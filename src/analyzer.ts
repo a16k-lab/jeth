@@ -1283,30 +1283,58 @@ export class Analyzer {
     return undefined;
   }
 
-  /** Resolve `p.x` where `p` is a memory-aggregate (struct) local: a value-typed field read/
-   *  write maps to a memory load/store at the field's word offset. Non-value fields are gated. */
-  private resolveMemAggregateField(node: ts.PropertyAccessExpression): { local: string; wordOffset: number; type: JethType } | undefined {
-    if (!ts.isIdentifier(node.expression)) return undefined;
-    const local = node.expression.text;
-    const st = this.memAggregateLocals.get(local);
-    if (!st || st.kind !== 'struct') return undefined;
-    const fo = this.memFieldOffset(st, node.name.text);
+  /** The root memory-aggregate local name of a property-access chain `p.f1...fn`, else undefined. */
+  private memChainRoot(node: ts.Expression): string | undefined {
+    if (ts.isIdentifier(node)) return this.memAggregateLocals.has(node.text) ? node.text : undefined;
+    if (ts.isPropertyAccessExpression(node)) return this.memChainRoot(node.expression);
+    return undefined;
+  }
+
+  /** Resolve `p.f1.f2...fn` rooted at a memory-aggregate (struct) local into the final field's
+   *  {local, wordOffset, type}, descending through nested STRUCT fields (word offsets sum). The
+   *  final field type may be a struct or a value (callers decide what they accept). */
+  private resolveMemFieldChain(node: ts.PropertyAccessExpression): { local: string; wordOffset: number; type: JethType } | undefined {
+    let base: { local: string; wordOffset: number; type: JethType };
+    if (ts.isIdentifier(node.expression)) {
+      const st = this.memAggregateLocals.get(node.expression.text);
+      if (!st || st.kind !== 'struct') return undefined;
+      base = { local: node.expression.text, wordOffset: 0, type: st };
+    } else if (ts.isPropertyAccessExpression(node.expression)) {
+      const parent = this.resolveMemFieldChain(node.expression);
+      if (!parent) return undefined;
+      base = parent;
+    } else {
+      return undefined;
+    }
+    if (base.type.kind !== 'struct') {
+      this.diags.error(node, 'JETH210', `'${node.name.text}' is not a field of ${displayName(base.type)}`);
+      return undefined;
+    }
+    const fo = this.memFieldOffset(base.type, node.name.text);
     if (!fo) {
-      this.diags.error(node, 'JETH210', `struct '${st.name}' has no field '${node.name.text}'`);
+      this.diags.error(node, 'JETH210', `struct '${base.type.name}' has no field '${node.name.text}'`);
       return undefined;
     }
-    if (!isStaticValueType(fo.type)) {
-      this.diags.error(node, 'JETH245', `reading a non-value field '${node.name.text}' of a memory struct is not supported yet`);
+    return { local: base.local, wordOffset: base.wordOffset + fo.wordOffset, type: fo.type };
+  }
+
+  /** A `p.f1...fn` read/write on a memory struct local where the FINAL field is a VALUE type:
+   *  maps to a memory load/store at the accumulated word offset. Non-value final fields are gated. */
+  private resolveMemAggregateField(node: ts.PropertyAccessExpression): { local: string; wordOffset: number; type: JethType } | undefined {
+    const r = this.resolveMemFieldChain(node);
+    if (!r) return undefined;
+    if (!isStaticValueType(r.type)) {
+      this.diags.error(node, 'JETH245', `accessing a non-value field of a memory struct is not supported yet (read/write a value field)`);
       return undefined;
     }
-    return { local, wordOffset: fo.wordOffset, type: fo.type };
+    return r;
   }
 
   // ---- lvalues -------------------------------------------------------------
 
   private checkLValue(node: ts.Expression): LValue | undefined {
-    // G9: `p.x = v` on a memory-aggregate (struct) local -> a memory store at the field offset.
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memAggregateLocals.has(node.expression.text)) {
+    // G9: `p.x = v` / `p.inner.x = v` on a memory-aggregate (struct) local -> a memory store.
+    if (ts.isPropertyAccessExpression(node) && this.memChainRoot(node)) {
       const mf = this.resolveMemAggregateField(node);
       if (!mf) return undefined;
       return { kind: 'memField', type: mf.type, local: mf.local, wordOffset: mf.wordOffset };
@@ -2673,10 +2701,10 @@ export class Analyzer {
       return { kind: 'arrayLit', type: expected, elem: expected.element, elements };
     }
 
-    // G9: `p.x` read where p is a memory-aggregate (struct) local -> a memory field load.
-    // Must precede the calldata/storage access resolvers below (a memory struct local is
-    // neither a calldata param nor a `this.`-rooted place).
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memAggregateLocals.has(node.expression.text)) {
+    // G9: `p.x` / `p.inner.x` read where the chain is rooted at a memory-aggregate (struct)
+    // local -> a memory field load. Must precede the calldata/storage access resolvers below
+    // (a memory struct local is neither a calldata param nor a `this.`-rooted place).
+    if (ts.isPropertyAccessExpression(node) && this.memChainRoot(node)) {
       const mf = this.resolveMemAggregateField(node);
       if (!mf) return undefined;
       return { kind: 'memField', type: mf.type, local: mf.local, wordOffset: mf.wordOffset };

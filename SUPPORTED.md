@@ -275,11 +275,15 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
 - Calldata struct-with-dynamic-array-field FIELD ACCESS (`s.xs[i]` on a param); the whole-struct
   ECHO of such a param works.
 - STATIC struct MEMORY locals are supported (G9): `let p: P = P(...)` construct, value-field read/write
-  (`p.x`, `p.x = v`, `p.x += v`, `p.x++`), whole-struct return, and memory aliasing (`let q = p`; a
-  write through `q` is visible through `p`). Still gated: FIXED-ARRAY and `bytes`/`string` memory locals;
-  dynamic-field struct memory locals; copying a memory local FROM a storage/calldata source
-  (`let p: P = this.s` / `= calldataParam`); a non-value field of a memory struct; `new T[](n)` (not
-  expressible in the TS subset - use an array literal); aggregate components in a multi-value return.
+  including nested chains (`p.x`, `p.inner.x`, `d.o.inner.a`, `p.x = v`, `p.x += v`, `p.x++`),
+  whole-struct return, and memory aliasing (`let q = p`; a write through `q` is visible through `p`).
+  @internal/@private functions take and RETURN static structs as memory by reference (mutation in a
+  callee is visible to the caller); a struct can be passed, returned, bound to a local, chained, and
+  built via recursion. Still gated: FIXED-ARRAY and `bytes`/`string` memory locals; dynamic-field
+  struct memory locals; copying a memory local FROM a storage/calldata source (`let p: P = this.s`
+  / `= calldataParam`); reading a WHOLE nested struct field as a value (`p.inner`); a struct param to a
+  PUBLIC/EXTERNAL callee via an internal call; `new T[](n)` (use an array literal); aggregate
+  components in a multi-value return.
 - A packed (`<256`-bit) element of a nested DYNAMIC array (`this.m[k].dynArr[i]`); the packed
   FIXED-array case through a struct field (`this.q.pts[i]`) now works (runtime byte offset).
 - A ternary over a storage struct / storage array / bytes / string (`c ? this.a : this.b`); a ternary
