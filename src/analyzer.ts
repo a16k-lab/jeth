@@ -200,8 +200,12 @@ export class Analyzer {
       }
       const t = resolveType(member.type, this.diags, this.structsByName);
       if (!t) continue;
+      // A mapping field (G7) is allowed: it makes the struct STORAGE-ONLY (the storage-only
+      // gates below reject using it as a memory local / param / return / construction / copy,
+      // matching Solidity). It occupies its own slot (planLayout); inner[k] resolves to
+      // keccak(key . (structBase + fieldSlot)).
       if (t.kind === 'mapping') {
-        this.diags.error(member, 'JETH222', `struct field '${member.name.text}' cannot be a mapping`);
+        raw.push({ name: member.name.text, type: t });
         continue;
       }
       // Fields may be static (value, nested struct, or fixed array). A struct with
@@ -511,6 +515,11 @@ export class Analyzer {
       }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
+      // A type containing a mapping is storage-only: it cannot be a parameter (matches solc).
+      if (this.typeHasMapping(t)) {
+        this.diags.error(p, 'JETH247', `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
+        continue;
+      }
       if (!this.gateArrayType(t, p)) continue;
       // Static struct / fixed-array params decode lazily from the ABI-unpacked head
       // via CalldataPlace; a DYNAMIC struct param (>=1 dynamic field, Phase 4e-6)
@@ -542,7 +551,9 @@ export class Analyzer {
     }
 
     const returnType = member.type ? resolveType(member.type, this.diags, this.structsByName) ?? VOID : VOID;
-    if (returnType.kind === 'struct' && !this.isSupportedStructReturn(returnType)) {
+    if (this.typeHasMapping(returnType)) {
+      this.diags.error(member.type ?? member, 'JETH247', `return type ${displayName(returnType)} contains a mapping and cannot be returned (mappings are storage-only)`);
+    } else if (returnType.kind === 'struct' && !this.isSupportedStructReturn(returnType)) {
       this.diags.error(member.type ?? member, 'JETH225', 'returning a struct with this shape is not supported yet (supported: static value/nested-static-struct fields, and bytes/string or nested-struct dynamic fields)');
     }
     if (!this.gateArrayType(returnType, member.type ?? member)) {
@@ -792,6 +803,12 @@ export class Analyzer {
   }
 
   private checkStructConstruct(node: ts.CallExpression, st: JethType & { kind: 'struct' }): Expr | undefined {
+    // A struct that (transitively) contains a mapping is storage-only and cannot be
+    // constructed in memory (matches solc).
+    if (this.typeHasMapping(st)) {
+      this.diags.error(node, 'JETH247', `struct '${st.name}' contains a mapping and cannot be constructed (mappings are storage-only)`);
+      return undefined;
+    }
     if (node.arguments.length !== st.fields.length) {
       this.diags.error(node, 'JETH228', `struct '${st.name}' expects ${st.fields.length} field arg(s), got ${node.arguments.length}`);
       return undefined;
@@ -1152,6 +1169,13 @@ export class Analyzer {
   private checkAssignment(e: ts.BinaryExpression, out: Stmt[]): void {
     const target = this.checkLValue(e.left);
     if (!target) return;
+    // A whole aggregate that contains a mapping cannot be assigned/copied (matches solc:
+    // "types containing a mapping cannot be assigned"). Assigning its non-mapping fields
+    // individually still works (their target type is a value, so this does not fire).
+    if (this.typeHasMapping(target.type)) {
+      this.diags.error(e.left, 'JETH247', `cannot assign a whole ${displayName(target.type)} that contains a mapping (assign its non-mapping fields individually)`);
+      return;
+    }
     const opKind = e.operatorToken.kind;
 
     if (opKind === ts.SyntaxKind.EqualsToken) {
@@ -1632,6 +1656,16 @@ export class Analyzer {
       default:
         return false;
     }
+  }
+
+  /** True iff `t` is, or transitively contains (struct field / array element), a MAPPING (G7).
+   *  Such a type is STORAGE-ONLY in Solidity: it cannot be a memory local, a function param or
+   *  return, constructed, or copied - only a state var, a mapping value, or navigated into. */
+  private typeHasMapping(t: JethType): boolean {
+    if (t.kind === 'mapping') return true;
+    if (t.kind === 'struct') return t.fields.some((f) => this.typeHasMapping(f.type));
+    if (t.kind === 'array') return this.typeHasMapping(t.element);
+    return false;
   }
 
   /** True iff `t` is exactly a storage-supported DYNAMIC STRUCT: either a dynamic

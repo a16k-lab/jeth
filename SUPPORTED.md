@@ -121,6 +121,12 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 - `@struct class Name { ... }`; mixed-width field packing (Solidity-identical slots); `this.s.field`
   read/write (RMW); positional `Name(...)` construction, incl. nested `Outer(p, Inner(a,b), q)`
   (flattened into packed slots, Phase 4e-2c); whole-struct assignment; struct -> ABI tuple return.
+- A `@struct` may have a MAPPING field (G7): `struct Acct { uint256 head; mapping(address => uint256) bal; }`.
+  Such a struct is STORAGE-ONLY (matching solc): allowed as a `@state` var or a mapping VALUE
+  (`mapping<K, Acct>`), accessed via `this.s.bal[a]` / `this.m[k].bal[a]` (the mapping base is the
+  field slot `structBase + fieldSlot`; value at `keccak(key . base)`); the mapping field never packs
+  with neighbours (its own slot). Byte-identical to solc on raw storage slots. A struct containing a
+  mapping cannot be returned, a function param, constructed, copied, or a memory local (JETH247).
 - Whole-struct assignment into a STORAGE aggregate slot (static or dynamic struct): a mapping
   value `this.m[k] = Name(...)`, an array element `this.recs[i] = Name(...)` / `this.fa[i] = P(...)`
   / `this.md[k][i] = D(...)`, and a state var `this.d = D(...)`. Both the constructed-literal
