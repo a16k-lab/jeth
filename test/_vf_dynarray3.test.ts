@@ -226,24 +226,17 @@ describe('_vf_dynarray3 probe', () => {
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 
-  // ---- documented OVER-REJECTIONS: JETH rejects, solc compiles -------------
-  // These are fixed/dynamic array compositions expressible in JETH surface syntax
-  // with direct Solidity equivalents, that JETH rejects with "not supported yet".
-  it('OVER-REJECTION: Arr<u256[],N> (fixed array of dynamic arrays) -> uint256[][N]', () => {
-    // solc compiles uint256[][2]
-    expect(() => compileSolidity(`// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-contract C { uint256[][2] a; function p(uint256 i, uint256 v) external { a[i].push(v); } }`, 'C')).not.toThrow();
-    // JETH rejects Arr<u256[],2> with JETH210
-    expect(() => compile(`@contract class C { @state a: Arr<u256[], 2>; @external p(i: u256, v: u256): void { this.a[i].push(v); } }`, { fileName: 'C.jeth' })).toThrow();
+  // ---- STORAGE array compositions now supported (G6); byte-identical incl. raw slots in
+  // test/array-compositions.test.ts. Whole calldata-param / return of these shapes stays gated.
+  it('Arr<u256[],N> (uint256[][N]) storage access now compiles (G6)', () => {
+    expect(() => compile(`@contract class C { @state a: Arr<u256[], 2>; @external p(i: u256, v: u256): void { this.a[i].push(v); } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    // a whole-array calldata PARAM of this shape is still gated.
+    expect(() => compile(`@contract class C { @external f(a: Arr<u256[], 2>): void {} }`, { fileName: 'C.jeth' })).toThrow();
   });
 
-  it('OVER-REJECTION: Arr<u256,2>[] (dynamic array of fixed arrays) -> uint256[2][]', () => {
-    // solc compiles uint256[2][]
-    expect(() => compileSolidity(`// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-contract C { uint256[2][] a; function p() external { a.push(); } function all() external view returns (uint256[2][] memory){ return a; } }`, 'C')).not.toThrow();
-    // JETH rejects Arr<u256,2>[] with JETH217
-    expect(() => compile(`@contract class C { @state a: Arr<u256,2>[]; @external p(): void { this.a.push(); } @view all(): Arr<u256,2>[] { return this.a; } }`, { fileName: 'C.jeth' })).toThrow();
+  it('Arr<u256,2>[] (uint256[2][]) storage access now compiles (G6)', () => {
+    expect(() => compile(`@contract class C { @state a: Arr<u256,2>[]; @external p(): void { this.a.push(); } @external s(i: u256, j: u256, v: u256): void { this.a[i][j] = v; } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    // a whole-array RETURN of this shape is still gated.
+    expect(() => compile(`@contract class C { @state a: Arr<u256,2>[]; @view all(): Arr<u256,2>[] { return this.a; } }`, { fileName: 'C.jeth' })).toThrow();
   });
 });

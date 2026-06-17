@@ -196,9 +196,12 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   or `j >= innerLen`) -> Panic(0x32); any layout fault (bad outer / inner offset,
   inner length implies elements past calldatasize, truncated pointer table, wrong-base
   offset) -> EMPTY revert. Overlapping / non-canonical inner offsets are accepted (pure
-  pointer arithmetic). Byte-identical to Solidity (differentially verified). Storage /
-  mapping-valued `T[][]`, triple-nested `T[][][]`, `string[][]`, and fixed `Arr<T[],N>`
-  are rejected with a diagnostic.
+  pointer arithmetic). Byte-identical to Solidity (differentially verified).
+- STORAGE array compositions (G6): `Arr<T[],N>` (= `uint256[][N]`, a fixed array of dynamic
+  arrays) and `Arr<T,N>[]` (= `uint256[N][]`, a dynamic array of fixed arrays, incl. packed
+  fixed elements like `uint8[4][]`) work as `@state` vars: element access, `.push`, `.length`,
+  and nested indexing (`a[i][j]`), byte-identical to solc incl. raw storage slots. A whole
+  calldata-param or return of these composite shapes stays gated.
 
 ### Dynamic array of static struct (Phase 4e-1)
 - `Pt[]` as a calldata param (`Pt` a static struct): whole-array echo (`return ps`,

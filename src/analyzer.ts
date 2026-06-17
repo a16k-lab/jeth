@@ -1777,6 +1777,10 @@ export class Analyzer {
         // must be a static value type or bytes/string. Storage / mapping positions are
         // rejected separately by the containsNestedDynArray guard.
         if (this.isAbiNestedDynArray(t)) return true;
+        // a dynamic array whose element is a FIXED array (Arr<u256,2>[] = uint256[2][]) is
+        // supported in STORAGE (G6): element i occupies storageSlotCount(element) slots at
+        // keccak(p)+i*stride; element access / push / index reuse the dynIndex machinery.
+        if (storage && t.element.length !== undefined) return true;
         this.diags.error(node, 'JETH217', 'this nested dynamic array shape is not supported yet');
         return false;
       }
@@ -1812,6 +1816,10 @@ export class Analyzer {
       // Arr<D,N> (fixed array of a DYNAMIC struct): N*slotCount(D) contiguous slots in
       // storage; an N-word offset table + per-element tuples as a calldata param/return.
       if (t.element.kind === 'struct' && (storage ? this.isStorageDynStruct(t.element) : this.isSupportedDynStructField(t.element))) return true;
+      // Arr<u256[],N> (= uint256[][N], a fixed array of DYNAMIC arrays) in STORAGE (G6):
+      // element i is an inner dynamic array whose length slot is baseSlot+i*stride; access /
+      // push / index reuse the placeArray + dynIndex machinery.
+      if (t.element.kind === 'array' && storage) return true;
       this.diags.error(node, 'JETH210', `fixed-array element type ${displayName(t.element)} is not supported yet`);
       return false;
     }
