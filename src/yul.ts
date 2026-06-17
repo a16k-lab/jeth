@@ -415,7 +415,9 @@ ${indent(runtime, 6)}
         // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
         // sub-pointer), or `return this.helper()` (struct-returning internal call): the
         // ABI-unpacked memory image at the (sub)pointer IS the flat return blob. G9.
-        if ((s.value.type.kind === 'struct' || s.value.type.kind === 'array') && (s.value.kind === 'memAggregate' || s.value.kind === 'call')) {
+        if ((s.value.type.kind === 'struct' || s.value.type.kind === 'array') && (s.value.kind === 'memAggregate' || s.value.kind === 'call' || (s.value.kind === 'ternary' && isStaticType(s.value.type)))) {
+          // a memory-aggregate image (static struct / fixed array): the image IS the flat return blob.
+          // (A DYNAMIC-array ternary falls through to encodeMemArrayReturn below.)
           const ptr = this.lowerExpr(s.value, ctx, out);
           out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
           break;
@@ -1177,6 +1179,28 @@ ${indent(runtime, 6)}
       case 'binary':
         return this.lowerBinary(e, ctx, out);
       case 'ternary': {
+        // an aggregate ternary (static struct / static fixed array): materialize the taken
+        // branch to a memory image (allocAggFromStorage copy / allocAggToMem / memAggregate
+        // alias), then select the image POINTER with a short-circuit switch.
+        if (e.type.kind === 'struct' || (e.type.kind === 'array' && e.type.length !== undefined)) {
+          const cc = this.lowerExpr(e.cond, ctx, out);
+          const p = this.fresh();
+          out.push(`let ${p} := 0`);
+          const tO: string[] = [];
+          const pT = this.aggToMemPtr(e.then, ctx, tO);
+          const eO: string[] = [];
+          const pE = this.aggToMemPtr(e.else, ctx, eO);
+          out.push(`switch ${cc}`);
+          out.push('case 0 {');
+          for (const l of eO) out.push('  ' + l);
+          out.push(`  ${p} := ${pE}`);
+          out.push('}');
+          out.push('default {');
+          for (const l of tO) out.push('  ' + l);
+          out.push(`  ${p} := ${pT}`);
+          out.push('}');
+          return p;
+        }
         // short-circuit: only the taken branch is evaluated (a branch may revert / have
         // checked-arithmetic side effects), exactly like Solidity's c ? a : b.
         const c = this.lowerExpr(e.cond, ctx, out);
@@ -2205,6 +2229,21 @@ ${indent(runtime, 6)}
 
   /** Allocate a memory image for a constructed STATIC struct (G9) and return its pointer.
    *  Layout is ABI-unpacked (one word per leaf), so the image doubles as the ABI return blob. */
+  /** Materialize a static struct / fixed-array aggregate value to a memory image pointer (used
+   *  by an aggregate ternary branch): a constructed value allocates fresh; a storage source is
+   *  COPIED into a fresh image; a memory-aggregate local aliases its pointer. */
+  private aggToMemPtr(e: Expr, ctx: LowerCtx, out: string[]): string {
+    if (e.kind === 'structNew' || e.kind === 'arrayLit') return this.allocAggToMem(e, ctx, out);
+    if (e.kind === 'memAggregate' || e.kind === 'ternary') return this.lowerExpr(e, ctx, out); // a nested aggregate ternary recurses (materialize + select)
+    if (e.kind === 'structValue') return this.allocAggFromStorage(e.type, String(e.baseSlot), out);
+    if (e.kind === 'mapStorageValue') return this.allocAggFromStorage(e.type, this.mappingSlot(e.baseSlot, e.keys, ctx, out), out);
+    if (e.kind === 'structArrayElem') return this.allocAggFromStorage(e.type, this.structArrayElemSlot(e.arr, e.index, ctx, out), out);
+    if (e.kind === 'placeRead') return this.allocAggFromStorage(e.type, this.lowerPlace(e.path, ctx, out).slot, out);
+    if (e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray') return this.allocAggFromStorage(e.type, String(e.arr.base.baseSlot), out);
+    if (e.kind === 'cdAggregateValue') return this.allocAggFromCalldata(e.param, e.type, ctx, out);
+    throw new UnsupportedError(`cannot materialize aggregate ternary branch '${e.kind}'`);
+  }
+
   private allocAggToMem(value: Expr & { kind: 'structNew' | 'arrayLit' }, ctx: LowerCtx, out: string[]): string {
     const words = abiHeadWords(value.type);
     const ptr = this.fresh();

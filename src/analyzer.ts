@@ -1214,7 +1214,7 @@ export class Analyzer {
       // Allowed sources: a constructor StructName(...), another memory struct (ALIAS), a
       // struct-returning internal call, a whole STORAGE struct (this.s -> fresh COPY), or a
       // STATIC struct calldata param (q -> fresh COPY). The struct types must match.
-      const okInit = e.kind === 'structNew' || e.kind === 'memAggregate' || (e.kind === 'call' && e.type.kind === 'struct') || e.kind === 'structValue' || e.kind === 'cdAggregateValue';
+      const okInit = e.kind === 'structNew' || e.kind === 'memAggregate' || (e.kind === 'call' && e.type.kind === 'struct') || e.kind === 'structValue' || e.kind === 'cdAggregateValue' || e.kind === 'ternary';
       if (!okInit) {
         this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...), another memory struct, a struct-returning internal call, a storage struct (this.s), or a struct calldata parameter');
         return;
@@ -1244,7 +1244,7 @@ export class Analyzer {
       const e = this.checkExpr(decl.initializer, declared);
       if (!e) return;
       const fromStorage = e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray';
-      const okInit = e.kind === 'arrayLit' || e.kind === 'memAggregate' || e.kind === 'cdAggregateValue' || fromStorage;
+      const okInit = e.kind === 'arrayLit' || e.kind === 'memAggregate' || e.kind === 'cdAggregateValue' || e.kind === 'ternary' || fromStorage;
       if (!okInit) {
         this.diags.error(decl.initializer, 'JETH900', `a fixed-array memory local must be initialized from a literal, another memory fixed array, a fixed-array calldata parameter, or a storage fixed array`);
         return;
@@ -3008,10 +3008,12 @@ export class Analyzer {
       const lowerable = (e: Expr): boolean =>
         isStaticValueType(e.type) ||
         isBytesLike(e.type) ||
+        // a STATIC struct / fixed array: materialized to a memory image, selected by pointer.
+        (isStaticType(e.type) && (e.type.kind === 'struct' || (e.type.kind === 'array' && e.type.length !== undefined))) ||
         (e.type.kind === 'array' &&
           (e.kind === 'arrayLit' || (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'))));
       if (!lowerable(unified[0]) || !lowerable(unified[1])) {
-        this.diags.error(node, 'JETH074', `a ternary over a ${displayName(unified[0].type)} (storage aggregate) is not supported; select the value before the aggregate operation`);
+        this.diags.error(node, 'JETH074', `a ternary over a ${displayName(unified[0].type)} (dynamic storage aggregate) is not supported; select the value before the aggregate operation`);
         return undefined;
       }
       return { kind: 'ternary', type: unified[0].type, cond, then: unified[0], else: unified[1] };
