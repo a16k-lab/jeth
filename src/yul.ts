@@ -738,6 +738,10 @@ ${indent(runtime, 6)}
         out.push(isVoid ? call : `pop(${call})`);
         break;
       }
+      case 'deleteStmt': {
+        this.lowerDelete(s.target, ctx, out);
+        break;
+      }
       case 'block': {
         out.push('{');
         for (const l of this.lowerBlock(s.body, ctx)) out.push('  ' + l);
@@ -2407,6 +2411,119 @@ ${indent(runtime, 6)}
         this.clearStructDyn(f.type, slotAt(f.slot), out);
       }
     }
+  }
+
+  /** `delete <storage location>`: reset to the type's zero value, matching solc. VALUE
+   *  targets are lowered as `= 0` by the analyzer; this handles bytes/string (clearStr),
+   *  struct/array (recursive footprint clear), and a whole mapping (no-op). */
+  private lowerDelete(target: LValue, ctx: LowerCtx, out: string[]): void {
+    switch (target.kind) {
+      case 'dynState':
+        out.push(`${this.clearStr()}(${target.slot})`);
+        return;
+      case 'mapDynState':
+        out.push(`${this.clearStr()}(${this.mappingSlot(target.baseSlot, target.keys, ctx, out)})`);
+        return;
+      case 'strArrayElem':
+        out.push(`${this.clearStr()}(${this.strArrayElemSlot(target.arr, target.index, ctx, out)})`);
+        return;
+      case 'dynPlace':
+        out.push(`${this.clearStr()}(${this.lowerPlace(target.path, ctx, out).slot})`);
+        return;
+      case 'state':
+        if (target.type.kind === 'mapping') return; // delete on a whole mapping is a no-op
+        this.deleteAgg(target.type, String(target.slot), out);
+        return;
+      case 'mapping':
+        this.deleteAgg(target.type, this.mappingSlot(target.baseSlot, target.keys, ctx, out), out);
+        return;
+      case 'place':
+        if (target.type.kind === 'mapping') return;
+        this.deleteAgg(target.type, this.lowerPlace(target.path, ctx, out).slot, out);
+        return;
+      case 'arrayElem':
+        this.deleteAgg(target.type, this.structArrayElemSlot(target.arr, target.index, ctx, out), out);
+        return;
+      default:
+        throw new UnsupportedError(`delete of '${target.kind}' is not supported`);
+    }
+  }
+
+  /** Recursively clear a storage aggregate's footprint to zero (delete semantics). */
+  private deleteAgg(type: JethType, slot: string, out: string[]): void {
+    if (isBytesLike(type)) {
+      out.push(`${this.clearStr()}(${slot})`);
+      return;
+    }
+    if (type.kind === 'mapping') return; // mappings are not cleared by delete
+    if (type.kind === 'array') {
+      if (type.length === undefined) this.deleteDynArray(type.element, slot, out);
+      else this.deleteFixedArray(type, slot, out);
+      return;
+    }
+    if (type.kind === 'struct') {
+      this.deleteStruct(type, slot, out);
+      return;
+    }
+    out.push(`sstore(${slot}, 0)`); // whole-slot value fallback
+  }
+
+  /** Clear a storage struct: zero each value field (packed-aware), clear bytes/string and
+   *  nested struct/array fields, and SKIP mapping fields (solc's delete leaves mappings). */
+  private deleteStruct(struct: JethType & { kind: 'struct' }, base: string, out: string[]): void {
+    const isConst = /^\d+$/.test(base);
+    const at = (n: number): string => (isConst ? String(Number(base) + n) : n === 0 ? base : `add(${base}, ${n})`);
+    for (const f of struct.fields) {
+      if (f.type.kind === 'mapping') continue;
+      if (isBytesLike(f.type)) out.push(`${this.clearStr()}(${at(f.slot)})`);
+      else if (f.type.kind === 'struct' || f.type.kind === 'array') this.deleteAgg(f.type, at(f.slot), out);
+      else for (const l of this.storeState(f.type, at(f.slot), f.offset, '0')) out.push(l);
+    }
+  }
+
+  /** Clear a fixed array Arr<T,N>: a static VALUE / value-array element zeroes the whole
+   *  (packed) footprint; struct / bytes-string / dynamic elements clear per element. */
+  private deleteFixedArray(arrType: JethType & { kind: 'array' }, base: string, out: string[]): void {
+    const elem = arrType.element;
+    const N = arrType.length!;
+    const isConst = /^\d+$/.test(base);
+    const at = (n: number): string => (isConst ? String(Number(base) + n) : n === 0 ? base : `add(${base}, ${n})`);
+    if (isStaticType(elem) && elem.kind !== 'struct') {
+      const packs = arrayElemPacks(elem);
+      const slots = packs.packed ? Math.ceil(N / packs.perSlot) : N * storageSlotCount(elem);
+      for (let i = 0; i < slots; i++) out.push(`sstore(${at(i)}, 0)`);
+      return;
+    }
+    const sc = storageSlotCount(elem);
+    for (let i = 0; i < N; i++) this.deleteAgg(elem, at(i * sc), out);
+  }
+
+  /** Clear a dynamic array T[]: free/zero every element's slots then set length 0. Mirrors
+   *  copyArray's shrink-to-zero (static value elements zero the used data slots; struct /
+   *  bytes-string / nested-array elements recurse per element). */
+  private deleteDynArray(elem: JethType, lenSlot: string, out: string[]): void {
+    const len = this.fresh();
+    out.push(`let ${len} := sload(${lenSlot})`);
+    const data = this.fresh();
+    out.push(`let ${data} := ${this.arrayDataSlotHelper()}(${lenSlot})`);
+    if (isStaticType(elem) && elem.kind !== 'struct') {
+      const packs = arrayElemPacks(elem);
+      const slots = this.fresh();
+      out.push(`let ${slots} := ${packs.packed ? `div(add(${len}, ${packs.perSlot - 1}), ${packs.perSlot})` : `mul(${len}, ${storageSlotCount(elem)})`}`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${slots}) { ${i} := add(${i}, 1) } { sstore(add(${data}, ${i}), 0) }`);
+    } else {
+      const sc = storageSlotCount(elem);
+      const k = this.fresh();
+      out.push(`for { let ${k} := 0 } lt(${k}, ${len}) { ${k} := add(${k}, 1) } {`);
+      const inner: string[] = [];
+      const eb = this.fresh();
+      inner.push(`let ${eb} := add(${data}, mul(${k}, ${sc}))`);
+      this.deleteAgg(elem, eb, inner);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+    }
+    out.push(`sstore(${lenSlot}, 0)`);
   }
 
   // ---- storage / mapping-valued string[] / bytes[] (element = a storage bytes/

@@ -224,6 +224,7 @@ export type Stmt =
   | { kind: 'assign'; target: LValue; value: Expr } // plain `=` (value already folds compound ops)
   | { kind: 'exprStmt'; expr: Expr }
   | { kind: 'callStmt'; fn: string; args: Expr[] } // internal call as a statement (void or discarded value)
+  | { kind: 'deleteStmt'; target: LValue } // `delete x`: reset a storage bytes/string/struct/array (whole mapping = no-op) to its zero value
   // --- Phase 2: control flow (each branch/body is its own lexical scope) ---
   | { kind: 'block'; body: Stmt[] }
   | { kind: 'if'; cond: Expr; then: Stmt[]; else?: Stmt[] }

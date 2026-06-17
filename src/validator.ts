@@ -45,9 +45,8 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
       case ts.SyntaxKind.TypeOfExpression:
         diags.error(node, 'JETH030', "'typeof' is not supported");
         break;
-      case ts.SyntaxKind.DeleteExpression:
-        diags.error(node, 'JETH031', "'delete' is not supported");
-        break;
+      // `delete x` (Solidity storage reset) is handled by the analyzer in statement
+      // position; the type checker rejects a non-lvalue or unsupported operand.
       case ts.SyntaxKind.AnyKeyword:
         diags.error(node, 'JETH002', "'any' is not allowed in JETH");
         break;

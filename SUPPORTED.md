@@ -329,8 +329,20 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
 ## Permanently rejected (no on-chain meaning)
 
 `number`/floats, `any`, async/await, generators, closures/free functions,
-`throw`, try/catch, regex, template literals, `typeof`/`delete`/`instanceof`/`in`,
+`throw`, try/catch, regex, template literals, `typeof`/`instanceof`/`in`,
 spread/rest, `eval`.
+
+## delete
+
+- `delete x` (Solidity storage reset to the type's zero value) is supported on storage
+  value vars (packed-aware: a packed field zeroes only its lane), structs (value fields
+  zeroed, bytes/string fields cleared, nested struct/array fields recursed, MAPPING fields
+  left intact - matching solc), fixed arrays, dynamic arrays (data slots zeroed + length 0),
+  bytes/string (header + long-data slots freed), mapping VALUES (`delete this.m[k]`, incl.
+  struct/bytes values and `this.m[k].field`), nested places (`delete this.s.f`,
+  `delete this.a[i]`), and local value variables. `delete` of a WHOLE mapping is rejected
+  (parity: solc also rejects it). Verified byte-identical to solc on returndata AND raw
+  storage slots (incl. computed keccak data slots).
 
 ## Known JS-vs-EVM divergences flagged (directive §9 "known danger")
 

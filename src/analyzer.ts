@@ -790,6 +790,10 @@ export class Analyzer {
       if (ts.isPrefixUnaryExpression(e) && (e.operator === ts.SyntaxKind.PlusPlusToken || e.operator === ts.SyntaxKind.MinusMinusToken)) {
         return this.checkIncDec(e.operand, e.operator === ts.SyntaxKind.PlusPlusToken, e, out);
       }
+      // `delete x` statement: reset a storage location to its zero value.
+      if (ts.isDeleteExpression(e)) {
+        return this.checkDelete(e, out);
+      }
       this.checkExpressionStatement(e, out);
       return;
     }
@@ -797,6 +801,37 @@ export class Analyzer {
     if (ts.isEmptyStatement(node)) return;
 
     this.diags.error(node, 'JETH061', `unsupported statement: ${ts.SyntaxKind[node.kind]}`);
+  }
+
+  /** `delete x`: reset a storage location to its zero value (Solidity semantics). A VALUE
+   *  target lowers to `x = 0` (reusing the packed / array-element / place store paths); a
+   *  bytes/string, struct, or array target lowers to a footprint-clearing deleteStmt; a whole
+   *  mapping is a no-op (solc leaves mappings untouched). Memory-aggregate deletes are gated. */
+  private checkDelete(node: ts.DeleteExpression, out: Stmt[]): void {
+    const lv = this.checkLValue(node.expression);
+    if (!lv) return;
+    const t = lv.type;
+    // solc rejects `delete <mapping>` (a whole mapping cannot be cleared; keys are unknown).
+    if (t.kind === 'mapping') {
+      this.diags.error(node, 'JETH031', "'delete' cannot be applied to a mapping");
+      return;
+    }
+    // a value field/element of a memory aggregate local: reset in place via `= 0`.
+    if (lv.kind === 'memField' || lv.kind === 'memElem') {
+      if (!isStaticValueType(t)) {
+        this.diags.error(node, 'JETH200', `delete of a ${displayName(t)} memory location is not supported yet`);
+        return;
+      }
+      out.push({ kind: 'assign', target: lv, value: { kind: 'literalInt', type: t, value: 0n } });
+      return;
+    }
+    // a value target (storage var / place / mapping value / array element / local): `= 0`.
+    if (isStaticValueType(t)) {
+      out.push({ kind: 'assign', target: lv, value: { kind: 'literalInt', type: t, value: 0n } });
+      return;
+    }
+    // bytes/string, struct, array, or whole mapping: clear the storage footprint (mapping = no-op).
+    out.push({ kind: 'deleteStmt', target: lv });
   }
 
   /** Assignment / compound-assignment / bare expression statement. */
