@@ -351,12 +351,12 @@ export class Analyzer {
       }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
-      // @error args: static value types or dynamic bytes/string (head/tail encoded).
-      if (!isStaticValueType(t) && !isBytesLike(t)) {
+      // @error args: static value types, dynamic bytes/string, or a DYNAMIC array (G3, head/tail).
+      if (!isStaticValueType(t) && !isBytesLike(t) && !(t.kind === 'array' && t.length === undefined)) {
         this.diags.error(
           p,
           'JETH127',
-          `@error parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types and bytes/string`,
+          `@error parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types, bytes/string, and dynamic arrays`,
         );
         continue;
       }
@@ -397,19 +397,22 @@ export class Analyzer {
       if (!t) continue;
       const indexed = decoratorNames(p).includes('indexed');
       if (!isStaticValueType(t)) {
-        if (isBytesLike(t) && indexed) {
-          this.diags.error(p, 'JETH207', `indexed bytes/string event parameter '${p.name.text}' is not supported yet (keccak topic; Phase 4+)`);
-          continue;
-        }
-        if (!isBytesLike(t)) {
+        if (indexed) {
+          // an indexed reference-type param becomes a keccak topic. bytes/string: topic =
+          // keccak256(content bytes) (G4). Indexed dynamic-array/struct topics are a later step.
+          if (!isBytesLike(t)) {
+            this.diags.error(p, 'JETH207', `indexed ${displayName(t)} event parameter '${p.name.text}' is not supported yet (only indexed bytes/string)`);
+            continue;
+          }
+          // indexed bytes/string: allowed (keccak topic, handled in lowerEmit).
+        } else if (!isBytesLike(t) && !(t.kind === 'array' && t.length === undefined)) {
           this.diags.error(
             p,
             'JETH142',
-            `@event parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types (any), bytes/string (non-indexed)`,
+            `@event parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types (any), bytes/string, and dynamic arrays (non-indexed)`,
           );
           continue;
         }
-        // non-indexed bytes/string data param: allowed
       }
       if (indexed) indexedCount++;
       params.push({ name: p.name.text, type: t, indexed });

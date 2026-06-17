@@ -874,7 +874,7 @@ ${indent(runtime, 6)}
       case 'custom': {
         // Evaluate args eagerly into temps so they run before any cond guard
         // (matches solc: a custom-error arg can revert even when require passes).
-        if (!r.args.some((a) => isBytesLike(a.type))) {
+        if (!r.args.some((a) => isDynamicType(a.type))) {
           const argTemps = r.args.map((a) => {
             const v = this.lowerExpr(a, ctx, out);
             const t = this.fresh();
@@ -884,19 +884,22 @@ ${indent(runtime, 6)}
           const helper = this.errorRevert(argTemps.length);
           return [`${helper}(0x${r.decl.selector}${argTemps.map((a) => ', ' + a).join('')})`];
         }
-        // head/tail: each arg is one head word (static value, or a tail offset for
-        // bytes/string); offsets are relative to the args region (calldata byte 4).
+        // head/tail: each arg is one head word (static value, or a tail offset for a
+        // dynamic bytes/string/array); offsets are relative to the args region (calldata byte 4).
         const lines: string[] = [];
-        type LA = { dyn: false; word: string } | { dyn: true; mp: string; len: string };
-        const lowered: LA[] = r.args.map((a) => {
+        type LA = { dyn: 'static'; word: string } | { dyn: 'bytes'; mp: string; len: string } | { dyn: 'array'; mp: string; size: string };
+        const lowered: LA[] = r.args.map((a): LA => {
           if (isBytesLike(a.type)) {
-            const ref = this.lowerDynamic(a, ctx, lines);
-            const { mp, len } = this.toMemory(ref, lines);
-            return { dyn: true, mp, len };
+            const { mp, len } = this.toMemory(this.lowerDynamic(a, ctx, lines), lines);
+            return { dyn: 'bytes', mp, len };
+          }
+          if (a.type.kind === 'array') {
+            const { mp, size } = this.materializeArrayArg(a, ctx, lines);
+            return { dyn: 'array', mp, size };
           }
           const t = this.fresh();
           lines.push(`let ${t} := ${this.lowerExpr(a, ctx, lines)}`);
-          return { dyn: false, word: t };
+          return { dyn: 'static', word: t };
         });
         const headSize = lowered.length * 32;
         const p = this.fresh();
@@ -906,15 +909,20 @@ ${indent(runtime, 6)}
         lines.push(`let ${cur} := ${headSize}`); // byte offset (rel byte 4) of next tail
         lowered.forEach((a, i) => {
           const headAt = `add(${p}, ${4 + i * 32})`;
-          if (!a.dyn) {
+          if (a.dyn === 'static') {
             lines.push(`mstore(${headAt}, ${a.word})`);
-          } else {
+          } else if (a.dyn === 'bytes') {
             lines.push(`mstore(${headAt}, ${cur})`);
             const padded = this.fresh();
             lines.push(`let ${padded} := and(add(${a.len}, 0x1f), not(0x1f))`);
             lines.push(`mstore(add(${p}, add(4, ${cur})), ${a.len})`);
             lines.push(`mcopy(add(${p}, add(4, add(${cur}, 0x20))), add(${a.mp}, 0x20), ${padded})`);
             lines.push(`${cur} := add(${cur}, add(0x20, ${padded}))`);
+          } else {
+            // array tail blob [len][elements...] is already ABI-encoded: copy it verbatim.
+            lines.push(`mstore(${headAt}, ${cur})`);
+            lines.push(`mcopy(add(${p}, add(4, ${cur})), ${a.mp}, ${a.size})`);
+            lines.push(`${cur} := add(${cur}, ${a.size})`);
           }
         });
         lines.push(`revert(${p}, add(4, ${cur}))`);
@@ -960,15 +968,23 @@ ${indent(runtime, 6)}
   private lowerEmit(ev: EventIR, args: Expr[], ctx: LowerCtx, out: string[]): string[] {
     // partition into indexed topics (static) and the non-indexed data tuple.
     const idxVals: string[] = [];
-    type Part = { word: string } | { mp: string; len: string };
+    type Part = { word: string } | { mp: string; len: string } | { mp: string; size: string };
     const data: Part[] = [];
     ev.params.forEach((p, i) => {
       const arg = args[i]!;
-      if (p.indexed) {
-        idxVals.push(this.lowerExpr(arg, ctx, out)); // indexed params are static
+      if (p.indexed && isBytesLike(p.type)) {
+        // an indexed bytes/string topic is keccak256 of the CONTENT bytes (G4), not the value.
+        const { mp, len } = this.toMemory(this.lowerDynamic(arg, ctx, out), out);
+        const topic = this.fresh();
+        out.push(`let ${topic} := keccak256(add(${mp}, 0x20), ${len})`);
+        idxVals.push(topic);
+      } else if (p.indexed) {
+        idxVals.push(this.lowerExpr(arg, ctx, out)); // a static-value indexed topic
       } else if (isBytesLike(p.type)) {
         const ref = this.lowerDynamic(arg, ctx, out);
         data.push(this.toMemory(ref, out)); // materialize before the buffer is allocated
+      } else if (p.type.kind === 'array') {
+        data.push(this.materializeArrayArg(arg, ctx, out)); // {mp, size}: ABI tail blob (G3)
       } else {
         data.push({ word: this.lowerExpr(arg, ctx, out) });
       }
@@ -992,7 +1008,10 @@ ${indent(runtime, 6)}
     // mixed/dynamic data: ABI head/tail. Total size computed at runtime.
     const total = this.fresh();
     lines.push(`let ${total} := ${headSize}`);
-    for (const d of data) if ('mp' in d) lines.push(`${total} := add(${total}, add(0x20, and(add(${d.len}, 0x1f), not(0x1f))))`);
+    for (const d of data) {
+      if ('len' in d) lines.push(`${total} := add(${total}, add(0x20, and(add(${d.len}, 0x1f), not(0x1f))))`);
+      else if ('size' in d) lines.push(`${total} := add(${total}, ${d.size})`);
+    }
     const ptr = this.fresh();
     lines.push(`let ${ptr} := ${this.alloc()}(${total})`);
     const cursor = this.fresh();
@@ -1001,12 +1020,17 @@ ${indent(runtime, 6)}
       const head = j === 0 ? ptr : `add(${ptr}, ${32 * j})`;
       if ('word' in d) {
         lines.push(`mstore(${head}, ${d.word})`);
-      } else {
+      } else if ('len' in d) {
         const pad = `and(add(${d.len}, 0x1f), not(0x1f))`;
         lines.push(`mstore(${head}, sub(${cursor}, ${ptr}))`);
         lines.push(`mstore(${cursor}, ${d.len})`);
         lines.push(`mcopy(add(${cursor}, 0x20), add(${d.mp}, 0x20), ${pad})`);
         lines.push(`${cursor} := add(${cursor}, add(0x20, ${pad}))`);
+      } else {
+        // array tail blob [len][elements...]: copy verbatim (already ABI-encoded).
+        lines.push(`mstore(${head}, sub(${cursor}, ${ptr}))`);
+        lines.push(`mcopy(${cursor}, ${d.mp}, ${d.size})`);
+        lines.push(`${cursor} := add(${cursor}, ${d.size})`);
       }
     });
     lines.push(`log${n}(${ptr}, ${total}, ${topics})`);
@@ -2558,6 +2582,35 @@ ${indent(runtime, 6)}
     const size = this.abiEncFromCd(t, cdPtr, `add(${ptr}, 0x20)`, !topClean, out);
     out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
     return { ptr, size: `add(0x20, ${size})` };
+  }
+
+  /** Materialize a DYNAMIC-array argument (G3, for @error/@event head/tail) into a memory blob
+   *  holding its ABI tail encoding `[len][elements...]`, returning a frozen pointer + byte size.
+   *  Calldata-param arrays reuse echoParam (unbounded element nesting); value-element memory
+   *  arrays are already in ABI tail layout. Other sources are gated. */
+  private materializeArrayArg(arg: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
+    if (arg.kind !== 'arrayValue') throw new UnsupportedError(`array argument must be an array value, got '${arg.kind}'`);
+    const base = arg.arr.base;
+    let mpExpr: string;
+    let sizeExpr: string;
+    if (base.kind === 'calldataArray') {
+      const { ptr, size } = this.echoParam(base.name, arg.type, ctx, out);
+      mpExpr = `add(${ptr}, 0x20)`; // skip the single-value [0x20] offset wrapper
+      sizeExpr = `sub(${size}, 0x20)`;
+    } else if (base.kind === 'memArray') {
+      mpExpr = this.ctxLookup(ctx, base.varName);
+      sizeExpr = `mul(add(mload(${mpExpr}), 1), 0x20)`; // [len][e0..] value elements
+    } else if (base.kind === 'memArrayExpr') {
+      mpExpr = this.lowerExpr(base.expr, ctx, out);
+      sizeExpr = `mul(add(mload(${mpExpr}), 1), 0x20)`;
+    } else {
+      throw new UnsupportedError(`a dynamic-array @error/@event argument from a '${base.kind}' source is not supported yet`);
+    }
+    const mp = this.fresh();
+    out.push(`let ${mp} := ${mpExpr}`);
+    const size = this.fresh();
+    out.push(`let ${size} := ${sizeExpr}`);
+    return { mp, size };
   }
 
   /** Echo a whole STATIC struct / fixed-array calldata param (G5). The data is INLINE at the

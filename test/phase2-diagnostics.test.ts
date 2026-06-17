@@ -70,7 +70,8 @@ describe('Phase 2 diagnostics', () => {
 
   it('rejects malformed @error declarations', () => {
     expect(codesFor(`@contract\nclass T { @error Bad(a: u256) { return; } }`)).toContain('JETH125'); // has body
-    expect(codesFor(`@contract\nclass T { @error Bad(a: u256[]); }`)).toContain('JETH127'); // dynamic-array arg deferred
+    expect(codesFor(`@contract\nclass T { @error Bad(a: Arr<u256, 3>); }`)).toContain('JETH127'); // fixed-array arg still deferred
+    expect(codesFor(`@contract\nclass T { @error Ok(a: u256[]); }`)).toEqual([]); // dynamic-array args supported (G3)
     expect(codesFor(`@contract\nclass T { @error Ok(a: string); }`)).toEqual([]); // bytes/string args supported (4e-7)
     expect(codesFor(`@contract\nclass T { @error E(a: u256); @error E(b: u256); }`)).toContain('JETH128'); // dup
   });
@@ -79,8 +80,10 @@ describe('Phase 2 diagnostics', () => {
     expect(codesFor(fn('emit(Missing(1n));'))).toContain('JETH147'); // unknown event
     expect(codesFor(fn('emit(Ev(1n, 2n, 3n));'))).toContain('JETH148'); // arg count
     expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256, @indexed b: u256, @indexed c: u256, @indexed d: u256); }`)).toContain('JETH143'); // >3 indexed
-    expect(codesFor(`@contract\nclass T { @event E(@indexed s: string); }`)).toContain('JETH207'); // indexed dynamic deferred
-    // a non-indexed string event param is now allowed (Phase 4)
+    expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256[]); }`)).toContain('JETH207'); // indexed dynamic ARRAY still deferred
+    // an indexed bytes/string event param is now allowed (keccak topic, G4)
+    expect(codesFor(`@contract\nclass T { @event E(@indexed s: string, v: u256); }`)).toEqual([]);
+    // a non-indexed string event param is allowed (Phase 4)
     expect(codesFor(`@contract\nclass T { @event E(m: string); }`)).toEqual([]);
   });
 
