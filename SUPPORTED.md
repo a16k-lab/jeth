@@ -304,19 +304,32 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
   or ALIASED from another struct local (`let e: D = d`, a Solidity memory reference); and a `bytes`/
   `string` field may be WRITTEN (`d.s = x`, re-pointing the head word at a fresh blob). Still gated:
   structs with static-array/nested-struct/dynamic-array fields as memory locals; a struct param to a
-  PUBLIC/EXTERNAL callee via an internal call; `new T[](n)` (use an array literal); non-value aggregate
-  components in a multi-value return.
+  PUBLIC/EXTERNAL callee via an internal call (an external/message call, Phase 6); `new T[](n)` (use an
+  array literal).
+- Tuple destructuring works: `let [a, , c] = src` and `[a, , c] = src` where `src` is a multi-value
+  internal call (`this.f()`) or a tuple literal (`[x, y]`, e.g. swap `[a, b] = [b, a]`); new locals,
+  existing value lvalues incl. storage, or skipped components; value components only.
+- The `delete x` statement works on every storage location (value/packed/struct/array/dynamic/bytes/
+  string/mapping-value/nested-place/local), leaving mappings intact; `delete` of a whole mapping is
+  rejected (parity with solc).
 - A packed (`<256`-bit) element of a nested DYNAMIC array (`this.m[k].dynArr[i]`); the packed
   FIXED-array case through a struct field (`this.q.pts[i]`) now works (runtime byte offset).
-- A ternary over a storage struct / storage array / bytes / string (`c ? this.a : this.b`); a ternary
-  over value types or memory arrays works (select before the aggregate op).
-- A calldata-aggregate echo COMPONENT in a multi-value return (`return [calldataArrayParam, x]`);
-  storage and memory-array components work, and echoing the calldata aggregate as the SOLE return works.
-- Assigning a whole FIXED-array element (`this.g[i] = arr`); reading it (`return this.g[i]`) and
-  whole DYNAMIC inner-array assignment (`this.dd[i] = xs`) work.
+- A ternary over `bytes`/`string` (`c ? a : b`, literal/storage/calldata branches) and over a STATIC
+  struct or fixed array (`c ? this.x : this.y`, materialized + pointer-selected, incl. nested ternary)
+  now work; only a DYNAMIC storage struct/array ternary stays gated (select before the aggregate op).
+- A whole DYNAMIC calldata array / struct param as a COMPONENT of a multi-value return
+  (`return [calldataArrayParam, x]`) now works; a calldata array ELEMENT or a STATIC calldata
+  aggregate component stays gated. Storage and memory-array components also work.
+- Whole FIXED-array storage copy (`this.g = this.src`), whole DYNAMIC inner-array assignment
+  (`this.dd[i] = xs`), and reading a whole fixed-array (`return this.g[i]`) work; assigning a whole
+  FIXED-array element in place (`this.g[i] = arr`) stays gated.
+- Mixed calldata composite element access works: `uint256[2][]` (dynamic-of-fixed) and `uint256[][2]`
+  (fixed-of-dynamic) support `a[i]`, `a[i][j]`, `a[i].length`, and whole-param echo (JETH151/210),
+  byte-identical incl. malformed-offset/length EMPTY-revert and full N-word head readability.
 - Standard tuple ABI JSON: struct params/returns render as `(t1,t2)` in the JSON `type` field
   rather than `type:"tuple"` + `components` (selectors are canonical and correct; JSON-shape polish).
-- `msg.data`; indexed reference-type event params.
+- `msg.data`; an indexed FIXED-array / struct event param (indexed `bytes`/`string` and indexed
+  DYNAMIC value-element arrays work, as a keccak topic of the content / element words).
 - Evaluation ORDER of side-effecting subexpressions now matches solc: BINARY operands evaluate
   RIGHT-to-LEFT and ARGUMENT lists (array literals, return tuples, event/error args, call args)
   LEFT-to-RIGHT, byte-identical to solc (verified). This covers `++`/`--` in value position and
