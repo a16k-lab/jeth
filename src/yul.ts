@@ -22,7 +22,7 @@ import {
   EventIR,
 } from './ir.js';
 import { JethType, StructField, intRange, storageByteSize, storageSlotCount, isBytesLike, isDynamicType, isStaticType, isStaticValueType, isImplicitWiden, arrayElemPacks, abiHeadWords, abiLeaves, structStorageLeaves } from './types.js';
-import type { ArrayExpr, AccessPath, CalldataPlace, CdDynPlace, LValue } from './ir.js';
+import type { ArrayExpr, AccessPath, CalldataPlace, CdDynPlace, LValue, DestructureSource } from './ir.js';
 
 export class UnsupportedError extends Error {
   constructor(message: string) {
@@ -180,12 +180,20 @@ ${indent(runtime, 6)}
       this.ctxDeclare(ctx, p.name, an);
       argNames.push(an);
     }
-    const isVoid = fn.returnType.kind === 'void';
-    const retVar = isVoid ? null : this.fresh();
-    ctx.fnMode = { retVar };
+    let retDecl = '';
+    if (fn.returnTypes) {
+      // a multi-value internal function: `-> r0, r1, ...`; `return [..]` sets each and leaves.
+      const retVars = fn.returnTypes.map(() => this.fresh());
+      ctx.fnMode = { retVar: null, retVars };
+      retDecl = ` -> ${retVars.join(', ')}`;
+    } else {
+      const retVar = fn.returnType.kind === 'void' ? null : this.fresh();
+      ctx.fnMode = { retVar };
+      retDecl = retVar ? ` -> ${retVar}` : '';
+    }
     const body: string[] = [];
     for (const s of fn.body) for (const l of this.lowerStmt(s, ctx)) body.push(l);
-    const sig = `function ${this.userFnName(fn.name)}(${argNames.join(', ')})${isVoid ? '' : ` -> ${retVar}`}`;
+    const sig = `function ${this.userFnName(fn.name)}(${argNames.join(', ')})${retDecl}`;
     return `${sig} {\n${body.map((l) => '  ' + l).join('\n')}${body.length ? '\n' : ''}}`;
   }
 
@@ -377,6 +385,13 @@ ${indent(runtime, 6)}
     const out: string[] = [];
     switch (s.kind) {
       case 'returnTuple': {
+        // inside a multi-value INTERNAL function: set each return var (left-to-right) and leave.
+        if (ctx.fnMode) {
+          const vars = ctx.fnMode.retVars ?? [];
+          s.values.forEach((v, i) => out.push(`${vars[i]} := ${this.lowerExpr(v, ctx, out)}`));
+          out.push('leave');
+          break;
+        }
         const { ptr, size } = this.encodeReturnTuple(s.values, s.types, ctx, out);
         out.push(`return(${ptr}, ${size})`);
         break;
@@ -753,6 +768,27 @@ ${indent(runtime, 6)}
         this.lowerDelete(s.target, ctx, out);
         break;
       }
+      case 'tupleDecl': {
+        // `let [a, , c] = src`: bind a fresh local per non-skipped component.
+        const temps = this.lowerDestructureSource(s.source, ctx, out);
+        s.names.forEach((nm, i) => {
+          if (nm === null) return;
+          const ln = this.freshLocal(nm);
+          out.push(`let ${ln} := ${temps[i]}`);
+          this.ctxDeclare(ctx, nm, ln);
+        });
+        break;
+      }
+      case 'tupleAssign': {
+        // `[a, , c] = src`: RHS fully evaluated into temps, then store into each non-skipped
+        // target by reusing the assign lowering (feed the temp as a rawReg value).
+        const temps = this.lowerDestructureSource(s.source, ctx, out);
+        s.targets.forEach((tgt, i) => {
+          if (tgt === null) return;
+          for (const l of this.lowerStmt({ kind: 'assign', target: tgt, value: { kind: 'rawReg', type: tgt.type, reg: temps[i]! } }, ctx)) out.push(l);
+        });
+        break;
+      }
       case 'block': {
         out.push('{');
         for (const l of this.lowerBlock(s.body, ctx)) out.push('  ' + l);
@@ -1112,6 +1148,8 @@ ${indent(runtime, 6)}
     switch (e.kind) {
       case 'literalInt':
         return toWord(e.value);
+      case 'rawReg':
+        return e.reg; // a pre-computed Yul register (tuple destructuring feeds it into the assign lowering)
       case 'literalBool':
         return e.value ? '1' : '0';
       case 'localRead':
@@ -3839,6 +3877,24 @@ ${indent(runtime, 6)}
     });
   }
 
+  /** Evaluate a tuple destructuring source into one value register per component (left-to-right).
+   *  A multi-value internal call yields all components at once (`let r0, r1 := f(args)`); a tuple
+   *  of expressions evaluates each into its own temp. */
+  private lowerDestructureSource(source: DestructureSource, ctx: LowerCtx, out: string[]): string[] {
+    if (source.kind === 'call') {
+      const args = this.lowerCallArgs(source.args, ctx, out);
+      const n = this.funcs.get(source.fn)?.returnTypes?.length ?? 0;
+      const regs = Array.from({ length: n }, () => this.fresh());
+      out.push(`let ${regs.join(', ')} := ${this.userFnName(source.fn)}(${args.join(', ')})`);
+      return regs;
+    }
+    return source.values.map((v) => {
+      const r = this.fresh();
+      out.push(`let ${r} := ${this.lowerExpr(v, ctx, out)}`);
+      return r;
+    });
+  }
+
   private lowerAssignValue(target: LValue, valueReg: string, ctx: LowerCtx, out: string[]): void {
     if (target.kind === 'local') {
       out.push(`${this.ctxLookup(ctx, target.varName)} := ${valueReg}`);
@@ -4318,7 +4374,7 @@ interface LowerCtx {
   cdAggregates: Map<string, { baseOffset: number; type: JethType }>; // struct / fixed-array params (inline calldata head)
   cdDynStructs: Map<string, { tupleStart: string; type: JethType }>; // dynamic struct params (runtime tuple-start byte ptr)
   cdParamHead: Map<string, { head: number; type: JethType }>; // calldata head byte of EVERY param (for whole-param echo via the recursive encoder)
-  fnMode?: { retVar: string | null }; // set when lowering an INTERNAL function body: `return` -> retVar:=v; leave (retVar null = void)
+  fnMode?: { retVar: string | null; retVars?: string[] }; // set when lowering an INTERNAL function body: `return` -> retVar:=v; leave (retVar null = void). retVars set for a multi-value return.
 }
 
 // A lowered array reference, by source location.

@@ -1138,6 +1138,11 @@ export class Analyzer {
   }
 
   private checkLocalDecl(decl: ts.VariableDeclaration, out: Stmt[]): void {
+    // `let [a, , c] = <multi-call | tuple>` (tuple destructuring declaration).
+    if (ts.isArrayBindingPattern(decl.name)) {
+      this.checkTupleDecl(decl, out);
+      return;
+    }
     if (!ts.isIdentifier(decl.name)) {
       this.diags.error(decl, 'JETH062', 'destructuring is not supported');
       return;
@@ -1292,6 +1297,15 @@ export class Analyzer {
   }
 
   private checkAssignment(e: ts.BinaryExpression, out: Stmt[]): void {
+    // `[a, , c] = <multi-call | tuple>` (tuple destructuring assignment to existing lvalues).
+    if (ts.isArrayLiteralExpression(e.left)) {
+      if (e.operatorToken.kind !== ts.SyntaxKind.EqualsToken) {
+        this.diags.error(e.operatorToken, 'JETH064', 'compound assignment is not allowed on a tuple');
+        return;
+      }
+      this.checkTupleAssign(e, out);
+      return;
+    }
     const target = this.checkLValue(e.left);
     if (!target) return;
     // A whole aggregate that contains a mapping cannot be assigned/copied (matches solc:
@@ -1419,6 +1433,177 @@ export class Analyzer {
     this.currentCallees.add(name);
     this.internallyCalled.add(name);
     return { kind: 'call', type: callee.returnType, fn: name, args };
+  }
+
+  /** Resolve a multi-value internal call `f(...)` / `this.f(...)` as a tuple destructuring
+   *  source: the callee must be internal/private with `n` VALUE return components and value
+   *  params. Returns {fn, args, types} or undefined (with a diagnostic). */
+  private resolveTupleCall(node: ts.CallExpression, name: string, n: number): { fn: string; args: Expr[]; types: JethType[] } | undefined {
+    const callee = this.funcsByName.get(name)!;
+    if (callee.visibility === 'external') {
+      this.diags.error(node, 'JETH240', `cannot internally call @external function '${name}'`);
+      return undefined;
+    }
+    if (!callee.returnTypes || callee.returnTypes.length < 2) {
+      this.diags.error(node, 'JETH066', `'${name}' does not return a tuple; cannot destructure`);
+      return undefined;
+    }
+    if (callee.returnTypes.length !== n) {
+      this.diags.error(node, 'JETH066', `destructuring expects ${n} value(s) but '${name}' returns ${callee.returnTypes.length}`);
+      return undefined;
+    }
+    for (const t of callee.returnTypes) {
+      if (!isStaticValueType(t)) {
+        this.diags.error(node, 'JETH243', `tuple destructuring of a non-value return component (${displayName(t)}) is not supported yet`);
+        return undefined;
+      }
+    }
+    for (const p of callee.params) {
+      if (!isStaticValueType(p.type)) {
+        this.diags.error(node, 'JETH242', `internal call to '${name}' is not supported yet (parameter type ${displayName(p.type)})`);
+        return undefined;
+      }
+    }
+    if (node.arguments.length !== callee.params.length) {
+      this.diags.error(node, 'JETH148', `'${name}' expects ${callee.params.length} argument(s), got ${node.arguments.length}`);
+      return undefined;
+    }
+    const args: Expr[] = [];
+    for (let i = 0; i < callee.params.length; i++) {
+      const a = this.checkExpr(node.arguments[i]!, callee.params[i]!.type);
+      if (!a) return undefined;
+      args.push(this.coerce(a, callee.params[i]!.type, node.arguments[i]!));
+    }
+    this.currentCallees.add(name);
+    this.internallyCalled.add(name);
+    return { fn: name, args, types: callee.returnTypes };
+  }
+
+  /** The internal-callee name of `f(...)` / `this.f(...)`, if it resolves to a known function. */
+  private tupleCallName(node: ts.Expression): string | undefined {
+    if (!ts.isCallExpression(node)) return undefined;
+    if (ts.isIdentifier(node.expression) && this.funcsByName.has(node.expression.text)) return node.expression.text;
+    if (
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      this.funcsByName.has(node.expression.name.text)
+    )
+      return node.expression.name.text;
+    return undefined;
+  }
+
+  /** `let [a, , c] = <multi-call | [e1, e2, ...]>`: declare a new local per non-skipped element
+   *  (type inferred from the source component), skipping omitted slots. Value components only. */
+  private checkTupleDecl(decl: ts.VariableDeclaration, out: Stmt[]): void {
+    const pat = decl.name as ts.ArrayBindingPattern;
+    const n = pat.elements.length;
+    if (!decl.initializer) {
+      this.diags.error(decl, 'JETH066', 'a tuple destructuring declaration requires an initializer');
+      return;
+    }
+    const callName = this.tupleCallName(decl.initializer);
+    let types: JethType[];
+    let source: { kind: 'call'; fn: string; args: Expr[] } | { kind: 'tuple'; values: Expr[] };
+    if (callName) {
+      const r = this.resolveTupleCall(decl.initializer as ts.CallExpression, callName, n);
+      if (!r) return;
+      types = r.types;
+      source = { kind: 'call', fn: r.fn, args: r.args };
+    } else if (ts.isArrayLiteralExpression(decl.initializer)) {
+      if (decl.initializer.elements.length !== n) {
+        this.diags.error(decl.initializer, 'JETH066', `tuple has ${decl.initializer.elements.length} value(s), expected ${n}`);
+        return;
+      }
+      const values: Expr[] = [];
+      types = [];
+      for (const el of decl.initializer.elements) {
+        const v = this.checkExpr(el);
+        if (!v) return;
+        if (!isStaticValueType(v.type)) {
+          this.diags.error(el, 'JETH066', `tuple destructuring of a non-value component (${displayName(v.type)}) is not supported yet`);
+          return;
+        }
+        values.push(v);
+        types.push(v.type);
+      }
+      source = { kind: 'tuple', values };
+    } else {
+      this.diags.error(decl.initializer, 'JETH066', 'tuple destructuring requires a multi-value call or a tuple literal on the right');
+      return;
+    }
+    const names: (string | null)[] = [];
+    for (let i = 0; i < n; i++) {
+      const el = pat.elements[i]!;
+      if (ts.isOmittedExpression(el)) {
+        names.push(null);
+        continue;
+      }
+      if (!ts.isBindingElement(el) || !ts.isIdentifier(el.name)) {
+        this.diags.error(el, 'JETH062', 'only simple names are allowed in a tuple destructuring');
+        return;
+      }
+      const nm = el.name.text;
+      if (this.isVisibleLocal(nm)) {
+        this.diags.error(el, 'JETH068', `redeclaration of '${nm}' (shadowing is not allowed)`);
+        return;
+      }
+      this.declareLocal(nm, types[i]!);
+      names.push(nm);
+    }
+    out.push({ kind: 'tupleDecl', names, types, source });
+  }
+
+  /** `[a, , c] = <multi-call | [e1, e2, ...]>`: assign each non-skipped value to an existing
+   *  value lvalue (omitted slots discard the component). RHS is fully evaluated before any store. */
+  private checkTupleAssign(e: ts.BinaryExpression, out: Stmt[]): void {
+    const lhs = e.left as ts.ArrayLiteralExpression;
+    const n = lhs.elements.length;
+    const targets: (LValue | null)[] = [];
+    for (const el of lhs.elements) {
+      if (ts.isOmittedExpression(el)) {
+        targets.push(null);
+        continue;
+      }
+      const lv = this.checkLValue(el);
+      if (!lv) return;
+      if (!isStaticValueType(lv.type)) {
+        this.diags.error(el, 'JETH066', `tuple assignment to a non-value target (${displayName(lv.type)}) is not supported yet`);
+        return;
+      }
+      targets.push(lv);
+    }
+    const callName = this.tupleCallName(e.right);
+    let source: { kind: 'call'; fn: string; args: Expr[] } | { kind: 'tuple'; values: Expr[] };
+    if (callName) {
+      const r = this.resolveTupleCall(e.right as ts.CallExpression, callName, n);
+      if (!r) return;
+      for (let i = 0; i < n; i++) {
+        const tgt = targets[i];
+        if (tgt && !typesEqual(r.types[i]!, tgt.type) && !isImplicitWiden(r.types[i]!, tgt.type)) {
+          this.diags.error(lhs.elements[i]!, 'JETH085', `cannot assign ${displayName(r.types[i]!)} to ${displayName(tgt.type)}`);
+          return;
+        }
+      }
+      source = { kind: 'call', fn: r.fn, args: r.args };
+    } else if (ts.isArrayLiteralExpression(e.right)) {
+      if (e.right.elements.length !== n) {
+        this.diags.error(e.right, 'JETH066', `tuple has ${e.right.elements.length} value(s), expected ${n}`);
+        return;
+      }
+      const values: Expr[] = [];
+      for (let i = 0; i < n; i++) {
+        const el = e.right.elements[i]!;
+        const tgt = targets[i];
+        const v = this.checkExpr(el, tgt?.type);
+        if (!v) return;
+        values.push(tgt ? this.coerce(v, tgt.type, el) : v);
+      }
+      source = { kind: 'tuple', values };
+    } else {
+      this.diags.error(e.right, 'JETH066', 'tuple assignment requires a multi-value call or a tuple literal on the right');
+      return;
+    }
+    out.push({ kind: 'tupleAssign', targets, source });
   }
 
   /** Word offset (and type) of a struct field within the ABI-unpacked memory image, for a

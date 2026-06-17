@@ -54,6 +54,7 @@ export type GlobalOp =
 export type Expr =
   | { kind: 'literalInt'; type: JethType; value: bigint }
   | { kind: 'literalBool'; type: JethType; value: boolean }
+  | { kind: 'rawReg'; type: JethType; reg: string } // a pre-computed Yul register (internal; used to feed a value into the assign lowering, e.g. tuple destructuring)
   | { kind: 'stateRead'; type: JethType; slot: number; offset: number; varName: string }
   | { kind: 'localRead'; type: JethType; name: string }
   | { kind: 'binary'; type: JethType; op: BinOp; left: Expr; right: Expr; unchecked: boolean }
@@ -218,6 +219,11 @@ export type LValue =
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number } // a[i] = v on a fixed-array memory local
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number }; // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
 
+// The right-hand side of a tuple destructuring: a multi-value internal call, or a tuple of expressions.
+export type DestructureSource =
+  | { kind: 'call'; fn: string; args: Expr[] } // `[a, b] = this.f()` (f has N value return components)
+  | { kind: 'tuple'; values: Expr[] }; // `[a, b] = [x, y]` (parallel assign / swap)
+
 export type Stmt =
   | { kind: 'return'; value?: Expr }
   | { kind: 'returnTuple'; values: Expr[]; types: JethType[] } // return [a, b, ...] (multi-value)
@@ -226,6 +232,8 @@ export type Stmt =
   | { kind: 'exprStmt'; expr: Expr }
   | { kind: 'callStmt'; fn: string; args: Expr[] } // internal call as a statement (void or discarded value)
   | { kind: 'deleteStmt'; target: LValue } // `delete x`: reset a storage bytes/string/struct/array (whole mapping = no-op) to its zero value
+  | { kind: 'tupleDecl'; names: (string | null)[]; types: JethType[]; source: DestructureSource } // `let [a, , c] = src` (new locals; null = skipped)
+  | { kind: 'tupleAssign'; targets: (LValue | null)[]; source: DestructureSource } // `[a, , c] = src` (existing lvalues; null = skipped)
   // --- Phase 2: control flow (each branch/body is its own lexical scope) ---
   | { kind: 'block'; body: Stmt[] }
   | { kind: 'if'; cond: Expr; then: Stmt[]; else?: Stmt[] }

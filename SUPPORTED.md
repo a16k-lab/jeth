@@ -322,9 +322,15 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
   LEFT-to-RIGHT, byte-identical to solc (verified). This covers `++`/`--` in value position and
   assignment-expressions `(x = v)`/`(x += v)`/`x = y = a`.
 - Internal/private/public function calls are supported (`this.method(...)` or bare `name(...)`)
-  for value-typed and void params/returns, with recursion, mutual recursion, and transitive
-  `@view`/`@pure` purity. Aggregate (struct/array/bytes/string) params and returns, and
-  multi-value returns through an internal call, are gated until aggregate memory locals land.
+  for value-typed and void params/returns (plus static-struct params/returns to @internal/@private
+  callees), with recursion, mutual recursion, and transitive `@view`/`@pure` purity. A MULTI-VALUE
+  internal call (value return components) is callable via tuple destructuring (below). Aggregate
+  (array/bytes/string) params/returns through an internal call remain gated.
+- Tuple destructuring: `let [a, , c] = src` (declaration, new locals) and `[a, , c] = src`
+  (assignment to existing value lvalues incl. storage; omitted slots discard the component), where
+  `src` is a multi-value internal call (`this.f()`) or a tuple literal (`[x, y]`, e.g. swap
+  `[a, b] = [b, a]`). The RHS is fully evaluated before any store. Value components only (an
+  aggregate/bytes component in a tuple is gated). Byte-identical to solc.
 - Phase 5: constructors, modifiers, immutables.
 - Phase 6+: external calls, `address.balance`/`.call`/`.transfer`, `new` contract, inheritance,
   libraries, interfaces, abstract contracts, receive/fallback.
