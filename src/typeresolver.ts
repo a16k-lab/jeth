@@ -88,10 +88,17 @@ export function resolveType(
       return { kind: 'array', element, length };
     }
 
+    // Brand<Base> is only meaningful inside a named alias (`type X = Brand<Base>`), where the
+    // alias name becomes the nominal tag; an inline Brand<...> has no name.
+    if (name === 'Brand') {
+      diags.error(node, 'JETH015', 'Brand<...> must be used in a named type alias: `type X = Brand<BaseType>`');
+      return undefined;
+    }
+
     const prim = resolvePrimitiveName(name);
     if (prim) return prim;
 
-    // @struct type reference
+    // @struct type reference, or a registered branded newtype alias (both live in `structs`).
     const st = structs?.get(name);
     if (st) return st;
 

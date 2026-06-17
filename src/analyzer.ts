@@ -168,6 +168,7 @@ export class Analyzer {
   }
 
   analyze(): ContractIR | undefined {
+    this.collectTypeAliases(); // branded newtypes, before structs (a struct field may use one)
     this.collectStructs();
     const classes = this.findContractClasses();
     if (classes.length === 0) {
@@ -178,6 +179,51 @@ export class Analyzer {
       this.diags.error(classes[1]!, 'JETH041', 'multiple @contract classes per file are not supported in the MVP');
     }
     return this.analyzeContract(classes[0]!);
+  }
+
+  /** Collect `type X = Brand<BaseValueType>` branded-newtype aliases. A branded type is a
+   *  distinct NOMINAL value type over its base (a zero-cost newtype): the brand is erased at
+   *  codegen/ABI/selectors, so it is byte-identical to the base at runtime, but the type checker
+   *  keeps it distinct (no implicit conversion to/from the base or another brand). Registered in
+   *  structsByName so resolveType finds it; the struct-constructor dispatch ignores it (it is a
+   *  value type, not kind 'struct'). */
+  private collectTypeAliases(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isTypeAliasDeclaration(n)) this.collectTypeAlias(n);
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  private collectTypeAlias(decl: ts.TypeAliasDeclaration): void {
+    const name = decl.name.text;
+    const t = decl.type;
+    if (!ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName) || t.typeName.text !== 'Brand') {
+      this.diags.error(decl, 'JETH015', `type alias '${name}' must be 'Brand<BaseType>' (a distinct newtype over a value type)`);
+      return;
+    }
+    const args = t.typeArguments;
+    if (!args || args.length !== 1) {
+      this.diags.error(decl, 'JETH015', `Brand<...> takes exactly one base type, e.g. 'type ${name} = Brand<u256>'`);
+      return;
+    }
+    const base = resolveType(args[0], this.diags, this.structsByName);
+    if (!base) return;
+    if (!isStaticValueType(base) || (base as { brand?: string }).brand) {
+      this.diags.error(decl, 'JETH015', `Brand<...> base must be a plain value type (u8..u256, i8..i256, bool, address, bytesN), got ${displayName(base)}`);
+      return;
+    }
+    if (this.structsByName.has(name) || resolvePrimitiveName(name)) {
+      this.diags.error(decl, 'JETH015', `type name '${name}' conflicts with an existing type`);
+      return;
+    }
+    this.structsByName.set(name, { ...base, brand: name } as JethType);
+  }
+
+  /** True if `name` is a registered branded newtype alias (so `Name(x)` is a wrap/unwrap cast). */
+  private isBrandedAlias(name: string): boolean {
+    const t = this.structsByName.get(name);
+    return !!t && !!(t as { brand?: string }).brand;
   }
 
   /** Collect @struct class declarations into the registry (in source order so a
@@ -2984,7 +3030,8 @@ export class Analyzer {
       }
       return { kind: 'cast', type: { kind: 'address', payable: true }, from: inner.type, operand: inner };
     }
-    const target = resolvePrimitiveName(callee)!; // guaranteed by caller
+    // a primitive cast (u256(x), address(x), ...) or a branded-newtype wrap (TokenId(x)).
+    const target = resolvePrimitiveName(callee) ?? this.structsByName.get(callee)!;
     const inner = this.checkExpr(arg);
     if (!inner) return undefined;
     // An integer-literal cast is range-checked at compile time (uint8(300) is an error
@@ -3672,7 +3719,7 @@ export class Analyzer {
     ) {
       const callee = node.expression.text;
       if (callee === 'address') return this.checkAddressCall(node);
-      if (callee === 'payable' || resolvePrimitiveName(callee)) return this.checkCast(node, callee);
+      if (callee === 'payable' || resolvePrimitiveName(callee) || this.isBrandedAlias(callee)) return this.checkCast(node, callee);
       const st = this.structsByName.get(callee);
       if (st && st.kind === 'struct') return this.checkStructConstruct(node, st);
       // an internal/private/public contract function called by name -> internal call.
@@ -3856,8 +3903,10 @@ export class Analyzer {
   /** Make two operands share a type, retyping a literal toward the other side. */
   private unifyOperands(left: Expr, right: Expr, node: ts.Node): [Expr, Expr] | undefined {
     if (typesEqual(left.type, right.type)) return [left, right];
-    // address and address payable share the same EVM word; compare freely.
-    if (left.type.kind === 'address' && right.type.kind === 'address') return [left, right];
+    // address and address payable share the same EVM word; compare freely. But a branded
+    // address is nominally distinct: only fold when both sides carry the same brand (or none).
+    if (left.type.kind === 'address' && right.type.kind === 'address' &&
+        left.type.brand === right.type.brand) return [left, right];
     const lLit = left.kind === 'literalInt';
     const rLit = right.kind === 'literalInt';
     if (rLit && !lLit) {
@@ -3905,8 +3954,11 @@ export class Analyzer {
       if (r) return r;
       return expr;
     }
-    // address payable -> address is implicit (same word); the reverse needs payable().
-    if (expr.type.kind === 'address' && target.kind === 'address') {
+    // address payable -> address is implicit (same word); the reverse needs payable(). A branded
+    // address is nominally distinct, so only this fast-path when the brands match (else fall
+    // through to the generic no-implicit-conversion error, matching every other branded base).
+    if (expr.type.kind === 'address' && target.kind === 'address' &&
+        expr.type.brand === target.brand) {
       if (expr.type.payable || !target.payable) return expr;
       this.diags.error(node, 'JETH172', 'cannot implicitly convert address to address payable (use payable(...))');
       return expr;

@@ -1,12 +1,15 @@
 // The JETH type system. These types ARE the EVM/Solidity types (directive §4.2);
 // the surface syntax is TypeScript annotations but the semantics are Solidity's.
 
+// `brand` is a compile-time-only nominal tag (a branded newtype, `type X = Brand<Base>`).
+// It is ERASED at codegen / ABI / selectors (which switch on kind/bits/size), so a branded
+// value is byte-identical to its base at runtime; it only adds a distinct compile-time identity.
 export type JethType =
-  | { kind: 'uint'; bits: number } // u8..u256, bits multiple of 8
-  | { kind: 'int'; bits: number } // i8..i256
-  | { kind: 'bool' }
-  | { kind: 'address'; payable: boolean }
-  | { kind: 'bytesN'; size: number } // bytes1..bytes32
+  | { kind: 'uint'; bits: number; brand?: string } // u8..u256, bits multiple of 8
+  | { kind: 'int'; bits: number; brand?: string } // i8..i256
+  | { kind: 'bool'; brand?: string }
+  | { kind: 'address'; payable: boolean; brand?: string }
+  | { kind: 'bytesN'; size: number; brand?: string } // bytes1..bytes32
   | { kind: 'bytes' } // dynamic
   | { kind: 'string' } // dynamic
   | { kind: 'mapping'; key: JethType; value: JethType }
@@ -59,6 +62,8 @@ export function canonicalName(t: JethType): string {
 
 /** Human-facing JETH name (u256, i8, ...) for diagnostics. */
 export function displayName(t: JethType): string {
+  const br = (t as { brand?: string }).brand;
+  if (br) return br; // a branded newtype shows its name (e.g. TokenId) in diagnostics
   switch (t.kind) {
     case 'uint':
       return `u${t.bits}`;
@@ -215,6 +220,9 @@ export function storageByteSize(t: JethType): number {
 /** Whether two types are exactly equal. */
 export function typesEqual(a: JethType, b: JethType): boolean {
   if (a.kind !== b.kind) return false;
+  // branded newtypes are NOMINAL: a brand only equals the same brand (and a brand never
+  // equals its unbranded base). Non-value kinds have no brand, so this is a no-op for them.
+  if ((a as { brand?: string }).brand !== (b as { brand?: string }).brand) return false;
   switch (a.kind) {
     case 'uint':
     case 'int':
@@ -252,6 +260,9 @@ export function isInteger(t: JethType): boolean {
  *  sign-extended; bytesN: left-aligned), so the conversion is a no-op at the word level.
  *  uint<->int mixes and narrowing are excluded (they need an explicit cast). */
 export function isImplicitWiden(from: JethType, to: JethType): boolean {
+  // a branded newtype never implicitly converts to/from a different brand (or its base):
+  // crossing a brand boundary requires an explicit wrap/unwrap cast.
+  if ((from as { brand?: string }).brand !== (to as { brand?: string }).brand) return false;
   if (from.kind === 'uint' && to.kind === 'uint') return to.bits >= from.bits;
   if (from.kind === 'int' && to.kind === 'int') return to.bits >= from.bits;
   if (from.kind === 'bytesN' && to.kind === 'bytesN') return to.size >= from.size;
@@ -262,6 +273,9 @@ export function isImplicitWiden(from: JethType, to: JethType): boolean {
  *  of two same-signedness integers (uintN/uintM -> max, intN/intM -> max) or two bytesN
  *  (-> larger size). undefined when there is no implicit common type (e.g. uint vs int). */
 export function commonNumericType(a: JethType, b: JethType): JethType | undefined {
+  // operands must share a brand (so the result keeps it); a brand never mixes with its base
+  // or a different brand in one operation - unwrap explicitly to combine them.
+  if ((a as { brand?: string }).brand !== (b as { brand?: string }).brand) return undefined;
   if (a.kind === 'uint' && b.kind === 'uint') return a.bits >= b.bits ? a : b;
   if (a.kind === 'int' && b.kind === 'int') return a.bits >= b.bits ? a : b;
   if (a.kind === 'bytesN' && b.kind === 'bytesN') return a.size >= b.size ? a : b;

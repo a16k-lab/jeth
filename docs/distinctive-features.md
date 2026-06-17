@@ -92,7 +92,43 @@ an `@external` function -> `JETH240`.
 
 ---
 
-## 2. Where JETH is *more capable* than the Solidity compiler
+## 2. Branded newtypes (JETH-only ergonomics)
+
+`type X = Brand<Base>` declares a distinct **nominal** value type over a value `Base` (any
+`uintN` / `intN` / `bool` / `address` / `bytesN`). The brand is a **compile-time tag only**:
+it is fully **erased** at codegen, ABI, and selector level, so a branded contract is
+byte-identical to the same contract written with the plain base. (Verified: a branded
+contract compiles to **byte-identical creation bytecode and ABI** as the plain-base version,
+and is byte-identical to solc at runtime, including raw storage slots and event logs. This is
+the same idea as Solidity's `type X is uint256` user-defined value types, with lighter syntax.)
+
+```ts
+type TokenId = Brand<u256>;
+type Wei     = Brand<u256>;
+
+@contract class C {
+  @state owner: mapping<TokenId, address>;          // branded key, slot layout == mapping<u256,...>
+  @external setOwner(id: TokenId, o: address): void { this.owner[id] = o; } // selector: setOwner(uint256,address)
+  @external @pure addWei(a: Wei, b: Wei): Wei { return a + b; }             // same-brand math keeps the brand
+  @external @pure wrap(x: u256): TokenId { return TokenId(x); }             // explicit wrap
+  @external @pure unwrap(id: TokenId): u256 { return u256(id); }            // explicit unwrap
+}
+```
+
+**Nominal identity is enforced.** Two different brands, or a brand versus its bare base, are
+**not** implicitly convertible: you must wrap (`TokenId(x)`) or unwrap (`u256(t)`) explicitly.
+Mixing a `TokenId` with a `UserId`, or a `TokenId` with a plain `u256`, is a type error
+(`JETH083` / `JETH085`). This holds for **every** base kind, addresses included. Same-brand
+operands keep the brand under binary ops (so `a + b` of two `Wei` is a `Wei`), and a numeric
+literal retypes to the branded operand (so `id + 1n` works). The brand has **zero runtime
+cost**: it exists only in the type checker.
+
+Use it for the usual unit-confusion bugs: token ids that should never be mixed with balances,
+wei versus gwei, two different address roles, opaque handles. `Brand<...>` may only appear in a
+named alias (`JETH015` on inline use), and the base must be a value type (a `Brand` over a
+mapping / array / struct is rejected).
+
+## 3. Where JETH is *more capable* than the Solidity compiler
 
 JETH always compiles through Yul (solc's IR pipeline), which schedules the EVM's 1024-slot
 operand stack far more efficiently than Solidity's default (legacy) stack-based codegen. Two
@@ -138,7 +174,7 @@ The identical JETH program compiles with no trouble.
 
 ---
 
-## 3. Design note
+## 4. Design note
 
 Everything not listed above is intended to be **observably indistinguishable from Solidity**.
 JETH's value proposition is a TypeScript surface syntax with exact Solidity/EVM semantics, plus
