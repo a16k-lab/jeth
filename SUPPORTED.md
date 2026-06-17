@@ -45,8 +45,13 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 - `@contract` class -> contract.
 - `@state` fields -> storage slots (Solidity-compatible layout + packing).
 - Methods -> ABI functions.
-- Visibility decorators: `@external`, `@public`, `@internal`, `@private` (default `public`).
-- Mutability decorators: `@view`, `@pure`, `@payable` (default nonpayable).
+- Visibility decorators: `@external`, `@public`, `@internal`, `@private`. INFERENCE: with no
+  visibility decorator the compiler resolves `@public` if the function is ever called internally
+  (`f()`/`this.f()`), else `@external`; `@hidden` marks a not-exposed helper, resolved to `@internal`.
+- Mutability decorators: `@view`, `@pure`, `@payable` (default nonpayable). INFERENCE: `@read` marks a
+  read-only function, resolved to `@pure` (touches no state/env, transitively) or `@view` (reads, never
+  writes); a transitive write is rejected (JETH056). All inference resolves to a concrete
+  visibility+mutability before ABI emission, so the generated ABI is the true one.
 - Constant state initializers (`@state x: u256 = 42n`) -> written in creation code.
 
 ### Types
