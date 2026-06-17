@@ -257,7 +257,10 @@ ${indent(runtime, 6)}
         out.push(`if gt(${off}, 0xffffffffffffffff) { revert(0, 0) }`);
         const dataPtr = this.fresh();
         out.push(`let ${dataPtr} := add(4, ${off})`);
-        out.push(`if iszero(slt(add(${dataPtr}, 0x1f), calldatasize())) { revert(0, 0) }`);
+        // the WHOLE N-word per-element offset table (no length word) must be readable: solc
+        // requires dataPtr + N*32 <= calldatasize, not just the first word (a head that fits its
+        // first word but runs past calldatasize for words 1..N-1 must EMPTY-revert, like solc).
+        out.push(`if gt(add(${dataPtr}, ${p.type.length * 32}), calldatasize()) { revert(0, 0) }`);
         ctx.cdArrays.set(p.name, { offset: dataPtr, length: String(p.type.length), elem: p.type.element });
       } else if (p.type.kind === 'struct' || (p.type.kind === 'array' && p.type.length !== undefined)) {
         // static aggregate: inline in the head, decoded lazily on field/element read.

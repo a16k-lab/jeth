@@ -51,13 +51,18 @@ class Counter {
 
 ## Status
 
-Phases 0-3 are complete and verified on a live EVM with differential tests against
-real Solidity (`solc-js`): Phase 0 (frontend + validator), Phase 1 (Counter end-to-end),
-Phase 2 (control flow, `require`/`revert`/`Error(string)`/custom errors, events), and
-Phase 3 (mappings with keccak slot derivation, `msg.*`/`block.*`/`tx.*` globals, `payable`,
-`address(this)`). Returndata, raw storage slots (including keccak-derived mapping slots),
-and event logs are asserted byte-identical to Solidity. The directive's `Vault` contract
-runs end-to-end. See [SUPPORTED.md](SUPPORTED.md) for the full matrix and roadmap.
+Everything through Phase 4 is complete and verified on a live EVM with differential
+tests against real Solidity (`solc-js`): Phase 0 (frontend + validator), Phase 1
+(Counter end-to-end), Phase 2 (control flow, `require`/`revert`/`Error(string)`/custom
+errors, events), Phase 3 (mappings with keccak slot derivation, `msg.*`/`block.*`/`tx.*`
+globals, `payable`, `address(this)`), and Phase 4 (the full ABI-v2 surface: arrays,
+structs, `bytes`/`string`, dynamic head/tail encode/decode with unbounded nesting,
+storage/calldata composites, memory locals, internal calls, tuple destructuring, `delete`,
+events/errors). Returndata, raw storage slots (including keccak-derived mapping slots),
+and event logs are asserted byte-identical to Solidity across 1000+ differential tests
+plus repeated adversarial fuzzing (zero known miscompiles). The directive's `Vault`
+contract runs end-to-end. Phase 5 (constructors with arguments, modifiers, immutables)
+is the next milestone. See [SUPPORTED.md](SUPPORTED.md) for the full matrix and roadmap.
 
 ## Layout
 
