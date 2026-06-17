@@ -288,11 +288,14 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
   whole-struct return, and memory aliasing (`let q = p`; a write through `q` is visible through `p`).
   @internal/@private functions take and RETURN static structs as memory by reference (mutation in a
   callee is visible to the caller); a struct can be passed, returned, bound to a local, chained, and
-  built via recursion. Still gated: FIXED-ARRAY and `bytes`/`string` memory locals; dynamic-field
-  struct memory locals; copying a memory local FROM a storage/calldata source (`let p: P = this.s`
-  / `= calldataParam`); reading a WHOLE nested struct field as a value (`p.inner`); a struct param to a
-  PUBLIC/EXTERNAL callee via an internal call; `new T[](n)` (use an array literal); aggregate
-  components in a multi-value return.
+  built via recursion. Also supported: copying a memory local FROM a storage struct or calldata struct
+  param (`let p: P = this.s` / `= calldataParam`, a fresh COPY); reading a whole nested struct field
+  as a value (`return p.inner`, aliasing); `bytes`/`string` memory locals (`let s: string = X`: return,
+  `.length`, `b[i]`, alias); FIXED-ARRAY-of-value memory locals (`let a: Arr<u256,3> = [...]`: `a[i]`
+  read/write, return, alias, storage/calldata copy). Still gated: dynamic-field struct memory locals
+  (a memory struct with a `bytes`/`string`/array field needs the Solidity pointer-based memory layout);
+  a struct param to a PUBLIC/EXTERNAL callee via an internal call; `new T[](n)` (use an array literal);
+  non-value aggregate components in a multi-value return.
 - A packed (`<256`-bit) element of a nested DYNAMIC array (`this.m[k].dynArr[i]`); the packed
   FIXED-array case through a struct field (`this.q.pts[i]`) now works (runtime byte offset).
 - A ternary over a storage struct / storage array / bytes / string (`c ? this.a : this.b`); a ternary
