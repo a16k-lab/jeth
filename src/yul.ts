@@ -382,10 +382,14 @@ ${indent(runtime, 6)}
         break;
       }
       case 'return': {
-        // Inside an INTERNAL function (G8): set the return var and `leave` (a value type
-        // only - aggregate returns are gated). A bare `return;` in a void fn just leaves.
+        // Inside an INTERNAL function (G8/G9): set the return var and `leave`. A value return
+        // sets ret to the value; a STATIC struct return sets ret to the memory pointer (a freshly
+        // constructed struct is allocated first). A bare `return;` in a void fn just leaves.
         if (ctx.fnMode) {
-          if (s.value && ctx.fnMode.retVar) out.push(`${ctx.fnMode.retVar} := ${this.lowerExpr(s.value, ctx, out)}`);
+          if (s.value && ctx.fnMode.retVar) {
+            const v = s.value.kind === 'structNew' ? this.allocAggToMem(s.value, ctx, out) : this.lowerExpr(s.value, ctx, out);
+            out.push(`${ctx.fnMode.retVar} := ${v}`);
+          }
           out.push('leave');
           break;
         }
@@ -393,10 +397,11 @@ ${indent(runtime, 6)}
           out.push('return(0, 0)');
           break;
         }
-        // `return p` (whole memory STATIC struct local): its ABI-unpacked memory image IS the
-        // flat return encoding. G9.
-        if (s.value.kind === 'memAggregate' && s.value.type.kind === 'struct') {
-          out.push(`return(${this.ctxLookup(ctx, s.value.local)}, ${abiHeadWords(s.value.type) * 32})`);
+        // `return p` (memory STATIC struct local) or `return this.helper()` (struct-returning
+        // internal call): the ABI-unpacked memory image at the pointer IS the flat return blob. G9.
+        if (s.value.type.kind === 'struct' && (s.value.kind === 'memAggregate' || s.value.kind === 'call')) {
+          const ptr = s.value.kind === 'memAggregate' ? this.ctxLookup(ctx, s.value.local) : this.lowerExpr(s.value, ctx, out);
+          out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
           break;
         }
         // `return a` (whole STATIC struct / fixed-array calldata param): re-encode inline
@@ -3447,10 +3452,12 @@ ${indent(runtime, 6)}
    *  place / array element). Factored from the assign-statement handler; used by the
    *  expression-position ++/-- lowering. */
   /** Evaluate internal-call arguments LEFT-to-RIGHT (solc order), freezing each into a fresh
-   *  temp so a later arg's side effect cannot disturb an earlier arg's already-computed value. */
+   *  temp so a later arg's side effect cannot disturb an earlier arg's already-computed value.
+   *  A STATIC struct argument is passed by reference (its memory pointer); a freshly constructed
+   *  one (structNew) is allocated to memory first. */
   private lowerCallArgs(args: Expr[], ctx: LowerCtx, out: string[]): string[] {
     return args.map((a) => {
-      const reg = this.lowerExpr(a, ctx, out);
+      const reg = a.kind === 'structNew' ? this.allocAggToMem(a, ctx, out) : this.lowerExpr(a, ctx, out);
       const t = this.fresh();
       out.push(`let ${t} := ${reg}`);
       return t;

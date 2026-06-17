@@ -564,11 +564,17 @@ export class Analyzer {
     this.currentCallees = new Set();
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
+    const internalOnly = rf.visibility === 'internal' || rf.visibility === 'private';
     for (const p of rf.params) {
       if (this.inCurrentScope(p.name)) {
         this.diags.error(rf.node, 'JETH056', `duplicate parameter name '${p.name}'`);
       }
       this.declareLocal(p.name, p.type);
+      // G9: a STATIC struct param of an @internal/@private function is a MEMORY pointer
+      // (passed by reference), so `p.x` resolves to a memory field, not a calldata place.
+      if (internalOnly && p.type.kind === 'struct' && isStaticType(p.type)) {
+        this.memAggregateLocals.set(p.name, p.type);
+      }
     }
 
     const body: Stmt[] = [];
@@ -1102,8 +1108,11 @@ export class Analyzer {
       }
       const e = this.checkExpr(decl.initializer, declared);
       if (!e) return;
-      if (e.kind !== 'structNew' && e.kind !== 'memAggregate') {
-        this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...) or another memory struct (copying from storage/calldata is a later step)');
+      // Allowed sources: a constructor StructName(...), another memory struct (alias), or a
+      // struct-returning internal call. Copies from storage/calldata are a later step.
+      const okInit = e.kind === 'structNew' || e.kind === 'memAggregate' || (e.kind === 'call' && e.type.kind === 'struct');
+      if (!okInit) {
+        this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...), another memory struct, or a struct-returning internal call (copying from storage/calldata is a later step)');
         return;
       }
       this.declareLocal(decl.name.text, declared);
@@ -1216,12 +1225,22 @@ export class Analyzer {
       this.diags.error(node, 'JETH241', `internal call to a multi-value-return function '${name}' is not supported yet`);
       return undefined;
     }
-    if (callee.params.some((p) => !isStaticValueType(p.type))) {
-      this.diags.error(node, 'JETH242', `internal call to '${name}' is not supported yet (a parameter is not a value type)`);
+    // A STATIC struct param/return is supported only when the callee is @internal/@private
+    // (its struct params are pure MEMORY pointers, passed by reference). A public/external
+    // function's struct param uses calldata, so internal struct calls to it are gated.
+    const aggOK = callee.visibility === 'internal' || callee.visibility === 'private';
+    const paramSupported = (t: JethType): boolean => isStaticValueType(t) || (t.kind === 'struct' && isStaticType(t) && aggOK);
+    for (const p of callee.params) {
+      if (paramSupported(p.type)) continue;
+      const hint = p.type.kind === 'struct' && !aggOK ? ' (struct params require the callee to be @internal or @private)' : '';
+      this.diags.error(node, 'JETH242', `internal call to '${name}' is not supported yet (parameter type ${displayName(p.type)} is not supported${hint})`);
       return undefined;
     }
-    if (callee.returnType.kind !== 'void' && !isStaticValueType(callee.returnType)) {
-      this.diags.error(node, 'JETH243', `internal call to '${name}' is not supported yet (its return type is not a value type)`);
+    const rt = callee.returnType;
+    const returnSupported = rt.kind === 'void' || isStaticValueType(rt) || (rt.kind === 'struct' && isStaticType(rt) && aggOK);
+    if (!returnSupported) {
+      const hint = rt.kind === 'struct' && !aggOK ? ' (struct returns require the callee to be @internal or @private)' : '';
+      this.diags.error(node, 'JETH243', `internal call to '${name}' is not supported yet (return type ${displayName(rt)} is not supported${hint})`);
       return undefined;
     }
     if (!asStatement && callee.returnType.kind === 'void') {
@@ -1237,7 +1256,16 @@ export class Analyzer {
       const pt = callee.params[i]!.type;
       const a = this.checkExpr(node.arguments[i]!, pt);
       if (!a) return undefined;
-      args.push(this.coerce(a, pt, node.arguments[i]!));
+      if (pt.kind === 'struct') {
+        // a memory-struct argument (passed by reference): the argument must be the same struct.
+        if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
+          this.diags.error(node.arguments[i]!, 'JETH085', `argument ${i + 1} of '${name}' expects ${displayName(pt)}, got ${displayName(a.type)}`);
+          return undefined;
+        }
+        args.push(a);
+      } else {
+        args.push(this.coerce(a, pt, node.arguments[i]!));
+      }
     }
     this.currentCallees.add(name);
     this.internallyCalled.add(name);
