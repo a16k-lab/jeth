@@ -39,8 +39,9 @@ describe('Phase 2 diagnostics', () => {
     expect(codesFor(fn('while (this.x) {}'))).toContain('JETH110');
   });
 
-  it('rejects for-of / for-in', () => {
-    expect(codesFor(fn('for (let i: u256 of xs) {}'))).toContain('JETH111');
+  it('rejects for-in, and a type-annotated for-of binding (for-of itself is supported)', () => {
+    expect(codesFor(fn('for (const k in this.x) {}'))).toContain('JETH111');
+    expect(codesFor(fn('for (let i: u256 of xs) {}'))).toContain('JETH116');
   });
 
   it('rejects a local that shadows an outer-scope variable', () => {

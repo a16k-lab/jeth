@@ -35,8 +35,10 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
         diags.error(node, 'JETH027', 'regular expressions have no on-chain meaning');
         break;
       case ts.SyntaxKind.SpreadElement:
-      case ts.SyntaxKind.SpreadAssignment:
-        diags.error(node, 'JETH028', 'spread/rest is not supported');
+        // array / call spread ([...a], f(...a)) has no deterministic on-chain meaning.
+        // Object spread (`...base` in a struct literal) IS supported; the type checker
+        // validates it precisely against the target struct type.
+        diags.error(node, 'JETH028', 'array/call spread/rest is not supported');
         break;
       case ts.SyntaxKind.TemplateExpression:
       case ts.SyntaxKind.TaggedTemplateExpression:

@@ -128,7 +128,59 @@ wei versus gwei, two different address roles, opaque handles. `Brand<...>` may o
 named alias (`JETH015` on inline use), and the base must be a value type (a `Brand` over a
 mapping / array / struct is rejected).
 
-## 3. Where JETH is *more capable* than the Solidity compiler
+## 3. Struct spread and `for...of` (ergonomic desugarings)
+
+Two TypeScript-native conveniences that Solidity has no syntax for. Both are pure compile-time
+desugarings into constructs the compiler already emits byte-for-byte against solc, so they carry
+zero new runtime semantics.
+
+### Immutable struct update with spread
+
+`{ ...base, field: value }` builds a new struct that copies `base` and overrides the named
+fields. It desugars to the exact same construction as positional `StructName(...)`, so codegen,
+ABI, and storage layout are identical.
+
+```ts
+@struct class Config { fee: u16; recipient: address; paused: bool; }
+
+@contract class C {
+  @state cfg: Config;
+  @external setFee(f: u16): void { this.cfg = { ...this.cfg, fee: f }; }       // update one field
+  @external pause(): void { this.cfg = { ...this.cfg, paused: !this.cfg.paused }; }
+  @external @pure make(r: address): Config { return { fee: 0n, recipient: r, paused: false }; } // full literal
+}
+```
+
+The `this.cfg = { ...this.cfg, fee: f }` form reads the old value and writes the new one with the
+same observable result as Solidity's `Config memory c = cfg; c.fee = f; cfg = c;`, including
+identical packed-slot bytes. Scoped to structs whose fields are all value types (the immutable
+config/position pattern); structs with nested, dynamic, or array fields still use positional
+`StructName(...)`. Object-literal construction needs the target struct type to be known from
+context (a return type, an annotated local, an assignment target, or a call argument).
+
+### `for...of` over arrays
+
+`for (const v of xs) { ... }` iterates an array (storage, calldata, memory, or fixed `Arr<T,N>`),
+binding each element to a fresh copy. It desugars to the indexed loop you would write by hand:
+
+```ts
+@contract class C {
+  @state xs: u256[];
+  @external @view total(): u256 {
+    let s: u256 = 0n;
+    for (const v of this.xs) { s = s + v; }   // == for (let i=0n; i<this.xs.length; i=i+1n) { const v = this.xs[i]; ... }
+    return s;
+  }
+}
+```
+
+The array length and element are re-read each iteration (not cached), so mutating the array in the
+body behaves exactly like the hand-written loop under solc. `break` / `continue` / `return` and
+nesting all work. The element binding inherits whatever a standalone `const v = xs[i]` supports
+(value and branded-value elements today). `for...in` is not supported (iterate an array with
+`for...of`).
+
+## 4. Where JETH is *more capable* than the Solidity compiler
 
 JETH always compiles through Yul (solc's IR pipeline), which schedules the EVM's 1024-slot
 operand stack far more efficiently than Solidity's default (legacy) stack-based codegen. Two
@@ -174,7 +226,7 @@ The identical JETH program compiles with no trouble.
 
 ---
 
-## 4. Design note
+## 5. Design note
 
 Everything not listed above is intended to be **observably indistinguishable from Solidity**.
 JETH's value proposition is a TypeScript surface syntax with exact Solidity/EVM semantics, plus

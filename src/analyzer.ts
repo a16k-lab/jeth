@@ -833,8 +833,12 @@ export class Analyzer {
       return;
     }
 
-    if (ts.isForOfStatement(node) || ts.isForInStatement(node)) {
-      this.diags.error(node, 'JETH111', 'for-of / for-in loops are not supported');
+    if (ts.isForOfStatement(node)) {
+      this.checkForOfStatement(node, returnType, out);
+      return;
+    }
+    if (ts.isForInStatement(node)) {
+      this.diags.error(node, 'JETH111', 'for-in loops are not supported; iterate an array with for-of');
       return;
     }
 
@@ -1004,6 +1008,72 @@ export class Analyzer {
     return { kind: 'structNew', type: st, fields: st.fields, args };
   }
 
+  // Object-literal / spread struct construction: `{ ...base, x: v }` (immutable update) or a
+  // full `{ a: x, b: y }` literal. Desugars to the SAME `structNew` a positional StructName(...)
+  // produces, so codegen / ABI / storage are byte-identical. Scoped to all-value-field structs:
+  // each field value is either an override or a re-read `base.field`, and a value read trivially
+  // satisfies structNew's per-field contract (nested/dynamic/array fields still need StructName(...)).
+  private checkStructLiteral(node: ts.ObjectLiteralExpression, st: JethType & { kind: 'struct' }): Expr | undefined {
+    if (this.typeHasMapping(st)) {
+      this.diags.error(node, 'JETH247', `struct '${st.name}' contains a mapping and cannot be constructed (mappings are storage-only)`);
+      return undefined;
+    }
+    for (const fld of st.fields) {
+      if (!isStaticValueType(fld.type)) {
+        this.diags.error(node, 'JETH229', `object-literal / spread construction of '${st.name}' supports only value-typed fields; field '${fld.name}' is ${displayName(fld.type)} (use positional ${st.name}(...))`);
+        return undefined;
+      }
+    }
+    let base: ts.Expression | undefined;
+    const overrides = new Map<string, ts.Expression>();
+    for (const p of node.properties) {
+      if (ts.isSpreadAssignment(p)) {
+        if (base) { this.diags.error(p, 'JETH230', 'at most one spread `...base` is allowed in a struct literal'); return undefined; }
+        base = p.expression;
+        continue;
+      }
+      if (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) {
+        if (!ts.isIdentifier(p.name)) { this.diags.error(p.name, 'JETH231', 'struct field name must be a plain identifier'); return undefined; }
+        const fn = p.name.text;
+        if (!st.fields.some((fl) => fl.name === fn)) { this.diags.error(p.name, 'JETH232', `struct '${st.name}' has no field '${fn}'`); return undefined; }
+        if (overrides.has(fn)) { this.diags.error(p.name, 'JETH233', `duplicate field '${fn}' in struct literal`); return undefined; }
+        // shorthand `{ x }` means `x: x` (the field name read as an identifier).
+        overrides.set(fn, ts.isPropertyAssignment(p) ? p.initializer : p.name);
+        continue;
+      }
+      this.diags.error(p, 'JETH231', 'unsupported struct-literal member (use `field: value`, shorthand `field`, or `...base`)');
+      return undefined;
+    }
+    if (base && this.exprHasCall(base)) {
+      this.diags.error(base, 'JETH234', 'struct spread source must be a plain reference (bind a computed value to a const first)');
+      return undefined;
+    }
+    if (base) {
+      // The spread source must itself be a value of this exact struct type.
+      const b = this.checkExpr(base, st);
+      if (!b) return undefined;
+      if (!(b.type.kind === 'struct' && b.type.name === st.name)) {
+        this.diags.error(base, 'JETH236', `struct spread source must be a ${st.name}, got ${displayName(b.type)}`);
+        return undefined;
+      }
+    }
+    const args: Expr[] = [];
+    for (const fld of st.fields) {
+      let argNode = overrides.get(fld.name);
+      if (!argNode) {
+        if (!base) {
+          this.diags.error(node, 'JETH235', `struct literal for '${st.name}' is missing field '${fld.name}' (add it, or spread a base value with ...base)`);
+          return undefined;
+        }
+        argNode = this.synth(ts.factory.createPropertyAccessExpression(base, fld.name), base);
+      }
+      const a = this.checkExpr(argNode, fld.type);
+      if (!a) return undefined;
+      args.push(this.coerce(a, fld.type, argNode));
+    }
+    return { kind: 'structNew', type: st, fields: st.fields, args };
+  }
+
   private checkArrayMutator(call: ts.CallExpression, method: string, out: Stmt[]): void {
     const arr = this.resolveArrayExpr((call.expression as ts.PropertyAccessExpression).expression);
     if (!arr) {
@@ -1127,6 +1197,121 @@ export class Analyzer {
     this.loopDepth--;
     this.popScope();
     out.push({ kind: 'for', init, cond, post, body });
+  }
+
+  // Monotonic counter for fresh synthesized-loop variable names (deterministic, no RNG).
+  private synthCounter = 0;
+
+  /** Stamp a synthesized AST node with a real source range + parent so diagnostics that
+   *  fire on it can still compute a line/column (getStart scans from node.pos). */
+  private synth<T extends ts.Node>(n: T, src: ts.Node): T {
+    ts.setTextRange(n, src);
+    (n as unknown as { parent: ts.Node }).parent = src.parent ?? src;
+    return n;
+  }
+
+  /** Rebuild a TS type-annotation node from a resolved JethType, so a synthesized local
+   *  decl carries the explicit annotation JETH requires. Covers the types an array element
+   *  can be (value/branded/bytes/string/struct/array); other kinds are not iterable elements. */
+  private jethTypeToTypeNode(t: JethType, anchor: ts.Node): ts.TypeNode {
+    const f = ts.factory;
+    const S = <T extends ts.Node>(n: T): T => this.synth(n, anchor);
+    const ref = (name: string, args?: ts.TypeNode[]): ts.TypeNode => S(f.createTypeReferenceNode(name, args));
+    const brand = (t as { brand?: string }).brand;
+    if (brand) return ref(brand);
+    switch (t.kind) {
+      case 'bool': return ref('bool');
+      case 'address': return ref('address');
+      case 'uint': return ref('u' + t.bits);
+      case 'int': return ref('i' + t.bits);
+      case 'bytesN': return ref('bytes' + t.size);
+      case 'bytes': return ref('bytes');
+      case 'string': return ref('string');
+      case 'struct': return ref(t.name);
+      case 'array':
+        return t.length !== undefined
+          ? ref('Arr', [this.jethTypeToTypeNode(t.element, anchor), S(f.createLiteralTypeNode(S(f.createNumericLiteral(String(t.length)))))])
+          : S(f.createArrayTypeNode(this.jethTypeToTypeNode(t.element, anchor)));
+      default:
+        return ref('void'); // unreachable for a well-formed array element; re-rejected downstream
+    }
+  }
+
+  /** True if the expression subtree contains a call (cast, constructor, or method call).
+   *  Used to forbid re-evaluating a side-effectful expression once per desugared iteration
+   *  / per struct field; the user binds it to a const first. */
+  private exprHasCall(node: ts.Node): boolean {
+    let found = false;
+    const walk = (n: ts.Node): void => {
+      if (found) return;
+      if (ts.isCallExpression(n)) { found = true; return; }
+      ts.forEachChild(n, walk);
+    };
+    walk(node);
+    return found;
+  }
+
+  // `for (const v of xs) BODY` desugars to a plain indexed loop the existing checker already
+  // handles byte-for-byte:  for (let __i: u256 = 0n; __i < xs.length; __i = __i + 1n) {
+  //   const v = xs[__i]; BODY }. The element binding is whatever `const v = xs[__i]` supports
+  // on its own (value, or a memory-aggregate copy), so for-of inherits exactly those limits.
+  private checkForOfStatement(node: ts.ForOfStatement, returnType: JethType, out: Stmt[]): void {
+    if (node.awaitModifier) {
+      this.diags.error(node, 'JETH111', 'for-await is not supported (the EVM is synchronous)');
+      return;
+    }
+    const initList = node.initializer;
+    if (!ts.isVariableDeclarationList(initList) || initList.declarations.length !== 1) {
+      this.diags.error(node.initializer, 'JETH115', 'for-of binding must be a single `const`/`let` variable');
+      return;
+    }
+    if ((initList.flags & (ts.NodeFlags.Const | ts.NodeFlags.Let)) === 0) {
+      this.diags.error(node.initializer, 'JETH115', 'for-of binding must use `const` or `let` (no `var`)');
+      return;
+    }
+    const decl = initList.declarations[0]!;
+    if (!ts.isIdentifier(decl.name)) {
+      this.diags.error(decl.name, 'JETH115', 'for-of binding must be a single identifier (no destructuring)');
+      return;
+    }
+    if (decl.type) {
+      this.diags.error(decl.type, 'JETH116', 'for-of binding has an inferred element type; drop the annotation');
+      return;
+    }
+    const iterable = node.expression;
+    if (this.exprHasCall(iterable)) {
+      this.diags.error(iterable, 'JETH117', 'for-of iterable must be a plain array reference (bind a computed value to a const first)');
+      return;
+    }
+    const probe = this.checkExpr(iterable);
+    if (!probe) return;
+    if (probe.type.kind !== 'array') {
+      this.diags.error(iterable, 'JETH118', `for-of requires an array, got ${displayName(probe.type)}`);
+      return;
+    }
+    const elemType = probe.type.element;
+    const f = ts.factory;
+    const S = <T extends ts.Node>(n: T): T => this.synth(n, iterable);
+    const idxName = `__jeth_of_${this.synthCounter++}`;
+    const idx = (): ts.Identifier => S(f.createIdentifier(idxName));
+    const initDecl = S(f.createVariableDeclaration(
+      idxName, undefined, S(f.createTypeReferenceNode('u256', undefined)), S(f.createBigIntLiteral('0n')),
+    ));
+    const synInit = S(f.createVariableDeclarationList([initDecl], ts.NodeFlags.Let));
+    const cond = S(f.createBinaryExpression(
+      idx(), ts.SyntaxKind.LessThanToken, S(f.createPropertyAccessExpression(iterable, 'length')),
+    ));
+    const incr = S(f.createBinaryExpression(
+      idx(), ts.SyntaxKind.EqualsToken, S(f.createBinaryExpression(idx(), ts.SyntaxKind.PlusToken, S(f.createBigIntLiteral('1n')))),
+    ));
+    const elemDecl = S(f.createVariableDeclaration(
+      decl.name, undefined, this.jethTypeToTypeNode(elemType, iterable), S(f.createElementAccessExpression(iterable, idx())),
+    ));
+    const elemFlags = (initList.flags & ts.NodeFlags.Const) ? ts.NodeFlags.Const : ts.NodeFlags.Let;
+    const elemStmt = S(f.createVariableStatement(undefined, S(f.createVariableDeclarationList([elemDecl], elemFlags))));
+    const bodyBlock = S(f.createBlock([elemStmt, node.statement], true));
+    const forStmt = S(f.createForStatement(synInit, cond, incr, bodyBlock));
+    this.checkForStatement(forStmt, returnType, out);
   }
 
   // ---- require / revert / custom errors ------------------------------------
@@ -3736,9 +3921,11 @@ export class Analyzer {
       return this.checkInternalCall(node, node.expression.name.text, false);
     }
 
-    // object literal { x: 1n, y: 2n } -> error pointing at positional construction
+    // object literal { ...base, x: v } / { x: 1n, y: 2n } -> struct construction when the
+    // expected type is a known struct; otherwise point at positional construction.
     if (ts.isObjectLiteralExpression(node)) {
-      this.diags.error(node, 'JETH227', 'use positional struct construction StructName(...), not an object literal');
+      if (expected && expected.kind === 'struct') return this.checkStructLiteral(node, expected);
+      this.diags.error(node, 'JETH227', 'object-literal struct construction needs a known struct type from context (annotate the target), or use positional StructName(...)');
       return undefined;
     }
 
