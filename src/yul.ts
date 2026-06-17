@@ -393,6 +393,12 @@ ${indent(runtime, 6)}
           out.push('return(0, 0)');
           break;
         }
+        // `return p` (whole memory STATIC struct local): its ABI-unpacked memory image IS the
+        // flat return encoding. G9.
+        if (s.value.kind === 'memAggregate' && s.value.type.kind === 'struct') {
+          out.push(`return(${this.ctxLookup(ctx, s.value.local)}, ${abiHeadWords(s.value.type) * 32})`);
+          break;
+        }
         // `return a` (whole STATIC struct / fixed-array calldata param): re-encode inline
         // from the param head (flat, no offset wrapper). G5.
         if (s.value.kind === 'cdAggregateValue') {
@@ -523,6 +529,18 @@ ${indent(runtime, 6)}
       }
       case 'localDecl': {
         const name = this.freshLocal(s.name);
+        if (s.type.kind === 'struct' && s.init) {
+          // G9: a memory struct local. A constructor (structNew) allocates a fresh
+          // ABI-unpacked image; aliasing another memory struct (memAggregate) copies the
+          // pointer (so the two alias, matching Solidity memory reference semantics).
+          if (s.init.kind === 'structNew') {
+            out.push(`let ${name} := ${this.allocAggToMem(s.init, ctx, out)}`);
+          } else {
+            out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
+          }
+          this.ctxDeclare(ctx, s.name, name);
+          break;
+        }
         if (s.init) {
           const v = this.lowerExpr(s.init, ctx, out);
           out.push(`let ${name} := ${v}`);
@@ -587,6 +605,11 @@ ${indent(runtime, 6)}
           // constant-offset storeState (also covers a literal packed index).
           if (p.byteShift !== undefined) this.packedStore(s.target.type, p.slot, p.byteShift, value, out);
           else for (const l of this.storeState(s.target.type, p.slot, p.offset, value)) out.push(l);
+          break;
+        }
+        if (s.target.kind === 'memField') {
+          // p.x = v on a memory struct local: mstore the value at the field's word offset.
+          this.lowerAssignValue(s.target, this.lowerExpr(s.value, ctx, out), ctx, out);
           break;
         }
         if (s.target.kind === 'dynState') {
@@ -1077,6 +1100,14 @@ ${indent(runtime, 6)}
         const args = this.lowerCallArgs(e.args, ctx, out);
         return `${this.userFnName(e.fn)}(${args.join(', ')})`;
       }
+      case 'memField': {
+        // read a value field of a memory-aggregate (struct) local: mload at ptr + offset.
+        const ptr = this.ctxLookup(ctx, e.local);
+        return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
+      }
+      case 'memAggregate':
+        // a whole memory-aggregate local: its register value IS the pointer.
+        return this.ctxLookup(ctx, e.local);
       case 'global':
         return this.lowerGlobal(e);
       case 'cast':
@@ -1977,6 +2008,43 @@ ${indent(runtime, 6)}
         for (const l of this.storeState(f.type, slotAt(f.slot), f.offset, v)) out.push(l);
       }
     });
+  }
+
+  /** Allocate a memory image for a constructed STATIC struct (G9) and return its pointer.
+   *  Layout is ABI-unpacked (one word per leaf), so the image doubles as the ABI return blob. */
+  private allocAggToMem(value: Expr & { kind: 'structNew' }, ctx: LowerCtx, out: string[]): string {
+    const words = abiHeadWords(value.type);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${words * 32}))`);
+    this.writeAggToMem(value, ptr, 0, ctx, out);
+    return ptr;
+  }
+
+  /** Write a constructed static aggregate (structNew / arrayLit, possibly nested) into the
+   *  memory image at `ptr`, starting at word `wordBase`. Value leaves are one word each. */
+  private writeAggToMem(value: Expr, ptr: string, wordBase: number, ctx: LowerCtx, out: string[]): void {
+    const at = (w: number): string => (w === 0 ? ptr : `add(${ptr}, ${w * 32})`);
+    if (value.kind === 'structNew') {
+      let w = wordBase;
+      value.fields.forEach((f, j) => {
+        const arg = value.args[j]!;
+        if (arg.kind === 'arrayLit' || arg.kind === 'structNew') this.writeAggToMem(arg, ptr, w, ctx, out);
+        else out.push(`mstore(${at(w)}, ${this.lowerExpr(arg, ctx, out)})`);
+        w += abiHeadWords(f.type);
+      });
+      return;
+    }
+    if (value.kind === 'arrayLit') {
+      const ew = abiHeadWords(value.elem);
+      value.elements.forEach((el, k) => {
+        const w = wordBase + k * ew;
+        if (el.kind === 'arrayLit' || el.kind === 'structNew') this.writeAggToMem(el, ptr, w, ctx, out);
+        else out.push(`mstore(${at(w)}, ${this.lowerExpr(el, ctx, out)})`);
+      });
+      return;
+    }
+    throw new UnsupportedError(`cannot write '${value.kind}' into a memory aggregate`);
   }
 
   /** Write a (possibly NESTED) static fixed-array literal into storage at `baseSlot`.
@@ -3408,6 +3476,11 @@ ${indent(runtime, 6)}
       // a packed element with a RUNTIME byte offset uses packedStore; otherwise constant-offset.
       if (p.byteShift !== undefined) this.packedStore(target.type, p.slot, p.byteShift, valueReg, out);
       else for (const l of this.storeState(target.type, p.slot, p.offset, valueReg)) out.push(l);
+      return;
+    }
+    if (target.kind === 'memField') {
+      const ptr = this.ctxLookup(ctx, target.local);
+      out.push(`mstore(${target.wordOffset === 0 ? ptr : `add(${ptr}, ${target.wordOffset * 32})`}, ${valueReg})`);
       return;
     }
     if (target.kind === 'arrayElem') {

@@ -88,6 +88,8 @@ export type Expr =
   // --- Phase 4c: structs ---
   | { kind: 'structNew'; type: JethType; fields: StructField[]; args: Expr[] } // Point(a, b)
   | { kind: 'structValue'; type: JethType; baseSlot: number } // whole storage struct (for return)
+  | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // read a value field/element of a memory-aggregate local (p.x)
+  | { kind: 'memAggregate'; type: JethType; local: string } // a whole memory-aggregate local (alias copy / return / arg)
   | { kind: 'structArrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // whole storage/fixed/mapping struct element this.recs[i] (for return / copy source)
   | { kind: 'mapStorageValue'; type: JethType; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // return this.m[k] (whole struct/array mapping value)
   | { kind: 'mapDynValue'; type: JethType; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // this.m[k] where the value is bytes/string (dynamic value at the mapping slot)
@@ -207,7 +209,8 @@ export type LValue =
   | { kind: 'strArrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // this.ss[i] = <bytes/string>
   | { kind: 'dynPlace'; type: JethType; path: AccessPath } // this.d.s = <bytes/string> (dyn-struct field)
 
-  | { kind: 'place'; type: JethType; path: AccessPath }; // nested storage place = v
+  | { kind: 'place'; type: JethType; path: AccessPath } // nested storage place = v
+  | { kind: 'memField'; type: JethType; local: string; wordOffset: number }; // p.x = v on a memory-aggregate local
 
 export type Stmt =
   | { kind: 'return'; value?: Expr }

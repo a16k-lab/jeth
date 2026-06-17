@@ -123,6 +123,7 @@ export class Analyzer {
   private currentUnchecked = false; // inside an unchecked { } block (arithmetic wraps)
   private currentReturnTypes: JethType[] | undefined; // multi-value return components, if any
   private memArrayLocals = new Set<string>(); // let-locals that are MEMORY arrays (vs calldata-array params)
+  private memAggregateLocals = new Map<string, JethType>(); // STATIC struct / fixed-array MEMORY locals (G9): name -> type
   private currentReadsEnv = false; // reads msg.*/block.*/tx.*/address(this) -> forbidden in @pure
   // internal-call support (G8): the function registry (built before bodies so calls can
   // forward-reference), plus per-function direct-effect / callee tracking for the
@@ -562,6 +563,7 @@ export class Analyzer {
     this.currentReturnTypes = rf.returnTypes;
     this.currentCallees = new Set();
     this.memArrayLocals.clear();
+    this.memAggregateLocals.clear();
     for (const p of rf.params) {
       if (this.inCurrentScope(p.name)) {
         this.diags.error(rf.node, 'JETH056', `duplicate parameter name '${p.name}'`);
@@ -1081,6 +1083,34 @@ export class Analyzer {
       return;
     }
     if (!declared) return;
+    // G9: a STATIC struct MEMORY local (let p: P = P(...)). The register holds a pointer to
+    // an ABI-unpacked memory image (one word per leaf). It must be initialized from a
+    // constructor P(...) or aliased from another memory struct (memAggregate); copies from a
+    // storage/calldata source, and dynamic-field structs, are a later step.
+    if (declared.kind === 'struct') {
+      if (this.isVisibleLocal(decl.name.text)) {
+        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' (shadowing is not allowed)`);
+        return;
+      }
+      if (!isStaticType(declared)) {
+        this.diags.error(decl, 'JETH200', `local variables of dynamic struct type ${displayName(declared)} are not supported yet`);
+        return;
+      }
+      if (!decl.initializer) {
+        this.diags.error(decl, 'JETH200', `a struct memory local must be initialized (e.g. let p: ${displayName(declared)} = ${(declared as JethType & { kind: 'struct' }).name}(...))`);
+        return;
+      }
+      const e = this.checkExpr(decl.initializer, declared);
+      if (!e) return;
+      if (e.kind !== 'structNew' && e.kind !== 'memAggregate') {
+        this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...) or another memory struct (copying from storage/calldata is a later step)');
+        return;
+      }
+      this.declareLocal(decl.name.text, declared);
+      this.memAggregateLocals.set(decl.name.text, declared);
+      out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
+      return;
+    }
     // A value-element dynamic-array local is a MEMORY array (a pointer to [len][elems]);
     // bytes/string and aggregate-element memory locals are a later step.
     if (declared.kind === 'array' && !(declared.length === undefined && isStaticValueType(declared.element))) {
@@ -1214,9 +1244,45 @@ export class Analyzer {
     return { kind: 'call', type: callee.returnType, fn: name, args };
   }
 
+  /** Word offset (and type) of a struct field within the ABI-unpacked memory image, for a
+   *  memory-aggregate local (G9). Returns undefined if the field is absent. */
+  private memFieldOffset(structType: JethType & { kind: 'struct' }, fieldName: string): { wordOffset: number; type: JethType } | undefined {
+    let w = 0;
+    for (const f of structType.fields) {
+      if (f.name === fieldName) return { wordOffset: w, type: f.type };
+      w += abiHeadWords(f.type);
+    }
+    return undefined;
+  }
+
+  /** Resolve `p.x` where `p` is a memory-aggregate (struct) local: a value-typed field read/
+   *  write maps to a memory load/store at the field's word offset. Non-value fields are gated. */
+  private resolveMemAggregateField(node: ts.PropertyAccessExpression): { local: string; wordOffset: number; type: JethType } | undefined {
+    if (!ts.isIdentifier(node.expression)) return undefined;
+    const local = node.expression.text;
+    const st = this.memAggregateLocals.get(local);
+    if (!st || st.kind !== 'struct') return undefined;
+    const fo = this.memFieldOffset(st, node.name.text);
+    if (!fo) {
+      this.diags.error(node, 'JETH210', `struct '${st.name}' has no field '${node.name.text}'`);
+      return undefined;
+    }
+    if (!isStaticValueType(fo.type)) {
+      this.diags.error(node, 'JETH245', `reading a non-value field '${node.name.text}' of a memory struct is not supported yet`);
+      return undefined;
+    }
+    return { local, wordOffset: fo.wordOffset, type: fo.type };
+  }
+
   // ---- lvalues -------------------------------------------------------------
 
   private checkLValue(node: ts.Expression): LValue | undefined {
+    // G9: `p.x = v` on a memory-aggregate (struct) local -> a memory store at the field offset.
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memAggregateLocals.has(node.expression.text)) {
+      const mf = this.resolveMemAggregateField(node);
+      if (!mf) return undefined;
+      return { kind: 'memField', type: mf.type, local: mf.local, wordOffset: mf.wordOffset };
+    }
     // nested storage place: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const acc = this.resolveAccess(node);
@@ -1424,6 +1490,10 @@ export class Analyzer {
     if (lv.kind === 'dynPlace') {
       this.currentReadsState = true;
       return { kind: 'dynPlaceRead', type: lv.type, path: lv.path };
+    }
+    if (lv.kind === 'memField') {
+      // a memory struct field read (for compound-assign / ++ on p.x): NOT storage.
+      return { kind: 'memField', type: lv.type, local: lv.local, wordOffset: lv.wordOffset };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }
@@ -2575,6 +2645,15 @@ export class Analyzer {
       return { kind: 'arrayLit', type: expected, elem: expected.element, elements };
     }
 
+    // G9: `p.x` read where p is a memory-aggregate (struct) local -> a memory field load.
+    // Must precede the calldata/storage access resolvers below (a memory struct local is
+    // neither a calldata param nor a `this.`-rooted place).
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memAggregateLocals.has(node.expression.text)) {
+      const mf = this.resolveMemAggregateField(node);
+      if (!mf) return undefined;
+      return { kind: 'memField', type: mf.type, local: mf.local, wordOffset: mf.wordOffset };
+    }
+
     // nested storage access: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const acc = this.resolveAccess(node);
@@ -3021,6 +3100,11 @@ export class Analyzer {
         return undefined;
       }
       if (isBytesLike(t)) return { kind: 'dynParamRead', type: t, name: node.text };
+      // a whole MEMORY-aggregate (struct) local (return p / let q = p / arg p): the register
+      // holds a pointer to the ABI-unpacked image. G9.
+      if (this.memAggregateLocals.has(node.text)) {
+        return { kind: 'memAggregate', type: t, local: node.text };
+      }
       // a MEMORY array local (return xs): the register holds a pointer to [len][elems];
       // ABI-encoded from memory on return.
       if (t.kind === 'array' && this.memArrayLocals.has(node.text)) {
