@@ -236,7 +236,9 @@ describe('_vf_dynarray3 probe', () => {
 
   it('Arr<u256,2>[] (uint256[2][]) storage access now compiles (G6)', () => {
     expect(() => compile(`@contract class C { @state a: Arr<u256,2>[]; @external p(): void { this.a.push(); } @external s(i: u256, j: u256, v: u256): void { this.a[i][j] = v; } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`, { fileName: 'C.jeth' })).not.toThrow();
-    // a whole-array RETURN of this shape is still gated.
-    expect(() => compile(`@contract class C { @state a: Arr<u256,2>[]; @view all(): Arr<u256,2>[] { return this.a; } }`, { fileName: 'C.jeth' })).toThrow();
+    // whole-array RETURN and calldata-param ECHO of this shape now compile too (G6, byte-identical
+    // in test/array-composition-abi.test.ts).
+    expect(() => compile(`@contract class C { @state a: Arr<u256,2>[]; @view all(): Arr<u256,2>[] { return this.a; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() => compile(`@contract class C { @external @pure e(x: Arr<u256,2>[]): Arr<u256,2>[] { return x; } }`, { fileName: 'C.jeth' })).not.toThrow();
   });
 });
