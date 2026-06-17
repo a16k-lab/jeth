@@ -312,12 +312,13 @@ export class Analyzer {
     }
     for (const e of effects.values()) {
       if (e.rf.inferRead) {
-        // @read is read-only: a transitive write is an error; @pure/@view is assigned below.
-        if (e.writes) this.diags.error(e.rf.node, 'JETH056', `@read function '${e.rf.name}' must not write to storage (it is read-only)`);
+        // @read is read-only: a transitive state modification (storage write or emit) is an error;
+        // @pure/@view is assigned below.
+        if (e.writes) this.diags.error(e.rf.node, 'JETH056', `@read function '${e.rf.name}' must not modify state (write to storage or emit an event) - it is read-only`);
         continue;
       }
-      if (e.rf.mutability === 'view' && e.writes) this.diags.error(e.rf.node, 'JETH054', `@view function '${e.rf.name}' writes to storage`);
-      if (e.rf.mutability === 'pure' && (e.writes || e.reads)) this.diags.error(e.rf.node, 'JETH055', `@pure function '${e.rf.name}' accesses storage`);
+      if (e.rf.mutability === 'view' && e.writes) this.diags.error(e.rf.node, 'JETH054', `@view function '${e.rf.name}' modifies state (writes to storage or emits an event)`);
+      if (e.rf.mutability === 'pure' && (e.writes || e.reads)) this.diags.error(e.rf.node, 'JETH055', `@pure function '${e.rf.name}' accesses state (storage or emits an event)`);
       if (e.rf.mutability === 'pure' && e.readsEnv) this.diags.error(e.rf.node, 'JETH164', `@pure function '${e.rf.name}' reads the execution environment (msg.*/block.*/tx.*/address(this))`);
     }
     // RESOLVE inference (mutability + visibility) from the transitive effects + call graph, then
@@ -1172,6 +1173,10 @@ export class Analyzer {
       this.diags.error(inner.expression, 'JETH147', `unknown event '${inner.expression.text}'`);
       return;
     }
+    // Emitting a log is a STATE-MODIFYING effect (solc forbids it in view/pure, and a STATICCALL
+    // reverts on LOG). Record it like a storage write so the transitive-purity fixpoint propagates
+    // it through helpers: a @view/@pure/@read function that TRANSITIVELY emits is rejected too.
+    this.currentWritesState = true;
     if (this.currentMutability === 'view' || this.currentMutability === 'pure') {
       this.diags.error(call, 'JETH149', `cannot emit an event in a @${this.currentMutability} function (a log is a state change)`);
     }
