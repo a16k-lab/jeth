@@ -97,11 +97,14 @@ function stripParens(node: ts.Expression): ts.Expression {
 interface RawFunction {
   node: ts.MethodDeclaration;
   name: string;
-  visibility: Visibility;
-  mutability: Mutability;
+  visibility: Visibility; // provisional when an infer flag is set; resolved after the fixpoint
+  mutability: Mutability; // provisional ('view') when inferRead is set; resolved after the fixpoint
   params: { name: string; type: JethType }[];
   returnType: JethType;
   returnTypes?: JethType[]; // multi-value return `[T1, T2, ...]`
+  inferRead?: boolean; // @read -> resolve to @pure (touches no state/env) or @view (reads, never writes)
+  inferExposed?: boolean; // no visibility decorator -> @public if internally called, else @external
+  inferHidden?: boolean; // @hidden -> @internal (not in the ABI; internal vs private is codegen-identical pre-inheritance)
 }
 
 export class Analyzer {
@@ -308,12 +311,25 @@ export class Analyzer {
       }
     }
     for (const e of effects.values()) {
+      if (e.rf.inferRead) {
+        // @read is read-only: a transitive write is an error; @pure/@view is assigned below.
+        if (e.writes) this.diags.error(e.rf.node, 'JETH056', `@read function '${e.rf.name}' must not write to storage (it is read-only)`);
+        continue;
+      }
       if (e.rf.mutability === 'view' && e.writes) this.diags.error(e.rf.node, 'JETH054', `@view function '${e.rf.name}' writes to storage`);
       if (e.rf.mutability === 'pure' && (e.writes || e.reads)) this.diags.error(e.rf.node, 'JETH055', `@pure function '${e.rf.name}' accesses storage`);
       if (e.rf.mutability === 'pure' && e.readsEnv) this.diags.error(e.rf.node, 'JETH164', `@pure function '${e.rf.name}' reads the execution environment (msg.*/block.*/tx.*/address(this))`);
     }
-    // Mark functions that are actually called internally so the emitter emits a Yul fn def.
-    for (const f of functions) if (this.internallyCalled.has(f.name)) f.internallyCalled = true;
+    // RESOLVE inference (mutability + visibility) from the transitive effects + call graph, then
+    // mark internally-called functions. After this the FunctionIR carries concrete visibility +
+    // mutability, so the ABI emitter and dispatcher (which read these) produce the TRUE ABI.
+    for (const f of functions) {
+      const e = effects.get(f.name);
+      if (e?.rf.inferRead) { const m: Mutability = e.reads || e.readsEnv ? 'view' : 'pure'; f.mutability = m; e.rf.mutability = m; }
+      if (e?.rf.inferExposed) { const v: Visibility = this.internallyCalled.has(f.name) ? 'public' : 'external'; f.visibility = v; e.rf.visibility = v; }
+      if (e?.rf.inferHidden) { f.visibility = 'internal'; e.rf.visibility = 'internal'; }
+      if (this.internallyCalled.has(f.name)) f.internallyCalled = true;
+    }
 
     // Reject duplicate selectors (would make the dispatcher ambiguous).
     const seen = new Map<string, string>();
@@ -508,10 +524,36 @@ export class Analyzer {
     if (visibilities.length > 1) {
       this.diags.error(member, 'JETH052', `conflicting visibility decorators: ${visibilities.join(', ')}`);
     }
-    const visibility: Visibility = visibilities[0] ?? 'public';
+    // VISIBILITY INFERENCE: an explicit @external/@public/@internal/@private is used verbatim.
+    // `@hidden` is a not-exposed helper (resolved to @internal after the fixpoint). With NO
+    // visibility decorator, the compiler resolves @public (if called internally) or @external.
+    const hidden = decs.includes('hidden');
+    let visibility: Visibility;
+    let inferExposed = false;
+    let inferHidden = false;
+    if (visibilities.length > 0) {
+      if (hidden) this.diags.error(member, 'JETH052', `conflicting visibility: @hidden with @${visibilities[0]}`);
+      visibility = visibilities[0]!;
+    } else if (hidden) {
+      visibility = 'internal'; // provisional; resolved to internal
+      inferHidden = true;
+    } else {
+      visibility = 'public'; // provisional (permissive for internal-call analysis); resolved to external/public
+      inferExposed = true;
+    }
 
+    // MUTABILITY INFERENCE: `@read` is a read-only function whose @pure/@view is computed from
+    // its TRANSITIVE effects after the fixpoint. Provisionally @view so the body is validated as
+    // read-only (no writes/emits/msg.value); an actual write is rejected (JETH056).
+    const read = decs.includes('read');
     let mutability: Mutability = 'nonpayable';
-    if (decs.includes('payable')) mutability = 'payable';
+    let inferRead = false;
+    if (read) {
+      const explicitMut = ['view', 'pure', 'payable'].filter((m) => decs.includes(m));
+      if (explicitMut.length > 0) this.diags.error(member, 'JETH052', `conflicting mutability: @read with @${explicitMut[0]}`);
+      mutability = 'view';
+      inferRead = true;
+    } else if (decs.includes('payable')) mutability = 'payable';
     else if (decs.includes('view')) mutability = 'view';
     else if (decs.includes('pure')) mutability = 'pure';
 
@@ -553,9 +595,9 @@ export class Analyzer {
         returnTypes.push(t);
       }
       if (ok && returnTypes.length >= 2) {
-        return { node: member, name: member.name.text, visibility, mutability, params, returnType: VOID, returnTypes };
+        return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, returnType: VOID, returnTypes };
       }
-      return { node: member, name: member.name.text, visibility, mutability, params, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, returnType: VOID };
     }
 
     const returnType = member.type ? resolveType(member.type, this.diags, this.structsByName) ?? VOID : VOID;
@@ -565,10 +607,10 @@ export class Analyzer {
       this.diags.error(member.type ?? member, 'JETH225', 'returning a struct with this shape is not supported yet (supported: static value/nested-static-struct fields, and bytes/string or nested-struct dynamic fields)');
     }
     if (!this.gateArrayType(returnType, member.type ?? member)) {
-      return { node: member, name: member.name.text, visibility, mutability, params, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, returnType: VOID };
     }
 
-    return { node: member, name: member.name.text, visibility, mutability, params, returnType };
+    return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, returnType };
   }
 
   private checkFunction(rf: RawFunction): FunctionIR | undefined {
