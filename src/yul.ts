@@ -535,6 +535,13 @@ ${indent(runtime, 6)}
       }
       case 'localDecl': {
         const name = this.freshLocal(s.name);
+        if (s.type.kind === 'struct' && isDynamicType(s.type) && s.init && s.init.kind === 'structNew') {
+          // a DYNAMIC-field struct memory local (`let d: D = D(x, str)`): build the
+          // pointer-headed image (value fields inline, bytes/string fields as blob pointers).
+          out.push(`let ${name} := ${this.allocDynStructToMem(s.init, ctx, out)}`);
+          this.ctxDeclare(ctx, s.name, name);
+          break;
+        }
         if ((s.type.kind === 'struct' || (s.type.kind === 'array' && s.type.length !== undefined)) && s.init) {
           // G9: a memory AGGREGATE local (struct or fixed array). A constructor / array literal
           // allocates a fresh ABI-unpacked image; a whole STORAGE aggregate (structValue, or an
@@ -1265,6 +1272,8 @@ ${indent(runtime, 6)}
       case 'dynStateRead':
       case 'dynParamRead':
       case 'dynLocalRead':
+      case 'memDynField':
+      case 'memDynStructValue':
       case 'cdDynArrayElem':
       case 'strArrayElem':
       case 'dynPlaceRead':
@@ -1471,6 +1480,9 @@ ${indent(runtime, 6)}
       if (!bound) throw new UnsupportedError(`dynamic struct param '${value.param}' is not bound`);
       return { kind: 'cd', base: bound.tupleStart };
     }
+    if (value.kind === 'memDynStructValue') {
+      return { kind: 'mem', headPtr: this.ctxLookup(ctx, value.local) };
+    }
     throw new UnsupportedError(`cannot encode dynamic struct from ${value.kind}`);
   }
 
@@ -1551,6 +1563,13 @@ ${indent(runtime, 6)}
    *  and the payload-within-calldatasize check land in encodeDynFieldInto's copy. */
   private dynFieldRef(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, ctx: LowerCtx, out: string[]): DynRef {
     if (src.kind === 'new') return this.lowerDynamic(src.args[fieldIdx]!, ctx, out);
+    if (src.kind === 'mem') {
+      // the head word holds the [len][data] memory pointer of the bytes/string field.
+      const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(${at})`);
+      return { src: 'memory', ptr };
+    }
     // calldata echo: read the field's offset word at base + headWord*32, resolve.
     const offPtr = headWord === 0 ? src.base : `add(${src.base}, ${headWord * 32})`;
     const dataPtr = this.fresh();
@@ -1567,6 +1586,7 @@ ${indent(runtime, 6)}
       if (arg.kind !== 'structNew') throw new UnsupportedError('nested struct field must be constructed inline');
       return { kind: 'new', fields: arg.fields, args: arg.args };
     }
+    if (src.kind === 'mem') throw new UnsupportedError('nested struct field in a memory dynamic struct is not supported');
     // calldata echo. If the nested struct is dynamic, its head slot is an offset
     // word (base resets to base + offset); if static, it is inline at base+head.
     const fieldOff = headWord === 0 ? src.base : `add(${src.base}, ${headWord * 32})`;
@@ -1593,6 +1613,14 @@ ${indent(runtime, 6)}
         return;
       }
       const w = this.lowerExpr(arg, ctx, out);
+      out.push(`mstore(${dstPtr}, ${w})`);
+      return;
+    }
+    if (src.kind === 'mem') {
+      // a value field of a memory dynamic struct: one inline word at headWord.
+      const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
+      const w = this.fresh();
+      out.push(`let ${w} := mload(${at})`);
       out.push(`mstore(${dstPtr}, ${w})`);
       return;
     }
@@ -2112,6 +2140,34 @@ ${indent(runtime, 6)}
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(0x40, add(${ptr}, ${abiHeadWords(type) * 32}))`);
     this.abiEncFromCd(type, String(ph.head), ptr, true, out);
+    return ptr;
+  }
+
+  /** Allocate a memory image for a DYNAMIC-field struct local from a constructor `D(...)`.
+   *  Layout = one head word per field: value fields inline, bytes/string fields a pointer to
+   *  a freshly-materialized [len][data] blob. This coincides with the ABI tuple head layout,
+   *  so `return d` reuses encodeDynStructReturn through a 'mem' TupleSrc. Scoped to value +
+   *  bytes/string fields (no static-aggregate or nested-struct fields), so each field is one
+   *  head word and field i sits at word i. The head is allocated first (args materialize their
+   *  blobs above it); constructor args evaluate left-to-right, matching solc. */
+  private allocDynStructToMem(value: Expr & { kind: 'structNew' }, ctx: LowerCtx, out: string[]): string {
+    const struct = value.type as JethType & { kind: 'struct' };
+    const headWords = tupleHeadWords(struct);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${headWords * 32}))`);
+    let hw = 0;
+    struct.fields.forEach((f, i) => {
+      const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
+      if (isBytesLike(f.type)) {
+        const { mp } = this.toMemory(this.lowerDynamic(value.args[i]!, ctx, out), out);
+        out.push(`mstore(${at}, ${mp})`);
+        hw += 1;
+      } else {
+        out.push(`mstore(${at}, ${this.lowerExpr(value.args[i]!, ctx, out)})`);
+        hw += abiHeadWords(f.type);
+      }
+    });
     return ptr;
   }
 
@@ -3008,6 +3064,15 @@ ${indent(runtime, 6)}
       case 'dynLocalRead':
         // a bytes/string MEMORY local: its register IS the [len][data] pointer.
         return { src: 'memory', ptr: this.ctxLookup(ctx, e.name) };
+      case 'memDynField': {
+        // a bytes/string field of a memory dynamic struct: the head word holds the
+        // [len][data] pointer.
+        const head = this.ctxLookup(ctx, e.local);
+        const at = e.wordOffset === 0 ? head : `add(${head}, ${e.wordOffset * 32})`;
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(${at})`);
+        return { src: 'memory', ptr };
+      }
       case 'strArrayElem': {
         // storage / mapping-valued string[]/bytes[] element: bounds-check i (Panic
         // 0x32), then the element header at keccak(lenSlot)+i is a normal storage
@@ -4078,7 +4143,8 @@ type ArrayRef =
 // value (structNew args) or a calldata echo (the bound tuple-start byte ptr).
 type TupleSrc =
   | { kind: 'new'; fields: StructField[]; args: Expr[] }
-  | { kind: 'cd'; base: string };
+  | { kind: 'cd'; base: string }
+  | { kind: 'mem'; headPtr: string }; // a memory dynamic-struct local (one word per field: value inline, bytes/string a pointer)
 
 // A lowered dynamic bytes/string value, by source location.
 type DynRef =

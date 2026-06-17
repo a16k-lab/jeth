@@ -292,10 +292,17 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
   param (`let p: P = this.s` / `= calldataParam`, a fresh COPY); reading a whole nested struct field
   as a value (`return p.inner`, aliasing); `bytes`/`string` memory locals (`let s: string = X`: return,
   `.length`, `b[i]`, alias); FIXED-ARRAY-of-value memory locals (`let a: Arr<u256,3> = [...]`: `a[i]`
-  read/write, return, alias, storage/calldata copy). Still gated: dynamic-field struct memory locals
-  (a memory struct with a `bytes`/`string`/array field needs the Solidity pointer-based memory layout);
-  a struct param to a PUBLIC/EXTERNAL callee via an internal call; `new T[](n)` (use an array literal);
-  non-value aggregate components in a multi-value return.
+  read/write, return, alias, storage/calldata copy). DYNAMIC-field struct memory locals are also
+  supported (G10) when every field is a value type or `bytes`/`string` (no static-array, nested-struct,
+  or dynamic-array fields): `let d: D = D(x, str)` construct, value-field read (`d.a`) and write
+  (`d.a = v`), dynamic-field read (`d.s` whole, `d.b.length`, `d.b[i]`), and whole-struct `return d`.
+  The image is a pointer-headed tuple (value fields inline, `bytes`/`string` fields a `[len][data]`
+  pointer), so `return d` reuses the dynamic-struct tuple encoder via a memory `TupleSrc`; dynamic
+  fields may be built from a memory-string local (alias) or a string literal. Still gated: COPYING a
+  dynamic-field struct local from storage/calldata/another local (construct inline instead); WRITING a
+  `bytes`/`string` field (would re-point the head); structs with static-array/nested-struct/dynamic-array
+  fields as memory locals; a struct param to a PUBLIC/EXTERNAL callee via an internal call; `new T[](n)`
+  (use an array literal); non-value aggregate components in a multi-value return.
 - A packed (`<256`-bit) element of a nested DYNAMIC array (`this.m[k].dynArr[i]`); the packed
   FIXED-array case through a struct field (`this.q.pts[i]`) now works (runtime byte offset).
 - A ternary over a storage struct / storage array / bytes / string (`c ? this.a : this.b`); a ternary

@@ -125,6 +125,7 @@ export class Analyzer {
   private memArrayLocals = new Set<string>(); // let-locals that are MEMORY arrays (vs calldata-array params)
   private memAggregateLocals = new Map<string, JethType>(); // STATIC struct / fixed-array MEMORY locals (G9): name -> type
   private memDynLocals = new Set<string>(); // bytes/string MEMORY locals (G9): register holds a [len][data] pointer
+  private memDynStructLocals = new Map<string, JethType>(); // DYNAMIC-field struct MEMORY locals: name -> struct type (head = one word per field, value inline / bytes-string a pointer)
   private currentReadsEnv = false; // reads msg.*/block.*/tx.*/address(this) -> forbidden in @pure
   // internal-call support (G8): the function registry (built before bodies so calls can
   // forward-reference), plus per-function direct-effect / callee tracking for the
@@ -580,6 +581,7 @@ export class Analyzer {
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
+    this.memDynStructLocals.clear();
     const internalOnly = rf.visibility === 'internal' || rf.visibility === 'private';
     for (const p of rf.params) {
       if (this.inCurrentScope(p.name)) {
@@ -1121,6 +1123,26 @@ export class Analyzer {
         return;
       }
       if (!isStaticType(declared)) {
+        // a DYNAMIC-field struct MEMORY local, scoped to value + bytes/string fields,
+        // constructed inline (let d: D = D(x, str)). The image is a pointer-headed tuple
+        // (value fields inline, bytes/string fields a [len][data] pointer), so reads and
+        // `return d` reuse the dynamic-struct tuple encoder.
+        if (this.isSupportedDynStructLocal(declared)) {
+          if (!decl.initializer) {
+            this.diags.error(decl, 'JETH200', `a dynamic-field struct memory local must be initialized (e.g. let d: ${displayName(declared)} = ${(declared as JethType & { kind: 'struct' }).name}(...))`);
+            return;
+          }
+          const e = this.checkExpr(decl.initializer, declared);
+          if (!e) return;
+          if (e.kind !== 'structNew') {
+            this.diags.error(decl.initializer, 'JETH200', `a dynamic-field struct memory local must be constructed inline (e.g. ${(declared as JethType & { kind: 'struct' }).name}(...)); copies from storage/calldata/another local are a later step`);
+            return;
+          }
+          this.declareLocal(decl.name.text, declared);
+          this.memDynStructLocals.set(decl.name.text, declared);
+          out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
+          return;
+        }
         this.diags.error(decl, 'JETH200', `local variables of dynamic struct type ${displayName(declared)} are not supported yet`);
         return;
       }
@@ -1410,9 +1432,44 @@ export class Analyzer {
     return r;
   }
 
+  /** A dynamic-field struct is supported as a MEMORY local only when every field is a value
+   *  type or bytes/string (no static-aggregate or nested-struct fields). This keeps the image
+   *  one head word per field (value inline, bytes/string a pointer), matching the tuple head. */
+  private isSupportedDynStructLocal(t: JethType): boolean {
+    if (t.kind !== 'struct' || !isDynamicType(t)) return false;
+    return t.fields.every((f) => isStaticValueType(f.type) || isBytesLike(f.type));
+  }
+
+  /** Resolve `d.field` where `d` is a DYNAMIC-field struct memory local into its head-word
+   *  offset and field. Only a direct identifier base is supported (no nesting in scope). */
+  private memDynStructField(node: ts.PropertyAccessExpression): { local: string; headWord: number; field: StructField } | undefined {
+    if (!ts.isIdentifier(node.expression)) return undefined;
+    const st = this.memDynStructLocals.get(node.expression.text);
+    if (!st || st.kind !== 'struct') return undefined;
+    const idx = st.fields.findIndex((f) => f.name === node.name.text);
+    if (idx < 0) {
+      this.diags.error(node, 'JETH210', `struct '${st.name}' has no field '${node.name.text}'`);
+      return undefined;
+    }
+    const headWord = st.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+    return { local: node.expression.text, headWord, field: st.fields[idx]! };
+  }
+
   // ---- lvalues -------------------------------------------------------------
 
   private checkLValue(node: ts.Expression): LValue | undefined {
+    // `d.x = v` on a DYNAMIC-field struct memory local: a VALUE field is a plain memory store
+    // at the head word. A bytes/string field write would re-point the head at a new blob (size
+    // may change); that is gated for now (construction + reads + return are supported).
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
+      const mf = this.memDynStructField(node);
+      if (!mf) return undefined;
+      if (!isStaticValueType(mf.field.type)) {
+        this.diags.error(node, 'JETH245', `assigning a ${displayName(mf.field.type)} field of a memory struct is not supported yet`);
+        return undefined;
+      }
+      return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+    }
     // G9: `p.x = v` / `p.inner.x = v` on a memory-aggregate (struct) local -> a memory store.
     if (ts.isPropertyAccessExpression(node) && this.memChainRoot(node)) {
       const mf = this.resolveMemAggregateField(node);
@@ -2814,6 +2871,15 @@ export class Analyzer {
       return { kind: 'arrayLit', type: expected, elem: expected.element, elements };
     }
 
+    // `d.field` read on a DYNAMIC-field struct memory local: a value field -> a memory load
+    // (memField at the head word); a bytes/string field -> the head word holds the [len][data]
+    // pointer (memDynField, routed through the bytes/string codec). Must precede the resolvers below.
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
+      const mf = this.memDynStructField(node);
+      if (!mf) return undefined;
+      if (isStaticValueType(mf.field.type)) return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+      return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+    }
     // G9: `p.x` / `p.inner.x` / `p.inner` read where the chain is rooted at a memory-aggregate
     // (struct) local. A VALUE final field -> a memory load (memField); a whole nested STRUCT
     // field -> a sub-pointer into the parent image (memAggregate at the field offset, which
@@ -3156,6 +3222,29 @@ export class Analyzer {
         if (!base || !index) return undefined;
         return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
       }
+      // d.b[i] where d.b is a bytes field of a DYNAMIC-field struct MEMORY local: the base
+      // resolves to a memDynField (bytes); byte-index it (Panic 0x32). Must precede the
+      // calldata dynamic-struct resolver below, which would mis-bind the memory local.
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        this.memDynStructLocals.has(node.expression.expression.text) &&
+        node.argumentExpression
+      ) {
+        const base = this.checkExpr(node.expression);
+        if (!base) return undefined;
+        if (base.type.kind === 'string') {
+          this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+          return undefined;
+        }
+        if (base.type.kind !== 'bytes') {
+          this.diags.error(node, 'JETH212', `cannot index ${displayName(base.type)}`);
+          return undefined;
+        }
+        const index = this.checkExpr(node.argumentExpression, U256);
+        if (!index) return undefined;
+        return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+      }
       // this.<chain>.b[j] where the base is a bytes field of a STORAGE dynamic
       // struct (this.e.b[j], this.recs[i].b[j], this.o.inner.b[j]): the base resolves
       // (via the struct-field / resolveAccess read paths) to a bytes value
@@ -3289,6 +3378,11 @@ export class Analyzer {
       // holds a pointer to the ABI-unpacked image. G9.
       if (this.memAggregateLocals.has(node.text)) {
         return { kind: 'memAggregate', type: t, local: node.text };
+      }
+      // a whole DYNAMIC-field struct memory local (return d): re-encode head/tail from the
+      // pointer-headed image via the dynamic-struct tuple encoder (memory TupleSrc).
+      if (this.memDynStructLocals.has(node.text)) {
+        return { kind: 'memDynStructValue', type: t, local: node.text };
       }
       // a MEMORY array local (return xs): the register holds a pointer to [len][elems];
       // ABI-encoded from memory on return.
