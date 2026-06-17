@@ -3,6 +3,10 @@ dist/
 .DS_Store
 *.tsbuildinfo
 
+# graphify generated knowledge graph (regenerate with `graphify update .`); the
+# integration itself (.claude/ skill + hooks, CLAUDE.md) is committed.
+graphify-out/
+
 # scratch debug probes at the repo root (not part of the build or test suite)
 /_dbg.mts
 /_probe2.mts
