@@ -1777,10 +1777,12 @@ export class Analyzer {
         // must be a static value type or bytes/string. Storage / mapping positions are
         // rejected separately by the containsNestedDynArray guard.
         if (this.isAbiNestedDynArray(t)) return true;
-        // a dynamic array whose element is a FIXED array (Arr<u256,2>[] = uint256[2][]) is
-        // supported in STORAGE (G6): element i occupies storageSlotCount(element) slots at
-        // keccak(p)+i*stride; element access / push / index reuse the dynIndex machinery.
-        if (storage && t.element.length !== undefined) return true;
+        // a dynamic array whose element is a STATIC FIXED array (Arr<u256,2>[] = uint256[2][])
+        // is supported in STORAGE (G6): element i occupies storageSlotCount(element) slots at
+        // keccak(p)+i*stride; element access / push / index reuse the dynIndex machinery, and
+        // pop zeroes all element slots. A fixed element that itself contains a dynamic array
+        // would need a deep-clear on pop, so it stays gated (isStaticType requirement).
+        if (storage && t.element.length !== undefined && isStaticType(t.element)) return true;
         this.diags.error(node, 'JETH217', 'this nested dynamic array shape is not supported yet');
         return false;
       }

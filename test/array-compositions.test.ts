@@ -22,6 +22,7 @@ const JETH = `@contract class C {
   @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
   @view lenA(i: u256): u256 { return this.a[i].length; }
   @external pushB(): void { this.b.push(); }
+  @external popB(): void { this.b.pop(); }
   @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
   @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
   @view lenB(): u256 { return this.b.length; }
@@ -40,6 +41,7 @@ contract C {
   function getA(uint256 i, uint256 j) external view returns (uint256){ return a[i][j]; }
   function lenA(uint256 i) external view returns (uint256){ return a[i].length; }
   function pushB() external { b.push(); }
+  function popB() external { b.pop(); }
   function setB(uint256 i, uint256 j, uint256 v) external { b[i][j] = v; }
   function getB(uint256 i, uint256 j) external view returns (uint256){ return b[i][j]; }
   function lenB() external view returns (uint256){ return b.length; }
@@ -95,6 +97,20 @@ describe('storage array compositions (G6) vs Solidity', () => {
     await eqSlot(kc(2n) + 1n, 'b[0][1]');
     await eqSlot(kc(2n) + 2n, 'b[1][0]');
     await eqSlot(kc(2n) + 5n, 'b[2][1]');
+  });
+  it('Arr<u256,2>[] pop() zeroes ALL slots of the freed multi-slot element', async () => {
+    // b has length 3 from the prior block (indices 0,1,2). Fill the LAST element b[2], pop it
+    // (frees its 2 slots at keccak(2)+4 and +5), then push (re-adds b[2]): it must read all-zero.
+    // The pre-G6-fix bug left one slot stale; jeth-vs-solc differential catches it either way.
+    await send(encodeCall(sel('setB(uint256,uint256,uint256)'), [2n, 0n, 0xaaaan]));
+    await send(encodeCall(sel('setB(uint256,uint256,uint256)'), [2n, 1n, 0xbbbbn]));
+    await send(encodeCall(sel('popB()'), []));
+    await send(encodeCall(sel('pushB()'), []));
+    await eq('getB(2,0) after pop+push (must be 0)', encodeCall(sel('getB(uint256,uint256)'), [2n, 0n]));
+    await eq('getB(2,1) after pop+push (must be 0)', encodeCall(sel('getB(uint256,uint256)'), [2n, 1n]));
+    await eq('lenB after pop+push', encodeCall(sel('lenB()'), []));
+    await eqSlot(kc(2n) + 4n, 'freed b[2][0] cleared');
+    await eqSlot(kc(2n) + 5n, 'freed b[2][1] cleared');
   });
   it('Arr<u8,4>[] (uint8[4][]): packed fixed element + raw slots', async () => {
     await send(encodeCall(sel('pushPk()'), []));

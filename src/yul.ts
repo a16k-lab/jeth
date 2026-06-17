@@ -1986,7 +1986,18 @@ ${indent(runtime, 6)}
     out.push(`let ${nl} := sub(${len}, 1)`);
     out.push(`sstore(${ref.lenSlot}, ${nl})`);
     const data = this.arrayDataSlot(ref.lenSlot, out);
-    this.arrayElemStore(ref.elem, data, nl, '0', out); // zero the freed element
+    const sc = storageSlotCount(ref.elem);
+    if (sc === 1) {
+      // value element, or a fixed array that packs into ONE slot (uint8[4], uint128[2]):
+      // arrayElemStore handles per-byte packing / single-slot clear.
+      this.arrayElemStore(ref.elem, data, nl, '0', out);
+    } else {
+      // a MULTI-slot fixed-array element (uint256[2], uint256[2][2], ...): solc zeroes ALL
+      // sc slots of the freed element; clear each contiguous slot at data + nl*sc.
+      const base = this.fresh();
+      out.push(`let ${base} := add(${data}, mul(${nl}, ${sc}))`);
+      for (let k = 0; k < sc; k++) out.push(`sstore(${k === 0 ? base : `add(${base}, ${k})`}, 0)`);
+    }
   }
 
   /** push a struct element onto a storage dynamic array: grow length, then write
