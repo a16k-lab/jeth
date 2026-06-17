@@ -1,0 +1,16 @@
+// Phase 4e-7: custom errors with dynamic (bytes/string) args, head/tail encoded.
+@contract
+class DynErrors {
+  @error Unauthorized(caller: address, reason: string);
+  @error TwoStr(a: string, b: string);
+  @error Mixed(code: u256, note: string, flag: bool);
+  @error JustStr(msg: string);
+
+  @external @pure check(x: u256, who: address, s: string): void {
+    if (x == 0n) { revert(Unauthorized(who, "not allowed here")); }
+    if (x == 1n) { revert(Mixed(42n, s, true)); }
+    if (x == 2n) { revert(TwoStr("first", "second longer string value goes here for padding test ok")); }
+    if (x == 3n) { revert(JustStr(s)); }
+    revert(JustStr(""));
+  }
+}

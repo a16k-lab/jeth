@@ -1,0 +1,87 @@
+// Control flow: if/else, for, while, break, continue, early return, fall-through.
+@contract
+class Control {
+  @external @pure sumTo(n: u256): u256 {
+    let s: u256 = 0n;
+    for (let i: u256 = 0n; i < n; i += 1n) { s += i; }
+    return s;
+  }
+
+  @external @pure factorial(n: u256): u256 {
+    let r: u256 = 1n;
+    for (let i: u256 = 1n; i <= n; i += 1n) { r *= i; }
+    return r;
+  }
+
+  @external @pure whileCountdown(n: u256): u256 {
+    let c: u256 = n;
+    let steps: u256 = 0n;
+    while (c > 0n) { c -= 1n; steps += 1n; }
+    return steps;
+  }
+
+  @external @pure breakAt(n: u256, k: u256): u256 {
+    let s: u256 = 0n;
+    for (let i: u256 = 0n; i < n; i += 1n) {
+      if (i == k) { break; }
+      s += i;
+    }
+    return s;
+  }
+
+  @external @pure skipEven(n: u256): u256 {
+    let s: u256 = 0n;
+    for (let i: u256 = 0n; i < n; i += 1n) {
+      if (i % 2n == 0n) { continue; }
+      s += i;
+    }
+    return s;
+  }
+
+  @external @pure whileContinue(n: u256): u256 {
+    let s: u256 = 0n;
+    let i: u256 = 0n;
+    while (i < n) {
+      i += 1n;
+      if (i % 2n == 1n) { continue; }
+      s += i;
+    }
+    return s;
+  }
+
+  @external @pure absI256(x: i256): i256 {
+    let r: i256 = 0n;
+    if (x < 0n) { r = -x; } else { r = x; }
+    return r;
+  }
+
+  @external @pure classify(x: u256): u256 {
+    if (x < 10n) { return 1n; } else if (x < 20n) { return 2n; } else { return 3n; }
+  }
+
+  @external @pure earlyReturnInLoop(n: u256, k: u256): u256 {
+    for (let i: u256 = 0n; i < n; i += 1n) {
+      if (i == k) { return i; }
+    }
+    return 999n;
+  }
+
+  @external @pure fallThroughZero(x: u256): u256 {
+    if (x > 0n) { return 7n; }
+  }
+
+  @external @pure nestedLoops(n: u256): u256 {
+    let s: u256 = 0n;
+    for (let i: u256 = 0n; i < n; i += 1n) {
+      for (let j: u256 = 0n; j < n; j += 1n) {
+        if (j == i) { break; }
+        s += 1n;
+      }
+    }
+    return s;
+  }
+
+  @external @pure shortCircuit(a: u256): bool {
+    return (a > 0n) && ((10n / a) > 0n);
+  }
+}

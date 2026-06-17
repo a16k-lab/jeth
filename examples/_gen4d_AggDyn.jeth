@@ -1,0 +1,22 @@
+// Phase 4d scenario: a STATIC aggregate param mixed with a DYNAMIC sibling.
+// The ABI head holds the aggregate's inline leaf words and ONE offset word per
+// dynamic param; the dynamic tail base is byte 4 (after the selector).
+@struct class Pt { x: u128; y: u128; }
+
+@contract
+class AggDyn {
+  // fixed-array (3 inline head words) + dynamic u256[] (offset word) + value i.
+  @external @pure sumAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return a[i] + b[i]; }
+  // probe the fixed array alone at a runtime index (constant-OOB would be a
+  // compile error, so we always use a runtime index here).
+  @external @pure aAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return a[i]; }
+  // probe the dynamic sibling alone (forces the tail offset to be followed).
+  @external @pure bAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return b[i]; }
+  @external @pure bLen(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return b.length; }
+
+  // static struct (2 inline head words) + bytes (offset word).
+  @external @pure ptXof(p: Pt, data: bytes): u128 { return p.x; }
+  @external @pure ptYof(p: Pt, data: bytes): u128 { return p.y; }
+  @external @pure dataLen(p: Pt, data: bytes): u256 { return data.length; }
+  @external @pure dataAt(p: Pt, data: bytes, k: u256): bytes1 { return data[k]; }
+}

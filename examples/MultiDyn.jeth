@@ -1,0 +1,18 @@
+@struct class T { a: u256; s: bytes; b: bytes; }
+@struct class U { name: string; x: u256; data: bytes; }
+
+@contract
+class MultiDyn {
+  // T has two bytes fields; probe second-field offset + tail ordering.
+  @external @pure tLenS(t: T): u256 { return t.s.length; }
+  @external @pure tLenB(t: T): u256 { return t.b.length; }
+  @external @pure tGetS(t: T): bytes { return t.s; }
+  @external @pure tGetB(t: T): bytes { return t.b; }
+  @external @pure tEcho(t: T): T { return t; }
+
+  // U: string field first (dynamic), then static, then bytes.
+  @external @pure uGetN(u: U): string { return u.name; }
+  @external @pure uGetD(u: U): bytes { return u.data; }
+  @external @pure uX(u: U): u256 { return u.x; }
+  @external @pure uEcho(u: U): U { return u; }
+}

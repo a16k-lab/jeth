@@ -1,0 +1,22 @@
+// s1-arr-of-packed-struct: Arr<P,4> where P packs a:u8,b:u16,c:u64,d:bool into
+// the low 12 bytes and address e into bytes 12..31 of a single slot. Each pts[i]
+// occupies exactly one slot (Solidity numberOfBytes == 32). Differential vs Solidity.
+@struct class P { a: u8; b: u16; c: u64; d: bool; e: address; }
+
+@contract
+class PackedArr {
+  @state pts: Arr<P, 4>;   // slots 0-3 (one slot per element)
+  @state sentinel: u256;   // slot 4
+
+  @external setA(i: u256, v: u8): void { this.pts[i].a = v; }
+  @external setB(i: u256, v: u16): void { this.pts[i].b = v; }
+  @external setC(i: u256, v: u64): void { this.pts[i].c = v; }
+  @external setD(i: u256, v: bool): void { this.pts[i].d = v; }
+  @external setE(i: u256, v: address): void { this.pts[i].e = v; }
+
+  @view getA(i: u256): u8 { return this.pts[i].a; }
+  @view getB(i: u256): u16 { return this.pts[i].b; }
+  @view getC(i: u256): u64 { return this.pts[i].c; }
+  @view getD(i: u256): bool { return this.pts[i].d; }
+  @view getE(i: u256): address { return this.pts[i].e; }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "jeth",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "JETH - a TypeScript-subset smart-contract language compiling to EVM bytecode via Yul",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "jethc": "tsx src/cli.ts"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@ethereumjs/block": "^10.1.2",
+    "@ethereumjs/common": "^10.1.2",
+    "@ethereumjs/evm": "^10.1.2",
+    "@ethereumjs/statemanager": "^10.1.2",
+    "@ethereumjs/util": "^10.1.2",
+    "ethereum-cryptography": "^3.2.0",
+    "solc": "^0.8.35",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "tsx": "^4.22.4",
+    "vitest": "^4.1.9"
+  }
+}

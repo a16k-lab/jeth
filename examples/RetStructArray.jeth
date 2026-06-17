@@ -1,0 +1,17 @@
+// Phase 4e-3: returning a whole STORAGE dynamic array of struct (head/tail encode,
+// transcoding packed storage -> unpacked ABI).
+@struct class Rec { id: u64; owner: address; amount: u128; active: bool; } // 2 slots, packed
+@struct class Pt { x: u256; y: u256; }                                      // 2 slots, whole-slot
+
+@contract
+class RetStructArray {
+  @state recs: Rec[];
+  @state pts: Pt[];
+  @external addRec(id: u64, owner: address, amount: u128, active: bool): void {
+    this.recs.push(Rec(id, owner, amount, active));
+  }
+  @external addPt(x: u256, y: u256): void { this.pts.push(Pt(x, y)); }
+  @view allRecs(): Rec[] { return this.recs; }
+  @view allPts(): Pt[] { return this.pts; }
+  @view recCount(): u256 { return this.recs.length; }
+}

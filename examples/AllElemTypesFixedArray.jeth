@@ -1,0 +1,48 @@
+// Phase 4d scenario "all-elem-types-fixed-array": one fixed-array param getter per
+// value element type, T[5] and T[3], returning a[i] with a runtime index. Exercises
+// clean reads (incl type max + negative intN), lazy dirty-element EMPTY reverts,
+// unread-dirty OK, and runtime OOB Panic(0x32). ABI head is unpacked (1 word/leaf).
+@contract
+class AllElemTypesFixedArray {
+  // unsigned ints
+  @external @pure u8_5(a: Arr<u8, 5>, i: u256): u8 { return a[i]; }
+  @external @pure u8_3(a: Arr<u8, 3>, i: u256): u8 { return a[i]; }
+  @external @pure u16_5(a: Arr<u16, 5>, i: u256): u16 { return a[i]; }
+  @external @pure u16_3(a: Arr<u16, 3>, i: u256): u16 { return a[i]; }
+  @external @pure u32_5(a: Arr<u32, 5>, i: u256): u32 { return a[i]; }
+  @external @pure u32_3(a: Arr<u32, 3>, i: u256): u32 { return a[i]; }
+  @external @pure u64_5(a: Arr<u64, 5>, i: u256): u64 { return a[i]; }
+  @external @pure u64_3(a: Arr<u64, 3>, i: u256): u64 { return a[i]; }
+  @external @pure u128_5(a: Arr<u128, 5>, i: u256): u128 { return a[i]; }
+  @external @pure u128_3(a: Arr<u128, 3>, i: u256): u128 { return a[i]; }
+
+  // signed ints
+  @external @pure i8_5(a: Arr<i8, 5>, i: u256): i8 { return a[i]; }
+  @external @pure i8_3(a: Arr<i8, 3>, i: u256): i8 { return a[i]; }
+  @external @pure i16_5(a: Arr<i16, 5>, i: u256): i16 { return a[i]; }
+  @external @pure i16_3(a: Arr<i16, 3>, i: u256): i16 { return a[i]; }
+  @external @pure i64_5(a: Arr<i64, 5>, i: u256): i64 { return a[i]; }
+  @external @pure i64_3(a: Arr<i64, 3>, i: u256): i64 { return a[i]; }
+  @external @pure i128_5(a: Arr<i128, 5>, i: u256): i128 { return a[i]; }
+  @external @pure i128_3(a: Arr<i128, 3>, i: u256): i128 { return a[i]; }
+  @external @pure i256_5(a: Arr<i256, 5>, i: u256): i256 { return a[i]; }
+  @external @pure i256_3(a: Arr<i256, 3>, i: u256): i256 { return a[i]; }
+
+  // bool
+  @external @pure bool_5(a: Arr<bool, 5>, i: u256): bool { return a[i]; }
+  @external @pure bool_3(a: Arr<bool, 3>, i: u256): bool { return a[i]; }
+
+  // address
+  @external @pure addr_5(a: Arr<address, 5>, i: u256): address { return a[i]; }
+  @external @pure addr_3(a: Arr<address, 3>, i: u256): address { return a[i]; }
+
+  // bytesM (left-aligned)
+  @external @pure b1_5(a: Arr<bytes1, 5>, i: u256): bytes1 { return a[i]; }
+  @external @pure b1_3(a: Arr<bytes1, 3>, i: u256): bytes1 { return a[i]; }
+  @external @pure b4_5(a: Arr<bytes4, 5>, i: u256): bytes4 { return a[i]; }
+  @external @pure b4_3(a: Arr<bytes4, 3>, i: u256): bytes4 { return a[i]; }
+  @external @pure b20_5(a: Arr<bytes20, 5>, i: u256): bytes20 { return a[i]; }
+  @external @pure b20_3(a: Arr<bytes20, 3>, i: u256): bytes20 { return a[i]; }
+  @external @pure b32_5(a: Arr<bytes32, 5>, i: u256): bytes32 { return a[i]; }
+  @external @pure b32_3(a: Arr<bytes32, 3>, i: u256): bytes32 { return a[i]; }
+}

@@ -1,0 +1,69 @@
+// Audit contract for calldata-decode-validation.
+@struct class Pt { x: u128; y: u128; }
+@struct class Acct { bal: u128; nonce: u64; active: bool; }
+@struct class D { a: u256; s: string; }
+@struct class E { id: u64; name: bytes; }
+
+@contract
+class AuditCd {
+  // ---- value params (dirty-bit validation) ----
+  @external @pure vU8(x: u8): u8 { return x; }
+  @external @pure vI8(x: i8): i8 { return x; }
+  @external @pure vBool(x: bool): bool { return x; }
+  @external @pure vAddr(x: address): address { return x; }
+  @external @pure vB4(x: bytes4): bytes4 { return x; }
+  @external @pure vTwo(a: u8, b: u8): u8 { return a + b; }
+
+  // ---- static struct ----
+  @external @pure ptX(p: Pt): u128 { return p.x; }
+  @external @pure acctNonce(a: Acct): u64 { return a.nonce; }
+  @external @pure acctActive(a: Acct): bool { return a.active; }
+
+  // ---- fixed array ----
+  @external @pure fa3(a: Arr<u256, 3>, i: u256): u256 { return a[i]; }
+  @external @pure fa8(a: Arr<u8, 4>, i: u256): u8 { return a[i]; }
+
+  // ---- dynamic value array ----
+  @external @pure daGet(a: u256[], i: u256): u256 { return a[i]; }
+  @external @pure daLen(a: u256[]): u256 { return a.length; }
+  @external @pure da8Get(a: u8[], i: u256): u8 { return a[i]; }
+  @external @pure daEcho(a: u256[]): u256[] { return a; }
+
+  // ---- dynamic array of static struct ----
+  @external @pure psX(ps: Pt[], i: u256): u128 { return ps[i].x; }
+  @external @pure psLen(ps: Pt[]): u256 { return ps.length; }
+
+  // ---- bytes/string ----
+  @external @pure bLen(b: bytes): u256 { return b.length; }
+  @external @pure bAt(b: bytes, i: u256): bytes1 { return b[i]; }
+  @external @pure bEcho(b: bytes): bytes { return b; }
+  @external @pure sEcho(s: string): string { return s; }
+
+  // ---- string[] / bytes[] ----
+  @external @pure saCount(a: string[]): u256 { return a.length; }
+  @external @pure saAt(a: string[], i: u256): string { return a[i]; }
+
+  // ---- T[][] ----
+  @external @pure mGet(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
+  @external @pure mLen(m: u256[][]): u256 { return m.length; }
+  @external @pure mInnerLen(m: u256[][], i: u256): u256 { return m[i].length; }
+  @external @pure m8Get(m: u8[][], i: u256, j: u256): u8 { return m[i][j]; }
+
+  // ---- dynamic struct ----
+  @external @pure dA(d: D): u256 { return d.a; }
+  @external @pure dS(d: D): string { return d.s; }
+  @external @pure eName(e: E): bytes { return e.name; }
+  @external @pure dEcho(d: D): D { return d; }
+  @external @pure eEcho(e: E): E { return e; }
+
+  // ---- echo paths (decode-then-encode validation) ----
+  @external @pure m8Echo(m: u8[][]): u8[][] { return m; }
+  @external @pure mEcho(m: u256[][]): u256[][] { return m; }
+  @external @pure saEcho(a: string[]): string[] { return a; }
+  @external @pure psEcho(ps: Pt[]): Pt[] { return ps; }
+  @external @pure da8Echo(a: u8[]): u8[] { return a; }
+
+  // ---- mixed dynamic + value siblings ----
+  @external @pure mixed(x: u256, a: u256[], s: bytes): u256 { return x + a.length + s.length; }
+  @external @pure twoArr(a: u256[], b: u256[]): u256 { return a.length + b.length; }
+}

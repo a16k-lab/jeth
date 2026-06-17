@@ -1,0 +1,46 @@
+// G8 gate parity: the transitive-purity fixpoint and internal-call gates must match solc's
+// acceptance boundary. solc is the oracle for the purity rejections (it rejects the same
+// programs); the first-cut composition gates (aggregate args, multi-return, external target)
+// are JETH-only intentional rejections documented here.
+import { describe, it, expect } from 'vitest';
+import { compile } from '../src/compile.js';
+import { CompileError } from '../src/diagnostics.js';
+import { compileSolidity } from './_solidity.js';
+
+function jethCodes(src: string): string[] | null {
+  try { compile(src, { fileName: 'C.jeth' }); return null; }
+  catch (e) { if (e instanceof CompileError) return e.diagnostics.filter((d) => d.severity === 'error').map((d) => d.code); throw e; }
+}
+function solcRejects(src: string): boolean {
+  try { compileSolidity('// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n' + src, 'C'); return false; }
+  catch { return true; }
+}
+
+describe('internal-call gates (G8)', () => {
+  it('@view calling a state-writer is rejected (JETH054), like solc', () => {
+    const codes = jethCodes(`@contract class C { @state x: u256; @internal w(): void { this.x = 1n; } @view f(): u256 { this.w(); return this.x; } }`);
+    expect(codes).toContain('JETH054');
+    expect(solcRejects(`contract C { uint256 x; function w() internal { x = 1; } function f() external view returns (uint256){ w(); return x; } }`)).toBe(true);
+  });
+  it('@pure calling a state-reader is rejected (JETH055), like solc', () => {
+    const codes = jethCodes(`@contract class C { @state x: u256; @view r(): u256 { return this.x; } @pure f(): u256 { return this.r(); } }`);
+    expect(codes).toContain('JETH055');
+    expect(solcRejects(`contract C { uint256 x; function r() internal view returns (uint256){ return x; } function f() external pure returns (uint256){ return r(); } }`)).toBe(true);
+  });
+  it('@pure calling an env-reader is rejected (JETH164), like solc', () => {
+    const codes = jethCodes(`@contract class C { @view r(): address { return msg.sender; } @pure f(): address { return this.r(); } }`);
+    expect(codes).toContain('JETH164');
+    expect(solcRejects(`contract C { function r() internal view returns (address){ return msg.sender; } function f() external pure returns (address){ return r(); } }`)).toBe(true);
+  });
+  it('transitive purity is NOT over-rejected: @pure calling a @pure helper compiles', () => {
+    expect(jethCodes(`@contract class C { @pure a(n: u256): u256 { return n + 1n; } @pure f(n: u256): u256 { return this.a(n) * 2n; } }`)).toBeNull();
+  });
+  it('internal call to an @external function is rejected (JETH240)', () => {
+    const codes = jethCodes(`@contract class C { @external g(n: u256): u256 { return n; } @external f(n: u256): u256 { return this.g(n); } }`);
+    expect(codes).toContain('JETH240');
+  });
+  it('first-cut composition gates: aggregate arg (JETH242) and multi-return (JETH241)', () => {
+    expect(jethCodes(`@struct class P { a: u256; b: u256; } @contract class C { @pure h(p: P): u256 { return p.a; } @external f(): u256 { let p: P = P(1n, 2n); return this.h(p); } }`)).toEqual(expect.arrayContaining(['JETH242']));
+    expect(jethCodes(`@contract class C { @pure two(): [u256, u256] { return [1n, 2n]; } @external f(): u256 { let a: u256 = this.two(); return a; } }`)).toEqual(expect.arrayContaining(['JETH241']));
+  });
+});

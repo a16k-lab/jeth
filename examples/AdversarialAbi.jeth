@@ -1,0 +1,33 @@
+// Adversarial ABI-decode parity surface (audit findings B2/B4/B6/B3). These
+// functions exercise the two distinct solc calldata-decode code paths that JETH must
+// reproduce byte-for-byte even on hostile offsets/lengths (see
+// test/parity-adversarial.test.ts):
+//
+//   LAZY-ACCESS of a single calldata slice (d.s, d.s.length, m[i][j], m[i].length,
+//   a[i]) uses solc's `access_calldata_tail`: a SIGNED length-word-readable check
+//   (a high-bit / wrapping member offset PASSES and the pointer wraps mod 2^256,
+//   reading 0 out of range), a 2^64-1 length cap, and a SIGNED payload-fits check.
+//
+//   DECODE-TO-FRESH-MEMORY ECHO of a whole aggregate (return d / return a / return m)
+//   rejects a wrapping/high-bit member offset with an UNSIGNED 2^64-1 cap and raises
+//   Panic(0x41) on an oversized payload allocation BEFORE the payload-within-
+//   calldatasize EMPTY check.
+//
+// D uses a `bytes` field (not `string`) so `d.s.length` is expressible (Solidity's
+// `string` has no .length); bytes and string share an identical ABI layout.
+@struct class D { a: u256; s: bytes; }
+
+@contract
+class AdversarialAbi {
+  // --- lazy-access: a single calldata slice, read or re-encoded directly ---
+  @external @pure dLen(d: D): u256 { return d.s.length; }
+  @external @pure dGet(d: D): bytes { return d.s; }
+  @external @pure mGet(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
+  @external @pure innerLen(m: u256[][], i: u256): u256 { return m[i].length; }
+  @external @pure saAt(a: string[], i: u256): string { return a[i]; }
+
+  // --- decode-to-memory echo: a whole aggregate decoded into fresh memory ---
+  @external @pure dEcho(d: D): D { return d; }
+  @external @pure saEcho(a: string[]): string[] { return a; }
+  @external @pure mEcho(m: u256[][]): u256[][] { return m; }
+}

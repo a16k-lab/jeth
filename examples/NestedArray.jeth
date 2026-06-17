@@ -1,0 +1,14 @@
+// Phase 4e-5: nested dynamic arrays T[][] (u256[][], u8[][]) as a calldata param
+// and as a return. Whole-array echo (head/tail re-encode with a per-inner pointer
+// table whose base is the pointer-region start, i.e. the word after the outer
+// length word), element read m[i][j] (Panic 0x32 on either dim OOB; u8 element
+// > 255 -> EMPTY on read), m.length (outer count), and m[i].length (inner count).
+@contract
+class NestedArray {
+  @external @pure echo(m: u256[][]): u256[][] { return m; }
+  @external @pure echo8(m: u8[][]): u8[][] { return m; }
+  @external @pure at(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
+  @external @pure at8(m: u8[][], i: u256, j: u256): u8 { return m[i][j]; }
+  @external @pure outerLen(m: u256[][]): u256 { return m.length; }
+  @external @pure innerLen(m: u256[][], i: u256): u256 { return m[i].length; }
+}

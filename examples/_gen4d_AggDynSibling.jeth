@@ -1,0 +1,21 @@
+// Phase 4d scenario "aggregate-plus-dynamic-sibling" (independent harness):
+// a STATIC aggregate param (fixed array / struct) next to a DYNAMIC sibling
+// (u256[] / bytes). ABI head is flat+unpacked: the aggregate leaves are inline,
+// the dynamic param contributes ONE offset word, and the dynamic tail base is
+// byte 4 (right after the selector).
+@struct class Pt { x: u128; y: u128; }
+
+@contract
+class AggDynSibling {
+  // (1) fixed-array (3 inline head words) + dynamic u256[] (offset word) + value i.
+  @external @pure sumAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return a[i] + b[i]; }
+  @external @pure aAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return a[i]; }
+  @external @pure bAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return b[i]; }
+  @external @pure bLen(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return b.length; }
+
+  // (2) static struct (2 inline head words) + bytes (offset word).
+  @external @pure ptXof(p: Pt, data: bytes): u128 { return p.x; }
+  @external @pure ptYof(p: Pt, data: bytes): u128 { return p.y; }
+  @external @pure dataLen(p: Pt, data: bytes): u256 { return data.length; }
+  @external @pure dataAt(p: Pt, data: bytes, k: u256): bytes1 { return data[k]; }
+}

@@ -1,0 +1,20 @@
+// The Phase 1 proof contract. JS syntax, EVM/Solidity semantics.
+@contract
+class Counter {
+  @state count: u256 = 0n;
+
+  @external
+  increment(): void {
+    this.count += 1n; // checked uint256 add -> SSTORE at slot 0
+  }
+
+  @external
+  add(delta: u256): void {
+    this.count += delta;
+  }
+
+  @view
+  current(): u256 {
+    return this.count;
+  }
+}

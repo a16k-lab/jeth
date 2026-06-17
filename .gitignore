@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.DS_Store
+*.tsbuildinfo
+
+# scratch debug probes at the repo root (not part of the build or test suite)
+/_dbg.mts
+/_probe2.mts
+/_probe_gate.mjs
+/_probe_md.mjs
+/_probe_sel.mjs
+/_probe_sel2.mjs
+/_probe_silent.mjs
+/_probe_tmp.mts
+/probe2.mjs
+/probe3.mjs
+/probe4.mjs
+/probe5.mjs

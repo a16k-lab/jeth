@@ -1,0 +1,28 @@
+// Dynamic bytes/string: storage (short/long), calldata params, ABI returns,
+// .length, b[i] indexing, dynamic events and Error(string).
+@contract
+class BS {
+  @state s: string;   // slot 0
+  @state b: bytes;    // slot 1
+  @state canary: u256; // slot 2 (must never be disturbed by dynamic writes)
+
+  @event Msg(m: string);
+  @event Tagged(@indexed who: address, m: string);
+
+  @external setS(v: string): void { this.s = v; }
+  @view getS(): string { return this.s; }
+  @external @pure echo(v: string): string { return v; }
+
+  @external setB(v: bytes): void { this.b = v; }
+  @view getB(): bytes { return this.b; }
+  @view blen(): u256 { return this.b.length; }
+  @view at(i: u256): bytes1 { return this.b[i]; }
+
+  @external setCanary(c: u256): void { this.canary = c; }
+  @view getCanary(): u256 { return this.canary; }
+
+  @external emitMsg(): void { emit(Msg(this.s)); }
+  @external emitTagged(): void { emit(Tagged(msg.sender, this.s)); }
+  @view boom(): void { require(false, this.s); }
+  @view boomParam(v: string): void { require(false, v); }
+}
