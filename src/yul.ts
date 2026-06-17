@@ -1072,6 +1072,13 @@ ${indent(runtime, 6)}
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(add(${mp}, 0x20), ${len})`);
         idxVals.push(topic);
+      } else if (p.indexed && p.type.kind === 'array') {
+        // an indexed DYNAMIC value-element array topic is keccak256 of the element words (the
+        // ABI tail minus its length word), not the value. Verified byte-identical to solc.
+        const { mp, size } = this.materializeArrayArg(arg, ctx, out);
+        const topic = this.fresh();
+        out.push(`let ${topic} := keccak256(add(${mp}, 0x20), sub(${size}, 0x20))`);
+        idxVals.push(topic);
       } else if (p.indexed) {
         idxVals.push(this.lowerExpr(arg, ctx, out)); // a static-value indexed topic
       } else if (isBytesLike(p.type)) {
@@ -3029,7 +3036,7 @@ ${indent(runtime, 6)}
   /** Echo a whole calldata PARAM `name` of dynamic type `t` into a fresh ABI return
    *  blob: [0x20][value encoding]. The general recursive encoder gives UNBOUNDED
    *  nesting depth. The top-level offset is signed-range-checked (solc form). */
-  private echoParam(name: string, t: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+  private echoParam(name: string, t: JethType, ctx: LowerCtx, out: string[], forceValidate = false): { ptr: string; size: string } {
     const ph = ctx.cdParamHead.get(name);
     if (!ph) throw new UnsupportedError(`unbound echo param ${name}`);
     const off = this.fresh();
@@ -3040,8 +3047,10 @@ ${indent(runtime, 6)}
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(${ptr}, 0x20)`);
-    // a flat top-level value array cleans its elements (Bug A); everything else validates.
-    const topClean = t.kind === 'array' && t.length === undefined && isStaticValueType(t.element);
+    // a flat top-level value array CLEANS its elements on a RETURN echo (Bug A; solc's return
+    // copy masks dirty bits), but the EVENT/ERROR decode VALIDATES every element (reverts on
+    // dirty), so callers in that context pass forceValidate. Everything else always validates.
+    const topClean = !forceValidate && t.kind === 'array' && t.length === undefined && isStaticValueType(t.element);
     const size = this.abiEncFromCd(t, cdPtr, `add(${ptr}, 0x20)`, !topClean, out);
     out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
     return { ptr, size: `add(0x20, ${size})` };
@@ -3057,7 +3066,9 @@ ${indent(runtime, 6)}
     let mpExpr: string;
     let sizeExpr: string;
     if (base.kind === 'calldataArray') {
-      const { ptr, size } = this.echoParam(base.name, arg.type, ctx, out);
+      // an @event/@error array arg: solc VALIDATES every value element (reverts on dirty bits),
+      // unlike a RETURN echo which cleans, so force validation here.
+      const { ptr, size } = this.echoParam(base.name, arg.type, ctx, out, true);
       mpExpr = `add(${ptr}, 0x20)`; // skip the single-value [0x20] offset wrapper
       sizeExpr = `sub(${size}, 0x20)`;
     } else if (base.kind === 'memArray') {

@@ -80,7 +80,10 @@ describe('Phase 2 diagnostics', () => {
     expect(codesFor(fn('emit(Missing(1n));'))).toContain('JETH147'); // unknown event
     expect(codesFor(fn('emit(Ev(1n, 2n, 3n));'))).toContain('JETH148'); // arg count
     expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256, @indexed b: u256, @indexed c: u256, @indexed d: u256); }`)).toContain('JETH143'); // >3 indexed
-    expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256[]); }`)).toContain('JETH207'); // indexed dynamic ARRAY still deferred
+    // an indexed dynamic VALUE-element array is now allowed (keccak topic of the element words)
+    expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256[]); }`)).toEqual([]);
+    // an indexed FIXED array / struct is still deferred (JETH207)
+    expect(codesFor(`@contract\nclass T { @event E(@indexed a: Arr<u256,2>); }`)).toContain('JETH207');
     // an indexed bytes/string event param is now allowed (keccak topic, G4)
     expect(codesFor(`@contract\nclass T { @event E(@indexed s: string, v: u256); }`)).toEqual([]);
     // a non-indexed string event param is allowed (Phase 4)
