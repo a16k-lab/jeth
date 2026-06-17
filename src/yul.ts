@@ -251,9 +251,13 @@ ${indent(runtime, 6)}
         // dynamic-array machinery.
         const off = this.fresh();
         out.push(`let ${off} := calldataload(${head})`);
-        out.push(`if iszero(slt(${off}, sub(sub(calldatasize(), 4), 0x1f))) { revert(0, 0) }`);
+        // UNSIGNED offset cap (matching the sibling top-level decoders + solc): a high-bit
+        // "negative" offset must EMPTY-revert here, not wrap to a small in-bounds pointer (which
+        // would later raise Panic 0x32 and diverge from solc's empty revert).
+        out.push(`if gt(${off}, 0xffffffffffffffff) { revert(0, 0) }`);
         const dataPtr = this.fresh();
         out.push(`let ${dataPtr} := add(4, ${off})`);
+        out.push(`if iszero(slt(add(${dataPtr}, 0x1f), calldatasize())) { revert(0, 0) }`);
         ctx.cdArrays.set(p.name, { offset: dataPtr, length: String(p.type.length), elem: p.type.element });
       } else if (p.type.kind === 'struct' || (p.type.kind === 'array' && p.type.length !== undefined)) {
         // static aggregate: inline in the head, decoded lazily on field/element read.
@@ -1986,6 +1990,32 @@ ${indent(runtime, 6)}
       const ptr = this.fresh();
       out.push(`let ${ptr} := ${this.lowerExpr(arr.base.expr, ctx, out)}`);
       return { src: 'memory', ptr, elem: arr.elem };
+    }
+    if (arr.base.kind === 'cdSubElem') {
+      // a[i] inner array of a MIXED calldata composite. The param is bound as a calldata array
+      // (b.offset, b.length, b.elem = the inner array type). Bound i against the outer count/N
+      // (Panic 0x32), then resolve the inner array:
+      //  - dynamic-of-fixed (inner is a fixed array): contiguous, stride = abiHeadWords(inner)*32;
+      //    the inner fixed array starts at b.offset + i*stride (outer payload already validated).
+      //  - fixed-of-dynamic (inner is a dynamic array): resolve via the offset table at b.offset
+      //    (calldataInnerArray, with the same revert semantics as a nested dynamic array).
+      const b = ctx.cdArrays.get(arr.base.name);
+      if (!b) throw new UnsupportedError(`unbound calldata composite ${arr.base.name}`);
+      const inner = b.elem;
+      const i = this.fresh();
+      out.push(`let ${i} := ${this.lowerExpr(arr.base.index, ctx, out)}`);
+      out.push(`if iszero(lt(${i}, ${b.length})) { ${this.panic()}(0x32) }`);
+      if (inner.kind === 'array' && inner.length !== undefined) {
+        const stride = abiHeadWords(inner) * 32;
+        const offset = this.fresh();
+        out.push(`let ${offset} := add(${b.offset}, mul(${i}, ${stride}))`);
+        return { src: 'calldata', offset, length: String(inner.length), elem: arr.elem };
+      }
+      const stride = abiHeadWords(arr.elem) * 32;
+      const nb = this.fresh();
+      const nl = this.fresh();
+      out.push(`let ${nb}, ${nl} := ${this.calldataInnerArray()}(${b.offset}, ${i}, ${stride})`);
+      return { src: 'calldata', offset: nb, length: nl, elem: arr.elem };
     }
     if (arr.base.kind === 'cdNestedElem') {
       // Inner array m[i] of a nested dynamic array T[][] (calldata, 4e-5). The outer

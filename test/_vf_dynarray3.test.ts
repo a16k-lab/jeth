@@ -230,8 +230,9 @@ describe('_vf_dynarray3 probe', () => {
   // test/array-compositions.test.ts. Whole calldata-param / return of these shapes stays gated.
   it('Arr<u256[],N> (uint256[][N]) storage access now compiles (G6)', () => {
     expect(() => compile(`@contract class C { @state a: Arr<u256[], 2>; @external p(i: u256, v: u256): void { this.a[i].push(v); } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`, { fileName: 'C.jeth' })).not.toThrow();
-    // a whole-array calldata PARAM of this shape is still gated.
-    expect(() => compile(`@contract class C { @external f(a: Arr<u256[], 2>): void {} }`, { fileName: 'C.jeth' })).toThrow();
+    // a whole-array calldata PARAM / return + element access of this shape now compile too
+    // (JETH210/151, byte-identical incl. malformed-offset parity in test/calldata-composite-index).
+    expect(() => compile(`@contract class C { @external @pure f(a: Arr<u256[], 2>, i: u256, j: u256): u256 { return a[i][j]; } }`, { fileName: 'C.jeth' })).not.toThrow();
   });
 
   it('Arr<u256,2>[] (uint256[2][]) storage access now compiles (G6)', () => {

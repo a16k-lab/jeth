@@ -2187,10 +2187,11 @@ export class Analyzer {
       // Arr<D,N> (fixed array of a DYNAMIC struct): N*slotCount(D) contiguous slots in
       // storage; an N-word offset table + per-element tuples as a calldata param/return.
       if (t.element.kind === 'struct' && (storage ? this.isStorageDynStruct(t.element) : this.isSupportedDynStructField(t.element))) return true;
-      // Arr<u256[],N> (= uint256[][N], a fixed array of DYNAMIC arrays) in STORAGE (G6):
-      // element i is an inner dynamic array whose length slot is baseSlot+i*stride; access /
-      // push / index reuse the placeArray + dynIndex machinery.
-      if (t.element.kind === 'array' && storage) return true;
+      // Arr<u256[],N> (= uint256[][N], a fixed array of DYNAMIC arrays). In STORAGE (G6):
+      // element i is an inner dynamic array whose length slot is baseSlot+i*stride. As a
+      // calldata PARAM / RETURN: an N-word offset table + per-element tails, handled by the
+      // recursive head/tail codec (any supported nested dynamic-array element).
+      if (t.element.kind === 'array' && (storage || this.isAbiNestedDynArray(t.element) || (t.element.length === undefined && isStaticValueType(t.element.element)))) return true;
       this.diags.error(node, 'JETH210', `fixed-array element type ${displayName(t.element)} is not supported yet`);
       return false;
     }
@@ -2481,6 +2482,25 @@ export class Analyzer {
       // both bound at codegen as a calldata array (the latter with a constant length).
       if (t && t.kind === 'array' && (t.length === undefined || isDynamicType(t.element))) {
         return { base: { kind: 'calldataArray', name: node.text }, elem: t.element };
+      }
+    }
+    // `a[i]` where `a` is a MIXED calldata composite array param whose element is itself an
+    // array, but NOT the all-dynamic nested case (owned by cdNestedElem below): dynamic-of-
+    // fixed (Arr<u256,2>[]) or fixed-of-dynamic (Arr<u256[],N>). Resolves to the inner array
+    // (fixed or dynamic) so a following [j] reads its element.
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression) {
+      const t = this.lookupLocal(node.expression.text);
+      if (
+        t &&
+        t.kind === 'array' &&
+        t.element.kind === 'array' &&
+        (t.length === undefined || isDynamicType(t.element)) && // bound as a calldata array
+        !(t.length === undefined && t.element.length === undefined) && // not all-dynamic (cdNestedElem)
+        !this.memArrayLocals.has(node.expression.text)
+      ) {
+        const idx = this.checkExpr(node.argumentExpression, U256);
+        if (!idx) return undefined;
+        return { base: { kind: 'cdSubElem', name: node.expression.text, index: this.coerce(idx, U256, node.argumentExpression) }, elem: t.element.element };
       }
     }
     // An inner array reached by a chain of index steps into a nested dynamic array
@@ -3314,6 +3334,20 @@ export class Analyzer {
           // would read INTO it is handled by resolveArrayExpr on the outer node, so
           // this point is only reached when the element is neither value nor bytes-
           // like nor a dynamic array. Such shapes are gated by the type tree.
+          return undefined;
+        }
+      }
+      // a[i][j] where a[i] is the inner array of a MIXED calldata composite (cdSubElem):
+      // dynamic-of-fixed (Arr<u256,2>[]) or fixed-of-dynamic (Arr<u256[],N>). [j] reads a value
+      // element (or a bytes/string element if the inner is string[]/bytes[]).
+      if (ts.isElementAccessExpression(node.expression) && node.argumentExpression) {
+        const innerArr = this.resolveArrayExpr(node.expression);
+        if (innerArr && innerArr.base.kind === 'cdSubElem') {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          if (isBytesLike(innerArr.elem)) return { kind: 'cdDynArrayElem', type: innerArr.elem, arr: innerArr, index: idx };
+          if (isStaticValueType(innerArr.elem)) return { kind: 'arrayGet', type: innerArr.elem, arr: innerArr, index: idx };
           return undefined;
         }
       }

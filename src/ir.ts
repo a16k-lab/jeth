@@ -186,6 +186,7 @@ export interface ArrayExpr {
     //     table (base = the word after the level's length word). `indices` lists the
     //     steps outer-to-inner (>=1); the resolved array's element type is `elem`. ---
     | { kind: 'cdNestedElem'; name: string; indices: Expr[] } // m[i], m[i][j], ... (calldata param)
+    | { kind: 'cdSubElem'; name: string; index: Expr } // a[i] inner array of a MIXED calldata composite: dynamic-of-fixed (Arr<T,N>[]) or fixed-of-dynamic (Arr<T[],N>)
     // --- a STORAGE inner dynamic array whose length slot is reached via an AccessPath:
     //     an element of a nested dynamic array (this.dd[i] of u256[][]/string[][]/D[][]),
     //     or a dynamic-array field of a storage struct (this.s.xs). The length lives at
