@@ -634,6 +634,22 @@ ${indent(runtime, 6)}
           this.copyArrayValueIntoStorage(s.target.type.element, s.value, dstLenSlot, ctx, out);
           break;
         }
+        // whole FIXED-array assignment into storage: this.g = this.src (storage source) or
+        // this.g = [a, b, c] (array literal). Static-element arrays copy their slot footprint
+        // verbatim; dynamic-element fixed arrays deep-copy per element.
+        if (
+          (s.target.kind === 'state' || s.target.kind === 'place') &&
+          s.target.type.kind === 'array' &&
+          s.target.type.length !== undefined
+        ) {
+          const dstBase = s.target.kind === 'state' ? String(s.target.slot) : this.lowerPlace(s.target.path, ctx, out).slot;
+          if (s.value.kind === 'arrayLit') {
+            this.writeArrayLit(s.value, dstBase, ctx, out);
+          } else {
+            this.copyFixedArray(s.target.type, this.fixedArraySrcBase(s.value, ctx, out), dstBase, out);
+          }
+          break;
+        }
         if (s.target.kind === 'place' && s.target.type.kind === 'struct') {
           // this.o.inner = <struct> (whole nested-struct field): fold the path to the
           // field slot, then writeStruct (literal) / copyStruct (storage copy).
@@ -2433,6 +2449,40 @@ ${indent(runtime, 6)}
     }
     for (const l of copyInner) out.push('  ' + l);
     out.push('}');
+  }
+
+  /** Resolve the storage base slot of a whole FIXED-array source value (state-var fixed array,
+   *  or a nested fixed-array field via placeArray). */
+  private fixedArraySrcBase(value: Expr, ctx: LowerCtx, out: string[]): string {
+    if (value.kind === 'arrayValue') {
+      const base = value.arr.base;
+      if (base.kind === 'fixedArray') return String(base.baseSlot);
+      if (base.kind === 'placeArray') return this.lowerPlace(base.path, ctx, out).slot;
+    }
+    throw new UnsupportedError(`cannot copy a fixed array from '${value.kind}'`);
+  }
+
+  /** Storage-to-storage copy of a fixed array Arr<T,N> from `srcBase` to `dstBase`. Static
+   *  elements (value/packed/static struct/static nested array) copy the array's slot footprint
+   *  verbatim; dynamic elements (bytes/string, dynamic struct) deep-copy per element (storeDynamic
+   *  / copyStruct overwrite-clear the dst element's old tail). Byte-identical to solc. */
+  private copyFixedArray(arrType: JethType & { kind: 'array' }, srcBase: string, dstBase: string, out: string[]): void {
+    const elem = arrType.element;
+    const N = arrType.length!;
+    const sConst = /^\d+$/.test(srcBase);
+    const dConst = /^\d+$/.test(dstBase);
+    const sAt = (n: number): string => (sConst ? String(Number(srcBase) + n) : n === 0 ? srcBase : `add(${srcBase}, ${n})`);
+    const dAt = (n: number): string => (dConst ? String(Number(dstBase) + n) : n === 0 ? dstBase : `add(${dstBase}, ${n})`);
+    if (isStaticType(elem)) {
+      const slots = storageSlotCount(arrType);
+      for (let i = 0; i < slots; i++) out.push(`sstore(${dAt(i)}, sload(${sAt(i)}))`);
+      return;
+    }
+    const sc = storageSlotCount(elem);
+    for (let i = 0; i < N; i++) {
+      if (isBytesLike(elem)) this.storeDynamic(dAt(i * sc), { src: 'storage', slot: sAt(i * sc) }, out);
+      else this.copyStruct(elem as JethType & { kind: 'struct' }, sAt(i * sc), dAt(i * sc), out);
+    }
   }
 
   /** Resolve the storage base slot of a struct VALUE source (for a storage-to-storage
