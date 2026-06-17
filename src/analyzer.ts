@@ -2994,15 +2994,17 @@ export class Analyzer {
         this.diags.error(node, 'JETH083', `ternary branches have incompatible types: ${displayName(then.type)} vs ${displayName(els.type)}`);
         return undefined;
       }
-      // A ternary branch must lower to a single register value: a value type, or a MEMORY
-      // array (whose register IS its pointer). A storage struct / storage array / bytes /
-      // string branch has no single-word value, so select before the aggregate op.
+      // A ternary branch must lower to a single register value (a value type, or a MEMORY array
+      // whose register IS its pointer), OR be a bytes/string (materialized to memory and selected
+      // by pointer via lowerDynamic). A storage struct / storage array branch still has no single
+      // materialization here, so select before the aggregate operation.
       const lowerable = (e: Expr): boolean =>
         isStaticValueType(e.type) ||
+        isBytesLike(e.type) ||
         (e.type.kind === 'array' &&
           (e.kind === 'arrayLit' || (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'))));
       if (!lowerable(unified[0]) || !lowerable(unified[1])) {
-        this.diags.error(node, 'JETH074', `a ternary over a ${displayName(unified[0].type)} (storage aggregate / bytes / string) is not supported; select the value before the aggregate operation`);
+        this.diags.error(node, 'JETH074', `a ternary over a ${displayName(unified[0].type)} (storage aggregate) is not supported; select the value before the aggregate operation`);
         return undefined;
       }
       return { kind: 'ternary', type: unified[0].type, cond, then: unified[0], else: unified[1] };

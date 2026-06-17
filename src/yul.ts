@@ -3338,6 +3338,28 @@ ${indent(runtime, 6)}
         if (!b) throw new UnsupportedError(`unbound dynamic param ${e.name}`);
         return { src: 'calldata', dataPtr: b.dataPtr, len: b.len };
       }
+      case 'ternary': {
+        // a bytes/string ternary `c ? a : b`: short-circuit (only the taken branch is
+        // materialized), then select the [len][data] pointer. Matches Solidity (the untaken
+        // branch is not evaluated, so a reverting/side-effecting branch is safe).
+        const c = this.lowerExpr(e.cond, ctx, out);
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := 0`);
+        const thenOut: string[] = [];
+        const { mp: mpT } = this.toMemory(this.lowerDynamic(e.then, ctx, thenOut), thenOut);
+        const elseOut: string[] = [];
+        const { mp: mpE } = this.toMemory(this.lowerDynamic(e.else, ctx, elseOut), elseOut);
+        out.push(`switch ${c}`);
+        out.push('case 0 {');
+        for (const l of elseOut) out.push('  ' + l);
+        out.push(`  ${ptr} := ${mpE}`);
+        out.push('}');
+        out.push('default {');
+        for (const l of thenOut) out.push('  ' + l);
+        out.push(`  ${ptr} := ${mpT}`);
+        out.push('}');
+        return { src: 'memory', ptr };
+      }
       case 'dynLocalRead':
         // a bytes/string MEMORY local: its register IS the [len][data] pointer.
         return { src: 'memory', ptr: this.ctxLookup(ctx, e.name) };
