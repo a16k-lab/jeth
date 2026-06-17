@@ -215,7 +215,8 @@ export type LValue =
 
   | { kind: 'place'; type: JethType; path: AccessPath } // nested storage place = v
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // p.x = v on a memory-aggregate local
-  | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number }; // a[i] = v on a fixed-array memory local
+  | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number } // a[i] = v on a fixed-array memory local
+  | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number }; // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
 
 export type Stmt =
   | { kind: 'return'; value?: Expr }

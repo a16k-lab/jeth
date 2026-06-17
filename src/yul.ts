@@ -535,10 +535,12 @@ ${indent(runtime, 6)}
       }
       case 'localDecl': {
         const name = this.freshLocal(s.name);
-        if (s.type.kind === 'struct' && isDynamicType(s.type) && s.init && s.init.kind === 'structNew') {
-          // a DYNAMIC-field struct memory local (`let d: D = D(x, str)`): build the
-          // pointer-headed image (value fields inline, bytes/string fields as blob pointers).
-          out.push(`let ${name} := ${this.allocDynStructToMem(s.init, ctx, out)}`);
+        if (s.type.kind === 'struct' && isDynamicType(s.type) && s.init) {
+          // a DYNAMIC-field struct memory local: build the pointer-headed image (value fields
+          // inline, bytes/string fields a [len][data] pointer). Source: a constructor builds
+          // fresh; a storage struct / calldata param is COPIED into a fresh image; another
+          // dynamic-struct memory local ALIASES (pointer copy, matching Solidity references).
+          out.push(`let ${name} := ${this.buildDynStructLocal(s.type, s.init, ctx, out)}`);
           this.ctxDeclare(ctx, s.name, name);
           break;
         }
@@ -640,6 +642,15 @@ ${indent(runtime, 6)}
         if (s.target.kind === 'memField' || s.target.kind === 'memElem') {
           // p.x = v / a[i] = v on a memory aggregate local: bounds-checked memory store.
           this.lowerAssignValue(s.target, this.lowerExpr(s.value, ctx, out), ctx, out);
+          break;
+        }
+        if (s.target.kind === 'memDynField') {
+          // d.s = <bytes/string> on a dynamic-field struct memory local: materialize the value
+          // to a memory [len][data] blob (alias if it is already memory), then re-point the
+          // field's head word at it (Solidity memory-struct field assignment is a reference).
+          const { mp } = this.toMemory(this.lowerDynamic(s.value, ctx, out), out);
+          const head = this.ctxLookup(ctx, s.target.local);
+          out.push(`mstore(${s.target.wordOffset === 0 ? head : `add(${head}, ${s.target.wordOffset * 32})`}, ${mp})`);
           break;
         }
         if (s.target.kind === 'dynState') {
@@ -2169,6 +2180,67 @@ ${indent(runtime, 6)}
         hw += 1;
       } else {
         out.push(`mstore(${at}, ${this.lowerExpr(value.args[i]!, ctx, out)})`);
+        hw += abiHeadWords(f.type);
+      }
+    });
+    return ptr;
+  }
+
+  /** Build a DYNAMIC-field struct memory local's pointer-headed image from any supported
+   *  source: a constructor (fresh), a storage struct (COPY), a calldata struct param (decode
+   *  + validate into a fresh image), or another dynamic-struct memory local (ALIAS = pointer
+   *  copy, matching Solidity memory references). Returns the head pointer. */
+  private buildDynStructLocal(struct: JethType & { kind: 'struct' }, init: Expr, ctx: LowerCtx, out: string[]): string {
+    if (init.kind === 'structNew') return this.allocDynStructToMem(init, ctx, out);
+    if (init.kind === 'memDynStructValue') return this.ctxLookup(ctx, init.local); // alias
+    if (init.kind === 'cdDynStructValue') return this.buildDynStructFromCalldata(struct, init, ctx, out);
+    // a storage struct source (structValue / mapStorageValue / structArrayElem / placeRead).
+    return this.buildDynStructFromStorage(struct, this.structSrcSlot(init, ctx, out), ctx, out);
+  }
+
+  /** Copy a storage dynamic-field struct at `baseSlot` into a fresh memory image: value fields
+   *  are read (packed-aware) and stored inline; bytes/string fields are copied to a memory blob
+   *  whose pointer is stored in the head word. Scoped to value + bytes/string fields. */
+  private buildDynStructFromStorage(struct: JethType & { kind: 'struct' }, baseSlot: string, ctx: LowerCtx, out: string[]): string {
+    const headWords = tupleHeadWords(struct);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${headWords * 32}))`);
+    const isConst = /^\d+$/.test(baseSlot);
+    const slotAt = (n: number): string => (isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`);
+    let hw = 0;
+    for (const f of struct.fields) {
+      const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
+      if (isBytesLike(f.type)) {
+        const { mp } = this.toMemory({ src: 'storage', slot: slotAt(f.slot) }, out);
+        out.push(`mstore(${at}, ${mp})`);
+        hw += 1;
+      } else {
+        out.push(`mstore(${at}, ${this.loadState(f.type, slotAt(f.slot), f.offset)})`);
+        hw += abiHeadWords(f.type);
+      }
+    }
+    return ptr;
+  }
+
+  /** Decode a calldata dynamic-field struct param into a fresh memory image: value fields are
+   *  read + VALIDATED inline (encodeStaticInline 'cd'), bytes/string fields are calldatacopied
+   *  to a memory blob whose pointer is stored in the head word. Matches solc's copy-to-memory. */
+  private buildDynStructFromCalldata(struct: JethType & { kind: 'struct' }, init: Expr, ctx: LowerCtx, out: string[]): string {
+    const src = this.tupleSrc(init, ctx, out); // { kind: 'cd', base }
+    const headWords = tupleHeadWords(struct);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${headWords * 32}))`);
+    let hw = 0;
+    struct.fields.forEach((f, i) => {
+      const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
+      if (isBytesLike(f.type)) {
+        const { mp } = this.toMemory(this.dynFieldRef(f, src, i, hw, ctx, out), out);
+        out.push(`mstore(${at}, ${mp})`);
+        hw += 1;
+      } else {
+        this.encodeStaticInline(f.type, src, i, hw, at, ctx, out);
         hw += abiHeadWords(f.type);
       }
     });

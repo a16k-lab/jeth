@@ -298,11 +298,14 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
   (`d.a = v`), dynamic-field read (`d.s` whole, `d.b.length`, `d.b[i]`), and whole-struct `return d`.
   The image is a pointer-headed tuple (value fields inline, `bytes`/`string` fields a `[len][data]`
   pointer), so `return d` reuses the dynamic-struct tuple encoder via a memory `TupleSrc`; dynamic
-  fields may be built from a memory-string local (alias) or a string literal. Still gated: COPYING a
-  dynamic-field struct local from storage/calldata/another local (construct inline instead); WRITING a
-  `bytes`/`string` field (would re-point the head); structs with static-array/nested-struct/dynamic-array
-  fields as memory locals; a struct param to a PUBLIC/EXTERNAL callee via an internal call; `new T[](n)`
-  (use an array literal); non-value aggregate components in a multi-value return.
+  fields may be built from a memory-string local (alias) or a string literal. A dynamic-field struct
+  memory local may also be COPY-initialized from a storage struct (`let d: D = this.st` / `this.m[k]` /
+  `this.recs[i]`), a calldata struct parameter (`let d: D = x`, decoded + validated into a fresh image),
+  or ALIASED from another struct local (`let e: D = d`, a Solidity memory reference); and a `bytes`/
+  `string` field may be WRITTEN (`d.s = x`, re-pointing the head word at a fresh blob). Still gated:
+  structs with static-array/nested-struct/dynamic-array fields as memory locals; a struct param to a
+  PUBLIC/EXTERNAL callee via an internal call; `new T[](n)` (use an array literal); non-value aggregate
+  components in a multi-value return.
 - A packed (`<256`-bit) element of a nested DYNAMIC array (`this.m[k].dynArr[i]`); the packed
   FIXED-array case through a struct field (`this.q.pts[i]`) now works (runtime byte offset).
 - A ternary over a storage struct / storage array / bytes / string (`c ? this.a : this.b`); a ternary

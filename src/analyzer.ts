@@ -1169,8 +1169,20 @@ export class Analyzer {
           }
           const e = this.checkExpr(decl.initializer, declared);
           if (!e) return;
-          if (e.kind !== 'structNew') {
-            this.diags.error(decl.initializer, 'JETH200', `a dynamic-field struct memory local must be constructed inline (e.g. ${(declared as JethType & { kind: 'struct' }).name}(...)); copies from storage/calldata/another local are a later step`);
+          // Allowed sources: a constructor D(...); a STORAGE struct (this.s -> structValue,
+          // this.m[k] -> mapStorageValue, this.arr[i] -> structArrayElem, this.s.inner ->
+          // placeRead) COPIED into a fresh image; a calldata struct param (cdDynStructValue)
+          // decoded into a fresh image; or another dynamic-struct memory local (ALIAS).
+          const okInit =
+            e.kind === 'structNew' || e.kind === 'structValue' || e.kind === 'mapStorageValue' ||
+            e.kind === 'structArrayElem' || e.kind === 'cdDynStructValue' || e.kind === 'memDynStructValue' ||
+            (e.kind === 'placeRead' && e.type.kind === 'struct');
+          if (!okInit) {
+            this.diags.error(decl.initializer, 'JETH200', `a dynamic-field struct memory local must be initialized from a constructor ${(declared as JethType & { kind: 'struct' }).name}(...), a storage struct (this.s / this.m[k] / this.arr[i]), a calldata struct parameter, or another struct local`);
+            return;
+          }
+          if (e.type.kind !== 'struct' || (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name) {
+            this.diags.error(decl.initializer, 'JETH085', `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`);
             return;
           }
           this.declareLocal(decl.name.text, declared);
@@ -1499,9 +1511,9 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
       const mf = this.memDynStructField(node);
       if (!mf) return undefined;
-      if (!isStaticValueType(mf.field.type)) {
-        this.diags.error(node, 'JETH245', `assigning a ${displayName(mf.field.type)} field of a memory struct is not supported yet`);
-        return undefined;
+      // a bytes/string field write re-points the head word at a freshly-materialized blob.
+      if (isBytesLike(mf.field.type)) {
+        return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
       }
       return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
     }
@@ -1735,6 +1747,10 @@ export class Analyzer {
     if (lv.kind === 'memElem') {
       // a fixed-array memory element read (for compound-assign / ++ on a[i]): NOT storage.
       return { kind: 'memElem', type: lv.type, local: lv.local, index: lv.index, length: lv.length };
+    }
+    if (lv.kind === 'memDynField') {
+      // a bytes/string memory-struct field read (no compound-assign/++ applies; type-checked away).
+      return { kind: 'memDynField', type: lv.type, local: lv.local, wordOffset: lv.wordOffset };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }
