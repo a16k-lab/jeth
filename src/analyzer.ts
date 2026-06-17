@@ -1128,11 +1128,16 @@ export class Analyzer {
       }
       const e = this.checkExpr(decl.initializer, declared);
       if (!e) return;
-      // Allowed sources: a constructor StructName(...), another memory struct (alias), or a
-      // struct-returning internal call. Copies from storage/calldata are a later step.
-      const okInit = e.kind === 'structNew' || e.kind === 'memAggregate' || (e.kind === 'call' && e.type.kind === 'struct');
+      // Allowed sources: a constructor StructName(...), another memory struct (ALIAS), a
+      // struct-returning internal call, a whole STORAGE struct (this.s -> fresh COPY), or a
+      // STATIC struct calldata param (q -> fresh COPY). The struct types must match.
+      const okInit = e.kind === 'structNew' || e.kind === 'memAggregate' || (e.kind === 'call' && e.type.kind === 'struct') || e.kind === 'structValue' || e.kind === 'cdAggregateValue';
       if (!okInit) {
-        this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...), another memory struct, or a struct-returning internal call (copying from storage/calldata is a later step)');
+        this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...), another memory struct, a struct-returning internal call, a storage struct (this.s), or a struct calldata parameter');
+        return;
+      }
+      if ((e.kind === 'structValue' || e.kind === 'cdAggregateValue') && (e.type.kind !== 'struct' || (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)) {
+        this.diags.error(decl.initializer, 'JETH085', `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`);
         return;
       }
       this.declareLocal(decl.name.text, declared);
@@ -2748,13 +2753,17 @@ export class Analyzer {
       return { kind: 'arrayLit', type: expected, elem: expected.element, elements };
     }
 
-    // G9: `p.x` / `p.inner.x` read where the chain is rooted at a memory-aggregate (struct)
-    // local -> a memory field load. Must precede the calldata/storage access resolvers below
-    // (a memory struct local is neither a calldata param nor a `this.`-rooted place).
+    // G9: `p.x` / `p.inner.x` / `p.inner` read where the chain is rooted at a memory-aggregate
+    // (struct) local. A VALUE final field -> a memory load (memField); a whole nested STRUCT
+    // field -> a sub-pointer into the parent image (memAggregate at the field offset, which
+    // aliases the parent). Must precede the calldata/storage access resolvers below.
     if (ts.isPropertyAccessExpression(node) && this.memChainRoot(node)) {
-      const mf = this.resolveMemAggregateField(node);
-      if (!mf) return undefined;
-      return { kind: 'memField', type: mf.type, local: mf.local, wordOffset: mf.wordOffset };
+      const r = this.resolveMemFieldChain(node);
+      if (!r) return undefined;
+      if (isStaticValueType(r.type)) return { kind: 'memField', type: r.type, local: r.local, wordOffset: r.wordOffset };
+      if (r.type.kind === 'struct') return { kind: 'memAggregate', type: r.type, local: r.local, wordOffset: r.wordOffset };
+      this.diags.error(node, 'JETH245', `reading a ${displayName(r.type)} field of a memory struct is not supported yet`);
+      return undefined;
     }
 
     // nested storage access: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]

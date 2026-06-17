@@ -177,16 +177,14 @@ class G {
       expect(jethCodes(src, 'G.jeth'), 'returning a whole fixed-array param is supported (G5)').toBeNull();
     });
 
-    it('assigning a whole struct param to a memory local is gated (JETH900, pending G9)', () => {
+    it('copying a whole struct param to a memory local now compiles (G9)', () => {
       const src = JETH_STRUCTS + `
 @contract
 class G {
   @external @pure f(p: Pt): u128 { let q: Pt = p; return q.x; }
 }
 `;
-      const codes = jethCodes(src, 'G.jeth');
-      expect(codes, 'aggregate memory local not yet supported').not.toBeNull();
-      expect(codes, 'expected JETH900; got ' + JSON.stringify(codes)).toContain('JETH900');
+      expect(jethCodes(src, 'G.jeth'), 'calldata struct param -> memory local copy is supported (G9)').toBeNull();
     });
   });
 

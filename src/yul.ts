@@ -397,10 +397,11 @@ ${indent(runtime, 6)}
           out.push('return(0, 0)');
           break;
         }
-        // `return p` (memory STATIC struct local) or `return this.helper()` (struct-returning
-        // internal call): the ABI-unpacked memory image at the pointer IS the flat return blob. G9.
+        // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
+        // sub-pointer), or `return this.helper()` (struct-returning internal call): the
+        // ABI-unpacked memory image at the (sub)pointer IS the flat return blob. G9.
         if (s.value.type.kind === 'struct' && (s.value.kind === 'memAggregate' || s.value.kind === 'call')) {
-          const ptr = s.value.kind === 'memAggregate' ? this.ctxLookup(ctx, s.value.local) : this.lowerExpr(s.value, ctx, out);
+          const ptr = this.lowerExpr(s.value, ctx, out);
           out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
           break;
         }
@@ -535,11 +536,17 @@ ${indent(runtime, 6)}
       case 'localDecl': {
         const name = this.freshLocal(s.name);
         if (s.type.kind === 'struct' && s.init) {
-          // G9: a memory struct local. A constructor (structNew) allocates a fresh
-          // ABI-unpacked image; aliasing another memory struct (memAggregate) copies the
-          // pointer (so the two alias, matching Solidity memory reference semantics).
+          // G9: a memory struct local. A constructor (structNew) allocates a fresh ABI-unpacked
+          // image; a whole STORAGE struct (structValue) or a calldata struct param
+          // (cdAggregateValue) is COPIED into a fresh image (decode storage/calldata -> memory);
+          // aliasing another memory struct (memAggregate) or a struct-returning call copies the
+          // POINTER (so they alias / own the same fresh memory, matching Solidity).
           if (s.init.kind === 'structNew') {
             out.push(`let ${name} := ${this.allocAggToMem(s.init, ctx, out)}`);
+          } else if (s.init.kind === 'structValue') {
+            out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, String(s.init.baseSlot), out)}`);
+          } else if (s.init.kind === 'cdAggregateValue') {
+            out.push(`let ${name} := ${this.allocAggFromCalldata(s.init.param, s.init.type, ctx, out)}`);
           } else {
             out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
           }
@@ -1134,9 +1141,12 @@ ${indent(runtime, 6)}
         const ptr = this.ctxLookup(ctx, e.local);
         return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
       }
-      case 'memAggregate':
-        // a whole memory-aggregate local: its register value IS the pointer.
-        return this.ctxLookup(ctx, e.local);
+      case 'memAggregate': {
+        // a whole memory aggregate (the local's pointer), or a nested struct field at a word
+        // offset (a sub-pointer into the parent image, which aliases it).
+        const base = this.ctxLookup(ctx, e.local);
+        return e.wordOffset ? `add(${base}, ${e.wordOffset * 32})` : base;
+      }
       case 'global':
         return this.lowerGlobal(e);
       case 'cast':
@@ -2058,6 +2068,30 @@ ${indent(runtime, 6)}
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(0x40, add(${ptr}, ${words * 32}))`);
     this.writeAggToMem(value, ptr, 0, ctx, out);
+    return ptr;
+  }
+
+  /** Allocate a fresh memory image for a static aggregate and COPY it from a STORAGE source
+   *  (G9: `let p: P = this.s`). abiEncFromStorage transcodes the packed storage into the
+   *  ABI-unpacked image (one word per leaf), which is exactly the memAggregate layout. */
+  private allocAggFromStorage(type: JethType, slot: string, out: string[]): string {
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${abiHeadWords(type) * 32}))`);
+    this.abiEncFromStorage(type, slot, 0, ptr, out);
+    return ptr;
+  }
+
+  /** Allocate a fresh memory image for a static aggregate and COPY it from a CALLDATA param
+   *  (G9: `let q: P = calldataStructParam`). The param data is inline at its head word;
+   *  abiEncFromCd decodes it (validating dirty narrow fields like solc) into the image. */
+  private allocAggFromCalldata(param: string, type: JethType, ctx: LowerCtx, out: string[]): string {
+    const ph = ctx.cdParamHead.get(param);
+    if (!ph) throw new UnsupportedError(`unbound struct-copy param ${param}`);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${abiHeadWords(type) * 32}))`);
+    this.abiEncFromCd(type, String(ph.head), ptr, true, out);
     return ptr;
   }
 

@@ -89,7 +89,7 @@ export type Expr =
   | { kind: 'structNew'; type: JethType; fields: StructField[]; args: Expr[] } // Point(a, b)
   | { kind: 'structValue'; type: JethType; baseSlot: number } // whole storage struct (for return)
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // read a value field/element of a memory-aggregate local (p.x)
-  | { kind: 'memAggregate'; type: JethType; local: string } // a whole memory-aggregate local (alias copy / return / arg)
+  | { kind: 'memAggregate'; type: JethType; local: string; wordOffset?: number } // a whole memory aggregate, or a nested struct field at wordOffset (sub-pointer into the parent image)
   | { kind: 'structArrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // whole storage/fixed/mapping struct element this.recs[i] (for return / copy source)
   | { kind: 'mapStorageValue'; type: JethType; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // return this.m[k] (whole struct/array mapping value)
   | { kind: 'mapDynValue'; type: JethType; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // this.m[k] where the value is bytes/string (dynamic value at the mapping slot)
