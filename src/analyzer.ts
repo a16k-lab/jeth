@@ -642,11 +642,18 @@ export class Analyzer {
           const v = this.checkExpr(node.expression.elements[i]!, rts[i]);
           if (!v) return;
           const cv = this.coerce(v, rts[i]!, node.expression.elements[i]!);
-          // An aggregate component must be a STORAGE value (this.x / this.m[k] / this.arr[i])
-          // or a MEMORY value-array; a calldata-aggregate echo component is a later step.
-          if ((rts[i]!.kind === 'struct' || rts[i]!.kind === 'array') && this.isCalldataAggregate(cv)) {
-            this.diags.error(node.expression.elements[i]!, 'JETH213', 'a calldata-aggregate component in a multi-value return is not supported yet (return it from a storage value, or echo it as the sole return)');
-            return;
+          // An aggregate component may be a STORAGE value (this.x / this.m[k] / this.arr[i]), a
+          // MEMORY value-array, or a whole DYNAMIC calldata param (a calldata array / dynamic
+          // struct), echoed via the recursive calldata encoder. A calldata array ELEMENT
+          // (cdNestedElem) or a static calldata aggregate component is still a later step.
+          if (rts[i]!.kind === 'struct' || rts[i]!.kind === 'array') {
+            const cdParamDyn =
+              (cv.kind === 'arrayValue' && cv.arr.base.kind === 'calldataArray' && isDynamicType(rts[i]!)) ||
+              cv.kind === 'cdDynStructValue';
+            if (this.isCalldataAggregate(cv) && !cdParamDyn) {
+              this.diags.error(node.expression.elements[i]!, 'JETH213', 'this calldata-aggregate component in a multi-value return is not supported yet (a whole dynamic calldata array / struct param works; an element or static aggregate does not)');
+              return;
+            }
           }
           values.push(cv);
         }

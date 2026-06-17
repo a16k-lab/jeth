@@ -1450,6 +1450,24 @@ ${indent(runtime, 6)}
         out.push(`mcopy(${cursor}, ${mp}, ${total})`);
         out.push(`${cursor} := add(${cursor}, ${total})`);
         hw += 1;
+      } else if (this.cdComponentName(values[i]!)) {
+        // a whole DYNAMIC calldata param component (return [xs, n] / [dynStructParam, n]):
+        // offset word + tail via the recursive calldata encoder. The offset bounds check and
+        // data-pointer resolution mirror echoParam; a flat value array cleans dirty elements,
+        // everything else validates (matching solc).
+        const name = this.cdComponentName(values[i]!)!;
+        const ph = ctx.cdParamHead.get(name);
+        if (!ph) throw new UnsupportedError(`unbound calldata component '${name}'`);
+        const off = this.fresh();
+        out.push(`let ${off} := calldataload(${ph.head})`);
+        out.push(`if iszero(slt(${off}, sub(sub(calldatasize(), 4), 0x1f))) { revert(0, 0) }`);
+        const cdPtr = this.fresh();
+        out.push(`let ${cdPtr} := add(4, ${off})`);
+        out.push(`mstore(add(${ptr}, ${hw * 32}), sub(${cursor}, ${ptr}))`);
+        const topClean = t.kind === 'array' && t.length === undefined && isStaticValueType(t.element);
+        const sz = this.abiEncFromCd(t, cdPtr, cursor, !topClean, out);
+        out.push(`${cursor} := add(${cursor}, ${sz})`);
+        hw += 1;
       } else {
         // a struct / array component, storage-source: static -> inline head; dynamic ->
         // offset word + tail (both via the recursive storage encoder).
@@ -1467,6 +1485,14 @@ ${indent(runtime, 6)}
     });
     out.push(`mstore(0x40, ${cursor})`);
     return { ptr, size: `sub(${cursor}, ${ptr})` };
+  }
+
+  /** The calldata PARAM name of a whole dynamic calldata aggregate value (a calldata array
+   *  or dynamic-struct param) used as a multi-return component, else undefined. */
+  private cdComponentName(value: Expr): string | undefined {
+    if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray') return value.arr.base.name;
+    if (value.kind === 'cdDynStructValue') return value.param;
+    return undefined;
   }
 
   /** Storage base slot (length slot for an array) of a storage-source aggregate value used
