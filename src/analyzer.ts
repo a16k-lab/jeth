@@ -124,6 +124,7 @@ export class Analyzer {
   private currentReturnTypes: JethType[] | undefined; // multi-value return components, if any
   private memArrayLocals = new Set<string>(); // let-locals that are MEMORY arrays (vs calldata-array params)
   private memAggregateLocals = new Map<string, JethType>(); // STATIC struct / fixed-array MEMORY locals (G9): name -> type
+  private memDynLocals = new Set<string>(); // bytes/string MEMORY locals (G9): register holds a [len][data] pointer
   private currentReadsEnv = false; // reads msg.*/block.*/tx.*/address(this) -> forbidden in @pure
   // internal-call support (G8): the function registry (built before bodies so calls can
   // forward-reference), plus per-function direct-effect / callee tracking for the
@@ -578,6 +579,7 @@ export class Analyzer {
     this.currentCallees = new Set();
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
+    this.memDynLocals.clear();
     const internalOnly = rf.visibility === 'internal' || rf.visibility === 'private';
     for (const p of rf.params) {
       if (this.inCurrentScope(p.name)) {
@@ -1145,14 +1147,60 @@ export class Analyzer {
       out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
+    // G9: a FIXED array of VALUE elements as a MEMORY local (let a: Arr<u256,3> = [...]). A
+    // memAggregate (pointer to N words); a[i] reads/writes a word with a bounds check. Init from
+    // an array literal, another fixed-array memory local (alias), a fixed-array calldata param,
+    // or a storage fixed array (copy).
+    if (declared.kind === 'array' && declared.length !== undefined && isStaticValueType(declared.element)) {
+      if (this.isVisibleLocal(decl.name.text)) {
+        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' (shadowing is not allowed)`);
+        return;
+      }
+      if (!decl.initializer) {
+        this.diags.error(decl, 'JETH200', `a fixed-array memory local must be initialized (e.g. let a: ${displayName(declared)} = [...])`);
+        return;
+      }
+      const e = this.checkExpr(decl.initializer, declared);
+      if (!e) return;
+      const fromStorage = e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray';
+      const okInit = e.kind === 'arrayLit' || e.kind === 'memAggregate' || e.kind === 'cdAggregateValue' || fromStorage;
+      if (!okInit) {
+        this.diags.error(decl.initializer, 'JETH900', `a fixed-array memory local must be initialized from a literal, another memory fixed array, a fixed-array calldata parameter, or a storage fixed array`);
+        return;
+      }
+      this.declareLocal(decl.name.text, declared);
+      this.memAggregateLocals.set(decl.name.text, declared);
+      out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
+      return;
+    }
     // A value-element dynamic-array local is a MEMORY array (a pointer to [len][elems]);
     // bytes/string and aggregate-element memory locals are a later step.
     if (declared.kind === 'array' && !(declared.length === undefined && isStaticValueType(declared.element))) {
       this.diags.error(decl, 'JETH200', `local variables of type ${displayName(declared)} are not supported yet (memory: dynamic arrays of a value element)`);
       return;
     }
+    // G9: a bytes/string MEMORY local (let s: string = X). Its register holds a memory
+    // [len][data] pointer materialized from the init source (calldata param / storage / another
+    // memory string / a literal); reads route through the bytes/string codec (return, .length,
+    // s[i], keccak, emit/error args). Must be initialized (Solidity has no null memory bytes).
     if (isBytesLike(declared)) {
-      this.diags.error(decl, 'JETH200', `local variables of type ${displayName(declared)} are not supported yet (no bytes/string memory locals)`);
+      if (this.isVisibleLocal(decl.name.text)) {
+        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' (shadowing is not allowed)`);
+        return;
+      }
+      if (!decl.initializer) {
+        this.diags.error(decl, 'JETH200', `a ${displayName(declared)} memory local must be initialized`);
+        return;
+      }
+      const e = this.checkExpr(decl.initializer, declared);
+      if (!e) return;
+      if (!isBytesLike(e.type)) {
+        this.diags.error(decl.initializer, 'JETH085', `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`);
+        return;
+      }
+      this.declareLocal(decl.name.text, declared);
+      this.memDynLocals.add(decl.name.text);
+      out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
     if (this.isVisibleLocal(decl.name.text)) {
@@ -1371,6 +1419,15 @@ export class Analyzer {
       if (!mf) return undefined;
       return { kind: 'memField', type: mf.type, local: mf.local, wordOffset: mf.wordOffset };
     }
+    // G9: `a[i] = v` on a fixed-array MEMORY local (value element) -> a bounds-checked store.
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression) {
+      const at = this.memAggregateLocals.get(node.expression.text);
+      if (at && at.kind === 'array' && at.length !== undefined) {
+        const index = this.checkExpr(node.argumentExpression, U256);
+        if (!index) return undefined;
+        return { kind: 'memElem', type: at.element, local: node.expression.text, index: this.coerce(index, U256, node.argumentExpression), length: at.length };
+      }
+    }
     // nested storage place: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const acc = this.resolveAccess(node);
@@ -1582,6 +1639,10 @@ export class Analyzer {
     if (lv.kind === 'memField') {
       // a memory struct field read (for compound-assign / ++ on p.x): NOT storage.
       return { kind: 'memField', type: lv.type, local: lv.local, wordOffset: lv.wordOffset };
+    }
+    if (lv.kind === 'memElem') {
+      // a fixed-array memory element read (for compound-assign / ++ on a[i]): NOT storage.
+      return { kind: 'memElem', type: lv.type, local: lv.local, index: lv.index, length: lv.length };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }
@@ -2765,6 +2826,16 @@ export class Analyzer {
       this.diags.error(node, 'JETH245', `reading a ${displayName(r.type)} field of a memory struct is not supported yet`);
       return undefined;
     }
+    // G9: a[i] on a fixed-array MEMORY local (value element) -> a bounds-checked memory load.
+    // Must precede the calldata/storage access resolvers below.
+    if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression) {
+      const at = this.memAggregateLocals.get(node.expression.text);
+      if (at && at.kind === 'array' && at.length !== undefined) {
+        const index = this.checkExpr(node.argumentExpression, U256);
+        if (!index) return undefined;
+        return { kind: 'memElem', type: at.element, local: node.expression.text, index: this.coerce(index, U256, node.argumentExpression), length: at.length };
+      }
+    }
 
     // nested storage access: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
@@ -3211,7 +3282,9 @@ export class Analyzer {
         this.diags.error(node, 'JETH072', `unknown identifier '${node.text}'`);
         return undefined;
       }
-      if (isBytesLike(t)) return { kind: 'dynParamRead', type: t, name: node.text };
+      if (isBytesLike(t)) return this.memDynLocals.has(node.text)
+        ? { kind: 'dynLocalRead', type: t, name: node.text }
+        : { kind: 'dynParamRead', type: t, name: node.text };
       // a whole MEMORY-aggregate (struct) local (return p / let q = p / arg p): the register
       // holds a pointer to the ABI-unpacked image. G9.
       if (this.memAggregateLocals.has(node.text)) {

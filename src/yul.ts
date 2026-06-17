@@ -400,7 +400,7 @@ ${indent(runtime, 6)}
         // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
         // sub-pointer), or `return this.helper()` (struct-returning internal call): the
         // ABI-unpacked memory image at the (sub)pointer IS the flat return blob. G9.
-        if (s.value.type.kind === 'struct' && (s.value.kind === 'memAggregate' || s.value.kind === 'call')) {
+        if ((s.value.type.kind === 'struct' || s.value.type.kind === 'array') && (s.value.kind === 'memAggregate' || s.value.kind === 'call')) {
           const ptr = this.lowerExpr(s.value, ctx, out);
           out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
           break;
@@ -535,21 +535,32 @@ ${indent(runtime, 6)}
       }
       case 'localDecl': {
         const name = this.freshLocal(s.name);
-        if (s.type.kind === 'struct' && s.init) {
-          // G9: a memory struct local. A constructor (structNew) allocates a fresh ABI-unpacked
-          // image; a whole STORAGE struct (structValue) or a calldata struct param
-          // (cdAggregateValue) is COPIED into a fresh image (decode storage/calldata -> memory);
-          // aliasing another memory struct (memAggregate) or a struct-returning call copies the
-          // POINTER (so they alias / own the same fresh memory, matching Solidity).
-          if (s.init.kind === 'structNew') {
+        if ((s.type.kind === 'struct' || (s.type.kind === 'array' && s.type.length !== undefined)) && s.init) {
+          // G9: a memory AGGREGATE local (struct or fixed array). A constructor / array literal
+          // allocates a fresh ABI-unpacked image; a whole STORAGE aggregate (structValue, or an
+          // arrayValue with a fixedArray base) or a calldata aggregate param (cdAggregateValue) is
+          // COPIED into a fresh image; aliasing another memory aggregate (memAggregate) or a
+          // struct-returning call copies the POINTER (matching Solidity memory references).
+          if (s.init.kind === 'structNew' || s.init.kind === 'arrayLit') {
             out.push(`let ${name} := ${this.allocAggToMem(s.init, ctx, out)}`);
           } else if (s.init.kind === 'structValue') {
             out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, String(s.init.baseSlot), out)}`);
+          } else if (s.init.kind === 'arrayValue' && s.init.arr.base.kind === 'fixedArray') {
+            out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, String(s.init.arr.base.baseSlot), out)}`);
           } else if (s.init.kind === 'cdAggregateValue') {
             out.push(`let ${name} := ${this.allocAggFromCalldata(s.init.param, s.init.type, ctx, out)}`);
           } else {
             out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
           }
+          this.ctxDeclare(ctx, s.name, name);
+          break;
+        }
+        if (isBytesLike(s.type) && s.init) {
+          // G9: a bytes/string memory local. Materialize the init source into a memory
+          // [len][data] blob; the register holds the pointer. toMemory COPIES a calldata /
+          // storage / literal source, and aliases a memory source (matching Solidity).
+          const { mp } = this.toMemory(this.lowerDynamic(s.init, ctx, out), out);
+          out.push(`let ${name} := ${mp}`);
           this.ctxDeclare(ctx, s.name, name);
           break;
         }
@@ -619,8 +630,8 @@ ${indent(runtime, 6)}
           else for (const l of this.storeState(s.target.type, p.slot, p.offset, value)) out.push(l);
           break;
         }
-        if (s.target.kind === 'memField') {
-          // p.x = v on a memory struct local: mstore the value at the field's word offset.
+        if (s.target.kind === 'memField' || s.target.kind === 'memElem') {
+          // p.x = v / a[i] = v on a memory aggregate local: bounds-checked memory store.
           this.lowerAssignValue(s.target, this.lowerExpr(s.value, ctx, out), ctx, out);
           break;
         }
@@ -1141,6 +1152,14 @@ ${indent(runtime, 6)}
         const ptr = this.ctxLookup(ctx, e.local);
         return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
       }
+      case 'memElem': {
+        // a[i] on a fixed-array memory local (value element): bounds-check then mload at ptr+i*32.
+        const ptr = this.ctxLookup(ctx, e.local);
+        const i = this.fresh();
+        out.push(`let ${i} := ${this.lowerExpr(e.index, ctx, out)}`);
+        out.push(`if iszero(lt(${i}, ${e.length})) { ${this.panic()}(0x32) }`);
+        return `mload(add(${ptr}, mul(${i}, 0x20)))`;
+      }
       case 'memAggregate': {
         // a whole memory aggregate (the local's pointer), or a nested struct field at a word
         // offset (a sub-pointer into the parent image, which aliases it).
@@ -1245,6 +1264,7 @@ ${indent(runtime, 6)}
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
       case 'dynStateRead':
       case 'dynParamRead':
+      case 'dynLocalRead':
       case 'cdDynArrayElem':
       case 'strArrayElem':
       case 'dynPlaceRead':
@@ -2062,7 +2082,7 @@ ${indent(runtime, 6)}
 
   /** Allocate a memory image for a constructed STATIC struct (G9) and return its pointer.
    *  Layout is ABI-unpacked (one word per leaf), so the image doubles as the ABI return blob. */
-  private allocAggToMem(value: Expr & { kind: 'structNew' }, ctx: LowerCtx, out: string[]): string {
+  private allocAggToMem(value: Expr & { kind: 'structNew' | 'arrayLit' }, ctx: LowerCtx, out: string[]): string {
     const words = abiHeadWords(value.type);
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
@@ -2985,6 +3005,9 @@ ${indent(runtime, 6)}
         if (!b) throw new UnsupportedError(`unbound dynamic param ${e.name}`);
         return { src: 'calldata', dataPtr: b.dataPtr, len: b.len };
       }
+      case 'dynLocalRead':
+        // a bytes/string MEMORY local: its register IS the [len][data] pointer.
+        return { src: 'memory', ptr: this.ctxLookup(ctx, e.name) };
       case 'strArrayElem': {
         // storage / mapping-valued string[]/bytes[] element: bounds-check i (Panic
         // 0x32), then the element header at keccak(lenSlot)+i is a normal storage
@@ -3586,6 +3609,14 @@ ${indent(runtime, 6)}
     if (target.kind === 'memField') {
       const ptr = this.ctxLookup(ctx, target.local);
       out.push(`mstore(${target.wordOffset === 0 ? ptr : `add(${ptr}, ${target.wordOffset * 32})`}, ${valueReg})`);
+      return;
+    }
+    if (target.kind === 'memElem') {
+      const ptr = this.ctxLookup(ctx, target.local);
+      const i = this.fresh();
+      out.push(`let ${i} := ${this.lowerExpr(target.index, ctx, out)}`);
+      out.push(`if iszero(lt(${i}, ${target.length})) { ${this.panic()}(0x32) }`);
+      out.push(`mstore(add(${ptr}, mul(${i}, 0x20)), ${valueReg})`);
       return;
     }
     if (target.kind === 'arrayElem') {

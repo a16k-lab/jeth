@@ -76,6 +76,7 @@ export type Expr =
   // --- Phase 4: dynamic bytes/string values (references, not 256-bit words) ---
   | { kind: 'dynStateRead'; type: JethType; slot: number } // this.s (storage)
   | { kind: 'dynParamRead'; type: JethType; name: string } // calldata param (codegen binds ptr/len)
+  | { kind: 'dynLocalRead'; type: JethType; name: string } // bytes/string MEMORY local (register holds a [len][data] pointer)
   | { kind: 'stringLiteral'; type: JethType; bytes: Uint8Array } // a memory bytes/string literal
   | { kind: 'dynLength'; type: JethType; operand: Expr } // s.length -> u256
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1
@@ -89,6 +90,7 @@ export type Expr =
   | { kind: 'structNew'; type: JethType; fields: StructField[]; args: Expr[] } // Point(a, b)
   | { kind: 'structValue'; type: JethType; baseSlot: number } // whole storage struct (for return)
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // read a value field/element of a memory-aggregate local (p.x)
+  | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number } // a[i] on a fixed-array memory local (value element, bounds-checked)
   | { kind: 'memAggregate'; type: JethType; local: string; wordOffset?: number } // a whole memory aggregate, or a nested struct field at wordOffset (sub-pointer into the parent image)
   | { kind: 'structArrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // whole storage/fixed/mapping struct element this.recs[i] (for return / copy source)
   | { kind: 'mapStorageValue'; type: JethType; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // return this.m[k] (whole struct/array mapping value)
@@ -210,7 +212,8 @@ export type LValue =
   | { kind: 'dynPlace'; type: JethType; path: AccessPath } // this.d.s = <bytes/string> (dyn-struct field)
 
   | { kind: 'place'; type: JethType; path: AccessPath } // nested storage place = v
-  | { kind: 'memField'; type: JethType; local: string; wordOffset: number }; // p.x = v on a memory-aggregate local
+  | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // p.x = v on a memory-aggregate local
+  | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number }; // a[i] = v on a fixed-array memory local
 
 export type Stmt =
   | { kind: 'return'; value?: Expr }
