@@ -180,6 +180,34 @@ nesting all work. The element binding inherits whatever a standalone `const v = 
 (value and branded-value elements today). `for...in` is not supported (iterate an array with
 `for...of`).
 
+### Default and named arguments (internal calls)
+
+Internal helpers can declare default parameter values and be called with named arguments, both of
+which desugar to an ordinary positional internal call. They apply only at internal call sites
+(`this.f(...)`); the external ABI boundary is fixed by the selector, so external callers always
+provide every argument and the ABI/selector always list every parameter.
+
+```ts
+@contract class C {
+  @hidden fee(amount: u256, bps: u256 = 30n, floor: u256 = 1n): u256 {
+    let f: u256 = (amount * bps) / 10000n;
+    return f < floor ? floor : f;
+  }
+  @external @view a(x: u256): u256 { return this.fee(x); }                   // bps=30, floor=1
+  @external @view b(x: u256): u256 { return this.fee(x, 50n); }              // floor=1
+  @external @view c(x: u256): u256 { return this.fee({ amount: x, bps: 50n }); } // named, floor default
+}
+```
+
+A default must be a self-contained compile-time **constant** (a literal, `address(0n)`,
+`type(u256).max`, a value cast over constants, and so on), and any defaulted parameter must be
+trailing. Defaults are type- and range-checked at the declaration, so `b: u8 = 300n` is an error
+even on a helper that is never called (matching TypeScript). Named arguments `{ paramName: value }`
+bind by **name** (so they may be written in any order) and fall back to defaults for omitted
+parameters; a single object-literal argument is treated as named only when every key is a
+parameter name, otherwise it is an ordinary positional value (for example a struct-literal for a
+single struct parameter).
+
 ## 4. Where JETH is *more capable* than the Solidity compiler
 
 JETH always compiles through Yul (solc's IR pipeline), which schedules the EVM's 1024-slot

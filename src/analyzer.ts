@@ -100,6 +100,7 @@ interface RawFunction {
   visibility: Visibility; // provisional when an infer flag is set; resolved after the fixpoint
   mutability: Mutability; // provisional ('view') when inferRead is set; resolved after the fixpoint
   params: { name: string; type: JethType }[];
+  defaults?: (ts.Expression | undefined)[]; // F3: per-param constant default (call-site fill), aligned with params
   returnType: JethType;
   returnTypes?: JethType[]; // multi-value return `[T1, T2, ...]`
   inferRead?: boolean; // @read -> resolve to @pure (touches no state/env) or @view (reads, never writes)
@@ -605,6 +606,8 @@ export class Analyzer {
     else if (decs.includes('pure')) mutability = 'pure';
 
     const params: { name: string; type: JethType }[] = [];
+    const defaults: (ts.Expression | undefined)[] = [];
+    let seenDefault = false;
     for (const p of member.parameters) {
       if (!ts.isIdentifier(p.name)) {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
@@ -618,11 +621,29 @@ export class Analyzer {
         continue;
       }
       if (!this.gateArrayType(t, p)) continue;
+      // F3: a default value (b: u256 = 10n) is a CALL-SITE fill for an omitted internal arg.
+      // It must be a self-contained constant (no scope dependency), and any defaulted param
+      // must be trailing (no required param may follow one). Defaults never reach the ABI or
+      // codegen; external callers always provide every argument.
+      let def: ts.Expression | undefined;
+      if (p.initializer) {
+        if (!isStaticValueType(t)) {
+          this.diags.error(p, 'JETH252', `parameter '${p.name.text}' of type ${displayName(t)} cannot have a default value (only value types)`);
+        } else if (!this.isConstDefault(p.initializer)) {
+          this.diags.error(p.initializer, 'JETH250', `default for '${p.name.text}' must be a constant literal (e.g. 10n, true, address(0n), type(u256).max)`);
+        } else {
+          def = p.initializer;
+          seenDefault = true;
+        }
+      } else if (seenDefault) {
+        this.diags.error(p, 'JETH251', `parameter '${p.name.text}' (no default) cannot follow a defaulted parameter`);
+      }
       // Static struct / fixed-array params decode lazily from the ABI-unpacked head
       // via CalldataPlace; a DYNAMIC struct param (>=1 dynamic field, Phase 4e-6)
       // decodes via its tuple head/tail (CdDynPlace). Both shapes resolve OK here;
       // unsupported field kinds were rejected at @struct declaration (JETH229).
       params.push({ name: p.name.text, type: t });
+      defaults.push(def);
     }
 
     // multi-value return `f(): [T1, T2, ...]` (a TS tuple type). Each component is a
@@ -642,9 +663,9 @@ export class Analyzer {
         returnTypes.push(t);
       }
       if (ok && returnTypes.length >= 2) {
-        return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, returnType: VOID, returnTypes };
+        return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, defaults, returnType: VOID, returnTypes };
       }
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, defaults, returnType: VOID };
     }
 
     const returnType = member.type ? resolveType(member.type, this.diags, this.structsByName) ?? VOID : VOID;
@@ -654,10 +675,10 @@ export class Analyzer {
       this.diags.error(member.type ?? member, 'JETH225', 'returning a struct with this shape is not supported yet (supported: static value/nested-static-struct fields, and bytes/string or nested-struct dynamic fields)');
     }
     if (!this.gateArrayType(returnType, member.type ?? member)) {
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, defaults, returnType: VOID };
     }
 
-    return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, returnType };
+    return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, defaults, returnType };
   }
 
   private checkFunction(rf: RawFunction): FunctionIR | undefined {
@@ -685,6 +706,21 @@ export class Analyzer {
       if (internalOnly && p.type.kind === 'struct' && isStaticType(p.type)) {
         this.memAggregateLocals.set(p.name, p.type);
       }
+    }
+
+    // F3: eagerly type/range-check every constant default, so a bad default (wrong type or out of
+    // range for the parameter) is reported at the declaration even when the helper is never called
+    // internally (matching TypeScript, which flags type errors in unused code). Defaults are
+    // self-contained constants, so snapshot/restore the effect flags to keep this purely diagnostic.
+    if (rf.defaults) {
+      const rs = this.currentReadsState, ws = this.currentWritesState, re = this.currentReadsEnv;
+      for (let i = 0; i < rf.params.length; i++) {
+        const d = rf.defaults[i];
+        if (!d) continue;
+        const e = this.checkExpr(d, rf.params[i]!.type);
+        if (e) this.coerce(e, rf.params[i]!.type, d);
+      }
+      this.currentReadsState = rs; this.currentWritesState = ws; this.currentReadsEnv = re;
     }
 
     const body: Stmt[] = [];
@@ -1665,6 +1701,74 @@ export class Analyzer {
    *  (its type is the callee's return type; void only allowed when asStatement). First cut:
    *  value-typed params and a value/void return (aggregate/bytes/string params and returns,
    *  and multi-value returns, are cleanly gated until aggregate memory locals land). */
+  // F3: a default parameter value must be a self-contained compile-time constant, so filling it
+  // at any internal call site is deterministic and side-effect-free (no caller-scope dependency).
+  private isConstDefault(node: ts.Expression): boolean {
+    if (ts.isParenthesizedExpression(node)) return this.isConstDefault(node.expression);
+    if (ts.isBigIntLiteral(node) || ts.isNumericLiteral(node)) return true;
+    if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return true;
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) return this.isConstDefault(node.operand);
+    // type(T).max / type(T).min
+    if (ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min')) return this.isConstDefault(node.expression);
+    // a value cast / builtin over constants: address(0n), u8(255n), bytes4(0x..n), payable(0n), type(u256)
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const c = node.expression.text;
+      if (c === 'address' || c === 'payable' || c === 'type' || resolvePrimitiveName(c)) {
+        return node.arguments.every((a) => this.isConstDefault(a) || (c === 'type' && ts.isIdentifier(a)));
+      }
+    }
+    return false;
+  }
+
+  // True when a single object-literal argument is a NAMED call `f({ p: v, ... })`: every member is
+  // `name: value` (or shorthand) and every name is a parameter name. Otherwise it is an ordinary
+  // positional argument (e.g. a struct-literal value for a single struct param).
+  private looksLikeNamedArgs(obj: ts.ObjectLiteralExpression, params: { name: string }[]): boolean {
+    if (obj.properties.length === 0) return false;
+    const names = new Set(params.map((p) => p.name));
+    for (const p of obj.properties) {
+      if (!(ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p))) return false;
+      if (!ts.isIdentifier(p.name) || !names.has(p.name.text)) return false;
+    }
+    return true;
+  }
+
+  /** Resolve an internal-call argument list to one TS expression per parameter, honoring named-call
+   *  form `f({p: v})` and trailing defaults. Returns undefined (with a diagnostic) on arity / name
+   *  errors. Default fills reuse the callee signature's (constant) initializer node verbatim. */
+  private resolveCallArgs(node: ts.CallExpression, callee: RawFunction, name: string): ts.Expression[] | undefined {
+    const params = callee.params;
+    const defaults = callee.defaults ?? params.map(() => undefined);
+    const provided = node.arguments;
+    if (provided.length === 1 && ts.isObjectLiteralExpression(provided[0]!) && this.looksLikeNamedArgs(provided[0] as ts.ObjectLiteralExpression, params)) {
+      const byName = new Map<string, ts.Expression>();
+      for (const p of (provided[0] as ts.ObjectLiteralExpression).properties) {
+        const key = (p.name as ts.Identifier).text;
+        if (byName.has(key)) { this.diags.error(p.name!, 'JETH253', `duplicate named argument '${key}' in call to '${name}'`); return undefined; }
+        byName.set(key, ts.isPropertyAssignment(p) ? p.initializer : (p.name as ts.Expression));
+      }
+      const out: ts.Expression[] = [];
+      for (let i = 0; i < params.length; i++) {
+        const nm = params[i]!.name;
+        if (byName.has(nm)) out.push(byName.get(nm)!);
+        else if (defaults[i]) out.push(defaults[i]!);
+        else { this.diags.error(node, 'JETH254', `named call to '${name}' is missing argument '${nm}' (no default)`); return undefined; }
+      }
+      return out;
+    }
+    if (provided.length > params.length) {
+      this.diags.error(node, 'JETH148', `'${name}' expects at most ${params.length} argument(s), got ${provided.length}`);
+      return undefined;
+    }
+    const out: ts.Expression[] = [];
+    for (let i = 0; i < params.length; i++) {
+      if (i < provided.length) out.push(provided[i]!);
+      else if (defaults[i]) out.push(defaults[i]!);
+      else { this.diags.error(node, 'JETH148', `'${name}' is missing argument '${params[i]!.name}' (no default)`); return undefined; }
+    }
+    return out;
+  }
+
   private checkInternalCall(node: ts.CallExpression, name: string, asStatement: boolean): (Expr & { kind: 'call' }) | undefined {
     const callee = this.funcsByName.get(name);
     if (!callee) return undefined;
@@ -1698,24 +1802,22 @@ export class Analyzer {
       this.diags.error(node, 'JETH244', `'${name}' returns void and cannot be used as a value`);
       return undefined;
     }
-    if (node.arguments.length !== callee.params.length) {
-      this.diags.error(node, 'JETH148', `'${name}' expects ${callee.params.length} argument(s), got ${node.arguments.length}`);
-      return undefined;
-    }
+    const argNodes = this.resolveCallArgs(node, callee, name);
+    if (!argNodes) return undefined;
     const args: Expr[] = [];
     for (let i = 0; i < callee.params.length; i++) {
       const pt = callee.params[i]!.type;
-      const a = this.checkExpr(node.arguments[i]!, pt);
+      const a = this.checkExpr(argNodes[i]!, pt);
       if (!a) return undefined;
       if (pt.kind === 'struct') {
         // a memory-struct argument (passed by reference): the argument must be the same struct.
         if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
-          this.diags.error(node.arguments[i]!, 'JETH085', `argument ${i + 1} of '${name}' expects ${displayName(pt)}, got ${displayName(a.type)}`);
+          this.diags.error(argNodes[i]!, 'JETH085', `argument ${i + 1} of '${name}' expects ${displayName(pt)}, got ${displayName(a.type)}`);
           return undefined;
         }
         args.push(a);
       } else {
-        args.push(this.coerce(a, pt, node.arguments[i]!));
+        args.push(this.coerce(a, pt, argNodes[i]!));
       }
     }
     this.currentCallees.add(name);
@@ -1752,15 +1854,13 @@ export class Analyzer {
         return undefined;
       }
     }
-    if (node.arguments.length !== callee.params.length) {
-      this.diags.error(node, 'JETH148', `'${name}' expects ${callee.params.length} argument(s), got ${node.arguments.length}`);
-      return undefined;
-    }
+    const argNodes = this.resolveCallArgs(node, callee, name);
+    if (!argNodes) return undefined;
     const args: Expr[] = [];
     for (let i = 0; i < callee.params.length; i++) {
-      const a = this.checkExpr(node.arguments[i]!, callee.params[i]!.type);
+      const a = this.checkExpr(argNodes[i]!, callee.params[i]!.type);
       if (!a) return undefined;
-      args.push(this.coerce(a, callee.params[i]!.type, node.arguments[i]!));
+      args.push(this.coerce(a, callee.params[i]!.type, argNodes[i]!));
     }
     this.currentCallees.add(name);
     this.internallyCalled.add(name);
