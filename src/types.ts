@@ -5,7 +5,10 @@
 // It is ERASED at codegen / ABI / selectors (which switch on kind/bits/size), so a branded
 // value is byte-identical to its base at runtime; it only adds a distinct compile-time identity.
 export type JethType =
-  | { kind: 'uint'; bits: number; brand?: string } // u8..u256, bits multiple of 8
+  // an enum is a BRANDED uint8 carrying its member names (`enumMembers`); the brand gives nominal
+  // identity, the uint8 base gives storage/ABI/codegen for free, and the member list drives
+  // member-access constants + the `< N` range check on explicit conversion / calldata decode.
+  | { kind: 'uint'; bits: number; brand?: string; enumMembers?: string[] } // u8..u256, bits multiple of 8
   | { kind: 'int'; bits: number; brand?: string } // i8..i256
   | { kind: 'bool'; brand?: string }
   | { kind: 'address'; payable: boolean; brand?: string }
@@ -252,6 +255,13 @@ export function isUnsigned(t: JethType): t is { kind: 'uint'; bits: number } {
 }
 export function isInteger(t: JethType): boolean {
   return t.kind === 'uint' || t.kind === 'int';
+}
+
+/** True iff `t` is an enum: a branded uint8 carrying `enumMembers`. Enums reuse the uint8
+ *  base for storage/ABI/codegen, so most paths treat them as integers; this helper marks the
+ *  spots where enum semantics diverge (forbidden arithmetic, `< N` range check). */
+export function isEnum(t: JethType): boolean {
+  return t.kind === 'uint' && (t as { enumMembers?: string[] }).enumMembers !== undefined;
 }
 
 /** True iff `from` -> `to` is a Solidity IMPLICIT WIDENING conversion: uintN -> uintM

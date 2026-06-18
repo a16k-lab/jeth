@@ -19,6 +19,7 @@ import {
   displayName,
   typesEqual,
   isInteger,
+  isEnum,
   isImplicitWiden,
   commonNumericType,
   isStaticValueType,
@@ -171,6 +172,7 @@ export class Analyzer {
 
   analyze(): ContractIR | undefined {
     this.collectTypeAliases(); // branded newtypes, before structs (a struct field may use one)
+    this.collectEnums(); // enums (branded uint8), before structs (a struct field / param may use one)
     this.collectStructs();
     const classes = this.findContractClasses();
     if (classes.length === 0) {
@@ -226,6 +228,59 @@ export class Analyzer {
   private isBrandedAlias(name: string): boolean {
     const t = this.structsByName.get(name);
     return !!t && !!(t as { brand?: string }).brand;
+  }
+
+  /** Collect `enum Color { Red, Green, Blue }` declarations. An enum is modeled as a BRANDED
+   *  uint8 carrying its member names: nominal identity is the brand, storage/ABI/codegen come
+   *  from the uint8 base. Members are 0,1,2,... in declaration order and may NOT carry explicit
+   *  values (solc enums are always 0-based and contiguous). Registered in structsByName so
+   *  resolveType finds the type in field/param/return positions, exactly like a branded alias. */
+  private collectEnums(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isEnumDeclaration(n)) this.collectEnum(n);
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  private collectEnum(decl: ts.EnumDeclaration): void {
+    const name = decl.name.text;
+    if (this.structsByName.has(name) || resolvePrimitiveName(name)) {
+      this.diags.error(decl, 'JETH272', `enum name '${name}' conflicts with an existing type`);
+      return;
+    }
+    const members: string[] = [];
+    for (const m of decl.members) {
+      if (m.initializer) {
+        this.diags.error(m, 'JETH270', `enum members cannot have explicit values (member '${m.name.getText()}'); enum members are 0,1,2,... in declaration order`);
+        continue;
+      }
+      if (!ts.isIdentifier(m.name)) {
+        this.diags.error(m, 'JETH273', 'enum member name must be a plain identifier');
+        continue;
+      }
+      if (members.includes(m.name.text)) {
+        this.diags.error(m, 'JETH274', `duplicate enum member '${m.name.text}' in '${name}'`);
+        continue;
+      }
+      members.push(m.name.text);
+    }
+    if (members.length === 0) {
+      this.diags.error(decl, 'JETH275', `enum '${name}' must have at least one member`);
+      return;
+    }
+    if (members.length > 256) {
+      this.diags.error(decl, 'JETH276', `enum '${name}' has ${members.length} members (max 256)`);
+      return;
+    }
+    this.structsByName.set(name, { kind: 'uint', bits: 8, brand: name, enumMembers: members });
+  }
+
+  /** True if `name` is a registered enum type name (so `Name.Member` is a member constant and
+   *  `Name(x)` is an integer -> enum range-checked conversion). */
+  private isEnumName(name: string): boolean {
+    const t = this.structsByName.get(name);
+    return !!t && isEnum(t);
   }
 
   /** Collect @struct class declarations into the registry (in source order so a
@@ -1725,10 +1780,12 @@ export class Analyzer {
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) return this.isConstDefault(node.operand);
     // type(T).max / type(T).min
     if (ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min')) return this.isConstDefault(node.expression);
-    // a value cast / builtin over constants: address(0n), u8(255n), bytes4(0x..n), payable(0n), type(u256)
+    // an enum member constant `Color.Red` is a compile-time constant.
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text)) return true;
+    // a value cast / builtin over constants: address(0n), u8(255n), bytes4(0x..n), payable(0n), type(u256), Color(0n)
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const c = node.expression.text;
-      if (c === 'address' || c === 'payable' || c === 'type' || resolvePrimitiveName(c)) {
+      if (c === 'address' || c === 'payable' || c === 'type' || resolvePrimitiveName(c) || this.isEnumName(c)) {
         return node.arguments.every((a) => this.isConstDefault(a) || (c === 'type' && ts.isIdentifier(a)));
       }
     }
@@ -3337,6 +3394,28 @@ export class Analyzer {
       }
       return { kind: 'cast', type: { kind: 'address', payable: true }, from: inner.type, operand: inner };
     }
+    // an enum conversion `Color(x)`: the operand must be an integer; produce a cast to the enum
+    // type whose codegen range-checks `x < memberCount` (Panic 0x21 out of range, solc-identical).
+    // A constant operand is range-checked at compile time (solc rejects an out-of-range constant
+    // enum conversion at compile time, not at runtime).
+    if (this.isEnumName(callee)) {
+      const et = this.structsByName.get(callee)! as JethType & { kind: 'uint'; enumMembers: string[] };
+      const inner = this.checkExpr(arg);
+      if (!inner) return undefined;
+      if (!isInteger(inner.type) || isEnum(inner.type)) {
+        this.diags.error(node, 'JETH277', `enum conversion ${callee}(...) requires an integer operand, got ${displayName(inner.type)}`);
+        return undefined;
+      }
+      if (inner.kind === 'literalInt') {
+        if (inner.value < 0n || inner.value >= BigInt(et.enumMembers.length)) {
+          this.diags.error(node, 'JETH278', `value ${inner.value} is out of range for enum '${callee}' (0..${et.enumMembers.length - 1})`);
+          return undefined;
+        }
+        return { kind: 'literalInt', type: et, value: inner.value };
+      }
+      return { kind: 'cast', type: et, from: inner.type, operand: inner };
+    }
+
     // a primitive cast (u256(x), address(x), ...) or a branded-newtype wrap (TokenId(x)).
     const target = resolvePrimitiveName(callee) ?? this.structsByName.get(callee)!;
     const inner = this.checkExpr(arg);
@@ -3361,6 +3440,10 @@ export class Analyzer {
   /** Minimal Phase 3 cast set (each verified against solc): address<->u160 (no-op),
    *  address<->bytes20 (shift). General numeric casts are deferred. */
   private isCastAllowed(from: JethType, to: JethType): boolean {
+    // An enum value converts ONLY to an integer type (uintN/intN); solc rejects a direct
+    // enum -> bytesN / address / bool conversion (it must go through `uintN(c)` first). The
+    // reverse, integer -> enum, is allowed (range-checked) and handled in the cast path.
+    if ((from as { enumMembers?: string[] }).enumMembers && to.kind !== 'uint' && to.kind !== 'int') return false;
     if (to.kind === 'uint' && to.bits === 160 && from.kind === 'address') return true;
     if (to.kind === 'bytesN' && to.size === 20 && from.kind === 'address') return true;
     if (to.kind === 'address') return this.isAddressConvertible(from);
@@ -3413,6 +3496,24 @@ export class Analyzer {
       return { kind: 'literalInt', type: t, value };
     }
 
+    // enum member access `Color.Red` -> a compile-time uint8 constant of the enum type with the
+    // member's declaration index. An enum name is a TYPE name (never a local/state/global), so an
+    // identifier base that names an enum is unambiguous; fire before every other property-access
+    // interpretation. (`Color` standing alone is not a value, only `Color.Member`.)
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.isEnumName(node.expression.text)
+    ) {
+      const et = this.structsByName.get(node.expression.text)! as JethType & { kind: 'uint'; enumMembers: string[] };
+      const idx = et.enumMembers.indexOf(node.name.text);
+      if (idx < 0) {
+        this.diags.error(node, 'JETH271', `enum '${node.expression.text}' has no member '${node.name.text}'`);
+        return undefined;
+      }
+      return { kind: 'literalInt', type: et, value: BigInt(idx) };
+    }
+
     // ternary c ? a : b -> the common type of the two branches (short-circuit at codegen).
     if (ts.isConditionalExpression(node)) {
       const cond = this.checkCondition(node.condition);
@@ -3449,7 +3550,9 @@ export class Analyzer {
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
       const folded = this.asIntLiteral(node);
       if (folded !== undefined) {
-        const type = expected && isInteger(expected) ? expected : folded < 0n ? I256 : U256;
+        // an enum `expected` does NOT capture a bare integer literal: it keeps its plain int type
+        // so coerce rejects the implicit int -> enum (solc forbids `Color c = 1;`).
+        const type = expected && isInteger(expected) && !isEnum(expected) ? expected : folded < 0n ? I256 : U256;
         if (!this.inRange(folded, type)) {
           this.diags.error(node, 'JETH070', `literal ${folded} out of range for ${displayName(type)}`);
         }
@@ -3461,7 +3564,9 @@ export class Analyzer {
     if (ts.isBigIntLiteral(node)) {
       const raw = node.text.replace(/n$/, '');
       const value = BigInt(raw);
-      const type = expected && isInteger(expected) ? expected : U256;
+      // an enum `expected` does NOT capture a bare integer literal (see the negated-literal case
+      // above): keep the plain int type so coerce rejects the implicit int -> enum.
+      const type = expected && isInteger(expected) && !isEnum(expected) ? expected : U256;
       if (!this.inRange(value, type)) {
         this.diags.error(node, 'JETH070', `literal ${value} out of range for ${displayName(type)}`);
       }
@@ -4026,7 +4131,9 @@ export class Analyzer {
     ) {
       const callee = node.expression.text;
       if (callee === 'address') return this.checkAddressCall(node);
-      if (callee === 'payable' || resolvePrimitiveName(callee) || this.isBrandedAlias(callee)) return this.checkCast(node, callee);
+      // `Color(x)` is an integer -> enum range-checked conversion; an enum is a branded uint8, so
+      // isBrandedAlias already routes it, but name it explicitly for clarity.
+      if (callee === 'payable' || resolvePrimitiveName(callee) || this.isEnumName(callee) || this.isBrandedAlias(callee)) return this.checkCast(node, callee);
       const st = this.structsByName.get(callee);
       if (st && st.kind === 'struct') return this.checkStructConstruct(node, st);
       // an internal/private/public contract function called by name -> internal call.
@@ -4169,11 +4276,21 @@ export class Analyzer {
       return { kind: 'binary', type: BOOL, op, left, right, unchecked: false };
     }
 
-    // Comparisons -> bool
+    // Comparisons -> bool. Allowed on enums (compares the underlying uint8); two DIFFERENT enums
+    // are rejected by the brand-mismatch path inside unifyOperands.
     if (this.isComparison(op)) {
       const unified = this.unifyOperands(left, right, node);
       if (!unified) return undefined;
       return { kind: 'binary', type: BOOL, op, left: unified[0], right: unified[1], unchecked: false };
+    }
+
+    // Arithmetic / bitwise / shift / ** on an enum operand is a type error (solc forbids it):
+    // an enum is not an arithmetic type. Only comparisons (handled above) are allowed; cast to an
+    // integer first to do math. (Comparisons already returned; everything below is arithmetic-ish.)
+    if (isEnum(left.type) || isEnum(right.type)) {
+      const en = isEnum(left.type) ? left.type : right.type;
+      this.diags.error(node, 'JETH279', `arithmetic on enum '${displayName(en)}' is not allowed; cast to an integer first (e.g. u8(x))`);
+      return undefined;
     }
 
     // Shifts: amount may be any unsigned int; result type follows the left operand.
@@ -4244,6 +4361,13 @@ export class Analyzer {
 
   private retypeLiteral(lit: Expr, target: JethType, node: ts.Node): Expr | undefined {
     if (lit.kind !== 'literalInt') return undefined;
+    // A bare integer literal cannot become an enum without an explicit conversion (solc rejects
+    // `Color c = 1;`). An already-enum-typed literal (Color.Member / Color(x)) reaches coerce via
+    // typesEqual and never lands here, so any literal arriving with an enum target is a bare int.
+    if (isEnum(target) && !isEnum(lit.type)) {
+      this.diags.error(node, 'JETH280', `cannot use a bare integer literal as enum '${displayName(target)}'; use ${displayName(target)}(${lit.value}) or ${displayName(target)}.<Member>`);
+      return undefined;
+    }
     if (!isInteger(target)) {
       this.diags.error(node, 'JETH084', `cannot use integer literal as ${displayName(target)}`);
       return undefined;

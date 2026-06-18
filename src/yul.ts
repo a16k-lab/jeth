@@ -365,6 +365,12 @@ ${indent(runtime, 6)}
    *  full 32-byte word is always valid. Reverts with empty returndata on dirty
    *  input, matching Solidity's ABI decoder (verified against solc 0.8). */
   private validateInput(t: JethType, name: string): string {
+    // an enum (branded uint8) decodes like uint8 but with the TIGHTER `< memberCount` check:
+    // an out-of-range enum value reverts EMPTY in solc (ABI validation failure, not a Panic).
+    const em = (t as { enumMembers?: string[] }).enumMembers;
+    if (t.kind === 'uint' && em !== undefined) {
+      return `if iszero(lt(${name}, ${em.length})) { revert(0, 0) }`;
+    }
     switch (t.kind) {
       case 'uint':
         // uintN<256: high bits must be zero.
@@ -3187,6 +3193,13 @@ ${indent(runtime, 6)}
         const g = this.validateInput(t, w);
         if (g) out.push(g);
         out.push(`mstore(${dst}, ${w})`);
+      } else if ((t as { enumMembers?: string[] }).enumMembers) {
+        // An enum element copied whole to memory is range-checked like an explicit conversion:
+        // solc reverts Panic(0x21) on an out-of-range element during the copy. (The empty-revert
+        // sites are the ABI-decode boundary, lazy element access, and event/error materialization;
+        // a whole-aggregate echo to a memory return Panics instead.)
+        out.push(`if iszero(lt(${w}, ${(t as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`);
+        out.push(`mstore(${dst}, ${w})`);
       } else {
         out.push(`mstore(${dst}, ${this.cleanCalldataElem(t, w)})`);
       }
@@ -3202,6 +3215,11 @@ ${indent(runtime, 6)}
         if (validate) {
           const g = this.validateInput(leaf.type, w);
           if (g) out.push(g);
+          out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${w})`);
+        } else if ((leaf.type as { enumMembers?: string[] }).enumMembers) {
+          // enum leaf in a whole-aggregate echo: Panic(0x21) on out-of-range (see the value-leaf
+          // case above), not a silent mask.
+          out.push(`if iszero(lt(${w}, ${(leaf.type as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`);
           out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${w})`);
         } else {
           out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${this.cleanCalldataElem(leaf.type, w)})`);
@@ -4188,6 +4206,15 @@ ${indent(runtime, 6)}
   private lowerCast(e: Expr & { kind: 'cast' }, ctx: LowerCtx, out: string[]): string {
     const v = this.lowerExpr(e.operand, ctx, out);
     const { from, type: to } = e;
+    // enum TARGET (integer -> enum, `Color(x)`): solc range-checks `x < memberCount` and reverts
+    // Panic 0x21 when out of range (the unsigned `lt` naturally rejects negative ints). The value
+    // is already a valid small uint8 afterward, so just return it. (enum -> integer needs no case:
+    // the integer branch below returns the value unchanged.)
+    const toEnum = (to as { enumMembers?: string[] }).enumMembers;
+    if (to.kind === 'uint' && toEnum !== undefined) {
+      out.push(`if iszero(lt(${v}, ${toEnum.length})) { ${this.panic()}(0x21) }`);
+      return v;
+    }
     // address <-> uint160 and address <-> address(payable): identical register word.
     if (to.kind === 'address' && from.kind === 'address') return v;
     if (to.kind === 'address' && from.kind === 'uint' && from.bits === 160) return v;
