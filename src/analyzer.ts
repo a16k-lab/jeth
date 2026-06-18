@@ -913,6 +913,11 @@ export class Analyzer {
       return;
     }
 
+    if (ts.isSwitchStatement(node)) {
+      this.checkSwitchStatement(node, returnType, out);
+      return;
+    }
+
     if (ts.isWhileStatement(node)) {
       const cond = this.checkCondition(node.expression);
       this.loopDepth++;
@@ -1418,6 +1423,143 @@ export class Analyzer {
     const bodyBlock = S(f.createBlock([elemStmt, node.statement], true));
     const forStmt = S(f.createForStatement(synInit, cond, incr, bodyBlock));
     this.checkForStatement(forStmt, returnType, out);
+  }
+
+  /** Collect `break` statements that target THIS switch (not enclosed by a nested loop/switch,
+   *  which consume their own break). Used to forbid an early `break` mid-case. */
+  private straySwitchBreaks(stmts: readonly ts.Statement[]): ts.Node[] {
+    const found: ts.Node[] = [];
+    const walk = (n: ts.Node): void => {
+      if (ts.isForStatement(n) || ts.isForOfStatement(n) || ts.isForInStatement(n) ||
+          ts.isWhileStatement(n) || ts.isDoStatement(n) || ts.isSwitchStatement(n)) return; // own break target
+      if (n.kind === ts.SyntaxKind.BreakStatement) { found.push(n); return; }
+      ts.forEachChild(n, walk);
+    };
+    for (const s of stmts) walk(s);
+    return found;
+  }
+
+  // `switch (disc) { case A: ... break; case B: case C: ... return x; default: ... }` desugars to a
+  // nested if/else chain over a single evaluation of the discriminant, reusing the if-codegen. JETH
+  // is STRICTER than TypeScript: a non-empty case must terminate (break / return / revert / continue)
+  // so there is no implicit fall-through (an EMPTY case label still shares the next case's body), and
+  // a switch over an enum with no `default` must cover every member (exhaustiveness).
+  private checkSwitchStatement(node: ts.SwitchStatement, returnType: JethType, out: Stmt[]): void {
+    const disc = node.expression;
+    const probe = this.checkExpr(disc);
+    if (!probe) return;
+    const dt = probe.type;
+    if (!isStaticValueType(dt)) {
+      this.diags.error(disc, 'JETH281', `switch discriminant must be a value type (uint/int/enum/bool/address/bytesN), got ${displayName(dt)}`);
+      return;
+    }
+    const clauses = node.caseBlock.clauses;
+    // Group consecutive EMPTY case labels with the next clause that has a body. default must be last.
+    const groups: { labels: ts.Expression[]; body: ts.Statement[]; node: ts.Node }[] = [];
+    let defaultBody: ts.Statement[] | undefined;
+    let pending: ts.Expression[] = [];
+    for (let i = 0; i < clauses.length; i++) {
+      const cl = clauses[i]!;
+      if (ts.isDefaultClause(cl)) {
+        if (i !== clauses.length - 1) { this.diags.error(cl, 'JETH282', 'a switch `default` must be the last clause'); return; }
+        if (pending.length > 0) { this.diags.error(cl, 'JETH283', 'a `case` label that falls through to `default` is not supported; give it a body'); return; }
+        defaultBody = [...cl.statements];
+        continue;
+      }
+      pending.push(cl.expression);
+      if (cl.statements.length > 0) { groups.push({ labels: pending, body: [...cl.statements], node: cl }); pending = []; }
+    }
+    if (pending.length > 0) { this.diags.error(node, 'JETH283', 'a trailing `case` label with no body is not supported (it would fall off the end)'); return; }
+
+    // Each group body must terminate; drop a trailing `break` (the case end) and forbid a stray one.
+    for (const g of groups) {
+      const last = g.body[g.body.length - 1];
+      const terminated = last !== undefined && (last.kind === ts.SyntaxKind.BreakStatement || this.stmtDiverts(last));
+      if (!terminated) {
+        this.diags.error(g.node, 'JETH284', 'a switch case must end in `break`, `return`, `revert(...)`, or `continue` (implicit fall-through is not allowed; add a trailing `break` after a nested switch)');
+        return;
+      }
+      if (last!.kind === ts.SyntaxKind.BreakStatement) g.body = g.body.slice(0, -1); // case terminator
+      const strays = this.straySwitchBreaks(g.body);
+      if (strays.length > 0) { this.diags.error(strays[0]!, 'JETH285', 'an early `break` in a switch case is not supported (a case ends only at its final `break`)'); return; }
+    }
+    if (defaultBody) {
+      const strays = this.straySwitchBreaks(defaultBody);
+      // a default body may end in a no-op break too; drop a trailing break and reject early ones.
+      const last = defaultBody[defaultBody.length - 1];
+      if (last && last.kind === ts.SyntaxKind.BreakStatement) defaultBody = defaultBody.slice(0, -1);
+      const stray2 = this.straySwitchBreaks(defaultBody);
+      if (stray2.length > 0) { this.diags.error(stray2[0]!, 'JETH285', 'an early `break` in a switch `default` is not supported'); return; }
+      void strays;
+    }
+
+    // Exhaustiveness: a switch over an enum with no default must cover every member. Resolve each
+    // label to its constant value (an enum-member label is a literalInt) and collect the coverage.
+    const labelExprs: { node: ts.Expression; expr: Expr | undefined }[] = [];
+    for (const g of groups) for (const l of g.labels) labelExprs.push({ node: l, expr: this.checkExpr(l, dt) });
+    // Stricter lint: a duplicate CONSTANT case label is a dead arm (the first match wins) and almost
+    // always a bug. Reject it (constant int/enum/address-literal and bool labels are deduplicated).
+    const seenInt = new Set<bigint>();
+    const seenBool = new Set<boolean>();
+    for (const { node: ln, expr } of labelExprs) {
+      if (expr?.kind === 'literalInt') {
+        if (seenInt.has(expr.value)) { this.diags.error(ln, 'JETH287', `duplicate case label ${expr.value} in switch`); return; }
+        seenInt.add(expr.value);
+      } else if (expr?.kind === 'literalBool') {
+        if (seenBool.has(expr.value)) { this.diags.error(ln, 'JETH287', `duplicate case label ${expr.value} in switch`); return; }
+        seenBool.add(expr.value);
+      }
+    }
+    if (isEnum(dt) && !defaultBody) {
+      const covered = new Set<bigint>();
+      for (const { expr } of labelExprs) if (expr && expr.kind === 'literalInt') covered.add(expr.value);
+      const n = (dt as { enumMembers: string[] }).enumMembers.length;
+      const missing: string[] = [];
+      for (let i = 0; i < n; i++) if (!covered.has(BigInt(i))) missing.push((dt as { enumMembers: string[] }).enumMembers[i]!);
+      if (missing.length > 0) {
+        this.diags.error(node, 'JETH286', `switch over enum '${displayName(dt)}' is not exhaustive; missing: ${missing.join(', ')} (add the cases or a \`default\`)`);
+        return;
+      }
+    }
+
+    // Desugar: `const __sw: T = disc; if (__sw == L..) { body } else if (..) {..} else { default }`.
+    const f = ts.factory;
+    const S = <T extends ts.Node>(x: T): T => this.synth(x, disc);
+    const swName = `__jeth_sw_${this.synthCounter++}`;
+    const swId = (): ts.Identifier => S(f.createIdentifier(swName));
+    const decl = S(f.createVariableDeclaration(swName, undefined, this.jethTypeToTypeNode(dt, disc), disc));
+    const declStmt = S(f.createVariableStatement(undefined, S(f.createVariableDeclarationList([decl], ts.NodeFlags.Const))));
+    const eqOr = (labels: ts.Expression[]): ts.Expression =>
+      labels.map((l) => S(f.createBinaryExpression(swId(), ts.SyntaxKind.EqualsEqualsToken, l)) as ts.Expression)
+        .reduce((a, b) => S(f.createBinaryExpression(a, ts.SyntaxKind.BarBarToken, b)));
+    let chain: ts.Statement | undefined = defaultBody ? S(f.createBlock(defaultBody, true)) : undefined;
+    for (let i = groups.length - 1; i >= 0; i--) {
+      const g = groups[i]!;
+      chain = S(f.createIfStatement(eqOr(g.labels), S(f.createBlock(g.body, true)), chain));
+    }
+    const block = S(f.createBlock(chain ? [declStmt, chain] : [declStmt], true));
+    // Emit as a scoped block so the synthesized discriminant temp does not leak.
+    this.checkStatement(block, returnType, out);
+  }
+
+  /** True if executing `s` never falls through to the textually-following statement (it always
+   *  returns / reverts / throws / continues, or is an if-else whose branches all divert, or a block
+   *  whose last statement diverts). Conservative: a nested switch is not counted (it needs an
+   *  explicit trailing `break`), and `break` is handled separately as the case terminator. */
+  private stmtDiverts(s: ts.Statement): boolean {
+    if (ts.isReturnStatement(s) || this.isRevertOrThrow(s) || s.kind === ts.SyntaxKind.ContinueStatement) return true;
+    if (ts.isBlock(s)) { const l = s.statements[s.statements.length - 1]; return !!l && this.stmtDiverts(l); }
+    if (ts.isIfStatement(s)) return !!s.elseStatement && this.stmtDiverts(s.thenStatement) && this.stmtDiverts(s.elseStatement);
+    return false;
+  }
+
+  /** True if a statement is a `revert(...)` / custom-error revert / `throw` (a terminating stmt). */
+  private isRevertOrThrow(s: ts.Statement): boolean {
+    if (s.kind === ts.SyntaxKind.ThrowStatement) return true;
+    if (ts.isExpressionStatement(s) && ts.isCallExpression(s.expression) && ts.isIdentifier(s.expression.expression)) {
+      return s.expression.expression.text === 'revert';
+    }
+    return false;
   }
 
   // ---- require / revert / custom errors ------------------------------------

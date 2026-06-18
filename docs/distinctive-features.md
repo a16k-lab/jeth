@@ -232,6 +232,34 @@ end of every transaction. The decorator requires a state-mutating external or pu
 `@nonReentrant` function cannot be called internally (the guard protects the external entry). It
 never changes the function's ABI, selector, or mutability.
 
+### Exhaustive `switch` (JETH-only control flow)
+
+Solidity has no `switch`; JETH adds one (over enums and other value types) that desugars to a
+nested if/else chain over a single evaluation of the discriminant, and is stricter than
+TypeScript so it cannot silently mis-route:
+
+```ts
+enum Status { Pending, Active, Closed }
+
+@contract class C {
+  @external @pure label(s: Status): u256 {
+    switch (s) {
+      case Status.Pending: return 1n;
+      case Status.Active: case Status.Closed: return 2n;  // shared body (empty label falls through)
+    }                                                      // exhaustive: every member covered -> no default needed
+  }
+}
+```
+
+The discriminant is a value type (uint / int / enum / bool / address / bytesN) evaluated exactly
+once. A non-empty case must terminate (`break`, which ends the case; `return`; `revert(...)`;
+`continue`; or an if-else / block that fully diverts), so there is **no implicit fall-through**
+from a non-empty case (an empty case label still shares the next case's body). A `switch` over an
+enum with no `default` must cover **every member** (exhaustiveness, `JETH286`) - add a member and
+the compiler flags every switch that no longer covers it. A duplicate constant case label is a
+dead arm and is rejected (`JETH287`). Enum semantics themselves match Solidity exactly (ABI
+`uint8`, 1-byte storage, `Panic(0x21)` on an out-of-range explicit conversion).
+
 ## 4. Where JETH is *more capable* than the Solidity compiler
 
 JETH always compiles through Yul (solc's IR pipeline), which schedules the EVM's 1024-slot
