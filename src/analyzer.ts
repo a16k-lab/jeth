@@ -106,6 +106,7 @@ interface RawFunction {
   inferRead?: boolean; // @read -> resolve to @pure (touches no state/env) or @view (reads, never writes)
   inferExposed?: boolean; // no visibility decorator -> @public if internally called, else @external
   inferHidden?: boolean; // @hidden -> @internal (not in the ABI; internal vs private is codegen-identical pre-inheritance)
+  nonReentrant?: boolean; // F4: @nonReentrant -> transient-storage reentrancy mutex on the external entry
 }
 
 export class Analyzer {
@@ -605,6 +606,19 @@ export class Analyzer {
     else if (decs.includes('view')) mutability = 'view';
     else if (decs.includes('pure')) mutability = 'pure';
 
+    // F4: @nonReentrant wraps the external entry in a transient-storage mutex. It must be a
+    // state-mutating external/public function: a guard performs a TSTORE, so @read/@view/@pure
+    // are incompatible, and reentrancy only meaningfully protects externally-reachable entries.
+    const nonReentrant = decs.includes('nonReentrant');
+    if (nonReentrant) {
+      if (read || decs.includes('view') || decs.includes('pure')) {
+        this.diags.error(member, 'JETH260', '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)');
+      }
+      if (hidden || (visibilities.length > 0 && visibility !== 'external' && visibility !== 'public')) {
+        this.diags.error(member, 'JETH261', `@nonReentrant requires an external or public function, not @${hidden ? 'hidden' : visibility}`);
+      }
+    }
+
     const params: { name: string; type: JethType }[] = [];
     const defaults: (ts.Expression | undefined)[] = [];
     let seenDefault = false;
@@ -663,9 +677,9 @@ export class Analyzer {
         returnTypes.push(t);
       }
       if (ok && returnTypes.length >= 2) {
-        return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, defaults, returnType: VOID, returnTypes };
+        return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType: VOID, returnTypes };
       }
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, defaults, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType: VOID };
     }
 
     const returnType = member.type ? resolveType(member.type, this.diags, this.structsByName) ?? VOID : VOID;
@@ -675,10 +689,10 @@ export class Analyzer {
       this.diags.error(member.type ?? member, 'JETH225', 'returning a struct with this shape is not supported yet (supported: static value/nested-static-struct fields, and bytes/string or nested-struct dynamic fields)');
     }
     if (!this.gateArrayType(returnType, member.type ?? member)) {
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, defaults, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType: VOID };
     }
 
-    return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, params, defaults, returnType };
+    return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType };
   }
 
   private checkFunction(rf: RawFunction): FunctionIR | undefined {
@@ -747,6 +761,7 @@ export class Analyzer {
       signature,
       selector,
       body,
+      nonReentrant: rf.nonReentrant,
     };
   }
 
@@ -1774,6 +1789,13 @@ export class Analyzer {
     if (!callee) return undefined;
     if (callee.visibility === 'external') {
       this.diags.error(node, 'JETH240', `cannot internally call @external function '${name}' (only internal/private/public functions are callable by name)`);
+      return undefined;
+    }
+    if (callee.nonReentrant) {
+      // The transient mutex is emitted on the EXTERNAL entry only; an internal call would bypass
+      // it (or, if it did not, falsely trip the guard). Forbid it, matching how a Solidity
+      // nonReentrant function is not meant to be re-entered through an internal call.
+      this.diags.error(node, 'JETH262', `cannot internally call @nonReentrant function '${name}' (the reentrancy guard protects the external entry only)`);
       return undefined;
     }
     if (callee.returnTypes) {

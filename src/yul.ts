@@ -31,6 +31,14 @@ export class UnsupportedError extends Error {
   }
 }
 
+// F4 @nonReentrant: a dedicated TRANSIENT-storage slot (EIP-1153, its own address space, wiped at
+// end of transaction and reverted on a failed call) holds the mutex. The slot is namespaced by a
+// keccak so it cannot collide with any future transient use; its value is never observable on chain.
+const REENTRANCY_TSLOT = '0xe3c13ce1a6dbca2cd747af6cfb37b5bfaa572cf58e51980e617e5acd973fa8b3'; // keccak("jeth.nonReentrant.guard.v1")
+// The OpenZeppelin custom error ReentrancyGuardReentrantCall() (selector 0x3ee5aeb5), left-aligned in
+// a word, so a reentrant call reverts with revert data byte-identical to OZ's transient guard.
+const REENTRANCY_ERROR_WORD = '0x3ee5aeb500000000000000000000000000000000000000000000000000000000';
+
 /** ABI head-word count of a struct's tuple HEAD (spec section 3.0): each field
  *  contributes its inline static words if static, or exactly ONE offset word if
  *  dynamic (string/bytes/dynamic-array/nested-dynamic-struct). This differs from
@@ -306,8 +314,11 @@ ${indent(runtime, 6)}
 
     const last = fn.body[fn.body.length - 1];
     const terminates = last !== undefined && (last.kind === 'return' || last.kind === 'revert' || last.kind === 'returnTuple');
+    // Lower the body + fall-through epilogue into a local buffer; a @nonReentrant function then
+    // brackets it with the transient mutex (resetting before every normal return).
+    const bodyLines: string[] = [];
     for (const s of fn.body) {
-      for (const l of this.lowerStmt(s, ctx)) out.push(l);
+      for (const l of this.lowerStmt(s, ctx)) bodyLines.push(l);
     }
     if (!terminates && fn.returnTypes) {
       // fall-through default for a multi-value return: the zero tuple (value/bytes-string
@@ -316,22 +327,36 @@ ${indent(runtime, 6)}
       let cursor = headWords * 32;
       for (let i = 0; i < fn.returnTypes.length; i++) {
         if (isBytesLike(fn.returnTypes[i]!)) {
-          out.push(`mstore(${i * 32}, ${cursor})`, `mstore(${cursor}, 0)`);
+          bodyLines.push(`mstore(${i * 32}, ${cursor})`, `mstore(${cursor}, 0)`);
           cursor += 32;
-        } else out.push(`mstore(${i * 32}, 0)`);
+        } else bodyLines.push(`mstore(${i * 32}, 0)`);
       }
-      out.push(`return(0, ${cursor})`);
+      bodyLines.push(`return(0, ${cursor})`);
     } else if (!terminates) {
       // void or fall-through: return the default-encoded value, matching Solidity
       // (falling off the end returns the zero value of the return type).
-      if (fn.returnType.kind === 'void') out.push('return(0, 0)');
+      if (fn.returnType.kind === 'void') bodyLines.push('return(0, 0)');
       else if (isBytesLike(fn.returnType) || fn.returnType.kind === 'array')
-        out.push('mstore(0, 0x20)', 'mstore(0x20, 0)', 'return(0, 0x40)');
+        bodyLines.push('mstore(0, 0x20)', 'mstore(0x20, 0)', 'return(0, 0x40)');
       else if (fn.returnType.kind === 'struct') {
         const words = abiHeadWords(fn.returnType);
-        for (let j = 0; j < words; j++) out.push(`mstore(${j * 32}, 0)`);
-        out.push(`return(0, ${words * 32})`);
-      } else out.push('mstore(0, 0)', 'return(0, 0x20)');
+        for (let j = 0; j < words; j++) bodyLines.push(`mstore(${j * 32}, 0)`);
+        bodyLines.push(`return(0, ${words * 32})`);
+      } else bodyLines.push('mstore(0, 0)', 'return(0, 0x20)');
+    }
+
+    if (fn.nonReentrant) {
+      // ENTER: trip the guard if already entered (revert ReentrancyGuardReentrantCall()), else set
+      // it. EXIT: reset the transient slot before every NORMAL return; a revert auto-rolls-back
+      // transient storage per EIP-1153, so revert paths need no explicit reset.
+      out.push(`if tload(${REENTRANCY_TSLOT}) { mstore(0, ${REENTRANCY_ERROR_WORD}) revert(0, 4) }`);
+      out.push(`tstore(${REENTRANCY_TSLOT}, 1)`);
+      for (const l of bodyLines) {
+        if (l.trimStart().startsWith('return(')) out.push(`tstore(${REENTRANCY_TSLOT}, 0)`);
+        out.push(l);
+      }
+    } else {
+      out.push(...bodyLines);
     }
     return out;
   }
@@ -468,6 +493,15 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.value.type.kind === 'array') {
+          // a STATIC fixed-array LITERAL (return [a, b, c] typed Arr<T,N>, incl. nested static):
+          // the ABI encoding is the N inline head words, with NO dynamic offset/length wrapper
+          // (a dynamic-array return keeps the wrapper via encodeArrayReturn below). Writing the
+          // literal at memory 0 and returning abiHeadWords*32 matches solc's uint256[N] layout.
+          if (s.value.kind === 'arrayLit' && isStaticType(s.value.type)) {
+            this.encodeArrayLitHead(s.value, 0, ctx, out);
+            out.push(`return(0, ${abiHeadWords(s.value.type) * 32})`);
+            break;
+          }
           // a memory-array value produced by an expression (ternary `c ? xs : ys`, or any
           // expr that yields a [len][data] pointer): lower to the pointer, then encode.
           if (s.value.kind === 'ternary' || s.value.kind === 'incDec') {

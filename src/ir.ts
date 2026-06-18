@@ -307,6 +307,7 @@ export interface FunctionIR {
   selector: string; // 4-byte hex without 0x, e.g. "d09de08a"
   body: Stmt[];
   internallyCalled?: boolean; // a target of at least one internal call -> emit a Yul function def
+  nonReentrant?: boolean; // F4: wrap the external entry in a transient-storage (TSTORE/TLOAD) mutex
 }
 
 export interface ContractIR {

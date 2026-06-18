@@ -208,6 +208,30 @@ parameters; a single object-literal argument is treated as named only when every
 parameter name, otherwise it is an ordinary positional value (for example a struct-literal for a
 single struct parameter).
 
+### `@nonReentrant` reentrancy guard
+
+A built-in decorator that wraps an external/public state-mutating function in an EIP-1153
+**transient-storage** reentrancy mutex, the same mechanism as OpenZeppelin's
+`ReentrancyGuardTransient` but with no import, no boilerplate, and no storage slot consumed.
+
+```ts
+@contract class Vault {
+  @state bal: mapping<address, u256>;
+  @nonReentrant @external withdraw(amount: u256): void {
+    // ... guarded body ...
+  }
+}
+```
+
+On entry the guard reverts with OpenZeppelin's `ReentrancyGuardReentrantCall()` (selector
+`0x3ee5aeb5`) if the contract is already executing a guarded function, otherwise it sets a
+transient flag; on every normal exit it clears the flag, and a reverting call has the flag rolled
+back automatically by EIP-1153. The transient slot costs no persistent storage and is wiped at the
+end of every transaction. The decorator requires a state-mutating external or public function
+(`@view`/`@pure`/`@read` are rejected, as is `@internal`/`@private`/`@hidden`), and a
+`@nonReentrant` function cannot be called internally (the guard protects the external entry). It
+never changes the function's ABI, selector, or mutability.
+
 ## 4. Where JETH is *more capable* than the Solidity compiler
 
 JETH always compiles through Yul (solc's IR pipeline), which schedules the EVM's 1024-slot
