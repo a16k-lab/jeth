@@ -59,10 +59,26 @@ globals, `payable`, `address(this)`), and Phase 4 (the full ABI-v2 surface: arra
 structs, `bytes`/`string`, dynamic head/tail encode/decode with unbounded nesting,
 storage/calldata composites, memory locals, internal calls, tuple destructuring, `delete`,
 events/errors). Returndata, raw storage slots (including keccak-derived mapping slots),
-and event logs are asserted byte-identical to Solidity across 1000+ differential tests
+and event logs are asserted byte-identical to Solidity across **1500+ differential tests**
 plus repeated adversarial fuzzing (zero known miscompiles). The directive's `Vault`
-contract runs end-to-end. Phase 5 (constructors with arguments, modifiers, immutables)
-is the next milestone. See [SUPPORTED.md](SUPPORTED.md) for the full matrix and roadmap.
+contract runs end-to-end.
+
+On top of Phase 4, JETH ships **enums** (Solidity-exact: ABI `uint8`, 1-byte storage,
+`Panic(0x21)` on an out-of-range conversion) plus six **distinctive features** that go
+beyond plain Solidity parity, each differentially verified byte-identical to solc and
+adversarially audited:
+
+- **Branded newtypes** `type TokenId = Brand<u256>` (nominal value types, zero runtime cost)
+- **Struct spread** `{ ...cfg, fee: f }` and **`for...of`** over arrays (compile-time desugarings)
+- **Default + named arguments** at internal call sites (`f(a, b = 10n)`, `f({ a, b })`)
+- **`@nonReentrant`** (an EIP-1153 transient-storage reentrancy guard, no storage slot)
+- **Exhaustive `switch`** over enums/value types (no implicit fall-through, exhaustiveness checked)
+- **Generics** `f<T>(...)` (compile-time monomorphization, internal-only)
+
+plus an ergonomic **decorator-inference** layer (`@read`, `@hidden`, inferred visibility). See
+[docs/distinctive-features.md](docs/distinctive-features.md) for these and [SUPPORTED.md](SUPPORTED.md)
+for the full Solidity-parity matrix. Phase 5 (constructors with arguments, modifiers, immutables)
+is the next milestone.
 
 ## Layout
 

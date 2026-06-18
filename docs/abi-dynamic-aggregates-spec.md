@@ -61,7 +61,7 @@ For selector computation, **a struct name must be replaced by its tuple type** i
 
 ---
 
-## 1. Dynamic array of STATIC struct — `P[]`, `S[]`
+## 1. Dynamic array of STATIC struct - `P[]`, `S[]`
 
 A static struct has **no inner offsets**: each field is its own full 32-byte word, inline, in declaration order, **unpacked** (storage packing is irrelevant to ABI). Define `structWords(S)` = number of fields (one ABI word each). Element **stride** = `structWords(S) * 32`.
 
@@ -86,14 +86,14 @@ Total bytes = `0x20 (offset) + 0x20 (length) + n*stride`.
 Worked (measured `encP()`, n=3): `[0x20][0x03][x0][y0][x1][y1][x2][y2]` = 256 bytes.
 Worked (measured `encS()`, n=2): `[0x20][0x02][a0(uint128 right-aligned)][b0(uint64 right-aligned)][c0(0/1 full word)][a1][b1][c1]` = 256 bytes.
 
-### 1.2 DECODE (param) — e.g. `getP(P[] a, uint256 i)`
+### 1.2 DECODE (param) - e.g. `getP(P[] a, uint256 i)`
 
 Calldata: selector + 2-word head: `word0 = offset` (base = args region, byte 4) to array data region; `word1 = i` (static, inline). Then at `4 + offset`: `[length][elements inline]`.
 
 `dataStart = 4 + offset + 32` (skip length word). `a[i].fieldF` at `dataStart + i*stride + f*0x20`.
 
 Decode check order (each failing step 1-4 → EMPTY revert; step 5 → Panic):
-1. Head fully present (both words) — else EMPTY.
+1. Head fully present (both words) - else EMPTY.
 2. `offset` in range (`4 + offset + 32 <= calldatasize`; absurd offset like `2^255` → EMPTY).
 3. **Up-front full-payload check:** read `length` at `4+offset`; require `length*stride` bytes present (`dataStart + length*stride <= calldatasize`). Truncated/zero-byte payload → EMPTY, **independent of `i`**, before any indexing.
 4. **Per-element clean-bits on access:** for the accessed element, `uint128 a` and `uint64 b` must have zero high bits beyond their width; `bool c` must be `0` or `1`. Violation → EMPTY revert (clean-bits abort, **not** a Panic). Triggered when the indexed field is read.
@@ -112,7 +112,7 @@ Top-level array offset base = **calldata byte 4** (post-selector). Proven: `offs
 
 ---
 
-## 2. Nested dynamic array — `T[][]` (`uint256[][]`, `uint8[][]` identical)
+## 2. Nested dynamic array - `T[][]` (`uint256[][]`, `uint8[][]` identical)
 
 `uint8[][]` is byte-for-byte identical to `uint256[][]` because `uint8` elements still occupy full 32-byte words. The only `uint8` difference is decode validation (element > 255 → EMPTY).
 
@@ -135,7 +135,7 @@ Worked (measured `enc256()` = `[[1,2,3],[4],[5,6]]`, 448 bytes, 14 words):
 `[32][3][96][224][288][3][1][2][3][1][4][2][5][6]`.
 Base check: pointer region starts at byte 64. `64+96=160`→`len(inner0)=3`; `64+224=288`→`len(inner1)=1`; `64+288=352`→`len(inner2)=2`. The alternative base (the `outer_len` word at byte 32) gives `32+96=128`→an *element* (wrong). Asymmetric lengths `(3,1,2)` make only the correct base reproduce all three.
 
-### 2.2 DECODE (param) — e.g. `get256(i, j)` over `m: uint256[][]`
+### 2.2 DECODE (param) - e.g. `get256(i, j)` over `m: uint256[][]`
 
 1. Read `off_m` from the param head (base = byte 4). Read `outer_len` at `4 + off_m`. Pointer region begins at the next word (`4 + off_m + 32`).
 2. `m[i][j]`:
@@ -159,7 +159,7 @@ Encode base proven above. Decode base proven: blob `[1][0x40][filler][2][111][22
 
 ---
 
-## 3. Dynamic struct (tuple with ≥1 dynamic field) — bare and nested
+## 3. Dynamic struct (tuple with ≥1 dynamic field) - bare and nested
 
 A tuple with at least one dynamic field is itself **dynamic**. Static fields stay **inline in the tuple head in declaration order**, even when they follow a dynamic field; only dynamic fields are deferred to the tail (each represented in the head by an offset word).
 
@@ -182,7 +182,7 @@ Measured layouts:
 ```
 `off_b` is **always 0x40** for `D{a,b}` (a + off_b = 2 static head words). `retD2` (b.len=3) → identical `off_b=0x40`.
 
-**(2) `retDpair()` = (D{7,[10,20]}, uint256 marker=0x9999)** — the asymmetric encode proof:
+**(2) `retDpair()` = (D{7,[10,20]}, uint256 marker=0x9999)** - the asymmetric encode proof:
 ```
 @0x00 0x40      head[0]: offset to D (base = return region byte 0); marker took head slot 0x20
 @0x20 0x9999    head[1]: static marker INLINE in head (NOT after the tail)
@@ -204,7 +204,7 @@ Tuple start moved `0x20`→`0x40`, yet `off_b` stayed `0x40`: base is tuple star
 @0xa0 0x40      off_b (rel INNER start 0x80) -> b len at 0x80+0x40 = 0xc0
 @0xc0 0x02 ...  inner.b
 ```
-`off_inner=0x60` rel Outer start; `off_b=0x40` rel inner start. **Each container's internal offsets are based at THAT container's start — bases compose/reset at every dynamic boundary.**
+`off_inner=0x60` rel Outer start; `off_b=0x40` rel inner start. **Each container's internal offsets are based at THAT container's start - bases compose/reset at every dynamic boundary.**
 
 **(5) `D[]` (dynamic array of dynamic structs)**, `retDarray()` = `[{7,[0x10]},{8,[0x20,0x21,0x22]}]`:
 ```
@@ -217,7 +217,7 @@ Tuple start moved `0x20`→`0x40`, yet `off_b` stayed `0x40`: base is tuple star
 ```
 **Level-2 base for `D[]` = the array length word** (`0x20` here). Asymmetric inner b-lengths (1 vs 3) force non-uniform element offsets `0x40` vs `0xc0`, proving genuine per-element offsets. Each element tuple then has its own level-1 base at that element's start.
 
-### 3.2 DECODE (param) — e.g. `f(D calldata d)`
+### 3.2 DECODE (param) - e.g. `f(D calldata d)`
 
 - Top-level head word = offset to tuple, base = args region (byte 4). Canonical `0x20` for a sole `D`.
 - `d.a`: read word at `tuple_start + 0`. (Measured `getA` → 7.)
@@ -235,7 +235,7 @@ Base proof (decode, asymmetric): tuple placed at args-byte `0xA0` (head `[0x40][
 
 ---
 
-## 4. Array of dynamic — `string[]` / `bytes[]` (identical layout)
+## 4. Array of dynamic - `string[]` / `bytes[]` (identical layout)
 
 `string[]` and `bytes[]` use byte-for-byte identical head/tail; only payload content differs. JETH may share one encoder/decoder, parameterized only by payload bytes.
 
@@ -260,11 +260,11 @@ Worked (measured `f()` = `["ab","cdef",""]`):
 @0x40 0x60 (off_s0)  @0x60 0xa0 (off_s1)  @0x80 0xe0 (off_s2)
 @0xa0 2 ["ab" -> 6162..]  @0xe0 4 ["cdef"->6364656600..]  @0x120 0 (empty, no payload word)
 ```
-Base check (table start = byte `0x40`): `0x40+0x60=0xa0` (s0 len), `0x40+0xa0=0xe0` (s1 len), `0x40+0xe0=0x120` (s2 len) — all land exactly on length words. `bytes[]` (`g()`) identical structure.
+Base check (table start = byte `0x40`): `0x40+0x60=0xa0` (s0 len), `0x40+0xa0=0xe0` (s1 len), `0x40+0xe0=0x120` (s2 len) - all land exactly on length words. `bytes[]` (`g()`) identical structure.
 
 Asymmetric encode proof (`h2()` = [40-byte, "Z"]): `off_s0=0x40`, `off_s1=0xa0`. Gap `0xa0−0x40 = 0x60` = first element's encoded size (1 len + 2 payload words for 40 bytes), so offsets accumulate by prior element size from the table start.
 
-### 4.2 DECODE (param) — e.g. `len(string[] a, uint256 i)`
+### 4.2 DECODE (param) - e.g. `len(string[] a, uint256 i)`
 
 - Outer param head word = offset to array region, base = args region (byte 4). Canonical `0x40` (two head words: array-offset + `i`).
 - Array region: `word0 = L`; then `L` element-offset words (the table) immediately follow.
@@ -287,7 +287,7 @@ Built `["WX"(2B), "Y"*40(40B)]` with table values `0x40`, `0x80`. Prepended 2 ju
 
 Top-level layout = HEAD (one slot per top-level param, declaration order) + TAIL (dynamic params' payloads, declaration order, contiguous). Static scalar → 1 inline head word. **Static aggregate** (`uint256[3]`, or an all-static struct) → **all its words inline** in the head (N words), no offset, never in the tail. Dynamic param → 1 offset word. **Every top-level offset base = start of head region** (returndata byte 0 / calldata byte 4).
 
-### 5.1 ENCODE (return) — measured
+### 5.1 ENCODE (return) - measured
 
 **`f(uint256[] a, uint256[] b)`** → `([0xAA], [0xB0,0xB1,0xB2])`:
 `[off_a=0x40][off_b=0x80][a.len=1][0xaa][b.len=3][0xb0][0xb1][0xb2]`. Head = 2 words. `off_a=0x40`→byte 64; `off_b = off_a + 32 + 32*len_a = 0x80`. Tails sequential (a then b).
@@ -300,7 +300,7 @@ Top-level layout = HEAD (one slot per top-level param, declaration order) + TAIL
 
 ENCODE offset formula: `offset(dynamic param) = headSizeBytes + (cumulative byte size of all preceding dynamic params' tails)`.
 
-### 5.2 DECODE (param) — measured
+### 5.2 DECODE (param) - measured
 
 - For top-level param `i`, read head word(s) at `headStart + 32*wordIndex` (wordIndex accounts for static aggregates consuming multiple words). Static → use value(s) directly. Dynamic → treat word as unsigned offset `O`, `ptr = headStart + O` (headStart = 4 for calldata).
 - **Check 1** (length readable): `O + 32 <= argsLen` (argsLen = `calldatasize − 4`), inclusive. Else EMPTY.
@@ -310,7 +310,7 @@ ENCODE offset formula: `offset(dynamic param) = headSizeBytes + (cumulative byte
 
 `fdec` shifted: 32-byte gap between the 2-word head and a's tail; `off_a=0x60` (= 64-byte head + 32 gap), `off_b=0xA0` (= `0x60 + 32 + 32*len_a(1)`), a.len=1[0xAA], b.len=3[0xB0..0xB2] → decoded exactly. `off_a=0x44/off_b=0x84` (the values needed if base were full-calldata byte 0) → REV. Proves base = byte 4 (head start), not byte 0.
 
-### 5.4 Tolerances (measured) — DO NOT add checks solc lacks
+### 5.4 Tolerances (measured) - DO NOT add checks solc lacks
 
 - **No alignment requirement:** valid len=1 + element at a non-32-aligned byte, `off_a=0x41/0x48/0x40/0x60` → all OK. (An earlier apparent `0x41` revert was solely because the misaligned read happened to hit a huge length value, not alignment.)
 - **Non-canonical/overlapping/swapped offsets accepted** as long as both range checks pass: `off_a=off_b=0x40` (both at same len-3 tail) → both decode len 3; swapped `off_a=0x80/off_b=0x40` → OK; self-ref `off_a=0x00` (reads head word0=0 as length) → empty array, OK.
@@ -350,7 +350,7 @@ ENCODE offset formula: `offset(dynamic param) = headSizeBytes + (cumulative byte
 ## 7. OPEN QUESTIONS (not conclusively established by these probes)
 
 1. **Signed integers / `bytesN` / `address` field alignment.** Probes measured only `uintN` (right-aligned) and `bool` (full 0/1 word). Not measured: `intN` sign-extension into the high bytes, `bytesN` **left-alignment** (right zero-padding), `address` (right-aligned in low 20 bytes). These follow the ABI spec, but JETH should confirm against solc before relying on the encoder for them.
-2. **Clean-bits/validation on `intN`, `bytesN`, `address`, and `enum` fields/elements.** Only `uint128`/`uint64`/`bool`/`uint8` dirty-bit and over-max behavior was measured (→ EMPTY revert). The validation rule for signed ints (sign-bit handling), `bytesN` (low-bit dirtiness), `address` (high 12 bytes nonzero), and `enum` (value `>= variant count` → Panic(0x21)? not tested) is unconfirmed.
+2. **Clean-bits/validation on `intN`, `bytesN`, `address`, and `enum` fields/elements.** Only `uint128`/`uint64`/`bool`/`uint8` dirty-bit and over-max behavior was measured here (→ EMPTY revert). The validation rule for signed ints (sign-bit handling), `bytesN` (low-bit dirtiness), and `address` (high 12 bytes nonzero) follows the ABI spec (now implemented in `validateInput`). **`enum` is now CONFIRMED (F5 enum work, differential vs solc):** at the ABI calldata-decode boundary (a scalar enum param, a struct field, an event/error arg, lazy `a[i]` element access) an out-of-range value (`>= variant count`) EMPTY-reverts like every other scalar validation; but a whole calldata enum-array copied to MEMORY (`return a` for `Color[]` / `Arr<Color,N>`) range-checks every element as a conversion and reverts `Panic(0x21)`, and the explicit `Color(x)` conversion is also `Panic(0x21)`.
 3. **Dynamic struct as an ARRAY ELEMENT decode path (`D[]` decode).** Encode of `D[]` was fully measured; the *decode* validity/bounds behavior for `D[]` (and the exact ordering of the up-front payload check vs per-element offset checks) was only fully measured for the static-struct array (`P[]`/`S[]`) and for `string[]`. Confirm `D[]` decode matches the composed rules before relying on it.
 4. **Nested fixed-size arrays of dynamic elements (`Tdyn[k]`, e.g. `string[2]`, `D[3]`).** Classified as dynamic here, but no probe measured their exact head/tail (a fixed array of dynamic elements has an offset table but no length word). The layout is inferable (offset table of `k` words, base = table start = the type's data-region start, no leading length word) but **unmeasured**.
 5. **Multi-dynamic-field structs (`> 1` dynamic field in one tuple)** and **structs mixing static + multiple dynamic fields in non-trivial order.** Only `D{a, b}`, `E{id, name}`, `Outer{x, inner, y}` (one dynamic field each) were measured. The general rule (each dynamic field gets its own head offset word, tails in field order) is stated but the multi-dynamic-field tail ordering/offset accumulation was not directly probed.

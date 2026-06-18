@@ -1,7 +1,36 @@
 # JETH - supported vs unsupported features
 
 Running checklist per directive §10.7. Updated through **Phase 4 + the solc-parity feature
-sweep** (closed all 17 audit-found compile-time gaps; runtime byte-identical to solc).
+sweep** (closed all 17 audit-found compile-time gaps; runtime byte-identical to solc), plus
+**enums** and the **six distinctive features F1-F6** (see the next section and
+[docs/distinctive-features.md](docs/distinctive-features.md)). The full suite is 1500+ differential
+tests against `solc-js` (returndata + raw storage slots + event logs), zero known miscompiles.
+
+## Enums + distinctive features (F1-F6)
+- **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage
+  packed like `uint8`, members `0,1,...`). `Color.Member` constants, comparisons (`==`/`!=`/`<`/...),
+  `Color(x)` conversion (range-checked, `Panic(0x21)` on out-of-range), `uN(c)` extraction. Out-of-range
+  enum CALLDATA decode EMPTY-reverts; arithmetic on enums and mixing two enums are rejected. Usable as a
+  state var, param, return, mapping key/value, struct field, event/error arg. Byte-identical to solc.
+- **F1 branded newtypes** `type TokenId = Brand<u256>`: a distinct NOMINAL value type over a value base
+  (`uintN`/`intN`/`bool`/`address`/`bytesN`), fully erased at codegen/ABI/selectors (byte-identical to the
+  base), with wrap/unwrap via `TokenId(x)` / `u256(t)`. Mixing brands, or a brand with its bare base, is a
+  type error.
+- **F2 struct spread + `for...of`**: `{ ...base, field: v }` immutable struct update (value-field structs)
+  and `for (const v of xs)` over storage/calldata/memory/fixed arrays, both compile-time desugarings that
+  are byte-identical to the hand-written equivalents.
+- **F3 default + named arguments** (internal call sites only): a constant default `b: u256 = 10n`
+  (trailing, value-typed, eagerly validated) filled when omitted, and named calls `this.f({ a, b })` that
+  bind by parameter name. Defaults never reach the ABI (external callers pass every argument).
+- **F4 `@nonReentrant`**: wraps an external/public state-mutating function in an EIP-1153 transient-storage
+  reentrancy mutex (OpenZeppelin `ReentrancyGuardReentrantCall()` / `0x3ee5aeb5` on re-entry), no storage
+  slot, never changing the ABI/selector/mutability.
+- **F5 exhaustive `switch`**: `switch (disc) { case L: ... }` over a value/enum discriminant evaluated once,
+  desugared to if/else; stricter than TS (no implicit fall-through, a non-empty case must terminate, an
+  enum switch with no `default` must cover every member, duplicate constant labels are rejected).
+- **F6 generics** `f<T>(...)`: type-safe generic INTERNAL functions, monomorphized at compile time (one
+  specialization per concrete value-type instantiation, deduplicated, type-checked per instantiation,
+  byte-identical to a hand-written type-specific function). A generic is never in the ABI.
 
 ## Language + type-system features (solc-parity sweep)
 - Whole-aggregate storage ops: nested-struct field read/write/copy (`this.o.inner = D(...)`,
@@ -57,8 +86,10 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 ### Types
 - `u8`..`u256`, `i8`..`i256` (BigInt literals only).
 - `bool`, `address`, `bytes1`..`bytes32`.
-- `mapping<K,V>` and `T[]` / `Arr<T,N>` are **parsed and laid out**, but codegen for
-  indexing them is Phase 3/4.
+- `mapping<K,V>`, `T[]`, and `Arr<T,N>` are fully laid out AND code-generated (indexing, packing,
+  push/pop, keccak slot derivation; see the Mappings / arrays sections below).
+- `enum Name { ... }` (a 1-byte `uint8`-backed enum, ABI `uint8`; see "Enums + distinctive features").
+- Branded newtypes `type X = Brand<Base>` (nominal value types, F1; see "Enums + distinctive features").
 
 ### Expressions / statements
 - Checked arithmetic `+ - * / %` (default) -> `Panic(0x11)` overflow, `Panic(0x12)` div/mod-by-zero.
@@ -68,10 +99,15 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 - Local `let` with explicit type; parameters (static value types).
 - `return`, expression statements.
 
-### Control flow (Phase 2)
-- `if` / `else` / `else if`, `for(init; cond; post)`, `while`, `break`, `continue`.
-- Lexical block scoping with a scope stack; shadowing forbidden; `for...of`/`for...in`,
-  labeled break/continue rejected. Fall-through returns the zero value (matches Solidity).
+### Control flow (Phase 2 + F2/F5)
+- `if` / `else` / `else if`, `for(init; cond; post)`, `while`, `do...while`, `break`, `continue`.
+- `for...of` over an array (F2): `for (const v of xs)` (storage/calldata/memory/fixed arrays),
+  desugared to an indexed loop (re-reads length + element each iteration). `for...in` is rejected.
+- `switch` (F5): `switch (disc) { case L: ... default: ... }` over a value/enum discriminant evaluated
+  once, with exhaustiveness checking over enums and no implicit fall-through (see "Enums + distinctive
+  features"). Solidity has no `switch`; JETH's desugars to if/else.
+- Lexical block scoping with a scope stack; shadowing forbidden; labeled break/continue rejected.
+  Fall-through returns the zero value (matches Solidity).
 
 ### Reverts & custom errors (Phase 2)
 - `require(cond)`, `require(cond, "msg")`, `revert()`, `revert("msg")` -> byte-exact
@@ -343,7 +379,9 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
   for value-typed and void params/returns (plus static-struct params/returns to @internal/@private
   callees), with recursion, mutual recursion, and transitive `@view`/`@pure` purity. A MULTI-VALUE
   internal call (value return components) is callable via tuple destructuring (below). Aggregate
-  (array/bytes/string) params/returns through an internal call remain gated.
+  (array/bytes/string) params/returns through an internal call remain gated. At internal call sites,
+  default arguments (`f(a, b = 10n)`) and named arguments (`this.f({ a, b })`) are supported (F3),
+  and generic functions `f<T>(...)` are monomorphized per concrete value-type instantiation (F6).
 - Tuple destructuring: `let [a, , c] = src` (declaration, new locals) and `[a, , c] = src`
   (assignment to existing value lvalues incl. storage; omitted slots discard the component), where
   `src` is a multi-value internal call (`this.f()`) or a tuple literal (`[x, y]`, e.g. swap
@@ -357,7 +395,8 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
 
 `number`/floats, `any`, async/await, generators, closures/free functions,
 `throw`, try/catch, regex, template literals, `typeof`/`instanceof`/`in`,
-spread/rest, `eval`.
+array/call spread/rest (`[...a]`, `f(...a)`), `eval`. (Object spread `{ ...base, x: v }`
+in a struct literal IS supported, F2.)
 
 ## delete
 

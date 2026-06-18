@@ -1,7 +1,7 @@
 # JETH distinctive features
 
 Raw material for the eventual language documentation. JETH is, by design, a faithful
-**subset of Solidity semantics** — the compiler invariant is "zero miscompiles: byte-identical
+**subset of Solidity semantics**: the compiler invariant is "zero miscompiles: byte-identical
 to solc on returndata, raw storage slots, and event logs." The full Solidity-parity feature
 matrix lives in [`../SUPPORTED.md`](../SUPPORTED.md). This file records the things that are
 **not** plain Solidity parity: the JETH-only ergonomics, and the two places JETH is actually
@@ -19,7 +19,7 @@ so the generated ABI is always the true one. (Verified: an inferred-decorator co
 **byte-identical ABI** to the same contract written with explicit decorators, and is
 byte-identical to solc at runtime.)
 
-### `@read` — infer `@pure` vs `@view`
+### `@read`: infer `@pure` vs `@view`
 
 Mark a read-only function `@read` and the compiler computes, from the function's **transitive**
 effects, whether it is `@pure` (touches no state and no execution environment) or `@view`
@@ -36,12 +36,12 @@ effects, whether it is `@pure` (touches no state and no execution environment) o
 }
 ```
 
-A `@read` function that **modifies state** — writes storage, or **emits an event** (a log is a
-state change) — directly or transitively is rejected (`JETH056`). `@read` combined with an
+A `@read` function that **modifies state** (writes storage, or **emits an event**, since a log is a
+state change) directly or transitively is rejected (`JETH056`). `@read` combined with an
 explicit `@view`/`@pure`/`@payable` is a conflict (`JETH052`). Visibility and mutability are
 orthogonal, so `@external @read` etc. are fine.
 
-### No visibility decorator — infer `@external` vs `@public`
+### No visibility decorator: infer `@external` vs `@public`
 
 Omit the visibility decorator entirely and the compiler resolves:
 
@@ -58,9 +58,9 @@ Omit the visibility decorator entirely and the compiler resolves:
 ```
 
 `@public` and `@external` are identical in the ABI and produce identical observable behavior,
-so this never changes the contract's interface — only the internal codegen.
+so this never changes the contract's interface, only the internal codegen.
 
-### `@hidden` — infer `@internal`
+### `@hidden`: infer `@internal`
 
 Mark a not-exposed helper `@hidden` and it resolves to `@internal` (excluded from the ABI; you
 can still call it internally). Until inheritance lands (Phase 6) `internal` and `private` are
@@ -128,11 +128,14 @@ wei versus gwei, two different address roles, opaque handles. `Brand<...>` may o
 named alias (`JETH015` on inline use), and the base must be a value type (a `Brand` over a
 mapping / array / struct is rejected).
 
-## 3. Struct spread and `for...of` (ergonomic desugarings)
+## 3. Ergonomics, control flow, and safety (F2-F6)
 
-Two TypeScript-native conveniences that Solidity has no syntax for. Both are pure compile-time
-desugarings into constructs the compiler already emits byte-for-byte against solc, so they carry
-zero new runtime semantics.
+Features that Solidity has no syntax for, each either a pure compile-time desugaring into constructs
+the compiler already emits byte-for-byte against solc (so they carry zero new runtime semantics) or
+a thin, audited piece of codegen. This section collects: struct spread and `for...of` (F2), default
+and named arguments (F3), the `@nonReentrant` guard (F4), exhaustive `switch` (F5), and generics
+(F6). (Enums, also added in the F5 work, are plain Solidity-parity and live in
+[`../SUPPORTED.md`](../SUPPORTED.md), not here.)
 
 ### Immutable struct update with spread
 
@@ -292,7 +295,7 @@ overwritten.
 
 JETH always compiles through Yul (solc's IR pipeline), which schedules the EVM's 1024-slot
 operand stack far more efficiently than Solidity's default (legacy) stack-based codegen. Two
-consequences — these are the only two places the *same* program behaves better under JETH than
+consequences, and these are the only two places the *same* program behaves better under JETH than
 under default Solidity:
 
 ### Deeper recursion before EVM stack overflow
@@ -329,7 +332,7 @@ function f() external pure returns (uint256) {
 The identical JETH program compiles with no trouble.
 
 > Caveat (for honesty in the docs): Solidity compiled with `--via-ir` / `viaIR: true` also goes
-> through Yul and closes both gaps. The advantage is over Solidity's **default** pipeline — JETH
+> through Yul and closes both gaps. The advantage is over Solidity's **default** pipeline: JETH
 > gives you the IR-pipeline benefits without needing to remember a flag.
 
 ---
