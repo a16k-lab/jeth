@@ -17,6 +17,7 @@ import {
   I256,
   BOOL,
   displayName,
+  canonicalName,
   typesEqual,
   isInteger,
   isEnum,
@@ -139,6 +140,15 @@ export class Analyzer {
   private funcsByName = new Map<string, RawFunction>();
   private currentCallees = new Set<string>(); // internal callees of the function being checked
   private internallyCalled = new Set<string>(); // any function that is the target of an internal call
+  // F6: compile-time generics (monomorphization). A generic internal function `f<T>(...)` is NOT a
+  // normal function; it is a template. On each internal call we resolve concrete type arguments
+  // (explicit `f<u256>(x)` or inferred from the value args), register the type params -> concrete
+  // JethTypes in structsByName, and synthesize a mangled non-generic specialization that flows
+  // through the EXISTING collect/check/emit internal-function pipeline. Specializations are
+  // discovered lazily while checking bodies, so a worklist is drained until no new ones appear.
+  private genericsByName = new Map<string, { node: ts.MethodDeclaration; typeParams: string[] }>();
+  private specializedNames = new Map<string, string>(); // specialization KEY -> mangled function name
+  private specializationQueue: { mangled: string; node: ts.MethodDeclaration; binding: Map<string, JethType> }[] = []; // not-yet-checked specializations
 
   constructor(
     private readonly sourceFile: ts.SourceFile,
@@ -363,7 +373,12 @@ export class Analyzer {
         const decs = decoratorNames(member);
         if (decs.includes('error')) this.collectErrorDecl(member);
         else if (decs.includes('event')) this.collectEvent(member);
-        else {
+        else if (member.typeParameters && member.typeParameters.length > 0) {
+          // F6: a generic function `f<T>(...)`. Do NOT collect it as a normal function (that would
+          // try to resolve the bare type param T and fail with JETH013); register it as a template
+          // to be monomorphized per concrete instantiation at each internal call site.
+          this.collectGeneric(member);
+        } else {
           const fn = this.collectFunction(member);
           if (fn) rawFns.push(fn);
         }
@@ -394,6 +409,24 @@ export class Analyzer {
         functions.push(f);
         effects.set(rf.name, { writes: this.currentWritesState, reads: this.currentReadsState, readsEnv: this.currentReadsEnv, callees: this.currentCallees, rf });
       }
+    }
+
+    // F6: drain the specialization worklist. Checking a body may have queued generic
+    // specializations, and a specialization's own body may queue MORE (a generic calling another
+    // generic, or recursing at a new type), so loop until the queue is empty. The mangled name is
+    // already in funcsByName + specializedNames (registered when the call was first seen), so a
+    // recursive self-call at the same T resolves to the in-progress specialization instead of
+    // re-queuing it. Each specialization's effects feed the same transitive-purity fixpoint below.
+    while (this.specializationQueue.length > 0) {
+      const spec = this.specializationQueue.shift()!;
+      const rf = this.funcsByName.get(spec.mangled)!;
+      this.withTypeBinding(spec.binding, () => {
+        const f = this.checkFunction(rf);
+        if (f) {
+          functions.push(f);
+          effects.set(rf.name, { writes: this.currentWritesState, reads: this.currentReadsState, readsEnv: this.currentReadsEnv, callees: this.currentCallees, rf });
+        }
+      });
     }
 
     // Transitive purity: a function inherits the state/env effects of everything it calls.
@@ -750,6 +783,195 @@ export class Analyzer {
     return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType };
   }
 
+  // ---- F6: compile-time generics (monomorphization) ------------------------
+
+  /** Validate and register a generic function template `f<T, ...>(...)`. The decl shape is
+   *  checked here (internal-only, plain-identifier type params with no constraints); the body
+   *  and signature are NOT collected now - each concrete instantiation is synthesized lazily at
+   *  its call site and flows through the normal collect/check/emit internal-function pipeline. */
+  private collectGeneric(member: ts.MethodDeclaration): void {
+    if (!ts.isIdentifier(member.name)) {
+      this.diags.error(member, 'JETH049', 'method name must be a plain identifier');
+      return;
+    }
+    const name = member.name.text;
+    const decs = decoratorNames(member);
+    // A generic is callable ONLY internally (its specializations are internal functions and never
+    // reach the ABI), so an explicit @external/@public is an error - the ABI cannot be generic.
+    if (decs.includes('external') || decs.includes('public')) {
+      this.diags.error(member, 'JETH290', `generic function '${name}' cannot be @external/@public (its type is not expressible in the ABI); make it internal (@internal/@private/@hidden, or no visibility decorator)`);
+    }
+    if (decs.includes('nonReentrant')) {
+      this.diags.error(member, 'JETH290', `generic function '${name}' cannot be @nonReentrant (a generic is internal-only and the reentrancy guard protects an external entry)`);
+    }
+    const typeParams: string[] = [];
+    for (const tp of member.typeParameters!) {
+      if (tp.constraint || tp.default) {
+        this.diags.error(tp, 'JETH294', `type parameter '${tp.name.text}' must be a plain identifier (constraints / defaults are not supported)`);
+      }
+      const pn = tp.name.text;
+      if (resolvePrimitiveName(pn) || this.structsByName.has(pn)) {
+        this.diags.error(tp, 'JETH294', `type parameter name '${pn}' conflicts with an existing type`);
+      }
+      if (typeParams.includes(pn)) {
+        this.diags.error(tp, 'JETH294', `duplicate type parameter '${pn}' in generic '${name}'`);
+      }
+      typeParams.push(pn);
+    }
+    if (this.genericsByName.has(name) || this.funcsByName.has(name)) {
+      this.diags.error(member, 'JETH295', `function '${name}' redeclared`);
+      return;
+    }
+    this.genericsByName.set(name, { node: member, typeParams });
+  }
+
+  /** Register each type-parameter -> concrete-type binding in structsByName for the duration of
+   *  `fn` (so resolveType resolves T to its concrete JethType while collecting/checking one
+   *  specialization), restoring any name it shadowed afterwards. */
+  private withTypeBinding<R>(binding: Map<string, JethType>, fn: () => R): R {
+    const saved: [string, JethType | undefined][] = [];
+    for (const [tp, ct] of binding) {
+      saved.push([tp, this.structsByName.get(tp)]);
+      this.structsByName.set(tp, ct);
+    }
+    try {
+      return fn();
+    } finally {
+      for (const [tp, prev] of saved) {
+        if (prev === undefined) this.structsByName.delete(tp);
+        else this.structsByName.set(tp, prev);
+      }
+    }
+  }
+
+  /** A unique, valid-identifier mangled name for `f` specialized at the given concrete types.
+   *  Distinct from any user function name (the `$` separators are illegal in a TS identifier, so a
+   *  user could never declare a colliding name) and one-to-one with the type tuple, so it doubles
+   *  as the specialization cache KEY: two instantiations with the same concrete types collapse to
+   *  one specialization (dedup). The per-type tag includes the BRAND (a branded newtype / enum is a
+   *  DISTINCT nominal type from its base), so `f<Wei>` and `f<u256>` are separate specializations
+   *  even though their runtime codegen is byte-identical. */
+  private mangleSpecialization(name: string, args: JethType[]): string {
+    const tag = (t: JethType): string => {
+      const br = (t as { brand?: string }).brand;
+      // a brand name is a user identifier (already [A-Za-z0-9_], no primitive collisions); prefix
+      // with `b_` so a brand can never alias a base canonical tag (e.g. a brand named `uint256`).
+      const base = canonicalName(t).replace(/[^A-Za-z0-9]/g, '_');
+      return br ? `b_${br}_${base}` : base;
+    };
+    return `${name}$${args.map(tag).join('$')}`;
+  }
+
+  /** Resolve the concrete type arguments for a generic call: explicit `f<u256>(x)` from the call
+   *  node's `typeArguments`, otherwise inferred by matching each parameter annotated with a bare
+   *  type-parameter identifier against the corresponding checked argument's concrete type. Returns
+   *  the binding (typeParam -> JethType) or undefined (after emitting a diagnostic). */
+  private resolveGenericTypeArgs(node: ts.CallExpression, gen: { node: ts.MethodDeclaration; typeParams: string[] }, name: string): Map<string, JethType> | undefined {
+    const binding = new Map<string, JethType>();
+    const params = gen.node.parameters;
+
+    if (node.typeArguments && node.typeArguments.length > 0) {
+      // EXPLICIT type arguments: `this.f<u256, address>(...)`.
+      if (node.typeArguments.length !== gen.typeParams.length) {
+        this.diags.error(node, 'JETH292', `generic '${name}' expects ${gen.typeParams.length} type argument(s), got ${node.typeArguments.length}`);
+        return undefined;
+      }
+      for (let i = 0; i < gen.typeParams.length; i++) {
+        const t = resolveType(node.typeArguments[i]!, this.diags, this.structsByName);
+        if (!t) return undefined;
+        if (!this.gateGenericTypeArg(t, node.typeArguments[i]!, gen.typeParams[i]!)) return undefined;
+        binding.set(gen.typeParams[i]!, t);
+      }
+      return binding;
+    }
+
+    // INFERENCE: bind each type parameter that appears as a bare-identifier parameter annotation
+    // to that argument's concrete type. A parameter `x: T` where T is a type-param infers T; a
+    // type param used only in the return type (or never in a bare-identifier param) cannot be
+    // inferred. Unify across params: a conflict (T inferred as two different types) is an error.
+    const argNodes = node.arguments;
+    for (let i = 0; i < params.length && i < argNodes.length; i++) {
+      const ann = params[i]!.type;
+      if (!ann || !ts.isTypeReferenceNode(ann) || !ts.isIdentifier(ann.typeName)) continue;
+      const tpName = ann.typeName.text;
+      if (!gen.typeParams.includes(tpName)) continue;
+      const a = this.checkExpr(argNodes[i]!);
+      if (!a) return undefined;
+      // strip a leading branded identity only when inferring? No: infer the EXACT concrete type
+      // (a branded value infers its brand), matching how the body would re-resolve T.
+      const inferred = a.type;
+      const prev = binding.get(tpName);
+      if (prev && !typesEqual(prev, inferred)) {
+        this.diags.error(argNodes[i]!, 'JETH293', `conflicting type arguments inferred for '${tpName}' in '${name}': ${displayName(prev)} vs ${displayName(inferred)} (specify it explicitly, e.g. ${name}<${displayName(prev)}>(...))`);
+        return undefined;
+      }
+      if (!prev) binding.set(tpName, inferred);
+    }
+
+    for (const tp of gen.typeParams) {
+      if (!binding.has(tp)) {
+        this.diags.error(node, 'JETH292', `cannot infer type argument ${tp} for '${name}'; specify it explicitly, e.g. ${name}<u256>(...)`);
+        return undefined;
+      }
+      if (!this.gateGenericTypeArg(binding.get(tp)!, node, tp)) return undefined;
+    }
+    return binding;
+  }
+
+  /** A concrete type argument must be a VALUE type (uintN/intN/bool/address/bytesN/enum/branded).
+   *  A reference type (struct/array/mapping/bytes/string) is rejected (JETH291). (Internal struct
+   *  params exist but generic struct type-arguments are a future extension.) */
+  private gateGenericTypeArg(t: JethType, node: ts.Node, tp: string): boolean {
+    if (isStaticValueType(t)) return true; // covers uintN/intN/bool/address/bytesN, incl. enums + branded (a branded value type is one of these with a brand)
+    this.diags.error(node, 'JETH291', `type argument for '${tp}' must be a value type (uintN/intN/bool/address/bytesN/enum/branded newtype), got ${displayName(t)}`);
+    return false;
+  }
+
+  /** Resolve a generic call: compute its concrete instantiation, synthesize (once) a mangled
+   *  non-generic specialization that flows through the normal internal-function pipeline, and emit
+   *  the call as an ordinary internal call to that mangled name. Returns undefined on error. */
+  private checkGenericCall(node: ts.CallExpression, name: string, asStatement: boolean): (Expr & { kind: 'call' }) | undefined {
+    const gen = this.genericsByName.get(name)!;
+    const binding = this.resolveGenericTypeArgs(node, gen, name);
+    if (!binding) return undefined;
+    const args = gen.typeParams.map((tp) => binding.get(tp)!);
+    const key = this.mangleSpecialization(name, args);
+
+    if (!this.specializedNames.has(key)) {
+      // The mangled name embeds `$`, which is a legal identifier char, so in the pathological case a
+      // user declared a non-generic function with the exact mangled name we reject it with a clear
+      // diagnostic rather than letting two Yul defs collide (which would surface as a backend ICE).
+      if (this.funcsByName.has(key) || this.genericsByName.has(key)) {
+        this.diags.error(node, 'JETH296', `specialization name '${key}' for generic '${name}' collides with an existing function; rename that function`);
+        return undefined;
+      }
+      // First time this exact instantiation is seen. Synthesize a non-generic RawFunction by
+      // collecting the SAME AST node with the type params bound to their concrete types, then give
+      // it the mangled name. Register it in funcsByName + the cache BEFORE its body is checked, so a
+      // recursive self-call at the same T finds the in-progress specialization (no infinite loop).
+      this.specializedNames.set(key, key);
+      const rf = this.withTypeBinding(binding, () => this.collectFunction(gen.node));
+      if (!rf) {
+        // collectFunction emitted a diagnostic (e.g. a param type invalid for this instantiation).
+        this.specializedNames.delete(key);
+        return undefined;
+      }
+      // Force a concrete internal visibility (a specialization is never in the ABI) and a stable
+      // mangled name; drop any visibility inference (a generic is internal by construction).
+      rf.name = key;
+      rf.visibility = 'internal';
+      rf.inferExposed = false;
+      rf.inferHidden = false;
+      this.funcsByName.set(key, rf);
+      this.specializationQueue.push({ mangled: key, node: gen.node, binding });
+    }
+
+    // Emit the call as an ordinary internal call to the mangled specialization. Argument checking,
+    // coercion, and the call IR all reuse the existing internal-call path; arg types are checked
+    // against the specialization's (already concrete) parameter types.
+    return this.checkInternalCall(node, key, asStatement);
+  }
+
   private checkFunction(rf: RawFunction): FunctionIR | undefined {
     this.scopes = [];
     this.loopDepth = 0;
@@ -980,6 +1202,12 @@ export class Analyzer {
           if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
           return;
         }
+        // F6: a generic internal call `f<T>(...)` / `f(...)` as a statement.
+        if (this.genericsByName.has(callee)) {
+          const c = this.checkGenericCall(e, callee, true);
+          if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
+          return;
+        }
       }
       // `this.method(args)` internal call as a statement (TS-idiomatic).
       if (
@@ -989,6 +1217,17 @@ export class Analyzer {
         this.funcsByName.has(e.expression.name.text)
       ) {
         const c = this.checkInternalCall(e, e.expression.name.text, true);
+        if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
+        return;
+      }
+      // F6: `this.f<T>(args)` generic internal call as a statement.
+      if (
+        ts.isCallExpression(e) &&
+        ts.isPropertyAccessExpression(e.expression) &&
+        e.expression.expression.kind === ts.SyntaxKind.ThisKeyword &&
+        this.genericsByName.has(e.expression.name.text)
+      ) {
+        const c = this.checkGenericCall(e, e.expression.name.text, true);
         if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
         return;
       }
@@ -4280,6 +4519,8 @@ export class Analyzer {
       if (st && st.kind === 'struct') return this.checkStructConstruct(node, st);
       // an internal/private/public contract function called by name -> internal call.
       if (this.funcsByName.has(callee)) return this.checkInternalCall(node, callee, false);
+      // F6: a generic internal call `f<T>(x)` / `f(x)` in value position.
+      if (this.genericsByName.has(callee)) return this.checkGenericCall(node, callee, false);
     }
 
     // `this.method(args)` (TS-idiomatic internal call) -> internal-call semantics.
@@ -4290,6 +4531,15 @@ export class Analyzer {
       this.funcsByName.has(node.expression.name.text)
     ) {
       return this.checkInternalCall(node, node.expression.name.text, false);
+    }
+    // F6: `this.f<T>(args)` generic internal call in value position.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      this.genericsByName.has(node.expression.name.text)
+    ) {
+      return this.checkGenericCall(node, node.expression.name.text, false);
     }
 
     // object literal { ...base, x: v } / { x: 1n, y: 2n } -> struct construction when the

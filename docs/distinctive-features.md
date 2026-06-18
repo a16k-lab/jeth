@@ -260,6 +260,34 @@ the compiler flags every switch that no longer covers it. A duplicate constant c
 dead arm and is rejected (`JETH287`). Enum semantics themselves match Solidity exactly (ABI
 `uint8`, 1-byte storage, `Panic(0x21)` on an out-of-range explicit conversion).
 
+### Generics (compile-time monomorphization)
+
+Solidity has no generics; JETH adds type-safe generic **internal** functions, monomorphized at
+compile time (each concrete instantiation generates a specialized copy, exactly like a hand-written
+type-specific function, so there is zero runtime cost and the result is byte-identical to solc).
+
+```ts
+@contract class C {
+  @hidden max<T>(a: T, b: T): T { return a > b ? a : b; }     // one definition...
+  @hidden clamp<T>(v: T, lo: T, hi: T): T { return this.max(this.min(v, hi), lo); }
+  @hidden min<T>(a: T, b: T): T { return a < b ? a : b; }
+  @external @pure capU(v: u256, hi: u256): u256 { return this.min(v, hi); }   // ...used at u256
+  @external @pure capByte(v: u8, hi: u8): u8 { return this.min(v, hi); }      // ...and at u8
+}
+```
+
+Each distinct concrete type the generic is used with (here `u256` and `u8`) produces one specialized
+internal function; instantiations are deduplicated and the body is type-checked **per instantiation**
+(an operation invalid for some `T` is an error only at that instantiation, while other valid
+instantiations still compile). Type arguments are inferred from the value arguments, or given
+explicitly (`this.max<u256>(a, b)`). Type arguments must be value types (`uintN` / `intN` / `bool` /
+`address` / `bytesN` / an enum / a branded newtype). Generics are internal-only: a generic
+`@external` / `@public` function is rejected (`JETH290`), since a generic type is not expressible in
+the ABI, and no generic or specialization ever appears in the ABI. Monomorphization is bounded (the
+value-type universe is finite and recursion at a fixed type closes through the dedup cache), and a
+specialization whose mangled name would collide with a user function is rejected rather than silently
+overwritten.
+
 ## 4. Where JETH is *more capable* than the Solidity compiler
 
 JETH always compiles through Yul (solc's IR pipeline), which schedules the EVM's 1024-slot
