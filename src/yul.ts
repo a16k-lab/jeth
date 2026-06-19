@@ -1420,7 +1420,14 @@ ${indent(runtime, 6)}
       case 'arrayLit': {
         // a MEMORY T[] (value elements): build [len][e0][e1]...] at the free pointer; the
         // register value IS the pointer. (The ABI-return form is handled by encodeArrayReturn.)
-        const vals = e.elements.map((el) => this.lowerExpr(el, ctx, out));
+        // FREEZE each element into a register FIRST (left-to-right): an element may be a call that
+        // itself allocates memory via mload(0x40), so its allocation must bump the free pointer
+        // BEFORE we claim the array region - otherwise the callee overwrites the array.
+        const vals = e.elements.map((el) => {
+          const r = this.fresh();
+          out.push(`let ${r} := ${this.lowerExpr(el, ctx, out)}`);
+          return r;
+        });
         const ptr = this.fresh();
         out.push(`let ${ptr} := mload(0x40)`);
         out.push(`mstore(${ptr}, ${vals.length})`);

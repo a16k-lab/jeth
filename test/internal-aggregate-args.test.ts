@@ -23,6 +23,8 @@ describe('aggregate param/return through an internal call (JETH242/243) vs solc'
     @internal twice(xs: u256[]): u256 { return this.sum(xs) + this.sum(xs); }
     @internal mkB(): bytes { let s: bytes = "hello world, JETH"; return s; }
     @internal blen(b: bytes): u256 { return b.length; }
+    @internal alloc(n: u256): u256 { let z: u256[] = [n * 10n, n * 20n, n * 30n]; return z[1n]; }
+    @internal litCall(n: u256): u256[] { let m: u256[] = [this.alloc(n), n, this.alloc(n + 1n)]; return m; }
     @external @pure sumCd(a: u256[]): u256 { return this.sum(a); }
     @external @pure nsumCd(a: u64[]): u256 { return this.nsum(a); }
     @external @pure sumMem(): u256 { let m: u256[] = [10n, 20n, 30n]; return this.sum(m); }
@@ -34,6 +36,7 @@ describe('aggregate param/return through an internal call (JETH242/243) vs solc'
     @external @pure mkBytes(): bytes { return this.mkB(); }
     @external @pure blenCd(b: bytes): u256 { return this.blen(b); }
     @external @pure emptySum(a: u256[]): u256 { return this.sum(a); }
+    @external @pure litCallRet(n: u256): u256[] { return this.litCall(n); }
     @state s: u256[];
     @external pushS(v: u256): void { this.s.push(v); }
     @external @view sumStore(): u256 { return this.sum(this.s); } }`;
@@ -47,6 +50,8 @@ contract C {
   function twice(uint256[] memory xs) internal pure returns (uint256) { return sum(xs)+sum(xs); }
   function mkB() internal pure returns (bytes memory) { return "hello world, JETH"; }
   function blen(bytes memory b) internal pure returns (uint256) { return b.length; }
+  function alloc(uint256 n) internal pure returns (uint256) { uint256[] memory z=new uint256[](3); z[0]=n*10;z[1]=n*20;z[2]=n*30; return z[1]; }
+  function litCall(uint256 n) internal pure returns (uint256[] memory) { uint256[] memory m=new uint256[](3); m[0]=alloc(n); m[1]=n; m[2]=alloc(n+1); return m; }
   function sumCd(uint256[] calldata a) external pure returns (uint256) { return sum(a); }
   function nsumCd(uint64[] calldata a) external pure returns (uint256) { return nsum(a); }
   function sumMem() external pure returns (uint256) { uint256[] memory m=new uint256[](3); m[0]=10;m[1]=20;m[2]=30; return sum(m); }
@@ -58,6 +63,7 @@ contract C {
   function mkBytes() external pure returns (bytes memory) { return mkB(); }
   function blenCd(bytes calldata b) external pure returns (uint256) { return blen(b); }
   function emptySum(uint256[] calldata a) external pure returns (uint256) { return sum(a); }
+  function litCallRet(uint256 n) external pure returns (uint256[] memory) { return litCall(n); }
   uint256[] s;
   function pushS(uint256 v) external { s.push(v); }
   function sumStore() external view returns (uint256) { return sum(s); } }`;
@@ -101,5 +107,10 @@ contract C {
   it('bytes/string param + return compose with the external encoder', async () => {
     await cmp('0x' + sel('mkBytes()'), 'mkBytes');
     await cmp('0x' + sel('blenCd(bytes)') + pad32(0x20n) + pad32(11n) + 'aabbccddeeff0011223344'.padEnd(64, '0'), 'blenCd');
+  });
+  it('a memory-array LITERAL with a memory-allocating CALL element is not corrupted (pre-existing fix)', async () => {
+    // [this.alloc(n), n, this.alloc(n+1)]: each call element itself allocates a temp array. The
+    // literal must freeze elements before claiming its region so a callee alloc cannot overwrite it.
+    for (const n of [1n, 3n, 7n]) await cmp('0x' + sel('litCallRet(uint256)') + pad32(n), `litCall(${n})`);
   });
 });
