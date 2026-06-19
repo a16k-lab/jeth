@@ -12,7 +12,7 @@ import { compileSolidity } from './_solidity.js';
 const sel = (s: string) => functionSelector(s);
 // build calldata for a function whose FIRST param is S{a: uint256, xs: uint256[]} (dynamic) and an
 // optional trailing uint256. head = [off_s][trailing?]; s tuple at off_s = [a][off_xs=0x40][len][e..].
-const buildS = (selStr: string, a: bigint, xs: bigint[], trailing?: bigint, dirtyFirst = false): string => {
+const buildS = (selStr: string, a: bigint, xs: readonly bigint[], trailing?: bigint, dirtyFirst = false): string => {
   const e0 = dirtyFirst && xs.length ? ('ff' + pad32(xs[0]!).slice(2)) : (xs.length ? pad32(xs[0]!) : '');
   const elems = xs.map((v, k) => (k === 0 ? e0 : pad32(v))).join('');
   const tuple = pad32(a) + pad32(0x40n) + pad32(BigInt(xs.length)) + elems;
@@ -70,5 +70,16 @@ contract C {
     await cmp(buildS('nidx((uint256,uint64[]),uint256)', 7n, [5n, 6n, 7n], 1n), 'nidx clean');
     // dirty high bits in the first u64 element: solc validates the read element and reverts
     await cmp(buildS('nidx((uint256,uint64[]),uint256)', 7n, [5n, 6n, 7n], 0n, true), 'nidx dirty[0] read');
+  });
+  it('MALFORMED calldata reverts byte-identically (array payload-fit + unsigned offset, not the bytes decode)', async () => {
+    // The array field must be decoded with the ARRAY helper (len*stride payload-fit + unsigned offset
+    // bound), NOT the bytes/string helper (len+0x20 + signed offset). solc EMPTY-reverts on all three.
+    const SL = 'len((uint256,uint256[]))';
+    // (1) truncated tail: declares len=5 but supplies only 2 element words
+    await cmp('0x' + sel(SL) + pad32(0x20n) + pad32(7n) + pad32(0x40n) + pad32(5n) + pad32(1n) + pad32(2n), 'truncated tail');
+    // (2) offset wrap: off_xs = 2^256 - 32 (a wrapped/negative offset)
+    await cmp('0x' + sel(SL) + pad32(0x20n) + pad32(7n) + pad32((1n << 256n) - 32n) + pad32(2n) + pad32(1n) + pad32(2n), 'offset wrap');
+    // (3) offset 0: the length word overlaps the leading scalar field (len = a = 7, no payload)
+    await cmp('0x' + sel(SL) + pad32(0x20n) + pad32(7n) + pad32(0n) + pad32(1n) + pad32(2n), 'offset 0');
   });
 });

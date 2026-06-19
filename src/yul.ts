@@ -2088,14 +2088,16 @@ ${indent(runtime, 6)}
     if (arr.base.kind === 'cdDynArrayField') {
       // a dynamic value-array field of a calldata dynamic-struct param (s.xs): the field's head slot
       // holds an offset (relative to the containing tuple start) to the array's [len][elems]. Decode
-      // via calldataDynAt (the same validated decode the bytes/string field uses), then index it.
+      // with the ARRAY helper (unsigned offset bound + FULL len*stride payload-fit), NOT the
+      // bytes/string helper (which checks len+0x20 bytes and a signed offset) - matching solc's
+      // array-member decode. stride = 0x20 (value elements are one ABI word each).
       const place = arr.base.place;
       const base = this.lowerCdDynBase(place, ctx, out);
       const last = place.steps[place.steps.length - 1]!;
       const offPtr = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
       const dataPtr = this.fresh();
       const len = this.fresh();
-      out.push(`let ${dataPtr}, ${len} := ${this.calldataDynAt()}(${base}, ${offPtr})`);
+      out.push(`let ${dataPtr}, ${len} := ${this.calldataArrayAt()}(${base}, ${offPtr}, 0x20)`);
       return { src: 'calldata', offset: dataPtr, length: len, elem: arr.elem };
     }
     if (arr.base.kind === 'memArray') {
@@ -3812,6 +3814,28 @@ ${indent(runtime, 6)}
       this.helpers.set(name, `function ${name}(off, stride) -> dataOff, len {
   if gt(off, 0xffffffffffffffff) { revert(0, 0) }
   let p := add(4, off)
+  if iszero(slt(add(p, 0x1f), calldatasize())) { revert(0, 0) }
+  len := calldataload(p)
+  if gt(len, 0xffffffffffffffff) { revert(0, 0) }
+  dataOff := add(p, 0x20)
+  if gt(add(dataOff, mul(len, stride)), calldatasize()) { revert(0, 0) }
+}`);
+    }
+    return name;
+  }
+
+  /** Decode a dynamic VALUE-array field of a calldata dynamic struct: the offset word at `offPtr`
+   *  points (relative to the containing tuple `base`, spec 3.2) to the array's [len][elems]. Mirrors
+   *  solc's array-member decode: UNSIGNED offset bound, length-word readable, and the FULL len*stride
+   *  payload must fit within calldatasize (unlike the bytes/string helper jeth_calldata_dyn_at, which
+   *  validates len+0x20 bytes and uses a SIGNED offset check). Returns (dataOff, len). */
+  private calldataArrayAt(): string {
+    const name = 'jeth_calldata_array_at';
+    if (!this.helpers.has(name)) {
+      this.helpers.set(name, `function ${name}(base, offPtr, stride) -> dataOff, len {
+  let off := calldataload(offPtr)
+  if gt(off, 0xffffffffffffffff) { revert(0, 0) }
+  let p := add(base, off)
   if iszero(slt(add(p, 0x1f), calldatasize())) { revert(0, 0) }
   len := calldataload(p)
   if gt(len, 0xffffffffffffffff) { revert(0, 0) }
