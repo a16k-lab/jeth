@@ -4788,6 +4788,9 @@ export class Analyzer {
       return undefined;
     }
     if (!isInteger(target)) {
+      // solc allows ONLY the literal 0 to implicitly convert to bytesN (its zero value, an all-zero
+      // left-aligned word); any other integer literal -> bytesN needs an explicit bytesN(...) cast.
+      if (target.kind === 'bytesN' && lit.value === 0n) return { ...lit, type: target };
       this.diags.error(node, 'JETH084', `cannot use integer literal as ${displayName(target)}`);
       return undefined;
     }

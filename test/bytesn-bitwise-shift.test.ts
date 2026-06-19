@@ -101,4 +101,14 @@ describe('bytesN bitwise/shift + signedness + bool-cast conformance', () => {
     expect(codes('@contract class C { @external @pure f(a: u8, n: u8): u8 { return a << n; } }')).toEqual([]);
     expect(codes('@contract class C { @external @pure f(a: u8, b: u8): u8 { return a & b; } }')).toEqual([]);
   });
+
+  it('the literal 0 implicitly converts to bytesN like solc; any other literal does not', async () => {
+    expect(codes('@contract class C { @external @pure f(): bytes32 { return 0n; } }')).toEqual([]);     // solc accepts
+    expect(codes('@contract class C { @external @pure f(): bytes4 { let b: bytes4 = 0n; return b; } }')).toEqual([]);
+    expect(codes('@contract class C { @external @pure f(): bytes32 { return 1n; } }')).toContain('JETH084'); // only 0
+    // runtime: 0n -> bytes32 is the all-zero word
+    const J0 = '@contract class C { @external @pure z(): bytes32 { return 0n; } }';
+    const h0 = await Harness.create(); const a0 = await h0.deploy(compile(J0, { fileName: 'C.jeth' }).creationBytecode);
+    expect((await h0.call(a0, '0x' + sel('z()'))).returnHex).toBe('0x' + '0'.repeat(64));
+  });
 });
