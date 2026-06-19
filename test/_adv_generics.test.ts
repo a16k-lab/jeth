@@ -563,20 +563,18 @@ describe('F6-adv 6: per-instantiation error isolation (no crash, valid sibling u
     expect(o.codes).toContain('JETH082');
   });
 
-  // OBSERVATION (pre-existing, NOT a generics defect): JETH accepts `a > b` on bool even in a
-  // NON-generic function (`@external f(a:bool,b:bool):bool { return a > b; }` compiles), whereas
-  // solc rejects ordering on bool. This is a language-level lint gap that predates F6: the generic
-  // `>`-at-bool instantiation inherits the same lenient behavior (it compiles), so it is consistent,
-  // not a monomorphization-specific miscompile. Pinned here so a future tightening is noticed.
-  it('bool `>` over-acceptance is a pre-existing lint gap, identical generic vs non-generic', () => {
+  // REGRESSION (was a pre-existing lint gap, now FIXED): solc rejects ordering (< > <= >=) on bool
+  // ("operator > cannot be applied to types bool and bool"); JETH now rejects it too (JETH082). The
+  // generic `>`-at-bool instantiation inherits the same rejection (the bool-ordering check fires when
+  // the specialized body is checked), so generic and non-generic behave identically.
+  it('bool `>` is rejected (JETH082) identically for generic and non-generic', () => {
     const nonGen = `@contract class C { @external @pure f(a: bool, b: bool): bool { return a > b; } }`;
     const gen = `@contract class C {
       @hidden g<T>(a: T, b: T): bool { return a > b; }
       @external @pure f(a: bool, b: bool): bool { return this.g(a, b); }
     }`;
-    // both accept it: the generic path does not ADD unsoundness beyond the existing non-generic gap
-    expect(errCodes(nonGen)).toEqual([]);
-    expect(errCodes(gen)).toEqual([]);
+    expect(errCodes(nonGen)).toContain('JETH082');
+    expect(errCodes(gen)).toContain('JETH082');
   });
   it('`a + b` invalid at address, valid sibling at u256 compiles in isolation', () => {
     const okOnly = `@contract class C {

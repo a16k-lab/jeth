@@ -4673,6 +4673,13 @@ export class Analyzer {
     if (this.isComparison(op)) {
       const unified = this.unifyOperands(left, right, node);
       if (!unified) return undefined;
+      // ORDERED comparisons (< > <= >=) need an ordered type. solc allows them on int/uint,
+      // address, bytesN, and enums, but REJECTS them on bool (only == / != are valid on bool):
+      // "Built-in binary operator > cannot be applied to types bool and bool."
+      if (op !== '==' && op !== '!=' && unified[0].type.kind === 'bool') {
+        this.diags.error(node, 'JETH082', `operator '${op}' cannot be applied to bool operands (only == and != are valid on bool)`);
+        return undefined;
+      }
       return { kind: 'binary', type: BOOL, op, left: unified[0], right: unified[1], unchecked: false };
     }
 
