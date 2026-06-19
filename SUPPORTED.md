@@ -207,8 +207,11 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   string/bytes), and `a.length`. Outer offset base = calldata byte 4; element offsets
   relative to the table start (word after the length word); two inclusive range checks
   per dynamic level; `i >= len` -> Panic(0x32); any layout fault -> EMPTY revert.
-  Byte-identical to Solidity (differentially verified). `string[][]`, fixed
-  `string[N]`, and `string[]` struct fields are rejected with a diagnostic.
+  Byte-identical to Solidity (differentially verified). These COMPOSE through the recursive
+  codec (4e-5): `string[][]` / `string[][][]` and a fixed `Arr<string,N>` (= `string[N]`) also
+  work as a calldata PARAM and RETURN, with `a[i]` / `a[i][j]` element access and `.length`. A
+  `string[]` (or `bytes[]`) inside a STRUCT works as a whole-struct echo / return; the one piece
+  still gated is ELEMENT access into such a field on a calldata param (`s.xs[i]` -> JETH230).
 
 ### Storage / mapping-valued `string[]` / `bytes[]`
 - `@state ss: string[]` / `bytes[]` and `mapping<K, string[]>` / `mapping<K, bytes[]>`:
@@ -222,8 +225,7 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   element reuses the storage bytes/string codec; `pop` fully clears the freed header
   AND its data slots. OOB index `Panic(0x32)`, pop-empty `Panic(0x31)`, push past
   `2^64-1` `Panic(0x41)`. Byte-identical to Solidity incl. raw storage slots
-  (differentially verified). A `string[]` nested deeper (struct field, `string[][]`,
-  fixed `string[N]`) stays gated.
+  (differentially verified).
 
 ### Nested dynamic array `T[][]` (Phase 4e-5)
 - `u256[][]` / `u8[][]` (a dynamic array of dynamic value arrays) as a calldata PARAM
@@ -315,13 +317,17 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 - Short-circuiting `&&` / `||` (RHS not evaluated when it can revert).
 - Non-payable functions reject ETH; unknown selector reverts.
 
-## Not yet supported (rejected with a precise diagnostic - never miscompiled)
+## Post-sweep surface detail (what's supported, with the remaining gates inline)
 
-After the solc-parity sweep, the earlier "storage aggregate" gaps are CLOSED (whole-struct
-field read/write/copy, whole fixed-array/struct return, whole dynamic-array copy, `Arr<D,N>`/
-`Arr<string,N>` storage, storage `u256[][]`/`string[][]`/`D[][]`/`T[][][]`, struct-with-dynamic-
-array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unchecked`,
-`type(T).max`, `++`/`--`, memory value-array locals, multi-value return). Remaining cleanly-gated:
+This section records the detailed post-Phase-4 surface beyond the headline sections above: the
+solc-parity sweep CLOSED the earlier "storage aggregate" gaps (whole-struct field read/write/copy,
+whole fixed-array/struct return, whole dynamic-array copy, `Arr<D,N>`/`Arr<string,N>` storage,
+storage `u256[][]`/`string[][]`/`D[][]`/`T[][][]`, struct-with-dynamic-array-field, general
+numeric/bytes casts, implicit widening, `**`, ternary, `unchecked`, `type(T).max`, `++`/`--`,
+memory value-array locals, multi-value return). The bullets below describe what is now SUPPORTED in
+each area, calling out the few pieces still gated inline; the genuinely-unsupported items are
+consolidated in the **"Still gated"** list at the end. Every gate rejects with a precise diagnostic
+and is never miscompiled.
 - Calldata struct-with-dynamic-array-field FIELD ACCESS (`s.xs[i]` on a param); the whole-struct
   ECHO of such a param works.
 - STATIC struct MEMORY locals are supported (G9): `let p: P = P(...)` construct, value-field read/write
@@ -343,10 +349,11 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
   memory local may also be COPY-initialized from a storage struct (`let d: D = this.st` / `this.m[k]` /
   `this.recs[i]`), a calldata struct parameter (`let d: D = x`, decoded + validated into a fresh image),
   or ALIASED from another struct local (`let e: D = d`, a Solidity memory reference); and a `bytes`/
-  `string` field may be WRITTEN (`d.s = x`, re-pointing the head word at a fresh blob). Still gated:
-  structs with static-array/nested-struct/dynamic-array fields as memory locals; a struct param to a
-  PUBLIC/EXTERNAL callee via an internal call (an external/message call, Phase 6); `new T[](n)` (use an
-  array literal).
+  `string` field may be WRITTEN (`d.s = x`, re-pointing the head word at a fresh blob). A NESTED-STRUCT
+  field works fully in a struct memory local (construct + deep read). Still gated: a struct memory local
+  with a DYNAMIC-array field (JETH200), and ELEMENT access into a FIXED-array field through the local
+  (`s.a[i]`, JETH900); a struct param to a PUBLIC/EXTERNAL callee via an internal call (an external/
+  message call, Phase 6); `new T[](n)` (use an array literal).
 - Tuple destructuring works: `let [a, , c] = src` and `[a, , c] = src` where `src` is a multi-value
   internal call (`this.f()`) or a tuple literal (`[x, y]`, e.g. swap `[a, b] = [b, a]`); new locals,
   existing value lvalues incl. storage, or skipped components; value components only.
@@ -359,11 +366,13 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
   struct or fixed array (`c ? this.x : this.y`, materialized + pointer-selected, incl. nested ternary)
   now work; only a DYNAMIC storage struct/array ternary stays gated (select before the aggregate op).
 - A whole DYNAMIC calldata array / struct param as a COMPONENT of a multi-value return
-  (`return [calldataArrayParam, x]`) now works; a calldata array ELEMENT or a STATIC calldata
-  aggregate component stays gated. Storage and memory-array components also work.
-- Whole FIXED-array storage copy (`this.g = this.src`), whole DYNAMIC inner-array assignment
-  (`this.dd[i] = xs`), and reading a whole fixed-array (`return this.g[i]`) work; assigning a whole
-  FIXED-array element in place (`this.g[i] = arr`) stays gated.
+  (`return [calldataArrayParam, x]`) works, as do element components (incl. a `string[]` element)
+  and storage / memory-array components; only a WHOLE STATIC calldata aggregate (`Arr<T,N>` or a
+  static struct param) as a component stays gated (JETH900).
+- Whole FIXED-array storage copy (`this.g = this.src`), whole STORAGE-source inner-array assignment
+  (`this.dd[i] = this.other`), and reading a whole fixed-array (`return this.g[i]`) work; assigning a
+  whole FIXED-array element in place (`this.g[i] = arr`) and a CALLDATA-source inner-array assignment
+  (`this.dd[i] = xs`) stay gated.
 - Mixed calldata composite element access works: `uint256[2][]` (dynamic-of-fixed) and `uint256[][2]`
   (fixed-of-dynamic) support `a[i]`, `a[i][j]`, `a[i].length`, and whole-param echo (JETH151/210),
   byte-identical incl. malformed-offset/length EMPTY-revert and full N-word head readability.
@@ -390,6 +399,37 @@ array-field, general numeric/bytes casts, implicit widening, `**`, ternary, `unc
 - Phase 5: constructors, modifiers, immutables.
 - Phase 6+: external calls, `address.balance`/`.call`/`.transfer`, `new` contract, inheritance,
   libraries, interfaces, abstract contracts, receive/fallback.
+
+### Still gated (the complete list of what is rejected with a diagnostic, never miscompiled)
+
+Each of the following compiles to a clean compile-time error (verified), not a miscompile:
+- **ELEMENT access into a dynamic-array field of a calldata struct param** (`s.xs[i]` where
+  `xs: u256[]`/`string[]`) - JETH230. The WHOLE-struct echo / return of such a param works.
+- **Aggregate (array / `bytes` / `string`) params or returns through an internal call** - JETH242.
+  Value-typed and static-struct params/returns to `@internal`/`@private` callees work.
+- **A struct param to a PUBLIC/EXTERNAL callee via an internal call** - JETH242 (that is a message
+  call, Phase 6); a struct param to an `@internal`/`@private` callee works (by-reference memory).
+- **A struct memory local with a DYNAMIC-array field** (`u256[]` / `string[]`) - JETH200; and ELEMENT
+  access into a FIXED-array field through such a local (`s.a[i]`) - JETH900. Value-typed,
+  `bytes`/`string`-field, and NESTED-STRUCT-field struct memory locals work fully (G9/G10).
+- **`new T[](n)`** - JETH023 (use an array literal `let xs: u256[] = [...]`).
+- **In-place assignment of a WHOLE fixed-array element** `this.g[i] = arr` - JETH226 (whole fixed-array
+  storage copy `this.g = this.src` and whole STORAGE-source inner-array assignment
+  `this.dd[i] = this.other` work; a CALLDATA-source inner-array assignment `this.dd[i] = xs` is gated).
+- **A WHOLE STATIC calldata aggregate (`Arr<T,N>` or a static struct param) as a multi-value-return
+  component** - JETH900. A whole DYNAMIC calldata array/struct component, element components (incl. a
+  `string[]` element), and storage/memory components all work.
+- **A ternary over a DYNAMIC storage struct / array** - JETH074 (select before the aggregate op;
+  ternary over `bytes`/`string` and over a static struct/fixed array works).
+- **A packed (`<256`-bit) element of a NESTED dynamic array** `this.m[k].dynArr[i]` (the packed
+  fixed-array-through-a-struct-field case `this.q.pts[i]` works).
+- **`msg.data`, and an indexed FIXED-array or struct event param** (indexed `bytes`/`string` and
+  indexed dynamic value-element arrays work, as a keccak topic).
+- **Tuple ABI JSON shape**: struct params/returns render as `(t1,t2)` rather than `type:"tuple"` +
+  `components` (selectors are canonical and correct; this is a JSON-shape gap, not a behavior gap).
+- **Phase 5** (constructors with args, modifiers, immutables) and **Phase 6+** (external/message
+  calls, `address.balance`/`.call`/`.transfer`, `new` contract, inheritance, libraries, interfaces,
+  abstract contracts, receive/fallback).
 
 ## Permanently rejected (no on-chain meaning)
 
