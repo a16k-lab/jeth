@@ -4647,9 +4647,12 @@ export class Analyzer {
       if (!left) return undefined;
       // the exponent of `**` and the amount of a shift are independent (unsigned) values, not
       // unified with the left operand (so `bytes4 x << 4n` treats 4n as a uint, not a bytes4).
-      const rightExpected = op === '**' || op === '<<' || op === '>>'
+      // For `**` and shifts the right operand is an independent unsigned value; for COMPARISONS the
+      // operands take their NATURAL types and unify afterward (so an out-of-range literal is not
+      // force-rejected here but widened to a common type by widenComparisonLiteral, matching solc).
+      const rightExpected = op === '**' || op === '<<' || op === '>>' || this.isComparison(op)
         ? undefined
-        : this.isComparison(op) ? (isInteger(left.type) ? left.type : undefined) : expected ?? left.type;
+        : expected ?? left.type;
       const right = this.checkExpr(node.right, rightExpected);
       if (!right) return undefined;
       return this.buildBinary(op, left, right, node);
@@ -4701,7 +4704,12 @@ export class Analyzer {
     // Comparisons -> bool. Allowed on enums (compares the underlying uint8); two DIFFERENT enums
     // are rejected by the brand-mismatch path inside unifyOperands.
     if (this.isComparison(op)) {
-      const unified = this.unifyOperands(left, right, node);
+      // solc allows comparing an integer variable to an out-of-range literal by widening BOTH to the
+      // smallest common type of the same signedness that holds the literal (a legal, usually-
+      // degenerate comparison: e.g. `uint8 == 256` -> compare in uint16). Try that before the normal
+      // unify (which would emit a range error). A signedness mismatch (e.g. `int8 == 200`, whose
+      // literal's mobile type is unsigned, or `uint8 == -1`) is left to unify, which rejects it.
+      const unified = this.widenComparisonLiteral(left, right) ?? this.unifyOperands(left, right, node);
       if (!unified) return undefined;
       // ORDERED comparisons (< > <= >=) need an ordered type. solc allows them on int/uint,
       // address, bytesN, and enums, but REJECTS them on bool (only == / != are valid on bool):
@@ -4948,6 +4956,34 @@ export class Analyzer {
 
   private isComparison(op: BinOp): boolean {
     return op === '<' || op === '>' || op === '<=' || op === '>=' || op === '==' || op === '!=';
+  }
+
+  /** solc comparison rule for an out-of-range literal: if one operand is an integer VARIABLE and the
+   *  other an integer LITERAL that does not fit the variable's type but fits a WIDER type of the SAME
+   *  signedness (the literal's mobile type), both widen to that common type and the comparison is
+   *  legal. Returns the widened [left, right] pair, or null to fall back to the normal unify (which
+   *  handles the in-range case and rejects a signedness mismatch like `int8 == 200` / `uint8 == -1`). */
+  private widenComparisonLiteral(left: Expr, right: Expr): [Expr, Expr] | null {
+    const fit = (lit: Expr, other: Expr): { common: JethType } | null => {
+      if (lit.kind !== 'literalInt' || lit.kind === other.kind || !isInteger(other.type)) return null;
+      if (this.inRange(lit.value, other.type)) return null; // fits the variable -> normal path
+      const vt = other.type as { kind: 'uint' | 'int'; bits: number };
+      if (lit.value >= 0n) {
+        if (vt.kind !== 'uint') return null; // positive literal's mobile type is uint; an int var mismatches
+        for (let m = vt.bits; m <= 256; m += 8) if (lit.value <= (1n << BigInt(m)) - 1n) return { common: { kind: 'uint', bits: m } };
+      } else {
+        if (vt.kind !== 'int') return null; // negative literal's mobile type is int; a uint var mismatches
+        for (let m = vt.bits; m <= 256; m += 8) if (lit.value >= -(1n << BigInt(m - 1))) return { common: { kind: 'int', bits: m } };
+      }
+      return null; // does not fit any type of that signedness -> let unify reject it
+    };
+    // (var OP lit): widen left=var, right=lit
+    const rl = fit(right, left);
+    if (rl) return [{ kind: 'cast', type: rl.common, from: left.type, operand: left }, { ...right, type: rl.common }];
+    // (lit OP var): widen left=lit, right=var
+    const lr = fit(left, right);
+    if (lr) return [{ ...left, type: lr.common }, { kind: 'cast', type: lr.common, from: right.type, operand: right }];
+    return null;
   }
 
   private isAssignmentOperator(kind: ts.SyntaxKind): boolean {
