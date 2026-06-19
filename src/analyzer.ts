@@ -558,14 +558,16 @@ export class Analyzer {
         if (indexed) {
           // an indexed reference-type param becomes a keccak topic. bytes/string: topic =
           // keccak256(content bytes) (G4). A DYNAMIC value-element array: topic =
-          // keccak256(element words) (verified vs solc). Indexed fixed arrays / dynamic-element
-          // arrays / structs are a later step.
+          // keccak256(element words). A STATIC fixed-array / static struct: topic =
+          // keccak256(abi.encode(value)) = keccak over the padded leaf words. All verified vs solc.
+          // A dynamic struct / fixed-array-of-dynamic indexed param stays a later step.
           const indexedArrayOk = t.kind === 'array' && t.length === undefined && isStaticValueType(t.element);
-          if (!isBytesLike(t) && !indexedArrayOk) {
-            this.diags.error(p, 'JETH207', `indexed ${displayName(t)} event parameter '${p.name.text}' is not supported yet (indexed bytes/string or a dynamic value-element array)`);
+          const indexedStaticAgg = isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
+          if (!isBytesLike(t) && !indexedArrayOk && !indexedStaticAgg) {
+            this.diags.error(p, 'JETH207', `indexed ${displayName(t)} event parameter '${p.name.text}' is not supported yet (indexed bytes/string, a dynamic value-element array, or a static fixed-array/struct)`);
             continue;
           }
-          // indexed bytes/string or dynamic value array: allowed (keccak topic, handled in lowerEmit).
+          // indexed bytes/string, dynamic value array, or static fixed-array/struct: allowed (keccak topic).
         } else if (!isBytesLike(t) && !(t.kind === 'array' && t.length === undefined)) {
           this.diags.error(
             p,

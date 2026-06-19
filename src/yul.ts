@@ -1124,6 +1124,13 @@ ${indent(runtime, 6)}
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(add(${mp}, 0x20), ${len})`);
         idxVals.push(topic);
+      } else if (p.indexed && (p.type.kind === 'struct' || (p.type.kind === 'array' && p.type.length !== undefined))) {
+        // an indexed STATIC fixed-array / struct topic is keccak256(abi.encode(value)) = keccak over
+        // the padded leaf words (no length word). Verified byte-identical to solc.
+        const { mp, size } = this.materializeStaticAggToMem(arg, ctx, out);
+        const topic = this.fresh();
+        out.push(`let ${topic} := keccak256(${mp}, ${size})`);
+        idxVals.push(topic);
       } else if (p.indexed && p.type.kind === 'array') {
         // an indexed DYNAMIC value-element array topic is keccak256 of the element words (the
         // ABI tail minus its length word), not the value. Verified byte-identical to solc.
@@ -3164,6 +3171,28 @@ ${indent(runtime, 6)}
     const size = this.fresh();
     out.push(`let ${size} := ${sizeExpr}`);
     return { mp, size };
+  }
+
+  /** Materialize a whole STATIC fixed-array / struct value to a fresh memory blob of ABI-encoded
+   *  padded leaf words (one word per leaf), for an indexed-event keccak topic. Sources: a @state
+   *  fixed array / struct (storage -> abiEncFromStorage) or a whole static calldata aggregate param
+   *  (echoStaticParam). Returns {mp, size}; keccak256(mp, size) == solc's keccak256(abi.encode(v)). */
+  private materializeStaticAggToMem(arg: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
+    if (arg.kind === 'cdAggregateValue') {
+      const { ptr, size } = this.echoStaticParam(arg.param, arg.type, ctx, out);
+      return { mp: ptr, size };
+    }
+    let slot: string;
+    if (arg.kind === 'structValue') slot = String(arg.baseSlot);
+    else if (arg.kind === 'arrayValue' && arg.arr.base.kind === 'fixedArray') slot = String(arg.arr.base.baseSlot);
+    else throw new UnsupportedError(`indexed static-aggregate event arg from '${arg.kind}' is not supported yet`);
+    const dst = this.fresh();
+    out.push(`let ${dst} := mload(0x40)`);
+    const size = this.abiEncFromStorage(arg.type, slot, 0, dst, out);
+    const sz = this.fresh();
+    out.push(`let ${sz} := ${size}`);
+    out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+    return { mp: dst, size: sz };
   }
 
   /** Echo a whole STATIC struct / fixed-array calldata param (G5). The data is INLINE at the
