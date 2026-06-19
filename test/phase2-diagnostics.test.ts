@@ -84,8 +84,9 @@ describe('Phase 2 diagnostics', () => {
     expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256, @indexed b: u256, @indexed c: u256, @indexed d: u256); }`)).toContain('JETH143'); // >3 indexed
     // an indexed dynamic VALUE-element array is now allowed (keccak topic of the element words)
     expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256[]); }`)).toEqual([]);
-    // an indexed FIXED array / struct is still deferred (JETH207)
-    expect(codesFor(`@contract\nclass T { @event E(@indexed a: Arr<u256,2>); }`)).toContain('JETH207');
+    // an indexed FIXED array / static struct is now supported (keccak topic); a DYNAMIC struct stays gated
+    expect(codesFor(`@contract\nclass T { @event E(@indexed a: Arr<u256,2>); }`)).toEqual([]);
+    expect(codesFor(`@struct\nclass D { s: string; }\n@contract\nclass T { @event E(@indexed d: D); }`)).toContain('JETH207');
     // an indexed bytes/string event param is now allowed (keccak topic, G4)
     expect(codesFor(`@contract\nclass T { @event E(@indexed s: string, v: u256); }`)).toEqual([]);
     // a non-indexed string event param is allowed (Phase 4)

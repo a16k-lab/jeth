@@ -535,21 +535,17 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     }
     expect(threw).toBe(true);
   });
-  it('gate: indexed fixed-array event param rejected (JETH207)', () => {
-    let threw = false;
-    try {
-      compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' });
-    } catch (e: any) {
-      threw = true;
-      expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH207');
-    }
-    expect(threw).toBe(true);
+  it('indexed fixed-array event param now compiles (keccak topic, JETH207 lifted)', () => {
+    expect(() => compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' }))
+      .not.toThrow();
   });
-  it('gate: indexed struct event param rejected (JETH207)', () => {
+  it('indexed static-struct event param now compiles; a dynamic struct stays gated (JETH207)', () => {
+    expect(() => compile(`@struct class S { x: u256; }
+@contract class C { @event E(@indexed s: S); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
     let threw = false;
     try {
-      compile(`@struct class S { x: u256; }
-@contract class C { @event E(@indexed s: S); @external f(): void {} }`, { fileName: 'C.jeth' });
+      compile(`@struct class D { s: string; }
+@contract class C { @event E(@indexed d: D); @external f(): void {} }`, { fileName: 'C.jeth' });
     } catch (e: any) {
       threw = true;
       expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH207');

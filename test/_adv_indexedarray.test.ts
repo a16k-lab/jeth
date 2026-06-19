@@ -322,28 +322,21 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
       await eq(`edata([${xs.length}])`, '0x' + sel('edata(uint256[],uint256)') + pad(0x40n) + pad(77n) + arr(xs));
   });
 
-  // ---- 7. gate parity: fixed-array / struct indexed params rejected ------
-  it('fixed-array indexed event param is rejected (JETH207 gate)', () => {
-    let threw = false;
-    try {
-      compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' });
-    } catch (e: any) {
-      threw = true;
-      expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH207');
-    }
-    expect(threw, 'fixed-array indexed param must be rejected').toBe(true);
+  // ---- 7. an indexed STATIC fixed-array / struct param is now SUPPORTED (keccak topic) -----
+  it('fixed-array indexed event param now compiles (keccak topic, JETH207 lifted)', () => {
+    expect(() => compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' }))
+      .not.toThrow();
   });
-  it('struct indexed event param is rejected (JETH207 gate)', () => {
+  it('struct indexed event param now compiles (keccak topic, JETH207 lifted)', () => {
     const src = `@struct class S { x: u256; }
 @contract class C { @event E(@indexed s: S); @external f(): void {} }`;
+    expect(() => compile(src, { fileName: 'C.jeth' })).not.toThrow();
+    // a DYNAMIC struct (bytes/string field) indexed param is still gated (JETH207)
+    const dyn = `@struct class D { s: string; }
+@contract class C { @event E(@indexed d: D); @external f(): void {} }`;
     let threw = false;
-    try {
-      compile(src, { fileName: 'C.jeth' });
-    } catch (e: any) {
-      threw = true;
-      expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH207');
-    }
-    expect(threw, 'struct indexed param must be rejected').toBe(true);
+    try { compile(dyn, { fileName: 'C.jeth' }); } catch (e: any) { threw = true; expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH207'); }
+    expect(threw, 'dynamic-struct indexed param must still be rejected').toBe(true);
   });
   it('nested dynamic array (u256[][]) indexed event param is rejected', () => {
     let threw = false;
