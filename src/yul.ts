@@ -1423,6 +1423,7 @@ ${indent(runtime, 6)}
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
       case 'dynStateRead':
       case 'dynParamRead':
+      case 'msgData':
       case 'dynLocalRead':
       case 'memDynField':
       case 'memDynStructValue':
@@ -3504,6 +3505,10 @@ ${indent(runtime, 6)}
         if (!b) throw new UnsupportedError(`unbound dynamic param ${e.name}`);
         return { src: 'calldata', dataPtr: b.dataPtr, len: b.len };
       }
+      case 'msgData':
+        // msg.data is the WHOLE calldata (selector included), so data starts at 0 and
+        // length is calldatasize() (matches solc: msg.data.length == calldatasize()).
+        return { src: 'calldata', dataPtr: '0', len: 'calldatasize()' };
       case 'ternary': {
         // a bytes/string ternary `c ? a : b`: short-circuit (only the taken branch is
         // materialized), then select the [len][data] pointer. Matches Solidity (the untaken

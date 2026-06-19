@@ -77,6 +77,7 @@ export type Expr =
   // --- Phase 4: dynamic bytes/string values (references, not 256-bit words) ---
   | { kind: 'dynStateRead'; type: JethType; slot: number } // this.s (storage)
   | { kind: 'dynParamRead'; type: JethType; name: string } // calldata param (codegen binds ptr/len)
+  | { kind: 'msgData'; type: JethType } // msg.data: a calldata bytes view over the WHOLE calldata [0, calldatasize())
   | { kind: 'dynLocalRead'; type: JethType; name: string } // bytes/string MEMORY local (register holds a [len][data] pointer)
   | { kind: 'stringLiteral'; type: JethType; bytes: Uint8Array } // a memory bytes/string literal
   | { kind: 'dynLength'; type: JethType; operand: Expr } // s.length -> u256

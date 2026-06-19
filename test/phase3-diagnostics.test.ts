@@ -57,9 +57,11 @@ describe('Phase 3 diagnostics', () => {
     expect(codesFor(C('return msg.sig;', '@pure', 'bytes4'))).toEqual([]); // calldata, not env
   });
 
-  it('rejects unknown globals and deferred msg.data', () => {
+  it('rejects unknown globals; msg.data is now supported (a calldata bytes)', () => {
     expect(codesFor(C('return block.foo;', '@view', 'u256'))).toContain('JETH160');
-    expect(codesFor(C('return msg.data;', '@view', 'u256'))).toContain('JETH161');
+    // msg.data is supported now; returning it as a `bytes` compiles cleanly (no JETH161)
+    expect(codesFor(C('return msg.data;', '@pure', 'bytes'))).toEqual([]);
+    expect(codesFor(C('return msg.data.length;', '@pure', 'u256'))).toEqual([]);
   });
 
   it('accepts address(0n) and rejects address(u256)/payable(non-address)', () => {

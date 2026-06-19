@@ -114,6 +114,9 @@ interface RawFunction {
 export class Analyzer {
   // state symbols, available once layout is planned
   private stateByName = new Map<string, StateVar>();
+  // @constant fields: slot-free compile-time constants. The folded literal is inlined at every
+  // read site (no SLOAD, no storage slot), so a @constant never shifts the slot of a @state var.
+  private constantsByName = new Map<string, { value: bigint | boolean; type: JethType }>();
   // @struct declarations (name -> resolved struct type), collected before contracts
   private structsByName = new Map<string, JethType>();
   // contract-level custom error and event tables (collected before function bodies)
@@ -591,12 +594,21 @@ export class Analyzer {
 
   private collectStateVar(member: ts.PropertyDeclaration, out: RawStateVar[]): void {
     const decs = decoratorNames(member);
-    if (!decs.includes('state')) {
-      this.diags.error(member, 'JETH045', 'contract fields must be marked @state');
+    const isConstant = decs.includes('constant');
+    if (!decs.includes('state') && !isConstant) {
+      this.diags.error(member, 'JETH045', 'contract fields must be marked @state (or @constant)');
+      return;
+    }
+    if (decs.includes('state') && isConstant) {
+      this.diags.error(member, 'JETH052', 'a field cannot be both @state and @constant');
       return;
     }
     if (!ts.isIdentifier(member.name)) {
-      this.diags.error(member, 'JETH046', 'state variable name must be a plain identifier');
+      this.diags.error(member, 'JETH046', `${isConstant ? 'constant' : 'state variable'} name must be a plain identifier`);
+      return;
+    }
+    if (isConstant) {
+      this.collectConstant(member);
       return;
     }
     const type = resolveType(member.type, this.diags, this.structsByName);
@@ -642,6 +654,34 @@ export class Analyzer {
       }
     }
     out.push({ name: member.name.text, type, initialValue });
+  }
+
+  // A `@constant` is a slot-free compile-time constant (solc's `type constant NAME = value`): the
+  // folded literal is substituted at each read site, it consumes NO storage slot, and it is absent
+  // from the ABI (solc generates no getter for a constant). Scoped to value-type constants
+  // (uintN/intN/bool/address/bytesN); a bytes/string/aggregate constant stays a clean over-rejection.
+  private collectConstant(member: ts.PropertyDeclaration): void {
+    const name = (member.name as ts.Identifier).text;
+    const type = resolveType(member.type, this.diags, this.structsByName);
+    if (!type) return;
+    if (!isStaticValueType(type)) {
+      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported (only value-type constants: uintN/intN/bool/address/bytesN)`);
+      return;
+    }
+    if (!member.initializer) {
+      this.diags.error(member, 'JETH048', `@constant '${name}' requires a constant initializer`);
+      return;
+    }
+    const folded = this.foldConstant(member.initializer, type);
+    if (folded === undefined) {
+      this.diags.error(member.initializer, 'JETH048', `@constant '${name}' initializer must be a constant expression`);
+      return;
+    }
+    if (this.constantsByName.has(name)) {
+      this.diags.error(member, 'JETH046', `duplicate @constant '${name}'`);
+      return;
+    }
+    this.constantsByName.set(name, { value: folded, type });
   }
 
   private collectFunction(member: ts.MethodDeclaration): RawFunction | undefined {
@@ -2662,6 +2702,10 @@ export class Analyzer {
 
     // this.stateVar
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      if (this.constantsByName.has(node.name.text)) {
+        this.diags.error(node, 'JETH054', `cannot assign to '@constant ${node.name.text}'`);
+        return undefined;
+      }
       const v = this.stateByName.get(node.name.text);
       if (!v) {
         this.diags.error(node, 'JETH065', `unknown state variable 'this.${node.name.text}'`);
@@ -3530,6 +3574,14 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === ts.SyntaxKind.ThisKeyword) {
       return this.stateByName.get(expr.name.text)?.type;
     }
+    // msg.data is a calldata `bytes`, so `msg.data[i]` indexes it like any bytes value (Panic 0x32 OOB).
+    if (
+      ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression) &&
+      expr.expression.text === 'msg' && expr.name.text === 'data' &&
+      !this.isVisibleLocal('msg') && !this.stateByName.has('msg')
+    ) {
+      return { kind: 'bytes' };
+    }
     if (ts.isIdentifier(expr)) return this.lookupLocal(expr.text);
     return undefined;
   }
@@ -3735,13 +3787,14 @@ export class Analyzer {
   private checkGlobal(node: ts.PropertyAccessExpression): Expr | undefined {
     const obj = (node.expression as ts.Identifier).text;
     const field = node.name.text;
+    // msg.data: the complete calldata as `bytes` (selector included). Like msg.sig it is calldata,
+    // so it is allowed even in @pure (no env/state read). Modeled as a calldata bytes view.
+    if (obj === 'msg' && field === 'data') {
+      return { kind: 'msgData', type: { kind: 'bytes' } };
+    }
     const entry = GLOBALS[obj]?.[field];
     if (!entry) {
-      if (obj === 'msg' && field === 'data') {
-        this.diags.error(node, 'JETH161', "'msg.data' (bytes) is not supported until Phase 4");
-      } else {
-        this.diags.error(node, 'JETH160', `unknown global '${obj}.${field}'`);
-      }
+      this.diags.error(node, 'JETH160', `unknown global '${obj}.${field}'`);
       return undefined;
     }
     if (entry.cat === 'value') {
@@ -4168,6 +4221,14 @@ export class Analyzer {
         this.currentReadsState = true;
         return { kind: 'stateRead', type: f.type, slot: sv.slot + f.slot, offset: f.offset, varName: `${sv.name}.${f.name}` };
       }
+    }
+
+    // this.CONSTANT (read): inline the folded literal (no SLOAD; @constant is slot-free, like solc).
+    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && this.constantsByName.has(node.name.text)) {
+      const c = this.constantsByName.get(node.name.text)!;
+      return typeof c.value === 'boolean'
+        ? { kind: 'literalBool', type: c.type, value: c.value }
+        : { kind: 'literalInt', type: c.type, value: c.value };
     }
 
     // this.stateVar (read)
