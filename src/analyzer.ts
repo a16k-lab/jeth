@@ -3833,6 +3833,8 @@ export class Analyzer {
     if ((from.kind === 'uint' || from.kind === 'int') && (to.kind === 'uint' || to.kind === 'int')) {
       return from.kind === to.kind || from.bits === to.bits;
     }
+    // bool(x) identity self-cast (a no-op; solc accepts bool -> bool).
+    if (from.kind === 'bool' && to.kind === 'bool') return true;
     // bytesN <-> bytesM (any size: truncate / zero-pad, left-aligned).
     if (from.kind === 'bytesN' && to.kind === 'bytesN') return true;
     // uintN <-> bytesM of the SAME byte size (uint256<->bytes32, uint32<->bytes4, ...).
@@ -4619,8 +4621,11 @@ export class Analyzer {
       }
       const left = this.checkExpr(node.left, expected);
       if (!left) return undefined;
-      // the exponent of `**` is an independent (unsigned) value, not unified with the base.
-      const rightExpected = op === '**' ? undefined : this.isComparison(op) ? (isInteger(left.type) ? left.type : undefined) : expected ?? left.type;
+      // the exponent of `**` and the amount of a shift are independent (unsigned) values, not
+      // unified with the left operand (so `bytes4 x << 4n` treats 4n as a uint, not a bytes4).
+      const rightExpected = op === '**' || op === '<<' || op === '>>'
+        ? undefined
+        : this.isComparison(op) ? (isInteger(left.type) ? left.type : undefined) : expected ?? left.type;
       const right = this.checkExpr(node.right, rightExpected);
       if (!right) return undefined;
       return this.buildBinary(op, left, right, node);
@@ -4647,8 +4652,9 @@ export class Analyzer {
         }
         return { kind: 'unary', type: BOOL, op: '!', operand, unchecked: false };
       case ts.SyntaxKind.TildeToken:
-        if (!isInteger(operand.type)) {
-          this.diags.error(node, 'JETH077', `unary '~' requires an integer`);
+        // ~ is a bit-vector complement: solc allows it on integers AND fixed bytes (bytesN).
+        if (!isInteger(operand.type) && operand.type.kind !== 'bytesN') {
+          this.diags.error(node, 'JETH077', `unary '~' requires an integer or bytesN, got ${displayName(operand.type)}`);
           return undefined;
         }
         return { kind: 'unary', type: operand.type, op: '~', operand, unchecked: false };
@@ -4692,10 +4698,16 @@ export class Analyzer {
       return undefined;
     }
 
-    // Shifts: amount may be any unsigned int; result type follows the left operand.
+    // Shifts: the value may be an integer OR a bytesN (bit-vector shift, like solc); the result
+    // type follows the left operand. The amount must be an UNSIGNED integer - solc rejects a signed
+    // shift amount ("the type of the shift amount ... must be unsigned").
     if (op === '<<' || op === '>>') {
-      if (!isInteger(left.type)) {
-        this.diags.error(node, 'JETH081', `shift requires an integer left operand`);
+      if (!isInteger(left.type) && left.type.kind !== 'bytesN') {
+        this.diags.error(node, 'JETH081', `shift requires an integer or bytesN left operand, got ${displayName(left.type)}`);
+        return undefined;
+      }
+      if (right.type.kind !== 'uint') {
+        this.diags.error(node, 'JETH081', `shift amount must be an unsigned integer, got ${displayName(right.type)}`);
         return undefined;
       }
       return { kind: 'binary', type: left.type, op, left, right, unchecked: this.currentUnchecked };
@@ -4712,14 +4724,22 @@ export class Analyzer {
         this.diags.error(node, 'JETH082', `'**' requires an integer exponent, got ${displayName(right.type)}`);
         return undefined;
       }
+      // solc rejects a SIGNED exponent ("Exponentiation power is not allowed to be a signed type").
+      if (right.type.kind === 'int') {
+        this.diags.error(node, 'JETH082', `'**' exponent cannot be a signed integer (solc requires an unsigned power), got ${displayName(right.type)}`);
+        return undefined;
+      }
       return { kind: 'binary', type: left.type, op, left, right, unchecked: this.currentUnchecked };
     }
 
-    // Arithmetic / bitwise: operands must match an integer type.
+    // Bitwise & | ^ : operands may be integer OR bytesN (bit-vector ops, like solc). Arithmetic
+    // + - * / % : integer operands only.
     const unified = this.unifyOperands(left, right, node);
     if (!unified) return undefined;
-    if (!isInteger(unified[0].type)) {
-      this.diags.error(node, 'JETH082', `operator '${op}' requires integer operands, got ${displayName(unified[0].type)}`);
+    const isBitwise = op === '&' || op === '|' || op === '^';
+    const ok = isBitwise ? (isInteger(unified[0].type) || unified[0].type.kind === 'bytesN') : isInteger(unified[0].type);
+    if (!ok) {
+      this.diags.error(node, 'JETH082', `operator '${op}' requires ${isBitwise ? 'integer or bytesN' : 'integer'} operands, got ${displayName(unified[0].type)}`);
       return undefined;
     }
     return { kind: 'binary', type: unified[0].type, op, left: unified[0], right: unified[1], unchecked: this.currentUnchecked };

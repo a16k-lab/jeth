@@ -67,6 +67,11 @@ function uintMaxHex(bits: number): string {
 function bytesNLowMaskHex(size: number): string {
   return '0x' + ((1n << BigInt((32 - size) * 8)) - 1n).toString(16);
 }
+/** Mask of the high `size` bytes: the data region of a left-aligned bytesN (used to keep the
+ *  padding region zero after `~` / `>>` whose word-level op would otherwise dirty the low bytes). */
+function bytesNHighMaskHex(size: number): string {
+  return '0x' + (((1n << BigInt(size * 8)) - 1n) << BigInt((32 - size) * 8)).toString(16);
+}
 /** Big-endian 32-byte word from `bytes` at `start`, right zero-padded (matches
  *  Solidity's left-aligned string/bytes tail words). */
 function wordFromBytes(bytes: Uint8Array, start: number): string {
@@ -4226,6 +4231,8 @@ ${indent(runtime, 6)}
     // narrow value is already a valid wider value (uint: high bits 0; int: sign-extended;
     // bytesN: left-aligned), so the conversion is a no-op at the word level.
     if (isImplicitWiden(from, to)) return v;
+    // bool(x) identity self-cast: a bool is already a canonical 0/1 word, so the conversion is a no-op.
+    if (from.kind === 'bool' && to.kind === 'bool') return v;
     // integer <-> integer (explicit). uint target -> keep low toBits; int target ->
     // sign-extend the low toBits. Same-size int<->uint reinterprets the bits.
     if ((from.kind === 'uint' || from.kind === 'int') && (to.kind === 'uint' || to.kind === 'int')) {
@@ -4266,6 +4273,8 @@ ${indent(runtime, 6)}
         const not = `not(${operand})`;
         // keep uintN in range after complement
         if (e.type.kind === 'uint' && e.type.bits < 256) return `and(${not}, ${uintMaxHex(e.type.bits)})`;
+        // bytesN ~: keep the low padding bytes zero (not(..) would set them to ff), matching solc.
+        if (e.type.kind === 'bytesN' && e.type.size < 32) return `and(${not}, ${bytesNHighMaskHex(e.type.size)})`;
         return not;
       }
       case '-': {
@@ -4349,7 +4358,11 @@ ${indent(runtime, 6)}
         return res;
       }
       case '>>':
-        return opType.kind === 'int' ? `sar(${r}, ${l})` : `shr(${r}, ${l})`;
+        if (opType.kind === 'int') return `sar(${r}, ${l})`;
+        // bytesN >> n: shr leaks data bits into the low padding region; mask back to the high
+        // `size` bytes so the result stays a canonical left-aligned bytesN (byte-identical to solc).
+        if (opType.kind === 'bytesN' && opType.size < 32) return `and(shr(${r}, ${l}), ${bytesNHighMaskHex(opType.size)})`;
+        return `shr(${r}, ${l})`;
       case '<':
         return opType.kind === 'int' ? `slt(${l}, ${r})` : `lt(${l}, ${r})`;
       case '>':
