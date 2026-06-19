@@ -44,8 +44,9 @@ describe('Phase 2 diagnostics', () => {
     expect(codesFor(fn('for (let i: u256 of xs) {}'))).toContain('JETH116');
   });
 
-  it('rejects a local that shadows an outer-scope variable', () => {
-    expect(codesFor(fn('let a: u256 = 1n; if (a > 0n) { let a: u256 = 2n; }'))).toContain('JETH068');
+  it('allows a nested local to shadow an outer-scope variable (like solc), but rejects same-scope redeclaration', () => {
+    expect(codesFor(fn('let a: u256 = 1n; if (a > 0n) { let a: u256 = 2n; }'))).toEqual([]); // cross-scope shadow: allowed
+    expect(codesFor(fn('let a: u256 = 1n; let a: u256 = 2n;'))).toContain('JETH068');        // same-scope redecl: rejected
   });
 
   it('allows disjoint sibling blocks to reuse a name', () => {

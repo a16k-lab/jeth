@@ -495,16 +495,24 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
     // switch). The if/else twin `if (x == y)` is exactly equivalent, so it is NOT a miscompile.
     expect(codes(wrap('switch (x) { case x: return 1n; default: return 0n; }'))).toEqual([]);
   });
-  it('CHARACTERIZE: a user local that collides with the synthesized temp is a LOUD error, not a miscompile', () => {
-    // The desugar names its discriminant temp `__jeth_sw_<n>`. That name lives in the user-reachable
-    // namespace, so a user who happens to declare `__jeth_sw_0` and then writes the FIRST switch in
-    // the function collides with the synthesized const. JETH rejects this with JETH068 (redeclaration
-    // / no shadowing). Crucially it never silently miscompiles: the collision is caught at compile
-    // time. (The counter is monotonic per analyzer, so a second switch uses __jeth_sw_1, etc.)
+  it('SOUNDNESS: a user local that spells the synthesized temp is NOT hijacked (the temp is renamed)', async () => {
+    // The desugar names its discriminant temp `__jeth_sw_<n>`, which lives in the user-reachable
+    // namespace. Cross-scope shadowing is now allowed (matching solc), so naively the synth const in
+    // the switch block would SHADOW the user's `__jeth_sw_0` and `return __jeth_sw_0` would return the
+    // discriminant (x), not 42. `freshSynthName` defends against exactly this: it bumps the counter
+    // past every visible user name, so the synth temp becomes `__jeth_sw_1` and the user's
+    // `__jeth_sw_0` (= 42) is preserved. The contract compiles AND returns 42, byte-identically to the
+    // hand-written `let v = 42; if (x == 1) return v; return 0;` twin.
     const src = `@contract class C { @external @pure f(x: u256): u256 {
       let __jeth_sw_0: u256 = 42n;
       switch (x) { case 1n: return __jeth_sw_0; default: return 0n; }
     } }`;
-    expect(codes(src)).toContain('JETH068');
+    expect(codes(src)).toEqual([]);
+    const h = await Harness.create();
+    const a = await h.deploy(compile(src, { fileName: 'C.jeth' }).creationBytecode);
+    const call1 = await h.call(a, '0x' + sel('f(uint256)') + pad32(1n));
+    const call9 = await h.call(a, '0x' + sel('f(uint256)') + pad32(9n));
+    expect(call1.returnHex).toBe('0x' + pad32(42n)); // case 1 returns the USER's 42, not the discriminant
+    expect(call9.returnHex).toBe('0x' + pad32(0n));  // default returns 0
   });
 });

@@ -1016,9 +1016,14 @@ export class Analyzer {
 
     const body: Stmt[] = [];
     if (rf.node.body) {
+      // The function BODY is a child of the parameter scope, so a body local may shadow a parameter
+      // (solc allows this with only a warning). A same-scope redeclaration is still rejected, and the
+      // shadow resolves innermost-first (the codegen gives each declaration a unique Yul name).
+      this.pushScope();
       for (const s of rf.node.body.statements) {
         this.checkStatement(s, rf.returnType, body);
       }
+      this.popScope();
     }
     this.popScope();
 
@@ -1556,6 +1561,21 @@ export class Analyzer {
   // Monotonic counter for fresh synthesized-loop variable names (deterministic, no RNG).
   private synthCounter = 0;
 
+  /**
+   * Mint a synthesized local name (for-of loop counter, switch discriminant) that cannot collide
+   * with any user-visible variable. Cross-scope shadowing is allowed (matching solc), so a synth
+   * temp declared in a desugared child block would otherwise SHADOW an enclosing user variable of
+   * the same spelling: the user's own references to that name inside the construct would then
+   * silently resolve to our temp (e.g. `let __jeth_sw_0 = 42; switch (x) { case 1n: return
+   * __jeth_sw_0; }` would return the discriminant, not 42). Bumping past every visible name keeps
+   * the synth temp invisible to user code, so the desugar stays sound.
+   */
+  private freshSynthName(prefix: string): string {
+    let name = `${prefix}${this.synthCounter++}`;
+    while (this.isVisibleLocal(name)) name = `${prefix}${this.synthCounter++}`;
+    return name;
+  }
+
   /** Stamp a synthesized AST node with a real source range + parent so diagnostics that
    *  fire on it can still compute a line/column (getStart scans from node.pos). */
   private synth<T extends ts.Node>(n: T, src: ts.Node): T {
@@ -1646,7 +1666,7 @@ export class Analyzer {
     const elemType = probe.type.element;
     const f = ts.factory;
     const S = <T extends ts.Node>(n: T): T => this.synth(n, iterable);
-    const idxName = `__jeth_of_${this.synthCounter++}`;
+    const idxName = this.freshSynthName('__jeth_of_');
     const idx = (): ts.Identifier => S(f.createIdentifier(idxName));
     const initDecl = S(f.createVariableDeclaration(
       idxName, undefined, S(f.createTypeReferenceNode('u256', undefined)), S(f.createBigIntLiteral('0n')),
@@ -1768,7 +1788,7 @@ export class Analyzer {
     // Desugar: `const __sw: T = disc; if (__sw == L..) { body } else if (..) {..} else { default }`.
     const f = ts.factory;
     const S = <T extends ts.Node>(x: T): T => this.synth(x, disc);
-    const swName = `__jeth_sw_${this.synthCounter++}`;
+    const swName = this.freshSynthName('__jeth_sw_');
     const swId = (): ts.Identifier => S(f.createIdentifier(swName));
     const decl = S(f.createVariableDeclaration(swName, undefined, this.jethTypeToTypeNode(dt, disc), disc));
     const declStmt = S(f.createVariableStatement(undefined, S(f.createVariableDeclarationList([decl], ts.NodeFlags.Const))));
@@ -1937,8 +1957,8 @@ export class Analyzer {
     // constructor P(...) or aliased from another memory struct (memAggregate); copies from a
     // storage/calldata source, and dynamic-field structs, are a later step.
     if (declared.kind === 'struct') {
-      if (this.isVisibleLocal(decl.name.text)) {
-        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' (shadowing is not allowed)`);
+      if (this.inCurrentScope(decl.name.text)) {
+        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
         return;
       }
       if (!isStaticType(declared)) {
@@ -2005,8 +2025,8 @@ export class Analyzer {
     // an array literal, another fixed-array memory local (alias), a fixed-array calldata param,
     // or a storage fixed array (copy).
     if (declared.kind === 'array' && declared.length !== undefined && isStaticValueType(declared.element)) {
-      if (this.isVisibleLocal(decl.name.text)) {
-        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' (shadowing is not allowed)`);
+      if (this.inCurrentScope(decl.name.text)) {
+        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
         return;
       }
       if (!decl.initializer) {
@@ -2037,8 +2057,8 @@ export class Analyzer {
     // memory string / a literal); reads route through the bytes/string codec (return, .length,
     // s[i], keccak, emit/error args). Must be initialized (Solidity has no null memory bytes).
     if (isBytesLike(declared)) {
-      if (this.isVisibleLocal(decl.name.text)) {
-        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' (shadowing is not allowed)`);
+      if (this.inCurrentScope(decl.name.text)) {
+        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
         return;
       }
       if (!decl.initializer) {
@@ -2056,8 +2076,8 @@ export class Analyzer {
       out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
-    if (this.isVisibleLocal(decl.name.text)) {
-      this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' (shadowing is not allowed)`);
+    if (this.inCurrentScope(decl.name.text)) {
+      this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
       return;
     }
     // a memory-array local must be initialized (Solidity has no null memory array).
@@ -2395,8 +2415,8 @@ export class Analyzer {
         return;
       }
       const nm = el.name.text;
-      if (this.isVisibleLocal(nm)) {
-        this.diags.error(el, 'JETH068', `redeclaration of '${nm}' (shadowing is not allowed)`);
+      if (this.inCurrentScope(nm)) {
+        this.diags.error(el, 'JETH068', `redeclaration of '${nm}' in the same scope`);
         return;
       }
       this.declareLocal(nm, types[i]!);

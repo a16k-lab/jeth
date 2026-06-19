@@ -431,9 +431,11 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
     expect(errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (var v of this.xs) { s = s + v; } return s; }`)))
       .toContain('JETH115');
   });
-  it('nested for-of with the SAME element name => JETH068 (shadowing, like solc default)', () => {
+  it('nested for-of with the SAME element name compiles (the inner binding shadows the outer, like solc)', () => {
+    // each loop body is its own scope, so the inner `v` shadows the outer `v` (cross-scope shadowing
+    // is allowed, matching solc); the codegen gives each a unique Yul name, so it is sound.
     expect(errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (const v of this.xs) { for (const v of this.xs) { s = s + v; } } return s; }`)))
-      .toContain('JETH068');
+      .toEqual([]);
   });
 
   // Element kind that is NOT supported as a standalone `const v = xs[i]`: a struct element.

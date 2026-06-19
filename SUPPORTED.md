@@ -106,8 +106,10 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 - `switch` (F5): `switch (disc) { case L: ... default: ... }` over a value/enum discriminant evaluated
   once, with exhaustiveness checking over enums and no implicit fall-through (see "Enums + distinctive
   features"). Solidity has no `switch`; JETH's desugars to if/else.
-- Lexical block scoping with a scope stack; shadowing forbidden; labeled break/continue rejected.
-  Fall-through returns the zero value (matches Solidity).
+- Lexical block scoping with a scope stack. A nested local may shadow an outer-scope variable (like
+  solc, which warns but accepts); a redeclaration in the SAME scope is rejected (JETH068). Each
+  declaration gets a unique Yul name, so emitted Yul is always shadow-free. Labeled break/continue
+  rejected. Fall-through returns the zero value (matches Solidity).
 
 ### Reverts & custom errors (Phase 2)
 - `require(cond)`, `require(cond, "msg")`, `revert()`, `revert("msg")` -> byte-exact
@@ -460,9 +462,12 @@ in a struct literal IS supported, F2.)
 - `&&` / `||` short-circuit: the RHS is not evaluated when the result is already
   determined, so a RHS that would revert (e.g. division) does not run, matching
   Solidity.
-- Local variables may not shadow a visible outer variable (rejected; stricter than
-  Solidity, which only warns), but disjoint sibling blocks may reuse a name. Each
-  declaration gets a unique Yul name so emitted Yul is always shadow-free.
+- A nested local may shadow a visible outer variable (accepted, matching solc, which
+  warns but compiles); a redeclaration in the SAME scope is rejected (JETH068), and
+  disjoint sibling blocks may reuse a name. Each declaration gets a unique Yul name so
+  emitted Yul is always shadow-free, so shadowing never miscompiles. The for-of and
+  switch desugars mint their temps with a counter that skips past every visible user
+  name, so a user variable spelled like an internal temp is never hijacked.
 - `require`/`revert` custom-error arguments are evaluated eagerly (unconditionally),
   so an arg that reverts fires even when the condition passes - matches solc, not
   JS short-circuit intuition.

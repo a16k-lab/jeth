@@ -79,13 +79,13 @@ class T {
     expect(codesFor(`@contract\nclass T { @state x: u256 = true; }`)).toContain('JETH087');
   });
 
-  it('rejects a local that shadows a parameter (would emit invalid Yul)', () => {
+  it('allows a local to shadow a parameter (like solc; codegen gives each a unique Yul name)', () => {
     const src = `@contract
 class T {
   @state x: u256 = 0n;
   @external f(a: u256): u256 { let a: u256 = 1n; return a; }
 }`;
-    expect(codesFor(src)).toContain('JETH068');
+    expect(codesFor(src)).toEqual([]); // cross-scope shadow of a parameter is allowed (warning-only in solc)
   });
 
   it('accepts the Counter shape', () => {
