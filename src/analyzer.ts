@@ -2745,13 +2745,10 @@ export class Analyzer {
         this.currentWritesState = true;
         return { kind: 'strArrayElem', type: arr.elem, arr, index: this.coerce(index, U256, node.argumentExpression) };
       }
-      // this.dd[i] = <array> (a whole DYNAMIC inner array element): deep-copy the value
-      // into the inner element's length slot (overwrite-clearing). A FIXED inner-array
-      // element assign (a static aggregate copy) is a later step.
-      if (arr.elem.kind === 'array' && arr.elem.length !== undefined) {
-        this.diags.error(node, 'JETH226', 'assigning a whole fixed-array element is a later step (assign its elements)');
-        return undefined;
-      }
+      // this.dd[i] = <array>: a whole inner-array element write. A DYNAMIC inner array
+      // (`u256[]`) deep-copies into the element's length slot (codegen copyArrayValueIntoStorage);
+      // a FIXED inner array (`Arr<u256,2>`) copies the static aggregate into the element base slot
+      // (codegen copyFixedArray / writeArrayLit) - same source set as the whole-array `this.g = src`.
       // A whole-struct array-element write (this.recs[i] = D(...) / = this.x) is
       // supported: writeStruct/copyStruct lands at the element slot (Panic 0x32 on OOB).
       const index = this.checkExpr(node.argumentExpression, U256);

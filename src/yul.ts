@@ -770,7 +770,15 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'arrayElem' && s.target.type.kind === 'array') {
-          // this.dd[i] = <array> (a whole dynamic inner array element): the element slot
+          if (s.target.type.length !== undefined) {
+            // this.dd[i] = <array> (a whole FIXED inner-array element): copy the static aggregate
+            // into the element BASE slot (base + i*storageSlotCount), like the whole-array assign.
+            const elemBase = this.structArrayElemSlot(s.target.arr, s.target.index, ctx, out);
+            if (s.value.kind === 'arrayLit') this.writeArrayLit(s.value, elemBase, ctx, out);
+            else this.copyFixedArray(s.target.type, this.fixedArraySrcBase(s.value, ctx, out), elemBase, out);
+            break;
+          }
+          // this.dd[i] = <array> (a whole DYNAMIC inner array element): the element slot
           // is the inner array's length slot (data + i*1); deep-copy the value in
           // (overwrite-clearing the old inner array).
           const innerLenSlot = this.structArrayElemSlot(s.target.arr, s.target.index, ctx, out);
@@ -2206,7 +2214,19 @@ ${indent(runtime, 6)}
     out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${ref.lenSlot})`);
     const innerSlot = this.fresh();
     out.push(`let ${innerSlot} := add(${dataBase}, mul(${len}, ${stride}))`);
-    if (value) this.copyArrayValueIntoStorage((arr.elem as JethType & { kind: 'array' }).element, value, innerSlot, ctx, out);
+    const elem = arr.elem as JethType & { kind: 'array' };
+    if (elem.length !== undefined) {
+      // a FIXED inner array element (Arr<T,N>[]): the element is N inline words at innerSlot, NOT a
+      // dynamic array with its own length slot. Write the literal / copy the source fixed array
+      // inline. (A no-arg push() grows with a zero element; the fresh slots are already 0.)
+      if (value) {
+        if (value.kind === 'arrayLit') this.writeArrayLit(value, innerSlot, ctx, out);
+        else this.copyFixedArray(elem, this.fixedArraySrcBase(value, ctx, out), innerSlot, out);
+      }
+      return;
+    }
+    // a DYNAMIC inner array element (T[][]): innerSlot is the inner array's length slot.
+    if (value) this.copyArrayValueIntoStorage(elem.element, value, innerSlot, ctx, out);
   }
 
   /** Deep-copy an ARRAY VALUE (memory `memArray`/`arrayLit` of value elements, or a
