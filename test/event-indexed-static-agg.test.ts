@@ -31,6 +31,7 @@ describe('indexed static fixed-array / struct event param (JETH207) vs solc', ()
   @external emitFaState(v: u256): void { emit(EF(this.fa, v)); }
   @external emitFaCd(a: Arr<u256,2>, v: u256): void { emit(EF(a, v)); }
   @external emitNaState(v: u256): void { emit(EN(this.na, v)); }
+  @external emitNaCd(a: Arr<u8,3>, v: u256): void { emit(EN(a, v)); }
   @external emitPsState(v: u256): void { emit(EP(this.ps, v)); } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
@@ -48,6 +49,7 @@ contract C {
   function emitFaState(uint256 v) external { emit EF(fa, v); }
   function emitFaCd(uint256[2] calldata a, uint256 v) external { emit EF(a, v); }
   function emitNaState(uint256 v) external { emit EN(na, v); }
+  function emitNaCd(uint8[3] calldata a, uint256 v) external { emit EN(a, v); }
   function emitPsState(uint256 v) external { emit EP(ps, v); } }`;
 
   beforeAll(async () => {
@@ -75,5 +77,17 @@ contract C {
   it('indexed static struct: topic matches solc', async () => {
     const data = '0x' + sel('emitPsState(uint256)') + pad32(9n);
     eqLogs((await jeth.call(aj, data)).logs, (await sol.call(as, data)).logs);
+  });
+  it('a DIRTY value-leaf fixed-array calldata param emitted directly reverts like solc (validate, not mask)', async () => {
+    // solc VALIDATES a value-leaf fixed-array read directly from calldata on emit (reverts on dirty
+    // high bits); it only masks when the array is first copied to a memory local. JETH must match.
+    const fn = '0x' + sel('emitNaCd(uint8[3],uint256)');
+    const clean = fn + pad32(7n) + pad32(8n) + pad32(9n) + pad32(5n);
+    const dirty = fn + ('ff' + pad32(7n).slice(2)) + pad32(8n) + pad32(9n) + pad32(5n); // word0 has dirty high bits
+    for (const [label, data] of [['clean', clean], ['dirty', dirty]] as const) {
+      const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+      expect(j.success, `${label} success`).toBe(s.success);
+      eqLogs(j.logs, s.logs);
+    }
   });
 });

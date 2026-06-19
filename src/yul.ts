@@ -3179,7 +3179,10 @@ ${indent(runtime, 6)}
    *  (echoStaticParam). Returns {mp, size}; keccak256(mp, size) == solc's keccak256(abi.encode(v)). */
   private materializeStaticAggToMem(arg: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
     if (arg.kind === 'cdAggregateValue') {
-      const { ptr, size } = this.echoStaticParam(arg.param, arg.type, ctx, out);
+      // An indexed event arg emitted DIRECTLY from a calldata param: solc VALIDATES the value-leaf
+      // words (reverts on dirty high/low bits), unlike a return echo which masks. Force validation
+      // so a dirty calldata fixed-array reverts byte-identically to solc (not a masked success).
+      const { ptr, size } = this.echoStaticParam(arg.param, arg.type, ctx, out, true);
       return { mp: ptr, size };
     }
     let slot: string;
@@ -3200,11 +3203,11 @@ ${indent(runtime, 6)}
    *  are returned inline). Matching solc's decode-to-memory: a pure VALUE-leaf fixed array
    *  CLEANS (masks) its leaves, while a struct (or struct-element array) VALIDATES its fields
    *  (the struct branch of abiEncFromCd forces field validation regardless of this flag). */
-  private echoStaticParam(name: string, t: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+  private echoStaticParam(name: string, t: JethType, ctx: LowerCtx, out: string[], forceValidate = false): { ptr: string; size: string } {
     const ph = ctx.cdParamHead.get(name);
     if (!ph) throw new UnsupportedError(`unbound echo param ${name}`);
     const leaf = (ty: JethType): JethType => (ty.kind === 'array' && ty.length !== undefined ? leaf(ty.element) : ty);
-    const validate = !(t.kind === 'array' && isStaticValueType(leaf(t)));
+    const validate = forceValidate || !(t.kind === 'array' && isStaticValueType(leaf(t)));
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     const size = this.abiEncFromCd(t, String(ph.head), ptr, validate, out);

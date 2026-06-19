@@ -666,8 +666,11 @@ export class Analyzer {
     const name = (member.name as ts.Identifier).text;
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
-    if (!isStaticValueType(type)) {
-      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported (only value-type constants: uintN/intN/bool/address/bytesN)`);
+    // Folding supports integer + bool literals only (foldConstant/evalConstInt), so scope @constant
+    // to those. A bytesN/address/string/aggregate constant is a clean over-rejection (a later step),
+    // not a confusing fold-failure cascade.
+    if (type.kind !== 'uint' && type.kind !== 'int' && type.kind !== 'bool') {
+      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool constants; bytesN/address constant folding is a later step)`);
       return;
     }
     if (!member.initializer) {
