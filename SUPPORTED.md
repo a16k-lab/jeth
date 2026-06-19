@@ -295,9 +295,11 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   relative to the tuple start (spec section 3.2); bounds checks per dynamic level;
   any layout fault (offset/length past calldatasize, truncated head, wrong-base
   offset) -> EMPTY revert; field reads are LAZY (a malformed UNREAD dynamic field
-  is ignored). Differentially verified. STORAGE / mapping-valued dynamic structs,
-  a dynamic-ARRAY struct field (`T[]`/`string[]`/`T[][]` inside a struct), `D[]`
-  (a dynamic array of dynamic structs), and fixed `Arr<D,N>` are gated cleanly.
+  is ignored). Differentially verified. A `@struct` with a dynamic-ARRAY field
+  (`T[]`/`string[]`/`T[][]`) is now supported in storage, as a whole-struct RETURN,
+  and as a whole-struct calldata-param echo; only ELEMENT access into such a field of
+  a calldata struct param (`s.xs[i]`) stays gated (JETH230). `D[]` (a dynamic array of
+  dynamic structs) and fixed `Arr<D,N>` as a calldata param/return are gated cleanly.
 
 ### Aggregate calldata params (Phase 4d)
 - `struct` and fixed-array `Arr<T,N>` function parameters, decoded lazily from the
@@ -380,8 +382,14 @@ and is never miscompiled.
   byte-identical incl. malformed-offset/length EMPTY-revert and full N-word head readability.
 - Standard tuple ABI JSON: struct params/returns render as `(t1,t2)` in the JSON `type` field
   rather than `type:"tuple"` + `components` (selectors are canonical and correct; JSON-shape polish).
-- `msg.data`; an indexed FIXED-array / struct event param (indexed `bytes`/`string` and indexed
-  DYNAMIC value-element arrays work, as a keccak topic of the content / element words).
+- `msg.data` is the whole calldata as `bytes` (selector included, so `msg.data.length` ==
+  `calldatasize()`): `.length`, copy to a memory bytes / return, and byte-indexing (Panic 0x32 OOB);
+  allowed in `@pure` (calldata, like `msg.sig`).
+- An indexed FIXED-array or static-struct event param is a keccak topic of `abi.encode(value)` (from a
+  `@state` source or a calldata-param source). Indexed `bytes`/`string` and indexed DYNAMIC
+  value-element arrays also work (keccak of the content / element words). All byte-identical to solc.
+- `@constant` fields: a slot-free compile-time constant (uintN/intN/bool) inlined at each read site
+  (no SLOAD, no storage slot, absent from the ABI), byte-identical to solc incl. raw storage layout.
 - Evaluation ORDER of side-effecting subexpressions now matches solc: BINARY operands evaluate
   RIGHT-to-LEFT and ARGUMENT lists (array literals, return tuples, event/error args, call args)
   LEFT-to-RIGHT, byte-identical to solc (verified). This covers `++`/`--` in value position and
@@ -425,8 +433,6 @@ Each of the following compiles to a clean compile-time error (verified), not a m
   ternary over `bytes`/`string` and over a static struct/fixed array works).
 - **A packed (`<256`-bit) element of a NESTED dynamic array** `this.m[k].dynArr[i]` (the packed
   fixed-array-through-a-struct-field case `this.q.pts[i]` works).
-- **`msg.data`, and an indexed FIXED-array or struct event param** (indexed `bytes`/`string` and
-  indexed dynamic value-element arrays work, as a keccak topic).
 - **Tuple ABI JSON shape**: struct params/returns render as `(t1,t2)` rather than `type:"tuple"` +
   `components` (selectors are canonical and correct; this is a JSON-shape gap, not a behavior gap).
 - **Phase 5** (constructors with args, modifiers, immutables) and **Phase 6+** (external/message
