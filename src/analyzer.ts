@@ -3392,6 +3392,8 @@ export class Analyzer {
     // (c ? xs : ys)[i]: a memory array produced by a ternary; the expr lowers to a pointer.
     if (ts.isConditionalExpression(node)) {
       const e = this.checkExpr(node);
+      // a dynamic-array ternary already resolves to arrayValue{memArrayExpr{ternary}} - use it directly.
+      if (e && e.kind === 'arrayValue' && e.arr.base.kind === 'memArrayExpr') return e.arr;
       if (e && e.type.kind === 'array' && e.type.length === undefined && isStaticValueType(e.type.element)) {
         return { base: { kind: 'memArrayExpr', expr: e }, elem: e.type.element };
       }
@@ -4016,10 +4018,28 @@ export class Analyzer {
         this.diags.error(node, 'JETH083', `ternary branches have incompatible types: ${displayName(then.type)} vs ${displayName(els.type)}`);
         return undefined;
       }
+      // A DYNAMIC value-element array ternary (c ? a : b, incl. storage `this.a`/`this.b`): materialize
+      // the TAKEN branch to a memory [len][elems] pointer (codegen, via aggArgToMemPtr - storage/
+      // calldata copy, memory alias) and select it; wrap as a memArrayExpr so return / index /
+      // .length consume it uniformly. Matches solc (only the taken branch is read; identical bytes).
+      const ut = unified[0].type;
+      if (ut.kind === 'array' && ut.length === undefined && isStaticValueType(ut.element)) {
+        const dynArrOk = (e: Expr): boolean =>
+          e.kind === 'arrayLit' ||
+          (e.kind === 'arrayValue' &&
+            (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr' || e.arr.base.kind === 'stateArray' ||
+             e.arr.base.kind === 'mapArray' || e.arr.base.kind === 'placeArray' || e.arr.base.kind === 'calldataArray'));
+        if (dynArrOk(unified[0]) && dynArrOk(unified[1])) {
+          const tern: Expr = { kind: 'ternary', type: ut, cond, then: unified[0], else: unified[1] };
+          return { kind: 'arrayValue', type: ut, arr: { base: { kind: 'memArrayExpr', expr: tern }, elem: ut.element } };
+        }
+        this.diags.error(node, 'JETH074', `a ternary over a ${displayName(ut)} from this source is not supported; select the value before the aggregate operation`);
+        return undefined;
+      }
       // A ternary branch must lower to a single register value (a value type, or a MEMORY array
       // whose register IS its pointer), OR be a bytes/string (materialized to memory and selected
-      // by pointer via lowerDynamic). A storage struct / storage array branch still has no single
-      // materialization here, so select before the aggregate operation.
+      // by pointer via lowerDynamic). A storage struct / a non-value-element array branch still has
+      // no single materialization here, so select before the aggregate operation.
       const lowerable = (e: Expr): boolean =>
         isStaticValueType(e.type) ||
         isBytesLike(e.type) ||

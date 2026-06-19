@@ -1284,6 +1284,28 @@ ${indent(runtime, 6)}
           out.push('}');
           return p;
         }
+        if (e.type.kind === 'array' && e.type.length === undefined) {
+          // a DYNAMIC value-array ternary: materialize the TAKEN branch to a memory [len][elems]
+          // pointer (aggArgToMemPtr: storage/calldata copy, memory alias) and select it. Short-circuit
+          // (only the taken branch is materialized), matching solc.
+          const cc = this.lowerExpr(e.cond, ctx, out);
+          const p = this.fresh();
+          out.push(`let ${p} := 0`);
+          const tO: string[] = [];
+          const pT = this.aggArgToMemPtr(e.then, ctx, tO);
+          const eO: string[] = [];
+          const pE = this.aggArgToMemPtr(e.else, ctx, eO);
+          out.push(`switch ${cc}`);
+          out.push('case 0 {');
+          for (const l of eO) out.push('  ' + l);
+          out.push(`  ${p} := ${pE}`);
+          out.push('}');
+          out.push('default {');
+          for (const l of tO) out.push('  ' + l);
+          out.push(`  ${p} := ${pT}`);
+          out.push('}');
+          return p;
+        }
         // short-circuit: only the taken branch is evaluated (a branch may revert / have
         // checked-arithmetic side effects), exactly like Solidity's c ? a : b.
         const c = this.lowerExpr(e.cond, ctx, out);
@@ -3027,6 +3049,13 @@ ${indent(runtime, 6)}
     // a MEMORY T[] (value elements) at ptr=[len][data]: ABI return = [0x20][len][data].
     if (value.arr.base.kind === 'memArray') {
       return this.encodeMemArrayReturn(this.ctxLookup(ctx, value.arr.base.varName), out);
+    }
+    // a memory T[] produced by an expression (a dynamic-array ternary `c ? this.a : this.b`):
+    // lower to the [len][elems] pointer (freeze first), then encode.
+    if (value.arr.base.kind === 'memArrayExpr') {
+      const p = this.fresh();
+      out.push(`let ${p} := ${this.lowerExpr(value.arr.base.expr, ctx, out)}`);
+      return this.encodeMemArrayReturn(p, out);
     }
     const ref = this.lowerArrayRef(value.arr, ctx, out);
     if (ref.src === 'fixed') throw new UnsupportedError('returning a whole fixed array is not supported yet');
