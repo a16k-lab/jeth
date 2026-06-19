@@ -138,6 +138,7 @@ export type AccessStep =
   | { kind: 'index'; index: Expr; strideSlots: number; length: number; elemType: JethType } // fixed-array element (whole-slot)
   | { kind: 'packedIndex'; index: Expr; perSlot: number; size: number; length: number; elemType: JethType } // packed fixed-array element (perSlot per slot, runtime byte offset)
   | { kind: 'dynIndex'; index: Expr; strideSlots: number; elemType: JethType } // dynamic T[] element (data at keccak(lenSlot), runtime bound)
+  | { kind: 'packedDynIndex'; index: Expr; perSlot: number; size: number; elemType: JethType } // packed dynamic T[] element (data at keccak(lenSlot), runtime byte offset)
   | { kind: 'mapKey'; key: Expr; valueType: JethType }; // mapping key
 
 /** A calldata location reached by navigating a chain of field/index steps from an

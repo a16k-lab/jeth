@@ -3674,15 +3674,17 @@ export class Analyzer {
         if (t.kind === 'array') {
           const elem = t.element;
           const packed = elem.kind !== 'struct' && elem.kind !== 'array' && storageByteSize(elem) < 32;
-          if (packed && t.length === undefined) {
-            // a PACKED element of a DYNAMIC array in a nested access: the data lives at
-            // keccak(lenSlot) with packing; not yet wired (the fixed-array packed case is).
-            this.diags.error(idxNode, 'JETH217', 'indexing a packed element of a nested dynamic array is not supported yet');
-            return { committed: true };
-          }
           const idxE = this.checkExpr(idxNode, U256);
           if (!idxE) return { committed: true };
           const idx = this.coerce(idxE, U256, idxNode);
+          if (packed && t.length === undefined) {
+            // a PACKED element of a DYNAMIC array in a nested access (this.m[k].ps[i], ps: u64[]):
+            // data at keccak(lenSlot) with packing (perSlot per slot, runtime byte offset).
+            const size = storageByteSize(elem);
+            steps.push({ kind: 'packedDynIndex', index: idx, perSlot: Math.floor(32 / size), size, elemType: elem });
+            t = elem;
+            continue;
+          }
           if (t.length !== undefined) {
             if (idx.kind === 'literalInt' && (idx.value < 0n || idx.value >= BigInt(t.length))) {
               this.diags.error(idxNode, 'JETH211', `array index ${idx.value} out of bounds for length ${t.length}`);

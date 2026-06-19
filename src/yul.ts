@@ -1936,6 +1936,26 @@ ${indent(runtime, 6)}
         slot = `add(${dataBase}, ${delta})`;
         constSlot = null;
         offset = 0;
+      } else if (step.kind === 'packedDynIndex') {
+        // packed element of a dynamic T[]: bound vs sload(lenSlot); data at keccak(lenSlot);
+        // slot = dataBase + i/perSlot, byte offset (i%perSlot)*size within that slot.
+        const lenSlot = constSlot !== null ? String(constSlot) : slot;
+        const it = this.fresh();
+        out.push(`let ${it} := ${this.lowerExpr(step.index, ctx, out)}`);
+        out.push(`if iszero(lt(${it}, sload(${lenSlot}))) { ${this.panic()}(0x32) }`);
+        const dataBase = this.fresh();
+        out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${lenSlot})`);
+        if (step.index.kind === 'literalInt') {
+          const k = Number(step.index.value);
+          slot = Math.floor(k / step.perSlot) === 0 ? dataBase : `add(${dataBase}, ${Math.floor(k / step.perSlot)})`;
+          offset = (k % step.perSlot) * step.size;
+          byteShift = undefined;
+        } else {
+          slot = `add(${dataBase}, div(${it}, ${step.perSlot}))`;
+          byteShift = `mul(mod(${it}, ${step.perSlot}), ${step.size})`;
+          offset = 0;
+        }
+        constSlot = null;
       } else {
         // mapping key: slot = keccak256(keyWord . currentSlot)
         const k = this.lowerExpr(step.key, ctx, out);
