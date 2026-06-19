@@ -1042,6 +1042,14 @@ export class Analyzer {
       if (internalOnly && p.type.kind === 'struct' && isStaticType(p.type)) {
         this.memAggregateLocals.set(p.name, p.type);
       }
+      // JETH242/243: a dynamic value-element array / bytes / string param of an @internal/@private
+      // function is likewise a MEMORY reference, so `p[i]`/`p.length`/`return p` resolve to memory.
+      if (internalOnly && p.type.kind === 'array' && p.type.length === undefined && isStaticValueType(p.type.element)) {
+        this.memArrayLocals.add(p.name);
+      }
+      if (internalOnly && isBytesLike(p.type)) {
+        this.memDynLocals.add(p.name);
+      }
     }
 
     // F3: eagerly type/range-check every constant default, so a bad default (wrong type or out of
@@ -2317,17 +2325,25 @@ export class Analyzer {
     // (its struct params are pure MEMORY pointers, passed by reference). A public/external
     // function's struct param uses calldata, so internal struct calls to it are gated.
     const aggOK = callee.visibility === 'internal' || callee.visibility === 'private';
-    const paramSupported = (t: JethType): boolean => isStaticValueType(t) || (t.kind === 'struct' && isStaticType(t) && aggOK);
+    // An @internal/@private function passes an aggregate BY MEMORY REFERENCE: a static struct, a
+    // dynamic value-element array (u256[]/u64[]/address[]...), or bytes/string. A memory-source arg
+    // ALIASES (a callee mutation is visible to the caller, like solc); a storage/calldata/literal
+    // source is COPIED to fresh memory (the codegen materializes it).
+    const isMemByRef = (t: JethType): boolean =>
+      (t.kind === 'struct' && isStaticType(t)) ||
+      (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) ||
+      isBytesLike(t);
+    const paramSupported = (t: JethType): boolean => isStaticValueType(t) || (aggOK && isMemByRef(t));
     for (const p of callee.params) {
       if (paramSupported(p.type)) continue;
-      const hint = p.type.kind === 'struct' && !aggOK ? ' (struct params require the callee to be @internal or @private)' : '';
+      const hint = isMemByRef(p.type) && !aggOK ? ' (aggregate params require the callee to be @internal or @private)' : '';
       this.diags.error(node, 'JETH242', `internal call to '${name}' is not supported yet (parameter type ${displayName(p.type)} is not supported${hint})`);
       return undefined;
     }
     const rt = callee.returnType;
-    const returnSupported = rt.kind === 'void' || isStaticValueType(rt) || (rt.kind === 'struct' && isStaticType(rt) && aggOK);
+    const returnSupported = rt.kind === 'void' || isStaticValueType(rt) || (aggOK && isMemByRef(rt));
     if (!returnSupported) {
-      const hint = rt.kind === 'struct' && !aggOK ? ' (struct returns require the callee to be @internal or @private)' : '';
+      const hint = isMemByRef(rt) && !aggOK ? ' (aggregate returns require the callee to be @internal or @private)' : '';
       this.diags.error(node, 'JETH243', `internal call to '${name}' is not supported yet (return type ${displayName(rt)} is not supported${hint})`);
       return undefined;
     }

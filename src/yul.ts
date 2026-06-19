@@ -445,7 +445,11 @@ ${indent(runtime, 6)}
         // constructed struct is allocated first). A bare `return;` in a void fn just leaves.
         if (ctx.fnMode) {
           if (s.value && ctx.fnMode.retVar) {
-            const v = s.value.kind === 'structNew' ? this.allocAggToMem(s.value, ctx, out) : this.lowerExpr(s.value, ctx, out);
+            // an aggregate return (struct / dynamic value array / bytes / string) yields a MEMORY
+            // pointer (same alias/copy rules as an argument); a value return is a plain register.
+            const rt = s.value.type;
+            const isAgg = rt.kind === 'struct' || rt.kind === 'array' || isBytesLike(rt);
+            const v = isAgg ? this.aggArgToMemPtr(s.value, ctx, out) : this.lowerExpr(s.value, ctx, out);
             out.push(`${ctx.fnMode.retVar} := ${v}`);
           }
           out.push('leave');
@@ -458,9 +462,9 @@ ${indent(runtime, 6)}
         // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
         // sub-pointer), or `return this.helper()` (struct-returning internal call): the
         // ABI-unpacked memory image at the (sub)pointer IS the flat return blob. G9.
-        if ((s.value.type.kind === 'struct' || s.value.type.kind === 'array') && (s.value.kind === 'memAggregate' || s.value.kind === 'call' || (s.value.kind === 'ternary' && isStaticType(s.value.type)))) {
-          // a memory-aggregate image (static struct / fixed array): the image IS the flat return blob.
-          // (A DYNAMIC-array ternary falls through to encodeMemArrayReturn below.)
+        if (isStaticType(s.value.type) && (s.value.type.kind === 'struct' || s.value.type.kind === 'array') && (s.value.kind === 'memAggregate' || s.value.kind === 'call' || s.value.kind === 'ternary')) {
+          // a STATIC memory-aggregate image (struct / fixed array): the image IS the flat return blob.
+          // (A DYNAMIC-array call/ternary falls through to encodeMemArrayReturn below.)
           const ptr = this.lowerExpr(s.value, ctx, out);
           out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
           break;
@@ -513,10 +517,15 @@ ${indent(runtime, 6)}
             out.push(`return(0, ${abiHeadWords(s.value.type) * 32})`);
             break;
           }
-          // a memory-array value produced by an expression (ternary `c ? xs : ys`, or any
-          // expr that yields a [len][data] pointer): lower to the pointer, then encode.
-          if (s.value.kind === 'ternary' || s.value.kind === 'incDec') {
-            const { ptr, size } = this.encodeMemArrayReturn(this.lowerExpr(s.value, ctx, out), out);
+          // a memory-array value produced by an expression (ternary `c ? xs : ys`, an incDec, or a
+          // dynamic-array-returning internal call `return this.mk()`): lower to the [len][elems]
+          // pointer, then encode the ABI [0x20][len][elems] return blob.
+          if (s.value.kind === 'ternary' || s.value.kind === 'incDec' || (s.value.kind === 'call' && isDynamicType(s.value.type))) {
+            // FREEZE the pointer first: encodeMemArrayReturn reads it multiple times, and a `call`
+            // lowers to an inline `userfn_x(...)` that would otherwise be re-invoked per use.
+            const p = this.fresh();
+            out.push(`let ${p} := ${this.lowerExpr(s.value, ctx, out)}`);
+            const { ptr, size } = this.encodeMemArrayReturn(p, out);
             out.push(`return(${ptr}, ${size})`);
             break;
           }
@@ -3217,6 +3226,44 @@ ${indent(runtime, 6)}
     return { ptr, size: `add(0x20, ${size})` };
   }
 
+  /** JETH242/243: resolve an aggregate ARGUMENT or internal-fn RETURN value (a dynamic value-element
+   *  array, bytes/string, or a struct) to a MEMORY pointer for pass-/return-by-reference. A
+   *  memory-local source ALIASES (the pointer is shared, so a callee mutation is visible to the
+   *  caller, matching solc); a calldata source is COPIED to fresh memory (a value array MASKS dirty
+   *  elements, like solc's calldata->memory copy); a storage source is copied via abiEncFromStorage
+   *  (storage is canonical); a constructed literal / call result is already fresh memory. */
+  private aggArgToMemPtr(a: Expr, ctx: LowerCtx, out: string[]): string {
+    if (a.kind === 'arrayLit' || a.kind === 'structNew') return this.allocAggToMem(a, ctx, out);
+    if (a.kind === 'arrayValue') {
+      const b = a.arr.base;
+      if (b.kind === 'memArray') return this.ctxLookup(ctx, b.varName); // memory local: ALIAS
+      if (b.kind === 'memArrayExpr') return this.lowerExpr(b.expr, ctx, out);
+      if (b.kind === 'calldataArray') {
+        const { ptr } = this.echoParam(b.name, a.type, ctx, out, false); // COPY, masking dirty elements
+        const mp = this.fresh();
+        out.push(`let ${mp} := add(${ptr}, 0x20)`); // skip the [0x20] offset wrapper -> [len][elems]
+        return mp;
+      }
+      // storage source (this.arr / this.m[k] / a nested inner array): COPY a fresh [len][elems] image.
+      let lenSlot: string;
+      if (b.kind === 'stateArray') lenSlot = String(b.slot);
+      else if (b.kind === 'mapArray') lenSlot = this.mappingSlot(b.baseSlot, b.keys, ctx, out);
+      else if (b.kind === 'placeArray') lenSlot = this.lowerPlace(b.path, ctx, out).slot;
+      else throw new UnsupportedError(`aggregate argument from array source '${b.kind}' is not supported`);
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const size = this.abiEncFromStorage(a.type, lenSlot, 0, dst, out);
+      out.push(`mstore(0x40, add(${dst}, ${size}))`);
+      return dst;
+    }
+    if (isBytesLike(a.type)) {
+      const { mp } = this.toMemory(this.lowerDynamic(a, ctx, out), out); // alias (memory) or copy (cd/storage)
+      return mp;
+    }
+    // a struct value (memAggregate alias / storage / calldata copy) or a call result (already a pointer).
+    return this.lowerExpr(a, ctx, out);
+  }
+
   /** Materialize a DYNAMIC-array argument (G3, for @error/@event head/tail) into a memory blob
    *  holding its ABI tail encoding `[len][elements...]`, returning a frozen pointer + byte size.
    *  Calldata-param arrays reuse echoParam (unbounded element nesting); value-element memory
@@ -3616,6 +3663,12 @@ ${indent(runtime, 6)}
         // msg.data is the WHOLE calldata (selector included), so data starts at 0 and
         // length is calldatasize() (matches solc: msg.data.length == calldatasize()).
         return { src: 'calldata', dataPtr: '0', len: 'calldatasize()' };
+      case 'call': {
+        // a bytes/string-returning internal call: the callee returns a [len][data] memory pointer.
+        const p = this.fresh();
+        out.push(`let ${p} := ${this.lowerExpr(e, ctx, out)}`);
+        return { src: 'memory', ptr: p };
+      }
       case 'ternary': {
         // a bytes/string ternary `c ? a : b`: short-circuit (only the taken branch is
         // materialized), then select the [len][data] pointer. Matches Solidity (the untaken
@@ -4253,7 +4306,11 @@ ${indent(runtime, 6)}
    *  one (structNew) is allocated to memory first. */
   private lowerCallArgs(args: Expr[], ctx: LowerCtx, out: string[]): string[] {
     return args.map((a) => {
-      const reg = a.kind === 'structNew' ? this.allocAggToMem(a, ctx, out) : this.lowerExpr(a, ctx, out);
+      // an aggregate arg (struct / dynamic value array / bytes / string) is passed BY MEMORY
+      // REFERENCE (alias for a memory source, fresh copy for storage/calldata/literal); a value arg
+      // is a plain register.
+      const isAgg = a.type.kind === 'struct' || a.type.kind === 'array' || isBytesLike(a.type);
+      const reg = isAgg ? this.aggArgToMemPtr(a, ctx, out) : this.lowerExpr(a, ctx, out);
       const t = this.fresh();
       out.push(`let ${t} := ${reg}`);
       return t;
