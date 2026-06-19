@@ -1117,11 +1117,15 @@ export class Analyzer {
           // struct), echoed via the recursive calldata encoder. A calldata array ELEMENT
           // (cdNestedElem) or a static calldata aggregate component is still a later step.
           if (rts[i]!.kind === 'struct' || rts[i]!.kind === 'array') {
-            const cdParamDyn =
-              (cv.kind === 'arrayValue' && cv.arr.base.kind === 'calldataArray' && isDynamicType(rts[i]!)) ||
-              cv.kind === 'cdDynStructValue';
-            if (this.isCalldataAggregate(cv) && !cdParamDyn) {
-              this.diags.error(node.expression.elements[i]!, 'JETH213', 'this calldata-aggregate component in a multi-value return is not supported yet (a whole dynamic calldata array / struct param works; an element or static aggregate does not)');
+            // A whole calldata PARAM component is supported: a dynamic array / dynamic struct (offset
+            // word + tail), or a STATIC fixed-array / struct (inline head). A calldata array ELEMENT
+            // (cdNestedElem) is still a later step.
+            const cdParamOk =
+              (cv.kind === 'arrayValue' && cv.arr.base.kind === 'calldataArray') ||
+              cv.kind === 'cdDynStructValue' ||
+              cv.kind === 'cdAggregateValue';
+            if (this.isCalldataAggregate(cv) && !cdParamOk) {
+              this.diags.error(node.expression.elements[i]!, 'JETH213', 'this calldata-aggregate component in a multi-value return is not supported yet (a whole calldata array/struct param works; a calldata array ELEMENT does not)');
               return;
             }
           }

@@ -1549,6 +1549,17 @@ ${indent(runtime, 6)}
         out.push(`mcopy(${cursor}, ${mp}, ${total})`);
         out.push(`${cursor} := add(${cursor}, ${total})`);
         hw += 1;
+      } else if (this.staticCdComponentName(values[i]!, t)) {
+        // a whole STATIC calldata aggregate param (Arr<T,N> / static struct): INLINE in the head
+        // (no offset word), like the storage static case. Masks value-leaf fixed arrays / validates
+        // struct fields, matching solc's return decode-to-memory.
+        const name = this.staticCdComponentName(values[i]!, t)!;
+        const ph = ctx.cdParamHead.get(name);
+        if (!ph) throw new UnsupportedError(`unbound calldata component '${name}'`);
+        const leaf = (ty: JethType): JethType => (ty.kind === 'array' && ty.length !== undefined ? leaf(ty.element) : ty);
+        const validate = !(t.kind === 'array' && isStaticValueType(leaf(t)));
+        this.abiEncFromCd(t, String(ph.head), `add(${ptr}, ${headPos})`, validate, out);
+        hw += abiHeadWords(t);
       } else if (this.cdComponentName(values[i]!)) {
         // a whole DYNAMIC calldata param component (return [xs, n] / [dynStructParam, n]):
         // offset word + tail via the recursive calldata encoder. The offset bounds check and
@@ -1591,6 +1602,15 @@ ${indent(runtime, 6)}
   private cdComponentName(value: Expr): string | undefined {
     if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray') return value.arr.base.name;
     if (value.kind === 'cdDynStructValue') return value.param;
+    return undefined;
+  }
+
+  /** The calldata PARAM name of a whole STATIC calldata aggregate value (a static fixed-array param
+   *  -> arrayValue{calldataArray}, or a static struct param -> cdAggregateValue) used as a
+   *  multi-return component, else undefined. The component is encoded INLINE in the tuple head. */
+  private staticCdComponentName(value: Expr, t: JethType): string | undefined {
+    if (value.kind === 'cdAggregateValue') return value.param;
+    if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray' && !isDynamicType(t)) return value.arr.base.name;
     return undefined;
   }
 
