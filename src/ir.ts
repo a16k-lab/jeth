@@ -194,6 +194,7 @@ export interface ArrayExpr {
     //     or a dynamic-array field of a storage struct (this.s.xs). The length lives at
     //     lowerPlace(path).slot; data at keccak(that slot). ---
     | { kind: 'placeArray'; path: AccessPath } // inner dynamic array at a runtime length slot
+    | { kind: 'cdDynArrayField'; place: CdDynPlace } // a dynamic value-array field of a calldata dynamic-struct param (s.xs): data via the tuple tail offset
     | { kind: 'memArray'; varName: string } // a MEMORY array local (register holds a pointer to [len][elems])
     | { kind: 'memArrayExpr'; expr: Expr }; // a MEMORY array produced by an expression (a ternary etc.); expr lowers to the pointer
   elem: JethType;

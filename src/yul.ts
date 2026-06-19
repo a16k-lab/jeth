@@ -2085,6 +2085,19 @@ ${indent(runtime, 6)}
       const p = this.lowerPlace(arr.base.path, ctx, out);
       return { src: 'storage', lenSlot: p.slot, elem: arr.elem };
     }
+    if (arr.base.kind === 'cdDynArrayField') {
+      // a dynamic value-array field of a calldata dynamic-struct param (s.xs): the field's head slot
+      // holds an offset (relative to the containing tuple start) to the array's [len][elems]. Decode
+      // via calldataDynAt (the same validated decode the bytes/string field uses), then index it.
+      const place = arr.base.place;
+      const base = this.lowerCdDynBase(place, ctx, out);
+      const last = place.steps[place.steps.length - 1]!;
+      const offPtr = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
+      const dataPtr = this.fresh();
+      const len = this.fresh();
+      out.push(`let ${dataPtr}, ${len} := ${this.calldataDynAt()}(${base}, ${offPtr})`);
+      return { src: 'calldata', offset: dataPtr, length: len, elem: arr.elem };
+    }
     if (arr.base.kind === 'memArray') {
       // a memory array local: the register holds a pointer to [len][elem0]...
       return { src: 'memory', ptr: this.ctxLookup(ctx, arr.base.varName), elem: arr.elem };

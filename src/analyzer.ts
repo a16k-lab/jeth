@@ -3168,9 +3168,15 @@ export class Analyzer {
     if (isBytesLike(t)) {
       return { committed: true, result: { kind: 'cdDynStructField', type: t, place } };
     }
-    // Ended at a whole nested struct (static or dynamic): reading it whole is a
-    // later step. (A static nested struct read would need a tuple-return encode
-    // from a calldata source; a dynamic one likewise.)
+    // a dynamic value-element array field (s.xs where xs: u256[]): a calldata array reached via the
+    // tuple tail offset. Indexing it (s.xs[i]) and echoing it whole (return s.xs) both decode the
+    // array via calldataDynAt, then read/encode like any calldata array.
+    if (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) {
+      return { committed: true, result: { kind: 'arrayValue', type: t, arr: { base: { kind: 'cdDynArrayField', place }, elem: t.element } } };
+    }
+    // Ended at a whole nested struct (static or dynamic), or a string[]/T[][] field: reading it whole
+    // is a later step. (A static nested struct read would need a tuple-return encode from a calldata
+    // source; a dynamic one likewise.)
     this.diags.error(node, 'JETH230', `reading a whole ${displayName(t)} from a dynamic-struct calldata parameter is not supported yet (access a value field)`);
     return { committed: true };
   }
@@ -4080,6 +4086,15 @@ export class Analyzer {
         if (lenArr.base.kind === 'stateArray' || lenArr.base.kind === 'mapArray') this.currentReadsState = true;
         return { kind: 'arrayLen', type: U256, arr: lenArr };
       }
+      // s.xs.length: a dynamic value-array field of a calldata dynamic-struct param (runtime length
+      // from the array's tail). Only fires for an array field; a bytes/struct field falls through.
+      if (ts.isPropertyAccessExpression(node.expression)) {
+        const dyn = this.resolveCdDynStruct(node.expression);
+        if (dyn && dyn.result && dyn.result.kind === 'arrayValue' && dyn.result.arr.base.kind === 'cdDynArrayField') {
+          return { kind: 'arrayLen', type: U256, arr: dyn.result.arr };
+        }
+        if (dyn && !dyn.result) return undefined; // committed but errored (diagnostic already emitted)
+      }
       // .length of a fixed-array field/element of a calldata aggregate param: a
       // compile-time constant (e.g. s.data.length where data: Arr<T,N>).
       const cdType = this.calldataAccessType(node.expression);
@@ -4556,11 +4571,17 @@ export class Analyzer {
         return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
       }
       // d.s[i] where d.s is a bytes field of a dynamic-struct param: byte index.
+      // s.xs[i] where s.xs is a dynamic VALUE-array field: array element (calldata).
       if (ts.isPropertyAccessExpression(node.expression)) {
         const dyn = this.resolveCdDynStruct(node.expression);
         if (dyn) {
           if (!dyn.result) return undefined; // committed but errored
           const base = dyn.result;
+          if (base.kind === 'arrayValue' && base.type.kind === 'array' && node.argumentExpression) {
+            const index = this.checkExpr(node.argumentExpression, U256);
+            if (!index) return undefined;
+            return { kind: 'arrayGet', type: base.arr.elem, arr: base.arr, index: this.coerce(index, U256, node.argumentExpression) };
+          }
           if (base.type.kind === 'string') {
             this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
             return undefined;
