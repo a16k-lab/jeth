@@ -3628,6 +3628,17 @@ ${indent(runtime, 6)}
 
   /** b[i] -> bytes1 (left-aligned), Panic(0x32) on out-of-bounds. */
   private lowerByteIndex(e: Expr & { kind: 'byteIndex' }, ctx: LowerCtx, out: string[]): string {
+    // bytesN[i]: byte i of a fixed-bytes VALUE (a left-aligned word). Bound i < size (Panic 0x32),
+    // then extract byte i (0-indexed from the MSB) and re-left-align it as a bytes1.
+    if (e.base.type.kind === 'bytesN') {
+      const size = e.base.type.size;
+      const w = this.fresh();
+      out.push(`let ${w} := ${this.lowerExpr(e.base, ctx, out)}`);
+      const i = this.fresh();
+      out.push(`let ${i} := ${this.lowerExpr(e.index, ctx, out)}`);
+      out.push(`if iszero(lt(${i}, ${size})) { ${this.panic()}(0x32) }`);
+      return `shl(248, byte(${i}, ${w}))`;
+    }
     const ref = this.lowerDynamic(e.base, ctx, out);
     const len = this.fresh();
     out.push(`let ${len} := ${this.dynLen(ref)}`);

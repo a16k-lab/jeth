@@ -635,7 +635,7 @@ export class Analyzer {
         this.diags.error(
           member.initializer,
           'JETH048',
-          'state initializer must be a constant literal (non-constant init requires a constructor, Phase 5)',
+          'state initializer must be a constant expression (non-constant init requires a constructor, Phase 5)',
         );
       } else if (folded !== 0n && folded !== false) {
         initialValue = folded; // zero/false is the storage default; no SSTORE needed
@@ -1251,7 +1251,11 @@ export class Analyzer {
       return;
     }
 
-    if (ts.isEmptyStatement(node)) return;
+    if (ts.isEmptyStatement(node)) {
+      // solc's grammar has no empty-statement production: a lone `;` is a parse error. Match it.
+      this.diags.error(node, 'JETH061', 'an empty statement `;` is not allowed (remove it)');
+      return;
+    }
 
     this.diags.error(node, 'JETH061', `unsupported statement: ${ts.SyntaxKind[node.kind]}`);
   }
@@ -4195,6 +4199,26 @@ export class Analyzer {
 
     // indexing: array a[i] -> elem, bytes b[i] -> bytes1, or mapping this.m[k]
     if (ts.isElementAccessExpression(node)) {
+      // bytesN[i] -> bytes1: a byte extract from a fixed-bytes VALUE (solc allows indexing a fixed
+      // bytes value). The result is byte i, left-aligned, with a runtime OOB Panic(0x32) and a
+      // compile error on a constant out-of-range index. Probe the base type cheaply (a param/local
+      // identifier or this.<state>) so this never double-evaluates an array/mapping base.
+      if (node.argumentExpression) {
+        let bt: JethType | undefined;
+        if (ts.isIdentifier(node.expression)) bt = this.lookupLocal(node.expression.text);
+        else if (ts.isPropertyAccessExpression(node.expression) && node.expression.expression.kind === ts.SyntaxKind.ThisKeyword)
+          bt = this.stateByName.get(node.expression.name.text)?.type;
+        if (bt && bt.kind === 'bytesN') {
+          const base = this.checkExpr(node.expression);
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!base || !index) return undefined;
+          if (index.kind === 'literalInt' && (index.value < 0n || index.value >= BigInt(bt.size))) {
+            this.diags.error(node, 'JETH152', `byte index ${index.value} is out of range for ${displayName(bt)} (valid 0..${bt.size - 1})`);
+            return undefined;
+          }
+          return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+        }
+      }
       // A read m[i]...[k] on a nested dynamic array calldata param (T[][], T[][][],
       // string[][], ...): the inner array m[i]...[k-1] is resolved via cdNestedElem
       // (descending the per-level inner-offset tables); the final index then reads
@@ -4835,24 +4859,69 @@ export class Analyzer {
 
   private foldConstant(node: ts.Expression, expected: JethType): bigint | boolean | undefined {
     if (ts.isParenthesizedExpression(node)) return this.foldConstant(node.expression, expected);
-    // (possibly negated) integer literal
-    const lit = this.asIntLiteral(node);
-    if (lit !== undefined) {
-      if (!isInteger(expected)) {
-        this.diags.error(node, 'JETH086', `cannot assign an integer literal to ${displayName(expected)}`);
-        return undefined;
-      }
-      if (!this.inRange(lit, expected)) {
-        this.diags.error(node, 'JETH070', `literal ${lit} out of range for ${displayName(expected)}`);
-      }
-      return lit;
-    }
+    // bool literal
     if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) {
       if (expected.kind !== 'bool') {
         this.diags.error(node, 'JETH087', `cannot assign a bool literal to ${displayName(expected)}`);
         return undefined;
       }
       return node.kind === ts.SyntaxKind.TrueKeyword;
+    }
+    // A constant INTEGER expression: solc folds + - * ** << >> & | ^ % (and exact /) and unary -
+    // with UNBOUNDED precision, then range-checks only the FINAL value against the target type.
+    if (isInteger(expected)) {
+      const v = this.evalConstInt(node);
+      if (v !== undefined) {
+        if (!this.inRange(v, expected)) this.diags.error(node, 'JETH070', `constant ${v} out of range for ${displayName(expected)}`);
+        return v;
+      }
+      return undefined; // not a constant integer expression -> caller emits JETH048
+    }
+    // non-integer target: only the literal 0 implicitly converts to bytesN (matching solc); any
+    // other integer literal/expression is an error.
+    const lit = this.asIntLiteral(node);
+    if (lit !== undefined) {
+      if (expected.kind === 'bytesN' && lit === 0n) return 0n;
+      this.diags.error(node, 'JETH086', `cannot assign an integer literal to ${displayName(expected)}`);
+      return undefined;
+    }
+    return undefined;
+  }
+
+  /** Evaluate a constant INTEGER expression with UNBOUNDED precision (no intermediate range check),
+   *  matching solc's constant folding. Returns the bigint value, or undefined if the expression is
+   *  not a foldable integer constant (a non-constant operand, an unsupported op, or - matching solc -
+   *  a fractional `/`, a `>>`/`<<`/`**` by a negative amount, or a `/`/`%` by zero). */
+  private evalConstInt(node: ts.Expression): bigint | undefined {
+    if (ts.isParenthesizedExpression(node)) return this.evalConstInt(node.expression);
+    const lit = this.asIntLiteral(node); // a literal or a leading-minus literal
+    if (lit !== undefined) return lit;
+    if (ts.isPrefixUnaryExpression(node)) {
+      if (node.operator !== ts.SyntaxKind.MinusToken) return undefined; // ~ on a const is type-specific; do not fold
+      const x = this.evalConstInt(node.operand);
+      return x === undefined ? undefined : -x;
+    }
+    if (ts.isBinaryExpression(node)) {
+      const op = this.binaryToBinOp(node.operatorToken.kind);
+      if (!op) return undefined;
+      const a = this.evalConstInt(node.left);
+      if (a === undefined) return undefined;
+      const b = this.evalConstInt(node.right);
+      if (b === undefined) return undefined;
+      switch (op) {
+        case '+': return a + b;
+        case '-': return a - b;
+        case '*': return a * b;
+        case '**': return b < 0n ? undefined : a ** b;
+        case '<<': return b < 0n ? undefined : a << b;
+        case '>>': return b < 0n ? undefined : a >> b;
+        case '&': return a & b;
+        case '|': return a | b;
+        case '^': return a ^ b;
+        case '/': return b === 0n || a % b !== 0n ? undefined : a / b; // solc rejects a fractional constant division
+        case '%': return b === 0n ? undefined : a % b;
+        default: return undefined;
+      }
     }
     return undefined;
   }
