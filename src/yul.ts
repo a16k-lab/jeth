@@ -1711,6 +1711,11 @@ ${indent(runtime, 6)}
           } else {
             queue.push(ref);
           }
+        } else if (f.type.kind === 'array' && f.type.length === undefined) {
+          // a dynamic value-array field: resolve its [len][elems] memory pointer (a memory source is
+          // already a pointer; a constructor arg is materialized via aggArgToMemPtr, allocating here
+          // in the pre-pass, below the eventual tuple blob).
+          queue.push(this.arrayFieldRef(f, src, i, hw, ctx, out));
         } else if (f.type.kind === 'struct') {
           const nestedSrc = this.nestedTupleSrc(f, src, i, hw, ctx, out);
           this.collectTupleDyn(f.type, nestedSrc, queue, ctx, out);
@@ -1801,6 +1806,25 @@ ${indent(runtime, 6)}
       out.push(`if mod(${len}, 0x20) { mstore(add(add(${cursor}, 0x20), ${len}), 0) }`);
       return nc;
     }
+    if (f.type.kind === 'array' && f.type.length === undefined) {
+      // dynamic value-array field tail: [len][word-elements], NO byte-padding (each element is a full
+      // 32-byte word). The source is a memory [len][elems] pointer (the materialized array image).
+      const ref = nextRef();
+      const len = this.fresh();
+      out.push(`let ${len} := ${this.dynLen(ref)}`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
+      const byteLen = `mul(${len}, 0x20)`;
+      const nc = this.fresh();
+      out.push(`let ${nc} := add(${cursor}, add(0x20, ${byteLen}))`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${cursor})) { ${this.panic()}(0x41) }`);
+      if (ref.src === 'memory') {
+        out.push(`mstore(${cursor}, ${len})`);
+        out.push(`mcopy(add(${cursor}, 0x20), add(${ref.ptr}, 0x20), ${byteLen})`);
+      } else {
+        throw new UnsupportedError('encoding a calldata-array struct field in a whole-struct return is not supported yet');
+      }
+      return nc;
+    }
     if (f.type.kind === 'struct') {
       // nested dynamic struct: encode it as its own tuple starting at cursor.
       const nestedSrc = this.nestedTupleSrc(f, src, fieldIdx, headWord, ctx, out);
@@ -1828,6 +1852,21 @@ ${indent(runtime, 6)}
     const len = this.fresh();
     out.push(`let ${dataPtr}, ${len} := ${this.calldataDynAtEcho()}(${src.base}, ${offPtr})`);
     return { src: 'calldata', dataPtr, len };
+  }
+
+  /** Resolve a dynamic value-array field of a dynamic-field struct to a memory [len][elems] pointer
+   *  (for whole-struct `return d` encoding). A memory source's head word already holds the pointer; a
+   *  constructor arg is materialized via aggArgToMemPtr. A calldata source stays gated (the analyzer
+   *  rejects returning a calldata struct param that carries an array field). */
+  private arrayFieldRef(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, ctx: LowerCtx, out: string[]): DynRef {
+    if (src.kind === 'new') return { src: 'memory', ptr: this.aggArgToMemPtr(src.args[fieldIdx]!, ctx, out) };
+    if (src.kind === 'mem') {
+      const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(${at})`);
+      return { src: 'memory', ptr };
+    }
+    throw new UnsupportedError('returning a calldata struct param with an array field is not supported yet');
   }
 
   /** Build the value source for a nested (sub)struct field. */
@@ -2503,6 +2542,10 @@ ${indent(runtime, 6)}
         const { mp } = this.toMemory(this.lowerDynamic(value.args[i]!, ctx, out), out);
         out.push(`mstore(${at}, ${mp})`);
         hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // a dynamic value-array field: materialize the arg to a [len][elems] memory pointer, store it.
+        out.push(`mstore(${at}, ${this.aggArgToMemPtr(value.args[i]!, ctx, out)})`);
+        hw += 1;
       } else {
         out.push(`mstore(${at}, ${this.lowerExpr(value.args[i]!, ctx, out)})`);
         hw += abiHeadWords(f.type);
@@ -2539,6 +2582,15 @@ ${indent(runtime, 6)}
       if (isBytesLike(f.type)) {
         const { mp } = this.toMemory({ src: 'storage', slot: slotAt(f.slot) }, out);
         out.push(`mstore(${at}, ${mp})`);
+        hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // a dynamic value-array field: copy the storage array (length slot = f's slot) to a fresh
+        // [len][elems] memory image (storage is canonical, no masking needed); store the pointer.
+        const dst = this.fresh();
+        out.push(`let ${dst} := mload(0x40)`);
+        const size = this.abiEncFromStorage(f.type, slotAt(f.slot), 0, dst, out);
+        out.push(`mstore(0x40, add(${dst}, ${size}))`);
+        out.push(`mstore(${at}, ${dst})`);
         hw += 1;
       } else {
         out.push(`mstore(${at}, ${this.loadState(f.type, slotAt(f.slot), f.offset)})`);

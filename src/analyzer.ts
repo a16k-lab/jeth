@@ -1413,6 +1413,19 @@ export class Analyzer {
         args.push(a);
         continue;
       }
+      // a dynamic value-element array field (u256[]/u64[]/...): any array source (literal, calldata/
+      // storage/memory array). Materialized to a memory [len][elems] pointer by allocDynStructToMem
+      // (memory-local construct). Only valid for a memory-local struct (storage construct gated below).
+      if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
+        const a = this.checkExpr(node.arguments[i]!, f.type);
+        if (!a) return undefined;
+        if (!(a.type.kind === 'array' && a.type.length === undefined)) {
+          this.diags.error(node.arguments[i]!, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
+          return undefined;
+        }
+        args.push(this.coerce(a, f.type, node.arguments[i]!));
+        continue;
+      }
       if (!isStaticValueType(f.type)) {
         this.diags.error(node.arguments[i]!, 'JETH226', `struct field '${f.name}' of type ${displayName(f.type)} is not constructible yet`);
         return undefined;
@@ -2046,6 +2059,13 @@ export class Analyzer {
             this.diags.error(decl.initializer, 'JETH085', `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`);
             return;
           }
+          // a struct with a dynamic-ARRAY field, built FROM a calldata struct param, would need a
+          // calldata-array tail decode (with masking) into the field image - a later step. The
+          // constructor / storage / local-alias sources are supported.
+          if (e.kind === 'cdDynStructValue' && (declared as JethType & { kind: 'struct' }).fields.some((f) => f.type.kind === 'array' && f.type.length === undefined)) {
+            this.diags.error(decl.initializer, 'JETH200', `constructing a memory struct with a dynamic-array field from a calldata struct parameter is not supported yet (use a constructor, a storage struct, or another struct local)`);
+            return;
+          }
           this.declareLocal(decl.name.text, declared);
           this.memDynStructLocals.set(decl.name.text, declared);
           out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
@@ -2177,6 +2197,18 @@ export class Analyzer {
       const rhs = this.checkExpr(e.right, target.type);
       if (!rhs) return;
       const value = this.coerce(rhs, target.type, e.right);
+      // Constructing a whole STORAGE struct that has a dynamic-array field (this.s = S(a, ys, b)) is a
+      // later step (writeStruct has no array-field path); assign its fields individually. (Memory-local
+      // construction is handled in checkLocalDecl and is fully supported.)
+      if (
+        value.kind === 'structNew' &&
+        (target.kind === 'state' || target.kind === 'mapping' || target.kind === 'place' || target.kind === 'arrayElem') &&
+        target.type.kind === 'struct' &&
+        target.type.fields.some((f) => f.type.kind === 'array' && f.type.length === undefined)
+      ) {
+        this.diags.error(e.right, 'JETH200', `constructing a storage struct with a dynamic-array field is not supported yet (assign its fields individually: this.s.a = ...; this.s.xs.push(...))`);
+        return;
+      }
       out.push({ kind: 'assign', target, value });
       return;
     }
@@ -2606,7 +2638,15 @@ export class Analyzer {
    *  one head word per field (value inline, bytes/string a pointer), matching the tuple head. */
   private isSupportedDynStructLocal(t: JethType): boolean {
     if (t.kind !== 'struct' || !isDynamicType(t)) return false;
-    return t.fields.every((f) => isStaticValueType(f.type) || isBytesLike(f.type));
+    // every field must be a value type (inline head word), bytes/string (head pointer to [len][data]),
+    // or a dynamic value-element array (head pointer to [len][elems]). Static-array / nested-struct /
+    // string[] / T[][] fields stay gated.
+    return t.fields.every(
+      (f) =>
+        isStaticValueType(f.type) ||
+        isBytesLike(f.type) ||
+        (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)),
+    );
   }
 
   /** Resolve `d.field` where `d` is a DYNAMIC-field struct memory local into its head-word
@@ -2636,6 +2676,12 @@ export class Analyzer {
       // a bytes/string field write re-points the head word at a freshly-materialized blob.
       if (isBytesLike(mf.field.type)) {
         return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+      }
+      // writing a whole dynamic-array field of a memory struct (re-pointing the head word) is a later
+      // step; element writes (p.xs[i] = v) are gated separately.
+      if (mf.field.type.kind === 'array' && mf.field.type.length === undefined) {
+        this.diags.error(node, 'JETH200', `writing a dynamic-array field of a memory struct is not supported yet`);
+        return undefined;
       }
       return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
     }
@@ -3407,6 +3453,16 @@ export class Analyzer {
       }
       return undefined;
     }
+    // p.xs: a dynamic value-array field of a dynamic-field struct memory local. The head word holds a
+    // [len][elems] pointer; load it (memField) and wrap in memArrayExpr so index/.length consume it.
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
+      const mf = this.memDynStructField(node);
+      if (mf && mf.field.type.kind === 'array' && mf.field.type.length === undefined) {
+        const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
+        return { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element };
+      }
+      return undefined;
+    }
     if (ts.isIdentifier(node)) {
       const t = this.lookupLocal(node.text);
       // a MEMORY array local (let xs: u256[] = [...]): the register holds a pointer to
@@ -4173,6 +4229,12 @@ export class Analyzer {
       const mf = this.memDynStructField(node);
       if (!mf) return undefined;
       if (isStaticValueType(mf.field.type)) return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+      // a dynamic value-array field: the head word holds a pointer to [len][elems]. Wrap a head-word
+      // LOAD (memField) in memArrayExpr so index / .length / return consume it as a memory array.
+      if (mf.field.type.kind === 'array' && mf.field.type.length === undefined) {
+        const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
+        return { kind: 'arrayValue', type: mf.field.type, arr: { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element } };
+      }
       return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
     }
     // G9: `p.x` / `p.inner.x` / `p.inner` read where the chain is rooted at a memory-aggregate
