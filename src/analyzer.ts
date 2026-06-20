@@ -852,11 +852,10 @@ export class Analyzer {
     const name = (member.name as ts.Identifier).text;
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
-    // Folding supports integer + bool literals only (foldConstant/evalConstInt), so scope @constant
-    // to those. A bytesN/address/string/aggregate constant is a clean over-rejection (a later step),
-    // not a confusing fold-failure cascade.
-    if (type.kind !== 'uint' && type.kind !== 'int' && type.kind !== 'bool') {
-      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool constants; bytesN/address constant folding is a later step)`);
+    // Folding supports integer + bool + address constants (foldConstant). A bytesN/string/aggregate
+    // constant is a clean over-rejection (a later step), not a confusing fold-failure cascade.
+    if (type.kind !== 'uint' && type.kind !== 'int' && type.kind !== 'bool' && type.kind !== 'address') {
+      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address constants; bytesN/string constant folding is a later step)`);
       return;
     }
     if (!member.initializer) {
@@ -5708,6 +5707,22 @@ export class Analyzer {
         return v;
       }
       return undefined; // not a constant integer expression -> caller emits JETH048
+    }
+    // address constant: `address(<int literal>)` -> the uint160 value (range-checked like solc).
+    if (expected.kind === 'address') {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'address' &&
+        node.arguments.length === 1
+      ) {
+        const a = this.asIntLiteral(node.arguments[0]!);
+        if (a !== undefined) {
+          if (a < 0n || a >= 1n << 160n) { this.diags.error(node, 'JETH070', `literal ${a} out of range for address`); return undefined; }
+          return a;
+        }
+      }
+      return undefined; // not a constant address literal -> caller emits JETH048
     }
     // non-integer target: only the literal 0 implicitly converts to bytesN (matching solc); any
     // other integer literal/expression is an error.

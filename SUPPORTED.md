@@ -71,9 +71,12 @@ local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value 
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short
 overwrite). A struct with a dynamic-ARRAY field from a memory/calldata source stays a clean rejection.
 
+`@constant address` (`@constant K: address = address(0x..n)`) is supported: a slot-free compile-time
+constant substituted at each read site, byte-identical to solc and consuming no storage slot.
+
 Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encodeWithSelector/Signature`,
 `abi.encode*` of array/struct args, a struct with a dynamic-ARRAY field from a memory/calldata source
--> storage, struct / indexed-array event params, `@constant` `address`/`bytesN`.
+-> storage, struct / indexed-array (non-indexed struct) event params, `@constant bytesN`/`string`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage
