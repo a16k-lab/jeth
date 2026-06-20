@@ -4056,7 +4056,8 @@ export class Analyzer {
     // An integer-literal cast is range-checked at compile time (uint8(300) is an error
     // in solc, not a runtime truncation): retype the literal to the target directly.
     if (inner.kind === 'literalInt' && isInteger(target)) {
-      const r = this.retypeLiteral(inner, target, node);
+      // an EXPLICIT cast: an enum-member literal may be cast to an integer here (uint256(Color.Blue)).
+      const r = this.retypeLiteral(inner, target, node, /* allowEnumToInt */ true);
       return r ?? undefined;
     }
     if (this.isCastAllowed(inner.type, target)) {
@@ -5118,8 +5119,18 @@ export class Analyzer {
     return undefined;
   }
 
-  private retypeLiteral(lit: Expr, target: JethType, node: ts.Node): Expr | undefined {
+  private retypeLiteral(lit: Expr, target: JethType, node: ts.Node, allowEnumToInt = false): Expr | undefined {
     if (lit.kind !== 'literalInt') return undefined;
+    // An enum-typed literal (Color.Member or Color(x)) is nominally an enum: it implicitly converts
+    // ONLY to the same enum, and that case is caught upstream by typesEqual so it never reaches here.
+    // Arriving here with an enum literal therefore means an implicit enum -> int (or enum -> a
+    // different enum) conversion, which solc forbids (`uint256 x = Color.Blue;` is an error); an
+    // explicit cast is required. The explicit-cast call site passes allowEnumToInt. This mirrors the
+    // non-literal enum value, which also rejects with JETH085 via isImplicitWiden's brand check.
+    if (isEnum(lit.type) && !allowEnumToInt) {
+      this.diags.error(node, 'JETH085', `cannot implicitly convert enum '${displayName(lit.type)}' to ${displayName(target)} (no implicit enum conversion; use an explicit cast)`);
+      return undefined;
+    }
     // A bare integer literal cannot become an enum without an explicit conversion (solc rejects
     // `Color c = 1;`). An already-enum-typed literal (Color.Member / Color(x)) reaches coerce via
     // typesEqual and never lands here, so any literal arriving with an enum target is a bare int.
