@@ -4712,6 +4712,17 @@ export class Analyzer {
       }
       return undefined;
     }
+    // bytesN(<int literal>) -> the value LEFT-aligned in the high N bytes (the bytesN register form),
+    // matching solc's bytesN literal. (An address-typed literal goes through isCastAllowed: address ->
+    // bytes20 only.) e.g. bytes4(0x12345678n) == 0x1234567800...00.
+    if (inner.kind === 'literalInt' && target.kind === 'bytesN' && inner.type.kind !== 'address') {
+      const v = inner.value;
+      if (v < 0n || v >= 1n << BigInt(target.size * 8)) {
+        this.diags.error(node, 'JETH070', `literal ${v} does not fit in bytes${target.size}`);
+        return undefined;
+      }
+      return { kind: 'literalInt', type: target, value: v << BigInt((32 - target.size) * 8) };
+    }
     if (this.isCastAllowed(inner.type, target)) {
       return { kind: 'cast', type: target, from: inner.type, operand: inner };
     }

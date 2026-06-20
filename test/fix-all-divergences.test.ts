@@ -157,3 +157,13 @@ describe('sweep @constant folder enhancements', () => {
     );
   });
 });
+
+describe('sweep cast fixes', () => {
+  it('bytesN(<int literal>) left-aligns into the high N bytes', async () => {
+    await rt(
+      `@contract class C { @external @pure a(): bytes4 { return bytes4(0x12345678n); } @external @pure b(): bytes1 { return bytes1(0xabn); } }`,
+      `contract C { function a() external pure returns(bytes4){ return bytes4(0x12345678); } function b() external pure returns(bytes1){ return bytes1(0xab); } }`,
+      [{ sig: 'a()' }, { sig: 'b()' }],
+    );
+  });
+});
