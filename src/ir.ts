@@ -95,7 +95,7 @@ export type Expr =
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1
   // --- Phase 4: dynamic arrays T[] ---
   | { kind: 'arrayLen'; type: JethType; arr: ArrayExpr } // a.length -> u256
-  | { kind: 'arrayGet'; type: JethType; arr: ArrayExpr; index: Expr } // a[i] read (bounds-checked)
+  | { kind: 'arrayGet'; type: JethType; arr: ArrayExpr; index: Expr; oobEmpty?: boolean } // a[i] read (bounds-checked; oobEmpty: revert(0,0) instead of Panic 0x32, for @public getters)
   | { kind: 'arrayValue'; type: JethType; arr: ArrayExpr } // a whole array (for return encoding)
   | { kind: 'arrayLit'; type: JethType; elem: JethType; elements: Expr[] } // [a,b,c] -> memory T[]
   | { kind: 'newArray'; type: JethType; elem: JethType; length: Expr } // new T[](n) -> zeroed memory T[]
@@ -127,7 +127,7 @@ export type Expr =
   // --- storage / mapping-valued string[] / bytes[] element -> a dynamic value ---
   // (read this.ss[i] / this.m[k][i]; the element header lives at keccak(lenSlot)+i,
   //  a normal storage bytes/string; bounds-checked against the array length).
-  | { kind: 'strArrayElem'; type: JethType; arr: ArrayExpr; index: Expr }
+  | { kind: 'strArrayElem'; type: JethType; arr: ArrayExpr; index: Expr; oobEmpty?: boolean }
   // --- Phase 4e-6: dynamic struct (tuple with >=1 dynamic field) calldata param ---
   // Read a STATIC leaf reached by navigating a dynamic-struct field chain. The
   // codegen folds the path to a calldata byte offset (runtime tuple-start base).
@@ -143,6 +143,8 @@ export type Expr =
 export interface AccessPath {
   baseSlot: number;
   steps: AccessStep[];
+  oobEmpty?: boolean; // index/dynIndex out-of-bounds reverts EMPTY (revert(0,0)) instead of Panic 0x32
+  // (for @public auto-getters, whose array-element access matches solc's empty-revert on OOB).
 }
 export type AccessStep =
   | { kind: 'field'; fieldSlot: number; fieldOffset: number; fieldType: JethType } // struct field

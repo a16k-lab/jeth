@@ -8,7 +8,7 @@ import { compileSolidity } from './_solidity.js';
 
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => functionSelector(s);
-const W = (n: bigint) => pad32(n).slice(2);
+const W = (n: bigint) => pad32(n);
 const A1 = '00'.repeat(12) + '1111111111111111111111111111111111111111';
 const A2 = '00'.repeat(12) + '2222222222222222222222222222222222222222';
 
@@ -135,13 +135,64 @@ describe('@public struct-flattening getters vs Solidity', () => {
   });
 });
 
+describe('@public struct getters reached via mapping/array + nested structs vs Solidity', () => {
+  it('mapping(K=>Struct) getter (present + absent key -> zero struct, no revert)', async () => {
+    await diff(
+      `@struct class P { x: u256; o: address; } @contract class C { @public @state m: mapping<u256,P>; @external set(k: u256): void { this.m[k].x = 7n; this.m[k].o = address(0x111n); } }`,
+      `struct P { uint256 x; address o; } contract C { mapping(uint256=>P) public m; function set(uint256 k) external { m[k].x=7; m[k].o=address(0x111); } }`,
+      [{ sig: 'set(uint256)', args: W(5n) }, { sig: 'm(uint256)', args: W(5n) }, { sig: 'm(uint256)', args: W(9n) }],
+    );
+  });
+
+  it('Struct[] getter (in-bounds + OOB empty revert) and Arr<Struct,N>', async () => {
+    await diff(
+      `@struct class P { x: u256; o: address; } @contract class C { @public @state a: P[]; @external push(x: u256): void { this.a.push(P(x, address(0x222n))); } }`,
+      `struct P { uint256 x; address o; } contract C { P[] public a; function push(uint256 x) external { a.push(P(x, address(0x222))); } }`,
+      [{ sig: 'push(uint256)', args: W(7n) }, { sig: 'a(uint256)', args: W(0n) }, { sig: 'a(uint256)', args: W(5n) }],
+    );
+    await diff(
+      `@struct class P { x: u256; o: address; } @contract class C { @public @state a: Arr<P,3>; @external set(i: u256, x: u256): void { this.a[i] = P(x, address(0x555n)); } }`,
+      `struct P { uint256 x; address o; } contract C { P[3] public a; function set(uint256 i, uint256 x) external { a[i] = P(x, address(0x555)); } }`,
+      [{ sig: 'set(uint256,uint256)', args: W(1n) + W(8n) }, { sig: 'a(uint256)', args: W(1n) }, { sig: 'a(uint256)', args: W(5n) }],
+    );
+  });
+
+  it('mapping(K=>Struct[]) getter (key + index params)', async () => {
+    await diff(
+      `@struct class P { x: u256; o: address; } @contract class C { @public @state m: mapping<u256,P[]>; @external push(k: u256, x: u256): void { this.m[k].push(P(x, address(0x444n))); } }`,
+      `struct P { uint256 x; address o; } contract C { mapping(uint256=>P[]) public m; function push(uint256 k, uint256 x) external { m[k].push(P(x, address(0x444))); } }`,
+      [{ sig: 'push(uint256,uint256)', args: W(1n) + W(9n) }, { sig: 'm(uint256,uint256)', args: W(1n) + W(0n) }, { sig: 'm(uint256,uint256)', args: W(1n) + W(7n) }],
+    );
+  });
+
+  it('nested static struct is flattened inline (dynamic array + mapping members omitted)', async () => {
+    await diff(
+      `@struct class I { a: u256; b: address; } @struct class O { x: u256; inner: I; z: u256; } @contract class C { @public @state o: O; @external set(): void { this.o.x = 1n; this.o.inner.a = 2n; this.o.inner.b = address(0x333n); this.o.z = 4n; } }`,
+      `struct I { uint256 a; address b; } struct O { uint256 x; I inner; uint256 z; } contract C { O public o; function set() external { o.x=1; o.inner.a=2; o.inner.b=address(0x333); o.z=4; } }`,
+      [{ sig: 'set()' }, { sig: 'o()' }],
+    );
+  });
+
+  it('string/bytes-key mapping getters', async () => {
+    await diff(
+      `@contract class C { @public @state m: mapping<string,u256>; @external set(k: string, v: u256): void { this.m[k] = v; } }`,
+      `contract C { mapping(string=>uint256) public m; function set(string calldata k, uint256 v) external { m[k] = v; } }`,
+      [{ sig: 'set(string,uint256)', args: W(0x40n) + W(42n) + W(2n) + '6869'.padEnd(64, '0') }, { sig: 'm(string)', args: W(0x20n) + W(2n) + '6869'.padEnd(64, '0') }],
+    );
+    await diff(
+      `@contract class C { @public @state m: mapping<bytes,address>; @external set(k: bytes, v: address): void { this.m[k] = v; } }`,
+      `contract C { mapping(bytes=>address) public m; function set(bytes calldata k, address v) external { m[k] = v; } }`,
+      [{ sig: 'set(bytes,address)', args: W(0x40n) + W(0x111n) + W(3n) + 'aabbcc'.padEnd(64, '0') }, { sig: 'm(bytes)', args: W(0x20n) + W(3n) + 'aabbcc'.padEnd(64, '0') }],
+    );
+  });
+});
+
 describe('@public getter shapes still deferred reject cleanly (honest gaps vs solc)', () => {
   const cases: { name: string; jeth: string; sol: string }[] = [
-    { name: 'nested-struct member', jeth: `@struct class I { a: u256; } @struct class P { x: u256; inner: I; } @contract class C { @public @state p: P; }`, sol: `struct I { uint256 a; } struct P { uint256 x; I inner; } contract C { P public p; }` },
-    { name: 'mapping-reached struct', jeth: `@struct class P { x: u256; y: u256; } @contract class C { @public @state accounts: mapping<address,P>; }`, sol: `struct P { uint256 x; uint256 y; } contract C { mapping(address=>P) public accounts; }` },
-    { name: 'array-reached struct', jeth: `@struct class P { x: u256; y: u256; } @contract class C { @public @state list: P[]; }`, sol: `struct P { uint256 x; uint256 y; } contract C { P[] public list; }` },
-    { name: 'nested array', jeth: `@contract class C { @public @state dd: u256[][]; }`, sol: `contract C { uint256[][] public dd; }` },
-    { name: 'mapping to fixed array', jeth: `@contract class C { @public @state m: mapping<u256,Arr<u256,3>>; }`, sol: `contract C { mapping(uint256=>uint256[3]) public m; }` },
+    { name: 'nested array (value element)', jeth: `@contract class C { @public @state dd: u256[][]; }`, sol: `contract C { uint256[][] public dd; }` },
+    { name: 'mapping to fixed array (value element)', jeth: `@contract class C { @public @state m: mapping<u256,Arr<u256,3>>; }`, sol: `contract C { mapping(uint256=>uint256[3]) public m; }` },
+    { name: 'nested struct with a dynamic (string) member', jeth: `@struct class I { a: u256; s: string; } @struct class O { x: u256; inner: I; } @contract class C { @public @state o: O; }`, sol: `struct I { uint256 a; string s; } struct O { uint256 x; I inner; } contract C { O public o; }` },
+    { name: 'struct with a fixed-array member (solc includes it; flattening unimpl)', jeth: `@struct class P { x: u256; arr: Arr<u256,3>; } @contract class C { @public @state p: P; }`, sol: `struct P { uint256 x; uint256[3] arr; } contract C { P public p; }` },
   ];
   for (const c of cases) {
     it(`${c.name}: JETH rejects cleanly, solc accepts`, () => {

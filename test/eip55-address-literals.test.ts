@@ -97,7 +97,30 @@ describe('EIP-55 address literals: runtime byte-identity vs solc', () => {
     await diff(
       `@contract class C { @constant K: address = 0x${valid}n; @external @view getK(): address { return this.K; } @external @view isK(x: address): bool { return x == this.K; } }`,
       `contract C { address constant K = 0x${valid}; function getK() external view returns(address){ return K; } function isK(address x) external view returns(bool){ return x == K; } }`,
-      [{ sig: 'getK()' }, { sig: 'isK(address)', args: '00'.repeat(12) + valid }, { sig: 'isK(address)', args: pad32(0x2222n).slice(2) }],
+      [{ sig: 'getK()' }, { sig: 'isK(address)', args: '00'.repeat(12) + valid }, { sig: 'isK(address)', args: pad32(0x2222n) }],
     );
+  });
+});
+
+describe('EIP-55 address literals: over-acceptances rejected (match solc)', () => {
+  // [label, jeth-body, sol-body] - all must be rejected by BOTH (an address literal is not an
+  // arithmetic operand; uppercase 0X is not a valid hex prefix).
+  const rejects: [string, string, string][] = [
+    ['address literal + int', `@external @pure f(): u256 { return 0x${valid}n + 2n; }`, `function f() external pure returns(uint256){ return 0x${valid} + 2; }`],
+    ['address literal & int', `@external @pure f(): u256 { return 0x${ones}n & 1n; }`, `function f() external pure returns(uint256){ return 0x${ones} & 1; }`],
+    ['address literal * int', `@external @pure f(): u256 { return 0x${ones}n * 3n; }`, `function f() external pure returns(uint256){ return 0x${ones} * 3; }`],
+    ['uppercase 0X prefix (bare)', `@external @pure f(): address { return 0X${valid}n; }`, `function f() external pure returns(address){ return address(0X${valid}); }`],
+    ['uppercase 0X in u160 cast', `@external @pure f(): u160 { return u160(0X${ones}n); }`, `function f() external pure returns(uint160){ return uint160(0X${ones}); }`],
+  ];
+  for (const [label, jb, sb] of rejects) {
+    it(`${label}: rejected by both`, () => {
+      expect(jethOk(`@contract class C { ${jb} }`), 'JETH should reject').toBe(false);
+      expect(solcOk(`contract C { ${sb} }`), 'solc should reject').toBe(false);
+    });
+  }
+
+  it('address literal comparison (==) is still accepted (both)', () => {
+    expect(jethOk(`@contract class C { @external @pure f(a: address): bool { return a == 0x${valid}n; } }`)).toBe(true);
+    expect(solcOk(`contract C { function f(address a) external pure returns(bool){ return a == 0x${valid}; } }`)).toBe(true);
   });
 });

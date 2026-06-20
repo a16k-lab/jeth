@@ -1518,9 +1518,16 @@ ${indent(runtime, 6)}
         out.push(`let ${r} := keccak256(add(${mp}, 0x20), ${len})`);
         return r;
       }
-      case 'modOp':
-        // addmod/mulmod: full-precision (a op b) mod m, m==0 -> 0 (EVM opcode semantics).
-        return `${e.op}(${this.lowerExpr(e.a, ctx, out)}, ${this.lowerExpr(e.b, ctx, out)}, ${this.lowerExpr(e.m, ctx, out)})`;
+      case 'modOp': {
+        // addmod/mulmod: full-precision (a op b) mod m. Solidity reverts Panic(0x12) when the
+        // modulus is 0 (unlike the raw EVM opcode, which returns 0); args are evaluated first.
+        const ma = this.lowerExpr(e.a, ctx, out);
+        const mb = this.lowerExpr(e.b, ctx, out);
+        const mm = this.fresh();
+        out.push(`let ${mm} := ${this.lowerExpr(e.m, ctx, out)}`);
+        out.push(`if iszero(${mm}) { ${this.panic()}(0x12) }`);
+        return `${e.op}(${ma}, ${mb}, ${mm})`;
+      }
       case 'precompileHash': {
         // sha256 (0x02) / ripemd160 (0x03): staticcall the precompile over the CONTENT bytes,
         // output 32 bytes to scratch. ripemd160's 20-byte result is right-aligned, so left-shift
@@ -2135,6 +2142,8 @@ ${indent(runtime, 6)}
     let slot = String(path.baseSlot);
     let offset = 0;
     let byteShift: string | undefined; // a RUNTIME byte offset within the slot (packed elem)
+    // @public auto-getters revert EMPTY on an out-of-bounds index (solc parity); ordinary access Panics.
+    const oob = path.oobEmpty ? 'revert(0, 0)' : `${this.panic()}(0x32)`;
     for (const step of path.steps) {
       if (step.kind === 'field') {
         if (constSlot !== null) {
@@ -2156,7 +2165,7 @@ ${indent(runtime, 6)}
         } else {
           const it = this.fresh();
           out.push(`let ${it} := ${this.lowerExpr(step.index, ctx, out)}`);
-          out.push(`if iszero(lt(${it}, ${step.length})) { ${this.panic()}(0x32) }`);
+          out.push(`if iszero(lt(${it}, ${step.length})) { ${oob} }`);
           const delta = step.strideSlots === 1 ? it : `mul(${it}, ${step.strideSlots})`;
           slot = `add(${constSlot !== null ? constSlot : slot}, ${delta})`;
           constSlot = null;
@@ -2175,7 +2184,7 @@ ${indent(runtime, 6)}
         } else {
           const it = this.fresh();
           out.push(`let ${it} := ${this.lowerExpr(step.index, ctx, out)}`);
-          out.push(`if iszero(lt(${it}, ${step.length})) { ${this.panic()}(0x32) }`);
+          out.push(`if iszero(lt(${it}, ${step.length})) { ${oob} }`);
           const base = constSlot !== null ? String(constSlot) : slot;
           slot = `add(${base}, div(${it}, ${step.perSlot}))`;
           byteShift = `mul(mod(${it}, ${step.perSlot}), ${step.size})`;
@@ -2187,7 +2196,7 @@ ${indent(runtime, 6)}
         const lenSlot = constSlot !== null ? String(constSlot) : slot;
         const it = this.fresh();
         out.push(`let ${it} := ${this.lowerExpr(step.index, ctx, out)}`);
-        out.push(`if iszero(lt(${it}, sload(${lenSlot}))) { ${this.panic()}(0x32) }`);
+        out.push(`if iszero(lt(${it}, sload(${lenSlot}))) { ${oob} }`);
         const dataBase = this.fresh();
         out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${lenSlot})`);
         const delta = step.strideSlots === 1 ? it : `mul(${it}, ${step.strideSlots})`;
@@ -2200,7 +2209,7 @@ ${indent(runtime, 6)}
         const lenSlot = constSlot !== null ? String(constSlot) : slot;
         const it = this.fresh();
         out.push(`let ${it} := ${this.lowerExpr(step.index, ctx, out)}`);
-        out.push(`if iszero(lt(${it}, sload(${lenSlot}))) { ${this.panic()}(0x32) }`);
+        out.push(`if iszero(lt(${it}, sload(${lenSlot}))) { ${oob} }`);
         const dataBase = this.fresh();
         out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${lenSlot})`);
         if (step.index.kind === 'literalInt') {
@@ -2437,21 +2446,24 @@ ${indent(runtime, 6)}
     const ref = this.lowerArrayRef(e.arr, ctx, out);
     const i = this.fresh();
     out.push(`let ${i} := ${this.lowerExpr(e.index, ctx, out)}`);
+    // @public auto-getters revert with EMPTY data on out-of-bounds (matching solc's getter),
+    // whereas an ordinary a[i] access raises Panic(0x32).
+    const oob = e.oobEmpty ? 'revert(0, 0)' : `${this.panic()}(0x32)`;
     if (ref.src === 'storage') {
-      out.push(`if iszero(lt(${i}, sload(${ref.lenSlot}))) { ${this.panic()}(0x32) }`);
+      out.push(`if iszero(lt(${i}, sload(${ref.lenSlot}))) { ${oob} }`);
       const data = this.arrayDataSlot(ref.lenSlot, out);
       return this.arrayElemLoad(ref.elem, data, i);
     }
     if (ref.src === 'fixed') {
-      out.push(`if iszero(lt(${i}, ${ref.length})) { ${this.panic()}(0x32) }`);
+      out.push(`if iszero(lt(${i}, ${ref.length})) { ${oob} }`);
       return this.arrayElemLoad(ref.elem, String(ref.baseSlot), i); // data inline at baseSlot
     }
     if (ref.src === 'memory') {
       // memory T[] (value element, one word each): bound vs mload(ptr); data at ptr+0x20.
-      out.push(`if iszero(lt(${i}, mload(${ref.ptr}))) { ${this.panic()}(0x32) }`);
+      out.push(`if iszero(lt(${i}, mload(${ref.ptr}))) { ${oob} }`);
       return `mload(add(${ref.ptr}, add(0x20, mul(${i}, 0x20))))`;
     }
-    out.push(`if iszero(lt(${i}, ${ref.length})) { ${this.panic()}(0x32) }`);
+    out.push(`if iszero(lt(${i}, ${ref.length})) { ${oob} }`);
     const w = this.fresh();
     out.push(`let ${w} := calldataload(add(${ref.offset}, mul(${i}, 32)))`);
     const guard = this.validateInput(ref.elem, w); // validate dirty calldata elements on read
@@ -3334,19 +3346,21 @@ ${indent(runtime, 6)}
   /** Storage header slot of bytes/string element `i` of a storage string[]/bytes[].
    *  Bounds-checks i against the array length (Panic 0x32), then returns
    *  keccak(lenSlot)+i. The header is a normal storage bytes/string. */
-  private strArrayElemSlot(arr: ArrayExpr, index: Expr, ctx: LowerCtx, out: string[]): string {
+  private strArrayElemSlot(arr: ArrayExpr, index: Expr, ctx: LowerCtx, out: string[], oobEmpty = false): string {
     const ref = this.lowerArrayRef(arr, ctx, out);
     const i = this.fresh();
     out.push(`let ${i} := ${this.lowerExpr(index, ctx, out)}`);
+    // @public getters revert EMPTY on out-of-bounds (solc parity); ordinary access Panics 0x32.
+    const oob = oobEmpty ? 'revert(0, 0)' : `${this.panic()}(0x32)`;
     // Arr<string,N>/Arr<bytes,N> (fixed): N contiguous string headers at baseSlot + i.
     if (ref.src === 'fixed') {
-      out.push(`if iszero(lt(${i}, ${ref.length})) { ${this.panic()}(0x32) }`);
+      out.push(`if iszero(lt(${i}, ${ref.length})) { ${oob} }`);
       const hdr = this.fresh();
       out.push(`let ${hdr} := add(${ref.baseSlot}, ${i})`);
       return hdr;
     }
     if (ref.src !== 'storage') throw new UnsupportedError('string[]/bytes[] element requires a storage array');
-    out.push(`if iszero(lt(${i}, sload(${ref.lenSlot}))) { ${this.panic()}(0x32) }`);
+    out.push(`if iszero(lt(${i}, sload(${ref.lenSlot}))) { ${oob} }`);
     const dataBase = this.arrayDataSlot(ref.lenSlot, out);
     const hdr = this.fresh();
     out.push(`let ${hdr} := add(${dataBase}, ${i})`);
@@ -4252,7 +4266,7 @@ ${indent(runtime, 6)}
         // storage / mapping-valued string[]/bytes[] element: bounds-check i (Panic
         // 0x32), then the element header at keccak(lenSlot)+i is a normal storage
         // bytes/string (short inline / long with keccak(headerSlot) data slots).
-        const slot = this.strArrayElemSlot(e.arr, e.index, ctx, out);
+        const slot = this.strArrayElemSlot(e.arr, e.index, ctx, out, e.oobEmpty);
         return { src: 'storage', slot };
       }
       case 'dynPlaceRead': {

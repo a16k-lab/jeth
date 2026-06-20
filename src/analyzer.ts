@@ -569,61 +569,69 @@ export class Analyzer {
   }
 
   /** Synthesize the solc auto-getter for a @public state variable, or null when its shape is not
-   *  yet supported (struct leaf, mapping->fixed-array, nested arrays). solc parameterizes the getter:
-   *  each mapping level contributes a key param, each array level a uint256 index param, and the body
-   *  returns the leaf value at the resolved slot. */
+   *  yet supported. solc parameterizes the getter: each mapping level contributes a key param, each
+   *  array level a uint256 index param. A value/bytes/string leaf returns directly; a STRUCT leaf is
+   *  flattened into a value/bytes/string-field tuple (omitting array+mapping members, recursively
+   *  inlining all-static nested structs). Byte-identical to solc, incl. empty-revert on OOB. */
   private synthPublicGetter(v: StateVar): FunctionIR | null {
     const params: Param[] = [];
-    const keys: Expr[] = [];
+    const keys: Expr[] = []; // mapping keys, for the specialized mapGet/mapArray value encoders
     const keyTypes: JethType[] = [];
+    const indices: Expr[] = []; // array index params
+    const arrTypes: Extract<JethType, { kind: 'array' }>[] = [];
+    const prefix: AccessStep[] = []; // generic navigation (mapKey + index) for STRUCT leaves
     let t: JethType = v.type;
     let argi = 0;
     while (t.kind === 'mapping') {
       const nm = `arg${argi++}`;
       params.push({ name: nm, type: t.key });
-      keys.push({ kind: 'localRead', type: t.key, name: nm });
+      // a bytes/string key is a dynamic (calldata) value; a value-type key is a register local.
+      const key: Expr = isBytesLike(t.key)
+        ? { kind: 'dynParamRead', type: t.key, name: nm }
+        : { kind: 'localRead', type: t.key, name: nm };
+      keys.push(key);
       keyTypes.push(t.key);
+      prefix.push({ kind: 'mapKey', key, valueType: t.value });
       t = t.value;
     }
-    // A single array level (the var itself, or a mapping value) becomes a uint256 index param.
-    let arrType: Extract<JethType, { kind: 'array' }> | null = null;
-    let index: Expr | null = null;
-    if (t.kind === 'array') {
-      arrType = t;
+    while (t.kind === 'array') {
       const nm = `arg${argi++}`;
       params.push({ name: nm, type: U256 });
-      index = { kind: 'localRead', type: U256, name: nm };
+      const idx: Expr = { kind: 'localRead', type: U256, name: nm };
+      indices.push(idx);
+      arrTypes.push(t);
+      prefix.push(
+        t.length !== undefined
+          ? { kind: 'index', index: idx, strideSlots: storageSlotCount(t.element), length: t.length, elemType: t.element }
+          : { kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(t.element), elemType: t.element },
+      );
       t = t.element;
-      if (t.kind === 'array' || t.kind === 'mapping') return null; // nested array / array-of-mapping deferred
+      if (t.kind === 'mapping') return null; // array-of-mapping (not valid Solidity anyway)
     }
-    // A struct leaf: solc flattens it into a tuple of its value/bytes/string members, OMITTING array
-    // and mapping members. Supported only for a directly-declared struct var (mapping/array-reached
-    // structs and nested-struct members are deferred). The returndata is byte-identical to solc's.
-    if (t.kind === 'struct') {
-      if (keys.length > 0 || index) return null;
-      const types: JethType[] = [];
-      const values: Expr[] = [];
-      for (const f of t.fields) {
-        if (f.type.kind === 'array' || f.type.kind === 'mapping') continue; // solc omits these
-        const path: AccessPath = { baseSlot: v.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] };
-        if (isBytesLike(f.type)) values.push({ kind: 'dynPlaceRead', type: f.type, path });
-        else if (isStaticValueType(f.type)) values.push({ kind: 'placeRead', type: f.type, path });
-        else return null; // nested struct member (recursive flatten) deferred
-        types.push(f.type);
-      }
-      if (types.length === 0) return null; // degenerate struct (all members omitted)
-      const sig = functionSignature(v.name, params.map((p) => p.type));
-      return {
-        name: v.name, key: `getter$${v.name}`, visibility: 'external', mutability: 'view',
-        params, returnType: VOID, returnTypes: types, signature: sig, selector: functionSelector(sig),
-        body: [{ kind: 'returnTuple', values, types }],
-      };
-    }
-    // The leaf must be a value type or bytes/string.
-    if (!(isStaticValueType(t) || isBytesLike(t))) return null;
+    const sig = functionSignature(v.name, params.map((p) => p.type));
+    const base = { name: v.name, key: `getter$${v.name}`, visibility: 'external' as const, mutability: 'view' as const, params, signature: sig, selector: functionSelector(sig) };
 
+    // STRUCT leaf: flatten to a value/bytes/string-field tuple (omitting array+mapping members),
+    // reached via the navigation prefix; array-element OOB reverts EMPTY (solc parity).
+    if (t.kind === 'struct') {
+      const flat = this.flattenGetterStruct(t, v.slot, prefix);
+      if (!flat) return null;
+      return { ...base, returnType: VOID, returnTypes: flat.types, body: [{ kind: 'returnTuple', values: flat.values, types: flat.types }] };
+    }
+
+    // Value / bytes / string leaf.
+    if (!(isStaticValueType(t) || isBytesLike(t))) return null;
     let value: Expr;
-    if (arrType && index) {
+    if (indices.length === 0 && keys.length === 0) {
+      value = isStaticValueType(t)
+        ? { kind: 'stateRead', type: t, slot: v.slot, offset: v.offset, varName: v.name }
+        : { kind: 'dynStateRead', type: t, slot: v.slot };
+    } else if (indices.length === 0) {
+      value = isBytesLike(t)
+        ? { kind: 'mapDynValue', type: t, baseSlot: v.slot, keys, keyTypes }
+        : { kind: 'mapGet', type: t, baseSlot: v.slot, keys, keyTypes };
+    } else if (indices.length === 1) {
+      const arrType = arrTypes[0]!;
       let arr: ArrayExpr;
       if (keys.length > 0) {
         if (arrType.length !== undefined) return null; // mapping -> fixed array deferred
@@ -634,23 +642,43 @@ export class Analyzer {
         arr = { base: { kind: 'stateArray', slot: v.slot }, elem: t };
       }
       value = isBytesLike(t)
-        ? { kind: 'strArrayElem', type: t, arr, index }
-        : { kind: 'arrayGet', type: t, arr, index };
-    } else if (keys.length > 0) {
-      value = isBytesLike(t)
-        ? { kind: 'mapDynValue', type: t, baseSlot: v.slot, keys, keyTypes }
-        : { kind: 'mapGet', type: t, baseSlot: v.slot, keys, keyTypes };
+        ? { kind: 'strArrayElem', type: t, arr, index: indices[0]!, oobEmpty: true }
+        : { kind: 'arrayGet', type: t, arr, index: indices[0]!, oobEmpty: true };
     } else {
-      value = isStaticValueType(t)
-        ? { kind: 'stateRead', type: t, slot: v.slot, offset: v.offset, varName: v.name }
-        : { kind: 'dynStateRead', type: t, slot: v.slot };
+      return null; // a value/bytes leaf reached through >1 array level (T[][]) is deferred
     }
-    const sig = functionSignature(v.name, params.map((p) => p.type));
-    return {
-      name: v.name, key: `getter$${v.name}`, visibility: 'external', mutability: 'view',
-      params, returnType: t, signature: sig, selector: functionSelector(sig),
-      body: [{ kind: 'return', value }],
-    };
+    return { ...base, returnType: t, body: [{ kind: 'return', value }] };
+  }
+
+  /** Flatten a @public struct getter's return tuple: each value/bytes/string field (in declaration
+   *  order, OMITTING array+mapping members) becomes a tuple component read via `prefix`+field steps
+   *  from `baseSlot`; an all-static nested struct is recursively inlined (byte-identical to solc,
+   *  whose static nested tuple encodes inline). Returns null when a nested struct is non-static (a
+   *  dynamic nested tuple would not match a flattened encoding) or the result tuple is empty. */
+  private flattenGetterStruct(st: Extract<JethType, { kind: 'struct' }>, baseSlot: number, prefix: AccessStep[]): { types: JethType[]; values: Expr[] } | null {
+    const types: JethType[] = [];
+    const values: Expr[] = [];
+    for (const f of st.fields) {
+      if (f.type.kind === 'mapping') continue; // solc omits mappings
+      if (f.type.kind === 'array' && f.type.length === undefined) continue; // solc omits DYNAMIC arrays
+      if (f.type.kind === 'array') return null; // a FIXED array IS included by solc; flattening it not yet impl -> defer
+      const steps: AccessStep[] = [...prefix, { kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }];
+      const path: AccessPath = { baseSlot, steps, oobEmpty: true };
+      if (isStaticValueType(f.type)) {
+        values.push({ kind: 'placeRead', type: f.type, path });
+        types.push(f.type);
+      } else if (isBytesLike(f.type)) {
+        values.push({ kind: 'dynPlaceRead', type: f.type, path });
+        types.push(f.type);
+      } else if (f.type.kind === 'struct') {
+        if (!isStaticType(f.type)) return null; // dynamic nested struct: tuple head/tail != flattened
+        const nested = this.flattenGetterStruct(f.type, baseSlot, steps);
+        if (!nested) return null;
+        types.push(...nested.types);
+        values.push(...nested.values);
+      } else return null;
+    }
+    return types.length ? { types, values } : null;
   }
 
   /** Phase 5: validate a constructor declaration + type-check its body into a ConstructorIR.
@@ -4547,6 +4575,7 @@ export class Analyzer {
     // check still applies to an address-like hex literal inside the cast (solc rejects address(0x<bad>)).
     const lit = this.asIntLiteral(arg);
     if (lit !== undefined) {
+      this.rejectUppercaseHexPrefix(arg);
       const addrClass = this.classifyAddressHexLiteral(arg);
       if (addrClass !== 'plain' && addrClass !== 'address') this.diags.error(node, addrClass.code, addrClass.msg);
       if (lit < 0n || lit >= 1n << 160n) {
@@ -4789,6 +4818,7 @@ export class Analyzer {
     if (ts.isBigIntLiteral(node)) {
       const raw = node.text.replace(/n$/, '');
       const value = BigInt(raw);
+      if (this.rejectUppercaseHexPrefix(node)) return { kind: 'literalInt', type: U256, value };
       // A 40-hex-digit checksummed literal is of type `address` (and only converts to uint160/bytes20,
       // never implicitly to an integer); a 39/41-digit or bad-checksum hex literal is a hard error.
       const addrClass = this.classifyAddressHexLiteral(node);
@@ -5629,7 +5659,14 @@ export class Analyzer {
       // integer-truncation miscompile (`(10n/4n)*4n` == 10, not 8) and rejects compile-time overflow /
       // div-by-zero / non-integer constants the way solc does. Non-constant operands fall through to
       // runtime codegen below (so variable arithmetic, incl. `unchecked` wrapping, is unchanged).
-      if (['+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^'].includes(op)) {
+      // An address-like hex literal (a 40-digit checksummed literal, or an invalid 39/41-digit /
+      // bad-checksum one) must NOT be const-folded as an integer: solc rejects arithmetic on an
+      // address (and rejects a bad-checksum literal outright). Fall through to checkExpr/buildBinary,
+      // which types the operand as `address` (-> JETH082) or emits the checksum error (-> JETH049).
+      const addrLike =
+        this.classifyAddressHexLiteral(node.left) !== 'plain' ||
+        this.classifyAddressHexLiteral(node.right) !== 'plain';
+      if (!addrLike && ['+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^'].includes(op)) {
         const folded = this.foldConstRational(node);
         if (folded !== undefined) {
           if ('err' in folded) {
@@ -5893,6 +5930,7 @@ export class Analyzer {
 
   private foldConstant(node: ts.Expression, expected: JethType): bigint | boolean | undefined {
     if (ts.isParenthesizedExpression(node)) return this.foldConstant(node.expression, expected);
+    if (this.rejectUppercaseHexPrefix(node)) return undefined; // 0X prefix (solc parser error)
     // bool literal
     if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) {
       if (expected.kind !== 'bool') {
@@ -6107,6 +6145,19 @@ export class Analyzer {
       return { code: 'JETH049', msg: `this looks like an address but has an invalid EIP-55 checksum (use the checksummed form, or address(...) / a number with leading zeros)` };
     }
     return 'address';
+  }
+
+  /** solc accepts only a lowercase `0x` hex-literal prefix; an uppercase `0X` is a parser error. If
+   *  `node` is such a literal, emit the error and return true (callers treat its value as a plain int
+   *  to avoid cascade errors). */
+  private rejectUppercaseHexPrefix(node: ts.Expression): boolean {
+    let n: ts.Expression = node;
+    while (ts.isParenthesizedExpression(n)) n = n.expression;
+    if (ts.isBigIntLiteral(n) && /^0X/.test(n.getText())) {
+      this.diags.error(n, 'JETH049', `uppercase '0X' hex prefix is not allowed; use a lowercase '0x' prefix`);
+      return true;
+    }
+    return false;
   }
 
   /** EIP-55 mixed-case checksum test for a 40-hex-digit string. Digits 0-9 carry no case and always

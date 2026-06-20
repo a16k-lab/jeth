@@ -32,14 +32,18 @@ Over-acceptances fixed (JETH accepted programs solc rejects):
   a getter colliding with a same-named function is a clean `JETH044`. Supported shapes, all
   byte-identical to solc:
   - value-type and `bytes`/`string` vars: `name() view returns (T)`.
-  - mappings (nested ok): `name(K1,..,Kn) view returns (V)`, including small-value masking, `bytes`/
-    `string` values, and a `mapping(K=>T[])` value (adds a trailing `uint256` index param).
-  - dynamic `T[]` and fixed `Arr<T,N>` value-element arrays: `name(uint256) view returns (T)` with
-    out-of-bounds `Panic(0x32)` parity; `string[]`/`bytes[]` return the element.
-  - struct vars: flattened into a value/`bytes`/`string`-field tuple, OMITTING array and mapping
-    members (declaration order preserved), exactly as solc encodes the getter result.
-  - still deferred cleanly (`JETH057`; solc accepts): nested-struct members, mapping/array-reached
-    structs, nested arrays (`T[][]`), and `mapping(K=>Arr<T,N>)`.
+  - mappings (nested ok), including value-type/`bytes`/`string`/`bytes`-or-`string`-KEY mappings,
+    small-value masking, and a `mapping(K=>T[])` value (trailing `uint256` index param).
+  - dynamic `T[]` and fixed `Arr<T,N>` value-element arrays: `name(uint256) view returns (T)`;
+    `string[]`/`bytes[]` return the element. Out-of-bounds reverts with EMPTY data (matching solc's
+    getter, NOT `Panic(0x32)`).
+  - struct vars, and structs reached via a mapping/array (`mapping(K=>S)`, `S[]`, `Arr<S,N>`,
+    `mapping(K=>S[])`): flattened into a value/`bytes`/`string`-field tuple, OMITTING dynamic-array
+    and mapping members, recursively inlining all-static nested structs - byte-identical to solc's
+    getter encoding (incl. empty-revert on array OOB, zero-struct for an absent mapping key).
+  - still deferred cleanly (`JETH057`; solc accepts): nested-array value getters (`T[][]`),
+    `mapping(K=>Arr<T,N>)` value getters, a nested struct with a dynamic (`bytes`/`string`) member,
+    and a struct with a FIXED-array member (solc includes it; flattening not yet implemented).
 
 Over-rejections fixed (valid Solidity JETH wrongly rejected):
 - `for (const x of this.structArray)` and a typed `let p: S = this.arr[i]` / `this.m[k]` (storage
@@ -53,8 +57,13 @@ Over-rejections fixed (valid Solidity JETH wrongly rejected):
 
 Over-acceptances fixed (same EIP-55 change): a 39/41-hex-digit literal, or a 40-digit literal with a
 bad checksum, is now a hard error (`JETH049`) in ANY context (bare, inside a cast, in arithmetic),
-exactly as solc rejects it; and a 40-digit address literal no longer silently converts to a `uintN`
-or `bytesN` (`u256 x = 0x<40 hex>n` is rejected, matching solc).
+exactly as solc rejects it; a 40-digit address literal no longer silently converts to a `uintN`
+or `bytesN` (`u256 x = 0x<40 hex>n` is rejected, matching solc); ARITHMETIC/bitwise on an address
+literal (`0x<40 hex>n + 1n`) is rejected (only `==`/`!=` allowed); and an uppercase `0X` hex prefix
+is rejected (solc accepts only lowercase `0x`).
+
+Over-acceptance fixed (`addmod`/`mulmod`): a zero modulus now reverts `Panic(0x12)` (matching
+solc), not silently returning 0 (the raw EVM opcode's behavior).
 
 Builtins added: `assert(cond)` (-> `Panic(0x01)`), `keccak256(bytes|string)`, `gasleft()`,
 `blockhash(n)`, `<address>.balance`, `address(this).balance`, `block.difficulty` (= prevrandao).

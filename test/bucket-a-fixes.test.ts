@@ -7,7 +7,7 @@ import { compileSolidity } from './_solidity.js';
 
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => functionSelector(s);
-const W = (n: bigint) => pad32(n).slice(2);
+const W = (n: bigint) => pad32(n);
 
 async function diff(jeth: string, sol: string, calls: { sig: string; args?: string }[]) {
   const jb = compile(jeth, { fileName: 'C.jeth' });
@@ -27,7 +27,7 @@ async function diff(jeth: string, sol: string, calls: { sig: string; args?: stri
 }
 
 describe('Bucket-A over-rejection fixes vs Solidity', () => {
-  it('addmod / mulmod builtins (full precision, m==0 -> 0, widened args)', async () => {
+  it('addmod / mulmod builtins (full precision, m==0 -> Panic 0x12, widened args)', async () => {
     const M = (1n << 256n) - 1n;
     await diff(
       `@contract class C { @external @pure am(a: u256, b: u256, m: u256): u256 { return addmod(a, b, m); } @external @pure mm(a: u256, b: u256, m: u256): u256 { return mulmod(a, b, m); } @external @pure w(a: u8, b: u16): u256 { return addmod(a, b, 5n); } }`,

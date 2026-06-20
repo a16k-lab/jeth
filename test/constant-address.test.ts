@@ -8,7 +8,7 @@ import { compileSolidity, readSlot } from './_solidity.js';
 
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => functionSelector(s);
-const W = (n: bigint) => pad32(n).slice(2);
+const W = (n: bigint) => pad32(n);
 
 async function diff(jeth: string, sol: string, calls: { sig: string; args?: string }[], slots: bigint[] = []) {
   const jb = compile(jeth, { fileName: 'C.jeth' });
