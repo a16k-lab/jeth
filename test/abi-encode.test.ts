@@ -107,6 +107,32 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
     );
   });
 
+  it('abi.encodeWithSelector / abi.encodeWithSignature', async () => {
+    await diff(
+      `@contract class C {
+        @external @pure ws(s: bytes4, a: u256, b: address): bytes { return abi.encodeWithSelector(s, a, b); }
+        @external @pure wsd(s: bytes4, a: u256, d: bytes): bytes { return abi.encodeWithSelector(s, a, d); }
+        @external @pure sig(a: u256, b: address): bytes { return abi.encodeWithSignature("transfer(address,uint256)", b, a); }
+        @external @pure sigh(x: u256): bytes32 { return keccak256(abi.encodeWithSignature("foo(uint256)", x)); }
+        @external @pure rt(s: string, x: u256): bytes { return abi.encodeWithSignature(s, x); }
+      }`,
+      `contract C {
+        function ws(bytes4 s, uint256 a, address b) external pure returns (bytes memory){ return abi.encodeWithSelector(s, a, b); }
+        function wsd(bytes4 s, uint256 a, bytes calldata d) external pure returns (bytes memory){ return abi.encodeWithSelector(s, a, d); }
+        function sig(uint256 a, address b) external pure returns (bytes memory){ return abi.encodeWithSignature("transfer(address,uint256)", b, a); }
+        function sigh(uint256 x) external pure returns (bytes32){ return keccak256(abi.encodeWithSignature("foo(uint256)", x)); }
+        function rt(string calldata s, uint256 x) external pure returns (bytes memory){ return abi.encodeWithSignature(s, x); }
+      }`,
+      [
+        { sig: 'ws(bytes4,uint256,address)', args: '12345678'.padEnd(64, '0') + W(42n) + W(0xbeefn) },
+        { sig: 'wsd(bytes4,uint256,bytes)', args: '11223344'.padEnd(64, '0') + W(7n) + W(0x60n) + W(3n) + 'aabbcc'.padEnd(64, '0') },
+        { sig: 'sig(uint256,address)', args: W(100n) + W(0x1234n) },
+        { sig: 'sigh(uint256)', args: W(5n) },
+        { sig: 'rt(string,uint256)', args: W(0x40n) + W(9n) + W(11n) + '666f6f28290000000000000000000000000000000000000000000000000000'.padEnd(64, '0') },
+      ],
+    );
+  });
+
   it('nested abi.encode(abi.encodePacked(...)) + store result to storage bytes', async () => {
     await diff(
       `@contract class C { @state b: bytes; @external @pure n(a: u256, c: address): bytes32 { return keccak256(abi.encode(abi.encodePacked(a, c))); } @external set(a: u256, c: u8): void { this.b = abi.encodePacked(a, c); } @external @view get(): bytes { return this.b; } }`,

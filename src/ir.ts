@@ -88,7 +88,7 @@ export type Expr =
   | { kind: 'dynLength'; type: JethType; operand: Expr } // s.length -> u256
   | { kind: 'keccak'; type: JethType; arg: Expr } // keccak256(bytes/string) -> bytes32
   | { kind: 'precompileHash'; type: JethType; arg: Expr; addr: number; leftShift: number } // sha256(0x02)->bytes32 / ripemd160(0x03)->bytes20
-  | { kind: 'abiEncode'; type: JethType; packed: boolean; args: Expr[] } // abi.encode / abi.encodePacked -> bytes
+  | { kind: 'abiEncode'; type: JethType; packed: boolean; args: Expr[]; selector?: Expr; sig?: Expr } // abi.encode/encodePacked/encodeWithSelector(selector)/encodeWithSignature(sig) -> bytes
   | { kind: 'blockhash'; type: JethType; arg: Expr } // blockhash(uint) -> bytes32
   | { kind: 'balance'; type: JethType; addr: Expr } // <address>.balance -> u256
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1

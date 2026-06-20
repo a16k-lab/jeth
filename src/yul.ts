@@ -3982,10 +3982,44 @@ ${indent(runtime, 6)}
   // ---- dynamic bytes/string values (Phase 4) -------------------------------
 
   /** Resolve a dynamic bytes/string expression to its source reference. */
-  /** Build an abi.encode / abi.encodePacked bytes value in memory ([len][data]) and return its
-   *  pointer. Scoped to value-type and bytes/string args (arrays/structs rejected in the analyzer). */
-  private buildAbiEncode(args: Expr[], packed: boolean, ctx: LowerCtx, out: string[]): string {
+  /** Build an abi.encode* bytes value in memory ([len][data]) and return its pointer. With a
+   *  `selector` (encodeWithSelector) or `sig` (encodeWithSignature: bytes4(keccak256(sig))), a 4-byte
+   *  selector is prepended to the standard encoding of the remaining args. */
+  private buildAbiEncode(args: Expr[], packed: boolean, ctx: LowerCtx, out: string[], selector?: Expr, sig?: Expr): string {
+    if (selector || sig) {
+      let pfx: string;
+      if (selector) {
+        pfx = this.lowerExpr(selector, ctx, out); // bytes4, left-aligned (high 4 bytes)
+      } else {
+        const { mp, len } = this.toMemory(this.lowerDynamic(sig!, ctx, out), out);
+        const h = this.fresh();
+        out.push(`let ${h} := keccak256(add(${mp}, 0x20), ${len})`);
+        // keccak256(sig)[0:4] = the high 4 bytes, left-aligned.
+        pfx = `and(${h}, 0xffffffff00000000000000000000000000000000000000000000000000000000)`;
+      }
+      return this.buildAbiEncodeWithSelector(pfx, args, ctx, out);
+    }
     return packed ? this.buildAbiEncodePacked(args, ctx, out) : this.buildAbiEncodeStd(args, ctx, out);
+  }
+
+  /** abi.encodeWithSelector/Signature: a 4-byte selector prefix (left-aligned in a register) followed
+   *  by the standard abi.encode of the remaining args. The args' internal offsets stay relative to the
+   *  start of the args encoding (after the selector), matching solc (selector ++ abi.encode(args)). */
+  private buildAbiEncodeWithSelector(pfx: string, args: Expr[], ctx: LowerCtx, out: string[]): string {
+    const argsBytes = this.buildAbiEncodeStd(args, ctx, out); // [len][data]
+    const argsLen = this.fresh();
+    out.push(`let ${argsLen} := mload(${argsBytes})`);
+    const total = this.fresh();
+    out.push(`let ${total} := add(4, ${argsLen})`);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := ${this.alloc()}(add(0x40, and(add(${total}, 0x1f), not(0x1f))))`);
+    out.push(`mstore(${ptr}, ${total})`);
+    const data = this.fresh();
+    out.push(`let ${data} := add(${ptr}, 0x20)`);
+    out.push(`mstore(${data}, ${pfx})`); // 4 selector bytes (high) + 28 zero
+    out.push(`mcopy(add(${data}, 4), add(${argsBytes}, 0x20), ${argsLen})`);
+    out.push(`mstore(add(${data}, ${total}), 0)`); // zero the trailing partial word
+    return ptr;
   }
 
   /** Standard ABI encoding (head/tail, 32-byte aligned) as a bytes value. A value -> a padded word;
@@ -4108,7 +4142,7 @@ ${indent(runtime, 6)}
         // length is calldatasize() (matches solc: msg.data.length == calldatasize()).
         return { src: 'calldata', dataPtr: '0', len: 'calldatasize()' };
       case 'abiEncode':
-        return { src: 'memory', ptr: this.buildAbiEncode(e.args, e.packed, ctx, out) };
+        return { src: 'memory', ptr: this.buildAbiEncode(e.args, e.packed, ctx, out, e.selector, e.sig) };
       case 'call': {
         // a bytes/string-returning internal call: the callee returns a [len][data] memory pointer.
         const p = this.fresh();

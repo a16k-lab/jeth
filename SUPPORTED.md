@@ -71,17 +71,24 @@ local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value 
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short
 overwrite). A struct with a dynamic-ARRAY field from a memory/calldata source stays a clean rejection.
 
-`@constant address` (`@constant K: address = address(0x..n)`) is supported: a slot-free compile-time
-constant substituted at each read site, byte-identical to solc and consuming no storage slot.
+`@constant address` (`address(0x..n)`) and `@constant bytesN` (`bytes4(0x..n)`, left-aligned) are
+supported: slot-free compile-time constants substituted at each read site, byte-identical to solc and
+consuming no storage slot. (`@constant string` stays a later step.)
+
+`abi.encode` / `abi.encodePacked` also accept a STATIC struct / fixed-array arg (encoded inline) and a
+DYNAMIC value-element array (offset + tail). `abi.encodeWithSelector(bytes4, ...)` and
+`abi.encodeWithSignature(string, ...)` prepend the 4-byte selector to the standard encoding (the
+signature's selector = keccak256(sig)[0:4], literal or runtime). Verified byte-identical to solc. A
+nested-dynamic arg (`string[]`, `T[][]`, dynamic struct) stays a clean rejection.
 
 A NON-indexed static struct / static fixed-array event param is now encoded INLINE in the ABI data
 tuple (byte-identical to solc: topic0 uses the struct's canonical tuple form, the data head holds the
 aggregate's leaf words; verified for mixed value/struct heads, struct + a dynamic param, nested, and
 packed structs). (Indexed static struct/fixed-array params - a keccak topic - were already supported.)
 
-Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encodeWithSelector/Signature`,
-`abi.encode*` of array/struct args, a struct with a dynamic-ARRAY field from a memory/calldata source
--> storage, a non-indexed DYNAMIC struct (bytes/string field) event param, `@constant bytesN`/`string`.
+Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encode*` of a nested-dynamic
+arg (`string[]`, `T[][]`, dynamic struct), a struct with a dynamic-ARRAY field from a memory/calldata
+source -> storage, a non-indexed DYNAMIC struct (bytes/string field) event param, `@constant string`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage

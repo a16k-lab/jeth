@@ -4382,16 +4382,36 @@ export class Analyzer {
     return { kind: 'global', type: entry.type, op: entry.op };
   }
 
-  /** abi.encode(...) / abi.encodePacked(...) -> bytes. Scoped to value-type and bytes/string args
-   *  (arrays/structs are a later step). No state/env read (pure). */
-  private checkAbiEncode(node: ts.CallExpression, packed: boolean): Expr | undefined {
+  /** abi.encode / abi.encodePacked / abi.encodeWithSelector(bytes4 sel, ...) /
+   *  abi.encodeWithSignature(string sig, ...) -> bytes. encodeWith* prepend a 4-byte selector to the
+   *  standard encoding of the remaining args. No state/env read (pure). */
+  private checkAbiEncode(node: ts.CallExpression, method: string): Expr | undefined {
+    const packed = method === 'encodePacked';
+    let rest = [...node.arguments];
+    let selector: Expr | undefined;
+    let sig: Expr | undefined;
+    if (method === 'encodeWithSelector') {
+      if (rest.length < 1) { this.diags.error(node, 'JETH173', 'abi.encodeWithSelector requires a bytes4 selector'); return undefined; }
+      const s = this.checkExpr(rest[0]!);
+      if (!s) return undefined;
+      if (!(s.type.kind === 'bytesN' && s.type.size === 4)) { this.diags.error(rest[0]!, 'JETH173', `abi.encodeWithSelector's first argument must be bytes4 (got ${displayName(s.type)})`); return undefined; }
+      selector = s;
+      rest = rest.slice(1);
+    } else if (method === 'encodeWithSignature') {
+      if (rest.length < 1) { this.diags.error(node, 'JETH173', 'abi.encodeWithSignature requires a string signature'); return undefined; }
+      const s = this.checkExpr(rest[0]!, { kind: 'string' }); // a string-literal sig needs the string context
+      if (!s) return undefined;
+      if (s.type.kind !== 'string') { this.diags.error(rest[0]!, 'JETH173', `abi.encodeWithSignature's first argument must be string (got ${displayName(s.type)})`); return undefined; }
+      sig = s;
+      rest = rest.slice(1);
+    }
     const args: Expr[] = [];
-    for (const a of node.arguments) {
+    for (const a of rest) {
       const e = this.checkExpr(a);
       if (!e) return undefined;
-      // packed: value + bytes/string only. standard abi.encode also accepts a STATIC struct/fixed-array
-      // (encoded inline) and a DYNAMIC value-element array (offset + tail). Nested-dynamic (string[],
-      // T[][]) / dynamic struct args stay a later step.
+      // packed: value + bytes/string only. standard (incl. encodeWith*) also accepts a STATIC
+      // struct/fixed-array (encoded inline) and a DYNAMIC value-element array (offset + tail).
+      // Nested-dynamic (string[], T[][]) / dynamic struct args stay a later step.
       const t = e.type;
       const aggOk = !packed && (
         (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) ||
@@ -4401,13 +4421,13 @@ export class Analyzer {
         this.diags.error(
           a,
           'JETH173',
-          `abi.${packed ? 'encodePacked' : 'encode'} supports ${packed ? 'value-type and bytes/string' : 'value-type, bytes/string, static struct/fixed-array, and dynamic value-array'} arguments (got ${displayName(t)})`,
+          `abi.${method} supports ${packed ? 'value-type and bytes/string' : 'value-type, bytes/string, static struct/fixed-array, and dynamic value-array'} arguments (got ${displayName(t)})`,
         );
         return undefined;
       }
       args.push(e);
     }
-    return { kind: 'abiEncode', type: { kind: 'bytes' }, packed, args };
+    return { kind: 'abiEncode', type: { kind: 'bytes' }, packed, args, selector, sig };
   }
 
   private checkAddressCall(node: ts.CallExpression): Expr | undefined {
@@ -5367,8 +5387,8 @@ export class Analyzer {
       return this.checkGenericCall(node, node.expression.name.text, false);
     }
 
-    // abi.encode(...) / abi.encodePacked(...) -> a bytes value (no selector). Scoped to value-type
-    // and bytes/string arguments; arrays/structs are a later step.
+    // abi.encode(...) / abi.encodePacked(...) / abi.encodeWithSelector(sel, ...) /
+    // abi.encodeWithSignature(sig, ...) -> a bytes value.
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
@@ -5376,9 +5396,9 @@ export class Analyzer {
       node.expression.expression.text === 'abi' &&
       !this.isVisibleLocal('abi') &&
       !this.stateByName.has('abi') &&
-      (node.expression.name.text === 'encode' || node.expression.name.text === 'encodePacked')
+      ['encode', 'encodePacked', 'encodeWithSelector', 'encodeWithSignature'].includes(node.expression.name.text)
     ) {
-      return this.checkAbiEncode(node, node.expression.name.text === 'encodePacked');
+      return this.checkAbiEncode(node, node.expression.name.text);
     }
 
     // object literal { ...base, x: v } / { x: 1n, y: 2n } -> struct construction when the
