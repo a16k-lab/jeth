@@ -46,6 +46,15 @@ Over-rejections fixed (valid Solidity JETH wrongly rejected):
   struct-array element / mapping struct value -> memory local) are now supported.
 - A nested `switch` that terminates on every branch now satisfies the case-terminator analysis (no
   spurious "add a trailing break" `JETH284`).
+- EIP-55 address hex literals: a 40-hex-digit bigint literal that passes the EIP-55 checksum (all-
+  numeric literals pass trivially) is now of type `address`, so `K: address = 0x<40 hex>n` and
+  `x == 0x<40 hex>n` work WITHOUT an `address(...)` cast (byte-identical to solc). Such a literal is
+  address-typed everywhere: it casts only to `u160`/`bytes20`, never implicitly to an integer.
+
+Over-acceptances fixed (same EIP-55 change): a 39/41-hex-digit literal, or a 40-digit literal with a
+bad checksum, is now a hard error (`JETH049`) in ANY context (bare, inside a cast, in arithmetic),
+exactly as solc rejects it; and a 40-digit address literal no longer silently converts to a `uintN`
+or `bytesN` (`u256 x = 0x<40 hex>n` is rejected, matching solc).
 
 Builtins added: `assert(cond)` (-> `Panic(0x01)`), `keccak256(bytes|string)`, `gasleft()`,
 `blockhash(n)`, `<address>.balance`, `address(this).balance`, `block.difficulty` (= prevrandao).

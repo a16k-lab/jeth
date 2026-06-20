@@ -201,7 +201,7 @@ const J4 = `@struct class P { a: u256; s: i256; ad: address; bn: bytes32; }
     this.x = P(0n, 0n, address(0n), bytes32(0n));
     this.y = P(115792089237316195423570985008687907853269984665640564039457584007913129639935n,
                57896044618658097711785492504343953926634992332820282019728792003956564819967n,
-               address(0xffffffffffffffffffffffffffffffffffffffffn), bytes32(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffn));
+               address(type(u160).max), bytes32(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffn));
     this.z = P(42n, -57896044618658097711785492504343953926634992332820282019728792003956564819968n, address(0x1n), bytes32(0x1n));
   }
   // storage vs ctor with boundary literal args
@@ -234,7 +234,7 @@ const J5 = `@contract class C {
   @state ax: Arr<address,3>; @state ay: Arr<address,3>;
   @state bx: Arr<bytes4,4>; @state by: Arr<bytes4,4>;
   @external seed(): void {
-    this.ax[0n] = address(0xa1n); this.ax[1n] = address(0xa2n); this.ax[2n] = address(0xffffffffffffffffffffffffffffffffffffffffn);
+    this.ax[0n] = address(0xa1n); this.ax[1n] = address(0xa2n); this.ax[2n] = address(type(u160).max);
     this.ay[0n] = address(0xb1n); this.ay[1n] = address(0xb2n); this.ay[2n] = address(0x0n);
     this.bx[0n] = bytes4(u32(0x11223344n)); this.bx[1n] = bytes4(u32(0xffffffffn)); this.bx[2n] = bytes4(u32(0x0n)); this.bx[3n] = bytes4(u32(0xdeadbeefn));
     this.by[0n] = bytes4(u32(0xaabbccddn)); this.by[1n] = bytes4(u32(0x1n)); this.by[2n] = bytes4(u32(0x2n)); this.by[3n] = bytes4(u32(0x3n));

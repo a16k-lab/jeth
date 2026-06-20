@@ -89,7 +89,7 @@ const GLOBALS: Record<string, Record<string, { op: GlobalOp; type: JethType; cat
   },
 };
 import { planLayout, RawStateVar } from './layout.js';
-import { functionSignature, functionSelector, eventTopic0 } from './selectors.js';
+import { functionSignature, functionSelector, eventTopic0, keccak, toHex } from './selectors.js';
 
 const VISIBILITY_DECORATORS: Visibility[] = ['external', 'public', 'internal', 'private'];
 
@@ -4543,9 +4543,12 @@ export class Analyzer {
       this.currentReadsEnv = true;
       return { kind: 'global', type: ADDRESS, op: 'address' };
     }
-    // address(<int literal>) -> address-typed literal (e.g. address(0n)).
+    // address(<int literal>) -> address-typed literal (e.g. address(0n)). The EIP-55 checksum / length
+    // check still applies to an address-like hex literal inside the cast (solc rejects address(0x<bad>)).
     const lit = this.asIntLiteral(arg);
     if (lit !== undefined) {
+      const addrClass = this.classifyAddressHexLiteral(arg);
+      if (addrClass !== 'plain' && addrClass !== 'address') this.diags.error(node, addrClass.code, addrClass.msg);
       if (lit < 0n || lit >= 1n << 160n) {
         this.diags.error(node, 'JETH070', `literal ${lit} out of range for address`);
       }
@@ -4607,7 +4610,13 @@ export class Analyzer {
     if (inner.kind === 'literalInt' && isInteger(target)) {
       // an EXPLICIT cast: an enum-member literal may be cast to an integer here (uint256(Color.Blue)).
       const r = this.retypeLiteral(inner, target, node, /* allowEnumToInt */ true);
-      return r ?? undefined;
+      if (r) return r;
+      // An address-typed literal converts only to uint160 (retypeLiteral returned undefined without a
+      // diagnostic); other integer widths are an explicit-conversion error (uint256(0x<addr>)).
+      if (inner.type.kind === 'address') {
+        this.diags.error(node, 'JETH170', `explicit conversion not allowed from address to ${displayName(target)}`);
+      }
+      return undefined;
     }
     if (this.isCastAllowed(inner.type, target)) {
       return { kind: 'cast', type: target, from: inner.type, operand: inner };
@@ -4780,6 +4789,16 @@ export class Analyzer {
     if (ts.isBigIntLiteral(node)) {
       const raw = node.text.replace(/n$/, '');
       const value = BigInt(raw);
+      // A 40-hex-digit checksummed literal is of type `address` (and only converts to uint160/bytes20,
+      // never implicitly to an integer); a 39/41-digit or bad-checksum hex literal is a hard error.
+      const addrClass = this.classifyAddressHexLiteral(node);
+      if (addrClass === 'address') {
+        return { kind: 'literalInt', type: ADDRESS, value };
+      }
+      if (addrClass !== 'plain') {
+        this.diags.error(node, addrClass.code, addrClass.msg);
+        return { kind: 'literalInt', type: U256, value };
+      }
       // an enum `expected` does NOT capture a bare integer literal (see the negated-literal case
       // above): keep the plain int type so coerce rejects the implicit int -> enum.
       const type = expected && isInteger(expected) && !isEnum(expected) ? expected : U256;
@@ -5795,6 +5814,16 @@ export class Analyzer {
 
   private retypeLiteral(lit: Expr, target: JethType, node: ts.Node, allowEnumToInt = false): Expr | undefined {
     if (lit.kind !== 'literalInt') return undefined;
+    // An address-typed literal (a 40-hex-digit checksummed literal, or address(x)) behaves like an
+    // address VALUE: it converts only to uint160 (explicit cast) and never implicitly to any integer
+    // (solc: `uint256 x = 0x<addr>` and `uint8(0x<addr>)` are both errors). Same-type (address) is
+    // handled by typesEqual upstream; bytesN targets fall through to isCastAllowed (address<->bytes20).
+    if (lit.type.kind === 'address') {
+      if (allowEnumToInt && target.kind === 'uint' && target.bits === 160 && this.inRange(lit.value, target)) {
+        return { ...lit, type: target };
+      }
+      return undefined;
+    }
     // An enum-typed literal (Color.Member or Color(x)) is nominally an enum: it implicitly converts
     // ONLY to the same enum, and that case is caught upstream by typesEqual so it never reaches here.
     // Arriving here with an enum literal therefore means an implicit enum -> int (or enum -> a
@@ -5832,7 +5861,11 @@ export class Analyzer {
     if (expr.kind === 'literalInt') {
       const r = this.retypeLiteral(expr, target, node);
       if (r) return r;
-      return expr;
+      // An ordinary int literal that fails to retype already had its diagnostic emitted by
+      // retypeLiteral (out-of-range / bytesN / enum); an ADDRESS-typed literal (a 40-hex-digit
+      // checksummed literal) declines silently, so let it fall through to the generic
+      // no-implicit-conversion error below (solc rejects `uint256 x = 0x<addr>`).
+      if (expr.type.kind !== 'address') return expr;
     }
     // address payable -> address is implicit (same word); the reverse needs payable(). A branded
     // address is nominally distinct, so only this fast-path when the brands match (else fall
@@ -5868,6 +5901,15 @@ export class Analyzer {
       }
       return node.kind === ts.SyntaxKind.TrueKeyword;
     }
+    // An address-like hex literal where a NON-address constant is expected: a valid 40-digit literal
+    // is address-typed (not implicitly convertible), and a 39/41-digit or bad-checksum literal is a
+    // hard error. Checked before the integer/bytesN folders (which would otherwise read its value).
+    const addrClass = this.classifyAddressHexLiteral(node);
+    if (addrClass !== 'plain' && expected.kind !== 'address') {
+      if (addrClass === 'address') this.diags.error(node, 'JETH086', `cannot assign an address literal to ${displayName(expected)}`);
+      else this.diags.error(node, addrClass.code, addrClass.msg);
+      return undefined;
+    }
     // A constant INTEGER expression: solc folds + - * ** << >> & | ^ % (and exact /) and unary -
     // with UNBOUNDED precision, then range-checks only the FINAL value against the target type.
     if (isInteger(expected)) {
@@ -5878,14 +5920,18 @@ export class Analyzer {
       }
       return undefined; // not a constant integer expression -> caller emits JETH048
     }
-    // address constant: `address(<int literal>)` -> the uint160 value (range-checked like solc).
+    // address constant: a bare 40-hex-digit checksummed literal (= 0x...) or `address(<int literal>)`.
     if (expected.kind === 'address') {
+      if (addrClass === 'address') return this.asIntLiteral(node)!;
+      if (addrClass !== 'plain') { this.diags.error(node, addrClass.code, addrClass.msg); return undefined; }
       if (
         ts.isCallExpression(node) &&
         ts.isIdentifier(node.expression) &&
         node.expression.text === 'address' &&
         node.arguments.length === 1
       ) {
+        const argClass = this.classifyAddressHexLiteral(node.arguments[0]!);
+        if (argClass !== 'plain' && argClass !== 'address') { this.diags.error(node, argClass.code, argClass.msg); return undefined; }
         const a = this.asIntLiteral(node.arguments[0]!);
         if (a !== undefined) {
           if (a < 0n || a >= 1n << 160n) { this.diags.error(node, 'JETH070', `literal ${a} out of range for address`); return undefined; }
@@ -5903,6 +5949,8 @@ export class Analyzer {
         node.expression.text === `bytes${expected.size}` &&
         node.arguments.length === 1
       ) {
+        const argClass = this.classifyAddressHexLiteral(node.arguments[0]!);
+        if (argClass !== 'plain' && argClass !== 'address') { this.diags.error(node, argClass.code, argClass.msg); return undefined; }
         const a = this.asIntLiteral(node.arguments[0]!);
         if (a !== undefined) {
           if (a < 0n || a >= 1n << BigInt(expected.size * 8)) { this.diags.error(node, 'JETH070', `literal ${a} does not fit in bytes${expected.size}`); return undefined; }
@@ -6033,6 +6081,48 @@ export class Analyzer {
       return undefined;
     }
     return { kind: 'literalInt', type, value };
+  }
+
+  /** solc treats a hex number literal of 39 to 41 hex digits as "address-like": a 40-digit literal
+   *  that passes the EIP-55 checksum is of type `address`, and a 39/41-digit literal or a 40-digit
+   *  literal with a bad checksum is a hard error in ANY context (even inside an explicit cast). This
+   *  classifies a (possibly parenthesized) bigint literal node accordingly; non-hex / out-of-range
+   *  literals are 'plain' (ordinary integers). */
+  private classifyAddressHexLiteral(node: ts.Expression): 'plain' | 'address' | { code: string; msg: string } {
+    let n: ts.Expression = node;
+    while (ts.isParenthesizedExpression(n)) n = n.expression;
+    if (!ts.isBigIntLiteral(n)) return 'plain';
+    // ts normalizes BigIntLiteral.text to lowercase, so use it only for length; the EIP-55 checksum
+    // is case-sensitive and must read the ORIGINAL source spelling via getText().
+    const m = /^0[xX]([0-9a-fA-F_]+)n?$/.exec(n.text);
+    if (!m) return 'plain';
+    const digits = m[1]!.replace(/_/g, '');
+    if (digits.length < 39 || digits.length > 41) return 'plain';
+    if (digits.length !== 40) {
+      return { code: 'JETH049', msg: `this looks like an address but is not exactly 40 hex digits (it has ${digits.length}); prepend zeros if it is meant to be a number` };
+    }
+    const rawMatch = /^0[xX]([0-9a-fA-F_]+)n?$/.exec(n.getText());
+    const rawDigits = (rawMatch ? rawMatch[1]! : m[1]!).replace(/_/g, '');
+    if (!this.isEip55Checksummed(rawDigits)) {
+      return { code: 'JETH049', msg: `this looks like an address but has an invalid EIP-55 checksum (use the checksummed form, or address(...) / a number with leading zeros)` };
+    }
+    return 'address';
+  }
+
+  /** EIP-55 mixed-case checksum test for a 40-hex-digit string. Digits 0-9 carry no case and always
+   *  pass (so an all-numeric address is valid); each letter must be upper-case iff the corresponding
+   *  nibble of keccak256(lowercase-hex-ascii) is >= 8. */
+  private isEip55Checksummed(hex40: string): boolean {
+    const lower = hex40.toLowerCase();
+    const hash = toHex(keccak(lower));
+    for (let i = 0; i < 40; i++) {
+      const c = hex40[i]!;
+      if (c >= '0' && c <= '9') continue;
+      const wantUpper = parseInt(hash[i]!, 16) >= 8;
+      const isUpper = c >= 'A' && c <= 'F';
+      if (wantUpper !== isUpper) return false;
+    }
+    return true;
   }
 
   /** If `node` is an integer literal, optionally wrapped in unary minus and/or

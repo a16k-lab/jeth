@@ -164,7 +164,7 @@ describe('F3 adv: defaulted arg flowing into storage + into an event', () => {
     @state y: u256;
     @event Set(@indexed who: address, amount: u256);
     @hidden store(a: u256, b: u256 = 1000n): void { this.x = a + b; this.y = b; }
-    @hidden announce(amount: u256, who: address = address(0x000000000000000000000000000000000000beefn)): void { emit(Set(who, amount)); }
+    @hidden announce(amount: u256, who: address = address(u160(0xbeefn))): void { emit(Set(who, amount)); }
     @external setIt(a: u256): void { this.store(a); }
     @external setBoth(a: u256, b: u256): void { this.store(a, b); }
     @external ann(amount: u256): void { this.announce(amount); }
