@@ -11,6 +11,9 @@ const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => functionSelector(s);
 const W = (n: bigint) => pad32(n);
 
+function jethAccepts(src: string): boolean {
+  try { compile(src, { fileName: 'C.jeth' }); return true; } catch { return false; }
+}
 function jethRejects(src: string): boolean {
   try { compile(src, { fileName: 'C.jeth' }); return false; } catch { return true; }
 }
@@ -104,6 +107,53 @@ describe('sweep over-rejection fixes (cheap)', () => {
         { sig: 'fits(uint8)', args: W(200n) }, // 201, ok at u8
         { sig: 'fits(uint8)', args: W(255n) }, // overflow Panic at u8
       ],
+    );
+  });
+});
+
+describe('sweep @constant folder enhancements', () => {
+  // Each must produce a byte-identical runtime value to solc (read the constant back through a getter).
+  it('references, type(T).max/min, ~, bool exprs, ternary', async () => {
+    await rt(
+      `@contract class C {
+        @constant A: u256 = 10n;
+        @constant B: u256 = A * 2n;
+        @constant M: u256 = type(u256).max;
+        @constant H: u8 = type(u8).max;
+        @constant N: i8 = type(i8).min;
+        @constant MASK: u8 = ~0n;
+        @constant FLAG: bool = 5n > 3n;
+        @constant FLAG2: bool = A == 10n;
+        @constant T: u256 = FLAG ? 100n : 200n;
+        @external @pure b(): u256 { return this.B; }
+        @external @pure m(): u256 { return this.M; }
+        @external @pure h(): u8 { return this.H; }
+        @external @pure n(): i8 { return this.N; }
+        @external @pure mask(): u8 { return this.MASK; }
+        @external @pure flag(): bool { return this.FLAG; }
+        @external @pure flag2(): bool { return this.FLAG2; }
+        @external @pure t(): u256 { return this.T; }
+      }`,
+      `contract C {
+        uint256 constant A = 10;
+        uint256 constant B = A * 2;
+        uint256 constant M = type(uint256).max;
+        uint8 constant H = type(uint8).max;
+        int8 constant N = type(int8).min;
+        uint8 constant MASK = ~uint8(0);
+        bool constant FLAG = 5 > 3;
+        bool constant FLAG2 = A == 10;
+        uint256 constant T = FLAG ? 100 : 200;
+        function b() external pure returns(uint256){ return B; }
+        function m() external pure returns(uint256){ return M; }
+        function h() external pure returns(uint8){ return H; }
+        function n() external pure returns(int8){ return N; }
+        function mask() external pure returns(uint8){ return MASK; }
+        function flag() external pure returns(bool){ return FLAG; }
+        function flag2() external pure returns(bool){ return FLAG2; }
+        function t() external pure returns(uint256){ return T; }
+      }`,
+      [{ sig: 'b()' }, { sig: 'm()' }, { sig: 'h()' }, { sig: 'n()' }, { sig: 'mask()' }, { sig: 'flag()' }, { sig: 'flag2()' }, { sig: 't()' }],
     );
   });
 });

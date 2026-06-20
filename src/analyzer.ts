@@ -6009,13 +6009,22 @@ export class Analyzer {
   private foldConstant(node: ts.Expression, expected: JethType): bigint | boolean | undefined {
     if (ts.isParenthesizedExpression(node)) return this.foldConstant(node.expression, expected);
     if (this.rejectUppercaseHexPrefix(node)) return undefined; // 0X prefix (solc parser error)
-    // bool literal
+    // constant ternary `c ? a : b` (any target type): fold the constant condition, then the chosen arm.
+    if (ts.isConditionalExpression(node)) {
+      const c = this.foldConstBool(node.condition);
+      if (c !== undefined) return this.foldConstant(c ? node.whenTrue : node.whenFalse, expected);
+    }
+    // bool constant: a literal, another bool @constant, !/&&/|| or a comparison of constants.
+    if (expected.kind === 'bool') {
+      const b = this.foldConstBool(node);
+      if (b !== undefined) return b;
+      const lit = this.asIntLiteral(node);
+      if (lit !== undefined) this.diags.error(node, 'JETH086', `cannot assign an integer literal to bool`);
+      return undefined;
+    }
     if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) {
-      if (expected.kind !== 'bool') {
-        this.diags.error(node, 'JETH087', `cannot assign a bool literal to ${displayName(expected)}`);
-        return undefined;
-      }
-      return node.kind === ts.SyntaxKind.TrueKeyword;
+      this.diags.error(node, 'JETH087', `cannot assign a bool literal to ${displayName(expected)}`);
+      return undefined;
     }
     // An address-like hex literal where a NON-address constant is expected: a valid 40-digit literal
     // is address-typed (not implicitly convertible), and a 39/41-digit or bad-checksum literal is a
@@ -6029,6 +6038,16 @@ export class Analyzer {
     // A constant INTEGER expression: solc folds + - * ** << >> & | ^ % (and exact /) and unary -
     // with UNBOUNDED precision, then range-checks only the FINAL value against the target type.
     if (isInteger(expected)) {
+      // `~x` is type-specific (it complements within the target width): fold the operand, then mask.
+      if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.TildeToken) {
+        const x = this.evalConstInt(node.operand);
+        if (x !== undefined) {
+          const bits = BigInt((expected as { bits: number }).bits);
+          const v = expected.kind === 'uint' ? ((1n << bits) - 1n) ^ (x & ((1n << bits) - 1n)) : -x - 1n;
+          if (!this.inRange(v, expected)) this.diags.error(node, 'JETH070', `constant ${v} out of range for ${displayName(expected)}`);
+          return v;
+        }
+      }
       const v = this.evalConstInt(node);
       if (v !== undefined) {
         if (!this.inRange(v, expected)) this.diags.error(node, 'JETH070', `constant ${v} out of range for ${displayName(expected)}`);
@@ -6089,10 +6108,90 @@ export class Analyzer {
    *  matching solc's constant folding. Returns the bigint value, or undefined if the expression is
    *  not a foldable integer constant (a non-constant operand, an unsupported op, or - matching solc -
    *  a fractional `/`, a `>>`/`<<`/`**` by a negative amount, or a `/`/`%` by zero). */
+  /** Fold a node that denotes a compile-time BOOL: a literal, another bool @constant (bare or this.K),
+   *  `!x`, `a && b`/`a || b`, or a comparison of constant integers/bools. Returns the value or undefined. */
+  private foldConstBool(node: ts.Expression): boolean | undefined {
+    if (ts.isParenthesizedExpression(node)) return this.foldConstBool(node.expression);
+    if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
+    const constBool = (n: ts.Expression): boolean | undefined => {
+      const name = ts.isIdentifier(n) && !this.lookupLocal(n.text) ? n.text
+        : ts.isPropertyAccessExpression(n) && n.expression.kind === ts.SyntaxKind.ThisKeyword ? n.name.text : undefined;
+      if (name === undefined) return undefined;
+      const c = this.constantsByName.get(name);
+      return c && typeof c.value === 'boolean' ? c.value : undefined;
+    };
+    const cb = constBool(node);
+    if (cb !== undefined) return cb;
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
+      const x = this.foldConstBool(node.operand);
+      return x === undefined ? undefined : !x;
+    }
+    if (ts.isBinaryExpression(node)) {
+      const op = this.binaryToBinOp(node.operatorToken.kind);
+      if (op === '&&' || op === '||') {
+        const a = this.foldConstBool(node.left), b = this.foldConstBool(node.right);
+        return a === undefined || b === undefined ? undefined : op === '&&' ? a && b : a || b;
+      }
+      if (op === '==' || op === '!=' || op === '<' || op === '>' || op === '<=' || op === '>=') {
+        // bool==bool or int-comparison of constants
+        const ba = this.foldConstBool(node.left), bb = this.foldConstBool(node.right);
+        let a: bigint | undefined, b: bigint | undefined;
+        if (ba !== undefined && bb !== undefined) { a = ba ? 1n : 0n; b = bb ? 1n : 0n; }
+        else { a = this.evalConstInt(node.left); b = this.evalConstInt(node.right); }
+        if (a === undefined || b === undefined) return undefined;
+        switch (op) {
+          case '==': return a === b;
+          case '!=': return a !== b;
+          case '<': return a < b;
+          case '>': return a > b;
+          case '<=': return a <= b;
+          case '>=': return a >= b;
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /** Fold a node that denotes a compile-time INTEGER: a reference to another integer @constant (a bare
+   *  name not shadowed by a local, or `this.K`), or `type(T).max/.min`. Returns the value or undefined. */
+  private constIntRef(node: ts.Expression): bigint | undefined {
+    if (ts.isIdentifier(node) && !this.lookupLocal(node.text)) {
+      const c = this.constantsByName.get(node.text);
+      if (c && typeof c.value === 'bigint' && isInteger(c.type)) return c.value;
+    }
+    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const c = this.constantsByName.get(node.name.text);
+      if (c && typeof c.value === 'bigint' && isInteger(c.type)) return c.value;
+    }
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      (node.name.text === 'max' || node.name.text === 'min') &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'type' &&
+      node.expression.arguments.length === 1 &&
+      ts.isIdentifier(node.expression.arguments[0]!)
+    ) {
+      const t = resolvePrimitiveName((node.expression.arguments[0] as ts.Identifier).text);
+      if (!t || !isInteger(t)) return undefined;
+      const isMax = node.name.text === 'max';
+      const bits = (t as { bits: number }).bits;
+      return t.kind === 'uint'
+        ? (isMax ? (1n << BigInt(bits)) - 1n : 0n)
+        : (isMax ? (1n << BigInt(bits - 1)) - 1n : -(1n << BigInt(bits - 1)));
+    }
+    return undefined;
+  }
+
   private evalConstInt(node: ts.Expression): bigint | undefined {
     if (ts.isParenthesizedExpression(node)) return this.evalConstInt(node.expression);
     const lit = this.asIntLiteral(node); // a literal or a leading-minus literal
     if (lit !== undefined) return lit;
+    // a reference to another integer @constant (bare name when not shadowed by a local, or this.K),
+    // and type(T).max/min - both fold to compile-time integers (solc parity).
+    const ref = this.constIntRef(node);
+    if (ref !== undefined) return ref;
     if (ts.isPrefixUnaryExpression(node)) {
       if (node.operator !== ts.SyntaxKind.MinusToken) return undefined; // ~ on a const is type-specific; do not fold
       const x = this.evalConstInt(node.operand);
@@ -6141,6 +6240,9 @@ export class Analyzer {
     if (ts.isParenthesizedExpression(node)) return this.foldConstRational(node.expression);
     const lit = this.asIntLiteral(node);
     if (lit !== undefined) return { num: lit, den: 1n };
+    // NOTE: deliberately does NOT fold @constant references / type(T).max here. In a function body,
+    // solc keeps `type(u16).max + 1` as TYPED (uint16) arithmetic -> a runtime overflow, not a folded
+    // constant. Constant folding of these belongs only to the @constant-initializer path (evalConstInt).
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
       const x = this.foldConstRational(node.operand);
       if (x === undefined || 'err' in x) return x;
