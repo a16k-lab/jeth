@@ -107,6 +107,29 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
     );
   });
 
+  it('abi.encode of a dynamic struct and nested dynamic arrays', async () => {
+    await diff(
+      `@struct class D { a: u256; s: string; } @contract class C {
+        @external @pure st(a: u256, s: string): bytes { return abi.encode(D(a, s)); }
+        @external @pure mix(n: u256, a: u256, s: string): bytes { return abi.encode(n, D(a, s)); }
+        @external @pure sa(x: string[]): bytes { return abi.encode(x); }
+        @external @pure nn(m: u256[][]): bytes { return abi.encode(m); }
+      }`,
+      `struct D { uint256 a; string s; } contract C {
+        function st(uint256 a, string calldata s) external pure returns (bytes memory){ return abi.encode(D(a,s)); }
+        function mix(uint256 n, uint256 a, string calldata s) external pure returns (bytes memory){ return abi.encode(n, D(a,s)); }
+        function sa(string[] calldata x) external pure returns (bytes memory){ return abi.encode(x); }
+        function nn(uint256[][] calldata m) external pure returns (bytes memory){ return abi.encode(m); }
+      }`,
+      [
+        { sig: 'st(uint256,string)', args: W(42n) + W(0x40n) + W(5n) + '68656c6c6f'.padEnd(64, '0') },
+        { sig: 'mix(uint256,uint256,string)', args: W(7n) + W(8n) + W(0x60n) + W(3n) + '616263'.padEnd(64, '0') },
+        { sig: 'sa(string[])', args: W(0x20n) + W(2n) + W(0x40n) + W(0x80n) + W(2n) + '6161'.padEnd(64, '0') + W(3n) + '626263'.padEnd(64, '0') },
+        { sig: 'nn(uint256[][])', args: W(0x20n) + W(2n) + W(0x40n) + W(0xa0n) + W(2n) + W(1n) + W(2n) + W(1n) + W(9n) },
+      ],
+    );
+  });
+
   it('abi.encodeWithSelector / abi.encodeWithSignature', async () => {
     await diff(
       `@contract class C {

@@ -4068,7 +4068,8 @@ ${indent(runtime, 6)}
       const t = a.type;
       if (isBytesLike(t)) return this.toMemory(this.lowerDynamic(a, ctx, out), out);
       if (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) return { inline: true, mp: this.aggToMemPtr(a, ctx, out), words: abiHeadWords(t) };
-      if (t.kind === 'array') return this.materializeArrayArg(a, ctx, out); // dynamic value array -> {mp, size} tail
+      if (t.kind === 'struct') return this.encodeDynStructToBlob(a, ctx, out); // dynamic struct -> offset + head/tail tail
+      if (t.kind === 'array') return this.materializeArrayArg(a, ctx, out); // dynamic array (value or nested) -> {mp, size} tail
       return { word: this.lowerExpr(a, ctx, out) };
     });
     const headWords = parts.reduce((acc, p) => acc + ('inline' in p ? p.words : 1), 0);

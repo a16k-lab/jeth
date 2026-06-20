@@ -4416,8 +4416,9 @@ export class Analyzer {
       // Nested-dynamic (string[], T[][]) / dynamic struct args stay a later step.
       const t = e.type;
       const aggOk = !packed && (
-        (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) ||
-        (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element))
+        (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) || // static struct/fixed-array (inline)
+        (t.kind === 'struct' && this.isSupportedDynStructLocal(t)) ||        // dynamic struct (offset + tail)
+        (t.kind === 'array' && t.length === undefined)                       // dynamic array (value or nested, offset + tail)
       );
       if (!isStaticValueType(t) && !isBytesLike(t) && !aggOk) {
         this.diags.error(
