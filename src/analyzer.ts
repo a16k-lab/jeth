@@ -109,6 +109,8 @@ interface RawFunction {
   inferExposed?: boolean; // no visibility decorator -> @public if internally called, else @external
   inferHidden?: boolean; // @hidden -> @internal (not in the ABI; internal vs private is codegen-identical pre-inheritance)
   nonReentrant?: boolean; // F4: @nonReentrant -> transient-storage reentrancy mutex on the external entry
+  key?: string; // unique identity for the call graph: the bare name when unique, `name__ovN` when
+  // overloaded (a generic specialization sets name=key=mangled). Unset => `name` (see fkey()).
 }
 
 export class Analyzer {
@@ -141,8 +143,9 @@ export class Analyzer {
   // forward-reference), plus per-function direct-effect / callee tracking for the
   // transitive-purity fixpoint and the set of names actually called internally.
   private funcsByName = new Map<string, RawFunction>();
-  private currentCallees = new Set<string>(); // internal callees of the function being checked
-  private internallyCalled = new Set<string>(); // any function that is the target of an internal call
+  private candidatesByName = new Map<string, RawFunction[]>(); // source name -> all overloads (decl order)
+  private currentCallees = new Set<string>(); // internal callee KEYS of the function being checked
+  private internallyCalled = new Set<string>(); // KEYS of functions that are the target of an internal call
   // F6: compile-time generics (monomorphization). A generic internal function `f<T>(...)` is NOT a
   // normal function; it is a template. On each internal call we resolve concrete type arguments
   // (explicit `f<u256>(x)` or inferred from the value args), register the type params -> concrete
@@ -397,9 +400,20 @@ export class Analyzer {
     for (const v of layout.vars) this.stateByName.set(v.name, v);
 
     // Register functions by name BEFORE checking bodies so an internal call can
-    // forward-reference a callee declared later (matches Solidity).
+    // forward-reference a callee declared later (matches Solidity). funcsByName keeps the FIRST
+    // function per source name (for "is this name callable?" checks + the generic mangled-name
+    // namespace); candidatesByName holds ALL overloads for resolution at the call site.
     for (const rf of rawFns) {
+      const list = this.candidatesByName.get(rf.name);
+      if (list) list.push(rf);
+      else this.candidatesByName.set(rf.name, [rf]);
       if (!this.funcsByName.has(rf.name)) this.funcsByName.set(rf.name, rf);
+    }
+    // Assign each function a UNIQUE key: the bare name when that name is unique, else `name__ovN`
+    // (decl order). This keys the effects map / Yul `userfn_` name / call-graph identity so two
+    // overloads never collide. Solc allows overloading by arity or parameter types.
+    for (const [nm, list] of this.candidatesByName) {
+      if (list.length > 1) list.forEach((rf, i) => { rf.key = `${nm}__ov${i}`; });
     }
 
     // Type-check each function body, capturing each function's DIRECT effects and its
@@ -410,7 +424,7 @@ export class Analyzer {
       const f = this.checkFunction(rf);
       if (f) {
         functions.push(f);
-        effects.set(rf.name, { writes: this.currentWritesState, reads: this.currentReadsState, readsEnv: this.currentReadsEnv, callees: this.currentCallees, rf });
+        effects.set(this.fkey(rf), { writes: this.currentWritesState, reads: this.currentReadsState, readsEnv: this.currentReadsEnv, callees: this.currentCallees, rf });
       }
     }
 
@@ -427,7 +441,7 @@ export class Analyzer {
         const f = this.checkFunction(rf);
         if (f) {
           functions.push(f);
-          effects.set(rf.name, { writes: this.currentWritesState, reads: this.currentReadsState, readsEnv: this.currentReadsEnv, callees: this.currentCallees, rf });
+          effects.set(this.fkey(rf), { writes: this.currentWritesState, reads: this.currentReadsState, readsEnv: this.currentReadsEnv, callees: this.currentCallees, rf });
         }
       });
     }
@@ -464,11 +478,11 @@ export class Analyzer {
     // mark internally-called functions. After this the FunctionIR carries concrete visibility +
     // mutability, so the ABI emitter and dispatcher (which read these) produce the TRUE ABI.
     for (const f of functions) {
-      const e = effects.get(f.name);
+      const e = effects.get(f.key);
       if (e?.rf.inferRead) { const m: Mutability = e.reads || e.readsEnv ? 'view' : 'pure'; f.mutability = m; e.rf.mutability = m; }
-      if (e?.rf.inferExposed) { const v: Visibility = this.internallyCalled.has(f.name) ? 'public' : 'external'; f.visibility = v; e.rf.visibility = v; }
+      if (e?.rf.inferExposed) { const v: Visibility = this.internallyCalled.has(f.key) ? 'public' : 'external'; f.visibility = v; e.rf.visibility = v; }
       if (e?.rf.inferHidden) { f.visibility = 'internal'; e.rf.visibility = 'internal'; }
-      if (this.internallyCalled.has(f.name)) f.internallyCalled = true;
+      if (this.internallyCalled.has(f.key)) f.internallyCalled = true;
     }
 
     // Reject duplicate selectors (would make the dispatcher ambiguous).
@@ -1088,6 +1102,7 @@ export class Analyzer {
     const selector = functionSelector(signature);
     return {
       name: rf.name,
+      key: this.fkey(rf),
       visibility: rf.visibility,
       mutability: rf.mutability,
       params: rf.params,
@@ -2335,8 +2350,77 @@ export class Analyzer {
     return out;
   }
 
+  /** A function's unique call-graph key: its bare name when unique, else `name__ovN` (an overload) or
+   *  a generic mangled name. Distinct from `name` (the source name, shared by overloads). */
+  private fkey(rf: RawFunction): string {
+    return rf.key ?? rf.name;
+  }
+
+  /** Resolve a (possibly overloaded) internal call `name(...)` to a single callee. One candidate ->
+   *  that one. Several (overloading by arity or parameter types, like solc) -> filter by callable
+   *  arity (accounting for F3 defaults / named-arg form), then by which candidate's parameter types
+   *  ALL the arguments fit. Emits JETH148 (no match) / JETH901 (ambiguous). */
+  private resolveOverload(node: ts.CallExpression, name: string): RawFunction | undefined {
+    const candidates = this.candidatesByName.get(name);
+    if (!candidates || candidates.length === 0) return this.funcsByName.get(name); // generic mangled name / none
+    if (candidates.length === 1) return candidates[0];
+    const applicable = candidates.filter((c) => this.overloadApplicable(node, c));
+    if (applicable.length === 0) {
+      this.diags.error(node, 'JETH148', `no overload of '${name}' accepts this number of arguments`);
+      return undefined;
+    }
+    if (applicable.length === 1) return applicable[0];
+    const viable = applicable.filter((c) => this.overloadArgsMatch(node, c));
+    if (viable.length === 1) return viable[0];
+    if (viable.length === 0) {
+      this.diags.error(node, 'JETH148', `no overload of '${name}' matches the argument types`);
+      return undefined;
+    }
+    this.diags.error(node, 'JETH901', `call to '${name}' is ambiguous (matches ${viable.length} overloads)`);
+    return undefined;
+  }
+
+  /** Is the call's argument SHAPE (arity / named form) callable on this candidate (F3 defaults aware)? */
+  private overloadApplicable(node: ts.CallExpression, c: RawFunction): boolean {
+    const params = c.params;
+    const defaults = c.defaults ?? params.map(() => undefined);
+    const provided = node.arguments;
+    if (provided.length === 1 && ts.isObjectLiteralExpression(provided[0]!) && this.looksLikeNamedArgs(provided[0] as ts.ObjectLiteralExpression, params)) {
+      const keys = new Set<string>();
+      for (const p of (provided[0] as ts.ObjectLiteralExpression).properties) keys.add((p.name as ts.Identifier).text);
+      return params.every((p, i) => keys.has(p.name) || !!defaults[i]);
+    }
+    if (provided.length > params.length) return false;
+    for (let i = provided.length; i < params.length; i++) if (!defaults[i]) return false;
+    return true;
+  }
+
+  /** Do ALL the call's arguments fit this candidate's parameter types? A TRIAL type-check with every
+   *  side effect (diagnostics, effect flags, callee set) rolled back, so resolution never pollutes the
+   *  real analysis - the chosen overload's args are re-checked normally afterwards. */
+  private overloadArgsMatch(node: ts.CallExpression, c: RawFunction): boolean {
+    const diagLen = this.diags.items.length;
+    const rs = this.currentReadsState, ws = this.currentWritesState, re = this.currentReadsEnv;
+    const savedCallees = this.currentCallees;
+    this.currentCallees = new Set();
+    let ok = true;
+    const argNodes = this.resolveCallArgs(node, c, c.name);
+    if (!argNodes) ok = false;
+    else
+      for (let i = 0; i < c.params.length; i++) {
+        const a = this.checkExpr(argNodes[i]!, c.params[i]!.type);
+        if (!a) { ok = false; break; }
+        this.coerce(a, c.params[i]!.type, argNodes[i]!);
+      }
+    ok = ok && this.diags.items.length === diagLen; // a clean check leaves no new diagnostics
+    this.diags.items.length = diagLen; // discard trial diagnostics
+    this.currentReadsState = rs; this.currentWritesState = ws; this.currentReadsEnv = re;
+    this.currentCallees = savedCallees;
+    return ok;
+  }
+
   private checkInternalCall(node: ts.CallExpression, name: string, asStatement: boolean): (Expr & { kind: 'call' }) | undefined {
-    const callee = this.funcsByName.get(name);
+    const callee = this.resolveOverload(node, name);
     if (!callee) return undefined;
     if (callee.visibility === 'external') {
       this.diags.error(node, 'JETH240', `cannot internally call @external function '${name}' (only internal/private/public functions are callable by name)`);
@@ -2401,16 +2485,18 @@ export class Analyzer {
         args.push(this.coerce(a, pt, argNodes[i]!));
       }
     }
-    this.currentCallees.add(name);
-    this.internallyCalled.add(name);
-    return { kind: 'call', type: callee.returnType, fn: name, args };
+    const key = this.fkey(callee);
+    this.currentCallees.add(key);
+    this.internallyCalled.add(key);
+    return { kind: 'call', type: callee.returnType, fn: key, args };
   }
 
   /** Resolve a multi-value internal call `f(...)` / `this.f(...)` as a tuple destructuring
    *  source: the callee must be internal/private with `n` VALUE return components and value
    *  params. Returns {fn, args, types} or undefined (with a diagnostic). */
   private resolveTupleCall(node: ts.CallExpression, name: string, n: number): { fn: string; args: Expr[]; types: JethType[] } | undefined {
-    const callee = this.funcsByName.get(name)!;
+    const callee = this.resolveOverload(node, name);
+    if (!callee) return undefined;
     if (callee.visibility === 'external') {
       this.diags.error(node, 'JETH240', `cannot internally call @external function '${name}'`);
       return undefined;
@@ -2443,9 +2529,10 @@ export class Analyzer {
       if (!a) return undefined;
       args.push(this.coerce(a, callee.params[i]!.type, argNodes[i]!));
     }
-    this.currentCallees.add(name);
-    this.internallyCalled.add(name);
-    return { fn: name, args, types: callee.returnTypes };
+    const key = this.fkey(callee);
+    this.currentCallees.add(key);
+    this.internallyCalled.add(key);
+    return { fn: key, args, types: callee.returnTypes };
   }
 
   /** The internal-callee name of `f(...)` / `this.f(...)`, if it resolves to a known function. */

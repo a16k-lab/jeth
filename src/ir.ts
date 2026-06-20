@@ -301,6 +301,9 @@ export interface Param {
 
 export interface FunctionIR {
   name: string;
+  key: string; // unique identity (the bare name when unique, else `name__ovN` for an overload, or a
+  // generic mangled name): the internal-call target id (Yul `userfn_<key>`), distinct from `name`
+  // (which is the source name shared by overloads, used for diagnostics + the ABI signature)
   visibility: Visibility;
   mutability: Mutability;
   params: Param[];

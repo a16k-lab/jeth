@@ -90,7 +90,7 @@ export class YulEmitter {
   private funcs = new Map<string, FunctionIR>(); // contract functions by name (internal-call targets)
 
   emit(contract: ContractIR): string {
-    for (const f of contract.functions) this.funcs.set(f.name, f);
+    for (const f of contract.functions) this.funcs.set(f.key, f); // by unique key (overload-safe)
     const runtime = this.emitRuntime(contract);
     const creation = this.emitCreation(contract);
     return `object "${contract.name}" {
@@ -206,7 +206,7 @@ ${indent(runtime, 6)}
     }
     const body: string[] = [];
     for (const s of fn.body) for (const l of this.lowerStmt(s, ctx)) body.push(l);
-    const sig = `function ${this.userFnName(fn.name)}(${argNames.join(', ')})${retDecl}`;
+    const sig = `function ${this.userFnName(fn.key)}(${argNames.join(', ')})${retDecl}`;
     return `${sig} {\n${body.map((l) => '  ' + l).join('\n')}${body.length ? '\n' : ''}}`;
   }
 
