@@ -125,9 +125,91 @@ ${indent(runtime, 6)}
     for (const [slot, word] of [...slotWords.entries()].sort((a, b) => a[0] - b[0])) {
       lines.push(`sstore(${slot}, ${toWord(word)})`);
     }
+    // Phase 5: run the constructor body (if any) AFTER the constant-field initializers and BEFORE
+    // copying out + returning the runtime code. The ctor's helper definitions are appended at the
+    // end of THIS creation block (a separate Yul scope from the runtime object).
+    let ctorHelpers: string[] = [];
+    if (contract.ctor) {
+      const c = this.emitConstructor(contract);
+      lines.push(...c.lines);
+      ctorHelpers = c.helpers;
+    }
     lines.push(`datacopy(0, dataoffset("${contract.name}_runtime"), datasize("${contract.name}_runtime"))`);
     lines.push(`return(0, datasize("${contract.name}_runtime"))`);
+    for (const def of ctorHelpers) {
+      lines.push('');
+      lines.push(def);
+    }
     return lines.join('\n');
+  }
+
+  /** Phase 5: emit the constructor prologue (non-payable callvalue guard + decode the appended
+   *  ABI-encoded args from MEMORY) and a synthesized `jeth_constructor(...)` Yul function for the
+   *  body, then call it. Returns the inline creation lines and the function/helper definitions to
+   *  place at the end of the creation block. The body runs inside a Yul function so a `return;`
+   *  becomes `leave` (exit the ctor, then deploy) rather than a raw EVM return (empty code). */
+  private emitConstructor(contract: ContractIR): { lines: string[]; helpers: string[] } {
+    const ctor = contract.ctor!;
+    this.nameCounter = 0;
+    const lines: string[] = [];
+    // Non-payable constructor: reject any value sent at deploy (solc emits this guard).
+    if (!ctor.payable) lines.push('if callvalue() { revert(0, 0) }');
+
+    const ctx: LowerCtx = {
+      scopes: [new Map()],
+      returnType: { kind: 'void' } as JethType,
+      dynParams: new Map(),
+      cdArrays: new Map(),
+      cdAggregates: new Map(),
+      cdDynStructs: new Map(),
+      cdParamHead: new Map(),
+      fnMode: { retVar: null }, // a bare `return;` in the ctor body -> leave
+    };
+
+    // Decode the constructor args (ABI-encoded, appended after the init code). They begin at code
+    // offset datasize("C") (the init-code size) and run to codesize(). Copy them into memory at
+    // 0x80 and decode from MEMORY (each value param is one 32-byte ABI head word). solc reverts
+    // EMPTY when the args region is shorter than the static head, and ignores trailing bytes.
+    const ARGS = 0x80;
+    const headWords = ctor.params.reduce((n, p) => n + abiHeadWords(p.type), 0);
+    const argBytes = headWords * 32;
+    if (headWords > 0) {
+      lines.push(`let _argsLen := sub(codesize(), datasize("${contract.name}"))`);
+      lines.push(`if lt(_argsLen, ${argBytes}) { revert(0, 0) }`);
+      lines.push(`codecopy(${ARGS}, datasize("${contract.name}"), ${argBytes})`);
+      // free-memory pointer past the decoded args, so a body allocation cannot clobber them.
+      lines.push(`mstore(0x40, ${ARGS + argBytes})`);
+    } else {
+      lines.push('mstore(0x40, 0x80)'); // init the free-memory pointer for any body allocation
+    }
+    const formals: string[] = []; // the synthesized function's parameter names (v_<name>_N)
+    const decoded: string[] = []; // the outer decode locals (_tN) passed at the call site
+    let cursorWords = 0;
+    for (const p of ctor.params) {
+      const formal = this.freshLocal(p.name);
+      this.ctxDeclare(ctx, p.name, formal);
+      formals.push(formal);
+      const dec = this.fresh();
+      lines.push(`let ${dec} := mload(${ARGS + cursorWords * 32})`);
+      const guard = this.validateInput(p.type, dec);
+      if (guard) lines.push(guard);
+      decoded.push(dec);
+      cursorWords += abiHeadWords(p.type);
+    }
+
+    // Lower the body with a FRESH helpers map so any helper it pulls in (keccak/checked-math/alloc)
+    // is defined in THIS creation block, not the runtime object (separate Yul scope).
+    const savedHelpers = this.helpers;
+    this.helpers = new Map();
+    const body: string[] = [];
+    for (const s of ctor.body) for (const l of this.lowerStmt(s, ctx)) body.push(l);
+    const helperDefs = [...this.helpers.values()];
+    this.helpers = savedHelpers;
+
+    const sig = `function jeth_constructor(${formals.join(', ')})`;
+    const ctorFn = `${sig} {\n${body.map((l) => '  ' + l).join('\n')}${body.length ? '\n' : ''}}`;
+    lines.push(`jeth_constructor(${decoded.join(', ')})`);
+    return { lines, helpers: [ctorFn, ...helperDefs] };
   }
 
   // ---- runtime / dispatcher ------------------------------------------------

@@ -36,11 +36,11 @@ describe('Counter end-to-end', () => {
   });
 
   it('emits a Solidity-compatible ABI', () => {
-    const inc = result.abi.find((a) => a.name === 'increment');
+    const inc = result.abi.find((a) => 'name' in a && a.name === 'increment');
     expect(inc).toMatchObject({ type: 'function', stateMutability: 'nonpayable', inputs: [], outputs: [] });
-    const cur = result.abi.find((a) => a.name === 'current');
+    const cur = result.abi.find((a) => 'name' in a && a.name === 'current');
     expect(cur).toMatchObject({ stateMutability: 'view', outputs: [{ type: 'uint256' }] });
-    const add = result.abi.find((a) => a.name === 'add');
+    const add = result.abi.find((a) => 'name' in a && a.name === 'add');
     expect(add?.inputs).toEqual([{ name: 'delta', type: 'uint256', internalType: 'uint256' }]);
   });
 

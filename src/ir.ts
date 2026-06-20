@@ -316,6 +316,15 @@ export interface FunctionIR {
   nonReentrant?: boolean; // F4: wrap the external entry in a transient-storage (TSTORE/TLOAD) mutex
 }
 
+/** A constructor (Phase 5): runs once in creation code. Not callable, not in the dispatcher;
+ *  params are ABI-decoded from the args appended to the init code (decoded from MEMORY, not
+ *  calldata). `payable` controls the non-payable callvalue guard. */
+export interface ConstructorIR {
+  params: Param[];
+  payable: boolean;
+  body: Stmt[];
+}
+
 export interface ContractIR {
   name: string;
   stateVars: StateVar[];
@@ -324,4 +333,5 @@ export interface ContractIR {
   events: EventIR[];
   // number of 32-byte slots consumed by state (for diagnostics / layout dump)
   slotCount: number;
+  ctor?: ConstructorIR; // a constructor, if declared (Phase 5)
 }

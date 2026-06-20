@@ -36,6 +36,22 @@ export function decoratorNames(node: ts.Node): string[] {
   return names;
 }
 
+/** Decorator names on a constructor. TS reports `ts.canHaveDecorators(ctor) === false`
+ *  for a ConstructorDeclaration (decorating a constructor is not legal TS), so the
+ *  guarded `decoratorNames` above returns [] and would silently drop a ctor's @payable.
+ *  The parser still records the decorators, reachable via ts.getDecorators directly. */
+export function ctorDecoratorNames(node: ts.ConstructorDeclaration): string[] {
+  const names: string[] = [];
+  // ts.getDecorators' type excludes ConstructorDeclaration (decorating a ctor is not legal TS),
+  // but the parser still records them and the call works at runtime; cast past the type guard.
+  for (const d of ts.getDecorators(node as unknown as ts.HasDecorators) ?? []) {
+    const e = d.expression;
+    if (ts.isIdentifier(e)) names.push(e.text);
+    else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) names.push(e.expression.text);
+  }
+  return names;
+}
+
 /** Return the decorator CallExpression for a given decorator name, if it was
  *  written in call form (e.g. @state({ slot: 3 })). */
 export function decoratorCall(node: ts.Node, name: string): ts.CallExpression | undefined {

@@ -8,7 +8,7 @@
 //    enforcing integer widths, BigInt-literal rule, and view/pure mutability.
 import ts from 'typescript';
 import type { DiagnosticBag } from './diagnostics.js';
-import { decoratorNames } from './parser.js';
+import { decoratorNames, ctorDecoratorNames } from './parser.js';
 import { resolveType, resolvePrimitiveName } from './typeresolver.js';
 import {
   JethType,
@@ -35,6 +35,7 @@ import {
 } from './types.js';
 import {
   ContractIR,
+  ConstructorIR,
   FunctionIR,
   StateVar,
   Stmt,
@@ -368,6 +369,7 @@ export class Analyzer {
     const name = cls.name?.text ?? 'Contract';
     const rawState: RawStateVar[] = [];
     const rawFns: RawFunction[] = [];
+    let ctorNode: ts.ConstructorDeclaration | undefined; // Phase 5: the single constructor, if any
 
     // First pass: collect state, errors, and events. Errors/events are gathered
     // before any function body is checked so emit(...)/revert(...) can resolve
@@ -389,7 +391,11 @@ export class Analyzer {
           if (fn) rawFns.push(fn);
         }
       } else if (ts.isConstructorDeclaration(member)) {
-        this.diags.error(member, 'JETH042', 'constructors are not supported until Phase 5');
+        // Phase 5: a constructor runs once in creation code. Collect the node now; type-check its
+        // body after the state symbol table + function effects are built (it may read/write state
+        // and call - gated - other functions). solc allows at most one constructor.
+        if (ctorNode) this.diags.error(member, 'JETH300', 'a contract may declare at most one constructor');
+        else ctorNode = member;
       } else if (ts.isGetAccessor(member) || ts.isSetAccessor(member)) {
         this.diags.error(member, 'JETH043', 'getters/setters are not supported');
       }
@@ -495,6 +501,11 @@ export class Analyzer {
       } else seen.set(f.selector, f.signature);
     }
 
+    // Phase 5: type-check the constructor body now that the state symbol table and function
+    // registry exist (the body may read/write state). The ctor is not in `functions` and is not
+    // subject to the purity fixpoint; it only needs the value-type param scope + state symbols.
+    const ctor = ctorNode ? this.checkConstructor(ctorNode) : undefined;
+
     return {
       name,
       stateVars: layout.vars,
@@ -502,7 +513,84 @@ export class Analyzer {
       errors: this.errors,
       events: this.events,
       slotCount: layout.slotCount,
+      ctor,
     };
+  }
+
+  /** Phase 5: validate a constructor declaration + type-check its body into a ConstructorIR.
+   *  Increment 1 supports value-type params (decoded from the appended init-code args in
+   *  emitCreation) and a body that writes/reads @state + reads msg.sender/msg.value(@payable)/
+   *  address(this). Aggregate params and ctor->internal-calls are cleanly gated. */
+  private checkConstructor(ctorNode: ts.ConstructorDeclaration): ConstructorIR | undefined {
+    // Decorators: only @payable (default non-payable). solc rejects a view/pure ctor and a ctor
+    // with a return type or type parameters. ts.canHaveDecorators is false for a ctor, so read via
+    // the dedicated ctorDecoratorNames helper (the guarded decoratorNames would drop @payable).
+    let payable = false;
+    for (const d of ctorDecoratorNames(ctorNode)) {
+      if (d === 'payable') payable = true;
+      else this.diags.error(ctorNode, 'JETH301', `a constructor cannot be @${d} (a constructor is payable or non-payable only)`);
+    }
+    if (ctorNode.type) this.diags.error(ctorNode.type, 'JETH301', 'a constructor cannot declare a return type');
+    if (ctorNode.typeParameters && ctorNode.typeParameters.length > 0) {
+      this.diags.error(ctorNode, 'JETH301', 'a constructor cannot be generic');
+    }
+
+    // Params: value types only in increment 1 (decoded from memory via mload + validateInput).
+    const params: Param[] = [];
+    for (const p of ctorNode.parameters) {
+      if (!ts.isIdentifier(p.name)) { this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier'); continue; }
+      const t = resolveType(p.type, this.diags, this.structsByName);
+      if (!t) continue;
+      if (p.initializer) this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
+      if (this.typeHasMapping(t)) {
+        this.diags.error(p, 'JETH247', `constructor parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
+        continue;
+      }
+      if (!isStaticValueType(t)) {
+        this.diags.error(p, 'JETH302', `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only: uintN/intN/bool/address/bytesN/enum/branded)`);
+        continue;
+      }
+      params.push({ name: p.name.text, type: t });
+    }
+
+    // Type-check the body with a fresh function-like context (modeled on checkFunction). Setting
+    // currentMutability is sufficient to enforce the payable rule: a msg.value read flows through
+    // checkGlobal's cat==='value' branch (JETH162) when currentMutability !== 'payable'.
+    this.scopes = [];
+    this.loopDepth = 0;
+    this.pushScope();
+    this.currentMutability = payable ? 'payable' : 'nonpayable';
+    this.currentWritesState = false;
+    this.currentReadsState = false;
+    this.currentReadsEnv = false;
+    this.currentReturnTypes = undefined;
+    this.currentCallees = new Set();
+    this.memArrayLocals.clear();
+    this.memAggregateLocals.clear();
+    this.memDynLocals.clear();
+    this.memDynStructLocals.clear();
+    for (const p of params) {
+      if (this.inCurrentScope(p.name)) this.diags.error(ctorNode, 'JETH056', `duplicate parameter name '${p.name}'`);
+      this.declareLocal(p.name, p.type);
+    }
+    const body: Stmt[] = [];
+    if (ctorNode.body) {
+      this.pushScope();
+      // VOID return type: a bare `return;` is allowed (exits early); `return expr;` is rejected
+      // by coerce-to-void, matching solc ('Return arguments not allowed' for a constructor).
+      for (const s of ctorNode.body.statements) this.checkStatement(s, VOID, body);
+      this.popScope();
+    }
+    this.popScope();
+
+    // Increment-1 gate: a ctor calling an internal/private function. The callee is emitted as a
+    // userfn_ in the RUNTIME object, unreachable from creation code, so reject cleanly (solc
+    // accepts; a later increment will duplicate the callee into the creation object).
+    if (this.currentCallees.size > 0) {
+      this.diags.error(ctorNode, 'JETH303', 'calling an internal/private function from a constructor is not supported yet (the callee lives in the runtime object); inline the logic into the constructor body');
+    }
+
+    return { params, payable, body };
   }
 
   // ---- @error / @event declarations ----------------------------------------

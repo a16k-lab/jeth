@@ -19,6 +19,11 @@ export interface AbiFunction {
   outputs: AbiParameter[];
   stateMutability: 'pure' | 'view' | 'nonpayable' | 'payable';
 }
+export interface AbiConstructor {
+  type: 'constructor';
+  inputs: AbiParameter[];
+  stateMutability: 'nonpayable' | 'payable';
+}
 export interface AbiError {
   type: 'error';
   name: string;
@@ -31,7 +36,7 @@ export interface AbiEvent {
   anonymous: false;
 }
 
-export type AbiItem = AbiFunction | AbiError | AbiEvent;
+export type AbiItem = AbiFunction | AbiConstructor | AbiError | AbiEvent;
 
 function param(name: string, t: JethType): AbiParameter {
   return { name, type: canonicalName(t), internalType: canonicalName(t) };
@@ -65,8 +70,17 @@ function eventAbi(ev: EventIR): AbiEvent {
   };
 }
 
+function ctorAbi(c: NonNullable<ContractIR['ctor']>): AbiConstructor {
+  return {
+    type: 'constructor',
+    inputs: c.params.map((p) => param(p.name, p.type)),
+    stateMutability: c.payable ? 'payable' : 'nonpayable',
+  };
+}
+
 export function emitAbi(contract: ContractIR): AbiItem[] {
   return [
+    ...(contract.ctor ? [ctorAbi(contract.ctor)] : []),
     ...contract.functions
       .filter((f) => f.visibility === 'external' || f.visibility === 'public')
       .map(fnAbi),
