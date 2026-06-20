@@ -2982,13 +2982,43 @@ ${indent(runtime, 6)}
   private storeStructTo(type: JethType & { kind: 'struct' }, value: Expr, dst: string, ctx: LowerCtx, out: string[]): void {
     if (value.kind === 'structNew') { this.writeStruct(value.fields, value.args, dst, ctx, out); return; }
     if (value.kind === 'memAggregate' || value.kind === 'cdAggregateValue') {
-      // a dynamic-field struct (bytes/string field) from a memory/calldata source needs the tails
-      // stored too - a later step; keep it a clean rejection rather than a silent miscompile.
-      if (!isStaticType(type)) throw new UnsupportedError(`cannot copy a dynamic-field struct from '${value.kind}'`);
+      // a STATIC struct from a memory/calldata source: transcode its ABI-unpacked image to packed storage.
       this.storeStaticAggFromMem(type, this.aggToMemPtr(value, ctx, out), dst, out);
       return;
     }
+    if (value.kind === 'memDynStructValue' || value.kind === 'cdDynStructValue') {
+      // a DYNAMIC-field struct from a memory local or calldata param: materialize the pointer-headed
+      // image (handling the source uniformly), then write value fields packed and bytes/string fields
+      // with overwrite-clear into storage.
+      this.writeDynStructFromMem(type, this.buildDynStructLocal(type, value, ctx, out), dst, out);
+      return;
+    }
     this.copyStruct(type, this.structSrcSlot(value, ctx, out), dst, out);
+  }
+
+  /** Write a DYNAMIC-field struct's pointer-headed memory image (from buildDynStructLocal) into
+   *  storage: each value field via storeState (packed), each bytes/string field via storeDynamic from
+   *  the head-word pointer (overwrite-clearing the old tail). Scoped to value + bytes/string fields;
+   *  a dynamic-array field from a memory/calldata source is a later step (clean rejection). */
+  private writeDynStructFromMem(struct: JethType & { kind: 'struct' }, memPtr: string, slot: string, out: string[]): void {
+    const sConst = /^\d+$/.test(slot);
+    const fslotAt = (n: number): string => (n === 0 ? slot : sConst ? String(Number(slot) + n) : `add(${slot}, ${n})`);
+    let hw = 0;
+    for (const f of struct.fields) {
+      const at = hw === 0 ? memPtr : `add(${memPtr}, ${hw * 32})`;
+      if (isBytesLike(f.type)) {
+        const p = this.fresh();
+        out.push(`let ${p} := mload(${at})`);
+        this.storeDynamic(fslotAt(f.slot), { src: 'memory', ptr: p }, out);
+      } else if (!isDynamicType(f.type) && isStaticValueType(f.type)) {
+        const w = this.fresh();
+        out.push(`let ${w} := mload(${at})`);
+        for (const l of this.storeState(f.type, fslotAt(f.slot), f.offset, w)) out.push(l);
+      } else {
+        throw new UnsupportedError(`storing a struct with a '${f.type.kind}' field from a memory/calldata source is not supported yet`);
+      }
+      hw += isDynamicType(f.type) ? 1 : abiHeadWords(f.type);
+    }
   }
 
   /** Copy a STATIC aggregate (struct / fixed array of static elements) from an ABI-unpacked memory
