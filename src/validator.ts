@@ -10,6 +10,19 @@ import type { DiagnosticBag } from './diagnostics.js';
 
 export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag): void {
   const visit = (node: ts.Node): void => {
+    // Solidity reserves `_` (the @modifier placeholder), so it cannot be a DECLARED identifier name
+    // anywhere (local, parameter, field, enum member, method, contract/struct, type alias). The
+    // placeholder itself is an ExpressionStatement (`_;`), not a declaration, so it is unaffected.
+    const declName =
+      ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isPropertyDeclaration(node) ||
+      ts.isEnumMember(node) || ts.isMethodDeclaration(node) || ts.isClassDeclaration(node) ||
+      ts.isTypeAliasDeclaration(node)
+        ? node.name
+        : undefined;
+    if (declName && ts.isIdentifier(declName) && declName.text === '_') {
+      diags.error(declName, 'JETH034', "'_' is a reserved identifier (the @modifier placeholder) and cannot be used as a name");
+    }
+
     switch (node.kind) {
       case ts.SyntaxKind.AwaitExpression:
         diags.error(node, 'JETH020', 'async/await has no on-chain meaning (the EVM is synchronous)');

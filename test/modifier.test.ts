@@ -154,4 +154,57 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     it('a modifier on a multi-value-return function -> JETH323', () =>
       expect(codes(`@contract class C { @modifier m() { _; } @external @m f(): [u256, u256] { return [1n, 2n]; } }`)).toContain('JETH323'));
   });
+
+  // Regression: a modifier param/local sharing a NAME with a function param must NOT shadow it in the
+  // body (the body reads the FUNCTION param, not the modifier's value). Caught by the Phase 5
+  // adversarial sweep as a silent miscompile (wrong returndata + wrong raw storage slot).
+  describe('modifier param name-shadowing the function param (no leak into the body)', () => {
+    it('returndata reads the function param, not the modifier arg', async () => {
+      const J = `@contract class C { @modifier g(v: u256) { require(v < 1000n, "g"); _; } @external @pure @g(99n) f(v: u256): u256 { return v; } }`;
+      const S = `contract C { modifier g(uint256 v){ require(v<1000,"g"); _; } function f(uint256 v) external pure g(99) returns(uint256){ return v; } }`;
+      const j = await depJ(J), s = await depS(S);
+      const rj = await j.h.call(j.a, '0x' + sel('f(uint256)') + pad32(7n));
+      const rs = await s.h.call(s.a, '0x' + sel('f(uint256)') + pad32(7n));
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(BigInt(rj.returnHex)).toBe(7n);
+    });
+    it('raw storage slot uses the function param (withdraw(amount) with @maxOut(100))', async () => {
+      const J = `@contract class C { @state bal: u256; @modifier maxOut(amount: u256) { require(amount <= 100n, "cap"); _; } constructor(){ this.bal = 1000n; } @external @maxOut(100n) withdraw(amount: u256): void { this.bal = this.bal - amount; } }`;
+      const S = `contract C { uint256 bal; modifier maxOut(uint256 amount){ require(amount<=100,"cap"); _; } constructor(){ bal=1000; } function withdraw(uint256 amount) external maxOut(100) { bal = bal - amount; } }`;
+      const j = await depJ(J), s = await depS(S);
+      await j.h.call(j.a, '0x' + sel('withdraw(uint256)') + pad32(30n));
+      await s.h.call(s.a, '0x' + sel('withdraw(uint256)') + pad32(30n));
+      expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+      expect(BigInt(await readSlot(j.h, j.a, 0n))).toBe(970n);
+    });
+  });
+
+  // A constructor may carry a modifier (the canonical base-init guard), inlined like a function
+  // modifier; byte-identical to solc (deploy succeeds/reverts per the guard).
+  it('a @modifier on the constructor runs its guard at deploy', async () => {
+    const J = `@contract class C { @state n: u256; @modifier pos(x: u256) { require(x > 0n, "pos"); _; } @external @view getN(): u256 { return this.n; } @pos(v) constructor(v: u256) { this.n = v; } }`;
+    const S = `contract C { uint256 n; modifier pos(uint256 x){ require(x>0,"pos"); _; } function getN() external view returns(uint256){return n;} constructor(uint256 v) pos(v) { n = v; } }`;
+    for (const v of [9n, 0n]) {
+      let jr = false, sr = false, sj = '', ss = '';
+      const hj = await Harness.create(); await hj.fund(owner, 10n ** 20n);
+      const hs = await Harness.create(); await hs.fund(owner, 10n ** 20n);
+      try { const a = await hj.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode + pad32(v), { caller: owner }); sj = await readSlot(hj, a, 0n); } catch { jr = true; }
+      try { const a = await hs.deploy(compileSolidity(SPDX + S, 'C').creation + pad32(v), { caller: owner }); ss = await readSlot(hs, a, 0n); } catch { sr = true; }
+      expect({ jr, sj }).toEqual({ jr: sr, sj: ss });
+    }
+  });
+
+  describe("the reserved identifier '_' (JETH034)", () => {
+    const par = (J: string, S: string) => { expect(codes(J)).toContain('JETH034'); expect(solcRejects(S)).toBe(true); };
+    it('rejects a local named _', () =>
+      par(`@contract class C { @external @pure f(): u256 { let _: u256 = 3n; return _; } }`, `contract C { function f() external pure returns(uint256){ uint256 _ = 3; return _; } }`));
+    it('rejects a parameter named _', () =>
+      par(`@contract class C { @external @pure f(_: u256): u256 { return _; } }`, `contract C { function f(uint256 _) external pure returns(uint256){ return _; } }`));
+    it('rejects a @state field named _', () =>
+      par(`@contract class C { @state _: u256; @external @view g(): u256 { return this._; } }`, `contract C { uint256 _; function g() external view returns(uint256){ return _; } }`));
+    it('rejects a modifier parameter named _', () =>
+      par(`@contract class C { @state s: u256; @modifier m(_: u256) { require(_ > 0n); _; } @external @m(1n) f(): void { this.s = 1n; } }`, `contract C { uint256 s; modifier m(uint256 _){ require(_>0); _; } function f() external m(1) { s=1; } }`));
+    it('the _ placeholder itself still works', () =>
+      expect(codes(`@contract class C { @state s: u256; @modifier m() { require(true); _; } @external @m f(): void { this.s = 1n; } }`)).toEqual([]));
+  });
 });

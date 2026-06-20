@@ -553,13 +553,23 @@ export class Analyzer {
    *  emitCreation) and a body that writes/reads @state + reads msg.sender/msg.value(@payable)/
    *  address(this). Aggregate params and ctor->internal-calls are cleanly gated. */
   private checkConstructor(ctorNode: ts.ConstructorDeclaration): ConstructorIR | undefined {
-    // Decorators: only @payable (default non-payable). solc rejects a view/pure ctor and a ctor
-    // with a return type or type parameters. ts.canHaveDecorators is false for a ctor, so read via
-    // the dedicated ctorDecoratorNames helper (the guarded decoratorNames would drop @payable).
+    // Decorators: @payable makes the ctor payable (default non-payable; solc rejects a view/pure ctor
+    // -> JETH301). A user @modifier MAY decorate a constructor (the canonical base-init guard, e.g.
+    // `constructor() onlyValid {}`); it is inlined around the body like a function modifier. ctors
+    // report ts.canHaveDecorators === false, so read the decorators via ts.getDecorators directly.
     let payable = false;
-    for (const d of ctorDecoratorNames(ctorNode)) {
-      if (d === 'payable') payable = true;
-      else this.diags.error(ctorNode, 'JETH301', `a constructor cannot be @${d} (a constructor is payable or non-payable only)`);
+    const ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
+    const CTOR_BAD_DECORATORS = new Set(['view', 'pure', 'read', 'nonReentrant', 'external', 'public', 'internal', 'private', 'hidden']);
+    for (const dec of ts.getDecorators(ctorNode as unknown as ts.HasDecorators) ?? []) {
+      const e = dec.expression;
+      let nm: string | undefined;
+      let args: ts.Expression[] = [];
+      if (ts.isIdentifier(e)) nm = e.text;
+      else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) { nm = e.expression.text; args = [...e.arguments]; }
+      if (!nm) continue;
+      if (nm === 'payable') payable = true;
+      else if (CTOR_BAD_DECORATORS.has(nm)) this.diags.error(ctorNode, 'JETH301', `a constructor cannot be @${nm} (a constructor is payable or non-payable only)`);
+      else ctorMods.push({ name: nm, argNodes: args, site: dec }); // a @modifier application, inlined below
     }
     if (ctorNode.type) this.diags.error(ctorNode.type, 'JETH301', 'a constructor cannot declare a return type');
     if (ctorNode.typeParameters && ctorNode.typeParameters.length > 0) {
@@ -604,18 +614,25 @@ export class Analyzer {
       if (this.inCurrentScope(p.name)) this.diags.error(ctorNode, 'JETH056', `duplicate parameter name '${p.name}'`);
       this.declareLocal(p.name, p.type);
     }
-    const body: Stmt[] = [];
+    // currentInConstructor routes a `this.<imm>` read to the staged shadow (the value assigned so
+    // far) instead of a runtime loadimmutable, and permits an @immutable write (only here). It spans
+    // the body AND any constructor-modifier inlining (so a ctor modifier reading an immutable also
+    // sees the staged value).
+    this.currentInConstructor = true;
+    const rawBody: Stmt[] = [];
     if (ctorNode.body) {
       this.pushScope();
-      // currentInConstructor routes a `this.<imm>` read to the staged shadow (the value assigned so
-      // far) instead of a runtime loadimmutable, and permits an @immutable write (only here).
-      this.currentInConstructor = true;
       // VOID return type: a bare `return;` is allowed (exits early); `return expr;` is rejected
       // by coerce-to-void, matching solc ('Return arguments not allowed' for a constructor).
-      for (const s of ctorNode.body.statements) this.checkStatement(s, VOID, body);
-      this.currentInConstructor = false;
+      for (const s of ctorNode.body.statements) this.checkStatement(s, VOID, rawBody);
       this.popScope();
     }
+    // Inline applied @modifiers around the constructor body (param scope active for arg
+    // materialization; leftmost decorator outermost). A ctor modifier reading msg.value still flows
+    // through the payable rule, and one calling an internal function is caught by the JETH303 gate.
+    let body = rawBody;
+    for (const app of [...ctorMods].reverse()) body = this.inlineModifier(app, body);
+    this.currentInConstructor = false;
     this.popScope();
 
     // Increment-1 gate: a ctor calling an internal/private function. The callee is emitted as a
@@ -1338,9 +1355,12 @@ export class Analyzer {
     for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
     this.popScope();
     this.scopes = savedScopes;
-    // 3. A block gives the modifier params/locals their own lexical scope (so two applications, or a
-    //    modifier local shadowing a body local, never collide in codegen).
-    return [{ kind: 'block', body: [...argDecls, ...pre, ...inner] }];
+    // 3. Wrap ONLY [argDecls, pre-code] in a block so the modifier's params/locals are scoped to the
+    //    guard and POPPED before the function body runs. `inner` (the function body) must stay OUTSIDE
+    //    the block: otherwise a modifier param sharing a NAME with a function param would shadow it in
+    //    codegen's flat name map and the body would read the modifier's value (a silent miscompile).
+    //    For pre-only modifiers there is no post-code, so the body simply follows the guard.
+    return [{ kind: 'block', body: [...argDecls, ...pre] }, ...inner];
   }
 
   /** Phase 5: collect a user-defined @modifier. Increment 1 supports a PRE-ONLY modifier: a single
