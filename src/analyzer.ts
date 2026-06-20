@@ -641,11 +641,11 @@ export class Analyzer {
         : { kind: 'arrayGet', type: t, arr, index: indices[0]!, oobEmpty: true };
     }
     if (!value) {
-      // Generic fallback for the remaining shapes (nested arrays T[][], mapping(K=>Arr<T,N>)): read the
-      // VALUE leaf at the resolved place (the packing-aware prefix). bytes/string leaves beyond the
-      // specialized paths above are deferred (their multi-level encoding is not yet handled).
-      if (!isStaticValueType(t)) return null;
-      value = { kind: 'placeRead', type: t, path: { baseSlot: v.slot, steps: prefix, oobEmpty: true } };
+      // Generic fallback for the remaining shapes (nested arrays T[][], string[][], mapping(K=>Arr<T,N>),
+      // mapping(K=>Arr<string,N>), ...): read the leaf at the resolved place (the packing-aware prefix).
+      // A bytes/string leaf is a storage dynamic value at the folded slot (dynPlaceRead).
+      const path: AccessPath = { baseSlot: v.slot, steps: prefix, oobEmpty: true };
+      value = isBytesLike(t) ? { kind: 'dynPlaceRead', type: t, path } : { kind: 'placeRead', type: t, path };
     }
     return { ...base, returnType: t, body: [{ kind: 'return', value }] };
   }
@@ -663,17 +663,6 @@ export class Analyzer {
     return packed
       ? { kind: 'packedDynIndex', index: idx, perSlot: Math.floor(32 / storageByteSize(elem)), size: storageByteSize(elem), elemType: elem }
       : { kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(elem), elemType: elem };
-  }
-
-  /** The constant storage slot a path resolves to, or null if any step is runtime (a mapping key or an
-   *  array index) - i.e. only when every step is a (constant-offset) struct field. */
-  private constStructSlot(baseSlot: number, steps: AccessStep[]): number | null {
-    let slot = baseSlot;
-    for (const s of steps) {
-      if (s.kind !== 'field') return null;
-      slot += s.fieldSlot;
-    }
-    return slot;
   }
 
   /** Flatten a @public struct getter's return tuple: each value/bytes/string field (in declaration
@@ -711,11 +700,10 @@ export class Analyzer {
     if (type.kind === 'struct') {
       if (isStaticType(type)) return this.flattenGetterStruct(type, baseSlot, steps, false); // static: flatten inline (byte-identical)
       // A DYNAMIC nested struct is a head/tail ABI sub-tuple, NOT a flattened inline run. Emit it as ONE
-      // whole storage-struct component (the recursive return codec encodes it exactly like solc) when the
-      // path resolves to a CONSTANT slot; a runtime-reached (mapping/array) one is still deferred.
-      const cs = this.constStructSlot(baseSlot, steps);
-      if (cs === null) return null;
-      return { types: [type], values: [{ kind: 'structValue', type, baseSlot: cs }] };
+      // whole storage-struct component: a struct-typed placeRead, which the multi-return codec resolves
+      // to its slot via lowerPlace (a CONSTANT slot for a direct var, or a RUNTIME keccak slot when the
+      // struct is reached through a mapping/array) and encodes via the recursive storage encoder.
+      return { types: [type], values: [{ kind: 'placeRead', type, path }] };
     }
     if (type.kind === 'array' && type.length !== undefined) {
       const el = type.element;

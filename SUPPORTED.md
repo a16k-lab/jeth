@@ -38,14 +38,19 @@ Over-acceptances fixed (JETH accepted programs solc rejects):
     `mapping(K=>Arr<T,N>)`): one `uint256` index param per dimension, incl. packed elements;
     `string[]`/`bytes[]` return the element. Out-of-bounds reverts with EMPTY data (matching solc's
     getter, NOT `Panic(0x32)`).
+  - `bytes`/`string` multi-level arrays (`string[][]`, `mapping(K=>Arr<string,N>)`, ...): the dynamic
+    element at the resolved place, empty-revert on OOB.
   - struct vars, and structs reached via a mapping/array (`mapping(K=>S)`, `S[]`, `Arr<S,N>`,
     `mapping(K=>S[])`): flattened to a tuple - the TOP struct OMITS all array + mapping members; a kept
     nested struct is a FULL sub-tuple whose FIXED arrays ARE included. An all-static nested struct is
-    inlined; a DYNAMIC nested struct (a `bytes`/`string`/dynamic-array member at depth) of a directly-
-    declared struct var is emitted as a whole storage-struct component (head/tail), at any nesting
-    depth. Byte-identical to solc (incl. empty-revert on array OOB, zero-struct for an absent key).
-  - still deferred cleanly (`JETH057`; solc accepts): ONLY a getter whose struct is reached through a
-    mapping/array AND has a DYNAMIC nested-struct member (a runtime slot, so no constant struct base).
+    inlined; a DYNAMIC nested struct (a `bytes`/`string`/dynamic-array member at depth) is emitted as a
+    whole storage-struct component (head/tail) at any nesting depth, reached via a constant OR a runtime
+    (mapping/array) slot. Byte-identical to solc (incl. empty-revert on array OOB, zero-struct absent key).
+
+  The auto-getter now matches solc for EVERY storage type JETH supports. The only `@public` vars solc
+  accepts that JETH rejects are ones whose underlying STORAGE TYPE is itself unimplemented (so a manual
+  getter or a write is rejected too, not a getter-specific over-rejection), e.g. `string[3][]` (a
+  dynamic array of fixed arrays of a dynamic type, `JETH217`).
 
 Over-rejections fixed (valid Solidity JETH wrongly rejected):
 - `for (const x of this.structArray)` and a typed `let p: S = this.arr[i]` / `this.m[k]` (storage

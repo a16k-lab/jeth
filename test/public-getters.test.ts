@@ -262,19 +262,48 @@ describe('@public getters with a nested DYNAMIC struct member vs Solidity', () =
       [{ sig: 'set()' }, { sig: 'a()' }],
     );
   });
+
+  it('dynamic nested struct reached THROUGH a mapping / array (runtime slot)', async () => {
+    await diff(
+      `@struct class I { s: string; } @struct class O { x: u256; inner: I; y: address; } @contract class C { @public @state m: mapping<u256,O>; @external set(k: u256): void { this.m[k].x = 7n; this.m[k].inner.s = "hey"; this.m[k].y = address(0x9n); } }`,
+      `struct I { string s; } struct O { uint256 x; I inner; address y; } contract C { mapping(uint256=>O) public m; function set(uint256 k) external { m[k].x=7; m[k].inner.s="hey"; m[k].y=address(0x9); } }`,
+      [{ sig: 'set(uint256)', args: W(3n) }, { sig: 'm(uint256)', args: W(3n) }, { sig: 'm(uint256)', args: W(8n) }],
+    );
+    await diff(
+      `@struct class I { s: string; } @struct class O { x: u256; inner: I; } @contract class C { @public @state a: O[]; @external push(x: u256, s: string): void { let i: u256 = this.a.length; this.a.push(); this.a[i].x = x; this.a[i].inner.s = s; } }`,
+      `struct I { string s; } struct O { uint256 x; I inner; } contract C { O[] public a; function push(uint256 x, string calldata s) external { a.push(); a[a.length-1].x=x; a[a.length-1].inner.s=s; } }`,
+      [{ sig: 'push(uint256,string)', args: W(0x40n) + W(11n) + W(2n) + '7a7a'.padEnd(64, '0') }, { sig: 'a(uint256)', args: W(0n) }, { sig: 'a(uint256)', args: W(5n) }],
+    );
+  });
 });
 
-describe('@public getter shapes still deferred reject cleanly (honest gaps vs solc)', () => {
-  const cases: { name: string; jeth: string; sol: string }[] = [
-    // A nested DYNAMIC struct is supported for a directly-declared struct var (emitted as a whole
-    // storage-struct component); only when reached through a mapping/array (a runtime slot, so no
-    // constant struct base) is it still deferred.
-    { name: 'mapping-reached struct whose member is a dynamic nested struct', jeth: `@struct class I { s: string; } @struct class O { x: u256; inner: I; } @contract class C { @public @state m: mapping<u256,O>; }`, sol: `struct I { string s; } struct O { uint256 x; I inner; } contract C { mapping(uint256=>O) public m; }` },
-  ];
-  for (const c of cases) {
-    it(`${c.name}: JETH rejects cleanly, solc accepts`, () => {
-      expect(jethRejects(c.jeth), 'JETH should reject').toBe(true);
-      expect(solcAccepts(c.sol), 'solc should accept').toBe(true);
-    });
-  }
+describe('@public bytes/string multi-level array getters vs Solidity', () => {
+  it('string[][] (and bytes element), incl OOB empty-revert', async () => {
+    await diff(
+      `@contract class C { @public @state d: string[][]; @external nr(): void { this.d.push(); } @external add(i: u256, s: string): void { this.d[i].push(s); } }`,
+      `contract C { string[][] public d; function nr() external { d.push(); } function add(uint256 i, string calldata s) external { d[i].push(s); } }`,
+      [{ sig: 'nr()' }, { sig: 'add(uint256,string)', args: W(0x40n) + W(0n) + W(3n) + '616263'.padEnd(64, '0') }, { sig: 'd(uint256,uint256)', args: W(0n) + W(0n) }, { sig: 'd(uint256,uint256)', args: W(0n) + W(5n) }],
+    );
+  });
+
+  it('mapping(K=>Arr<string,N>) element getter', async () => {
+    await diff(
+      `@contract class C { @public @state m: mapping<u256,Arr<string,2>>; @external set(k: u256, i: u256, s: string): void { this.m[k][i] = s; } }`,
+      `contract C { mapping(uint256=>string[2]) public m; function set(uint256 k, uint256 i, string calldata s) external { m[k][i]=s; } }`,
+      [{ sig: 'set(uint256,uint256,string)', args: W(1n) + W(0n) + W(0x60n) + W(2n) + '7878'.padEnd(64, '0') }, { sig: 'm(uint256,uint256)', args: W(1n) + W(0n) }, { sig: 'm(uint256,uint256)', args: W(1n) + W(2n) }],
+    );
+  });
+});
+
+describe('@public getter parity is limited only by unsupported STORAGE TYPES (not getters)', () => {
+  // Every getter shape whose storage TYPE JETH supports now matches solc. The only @public state vars
+  // solc accepts that JETH rejects are ones whose underlying STORAGE TYPE is itself unimplemented
+  // (rejected for manual getters and writes too), e.g. `string[3][]` (a dynamic array of fixed arrays
+  // of a dynamic type). The getter rejection there is consistent, not a getter-specific over-rejection.
+  it('string[3][] storage type is unsupported everywhere (JETH217), incl. its @public getter', () => {
+    // not getter-specific: a manual read of the same type is also rejected.
+    expect(jethRejects(`@contract class C { @state d: Arr<string,3>[]; @external @view g(i: u256, j: u256): string { return this.d[i][j]; } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @public @state d: Arr<string,3>[]; }`)).toBe(true);
+    expect(solcAccepts(`contract C { string[3][] public d; }`)).toBe(true);
+  });
 });
