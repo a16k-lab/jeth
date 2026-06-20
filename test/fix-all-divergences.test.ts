@@ -192,3 +192,18 @@ describe('sweep batch D (moderate over-rejections)', () => {
     );
   });
 });
+
+describe('sweep @immutable inline initialization', () => {
+  it('inline init (no ctor, with ctor, and an expression) byte-identical', async () => {
+    await rt(
+      `@contract class C { @immutable a: u256 = 5n; @immutable b: address = msg.sender; @external @view ga(): u256 { return this.a; } @external @view gb(): address { return this.b; } }`,
+      `contract C { uint256 immutable a = 5; address immutable b = msg.sender; function ga() external view returns(uint256){ return a; } function gb() external view returns(address){ return b; } }`,
+      [{ sig: 'ga()' }, { sig: 'gb()' }],
+    );
+    await rt(
+      `@contract class C { @constant K: u256 = 3n; @immutable a: u256 = this.K * 7n; @external @view ga(): u256 { return this.a; } }`,
+      `contract C { uint256 constant K = 3; uint256 immutable a = K * 7; function ga() external view returns(uint256){ return a; } }`,
+      [{ sig: 'ga()' }],
+    );
+  });
+});

@@ -139,7 +139,7 @@ export class Analyzer {
   // code via setimmutable (NO storage slot - never enters rawState/planLayout). immutableOrder keeps
   // declaration order for deterministic setimmutable emission. currentInConstructor distinguishes a
   // staged ctor-body read (the value assigned so far) from a runtime loadimmutable read.
-  private immutablesByName = new Map<string, { name: string; type: JethType }>();
+  private immutablesByName = new Map<string, { name: string; type: JethType; init?: ts.Expression }>();
   private immutableOrder: string[] = [];
   private currentInConstructor = false;
   // Phase 5: user-defined @modifier declarations (name -> RawModifier). A modifier is never a
@@ -555,7 +555,14 @@ export class Analyzer {
     // Phase 5: type-check the constructor body now that the state symbol table and function
     // registry exist (the body may read/write state). The ctor is not in `functions` and is not
     // subject to the purity fixpoint; it only needs the value-type param scope + state symbols.
-    const ctor = ctorNode ? this.checkConstructor(ctorNode) : undefined;
+    // @immutable inline initializers run at the start of the constructor. With no explicit constructor,
+    // synthesize one holding just the inits (so they are still staged + baked via setimmutable).
+    const hasInlineImmInit = this.immutableOrder.some((n) => this.immutablesByName.get(n)!.init !== undefined);
+    const ctor = ctorNode
+      ? this.checkConstructor(ctorNode)
+      : hasInlineImmInit
+        ? { params: [], payable: false, body: this.immutableInitStmts() }
+        : undefined;
 
     return {
       name,
@@ -565,7 +572,7 @@ export class Analyzer {
       events: this.events,
       slotCount: layout.slotCount,
       ctor,
-      immutables: this.immutableOrder.map((n) => this.immutablesByName.get(n)!),
+      immutables: this.immutableOrder.map((n) => ({ name: n, type: this.immutablesByName.get(n)!.type })),
     };
   }
 
@@ -726,6 +733,34 @@ export class Analyzer {
    *  Increment 1 supports value-type params (decoded from the appended init-code args in
    *  emitCreation) and a body that writes/reads @state + reads msg.sender/msg.value(@payable)/
    *  address(this). Aggregate params and ctor->internal-calls are cleanly gated. */
+  /** Type-check the @immutable inline initializers (`@immutable a = expr`) into staged-assignment
+   *  statements that run at the START of the constructor, in declaration order. Checked in a FRESH
+   *  scope (no constructor params - a field initializer cannot reference them, matching solc) with the
+   *  in-constructor flag set so the immutable write is permitted. */
+  private immutableInitStmts(): Stmt[] {
+    const stmts: Stmt[] = [];
+    const savedScopes = this.scopes;
+    const savedInCtor = this.currentInConstructor;
+    const savedMut = this.currentMutability;
+    this.scopes = [new Map()];
+    this.pushScope();
+    this.currentInConstructor = true;
+    this.currentMutability = 'nonpayable'; // a field initializer has no payable context (msg.value -> JETH162)
+    for (const name of this.immutableOrder) {
+      const im = this.immutablesByName.get(name)!;
+      if (!im.init) continue;
+      const v = this.checkExpr(im.init, im.type);
+      if (!v) continue;
+      const coerced = this.coerce(v, im.type, im.init);
+      stmts.push({ kind: 'assign', target: { kind: 'immutableStaged', type: im.type, name }, value: coerced });
+    }
+    this.popScope();
+    this.scopes = savedScopes;
+    this.currentInConstructor = savedInCtor;
+    this.currentMutability = savedMut;
+    return stmts;
+  }
+
   private checkConstructor(ctorNode: ts.ConstructorDeclaration): ConstructorIR | undefined {
     // Decorators: @payable makes the ctor payable (default non-payable; solc rejects a view/pure ctor
     // -> JETH301). A user @modifier MAY decorate a constructor (the canonical base-init guard, e.g.
@@ -793,7 +828,8 @@ export class Analyzer {
     // the body AND any constructor-modifier inlining (so a ctor modifier reading an immutable also
     // sees the staged value).
     this.currentInConstructor = true;
-    const rawBody: Stmt[] = [];
+    // @immutable inline initializers run first, before the explicit constructor body (solc parity).
+    const rawBody: Stmt[] = this.immutableInitStmts();
     if (ctorNode.body) {
       this.pushScope();
       // VOID return type: a bare `return;` is allowed (exits early); `return expr;` is rejected
@@ -1078,17 +1114,13 @@ export class Analyzer {
       this.diags.error(member, 'JETH310', `@immutable '${name}' of type ${displayName(type)} is not supported (immutables must be a value type: uintN/intN/bool/address/bytesN/enum/branded)`);
       return;
     }
-    // Inline initialization (`@immutable a: u256 = 7n`) is a later step: solc accepts it (even from a
-    // non-constant), but JETH currently stages immutables only via constructor assignment.
-    if (member.initializer) {
-      this.diags.error(member.initializer, 'JETH311', `inline initialization of @immutable '${name}' is not supported yet; assign it in the constructor`);
-      return;
-    }
+    // Inline initialization (`@immutable a: u256 = 7n`) is staged as an assignment at the START of the
+    // constructor (a synthetic one is created when the contract has no constructor), matching solc.
     if (this.immutablesByName.has(name) || this.constantsByName.has(name) || this.stateByName.has(name)) {
       this.diags.error(member, 'JETH046', `duplicate field name '${name}'`);
       return;
     }
-    this.immutablesByName.set(name, { name, type });
+    this.immutablesByName.set(name, { name, type, init: member.initializer });
     this.immutableOrder.push(name);
   }
 
