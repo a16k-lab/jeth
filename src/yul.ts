@@ -1273,6 +1273,9 @@ ${indent(runtime, 6)}
         // leaf words, no offset/tail). aggToMemPtr materializes the ABI-unpacked image from any source
         // (a constructor, a memory/storage aggregate), then we mcopy it into the head.
         data.push({ inline: true, mp: this.aggToMemPtr(arg, ctx, out), words: abiHeadWords(p.type) });
+      } else if (p.type.kind === 'struct') {
+        // a non-indexed DYNAMIC struct: a head offset + its head/tail blob in the tail.
+        data.push(this.encodeDynStructToBlob(arg, ctx, out));
       } else if (p.type.kind === 'array') {
         data.push(this.materializeArrayArg(arg, ctx, out)); // {mp, size}: ABI tail blob (G3)
       } else {
@@ -1847,6 +1850,24 @@ ${indent(runtime, 6)}
     const end = this.encodeTupleInto(struct, src, tuplePtr, ctx, out, nextRef);
     out.push(`mstore(0x40, ${end})`); // bump free-mem pointer past the blob
     return { ptr, size: `sub(${end}, ${ptr})` };
+  }
+
+  /** Encode a DYNAMIC struct value to its bare ABI tuple head/tail blob (no leading sole-return
+   *  offset), for use as a tuple COMPONENT (event data / abi.encode): the component is a head offset
+   *  word + this blob in the tail. Returns the blob {mp, size}. Mirrors encodeDynStructReturn's
+   *  pre-pass + encodeTupleInto sequence. */
+  private encodeDynStructToBlob(value: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
+    const struct = value.type as JethType & { kind: 'struct' };
+    const src = this.tupleSrc(value, ctx, out);
+    const queue: DynRef[] = [];
+    this.collectTupleDyn(struct, src, queue, ctx, out);
+    let qi = 0;
+    const nextRef = (): DynRef => queue[qi++]!;
+    const mp = this.fresh();
+    out.push(`let ${mp} := mload(0x40)`);
+    const end = this.encodeTupleInto(struct, src, mp, ctx, out, nextRef);
+    out.push(`mstore(0x40, ${end})`);
+    return { mp, size: `sub(${end}, ${mp})` };
   }
 
   /** PRE-PASS: walk a tuple in encode order and materialize each bytes/string

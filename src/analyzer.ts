@@ -748,16 +748,18 @@ export class Analyzer {
           }
           // indexed bytes/string, dynamic value array, or static fixed-array/struct: allowed (keccak topic).
         } else {
-          // non-indexed reference param: a dynamic value-element array, bytes/string, or a STATIC
-          // struct / fixed-array (encoded inline in the ABI data tuple). A dynamic struct (bytes/string
-          // field) / fixed-array-of-dynamic non-indexed param stays a later step.
+          // non-indexed reference param: a dynamic value-element array, bytes/string, a STATIC struct /
+          // fixed-array (encoded inline), or a supported DYNAMIC struct (value + bytes/string + dyn
+          // value-array fields, encoded as a head offset + head/tail tail). A fixed-array-of-dynamic /
+          // nested-dynamic struct field stays a later step.
           const nonIdxDynArray = t.kind === 'array' && t.length === undefined;
           const nonIdxStaticAgg = isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
-          if (!isBytesLike(t) && !nonIdxDynArray && !nonIdxStaticAgg) {
+          const nonIdxDynStruct = t.kind === 'struct' && this.isSupportedDynStructLocal(t);
+          if (!isBytesLike(t) && !nonIdxDynArray && !nonIdxStaticAgg && !nonIdxDynStruct) {
             this.diags.error(
               p,
               'JETH142',
-              `@event parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types, bytes/string, dynamic value arrays, and static structs/fixed-arrays (non-indexed)`,
+              `@event parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types, bytes/string, dynamic value arrays, static structs/fixed-arrays, and dynamic structs (non-indexed)`,
             );
             continue;
           }

@@ -53,6 +53,19 @@ describe('non-indexed struct / fixed-array event params vs Solidity', () => {
     );
   });
 
+  it('a non-indexed DYNAMIC struct (bytes/string/array fields) param', async () => {
+    await diffLogs(
+      `@struct class D { a: u256; s: string; } @contract class C { @event E(n: u256, d: D); @external f(n: u256, a: u256, s: string): void { emit(E(n, D(a, s))); } }`,
+      `struct D { uint256 a; string s; } contract C { event E(uint256 n, D d); function f(uint256 n, uint256 a, string calldata s) external { emit E(n, D(a,s)); } }`,
+      [{ sig: 'f(uint256,uint256,string)', args: W(99n) + W(42n) + W(0x60n) + W(5n) + '68656c6c6f'.padEnd(64, '0') }],
+    );
+    await diffLogs(
+      `@struct class D { a: u256; bs: bytes; xs: u256[]; } @contract class C { @event E(d: D); @external f(a: u256, bs: bytes, xs: u256[]): void { let m: D = D(a, bs, xs); emit(E(m)); } }`,
+      `struct D { uint256 a; bytes bs; uint256[] xs; } contract C { event E(D d); function f(uint256 a, bytes calldata bs, uint256[] calldata xs) external { D memory m = D(a, bs, xs); emit E(m); } }`,
+      [{ sig: 'f(uint256,bytes,uint256[])', args: W(1n) + W(0x60n) + W(0xa0n) + W(2n) + 'aabb'.padEnd(64, '0') + W(2n) + W(5n) + W(6n) }],
+    );
+  });
+
   it('a static fixed-array param and a nested static struct', async () => {
     await diffLogs(
       `@contract class C { @event E(xs: Arr<u256,3>); @external f(a: u256, b: u256, c: u256): void { emit(E([a, b, c])); } }`,

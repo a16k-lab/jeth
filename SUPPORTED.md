@@ -81,10 +81,11 @@ DYNAMIC value-element array (offset + tail). `abi.encodeWithSelector(bytes4, ...
 signature's selector = keccak256(sig)[0:4], literal or runtime). Verified byte-identical to solc. A
 nested-dynamic arg (`string[]`, `T[][]`, dynamic struct) stays a clean rejection.
 
-A NON-indexed static struct / static fixed-array event param is now encoded INLINE in the ABI data
-tuple (byte-identical to solc: topic0 uses the struct's canonical tuple form, the data head holds the
-aggregate's leaf words; verified for mixed value/struct heads, struct + a dynamic param, nested, and
-packed structs). (Indexed static struct/fixed-array params - a keccak topic - were already supported.)
+A NON-indexed STATIC struct / fixed-array event param is encoded INLINE in the ABI data tuple, and a
+NON-indexed DYNAMIC struct (value + bytes/string + dyn value-array fields) is encoded as a head offset
++ head/tail tail. Byte-identical to solc (topic0 uses the struct's canonical tuple form; verified for
+mixed value/struct heads, struct + a dynamic param, nested, packed, and calldata/memory sources).
+(Indexed static struct/fixed-array params - a keccak topic - were already supported.)
 
 A struct with a dynamic value-element ARRAY field (alongside value / bytes/string fields), built in a
 memory local, now stores to storage byte-identically (length + keccak-data slots, overwrite-clearing).
