@@ -4206,6 +4206,9 @@ ${indent(runtime, 6)}
 
   private lowerDynamic(e: Expr, ctx: LowerCtx, out: string[]): DynRef {
     switch (e.kind) {
+      case 'cast':
+        // bytes(string) / string(bytes): a no-op reinterpret of the same [len][data] dynamic value.
+        return this.lowerDynamic(e.operand, ctx, out);
       case 'dynStateRead':
         return { src: 'storage', slot: String(e.slot) };
       case 'mapDynValue': {
@@ -4993,8 +4996,18 @@ ${indent(runtime, 6)}
   }
 
   private lowerCast(e: Expr & { kind: 'cast' }, ctx: LowerCtx, out: string[]): string {
-    const v = this.lowerExpr(e.operand, ctx, out);
     const { from, type: to } = e;
+    // bytesN(bytes): the first N content bytes (left-aligned), zero-padded if the value is shorter.
+    // The operand is a dynamic [len][data] value, not a word, so materialize it and read its first word.
+    if (from.kind === 'bytes' && to.kind === 'bytesN') {
+      const { mp } = this.toMemory(this.lowerDynamic(e.operand, ctx, out), out);
+      const w = this.fresh();
+      out.push(`let ${w} := mload(add(${mp}, 0x20))`); // first content word: left-aligned, zero-padded
+      if (to.size === 32) return w;
+      const mask = toWord(((1n << BigInt(to.size * 8)) - 1n) << BigInt((32 - to.size) * 8));
+      return `and(${w}, ${mask})`;
+    }
+    const v = this.lowerExpr(e.operand, ctx, out);
     // enum TARGET (integer -> enum, `Color(x)`): solc range-checks `x < memberCount` and reverts
     // Panic 0x21 when out of range (the unsigned `lt` naturally rejects negative ints). The value
     // is already a valid small uint8 afterward, so just return it. (enum -> integer needs no case:

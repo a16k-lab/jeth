@@ -151,8 +151,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(codes(`@contract class C { @modifier m(a: Arr<u256,2>) { _; } @external @m(([1n,2n])) f(): void {} }`)).toContain('JETH322'));
     it('a visibility/mutability decorator on the modifier itself -> JETH330', () =>
       expect(codes(`@contract class C { @view @modifier m() { _; } @external @m f(): void {} }`)).toContain('JETH330'));
-    it('a modifier on a multi-value-return function -> JETH323', () =>
-      expect(codes(`@contract class C { @modifier m() { _; } @external @m f(): [u256, u256] { return [1n, 2n]; } }`)).toContain('JETH323'));
+    it('a (pre-only) modifier on a multi-value-return function is supported', () =>
+      expect(codes(`@contract class C { @modifier m() { _; } @external @m f(): [u256, u256] { return [1n, 2n]; } }`)).toEqual([]));
   });
 
   // Regression: a modifier param/local sharing a NAME with a function param must NOT shadow it in the

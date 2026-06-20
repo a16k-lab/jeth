@@ -1536,10 +1536,8 @@ export class Analyzer {
    *  pre-condition code that runs before the body). The leftmost decorator is OUTERMOST, so wrap
    *  innermost-first (reverse source order). */
   private wrapModifiers(rf: RawFunction, bodyIR: Stmt[]): Stmt[] {
-    if (rf.returnTypes) {
-      this.diags.error(rf.node, 'JETH323', 'a @modifier on a multi-value-return function is not supported yet');
-      return bodyIR;
-    }
+    // JETH modifiers are PRE-ONLY (the placeholder is in tail position), so the guard runs before the
+    // body and never touches the return values - a multi-value-return function is fine.
     let inner = bodyIR;
     for (const app of [...rf.modifiers!].reverse()) inner = this.inlineModifier(app, inner);
     return inner;
@@ -4756,6 +4754,10 @@ export class Analyzer {
     // uintN <-> bytesM of the SAME byte size (uint256<->bytes32, uint32<->bytes4, ...).
     if (from.kind === 'uint' && to.kind === 'bytesN' && from.bits === to.size * 8) return true;
     if (from.kind === 'bytesN' && to.kind === 'uint' && to.bits === from.size * 8) return true;
+    // bytes <-> string: a no-op reinterpret of the same dynamic [len][data] value (solc-identical).
+    if ((from.kind === 'bytes' && to.kind === 'string') || (from.kind === 'string' && to.kind === 'bytes')) return true;
+    // bytesN(bytes): take the first N content bytes (left-aligned), zero-padded if shorter.
+    if (from.kind === 'bytes' && to.kind === 'bytesN') return true;
     return false;
   }
 
