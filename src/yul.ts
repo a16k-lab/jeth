@@ -1518,6 +1518,9 @@ ${indent(runtime, 6)}
         out.push(`let ${r} := keccak256(add(${mp}, 0x20), ${len})`);
         return r;
       }
+      case 'modOp':
+        // addmod/mulmod: full-precision (a op b) mod m, m==0 -> 0 (EVM opcode semantics).
+        return `${e.op}(${this.lowerExpr(e.a, ctx, out)}, ${this.lowerExpr(e.b, ctx, out)}, ${this.lowerExpr(e.m, ctx, out)})`;
       case 'precompileHash': {
         // sha256 (0x02) / ripemd160 (0x03): staticcall the precompile over the CONTENT bytes,
         // output 32 bytes to scratch. ripemd160's 20-byte result is right-aligned, so left-shift
@@ -3680,7 +3683,11 @@ ${indent(runtime, 6)}
     let slot: string;
     if (arg.kind === 'structValue') slot = String(arg.baseSlot);
     else if (arg.kind === 'arrayValue' && arg.arr.base.kind === 'fixedArray') slot = String(arg.arr.base.baseSlot);
-    else throw new UnsupportedError(`indexed static-aggregate event arg from '${arg.kind}' is not supported yet`);
+    else {
+      // a constructed / memory / mapping-value / struct-array-element source: aggToMemPtr builds the
+      // ABI-unpacked image (one word per leaf), so keccak256(mp, abiHeadWords*32) == keccak256(abi.encode(v)).
+      return { mp: this.aggToMemPtr(arg, ctx, out), size: String(abiHeadWords(arg.type) * 32) };
+    }
     const dst = this.fresh();
     out.push(`let ${dst} := mload(0x40)`);
     const size = this.abiEncFromStorage(arg.type, slot, 0, dst, out);

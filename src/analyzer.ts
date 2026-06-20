@@ -4422,7 +4422,9 @@ export class Analyzer {
     }
     const args: Expr[] = [];
     for (const a of rest) {
-      const e = this.checkExpr(a);
+      // a bare string literal arg (abi.encodePacked("DOMAIN")) needs the string context to type-check.
+      const exp = ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a) ? ({ kind: 'string' } as JethType) : undefined;
+      const e = this.checkExpr(a, exp);
       if (!e) return undefined;
       // packed: value + bytes/string only. standard (incl. encodeWith*) also accepts a STATIC
       // struct/fixed-array (encoded inline) and a DYNAMIC value-element array (offset + tail).
@@ -5382,6 +5384,19 @@ export class Analyzer {
         if (arg.type.kind !== 'bytes') { this.diags.error(node, 'JETH171', `${callee}(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`); return undefined; }
         const isSha = callee === 'sha256';
         return { kind: 'precompileHash', type: { kind: 'bytesN', size: isSha ? 32 : 20 }, arg, addr: isSha ? 2 : 3, leftShift: isSha ? 0 : 96 };
+      }
+      if (callee === 'addmod' || callee === 'mulmod') {
+        // addmod(a,b,m) = (a+b) % m, mulmod(a,b,m) = (a*b) % m, both full-precision (no overflow);
+        // m==0 yields 0 (the EVM ADDMOD/MULMOD opcode, no revert). solc args are uint256.
+        if (node.arguments.length !== 3) { this.diags.error(node, 'JETH170', `${callee}(...) takes exactly three arguments`); return undefined; }
+        const a = this.checkExpr(node.arguments[0]!, U256);
+        const b = this.checkExpr(node.arguments[1]!, U256);
+        const m = this.checkExpr(node.arguments[2]!, U256);
+        if (!a || !b || !m) return undefined;
+        for (const [x, i] of [[a, 0], [b, 1], [m, 2]] as const) {
+          if (!isInteger(x.type)) { this.diags.error(node.arguments[i]!, 'JETH171', `${callee}(...) requires integer arguments, got ${displayName(x.type)}`); return undefined; }
+        }
+        return { kind: 'modOp', type: U256, op: callee, a: this.coerce(a, U256, node.arguments[0]!), b: this.coerce(b, U256, node.arguments[1]!), m: this.coerce(m, U256, node.arguments[2]!) };
       }
       if (callee === 'blockhash') {
         if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'blockhash(...) takes exactly one argument'); return undefined; }
