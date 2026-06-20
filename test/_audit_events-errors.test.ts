@@ -561,14 +561,9 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     }
     expect(threw).toBe(true);
   });
-  it('gate: non-indexed fixed-array event param rejected (JETH142)', () => {
-    let threw = false;
-    try {
-      compile(`@contract class C { @event E(a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' });
-    } catch (e: any) {
-      threw = true;
-    }
-    expect(threw).toBe(true);
+  it('non-indexed static fixed-array event param now compiles (encoded inline in the data tuple)', () => {
+    // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).
+    expect(() => compile(`@contract class C { @event E(a: Arr<u256, 3>); @external f(a: u256, b: u256, c: u256): void { emit(E([a, b, c])); } }`, { fileName: 'C.jeth' })).not.toThrow();
   });
   it('gate: struct error arg rejected (JETH127) - clean reject, not miscompile', () => {
     let threw = false;
@@ -581,15 +576,9 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     }
     expect(threw).toBe(true);
   });
-  it('gate: struct event arg rejected (JETH142) - clean reject, not miscompile', () => {
-    let threw = false;
-    try {
-      compile(`@struct class S { a: u256; b: bool; }
-@contract class C { @event E(s: S); @external f(s: S): void { emit(E(s)); } }`, { fileName: 'C.jeth' });
-    } catch (e: any) {
-      threw = true;
-      expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH142');
-    }
-    expect(threw).toBe(true);
+  it('non-indexed static struct event param now compiles (encoded inline in the data tuple)', () => {
+    // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).
+    expect(() => compile(`@struct class S { a: u256; b: bool; }
+@contract class C { @event E(s: S); @external f(s: S): void { emit(E(s)); } }`, { fileName: 'C.jeth' })).not.toThrow();
   });
 });

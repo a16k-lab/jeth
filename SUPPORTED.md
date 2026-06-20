@@ -74,9 +74,14 @@ overwrite). A struct with a dynamic-ARRAY field from a memory/calldata source st
 `@constant address` (`@constant K: address = address(0x..n)`) is supported: a slot-free compile-time
 constant substituted at each read site, byte-identical to solc and consuming no storage slot.
 
+A NON-indexed static struct / static fixed-array event param is now encoded INLINE in the ABI data
+tuple (byte-identical to solc: topic0 uses the struct's canonical tuple form, the data head holds the
+aggregate's leaf words; verified for mixed value/struct heads, struct + a dynamic param, nested, and
+packed structs). (Indexed static struct/fixed-array params - a keccak topic - were already supported.)
+
 Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encodeWithSelector/Signature`,
 `abi.encode*` of array/struct args, a struct with a dynamic-ARRAY field from a memory/calldata source
--> storage, struct / indexed-array (non-indexed struct) event params, `@constant bytesN`/`string`.
+-> storage, a non-indexed DYNAMIC struct (bytes/string field) event param, `@constant bytesN`/`string`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage

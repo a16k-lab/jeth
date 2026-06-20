@@ -747,13 +747,20 @@ export class Analyzer {
             continue;
           }
           // indexed bytes/string, dynamic value array, or static fixed-array/struct: allowed (keccak topic).
-        } else if (!isBytesLike(t) && !(t.kind === 'array' && t.length === undefined)) {
-          this.diags.error(
-            p,
-            'JETH142',
-            `@event parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types (any), bytes/string, and dynamic arrays (non-indexed)`,
-          );
-          continue;
+        } else {
+          // non-indexed reference param: a dynamic value-element array, bytes/string, or a STATIC
+          // struct / fixed-array (encoded inline in the ABI data tuple). A dynamic struct (bytes/string
+          // field) / fixed-array-of-dynamic non-indexed param stays a later step.
+          const nonIdxDynArray = t.kind === 'array' && t.length === undefined;
+          const nonIdxStaticAgg = isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
+          if (!isBytesLike(t) && !nonIdxDynArray && !nonIdxStaticAgg) {
+            this.diags.error(
+              p,
+              'JETH142',
+              `@event parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types, bytes/string, dynamic value arrays, and static structs/fixed-arrays (non-indexed)`,
+            );
+            continue;
+          }
         }
       }
       if (indexed) indexedCount++;

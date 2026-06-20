@@ -1239,7 +1239,7 @@ ${indent(runtime, 6)}
   private lowerEmit(ev: EventIR, args: Expr[], ctx: LowerCtx, out: string[]): string[] {
     // partition into indexed topics (static) and the non-indexed data tuple.
     const idxVals: string[] = [];
-    type Part = { word: string } | { mp: string; len: string } | { mp: string; size: string };
+    type Part = { word: string } | { mp: string; len: string } | { mp: string; size: string } | { inline: true; mp: string; words: number };
     const data: Part[] = [];
     ev.params.forEach((p, i) => {
       const arg = args[i]!;
@@ -1268,6 +1268,11 @@ ${indent(runtime, 6)}
       } else if (isBytesLike(p.type)) {
         const ref = this.lowerDynamic(arg, ctx, out);
         data.push(this.toMemory(ref, out)); // materialize before the buffer is allocated
+      } else if (isStaticType(p.type) && (p.type.kind === 'struct' || p.type.kind === 'array')) {
+        // a non-indexed STATIC struct / fixed-array: encoded INLINE in the data head (abiHeadWords
+        // leaf words, no offset/tail). aggToMemPtr materializes the ABI-unpacked image from any source
+        // (a constructor, a memory/storage aggregate), then we mcopy it into the head.
+        data.push({ inline: true, mp: this.aggToMemPtr(arg, ctx, out), words: abiHeadWords(p.type) });
       } else if (p.type.kind === 'array') {
         data.push(this.materializeArrayArg(arg, ctx, out)); // {mp, size}: ABI tail blob (G3)
       } else {
@@ -1281,12 +1286,20 @@ ${indent(runtime, 6)}
       lines.push(`log${n}(0, 0, ${topics})`);
       return lines;
     }
-    const headSize = 32 * data.length;
-    if (data.every((d) => 'word' in d)) {
-      // all-static data: head words only.
+    // head word count: a value -> 1 word; a STATIC struct/fixed-array -> abiHeadWords inline; a
+    // dynamic (bytes/string/array) -> 1 word (an offset into the tail).
+    const headWords = data.reduce((acc, d) => acc + ('inline' in d ? d.words : 1), 0);
+    const headSize = 32 * headWords;
+    if (data.every((d) => 'word' in d || 'inline' in d)) {
+      // all-static data: head only (value words + inline static-aggregate blobs), no tail.
       const m = this.fresh();
       lines.push(`let ${m} := mload(0x40)`);
-      data.forEach((d, i) => lines.push(`mstore(${i === 0 ? m : `add(${m}, ${32 * i})`}, ${(d as { word: string }).word})`));
+      let hw = 0;
+      for (const d of data) {
+        const head = hw === 0 ? m : `add(${m}, ${32 * hw})`;
+        if ('word' in d) { lines.push(`mstore(${head}, ${d.word})`); hw += 1; }
+        else { lines.push(`mcopy(${head}, ${(d as { mp: string }).mp}, ${(d as { words: number }).words * 32})`); hw += (d as { words: number }).words; }
+      }
       lines.push(`log${n}(${m}, ${headSize}, ${topics})`);
       return lines;
     }
@@ -1301,23 +1314,31 @@ ${indent(runtime, 6)}
     lines.push(`let ${ptr} := ${this.alloc()}(${total})`);
     const cursor = this.fresh();
     lines.push(`let ${cursor} := add(${ptr}, ${headSize})`);
-    data.forEach((d, j) => {
-      const head = j === 0 ? ptr : `add(${ptr}, ${32 * j})`;
+    let hw = 0;
+    for (const d of data) {
+      const head = hw === 0 ? ptr : `add(${ptr}, ${32 * hw})`;
       if ('word' in d) {
         lines.push(`mstore(${head}, ${d.word})`);
+        hw += 1;
+      } else if ('inline' in d) {
+        // a STATIC struct/fixed-array: leaf words inline in the head (no offset/tail).
+        lines.push(`mcopy(${head}, ${d.mp}, ${d.words * 32})`);
+        hw += d.words;
       } else if ('len' in d) {
         const pad = `and(add(${d.len}, 0x1f), not(0x1f))`;
         lines.push(`mstore(${head}, sub(${cursor}, ${ptr}))`);
         lines.push(`mstore(${cursor}, ${d.len})`);
         lines.push(`mcopy(add(${cursor}, 0x20), add(${d.mp}, 0x20), ${pad})`);
         lines.push(`${cursor} := add(${cursor}, add(0x20, ${pad}))`);
+        hw += 1;
       } else {
         // array tail blob [len][elements...]: copy verbatim (already ABI-encoded).
         lines.push(`mstore(${head}, sub(${cursor}, ${ptr}))`);
         lines.push(`mcopy(${cursor}, ${d.mp}, ${d.size})`);
         lines.push(`${cursor} := add(${cursor}, ${d.size})`);
+        hw += 1;
       }
-    });
+    }
     lines.push(`log${n}(${ptr}, ${total}, ${topics})`);
     return lines;
   }
