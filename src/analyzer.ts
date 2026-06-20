@@ -859,10 +859,10 @@ export class Analyzer {
     const name = (member.name as ts.Identifier).text;
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
-    // Folding supports integer + bool + address constants (foldConstant). A bytesN/string/aggregate
+    // Folding supports integer + bool + address + bytesN constants (foldConstant). A string/aggregate
     // constant is a clean over-rejection (a later step), not a confusing fold-failure cascade.
-    if (type.kind !== 'uint' && type.kind !== 'int' && type.kind !== 'bool' && type.kind !== 'address') {
-      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address constants; bytesN/string constant folding is a later step)`);
+    if (type.kind !== 'uint' && type.kind !== 'int' && type.kind !== 'bool' && type.kind !== 'address' && type.kind !== 'bytesN') {
+      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address/bytesN constants; string constant folding is a later step)`);
       return;
     }
     if (!member.initializer) {
@@ -4389,11 +4389,19 @@ export class Analyzer {
     for (const a of node.arguments) {
       const e = this.checkExpr(a);
       if (!e) return undefined;
-      if (!isStaticValueType(e.type) && !isBytesLike(e.type)) {
+      // packed: value + bytes/string only. standard abi.encode also accepts a STATIC struct/fixed-array
+      // (encoded inline) and a DYNAMIC value-element array (offset + tail). Nested-dynamic (string[],
+      // T[][]) / dynamic struct args stay a later step.
+      const t = e.type;
+      const aggOk = !packed && (
+        (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) ||
+        (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element))
+      );
+      if (!isStaticValueType(t) && !isBytesLike(t) && !aggOk) {
         this.diags.error(
           a,
           'JETH173',
-          `abi.${packed ? 'encodePacked' : 'encode'} supports value-type and bytes/string arguments (got ${displayName(e.type)}); arrays/structs are not supported yet`,
+          `abi.${packed ? 'encodePacked' : 'encode'} supports ${packed ? 'value-type and bytes/string' : 'value-type, bytes/string, static struct/fixed-array, and dynamic value-array'} arguments (got ${displayName(t)})`,
         );
         return undefined;
       }
@@ -5731,11 +5739,27 @@ export class Analyzer {
       }
       return undefined; // not a constant address literal -> caller emits JETH048
     }
-    // non-integer target: only the literal 0 implicitly converts to bytesN (matching solc); any
-    // other integer literal/expression is an error.
+    // bytesN constant: `bytesN(<int literal>)` -> the value LEFT-aligned in the high N bytes (the
+    // bytesN register form), matching solc's bytesN literal. The bare literal 0 also folds to zero.
+    if (expected.kind === 'bytesN') {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === `bytes${expected.size}` &&
+        node.arguments.length === 1
+      ) {
+        const a = this.asIntLiteral(node.arguments[0]!);
+        if (a !== undefined) {
+          if (a < 0n || a >= 1n << BigInt(expected.size * 8)) { this.diags.error(node, 'JETH070', `literal ${a} does not fit in bytes${expected.size}`); return undefined; }
+          return a << BigInt((32 - expected.size) * 8); // left-align into the high N bytes
+        }
+      }
+      if (this.asIntLiteral(node) === 0n) return 0n;
+      return undefined; // not a constant bytesN literal -> caller emits JETH048
+    }
+    // non-integer target: any other integer literal/expression is an error.
     const lit = this.asIntLiteral(node);
     if (lit !== undefined) {
-      if (expected.kind === 'bytesN' && lit === 0n) return 0n;
       this.diags.error(node, 'JETH086', `cannot assign an integer literal to ${displayName(expected)}`);
       return undefined;
     }
