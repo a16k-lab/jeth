@@ -50,6 +50,21 @@ describe('@constant address vs Solidity', () => {
     );
   });
 
+  it('@constant string (inlined, slot-free)', async () => {
+    await diff(
+      `@contract class C { @constant S: string = "hello world"; @state x: u256 = 5n; @external @view f(): string { return this.S; } @external @pure h(): bytes32 { return keccak256(abi.encodePacked(this.S)); } @external @view getX(): u256 { return this.x; } }`,
+      `contract C { string constant S = "hello world"; uint256 x = 5; function f() external view returns (string memory){ return S; } function h() external pure returns (bytes32){ return keccak256(abi.encodePacked(S)); } function getX() external view returns (uint256){ return x; } }`,
+      [{ sig: 'f()' }, { sig: 'h()' }, { sig: 'getX()' }],
+      [0n],
+    );
+    // empty + long
+    await diff(
+      `@contract class C { @constant E: string = ""; @constant L: string = "a string definitely longer than thirty-two bytes for sure"; @external @view e(): string { return this.E; } @external @view l(): string { return this.L; } }`,
+      `contract C { string constant E = ""; string constant L = "a string definitely longer than thirty-two bytes for sure"; function e() external view returns (string memory){ return E; } function l() external view returns (string memory){ return L; } }`,
+      [{ sig: 'e()' }, { sig: 'l()' }],
+    );
+  });
+
   it('@constant bytesN (left-aligned, slot-free)', async () => {
     await diff(
       `@contract class C { @constant K: bytes4 = bytes4(0x12345678n); @constant H: bytes32 = bytes32(0xdeadbeefn); @state x: u256 = 9n; @external @view getK(): bytes4 { return this.K; } @external @view getH(): bytes32 { return this.H; } @external @view isK(v: bytes4): bool { return v == this.K; } @external @view getX(): u256 { return this.x; } }`,

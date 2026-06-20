@@ -133,7 +133,7 @@ export class Analyzer {
   private publicStateNames = new Set<string>(); // @public @state vars that get an auto-generated getter
   // @constant fields: slot-free compile-time constants. The folded literal is inlined at every
   // read site (no SLOAD, no storage slot), so a @constant never shifts the slot of a @state var.
-  private constantsByName = new Map<string, { value: bigint | boolean; type: JethType }>();
+  private constantsByName = new Map<string, { value: bigint | boolean | Uint8Array; type: JethType }>();
   // @immutable fields (Phase 5): value-type, assigned once in the constructor, baked into runtime
   // code via setimmutable (NO storage slot - never enters rawState/planLayout). immutableOrder keeps
   // declaration order for deterministic setimmutable emission. currentInConstructor distinguishes a
@@ -861,23 +861,34 @@ export class Analyzer {
     const name = (member.name as ts.Identifier).text;
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
-    // Folding supports integer + bool + address + bytesN constants (foldConstant). A string/aggregate
-    // constant is a clean over-rejection (a later step), not a confusing fold-failure cascade.
-    if (type.kind !== 'uint' && type.kind !== 'int' && type.kind !== 'bool' && type.kind !== 'address' && type.kind !== 'bytesN') {
-      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address/bytesN constants; string constant folding is a later step)`);
+    // Folding supports integer + bool + address + bytesN + string constants. A bytes/aggregate
+    // constant stays a clean over-rejection (a later step), not a confusing fold-failure cascade.
+    if (type.kind !== 'uint' && type.kind !== 'int' && type.kind !== 'bool' && type.kind !== 'address' && type.kind !== 'bytesN' && type.kind !== 'string') {
+      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address/bytesN/string constants)`);
       return;
     }
     if (!member.initializer) {
       this.diags.error(member, 'JETH048', `@constant '${name}' requires a constant initializer`);
       return;
     }
+    if (this.constantsByName.has(name) || this.stateByName.has(name) || this.immutablesByName.has(name)) {
+      this.diags.error(member, 'JETH046', `duplicate @constant '${name}'`);
+      return;
+    }
+    if (type.kind === 'string') {
+      // a string constant must be a string literal (solc: only a literal); store the UTF-8 bytes,
+      // substituted as a fresh memory string at each read site.
+      const init = member.initializer;
+      if (!ts.isStringLiteral(init) && !ts.isNoSubstitutionTemplateLiteral(init)) {
+        this.diags.error(init, 'JETH048', `@constant '${name}' must be a string literal`);
+        return;
+      }
+      this.constantsByName.set(name, { value: new TextEncoder().encode(init.text), type });
+      return;
+    }
     const folded = this.foldConstant(member.initializer, type);
     if (folded === undefined) {
       this.diags.error(member.initializer, 'JETH048', `@constant '${name}' initializer must be a constant expression`);
-      return;
-    }
-    if (this.constantsByName.has(name)) {
-      this.diags.error(member, 'JETH046', `duplicate @constant '${name}'`);
       return;
     }
     this.constantsByName.set(name, { value: folded, type });
@@ -4415,11 +4426,15 @@ export class Analyzer {
       // struct/fixed-array (encoded inline) and a DYNAMIC value-element array (offset + tail).
       // Nested-dynamic (string[], T[][]) / dynamic struct args stay a later step.
       const t = e.type;
-      const aggOk = !packed && (
-        (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) || // static struct/fixed-array (inline)
-        (t.kind === 'struct' && this.isSupportedDynStructLocal(t)) ||        // dynamic struct (offset + tail)
-        (t.kind === 'array' && t.length === undefined)                       // dynamic array (value or nested, offset + tail)
-      );
+      const aggOk = packed
+        // packed: a value-element array (fixed or dynamic); each element padded to 32 bytes, no length.
+        // solc rejects a struct / nested-element array in packed mode (so JETH does too).
+        ? (t.kind === 'array' && isStaticValueType(t.element))
+        : (
+            (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) || // static struct/fixed-array (inline)
+            (t.kind === 'struct' && this.isSupportedDynStructLocal(t)) ||        // dynamic struct (offset + tail)
+            (t.kind === 'array' && t.length === undefined)                       // dynamic array (value or nested, offset + tail)
+          );
       if (!isStaticValueType(t) && !isBytesLike(t) && !aggOk) {
         this.diags.error(
           a,
@@ -4910,6 +4925,7 @@ export class Analyzer {
     // this.CONSTANT (read): inline the folded literal (no SLOAD; @constant is slot-free, like solc).
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && this.constantsByName.has(node.name.text)) {
       const c = this.constantsByName.get(node.name.text)!;
+      if (c.value instanceof Uint8Array) return { kind: 'stringLiteral', type: c.type, bytes: c.value }; // string constant
       return typeof c.value === 'boolean'
         ? { kind: 'literalBool', type: c.type, value: c.value }
         : { kind: 'literalInt', type: c.type, value: c.value };
