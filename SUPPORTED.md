@@ -28,10 +28,18 @@ Silent miscompiles fixed (the dangerous class - JETH accepted + ran but produced
 
 Over-acceptances fixed (JETH accepted programs solc rejects):
 - Conflicting state mutability (`@view @payable`, `@pure @payable`) is now rejected (`JETH052`).
-- `@public @state` was silently ignored (no getter). It now auto-generates a `name() view returns (T)`
-  getter for value-type and `bytes`/`string` state vars (solc parity); a getter colliding with a
-  same-named function is a clean `JETH044`. Parameterized getters (mapping/array/struct) are a later
-  step and rejected cleanly (`JETH057`) rather than silently producing nothing.
+- `@public @state` was silently ignored (no getter). It now auto-generates a getter (solc parity);
+  a getter colliding with a same-named function is a clean `JETH044`. Supported shapes, all
+  byte-identical to solc:
+  - value-type and `bytes`/`string` vars: `name() view returns (T)`.
+  - mappings (nested ok): `name(K1,..,Kn) view returns (V)`, including small-value masking, `bytes`/
+    `string` values, and a `mapping(K=>T[])` value (adds a trailing `uint256` index param).
+  - dynamic `T[]` and fixed `Arr<T,N>` value-element arrays: `name(uint256) view returns (T)` with
+    out-of-bounds `Panic(0x32)` parity; `string[]`/`bytes[]` return the element.
+  - struct vars: flattened into a value/`bytes`/`string`-field tuple, OMITTING array and mapping
+    members (declaration order preserved), exactly as solc encodes the getter result.
+  - still deferred cleanly (`JETH057`; solc accepts): nested-struct members, mapping/array-reached
+    structs, nested arrays (`T[][]`), and `mapping(K=>Arr<T,N>)`.
 
 Over-rejections fixed (valid Solidity JETH wrongly rejected):
 - `for (const x of this.structArray)` and a typed `let p: S = this.arr[i]` / `this.m[k]` (storage

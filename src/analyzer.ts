@@ -525,25 +525,20 @@ export class Analyzer {
     }
 
     // Auto-generate getters for @public state variables (solc parity). A value-type or bytes/string
-    // getter is `name() view returns (T)` reading the slot directly. Mapping/array/struct getters are
-    // PARAMETERIZED in solc (m(K)->V, a(uint)->T, s()->fields); those are a later step and rejected
-    // cleanly here rather than silently producing no getter. Inserted before the selector-clash check
-    // so a getter colliding with a same-named function is a clean JETH044 error (matches solc).
+    // getter is `name() view returns (T)` reading the slot directly. Mapping/array getters are
+    // PARAMETERIZED in solc: each mapping level adds a key param and each array level a uint256 index
+    // param, returning the leaf value (`name(K..,uint256..) -> leaf`). Struct leaves (which solc
+    // flattens into a value-field tuple) and a few nested combinations are not yet supported and are
+    // rejected cleanly rather than silently producing no getter. Inserted before the selector-clash
+    // check so a getter colliding with a same-named function is a clean JETH044 error (matches solc).
     for (const v of layout.vars) {
       if (!this.publicStateNames.has(v.name)) continue;
-      let value: Expr;
-      if (isStaticValueType(v.type)) value = { kind: 'stateRead', type: v.type, slot: v.slot, offset: v.offset, varName: v.name };
-      else if (isBytesLike(v.type)) value = { kind: 'dynStateRead', type: v.type, slot: v.slot };
-      else {
+      const getter = this.synthPublicGetter(v);
+      if (!getter) {
         this.diags.error(cls, 'JETH057', `@public getter for state variable '${v.name}' of type ${displayName(v.type)} is not supported yet (declare an explicit @view getter)`);
         continue;
       }
-      const sig = functionSignature(v.name, []);
-      functions.push({
-        name: v.name, key: `getter$${v.name}`, visibility: 'external', mutability: 'view',
-        params: [], returnType: v.type, signature: sig, selector: functionSelector(sig),
-        body: [{ kind: 'return', value }],
-      });
+      functions.push(getter);
     }
 
     // Reject duplicate selectors (would make the dispatcher ambiguous).
@@ -570,6 +565,91 @@ export class Analyzer {
       slotCount: layout.slotCount,
       ctor,
       immutables: this.immutableOrder.map((n) => this.immutablesByName.get(n)!),
+    };
+  }
+
+  /** Synthesize the solc auto-getter for a @public state variable, or null when its shape is not
+   *  yet supported (struct leaf, mapping->fixed-array, nested arrays). solc parameterizes the getter:
+   *  each mapping level contributes a key param, each array level a uint256 index param, and the body
+   *  returns the leaf value at the resolved slot. */
+  private synthPublicGetter(v: StateVar): FunctionIR | null {
+    const params: Param[] = [];
+    const keys: Expr[] = [];
+    const keyTypes: JethType[] = [];
+    let t: JethType = v.type;
+    let argi = 0;
+    while (t.kind === 'mapping') {
+      const nm = `arg${argi++}`;
+      params.push({ name: nm, type: t.key });
+      keys.push({ kind: 'localRead', type: t.key, name: nm });
+      keyTypes.push(t.key);
+      t = t.value;
+    }
+    // A single array level (the var itself, or a mapping value) becomes a uint256 index param.
+    let arrType: Extract<JethType, { kind: 'array' }> | null = null;
+    let index: Expr | null = null;
+    if (t.kind === 'array') {
+      arrType = t;
+      const nm = `arg${argi++}`;
+      params.push({ name: nm, type: U256 });
+      index = { kind: 'localRead', type: U256, name: nm };
+      t = t.element;
+      if (t.kind === 'array' || t.kind === 'mapping') return null; // nested array / array-of-mapping deferred
+    }
+    // A struct leaf: solc flattens it into a tuple of its value/bytes/string members, OMITTING array
+    // and mapping members. Supported only for a directly-declared struct var (mapping/array-reached
+    // structs and nested-struct members are deferred). The returndata is byte-identical to solc's.
+    if (t.kind === 'struct') {
+      if (keys.length > 0 || index) return null;
+      const types: JethType[] = [];
+      const values: Expr[] = [];
+      for (const f of t.fields) {
+        if (f.type.kind === 'array' || f.type.kind === 'mapping') continue; // solc omits these
+        const path: AccessPath = { baseSlot: v.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] };
+        if (isBytesLike(f.type)) values.push({ kind: 'dynPlaceRead', type: f.type, path });
+        else if (isStaticValueType(f.type)) values.push({ kind: 'placeRead', type: f.type, path });
+        else return null; // nested struct member (recursive flatten) deferred
+        types.push(f.type);
+      }
+      if (types.length === 0) return null; // degenerate struct (all members omitted)
+      const sig = functionSignature(v.name, params.map((p) => p.type));
+      return {
+        name: v.name, key: `getter$${v.name}`, visibility: 'external', mutability: 'view',
+        params, returnType: VOID, returnTypes: types, signature: sig, selector: functionSelector(sig),
+        body: [{ kind: 'returnTuple', values, types }],
+      };
+    }
+    // The leaf must be a value type or bytes/string.
+    if (!(isStaticValueType(t) || isBytesLike(t))) return null;
+
+    let value: Expr;
+    if (arrType && index) {
+      let arr: ArrayExpr;
+      if (keys.length > 0) {
+        if (arrType.length !== undefined) return null; // mapping -> fixed array deferred
+        arr = { base: { kind: 'mapArray', baseSlot: v.slot, keys, keyTypes }, elem: t };
+      } else if (arrType.length !== undefined) {
+        arr = { base: { kind: 'fixedArray', baseSlot: v.slot, length: arrType.length }, elem: t };
+      } else {
+        arr = { base: { kind: 'stateArray', slot: v.slot }, elem: t };
+      }
+      value = isBytesLike(t)
+        ? { kind: 'strArrayElem', type: t, arr, index }
+        : { kind: 'arrayGet', type: t, arr, index };
+    } else if (keys.length > 0) {
+      value = isBytesLike(t)
+        ? { kind: 'mapDynValue', type: t, baseSlot: v.slot, keys, keyTypes }
+        : { kind: 'mapGet', type: t, baseSlot: v.slot, keys, keyTypes };
+    } else {
+      value = isStaticValueType(t)
+        ? { kind: 'stateRead', type: t, slot: v.slot, offset: v.offset, varName: v.name }
+        : { kind: 'dynStateRead', type: t, slot: v.slot };
+    }
+    const sig = functionSignature(v.name, params.map((p) => p.type));
+    return {
+      name: v.name, key: `getter$${v.name}`, visibility: 'external', mutability: 'view',
+      params, returnType: t, signature: sig, selector: functionSelector(sig),
+      body: [{ kind: 'return', value }],
     };
   }
 
