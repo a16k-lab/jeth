@@ -3321,7 +3321,13 @@ ${indent(runtime, 6)}
    *  elements, like solc's calldata->memory copy); a storage source is copied via abiEncFromStorage
    *  (storage is canonical); a constructed literal / call result is already fresh memory. */
   private aggArgToMemPtr(a: Expr, ctx: LowerCtx, out: string[]): string {
-    if (a.kind === 'arrayLit' || a.kind === 'structNew') return this.allocAggToMem(a, ctx, out);
+    // a DYNAMIC-array literal lowers to a fresh [len][elems] memory image (lowerExpr's arrayLit case);
+    // a structNew / static fixed-array literal uses the static-aggregate image (allocAggToMem).
+    if (a.kind === 'arrayLit') {
+      if (a.type.kind === 'array' && a.type.length === undefined) return this.lowerExpr(a, ctx, out);
+      return this.allocAggToMem(a, ctx, out);
+    }
+    if (a.kind === 'structNew') return this.allocAggToMem(a, ctx, out);
     if (a.kind === 'arrayValue') {
       const b = a.arr.base;
       if (b.kind === 'memArray') return this.ctxLookup(ctx, b.varName); // memory local: ALIAS

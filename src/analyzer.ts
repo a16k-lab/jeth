@@ -4086,6 +4086,19 @@ export class Analyzer {
             (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr' || e.arr.base.kind === 'stateArray' ||
              e.arr.base.kind === 'mapArray' || e.arr.base.kind === 'placeArray' || e.arr.base.kind === 'calldataArray'));
         if (dynArrOk(unified[0]) && dynArrOk(unified[1])) {
+          // Match solc's data-location rules: storage|calldata is a hard type error, and
+          // calldata|calldata yields a CALLDATA reference (an indexed read VALIDATES dirty elements)
+          // which our materialize-to-memory (masking) does not replicate - gate both. memory|*,
+          // storage|storage, and storage|memory all reduce to a memory image (byte-identical reads).
+          const loc = (e: Expr): 'cd' | 'storage' | 'mem' =>
+            e.kind === 'arrayValue' && e.arr.base.kind === 'calldataArray' ? 'cd'
+              : e.kind === 'arrayValue' && (e.arr.base.kind === 'stateArray' || e.arr.base.kind === 'mapArray' || e.arr.base.kind === 'placeArray') ? 'storage'
+                : 'mem';
+          const l0 = loc(unified[0]), l1 = loc(unified[1]);
+          if ((l0 === 'cd' && l1 === 'cd') || (l0 === 'cd' && l1 === 'storage') || (l0 === 'storage' && l1 === 'cd')) {
+            this.diags.error(node, 'JETH074', `a ternary mixing a calldata array with a calldata/storage array (data-location mismatch) is not supported; copy a branch to a memory local first`);
+            return undefined;
+          }
           const tern: Expr = { kind: 'ternary', type: ut, cond, then: unified[0], else: unified[1] };
           return { kind: 'arrayValue', type: ut, arr: { base: { kind: 'memArrayExpr', expr: tern }, elem: ut.element } };
         }
