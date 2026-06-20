@@ -66,7 +66,7 @@ describe('EIP-55 address-literal acceptance matches solc', () => {
   }
 
   it('@constant address: bare checksummed/numeric accepted, bad-checksum rejected (matches solc)', () => {
-    const con = (lit: string, ty = 'address', sty = 'address') =>
+    const con = (lit: { jeth: string; sol: string }, ty = 'address', sty = 'address') =>
       [`@contract class C { @constant K: ${ty} = ${lit.jeth}; @external @view f(): ${ty} { return this.K; } }`,
        `contract C { ${sty} constant K = ${lit.sol}; function f() external view returns(${sty}){ return K; } }`] as const;
     const pairs: [string, { jeth: string; sol: string }][] = [
