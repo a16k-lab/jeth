@@ -50,9 +50,13 @@ A whole CALLDATA value-element dynamic-array param assigned to storage (`this.a 
 now decodes + validates each element (solc-matching dirty-element revert) and packed-stores it
 (byte-identical incl. packed raw slots, overwrite-clearing, and dirty narrow/bool/int element reverts).
 
+`bytes`/`string` **mapping keys** (`mapping<bytes, V>` / `mapping<string, V>`, incl. nested and
+storage value types) now derive the slot as `keccak256(keyContent . slotWord)` (solc's dynamic-key
+rule), verified byte-identical incl. raw slots and empty/long keys.
+
 Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encode*`, `sha256`/`ripemd160`,
-`bytes`/`string` mapping keys, a dynamic-field struct from a memory/calldata source -> storage,
-struct / indexed-array event params, `@constant` `address`/`bytesN`.
+a dynamic-field struct from a memory/calldata source -> storage, struct / indexed-array event params,
+`@constant` `address`/`bytesN`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage

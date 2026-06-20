@@ -4563,6 +4563,19 @@ ${indent(runtime, 6)}
   private mappingSlot(baseSlot: number, keys: Expr[], ctx: LowerCtx, out: string[]): string {
     let slot = String(baseSlot);
     for (const key of keys) {
+      if (isBytesLike(key.type)) {
+        // bytes/string key: slot = keccak256(keyContent . slotWord) over the RAW content bytes
+        // (unpadded) concatenated with the 32-byte slot (solc's mapping-with-dynamic-key rule).
+        const { mp, len } = this.toMemory(this.lowerDynamic(key, ctx, out), out);
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(0x40)`);
+        out.push(`mcopy(${ptr}, add(${mp}, 0x20), ${len})`); // copy content to a fresh scratch region
+        out.push(`mstore(add(${ptr}, ${len}), ${slot})`); // append the slot word right after the content
+        const t = this.fresh();
+        out.push(`let ${t} := keccak256(${ptr}, add(${len}, 0x20))`);
+        slot = t;
+        continue;
+      }
       const k = this.lowerExpr(key, ctx, out);
       const t = this.fresh();
       out.push(`mstore(0x00, ${k})`);
