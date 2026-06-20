@@ -50,6 +50,46 @@ describe('Bucket-A over-rejection fixes vs Solidity', () => {
     );
   });
 
+  it('binary-op with a literal operand exceeding the operand type (common-type widening + overflow)', async () => {
+    await diff(
+      `@contract class C {
+        @external @pure add(a: u8): u16 { return a + 1000n; }
+        @external @pure mul(a: u8): u16 { return a * 1000n; }
+        @external @pure mul32(a: u8): u32 { return a * 1000n; }
+        @external @pure left(a: u8): u16 { return 1000n + a; }
+        @external @pure bor(a: u8): u16 { return a | 0x1ffn; }
+        @external @pure fits(a: u8): u8 { return a + 100n; }
+        @external @pure wide(a: u16): u32 { return a + 70000n; }
+        @external @pure neg(a: i8): i16 { return a + -1000n; }
+        @external @pure unc(a: u8): u16 { unchecked: { return a * 1000n; } }
+      }`,
+      `contract C {
+        function add(uint8 a) external pure returns (uint16){ return a + 1000; }
+        function mul(uint8 a) external pure returns (uint16){ return a * 1000; }
+        function mul32(uint8 a) external pure returns (uint32){ return a * 1000; }
+        function left(uint8 a) external pure returns (uint16){ return 1000 + a; }
+        function bor(uint8 a) external pure returns (uint16){ return a | 0x1ff; }
+        function fits(uint8 a) external pure returns (uint8){ return a + 100; }
+        function wide(uint16 a) external pure returns (uint32){ return a + 70000; }
+        function neg(int8 a) external pure returns (int16){ return a + -1000; }
+        function unc(uint8 a) external pure returns (uint16){ unchecked { return a * 1000; } }
+      }`,
+      [
+        { sig: 'add(uint8)', args: W(255n) },          // 1255, no overflow at u16
+        { sig: 'mul(uint8)', args: W(1n) },            // 1000
+        { sig: 'mul(uint8)', args: W(255n) },          // 255000 -> Panic at u16
+        { sig: 'mul32(uint8)', args: W(255n) },        // overflow still at the common type u16 -> Panic
+        { sig: 'mul32(uint8)', args: W(60n) },         // 60000, ok
+        { sig: 'left(uint8)', args: W(200n) },
+        { sig: 'bor(uint8)', args: W(0x80n) },
+        { sig: 'fits(uint8)', args: W(200n) },         // 300 -> Panic at u8 (literal fits u8, stays u8)
+        { sig: 'wide(uint16)', args: W(5n) },
+        { sig: 'neg(int8)', args: W((1n << 256n) - 5n) },
+        { sig: 'unc(uint8)', args: W(255n) },          // wraps at u16
+      ],
+    );
+  });
+
   it('indexed static-aggregate event params from a local / constructor', async () => {
     await diff(
       `@struct class P { x: u256; y: u256; } @contract class C { @event A(@indexed a: Arr<u256,3>, n: u256); @event S(@indexed p: P, n: u256); @external fa(): void { let a: Arr<u256,3> = [10n, 20n, 30n]; emit(A(a, 7n)); } @external fs(x: u256, y: u256): void { emit(S(P(x, y), 7n)); } }`,

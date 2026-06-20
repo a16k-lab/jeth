@@ -5546,7 +5546,7 @@ export class Analyzer {
       // unified with the left operand (so `bytes4 x << 4n` treats 4n as a uint, not a bytes4).
       // For `**` and shifts the right operand is an independent unsigned value; for COMPARISONS the
       // operands take their NATURAL types and unify afterward (so an out-of-range literal is not
-      // force-rejected here but widened to a common type by widenComparisonLiteral, matching solc).
+      // force-rejected here but widened to a common type by widenLiteralOperand, matching solc).
       const rightExpected = op === '**' || op === '<<' || op === '>>' || this.isComparison(op)
         ? undefined
         : expected ?? left.type;
@@ -5606,7 +5606,7 @@ export class Analyzer {
       // degenerate comparison: e.g. `uint8 == 256` -> compare in uint16). Try that before the normal
       // unify (which would emit a range error). A signedness mismatch (e.g. `int8 == 200`, whose
       // literal's mobile type is unsigned, or `uint8 == -1`) is left to unify, which rejects it.
-      const unified = this.widenComparisonLiteral(left, right) ?? this.unifyOperands(left, right, node);
+      const unified = this.widenLiteralOperand(left, right) ?? this.unifyOperands(left, right, node);
       if (!unified) return undefined;
       // ORDERED comparisons (< > <= >=) need an ordered type. solc allows them on int/uint,
       // address, bytesN, and enums, but REJECTS them on bool (only == / != are valid on bool):
@@ -5681,6 +5681,12 @@ export class Analyzer {
     // address is nominally distinct: only fold when both sides carry the same brand (or none).
     if (left.type.kind === 'address' && right.type.kind === 'address' &&
         left.type.brand === right.type.brand) return [left, right];
+    // A literal operand that overflows the OTHER operand's type but fits a WIDER same-signedness type:
+    // widen BOTH to that common type (solc: `uint8 a + 1000` computes in uint16, overflow at uint16).
+    // Returns null when the literal fits (falls through to retype, staying at the operand type) or on a
+    // signedness mismatch (left to the retype path, which rejects it).
+    const widened = this.widenLiteralOperand(left, right);
+    if (widened) return widened;
     const lLit = left.kind === 'literalInt';
     const rLit = right.kind === 'literalInt';
     if (rLit && !lLit) {
@@ -5978,7 +5984,7 @@ export class Analyzer {
    *  signedness (the literal's mobile type), both widen to that common type and the comparison is
    *  legal. Returns the widened [left, right] pair, or null to fall back to the normal unify (which
    *  handles the in-range case and rejects a signedness mismatch like `int8 == 200` / `uint8 == -1`). */
-  private widenComparisonLiteral(left: Expr, right: Expr): [Expr, Expr] | null {
+  private widenLiteralOperand(left: Expr, right: Expr): [Expr, Expr] | null {
     const fit = (lit: Expr, other: Expr): { common: JethType } | null => {
       if (lit.kind !== 'literalInt' || lit.kind === other.kind || !isInteger(other.type)) return null;
       if (this.inRange(lit.value, other.type)) return null; // fits the variable -> normal path
