@@ -34,16 +34,16 @@ Over-acceptances fixed (JETH accepted programs solc rejects):
   - value-type and `bytes`/`string` vars: `name() view returns (T)`.
   - mappings (nested ok), including value-type/`bytes`/`string`/`bytes`-or-`string`-KEY mappings,
     small-value masking, and a `mapping(K=>T[])` value (trailing `uint256` index param).
-  - dynamic `T[]` and fixed `Arr<T,N>` value-element arrays: `name(uint256) view returns (T)`;
+  - value-element arrays of any nesting (`T[]`, `Arr<T,N>`, `T[][]`, `T[][][]`, `mapping(K=>T[])`,
+    `mapping(K=>Arr<T,N>)`): one `uint256` index param per dimension, incl. packed elements;
     `string[]`/`bytes[]` return the element. Out-of-bounds reverts with EMPTY data (matching solc's
     getter, NOT `Panic(0x32)`).
   - struct vars, and structs reached via a mapping/array (`mapping(K=>S)`, `S[]`, `Arr<S,N>`,
-    `mapping(K=>S[])`): flattened into a value/`bytes`/`string`-field tuple, OMITTING dynamic-array
-    and mapping members, recursively inlining all-static nested structs - byte-identical to solc's
-    getter encoding (incl. empty-revert on array OOB, zero-struct for an absent mapping key).
-  - still deferred cleanly (`JETH057`; solc accepts): nested-array value getters (`T[][]`),
-    `mapping(K=>Arr<T,N>)` value getters, a nested struct with a dynamic (`bytes`/`string`) member,
-    and a struct with a FIXED-array member (solc includes it; flattening not yet implemented).
+    `mapping(K=>S[])`): flattened to a tuple - the TOP struct OMITS all array + mapping members; a kept
+    nested struct is a FULL sub-tuple whose FIXED arrays ARE included (recursively, all-static),
+    byte-identical to solc (incl. empty-revert on array OOB, zero-struct for an absent mapping key).
+  - still deferred cleanly (`JETH057`; solc accepts): a getter whose result contains a nested struct
+    with a DYNAMIC (`bytes`/`string`/dynamic-array) member (a dynamic nested ABI sub-tuple).
 
 Over-rejections fixed (valid Solidity JETH wrongly rejected):
 - `for (const x of this.structArray)` and a typed `let p: S = this.arr[i]` / `this.m[k]` (storage

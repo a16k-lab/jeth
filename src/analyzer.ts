@@ -600,28 +600,25 @@ export class Analyzer {
       const idx: Expr = { kind: 'localRead', type: U256, name: nm };
       indices.push(idx);
       arrTypes.push(t);
-      prefix.push(
-        t.length !== undefined
-          ? { kind: 'index', index: idx, strideSlots: storageSlotCount(t.element), length: t.length, elemType: t.element }
-          : { kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(t.element), elemType: t.element },
-      );
+      prefix.push(this.getterArrayStep(t, idx));
       t = t.element;
       if (t.kind === 'mapping') return null; // array-of-mapping (not valid Solidity anyway)
     }
     const sig = functionSignature(v.name, params.map((p) => p.type));
     const base = { name: v.name, key: `getter$${v.name}`, visibility: 'external' as const, mutability: 'view' as const, params, signature: sig, selector: functionSelector(sig) };
 
-    // STRUCT leaf: flatten to a value/bytes/string-field tuple (omitting array+mapping members),
-    // reached via the navigation prefix; array-element OOB reverts EMPTY (solc parity).
+    // STRUCT leaf: flatten to a value/bytes/string-field tuple, reached via the navigation prefix;
+    // array-element OOB reverts EMPTY (solc parity). The TOP struct omits ALL array + mapping members;
+    // a kept nested struct is a FULL sub-tuple (its fixed arrays ARE included).
     if (t.kind === 'struct') {
-      const flat = this.flattenGetterStruct(t, v.slot, prefix);
+      const flat = this.flattenGetterStruct(t, v.slot, prefix, true);
       if (!flat) return null;
       return { ...base, returnType: VOID, returnTypes: flat.types, body: [{ kind: 'returnTuple', values: flat.values, types: flat.types }] };
     }
 
     // Value / bytes / string leaf.
     if (!(isStaticValueType(t) || isBytesLike(t))) return null;
-    let value: Expr;
+    let value: Expr | null = null;
     if (indices.length === 0 && keys.length === 0) {
       value = isStaticValueType(t)
         ? { kind: 'stateRead', type: t, slot: v.slot, offset: v.offset, varName: v.name }
@@ -630,24 +627,42 @@ export class Analyzer {
       value = isBytesLike(t)
         ? { kind: 'mapDynValue', type: t, baseSlot: v.slot, keys, keyTypes }
         : { kind: 'mapGet', type: t, baseSlot: v.slot, keys, keyTypes };
-    } else if (indices.length === 1) {
+    } else if (indices.length === 1 && (keys.length === 0 || arrTypes[0]!.length === undefined)) {
+      // single dynamic/fixed array (no mapping) or mapping->DYNAMIC array: the proven ArrayExpr path.
       const arrType = arrTypes[0]!;
-      let arr: ArrayExpr;
-      if (keys.length > 0) {
-        if (arrType.length !== undefined) return null; // mapping -> fixed array deferred
-        arr = { base: { kind: 'mapArray', baseSlot: v.slot, keys, keyTypes }, elem: t };
-      } else if (arrType.length !== undefined) {
-        arr = { base: { kind: 'fixedArray', baseSlot: v.slot, length: arrType.length }, elem: t };
-      } else {
-        arr = { base: { kind: 'stateArray', slot: v.slot }, elem: t };
-      }
+      const arr: ArrayExpr =
+        keys.length > 0
+          ? { base: { kind: 'mapArray', baseSlot: v.slot, keys, keyTypes }, elem: t }
+          : arrType.length !== undefined
+            ? { base: { kind: 'fixedArray', baseSlot: v.slot, length: arrType.length }, elem: t }
+            : { base: { kind: 'stateArray', slot: v.slot }, elem: t };
       value = isBytesLike(t)
         ? { kind: 'strArrayElem', type: t, arr, index: indices[0]!, oobEmpty: true }
         : { kind: 'arrayGet', type: t, arr, index: indices[0]!, oobEmpty: true };
-    } else {
-      return null; // a value/bytes leaf reached through >1 array level (T[][]) is deferred
+    }
+    if (!value) {
+      // Generic fallback for the remaining shapes (nested arrays T[][], mapping(K=>Arr<T,N>)): read the
+      // VALUE leaf at the resolved place (the packing-aware prefix). bytes/string leaves beyond the
+      // specialized paths above are deferred (their multi-level encoding is not yet handled).
+      if (!isStaticValueType(t)) return null;
+      value = { kind: 'placeRead', type: t, path: { baseSlot: v.slot, steps: prefix, oobEmpty: true } };
     }
     return { ...base, returnType: t, body: [{ kind: 'return', value }] };
+  }
+
+  /** Build the AccessStep for one array level of a @public getter, mirroring the element-access codec
+   *  (packed iff a non-aggregate element smaller than a slot). Used to navigate to a struct/value leaf. */
+  private getterArrayStep(arr: Extract<JethType, { kind: 'array' }>, idx: Expr): AccessStep {
+    const elem = arr.element;
+    const packed = elem.kind !== 'struct' && elem.kind !== 'array' && storageByteSize(elem) < 32;
+    if (arr.length !== undefined) {
+      return packed
+        ? { kind: 'packedIndex', index: idx, perSlot: Math.floor(32 / storageByteSize(elem)), size: storageByteSize(elem), length: arr.length, elemType: elem }
+        : { kind: 'index', index: idx, strideSlots: storageSlotCount(elem), length: arr.length, elemType: elem };
+    }
+    return packed
+      ? { kind: 'packedDynIndex', index: idx, perSlot: Math.floor(32 / storageByteSize(elem)), size: storageByteSize(elem), elemType: elem }
+      : { kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(elem), elemType: elem };
   }
 
   /** Flatten a @public struct getter's return tuple: each value/bytes/string field (in declaration
@@ -655,30 +670,51 @@ export class Analyzer {
    *  from `baseSlot`; an all-static nested struct is recursively inlined (byte-identical to solc,
    *  whose static nested tuple encodes inline). Returns null when a nested struct is non-static (a
    *  dynamic nested tuple would not match a flattened encoding) or the result tuple is empty. */
-  private flattenGetterStruct(st: Extract<JethType, { kind: 'struct' }>, baseSlot: number, prefix: AccessStep[]): { types: JethType[]; values: Expr[] } | null {
+  private flattenGetterStruct(st: Extract<JethType, { kind: 'struct' }>, baseSlot: number, prefix: AccessStep[], top: boolean): { types: JethType[]; values: Expr[] } | null {
     const types: JethType[] = [];
     const values: Expr[] = [];
     for (const f of st.fields) {
-      if (f.type.kind === 'mapping') continue; // solc omits mappings
-      if (f.type.kind === 'array' && f.type.length === undefined) continue; // solc omits DYNAMIC arrays
-      if (f.type.kind === 'array') return null; // a FIXED array IS included by solc; flattening it not yet impl -> defer
+      if (f.type.kind === 'mapping') continue; // solc omits mappings at any level
+      // The directly-returned (top) struct OMITS arrays (fixed AND dynamic); a nested struct is a full
+      // sub-tuple whose FIXED arrays are included (a nested DYNAMIC array isn't flattenable -> defer).
+      if (top && f.type.kind === 'array') continue;
+      if (!top && f.type.kind === 'array' && f.type.length === undefined) return null;
       const steps: AccessStep[] = [...prefix, { kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }];
-      const path: AccessPath = { baseSlot, steps, oobEmpty: true };
-      if (isStaticValueType(f.type)) {
-        values.push({ kind: 'placeRead', type: f.type, path });
-        types.push(f.type);
-      } else if (isBytesLike(f.type)) {
-        values.push({ kind: 'dynPlaceRead', type: f.type, path });
-        types.push(f.type);
-      } else if (f.type.kind === 'struct') {
-        if (!isStaticType(f.type)) return null; // dynamic nested struct: tuple head/tail != flattened
-        const nested = this.flattenGetterStruct(f.type, baseSlot, steps);
-        if (!nested) return null;
-        types.push(...nested.types);
-        values.push(...nested.values);
-      } else return null;
+      const r = this.flattenGetterLeaf(f.type, baseSlot, steps);
+      if (!r) return null;
+      types.push(...r.types);
+      values.push(...r.values);
     }
     return types.length ? { types, values } : null;
+  }
+
+  /** Flatten one struct-getter leaf reached by `steps`: a value/`bytes`/`string` field is one tuple
+   *  component; an all-static nested struct recurses; a FIXED-size array is inlined as its N elements
+   *  (solc INCLUDES fixed arrays, omitting only dynamic arrays/mappings). Returns null for shapes whose
+   *  flattened encoding would not match solc's nested tuple (a dynamic nested struct, or a fixed array
+   *  of bytes/string/array/dynamic-struct). */
+  private flattenGetterLeaf(type: JethType, baseSlot: number, steps: AccessStep[]): { types: JethType[]; values: Expr[] } | null {
+    const path: AccessPath = { baseSlot, steps, oobEmpty: true };
+    if (isStaticValueType(type)) return { types: [type], values: [{ kind: 'placeRead', type, path }] };
+    if (isBytesLike(type)) return { types: [type], values: [{ kind: 'dynPlaceRead', type, path }] };
+    if (type.kind === 'struct') {
+      if (!isStaticType(type)) return null; // dynamic nested struct: tuple head/tail != flattened
+      return this.flattenGetterStruct(type, baseSlot, steps, false); // full sub-tuple (includes fixed arrays)
+    }
+    if (type.kind === 'array' && type.length !== undefined) {
+      const el = type.element;
+      if (!(isStaticValueType(el) || (el.kind === 'struct' && isStaticType(el)))) return null; // fixed array of bytes/string/array/dyn-struct: defer
+      const types: JethType[] = [];
+      const values: Expr[] = [];
+      for (let j = 0; j < type.length; j++) {
+        const r = this.flattenGetterLeaf(el, baseSlot, [...steps, this.getterArrayStep(type, { kind: 'literalInt', type: U256, value: BigInt(j) })]);
+        if (!r) return null;
+        types.push(...r.types);
+        values.push(...r.values);
+      }
+      return types.length ? { types, values } : null;
+    }
+    return null;
   }
 
   /** Phase 5: validate a constructor declaration + type-check its body into a ConstructorIR.
