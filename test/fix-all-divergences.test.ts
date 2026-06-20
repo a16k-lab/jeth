@@ -217,3 +217,24 @@ describe('sweep keccak256 in a @constant initializer', () => {
     );
   });
 });
+
+describe('constant arithmetic accept/reject parity vs solc (already solc-accurate)', () => {
+  // solc folds pure constant subexpressions in arbitrary precision, then rejects div/mod-by-zero and
+  // any result that does not fit the inferred/expected type. JETH must match (NOT over-accept).
+  const reject: [string, string][] = [
+    ['overflow vs return type', `@contract class C { @external @pure f(): u8 { return 255n + 1n; } }`],
+    ['div by zero', `@contract class C { @external @pure f(): u8 { return 5n / 0n; } }`],
+    ['mod by zero', `@contract class C { @external @pure f(): u8 { return 5n % 0n; } }`],
+    ['exponent overflow', `@contract class C { @external @pure f(): u256 { return 2n ** 256n; } }`],
+  ];
+  for (const [name, src] of reject) {
+    it(`rejects: ${name}`, () => expect(jethRejects(src)).toBe(true));
+  }
+  const accept: [string, string][] = [
+    ['200n + 55n fits u8', `@contract class C { @external @pure f(): u8 { return 200n + 55n; } }`],
+    ['2n ** 255n fits u256', `@contract class C { @external @pure f(): u256 { return 2n ** 255n; } }`],
+  ];
+  for (const [name, src] of accept) {
+    it(`accepts: ${name}`, () => expect(jethAccepts(src)).toBe(true));
+  }
+});
