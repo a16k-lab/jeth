@@ -4118,15 +4118,36 @@ ${indent(runtime, 6)}
    *  (no padding/length), each bytes/string its raw content. The final partial word is zeroed so the
    *  bytes value's tail padding is clean (a slack word is allocated to keep that write in-bounds). */
   private buildAbiEncodePacked(args: Expr[], ctx: LowerCtx, out: string[]): string {
-    type Part = { val: string; width: number; leftAligned: boolean } | { mp: string; len: string };
-    const parts: Part[] = args.map((a) =>
-      isBytesLike(a.type)
-        ? this.toMemory(this.lowerDynamic(a, ctx, out), out)
-        : { val: this.lowerExpr(a, ctx, out), width: storageByteSize(a.type), leftAligned: a.type.kind === 'bytesN' },
-    );
+    type Part =
+      | { val: string; width: number; leftAligned: boolean }
+      | { mp: string; len: string }
+      | { arrMp: string; byteSize: string }; // a value array: element words (each padded to 32), no length
+    const parts: Part[] = args.map((a) => {
+      const t = a.type;
+      if (isBytesLike(t)) return this.toMemory(this.lowerDynamic(a, ctx, out), out);
+      if (t.kind === 'array') {
+        // a value-element array: solc packs each element padded to 32 bytes (its ABI element words),
+        // with no length prefix. Get the element words from the array's memory image.
+        if (t.length !== undefined) {
+          // a fixed value array: aggToMemPtr gives N contiguous element words.
+          return { arrMp: this.aggToMemPtr(a, ctx, out), byteSize: String(t.length * 32) };
+        }
+        const m = this.materializeArrayArg(a, ctx, out); // {mp,size} = [len][elems]
+        const arrMp = this.fresh();
+        out.push(`let ${arrMp} := add(${m.mp}, 0x20)`); // skip the [len] word -> first element
+        const byteSize = this.fresh();
+        out.push(`let ${byteSize} := sub(${m.size}, 0x20)`);
+        return { arrMp, byteSize };
+      }
+      return { val: this.lowerExpr(a, ctx, out), width: storageByteSize(t), leftAligned: t.kind === 'bytesN' };
+    });
     let staticBytes = 0;
     const dynLens: string[] = [];
-    for (const p of parts) { if ('len' in p) dynLens.push(p.len); else staticBytes += p.width; }
+    for (const p of parts) {
+      if ('len' in p) dynLens.push(p.len);
+      else if ('byteSize' in p) dynLens.push(p.byteSize);
+      else staticBytes += p.width;
+    }
     const total = this.fresh();
     out.push(`let ${total} := ${staticBytes}`);
     for (const l of dynLens) out.push(`${total} := add(${total}, ${l})`);
@@ -4141,6 +4162,10 @@ ${indent(runtime, 6)}
       if ('len' in p) {
         out.push(`mcopy(${cursor}, add(${p.mp}, 0x20), ${p.len})`);
         out.push(`${cursor} := add(${cursor}, ${p.len})`);
+      } else if ('byteSize' in p) {
+        // a value array: the element words (each padded to 32), concatenated, no length.
+        out.push(`mcopy(${cursor}, ${p.arrMp}, ${p.byteSize})`);
+        out.push(`${cursor} := add(${cursor}, ${p.byteSize})`);
       } else if (p.width === 32 || p.leftAligned) {
         // a full 32-byte value, or a bytesN already left-aligned (content in the high width bytes).
         out.push(`mstore(${cursor}, ${p.val})`);

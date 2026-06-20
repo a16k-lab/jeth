@@ -71,16 +71,17 @@ local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value 
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short
 overwrite). A struct with a dynamic-ARRAY field from a memory/calldata source stays a clean rejection.
 
-`@constant address` (`address(0x..n)`) and `@constant bytesN` (`bytes4(0x..n)`, left-aligned) are
-supported: slot-free compile-time constants substituted at each read site, byte-identical to solc and
-consuming no storage slot. (`@constant string` stays a later step.)
+`@constant` `address` / `bytesN` (left-aligned) / `string` are supported: slot-free compile-time
+constants substituted at each read site (a string as a fresh memory literal), byte-identical to solc
+and consuming no storage slot.
 
 `abi.encode` accepts every constructable arg type: value, bytes/string, a STATIC struct / fixed-array
 (inline), a DYNAMIC value-element array, a DYNAMIC struct, and nested-dynamic arrays (`string[]`,
-`T[][]`) - all offset + recursive head/tail. `abi.encodePacked` accepts value + bytes/string args.
-`abi.encodeWithSelector(bytes4, ...)` and `abi.encodeWithSignature(string, ...)` prepend the 4-byte
-selector to the standard encoding (the signature's selector = keccak256(sig)[0:4], literal or runtime).
-All verified byte-identical to solc.
+`T[][]`) - all offset + recursive head/tail. `abi.encodePacked` accepts value, bytes/string, and
+value-element arrays (each element padded to 32 bytes, no length; a struct / nested-element array is
+rejected, matching solc's "type not supported in packed mode"). `abi.encodeWithSelector(bytes4, ...)`
+and `abi.encodeWithSignature(string, ...)` prepend the 4-byte selector to the standard encoding (the
+signature's selector = keccak256(sig)[0:4], literal or runtime). All verified byte-identical to solc.
 
 A NON-indexed STATIC struct / fixed-array event param is encoded INLINE in the ABI data tuple, and a
 NON-indexed DYNAMIC struct (value + bytes/string + dyn value-array fields) is encoded as a head offset
@@ -91,10 +92,10 @@ mixed value/struct heads, struct + a dynamic param, nested, packed, and calldata
 A struct with a dynamic value-element ARRAY field (alongside value / bytes/string fields), built in a
 memory local, now stores to storage byte-identically (length + keccak-data slots, overwrite-clearing).
 
-Still unbuilt (clean rejections, NOT miscompiles): `@constant string`; `abi.encodePacked` of an
-aggregate arg (the in-place packed-element rules); a struct field that is itself a fixed-array-of-dynamic
-or a nested dynamic struct (the supported dynamic struct is value + bytes/string + dyn value-array
-fields). These are narrow edge cases; the practical language surface is complete and solc-parity.
+Remaining (clean rejections, NOT miscompiles): a struct/array field that is itself a nested-dynamic
+array (`string[]`/`T[][]` field), a nested dynamic struct, or a fixed-array-of-dynamic - i.e. the
+recursive aggregate codec is complete for value + bytes/string + dynamic value-array fields, and these
+deeper field shapes are the remaining frontier. The practical language surface is complete and solc-parity.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage
