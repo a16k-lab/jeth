@@ -406,7 +406,19 @@ and is never miscompiled.
   `src` is a multi-value internal call (`this.f()`) or a tuple literal (`[x, y]`, e.g. swap
   `[a, b] = [b, a]`). The RHS is fully evaluated before any store. Value components only (an
   aggregate/bytes component in a tuple is gated). Byte-identical to solc.
-- Phase 5: constructors, modifiers, immutables.
+- **Phase 5 (functions in depth) - constructors, immutables, modifiers** (byte-identical to solc
+  incl. raw storage slots): a `constructor(params) { body }` runs once at deploy - value-type params
+  (uintN/intN/bool/address/bytesN/enum/branded) are ABI-decoded from the args appended to the init
+  code (decoded from memory), the body may write `@state` and read `msg.sender` / `msg.value`
+  (`@payable`) / `address(this)`, constant field initializers run before it, and a non-payable
+  constructor rejects deploy-time value. `@immutable` value-type fields are assigned in the
+  constructor and baked into the runtime code via `setimmutable`/`loadimmutable` - they consume NO
+  storage slot (a constructor read sees the staged value, a runtime read is `loadimmutable`, and
+  reading one needs `@view` not `@pure`). PRE-ONLY user `@modifier`s (a single tail `_` placeholder,
+  i.e. a pre-condition guard like `require(cond); _;`, applied via `@name` / `@name(args)`) inline
+  their guard code before the body; multiple modifiers nest leftmost-outermost, the same modifier may
+  apply twice, arguments evaluate exactly once, their effects feed the purity fixpoint, and they
+  compose with `@nonReentrant`.
 - Phase 6+: external calls, `address.balance`/`.call`/`.transfer`, `new` contract, inheritance,
   libraries, interfaces, abstract contracts, receive/fallback.
 
@@ -435,9 +447,17 @@ Each of the following compiles to a clean compile-time error (verified), not a m
   fixed-array-through-a-struct-field case `this.q.pts[i]` works).
 - **Tuple ABI JSON shape**: struct params/returns render as `(t1,t2)` rather than `type:"tuple"` +
   `components` (selectors are canonical and correct; this is a JSON-shape gap, not a behavior gap).
-- **Phase 5** (constructors with args, modifiers, immutables) and **Phase 6+** (external/message
-  calls, `address.balance`/`.call`/`.transfer`, `new` contract, inheritance, libraries, interfaces,
-  abstract contracts, receive/fallback).
+- **Phase 5 increment-1 gates** (each a clean diagnostic, never a miscompile; solc accepts unless
+  noted): a constructor with an aggregate/dynamic param (JETH302), one that calls an internal
+  function (JETH303), or a defaulted ctor param (JETH304); an `@immutable` that is inline-initialized
+  (JETH311) or `@public` with an auto-generated getter (JETH312) - a non-value-type immutable
+  (JETH310) and an immutable assigned outside the constructor (JETH313) are accept/reject parity
+  (solc rejects too); a `@modifier` with post-placeholder code or a conditional placeholder (JETH321),
+  more than one `_` (JETH320), a `return` (JETH324 = parity since solc rejects a value return / JETH325
+  for a bare `return`), an aggregate param (JETH322), on a multi-value-return function (JETH323), or
+  generic (JETH327).
+- **Phase 6+** (external/message calls, `address.balance`/`.call`/`.transfer`, `new` contract,
+  inheritance, libraries, interfaces, abstract contracts, receive/fallback).
 
 ## Permanently rejected (no on-chain meaning)
 
