@@ -417,8 +417,11 @@ and is never miscompiled.
   reading one needs `@view` not `@pure`). PRE-ONLY user `@modifier`s (a single tail `_` placeholder,
   i.e. a pre-condition guard like `require(cond); _;`, applied via `@name` / `@name(args)`) inline
   their guard code before the body; multiple modifiers nest leftmost-outermost, the same modifier may
-  apply twice, arguments evaluate exactly once, their effects feed the purity fixpoint, and they
-  compose with `@nonReentrant`.
+  apply twice, arguments evaluate exactly once (a modifier param never shadows a same-named function
+  param in the body), their effects feed the purity fixpoint, and they compose with `@nonReentrant`.
+  A `@modifier` may also decorate the **constructor** (the canonical base-init guard, e.g.
+  `@onlyValid constructor(...) { ... }`). The identifier `_` is reserved (the modifier placeholder)
+  and cannot be a declared name (JETH034), matching solc.
 - Phase 6+: external calls, `address.balance`/`.call`/`.transfer`, `new` contract, inheritance,
   libraries, interfaces, abstract contracts, receive/fallback.
 
@@ -455,7 +458,10 @@ Each of the following compiles to a clean compile-time error (verified), not a m
   (solc rejects too); a `@modifier` with post-placeholder code or a conditional placeholder (JETH321),
   more than one `_` (JETH320), a `return` (JETH324 = parity since solc rejects a value return / JETH325
   for a bare `return`), an aggregate param (JETH322), on a multi-value-return function (JETH323), or
-  generic (JETH327).
+  generic (JETH327). One known low-severity over-rejection: a constructor that *provably* overflows a
+  staged `@immutable` that is read at runtime is rejected (JETH901) where solc accepts and the deploy
+  then reverts - solc's Yul optimizer strips the dead `setimmutable`, leaving an unassigned
+  `loadimmutable`; the contract is non-functional (reverts at construction) in both compilers.
 - **Phase 6+** (external/message calls, `address.balance`/`.call`/`.transfer`, `new` contract,
   inheritance, libraries, interfaces, abstract contracts, receive/fallback).
 
