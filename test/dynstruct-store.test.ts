@@ -63,7 +63,18 @@ describe('dynamic-field struct -> storage assignment vs Solidity', () => {
     );
   });
 
-  it('a dynamic-array field from a memory source is still rejected cleanly', () => {
-    expect(jOk(`@struct class D { a: u256; xs: u256[]; } @contract class C { @state d: D; @external set(a: u256): void { let m: D = D(a, [1n,2n]); this.d = m; } }`)).toBe(false);
+  it('a struct with a dynamic value-array field, from a memory source (overwrite + mixed fields)', async () => {
+    await diff(
+      `@struct class D { a: u8; s: string; xs: u256[]; } @contract class C { @state d: D; @external set(a: u8, s: string, p: u256[]): void { let m: D = D(a, s, p); this.d = m; } @external @view geta(): u8 { return this.d.a; } @external @view gets(): string { return this.d.s; } @external @view len(): u256 { return this.d.xs.length; } @external @view get(i: u256): u256 { return this.d.xs[i]; } }`,
+      `struct D { uint8 a; string s; uint256[] xs; } contract C { D d; function set(uint8 a, string calldata s, uint256[] calldata p) external { D memory m = D(a, s, p); d = m; } function geta() external view returns (uint8){ return d.a; } function gets() external view returns (string memory){ return d.s; } function len() external view returns (uint256){ return d.xs.length; } function get(uint256 i) external view returns (uint256){ return d.xs[i]; } }`,
+      [
+        { sig: 'set(uint8,string,uint256[])', args: W(200n) + W(0x60n) + W(0xa0n) + W(3n) + '616263'.padEnd(64, '0') + W(4n) + W(1n) + W(2n) + W(3n) + W(4n) },
+        { sig: 'set(uint8,string,uint256[])', args: W(7n) + W(0x60n) + W(0xa0n) + W(2n) + '7a7a'.padEnd(64, '0') + W(2n) + W(99n) + W(88n) },
+        { sig: 'geta()' },
+        { sig: 'gets()' },
+        { sig: 'len()' },
+        { sig: 'get(uint256)', args: W(0n) },
+      ],
+    );
   });
 });

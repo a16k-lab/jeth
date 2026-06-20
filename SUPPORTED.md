@@ -86,9 +86,12 @@ tuple (byte-identical to solc: topic0 uses the struct's canonical tuple form, th
 aggregate's leaf words; verified for mixed value/struct heads, struct + a dynamic param, nested, and
 packed structs). (Indexed static struct/fixed-array params - a keccak topic - were already supported.)
 
+A struct with a dynamic value-element ARRAY field (alongside value / bytes/string fields), built in a
+memory local, now stores to storage byte-identically (length + keccak-data slots, overwrite-clearing).
+
 Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encode*` of a nested-dynamic
-arg (`string[]`, `T[][]`, dynamic struct), a struct with a dynamic-ARRAY field from a memory/calldata
-source -> storage, a non-indexed DYNAMIC struct (bytes/string field) event param, `@constant string`.
+arg (`string[]`, `T[][]`, dynamic struct), a non-indexed DYNAMIC struct (bytes/string field) event
+param, `@constant string`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage

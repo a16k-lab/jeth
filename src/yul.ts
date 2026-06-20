@@ -2559,12 +2559,17 @@ ${indent(runtime, 6)}
     }
     // memory source (a memArray local or an array literal): value elements only.
     if (!isStaticValueType(innerElem)) throw new UnsupportedError('a memory array of non-value elements is not supported');
-    const memPtr = this.lowerExpr(value, ctx, out);
+    this.copyMemArrayIntoStorage(innerElem, this.lowerExpr(value, ctx, out), dstLenSlot, out);
+  }
+
+  /** Deep-copy a MEMORY value-element array ([len][elems] at `memPtr`) into a storage dynamic array
+   *  at `dstLenSlot` (length there, data at keccak(slot)): resize + clear old data + packed element
+   *  store. Shared by whole-array assignment and a dynamic-array struct field write. */
+  private copyMemArrayIntoStorage(innerElem: JethType, memPtr: string, dstLenSlot: string, out: string[]): void {
     const n = this.fresh();
     out.push(`let ${n} := mload(${memPtr})`);
     const dstData = this.fresh();
     out.push(`let ${dstData} := ${this.arrayDataSlotHelper()}(${dstLenSlot})`);
-    // clear the dst's OLD data slots (overwrite case); for a fresh slot oldLen is 0.
     const packs = arrayElemPacks(innerElem);
     const slotsFor = (L: string): string => (packs.packed ? `div(add(${L}, ${packs.perSlot - 1}), ${packs.perSlot})` : `mul(${L}, ${storageSlotCount(innerElem)})`);
     const oldSlots = this.fresh();
@@ -3035,6 +3040,12 @@ ${indent(runtime, 6)}
         const w = this.fresh();
         out.push(`let ${w} := mload(${at})`);
         for (const l of this.storeState(f.type, fslotAt(f.slot), f.offset, w)) out.push(l);
+      } else if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
+        // a dynamic value-element array field: the head word is a memory [len][elems] pointer;
+        // deep-copy it into the field's storage dynamic array (length at fslot, data at keccak(fslot)).
+        const p = this.fresh();
+        out.push(`let ${p} := mload(${at})`);
+        this.copyMemArrayIntoStorage(f.type.element, p, fslotAt(f.slot), out);
       } else {
         throw new UnsupportedError(`storing a struct with a '${f.type.kind}' field from a memory/calldata source is not supported yet`);
       }
