@@ -49,6 +49,7 @@ export type GlobalOp =
   | 'basefee'
   | 'gaslimit'
   | 'prevrandao'
+  | 'gas' // gasleft()
   | 'msgsig'; // msg.sig
 
 export type Expr =
@@ -85,6 +86,9 @@ export type Expr =
   | { kind: 'dynLocalRead'; type: JethType; name: string } // bytes/string MEMORY local (register holds a [len][data] pointer)
   | { kind: 'stringLiteral'; type: JethType; bytes: Uint8Array } // a memory bytes/string literal
   | { kind: 'dynLength'; type: JethType; operand: Expr } // s.length -> u256
+  | { kind: 'keccak'; type: JethType; arg: Expr } // keccak256(bytes/string) -> bytes32
+  | { kind: 'blockhash'; type: JethType; arg: Expr } // blockhash(uint) -> bytes32
+  | { kind: 'balance'; type: JethType; addr: Expr } // <address>.balance -> u256
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1
   // --- Phase 4: dynamic arrays T[] ---
   | { kind: 'arrayLen'; type: JethType; arr: ArrayExpr } // a.length -> u256
@@ -264,6 +268,7 @@ export type Stmt =
 // 'custom' -> a user-declared custom error (selector + ABI-encoded static args).
 export type RevertReason =
   | { kind: 'empty' }
+  | { kind: 'panic'; code: number } // Panic(uint256) blob: selector 0x4e487b71 + code (assert -> 0x01)
   | { kind: 'errorString'; message: Uint8Array } // precomputed UTF-8 bytes (constant)
   | { kind: 'errorStringDyn'; value: Expr } // Error(string) from a runtime bytes/string value
   | { kind: 'custom'; decl: ErrorDecl; args: Expr[] };

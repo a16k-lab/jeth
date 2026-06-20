@@ -6,6 +6,47 @@ sweep** (closed all 17 audit-found compile-time gaps; runtime byte-identical to 
 [docs/distinctive-features.md](docs/distinctive-features.md)). The full suite is 1500+ differential
 tests against `solc-js` (returndata + raw storage slots + event logs), zero known miscompiles.
 
+## Differential audit (2026-06-20) - fixes
+
+A fresh adversarial differential audit against solc 0.8.35 found and fixed the following. All are
+verified byte-identical to solc and the suite stays green (1672 tests).
+
+Silent miscompiles fixed (the dangerous class - JETH accepted + ran but produced wrong results):
+- **Constant rational arithmetic**: a compile-time-constant expression is now evaluated as an EXACT
+  rational and collapsed to a single range-checked integer literal (solc semantics), instead of eager
+  truncating integer division. `(10n/4n)*4n` is now `10` (was `8`); `1n/2n + 1n/2n` is `1` (was `0`).
+  As a side effect, compile-time constant overflow / div-by-zero / `2n**256n` / non-integer-rational
+  results are now rejected at compile time (`JETH070`/`JETH079`), matching solc, instead of deferring
+  to a runtime panic or silently truncating. Variable arithmetic (incl. `unchecked` wrapping) is
+  unchanged - only fully-constant subtrees fold.
+- **enum declared INSIDE the `@contract class`** previously produced an EMPTY ABI (every function
+  silently dropped, all calls revert). In-class enums are now hoisted to top level pre-parse and the
+  contract compiles normally (TS cannot parse an enum as a class member).
+- **Nested array literal returns** (`return [[1n,2n],[3n,4n]]` for `u256[][]`) previously emitted
+  malformed ABI (inner offsets past the returndata). A dynamic array literal must now have value-type
+  elements (`JETH216`); nested/aggregate-element literals are rejected (solc rejects them too).
+
+Over-acceptances fixed (JETH accepted programs solc rejects):
+- Conflicting state mutability (`@view @payable`, `@pure @payable`) is now rejected (`JETH052`).
+- `@public @state` was silently ignored (no getter). It now auto-generates a `name() view returns (T)`
+  getter for value-type and `bytes`/`string` state vars (solc parity); a getter colliding with a
+  same-named function is a clean `JETH044`. Parameterized getters (mapping/array/struct) are a later
+  step and rejected cleanly (`JETH057`) rather than silently producing nothing.
+
+Over-rejections fixed (valid Solidity JETH wrongly rejected):
+- `for (const x of this.structArray)` and a typed `let p: S = this.arr[i]` / `this.m[k]` (storage
+  struct-array element / mapping struct value -> memory local) are now supported.
+- A nested `switch` that terminates on every branch now satisfies the case-terminator analysis (no
+  spurious "add a trailing break" `JETH284`).
+
+Builtins added: `assert(cond)` (-> `Panic(0x01)`), `keccak256(bytes|string)`, `gasleft()`,
+`blockhash(n)`, `<address>.balance`, `address(this).balance`, `block.difficulty` (= prevrandao).
+
+Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encode*`, `sha256`/`ripemd160`,
+`bytes`/`string` mapping keys, whole memory/calldata struct -> storage assignment, whole calldata
+dynamic-array param -> storage assignment, struct / indexed-array event params, `@constant`
+`address`/`bytesN`.
+
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage
   packed like `uint8`, members `0,1,...`). `Color.Member` constants, comparisons (`==`/`!=`/`<`/...),

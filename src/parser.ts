@@ -12,14 +12,78 @@ export interface ParsedSource {
 }
 
 export function parse(text: string, fileName = 'contract.jeth'): ParsedSource {
+  // Solidity allows `enum` inside a contract, but TS refuses an enum as a class member
+  // (it closes the class empty and silently drops the rest of the body -> empty contract).
+  // Hoist any in-class enum to top level before parsing. Offsets are preserved (the enum is
+  // blanked in place with equal-length whitespace and appended at the end), so diagnostic
+  // spans for the rest of the file are unchanged. No-op when no in-class enum is present.
+  const hoisted = hoistInClassEnums(text);
   const sourceFile = ts.createSourceFile(
     fileName,
-    text,
+    hoisted,
     ts.ScriptTarget.Latest,
     /*setParentNodes*/ true,
     ts.ScriptKind.TS,
   );
-  return { sourceFile, fileName, text };
+  return { sourceFile, fileName, text: hoisted };
+}
+
+/** Move `enum Name { ... }` declarations that sit inside a class body (brace depth >= 1) out to
+ *  top level. A char scanner tracks string/comment state and brace depth; each in-class enum is
+ *  blanked where it sat (newlines kept, so offsets/line numbers are stable) and re-appended at the
+ *  end of the source, where collectEnums (a position-agnostic recursive walk) registers it. */
+function hoistInClassEnums(text: string): string {
+  const isWord = (ch: string) => /[A-Za-z0-9_$]/.test(ch);
+  const spans: { start: number; end: number }[] = [];
+  const n = text.length;
+  let depth = 0;
+  let i = 0;
+  while (i < n) {
+    const c = text[i]!;
+    if (c === '"' || c === "'" || c === '`') {
+      const q = c;
+      i++;
+      while (i < n) {
+        if (text[i] === '\\') { i += 2; continue; }
+        if (text[i] === q) { i++; break; }
+        i++;
+      }
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '/') { i += 2; while (i < n && text[i] !== '\n') i++; continue; }
+    if (c === '/' && text[i + 1] === '*') { i += 2; while (i < n && !(text[i] === '*' && text[i + 1] === '/')) i++; i += 2; continue; }
+    if (c === '{') { depth++; i++; continue; }
+    if (c === '}') { depth--; i++; continue; }
+    if (depth >= 1 && c === 'e' && text.startsWith('enum', i) && !isWord(text[i - 1] ?? '') && !isWord(text[i + 4] ?? '')) {
+      let j = i + 4;
+      while (j < n && text[j] !== '{' && text[j] !== '}' && text[j] !== ';') j++;
+      if (j < n && text[j] === '{') {
+        let d2 = 0;
+        let k = j;
+        for (; k < n; k++) {
+          if (text[k] === '{') d2++;
+          else if (text[k] === '}') { d2--; if (d2 === 0) { k++; break; } }
+        }
+        spans.push({ start: i, end: k });
+        i = k;
+        continue;
+      }
+    }
+    i++;
+  }
+  if (spans.length === 0) return text;
+  let out = '';
+  let cursor = 0;
+  const moved: string[] = [];
+  for (const s of spans) {
+    out += text.slice(cursor, s.start);
+    const body = text.slice(s.start, s.end);
+    moved.push(body);
+    out += body.replace(/[^\n]/g, ' '); // blank in place, keep newlines
+    cursor = s.end;
+  }
+  out += text.slice(cursor);
+  return out + '\n' + moved.join('\n') + '\n';
 }
 
 /** Extract decorator names (e.g. ["contract"], ["external","view"]) from a node. */

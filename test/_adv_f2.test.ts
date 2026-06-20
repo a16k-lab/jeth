@@ -438,16 +438,35 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
       .toEqual([]);
   });
 
-  // Element kind that is NOT supported as a standalone `const v = xs[i]`: a struct element.
-  // The standalone decl rejects; for-of must also reject (no crash). The codes differ from the
-  // standalone decl (for-of: JETH900, standalone: JETH063) but both reject cleanly.
-  it('for-of over struct[] rejects cleanly (struct element unsupported, no crash)', () => {
-    const src = `@struct class P { x: u256; y: u256; } @contract class C { @state ps: P[]; @external @view f(): u256 { let s: u256 = 0n; for (const v of this.ps) { s = s + v.x; } return s; } }`;
-    const codes = errCodes(src);
-    expect(codes.length, 'must reject, not crash').toBeGreaterThan(0);
-    // standalone equivalent also rejects, so behavior is consistent (both refuse a struct element).
-    const standalone = `@struct class P { x: u256; y: u256; } @contract class C { @state ps: P[]; @external @view f(): u256 { const v = this.ps[0n]; return v.x; } }`;
-    expect(errCodes(standalone).length, 'standalone also rejects').toBeGreaterThan(0);
+  // for-of over a struct[] (and the standalone `const v = this.ps[i]` it desugars to) is now
+  // SUPPORTED: a storage struct-array element is copied into a fresh memory image. Byte-identical
+  // to solc (previously over-rejected with JETH900/JETH063).
+  it('for-of over struct[] compiles and is byte-identical to solc (struct element supported)', async () => {
+    const J = `@struct class P { x: u256; y: u256; } @contract class C { @state ps: P[]; @external add(x: u256, y: u256): void { this.ps.push(P(x, y)); } @external @view f(): u256 { let s: u256 = 0n; for (const v of this.ps) { s = s + v.x + v.y; } return s; } }`;
+    const S = `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+struct P { uint256 x; uint256 y; }
+contract C { P[] ps; function add(uint256 x, uint256 y) external { ps.push(P(x,y)); } function f() external view returns (uint256){ uint256 s=0; for(uint256 i=0;i<ps.length;i++){ s = s + ps[i].x + ps[i].y; } return s; } }`;
+    expect(errCodes(J), 'for-of over struct[] now compiles').toEqual([]);
+    // the standalone (typed) struct-element-to-memory local it desugars to also compiles
+    const standalone = `@struct class P { x: u256; y: u256; } @contract class C { @state ps: P[]; @external add(x: u256, y: u256): void { this.ps.push(P(x, y)); } @external @view g(): u256 { let v: P = this.ps[0n]; return v.x; } }`;
+    expect(errCodes(standalone), 'standalone struct-elem -> memory local also compiles').toEqual([]);
+    // runtime byte-identical to solc
+    const jb = compile(J, { fileName: 'C.jeth' });
+    const sb = compileSolidity(S, 'C');
+    const hj = await Harness.create();
+    const hs = await Harness.create();
+    const aj = await hj.deploy(jb.creationBytecode);
+    const as = await hs.deploy(sb.creation);
+    for (const args of [[3n, 4n], [10n, 20n]]) {
+      const d = encodeCall(sel('add(uint256,uint256)'), args);
+      await hj.call(aj, d);
+      await hs.call(as, d);
+    }
+    const rj = await hj.call(aj, encodeCall(sel('f()'), []));
+    const rs = await hs.call(as, encodeCall(sel('f()'), []));
+    expect(rj.success).toBe(true);
+    expect(rj.returnHex).toBe(rs.returnHex);
   });
 });
 

@@ -748,6 +748,12 @@ ${indent(runtime, 6)}
             out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, String(s.init.baseSlot), out)}`);
           } else if (s.init.kind === 'arrayValue' && s.init.arr.base.kind === 'fixedArray') {
             out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, String(s.init.arr.base.baseSlot), out)}`);
+          } else if (s.init.kind === 'mapStorageValue') {
+            // a storage mapping struct value (this.m[k]) COPIED into a fresh image
+            out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, this.mappingSlot(s.init.baseSlot, s.init.keys, ctx, out), out)}`);
+          } else if (s.init.kind === 'structArrayElem') {
+            // a storage struct-array element (this.arr[i]) COPIED into a fresh image (also the for-of desugar)
+            out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, this.structArrayElemSlot(s.init.arr, s.init.index, ctx, out), out)}`);
           } else if (s.init.kind === 'cdAggregateValue') {
             out.push(`let ${name} := ${this.allocAggFromCalldata(s.init.param, s.init.type, ctx, out)}`);
           } else {
@@ -1135,6 +1141,8 @@ ${indent(runtime, 6)}
     switch (r.kind) {
       case 'empty':
         return ['revert(0, 0)'];
+      case 'panic':
+        return [`${this.panic()}(0x${r.code.toString(16).padStart(2, '0')})`];
       case 'errorString':
         return this.lowerErrorString(r.message);
       case 'errorStringDyn': {
@@ -1496,6 +1504,17 @@ ${indent(runtime, 6)}
       }
       case 'global':
         return this.lowerGlobal(e);
+      case 'keccak': {
+        // keccak256(bytes/string): hash the CONTENT bytes (data at mp+0x20, length len).
+        const { mp, len } = this.toMemory(this.lowerDynamic(e.arg, ctx, out), out);
+        const r = this.fresh();
+        out.push(`let ${r} := keccak256(add(${mp}, 0x20), ${len})`);
+        return r;
+      }
+      case 'blockhash':
+        return `blockhash(${this.lowerExpr(e.arg, ctx, out)})`;
+      case 'balance':
+        return `balance(${this.lowerExpr(e.addr, ctx, out)})`;
       case 'cast':
         return this.lowerCast(e, ctx, out);
       case 'mapGet': {
@@ -4626,6 +4645,7 @@ ${indent(runtime, 6)}
       case 'basefee': return 'basefee()';
       case 'gaslimit': return 'gaslimit()';
       case 'prevrandao': return 'prevrandao()';
+      case 'gas': return 'gas()';
       case 'msgsig':
         // bytes4 left-aligned: high 4 bytes = selector. Matches solc.
         return 'and(calldataload(0), 0xffffffff00000000000000000000000000000000000000000000000000000000)';

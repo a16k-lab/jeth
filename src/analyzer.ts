@@ -84,6 +84,8 @@ const GLOBALS: Record<string, Record<string, { op: GlobalOp; type: JethType; cat
     basefee: { op: 'basefee', type: U256, cat: 'env' },
     gaslimit: { op: 'gaslimit', type: U256, cat: 'env' },
     prevrandao: { op: 'prevrandao', type: U256, cat: 'env' },
+    // post-Merge `block.difficulty` is the same DIFFICULTY/PREVRANDAO opcode (0x44); solc maps both here.
+    difficulty: { op: 'prevrandao', type: U256, cat: 'env' },
   },
 };
 import { planLayout, RawStateVar } from './layout.js';
@@ -128,6 +130,7 @@ interface RawModifier {
 export class Analyzer {
   // state symbols, available once layout is planned
   private stateByName = new Map<string, StateVar>();
+  private publicStateNames = new Set<string>(); // @public @state vars that get an auto-generated getter
   // @constant fields: slot-free compile-time constants. The folded literal is inlined at every
   // read site (no SLOAD, no storage slot), so a @constant never shifts the slot of a @state var.
   private constantsByName = new Map<string, { value: bigint | boolean; type: JethType }>();
@@ -521,6 +524,28 @@ export class Analyzer {
       if (this.internallyCalled.has(f.key)) f.internallyCalled = true;
     }
 
+    // Auto-generate getters for @public state variables (solc parity). A value-type or bytes/string
+    // getter is `name() view returns (T)` reading the slot directly. Mapping/array/struct getters are
+    // PARAMETERIZED in solc (m(K)->V, a(uint)->T, s()->fields); those are a later step and rejected
+    // cleanly here rather than silently producing no getter. Inserted before the selector-clash check
+    // so a getter colliding with a same-named function is a clean JETH044 error (matches solc).
+    for (const v of layout.vars) {
+      if (!this.publicStateNames.has(v.name)) continue;
+      let value: Expr;
+      if (isStaticValueType(v.type)) value = { kind: 'stateRead', type: v.type, slot: v.slot, offset: v.offset, varName: v.name };
+      else if (isBytesLike(v.type)) value = { kind: 'dynStateRead', type: v.type, slot: v.slot };
+      else {
+        this.diags.error(cls, 'JETH057', `@public getter for state variable '${v.name}' of type ${displayName(v.type)} is not supported yet (declare an explicit @view getter)`);
+        continue;
+      }
+      const sig = functionSignature(v.name, []);
+      functions.push({
+        name: v.name, key: `getter$${v.name}`, visibility: 'external', mutability: 'view',
+        params: [], returnType: v.type, signature: sig, selector: functionSelector(sig),
+        body: [{ kind: 'return', value }],
+      });
+    }
+
     // Reject duplicate selectors (would make the dispatcher ambiguous).
     const seen = new Map<string, string>();
     for (const f of functions) {
@@ -815,6 +840,7 @@ export class Analyzer {
         initialValue = folded; // zero/false is the storage default; no SSTORE needed
       }
     }
+    if (decs.includes('public')) this.publicStateNames.add(member.name.text); // solc auto-generates a getter
     out.push({ name: member.name.text, type, initialValue });
   }
 
@@ -931,6 +957,15 @@ export class Analyzer {
     // its TRANSITIVE effects after the fixpoint. Provisionally @view so the body is validated as
     // read-only (no writes/emits/msg.value); an actual write is rejected (JETH056).
     const read = decs.includes('read');
+    // A function is at most one of @view/@pure/@payable (solc: "State mutability already specified").
+    const explicitMuts = (['view', 'pure', 'payable'] as const).filter((m) => decs.includes(m));
+    if (!read && explicitMuts.length > 1) {
+      this.diags.error(
+        member,
+        'JETH052',
+        `conflicting mutability decorators: ${explicitMuts.map((m) => '@' + m).join(', ')} (a function is at most one of @view/@pure/@payable)`,
+      );
+    }
     let mutability: Mutability = 'nonpayable';
     let inferRead = false;
     if (read) {
@@ -1584,6 +1619,7 @@ export class Analyzer {
       if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
         const callee = e.expression.text;
         if (callee === 'require') return this.checkRequire(e, out);
+        if (callee === 'assert') return this.checkAssert(e, out);
         if (callee === 'revert') return this.checkRevert(e, out);
         if (callee === 'emit') return this.checkEmit(e, out);
         // a bare internal call as a statement (void result, or a value result discarded).
@@ -2211,6 +2247,18 @@ export class Analyzer {
     if (ts.isReturnStatement(s) || this.isRevertOrThrow(s) || s.kind === ts.SyntaxKind.ContinueStatement) return true;
     if (ts.isBlock(s)) { const l = s.statements[s.statements.length - 1]; return !!l && this.stmtDiverts(l); }
     if (ts.isIfStatement(s)) return !!s.elseStatement && this.stmtDiverts(s.thenStatement) && this.stmtDiverts(s.elseStatement);
+    // A switch diverts iff it has a `default` (the "else") AND every non-empty clause body diverts.
+    // (An empty label falls through to the next clause's body, so skip it.) Mirrors the if/else rule.
+    if (ts.isSwitchStatement(s)) {
+      const clauses = s.caseBlock.clauses;
+      if (!clauses.some(ts.isDefaultClause)) return false;
+      for (const cl of clauses) {
+        if (cl.statements.length === 0) continue;
+        const last = cl.statements[cl.statements.length - 1]!;
+        if (!this.stmtDiverts(last)) return false;
+      }
+      return true;
+    }
     return false;
   }
 
@@ -2240,6 +2288,23 @@ export class Analyzer {
     const reason: RevertReason | undefined =
       args.length === 2 ? this.checkRevertReason(args[1]!) : { kind: 'empty' };
     if (reason) out.push({ kind: 'require', cond, reason });
+  }
+
+  /** assert(cond): an invariant check. On failure -> Panic(0x01) (matches solc). Unlike
+   *  require, assert takes no message and always reverts with the assert panic code. */
+  private checkAssert(call: ts.CallExpression, out: Stmt[]): void {
+    const args = call.arguments;
+    if (args.length !== 1) {
+      this.diags.error(call, 'JETH120', `assert(...) takes 1 argument, got ${args.length}`);
+      return;
+    }
+    const cond = this.checkExpr(args[0]!, BOOL);
+    if (!cond) return;
+    if (cond.type.kind !== 'bool') {
+      this.diags.error(args[0]!, 'JETH121', `assert condition must be bool, got ${displayName(cond.type)}`);
+      return;
+    }
+    out.push({ kind: 'require', cond, reason: { kind: 'panic', code: 0x01 } });
   }
 
   private checkRevert(call: ts.CallExpression, out: Stmt[]): void {
@@ -2411,12 +2476,12 @@ export class Analyzer {
       // Allowed sources: a constructor StructName(...), another memory struct (ALIAS), a
       // struct-returning internal call, a whole STORAGE struct (this.s -> fresh COPY), or a
       // STATIC struct calldata param (q -> fresh COPY). The struct types must match.
-      const okInit = e.kind === 'structNew' || e.kind === 'memAggregate' || (e.kind === 'call' && e.type.kind === 'struct') || e.kind === 'structValue' || e.kind === 'cdAggregateValue' || e.kind === 'ternary';
+      const okInit = e.kind === 'structNew' || e.kind === 'memAggregate' || (e.kind === 'call' && e.type.kind === 'struct') || e.kind === 'structValue' || e.kind === 'cdAggregateValue' || e.kind === 'ternary' || e.kind === 'mapStorageValue' || e.kind === 'structArrayElem';
       if (!okInit) {
-        this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...), another memory struct, a struct-returning internal call, a storage struct (this.s), or a struct calldata parameter');
+        this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...), another memory struct, a struct-returning internal call, a storage struct (this.s / this.m[k] / this.arr[i]), or a struct calldata parameter');
         return;
       }
-      if ((e.kind === 'structValue' || e.kind === 'cdAggregateValue') && (e.type.kind !== 'struct' || (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)) {
+      if ((e.kind === 'structValue' || e.kind === 'cdAggregateValue' || e.kind === 'mapStorageValue' || e.kind === 'structArrayElem') && (e.type.kind !== 'struct' || (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)) {
         this.diags.error(decl.initializer, 'JETH085', `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`);
         return;
       }
@@ -4642,6 +4707,18 @@ export class Analyzer {
         this.diags.error(node, 'JETH213', 'cannot infer array-literal type here (expected an array type)');
         return undefined;
       }
+      // Only a 1-D dynamic array literal of value-type elements is supported. A dynamic array
+      // literal whose elements are themselves dynamic/aggregate (e.g. u256[][], string[], S[],
+      // Arr<u256,2>[]) is rejected: the return/copy encoder cannot represent it (solc likewise
+      // rejects these literals, which type as fixed T[N] and don't convert to a dynamic array).
+      if (expected.length === undefined && !isStaticValueType(expected.element)) {
+        this.diags.error(
+          node,
+          'JETH216',
+          `a dynamic array literal must have value-type elements; a literal of ${displayName(expected.element)} elements is not supported`,
+        );
+        return undefined;
+      }
       const elements: Expr[] = [];
       for (const el of node.elements) {
         const e = this.checkExpr(el, expected.element);
@@ -4838,6 +4915,15 @@ export class Analyzer {
       !this.stateByName.has(node.expression.text)
     ) {
       return this.checkGlobal(node);
+    }
+
+    // <address>.balance (incl. address(this).balance): the account balance as u256 (env read).
+    if (ts.isPropertyAccessExpression(node) && node.name.text === 'balance') {
+      const base = this.checkExpr(node.expression);
+      if (base && base.type.kind === 'address') {
+        this.currentReadsEnv = true; // forbidden in @pure
+        return { kind: 'balance', type: U256, addr: base };
+      }
     }
 
     // indexing: array a[i] -> elem, bytes b[i] -> bytes1, or mapping this.m[k]
@@ -5187,6 +5273,27 @@ export class Analyzer {
     ) {
       const callee = node.expression.text;
       if (callee === 'address') return this.checkAddressCall(node);
+      // global builtins (solc reserved): gasleft() / keccak256(bytes|string) / blockhash(uint).
+      if (callee === 'gasleft') {
+        if (node.arguments.length !== 0) this.diags.error(node, 'JETH170', 'gasleft() takes no arguments');
+        this.currentReadsEnv = true; // forbidden in @pure
+        return { kind: 'global', type: U256, op: 'gas' };
+      }
+      if (callee === 'keccak256') {
+        if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'keccak256(...) takes exactly one argument'); return undefined; }
+        const arg = this.checkExpr(node.arguments[0]!);
+        if (!arg) return undefined;
+        if (!isBytesLike(arg.type)) { this.diags.error(node, 'JETH171', `keccak256(...) requires a bytes/string argument, got ${displayName(arg.type)}`); return undefined; }
+        return { kind: 'keccak', type: { kind: 'bytesN', size: 32 }, arg };
+      }
+      if (callee === 'blockhash') {
+        if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'blockhash(...) takes exactly one argument'); return undefined; }
+        const arg = this.checkExpr(node.arguments[0]!, U256);
+        if (!arg) return undefined;
+        if (!isInteger(arg.type)) { this.diags.error(node, 'JETH171', `blockhash(...) requires an integer argument, got ${displayName(arg.type)}`); return undefined; }
+        this.currentReadsEnv = true; // forbidden in @pure
+        return { kind: 'blockhash', type: { kind: 'bytesN', size: 32 }, arg: this.coerce(arg, U256, node.arguments[0]!) };
+      }
       // `Color(x)` is an integer -> enum range-checked conversion; an enum is a branded uint8, so
       // isBrandedAlias already routes it, but name it explicitly for clarity.
       if (callee === 'payable' || resolvePrimitiveName(callee) || this.isEnumName(callee) || this.isBrandedAlias(callee)) return this.checkCast(node, callee);
@@ -5291,6 +5398,21 @@ export class Analyzer {
       if (!op) {
         this.diags.error(node.operatorToken, 'JETH073', `unsupported binary operator`);
         return undefined;
+      }
+      // Constant folding (solc parity): a fully-constant arithmetic expression is evaluated as an
+      // exact rational and collapsed to a single range-checked integer literal. This fixes the eager
+      // integer-truncation miscompile (`(10n/4n)*4n` == 10, not 8) and rejects compile-time overflow /
+      // div-by-zero / non-integer constants the way solc does. Non-constant operands fall through to
+      // runtime codegen below (so variable arithmetic, incl. `unchecked` wrapping, is unchanged).
+      if (['+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^'].includes(op)) {
+        const folded = this.foldConstRational(node);
+        if (folded !== undefined) {
+          if ('err' in folded) {
+            this.diags.error(node, 'JETH079', folded.err);
+            return undefined;
+          }
+          return this.literalFromConst(folded, node, expected);
+        }
       }
       const left = this.checkExpr(node.left, expected);
       if (!left) return undefined;
@@ -5591,6 +5713,82 @@ export class Analyzer {
       }
     }
     return undefined;
+  }
+
+  /** Exact-RATIONAL constant folding for the general expression path, matching solc: a constant
+   *  arithmetic expression is evaluated as an unbounded reduced fraction (num/den, den>0), and only
+   *  collapsed to an integer (with range/div0/non-integer checks) at the conversion point. This is
+   *  what makes `(10n/4n)*4n` == 10 (not 8): division is exact, never truncated mid-expression.
+   *  Returns: undefined = NOT a (literal-based) constant expression (leave it to runtime codegen);
+   *  {err} = a constant expression solc rejects at compile time (div/mod by zero, negative shift/exp,
+   *  a bitwise/shift/% on a non-integer rational); {num,den} = the exact reduced value. */
+  private foldConstRational(node: ts.Expression): { num: bigint; den: bigint } | { err: string } | undefined {
+    const reduce = (num: bigint, den: bigint): { num: bigint; den: bigint } => {
+      if (den < 0n) { num = -num; den = -den; }
+      let a = num < 0n ? -num : num, b = den;
+      while (b) { [a, b] = [b, a % b]; }
+      const g = a === 0n ? 1n : a;
+      return { num: num / g, den: den / g };
+    };
+    if (ts.isParenthesizedExpression(node)) return this.foldConstRational(node.expression);
+    const lit = this.asIntLiteral(node);
+    if (lit !== undefined) return { num: lit, den: 1n };
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
+      const x = this.foldConstRational(node.operand);
+      if (x === undefined || 'err' in x) return x;
+      return reduce(-x.num, x.den);
+    }
+    if (ts.isBinaryExpression(node)) {
+      const op = this.binaryToBinOp(node.operatorToken.kind);
+      // Only fold pure arithmetic/bitwise/shift. Comparisons / && / || are not constant-int-folded here.
+      if (!op || !['+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^'].includes(op)) return undefined;
+      const a = this.foldConstRational(node.left);
+      if (a === undefined) return undefined;
+      const b = this.foldConstRational(node.right);
+      if (b === undefined) return undefined;
+      if ('err' in a) return a;
+      if ('err' in b) return b;
+      switch (op) {
+        case '+': return reduce(a.num * b.den + b.num * a.den, a.den * b.den);
+        case '-': return reduce(a.num * b.den - b.num * a.den, a.den * b.den);
+        case '*': return reduce(a.num * b.num, a.den * b.den);
+        case '/':
+          if (b.num === 0n) return { err: 'division by zero in a constant expression' };
+          return reduce(a.num * b.den, a.den * b.num);
+        case '**':
+          if (b.den !== 1n) return { err: 'a constant exponent must be an integer' };
+          if (b.num < 0n) return { err: 'negative exponent in a constant expression' };
+          return reduce(a.num ** b.num, a.den ** b.num);
+      }
+      // The remaining operators require integer operands (solc rejects them on a non-integer rational).
+      if (a.den !== 1n || b.den !== 1n) return { err: `operator '${op}' requires integer constant operands` };
+      const A = a.num, B = b.num;
+      switch (op) {
+        case '%': return B === 0n ? { err: 'modulo by zero in a constant expression' } : { num: A % B, den: 1n };
+        case '<<': return B < 0n ? { err: 'negative shift amount' } : { num: A << B, den: 1n };
+        case '>>': return B < 0n ? { err: 'negative shift amount' } : { num: A >> B, den: 1n };
+        case '&': return { num: A & B, den: 1n };
+        case '|': return { num: A | B, den: 1n };
+        case '^': return { num: A ^ B, den: 1n };
+      }
+    }
+    return undefined;
+  }
+
+  /** Materialize a folded reduced rational as an integer `literalInt`, emitting solc-matching
+   *  diagnostics (non-integer constant, out of range). `node`/`expected` mirror the literal producers. */
+  private literalFromConst(r: { num: bigint; den: bigint }, node: ts.Node, expected?: JethType): Expr | undefined {
+    if (r.den !== 1n) {
+      this.diags.error(node, 'JETH079', `constant expression ${r.num}/${r.den} is not an integer`);
+      return undefined;
+    }
+    const value = r.num;
+    const type = expected && isInteger(expected) && !isEnum(expected) ? expected : value < 0n ? I256 : U256;
+    if (!this.inRange(value, type)) {
+      this.diags.error(node, 'JETH070', `constant ${value} out of range for ${displayName(type)}`);
+      return undefined;
+    }
+    return { kind: 'literalInt', type, value };
   }
 
   /** If `node` is an integer literal, optionally wrapped in unary minus and/or
