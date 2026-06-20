@@ -6120,6 +6120,16 @@ export class Analyzer {
       }
       return undefined; // not a constant address literal -> caller emits JETH048
     }
+    // keccak256(<constant string/bytes>) in a bytes32 @constant -> the hash, folded at compile time
+    // (the common typehash / domain-separator-component pattern). The 32-byte hash is the bytes32 word.
+    if (
+      expected.kind === 'bytesN' && expected.size === 32 &&
+      ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+      node.expression.text === 'keccak256' && node.arguments.length === 1
+    ) {
+      const bytes = this.constByteString(node.arguments[0]!);
+      if (bytes) return BigInt('0x' + toHex(keccak(bytes)));
+    }
     // bytesN constant: `bytesN(<int literal>)` -> the value LEFT-aligned in the high N bytes (the
     // bytesN register form), matching solc's bytesN literal. The bare literal 0 also folds to zero.
     if (expected.kind === 'bytesN') {
@@ -6194,6 +6204,33 @@ export class Analyzer {
           case '>=': return a >= b;
         }
       }
+    }
+    return undefined;
+  }
+
+  /** Evaluate a node to a constant byte string (for compile-time keccak256 in a @constant): a string/
+   *  template literal (its UTF-8 bytes), `bytes(<that>)`, or `abi.encodePacked(<such literals>)`. */
+  private constByteString(node: ts.Expression): Uint8Array | undefined {
+    if (ts.isParenthesizedExpression(node)) return this.constByteString(node.expression);
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return new TextEncoder().encode(node.text);
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'bytes' && node.arguments.length === 1) {
+      return this.constByteString(node.arguments[0]!);
+    }
+    if (
+      ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'abi' &&
+      node.expression.name.text === 'encodePacked'
+    ) {
+      const parts: Uint8Array[] = [];
+      for (const a of node.arguments) {
+        const b = this.constByteString(a);
+        if (!b) return undefined; // a non-string-literal packed arg: not foldable here
+        parts.push(b);
+      }
+      const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+      let o = 0;
+      for (const p of parts) { out.set(p, o); o += p.length; }
+      return out;
     }
     return undefined;
   }

@@ -207,3 +207,13 @@ describe('sweep @immutable inline initialization', () => {
     );
   });
 });
+
+describe('sweep keccak256 in a @constant initializer', () => {
+  it('folds keccak256 of a constant string / encodePacked / bytes() at compile time', async () => {
+    await rt(
+      `@contract class C { @constant H: bytes32 = keccak256("Permit(address owner,uint256 value)"); @constant D: bytes32 = keccak256(abi.encodePacked("EIP712Domain")); @constant B: bytes32 = keccak256(bytes("abc")); @external @pure h(): bytes32 { return this.H; } @external @pure d(): bytes32 { return this.D; } @external @pure b(): bytes32 { return this.B; } }`,
+      `contract C { bytes32 constant H = keccak256("Permit(address owner,uint256 value)"); bytes32 constant D = keccak256(abi.encodePacked("EIP712Domain")); bytes32 constant B = keccak256(bytes("abc")); function h() external pure returns(bytes32){ return H; } function d() external pure returns(bytes32){ return D; } function b() external pure returns(bytes32){ return B; } }`,
+      [{ sig: 'h()' }, { sig: 'd()' }, { sig: 'b()' }],
+    );
+  });
+});
