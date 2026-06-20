@@ -665,6 +665,17 @@ export class Analyzer {
       : { kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(elem), elemType: elem };
   }
 
+  /** The constant storage slot a path resolves to, or null if any step is runtime (a mapping key or an
+   *  array index) - i.e. only when every step is a (constant-offset) struct field. */
+  private constStructSlot(baseSlot: number, steps: AccessStep[]): number | null {
+    let slot = baseSlot;
+    for (const s of steps) {
+      if (s.kind !== 'field') return null;
+      slot += s.fieldSlot;
+    }
+    return slot;
+  }
+
   /** Flatten a @public struct getter's return tuple: each value/bytes/string field (in declaration
    *  order, OMITTING array+mapping members) becomes a tuple component read via `prefix`+field steps
    *  from `baseSlot`; an all-static nested struct is recursively inlined (byte-identical to solc,
@@ -698,8 +709,13 @@ export class Analyzer {
     if (isStaticValueType(type)) return { types: [type], values: [{ kind: 'placeRead', type, path }] };
     if (isBytesLike(type)) return { types: [type], values: [{ kind: 'dynPlaceRead', type, path }] };
     if (type.kind === 'struct') {
-      if (!isStaticType(type)) return null; // dynamic nested struct: tuple head/tail != flattened
-      return this.flattenGetterStruct(type, baseSlot, steps, false); // full sub-tuple (includes fixed arrays)
+      if (isStaticType(type)) return this.flattenGetterStruct(type, baseSlot, steps, false); // static: flatten inline (byte-identical)
+      // A DYNAMIC nested struct is a head/tail ABI sub-tuple, NOT a flattened inline run. Emit it as ONE
+      // whole storage-struct component (the recursive return codec encodes it exactly like solc) when the
+      // path resolves to a CONSTANT slot; a runtime-reached (mapping/array) one is still deferred.
+      const cs = this.constStructSlot(baseSlot, steps);
+      if (cs === null) return null;
+      return { types: [type], values: [{ kind: 'structValue', type, baseSlot: cs }] };
     }
     if (type.kind === 'array' && type.length !== undefined) {
       const el = type.element;

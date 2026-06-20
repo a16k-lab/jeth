@@ -40,10 +40,12 @@ Over-acceptances fixed (JETH accepted programs solc rejects):
     getter, NOT `Panic(0x32)`).
   - struct vars, and structs reached via a mapping/array (`mapping(K=>S)`, `S[]`, `Arr<S,N>`,
     `mapping(K=>S[])`): flattened to a tuple - the TOP struct OMITS all array + mapping members; a kept
-    nested struct is a FULL sub-tuple whose FIXED arrays ARE included (recursively, all-static),
-    byte-identical to solc (incl. empty-revert on array OOB, zero-struct for an absent mapping key).
-  - still deferred cleanly (`JETH057`; solc accepts): a getter whose result contains a nested struct
-    with a DYNAMIC (`bytes`/`string`/dynamic-array) member (a dynamic nested ABI sub-tuple).
+    nested struct is a FULL sub-tuple whose FIXED arrays ARE included. An all-static nested struct is
+    inlined; a DYNAMIC nested struct (a `bytes`/`string`/dynamic-array member at depth) of a directly-
+    declared struct var is emitted as a whole storage-struct component (head/tail), at any nesting
+    depth. Byte-identical to solc (incl. empty-revert on array OOB, zero-struct for an absent key).
+  - still deferred cleanly (`JETH057`; solc accepts): ONLY a getter whose struct is reached through a
+    mapping/array AND has a DYNAMIC nested-struct member (a runtime slot, so no constant struct base).
 
 Over-rejections fixed (valid Solidity JETH wrongly rejected):
 - `for (const x of this.structArray)` and a typed `let p: S = this.arr[i]` / `this.m[k]` (storage

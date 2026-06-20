@@ -238,12 +238,38 @@ describe('@public nested-array / fixed-array getters vs Solidity', () => {
   });
 });
 
+describe('@public getters with a nested DYNAMIC struct member vs Solidity', () => {
+  it('struct var with a nested struct that has a string member', async () => {
+    await diff(
+      `@struct class Meta { name: string; ts: u256; } @struct class Item { id: u256; meta: Meta; active: bool; } @contract class C { @public @state item: Item; @external set(): void { this.item.id = 7n; this.item.meta.name = "alice"; this.item.meta.ts = 99n; this.item.active = true; } }`,
+      `struct Meta { string name; uint256 ts; } struct Item { uint256 id; Meta meta; bool active; } contract C { Item public item; function set() external { item.id=7; item.meta.name="alice"; item.meta.ts=99; item.active=true; } }`,
+      [{ sig: 'set()' }, { sig: 'item()' }],
+    );
+  });
+
+  it('nested struct with bytes + a dynamic array member', async () => {
+    await diff(
+      `@struct class I { data: bytes; xs: u256[]; } @struct class O { x: u256; inner: I; y: address; } @contract class C { @public @state o: O; @external set(): void { this.o.x = 1n; this.o.inner.data = msg.data; this.o.inner.xs.push(5n); this.o.inner.xs.push(6n); this.o.y = address(0xabn); } }`,
+      `struct I { bytes data; uint256[] xs; } struct O { uint256 x; I inner; address y; } contract C { O public o; function set() external { o.x=1; o.inner.data=msg.data; o.inner.xs.push(5); o.inner.xs.push(6); o.y=address(0xab); } }`,
+      [{ sig: 'set()' }, { sig: 'o()' }],
+    );
+  });
+
+  it('triple-nested dynamic struct', async () => {
+    await diff(
+      `@struct class D3 { s: string; } @struct class D2 { m: u256; c: D3; } @struct class D1 { n: u256; b: D2; } @contract class C { @public @state a: D1; @external set(): void { this.a.n = 1n; this.a.b.m = 2n; this.a.b.c.s = "deep"; } }`,
+      `struct D3 { string s; } struct D2 { uint256 m; D3 c; } struct D1 { uint256 n; D2 b; } contract C { D1 public a; function set() external { a.n=1; a.b.m=2; a.b.c.s="deep"; } }`,
+      [{ sig: 'set()' }, { sig: 'a()' }],
+    );
+  });
+});
+
 describe('@public getter shapes still deferred reject cleanly (honest gaps vs solc)', () => {
   const cases: { name: string; jeth: string; sol: string }[] = [
-    // A nested struct with a DYNAMIC member is a dynamic ABI sub-tuple (head offset + tail), which a
-    // flattened encoding does not reproduce; still deferred cleanly. (All-static nested structs, and
-    // top-level dynamic struct fields, ARE supported above.)
-    { name: 'nested struct with a dynamic (string) member', jeth: `@struct class I { a: u256; s: string; } @struct class O { x: u256; inner: I; } @contract class C { @public @state o: O; }`, sol: `struct I { uint256 a; string s; } struct O { uint256 x; I inner; } contract C { O public o; }` },
+    // A nested DYNAMIC struct is supported for a directly-declared struct var (emitted as a whole
+    // storage-struct component); only when reached through a mapping/array (a runtime slot, so no
+    // constant struct base) is it still deferred.
+    { name: 'mapping-reached struct whose member is a dynamic nested struct', jeth: `@struct class I { s: string; } @struct class O { x: u256; inner: I; } @contract class C { @public @state m: mapping<u256,O>; }`, sol: `struct I { string s; } struct O { uint256 x; I inner; } contract C { mapping(uint256=>O) public m; }` },
   ];
   for (const c of cases) {
     it(`${c.name}: JETH rejects cleanly, solc accepts`, () => {
