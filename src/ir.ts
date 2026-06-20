@@ -41,6 +41,7 @@ export type GlobalOp =
   | 'caller' // msg.sender
   | 'callvalue' // msg.value (payable-only)
   | 'origin' // tx.origin
+  | 'gasprice' // tx.gasprice
   | 'address' // address(this)
   | 'timestamp'
   | 'number'
@@ -297,7 +298,7 @@ export interface EventIR {
   params: EventParam[]; // source declaration order
   signature: string; // canonical, NO 'indexed'
   topic0: string; // 64-hex (no 0x): keccak256(signature)
-  anonymous: false; // Phase 2 only emits non-anonymous
+  anonymous: boolean; // @anonymous events omit topic0 (LOG carries only the indexed params)
 }
 
 export interface StateVar {

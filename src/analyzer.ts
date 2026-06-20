@@ -75,6 +75,7 @@ const GLOBALS: Record<string, Record<string, { op: GlobalOp; type: JethType; cat
   },
   tx: {
     origin: { op: 'origin', type: ADDRESS, cat: 'env' },
+    gasprice: { op: 'gasprice', type: U256, cat: 'env' },
   },
   block: {
     timestamp: { op: 'timestamp', type: U256, cat: 'env' },
@@ -834,6 +835,9 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
+      if (decoratorNames(p).includes('indexed')) {
+        this.diags.error(p, 'JETH129', `@error parameter '${p.name.text}' cannot be @indexed (only event parameters are indexed)`);
+      }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
       // @error args: static value types, dynamic bytes/string, or a DYNAMIC array (G3, head/tail).
@@ -846,6 +850,10 @@ export class Analyzer {
         continue;
       }
       params.push({ name: p.name.text, type: t });
+    }
+    const strayErr = decoratorNames(member).filter((d) => d !== 'error');
+    if (strayErr.length) {
+      this.diags.error(member, 'JETH130', `@error '${name}' has unsupported decorator(s): ${strayErr.map((d) => '@' + d).join(', ')}`);
     }
     if (this.errorsByName.has(name)) {
       this.diags.error(member, 'JETH128', `duplicate @error declaration '${name}'`);
@@ -916,8 +924,16 @@ export class Analyzer {
       if (indexed) indexedCount++;
       params.push({ name: p.name.text, type: t, indexed });
     }
-    if (indexedCount > 3) {
-      this.diags.error(member, 'JETH143', `@event '${name}' has ${indexedCount} indexed parameters (max 3)`);
+    // @anonymous events emit no topic0, so all 4 topic slots are available for indexed params.
+    const anonymous = decoratorNames(member).includes('anonymous');
+    const maxIndexed = anonymous ? 4 : 3;
+    if (indexedCount > maxIndexed) {
+      this.diags.error(member, 'JETH143', `@event '${name}' has ${indexedCount} indexed parameters (max ${maxIndexed}${anonymous ? ' for an anonymous event' : ''})`);
+    }
+    // Only @event/@anonymous are meaningful on an event declaration (solc rejects other modifiers).
+    const stray = decoratorNames(member).filter((d) => d !== 'event' && d !== 'anonymous');
+    if (stray.length) {
+      this.diags.error(member, 'JETH145', `@event '${name}' has unsupported decorator(s): ${stray.map((d) => '@' + d).join(', ')}`);
     }
     if (this.eventsByName.has(name)) {
       this.diags.error(member, 'JETH144', `duplicate @event declaration '${name}'`);
@@ -925,7 +941,7 @@ export class Analyzer {
     }
     const signature = functionSignature(name, params.map((p) => p.type));
     const topic0 = eventTopic0(signature);
-    const ev: EventIR = { name, params, signature, topic0, anonymous: false };
+    const ev: EventIR = { name, params, signature, topic0, anonymous };
     this.eventsByName.set(name, ev);
     this.events.push(ev);
   }
@@ -1143,6 +1159,10 @@ export class Analyzer {
     } else if (decs.includes('payable')) mutability = 'payable';
     else if (decs.includes('view')) mutability = 'view';
     else if (decs.includes('pure')) mutability = 'pure';
+    // solc: internal/private functions can never be payable (no message context of their own).
+    if (decs.includes('payable') && (decs.includes('internal') || decs.includes('private'))) {
+      this.diags.error(member, 'JETH131', '@payable cannot be combined with @internal/@private (only external/public functions can be payable)');
+    }
 
     // F4: @nonReentrant wraps the external entry in a transient-storage mutex. It must be a
     // state-mutating external/public function: a guard performs a TSTORE, so @read/@view/@pure
@@ -1709,6 +1729,8 @@ export class Analyzer {
     // has no `unchecked` keyword, so the labeled-block form carries the annotation.
     if (ts.isLabeledStatement(node) && node.label.text === 'unchecked' && ts.isBlock(node.statement)) {
       const prev = this.currentUnchecked;
+      // solc forbids nesting `unchecked` blocks ("\"unchecked\" blocks cannot be nested").
+      if (prev) this.diags.error(node, 'JETH288', '`unchecked` blocks cannot be nested');
       this.currentUnchecked = true;
       this.pushScope();
       const body: Stmt[] = [];
@@ -4535,6 +4557,9 @@ export class Analyzer {
       return undefined;
     }
     if (entry.cat === 'value') {
+      // NOTE: solc also allows msg.value in an internal/private function of any mutability, but JETH's
+      // read-only inference (@read/@hidden/no-visibility must stay equivalent) gates on PROVISIONAL
+      // visibility here, so relaxing this would break that invariant. Deferred (minor over-rejection).
       if (this.currentMutability !== 'payable') {
         this.diags.error(node, 'JETH162', "'msg.value' can only be read in a @payable function");
       }
@@ -5540,7 +5565,7 @@ export class Analyzer {
       }
       if (callee === 'keccak256') {
         if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'keccak256(...) takes exactly one argument'); return undefined; }
-        const arg = this.checkExpr(node.arguments[0]!);
+        const arg = this.checkExpr(node.arguments[0]!, this.bytesLiteralExpected(node.arguments[0]!));
         if (!arg) return undefined;
         // solc: keccak256 takes a single `bytes` (a string/bytesN does NOT implicitly convert).
         if (arg.type.kind !== 'bytes') { this.diags.error(node, 'JETH171', `keccak256(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`); return undefined; }
@@ -5548,7 +5573,7 @@ export class Analyzer {
       }
       if (callee === 'sha256' || callee === 'ripemd160') {
         if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', `${callee}(...) takes exactly one argument`); return undefined; }
-        const arg = this.checkExpr(node.arguments[0]!);
+        const arg = this.checkExpr(node.arguments[0]!, this.bytesLiteralExpected(node.arguments[0]!));
         if (!arg) return undefined;
         if (arg.type.kind !== 'bytes') { this.diags.error(node, 'JETH171', `${callee}(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`); return undefined; }
         const isSha = callee === 'sha256';
@@ -5564,6 +5589,13 @@ export class Analyzer {
         if (!a || !b || !m) return undefined;
         for (const [x, i] of [[a, 0], [b, 1], [m, 2]] as const) {
           if (!isInteger(x.type)) { this.diags.error(node.arguments[i]!, 'JETH171', `${callee}(...) requires integer arguments, got ${displayName(x.type)}`); return undefined; }
+        }
+        // solc rejects a compile-time-constant zero modulus ("Arithmetic modulo zero"). A constant
+        // arithmetic modulus is already folded to a literalInt by checkExpr, so this catches `0n` and
+        // folded forms like `1n - 1n` alike. (A runtime-zero modulus still reverts Panic(0x12).)
+        if (m.kind === 'literalInt' && m.value === 0n) {
+          this.diags.error(node.arguments[2]!, 'JETH172', `${callee}(...) modulus is a compile-time zero (arithmetic modulo zero)`);
+          return undefined;
         }
         return { kind: 'modOp', type: U256, op: callee, a: this.coerce(a, U256, node.arguments[0]!), b: this.coerce(b, U256, node.arguments[1]!), m: this.coerce(m, U256, node.arguments[2]!) };
       }
@@ -5723,9 +5755,15 @@ export class Analyzer {
       // For `**` and shifts the right operand is an independent unsigned value; for COMPARISONS the
       // operands take their NATURAL types and unify afterward (so an out-of-range literal is not
       // force-rejected here but widened to a common type by widenLiteralOperand, matching solc).
+      // A LITERAL right operand takes its own mobile type (not forced into left.type) when there is no
+      // outer expected, so `varN OP bigLit` widens to the common type instead of range-failing the
+      // literal against the (narrower) variable type - matching solc (e.g. `u8 a + 1000` computes at u16).
+      const rightLit = this.asIntLiteral(node.right) !== undefined;
       const rightExpected = op === '**' || op === '<<' || op === '>>' || this.isComparison(op)
         ? undefined
-        : expected ?? left.type;
+        : rightLit
+          ? expected
+          : expected ?? left.type;
       const right = this.checkExpr(node.right, rightExpected);
       if (!right) return undefined;
       return this.buildBinary(op, left, right, node);
@@ -6185,6 +6223,12 @@ export class Analyzer {
       return { code: 'JETH049', msg: `this looks like an address but has an invalid EIP-55 checksum (use the checksummed form, or address(...) / a number with leading zeros)` };
     }
     return 'address';
+  }
+
+  /** A string/template literal implicitly converts to `bytes` as a hash/abi argument in solc (a string
+   *  VARIABLE does not). Returns the `bytes` expected-type for such a literal arg, else undefined. */
+  private bytesLiteralExpected(node: ts.Expression): JethType | undefined {
+    return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? { kind: 'bytes' } : undefined;
   }
 
   /** solc accepts only a lowercase `0x` hex-literal prefix; an uppercase `0X` is a parser error. If

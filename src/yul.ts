@@ -1282,11 +1282,14 @@ ${indent(runtime, 6)}
         data.push({ word: this.lowerExpr(arg, ctx, out) });
       }
     });
-    const n = idxVals.length + 1; // non-anonymous: topic0 always present
-    const topics = `0x${ev.topic0}${idxVals.map((t) => `, ${t}`).join('')}`;
+    // anonymous events carry NO topic0 (the signature hash); only the indexed params are topics
+    // (LOG0 when there are none). Non-anonymous events always lead with topic0.
+    const topicArgs = ev.anonymous ? idxVals : [`0x${ev.topic0}`, ...idxVals];
+    const n = topicArgs.length;
+    const topics = topicArgs.length ? `, ${topicArgs.join(', ')}` : '';
     const lines: string[] = [];
     if (data.length === 0) {
-      lines.push(`log${n}(0, 0, ${topics})`);
+      lines.push(`log${n}(0, 0${topics})`);
       return lines;
     }
     // head word count: a value -> 1 word; a STATIC struct/fixed-array -> abiHeadWords inline; a
@@ -1303,7 +1306,7 @@ ${indent(runtime, 6)}
         if ('word' in d) { lines.push(`mstore(${head}, ${d.word})`); hw += 1; }
         else { lines.push(`mcopy(${head}, ${(d as { mp: string }).mp}, ${(d as { words: number }).words * 32})`); hw += (d as { words: number }).words; }
       }
-      lines.push(`log${n}(${m}, ${headSize}, ${topics})`);
+      lines.push(`log${n}(${m}, ${headSize}${topics})`);
       return lines;
     }
     // mixed/dynamic data: ABI head/tail. Total size computed at runtime.
@@ -1342,7 +1345,7 @@ ${indent(runtime, 6)}
         hw += 1;
       }
     }
-    lines.push(`log${n}(${ptr}, ${total}, ${topics})`);
+    lines.push(`log${n}(${ptr}, ${total}${topics})`);
     return lines;
   }
 
@@ -4973,6 +4976,7 @@ ${indent(runtime, 6)}
       case 'caller': return 'caller()';
       case 'callvalue': return 'callvalue()';
       case 'origin': return 'origin()';
+      case 'gasprice': return 'gasprice()';
       case 'address': return 'address()';
       case 'timestamp': return 'timestamp()';
       case 'number': return 'number()';
