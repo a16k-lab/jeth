@@ -2498,6 +2498,33 @@ ${indent(runtime, 6)}
       this.copyArray(innerElem, this.arraySrcLenSlot(value, ctx, out), dstLenSlot, out);
       return;
     }
+    // calldata source (a calldata value-array param: this.a = p): decode + validate each element
+    // (like solc's per-element calldata read) and packed-store into storage. Value elements only.
+    if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray') {
+      if (!isStaticValueType(innerElem)) throw new UnsupportedError('a calldata array of non-value elements is not supported');
+      const b = ctx.cdArrays.get(value.arr.base.name);
+      if (!b) throw new UnsupportedError(`unbound calldata array ${value.arr.base.name}`);
+      const dstData = this.fresh();
+      out.push(`let ${dstData} := ${this.arrayDataSlotHelper()}(${dstLenSlot})`);
+      const packs = arrayElemPacks(innerElem);
+      const slotsFor = (L: string): string => (packs.packed ? `div(add(${L}, ${packs.perSlot - 1}), ${packs.perSlot})` : `mul(${L}, ${storageSlotCount(innerElem)})`);
+      const oldSlots = this.fresh();
+      out.push(`let ${oldSlots} := ${slotsFor(`sload(${dstLenSlot})`)}`);
+      const c = this.fresh();
+      out.push(`for { let ${c} := 0 } lt(${c}, ${oldSlots}) { ${c} := add(${c}, 1) } { sstore(add(${dstData}, ${c}), 0) }`);
+      out.push(`sstore(${dstLenSlot}, ${b.length})`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${b.length}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const w = this.fresh();
+      inner.push(`let ${w} := calldataload(add(${b.offset}, mul(${i}, 32)))`);
+      const guard = this.validateInput(innerElem, w);
+      if (guard) inner.push(guard);
+      this.arrayElemStore(innerElem, dstData, i, w, inner);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+      return;
+    }
     // memory source (a memArray local or an array literal): value elements only.
     if (!isStaticValueType(innerElem)) throw new UnsupportedError('a memory array of non-value elements is not supported');
     const memPtr = this.lowerExpr(value, ctx, out);

@@ -46,10 +46,13 @@ Phase 6 (follow-up): a whole MEMORY or CALLDATA **static struct** assigned to st
 `this.s = calldataParam`, incl. into a mapping value / nested struct field / struct-array element) now
 transcodes the ABI-unpacked image into packed storage (byte-identical to solc, incl. packed raw slots).
 
+A whole CALLDATA value-element dynamic-array param assigned to storage (`this.a = p`, `p: u256[]`)
+now decodes + validates each element (solc-matching dirty-element revert) and packed-stores it
+(byte-identical incl. packed raw slots, overwrite-clearing, and dirty narrow/bool/int element reverts).
+
 Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encode*`, `sha256`/`ripemd160`,
-`bytes`/`string` mapping keys, whole calldata dynamic-array param -> storage assignment, a
-dynamic-field struct from a memory/calldata source -> storage, struct / indexed-array event params,
-`@constant` `address`/`bytesN`.
+`bytes`/`string` mapping keys, a dynamic-field struct from a memory/calldata source -> storage,
+struct / indexed-array event params, `@constant` `address`/`bytesN`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage
