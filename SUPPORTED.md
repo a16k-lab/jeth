@@ -42,10 +42,14 @@ Over-rejections fixed (valid Solidity JETH wrongly rejected):
 Builtins added: `assert(cond)` (-> `Panic(0x01)`), `keccak256(bytes|string)`, `gasleft()`,
 `blockhash(n)`, `<address>.balance`, `address(this).balance`, `block.difficulty` (= prevrandao).
 
+Phase 6 (follow-up): a whole MEMORY or CALLDATA **static struct** assigned to storage (`this.s = m`,
+`this.s = calldataParam`, incl. into a mapping value / nested struct field / struct-array element) now
+transcodes the ABI-unpacked image into packed storage (byte-identical to solc, incl. packed raw slots).
+
 Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encode*`, `sha256`/`ripemd160`,
-`bytes`/`string` mapping keys, whole memory/calldata struct -> storage assignment, whole calldata
-dynamic-array param -> storage assignment, struct / indexed-array event params, `@constant`
-`address`/`bytesN`.
+`bytes`/`string` mapping keys, whole calldata dynamic-array param -> storage assignment, a
+dynamic-field struct from a memory/calldata source -> storage, struct / indexed-array event params,
+`@constant` `address`/`bytesN`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage

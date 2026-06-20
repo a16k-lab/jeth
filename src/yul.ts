@@ -782,14 +782,9 @@ ${indent(runtime, 6)}
       }
       case 'assign': {
         if (s.target.kind === 'state' && s.target.type.kind === 'struct') {
-          // whole-struct write: either a constructed value (structNew) or a
-          // storage-to-storage copy from another struct lvalue (this.d = this.e /
-          // this.d = this.m[k]).
-          if (s.value.kind === 'structNew') {
-            this.writeStruct(s.value.fields, s.value.args, String(s.target.slot), ctx, out);
-          } else {
-            this.copyStruct(s.target.type, this.structSrcSlot(s.value, ctx, out), String(s.target.slot), out);
-          }
+          // whole-struct write: a constructed value (structNew), a memory/calldata struct
+          // (this.d = m / this.d = calldataParam), or a storage-to-storage copy (this.d = this.e).
+          this.storeStructTo(s.target.type, s.value, String(s.target.slot), ctx, out);
           break;
         }
         if (s.target.kind === 'mapping' && s.target.type.kind === 'struct') {
@@ -797,11 +792,7 @@ ${indent(runtime, 6)}
           // keccak(key.base) mapping slot (writeStruct/copyStruct clear dynamic-field
           // tails per field, byte-identical to solc).
           const dst = this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out);
-          if (s.value.kind === 'structNew') {
-            this.writeStruct(s.value.fields, s.value.args, dst, ctx, out);
-          } else {
-            this.copyStruct(s.target.type, this.structSrcSlot(s.value, ctx, out), dst, out);
-          }
+          this.storeStructTo(s.target.type, s.value, dst, ctx, out);
           break;
         }
         // whole DYNAMIC-array assignment into storage: this.a = this.b (storage source) or
@@ -837,11 +828,7 @@ ${indent(runtime, 6)}
           // this.o.inner = <struct> (whole nested-struct field): fold the path to the
           // field slot, then writeStruct (literal) / copyStruct (storage copy).
           const p = this.lowerPlace(s.target.path, ctx, out);
-          if (s.value.kind === 'structNew') {
-            this.writeStruct(s.value.fields, s.value.args, p.slot, ctx, out);
-          } else {
-            this.copyStruct(s.target.type, this.structSrcSlot(s.value, ctx, out), p.slot, out);
-          }
+          this.storeStructTo(s.target.type, s.value, p.slot, ctx, out);
           break;
         }
         if (s.target.kind === 'place') {
@@ -919,11 +906,7 @@ ${indent(runtime, 6)}
           // bounds-checked element slot (writeStruct/copyStruct clear dynamic-field
           // tails per field, byte-identical to solc).
           const elemSlot = this.structArrayElemSlot(s.target.arr, s.target.index, ctx, out);
-          if (s.value.kind === 'structNew') {
-            this.writeStruct(s.value.fields, s.value.args, elemSlot, ctx, out);
-          } else {
-            this.copyStruct(s.target.type, this.structSrcSlot(s.value, ctx, out), elemSlot, out);
-          }
+          this.storeStructTo(s.target.type, s.value, elemSlot, ctx, out);
           break;
         }
         if (s.target.kind === 'arrayElem') {
@@ -2954,6 +2937,36 @@ ${indent(runtime, 6)}
    *  copy): a state-var struct (structValue), a whole mapping-value struct
    *  (mapStorageValue at the runtime keccak(key.base) slot), or a whole struct array
    *  element (structArrayElem at data + i*slotCount). */
+  /** Write a whole struct VALUE into a storage slot. Dispatches by source: a constructor
+   *  (structNew) is written field-by-field; a MEMORY / CALLDATA struct (memAggregate from a
+   *  `let m: S = ...` local, or a calldata struct param) is transcoded from its ABI-unpacked image
+   *  into packed storage; a STORAGE struct lvalue is a storage-to-storage deep copy. */
+  private storeStructTo(type: JethType & { kind: 'struct' }, value: Expr, dst: string, ctx: LowerCtx, out: string[]): void {
+    if (value.kind === 'structNew') { this.writeStruct(value.fields, value.args, dst, ctx, out); return; }
+    if (value.kind === 'memAggregate' || value.kind === 'cdAggregateValue') {
+      // a dynamic-field struct (bytes/string field) from a memory/calldata source needs the tails
+      // stored too - a later step; keep it a clean rejection rather than a silent miscompile.
+      if (!isStaticType(type)) throw new UnsupportedError(`cannot copy a dynamic-field struct from '${value.kind}'`);
+      this.storeStaticAggFromMem(type, this.aggToMemPtr(value, ctx, out), dst, out);
+      return;
+    }
+    this.copyStruct(type, this.structSrcSlot(value, ctx, out), dst, out);
+  }
+
+  /** Copy a STATIC aggregate (struct / fixed array of static elements) from an ABI-unpacked memory
+   *  image (one word per leaf - the memAggregate / calldata-decoded layout) into PACKED storage.
+   *  The inverse of abiEncFromStorage's static branch; storeState read-modify-writes each packed
+   *  leaf, so leaves sharing a slot compose correctly and slot padding stays zero. */
+  private storeStaticAggFromMem(t: JethType, memPtr: string, slot: string, out: string[]): void {
+    const sConst = /^\d+$/.test(slot);
+    for (const leaf of structStorageLeaves(t)) {
+      const ls = leaf.storageSlot === 0 ? slot : sConst ? String(Number(slot) + leaf.storageSlot) : `add(${slot}, ${leaf.storageSlot})`;
+      const w = this.fresh();
+      out.push(`let ${w} := mload(${leaf.abiWord === 0 ? memPtr : `add(${memPtr}, ${leaf.abiWord * 32})`})`);
+      for (const l of this.storeState(leaf.type, ls, leaf.storageOffset, w)) out.push(l);
+    }
+  }
+
   private structSrcSlot(value: Expr, ctx: LowerCtx, out: string[]): string {
     if (value.kind === 'structValue') return String(value.baseSlot);
     if (value.kind === 'mapStorageValue') return this.mappingSlot(value.baseSlot, value.keys, ctx, out);
