@@ -5303,8 +5303,17 @@ export class Analyzer {
         if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'keccak256(...) takes exactly one argument'); return undefined; }
         const arg = this.checkExpr(node.arguments[0]!);
         if (!arg) return undefined;
-        if (!isBytesLike(arg.type)) { this.diags.error(node, 'JETH171', `keccak256(...) requires a bytes/string argument, got ${displayName(arg.type)}`); return undefined; }
+        // solc: keccak256 takes a single `bytes` (a string/bytesN does NOT implicitly convert).
+        if (arg.type.kind !== 'bytes') { this.diags.error(node, 'JETH171', `keccak256(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`); return undefined; }
         return { kind: 'keccak', type: { kind: 'bytesN', size: 32 }, arg };
+      }
+      if (callee === 'sha256' || callee === 'ripemd160') {
+        if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', `${callee}(...) takes exactly one argument`); return undefined; }
+        const arg = this.checkExpr(node.arguments[0]!);
+        if (!arg) return undefined;
+        if (arg.type.kind !== 'bytes') { this.diags.error(node, 'JETH171', `${callee}(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`); return undefined; }
+        const isSha = callee === 'sha256';
+        return { kind: 'precompileHash', type: { kind: 'bytesN', size: isSha ? 32 : 20 }, arg, addr: isSha ? 2 : 3, leftShift: isSha ? 0 : 96 };
       }
       if (callee === 'blockhash') {
         if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'blockhash(...) takes exactly one argument'); return undefined; }

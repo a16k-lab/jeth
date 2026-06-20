@@ -61,9 +61,14 @@ hashing (`keccak256(abi.encode...)`), returning, and storing the result, incl. m
 ints, dynamic args, nesting, and empty. Arrays/structs as args, and `abi.encodeWithSelector/Signature`,
 remain a later step.
 
+`sha256(bytes)` -> `bytes32` and `ripemd160(bytes)` -> `bytes20` (precompiles 0x02/0x03) are
+supported and byte-identical to solc (incl. empty/short/long). `keccak256`/`sha256`/`ripemd160` take a
+single dynamic `bytes` (a `string`/`bytesN` is rejected, matching solc; hash a string via
+`keccak256(abi.encodePacked(s))`).
+
 Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encodeWithSelector/Signature`,
-`abi.encode*` of array/struct args, `sha256`/`ripemd160`, a dynamic-field struct from a memory/calldata
-source -> storage, struct / indexed-array event params, `@constant` `address`/`bytesN`.
+`abi.encode*` of array/struct args, a dynamic-field struct from a memory/calldata source -> storage,
+struct / indexed-array event params, `@constant` `address`/`bytesN`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage

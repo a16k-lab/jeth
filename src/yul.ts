@@ -1494,6 +1494,16 @@ ${indent(runtime, 6)}
         out.push(`let ${r} := keccak256(add(${mp}, 0x20), ${len})`);
         return r;
       }
+      case 'precompileHash': {
+        // sha256 (0x02) / ripemd160 (0x03): staticcall the precompile over the CONTENT bytes,
+        // output 32 bytes to scratch. ripemd160's 20-byte result is right-aligned, so left-shift
+        // it 96 bits to the bytesN (left-aligned) register form (matches solc).
+        const { mp, len } = this.toMemory(this.lowerDynamic(e.arg, ctx, out), out);
+        const r = this.fresh();
+        out.push(`if iszero(staticcall(gas(), ${e.addr}, add(${mp}, 0x20), ${len}, 0x00, 0x20)) { revert(0, 0) }`);
+        out.push(`let ${r} := ${e.leftShift ? `shl(${e.leftShift}, mload(0x00))` : 'mload(0x00)'}`);
+        return r;
+      }
       case 'blockhash':
         return `blockhash(${this.lowerExpr(e.arg, ctx, out)})`;
       case 'balance':
