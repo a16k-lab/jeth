@@ -3988,18 +3988,31 @@ ${indent(runtime, 6)}
     return packed ? this.buildAbiEncodePacked(args, ctx, out) : this.buildAbiEncodeStd(args, ctx, out);
   }
 
-  /** Standard ABI encoding (head/tail, 32-byte aligned) as a bytes value: each value -> a padded
-   *  word; each bytes/string -> a head offset + [len][padded data] tail. Mirrors the (tested)
-   *  event-data tuple encoder, with a length prefix and offsets relative to the data start. */
+  /** Standard ABI encoding (head/tail, 32-byte aligned) as a bytes value. A value -> a padded word;
+   *  a STATIC struct/fixed-array -> abiHeadWords leaf words INLINE (no offset); a bytes/string -> a
+   *  head offset + [len][padded data] tail; a DYNAMIC value-array -> a head offset + [len][elems] tail.
+   *  The head uses a cumulative word offset (a static aggregate spans multiple inline head words). */
   private buildAbiEncodeStd(args: Expr[], ctx: LowerCtx, out: string[]): string {
-    type Part = { word: string } | { mp: string; len: string };
-    const parts: Part[] = args.map((a) =>
-      isBytesLike(a.type) ? this.toMemory(this.lowerDynamic(a, ctx, out), out) : { word: this.lowerExpr(a, ctx, out) },
-    );
-    const headSize = 32 * parts.length;
+    type Part =
+      | { word: string }
+      | { inline: true; mp: string; words: number }
+      | { mp: string; len: string }
+      | { mp: string; size: string };
+    const parts: Part[] = args.map((a) => {
+      const t = a.type;
+      if (isBytesLike(t)) return this.toMemory(this.lowerDynamic(a, ctx, out), out);
+      if (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) return { inline: true, mp: this.aggToMemPtr(a, ctx, out), words: abiHeadWords(t) };
+      if (t.kind === 'array') return this.materializeArrayArg(a, ctx, out); // dynamic value array -> {mp, size} tail
+      return { word: this.lowerExpr(a, ctx, out) };
+    });
+    const headWords = parts.reduce((acc, p) => acc + ('inline' in p ? p.words : 1), 0);
+    const headSize = 32 * headWords;
     const total = this.fresh();
     out.push(`let ${total} := ${headSize}`);
-    for (const p of parts) if ('len' in p) out.push(`${total} := add(${total}, add(0x20, and(add(${p.len}, 0x1f), not(0x1f))))`);
+    for (const p of parts) {
+      if ('len' in p) out.push(`${total} := add(${total}, add(0x20, and(add(${p.len}, 0x1f), not(0x1f))))`);
+      else if ('size' in p) out.push(`${total} := add(${total}, ${p.size})`);
+    }
     const ptr = this.fresh();
     out.push(`let ${ptr} := ${this.alloc()}(add(0x20, ${total}))`);
     out.push(`mstore(${ptr}, ${total})`);
@@ -4007,18 +4020,30 @@ ${indent(runtime, 6)}
     out.push(`let ${data} := add(${ptr}, 0x20)`);
     const cursor = this.fresh();
     out.push(`let ${cursor} := add(${data}, ${headSize})`);
-    parts.forEach((p, j) => {
-      const head = j === 0 ? data : `add(${data}, ${32 * j})`;
+    let hw = 0;
+    for (const p of parts) {
+      const head = hw === 0 ? data : `add(${data}, ${32 * hw})`;
       if ('word' in p) {
         out.push(`mstore(${head}, ${p.word})`);
-      } else {
+        hw += 1;
+      } else if ('inline' in p) {
+        out.push(`mcopy(${head}, ${p.mp}, ${p.words * 32})`);
+        hw += p.words;
+      } else if ('len' in p) {
         const pad = `and(add(${p.len}, 0x1f), not(0x1f))`;
         out.push(`mstore(${head}, sub(${cursor}, ${data}))`);
         out.push(`mstore(${cursor}, ${p.len})`);
         out.push(`mcopy(add(${cursor}, 0x20), add(${p.mp}, 0x20), ${pad})`);
         out.push(`${cursor} := add(${cursor}, add(0x20, ${pad}))`);
+        hw += 1;
+      } else {
+        // dynamic value-array tail: [len][elems] blob, copied verbatim, offset in the head.
+        out.push(`mstore(${head}, sub(${cursor}, ${data}))`);
+        out.push(`mcopy(${cursor}, ${p.mp}, ${p.size})`);
+        out.push(`${cursor} := add(${cursor}, ${p.size})`);
+        hw += 1;
       }
-    });
+    }
     return ptr;
   }
 
