@@ -3296,7 +3296,9 @@ export class Analyzer {
       // string[] / bytes[] element write: the element is a storage bytes/string
       // header at keccak(lenSlot)+i (strArrayElem); the RHS is a dynamic value.
       if (isBytesLike(arr.elem)) {
-        if (arr.base.kind !== 'stateArray' && arr.base.kind !== 'mapArray' && arr.base.kind !== 'fixedArray') {
+        // placeArray covers a struct-field / nested dynamic-element array (this.d.xs[i], this.dd[i][j]);
+        // the element slot resolves at keccak(lenSlot)+i exactly like the state/fixed/mapping bases.
+        if (arr.base.kind !== 'stateArray' && arr.base.kind !== 'mapArray' && arr.base.kind !== 'fixedArray' && arr.base.kind !== 'placeArray') {
           this.diags.error(node, 'JETH217', 'this string[]/bytes[] element write is not supported yet');
           return undefined;
         }
@@ -5138,6 +5140,19 @@ export class Analyzer {
           if (!index) return undefined;
           this.currentReadsState = true;
           return { kind: 'structArrayElem', type: sa.elem, arr: sa, index: this.coerce(index, U256, node.argumentExpression) };
+        }
+      }
+      // A string[]/bytes[] element of a STRUCT-FIELD / nested dynamic-element array (this.d.xs[i],
+      // this.s.inner.xs[i]): resolveArrayExpr folds the base to a placeArray; the element is a
+      // dynamic string/bytes at keccak(lenSlot)+i (strArrayElem). State/fixed/mapping bases are
+      // handled elsewhere (baseDynType block / mapArr); this covers the placeArray base only.
+      if (node.argumentExpression) {
+        const da = this.resolveArrayExpr(node.expression);
+        if (da && isBytesLike(da.elem) && da.base.kind === 'placeArray') {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          this.currentReadsState = true;
+          return { kind: 'strArrayElem', type: da.elem, arr: da, index: this.coerce(index, U256, node.argumentExpression) };
         }
       }
       const bt = this.baseDynType(node.expression);

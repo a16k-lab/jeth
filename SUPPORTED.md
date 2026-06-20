@@ -92,10 +92,10 @@ mixed value/struct heads, struct + a dynamic param, nested, packed, and calldata
 A struct with a dynamic value-element ARRAY field (alongside value / bytes/string fields), built in a
 memory local, now stores to storage byte-identically (length + keccak-data slots, overwrite-clearing).
 
-Remaining (clean rejections, NOT miscompiles): a struct/array field that is itself a nested-dynamic
-array (`string[]`/`T[][]` field), a nested dynamic struct, or a fixed-array-of-dynamic - i.e. the
-recursive aggregate codec is complete for value + bytes/string + dynamic value-array fields, and these
-deeper field shapes are the remaining frontier. The practical language surface is complete and solc-parity.
+The recursive aggregate codec is complete and solc-parity: a struct with a `string[]`/`T[][]`/dynamic
+value-array field, a nested dynamic struct, `DynStruct[]`, `Arr<DynStruct,N>`, and element read/write of
+a dynamic-element array reached via a struct field or nested array (`this.d.xs[i]`, `this.dd[i][j]`,
+`this.o.inner.xs[i]`) all compile byte-identical to solc. The practical language surface is complete.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage
