@@ -110,8 +110,19 @@ interface RawFunction {
   inferExposed?: boolean; // no visibility decorator -> @public if internally called, else @external
   inferHidden?: boolean; // @hidden -> @internal (not in the ABI; internal vs private is codegen-identical pre-inheritance)
   nonReentrant?: boolean; // F4: @nonReentrant -> transient-storage reentrancy mutex on the external entry
+  modifiers?: { name: string; argNodes: ts.Expression[]; site: ts.Node }[]; // Phase 5: applied @modifier decorators, in source order (leftmost = outermost)
   key?: string; // unique identity for the call graph: the bare name when unique, `name__ovN` when
   // overloaded (a generic specialization sets name=key=mangled). Unset => `name` (see fkey()).
+}
+
+// Phase 5: a user-defined @modifier (Solidity-style). Increment 1 supports a PRE-ONLY modifier:
+// a single `_;` placeholder in tail position (e.g. `require(cond); _;`), so the wrapped body is
+// just [pre-code, function body] - no post-placeholder code, hence no buffered-return machinery.
+interface RawModifier {
+  name: string;
+  node: ts.MethodDeclaration;
+  params: { name: string; type: JethType }[];
+  preStmts: ts.Statement[]; // the statements before the placeholder (the pre-condition guard)
 }
 
 export class Analyzer {
@@ -127,6 +138,9 @@ export class Analyzer {
   private immutablesByName = new Map<string, { name: string; type: JethType }>();
   private immutableOrder: string[] = [];
   private currentInConstructor = false;
+  // Phase 5: user-defined @modifier declarations (name -> RawModifier). A modifier is never a
+  // standalone function (not callable, not in the ABI); it is inlined around each function it decorates.
+  private modifiersByName = new Map<string, RawModifier>();
   // @struct declarations (name -> resolved struct type), collected before contracts
   private structsByName = new Map<string, JethType>();
   // contract-level custom error and event tables (collected before function bodies)
@@ -388,6 +402,7 @@ export class Analyzer {
         const decs = decoratorNames(member);
         if (decs.includes('error')) this.collectErrorDecl(member);
         else if (decs.includes('event')) this.collectEvent(member);
+        else if (decs.includes('modifier')) this.collectModifier(member);
         else if (member.typeParameters && member.typeParameters.length > 0) {
           // F6: a generic function `f<T>(...)`. Do NOT collect it as a normal function (that would
           // try to resolve the bare type param T and fail with JETH013); register it as a template
@@ -858,10 +873,19 @@ export class Analyzer {
     }
     const decs = decoratorNames(member);
 
-    // @error / @event members are intercepted earlier; @modifier is Phase 5.
-    if (decs.includes('modifier')) {
-      this.diags.error(member, 'JETH051', '@modifier is not supported until Phase 5');
-      return undefined;
+    // Phase 5: capture APPLIED @modifier decorators (e.g. @onlyOwner / @minVal(amount)) in source
+    // order (leftmost = outermost). A decorator whose name is not a built-in function decorator is a
+    // candidate modifier application; it is resolved against modifiersByName in checkFunction (an
+    // unknown name -> JETH329). The decorator's call-form arguments are captured for inlining.
+    const BUILTIN_FN_DECORATORS = new Set(['external', 'public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'nonReentrant', 'modifier', 'error', 'event']);
+    const appliedModifiers: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
+    for (const d of ts.getDecorators(member) ?? []) {
+      const e = d.expression;
+      if (ts.isIdentifier(e) && !BUILTIN_FN_DECORATORS.has(e.text)) {
+        appliedModifiers.push({ name: e.text, argNodes: [], site: d });
+      } else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && !BUILTIN_FN_DECORATORS.has(e.expression.text)) {
+        appliedModifiers.push({ name: e.expression.text, argNodes: [...e.arguments], site: d });
+      }
     }
 
     const visibilities = VISIBILITY_DECORATORS.filter((v) => decs.includes(v));
@@ -972,9 +996,9 @@ export class Analyzer {
         returnTypes.push(t);
       }
       if (ok && returnTypes.length >= 2) {
-        return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType: VOID, returnTypes };
+        return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID, returnTypes };
       }
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID };
     }
 
     const returnType = member.type ? resolveType(member.type, this.diags, this.structsByName) ?? VOID : VOID;
@@ -984,10 +1008,10 @@ export class Analyzer {
       this.diags.error(member.type ?? member, 'JETH225', 'returning a struct with this shape is not supported yet (supported: static value/nested-static-struct fields, and bytes/string or nested-struct dynamic fields)');
     }
     if (!this.gateArrayType(returnType, member.type ?? member)) {
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID };
     }
 
-    return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, params, defaults, returnType };
+    return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType };
   }
 
   // ---- F6: compile-time generics (monomorphization) ------------------------
@@ -1240,6 +1264,12 @@ export class Analyzer {
       }
       this.popScope();
     }
+
+    // Phase 5: inline applied @modifiers around the body. Done while the function PARAMETER scope is
+    // still active so a modifier ARGUMENT can reference the function's parameters (its effects also
+    // accumulate into this function's effect flags, feeding the purity fixpoint). The modifier BODY
+    // is checked in a fresh scope (it sees only its own params + state, not the function's locals).
+    const finalBody = rf.modifiers && rf.modifiers.length ? this.wrapModifiers(rf, body) : body;
     this.popScope();
 
     // Mutability enforcement (directive §2.7 STATICCALL view semantics) is performed AFTER
@@ -1258,9 +1288,124 @@ export class Analyzer {
       returnTypes: rf.returnTypes,
       signature,
       selector,
-      body,
+      body: finalBody,
       nonReentrant: rf.nonReentrant,
     };
+  }
+
+  /** Phase 5: fold applied @modifiers around the function body (pre-only: each modifier contributes
+   *  pre-condition code that runs before the body). The leftmost decorator is OUTERMOST, so wrap
+   *  innermost-first (reverse source order). */
+  private wrapModifiers(rf: RawFunction, bodyIR: Stmt[]): Stmt[] {
+    if (rf.returnTypes) {
+      this.diags.error(rf.node, 'JETH323', 'a @modifier on a multi-value-return function is not supported yet');
+      return bodyIR;
+    }
+    let inner = bodyIR;
+    for (const app of [...rf.modifiers!].reverse()) inner = this.inlineModifier(app, inner);
+    return inner;
+  }
+
+  /** Inline one PRE-ONLY modifier application around `inner`: materialize its args (in the function
+   *  param scope), then splice [argDecls, pre-code, inner] inside a block (for lexical scoping). The
+   *  modifier's pre-code is checked in a FRESH scope so it cannot see the function's params/locals. */
+  private inlineModifier(app: { name: string; argNodes: ts.Expression[]; site: ts.Node }, inner: Stmt[]): Stmt[] {
+    const mod = this.modifiersByName.get(app.name);
+    if (!mod) {
+      this.diags.error(app.site, 'JETH329', `unknown modifier '@${app.name}' (no @modifier with that name is declared)`);
+      return inner;
+    }
+    if (app.argNodes.length !== mod.params.length) {
+      this.diags.error(app.site, 'JETH329', `modifier '@${mod.name}' expects ${mod.params.length} argument(s), but got ${app.argNodes.length}`);
+      return inner;
+    }
+    // 1. Materialize each arg ONCE (solc evaluates a modifier arg exactly once) in the function param
+    //    scope, bound to the modifier's parameter name. The localDecl init is evaluated before the
+    //    name is (re)bound, so an arg referencing a same-named function param resolves correctly.
+    const argDecls: Stmt[] = [];
+    for (let i = 0; i < mod.params.length; i++) {
+      const a = this.checkExpr(app.argNodes[i]!, mod.params[i]!.type);
+      if (!a) continue;
+      const coerced = this.coerce(a, mod.params[i]!.type, app.argNodes[i]!);
+      argDecls.push({ kind: 'localDecl', name: mod.params[i]!.name, type: mod.params[i]!.type, init: coerced });
+    }
+    // 2. Check the modifier pre-code in a FRESH scope (only its own params + contract state visible).
+    const savedScopes = this.scopes;
+    this.scopes = [new Map()];
+    this.pushScope();
+    for (const p of mod.params) this.declareLocal(p.name, p.type);
+    const pre: Stmt[] = [];
+    for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
+    this.popScope();
+    this.scopes = savedScopes;
+    // 3. A block gives the modifier params/locals their own lexical scope (so two applications, or a
+    //    modifier local shadowing a body local, never collide in codegen).
+    return [{ kind: 'block', body: [...argDecls, ...pre, ...inner] }];
+  }
+
+  /** Phase 5: collect a user-defined @modifier. Increment 1 supports a PRE-ONLY modifier: a single
+   *  `_;` placeholder in TAIL position (the last statement). The pre-code is the guard that runs
+   *  before the wrapped function body; post-placeholder code and a conditional placeholder are gated. */
+  private collectModifier(member: ts.MethodDeclaration): void {
+    if (!ts.isIdentifier(member.name)) { this.diags.error(member, 'JETH049', 'modifier name must be a plain identifier'); return; }
+    const name = member.name.text;
+    if (this.modifiersByName.has(name)) { this.diags.error(member, 'JETH046', `duplicate @modifier '${name}'`); return; }
+    const decs = decoratorNames(member);
+    const bad = ['external', 'public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'nonReentrant'].find((d) => decs.includes(d));
+    if (bad) this.diags.error(member, 'JETH330', `a @modifier cannot also be @${bad} (a modifier has no visibility or mutability)`);
+    if (member.type) this.diags.error(member.type, 'JETH330', 'a @modifier cannot declare a return type');
+    if (member.typeParameters && member.typeParameters.length > 0) this.diags.error(member, 'JETH327', 'a generic @modifier is not supported yet');
+
+    const params: { name: string; type: JethType }[] = [];
+    for (const p of member.parameters) {
+      if (!ts.isIdentifier(p.name)) { this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier'); continue; }
+      const t = resolveType(p.type, this.diags, this.structsByName);
+      if (!t) continue;
+      if (p.initializer) this.diags.error(p, 'JETH304', `a @modifier parameter ('${p.name.text}') cannot have a default value`);
+      if (!isStaticValueType(t)) { this.diags.error(p, 'JETH322', `a @modifier parameter ('${p.name.text}') of type ${displayName(t)} is not supported yet (value types only)`); continue; }
+      params.push({ name: p.name.text, type: t });
+    }
+
+    if (!member.body) { this.diags.error(member, 'JETH328', `a @modifier must have a body containing the placeholder '_'`); return; }
+    const stmts = member.body.statements;
+    const placeholders = this.findPlaceholders(member.body);
+    if (placeholders.length === 0) { this.diags.error(member, 'JETH328', `a @modifier body must contain the placeholder '_' exactly once`); return; }
+    if (placeholders.length > 1) { this.diags.error(placeholders[1]!, 'JETH320', `a @modifier with more than one '_' placeholder (the body would run multiple times) is not supported yet`); return; }
+    // PRE-ONLY: the placeholder must be the LAST statement (no post-placeholder code, not inside a
+    // conditional/loop). Otherwise gate (a later increment buffers the return for post-code).
+    const last = stmts[stmts.length - 1];
+    if (!last || !this.isPlaceholderStmt(last)) {
+      this.diags.error(placeholders[0]!, 'JETH321', `a @modifier's '_' placeholder must be the LAST statement of the body (pre-condition guards only); post-placeholder code or a placeholder inside a conditional/loop is not supported yet`);
+      return;
+    }
+    const preStmts = stmts.slice(0, stmts.length - 1);
+    const returns = this.findReturns(preStmts);
+    for (const r of returns) {
+      if (r.expression) this.diags.error(r, 'JETH324', `a @modifier cannot 'return' a value`);
+      else this.diags.error(r, 'JETH325', `a @modifier with a 'return;' statement is not supported yet (it conditionally skips the wrapped body)`);
+    }
+    if (returns.length > 0) return; // don't register a modifier with a return (avoids a cascade on inlining)
+    this.modifiersByName.set(name, { name, node: member, params, preStmts });
+  }
+
+  private isPlaceholderStmt(s: ts.Statement): boolean {
+    return ts.isExpressionStatement(s) && ts.isIdentifier(s.expression) && s.expression.text === '_';
+  }
+  /** Find every `_;` placeholder ExpressionStatement anywhere in a node (recursively). */
+  private findPlaceholders(node: ts.Node): ts.Node[] {
+    const out: ts.Node[] = [];
+    const walk = (n: ts.Node) => {
+      if (ts.isExpressionStatement(n) && ts.isIdentifier(n.expression) && n.expression.text === '_') out.push(n);
+      ts.forEachChild(n, walk);
+    };
+    ts.forEachChild(node, walk);
+    return out;
+  }
+  private findReturns(stmts: ts.Statement[]): ts.ReturnStatement[] {
+    const out: ts.ReturnStatement[] = [];
+    const walk = (n: ts.Node) => { if (ts.isReturnStatement(n)) out.push(n); ts.forEachChild(n, walk); };
+    for (const s of stmts) walk(s);
+    return out;
   }
 
   // ---- statements ----------------------------------------------------------
