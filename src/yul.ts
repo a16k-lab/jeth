@@ -129,12 +129,21 @@ ${indent(runtime, 6)}
     // copying out + returning the runtime code. The ctor's helper definitions are appended at the
     // end of THIS creation block (a separate Yul scope from the runtime object).
     let ctorHelpers: string[] = [];
+    const staged = new Map<string, string>(); // @immutable name -> the Yul var holding its baked value
     if (contract.ctor) {
       const c = this.emitConstructor(contract);
       lines.push(...c.lines);
       ctorHelpers = c.helpers;
+      for (const [k, v] of c.staged) staged.set(k, v);
     }
     lines.push(`datacopy(0, dataoffset("${contract.name}_runtime"), datasize("${contract.name}_runtime"))`);
+    // Bake every @immutable into the (in-memory copy of the) runtime code via setimmutable. The
+    // value is the staged shadow when the ctor assigned it, else 0 (solc: a never-assigned immutable
+    // reads as 0). setimmutable requires a matching loadimmutable in the runtime, which only exists
+    // when the immutable is actually read - but an unread immutable's setimmutable is a harmless no-op.
+    for (const im of contract.immutables) {
+      lines.push(`setimmutable(0, "${im.name}", ${staged.get(im.name) ?? '0'})`);
+    }
     lines.push(`return(0, datasize("${contract.name}_runtime"))`);
     for (const def of ctorHelpers) {
       lines.push('');
@@ -148,12 +157,29 @@ ${indent(runtime, 6)}
    *  body, then call it. Returns the inline creation lines and the function/helper definitions to
    *  place at the end of the creation block. The body runs inside a Yul function so a `return;`
    *  becomes `leave` (exit the ctor, then deploy) rather than a raw EVM return (empty code). */
-  private emitConstructor(contract: ContractIR): { lines: string[]; helpers: string[] } {
+  private emitConstructor(contract: ContractIR): { lines: string[]; helpers: string[]; staged: Map<string, string> } {
     const ctor = contract.ctor!;
     this.nameCounter = 0;
     const lines: string[] = [];
     // Non-payable constructor: reject any value sent at deploy (solc emits this guard).
     if (!ctor.payable) lines.push('if callvalue() { revert(0, 0) }');
+
+    // Each @immutable is a RETURN VARIABLE of jeth_constructor: zero-initialized (matching a
+    // never-assigned immutable), last-write-wins, and readable after the function returns (`leave`).
+    // The body writes/reads them via ctx.immStaged (the inner ret-var names); the OUTER capture vars
+    // (distinct names, to avoid Yul shadowing) feed setimmutable in emitCreation.
+    const immStaged = new Map<string, string>(); // immutable name -> inner ret var
+    const innerRets: string[] = [];
+    const outerRets: string[] = [];
+    const staged = new Map<string, string>(); // immutable name -> outer capture var
+    for (const im of contract.immutables) {
+      const inner = this.freshLocal(`imm_${im.name}`);
+      const outer = this.fresh();
+      immStaged.set(im.name, inner);
+      innerRets.push(inner);
+      outerRets.push(outer);
+      staged.set(im.name, outer);
+    }
 
     const ctx: LowerCtx = {
       scopes: [new Map()],
@@ -164,6 +190,7 @@ ${indent(runtime, 6)}
       cdDynStructs: new Map(),
       cdParamHead: new Map(),
       fnMode: { retVar: null }, // a bare `return;` in the ctor body -> leave
+      immStaged,
     };
 
     // Decode the constructor args (ABI-encoded, appended after the init code). They begin at code
@@ -206,10 +233,15 @@ ${indent(runtime, 6)}
     const helperDefs = [...this.helpers.values()];
     this.helpers = savedHelpers;
 
-    const sig = `function jeth_constructor(${formals.join(', ')})`;
+    const retDecl = innerRets.length ? ` -> ${innerRets.join(', ')}` : '';
+    const sig = `function jeth_constructor(${formals.join(', ')})${retDecl}`;
     const ctorFn = `${sig} {\n${body.map((l) => '  ' + l).join('\n')}${body.length ? '\n' : ''}}`;
-    lines.push(`jeth_constructor(${decoded.join(', ')})`);
-    return { lines, helpers: [ctorFn, ...helperDefs] };
+    lines.push(
+      innerRets.length
+        ? `let ${outerRets.join(', ')} := jeth_constructor(${decoded.join(', ')})`
+        : `jeth_constructor(${decoded.join(', ')})`,
+    );
+    return { lines, helpers: [ctorFn, ...helperDefs], staged };
   }
 
   // ---- runtime / dispatcher ------------------------------------------------
@@ -912,6 +944,9 @@ ${indent(runtime, 6)}
         const value = this.lowerExpr(s.value, ctx, out);
         if (s.target.kind === 'local') {
           out.push(`${this.ctxLookup(ctx, s.target.varName)} := ${value}`);
+        } else if (s.target.kind === 'immutableStaged') {
+          // this.<imm> = v in the constructor: write the staged shadow (baked via setimmutable).
+          out.push(`${ctx.immStaged!.get(s.target.name)!} := ${value}`);
         } else if (s.target.kind === 'mapping') {
           const slot = this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out);
           for (const l of this.storeState(s.target.type, slot, 0, value)) out.push(l);
@@ -1339,6 +1374,12 @@ ${indent(runtime, 6)}
         return this.ctxLookup(ctx, e.name);
       case 'stateRead':
         return this.loadState(e.type, String(e.slot), e.offset);
+      case 'immutableRead':
+        // a runtime read of an @immutable: the value baked into the code by setimmutable.
+        return `loadimmutable("${e.name}")`;
+      case 'immutableStagedRead':
+        // a read inside the constructor body: the staged shadow (a jeth_constructor return var).
+        return ctx.immStaged!.get(e.name)!;
       case 'unary':
         return this.lowerUnary(e, ctx, out);
       case 'binary':
@@ -4520,6 +4561,11 @@ ${indent(runtime, 6)}
       for (const l of this.storeState(target.type, String(target.slot), target.offset, valueReg)) out.push(l);
       return;
     }
+    if (target.kind === 'immutableStaged') {
+      // assign the staged shadow (a jeth_constructor return var); baked via setimmutable at the end.
+      out.push(`${ctx.immStaged!.get(target.name)!} := ${valueReg}`);
+      return;
+    }
     if (target.kind === 'mapping') {
       const slot = this.mappingSlot(target.baseSlot, target.keys, ctx, out);
       for (const l of this.storeState(target.type, slot, 0, valueReg)) out.push(l);
@@ -5008,6 +5054,7 @@ interface LowerCtx {
   cdDynStructs: Map<string, { tupleStart: string; type: JethType }>; // dynamic struct params (runtime tuple-start byte ptr)
   cdParamHead: Map<string, { head: number; type: JethType }>; // calldata head byte of EVERY param (for whole-param echo via the recursive encoder)
   fnMode?: { retVar: string | null; retVars?: string[] }; // set when lowering an INTERNAL function body: `return` -> retVar:=v; leave (retVar null = void). retVars set for a multi-value return.
+  immStaged?: Map<string, string>; // Phase 5: @immutable name -> its staged-shadow Yul var (constructor body only)
 }
 
 // A lowered array reference, by source location.

@@ -120,6 +120,13 @@ export class Analyzer {
   // @constant fields: slot-free compile-time constants. The folded literal is inlined at every
   // read site (no SLOAD, no storage slot), so a @constant never shifts the slot of a @state var.
   private constantsByName = new Map<string, { value: bigint | boolean; type: JethType }>();
+  // @immutable fields (Phase 5): value-type, assigned once in the constructor, baked into runtime
+  // code via setimmutable (NO storage slot - never enters rawState/planLayout). immutableOrder keeps
+  // declaration order for deterministic setimmutable emission. currentInConstructor distinguishes a
+  // staged ctor-body read (the value assigned so far) from a runtime loadimmutable read.
+  private immutablesByName = new Map<string, { name: string; type: JethType }>();
+  private immutableOrder: string[] = [];
+  private currentInConstructor = false;
   // @struct declarations (name -> resolved struct type), collected before contracts
   private structsByName = new Map<string, JethType>();
   // contract-level custom error and event tables (collected before function bodies)
@@ -405,6 +412,14 @@ export class Analyzer {
     const layout = planLayout(rawState);
     for (const v of layout.vars) this.stateByName.set(v.name, v);
 
+    // An @immutable name must not collide with a @state var or @constant (solc: duplicate
+    // identifier). collectImmutable cannot see @state names yet (planned only here), so check now.
+    for (const name of this.immutableOrder) {
+      if (this.stateByName.has(name) || this.constantsByName.has(name)) {
+        this.diags.error(cls, 'JETH046', `field name '${name}' is declared more than once (@immutable conflicts with a @state/@constant of the same name)`);
+      }
+    }
+
     // Register functions by name BEFORE checking bodies so an internal call can
     // forward-reference a callee declared later (matches Solidity). funcsByName keeps the FIRST
     // function per source name (for "is this name callable?" checks + the generic mangled-name
@@ -514,6 +529,7 @@ export class Analyzer {
       events: this.events,
       slotCount: layout.slotCount,
       ctor,
+      immutables: this.immutableOrder.map((n) => this.immutablesByName.get(n)!),
     };
   }
 
@@ -576,9 +592,13 @@ export class Analyzer {
     const body: Stmt[] = [];
     if (ctorNode.body) {
       this.pushScope();
+      // currentInConstructor routes a `this.<imm>` read to the staged shadow (the value assigned so
+      // far) instead of a runtime loadimmutable, and permits an @immutable write (only here).
+      this.currentInConstructor = true;
       // VOID return type: a bare `return;` is allowed (exits early); `return expr;` is rejected
       // by coerce-to-void, matching solc ('Return arguments not allowed' for a constructor).
       for (const s of ctorNode.body.statements) this.checkStatement(s, VOID, body);
+      this.currentInConstructor = false;
       this.popScope();
     }
     this.popScope();
@@ -699,20 +719,26 @@ export class Analyzer {
   private collectStateVar(member: ts.PropertyDeclaration, out: RawStateVar[]): void {
     const decs = decoratorNames(member);
     const isConstant = decs.includes('constant');
-    if (!decs.includes('state') && !isConstant) {
-      this.diags.error(member, 'JETH045', 'contract fields must be marked @state (or @constant)');
+    const isImmutable = decs.includes('immutable');
+    if (!decs.includes('state') && !isConstant && !isImmutable) {
+      this.diags.error(member, 'JETH045', 'contract fields must be marked @state (or @constant / @immutable)');
       return;
     }
-    if (decs.includes('state') && isConstant) {
-      this.diags.error(member, 'JETH052', 'a field cannot be both @state and @constant');
+    const kinds = [decs.includes('state') && 'state', isConstant && 'constant', isImmutable && 'immutable'].filter(Boolean);
+    if (kinds.length > 1) {
+      this.diags.error(member, 'JETH052', `a field cannot combine @${kinds.join(' and @')}`);
       return;
     }
     if (!ts.isIdentifier(member.name)) {
-      this.diags.error(member, 'JETH046', `${isConstant ? 'constant' : 'state variable'} name must be a plain identifier`);
+      this.diags.error(member, 'JETH046', `${isConstant ? 'constant' : isImmutable ? 'immutable' : 'state variable'} name must be a plain identifier`);
       return;
     }
     if (isConstant) {
       this.collectConstant(member);
+      return;
+    }
+    if (isImmutable) {
+      this.collectImmutable(member);
       return;
     }
     const type = resolveType(member.type, this.diags, this.structsByName);
@@ -789,6 +815,40 @@ export class Analyzer {
       return;
     }
     this.constantsByName.set(name, { value: folded, type });
+  }
+
+  // An `@immutable` is a value-type field assigned once in the constructor and baked into the
+  // runtime code via setimmutable (read via loadimmutable). It consumes NO storage slot (it never
+  // enters rawState, so the planner numbers @state vars exactly as solc does). Scoped to value types
+  // (uintN/intN/bool/address/bytesN/enum/branded) - solc itself rejects a non-value-type immutable.
+  private collectImmutable(member: ts.PropertyDeclaration): void {
+    const name = (member.name as ts.Identifier).text;
+    const decs = decoratorNames(member);
+    // An immutable carries no visibility/mutability decorator: solc auto-generates a view getter for
+    // a `public immutable`, which JETH's ABI emitter does not produce, so gate it cleanly.
+    const extra = ['public', 'external', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden'].find((d) => decs.includes(d));
+    if (extra) {
+      this.diags.error(member, 'JETH312', `@immutable '${name}' cannot also be @${extra} (an immutable has no auto-generated getter; expose it with an explicit @view function)`);
+      return;
+    }
+    const type = resolveType(member.type, this.diags, this.structsByName);
+    if (!type) return;
+    if (!isStaticValueType(type)) {
+      this.diags.error(member, 'JETH310', `@immutable '${name}' of type ${displayName(type)} is not supported (immutables must be a value type: uintN/intN/bool/address/bytesN/enum/branded)`);
+      return;
+    }
+    // Inline initialization (`@immutable a: u256 = 7n`) is a later step: solc accepts it (even from a
+    // non-constant), but JETH currently stages immutables only via constructor assignment.
+    if (member.initializer) {
+      this.diags.error(member.initializer, 'JETH311', `inline initialization of @immutable '${name}' is not supported yet; assign it in the constructor`);
+      return;
+    }
+    if (this.immutablesByName.has(name) || this.constantsByName.has(name) || this.stateByName.has(name)) {
+      this.diags.error(member, 'JETH046', `duplicate field name '${name}'`);
+      return;
+    }
+    this.immutablesByName.set(name, { name, type });
+    this.immutableOrder.push(name);
   }
 
   private collectFunction(member: ts.MethodDeclaration): RawFunction | undefined {
@@ -2952,6 +3012,16 @@ export class Analyzer {
         this.diags.error(node, 'JETH054', `cannot assign to '@constant ${node.name.text}'`);
         return undefined;
       }
+      // this.<immutable> = v: legal ONLY directly in the constructor body (matches solc, which also
+      // rejects an assignment in a function called from the ctor). It writes the staged shadow.
+      if (this.immutablesByName.has(node.name.text)) {
+        const im = this.immutablesByName.get(node.name.text)!;
+        if (!this.currentInConstructor) {
+          this.diags.error(node, 'JETH313', `@immutable '${node.name.text}' can only be assigned directly in the constructor body`);
+          return undefined;
+        }
+        return { kind: 'immutableStaged', type: im.type, name: im.name };
+      }
       const v = this.stateByName.get(node.name.text);
       if (!v) {
         this.diags.error(node, 'JETH065', `unknown state variable 'this.${node.name.text}'`);
@@ -3095,6 +3165,11 @@ export class Analyzer {
     if (lv.kind === 'memDynField') {
       // a bytes/string memory-struct field read (no compound-assign/++ applies; type-checked away).
       return { kind: 'memDynField', type: lv.type, local: lv.local, wordOffset: lv.wordOffset };
+    }
+    if (lv.kind === 'immutableStaged') {
+      // compound-assign / ++ on an @immutable in the constructor reads the staged shadow (solc
+      // accepts `a += 1`, reading the current staged value, e.g. 0 before any assignment).
+      return { kind: 'immutableStagedRead', type: lv.type, name: lv.name };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }
@@ -4539,6 +4614,18 @@ export class Analyzer {
       return typeof c.value === 'boolean'
         ? { kind: 'literalBool', type: c.type, value: c.value }
         : { kind: 'literalInt', type: c.type, value: c.value };
+    }
+
+    // this.<immutable> (read). An immutable read is a code read (loadimmutable), NOT a storage read,
+    // but solc still requires `view` (rejects `pure`): it "reads the environment". Inside the
+    // constructor body the read is the STAGED shadow (value assigned so far); elsewhere it lowers to
+    // a runtime loadimmutable.
+    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && this.immutablesByName.has(node.name.text)) {
+      const im = this.immutablesByName.get(node.name.text)!;
+      this.currentReadsEnv = true; // forbidden in @pure, allowed in @view (matches solc)
+      return this.currentInConstructor
+        ? { kind: 'immutableStagedRead', type: im.type, name: im.name }
+        : { kind: 'immutableRead', type: im.type, name: im.name };
     }
 
     // this.stateVar (read)

@@ -56,6 +56,10 @@ export type Expr =
   | { kind: 'literalBool'; type: JethType; value: boolean }
   | { kind: 'rawReg'; type: JethType; reg: string } // a pre-computed Yul register (internal; used to feed a value into the assign lowering, e.g. tuple destructuring)
   | { kind: 'stateRead'; type: JethType; slot: number; offset: number; varName: string }
+  // Phase 5 immutables: a runtime read lowers to loadimmutable("name") (baked into code, no slot);
+  // a read INSIDE the constructor body reads the staged shadow (the value assigned so far).
+  | { kind: 'immutableRead'; type: JethType; name: string }
+  | { kind: 'immutableStagedRead'; type: JethType; name: string }
   | { kind: 'localRead'; type: JethType; name: string }
   | { kind: 'binary'; type: JethType; op: BinOp; left: Expr; right: Expr; unchecked: boolean }
   | { kind: 'ternary'; type: JethType; cond: Expr; then: Expr; else: Expr } // c ? a : b (short-circuit)
@@ -203,6 +207,7 @@ export interface ArrayExpr {
 // Where an assignment target lives.
 export type LValue =
   | { kind: 'state'; type: JethType; slot: number; offset: number; varName: string }
+  | { kind: 'immutableStaged'; type: JethType; name: string } // Phase 5: this.<imm> = v inside the constructor (writes the staged shadow; baked via setimmutable)
   | { kind: 'local'; type: JethType; varName: string }
   | {
       kind: 'mapping'; // this.m[k]...[k] write target
@@ -325,6 +330,13 @@ export interface ConstructorIR {
   body: Stmt[];
 }
 
+/** Phase 5: an @immutable field. Assigned once in the constructor, baked into runtime code via
+ *  setimmutable, read via loadimmutable. Consumes NO storage slot (never a StateVar). */
+export interface ImmutableVar {
+  name: string;
+  type: JethType;
+}
+
 export interface ContractIR {
   name: string;
   stateVars: StateVar[];
@@ -334,4 +346,5 @@ export interface ContractIR {
   // number of 32-byte slots consumed by state (for diagnostics / layout dump)
   slotCount: number;
   ctor?: ConstructorIR; // a constructor, if declared (Phase 5)
+  immutables: ImmutableVar[]; // @immutable fields (declaration order), baked via setimmutable
 }
