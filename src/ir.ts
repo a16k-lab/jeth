@@ -87,6 +87,7 @@ export type Expr =
   | { kind: 'stringLiteral'; type: JethType; bytes: Uint8Array } // a memory bytes/string literal
   | { kind: 'dynLength'; type: JethType; operand: Expr } // s.length -> u256
   | { kind: 'keccak'; type: JethType; arg: Expr } // keccak256(bytes/string) -> bytes32
+  | { kind: 'abiEncode'; type: JethType; packed: boolean; args: Expr[] } // abi.encode / abi.encodePacked -> bytes
   | { kind: 'blockhash'; type: JethType; arg: Expr } // blockhash(uint) -> bytes32
   | { kind: 'balance'; type: JethType; addr: Expr } // <address>.balance -> u256
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1

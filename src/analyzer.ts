@@ -4376,6 +4376,26 @@ export class Analyzer {
     return { kind: 'global', type: entry.type, op: entry.op };
   }
 
+  /** abi.encode(...) / abi.encodePacked(...) -> bytes. Scoped to value-type and bytes/string args
+   *  (arrays/structs are a later step). No state/env read (pure). */
+  private checkAbiEncode(node: ts.CallExpression, packed: boolean): Expr | undefined {
+    const args: Expr[] = [];
+    for (const a of node.arguments) {
+      const e = this.checkExpr(a);
+      if (!e) return undefined;
+      if (!isStaticValueType(e.type) && !isBytesLike(e.type)) {
+        this.diags.error(
+          a,
+          'JETH173',
+          `abi.${packed ? 'encodePacked' : 'encode'} supports value-type and bytes/string arguments (got ${displayName(e.type)}); arrays/structs are not supported yet`,
+        );
+        return undefined;
+      }
+      args.push(e);
+    }
+    return { kind: 'abiEncode', type: { kind: 'bytes' }, packed, args };
+  }
+
   private checkAddressCall(node: ts.CallExpression): Expr | undefined {
     if (node.arguments.length !== 1) {
       this.diags.error(node, 'JETH170', 'address(...) takes exactly one argument');
@@ -5322,6 +5342,20 @@ export class Analyzer {
       this.genericsByName.has(node.expression.name.text)
     ) {
       return this.checkGenericCall(node, node.expression.name.text, false);
+    }
+
+    // abi.encode(...) / abi.encodePacked(...) -> a bytes value (no selector). Scoped to value-type
+    // and bytes/string arguments; arrays/structs are a later step.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'abi' &&
+      !this.isVisibleLocal('abi') &&
+      !this.stateByName.has('abi') &&
+      (node.expression.name.text === 'encode' || node.expression.name.text === 'encodePacked')
+    ) {
+      return this.checkAbiEncode(node, node.expression.name.text === 'encodePacked');
     }
 
     // object literal { ...base, x: v } / { x: 1n, y: 2n } -> struct construction when the

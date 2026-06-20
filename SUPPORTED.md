@@ -54,9 +54,16 @@ now decodes + validates each element (solc-matching dirty-element revert) and pa
 storage value types) now derive the slot as `keccak256(keyContent . slotWord)` (solc's dynamic-key
 rule), verified byte-identical incl. raw slots and empty/long keys.
 
-Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encode*`, `sha256`/`ripemd160`,
-a dynamic-field struct from a memory/calldata source -> storage, struct / indexed-array event params,
-`@constant` `address`/`bytesN`.
+`abi.encode(...)` and `abi.encodePacked(...)` (value-type and `bytes`/`string` args) now produce a
+`bytes` value: standard mode mirrors the ABI head/tail tuple encoder; packed mode concatenates each
+value's byte-width and each `bytes`/`string`'s raw content. Verified byte-identical to solc for
+hashing (`keccak256(abi.encode...)`), returning, and storing the result, incl. mixed widths, negative
+ints, dynamic args, nesting, and empty. Arrays/structs as args, and `abi.encodeWithSelector/Signature`,
+remain a later step.
+
+Still unbuilt (clean rejections, a later phase - NOT miscompiles): `abi.encodeWithSelector/Signature`,
+`abi.encode*` of array/struct args, `sha256`/`ripemd160`, a dynamic-field struct from a memory/calldata
+source -> storage, struct / indexed-array event params, `@constant` `address`/`bytesN`.
 
 ## Enums + distinctive features (F1-F6)
 - **Enums** `enum Color { Red, Green, Blue }`: a Solidity-exact enum (ABI `uint8`, 1-byte storage

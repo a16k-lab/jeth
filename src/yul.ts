@@ -1617,6 +1617,7 @@ ${indent(runtime, 6)}
       case 'structArrayElem':
       case 'mapStorageValue':
       case 'mapDynValue':
+      case 'abiEncode':
         // reference/aggregate values are not single 256-bit words; they are
         // consumed by the return/assign/length/index paths.
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
@@ -3920,6 +3921,87 @@ ${indent(runtime, 6)}
   // ---- dynamic bytes/string values (Phase 4) -------------------------------
 
   /** Resolve a dynamic bytes/string expression to its source reference. */
+  /** Build an abi.encode / abi.encodePacked bytes value in memory ([len][data]) and return its
+   *  pointer. Scoped to value-type and bytes/string args (arrays/structs rejected in the analyzer). */
+  private buildAbiEncode(args: Expr[], packed: boolean, ctx: LowerCtx, out: string[]): string {
+    return packed ? this.buildAbiEncodePacked(args, ctx, out) : this.buildAbiEncodeStd(args, ctx, out);
+  }
+
+  /** Standard ABI encoding (head/tail, 32-byte aligned) as a bytes value: each value -> a padded
+   *  word; each bytes/string -> a head offset + [len][padded data] tail. Mirrors the (tested)
+   *  event-data tuple encoder, with a length prefix and offsets relative to the data start. */
+  private buildAbiEncodeStd(args: Expr[], ctx: LowerCtx, out: string[]): string {
+    type Part = { word: string } | { mp: string; len: string };
+    const parts: Part[] = args.map((a) =>
+      isBytesLike(a.type) ? this.toMemory(this.lowerDynamic(a, ctx, out), out) : { word: this.lowerExpr(a, ctx, out) },
+    );
+    const headSize = 32 * parts.length;
+    const total = this.fresh();
+    out.push(`let ${total} := ${headSize}`);
+    for (const p of parts) if ('len' in p) out.push(`${total} := add(${total}, add(0x20, and(add(${p.len}, 0x1f), not(0x1f))))`);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := ${this.alloc()}(add(0x20, ${total}))`);
+    out.push(`mstore(${ptr}, ${total})`);
+    const data = this.fresh();
+    out.push(`let ${data} := add(${ptr}, 0x20)`);
+    const cursor = this.fresh();
+    out.push(`let ${cursor} := add(${data}, ${headSize})`);
+    parts.forEach((p, j) => {
+      const head = j === 0 ? data : `add(${data}, ${32 * j})`;
+      if ('word' in p) {
+        out.push(`mstore(${head}, ${p.word})`);
+      } else {
+        const pad = `and(add(${p.len}, 0x1f), not(0x1f))`;
+        out.push(`mstore(${head}, sub(${cursor}, ${data}))`);
+        out.push(`mstore(${cursor}, ${p.len})`);
+        out.push(`mcopy(add(${cursor}, 0x20), add(${p.mp}, 0x20), ${pad})`);
+        out.push(`${cursor} := add(${cursor}, add(0x20, ${pad}))`);
+      }
+    });
+    return ptr;
+  }
+
+  /** Packed encoding (abi.encodePacked) as a bytes value: each value contributes its byte-width
+   *  (no padding/length), each bytes/string its raw content. The final partial word is zeroed so the
+   *  bytes value's tail padding is clean (a slack word is allocated to keep that write in-bounds). */
+  private buildAbiEncodePacked(args: Expr[], ctx: LowerCtx, out: string[]): string {
+    type Part = { val: string; width: number; leftAligned: boolean } | { mp: string; len: string };
+    const parts: Part[] = args.map((a) =>
+      isBytesLike(a.type)
+        ? this.toMemory(this.lowerDynamic(a, ctx, out), out)
+        : { val: this.lowerExpr(a, ctx, out), width: storageByteSize(a.type), leftAligned: a.type.kind === 'bytesN' },
+    );
+    let staticBytes = 0;
+    const dynLens: string[] = [];
+    for (const p of parts) { if ('len' in p) dynLens.push(p.len); else staticBytes += p.width; }
+    const total = this.fresh();
+    out.push(`let ${total} := ${staticBytes}`);
+    for (const l of dynLens) out.push(`${total} := add(${total}, ${l})`);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := ${this.alloc()}(add(0x40, and(add(${total}, 0x1f), not(0x1f))))`);
+    out.push(`mstore(${ptr}, ${total})`);
+    const data = this.fresh();
+    out.push(`let ${data} := add(${ptr}, 0x20)`);
+    const cursor = this.fresh();
+    out.push(`let ${cursor} := ${data}`);
+    for (const p of parts) {
+      if ('len' in p) {
+        out.push(`mcopy(${cursor}, add(${p.mp}, 0x20), ${p.len})`);
+        out.push(`${cursor} := add(${cursor}, ${p.len})`);
+      } else if (p.width === 32 || p.leftAligned) {
+        // a full 32-byte value, or a bytesN already left-aligned (content in the high width bytes).
+        out.push(`mstore(${cursor}, ${p.val})`);
+        out.push(`${cursor} := add(${cursor}, ${p.width})`);
+      } else {
+        // int/uint/bool/address: right-aligned register; left-align its low `width` bytes.
+        out.push(`mstore(${cursor}, shl(${(32 - p.width) * 8}, ${p.val}))`);
+        out.push(`${cursor} := add(${cursor}, ${p.width})`);
+      }
+    }
+    out.push(`mstore(${cursor}, 0)`); // zero the trailing partial word
+    return ptr;
+  }
+
   private lowerDynamic(e: Expr, ctx: LowerCtx, out: string[]): DynRef {
     switch (e.kind) {
       case 'dynStateRead':
@@ -3939,6 +4021,8 @@ ${indent(runtime, 6)}
         // msg.data is the WHOLE calldata (selector included), so data starts at 0 and
         // length is calldatasize() (matches solc: msg.data.length == calldatasize()).
         return { src: 'calldata', dataPtr: '0', len: 'calldatasize()' };
+      case 'abiEncode':
+        return { src: 'memory', ptr: this.buildAbiEncode(e.args, e.packed, ctx, out) };
       case 'call': {
         // a bytes/string-returning internal call: the callee returns a [len][data] memory pointer.
         const p = this.fresh();
