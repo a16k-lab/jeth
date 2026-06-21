@@ -340,3 +340,14 @@ describe('multi-return with a MEMORY/constructed struct component vs solc', () =
     );
   });
 });
+
+describe('event overloading by signature vs solc', () => {
+  it('resolves overloads by arity and by type; exact-dup still rejected', async () => {
+    await rt(
+      `@contract class C { @event L(a: u256); @event L(a: u256, b: u256); @event L(a: address); @external f(): void { emit(L(1n)); emit(L(2n, 3n)); emit(L(msg.sender)); } }`,
+      `contract C { event L(uint256 a); event L(uint256 a, uint256 b); event L(address a); function f() external { emit L(1); emit L(2,3); emit L(msg.sender); } }`,
+      [{ sig: 'f()' }],
+    );
+    expect(jethRejects(`@contract class C { @event L(a: u256); @event L(a: u256); }`)).toBe(true); // exact-sig duplicate
+  });
+});

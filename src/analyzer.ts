@@ -150,7 +150,7 @@ export class Analyzer {
   // contract-level custom error and event tables (collected before function bodies)
   private errorsByName = new Map<string, ErrorDecl>();
   private errors: ErrorDecl[] = [];
-  private eventsByName = new Map<string, EventIR>();
+  private eventsByName = new Map<string, EventIR[]>(); // source name -> all overloads (solc allows event overloading by signature)
   private events: EventIR[] = [];
   // per-function lexical scope stack (innermost last); each scope maps name -> type.
   private scopes: Map<string, JethType>[] = [];
@@ -971,14 +971,17 @@ export class Analyzer {
     if (stray.length) {
       this.diags.error(member, 'JETH145', `@event '${name}' has unsupported decorator(s): ${stray.map((d) => '@' + d).join(', ')}`);
     }
-    if (this.eventsByName.has(name)) {
-      this.diags.error(member, 'JETH144', `duplicate @event declaration '${name}'`);
+    // solc allows event overloading by signature (name + parameter types); only an EXACT duplicate
+    // signature is an error.
+    const signature = functionSignature(name, params.map((p) => p.type));
+    const overloads = this.eventsByName.get(name) ?? [];
+    if (overloads.some((e) => e.signature === signature)) {
+      this.diags.error(member, 'JETH144', `duplicate @event declaration '${signature}'`);
       return;
     }
-    const signature = functionSignature(name, params.map((p) => p.type));
     const topic0 = eventTopic0(signature);
     const ev: EventIR = { name, params, signature, topic0, anonymous };
-    this.eventsByName.set(name, ev);
+    this.eventsByName.set(name, [...overloads, ev]);
     this.events.push(ev);
   }
 
@@ -2604,8 +2607,8 @@ export class Analyzer {
       this.diags.error(inner, 'JETH146', 'emit(...) argument must be an event constructor, e.g. emit(Transfer(a, b))');
       return;
     }
-    const ev = this.eventsByName.get(inner.expression.text);
-    if (!ev) {
+    const candidates = this.eventsByName.get(inner.expression.text);
+    if (!candidates || candidates.length === 0) {
       this.diags.error(inner.expression, 'JETH147', `unknown event '${inner.expression.text}'`);
       return;
     }
@@ -2616,9 +2619,21 @@ export class Analyzer {
     if (this.currentMutability === 'view' || this.currentMutability === 'pure') {
       this.diags.error(call, 'JETH149', `cannot emit an event in a @${this.currentMutability} function (a log is a state change)`);
     }
-    if (inner.arguments.length !== ev.params.length) {
-      this.diags.error(inner, 'JETH148', `event '${ev.name}' expects ${ev.params.length} argument(s), got ${inner.arguments.length}`);
+    // Resolve the overload: by argument count, then (for same-arity overloads) by a trial type-match.
+    const byArity = candidates.filter((c) => c.params.length === inner.arguments.length);
+    if (byArity.length === 0) {
+      this.diags.error(inner, 'JETH148', `event '${inner.expression.text}' has no overload taking ${inner.arguments.length} argument(s)`);
       return;
+    }
+    let ev: EventIR;
+    if (byArity.length === 1) ev = byArity[0]!;
+    else {
+      const viable = byArity.filter((c) => this.eventArgsMatch(inner, c));
+      if (viable.length === 1) ev = viable[0]!;
+      else {
+        this.diags.error(inner, viable.length === 0 ? 'JETH148' : 'JETH901', viable.length === 0 ? `no overload of event '${inner.expression.text}' matches the argument types` : `emit of '${inner.expression.text}' is ambiguous (matches ${viable.length} overloads)`);
+        return;
+      }
     }
     const args: Expr[] = [];
     for (let i = 0; i < ev.params.length; i++) {
@@ -2628,6 +2643,23 @@ export class Analyzer {
       args.push(this.coerce(a, expected, inner.arguments[i]!));
     }
     out.push({ kind: 'emit', event: ev, args });
+  }
+
+  /** Trial type-check the emit args against an event overload's params, rolling back all side effects
+   *  (diagnostics, effect flags) - used for same-arity event-overload resolution. */
+  private eventArgsMatch(inner: ts.CallExpression, ev: EventIR): boolean {
+    const diagLen = this.diags.items.length;
+    const rs = this.currentReadsState, ws = this.currentWritesState, re = this.currentReadsEnv;
+    let ok = true;
+    for (let i = 0; i < ev.params.length; i++) {
+      const a = this.checkExpr(inner.arguments[i]!, ev.params[i]!.type);
+      if (!a) { ok = false; break; }
+      this.coerce(a, ev.params[i]!.type, inner.arguments[i]!);
+    }
+    ok = ok && this.diags.items.length === diagLen;
+    this.diags.items.length = diagLen;
+    this.currentReadsState = rs; this.currentWritesState = ws; this.currentReadsEnv = re;
+    return ok;
   }
 
   private checkLocalDecl(decl: ts.VariableDeclaration, out: Stmt[]): void {
