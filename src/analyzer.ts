@@ -92,7 +92,6 @@ const GLOBALS: Record<string, Record<string, { op: GlobalOp; type: JethType; cat
 import { planLayout, RawStateVar } from './layout.js';
 import { functionSignature, functionSelector, eventTopic0, keccak, toHex } from './selectors.js';
 
-const VISIBILITY_DECORATORS: Visibility[] = ['external', 'public', 'internal', 'private'];
 
 /** Unwrap redundant parentheses: `(xs)` / `((this.a))` -> the inner expression. */
 function stripParens(node: ts.Expression): ts.Expression {
@@ -110,8 +109,6 @@ interface RawFunction {
   returnType: JethType;
   returnTypes?: JethType[]; // multi-value return `[T1, T2, ...]`
   inferRead?: boolean; // @read -> resolve to @pure (touches no state/env) or @view (reads, never writes)
-  inferExposed?: boolean; // no visibility decorator -> @public if internally called, else @external
-  inferHidden?: boolean; // @hidden -> @internal (not in the ABI; internal vs private is codegen-identical pre-inheritance)
   nonReentrant?: boolean; // F4: @nonReentrant -> transient-storage reentrancy mutex on the external entry
   modifiers?: { name: string; argNodes: ts.Expression[]; site: ts.Node }[]; // Phase 5: applied @modifier decorators, in source order (leftmost = outermost)
   key?: string; // unique identity for the call graph: the bare name when unique, `name__ovN` when
@@ -551,8 +548,6 @@ export class Analyzer {
     for (const f of functions) {
       const e = effects.get(f.key);
       if (e?.rf.inferRead) { const m: Mutability = e.reads || e.readsEnv ? 'view' : 'pure'; f.mutability = m; e.rf.mutability = m; }
-      if (e?.rf.inferExposed) { const v: Visibility = this.internallyCalled.has(f.key) ? 'public' : 'external'; f.visibility = v; e.rf.visibility = v; }
-      if (e?.rf.inferHidden) { f.visibility = 'internal'; e.rf.visibility = 'internal'; }
       if (this.internallyCalled.has(f.key)) f.internallyCalled = true;
     }
 
@@ -1207,8 +1202,6 @@ export class Analyzer {
       this.diags.error(member, 'JETH054', `@${removedVis} is not a JETH visibility decorator: write @external to expose a function; everything else is internal by default (the compiler infers private/internal)`);
     }
     const visibility: Visibility = decs.includes('external') ? 'external' : 'internal';
-    const inferExposed = false;
-    const inferHidden = false;
 
     // MUTABILITY INFERENCE: `@read` is a read-only function whose @pure/@view is computed from
     // its TRANSITIVE effects after the fixpoint. Provisionally @view so the body is validated as
@@ -1310,9 +1303,9 @@ export class Analyzer {
         returnTypes.push(t);
       }
       if (ok && returnTypes.length >= 2) {
-        return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID, returnTypes };
+        return { node: member, name: member.name.text, visibility, mutability, inferRead, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID, returnTypes };
       }
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID };
     }
 
     const returnType = member.type ? resolveType(member.type, this.diags, this.structsByName) ?? VOID : VOID;
@@ -1322,10 +1315,10 @@ export class Analyzer {
       this.diags.error(member.type ?? member, 'JETH225', 'returning a struct with this shape is not supported yet (supported: static value/nested-static-struct fields, and bytes/string or nested-struct dynamic fields)');
     }
     if (!this.gateArrayType(returnType, member.type ?? member)) {
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID };
+      return { node: member, name: member.name.text, visibility, mutability, inferRead, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID };
     }
 
-    return { node: member, name: member.name.text, visibility, mutability, inferRead, inferExposed, inferHidden, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType };
+    return { node: member, name: member.name.text, visibility, mutability, inferRead, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType };
   }
 
   // ---- F6: compile-time generics (monomorphization) ------------------------
@@ -1505,8 +1498,6 @@ export class Analyzer {
       // mangled name; drop any visibility inference (a generic is internal by construction).
       rf.name = key;
       rf.visibility = 'internal';
-      rf.inferExposed = false;
-      rf.inferHidden = false;
       this.funcsByName.set(key, rf);
       this.specializationQueue.push({ mangled: key, node: gen.node, binding });
     }
@@ -1522,8 +1513,8 @@ export class Analyzer {
     this.loopDepth = 0;
     this.pushScope(); // function/parameter scope
     this.currentMutability = rf.mutability;
-    // external/public (incl. a provisional-public inferExposed no-vis function) is externally
-    // reachable; internal/private (incl. @hidden -> internal) is not. Gates the msg.value/@payable rule.
+    // only @external is externally reachable; an unmarked (internal) function is not. Gates the
+    // msg.value/@payable rule.
     this.currentExternallyReachable = rf.visibility === 'external';
     this.currentWritesState = false;
     this.currentReadsState = false;
