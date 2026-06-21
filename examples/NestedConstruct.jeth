@@ -14,10 +14,10 @@ class NestedConstruct {
   @external setOne(p: u64, a: u128, b: u128, q: u64): void {
     this.one = Outer(p, Inner(a, b), q);
   }
-  @view oP(i: u256): u64 { return this.outers[i].p; }
-  @view oA(i: u256): u128 { return this.outers[i].inner.a; }
-  @view oB(i: u256): u128 { return this.outers[i].inner.b; }
-  @view oQ(i: u256): u64 { return this.outers[i].q; }
-  @view oneA(): u128 { return this.one.inner.a; }
-  @view oneQ(): u64 { return this.one.q; }
+  @external @view oP(i: u256): u64 { return this.outers[i].p; }
+  @external @view oA(i: u256): u128 { return this.outers[i].inner.a; }
+  @external @view oB(i: u256): u128 { return this.outers[i].inner.b; }
+  @external @view oQ(i: u256): u64 { return this.outers[i].q; }
+  @external @view oneA(): u128 { return this.one.inner.a; }
+  @external @view oneQ(): u64 { return this.one.q; }
 }

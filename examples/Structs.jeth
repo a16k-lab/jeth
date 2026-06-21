@@ -12,11 +12,11 @@ class Structs {
     this.after_ = 0x99n;
   }
   @external setA(v: u128): void { this.s.a = v; }
-  @view getA(): u128 { return this.s.a; }
-  @view getB(): u64 { return this.s.b; }
-  @view getC(): bool { return this.s.c; }
-  @view getD(): address { return this.s.d; }
-  @view getE(): u256 { return this.s.e; }
-  @view getAll(): Mixed { return this.s; }
+  @external @view getA(): u128 { return this.s.a; }
+  @external @view getB(): u64 { return this.s.b; }
+  @external @view getC(): bool { return this.s.c; }
+  @external @view getD(): address { return this.s.d; }
+  @external @view getE(): u256 { return this.s.e; }
+  @external @view getAll(): Mixed { return this.s; }
   @external @pure make(a: u128, e: u256): Mixed { return Mixed(a, 0n, true, address(0n), e); }
 }

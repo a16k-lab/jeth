@@ -14,25 +14,25 @@ class StorageStrArray {
   @external pushEmptyS(): void { this.ss.push(); }
   @external popS(): void { this.ss.pop(); }
   @external setS(i: u256, v: string): void { this.ss[i] = v; }
-  @view sLen(): u256 { return this.ss.length; }
-  @view sAt(i: u256): string { return this.ss[i]; }
+  @external @view sLen(): u256 { return this.ss.length; }
+  @external @view sAt(i: u256): string { return this.ss[i]; }
 
   // bytes[] bb (supports b[i].length and a byte index)
   @external pushB(v: bytes): void { this.bb.push(v); }
   @external popB(): void { this.bb.pop(); }
   @external setB(i: u256, v: bytes): void { this.bb[i] = v; }
-  @view bLen(): u256 { return this.bb.length; }
-  @view bAt(i: u256): bytes { return this.bb[i]; }
-  @view bElemLen(i: u256): u256 { return this.bb[i].length; }
-  @view bByte(i: u256, j: u256): bytes1 { return this.bb[i][j]; }
+  @external @view bLen(): u256 { return this.bb.length; }
+  @external @view bAt(i: u256): bytes { return this.bb[i]; }
+  @external @view bElemLen(i: u256): u256 { return this.bb[i].length; }
+  @external @view bByte(i: u256, j: u256): bytes1 { return this.bb[i][j]; }
 
   // mapping<address, string[]> byKey (per-key isolation)
   @external pushK(k: address, v: string): void { this.byKey[k].push(v); }
   @external popK(k: address): void { this.byKey[k].pop(); }
   @external setK(k: address, i: u256, v: string): void { this.byKey[k][i] = v; }
-  @view kLen(k: address): u256 { return this.byKey[k].length; }
-  @view kAt(k: address, i: u256): string { return this.byKey[k][i]; }
+  @external @view kLen(k: address): u256 { return this.byKey[k].length; }
+  @external @view kAt(k: address, i: u256): string { return this.byKey[k][i]; }
 
   @external setSentinel(c: u256): void { this.sentinel = c; }
-  @view getSentinel(): u256 { return this.sentinel; }
+  @external @view getSentinel(): u256 { return this.sentinel; }
 }

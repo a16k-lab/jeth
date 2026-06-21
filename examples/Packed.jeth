@@ -15,9 +15,9 @@ class Packed {
   @external setD(x: bool): void { this.d = x; }
   @external setE(x: address): void { this.e = x; }
 
-  @view getA(): u128 { return this.a; }
-  @view getB(): bytes4 { return this.b; }
-  @view getC(): i16 { return this.c; }
-  @view getD(): bool { return this.d; }
-  @view getE(): address { return this.e; }
+  @external @view getA(): u128 { return this.a; }
+  @external @view getB(): bytes4 { return this.b; }
+  @external @view getC(): i16 { return this.c; }
+  @external @view getD(): bool { return this.d; }
+  @external @view getE(): address { return this.e; }
 }

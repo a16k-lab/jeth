@@ -14,9 +14,9 @@ class PackedArr {
   @external setD(i: u256, v: bool): void { this.pts[i].d = v; }
   @external setE(i: u256, v: address): void { this.pts[i].e = v; }
 
-  @view getA(i: u256): u8 { return this.pts[i].a; }
-  @view getB(i: u256): u16 { return this.pts[i].b; }
-  @view getC(i: u256): u64 { return this.pts[i].c; }
-  @view getD(i: u256): bool { return this.pts[i].d; }
-  @view getE(i: u256): address { return this.pts[i].e; }
+  @external @view getA(i: u256): u8 { return this.pts[i].a; }
+  @external @view getB(i: u256): u16 { return this.pts[i].b; }
+  @external @view getC(i: u256): u64 { return this.pts[i].c; }
+  @external @view getD(i: u256): bool { return this.pts[i].d; }
+  @external @view getE(i: u256): address { return this.pts[i].e; }
 }

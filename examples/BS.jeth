@@ -10,19 +10,19 @@ class BS {
   @event Tagged(@indexed who: address, m: string);
 
   @external setS(v: string): void { this.s = v; }
-  @view getS(): string { return this.s; }
+  @external @view getS(): string { return this.s; }
   @external @pure echo(v: string): string { return v; }
 
   @external setB(v: bytes): void { this.b = v; }
-  @view getB(): bytes { return this.b; }
-  @view blen(): u256 { return this.b.length; }
-  @view at(i: u256): bytes1 { return this.b[i]; }
+  @external @view getB(): bytes { return this.b; }
+  @external @view blen(): u256 { return this.b.length; }
+  @external @view at(i: u256): bytes1 { return this.b[i]; }
 
   @external setCanary(c: u256): void { this.canary = c; }
-  @view getCanary(): u256 { return this.canary; }
+  @external @view getCanary(): u256 { return this.canary; }
 
   @external emitMsg(): void { emit(Msg(this.s)); }
   @external emitTagged(): void { emit(Tagged(msg.sender, this.s)); }
-  @view boom(): void { require(false, this.s); }
-  @view boomParam(v: string): void { require(false, v); }
+  @external @view boom(): void { require(false, this.s); }
+  @external @view boomParam(v: string): void { require(false, v); }
 }

@@ -13,7 +13,7 @@ class Counter {
     this.count += delta;
   }
 
-  @view
+  @external @view
   current(): u256 {
     return this.count;
   }

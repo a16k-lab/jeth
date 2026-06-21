@@ -28,12 +28,12 @@ class Vault {
     this.balances[to] += amount;
   }
 
-  @view
+  @external @view
   balanceOf(account: address): u256 {
     return this.balances[account];
   }
 
-  @view
+  @external @view
   totalSupply(): u256 {
     return this.total;
   }

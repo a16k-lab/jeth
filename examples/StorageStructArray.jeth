@@ -15,9 +15,9 @@ class StorageStructArray {
   @external setAmount(i: u256, v: u128): void { this.recs[i].amount = v; }
   @external setActive(i: u256, v: bool): void { this.recs[i].active = v; }
 
-  @view len(): u256 { return this.recs.length; }
-  @view getId(i: u256): u64 { return this.recs[i].id; }
-  @view getOwner(i: u256): address { return this.recs[i].owner; }
-  @view getAmount(i: u256): u128 { return this.recs[i].amount; }
-  @view getActive(i: u256): bool { return this.recs[i].active; }
+  @external @view len(): u256 { return this.recs.length; }
+  @external @view getId(i: u256): u64 { return this.recs[i].id; }
+  @external @view getOwner(i: u256): address { return this.recs[i].owner; }
+  @external @view getAmount(i: u256): u128 { return this.recs[i].amount; }
+  @external @view getActive(i: u256): bool { return this.recs[i].active; }
 }

@@ -21,8 +21,8 @@ class StorageDynStruct {
   @external setDa(v: u256): void { this.d.a = v; }
   @external setDs(v: string): void { this.d.s = v; }
   @external setD(a: u256, s: string): void { this.d = D(a, s); }
-  @view getDa(): u256 { return this.d.a; }
-  @view getDs(): string { return this.d.s; }
+  @external @view getDa(): u256 { return this.d.a; }
+  @external @view getDs(): string { return this.d.s; }
 
   // --- D[] recs ---
   @external pushRec(a: u256, s: string): void { this.recs.push(D(a, s)); }
@@ -30,45 +30,45 @@ class StorageDynStruct {
   @external popRec(): void { this.recs.pop(); }
   @external setRecA(i: u256, v: u256): void { this.recs[i].a = v; }
   @external setRecS(i: u256, v: string): void { this.recs[i].s = v; }
-  @view recsLen(): u256 { return this.recs.length; }
-  @view recAt(i: u256): string { return this.recs[i].s; }
-  @view recAtA(i: u256): u256 { return this.recs[i].a; }
+  @external @view recsLen(): u256 { return this.recs.length; }
+  @external @view recAt(i: u256): string { return this.recs[i].s; }
+  @external @view recAtA(i: u256): u256 { return this.recs[i].a; }
 
   // --- mapping<address, D> byKey ---
   @external setKa(k: address, v: u256): void { this.byKey[k].a = v; }
   @external setKs(k: address, v: string): void { this.byKey[k].s = v; }
-  @view getKa(k: address): u256 { return this.byKey[k].a; }
-  @view getKs(k: address): string { return this.byKey[k].s; }
+  @external @view getKa(k: address): u256 { return this.byKey[k].a; }
+  @external @view getKs(k: address): string { return this.byKey[k].s; }
 
   // --- E{uint64 id; bytes b; uint64 x}: a bytes field, .length and byte index ---
   @external setEid(v: u64): void { this.e.id = v; }
   @external setEb(v: bytes): void { this.e.b = v; }
   @external setEx(v: u64): void { this.e.x = v; }
-  @view getEid(): u64 { return this.e.id; }
-  @view getEb(): bytes { return this.e.b; }
-  @view getEx(): u64 { return this.e.x; }
-  @view ebLen(): u256 { return this.e.b.length; }
-  @view ebByte(j: u256): bytes1 { return this.e.b[j]; }
+  @external @view getEid(): u64 { return this.e.id; }
+  @external @view getEb(): bytes { return this.e.b; }
+  @external @view getEx(): u64 { return this.e.x; }
+  @external @view ebLen(): u256 { return this.e.b.length; }
+  @external @view ebByte(j: u256): bytes1 { return this.e.b[j]; }
 
   // --- nested Outer{x; D inner; y} ---
   @external setOx(v: u256): void { this.o.x = v; }
   @external setOy(v: u256): void { this.o.y = v; }
   @external setOInnerA(v: u256): void { this.o.inner.a = v; }
   @external setOInnerS(v: string): void { this.o.inner.s = v; }
-  @view getOx(): u256 { return this.o.x; }
-  @view getOy(): u256 { return this.o.y; }
-  @view getOInnerA(): u256 { return this.o.inner.a; }
-  @view getOInnerS(): string { return this.o.inner.s; }
+  @external @view getOx(): u256 { return this.o.x; }
+  @external @view getOy(): u256 { return this.o.y; }
+  @external @view getOInnerA(): u256 { return this.o.inner.a; }
+  @external @view getOInnerS(): string { return this.o.inner.s; }
 
   // --- mapping<address, D[]> byKeyArr (a mapping value that is a dynamic array of
   // dynamic struct: per-key length at keccak(k.12), data at keccak(that)) ---
   @external pushKA(k: address, a: u256, s: string): void { this.byKeyArr[k].push(D(a, s)); }
   @external popKA(k: address): void { this.byKeyArr[k].pop(); }
-  @view kaLen(k: address): u256 { return this.byKeyArr[k].length; }
+  @external @view kaLen(k: address): u256 { return this.byKeyArr[k].length; }
   @external setKAs(k: address, i: u256, v: string): void { this.byKeyArr[k][i].s = v; }
-  @view kaAtA(k: address, i: u256): u256 { return this.byKeyArr[k][i].a; }
-  @view kaAt(k: address, i: u256): string { return this.byKeyArr[k][i].s; }
+  @external @view kaAtA(k: address, i: u256): u256 { return this.byKeyArr[k][i].a; }
+  @external @view kaAt(k: address, i: u256): string { return this.byKeyArr[k][i].s; }
 
   @external setSentinel(c: u256): void { this.sentinel = c; }
-  @view getSentinel(): u256 { return this.sentinel; }
+  @external @view getSentinel(): u256 { return this.sentinel; }
 }

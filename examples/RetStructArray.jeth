@@ -11,7 +11,7 @@ class RetStructArray {
     this.recs.push(Rec(id, owner, amount, active));
   }
   @external addPt(x: u256, y: u256): void { this.pts.push(Pt(x, y)); }
-  @view allRecs(): Rec[] { return this.recs; }
-  @view allPts(): Pt[] { return this.pts; }
-  @view recCount(): u256 { return this.recs.length; }
+  @external @view allRecs(): Rec[] { return this.recs; }
+  @external @view allPts(): Pt[] { return this.pts; }
+  @external @view recCount(): u256 { return this.recs.length; }
 }
