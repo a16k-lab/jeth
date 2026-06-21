@@ -220,7 +220,7 @@ export interface ArrayExpr {
 // Where an assignment target lives.
 export type LValue =
   | { kind: 'state'; type: JethType; slot: number; offset: number; varName: string }
-  | { kind: 'byteIndexStore'; type: JethType; slot: number; index: Expr } // this.b[i] = <bytes1>: write byte i of a storage `bytes` (RMW, bounds-checked)
+  | { kind: 'byteIndexStore'; type: JethType; loc: LValue; index: Expr } // this.b[i] = <bytes1> (loc is the storage `bytes`: direct var / struct field / mapping value / array elem): write byte i (RMW, bounds-checked)
   | { kind: 'immutableStaged'; type: JethType; name: string } // Phase 5: this.<imm> = v inside the constructor (writes the staged shadow; baked via setimmutable)
   | { kind: 'local'; type: JethType; varName: string }
   | {
@@ -273,8 +273,8 @@ export type Stmt =
   // --- Phase 4: array mutators (statements; both return void) ---
   | { kind: 'push'; arr: ArrayExpr; value?: Expr }
   | { kind: 'pop'; arr: ArrayExpr }
-  | { kind: 'bytesPush'; slot: number; value?: Expr } // this.b.push(<bytes1>) / push() on a storage `bytes`
-  | { kind: 'bytesPop'; slot: number }; // this.b.pop() on a storage `bytes`
+  | { kind: 'bytesPush'; loc: LValue; value?: Expr } // this.b.push(<bytes1>) / push() on a storage `bytes` (loc: direct var / struct field / mapping value / array elem)
+  | { kind: 'bytesPop'; loc: LValue }; // this.b.pop() on a storage `bytes` (loc: direct var / struct field / mapping value / array elem)
 
 // A revert payload. 'empty' -> revert(0,0); 'errorString' -> Error(string) blob;
 // 'custom' -> a user-declared custom error (selector + ABI-encoded static args).

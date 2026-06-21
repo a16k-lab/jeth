@@ -908,12 +908,15 @@ export class Analyzer {
       }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
-      // @error args: static value types, dynamic bytes/string, or a DYNAMIC array (G3, head/tail).
-      if (!isStaticValueType(t) && !isBytesLike(t) && !(t.kind === 'array' && t.length === undefined)) {
+      // @error args: static value types, dynamic bytes/string, a DYNAMIC array (G3, head/tail), or a
+      // STATIC struct / fixed-array (encoded inline in the head, like a non-indexed event param). A
+      // dynamic struct @error param stays a later step.
+      const errStaticAgg = isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
+      if (!isStaticValueType(t) && !isBytesLike(t) && !(t.kind === 'array' && t.length === undefined) && !errStaticAgg) {
         this.diags.error(
           p,
           'JETH127',
-          `@error parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types, bytes/string, and dynamic arrays`,
+          `@error parameter '${p.name.text}' has type ${displayName(t)}; supported: static value types, bytes/string, dynamic arrays, and static structs/fixed-arrays`,
         );
         continue;
       }
@@ -2139,32 +2142,53 @@ export class Analyzer {
     return { kind: 'structNew', type: st, fields: st.fields, args };
   }
 
+  /** Resolve `node` to the storage `bytes` LOCATION lvalue (a direct state var, a struct field, a
+   *  mapping value, or a bytes[]/Arr<bytes,N> element) for a .push/.pop or b[i]=x mutation. Returns
+   *  the lvalue only when it denotes a storage `bytes` (string has no element/push/pop ops in solc),
+   *  else undefined so the caller falls through to its other handlers. The yul side computes the
+   *  slot from this lvalue exactly as the whole-value assignment does, so any base solc supports works. */
+  private bytesLocation(node: ts.Expression): LValue | undefined {
+    // Probe via checkLValue, but ROLL BACK any diagnostics + the write flag if the node is not a
+    // storage `bytes` location, so the caller can fall through to its other handlers cleanly (e.g.
+    // `this.m[k]` first probes `this.m`, which would otherwise emit a spurious JETH153).
+    const diagLen = this.diags.items.length;
+    const savedWrites = this.currentWritesState;
+    const lv = this.checkLValue(node);
+    if (lv && lv.type.kind === 'bytes' && (lv.kind === 'dynState' || lv.kind === 'mapDynState' || lv.kind === 'strArrayElem' || lv.kind === 'dynPlace')) {
+      return lv;
+    }
+    this.diags.items.length = diagLen;
+    this.currentWritesState = savedWrites;
+    return undefined;
+  }
+
   private checkArrayMutator(call: ts.CallExpression, method: string, out: Stmt[]): void {
-    // this.b.push(<bytes1>) / push() / pop() on a STORAGE `bytes` var (direct state var; mapping/
-    // struct-reached bytes is deferred). Must precede the array resolver (bytes is not an array).
+    // this.b.push(<bytes1>) / push() / pop() on a STORAGE `bytes` - a direct state var OR reached
+    // through a struct field / mapping value / bytes[] or Arr<bytes,N> element. The receiver is
+    // resolved to its bytes LOCATION lvalue (whose slot the yul side computes exactly like the
+    // whole-value assignment), so any base solc supports works. Must precede the array resolver
+    // (bytes is not an array). push/pop apply to `bytes` only, not `string` (solc parity).
     const recv = (call.expression as ts.PropertyAccessExpression).expression;
-    if (ts.isPropertyAccessExpression(recv) && recv.expression.kind === ts.SyntaxKind.ThisKeyword) {
-      const sv = this.stateByName.get(recv.name.text);
-      if (sv && sv.type.kind === 'bytes') {
-        this.currentWritesState = true;
-        if (method === 'pop') {
-          if (call.arguments.length !== 0) this.diags.error(call, 'JETH215', 'pop() takes no arguments');
-          out.push({ kind: 'bytesPop', slot: sv.slot });
-          return;
-        }
-        if (call.arguments.length > 1) {
-          this.diags.error(call, 'JETH215', 'push(...) takes 0 or 1 arguments');
-          return;
-        }
-        if (call.arguments.length === 0) {
-          out.push({ kind: 'bytesPush', slot: sv.slot });
-          return;
-        }
-        const v = this.checkExpr(call.arguments[0]!, BYTES1);
-        if (!v) return;
-        out.push({ kind: 'bytesPush', slot: sv.slot, value: this.coerce(v, BYTES1, call.arguments[0]!) });
+    const loc = this.bytesLocation(recv);
+    if (loc) {
+      this.currentWritesState = true;
+      if (method === 'pop') {
+        if (call.arguments.length !== 0) this.diags.error(call, 'JETH215', 'pop() takes no arguments');
+        out.push({ kind: 'bytesPop', loc });
         return;
       }
+      if (call.arguments.length > 1) {
+        this.diags.error(call, 'JETH215', 'push(...) takes 0 or 1 arguments');
+        return;
+      }
+      if (call.arguments.length === 0) {
+        out.push({ kind: 'bytesPush', loc });
+        return;
+      }
+      const v = this.checkExpr(call.arguments[0]!, BYTES1);
+      if (!v) return;
+      out.push({ kind: 'bytesPush', loc, value: this.coerce(v, BYTES1, call.arguments[0]!) });
+      return;
     }
     const arr = this.resolveArrayExpr((call.expression as ts.PropertyAccessExpression).expression);
     if (!arr) {
@@ -3502,17 +3526,19 @@ export class Analyzer {
       }
     }
     // this.b[i] = <bytes1>: byte assignment into a STORAGE `bytes` (RMW the containing slot/word).
-    // Only `bytes` (not string), and a direct state var (mapping/struct-reached bytes is deferred).
+    // The bytes may be a direct state var OR reached through a struct field / mapping value /
+    // bytes[] or Arr<bytes,N> element. (string is not element-assignable in solc.) The bytes
+    // LOCATION is resolved first; its slot is computed at codegen like the whole-value assignment.
     if (
       ts.isElementAccessExpression(node) && node.argumentExpression &&
-      ts.isPropertyAccessExpression(node.expression) && node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
+      (ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression))
     ) {
-      const sv = this.stateByName.get(node.expression.name.text);
-      if (sv && sv.type.kind === 'bytes') {
+      const loc = this.bytesLocation(node.expression);
+      if (loc) {
         const idx = this.checkExpr(node.argumentExpression, U256);
         if (!idx) return undefined;
         this.currentWritesState = true;
-        return { kind: 'byteIndexStore', type: BYTES1, slot: sv.slot, index: this.coerce(idx, U256, node.argumentExpression) };
+        return { kind: 'byteIndexStore', type: BYTES1, loc, index: this.coerce(idx, U256, node.argumentExpression) };
       }
     }
     // nested storage place: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]
@@ -3761,8 +3787,8 @@ export class Analyzer {
     }
     if (lv.kind === 'byteIndexStore') {
       // a storage-bytes byte read (for symmetry; compound-assign/++ on a bytes1 byte is rejected
-      // elsewhere - bytesN has no arithmetic).
-      return { kind: 'byteIndex', type: lv.type, base: { kind: 'dynStateRead', type: { kind: 'bytes' }, slot: lv.slot }, index: lv.index };
+      // elsewhere - bytesN has no arithmetic). The base is the bytes location read back.
+      return { kind: 'byteIndex', type: lv.type, base: this.lvalueAsExpr(lv.loc), index: lv.index };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }
@@ -4510,6 +4536,13 @@ export class Analyzer {
       !this.isVisibleLocal('msg') && !this.stateByName.has('msg')
     ) {
       return { kind: 'bytes' };
+    }
+    // a bytes(<string|bytes>) / string(<bytes>) reinterpret cast is indexable as the cast's type, so
+    // `bytes(s)[i]` byte-indexes the reinterpreted value (string(...) is then rejected as non-indexable
+    // by the b[i] handler, matching solc). An invalid inner cast is rejected later by checkExpr.
+    if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.arguments.length === 1) {
+      if (expr.expression.text === 'bytes') return { kind: 'bytes' };
+      if (expr.expression.text === 'string') return { kind: 'string' };
     }
     if (ts.isIdentifier(expr)) return this.lookupLocal(expr.text);
     return undefined;

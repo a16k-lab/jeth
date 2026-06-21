@@ -504,64 +504,59 @@ describe('probe2', () => {
 });
 
 // ===========================================================================
-// DOCUMENTED GAP (compile-time rejection, NOT a runtime miscompile):
-// JETH's construct-and-RETURN encoder (encodeStructReturn / encodeArrayLitHead in
-// src/yul.ts) cannot encode a nested struct-literal (structNew) that appears as a
-// struct FIELD or as a struct-array-literal element's SUBFIELD, when the construction
-// is RETURNED directly (pure/view). solc compiles all of these. The STORE path
-// (writeStruct) handles the identical construction and is byte-identical at runtime
-// (covered by the setTwo/getTwo cases above). These tests pin the gap: JETH rejects
-// at compile time (JETH900) what solc accepts. They are GREEN as long as the gap
-// exists; if JETH later gains support, the .toContain assertion flips and the test
-// fails loudly, prompting conversion into a runtime-parity case.
+// A nested struct-literal (structNew) appearing as a struct FIELD or as a struct-array
+// -literal element's SUBFIELD, when the construction is RETURNED directly (pure/view), is
+// now encoded byte-identically to solc (encodeStructReturn flattens a nested struct field
+// via staticNewLeaves; encodeArrayLitHead recurses into a struct element's nested struct
+// subfield). These were previously a documented JETH900 gap; now runtime-parity cases.
 // ===========================================================================
-describe('documented: nested struct-literal field in RETURN position (JETH900)', () => {
-  function jethErr(src: string): string {
-    try { compile(src, { fileName: 'D.jeth' }); return ''; }
-    catch (e: any) { return (e?.diagnostics?.[0]?.message) || String(e?.message || e); }
-  }
-  function solcOk(src: string): boolean {
-    try { compileSolidity(src, 'D'); return true; } catch { return false; }
+describe('nested struct-literal field in RETURN position vs solc (byte-identical)', () => {
+  async function sameReturn(J: string, S: string, sig: string, args: bigint[]): Promise<void> {
+    const jb = compile(J, { fileName: 'D.jeth' });
+    const sb = compileSolidity(S, 'D');
+    const hj = await Harness.create(); const hs = await Harness.create();
+    const aj = await hj.deploy(jb.creationBytecode); const as = await hs.deploy(sb.creation);
+    const data = '0x' + sel(sig) + args.map((w) => ((w % M + M) % M).toString(16).padStart(64, '0')).join('');
+    const rj = await hj.call(aj, data); const rs = await hs.call(as, data);
+    expect(rj.success, `jeth err=${rj.exceptionError}`).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex);
   }
 
-  it('nested struct field returned: M(Pt(x,y), z)', () => {
-    const J = `@struct class Pt { x: u256; y: u256; }
+  it('nested struct field returned: M(Pt(x,y), z)', () =>
+    sameReturn(
+      `@struct class Pt { x: u256; y: u256; }
 @struct class M { p: Pt; z: u256; }
-@contract class D { @view f(x: u256, y: u256, z: u256): M { return M(Pt(x, y), z); } }`;
-    const S = `// SPDX-License-Identifier: MIT
+@contract class D { @external @view f(x: u256, y: u256, z: u256): M { return M(Pt(x, y), z); } }`,
+      `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract D { struct Pt { uint256 x; uint256 y; } struct M { Pt p; uint256 z; }
-  function f(uint256 x, uint256 y, uint256 z) external pure returns (M memory){ return M(Pt(x, y), z); } }`;
-    expect(solcOk(S)).toBe(true);
-    expect(jethErr(J)).toContain("reference value 'structNew' used in a non-reference context");
-  });
+  function f(uint256 x, uint256 y, uint256 z) external pure returns (M memory){ return M(Pt(x, y), z); } }`,
+      'f(uint256,uint256,uint256)', [7n, 8n, 9n]));
 
-  it('struct field + array-literal sibling returned: T2(P2(px,py), [[..]])', () => {
-    const J = `@struct class P2 { a: u128; b: u128; }
+  it('struct field + array-literal sibling returned: T2(P2(px,py), [[..]])', () =>
+    sameReturn(
+      `@struct class P2 { a: u128; b: u128; }
 @struct class T2 { pt: P2; g: Arr<Arr<u256, 2>, 2>; }
-@contract class D { @view f(px: u128, py: u128, a: u256, b: u256, c: u256, d: u256): T2 { return T2(P2(px, py), [[a, b], [c, d]]); } }`;
-    const S = `// SPDX-License-Identifier: MIT
+@contract class D { @external @view f(px: u128, py: u128, a: u256, b: u256, c: u256, d: u256): T2 { return T2(P2(px, py), [[a, b], [c, d]]); } }`,
+      `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract D { struct P2 { uint128 a; uint128 b; } struct T2 { P2 pt; uint256[2][2] g; }
-  function f(uint128 px, uint128 py, uint256 a, uint256 b, uint256 c, uint256 d) external pure returns (T2 memory){ return T2(P2(px, py), [[a, b], [c, d]]); } }`;
-    expect(solcOk(S)).toBe(true);
-    expect(jethErr(J)).toContain("reference value 'structNew' used in a non-reference context");
-  });
+  function f(uint128 px, uint128 py, uint256 a, uint256 b, uint256 c, uint256 d) external pure returns (T2 memory){ return T2(P2(px, py), [[a, b], [c, d]]); } }`,
+      'f(uint128,uint128,uint256,uint256,uint256,uint256)', [3n, 4n, 10n, 11n, 12n, 13n]));
 
-  it('struct-array literal element with nested struct subfield returned: M(t,[Row(Pt(..),z),..])', () => {
-    const J = `@struct class Pt { x: u8; y: u8; }
+  it('struct-array literal element with nested struct subfield returned: M(t,[Row(Pt(..),z),..])', () =>
+    sameReturn(
+      `@struct class Pt { x: u8; y: u8; }
 @struct class Row { p: Pt; z: u256; }
 @struct class M { tag: u256; rows: Arr<Row, 2>; }
-@contract class D { @view f(t: u256, x0: u8, y0: u8, z0: u256, x1: u8, y1: u8, z1: u256): M {
-  return M(t, [Row(Pt(x0, y0), z0), Row(Pt(x1, y1), z1)]); } }`;
-    const S = `// SPDX-License-Identifier: MIT
+@contract class D { @external @view f(t: u256, x0: u8, y0: u8, z0: u256, x1: u8, y1: u8, z1: u256): M {
+  return M(t, [Row(Pt(x0, y0), z0), Row(Pt(x1, y1), z1)]); } }`,
+      `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract D { struct Pt { uint8 x; uint8 y; } struct Row { Pt p; uint256 z; } struct M { uint256 tag; Row[2] rows; }
   function f(uint256 t, uint8 x0, uint8 y0, uint256 z0, uint8 x1, uint8 y1, uint256 z1) external pure returns (M memory){
-    return M(t, [Row(Pt(x0, y0), z0), Row(Pt(x1, y1), z1)]); } }`;
-    expect(solcOk(S)).toBe(true);
-    expect(jethErr(J)).toContain("reference value 'structNew' used in a non-reference context");
-  });
+    return M(t, [Row(Pt(x0, y0), z0), Row(Pt(x1, y1), z1)]); } }`,
+      'f(uint256,uint8,uint8,uint256,uint8,uint8,uint256)', [99n, 1n, 2n, 100n, 3n, 4n, 200n]));
 
   it('CONTROL: the identical struct stored to state IS byte-identical at runtime', async () => {
     // construct-and-store compiles; verify runtime parity for M(Pt(x,y), z) via the STORE path.

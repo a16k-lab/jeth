@@ -487,3 +487,74 @@ describe('re-sweep over-rejection fixes: hex literal -> bytesN + rational @const
     expect(jethRejects(`@contract class C { @constant K: u256 = 7n/2n; @external @pure f(): u256 { return this.K; } }`)).toBe(true);
   });
 });
+
+describe('re-sweep batch 2: storage-bytes mutators through any base vs solc', () => {
+  const B1 = (h: string) => h.padEnd(64, '0');
+  const initB = (n: number) => W(0x20n) + W(BigInt(n)) + 'aa'.repeat(n).padEnd(Math.ceil(n / 32) * 64, '0');
+  it('struct.bytes .push (31->32) / .pop (32->31) / [i]=x byte-identical', async () => {
+    const c: { sig: string; args?: string }[] = [{ sig: 'init(bytes)', args: initB(30) }];
+    for (let i = 0; i < 5; i++) c.push({ sig: 'p(bytes1)', args: B1((0x10 + i).toString(16).padStart(2, '0')) });
+    c.push({ sig: 'get()' }, { sig: 's(uint256,bytes1)', args: W(33n) + B1('ee') }, { sig: 'get()' });
+    for (let i = 0; i < 4; i++) c.push({ sig: 'pop()' });
+    c.push({ sig: 'get()' });
+    await rt(
+      `@struct class D { x: u256; data: bytes; } @contract class C { @state d: D; @external init(v: bytes): void { this.d.data = v; } @external p(b: bytes1): void { this.d.data.push(b); } @external pop(): void { this.d.data.pop(); } @external s(i: u256, x: bytes1): void { this.d.data[i] = x; } @external @view get(): bytes { return this.d.data; } }`,
+      `contract C { struct D{uint256 x;bytes data;} D d; function init(bytes calldata v) external { d.data=v; } function p(bytes1 b) external { d.data.push(b); } function pop() external { d.data.pop(); } function s(uint256 i,bytes1 x) external { d.data[i]=x; } function get() external view returns(bytes memory){ return d.data; } }`,
+      c,
+    );
+  });
+  it('mapping(u256=>bytes) value .push / [i]=x byte-identical', async () => {
+    const c: { sig: string; args?: string }[] = [{ sig: 'init(uint256,bytes)', args: W(7n) + W(0x40n) + W(30n) + 'bb'.repeat(30).padEnd(64, '0') }];
+    for (let i = 0; i < 4; i++) c.push({ sig: 'p(uint256,bytes1)', args: W(7n) + B1((0x20 + i).toString(16).padStart(2, '0')) });
+    c.push({ sig: 's(uint256,uint256,bytes1)', args: W(7n) + W(2n) + B1('ff') }, { sig: 'get(uint256)', args: W(7n) });
+    await rt(
+      `@contract class C { @state m: mapping<u256, bytes>; @external init(k: u256, v: bytes): void { this.m[k] = v; } @external p(k: u256, b: bytes1): void { this.m[k].push(b); } @external s(k: u256, i: u256, x: bytes1): void { this.m[k][i] = x; } @external @view get(k: u256): bytes { return this.m[k]; } }`,
+      `contract C { mapping(uint256=>bytes) m; function init(uint256 k,bytes calldata v) external { m[k]=v; } function p(uint256 k,bytes1 b) external { m[k].push(b); } function s(uint256 k,uint256 i,bytes1 x) external { m[k][i]=x; } function get(uint256 k) external view returns(bytes memory){ return m[k]; } }`,
+      c,
+    );
+  });
+  it('bytes[] element and Arr<bytes,N> element .push byte-identical', async () => {
+    const c: { sig: string; args?: string }[] = [{ sig: 'init(bytes)', args: initB(30) }];
+    for (let i = 0; i < 4; i++) c.push({ sig: 'p(uint256,bytes1)', args: W(0n) + B1((0x30 + i).toString(16).padStart(2, '0')) });
+    c.push({ sig: 'get(uint256)', args: W(0n) });
+    await rt(
+      `@contract class C { @state a: bytes[]; @external init(v: bytes): void { this.a.push(v); } @external p(i: u256, b: bytes1): void { this.a[i].push(b); } @external @view get(i: u256): bytes { return this.a[i]; } }`,
+      `contract C { bytes[] a; function init(bytes calldata v) external { a.push(v); } function p(uint256 i,bytes1 b) external { a[i].push(b); } function get(uint256 i) external view returns(bytes memory){ return a[i]; } }`,
+      c,
+    );
+  });
+  it('pop on empty struct.bytes Panics (0x31) like solc', () =>
+    rt(
+      `@struct class D { x: u256; data: bytes; } @contract class C { @state d: D; @external pop(): void { this.d.data.pop(); } }`,
+      `contract C { struct D{uint256 x;bytes data;} D d; function pop() external { d.data.pop(); } }`,
+      [{ sig: 'pop()' }],
+    ));
+});
+
+describe('re-sweep batch 2: bytes(string)[i] / nested ctor / fixed-array copy / @error aggregates vs solc', () => {
+  const strArg = (s: string) => W(0x20n) + W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd(64, '0');
+  it('bytes(string)[i] byte-indexes the reinterpreted value (calldata / storage / memory)', () =>
+    rt(
+      `@contract class C { @state s: string; @external set(v: string): void { this.s = v; } @external @view atStore(i: u256): bytes1 { return bytes(this.s)[i]; } @external @pure atCd(t: string, i: u256): bytes1 { return bytes(t)[i]; } @external @pure atMem(t: string, i: u256): bytes1 { let m: string = t; return bytes(m)[i]; } }`,
+      `contract C { string s; function set(string calldata v) external { s=v; } function atStore(uint256 i) external view returns(bytes1){ return bytes(s)[i]; } function atCd(string calldata t,uint256 i) external pure returns(bytes1){ return bytes(t)[i]; } function atMem(string calldata t,uint256 i) external pure returns(bytes1){ string memory m=t; return bytes(m)[i]; } }`,
+      [{ sig: 'set(string)', args: strArg('hello world') }, { sig: 'atStore(uint256)', args: W(4n) }, { sig: 'atCd(string,uint256)', args: strArg('abcdef') + '' }, { sig: 'atCd(string,uint256)', args: strArg('abcdef') }, { sig: 'atMem(string,uint256)', args: strArg('xyz123') }],
+    ));
+  it('nested inline struct constructor in a return position (positional), incl. deep nesting', () =>
+    rt(
+      `@struct class Inner { c: u8; v: u32; } @struct class Outer { id: u16; inner: Inner; } @struct class A { x: u8; } @struct class B { a: A; y: u16; } @struct class D { b: B; z: u32; } @contract class C { @external @pure f(id: u16, c: u8, v: u32): Outer { return Outer(id, Inner(c, v)); } @external @pure g(): D { return D(B(A(5n), 6n), 7n); } }`,
+      `struct Inner{uint8 c;uint32 v;} struct Outer{uint16 id;Inner inner;} struct A{uint8 x;} struct B{A a;uint16 y;} struct D{B b;uint32 z;} contract C { function f(uint16 id,uint8 c,uint32 v) external pure returns(Outer memory){ return Outer(id,Inner(c,v)); } function g() external pure returns(D memory){ return D(B(A(5),6),7); } }`,
+      [{ sig: 'f(uint16,uint8,uint32)', args: W(0x102n) + W(7n) + W(0xcafen) }, { sig: 'g()' }],
+    ));
+  it('whole memory / calldata fixed-array -> storage assignment (incl. packed elements)', () =>
+    rt(
+      `@contract class C { @state g: Arr<u256,3>; @state h: Arr<u64,4>; @external a(): u256 { let m: Arr<u256,3> = [111n,222n,333n]; this.g = m; return this.g[2n]; } @external b(x: Arr<u256,3>): u256 { this.g = x; return this.g[1n]; } @external c(): u64 { let m: Arr<u64,4> = [1n,2n,3n,4n]; this.h = m; return this.h[3n]; } }`,
+      `contract C { uint256[3] g; uint64[4] h; function a() external returns(uint256){ uint256[3] memory m=[uint256(111),222,333]; g=m; return g[2]; } function b(uint256[3] calldata x) external returns(uint256){ g=x; return g[1]; } function c() external returns(uint64){ uint64[4] memory m=[uint64(1),2,3,4]; h=m; return h[3]; } }`,
+      [{ sig: 'a()' }, { sig: 'b(uint256[3])', args: W(5n) + W(6n) + W(7n) }, { sig: 'c()' }],
+    ));
+  it('@error with static struct / fixed-array / mixed params reverts byte-identically', () =>
+    rt(
+      `@struct class P { x: u256; y: bool; } @contract class C { @error BadS(p: P); @error BadA(a: Arr<u256, 2>); @error BadMix(n: u256, p: P, s: bytes); @external fs(): void { revert(BadS(P(42n, true))); } @external fa(): void { let x: Arr<u256,2> = [5n,6n]; revert(BadA(x)); } @external fm(): void { revert(BadMix(9n, P(1n, true), "hello")); } }`,
+      `contract C { struct P{uint256 x;bool y;} error BadS(P p); error BadA(uint256[2] a); error BadMix(uint256 n, P p, bytes s); function fs() external { revert BadS(P(42,true)); } function fa() external { uint256[2] memory x=[uint256(5),6]; revert BadA(x); } function fm() external { revert BadMix(9, P(1,true), "hello"); } }`,
+      [{ sig: 'fs()' }, { sig: 'fa()' }, { sig: 'fm()' }],
+    ));
+});

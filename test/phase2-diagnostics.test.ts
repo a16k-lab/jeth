@@ -72,7 +72,8 @@ describe('Phase 2 diagnostics', () => {
 
   it('rejects malformed @error declarations', () => {
     expect(codesFor(`@contract\nclass T { @error Bad(a: u256) { return; } }`)).toContain('JETH125'); // has body
-    expect(codesFor(`@contract\nclass T { @error Bad(a: Arr<u256, 3>); }`)).toContain('JETH127'); // fixed-array arg still deferred
+    expect(codesFor(`@contract\nclass T { @error Ok(a: Arr<u256, 3>); }`)).toEqual([]); // static fixed-array arg now supported (inline head)
+    expect(codesFor(`@struct\nclass D { s: string; }\n@contract\nclass T { @error Bad(d: D); }`)).toContain('JETH127'); // a DYNAMIC struct arg stays deferred
     expect(codesFor(`@contract\nclass T { @error Ok(a: u256[]); }`)).toEqual([]); // dynamic-array args supported (G3)
     expect(codesFor(`@contract\nclass T { @error Ok(a: string); }`)).toEqual([]); // bytes/string args supported (4e-7)
     expect(codesFor(`@contract\nclass T { @error E(a: u256); @error E(b: u256); }`)).toContain('JETH128'); // dup

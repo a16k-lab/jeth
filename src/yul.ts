@@ -824,6 +824,10 @@ ${indent(runtime, 6)}
                 : this.lowerPlace(s.target.path, ctx, out).slot;
           if (s.value.kind === 'arrayLit') {
             this.writeArrayLit(s.value, dstBase, ctx, out);
+          } else if (s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue') {
+            // a whole MEMORY fixed-array local / CALLDATA fixed-array param: transcode its ABI-unpacked
+            // image (one word per leaf) into packed storage, exactly like a whole memory struct assign.
+            this.storeStaticAggFromMem(s.target.type, this.aggToMemPtr(s.value, ctx, out), dstBase, out);
           } else {
             this.copyFixedArray(s.target.type, this.fixedArraySrcBase(s.value, ctx, out), dstBase, out);
           }
@@ -852,10 +856,13 @@ ${indent(runtime, 6)}
         }
         if (s.target.kind === 'byteIndexStore') {
           // this.b[i] = <bytes1>: bounds-checked read-modify-write of byte i in a storage `bytes`.
+          // The bytes location (direct var / struct field / mapping value / array elem) resolves to
+          // its slot exactly like the whole-value assignment.
+          const bslot = this.bytesLocSlot(s.target.loc, ctx, out);
           const i = this.fresh();
           out.push(`let ${i} := ${this.lowerExpr(s.target.index, ctx, out)}`);
           const v = this.lowerExpr(s.value, ctx, out);
-          out.push(`${this.strByteSet()}(${s.target.slot}, ${i}, ${v})`);
+          out.push(`${this.strByteSet()}(${bslot}, ${i}, ${v})`);
           break;
         }
         if (s.target.kind === 'memDynField') {
@@ -1116,13 +1123,16 @@ ${indent(runtime, 6)}
         else this.lowerPop(s.arr, ctx, out);
         break;
       case 'bytesPush': {
+        const slot = this.bytesLocSlot(s.loc, ctx, out);
         const v = s.value ? this.lowerExpr(s.value, ctx, out) : '0';
-        out.push(`${this.strPush()}(${s.slot}, ${v})`);
+        out.push(`${this.strPush()}(${slot}, ${v})`);
         break;
       }
-      case 'bytesPop':
-        out.push(`${this.strPop()}(${s.slot})`);
+      case 'bytesPop': {
+        const slot = this.bytesLocSlot(s.loc, ctx, out);
+        out.push(`${this.strPop()}(${slot})`);
         break;
+      }
     }
     return out;
   }
@@ -1166,7 +1176,8 @@ ${indent(runtime, 6)}
       case 'custom': {
         // Evaluate args eagerly into temps so they run before any cond guard
         // (matches solc: a custom-error arg can revert even when require passes).
-        if (!r.args.some((a) => isDynamicType(a.type))) {
+        // Fast path: every arg is a static VALUE (one word each, no struct/array/dynamic).
+        if (!r.args.some((a) => isDynamicType(a.type) || a.type.kind === 'struct' || a.type.kind === 'array')) {
           const argTemps = r.args.map((a) => {
             const v = this.lowerExpr(a, ctx, out);
             const t = this.fresh();
@@ -1176,33 +1187,50 @@ ${indent(runtime, 6)}
           const helper = this.errorRevert(argTemps.length);
           return [`${helper}(0x${r.decl.selector}${argTemps.map((a) => ', ' + a).join('')})`];
         }
-        // head/tail: each arg is one head word (static value, or a tail offset for a
-        // dynamic bytes/string/array); offsets are relative to the args region (calldata byte 4).
+        // head/tail: a static value is one head word; a static struct / fixed-array occupies its
+        // abiHeadWords leaf words INLINE in the head; a dynamic bytes/string/array writes a head
+        // offset word + a tail blob. Tail offsets are relative to the args region (calldata byte 4).
+        const headWordsOf = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
         const lines: string[] = [];
-        type LA = { dyn: 'static'; word: string } | { dyn: 'bytes'; mp: string; len: string } | { dyn: 'array'; mp: string; size: string };
+        type LA =
+          | { dyn: 'static'; word: string }
+          | { dyn: 'agg'; mp: string; words: number }
+          | { dyn: 'bytes'; mp: string; len: string }
+          | { dyn: 'array'; mp: string; size: string };
         const lowered: LA[] = r.args.map((a): LA => {
           if (isBytesLike(a.type)) {
             const { mp, len } = this.toMemory(this.lowerDynamic(a, ctx, lines), lines);
             return { dyn: 'bytes', mp, len };
           }
-          if (a.type.kind === 'array') {
+          if (a.type.kind === 'array' && a.type.length === undefined) {
             const { mp, size } = this.materializeArrayArg(a, ctx, lines);
             return { dyn: 'array', mp, size };
+          }
+          if (a.type.kind === 'struct' || (a.type.kind === 'array' && a.type.length !== undefined)) {
+            // a STATIC struct / fixed-array: materialize its ABI-unpacked image NOW (before the head
+            // buffer is captured, so it cannot alias), then mcopy its leaf words inline into the head.
+            return { dyn: 'agg', mp: this.aggToMemPtr(a, ctx, lines), words: abiHeadWords(a.type) };
           }
           const t = this.fresh();
           lines.push(`let ${t} := ${this.lowerExpr(a, ctx, lines)}`);
           return { dyn: 'static', word: t };
         });
-        const headSize = lowered.length * 32;
+        const headSize = r.args.reduce((n, a) => n + headWordsOf(a.type), 0) * 32;
         const p = this.fresh();
         lines.push(`let ${p} := mload(0x40)`);
         lines.push(`mstore(${p}, shl(224, 0x${r.decl.selector}))`);
         const cur = this.fresh();
         lines.push(`let ${cur} := ${headSize}`); // byte offset (rel byte 4) of next tail
-        lowered.forEach((a, i) => {
-          const headAt = `add(${p}, ${4 + i * 32})`;
+        let hw = 0; // running head-word index
+        lowered.forEach((a) => {
+          const headAt = `add(${p}, ${4 + hw * 32})`;
           if (a.dyn === 'static') {
             lines.push(`mstore(${headAt}, ${a.word})`);
+            hw += 1;
+          } else if (a.dyn === 'agg') {
+            // static aggregate: its abiHeadWords leaf words inline (no offset, no tail).
+            lines.push(`mcopy(${headAt}, ${a.mp}, ${a.words * 32})`);
+            hw += a.words;
           } else if (a.dyn === 'bytes') {
             lines.push(`mstore(${headAt}, ${cur})`);
             const padded = this.fresh();
@@ -1210,11 +1238,13 @@ ${indent(runtime, 6)}
             lines.push(`mstore(add(${p}, add(4, ${cur})), ${a.len})`);
             lines.push(`mcopy(add(${p}, add(4, add(${cur}, 0x20))), add(${a.mp}, 0x20), ${padded})`);
             lines.push(`${cur} := add(${cur}, add(0x20, ${padded}))`);
+            hw += 1;
           } else {
             // array tail blob [len][elements...] is already ABI-encoded: copy it verbatim.
             lines.push(`mstore(${headAt}, ${cur})`);
             lines.push(`mcopy(add(${p}, add(4, ${cur})), ${a.mp}, ${a.size})`);
             lines.push(`${cur} := add(${cur}, ${a.size})`);
+            hw += 1;
           }
         });
         lines.push(`revert(${p}, add(4, ${cur}))`);
@@ -1722,6 +1752,11 @@ ${indent(runtime, 6)}
         if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
           this.encodeArrayLitHead(arg, w, ctx, out);
           w += abiHeadWords(f.type);
+        } else if ((f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) && arg.kind === 'structNew') {
+          // a nested inline static struct field (Outer(id, Inner(...))): flatten its leaf words
+          // inline at consecutive head words, recursing into deeper nested structs.
+          this.staticNewLeaves(f.type, arg, ctx, out).forEach((lw, k) => out.push(`mstore(${(w + k) * 32}, ${lw})`));
+          w += abiHeadWords(f.type);
         } else {
           out.push(`mstore(${w * 32}, ${this.lowerExpr(arg, ctx, out)})`);
           w += abiHeadWords(f.type);
@@ -1742,12 +1777,16 @@ ${indent(runtime, 6)}
       const wb = wordBase + k * ew;
       if (el.kind === 'arrayLit') this.encodeArrayLitHead(el, wb, ctx, out);
       else if (el.kind === 'structNew') {
-        // a struct-literal element: write each of its fields as a head word (static only here).
+        // a struct-literal element: write each field as head word(s). A fixed-array subfield recurses;
+        // a nested inline static struct subfield is flattened to its leaf words; a value subfield is one word.
         let fw = wb;
         el.fields.forEach((sf, sj) => {
           const sarg = el.args[sj]!;
           if (sf.type.kind === 'array' && sarg.kind === 'arrayLit') { this.encodeArrayLitHead(sarg, fw, ctx, out); fw += abiHeadWords(sf.type); }
-          else { out.push(`mstore(${fw * 32}, ${this.lowerExpr(sarg, ctx, out)})`); fw += abiHeadWords(sf.type); }
+          else if ((sf.type.kind === 'struct' || (sf.type.kind === 'array' && sf.type.length !== undefined)) && sarg.kind === 'structNew') {
+            this.staticNewLeaves(sf.type, sarg, ctx, out).forEach((lw, k) => out.push(`mstore(${(fw + k) * 32}, ${lw})`));
+            fw += abiHeadWords(sf.type);
+          } else { out.push(`mstore(${fw * 32}, ${this.lowerExpr(sarg, ctx, out)})`); fw += abiHeadWords(sf.type); }
         });
       } else out.push(`mstore(${wb * 32}, ${this.lowerExpr(el, ctx, out)})`);
     });
@@ -3494,6 +3533,19 @@ ${indent(runtime, 6)}
     const hdr = this.fresh();
     out.push(`let ${hdr} := add(${dataBase}, ${nl})`);
     out.push(`${this.clearStr()}(${hdr})`);
+  }
+
+  /** Resolve a storage `bytes` LOCATION lvalue (a direct state var, a struct field, a mapping value,
+   *  or a bytes[]/Arr<bytes,N> element) to its header slot, using the SAME resolver each whole-value
+   *  assignment uses, so a .push/.pop/b[i]=x mutation lands on the identical slot. */
+  private bytesLocSlot(loc: LValue, ctx: LowerCtx, out: string[]): string {
+    switch (loc.kind) {
+      case 'dynState': return String(loc.slot);
+      case 'mapDynState': return this.mappingSlot(loc.baseSlot, loc.keys, ctx, out);
+      case 'strArrayElem': return this.strArrayElemSlot(loc.arr, loc.index, ctx, out);
+      case 'dynPlace': return this.lowerPlace(loc.path, ctx, out).slot;
+      default: throw new UnsupportedError(`bytes mutation through a '${loc.kind}' location is not supported`);
+    }
   }
 
   /** Storage header slot of bytes/string element `i` of a storage string[]/bytes[].

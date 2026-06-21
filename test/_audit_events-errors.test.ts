@@ -570,11 +570,16 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).
     expect(() => compile(`@contract class C { @event E(a: Arr<u256, 3>); @external f(a: u256, b: u256, c: u256): void { emit(E([a, b, c])); } }`, { fileName: 'C.jeth' })).not.toThrow();
   });
-  it('gate: struct error arg rejected (JETH127) - clean reject, not miscompile', () => {
+  it('@error with a STATIC struct param now compiles (encoded inline in the revert head); a DYNAMIC struct param stays gated (JETH127)', () => {
+    // a static struct error param is now supported (revert data byte-identical to solc, verified in
+    // fix-all-divergences.test.ts).
+    expect(() => compile(`@struct class S { a: u256; b: bool; }
+@contract class C { @error E(s: S); @external @pure f(s: S): void { revert(E(s)); } }`, { fileName: 'C.jeth' })).not.toThrow();
+    // a DYNAMIC struct (bytes/string field) error param is still a clean rejection (JETH127).
     let threw = false;
     try {
-      compile(`@struct class S { a: u256; b: bool; }
-@contract class C { @error E(s: S); @external @pure f(s: S): void { revert(E(s)); } }`, { fileName: 'C.jeth' });
+      compile(`@struct class D { a: u256; s: string; }
+@contract class C { @error E(d: D); @external f(): void { revert(E(D(1n, "x"))); } }`, { fileName: 'C.jeth' });
     } catch (e: any) {
       threw = true;
       expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH127');
