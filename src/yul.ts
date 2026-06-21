@@ -1796,6 +1796,17 @@ ${indent(runtime, 6)}
         const sz = this.abiEncFromCd(t, cdPtr, cursor, !topClean, out);
         out.push(`${cursor} := add(${cursor}, ${sz})`);
         hw += 1;
+      } else if (!isDynamicType(t) && values[i]!.kind === 'structNew') {
+        // a constructed STATIC struct component (return [x, P(1,2), y]): write its fields INLINE,
+        // directly into the tuple head (no fresh allocation - the head buffer's free pointer is not
+        // reserved until the end of the loop, so a scratch alloc here would alias the head).
+        this.writeAggToMem(values[i]!, ptr, hw, ctx, out);
+        hw += abiHeadWords(t);
+      } else if (!isDynamicType(t) && values[i]!.kind === 'memAggregate') {
+        // a STATIC memory struct/fixed-array local component: copy its image inline into the head.
+        const mp = this.lowerExpr(values[i]!, ctx, out);
+        out.push(`mcopy(add(${ptr}, ${headPos}), ${mp}, ${abiHeadWords(t) * 32})`);
+        hw += abiHeadWords(t);
       } else {
         // a struct / array component, storage-source: static -> inline head; dynamic ->
         // offset word + tail (both via the recursive storage encoder).

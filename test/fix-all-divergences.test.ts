@@ -315,3 +315,28 @@ describe('delete of a memory aggregate local (rebind to fresh zeroed instance) v
     );
   });
 });
+
+describe('multi-return with a MEMORY/constructed struct component vs solc', () => {
+  it('constructed, local, packed, and mixed-with-dynamic', async () => {
+    await rt(
+      `@struct class P { a: u256; b: address; } @contract class C { @external @pure f(): [u256, P, bool] { return [9n, P(1n, address(0x7n)), true]; } }`,
+      `struct P { uint256 a; address b; } contract C { function f() external pure returns (uint256, P memory, bool){ return (9, P(1, address(0x7)), true); } }`,
+      [{ sig: 'f()' }],
+    );
+    await rt(
+      `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(): [u256, P] { let p: P = P(3n, 4n); return [9n, p]; } }`,
+      `struct P { uint256 a; uint256 b; } contract C { function f() external pure returns (uint256, P memory){ P memory p = P(3, 4); return (9, p); } }`,
+      [{ sig: 'f()' }],
+    );
+    await rt(
+      `@struct class P { a: u8; b: u16; c: address; } @contract class C { @external @pure f(): [P, u256] { return [P(200n, 50000n, address(0x1n)), 7n]; } }`,
+      `struct P { uint8 a; uint16 b; address c; } contract C { function f() external pure returns (P memory, uint256){ return (P(200, 50000, address(0x1)), 7); } }`,
+      [{ sig: 'f()' }],
+    );
+    await rt(
+      `@struct class P { a: u256; } @contract class C { @external @pure f(): [P, u256, string] { return [P(5n), 8n, "hi"]; } }`,
+      `struct P { uint256 a; } contract C { function f() external pure returns (P memory, uint256, string memory){ return (P(5), 8, "hi"); } }`,
+      [{ sig: 'f()' }],
+    );
+  });
+});
