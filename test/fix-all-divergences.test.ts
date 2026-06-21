@@ -255,3 +255,23 @@ describe('@payable on internal/private/hidden is rejected (solc parity)', () => 
     expect(jethAccepts(`@contract class C { @public @payable f(): u256 { return msg.value; } }`)).toBe(true);
   });
 });
+
+describe('fixed-array field of a memory struct local (p.a[i]) read/write vs solc', () => {
+  it('value, packed-element, and nested-struct fixed-array fields', async () => {
+    await rt(
+      `@struct class P { x: u256; a: Arr<u256,3>; y: u256; } @contract class C { @external @pure f(i: u256, v: u256): u256 { let p: P = P(7n, [10n, 20n, 30n], 9n); p.a[i] = v; return p.a[i] + p.x + p.y; } }`,
+      `struct P { uint256 x; uint256[3] a; uint256 y; } contract C { function f(uint256 i, uint256 v) external pure returns(uint256){ P memory p = P(7, [uint256(10),20,30], 9); p.a[i] = v; return p.a[i] + p.x + p.y; } }`,
+      [{ sig: 'f(uint256,uint256)', args: W(1n) + W(99n) }, { sig: 'f(uint256,uint256)', args: W(0n) + W(5n) }, { sig: 'f(uint256,uint256)', args: W(3n) + W(1n) }],
+    );
+    await rt(
+      `@struct class P { a: Arr<u8,4>; n: u256; } @contract class C { @external @pure f(i: u256): u256 { let p: P = P([1n, 2n, 3n, 4n], 0n); p.a[i] = 200n; return u256(p.a[0n]) + u256(p.a[i]); } }`,
+      `struct P { uint8[4] a; uint256 n; } contract C { function f(uint256 i) external pure returns(uint256){ P memory p = P([uint8(1),2,3,4], 0); p.a[i] = 200; return uint256(p.a[0]) + uint256(p.a[i]); } }`,
+      [{ sig: 'f(uint256)', args: W(2n) }, { sig: 'f(uint256)', args: W(0n) }],
+    );
+    await rt(
+      `@struct class I { a: Arr<u256,2>; } @struct class O { x: u256; inner: I; } @contract class C { @external @pure f(i: u256, v: u256): u256 { let o: O = O(5n, I([1n, 2n])); o.inner.a[i] = v; return o.inner.a[i] + o.x; } }`,
+      `struct I { uint256[2] a; } struct O { uint256 x; I inner; } contract C { function f(uint256 i, uint256 v) external pure returns(uint256){ O memory o = O(5, I([uint256(1),2])); o.inner.a[i] = v; return o.inner.a[i] + o.x; } }`,
+      [{ sig: 'f(uint256,uint256)', args: W(1n) + W(77n) }, { sig: 'f(uint256,uint256)', args: W(0n) + W(8n) }],
+    );
+  });
+});

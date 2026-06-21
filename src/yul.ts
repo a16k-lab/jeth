@@ -1499,12 +1499,14 @@ ${indent(runtime, 6)}
         return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
       }
       case 'memElem': {
-        // a[i] on a fixed-array memory local (value element): bounds-check then mload at ptr+i*32.
+        // a[i] on a fixed-array memory local (value element): bounds-check then mload. A fixed-array
+        // FIELD of a memory struct (p.a[i]) starts wordOffset words into the image.
         const ptr = this.ctxLookup(ctx, e.local);
+        const base = e.wordOffset ? `add(${ptr}, ${e.wordOffset * 32})` : ptr;
         const i = this.fresh();
         out.push(`let ${i} := ${this.lowerExpr(e.index, ctx, out)}`);
         out.push(`if iszero(lt(${i}, ${e.length})) { ${this.panic()}(0x32) }`);
-        return `mload(add(${ptr}, mul(${i}, 0x20)))`;
+        return `mload(add(${base}, mul(${i}, 0x20)))`;
       }
       case 'memAggregate': {
         // a whole memory aggregate (the local's pointer), or a nested struct field at a word
@@ -4946,10 +4948,11 @@ ${indent(runtime, 6)}
     }
     if (target.kind === 'memElem') {
       const ptr = this.ctxLookup(ctx, target.local);
+      const base = target.wordOffset ? `add(${ptr}, ${target.wordOffset * 32})` : ptr;
       const i = this.fresh();
       out.push(`let ${i} := ${this.lowerExpr(target.index, ctx, out)}`);
       out.push(`if iszero(lt(${i}, ${target.length})) { ${this.panic()}(0x32) }`);
-      out.push(`mstore(add(${ptr}, mul(${i}, 0x20)), ${valueReg})`);
+      out.push(`mstore(add(${base}, mul(${i}, 0x20)), ${valueReg})`);
       return;
     }
     if (target.kind === 'arrayElem') {

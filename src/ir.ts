@@ -104,7 +104,7 @@ export type Expr =
   | { kind: 'structNew'; type: JethType; fields: StructField[]; args: Expr[] } // Point(a, b)
   | { kind: 'structValue'; type: JethType; baseSlot: number } // whole storage struct (for return)
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // read a value field/element of a memory-aggregate local (p.x)
-  | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number } // a[i] on a fixed-array memory local (value element, bounds-checked)
+  | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] on a fixed-array memory local (value element, bounds-checked); wordOffset: a fixed-array FIELD of a memory struct (p.a[i]) starts that many words into the image
   | { kind: 'memAggregate'; type: JethType; local: string; wordOffset?: number } // a whole memory aggregate, or a nested struct field at wordOffset (sub-pointer into the parent image)
   | { kind: 'memDynStructValue'; type: JethType; local: string } // a whole DYNAMIC-field struct memory local (head: value fields inline, bytes/string fields as pointers)
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number } // a bytes/string field of a memory dynamic struct (the head word holds the [len][data] pointer)
@@ -235,7 +235,7 @@ export type LValue =
 
   | { kind: 'place'; type: JethType; path: AccessPath } // nested storage place = v
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // p.x = v on a memory-aggregate local
-  | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number } // a[i] = v on a fixed-array memory local
+  | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] = v on a fixed-array memory local (wordOffset: a fixed-array field of a memory struct, p.a[i])
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number }; // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
 
 // The right-hand side of a tuple destructuring: a multi-value internal call, or a tuple of expressions.

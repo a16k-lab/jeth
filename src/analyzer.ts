@@ -3385,6 +3385,15 @@ export class Analyzer {
         return { kind: 'memElem', type: at.element, local: node.expression.text, index: this.coerce(index, U256, node.argumentExpression), length: at.length };
       }
     }
+    // G9: `p.a[i] = v` where a is a fixed-array VALUE field of a memory struct local.
+    if (ts.isElementAccessExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.argumentExpression && this.memChainRoot(node.expression)) {
+      const fld = this.resolveMemFieldChain(node.expression);
+      if (fld && fld.type.kind === 'array' && fld.type.length !== undefined && isStaticValueType(fld.type.element)) {
+        const index = this.checkExpr(node.argumentExpression, U256);
+        if (!index) return undefined;
+        return { kind: 'memElem', type: fld.type.element, local: fld.local, index: this.coerce(index, U256, node.argumentExpression), length: fld.type.length, wordOffset: fld.wordOffset };
+      }
+    }
     // nested storage place: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const acc = this.resolveAccess(node);
@@ -3611,8 +3620,8 @@ export class Analyzer {
       return { kind: 'memField', type: lv.type, local: lv.local, wordOffset: lv.wordOffset };
     }
     if (lv.kind === 'memElem') {
-      // a fixed-array memory element read (for compound-assign / ++ on a[i]): NOT storage.
-      return { kind: 'memElem', type: lv.type, local: lv.local, index: lv.index, length: lv.length };
+      // a fixed-array memory element read (for compound-assign / ++ on a[i] or p.a[i]): NOT storage.
+      return { kind: 'memElem', type: lv.type, local: lv.local, index: lv.index, length: lv.length, wordOffset: lv.wordOffset };
     }
     if (lv.kind === 'memDynField') {
       // a bytes/string memory-struct field read (no compound-assign/++ applies; type-checked away).
@@ -5079,6 +5088,16 @@ export class Analyzer {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         return { kind: 'memElem', type: at.element, local: node.expression.text, index: this.coerce(index, U256, node.argumentExpression), length: at.length };
+      }
+    }
+    // G9: p.a[i] where a is a fixed-array VALUE field of a memory struct local -> memElem at a's word
+    // offset within the image (the element words are inline, one per element).
+    if (ts.isElementAccessExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.argumentExpression && this.memChainRoot(node.expression)) {
+      const fld = this.resolveMemFieldChain(node.expression);
+      if (fld && fld.type.kind === 'array' && fld.type.length !== undefined && isStaticValueType(fld.type.element)) {
+        const index = this.checkExpr(node.argumentExpression, U256);
+        if (!index) return undefined;
+        return { kind: 'memElem', type: fld.type.element, local: fld.local, index: this.coerce(index, U256, node.argumentExpression), length: fld.type.length, wordOffset: fld.wordOffset };
       }
     }
 
