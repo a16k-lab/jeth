@@ -2029,12 +2029,15 @@ export class Analyzer {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
       const sameStruct = a.type.kind === 'struct' && a.type.name === f.type.name;
-      if (a.kind === 'structNew') return a; // an inline constructor (the only form for a DYNAMIC field)
-      // a non-inline value of the same struct type is allowed for a STATIC struct field (codegen copies
-      // its leaves); a DYNAMIC nested struct field must be constructed inline.
+      if (a.kind === 'structNew') return a; // an inline constructor
+      // a non-inline value of the same struct type. A STATIC field is copied leaf-by-leaf by codegen
+      // (R1). A DYNAMIC field from a SIDE-EFFECT-FREE source is desugared into an inline constructor
+      // that reads each of the source's fields - StructName(src.f0, src.f1, ...) - which reuses the
+      // verified inline encoder and is byte-identical to solc's field-by-field copy.
       if (sameStruct && isStaticType(f.type)) return a;
+      if (sameStruct && this.isPureReadExpr(argNode)) return this.desugarStructCopy(f.type, argNode);
       this.diags.error(argNode, 'JETH226', sameStruct
-        ? `dynamic struct field '${f.name}' must be constructed inline, e.g. ${f.type.name}(...)`
+        ? `dynamic struct field '${f.name}' must be constructed inline or come from a simple (side-effect-free) struct value`
         : `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
       return undefined;
     }
@@ -2081,6 +2084,32 @@ export class Analyzer {
     const a = this.checkExpr(argNode, f.type);
     if (!a) return undefined;
     return this.coerce(a, f.type, argNode);
+  }
+
+  /** True if reading `node` has no side effects and is repeatable (an identifier, `this`, or a
+   *  property/element access over such - never a call). Used to decide whether a struct value can be
+   *  desugared into per-field reads without changing semantics. */
+  private isPureReadExpr(node: ts.Expression): boolean {
+    if (ts.isIdentifier(node) || node.kind === ts.SyntaxKind.ThisKeyword) return true;
+    if (ts.isPropertyAccessExpression(node)) return this.isPureReadExpr(node.expression);
+    if (ts.isElementAccessExpression(node)) return this.isPureReadExpr(node.expression) && this.isPureReadExpr(node.argumentExpression);
+    if (ts.isParenthesizedExpression(node)) return this.isPureReadExpr(node.expression);
+    if (ts.isNumericLiteral(node) || ts.isBigIntLiteral(node)) return true;
+    return false;
+  }
+
+  /** Desugar a non-inline DYNAMIC struct value `src` into an inline constructor that reads each of its
+   *  fields: `StructName(src.f0, src.f1, ...)`. This reuses the verified inline struct encoder and is
+   *  byte-identical to a field-by-field copy. `src` must be side-effect-free (checked by the caller). */
+  private desugarStructCopy(st: JethType & { kind: 'struct' }, src: ts.Expression): Expr | undefined {
+    const args: Expr[] = [];
+    for (const fld of st.fields) {
+      const access = this.synth(ts.factory.createPropertyAccessExpression(src, fld.name), src);
+      const a = this.buildStructFieldArg(fld, access);
+      if (!a) return undefined;
+      args.push(a);
+    }
+    return { kind: 'structNew', type: st, fields: st.fields, args };
   }
 
   // Object-literal / spread struct construction: `{ ...base, x: v }` (immutable update) or a

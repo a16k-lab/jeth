@@ -646,3 +646,30 @@ describe('R4: Arr<dynElem,N>[] as a calldata param / whole-array return vs solc'
     expect(jethRejects(`@contract class C { @external @pure f(a: Arr<Arr<string,2>,3>[]): u256 { return a.length; } }`)).toBe(true);
   });
 });
+
+describe('dynamic nested struct field from a non-inline (side-effect-free) source vs solc', () => {
+  it('local / calldata-param / bytes-field dynamic struct copied into a parent struct (byte-identical)', () =>
+    rt(
+      `@struct class Inner { p: u256; s: string; } @struct class Outer { x: u256; inner: Inner; }
+       @struct class IB { a: u256; b: bytes; c: u256; } @struct class OB { inner: IB; tail: u256; }
+       @contract class C {
+         @external @pure fLocal(): Outer { let z: Inner = Inner(1n, "a fairly long string value here!!"); return Outer(2n, z); }
+         @external @pure fParam(z: Inner): Outer { return Outer(2n, z); }
+         @external @pure fBytes(): OB { let z: IB = IB(9n, "deadbeefdeadbeef", 8n); return OB(z, 5n); }
+       }`,
+      `struct Inner { uint256 p; string s; } struct Outer { uint256 x; Inner inner; }
+       struct IB { uint256 a; bytes b; uint256 c; } struct OB { IB inner; uint256 tail; }
+       contract C {
+         function fLocal() external pure returns(Outer memory){ Inner memory z = Inner(1, "a fairly long string value here!!"); return Outer(2, z); }
+         function fParam(Inner calldata z) external pure returns(Outer memory){ return Outer(2, z); }
+         function fBytes() external pure returns(OB memory){ IB memory z = IB(9, "deadbeefdeadbeef", 8); return OB(z, 5); }
+       }`,
+      [{ sig: 'fLocal()' }, { sig: 'fParam((uint256,string))', args: W(0x20n) + W(7n) + W(0x40n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') }, { sig: 'fBytes()' }],
+    ));
+  it('a function-call source (side-effecting) is still rejected (no double-eval), as is double-nested string[2][3][]', () => {
+    // a non-inline source that is a CALL is rejected (would re-evaluate); must bind to a local first.
+    expect(jethRejects(`@struct class I { p: u256; s: string; } @struct class O { i: I; } @contract class C { @pure mk(): I { return I(1n,"x"); } @external @pure f(): O { return O(mk()); } }`)).toBe(true);
+    // double-nested fixed-array-of-dynamic stays a clean rejection (recursive-access codec gap, not a miscompile)
+    expect(jethRejects(`@contract class C { @external @pure f(a: Arr<Arr<string,2>,3>[]): u256 { return a.length; } }`)).toBe(true);
+  });
+});
