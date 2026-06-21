@@ -295,3 +295,23 @@ describe('whole storage fixed-array copy via element/mapping/struct-field vs sol
     );
   });
 });
+
+describe('delete of a memory aggregate local (rebind to fresh zeroed instance) vs solc', () => {
+  it('struct, fixed array, and aliasing semantics', async () => {
+    await rt(
+      `@struct class S { x: u256; y: u256; } @contract class C { @external @pure f(): u256 { let a: S = S(5n, 6n); delete a; return a.x + a.y; } }`,
+      `struct S { uint256 x; uint256 y; } contract C { function f() external pure returns(uint256){ S memory a = S(5,6); delete a; return a.x + a.y; } }`,
+      [{ sig: 'f()' }],
+    );
+    await rt(
+      `@contract class C { @external @pure f(): u256 { let a: Arr<u256,3> = [5n, 6n, 7n]; delete a; return a[0n] + a[1n] + a[2n]; } }`,
+      `contract C { function f() external pure returns(uint256){ uint256[3] memory a = [uint256(5),6,7]; delete a; return a[0] + a[1] + a[2]; } }`,
+      [{ sig: 'f()' }],
+    );
+    await rt(
+      `@struct class S { x: u256; } @contract class C { @external @pure f(): [u256, u256] { let a: S = S(5n); let b: S = a; delete a; return [a.x, b.x]; } }`,
+      `struct S { uint256 x; } contract C { function f() external pure returns(uint256,uint256){ S memory a = S(5); S memory b = a; delete a; return (a.x, b.x); } }`,
+      [{ sig: 'f()' }],
+    );
+  });
+});

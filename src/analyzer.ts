@@ -1933,6 +1933,17 @@ export class Analyzer {
       out.push({ kind: 'assign', target: lv, value: { kind: 'literalInt', type: t, value: 0n } });
       return;
     }
+    // a whole MEMORY aggregate local (static struct / fixed array): delete rebinds it to a FRESH
+    // zeroed instance (solc parity: an alias `b = a` keeps the old value after `delete a`). A bytes/
+    // string / dynamic-array / dynamic-struct memory local is deferred.
+    if (lv.kind === 'local') {
+      if (isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined))) {
+        out.push({ kind: 'deleteStmt', target: lv });
+        return;
+      }
+      this.diags.error(node, 'JETH200', `delete of a ${displayName(t)} memory local is not supported yet`);
+      return;
+    }
     // bytes/string, struct, array, or whole mapping: clear the storage footprint (mapping = no-op).
     out.push({ kind: 'deleteStmt', target: lv });
   }

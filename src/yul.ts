@@ -3208,6 +3208,16 @@ ${indent(runtime, 6)}
    *  struct/array (recursive footprint clear), and a whole mapping (no-op). */
   private lowerDelete(target: LValue, ctx: LowerCtx, out: string[]): void {
     switch (target.kind) {
+      case 'local': {
+        // delete a memory aggregate local: rebind it to a FRESH zeroed image (solc parity - an alias
+        // keeps the old value). Fresh memory above the free pointer is zero-initialized in the EVM.
+        const words = abiHeadWords(target.type);
+        const p = this.fresh();
+        out.push(`let ${p} := mload(0x40)`);
+        out.push(`mstore(0x40, add(${p}, ${words * 32}))`);
+        out.push(`${this.ctxLookup(ctx, target.varName)} := ${p}`);
+        return;
+      }
       case 'dynState':
         out.push(`${this.clearStr()}(${target.slot})`);
         return;
