@@ -350,6 +350,10 @@ export class Analyzer {
         this.diags.error(member, 'JETH221', 'struct field name must be a plain identifier');
         continue;
       }
+      if (raw.some((r) => r.name === (member.name as ts.Identifier).text)) {
+        this.diags.error(member, 'JETH221', `duplicate struct field name '${member.name.text}'`);
+        continue;
+      }
       const t = resolveType(member.type, this.diags, this.structsByName);
       if (!t) continue;
       // A mapping field (G7) is allowed: it makes the struct STORAGE-ONLY (the storage-only
@@ -576,6 +580,16 @@ export class Analyzer {
       if (prev) {
         this.diags.error(cls, 'JETH044', `selector clash 0x${f.selector} between ${prev} and ${f.signature}`);
       } else seen.set(f.selector, f.signature);
+    }
+    // Reject duplicate function SIGNATURES (name + parameter types) across ALL functions, including
+    // internal/private and across visibilities - solc forbids two functions with the same name and
+    // parameter types (a differing return type does not disambiguate). Distinct param types are valid
+    // overloads (#47), so they have distinct signatures and are not flagged.
+    const seenSig = new Map<string, boolean>();
+    for (const f of functions) {
+      if (seenSig.has(f.signature)) {
+        this.diags.error(cls, 'JETH044', `duplicate function '${f.signature}' (a function with the same name and parameter types is already declared)`);
+      } else seenSig.set(f.signature, true);
     }
 
     // Phase 5: type-check the constructor body now that the state symbol table and function
@@ -905,6 +919,10 @@ export class Analyzer {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
         continue;
       }
+      if (params.some((q) => q.name === (p.name as ts.Identifier).text)) {
+        this.diags.error(p, 'JETH053', `duplicate @error parameter name '${p.name.text}'`);
+        continue;
+      }
       if (decoratorNames(p).includes('indexed')) {
         this.diags.error(p, 'JETH129', `@error parameter '${p.name.text}' cannot be @indexed (only event parameters are indexed)`);
       }
@@ -957,6 +975,10 @@ export class Analyzer {
     for (const p of member.parameters) {
       if (!ts.isIdentifier(p.name)) {
         this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
+        continue;
+      }
+      if (params.some((q) => q.name === (p.name as ts.Identifier).text)) {
+        this.diags.error(p, 'JETH053', `duplicate event parameter name '${p.name.text}'`);
         continue;
       }
       const t = resolveType(p.type, this.diags, this.structsByName);
@@ -4973,7 +4995,10 @@ export class Analyzer {
 
     // a primitive cast (u256(x), address(x), ...) or a branded-newtype wrap (TokenId(x)).
     const target = resolvePrimitiveName(callee) ?? this.structsByName.get(callee)!;
-    const inner = this.checkExpr(arg);
+    // bytes(...) / string(...) of a STRING LITERAL: give the literal the target type as expected so it
+    // is accepted (e.g. bytes("abc"), string("abc")) instead of failing the no-expected-type gate.
+    const argExpected = target && (target.kind === 'bytes' || target.kind === 'string') ? target : undefined;
+    const inner = this.checkExpr(arg, argExpected);
     if (!inner) return undefined;
     // An integer-literal cast is range-checked at compile time (uint8(300) is an error
     // in solc, not a runtime truncation): retype the literal to the target directly.
@@ -4999,6 +5024,9 @@ export class Analyzer {
       }
       return { kind: 'literalInt', type: target, value: v << BigInt((32 - target.size) * 8) };
     }
+    // an identity conversion is a no-op (e.g. bytes(bytesValue), string(stringValue), or bytes("abc")
+    // where the string literal was given the bytes target type above): return the operand unchanged.
+    if (typesEqual(inner.type, target)) return inner;
     if (this.isCastAllowed(inner.type, target)) {
       return { kind: 'cast', type: target, from: inner.type, operand: inner };
     }
@@ -5261,6 +5289,10 @@ export class Analyzer {
       if (bt && bt.kind === 'array') return undefined; // array but unresolvable -> no diagnostic doubling
       const operand = this.checkExpr(node.expression);
       if (!operand) return undefined;
+      if (operand.type.kind === 'bytesN') {
+        // a fixed-bytes value: .length is the compile-time constant N (solc: bytesN(x).length == N).
+        return { kind: 'literalInt', type: U256, value: BigInt(operand.type.size) };
+      }
       if (operand.type.kind === 'string') {
         this.diags.error(node, 'JETH202', "'string' has no .length in Solidity; only 'bytes' does");
         return undefined;
@@ -6345,7 +6377,16 @@ export class Analyzer {
     // constant ternary `c ? a : b` (any target type): fold the constant condition, then the chosen arm.
     if (ts.isConditionalExpression(node)) {
       const c = this.foldConstBool(node.condition);
-      if (c !== undefined) return this.foldConstant(c ? node.whenTrue : node.whenFalse, expected);
+      if (c !== undefined) {
+        const chosen = this.foldConstant(c ? node.whenTrue : node.whenFalse, expected);
+        // solc type-checks BOTH arms of a constant conditional. Fold the DEAD arm too: its own errors
+        // (out-of-range JETH070, etc.) are emitted, and if it is not a valid constant of the expected
+        // type (e.g. div/mod by zero, which folds to undefined) the whole conditional is rejected
+        // (the caller emits JETH048), matching solc which rejects a compile-time error in either arm.
+        const dead = this.foldConstant(c ? node.whenFalse : node.whenTrue, expected);
+        if (dead === undefined) return undefined;
+        return chosen;
+      }
     }
     // bool constant: a literal, another bool @constant, !/&&/|| or a comparison of constants.
     if (expected.kind === 'bool') {
@@ -6590,7 +6631,7 @@ export class Analyzer {
     const ref = this.constIntRef(node);
     if (ref !== undefined) return ref;
     if (ts.isPrefixUnaryExpression(node)) {
-      if (node.operator !== ts.SyntaxKind.MinusToken) return undefined; // ~ on a const is type-specific; do not fold
+      if (node.operator !== ts.SyntaxKind.MinusToken) return undefined; // ~ on a const is width-specific (only foldConstant's top-level ~ masks to the type); do not fold here
       const x = this.evalConstInt(node.operand);
       return x === undefined ? undefined : -x;
     }

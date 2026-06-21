@@ -2844,12 +2844,20 @@ ${indent(runtime, 6)}
     out.push(`sstore(${ref.lenSlot}, ${nl})`);
     const data = this.arrayDataSlot(ref.lenSlot, out);
     const sc = storageSlotCount(ref.elem);
-    if (sc === 1) {
+    if (isDynamicType(ref.elem)) {
+      // the freed element holds DYNAMIC data (a dynamic array / bytes / string / dynamic struct /
+      // fixed-array-of-dynamic). Its storage footprint includes keccak-located data slots that a plain
+      // header-zero leaves STALE (so stale data resurfaces when the index is reused). DEEP-CLEAR it via
+      // the same recursive footprint clear `delete` uses, so it is byte-identical to solc's pop().
+      const base = this.fresh();
+      out.push(`let ${base} := add(${data}, mul(${nl}, ${sc}))`);
+      this.deleteAgg(ref.elem, base, out);
+    } else if (sc === 1) {
       // value element, or a fixed array that packs into ONE slot (uint8[4], uint128[2]):
       // arrayElemStore handles per-byte packing / single-slot clear.
       this.arrayElemStore(ref.elem, data, nl, '0', out);
     } else {
-      // a MULTI-slot fixed-array element (uint256[2], uint256[2][2], ...): solc zeroes ALL
+      // a MULTI-slot STATIC fixed-array element (uint256[2], uint256[2][2], ...): solc zeroes ALL
       // sc slots of the freed element; clear each contiguous slot at data + nl*sc.
       const base = this.fresh();
       out.push(`let ${base} := add(${data}, mul(${nl}, ${sc}))`);

@@ -693,3 +693,35 @@ describe('dynamic nested struct field from a non-inline (side-effect-free) sourc
     expect(jethRejects(`@struct class I { p: u256; s: string; } @struct class O { i: I; } @contract class C { @pure mk(): I { return I(1n,"x"); } @external @pure f(): O { return O(mk()); } }`)).toBe(true);
   });
 });
+
+describe('all-issues sweep: miscompile + over-accepts + easy over-rejects vs solc', () => {
+  it('[1] pop() deep-clears a popped dynamic-array element (no stale inner data) - raw slots byte-identical', async () => {
+    // unequal inner lengths so a header-only clear leaves distinct stale data; re-grow must read 0.
+    const seq: { sig: string; args?: string }[] = [{ sig: 'grow()' }, { sig: 'grow()' },
+      { sig: 'add(uint256,uint256)', args: W(0n) + W(1n) }, { sig: 'add(uint256,uint256)', args: W(0n) + W(2n) }, { sig: 'add(uint256,uint256)', args: W(0n) + W(3n) },
+      { sig: 'add(uint256,uint256)', args: W(1n) + W(4n) }, { sig: 'add(uint256,uint256)', args: W(1n) + W(5n) },
+      { sig: 'pop()' }, { sig: 'grow()' }, { sig: 'ilen(uint256)', args: W(1n) }];
+    await rt(
+      `@contract class C { @state xs: u256[][]; @external grow(): void { this.xs.push(); } @external add(i: u256, v: u256): void { this.xs[i].push(v); } @external pop(): void { this.xs.pop(); } @external @view ilen(i: u256): u256 { return this.xs[i].length; } @external @view at(i: u256, j: u256): u256 { return this.xs[i][j]; } }`,
+      `contract C { uint256[][] xs; function grow() external { xs.push(); } function add(uint256 i,uint256 v) external { xs[i].push(v); } function pop() external { xs.pop(); } function ilen(uint256 i) external view returns(uint256){ return xs[i].length; } function at(uint256 i,uint256 j) external view returns(uint256){ return xs[i][j]; } }`,
+      seq,
+    );
+  });
+  it('over-accepts now rejected (match solc): ternary dead-arm error, duplicate names, duplicate signature', () => {
+    expect(jethRejects(`@contract class C { @constant K: u256 = false ? (1n/0n) : 5n; @external @pure k(): u256 { return this.K; } }`)).toBe(true); // [2]
+    expect(jethRejects(`@contract class C { @constant K: u8 = false ? 9999n : 5n; @external @pure k(): u8 { return this.K; } }`)).toBe(true); // [2] dead-arm overflow
+    expect(jethAccepts(`@contract class C { @constant K: u256 = true ? 5n : 6n; @external @pure k(): u256 { return this.K; } }`)).toBe(true); // [2] control
+    expect(jethRejects(`@contract class C { @event E(a: u256, a: u256); @external f(): void { emit(E(1n,2n)); } }`)).toBe(true); // [3]
+    expect(jethRejects(`@contract class C { @error E(a: u256, a: u256); @external f(): void { revert(E(1n,2n)); } }`)).toBe(true); // [3]
+    expect(jethRejects(`@struct class D { a: u256; a: u256 } @contract class C { @external @pure f(): u256 { return D(1n,2n).a; } }`)).toBe(true); // [3]
+    expect(jethRejects(`@contract class C { f(x: u256): u256 { return x; } f(x: u256): u256 { return x+1n; } @external g(): u256 { return 0n; } }`)).toBe(true); // [4]
+    expect(jethAccepts(`@contract class C { @pure a(x: u256): u256 { return x; } @pure a(x: u256, y: u256): u256 { return x+y; } @external @pure g(): u256 { return a(1n)+a(2n,3n); } }`)).toBe(true); // [4] valid overload
+  });
+  it('[14] bytes/string of a string literal; [17] bytesN.length is the constant N (byte-identical)', async () => {
+    await rt(
+      `@contract class C { @external @pure b(): bytes { return bytes("abc"); } @external @pure s(): string { return string("hello world"); } @external @pure l32(v: bytes32): u256 { return v.length; } @external @pure l4(v: bytes4): u256 { return v.length; } }`,
+      `contract C { function b() external pure returns(bytes memory){ return bytes("abc"); } function s() external pure returns(string memory){ return string("hello world"); } function l32(bytes32 v) external pure returns(uint256){ return v.length; } function l4(bytes4 v) external pure returns(uint256){ return v.length; } }`,
+      [{ sig: 'b()' }, { sig: 's()' }, { sig: 'l32(bytes32)', args: W(0xabn) }, { sig: 'l4(bytes4)', args: W(0n) }],
+    );
+  });
+});
