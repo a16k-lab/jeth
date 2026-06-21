@@ -3437,6 +3437,20 @@ export class Analyzer {
         return { kind: 'memElem', type: fld.type.element, local: fld.local, index: this.coerce(index, U256, node.argumentExpression), length: fld.type.length, wordOffset: fld.wordOffset };
       }
     }
+    // this.b[i] = <bytes1>: byte assignment into a STORAGE `bytes` (RMW the containing slot/word).
+    // Only `bytes` (not string), and a direct state var (mapping/struct-reached bytes is deferred).
+    if (
+      ts.isElementAccessExpression(node) && node.argumentExpression &&
+      ts.isPropertyAccessExpression(node.expression) && node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
+    ) {
+      const sv = this.stateByName.get(node.expression.name.text);
+      if (sv && sv.type.kind === 'bytes') {
+        const idx = this.checkExpr(node.argumentExpression, U256);
+        if (!idx) return undefined;
+        this.currentWritesState = true;
+        return { kind: 'byteIndexStore', type: BYTES1, slot: sv.slot, index: this.coerce(idx, U256, node.argumentExpression) };
+      }
+    }
     // nested storage place: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const acc = this.resolveAccess(node);
@@ -3680,6 +3694,11 @@ export class Analyzer {
       // compound-assign / ++ on an @immutable in the constructor reads the staged shadow (solc
       // accepts `a += 1`, reading the current staged value, e.g. 0 before any assignment).
       return { kind: 'immutableStagedRead', type: lv.type, name: lv.name };
+    }
+    if (lv.kind === 'byteIndexStore') {
+      // a storage-bytes byte read (for symmetry; compound-assign/++ on a bytes1 byte is rejected
+      // elsewhere - bytesN has no arithmetic).
+      return { kind: 'byteIndex', type: lv.type, base: { kind: 'dynStateRead', type: { kind: 'bytes' }, slot: lv.slot }, index: lv.index };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }

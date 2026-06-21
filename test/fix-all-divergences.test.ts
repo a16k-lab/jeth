@@ -351,3 +351,19 @@ describe('event overloading by signature vs solc', () => {
     expect(jethRejects(`@contract class C { @event L(a: u256); @event L(a: u256); }`)).toBe(true); // exact-sig duplicate
   });
 });
+
+describe('storage bytes index write b[i] = x vs solc', () => {
+  const B1 = (h: string) => h.padEnd(64, '0');
+  it('short and long bytes, with OOB Panic parity', async () => {
+    await rt(
+      `@contract class C { @state b: bytes; @external init(v: bytes): void { this.b = v; } @external set(i: u256, x: bytes1): void { this.b[i] = x; } @external @view get(i: u256): bytes1 { return this.b[i]; } @external @view all(): bytes { return this.b; } }`,
+      `contract C { bytes b; function init(bytes calldata v) external { b = v; } function set(uint256 i, bytes1 x) external { b[i] = x; } function get(uint256 i) external view returns(bytes1){ return b[i]; } function all() external view returns(bytes memory){ return b; } }`,
+      [{ sig: 'init(bytes)', args: W(0x20n) + W(5n) + B1('aabbccddee') }, { sig: 'set(uint256,bytes1)', args: W(2n) + B1('ff') }, { sig: 'get(uint256)', args: W(2n) }, { sig: 'all()' }, { sig: 'set(uint256,bytes1)', args: W(9n) + B1('11') }],
+    );
+    await rt(
+      `@contract class C { @state b: bytes; @external init(v: bytes): void { this.b = v; } @external set(i: u256, x: bytes1): void { this.b[i] = x; } @external @view all(): bytes { return this.b; } }`,
+      `contract C { bytes b; function init(bytes calldata v) external { b = v; } function set(uint256 i, bytes1 x) external { b[i] = x; } function all() external view returns(bytes memory){ return b; } }`,
+      [{ sig: 'init(bytes)', args: W(0x20n) + W(40n) + '00'.repeat(40).padEnd(128, '0') }, { sig: 'set(uint256,bytes1)', args: W(35n) + B1('ab') }, { sig: 'set(uint256,bytes1)', args: W(0n) + B1('cd') }, { sig: 'all()' }],
+    );
+  });
+});

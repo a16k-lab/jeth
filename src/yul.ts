@@ -850,6 +850,14 @@ ${indent(runtime, 6)}
           this.lowerAssignValue(s.target, this.lowerExpr(s.value, ctx, out), ctx, out);
           break;
         }
+        if (s.target.kind === 'byteIndexStore') {
+          // this.b[i] = <bytes1>: bounds-checked read-modify-write of byte i in a storage `bytes`.
+          const i = this.fresh();
+          out.push(`let ${i} := ${this.lowerExpr(s.target.index, ctx, out)}`);
+          const v = this.lowerExpr(s.value, ctx, out);
+          out.push(`${this.strByteSet()}(${s.target.slot}, ${i}, ${v})`);
+          break;
+        }
         if (s.target.kind === 'memDynField') {
           // d.s = <bytes/string> on a dynamic-field struct memory local: materialize the value
           // to a memory [len][data] blob (alias if it is already memory), then re-point the
@@ -4817,6 +4825,32 @@ ${indent(runtime, 6)}
     mstore(0x00, slot)
     let base := keccak256(0x00, 0x20)
     r := and(shl(mul(mod(i, 0x20), 8), sload(add(base, div(i, 0x20)))), ${TOP_BYTE})
+  }
+}`);
+    }
+    return name;
+  }
+
+  /** Write byte i (bounds-checked) of a storage `bytes` to the bytes1 value `b` (left-aligned, byte in
+   *  the top byte). Same short/long layout as strByteAt: short = data in the high bytes of the slot,
+   *  long = at keccak(slot)+i/32. Read-modify-writes only the target byte; the length is unchanged. */
+  private strByteSet(): string {
+    const name = 'jeth_str_byte_set';
+    if (!this.helpers.has(name)) {
+      this.helpers.set(name, `function ${name}(slot, i, b) {
+  let w := sload(slot)
+  switch and(w, 1)
+  case 0 {
+    if iszero(lt(i, and(shr(1, w), 0x7f))) { ${this.panic()}(0x32) }
+    let sh := mul(i, 8)
+    sstore(slot, or(and(w, not(shr(sh, ${TOP_BYTE}))), shr(sh, and(b, ${TOP_BYTE}))))
+  }
+  default {
+    if iszero(lt(i, shr(1, sub(w, 1)))) { ${this.panic()}(0x32) }
+    mstore(0x00, slot)
+    let ds := add(keccak256(0x00, 0x20), div(i, 0x20))
+    let sh := mul(mod(i, 0x20), 8)
+    sstore(ds, or(and(sload(ds), not(shr(sh, ${TOP_BYTE}))), shr(sh, and(b, ${TOP_BYTE}))))
   }
 }`);
     }

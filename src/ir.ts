@@ -217,6 +217,7 @@ export interface ArrayExpr {
 // Where an assignment target lives.
 export type LValue =
   | { kind: 'state'; type: JethType; slot: number; offset: number; varName: string }
+  | { kind: 'byteIndexStore'; type: JethType; slot: number; index: Expr } // this.b[i] = <bytes1>: write byte i of a storage `bytes` (RMW, bounds-checked)
   | { kind: 'immutableStaged'; type: JethType; name: string } // Phase 5: this.<imm> = v inside the constructor (writes the staged shadow; baked via setimmutable)
   | { kind: 'local'; type: JethType; varName: string }
   | {
