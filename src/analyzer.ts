@@ -2859,6 +2859,7 @@ export class Analyzer {
           const okInit =
             e.kind === 'structNew' || e.kind === 'structValue' || e.kind === 'mapStorageValue' ||
             e.kind === 'structArrayElem' || e.kind === 'cdDynStructValue' || e.kind === 'memDynStructValue' ||
+            e.kind === 'ternary' ||
             (e.kind === 'placeRead' && e.type.kind === 'struct');
           if (!okInit) {
             this.diags.error(decl.initializer, 'JETH200', `a dynamic-field struct memory local must be initialized from a constructor ${(declared as JethType & { kind: 'struct' }).name}(...), a storage struct (this.s / this.m[k] / this.arr[i]), a calldata struct parameter, or another struct local`);
@@ -4193,11 +4194,50 @@ export class Analyzer {
     if (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) {
       return { committed: true, result: { kind: 'arrayValue', type: t, arr: { base: { kind: 'cdDynArrayField', place }, elem: t.element } } };
     }
+    // an inline fixed-array-of-value field (s.xs where xs: Arr<T,N>): the N element words sit inline in
+    // the tuple head at the field's byte offset (stride = 32, each static-value element is one ABI word).
+    // Index it (s.xs[i], Panic 0x32 on i>=N) and read .length as the constant N. Mirrors the dynamic-field
+    // index path but uses the inline head offset (no tail decode).
+    if (t.kind === 'array' && t.length !== undefined && isStaticValueType(t.element)) {
+      return { committed: true, result: { kind: 'arrayValue', type: t, arr: { base: { kind: 'cdDynFixedField', place, length: t.length }, elem: t.element } } };
+    }
     // Ended at a whole nested struct (static or dynamic), or a string[]/T[][] field: reading it whole
     // is a later step. (A static nested struct read would need a tuple-return encode from a calldata
     // source; a dynamic one likewise.)
     this.diags.error(node, 'JETH230', `reading a whole ${displayName(t)} from a dynamic-struct calldata parameter is not supported yet (access a value field)`);
     return { committed: true };
+  }
+
+  private resolveCdDynFieldPlace(node: ts.Expression): { place: CdDynPlace; type: JethType } | undefined {
+    const rawFields: ts.PropertyAccessExpression[] = [];
+    let cur: ts.Expression = node;
+    let rootType: (JethType & { kind: 'struct' }) | undefined;
+    let rootName: string | undefined;
+    for (;;) {
+      if (ts.isPropertyAccessExpression(cur)) {
+        if (cur.name.text === 'length') return undefined;
+        rawFields.push(cur);
+        cur = cur.expression;
+      } else if (ts.isIdentifier(cur)) {
+        const t = this.lookupLocal(cur.text);
+        if (t && t.kind === 'struct' && isDynamicType(t)) { rootName = cur.text; rootType = t; }
+        break;
+      } else { return undefined; }
+    }
+    if (!rootName || !rootType || rawFields.length === 0) return undefined;
+    rawFields.reverse();
+    let t: JethType = rootType;
+    const steps: CdDynStep[] = [];
+    for (const fnode of rawFields) {
+      if (t.kind !== 'struct') return undefined;
+      const idx = t.fields.findIndex((f) => f.name === fnode.name.text);
+      if (idx < 0) return undefined;
+      const f = t.fields[idx]!;
+      const headWords = t.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+      steps.push({ headWords, fieldType: f.type, crossDynamic: isDynamicType(f.type) });
+      t = f.type;
+    }
+    return { place: { param: rootName, steps }, type: t };
   }
 
   /** Resolve a field/index chain rooted at an aggregate (struct or FIXED-array)
@@ -4348,24 +4388,62 @@ export class Analyzer {
     const place: CdDynPlace = { param: '', steps: [{ headWords, fieldType: f.type, crossDynamic: isDynamicType(f.type) }], arrayRoot: { arr, index } };
     if (isStaticValueType(f.type)) return { kind: 'cdDynStructLeaf', type: f.type, place };
     if (isBytesLike(f.type)) return { kind: 'cdDynStructField', type: f.type, place };
+    // a dynamic value-array field (ps[i].xs where xs: u256[]): a calldata array reached via the
+    // tuple tail offset of the element tuple. Indexing it (ps[i].xs[j]) decodes the array via
+    // calldataArrayAt, then reads the value element like any calldata array (mirrors s.xs).
+    if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
+      return { kind: 'arrayValue', type: f.type, arr: { base: { kind: 'cdDynArrayField', place }, elem: f.type.element } };
+    }
     this.diags.error(node, 'JETH230', 'reading a whole nested struct/array field of a dynamic-struct array element is a later step');
     return undefined;
   }
 
   private resolveCdArrayField(node: ts.PropertyAccessExpression, struct: JethType & { kind: 'struct' }): Expr | undefined {
-    const elemAccess = node.expression as ts.ElementAccessExpression;
-    const arr = this.resolveArrayExpr(elemAccess.expression);
-    if (!arr || arr.base.kind !== 'calldataArray') {
+    // Peel the property-access chain `arr[i].f1.f2...fn` down to the element access
+    // `arr[i]`, collecting the field names root->leaf. A one-deep `arr[i].f` has
+    // node.expression === the ElementAccessExpression; a deeper `arr[i].inn.v` has
+    // intermediate PropertyAccessExpression links. Each link traverses a STATIC
+    // struct field, so the whole element (and every nested struct) is inline and the
+    // leaf word sits at a single fixed displacement: the sum of abiHeadWords of all
+    // fields preceding the chosen field at each level.
+    const fieldNames: string[] = [];
+    let cur: ts.Expression = node;
+    while (ts.isPropertyAccessExpression(cur)) {
+      fieldNames.push(cur.name.text);
+      cur = cur.expression;
+    }
+    fieldNames.reverse(); // root -> leaf
+    if (!ts.isElementAccessExpression(cur)) {
       this.diags.error(node, 'JETH217', 'this dynamic-array-of-struct access is a later step');
       return undefined;
     }
-    const fidx = struct.fields.findIndex((f) => f.name === node.name.text);
-    if (fidx < 0) {
-      this.diags.error(node, 'JETH210', `struct '${struct.name}' has no field '${node.name.text}'`);
+    const elemAccess = cur;
+    const arr = this.resolveArrayExpr(elemAccess.expression);
+    // a DIRECT calldata array param (calldataArray) OR a dynamic-struct param's array
+    // FIELD (cdDynArrayField, e.g. p.pts[i].x): both lower to a calldata array ref with
+    // a static-struct element stride, so cdArrayField indexes the leaf word identically.
+    if (!arr || (arr.base.kind !== 'calldataArray' && arr.base.kind !== 'cdDynArrayField')) {
+      this.diags.error(node, 'JETH217', 'this dynamic-array-of-struct access is a later step');
       return undefined;
     }
-    const f = struct.fields[fidx]!;
-    if (!isStaticValueType(f.type)) {
+    // Walk the field chain through (possibly nested) static structs, accumulating the
+    // leaf word displacement.
+    let t: JethType = struct;
+    let headWords = 0;
+    for (const fname of fieldNames) {
+      if (t.kind !== 'struct') {
+        this.diags.error(node, 'JETH210', `'${displayName(t)}' has no field '${fname}'`);
+        return undefined;
+      }
+      const fidx = t.fields.findIndex((f) => f.name === fname);
+      if (fidx < 0) {
+        this.diags.error(node, 'JETH210', `struct '${t.name}' has no field '${fname}'`);
+        return undefined;
+      }
+      headWords += t.fields.slice(0, fidx).reduce((n, ff) => n + abiHeadWords(ff.type), 0);
+      t = t.fields[fidx]!.type;
+    }
+    if (!isStaticValueType(t)) {
       this.diags.error(node, 'JETH230', 'reading a non-value field of a calldata struct-array element is a later step');
       return undefined;
     }
@@ -4373,8 +4451,7 @@ export class Analyzer {
     const index = this.checkExpr(elemAccess.argumentExpression, U256);
     if (!index) return undefined;
     const idx = this.coerce(index, U256, elemAccess.argumentExpression);
-    const headWords = struct.fields.slice(0, fidx).reduce((n, ff) => n + abiHeadWords(ff.type), 0);
-    return { kind: 'cdArrayField', type: f.type, arr, index: idx, headWords, fieldType: f.type };
+    return { kind: 'cdArrayField', type: t, arr, index: idx, headWords, fieldType: t };
   }
 
   /** Compile-time bounds check for a constant index into a fixed array (matches
@@ -4419,6 +4496,12 @@ export class Analyzer {
         return { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element };
       }
       return undefined;
+    }
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
+      const fp = this.resolveCdDynFieldPlace(node);
+      if (fp && fp.type.kind === 'array' && fp.type.length === undefined && fp.type.element.kind === 'struct' && isStaticType(fp.type.element)) {
+        return { base: { kind: 'cdDynArrayField', place: fp.place }, elem: fp.type.element };
+      }
     }
     if (ts.isIdentifier(node)) {
       const t = this.lookupLocal(node.text);
@@ -4618,6 +4701,10 @@ export class Analyzer {
     expr = stripParens(expr);
     if (ts.isPropertyAccessExpression(expr) && expr.expression.kind === ts.SyntaxKind.ThisKeyword) {
       return this.stateByName.get(expr.name.text)?.type;
+    }
+    if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression)) {
+      const fp = this.resolveCdDynFieldPlace(expr);
+      if (fp && fp.type.kind === 'array' && fp.type.length === undefined && fp.type.element.kind === 'struct') return fp.type;
     }
     // msg.data is a calldata `bytes`, so `msg.data[i]` indexes it like any bytes value (Panic 0x32 OOB).
     if (
@@ -5174,6 +5261,13 @@ export class Analyzer {
         isBytesLike(e.type) ||
         // a STATIC struct / fixed array: materialized to a memory image, selected by pointer.
         (isStaticType(e.type) && (e.type.kind === 'struct' || (e.type.kind === 'array' && e.type.length !== undefined))) ||
+        // a DYNAMIC-field struct: materialized to a pointer-headed memory image (buildDynStructLocal)
+        // and selected by pointer; the ternary result re-encodes via the mem TupleSrc. Branch sources
+        // are exactly the kinds buildDynStructLocal copies (constructor / mem local / calldata param /
+        // storage struct sources).
+        (e.type.kind === 'struct' && isDynamicType(e.type) &&
+          (e.kind === 'memDynStructValue' || e.kind === 'structNew' || e.kind === 'cdDynStructValue' ||
+           e.kind === 'structValue' || e.kind === 'mapStorageValue' || e.kind === 'structArrayElem' || e.kind === 'placeRead')) ||
         (e.type.kind === 'array' &&
           (e.kind === 'arrayLit' || (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'))));
       if (!lowerable(unified[0]) || !lowerable(unified[1])) {
@@ -5277,6 +5371,10 @@ export class Analyzer {
         const dyn = this.resolveCdDynStruct(node.expression);
         if (dyn && dyn.result && dyn.result.kind === 'arrayValue' && dyn.result.arr.base.kind === 'cdDynArrayField') {
           return { kind: 'arrayLen', type: U256, arr: dyn.result.arr };
+        }
+        // an inline fixed-array field (s.xs where xs: Arr<T,N>): .length is the compile-time constant N.
+        if (dyn && dyn.result && dyn.result.kind === 'arrayValue' && dyn.result.arr.base.kind === 'cdDynFixedField') {
+          return { kind: 'literalInt', type: U256, value: BigInt(dyn.result.arr.base.length) };
         }
         if (dyn && !dyn.result) return undefined; // committed but errored (diagnostic already emitted)
       }
@@ -5426,6 +5524,21 @@ export class Analyzer {
           // Arr<staticStruct,N>: owned by resolveCalldataPlace (cdAggregates) above.
         }
       }
+      // deeper static field chain off a dynamic array element: ps[i].inn.v. The outer
+      // `.v` has a PropertyAccessExpression base (ps[i].inn), so the one-deep matcher
+      // above misses it. Peel the property accesses to the underlying `arr[i]`; if the
+      // array is a DYNAMIC array of a STATIC struct, the element (and every nested
+      // static struct) is inline, so resolveCdArrayField reads the leaf at a fixed word.
+      if (ts.isPropertyAccessExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+        let inner: ts.Expression = node.expression;
+        while (ts.isPropertyAccessExpression(inner)) inner = inner.expression;
+        if (ts.isElementAccessExpression(inner)) {
+          const bt = this.baseDynType(inner.expression);
+          if (bt && bt.kind === 'array' && bt.length === undefined && bt.element.kind === 'struct' && isStaticType(bt.element)) {
+            return this.resolveCdArrayField(node, bt.element);
+          }
+        }
+      }
     }
 
     // this.struct.field (struct field read)
@@ -5570,6 +5683,40 @@ export class Analyzer {
             return undefined;
           }
           return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+        }
+        // Indexing a fixed/dynamic-bytes VALUE produced by an expression whose base is NOT a
+        // plain identifier or this.<state> (a call like keccak256(b)/bytes32(x)/abi.encodePacked(b),
+        // a parenthesized value (x), or a global like msg.sig). solc allows b[i] on any bytesN /
+        // bytes value. Resolve the base by its TYPE rather than its syntactic shape. Only claim
+        // base shapes that no other element-access handler owns (a call expr, a parenthesized
+        // expr, or a non-shadowed global property access) so this never double-evaluates / mis-
+        // binds an array/mapping/struct base. lowerByteIndex already supports a bytesN word and a
+        // dynamic bytes value.
+        if (!bt) {
+          const stripped = stripParens(node.expression);
+          const isGlobalProp =
+            ts.isPropertyAccessExpression(stripped) &&
+            ts.isIdentifier(stripped.expression) &&
+            GLOBALS[stripped.expression.text] !== undefined &&
+            !this.isVisibleLocal(stripped.expression.text) &&
+            !this.stateByName.has(stripped.expression.text);
+          if (ts.isCallExpression(stripped) || stripped !== node.expression || isGlobalProp) {
+            const base = this.checkExpr(node.expression);
+            if (!base) return undefined;
+            if (base.type.kind === 'bytesN' || base.type.kind === 'bytes') {
+              const index = this.checkExpr(node.argumentExpression, U256);
+              if (!index) return undefined;
+              if (base.type.kind === 'bytesN' && index.kind === 'literalInt' && (index.value < 0n || index.value >= BigInt(base.type.size))) {
+                this.diags.error(node, 'JETH152', `byte index ${index.value} is out of range for ${displayName(base.type)} (valid 0..${base.type.size - 1})`);
+                return undefined;
+              }
+              return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+            }
+            if (base.type.kind === 'string') {
+              this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+              return undefined;
+            }
+          }
         }
       }
       // A read m[i]...[k] on a nested dynamic array calldata param (T[][], T[][][],
@@ -5739,6 +5886,15 @@ export class Analyzer {
             this.currentReadsState = true;
             return { kind: 'structArrayElem', type: arr.elem, arr, index: idx };
           }
+          // A whole struct element of a CALLDATA struct array (return ps[i]): copy the element's
+          // calldata head (contiguous static struct / offset-located dynamic struct) into a fresh
+          // ABI return blob via the recursive calldata codec. Bounds-checked at codegen (Panic 0x32).
+          if (arr.base.kind === 'calldataArray') {
+            const index = this.checkExpr(node.argumentExpression, U256);
+            if (!index) return undefined;
+            const idx = this.coerce(index, U256, node.argumentExpression);
+            return { kind: 'cdStructArrayElem', type: arr.elem, arr, index: idx };
+          }
           this.diags.error(node, 'JETH230', 'reading a whole struct element of a calldata array is not supported yet (access a value field)');
           return undefined;
         }
@@ -5864,7 +6020,7 @@ export class Analyzer {
         if (
           innerArr &&
           isBytesLike(innerArr.elem) &&
-          (innerArr.base.kind === 'stateArray' || innerArr.base.kind === 'mapArray')
+          (innerArr.base.kind === 'stateArray' || innerArr.base.kind === 'mapArray' || innerArr.base.kind === 'calldataArray')
         ) {
           if (innerArr.elem.kind === 'string') {
             this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
@@ -5874,6 +6030,56 @@ export class Analyzer {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!base || !index) return undefined;
           return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+        }
+      }
+      // ps[i].xs[j]: index an array FIELD of a calldata struct-array element. node is the
+      // outer [j]; node.expression is ps[i].xs (a field of the i-th struct element).
+      //  - STATIC struct element + FIXED value-array field (Arr<u64,2>): the field elements
+      //    are inline in the element's head; read the j-th word (cdArrayField + elemIndex).
+      //  - DYNAMIC struct element + DYNAMIC value-array field (u64[]): resolveCdDynArrayField
+      //    gives the array via the tuple tail offset; index it as an ordinary calldata array.
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isElementAccessExpression(node.expression.expression) &&
+        node.argumentExpression
+      ) {
+        const fieldNode = node.expression;
+        const elemAccess = node.expression.expression;
+        const bt = this.baseDynType(elemAccess.expression);
+        if (bt && bt.kind === 'array' && bt.element.kind === 'struct') {
+          const struct = bt.element;
+          if (isDynamicType(struct)) {
+            // dynamic-struct array element: ps[i].xs resolves to a value-array; index it.
+            const arrBase = this.resolveCdDynArrayField(fieldNode, struct);
+            if (arrBase && arrBase.kind === 'arrayValue' && arrBase.type.kind === 'array') {
+              const index = this.checkExpr(node.argumentExpression, U256);
+              if (!index) return undefined;
+              return { kind: 'arrayGet', type: arrBase.arr.elem, arr: arrBase.arr, index: this.coerce(index, U256, node.argumentExpression) };
+            }
+            return undefined; // resolveCdDynArrayField already emitted any diagnostic
+          }
+          // static struct element: the field must be a FIXED value-array (inline head).
+          const fidx = struct.fields.findIndex((f) => f.name === fieldNode.name.text);
+          if (fidx >= 0) {
+            const f = struct.fields[fidx]!;
+            if (f.type.kind === 'array' && f.type.length !== undefined && isStaticValueType(f.type.element)) {
+              const arr = this.resolveArrayExpr(elemAccess.expression);
+              if (arr && arr.base.kind === 'calldataArray') {
+                const eidxE = this.checkExpr(elemAccess.argumentExpression!, U256);
+                if (!eidxE) return undefined;
+                const eidx = this.coerce(eidxE, U256, elemAccess.argumentExpression!);
+                const jE = this.checkExpr(node.argumentExpression, U256);
+                if (!jE) return undefined;
+                const jIdx = this.coerce(jE, U256, node.argumentExpression);
+                if (jIdx.kind === 'literalInt' && (jIdx.value < 0n || jIdx.value >= BigInt(f.type.length))) {
+                  this.diags.error(node.argumentExpression, 'JETH211', `array index ${jIdx.value} out of bounds for length ${f.type.length}`);
+                  return undefined;
+                }
+                const headWords = struct.fields.slice(0, fidx).reduce((n, ff) => n + abiHeadWords(ff.type), 0);
+                return { kind: 'cdArrayField', type: f.type.element, arr, index: eidx, headWords, fieldType: f.type.element, elemIndex: jIdx, elemLength: f.type.length };
+              }
+            }
+          }
         }
       }
       const r = this.resolveMapAccess(node);
@@ -6412,16 +6618,10 @@ export class Analyzer {
     // A constant INTEGER expression: solc folds + - * ** << >> & | ^ % (and exact /) and unary -
     // with UNBOUNDED precision, then range-checks only the FINAL value against the target type.
     if (isInteger(expected)) {
-      // `~x` is type-specific (it complements within the target width): fold the operand, then mask.
-      if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.TildeToken) {
-        const x = this.evalConstInt(node.operand);
-        if (x !== undefined) {
-          const bits = BigInt((expected as { bits: number }).bits);
-          const v = expected.kind === 'uint' ? ((1n << bits) - 1n) ^ (x & ((1n << bits) - 1n)) : -x - 1n;
-          if (!this.inRange(v, expected)) this.diags.error(node, 'JETH070', `constant ${v} out of range for ${displayName(expected)}`);
-          return v;
-        }
-      }
+      // `~x` on an UNTYPED integer constant yields the signed int_const -x-1 (solc), folded by
+      // evalConstInt with the rest of the expression and range-checked below: a negative result
+      // (e.g. `~1` = -2, `~uint(0)` is a typed operand JETH does not fold) is rejected for an
+      // unsigned target exactly as solc rejects `uint K = ~1`. No type-width masking here.
       const v = this.evalConstInt(node);
       if (v !== undefined) {
         if (!this.inRange(v, expected)) this.diags.error(node, 'JETH070', `constant ${v} out of range for ${displayName(expected)}`);
@@ -6631,9 +6831,16 @@ export class Analyzer {
     const ref = this.constIntRef(node);
     if (ref !== undefined) return ref;
     if (ts.isPrefixUnaryExpression(node)) {
-      if (node.operator !== ts.SyntaxKind.MinusToken) return undefined; // ~ on a const is width-specific (only foldConstant's top-level ~ masks to the type); do not fold here
       const x = this.evalConstInt(node.operand);
-      return x === undefined ? undefined : -x;
+      if (x === undefined) return undefined;
+      if (node.operator === ts.SyntaxKind.MinusToken) return -x;
+      // `~x` on an UNTYPED integer constant folds with UNBOUNDED precision to the signed two's-
+      // complement value -x-1 (solc: ~ of an int_const yields a signed int_const). It may be negative;
+      // the FINAL value is range-checked against the target type at the conversion point (a negative
+      // value -> an unsigned type is rejected there, exactly as solc rejects a bare `uint K = ~1`). This
+      // lets ~ fold wherever it appears as a SUB-expression, e.g. `(~1) & 3` == -2 & 3 == 2 (solc parity).
+      if (node.operator === ts.SyntaxKind.TildeToken) return -x - 1n;
+      return undefined;
     }
     if (ts.isBinaryExpression(node)) {
       const op = this.binaryToBinOp(node.operatorToken.kind);
@@ -6685,6 +6892,14 @@ export class Analyzer {
       const x = this.foldConstRational(node.operand);
       if (x === undefined || 'err' in x) return x;
       return reduce(-x.num, x.den);
+    }
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.TildeToken) {
+      const x = this.foldConstRational(node.operand);
+      if (x === undefined || 'err' in x) return x;
+      // ~ requires an integer operand: solc rejects `~(rational_const)` (e.g. ~(10/4)). A non-integer
+      // intermediate (den != 1) is an error; an exact integer folds to -x-1, like evalConstInt above.
+      if (x.den !== 1n) return { err: `operator '~' requires an integer constant operand` };
+      return { num: -x.num - 1n, den: 1n };
     }
     if (ts.isBinaryExpression(node)) {
       const op = this.binaryToBinOp(node.operatorToken.kind);

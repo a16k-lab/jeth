@@ -10,14 +10,12 @@
 //   - ps.length
 //   - up-front payload check uses stride 3: declare len but supply short payload
 //     (one element's worth missing) -> EMPTY revert independent of any index.
-// Deferred (captured, not a gap): ps[i].data[j] (inner fixed-array element of a
-// dyn-array struct element) is rejected by the compiler (JETH151). Phase 4e-1's
-// supported set is whole-array echo, element value-field read, and length, so this
-// rejection is the intended deferral -> the scenario still PASSES.
+//   - ps[i].data[j]: inner fixed-array element of a dyn-array struct element, read
+//     byte-identically (element word at i*stride + dataFieldHeadWord + j), with
+//     OOB Panic(0x32) on both the outer index and the inner fixed-array index.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
-import { CompileError } from '../src/diagnostics.js';
 import { Harness, decodeUint } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
@@ -32,6 +30,7 @@ class StructWithFixedArrayField {
   @external @pure echoArr(ps: WithArr[]): WithArr[] { return ps; }
   @external @pure idAt(ps: WithArr[], i: u256): u64 { return ps[i].id; }
   @external @pure lenOf(ps: WithArr[]): u256 { return ps.length; }
+  @external @pure dataAt(ps: WithArr[], i: u256, j: u256): u256 { return ps[i].data[j]; }
 }`;
 
 // Faithful Solidity mirror. Selector expands the struct to a tuple:
@@ -43,11 +42,13 @@ contract StructWithFixedArrayField {
   function echoArr(WithArr[] calldata ps) external pure returns (WithArr[] memory){ return ps; }
   function idAt(WithArr[] calldata ps, uint256 i) external pure returns (uint64){ return ps[i].id; }
   function lenOf(WithArr[] calldata ps) external pure returns (uint256){ return ps.length; }
+  function dataAt(WithArr[] calldata ps, uint256 i, uint256 j) external pure returns (uint256){ return ps[i].data[j]; }
 }`;
 
 const ECHO = 'echoArr((uint64,uint256[2])[])';
 const IDAT = 'idAt((uint64,uint256[2])[],uint256)';
 const LEN = 'lenOf((uint64,uint256[2])[])';
+const DAT = 'dataAt((uint64,uint256[2])[],uint256,uint256)';
 
 describe('struct-with-fixed-array-field (WithArr[]) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
@@ -67,6 +68,9 @@ describe('struct-with-fixed-array-field (WithArr[]) vs Solidity', () => {
   // (dyn-array, uint256 i): head = [offset=0x40][i], then [len][flat words]
   const arr2 = (selSig: string, flat: bigint[], len: number, i: bigint) =>
     '0x' + sel(selSig) + pad(0x40n) + pad(i) + pad(BigInt(len)) + flat.map(pad).join('');
+  // (dyn-array, uint256 i, uint256 j): head = [offset=0x60][i][j], then [len][flat words]
+  const arr3 = (selSig: string, flat: bigint[], len: number, i: bigint, j: bigint) =>
+    '0x' + sel(selSig) + pad(0x60n) + pad(i) + pad(j) + pad(BigInt(len)) + flat.map(pad).join('');
 
   // one WithArr element = [id][data0][data1] (3 unpacked words)
   const elem = (id: bigint, d0: bigint, d1: bigint) => [id, d0, d1];
@@ -153,26 +157,24 @@ describe('struct-with-fixed-array-field (WithArr[]) vs Solidity', () => {
     expect(rw.j.returnHex).toBe('0x');
   });
 
-  it('DEFERRED: ps[i].data[j] (inner fixed-array element of dyn-array struct element) is rejected', () => {
-    // Phase 4e-1 supports whole-array echo, element value-field read, and length.
-    // Indexing the inner fixed-array of a dyn-array struct element is out of scope;
-    // the compiler rejects it. Capture the diagnostic so this is a recorded deferral
-    // rather than a silent gap. (Single-struct t.data[j] IS supported in Phase 4d.)
-    const bad = `@struct class WithArr { id: u64; data: Arr<u256, 2>; }
-@contract
-class Bad {
-  @external @pure dataAt(ps: WithArr[], i: u256, j: u256): u256 { return ps[i].data[j]; }
-}`;
-    let threw = false;
-    let codes: string[] = [];
-    try {
-      compile(bad, { fileName: 'Bad.jeth' });
-    } catch (e: any) {
-      threw = true;
-      expect(e).toBeInstanceOf(CompileError);
-      codes = (e.diagnostics ?? []).map((d: any) => d.code);
-    }
-    expect(threw, 'ps[i].data[j] must be rejected (intended deferral)').toBe(true);
-    expect(codes.length).toBeGreaterThan(0);
+  it('reads ps[i].data[j] (inner fixed-array element) byte-identically incl OOB Panic(0x32)', async () => {
+    // 2 elements: {1,[10,11]}, {2,[20,21]}; stride 3, data field at head word 1.
+    const two = [...elem(1n, 10n, 11n), ...elem(2n, 20n, 21n)];
+    let r = await eq('dataAt i=0 j=0', arr3(DAT, two, 2, 0n, 0n));
+    expect(decodeUint(r.j.returnHex)).toBe(10n);
+    r = await eq('dataAt i=0 j=1', arr3(DAT, two, 2, 0n, 1n));
+    expect(decodeUint(r.j.returnHex)).toBe(11n);
+    r = await eq('dataAt i=1 j=0', arr3(DAT, two, 2, 1n, 0n));
+    expect(decodeUint(r.j.returnHex)).toBe(20n);
+    r = await eq('dataAt i=1 j=1', arr3(DAT, two, 2, 1n, 1n));
+    expect(decodeUint(r.j.returnHex)).toBe(21n);
+    // inner OOB j=2 (fixed length 2) -> Panic(0x32), byte-identical revert
+    r = await eq('dataAt i=0 j=2 OOB', arr3(DAT, two, 2, 0n, 2n));
+    expect(r.j.success).toBe(false);
+    // outer OOB i=2 (len 2) -> Panic(0x32), byte-identical revert
+    r = await eq('dataAt i=2 j=0 OOB', arr3(DAT, two, 2, 2n, 0n));
+    expect(r.j.success).toBe(false);
+    // both OOB -> still byte-identical (whichever solc checks first)
+    await eq('dataAt i=9 j=9 OOB', arr3(DAT, two, 2, 9n, 9n));
   });
 });

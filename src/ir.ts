@@ -125,7 +125,11 @@ export type Expr =
   // --- Phase 4d: aggregate calldata params (struct / fixed-array field+index reads) ---
   | { kind: 'cdPlaceRead'; type: JethType; place: CalldataPlace }
   // --- Phase 4e-1: dynamic array of static struct (calldata param) field read ---
-  | { kind: 'cdArrayField'; type: JethType; arr: ArrayExpr; index: Expr; headWords: number; fieldType: JethType }
+  | { kind: 'cdArrayField'; type: JethType; arr: ArrayExpr; index: Expr; headWords: number; fieldType: JethType; elemIndex?: Expr; elemLength?: number }
+  // whole struct element of a calldata struct array (return ps[i]); the element is copied
+  // from its (contiguous for a static struct / offset-located for a dynamic struct) calldata
+  // head into a fresh ABI return blob, with the same bounds-check (Panic 0x32) as ps[i].field.
+  | { kind: 'cdStructArrayElem'; type: JethType; arr: ArrayExpr; index: Expr }
   // --- Phase 4e-4: string[] / bytes[] (calldata param) element read -> a dynamic value ---
   | { kind: 'cdDynArrayElem'; type: JethType; arr: ArrayExpr; index: Expr }
   // --- storage / mapping-valued string[] / bytes[] element -> a dynamic value ---
@@ -212,6 +216,7 @@ export interface ArrayExpr {
     //     lowerPlace(path).slot; data at keccak(that slot). ---
     | { kind: 'placeArray'; path: AccessPath } // inner dynamic array at a runtime length slot
     | { kind: 'cdDynArrayField'; place: CdDynPlace } // a dynamic value-array field of a calldata dynamic-struct param (s.xs): data via the tuple tail offset
+    | { kind: 'cdDynFixedField'; place: CdDynPlace; length: number } // an inline fixed-array-of-value field of a calldata dynamic-struct param (s.xs where xs: Arr<T,N>): N element words inline at the field's head offset
     | { kind: 'memArray'; varName: string } // a MEMORY array local (register holds a pointer to [len][elems])
     | { kind: 'memArrayExpr'; expr: Expr }; // a MEMORY array produced by an expression (a ternary etc.); expr lowers to the pointer
   elem: JethType;

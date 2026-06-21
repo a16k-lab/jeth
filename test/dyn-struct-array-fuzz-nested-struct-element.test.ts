@@ -9,13 +9,12 @@
 //   - whole-array echo (head/tail round-trip; dirty leaf -> EMPTY revert, because a
 //     STRUCT-element echo reads/validates EVERY leaf, including the inner ones),
 //   - element value-field reads ps[i].p, ps[i].q (lazy dirty validation),
+//   - nested-struct field chain ps[i].inner.a / ps[i].inner.b (leaf at the inline
+//     accumulated head word), with OOB Panic(0x32) and lazy dirty validation,
 //   - OOB index -> Panic(0x32), length, truncated payload -> EMPTY.
-// We also probe ps[i].inner.a: JETH defers it at compile time (a real gap), which is
-// the intended deferral for this phase; we assert the diagnostic and keep status=pass.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
-import { CompileError } from '../src/diagnostics.js';
 import { Harness, decodeUint } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
@@ -34,6 +33,8 @@ class NestedStructElem {
   @external @pure outerP(ps: Outer[], i: u256): u64 { return ps[i].p; }
   @external @pure outerQ(ps: Outer[], i: u256): u64 { return ps[i].q; }
   @external @pure len(ps: Outer[]): u256 { return ps.length; }
+  @external @pure innerA(ps: Outer[], i: u256): u128 { return ps[i].inner.a; }
+  @external @pure innerB(ps: Outer[], i: u256): u128 { return ps[i].inner.b; }
 }`;
 
 // Faithful Solidity mirror (the oracle).
@@ -46,6 +47,8 @@ contract NestedStructElem {
   function outerP(Outer[] calldata ps, uint256 i) external pure returns (uint64){ return ps[i].p; }
   function outerQ(Outer[] calldata ps, uint256 i) external pure returns (uint64){ return ps[i].q; }
   function len(Outer[] calldata ps) external pure returns (uint256){ return ps.length; }
+  function innerA(Outer[] calldata ps, uint256 i) external pure returns (uint128){ return ps[i].inner.a; }
+  function innerB(Outer[] calldata ps, uint256 i) external pure returns (uint128){ return ps[i].inner.b; }
 }`;
 
 const T = '(uint64,(uint128,uint128),uint64)'; // element tuple form
@@ -172,22 +175,31 @@ describe('nested-struct-element: Outer[] (uint64,(uint128,uint128),uint64)[] vs 
     expect(ro.j.success).toBe(false);
   });
 
-  it('ps[i].inner.a is cleanly DEFERRED by JETH (intended gap, not a silent miscompile)', () => {
-    const src = JETH.replace(
-      '@external @pure len(ps: Outer[]): u256 { return ps.length; }',
-      '@external @pure len(ps: Outer[]): u256 { return ps.length; }\n  @external @pure innerA(ps: Outer[], i: u256): u128 { return ps[i].inner.a; }',
-    );
-    let err: CompileError | undefined;
-    try {
-      compile(src, { fileName: 'NestedStructElem.jeth' });
-    } catch (e) {
-      err = e as CompileError;
-    }
-    expect(err, 'expected ps[i].inner.a to be rejected at compile time').toBeInstanceOf(CompileError);
-    // It is rejected (does not match the single-level element-field path); record the code.
-    const codes = (err!.diagnostics ?? []).map((d) => d.code);
-    expect(codes.length).toBeGreaterThan(0);
-    // documented deferral code(s): JETH074 (unsupported expr) or JETH230/217 (later step)
-    expect(codes.some((c) => ['JETH074', 'JETH230', 'JETH217', 'JETH226'].includes(c))).toBe(true);
+  it('reads ps[i].inner.a / ps[i].inner.b (nested-struct field chain) byte-identically', async () => {
+    const flat = [...outer(0xa1n, 0xa2n, 0xa3n, 0xa4n), ...outer(0xb1n, 0xb2n, 0xb3n, 0xb4n)];
+    const IA = `innerA(${T}[],uint256)`;
+    const IB = `innerB(${T}[],uint256)`;
+    // ps[i].inner.a is element head word 1; ps[i].inner.b is word 2
+    let r = await eq('innerA i=0', arr2(IA, flat, 2, 0n));
+    expect(decodeUint(r.j.returnHex)).toBe(0xa2n);
+    r = await eq('innerA i=1', arr2(IA, flat, 2, 1n));
+    expect(decodeUint(r.j.returnHex)).toBe(0xb2n);
+    r = await eq('innerB i=0', arr2(IB, flat, 2, 0n));
+    expect(decodeUint(r.j.returnHex)).toBe(0xa3n);
+    r = await eq('innerB i=1', arr2(IB, flat, 2, 1n));
+    expect(decodeUint(r.j.returnHex)).toBe(0xb3n);
+    // OOB i=2 (len 2) -> Panic(0x32), byte-identical revert
+    r = await eq('innerA OOB i=2', arr2(IA, flat, 2, 2n));
+    expect(r.j.success).toBe(false);
+    // lazy dirty validation: dirty inner.a (read by innerA) -> EMPTY revert
+    const da = outer(0x5n, (1n << 128n) | 0x6n, 0x7n, 0x8n);
+    r = await eq('innerA dirty inner.a', arr2(IA, da, 1, 0n));
+    expect(r.j.success).toBe(false);
+    expect(r.j.returnHex).toBe('0x');
+    // dirty inner.b but read inner.a (unread) -> OK (lazy), byte-identical value
+    const db = outer(0x5n, 0x6n, (1n << 128n) | 0x7n, 0x8n);
+    r = await eq('innerA dirty-unread inner.b', arr2(IA, db, 1, 0n));
+    expect(r.j.success).toBe(true);
+    expect(decodeUint(r.j.returnHex)).toBe(0x6n);
   });
 });

@@ -588,6 +588,14 @@ ${indent(runtime, 6)}
           out.push(`return(${ptr}, ${size})`);
           break;
         }
+        // `return ps[i]` (whole struct element of a calldata struct array): bounds-check i
+        // (Panic 0x32), then re-encode the element from its calldata head into a fresh ABI
+        // return blob (a STATIC struct flat, a DYNAMIC struct with the [0x20] wrapper).
+        if (s.value.kind === 'cdStructArrayElem') {
+          const { ptr, size } = this.returnCdArrayElem(s.value.arr, s.value.index, s.value.type, ctx, out);
+          out.push(`return(${ptr}, ${size})`);
+          break;
+        }
         // `return this.m[k]` (whole struct/array mapping value): encode from the
         // runtime mapping slot via the storage-source encoder.
         if (s.value.kind === 'mapStorageValue') {
@@ -773,6 +781,15 @@ ${indent(runtime, 6)}
           // storage / literal source, and aliases a memory source (matching Solidity).
           const { mp } = this.toMemory(this.lowerDynamic(s.init, ctx, out), out);
           out.push(`let ${name} := ${mp}`);
+          this.ctxDeclare(ctx, s.name, name);
+          break;
+        }
+        if (s.type.kind === 'array' && s.type.length === undefined && s.init) {
+          // G9: a DYNAMIC value-array memory local (let a: u256[] = p / xs / this.arr). The
+          // register holds a [len][elems] pointer: aggArgToMemPtr ALIASES a memory source
+          // (pointer copy, matching Solidity references) and COPIES a calldata/storage/literal
+          // source into a fresh image (a calldata value array MASKS dirty elements, like solc).
+          out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
           this.ctxDeclare(ctx, s.name, name);
           break;
         }
@@ -1472,13 +1489,19 @@ ${indent(runtime, 6)}
         // branch to a memory image (allocAggFromStorage copy / allocAggToMem / memAggregate
         // alias), then select the image POINTER with a short-circuit switch.
         if (e.type.kind === 'struct' || (e.type.kind === 'array' && e.type.length !== undefined)) {
+          // a DYNAMIC-field struct uses the pointer-headed image builder (buildDynStructLocal);
+          // a static aggregate uses the flat ABI-image materializer (aggToMemPtr).
+          const dynStruct = e.type.kind === 'struct' && isDynamicType(e.type);
+          const matPtr = (br: Expr, o: string[]): string =>
+            dynStruct ? this.buildDynStructLocal(e.type as JethType & { kind: 'struct' }, br, ctx, o)
+              : this.aggToMemPtr(br, ctx, o);
           const cc = this.lowerExpr(e.cond, ctx, out);
           const p = this.fresh();
           out.push(`let ${p} := 0`);
           const tO: string[] = [];
-          const pT = this.aggToMemPtr(e.then, ctx, tO);
+          const pT = matPtr(e.then, tO);
           const eO: string[] = [];
-          const pE = this.aggToMemPtr(e.else, ctx, eO);
+          const pE = matPtr(e.else, eO);
           out.push(`switch ${cc}`);
           out.push('case 0 {');
           for (const l of eO) out.push('  ' + l);
@@ -1669,6 +1692,22 @@ ${indent(runtime, 6)}
         out.push(`if iszero(lt(${i}, ${ref.length})) { ${this.panic()}(0x32) }`);
         const stride = abiHeadWords(e.arr.elem) * 32;
         const disp = e.headWords * 32;
+        // ps[i].xs[j]: a fixed value-array FIELD element. Each element is one ABI head
+        // word (inline in the struct head); bound j against N (Panic 0x32) then add
+        // j*32 to the field displacement. solc checks the outer i bound first.
+        if (e.elemIndex !== undefined) {
+          const j = this.fresh();
+          out.push(`let ${j} := ${this.lowerExpr(e.elemIndex, ctx, out)}`);
+          out.push(`if iszero(lt(${j}, ${e.elemLength})) { ${this.panic()}(0x32) }`);
+          const at2 = disp === 0
+            ? `add(mul(${i}, ${stride}), mul(${j}, 0x20))`
+            : `add(add(mul(${i}, ${stride}), ${disp}), mul(${j}, 0x20))`;
+          const w2 = this.fresh();
+          out.push(`let ${w2} := calldataload(add(${ref.offset}, ${at2}))`);
+          const g2 = this.validateInput(e.fieldType, w2);
+          if (g2) out.push(g2);
+          return w2;
+        }
         const at = disp === 0 ? `mul(${i}, ${stride})` : `add(mul(${i}, ${stride}), ${disp})`;
         const w = this.fresh();
         out.push(`let ${w} := calldataload(add(${ref.offset}, ${at}))`);
@@ -1729,6 +1768,7 @@ ${indent(runtime, 6)}
       case 'structNew':
       case 'structValue':
       case 'structArrayElem':
+      case 'cdStructArrayElem':
       case 'mapStorageValue':
       case 'mapDynValue':
       case 'abiEncode':
@@ -1807,6 +1847,14 @@ ${indent(runtime, 6)}
     const refs: ({ mp: string; len: string } | null)[] = types.map((t, i) =>
       isBytesLike(t) ? this.toMemory(this.lowerDynamic(values[i]!, ctx, out), out) : null,
     );
+    // PRE-PASS: an INLINE dynamic value-array literal component ([7,8,9]) is materialized to a
+    // fresh [len][data] memory image BEFORE the blob ptr is captured below, so a later allocation
+    // cannot alias the blob (mirrors the bytes/string `refs` pre-pass above).
+    const litRefs: (string | null)[] = types.map((t, i) =>
+      t.kind === 'array' && t.length === undefined && isStaticValueType(t.element) && values[i]!.kind === 'arrayLit'
+        ? this.lowerExpr(values[i]!, ctx, out)
+        : null,
+    );
     const headWordsOf = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
     const totalHead = types.reduce((n, t) => n + headWordsOf(t), 0);
     const ptr = this.fresh();
@@ -1831,6 +1879,17 @@ ${indent(runtime, 6)}
         // is the memory [len][data] (value elements are one word each, the ABI layout).
         const av = values[i] as Expr & { kind: 'arrayValue' };
         const mp = av.arr.base.kind === 'memArray' ? this.ctxLookup(ctx, av.arr.base.varName) : this.lowerExpr((av.arr.base as { kind: 'memArrayExpr'; expr: Expr }).expr, ctx, out);
+        out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
+        const total = `mul(add(mload(${mp}), 1), 0x20)`;
+        out.push(`mcopy(${cursor}, ${mp}, ${total})`);
+        out.push(`${cursor} := add(${cursor}, ${total})`);
+        hw += 1;
+      } else if (litRefs[i]) {
+        // an INLINE dynamic value-array literal component (return [x, [7,8,9]]): the literal was
+        // materialized to a fresh [len][data] memory image in the PRE-PASS (before the blob ptr was
+        // captured, so it cannot alias the blob), then encoded like a memory value-array local
+        // (offset word + one-word-per-element mcopy).
+        const mp = litRefs[i]!;
         out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
         const total = `mul(add(mload(${mp}), 1), 0x20)`;
         out.push(`mcopy(${cursor}, ${mp}, ${total})`);
@@ -1876,6 +1935,19 @@ ${indent(runtime, 6)}
         const mp = this.lowerExpr(values[i]!, ctx, out);
         out.push(`mcopy(add(${ptr}, ${headPos}), ${mp}, ${abiHeadWords(t) * 32})`);
         hw += abiHeadWords(t);
+      } else if (isDynamicType(t) && t.kind === 'struct' && values[i]!.kind === 'memDynStructValue') {
+        // a DYNAMIC memory struct local component: offset word + bare tuple head/tail in the tail,
+        // encoded in-place at the cursor. A memory-source pre-pass (collectTupleDyn) allocates
+        // NOTHING (bytes/string and value-array fields are already memory pointers in the local's
+        // head), so it cannot alias the not-yet-reserved head buffer. Mirrors encodeDynStructToBlob.
+        out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
+        const src = this.tupleSrc(values[i]!, ctx, out);
+        const queue: DynRef[] = [];
+        this.collectTupleDyn(t, src, queue, ctx, out);
+        let qi = 0;
+        const end = this.encodeTupleInto(t, src, cursor, ctx, out, () => queue[qi++]!);
+        out.push(`${cursor} := ${end}`);
+        hw += 1;
       } else {
         // a struct / array component, storage-source: static -> inline head; dynamic ->
         // offset word + tail (both via the recursive storage encoder).
@@ -2108,6 +2180,20 @@ ${indent(runtime, 6)}
     }
     if (value.kind === 'memDynStructValue') {
       return { kind: 'mem', headPtr: this.ctxLookup(ctx, value.local) };
+    }
+    if (value.kind === 'ternary') {
+      // a DYNAMIC-struct ternary: lower it to a pointer-headed memory image (short-circuit
+      // select of buildDynStructLocal per branch), then encode from that mem source.
+      return { kind: 'mem', headPtr: this.lowerExpr(value, ctx, out) };
+    }
+    // a whole STORAGE dynamic struct (this.d / this.m[k] / this.recs[i] / placeRead): copy it
+    // into a fresh memory image (value fields inline, bytes/string + dyn value-array fields a
+    // [len][data] pointer) via the same helper buildDynStructLocal uses, then encode from 'mem'.
+    // structSrcSlot throws for genuinely unsupported source kinds, preserving the fail-safe below.
+    if (value.kind === 'structValue' || value.kind === 'mapStorageValue' || value.kind === 'structArrayElem' || value.kind === 'placeRead') {
+      const struct = value.type as JethType & { kind: 'struct' };
+      const headPtr = this.buildDynStructFromStorage(struct, this.structSrcSlot(value, ctx, out), ctx, out);
+      return { kind: 'mem', headPtr };
     }
     throw new UnsupportedError(`cannot encode dynamic struct from ${value.kind}`);
   }
@@ -2550,8 +2636,20 @@ ${indent(runtime, 6)}
       const offPtr = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
       const dataPtr = this.fresh();
       const len = this.fresh();
-      out.push(`let ${dataPtr}, ${len} := ${this.calldataArrayAt()}(${base}, ${offPtr}, 0x20)`);
+      const stride = abiHeadWords(arr.elem) * 32;
+      out.push(`let ${dataPtr}, ${len} := ${this.calldataArrayAt()}(${base}, ${offPtr}, ${stride})`);
       return { src: 'calldata', offset: dataPtr, length: len, elem: arr.elem };
+    }
+    if (arr.base.kind === 'cdDynFixedField') {
+      // an inline fixed-array-of-value field (s.xs where xs: Arr<T,N>): the N element words sit inline
+      // in the tuple head at the field's byte offset. No tail decode: element i is the word at
+      // fieldOff + i*32. length is the compile-time constant N. arrayGet bounds-checks (Panic 0x32)
+      // and validates dirty calldata bits on read, matching solc's inline static-array element read.
+      const place = arr.base.place;
+      const base = this.lowerCdDynBase(place, ctx, out);
+      const last = place.steps[place.steps.length - 1]!;
+      const offset = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
+      return { src: 'calldata', offset, length: String(arr.base.length), elem: arr.elem };
     }
     if (arr.base.kind === 'memArray') {
       // a memory array local: the register holds a pointer to [len][elem0]...
@@ -3008,6 +3106,7 @@ ${indent(runtime, 6)}
   private buildDynStructLocal(struct: JethType & { kind: 'struct' }, init: Expr, ctx: LowerCtx, out: string[]): string {
     if (init.kind === 'structNew') return this.allocDynStructToMem(init, ctx, out);
     if (init.kind === 'memDynStructValue') return this.ctxLookup(ctx, init.local); // alias
+    if (init.kind === 'ternary') return this.lowerExpr(init, ctx, out); // selects an already-built branch image pointer
     if (init.kind === 'cdDynStructValue') return this.buildDynStructFromCalldata(struct, init, ctx, out);
     // a storage struct source (structValue / mapStorageValue / structArrayElem / placeRead).
     return this.buildDynStructFromStorage(struct, this.structSrcSlot(init, ctx, out), ctx, out);
@@ -3953,7 +4052,23 @@ ${indent(runtime, 6)}
       mpExpr = this.lowerExpr(base.expr, ctx, out);
       sizeExpr = `mul(add(mload(${mpExpr}), 1), 0x20)`;
     } else {
-      throw new UnsupportedError(`a dynamic-array @error/@event argument from a '${base.kind}' source is not supported yet`);
+      // a STORAGE source (this.arr / this.m[k] / a nested inner array this.dd[i] / this.s.xs):
+      // build a fresh [len][elements...] ABI tail image via abiEncFromStorage (the canonical
+      // transcode aggArgToMemPtr already uses). The result IS the ABI tail blob, so mp points at
+      // the [len] word and size is its full byte length (length word + element / offset-table /
+      // tail bytes), matching the value-element memArray contract and the calldata echo.
+      let lenSlot: string;
+      if (base.kind === 'stateArray') lenSlot = String(base.slot);
+      else if (base.kind === 'mapArray') lenSlot = this.mappingSlot(base.baseSlot, base.keys, ctx, out);
+      else if (base.kind === 'placeArray') lenSlot = this.lowerPlace(base.path, ctx, out).slot;
+      else throw new UnsupportedError(`a dynamic-array @error/@event argument from a '${base.kind}' source is not supported yet`);
+      const sdst = this.fresh();
+      out.push(`let ${sdst} := mload(0x40)`);
+      const ssz = this.abiEncFromStorage(arg.type, lenSlot, 0, sdst, out);
+      const sm = this.fresh();
+      out.push(`let ${sm} := ${ssz}`);
+      out.push(`mstore(0x40, add(${sdst}, ${sm}))`);
+      return { mp: sdst, size: sm };
     }
     const mp = this.fresh();
     out.push(`let ${mp} := ${mpExpr}`);
@@ -4198,6 +4313,47 @@ ${indent(runtime, 6)}
       const size = this.abiEncFromStorage(t, slotExpr, 0, ptr, out);
       out.push(`let ${total} := ${size}`);
     }
+    out.push(`mstore(0x40, add(${ptr}, ${total}))`);
+    return { ptr, size: total };
+  }
+
+  /** `return ps[i]` (whole struct element of a calldata struct array): bounds-check i
+   *  (Panic 0x32), resolve the element's calldata head (contiguous for a STATIC struct;
+   *  offset-located via the per-element table for a DYNAMIC struct, with solc's unsigned
+   *  2^64 cap + readability check), then re-encode it into a fresh ABI return blob via the
+   *  recursive calldata codec (a static struct flat; a dynamic struct with the [0x20]
+   *  wrapper). The calldata twin of returnStorageValue/structArrayElem. */
+  private returnCdArrayElem(arr: ArrayExpr, index: Expr, t: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+    const ref = this.lowerArrayRef(arr, ctx, out);
+    if (ref.src !== 'calldata') throw new UnsupportedError('returnCdArrayElem requires a calldata array');
+    const i = this.fresh();
+    out.push(`let ${i} := ${this.lowerExpr(index, ctx, out)}`);
+    out.push(`if iszero(lt(${i}, ${ref.length})) { ${this.panic()}(0x32) }`);
+    const eb = this.fresh();
+    if (isStaticType(t)) {
+      // contiguous static elements: base = dataStart + i*stride (the whole payload was
+      // already validated readable when the array was bound).
+      const stride = abiHeadWords(t) * 32;
+      out.push(`let ${eb} := add(${ref.offset}, mul(${i}, ${stride}))`);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const size = this.abiEncFromCd(t, eb, ptr, true, out);
+      out.push(`mstore(0x40, add(${ptr}, ${size}))`);
+      return { ptr, size };
+    }
+    // dynamic element: ref.offset is the per-element offset-table base (= data start). Element
+    // i's data is at base + offset[i]; mirror abiEncFromCd's dynamic-array element resolution.
+    const so = this.fresh();
+    out.push(`let ${so} := calldataload(add(${ref.offset}, mul(${i}, 0x20)))`);
+    out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+    out.push(`let ${eb} := add(${ref.offset}, ${so})`);
+    out.push(`if gt(add(${eb}, ${cdElemHeadBytes(t)}), calldatasize()) { revert(0, 0) }`);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(${ptr}, 0x20)`);
+    const size = this.abiEncFromCd(t, eb, `add(${ptr}, 0x20)`, true, out);
+    const total = this.fresh();
+    out.push(`let ${total} := add(0x20, ${size})`);
     out.push(`mstore(0x40, add(${ptr}, ${total}))`);
     return { ptr, size: total };
   }

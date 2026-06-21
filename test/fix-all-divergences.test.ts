@@ -121,7 +121,8 @@ describe('sweep @constant folder enhancements', () => {
         @constant M: u256 = type(u256).max;
         @constant H: u8 = type(u8).max;
         @constant N: i8 = type(i8).min;
-        @constant MASK: u8 = ~0n;
+        @constant MASK: u8 = (~1n) & 0xFFn;
+        @constant NEG: i256 = ~5n;
         @constant FLAG: bool = 5n > 3n;
         @constant FLAG2: bool = A == 10n;
         @constant T: u256 = FLAG ? 100n : 200n;
@@ -130,6 +131,7 @@ describe('sweep @constant folder enhancements', () => {
         @external @pure h(): u8 { return this.H; }
         @external @pure n(): i8 { return this.N; }
         @external @pure mask(): u8 { return this.MASK; }
+        @external @pure neg(): i256 { return this.NEG; }
         @external @pure flag(): bool { return this.FLAG; }
         @external @pure flag2(): bool { return this.FLAG2; }
         @external @pure t(): u256 { return this.T; }
@@ -140,7 +142,8 @@ describe('sweep @constant folder enhancements', () => {
         uint256 constant M = type(uint256).max;
         uint8 constant H = type(uint8).max;
         int8 constant N = type(int8).min;
-        uint8 constant MASK = ~uint8(0);
+        uint8 constant MASK = (~1) & 0xFF;
+        int256 constant NEG = ~5;
         bool constant FLAG = 5 > 3;
         bool constant FLAG2 = A == 10;
         uint256 constant T = FLAG ? 100 : 200;
@@ -149,12 +152,26 @@ describe('sweep @constant folder enhancements', () => {
         function h() external pure returns(uint8){ return H; }
         function n() external pure returns(int8){ return N; }
         function mask() external pure returns(uint8){ return MASK; }
+        function neg() external pure returns(int256){ return NEG; }
         function flag() external pure returns(bool){ return FLAG; }
         function flag2() external pure returns(bool){ return FLAG2; }
         function t() external pure returns(uint256){ return T; }
       }`,
-      [{ sig: 'b()' }, { sig: 'm()' }, { sig: 'h()' }, { sig: 'n()' }, { sig: 'mask()' }, { sig: 'flag()' }, { sig: 'flag2()' }, { sig: 't()' }],
+      [{ sig: 'b()' }, { sig: 'm()' }, { sig: 'h()' }, { sig: 'n()' }, { sig: 'mask()' }, { sig: 'neg()' }, { sig: 'flag()' }, { sig: 'flag2()' }, { sig: 't()' }],
     );
+  });
+
+  it('rejects a bare top-level ~N into an UNSIGNED constant (solc parity: int_const -N-1 not convertible)', () => {
+    // ~0n is the signed int_const -1; assigning it to an unsigned type is a solc TypeError
+    // ("Cannot implicitly convert signed literal to unsigned type"). JETH must reject too, NOT
+    // width-mask to a positive value. The sub-expression form (~1n)&0xFFn above stays valid.
+    for (const src of [
+      `@contract class C { @constant K: u256 = ~1n; @external @pure f(): u256 { return this.K; } }`,
+      `@contract class C { @constant K: u8 = ~0n; @external @pure f(): u8 { return this.K; } }`,
+      `@contract class C { @constant K: u128 = ~7n; @external @pure f(): u128 { return this.K; } }`,
+    ]) {
+      expect(jethRejects(src), src).toBe(true);
+    }
   });
 });
 
@@ -723,5 +740,68 @@ describe('all-issues sweep: miscompile + over-accepts + easy over-rejects vs sol
       `contract C { function b() external pure returns(bytes memory){ return bytes("abc"); } function s() external pure returns(string memory){ return string("hello world"); } function l32(bytes32 v) external pure returns(uint256){ return v.length; } function l4(bytes4 v) external pure returns(uint256){ return v.length; } }`,
       [{ sig: 'b()' }, { sig: 's()' }, { sig: 'l32(bytes32)', args: W(0xabn) }, { sig: 'l4(bytes4)', args: W(0n) }],
     );
+  });
+});
+
+describe('sweep batch 2 over-rejections (byte-identical to solc)', () => {
+  it('#9 ternary over a dynamic-field struct, bound to a local (return whole struct)', async () => {
+    await rt(
+      `@struct class P { a: u256; s: string; } @contract class C { @external @pure pick(b: bool): P { let x: P = P(1n,"xx"); let y: P = P(2n,"yyyyyyyyyyyy"); let p: P = b ? x : y; return p; } }`,
+      `contract C { struct P { uint256 a; string s; } function pick(bool b) external pure returns(P memory){ P memory x=P(1,"xx"); P memory y=P(2,"yyyyyyyyyyyy"); P memory p=b?x:y; return p; } }`,
+      [{ sig: 'pick(bool)', args: W(0n) }, { sig: 'pick(bool)', args: W(1n) }],
+    );
+  });
+
+  it('#8 emit a STORAGE dynamic value-array argument (log data byte-identical)', async () => {
+    await rt(
+      `@contract class C { @state nums: u256[]; @event E(a: u256[]); @external add(v: u256): void { this.nums.push(v); } @external fire(): void { emit(E(this.nums)); } }`,
+      `contract C { uint256[] nums; event E(uint256[] a); function add(uint256 v) external { nums.push(v); } function fire() external { emit E(nums); } }`,
+      [{ sig: 'add(uint256)', args: W(11n) }, { sig: 'add(uint256)', args: W(22n) }, { sig: 'add(uint256)', args: W(33n) }, { sig: 'fire()' }],
+    );
+  });
+
+  it('#15 emit a MEMORY-local dynamic array argument (log data byte-identical)', async () => {
+    await rt(
+      `@contract class C { @event E(a: u256[]); @external f(p: u256[]): void { const a: u256[] = p; emit(E(a)); } }`,
+      `contract C { event E(uint256[] a); function f(uint256[] calldata p) external { uint256[] memory a = p; emit E(a); } }`,
+      [{ sig: 'f(uint256[])', args: W(0x20n) + W(3n) + W(11n) + W(22n) + W(33n) }],
+    );
+  });
+
+  it('#10 memory dynamic-struct local as a multi-return tuple component', async () => {
+    await rt(
+      `@struct class P { a: u256; s: string; } @contract class C { @external @pure f(): [u256, P] { let p: P = P(7n, "hello world!!"); return [9n, p]; } }`,
+      `contract C { struct P { uint256 a; string s; } function f() external pure returns(uint256, P memory){ P memory p=P(7,"hello world!!"); return (9, p); } }`,
+      [{ sig: 'f()' }],
+    );
+  });
+
+  it('#19 inline dynamic-array literal as a multi-return tuple component', async () => {
+    await rt(
+      `@contract class C { @external @pure f(): [u256, u256[]] { return [1n, [7n, 8n, 9n]]; } }`,
+      `contract C { function f() external pure returns(uint256, uint256[] memory){ uint256[] memory a = new uint256[](3); a[0]=7;a[1]=8;a[2]=9; return (1, a); } }`,
+      [{ sig: 'f()' }],
+    );
+  });
+
+  it('calldata struct-array-element access cluster now ACCEPTS (byte-identity in dyn-struct-array fuzz suites)', () => {
+    // #5 field through an indexed struct-array FIELD; #6 fixed-array field of a dyn-struct param;
+    // #7 whole struct element returned; #11 emit a storage struct with a dynamic field; #17/#18
+    // byte-index of a calldata bytes[] element / a bytesN value. Each was over-rejected before.
+    const srcs = [
+      // #5 p.pts[i].x (Pt[] field of a calldata struct)
+      `@struct class Pt { x: u256; y: u256; } @struct class Poly { name: string; pts: Pt[]; } @contract class C { @external @pure f(p: Poly, i: u256): u256 { return p.pts[i].x; } }`,
+      // #6 d.xs[j] (fixed-array field of a calldata dynamic-struct param)
+      `@struct class D { a: u256; s: string; xs: Arr<u256, 3>; } @contract class C { @external @pure f(d: D, j: u256): u256 { return d.xs[j]; } }`,
+      // #7 return ps[i] (whole struct element of a calldata struct array)
+      `@struct class P { x: u128; s: string; } @contract class C { @external @pure f(ps: P[], i: u256): P { return ps[i]; } }`,
+      // #11 emit a storage struct with a dynamic field
+      `@struct class D { id: u256; name: string } @contract class C { @state d: D; @event E(x: D); @external f(): void { emit(E(this.d)); } }`,
+      // #17 a[i][j] byte-index into a calldata bytes[] element
+      `@contract class C { @external @pure f(a: bytes[], i: u256, j: u256): bytes1 { return a[i][j]; } }`,
+      // #18 byte-index of a bytesN VALUE expression
+      `@contract class C { @external @pure f(x: u256, i: u256): bytes1 { return bytes32(x)[i]; } }`,
+    ];
+    for (const s of srcs) expect(jethAccepts(s), s).toBe(true);
   });
 });
