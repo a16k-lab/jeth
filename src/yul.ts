@@ -812,11 +812,16 @@ ${indent(runtime, 6)}
         // this.g = [a, b, c] (array literal). Static-element arrays copy their slot footprint
         // verbatim; dynamic-element fixed arrays deep-copy per element.
         if (
-          (s.target.kind === 'state' || s.target.kind === 'place') &&
+          (s.target.kind === 'state' || s.target.kind === 'place' || s.target.kind === 'mapping') &&
           s.target.type.kind === 'array' &&
           s.target.type.length !== undefined
         ) {
-          const dstBase = s.target.kind === 'state' ? String(s.target.slot) : this.lowerPlace(s.target.path, ctx, out).slot;
+          const dstBase =
+            s.target.kind === 'state'
+              ? String(s.target.slot)
+              : s.target.kind === 'mapping'
+                ? this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out)
+                : this.lowerPlace(s.target.path, ctx, out).slot;
           if (s.value.kind === 'arrayLit') {
             this.writeArrayLit(s.value, dstBase, ctx, out);
           } else {
@@ -3010,8 +3015,14 @@ ${indent(runtime, 6)}
     if (value.kind === 'arrayValue') {
       const base = value.arr.base;
       if (base.kind === 'fixedArray') return String(base.baseSlot);
+      if (base.kind === 'stateArray') return String(base.slot);
       if (base.kind === 'placeArray') return this.lowerPlace(base.path, ctx, out).slot;
+      if (base.kind === 'mapArray') return this.mappingSlot(base.baseSlot, base.keys, ctx, out);
     }
+    // a whole fixed-array reached as an element of a dynamic/fixed array (this.a[i], Arr<T,N>[]) or as a
+    // mapping value (this.m[k], mapping(K=>Arr<T,N>)): resolve its (runtime) base slot.
+    if (value.kind === 'structArrayElem') return this.structArrayElemSlot(value.arr, value.index, ctx, out);
+    if (value.kind === 'mapStorageValue') return this.mappingSlot(value.baseSlot, value.keys, ctx, out);
     throw new UnsupportedError(`cannot copy a fixed array from '${value.kind}'`);
   }
 

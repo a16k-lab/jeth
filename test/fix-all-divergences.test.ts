@@ -275,3 +275,23 @@ describe('fixed-array field of a memory struct local (p.a[i]) read/write vs solc
     );
   });
 });
+
+describe('whole storage fixed-array copy via element/mapping/struct-field vs solc', () => {
+  it('dyn-array element, mapping value, nested element, and struct field', async () => {
+    await rt(
+      `@contract class C { @state a: Arr<u256,2>[]; @external seed(): void { this.a.push(); this.a.push(); this.a[0n][0n]=11n; this.a[0n][1n]=22n; this.a[1n][0n]=33n; } @external cp(): void { this.a[1n] = this.a[0n]; } @external @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`,
+      `contract C { uint256[2][] a; function seed() external { a.push(); a.push(); a[0][0]=11; a[0][1]=22; a[1][0]=33; } function cp() external { a[1] = a[0]; } function g(uint256 i, uint256 j) external view returns(uint256){ return a[i][j]; } }`,
+      [{ sig: 'seed()' }, { sig: 'cp()' }, { sig: 'g(uint256,uint256)', args: W(1n) + W(0n) }, { sig: 'g(uint256,uint256)', args: W(1n) + W(1n) }],
+    );
+    await rt(
+      `@contract class C { @state m: mapping<u256,Arr<u256,2>>; @external seed(): void { this.m[0n][0n]=5n; this.m[0n][1n]=6n; } @external cp(): void { this.m[1n] = this.m[0n]; } @external @view g(k: u256, j: u256): u256 { return this.m[k][j]; } }`,
+      `contract C { mapping(uint256=>uint256[2]) m; function seed() external { m[0][0]=5; m[0][1]=6; } function cp() external { m[1] = m[0]; } function g(uint256 k, uint256 j) external view returns(uint256){ return m[k][j]; } }`,
+      [{ sig: 'seed()' }, { sig: 'cp()' }, { sig: 'g(uint256,uint256)', args: W(1n) + W(0n) }, { sig: 'g(uint256,uint256)', args: W(1n) + W(1n) }],
+    );
+    await rt(
+      `@struct class S { x: u256; arr: Arr<u256,2>; } @contract class C { @state e: S; @state g: S; @external seed(): void { this.g.arr[0n]=11n; this.g.arr[1n]=22n; } @external cp(): void { this.e.arr = this.g.arr; } @external @view ge(j: u256): u256 { return this.e.arr[j]; } }`,
+      `struct S { uint256 x; uint256[2] arr; } contract C { S e; S g; function seed() external { g.arr[0]=11; g.arr[1]=22; } function cp() external { e.arr = g.arr; } function ge(uint256 j) external view returns(uint256){ return e.arr[j]; } }`,
+      [{ sig: 'seed()' }, { sig: 'cp()' }, { sig: 'ge(uint256)', args: W(0n) }, { sig: 'ge(uint256)', args: W(1n) }],
+    );
+  });
+});

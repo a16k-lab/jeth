@@ -3456,6 +3456,12 @@ export class Analyzer {
           this.currentWritesState = true;
           return { kind: 'place', type: f.type, path: { baseSlot: sv.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] } };
         }
+        // this.e.arr = <fixed array>: a whole FIXED-array field copy (a storage place; copyFixedArray
+        // handles value/static elements). A dynamic-array or fixed-array-of-dynamic field stays gated.
+        if (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)) {
+          this.currentWritesState = true;
+          return { kind: 'place', type: f.type, path: { baseSlot: sv.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] } };
+        }
         if (!isStaticValueType(f.type)) {
           this.diags.error(node, 'JETH226', 'nested array field assignment is not supported yet');
           return undefined;
