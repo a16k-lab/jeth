@@ -1192,8 +1192,9 @@ export class Analyzer {
     else if (decs.includes('view')) mutability = 'view';
     else if (decs.includes('pure')) mutability = 'pure';
     // solc: internal/private functions can never be payable (no message context of their own).
-    if (decs.includes('payable') && (decs.includes('internal') || decs.includes('private'))) {
-      this.diags.error(member, 'JETH131', '@payable cannot be combined with @internal/@private (only external/public functions can be payable)');
+    // @hidden is an explicitly-internal function, so it is rejected with @payable too.
+    if (decs.includes('payable') && (decs.includes('internal') || decs.includes('private') || decs.includes('hidden'))) {
+      this.diags.error(member, 'JETH131', '@payable cannot be combined with @internal/@private/@hidden (only external/public functions can be payable)');
     }
 
     // F4: @nonReentrant wraps the external entry in a transient-storage mutex. It must be a

@@ -238,3 +238,20 @@ describe('constant arithmetic accept/reject parity vs solc (already solc-accurat
     it(`accepts: ${name}`, () => expect(jethAccepts(src)).toBe(true));
   }
 });
+
+describe('@payable on internal/private/hidden is rejected (solc parity)', () => {
+  // solc: "internal" and "private" functions cannot be payable. @hidden is an explicitly-internal fn.
+  const reject: [string, string][] = [
+    ['@internal @payable', `@contract class C { @internal @payable v(): u256 { return msg.value; } @external @payable f(): u256 { return this.v(); } }`],
+    ['@private @payable', `@contract class C { @private @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
+    ['@hidden @payable', `@contract class C { @hidden @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
+  ];
+  for (const [name, src] of reject) {
+    it(`rejects ${name}`, () => expect(jethRejects(src)).toBe(true));
+  }
+  // external/public payable must still be accepted.
+  it('accepts @external/@public @payable', () => {
+    expect(jethAccepts(`@contract class C { @external @payable f(): u256 { return msg.value; } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @public @payable f(): u256 { return msg.value; } }`)).toBe(true);
+  });
+});
