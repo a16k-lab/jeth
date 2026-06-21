@@ -449,6 +449,32 @@ export class Analyzer {
       else this.candidatesByName.set(rf.name, [rf]);
       if (!this.funcsByName.has(rf.name)) this.funcsByName.set(rf.name, rf);
     }
+
+    // Cross-kind identifier collision (solc: "Identifier already declared"). Every contract-level
+    // declaration shares one identifier namespace; a name may carry MULTIPLE declarations ONLY if
+    // they are all functions (overloading) or all events (overloading). A name used by two DIFFERENT
+    // kinds - function / event / error / type (struct or enum) / storage (state/@constant/@immutable)
+    // - collides. Intra-kind duplicates are handled elsewhere (JETH046 immutable, JETH128 error,
+    // JETH272 enum/struct, the overload resolver), so this only catches cross-kind reuse.
+    const idKinds = new Map<string, Set<string>>();
+    const addId = (nm: string, kind: string): void => {
+      const s = idKinds.get(nm) ?? new Set<string>();
+      s.add(kind);
+      idKinds.set(nm, s);
+    };
+    for (const nm of this.candidatesByName.keys()) addId(nm, 'function');
+    for (const nm of this.genericsByName.keys()) addId(nm, 'function');
+    for (const nm of this.eventsByName.keys()) addId(nm, 'event');
+    for (const nm of this.errorsByName.keys()) addId(nm, 'error');
+    for (const nm of this.structsByName.keys()) addId(nm, 'type'); // structs + enums share the type namespace
+    for (const v of layout.vars) addId(v.name, 'storage');
+    for (const nm of this.constantsByName.keys()) addId(nm, 'storage');
+    for (const nm of this.immutableOrder) addId(nm, 'storage');
+    for (const [nm, kinds] of idKinds) {
+      if (kinds.size > 1) {
+        this.diags.error(cls, 'JETH133', `identifier '${nm}' is already declared (a ${[...kinds].join(' and a ')} share the name; solc reuses a name only among overloaded functions or events)`);
+      }
+    }
     // Assign each function a UNIQUE key: the bare name when that name is unique, else `name__ovN`
     // (decl order). This keys the effects map / Yul `userfn_` name / call-graph identity so two
     // overloads never collide. Solc allows overloading by arity or parameter types.
@@ -863,6 +889,12 @@ export class Analyzer {
       return;
     }
     const name = member.name.text;
+    // solc reserves the built-in error names Error and Panic: an @error may not redefine them
+    // (a same-named @event or function IS allowed, so this guard is specific to @error).
+    if (name === 'Error' || name === 'Panic') {
+      this.diags.error(member, 'JETH132', `@error name '${name}' is reserved: the built-in errors Error and Panic cannot be redefined`);
+      return;
+    }
     if (member.body) this.diags.error(member, 'JETH125', `@error '${name}' must be a bodyless declaration`);
     if (member.type) this.diags.error(member.type, 'JETH126', `@error '${name}' must not declare a return type`);
     const params: Param[] = [];
@@ -4720,7 +4752,8 @@ export class Analyzer {
     let sig: Expr | undefined;
     if (method === 'encodeWithSelector') {
       if (rest.length < 1) { this.diags.error(node, 'JETH173', 'abi.encodeWithSelector requires a bytes4 selector'); return undefined; }
-      const s = this.checkExpr(rest[0]!);
+      // expect bytes4 so a 4-byte hex literal (0x12345678) converts implicitly, matching solc.
+      const s = this.checkExpr(rest[0]!, { kind: 'bytesN', size: 4 });
       if (!s) return undefined;
       if (!(s.type.kind === 'bytesN' && s.type.size === 4)) { this.diags.error(rest[0]!, 'JETH173', `abi.encodeWithSelector's first argument must be bytes4 (got ${displayName(s.type)})`); return undefined; }
       selector = s;
@@ -4877,10 +4910,11 @@ export class Analyzer {
   /** Minimal Phase 3 cast set (each verified against solc): address<->u160 (no-op),
    *  address<->bytes20 (shift). General numeric casts are deferred. */
   private isCastAllowed(from: JethType, to: JethType): boolean {
-    // An enum value converts ONLY to an integer type (uintN/intN); solc rejects a direct
-    // enum -> bytesN / address / bool conversion (it must go through `uintN(c)` first). The
-    // reverse, integer -> enum, is allowed (range-checked) and handled in the cast path.
-    if ((from as { enumMembers?: string[] }).enumMembers && to.kind !== 'uint' && to.kind !== 'int') return false;
+    // An enum value converts ONLY to an UNSIGNED integer (uintN of any width); solc rejects a
+    // direct enum -> intN (must go through `uintN(c)` first) and enum -> bytesN / address / bool.
+    // Without this, enum (a branded uint8) would slip through the same-width signed-cast rule below
+    // for int8 only. The reverse, integer -> enum, is range-checked in the cast path.
+    if ((from as { enumMembers?: string[] }).enumMembers && to.kind !== 'uint') return false;
     if (to.kind === 'uint' && to.bits === 160 && from.kind === 'address') return true;
     if (to.kind === 'bytesN' && to.size === 20 && from.kind === 'address') return true;
     if (to.kind === 'address') return this.isAddressConvertible(from);
@@ -5038,7 +5072,10 @@ export class Analyzer {
     if (ts.isBigIntLiteral(node)) {
       const raw = node.text.replace(/n$/, '');
       const value = BigInt(raw);
-      if (this.rejectUppercaseHexPrefix(node)) return { kind: 'literalInt', type: U256, value };
+      // a HEX literal carries its source byte width (digits / 2, even-digit only) for bytesN conversion.
+      const hexDigits = /^0x/i.test(raw) ? raw.length - 2 : -1;
+      const hexBytes = hexDigits >= 0 && hexDigits % 2 === 0 ? hexDigits / 2 : undefined;
+      if (this.rejectUppercaseHexPrefix(node)) return { kind: 'literalInt', type: U256, value, hexBytes };
       // A 40-hex-digit checksummed literal is of type `address` (and only converts to uint160/bytes20,
       // never implicitly to an integer); a 39/41-digit or bad-checksum hex literal is a hard error.
       const addrClass = this.classifyAddressHexLiteral(node);
@@ -5047,7 +5084,13 @@ export class Analyzer {
       }
       if (addrClass !== 'plain') {
         this.diags.error(node, addrClass.code, addrClass.msg);
-        return { kind: 'literalInt', type: U256, value };
+        return { kind: 'literalInt', type: U256, value, hexBytes };
+      }
+      // solc implicitly converts a hex literal to bytesN iff its source byte width == N (left-aligned in
+      // the high N bytes). e.g. `bytes4 b = 0x12345678` -> 0x1234567800..00. A shorter/longer hex
+      // literal, or a decimal literal, does NOT convert (only the literal 0 does, handled in coerce).
+      if (expected && expected.kind === 'bytesN' && hexBytes === expected.size) {
+        return { kind: 'literalInt', type: expected, value: value << BigInt((32 - expected.size) * 8) };
       }
       // an enum `expected` does NOT capture a bare integer literal (see the negated-literal case
       // above): keep the plain int type so coerce rejects the implicit int -> enum.
@@ -5055,7 +5098,7 @@ export class Analyzer {
       if (!this.inRange(value, type)) {
         this.diags.error(node, 'JETH070', `literal ${value} out of range for ${displayName(type)}`);
       }
-      return { kind: 'literalInt', type, value };
+      return { kind: 'literalInt', type, value, hexBytes };
     }
 
     // numeric literal (no 'n') -> error: must use BigInt
@@ -5141,6 +5184,16 @@ export class Analyzer {
           node,
           'JETH216',
           `a dynamic array literal must have value-type elements; a literal of ${displayName(expected.element)} elements is not supported`,
+        );
+        return undefined;
+      }
+      // a FIXED array Arr<T,N> literal must have EXACTLY N elements; solc rejects a count
+      // mismatch (it never implicitly pads or truncates). A dynamic T[] literal takes any count.
+      if (expected.length !== undefined && node.elements.length !== expected.length) {
+        this.diags.error(
+          node,
+          'JETH226',
+          `fixed-array literal must have exactly ${expected.length} element(s) for ${displayName(expected)} (got ${node.elements.length})`,
         );
         return undefined;
       }
@@ -6110,9 +6163,17 @@ export class Analyzer {
     // different enum) conversion, which solc forbids (`uint256 x = Color.Blue;` is an error); an
     // explicit cast is required. The explicit-cast call site passes allowEnumToInt. This mirrors the
     // non-literal enum value, which also rejects with JETH085 via isImplicitWiden's brand check.
-    if (isEnum(lit.type) && !allowEnumToInt) {
-      this.diags.error(node, 'JETH085', `cannot implicitly convert enum '${displayName(lit.type)}' to ${displayName(target)} (no implicit enum conversion; use an explicit cast)`);
-      return undefined;
+    if (isEnum(lit.type)) {
+      if (!allowEnumToInt) {
+        this.diags.error(node, 'JETH085', `cannot implicitly convert enum '${displayName(lit.type)}' to ${displayName(target)} (no implicit enum conversion; use an explicit cast)`);
+        return undefined;
+      }
+      // an EXPLICIT enum -> integer cast: solc allows ONLY enum -> uintN (any width), never enum -> intN
+      // (int8(Color.Blue) is rejected; go through uintN first). Mirrors isCastAllowed for runtime values.
+      if (target.kind === 'int') {
+        this.diags.error(node, 'JETH170', `explicit conversion not allowed from enum '${displayName(lit.type)}' to ${displayName(target)} (an enum converts only to an unsigned integer)`);
+        return undefined;
+      }
     }
     // A bare integer literal cannot become an enum without an explicit conversion (solc rejects
     // `Color c = 1;`). An already-enum-typed literal (Color.Member / Color(x)) reaches coerce via
@@ -6122,9 +6183,13 @@ export class Analyzer {
       return undefined;
     }
     if (!isInteger(target)) {
-      // solc allows ONLY the literal 0 to implicitly convert to bytesN (its zero value, an all-zero
-      // left-aligned word); any other integer literal -> bytesN needs an explicit bytesN(...) cast.
-      if (target.kind === 'bytesN' && lit.value === 0n) return { ...lit, type: target };
+      if (target.kind === 'bytesN') {
+        // the literal 0 always converts (all-zero left-aligned word).
+        if (lit.value === 0n) return { ...lit, type: target };
+        // a HEX literal whose source byte width == N converts (left-aligned in the high N bytes); a
+        // decimal literal or a wrong-width hex literal needs an explicit bytesN(...) cast.
+        if (lit.hexBytes === target.size) return { kind: 'literalInt', type: target, value: lit.value << BigInt((32 - target.size) * 8) };
+      }
       this.diags.error(node, 'JETH084', `cannot use integer literal as ${displayName(target)}`);
       return undefined;
     }
@@ -6218,6 +6283,16 @@ export class Analyzer {
         if (!this.inRange(v, expected)) this.diags.error(node, 'JETH070', `constant ${v} out of range for ${displayName(expected)}`);
         return v;
       }
+      // Fall back to exact-RATIONAL folding for a constant with a FRACTIONAL intermediate that
+      // evalConstInt rejects but solc accepts: `(10/4)*4 == 10` (division is exact mid-expression,
+      // never truncated). evalConstInt already covered constant refs + type(T).max above. Only a valid
+      // INTEGER result is returned (range-checked); a non-integer final value or a rejected expression
+      // (div/mod by zero, negative shift) falls through to the caller's single JETH048, as before.
+      const r = this.foldConstRational(node);
+      if (r !== undefined && !('err' in r) && r.den === 1n) {
+        if (!this.inRange(r.num, expected)) this.diags.error(node, 'JETH070', `constant ${r.num} out of range for ${displayName(expected)}`);
+        return r.num;
+      }
       return undefined; // not a constant integer expression -> caller emits JETH048
     }
     // address constant: a bare 40-hex-digit checksummed literal (= 0x...) or `address(<int literal>)`.
@@ -6266,6 +6341,10 @@ export class Analyzer {
           if (a < 0n || a >= 1n << BigInt(expected.size * 8)) { this.diags.error(node, 'JETH070', `literal ${a} does not fit in bytes${expected.size}`); return undefined; }
           return a << BigInt((32 - expected.size) * 8); // left-align into the high N bytes
         }
+      }
+      // a bare HEX literal whose source byte width == N converts implicitly (left-aligned), matching solc.
+      if (this.hexLiteralBytes(node) === expected.size) {
+        return this.asIntLiteral(node)! << BigInt((32 - expected.size) * 8);
       }
       if (this.asIntLiteral(node) === 0n) return 0n;
       return undefined; // not a constant bytesN literal -> caller emits JETH048
@@ -6384,6 +6463,19 @@ export class Analyzer {
         : (isMax ? (1n << BigInt(bits - 1)) - 1n : -(1n << BigInt(bits - 1)));
     }
     return undefined;
+  }
+
+  /** If `node` (modulo parentheses) is a bare HEX bigint literal (0x...) with an EVEN digit count,
+   *  its source byte width (digits / 2); else undefined. solc converts a hex literal to bytesN iff
+   *  this width equals N. (A decimal literal or an odd-digit hex literal never converts.) */
+  private hexLiteralBytes(node: ts.Expression): number | undefined {
+    let n: ts.Expression = node;
+    while (ts.isParenthesizedExpression(n)) n = n.expression;
+    if (!ts.isBigIntLiteral(n)) return undefined;
+    const raw = n.text.replace(/n$/, '');
+    if (!/^0x/i.test(raw)) return undefined;
+    const digits = raw.length - 2;
+    return digits % 2 === 0 ? digits / 2 : undefined;
   }
 
   private evalConstInt(node: ts.Expression): bigint | undefined {

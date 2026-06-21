@@ -437,3 +437,53 @@ describe('indexed DYNAMIC-struct event param: topic = keccak(flattened payload) 
       [{ sig: 'f()' }],
     ));
 });
+
+describe('re-sweep over-acceptance fixes (solc rejects, JETH must too)', () => {
+  it('a fixed-array literal with the wrong element count is rejected (no silent pad/truncate)', () => {
+    expect(jethRejects(`@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n,3n,4n,5n]; return a; } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n]; return a; } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n,3n]; return a; } }`)).toBe(true);
+  });
+  it('enum -> intN cast is rejected for every width (runtime value and member literal)', () => {
+    expect(jethRejects(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): i8 { return i8(c); } }`)).toBe(true);
+    expect(jethRejects(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(): i8 { return i8(Color.Blue); } }`)).toBe(true);
+    expect(jethAccepts(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): u8 { return u8(c); } }`)).toBe(true);
+    expect(jethAccepts(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): u256 { return u256(c); } }`)).toBe(true);
+  });
+  it('@error named Error or Panic is rejected (reserved); a same-named @event is fine', () => {
+    expect(jethRejects(`@contract class C { @error Panic(code: u256); @external f(): void { revert(Panic(1n)); } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @error Error(s: string); @external f(): void { revert(Error("x")); } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @event Panic(code: u256); @external f(): void { emit(Panic(1n)); } }`)).toBe(true);
+  });
+  it('cross-kind identifier collisions are rejected; function/event overloading is allowed', () => {
+    expect(jethRejects(`@contract class C { @error X(a: u256); @event X(a: u256); @external f(): void { revert(X(1n)); } }`)).toBe(true);
+    expect(jethRejects(`@struct class X { a: u256; } @contract class C { @external X(): void {} }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @state x: u256; @external x(): void {} }`)).toBe(true);
+    expect(jethRejects(`enum X { A, B } @contract class C { @event X(a: u256); @external f(): void {} }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @external f(): void {} @external f(a: u256): void {} }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @event E(a: u256); @event E(b: bool); @external f(): void { emit(E(1n)); } }`)).toBe(true);
+  });
+});
+
+describe('re-sweep over-rejection fixes: hex literal -> bytesN + rational @constant', () => {
+  it('an exact-width hex literal converts to bytesN (left-aligned), byte-identical to solc', () =>
+    rt(
+      `@contract class C { @constant B: bytes4 = 0x12345678n; @external @pure f(): bytes4 { return 0x12345678n; } @external @pure g(): bytes4 { return this.B; } @external @pure h(x: bytes4): bool { return x == 0x12345678n; } @external @pure e(a: u256): bytes { return abi.encodeWithSelector(0x12345678n, a); } }`,
+      `contract C { bytes4 constant B=0x12345678; function f() external pure returns(bytes4){ return 0x12345678; } function g() external pure returns(bytes4){ return B; } function h(bytes4 x) external pure returns(bool){ return x==0x12345678; } function e(uint256 a) external pure returns(bytes memory){ return abi.encodeWithSelector(0x12345678, a); } }`,
+      [{ sig: 'f()' }, { sig: 'g()' }, { sig: 'h(bytes4)', args: '12345678'.padEnd(64, '0') }, { sig: 'e(uint256)', args: W(99n) }],
+    ));
+  it('a wrong-width hex literal still needs an explicit cast (parity: both reject)', () => {
+    expect(jethRejects(`@contract class C { @external @pure f(): bytes4 { return 0x1234n; } }`)).toBe(true);
+    expect(solcRejects(`contract C { function f() external pure returns(bytes4){ return 0x1234; } }`)).toBe(true);
+  });
+  it('a @constant / @state with a fractional intermediate folds rationally (byte-identical to solc)', () =>
+    rt(
+      `@contract class C { @constant K: u256 = (10n/4n)*4n; @state x: u256 = ((3n/2n)*2n)**3n; @external @view a(): u256 { return this.K; } @external @view b(): u256 { return this.x; } }`,
+      `contract C { uint256 constant K=(10/4)*4; uint256 x=((3/2)*2)**3; function a() external view returns(uint256){ return K; } function b() external view returns(uint256){ return x; } }`,
+      [{ sig: 'a()' }, { sig: 'b()' }],
+    ));
+  it('constant div/mod by zero and a fractional final value are rejected (parity)', () => {
+    expect(jethRejects(`@contract class C { @constant K: u256 = 5n/0n; @external @pure f(): u256 { return this.K; } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @constant K: u256 = 7n/2n; @external @pure f(): u256 { return this.K; } }`)).toBe(true);
+  });
+});

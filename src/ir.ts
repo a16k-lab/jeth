@@ -54,7 +54,10 @@ export type GlobalOp =
   | 'msgsig'; // msg.sig
 
 export type Expr =
-  | { kind: 'literalInt'; type: JethType; value: bigint }
+  // hexBytes: when the literal was written as a HEX number (0x...), the source byte width
+  // (hex digits / 2). solc converts a hex literal to bytesN iff hexBytes === N. undefined for
+  // decimal literals and for synthesized literals.
+  | { kind: 'literalInt'; type: JethType; value: bigint; hexBytes?: number }
   | { kind: 'literalBool'; type: JethType; value: boolean }
   | { kind: 'rawReg'; type: JethType; reg: string } // a pre-computed Yul register (internal; used to feed a value into the assign lowering, e.g. tuple destructuring)
   | { kind: 'stateRead'; type: JethType; slot: number; offset: number; varName: string }
