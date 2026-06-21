@@ -558,3 +558,40 @@ describe('re-sweep batch 2: bytes(string)[i] / nested ctor / fixed-array copy / 
       [{ sig: 'fs()' }, { sig: 'fa()' }, { sig: 'fm()' }],
     ));
 });
+
+describe('re-sweep batch 3: object literals, internal aggregate params, Arr<dynElem,N>[] vs solc', () => {
+  const strArg = (s: string) => W(0x20n) + W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
+  const LONG = 'abcdefghijklmnopqrstuvwxyz0123456789';
+  it('object-literal struct construction with nested struct / bytes / fixed-array fields', () =>
+    rt(
+      `@struct class In { c: u8; v: u32; } @struct class O { id: u16; inner: In; } @struct class Db { x: u256; s: bytes; } @struct class Da { x: u256; a: Arr<u256,2>; } @contract class C { @external @pure f(): O { return { id: 1n, inner: In(2n, 3n) }; } @external @pure gb(): Db { return { x: 9n, s: "hi" }; } @external @pure ga(): Da { return { x: 7n, a: [4n, 5n] }; } }`,
+      `struct In{uint8 c;uint32 v;} struct O{uint16 id;In inner;} struct Db{uint256 x;bytes s;} struct Da{uint256 x;uint256[2] a;} contract C { function f() external pure returns(O memory){ return O({id:1, inner:In(2,3)}); } function gb() external pure returns(Db memory){ return Db({x:9, s:"hi"}); } function ga() external pure returns(Da memory){ return Da({x:7, a:[uint256(4),5]}); } }`,
+      [{ sig: 'f()' }, { sig: 'gb()' }, { sig: 'ga()' }],
+    ));
+  it('object-literal spread keeps value fields; a non-value field must be explicit (not spread)', () => {
+    expect(jethAccepts(`@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(p: P): P { return { ...p, a: 9n }; } }`)).toBe(true);
+    expect(jethRejects(`@struct class In { c: u8; } @struct class O { id: u256; inner: In; } @contract class C { @external @pure f(o: O): O { return { ...o, id: 1n }; } }`)).toBe(true);
+  });
+  it('internal call: struct + fixed-array params/return + calldata aggregate forwarding (byte-identical)', () =>
+    rt(
+      `@struct class P { a: u8; b: u32; } @contract class C { @internal @pure gs(p: P): u32 { return p.b; } @internal @pure ga(a: Arr<u256,3>): u256 { return a[2n]; } @internal @pure mk(): Arr<u256,2> { return [9n, 8n]; } @external @pure fs(x: u8, y: u32): u32 { return gs(P(x, y)); } @external @pure fa(): u256 { return ga([10n,20n,30n]); } @external @pure fr(): u256 { let a: Arr<u256,2> = mk(); return a[0n] + a[1n]; } @external @pure fwd(x: P): u32 { return gs(x); } }`,
+      `contract C { struct P{uint8 a;uint32 b;} function gs(P memory p) internal pure returns(uint32){return p.b;} function ga(uint256[3] memory a) internal pure returns(uint256){return a[2];} function mk() internal pure returns(uint256[2] memory){return [uint256(9),8];} function fs(uint8 x,uint32 y) external pure returns(uint32){ return gs(P(x,y)); } function fa() external pure returns(uint256){ return ga([uint256(10),20,30]); } function fr() external pure returns(uint256){ uint256[2] memory a=mk(); return a[0]+a[1]; } function fwd(P calldata x) external pure returns(uint32){ return gs(x); } }`,
+      [{ sig: 'fs(uint8,uint32)', args: W(7n) + W(0xcafen) }, { sig: 'fa()' }, { sig: 'fr()' }, { sig: 'fwd((uint8,uint32))', args: W(1n) + W(2n) }],
+    ));
+  it('@public aggregate internal call stays a clean rejection (broader dual-entry feature)', () => {
+    expect(jethRejects(`@struct class P { a: u8; } @contract class C { @public @pure g(p: P): u8 { return p.a; } @external @pure f(): u8 { return g(P(5n)); } }`)).toBe(true);
+  });
+  it('bare @state Arr<string,N>[] / Arr<bytes,N>[]: push/set/get/pop deep-clear/delete byte-identical', async () => {
+    const calls: { sig: string; args?: string }[] = [{ sig: 'grow()' }, { sig: 'grow()' }, { sig: 'len()' }];
+    calls.push({ sig: 's(uint256,uint256,string)', args: W(0n) + W(1n) + strArg('hi') });
+    calls.push({ sig: 's(uint256,uint256,string)', args: W(1n) + W(0n) + strArg(LONG) });
+    calls.push({ sig: 'g(uint256,uint256)', args: W(0n) + W(1n) }, { sig: 'g(uint256,uint256)', args: W(1n) + W(0n) });
+    calls.push({ sig: 'pop()' }, { sig: 'grow()' }, { sig: 'g(uint256,uint256)', args: W(1n) + W(0n) }); // re-grown -> empty (deep-clear)
+    calls.push({ sig: 'del()' }, { sig: 'len()' });
+    await rt(
+      `@contract class C { @state a: Arr<string,3>[]; @external grow(): void { this.a.push(); } @external pop(): void { this.a.pop(); } @external del(): void { delete this.a; } @external s(i: u256, j: u256, v: string): void { this.a[i][j] = v; } @external @view g(i: u256, j: u256): string { return this.a[i][j]; } @external @view len(): u256 { return this.a.length; } }`,
+      `contract C { string[3][] a; function grow() external { a.push(); } function pop() external { a.pop(); } function del() external { delete a; } function s(uint256 i,uint256 j,string calldata v) external { a[i][j]=v; } function g(uint256 i,uint256 j) external view returns(string memory){ return a[i][j]; } function len() external view returns(uint256){ return a.length; } }`,
+      calls,
+    );
+  });
+});

@@ -656,17 +656,19 @@ contract C {
 // PART 10 - struct literal / spread REJECTIONS (codes pinned, no crash).
 // =====================================================================================
 describe('F2 struct literal: rejections (codes pinned, no crash)', () => {
-  it('nested-struct-field struct via literal => JETH229', () => {
-    const src = `@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @state o: O; @external @pure mk(y: u256): O { let z: I = I(0n); return { i: z, y: y }; } }`;
-    expect(errCodes(src)).toContain('JETH229');
+  it('non-value struct field via object literal: INLINE construction accepted; a non-inline local source rejected (JETH226, same as positional)', () => {
+    // a nested struct field constructed INLINE is now accepted (mirrors positional StructName(...)).
+    expect(errCodes(`@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @external @pure mk(y: u256): O { return { i: I(0n), y: y }; } }`)).toEqual([]);
+    // a non-inline source (a struct local) for a nested struct field is rejected (JETH226), the same
+    // limitation the positional builder has - the codegen flattens an inline constructor only.
+    expect(errCodes(`@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @external @pure mk(y: u256): O { let z: I = I(0n); return { i: z, y: y }; } }`)).toContain('JETH226');
   });
-  it('dynamic-field (bytes) struct via literal => JETH229', () => {
-    const src = `@struct class D { x: u256; b: bytes; } @contract class C { @external @pure mk(x: u256): D { return { x: x, b: bytes(0) }; } }`;
-    expect(errCodes(src)).toContain('JETH229');
+  it('dynamic-field (bytes) struct via object literal: a bytes literal is accepted', () => {
+    expect(errCodes(`@struct class D { x: u256; b: bytes; } @contract class C { @external @pure mk(x: u256): D { return { x: x, b: "hi" }; } }`)).toEqual([]);
   });
-  it('array-field struct via literal => JETH229', () => {
-    const src = `@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { let z: Arr<u256,2> = [1n,2n]; return { x: x, arr: z }; } }`;
-    expect(errCodes(src)).toContain('JETH229');
+  it('array-field struct via object literal: an array LITERAL is accepted; a non-inline array local rejected (JETH226)', () => {
+    expect(errCodes(`@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { return { x: x, arr: [1n,2n] }; } }`)).toEqual([]);
+    expect(errCodes(`@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { let z: Arr<u256,2> = [1n,2n]; return { x: x, arr: z }; } }`)).toContain('JETH226');
   });
   it('object literal with no struct context (return type u256) => JETH227', () => {
     const src = `@contract class C { @external @pure f(): u256 { return { x: 1n, y: 2n }; } }`;

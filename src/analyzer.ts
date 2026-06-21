@@ -1549,6 +1549,11 @@ export class Analyzer {
       if (internalOnly && p.type.kind === 'array' && p.type.length === undefined && isStaticValueType(p.type.element)) {
         this.memArrayLocals.add(p.name);
       }
+      // a STATIC fixed-array param (Arr<T,N>) is a MEMORY pointer too, so `p[i]` resolves to a
+      // memory element (memElem) and `return p` to the image, like a struct param.
+      if (internalOnly && p.type.kind === 'array' && p.type.length !== undefined && isStaticType(p.type)) {
+        this.memAggregateLocals.set(p.name, p.type);
+      }
       if (internalOnly && isBytesLike(p.type)) {
         this.memDynLocals.add(p.name);
       }
@@ -2015,65 +2020,62 @@ export class Analyzer {
     }
     const args: Expr[] = [];
     for (let i = 0; i < st.fields.length; i++) {
-      const f = st.fields[i]!;
-      if (f.type.kind === 'struct') {
-        // a nested struct field must be constructed inline (Inner(...)) so codegen
-        // can flatten it into the parent's packed slots.
-        const a = this.checkExpr(node.arguments[i]!, f.type);
-        if (!a) return undefined;
-        if (a.kind !== 'structNew') {
-          this.diags.error(node.arguments[i]!, 'JETH226', `struct field '${f.name}' must be constructed inline, e.g. ${f.type.name}(...)`);
-          return undefined;
-        }
-        args.push(a);
-        continue;
-      }
-      // bytes/string field: a dynamic value (literal, param, or another dynamic
-      // source). Encoded into the tuple tail by the general encoder (4e-6).
-      if (isBytesLike(f.type)) {
-        const a = this.checkExpr(node.arguments[i]!, f.type);
-        if (!a) return undefined;
-        if (a.type.kind !== f.type.kind) {
-          this.diags.error(node.arguments[i]!, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
-          return undefined;
-        }
-        args.push(a);
-        continue;
-      }
-      // a static fixed-array field (Arr<T,N>, incl nested Arr<Arr<T,N>,M>): constructed
-      // from a (possibly nested) array literal, written into the field's slots.
-      if (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)) {
-        const a = this.checkExpr(node.arguments[i]!, f.type);
-        if (!a) return undefined;
-        if (a.kind !== 'arrayLit' || a.elements.length !== f.type.length) {
-          this.diags.error(node.arguments[i]!, 'JETH226', `struct field '${f.name}' (${displayName(f.type)}) must be an array literal of ${f.type.length} elements`);
-          return undefined;
-        }
-        args.push(a);
-        continue;
-      }
-      // a dynamic value-element array field (u256[]/u64[]/...): any array source (literal, calldata/
-      // storage/memory array). Materialized to a memory [len][elems] pointer by allocDynStructToMem
-      // (memory-local construct). Only valid for a memory-local struct (storage construct gated below).
-      if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
-        const a = this.checkExpr(node.arguments[i]!, f.type);
-        if (!a) return undefined;
-        if (!(a.type.kind === 'array' && a.type.length === undefined)) {
-          this.diags.error(node.arguments[i]!, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
-          return undefined;
-        }
-        args.push(this.coerce(a, f.type, node.arguments[i]!));
-        continue;
-      }
-      if (!isStaticValueType(f.type)) {
-        this.diags.error(node.arguments[i]!, 'JETH226', `struct field '${f.name}' of type ${displayName(f.type)} is not constructible yet`);
-        return undefined;
-      }
-      const a = this.checkExpr(node.arguments[i]!, f.type);
+      const a = this.buildStructFieldArg(st.fields[i]!, node.arguments[i]!);
       if (!a) return undefined;
-      args.push(this.coerce(a, f.type, node.arguments[i]!));
+      args.push(a);
     }
     return { kind: 'structNew', type: st, fields: st.fields, args };
+  }
+
+  /** Build + validate ONE struct-construction field argument from its AST node, matching solc's
+   *  per-field contract. Shared by positional StructName(...) and object-literal {field: val}:
+   *  a nested struct must be an inline constructor (so codegen can flatten it); bytes/string a
+   *  dynamic value; a static fixed-array an array literal of exactly N; a dynamic value-array any
+   *  array source; a value type a value. */
+  private buildStructFieldArg(f: StructField, argNode: ts.Expression): Expr | undefined {
+    if (f.type.kind === 'struct') {
+      const a = this.checkExpr(argNode, f.type);
+      if (!a) return undefined;
+      if (a.kind !== 'structNew') {
+        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' must be constructed inline, e.g. ${f.type.name}(...)`);
+        return undefined;
+      }
+      return a;
+    }
+    if (isBytesLike(f.type)) {
+      const a = this.checkExpr(argNode, f.type);
+      if (!a) return undefined;
+      if (a.type.kind !== f.type.kind) {
+        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
+        return undefined;
+      }
+      return a;
+    }
+    if (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)) {
+      const a = this.checkExpr(argNode, f.type);
+      if (!a) return undefined;
+      if (a.kind !== 'arrayLit' || a.elements.length !== f.type.length) {
+        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' (${displayName(f.type)}) must be an array literal of ${f.type.length} elements`);
+        return undefined;
+      }
+      return a;
+    }
+    if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
+      const a = this.checkExpr(argNode, f.type);
+      if (!a) return undefined;
+      if (!(a.type.kind === 'array' && a.type.length === undefined)) {
+        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
+        return undefined;
+      }
+      return this.coerce(a, f.type, argNode);
+    }
+    if (!isStaticValueType(f.type)) {
+      this.diags.error(argNode, 'JETH226', `struct field '${f.name}' of type ${displayName(f.type)} is not constructible yet`);
+      return undefined;
+    }
+    const a = this.checkExpr(argNode, f.type);
+    if (!a) return undefined;
+    return this.coerce(a, f.type, argNode);
   }
 
   // Object-literal / spread struct construction: `{ ...base, x: v }` (immutable update) or a
@@ -2085,12 +2087,6 @@ export class Analyzer {
     if (this.typeHasMapping(st)) {
       this.diags.error(node, 'JETH247', `struct '${st.name}' contains a mapping and cannot be constructed (mappings are storage-only)`);
       return undefined;
-    }
-    for (const fld of st.fields) {
-      if (!isStaticValueType(fld.type)) {
-        this.diags.error(node, 'JETH229', `object-literal / spread construction of '${st.name}' supports only value-typed fields; field '${fld.name}' is ${displayName(fld.type)} (use positional ${st.name}(...))`);
-        return undefined;
-      }
     }
     let base: ts.Expression | undefined;
     const overrides = new Map<string, ts.Expression>();
@@ -2127,17 +2123,30 @@ export class Analyzer {
     }
     const args: Expr[] = [];
     for (const fld of st.fields) {
-      let argNode = overrides.get(fld.name);
+      const argNode = overrides.get(fld.name);
       if (!argNode) {
         if (!base) {
           this.diags.error(node, 'JETH235', `struct literal for '${st.name}' is missing field '${fld.name}' (add it, or spread a base value with ...base)`);
           return undefined;
         }
-        argNode = this.synth(ts.factory.createPropertyAccessExpression(base, fld.name), base);
+        // A value field is re-read from the spread base. A non-value field (nested struct / bytes /
+        // string / array) cannot be re-read - a field read is not an inline constructor / literal,
+        // which the codegen requires - so it must be explicitly provided.
+        if (!isStaticValueType(fld.type)) {
+          this.diags.error(node, 'JETH229', `struct literal for '${st.name}': non-value field '${fld.name}' (${displayName(fld.type)}) must be provided explicitly, not spread from a base`);
+          return undefined;
+        }
+        const reread = this.synth(ts.factory.createPropertyAccessExpression(base, fld.name), base);
+        const a = this.checkExpr(reread, fld.type);
+        if (!a) return undefined;
+        args.push(this.coerce(a, fld.type, reread));
+        continue;
       }
-      const a = this.checkExpr(argNode, fld.type);
+      // an explicitly-provided field: full per-field contract (nested struct/bytes/array supported),
+      // shared with the positional StructName(...) builder.
+      const a = this.buildStructFieldArg(fld, argNode);
       if (!a) return undefined;
-      args.push(this.coerce(a, fld.type, argNode));
+      args.push(a);
     }
     return { kind: 'structNew', type: st, fields: st.fields, args };
   }
@@ -2857,7 +2866,7 @@ export class Analyzer {
       const e = this.checkExpr(decl.initializer, declared);
       if (!e) return;
       const fromStorage = e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray';
-      const okInit = e.kind === 'arrayLit' || e.kind === 'memAggregate' || e.kind === 'cdAggregateValue' || e.kind === 'ternary' || fromStorage;
+      const okInit = e.kind === 'arrayLit' || e.kind === 'memAggregate' || e.kind === 'cdAggregateValue' || e.kind === 'ternary' || (e.kind === 'call' && e.type.kind === 'array') || fromStorage;
       if (!okInit) {
         this.diags.error(decl.initializer, 'JETH900', `a fixed-array memory local must be initialized from a literal, another memory fixed array, a fixed-array calldata parameter, or a storage fixed array`);
         return;
@@ -3166,9 +3175,11 @@ export class Analyzer {
       this.diags.error(node, 'JETH241', `internal call to a multi-value-return function '${name}' is not supported yet`);
       return undefined;
     }
-    // A STATIC struct param/return is supported only when the callee is @internal/@private
-    // (its struct params are pure MEMORY pointers, passed by reference). A public/external
-    // function's struct param uses calldata, so internal struct calls to it are gated.
+    // An aggregate (struct / fixed-array / dynamic value-array / bytes / string) param/return is
+    // passed BY MEMORY REFERENCE on an internal call - supported only when the callee is
+    // @internal/@private (its params are pure memory pointers). A @public function's params are
+    // ABI-decoded from calldata in its userfn_ body, so an internal call passing a memory pointer
+    // would mismatch; that dual calldata+memory case stays gated (a clean JETH242 rejection).
     const aggOK = callee.visibility === 'internal' || callee.visibility === 'private';
     // An @internal/@private function passes an aggregate BY MEMORY REFERENCE: a static struct, a
     // dynamic value-element array (u256[]/u64[]/address[]...), or bytes/string. A memory-source arg
@@ -3176,6 +3187,7 @@ export class Analyzer {
     // source is COPIED to fresh memory (the codegen materializes it).
     const isMemByRef = (t: JethType): boolean =>
       (t.kind === 'struct' && isStaticType(t)) ||
+      (t.kind === 'array' && t.length !== undefined && isStaticType(t)) || // a static fixed array Arr<T,N>
       (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) ||
       isBytesLike(t);
     const paramSupported = (t: JethType): boolean => isStaticValueType(t) || (aggOK && isMemByRef(t));
@@ -3992,9 +4004,18 @@ export class Analyzer {
         // a dynamic array whose element is a STATIC FIXED array (Arr<u256,2>[] = uint256[2][]):
         // in STORAGE (G6), element i occupies storageSlotCount(element) slots at keccak(p)+i*stride
         // (access/push/index/pop); as a calldata PARAM / RETURN it is a dynamic array of static
-        // elements handled by the recursive head/tail codec. A fixed element that itself contains
-        // a dynamic array would need a deep-clear on pop, so it stays gated (isStaticType).
+        // elements handled by the recursive head/tail codec.
         if (t.element.length !== undefined && isStaticType(t.element)) return true;
+        // a dynamic array whose element is a FIXED array with DYNAMIC leaves (Arr<string,N>[],
+        // Arr<bytes,N>[]): supported in STORAGE - element i occupies storageSlotCount(element)
+        // contiguous slots at keccak(p)+i*stride, and the recursive place codec handles per-element
+        // access / push / index / pop (with deep-clear of the inner dynamic data, verified byte-
+        // identical to solc). Validate the element type; a calldata param/return stays gated below.
+        if (storage && t.element.length !== undefined) {
+          const diagLen = this.diags.items.length;
+          if (this.gateArrayType(t.element, node, storage)) return true;
+          this.diags.items.length = diagLen; // discard the element's diagnostic; emit our own below
+        }
         this.diags.error(node, 'JETH217', 'this nested dynamic array shape is not supported yet');
         return false;
       }

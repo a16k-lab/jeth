@@ -3852,7 +3852,9 @@ ${indent(runtime, 6)}
       const { mp } = this.toMemory(this.lowerDynamic(a, ctx, out), out); // alias (memory) or copy (cd/storage)
       return mp;
     }
-    // a struct value (memAggregate alias / storage / calldata copy) or a call result (already a pointer).
+    // a calldata struct / fixed-array param forwarded as an arg: COPY its ABI-unpacked image to memory.
+    if (a.kind === 'cdAggregateValue') return this.allocAggFromCalldata(a.param, a.type, ctx, out);
+    // a struct value (memAggregate alias / storage) or a call result (already a pointer).
     return this.lowerExpr(a, ctx, out);
   }
 

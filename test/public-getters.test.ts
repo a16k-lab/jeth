@@ -300,10 +300,12 @@ describe('@public getter parity is limited only by unsupported STORAGE TYPES (no
   // solc accepts that JETH rejects are ones whose underlying STORAGE TYPE is itself unimplemented
   // (rejected for manual getters and writes too), e.g. `string[3][]` (a dynamic array of fixed arrays
   // of a dynamic type). The getter rejection there is consistent, not a getter-specific over-rejection.
-  it('string[3][] storage type is unsupported everywhere (JETH217), incl. its @public getter', () => {
-    // not getter-specific: a manual read of the same type is also rejected.
-    expect(jethRejects(`@contract class C { @state d: Arr<string,3>[]; @external @view g(i: u256, j: u256): string { return this.d[i][j]; } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @public @state d: Arr<string,3>[]; }`)).toBe(true);
+  it('string[3][] storage type: manual element access AND its @public (i,j) auto-getter are supported', () => {
+    // a bare @state Arr<string,3>[] with manual element access now compiles (byte-identical to solc,
+    // verified incl. push/pop deep-clear in fix-all-divergences.test.ts).
+    expect(jethRejects(`@contract class C { @state d: Arr<string,3>[]; @external @view g(i: u256, j: u256): string { return this.d[i][j]; } }`)).toBe(false);
+    // the @public auto-getter d(uint256,uint256) -> string now compiles too (byte-identical to solc).
+    expect(jethRejects(`@contract class C { @public @state d: Arr<string,3>[]; }`)).toBe(false);
     expect(solcAccepts(`contract C { string[3][] public d; }`)).toBe(true);
   });
 });
