@@ -19,7 +19,7 @@ const JETH = `@contract class C {
   @state b: Arr<u256, 2>[];
   @external push(): void { this.b.push(); }
   @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
-  @view all(): Arr<u256, 2>[] { return this.b; }
+  @external @view all(): Arr<u256, 2>[] { return this.b; }
   @external @pure echo(x: Arr<u256, 2>[]): Arr<u256, 2>[] { return x; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT

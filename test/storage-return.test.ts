@@ -34,9 +34,9 @@ const JETH = `@struct class D { a: u256; s: string; }
   @external setDS(s: string): void { this.d.s = s; }
   @external pushSs(s: string): void { this.ss.push(s); }
   @external pushRec(a: u256, s: string): void { this.recs.push(D(a, s)); }
-  @view getD(): D { return this.d; }
-  @view getSs(): string[] { return this.ss; }
-  @view getRecs(): D[] { return this.recs; }
+  @external @view getD(): D { return this.d; }
+  @external @view getSs(): string[] { return this.ss; }
+  @external @view getRecs(): D[] { return this.recs; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

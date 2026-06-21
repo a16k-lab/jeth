@@ -20,10 +20,10 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external setDA(a: u256): void { this.d.a = a; }
   @external setDS(s: string): void { this.d.s = s; }
   @external pushArr(v: u256): void { this.arr.push(v); }
-  @view withStatic(n: u256): [P, u256] { return [this.p, n]; }
-  @view withDyn(n: u256): [D, u256] { return [this.d, n]; }
-  @view withArr(n: u256): [u256[], u256] { return [this.arr, n]; }
-  @view twoAgg(): [P, D] { return [this.p, this.d]; }
+  @external @view withStatic(n: u256): [P, u256] { return [this.p, n]; }
+  @external @view withDyn(n: u256): [D, u256] { return [this.d, n]; }
+  @external @view withArr(n: u256): [u256[], u256] { return [this.arr, n]; }
+  @external @view twoAgg(): [P, D] { return [this.p, this.d]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -13,7 +13,7 @@ const sel = (s: string) => functionSelector(s);
 // JETH uses defaults + named args at the call sites; Solidity (no such feature) spells every
 // argument out. If F3 desugars correctly, the two contracts are observationally identical.
 const J = `@contract class C {
-  @hidden fee(amount: u256, bps: u256 = 30n, floor: u256 = 1n): u256 {
+  fee(amount: u256, bps: u256 = 30n, floor: u256 = 1n): u256 {
     let f: u256 = (amount * bps) / 10000n;
     if (f < floor) { f = floor; }
     return f;
@@ -23,10 +23,10 @@ const J = `@contract class C {
   @external @view feeAll(a: u256, b: u256, fl: u256): u256 { return this.fee(a, b, fl); }
   @external @view feeNamed(a: u256): u256 { return this.fee({ amount: a, bps: 50n }); } // named, floor default
   @external @view feeNamedReorder(a: u256, b: u256): u256 { return this.fee({ bps: b, amount: a }); }
-  @hidden capped(x: u256, cap: u256 = type(u256).max): u256 { return x < cap ? x : cap; }
+  capped(x: u256, cap: u256 = type(u256).max): u256 { return x < cap ? x : cap; }
   @external @pure capDefault(x: u256): u256 { return this.capped(x); }
   @external @pure capNamed(x: u256, c: u256): u256 { return this.capped({ cap: c, x: x }); }
-  @hidden flag(on: bool = true): u256 { return on ? 1n : 0n; }
+  flag(on: bool = true): u256 { return on ? 1n : 0n; }
   @external @pure flagDefault(): u256 { return this.flag(); }
   @external @pure flagSet(): u256 { return this.flag(false); }
 }`;
@@ -79,7 +79,7 @@ describe('F3 default + named arguments', () => {
 
   it('the ABI shows only externally-callable functions (defaults are call-site only)', () => {
     const abi = compile(J, { fileName: 'C.jeth' }).abi;
-    // the @hidden helpers (fee/capped/flag) carry defaults but must not surface in the ABI...
+    // the helpers (fee/capped/flag) carry defaults but must not surface in the ABI...
     expect(abi.find((e: any) => e.name === 'fee')).toBeUndefined();
     expect(abi.find((e: any) => e.name === 'capped')).toBeUndefined();
     // ...and an exposed function's inputs never carry a default (the ABI lists every parameter).

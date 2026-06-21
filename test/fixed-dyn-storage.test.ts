@@ -28,12 +28,12 @@ const JETH = `@struct class D { a: u256; s: string; }
   @external setDA(i: u256, a: u256): void { this.ds[i].a = a; }
   @external setDS(i: u256, s: string): void { this.ds[i].s = s; }
   @external setDWhole(i: u256, a: u256, s: string): void { this.ds[i] = D(a, s); }
-  @view getS(i: u256): string { return this.ss[i]; }
-  @view getDWhole(i: u256): D { return this.ds[i]; }
-  @view getDA(i: u256): u256 { return this.ds[i].a; }
-  @view getDS(i: u256): string { return this.ds[i].s; }
-  @view getAllS(): Arr<string, 3> { return this.ss; }
-  @view getAllD(): Arr<D, 2> { return this.ds; }
+  @external @view getS(i: u256): string { return this.ss[i]; }
+  @external @view getDWhole(i: u256): D { return this.ds[i]; }
+  @external @view getDA(i: u256): u256 { return this.ds[i].a; }
+  @external @view getDS(i: u256): string { return this.ds[i].s; }
+  @external @view getAllS(): Arr<string, 3> { return this.ss; }
+  @external @view getAllD(): Arr<D, 2> { return this.ds; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

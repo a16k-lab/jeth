@@ -108,14 +108,14 @@ describe('vf_packing', () => {
   @external setF(v: address) { this.f = v; }
   @external setG(v: i40) { this.g = v; }
   @external setH(v: bytes7) { this.h = v; }
-  @view getA(): u8 { return this.a; }
-  @view getB(): i16 { return this.b; }
-  @view getC(): bytes3 { return this.c; }
-  @view getD(): bool { return this.d; }
-  @view getE(): u32 { return this.e; }
-  @view getF(): address { return this.f; }
-  @view getG(): i40 { return this.g; }
-  @view getH(): bytes7 { return this.h; }
+  @external @view getA(): u8 { return this.a; }
+  @external @view getB(): i16 { return this.b; }
+  @external @view getC(): bytes3 { return this.c; }
+  @external @view getD(): bool { return this.d; }
+  @external @view getE(): u32 { return this.e; }
+  @external @view getF(): address { return this.f; }
+  @external @view getG(): i40 { return this.g; }
+  @external @view getH(): bytes7 { return this.h; }
 }`;
     const S1 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -156,14 +156,14 @@ contract C {
   @external setD(v: bytes4) { this.s.d = v; }
   @external setE(v: u64) { this.s.e = v; }
   @external setF(v: bytes32) { this.s.f = v; }
-  @view getA(): u128 { return this.s.a; }
-  @view getB(): u64 { return this.s.b; }
-  @view getC(): bool { return this.s.c; }
-  @view getD(): bytes4 { return this.s.d; }
-  @view getE(): u64 { return this.s.e; }
-  @view getF(): bytes32 { return this.s.f; }
-  @view getAll(): S { return this.s; }
-  @view getSentinel(): u256 { return this.sentinel; }
+  @external @view getA(): u128 { return this.s.a; }
+  @external @view getB(): u64 { return this.s.b; }
+  @external @view getC(): bool { return this.s.c; }
+  @external @view getD(): bytes4 { return this.s.d; }
+  @external @view getE(): u64 { return this.s.e; }
+  @external @view getF(): bytes32 { return this.s.f; }
+  @external @view getAll(): S { return this.s; }
+  @external @view getSentinel(): u256 { return this.sentinel; }
 }`;
     const S2 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -199,14 +199,14 @@ contract C {
   @external setA(v: i8) { this.s.a = v; }
   @external setC(v: i24) { this.s.c = v; }
   @external setG(v: i56) { this.s.g = v; }
-  @view getA(): i8 { return this.s.a; }
-  @view getB(): i16 { return this.s.b; }
-  @view getC(): i24 { return this.s.c; }
-  @view getD(): i32 { return this.s.d; }
-  @view getE(): i40 { return this.s.e; }
-  @view getF(): i48 { return this.s.f; }
-  @view getG(): i56 { return this.s.g; }
-  @view getAll(): S { return this.s; }
+  @external @view getA(): i8 { return this.s.a; }
+  @external @view getB(): i16 { return this.s.b; }
+  @external @view getC(): i24 { return this.s.c; }
+  @external @view getD(): i32 { return this.s.d; }
+  @external @view getE(): i40 { return this.s.e; }
+  @external @view getF(): i48 { return this.s.f; }
+  @external @view getG(): i56 { return this.s.g; }
+  @external @view getAll(): S { return this.s; }
 }`;
     const S3 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -236,11 +236,11 @@ contract C {
   @external setOwner(v: address) { this.s.owner = v; }
   @external setF1(v: bool) { this.s.flag1 = v; }
   @external setF2(v: bool) { this.s.flag2 = v; }
-  @view getF1(): bool { return this.s.flag1; }
-  @view getOwner(): address { return this.s.owner; }
-  @view getF2(): bool { return this.s.flag2; }
-  @view getSmall(): u8 { return this.s.small; }
-  @view getAll(): S { return this.s; }
+  @external @view getF1(): bool { return this.s.flag1; }
+  @external @view getOwner(): address { return this.s.owner; }
+  @external @view getF2(): bool { return this.s.flag2; }
+  @external @view getSmall(): u8 { return this.s.small; }
+  @external @view getAll(): S { return this.s; }
 }`;
     const S4 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -266,11 +266,11 @@ contract C {
   @external setRec(i: u256, a: u128, b: u64, c: bool, d: bytes4) { this.arr[i] = Rec(a,b,c,d); }
   @external setA(i: u256, v: u128) { this.arr[i].a = v; }
   @external setC(i: u256, v: bool) { this.arr[i].c = v; }
-  @view getA(i: u256): u128 { return this.arr[i].a; }
-  @view getB(i: u256): u64 { return this.arr[i].b; }
-  @view getC(i: u256): bool { return this.arr[i].c; }
-  @view getD(i: u256): bytes4 { return this.arr[i].d; }
-  @view getRec(i: u256): Rec { return this.arr[i]; }
+  @external @view getA(i: u256): u128 { return this.arr[i].a; }
+  @external @view getB(i: u256): u64 { return this.arr[i].b; }
+  @external @view getC(i: u256): bool { return this.arr[i].c; }
+  @external @view getD(i: u256): bytes4 { return this.arr[i].d; }
+  @external @view getRec(i: u256): Rec { return this.arr[i]; }
 }`;
     const S5 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -296,10 +296,10 @@ contract C {
   @external pop() { this.recs.pop(); }
   @external setA(i: u256, v: u128) { this.recs[i].a = v; }
   @external setC(i: u256, v: bool) { this.recs[i].c = v; }
-  @view getA(i: u256): u128 { return this.recs[i].a; }
-  @view getC(i: u256): bool { return this.recs[i].c; }
-  @view getRec(i: u256): Rec { return this.recs[i]; }
-  @view len(): u256 { return this.recs.length; }
+  @external @view getA(i: u256): u128 { return this.recs[i].a; }
+  @external @view getC(i: u256): bool { return this.recs[i].c; }
+  @external @view getRec(i: u256): Rec { return this.recs[i]; }
+  @external @view len(): u256 { return this.recs.length; }
 }`;
     const S6 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -325,9 +325,9 @@ contract C {
   @external setA(i: u256, v: u40) { this.a[i] = v; }
   @external setB(i: u256, v: u80) { this.b[i] = v; }
   @external setC(i: u256, v: bytes5) { this.c[i] = v; }
-  @view getA(i: u256): u40 { return this.a[i]; }
-  @view getB(i: u256): u80 { return this.b[i]; }
-  @view getC(i: u256): bytes5 { return this.c[i]; }
+  @external @view getA(i: u256): u40 { return this.a[i]; }
+  @external @view getB(i: u256): u80 { return this.b[i]; }
+  @external @view getC(i: u256): bytes5 { return this.c[i]; }
 }`;
     const S7 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -349,8 +349,8 @@ contract C {
   @external setA(i: u256, v: i40) { this.a[i] = v; }
   @external pushB(v: i48) { this.b.push(v); }
   @external popB() { this.b.pop(); }
-  @view getA(i: u256): i40 { return this.a[i]; }
-  @view getB(i: u256): i48 { return this.b[i]; }
+  @external @view getA(i: u256): i40 { return this.a[i]; }
+  @external @view getB(i: u256): i48 { return this.b[i]; }
 }`;
     const S8 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -371,11 +371,11 @@ contract C {
   @external setAll(k: u256, a: u64, b: i64, flag: bool, addr: address) { this.m[k] = S(a,b,flag,addr); }
   @external setA(k: u256, v: u64) { this.m[k].a = v; }
   @external setFlag(k: u256, v: bool) { this.m[k].flag = v; }
-  @view getA(k: u256): u64 { return this.m[k].a; }
-  @view getB(k: u256): i64 { return this.m[k].b; }
-  @view getFlag(k: u256): bool { return this.m[k].flag; }
-  @view getAddr(k: u256): address { return this.m[k].addr; }
-  @view getAll(k: u256): S { return this.m[k]; }
+  @external @view getA(k: u256): u64 { return this.m[k].a; }
+  @external @view getB(k: u256): i64 { return this.m[k].b; }
+  @external @view getFlag(k: u256): bool { return this.m[k].flag; }
+  @external @view getAddr(k: u256): address { return this.m[k].addr; }
+  @external @view getAll(k: u256): S { return this.m[k]; }
 }`;
     const S9 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -403,10 +403,10 @@ contract C {
   @external setData(i: u256, v: u128) { this.t.data[i] = v; }
   @external setFlag(v: u8) { this.t.flag = v; }
   @external setMid(v: bytes4) { this.t.mid = v; }
-  @view getTag(): u8 { return this.t.tag; }
-  @view getData(i: u256): u128 { return this.t.data[i]; }
-  @view getFlag(): u8 { return this.t.flag; }
-  @view getMid(): bytes4 { return this.t.mid; }
+  @external @view getTag(): u8 { return this.t.tag; }
+  @external @view getData(i: u256): u128 { return this.t.data[i]; }
+  @external @view getFlag(): u8 { return this.t.flag; }
+  @external @view getMid(): bytes4 { return this.t.mid; }
 }`;
     const S10 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -435,12 +435,12 @@ contract C {
   @external setZ(v: bool) { this.o.inner.z = v; }
   @external setTrail(v: bytes20) { this.o.trail = v; }
   @external setInner(x: u64, y: u64, z: bool) { this.o.inner = Inner(x,y,z); }
-  @view getLead(): u8 { return this.o.lead; }
-  @view getX(): u64 { return this.o.inner.x; }
-  @view getY(): u64 { return this.o.inner.y; }
-  @view getZ(): bool { return this.o.inner.z; }
-  @view getTrail(): bytes20 { return this.o.trail; }
-  @view getInner(): Inner { return this.o.inner; }
+  @external @view getLead(): u8 { return this.o.lead; }
+  @external @view getX(): u64 { return this.o.inner.x; }
+  @external @view getY(): u64 { return this.o.inner.y; }
+  @external @view getZ(): bool { return this.o.inner.z; }
+  @external @view getTrail(): bytes20 { return this.o.trail; }
+  @external @view getInner(): Inner { return this.o.inner; }
 }`;
     const S11 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -475,11 +475,11 @@ contract C {
   @external setA(v: u128) { this.s.a = v; }
   @external setB(v: u128) { this.s.b = v; }
   @external setC(v: u8) { this.s.c = v; }
-  @view getA(): u128 { return this.s.a; }
-  @view getB(): u128 { return this.s.b; }
-  @view getC(): u8 { return this.s.c; }
-  @view getAfter(): u8 { return this.after_; }
-  @view getAll(): S { return this.s; }
+  @external @view getA(): u128 { return this.s.a; }
+  @external @view getB(): u128 { return this.s.b; }
+  @external @view getC(): u8 { return this.s.c; }
+  @external @view getAfter(): u8 { return this.after_; }
+  @external @view getAll(): S { return this.s; }
 }`;
     const S12 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -508,10 +508,10 @@ contract C {
   @state m: mapping<u256, S>;
   @external setAll(k: u256, a: u64, b: u64, c: bool) { this.m[k] = S(a,b,c); }
   @external copy(dst: u256, src: u256) { this.m[dst] = this.m[src]; }
-  @view getA(k: u256): u64 { return this.m[k].a; }
-  @view getB(k: u256): u64 { return this.m[k].b; }
-  @view getC(k: u256): bool { return this.m[k].c; }
-  @view getAll(k: u256): S { return this.m[k]; }
+  @external @view getA(k: u256): u64 { return this.m[k].a; }
+  @external @view getB(k: u256): u64 { return this.m[k].b; }
+  @external @view getC(k: u256): bool { return this.m[k].c; }
+  @external @view getAll(k: u256): S { return this.m[k]; }
 }`;
     const S13 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -540,11 +540,11 @@ contract C {
   @external setD(v: bytes32) { this.s.d = v; }
   @external setE(v: bytes30) { this.s.e = v; }
   @external setF(v: bytes4) { this.s.f = v; }
-  @view getA(): bytes16 { return this.s.a; }
-  @view getC(): bytes1 { return this.s.c; }
-  @view getE(): bytes30 { return this.s.e; }
-  @view getF(): bytes4 { return this.s.f; }
-  @view getAll(): S { return this.s; }
+  @external @view getA(): bytes16 { return this.s.a; }
+  @external @view getC(): bytes1 { return this.s.c; }
+  @external @view getE(): bytes30 { return this.s.e; }
+  @external @view getF(): bytes4 { return this.s.f; }
+  @external @view getAll(): S { return this.s; }
 }`;
     const S14 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -575,11 +575,11 @@ contract C {
   @external setAll(a: u16, b: i120, c: bool, d: u8) { this.s = S(a,b,c,d); }
   @external setB(v: i120) { this.s.b = v; }
   @external setD(v: u8) { this.s.d = v; }
-  @view getA(): u16 { return this.s.a; }
-  @view getB(): i120 { return this.s.b; }
-  @view getC(): bool { return this.s.c; }
-  @view getD(): u8 { return this.s.d; }
-  @view getAll(): S { return this.s; }
+  @external @view getA(): u16 { return this.s.a; }
+  @external @view getB(): i120 { return this.s.b; }
+  @external @view getC(): bool { return this.s.c; }
+  @external @view getD(): u8 { return this.s.d; }
+  @external @view getAll(): S { return this.s; }
 }`;
     const S15 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

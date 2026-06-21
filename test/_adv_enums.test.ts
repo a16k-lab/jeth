@@ -54,12 +54,12 @@ enum Status { Inactive, Active, Banned, Frozen }
   @external setPacked(a: Color, b: u8, c: Status, d: bool, e: address): void {
     this.packed = Packed(a, b, c, d, e);
   }
-  @view getPackedA(): Color { return this.packed.a; }
-  @view getPackedC(): Status { return this.packed.c; }
+  @external @view getPackedA(): Color { return this.packed.a; }
+  @external @view getPackedC(): Status { return this.packed.c; }
   @external setBnd(lead: u248, col: Color, trail: u8): void { this.bnd = Boundary(lead, col, trail); }
-  @view bndCol(): Color { return this.bnd.col; }
+  @external @view bndCol(): Color { return this.bnd.col; }
   @external setItem(c: Color, q: u32, f: bool): void { this.it = Item(c, q, f); }
-  @view itemColor(): Color { return this.it.c; }
+  @external @view itemColor(): Color { return this.it.c; }
 
   // --- enum arrays ---
   @external @pure echoFix(a: Arr<Color,3>): Arr<Color,3> { return a; }
@@ -72,11 +72,11 @@ enum Status { Inactive, Active, Banned, Frozen }
   @external @pure dynSum(a: Color[]): u256 { let s: u256 = 0n; for (const v of a) { s = s + u256(v); } return s; }
   @external @pure dynLen(a: Color[]): u256 { return a.length; }
   @external pushCdyn(c: Color): void { this.cdyn.push(c); }     // element-wise (whole cd->storage copy is rejected JETH900, non-enum)
-  @view getCdyn(): Color[] { return this.cdyn; }
-  @view cdynElem(i: u256): Color { return this.cdyn[i]; }
+  @external @view getCdyn(): Color[] { return this.cdyn; }
+  @external @view cdynElem(i: u256): Color { return this.cdyn[i]; }
   @external setCfixElem(i: u256, c: Color): void { this.cfix[i] = c; }
-  @view getCfix(): Arr<Color,3> { return this.cfix; }
-  @view cfixElem(i: u256): Color { return this.cfix[i]; }
+  @external @view getCfix(): Arr<Color,3> { return this.cfix; }
+  @external @view cfixElem(i: u256): Color { return this.cfix[i]; }
 
   // --- events ---
   @external emitColor(c: Color): void { emit(ColorSet(c)); }
@@ -105,15 +105,15 @@ enum Status { Inactive, Active, Banned, Frozen }
 
   // --- mapping key/value ---
   @external mark(c: Color): void { this.seen[c] = true; }
-  @view isSeen(c: Color): bool { return this.seen[c]; }
+  @external @view isSeen(c: Color): bool { return this.seen[c]; }
   @external setPref(a: address, c: Color): void { this.pref[a] = c; }
-  @view prefOf(a: address): Color { return this.pref[a]; }
+  @external @view prefOf(a: address): Color { return this.pref[a]; }
 
   // --- default member 0 + delete ---
-  @view unsetMapping(a: address): Color { return this.pref[a]; }   // never set -> Red(0)
+  @external @view unsetMapping(a: address): Color { return this.pref[a]; }   // never set -> Red(0)
   @external setCur(c: Color): void { this.cur = c; }
   @external delCur(): void { delete this.cur; }
-  @view getCur(): Color { return this.cur; }
+  @external @view getCur(): Color { return this.cur; }
 
   // --- comparisons / control flow ---
   @external @pure eq(a: Color, b: Color): bool { return a == b; }
@@ -132,13 +132,13 @@ enum Status { Inactive, Active, Banned, Frozen }
   // --- multi-value + nested ---
   @external @pure pair(c: Color, n: u256): [Color, u256] { return [c, n]; }
   @external setNested(id: u16, c: Color, q: u32, f: bool): void { this.nst = Nested(id, Item(c, q, f)); }
-  @view nestedColor(): Color { return this.nst.it.c; }
+  @external @view nestedColor(): Color { return this.nst.it.c; }
   @external setWa(tag: u8, c0: Color, c1: Color, c2: Color): void { this.wa = WithArr(tag, [c0, c1, c2]); }
-  @view waElem(i: u256): Color { return this.wa.cols[i]; }
+  @external @view waElem(i: u256): Color { return this.wa.cols[i]; }
   @external @pure mkBoundary(lead: u248, col: Color, trail: u8): Boundary { return Boundary(lead, col, trail); }
 
   // --- default enum param (F3) ---
-  @hidden mkDef(c: Color = Color.Red): Color { return c; }
+  mkDef(c: Color = Color.Red): Color { return c; }
   @external @pure defParam(): Color { return this.mkDef(); }
   @external @pure withDef(c: Color = Color.Red): Color { return c; }
 }`;

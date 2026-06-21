@@ -18,9 +18,9 @@ const JETH = `@contract class PA {
   @external pushEmpty(): void { this.dd.push(); }
   @external fillSrc(v: u256): void { this.src.push(v); }
   @external pushSrc(): void { this.dd.push(this.src); }
-  @view getAll(): u256[][] { return this.dd; }
-  @view at(i: u256, j: u256): u256 { return this.dd[i][j]; }
-  @view innerLen(i: u256): u256 { return this.dd[i].length; }
+  @external @view getAll(): u256[][] { return this.dd; }
+  @external @view at(i: u256, j: u256): u256 { return this.dd[i][j]; }
+  @external @view innerLen(i: u256): u256 { return this.dd[i].length; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

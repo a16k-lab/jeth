@@ -33,10 +33,10 @@ class M {
   @state accts: mapping<address, Acct>; // slot 0
 
   @external setBal(k: address, v: u128): void { this.accts[k].bal = v; }
-  @view getBal(k: address): u128 { return this.accts[k].bal; }
+  @external @view getBal(k: address): u128 { return this.accts[k].bal; }
 
   @external setHist(k: address, i: u256, v: u256): void { this.accts[k].hist[i] = v; }
-  @view getHist(k: address, i: u256): u256 { return this.accts[k].hist[i]; }
+  @external @view getHist(k: address, i: u256): u256 { return this.accts[k].hist[i]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

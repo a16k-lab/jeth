@@ -28,8 +28,8 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
   // copy a CALLDATA struct param to a memory local, mutate, return
   @external @pure fromParam(q: P, na: u256): P { let p: P = q; p.a = na; p.d = address(0x999n); return p; }
   // confirm storage is untouched by reading it back after copyMutate
-  @view getSA(): u256 { return this.s.a; }
-  @view getSB(): u8 { return this.s.b; }
+  @external @view getSA(): u256 { return this.s.a; }
+  @external @view getSB(): u8 { return this.s.b; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

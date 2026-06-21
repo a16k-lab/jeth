@@ -82,20 +82,20 @@ const JETH = `
 
   // --- struct array (each element carries dynamic field), from storage ---
   @external pushFD(a: u256, s: string): void { this.recs.push(FD(a, s)); }
-  @view allFD(): FD[] { return this.recs; }
+  @external @view allFD(): FD[] { return this.recs; }
   @external pushMix(p: u64, q: u64, s: string, b: bytes, z: u256): void { this.mixes.push(Mix(p, q, s, b, z)); }
-  @view allMix(): Mix[] { return this.mixes; }
+  @external @view allMix(): Mix[] { return this.mixes; }
   @external pushStat(a: u128, b: u128, c: bool): void { this.stats.push(StatPack(a, b, c)); }
-  @view allStat(): StatPack[] { return this.stats; }
+  @external @view allStat(): StatPack[] { return this.stats; }
 
   // --- nested dynamic returns from storage ---
   @external pushName(s: string): void { this.names.push(s); }
-  @view allNames(): string[] { return this.names; }
+  @external @view allNames(): string[] { return this.names; }
   @external pushBlob(b: bytes): void { this.blobs.push(b); }
-  @view allBlobs(): bytes[] { return this.blobs; }
+  @external @view allBlobs(): bytes[] { return this.blobs; }
   @external gridPush(): void { this.grid.push(); }
   @external gridPushInner(i: u256, v: u256): void { this.grid[i].push(v); }
-  @view allGrid(): u256[][] { return this.grid; }
+  @external @view allGrid(): u256[][] { return this.grid; }
 
   // --- nested dynamic returns echoed (pure, from calldata) ---
   @external @pure echoNames(a: string[]): string[] { return a; }
@@ -107,17 +107,17 @@ const JETH = `
   @external @pure mvStrVal(s: string, n: u256): [string, u256] { return [s, n]; }
   @external @pure mvTwoStr(a: string, b: string): [string, string] { return [a, b]; }
   @external @pure mvValBytesVal(n: u256, b: bytes, m: u256): [u256, bytes, u256] { return [n, b, m]; }
-  @view mvStructVal(n: u256): [FD, u256] { return [this.fd1, n]; }
-  @view mvValStruct(n: u256): [u256, FD] { return [n, this.fd1]; }
-  @view mvStructStruct(): [FD, FD] { return [this.fd1, this.fd2]; }
+  @external @view mvStructVal(n: u256): [FD, u256] { return [this.fd1, n]; }
+  @external @view mvValStruct(n: u256): [u256, FD] { return [n, this.fd1]; }
+  @external @view mvStructStruct(): [FD, FD] { return [this.fd1, this.fd2]; }
   @external @pure mvAllStatic(a: u256, b: address, c: bool): [u256, address, bool] { return [a, b, c]; }
-  @view mvArrVal(n: u256): [u256[], u256] { return [this.vals, n]; }
-  @view mvStrArr(n: u256): [string[], u256] { return [this.names, n]; }
+  @external @view mvArrVal(n: u256): [u256[], u256] { return [this.vals, n]; }
+  @external @view mvStrArr(n: u256): [string[], u256] { return [this.names, n]; }
 
   // --- empty dynamic returns (storage-backed empties + literals) ---
   @external @pure emptyStr(): string { return ""; }
-  @view emptyArr(): u256[] { return this.vals; }
-  @view emptyStrArr(): string[] { return this.empties; }
+  @external @view emptyArr(): u256[] { return this.vals; }
+  @external @view emptyStrArr(): string[] { return this.empties; }
   @external @pure emptyStructWithEmptyStr(): FD { return FD(0n, ""); }
   @external @pure passBytes(b: bytes): bytes { return b; }
 }`;

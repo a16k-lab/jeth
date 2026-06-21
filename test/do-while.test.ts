@@ -38,7 +38,7 @@ const JETH = `@contract class C {
   // a do-while that mutates state (condition reads state too)
   @state acc: u256;
   @external pump(steps: u256): void { let k: u256 = 0n; do { this.acc = this.acc + k; k = k + 1n; } while (k < steps); }
-  @view getAcc(): u256 { return this.acc; }
+  @external @view getAcc(): u256 { return this.acc; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

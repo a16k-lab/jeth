@@ -36,8 +36,8 @@ class A {
   @external setDa(v: u256): void { this.d.a = v; }
   @external setDs(v: string): void { this.d.s = v; }
   @external setD(a: u256, ss: string): void { this.d = D(a, ss); }
-  @view getDs(): string { return this.d.s; }
-  @view getDa(): u256 { return this.d.a; }
+  @external @view getDs(): string { return this.d.s; }
+  @external @view getDa(): u256 { return this.d.a; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

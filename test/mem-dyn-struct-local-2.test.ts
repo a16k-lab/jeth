@@ -36,10 +36,10 @@ const JETH = `@struct class D { a: u256; s: string; }
   @external seedSt(av: u256, s: string): void { this.st = D(av, s); }
   @external seedMap(av: u256, s: string): void { this.m[address(0xbeefn)] = D(av, s); }
   @external seedRec(av: u256, s: string): void { this.recs.push(D(av, s)); }
-  @view fromStorage(): D { let d: D = this.st; return d; }
-  @view fromMap(): D { let d: D = this.m[address(0xbeefn)]; return d; }
-  @view fromRec(): D { let d: D = this.recs[0n]; return d; }
-  @view copyMut(nv: u256, ns: string): D { let d: D = this.st; d.a = nv; d.s = ns; return d; }
+  @external @view fromStorage(): D { let d: D = this.st; return d; }
+  @external @view fromMap(): D { let d: D = this.m[address(0xbeefn)]; return d; }
+  @external @view fromRec(): D { let d: D = this.recs[0n]; return d; }
+  @external @view copyMut(nv: u256, ns: string): D { let d: D = this.st; d.a = nv; d.s = ns; return d; }
   @external @pure fromCalldata(x: D): D { let d: D = x; return d; }
   @external @pure copyCdMut(x: D, nv: u256): D { let d: D = x; d.a = nv; return d; }
   @external @pure writeBytes(av: u256, s: string, ns: string): D { let d: D = D(av, s); d.s = ns; return d; }

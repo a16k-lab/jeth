@@ -16,12 +16,12 @@ const JETH = `@struct class S { a: u256; xs: u256[]; }
   @state g: Arr<Arr<u256, 2>, 2>;
   @state dd: u256[][];
   @external pushX(v: u256): void { this.s.xs.push(v); }
-  @view getXs(): u256[] { return this.s.xs; }
+  @external @view getXs(): u256[] { return this.s.xs; }
   @external setG(i: u256, j: u256, v: u256): void { this.g[i][j] = v; }
-  @view getRow(i: u256): Arr<u256, 2> { return this.g[i]; }
+  @external @view getRow(i: u256): Arr<u256, 2> { return this.g[i]; }
   @external ddPush(): void { this.dd.push(); }
   @external assignInner(i: u256, a: u256, b: u256, c: u256): void { let xs: u256[] = [a, b, c]; this.dd[i] = xs; }
-  @view getInner(i: u256): u256[] { return this.dd[i]; }
+  @external @view getInner(i: u256): u256[] { return this.dd[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

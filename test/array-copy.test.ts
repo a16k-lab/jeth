@@ -47,12 +47,12 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external copyDA(): void { this.da = this.db; }
   @external copyToMap(k: address): void { this.ma[k] = this.b; }
   @external copyFromMap(k: address): void { this.a = this.mb[k]; }
-  @view getA(): u256[] { return this.a; }
-  @view getPA(): P[] { return this.pa; }
-  @view getSA(): string[] { return this.sa; }
-  @view getDA(): D[] { return this.da; }
-  @view getMA(k: address): u256[] { return this.ma[k]; }
-  @view lenA(): u256 { return this.a.length; }
+  @external @view getA(): u256[] { return this.a; }
+  @external @view getPA(): P[] { return this.pa; }
+  @external @view getSA(): string[] { return this.sa; }
+  @external @view getDA(): D[] { return this.da; }
+  @external @view getMA(k: address): u256[] { return this.ma[k]; }
+  @external @view lenA(): u256 { return this.a.length; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

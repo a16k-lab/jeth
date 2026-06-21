@@ -43,11 +43,11 @@ class NSFE {
   @external setX(i: u256, v: u128): void { this.recs[i].inner.x = v; }
   @external setY(i: u256, v: u128): void { this.recs[i].inner.y = v; }
 
-  @view len(): u256 { return this.recs.length; }
-  @view getP(i: u256): u64 { return this.recs[i].p; }
-  @view getQ(i: u256): u64 { return this.recs[i].q; }
-  @view getX(i: u256): u128 { return this.recs[i].inner.x; }
-  @view getY(i: u256): u128 { return this.recs[i].inner.y; }
+  @external @view len(): u256 { return this.recs.length; }
+  @external @view getP(i: u256): u64 { return this.recs[i].p; }
+  @external @view getQ(i: u256): u64 { return this.recs[i].q; }
+  @external @view getX(i: u256): u128 { return this.recs[i].inner.x; }
+  @external @view getY(i: u256): u128 { return this.recs[i].inner.y; }
 }
 `;
 

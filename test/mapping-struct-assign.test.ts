@@ -35,8 +35,8 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external copyD(a: address, b: address): void { this.md[a] = this.md[b]; }
   @external setDD(a: u256, s: string): void { this.dd = D(a, s); }
   @external fromState(k: address): void { this.md[k] = this.dd; }
-  @view getP(k: address): P { return this.mp[k]; }
-  @view getD(k: address): D { return this.md[k]; }
+  @external @view getP(k: address): P { return this.mp[k]; }
+  @external @view getD(k: address): D { return this.md[k]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

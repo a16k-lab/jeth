@@ -16,7 +16,7 @@ const JETH = `@struct class Acct { hist: Arr<u32, 4>; }
 @contract class Packed {
   @state accts: mapping<address, Acct>;
   @external setHist(k: address, i: u256, v: u32): void { this.accts[k].hist[i] = v; }
-  @view getHist(k: address, i: u256): u32 { return this.accts[k].hist[i]; }
+  @external @view getHist(k: address, i: u256): u32 { return this.accts[k].hist[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

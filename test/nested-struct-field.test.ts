@@ -38,12 +38,12 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external copyD2FromInner(): void { this.d2 = this.o.inner; }
   @external pushO(p: u256, a: u256, str: string, q: u256): void { this.recs.push(O(p, D(a, str), q)); }
   @external setRecInner(i: u256, a: u256, str: string): void { this.recs[i].inner = D(a, str); }
-  @view getInner(): D { return this.o.inner; }
-  @view getPt(): P { return this.s2.pt; }
-  @view getO(): O { return this.o; }
-  @view getRecInner(i: u256): D { return this.recs[i].inner; }
-  @view getOp(): u256 { return this.o.p; }
-  @view getOq(): u256 { return this.o.q; }
+  @external @view getInner(): D { return this.o.inner; }
+  @external @view getPt(): P { return this.s2.pt; }
+  @external @view getO(): O { return this.o; }
+  @external @view getRecInner(i: u256): D { return this.recs[i].inner; }
+  @external @view getOp(): u256 { return this.o.p; }
+  @external @view getOq(): u256 { return this.o.q; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

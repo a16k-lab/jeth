@@ -1,6 +1,6 @@
 // Adversarial verification of compile-time DECORATOR INFERENCE.
 //
-// Invariant under test: writing @read / no-visibility / @hidden must be EXACTLY equivalent to
+// Invariant under test: writing @read / no-visibility / must be EXACTLY equivalent to
 // writing the explicit decorators the compiler resolves to, and the resulting ABI must be the
 // TRUE one (byte-identical to solc on returndata + matching stateMutability).
 //
@@ -58,16 +58,16 @@ const twins: Twin[] = [
   {
     name: 'transitive-pure-depth3',
     inferred: `@contract class C {
-      @read top(a: u256): u256 { return this.l1(a); }
-      @hidden l1(a: u256): u256 { return this.l2(a) + 1n; }
-      @hidden l2(a: u256): u256 { return this.l3(a) * 2n; }
-      @hidden l3(a: u256): u256 { return a + 10n; }
+      @external @read top(a: u256): u256 { return this.l1(a); }
+      l1(a: u256): u256 { return this.l2(a) + 1n; }
+      l2(a: u256): u256 { return this.l3(a) * 2n; }
+      l3(a: u256): u256 { return a + 10n; }
     }`,
     explicit: `@contract class C {
       @external @pure top(a: u256): u256 { return this.l1(a); }
-      @internal l1(a: u256): u256 { return this.l2(a) + 1n; }
-      @internal l2(a: u256): u256 { return this.l3(a) * 2n; }
-      @internal l3(a: u256): u256 { return a + 10n; }
+      l1(a: u256): u256 { return this.l2(a) + 1n; }
+      l2(a: u256): u256 { return this.l3(a) * 2n; }
+      l3(a: u256): u256 { return a + 10n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
@@ -87,18 +87,18 @@ const twins: Twin[] = [
     inferred: `@contract class C {
       @state v: u256;
       @external setV(x: u256): void { this.v = x; }
-      @read top(): u256 { return this.l1(); }
-      @hidden l1(): u256 { return this.l2() + 1n; }
-      @hidden l2(): u256 { return this.l3(); }
-      @hidden l3(): u256 { return this.v; }
+      @external @read top(): u256 { return this.l1(); }
+      l1(): u256 { return this.l2() + 1n; }
+      l2(): u256 { return this.l3(); }
+      l3(): u256 { return this.v; }
     }`,
     explicit: `@contract class C {
       @state v: u256;
       @external setV(x: u256): void { this.v = x; }
       @external @view top(): u256 { return this.l1(); }
-      @internal l1(): u256 { return this.l2() + 1n; }
-      @internal l2(): u256 { return this.l3(); }
-      @internal l3(): u256 { return this.v; }
+      l1(): u256 { return this.l2() + 1n; }
+      l2(): u256 { return this.l3(); }
+      l3(): u256 { return this.v; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
@@ -119,14 +119,14 @@ const twins: Twin[] = [
   {
     name: 'transitive-view-env-depth',
     inferred: `@contract class C {
-      @read top(): address { return this.l1(); }
-      @hidden l1(): address { return this.l2(); }
-      @hidden l2(): address { return msg.sender; }
+      @external @read top(): address { return this.l1(); }
+      l1(): address { return this.l2(); }
+      l2(): address { return msg.sender; }
     }`,
     explicit: `@contract class C {
       @external @view top(): address { return this.l1(); }
-      @internal l1(): address { return this.l2(); }
-      @internal l2(): address { return msg.sender; }
+      l1(): address { return this.l2(); }
+      l2(): address { return msg.sender; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
@@ -139,69 +139,85 @@ const twins: Twin[] = [
     calls: [{ sig: 'top()' }],
   },
 
-  // 4. MUTUAL RECURSION among @read / @hidden, reading state -> both resolve view.
+  // 4. MUTUAL RECURSION among internal helpers reading state -> the read-only-ness propagates so the
+  //    exposed entry resolves view. In the @external-only model the mutually-recursive pair must be
+  //    INTERNAL (an @external function is not internally callable), so a thin @external @read entry
+  //    delegates into the recursion; the inferred view-ness still flows out through the entry.
   {
     name: 'mutual-recursion-view',
     inferred: `@contract class C {
       @state n: u256;
       @external setN(x: u256): void { this.n = x; }
-      @read isEven(k: u256): bool { if (k == 0n) { return true; } return this.isOdd(k - 1n); }
-      @hidden isOdd(k: u256): bool { if (k == 0n) { return this.n == 0n; } return this.isEven(k - 1n); }
+      @external @read isEven(k: u256): bool { return this.evenI(k); }
+      evenI(k: u256): bool { if (k == 0n) { return true; } return this.oddI(k - 1n); }
+      oddI(k: u256): bool { if (k == 0n) { return this.n == 0n; } return this.evenI(k - 1n); }
     }`,
     explicit: `@contract class C {
       @state n: u256;
       @external setN(x: u256): void { this.n = x; }
-      @public @view isEven(k: u256): bool { if (k == 0n) { return true; } return this.isOdd(k - 1n); }
-      @internal isOdd(k: u256): bool { if (k == 0n) { return this.n == 0n; } return this.isEven(k - 1n); }
+      @external @view isEven(k: u256): bool { return this.evenI(k); }
+      evenI(k: u256): bool { if (k == 0n) { return true; } return this.oddI(k - 1n); }
+      oddI(k: u256): bool { if (k == 0n) { return this.n == 0n; } return this.evenI(k - 1n); }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
       uint256 n;
       function setN(uint256 x) external { n = x; }
-      function isEven(uint256 k) public view returns (bool){ if (k == 0) return true; return isOdd(k - 1); }
-      function isOdd(uint256 k) internal view returns (bool){ if (k == 0) return n == 0; return isEven(k - 1); }
+      function isEven(uint256 k) external view returns (bool){ return evenI(k); }
+      function evenI(uint256 k) internal view returns (bool){ if (k == 0) return true; return oddI(k - 1); }
+      function oddI(uint256 k) internal view returns (bool){ if (k == 0) return n == 0; return evenI(k - 1); }
     }`,
     expectedFnMap: { setN: 'nonpayable', isEven: 'view' },
     seed: { sig: 'setN(uint256)', words: [0n] },
     calls: [{ sig: 'isEven(uint256)', words: [4n] }, { sig: 'isEven(uint256)', words: [5n] }],
   },
 
-  // 5. SELF-RECURSION pure (Fibonacci) -> infer pure.
+  // 5. SELF-RECURSION pure (Fibonacci) -> infer pure. The recursion lives in an INTERNAL helper
+  //    (an @external function is not internally callable in the @external-only model); the exposed
+  //    entry is a thin @external @read wrapper whose purity is inferred from the helper.
   {
     name: 'self-recursion-pure',
     inferred: `@contract class C {
-      @read fib(k: u256): u256 { if (k < 2n) { return k; } return this.fib(k - 1n) + this.fib(k - 2n); }
+      @external @read fib(k: u256): u256 { return this.fibI(k); }
+      fibI(k: u256): u256 { if (k < 2n) { return k; } return this.fibI(k - 1n) + this.fibI(k - 2n); }
     }`,
     explicit: `@contract class C {
-      @public @pure fib(k: u256): u256 { if (k < 2n) { return k; } return this.fib(k - 1n) + this.fib(k - 2n); }
+      @external @pure fib(k: u256): u256 { return this.fibI(k); }
+      fibI(k: u256): u256 { if (k < 2n) { return k; } return this.fibI(k - 1n) + this.fibI(k - 2n); }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
-      function fib(uint256 k) public pure returns (uint256){ if (k < 2) return k; return fib(k - 1) + fib(k - 2); }
+      function fib(uint256 k) external pure returns (uint256){ return fibI(k); }
+      function fibI(uint256 k) internal pure returns (uint256){ if (k < 2) return k; return fibI(k - 1) + fibI(k - 2); }
     }`,
     expectedFnMap: { fib: 'pure' },
     calls: [{ sig: 'fib(uint256)', words: [10n] }],
   },
 
-  // 6. @read calling ANOTHER @read (both read-only); both exposed. The inner @read is internally
-  //    called -> resolves @public; outer never called -> @external. Both pure here.
+  // 6. Two exposed @read entries sharing an internal read-only helper; both infer pure. (In the old
+  //    model `inner` was a single @public function both exposed and internally called; the
+  //    @external-only model splits that into an exposed @external @read `inner` plus the internal
+  //    `innerI` that `outer` calls - both still infer pure and stay byte-identical.)
   {
     name: 'read-calls-read',
     inferred: `@contract class C {
-      @read outer(a: u256): u256 { return this.inner(a) + 1n; }
-      @read inner(a: u256): u256 { return a * 3n; }
+      @external @read outer(a: u256): u256 { return this.innerI(a) + 1n; }
+      @external @read inner(a: u256): u256 { return this.innerI(a); }
+      innerI(a: u256): u256 { return a * 3n; }
     }`,
     explicit: `@contract class C {
-      @external @pure outer(a: u256): u256 { return this.inner(a) + 1n; }
-      @public @pure inner(a: u256): u256 { return a * 3n; }
+      @external @pure outer(a: u256): u256 { return this.innerI(a) + 1n; }
+      @external @pure inner(a: u256): u256 { return this.innerI(a); }
+      innerI(a: u256): u256 { return a * 3n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
-      function outer(uint256 a) external pure returns (uint256){ return inner(a) + 1; }
-      function inner(uint256 a) public pure returns (uint256){ return a * 3; }
+      function outer(uint256 a) external pure returns (uint256){ return innerI(a) + 1; }
+      function inner(uint256 a) external pure returns (uint256){ return innerI(a); }
+      function innerI(uint256 a) internal pure returns (uint256){ return a * 3; }
     }`,
     expectedFnMap: { outer: 'pure', inner: 'pure' },
     calls: [
@@ -210,50 +226,63 @@ const twins: Twin[] = [
     ],
   },
 
-  // 7. VISIBILITY INFERENCE: no-decorator callee invoked by a no-decorator caller -> callee public,
-  //    caller external. (public/external are ABI-identical; runtime must match.)
+  // 7. VISIBILITY MODEL: @external is the ABI surface; an unmarked function is internal. An exposed
+  //    entry that also needs its own logic reused internally factors that logic into an internal
+  //    helper (an @external function is not internally callable). pubTarget/caller/extOnly are all
+  //    exposed; caller reuses pubTarget's value through the internal pubTargetI.
   {
     name: 'visibility-callgraph',
     inferred: `@contract class C {
-      pubTarget(): u256 { return 7n; }
-      caller(): u256 { return this.pubTarget() + 1n; }
-      extOnly(): u256 { return 42n; }
+      @external pubTarget(): u256 { return this.pubTargetI(); }
+      @external caller(): u256 { return this.pubTargetI() + 1n; }
+      @external extOnly(): u256 { return 42n; }
+      pubTargetI(): u256 { return 7n; }
     }`,
     explicit: `@contract class C {
-      @public pubTarget(): u256 { return 7n; }
-      @external caller(): u256 { return this.pubTarget() + 1n; }
+      @external pubTarget(): u256 { return this.pubTargetI(); }
+      @external caller(): u256 { return this.pubTargetI() + 1n; }
       @external extOnly(): u256 { return 42n; }
+      pubTargetI(): u256 { return 7n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
-      function pubTarget() public returns (uint256){ return 7; }
-      function caller() external returns (uint256){ return pubTarget() + 1; }
+      function pubTarget() external returns (uint256){ return pubTargetI(); }
+      function caller() external returns (uint256){ return pubTargetI() + 1; }
       function extOnly() external returns (uint256){ return 42; }
+      function pubTargetI() internal returns (uint256){ return 7; }
     }`,
     expectedFnMap: { pubTarget: 'nonpayable', caller: 'nonpayable', extOnly: 'nonpayable' },
     calls: [{ sig: 'pubTarget()' }, { sig: 'caller()' }, { sig: 'extOnly()' }],
   },
 
-  // 8. no-decorator function called ONLY via this.f() -> public; recursion self-call -> public.
+  // 8. an exposed entry reuses an internal helper by name; self-recursion lives in an internal
+  //    worker (an @external function is not internally callable). viaThis/helper/countdown are
+  //    exposed @external; helperI and countdownI are internal.
   {
     name: 'visibility-this-and-recursion',
     inferred: `@contract class C {
-      viaThis(a: u256): u256 { return this.helper(a); }
-      helper(a: u256): u256 { return a + 100n; }
-      countdown(k: u256): u256 { if (k == 0n) { return 0n; } return this.countdown(k - 1n) + 1n; }
+      @external viaThis(a: u256): u256 { return this.helperI(a); }
+      @external helper(a: u256): u256 { return this.helperI(a); }
+      @external countdown(k: u256): u256 { return this.countdownI(k); }
+      helperI(a: u256): u256 { return a + 100n; }
+      countdownI(k: u256): u256 { if (k == 0n) { return 0n; } return this.countdownI(k - 1n) + 1n; }
     }`,
     explicit: `@contract class C {
-      @external viaThis(a: u256): u256 { return this.helper(a); }
-      @public helper(a: u256): u256 { return a + 100n; }
-      @public countdown(k: u256): u256 { if (k == 0n) { return 0n; } return this.countdown(k - 1n) + 1n; }
+      @external viaThis(a: u256): u256 { return this.helperI(a); }
+      @external helper(a: u256): u256 { return this.helperI(a); }
+      @external countdown(k: u256): u256 { return this.countdownI(k); }
+      helperI(a: u256): u256 { return a + 100n; }
+      countdownI(k: u256): u256 { if (k == 0n) { return 0n; } return this.countdownI(k - 1n) + 1n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
-      function viaThis(uint256 a) external returns (uint256){ return helper(a); }
-      function helper(uint256 a) public returns (uint256){ return a + 100; }
-      function countdown(uint256 k) public returns (uint256){ if (k == 0) return 0; return countdown(k - 1) + 1; }
+      function viaThis(uint256 a) external returns (uint256){ return helperI(a); }
+      function helper(uint256 a) external returns (uint256){ return helperI(a); }
+      function countdown(uint256 k) external returns (uint256){ return countdownI(k); }
+      function helperI(uint256 a) internal returns (uint256){ return a + 100; }
+      function countdownI(uint256 k) internal returns (uint256){ if (k == 0) return 0; return countdownI(k - 1) + 1; }
     }`,
     expectedFnMap: { viaThis: 'nonpayable', helper: 'nonpayable', countdown: 'nonpayable' },
     calls: [
@@ -263,29 +292,30 @@ const twins: Twin[] = [
     ],
   },
 
-  // 9. no-decorator function called by a @hidden one -> the callee becomes public (internally
-  //    called), the @hidden one is excluded from the ABI.
+  // 9. an unmarked (internal) function called by an exposed entry stays out of the ABI; the exposed
+  //    entry's purity is inferred via @read. `leaf` is also exposed @read (its own selector) while
+  //    the shared read-only logic is the internal `leafI`; `mid` is an internal helper.
   {
     name: 'visibility-called-by-hidden',
-    // leaf is read-only and internally called by the @hidden `mid`; it resolves @public @pure.
-    // (We give leaf @read so the whole pure chain is mutability-consistent, matching solc, while
-    // still exercising "a no-visibility/@read function called by a @hidden one becomes public".)
     inferred: `@contract class C {
-      @read entry(a: u256): u256 { return this.mid(a); }
-      @hidden mid(a: u256): u256 { return this.leaf(a) + 1n; }
-      @read leaf(a: u256): u256 { return a * 5n; }
+      @external @read entry(a: u256): u256 { return this.mid(a); }
+      mid(a: u256): u256 { return this.leafI(a) + 1n; }
+      @external @read leaf(a: u256): u256 { return this.leafI(a); }
+      leafI(a: u256): u256 { return a * 5n; }
     }`,
     explicit: `@contract class C {
       @external @pure entry(a: u256): u256 { return this.mid(a); }
-      @internal mid(a: u256): u256 { return this.leaf(a) + 1n; }
-      @public @pure leaf(a: u256): u256 { return a * 5n; }
+      mid(a: u256): u256 { return this.leafI(a) + 1n; }
+      @external @pure leaf(a: u256): u256 { return this.leafI(a); }
+      leafI(a: u256): u256 { return a * 5n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
       function entry(uint256 a) external pure returns (uint256){ return mid(a); }
-      function mid(uint256 a) internal pure returns (uint256){ return leaf(a) + 1; }
-      function leaf(uint256 a) public pure returns (uint256){ return a * 5; }
+      function mid(uint256 a) internal pure returns (uint256){ return leafI(a) + 1; }
+      function leaf(uint256 a) external pure returns (uint256){ return leafI(a); }
+      function leafI(uint256 a) internal pure returns (uint256){ return a * 5; }
     }`,
     expectedFnMap: { entry: 'pure', leaf: 'pure' },
     calls: [
@@ -294,20 +324,21 @@ const twins: Twin[] = [
     ],
   },
 
-  // 10. @hidden calling @hidden, both mutating helpers behind an exposed nonpayable function.
+  // 10. two internal mutating helpers behind one exposed nonpayable entry. bump is @external; h1/h2
+  //     are internal (unmarked) and called by name.
   {
     name: 'hidden-calls-hidden-mutating',
     inferred: `@contract class C {
       @state s: u256;
-      bump(): u256 { this.h1(); return this.s; }
-      @hidden h1(): void { this.h2(); this.s = this.s + 1n; }
-      @hidden h2(): void { this.s = this.s + 10n; }
+      @external bump(): u256 { this.h1(); return this.s; }
+      h1(): void { this.h2(); this.s = this.s + 1n; }
+      h2(): void { this.s = this.s + 10n; }
     }`,
     explicit: `@contract class C {
       @state s: u256;
       @external bump(): u256 { this.h1(); return this.s; }
-      @internal h1(): void { this.h2(); this.s = this.s + 1n; }
-      @internal h2(): void { this.s = this.s + 10n; }
+      h1(): void { this.h2(); this.s = this.s + 1n; }
+      h2(): void { this.s = this.s + 10n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
@@ -321,54 +352,58 @@ const twins: Twin[] = [
     calls: [{ sig: 'bump()' }, { sig: 'bump()' }],
   },
 
-  // 11. MIXED @read + no-visibility on the same function: infer BOTH view-ness and visibility.
-  //     getX has @read and no visibility; it's never internally called -> external @view.
-  //     deriv has @read, called via this.getX -> getX stays external? No: getX IS internally
-  //     called here, so it resolves @public @view.
+  // 11. @read mutability inference on two exposed entries that share an internal read-only helper.
+  //     getX/deriv are @external @read (both infer view); the shared state read lives in the
+  //     internal getXI (an @external function is not internally callable, so deriv cannot call getX
+  //     by name). setX is the nonpayable writer.
   {
     name: 'mixed-read-and-inferred-visibility',
     inferred: `@contract class C {
       @state x: u256;
       @external setX(v: u256): void { this.x = v; }
-      @read getX(): u256 { return this.x; }
-      @read deriv(): u256 { return this.getX() * 2n; }
+      @external @read getX(): u256 { return this.getXI(); }
+      @external @read deriv(): u256 { return this.getXI() * 2n; }
+      getXI(): u256 { return this.x; }
     }`,
     explicit: `@contract class C {
       @state x: u256;
       @external setX(v: u256): void { this.x = v; }
-      @public @view getX(): u256 { return this.x; }
-      @external @view deriv(): u256 { return this.getX() * 2n; }
+      @external @view getX(): u256 { return this.getXI(); }
+      @external @view deriv(): u256 { return this.getXI() * 2n; }
+      getXI(): u256 { return this.x; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
       uint256 x;
       function setX(uint256 v) external { x = v; }
-      function getX() public view returns (uint256){ return x; }
-      function deriv() external view returns (uint256){ return getX() * 2; }
+      function getX() external view returns (uint256){ return getXI(); }
+      function deriv() external view returns (uint256){ return getXI() * 2; }
+      function getXI() internal view returns (uint256){ return x; }
     }`,
     expectedFnMap: { setX: 'nonpayable', getX: 'view', deriv: 'view' },
     seed: { sig: 'setX(uint256)', words: [21n] },
     calls: [{ sig: 'getX()' }, { sig: 'deriv()' }],
   },
 
-  // 12. @read + @hidden together: a hidden read-only helper. Should resolve internal + (pure/view).
-  //     Excluded from the ABI either way; the exposed @read consumer is what we assert.
+  // 12. internal read-only helpers (no @external) behind one exposed @read entry. consume infers
+  //     view; hiddenView/hiddenPure are internal and excluded from the ABI. @read still drives
+  //     mutability inference on an internal function.
   {
     name: 'read-plus-hidden-helper',
     inferred: `@contract class C {
       @state x: u256;
       @external setX(v: u256): void { this.x = v; }
-      @read consume(): u256 { return this.hiddenView() + this.hiddenPure(3n); }
-      @read @hidden hiddenView(): u256 { return this.x; }
-      @read @hidden hiddenPure(a: u256): u256 { return a + 1n; }
+      @external @read consume(): u256 { return this.hiddenView() + this.hiddenPure(3n); }
+      @read hiddenView(): u256 { return this.x; }
+      @read hiddenPure(a: u256): u256 { return a + 1n; }
     }`,
     explicit: `@contract class C {
       @state x: u256;
       @external setX(v: u256): void { this.x = v; }
       @external @view consume(): u256 { return this.hiddenView() + this.hiddenPure(3n); }
-      @internal @view hiddenView(): u256 { return this.x; }
-      @internal @pure hiddenPure(a: u256): u256 { return a + 1n; }
+      @view hiddenView(): u256 { return this.x; }
+      @pure hiddenPure(a: u256): u256 { return a + 1n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
@@ -384,14 +419,15 @@ const twins: Twin[] = [
     calls: [{ sig: 'consume()' }],
   },
 
-  // 13. DEEP no-visibility call chain (depth 5), the deepest reads state -> all view that propagate,
-  //     exposed entry external @view, the chain members public @view (internally called).
+  // 13. DEEP internal call chain (depth 5), the deepest reads state -> the read-only-ness propagates
+  //     out to the single exposed @read entry, which infers view. a1..a4 are internal (unmarked) and
+  //     excluded from the ABI; only a0 (exposed) and setZ appear.
   {
     name: 'deep-chain-view',
     inferred: `@contract class C {
       @state z: u256;
       @external setZ(v: u256): void { this.z = v; }
-      @read a0(): u256 { return this.a1(); }
+      @external @read a0(): u256 { return this.a1(); }
       a1(): u256 { return this.a2(); }
       a2(): u256 { return this.a3(); }
       a3(): u256 { return this.a4(); }
@@ -401,10 +437,10 @@ const twins: Twin[] = [
       @state z: u256;
       @external setZ(v: u256): void { this.z = v; }
       @external @view a0(): u256 { return this.a1(); }
-      @public a1(): u256 { return this.a2(); }
-      @public a2(): u256 { return this.a3(); }
-      @public a3(): u256 { return this.a4(); }
-      @public a4(): u256 { return this.z + 1n; }
+      a1(): u256 { return this.a2(); }
+      a2(): u256 { return this.a3(); }
+      a3(): u256 { return this.a4(); }
+      a4(): u256 { return this.z + 1n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
@@ -412,27 +448,20 @@ const twins: Twin[] = [
       uint256 z;
       function setZ(uint256 v) external { z = v; }
       function a0() external view returns (uint256){ return a1(); }
-      function a1() public view returns (uint256){ return a2(); }
-      function a2() public view returns (uint256){ return a3(); }
-      function a3() public view returns (uint256){ return a4(); }
-      function a4() public view returns (uint256){ return z + 1; }
+      function a1() internal view returns (uint256){ return a2(); }
+      function a2() internal view returns (uint256){ return a3(); }
+      function a3() internal view returns (uint256){ return a4(); }
+      function a4() internal view returns (uint256){ return z + 1; }
     }`,
-    // a1..a4 carry no @read so their mutability is the DEFAULT (nonpayable) in jeth, but solc would
-    // infer view. Since a1..a4 are internally called AND not @read, jeth keeps them nonpayable.
-    // We only assert the @read entry's mutability and the public/external set; internal-only call
-    // results are exercised through a0.
-    expectedFnMap: { setZ: 'nonpayable', a0: 'view', a1: 'nonpayable', a2: 'nonpayable', a3: 'nonpayable', a4: 'nonpayable' },
+    expectedFnMap: { setZ: 'nonpayable', a0: 'view' },
     seed: { sig: 'setZ(uint256)', words: [5n] },
     calls: [{ sig: 'a0()' }],
   },
 ];
 
-// Test 13 mixes inferred @read (a0) with non-@read public functions whose mutability does NOT get
-// inferred (a1..a4 stay nonpayable). The solc twin declares them view, so the ABI fnMaps for those
-// public functions differ from solc, but they are not in our `calls` assertion path beyond a0().
-// To keep the inferred==explicit ABI check meaningful we compare against the EXPLICIT jeth twin,
-// which declares a1..a4 @public (nonpayable) - matching jeth, not solc. Runtime of a0() is still
-// asserted against solc.
+// In the @external-only model every twin's deep helpers (a1..a4, getXI, leafI, ...) are INTERNAL,
+// so they are absent from the ABI and the inferred / explicit / solc fnMaps agree on exactly the
+// exposed @external entries. Runtime of each exposed entry is still asserted byte-identical to solc.
 
 describe('decorator inference: inferred === explicit === solc (positive)', () => {
   for (const t of twins) {
@@ -498,7 +527,7 @@ describe('decorator inference: rejection parity', () => {
       src: `@contract class C {
         @state x: u256;
         @read bad(): u256 { return this.w(); }
-        @hidden w(): u256 { this.x = 1n; return this.x; }
+        w(): u256 { this.x = 1n; return this.x; }
       }`,
       code: 'JETH056',
     },
@@ -507,14 +536,15 @@ describe('decorator inference: rejection parity', () => {
       src: `@contract class C {
         @state x: u256;
         @read bad(): u256 { return this.h1(); }
-        @hidden h1(): u256 { return this.h2(); }
-        @hidden h2(): u256 { this.x = this.x + 1n; return this.x; }
+        h1(): u256 { return this.h2(); }
+        h2(): u256 { this.x = this.x + 1n; return this.x; }
       }`,
       code: 'JETH056',
     },
     {
-      name: '@read reads msg.value directly -> JETH162',
-      src: `@contract class C { @read bad(): u256 { return msg.value; } }`,
+      // msg.value in an externally-reachable function needs @payable; @external makes bad reachable.
+      name: '@external @read reads msg.value directly -> JETH162',
+      src: `@contract class C { @external @read bad(): u256 { return msg.value; } }`,
       code: 'JETH162',
     },
     {
@@ -522,14 +552,16 @@ describe('decorator inference: rejection parity', () => {
       src: `@contract class C { @event E(a: u256); @read bad(): void { emit(E(1n)); } }`,
       code: 'JETH149',
     },
-    // conflicts -> JETH052
+    // @read mutability conflicts -> JETH052
     { name: '@read + @view conflict -> JETH052', src: `@contract class C { @read @view bad(): u256 { return 1n; } }`, code: 'JETH052' },
     { name: '@read + @pure conflict -> JETH052', src: `@contract class C { @read @pure bad(): u256 { return 1n; } }`, code: 'JETH052' },
     { name: '@read + @payable conflict -> JETH052', src: `@contract class C { @read @payable bad(): u256 { return 1n; } }`, code: 'JETH052' },
-    { name: '@hidden + @external conflict -> JETH052', src: `@contract class C { @hidden @external bad(): u256 { return 1n; } }`, code: 'JETH052' },
-    { name: '@hidden + @public conflict -> JETH052', src: `@contract class C { @hidden @public bad(): u256 { return 1n; } }`, code: 'JETH052' },
-    { name: '@hidden + @internal conflict -> JETH052', src: `@contract class C { @hidden @internal bad(): u256 { return 1n; } }`, code: 'JETH052' },
-    { name: '@hidden + @private conflict -> JETH052', src: `@contract class C { @hidden @private bad(): u256 { return 1n; } }`, code: 'JETH052' },
+    // removed visibility decorators -> JETH054 (the @external-only model: write @external to expose,
+    // everything else is internal by default; @public/@internal/@private/@hidden no longer exist).
+    { name: '@public is removed -> JETH054', src: `@contract class C { @public bad(): u256 { return 1n; } }`, code: 'JETH054' },
+    { name: '@internal is removed -> JETH054', src: `@contract class C { @internal bad(): u256 { return 1n; } }`, code: 'JETH054' },
+    { name: '@private is removed -> JETH054', src: `@contract class C { @private bad(): u256 { return 1n; } }`, code: 'JETH054' },
+    { name: '@hidden is removed -> JETH054', src: `@contract class C { @hidden bad(): u256 { return 1n; } }`, code: 'JETH054' },
   ];
 
   for (const r of rej) {
@@ -577,7 +609,7 @@ describe('decorator inference: orthogonality + pre-existing diagnostics intact',
       @state x: u256;
       @external @view getX(): u256 { return this.x; }
       @external setX(v: u256): void { this.x = v; }
-      @internal helper(): u256 { return this.x + 1n; }
+      helper(): u256 { return this.x + 1n; }
     }`);
     expect(res.ok).toBe(true);
     if (res.ok) expect(fnMap(res.abi)).toEqual({ getX: 'view', setX: 'nonpayable' });
@@ -594,7 +626,7 @@ describe('transitive emit makes a function non-read-only (parity with solc)', ()
   const READ_VIA_HIDDEN_EMIT = `@contract class C {
     @event E(a: u256);
     @read foo(): u256 { return this.bar(); }
-    @hidden bar(): u256 { emit(E(1n)); return 5n; }
+    bar(): u256 { emit(E(1n)); return 5n; }
   }`;
 
   it('solc REJECTS the equivalent view (ground truth)', () => {
@@ -612,12 +644,12 @@ describe('transitive emit makes a function non-read-only (parity with solc)', ()
 
   it('JETH also REJECTS @read / @view / @pure that transitively emit', () => {
     expect(compileOrDiags(READ_VIA_HIDDEN_EMIT).ok, '@read transitively emitting must be rejected').toBe(false);
-    const viaView = `@contract class C { @event E(a: u256); @external @view foo(): u256 { return this.bar(); } @hidden bar(): u256 { emit(E(1n)); return 5n; } }`;
+    const viaView = `@contract class C { @event E(a: u256); @external @view foo(): u256 { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
     expect(compileOrDiags(viaView).ok, '@view transitively emitting must be rejected').toBe(false);
-    const viaPure = `@contract class C { @event E(a: u256); @external @pure foo(): u256 { return this.bar(); } @hidden bar(): u256 { emit(E(1n)); return 5n; } }`;
+    const viaPure = `@contract class C { @event E(a: u256); @external @pure foo(): u256 { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
     expect(compileOrDiags(viaPure).ok, '@pure transitively emitting must be rejected').toBe(false);
     // a plain nonpayable function transitively emitting is fine (control).
-    const ok = `@contract class C { @event E(a: u256); @external foo(): u256 { return this.bar(); } @hidden bar(): u256 { emit(E(1n)); return 5n; } }`;
+    const ok = `@contract class C { @event E(a: u256); @external foo(): u256 { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
     expect(compileOrDiags(ok).ok, 'a nonpayable function may transitively emit').toBe(true);
   });
 });

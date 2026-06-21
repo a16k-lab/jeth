@@ -19,12 +19,12 @@ const JETH = `@struct class P { a: u256; b: u8; c: address; }
     this.ax[0n] = 1n; this.ax[1n] = 2n; this.ax[2n] = 3n;
     this.ay[0n] = 7n; this.ay[1n] = 8n; this.ay[2n] = 9n;
   }
-  @view pickField(c: bool): u256 { let p: P = c ? this.x : this.y; return p.a; }
-  @view pickStruct(c: bool): P { return c ? this.x : this.y; }
-  @view pickStructLocal(c: bool): P { let p: P = c ? this.x : this.y; return p; }
-  @view pickArr(c: bool): Arr<u256,3> { return c ? this.ax : this.ay; }
-  @view pickArrLocal(c: bool): Arr<u256,3> { let a: Arr<u256,3> = c ? this.ax : this.ay; return a; }
-  @view pickCtor(c: bool, v: u256): P { let p: P = c ? this.x : P(v, 5n, address(0xc3n)); return p; }
+  @external @view pickField(c: bool): u256 { let p: P = c ? this.x : this.y; return p.a; }
+  @external @view pickStruct(c: bool): P { return c ? this.x : this.y; }
+  @external @view pickStructLocal(c: bool): P { let p: P = c ? this.x : this.y; return p; }
+  @external @view pickArr(c: bool): Arr<u256,3> { return c ? this.ax : this.ay; }
+  @external @view pickArrLocal(c: bool): Arr<u256,3> { let a: Arr<u256,3> = c ? this.ax : this.ay; return a; }
+  @external @view pickCtor(c: bool, v: u256): P { let p: P = c ? this.x : P(v, 5n, address(0xc3n)); return p; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

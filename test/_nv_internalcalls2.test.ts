@@ -7,15 +7,15 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 
-// Round 2: side-effecting argument evaluation, @public functions called by name,
+// Round 2: side-effecting argument evaluation, @external functions called by name,
 // interleaved state mutation during recursion, args that mutate locals read by
 // later args, post/pre-inc in argument position, chained assignment as args.
 const JETH = `@contract class C {
   @state s: u256;
   @state log: u256;
 
-  @internal @pure cat3(a: u256, b: u256, c: u256): u256 { return ((a * 1000n + b) * 1000n + c); }
-  @internal @pure cat2(a: u256, b: u256): u256 { return a * 1000n + b; }
+  @pure cat3(a: u256, b: u256, c: u256): u256 { return ((a * 1000n + b) * 1000n + c); }
+  @pure cat2(a: u256, b: u256): u256 { return a * 1000n + b; }
 
   // args mutate a local that later args read (left-to-right order for arg lists)
   @external @pure argSeq(): u256 {
@@ -39,22 +39,22 @@ const JETH = `@contract class C {
   }
 
   // state mutated as a side effect inside an internal-call arg, read by later arg
-  @internal @pure pass2(a: u256, b: u256): u256 { return a * 1000000n + b; }
+  @pure pass2(a: u256, b: u256): u256 { return a * 1000000n + b; }
   @external setSeq(): u256 {
     this.s = 0n;
     return this.pass2((this.s = this.s + 1n), this.s) * 10n + this.s;
   }
 
-  // @public functions: callable externally AND by name internally
-  @public @pure pdbl(x: u256): u256 { return x * 2n; }
-  @public @pure padd(a: u256, b: u256): u256 { return a + b; }
+  // @external functions: callable externally AND by name internally
+  @external @pure pdbl(x: u256): u256 { return x * 2n; }
+  @external @pure padd(a: u256, b: u256): u256 { return a + b; }
   @external @pure usePublic(a: u256, b: u256): u256 { return this.padd(this.pdbl(a), this.pdbl(b)); }
   @external @pure usePublicBare(a: u256, b: u256): u256 { return padd(pdbl(a), pdbl(b)); }
   // public recursive
-  @public @pure pfib(n: u256): u256 { if (n < 2n) { return n; } return this.pfib(n - 1n) + this.pfib(n - 2n); }
+  @external @pure pfib(n: u256): u256 { if (n < 2n) { return n; } return this.pfib(n - 1n) + this.pfib(n - 2n); }
 
   // interleaved state mutation during recursion: each call writes then recurses
-  @internal accumDown(n: u256): u256 {
+  accumDown(n: u256): u256 {
     if (n == 0n) { return this.s; }
     this.s = this.s + n;
     return this.accumDown(n - 1n);
@@ -63,14 +63,14 @@ const JETH = `@contract class C {
   @view getS(): u256 { return this.s; }
 
   // a helper that both reads and writes, called in nested positions
-  @internal tick(): u256 { this.log = this.log + 1n; return this.log; }
+  tick(): u256 { this.log = this.log + 1n; return this.log; }
   @external multiTick(): u256 {
     this.log = 0n;
     return this.cat3(this.tick(), this.tick(), this.tick());
   }
 
   // recursion where the recursive arg has overflow potential mid-tree
-  @internal @pure powc(base: u256, exp: u256): u256 {
+  @pure powc(base: u256, exp: u256): u256 {
     if (exp == 0n) { return 1n; }
     return base * this.powc(base, exp - 1n);
   }
@@ -80,20 +80,20 @@ const JETH = `@contract class C {
   // STACK-DEPTH divergence: solc lays internal-call frames on the EVM stack and
   // hits the 1024-slot limit at ~338 frames; JETH frames live in memory and run
   // far deeper. Pure value logic, so any divergence is purely the frame model.
-  @internal @pure down(n: u256): u256 { if (n == 0n) { return 0n; } return this.down(n - 1n) + 1n; }
+  @pure down(n: u256): u256 { if (n == 0n) { return 0n; } return this.down(n - 1n) + 1n; }
   @external @pure downE(n: u256): u256 { return this.down(n); }
 
   // call returning bool feeding a require in the caller
-  @internal @pure okGt(a: u256, b: u256): bool { return a > b; }
+  @pure okGt(a: u256, b: u256): bool { return a > b; }
   @external @pure needGt(a: u256, b: u256): u256 { require(this.okGt(a, b), "le"); return a - b; }
 
   // mutual recursion that also writes state on the way (count steps)
-  @internal mEven(n: u256): bool { this.log = this.log + 1n; if (n == 0n) { return true; } return this.mOdd(n - 1n); }
-  @internal mOdd(n: u256): bool { this.log = this.log + 1n; if (n == 0n) { return false; } return this.mEven(n - 1n); }
+  mEven(n: u256): bool { this.log = this.log + 1n; if (n == 0n) { return true; } return this.mOdd(n - 1n); }
+  mOdd(n: u256): bool { this.log = this.log + 1n; if (n == 0n) { return false; } return this.mEven(n - 1n); }
   @external runMutual(n: u256): u256 { this.log = 0n; let b: bool = this.mEven(n); return this.log * 10n + (b ? 1n : 0n); }
 
   // deeply nested same-call in a single expression with shared mutable arg
-  @internal @pure addOne(x: u256): u256 { return x + 1n; }
+  @pure addOne(x: u256): u256 { return x + 1n; }
   @external @pure deepShared(): u256 {
     let x: u256 = 0n;
     return this.cat3(this.addOne((x = x + 1n)), this.addOne((x = x + 1n)), this.addOne((x = x + 1n))) * 10n + x;
@@ -206,7 +206,7 @@ describe('probe', () => {
     await eq('setSeq ret', encodeCall(sel('setSeq()'), [])); // returns value directly
     await eq('multiTick', encodeCall(sel('multiTick()'), []));
 
-    // @public called by name (this. and bare) + externally
+    // @external called by name (this. and bare) + externally
     for (const [a, b] of [[1n, 2n], [10n, 20n], [M >> 2n, M >> 2n], [M - 1n, 0n]] as [bigint, bigint][]) {
       await eq('usePublic(' + a + ',' + b + ')', encodeCall(sel('usePublic(uint256,uint256)'), [a, b]));
       await eq('usePublicBare(' + a + ',' + b + ')', encodeCall(sel('usePublicBare(uint256,uint256)'), [a, b]));

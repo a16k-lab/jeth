@@ -57,22 +57,22 @@ const J1 = `@struct class P { a: u256; b: u8; c: address; d: i128; e: bool; f: b
     this.x = P(11n, 200n, address(0xa1n), -5n, true, bytes32(0x1122n));
     this.y = P(33n, 44n, address(0xb2n), 99n, false, bytes32(0xdeadbeefn));
   }
-  @view getX(): P { return this.x; }
-  @view getY(): P { return this.y; }
+  @external @view getX(): P { return this.x; }
+  @external @view getY(): P { return this.y; }
   // copy via ternary, mutate every field of the local, return it (storage must be untouched)
   @external mutLocal(c: bool): P {
     let p: P = c ? this.x : this.y;
     p.a = 7777n; p.b = 1n; p.c = address(0xcafen); p.d = -42n; p.e = false; p.f = bytes32(0x9999n);
     return p;
   }
-  @view pickStruct(c: bool): P { return c ? this.x : this.y; }
-  @view pickStructLocal(c: bool): P { let p: P = c ? this.x : this.y; return p; }
+  @external @view pickStruct(c: bool): P { return c ? this.x : this.y; }
+  @external @view pickStructLocal(c: bool): P { let p: P = c ? this.x : this.y; return p; }
   // field read after select via a memory-aggregate local (the supported form)
-  @view fieldA(c: bool): u256 { let p: P = c ? this.x : this.y; return p.a; }
-  @view fieldB(c: bool): u8 { let p: P = c ? this.x : this.y; return p.b; }
-  @view fieldD(c: bool): i128 { let p: P = c ? this.x : this.y; return p.d; }
-  @view fieldE(c: bool): bool { let p: P = c ? this.x : this.y; return p.e; }
-  @view fieldF(c: bool): bytes32 { let p: P = c ? this.x : this.y; return p.f; }
+  @external @view fieldA(c: bool): u256 { let p: P = c ? this.x : this.y; return p.a; }
+  @external @view fieldB(c: bool): u8 { let p: P = c ? this.x : this.y; return p.b; }
+  @external @view fieldD(c: bool): i128 { let p: P = c ? this.x : this.y; return p.d; }
+  @external @view fieldE(c: bool): bool { let p: P = c ? this.x : this.y; return p.e; }
+  @external @view fieldF(c: bool): bytes32 { let p: P = c ? this.x : this.y; return p.f; }
 }`;
 const S1 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -149,17 +149,17 @@ const J3 = `@struct class Inner { p: u128; q: u128; }
     this.bx[0n] = 255n; this.bx[1n] = 1n; this.bx[2n] = 128n; this.bx[3n] = 0n; this.bx[4n] = 77n;
     this.by[0n] = 9n; this.by[1n] = 8n; this.by[2n] = 7n; this.by[3n] = 6n; this.by[4n] = 5n;
   }
-  @view pickWithArr(c: bool): WithArr { return c ? this.wx : this.wy; }
-  @view pickArrOfStruct(c: bool): Arr<Inner,2> { return c ? this.sx : this.sy; }
-  @view pickNested(c: bool): Arr<Arr<u256,2>,3> { return c ? this.nx : this.ny; }
-  @view pickPacked(c: bool): Arr<u8,5> { return c ? this.bx : this.by; }
+  @external @view pickWithArr(c: bool): WithArr { return c ? this.wx : this.wy; }
+  @external @view pickArrOfStruct(c: bool): Arr<Inner,2> { return c ? this.sx : this.sy; }
+  @external @view pickNested(c: bool): Arr<Arr<u256,2>,3> { return c ? this.nx : this.ny; }
+  @external @view pickPacked(c: bool): Arr<u8,5> { return c ? this.bx : this.by; }
   // local + field read on the nested ones
-  @view withArrLocal(c: bool): WithArr { let w: WithArr = c ? this.wx : this.wy; return w; }
-  @view packedElem(c: bool, i: u256): u8 { let a: Arr<u8,5> = c ? this.bx : this.by; return a[i]; }
+  @external @view withArrLocal(c: bool): WithArr { let w: WithArr = c ? this.wx : this.wy; return w; }
+  @external @view packedElem(c: bool, i: u256): u8 { let a: Arr<u8,5> = c ? this.bx : this.by; return a[i]; }
   // mutate the value field of a struct-with-array local; storage must be untouched (independence)
   @external mutWithArr(c: bool): WithArr { let w: WithArr = c ? this.wx : this.wy; w.tag = 999n; return w; }
-  @view getWx(): WithArr { return this.wx; }
-  @view getWy(): WithArr { return this.wy; }
+  @external @view getWx(): WithArr { return this.wx; }
+  @external @view getWy(): WithArr { return this.wy; }
 }`;
 const S3 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -239,13 +239,13 @@ const J5 = `@contract class C {
     this.bx[0n] = bytes4(u32(0x11223344n)); this.bx[1n] = bytes4(u32(0xffffffffn)); this.bx[2n] = bytes4(u32(0x0n)); this.bx[3n] = bytes4(u32(0xdeadbeefn));
     this.by[0n] = bytes4(u32(0xaabbccddn)); this.by[1n] = bytes4(u32(0x1n)); this.by[2n] = bytes4(u32(0x2n)); this.by[3n] = bytes4(u32(0x3n));
   }
-  @view pickAddrs(c: bool): Arr<address,3> { return c ? this.ax : this.ay; }
-  @view pickBytes4(c: bool): Arr<bytes4,4> { return c ? this.bx : this.by; }
+  @external @view pickAddrs(c: bool): Arr<address,3> { return c ? this.ax : this.ay; }
+  @external @view pickBytes4(c: bool): Arr<bytes4,4> { return c ? this.bx : this.by; }
   // write an element after select, return whole; storage must be untouched (independence)
   @external mutAddrs(c: bool): Arr<address,3> { let a: Arr<address,3> = c ? this.ax : this.ay; a[1n] = address(0xdeadn); return a; }
-  @view addrElem(c: bool, i: u256): address { let a: Arr<address,3> = c ? this.ax : this.ay; return a[i]; }
-  @view getAx(): Arr<address,3> { return this.ax; }
-  @view getAy(): Arr<address,3> { return this.ay; }
+  @external @view addrElem(c: bool, i: u256): address { let a: Arr<address,3> = c ? this.ax : this.ay; return a[i]; }
+  @external @view getAx(): Arr<address,3> { return this.ax; }
+  @external @view getAy(): Arr<address,3> { return this.ay; }
 }`;
 const S5 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

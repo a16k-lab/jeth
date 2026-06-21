@@ -17,10 +17,10 @@ const JETH = `@struct class Q { tag: u256; pts: Arr<i64, 3>; us: Arr<u64, 4>; }
   @external setPt(i: u256, v: i64): void { this.q.pts[i] = v; }
   @external setUs(i: u256, v: u64): void { this.q.us[i] = v; }
   @external setPt1(v: i64): void { this.q.pts[1n] = v; }
-  @view getPt(i: u256): i64 { return this.q.pts[i]; }
-  @view getUs(i: u256): u64 { return this.q.us[i]; }
-  @view getPt2(): i64 { return this.q.pts[2n]; }
-  @view tag(): u256 { return this.q.tag; }
+  @external @view getPt(i: u256): i64 { return this.q.pts[i]; }
+  @external @view getUs(i: u256): u64 { return this.q.us[i]; }
+  @external @view getPt2(): i64 { return this.q.pts[2n]; }
+  @external @view tag(): u256 { return this.q.tag; }
   @external setTag(v: u256): void { this.q.tag = v; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT

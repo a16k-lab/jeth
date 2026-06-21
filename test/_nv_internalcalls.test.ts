@@ -12,28 +12,28 @@ const JETH = `@contract class C {
   @state cnt: u256;
 
   // ---- value helpers, nesting, long chains -------------------------------
-  @internal @pure a4(x: u256): u256 { return this.b4(x) + 1n; }
-  @internal @pure b4(x: u256): u256 { return this.c4(x) + 2n; }
-  @internal @pure c4(x: u256): u256 { return this.d4(x) + 4n; }
-  @internal @pure d4(x: u256): u256 { return x * 8n; }
+  @pure a4(x: u256): u256 { return this.b4(x) + 1n; }
+  @pure b4(x: u256): u256 { return this.c4(x) + 2n; }
+  @pure c4(x: u256): u256 { return this.d4(x) + 4n; }
+  @pure d4(x: u256): u256 { return x * 8n; }
   @external @pure chain4(x: u256): u256 { return this.a4(x); }
   // bare-name form of the same chain
-  @internal @pure ba(x: u256): u256 { return bb(x) + 1n; }
-  @internal @pure bb(x: u256): u256 { return bc(x) + 2n; }
-  @internal @pure bc(x: u256): u256 { return bd(x) + 4n; }
-  @internal @pure bd(x: u256): u256 { return x * 8n; }
+  @pure ba(x: u256): u256 { return bb(x) + 1n; }
+  @pure bb(x: u256): u256 { return bc(x) + 2n; }
+  @pure bc(x: u256): u256 { return bd(x) + 4n; }
+  @pure bd(x: u256): u256 { return x * 8n; }
   @external @pure chain4bare(x: u256): u256 { return ba(x); }
 
   // ---- deep recursion ----------------------------------------------------
-  @internal @pure fib(n: u256): u256 { if (n < 2n) { return n; } return this.fib(n - 1n) + this.fib(n - 2n); }
+  @pure fib(n: u256): u256 { if (n < 2n) { return n; } return this.fib(n - 1n) + this.fib(n - 2n); }
   @external @pure fibE(n: u256): u256 { return this.fib(n); }
-  @internal @pure fact(n: u256): u256 { if (n == 0n) { return 1n; } return n * this.fact(n - 1n); }
+  @pure fact(n: u256): u256 { if (n == 0n) { return 1n; } return n * this.fact(n - 1n); }
   @external @pure factE(n: u256): u256 { return this.fact(n); }
   // factorial that overflows for large n -> checked mul revert in a callee
-  @internal @pure factU(n: u8): u256 { if (n == 0n) { return 1n; } return u256(n) * this.factU(n - 1n); }
+  @pure factU(n: u8): u256 { if (n == 0n) { return 1n; } return u256(n) * this.factU(n - 1n); }
   @external @pure factUE(n: u8): u256 { return this.factU(n); }
   // ackermann-lite (bounded)
-  @internal @pure ack(m: u256, n: u256): u256 {
+  @pure ack(m: u256, n: u256): u256 {
     if (m == 0n) { return n + 1n; }
     if (n == 0n) { return this.ack(m - 1n, 1n); }
     return this.ack(m - 1n, this.ack(m, n - 1n));
@@ -41,36 +41,36 @@ const JETH = `@contract class C {
   @external @pure ackE(m: u256, n: u256): u256 { return this.ack(m, n); }
 
   // ---- mutual recursion --------------------------------------------------
-  @internal @pure isEven(n: u256): bool { if (n == 0n) { return true; } return this.isOdd(n - 1n); }
-  @internal @pure isOdd(n: u256): bool { if (n == 0n) { return false; } return this.isEven(n - 1n); }
+  @pure isEven(n: u256): bool { if (n == 0n) { return true; } return this.isOdd(n - 1n); }
+  @pure isOdd(n: u256): bool { if (n == 0n) { return false; } return this.isEven(n - 1n); }
   @external @pure evenE(n: u256): bool { return this.isEven(n); }
-  @internal @pure ping(n: u256): u256 { if (n == 0n) { return 100n; } return this.pong(n - 1n) + 1n; }
-  @internal @pure pong(n: u256): u256 { if (n == 0n) { return 200n; } return this.ping(n - 1n) + 2n; }
+  @pure ping(n: u256): u256 { if (n == 0n) { return 100n; } return this.pong(n - 1n) + 1n; }
+  @pure pong(n: u256): u256 { if (n == 0n) { return 200n; } return this.ping(n - 1n) + 2n; }
   @external @pure pingE(n: u256): u256 { return this.ping(n); }
 
   // ---- many params (4-8) -------------------------------------------------
-  @internal @pure s5(a: u256, b: u256, c: u256, d: u256, e: u256): u256 { return a + b * 2n + c * 3n + d * 4n + e * 5n; }
+  @pure s5(a: u256, b: u256, c: u256, d: u256, e: u256): u256 { return a + b * 2n + c * 3n + d * 4n + e * 5n; }
   @external @pure s5E(a: u256, b: u256, c: u256, d: u256, e: u256): u256 { return this.s5(a, b, c, d, e); }
-  @internal @pure s8(a: u256, b: u256, c: u256, d: u256, e: u256, f: u256, g: u256, h: u256): u256 {
+  @pure s8(a: u256, b: u256, c: u256, d: u256, e: u256, f: u256, g: u256, h: u256): u256 {
     return a + b + c + d + e + f + g + h;
   }
   @external @pure s8E(a: u256, b: u256, c: u256, d: u256, e: u256, f: u256, g: u256, h: u256): u256 {
     return this.s8(a, b, c, d, e, f, g, h);
   }
   // many params, non-commutative to catch arg-order/slot bugs
-  @internal @pure mix6(a: u256, b: u256, c: u256, d: u256, e: u256, f: u256): u256 {
+  @pure mix6(a: u256, b: u256, c: u256, d: u256, e: u256, f: u256): u256 {
     return ((a * 31n + b) * 31n + c) * 31n + d * 7n + e * 3n + f;
   }
   @external @pure mix6E(a: u256, b: u256, c: u256, d: u256, e: u256, f: u256): u256 { return this.mix6(a, b, c, d, e, f); }
 
   // ---- args that are themselves internal calls ---------------------------
-  @internal @pure add(a: u256, b: u256): u256 { return a + b; }
-  @internal @pure mul(a: u256, b: u256): u256 { return a * b; }
+  @pure add(a: u256, b: u256): u256 { return a + b; }
+  @pure mul(a: u256, b: u256): u256 { return a * b; }
   @external @pure nestArgs(a: u256, b: u256, c: u256): u256 {
     return this.add(this.mul(a, b), this.mul(this.add(a, c), b));
   }
   // a function called from many sites
-  @internal @pure dbl(x: u256): u256 { return x * 2n; }
+  @pure dbl(x: u256): u256 { return x * 2n; }
   @external @pure manySites(a: u256, b: u256): u256 {
     return this.dbl(a) + this.dbl(b) + this.dbl(this.dbl(a)) + this.dbl(a + b);
   }
@@ -97,60 +97,60 @@ const JETH = `@contract class C {
   @external @pure ovf(a: u256, b: u256): u256 { return this.add(a, b) + 1n; }
   @external @pure ovfMul(a: u256, b: u256): u256 { return this.mul(a, b) * 2n; }
   // callee does the overflowing op
-  @internal @pure addStrict(a: u256, b: u256): u256 { return a + b; }
+  @pure addStrict(a: u256, b: u256): u256 { return a + b; }
   @external @pure addStrictE(a: u256, b: u256): u256 { return this.addStrict(a, b); }
 
   // ---- signed + narrow params/returns ------------------------------------
-  @internal @pure negate(x: i64): i64 { return -x; }
+  @pure negate(x: i64): i64 { return -x; }
   @external @pure negateE(x: i64): i64 { return this.negate(x); }
-  @internal @pure absI8(x: i8): i8 { if (x < 0n) { return -x; } return x; }
+  @pure absI8(x: i8): i8 { if (x < 0n) { return -x; } return x; }
   @external @pure absI8E(x: i8): i8 { return this.absI8(x); }
-  @internal @pure sumI8(a: i8, b: i8): i8 { return a + b; }
+  @pure sumI8(a: i8, b: i8): i8 { return a + b; }
   @external @pure sumI8E(a: i8, b: i8): i8 { return this.sumI8(a, b); }
-  @internal @pure addU8(a: u8, b: u8): u8 { return a + b; }
+  @pure addU8(a: u8, b: u8): u8 { return a + b; }
   @external @pure addU8E(a: u8, b: u8): u8 { return this.addU8(a, b); }
-  @internal @pure clamp(x: i256): i256 { if (x < 0n) { return 0n; } return x; }
+  @pure clamp(x: i256): i256 { if (x < 0n) { return 0n; } return x; }
   @external @pure clampE(x: i256): i256 { return this.clamp(x); }
-  @internal @pure widen(x: i8): i256 { return i256(x); }
+  @pure widen(x: i8): i256 { return i256(x); }
   @external @pure widenE(x: i8): i256 { return this.widen(x); }
   // narrow return truncation through a call
-  @internal @pure narrow(x: u256): u8 { return u8(x); }
+  @pure narrow(x: u256): u8 { return u8(x); }
   @external @pure narrowE(x: u256): u8 { return this.narrow(x); }
 
   // ---- void returns + state propagation ----------------------------------
-  @internal bump(by: u256): void { this.acc = this.acc + by; }
+  bump(by: u256): void { this.acc = this.acc + by; }
   @external doBump(x: u256): void { this.bump(x); this.bump(x); this.bump(x); }
-  @internal bumpBare(by: u256): void { this.acc = this.acc + by; }
+  bumpBare(by: u256): void { this.acc = this.acc + by; }
   @external doBumpBare(x: u256): void { bumpBare(x); bumpBare(x); }
-  @view getAcc(): u256 { return this.acc; }
+  @external @view getAcc(): u256 { return this.acc; }
   // writer in a loop
   @external addLoop(n: u256): void { let i: u256 = 0n; while (i < n) { this.bump(i); i = i + 1n; } }
   // transitive writer
-  @internal innerWrite(v: u256): void { this.cnt = this.cnt + v; }
-  @internal outerWrite(v: u256): void { this.innerWrite(v); this.innerWrite(v * 2n); }
+  innerWrite(v: u256): void { this.cnt = this.cnt + v; }
+  outerWrite(v: u256): void { this.innerWrite(v); this.innerWrite(v * 2n); }
   @external doTrans(v: u256): void { this.outerWrite(v); }
-  @view getCnt(): u256 { return this.cnt; }
+  @external @view getCnt(): u256 { return this.cnt; }
   // internal view read transitively -> external view
   @view readAcc(): u256 { return this.acc; }
-  @view doubleAcc(): u256 { return this.add(this.readAcc(), this.readAcc()); }
+  @external @view doubleAcc(): u256 { return this.add(this.readAcc(), this.readAcc()); }
   // call that reads-then-writes via void then returns a value
   @external bumpAndGet(x: u256): u256 { this.bump(x); return this.acc; }
 
   // ---- bool returns used in control flow ---------------------------------
-  @internal @pure gt(a: u256, b: u256): bool { return a > b; }
+  @pure gt(a: u256, b: u256): bool { return a > b; }
   @external @pure pick(a: u256, b: u256): u256 { if (this.gt(a, b)) { return a; } return b; }
 
   // ---- deep nesting of same call (compose) -------------------------------
-  @internal @pure inc(x: u256): u256 { return x + 1n; }
+  @pure inc(x: u256): u256 { return x + 1n; }
   @external @pure inc8(x: u256): u256 {
     return this.inc(this.inc(this.inc(this.inc(this.inc(this.inc(this.inc(this.inc(x))))))));
   }
 
   // ---- callee that reverts via require -----------------------------------
-  @internal @pure mustPos(x: u256): u256 { require(x > 0n, "nonpos"); return x; }
+  @pure mustPos(x: u256): u256 { require(x > 0n, "nonpos"); return x; }
   @external @pure mustPosE(x: u256): u256 { return this.mustPos(x) * 2n; }
   // callee that does checked subtraction (underflow revert)
-  @internal @pure subc(a: u256, b: u256): u256 { return a - b; }
+  @pure subc(a: u256, b: u256): u256 { return a - b; }
   @external @pure subcE(a: u256, b: u256): u256 { return this.subc(a, b); }
 }`;
 

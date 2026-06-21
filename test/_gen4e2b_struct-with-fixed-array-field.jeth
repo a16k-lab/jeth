@@ -20,7 +20,7 @@ class StructFixedArrField {
   @external setId(k: u256, i: u256, v: u64): void { this.recs[k][i].id = v; }
   @external setData(k: u256, i: u256, j: u256, v: u256): void { this.recs[k][i].data[j] = v; }
 
-  @view recLen(k: u256): u256 { return this.recs[k].length; }
-  @view getId(k: u256, i: u256): u64 { return this.recs[k][i].id; }
-  @view getData(k: u256, i: u256, j: u256): u256 { return this.recs[k][i].data[j]; }
+  @external @view recLen(k: u256): u256 { return this.recs[k].length; }
+  @external @view getId(k: u256, i: u256): u64 { return this.recs[k][i].id; }
+  @external @view getData(k: u256, i: u256, j: u256): u256 { return this.recs[k][i].data[j]; }
 }

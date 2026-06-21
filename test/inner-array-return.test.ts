@@ -18,15 +18,15 @@ const JETH = `@contract class IR {
   @state ss: string[][];
   @external mPushOuter(k: u256): void { this.m[k].push(); }
   @external mPushInner(k: u256, i: u256, v: u256): void { this.m[k][i].push(v); }
-  @view mInner(k: u256, i: u256): u256[] { return this.m[k][i]; }
+  @external @view mInner(k: u256, i: u256): u256[] { return this.m[k][i]; }
   @external d3a(): void { this.ddd.push(); }
   @external d3b(i: u256): void { this.ddd[i].push(); }
   @external d3c(i: u256, j: u256, v: u256): void { this.ddd[i][j].push(v); }
-  @view d3Inner1(i: u256, j: u256): u256[] { return this.ddd[i][j]; }
-  @view d3Inner2(i: u256): u256[][] { return this.ddd[i]; }
+  @external @view d3Inner1(i: u256, j: u256): u256[] { return this.ddd[i][j]; }
+  @external @view d3Inner2(i: u256): u256[][] { return this.ddd[i]; }
   @external sPushOuter(): void { this.ss.push(); }
   @external sPushInner(i: u256, s: string): void { this.ss[i].push(s); }
-  @view sInner(i: u256): string[] { return this.ss[i]; }
+  @external @view sInner(i: u256): string[] { return this.ss[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

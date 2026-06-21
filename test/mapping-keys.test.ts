@@ -33,18 +33,18 @@ class K {
   @state adj0: mapping<u256, u256>;
   @state adj1: mapping<u256, u256>;
   @external setSi(k: i256, v: u256): void { this.si[k] = v; }
-  @view getSi(k: i256): u256 { return this.si[k]; }
+  @external @view getSi(k: i256): u256 { return this.si[k]; }
   @external setB4(k: bytes4, v: u256): void { this.b4[k] = v; }
-  @view getB4(k: bytes4): u256 { return this.b4[k]; }
+  @external @view getB4(k: bytes4): u256 { return this.b4[k]; }
   @external setBl(k: bool, v: u256): void { this.bl[k] = v; }
-  @view getBl(k: bool): u256 { return this.bl[k]; }
+  @external @view getBl(k: bool): u256 { return this.bl[k]; }
   @external setDeep(a: u256, b: u256, c: u256, v: u256): void { this.deep[a][b][c] = v; }
-  @view getDeep(a: u256, b: u256, c: u256): u256 { return this.deep[a][b][c]; }
+  @external @view getDeep(a: u256, b: u256, c: u256): u256 { return this.deep[a][b][c]; }
   @external setEdge(k: u256, v: u256): void { this.edge[k] = v; }
-  @view getEdge(k: u256): u256 { return this.edge[k]; }
+  @external @view getEdge(k: u256): u256 { return this.edge[k]; }
   @external setAdj(v0: u256, v1: u256): void { this.adj0[0n] = v0; this.adj1[0n] = v1; }
-  @view getAdj0(): u256 { return this.adj0[0n]; }
-  @view getAdj1(): u256 { return this.adj1[0n]; }
+  @external @view getAdj0(): u256 { return this.adj0[0n]; }
+  @external @view getAdj1(): u256 { return this.adj1[0n]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

@@ -29,15 +29,15 @@ class M {
   @state signed: mapping<u256, i16>;
   @external setAllow(o: address, s: address, v: u256): void { this.allowance[o][s] = v; }
   @external incAllow(o: address, s: address, d: u256): void { this.allowance[o][s] += d; }
-  @view getAllow(o: address, s: address): u256 { return this.allowance[o][s]; }
+  @external @view getAllow(o: address, s: address): u256 { return this.allowance[o][s]; }
   @external setFlag(a: address, b: bool): void { this.flags[a] = b; }
-  @view getFlag(a: address): bool { return this.flags[a]; }
+  @external @view getFlag(a: address): bool { return this.flags[a]; }
   @external setCount(k: u256, v: u8): void { this.counts[k] = v; }
-  @view getCount(k: u256): u8 { return this.counts[k]; }
+  @external @view getCount(k: u256): u8 { return this.counts[k]; }
   @external setName(a: address, n: bytes4): void { this.names[a] = n; }
-  @view getName(a: address): bytes4 { return this.names[a]; }
+  @external @view getName(a: address): bytes4 { return this.names[a]; }
   @external setSigned(k: u256, v: i16): void { this.signed[k] = v; }
-  @view getSigned(k: u256): i16 { return this.signed[k]; }
+  @external @view getSigned(k: u256): i16 { return this.signed[k]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

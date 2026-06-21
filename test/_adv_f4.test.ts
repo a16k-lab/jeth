@@ -100,7 +100,7 @@ const JETH = `
     return a;
   }
 
-  @view get(): u256 { return this.x; }
+  @external @view get(): u256 { return this.x; }
 }`;
 
 // ---------------------------------------------------------------------------------------------
@@ -540,17 +540,17 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
     expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @read f(): u256 { return this.x; } }`)).toContain('JETH260');
   });
 
-  it('rejects @nonReentrant on @internal / @private / @hidden with JETH261', () => {
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @internal f(): void { this.x = 1n; } }`)).toContain('JETH261');
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @private f(): void { this.x = 1n; } }`)).toContain('JETH261');
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @hidden f(): void { this.x = 1n; } }`)).toContain('JETH261');
+  it('rejects @nonReentrant on / / with JETH261', () => {
+    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain('JETH261');
+    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain('JETH261');
+    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain('JETH261');
   });
 
   it('rejects an internal call to a @nonReentrant function', () => {
-    // A @public guarded fn called by name -> JETH262 (the reentrancy-specific code). A @external
-    // guarded fn called by name -> JETH240 (the general "cannot internally call external" rule)
-    // fires first; both correctly REJECT the internal bypass of the guard.
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @public f(): void { this.x = 1n; } @external g(): void { this.f(); } }`)).toContain('JETH262');
+    // In the @external-only model @nonReentrant REQUIRES @external (JETH261), so a guarded function
+    // is always an external entry. Calling it by name from inside the contract is therefore rejected
+    // by the general "cannot internally call @external" rule (JETH240), which subsumes the old
+    // reentrancy-specific JETH262: there is no internally-callable guarded function to bypass.
     expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @external f(): void { this.x = 1n; } @external g(): void { this.f(); } }`)).toContain('JETH240');
   });
 

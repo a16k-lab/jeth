@@ -27,28 +27,28 @@ const JETH = `@struct class Acct { head: u256; bal: mapping<address, u256>; tail
   @external setTail(v: u64): void { this.s.tail = v; }
   @external setBal(a: address, v: u256): void { this.s.bal[a] = v; }
   @external incBal(a: address, v: u256): void { this.s.bal[a] = this.s.bal[a] + v; }
-  @view getHead(): u256 { return this.s.head; }
-  @view getTail(): u64 { return this.s.tail; }
-  @view getBal(a: address): u256 { return this.s.bal[a]; }
+  @external @view getHead(): u256 { return this.s.head; }
+  @external @view getTail(): u64 { return this.s.tail; }
+  @external @view getBal(a: address): u256 { return this.s.bal[a]; }
   // mapping value is a struct-with-mapping (nested)
   @external setMHead(k: u256, v: u256): void { this.mp[k].head = v; }
   @external setMBal(k: u256, a: address, v: u256): void { this.mp[k].bal[a] = v; }
-  @view getMBal(k: u256, a: address): u256 { return this.mp[k].bal[a]; }
-  @view getMHead(k: u256): u256 { return this.mp[k].head; }
+  @external @view getMBal(k: u256, a: address): u256 { return this.mp[k].bal[a]; }
+  @external @view getMHead(k: u256): u256 { return this.mp[k].head; }
   // packed neighbours around a mapping field
   @external setPk(a: u64, b: u64): void { this.pk.a = a; this.pk.b = b; }
   @external setPkM(k: u256, v: u256): void { this.pk.m[k] = v; }
-  @view getPkA(): u64 { return this.pk.a; }
-  @view getPkB(): u64 { return this.pk.b; }
-  @view getPkM(k: u256): u256 { return this.pk.m[k]; }
+  @external @view getPkA(): u64 { return this.pk.a; }
+  @external @view getPkB(): u64 { return this.pk.b; }
+  @external @view getPkM(k: u256): u256 { return this.pk.m[k]; }
   // two mapping fields with different key/value types
   @external setTwo(x: u256, y: u256): void { this.tw.x = x; this.tw.y = y; }
   @external setTwoM1(k: u256, v: u256): void { this.tw.m1[k] = v; }
   @external setTwoM2(a: address, v: u64): void { this.tw.m2[a] = v; }
-  @view getTwoM1(k: u256): u256 { return this.tw.m1[k]; }
-  @view getTwoM2(a: address): u64 { return this.tw.m2[a]; }
-  @view getTwoX(): u256 { return this.tw.x; }
-  @view getTwoY(): u256 { return this.tw.y; }
+  @external @view getTwoM1(k: u256): u256 { return this.tw.m1[k]; }
+  @external @view getTwoM2(a: address): u64 { return this.tw.m2[a]; }
+  @external @view getTwoX(): u256 { return this.tw.x; }
+  @external @view getTwoY(): u256 { return this.tw.y; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

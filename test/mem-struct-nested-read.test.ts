@@ -33,7 +33,7 @@ const JETH = `@struct class Inner { a: u256; b: i64; }
     return q.a + u256(u64(q.b));
   }
   // pass a nested field (by ref) to an internal helper that mutates it
-  @internal bump(i: Inner): void { i.a = i.a + 1n; }
+  bump(i: Inner): void { i.a = i.a + 1n; }
   @external @pure passInner(a: u256, b: i64): Outer {
     let p: Outer = Outer(7n, Inner(a, b), 2n);
     this.bump(p.inner);

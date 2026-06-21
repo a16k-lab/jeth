@@ -14,10 +14,10 @@ const sel = (s: string) => functionSelector(s);
 const JETH = `@contract class C {
   @state x: u256;
   @state y: u256;
-  @internal @pure two(): [u256, u256] { return [11n, 22n]; }
-  @internal @pure three(): [u256, u256, u256] { return [1n, 2n, 3n]; }
-  @internal @pure mix(): [u256, bool, u8] { return [7n, true, 5n]; }
-  @internal @pure addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
+  @pure two(): [u256, u256] { return [11n, 22n]; }
+  @pure three(): [u256, u256, u256] { return [1n, 2n, 3n]; }
+  @pure mix(): [u256, bool, u8] { return [7n, true, 5n]; }
+  @pure addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
   @external @pure declCall(): u256 { let [a, b] = this.two(); return a * 1000n + b; }
   @external @pure assignCall(): u256 { let a: u256 = 0n; let b: u256 = 0n; [a, b] = this.two(); return a * 1000n + b; }
   @external @pure skipCall(): u256 { let [a, , c] = this.three(); return a * 1000n + c; }

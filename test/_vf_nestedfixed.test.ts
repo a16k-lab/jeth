@@ -63,43 +63,43 @@ const JETH = `@struct class G2 { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
   @external pushPk(): void { this.pkarr.push(); }
   @external setPkarr(idx: u256, a: u64, b: u64, i: u256, j: u256, v: u8): void { this.pkarr[idx].a = a; this.pkarr[idx].b = b; this.pkarr[idx].rows[i][j] = v; }
 
-  @view getU2(): Arr<Arr<u256, 3>, 2> { return this.u2; }
-  @view rowU2(i: u256): Arr<u256, 3> { return this.u2[i]; }
-  @view elemU2(i: u256, j: u256): u256 { return this.u2[i][j]; }
-  @view getU3(): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.u3; }
-  @view planeU3(i: u256): Arr<Arr<u256, 2>, 2> { return this.u3[i]; }
-  @view rowU3(i: u256, j: u256): Arr<u256, 2> { return this.u3[i][j]; }
-  @view elemU3(i: u256, j: u256, k: u256): u256 { return this.u3[i][j][k]; }
-  @view getU4(): Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2> { return this.u4; }
-  @view cubeU4(i: u256): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.u4[i]; }
-  @view elemU4(i: u256, j: u256, k: u256, l: u256): u256 { return this.u4[i][j][k][l]; }
-  @view getP2(): Arr<Arr<u8, 4>, 3> { return this.p2; }
-  @view rowP2(i: u256): Arr<u8, 4> { return this.p2[i]; }
-  @view elemP2(i: u256, j: u256): u8 { return this.p2[i][j]; }
-  @view getP3(): Arr<Arr<Arr<u8, 5>, 3>, 2> { return this.p3; }
-  @view planeP3(i: u256): Arr<Arr<u8, 5>, 3> { return this.p3[i]; }
-  @view elemP3(i: u256, j: u256, k: u256): u8 { return this.p3[i][j][k]; }
-  @view getS2(): Arr<Arr<i64, 2>, 3> { return this.s2; }
-  @view rowS2(i: u256): Arr<i64, 2> { return this.s2[i]; }
-  @view elemS2(i: u256, j: u256): i64 { return this.s2[i][j]; }
-  @view getB2(): Arr<Arr<bytes4, 2>, 2> { return this.b2; }
-  @view rowB2(i: u256): Arr<bytes4, 2> { return this.b2[i]; }
-  @view elemB2(i: u256, j: u256): bytes4 { return this.b2[i][j]; }
-  @view getBl2(): Arr<Arr<bool, 5>, 2> { return this.bl2; }
-  @view rowBl2(i: u256): Arr<bool, 5> { return this.bl2[i]; }
-  @view elemBl2(i: u256, j: u256): bool { return this.bl2[i][j]; }
-  @view getG2(): G2 { return this.g2; }
-  @view getPk(): Pk { return this.pk; }
-  @view getSg(): Sg { return this.sg; }
-  @view getBz(): Bz { return this.bz; }
-  @view getBl(): Bl { return this.bl; }
-  @view getSgr(): StructGrid { return this.sgr; }
-  @view getG2arr(): G2[] { return this.g2arr; }
-  @view getG2arrI(i: u256): G2 { return this.g2arr[i]; }
-  @view getPkarr(): Pk[] { return this.pkarr; }
-  @view getPkarrI(i: u256): Pk { return this.pkarr[i]; }
-  @view getSentBefore(): u256 { return this.sentBefore; }
-  @view getSentAfter(): u256 { return this.sentAfter; }
+  @external @view getU2(): Arr<Arr<u256, 3>, 2> { return this.u2; }
+  @external @view rowU2(i: u256): Arr<u256, 3> { return this.u2[i]; }
+  @external @view elemU2(i: u256, j: u256): u256 { return this.u2[i][j]; }
+  @external @view getU3(): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.u3; }
+  @external @view planeU3(i: u256): Arr<Arr<u256, 2>, 2> { return this.u3[i]; }
+  @external @view rowU3(i: u256, j: u256): Arr<u256, 2> { return this.u3[i][j]; }
+  @external @view elemU3(i: u256, j: u256, k: u256): u256 { return this.u3[i][j][k]; }
+  @external @view getU4(): Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2> { return this.u4; }
+  @external @view cubeU4(i: u256): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.u4[i]; }
+  @external @view elemU4(i: u256, j: u256, k: u256, l: u256): u256 { return this.u4[i][j][k][l]; }
+  @external @view getP2(): Arr<Arr<u8, 4>, 3> { return this.p2; }
+  @external @view rowP2(i: u256): Arr<u8, 4> { return this.p2[i]; }
+  @external @view elemP2(i: u256, j: u256): u8 { return this.p2[i][j]; }
+  @external @view getP3(): Arr<Arr<Arr<u8, 5>, 3>, 2> { return this.p3; }
+  @external @view planeP3(i: u256): Arr<Arr<u8, 5>, 3> { return this.p3[i]; }
+  @external @view elemP3(i: u256, j: u256, k: u256): u8 { return this.p3[i][j][k]; }
+  @external @view getS2(): Arr<Arr<i64, 2>, 3> { return this.s2; }
+  @external @view rowS2(i: u256): Arr<i64, 2> { return this.s2[i]; }
+  @external @view elemS2(i: u256, j: u256): i64 { return this.s2[i][j]; }
+  @external @view getB2(): Arr<Arr<bytes4, 2>, 2> { return this.b2; }
+  @external @view rowB2(i: u256): Arr<bytes4, 2> { return this.b2[i]; }
+  @external @view elemB2(i: u256, j: u256): bytes4 { return this.b2[i][j]; }
+  @external @view getBl2(): Arr<Arr<bool, 5>, 2> { return this.bl2; }
+  @external @view rowBl2(i: u256): Arr<bool, 5> { return this.bl2[i]; }
+  @external @view elemBl2(i: u256, j: u256): bool { return this.bl2[i][j]; }
+  @external @view getG2(): G2 { return this.g2; }
+  @external @view getPk(): Pk { return this.pk; }
+  @external @view getSg(): Sg { return this.sg; }
+  @external @view getBz(): Bz { return this.bz; }
+  @external @view getBl(): Bl { return this.bl; }
+  @external @view getSgr(): StructGrid { return this.sgr; }
+  @external @view getG2arr(): G2[] { return this.g2arr; }
+  @external @view getG2arrI(i: u256): G2 { return this.g2arr[i]; }
+  @external @view getPkarr(): Pk[] { return this.pkarr; }
+  @external @view getPkarrI(i: u256): Pk { return this.pkarr[i]; }
+  @external @view getSentBefore(): u256 { return this.sentBefore; }
+  @external @view getSentAfter(): u256 { return this.sentAfter; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

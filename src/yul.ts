@@ -250,9 +250,7 @@ ${indent(runtime, 6)}
     const lines: string[] = [];
     lines.push('mstore(0x40, 0x80) // init free memory pointer');
 
-    const external = contract.functions.filter(
-      (f) => f.visibility === 'external' || f.visibility === 'public',
-    );
+    const external = contract.functions.filter((f) => f.visibility === 'external');
     if (external.length === 0) {
       // No externally-callable functions: any call reverts. (Avoid emitting a
       // `switch` with only a default, which solc warns about.)

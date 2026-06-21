@@ -25,23 +25,23 @@ const JETH = `@contract class C {
   @state dyn: u256[];         // dynamic array
   @state m: mapping<u256, u256>;
 
-  @internal bump(): u256 { this.counter = this.counter + 1n; return this.counter; }
-  @internal idx0(): u256 { this.counter = this.counter + 1n; return 0n; }
-  @internal idx1(): u256 { this.counter = this.counter + 100n; return 1n; }
+  bump(): u256 { this.counter = this.counter + 1n; return this.counter; }
+  idx0(): u256 { this.counter = this.counter + 1n; return 0n; }
+  idx1(): u256 { this.counter = this.counter + 100n; return 1n; }
   // order-tracing helpers: append a decimal tag to a sequence so the full order
   // of evaluation is captured (not just the multiset of side effects).
-  @internal tag(t: u256): u256 { this.counter = this.counter * 10n + t; return t; }
-  @internal tagIdx(t: u256, ret: u256): u256 { this.counter = this.counter * 10n + t; return ret; }
+  tag(t: u256): u256 { this.counter = this.counter * 10n + t; return t; }
+  tagIdx(t: u256, ret: u256): u256 { this.counter = this.counter * 10n + t; return ret; }
 
-  @internal @pure two(): [u256, u256] { return [11n, 22n]; }
-  @internal @pure three(): [u256, u256, u256] { return [1n, 2n, 3n]; }
-  @internal @pure addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
-  @internal @pure mixT(): [u8, bool, i64, address, bytes32] {
+  @pure two(): [u256, u256] { return [11n, 22n]; }
+  @pure three(): [u256, u256, u256] { return [1n, 2n, 3n]; }
+  @pure addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
+  @pure mixT(): [u8, bool, i64, address, bytes32] {
     return [255n, true, -5n, address(0xaan), bytes32(0x1122334455667788990011223344556677889900112233445566778899001122n)];
   }
-  @internal @pure widenSrc(): [u8, u16] { return [200n, 60000n]; }
-  @internal nested(): [u256, u256] { let [a, b] = this.two(); return [a + 1n, b + 1n]; }
-  @internal recurT(n: u256): [u256, u256] {
+  @pure widenSrc(): [u8, u16] { return [200n, 60000n]; }
+  nested(): [u256, u256] { let [a, b] = this.two(); return [a + 1n, b + 1n]; }
+  recurT(n: u256): [u256, u256] {
     if (n == 0n) { return [0n, 1n]; }
     let [a, b] = this.recurT(n - 1n);
     return [b, a + b];
@@ -116,7 +116,7 @@ const JETH = `@contract class C {
     let [a, , c] = this.threeSide();
     return a * 1000000n + c * 1000n + this.counter;
   }
-  @internal threeSide(): [u256, u256, u256] { this.counter = this.counter + 7n; return [1n, 2n, 3n]; }
+  threeSide(): [u256, u256, u256] { this.counter = this.counter + 7n; return [1n, 2n, 3n]; }
   // skipped TUPLE-literal components: side effects still happen
   @external skipLitSide(): u256 {
     this.counter = 0n;
@@ -151,7 +151,7 @@ const JETH = `@contract class C {
   }
 
   // --- signed min/max via tuple ---
-  @internal @pure signs(): [i256, i256] { return [-57896044618658097711785492504343953926634992332820282019728792003956564819968n, 57896044618658097711785492504343953926634992332820282019728792003956564819967n]; }
+  @pure signs(): [i256, i256] { return [-57896044618658097711785492504343953926634992332820282019728792003956564819968n, 57896044618658097711785492504343953926634992332820282019728792003956564819967n]; }
   @external @pure signMinMax(): i256 { let [lo, hi] = this.signs(); return lo + hi; }
 
   // --- targets: struct fields, array elems, mapping values ---
@@ -175,7 +175,7 @@ const JETH = `@contract class C {
     if (c) { let [a, b] = this.two(); r = a + b; } else { let [a, b] = this.three2(); r = a + b; }
     return r;
   }
-  @internal @pure three2(): [u256, u256] { return [100n, 200n]; }
+  @pure three2(): [u256, u256] { return [100n, 200n]; }
   @external @pure inFor(n: u256): u256 {
     let acc: u256 = 0n;
     for (let i: u256 = 0n; i < n; i = i + 1n) { let [a, b] = this.two(); acc = acc + a + b; }
@@ -221,7 +221,7 @@ const JETH = `@contract class C {
     [this.arr[this.tagIdx(1n, 0n)], this.arr[this.tagIdx(2n, 1n)]] = this.twoTag();
     return this.counter;
   }
-  @internal twoTag(): [u256, u256] { this.counter = this.counter * 10n + 9n; return [11n, 22n]; }
+  twoTag(): [u256, u256] { this.counter = this.counter * 10n + 9n; return [11n, 22n]; }
   // mapping-key side effects as targets
   @external traceMapKey(): u256 {
     this.counter = 0n;

@@ -19,12 +19,12 @@ type Wei = Brand<u256>;
   @state owner: mapping<TokenId, address>;
   @state rec: Rec;
   @external setOwner(id: TokenId, o: address): void { this.owner[id] = o; }
-  @view ownerOf(id: TokenId): address { return this.owner[id]; }
+  @external @view ownerOf(id: TokenId): address { return this.owner[id]; }
   @external @pure next(id: TokenId): TokenId { return TokenId(u256(id) + 1n); }
   @external @pure addWei(a: Wei, b: Wei): Wei { return a + b; }
   @external @pure eqId(a: TokenId, b: TokenId): bool { return a == b; }
   @external setRec(i: TokenId, b: Wei): void { this.rec = Rec(i, b); }
-  @view recId(): u256 { return u256(this.rec.id); }
+  @external @view recId(): u256 { return u256(this.rec.id); }
 }`;
 // Structurally identical, but plain u256 everywhere (the brand is the only difference).
 const PLAIN = `@struct class Rec { id: u256; bal: u256; }
@@ -32,12 +32,12 @@ const PLAIN = `@struct class Rec { id: u256; bal: u256; }
   @state owner: mapping<u256, address>;
   @state rec: Rec;
   @external setOwner(id: u256, o: address): void { this.owner[id] = o; }
-  @view ownerOf(id: u256): address { return this.owner[id]; }
+  @external @view ownerOf(id: u256): address { return this.owner[id]; }
   @external @pure next(id: u256): u256 { return u256(id + 1n); }
   @external @pure addWei(a: u256, b: u256): u256 { return a + b; }
   @external @pure eqId(a: u256, b: u256): bool { return a == b; }
   @external setRec(i: u256, b: u256): void { this.rec = Rec(i, b); }
-  @view recId(): u256 { return u256(this.rec.id); }
+  @external @view recId(): u256 { return u256(this.rec.id); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

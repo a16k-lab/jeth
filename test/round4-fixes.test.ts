@@ -17,11 +17,11 @@ const JETH = `@contract class R4 {
   @state dd: u256[][];
   @external pushOuter(k: u256): void { this.m[k].push(); }
   @external pushInner(k: u256, i: u256, v: u256): void { this.m[k][i].push(v); }
-  @view innerLen(k: u256, i: u256): u256 { return this.m[k][i].length; }
-  @view at(k: u256, i: u256, j: u256): u256 { return this.m[k][i][j]; }
+  @external @view innerLen(k: u256, i: u256): u256 { return this.m[k][i].length; }
+  @external @view at(k: u256, i: u256, j: u256): u256 { return this.m[k][i][j]; }
   @external ddPush(): void { this.dd.push(); }
   @external ddPushInner(i: u256, v: u256): void { this.dd[i].push(v); }
-  @view getInner(i: u256): u256[] { return this.dd[i]; }
+  @external @view getInner(i: u256): u256[] { return this.dd[i]; }
   @external @pure ternWrite(c: bool, i: u256, v: u256): u256 {
     let xs: u256[] = [1n, 2n]; let ys: u256[] = [3n, 4n];
     (c ? xs : ys)[i] = v;

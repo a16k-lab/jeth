@@ -35,10 +35,10 @@ class Deep {
   @external setQ(v: u128): void { this.a.b.c.q = v; }
   @external setM(v: u64): void  { this.a.b.m = v; }
   @external setX(v: u64): void  { this.a.x = v; }
-  @view getP(): u128 { return this.a.b.c.p; }
-  @view getQ(): u128 { return this.a.b.c.q; }
-  @view getM(): u64  { return this.a.b.m; }
-  @view getX(): u64  { return this.a.x; }
+  @external @view getP(): u128 { return this.a.b.c.p; }
+  @external @view getQ(): u128 { return this.a.b.c.q; }
+  @external @view getM(): u64  { return this.a.b.m; }
+  @external @view getX(): u64  { return this.a.x; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

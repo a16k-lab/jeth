@@ -19,16 +19,16 @@ const JETH = `@contract class C {
   @state pk: Arr<u8, 4>[];      // uint8[4][]: packed fixed element (1 slot each)
   @external pushA(i: u256, v: u256): void { this.a[i].push(v); }
   @external setA(i: u256, j: u256, v: u256): void { this.a[i][j] = v; }
-  @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
-  @view lenA(i: u256): u256 { return this.a[i].length; }
+  @external @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
+  @external @view lenA(i: u256): u256 { return this.a[i].length; }
   @external pushB(): void { this.b.push(); }
   @external popB(): void { this.b.pop(); }
   @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
-  @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
-  @view lenB(): u256 { return this.b.length; }
+  @external @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
+  @external @view lenB(): u256 { return this.b.length; }
   @external pushPk(): void { this.pk.push(); }
   @external setPk(i: u256, j: u256, v: u8): void { this.pk[i][j] = v; }
-  @view getPk(i: u256, j: u256): u8 { return this.pk[i][j]; }
+  @external @view getPk(i: u256, j: u256): u8 { return this.pk[i][j]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

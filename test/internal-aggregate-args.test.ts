@@ -1,5 +1,5 @@
 // JETH242/243 lift: a dynamic value-element array / bytes / string passed to OR returned from an
-// @internal/@private function, BY MEMORY REFERENCE (like solc). A memory-source arg ALIASES (a callee
+// @internal/function, BY MEMORY REFERENCE (like solc). A memory-source arg ALIASES (a callee
 // mutation is visible to the caller); a calldata source is COPIED (masking dirty value-array elements,
 // like solc's calldata->memory copy); a storage source is copied via the storage encoder. Returns
 // compose with the external encoder. Byte-identical to solc 0.8.35.
@@ -16,15 +16,15 @@ const cdArr = (xs: readonly bigint[]) => pad32(0x20n) + pad32(BigInt(xs.length))
 describe('aggregate param/return through an internal call (JETH242/243) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const J = `@contract class C {
-    @internal sum(xs: u256[]): u256 { let t: u256 = 0n; for (const v of xs) { t = t + v; } return t; }
-    @internal nsum(xs: u64[]): u256 { let t: u256 = 0n; for (const v of xs) { t = t + v; } return t; }
-    @internal bump(xs: u256[]): void { xs[0n] = 99n; }
-    @internal mk(n: u256): u256[] { let m: u256[] = [n, n + 1n, n + 2n]; return m; }
-    @internal twice(xs: u256[]): u256 { return this.sum(xs) + this.sum(xs); }
-    @internal mkB(): bytes { let s: bytes = "hello world, JETH"; return s; }
-    @internal blen(b: bytes): u256 { return b.length; }
-    @internal alloc(n: u256): u256 { let z: u256[] = [n * 10n, n * 20n, n * 30n]; return z[1n]; }
-    @internal litCall(n: u256): u256[] { let m: u256[] = [this.alloc(n), n, this.alloc(n + 1n)]; return m; }
+    sum(xs: u256[]): u256 { let t: u256 = 0n; for (const v of xs) { t = t + v; } return t; }
+    nsum(xs: u64[]): u256 { let t: u256 = 0n; for (const v of xs) { t = t + v; } return t; }
+    bump(xs: u256[]): void { xs[0n] = 99n; }
+    mk(n: u256): u256[] { let m: u256[] = [n, n + 1n, n + 2n]; return m; }
+    twice(xs: u256[]): u256 { return this.sum(xs) + this.sum(xs); }
+    mkB(): bytes { let s: bytes = "hello world, JETH"; return s; }
+    blen(b: bytes): u256 { return b.length; }
+    alloc(n: u256): u256 { let z: u256[] = [n * 10n, n * 20n, n * 30n]; return z[1n]; }
+    litCall(n: u256): u256[] { let m: u256[] = [this.alloc(n), n, this.alloc(n + 1n)]; return m; }
     @external @pure sumCd(a: u256[]): u256 { return this.sum(a); }
     @external @pure nsumCd(a: u64[]): u256 { return this.nsum(a); }
     @external @pure sumMem(): u256 { let m: u256[] = [10n, 20n, 30n]; return this.sum(m); }

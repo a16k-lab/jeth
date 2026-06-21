@@ -31,23 +31,23 @@ const JETH = `@struct class D { a: u256; s: string; }
   @external pushInner(i: u256, v: u256): void { this.dd[i].push(v); }
   @external popInner(i: u256): void { this.dd[i].pop(); }
   @external setAt(i: u256, j: u256, v: u256): void { this.dd[i][j] = v; }
-  @view outerLen(): u256 { return this.dd.length; }
-  @view innerLen(i: u256): u256 { return this.dd[i].length; }
-  @view at(i: u256, j: u256): u256 { return this.dd[i][j]; }
-  @view getDD(): u256[][] { return this.dd; }
+  @external @view outerLen(): u256 { return this.dd.length; }
+  @external @view innerLen(i: u256): u256 { return this.dd[i].length; }
+  @external @view at(i: u256, j: u256): u256 { return this.dd[i][j]; }
+  @external @view getDD(): u256[][] { return this.dd; }
   @external pushSOuter(): void { this.ss.push(); }
   @external pushSInner(i: u256, s: string): void { this.ss[i].push(s); }
-  @view getSS(): string[][] { return this.ss; }
-  @view sAt(i: u256, j: u256): string { return this.ss[i][j]; }
+  @external @view getSS(): string[][] { return this.ss; }
+  @external @view sAt(i: u256, j: u256): string { return this.ss[i][j]; }
   @external push3a(): void { this.ddd.push(); }
   @external push3b(i: u256): void { this.ddd[i].push(); }
   @external push3c(i: u256, j: u256, v: u256): void { this.ddd[i][j].push(v); }
-  @view at3(i: u256, j: u256, k: u256): u256 { return this.ddd[i][j][k]; }
-  @view getDDD(): u256[][][] { return this.ddd; }
+  @external @view at3(i: u256, j: u256, k: u256): u256 { return this.ddd[i][j][k]; }
+  @external @view getDDD(): u256[][][] { return this.ddd; }
   @external pushDAOuter(): void { this.da.push(); }
   @external pushDAInner(i: u256, a: u256, s: string): void { this.da[i].push(D(a, s)); }
-  @view getDA(): D[][] { return this.da; }
-  @view daAt(i: u256, j: u256): D { return this.da[i][j]; }
+  @external @view getDA(): D[][] { return this.da; }
+  @external @view daAt(i: u256, j: u256): D { return this.da[i][j]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

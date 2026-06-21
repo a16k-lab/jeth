@@ -132,18 +132,18 @@ const JETH = `
   @external @pure emptyStructStr(): FD { return FD(0n, ""); }
 
   // ---- WHOLE STORAGE aggregate returns ----
-  @view allVals(): u256[] { return this.vals; }
-  @view allNames(): string[] { return this.names; }
-  @view allBlobs(): bytes[] { return this.blobs; }
-  @view allGrid(): u256[][] { return this.grid; }
-  @view allFD(): FD[] { return this.recs; }
-  @view getFd1(): FD { return this.fd1; }
-  @view getNums(): Arr<u256, 3> { return this.nums; }
+  @external @view allVals(): u256[] { return this.vals; }
+  @external @view allNames(): string[] { return this.names; }
+  @external @view allBlobs(): bytes[] { return this.blobs; }
+  @external @view allGrid(): u256[][] { return this.grid; }
+  @external @view allFD(): FD[] { return this.recs; }
+  @external @view getFd1(): FD { return this.fd1; }
+  @external @view getNums(): Arr<u256, 3> { return this.nums; }
 
   // ---- WHOLE MAPPING-value returns ----
-  @view getM(k: u256): u256[] { return this.m[k]; }
-  @view getMs(k: u256): FD { return this.ms[k]; }
-  @view getMb(k: u256): bytes { return this.mb[k]; }
+  @external @view getM(k: u256): u256[] { return this.m[k]; }
+  @external @view getMs(k: u256): FD { return this.ms[k]; }
+  @external @view getMb(k: u256): bytes { return this.mb[k]; }
 
   // ---- MULTI-VALUE TUPLES mixing components ----
   @external @pure mvValStr(n: u256, s: string): [u256, string] { return [n, s]; }
@@ -152,9 +152,9 @@ const JETH = `
   @external @pure mvCdArrVal(xs: u256[], n: u256): [u256[], u256] { return [xs, n]; }       // value-array cd component (CLEANS)
   @external @pure mvCdNarrArrVal(xs: u8[], n: u256): [u8[], u256] { return [xs, n]; }        // narrow value-array cd component (CLEANS)
   @external @pure mvAllStatic(a: u256, b: address, c: bool): [u256, address, bool] { return [a, b, c]; }
-  @view mvStructVal(n: u256): [FD, u256] { return [this.fd1, n]; }
-  @view mvArrVal(n: u256): [u256[], u256] { return [this.vals, n]; }
-  @view mvStrArr(n: u256): [string[], u256] { return [this.names, n]; }
+  @external @view mvStructVal(n: u256): [FD, u256] { return [this.fd1, n]; }
+  @external @view mvArrVal(n: u256): [u256[], u256] { return [this.vals, n]; }
+  @external @view mvStrArr(n: u256): [string[], u256] { return [this.names, n]; }
   @external @pure mvBytesCdArr(b: bytes, xs: u256[]): [bytes, u256[]] { return [b, xs]; }
 }`;
 

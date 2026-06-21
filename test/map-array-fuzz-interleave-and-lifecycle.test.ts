@@ -34,14 +34,14 @@ class Inter {
 
   @external pushDirect(v: u256): void { this.direct.push(v); }
   @external popDirect(): void { this.direct.pop(); }
-  @view lenDirect(): u256 { return this.direct.length; }
-  @view getDirect(i: u256): u256 { return this.direct[i]; }
+  @external @view lenDirect(): u256 { return this.direct.length; }
+  @external @view getDirect(i: u256): u256 { return this.direct[i]; }
   @external setDirect(i: u256, v: u256): void { this.direct[i] = v; }
 
   @external pushM(k: address, v: u256): void { this.m[k].push(v); }
   @external popM(k: address): void { this.m[k].pop(); }
-  @view lenM(k: address): u256 { return this.m[k].length; }
-  @view getM(k: address, i: u256): u256 { return this.m[k][i]; }
+  @external @view lenM(k: address): u256 { return this.m[k].length; }
+  @external @view getM(k: address, i: u256): u256 { return this.m[k][i]; }
   @external setM(k: address, i: u256, v: u256): void { this.m[k][i] = v; }
 }`;
 

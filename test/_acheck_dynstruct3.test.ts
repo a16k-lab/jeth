@@ -40,16 +40,16 @@ class A {
   @state w: W;                                  // slot 1..4: x@1, inner.a@2, inner.s@3, t@4
   @external setMA(k1: u256, k2: u256, v: u256): void { this.mm[k1][k2].a = v; }
   @external setMS(k1: u256, k2: u256, v: string): void { this.mm[k1][k2].s = v; }
-  @view getMA(k1: u256, k2: u256): u256 { return this.mm[k1][k2].a; }
-  @view getMS(k1: u256, k2: u256): string { return this.mm[k1][k2].s; }
+  @external @view getMA(k1: u256, k2: u256): u256 { return this.mm[k1][k2].a; }
+  @external @view getMS(k1: u256, k2: u256): string { return this.mm[k1][k2].s; }
   @external setWx(v: u256): void { this.w.x = v; }
   @external setWInnerA(v: u256): void { this.w.inner.a = v; }
   @external setWInnerS(v: string): void { this.w.inner.s = v; }
   @external setWt(v: string): void { this.w.t = v; }
-  @view getWx(): u256 { return this.w.x; }
-  @view getWInnerA(): u256 { return this.w.inner.a; }
-  @view getWInnerS(): string { return this.w.inner.s; }
-  @view getWt(): string { return this.w.t; }
+  @external @view getWx(): u256 { return this.w.x; }
+  @external @view getWInnerA(): u256 { return this.w.inner.a; }
+  @external @view getWInnerS(): string { return this.w.inner.s; }
+  @external @view getWt(): string { return this.w.t; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

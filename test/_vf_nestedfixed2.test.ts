@@ -41,19 +41,19 @@ const JETH = `@struct class Pk { a: u64; rows: Arr<Arr<u8, 4>, 3>; b: u64; }
   @external setDeep(head: u256, foot: u256, idx: u256, a: u64, b: u64, i: u256, j: u256, v: u8): void { this.deep.head = head; this.deep.foot = foot; this.deep.inner[idx].a = a; this.deep.inner[idx].b = b; this.deep.inner[idx].rows[i][j] = v; }
   @external setPart(i: u256, j: u256, v: u256): void { this.part[i][j] = v; }
 
-  @view getD5(): Arr<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>, 2> { return this.d5; }
-  @view elemD5(i: u256, j: u256, k: u256, l: u256, m: u256): u256 { return this.d5[i][j][k][l][m]; }
-  @view getS8(): Arr<Arr<i8, 3>, 2> { return this.s8; }
-  @view rowS8(i: u256): Arr<i8, 3> { return this.s8[i]; }
-  @view getS128(): Arr<Arr<i128, 2>, 2> { return this.s128; }
-  @view getS256(): Arr<Arr<i256, 2>, 2> { return this.s256; }
-  @view getB32(): Arr<Arr<bytes32, 2>, 2> { return this.b32; }
-  @view getCells(): Arr<Arr<Cell, 2>, 2> { return this.cells; }
-  @view rowCells(i: u256): Arr<Cell, 2> { return this.cells[i]; }
-  @view getPkgrid(): Arr<Pk, 2> { return this.pkgrid; }
-  @view elemPkgrid(idx: u256): Pk { return this.pkgrid[idx]; }
-  @view getDeep(): Deep { return this.deep; }
-  @view getPart(): Arr<Arr<u256, 3>, 3> { return this.part; }
+  @external @view getD5(): Arr<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>, 2> { return this.d5; }
+  @external @view elemD5(i: u256, j: u256, k: u256, l: u256, m: u256): u256 { return this.d5[i][j][k][l][m]; }
+  @external @view getS8(): Arr<Arr<i8, 3>, 2> { return this.s8; }
+  @external @view rowS8(i: u256): Arr<i8, 3> { return this.s8[i]; }
+  @external @view getS128(): Arr<Arr<i128, 2>, 2> { return this.s128; }
+  @external @view getS256(): Arr<Arr<i256, 2>, 2> { return this.s256; }
+  @external @view getB32(): Arr<Arr<bytes32, 2>, 2> { return this.b32; }
+  @external @view getCells(): Arr<Arr<Cell, 2>, 2> { return this.cells; }
+  @external @view rowCells(i: u256): Arr<Cell, 2> { return this.cells[i]; }
+  @external @view getPkgrid(): Arr<Pk, 2> { return this.pkgrid; }
+  @external @view elemPkgrid(idx: u256): Pk { return this.pkgrid[idx]; }
+  @external @view getDeep(): Deep { return this.deep; }
+  @external @view getPart(): Arr<Arr<u256, 3>, 3> { return this.part; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

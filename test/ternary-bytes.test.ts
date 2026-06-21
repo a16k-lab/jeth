@@ -23,7 +23,7 @@ const JETH = `@contract class C {
   @state a: string; @state b: string;
   @external setAB(x: string, y: string): void { this.a = x; this.b = y; }
   @external @pure lit(c: bool): string { return c ? "${SHORT}" : "${LONG}"; }
-  @view stor(c: bool): string { let s: string = c ? this.a : this.b; return s; }
+  @external @view stor(c: bool): string { let s: string = c ? this.a : this.b; return s; }
   @external @pure cd(c: bool, x: string, y: string): string { return c ? x : y; }
   @external @pure cdLen(c: bool, x: bytes, y: bytes): u256 { return (c ? x : y).length; }
   @external @pure nested(c: bool, d: bool, x: string, y: string): string { return c ? (d ? x : y) : "fallback string that is also over thirty-two bytes long ok"; }

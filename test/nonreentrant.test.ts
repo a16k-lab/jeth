@@ -25,7 +25,7 @@ const JETH = `@contract class V {
   @nonReentrant @external bump(): void { this.x = this.x + 1n; }
   @nonReentrant @external bumpBy(n: u256): u256 { this.x = this.x + n; return this.x; }
   @nonReentrant @external bumpThenRevert(): void { this.x = this.x + 1n; revert("boom"); }
-  @view get(): u256 { return this.x; }
+  @external @view get(): u256 { return this.x; }
 }`;
 
 // Twin vault: identical bodies guarded by a transient-storage ReentrancyGuard, plus a Solidity

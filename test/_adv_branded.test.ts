@@ -130,7 +130,7 @@ describe('2. branded aggregates erase to the base and match solc', () => {
         @state m: mapping<T,W>;
         @state rec: Rec;
         @external setM(k:T,v:W):void{ this.m[k]=v; }
-        @view getM(k:T):W{ return this.m[k]; }
+        @external @view getM(k:T):W{ return this.m[k]; }
         @external setRec(i:T,b:T):void{ this.rec=Rec(i,b); }
         @external @pure echoArr(a: Arr<T,3>): Arr<T,3> { return a; }
         @external @pure echoDyn(a: T[]): T[] { return a; }
@@ -536,7 +536,7 @@ describe('branded address enforces the nominal barrier (regression)', () => {
     const J = `type Acc=Brand<address>;@contract class C{
       @state o: Acc;
       @external set(x: address): void { this.o = Acc(x); }
-      @view get(): address { return address(this.o); }
+      @external @view get(): address { return address(this.o); }
       @external @pure same(a: Acc, b: Acc): bool { return a == b; }
     }`;
     const S = `// SPDX-License-Identifier: MIT

@@ -32,14 +32,14 @@ const JETH = `@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
   @external setMw(k: u256, t: u256, i: u256, j: u256, v: u256): void { this.mw[k].tag = t; this.mw[k].grid[i][j] = v; }
   @external pushW(): void { this.warr.push(); }
   @external setWarr(idx: u256, t: u256, i: u256, j: u256, v: u256): void { this.warr[idx].tag = t; this.warr[idx].grid[i][j] = v; }
-  @view getUp(): Arr<Arr<u8, 4>, 3> { return this.up; }
-  @view getSg(): Arr<Arr<i64, 2>, 2> { return this.sg; }
-  @view getD4(): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.d4; }
-  @view getW(): W { return this.w; }
-  @view getPk(): Pk { return this.pk; }
-  @view getMw(k: u256): W { return this.mw[k]; }
-  @view getWarr(): W[] { return this.warr; }
-  @view getWarrI(i: u256): W { return this.warr[i]; }
+  @external @view getUp(): Arr<Arr<u8, 4>, 3> { return this.up; }
+  @external @view getSg(): Arr<Arr<i64, 2>, 2> { return this.sg; }
+  @external @view getD4(): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.d4; }
+  @external @view getW(): W { return this.w; }
+  @external @view getPk(): Pk { return this.pk; }
+  @external @view getMw(k: u256): W { return this.mw[k]; }
+  @external @view getWarr(): W[] { return this.warr; }
+  @external @view getWarrI(i: u256): W { return this.warr[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

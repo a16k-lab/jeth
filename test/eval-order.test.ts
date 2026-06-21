@@ -25,7 +25,7 @@ const JETH = `@contract class C {
   @external @pure retTuple(): [u256, u256, u256] { let s: u256 = 0n; return [(s = s * 10n + 1n), (s = s * 10n + 2n), s]; }
   @state seq: u256;
   @external emitOrd(): void { this.seq = 0n; emit(Ev((this.seq = this.seq * 10n + 1n), (this.seq = this.seq * 10n + 2n), (this.seq = this.seq * 10n + 3n))); }
-  @view getSeq(): u256 { return this.seq; }
+  @external @view getSeq(): u256 { return this.seq; }
   @external @pure revertOrd(): void { let s: u256 = 0n; revert(Er((s = s * 10n + 1n), (s = s * 10n + 2n))); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT

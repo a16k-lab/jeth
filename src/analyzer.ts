@@ -1100,7 +1100,7 @@ export class Analyzer {
         initialValue = folded; // zero/false is the storage default; no SSTORE needed
       }
     }
-    if (decs.includes('public')) this.publicStateNames.add(member.name.text); // solc auto-generates a getter
+    if (decs.includes('external')) this.publicStateNames.add(member.name.text); // @external @state -> auto-generated getter
     out.push({ name: member.name.text, type, initialValue });
   }
 
@@ -1197,27 +1197,18 @@ export class Analyzer {
       }
     }
 
-    const visibilities = VISIBILITY_DECORATORS.filter((v) => decs.includes(v));
-    if (visibilities.length > 1) {
-      this.diags.error(member, 'JETH052', `conflicting visibility decorators: ${visibilities.join(', ')}`);
+    // VISIBILITY MODEL: the ONLY writable visibility decorator is @external (an exposed ABI entry).
+    // A function WITHOUT @external is INTERNAL (private-by-default: callable by name, memory params,
+    // never in the ABI). @public/@internal/@private/@hidden are no longer writable - the compiler owns
+    // the internal-side decision (private now; private vs internal inferred from cross-contract use once
+    // inheritance lands). This dissolves the dual external+internal ("public") function entirely.
+    const removedVis = ['public', 'internal', 'private', 'hidden'].find((d) => decs.includes(d));
+    if (removedVis) {
+      this.diags.error(member, 'JETH054', `@${removedVis} is not a JETH visibility decorator: write @external to expose a function; everything else is internal by default (the compiler infers private/internal)`);
     }
-    // VISIBILITY INFERENCE: an explicit @external/@public/@internal/@private is used verbatim.
-    // `@hidden` is a not-exposed helper (resolved to @internal after the fixpoint). With NO
-    // visibility decorator, the compiler resolves @public (if called internally) or @external.
-    const hidden = decs.includes('hidden');
-    let visibility: Visibility;
-    let inferExposed = false;
-    let inferHidden = false;
-    if (visibilities.length > 0) {
-      if (hidden) this.diags.error(member, 'JETH052', `conflicting visibility: @hidden with @${visibilities[0]}`);
-      visibility = visibilities[0]!;
-    } else if (hidden) {
-      visibility = 'internal'; // provisional; resolved to internal
-      inferHidden = true;
-    } else {
-      visibility = 'public'; // provisional (permissive for internal-call analysis); resolved to external/public
-      inferExposed = true;
-    }
+    const visibility: Visibility = decs.includes('external') ? 'external' : 'internal';
+    const inferExposed = false;
+    const inferHidden = false;
 
     // MUTABILITY INFERENCE: `@read` is a read-only function whose @pure/@view is computed from
     // its TRANSITIVE effects after the fixpoint. Provisionally @view so the body is validated as
@@ -1244,8 +1235,8 @@ export class Analyzer {
     else if (decs.includes('pure')) mutability = 'pure';
     // solc: internal/private functions can never be payable (no message context of their own).
     // @hidden is an explicitly-internal function, so it is rejected with @payable too.
-    if (decs.includes('payable') && (decs.includes('internal') || decs.includes('private') || decs.includes('hidden'))) {
-      this.diags.error(member, 'JETH131', '@payable cannot be combined with @internal/@private/@hidden (only external/public functions can be payable)');
+    if (decs.includes('payable') && !decs.includes('external')) {
+      this.diags.error(member, 'JETH131', '@payable requires @external (an internal function has no message-call value context of its own)');
     }
 
     // F4: @nonReentrant wraps the external entry in a transient-storage mutex. It must be a
@@ -1256,8 +1247,8 @@ export class Analyzer {
       if (read || decs.includes('view') || decs.includes('pure')) {
         this.diags.error(member, 'JETH260', '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)');
       }
-      if (hidden || (visibilities.length > 0 && visibility !== 'external' && visibility !== 'public')) {
-        this.diags.error(member, 'JETH261', `@nonReentrant requires an external or public function, not @${hidden ? 'hidden' : visibility}`);
+      if (!decs.includes('external')) {
+        this.diags.error(member, 'JETH261', '@nonReentrant requires an @external function (a reentrancy guard protects an externally-reachable entry)');
       }
     }
 
@@ -1533,7 +1524,7 @@ export class Analyzer {
     this.currentMutability = rf.mutability;
     // external/public (incl. a provisional-public inferExposed no-vis function) is externally
     // reachable; internal/private (incl. @hidden -> internal) is not. Gates the msg.value/@payable rule.
-    this.currentExternallyReachable = rf.visibility === 'external' || rf.visibility === 'public';
+    this.currentExternallyReachable = rf.visibility === 'external';
     this.currentWritesState = false;
     this.currentReadsState = false;
     this.currentReadsEnv = false;

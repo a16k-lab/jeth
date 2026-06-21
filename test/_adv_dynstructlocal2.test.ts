@@ -51,9 +51,9 @@ const JETH = `
   @external seedRec(av: u256, s: string, b: bytes, n: u64): void { this.recs.push(D4(av, s, b, n)); }
 
   // storage independence: mutate copy, return it; getStA/getStS re-read storage afterward
-  @view copyMutBoth(nv: u256, ns: string): D { let d: D = this.st; d.a = nv; d.s = ns; return d; }
-  @view getStA(): u256 { return this.st.a; }
-  @view getStS(): string { return this.st.s; }
+  @external @view copyMutBoth(nv: u256, ns: string): D { let d: D = this.st; d.a = nv; d.s = ns; return d; }
+  @external @view getStA(): u256 { return this.st.a; }
+  @external @view getStS(): string { return this.st.s; }
 
   // alias chains
   @external @pure aliasChainBoth(av: u256, s: string, ns: string, nv: u256): D {
@@ -69,11 +69,11 @@ const JETH = `
   }
 
   // D4 from each storage source, returned whole
-  @view from4St(): D4 { let d: D4 = this.st4; return d; }
-  @view from4Map(): D4 { let d: D4 = this.m[address(0xbeefn)]; return d; }
-  @view from4Rec(): D4 { let d: D4 = this.recs[0n]; return d; }
+  @external @view from4St(): D4 { let d: D4 = this.st4; return d; }
+  @external @view from4Map(): D4 { let d: D4 = this.m[address(0xbeefn)]; return d; }
+  @external @view from4Rec(): D4 { let d: D4 = this.recs[0n]; return d; }
   // D4 copy then write each bytes/string field, plus value fields
-  @view from4StWrite(ns: string, nb: bytes, nv: u256, nn: u64): D4 {
+  @external @view from4StWrite(ns: string, nb: bytes, nv: u256, nn: u64): D4 {
     let d: D4 = this.st4; d.s = ns; d.b = nb; d.a = nv; d.n = nn; return d;
   }
   // repeated re-point of the same bytes field
@@ -97,10 +97,10 @@ const JETH = `
   @external @pure fromDNcdMut(x: DN, ns: string): DN { let d: DN = x; d.s = ns; return d; }
 
   // D4 alias: write bytes on the ORIGINAL, observe via the alias's bytes read (length + byte index)
-  @view aliasD4Len(): u256 { let d: D4 = this.st4; let e: D4 = d; d.b = "ZZZ"; return e.b.length; }
-  @view aliasD4Byte(i: u256): u8 { let d: D4 = this.st4; let e: D4 = d; d.b = "ABCDE"; return u8(e.b[i]); }
+  @external @view aliasD4Len(): u256 { let d: D4 = this.st4; let e: D4 = d; d.b = "ZZZ"; return e.b.length; }
+  @external @view aliasD4Byte(i: u256): u8 { let d: D4 = this.st4; let e: D4 = d; d.b = "ABCDE"; return u8(e.b[i]); }
   // D4 alias: mutate through alias e (value + both dyn fields), return the ORIGINAL d
-  @view aliasD4Cross(nv: u256, ns: string, nb: bytes): D4 {
+  @external @view aliasD4Cross(nv: u256, ns: string, nb: bytes): D4 {
     let d: D4 = this.st4; let e: D4 = d; e.a = nv; e.s = ns; e.b = nb; return d;
   }
   // calldata D4 OOB byte index after copy

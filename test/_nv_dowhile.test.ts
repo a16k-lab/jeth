@@ -67,12 +67,12 @@ const JETH = `@contract class C {
   @external pumpState(steps: u256): void { let k: u256 = 0n; do { this.acc = this.acc + k; k = k + 1n; } while (k < steps); }
   @external drainWhileState(): void { do { this.acc = this.acc - 1n; } while (this.acc > 0n); }
   @external condReadsState(target: u256): void { do { this.acc = this.acc + 1n; } while (this.acc < target); }
-  @view getAcc(): u256 { return this.acc; }
+  @external @view getAcc(): u256 { return this.acc; }
   @external setAcc(v: u256): void { this.acc = v; }
 
   // --- do-while with a SIDE-EFFECTING condition ---
   @external sideCond(n: u256): void { let i: u256 = 0n; do { i = i + 1n; } while ((this.hits = this.hits + 1n) < n); }
-  @view getHits(): u256 { return this.hits; }
+  @external @view getHits(): u256 { return this.hits; }
   @external resetHits(): void { this.hits = 0n; }
   // condition that increments the loop var as a side effect
   @external @pure sideIncCond(n: u256): u256 { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; } while ((i = i + 1n) < n); return body * 1000n + i; }
@@ -94,7 +94,7 @@ const JETH = `@contract class C {
   @external @pure earlyReturn(n: u256, k: u256): u256 { let i: u256 = 0n; do { i = i + 1n; if (i == k) { return i * 100n; } } while (i < n); return 999n; }
   @external @pure returnFromNestedDw(a: u256, b: u256): u256 { let i: u256 = 0n; do { i = i + 1n; let j: u256 = 0n; do { j = j + 1n; if (i * j > 6n) { return i * 10n + j; } } while (j < b); } while (i < a); return 0n; }
   @external @pure returnInCondPath(n: u256): u256 { let i: u256 = 0n; do { i = i + 1n; } while (i < n ? true : returnHelper()); return i; }
-  @internal @pure returnHelper(): bool { return false; }
+  @pure returnHelper(): bool { return false; }
 
   // --- UNCHECKED arithmetic inside the body ---
   @external @pure uncheckedSum(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; unchecked: { do { i = i + 1n; s = s + i; } while (i < n); } return s; }

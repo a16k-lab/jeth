@@ -64,70 +64,70 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external popU(): void { this.u.pop(); }
   @external setU(i: u256, v: u256): void { this.u[i] = v; }
   @external incU(i: u256, v: u256): void { this.u[i] += v; }
-  @view getU(i: u256): u256 { return this.u[i]; }
-  @view lenU(): u256 { return this.u.length; }
-  @view allU(): u256[] { return this.u; }
+  @external @view getU(i: u256): u256 { return this.u[i]; }
+  @external @view lenU(): u256 { return this.u.length; }
+  @external @view allU(): u256[] { return this.u; }
   @external clearU(): void { this.u = this.u2; }
   @external copyUFromU2(): void { this.u = this.u2; }
 
   @external pushP8(v: u8): void { this.p8.push(v); }
   @external popP8(): void { this.p8.pop(); }
-  @view getP8(i: u256): u8 { return this.p8[i]; }
-  @view lenP8(): u256 { return this.p8.length; }
-  @view allP8(): u8[] { return this.p8; }
+  @external @view getP8(i: u256): u8 { return this.p8[i]; }
+  @external @view lenP8(): u256 { return this.p8.length; }
+  @external @view allP8(): u8[] { return this.p8; }
 
   @external pushI8(v: i8): void { this.i8a.push(v); }
   @external popI8(): void { this.i8a.pop(); }
-  @view getI8(i: u256): i8 { return this.i8a[i]; }
-  @view allI8(): i8[] { return this.i8a; }
+  @external @view getI8(i: u256): i8 { return this.i8a[i]; }
+  @external @view allI8(): i8[] { return this.i8a; }
 
   @external pushBa(v: bool): void { this.ba.push(v); }
   @external popBa(): void { this.ba.pop(); }
-  @view getBa(i: u256): bool { return this.ba[i]; }
-  @view allBa(): bool[] { return this.ba; }
+  @external @view getBa(i: u256): bool { return this.ba[i]; }
+  @external @view allBa(): bool[] { return this.ba; }
 
   @external pushAdr(v: address): void { this.adr.push(v); }
   @external popAdr(): void { this.adr.pop(); }
-  @view getAdr(i: u256): address { return this.adr[i]; }
-  @view allAdr(): address[] { return this.adr; }
+  @external @view getAdr(i: u256): address { return this.adr[i]; }
+  @external @view allAdr(): address[] { return this.adr; }
 
   @external pushB16(v: bytes16): void { this.b16.push(v); }
   @external popB16(): void { this.b16.pop(); }
-  @view getB16(i: u256): bytes16 { return this.b16[i]; }
-  @view allB16(): bytes16[] { return this.b16; }
+  @external @view getB16(i: u256): bytes16 { return this.b16[i]; }
+  @external @view allB16(): bytes16[] { return this.b16; }
 
   @external pushPb(x: u128, y: u128): void { this.pb.push(P(x, y)); }
   @external popPa(): void { this.pa.pop(); }
   @external copyPaFromPb(): void { this.pa = this.pb; }
-  @view getPaX(i: u256): u128 { return this.pa[i].x; }
-  @view allPa(): P[] { return this.pa; }
+  @external @view getPaX(i: u256): u128 { return this.pa[i].x; }
+  @external @view allPa(): P[] { return this.pa; }
 
   @external pushOuter(): void { this.dd.push(); }
   @external pushInner(i: u256, v: u256): void { this.dd[i].push(v); }
   @external popInner(i: u256): void { this.dd[i].pop(); }
   @external setInner(i: u256, j: u256, v: u256): void { this.dd[i][j] = v; }
-  @view ddOuterLen(): u256 { return this.dd.length; }
-  @view ddInnerLen(i: u256): u256 { return this.dd[i].length; }
-  @view ddAt(i: u256, j: u256): u256 { return this.dd[i][j]; }
-  @view allDD(): u256[][] { return this.dd; }
+  @external @view ddOuterLen(): u256 { return this.dd.length; }
+  @external @view ddInnerLen(i: u256): u256 { return this.dd[i].length; }
+  @external @view ddAt(i: u256, j: u256): u256 { return this.dd[i][j]; }
+  @external @view allDD(): u256[][] { return this.dd; }
 
   @external pushSs(s: string): void { this.ss.push(s); }
   @external pushSb(s: string): void { this.sb.push(s); }
   @external popSs(): void { this.ss.pop(); }
   @external copySsFromSb(): void { this.ss = this.sb; }
-  @view getSs(i: u256): string { return this.ss[i]; }
-  @view lenSs(): u256 { return this.ss.length; }
-  @view allSs(): string[] { return this.ss; }
+  @external @view getSs(i: u256): string { return this.ss[i]; }
+  @external @view lenSs(): u256 { return this.ss.length; }
+  @external @view allSs(): string[] { return this.ss; }
 
   @external pushBy(b: bytes): void { this.by.push(b); }
   @external popBy(): void { this.by.pop(); }
-  @view getBy(i: u256): bytes { return this.by[i]; }
-  @view allBy(): bytes[] { return this.by; }
+  @external @view getBy(i: u256): bytes { return this.by[i]; }
+  @external @view allBy(): bytes[] { return this.by; }
 
   @external pushDb(a: u256, s: string): void { this.db.push(D(a, s)); }
   @external popDa(): void { this.da.pop(); }
   @external copyDaFromDb(): void { this.da = this.db; }
-  @view allDa(): D[] { return this.da; }
+  @external @view allDa(): D[] { return this.da; }
 
   @external @pure echoU(x: u256[]): u256[] { return x; }
   @external @pure sumU(x: u256[]): u256 {

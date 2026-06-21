@@ -46,37 +46,37 @@ class A {
 
   @external setDa(v: u256): void { this.d.a = v; }
   @external setDs(v: string): void { this.d.s = v; }
-  @view getDs(): string { return this.d.s; }
-  @view getDa(): u256 { return this.d.a; }
+  @external @view getDs(): string { return this.d.s; }
+  @external @view getDa(): u256 { return this.d.a; }
 
   @external setFp(v: u64): void { this.f.p = v; }
   @external setFq(v: u64): void { this.f.q = v; }
   @external setFc(v: bytes): void { this.f.c = v; }
-  @view getFp(): u64 { return this.f.p; }
-  @view getFq(): u64 { return this.f.q; }
-  @view getFc(): bytes { return this.f.c; }
+  @external @view getFp(): u64 { return this.f.p; }
+  @external @view getFq(): u64 { return this.f.q; }
+  @external @view getFc(): bytes { return this.f.c; }
 
   @external setGa(v: u128): void { this.g.a = v; }
   @external setGflag(v: bool): void { this.g.flag = v; }
   @external setGs(v: string): void { this.g.s = v; }
   @external setGb(v: u128): void { this.g.b = v; }
-  @view getGa(): u128 { return this.g.a; }
-  @view getGflag(): bool { return this.g.flag; }
-  @view getGs(): string { return this.g.s; }
-  @view getGb(): u128 { return this.g.b; }
+  @external @view getGa(): u128 { return this.g.a; }
+  @external @view getGflag(): bool { return this.g.flag; }
+  @external @view getGs(): string { return this.g.s; }
+  @external @view getGb(): u128 { return this.g.b; }
 
   @external setHs(v: string): void { this.h.s = v; }
   @external setHn(v: u256): void { this.h.n = v; }
-  @view getHs(): string { return this.h.s; }
-  @view getHn(): u256 { return this.h.n; }
+  @external @view getHs(): string { return this.h.s; }
+  @external @view getHn(): u256 { return this.h.n; }
 
   @external setMa(k: u256, v: u256): void { this.m[k].a = v; }
   @external setMs(k: u256, v: string): void { this.m[k].s = v; }
-  @view getMs(k: u256): string { return this.m[k].s; }
-  @view getMa(k: u256): u256 { return this.m[k].a; }
+  @external @view getMs(k: u256): string { return this.m[k].s; }
+  @external @view getMa(k: u256): u256 { return this.m[k].a; }
 
   @external setSent(v: u256): void { this.sent = v; }
-  @view getSent(): u256 { return this.sent; }
+  @external @view getSent(): u256 { return this.sent; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

@@ -35,9 +35,9 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external setFA(i: u256, x: u128, y: u128): void { this.fa[i] = P(x, y); }
   @external pushMD(k: address, a: u256, s: string): void { this.md[k].push(D(a, s)); }
   @external setMD(k: address, i: u256, a: u256, s: string): void { this.md[k][i] = D(a, s); }
-  @view getD(i: u256): D { return this.recs[i]; }
-  @view getFA(i: u256): P { return this.fa[i]; }
-  @view getMD(k: address, i: u256): D { return this.md[k][i]; }
+  @external @view getD(i: u256): D { return this.recs[i]; }
+  @external @view getFA(i: u256): P { return this.fa[i]; }
+  @external @view getMD(k: address, i: u256): D { return this.md[k][i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

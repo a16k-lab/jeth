@@ -16,9 +16,9 @@ const JETH = `@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
 @contract class SC {
   @state w: W;
   @external setW(t: u256, a: u256, b: u256, c: u256, d: u256): void { this.w = W(t, [[a, b], [c, d]]); }
-  @view getW(): W { return this.w; }
-  @view mkW(t: u256, a: u256, b: u256, c: u256, d: u256): W { return W(t, [[a, b], [c, d]]); }
-  @view mkM(t: u256, x0: u256, y0: u256, x1: u256, y1: u256): M { return M(t, [Row(x0, y0), Row(x1, y1)]); }
+  @external @view getW(): W { return this.w; }
+  @external @view mkW(t: u256, a: u256, b: u256, c: u256, d: u256): W { return W(t, [[a, b], [c, d]]); }
+  @external @view mkM(t: u256, x0: u256, y0: u256, x1: u256, y1: u256): M { return M(t, [Row(x0, y0), Row(x1, y1)]); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

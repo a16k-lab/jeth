@@ -65,30 +65,30 @@ const JETH = `@contract class C {
   @external pushB(): void { this.b.push(); }
   @external popB(): void { this.b.pop(); }
   @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
-  @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
-  @view lenB(): u256 { return this.b.length; }
+  @external @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
+  @external @view lenB(): u256 { return this.b.length; }
 
   @external pushPk8(): void { this.pk8.push(); }
   @external popPk8(): void { this.pk8.pop(); }
   @external setPk8(i: u256, j: u256, v: u8): void { this.pk8[i][j] = v; }
-  @view getPk8(i: u256, j: u256): u8 { return this.pk8[i][j]; }
-  @view lenPk8(): u256 { return this.pk8.length; }
+  @external @view getPk8(i: u256, j: u256): u8 { return this.pk8[i][j]; }
+  @external @view lenPk8(): u256 { return this.pk8.length; }
 
   @external pushPk16(): void { this.pk16.push(); }
   @external popPk16(): void { this.pk16.pop(); }
   @external setPk16(i: u256, j: u256, v: u16): void { this.pk16[i][j] = v; }
-  @view getPk16(i: u256, j: u256): u16 { return this.pk16[i][j]; }
+  @external @view getPk16(i: u256, j: u256): u16 { return this.pk16[i][j]; }
 
   @external pushDd(): void { this.dd.push(); }
   @external popDd(): void { this.dd.pop(); }
   @external setDd(i: u256, j: u256, k: u256, v: u256): void { this.dd[i][j][k] = v; }
-  @view getDd(i: u256, j: u256, k: u256): u256 { return this.dd[i][j][k]; }
+  @external @view getDd(i: u256, j: u256, k: u256): u256 { return this.dd[i][j][k]; }
 
   @external pushA(i: u256, v: u256): void { this.a[i].push(v); }
   @external popA(i: u256): void { this.a[i].pop(); }
   @external setA(i: u256, j: u256, v: u256): void { this.a[i][j] = v; }
-  @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
-  @view lenA(i: u256): u256 { return this.a[i].length; }
+  @external @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
+  @external @view lenA(i: u256): u256 { return this.a[i].length; }
   @external setSent(v: u256): void { this.sent = v; }
 }`;
 

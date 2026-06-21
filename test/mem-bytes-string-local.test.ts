@@ -22,7 +22,7 @@ const JETH = `@contract class C {
   @external setSt(x: string): void { this.st = x; }
   @external @pure echo(x: string): string { let s: string = x; return s; }
   @external @pure echoLit(): string { let s: string = "hello, this is a string literal over 32 bytes long!!"; return s; }
-  @view fromStorage(): string { let s: string = this.st; return s; }
+  @external @view fromStorage(): string { let s: string = this.st; return s; }
   @external @pure blen(x: bytes): u256 { let b: bytes = x; return b.length; }
   @external @pure byteAt(x: bytes, i: u256): u8 { let b: bytes = x; return u8(b[i]); }
   @external @pure aliasLen(x: bytes): u256 { let s: bytes = x; let t: bytes = s; return t.length; }

@@ -198,9 +198,13 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 - `@contract` class -> contract.
 - `@state` fields -> storage slots (Solidity-compatible layout + packing).
 - Methods -> ABI functions.
-- Visibility decorators: `@external`, `@public`, `@internal`, `@private`. INFERENCE: with no
-  visibility decorator the compiler resolves `@public` if the function is ever called internally
-  (`f()`/`this.f()`), else `@external`; `@hidden` marks a not-exposed helper, resolved to `@internal`.
+- Visibility: `@external` is the SOLE writable visibility decorator (an exposed ABI entry point).
+  A function / state variable WITHOUT `@external` is INTERNAL (private-by-default): callable by name
+  from inside the contract, never in the ABI, not externally callable. `@public`/`@internal`/
+  `@private`/`@hidden` are not writable (`JETH054`) - the compiler owns the internal-side decision
+  (private now; private vs internal inferred from cross-contract use once inheritance lands). A
+  `@external @state` variable gets an auto-generated getter and is still usable in code. To expose
+  logic that also recurses / is reused internally, write an `@external` wrapper over an internal impl.
 - Mutability decorators: `@view`, `@pure`, `@payable` (default nonpayable). INFERENCE: `@read` marks a
   read-only function, resolved to `@pure` (touches no state/env, transitively) or `@view` (reads, never
   writes); a transitive write is rejected (JETH056). All inference resolves to a concrete

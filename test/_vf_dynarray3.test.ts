@@ -36,40 +36,40 @@ const JETH = `@struct class S { xs: u256[]; n: u256; }
 
   @external push(v: u256): void { this.a.push(v); }
   @external self(): void { this.a = this.a; }                 // aliasing self-copy (no-op)
-  @view all(): u256[] { return this.a; }
+  @external @view all(): u256[] { return this.a; }
 
   @external pushI(v: i256): void { this.si.push(v); }
   @external popI(): void { this.si.pop(); }
-  @view getI(i: u256): i256 { return this.si[i]; }
-  @view allI(): i256[] { return this.si; }
+  @external @view getI(i: u256): i256 { return this.si[i]; }
+  @external @view allI(): i256[] { return this.si; }
 
   @external pushI8(v: i128): void { this.si8.push(v); }
   @external popI8(): void { this.si8.pop(); }
-  @view getI8(i: u256): i128 { return this.si8[i]; }
-  @view allI8(): i128[] { return this.si8; }
+  @external @view getI8(i: u256): i128 { return this.si8[i]; }
+  @external @view allI8(): i128[] { return this.si8; }
 
   @external pushW(v: u16): void { this.w16.push(v); }
   @external popW(): void { this.w16.pop(); }
-  @view getW(i: u256): u16 { return this.w16[i]; }
-  @view allW(): u16[] { return this.w16; }
+  @external @view getW(i: u256): u16 { return this.w16[i]; }
+  @external @view allW(): u16[] { return this.w16; }
 
   @external pushB32(v: bytes32): void { this.b32.push(v); }
-  @view allB32(): bytes32[] { return this.b32; }
+  @external @view allB32(): bytes32[] { return this.b32; }
 
   @external mmPushOuter(k: u256): void { this.mm[k].push(); }
   @external mmPushInner(k: u256, i: u256, v: u256): void { this.mm[k][i].push(v); }
-  @view mmAll(k: u256): u256[][] { return this.mm[k]; }
+  @external @view mmAll(k: u256): u256[][] { return this.mm[k]; }
 
   @external sPush(v: u256): void { this.s.xs.push(v); }
   @external sSetN(n: u256): void { this.s.n = n; }
-  @view sAll(): S { return this.s; }
+  @external @view sAll(): S { return this.s; }
 
   @external fsSet(i: u256, v: string): void { this.fs[i] = v; }
-  @view fsAll(): Arr<string, 3> { return this.fs; }
-  @view fsGet(i: u256): string { return this.fs[i]; }
+  @external @view fsAll(): Arr<string, 3> { return this.fs; }
+  @external @view fsGet(i: u256): string { return this.fs[i]; }
 
   @external fbSet(i: u256, v: bytes): void { this.fb[i] = v; }
-  @view fbAll(): Arr<bytes, 2> { return this.fb; }
+  @external @view fbAll(): Arr<bytes, 2> { return this.fb; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

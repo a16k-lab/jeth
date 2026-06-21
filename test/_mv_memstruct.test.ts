@@ -36,7 +36,7 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return r;
   }
   // alias then pass the ALIAS to a mutating helper; read the original
-  @internal @pure bumpQ(p: Q): void { p.x = p.x + 1000n; p.y = p.y * 2n; }
+  @pure bumpQ(p: Q): void { p.x = p.x + 1000n; p.y = p.y * 2n; }
   @external @pure aliasPass(a: u128, b: u128): Q {
     let p: Q = Q(a, b);
     let q: Q = p;
@@ -44,7 +44,7 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return p;
   }
   // ---- pass-by-ref: helper MUTATES param, caller sees it ----
-  @internal @pure setFields(p: P, na: u256, nb: u8, nc: i64): void {
+  @pure setFields(p: P, na: u256, nb: u8, nc: i64): void {
     p.a = na; p.b = nb; p.c = nc;
   }
   @external @pure refMutate(a: u256, b: u8, c: i64): P {
@@ -53,7 +53,7 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return p;
   }
   // helper that does NOT mutate: builds a NEW struct, returns it; original untouched
-  @internal @pure freshQ(p: Q): Q { return Q(p.x + 1n, p.y + 1n); }
+  @pure freshQ(p: Q): Q { return Q(p.x + 1n, p.y + 1n); }
   @external @pure noMutate(a: u128, b: u128): Q {
     let p: Q = Q(a, b);
     let unused: Q = this.freshQ(p);
@@ -84,7 +84,7 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return u256(p.x) * (1n << 192n) + u256(p.y) * (1n << 128n) + u256(r.x) * (1n << 64n) + u256(r.y);
   }
   // ---- same struct passed to a helper TWICE ----
-  @internal @pure addX(p: Q, k: u128): void { p.x = p.x + k; }
+  @pure addX(p: Q, k: u128): void { p.x = p.x + k; }
   @external @pure twice(a: u128, b: u128): Q {
     let p: Q = Q(a, b);
     this.addX(p, 10n);
@@ -98,7 +98,7 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return p;
   }
   // ---- recursion that takes AND returns a struct (modest depth) ----
-  @internal @pure climb(p: P, n: u256): P {
+  @pure climb(p: P, n: u256): P {
     if (n == 0n) { return p; }
     return this.climb(P(p.a + 1n, u8(p.b + 1n), i64(p.c - 1n), p.d), n - 1n);
   }
@@ -106,14 +106,14 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return this.climb(P(a, b, c, d), n);
   }
   // recursion that MUTATES the param in place at each level (by-ref accumulation)
-  @internal @pure accDown(p: Q, n: u128): void {
+  @pure accDown(p: Q, n: u128): void {
     if (n == 0n) { return; }
     p.x = p.x + n;
     this.accDown(p, n - 1n);
   }
   @external @pure accE(a: u128, n: u128): Q { let p: Q = Q(a, 0n); this.accDown(p, n); return p; }
   // ---- @pure helper mutating a memory struct param (legal in Solidity) ----
-  @internal @pure pureBump(p: P): void { p.a = p.a + 1n; p.b = u8(p.b + 1n); }
+  @pure pureBump(p: P): void { p.a = p.a + 1n; p.b = u8(p.b + 1n); }
   @external @pure pureBumpE(a: u256, b: u8): P { let p: P = P(a, b, 0n, address(0n)); this.pureBump(p); return p; }
   // ---- compound + ++/-- on struct fields through aliases ----
   @external @pure compoundAlias(a: u128): u256 {
@@ -123,8 +123,8 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return u256(p.x) * 1000000n + u256(q.y) * 1000n + u256(z);
   }
   // chain this.outer(this.inner(...)) passing a struct through
-  @internal @pure inner(p: P): P { return P(p.a * 2n, u8(p.b + 1n), i64(p.c + 1n), p.d); }
-  @internal @pure outer(p: P): P { return P(p.a + 1n, u8(p.b * 2n), i64(p.c * 2n), p.d); }
+  @pure inner(p: P): P { return P(p.a * 2n, u8(p.b + 1n), i64(p.c + 1n), p.d); }
+  @pure outer(p: P): P { return P(p.a + 1n, u8(p.b * 2n), i64(p.c * 2n), p.d); }
   @external @pure chainCall(a: u256, b: u8, c: i64, d: address): P {
     return this.outer(this.inner(P(a, b, c, d)));
   }
@@ -136,14 +136,14 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return p.x + p.y;
   }
   // helper reads two struct params (distinct), combine
-  @internal @pure combine(p: Q, r: Q): u256 { return u256(p.x) + u256(r.y); }
+  @pure combine(p: Q, r: Q): u256 { return u256(p.x) + u256(r.y); }
   @external @pure combineE(a: u128, b: u128, c: u128, d: u128): u256 {
     let p: Q = Q(a, b);
     let r: Q = Q(c, d);
     return this.combine(p, r);
   }
   // pass the SAME struct as both args; mutate one path -> both see it (same object)
-  @internal @pure addBoth(p: Q, r: Q): void { p.x = p.x + 1n; r.y = r.y + 1n; }
+  @pure addBoth(p: Q, r: Q): void { p.x = p.x + 1n; r.y = r.y + 1n; }
   @external @pure sameTwice(a: u128, b: u128): Q {
     let p: Q = Q(a, b);
     this.addBoth(p, p);

@@ -39,8 +39,8 @@ class M {
 
   @external setLo(k: u256, i: u256, v: u128): void { this.book[k][i].lo = v; }
   @external setHi(k: u256, i: u256, v: u128): void { this.book[k][i].hi = v; }
-  @view getLo(k: u256, i: u256): u128 { return this.book[k][i].lo; }
-  @view getHi(k: u256, i: u256): u128 { return this.book[k][i].hi; }
+  @external @view getLo(k: u256, i: u256): u128 { return this.book[k][i].lo; }
+  @external @view getHi(k: u256, i: u256): u128 { return this.book[k][i].hi; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

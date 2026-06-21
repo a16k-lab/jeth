@@ -68,9 +68,9 @@ class LayoutA {
   @external add(a: u128, b: u128): void { this.recs.push(Rec(a, b)); }
   @external setA(i: u256, v: u128): void { this.recs[i].a = v; }
   @external setB(i: u256, v: u128): void { this.recs[i].b = v; }
-  @view len(): u256 { return this.recs.length; }
-  @view getA(i: u256): u128 { return this.recs[i].a; }
-  @view getB(i: u256): u128 { return this.recs[i].b; }
+  @external @view len(): u256 { return this.recs.length; }
+  @external @view getA(i: u256): u128 { return this.recs[i].a; }
+  @external @view getB(i: u256): u128 { return this.recs[i].b; }
 }`;
 const A_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -97,10 +97,10 @@ class LayoutB {
   @external setA(i: u256, v: u256): void { this.recs[i].a = v; }
   @external setB(i: u256, v: u256): void { this.recs[i].b = v; }
   @external setC(i: u256, v: u256): void { this.recs[i].c = v; }
-  @view len(): u256 { return this.recs.length; }
-  @view getA(i: u256): u256 { return this.recs[i].a; }
-  @view getB(i: u256): u256 { return this.recs[i].b; }
-  @view getC(i: u256): u256 { return this.recs[i].c; }
+  @external @view len(): u256 { return this.recs.length; }
+  @external @view getA(i: u256): u256 { return this.recs[i].a; }
+  @external @view getB(i: u256): u256 { return this.recs[i].b; }
+  @external @view getC(i: u256): u256 { return this.recs[i].c; }
 }`;
 const B_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -129,10 +129,10 @@ class LayoutC {
   @external add(a: u128, b: u128, c: u8): void { this.recs.push(Rec(a, b, c)); }
   @external setA(i: u256, v: u128): void { this.recs[i].a = v; }
   @external setC(i: u256, v: u8): void { this.recs[i].c = v; }
-  @view len(): u256 { return this.recs.length; }
-  @view getA(i: u256): u128 { return this.recs[i].a; }
-  @view getB(i: u256): u128 { return this.recs[i].b; }
-  @view getC(i: u256): u8 { return this.recs[i].c; }
+  @external @view len(): u256 { return this.recs.length; }
+  @external @view getA(i: u256): u128 { return this.recs[i].a; }
+  @external @view getB(i: u256): u128 { return this.recs[i].b; }
+  @external @view getC(i: u256): u8 { return this.recs[i].c; }
 }`;
 const C_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -160,12 +160,12 @@ class LayoutD {
   @external add(a: bool, b: u8, c: u16, d: u64, e: address): void { this.recs.push(Rec(a, b, c, d, e)); }
   @external setB(i: u256, v: u8): void { this.recs[i].b = v; }
   @external setE(i: u256, v: address): void { this.recs[i].e = v; }
-  @view len(): u256 { return this.recs.length; }
-  @view getA(i: u256): bool { return this.recs[i].a; }
-  @view getB(i: u256): u8 { return this.recs[i].b; }
-  @view getC(i: u256): u16 { return this.recs[i].c; }
-  @view getD(i: u256): u64 { return this.recs[i].d; }
-  @view getE(i: u256): address { return this.recs[i].e; }
+  @external @view len(): u256 { return this.recs.length; }
+  @external @view getA(i: u256): bool { return this.recs[i].a; }
+  @external @view getB(i: u256): u8 { return this.recs[i].b; }
+  @external @view getC(i: u256): u16 { return this.recs[i].c; }
+  @external @view getD(i: u256): u64 { return this.recs[i].d; }
+  @external @view getE(i: u256): address { return this.recs[i].e; }
 }`;
 const D_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

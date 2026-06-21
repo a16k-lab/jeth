@@ -70,9 +70,9 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; e: bytes4; f
     let p: P = this.s;
     return p.a + u256(p.b) + u256(u64(p.c)) + u256(u128(p.f));
   }
-  @view getSa(): u256 { return this.s.a; }
-  @view getSb(): u8 { return this.s.b; }
-  @view getSf(): i128 { return this.s.f; }
+  @external @view getSa(): u256 { return this.s.a; }
+  @external @view getSb(): u8 { return this.s.b; }
+  @external @view getSf(): i128 { return this.s.f; }
   // copy storage struct, push narrow/signed fields to extremes via mutation, return WHOLE
   // (a missing mask on the memory->ABI encode of b:u8 / c:i64 / e:bytes4 would surface here)
   @external @view copyExtreme(): P {
@@ -94,7 +94,7 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; e: bytes4; f
     q.a = q.a + 1000n; q.b = ${'-'}3n;
     return p;
   }
-  @internal bump(i: Inner): void { i.a = i.a + 1n; i.b = i.b - 7n; }
+  bump(i: Inner): void { i.a = i.a + 1n; i.b = i.b - 7n; }
   @external @pure passInner(a: u256, b: i64): Outer {
     let p: Outer = Outer(7n, Inner(a, b), 2n);
     this.bump(p.inner);
@@ -105,7 +105,7 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; e: bytes4; f
   @external setSt(x: string): void { this.st = x; }
   @external @pure echo(x: string): string { let s: string = x; return s; }
   @external @pure echoLit(): string { let s: string = "hello, this is a string literal that exceeds 32 bytes!!"; return s; }
-  @view fromStorageStr(): string { let s: string = this.st; return s; }
+  @external @view fromStorageStr(): string { let s: string = this.st; return s; }
   @external @pure blen(x: bytes): u256 { let b: bytes = x; return b.length; }
   @external @pure byteAt(x: bytes, i: u256): u8 { let b: bytes = x; return u8(b[i]); }
   @external @pure aliasLen(x: bytes): u256 { let s: bytes = x; let t: bytes = s; return t.length; }
@@ -125,25 +125,25 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; e: bytes4; f
   @external @pure bytesArr(p: bytes8, q: bytes8): Arr<bytes8, 4> { let a: Arr<bytes8, 4> = [p, q, p, q]; return a; }
   @external @pure narrowArr(p: u8, q: u8): Arr<u8, 4> { let a: Arr<u8, 4> = [p, q, 255n, 0n]; a[1n] = 200n; a[0n] += 50n; return a; }
   // copy from a storage fixed array -> mutate the COPY -> storage stays intact
-  @view fromG(): Arr<u256, 3> { let a: Arr<u256, 3> = this.g; a[0n] = a[0n] + 1000n; a[2n]++; return a; }
-  @view getG(i: u256): u256 { return this.g[i]; }
+  @external @view fromG(): Arr<u256, 3> { let a: Arr<u256, 3> = this.g; a[0n] = a[0n] + 1000n; a[2n]++; return a; }
+  @external @view getG(i: u256): u256 { return this.g[i]; }
   @external setG(i: u256, v: u256): void { this.g[i] = v; }
-  @view fromG5(): Arr<i64, 5> { let a: Arr<i64, 5> = this.g5; a[0n]++; return a; }
+  @external @view fromG5(): Arr<i64, 5> { let a: Arr<i64, 5> = this.g5; a[0n]++; return a; }
   @external setG5(i: u256, v: i64): void { this.g5[i] = v; }
-  @view fromGb(): Arr<bytes8, 4> { let a: Arr<bytes8, 4> = this.gb; return a; }
+  @external @view fromGb(): Arr<bytes8, 4> { let a: Arr<bytes8, 4> = this.gb; return a; }
   @external setGb(i: u256, v: bytes8): void { this.gb[i] = v; }
 
   // ---- (5) G6 composite ABI ----
   @external pushComp(): void { this.comp.push(); }
   @external popComp(): void { this.comp.pop(); }
   @external setComp(i: u256, j: u256, v: u256): void { this.comp[i][j] = v; }
-  @view allComp(): Arr<u256, 2>[] { return this.comp; }
+  @external @view allComp(): Arr<u256, 2>[] { return this.comp; }
   @external @pure echoComp(x: Arr<u256, 2>[]): Arr<u256, 2>[] { return x; }
   @external pushNest(i: u256, v: u256): void { this.nest[i].push(v); }
   @external setNest(i: u256, j: u256, v: u256): void { this.nest[i][j] = v; }
   @external popNest(i: u256): void { this.nest[i].pop(); }
-  @view getNest(i: u256, j: u256): u256 { return this.nest[i][j]; }
-  @view lenNest(i: u256): u256 { return this.nest[i].length; }
+  @external @view getNest(i: u256, j: u256): u256 { return this.nest[i][j]; }
+  @external @view lenNest(i: u256): u256 { return this.nest[i].length; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

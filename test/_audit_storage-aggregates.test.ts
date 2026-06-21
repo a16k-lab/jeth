@@ -195,8 +195,8 @@ describe('storage-agg: uint64[] packed push/pop/set, OOB Panic 0x32', () => {
   @external push(v: u64): void { this.a.push(v); }
   @external pop(): void { this.a.pop(); }
   @external set(i: u256, v: u64): void { this.a[i] = v; }
-  @view get(i: u256): u64 { return this.a[i]; }
-  @view len(): u256 { return this.a.length; }
+  @external @view get(i: u256): u64 { return this.a[i]; }
+  @external @view len(): u256 { return this.a.length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -292,8 +292,8 @@ describe('storage-agg: bytes/string short/long transitions, dirty len, OOB', () 
   @state post: u256;
   @external setS(v: string): void { this.s = v; }
   @external setBs(v: bytes): void { this.bs = v; }
-  @view atBs(i: u256): bytes1 { return this.bs[i]; }
-  @view lenBs(): u256 { return this.bs.length; }
+  @external @view atBs(i: u256): bytes1 { return this.bs[i]; }
+  @external @view lenBs(): u256 { return this.bs.length; }
   @external setPre(v: u256): void { this.pre = v; }
   @external setPost(v: u256): void { this.post = v; }
 }`;
@@ -447,7 +447,7 @@ describe('storage-agg: mapping<u256,u256[]> per-key push/pop/set OOB', () => {
   @external push(k: u256, v: u256): void { this.m[k].push(v); }
   @external pop(k: u256): void { this.m[k].pop(); }
   @external set(k: u256, i: u256, v: u256): void { this.m[k][i] = v; }
-  @view len(k: u256): u256 { return this.m[k].length; }
+  @external @view len(k: u256): u256 { return this.m[k].length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -582,7 +582,7 @@ describe('storage-agg: mapping<address,bytes> short/long, delete value', () => {
   @state mb: mapping<address, bytes>;
   @external setB(k: address, v: bytes): void { this.mb[k] = v; }
   @external delB(k: address): void { delete this.mb[k]; }
-  @view lenB(k: address): u256 { return this.mb[k].length; }
+  @external @view lenB(k: address): u256 { return this.mb[k].length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -795,7 +795,7 @@ describe('storage-agg: bytes32[] whole-slot push to slot boundary', () => {
   @state a: bytes32[];
   @external push(v: bytes32): void { this.a.push(v); }
   @external pop(): void { this.a.pop(); }
-  @view len(): u256 { return this.a.length; }
+  @external @view len(): u256 { return this.a.length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -830,7 +830,7 @@ describe('storage-agg: i128[] packed 2/slot negatives', () => {
   @state a: i128[];
   @external push(v: i128): void { this.a.push(v); }
   @external set(i: u256, v: i128): void { this.a[i] = v; }
-  @view get(i: u256): i128 { return this.a[i]; }
+  @external @view get(i: u256): i128 { return this.a[i]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -916,7 +916,7 @@ describe('storage-agg: D[] {u256 n; string s} push/pop frees long-data', () => {
   @state recs: D[];   // slot 0; each D = 2 slots (n, s-header)
   @external pushV(n: u256, s: string): void { this.recs.push(D(n, s)); }
   @external pop(): void { this.recs.pop(); }
-  @view getS(i: u256): string { return this.recs[i].s; }
+  @external @view getS(i: u256): string { return this.recs[i].s; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1004,7 +1004,7 @@ describe('storage-agg: return packed struct from storage (ABI re-expand)', () =>
   @external setA(v: i64): void { this.s.a = v; }
   @external setE(v: address): void { this.s.e = v; }
   @external setAll(a: i64, b: u32, c: bytes4, d: bool, e: address): void { this.s = S(a, b, c, d, e); }
-  @view get(): S { return this.s; }
+  @external @view get(): S { return this.s; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1162,7 +1162,7 @@ describe('storage-agg: bytes[] push/pop frees element headers + long-data', () =
   @state a: bytes[];
   @external push(v: bytes): void { this.a.push(v); }
   @external pop(): void { this.a.pop(); }
-  @view at(i: u256): bytes { return this.a[i]; }
+  @external @view at(i: u256): bytes { return this.a[i]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1196,7 +1196,7 @@ describe('storage-agg: bytes 31/32-byte short/long flag boundary', () => {
   const JETH = `@contract class C {
   @state bs: bytes;   // slot 0
   @external setBs(v: bytes): void { this.bs = v; }
-  @view len(): u256 { return this.bs.length; }
+  @external @view len(): u256 { return this.bs.length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -66,8 +66,8 @@ const eqLogs = (a: LogEntry[], b: LogEntry[]): boolean =>
 const JETH_MANY = `enum Col { Red, Green, Blue }
 type Wei = Brand<u256>;
 @contract class C {
-  @hidden idg<T>(a: T): T { return a; }
-  @hidden eqg<T>(a: T, b: T): bool { return a == b; }
+  idg<T>(a: T): T { return a; }
+  eqg<T>(a: T, b: T): bool { return a == b; }
   // u256 reached two ways (explicit + inferred): must be ONE specialization, same answer.
   @external @pure u256Explicit(x: u256): u256 { return this.idg<u256>(x); }
   @external @pure u256Inferred(x: u256): u256 { return this.idg(x); }
@@ -175,8 +175,8 @@ describe('F6-adv 1: many-types-in-one-contract dedup is byte-identical to solc',
 describe('F6-adv 2: mangled-name collision hunting (no silent overwrite)', () => {
   it('(baseline) user fn literally named like a 1-arg specialization -> JETH296', () => {
     const src = `@contract class C {
-      @hidden idf<T>(a: T): T { return a; }
-      @hidden idf$uint256(a: u256): u256 { return a; }
+      idf<T>(a: T): T { return a; }
+      idf$uint256(a: u256): u256 { return a; }
       @external g(x: u256): u256 { return this.idf(x) + this.idf$uint256(x); }
     }`;
     expect(errCodes(src)).toContain('JETH296');
@@ -186,8 +186,8 @@ describe('F6-adv 2: mangled-name collision hunting (no silent overwrite)', () =>
     // f<T,U> at (u256,address) mangles to f$uint256$address. A user fn of that exact name must not
     // be silently shadowed/overwritten.
     const src = `@contract class C {
-      @hidden f<T, U>(a: T, b: U): T { return a; }
-      @hidden f$uint256$address(a: u256, b: address): u256 { return a; }
+      f<T, U>(a: T, b: U): T { return a; }
+      f$uint256$address(a: u256, b: address): u256 { return a; }
       @external g(a: u256, b: address): u256 { return this.f(a, b) + this.f$uint256$address(a, b); }
     }`;
     const o = compileOutcome(src);
@@ -200,8 +200,8 @@ describe('F6-adv 2: mangled-name collision hunting (no silent overwrite)', () =>
     // idf<Wei> mangles to idf$b_Wei_uint256. A user function of that exact name collides.
     const src = `type Wei = Brand<u256>;
     @contract class C {
-      @hidden idf<T>(a: T): T { return a; }
-      @hidden idf$b_Wei_uint256(a: u256): u256 { return a; }
+      idf<T>(a: T): T { return a; }
+      idf$b_Wei_uint256(a: u256): u256 { return a; }
       @external g(a: Wei): Wei { return this.idf(a); }
       @external h(a: u256): u256 { return this.idf$b_Wei_uint256(a); }
     }`;
@@ -215,8 +215,8 @@ describe('F6-adv 2: mangled-name collision hunting (no silent overwrite)', () =>
     // the exact name of the SECOND generic. The collision check inspects genericsByName, so this is
     // caught: a clean JETH296, never a silent overwrite / wrong call (which would be a miscompile).
     const collidingNames = `@contract class C {
-      @hidden a<T>(x: T): T { return x; }
-      @hidden a$uint256<U>(x: U): U { return x; }
+      a<T>(x: T): T { return x; }
+      a$uint256<U>(x: U): U { return x; }
       @external g(x: u256): u256 { return this.a(x); }
       @external h(x: u8): u8 { return this.a$uint256(x); }
     }`;
@@ -230,9 +230,9 @@ describe('F6-adv 2: mangled-name collision hunting (no silent overwrite)', () =>
     // `g<T>` calls `f<u256>` (mangles to f$uint256), and a user fn `f$uint256` exists with a
     // DIFFERENT body (+99). If the cache silently clobbered, `g` would call the wrong body. JETH296.
     const src = `@contract class C {
-      @hidden f<T>(x: T): T { return x; }
-      @hidden g<T>(x: T): T { return this.f<u256>(x); }
-      @hidden f$uint256(x: u256): u256 { return x + 99n; }
+      f<T>(x: T): T { return x; }
+      g<T>(x: T): T { return this.f<u256>(x); }
+      f$uint256(x: u256): u256 { return x + 99n; }
       @external @pure e(x: u256): u256 { return this.g<u256>(x) + this.f$uint256(x); }
     }`;
     const o = compileOutcome(src);
@@ -245,7 +245,7 @@ describe('F6-adv 2: mangled-name collision hunting (no silent overwrite)', () =>
     // specialization is `idf$uint256`. The `b_` prefix keeps them distinct - they must NOT collide.
     const src = `type X_uint256 = Brand<u256>;
     @contract class C {
-      @hidden idf<T>(a: T): T { return a; }
+      idf<T>(a: T): T { return a; }
       @external @pure w(a: X_uint256): X_uint256 { return this.idf(a); }
       @external @pure u(a: u256): u256 { return this.idf(a); }
     }`;
@@ -259,8 +259,8 @@ describe('F6-adv 2: mangled-name collision hunting (no silent overwrite)', () =>
     // Generic `m` at u256 -> m$uint256 (returns a*2). Generic `m2` at u256 -> m2$uint256 (returns a+1).
     // Confirm BOTH bodies are emitted and behaviorally distinct (no dedup-cache key clobber).
     const src = `@contract class C {
-      @hidden m<T>(a: T): T { return a + a; }
-      @hidden m2<T>(a: T): T { return a + 1n; }
+      m<T>(a: T): T { return a + a; }
+      m2<T>(a: T): T { return a + 1n; }
       @external g(x: u256): u256 { return this.m(x); }
       @external h(x: u256): u256 { return this.m2(x); }
     }`;
@@ -273,8 +273,8 @@ describe('F6-adv 2: mangled-name collision hunting (no silent overwrite)', () =>
 // behavioral proof for the colliding-generic-names case, if it compiled, run it against solc.
 describe('F6-adv 2b: two distinct generics at u256 stay behaviorally distinct vs solc', () => {
   const J = `@contract class C {
-    @hidden dbl<T>(a: T): T { return a + a; }
-    @hidden inc<T>(a: T): T { return a + 1n; }
+    dbl<T>(a: T): T { return a + a; }
+    inc<T>(a: T): T { return a + 1n; }
     @external @pure g(x: u256): u256 { return this.dbl(x); }
     @external @pure h(x: u256): u256 { return this.inc(x); }
   }`;
@@ -313,12 +313,12 @@ contract C {
 describe('F6-adv 3: cross-type recursion terminates within a wall-clock budget (no hang/OOM)', () => {
   it('a 6-level descending-width chain compiles and terminates fast', () => {
     const src = `@contract class C {
-      @hidden d8<T>(a: T): u8 { return 8n; }
-      @hidden d16<T>(a: T): u8 { let x: u8 = 0n; return this.d8<u8>(x); }
-      @hidden d32<T>(a: T): u8 { let x: u16 = 0n; return this.d16<u16>(x); }
-      @hidden d64<T>(a: T): u8 { let x: u32 = 0n; return this.d32<u32>(x); }
-      @hidden d128<T>(a: T): u8 { let x: u64 = 0n; return this.d64<u64>(x); }
-      @hidden d256<T>(a: T): u8 { let x: u128 = 0n; return this.d128<u128>(x); }
+      d8<T>(a: T): u8 { return 8n; }
+      d16<T>(a: T): u8 { let x: u8 = 0n; return this.d8<u8>(x); }
+      d32<T>(a: T): u8 { let x: u16 = 0n; return this.d16<u16>(x); }
+      d64<T>(a: T): u8 { let x: u32 = 0n; return this.d32<u32>(x); }
+      d128<T>(a: T): u8 { let x: u64 = 0n; return this.d64<u64>(x); }
+      d256<T>(a: T): u8 { let x: u128 = 0n; return this.d128<u128>(x); }
       @external @pure go(a: u256): u8 { return this.d256<u256>(a); }
     }`;
     const t0 = Date.now();
@@ -333,8 +333,8 @@ describe('F6-adv 3: cross-type recursion terminates within a wall-clock budget (
     // f<T> recurses at T (dedup closes it) and ALSO spawns g<u8> once per call. The cache resolves
     // the in-progress f<T> self-call without re-queuing, so this cannot diverge: exactly 2 fns.
     const src = `@contract class C {
-      @hidden f<T>(a: T, n: u256): u256 { return n == 0n ? 0n : 1n + this.f<T>(a, n - 1n) + this.g<u8>(0n); }
-      @hidden g<U>(a: U): u256 { return 0n; }
+      f<T>(a: T, n: u256): u256 { return n == 0n ? 0n : 1n + this.f<T>(a, n - 1n) + this.g<u8>(0n); }
+      g<U>(a: U): u256 { return 0n; }
       @external @pure go(a: u256, n: u256): u256 { return this.f<u256>(a, n); }
     }`;
     const t0 = Date.now();
@@ -352,7 +352,7 @@ describe('F6-adv 3: cross-type recursion terminates within a wall-clock budget (
     const params = Array.from({ length: N }, (_, i) => `b${i}: B${i}`).join(', ');
     const calls = Array.from({ length: N }, (_, i) => `u256(this.idf<B${i}>(b${i}))`).join(' + ');
     const src = `${brands}
-    @contract class C { @hidden idf<T>(a: T): T { return a; }
+    @contract class C { idf<T>(a: T): T { return a; }
       @external @pure go(${params}): u256 { return ${calls}; } }`;
     const t0 = Date.now();
     const o = compileOutcome(src);
@@ -366,8 +366,8 @@ describe('F6-adv 3: cross-type recursion terminates within a wall-clock budget (
   it('mutual cross-type recursion (a<u256> -> b<u8> -> a<u256>) terminates via the dedup cache', () => {
     // a and b call each other but always at the SAME fixed types, so the dedup cache closes the loop.
     const src = `@contract class C {
-      @hidden pa<T>(a: T, n: u256): u256 { return n == 0n ? 0n : 1n + this.pb<u8>(0n, n - 1n); }
-      @hidden pb<U>(b: U, n: u256): u256 { return n == 0n ? 0n : 1n + this.pa<u256>(0n, n - 1n); }
+      pa<T>(a: T, n: u256): u256 { return n == 0n ? 0n : 1n + this.pb<u8>(0n, n - 1n); }
+      pb<U>(b: U, n: u256): u256 { return n == 0n ? 0n : 1n + this.pa<u256>(0n, n - 1n); }
       @external @pure go(n: u256): u256 { return this.pa<u256>(0n, n); }
     }`;
     const t0 = Date.now();
@@ -387,7 +387,7 @@ describe('F6-adv 3: cross-type recursion terminates within a wall-clock budget (
     const calls = widths.map((w) => `this.idf<bytes${w}>(b${w})`).join(' == ');
     const params = widths.map((w) => `b${w}: bytes${w}`).join(', ');
     const src = `@contract class C {
-      @hidden idf<T>(a: T): bool { return true; }
+      idf<T>(a: T): bool { return true; }
       @external @pure go(${params}): bool { return ${calls}; }
     }`;
     const t0 = Date.now();
@@ -407,9 +407,9 @@ describe('F6-adv 3: cross-type recursion terminates within a wall-clock budget (
 // recursion between two generics at fixed types.
 // =====================================================================================
 const JETH_REC = `@contract class C {
-  @hidden sumTo<T>(n: T, acc: T): T { return n == 0n ? acc : this.sumTo<T>(n - 1n, acc + n); }
-  @hidden isEvenG<T>(n: T): bool { return n == 0n ? true : this.isOddG<T>(n - 1n); }
-  @hidden isOddG<T>(n: T): bool { return n == 0n ? false : this.isEvenG<T>(n - 1n); }
+  sumTo<T>(n: T, acc: T): T { return n == 0n ? acc : this.sumTo<T>(n - 1n, acc + n); }
+  isEvenG<T>(n: T): bool { return n == 0n ? true : this.isOddG<T>(n - 1n); }
+  isOddG<T>(n: T): bool { return n == 0n ? false : this.isEvenG<T>(n - 1n); }
   @external @pure sumU(n: u256): u256 { return this.sumTo<u256>(n, 0n); }
   @external @pure sumU32(n: u32): u32 { return this.sumTo<u32>(n, 0n); }
   @external @pure evenU(n: u256): bool { return this.isEvenG<u256>(n); }
@@ -466,8 +466,8 @@ describe('F6-adv 4: same-type recursion and mutual generic recursion match solc'
 const JETH_INFER = `enum Col { Red, Green, Blue }
 type Wei = Brand<u256>;
 @contract class C {
-  @hidden pick<T>(c: bool, a: T, b: T): T { return c ? a : b; }
-  @hidden pair<T, U>(a: T, b: U): T { return a; }
+  pick<T>(c: bool, a: T, b: T): T { return c ? a : b; }
+  pair<T, U>(a: T, b: U): T { return a; }
   @external @pure pickE(c: bool, a: Col, b: Col): Col { return this.pick(c, a, b); }
   @external @pure pickW(c: bool, a: Wei, b: Wei): Wei { return this.pick(c, a, b); }
   @external @pure pickB(c: bool, a: bytes8, b: bytes8): bytes8 { return this.pick(c, a, b); }
@@ -518,24 +518,24 @@ describe('F6-adv 5: inference from enum/brand/bytesN/bool and multi-param matche
 
 describe('F6-adv 5b: inference rejection diagnostics', () => {
   it('JETH293: same T inferred as two different types (conflict)', () => {
-    const src = `@contract class C { @hidden f<T>(a: T, b: T): T { return a; } @external g(a:u256,b:u8):u256 { return this.f(a, b); } }`;
+    const src = `@contract class C { f<T>(a: T, b: T): T { return a; } @external g(a:u256,b:u8):u256 { return this.f(a, b); } }`;
     expect(errCodes(src)).toContain('JETH293');
   });
   it('JETH292: arity mismatch - one explicit type arg for a two-type-param generic', () => {
-    const src = `@contract class C { @hidden f<T, U>(a: T, b: U): T { return a; } @external g(a:u256,b:address):u256 { return this.f<u256>(a, b); } }`;
+    const src = `@contract class C { f<T, U>(a: T, b: U): T { return a; } @external g(a:u256,b:address):u256 { return this.f<u256>(a, b); } }`;
     expect(errCodes(src)).toContain('JETH292');
   });
   it('JETH292: more explicit type args than type params', () => {
-    const src = `@contract class C { @hidden f<T>(a: T): T { return a; } @external g(a:u256):u256 { return this.f<u256, address>(a); } }`;
+    const src = `@contract class C { f<T>(a: T): T { return a; } @external g(a:u256):u256 { return this.f<u256, address>(a); } }`;
     expect(errCodes(src)).toContain('JETH292');
   });
   it('JETH292: a type param appearing only in the return type cannot be inferred', () => {
-    const src = `@contract class C { @hidden f<T>(a: u256): T { return T(a); } @external g(x:u256):u256 { return u256(this.f(x)); } }`;
+    const src = `@contract class C { f<T>(a: u256): T { return T(a); } @external g(x:u256):u256 { return u256(this.f(x)); } }`;
     expect(errCodes(src)).toContain('JETH292');
   });
   it('explicit type arg conflicting with a non-coercible arg type is rejected (no crash)', () => {
     // f<bool>(x) where x is u256: bool param cannot accept a u256 argument -> a clean diagnostic.
-    const src = `@contract class C { @hidden f<T>(a: T): T { return a; } @external g(x:u256):u256 { return u256(this.f<bool>(x)); } }`;
+    const src = `@contract class C { f<T>(a: T): T { return a; } @external g(x:u256):u256 { return u256(this.f<bool>(x)); } }`;
     const o = compileOutcome(src);
     expect(o.crash, `must not crash: ${o.crash}`).toBeUndefined();
     expect(o.ok, 'a u256 argument must not bind to a bool-specialized param').toBe(false);
@@ -553,7 +553,7 @@ describe('F6-adv 6: per-instantiation error isolation (no crash, valid sibling u
     // `a + b` is invalid at bool (no arithmetic on bool) but valid at u256. The bool
     // instantiation surfaces JETH082; the u256 instantiation is clean and independent.
     const bad = `@contract class C {
-      @hidden add<T>(a: T, b: T): T { return a + b; }
+      add<T>(a: T, b: T): T { return a + b; }
       @external @pure okU(a: u256, b: u256): u256 { return this.add(a, b); }
       @external @pure badB(a: bool, b: bool): bool { return this.add(a, b); }
     }`;
@@ -570,7 +570,7 @@ describe('F6-adv 6: per-instantiation error isolation (no crash, valid sibling u
   it('bool `>` is rejected (JETH082) identically for generic and non-generic', () => {
     const nonGen = `@contract class C { @external @pure f(a: bool, b: bool): bool { return a > b; } }`;
     const gen = `@contract class C {
-      @hidden g<T>(a: T, b: T): bool { return a > b; }
+      g<T>(a: T, b: T): bool { return a > b; }
       @external @pure f(a: bool, b: bool): bool { return this.g(a, b); }
     }`;
     expect(errCodes(nonGen)).toContain('JETH082');
@@ -578,12 +578,12 @@ describe('F6-adv 6: per-instantiation error isolation (no crash, valid sibling u
   });
   it('`a + b` invalid at address, valid sibling at u256 compiles in isolation', () => {
     const okOnly = `@contract class C {
-      @hidden add<T>(a: T, b: T): T { return a + b; }
+      add<T>(a: T, b: T): T { return a + b; }
       @external @pure ok(a: u256, b: u256): u256 { return this.add(a, b); }
     }`;
     expect(errCodes(okOnly)).toEqual([]); // the valid instantiation alone is clean
     const withBad = `@contract class C {
-      @hidden add<T>(a: T, b: T): T { return a + b; }
+      add<T>(a: T, b: T): T { return a + b; }
       @external @pure ok(a: u256, b: u256): u256 { return this.add(a, b); }
       @external @pure bad(a: address, b: address): address { return this.add(a, b); }
     }`;
@@ -596,8 +596,8 @@ describe('F6-adv 6: per-instantiation error isolation (no crash, valid sibling u
     // The contract only ever instantiates `add` at u256 (valid). An unused-at-bad-type generic
     // existing in the same contract must not poison the good one.
     const J = `@contract class C {
-      @hidden add<T>(a: T, b: T): T { return a + b; }
-      @hidden ordr<T>(a: T, b: T): bool { return a > b; }
+      add<T>(a: T, b: T): T { return a + b; }
+      ordr<T>(a: T, b: T): bool { return a > b; }
       @external @pure s(a: u256, b: u256): u256 { return this.add(a, b); }
       @external @pure o(a: u256, b: u256): bool { return this.ordr(a, b); }
     }`;
@@ -631,7 +631,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
   it('@view calling a generic that READS state is allowed', () => {
     const src = `@contract class C {
       @state v: u256;
-      @hidden rd<T>(k: T): u256 { return this.v; }
+      rd<T>(k: T): u256 { return this.v; }
       @external @view get(x: u256): u256 { return this.rd<u256>(x); }
     }`;
     expect(errCodes(src)).toEqual([]);
@@ -639,7 +639,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
   it('@pure calling a generic that WRITES state is REJECTED (JETH055)', () => {
     const src = `@contract class C {
       @state v: u256;
-      @hidden wr<T>(k: T): void { this.v = u256(0n); }
+      wr<T>(k: T): void { this.v = u256(0n); }
       @external @pure bad(x: u256): void { this.wr<u256>(x); }
     }`;
     expect(errCodes(src)).toContain('JETH055');
@@ -647,7 +647,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
   it('@view calling a generic that WRITES state is REJECTED (JETH054)', () => {
     const src = `@contract class C {
       @state v: u256;
-      @hidden wr<T>(k: T): void { this.v = u256(0n); }
+      wr<T>(k: T): void { this.v = u256(0n); }
       @external @view bad(x: u256): void { this.wr<u256>(x); }
     }`;
     expect(errCodes(src)).toContain('JETH054');
@@ -655,7 +655,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
   it('@view calling a generic that transitively EMITS an event is REJECTED (JETH054)', () => {
     const src = `@contract class C {
       @event Ping(x: u256);
-      @hidden ping<T>(k: T): void { emit(Ping(u256(0n))); }
+      ping<T>(k: T): void { emit(Ping(u256(0n))); }
       @external @view bad(x: u256): void { this.ping<u256>(x); }
     }`;
     expect(errCodes(src)).toContain('JETH054');
@@ -663,7 +663,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
   it('@pure calling a generic that READS state is REJECTED (JETH055)', () => {
     const src = `@contract class C {
       @state v: u256;
-      @hidden rd<T>(k: T): u256 { return this.v; }
+      rd<T>(k: T): u256 { return this.v; }
       @external @pure bad(x: u256): u256 { return this.rd<u256>(x); }
     }`;
     expect(errCodes(src)).toContain('JETH055');
@@ -674,8 +674,8 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
     // instantiation (different body branch) is fine. Here `idg` reads nothing, used pure + view.
     const src = `@contract class C {
       @state v: u256;
-      @hidden idg<T>(a: T): T { return a; }
-      @hidden rd<T>(k: T): u256 { return this.v; }
+      idg<T>(a: T): T { return a; }
+      rd<T>(k: T): u256 { return this.v; }
       @external @pure p(x: u256): u256 { return this.idg<u256>(x); }
       @external @view w(x: u256): u256 { return this.idg<u256>(x) + this.rd<u256>(x); }
     }`;
@@ -684,8 +684,8 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
   it('ABI mutability of the wrappers matches solc (pure stays pure, view stays view)', async () => {
     const J = `@contract class C {
       @state v: u256;
-      @hidden idg<T>(a: T): T { return a; }
-      @hidden rd<T>(k: T): u256 { return this.v; }
+      idg<T>(a: T): T { return a; }
+      rd<T>(k: T): u256 { return this.v; }
       @external @pure p(x: u256): u256 { return this.idg<u256>(x); }
       @external @view w(x: u256): u256 { return this.rd<u256>(x); }
     }`;
@@ -719,8 +719,8 @@ const JETH_BYTE = `@struct class Pair { a: u256; b: u256; }
 @contract class C {
   @state s0: u256;
   @state s1: u256;
-  @hidden maxg<T>(a: T, b: T): T { return a > b ? a : b; }
-  @hidden ming<T>(a: T, b: T): T { return a < b ? a : b; }
+  maxg<T>(a: T, b: T): T { return a > b ? a : b; }
+  ming<T>(a: T, b: T): T { return a < b ? a : b; }
   @external setBoth(x: u256, y: u256): void { this.s0 = this.maxg<u256>(x, y); this.s1 = this.ming<u256>(x, y); }
   @external @pure spread(x: u256, y: u256): Pair { return Pair(this.maxg<u256>(x, y), this.ming<u256>(x, y)); }
   @external @pure two(x: u256, y: u256): [u256, u256] { return [this.maxg<u256>(x, y), this.ming<u256>(x, y)]; }
@@ -771,10 +771,10 @@ const JETH_MIX = `enum Op { Add, Sub, Mul }
 type Tok = Brand<u256>;
 @contract class C {
   @event Used(amount: u256);
-  @hidden clampg<T>(v: T, lo: T = 0n, hi: T = 100n): T { return v < lo ? lo : (v > hi ? hi : v); }
-  @hidden idg<T>(a: T): T { return a; }
-  @hidden plain(a: u256): u256 { return this.idg<u256>(a) + 1n; }
-  @hidden viaGen<T>(a: T): T { return this.idg<T>(a); }
+  clampg<T>(v: T, lo: T = 0n, hi: T = 100n): T { return v < lo ? lo : (v > hi ? hi : v); }
+  idg<T>(a: T): T { return a; }
+  plain(a: u256): u256 { return this.idg<u256>(a) + 1n; }
+  viaGen<T>(a: T): T { return this.idg<T>(a); }
   // generic inside an F5 switch arm
   @external @pure dispatch(op: Op, a: u256, b: u256): u256 {
     switch (op) {
@@ -796,8 +796,8 @@ type Tok = Brand<u256>;
   @external @pure tokId(t: Tok): Tok { return this.viaGen<Tok>(t); }
   @external @pure plus1(a: u256): u256 { return this.plain(a); }
   // generic that EMITS via a non-generic (effect propagation through the wrapper)
-  @hidden logIt(a: u256): void { emit(Used(a)); }
-  @hidden gLog<T>(a: T): void { this.logIt(u256(0n)); }
+  logIt(a: u256): void { emit(Used(a)); }
+  gLog<T>(a: T): void { this.logIt(u256(0n)); }
   @external doLog(a: u256): void { this.gLog<u256>(a); }
 }`;
 const SOL_MIX = `// SPDX-License-Identifier: MIT
@@ -867,25 +867,25 @@ describe('F6-adv 10: soundness-rejection diagnostics (capture code, no crash)', 
     ['JETH290', 'external generic',
       '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
     ['JETH290', 'public generic',
-      '@contract class C { @public f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
+      '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
     ['JETH290', '@nonReentrant generic',
       '@contract class C { @nonReentrant f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
     ['JETH291', 'array type arg f<u256[]>',
-      '@contract class C { @hidden f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<u256[]>(x); } }'],
+      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<u256[]>(x); } }'],
     ['JETH291', 'bytes type arg',
-      '@contract class C { @hidden f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<bytes>(x); } }'],
+      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<bytes>(x); } }'],
     ['JETH291', 'string type arg',
-      '@contract class C { @hidden f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<string>(x); } }'],
+      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<string>(x); } }'],
     ['JETH292', 'infer-from-return-only',
-      '@contract class C { @hidden f<T>(a: u256): T { return T(a); } @external g(x:u256):u256 { return u256(this.f(x)); } }'],
+      '@contract class C { f<T>(a: u256): T { return T(a); } @external g(x:u256):u256 { return u256(this.f(x)); } }'],
     ['JETH293', 'inference conflict',
-      '@contract class C { @hidden f<T>(a: T, b: T): T { return a; } @external g(a:u256,b:u8):u256 { return this.f(a, b); } }'],
+      '@contract class C { f<T>(a: T, b: T): T { return a; } @external g(a:u256,b:u8):u256 { return this.f(a, b); } }'],
     ['JETH294', 'type param shadows a primitive (u256)',
-      '@contract class C { @hidden f<u256>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
+      '@contract class C { f<u256>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
     ['JETH294', 'duplicate type param <T, T>',
-      '@contract class C { @hidden f<T, T>(a: T, b: T): T { return a; } @external g(a:u256,b:u256):u256 { return this.f(a, b); } }'],
+      '@contract class C { f<T, T>(a: T, b: T): T { return a; } @external g(a:u256,b:u256):u256 { return this.f(a, b); } }'],
     ['JETH296', 'user fn collides with specialization name',
-      '@contract class C { @hidden idf<T>(a: T): T { return a; } @hidden idf$uint256(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.idf(x) + this.idf$uint256(x); } }'],
+      '@contract class C { idf<T>(a: T): T { return a; } idf$uint256(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.idf(x) + this.idf$uint256(x); } }'],
   ];
   for (const [code, label, src] of cases) {
     it(`${code}: ${label}`, () => {
@@ -897,14 +897,14 @@ describe('F6-adv 10: soundness-rejection diagnostics (capture code, no crash)', 
 
   it('a struct type argument is rejected (no crash)', () => {
     const src = `@struct class P { x: u256; y: u256; }
-    @contract class C { @hidden f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<P>(x); } }`;
+    @contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<P>(x); } }`;
     const o = compileOutcome(src);
     expect(o.crash, `crashed: ${o.crash}`).toBeUndefined();
     expect(o.codes).toContain('JETH291');
   });
 
   it('a mapping type argument is rejected (no crash)', () => {
-    const src = `@contract class C { @hidden f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<mapping<u256, u256>>(x); } }`;
+    const src = `@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<mapping<u256, u256>>(x); } }`;
     const o = compileOutcome(src);
     expect(o.crash, `crashed: ${o.crash}`).toBeUndefined();
     // either JETH291 (value-type gate) or a parse/type diagnostic - any clean error, no crash
@@ -914,7 +914,7 @@ describe('F6-adv 10: soundness-rejection diagnostics (capture code, no crash)', 
 
   it('a type param that shadows an existing enum is rejected (JETH294)', () => {
     const src = `enum Col { Red, Green }
-    @contract class C { @hidden f<Col>(a: Col): Col { return a; } @external g(x:u8):u8 { return u8(this.f(Col(x))); } }`;
+    @contract class C { f<Col>(a: Col): Col { return a; } @external g(x:u8):u8 { return u8(this.f(Col(x))); } }`;
     const o = compileOutcome(src);
     expect(o.crash, `crashed: ${o.crash}`).toBeUndefined();
     expect(o.codes).toContain('JETH294');
@@ -923,14 +923,14 @@ describe('F6-adv 10: soundness-rejection diagnostics (capture code, no crash)', 
   it('an UNUSED type param (not inferable, no explicit arg) is rejected (JETH292), not silently dropped', () => {
     // T never appears in a bare-identifier param, so it cannot be inferred and there is no explicit
     // type arg -> JETH292. (An unused-but-explicitly-supplied param compiles; see next test.)
-    const src = `@contract class C { @hidden f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f(x); } }`;
+    const src = `@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f(x); } }`;
     const o = compileOutcome(src);
     expect(o.crash, `crashed: ${o.crash}`).toBeUndefined();
     expect(o.codes).toContain('JETH292');
   });
 
   it('an unused type param WITH an explicit arg compiles (the type param is simply unobservable)', () => {
-    const src = `@contract class C { @hidden f<T>(a: u256): u256 { return a; } @external @pure g(x:u256):u256 { return this.f<address>(x); } }`;
+    const src = `@contract class C { f<T>(a: u256): u256 { return a; } @external @pure g(x:u256):u256 { return this.f<address>(x); } }`;
     const o = compileOutcome(src);
     expect(o.crash, `crashed: ${o.crash}`).toBeUndefined();
     expect(o.ok, `expected compile, got [${o.codes}]`).toBe(true);

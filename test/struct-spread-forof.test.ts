@@ -67,7 +67,7 @@ describe('F2 struct spread / object literal', () => {
     @external toggle(): void { this.p = { ...this.p, flag: !this.p.flag }; }
     @external @pure mk(x: u256, y: u256): P { return { x: x, y: y, flag: true }; }
     @external @pure withY(p: P, ny: u256): P { return { ...p, y: ny }; }
-    @view get(): P { return this.p; }
+    @external @view get(): P { return this.p; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

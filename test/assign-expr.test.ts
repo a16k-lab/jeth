@@ -33,7 +33,7 @@ const JETH = `@contract class C {
   // state variable as the LHS of an expression-assignment
   @state s: u256;
   @external setVia(v: u256): u256 { let y: u256 = (this.s = v) + 1n; return y; }
-  @view getS(): u256 { return this.s; }
+  @external @view getS(): u256 { return this.s; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

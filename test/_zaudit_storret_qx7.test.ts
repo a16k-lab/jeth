@@ -24,7 +24,7 @@ describe('SANITY: comparator catches a wrong Solidity contract', () => {
     const JETH = `@contract class S {
       @state x: u256;
       @external setx(v: u256): void { this.x = v; }
-      @view getx(): u256 { return this.x; }
+      @external @view getx(): u256 { return this.x; }
     }`;
     const SOL = `pragma solidity ^0.8.20;
     contract S {
@@ -51,15 +51,15 @@ describe('multi-dim fixed u256 arrays whole + row returns', () => {
     @external s2(i: u256, j: u256, v: u256): void { this.a2[i][j] = v; }
     @external s3(i: u256, j: u256, k: u256, v: u256): void { this.a3[i][j][k] = v; }
     @external s4(i: u256, j: u256, k: u256, l: u256, v: u256): void { this.a4[i][j][k][l] = v; }
-    @view w2(): Arr<Arr<u256, 2>, 3> { return this.a2; }
-    @view r2(i: u256): Arr<u256, 2> { return this.a2[i]; }
-    @view w3(): Arr<Arr<Arr<u256, 2>, 3>, 2> { return this.a3; }
-    @view p3(i: u256): Arr<Arr<u256, 2>, 3> { return this.a3[i]; }
-    @view r3(i: u256, j: u256): Arr<u256, 2> { return this.a3[i][j]; }
-    @view w4(): Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2> { return this.a4; }
-    @view c4(i: u256): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.a4[i]; }
-    @view p4(i: u256, j: u256): Arr<Arr<u256, 2>, 2> { return this.a4[i][j]; }
-    @view r4(i: u256, j: u256, k: u256): Arr<u256, 2> { return this.a4[i][j][k]; }
+    @external @view w2(): Arr<Arr<u256, 2>, 3> { return this.a2; }
+    @external @view r2(i: u256): Arr<u256, 2> { return this.a2[i]; }
+    @external @view w3(): Arr<Arr<Arr<u256, 2>, 3>, 2> { return this.a3; }
+    @external @view p3(i: u256): Arr<Arr<u256, 2>, 3> { return this.a3[i]; }
+    @external @view r3(i: u256, j: u256): Arr<u256, 2> { return this.a3[i][j]; }
+    @external @view w4(): Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2> { return this.a4; }
+    @external @view c4(i: u256): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.a4[i]; }
+    @external @view p4(i: u256, j: u256): Arr<Arr<u256, 2>, 2> { return this.a4[i][j]; }
+    @external @view r4(i: u256, j: u256, k: u256): Arr<u256, 2> { return this.a4[i][j][k]; }
   }`;
   const SOL = `pragma solidity ^0.8.20;
   contract M {

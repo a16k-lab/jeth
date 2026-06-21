@@ -17,8 +17,8 @@ const JETH = `@struct class D { id: u256; data: Arr<u256, 3>; }
   @external @pure uDivI256(a: i256, b: i256): i256 { unchecked: { return a / b; } }
   @external @pure pureRMW(a: u8): u8 { let xs: u8[] = [a, a]; xs[0n]++; xs[0n] = xs[0n] + 1n; return xs[0n]; }
   @external setS(id: u256, a: u256, b: u256, c: u256): void { this.s = D(id, [a, b, c]); }
-  @view getId(): u256 { return this.s.id; }
-  @view getData(i: u256): u256 { return this.s.data[i]; }
+  @external @view getId(): u256 { return this.s.id; }
+  @external @view getData(i: u256): u256 { return this.s.data[i]; }
   @external @pure ctorReturn(id: u256, a: u256, b: u256, c: u256): D { return D(id, [a, b, c]); }
   @external @pure postInc(x: u256): u256 { let a: u256 = x; let p: u256 = a++; return p + a; }
   @external @pure preInc(x: u256): u256 { let a: u256 = x; let p: u256 = ++a; return p + a; }

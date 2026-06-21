@@ -19,11 +19,11 @@ const JETH = `@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
   @external setG(i: u256, j: u256, v: u256): void { this.g[i][j] = v; }
   @external setG3(i: u256, j: u256, k: u256, v: u256): void { this.g3[i][j][k] = v; }
   @external setW(t: u256, i: u256, j: u256, v: u256): void { this.w.tag = t; this.w.grid[i][j] = v; }
-  @view whole(): Arr<Arr<u256, 2>, 2> { return this.g; }
-  @view row(i: u256): Arr<u256, 2> { return this.g[i]; }
-  @view whole3(): Arr<Arr<Arr<u256, 2>, 3>, 2> { return this.g3; }
-  @view plane(i: u256): Arr<Arr<u256, 2>, 3> { return this.g3[i]; }
-  @view wstruct(): W { return this.w; }
+  @external @view whole(): Arr<Arr<u256, 2>, 2> { return this.g; }
+  @external @view row(i: u256): Arr<u256, 2> { return this.g[i]; }
+  @external @view whole3(): Arr<Arr<Arr<u256, 2>, 3>, 2> { return this.g3; }
+  @external @view plane(i: u256): Arr<Arr<u256, 2>, 3> { return this.g3[i]; }
+  @external @view wstruct(): W { return this.w; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

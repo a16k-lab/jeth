@@ -13,28 +13,28 @@ const sel = (s: string) => functionSelector(s);
 const JETH = `@contract class C {
   @state acc: u256;
   @state log: u256;
-  @internal @pure add(a: u256, b: u256): u256 { return a + b; }
-  @private @pure mul3(a: u256, b: u256, c: u256): u256 { return this.add(a, b) * c; }
+  @pure add(a: u256, b: u256): u256 { return a + b; }
+  @pure mul3(a: u256, b: u256, c: u256): u256 { return this.add(a, b) * c; }
   @external @pure sum3(a: u256, b: u256, c: u256): u256 { return this.add(this.add(a, b), c); }
   @external @pure poly(a: u256, b: u256, c: u256): u256 { return this.mul3(a, b, c) + this.add(a, c); }
-  @internal @pure fib(n: u256): u256 { if (n < 2n) { return n; } return this.fib(n - 1n) + this.fib(n - 2n); }
+  @pure fib(n: u256): u256 { if (n < 2n) { return n; } return this.fib(n - 1n) + this.fib(n - 2n); }
   @external @pure fibE(n: u256): u256 { return this.fib(n); }
-  @internal @pure isEven(n: u256): bool { if (n == 0n) { return true; } return this.isOdd(n - 1n); }
-  @internal @pure isOdd(n: u256): bool { if (n == 0n) { return false; } return this.isEven(n - 1n); }
+  @pure isEven(n: u256): bool { if (n == 0n) { return true; } return this.isOdd(n - 1n); }
+  @pure isOdd(n: u256): bool { if (n == 0n) { return false; } return this.isEven(n - 1n); }
   @external @pure evenE(n: u256): bool { return this.isEven(n); }
   // void helper writing state -> caller is non-view (nonpayable)
-  @internal bump(by: u256): void { this.acc = this.acc + by; }
+  bump(by: u256): void { this.acc = this.acc + by; }
   @external doBump(x: u256): void { this.bump(x); this.bump(x); }
-  @view getAcc(): u256 { return this.acc; }
+  @external @view getAcc(): u256 { return this.acc; }
   // internal view reading state -> external view caller
   @view readAcc(): u256 { return this.acc; }
-  @view doubleAcc(): u256 { return this.add(this.readAcc(), this.readAcc()); }
+  @external @view doubleAcc(): u256 { return this.add(this.readAcc(), this.readAcc()); }
   // signed + narrow args/returns
-  @internal @pure clampNeg(x: i64): i64 { if (x < 0n) { return 0n; } return x; }
+  @pure clampNeg(x: i64): i64 { if (x < 0n) { return 0n; } return x; }
   @external @pure clampE(x: i64): i64 { return this.clampNeg(x); }
   // arg with a side effect (left-to-right arg order)
   @external @pure argOrder(): u256 { let s: u256 = 0n; return this.sub2((s = s * 10n + 1n), (s = s * 10n + 2n)) * 1000n + s; }
-  @internal @pure sub2(a: u256, b: u256): u256 { return a * 100n + b; }
+  @pure sub2(a: u256, b: u256): u256 { return a * 100n + b; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

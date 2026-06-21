@@ -62,9 +62,9 @@ class FixedArrayFieldElement {
   @external setId(i: u256, v: u64): void { this.recs[i].id = v; }
   @external setData(i: u256, j: u256, v: u256): void { this.recs[i].data[j] = v; }
 
-  @view len(): u256 { return this.recs.length; }
-  @view getId(i: u256): u64 { return this.recs[i].id; }
-  @view getData(i: u256, j: u256): u256 { return this.recs[i].data[j]; }
+  @external @view len(): u256 { return this.recs.length; }
+  @external @view getId(i: u256): u64 { return this.recs[i].id; }
+  @external @view getData(i: u256, j: u256): u256 { return this.recs[i].data[j]; }
 }`;
 
 describe('fixed-array-field-element: storage dyn-array of struct w/ fixed-array field vs Solidity', () => {

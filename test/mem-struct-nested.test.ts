@@ -32,14 +32,14 @@ const JETH = `@struct class Inner { a: u256; b: i64; }
     return d;
   }
   // pass a nested-struct memory struct to a helper that mutates a deep field (by ref)
-  @internal bumpInner(p: Outer): void { p.inner.a = p.inner.a + 1n; p.inner.b = p.inner.b - 1n; }
+  bumpInner(p: Outer): void { p.inner.a = p.inner.a + 1n; p.inner.b = p.inner.b - 1n; }
   @external @pure viaHelper(a: u256, b: i64): Outer {
     let p: Outer = Outer(3n, Inner(a, b), 5n);
     this.bumpInner(p); this.bumpInner(p);
     return p;
   }
   // return a nested struct constructed by a helper
-  @internal @pure mkOuter(t: u8, a: u256, b: i64): Outer { return Outer(t, Inner(a, b), 0n); }
+  @pure mkOuter(t: u8, a: u256, b: i64): Outer { return Outer(t, Inner(a, b), 0n); }
   @external @pure mkE(t: u8, a: u256, b: i64): Outer { return this.mkOuter(t, a, b); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT

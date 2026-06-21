@@ -91,7 +91,7 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
   });
 
   it('a modifier argument is evaluated EXACTLY ONCE (side-effecting arg -> calls == 1)', async () => {
-    const J = `@contract class C { @state calls: u256; @state sum: u256; @modifier use(v: u256) { this.sum = this.sum + v; _; } @internal bump(): u256 { this.calls = this.calls + 1n; return 7n; } @external @use(this.bump()) f(): void {} }`;
+    const J = `@contract class C { @state calls: u256; @state sum: u256; @modifier use(v: u256) { this.sum = this.sum + v; _; } bump(): u256 { this.calls = this.calls + 1n; return 7n; } @external @use(this.bump()) f(): void {} }`;
     const S = `contract C { uint256 calls; uint256 sum; modifier use(uint256 v){ sum=sum+v; _; } function bump() internal returns(uint256){ calls=calls+1; return 7; } function f() external use(bump()) {} }`;
     const j = await depJ(J), s = await depS(S);
     await j.h.call(j.a, '0x' + sel('f()'));

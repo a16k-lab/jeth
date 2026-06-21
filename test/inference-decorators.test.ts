@@ -1,7 +1,8 @@
-// @read / no-visibility / @hidden compile-time inference. The compiler resolves @read -> pure/view,
-// a missing visibility decorator -> external/public (public iff internally called), and @hidden ->
-// internal, BEFORE ABI emission. Verified: the inferred-decorator ABI is identical to the explicit-
-// decorator ABI, and the inferred contract is byte-identical to solc at runtime.
+// Mutability inference under the @external-only model. The compiler resolves @read -> pure/view
+// from the body, and an @external entry with no @view/@pure -> nonpayable, BEFORE ABI emission.
+// A function with no @external is INTERNAL (excluded from the ABI, callable by name). Verified:
+// the inferred-mutability ABI is identical to the explicit-mutability ABI, and the inferred
+// contract is byte-identical to solc at runtime.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -11,20 +12,22 @@ import { compileSolidity } from './_solidity.js';
 
 const sel = (s: string) => functionSelector(s);
 
-// Inferred decorators: @read, no visibility, @hidden.
+// Inferred mutability: @read (-> pure/view from the body) and @external alone (-> nonpayable).
+// `sum` / `pubImpl` carry no @external, so they are internal helpers (not in the ABI).
 const INFERRED = `@contract class C {
   @state x: u256; @state y: u256;
   @external setXY(a: u256, b: u256): void { this.x = a; this.y = b; }
-  @read addOne(a: u256): u256 { return a + 1n; }
-  @read getX(): u256 { return this.x; }
-  @read who(): address { return msg.sender; }
-  @read viaHelper(): u256 { return this.sum(); }
-  @hidden sum(): u256 { return this.x + this.y; }
-  extOnly(): u256 { return 42n; }
-  pubTarget(): u256 { return 7n; }
-  caller(): u256 { return this.pubTarget() + 1n; }
+  @external @read addOne(a: u256): u256 { return a + 1n; }
+  @external @read getX(): u256 { return this.x; }
+  @external @read who(): address { return msg.sender; }
+  @external @read viaHelper(): u256 { return this.sum(); }
+  sum(): u256 { return this.x + this.y; }
+  @external extOnly(): u256 { return 42n; }
+  @external pubTarget(): u256 { return this.pubImpl(); }
+  @external caller(): u256 { return this.pubImpl() + 1n; }
+  pubImpl(): u256 { return 7n; }
 }`;
-// Explicit decorators: the SAME contract written the long way.
+// Explicit mutability: the SAME contract with @view/@pure spelled out instead of inferred.
 const EXPLICIT = `@contract class C {
   @state x: u256; @state y: u256;
   @external setXY(a: u256, b: u256): void { this.x = a; this.y = b; }
@@ -32,10 +35,11 @@ const EXPLICIT = `@contract class C {
   @external @view getX(): u256 { return this.x; }
   @external @view who(): address { return msg.sender; }
   @external @view viaHelper(): u256 { return this.sum(); }
-  @internal sum(): u256 { return this.x + this.y; }
+  sum(): u256 { return this.x + this.y; }
   @external extOnly(): u256 { return 42n; }
-  @public pubTarget(): u256 { return 7n; }
-  @external caller(): u256 { return this.pubTarget() + 1n; }
+  @external pubTarget(): u256 { return this.pubImpl(); }
+  @external caller(): u256 { return this.pubImpl() + 1n; }
+  pubImpl(): u256 { return 7n; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -55,18 +59,18 @@ contract C {
 const fnMap = (abi: { type: string; name?: string; stateMutability?: string }[]) =>
   Object.fromEntries(abi.filter((e) => e.type === 'function').map((f) => [f.name, f.stateMutability]));
 
-describe('@read / inferred-visibility / @hidden inference', () => {
+describe('@read / inferred-visibility / inference', () => {
   it('inferred-decorator ABI == explicit-decorator ABI', () => {
     const inf = compile(INFERRED, { fileName: 'C.jeth' }).abi;
     const exp = compile(EXPLICIT, { fileName: 'C.jeth' }).abi;
-    // same function set (hidden/internal `sum` excluded from BOTH)
+    // same function set (internal `sum` / `pubImpl` excluded from BOTH)
     expect(fnMap(inf)).toEqual(fnMap(exp));
-    // explicit sanity on the resolved mutabilities/visibility
+    // explicit sanity on the resolved mutabilities
     expect(fnMap(inf)).toEqual({
       setXY: 'nonpayable', addOne: 'pure', getX: 'view', who: 'view', viaHelper: 'view',
       extOnly: 'nonpayable', pubTarget: 'nonpayable', caller: 'nonpayable',
     });
-    expect(inf.some((e) => (e as { name?: string }).name === 'sum')).toBe(false); // @hidden -> not in ABI
+    expect(inf.some((e) => (e as { name?: string }).name === 'sum')).toBe(false); // -> not in ABI
   });
 
   describe('runtime byte-identical to solc', () => {

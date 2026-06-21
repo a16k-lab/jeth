@@ -482,7 +482,7 @@ describe('F2 struct spread: aliasing read-old-then-write + packed slots', () => 
     @external bumpA(da: u8): void { this.p = { ...this.p, a: this.p.a + da }; }
     @external toggleD(): void { this.p = { ...this.p, d: !this.p.d }; }
     @external setC(c: address): void { this.p = { ...this.p, c: c }; }
-    @view get(): P { return this.p; }
+    @external @view get(): P { return this.p; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -549,7 +549,7 @@ describe('F2 struct literal: override / shorthand / field-kind / multi-slot', ()
     @external storeBig(a: u256, b: u256, c: address, d: bool, e: bytes32, f: i64, g: Wei): void {
       this.big = { a, b, c, d, e, f, g };
     }
-    @view getBig(): Big { return this.big; }
+    @external @view getBig(): Big { return this.big; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -620,7 +620,7 @@ describe('F2 struct spread: evaluation order + spread-source kinds', () => {
     @external @view fromStorage(nx: u256): P { let s: P = this.p; return { ...s, x: nx }; }
     // store via spread of storage then read raw slots
     @external bumpZ(dz: u256): void { this.p = { ...this.p, z: this.p.z + dz }; }
-    @view get(): P { return this.p; }
+    @external @view get(): P { return this.p; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -720,7 +720,7 @@ describe('F2 struct: spread/literal desugars to the SAME structNew as positional
     @external set(x: u256, y: u256, z: address, f: bool): void { this.p = P(x, y, z, f); }
     @external bump(dx: u256): void { let cur: P = this.p; this.p = P(cur.x + dx, cur.y, cur.z, cur.flag); }
     @external @pure mk(x: u256, y: u256, z: address, f: bool): P { return P(x, y, z, f); }
-    @view get(): P { return this.p; }
+    @external @view get(): P { return this.p; }
   }`;
   const SPREAD = `@struct class P { x: u256; y: u256; z: address; flag: bool; }
   @contract class C {
@@ -728,7 +728,7 @@ describe('F2 struct: spread/literal desugars to the SAME structNew as positional
     @external set(x: u256, y: u256, z: address, f: bool): void { this.p = { x: x, y: y, z: z, flag: f }; }
     @external bump(dx: u256): void { this.p = { ...this.p, x: this.p.x + dx }; }
     @external @pure mk(x: u256, y: u256, z: address, f: bool): P { return { x, y, z, flag: f }; }
-    @view get(): P { return this.p; }
+    @external @view get(): P { return this.p; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

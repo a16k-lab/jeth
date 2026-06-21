@@ -28,10 +28,10 @@ const JETH = `@contract class MB {
   @state ms: mapping<address, string>;
   @external setB(k: address, v: bytes): void { this.mb[k] = v; }
   @external setS(k: address, v: string): void { this.ms[k] = v; }
-  @view getB(k: address): bytes { return this.mb[k]; }
-  @view getS(k: address): string { return this.ms[k]; }
-  @view lenB(k: address): u256 { return this.mb[k].length; }
-  @view atB(k: address, i: u256): bytes1 { return this.mb[k][i]; }
+  @external @view getB(k: address): bytes { return this.mb[k]; }
+  @external @view getS(k: address): string { return this.ms[k]; }
+  @external @view lenB(k: address): u256 { return this.mb[k].length; }
+  @external @view atB(k: address, i: u256): bytes1 { return this.mb[k][i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -28,14 +28,14 @@ const J = `enum Color { Red, Green, Blue }
   @state seen: mapping<Color, bool>;
   @state pref: mapping<address, Color>;
   @external setC(x: Color): void { this.c = x; }
-  @view getC(): Color { return this.c; }
+  @external @view getC(): Color { return this.c; }
   @external setSmall(s: u8, o: u16): void { this.small = s; this.owner = o; }
   @external setItem(c: Color, q: u32, f: bool): void { this.it = Item(c, q, f); }
-  @view itemColor(): Color { return this.it.c; }
+  @external @view itemColor(): Color { return this.it.c; }
   @external mark(c: Color): void { this.seen[c] = true; }
-  @view isSeen(c: Color): bool { return this.seen[c]; }
+  @external @view isSeen(c: Color): bool { return this.seen[c]; }
   @external setPref(a: address, c: Color): void { this.pref[a] = c; }
-  @view prefOf(a: address): Color { return this.pref[a]; }
+  @external @view prefOf(a: address): Color { return this.pref[a]; }
   @external @pure mk(x: u8): Color { return Color(x); }          // range-checked -> Panic 0x21
   @external @pure toU8(c: Color): u8 { return u8(c); }            // reinterpret, no check
   @external @pure toU256(c: Color): u256 { return u256(c); }

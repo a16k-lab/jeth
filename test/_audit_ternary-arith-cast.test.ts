@@ -87,7 +87,7 @@ const JA = `@contract class C {
   @external @pure ternArith(c: bool, a: u8, b: u8): u8 { return (c ? a : b) + 1n; }
   // dirty-bool condition: any nonzero word is "true" in solc once cleaned; param is bool
   @external @pure boolPick(c: bool, a: u256, b: u256): u256 { return c ? a : b; }
-  @view getSeq(): u256 { return this.seq; }
+  @external @view getSeq(): u256 { return this.seq; }
 }`;
 const SA = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -115,7 +115,7 @@ const JB = `@contract class C {
   @event Ev(s: string);
   @external setAB(x: string, y: string): void { this.a = x; this.b = y; }
   @external @pure lit(c: bool): string { return c ? "${SHORT}" : "${LONG}"; }
-  @view stor(c: bool): string { let s: string = c ? this.a : this.b; return s; }
+  @external @view stor(c: bool): string { let s: string = c ? this.a : this.b; return s; }
   @external @pure cd(c: bool, x: string, y: string): string { return c ? x : y; }
   @external @pure cdLen(c: bool, x: bytes, y: bytes): u256 { return (c ? x : y).length; }
   @external @pure nested(c: bool, d: bool, x: string, y: string): string { return c ? (d ? x : y) : "fallback string that is also over thirty-two bytes long ok"; }
@@ -154,18 +154,18 @@ const JD = `@struct class P { a: u256; b: u8; c: address; d: i128; e: bool; f: b
     this.ax[0n] = 1n; this.ax[1n] = 2n; this.ax[2n] = 3n;
     this.ay[0n] = 7n; this.ay[1n] = 8n; this.ay[2n] = 9n;
   }
-  @view getX(): P { return this.x; }
-  @view getY(): P { return this.y; }
-  @view pickStruct(c: bool): P { return c ? this.x : this.y; }
-  @view pickArr(c: bool): Arr<u256,3> { return c ? this.ax : this.ay; }
-  @view fieldD(c: bool): i128 { let p: P = c ? this.x : this.y; return p.d; }
+  @external @view getX(): P { return this.x; }
+  @external @view getY(): P { return this.y; }
+  @external @view pickStruct(c: bool): P { return c ? this.x : this.y; }
+  @external @view pickArr(c: bool): Arr<u256,3> { return c ? this.ax : this.ay; }
+  @external @view fieldD(c: bool): i128 { let p: P = c ? this.x : this.y; return p.d; }
   // mutate the copied local: storage must be untouched
   @external mutLocal(c: bool): P { let p: P = c ? this.x : this.y; p.a = 7777n; p.b = 1n; p.d = -42n; p.e = false; return p; }
   // nested aggregate ternary
-  @view nestedAgg(c: bool, d: bool): P { return c ? this.x : (d ? this.y : this.z); }
+  @external @view nestedAgg(c: bool, d: bool): P { return c ? this.x : (d ? this.y : this.z); }
   // untaken ctor branch divides by zero -> short-circuit
   @external divBranch(c: bool, v: u256): P { return c ? this.x : P(1000n / v, 2n, address(0n), 0n, false, bytes32(0n)); }
-  @view getArr(i: u256): u256 { return this.ax[i]; }
+  @external @view getArr(i: u256): u256 { return this.ax[i]; }
 }`;
 const SD = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -289,7 +289,7 @@ const JF = `@contract class C {
   @external @pure mulOrder(): u256 { let s: u256 = 0n; let r: u256 = (s = s * 10n + 3n) * (s = s * 10n + 5n); return s * 1000n + r; }
   // arg lists LEFT-to-RIGHT
   @external @pure argOrder(): u256 { let s: u256 = 0n; return this.sum3((s = s*10n+1n),(s = s*10n+2n),(s = s*10n+3n)) * 10000n + s; }
-  @internal @pure sum3(a: u256, b: u256, c: u256): u256 { return a * 100n + b * 10n + c; }
+  @pure sum3(a: u256, b: u256, c: u256): u256 { return a * 100n + b * 10n + c; }
   // inc/dec in operands
   @external @pure incBin(): u256 { let x: u256 = 5n; let y: u256 = (++x) * 100n + (++x); return x * 100000n + y; }
   @external @pure postBin(): u256 { let x: u256 = 5n; let y: u256 = (x++) * 100n + (x++); return x * 100000n + y; }

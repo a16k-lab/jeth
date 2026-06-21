@@ -61,33 +61,33 @@ const JETH = `
   @external setTail(v: u64): void { this.acct.tail = v; }
   @external setBal(a: address, v: u256): void { this.acct.bal[a] = v; }
   @external incBal(a: address, v: u256): void { this.acct.bal[a] = this.acct.bal[a] + v; }
-  @view getHead(): u256 { return this.acct.head; }
-  @view getTail(): u64 { return this.acct.tail; }
-  @view getBal(a: address): u256 { return this.acct.bal[a]; }
+  @external @view getHead(): u256 { return this.acct.head; }
+  @external @view getTail(): u64 { return this.acct.tail; }
+  @external @view getBal(a: address): u256 { return this.acct.bal[a]; }
 
   // --- Pk: a mapping field tightly packed between small fields on BOTH sides ---
   @external setPkPacked(a: u8, b: u16, c: bool, d: u8, e: u32, f: address): void {
     this.pk.a = a; this.pk.b = b; this.pk.c = c; this.pk.d = d; this.pk.e = e; this.pk.f = f;
   }
   @external setPkM(k: u256, v: u256): void { this.pk.m[k] = v; }
-  @view getPkA(): u8 { return this.pk.a; }
-  @view getPkB(): u16 { return this.pk.b; }
-  @view getPkC(): bool { return this.pk.c; }
-  @view getPkD(): u8 { return this.pk.d; }
-  @view getPkE(): u32 { return this.pk.e; }
-  @view getPkF(): address { return this.pk.f; }
-  @view getPkM(k: u256): u256 { return this.pk.m[k]; }
+  @external @view getPkA(): u8 { return this.pk.a; }
+  @external @view getPkB(): u16 { return this.pk.b; }
+  @external @view getPkC(): bool { return this.pk.c; }
+  @external @view getPkD(): u8 { return this.pk.d; }
+  @external @view getPkE(): u32 { return this.pk.e; }
+  @external @view getPkF(): address { return this.pk.f; }
+  @external @view getPkM(k: u256): u256 { return this.pk.m[k]; }
 
   // --- FirstMap: FIRST field is a mapping ---
   @external setFmM(a: address, v: u256): void { this.fm.m[a] = v; }
   @external setFm(a: u64, b: u64): void { this.fm.a = a; this.fm.b = b; }
-  @view getFmM(a: address): u256 { return this.fm.m[a]; }
-  @view getFmA(): u64 { return this.fm.a; }
-  @view getFmB(): u64 { return this.fm.b; }
+  @external @view getFmM(a: address): u256 { return this.fm.m[a]; }
+  @external @view getFmA(): u64 { return this.fm.a; }
+  @external @view getFmB(): u64 { return this.fm.b; }
 
   // --- OnlyMap: the ONLY field is a mapping (narrow value u64) ---
   @external setOmM(k: u256, v: u64): void { this.om.m[k] = v; }
-  @view getOmM(k: u256): u64 { return this.om.m[k]; }
+  @external @view getOmM(k: u256): u64 { return this.om.m[k]; }
 
   // --- Multi: two mappings interspersed with value fields ---
   @external setMulti(x: u128, y: u128, z: u128, w: u64): void {
@@ -95,64 +95,64 @@ const JETH = `
   }
   @external setMultiM1(k: u256, v: u256): void { this.multi.m1[k] = v; }
   @external setMultiM2(a: address, v: u64): void { this.multi.m2[a] = v; }
-  @view getMultiX(): u128 { return this.multi.x; }
-  @view getMultiY(): u128 { return this.multi.y; }
-  @view getMultiZ(): u128 { return this.multi.z; }
-  @view getMultiW(): u64 { return this.multi.w; }
-  @view getMultiM1(k: u256): u256 { return this.multi.m1[k]; }
-  @view getMultiM2(a: address): u64 { return this.multi.m2[a]; }
+  @external @view getMultiX(): u128 { return this.multi.x; }
+  @external @view getMultiY(): u128 { return this.multi.y; }
+  @external @view getMultiZ(): u128 { return this.multi.z; }
+  @external @view getMultiW(): u64 { return this.multi.w; }
+  @external @view getMultiM1(k: u256): u256 { return this.multi.m1[k]; }
+  @external @view getMultiM2(a: address): u64 { return this.multi.m2[a]; }
 
   // --- mp: mapping<u256, Acct> (struct-with-mapping as a mapping value) ---
   @external setMpHead(k: u256, v: u256): void { this.mp[k].head = v; }
   @external setMpTail(k: u256, v: u64): void { this.mp[k].tail = v; }
   @external setMpBal(k: u256, a: address, v: u256): void { this.mp[k].bal[a] = v; }
-  @view getMpHead(k: u256): u256 { return this.mp[k].head; }
-  @view getMpTail(k: u256): u64 { return this.mp[k].tail; }
-  @view getMpBal(k: u256, a: address): u256 { return this.mp[k].bal[a]; }
+  @external @view getMpHead(k: u256): u256 { return this.mp[k].head; }
+  @external @view getMpTail(k: u256): u64 { return this.mp[k].tail; }
+  @external @view getMpBal(k: u256, a: address): u256 { return this.mp[k].bal[a]; }
 
   // --- mm: mapping<u256, mapping<u256, Acct>> (two outer keys, then struct-with-mapping) ---
   @external setMmHead(k1: u256, k2: u256, v: u256): void { this.mm[k1][k2].head = v; }
   @external setMmBal(k1: u256, k2: u256, a: address, v: u256): void { this.mm[k1][k2].bal[a] = v; }
-  @view getMmHead(k1: u256, k2: u256): u256 { return this.mm[k1][k2].head; }
-  @view getMmBal(k1: u256, k2: u256, a: address): u256 { return this.mm[k1][k2].bal[a]; }
+  @external @view getMmHead(k1: u256, k2: u256): u256 { return this.mm[k1][k2].head; }
+  @external @view getMmBal(k1: u256, k2: u256, a: address): u256 { return this.mm[k1][k2].bal[a]; }
 
   // --- wim: a struct field that is mapping<u256, Inner> where Inner has a mapping ---
   @external setWim(sa: u64, sb: u64): void { this.wim.sa = sa; this.wim.sb = sb; }
   @external setWimHead(k: u256, v: u64): void { this.wim.im[k].ihead = v; }
   @external setWimTail(k: u256, v: u64): void { this.wim.im[k].itail = v; }
   @external setWimBal(k: u256, a: address, v: u256): void { this.wim.im[k].ibal[a] = v; }
-  @view getWimSa(): u64 { return this.wim.sa; }
-  @view getWimSb(): u64 { return this.wim.sb; }
-  @view getWimHead(k: u256): u64 { return this.wim.im[k].ihead; }
-  @view getWimTail(k: u256): u64 { return this.wim.im[k].itail; }
-  @view getWimBal(k: u256, a: address): u256 { return this.wim.im[k].ibal[a]; }
+  @external @view getWimSa(): u64 { return this.wim.sa; }
+  @external @view getWimSb(): u64 { return this.wim.sb; }
+  @external @view getWimHead(k: u256): u64 { return this.wim.im[k].ihead; }
+  @external @view getWimTail(k: u256): u64 { return this.wim.im[k].itail; }
+  @external @view getWimBal(k: u256, a: address): u256 { return this.wim.im[k].ibal[a]; }
 
   // --- md: mapping<u256, OuterDeep>; OuterDeep.inner is mapping<u256, Deep>; Deep has a mapping ---
   @external setMdH(k: u256, v: u256): void { this.md[k].oh = v; }
   @external setMdT(k: u256, v: u64): void { this.md[k].ot = v; }
   @external setMdInnerD(k: u256, k2: u256, v: u256): void { this.md[k].inner[k2].d = v; }
   @external setMdDeep(k: u256, k2: u256, a: address, v: u256): void { this.md[k].inner[k2].dm[a] = v; }
-  @view getMdH(k: u256): u256 { return this.md[k].oh; }
-  @view getMdT(k: u256): u64 { return this.md[k].ot; }
-  @view getMdInnerD(k: u256, k2: u256): u256 { return this.md[k].inner[k2].d; }
-  @view getMdDeep(k: u256, k2: u256, a: address): u256 { return this.md[k].inner[k2].dm[a]; }
+  @external @view getMdH(k: u256): u256 { return this.md[k].oh; }
+  @external @view getMdT(k: u256): u64 { return this.md[k].ot; }
+  @external @view getMdInnerD(k: u256, k2: u256): u256 { return this.md[k].inner[k2].d; }
+  @external @view getMdDeep(k: u256, k2: u256, a: address): u256 { return this.md[k].inner[k2].dm[a]; }
 
   // --- KV: key-type and value-type variety in struct-field mappings ---
   @external setKu8(k: u8, v: u8): void { this.kv.ku8[k] = v; }
-  @view getKu8(k: u8): u8 { return this.kv.ku8[k]; }
+  @external @view getKu8(k: u8): u8 { return this.kv.ku8[k]; }
   @external setKi(k: i256, v: i256): void { this.kv.ki[k] = v; }
-  @view getKi(k: i256): i256 { return this.kv.ki[k]; }
+  @external @view getKi(k: i256): i256 { return this.kv.ki[k]; }
   @external setKb(k: bool, v: address): void { this.kv.kb[k] = v; }
-  @view getKb(k: bool): address { return this.kv.kb[k]; }
+  @external @view getKb(k: bool): address { return this.kv.kb[k]; }
   @external setK4(k: bytes4, v: bytes32): void { this.kv.k4[k] = v; }
-  @view getK4(k: bytes4): bytes32 { return this.kv.k4[k]; }
+  @external @view getK4(k: bytes4): bytes32 { return this.kv.k4[k]; }
   @external setK32(k: bytes32, v: u256): void { this.kv.k32[k] = v; }
-  @view getK32(k: bytes32): u256 { return this.kv.k32[k]; }
+  @external @view getK32(k: bytes32): u256 { return this.kv.k32[k]; }
   @external setKi8(k: i8, v: u256): void { this.kv.ki8[k] = v; }
-  @view getKi8(k: i8): u256 { return this.kv.ki8[k]; }
+  @external @view getKi8(k: i8): u256 { return this.kv.ki8[k]; }
 
   @external setSentinel(v: u256): void { this.sentinel = v; }
-  @view getSentinel(): u256 { return this.sentinel; }
+  @external @view getSentinel(): u256 { return this.sentinel; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

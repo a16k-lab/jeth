@@ -21,9 +21,9 @@ class S6 {
   @external setId(i: u256, v: u64): void { this.items[i].id = v; }
   @external setX(i: u256, v: u128): void { this.items[i].pt.x = v; }
   @external setY(i: u256, v: u128): void { this.items[i].pt.y = v; }
-  @view getId(i: u256): u64 { return this.items[i].id; }
-  @view getX(i: u256): u128 { return this.items[i].pt.x; }
-  @view getY(i: u256): u128 { return this.items[i].pt.y; }
+  @external @view getId(i: u256): u64 { return this.items[i].id; }
+  @external @view getX(i: u256): u128 { return this.items[i].pt.x; }
+  @external @view getY(i: u256): u128 { return this.items[i].pt.y; }
 }
 `;
 

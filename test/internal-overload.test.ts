@@ -1,4 +1,4 @@
-// #47: FUNCTION OVERLOADING for internal/private calls. solc allows two @internal/@private functions
+// #47: FUNCTION OVERLOADING for internal/private calls. solc allows two @internal/functions
 // to share a name when they differ by arity or parameter types; JETH used to misresolve (funcsByName
 // was first-wins -> JETH148/JETH901). Now each function has a unique call-graph key (the bare name when
 // unique, else `name__ovN`), and a call resolves the right overload by arity then by which candidate's
@@ -23,15 +23,15 @@ describe('internal/private function overloading (#47) vs solc', () => {
   // overload, and a transitive @view (one overload reads state) to exercise the purity fixpoint by key.
   const J = `@contract class C {
     @state n: u256;
-    @internal g(a: u256): u256 { return a * 10n; }
-    @internal g(a: u256, b: u256): u256 { return a + b; }
-    @internal g(a: bool): u256 { if (a) { return 111n; } return 222n; }
-    @internal sumv(a: u256, b: u256, c: u256): u256 { return a + b + c; }
-    @internal sumv(a: u256, b: u256): u256 { return a + b; }
-    @internal countdown(x: u256): u256 { if (x == 0n) { return 0n; } return x + this.countdown(x, 1n); }
-    @internal countdown(x: u256, step: u256): u256 { if (x < step) { return 0n; } return this.countdown(x - step); }
-    @private readN(): u256 { return this.n; }
-    @private readN(extra: u256): u256 { return this.n + extra; }
+    g(a: u256): u256 { return a * 10n; }
+    g(a: u256, b: u256): u256 { return a + b; }
+    g(a: bool): u256 { if (a) { return 111n; } return 222n; }
+    sumv(a: u256, b: u256, c: u256): u256 { return a + b + c; }
+    sumv(a: u256, b: u256): u256 { return a + b; }
+    countdown(x: u256): u256 { if (x == 0n) { return 0n; } return x + this.countdown(x, 1n); }
+    countdown(x: u256, step: u256): u256 { if (x < step) { return 0n; } return this.countdown(x - step); }
+    readN(): u256 { return this.n; }
+    readN(extra: u256): u256 { return this.n + extra; }
     @external setN(v: u256): void { this.n = v; }
     @external @pure one(x: u256): u256 { return this.g(x); }
     @external @pure two(x: u256, y: u256): u256 { return this.g(x, y); }
@@ -91,10 +91,10 @@ contract C {
   });
   it('rejects an ambiguous / no-matching-overload call (like solc)', () => {
     // a duplicate signature cannot overload (solc errors too)
-    expect(codes('@contract class C { @internal g(a: u256): u256 { return a; } @internal g(a: u256): u256 { return 2n; } @external @pure f(): u256 { return this.g(1n); } }')).toContain('JETH901');
+    expect(codes('@contract class C { g(a: u256): u256 { return a; } g(a: u256): u256 { return 2n; } @external @pure f(): u256 { return this.g(1n); } }')).toContain('JETH901');
     // no overload accepts 3 arguments
-    expect(codes('@contract class C { @internal g(a: u256): u256 { return a; } @internal g(a: u256, b: u256): u256 { return a + b; } @external @pure f(): u256 { return this.g(1n, 2n, 3n); } }')).toContain('JETH148');
+    expect(codes('@contract class C { g(a: u256): u256 { return a; } g(a: u256, b: u256): u256 { return a + b; } @external @pure f(): u256 { return this.g(1n, 2n, 3n); } }')).toContain('JETH148');
     // a single (non-overloaded) function is unaffected
-    expect(codes('@contract class C { @internal g(a: u256): u256 { return a; } @external @pure f(): u256 { return this.g(5n); } }')).toEqual([]);
+    expect(codes('@contract class C { g(a: u256): u256 { return a; } @external @pure f(): u256 { return this.g(5n); } }')).toEqual([]);
   });
 });

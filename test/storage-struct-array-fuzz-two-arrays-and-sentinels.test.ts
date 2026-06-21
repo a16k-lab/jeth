@@ -54,34 +54,34 @@ class TwoArrays {
 
   @external setX(v: u256): void { this.x = v; }
   @external setY(v: u256): void { this.y = v; }
-  @view getX(): u256 { return this.x; }
-  @view getY(): u256 { return this.y; }
+  @external @view getX(): u256 { return this.x; }
+  @external @view getY(): u256 { return this.y; }
 
   @external pushA(id: u64, owner: address, flag: bool): void { this.a.push(P(id, owner, flag)); }
   @external pushAEmpty(): void { this.a.push(); }
   @external popA(): void { this.a.pop(); }
   @external setAFlag(i: u256, v: bool): void { this.a[i].flag = v; }
   @external setAId(i: u256, v: u64): void { this.a[i].id = v; }
-  @view lenA(): u256 { return this.a.length; }
-  @view getAId(i: u256): u64 { return this.a[i].id; }
-  @view getAOwner(i: u256): address { return this.a[i].owner; }
-  @view getAFlag(i: u256): bool { return this.a[i].flag; }
+  @external @view lenA(): u256 { return this.a.length; }
+  @external @view getAId(i: u256): u64 { return this.a[i].id; }
+  @external @view getAOwner(i: u256): address { return this.a[i].owner; }
+  @external @view getAFlag(i: u256): bool { return this.a[i].flag; }
 
   @external pushB(big: u256, small: u128, mid: u128): void { this.b.push(Q(big, small, mid)); }
   @external pushBEmpty(): void { this.b.push(); }
   @external popB(): void { this.b.pop(); }
   @external setBSmall(i: u256, v: u128): void { this.b[i].small = v; }
   @external setBBig(i: u256, v: u256): void { this.b[i].big = v; }
-  @view lenB(): u256 { return this.b.length; }
-  @view getBBig(i: u256): u256 { return this.b[i].big; }
-  @view getBSmall(i: u256): u128 { return this.b[i].small; }
-  @view getBMid(i: u256): u128 { return this.b[i].mid; }
+  @external @view lenB(): u256 { return this.b.length; }
+  @external @view getBBig(i: u256): u256 { return this.b[i].big; }
+  @external @view getBSmall(i: u256): u128 { return this.b[i].small; }
+  @external @view getBMid(i: u256): u128 { return this.b[i].mid; }
 
   @external pushC(val: u256): void { this.c.push(S(val)); }
   @external popC(): void { this.c.pop(); }
   @external setCVal(i: u256, v: u256): void { this.c[i].val = v; }
-  @view lenC(): u256 { return this.c.length; }
-  @view getCVal(i: u256): u256 { return this.c[i].val; }
+  @external @view lenC(): u256 { return this.c.length; }
+  @external @view getCVal(i: u256): u256 { return this.c[i].val; }
 }
 `;
 

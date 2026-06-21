@@ -18,7 +18,7 @@ function solcRejects(src: string): boolean {
 
 describe('internal-call gates (G8)', () => {
   it('@view calling a state-writer is rejected (JETH054), like solc', () => {
-    const codes = jethCodes(`@contract class C { @state x: u256; @internal w(): void { this.x = 1n; } @view f(): u256 { this.w(); return this.x; } }`);
+    const codes = jethCodes(`@contract class C { @state x: u256; w(): void { this.x = 1n; } @view f(): u256 { this.w(); return this.x; } }`);
     expect(codes).toContain('JETH054');
     expect(solcRejects(`contract C { uint256 x; function w() internal { x = 1; } function f() external view returns (uint256){ w(); return x; } }`)).toBe(true);
   });
@@ -39,13 +39,14 @@ describe('internal-call gates (G8)', () => {
     const codes = jethCodes(`@contract class C { @external g(n: u256): u256 { return n; } @external f(n: u256): u256 { return this.g(n); } }`);
     expect(codes).toContain('JETH240');
   });
-  it('struct arg to an @internal/@private callee now compiles (G8+G9)', () => {
-    expect(jethCodes(`@struct class P { a: u256; b: u256; } @contract class C { @internal @pure h(p: P): u256 { return p.a; } @external @pure f(): u256 { let p: P = P(1n, 2n); return this.h(p); } }`)).toBeNull();
+  it('struct arg to an internal callee now compiles (G8+G9)', () => {
+    expect(jethCodes(`@struct class P { a: u256; b: u256; } @contract class C { @pure h(p: P): u256 { return p.a; } @external @pure f(): u256 { let p: P = P(1n, 2n); return this.h(p); } }`)).toBeNull();
   });
-  it('struct arg to a PUBLIC callee is gated (JETH242, solc accepts; calldata-vs-memory dual nature)', () => {
-    // h is public (no internal/private decorator), so its struct param is calldata-bound for the
-    // external entry; an internal struct call to it is gated for now. solc compiles this.
-    expect(jethCodes(`@struct class P { a: u256; b: u256; } @contract class C { @pure h(p: P): u256 { return p.a; } @external f(): u256 { let p: P = P(1n, 2n); return this.h(p); } }`)).toEqual(expect.arrayContaining(['JETH242']));
+  it('struct arg to an @external callee called internally is rejected (JETH240, new visibility model)', () => {
+    // New model: an undecorated callee is INTERNAL, so an internal struct call to it now compiles
+    // (covered by the G8+G9 case above). To make the callee an exposed ABI entry it must be
+    // @external, but an @external function is not internally callable: this.h(p) -> JETH240.
+    expect(jethCodes(`@struct class P { a: u256; b: u256; } @contract class C { @external @pure h(p: P): u256 { return p.a; } @external f(): u256 { let p: P = P(1n, 2n); return this.h(p); } }`)).toEqual(expect.arrayContaining(['JETH240']));
   });
   it('multi-value return through an internal call is gated (JETH241)', () => {
     expect(jethCodes(`@contract class C { @pure two(): [u256, u256] { return [1n, 2n]; } @external f(): u256 { let a: u256 = this.two(); return a; } }`)).toEqual(expect.arrayContaining(['JETH241']));

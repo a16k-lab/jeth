@@ -34,10 +34,10 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external setDS(k: address, s: string): void { this.md[k].s = s; }
   @external pushU(k: address, v: u256): void { this.mu[k].push(v); }
   @external pushS(k: address, s: string): void { this.ms[k].push(s); }
-  @view getP(k: address): P { return this.mp[k]; }
-  @view getD(k: address): D { return this.md[k]; }
-  @view getU(k: address): u256[] { return this.mu[k]; }
-  @view getS(k: address): string[] { return this.ms[k]; }
+  @external @view getP(k: address): P { return this.mp[k]; }
+  @external @view getD(k: address): D { return this.md[k]; }
+  @external @view getU(k: address): u256[] { return this.mu[k]; }
+  @external @view getS(k: address): string[] { return this.ms[k]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -67,15 +67,15 @@ async function buildPair(jSrc: string, sSrc: string) {
 // ---------------------------------------------------------------------------
 describe('F3 adv: a default of every kind matches the spelled-out constant', () => {
   const J = `@contract class C {
-    @hidden du(a: u256, b: u256 = 7n): u256 { return a + b; }
-    @hidden di(a: i64, b: i64 = -5n): i64 { return a + b; }
-    @hidden db(a: u256, on: bool = true): u256 { return on ? a : 0n; }
-    @hidden da(a: u256, who: address = address(0n)): u256 { return who == address(0n) ? a : a + 1n; }
-    @hidden dan(a: u256, who: address = address(0x00000000000000000000000000000000000000ffn)): u256 { return who == address(0n) ? a : a + 1n; }
-    @hidden dby(a: u256, tag: bytes32 = bytes32(0xdeadbeefn)): bytes32 { return tag; }
-    @hidden dmax(a: u256, cap: u256 = type(u256).max): u256 { return a < cap ? a : cap; }
-    @hidden dmin(a: i128, lo: i128 = type(i128).min): i128 { return a > lo ? a : lo; }
-    @hidden d255(a: u8, b: u8 = u8(255n)): u8 { return a > b ? a : b; }
+    du(a: u256, b: u256 = 7n): u256 { return a + b; }
+    di(a: i64, b: i64 = -5n): i64 { return a + b; }
+    db(a: u256, on: bool = true): u256 { return on ? a : 0n; }
+    da(a: u256, who: address = address(0n)): u256 { return who == address(0n) ? a : a + 1n; }
+    dan(a: u256, who: address = address(0x00000000000000000000000000000000000000ffn)): u256 { return who == address(0n) ? a : a + 1n; }
+    dby(a: u256, tag: bytes32 = bytes32(0xdeadbeefn)): bytes32 { return tag; }
+    dmax(a: u256, cap: u256 = type(u256).max): u256 { return a < cap ? a : cap; }
+    dmin(a: i128, lo: i128 = type(i128).min): i128 { return a > lo ? a : lo; }
+    d255(a: u8, b: u8 = u8(255n)): u8 { return a > b ? a : b; }
     @external @pure tu(a: u256): u256 { return this.du(a); }
     @external @pure ti(a: i64): i64 { return this.di(a); }
     @external @pure tb(a: u256): u256 { return this.db(a); }
@@ -130,7 +130,7 @@ describe('F3 adv: a default of every kind matches the spelled-out constant', () 
 // ---------------------------------------------------------------------------
 describe('F3 adv: multiple trailing defaults, omit none / some / all', () => {
   const J = `@contract class C {
-    @hidden f(a: u256 = 1n, b: u256 = 2n, c: u256 = 3n): u256 { return a * 100n + b * 10n + c; }
+    f(a: u256 = 1n, b: u256 = 2n, c: u256 = 3n): u256 { return a * 100n + b * 10n + c; }
     @external @pure none(): u256 { return this.f(); }
     @external @pure one(x: u256): u256 { return this.f(x); }
     @external @pure two(x: u256, y: u256): u256 { return this.f(x, y); }
@@ -163,8 +163,8 @@ describe('F3 adv: defaulted arg flowing into storage + into an event', () => {
     @state x: u256;
     @state y: u256;
     @event Set(@indexed who: address, amount: u256);
-    @hidden store(a: u256, b: u256 = 1000n): void { this.x = a + b; this.y = b; }
-    @hidden announce(amount: u256, who: address = address(u160(0xbeefn))): void { emit(Set(who, amount)); }
+    store(a: u256, b: u256 = 1000n): void { this.x = a + b; this.y = b; }
+    announce(amount: u256, who: address = address(u160(0xbeefn))): void { emit(Set(who, amount)); }
     @external setIt(a: u256): void { this.store(a); }
     @external setBoth(a: u256, b: u256): void { this.store(a, b); }
     @external ann(amount: u256): void { this.announce(amount); }
@@ -197,7 +197,7 @@ describe('F3 adv: defaulted arg flowing into storage + into an event', () => {
 // ---------------------------------------------------------------------------
 describe('F3 adv: recursion with a defaulted accumulator', () => {
   const J = `@contract class C {
-    @hidden rec(n: u256, acc: u256 = 0n): u256 { if (n == 0n) { return acc; } return this.rec(n - 1n, acc + n); }
+    rec(n: u256, acc: u256 = 0n): u256 { if (n == 0n) { return acc; } return this.rec(n - 1n, acc + n); }
     @external @pure sumTo(n: u256): u256 { return this.rec(n); }
   }`;
   const S = `// SPDX-License-Identifier: MIT
@@ -222,8 +222,8 @@ describe('F3 adv: recursion with a defaulted accumulator', () => {
 describe('F3 adv: named arguments bind by NAME not position', () => {
   const J = `@struct class P3 { x: u256; y: u256; z: u256; }
   @contract class C {
-    @hidden f(a: u256, b: u256, c: u256 = 9n): u256 { return a * 10000n + b * 100n + c; }
-    @hidden viaStruct(p: P3): u256 { return p.x * 10000n + p.y * 100n + p.z; }
+    f(a: u256, b: u256, c: u256 = 9n): u256 { return a * 10000n + b * 100n + c; }
+    viaStruct(p: P3): u256 { return p.x * 10000n + p.y * 100n + p.z; }
     @external @pure full(a: u256, b: u256, c: u256): u256 { return this.f({ a: a, b: b, c: c }); }
     @external @pure reorder(a: u256, b: u256, c: u256): u256 { return this.f({ c: c, a: a, b: b }); }
     @external @pure part(a: u256, b: u256): u256 { return this.f({ b: b, a: a }); }
@@ -264,12 +264,12 @@ describe('F3 adv: named arguments bind by NAME not position', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. ABI / selector boundary: a @public g(a, b=5n) is called both ways. Selector and ABI must list
+// 6. ABI / selector boundary: a @external g(a, b=5n) is called both ways. Selector and ABI must list
 //    BOTH params; the default never shrinks the signature.
 // ---------------------------------------------------------------------------
 describe('F3 adv: a defaulted param does NOT leak into the ABI / selector', () => {
   const J = `@contract class C {
-    @public @pure g(a: u256, b: u256 = 5n): u256 { return a + b; }
+    @external @pure g(a: u256, b: u256 = 5n): u256 { return a + b; }
     @external @pure useInternal(a: u256): u256 { return this.g(a); }
   }`;
   const S = `// SPDX-License-Identifier: MIT
@@ -280,7 +280,7 @@ describe('F3 adv: a defaulted param does NOT leak into the ABI / selector', () =
   }`;
   // A control twin with NO default, to prove the default does not perturb the selector / ABI.
   const J_NODEF = `@contract class C {
-    @public @pure g(a: u256, b: u256): u256 { return a + b; }
+    @external @pure g(a: u256, b: u256): u256 { return a + b; }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
   beforeAll(async () => { P = await buildPair(J, S); });
@@ -339,53 +339,53 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
 
   it('JETH250: non-constant defaults (param ref, state, msg.sender, call, arithmetic on non-literal)', () => {
     // default references another param
-    expect(jethCodes(base(`@hidden f(a: u256, b: u256 = a): u256 { return a + b; }`))).toContain('JETH250');
+    expect(jethCodes(base(`f(a: u256, b: u256 = a): u256 { return a + b; }`))).toContain('JETH250');
     // default reads state this.x
-    expect(jethCodes(base(`@state x: u256;\n@hidden f(b: u256 = this.x): u256 { return b; }`))).toContain('JETH250');
+    expect(jethCodes(base(`@state x: u256;\nf(b: u256 = this.x): u256 { return b; }`))).toContain('JETH250');
     // default is msg.sender
-    expect(jethCodes(base(`@hidden f(who: address = msg.sender): u256 { return 1n; }`))).toContain('JETH250');
+    expect(jethCodes(base(`f(who: address = msg.sender): u256 { return 1n; }`))).toContain('JETH250');
     // default is a function call to another function
-    expect(jethCodes(base(`@hidden h(): u256 { return 1n; }\n@hidden f(b: u256 = this.h()): u256 { return b; }`))).toContain('JETH250');
+    expect(jethCodes(base(`h(): u256 { return 1n; }\nf(b: u256 = this.h()): u256 { return b; }`))).toContain('JETH250');
     // arithmetic on a non-literal (a + 1n where a is a param) -> not a self-contained constant
-    expect(jethCodes(base(`@hidden f(a: u256, b: u256 = a + 1n): u256 { return b; }`))).toContain('JETH250');
+    expect(jethCodes(base(`f(a: u256, b: u256 = a + 1n): u256 { return b; }`))).toContain('JETH250');
   });
 
   it('JETH252: default on a non-value-type param (struct / array / bytes)', () => {
-    expect(jethCodes(`@struct class P { x: u256; }\n` + base(`@hidden f(p: P = P(0n)): u256 { return p.x; }`))).toContain('JETH252');
-    expect(jethCodes(base(`@hidden f(a: u256[] = [1n]): u256 { return a.length; }`))).toContain('JETH252');
-    expect(jethCodes(base(`@hidden f(b: bytes = 0x00n): u256 { return b.length; }`))).toContain('JETH252');
+    expect(jethCodes(`@struct class P { x: u256; }\n` + base(`f(p: P = P(0n)): u256 { return p.x; }`))).toContain('JETH252');
+    expect(jethCodes(base(`f(a: u256[] = [1n]): u256 { return a.length; }`))).toContain('JETH252');
+    expect(jethCodes(base(`f(b: bytes = 0x00n): u256 { return b.length; }`))).toContain('JETH252');
   });
 
   it('JETH251: a required (non-defaulted) param after a defaulted one', () => {
-    expect(jethCodes(base(`@hidden f(a: u256 = 1n, b: u256): u256 { return a + b; }`))).toContain('JETH251');
+    expect(jethCodes(base(`f(a: u256 = 1n, b: u256): u256 { return a + b; }`))).toContain('JETH251');
   });
 
   it('JETH070: out-of-range default literal (u8 = 300n) is rejected', () => {
-    const codes = jethCodes(base(`@hidden f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`));
+    const codes = jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`));
     expect(codes).toContain('JETH070');
   });
 
   it('wrong-type default (bool = 1n) is diagnosed when filled at a call site', () => {
-    const codes = jethCodes(base(`@hidden f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`));
+    const codes = jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`));
     // an integer literal coerced into bool -> JETH084 (cannot use integer literal as bool).
     expect(codes.some((c) => c === 'JETH084' || c === 'JETH085')).toBe(true);
   });
 
   it('JETH148: too many positional args, and omitting a non-defaulted arg', () => {
-    expect(jethCodes(base(`@hidden f(a: u256, b: u256 = 1n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, 2n, 3n); }`))).toContain('JETH148');
-    expect(jethCodes(base(`@hidden f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n); }`))).toContain('JETH148');
+    expect(jethCodes(base(`f(a: u256, b: u256 = 1n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, 2n, 3n); }`))).toContain('JETH148');
+    expect(jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n); }`))).toContain('JETH148');
   });
 
   it('named: unknown key, missing no-default param, duplicate key', () => {
     // an unknown key makes looksLikeNamedArgs false -> the object is treated as a positional arg,
     // which then fails to coerce into the u256 param. Whatever the code, it must reject (no crash).
-    const unknown = jethCodes(base(`@hidden f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, zzz: 2n }); }`));
+    const unknown = jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, zzz: 2n }); }`));
     expect(unknown).not.toContain('OK');
     expect(unknown.every((c) => !c.startsWith('CRASH'))).toBe(true);
     // named call missing a param that has no default -> JETH254
-    expect(jethCodes(base(`@hidden f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n }); }`))).toContain('JETH254');
+    expect(jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n }); }`))).toContain('JETH254');
     // duplicate named key -> JETH253 (parser may also reject a literal duplicate; accept either way as long as it diagnoses)
-    const dup = jethCodes(base(`@hidden f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, a: 2n, b: 3n }); }`));
+    const dup = jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, a: 2n, b: 3n }); }`));
     expect(dup).not.toContain('OK');
     expect(dup.every((c) => !c.startsWith('CRASH'))).toBe(true);
   });
@@ -397,7 +397,7 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
   it('mixing positional + named: this.f(1n, {b:2n}) is sound (rejected, never silently mis-binds)', () => {
     // provided.length == 2 so the named-args branch (length==1) is skipped; arg[1] is the object
     // literal coerced into u256 param b -> must be rejected, not silently accepted.
-    const codes = jethCodes(base(`@hidden f(a: u256, b: u256 = 7n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, { b: 2n }); }`));
+    const codes = jethCodes(base(`f(a: u256, b: u256 = 7n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, { b: 2n }); }`));
     expect(codes).not.toContain('OK');
     expect(codes.every((c) => !c.startsWith('CRASH'))).toBe(true);
   });
@@ -412,7 +412,7 @@ describe('F3 adv: cross-width type(T).max default', () => {
     // The default type(u256).max == 2^256-1, coerced into a u128 param at the call site, must hit
     // the same range check that the literal 2^256-1 would. Both should yield JETH070.
     const withDefault = jethCodes(`@contract class C {
-      @hidden f(cap: u128 = type(u256).max): u128 { return cap; }
+      f(cap: u128 = type(u256).max): u128 { return cap; }
       @external @pure t(): u128 { return this.f(); }
     }`);
     const bareLiteral = jethCodes(`@contract class C {
@@ -424,7 +424,7 @@ describe('F3 adv: cross-width type(T).max default', () => {
 
   it('cap: u128 = type(u128).max is in range and matches solc', async () => {
     const J = `@contract class C {
-      @hidden f(x: u128, cap: u128 = type(u128).max): u128 { return x < cap ? x : cap; }
+      f(x: u128, cap: u128 = type(u128).max): u128 { return x < cap ? x : cap; }
       @external @pure t(x: u128): u128 { return this.f(x); }
     }`;
     const S = `// SPDX-License-Identifier: MIT
@@ -449,19 +449,19 @@ describe('F3 adv: default validation is eager (declaration-time)', () => {
   const base = (members: string) => `@contract class C {\n${members}\n}`;
   it('a bad default errors even on an UNCALLED helper', () => {
     // bool = 1n: wrong type. u8 = 300n: out of range. u128 = type(u256).max: out of range.
-    expect(jethCodes(base(`@hidden f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return 0n; }`))
+    expect(jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return 0n; }`))
       .some((c) => c === 'JETH084' || c === 'JETH085')).toBe(true);
-    expect(jethCodes(base(`@hidden f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return 0n; }`))).toContain('JETH070');
-    expect(jethCodes(base(`@hidden f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return 0n; }`))).toContain('JETH070');
+    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return 0n; }`))).toContain('JETH070');
+    expect(jethCodes(base(`f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return 0n; }`))).toContain('JETH070');
   });
   it('the SAME bad default also errors when the helper IS internally called', () => {
-    expect(jethCodes(base(`@hidden f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`))
+    expect(jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`))
       .some((c) => c === 'JETH084' || c === 'JETH085')).toBe(true);
-    expect(jethCodes(base(`@hidden f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`))).toContain('JETH070');
-    expect(jethCodes(base(`@hidden f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return this.f(); }`))).toContain('JETH070');
+    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`))).toContain('JETH070');
+    expect(jethCodes(base(`f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return this.f(); }`))).toContain('JETH070');
   });
   it('a bad default errors even when every call supplies the arg (validated at the declaration)', () => {
-    expect(jethCodes(base(`@hidden f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(5n); }`))).toContain('JETH070');
+    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(5n); }`))).toContain('JETH070');
   });
 });
 
@@ -472,7 +472,7 @@ describe('F3 adv: default validation is eager (declaration-time)', () => {
 describe('F3 adv: positional struct-literal arg alongside an ordinary positional arg', () => {
   const J = `@struct class S { x: u256; y: u256; }
   @contract class C {
-    @hidden f(a: u256, b: S): u256 { return a + b.x * 10n + b.y; }
+    f(a: u256, b: S): u256 { return a + b.x * 10n + b.y; }
     @external @pure t(a: u256, bx: u256, by: u256): u256 { return this.f(a, { x: bx, y: by }); }
   }`;
   const Sol = `// SPDX-License-Identifier: MIT

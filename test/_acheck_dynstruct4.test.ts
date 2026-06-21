@@ -44,17 +44,17 @@ class A {
   @external pushEmptyRec(): void { this.recs.push(); }
   @external setRecS(i: u256, v: string): void { this.recs[i].s = v; }
   @external setRecA(i: u256, v: u256): void { this.recs[i].a = v; }
-  @view recsLen(): u256 { return this.recs.length; }
-  @view recAt(i: u256): string { return this.recs[i].s; }
-  @view recAtA(i: u256): u256 { return this.recs[i].a; }
+  @external @view recsLen(): u256 { return this.recs.length; }
+  @external @view recAt(i: u256): string { return this.recs[i].s; }
+  @external @view recAtA(i: u256): u256 { return this.recs[i].a; }
   @external pushKA(k: address, a: u256, ss: string): void { this.byKeyArr[k].push(D(a, ss)); }
   @external popKA(k: address): void { this.byKeyArr[k].pop(); }
   @external pushEmptyKA(k: address): void { this.byKeyArr[k].push(); }
   @external setKAs(k: address, i: u256, v: string): void { this.byKeyArr[k][i].s = v; }
   @external setKAa(k: address, i: u256, v: u256): void { this.byKeyArr[k][i].a = v; }
-  @view kaLen(k: address): u256 { return this.byKeyArr[k].length; }
-  @view kaAt(k: address, i: u256): string { return this.byKeyArr[k][i].s; }
-  @view kaAtA(k: address, i: u256): u256 { return this.byKeyArr[k][i].a; }
+  @external @view kaLen(k: address): u256 { return this.byKeyArr[k].length; }
+  @external @view kaAt(k: address, i: u256): string { return this.byKeyArr[k][i].s; }
+  @external @view kaAtA(k: address, i: u256): u256 { return this.byKeyArr[k][i].a; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

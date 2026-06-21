@@ -38,32 +38,32 @@ class KeyTypes {
   @external pushA(k: address, v: u256): void { this.ma[k].push(v); }
   @external popA(k: address): void { this.ma[k].pop(); }
   @external setA(k: address, i: u256, v: u256): void { this.ma[k][i] = v; }
-  @view lenA(k: address): u256 { return this.ma[k].length; }
-  @view atA(k: address, i: u256): u256 { return this.ma[k][i]; }
+  @external @view lenA(k: address): u256 { return this.ma[k].length; }
+  @external @view atA(k: address, i: u256): u256 { return this.ma[k][i]; }
 
   @external pushU(k: u256, v: u256): void { this.mu[k].push(v); }
   @external popU(k: u256): void { this.mu[k].pop(); }
   @external setU(k: u256, i: u256, v: u256): void { this.mu[k][i] = v; }
-  @view lenU(k: u256): u256 { return this.mu[k].length; }
-  @view atU(k: u256, i: u256): u256 { return this.mu[k][i]; }
+  @external @view lenU(k: u256): u256 { return this.mu[k].length; }
+  @external @view atU(k: u256, i: u256): u256 { return this.mu[k][i]; }
 
   @external pushB(k: bytes32, v: u256): void { this.mb[k].push(v); }
   @external popB(k: bytes32): void { this.mb[k].pop(); }
   @external setB(k: bytes32, i: u256, v: u256): void { this.mb[k][i] = v; }
-  @view lenB(k: bytes32): u256 { return this.mb[k].length; }
-  @view atB(k: bytes32, i: u256): u256 { return this.mb[k][i]; }
+  @external @view lenB(k: bytes32): u256 { return this.mb[k].length; }
+  @external @view atB(k: bytes32, i: u256): u256 { return this.mb[k][i]; }
 
   @external push6(k: u64, v: u256): void { this.m6[k].push(v); }
   @external pop6(k: u64): void { this.m6[k].pop(); }
   @external set6(k: u64, i: u256, v: u256): void { this.m6[k][i] = v; }
-  @view len6(k: u64): u256 { return this.m6[k].length; }
-  @view at6(k: u64, i: u256): u256 { return this.m6[k][i]; }
+  @external @view len6(k: u64): u256 { return this.m6[k].length; }
+  @external @view at6(k: u64, i: u256): u256 { return this.m6[k][i]; }
 
   @external pushI(k: i128, v: u256): void { this.mi[k].push(v); }
   @external popI(k: i128): void { this.mi[k].pop(); }
   @external setI(k: i128, i: u256, v: u256): void { this.mi[k][i] = v; }
-  @view lenI(k: i128): u256 { return this.mi[k].length; }
-  @view atI(k: i128, i: u256): u256 { return this.mi[k][i]; }
+  @external @view lenI(k: i128): u256 { return this.mi[k].length; }
+  @external @view atI(k: i128, i: u256): u256 { return this.mi[k][i]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

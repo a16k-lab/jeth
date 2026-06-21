@@ -33,16 +33,16 @@ class MultiKey {
   @external setBBal(k: bytes32, v: u128): void { this.bm[k].bal = v; }
   @external setBNonce(k: bytes32, v: u64): void { this.bm[k].nonce = v; }
   @external setBActive(k: bytes32, v: bool): void { this.bm[k].active = v; }
-  @view getBBal(k: bytes32): u128 { return this.bm[k].bal; }
-  @view getBNonce(k: bytes32): u64 { return this.bm[k].nonce; }
-  @view getBActive(k: bytes32): bool { return this.bm[k].active; }
+  @external @view getBBal(k: bytes32): u128 { return this.bm[k].bal; }
+  @external @view getBNonce(k: bytes32): u64 { return this.bm[k].nonce; }
+  @external @view getBActive(k: bytes32): bool { return this.bm[k].active; }
 
   @external setUBal(k: u256, v: u128): void { this.um[k].bal = v; }
   @external setUNonce(k: u256, v: u64): void { this.um[k].nonce = v; }
   @external setUActive(k: u256, v: bool): void { this.um[k].active = v; }
-  @view getUBal(k: u256): u128 { return this.um[k].bal; }
-  @view getUNonce(k: u256): u64 { return this.um[k].nonce; }
-  @view getUActive(k: u256): bool { return this.um[k].active; }
+  @external @view getUBal(k: u256): u128 { return this.um[k].bal; }
+  @external @view getUNonce(k: u256): u64 { return this.um[k].nonce; }
+  @external @view getUActive(k: u256): bool { return this.um[k].active; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

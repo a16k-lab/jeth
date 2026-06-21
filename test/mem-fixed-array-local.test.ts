@@ -31,8 +31,8 @@ const JETH = `@contract class C {
   @external @pure narrow(p: u8, q: u8): Arr<u8, 4> { let a: Arr<u8, 4> = [p, q, 255n, 0n]; a[1n] = 200n; return a; }
   @external @pure signed(p: i64, q: i64): Arr<i64, 3> { let a: Arr<i64, 3> = [p, q, -1n]; return a; }
   // copy from storage fixed array
-  @view fromG(): Arr<u256, 3> { let a: Arr<u256, 3> = this.g; a[0n] = a[0n] + 1000n; return a; }
-  @view getG(i: u256): u256 { return this.g[i]; }
+  @external @view fromG(): Arr<u256, 3> { let a: Arr<u256, 3> = this.g; a[0n] = a[0n] + 1000n; return a; }
+  @external @view getG(i: u256): u256 { return this.g[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

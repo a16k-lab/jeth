@@ -20,10 +20,10 @@ const JETH = `@struct class S { a: u256; xs: u256[]; b: u256; }
   @external pushX(v: u256): void { this.s.xs.push(v); }
   @external popX(): void { this.s.xs.pop(); }
   @external setX(i: u256, v: u256): void { this.s.xs[i] = v; }
-  @view xlen(): u256 { return this.s.xs.length; }
-  @view xat(i: u256): u256 { return this.s.xs[i]; }
-  @view getA(): u256 { return this.s.a; }
-  @view getS(): S { return this.s; }
+  @external @view xlen(): u256 { return this.s.xs.length; }
+  @external @view xat(i: u256): u256 { return this.s.xs[i]; }
+  @external @view getA(): u256 { return this.s.a; }
+  @external @view getS(): S { return this.s; }
   @external @pure echo(e: E): E { return e; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT

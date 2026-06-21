@@ -151,46 +151,46 @@ const JETH = `@contract class C {
 
   @external pushA(i: u256, v: u256): void { this.a[i].push(v); }
   @external setA(i: u256, j: u256, v: u256): void { this.a[i][j] = v; }
-  @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
-  @view lenA(i: u256): u256 { return this.a[i].length; }
+  @external @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
+  @external @view lenA(i: u256): u256 { return this.a[i].length; }
   @external pushAb(i: u256, v: bytes32): void { this.ab[i].push(v); }
-  @view getAb(i: u256, j: u256): bytes32 { return this.ab[i][j]; }
-  @view lenAb(i: u256): u256 { return this.ab[i].length; }
+  @external @view getAb(i: u256, j: u256): bytes32 { return this.ab[i][j]; }
+  @external @view lenAb(i: u256): u256 { return this.ab[i].length; }
 
   @external pushB(): void { this.b.push(); }
   @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
-  @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
-  @view lenB(): u256 { return this.b.length; }
+  @external @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
+  @external @view lenB(): u256 { return this.b.length; }
   @external pushC(): void { this.c.push(); }
   @external setC(i: u256, j: u256, v: u256): void { this.c[i][j] = v; }
-  @view getC(i: u256, j: u256): u256 { return this.c[i][j]; }
-  @view lenC(): u256 { return this.c.length; }
+  @external @view getC(i: u256, j: u256): u256 { return this.c[i][j]; }
+  @external @view lenC(): u256 { return this.c.length; }
   @external pushD(): void { this.d.push(); }
   @external setD(i: u256, j: u256, v: u256): void { this.d[i][j] = v; }
-  @view getD(i: u256, j: u256): u256 { return this.d[i][j]; }
-  @view lenD(): u256 { return this.d.length; }
+  @external @view getD(i: u256, j: u256): u256 { return this.d[i][j]; }
+  @external @view lenD(): u256 { return this.d.length; }
 
   @external pushPk8(): void { this.pk8.push(); }
   @external setPk8(i: u256, j: u256, v: u8): void { this.pk8[i][j] = v; }
-  @view getPk8(i: u256, j: u256): u8 { return this.pk8[i][j]; }
+  @external @view getPk8(i: u256, j: u256): u8 { return this.pk8[i][j]; }
   @external pushPk16(): void { this.pk16.push(); }
   @external setPk16(i: u256, j: u256, v: u16): void { this.pk16[i][j] = v; }
-  @view getPk16(i: u256, j: u256): u16 { return this.pk16[i][j]; }
+  @external @view getPk16(i: u256, j: u256): u16 { return this.pk16[i][j]; }
   @external pushPkI64(): void { this.pkI64.push(); }
   @external setPkI64(i: u256, j: u256, v: i64): void { this.pkI64[i][j] = v; }
-  @view getPkI64(i: u256, j: u256): i64 { return this.pkI64[i][j]; }
+  @external @view getPkI64(i: u256, j: u256): i64 { return this.pkI64[i][j]; }
 
   @external pushBa(): void { this.ba.push(); }
   @external setBa(i: u256, j: u256, v: bytes32): void { this.ba[i][j] = v; }
-  @view getBa(i: u256, j: u256): bytes32 { return this.ba[i][j]; }
+  @external @view getBa(i: u256, j: u256): bytes32 { return this.ba[i][j]; }
   @external pushAd(): void { this.ad.push(); }
   @external setAd(i: u256, j: u256, v: address): void { this.ad[i][j] = v; }
-  @view getAd(i: u256, j: u256): address { return this.ad[i][j]; }
+  @external @view getAd(i: u256, j: u256): address { return this.ad[i][j]; }
 
   @external pushDd(): void { this.dd.push(); }
   @external setDd(i: u256, j: u256, k: u256, v: u256): void { this.dd[i][j][k] = v; }
-  @view getDd(i: u256, j: u256, k: u256): u256 { return this.dd[i][j][k]; }
-  @view lenDd(): u256 { return this.dd.length; }
+  @external @view getDd(i: u256, j: u256, k: u256): u256 { return this.dd[i][j][k]; }
+  @external @view lenDd(): u256 { return this.dd.length; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

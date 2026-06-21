@@ -50,8 +50,8 @@ describe('sweep soundness fixes (miscompiles + over-acceptances)', () => {
     // addmod/mulmod with a compile-time zero modulus
     expect(jethRejects(`@contract class C { @external @pure f(a: u256, b: u256): u256 { return addmod(a, b, 0n); } }`)).toBe(true);
     expect(jethRejects(`@contract class C { @external @pure f(a: u256, b: u256): u256 { return mulmod(a, b, 1n - 1n); } }`)).toBe(true);
-    // @internal/@private @payable
-    expect(jethRejects(`@contract class C { @internal @payable g(): void {} @external f(): void { this.g(); } }`)).toBe(true);
+    // @internal/@payable
+    expect(jethRejects(`@contract class C { @payable g(): void {} @external f(): void { this.g(); } }`)).toBe(true);
     // nested unchecked
     expect(jethRejects(`@contract class C { @external @pure f(): u256 { let x: u256 = 0n; unchecked: { unchecked: { x = x + 1n; } } return x; } }`)).toBe(true);
     // stray decorators on event / error param
@@ -240,19 +240,19 @@ describe('constant arithmetic accept/reject parity vs solc (already solc-accurat
 });
 
 describe('@payable on internal/private/hidden is rejected (solc parity)', () => {
-  // solc: "internal" and "private" functions cannot be payable. @hidden is an explicitly-internal fn.
+  // solc: "internal" and "private" functions cannot be payable. is an explicitly-internal fn.
   const reject: [string, string][] = [
-    ['@internal @payable', `@contract class C { @internal @payable v(): u256 { return msg.value; } @external @payable f(): u256 { return this.v(); } }`],
-    ['@private @payable', `@contract class C { @private @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
-    ['@hidden @payable', `@contract class C { @hidden @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
+    ['@payable', `@contract class C { @payable v(): u256 { return msg.value; } @external @payable f(): u256 { return this.v(); } }`],
+    ['@payable', `@contract class C { @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
+    ['@payable', `@contract class C { @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
   ];
   for (const [name, src] of reject) {
     it(`rejects ${name}`, () => expect(jethRejects(src)).toBe(true));
   }
   // external/public payable must still be accepted.
-  it('accepts @external/@public @payable', () => {
+  it('accepts @external/@external @payable', () => {
     expect(jethAccepts(`@contract class C { @external @payable f(): u256 { return msg.value; } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @public @payable f(): u256 { return msg.value; } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @external @payable f(): u256 { return msg.value; } }`)).toBe(true);
   });
 });
 
@@ -574,12 +574,12 @@ describe('re-sweep batch 3: object literals, internal aggregate params, Arr<dynE
   });
   it('internal call: struct + fixed-array params/return + calldata aggregate forwarding (byte-identical)', () =>
     rt(
-      `@struct class P { a: u8; b: u32; } @contract class C { @internal @pure gs(p: P): u32 { return p.b; } @internal @pure ga(a: Arr<u256,3>): u256 { return a[2n]; } @internal @pure mk(): Arr<u256,2> { return [9n, 8n]; } @external @pure fs(x: u8, y: u32): u32 { return gs(P(x, y)); } @external @pure fa(): u256 { return ga([10n,20n,30n]); } @external @pure fr(): u256 { let a: Arr<u256,2> = mk(); return a[0n] + a[1n]; } @external @pure fwd(x: P): u32 { return gs(x); } }`,
+      `@struct class P { a: u8; b: u32; } @contract class C { @pure gs(p: P): u32 { return p.b; } @pure ga(a: Arr<u256,3>): u256 { return a[2n]; } @pure mk(): Arr<u256,2> { return [9n, 8n]; } @external @pure fs(x: u8, y: u32): u32 { return gs(P(x, y)); } @external @pure fa(): u256 { return ga([10n,20n,30n]); } @external @pure fr(): u256 { let a: Arr<u256,2> = mk(); return a[0n] + a[1n]; } @external @pure fwd(x: P): u32 { return gs(x); } }`,
       `contract C { struct P{uint8 a;uint32 b;} function gs(P memory p) internal pure returns(uint32){return p.b;} function ga(uint256[3] memory a) internal pure returns(uint256){return a[2];} function mk() internal pure returns(uint256[2] memory){return [uint256(9),8];} function fs(uint8 x,uint32 y) external pure returns(uint32){ return gs(P(x,y)); } function fa() external pure returns(uint256){ return ga([uint256(10),20,30]); } function fr() external pure returns(uint256){ uint256[2] memory a=mk(); return a[0]+a[1]; } function fwd(P calldata x) external pure returns(uint32){ return gs(x); } }`,
       [{ sig: 'fs(uint8,uint32)', args: W(7n) + W(0xcafen) }, { sig: 'fa()' }, { sig: 'fr()' }, { sig: 'fwd((uint8,uint32))', args: W(1n) + W(2n) }],
     ));
-  it('@public aggregate internal call stays a clean rejection (broader dual-entry feature)', () => {
-    expect(jethRejects(`@struct class P { a: u8; } @contract class C { @public @pure g(p: P): u8 { return p.a; } @external @pure f(): u8 { return g(P(5n)); } }`)).toBe(true);
+  it('@external aggregate internal call stays a clean rejection (broader dual-entry feature)', () => {
+    expect(jethRejects(`@struct class P { a: u8; } @contract class C { @external @pure g(p: P): u8 { return p.a; } @external @pure f(): u8 { return g(P(5n)); } }`)).toBe(true);
   });
   it('bare @state Arr<string,N>[] / Arr<bytes,N>[]: push/set/get/pop deep-clear/delete byte-identical', async () => {
     const calls: { sig: string; args?: string }[] = [{ sig: 'grow()' }, { sig: 'grow()' }, { sig: 'len()' }];
@@ -609,14 +609,16 @@ describe('remaining over-rejections R1/R3/R5 vs solc (byte-identical)', () => {
       `struct I{uint256 a;uint32 b;} struct O{I i;uint256 y;} struct A{uint256 x;uint256[2] arr;} contract C { O o; I src; function fLocal(uint256 y) external pure returns(O memory){ I memory z=I(7,8); return O(z,y); } function fParam(I calldata z,uint256 y) external pure returns(O memory){ return O(z,y); } function fArr(uint256 x) external pure returns(A memory){ uint256[2] memory z=[uint256(1),2]; return A(x,z); } function seed() external { src=I(11,22); } function setO() external { I memory z=I(3,4); o=O(z,99); } function ga() external view returns(uint256){ return o.i.a; } function fStore(uint256 y) external view returns(O memory){ return O(src,y); } }`,
       [{ sig: 'fLocal(uint256)', args: W(5n) }, { sig: 'fParam((uint256,uint32),uint256)', args: W(1n) + W(2n) + W(5n) }, { sig: 'fArr(uint256)', args: W(9n) }, { sig: 'seed()' }, { sig: 'setO()' }, { sig: 'ga()' }, { sig: 'fStore(uint256)', args: W(7n) }],
     ));
-  it('R5: msg.value in @internal/@private is allowed (forwarded byte-identical); externally requires @payable', () => {
-    expect(jethAccepts(`@contract class C { @internal @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @private @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`)).toBe(true);
-    // @read (public) reading msg.value directly still requires @payable -> rejected
-    expect(jethRejects(`@contract class C { @read bad(): u256 { return msg.value; } }`)).toBe(true);
-    // external/public non-payable reading msg.value rejected; @pure internal rejected (env read)
+  it('R5: msg.value in an internal function is allowed (forwarded byte-identical); externally requires @payable', () => {
+    expect(jethAccepts(`@contract class C { @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`)).toBe(true);
+    // internal (unmarked) reading msg.value directly is allowed (forwarded byte-identical)
+    expect(jethAccepts(`@contract class C { @read bad(): u256 { return msg.value; } }`)).toBe(true);
+    // external non-payable reading msg.value directly still requires @payable -> rejected
+    expect(jethRejects(`@contract class C { @external @read bad(): u256 { return msg.value; } }`)).toBe(true);
+    // external non-payable reading msg.value rejected; @pure internal rejected (env read)
     expect(jethRejects(`@contract class C { @external f(): u256 { return msg.value; } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @internal @pure h(): u256 { return msg.value; } @external f(): u256 { return this.h(); } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @pure h(): u256 { return msg.value; } @external f(): u256 { return this.h(); } }`)).toBe(true);
   });
 });
 

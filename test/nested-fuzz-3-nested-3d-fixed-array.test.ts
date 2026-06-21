@@ -34,11 +34,11 @@ class Cube3D {
   @external setCube(a: u256, b: u256, c: u256, v: u256): void {
     this.cube[a][b][c] = v;
   }
-  @view getCube(a: u256, b: u256, c: u256): u256 {
+  @external @view getCube(a: u256, b: u256, c: u256): u256 {
     return this.cube[a][b][c];
   }
-  @view getSentBefore(): u256 { return this.sentinelBefore; }
-  @view getSentAfter(): u256 { return this.sentinelAfter; }
+  @external @view getSentBefore(): u256 { return this.sentinelBefore; }
+  @external @view getSentAfter(): u256 { return this.sentinelAfter; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

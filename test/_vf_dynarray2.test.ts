@@ -47,12 +47,12 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external incU(i: u256, v: u256): void { this.u[i] = this.u[i] + v; }       // checked add
   @external decU(i: u256, v: u256): void { this.u[i] = this.u[i] - v; }       // checked sub
   @external mulU(i: u256, v: u256): void { this.u[i] = this.u[i] * v; }       // checked mul
-  @view getU(i: u256): u256 { return this.u[i]; }
-  @view lenU(): u256 { return this.u.length; }
-  @view lenM1(): u256 { return this.u.length - 1n; }                          // underflow if empty
-  @view allU(): u256[] { return this.u; }
+  @external @view getU(i: u256): u256 { return this.u[i]; }
+  @external @view lenU(): u256 { return this.u.length; }
+  @external @view lenM1(): u256 { return this.u.length - 1n; }                          // underflow if empty
+  @external @view allU(): u256[] { return this.u; }
   // dirty-high-bit index: index passed as full word, only low matters but value used as-is
-  @view getUTernary(c: bool): u256 { return this.u[c ? 0n : 1n]; }
+  @external @view getUTernary(c: bool): u256 { return this.u[c ? 0n : 1n]; }
   @external pushNloop(n: u256, base: u256): void {
     for (let i: u256 = 0n; i < n; i += 1n) { this.u.push(base + i); }
   }
@@ -60,23 +60,23 @@ const JETH = `@struct class P { x: u128; y: u128; }
   @external pushPa(x: u128, y: u128): void { this.pa.push(P(x, y)); }
   @external bumpY(i: u256, d: u128): void { this.pa[i].y += d; }              // field RMW, u128 wrap-in-unchecked? checked
   @external setX(i: u256, x: u128): void { this.pa[i].x = x; }
-  @view getY(i: u256): u128 { return this.pa[i].y; }
-  @view getX(i: u256): u128 { return this.pa[i].x; }
-  @view allPa(): P[] { return this.pa; }
+  @external @view getY(i: u256): u128 { return this.pa[i].y; }
+  @external @view getX(i: u256): u128 { return this.pa[i].x; }
+  @external @view allPa(): P[] { return this.pa; }
 
   @external pushSOuter(): void { this.ss.push(); }
   @external pushSInner(i: u256, s: string): void { this.ss[i].push(s); }
   @external popSInner(i: u256): void { this.ss[i].pop(); }
-  @view allSS(): string[][] { return this.ss; }
-  @view ssAt(i: u256, j: u256): string { return this.ss[i][j]; }
+  @external @view allSS(): string[][] { return this.ss; }
+  @external @view ssAt(i: u256, j: u256): string { return this.ss[i][j]; }
 
   @external pushDAOuter(): void { this.da.push(); }
   @external pushDAInner(i: u256, a: u256, s: string): void { this.da[i].push(D(a, s)); }
-  @view allDA(): D[][] { return this.da; }
+  @external @view allDA(): D[][] { return this.da; }
 
   @external pushB16(v: bytes16): void { this.b16.push(v); }
   @external popB16(): void { this.b16.pop(); }
-  @view allB16(): bytes16[] { return this.b16; }
+  @external @view allB16(): bytes16[] { return this.b16; }
 
   @external @pure memOOBWrite(): u256 { let xs: u256[] = [1n, 2n]; xs[5n] = 9n; return xs[0n]; }
   @external @pure memOOBRead(): u256 { let xs: u256[] = [1n, 2n]; return xs[5n]; }

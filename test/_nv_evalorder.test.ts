@@ -53,7 +53,7 @@ const JETH = `@struct class P { a: u128; b: u128; }
   @external @pure arrLit(): u256 { let s: u256 = 0n; let xs: u256[] = [(s = s * 10n + 1n), (s = s * 10n + 2n), (s = s * 10n + 3n)]; return s * 1000n + xs[0n] * 100n + xs[1n] * 10n + xs[2n]; }
   @external @pure retTuple(): [u256, u256, u256] { let s: u256 = 0n; return [(s = s * 10n + 1n), (s = s * 10n + 2n), s]; }
   @external @pure internalArgs(): u256 { let s: u256 = 0n; return this.sub3((s = s * 10n + 1n), (s = s * 10n + 2n), (s = s * 10n + 3n)) * 10000n + s; }
-  @internal @pure sub3(a: u256, b: u256, c: u256): u256 { return a * 100n + b * 10n + c; }
+  @pure sub3(a: u256, b: u256, c: u256): u256 { return a * 100n + b * 10n + c; }
   @external @pure incArgs(): u256 { let x: u256 = 0n; return this.sub3((++x), (++x), (++x)) * 10n + x; }
   @external @pure postArgs(): u256 { let x: u256 = 0n; return this.sub3((x++), (x++), (x++)) * 10n + x; }
   @external @pure nestedCallArgs(): u256 { let s: u256 = 0n; return this.sub3(this.sub3((s = s*10n+1n),(s = s*10n+2n),(s = s*10n+3n)), (s = s*10n+4n), (s = s*10n+5n)) % 1000000n; }
@@ -99,10 +99,10 @@ const JETH = `@struct class P { a: u128; b: u128; }
   @external @pure rawRight(v: u256): u256 { let x: u256 = 0n; let r: u256 = (x = x + 1n) + x * 10n + (x = v) * 100n; return r; }
 
   // helper for reading state
-  @view getSeq(): u256 { return this.seq; }
-  @view getArr(i: u256): u256 { return this.arr[i]; }
-  @view getPA(): u128 { return this.p.a; }
-  @view getPB(): u128 { return this.p.b; }
+  @external @view getSeq(): u256 { return this.seq; }
+  @external @view getArr(i: u256): u256 { return this.arr[i]; }
+  @external @view getPA(): u128 { return this.p.a; }
+  @external @view getPB(): u128 { return this.p.b; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
