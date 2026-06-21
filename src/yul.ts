@@ -1270,7 +1270,16 @@ ${indent(runtime, 6)}
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(add(${mp}, 0x20), ${len})`);
         idxVals.push(topic);
-      } else if (p.indexed && (p.type.kind === 'struct' || (p.type.kind === 'array' && p.type.length !== undefined))) {
+      } else if (p.indexed && p.type.kind === 'struct' && isDynamicType(p.type)) {
+        // an indexed DYNAMIC struct topic is keccak256 over the recursively FLATTENED payload
+        // (static leaves inline; bytes/string -> content padded to a word, no length; dyn value-
+        // array -> element words, no length; nested struct -> members concatenated). This is NOT
+        // abi.encode (no offsets, no length words). Verified byte-identical to solc.
+        const { mp, size } = this.encodeTopicBlob(arg, ctx, out);
+        const topic = this.fresh();
+        out.push(`let ${topic} := keccak256(${mp}, ${size})`);
+        idxVals.push(topic);
+      } else if (p.indexed && isStaticType(p.type) && (p.type.kind === 'struct' || (p.type.kind === 'array' && p.type.length !== undefined))) {
         // an indexed STATIC fixed-array / struct topic is keccak256(abi.encode(value)) = keccak over
         // the padded leaf words (no length word). Verified byte-identical to solc.
         const { mp, size } = this.materializeStaticAggToMem(arg, ctx, out);
@@ -1915,6 +1924,97 @@ ${indent(runtime, 6)}
     const end = this.encodeTupleInto(struct, src, mp, ctx, out, nextRef);
     out.push(`mstore(0x40, ${end})`);
     return { mp, size: `sub(${end}, ${mp})` };
+  }
+
+  /** Encode a dynamic struct value as solc's indexed-event TOPIC payload (then keccak'd to
+   *  produce the topic). Unlike the ABI encoding, this is the recursively FLATTENED form with
+   *  NO offset words and NO length words: a static leaf -> its word(s) inline; bytes/string ->
+   *  content padded up to a 32-byte boundary; a dynamic value-array -> its element words; a
+   *  nested struct -> its members concatenated. Verified byte-identical to solc (keccak256 of
+   *  this blob == the topic). Reuses the same pre-pass + source resolution as the ABI encoder. */
+  private encodeTopicBlob(value: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
+    const struct = value.type as JethType & { kind: 'struct' };
+    const src = this.tupleSrc(value, ctx, out);
+    const queue: DynRef[] = [];
+    this.collectTupleDyn(struct, src, queue, ctx, out);
+    let qi = 0;
+    const nextRef = (): DynRef => queue[qi++]!;
+    const mp = this.fresh();
+    out.push(`let ${mp} := mload(0x40)`);
+    const end = this.topicEncodeStruct(struct, src, mp, ctx, out, nextRef);
+    out.push(`mstore(0x40, ${end})`);
+    return { mp, size: `sub(${end}, ${mp})` };
+  }
+
+  /** Topic-encode a struct's fields sequentially at `tuplePtr` (no head/tail split, no
+   *  offsets, no length words). Returns a Yul expr for the cursor just past the payload. */
+  private topicEncodeStruct(struct: JethType & { kind: 'struct' }, src: TupleSrc, tuplePtr: string, ctx: LowerCtx, out: string[], nextRef: () => DynRef): string {
+    const cursor = this.fresh();
+    out.push(`let ${cursor} := ${tuplePtr}`);
+    let hw = 0; // running head-word offset within the source tuple (for mem/cd field resolution)
+    struct.fields.forEach((f, i) => {
+      if (isDynamicType(f.type)) {
+        const nc = this.topicEncodeDynField(f, src, i, hw, cursor, ctx, out, nextRef);
+        out.push(`${cursor} := ${nc}`);
+        hw += 1;
+      } else {
+        // a static field topic-encodes to exactly its abiHeadWords leaf words inline.
+        this.encodeStaticInline(f.type, src, i, hw, cursor, ctx, out);
+        out.push(`${cursor} := add(${cursor}, ${abiHeadWords(f.type) * 32})`);
+        hw += abiHeadWords(f.type);
+      }
+    });
+    return cursor;
+  }
+
+  /** Topic-encode a single DYNAMIC field's payload at `cursor`; returns the new cursor.
+   *  bytes/string -> content padded to a word (no length); dynamic value-array -> element
+   *  words (no length); nested dynamic struct -> recurse (members concatenated). */
+  private topicEncodeDynField(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, cursor: string, ctx: LowerCtx, out: string[], nextRef: () => DynRef): string {
+    if (isBytesLike(f.type)) {
+      const ref = nextRef();
+      const len = this.fresh();
+      out.push(`let ${len} := ${this.dynLen(ref)}`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
+      const padded = `and(add(${len}, 0x1f), not(0x1f))`;
+      const nc = this.fresh();
+      out.push(`let ${nc} := add(${cursor}, ${padded})`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${cursor})) { ${this.panic()}(0x41) }`);
+      if (ref.src === 'calldata') {
+        out.push(`if gt(add(${ref.dataPtr}, ${len}), calldatasize()) { revert(0, 0) }`);
+        out.push(`calldatacopy(${cursor}, ${ref.dataPtr}, ${len})`);
+      } else if (ref.src === 'memory') {
+        out.push(`mcopy(${cursor}, add(${ref.ptr}, 0x20), ${len})`);
+      } else {
+        throw new UnsupportedError('topic-encoding a storage bytes/string struct field is not supported yet');
+      }
+      // zero the partial-word padding tail (one word starting at content end; lies within the
+      // freshly-reserved region, so it cannot clobber an already-written earlier field).
+      out.push(`if mod(${len}, 0x20) { mstore(add(${cursor}, ${len}), 0) }`);
+      return nc;
+    }
+    if (f.type.kind === 'array' && f.type.length === undefined) {
+      // dynamic value-array: its element words, NO length word (each element is one 32-byte word).
+      const ref = nextRef();
+      const len = this.fresh();
+      out.push(`let ${len} := ${this.dynLen(ref)}`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
+      const byteLen = `mul(${len}, 0x20)`;
+      const nc = this.fresh();
+      out.push(`let ${nc} := add(${cursor}, ${byteLen})`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${cursor})) { ${this.panic()}(0x41) }`);
+      if (ref.src === 'memory') {
+        out.push(`mcopy(${cursor}, add(${ref.ptr}, 0x20), ${byteLen})`);
+      } else {
+        throw new UnsupportedError('topic-encoding a calldata-array struct field is not supported yet');
+      }
+      return nc;
+    }
+    if (f.type.kind === 'struct') {
+      const nestedSrc = this.nestedTupleSrc(f, src, fieldIdx, headWord, ctx, out);
+      return this.topicEncodeStruct(f.type, nestedSrc, cursor, ctx, out, nextRef);
+    }
+    throw new UnsupportedError(`unsupported dynamic struct field kind '${f.type.kind}'`);
   }
 
   /** PRE-PASS: walk a tuple in encode order and materialize each bytes/string

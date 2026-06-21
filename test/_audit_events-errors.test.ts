@@ -539,13 +539,18 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     expect(() => compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' }))
       .not.toThrow();
   });
-  it('indexed static-struct event param now compiles; a dynamic struct stays gated (JETH207)', () => {
+  it('indexed static-struct AND a supported dynamic struct now compile; a nested-struct-field one stays gated (JETH207)', () => {
     expect(() => compile(`@struct class S { x: u256; }
 @contract class C { @event E(@indexed s: S); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
+    // a supported dynamic struct (string field) indexed param now compiles too (keccak of the
+    // flattened payload; verified byte-identical in fix-all-divergences.test.ts).
+    expect(() => compile(`@struct class D { s: string; }
+@contract class C { @event E(@indexed d: D); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
     let threw = false;
     try {
-      compile(`@struct class D { s: string; }
-@contract class C { @event E(@indexed d: D); @external f(): void {} }`, { fileName: 'C.jeth' });
+      compile(`@struct class Inner { p: u256; s: string; }
+@struct class D2 { x: u256; inner: Inner; }
+@contract class C { @event E(@indexed d: D2); @external f(): void {} }`, { fileName: 'C.jeth' });
     } catch (e: any) {
       threw = true;
       expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH207');

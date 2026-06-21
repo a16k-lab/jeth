@@ -931,14 +931,20 @@ export class Analyzer {
           // keccak256(content bytes) (G4). A DYNAMIC value-element array: topic =
           // keccak256(element words). A STATIC fixed-array / static struct: topic =
           // keccak256(abi.encode(value)) = keccak over the padded leaf words. All verified vs solc.
-          // A dynamic struct / fixed-array-of-dynamic indexed param stays a later step.
+          // A supported DYNAMIC struct: topic = keccak256 over the recursively FLATTENED
+          // payload (static leaves inline; bytes/string -> content padded to a word, no
+          // length; dyn value-array -> element words, no length; nested struct -> members
+          // concatenated). Verified byte-identical to solc. A fixed-array-of-dynamic indexed
+          // param stays a later step.
           const indexedArrayOk = t.kind === 'array' && t.length === undefined && isStaticValueType(t.element);
           const indexedStaticAgg = isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
-          if (!isBytesLike(t) && !indexedArrayOk && !indexedStaticAgg) {
-            this.diags.error(p, 'JETH207', `indexed ${displayName(t)} event parameter '${p.name.text}' is not supported yet (indexed bytes/string, a dynamic value-element array, or a static fixed-array/struct)`);
+          const indexedDynStruct = t.kind === 'struct' && this.isSupportedDynStructLocal(t);
+          if (!isBytesLike(t) && !indexedArrayOk && !indexedStaticAgg && !indexedDynStruct) {
+            this.diags.error(p, 'JETH207', `indexed ${displayName(t)} event parameter '${p.name.text}' is not supported yet (indexed bytes/string, a dynamic value-element array, a static fixed-array/struct, or a supported dynamic struct)`);
             continue;
           }
-          // indexed bytes/string, dynamic value array, or static fixed-array/struct: allowed (keccak topic).
+          // indexed bytes/string, dynamic value array, static fixed-array/struct, or a supported
+          // dynamic struct: allowed (keccak topic).
         } else {
           // non-indexed reference param: a dynamic value-element array, bytes/string, a STATIC struct /
           // fixed-array (encoded inline), or a supported DYNAMIC struct (value + bytes/string + dyn

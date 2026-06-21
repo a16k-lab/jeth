@@ -390,3 +390,50 @@ describe('storage bytes .push / .pop vs solc (short<->long transitions)', () => 
     );
   });
 });
+
+describe('indexed DYNAMIC-struct event param: topic = keccak(flattened payload) vs solc', () => {
+  const L36 = 'abcdefghijklmnopqrstuvwxyz0123456789'; // 36 bytes (> 32, multi-word)
+  const L32 = 'abcdefghijklmnopqrstuvwxyz012345'; // exactly 32 (word boundary)
+  it('value + string fields (struct literal)', () =>
+    rt(
+      `@struct class D { x: u256; s: string; } @contract class C { @event E(@indexed d: D, n: u256); @external f(): void { emit(E(D(7n,"hi"), 9n)); } }`,
+      `struct D { uint256 x; string s; } contract C { event E(D indexed d, uint256 n); function f() external { emit E(D(7,"hi"), 9); } }`,
+      [{ sig: 'f()' }],
+    ));
+  it('long string + bytes + trailing static (multi-word, two dynamic fields)', () =>
+    rt(
+      `@struct class D { x: u256; s: string; b: bytes; y: u256; } @contract class C { @event E(@indexed d: D); @external f(): void { emit(E(D(7n,"${L36}","deadbeef",9n))); } }`,
+      `struct D { uint256 x; string s; bytes b; uint256 y; } contract C { event E(D indexed d); function f() external { emit E(D(7,"${L36}","deadbeef",9)); } }`,
+      [{ sig: 'f()' }],
+    ));
+  it('two strings, one empty, one exactly 32 bytes (padding boundary)', () =>
+    rt(
+      `@struct class D { a: string; b: string; } @contract class C { @event E(@indexed d: D); @external f(): void { emit(E(D("","${L32}"))); } }`,
+      `struct D { string a; string b; } contract C { event E(D indexed d); function f() external { emit E(D("","${L32}")); } }`,
+      [{ sig: 'f()' }],
+    ));
+  it('dynamic value-array field (struct literal)', () =>
+    rt(
+      `@struct class D { x: u256; a: u256[]; } @contract class C { @event E(@indexed d: D); @external f(): void { emit(E(D(4n, [5n,6n,7n]))); } }`,
+      `struct D { uint256 x; uint256[] a; } contract C { event E(D indexed d); function f() external { uint256[] memory m=new uint256[](3); m[0]=5;m[1]=6;m[2]=7; emit E(D(4, m)); } }`,
+      [{ sig: 'f()' }],
+    ));
+  it('memory-source struct local', () =>
+    rt(
+      `@struct class D { x: u256; s: string; } @contract class C { @event E(@indexed d: D); @external f(): void { let d: D = D(7n,"${L36}"); emit(E(d)); } }`,
+      `struct D { uint256 x; string s; } contract C { event E(D indexed d); function f() external { D memory d = D(7,"${L36}"); emit E(d); } }`,
+      [{ sig: 'f()' }],
+    ));
+  it('calldata-source struct param', () =>
+    rt(
+      `@struct class D { x: u256; s: string; } @contract class C { @event E(@indexed d: D); @external g(d: D): void { emit(E(d)); } }`,
+      `struct D { uint256 x; string s; } contract C { event E(D indexed d); function g(D calldata d) external { emit E(d); } }`,
+      [{ sig: 'g((uint256,string))', args: W(7n) + W(0x20n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') }],
+    ));
+  it('mixed: indexed static + indexed dyn struct + non-indexed data word', () =>
+    rt(
+      `@struct class D { x: u256; s: string; } @contract class C { @event E(@indexed k: u256, @indexed d: D, v: u256); @external f(): void { emit(E(99n, D(7n,"hi"), 123n)); } }`,
+      `struct D { uint256 x; string s; } contract C { event E(uint256 indexed k, D indexed d, uint256 v); function f() external { emit E(99, D(7,"hi"), 123); } }`,
+      [{ sig: 'f()' }],
+    ));
+});
