@@ -619,3 +619,28 @@ describe('remaining over-rejections R1/R3/R5 vs solc (byte-identical)', () => {
     expect(jethRejects(`@contract class C { @internal @pure h(): u256 { return msg.value; } @external f(): u256 { return this.h(); } }`)).toBe(true);
   });
 });
+
+describe('R4: Arr<dynElem,N>[] as a calldata param / whole-array return vs solc', () => {
+  const strArg = (s: string) => W(0x20n) + W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
+  const strBlk = (s: string) => W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
+  it('calldata string[3][] param: length + a[i][j] byte-identical', async () => {
+    // a = [["a","bb","ccc"]] : outer [off=0x20][len=1][elemOff=0x20] then elem [3 offsets][3 blocks]
+    const elem = W(0x60n) + W(0x120n) + W(0x180n) + strBlk('a') + strBlk('bb') + strBlk('ccc');
+    const cd = W(0x20n) + W(1n) + W(0x20n) + elem;
+    await rt(
+      `@contract class C { @external @pure len(a: Arr<string,3>[]): u256 { return a.length; } @external @pure at(a: Arr<string,3>[], i: u256, j: u256): string { return a[i][j]; } }`,
+      `contract C { function len(string[3][] calldata a) external pure returns(uint256){ return a.length; } function at(string[3][] calldata a,uint256 i,uint256 j) external pure returns(string memory){ return a[i][j]; } }`,
+      [{ sig: 'len(string[3][])', args: cd }, { sig: 'at(string[3][],uint256,uint256)', args: W(0x60n) + W(0n) + W(2n) + cd.slice(2) }],
+    );
+  });
+  it('whole storage Arr<string,3>[] / Arr<bytes,2>[] return byte-identical', async () => {
+    await rt(
+      `@contract class C { @state a: Arr<string,3>[]; @external grow(): void { this.a.push(); } @external s(i: u256, j: u256, v: string): void { this.a[i][j] = v; } @external @view r(): Arr<string,3>[] { return this.a; } }`,
+      `contract C { string[3][] a; function grow() external { a.push(); } function s(uint256 i,uint256 j,string calldata v) external { a[i][j]=v; } function r() external view returns(string[3][] memory){ return a; } }`,
+      [{ sig: 'grow()' }, { sig: 'grow()' }, { sig: 's(uint256,uint256,string)', args: W(0n) + W(1n) + strArg('hi') }, { sig: 's(uint256,uint256,string)', args: W(1n) + W(0n) + strArg('a fairly long string crossing 32!!') }, { sig: 'r()' }],
+    );
+  });
+  it('deeper nesting Arr<Arr<string,2>,3>[] stays a clean rejection (codec gap, not a miscompile)', () => {
+    expect(jethRejects(`@contract class C { @external @pure f(a: Arr<Arr<string,2>,3>[]): u256 { return a.length; } }`)).toBe(true);
+  });
+});

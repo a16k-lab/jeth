@@ -4030,11 +4030,12 @@ export class Analyzer {
         // elements handled by the recursive head/tail codec.
         if (t.element.length !== undefined && isStaticType(t.element)) return true;
         // a dynamic array whose element is a FIXED array with DYNAMIC leaves (Arr<string,N>[],
-        // Arr<bytes,N>[]): supported in STORAGE - element i occupies storageSlotCount(element)
-        // contiguous slots at keccak(p)+i*stride, and the recursive place codec handles per-element
-        // access / push / index / pop (with deep-clear of the inner dynamic data, verified byte-
-        // identical to solc). Validate the element type; a calldata param/return stays gated below.
-        if (storage && t.element.length !== undefined) {
+        // Arr<bytes,N>[]): supported in STORAGE (element i at keccak(p)+i*stride, recursive place
+        // codec handles access/push/index/pop with deep-clear) AND as a calldata PARAM / RETURN (the
+        // recursive head/tail codec). Validate the element type recursively; a shape whose element is
+        // not itself supported (e.g. Arr<Arr<string,2>,3>[]) falls through to JETH217. Verified
+        // byte-identical to solc in both positions.
+        if (t.element.length !== undefined) {
           const diagLen = this.diags.items.length;
           if (this.gateArrayType(t.element, node, storage)) return true;
           this.diags.items.length = diagLen; // discard the element's diagnostic; emit our own below
