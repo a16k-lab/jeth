@@ -595,3 +595,27 @@ describe('re-sweep batch 3: object literals, internal aggregate params, Arr<dynE
     );
   });
 });
+
+describe('remaining over-rejections R1/R3/R5 vs solc (byte-identical)', () => {
+  it('R3: a dynamic struct with a static fixed-array field (return + storage roundtrip)', () =>
+    rt(
+      `@struct class D { x: u256; s: bytes; a: Arr<u256,2>; } @contract class C { @state d: D; @external @pure f(): D { return D(9n, "hello", [4n,5n]); } @external set(): void { this.d = D(1n, "stored value here, fairly long!!", [7n,8n]); } @external @view ga(i: u256): u256 { return this.d.a[i]; } @external @view gs(): bytes { return this.d.s; } }`,
+      `struct D{uint256 x;bytes s;uint256[2] a;} contract C { D d; function f() external pure returns(D memory){ return D(9,"hello",[uint256(4),5]); } function set() external { d=D(1,"stored value here, fairly long!!",[uint256(7),8]); } function ga(uint256 i) external view returns(uint256){ return d.a[i]; } function gs() external view returns(bytes memory){ return d.s; } }`,
+      [{ sig: 'f()' }, { sig: 'set()' }, { sig: 'ga(uint256)', args: W(0n) }, { sig: 'ga(uint256)', args: W(1n) }, { sig: 'gs()' }],
+    ));
+  it('R1: struct/fixed-array field from a non-inline source (local/param/storage) in return/let/storage', () =>
+    rt(
+      `@struct class I { a: u256; b: u32; } @struct class O { i: I; y: u256; } @struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @state o: O; @state src: I; @external @pure fLocal(y: u256): O { let z: I = I(7n, 8n); return O(z, y); } @external @pure fParam(z: I, y: u256): O { return O(z, y); } @external @pure fArr(x: u256): A { let z: Arr<u256,2> = [1n,2n]; return A(x, z); } @external seed(): void { this.src = I(11n, 22n); } @external setO(): void { let z: I = I(3n, 4n); this.o = O(z, 99n); } @external @view ga(): u256 { return this.o.i.a; } @external @view fStore(y: u256): O { return O(this.src, y); } }`,
+      `struct I{uint256 a;uint32 b;} struct O{I i;uint256 y;} struct A{uint256 x;uint256[2] arr;} contract C { O o; I src; function fLocal(uint256 y) external pure returns(O memory){ I memory z=I(7,8); return O(z,y); } function fParam(I calldata z,uint256 y) external pure returns(O memory){ return O(z,y); } function fArr(uint256 x) external pure returns(A memory){ uint256[2] memory z=[uint256(1),2]; return A(x,z); } function seed() external { src=I(11,22); } function setO() external { I memory z=I(3,4); o=O(z,99); } function ga() external view returns(uint256){ return o.i.a; } function fStore(uint256 y) external view returns(O memory){ return O(src,y); } }`,
+      [{ sig: 'fLocal(uint256)', args: W(5n) }, { sig: 'fParam((uint256,uint32),uint256)', args: W(1n) + W(2n) + W(5n) }, { sig: 'fArr(uint256)', args: W(9n) }, { sig: 'seed()' }, { sig: 'setO()' }, { sig: 'ga()' }, { sig: 'fStore(uint256)', args: W(7n) }],
+    ));
+  it('R5: msg.value in @internal/@private is allowed (forwarded byte-identical); externally requires @payable', () => {
+    expect(jethAccepts(`@contract class C { @internal @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @private @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`)).toBe(true);
+    // @read (public) reading msg.value directly still requires @payable -> rejected
+    expect(jethRejects(`@contract class C { @read bad(): u256 { return msg.value; } }`)).toBe(true);
+    // external/public non-payable reading msg.value rejected; @pure internal rejected (env read)
+    expect(jethRejects(`@contract class C { @external f(): u256 { return msg.value; } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @internal @pure h(): u256 { return msg.value; } @external f(): u256 { return this.h(); } }`)).toBe(true);
+  });
+});

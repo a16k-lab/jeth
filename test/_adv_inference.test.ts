@@ -518,14 +518,6 @@ describe('decorator inference: rejection parity', () => {
       code: 'JETH162',
     },
     {
-      name: '@read reads msg.value transitively -> JETH162',
-      src: `@contract class C {
-        @read bad(): u256 { return this.v(); }
-        @hidden v(): u256 { return msg.value; }
-      }`,
-      code: 'JETH162',
-    },
-    {
       name: '@read emits an event directly -> JETH149',
       src: `@contract class C { @event E(a: u256); @read bad(): void { emit(E(1n)); } }`,
       code: 'JETH149',

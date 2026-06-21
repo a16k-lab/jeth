@@ -165,6 +165,11 @@ export class Analyzer {
   private memDynLocals = new Set<string>(); // bytes/string MEMORY locals (G9): register holds a [len][data] pointer
   private memDynStructLocals = new Map<string, JethType>(); // DYNAMIC-field struct MEMORY locals: name -> struct type (head = one word per field, value inline / bytes-string a pointer)
   private currentReadsEnv = false; // reads msg.*/block.*/tx.*/address(this) -> forbidden in @pure
+  // whether the function being checked is EXTERNALLY reachable (external/public, incl. an inferred-
+  // exposed no-visibility function). Reading msg.value in such a function requires @payable; an
+  // internal/private function may read it at any non-pure mutability (solc parity). Default strict
+  // (true) so constructors / field initializers keep requiring @payable.
+  private currentExternallyReachable = true;
   // internal-call support (G8): the function registry (built before bodies so calls can
   // forward-reference), plus per-function direct-effect / callee tracking for the
   // transitive-purity fixpoint and the set of names actually called internally.
@@ -772,6 +777,7 @@ export class Analyzer {
     this.pushScope();
     this.currentInConstructor = true;
     this.currentMutability = 'nonpayable'; // a field initializer has no payable context (msg.value -> JETH162)
+    this.currentExternallyReachable = true; // strict: a field initializer cannot read msg.value (nonpayable)
     for (const name of this.immutableOrder) {
       const im = this.immutablesByName.get(name)!;
       if (!im.init) continue;
@@ -836,6 +842,7 @@ export class Analyzer {
     this.loopDepth = 0;
     this.pushScope();
     this.currentMutability = payable ? 'payable' : 'nonpayable';
+    this.currentExternallyReachable = true; // a constructor is externally reachable: msg.value needs a payable ctor
     this.currentWritesState = false;
     this.currentReadsState = false;
     this.currentReadsEnv = false;
@@ -1524,6 +1531,9 @@ export class Analyzer {
     this.loopDepth = 0;
     this.pushScope(); // function/parameter scope
     this.currentMutability = rf.mutability;
+    // external/public (incl. a provisional-public inferExposed no-vis function) is externally
+    // reachable; internal/private (incl. @hidden -> internal) is not. Gates the msg.value/@payable rule.
+    this.currentExternallyReachable = rf.visibility === 'external' || rf.visibility === 'public';
     this.currentWritesState = false;
     this.currentReadsState = false;
     this.currentReadsEnv = false;
@@ -2036,11 +2046,15 @@ export class Analyzer {
     if (f.type.kind === 'struct') {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
-      if (a.kind !== 'structNew') {
-        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' must be constructed inline, e.g. ${f.type.name}(...)`);
-        return undefined;
-      }
-      return a;
+      const sameStruct = a.type.kind === 'struct' && a.type.name === f.type.name;
+      if (a.kind === 'structNew') return a; // an inline constructor (the only form for a DYNAMIC field)
+      // a non-inline value of the same struct type is allowed for a STATIC struct field (codegen copies
+      // its leaves); a DYNAMIC nested struct field must be constructed inline.
+      if (sameStruct && isStaticType(f.type)) return a;
+      this.diags.error(argNode, 'JETH226', sameStruct
+        ? `dynamic struct field '${f.name}' must be constructed inline, e.g. ${f.type.name}(...)`
+        : `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
+      return undefined;
     }
     if (isBytesLike(f.type)) {
       const a = this.checkExpr(argNode, f.type);
@@ -2054,8 +2068,17 @@ export class Analyzer {
     if (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)) {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
-      if (a.kind !== 'arrayLit' || a.elements.length !== f.type.length) {
-        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' (${displayName(f.type)}) must be an array literal of ${f.type.length} elements`);
+      // an array literal of exactly N, OR any fixed-array value of the same type (a local / param /
+      // storage source, COPIED into the parent at codegen, matching solc).
+      if (a.kind === 'arrayLit') {
+        if (a.elements.length !== f.type.length) {
+          this.diags.error(argNode, 'JETH226', `struct field '${f.name}' (${displayName(f.type)}) must be an array literal of ${f.type.length} elements`);
+          return undefined;
+        }
+        return a;
+      }
+      if (!typesEqual(a.type, f.type)) {
+        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
         return undefined;
       }
       return a;
@@ -4783,11 +4806,13 @@ export class Analyzer {
       return undefined;
     }
     if (entry.cat === 'value') {
-      // NOTE: solc also allows msg.value in an internal/private function of any mutability, but JETH's
-      // read-only inference (@read/@hidden/no-visibility must stay equivalent) gates on PROVISIONAL
-      // visibility here, so relaxing this would break that invariant. Deferred (minor over-rejection).
-      if (this.currentMutability !== 'payable') {
-        this.diags.error(node, 'JETH162', "'msg.value' can only be read in a @payable function");
+      // msg.value is an ENVIRONMENT read (forbidden in @pure, allowed in @view), like msg.sender.
+      this.currentReadsEnv = true;
+      // An EXTERNALLY-reachable function (external/public) reading msg.value must be @payable (solc
+      // rejects a non-payable/view external read). An internal/private function may read it at any
+      // non-pure mutability (the @pure check is handled by currentReadsEnv above). solc parity.
+      if (this.currentExternallyReachable && this.currentMutability !== 'payable') {
+        this.diags.error(node, 'JETH162', "'msg.value' in an externally-reachable function requires @payable");
       }
     } else if (entry.cat === 'env') {
       this.currentReadsEnv = true; // forbidden in @pure

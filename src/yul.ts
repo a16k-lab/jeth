@@ -716,6 +716,13 @@ ${indent(runtime, 6)}
             out.push(`return(${ptr}, ${size})`);
             break;
           }
+          if (s.value.kind === 'structNew' && this.aggHasNonInlineField(s.value)) {
+            // a constructed struct with a non-inline aggregate field: build the ABI image in FRESH
+            // memory (the source materialization would clobber the memory-0 scratch), then return it.
+            const ptr = this.allocAggToMem(s.value, ctx, out);
+            out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
+            break;
+          }
           const size = this.encodeStructReturn(s.value, ctx, out);
           out.push(`return(0, ${size})`);
           break;
@@ -2302,7 +2309,12 @@ ${indent(runtime, 6)}
       return words;
     }
     if (type.kind === 'array' && type.length !== undefined) {
-      throw new UnsupportedError('a static fixed-array struct field constructed inline is not supported yet');
+      // a static fixed-array field, built from an array literal: flatten each element's leaf words
+      // (recursing into nested fixed-arrays / structs), one ABI word per value leaf.
+      if (arg.kind !== 'arrayLit') throw new UnsupportedError('a static fixed-array struct field must be constructed from an array literal');
+      const words: string[] = [];
+      arg.elements.forEach((el) => words.push(...this.staticNewLeaves(type.element, el, ctx, out)));
+      return words;
     }
     return [this.lowerExpr(arg, ctx, out)];
   }
@@ -2863,6 +2875,10 @@ ${indent(runtime, 6)}
       } else if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
         // a fixed-array field constructed from a (possibly nested) literal.
         this.writeArrayLit(arg, slotAt(f.slot), ctx, out);
+      } else if ((f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) && isStaticType(f.type)) {
+        // a non-inline STATIC aggregate field source (a local / param / storage value): materialize its
+        // ABI-unpacked image, then transcode it into the field's packed storage slots.
+        this.storeStaticAggFromMem(f.type, this.aggToMemPtr(arg, ctx, out), slotAt(f.slot), out);
       } else if (isBytesLike(f.type)) {
         const ref = this.lowerDynamic(arg, ctx, out);
         this.storeDynamic(slotAt(f.slot), ref, out);
@@ -3027,6 +3043,27 @@ ${indent(runtime, 6)}
 
   /** Write a constructed static aggregate (structNew / arrayLit, possibly nested) into the
    *  memory image at `ptr`, starting at word `wordBase`. Value leaves are one word each. */
+  /** True if a constructed aggregate (structNew / arrayLit) has, at any depth, an aggregate field /
+   *  element supplied from a NON-INLINE source (not an inline structNew / arrayLit). Such a value must
+   *  be built in FRESH memory (allocAggToMem) rather than the memory-0 return scratch, since
+   *  materializing the source would otherwise clobber the in-progress blob. */
+  private aggHasNonInlineField(v: Expr): boolean {
+    if (v.kind === 'structNew') {
+      return (v.type as JethType & { kind: 'struct' }).fields.some((f, i) => {
+        const a = v.args[i]!;
+        if (!(f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined))) return false;
+        if (a.kind !== 'structNew' && a.kind !== 'arrayLit') return true;
+        return this.aggHasNonInlineField(a);
+      });
+    }
+    if (v.kind === 'arrayLit') {
+      const aggElem = v.elem.kind === 'struct' || (v.elem.kind === 'array' && v.elem.length !== undefined);
+      if (!aggElem) return false;
+      return v.elements.some((el) => (el.kind !== 'structNew' && el.kind !== 'arrayLit') || this.aggHasNonInlineField(el));
+    }
+    return false;
+  }
+
   private writeAggToMem(value: Expr, ptr: string, wordBase: number, ctx: LowerCtx, out: string[]): void {
     const at = (w: number): string => (w === 0 ? ptr : `add(${ptr}, ${w * 32})`);
     if (value.kind === 'structNew') {
@@ -3034,16 +3071,22 @@ ${indent(runtime, 6)}
       value.fields.forEach((f, j) => {
         const arg = value.args[j]!;
         if (arg.kind === 'arrayLit' || arg.kind === 'structNew') this.writeAggToMem(arg, ptr, w, ctx, out);
-        else out.push(`mstore(${at(w)}, ${this.lowerExpr(arg, ctx, out)})`);
+        else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
+          // a non-inline aggregate field source (a local / param / storage value): materialize its
+          // ABI-unpacked image (fresh memory, past this parent), then mcopy it into the field's words.
+          out.push(`mcopy(${at(w)}, ${this.aggToMemPtr(arg, ctx, out)}, ${abiHeadWords(f.type) * 32})`);
+        } else out.push(`mstore(${at(w)}, ${this.lowerExpr(arg, ctx, out)})`);
         w += abiHeadWords(f.type);
       });
       return;
     }
     if (value.kind === 'arrayLit') {
       const ew = abiHeadWords(value.elem);
+      const aggElem = value.elem.kind === 'struct' || (value.elem.kind === 'array' && value.elem.length !== undefined);
       value.elements.forEach((el, k) => {
         const w = wordBase + k * ew;
         if (el.kind === 'arrayLit' || el.kind === 'structNew') this.writeAggToMem(el, ptr, w, ctx, out);
+        else if (aggElem) out.push(`mcopy(${at(w)}, ${this.aggToMemPtr(el, ctx, out)}, ${ew * 32})`);
         else out.push(`mstore(${at(w)}, ${this.lowerExpr(el, ctx, out)})`);
       });
       return;
