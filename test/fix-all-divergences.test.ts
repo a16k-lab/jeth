@@ -367,3 +367,26 @@ describe('storage bytes index write b[i] = x vs solc', () => {
     );
   });
 });
+
+describe('storage bytes .push / .pop vs solc (short<->long transitions)', () => {
+  const B1 = (h: string) => h.padEnd(64, '0');
+  it('push across 31->32, pop across 32->31, push(), and pop-empty Panic', async () => {
+    const calls: { sig: string; args?: string }[] = [{ sig: 'init(bytes)', args: W(0x20n) + W(30n) + 'aa'.repeat(30).padEnd(64, '0') }];
+    for (let i = 0; i < 5; i++) calls.push({ sig: 'pb(bytes1)', args: B1((0x10 + i).toString(16).padStart(2, '0')) }); // 30 -> 35 (crosses 31->32)
+    calls.push({ sig: 'all()' }, { sig: 'len()' }, { sig: 'at(uint256)', args: W(34n) }, { sig: 'at(uint256)', args: W(0n) });
+    for (let i = 0; i < 5; i++) calls.push({ sig: 'pop()' }); // 35 -> 30 (crosses 32->31)
+    calls.push({ sig: 'all()' }, { sig: 'len()' });
+    calls.push({ sig: 'p0()' }, { sig: 'all()' }); // push() zero byte
+    await rt(
+      `@contract class C { @state b: bytes; @external init(v: bytes): void { this.b = v; } @external pb(x: bytes1): void { this.b.push(x); } @external p0(): void { this.b.push(); } @external pop(): void { this.b.pop(); } @external @view all(): bytes { return this.b; } @external @view len(): u256 { return this.b.length; } @external @view at(i: u256): bytes1 { return this.b[i]; } }`,
+      `contract C { bytes b; function init(bytes calldata v) external { b = v; } function pb(bytes1 x) external { b.push(x); } function p0() external { b.push(); } function pop() external { b.pop(); } function all() external view returns(bytes memory){ return b; } function len() external view returns(uint256){ return b.length; } function at(uint256 i) external view returns(bytes1){ return b[i]; } }`,
+      calls,
+    );
+    // pop on empty -> Panic(0x31) on both
+    await rt(
+      `@contract class C { @state b: bytes; @external pop(): void { this.b.pop(); } }`,
+      `contract C { bytes b; function pop() external { b.pop(); } }`,
+      [{ sig: 'pop()' }],
+    );
+  });
+});

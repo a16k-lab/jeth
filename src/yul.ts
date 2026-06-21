@@ -1115,6 +1115,14 @@ ${indent(runtime, 6)}
         else if (s.arr.elem.kind === 'bytes' || s.arr.elem.kind === 'string') this.lowerStrPop(s.arr, ctx, out);
         else this.lowerPop(s.arr, ctx, out);
         break;
+      case 'bytesPush': {
+        const v = s.value ? this.lowerExpr(s.value, ctx, out) : '0';
+        out.push(`${this.strPush()}(${s.slot}, ${v})`);
+        break;
+      }
+      case 'bytesPop':
+        out.push(`${this.strPop()}(${s.slot})`);
+        break;
     }
     return out;
   }
@@ -4851,6 +4859,79 @@ ${indent(runtime, 6)}
     let ds := add(keccak256(0x00, 0x20), div(i, 0x20))
     let sh := mul(mod(i, 0x20), 8)
     sstore(ds, or(and(sload(ds), not(shr(sh, ${TOP_BYTE}))), shr(sh, and(b, ${TOP_BYTE}))))
+  }
+}`);
+    }
+    return name;
+  }
+
+  /** Append byte `b` (a bytes1, byte in the top byte) to a storage `bytes`. Short form stays short
+   *  until 31 bytes; the 31->32 push transitions to long (data moved to keccak(slot)); long appends at
+   *  keccak(slot)+len/32. Matches solc's storage layout byte-for-byte (verified against raw slots). */
+  private strPush(): string {
+    const name = 'jeth_str_push';
+    if (!this.helpers.has(name)) {
+      this.helpers.set(name, `function ${name}(slot, b) {
+  let w := sload(slot)
+  switch and(w, 1)
+  case 0 {
+    let len := shr(1, and(w, 0xff))
+    switch lt(len, 31)
+    case 1 {
+      let nw := or(w, shr(mul(len, 8), and(b, ${TOP_BYTE})))
+      sstore(slot, or(and(nw, not(0xff)), shl(1, add(len, 1))))
+    }
+    default {
+      mstore(0x00, slot)
+      sstore(keccak256(0x00, 0x20), or(and(w, not(0xff)), shr(248, and(b, ${TOP_BYTE}))))
+      sstore(slot, 65)
+    }
+  }
+  default {
+    let len := shr(1, sub(w, 1))
+    mstore(0x00, slot)
+    let ds := add(keccak256(0x00, 0x20), div(len, 0x20))
+    let sh := mul(mod(len, 0x20), 8)
+    sstore(ds, or(and(sload(ds), not(shr(sh, ${TOP_BYTE}))), shr(sh, and(b, ${TOP_BYTE}))))
+    sstore(slot, add(w, 2))
+  }
+}`);
+    }
+    return name;
+  }
+
+  /** Remove the last byte of a storage `bytes` (Panic 0x31 if empty). Short pop zeroes the byte +
+   *  decrements; long pop zeroes the freed byte; the 32->31 pop transitions back to short (data moved
+   *  inline, keccak(slot) word freed). Matches solc's storage layout byte-for-byte. */
+  private strPop(): string {
+    const name = 'jeth_str_pop';
+    if (!this.helpers.has(name)) {
+      this.helpers.set(name, `function ${name}(slot) {
+  let w := sload(slot)
+  switch and(w, 1)
+  case 0 {
+    let len := shr(1, and(w, 0xff))
+    if iszero(len) { ${this.panic()}(0x31) }
+    let nw := and(w, not(shr(mul(sub(len, 1), 8), ${TOP_BYTE})))
+    sstore(slot, or(and(nw, not(0xff)), shl(1, sub(len, 1))))
+  }
+  default {
+    let len := shr(1, sub(w, 1))
+    switch eq(len, 32)
+    case 1 {
+      mstore(0x00, slot)
+      let base := keccak256(0x00, 0x20)
+      let kd0 := sload(base)
+      sstore(base, 0)
+      sstore(slot, or(and(kd0, not(0xff)), 62))
+    }
+    default {
+      mstore(0x00, slot)
+      let ds := add(keccak256(0x00, 0x20), div(sub(len, 1), 0x20))
+      let sh := mul(mod(sub(len, 1), 0x20), 8)
+      sstore(ds, and(sload(ds), not(shr(sh, ${TOP_BYTE}))))
+      sstore(slot, sub(w, 2))
+    }
   }
 }`);
     }

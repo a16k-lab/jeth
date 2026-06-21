@@ -2102,6 +2102,32 @@ export class Analyzer {
   }
 
   private checkArrayMutator(call: ts.CallExpression, method: string, out: Stmt[]): void {
+    // this.b.push(<bytes1>) / push() / pop() on a STORAGE `bytes` var (direct state var; mapping/
+    // struct-reached bytes is deferred). Must precede the array resolver (bytes is not an array).
+    const recv = (call.expression as ts.PropertyAccessExpression).expression;
+    if (ts.isPropertyAccessExpression(recv) && recv.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const sv = this.stateByName.get(recv.name.text);
+      if (sv && sv.type.kind === 'bytes') {
+        this.currentWritesState = true;
+        if (method === 'pop') {
+          if (call.arguments.length !== 0) this.diags.error(call, 'JETH215', 'pop() takes no arguments');
+          out.push({ kind: 'bytesPop', slot: sv.slot });
+          return;
+        }
+        if (call.arguments.length > 1) {
+          this.diags.error(call, 'JETH215', 'push(...) takes 0 or 1 arguments');
+          return;
+        }
+        if (call.arguments.length === 0) {
+          out.push({ kind: 'bytesPush', slot: sv.slot });
+          return;
+        }
+        const v = this.checkExpr(call.arguments[0]!, BYTES1);
+        if (!v) return;
+        out.push({ kind: 'bytesPush', slot: sv.slot, value: this.coerce(v, BYTES1, call.arguments[0]!) });
+        return;
+      }
+    }
     const arr = this.resolveArrayExpr((call.expression as ts.PropertyAccessExpression).expression);
     if (!arr) {
       this.diags.error(call, 'JETH210', `'${method}' requires a storage array (this.arr.${method}(...))`);

@@ -269,7 +269,9 @@ export type Stmt =
   | { kind: 'emit'; event: EventIR; args: Expr[] }
   // --- Phase 4: array mutators (statements; both return void) ---
   | { kind: 'push'; arr: ArrayExpr; value?: Expr }
-  | { kind: 'pop'; arr: ArrayExpr };
+  | { kind: 'pop'; arr: ArrayExpr }
+  | { kind: 'bytesPush'; slot: number; value?: Expr } // this.b.push(<bytes1>) / push() on a storage `bytes`
+  | { kind: 'bytesPop'; slot: number }; // this.b.pop() on a storage `bytes`
 
 // A revert payload. 'empty' -> revert(0,0); 'errorString' -> Error(string) blob;
 // 'custom' -> a user-declared custom error (selector + ABI-encoded static args).
