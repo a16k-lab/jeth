@@ -9,7 +9,6 @@
 //
 // No em-dash / en-dash anywhere (plain hyphen or the word "to") per project style.
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
 import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';

@@ -13,7 +13,6 @@ const M = 1n << 256n;
 const w = (v: bigint): string => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const sel = (s: string) => functionSelector(s);
 
-const HI = 1n << 255n;
 const WRAP = M - 0x20n;
 const U64 = (1n << 64n) - 1n;
 const U64m32 = (1n << 64n) - 32n;

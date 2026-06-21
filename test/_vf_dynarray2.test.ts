@@ -15,22 +15,12 @@ const MAX = M - 1n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-function encArr(sig: string, elems: bigint[]): string {
-  return '0x' + sel(sig) + pad(0x20n) + pad(BigInt(elems.length)) + elems.map(pad).join('');
-}
 function encIStr(sig: string, i: bigint, s: string): string {
   const b = Buffer.from(s, 'utf8');
   const nwords = Math.ceil(b.length / 32);
   let data = '';
   for (let w = 0; w < nwords; w++) data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
   return '0x' + sel(sig) + pad(i) + pad(0x40n) + pad(BigInt(b.length)) + data;
-}
-function encStr(sig: string, s: string): string {
-  const b = Buffer.from(s, 'utf8');
-  const nwords = Math.ceil(b.length / 32);
-  let data = '';
-  for (let w = 0; w < nwords; w++) data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
-  return '0x' + sel(sig) + pad(0x20n) + pad(BigInt(b.length)) + data;
 }
 
 const JETH = `@struct class P { x: u128; y: u128; }

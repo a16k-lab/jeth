@@ -4,7 +4,7 @@
 // (decoded FROM MEMORY via datasize/codesize/codecopy). A non-payable ctor rejects deploy-time value.
 // Every supported case is verified byte-identical to solc 0.8.35 on RAW STORAGE SLOTS + revert
 // parity; aggregate params and ctor->internal-calls are cleanly gated.
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';

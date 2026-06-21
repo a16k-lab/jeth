@@ -195,15 +195,6 @@ contract C {
 
 // ---- calldata builders ----------------------------------------------------
 
-// Single dynamic head/tail (one bytes/string param at head position 0).
-function call1Dyn(sig: string, head: bigint[], bytes: Uint8Array): string {
-  // head holds placeholders; dyn arg sits at offset = head.length*32 (assumes 1 dyn last).
-  let h = '0x' + sel(sig);
-  for (const w of head) h += pad(w);
-  h += dynElem(bytes);
-  return h;
-}
-
 // (uint256 n, string s) -> head [n][off=0x40], tail string.
 function callValStr(sig: string, n: bigint, s: Uint8Array): string {
   return '0x' + sel(sig) + pad(n) + pad(0x40n) + dynElem(s);
@@ -241,21 +232,6 @@ function callMix(sig: string, p: bigint, q: bigint, s: Uint8Array, b: Uint8Array
 // string[] / bytes[] sole param.
 function callArr1(sig: string, strs: Uint8Array[]): string {
   return '0x' + sel(sig) + pad(0x20n) + encodeArrayRegion(strs);
-}
-// (string s, uint256[] x) -> head [off_s][off_x], tail string then array.
-function callStrArr(sig: string, s: Uint8Array, x: bigint[]): string {
-  const es = dynElem(s);
-  const offS = 0x40n;
-  const offX = 0x40n + BigInt(es.length / 2);
-  let arrTail = pad(BigInt(x.length));
-  for (const v of x) arrTail += pad(v);
-  return '0x' + sel(sig) + pad(offS) + pad(offX) + es + arrTail;
-}
-// (uint256[] x, uint256 n) -> head [off_x=0x40][n], tail array.
-function callArrVal(sig: string, x: bigint[], n: bigint): string {
-  let arr = pad(BigInt(x.length));
-  for (const v of x) arr += pad(v);
-  return '0x' + sel(sig) + pad(0x40n) + pad(n) + arr;
 }
 // u256[][] sole param: outer off=0x20, then [len][inner off table][inner arrays].
 function encode2D(rows: bigint[][]): string {
@@ -402,11 +378,11 @@ describe('VF abireturn', () => {
     // ---- nested dynamic from storage: string[], bytes[], u256[][] ----
     await eq('allNames empty', encodeCall(sel('allNames()'), []));
     // pushName(string) has 1 dyn param: outer off=0x20.
-    for (const [ln, s] of strs) await send(callArr1Single('pushName(string)', s));
+    for (const [, s] of strs) await send(callArr1Single('pushName(string)', s));
     await eq('allNames full', encodeCall(sel('allNames()'), []));
 
     await eq('allBlobs empty', encodeCall(sel('allBlobs()'), []));
-    for (const [bn, b] of blobs) await send(callArr1Single('pushBlob(bytes)', b));
+    for (const [, b] of blobs) await send(callArr1Single('pushBlob(bytes)', b));
     await eq('allBlobs full', encodeCall(sel('allBlobs()'), []));
 
     // grid u256[][]

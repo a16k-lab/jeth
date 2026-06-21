@@ -7,7 +7,6 @@ import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
 const M = 1n << 256n;
-const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const sel = (s: string) => functionSelector(s);
 
 // Arithmetic / cast / shift / exponent surface. Mirrors solc 0.8.x cancun.

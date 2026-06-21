@@ -112,7 +112,6 @@ function raw(sig: string, words: bigint[]): string {
 describe('audit aggregate-params: signed/bytesN/bool/address leaves', () => {
   it('intN element + sign-extension via fixed array', async () => {
     // negative int64 element: high bytes should sign-extend on read
-    const neg = M - 5n; // -5 as a full word? No: element stored as a full word but clean iff sign-extended of low 8 bytes
     // Provide a clean -5 (full sign extension)
     const cleanNeg = ((-5n) % M + M) % M;
     for (const i of [0n, 1n, 2n, 3n]) {

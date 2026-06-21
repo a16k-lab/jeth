@@ -278,8 +278,6 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
     aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
   });
 
-  const U256VALS = [0n, 1n, 2n, 255n, 256n, 0xffffn, (1n << 128n), (1n << 255n), M - 1n, M - 2n];
-
   it('1+2: field-order permutations, whole-struct return, all dyn lengths', async () => {
     for (const s of STRS) {
       for (const a of [0n, 1n, M - 1n, 1n << 200n]) {

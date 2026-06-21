@@ -10,7 +10,6 @@ import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
 const M = 1n << 256n;
-const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const K = 0xbeefn;
 
 const JETH = `@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }

@@ -7,9 +7,6 @@ import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const M = 1n << 256n;
-const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
-
 const JETH = `@struct class S { a: u256; xs: u256[]; }
 @contract class R5 {
   @state s: S;

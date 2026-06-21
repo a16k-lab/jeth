@@ -47,7 +47,6 @@ contract C {
 
 describe('bytesN bitwise/shift + signedness + bool-cast conformance', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  let bad = 0;
   async function eq(label: string, sig: string, ...args: bigint[]) {
     const data = '0x' + sel(sig) + args.map(wrap).join('');
     const j = await jeth.call(aj, data); const s = await sol.call(as, data);

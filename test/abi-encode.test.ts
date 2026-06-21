@@ -2,7 +2,7 @@
 // hashing, returning, and storing the result, across value-type and bytes/string args.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
-import { Harness, encodeCall, pad32 } from '../src/evm.js';
+import { Harness, pad32 } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity, readSlot } from './_solidity.js';
 

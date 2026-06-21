@@ -39,8 +39,6 @@ describe('multi-value return vs Solidity', () => {
     // build calldata: head words (with offsets for string positions), then string tails
     let h = '0x' + sel(selSig);
     h += head.map(pad).join('');
-    let tail = '';
-    let cursor = head.length * 32;
     // replace string-position head words with offsets, append tails
     const headArr = head.map(pad);
     let tailBuf = '';

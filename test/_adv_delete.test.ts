@@ -25,14 +25,6 @@ const LONG = 'this string is definitely longer than thirty-two bytes so it uses 
 const LONG2 = 'another long payload exceeding the thirty-two byte short-string inline cutoff for sure!';
 const SHORT = 'hi';
 
-// hand-encode `seedStr(string)`-style calldata with one string arg (offset/len/padded data)
-function strArg(selector: string, str: string): string {
-  const bytes = Buffer.from(str, 'utf8');
-  const len = bytes.length;
-  const padded = Buffer.concat([bytes, Buffer.alloc((32 - (len % 32)) % 32)]);
-  return '0x' + selector + b32(0x20n).toString('hex') + b32(BigInt(len)).toString('hex') + padded.toString('hex');
-}
-
 interface Pair { jeth: Harness; sol: Harness; aj: Address; as: Address; }
 
 async function build(jethSrc: string, solSrc: string): Promise<Pair> {

@@ -21,13 +21,8 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const U256_MAX = M - 1n;
-const I256_MIN = -(1n << 255n);
-const I256_MAX = (1n << 255n) - 1n;
 const A = BigInt('0x' + 'aa'.repeat(20));
-const B = BigInt('0x' + 'bb'.repeat(20));
-const ADDR = BigInt('0x' + 'de'.repeat(20));
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
-const strip = (s: string) => (s.startsWith('0x') ? s.slice(2) : s);
 
 // ABI dynamic value-array tail [len][e0][e1]...; raw words so callers can inject DIRTY bits.
 const arr = (xs: bigint[]) => pad(BigInt(xs.length)) + xs.map(pad).join('');

@@ -27,7 +27,6 @@ const encStr = (s: string) => { const h = Buffer.from(s, 'utf8').toString('hex')
 // left-aligned bytesN word (value v occupying the high `size` bytes)
 const b4 = (v: bigint) => (v << (256n - 32n)) % M; // bytes4 word
 const b8 = (v: bigint) => (v << (256n - 64n)) % M; // bytes8 word
-const b32 = (v: bigint) => v % M;                  // bytes32 word
 // flat static words
 const call = (sig: string, words: bigint[]) => '0x' + sel(sig) + words.map(pad).join('');
 // single bytes/string arg

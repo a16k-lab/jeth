@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
-import { Harness, encodeCall, decodeUint } from '../src/evm.js';
+import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 

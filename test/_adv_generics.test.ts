@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
-import { Harness, encodeCall, decodeUint, type LogEntry } from '../src/evm.js';
+import { Harness, encodeCall, type LogEntry } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity, readSlot } from './_solidity.js';
 

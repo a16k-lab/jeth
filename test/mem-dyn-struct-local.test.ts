@@ -104,7 +104,6 @@ describe('dynamic-field struct memory locals vs Solidity', () => {
     // mk3: head [a][off_s][off_b][n]; off_s=0x80, then s, then b.
     for (const s of ['', 'xy', 'a longer string spanning more than thirty-two bytes here ok']) {
       for (const b of ['', 'Q', 'bytes payload longer than thirty-two bytes for the second dynamic field']) {
-        const bh = Buffer.from(b, 'utf8').toString('hex').padEnd(Math.ceil(b.length / 32) * 64, '0');
         const sLenPadded = Math.ceil((s.length) / 32) * 64;
         const offB = 0x80 + 32 + sLenPadded / 2; // off_b = head(0x80) + s.len-word + s.data
         const data = '0x' + sel('mk3(uint8,string,bytes,uint64)')

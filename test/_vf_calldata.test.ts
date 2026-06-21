@@ -412,7 +412,6 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
     // ===== (I) dynamic struct param Dyn{a, string s, bytes b, z} =====
     // tuple head: [a][off_s][off_b][z]; offsets relative to tuple start.
     function dynStruct(a: bigint, s: Uint8Array, b: Uint8Array, z: bigint): string {
-      const head = pad(a) + '__OFFS__' + '__OFFB__' + pad(z); // placeholders replaced below
       // 4 head words; tail: s-body then b-body. off relative to tuple start.
       const sBody = elemBody(s);
       const bBody = elemBody(b);

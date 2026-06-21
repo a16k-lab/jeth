@@ -16,7 +16,6 @@ import { compileSolidity, readSlot } from './_solidity.js';
 
 const A1 = BigInt('0x' + '11'.repeat(20));
 const A2 = BigInt('0x' + '22'.repeat(20));
-const A3 = BigInt('0x' + '33'.repeat(20));
 
 function pad32(v: bigint): string {
   return (((v % (1n << 256n)) + (1n << 256n)) % (1n << 256n)).toString(16).padStart(64, '0');

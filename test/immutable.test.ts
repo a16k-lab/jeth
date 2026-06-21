@@ -4,7 +4,7 @@
 // runtime reads load the baked value. Matches the solc-js 0.8.35 oracle: no definite-assignment
 // checking (never-assigned = 0, last-write-wins, read-before-assign = staged 0). Verified
 // byte-identical on raw storage slots + returndata; non-value/inline-init/public/outside-ctor gated.
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';

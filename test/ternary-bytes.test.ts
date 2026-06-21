@@ -48,7 +48,6 @@ describe('bytes/string ternary (JETH074) vs Solidity', () => {
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   async function seedAB(x: string, y: string) {
-    const data = cdBSS('setAB(string,string)', true, x, y).replace(sel('setAB(string,string)'), sel('setAB(string,string)'));
     // setAB takes (string,string); reuse cdBSS layout minus the leading bool
     const tx = encStr(x); const offY = 0x40 + tx.length / 2;
     const d = '0x' + sel('setAB(string,string)') + pad(0x40n) + pad(BigInt(offY)) + tx + encStr(y);

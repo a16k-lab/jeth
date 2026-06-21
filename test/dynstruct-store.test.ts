@@ -11,8 +11,6 @@ const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => functionSelector(s);
 const W = (n: bigint) => pad32(n);
 
-function jOk(src: string): boolean { try { compile(src, { fileName: 'C.jeth' }); return true; } catch { return false; } }
-
 async function diff(jeth: string, sol: string, calls: { sig: string; args?: string }[], slots: bigint[] = []) {
   const jb = compile(jeth, { fileName: 'C.jeth' });
   const sb = compileSolidity(SPDX + sol, 'C');

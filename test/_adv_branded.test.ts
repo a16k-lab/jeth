@@ -10,7 +10,6 @@
 // (branded `address` bypassing the nominal barrier); that is now fixed and the relevant
 // block is a passing regression guard.
 import { describe, it, expect } from 'vitest';
-import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
 import { Harness, encodeCall, pad32 } from '../src/evm.js';
 import { functionSelector, eventTopic0 } from '../src/selectors.js';

@@ -77,8 +77,6 @@ const LONG = 'this string is definitely longer than thirty-two bytes so it spill
 const LONG2 = 'another distinct long payload that also exceeds the thirty-one byte short-string inline limit';
 const SHORT = 'hi';
 const MAXU = M - 1n;
-const MIN256 = -(1n << 255n);
-const MAX256 = (1n << 255n) - 1n;
 
 // ===========================================================================
 // 1. Packed struct: full-slot dirty fields, RMW, neighbor preservation.

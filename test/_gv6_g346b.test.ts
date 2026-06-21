@@ -18,7 +18,6 @@ const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const kc = (p: bigint) => BigInt('0x' + toHex(keccak(hexToBytes(('0x' + pad(p)) as `0x${string}`))));
-const encArrRaw = (els: bigint[]) => pad(BigInt(els.length)) + els.map(pad).join(''); // elements as-given (may be dirty)
 const encStrRaw = (lenBytes: number, rawHex: string) => pad(BigInt(lenBytes)) + rawHex.padEnd(Math.ceil(rawHex.length / 64) * 64, '0');
 type Comp = { dyn: false; word: string } | { dyn: true; tail: string };
 const callData = (sig: string, comps: Comp[]) => {

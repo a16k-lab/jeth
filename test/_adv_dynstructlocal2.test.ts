@@ -21,8 +21,6 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const hx = (s: string) => Buffer.from(s, 'utf8').toString('hex');
 const encStr = (s: string) => { const h = hx(s); return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0'); };
-// encode a [len][data] tail from a RAW hex byte string (so we can inject arbitrary bytes)
-const encRaw = (rawHex: string) => { const n = rawHex.length / 2; return pad(BigInt(n)) + rawHex.padEnd(Math.ceil(rawHex.length / 64) * 64, '0'); };
 
 // payload zoo: empty / 1 / 31 / 32 / 33 / 65 / 100 bytes
 const S0 = '';
@@ -360,7 +358,7 @@ describe('ADVERSARIAL dyn-struct memory local: write/copy/alias vs solc', () => 
   });
 
   it('D4 alias cross: mutate value+string+bytes via alias e, return original d', async () => {
-    for (const [s, b] of [[S0, S0], [S33, S100], [S100, S31]] as const) {
+    for (const _ of [[S0, S0], [S33, S100], [S100, S31]] as const) {
       await seedBoth(seed4('seedSt4(uint256,string,bytes,uint64)', 9n, S31, S65, 3n));
       for (const ns of [S0, S1, S65]) for (const nb of [S0, S32, S100]) {
         // aliasD4Cross(nv, ns, nb): head [nv][off_ns=0x60][off_nb]

@@ -11,7 +11,6 @@ import { compileSolidity, readSlot } from './_solidity.js';
 import { CompileError } from '../src/diagnostics.js';
 
 const sel = (s: string) => functionSelector(s);
-const pad = (v: bigint) => v.toString(16).padStart(64, '0');
 function codes(src: string): string[] {
   try { compile(src, { fileName: 'C.jeth' }); return []; }
   catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }

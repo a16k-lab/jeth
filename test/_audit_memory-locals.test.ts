@@ -13,10 +13,10 @@
 //    skipped components, RHS-before-LHS evaluation order
 // Storage targets compared by RAW SLOT (direct + computed keccak data slots).
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Address, hexToBytes } from '@ethereumjs/util';
+import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
 import { Harness, encodeCall } from '../src/evm.js';
-import { functionSelector, keccak, toHex } from '../src/selectors.js';
+import { functionSelector } from '../src/selectors.js';
 import { compileSolidity, readSlot } from './_solidity.js';
 
 const M = 1n << 256n;
@@ -28,7 +28,6 @@ const encStr = (s: string) => { const h = hx(s); return pad(BigInt(h.length / 2)
 // same from a raw byte buffer (lets us inject arbitrary bytes / dirty payloads)
 const encBuf = (b: Buffer) => { const h = b.toString('hex'); return pad(BigInt(b.length)) + h.padEnd(Math.ceil(b.length / 32) * 64, '0'); };
 const wordsFor = (byteLen: number) => 32 + Math.ceil(byteLen / 32) * 32; // tail size of one dyn block
-const kc = (p: bigint) => BigInt('0x' + toHex(keccak(hexToBytes(('0x' + pad(p)) as `0x${string}`))));
 
 // payload zoo: empty / 1 / 31 / 32 / 33 / 63 / 64 / 65 / multi-word
 const LENS = [0, 1, 31, 32, 33, 63, 64, 65, 96, 100];
@@ -41,7 +40,6 @@ const BUFS = LENS.map(bufOf);
 // (value, string): head=[v][off=0x40], tail=[len][data]
 const cd_v_s = (sig: string, v: bigint, s: string) => '0x' + sel(sig) + pad(v) + pad(0x40n) + encStr(s);
 // (string, value): head=[off=0x40][v], tail=[len][data]
-const cd_s_v = (sig: string, s: string, v: bigint) => '0x' + sel(sig) + pad(0x40n) + pad(v) + encStr(s);
 // (bytes, uint256): head=[off=0x40][i], tail=[len][data]
 const cd_b_u = (sig: string, b: Buffer, i: bigint) => '0x' + sel(sig) + pad(0x40n) + pad(i) + encBuf(b);
 // single string param: head=[off=0x20], tail=[len][data]

@@ -299,8 +299,6 @@ describe('probe', () => {
   });
 
   it('runs', async () => {
-    const U = [0n, 1n, 2n, 3n, 7n, 255n, 256n, 1000n, M - 1n, M >> 1n, (M >> 1n) - 1n, 0x8000000000000000n];
-
     // chains (both forms)
     for (const x of [0n, 1n, 2n, 5n, 100n, M - 1n, M >> 4n]) {
       await eq('chain4(' + x + ')', encodeCall(sel('chain4(uint256)'), [x]));

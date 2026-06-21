@@ -1,7 +1,6 @@
 // THROWAWAY adversarial audit: whole-aggregate ENCODE-FROM-STORAGE returns.
 // Hunting silent runtime miscompiles vs solc 0.8.35 cancun. Distinct value per leaf.
 import { describe, it, expect, beforeAll } from 'vitest';
-import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
 import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';

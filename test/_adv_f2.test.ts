@@ -36,7 +36,6 @@ function errCodes(src: string): string[] {
     throw e;
   }
 }
-const compiles = (src: string) => errCodes(src).length === 0;
 
 /** A deployed JETH/solc pair driven with identical calldata; asserts byte-identical effects. */
 class Pair {
