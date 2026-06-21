@@ -2577,10 +2577,20 @@ ${indent(runtime, 6)}
       const i = this.fresh();
       out.push(`let ${i} := ${this.lowerExpr(arr.base.index, ctx, out)}`);
       out.push(`if iszero(lt(${i}, ${b.length})) { ${this.panic()}(0x32) }`);
-      if (inner.kind === 'array' && inner.length !== undefined) {
+      if (inner.kind === 'array' && inner.length !== undefined && isStaticType(inner)) {
+        // dynamic array of STATIC fixed arrays (uint256[2][]): elements are contiguous, each one
+        // abiHeadWords(inner) words. a[i] starts at b.offset + i*stride.
         const stride = abiHeadWords(inner) * 32;
         const offset = this.fresh();
         out.push(`let ${offset} := add(${b.offset}, mul(${i}, ${stride}))`);
+        return { src: 'calldata', offset, length: String(inner.length), elem: arr.elem };
+      }
+      if (inner.kind === 'array' && inner.length !== undefined) {
+        // dynamic array of a fixed-array-of-DYNAMIC (string[3][] = Arr<string,3>[]): element i is
+        // VARIABLE-size and offset-located (NOT contiguous). a[i] is the element's N-word offset
+        // table, which is itself offset-table-indexed by the next access.
+        const offset = this.fresh();
+        out.push(`let ${offset} := ${this.calldataNestedOff()}(${b.offset}, ${i})`);
         return { src: 'calldata', offset, length: String(inner.length), elem: arr.elem };
       }
       const stride = abiHeadWords(arr.elem) * 32;
@@ -2597,25 +2607,39 @@ ${indent(runtime, 6)}
       // / length / payload past calldatasize -> EMPTY revert inside the helper.
       const b = ctx.cdArrays.get(arr.base.name);
       if (!b) throw new UnsupportedError(`unbound nested calldata array ${arr.base.name}`);
-      // Descend one dynamic-array level per index. The container at each step lives at
-      // (base=pointer-region start, len). For every step but the last the inner element
-      // is itself a dynamic array (a single pointer word, stride 32); the last step
-      // resolves the array whose element is `arr.elem` (stride abiHeadWords*32).
+      // Descend one ARRAY level per index, bounds-checking against the current level's count.
+      // The element navigated at each step (elemT, starting at the root's immediate element b.elem)
+      // determines the navigation: a DYNAMIC-array element (T[]) is offset+length (calldataInnerArray,
+      // count = its read length); a FIXED-array-of-dynamic element (Arr<string,N>) is offset-only
+      // (calldataNestedOff, count = the static N). Mixed nesting (string[2][3][]) descends correctly.
       const indices = arr.base.indices;
       let base = b.offset;
-      let len = b.length;
-      indices.forEach((idxExpr, s) => {
+      let count: string = b.length; // count of the current container (runtime for dynamic, static N for fixed)
+      let elemT: JethType = b.elem; // the element type navigated INTO at the current step
+      indices.forEach((idxExpr) => {
         const i = this.fresh();
         out.push(`let ${i} := ${this.lowerExpr(idxExpr, ctx, out)}`);
-        out.push(`if iszero(lt(${i}, ${len})) { ${this.panic()}(0x32) }`);
-        const stride = s === indices.length - 1 ? abiHeadWords(arr.elem) * 32 : 32;
-        const nb = this.fresh();
-        const nl = this.fresh();
-        out.push(`let ${nb}, ${nl} := ${this.calldataInnerArray()}(${base}, ${i}, ${stride})`);
-        base = nb;
-        len = nl;
+        out.push(`if iszero(lt(${i}, ${count})) { ${this.panic()}(0x32) }`);
+        if (elemT.kind === 'array' && elemT.length === undefined) {
+          // navigate into a DYNAMIC array element: read its length word.
+          const stride = isDynamicType(elemT.element) ? 32 : abiHeadWords(elemT.element) * 32;
+          const nb = this.fresh();
+          const nl = this.fresh();
+          out.push(`let ${nb}, ${nl} := ${this.calldataInnerArray()}(${base}, ${i}, ${stride})`);
+          base = nb;
+          count = nl;
+        } else if (elemT.kind === 'array' && elemT.length !== undefined) {
+          // navigate into a FIXED-array-of-dynamic element: offset only, count = its static length.
+          const nb = this.fresh();
+          out.push(`let ${nb} := ${this.calldataNestedOff()}(${base}, ${i})`);
+          base = nb;
+          count = String(elemT.length);
+        } else {
+          throw new UnsupportedError(`cannot index calldata nested element of kind '${elemT.kind}'`);
+        }
+        elemT = (elemT as JethType & { kind: 'array' }).element;
       });
-      return { src: 'calldata', offset: base, length: len, elem: arr.elem };
+      return { src: 'calldata', offset: base, length: count, elem: arr.elem };
     }
     const b = ctx.cdArrays.get(arr.base.name);
     if (!b) throw new UnsupportedError(`unbound calldata array ${arr.base.name}`);
@@ -4813,6 +4837,22 @@ ${indent(runtime, 6)}
   if gt(innerLen, 0xffffffffffffffff) { revert(0, 0) }
   if sgt(lenPtr, sub(calldatasize(), add(mul(innerLen, stride), 0x20))) { revert(0, 0) }
   dataOff := add(lenPtr, 0x20)
+}`);
+    }
+    return name;
+  }
+
+  /** Navigate ONE offset-table level whose element has NO length word - an element that is itself a
+   *  fixed-array-of-dynamic (Arr<string,N> = its N-word offset table) or a bytes/string header.
+   *  Element idx's data starts at base + calldataload(base + idx*32) (offset relative to the table
+   *  start). Mirrors calldataInnerArray's unsigned offset validation but reads no length word. */
+  private calldataNestedOff(): string {
+    const name = 'jeth_calldata_nested_off';
+    if (!this.helpers.has(name)) {
+      this.helpers.set(name, `function ${name}(base, idx) -> elemData {
+  let off := calldataload(add(base, mul(idx, 0x20)))
+  if iszero(slt(off, sub(sub(calldatasize(), base), 0x1f))) { revert(0, 0) }
+  elemData := add(base, off)
 }`);
     }
     return name;

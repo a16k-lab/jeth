@@ -4090,7 +4090,17 @@ export class Analyzer {
       // element i is an inner dynamic array whose length slot is baseSlot+i*stride. As a
       // calldata PARAM / RETURN: an N-word offset table + per-element tails, handled by the
       // recursive head/tail codec (any supported nested dynamic-array element).
-      if (t.element.kind === 'array' && (storage || this.isAbiNestedDynArray(t.element) || (t.element.length === undefined && isStaticValueType(t.element.element)))) return true;
+      if (t.element.kind === 'array') {
+        if (storage || this.isAbiNestedDynArray(t.element) || (t.element.length === undefined && isStaticValueType(t.element.element))) return true;
+        // a nested FIXED array element with dynamic leaves (Arr<Arr<string,2>,3> = string[2][3]): valid
+        // as a calldata param / return if the inner element type is itself supported (recurse, with
+        // diagnostic rollback so only our own JETH210 surfaces if the inner is unsupported).
+        if (t.element.length !== undefined) {
+          const diagLen = this.diags.items.length;
+          if (this.gateArrayType(t.element, node, storage)) return true;
+          this.diags.items.length = diagLen;
+        }
+      }
       this.diags.error(node, 'JETH210', `fixed-array element type ${displayName(t.element)} is not supported yet`);
       return false;
     }
@@ -4443,17 +4453,19 @@ export class Analyzer {
           root.kind === 'array' &&
           root.length === undefined &&
           root.element.kind === 'array' &&
-          root.element.length === undefined
+          !this.memArrayLocals.has(cur.text)
         ) {
           indexNodes.reverse(); // outer-to-inner
-          // descend the type tree one dynamic-array level per index step.
+          // descend the type tree one ARRAY level per index step (a dynamic array OR a fixed-array-of-
+          // dynamic, e.g. string[2][3] inside string[2][3][]). The codegen navigates each level via its
+          // inner offset table (reading a length word only for a dynamic-array level).
           let t: JethType = root;
           for (let s = 0; s < indexNodes.length; s++) {
-            if (t.kind !== 'array' || t.length !== undefined) return undefined; // not a dynamic array at this level
+            if (t.kind !== 'array') return undefined; // not an array at this level
             t = t.element;
           }
-          // the resolved value must itself be a dynamic array to be an ArrayExpr.
-          if (t.kind !== 'array' || t.length !== undefined) return undefined;
+          // the resolved value must itself be an array to be an ArrayExpr.
+          if (t.kind !== 'array') return undefined;
           const indices: Expr[] = [];
           for (const inode of indexNodes) {
             const index = this.checkExpr(inode, U256);
@@ -4572,8 +4584,8 @@ export class Analyzer {
       t !== undefined &&
       t.kind === 'array' &&
       t.length === undefined &&
-      t.element.kind === 'array' &&
-      t.element.length === undefined
+      t.element.kind === 'array' && // a nested-array root: T[][], string[][], string[2][3][], ...
+      !this.memArrayLocals.has(cur.text)
     );
   }
 

@@ -642,8 +642,30 @@ describe('R4: Arr<dynElem,N>[] as a calldata param / whole-array return vs solc'
       [{ sig: 'grow()' }, { sig: 'grow()' }, { sig: 's(uint256,uint256,string)', args: W(0n) + W(1n) + strArg('hi') }, { sig: 's(uint256,uint256,string)', args: W(1n) + W(0n) + strArg('a fairly long string crossing 32!!') }, { sig: 'r()' }],
     );
   });
-  it('deeper nesting Arr<Arr<string,2>,3>[] stays a clean rejection (codec gap, not a miscompile)', () => {
-    expect(jethRejects(`@contract class C { @external @pure f(a: Arr<Arr<string,2>,3>[]): u256 { return a.length; } }`)).toBe(true);
+  // VARIABLE-LENGTH nested string arrays via calldata. (A prior version navigated outer elements with a
+  // CONTIGUOUS stride - correct only for equal-length elements - which silently miscompiled; these use
+  // intentionally unequal lengths so contiguous-vs-offset-table navigation must differ.)
+  const encStr = (s: string) => W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd((Math.ceil(s.length / 32) || 0) * 64, '0');
+  const block = (parts: string[]) => { const offs: string[] = []; let cur = parts.length * 32; for (const p of parts) { offs.push(W(BigInt(cur))); cur += p.length / 2; } return offs.join('') + parts.join(''); };
+  it('string[3][] (single-level) variable-length a[i][j] + OOB byte-identical', async () => {
+    const aBody = W(2n) + block([block(['aa', 'b', 'cccccc'].map(encStr)), block(['d', 'this-one-is-quite-a-bit-longer!!!', 'f'].map(encStr))]); // [len][offset table + tails]
+    const at = (i: bigint, j: bigint) => ({ sig: 'at(string[3][],uint256,uint256)', args: W(0x60n) + W(i) + W(j) + aBody }); // head: [off_a=0x60][i][j]
+    await rt(
+      `@contract class C { @external @pure at(a: Arr<string,3>[], i: u256, j: u256): string { return a[i][j]; } @external @pure len(a: Arr<string,3>[]): u256 { return a.length; } }`,
+      `contract C { function at(string[3][] calldata a,uint256 i,uint256 j) external pure returns(string memory){ return a[i][j]; } function len(string[3][] calldata a) external pure returns(uint256){ return a.length; } }`,
+      [at(0n, 0n), at(1n, 1n), at(0n, 2n), at(1n, 0n), at(0n, 3n), at(2n, 0n), { sig: 'len(string[3][])', args: W(0x20n) + aBody }],
+    );
+  });
+  it('string[2][3][] (double-level) variable-length a[i][j][k] + OOB + whole-array echo byte-identical', async () => {
+    const enc23 = (a: string[][]) => block(a.map((p) => block(p.map(encStr)))); // string[2][3]
+    const val = [[['a0', 'b1longer'], ['c2', 'd3'], ['e4', 'f5']], [['g6', ''], ['', 'k10longeryes'], ['l11', 'm12']]];
+    const aBody = W(BigInt(val.length)) + block(val.map(enc23)); // [len][table + per-element string[2][3] blocks]
+    const at = (i: bigint, j: bigint, k: bigint) => ({ sig: 'at(string[2][3][],uint256,uint256,uint256)', args: W(0x80n) + W(i) + W(j) + W(k) + aBody });
+    await rt(
+      `@contract class C { @external @pure at(a: Arr<Arr<string,2>,3>[], i: u256, j: u256, k: u256): string { return a[i][j][k]; } @external @pure len(a: Arr<Arr<string,2>,3>[]): u256 { return a.length; } @external @pure echo(a: Arr<Arr<string,2>,3>[]): Arr<Arr<string,2>,3>[] { return a; } }`,
+      `contract C { function at(string[2][3][] calldata a,uint256 i,uint256 j,uint256 k) external pure returns(string memory){ return a[i][j][k]; } function len(string[2][3][] calldata a) external pure returns(uint256){ return a.length; } function echo(string[2][3][] calldata a) external pure returns(string[2][3][] memory){ return a; } }`,
+      [at(0n, 0n, 1n), at(1n, 1n, 1n), at(1n, 2n, 0n), at(0n, 2n, 0n), at(0n, 3n, 0n), at(0n, 0n, 2n), { sig: 'len(string[2][3][])', args: W(0x20n) + aBody }, { sig: 'echo(string[2][3][])', args: W(0x20n) + aBody }],
+    );
   });
 });
 
@@ -666,10 +688,8 @@ describe('dynamic nested struct field from a non-inline (side-effect-free) sourc
        }`,
       [{ sig: 'fLocal()' }, { sig: 'fParam((uint256,string))', args: W(0x20n) + W(7n) + W(0x40n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') }, { sig: 'fBytes()' }],
     ));
-  it('a function-call source (side-effecting) is still rejected (no double-eval), as is double-nested string[2][3][]', () => {
+  it('a function-call source (side-effecting) is still rejected (no double-eval)', () => {
     // a non-inline source that is a CALL is rejected (would re-evaluate); must bind to a local first.
     expect(jethRejects(`@struct class I { p: u256; s: string; } @struct class O { i: I; } @contract class C { @pure mk(): I { return I(1n,"x"); } @external @pure f(): O { return O(mk()); } }`)).toBe(true);
-    // double-nested fixed-array-of-dynamic stays a clean rejection (recursive-access codec gap, not a miscompile)
-    expect(jethRejects(`@contract class C { @external @pure f(a: Arr<Arr<string,2>,3>[]): u256 { return a.length; } }`)).toBe(true);
   });
 });
