@@ -4236,7 +4236,10 @@ ${indent(runtime, 6)}
     // copy masks dirty bits), but the EVENT/ERROR decode VALIDATES every element (reverts on
     // dirty), so callers in that context pass forceValidate. Everything else always validates.
     const topClean = !forceValidate && t.kind === 'array' && t.length === undefined && isStaticValueType(t.element);
-    const size = this.abiEncFromCd(t, cdPtr, `add(${ptr}, 0x20)`, !topClean, out);
+    // forceValidate marks the DECODE/re-encode context (abi.encode/encodeWith*/emit/error via
+    // materializeArrayArg): an oversized inner length/offset is an ABI-decode failure -> revert(0,0),
+    // matching solc. The return-echo path (forceValidate=false) keeps Panic 0x41.
+    const size = this.abiEncFromCd(t, cdPtr, `add(${ptr}, 0x20)`, !topClean, out, forceValidate);
     out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
     return { ptr, size: `add(0x20, ${size})` };
   }
@@ -4393,7 +4396,13 @@ ${indent(runtime, 6)}
    *  oversized payloads Panic(0x41) then EMPTY-revert on calldata overrun. `validate`:
    *  value leaves revert on dirty bits (nested/struct decode) vs clean (flat value
    *  array). */
-  private abiEncFromCd(t: JethType, cdPtr: string, dst: string, validate: boolean, out: string[]): string {
+  private abiEncFromCd(t: JethType, cdPtr: string, dst: string, validate: boolean, out: string[], capEmptyRevert = false): string {
+    // In a DECODE/re-encode context (abi.encode/encodeWith*/emit/error materialization, reached via
+    // echoParam's forceValidate), an oversized length or memory-overflow cap is an ABI-DECODE FAILURE ->
+    // revert(0, 0) (empty), matching solc. In the plain return-echo copy context it Panics 0x41 (also
+    // matching solc - e.g. `return xs` for a bytes[] with an inner length >= 2^64). The calldatasize and
+    // offset bounds already revert(0,0) in both; only these unsigned 2^64 caps were context-dependent.
+    const capRevert = capEmptyRevert ? `revert(0, 0)` : `${this.panic()}(0x41)`;
     // a single value leaf
     if (isStaticValueType(t)) {
       const w = this.fresh();
@@ -4440,12 +4449,12 @@ ${indent(runtime, 6)}
     if (isBytesLike(t)) {
       const len = this.fresh();
       out.push(`let ${len} := calldataload(${cdPtr})`);
-      out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${capRevert} }`);
       const padded = this.fresh();
       out.push(`let ${padded} := and(add(${len}, 0x1f), not(0x1f))`);
       const nc = this.fresh();
       out.push(`let ${nc} := add(add(${dst}, 0x20), ${padded})`);
-      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${dst})) { ${this.panic()}(0x41) }`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${dst})) { ${capRevert} }`);
       out.push(`if gt(add(add(${cdPtr}, 0x20), ${len}), calldatasize()) { revert(0, 0) }`);
       out.push(`mstore(${dst}, ${len})`);
       out.push(`calldatacopy(add(${dst}, 0x20), add(${cdPtr}, 0x20), ${len})`);
@@ -4456,7 +4465,7 @@ ${indent(runtime, 6)}
     if (t.kind === 'array' && t.length === undefined) {
       const len = this.fresh();
       out.push(`let ${len} := calldataload(${cdPtr})`);
-      out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${capRevert} }`);
       out.push(`mstore(${dst}, ${len})`);
       const elemRegion = this.fresh();
       out.push(`let ${elemRegion} := add(${cdPtr}, 0x20)`);
@@ -4466,7 +4475,7 @@ ${indent(runtime, 6)}
         const es = abiHeadWords(t.element) * 32;
         const nc = this.fresh();
         out.push(`let ${nc} := add(${dstHead}, mul(${len}, ${es}))`);
-        out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${dstHead})) { ${this.panic()}(0x41) }`);
+        out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${dstHead})) { ${capRevert} }`);
         out.push(`if gt(add(${elemRegion}, mul(${len}, ${es})), calldatasize()) { revert(0, 0) }`);
         const elemValidate = validate || !isStaticValueType(t.element);
         const i = this.fresh();
@@ -4476,14 +4485,14 @@ ${indent(runtime, 6)}
         inner.push(`let ${ecd} := add(${elemRegion}, mul(${i}, ${es}))`);
         const edst = this.fresh();
         inner.push(`let ${edst} := add(${dstHead}, mul(${i}, ${es}))`);
-        this.abiEncFromCd(t.element, ecd, edst, elemValidate, inner);
+        this.abiEncFromCd(t.element, ecd, edst, elemValidate, inner, capEmptyRevert);
         for (const l of inner) out.push('  ' + l);
         out.push('}');
         return `add(0x20, mul(${len}, ${es}))`;
       }
       const cursor = this.fresh();
       out.push(`let ${cursor} := add(${dstHead}, mul(${len}, 0x20))`);
-      out.push(`if or(gt(${cursor}, 0xffffffffffffffff), lt(${cursor}, ${dstHead})) { ${this.panic()}(0x41) }`);
+      out.push(`if or(gt(${cursor}, 0xffffffffffffffff), lt(${cursor}, ${dstHead})) { ${capRevert} }`);
       const i = this.fresh();
       out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
       const inner: string[] = [];
@@ -4496,7 +4505,7 @@ ${indent(runtime, 6)}
       inner.push(`let ${se} := add(${elemRegion}, ${so})`);
       inner.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), calldatasize()) { revert(0, 0) }`);
       inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), sub(${cursor}, ${dstHead}))`);
-      const sz = this.abiEncFromCd(t.element, se, cursor, true, inner);
+      const sz = this.abiEncFromCd(t.element, se, cursor, true, inner, capEmptyRevert);
       inner.push(`${cursor} := add(${cursor}, ${sz})`);
       for (const l of inner) out.push('  ' + l);
       out.push('}');
@@ -4514,7 +4523,7 @@ ${indent(runtime, 6)}
         out.push(`let ${se} := add(${cdPtr}, ${so})`);
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), calldatasize()) { revert(0, 0) }`);
         out.push(`mstore(add(${dst}, ${k * 32}), sub(${cursor}, ${dst}))`);
-        const sz = this.abiEncFromCd(t.element, se, cursor, true, out);
+        const sz = this.abiEncFromCd(t.element, se, cursor, true, out, capEmptyRevert);
         out.push(`${cursor} := add(${cursor}, ${sz})`);
       }
       return `sub(${cursor}, ${dst})`;
@@ -4528,7 +4537,7 @@ ${indent(runtime, 6)}
       for (const f of t.fields) {
         const fb = hw * 32;
         if (!isDynamicType(f.type)) {
-          this.abiEncFromCd(f.type, `add(${cdPtr}, ${fb})`, `add(${dst}, ${fb})`, true, out);
+          this.abiEncFromCd(f.type, `add(${cdPtr}, ${fb})`, `add(${dst}, ${fb})`, true, out, capEmptyRevert);
           hw += abiHeadWords(f.type);
         } else {
           const so = this.fresh();
@@ -4538,7 +4547,7 @@ ${indent(runtime, 6)}
           out.push(`let ${se} := add(${cdPtr}, ${so})`);
           out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), calldatasize()) { revert(0, 0) }`);
           out.push(`mstore(add(${dst}, ${fb}), sub(${cursor}, ${dst}))`);
-          const sz = this.abiEncFromCd(f.type, se, cursor, true, out);
+          const sz = this.abiEncFromCd(f.type, se, cursor, true, out, capEmptyRevert);
           out.push(`${cursor} := add(${cursor}, ${sz})`);
           hw += 1;
         }

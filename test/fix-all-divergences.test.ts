@@ -1098,3 +1098,28 @@ describe('deep-sweep #2 over-rejections (byte-identical to solc)', () => {
     );
   });
 });
+
+describe('abi.encode of an array of dynamic elements: oversized length is an ABI-decode failure (empty revert)', () => {
+  // solc decodes the calldata value before re-encoding; an inner length / outer length >= 2^64 is a
+  // decode failure -> revert(0,0) (EMPTY), NOT Panic 0x41. The plain return-echo copy still Panics.
+  const big = W(1n << 65n);
+  it('abi.encode(bytes[]) bad inner / outer length -> empty revert; well-formed identical', async () => {
+    await rt(
+      `@contract class C { @external @pure r(xs: bytes[]): bytes { return abi.encode(xs); } }`,
+      `contract C { function r(bytes[] calldata xs) external pure returns (bytes memory) { return abi.encode(xs); } }`,
+      [
+        { sig: 'r(bytes[])', args: W(0x20n) + W(1n) + W(0x20n) + big }, // inner bytes length 2^65 -> both empty-revert
+        { sig: 'r(bytes[])', args: W(0x20n) + big }, // outer array length 2^65 -> both empty-revert
+        { sig: 'r(bytes[])', args: W(0x20n) + W(1n) + W(0x20n) + W(3n) + Buffer.from('abc').toString('hex').padEnd(64, '0') }, // well-formed
+        { sig: 'r(bytes[])', args: W(0x20n) + W(0n) }, // empty array
+      ],
+    );
+  });
+  it('return-echo of the same bad calldata still Panics 0x41 (matches solc, unchanged)', async () => {
+    await rt(
+      `@contract class C { @external @pure r(xs: bytes[]): bytes[] { return xs; } }`,
+      `contract C { function r(bytes[] calldata xs) external pure returns (bytes[] memory) { return xs; } }`,
+      [{ sig: 'r(bytes[])', args: W(0x20n) + W(1n) + W(0x20n) + big }],
+    );
+  });
+});
