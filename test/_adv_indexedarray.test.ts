@@ -337,13 +337,12 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
     const dyn = `@struct class D { s: string; }
 @contract class C { @event E(@indexed d: D); @external f(): void {} }`;
     expect(() => compile(dyn, { fileName: 'C.jeth' })).not.toThrow();
-    // a dynamic struct with a NESTED struct field stays gated (JETH207, shared with the non-indexed path)
+    // a dynamic struct with a NESTED dynamic struct field is now supported too (topic = keccak of the
+    // recursively flattened payload; byte-identical to solc, verified in fix-all-divergences.test.ts).
     const nested = `@struct class Inner { p: u256; s: string; }
 @struct class D2 { x: u256; inner: Inner; }
 @contract class C { @event E(@indexed d: D2); @external f(): void {} }`;
-    let threw = false;
-    try { compile(nested, { fileName: 'C.jeth' }); } catch (e: any) { threw = true; expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH207'); }
-    expect(threw, 'nested-struct-field dynamic struct indexed param must still be rejected').toBe(true);
+    expect(() => compile(nested, { fileName: 'C.jeth' })).not.toThrow();
   });
   it('nested dynamic array (u256[][]) indexed event param is rejected', () => {
     let threw = false;

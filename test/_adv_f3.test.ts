@@ -71,7 +71,7 @@ describe('F3 adv: a default of every kind matches the spelled-out constant', () 
     db(a: u256, on: bool = true): u256 { return on ? a : 0n; }
     da(a: u256, who: address = address(0n)): u256 { return who == address(0n) ? a : a + 1n; }
     dan(a: u256, who: address = address(0x00000000000000000000000000000000000000ffn)): u256 { return who == address(0n) ? a : a + 1n; }
-    dby(a: u256, tag: bytes32 = bytes32(0xdeadbeefn)): bytes32 { return tag; }
+    dby(a: u256, tag: bytes32 = bytes32(u256(0xdeadbeefn))): bytes32 { return tag; }
     dmax(a: u256, cap: u256 = type(u256).max): u256 { return a < cap ? a : cap; }
     dmin(a: i128, lo: i128 = type(i128).min): i128 { return a > lo ? a : lo; }
     d255(a: u8, b: u8 = u8(255n)): u8 { return a > b ? a : b; }

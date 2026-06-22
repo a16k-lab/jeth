@@ -73,7 +73,7 @@ describe('Phase 2 diagnostics', () => {
   it('rejects malformed @error declarations', () => {
     expect(codesFor(`@contract\nclass T { @error Bad(a: u256) { return; } }`)).toContain('JETH125'); // has body
     expect(codesFor(`@contract\nclass T { @error Ok(a: Arr<u256, 3>); }`)).toEqual([]); // static fixed-array arg now supported (inline head)
-    expect(codesFor(`@struct\nclass D { s: string; }\n@contract\nclass T { @error Bad(d: D); }`)).toContain('JETH127'); // a DYNAMIC struct arg stays deferred
+    expect(codesFor(`@struct\nclass D { s: string; }\n@contract\nclass T { @error Bad(d: D); }`)).toEqual([]); // a DYNAMIC struct error arg is now supported (revert data byte-identical to solc)
     expect(codesFor(`@contract\nclass T { @error Ok(a: u256[]); }`)).toEqual([]); // dynamic-array args supported (G3)
     expect(codesFor(`@contract\nclass T { @error Ok(a: string); }`)).toEqual([]); // bytes/string args supported (4e-7)
     expect(codesFor(`@contract\nclass T { @error E(a: u256); @error E(b: u256); }`)).toContain('JETH128'); // dup
@@ -88,8 +88,9 @@ describe('Phase 2 diagnostics', () => {
     // an indexed FIXED array / static struct is now supported (keccak topic); a supported DYNAMIC struct too
     expect(codesFor(`@contract\nclass T { @event E(@indexed a: Arr<u256,2>); }`)).toEqual([]);
     expect(codesFor(`@struct\nclass D { s: string; }\n@contract\nclass T { @event E(@indexed d: D); }`)).toEqual([]);
-    // a dynamic struct with a NESTED struct field stays gated (shared with the non-indexed path)
-    expect(codesFor(`@struct\nclass I { p: u256; s: string; }\n@struct\nclass D2 { x: u256; i: I; }\n@contract\nclass T { @event E(@indexed d: D2); }`)).toContain('JETH207');
+    // a dynamic struct with a NESTED dynamic struct field is now supported (indexed topic = keccak of
+    // the recursively flattened payload; byte-identical to solc, verified in fix-all-divergences.test.ts)
+    expect(codesFor(`@struct\nclass I { p: u256; s: string; }\n@struct\nclass D2 { x: u256; i: I; }\n@contract\nclass T { @event E(@indexed d: D2); }`)).toEqual([]);
     // an indexed bytes/string event param is now allowed (keccak topic, G4)
     expect(codesFor(`@contract\nclass T { @event E(@indexed s: string, v: u256); }`)).toEqual([]);
     // a non-indexed string event param is allowed (Phase 4)

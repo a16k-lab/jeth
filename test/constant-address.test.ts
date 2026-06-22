@@ -67,7 +67,7 @@ describe('@constant address vs Solidity', () => {
 
   it('@constant bytesN (left-aligned, slot-free)', async () => {
     await diff(
-      `@contract class C { @constant K: bytes4 = bytes4(0x12345678n); @constant H: bytes32 = bytes32(0xdeadbeefn); @state x: u256 = 9n; @external @view getK(): bytes4 { return this.K; } @external @view getH(): bytes32 { return this.H; } @external @view isK(v: bytes4): bool { return v == this.K; } @external @view getX(): u256 { return this.x; } }`,
+      `@contract class C { @constant K: bytes4 = bytes4(0x12345678n); @constant H: bytes32 = bytes32(0x00000000000000000000000000000000000000000000000000000000deadbeefn); @state x: u256 = 9n; @external @view getK(): bytes4 { return this.K; } @external @view getH(): bytes32 { return this.H; } @external @view isK(v: bytes4): bool { return v == this.K; } @external @view getX(): u256 { return this.x; } }`,
       `contract C { bytes4 constant K = 0x12345678; bytes32 constant H = 0x00000000000000000000000000000000000000000000000000000000deadbeef; uint256 x = 9; function getK() external view returns (bytes4){ return K; } function getH() external view returns (bytes32){ return H; } function isK(bytes4 v) external view returns (bool){ return v == K; } function getX() external view returns (uint256){ return x; } }`,
       [
         { sig: 'getK()' },

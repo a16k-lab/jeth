@@ -42,6 +42,7 @@ export type GlobalOp =
   | 'callvalue' // msg.value (payable-only)
   | 'origin' // tx.origin
   | 'gasprice' // tx.gasprice
+  | 'blobbasefee' // block.blobbasefee (EIP-4844 cancun, BLOBBASEFEE 0x4a)
   | 'address' // address(this)
   | 'timestamp'
   | 'number'
@@ -95,6 +96,7 @@ export type Expr =
   | { kind: 'modOp'; type: JethType; op: 'addmod' | 'mulmod'; a: Expr; b: Expr; m: Expr } // addmod/mulmod -> u256
   | { kind: 'abiEncode'; type: JethType; packed: boolean; args: Expr[]; selector?: Expr; sig?: Expr } // abi.encode/encodePacked/encodeWithSelector(selector)/encodeWithSignature(sig) -> bytes
   | { kind: 'blockhash'; type: JethType; arg: Expr } // blockhash(uint) -> bytes32
+  | { kind: 'blobhash'; type: JethType; arg: Expr } // blobhash(uint) -> bytes32 (EIP-4844)
   | { kind: 'balance'; type: JethType; addr: Expr } // <address>.balance -> u256
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1
   // --- Phase 4: dynamic arrays T[] ---

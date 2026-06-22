@@ -148,9 +148,9 @@ const JD = `@struct class P { a: u256; b: u8; c: address; d: i128; e: bool; f: b
   @state x: P; @state y: P; @state z: P;
   @state ax: Arr<u256,3>; @state ay: Arr<u256,3>;
   @external seed(): void {
-    this.x = P(11n, 200n, address(0xa1n), -5n, true, bytes32(0x1122n));
-    this.y = P(33n, 44n, address(0xb2n), 99n, false, bytes32(0xdeadbeefn));
-    this.z = P(55n, 66n, address(0xc3n), -77n, true, bytes32(0xfeedn));
+    this.x = P(11n, 200n, address(0xa1n), -5n, true, bytes32(u256(0x1122n)));
+    this.y = P(33n, 44n, address(0xb2n), 99n, false, bytes32(u256(0xdeadbeefn)));
+    this.z = P(55n, 66n, address(0xc3n), -77n, true, bytes32(u256(0xfeedn)));
     this.ax[0n] = 1n; this.ax[1n] = 2n; this.ax[2n] = 3n;
     this.ay[0n] = 7n; this.ay[1n] = 8n; this.ay[2n] = 9n;
   }
@@ -164,7 +164,7 @@ const JD = `@struct class P { a: u256; b: u8; c: address; d: i128; e: bool; f: b
   // nested aggregate ternary
   @external @view nestedAgg(c: bool, d: bool): P { return c ? this.x : (d ? this.y : this.z); }
   // untaken ctor branch divides by zero -> short-circuit
-  @external divBranch(c: bool, v: u256): P { return c ? this.x : P(1000n / v, 2n, address(0n), 0n, false, bytes32(0n)); }
+  @external divBranch(c: bool, v: u256): P { return c ? this.x : P(1000n / v, 2n, address(0n), 0n, false, bytes32(u256(0n))); }
   @external @view getArr(i: u256): u256 { return this.ax[i]; }
 }`;
 const SD = `// SPDX-License-Identifier: MIT

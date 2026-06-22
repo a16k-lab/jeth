@@ -534,23 +534,18 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     expect(() => compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' }))
       .not.toThrow();
   });
-  it('indexed static-struct AND a supported dynamic struct now compile; a nested-struct-field one stays gated (JETH207)', () => {
+  it('indexed static-struct, dynamic struct, AND nested-dynamic-struct-field event params all compile (keccak topic)', () => {
     expect(() => compile(`@struct class S { x: u256; }
 @contract class C { @event E(@indexed s: S); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
     // a supported dynamic struct (string field) indexed param now compiles too (keccak of the
     // flattened payload; verified byte-identical in fix-all-divergences.test.ts).
     expect(() => compile(`@struct class D { s: string; }
 @contract class C { @event E(@indexed d: D); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
-    let threw = false;
-    try {
-      compile(`@struct class Inner { p: u256; s: string; }
+    // a dynamic struct with a NESTED dynamic struct field is now supported too (the topic is keccak of
+    // the recursively flattened payload; byte-identical to solc, verified in fix-all-divergences.test.ts).
+    expect(() => compile(`@struct class Inner { p: u256; s: string; }
 @struct class D2 { x: u256; inner: Inner; }
-@contract class C { @event E(@indexed d: D2); @external f(): void {} }`, { fileName: 'C.jeth' });
-    } catch (e: any) {
-      threw = true;
-      expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH207');
-    }
-    expect(threw).toBe(true);
+@contract class C { @event E(@indexed d: D2); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
   });
   it('gate: indexed nested dynamic array (u256[][]) event param rejected', () => {
     let threw = false;
@@ -565,21 +560,15 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).
     expect(() => compile(`@contract class C { @event E(a: Arr<u256, 3>); @external f(a: u256, b: u256, c: u256): void { emit(E([a, b, c])); } }`, { fileName: 'C.jeth' })).not.toThrow();
   });
-  it('@error with a STATIC struct param now compiles (encoded inline in the revert head); a DYNAMIC struct param stays gated (JETH127)', () => {
+  it('@error with a STATIC struct param AND a DYNAMIC struct param both compile (revert data byte-identical)', () => {
     // a static struct error param is now supported (revert data byte-identical to solc, verified in
     // fix-all-divergences.test.ts).
     expect(() => compile(`@struct class S { a: u256; b: bool; }
 @contract class C { @error E(s: S); @external @pure f(s: S): void { revert(E(s)); } }`, { fileName: 'C.jeth' })).not.toThrow();
-    // a DYNAMIC struct (bytes/string field) error param is still a clean rejection (JETH127).
-    let threw = false;
-    try {
-      compile(`@struct class D { a: u256; s: string; }
-@contract class C { @error E(d: D); @external f(): void { revert(E(D(1n, "x"))); } }`, { fileName: 'C.jeth' });
-    } catch (e: any) {
-      threw = true;
-      expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH127');
-    }
-    expect(threw).toBe(true);
+    // a DYNAMIC struct (bytes/string field) error param is now supported too (revert returndata
+    // byte-identical to solc, verified in fix-all-divergences.test.ts).
+    expect(() => compile(`@struct class D { a: u256; s: string; }
+@contract class C { @error E(d: D); @external f(): void { revert(E(D(1n, "x"))); } }`, { fileName: 'C.jeth' })).not.toThrow();
   });
   it('non-indexed static struct event param now compiles (encoded inline in the data tuple)', () => {
     // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).

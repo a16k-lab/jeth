@@ -99,7 +99,7 @@ enum Big { A, B, C, D, E }
   @external @pure dU8(x: u8): u256 { switch (x) { case 0n: return 1n; case 255n: return 2n; default: return 0n; } }
   @external @pure dI256(x: i256): u256 { switch (x) { case -5n: return 1n; case -1n: return 2n; case 0n: return 3n; case 7n: return 4n; default: return 0n; } }
   @external @pure dAddr(x: address): u256 { switch (x) { case address(0n): return 1n; case address(0xaan): return 2n; default: return 0n; } }
-  @external @pure dB32(x: bytes32): u256 { switch (x) { case bytes32(0n): return 1n; case bytes32(0xffn): return 2n; default: return 0n; } }
+  @external @pure dB32(x: bytes32): u256 { switch (x) { case bytes32(u256(0n)): return 1n; case bytes32(u256(0xffn)): return 2n; default: return 0n; } }
   @external @pure dBool(b: bool): u256 { switch (b) { case true: return 7n; case false: return 8n; } }
 
   // --- (4) every terminator form ---

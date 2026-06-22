@@ -88,8 +88,8 @@ contract C {
   });
   it('clean gates (JETH200): cd-construct, storage construct, array-field write, string[] field', () => {
     const Sd = '@struct class S { a: u256; xs: u256[]; b: u256; }\n';
-    expect(codes(Sd + '@contract class C { @external @pure f(s: S): u256 { let p: S = s; return p.a; } }')).toContain('JETH200');
-    expect(codes(Sd + '@contract class C { @state s: S; @external f(ys: u256[]): void { this.s = S(1n, ys, 2n); } }')).toContain('JETH200');
+    // (cd-struct -> mem local with a value-array field, and storage-struct construct with a value-array
+    //  field, are now SUPPORTED and byte-identical to solc - see the dyn value-array assign tests.)
     expect(codes(Sd + '@contract class C { @external @pure f(ys: u256[]): u256 { let p: S = S(1n, ys, 2n); p.xs = ys; return p.a; } }')).toContain('JETH200');
     expect(codes('@struct class T { a: u256; ts: string[]; }\n@contract class C { @external @pure f(): u256 { let p: T = T(1n, []); return p.a; } }')).toContain('JETH200');
   });

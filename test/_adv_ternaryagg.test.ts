@@ -54,15 +54,15 @@ const J1 = `@struct class P { a: u256; b: u8; c: address; d: i128; e: bool; f: b
 @contract class C {
   @state x: P; @state y: P;
   @external seed(): void {
-    this.x = P(11n, 200n, address(0xa1n), -5n, true, bytes32(0x1122n));
-    this.y = P(33n, 44n, address(0xb2n), 99n, false, bytes32(0xdeadbeefn));
+    this.x = P(11n, 200n, address(0xa1n), -5n, true, bytes32(u256(0x1122n)));
+    this.y = P(33n, 44n, address(0xb2n), 99n, false, bytes32(u256(0xdeadbeefn)));
   }
   @external @view getX(): P { return this.x; }
   @external @view getY(): P { return this.y; }
   // copy via ternary, mutate every field of the local, return it (storage must be untouched)
   @external mutLocal(c: bool): P {
     let p: P = c ? this.x : this.y;
-    p.a = 7777n; p.b = 1n; p.c = address(0xcafen); p.d = -42n; p.e = false; p.f = bytes32(0x9999n);
+    p.a = 7777n; p.b = 1n; p.c = address(0xcafen); p.d = -42n; p.e = false; p.f = bytes32(u256(0x9999n));
     return p;
   }
   @external @view pickStruct(c: bool): P { return c ? this.x : this.y; }
@@ -198,18 +198,18 @@ const J4 = `@struct class P { a: u256; s: i256; ad: address; bn: bytes32; }
 @contract class C {
   @state x: P; @state y: P; @state z: P;
   @external seed(): void {
-    this.x = P(0n, 0n, address(0n), bytes32(0n));
+    this.x = P(0n, 0n, address(0n), bytes32(u256(0n)));
     this.y = P(115792089237316195423570985008687907853269984665640564039457584007913129639935n,
                57896044618658097711785492504343953926634992332820282019728792003956564819967n,
-               address(type(u160).max), bytes32(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffn));
-    this.z = P(42n, -57896044618658097711785492504343953926634992332820282019728792003956564819968n, address(0x1n), bytes32(0x1n));
+               address(type(u160).max), bytes32(u256(0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffn)));
+    this.z = P(42n, -57896044618658097711785492504343953926634992332820282019728792003956564819968n, address(0x1n), bytes32(u256(0x1n)));
   }
   // storage vs ctor with boundary literal args
-  @external sVsCtor(c: bool, v: i256): P { return c ? this.x : P(v == 0n ? 0n : u256(1n), v, address(0x2n), bytes32(0x3n)); }
+  @external sVsCtor(c: bool, v: i256): P { return c ? this.x : P(v == 0n ? 0n : u256(1n), v, address(0x2n), bytes32(u256(0x3n))); }
   // storage vs another memory local
-  @external sVsLocal(c: bool): P { let m: P = P(9n, -1n, address(0x7n), bytes32(0x8n)); return c ? this.x : m; }
+  @external sVsLocal(c: bool): P { let m: P = P(9n, -1n, address(0x7n), bytes32(u256(0x8n))); return c ? this.x : m; }
   // two constructors
-  @external twoCtor(c: bool, v: u256): P { return c ? P(v, 1n, address(0xaan), bytes32(0xbbn)) : P(v + 1n, -1n, address(0xccn), bytes32(0xddn)); }
+  @external twoCtor(c: bool, v: u256): P { return c ? P(v, 1n, address(0xaan), bytes32(u256(0xbbn))) : P(v + 1n, -1n, address(0xccn), bytes32(u256(0xddn))); }
 }`;
 const S4 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

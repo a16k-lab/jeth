@@ -543,7 +543,15 @@ ${indent(runtime, 6)}
         // inside a multi-value INTERNAL function: set each return var (left-to-right) and leave.
         if (ctx.fnMode) {
           const vars = ctx.fnMode.retVars ?? [];
-          s.values.forEach((v, i) => out.push(`${vars[i]} := ${this.lowerExpr(v, ctx, out)}`));
+          // a value component is a plain register; an AGGREGATE component (struct / dynamic
+          // value array / bytes / string) is materialized to a fresh MEMORY image and the
+          // return var holds its pointer (same alias/copy rules as a single aggregate return).
+          s.values.forEach((v, i) => {
+            const rt = v.type;
+            const isAgg = rt.kind === 'struct' || rt.kind === 'array' || isBytesLike(rt);
+            const reg = isAgg ? this.aggArgToMemPtr(v, ctx, out) : this.lowerExpr(v, ctx, out);
+            out.push(`${vars[i]} := ${reg}`);
+          });
           out.push('leave');
           break;
         }
@@ -818,15 +826,20 @@ ${indent(runtime, 6)}
           break;
         }
         // whole DYNAMIC-array assignment into storage: this.a = this.b (storage source) or
-        // this.a = xs / this.m[k] = xs (a MEMORY value-array source). copyArrayValueIntoStorage
+        // this.a = xs / this.m[k] = xs (a MEMORY value-array source), or a struct field
+        // this.s.arr = xs (a storage place at the field's length slot). copyArrayValueIntoStorage
         // deep-copies (resize + element copy + tail clear) from either source.
         if (
-          (s.target.kind === 'state' || s.target.kind === 'mapping') &&
+          (s.target.kind === 'state' || s.target.kind === 'mapping' || s.target.kind === 'place') &&
           s.target.type.kind === 'array' &&
           s.target.type.length === undefined
         ) {
           const dstLenSlot =
-            s.target.kind === 'mapping' ? this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out) : String(s.target.slot);
+            s.target.kind === 'mapping'
+              ? this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out)
+              : s.target.kind === 'place'
+                ? this.lowerPlace(s.target.path, ctx, out).slot
+                : String(s.target.slot);
           this.copyArrayValueIntoStorage(s.target.type.element, s.value, dstLenSlot, ctx, out);
           break;
         }
@@ -1188,11 +1201,17 @@ ${indent(runtime, 6)}
         const ref = this.lowerDynamic(r.value, ctx, lines);
         const { mp, len } = this.toMemory(ref, lines);
         const padded = `and(add(${len}, 0x1f), not(0x1f))`;
-        lines.push('mstore(0, shl(224, 0x08c379a0))');
-        lines.push('mstore(4, 0x20)');
-        lines.push(`mstore(0x24, ${len})`);
-        lines.push(`mcopy(0x44, add(${mp}, 0x20), ${padded})`);
-        lines.push(`revert(0, add(0x44, ${padded}))`);
+        // Build the Error(string) blob at the FREE POINTER (past the materialized source), NOT at the
+        // memory-0 scratch: when the source string was freshly allocated (a string literal, a ternary
+        // selecting a literal), the scratch blob's data region [0x44, 0x44+padded) overlaps that buffer,
+        // and the Yul backend mis-lowers the overlapping mcopy across a switch (empty revert for len>=61).
+        const p = this.fresh();
+        lines.push(`let ${p} := mload(0x40)`);
+        lines.push(`mstore(${p}, shl(224, 0x08c379a0))`);
+        lines.push(`mstore(add(${p}, 4), 0x20)`);
+        lines.push(`mstore(add(${p}, 0x24), ${len})`);
+        lines.push(`mcopy(add(${p}, 0x44), add(${mp}, 0x20), ${padded})`);
+        lines.push(`revert(${p}, add(0x44, ${padded}))`);
         return lines;
       }
       case 'custom': {
@@ -1226,6 +1245,14 @@ ${indent(runtime, 6)}
           }
           if (a.type.kind === 'array' && a.type.length === undefined) {
             const { mp, size } = this.materializeArrayArg(a, ctx, lines);
+            return { dyn: 'array', mp, size };
+          }
+          if (a.type.kind === 'struct' && isDynamicType(a.type)) {
+            // a DYNAMIC struct: a head OFFSET word + its self-contained head/tail blob in the tail.
+            // encodeDynStructToBlob returns {mp, size} of the fully ABI-encoded struct (its own
+            // head+tail), identical in shape to the array tail blob, so reuse the 'array' path
+            // (offset word + verbatim mcopy). Materialized NOW so it cannot alias the head buffer.
+            const { mp, size } = this.encodeDynStructToBlob(a, ctx, lines);
             return { dyn: 'array', mp, size };
           }
           if (a.type.kind === 'struct' || (a.type.kind === 'array' && a.type.length !== undefined)) {
@@ -1633,6 +1660,8 @@ ${indent(runtime, 6)}
       }
       case 'blockhash':
         return `blockhash(${this.lowerExpr(e.arg, ctx, out)})`;
+      case 'blobhash':
+        return `blobhash(${this.lowerExpr(e.arg, ctx, out)})`;
       case 'balance':
         return `balance(${this.lowerExpr(e.addr, ctx, out)})`;
       case 'cast':
@@ -1855,6 +1884,26 @@ ${indent(runtime, 6)}
         ? this.lowerExpr(values[i]!, ctx, out)
         : null,
     );
+    // PRE-PASS: an INLINE allocating value-array component whose source is a memArrayExpr
+    // (an array-valued ternary `c ? [10,20] : [30]` / `c ? this.a : this.b`, etc.) materializes
+    // its [len][data] image via mload(0x40); doing it BEFORE the head ptr is captured below stops
+    // that allocation from aliasing the head buffer (mirrors `litRefs` above). A plain memArray
+    // local needs no pre-pass (its ctxLookup pointer already aliases an existing image).
+    const memExprRefs: (string | null)[] = types.map((t, i) =>
+      t.kind === 'array' && values[i]!.kind === 'arrayValue' &&
+      (values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArrayExpr'
+        ? this.lowerExpr(((values[i] as Expr & { kind: 'arrayValue' }).arr.base as { kind: 'memArrayExpr'; expr: Expr }).expr, ctx, out)
+        : null,
+    );
+    // PRE-PASS: an INLINE-constructed DYNAMIC struct component (return [D("nm",[1,2,3]), 99]) is
+    // encoded to a fresh ABI [head/tail] blob BEFORE the tuple ptr is captured below, so the
+    // constructor's per-field allocations (string/array materialization) cannot alias the tuple
+    // buffer. The loop then mcopies the blob into the tail like the bytes/string `refs` pre-pass.
+    const dynStructRefs: ({ mp: string; size: string } | null)[] = types.map((t, i) =>
+      isDynamicType(t) && t.kind === 'struct' && values[i]!.kind === 'structNew'
+        ? this.encodeDynStructToBlob(values[i]!, ctx, out)
+        : null,
+    );
     const headWordsOf = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
     const totalHead = types.reduce((n, t) => n + headWordsOf(t), 0);
     const ptr = this.fresh();
@@ -1878,7 +1927,7 @@ ${indent(runtime, 6)}
         // a MEMORY value-array component (return [xs, n]): a dynamic component whose tail
         // is the memory [len][data] (value elements are one word each, the ABI layout).
         const av = values[i] as Expr & { kind: 'arrayValue' };
-        const mp = av.arr.base.kind === 'memArray' ? this.ctxLookup(ctx, av.arr.base.varName) : this.lowerExpr((av.arr.base as { kind: 'memArrayExpr'; expr: Expr }).expr, ctx, out);
+        const mp = av.arr.base.kind === 'memArray' ? this.ctxLookup(ctx, av.arr.base.varName) : memExprRefs[i]!;
         out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
         const total = `mul(add(mload(${mp}), 1), 0x20)`;
         out.push(`mcopy(${cursor}, ${mp}, ${total})`);
@@ -1935,6 +1984,15 @@ ${indent(runtime, 6)}
         const mp = this.lowerExpr(values[i]!, ctx, out);
         out.push(`mcopy(add(${ptr}, ${headPos}), ${mp}, ${abiHeadWords(t) * 32})`);
         hw += abiHeadWords(t);
+      } else if (dynStructRefs[i]) {
+        // an INLINE-constructed DYNAMIC struct component: offset word + the pre-materialized ABI
+        // blob copied into the tail (the blob was built BEFORE the tuple ptr was captured, so its
+        // constructor allocations cannot alias the tuple buffer).
+        const { mp, size } = dynStructRefs[i]!;
+        out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
+        out.push(`mcopy(${cursor}, ${mp}, ${size})`);
+        out.push(`${cursor} := add(${cursor}, ${size})`);
+        hw += 1;
       } else if (isDynamicType(t) && t.kind === 'struct' && values[i]!.kind === 'memDynStructValue') {
         // a DYNAMIC memory struct local component: offset word + bare tuple head/tail in the tail,
         // encoded in-place at the cursor. A memory-source pre-pass (collectTupleDyn) allocates
@@ -3000,6 +3058,11 @@ ${indent(runtime, 6)}
       const arg = args[i]!;
       if (f.type.kind === 'struct' && arg.kind === 'structNew') {
         this.writeStruct(arg.fields, arg.args, slotAt(f.slot), ctx, out);
+      } else if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
+        // a DYNAMIC value-element array field (u256[], address[], ...): deep-copy the array value
+        // (memory / calldata / array-literal / storage source) into the field's storage dynamic
+        // array (length at slotAt(f.slot), data at keccak(slot)), overwrite-clearing the old data.
+        this.copyArrayValueIntoStorage(f.type.element, arg, slotAt(f.slot), ctx, out);
       } else if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
         // a fixed-array field constructed from a (possibly nested) literal.
         this.writeArrayLit(arg, slotAt(f.slot), ctx, out);
@@ -3031,6 +3094,11 @@ ${indent(runtime, 6)}
     if (e.kind === 'placeRead') return this.allocAggFromStorage(e.type, this.lowerPlace(e.path, ctx, out).slot, out);
     if (e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray') return this.allocAggFromStorage(e.type, String(e.arr.base.baseSlot), out);
     if (e.kind === 'cdAggregateValue') return this.allocAggFromCalldata(e.param, e.type, ctx, out);
+    if (e.kind === 'call') {
+      const p = this.fresh();
+      out.push(`let ${p} := ${this.lowerExpr(e, ctx, out)}`);
+      return p;
+    }
     throw new UnsupportedError(`cannot materialize aggregate ternary branch '${e.kind}'`);
   }
 
@@ -3159,8 +3227,42 @@ ${indent(runtime, 6)}
     struct.fields.forEach((f, i) => {
       const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
       if (isBytesLike(f.type)) {
-        const { mp } = this.toMemory(this.dynFieldRef(f, src, i, hw, ctx, out), out);
+        const fref = this.dynFieldRef(f, src, i, hw, ctx, out);
+        // a calldata string/bytes field materialized into a fresh image (store/local, NOT the echo
+        // path): the echo decoder defers the length-cap + payload-fits checks, so add them here. solc
+        // EMPTY-reverts when a field's declared length runs past calldatasize; without this JETH would
+        // calldatacopy past the end (silently zero-padding) and store a garbage-length string.
+        if (fref.src === 'calldata') {
+          out.push(`if gt(${fref.len}, 0xffffffffffffffff) { revert(0, 0) }`);
+          out.push(`if gt(add(${fref.dataPtr}, ${fref.len}), calldatasize()) { revert(0, 0) }`);
+        }
+        const { mp } = this.toMemory(fref, out);
         out.push(`mstore(${at}, ${mp})`);
+        hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
+        // a DYNAMIC value-array field: resolve its calldata tail (offset word at base + hw*32;
+        // absolute = base + offset, bounded exactly like solc's tuple-member decode), decode +
+        // VALIDATE it into a fresh [len][elems] memory image via abiEncFromCd, then store the
+        // pointer in the head word (the pointer-headed image writeDynStructFromMem consumes).
+        if (src.kind !== 'cd') throw new UnsupportedError('calldata dynamic-array struct field decode needs a calldata source');
+        const so = this.fresh();
+        out.push(`let ${so} := calldataload(${hw === 0 ? src.base : `add(${src.base}, ${hw * 32})`})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${src.base}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), calldatasize()) { revert(0, 0) }`);
+        // cap the declared element count and require the whole [len][elems] payload to lie within
+        // calldata BEFORE allocating, so an absurd length EMPTY-reverts (like solc) rather than
+        // Panic(0x41) on an oversized memory allocation inside abiEncFromCd.
+        const alen = this.fresh();
+        out.push(`let ${alen} := calldataload(${se})`);
+        out.push(`if gt(${alen}, 0xffffffffffffffff) { revert(0, 0) }`);
+        out.push(`if gt(add(add(${se}, 0x20), mul(${alen}, ${abiHeadWords(f.type.element) * 32})), calldatasize()) { revert(0, 0) }`);
+        const dst = this.fresh();
+        out.push(`let ${dst} := mload(0x40)`);
+        const size = this.abiEncFromCd(f.type, se, dst, true, out);
+        out.push(`mstore(0x40, add(${dst}, ${size}))`);
+        out.push(`mstore(${at}, ${dst})`);
         hw += 1;
       } else {
         this.encodeStaticInline(f.type, src, i, hw, at, ctx, out);
@@ -4026,6 +4128,9 @@ ${indent(runtime, 6)}
     }
     // a calldata struct / fixed-array param forwarded as an arg: COPY its ABI-unpacked image to memory.
     if (a.kind === 'cdAggregateValue') return this.allocAggFromCalldata(a.param, a.type, ctx, out);
+    // a DYNAMIC-field struct arg: pointer-headed image (memory source ALIASES; storage/calldata/
+    // constructor source is COPIED to fresh memory) - the same builder a dynamic-struct local uses.
+    if (a.type.kind === 'struct' && isDynamicType(a.type)) return this.buildDynStructLocal(a.type, a, ctx, out);
     // a struct value (memAggregate alias / storage) or a call result (already a pointer).
     return this.lowerExpr(a, ctx, out);
   }
@@ -5537,6 +5642,7 @@ ${indent(runtime, 6)}
       case 'basefee': return 'basefee()';
       case 'gaslimit': return 'gaslimit()';
       case 'prevrandao': return 'prevrandao()';
+      case 'blobbasefee': return 'blobbasefee()';
       case 'gas': return 'gas()';
       case 'msgsig':
         // bytes4 left-aligned: high 4 bytes = selector. Matches solc.

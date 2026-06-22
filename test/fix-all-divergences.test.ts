@@ -431,9 +431,9 @@ describe('indexed DYNAMIC-struct event param: topic = keccak(flattened payload) 
     ));
   it('dynamic value-array field (struct literal)', () =>
     rt(
-      `@struct class D { x: u256; a: u256[]; } @contract class C { @event E(@indexed d: D); @external f(): void { emit(E(D(4n, [5n,6n,7n]))); } }`,
-      `struct D { uint256 x; uint256[] a; } contract C { event E(D indexed d); function f() external { uint256[] memory m=new uint256[](3); m[0]=5;m[1]=6;m[2]=7; emit E(D(4, m)); } }`,
-      [{ sig: 'f()' }],
+      `@struct class D { x: u256; a: u256[]; } @contract class C { @event E(@indexed d: D); @external f(a: u256[]): void { emit(E(D(4n, a))); } }`,
+      `struct D { uint256 x; uint256[] a; } contract C { event E(D indexed d); function f(uint256[] calldata a) external { emit E(D(4, a)); } }`,
+      [{ sig: 'f(uint256[])', args: W(0x20n) + W(3n) + W(5n) + W(6n) + W(7n) }],
     ));
   it('memory-source struct local', () =>
     rt(
@@ -803,5 +803,85 @@ describe('sweep batch 2 over-rejections (byte-identical to solc)', () => {
       `@contract class C { @external @pure f(x: u256, i: u256): bytes1 { return bytes32(x)[i]; } }`,
     ];
     for (const s of srcs) expect(jethAccepts(s), s).toBe(true);
+  });
+});
+
+describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to solc)', () => {
+  it('rejects the over-acceptances the sweep found (match solc)', () => {
+    const rej = [
+      `@contract class C { @external @pure f(): bytes4 { return bytes4(255n); } }`,               // #0 decimal -> bytesN
+      `@contract class C { @external @pure f(): bytes32 { return bytes32(0x1122n); } }`,           // #0 wrong-width hex -> bytesN
+      `@contract class C { @external f(x: bytes): string { let y: string = x; return y; } }`,      // #1 implicit bytes<->string
+      `@contract class C { @constant A: u16 = 300n; @constant K: u8 = A & 0xFFn; @external @pure f(): u8 { return this.K; } }`, // #4 typed result u16 -> u8
+      `@contract class C { @constant K: u16 = type(u8).max * 2n; @external @pure f(): u16 { return this.K; } }`, // #3 typed-overflow constant (safe reject)
+      `@contract class C { @external @pure f(): u256 { let a: Arr<u256,3> = [10n,20n,30n]; return a[3n]; } }`,    // #15 const-OOB memory fixed-array
+      `@contract class C { @state m: mapping<u256,u256>; @state i: u256; @external go(v: u256): void { this.m[this.i++] += v; } }`, // #16 side-effecting compound key
+      `@contract class C { @external @pure f(): u256 { return 0x12__34n; } }`,                     // #31 bad underscores
+      `@contract class C { @external @pure f(): u256 { return 0o17n; } }`,                         // #32 octal
+      `@contract class C { @external @pure f(): u256 { return 0xn; } }`,                           // #33 empty hex
+    ];
+    for (const s of rej) expect(jethRejects(s), s).toBe(true);
+  });
+
+  it('#2 typed-operand @constant shift truncates to the type (254, not 510)', async () => {
+    await rt(
+      `@contract class C { @constant K: u16 = type(u8).max << 1n; @constant A: u8 = 255n; @constant J: u16 = A << 1n; @external @pure k(): u16 { return this.K; } @external @pure j(): u16 { return this.J; } }`,
+      `contract C { uint16 constant K = type(uint8).max << 1; uint8 constant A = 255; uint16 constant J = A << 1; function k() external pure returns(uint16){ return K; } function j() external pure returns(uint16){ return J; } }`,
+      [{ sig: 'k()' }, { sig: 'j()' }],
+    );
+  });
+
+  it('bytesN(uintM) same-size cast is byte-identical (the #0 companion)', async () => {
+    await rt(
+      `@contract class C { @external @pure a(): bytes32 { return bytes32(u256(0x1122n)); } @external @pure b(): bytes4 { return bytes4(u32(0xffn)); } }`,
+      `contract C { function a() external pure returns(bytes32){ return bytes32(uint256(0x1122)); } function b() external pure returns(bytes4){ return bytes4(uint32(0xff)); } }`,
+      [{ sig: 'a()' }, { sig: 'b()' }],
+    );
+  });
+
+  it('#28 allocating value-array ternary as a multi-return tuple component (scalar sibling intact)', async () => {
+    await rt(
+      `@contract class C { @external @pure f(c: bool): [u256, u256[]] { return [7n, c ? [10n, 20n] : [30n]]; } }`,
+      `contract C { function f(bool c) external pure returns(uint256, uint256[] memory){ uint256[] memory a; if(c){a=new uint256[](2);a[0]=10;a[1]=20;}else{a=new uint256[](1);a[0]=30;} return (7, a); } }`,
+      [{ sig: 'f(bool)', args: W(0n) }, { sig: 'f(bool)', args: W(1n) }],
+    );
+  });
+
+  it('#21 ternary-string revert reason is byte-identical (incl. >=61 bytes)', async () => {
+    const long = 'x'.repeat(61);
+    await rt(
+      `@contract class C { @external @pure f(x: bool): void { revert(x ? "${long}" : "q"); } }`,
+      `contract C { function f(bool x) external pure { revert(x ? "${long}" : "q"); } }`,
+      [{ sig: 'f(bool)', args: W(1n) }, { sig: 'f(bool)', args: W(0n) }],
+    );
+  });
+
+  it('#22 dynamic-struct @error parameter revert data', async () => {
+    await rt(
+      `@struct class D { a: u256; s: string } @contract class C { @error E(d: D); @external @pure f(): void { revert(E(D(7n, "a string longer than thirty-two bytes for the tail"))); } }`,
+      `contract C { struct D { uint256 a; string s; } error E(D d); function f() external pure { revert E(D(7, "a string longer than thirty-two bytes for the tail")); } }`,
+      [{ sig: 'f()' }],
+    );
+  });
+
+  it('#18 nested-dynamic-struct-field event param (non-indexed data + indexed topic)', async () => {
+    const s = 'hello world over thirty-two bytes long!!';
+    await rt(
+      `@struct class I { p: u256; s: string } @struct class D2 { x: u256; inner: I } @contract class C { @event E(d: D2); @event T(@indexed d: D2); @external f(): void { emit(E(D2(1n, I(2n, "${s}")))); emit(T(D2(1n, I(2n, "${s}")))); } }`,
+      `contract C { struct I { uint256 p; string s; } struct D2 { uint256 x; I inner; } event E(D2 d); event T(D2 indexed d); function f() external { emit E(D2(1, I(2, "${s}"))); emit T(D2(1, I(2, "${s}"))); } }`,
+      [{ sig: 'f()' }],
+    );
+  });
+
+  it('#7 calldata dyn-struct to storage: happy path + truncated EMPTY-revert (bounds validated)', async () => {
+    const jeth = `@struct class S { a: u256; s: string } @contract class C { @state st: S; @external set(x: S): void { this.st = x; } @external @view gets(): string { return this.st.s; } }`;
+    const sol = `contract C { struct S { uint256 a; string s; } S st; function set(S calldata x) external { st = x; } function gets() external view returns (string memory) { return st.s; } }`;
+    const str = 'a string that is definitely longer than thirty-two bytes!';
+    const hex = Buffer.from(str).toString('hex').padEnd(Math.ceil(str.length / 32) * 64, '0');
+    await rt(jeth, sol, [
+      { sig: 'set((uint256,string))', args: W(0x20n) + W(7n) + W(0x40n) + W(BigInt(str.length)) + hex },
+      { sig: 'gets()' },
+      { sig: 'set((uint256,string))', args: W(0x20n) + W(7n) + W(0x40n) + W(33n) + 'aa'.repeat(32) }, // truncated -> EMPTY revert
+    ]);
   });
 });
