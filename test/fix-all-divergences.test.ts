@@ -804,6 +804,24 @@ describe('sweep batch 2 over-rejections (byte-identical to solc)', () => {
     ];
     for (const s of srcs) expect(jethAccepts(s), s).toBe(true);
   });
+
+  it('#19 struct-array field (Q[]) in a dynamic-struct constructor (static + dynamic element)', async () => {
+    // static struct element Q{m}: P(9, qs) re-encodes the whole [len][m0][m1] array tail
+    await rt(
+      `@struct class Q { m: u256 } @struct class P { a: u256; qs: Q[] } @contract class C { @external @pure f(qs: Q[]): P { return P(9n, qs); } }`,
+      `contract C { struct Q { uint256 m; } struct P { uint256 a; Q[] qs; } function f(Q[] calldata qs) external pure returns(P memory){ return P(9, qs); } }`,
+      [{ sig: 'f((uint256)[])', args: W(0x20n) + W(2n) + W(11n) + W(22n) }, { sig: 'f((uint256)[])', args: W(0x20n) + W(0n) }],
+    );
+    // dynamic struct element Q{m,s}: offset table + variable-length string payloads (q0="ab", q1="this-one-is-longer!!")
+    await rt(
+      `@struct class Q { m: u256; s: string } @struct class P { a: u256; qs: Q[] } @contract class C { @external @pure f(qs: Q[]): P { return P(9n, qs); } }`,
+      `contract C { struct Q { uint256 m; string s; } struct P { uint256 a; Q[] qs; } function f(Q[] calldata qs) external pure returns(P memory){ return P(9, qs); } }`,
+      [{ sig: 'f((uint256,string)[])', args:
+          W(0x20n) + W(2n) + W(0x40n) + W(0xc0n) +
+          W(1n) + W(0x40n) + W(2n) + '6162'.padEnd(64, '0') +
+          W(2n) + W(0x40n) + W(20n) + Buffer.from('this-one-is-longer!!', 'utf8').toString('hex').padEnd(64, '0') }],
+    );
+  });
 });
 
 describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to solc)', () => {

@@ -2168,6 +2168,7 @@ ${indent(runtime, 6)}
       return nc;
     }
     if (f.type.kind === 'array' && f.type.length === undefined) {
+      if (f.type.element.kind === 'struct') throw new UnsupportedError('indexed-topic encoding of a struct-element array field is not supported yet');
       // dynamic value-array: its element words, NO length word (each element is one 32-byte word).
       const ref = nextRef();
       const len = this.fresh();
@@ -2320,9 +2321,20 @@ ${indent(runtime, 6)}
       return nc;
     }
     if (f.type.kind === 'array' && f.type.length === undefined) {
+      const ref = nextRef();
+      // A STRUCT-element array field: the materialized memory image IS the full ABI tail blob
+      // [len][offset-table?][element payloads], a self-contained, position-independent encoding.
+      // Copy it verbatim at the cursor (relative offsets stay valid after the move); the new cursor
+      // advances by the full image byte size.
+      if (ref.src === 'memory' && ref.tailBytes) {
+        const nc = this.fresh();
+        out.push(`let ${nc} := add(${cursor}, ${ref.tailBytes})`);
+        out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${cursor})) { ${this.panic()}(0x41) }`);
+        out.push(`mcopy(${cursor}, ${ref.ptr}, ${ref.tailBytes})`);
+        return nc;
+      }
       // dynamic value-array field tail: [len][word-elements], NO byte-padding (each element is a full
       // 32-byte word). The source is a memory [len][elems] pointer (the materialized array image).
-      const ref = nextRef();
       const len = this.fresh();
       out.push(`let ${len} := ${this.dynLen(ref)}`);
       out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
@@ -2372,8 +2384,20 @@ ${indent(runtime, 6)}
    *  constructor arg is materialized via aggArgToMemPtr. A calldata source stays gated (the analyzer
    *  rejects returning a calldata struct param that carries an array field). */
   private arrayFieldRef(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, ctx: LowerCtx, out: string[]): DynRef {
-    if (src.kind === 'new') return { src: 'memory', ptr: this.aggArgToMemPtr(src.args[fieldIdx]!, ctx, out) };
+    // A STRUCT-element dynamic array field (Q[]): materialize the WHOLE ABI tail blob [len][...] (an
+    // offset table + element payloads for dynamic-struct elements; contiguous abiHeadWords element
+    // words for static ones), and carry its full byte size so the tail copy is exact (the
+    // value-element path below copies just [len][len*32] and so cannot express a struct stride/table).
+    const elemIsStruct = f.type.kind === 'array' && f.type.element.kind === 'struct';
+    if (src.kind === 'new') {
+      if (elemIsStruct) {
+        const { mp, size } = this.materializeArrayArg(src.args[fieldIdx]!, ctx, out);
+        return { src: 'memory', ptr: mp, tailBytes: size };
+      }
+      return { src: 'memory', ptr: this.aggArgToMemPtr(src.args[fieldIdx]!, ctx, out) };
+    }
     if (src.kind === 'mem') {
+      if (elemIsStruct) throw new UnsupportedError('encoding a struct-element array field from a memory dynamic struct is not supported yet');
       const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
       const ptr = this.fresh();
       out.push(`let ${ptr} := mload(${at})`);
@@ -6103,7 +6127,7 @@ type TupleSrc =
 type DynRef =
   | { src: 'storage'; slot: string }
   | { src: 'calldata'; dataPtr: string; len: string }
-  | { src: 'memory'; ptr: string }; // ptr -> [len][data...]
+  | { src: 'memory'; ptr: string; tailBytes?: string }; // ptr -> [len][data...]; tailBytes = full image byte size for a struct-element array
 
 const TOP_BYTE = '0xff00000000000000000000000000000000000000000000000000000000000000';
 

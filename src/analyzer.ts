@@ -2120,12 +2120,15 @@ export class Analyzer {
       }
       return a;
     }
-    if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
+    if (f.type.kind === 'array' && f.type.length === undefined && (isStaticValueType(f.type.element) || f.type.element.kind === 'struct')) {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
       // An array LITERAL ([a, b, c]) is a FIXED array (uint256[N]) in solc, which does NOT implicitly
       // convert to a dynamic array (uint256[]) as a constructor field - solc rejects it. Only a true
-      // dynamic-array value (a memory/calldata/storage source) is accepted here.
+      // dynamic-array value (a memory/calldata/storage source) is accepted here. A dynamic array of
+      // STRUCT elements (Q[]) is accepted identically: the dynamic-struct ABI encoder re-encodes the
+      // whole [len][...] array tail (offset table for dynamic-struct elements; contiguous abiHeadWords
+      // for static ones), and the source must be a true Q[] value, not a fixed-array literal.
       if (a.kind === 'arrayLit' || !(a.type.kind === 'array' && a.type.length === undefined)) {
         this.diags.error(argNode, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${a.kind === 'arrayLit' ? `${displayName(f.type.element)}[${a.elements.length}]` : displayName(a.type)}`);
         return undefined;
