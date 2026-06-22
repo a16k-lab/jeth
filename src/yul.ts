@@ -805,6 +805,9 @@ ${indent(runtime, 6)}
             out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, this.structArrayElemSlot(s.init.arr, s.init.index, ctx, out), out)}`);
           } else if (s.init.kind === 'cdAggregateValue') {
             out.push(`let ${name} := ${this.allocAggFromCalldata(s.init.param, s.init.type, ctx, out)}`);
+          } else if (s.init.kind === 'abiDecode') {
+            // a static fixed array Arr<T,N> from abi.decode: the decoded flat ABI image is the local.
+            out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
           } else {
             out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
           }
@@ -1725,6 +1728,11 @@ ${indent(runtime, 6)}
         out.push(`let ${mm} := ${this.lowerExpr(e.m, ctx, out)}`);
         out.push(`if iszero(${mm}) { ${this.panic()}(0x12) }`);
         return `${e.op}(${ma}, ${mb}, ${mm})`;
+      }
+      case 'abiDecode': {
+        // abi.decode(data, T) / data.decode(T) with a VALUE T: the single decoded component is one
+        // validated word (a reference T is lowered via lowerDynamic / the aggregate paths instead).
+        return this.lowerAbiDecode(e.data, [e.type], ctx, out)[0]!;
       }
       case 'precompileHash': {
         // sha256 (0x02) / ripemd160 (0x03): staticcall the precompile over the CONTENT bytes,
@@ -4280,6 +4288,10 @@ ${indent(runtime, 6)}
    *  elements, like solc's calldata->memory copy); a storage source is copied via abiEncFromStorage
    *  (storage is canonical); a constructed literal / call result is already fresh memory. */
   private aggArgToMemPtr(a: Expr, ctx: LowerCtx, out: string[]): string {
+    // abi.decode(data, T) / data.decode(T) yielding an array / struct: lowerAbiDecode already returns
+    // a fresh decoded memory image pointer in the right layout ([len][elems] for an array, the
+    // pointer-headed image for a dynamic struct, the flat ABI image for a static aggregate).
+    if (a.kind === 'abiDecode') return this.lowerAbiDecode(a.data, [a.type], ctx, out)[0]!;
     // a DYNAMIC-array literal lowers to a fresh [len][elems] memory image (lowerExpr's arrayLit case);
     // a structNew / static fixed-array literal uses the static-aggregate image (allocAggToMem).
     if (a.kind === 'arrayLit') {
@@ -4584,6 +4596,207 @@ ${indent(runtime, 6)}
       return `sub(${cursor}, ${dst})`;
     }
     throw new UnsupportedError(`abiEncFromCd: unsupported type '${t.kind}'`);
+  }
+
+  /** abi.decode codec: decode a MEMORY-sourced ABI value of type `t` (the DATA word at memory byte
+   *  `memPtr`) into a fresh memory image at `dst`. The memory analogue of abiEncFromCd: reads via
+   *  mload (not calldataload), copies via mcopy (not calldatacopy), and bounds every offset/length
+   *  against `blobEnd` (the absolute memory end address of the source blob, = blobData + blobLen)
+   *  rather than calldatasize(). Returns a Yul expr for the byte size written into `dst`. Byte-identical
+   *  to solc's abi.decode-from-memory: an oversized inner length / memory-alloc overflow Panics(0x41)
+   *  (the memory-decode cap), while an out-of-bounds offset / a length running past the blob reverts
+   *  EMPTY (revert(0, 0)). Value leaves are always VALIDATED (dirty narrow bits revert empty, like
+   *  solc's decode of a tuple component / array element). Compile-time recursion over `t` => unbounded
+   *  nesting; array lengths drive runtime loops. */
+  private abiDecFromMem(t: JethType, memPtr: string, dst: string, blobEnd: string, out: string[]): string {
+    const cap = `${this.panic()}(0x41)`;
+    // a single value leaf: one word, validated.
+    if (isStaticValueType(t)) {
+      const w = this.fresh();
+      out.push(`let ${w} := mload(${memPtr})`);
+      const g = this.validateInput(t, w);
+      if (g) out.push(g);
+      out.push(`mstore(${dst}, ${w})`);
+      return '32';
+    }
+    // a static aggregate (struct / fixed array of static leaves): copy each leaf word, validated.
+    if (isStaticType(t)) {
+      for (const leaf of abiLeaves(t)) {
+        const w = this.fresh();
+        out.push(`let ${w} := mload(add(${memPtr}, ${leaf.wordOffset * 32}))`);
+        const g = this.validateInput(leaf.type, w);
+        if (g) out.push(g);
+        out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${w})`);
+      }
+      return String(abiHeadWords(t) * 32);
+    }
+    // bytes / string: [len][right-padded data].
+    if (isBytesLike(t)) {
+      const len = this.fresh();
+      out.push(`let ${len} := mload(${memPtr})`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${cap} }`);
+      const padded = this.fresh();
+      out.push(`let ${padded} := and(add(${len}, 0x1f), not(0x1f))`);
+      const nc = this.fresh();
+      out.push(`let ${nc} := add(add(${dst}, 0x20), ${padded})`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${dst})) { ${cap} }`);
+      out.push(`if gt(add(add(${memPtr}, 0x20), ${len}), ${blobEnd}) { revert(0, 0) }`);
+      out.push(`mstore(${dst}, ${len})`);
+      out.push(`mcopy(add(${dst}, 0x20), add(${memPtr}, 0x20), ${len})`);
+      out.push(`if mod(${len}, 0x20) { mstore(add(add(${dst}, 0x20), ${len}), 0) }`);
+      return `add(0x20, ${padded})`;
+    }
+    // dynamic array T[]: [len][ static elements inline | dynamic elements head+tail ].
+    if (t.kind === 'array' && t.length === undefined) {
+      const len = this.fresh();
+      out.push(`let ${len} := mload(${memPtr})`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${cap} }`);
+      out.push(`mstore(${dst}, ${len})`);
+      const elemRegion = this.fresh();
+      out.push(`let ${elemRegion} := add(${memPtr}, 0x20)`);
+      const dstHead = this.fresh();
+      out.push(`let ${dstHead} := add(${dst}, 0x20)`);
+      if (isStaticType(t.element)) {
+        const es = abiHeadWords(t.element) * 32;
+        const nc = this.fresh();
+        out.push(`let ${nc} := add(${dstHead}, mul(${len}, ${es}))`);
+        out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${dstHead})) { ${cap} }`);
+        out.push(`if gt(add(${elemRegion}, mul(${len}, ${es})), ${blobEnd}) { revert(0, 0) }`);
+        const i = this.fresh();
+        out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+        const inner: string[] = [];
+        const ecd = this.fresh();
+        inner.push(`let ${ecd} := add(${elemRegion}, mul(${i}, ${es}))`);
+        const edst = this.fresh();
+        inner.push(`let ${edst} := add(${dstHead}, mul(${i}, ${es}))`);
+        this.abiDecFromMem(t.element, ecd, edst, blobEnd, inner);
+        for (const l of inner) out.push('  ' + l);
+        out.push('}');
+        return `add(0x20, mul(${len}, ${es}))`;
+      }
+      // dynamic element (bytes/string/...): an N-word offset table relative to elemRegion, plus tails.
+      const cursor = this.fresh();
+      out.push(`let ${cursor} := add(${dstHead}, mul(${len}, 0x20))`);
+      out.push(`if or(gt(${cursor}, 0xffffffffffffffff), lt(${cursor}, ${dstHead})) { ${cap} }`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const so = this.fresh();
+      inner.push(`let ${so} := mload(add(${elemRegion}, mul(${i}, 0x20)))`);
+      inner.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+      const se = this.fresh();
+      inner.push(`let ${se} := add(${elemRegion}, ${so})`);
+      inner.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), ${blobEnd}) { revert(0, 0) }`);
+      inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), sub(${cursor}, ${dstHead}))`);
+      const sz = this.abiDecFromMem(t.element, se, cursor, blobEnd, inner);
+      inner.push(`${cursor} := add(${cursor}, ${sz})`);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+      return `sub(${cursor}, ${dst})`;
+    }
+    // fixed array of dynamic element Arr<dyn,N>: an N-word offset table (no length), base = dst/memPtr.
+    if (t.kind === 'array' && t.length !== undefined) {
+      const cursor = this.fresh();
+      out.push(`let ${cursor} := add(${dst}, ${t.length * 32})`);
+      for (let k = 0; k < t.length; k++) {
+        const so = this.fresh();
+        out.push(`let ${so} := mload(add(${memPtr}, ${k * 32}))`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${memPtr}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), ${blobEnd}) { revert(0, 0) }`);
+        out.push(`mstore(add(${dst}, ${k * 32}), sub(${cursor}, ${dst}))`);
+        const sz = this.abiDecFromMem(t.element, se, cursor, blobEnd, out);
+        out.push(`${cursor} := add(${cursor}, ${sz})`);
+      }
+      return `sub(${cursor}, ${dst})`;
+    }
+    // dynamic struct (tuple with >=1 dynamic field): head (static inline / dynamic offset) + tails.
+    if (t.kind === 'struct') {
+      const headWords = tupleHeadWords(t);
+      const cursor = this.fresh();
+      out.push(`let ${cursor} := add(${dst}, ${headWords * 32})`);
+      let hw = 0;
+      for (const f of t.fields) {
+        const fb = hw * 32;
+        if (!isDynamicType(f.type)) {
+          this.abiDecFromMem(f.type, `add(${memPtr}, ${fb})`, `add(${dst}, ${fb})`, blobEnd, out);
+          hw += abiHeadWords(f.type);
+        } else {
+          const so = this.fresh();
+          out.push(`let ${so} := mload(add(${memPtr}, ${fb}))`);
+          out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+          const se = this.fresh();
+          out.push(`let ${se} := add(${memPtr}, ${so})`);
+          out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), ${blobEnd}) { revert(0, 0) }`);
+          out.push(`mstore(add(${dst}, ${fb}), sub(${cursor}, ${dst}))`);
+          const sz = this.abiDecFromMem(f.type, se, cursor, blobEnd, out);
+          out.push(`${cursor} := add(${cursor}, ${sz})`);
+          hw += 1;
+        }
+      }
+      return `sub(${cursor}, ${dst})`;
+    }
+    throw new UnsupportedError(`abiDecFromMem: unsupported type '${t.kind}'`);
+  }
+
+  /** Decode the bytes value `data` into N components of `types` (abi.decode). Materializes the source
+   *  to a memory [len][data] image, then for each top-level component reads its head word at
+   *  blobData+32*i: a STATIC component is decoded inline at that head position; a DYNAMIC component
+   *  reads the head as an offset (relative to blobData), bounds it, and decodes the tail into a fresh
+   *  memory image. Returns one Yul register per component (a value word, or a memory image pointer for
+   *  a reference component). The component layout (one head word per top-level type, regardless of how
+   *  many leaf words a static aggregate occupies in a NESTED position) matches solc's outer tuple. */
+  private lowerAbiDecode(data: Expr, types: JethType[], ctx: LowerCtx, out: string[]): string[] {
+    const { mp } = this.toMemory(this.lowerDynamic(data, ctx, out), out);
+    const blobData = this.fresh();
+    out.push(`let ${blobData} := add(${mp}, 0x20)`);
+    const blobEnd = this.fresh();
+    out.push(`let ${blobEnd} := add(${blobData}, mload(${mp}))`);
+    // the outer head is one OFFSET word per DYNAMIC component plus abiHeadWords(t) inline words per
+    // STATIC component (a static aggregate occupies all its leaf words inline in the outer tuple head,
+    // exactly as solc lays it out); bound the whole head span against the blob.
+    const headWords = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
+    const totalHead = types.reduce((n, t) => n + headWords(t), 0);
+    out.push(`if gt(add(${blobData}, ${totalHead * 32}), ${blobEnd}) { revert(0, 0) }`);
+    const regs: string[] = [];
+    let hw = 0;
+    types.forEach((t) => {
+      const head = `add(${blobData}, ${hw * 32})`;
+      hw += headWords(t);
+      if (!isDynamicType(t)) {
+        // a static component is decoded INLINE at its head position. A value type yields one word
+        // (returned directly); a static aggregate is materialized into a fresh memory image.
+        if (isStaticValueType(t)) {
+          const w = this.fresh();
+          out.push(`let ${w} := mload(${head})`);
+          const g = this.validateInput(t, w);
+          if (g) out.push(g);
+          regs.push(w);
+        } else {
+          const ptr = this.fresh();
+          out.push(`let ${ptr} := mload(0x40)`);
+          const sz = this.abiDecFromMem(t, head, ptr, blobEnd, out);
+          out.push(`mstore(0x40, add(${ptr}, ${sz}))`);
+          regs.push(ptr);
+        }
+      } else {
+        // a dynamic component: the head word is an offset relative to blobData. Bound it, then decode
+        // the tail into a fresh memory image (the register holds that image pointer).
+        const so = this.fresh();
+        out.push(`let ${so} := mload(${head})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${blobData}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(t)}), ${blobEnd}) { revert(0, 0) }`);
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(0x40)`);
+        const sz = this.abiDecFromMem(t, se, ptr, blobEnd, out);
+        out.push(`mstore(0x40, add(${ptr}, ${sz}))`);
+        regs.push(ptr);
+      }
+    });
+    return regs;
   }
 
   /** Echo a whole STORAGE state variable of dynamic type `t` (base storage slot
@@ -4995,6 +5208,10 @@ ${indent(runtime, 6)}
         return { src: 'calldata', dataPtr: '0', len: 'calldatasize()' };
       case 'abiEncode':
         return { src: 'memory', ptr: this.buildAbiEncode(e.args, e.packed, ctx, out, e.selector, e.sig) };
+      case 'abiDecode':
+        // abi.decode(data, T) / data.decode(T) with a bytes/string T: the decoded value is a fresh
+        // memory [len][data] image; the single component register is its pointer.
+        return { src: 'memory', ptr: this.lowerAbiDecode(e.data, [e.type], ctx, out)[0]! };
       case 'extCode': {
         // <addr>.code -> the deployed bytecode as a fresh bytes blob (EXTCODESIZE + EXTCODECOPY).
         // (codehash is a single word, handled in lowerExpr; this case is only the `code` member.)
@@ -5881,6 +6098,12 @@ ${indent(runtime, 6)}
       // exactly like any [len][data] pointer; the analyzer registered it in memDynLocals).
       const { okReg, dataPtr } = this.emitExtCall(source, ctx, out);
       return [okReg, dataPtr];
+    }
+    if (source.kind === 'abiDecode') {
+      // `let [a, b] = abi.decode(data, [T1, T2])`: decode each component into its own register (a value
+      // word, or a memory image pointer for a bytes/string/array/struct component; the analyzer
+      // registered the reference components in the matching side-tables, like a localDecl).
+      return this.lowerAbiDecode(source.data, source.types, ctx, out);
     }
     return source.values.map((v) => {
       const r = this.fresh();

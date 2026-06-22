@@ -357,6 +357,44 @@ export class Analyzer {
     return !!t && isEnum(t);
   }
 
+  /** Resolve a TYPE written in VALUE position (the 2nd argument of abi.decode / the argument of
+   *  `<bytes>.decode(T)`), reusing the same name resolution as a cast / type(T).max. Supported shapes:
+   *  - a bare type name (u256/i128/bool/address/bytesN/bytes/string/an enum name/a branded newtype)
+   *    -> the leaf JethType (an enum/branded resolves through structsByName, like checkCast);
+   *  - `T[]` (an ElementAccessExpression with an EMPTY index, e.g. `u256[]`) -> a dynamic array;
+   *  - `Arr<T, N>` (an ExpressionWithTypeArguments) -> a static fixed array (reuses resolveType so a
+   *    nested element resolves identically to a declaration position).
+   *  Returns undefined (no diagnostic) on an unrecognized shape; the caller emits the diagnostic. */
+  private resolveTypeExpr(node: ts.Expression): JethType | undefined {
+    // a bare type-name identifier
+    if (ts.isIdentifier(node)) {
+      return resolvePrimitiveName(node.text) ?? this.structsByName.get(node.text);
+    }
+    // `T[]`: an ElementAccessExpression whose base is a type-name and whose index is the synthetic
+    // empty identifier produced by the parser for the `[]` suffix (TS emits a parse diagnostic the
+    // compiler ignores; the AST is still walkable). -> a dynamic array of the resolved element type.
+    if (
+      ts.isElementAccessExpression(node) &&
+      ts.isIdentifier(node.argumentExpression) &&
+      node.argumentExpression.text === ''
+    ) {
+      const elem = this.resolveTypeExpr(node.expression);
+      if (!elem) return undefined;
+      return { kind: 'array', element: elem, length: undefined };
+    }
+    // `Arr<T, N>`: a generic type written in value position; reuse the canonical TypeNode resolver by
+    // re-parsing the same text as a type (so `Arr<u256, 3>` / a nested element resolves identically to
+    // a field/param position). The text is a syntactic type, so a TypeNode parse is exact.
+    if (ts.isExpressionWithTypeArguments(node) || (ts.isCallExpression(node) && node.typeArguments)) {
+      const typeNode = ts.factory.createTypeReferenceNode(
+        (node.expression as ts.Identifier).text,
+        (node as ts.ExpressionWithTypeArguments).typeArguments,
+      );
+      return resolveType(typeNode, this.diags, this.structsByName);
+    }
+    return undefined;
+  }
+
   /** Collect @struct class declarations into the registry (in source order so a
    *  struct may reference earlier structs by value). */
   private collectStructs(): void {
@@ -3055,6 +3093,34 @@ export class Analyzer {
     };
   }
 
+  /** Recognize a tuple-form abi.decode source for `let [a, b] = abi.decode(data, [T1, ...])` (and the
+   *  `<bytes>.decode([T1, ...])` sugar). Returns the DestructureSource + the component types, or
+   *  undefined when the initializer is not a tuple abi.decode. */
+  private resolveAbiDecodeTuple(node: ts.Expression): { source: DestructureSource; types: JethType[] } | undefined {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+    const pa = node.expression;
+    let dataNode: ts.Expression;
+    let typeNode: ts.Expression;
+    if (
+      ts.isIdentifier(pa.expression) && pa.expression.text === 'abi' &&
+      !this.isVisibleLocal('abi') && !this.stateByName.has('abi') && pa.name.text === 'decode'
+    ) {
+      // abi.decode(data, [T1, ...])
+      if (node.arguments.length !== 2 || !ts.isArrayLiteralExpression(node.arguments[1]!)) return undefined;
+      dataNode = node.arguments[0]!;
+      typeNode = node.arguments[1]!;
+    } else if (pa.name.text === 'decode' && node.arguments.length === 1 && ts.isArrayLiteralExpression(node.arguments[0]!) && this.isBytesValueExpr(pa.expression)) {
+      // <bytes>.decode([T1, ...])
+      dataNode = pa.expression;
+      typeNode = node.arguments[0]!;
+    } else {
+      return undefined;
+    }
+    const r = this.resolveAbiDecode(node, dataNode, typeNode);
+    if (!r) return undefined;
+    return { source: { kind: 'abiDecode', data: r.data, types: r.types }, types: r.types };
+  }
+
   /** `revertWith(b)`: bubble raw bytes as the revert payload (revert(add(b,0x20), mload(b))). */
   private checkRevertWith(call: ts.CallExpression, out: Stmt[]): void {
     if (call.arguments.length !== 1) { this.diags.error(call, 'JETH312', 'revertWith(...) takes exactly one bytes argument'); return; }
@@ -3241,7 +3307,7 @@ export class Analyzer {
       const e = this.checkExpr(decl.initializer, declared);
       if (!e) return;
       const fromStorage = e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray';
-      const okInit = e.kind === 'arrayLit' || e.kind === 'memAggregate' || e.kind === 'cdAggregateValue' || e.kind === 'ternary' || (e.kind === 'call' && e.type.kind === 'array') || fromStorage;
+      const okInit = e.kind === 'arrayLit' || e.kind === 'memAggregate' || e.kind === 'cdAggregateValue' || e.kind === 'ternary' || e.kind === 'abiDecode' || (e.kind === 'call' && e.type.kind === 'array') || fromStorage;
       if (!okInit) {
         this.diags.error(decl.initializer, 'JETH900', `a fixed-array memory local must be initialized from a literal, another memory fixed array, a fixed-array calldata parameter, or a storage fixed array`);
         return;
@@ -3710,9 +3776,19 @@ export class Analyzer {
     }
     const callName = this.tupleCallName(decl.initializer);
     const tryCall = this.resolveTryCall(decl.initializer);
+    const abiDecodeTuple = tryCall ? undefined : this.resolveAbiDecodeTuple(decl.initializer);
     let types: JethType[];
     let source: DestructureSource;
-    if (tryCall) {
+    if (abiDecodeTuple) {
+      // `let [a, b] = abi.decode(data, [T1, T2])`: each component is decoded into its own register
+      // (value -> a word, bytes/string/array/struct -> a memory image pointer), bound below.
+      if (abiDecodeTuple.types.length !== n) {
+        this.diags.error(decl.name, 'JETH066', `abi.decode tuple has ${abiDecodeTuple.types.length} type(s), expected ${n} name(s)`);
+        return;
+      }
+      types = abiDecodeTuple.types;
+      source = abiDecodeTuple.source;
+    } else if (tryCall) {
       // `let [ok, ret] = addr.tryCall/tryStaticcall({...})` -> [bool, bytes].
       if (n !== 2) { this.diags.error(decl.name, 'JETH314', `tryCall/tryStaticcall destructuring expects exactly 2 names [ok, ret], got ${n}`); return; }
       types = tryCall.types;
@@ -3766,7 +3842,12 @@ export class Analyzer {
       // resolve through the right codec (mirrors a `let x: T = ...` localDecl).
       const ct = types[i]!;
       if (isBytesLike(ct)) this.memDynLocals.add(nm);
-      else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element)) this.memArrayLocals.add(nm);
+      // a dynamic value-element array binds a [len][elems] memory pointer (memArrayLocals); a static
+      // fixed array Arr<T,N> binds a flat ABI image (memAggregateLocals, like a struct). These extra
+      // cases only fire for the abi.decode tuple form - the tryCall source yields only a bytes/bool pair.
+      else if (ct.kind === 'array' && ct.length === undefined) this.memArrayLocals.add(nm);
+      else if (ct.kind === 'array') this.memAggregateLocals.set(nm, ct);
+      else if (ct.kind === 'struct' && isDynamicType(ct)) this.memDynStructLocals.set(nm, ct);
       else if (ct.kind === 'struct') this.memAggregateLocals.set(nm, ct);
       names.push(nm);
     }
@@ -5454,6 +5535,113 @@ export class Analyzer {
     return { kind: 'abiEncode', type: { kind: 'bytes' }, packed, args, selector, sig };
   }
 
+  /** Which decoded types abi.decode supports (v1). The memory-sourced decode codec (abiDecFromMem,
+   *  the analogue of the calldata->memory codec) composes over: any value type (uintN/intN/bool/
+   *  address/bytesN/enum/branded), bytes/string, a dynamic value-element array T[], a static fixed
+   *  array Arr<T,N> of static leaves, a fully-static struct, and a dynamic struct of value/bytes/
+   *  string/dynamic-value-array fields. Nested-dynamic arrays (string[]/T[][]), arrays/structs whose
+   *  elements are themselves dynamic structs, and nested-struct fields stay a CLEAN rejection. */
+  private decodeSupported(t: JethType): boolean {
+    if (isStaticValueType(t) || isBytesLike(t)) return true;
+    if (t.kind === 'array') {
+      if (t.length === undefined) {
+        // a dynamic array of a VALUE element (head/tail). A bytes/string-element array (string[] /
+        // bytes[]) is a CLEAN rejection: JETH has no memory-local representation for it (the codec
+        // could decode it, but there is nowhere to bind the result), so reject rather than miscompile.
+        return isStaticValueType(t.element);
+      }
+      // a static fixed array: supported when its leaves are static value types (inline aggregate).
+      return isStaticType(t) && this.isStaticLeafArray(t);
+    }
+    // struct results stay a CLEAN rejection in v1: the decode codec produces the standard ABI
+    // head/tail layout, but a JETH dynamic-struct memory local is POINTER-headed (a head word holds a
+    // memory pointer to each dynamic field's [len][data] image, not an ABI offset). Reconciling the
+    // two representations cannot be verified byte-identical cheaply, so a struct target is rejected.
+    return false;
+  }
+
+  /** A fixed array whose every leaf (recursively unwrapping fixed-array nesting) is a static value
+   *  type, so abiDecFromMem's static-aggregate branch copies it inline word-for-word. */
+  private isStaticLeafArray(t: JethType): boolean {
+    if (t.kind === 'array' && t.length !== undefined) return this.isStaticLeafArray(t.element);
+    return isStaticValueType(t);
+  }
+
+  /** Resolve the common shape of abi.decode(data, T-or-[T...]) and `<bytes>.decode(T-or-[T...])`:
+   *  the source bytes Expr plus the resolved decoded type list (one entry for the single form, N for
+   *  the tuple form). Emits the diagnostic and returns undefined on any error (bad arity, a non-bytes
+   *  source, an unresolvable / unsupported type). `dataNode` is the bytes source expression and
+   *  `typeNode` the type argument (a bare type, `T[]`, `Arr<T,N>`, or `[T1, ...]`). */
+  private resolveAbiDecode(
+    site: ts.Node,
+    dataNode: ts.Expression,
+    typeNode: ts.Expression,
+  ): { data: Expr; types: JethType[]; tuple: boolean } | undefined {
+    const data = this.checkExpr(dataNode, BYTES);
+    if (!data) return undefined;
+    if (data.type.kind !== 'bytes') {
+      this.diags.error(dataNode, 'JETH320', `abi.decode(...) requires a bytes value to decode, got ${displayName(data.type)}`);
+      return undefined;
+    }
+    const tuple = ts.isArrayLiteralExpression(typeNode);
+    const typeExprs = tuple ? [...(typeNode as ts.ArrayLiteralExpression).elements] : [typeNode];
+    if (tuple && typeExprs.length < 1) {
+      this.diags.error(typeNode, 'JETH321', 'abi.decode(...) tuple type list must have at least one type');
+      return undefined;
+    }
+    const types: JethType[] = [];
+    for (const te of typeExprs) {
+      const t = this.resolveTypeExpr(te as ts.Expression);
+      if (!t) {
+        this.diags.error(te, 'JETH321', 'abi.decode(...) second argument must be a type name, `T[]`, `Arr<T, N>`, or a tuple `[T1, T2, ...]` of those');
+        return undefined;
+      }
+      if (!this.decodeSupported(t)) {
+        this.diags.error(te, 'JETH322', `abi.decode(...) does not support decoding to '${displayName(t)}' yet (supported: value types, bytes, string, T[], Arr<T, N>, and structs of those)`);
+        return undefined;
+      }
+      types.push(t);
+    }
+    return { data, types, tuple };
+  }
+
+  /** abi.decode(data, T) / abi.decode(data, [T1, ...]) in VALUE position. The single form yields one
+   *  decoded value Expr (kind 'abiDecode'); the tuple form is only valid in a destructuring and errors
+   *  here (mirrors tryCall's value-position rejection). */
+  private checkAbiDecode(node: ts.CallExpression): Expr | undefined {
+    if (node.arguments.length !== 2) {
+      this.diags.error(node, 'JETH320', 'abi.decode(...) takes exactly two arguments: the bytes value and the target type');
+      return undefined;
+    }
+    const r = this.resolveAbiDecode(node, node.arguments[0]!, node.arguments[1]!);
+    if (!r) return undefined;
+    if (r.tuple) {
+      this.diags.error(node, 'JETH323', 'a multi-type abi.decode(...) yields a tuple; bind it with a destructuring `let [a, b] = abi.decode(...)`');
+      return undefined;
+    }
+    return { kind: 'abiDecode', type: r.types[0]!, data: r.data };
+  }
+
+  /** Recognize the `<bytes>.decode(T)` / `<bytes>.decode([T1, ...])` method sugar. It is exact sugar
+   *  for abi.decode(<bytes>, T): the receiver is any bytes value (a local, a calldata param, an
+   *  abi.encode result, the returndata of addr.call({...}), ...). Returns the rewritten call shape
+   *  (data node + type node) or undefined when this is not a `.decode(...)` of a bytes value. */
+  private abiDecodeMethod(node: ts.CallExpression): { data: ts.Expression; typeArg: ts.Expression } | undefined {
+    if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'decode') return undefined;
+    if (node.arguments.length !== 1) return undefined;
+    return { data: node.expression.expression, typeArg: node.arguments[0]! };
+  }
+
+  /** Speculatively determine whether `node` is a bytes value (with diagnostic rollback so the peek
+   *  emits nothing). Used to decide whether `<expr>.decode(T)` is the abi.decode method sugar before
+   *  committing to that interpretation; a non-bytes receiver falls through to normal handling. */
+  private isBytesValueExpr(node: ts.Expression): boolean {
+    const diagLen = this.diags.items.length;
+    const e = this.checkExpr(node);
+    this.diags.items.length = diagLen;
+    return !!e && e.type.kind === 'bytes';
+  }
+
   private checkAddressCall(node: ts.CallExpression): Expr | undefined {
     if (node.arguments.length !== 1) {
       this.diags.error(node, 'JETH170', 'address(...) takes exactly one argument');
@@ -6741,6 +6929,32 @@ export class Analyzer {
       ['encode', 'encodePacked', 'encodeWithSelector', 'encodeWithSignature'].includes(node.expression.name.text)
     ) {
       return this.checkAbiEncode(node, node.expression.name.text);
+    }
+
+    // abi.decode(data, T) / abi.decode(data, [T1, ...]) -> the decoded typed value (single form) or a
+    // tuple (only valid in a destructuring; rejected with a clear message in value position).
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'abi' &&
+      !this.isVisibleLocal('abi') &&
+      !this.stateByName.has('abi') &&
+      node.expression.name.text === 'decode'
+    ) {
+      return this.checkAbiDecode(node);
+    }
+
+    // `<bytes>.decode(T)` method sugar: exact sugar for abi.decode(<bytes>, T). Only treated as a
+    // decode when the receiver is a bytes value and the single type argument resolves to a type; the
+    // tuple form `<bytes>.decode([...])` is a destructuring source (handled in checkTupleDecl).
+    if (ts.isCallExpression(node)) {
+      const dm = this.abiDecodeMethod(node);
+      if (dm && !ts.isArrayLiteralExpression(dm.typeArg) && this.isBytesValueExpr(dm.data)) {
+        const r = this.resolveAbiDecode(node, dm.data, dm.typeArg);
+        if (!r) return undefined;
+        return { kind: 'abiDecode', type: r.types[0]!, data: r.data };
+      }
     }
 
     // Phase 6: external low-level calls `<addr>.call/staticcall({ data, value?, gas?, success })`

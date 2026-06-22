@@ -95,6 +95,12 @@ export type Expr =
   | { kind: 'precompileHash'; type: JethType; arg: Expr; addr: number; leftShift: number } // sha256(0x02)->bytes32 / ripemd160(0x03)->bytes20
   | { kind: 'modOp'; type: JethType; op: 'addmod' | 'mulmod'; a: Expr; b: Expr; m: Expr } // addmod/mulmod -> u256
   | { kind: 'abiEncode'; type: JethType; packed: boolean; args: Expr[]; selector?: Expr; sig?: Expr } // abi.encode/encodePacked/encodeWithSelector(selector)/encodeWithSignature(sig) -> bytes
+  // abi.decode(data, T) / data.decode(T) -> the single decoded value of type T (memory-sourced ABI decode
+  // of the [len][data] bytes value `data`). The tuple form abi.decode(data, [T1, ...]) is a DestructureSource
+  // (see below). A value-type result is one word (lowered via lowerExpr); a bytes/string/array/struct result
+  // is a memory image pointer (lowered via lowerDynamic / aggArgToMemPtr). Malformed input reverts like solc:
+  // Panic(0x41) on an oversized length / memory-alloc cap, empty revert on an out-of-bounds offset/length.
+  | { kind: 'abiDecode'; type: JethType; data: Expr }
   | { kind: 'blockhash'; type: JethType; arg: Expr } // blockhash(uint) -> bytes32
   | { kind: 'blobhash'; type: JethType; arg: Expr } // blobhash(uint) -> bytes32 (EIP-4844)
   | { kind: 'balance'; type: JethType; addr: Expr } // <address>.balance -> u256
@@ -286,7 +292,11 @@ export type DestructureSource =
   | { kind: 'tuple'; values: Expr[] } // `[a, b] = [x, y]` (parallel assign / swap)
   // `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: the raw escape hatch (no success checks).
   // Yields two components: ok (bool) and ret (bytes returndata, always captured even on failure).
-  | { kind: 'extCall'; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr };
+  | { kind: 'extCall'; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr }
+  // `let [a, b] = abi.decode(data, [T1, T2])` (and the `.decode([...])` sugar): decode the memory bytes
+  // value `data` into N tuple components of `types`. Each component is materialized like the single form
+  // (value -> a word, bytes/string/array/struct -> a memory image pointer).
+  | { kind: 'abiDecode'; data: Expr; types: JethType[] };
 
 export type Stmt =
   | { kind: 'return'; value?: Expr }
