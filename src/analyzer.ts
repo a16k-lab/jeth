@@ -2153,6 +2153,15 @@ export class Analyzer {
     if (ts.isElementAccessExpression(node)) return this.isPureReadExpr(node.expression) && this.isPureReadExpr(node.argumentExpression);
     if (ts.isParenthesizedExpression(node)) return this.isPureReadExpr(node.expression);
     if (ts.isNumericLiteral(node) || ts.isBigIntLiteral(node)) return true;
+    // a pure VALUE-TYPE cast (address(x)/payable(x)/uN(x)/iN(x)/bytesN(x)/Enum(x)) with pure args is a
+    // type conversion, NOT a state-mutating call: repeatable and side-effect-free, like a literal. This
+    // keeps a common constant/derived key (m[address(0x..)], m[u8(x)]) out of the side-effecting-key gate.
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const callee = node.expression.text;
+      if (callee === 'address' || callee === 'payable' || resolvePrimitiveName(callee) !== undefined || this.isEnumName(callee)) {
+        return node.arguments.every((a) => this.isPureReadExpr(a));
+      }
+    }
     return false;
   }
 
@@ -3099,6 +3108,18 @@ export class Analyzer {
       ) {
         this.diags.error(e.right, 'JETH200', `constructing a storage struct with a dynamic-array field of non-value elements is not supported yet (assign its fields individually: this.s.a = ...; this.s.xs.push(...))`);
         return;
+      }
+      // Eval-order: solc evaluates the RHS before the LHS location. The value-type and bytes/string
+      // element paths reorder correctly in codegen, but the WHOLE-AGGREGATE element write path
+      // (recs[i] = P(...), dd[i] = [...]) does not, so a side-effecting index/key would run before the
+      // RHS aggregate's constructor args and miscompile. Reject it (bind the index to a const first),
+      // consistent with the JETH331 guard already applied to ++/-- and compound assignments.
+      if (target.type.kind === 'struct' || target.type.kind === 'array') {
+        const keyImpure = this.impureLValueKey(e.left);
+        if (keyImpure) {
+          this.diags.error(keyImpure, 'JETH331', `assigning a whole ${displayName(target.type)} to an element with a side-effecting index/key would evaluate the index before the value (solc evaluates the value first); bind the index to a const first`);
+          return;
+        }
       }
       out.push({ kind: 'assign', target, value });
       return;

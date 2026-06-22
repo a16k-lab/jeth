@@ -894,8 +894,12 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'place') {
+          // solc evaluates the RHS before the LHS location (incl every index/key in the path). Bind the
+          // value FIRST so a side-effecting path index (aa[inc()][inc()] = inc()) does not run ahead of
+          // a side-effecting RHS; the optimizer collapses the temp for pure operands (byte-identical).
+          const value = this.fresh();
+          out.push(`let ${value} := ${this.lowerExpr(s.value, ctx, out)}`);
           const p = this.lowerPlace(s.target.path, ctx, out);
-          const value = this.lowerExpr(s.value, ctx, out);
           // a packed element with a RUNTIME byte offset uses packedStore; otherwise the
           // constant-offset storeState (also covers a literal packed index).
           if (p.byteShift !== undefined) this.packedStore(s.target.type, p.slot, p.byteShift, value, out);
@@ -903,18 +907,24 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'memField' || s.target.kind === 'memElem') {
-          // p.x = v / a[i] = v on a memory aggregate local: bounds-checked memory store.
-          this.lowerAssignValue(s.target, this.lowerExpr(s.value, ctx, out), ctx, out);
+          // p.x = v / a[i] = v on a memory aggregate local: bounds-checked memory store. Bind the RHS
+          // FIRST (solc evaluates it before the LHS index); the optimizer collapses the temp for pure
+          // operands, so the bytecode is unchanged for the common case.
+          const value = this.fresh();
+          out.push(`let ${value} := ${this.lowerExpr(s.value, ctx, out)}`);
+          this.lowerAssignValue(s.target, value, ctx, out);
           break;
         }
         if (s.target.kind === 'byteIndexStore') {
           // this.b[i] = <bytes1>: bounds-checked read-modify-write of byte i in a storage `bytes`.
           // The bytes location (direct var / struct field / mapping value / array elem) resolves to
           // its slot exactly like the whole-value assignment.
+          // solc evaluates the RHS byte value FIRST, then the location and the index. Bind v first.
+          const v = this.fresh();
+          out.push(`let ${v} := ${this.lowerExpr(s.value, ctx, out)}`);
           const bslot = this.bytesLocSlot(s.target.loc, ctx, out);
           const i = this.fresh();
           out.push(`let ${i} := ${this.lowerExpr(s.target.index, ctx, out)}`);
-          const v = this.lowerExpr(s.value, ctx, out);
           out.push(`${this.strByteSet()}(${bslot}, ${i}, ${v})`);
           break;
         }
@@ -933,28 +943,30 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'mapDynState') {
-          // this.m[k] = <bytes/string>: compute the runtime mapping slot, then
-          // overwrite-store the value (storeDynamic clears the old tail).
-          const slot = this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out);
+          // this.m[k] = <bytes/string>: materialize the RHS value FIRST (solc evaluates the RHS before
+          // the LHS key - a side-effecting key must not run ahead of it), then compute the runtime
+          // mapping slot and overwrite-store (storeDynamic clears the old tail).
           const ref = this.lowerDynamic(s.value, ctx, out);
+          const slot = this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out);
           this.storeDynamic(slot, ref, out);
           break;
         }
         if (s.target.kind === 'strArrayElem') {
-          // this.ss[i] = <bytes/string>: bounds-check i, then overwrite the element
-          // header at keccak(lenSlot)+i (storeStrMem clears the old tail).
-          const slot = this.strArrayElemSlot(s.target.arr, s.target.index, ctx, out);
+          // this.ss[i] = <bytes/string>: materialize the RHS FIRST (solc evaluates the RHS before the
+          // LHS index), then bounds-check i and overwrite the element header at keccak(lenSlot)+i
+          // (storeStrMem clears the old tail).
           const ref = this.lowerDynamic(s.value, ctx, out);
+          const slot = this.strArrayElemSlot(s.target.arr, s.target.index, ctx, out);
           this.storeDynamic(slot, ref, out);
           break;
         }
         if (s.target.kind === 'dynPlace') {
-          // this.d.s = <bytes/string> (storage dynamic-struct field): fold the path
-          // to the field's slot (struct base + field slot, index/key bound-checks
-          // applied), then overwrite-store the value (storeStrMem clears the old
-          // tail, identical to solc).
-          const p = this.lowerPlace(s.target.path, ctx, out);
+          // this.d.s = <bytes/string> (storage dynamic-struct field): materialize the RHS FIRST (solc
+          // evaluates the RHS before the LHS path's index/key), then fold the path to the field's slot
+          // (struct base + field slot, index/key bound-checks applied) and overwrite-store the value
+          // (storeStrMem clears the old tail, identical to solc).
           const ref = this.lowerDynamic(s.value, ctx, out);
+          const p = this.lowerPlace(s.target.path, ctx, out);
           this.storeDynamic(p.slot, ref, out);
           break;
         }
@@ -983,10 +995,14 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'arrayElem') {
+          // solc evaluates the RHS before the LHS location (incl its index). Bind the value FIRST so
+          // a side-effecting index (a[inc()] = inc()) does not run ahead of a side-effecting RHS; for
+          // pure operands the solc Yul optimizer collapses the temp, so the bytecode is unchanged.
+          const value = this.fresh();
+          out.push(`let ${value} := ${this.lowerExpr(s.value, ctx, out)}`);
           const ref = this.lowerArrayRef(s.target.arr, ctx, out); // storage/fixed (analyzer rejects calldata)
           const idx = this.fresh();
           out.push(`let ${idx} := ${this.lowerExpr(s.target.index, ctx, out)}`);
-          const value = this.lowerExpr(s.value, ctx, out);
           if (ref.src === 'fixed') {
             out.push(`if iszero(lt(${idx}, ${ref.length})) { ${this.panic()}(0x32) }`);
             this.arrayElemStore(s.target.type, String(ref.baseSlot), idx, value, out);
@@ -1003,7 +1019,12 @@ ${indent(runtime, 6)}
           }
           break;
         }
-        const value = this.lowerExpr(s.value, ctx, out);
+        // Bind the RHS before resolving a mapping key (or any keyed/indexed target below) so a
+        // side-effecting key (m[inc()] = inc()) does not run before a side-effecting RHS - solc
+        // evaluates the RHS first. The optimizer collapses the temp for pure operands (byte-identical).
+        const valExpr = this.lowerExpr(s.value, ctx, out);
+        const value = this.fresh();
+        out.push(`let ${value} := ${valExpr}`);
         if (s.target.kind === 'local') {
           out.push(`${this.ctxLookup(ctx, s.target.varName)} := ${value}`);
         } else if (s.target.kind === 'immutableStaged') {

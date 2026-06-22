@@ -957,3 +957,46 @@ describe('calldata dynamic-struct DEEP field access (byte-identical to solc)', (
     await rt(jeth, sol, [0n, 1n, 2n].map((i) => ({ sig: 'g((uint256,(string,uint256)[]),uint256)', args: cd(i) })));
   });
 });
+
+describe('assignment evaluation order: RHS before LHS index/key (byte-identical to solc)', () => {
+  // solc evaluates the RHS before the LHS location (incl its index/key). A side-effecting index with a
+  // side-effecting RHS must match solc; previously JETH lowered the index first and silently miscompiled.
+  const INC = `@state i: u256; inc(): u256 { let v: u256 = this.i; this.i = this.i + 1n; return v; }`;
+  const SINC = `uint256 i; function inc() internal returns (uint256){ uint256 v=i; i++; return v; }`;
+  const cases: [string, string, string][] = [
+    ['fixed Arr a[inc()]=inc()',
+      `@contract class C { @state a: Arr<u256,2>; ${INC} @external f(): u256 { this.a[this.inc()] = this.inc(); return this.a[0n]*10n + this.a[1n]; } }`,
+      `contract C { uint256[2] a; ${SINC} function f() external returns (uint256){ a[inc()]=inc(); return a[0]*10 + a[1]; } }`],
+    ['dyn array a[inc()]=inc()',
+      `@contract class C { @state a: u256[]; ${INC} @external f(): u256 { this.a.push(0n); this.a.push(0n); this.a[this.inc()] = this.inc(); return this.a[0n]*100n + this.a[1n]; } }`,
+      `contract C { uint256[] a; ${SINC} function f() external returns (uint256){ a.push(0); a.push(0); a[inc()]=inc(); return a[0]*100 + a[1]; } }`],
+    ['mapping m[inc()]=inc()',
+      `@contract class C { @state m: mapping<u256,u256>; ${INC} @external f(): u256 { this.m[this.inc()] = this.inc(); return this.m[0n]*100n + this.m[1n]; } }`,
+      `contract C { mapping(uint256=>uint256) m; ${SINC} function f() external returns (uint256){ m[inc()]=inc(); return m[0]*100 + m[1]; } }`],
+    ['nested mapping m[inc()][inc()]=inc()',
+      `@contract class C { @state m: mapping<u256, mapping<u256, u256>>; ${INC} @external f(): u256 { this.m[this.inc()][this.inc()] = this.inc(); return this.m[0n][1n]*1000n + this.m[1n][2n]; } }`,
+      `contract C { mapping(uint256=>mapping(uint256=>uint256)) m; ${SINC} function f() external returns (uint256){ m[inc()][inc()]=inc(); return m[0][1]*1000 + m[1][2]; } }`],
+    ['memory-local a[inc()]=inc()',
+      `@contract class C { ${INC} @external f(): u256 { let a: Arr<u256,2> = [0n,0n]; a[this.inc()] = this.inc(); return a[0n]*10n + a[1n]; } }`,
+      `contract C { ${SINC} function f() external returns (uint256){ uint256[2] memory a; a[inc()]=inc(); return a[0]*10 + a[1]; } }`],
+    ['nested fixed aa[inc()][inc()]=inc() (success-vs-revert)',
+      `@contract class C { @state aa: Arr<Arr<u256,2>,2>; ${INC} @external f(): u256 { this.aa[this.inc()][this.inc()] = this.inc(); return this.aa[0n][1n]; } }`,
+      `contract C { uint256[2][2] aa; ${SINC} function f() external returns (uint256){ aa[inc()][inc()]=inc(); return aa[0][1]; } }`],
+    ['storage string m[inc()]=ternary',
+      `@contract class C { @state m: mapping<u256, string>; ${INC} @external f(): string { this.m[this.inc()] = (this.i > 0n) ? "longstringvalue!!" : "x"; return this.m[0n]; } }`,
+      `contract C { mapping(uint256=>string) m; ${SINC} function f() external returns (string memory){ m[inc()] = (i>0) ? "longstringvalue!!" : "x"; return m[0]; } }`],
+  ];
+  for (const [name, jeth, sol] of cases) {
+    it(name, async () => { await rt(jeth, sol, [{ sig: 'f()' }]); });
+  }
+
+  it('aggregate-element assign with a side-effecting index is rejected (JETH331); pure/derived keys still accept', () => {
+    // a whole-aggregate element write with a side-effecting index cannot reorder in codegen -> safe reject.
+    expect(jethRejects(`@struct class P { x: u256; y: u256 } @contract class C { @state recs: P[]; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.recs.push(P(0n,0n)); this.recs[this.inc()] = P(this.inc(), 9n); } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @state dd: Arr<Arr<u256,2>,2>; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.dd[this.inc()] = [this.inc(), 9n]; } }`)).toBe(true);
+    // a PURE value-type cast key (address(lit), u8(x)) is NOT side-effecting: must stay accepted (this was
+    // a regression-prone false positive in the side-effecting-key detector).
+    expect(jethAccepts(`@struct class P { a: u256; b: u8 } @contract class C { @state mp: mapping<address, P>; @external f(): void { this.mp[address(0x1n)] = P(1n, 2n); } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @state bal: mapping<address, u256>; @external f(k: address, v: u256): void { this.bal[address(0x1n)] += v; } }`)).toBe(true);
+  });
+});
