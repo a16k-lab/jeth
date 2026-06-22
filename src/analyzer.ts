@@ -2953,7 +2953,7 @@ export class Analyzer {
     method: string,
     op: 'call' | 'staticcall',
     isTry: boolean,
-  ): { data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[] } | undefined {
+  ): { data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[]; decode?: { types: JethType[]; tuple: boolean } } | undefined {
     if (node.arguments.length !== 1 || !ts.isObjectLiteralExpression(node.arguments[0]!)) {
       this.diags.error(node, 'JETH300', `${method}(...) takes a single object literal { data, ... }`);
       return undefined;
@@ -2974,12 +2974,13 @@ export class Analyzer {
     }
     const allowed = new Set(['data', 'gas']);
     if (op === 'call') allowed.add('value'); // staticcall cannot send value
-    if (!isTry) allowed.add('success');
+    if (!isTry) { allowed.add('success'); allowed.add('decode'); } // decode/success only on the checked forms
     for (const k of fields.keys()) {
       if (!allowed.has(k)) {
-        // give a precise message for the two structural rules.
+        // give a precise message for the structural rules.
         if (k === 'value' && op === 'staticcall') this.diags.error(obj, 'JETH302', `staticcall cannot send value (remove 'value')`);
         else if (k === 'success' && isTry) this.diags.error(obj, 'JETH303', `${method}(...) is the raw escape hatch and takes no 'success' (handle [ok, ret] yourself)`);
+        else if (k === 'decode' && isTry) this.diags.error(obj, 'JETH303', `${method}(...) is the raw escape hatch and takes no 'decode' (decode the [ok, ret] bytes yourself)`);
         else this.diags.error(obj, 'JETH301', `${method}(...): unknown option '${k}' (allowed: ${[...allowed].join(', ')})`);
         return undefined;
       }
@@ -3022,7 +3023,27 @@ export class Analyzer {
         checks.push(c);
       }
     }
-    return { data, value, gas, checks };
+    // optional `decode: T` / `decode: [T1, ...]` (checked forms only): decode the post-success
+    // returndata directly. This is exact sugar for `addr.call({...}).decode(T)` - it wraps the call's
+    // bytes result in the same abi.decode codec, with the same supported-type rules and validation.
+    let decode: { types: JethType[]; tuple: boolean } | undefined;
+    if (!isTry) {
+      const decNode = fields.get('decode');
+      if (decNode) {
+        const tuple = ts.isArrayLiteralExpression(decNode);
+        const typeExprs = tuple ? [...(decNode as ts.ArrayLiteralExpression).elements] : [decNode];
+        if (tuple && typeExprs.length < 1) { this.diags.error(decNode, 'JETH321', `${method}(...) 'decode' tuple type list must have at least one type`); return undefined; }
+        const types: JethType[] = [];
+        for (const te of typeExprs) {
+          const t = this.resolveTypeExpr(te as ts.Expression);
+          if (!t) { this.diags.error(te, 'JETH321', `${method}(...) 'decode' must be a type name, \`T[]\`, \`Arr<T, N>\`, or a tuple \`[T1, T2, ...]\` of those`); return undefined; }
+          if (!this.decodeSupported(t)) { this.diags.error(te, 'JETH322', `${method}(...) 'decode' does not support decoding to '${displayName(t)}' yet (supported: value types, bytes, string, T[], Arr<T, N>, and structs of those)`); return undefined; }
+          types.push(t);
+        }
+        decode = { types, tuple };
+      }
+    }
+    return { data, value, gas, checks, decode };
   }
 
   /** One success entry `{ condition: <bool with this.ok/this.data>, revert: "msg" | E(args) }`. */
@@ -3071,7 +3092,17 @@ export class Analyzer {
     // mutability: a `call` may mutate callee/this state -> non-view; a `staticcall` is read-only (env).
     if (op === 'call') this.currentWritesState = true;
     else this.currentReadsEnv = true;
-    return { kind: 'extCall', type: BYTES, op, addr: recv, data: shape.data, value: shape.value, gas: shape.gas, checks: shape.checks };
+    const expr: Expr = { kind: 'extCall', type: BYTES, op, addr: recv, data: shape.data, value: shape.value, gas: shape.gas, checks: shape.checks };
+    if (shape.decode) {
+      // `decode: [T1, ...]` yields a tuple; it must be destructured (handled by resolveCallDecodeTuple).
+      if (shape.decode.tuple) {
+        this.diags.error(node, 'JETH323', `a multi-type ${method}(...) 'decode' yields a tuple; bind it with a destructuring \`let [a, b] = ${method}(...)\``);
+        return undefined;
+      }
+      // `decode: T` yields one value: wrap the call's bytes result in the same abi.decode codec.
+      return { kind: 'abiDecode', type: shape.decode.types[0]!, data: expr };
+    }
+    return expr;
   }
 
   /** `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: resolve the destructuring source +
@@ -3091,6 +3122,34 @@ export class Analyzer {
       source: { kind: 'extCall', op, addr: recv, data: shape.data, value: shape.value, gas: shape.gas },
       types: [BOOL, BYTES],
     };
+  }
+
+  /** `let [a, b] = addr.call/staticcall({..., decode: [T1, ...]})`: the in-object decode tuple form.
+   *  The call's bytes result is wrapped in the abi.decode codec (same DestructureSource the tuple
+   *  `<bytes>.decode([...])` sugar produces). Returns the source + component types, `'handled'` when the
+   *  node IS an address call/staticcall but is misused (a precise diagnostic was emitted; stop), or
+   *  undefined when the node is not an external call (let other handling decide). */
+  private resolveCallDecodeTuple(node: ts.Expression): { source: DestructureSource; types: JethType[] } | 'handled' | undefined {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+    const method = node.expression.name.text;
+    if (method !== 'call' && method !== 'staticcall') return undefined;
+    const recv = this.externalCallReceiver(node);
+    if (!recv) return undefined; // not an address receiver -> not an external call
+    const op: 'call' | 'staticcall' = method === 'staticcall' ? 'staticcall' : 'call';
+    const shape = this.checkExternalCallShape(node, method, op, false);
+    if (!shape) return 'handled'; // shape already emitted a precise diagnostic
+    if (!shape.decode) {
+      this.diags.error(node, 'JETH323', `${method}(...) yields a single bytes value; to destructure, add a 'decode: [T1, ...]' tuple to the options (or bind the bytes with 'let x = ...')`);
+      return 'handled';
+    }
+    if (!shape.decode.tuple) {
+      this.diags.error(node, 'JETH323', `${method}(...) 'decode' is a single type, which yields one value; bind it with 'let x = ...' (use 'decode: [T1, ...]' to destructure)`);
+      return 'handled';
+    }
+    if (op === 'call') this.currentWritesState = true;
+    else this.currentReadsEnv = true;
+    const expr: Expr = { kind: 'extCall', type: BYTES, op, addr: recv, data: shape.data, value: shape.value, gas: shape.gas, checks: shape.checks };
+    return { source: { kind: 'abiDecode', data: expr, types: shape.decode.types }, types: shape.decode.types };
   }
 
   /** Recognize a tuple-form abi.decode source for `let [a, b] = abi.decode(data, [T1, ...])` (and the
@@ -3776,10 +3835,21 @@ export class Analyzer {
     }
     const callName = this.tupleCallName(decl.initializer);
     const tryCall = this.resolveTryCall(decl.initializer);
-    const abiDecodeTuple = tryCall ? undefined : this.resolveAbiDecodeTuple(decl.initializer);
+    const callDecode = tryCall ? undefined : this.resolveCallDecodeTuple(decl.initializer);
+    if (callDecode === 'handled') return; // recognized address call/staticcall, already diagnosed
+    const abiDecodeTuple = (tryCall || callDecode) ? undefined : this.resolveAbiDecodeTuple(decl.initializer);
     let types: JethType[];
     let source: DestructureSource;
-    if (abiDecodeTuple) {
+    if (callDecode) {
+      // `let [a, b] = addr.call({..., decode: [T1, T2]})`: decode the call's bytes result (same binding
+      // path as the abi.decode tuple form below - each component lands in its own register / mem image).
+      if (callDecode.types.length !== n) {
+        this.diags.error(decl.name, 'JETH066', `call decode tuple has ${callDecode.types.length} type(s), expected ${n} name(s)`);
+        return;
+      }
+      types = callDecode.types;
+      source = callDecode.source;
+    } else if (abiDecodeTuple) {
       // `let [a, b] = abi.decode(data, [T1, T2])`: each component is decoded into its own register
       // (value -> a word, bytes/string/array/struct -> a memory image pointer), bound below.
       if (abiDecodeTuple.types.length !== n) {
