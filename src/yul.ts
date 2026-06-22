@@ -22,7 +22,7 @@ import {
   EventIR,
 } from './ir.js';
 import { JethType, StructField, intRange, storageByteSize, storageSlotCount, isBytesLike, isDynamicType, isStaticType, isStaticValueType, isImplicitWiden, arrayElemPacks, abiHeadWords, abiLeaves, structStorageLeaves } from './types.js';
-import type { ArrayExpr, AccessPath, CalldataPlace, CdDynPlace, LValue, DestructureSource } from './ir.js';
+import type { ArrayExpr, AccessPath, CalldataPlace, CdDynPlace, LValue, DestructureSource, SuccessCheck } from './ir.js';
 
 export class UnsupportedError extends Error {
   constructor(message: string) {
@@ -30,6 +30,12 @@ export class UnsupportedError extends Error {
     this.name = 'UnsupportedError';
   }
 }
+
+// Phase 6 external-call scoped bindings (this.ok / this.data inside a success condition). These keys
+// are bound in the LowerCtx scope while a check is lowered; the leading '#' cannot collide with a
+// user identifier. callOk resolves to the success-bool register; callData to the returndata pointer.
+const EXT_CALL_OK_BINDING = '#extCallOk';
+const EXT_CALL_DATA_BINDING = '#extCallData';
 
 // F4 @nonReentrant: a dedicated TRANSIENT-storage slot (EIP-1153, its own address space, wiped at
 // end of transaction and reverted on a failed call) holds the mutex. The slot is namespaced by a
@@ -1059,6 +1065,13 @@ ${indent(runtime, 6)}
         break;
       }
       case 'exprStmt': {
+        // a bytes-reference expression as a statement (a bare `addr.call({...});` discarding the
+        // returndata) is lowered via lowerDynamic: the call + success checks still run, the value
+        // is dropped. lowerExpr would throw (a reference value in a non-reference context).
+        if (s.expr.kind === 'extCall') {
+          this.lowerDynamic(s.expr, ctx, out);
+          break;
+        }
         const v = this.lowerExpr(s.expr, ctx, out);
         out.push(`pop(${v})`);
         break;
@@ -1190,6 +1203,12 @@ ${indent(runtime, 6)}
       }
       case 'revert': {
         for (const l of this.lowerRevertReason(s.reason, ctx, out)) out.push(l);
+        break;
+      }
+      case 'revertWith': {
+        // bubble raw bytes as the revert payload: revert(add(b,0x20), mload(b)).
+        const { mp } = this.toMemory(this.lowerDynamic(s.value, ctx, out), out);
+        out.push(`revert(add(${mp}, 0x20), mload(${mp}))`);
         break;
       }
       case 'emit': {
@@ -1723,6 +1742,14 @@ ${indent(runtime, 6)}
         return `blobhash(${this.lowerExpr(e.arg, ctx, out)})`;
       case 'balance':
         return `balance(${this.lowerExpr(e.addr, ctx, out)})`;
+      case 'extCode':
+        // <addr>.codehash -> a single bytes32 word (EXTCODEHASH). The bytes form (<addr>.code) is a
+        // reference value, lowered via lowerDynamic (it reaches the throw list below if misused).
+        if (e.member === 'codehash') return `extcodehash(${this.lowerExpr(e.addr, ctx, out)})`;
+        throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
+      case 'callOk':
+        // bound only inside a .call/.staticcall success condition: the captured success bool.
+        return this.ctxLookup(ctx, EXT_CALL_OK_BINDING);
       case 'cast':
         return this.lowerCast(e, ctx, out);
       case 'mapGet': {
@@ -1860,6 +1887,8 @@ ${indent(runtime, 6)}
       case 'mapStorageValue':
       case 'mapDynValue':
       case 'abiEncode':
+      case 'extCall': // bytes returndata (a reference value, lowered via lowerDynamic)
+      case 'callData': // this.data inside a success condition (the returndata bytes reference)
         // reference/aggregate values are not single 256-bit words; they are
         // consumed by the return/assign/length/index paths.
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
@@ -4966,6 +4995,30 @@ ${indent(runtime, 6)}
         return { src: 'calldata', dataPtr: '0', len: 'calldatasize()' };
       case 'abiEncode':
         return { src: 'memory', ptr: this.buildAbiEncode(e.args, e.packed, ctx, out, e.selector, e.sig) };
+      case 'extCode': {
+        // <addr>.code -> the deployed bytecode as a fresh bytes blob (EXTCODESIZE + EXTCODECOPY).
+        // (codehash is a single word, handled in lowerExpr; this case is only the `code` member.)
+        const a = this.fresh();
+        out.push(`let ${a} := ${this.lowerExpr(e.addr, ctx, out)}`);
+        const sz = this.fresh();
+        out.push(`let ${sz} := extcodesize(${a})`);
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := ${this.alloc()}(add(0x20, and(add(${sz}, 0x1f), not(0x1f))))`);
+        out.push(`mstore(${ptr}, ${sz})`);
+        out.push(`extcodecopy(${a}, add(${ptr}, 0x20), 0, ${sz})`);
+        out.push(`if mod(${sz}, 0x20) { mstore(add(add(${ptr}, 0x20), ${sz}), 0) }`);
+        return { src: 'memory', ptr };
+      }
+      case 'callData':
+        // this.data inside a success condition: the returndata blob pointer bound for this check.
+        return { src: 'memory', ptr: this.ctxLookup(ctx, EXT_CALL_DATA_BINDING) };
+      case 'extCall': {
+        // perform the CALL/STATICCALL, then run the ordered success checks (the first failing
+        // condition reverts with its reason). Yields the returndata bytes.
+        const { okReg, dataPtr } = this.emitExtCall(e, ctx, out);
+        this.lowerSuccessChecks(e.checks, okReg, dataPtr, ctx, out);
+        return { src: 'memory', ptr: dataPtr };
+      }
       case 'call': {
         // a bytes/string-returning internal call: the callee returns a [len][data] memory pointer.
         const p = this.fresh();
@@ -5092,6 +5145,69 @@ ${indent(runtime, 6)}
       out.push(`if mod(${len}, 0x20) { mstore(add(add(${mp}, 0x20), ${len}), 0) }`);
     }
     return { mp, len };
+  }
+
+  /** Phase 6: perform a low-level CALL/STATICCALL. Lowers the data/value/gas operands, executes the
+   *  opcode (args = the data blob's [add(ptr,0x20), mload(ptr)] region, output discarded), and copies
+   *  the returndata into a FRESH memory bytes blob ([len][data], length-word at the returned ptr).
+   *  Returns the success-bool register and the returndata-blob pointer. Used by both the checked
+   *  (extCall expr) and raw (tryCall destructure) forms; the data blob is fully materialized BEFORE
+   *  the call so it cannot alias the returndata buffer. */
+  private emitExtCall(
+    e: { op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr },
+    ctx: LowerCtx,
+    out: string[],
+  ): { okReg: string; dataPtr: string } {
+    // Evaluate operands left-to-right: target, then value (call only), then gas, then the data blob.
+    const addr = this.fresh();
+    out.push(`let ${addr} := ${this.lowerExpr(e.addr, ctx, out)}`);
+    let valueExpr = '0';
+    if (e.op === 'call' && e.value) {
+      const v = this.fresh();
+      out.push(`let ${v} := ${this.lowerExpr(e.value, ctx, out)}`);
+      valueExpr = v;
+    }
+    let gasExpr = 'gas()'; // default: forward all remaining gas (matches solc's t.call(d))
+    if (e.gas) {
+      const g = this.fresh();
+      out.push(`let ${g} := ${this.lowerExpr(e.gas, ctx, out)}`);
+      gasExpr = g;
+    }
+    const { mp, len } = this.toMemory(this.lowerDynamic(e.data, ctx, out), out);
+    const okReg = this.fresh();
+    const argsOff = `add(${mp}, 0x20)`;
+    if (e.op === 'staticcall') {
+      out.push(`let ${okReg} := staticcall(${gasExpr}, ${addr}, ${argsOff}, ${len}, 0, 0)`);
+    } else {
+      out.push(`let ${okReg} := call(${gasExpr}, ${addr}, ${valueExpr}, ${argsOff}, ${len}, 0, 0)`);
+    }
+    // Copy returndata into a fresh [len][data] blob (always captured, even on failure).
+    const dataPtr = this.fresh();
+    const rlen = this.fresh();
+    out.push(`let ${rlen} := returndatasize()`);
+    out.push(`let ${dataPtr} := ${this.alloc()}(add(0x20, and(add(${rlen}, 0x1f), not(0x1f))))`);
+    out.push(`mstore(${dataPtr}, ${rlen})`);
+    out.push(`returndatacopy(add(${dataPtr}, 0x20), 0, ${rlen})`);
+    out.push(`if mod(${rlen}, 0x20) { mstore(add(add(${dataPtr}, 0x20), ${rlen}), 0) }`);
+    return { okReg, dataPtr };
+  }
+
+  /** Lower the ordered success checks of a `.call/.staticcall`. Each condition is evaluated with
+   *  `this.ok` (the success bool) and `this.data` (the returndata blob) bound; the FIRST condition
+   *  that is false reverts with its reason (the others are not evaluated past the revert). */
+  private lowerSuccessChecks(checks: SuccessCheck[], okReg: string, dataPtr: string, ctx: LowerCtx, out: string[]): void {
+    if (checks.length === 0) return;
+    this.ctxPush(ctx);
+    this.ctxDeclare(ctx, EXT_CALL_OK_BINDING, okReg);
+    this.ctxDeclare(ctx, EXT_CALL_DATA_BINDING, dataPtr);
+    for (const chk of checks) {
+      const cond = this.lowerExpr(chk.cond, ctx, out); // condition prep (e.g. abi.decode) emits to out
+      const reasonLines = this.lowerRevertReason(chk.reason, ctx, out);
+      out.push(`if iszero(${cond}) {`);
+      for (const l of reasonLines) out.push('  ' + l);
+      out.push('}');
+    }
+    this.ctxPop(ctx);
   }
 
   /** b[i] -> bytes1 (left-aligned), Panic(0x32) on out-of-bounds. */
@@ -5758,6 +5874,13 @@ ${indent(runtime, 6)}
       const regs = Array.from({ length: n }, () => this.fresh());
       out.push(`let ${regs.join(', ')} := ${this.userFnName(source.fn)}(${args.join(', ')})`);
       return regs;
+    }
+    if (source.kind === 'extCall') {
+      // `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: raw CALL, no checks. Two components:
+      // the success bool and the returndata bytes blob pointer (the bytes ret binds as a memory local
+      // exactly like any [len][data] pointer; the analyzer registered it in memDynLocals).
+      const { okReg, dataPtr } = this.emitExtCall(source, ctx, out);
+      return [okReg, dataPtr];
     }
     return source.values.map((v) => {
       const r = this.fresh();

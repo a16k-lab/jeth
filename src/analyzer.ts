@@ -57,11 +57,17 @@ import {
   EventIR,
   EventParam,
   RevertReason,
+  SuccessCheck,
+  DestructureSource,
 } from './ir.js';
 
 const ADDRESS: JethType = { kind: 'address', payable: false };
 const STRING: JethType = { kind: 'string' };
 const BYTES1: JethType = { kind: 'bytesN', size: 1 };
+const BYTES: JethType = { kind: 'bytes' };
+// Phase 6 external low-level call methods. call/staticcall return bytes (with mandatory success
+// checks); tryCall/tryStaticcall return [bool, bytes] (raw escape hatch, only in a tuple destructure).
+const EXT_CALL_METHODS = new Set(['call', 'staticcall', 'tryCall', 'tryStaticcall']);
 
 // Environment globals: "<obj>.<field>" -> opcode + type + category.
 // 'env' forbidden in @pure; 'value' (msg.value) requires @payable; 'calldata'
@@ -164,6 +170,11 @@ export class Analyzer {
   private memDynLocals = new Set<string>(); // bytes/string MEMORY locals (G9): register holds a [len][data] pointer
   private memDynStructLocals = new Map<string, JethType>(); // DYNAMIC-field struct MEMORY locals: name -> struct type (head = one word per field, value inline / bytes-string a pointer)
   private currentReadsEnv = false; // reads msg.*/block.*/tx.*/address(this) -> forbidden in @pure
+  // Phase 6: scoped bindings visible ONLY inside a .call/.staticcall `success` condition. While checking
+  // a condition expression, `this.ok` resolves to the call's success bool and `this.data` to the
+  // returndata bytes (consulted in the `this.<X>` resolution BEFORE constant/immutable/state lookup,
+  // so they shadow nothing globally and never leak outside the condition).
+  private callResultBindings: Map<string, JethType> | undefined;
   // whether the function being checked is EXTERNALLY reachable (external/public, incl. an inferred-
   // exposed no-visibility function). Reading msg.value in such a function requires @payable; an
   // internal/private function may read it at any non-pure mutability (solc parity). Default strict
@@ -1973,6 +1984,7 @@ export class Analyzer {
         if (callee === 'require') return this.checkRequire(e, out);
         if (callee === 'assert') return this.checkAssert(e, out);
         if (callee === 'revert') return this.checkRevert(e, out);
+        if (callee === 'revertWith') return this.checkRevertWith(e, out);
         if (callee === 'emit') return this.checkEmit(e, out);
         // a bare internal call as a statement (void result, or a value result discarded).
         if (this.funcsByName.has(callee)) {
@@ -2884,6 +2896,174 @@ export class Analyzer {
     return { kind: 'custom', decl, args };
   }
 
+  // ---- Phase 6: external low-level calls -----------------------------------
+
+  /** The receiver of a `<recv>.<method>(...)` external call, if `<recv>` is an address. */
+  private externalCallReceiver(node: ts.CallExpression): Expr | undefined {
+    if (!ts.isPropertyAccessExpression(node.expression)) return undefined;
+    const recv = this.checkExpr(node.expression.expression);
+    if (!recv || recv.type.kind !== 'address') return undefined;
+    return recv;
+  }
+
+  /** Parse the single object-literal argument shared by call/staticcall/tryCall/tryStaticcall.
+   *  Validates fields (data required; value rejected on a staticcall; success required on the
+   *  checked forms and forbidden on the try forms; no unknown fields). Returns the lowered
+   *  data/value/gas exprs and the ordered success checks, or undefined (with a diagnostic). */
+  private checkExternalCallShape(
+    node: ts.CallExpression,
+    method: string,
+    op: 'call' | 'staticcall',
+    isTry: boolean,
+  ): { data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[] } | undefined {
+    if (node.arguments.length !== 1 || !ts.isObjectLiteralExpression(node.arguments[0]!)) {
+      this.diags.error(node, 'JETH300', `${method}(...) takes a single object literal { data, ... }`);
+      return undefined;
+    }
+    const obj = node.arguments[0] as ts.ObjectLiteralExpression;
+    const fields = new Map<string, ts.Expression>();
+    for (const p of obj.properties) {
+      if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
+        if (fields.has(p.name.text)) { this.diags.error(p.name, 'JETH301', `duplicate field '${p.name.text}'`); return undefined; }
+        fields.set(p.name.text, p.initializer);
+      } else if (ts.isShorthandPropertyAssignment(p)) {
+        if (fields.has(p.name.text)) { this.diags.error(p.name, 'JETH301', `duplicate field '${p.name.text}'`); return undefined; }
+        fields.set(p.name.text, p.name);
+      } else {
+        this.diags.error(p, 'JETH301', `${method}(...) options must be plain 'field: value' members`);
+        return undefined;
+      }
+    }
+    const allowed = new Set(['data', 'gas']);
+    if (op === 'call') allowed.add('value'); // staticcall cannot send value
+    if (!isTry) allowed.add('success');
+    for (const k of fields.keys()) {
+      if (!allowed.has(k)) {
+        // give a precise message for the two structural rules.
+        if (k === 'value' && op === 'staticcall') this.diags.error(obj, 'JETH302', `staticcall cannot send value (remove 'value')`);
+        else if (k === 'success' && isTry) this.diags.error(obj, 'JETH303', `${method}(...) is the raw escape hatch and takes no 'success' (handle [ok, ret] yourself)`);
+        else this.diags.error(obj, 'JETH301', `${method}(...): unknown option '${k}' (allowed: ${[...allowed].join(', ')})`);
+        return undefined;
+      }
+    }
+    const dataNode = fields.get('data');
+    if (!dataNode) { this.diags.error(obj, 'JETH304', `${method}(...) requires a 'data' (bytes) field`); return undefined; }
+    const data = this.checkExpr(dataNode, BYTES);
+    if (!data) return undefined;
+    if (data.type.kind !== 'bytes') { this.diags.error(dataNode, 'JETH305', `${method}(...) 'data' must be bytes, got ${displayName(data.type)}`); return undefined; }
+    let value: Expr | undefined;
+    if (op === 'call') {
+      const vNode = fields.get('value');
+      if (vNode) {
+        const v = this.checkExpr(vNode, U256);
+        if (!v) return undefined;
+        if (!isInteger(v.type)) { this.diags.error(vNode, 'JETH306', `${method}(...) 'value' must be an integer, got ${displayName(v.type)}`); return undefined; }
+        value = this.coerce(v, U256, vNode);
+      }
+    }
+    let gas: Expr | undefined;
+    const gNode = fields.get('gas');
+    if (gNode) {
+      const g = this.checkExpr(gNode, U256);
+      if (!g) return undefined;
+      if (!isInteger(g.type)) { this.diags.error(gNode, 'JETH306', `${method}(...) 'gas' must be an integer, got ${displayName(g.type)}`); return undefined; }
+      gas = this.coerce(g, U256, gNode);
+    }
+    // success checks (checked forms only). A single { condition, revert } OR an array of them.
+    const checks: SuccessCheck[] = [];
+    if (!isTry) {
+      const sNode = fields.get('success');
+      if (!sNode) { this.diags.error(obj, 'JETH307', `${method}(...) requires a 'success' field (one { condition, revert } object or an array of them)`); return undefined; }
+      const entries: ts.Expression[] = ts.isArrayLiteralExpression(sNode)
+        ? sNode.elements.filter((el): el is ts.Expression => !ts.isOmittedExpression(el))
+        : [sNode];
+      if (entries.length === 0) { this.diags.error(sNode, 'JETH307', `${method}(...) 'success' must contain at least one { condition, revert } entry`); return undefined; }
+      for (const entry of entries) {
+        const c = this.checkSuccessEntry(entry, method);
+        if (!c) return undefined;
+        checks.push(c);
+      }
+    }
+    return { data, value, gas, checks };
+  }
+
+  /** One success entry `{ condition: <bool with this.ok/this.data>, revert: "msg" | E(args) }`. */
+  private checkSuccessEntry(entry: ts.Expression, method: string): SuccessCheck | undefined {
+    if (!ts.isObjectLiteralExpression(entry)) { this.diags.error(entry, 'JETH308', `${method}(...) success entry must be an object { condition, revert }`); return undefined; }
+    let condNode: ts.Expression | undefined;
+    let revertNode: ts.Expression | undefined;
+    for (const p of entry.properties) {
+      if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
+        if (p.name.text === 'condition') condNode = p.initializer;
+        else if (p.name.text === 'revert') revertNode = p.initializer;
+        else { this.diags.error(p.name, 'JETH308', `success entry: unknown field '${p.name.text}' (allowed: condition, revert)`); return undefined; }
+      } else { this.diags.error(p, 'JETH308', 'success entry options must be plain `condition:` / `revert:` members'); return undefined; }
+    }
+    if (!condNode) { this.diags.error(entry, 'JETH308', 'success entry is missing `condition`'); return undefined; }
+    if (!revertNode) { this.diags.error(entry, 'JETH308', 'success entry is missing `revert`'); return undefined; }
+    // Bind `this.ok` (bool) + `this.data` (bytes) ONLY while checking the condition; restore after so
+    // they never leak. Nested calls are not expected, but save/restore makes it safe anyway.
+    const saved = this.callResultBindings;
+    this.callResultBindings = new Map<string, JethType>([['ok', BOOL], ['data', BYTES]]);
+    const cond = this.checkExpr(condNode, BOOL);
+    this.callResultBindings = saved;
+    if (!cond) return undefined;
+    if (cond.type.kind !== 'bool') { this.diags.error(condNode, 'JETH309', `success condition must be bool, got ${displayName(cond.type)}`); return undefined; }
+    const reason = this.checkRevertReason(revertNode);
+    if (!reason) return undefined;
+    return { cond, reason };
+  }
+
+  /** `<addr>.call/staticcall({...})` in value position -> a bytes Expr. The try forms are only valid
+   *  in a tuple destructuring (`let [ok, ret] = addr.tryCall({...})`), so they error here. */
+  private checkExternalCall(node: ts.CallExpression, method: string): Expr | undefined {
+    const recv = this.externalCallReceiver(node);
+    if (!recv) {
+      // not an address receiver: let other handling report it; emit a precise error.
+      this.diags.error(node, 'JETH310', `${method}(...) requires an address receiver`);
+      return undefined;
+    }
+    if (method === 'tryCall' || method === 'tryStaticcall') {
+      this.diags.error(node, 'JETH311', `${method}(...) returns [bool, bytes]; bind it with 'let [ok, ret] = ...'`);
+      return undefined;
+    }
+    const op: 'call' | 'staticcall' = method === 'staticcall' ? 'staticcall' : 'call';
+    const shape = this.checkExternalCallShape(node, method, op, false);
+    if (!shape) return undefined;
+    // mutability: a `call` may mutate callee/this state -> non-view; a `staticcall` is read-only (env).
+    if (op === 'call') this.currentWritesState = true;
+    else this.currentReadsEnv = true;
+    return { kind: 'extCall', type: BYTES, op, addr: recv, data: shape.data, value: shape.value, gas: shape.gas, checks: shape.checks };
+  }
+
+  /** `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: resolve the destructuring source +
+   *  component types ([bool, bytes]), or undefined if `node` is not a try-call. */
+  private resolveTryCall(node: ts.Expression): { source: DestructureSource; types: JethType[] } | undefined {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+    const method = node.expression.name.text;
+    if (method !== 'tryCall' && method !== 'tryStaticcall') return undefined;
+    const recv = this.externalCallReceiver(node);
+    if (!recv) { this.diags.error(node, 'JETH310', `${method}(...) requires an address receiver`); return undefined; }
+    const op: 'call' | 'staticcall' = method === 'tryStaticcall' ? 'staticcall' : 'call';
+    const shape = this.checkExternalCallShape(node, method, op, true);
+    if (!shape) return undefined;
+    if (op === 'call') this.currentWritesState = true;
+    else this.currentReadsEnv = true;
+    return {
+      source: { kind: 'extCall', op, addr: recv, data: shape.data, value: shape.value, gas: shape.gas },
+      types: [BOOL, BYTES],
+    };
+  }
+
+  /** `revertWith(b)`: bubble raw bytes as the revert payload (revert(add(b,0x20), mload(b))). */
+  private checkRevertWith(call: ts.CallExpression, out: Stmt[]): void {
+    if (call.arguments.length !== 1) { this.diags.error(call, 'JETH312', 'revertWith(...) takes exactly one bytes argument'); return; }
+    const v = this.checkExpr(call.arguments[0]!, BYTES);
+    if (!v) return;
+    if (v.type.kind !== 'bytes') { this.diags.error(call.arguments[0]!, 'JETH313', `revertWith(...) requires a bytes argument, got ${displayName(v.type)}`); return; }
+    out.push({ kind: 'revertWith', value: v });
+  }
+
   // ---- events --------------------------------------------------------------
 
   private checkEmit(call: ts.CallExpression, out: Stmt[]): void {
@@ -3529,9 +3709,15 @@ export class Analyzer {
       return;
     }
     const callName = this.tupleCallName(decl.initializer);
+    const tryCall = this.resolveTryCall(decl.initializer);
     let types: JethType[];
-    let source: { kind: 'call'; fn: string; args: Expr[] } | { kind: 'tuple'; values: Expr[] };
-    if (callName) {
+    let source: DestructureSource;
+    if (tryCall) {
+      // `let [ok, ret] = addr.tryCall/tryStaticcall({...})` -> [bool, bytes].
+      if (n !== 2) { this.diags.error(decl.name, 'JETH314', `tryCall/tryStaticcall destructuring expects exactly 2 names [ok, ret], got ${n}`); return; }
+      types = tryCall.types;
+      source = tryCall.source;
+    } else if (callName) {
       const r = this.resolveTupleCall(decl.initializer as ts.CallExpression, callName, n);
       if (!r) return;
       types = r.types;
@@ -5872,6 +6058,20 @@ export class Analyzer {
       }
     }
 
+    // Phase 6: `this.ok` / `this.data` scoped bindings inside a .call/.staticcall success condition.
+    // Resolved BEFORE constant/immutable/state lookup so they take precedence (and never leak outside
+    // the condition: callResultBindings is set only while checking it). Any OTHER `this.<x>` inside a
+    // condition still resolves normally (state/constant/immutable) via the guards below.
+    if (
+      this.callResultBindings &&
+      ts.isPropertyAccessExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      this.callResultBindings.has(node.name.text)
+    ) {
+      const t = this.callResultBindings.get(node.name.text)!;
+      return node.name.text === 'ok' ? { kind: 'callOk', type: t } : { kind: 'callData', type: t };
+    }
+
     // this.CONSTANT (read): inline the folded literal (no SLOAD; @constant is slot-free, like solc).
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && this.constantsByName.has(node.name.text)) {
       const c = this.constantsByName.get(node.name.text)!;
@@ -5946,6 +6146,17 @@ export class Analyzer {
       if (base && base.type.kind === 'address') {
         this.currentReadsEnv = true; // forbidden in @pure
         return { kind: 'balance', type: U256, addr: base };
+      }
+    }
+
+    // <address>.code -> bytes (EXTCODESIZE + EXTCODECOPY); <address>.codehash -> bytes32 (EXTCODEHASH).
+    // Both are environment reads (allowed in @view, forbidden in @pure), like .balance.
+    if (ts.isPropertyAccessExpression(node) && (node.name.text === 'code' || node.name.text === 'codehash')) {
+      const base = this.checkExpr(node.expression);
+      if (base && base.type.kind === 'address') {
+        this.currentReadsEnv = true; // forbidden in @pure
+        const member = node.name.text as 'code' | 'codehash';
+        return { kind: 'extCode', type: member === 'code' ? { kind: 'bytes' } : { kind: 'bytesN', size: 32 }, addr: base, member };
       }
     }
 
@@ -6530,6 +6741,17 @@ export class Analyzer {
       ['encode', 'encodePacked', 'encodeWithSelector', 'encodeWithSignature'].includes(node.expression.name.text)
     ) {
       return this.checkAbiEncode(node, node.expression.name.text);
+    }
+
+    // Phase 6: external low-level calls `<addr>.call/staticcall({ data, value?, gas?, success })`
+    // -> bytes (returndata). `tryCall`/`tryStaticcall` return [bool, bytes] and are only valid in a
+    // tuple destructuring (handled in checkTupleDecl); used in value position they error here.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      EXT_CALL_METHODS.has(node.expression.name.text)
+    ) {
+      return this.checkExternalCall(node, node.expression.name.text);
     }
 
     // object literal { ...base, x: v } / { x: 1n, y: 2n } -> struct construction when the

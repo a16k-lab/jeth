@@ -98,6 +98,19 @@ export type Expr =
   | { kind: 'blockhash'; type: JethType; arg: Expr } // blockhash(uint) -> bytes32
   | { kind: 'blobhash'; type: JethType; arg: Expr } // blobhash(uint) -> bytes32 (EIP-4844)
   | { kind: 'balance'; type: JethType; addr: Expr } // <address>.balance -> u256
+  // --- Phase 6: external low-level calls ---
+  // <addr>.code -> bytes (EXTCODESIZE + EXTCODECOPY); <addr>.codehash -> bytes32 (EXTCODEHASH)
+  | { kind: 'extCode'; type: JethType; addr: Expr; member: 'code' | 'codehash' }
+  // Scoped markers usable ONLY inside an extCall success condition: `this.ok` -> the CALL success bool,
+  // `this.data` -> the returndata bytes. The yul backend binds them to the call's captured registers
+  // while lowering the checks (callData is a bytes reference, resolved via lowerDynamic).
+  | { kind: 'callOk'; type: JethType }
+  | { kind: 'callData'; type: JethType }
+  // <addr>.call/staticcall({ data, value?, gas?, success }) -> bytes (returndata). Performs the
+  // CALL/STATICCALL binding ok+data, evaluates the ordered success checks (first failing one reverts
+  // with its reason), and yields the returndata bytes. <addr>.tryCall/tryStaticcall({...}) (checks
+  // empty) is lowered via DestructureSource 'extCall' instead; this Expr form is the bytes value.
+  | { kind: 'extCall'; type: JethType; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[] }
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1
   // --- Phase 4: dynamic arrays T[] ---
   | { kind: 'arrayLen'; type: JethType; arr: ArrayExpr } // a.length -> u256
@@ -259,10 +272,21 @@ export type LValue =
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] = v on a fixed-array memory local (wordOffset: a fixed-array field of a memory struct, p.a[i])
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number }; // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
 
+// A success condition for an external .call/.staticcall. `cond` is a boolean expression in which the
+// scoped bindings `this.ok` (the CALL success bool) and `this.data` (the returndata bytes) are visible;
+// if it is false, the call reverts with `reason`. Checks run in declared order; the first failure wins.
+export interface SuccessCheck {
+  cond: Expr;
+  reason: RevertReason;
+}
+
 // The right-hand side of a tuple destructuring: a multi-value internal call, or a tuple of expressions.
 export type DestructureSource =
   | { kind: 'call'; fn: string; args: Expr[] } // `[a, b] = this.f()` (f has N value return components)
-  | { kind: 'tuple'; values: Expr[] }; // `[a, b] = [x, y]` (parallel assign / swap)
+  | { kind: 'tuple'; values: Expr[] } // `[a, b] = [x, y]` (parallel assign / swap)
+  // `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: the raw escape hatch (no success checks).
+  // Yields two components: ok (bool) and ret (bytes returndata, always captured even on failure).
+  | { kind: 'extCall'; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr };
 
 export type Stmt =
   | { kind: 'return'; value?: Expr }
@@ -291,7 +315,9 @@ export type Stmt =
   | { kind: 'push'; arr: ArrayExpr; value?: Expr }
   | { kind: 'pop'; arr: ArrayExpr }
   | { kind: 'bytesPush'; loc: LValue; value?: Expr } // this.b.push(<bytes1>) / push() on a storage `bytes` (loc: direct var / struct field / mapping value / array elem)
-  | { kind: 'bytesPop'; loc: LValue }; // this.b.pop() on a storage `bytes` (loc: direct var / struct field / mapping value / array elem)
+  | { kind: 'bytesPop'; loc: LValue } // this.b.pop() on a storage `bytes` (loc: direct var / struct field / mapping value / array elem)
+  // --- Phase 6: revertWith(b) bubbles raw bytes as the revert: revert(add(b,0x20), mload(b)) ---
+  | { kind: 'revertWith'; value: Expr };
 
 // A revert payload. 'empty' -> revert(0,0); 'errorString' -> Error(string) blob;
 // 'custom' -> a user-declared custom error (selector + ABI-encoded static args).
