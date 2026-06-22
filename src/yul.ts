@@ -1023,6 +1023,22 @@ ${indent(runtime, 6)}
           }
           break;
         }
+        if (s.target.kind === 'local' && s.target.type.kind === 'struct') {
+          // Re-point a struct MEMORY local by assignment: `s = P(...)` / `s = this.p` / `s = other`.
+          // Solidity rebinds the local to a fresh image - a constructed struct (structNew) builds
+          // fresh; a STORAGE struct (structValue / mapStorageValue / structArrayElem / placeRead) or a
+          // CALLDATA struct param (cdAggregateValue) is COPIED into fresh memory (a later `s.f = ...`
+          // must NOT alias the source); another memory struct (memAggregate) or a struct-returning
+          // call ALIASES the pointer (a memory reference). A DYNAMIC-field struct uses the
+          // pointer-headed image builder, a static struct the flat ABI-image materializer - exactly
+          // the helpers the `let s: P = <src>` DECLARATION path uses, so the image is byte-identical.
+          const reg = this.ctxLookup(ctx, s.target.varName);
+          const ptr = isDynamicType(s.target.type)
+            ? this.buildDynStructLocal(s.target.type, s.value, ctx, out)
+            : this.aggToMemPtr(s.value, ctx, out);
+          out.push(`${reg} := ${ptr}`);
+          break;
+        }
         // Bind the RHS before resolving a mapping key (or any keyed/indexed target below) so a
         // side-effecting key (m[inc()] = inc()) does not run before a side-effecting RHS - solc
         // evaluates the RHS first. The optimizer collapses the temp for pure operands (byte-identical).
@@ -2629,13 +2645,27 @@ ${indent(runtime, 6)}
         }
         constSlot = null;
       } else {
-        // mapping key: slot = keccak256(keyWord . currentSlot)
-        const k = this.lowerExpr(step.key, ctx, out);
-        const tmp = this.fresh();
-        out.push(`mstore(0x00, ${k})`);
-        out.push(`mstore(0x20, ${constSlot !== null ? constSlot : slot})`);
-        out.push(`let ${tmp} := keccak256(0x00, 0x40)`);
-        slot = tmp;
+        // mapping key: slot = keccak256(key . currentSlot). A bytes/string key hashes its
+        // RAW content bytes (unpadded) concatenated with the slot word (the same derivation
+        // as mappingSlot()); a value-type key hashes the 32-byte key word + slot word.
+        const cur = constSlot !== null ? String(constSlot) : slot;
+        if (isBytesLike(step.key.type)) {
+          const { mp, len } = this.toMemory(this.lowerDynamic(step.key, ctx, out), out);
+          const ptr = this.fresh();
+          out.push(`let ${ptr} := mload(0x40)`);
+          out.push(`mcopy(${ptr}, add(${mp}, 0x20), ${len})`);
+          out.push(`mstore(add(${ptr}, ${len}), ${cur})`);
+          const tmp = this.fresh();
+          out.push(`let ${tmp} := keccak256(${ptr}, add(${len}, 0x20))`);
+          slot = tmp;
+        } else {
+          const k = this.lowerExpr(step.key, ctx, out);
+          const tmp = this.fresh();
+          out.push(`mstore(0x00, ${k})`);
+          out.push(`mstore(0x20, ${cur})`);
+          out.push(`let ${tmp} := keccak256(0x00, 0x40)`);
+          slot = tmp;
+        }
         constSlot = null;
         offset = 0;
       }
@@ -3290,6 +3320,7 @@ ${indent(runtime, 6)}
   private buildDynStructLocal(struct: JethType & { kind: 'struct' }, init: Expr, ctx: LowerCtx, out: string[]): string {
     if (init.kind === 'structNew') return this.allocDynStructToMem(init, ctx, out);
     if (init.kind === 'memDynStructValue') return this.ctxLookup(ctx, init.local); // alias
+    if (init.kind === 'call') return this.lowerExpr(init, ctx, out); // a struct-returning internal call yields the pointer-headed image pointer (ALIAS, like solc memory references)
     if (init.kind === 'ternary') return this.lowerExpr(init, ctx, out); // selects an already-built branch image pointer
     if (init.kind === 'cdDynStructValue') return this.buildDynStructFromCalldata(struct, init, ctx, out);
     // a storage struct source (structValue / mapStorageValue / structArrayElem / placeRead).
@@ -4223,6 +4254,9 @@ ${indent(runtime, 6)}
       if (a.type.kind === 'array' && a.type.length === undefined) return this.lowerExpr(a, ctx, out);
       return this.allocAggToMem(a, ctx, out);
     }
+    // a DYNAMIC-field struct (constructor / memory / storage / calldata source) uses the
+    // pointer-headed image builder; only a STATIC structNew uses the flat ABI image.
+    if (a.type.kind === 'struct' && isDynamicType(a.type)) return this.buildDynStructLocal(a.type, a, ctx, out);
     if (a.kind === 'structNew') return this.allocAggToMem(a, ctx, out);
     if (a.kind === 'arrayValue') {
       const b = a.arr.base;

@@ -1781,6 +1781,45 @@ export class Analyzer {
       // multi-value return: `return [a, b, ...]` matching the function's tuple return type.
       if (this.currentReturnTypes) {
         const rts = this.currentReturnTypes;
+        // `return mk(args)` / `return this.mk(args)`: forward a tuple-returning INTERNAL call
+        // directly (solc accepts this). Desugar to `let [t0..tk] = mk(args); return [t0,..,tk]`,
+        // reusing the tested tuple-destructure (call source) + multi-return lowering. The synthetic
+        // locals are registered in the same side-tables checkTupleDecl uses, so the returnTuple
+        // component reads resolve through the right codec per component kind.
+        const tcName = node.expression ? this.tupleCallName(node.expression) : undefined;
+        if (tcName) {
+          const r = this.resolveTupleCall(node.expression as ts.CallExpression, tcName, rts.length);
+          if (!r) return;
+          for (let i = 0; i < rts.length; i++) {
+            if (!typesEqual(r.types[i]!, rts[i]!) && !isImplicitWiden(r.types[i]!, rts[i]!)) {
+              this.diags.error(node.expression!, 'JETH060', `returned tuple component ${i} is ${displayName(r.types[i]!)}, expected ${displayName(rts[i]!)}`);
+              return;
+            }
+          }
+          const names: string[] = [];
+          for (let i = 0; i < rts.length; i++) {
+            const nm = this.freshSynthName('__jeth_tret_');
+            this.declareLocal(nm, r.types[i]!);
+            const ct = r.types[i]!;
+            if (isBytesLike(ct)) this.memDynLocals.add(nm);
+            else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element)) this.memArrayLocals.add(nm);
+            else if (ct.kind === 'struct') this.memAggregateLocals.set(nm, ct);
+            names.push(nm);
+          }
+          out.push({ kind: 'tupleDecl', names, types: r.types, source: { kind: 'call', fn: r.fn, args: r.args } });
+          const fwd: Expr[] = names.map((nm, i) => {
+            const ct = r.types[i]!;
+            let read: Expr;
+            if (isBytesLike(ct)) read = { kind: 'dynLocalRead', type: ct, name: nm };
+            else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element))
+              read = { kind: 'arrayValue', type: ct, arr: { base: { kind: 'memArray', varName: nm }, elem: ct.element } };
+            else if (ct.kind === 'struct') read = { kind: 'memAggregate', type: ct, local: nm };
+            else read = { kind: 'localRead', type: ct, name: nm };
+            return this.coerce(read, rts[i]!, node.expression!);
+          });
+          out.push({ kind: 'returnTuple', values: fwd, types: rts });
+          return;
+        }
         if (!node.expression || !ts.isArrayLiteralExpression(node.expression)) {
           this.diags.error(node, 'JETH060', `function must return a ${rts.length}-tuple [${rts.map(displayName).join(', ')}]`);
           return;
@@ -2031,6 +2070,15 @@ export class Analyzer {
     // string / dynamic-array / dynamic-struct memory local is deferred.
     if (lv.kind === 'local') {
       if (isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined))) {
+        out.push({ kind: 'deleteStmt', target: lv });
+        return;
+      }
+      // a bytes/string or DYNAMIC-array memory local: delete rebinds it to a fresh empty image
+      // (length-0 block: one zeroed word). `.length` reads mload(ptr)==0, matching solc, and an
+      // alias keeps the old value. Dynamic structs / fixed arrays with dynamic elements stay gated
+      // (their memory head is pointers, not a length-prefixed block, so a 1-word rebind would not
+      // reproduce solc's per-member empty reset).
+      if (isBytesLike(t) || (t.kind === 'array' && t.length === undefined)) {
         out.push({ kind: 'deleteStmt', target: lv });
         return;
       }
@@ -2948,6 +2996,7 @@ export class Analyzer {
             e.kind === 'structNew' || e.kind === 'structValue' || e.kind === 'mapStorageValue' ||
             e.kind === 'structArrayElem' || e.kind === 'cdDynStructValue' || e.kind === 'memDynStructValue' ||
             e.kind === 'ternary' ||
+            (e.kind === 'call' && e.type.kind === 'struct') ||
             (e.kind === 'placeRead' && e.type.kind === 'struct');
           if (!okInit) {
             this.diags.error(decl.initializer, 'JETH200', `a dynamic-field struct memory local must be initialized from a constructor ${(declared as JethType & { kind: 'struct' }).name}(...), a storage struct (this.s / this.m[k] / this.arr[i]), a calldata struct parameter, or another struct local`);
@@ -3367,7 +3416,7 @@ export class Analyzer {
       return undefined;
     }
     const rt = callee.returnType;
-    const returnSupported = rt.kind === 'void' || isStaticValueType(rt) || (aggOK && isMemByRef(rt));
+    const returnSupported = rt.kind === 'void' || isStaticValueType(rt) || (aggOK && (isMemByRef(rt) || this.isSupportedDynStructLocal(rt)));
     if (!returnSupported) {
       const hint = isMemByRef(rt) && !aggOK ? ' (aggregate returns require the callee to be @internal or @private)' : '';
       this.diags.error(node, 'JETH243', `internal call to '${name}' is not supported yet (return type ${displayName(rt)} is not supported${hint})`);
@@ -5404,7 +5453,12 @@ export class Analyzer {
       node.expression.arguments.length === 1 &&
       ts.isIdentifier(node.expression.arguments[0]!)
     ) {
-      const t = resolvePrimitiveName((node.expression.arguments[0] as ts.Identifier).text);
+      const argName = (node.expression.arguments[0] as ts.Identifier).text;
+      if (this.isEnumName(argName)) {
+        const et = this.structsByName.get(argName)! as JethType & { kind: 'uint'; enumMembers: string[] };
+        return { kind: 'literalInt', type: et, value: node.name.text === 'max' ? BigInt(et.enumMembers.length - 1) : 0n };
+      }
+      const t = resolvePrimitiveName(argName);
       if (!t || !isInteger(t)) {
         this.diags.error(node, 'JETH074', 'type(T).max/.min requires an integer type T');
         return undefined;
@@ -6903,7 +6957,9 @@ export class Analyzer {
         }
         if (tc.type !== 'const') {
           // a TYPED result is implicitly convertible to `expected` iff same signedness and not wider.
-          if (tc.type.kind !== expected.kind || (tc.type as { bits: number }).bits > (expected as { bits: number }).bits) {
+          const tb = (tc.type as { brand?: string }).brand;
+          const eb = (expected as { brand?: string }).brand;
+          if (tc.type.kind !== expected.kind || (tc.type as { bits: number }).bits > (expected as { bits: number }).bits || tb !== eb) {
             this.diags.error(node, 'JETH070', `type ${displayName(tc.type)} is not implicitly convertible to ${displayName(expected)}`);
             return tc.value;
           }
@@ -7148,6 +7204,7 @@ export class Analyzer {
    *  the existing unbounded evalConstInt / rational path, preserving e.g. (10/4)*4 == 10 and 2**200. */
   private containsTypedConstOperand(node: ts.Expression): boolean {
     if (ts.isParenthesizedExpression(node)) return this.containsTypedConstOperand(node.expression);
+    if (this.isEnumConstNode(node)) return true;
     if (
       ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min') &&
       ts.isCallExpression(node.expression) && ts.isIdentifier(node.expression.expression) &&
@@ -7205,6 +7262,50 @@ export class Analyzer {
     return at.bits >= bt.bits ? at : bt;
   }
 
+  private isEnumConstNode(node: ts.Expression): boolean {
+    if (ts.isParenthesizedExpression(node)) return this.isEnumConstNode(node.expression);
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text)) return true;
+    if (
+      ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min') &&
+      ts.isCallExpression(node.expression) && ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'type' && node.expression.arguments.length === 1 &&
+      ts.isIdentifier(node.expression.arguments[0]!) && this.isEnumName((node.expression.arguments[0] as ts.Identifier).text)
+    ) return true;
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text) && node.arguments.length === 1) return true;
+    return false;
+  }
+
+  private evalEnumConst(
+    node: ts.Expression,
+  ): { value: bigint; type: JethType } | { err: string } | undefined {
+    if (ts.isParenthesizedExpression(node)) return this.evalEnumConst(node.expression);
+    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text)) {
+      const et = this.structsByName.get(node.expression.text)! as JethType & { kind: 'uint'; enumMembers: string[] };
+      const idx = et.enumMembers.indexOf(node.name.text);
+      if (idx < 0) return { err: `enum '${node.expression.text}' has no member '${node.name.text}'` };
+      return { value: BigInt(idx), type: et };
+    }
+    if (
+      ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min') &&
+      ts.isCallExpression(node.expression) && ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'type' && node.expression.arguments.length === 1 &&
+      ts.isIdentifier(node.expression.arguments[0]!) && this.isEnumName((node.expression.arguments[0] as ts.Identifier).text)
+    ) {
+      const et = this.structsByName.get((node.expression.arguments[0] as ts.Identifier).text)! as JethType & { kind: 'uint'; enumMembers: string[] };
+      return { value: node.name.text === 'max' ? BigInt(et.enumMembers.length - 1) : 0n, type: et };
+    }
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text) && node.arguments.length === 1) {
+      const et = this.structsByName.get(node.expression.text)! as JethType & { kind: 'uint'; enumMembers: string[] };
+      const inner = this.evalTypedConst(node.arguments[0]!);
+      if (inner === undefined || 'revert' in inner) return undefined; // a runtime-reverting inner is not a foldable enum const
+      if ('err' in inner) return inner;
+      if (inner.type !== 'const') return { err: `enum conversion ${node.expression.text}(...) requires a constant integer` };
+      if (inner.value < 0n || inner.value >= BigInt(et.enumMembers.length)) return { err: `value ${inner.value} is out of range for enum '${node.expression.text}' (0..${et.enumMembers.length - 1})` };
+      return { value: inner.value, type: et };
+    }
+    return undefined;
+  }
+
   /** Type-aware constant folder matching solc, used ONLY when containsTypedConstOperand(node) is true.
    *  Returns { value, type } where type is 'const' (int_const) or a concrete uintN/intN; { err } when
    *  solc rejects at COMPILE time (cast of an out-of-range int_const, sign mismatch, unary - on an
@@ -7218,6 +7319,10 @@ export class Analyzer {
     if (ts.isParenthesizedExpression(node)) return this.evalTypedConst(node.expression);
     const lit = this.asIntLiteral(node);
     if (lit !== undefined) return { value: lit, type: 'const' };
+    {
+      const ec = this.evalEnumConst(node);
+      if (ec !== undefined) return ec;
+    }
     // type(T).max/.min -> a TYPED value
     if (
       ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min') &&
@@ -7245,6 +7350,9 @@ export class Analyzer {
       if (t && isInteger(t) && node.arguments.length === 1) {
         const inner = this.evalTypedConst(node.arguments[0]!);
         if (inner === undefined || 'err' in inner || 'revert' in inner) return inner;
+        if (inner.type !== 'const' && isEnum(inner.type) && t.kind !== 'uint') {
+          return { err: `explicit conversion not allowed from ${displayName(inner.type)} to ${displayName(t)}` };
+        }
         // cast of an int_const: solc REJECTS an out-of-range literal (no truncation of int_const).
         if (inner.type === 'const') {
           if (!this.inRange(inner.value, t)) return { err: `explicit conversion of constant ${inner.value} out of range for ${displayName(t)}` };
@@ -7258,6 +7366,7 @@ export class Analyzer {
     if (ts.isPrefixUnaryExpression(node)) {
       const x = this.evalTypedConst(node.operand);
       if (x === undefined || 'err' in x || 'revert' in x) return x;
+      if (x.type !== 'const' && isEnum(x.type)) return { err: `operator cannot be applied to ${displayName(x.type)}` };
       if (node.operator === ts.SyntaxKind.MinusToken) {
         if (x.type === 'const') return { value: -x.value, type: 'const' };
         if (x.type.kind !== 'int') return { err: `unary - cannot be applied to ${displayName(x.type)}` };
@@ -7279,6 +7388,8 @@ export class Analyzer {
       if (a === undefined || 'err' in a || 'revert' in a) return a;
       const b = this.evalTypedConst(node.right);
       if (b === undefined || 'err' in b || 'revert' in b) return b;
+      if (a.type !== 'const' && isEnum(a.type)) return { err: `operator '${op}' cannot be applied to ${displayName(a.type)}` };
+      if (b.type !== 'const' && isEnum(b.type)) return { err: `operator '${op}' cannot be applied to ${displayName(b.type)}` };
       // shift: result type = LHS type. A typed LHS truncates to its width; an int_const LHS stays unbounded.
       if (op === '<<' || op === '>>') {
         if (b.value < 0n) return { err: 'negative shift amount' };

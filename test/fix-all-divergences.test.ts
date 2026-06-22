@@ -1037,3 +1037,64 @@ describe('creation callvalue guard + storage dyn-struct nested-aggregate event (
     );
   });
 });
+
+describe('deep-sweep #2 over-rejections (byte-identical to solc)', () => {
+  it('re-point a struct memory local via assignment (= ctor / = storage copy / = alias)', async () => {
+    await rt(
+      `@struct class P { x: u256; y: u256; } @contract class C { @external @pure f(a: u256): u256 { let s: P = P(a, a); s = P(9n, 9n); return s.x; } }`,
+      `contract C { struct P { uint256 x; uint256 y; } function f(uint256 a) external pure returns (uint256) { P memory s = P(a, a); s = P(9, 9); return s.x; } }`,
+      [{ sig: 'f(uint256)', args: W(5n) }],
+    );
+    // = storage is a COPY: mutating the local must not touch storage
+    await rt(
+      `@struct class P { x: u256; y: u256; } @contract class C { @state p: P; @external set(a: u256): void { this.p = P(a, a); } @external f(): u256 { let t: P = P(0n, 0n); t = this.p; t.x = 999n; return this.p.x; } }`,
+      `contract C { struct P { uint256 x; uint256 y; } P p; function set(uint256 a) external { p = P(a, a); } function f() external returns (uint256) { P memory t = P(0, 0); t = p; t.x = 999; return p.x; } }`,
+      [{ sig: 'set(uint256)', args: W(12345n) }, { sig: 'f()' }],
+    );
+  });
+
+  it('delete a memory string / dynamic-array local (rebind to empty)', async () => {
+    await rt(
+      `@contract class C { @external f(s: string): string { let b: string = s; delete b; return b; } }`,
+      `contract C { function f(string calldata s) external pure returns (string memory) { string memory b = s; delete b; return b; } }`,
+      [{ sig: 'f(string)', args: W(0x20n) + W(3n) + Buffer.from('abc').toString('hex').padEnd(64, '0') }],
+    );
+    expect(jethAccepts(`@contract class C { @external @pure f(): u256 { let a: u256[] = [1n,2n,3n]; delete a; return a.length; } }`)).toBe(true);
+  });
+
+  it('return a tuple-valued internal call directly', async () => {
+    await rt(
+      `@contract class C { mk(n: u256): [u256, u256] { return [n, n + 1n]; } @external @pure f(n: u256): [u256, u256] { return this.mk(n); } }`,
+      `contract C { function mk(uint256 n) internal pure returns (uint256, uint256){ return (n, n+1); } function f(uint256 n) external pure returns (uint256, uint256){ return mk(n); } }`,
+      [{ sig: 'f(uint256)', args: W(5n) }],
+    );
+  });
+
+  it('internal call returning a struct with a dynamic field', async () => {
+    await rt(
+      `@struct class S { a: u256; s: string } @contract class C { mk(): S { return S(1n, "hello-world!"); } @external @pure f(): u256 { let r: S = this.mk(); return r.a; } @external @pure g(): string { let r: S = this.mk(); return r.s; } }`,
+      `contract C { struct S { uint256 a; string s; } function mk() internal pure returns (S memory){ return S(1, "hello-world!"); } function f() external pure returns (uint256){ S memory r = mk(); return r.a; } function g() external pure returns (string memory){ S memory r = mk(); return r.s; } }`,
+      [{ sig: 'f()' }, { sig: 'g()' }],
+    );
+  });
+
+  it('enum const folding: type(Enum).max/.min, @constant enum, @constant int from enum', async () => {
+    await rt(
+      `enum Color{Red,Green,Blue}\n@contract class C { @constant K: u8 = u8(Color.Blue); @constant DEF: Color = Color.Green; @external @pure mx(): u8 { return u8(type(Color).max); } @external @pure mn(): u8 { return u8(type(Color).min); } @external @pure k(): u8 { return this.K; } @external @pure def(): u8 { return u8(this.DEF); } }`,
+      `contract C { enum Color{Red,Green,Blue} uint8 constant K = uint8(Color.Blue); Color constant DEF = Color.Green; function mx() external pure returns(uint8){ return uint8(type(Color).max); } function mn() external pure returns(uint8){ return uint8(type(Color).min); } function k() external pure returns(uint8){ return K; } function def() external pure returns(uint8){ return uint8(DEF); } }`,
+      [{ sig: 'mx()' }, { sig: 'mn()' }, { sig: 'k()' }, { sig: 'def()' }],
+    );
+  });
+
+  it('mapping with a dynamic (string) key and a STRUCT value: field write/read', async () => {
+    const k = W(0x40n) + W(0n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0'); // f(string,uint256): [k off=0x40][a]...
+    await rt(
+      `@struct class S { a: u256; b: u256 } @contract class C { @state m: mapping<string, S>; @external f(key: string, a: u256): void { this.m[key].a = a; } @external @view g(key: string): u256 { return this.m[key].a; } }`,
+      `contract C { struct S { uint256 a; uint256 b; } mapping(string=>S) m; function f(string calldata key, uint256 a) external { m[key].a = a; } function g(string calldata key) external view returns(uint256){ return m[key].a; } }`,
+      [
+        { sig: 'f(string,uint256)', args: W(0x40n) + W(77n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') },
+        { sig: 'g(string)', args: W(0x20n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') },
+      ],
+    );
+  });
+});
