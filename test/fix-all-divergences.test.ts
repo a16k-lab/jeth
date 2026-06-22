@@ -903,3 +903,57 @@ describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to
     ]);
   });
 });
+
+describe('calldata dynamic-struct DEEP field access (byte-identical to solc)', () => {
+  // string tail = [len][right-padded data]; pad to a 32-byte boundary
+  const strT = (s: string): string => {
+    const b = Buffer.from(s, 'utf8');
+    const pad = Math.ceil(b.length / 32) * 32 || 0;
+    return W(BigInt(b.length)) + b.toString('hex').padEnd(pad * 2, '0');
+  };
+
+  it('#6 return a whole nested struct field (o.inner) of a calldata dyn-struct param', async () => {
+    const jeth = `@struct class I { name: string; vals: u256[] } @struct class O { id: u256; inner: I; tag: u256 } @contract class C { @external @pure g(o: O): I { return o.inner; } }`;
+    const sol = `contract C { struct I { string name; uint256[] vals; } struct O { uint256 id; I inner; uint256 tag; } function g(O calldata o) external pure returns(I memory){ return o.inner; } }`;
+    const inner = (nm: string, vals: bigint[]) => {
+      const name = strT(nm);
+      const valsBlob = W(BigInt(vals.length)) + vals.map(W).join('');
+      return W(0x40n) + W(BigInt(0x40 + name.length / 2)) + name + valsBlob;
+    };
+    const O = (id: bigint, nm: string, vals: bigint[], tag: bigint) => W(id) + W(0x60n) + W(tag) + inner(nm, vals);
+    await rt(jeth, sol, [
+      { sig: 'g((uint256,(string,uint256[]),uint256))', args: W(0x20n) + O(1n, 'hello-world-inner-name', [11n, 22n, 33n], 99n) },
+      { sig: 'g((uint256,(string,uint256[]),uint256))', args: W(0x20n) + O(5n, '', [], 7n) }, // empty name + empty vals
+    ]);
+  });
+
+  it('#11 element of a string[] field (s.tags[i]) incl OOB Panic(0x32)', async () => {
+    const jeth = `@struct class S { id: u256; tags: string[] } @contract class C { @external @pure g(s: S, i: u256): string { return s.tags[i]; } }`;
+    const sol = `contract C { struct S { uint256 id; string[] tags; } function g(S calldata s, uint256 i) external pure returns(string memory){ return s.tags[i]; } }`;
+    const t = ['ab', 'this-is-a-much-longer-tag-value!!', ''].map(strT);
+    const table = W(BigInt(3 * 32)) + W(BigInt(3 * 32 + t[0]!.length / 2)) + W(BigInt(3 * 32 + (t[0]!.length + t[1]!.length) / 2));
+    const Sval = W(7n) + W(0x40n) + W(3n) + table + t.join('');
+    const cd = (i: bigint) => W(0x40n) + W(i) + Sval;
+    await rt(jeth, sol, [0n, 1n, 2n, 3n].map((i) => ({ sig: 'g((uint256,string[]),uint256)', args: cd(i) })));
+  });
+
+  it('#12 element of a T[][] field (s.grid[i][j]) incl both-dim OOB', async () => {
+    const jeth = `@struct class S { id: u256; grid: u256[][] } @contract class C { @external @pure g(s: S, i: u256, j: u256): u256 { return s.grid[i][j]; } }`;
+    const sol = `contract C { struct S { uint256 id; uint256[][] grid; } function g(S calldata s, uint256 i, uint256 j) external pure returns(uint256){ return s.grid[i][j]; } }`;
+    const rows = [[1n], [2n, 3n, 4n, 5n], []].map((r) => W(BigInt(r.length)) + r.map(W).join(''));
+    const table = W(BigInt(3 * 32)) + W(BigInt(3 * 32 + rows[0]!.length / 2)) + W(BigInt(3 * 32 + (rows[0]!.length + rows[1]!.length) / 2));
+    const Sval = W(9n) + W(0x40n) + W(3n) + table + rows.join('');
+    const cd = (i: bigint, j: bigint) => W(0x60n) + W(i) + W(j) + Sval;
+    await rt(jeth, sol, ([[1n, 2n], [0n, 0n], [0n, 1n], [3n, 0n]] as [bigint, bigint][]).map(([i, j]) => ({ sig: 'g((uint256,uint256[][]),uint256,uint256)', args: cd(i, j) })));
+  });
+
+  it('#13 field of a dynamic-struct-array element field (s.items[i].name) incl OOB', async () => {
+    const jeth = `@struct class It { name: string; v: u256 } @struct class S { id: u256; items: It[] } @contract class C { @external @pure g(s: S, i: u256): string { return s.items[i].name; } }`;
+    const sol = `contract C { struct It { string name; uint256 v; } struct S { uint256 id; It[] items; } function g(S calldata s, uint256 i) external pure returns(string memory){ return s.items[i].name; } }`;
+    const mkIt = (nm: string, v: bigint) => W(0x40n) + W(v) + strT(nm);
+    const i0 = mkIt('aa', 10n), i1 = mkIt('this-name-is-deliberately-longer!', 20n);
+    const Sval = W(8n) + W(0x40n) + W(2n) + W(BigInt(2 * 32)) + W(BigInt(2 * 32 + i0.length / 2)) + i0 + i1;
+    const cd = (i: bigint) => W(0x40n) + W(i) + Sval;
+    await rt(jeth, sol, [0n, 1n, 2n].map((i) => ({ sig: 'g((uint256,(string,uint256)[]),uint256)', args: cd(i) })));
+  });
+});

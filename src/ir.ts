@@ -146,7 +146,10 @@ export type Expr =
   // (re-encoded as a standalone top-level value on return, or .length / [i]).
   | { kind: 'cdDynStructField'; type: JethType; place: CdDynPlace }
   // The whole dynamic struct param (for `return d` echo). Codegen re-encodes it.
-  | { kind: 'cdDynStructValue'; type: JethType; param: string };
+  // `place` (when set) targets a nested STRUCT field of a dynamic-struct param
+  // (return o.inner): the encoder resolves that field's tuple-start base via the
+  // navigator and re-encodes it as a standalone tuple (param is then unused).
+  | { kind: 'cdDynStructValue'; type: JethType; param: string; place?: CdDynPlace };
 
 /** A storage location reached by navigating a chain of field/index/key steps from
  *  a root state variable. Resolves at codegen to a (slot expr, byte offset). */
@@ -218,6 +221,13 @@ export interface ArrayExpr {
     //     lowerPlace(path).slot; data at keccak(that slot). ---
     | { kind: 'placeArray'; path: AccessPath } // inner dynamic array at a runtime length slot
     | { kind: 'cdDynArrayField'; place: CdDynPlace } // a dynamic value-array field of a calldata dynamic-struct param (s.xs): data via the tuple tail offset
+    // an INNER array reached by indexing a NESTED-dynamic-array field of a calldata
+    // dynamic-struct param (s.grid[i] of u256[][], s.deep[i][j] of u256[][][]): the
+    // field's tail decodes to (tableStart, len) via the navigator, then each index
+    // descends one inner-offset-table level. `indices` lists the steps outer-to-inner
+    // (>=1); the resolved array's element type is `elem`. Mirrors cdNestedElem but the
+    // root array comes from a CdDynPlace field rather than a named param.
+    | { kind: 'cdDynFieldNested'; place: CdDynPlace; indices: Expr[] }
     | { kind: 'cdDynFixedField'; place: CdDynPlace; length: number } // an inline fixed-array-of-value field of a calldata dynamic-struct param (s.xs where xs: Arr<T,N>): N element words inline at the field's head offset
     | { kind: 'memArray'; varName: string } // a MEMORY array local (register holds a pointer to [len][elems])
     | { kind: 'memArrayExpr'; expr: Expr }; // a MEMORY array produced by an expression (a ternary etc.); expr lowers to the pointer

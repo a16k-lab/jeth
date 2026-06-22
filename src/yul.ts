@@ -711,13 +711,31 @@ ${indent(runtime, 6)}
             // a whole calldata dynamic-struct param echo (return s): the recursive
             // calldata encoder handles any field shape incl. dynamic-array fields
             // (unbounded), unlike the tuple-specific encoder.
-            if (s.value.kind === 'cdDynStructValue') {
+            if (s.value.kind === 'cdDynStructValue' && !s.value.place) {
               const { ptr, size } = this.echoParam(s.value.param, s.value.type, ctx, out);
+              out.push(`return(${ptr}, ${size})`);
+              break;
+            }
+            // a whole nested-struct field of a dyn-struct param (return o.inner): re-encode
+            // it as a standalone tuple from its resolved calldata tuple-start, reusing the
+            // unbounded recursive calldata->memory encoder (abiEncFromCd), the same codec the
+            // whole-param echo (echoParam) and the abi.encode path use - so any inner field
+            // shape (value-array, bytes/string, nested struct) is handled byte-identically.
+            if (s.value.kind === 'cdDynStructValue' && s.value.place) {
+              const { ptr, size } = this.echoCdDynField(s.value.place, s.value.type, ctx, out);
               out.push(`return(${ptr}, ${size})`);
               break;
             }
             // a DYNAMIC struct return: [head 0x20][tuple head/tail at byte 0x20].
             const { ptr, size } = this.encodeDynStructReturn(s.value, ctx, out);
+            out.push(`return(${ptr}, ${size})`);
+            break;
+          }
+          // a whole STATIC nested-struct field of a dyn-struct param (return o.inner where
+          // the inner struct is all-static): re-encode it flat (no head wrapper) from its
+          // resolved calldata tuple-start via the recursive calldata->memory codec.
+          if (s.value.kind === 'cdDynStructValue' && s.value.place) {
+            const { ptr, size } = this.echoCdDynField(s.value.place, s.value.type, ctx, out);
             out.push(`return(${ptr}, ${size})`);
             break;
           }
@@ -2722,6 +2740,47 @@ ${indent(runtime, 6)}
       out.push(`let ${dataPtr}, ${len} := ${this.calldataArrayAt()}(${base}, ${offPtr}, ${stride})`);
       return { src: 'calldata', offset: dataPtr, length: len, elem: arr.elem };
     }
+    if (arr.base.kind === 'cdDynFieldNested') {
+      // An inner array reached by indexing a NESTED-dynamic-array field of a calldata dyn-struct
+      // param (s.grid[i] of u256[][], s.deep[i][j] of u256[][][]). First decode the FIELD's tail to
+      // (tableStart, outerLen): the field's head slot holds an offset to the array header, decoded with
+      // the ARRAY helper at stride 0x20 (the outer element is a dynamic array = one offset word each), so
+      // tableStart = the word after the length word = the per-element offset base. Then descend one inner-
+      // offset-table level per index, bounds-checking each dim (Panic 0x32), exactly like cdNestedElem.
+      const place = arr.base.place;
+      const cbase = this.lowerCdDynBase(place, ctx, out);
+      const last = place.steps[place.steps.length - 1]!;
+      const offPtr = last.headWords === 0 ? cbase : `add(${cbase}, ${last.headWords * 32})`;
+      const tableStart = this.fresh();
+      const outerLen = this.fresh();
+      out.push(`let ${tableStart}, ${outerLen} := ${this.calldataArrayAt()}(${cbase}, ${offPtr}, 0x20)`);
+      const fieldArr = last.fieldType as JethType & { kind: 'array' };
+      let base = tableStart;
+      let count: string = outerLen;
+      let elemT: JethType = fieldArr.element;
+      arr.base.indices.forEach((idxExpr) => {
+        const i = this.fresh();
+        out.push(`let ${i} := ${this.lowerExpr(idxExpr, ctx, out)}`);
+        out.push(`if iszero(lt(${i}, ${count})) { ${this.panic()}(0x32) }`);
+        if (elemT.kind === 'array' && elemT.length === undefined) {
+          const stride = isDynamicType(elemT.element) ? 32 : abiHeadWords(elemT.element) * 32;
+          const nb = this.fresh();
+          const nl = this.fresh();
+          out.push(`let ${nb}, ${nl} := ${this.calldataInnerArray()}(${base}, ${i}, ${stride})`);
+          base = nb;
+          count = nl;
+        } else if (elemT.kind === 'array' && elemT.length !== undefined) {
+          const nb = this.fresh();
+          out.push(`let ${nb} := ${this.calldataNestedOff()}(${base}, ${i})`);
+          base = nb;
+          count = String(elemT.length);
+        } else {
+          throw new UnsupportedError(`cannot index calldata dyn-struct nested field element of kind '${elemT.kind}'`);
+        }
+        elemT = (elemT as JethType & { kind: 'array' }).element;
+      });
+      return { src: 'calldata', offset: base, length: count, elem: arr.elem };
+    }
     if (arr.base.kind === 'cdDynFixedField') {
       // an inline fixed-array-of-value field (s.xs where xs: Arr<T,N>): the N element words sit inline
       // in the tuple head at the field's byte offset. No tail decode: element i is the word at
@@ -4424,6 +4483,39 @@ ${indent(runtime, 6)}
     const size = this.abiEncFromStorage(t, String(slot), 0, `add(${ptr}, 0x20)`, out);
     out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
     return { ptr, size: `add(0x20, ${size})` };
+  }
+
+  /** Echo a whole nested-STRUCT field of a dynamic-struct calldata param (return o.inner)
+   *  into a fresh ABI return blob [0x20][tuple encoding]. Resolve the inner struct's tuple
+   *  start via the navigator: lowerCdDynBase folds every step but the last to the containing
+   *  tuple base; the last step's field is then resolved - a DYNAMIC nested struct reads its
+   *  offset word (base resets to base+offset, calldataTupleAt) while a STATIC one is inline
+   *  at the field offset. The whole inner struct is re-encoded from that tuple base by the
+   *  same recursive calldata->memory codec (abiEncFromCd) the whole-param echo uses. */
+  private echoCdDynField(place: CdDynPlace, t: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+    const struct = t as JethType & { kind: 'struct' };
+    const base = this.lowerCdDynBase(place, ctx, out);
+    const last = place.steps[place.steps.length - 1]!;
+    const fieldOff = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
+    let tupleStart: string;
+    if (last.crossDynamic) {
+      const nb = this.fresh();
+      out.push(`let ${nb} := ${this.calldataTupleAt()}(${base}, ${fieldOff}, ${tupleHeadWords(struct) * 32})`);
+      tupleStart = nb;
+    } else {
+      tupleStart = fieldOff;
+    }
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    if (isDynamicType(t)) {
+      out.push(`mstore(${ptr}, 0x20)`);
+      const size = this.abiEncFromCd(t, tupleStart, `add(${ptr}, 0x20)`, true, out);
+      out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
+      return { ptr, size: `add(0x20, ${size})` };
+    }
+    const size = this.abiEncFromCd(t, tupleStart, ptr, true, out);
+    out.push(`mstore(0x40, add(${ptr}, ${size}))`);
+    return { ptr, size };
   }
 
   /** ABI-encode a value of type `t` read from a RUNTIME storage `slotExpr` as a full
