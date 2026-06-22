@@ -6860,6 +6860,14 @@ export class Analyzer {
     // bytesN constant: `bytesN(<int literal>)` -> the value LEFT-aligned in the high N bytes (the
     // bytesN register form), matching solc's bytesN literal. The bare literal 0 also folds to zero.
     if (expected.kind === 'bytesN') {
+      // `~bytesN_const`: complement the value within the high N bytes (the bytesN register form),
+      // leaving the low (32-N) bytes zero. solc: ~bytes1(0)=0xff..(byte 0), ~bytes4(0x12345678)=0xedcba987.
+      if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.TildeToken) {
+        const v = this.foldConstant(node.operand, expected);
+        if (typeof v !== 'bigint') return undefined;
+        const highMask = ((1n << BigInt(expected.size * 8)) - 1n) << BigInt((32 - expected.size) * 8);
+        return (~v) & highMask;
+      }
       if (
         ts.isCallExpression(node) &&
         ts.isIdentifier(node.expression) &&
