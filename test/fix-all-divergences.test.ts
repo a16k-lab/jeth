@@ -1000,3 +1000,40 @@ describe('assignment evaluation order: RHS before LHS index/key (byte-identical 
     expect(jethAccepts(`@contract class C { @state bal: mapping<address, u256>; @external f(k: address, v: u256): void { this.bal[address(0x1n)] += v; } }`)).toBe(true);
   });
 });
+
+describe('creation callvalue guard + storage dyn-struct nested-aggregate event (byte-identical)', () => {
+  it('a constructorless contract rejects deploy value (non-payable creation), like solc', async () => {
+    const jb = compile(`@contract class C { @state x: u256 = 9n; @external @view g(): u256 { return this.x; } }`, { fileName: 'C.jeth' });
+    const sb = compileSolidity(SPDX + `contract C { uint256 x = 9; function g() external view returns(uint256){ return x; } }`, 'C');
+    for (const value of [0n, 5n]) {
+      const hj = await Harness.create(), hs = await Harness.create();
+      let jr = 'created', sr = 'created';
+      try { await hj.deploy(jb.creationBytecode, { value }); } catch { jr = 'reverted'; }
+      try { await hs.deploy(sb.creation, { value }); } catch { sr = 'reverted'; }
+      expect(jr, `deploy value=${value}`).toBe(sr);
+    }
+  });
+
+  it('emit a STORAGE dynamic struct with a nested multi-word static-aggregate field (topic + data)', async () => {
+    const setA = W(7n) + W(8n) + W(0x60n) + W(11n) + Buffer.from('hello world').toString('hex').padEnd(64, '0');
+    const calls = [{ sig: 'set(uint128,uint128,string)', args: setA }, { sig: 'go()' }];
+    // non-indexed (data): nested packed struct Inn{u128,u128}
+    await rt(
+      `@struct class Inn { a: u128; b: u128; } @struct class D { i: Inn; s: string; } @contract class C { @state d: D; @event E(v: D); @external set(a: u128, b: u128, s: string): void { this.d.i = Inn(a, b); this.d.s = s; } @external go(): void { emit(E(this.d)); } }`,
+      `contract C { struct Inn { uint128 a; uint128 b; } struct D { Inn i; string s; } D d; event E(D v); function set(uint128 a, uint128 b, string calldata s) external { d.i = Inn(a,b); d.s = s; } function go() external { emit E(d); } }`,
+      calls,
+    );
+    // indexed (topic = keccak of the flattened payload): same struct
+    await rt(
+      `@struct class Inn { a: u128; b: u128; } @struct class D { i: Inn; s: string; } @contract class C { @state d: D; @event E(@indexed v: D); @external set(a: u128, b: u128, s: string): void { this.d.i = Inn(a, b); this.d.s = s; } @external go(): void { emit(E(this.d)); } }`,
+      `contract C { struct Inn { uint128 a; uint128 b; } struct D { Inn i; string s; } D d; event E(D indexed v); function set(uint128 a, uint128 b, string calldata s) external { d.i = Inn(a,b); d.s = s; } function go() external { emit E(d); } }`,
+      calls,
+    );
+    // nested fixed-array field Arr<u256,2> (also >=2 head words)
+    await rt(
+      `@struct class D { i: Arr<u256,2>; s: string; } @contract class C { @state d: D; @event E(v: D); @external set(a: u128, b: u128, s: string): void { this.d.i[0n] = u256(a); this.d.i[1n] = u256(b); this.d.s = s; } @external go(): void { emit(E(this.d)); } }`,
+      `contract C { struct D { uint256[2] i; string s; } D d; event E(D v); function set(uint128 a, uint128 b, string calldata s) external { d.i[0]=uint256(a); d.i[1]=uint256(b); d.s = s; } function go() external { emit E(d); } }`,
+      calls,
+    );
+  });
+});

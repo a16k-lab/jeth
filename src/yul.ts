@@ -110,6 +110,10 @@ ${indent(runtime, 6)}
 
   private emitCreation(contract: ContractIR): string {
     const lines: string[] = [];
+    // A constructorless contract is non-payable at creation: reject any deploy value, exactly like
+    // solc (which always emits this guard at the start of creation unless the constructor is explicitly
+    // @payable). When there IS a constructor, emitConstructor emits the guard itself (unless @payable).
+    if (!contract.ctor) lines.push('if callvalue() { revert(0, 0) }');
     // Write non-default state initializers. All are compile-time constants, so we
     // pack each affected slot into a single word and emit one sstore per slot.
     const slotWords = new Map<number, bigint>();
@@ -2484,11 +2488,19 @@ ${indent(runtime, 6)}
       return;
     }
     if (src.kind === 'mem') {
-      // a value field of a memory dynamic struct: one inline word at headWord.
+      // a field of a memory dynamic struct's image. A value field is one inline word; a nested STATIC
+      // aggregate (struct / fixed-array) occupies abiHeadWords(type) consecutive head words in the
+      // image (the image is already ABI-flattened), so copy ALL of them - reading just the first word
+      // would drop the rest (corrupting the encoded tuple / event topic preimage / event data).
+      const n = abiHeadWords(type);
       const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
-      const w = this.fresh();
-      out.push(`let ${w} := mload(${at})`);
-      out.push(`mstore(${dstPtr}, ${w})`);
+      if (n === 1) {
+        const w = this.fresh();
+        out.push(`let ${w} := mload(${at})`);
+        out.push(`mstore(${dstPtr}, ${w})`);
+      } else {
+        out.push(`mcopy(${dstPtr}, ${at}, ${n * 32})`);
+      }
       return;
     }
     // calldata echo: copy + validate each leaf word.
@@ -3310,6 +3322,14 @@ ${indent(runtime, 6)}
         out.push(`mstore(0x40, add(${dst}, ${size}))`);
         out.push(`mstore(${at}, ${dst})`);
         hw += 1;
+      } else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
+        // a nested STATIC aggregate field (struct / fixed-array): flatten ALL its leaves into the head
+        // (one ABI head word per leaf) directly from storage, via the same storage->ABI transcoder the
+        // return/event encoders use. The plain loadState below writes only the FIRST word (and, for a
+        // packed multi-field struct, the wrong packed word) while advancing the cursor by abiHeadWords,
+        // corrupting the encoding of any aggregate spanning >=2 head words (event topic AND data).
+        this.abiEncFromStorage(f.type, slotAt(f.slot), 0, at, out);
+        hw += abiHeadWords(f.type);
       } else {
         out.push(`mstore(${at}, ${this.loadState(f.type, slotAt(f.slot), f.offset)})`);
         hw += abiHeadWords(f.type);
