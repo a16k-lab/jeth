@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
-    "jethc": "tsx src/cli.ts"
+    "jethc": "tsx src/cli.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "license": "MIT",
   "dependencies": {
@@ -22,6 +24,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
+    "prettier": "^3.8.4",
     "tsx": "^4.22.4",
     "vitest": "^4.1.9"
   }
