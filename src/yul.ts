@@ -1989,13 +1989,21 @@ ${indent(runtime, 6)}
         return ptr;
       }
       case 'newArray': {
-        // new T[](n): a zeroed memory array. Freshly-allocated memory (beyond the free
-        // pointer) is already zero in the EVM, so only the length word is written.
+        // new Array<T>(n) -> a length-n zero-initialized memory T[] ([len][n words], one full word
+        // per value element - memory arrays are never packed). Byte-identical to solc new T[](n):
+        // cap the element count at 2^64-1 (Panic 0x41, matching solc's deterministic overflow guard,
+        // which also keeps the allocation from wrapping), then ACTIVELY zero the data region so the
+        // result is all-zero even over dirty memory exactly as solc guarantees (calldatacopy reading
+        // past calldatasize writes zeros) - do not rely on the memory beyond the free pointer being
+        // clean. Lower the length BEFORE claiming mload(0x40) so a side-effecting length that itself
+        // allocates bumps the free pointer first.
         const n = this.fresh();
         out.push(`let ${n} := ${this.lowerExpr(e.length, ctx, out)}`);
+        out.push(`if gt(${n}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
         const ptr = this.fresh();
         out.push(`let ${ptr} := mload(0x40)`);
         out.push(`mstore(${ptr}, ${n})`);
+        out.push(`calldatacopy(add(${ptr}, 0x20), calldatasize(), mul(${n}, 0x20))`);
         out.push(`mstore(0x40, add(${ptr}, mul(add(${n}, 1), 0x20)))`);
         return ptr;
       }
@@ -4192,6 +4200,12 @@ ${indent(runtime, 6)}
       out.push(`mstore(0x40, add(${ptr}, ${0x40 + ws.length * 32}))`);
       return { ptr, size: String(0x40 + ws.length * 32) };
     }
+    if (value.kind === 'newArray') {
+      // new Array<T>(n) lowers to a [len][data] memory pointer; encode it as a dynamic memory array.
+      const p = this.fresh();
+      out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
+      return this.encodeMemArrayReturn(p, out);
+    }
     if (value.kind !== 'arrayValue') throw new UnsupportedError(`cannot encode array from ${value.kind}`);
     // a MEMORY T[] (value elements) at ptr=[len][data]: ABI return = [0x20][len][data].
     if (value.arr.base.kind === 'memArray') {
@@ -4473,6 +4487,12 @@ ${indent(runtime, 6)}
    *  Calldata-param arrays reuse echoParam (unbounded element nesting); value-element memory
    *  arrays are already in ABI tail layout. Other sources are gated. */
   private materializeArrayArg(arg: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
+    if (arg.kind === 'newArray') {
+      // new Array<T>(n) used directly as an abi.encode/encodePacked arg: it lowers to a [len][elems]
+      // memory pointer (value elements, ABI tail layout already), exactly like a memArray local.
+      const mp = this.lowerExpr(arg, ctx, out);
+      return { mp, size: `mul(add(mload(${mp}), 1), 0x20)` };
+    }
     if (arg.kind !== 'arrayValue') throw new UnsupportedError(`array argument must be an array value, got '${arg.kind}'`);
     const base = arg.arr.base;
     let mpExpr: string;

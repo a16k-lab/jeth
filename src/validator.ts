@@ -30,9 +30,14 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
       case ts.SyntaxKind.YieldExpression:
         diags.error(node, 'JETH021', 'generators/yield are not supported');
         break;
-      case ts.SyntaxKind.NewExpression:
-        diags.error(node, 'JETH023', "'new' (object/contract construction) is not supported in the MVP");
+      case ts.SyntaxKind.NewExpression: {
+        // allow `new Array<T>(n)` (dynamic memory-array allocation); the analyzer validates its
+        // exact shape. Every other `new` (object/contract construction) is unsupported.
+        const ne = node as ts.NewExpression;
+        if (ts.isIdentifier(ne.expression) && ne.expression.text === 'Array') break;
+        diags.error(node, 'JETH023', "'new' is only supported as 'new Array<T>(n)' (dynamic memory array); object/contract construction is not supported");
         break;
+      }
       case ts.SyntaxKind.ArrowFunction:
       case ts.SyntaxKind.FunctionExpression:
       case ts.SyntaxKind.FunctionDeclaration:

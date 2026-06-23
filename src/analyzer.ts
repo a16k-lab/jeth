@@ -6483,6 +6483,7 @@ export class Analyzer {
       if (ut.kind === 'array' && ut.length === undefined && isStaticValueType(ut.element)) {
         const dynArrOk = (e: Expr): boolean =>
           e.kind === 'arrayLit' ||
+          e.kind === 'newArray' || // new Array<T>(n): a fresh [len][elems] memory pointer (mem location)
           (e.kind === 'arrayValue' &&
             (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr' || e.arr.base.kind === 'stateArray' ||
              e.arr.base.kind === 'mapArray' || e.arr.base.kind === 'placeArray' || e.arr.base.kind === 'calldataArray'));
@@ -6656,6 +6657,38 @@ export class Analyzer {
         return undefined;
       }
       return { kind: 'dynLength', type: U256, operand };
+    }
+
+    // new Array<T>(n) -> a length-n zero-initialized dynamic memory array T[] (byte-identical to solc
+    // new T[](n)). The element T must be a value type; the length is a runtime u256.
+    if (ts.isNewExpression(node)) {
+      if (!ts.isIdentifier(node.expression) || node.expression.text !== 'Array') {
+        // every other `new` is rejected by the subset validator (JETH023); do not double-report.
+        return undefined;
+      }
+      if (!node.typeArguments || node.typeArguments.length !== 1) {
+        this.diags.error(node, 'JETH363', 'new Array<T>(n) requires exactly one element-type argument, e.g. new Array<u256>(n)');
+        return undefined;
+      }
+      if (!node.arguments || node.arguments.length !== 1) {
+        this.diags.error(node, 'JETH363', 'new Array<T>(n) takes exactly one length argument, e.g. new Array<u256>(n)');
+        return undefined;
+      }
+      const elem = resolveType(node.typeArguments[0]!, this.diags, this.structsByName);
+      if (!elem) return undefined;
+      if (!isStaticValueType(elem)) {
+        this.diags.error(node.typeArguments[0]!, 'JETH216', `new Array<T>(n) requires a value-type element (uint/int/bool/address/bytesN/enum); a ${displayName(elem)} element is not supported`);
+        return undefined;
+      }
+      const lenRaw = this.checkExpr(node.arguments[0]!, U256);
+      if (!lenRaw) return undefined;
+      if (!isInteger(lenRaw.type)) {
+        this.diags.error(node.arguments[0]!, 'JETH363', `new Array<T>(n) length must be an integer, got ${displayName(lenRaw.type)}`);
+        return undefined;
+      }
+      const length = this.coerce(lenRaw, U256, node.arguments[0]!);
+      const arrTy: JethType = { kind: 'array', element: elem };
+      return { kind: 'newArray', type: arrTy, elem, length };
     }
 
     // array literal [a, b, c] -> memory T[] (only where an array type is expected)
