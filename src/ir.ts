@@ -112,11 +112,21 @@ export type Expr =
   // while lowering the checks (callData is a bytes reference, resolved via lowerDynamic).
   | { kind: 'callOk'; type: JethType }
   | { kind: 'callData'; type: JethType }
+  // Scoped markers usable ONLY inside a try/catch CATCH body: `this.reason` -> the SOFT-decoded
+  // Error(string) message (or "" when the revert bytes are not a well-formed Error(string)); `this.panic`
+  // -> the decoded Panic(uint256) code (or 0). The yul backend binds the catch returndata blob to
+  // EXT_CALL_DATA_BINDING while lowering the catch body, then computes these from it.
+  | { kind: 'catchReason'; type: JethType } // -> string (the decoded Error(string), soft)
+  | { kind: 'catchPanic'; type: JethType } // -> u256 (the decoded Panic code, soft)
   // <addr>.call/staticcall({ data, value?, gas?, success }) -> bytes (returndata). Performs the
   // CALL/STATICCALL binding ok+data, evaluates the ordered success checks (first failing one reverts
   // with its reason), and yields the returndata bytes. <addr>.tryCall/tryStaticcall({...}) (checks
   // empty) is lowered via DestructureSource 'extCall' instead; this Expr form is the bytes value.
-  | { kind: 'extCall'; type: JethType; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[] }
+  // `bubble`: on failure (iszero(ok)), revert with the captured returndata VERBATIM (high-level typed
+  // interface calls re-throw the callee's exact revert bytes). `codeGuard`: after the failure bubble,
+  // `if iszero(extcodesize(addr)) { revert(0,0) }` (a high-level call to an EOA / non-contract reverts
+  // empty). Both default false so the low-level addr.call path (success checks) is unchanged.
+  | { kind: 'extCall'; type: JethType; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[]; bubble?: boolean; codeGuard?: boolean }
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1
   // --- Phase 4: dynamic arrays T[] ---
   | { kind: 'arrayLen'; type: JethType; arr: ArrayExpr } // a.length -> u256
@@ -292,7 +302,7 @@ export type DestructureSource =
   | { kind: 'tuple'; values: Expr[] } // `[a, b] = [x, y]` (parallel assign / swap)
   // `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: the raw escape hatch (no success checks).
   // Yields two components: ok (bool) and ret (bytes returndata, always captured even on failure).
-  | { kind: 'extCall'; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr }
+  | { kind: 'extCall'; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr; bubble?: boolean; codeGuard?: boolean }
   // `let [a, b] = abi.decode(data, [T1, T2])` (and the `.decode([...])` sugar): decode the memory bytes
   // value `data` into N tuple components of `types`. Each component is materialized like the single form
   // (value -> a word, bytes/string/array/struct -> a memory image pointer).
@@ -327,7 +337,23 @@ export type Stmt =
   | { kind: 'bytesPush'; loc: LValue; value?: Expr } // this.b.push(<bytes1>) / push() on a storage `bytes` (loc: direct var / struct field / mapping value / array elem)
   | { kind: 'bytesPop'; loc: LValue } // this.b.pop() on a storage `bytes` (loc: direct var / struct field / mapping value / array elem)
   // --- Phase 6: revertWith(b) bubbles raw bytes as the revert: revert(add(b,0x20), mload(b)) ---
-  | { kind: 'revertWith'; value: Expr };
+  | { kind: 'revertWith'; value: Expr }
+  // --- Phase 6 / Feature 2: try/catch around a high-level interface call ---
+  // The controlling call is `call` (a high-level interface call, WITHOUT auto-bubble: failure -> catch).
+  // On ok: codeGuard (extcodesize 0 -> OUTER revert empty), decode the returndata into the bound vars
+  // (retNames/retTypes; short returndata -> OUTER revert empty), run tryBody. On failure: bind `e` (the
+  // verbatim returndata bytes) + (if used) this.reason / this.panic, run catchBody.
+  | {
+      kind: 'tryCatch';
+      call: Expr & { kind: 'extCall' }; // op/addr/data/value/gas; bubble & codeGuard MUST be false (emitted manually)
+      retTypes: JethType[]; // [] for a void controlling call; [T] single; [T0,T1,...] tuple
+      retNames: (string | null)[]; // bound success-var names (parallel to retTypes; null = skipped)
+      tryBody: Stmt[];
+      catchName: string | null; // the catch binding `e: bytes` (null = `catch {}` or omitted/unused name)
+      usesReason: boolean; // catch body references this.reason
+      usesPanic: boolean; // catch body references this.panic
+      catchBody: Stmt[];
+    };
 
 // A revert payload. 'empty' -> revert(0,0); 'errorString' -> Error(string) blob;
 // 'custom' -> a user-declared custom error (selector + ABI-encoded static args).
@@ -344,6 +370,26 @@ export interface ErrorDecl {
   params: Param[];
   signature: string; // canonical, e.g. "Insufficient(uint256,uint256)"
   selector: string; // 4-byte hex, no 0x
+}
+
+// Phase 6: a method of an @interface declaration. Bodyless; carries its precomputed canonical
+// selector and ABI shape. `returnTypes` is set for a multi-value (tuple) return; for a single-value
+// return `returnTypes` is undefined and `returnType` holds the type (void = no return).
+export interface InterfaceMethod {
+  name: string;
+  params: Param[];
+  returnType: JethType; // VOID when the method returns nothing or has a tuple return
+  returnTypes?: JethType[]; // a >=2-component tuple return (returnType is VOID then)
+  mutability: Mutability; // view/pure -> STATICCALL; nonpayable/payable -> CALL ({value} only if payable)
+  signature: string; // canonical, e.g. "bar(uint256)"
+  selector: string; // 4-byte hex, no 0x
+}
+
+// Phase 6: an @interface declaration. Emits NO bytecode; it is purely a named type + the per-method
+// {selector, mutability, params, return} registry used to lower a high-level typed call IFoo(addr).m(..).
+export interface InterfaceDecl {
+  name: string;
+  methods: Map<string, InterfaceMethod>; // method name -> shape (no overloading in v1)
 }
 
 export interface EventParam {

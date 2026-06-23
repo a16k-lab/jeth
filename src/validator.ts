@@ -41,9 +41,10 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
       case ts.SyntaxKind.ThrowStatement:
         diags.error(node, 'JETH025', 'throw is not supported; use revert(...) / require(...)');
         break;
-      case ts.SyntaxKind.TryStatement:
-        diags.error(node, 'JETH026', 'try/catch is not supported in the MVP');
-        break;
+      // try/catch is supported around a high-level interface call (Feature 2): the analyzer validates
+      // the controlling-call shape, the catch binding, and the scoped this.reason/this.panic helpers.
+      // The validator still recurses into both bodies, so any unsupported construct inside them is
+      // rejected normally. (A bare `throw` inside is still JETH025.)
       case ts.SyntaxKind.RegularExpressionLiteral:
         diags.error(node, 'JETH027', 'regular expressions have no on-chain meaning');
         break;

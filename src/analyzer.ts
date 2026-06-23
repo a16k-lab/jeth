@@ -59,6 +59,8 @@ import {
   RevertReason,
   SuccessCheck,
   DestructureSource,
+  InterfaceDecl,
+  InterfaceMethod,
 } from './ir.js';
 
 const ADDRESS: JethType = { kind: 'address', payable: false };
@@ -157,6 +159,8 @@ export class Analyzer {
   private errors: ErrorDecl[] = [];
   private eventsByName = new Map<string, EventIR[]>(); // source name -> all overloads (solc allows event overloading by signature)
   private events: EventIR[] = [];
+  // Phase 6: @interface declarations (name -> {methods}); emits no bytecode, names a type + ABI shape.
+  private interfacesByName = new Map<string, InterfaceDecl>();
   // per-function lexical scope stack (innermost last); each scope maps name -> type.
   private scopes: Map<string, JethType>[] = [];
   private loopDepth = 0; // > 0 inside a for/while body (gates break/continue)
@@ -175,6 +179,14 @@ export class Analyzer {
   // returndata bytes (consulted in the `this.<X>` resolution BEFORE constant/immutable/state lookup,
   // so they shadow nothing globally and never leak outside the condition).
   private callResultBindings: Map<string, JethType> | undefined;
+  // Feature 2: scoped bindings visible ONLY inside a try/catch CATCH body. While checking the catch body,
+  // `this.reason` resolves to the decoded Error(string) message (string) and `this.panic` to the decoded
+  // Panic code (u256). Resolved in `this.<X>` BEFORE constant/immutable/state lookup, like callResultBindings.
+  // A reference outside a catch errors (JETH065). Set/restored around the catch body only; whether each was
+  // actually referenced is recorded in catchUsesReason / catchUsesPanic for usage-gated codegen.
+  private catchBindings: Map<string, JethType> | undefined;
+  private catchUsesReason = false;
+  private catchUsesPanic = false;
   // whether the function being checked is EXTERNALLY reachable (external/public, incl. an inferred-
   // exposed no-visibility function). Reading msg.value in such a function requires @payable; an
   // internal/private function may read it at any non-pure mutability (solc parity). Default strict
@@ -232,6 +244,7 @@ export class Analyzer {
     this.collectTypeAliases(); // branded newtypes, before structs (a struct field may use one)
     this.collectEnums(); // enums (branded uint8), before structs (a struct field / param may use one)
     this.collectStructs();
+    this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
     const classes = this.findContractClasses();
     if (classes.length === 0) {
       this.diags.error(this.sourceFile, 'JETH040', 'no @contract class found in source');
@@ -454,6 +467,140 @@ export class Analyzer {
     this.structsByName.set(name, { kind: 'struct', name, fields });
   }
 
+  /** Collect @interface class declarations: a named type + a per-method {selector, mutability, params,
+   *  return} registry. An @interface emits NO bytecode; its methods are BODYLESS and each requires
+   *  @external (optional @view/@pure/@payable). Rejected (cleanly, no crash): a body, a @state field,
+   *  a non-@external method, method overloading, and a constructor. */
+  private collectInterfaces(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && decoratorNames(n).includes('interface')) this.collectInterface(n);
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  private collectInterface(cls: ts.ClassDeclaration): void {
+    const name = cls.name?.text ?? 'Interface';
+    if (this.interfacesByName.has(name) || this.structsByName.has(name)) {
+      this.diags.error(cls, 'JETH340', `@interface '${name}' redeclared (the name is already a type)`);
+      return;
+    }
+    const methods = new Map<string, InterfaceMethod>();
+    for (const member of cls.members) {
+      if (ts.isPropertyDeclaration(member)) {
+        this.diags.error(member, 'JETH341', `@interface '${name}' cannot declare a field (an interface has no state)`);
+        continue;
+      }
+      if (ts.isConstructorDeclaration(member)) {
+        this.diags.error(member, 'JETH341', `@interface '${name}' cannot declare a constructor`);
+        continue;
+      }
+      if (!ts.isMethodDeclaration(member)) {
+        this.diags.error(member, 'JETH341', `@interface '${name}' may only declare bodyless @external methods`);
+        continue;
+      }
+      const m = this.collectInterfaceMethod(member, name);
+      if (!m) continue;
+      if (methods.has(m.name)) {
+        this.diags.error(member, 'JETH342', `@interface '${name}' method '${m.name}' is overloaded; method overloading inside an interface is not supported yet`);
+        continue;
+      }
+      methods.set(m.name, m);
+    }
+    this.interfacesByName.set(name, { name, methods });
+  }
+
+  private collectInterfaceMethod(member: ts.MethodDeclaration, ifaceName: string): InterfaceMethod | undefined {
+    if (!ts.isIdentifier(member.name)) {
+      this.diags.error(member, 'JETH049', 'interface method name must be a plain identifier');
+      return undefined;
+    }
+    const mname = member.name.text;
+    const decs = decoratorNames(member);
+    if (member.body) {
+      this.diags.error(member, 'JETH343', `@interface method '${ifaceName}.${mname}' must be bodyless`);
+      return undefined;
+    }
+    if (!decs.includes('external')) {
+      this.diags.error(member, 'JETH344', `@interface method '${ifaceName}.${mname}' must be @external`);
+      return undefined;
+    }
+    const explicitMuts = (['view', 'pure', 'payable'] as const).filter((m) => decs.includes(m));
+    if (explicitMuts.length > 1) {
+      this.diags.error(member, 'JETH052', `@interface method '${ifaceName}.${mname}' has conflicting mutability decorators: ${explicitMuts.map((m) => '@' + m).join(', ')} (a method is at most one of @view/@pure/@payable)`);
+    }
+    let mutability: Mutability = 'nonpayable';
+    if (decs.includes('payable')) mutability = 'payable';
+    else if (decs.includes('view')) mutability = 'view';
+    else if (decs.includes('pure')) mutability = 'pure';
+    const stray = decs.filter((d) => !['external', 'view', 'pure', 'payable'].includes(d));
+    if (stray.length) {
+      this.diags.error(member, 'JETH345', `@interface method '${ifaceName}.${mname}' has unsupported decorator(s): ${stray.map((d) => '@' + d).join(', ')} (allowed: @external, @view, @pure, @payable)`);
+    }
+    const params: Param[] = [];
+    for (const p of member.parameters) {
+      if (!ts.isIdentifier(p.name)) {
+        this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
+        continue;
+      }
+      if (p.initializer) {
+        this.diags.error(p, 'JETH346', `@interface method '${ifaceName}.${mname}' parameter '${p.name.text}' cannot have a default value`);
+      }
+      const t = resolveType(p.type, this.diags, this.structsByName);
+      if (!t) continue;
+      if (this.typeHasMapping(t)) {
+        this.diags.error(p, 'JETH247', `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
+        continue;
+      }
+      // The arg encoding reuses the abi.encode codec; restrict params to types that codec supports so a
+      // call never silently miscompiles (value types, bytes/string, supported arrays, structs).
+      if (!this.interfaceAbiTypeSupported(t)) {
+        this.diags.error(p, 'JETH347', `@interface method '${ifaceName}.${mname}' parameter '${p.name.text}' has type ${displayName(t)}, which is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
+        continue;
+      }
+      params.push({ name: p.name.text, type: t });
+    }
+    // return: void, a single type, or a >=2-element tuple. Each component must be a decode-supported type.
+    let returnType: JethType = VOID;
+    let returnTypes: JethType[] | undefined;
+    if (member.type && ts.isTupleTypeNode(member.type)) {
+      const rts: JethType[] = [];
+      for (const el of member.type.elements) {
+        const t = resolveType(el, this.diags, this.structsByName);
+        if (!t) continue;
+        if (!this.decodeSupported(t)) {
+          this.diags.error(el, 'JETH348', `@interface method '${ifaceName}.${mname}' return component ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
+          continue;
+        }
+        rts.push(t);
+      }
+      if (rts.length >= 2) returnTypes = rts;
+      else if (rts.length === 1) returnType = rts[0]!;
+    } else if (member.type) {
+      const t = resolveType(member.type, this.diags, this.structsByName);
+      if (t && t.kind !== 'void') {
+        if (!this.decodeSupported(t)) {
+          this.diags.error(member.type, 'JETH348', `@interface method '${ifaceName}.${mname}' return type ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
+        } else {
+          returnType = t;
+        }
+      }
+    }
+    const signature = functionSignature(mname, params.map((p) => p.type));
+    const selector = functionSelector(signature);
+    return { name: mname, params, returnType, returnTypes, mutability, signature, selector };
+  }
+
+  /** A type that the abi.encode arg codec supports for an interface call argument: value types,
+   *  bytes/string, a value-element array (fixed or dynamic), or a struct. Mirrors checkAbiEncode's
+   *  accepted arg shapes so a call never silently miscompiles. */
+  private interfaceAbiTypeSupported(t: JethType): boolean {
+    if (isStaticValueType(t) || isBytesLike(t)) return true;
+    if (t.kind === 'array') return true; // standard abi.encode supports value/dyn arrays + fixed arrays
+    if (t.kind === 'struct') return true; // static (inline) or dynamic (offset+tail) struct
+    return false;
+  }
+
   private findContractClasses(): ts.ClassDeclaration[] {
     const out: ts.ClassDeclaration[] = [];
     const visit = (n: ts.Node): void => {
@@ -541,6 +688,7 @@ export class Analyzer {
     for (const nm of this.eventsByName.keys()) addId(nm, 'event');
     for (const nm of this.errorsByName.keys()) addId(nm, 'error');
     for (const nm of this.structsByName.keys()) addId(nm, 'type'); // structs + enums share the type namespace
+    for (const nm of this.interfacesByName.keys()) addId(nm, 'type'); // interfaces share the type namespace too
     for (const v of layout.vars) addId(v.name, 'storage');
     for (const nm of this.constantsByName.keys()) addId(nm, 'storage');
     for (const nm of this.immutableOrder) addId(nm, 'storage');
@@ -1926,6 +2074,11 @@ export class Analyzer {
       return;
     }
 
+    if (ts.isTryStatement(node)) {
+      this.checkTryStatement(node, returnType, out);
+      return;
+    }
+
     // bare block `{ ... }` introduces a lexical scope
     if (ts.isBlock(node)) {
       this.pushScope();
@@ -2059,6 +2212,15 @@ export class Analyzer {
         if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
         return;
       }
+      // Phase 6: a high-level typed interface call as a statement `IFoo(addr).method(args);`. The call
+      // (selector ++ args, bubble + extcodesize guard) runs; the returndata is captured but discarded
+      // (no decode, even for a value-returning method). Performed before the array-mutator / fall-through
+      // handling so the wrapper's `IFoo(addr).method` PropertyAccess is recognized first.
+      {
+        const ic = this.resolveInterfaceCall(e);
+        if (ic === 'handled') return;
+        if (ic) { out.push({ kind: 'exprStmt', expr: ic.call }); return; }
+      }
       // array mutators: a.push(x) / a.pop()
       if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) {
         const method = e.expression.name.text;
@@ -2086,6 +2248,217 @@ export class Analyzer {
     }
 
     this.diags.error(node, 'JETH061', `unsupported statement: ${ts.SyntaxKind[node.kind]}`);
+  }
+
+  /** Feature 2: `try { let r = IFoo(addr).m(args); <body> } catch (e) { <catch> }`. The try block's
+   *  FIRST statement is the controlling high-level interface call; the rest of the try block is the
+   *  success body (the bound vars in scope). The catch binds `e: bytes` (the verbatim revert returndata)
+   *  and, inside its body only, the scoped helpers `this.reason` (decoded Error(string), soft) and
+   *  `this.panic` (decoded Panic code, soft). solc control flow: a failed call -> catch; a non-contract
+   *  target / short returndata -> OUTER revert empty (NOT catch). */
+  private checkTryStatement(node: ts.TryStatement, returnType: JethType, out: Stmt[]): void {
+    if (node.finallyBlock) {
+      this.diags.error(node, 'JETH360', 'a `finally` clause is not supported on try/catch');
+      return;
+    }
+    if (!node.catchClause) {
+      this.diags.error(node, 'JETH360', 'try requires a catch clause (try/catch around an interface call)');
+      return;
+    }
+    const tryStmts = node.tryBlock.statements;
+    if (tryStmts.length === 0) {
+      this.diags.error(node.tryBlock, 'JETH361', "the try block must begin with the controlling interface call (e.g. `let r = IFoo(addr).m(...)`)");
+      return;
+    }
+    const first = tryStmts[0]!;
+
+    // ---- extract the controlling interface call from the first statement ----
+    // Allowed shapes: `let r[:T] = IFoo(addr).m(args);` (single value), `let [a,b]:[..] = IFoo(addr).p();`
+    // (tuple), or a bare `IFoo(addr).m(args);` (void / discarded-return) expression statement.
+    let call: (Expr & { kind: 'extCall' }) | undefined;
+    let retTypes: JethType[] = [];
+    let retNames: (string | null)[] = [];
+    // names/types to declare in the success-body scope (parallel arrays of the bound vars)
+    const succVars: { name: string; type: JethType }[] = [];
+
+    if (ts.isVariableStatement(first)) {
+      if (first.declarationList.declarations.length !== 1) {
+        this.diags.error(first, 'JETH361', 'the controlling try statement must declare exactly one binding from the interface call');
+        return;
+      }
+      const decl = first.declarationList.declarations[0]!;
+      if (!decl.initializer) {
+        this.diags.error(decl, 'JETH361', 'the controlling try statement must initialize from an interface call (`= IFoo(addr).m(...)`)');
+        return;
+      }
+      const ic = this.resolveInterfaceCall(decl.initializer);
+      if (ic === 'handled') return; // recognized but diagnosed
+      if (!ic) {
+        this.diags.error(decl.initializer, 'JETH361', 'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)`');
+        return;
+      }
+      call = ic.call;
+      if (ts.isArrayBindingPattern(decl.name)) {
+        // tuple binding: `let [a, , c]: [T0, T1, T2] = IFoo(addr).pair();`
+        if (!ic.returnTypes) {
+          this.diags.error(decl.name, 'JETH356', ic.returnType.kind === 'void'
+            ? 'this interface method returns void and cannot be destructured (call it without a binding)'
+            : 'this interface method returns a single value; bind it with `let x = ...`, not a destructuring');
+          return;
+        }
+        const rts = ic.returnTypes;
+        const pat = decl.name;
+        if (pat.elements.length !== rts.length) {
+          this.diags.error(decl.name, 'JETH356', `this interface method returns ${rts.length} value(s), expected ${pat.elements.length} name(s)`);
+          return;
+        }
+        // optional `: [T0, T1, ...]` annotation must match the method's return types
+        if (decl.type) {
+          const ann = this.tupleTypeAnnotation(decl.type, rts.length);
+          if (ann) for (let i = 0; i < rts.length; i++) {
+            if (!typesEqual(ann[i]!, rts[i]!)) {
+              this.diags.error(decl.type, 'JETH085', `try return type component ${i} is ${displayName(ann[i]!)}, expected ${displayName(rts[i]!)}`);
+              return;
+            }
+          }
+        }
+        retTypes = rts;
+        for (let i = 0; i < rts.length; i++) {
+          const el = pat.elements[i]!;
+          if (ts.isOmittedExpression(el)) { retNames.push(null); continue; }
+          if (!ts.isBindingElement(el) || !ts.isIdentifier(el.name)) {
+            this.diags.error(el, 'JETH062', 'only simple names are allowed in a try tuple binding');
+            return;
+          }
+          retNames.push(el.name.text);
+          succVars.push({ name: el.name.text, type: rts[i]! });
+        }
+      } else if (ts.isIdentifier(decl.name)) {
+        // single-value binding: `let r: T = IFoo(addr).m(args);`
+        if (ic.returnTypes) {
+          this.diags.error(decl.name, 'JETH356', 'this interface method returns a tuple; bind it with a destructuring `let [a, b] = IFoo(addr).m(...)`');
+          return;
+        }
+        if (ic.returnType.kind === 'void') {
+          this.diags.error(decl.name, 'JETH357', 'this interface method returns void and cannot be bound to a name (call it without a binding: `IFoo(addr).m(...);`)');
+          return;
+        }
+        if (decl.type) {
+          const ann = resolveType(decl.type, this.diags, this.structsByName);
+          if (ann && !typesEqual(ann, ic.returnType)) {
+            this.diags.error(decl.type, 'JETH085', `try return type is ${displayName(ann)}, but the method returns ${displayName(ic.returnType)}`);
+            return;
+          }
+        }
+        retTypes = [ic.returnType];
+        retNames = [decl.name.text];
+        succVars.push({ name: decl.name.text, type: ic.returnType });
+      } else {
+        this.diags.error(decl, 'JETH062', 'destructuring is not supported in a try binding');
+        return;
+      }
+    } else if (ts.isExpressionStatement(first)) {
+      const ic = this.resolveInterfaceCall(first.expression);
+      if (ic === 'handled') return;
+      if (!ic) {
+        this.diags.error(first.expression, 'JETH361', 'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)`');
+        return;
+      }
+      call = ic.call;
+      // a bare call statement discards any return value (matches solc's `try ... { } catch`).
+      retTypes = [];
+      retNames = [];
+    } else {
+      this.diags.error(first, 'JETH361', 'the first statement in a try block must be the controlling interface call `let r = IFoo(addr).m(...)` or `IFoo(addr).m(...);`');
+      return;
+    }
+
+    // ---- success body: the rest of the try block, with the bound vars in scope ----
+    this.pushScope();
+    const savedMA = new Set(this.memArrayLocals);
+    const savedAgg = new Map(this.memAggregateLocals);
+    const savedDyn = new Set(this.memDynLocals);
+    const savedDynS = new Map(this.memDynStructLocals);
+    for (const v of succVars) {
+      this.declareLocal(v.name, v.type);
+      const ct = v.type;
+      if (isBytesLike(ct)) this.memDynLocals.add(v.name);
+      else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element)) this.memArrayLocals.add(v.name);
+      else if (ct.kind === 'array' && ct.length !== undefined) this.memAggregateLocals.set(v.name, ct);
+      else if (ct.kind === 'struct' && isDynamicType(ct)) this.memDynStructLocals.set(v.name, ct);
+      else if (ct.kind === 'struct') this.memAggregateLocals.set(v.name, ct);
+    }
+    const tryBody: Stmt[] = [];
+    for (let i = 1; i < tryStmts.length; i++) this.checkStatement(tryStmts[i]!, returnType, tryBody);
+    this.popScope();
+    // restore mem side-tables (the success vars only existed in the try-body scope)
+    this.memArrayLocals = savedMA;
+    this.memAggregateLocals = savedAgg;
+    this.memDynLocals = savedDyn;
+    this.memDynStructLocals = savedDynS;
+
+    // ---- catch body: bind `e: bytes` (if present + named) + scoped this.reason / this.panic ----
+    const cc = node.catchClause;
+    let catchName: string | null = null;
+    if (cc.variableDeclaration) {
+      const vd = cc.variableDeclaration;
+      if (!ts.isIdentifier(vd.name)) {
+        this.diags.error(vd, 'JETH062', 'the catch binding must be a simple name `catch (e) { ... }`');
+        return;
+      }
+      // solc's `catch (bytes memory e)`: the binding is always the raw revert returndata (bytes).
+      if (vd.type) {
+        const t = resolveType(vd.type, this.diags, this.structsByName);
+        if (t && !isBytesLike(t)) {
+          this.diags.error(vd.type, 'JETH362', `the catch binding is the raw revert returndata and must be \`bytes\`, got ${displayName(t)}`);
+          return;
+        }
+      }
+      catchName = vd.name.text;
+    }
+    this.pushScope();
+    const savedMA2 = new Set(this.memArrayLocals);
+    const savedDyn2 = new Set(this.memDynLocals);
+    if (catchName) {
+      this.declareLocal(catchName, BYTES);
+      this.memDynLocals.add(catchName); // `e` is a memory bytes local (its register is the [len][data] ptr)
+    }
+    const savedCatch = this.catchBindings;
+    const savedUR = this.catchUsesReason;
+    const savedUP = this.catchUsesPanic;
+    this.catchBindings = new Map<string, JethType>([['reason', STRING], ['panic', U256]]);
+    this.catchUsesReason = false;
+    this.catchUsesPanic = false;
+    const catchBody: Stmt[] = [];
+    for (const s of cc.block.statements) this.checkStatement(s, returnType, catchBody);
+    const usesReason = this.catchUsesReason;
+    const usesPanic = this.catchUsesPanic;
+    this.catchBindings = savedCatch;
+    this.catchUsesReason = savedUR;
+    this.catchUsesPanic = savedUP;
+    this.popScope();
+    this.memArrayLocals = savedMA2;
+    this.memDynLocals = savedDyn2;
+
+    if (!call) return; // a diagnostic already fired
+    // the controlling call must NOT auto-bubble (failure -> catch) and the codeGuard is emitted inside the
+    // ok-branch by the backend; clear both flags resolveInterfaceCall set for the plain high-level call.
+    call.bubble = false;
+    call.codeGuard = false;
+    out.push({ kind: 'tryCatch', call, retTypes, retNames, tryBody, catchName, usesReason, usesPanic, catchBody });
+  }
+
+  /** Parse an explicit tuple-type annotation `[T0, T1, ...]` into N component types, or undefined if it
+   *  is not a tuple of the expected arity (callers then skip the match check). */
+  private tupleTypeAnnotation(typeNode: ts.TypeNode, n: number): JethType[] | undefined {
+    if (!ts.isTupleTypeNode(typeNode) || typeNode.elements.length !== n) return undefined;
+    const out: JethType[] = [];
+    for (const el of typeNode.elements) {
+      const t = resolveType(el, this.diags, this.structsByName);
+      if (!t) return undefined;
+      out.push(t);
+    }
+    return out;
   }
 
   /** `delete x`: reset a storage location to its zero value (Solidity semantics). A VALUE
@@ -3105,6 +3478,136 @@ export class Analyzer {
     return expr;
   }
 
+  /** Is `node` the interface-wrapper call shape `IFoo(addr)` / `IFoo(addr, { value?, gas? })`?
+   *  Returns the interface name when it is (whether or not the args are valid), else undefined. */
+  private interfaceWrapperName(node: ts.Expression): string | undefined {
+    if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return undefined;
+    const nm = node.expression.text;
+    return this.interfacesByName.has(nm) && !this.isVisibleLocal(nm) ? nm : undefined;
+  }
+
+  /** Resolve a high-level typed interface call `IFoo(addr [, { value?, gas? }]).method(args)`.
+   *  Returns the lowered extCall expr (bubble + codeGuard set) plus the declared return shape, or
+   *  'handled' when the node IS an interface call/wrapper but is misused (a precise diagnostic was
+   *  emitted; stop), or undefined when `node` is not an interface call (let other handling decide). */
+  private resolveInterfaceCall(node: ts.Expression): { call: Expr & { kind: 'extCall' }; returnType: JethType; returnTypes?: JethType[] } | 'handled' | undefined {
+    // shape: a CallExpression whose callee is `IFoo(addr [, opts]).method` (a PropertyAccess whose base
+    // is the interface wrapper call). The bare wrapper `IFoo(addr)` (no .method() applied) is rejected
+    // separately by checkExpr (an interface value is not usable on its own).
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+    const pa = node.expression;
+    const ifaceName = this.interfaceWrapperName(pa.expression);
+    if (!ifaceName) return undefined;
+    const iface = this.interfacesByName.get(ifaceName)!;
+    const wrapper = pa.expression as ts.CallExpression;
+    const methodName = pa.name.text;
+
+    // ---- the wrapper: IFoo(addr) or IFoo(addr, { value?, gas? }) ----
+    if (wrapper.arguments.length < 1 || wrapper.arguments.length > 2) {
+      this.diags.error(wrapper, 'JETH349', `${ifaceName}(...) takes an address and an optional { value?, gas? } options object`);
+      return 'handled';
+    }
+    const addr = this.checkExpr(wrapper.arguments[0]!, ADDRESS);
+    if (!addr) return 'handled';
+    if (addr.type.kind !== 'address') {
+      this.diags.error(wrapper.arguments[0]!, 'JETH350', `${ifaceName}(...) requires an address, got ${displayName(addr.type)}`);
+      return 'handled';
+    }
+    const recv = this.coerce(addr, ADDRESS, wrapper.arguments[0]!);
+
+    // ---- the method ----
+    const method = iface.methods.get(methodName);
+    if (!method) {
+      this.diags.error(pa, 'JETH351', `interface '${ifaceName}' has no method '${methodName}'`);
+      return 'handled';
+    }
+    const op: 'call' | 'staticcall' = (method.mutability === 'view' || method.mutability === 'pure') ? 'staticcall' : 'call';
+
+    // ---- wrapper options: { value?, gas? } (value only on a @payable method) ----
+    let value: Expr | undefined;
+    let gas: Expr | undefined;
+    if (wrapper.arguments.length === 2) {
+      const optNode = wrapper.arguments[1]!;
+      if (!ts.isObjectLiteralExpression(optNode)) {
+        this.diags.error(optNode, 'JETH352', `${ifaceName}(...) options must be an object literal { value?, gas? }`);
+        return 'handled';
+      }
+      const fields = new Map<string, ts.Expression>();
+      for (const p of optNode.properties) {
+        if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
+          if (fields.has(p.name.text)) { this.diags.error(p.name, 'JETH352', `duplicate option '${p.name.text}'`); return 'handled'; }
+          fields.set(p.name.text, p.initializer);
+        } else if (ts.isShorthandPropertyAssignment(p)) {
+          if (fields.has(p.name.text)) { this.diags.error(p.name, 'JETH352', `duplicate option '${p.name.text}'`); return 'handled'; }
+          fields.set(p.name.text, p.name);
+        } else {
+          this.diags.error(p, 'JETH352', `${ifaceName}(...) options must be plain 'field: value' members`);
+          return 'handled';
+        }
+      }
+      for (const k of fields.keys()) {
+        if (k !== 'value' && k !== 'gas') {
+          this.diags.error(optNode, 'JETH352', `${ifaceName}(...): unknown option '${k}' (allowed: value, gas)`);
+          return 'handled';
+        }
+      }
+      const vNode = fields.get('value');
+      if (vNode) {
+        // solc: "Cannot set option value on a non-payable function type".
+        if (method.mutability !== 'payable') {
+          this.diags.error(vNode, 'JETH353', `cannot set option 'value' on the non-payable method '${ifaceName}.${methodName}'`);
+          return 'handled';
+        }
+        const v = this.checkExpr(vNode, U256);
+        if (!v) return 'handled';
+        if (!isInteger(v.type)) { this.diags.error(vNode, 'JETH306', `${ifaceName}(...) 'value' must be an integer, got ${displayName(v.type)}`); return 'handled'; }
+        value = this.coerce(v, U256, vNode);
+      }
+      const gNode = fields.get('gas');
+      if (gNode) {
+        const g = this.checkExpr(gNode, U256);
+        if (!g) return 'handled';
+        if (!isInteger(g.type)) { this.diags.error(gNode, 'JETH306', `${ifaceName}(...) 'gas' must be an integer, got ${displayName(g.type)}`); return 'handled'; }
+        gas = this.coerce(g, U256, gNode);
+      }
+    }
+
+    // ---- the arguments: check + coerce to the method's param types ----
+    if (node.arguments.length !== method.params.length) {
+      this.diags.error(node, 'JETH354', `'${ifaceName}.${methodName}' takes ${method.params.length} argument(s), got ${node.arguments.length}`);
+      return 'handled';
+    }
+    const args: Expr[] = [];
+    for (let i = 0; i < method.params.length; i++) {
+      const pt = method.params[i]!.type;
+      const a = this.checkExpr(node.arguments[i]!, pt);
+      if (!a) return 'handled';
+      if (pt.kind === 'struct') {
+        if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
+          this.diags.error(node.arguments[i]!, 'JETH355', `argument ${i + 1} of '${ifaceName}.${methodName}' expects ${displayName(pt)}, got ${displayName(a.type)}`);
+          return 'handled';
+        }
+        args.push(a);
+      } else {
+        args.push(this.coerce(a, pt, node.arguments[i]!));
+      }
+    }
+
+    // calldata = selector ++ abi.encode(args): a bytes value via the abiEncode codec with a precomputed
+    // bytes4 selector literal (left-aligned in the high 4 bytes, exactly like abi.encodeWithSelector).
+    const selExpr: Expr = { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + method.selector) << 224n };
+    const data: Expr = { kind: 'abiEncode', type: BYTES, packed: false, args, selector: selExpr };
+
+    // mutability: a CALL may mutate callee/this state (non-view); a STATICCALL is a read-only env effect.
+    if (op === 'call') this.currentWritesState = true;
+    else this.currentReadsEnv = true;
+
+    const call: Expr & { kind: 'extCall' } = {
+      kind: 'extCall', type: BYTES, op, addr: recv, data, value, gas, checks: [], bubble: true, codeGuard: true,
+    };
+    return { call, returnType: method.returnType, returnTypes: method.returnTypes };
+  }
+
   /** `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: resolve the destructuring source +
    *  component types ([bool, bytes]), or undefined if `node` is not a try-call. */
   private resolveTryCall(node: ts.Expression): { source: DestructureSource; types: JethType[] } | undefined {
@@ -3833,6 +4336,25 @@ export class Analyzer {
       this.diags.error(decl, 'JETH066', 'a tuple destructuring declaration requires an initializer');
       return;
     }
+    // Phase 6: `let [a, b] = IFoo(addr).method(args)` where the method has a >=2-component tuple return:
+    // decode the call's bytes returndata into N components (same abi.decode path as a tuple addr.call).
+    const ifaceCall = this.resolveInterfaceCall(decl.initializer);
+    if (ifaceCall === 'handled') return; // recognized interface call, already diagnosed
+    if (ifaceCall) {
+      if (!ifaceCall.returnTypes) {
+        this.diags.error(decl.name, 'JETH356', ifaceCall.returnType.kind === 'void'
+          ? 'this interface method returns void and cannot be destructured (call it as a statement)'
+          : 'this interface method returns a single value; bind it with `let x = ...`, not a destructuring');
+        return;
+      }
+      const rts = ifaceCall.returnTypes;
+      if (rts.length !== n) {
+        this.diags.error(decl.name, 'JETH356', `this interface method returns ${rts.length} value(s), expected ${n} name(s)`);
+        return;
+      }
+      this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: ifaceCall.call, types: rts }, out);
+      return;
+    }
     const callName = this.tupleCallName(decl.initializer);
     const tryCall = this.resolveTryCall(decl.initializer);
     const callDecode = tryCall ? undefined : this.resolveCallDecodeTuple(decl.initializer);
@@ -3890,6 +4412,14 @@ export class Analyzer {
       this.diags.error(decl.initializer, 'JETH066', 'tuple destructuring requires a multi-value call or a tuple literal on the right');
       return;
     }
+    this.bindDestructure(pat, n, types, source, out);
+  }
+
+  /** Declare a fresh local per non-skipped binding element of a tuple destructuring and emit the
+   *  tupleDecl. A non-value component binds a memory local in its kind's side-table (so later reads
+   *  resolve through the right codec). Shared by the internal-call, abi.decode, tryCall, and
+   *  interface-call tuple forms. */
+  private bindDestructure(pat: ts.ArrayBindingPattern, n: number, types: JethType[], source: DestructureSource, out: Stmt[]): void {
     const names: (string | null)[] = [];
     for (let i = 0; i < n; i++) {
       const el = pat.elements[i]!;
@@ -6330,6 +6860,21 @@ export class Analyzer {
       return node.name.text === 'ok' ? { kind: 'callOk', type: t } : { kind: 'callData', type: t };
     }
 
+    // Feature 2: `this.reason` / `this.panic` scoped bindings inside a try/catch CATCH body. Resolved
+    // BEFORE constant/immutable/state lookup so they take precedence; never leak (set only while checking
+    // the catch body). Record usage so codegen only computes the one(s) actually read.
+    if (
+      this.catchBindings &&
+      ts.isPropertyAccessExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      this.catchBindings.has(node.name.text)
+    ) {
+      const t = this.catchBindings.get(node.name.text)!;
+      if (node.name.text === 'reason') { this.catchUsesReason = true; return { kind: 'catchReason', type: t }; }
+      this.catchUsesPanic = true;
+      return { kind: 'catchPanic', type: t };
+    }
+
     // this.CONSTANT (read): inline the folded literal (no SLOAD; @constant is slot-free, like solc).
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && this.constantsByName.has(node.name.text)) {
       const c = this.constantsByName.get(node.name.text)!;
@@ -6962,6 +7507,12 @@ export class Analyzer {
       if (callee === 'payable' || resolvePrimitiveName(callee) || this.isEnumName(callee) || this.isBrandedAlias(callee)) return this.checkCast(node, callee);
       const st = this.structsByName.get(callee);
       if (st && st.kind === 'struct') return this.checkStructConstruct(node, st);
+      // Phase 6: a bare interface wrapper `IFoo(addr)` used as a VALUE (no .method() applied). An
+      // interface-tagged address is not usable on its own; it must be followed by a method call.
+      if (this.interfacesByName.has(callee) && !this.isVisibleLocal(callee)) {
+        this.diags.error(node, 'JETH358', `'${callee}(addr)' is an interface handle and cannot be used as a value; call a method on it, e.g. ${callee}(addr).someMethod(...)`);
+        return undefined;
+      }
       // an internal/private/public contract function called by name -> internal call.
       if (this.funcsByName.has(callee)) return this.checkInternalCall(node, callee, false);
       // F6: a generic internal call `f<T>(x)` / `f(x)` in value position.
@@ -7024,6 +7575,25 @@ export class Analyzer {
         const r = this.resolveAbiDecode(node, dm.data, dm.typeArg);
         if (!r) return undefined;
         return { kind: 'abiDecode', type: r.types[0]!, data: r.data };
+      }
+    }
+
+    // Phase 6: high-level typed interface call `IFoo(addr [, { value?, gas? }]).method(args)` in value
+    // position. A single-value method yields the abi.decode of the returndata; a void method cannot be
+    // a value (must be a statement); a tuple method must be destructured (handled in checkTupleDecl).
+    {
+      const ic = this.resolveInterfaceCall(node);
+      if (ic === 'handled') return undefined;
+      if (ic) {
+        if (ic.returnTypes) {
+          this.diags.error(node, 'JETH356', `this interface method returns a tuple; bind it with a destructuring \`let [a, b] = IFoo(addr).${(node as ts.CallExpression & { expression: ts.PropertyAccessExpression }).expression.name.text}(...)\``);
+          return undefined;
+        }
+        if (ic.returnType.kind === 'void') {
+          this.diags.error(node, 'JETH357', 'this interface method returns void and cannot be used as a value (call it as a statement)');
+          return undefined;
+        }
+        return { kind: 'abiDecode', type: ic.returnType, data: ic.call };
       }
     }
 

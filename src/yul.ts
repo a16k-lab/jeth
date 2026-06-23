@@ -1249,8 +1249,126 @@ ${indent(runtime, 6)}
         out.push(`${this.strPop()}(${slot})`);
         break;
       }
+      case 'tryCatch': {
+        this.lowerTryCatch(s, ctx, out);
+        break;
+      }
     }
     return out;
+  }
+
+  /** Feature 2: lower a try/catch around a high-level interface call. Mirrors solc:
+   *    ok, ret := <CALL/STATICCALL, returndata captured, NO auto-bubble>
+   *    switch ok
+   *    case 0 { <catch: bind e=ret + this.reason/this.panic; run catch body> }
+   *    default {
+   *      if iszero(extcodesize(addr)) { revert(0, 0) }   // a non-contract -> OUTER revert empty
+   *      <decode ret into the bound success vars (short returndata -> OUTER revert empty)>
+   *      <run try body>
+   *    } */
+  private lowerTryCatch(
+    s: Stmt & { kind: 'tryCatch' },
+    ctx: LowerCtx,
+    out: string[],
+  ): void {
+    // the controlling call WITHOUT bubble/codeGuard (the analyzer cleared both): we get ok + the
+    // captured returndata blob + the addr register (for the in-ok-branch extcodesize guard).
+    const { okReg, dataPtr, addrReg } = this.emitExtCall(s.call, ctx, out);
+    out.push(`switch ${okReg}`);
+
+    // ---- failure (ok==0): the catch body ----
+    out.push('case 0 {');
+    const catchOut: string[] = [];
+    this.ctxPush(ctx);
+    // `this.reason` / `this.panic` are soft-decoded from the verbatim returndata blob bound here.
+    this.ctxDeclare(ctx, EXT_CALL_DATA_BINDING, dataPtr);
+    if (s.catchName !== null) {
+      // `e: bytes` is a memory bytes local; its register IS the [len][data] pointer (the captured blob).
+      const ev = this.freshLocal(s.catchName);
+      catchOut.push(`let ${ev} := ${dataPtr}`);
+      this.ctxDeclare(ctx, s.catchName, ev);
+    }
+    for (const l of this.lowerBlock(s.catchBody, ctx)) catchOut.push(l);
+    this.ctxPop(ctx);
+    for (const l of catchOut) out.push('  ' + l);
+    out.push('}');
+
+    // ---- success (ok==1): codeGuard, decode the return, run the try body ----
+    out.push('default {');
+    const okOut: string[] = [];
+    okOut.push(`if iszero(extcodesize(${addrReg})) { revert(0, 0) }`);
+    this.ctxPush(ctx);
+    if (s.retTypes.length > 0) {
+      // decode the captured returndata blob into one register per bound component (short/empty
+      // returndata reverts EMPTY as an OUTER revert, via lowerAbiDecode's blob bounds). The data
+      // source is the EXT_CALL_DATA_BINDING (the blob pointer), reusing the addr.call decode path.
+      this.ctxDeclare(ctx, EXT_CALL_DATA_BINDING, dataPtr);
+      const dataExpr: Expr = { kind: 'callData', type: { kind: 'bytes' } };
+      const temps = this.lowerAbiDecode(dataExpr, s.retTypes, ctx, okOut);
+      s.retNames.forEach((nm, i) => {
+        if (nm === null) return;
+        const ln = this.freshLocal(nm);
+        okOut.push(`let ${ln} := ${temps[i]}`);
+        this.ctxDeclare(ctx, nm, ln);
+      });
+    }
+    for (const l of this.lowerBlock(s.tryBody, ctx)) okOut.push(l);
+    this.ctxPop(ctx);
+    for (const l of okOut) out.push('  ' + l);
+    out.push('}');
+  }
+
+  /** Feature 2: SOFT-decode `this.reason` (the Error(string) message) from the catch returndata blob.
+   *  Returns a memory [len][data] pointer: the decoded string when the blob is a well-formed
+   *  Error(string), else an EMPTY string (it MUST NOT hard-revert on a malformed payload - solc yields
+   *  "" there). Byte-identical to solc's `catch Error(string memory reason)` extraction: pre-validate
+   *  EXACTLY the bounds abiDecFromMem (the abi.decode string codec) would check for a string at e[4:]
+   *  decoded as (string); if all pass, the hard decode cannot revert, so reuse abiDecFromMem. */
+  private lowerCatchReason(ctx: LowerCtx, out: string[]): string {
+    const blob = this.ctxLookup(ctx, EXT_CALL_DATA_BINDING); // [len][e bytes]
+    // default result: a fresh EMPTY string image (length 0 = one zeroed word).
+    const rptr = this.fresh();
+    out.push(`let ${rptr} := ${this.alloc()}(0x20)`);
+    out.push(`mstore(${rptr}, 0)`);
+    // e-bytes region: blobData = add(blob, 0x20) (start of e), eEnd = add(blobData, len_e).
+    const blobData = this.fresh();
+    out.push(`let ${blobData} := add(${blob}, 0x20)`);
+    const eEnd = this.fresh();
+    out.push(`let ${eEnd} := add(${blobData}, mload(${blob}))`);
+    // Treat e[4:] as the abi.decode blob of `(string)`. innerData = e[4:] start = blobData + 4.
+    // Condition 1: len_e >= 4 (selector) AND the outer 1-word head fits: innerData + 32 <= eEnd
+    //   (lowerAbiDecode's `gt(add(blobData, 32), blobEnd)` over the inner blob; here innerData = blobData+4).
+    // Condition 2: the selector == 0x08c379a0.
+    out.push(`if and(iszero(lt(mload(${blob}), 36)), eq(shr(224, mload(${blobData})), 0x08c379a0)) {`);
+    const inner: string[] = [];
+    const innerData = this.fresh();
+    inner.push(`let ${innerData} := add(${blobData}, 4)`); // e[4:] = the (string) tuple blob
+    // offset word (relative to innerData), bounded like lowerAbiDecode's dynamic component.
+    const so = this.fresh();
+    inner.push(`let ${so} := mload(${innerData})`);
+    const se = this.fresh();
+    inner.push(`let ${se} := add(${innerData}, ${so})`);
+    // length word in-blob: `se + 32 <= eEnd` (cdElemHeadBytes(string) = 32). offset cap: so <= 2^64-1.
+    inner.push(`if and(iszero(gt(${so}, 0xffffffffffffffff)), iszero(gt(add(${se}, 32), ${eEnd}))) {`);
+    const lvl2: string[] = [];
+    const slen = this.fresh();
+    lvl2.push(`let ${slen} := mload(${se})`); // the string byte length
+    // abiDecFromMem(string) bounds: len <= 2^64-1 (Panic 0x41) AND data fits: se + 0x20 + len <= eEnd.
+    lvl2.push(`if and(iszero(gt(${slen}, 0xffffffffffffffff)), iszero(gt(add(add(${se}, 0x20), ${slen}), ${eEnd}))) {`);
+    const ok: string[] = [];
+    // all bounds pass -> the hard string decode is guaranteed not to revert; reuse abiDecFromMem.
+    const dst = this.fresh();
+    ok.push(`let ${dst} := mload(0x40)`);
+    const sz = this.abiDecFromMem({ kind: 'string' }, se, dst, eEnd, ok);
+    ok.push(`mstore(0x40, add(${dst}, ${sz}))`);
+    ok.push(`${rptr} := ${dst}`);
+    for (const l of ok) lvl2.push('  ' + l);
+    lvl2.push('}');
+    for (const l of lvl2) inner.push('  ' + l);
+    inner.push('}');
+    for (const l of inner) out.push('  ' + l);
+    out.push('}');
+    return rptr;
   }
 
   /** Lower a Stmt[] branch in a fresh ctx scope (mirrors a Yul block scope). */
@@ -1758,6 +1876,18 @@ ${indent(runtime, 6)}
       case 'callOk':
         // bound only inside a .call/.staticcall success condition: the captured success bool.
         return this.ctxLookup(ctx, EXT_CALL_OK_BINDING);
+      case 'catchPanic': {
+        // `this.panic` inside a try/catch catch body: SOFT-decode Panic(uint256). Panic has a fixed
+        // 4 + 32 layout, so the only checks are length >= 36 and the selector; never hard-revert
+        // (yields 0 when the returndata is not a Panic). Byte-identical to solc's `catch Panic(uint c)`.
+        const blob = this.ctxLookup(ctx, EXT_CALL_DATA_BINDING);
+        const r = this.fresh();
+        out.push(`let ${r} := 0`);
+        out.push(`if and(iszero(lt(mload(${blob}), 36)), eq(shr(224, mload(add(${blob}, 0x20))), 0x4e487b71)) {`);
+        out.push(`  ${r} := mload(add(${blob}, 0x24))`);
+        out.push('}');
+        return r;
+      }
       case 'cast':
         return this.lowerCast(e, ctx, out);
       case 'mapGet': {
@@ -1897,6 +2027,7 @@ ${indent(runtime, 6)}
       case 'abiEncode':
       case 'extCall': // bytes returndata (a reference value, lowered via lowerDynamic)
       case 'callData': // this.data inside a success condition (the returndata bytes reference)
+      case 'catchReason': // this.reason (string) inside a catch body (a reference value, lowered via lowerDynamic)
         // reference/aggregate values are not single 256-bit words; they are
         // consumed by the return/assign/length/index paths.
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
@@ -5229,6 +5360,9 @@ ${indent(runtime, 6)}
       case 'callData':
         // this.data inside a success condition: the returndata blob pointer bound for this check.
         return { src: 'memory', ptr: this.ctxLookup(ctx, EXT_CALL_DATA_BINDING) };
+      case 'catchReason':
+        // `this.reason` inside a try/catch catch body: the SOFT-decoded Error(string).
+        return { src: 'memory', ptr: this.lowerCatchReason(ctx, out) };
       case 'extCall': {
         // perform the CALL/STATICCALL, then run the ordered success checks (the first failing
         // condition reverts with its reason). Yields the returndata bytes.
@@ -5371,10 +5505,10 @@ ${indent(runtime, 6)}
    *  (extCall expr) and raw (tryCall destructure) forms; the data blob is fully materialized BEFORE
    *  the call so it cannot alias the returndata buffer. */
   private emitExtCall(
-    e: { op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr },
+    e: { op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr; bubble?: boolean; codeGuard?: boolean },
     ctx: LowerCtx,
     out: string[],
-  ): { okReg: string; dataPtr: string } {
+  ): { okReg: string; dataPtr: string; addrReg: string } {
     // Evaluate operands left-to-right: target, then value (call only), then gas, then the data blob.
     const addr = this.fresh();
     out.push(`let ${addr} := ${this.lowerExpr(e.addr, ctx, out)}`);
@@ -5406,7 +5540,19 @@ ${indent(runtime, 6)}
     out.push(`mstore(${dataPtr}, ${rlen})`);
     out.push(`returndatacopy(add(${dataPtr}, 0x20), 0, ${rlen})`);
     out.push(`if mod(${rlen}, 0x20) { mstore(add(add(${dataPtr}, 0x20), ${rlen}), 0) }`);
-    return { okReg, dataPtr };
+    // High-level typed interface call: bubble the callee's revert bytes VERBATIM, then guard against a
+    // non-contract target. Order matches solc: failure-bubble first (an EOA call returns ok=true+empty,
+    // so the bubble is skipped), then the extcodesize guard reverts empty for an EOA / never-deployed
+    // address. (NO re-eval of the addr Expr - reuse the register evaluated above.)
+    if (e.bubble) {
+      out.push(`if iszero(${okReg}) { revert(add(${dataPtr}, 0x20), mload(${dataPtr})) }`);
+    }
+    if (e.codeGuard) {
+      out.push(`if iszero(extcodesize(${addr})) { revert(0, 0) }`);
+    }
+    // Expose the addr register too: try/catch emits its codeGuard INSIDE the ok-branch without
+    // re-evaluating the addr Expr (no double-eval of side effects).
+    return { okReg, dataPtr, addrReg: addr };
   }
 
   /** Lower the ordered success checks of a `.call/.staticcall`. Each condition is evaluated with

@@ -36,8 +36,10 @@ describe('subset validator', () => {
     expect(codesFor(src)).toContain('JETH020');
   });
 
-  it('rejects try/catch and throw', () => {
-    expect(codesFor(wrap('try { this.x = 1n; } catch (e) {}'))).toContain('JETH026');
+  it('rejects a non-interface-call try block and throw', () => {
+    // try/catch is supported ONLY around a high-level interface call (Feature 2). A try whose first
+    // statement is not such a call is rejected by the analyzer (JETH361), not the blanket MVP gate.
+    expect(codesFor(wrap('try { this.x = 1n; } catch (e) {}'))).toContain('JETH361');
     expect(codesFor(wrap('throw 1n;'))).toContain('JETH025');
   });
 
