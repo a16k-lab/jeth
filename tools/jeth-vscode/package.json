@@ -1,0 +1,42 @@
+{
+  "name": "jeth-syntax",
+  "displayName": "JETH Syntax",
+  "description": "Syntax highlighting for JETH (.jeth) - a TypeScript-subset smart-contract language compiling to EVM.",
+  "version": "0.1.0",
+  "publisher": "jeth",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "jeth",
+        "aliases": [
+          "JETH",
+          "jeth"
+        ],
+        "extensions": [
+          ".jeth"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "jeth",
+        "scopeName": "source.jeth",
+        "path": "./syntaxes/jeth.tmLanguage.json"
+      },
+      {
+        "scopeName": "jeth.injection",
+        "path": "./syntaxes/jeth.injection.json",
+        "injectTo": ["source.jeth"]
+      }
+    ]
+  }
+}

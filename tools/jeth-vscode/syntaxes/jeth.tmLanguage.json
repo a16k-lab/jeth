@@ -1,0 +1,7 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "JETH",
+  "scopeName": "source.jeth",
+  "comment": "JETH is a TypeScript subset, so the base highlighting is the full TypeScript grammar. The JETH-specific colors (sized types, decorators, builtins) are added by the companion injection grammar jeth.injection.json (see package.json), which applies on top of source.ts inside every context.",
+  "patterns": [{ "include": "source.ts" }]
+}

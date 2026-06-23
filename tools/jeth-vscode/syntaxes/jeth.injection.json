@@ -1,0 +1,47 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "scopeName": "jeth.injection",
+  "comment": "Injected on top of source.jeth (which is TypeScript) so JETH-specific tokens are colored inside every context (class bodies, type annotations, expressions). 'L:' gives these higher priority than the host TypeScript rules; comments and strings are excluded.",
+  "injectionSelector": "L:source.jeth -comment -string",
+  "patterns": [
+    { "include": "#jeth-decorators" },
+    { "include": "#jeth-global-members" },
+    { "include": "#jeth-globals" },
+    { "include": "#jeth-types" },
+    { "include": "#jeth-builtins" }
+  ],
+  "repository": {
+    "jeth-decorators": {
+      "comment": "JETH decorators: @contract @external @view @state @event @error @interface ...",
+      "match": "(@)(contract|struct|interface|external|view|pure|payable|read|nonReentrant|state|constant|immutable|event|anonymous|error|modifier|indexed|public|internal|private|hidden)\\b",
+      "captures": {
+        "1": { "name": "punctuation.definition.decorator.jeth" },
+        "2": { "name": "entity.name.function.decorator.jeth storage.modifier.jeth" }
+      }
+    },
+    "jeth-types": {
+      "comment": "Sized integers u8..u256 / i8..i256 (step 8), bytes1..bytes32, bytes/bool/address/string/void, and the type constructors mapping / Arr / Brand.",
+      "match": "\\b(?:[ui](?:8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)|bytes(?:3[0-2]|[12][0-9]|[1-9])?|bool|address|string|void|mapping|Arr|Brand)\\b",
+      "name": "support.type.jeth"
+    },
+    "jeth-globals": {
+      "comment": "The global namespace objects.",
+      "match": "\\b(msg|block|tx|abi)\\b",
+      "name": "variable.language.jeth support.class.builtin.jeth"
+    },
+    "jeth-global-members": {
+      "comment": "Members of the global objects, colored only after their namespace + a dot so user identifiers named e.g. `value` are unaffected.",
+      "match": "\\b(msg|block|tx)\\s*(\\.)\\s*(sender|value|sig|data|origin|gasprice|timestamp|number|chainid|coinbase|basefee|gaslimit|prevrandao|difficulty|blobbasefee)\\b",
+      "captures": {
+        "1": { "name": "variable.language.jeth support.class.builtin.jeth" },
+        "2": { "name": "punctuation.accessor.jeth" },
+        "3": { "name": "support.variable.property.builtin.jeth" }
+      }
+    },
+    "jeth-builtins": {
+      "comment": "Free builtin functions / operators (not generic member names, to avoid mis-coloring user variables).",
+      "match": "\\b(require|assert|revert|revertWith|emit|keccak256|sha256|ripemd160|addmod|mulmod|blockhash|blobhash|gasleft|type|payable)\\b",
+      "name": "support.function.builtin.jeth"
+    }
+  }
+}
