@@ -10,8 +10,12 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 function diags(src: string): string[] {
-  try { compile(src, { fileName: 'G.jeth' }); return []; }
-  catch (e: any) { return (e.diagnostics ?? e.items ?? []).map((d: any) => d.code); }
+  try {
+    compile(src, { fileName: 'G.jeth' });
+    return [];
+  } catch (e: any) {
+    return (e.diagnostics ?? e.items ?? []).map((d: any) => d.code);
+  }
 }
 
 const JETH = `@contract class UD {
@@ -61,10 +65,12 @@ describe('round-2.5 fixes', () => {
   });
 
   it('#3 pushing a whole array element into a nested storage array now COMPILES (deep copy; see push-array-elem.test.ts)', () => {
-    expect(diags(`@contract class G {
+    expect(
+      diags(`@contract class G {
   @state dd: u256[][];
   @external f(): void { let xs: u256[] = [1n, 2n]; this.dd.push(xs); }
-}`)).toEqual([]);
+}`),
+    ).toEqual([]);
     expect(diags(`@contract class G { @state dd: u256[][]; @external f(): void { this.dd.push(); } }`)).toEqual([]);
   });
 });

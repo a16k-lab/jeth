@@ -14,7 +14,10 @@ function strSet(sel: string, head: bigint[], s: string): string {
   const b = Buffer.from(s, 'utf8');
   const nwords = Math.ceil(b.length / 32);
   let data = '';
-  for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+  for (let i = 0; i < nwords; i++)
+    data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   let h = '0x' + functionSelector(sel);
   for (const w of head) h += pad(w);
   h += pad(BigInt((head.length + 1) * 32)) + pad(BigInt(b.length)) + data;
@@ -100,7 +103,10 @@ describe('whole nested-struct field read/write/copy vs Solidity', () => {
       const b = Buffer.from(str, 'utf8');
       const nwords = Math.ceil(b.length / 32);
       let data = '';
-      for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+      for (let i = 0; i < nwords; i++)
+        data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+          .subarray(0, 32)
+          .toString('hex');
       // head: p, a, offset(str), q  -> 4 words; str offset = 4*32 = 0x80
       let h = '0x' + sel('setO(uint256,uint256,string,uint256)');
       h += pad(p) + pad(a) + pad(0x80n) + pad(q) + pad(BigInt(b.length)) + data;
@@ -140,7 +146,10 @@ describe('whole nested-struct field read/write/copy vs Solidity', () => {
       const b = Buffer.from(str, 'utf8');
       const nwords = Math.ceil(b.length / 32);
       let data = '';
-      for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+      for (let i = 0; i < nwords; i++)
+        data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+          .subarray(0, 32)
+          .toString('hex');
       let h = '0x' + sel('pushO(uint256,uint256,string,uint256)');
       h += pad(p) + pad(a) + pad(0x80n) + pad(q) + pad(BigInt(b.length)) + data;
       return h;

@@ -187,22 +187,50 @@ contract C {
 
 describe('probe', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const mism: string[] = []; let count = 0;
+  const mism: string[] = [];
+  let count = 0;
   async function eq(label: string, data: string) {
     count++;
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('runs', async () => {
     // binary operand order
-    for (const n of ['subOrder','subOrder2','divOrder','modOrder','mulOrder','incBin','postBin','mixBin','postSub']) await eq(n, encodeCall(sel(n + '()'), []));
+    for (const n of [
+      'subOrder',
+      'subOrder2',
+      'divOrder',
+      'modOrder',
+      'mulOrder',
+      'incBin',
+      'postBin',
+      'mixBin',
+      'postSub',
+    ])
+      await eq(n, encodeCall(sel(n + '()'), []));
     for (const v of [0n, 1n, 3n, 7n, 99n, M - 1n]) {
       await eq(`compBin(${v})`, encodeCall(sel('compBin(uint256)'), [v]));
       await eq(`leftMutRightRead(${v})`, encodeCall(sel('leftMutRightRead(uint256)'), [v]));
@@ -211,19 +239,33 @@ describe('probe', () => {
       await eq(`rawRight(${v})`, encodeCall(sel('rawRight(uint256)'), [v]));
     }
     // nested trees
-    for (const n of ['tree3','tree3post','treeSub','treeMixed','treeDeep']) await eq(n, encodeCall(sel(n + '()'), []));
+    for (const n of ['tree3', 'tree3post', 'treeSub', 'treeMixed', 'treeDeep'])
+      await eq(n, encodeCall(sel(n + '()'), []));
     // comparisons
     await eq('cmpOrder', encodeCall(sel('cmpOrder(uint256)'), [0n]));
     await eq('cmpEq', encodeCall(sel('cmpEq(uint256)'), [0n]));
     // argument lists
-    for (const n of ['arrLit','retTuple','internalArgs','incArgs','postArgs','nestedCallArgs','idxSide','emitOrd4']) await eq(n, encodeCall(sel(n + '()'), []));
+    for (const n of [
+      'arrLit',
+      'retTuple',
+      'internalArgs',
+      'incArgs',
+      'postArgs',
+      'nestedCallArgs',
+      'idxSide',
+      'emitOrd4',
+    ])
+      await eq(n, encodeCall(sel(n + '()'), []));
     // ternary
-    for (const n of ['ternTrue','ternFalse']) await eq(n, encodeCall(sel(n + '()'), []));
+    for (const n of ['ternTrue', 'ternFalse']) await eq(n, encodeCall(sel(n + '()'), []));
     await eq('ternCondSide', encodeCall(sel('ternCondSide(uint256)'), [0n]));
     await eq('ternNested(true)', encodeCall(sel('ternNested(bool)'), [1n]));
     await eq('ternNested(false)', encodeCall(sel('ternNested(bool)'), [0n]));
     // state-LHS assignment expressions (stateful, run + read back)
-    for (const n of ['setSeqOrd','setSeqArgs','setSeqBinRtoL']) { await eq(n, encodeCall(sel(n + '()'), [])); await eq(n + '/getSeq', encodeCall(sel('getSeq()'), [])); }
+    for (const n of ['setSeqOrd', 'setSeqArgs', 'setSeqBinRtoL']) {
+      await eq(n, encodeCall(sel(n + '()'), []));
+      await eq(n + '/getSeq', encodeCall(sel('getSeq()'), []));
+    }
     // array-element LHS
     await eq('arrElemOrd', encodeCall(sel('arrElemOrd()'), []));
     await eq('arrElemOrd/getArr0', encodeCall(sel('getArr(uint256)'), [0n]));
@@ -243,15 +285,18 @@ describe('probe', () => {
         await eq(`signedSub(${a},${b})`, encodeCall(sel('signedSub(int64,int64)'), [a, b]));
         await eq(`signedDiv(${a},${b})`, encodeCall(sel('signedDiv(int64,int64)'), [a, b]));
       }
-    for (const a of [0n, 1n, 200n, 255n]) for (const b of [0n, 7n, 128n, 255n])
-      await eq(`narrowOrd(${a},${b})`, encodeCall(sel('narrowOrd(uint8,uint8)'), [a, b]));
+    for (const a of [0n, 1n, 200n, 255n])
+      for (const b of [0n, 7n, 128n, 255n])
+        await eq(`narrowOrd(${a},${b})`, encodeCall(sel('narrowOrd(uint8,uint8)'), [a, b]));
     // require/revert/error arg order (cond true: no revert; cond false: revert with args)
     await eq('reqArgsOrd(true)', encodeCall(sel('reqArgsOrd(bool)'), [1n]));
     await eq('reqArgsOrd(false)', encodeCall(sel('reqArgsOrd(bool)'), [0n]));
     await eq('revertArgsOrd', encodeCall(sel('revertArgsOrd()'), []));
 
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0,40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
-    expect(mism, mism.slice(0,15).join('\n')).toEqual([]);
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
+    expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

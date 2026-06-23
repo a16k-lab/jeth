@@ -42,21 +42,33 @@ contract NF {
 describe('nested fixed-array whole returns vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = (s: string) => functionSelector(s);
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'NF.jeth' });
     const sb = compileSolidity(SOL, 'NF');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('2D fixed array: whole return + single-index row (no zeroing)', async () => {
-    for (const [i, j, v] of [[0n,0n,1n],[0n,1n,2n],[1n,0n,3n],[1n,1n,4n]] as [bigint,bigint,bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 1n],
+      [0n, 1n, 2n],
+      [1n, 0n, 3n],
+      [1n, 1n, 4n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setG(uint256,uint256,uint256)'), [i, j, v]));
     await eq('whole', encodeCall(sel('whole()'), []));
     await eq('row[0]', encodeCall(sel('row(uint256)'), [0n]));

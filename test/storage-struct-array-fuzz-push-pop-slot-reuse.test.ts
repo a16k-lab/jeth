@@ -65,7 +65,9 @@ describe('push-pop-slot-reuse vs Solidity', () => {
   // byte-identical: success + returndata.
   async function eqCall(label: string, data: string) {
     const { j, s } = await both(data);
-    expect(j.success, `${label} success (jeth err=${j.exceptionError}) j=${j.returnHex} s=${s.returnHex}`).toBe(s.success);
+    expect(j.success, `${label} success (jeth err=${j.exceptionError}) j=${j.returnHex} s=${s.returnHex}`).toBe(
+      s.success,
+    );
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     return { j, s };
   }

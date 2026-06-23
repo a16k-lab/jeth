@@ -9,3 +9,9 @@ graphify-out
 # lockfiles + misc
 package-lock.json
 .DS_Store
+
+# docs, markdown, and the managed .claude/ skill files are left to their own style
+# (Prettier is scoped to code: src/, test/, examples/)
+*.md
+docs
+.claude

@@ -50,15 +50,18 @@ contract C {
 describe('evaluation order vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('binary operand order (right before left)', async () => {

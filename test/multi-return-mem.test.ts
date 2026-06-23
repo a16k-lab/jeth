@@ -29,15 +29,18 @@ describe('memory-array multi-return component vs Solidity', () => {
   const sel = (s: string) => functionSelector(s);
   async function eq(label: string, sig: string, args: bigint[]) {
     const data = '0x' + sel(sig) + args.map(pad).join('');
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'MM.jeth' });
     const sb = compileSolidity(SOL, 'MM');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('[memArray, value] and [value, memArray]', async () => {
     await eq('f', 'f(uint256,uint256)', [10n, 20n]);

@@ -23,7 +23,12 @@ const sel = (s: string) => functionSelector(s);
 const W = (n: bigint) => pad32(n);
 
 function jethRejects(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return false; } catch { return true; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 // The interface, identical shape in JETH and solc.
@@ -70,11 +75,7 @@ const TARGET_SOL = `contract T {
 
 /** Deploy the SAME (solc) target bytecode in both harnesses + a JETH and solc caller; diff results.
  *  The caller is invoked with the target's address as the first 32-byte arg. */
-async function rt(
-  callerJeth: string,
-  callerSol: string,
-  calls: { sig: string; noTarget?: boolean }[],
-) {
+async function rt(callerJeth: string, callerSol: string, calls: { sig: string; noTarget?: boolean }[]) {
   const tsb = compileSolidity(SPDX + TARGET_SOL, 'T');
   const cjb = compile(callerJeth, { fileName: 'C.jeth' });
   const csb = compileSolidity(SPDX + callerSol, 'C');
@@ -282,9 +283,15 @@ describe('try/catch: return-decode bounds (byte-identical vs solc)', () => {
     expect(rj.success, `${sig}: success`).toBe(rs.success);
     expect(rj.returnHex, `${sig}: returndata`).toBe(rs.returnHex);
   }
-  it('0-byte returndata < head -> OUTER revert empty (NOT catch)', async () => { await rtRet('zero'); });
-  it('31-byte returndata < head -> OUTER revert empty (NOT catch)', async () => { await rtRet('short31'); });
-  it('64-byte returndata > head -> decode, trailing word ignored', async () => { await rtRet('extra64'); });
+  it('0-byte returndata < head -> OUTER revert empty (NOT catch)', async () => {
+    await rtRet('zero');
+  });
+  it('31-byte returndata < head -> OUTER revert empty (NOT catch)', async () => {
+    await rtRet('short31');
+  });
+  it('64-byte returndata > head -> decode, trailing word ignored', async () => {
+    await rtRet('extra64');
+  });
 });
 
 // A target whose `bad(mode)` reverts with arbitrary raw bytes (crafted via inline assembly). Deployed on
@@ -370,7 +377,7 @@ describe('try/catch helpers (stage 2b): this.reason / this.panic byte-identical 
       expect(rj.success).toBe(rs.success);
       expect(rj.returnHex).toBe(rs.returnHex);
     }
-    await one('boom()', 'boom()');   // Error -> this.reason
+    await one('boom()', 'boom()'); // Error -> this.reason
     await one('pdiv(0n)', 'pdiv(0)'); // Panic -> "panic"
   });
 });
@@ -384,33 +391,71 @@ describe('try/catch: clean rejections (no crash)', () => {
     expect(jethRejects(`@contract class C { @external f(): u256 { return this.panic; } }`)).toBe(true);
   });
   it('rejects this.reason inside the try body (not the catch)', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): string { try { let r: u256 = IFoo(t).bar(1n); return this.reason; } catch (e) { return ""; } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): string { try { let r: u256 = IFoo(t).bar(1n); return this.reason; } catch (e) { return ""; } } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a finally clause', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } catch (e) { return 0n; } finally { } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } catch (e) { return 0n; } finally { } } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a try with no catch', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } finally { } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } finally { } } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a first statement that is not an interface call', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = 5n; return r; } catch (e) { return 0n; } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = 5n; return r; } catch (e) { return 0n; } } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a first statement that is an internal call', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external g(): u256 { return 1n; } @external f(t: address): u256 { try { let r: u256 = this.g(); return r; } catch (e) { return 0n; } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external g(): u256 { return 1n; } @external f(t: address): u256 { try { let r: u256 = this.g(); return r; } catch (e) { return 0n; } } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a void method bound to a name', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).nada(); return r; } catch (e) { return 0n; } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).nada(); return r; } catch (e) { return 0n; } } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a tuple method bound to a single name', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).pair(); return r; } catch (e) { return 0n; } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).pair(); return r; } catch (e) { return 0n; } } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a catch binding annotated as a non-bytes type', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } catch (e: u256) { return 0n; } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } catch (e: u256) { return 0n; } } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects an empty try block', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { } catch (e) { return 0n; } } }`)).toBe(true);
+    expect(
+      jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { } catch (e) { return 0n; } } }`),
+    ).toBe(true);
   });
   it('rejects a return-type annotation that mismatches the method return', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): bool { try { let r: bool = IFoo(t).bar(1n); return r; } catch (e) { return false; } } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): bool { try { let r: bool = IFoo(t).bar(1n); return r; } catch (e) { return false; } } }`,
+      ),
+    ).toBe(true);
   });
 });

@@ -1,23 +1,49 @@
 // Phase 4e-2b: mapping value that is a dynamic array (mapping<K, T[]>): push/pop,
 // .length, this.m[k][i] element access (value and struct field).
-@struct class Rec { id: u64; amt: u128; }
+@struct
+class Rec {
+  id: u64;
+  amt: u128;
+}
 
 @contract
 class MapArray {
-  @state nums: mapping<address, u256[]>;   // slot 0
-  @state recs: mapping<address, Rec[]>;     // slot 1
-  @state sentinel: u256;                     // slot 2
+  @state nums: mapping<address, u256[]>; // slot 0
+  @state recs: mapping<address, Rec[]>; // slot 1
+  @state sentinel: u256; // slot 2
 
-  @external pushNum(k: address, v: u256): void { this.nums[k].push(v); }
-  @external popNum(k: address): void { this.nums[k].pop(); }
-  @external setNum(k: address, i: u256, v: u256): void { this.nums[k][i] = v; }
-  @external @view numLen(k: address): u256 { return this.nums[k].length; }
-  @external @view numAt(k: address, i: u256): u256 { return this.nums[k][i]; }
+  @external pushNum(k: address, v: u256): void {
+    this.nums[k].push(v);
+  }
+  @external popNum(k: address): void {
+    this.nums[k].pop();
+  }
+  @external setNum(k: address, i: u256, v: u256): void {
+    this.nums[k][i] = v;
+  }
+  @external @view numLen(k: address): u256 {
+    return this.nums[k].length;
+  }
+  @external @view numAt(k: address, i: u256): u256 {
+    return this.nums[k][i];
+  }
 
-  @external addRec(k: address, id: u64, amt: u128): void { this.recs[k].push(Rec(id, amt)); }
-  @external popRec(k: address): void { this.recs[k].pop(); }
-  @external setRecAmt(k: address, i: u256, v: u128): void { this.recs[k][i].amt = v; }
-  @external @view recLen(k: address): u256 { return this.recs[k].length; }
-  @external @view recId(k: address, i: u256): u64 { return this.recs[k][i].id; }
-  @external @view recAmt(k: address, i: u256): u128 { return this.recs[k][i].amt; }
+  @external addRec(k: address, id: u64, amt: u128): void {
+    this.recs[k].push(Rec(id, amt));
+  }
+  @external popRec(k: address): void {
+    this.recs[k].pop();
+  }
+  @external setRecAmt(k: address, i: u256, v: u128): void {
+    this.recs[k][i].amt = v;
+  }
+  @external @view recLen(k: address): u256 {
+    return this.recs[k].length;
+  }
+  @external @view recId(k: address, i: u256): u64 {
+    return this.recs[k][i].id;
+  }
+  @external @view recAmt(k: address, i: u256): u128 {
+    return this.recs[k][i].amt;
+  }
 }

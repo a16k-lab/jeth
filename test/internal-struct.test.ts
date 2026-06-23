@@ -59,33 +59,51 @@ contract C {
 
 describe('internal-function struct params/returns (G8+G9) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('pass / mutate-by-ref / return / bind / chain', async () => {
-    for (const [a, b] of [[1n, 2n], [0n, 0n], [M - 1n, 5n], [100n, 200n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [1n, 2n],
+      [0n, 0n],
+      [M - 1n, 5n],
+      [100n, 200n],
+    ] as [bigint, bigint][]) {
       await eq(`sumE(${a},${b})`, encodeCall(sel('sumE(uint256,uint256)'), [a, b]));
       await eq(`makeE(${a},${b})`, encodeCall(sel('makeE(uint256,uint256)'), [a, b]));
       await eq(`bindRead(${a},${b})`, encodeCall(sel('bindRead(uint256,uint256)'), [a, b]));
       await eq(`chainE(${a},${b})`, encodeCall(sel('chainE(uint256,uint256)'), [a, b]));
-      for (const k of [0n, 1n, 3n]) await eq(`scaleE(${a},${b},${k})`, encodeCall(sel('scaleE(uint256,uint256,uint256)'), [a, b, k]));
+      for (const k of [0n, 1n, 3n])
+        await eq(`scaleE(${a},${b},${k})`, encodeCall(sel('scaleE(uint256,uint256,uint256)'), [a, b, k]));
     }
   });
   it('recursion building a struct', async () => {
-    for (const n of [0n, 1n, 5n, 20n]) await eq(`climbE(${n})`, encodeCall(sel('climbE(uint256,uint256,uint256)'), [1n, 2n, n]));
+    for (const n of [0n, 1n, 5n, 20n])
+      await eq(`climbE(${n})`, encodeCall(sel('climbE(uint256,uint256,uint256)'), [1n, 2n, n]));
   });
   it('stateful struct-arg helper', async () => {
-    for (const [a, b] of [[1n, 2n], [10n, 20n]] as [bigint, bigint][]) await send(encodeCall(sel('feed(uint256,uint256)'), [a, b]));
+    for (const [a, b] of [
+      [1n, 2n],
+      [10n, 20n],
+    ] as [bigint, bigint][])
+      await send(encodeCall(sel('feed(uint256,uint256)'), [a, b]));
     await eq('getAcc', encodeCall(sel('getAcc()'), []));
   });
 });

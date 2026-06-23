@@ -10,8 +10,12 @@ import { compileSolidity } from './_solidity.js';
 
 const M = 1n << 256n;
 function diags(src: string): string[] {
-  try { compile(src, { fileName: 'W.jeth' }); return []; }
-  catch (e: any) { return (e.diagnostics ?? e.items ?? []).map((d: any) => d.code); }
+  try {
+    compile(src, { fileName: 'W.jeth' });
+    return [];
+  } catch (e: any) {
+    return (e.diagnostics ?? e.items ?? []).map((d: any) => d.code);
+  }
 }
 
 const JETH = `@contract class W {

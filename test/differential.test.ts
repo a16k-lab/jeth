@@ -54,33 +54,141 @@ interface Case {
 
 const CASES: Case[] = [
   // unsigned arithmetic, including overflow / div-by-zero edges
-  ...pairs('addU256(uint256,uint256)', [[0n, 0n], [1n, 2n], [U256_MAX, 0n], [U256_MAX, 1n], [P128, P128]]),
-  ...pairs('subU256(uint256,uint256)', [[5n, 3n], [3n, 5n], [0n, 0n], [0n, 1n]]),
-  ...pairs('mulU256(uint256,uint256)', [[0n, U256_MAX], [2n, 3n], [U256_MAX, 2n], [P128, P128], [P128, 2n]]),
-  ...pairs('divU256(uint256,uint256)', [[10n, 3n], [10n, 0n], [U256_MAX, 1n], [0n, 5n]]),
-  ...pairs('modU256(uint256,uint256)', [[10n, 3n], [10n, 0n], [U256_MAX, 7n]]),
+  ...pairs('addU256(uint256,uint256)', [
+    [0n, 0n],
+    [1n, 2n],
+    [U256_MAX, 0n],
+    [U256_MAX, 1n],
+    [P128, P128],
+  ]),
+  ...pairs('subU256(uint256,uint256)', [
+    [5n, 3n],
+    [3n, 5n],
+    [0n, 0n],
+    [0n, 1n],
+  ]),
+  ...pairs('mulU256(uint256,uint256)', [
+    [0n, U256_MAX],
+    [2n, 3n],
+    [U256_MAX, 2n],
+    [P128, P128],
+    [P128, 2n],
+  ]),
+  ...pairs('divU256(uint256,uint256)', [
+    [10n, 3n],
+    [10n, 0n],
+    [U256_MAX, 1n],
+    [0n, 5n],
+  ]),
+  ...pairs('modU256(uint256,uint256)', [
+    [10n, 3n],
+    [10n, 0n],
+    [U256_MAX, 7n],
+  ]),
   // narrow unsigned
-  ...pairs('addU8(uint8,uint8)', [[100n, 100n], [200n, 100n], [255n, 0n], [255n, 1n]]),
-  ...pairs('mulU8(uint8,uint8)', [[16n, 16n], [15n, 17n], [10n, 10n], [255n, 2n]]),
-  ...pairs('shlU8(uint8,uint8)', [[1n, 3n], [255n, 4n], [1n, 8n], [1n, 7n], [3n, 6n]]),
+  ...pairs('addU8(uint8,uint8)', [
+    [100n, 100n],
+    [200n, 100n],
+    [255n, 0n],
+    [255n, 1n],
+  ]),
+  ...pairs('mulU8(uint8,uint8)', [
+    [16n, 16n],
+    [15n, 17n],
+    [10n, 10n],
+    [255n, 2n],
+  ]),
+  ...pairs('shlU8(uint8,uint8)', [
+    [1n, 3n],
+    [255n, 4n],
+    [1n, 8n],
+    [1n, 7n],
+    [3n, 6n],
+  ]),
   // signed arithmetic
-  ...pairs('addI256(int256,int256)', [[1n, 2n], [-1n, -2n], [I256_MAX, 1n], [I256_MIN, -1n], [I256_MAX, -1n]]),
-  ...pairs('subI256(int256,int256)', [[1n, 2n], [I256_MIN, 1n], [I256_MAX, -1n], [-5n, -5n]]),
-  ...pairs('mulI256(int256,int256)', [[-2n, 3n], [I256_MIN, -1n], [I256_MAX, 2n], [2n, 3n], [-1n, -1n], [I256_MIN, 1n]]),
-  ...pairs('divI256(int256,int256)', [[-6n, 3n], [7n, -2n], [I256_MIN, -1n], [5n, 0n], [-7n, 2n]]),
-  ...pairs('modI256(int256,int256)', [[-7n, 3n], [7n, -3n], [5n, 0n], [-8n, 3n]]),
+  ...pairs('addI256(int256,int256)', [
+    [1n, 2n],
+    [-1n, -2n],
+    [I256_MAX, 1n],
+    [I256_MIN, -1n],
+    [I256_MAX, -1n],
+  ]),
+  ...pairs('subI256(int256,int256)', [
+    [1n, 2n],
+    [I256_MIN, 1n],
+    [I256_MAX, -1n],
+    [-5n, -5n],
+  ]),
+  ...pairs('mulI256(int256,int256)', [
+    [-2n, 3n],
+    [I256_MIN, -1n],
+    [I256_MAX, 2n],
+    [2n, 3n],
+    [-1n, -1n],
+    [I256_MIN, 1n],
+  ]),
+  ...pairs('divI256(int256,int256)', [
+    [-6n, 3n],
+    [7n, -2n],
+    [I256_MIN, -1n],
+    [5n, 0n],
+    [-7n, 2n],
+  ]),
+  ...pairs('modI256(int256,int256)', [
+    [-7n, 3n],
+    [7n, -3n],
+    [5n, 0n],
+    [-8n, 3n],
+  ]),
   // narrow signed
-  ...pairs('addI8(int8,int8)', [[100n, 27n], [100n, 28n], [-128n, -1n], [-100n, -28n], [-128n, 127n]]),
-  ...pairs('mulI8(int8,int8)', [[16n, 7n], [16n, 8n], [-16n, 8n], [-16n, 9n], [-1n, -128n]]),
+  ...pairs('addI8(int8,int8)', [
+    [100n, 27n],
+    [100n, 28n],
+    [-128n, -1n],
+    [-100n, -28n],
+    [-128n, 127n],
+  ]),
+  ...pairs('mulI8(int8,int8)', [
+    [16n, 7n],
+    [16n, 8n],
+    [-16n, 8n],
+    [-16n, 9n],
+    [-1n, -128n],
+  ]),
   ...pairs('negI8(int8)', [[5n], [-128n], [127n], [0n], [-1n]]),
   // comparisons (signed vs unsigned must differ on negatives)
-  ...pairs('ltU256(uint256,uint256)', [[1n, 2n], [2n, 1n], [U256_MAX, 0n]]),
-  ...pairs('ltI256(int256,int256)', [[-1n, 1n], [1n, -1n], [I256_MIN, I256_MAX]]),
+  ...pairs('ltU256(uint256,uint256)', [
+    [1n, 2n],
+    [2n, 1n],
+    [U256_MAX, 0n],
+  ]),
+  ...pairs('ltI256(int256,int256)', [
+    [-1n, 1n],
+    [1n, -1n],
+    [I256_MIN, I256_MAX],
+  ]),
   // arithmetic shift right keeps sign
-  ...pairs('shrI256(int256,uint256)', [[-8n, 1n], [-1n, 5n], [I256_MIN, 4n], [255n, 2n]]),
+  ...pairs('shrI256(int256,uint256)', [
+    [-8n, 1n],
+    [-1n, 5n],
+    [I256_MIN, 4n],
+    [255n, 2n],
+  ]),
   // signed narrow left shift must sign-extend/truncate to the type (regression)
-  ...pairs('shlI8(int8,uint8)', [[127n, 1n], [1n, 7n], [-1n, 1n], [64n, 1n], [-64n, 2n], [1n, 8n]]),
-  ...pairs('shlI16(int16,uint8)', [[16384n, 1n], [-1n, 4n], [255n, 8n], [1n, 15n]]),
+  ...pairs('shlI8(int8,uint8)', [
+    [127n, 1n],
+    [1n, 7n],
+    [-1n, 1n],
+    [64n, 1n],
+    [-64n, 2n],
+    [1n, 8n],
+  ]),
+  ...pairs('shlI16(int16,uint8)', [
+    [16384n, 1n],
+    [-1n, 4n],
+    [255n, 8n],
+    [1n, 15n],
+  ]),
   // short-circuit: a == 0 must NOT evaluate the dividing RHS (would revert)
   ...pairs('scAnd(uint256)', [[0n], [5n]]),
   ...pairs('scOr(uint256)', [[0n], [1n], [3n]]),
@@ -114,7 +222,10 @@ describe('differential vs Solidity', () => {
       const r1 = await jeth.call(jethAddr, data);
       const r2 = await sol.call(solAddr, data);
       const label = `${c.sig} [${c.args.join(', ')}]`;
-      expect(r1.success, `${label}: success mismatch (jeth=${r1.success} sol=${r2.success} err=${r1.exceptionError})`).toBe(r2.success);
+      expect(
+        r1.success,
+        `${label}: success mismatch (jeth=${r1.success} sol=${r2.success} err=${r1.exceptionError})`,
+      ).toBe(r2.success);
       if (r1.success && r2.success) {
         expect(r1.returnHex, `${label}: return mismatch`).toBe(r2.returnHex);
       } else {

@@ -26,8 +26,13 @@ import type { LogEntry } from '../src/evm.js';
 const sel = (s: string) => functionSelector(s);
 
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 function eqLogs(a: LogEntry[], b: LogEntry[]) {
   expect(a.map((l) => ({ t: l.topics, d: l.data }))).toEqual(b.map((l) => ({ t: l.topics, d: l.data })));
@@ -339,13 +344,15 @@ describe('ADV switch: byte-identical to the if/else twin under solc', () => {
   let h: Harness, hs: Harness, jv: Address, sv: Address;
   // full parity for one read-only call: success + returndata + logs.
   async function eq(label: string, data: string) {
-    const j = await h.call(jv, data); const s = await hs.call(sv, data);
+    const j = await h.call(jv, data);
+    const s = await hs.call(sv, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     eqLogs(j.logs, s.logs);
   }
   beforeAll(async () => {
-    h = await Harness.create(); hs = await Harness.create();
+    h = await Harness.create();
+    hs = await Harness.create();
     jv = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     sv = await hs.deploy(compileSolidity(SOL, 'C').creation);
   });
@@ -359,7 +366,12 @@ describe('ADV switch: byte-identical to the if/else twin under solc', () => {
     }
   });
   it('(1) compound-expression discriminant computed once', async () => {
-    for (const [a, b] of [[2n, 3n], [1n, 5n], [3n, 3n], [0n, 0n]] as const)
+    for (const [a, b] of [
+      [2n, 3n],
+      [1n, 5n],
+      [3n, 3n],
+      [0n, 0n],
+    ] as const)
       await eq(`exprDisc(${a},${b})`, encodeCall(sel('exprDisc(uint256,uint256)'), [a, b]));
   });
   it('(1) empty-label-group match reads the temp N times but bumps n ONCE (slot 0 vs twin)', async () => {
@@ -392,7 +404,7 @@ describe('ADV switch: byte-identical to the if/else twin under solc', () => {
 
   it('(4) all terminator forms (return/revert-str/custom-error/continue/break/if-else/block)', async () => {
     for (const v of [0n, 1n]) await eq(`tReturn(${v})`, encodeCall(sel('tReturn(uint256)'), [v]));
-    for (const v of [0n, 1n]) await eq(`tRevertStr(${v})`, encodeCall(sel('tRevertStr(uint256)'), [v]));  // revert("nope") data
+    for (const v of [0n, 1n]) await eq(`tRevertStr(${v})`, encodeCall(sel('tRevertStr(uint256)'), [v])); // revert("nope") data
     for (const v of [0n, 1n, 42n]) await eq(`tRevertErr(${v})`, encodeCall(sel('tRevertErr(uint256)'), [v])); // Boom(x) data
     for (const v of [0n, 1n, 2n, 3n, 5n]) await eq(`tContinue(${v})`, encodeCall(sel('tContinue(uint256)'), [v]));
     for (const v of [0n, 1n, 2n]) await eq(`tBreak(${v})`, encodeCall(sel('tBreak(uint256)'), [v]));
@@ -408,12 +420,17 @@ describe('ADV switch: byte-identical to the if/else twin under solc', () => {
     for (const v of [0n, 1n, 2n, 5n]) await eq(`whileSwitch(${v})`, encodeCall(sel('whileSwitch(uint256)'), [v]));
   });
   it('(5) switch nested in switch / switch nested in if', async () => {
-    for (const x of [0n, 1n]) for (const c of [0n, 1n, 2n]) await eq(`switchInSwitch(${x},${c})`, encodeCall(sel('switchInSwitch(uint256,uint8)'), [x, c]));
-    for (const x of [0n, 1n, 2n]) for (const y of [0n, 1n]) await eq(`switchInIf(${x},${y})`, encodeCall(sel('switchInIf(uint256,uint256)'), [x, y]));
+    for (const x of [0n, 1n])
+      for (const c of [0n, 1n, 2n])
+        await eq(`switchInSwitch(${x},${c})`, encodeCall(sel('switchInSwitch(uint256,uint8)'), [x, c]));
+    for (const x of [0n, 1n, 2n])
+      for (const y of [0n, 1n])
+        await eq(`switchInIf(${x},${y})`, encodeCall(sel('switchInIf(uint256,uint256)'), [x, y]));
   });
 
   it('(6) temp non-collision: two switches, sibling locals, hot loop', async () => {
-    for (const x of [0n, 1n]) for (const y of [0n, 1n]) await eq(`twoSwitch(${x},${y})`, encodeCall(sel('twoSwitch(uint256,uint256)'), [x, y]));
+    for (const x of [0n, 1n])
+      for (const y of [0n, 1n]) await eq(`twoSwitch(${x},${y})`, encodeCall(sel('twoSwitch(uint256,uint256)'), [x, y]));
     for (const v of [0n, 1n, 2n, 3n]) await eq(`siblingLocal(${v})`, encodeCall(sel('siblingLocal(uint256)'), [v]));
     for (const v of [0n, 1n, 7n, 100n]) await eq(`hotLoop(${v})`, encodeCall(sel('hotLoop(uint256)'), [v]));
   });
@@ -433,7 +450,13 @@ describe('ADV switch: byte-identical to the if/else twin under solc', () => {
   it('(9) duplicate labels route to the first arm; non-const label, default-only, empty switch', async () => {
     // varLabel: `case y:` is a runtime comparison `__sw == y`. Twin: if (x == y) ... Probe the
     // precedence vs the constant arm `case 5n:` (when y==5 the FIRST arm should win, matching solc).
-    for (const [x, y] of [[3n, 3n], [5n, 9n], [5n, 5n], [9n, 9n], [0n, 1n]] as const)
+    for (const [x, y] of [
+      [3n, 3n],
+      [5n, 9n],
+      [5n, 5n],
+      [9n, 9n],
+      [0n, 1n],
+    ] as const)
       await eq(`varLabel(${x},${y})`, encodeCall(sel('varLabel(uint256,uint256)'), [x, y]));
     for (const v of [0n, 1n, 7n]) await eq(`defOnly(${v})`, encodeCall(sel('defOnly(uint256)'), [v]));
     for (const v of [0n, 1n, 7n]) await eq(`emptySwitch(${v})`, encodeCall(sel('emptySwitch(uint256)'), [v]));
@@ -451,8 +474,14 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
 
   it('JETH281: non-value discriminant (string / array / struct)', () => {
     expect(codes(wrap('switch (s) { case "a": return 1n; default: return 0n; }'))).toContain('JETH281');
-    expect(codes(`@contract class C { @external @pure f(a: u256[]): u256 { switch (a) { default: return 0n; } } }`)).toContain('JETH281');
-    expect(codes(`@struct class S { a: u256; }\n@contract class C { @external @pure f(s: S): u256 { switch (s) { default: return 0n; } } }`)).toContain('JETH281');
+    expect(
+      codes(`@contract class C { @external @pure f(a: u256[]): u256 { switch (a) { default: return 0n; } } }`),
+    ).toContain('JETH281');
+    expect(
+      codes(
+        `@struct class S { a: u256; }\n@contract class C { @external @pure f(s: S): u256 { switch (s) { default: return 0n; } } }`,
+      ),
+    ).toContain('JETH281');
   });
   it('JETH282: default not last', () => {
     expect(codes(wrap('switch (x) { default: return 0n; case 1n: return 1n; }'))).toContain('JETH282');
@@ -463,22 +492,30 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
     expect(codes(wrap('switch (x) { case 1n: return 1n; case 2n: }'))).toContain('JETH283');
   });
   it('JETH284: implicit fall-through from a non-empty case', () => {
-    expect(codes(wrap('switch (x) { case 1n: { let y: u256 = x; } case 2n: return 2n; default: return 0n; }'))).toContain('JETH284');
+    expect(
+      codes(wrap('switch (x) { case 1n: { let y: u256 = x; } case 2n: return 2n; default: return 0n; }')),
+    ).toContain('JETH284');
   });
   it('JETH284: a trailing nested switch is NOT auto-diverting (needs an explicit break)', () => {
-    expect(codes(
-      `enum E { A, B }\n@contract class C { @external @pure f(x: u256, c: E): u256 {\nswitch (x) { case 1n: switch (c) { case E.A: return 1n; case E.B: return 2n; } default: return 0n; }\nreturn 9n; } }`,
-    )).toContain('JETH284');
+    expect(
+      codes(
+        `enum E { A, B }\n@contract class C { @external @pure f(x: u256, c: E): u256 {\nswitch (x) { case 1n: switch (c) { case E.A: return 1n; case E.B: return 2n; } default: return 0n; }\nreturn 9n; } }`,
+      ),
+    ).toContain('JETH284');
   });
   it('JETH285: an early/stray break mid-case', () => {
-    expect(codes(wrap('switch (x) { case 1n: if (x > 0n) break; return 5n; default: return 0n; }'))).toContain('JETH285');
+    expect(codes(wrap('switch (x) { case 1n: if (x > 0n) break; return 5n; default: return 0n; }'))).toContain(
+      'JETH285',
+    );
   });
   it('JETH286: non-exhaustive enum switch with no default', () => {
     expect(codes(wrap('switch (c) { case Color.Red: return 1n; case Color.Green: return 2n; }'))).toContain('JETH286');
   });
 
   it('accepts: exhaustive enum (no default), redundant default, empty switch, default-only', () => {
-    expect(codes(wrap('switch (c) { case Color.Red: return 1n; case Color.Green: return 2n; case Color.Blue: return 3n; }'))).toEqual([]);
+    expect(
+      codes(wrap('switch (c) { case Color.Red: return 1n; case Color.Green: return 2n; case Color.Blue: return 3n; }')),
+    ).toEqual([]);
     expect(codes(wrap('switch (c) { case Color.Red: return 1n; default: return 9n; }'))).toEqual([]);
     expect(codes(wrap('switch (x) {}'))).toEqual([]);
     expect(codes(wrap('switch (x) { default: return 5n; }'))).toEqual([]);
@@ -487,7 +524,9 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
   it('a duplicate CONSTANT case label is rejected (JETH287 stricter lint)', () => {
     // A duplicate constant label is a dead arm (the first match wins) and almost always a bug, so
     // JETH now rejects it rather than silently accepting it.
-    expect(codes(wrap('switch (x) { case 1n: return 1n; case 1n: return 2n; default: return 0n; }'))).toContain('JETH287');
+    expect(codes(wrap('switch (x) { case 1n: return 1n; case 1n: return 2n; default: return 0n; }'))).toContain(
+      'JETH287',
+    );
   });
   it('CHARACTERIZE: a non-constant (variable) case label is accepted (runtime ==)', () => {
     // `case y:` (y a parameter) compiles: the desugar makes it a runtime `__sw == y`. This is a
@@ -513,6 +552,6 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
     const call1 = await h.call(a, '0x' + sel('f(uint256)') + pad32(1n));
     const call9 = await h.call(a, '0x' + sel('f(uint256)') + pad32(9n));
     expect(call1.returnHex).toBe('0x' + pad32(42n)); // case 1 returns the USER's 42, not the discriminant
-    expect(call9.returnHex).toBe('0x' + pad32(0n));  // default returns 0
+    expect(call9.returnHex).toBe('0x' + pad32(0n)); // default returns 0
   });
 });

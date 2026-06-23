@@ -53,22 +53,36 @@ describe('whole inner-array return at depth vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = (s: string) => functionSelector(s);
   function strCall(sig: string, head: bigint[], s: string): string {
-    const b = Buffer.from(s, 'utf8'); const nwords = Math.ceil(b.length / 32);
-    let data = ''; for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i*32, i*32+32), Buffer.alloc(32)]).subarray(0,32).toString('hex');
-    let h = '0x' + sel(sig); for (const w of head) h += pad(w);
-    h += pad(BigInt((head.length + 1) * 32)) + pad(BigInt(b.length)) + data; return h;
+    const b = Buffer.from(s, 'utf8');
+    const nwords = Math.ceil(b.length / 32);
+    let data = '';
+    for (let i = 0; i < nwords; i++)
+      data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+        .subarray(0, 32)
+        .toString('hex');
+    let h = '0x' + sel(sig);
+    for (const w of head) h += pad(w);
+    h += pad(BigInt((head.length + 1) * 32)) + pad(BigInt(b.length)) + data;
+    return h;
   }
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'IR.jeth' });
     const sb = compileSolidity(SOL, 'IR');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('return this.m[k][i] (mapping<K,u256[][]> inner)', async () => {

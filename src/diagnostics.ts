@@ -18,9 +18,7 @@ export interface Diagnostic {
 /** Thrown when compilation cannot proceed; carries the collected diagnostics. */
 export class CompileError extends Error {
   constructor(public diagnostics: Diagnostic[]) {
-    super(
-      `JETH compilation failed with ${diagnostics.filter((d) => d.severity === 'error').length} error(s)`,
-    );
+    super(`JETH compilation failed with ${diagnostics.filter((d) => d.severity === 'error').length} error(s)`);
     this.name = 'CompileError';
   }
 }

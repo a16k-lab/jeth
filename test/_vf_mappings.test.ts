@@ -39,7 +39,9 @@ function dynCall(sig: string, head: bigint[], s: string): string {
   const nwords = Math.ceil(b.length / 32);
   let data = '';
   for (let i = 0; i < nwords; i++)
-    data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+    data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   let h = '0x' + functionSelector(sig);
   for (const w of head) h += pad(w);
   h += pad(BigInt((head.length + 1) * 32)) + pad(BigInt(b.length)) + data;
@@ -221,7 +223,18 @@ describe('probe', () => {
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
       mism.push(
-        label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}',
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
       );
   }
   beforeAll(async () => {
@@ -253,7 +266,11 @@ describe('probe', () => {
 
     // ---- nested mapping<address, mapping<u256,u256>> ----
     for (const [o, k, v] of [
-      [A1, 0n, 0n], [A1, U(256), U(256)], [A2, 1n, 12345n], [A3, U(256), 1n], [A1, 5n, 500n],
+      [A1, 0n, 0n],
+      [A1, U(256), U(256)],
+      [A2, 1n, 12345n],
+      [A3, U(256), 1n],
+      [A1, 5n, 500n],
     ] as [bigint, bigint, bigint][]) {
       await eq(`setAllow ${o} ${k}`, encodeCall(sel('setAllow(address,uint256,uint256)'), [o, k, v]));
       await eq(`getAllow ${o} ${k}`, encodeCall(sel('getAllow(address,uint256)'), [o, k]));
@@ -266,7 +283,11 @@ describe('probe', () => {
 
     // ---- 3-level mapping with signed + bool inner keys, INT_MIN boundary ----
     for (const [a, b, c, v] of [
-      [0n, 0n, 0n, 1n], [1n, -1n, 1n, 2n], [U(256), IMIN(256), 0n, 3n], [9n, IMAX(256), 1n, 4n], [9n, IMIN(256), 1n, 5n],
+      [0n, 0n, 0n, 1n],
+      [1n, -1n, 1n, 2n],
+      [U(256), IMIN(256), 0n, 3n],
+      [9n, IMAX(256), 1n, 4n],
+      [9n, IMIN(256), 1n, 5n],
     ] as [bigint, bigint, bigint, bigint][]) {
       await eq(`setDeep ${a},${b},${c}`, encodeCall(sel('setDeep(uint256,int256,bool,uint256)'), [a, b, c, v]));
       await eq(`getDeep ${a},${b},${c}`, encodeCall(sel('getDeep(uint256,int256,bool)'), [a, b, c]));
@@ -304,11 +325,13 @@ describe('probe', () => {
     await eq('getDs after shrink', encodeCall(sel('getDs(bytes4)'), [B4]));
 
     // ---- mapping to dynamic array: push/pop/index/grow/shrink, per-key isolation ----
-    for (let i = 0; i < 4; i++) await eq(`push A1 ${i}`, encodeCall(sel('push(address,uint256)'), [A1, BigInt(100 + i)]));
+    for (let i = 0; i < 4; i++)
+      await eq(`push A1 ${i}`, encodeCall(sel('push(address,uint256)'), [A1, BigInt(100 + i)]));
     await eq('push A2', encodeCall(sel('push(address,uint256)'), [A2, 7n]));
     await eq('numLen A1', encodeCall(sel('numLen(address)'), [A1]));
     await eq('numLen A2', encodeCall(sel('numLen(address)'), [A2]));
-    for (const i of [0n, 1n, 3n, 4n /*OOB*/]) await eq(`numAt A1 ${i}`, encodeCall(sel('numAt(address,uint256)'), [A1, i]));
+    for (const i of [0n, 1n, 3n, 4n /*OOB*/])
+      await eq(`numAt A1 ${i}`, encodeCall(sel('numAt(address,uint256)'), [A1, i]));
     await eq('setNum A1 2', encodeCall(sel('setNum(address,uint256,uint256)'), [A1, 2n, 9999n]));
     await eq('numAt A1 2 after set', encodeCall(sel('numAt(address,uint256)'), [A1, 2n]));
     await eq('numAt A1 OOB set', encodeCall(sel('setNum(address,uint256,uint256)'), [A1, 99n, 1n])); // Panic 0x32
@@ -430,7 +453,8 @@ describe('probe', () => {
     await eq('getDeep min distinct', encodeCall(sel('getDeep(uint256,int256,bool)'), [0n, IMIN(256) & U(256), 0n]));
     await eq('getDeep neg1 distinct', encodeCall(sel('getDeep(uint256,int256,bool)'), [0n, U(256), 0n]));
 
-    void B32a; void B32b;
+    void B32a;
+    void B32b;
 
     if (mism.length) {
       console.log('MISMATCHES ' + mism.length + '/' + count);

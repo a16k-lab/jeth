@@ -272,18 +272,35 @@ contract C {
 
 describe('memstruct', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const mism: string[] = []; let count = 0;
+  const mism: string[] = [];
+  let count = 0;
   async function eq(label: string, data: string) {
     count++;
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('runs', async () => {
     const U128MAX = (1n << 128n) - 1n;
@@ -291,27 +308,42 @@ describe('memstruct', () => {
     const U8MAX = 255n;
     const I64MAX = (1n << 63n) - 1n;
     const I64MIN_W = M - (1n << 63n); // two's-complement word for -2^63
-    const u128s: bigint[] = [0n, 1n, 2n, 99n, 12345n, U128MAX, U128MAX - 1n, (1n << 100n), (1n << 127n)];
+    const u128s: bigint[] = [0n, 1n, 2n, 99n, 12345n, U128MAX, U128MAX - 1n, 1n << 100n, 1n << 127n];
     const pairs: [bigint, bigint][] = [
-      [0n, 0n], [1n, 2n], [U128MAX, 0n], [0n, U128MAX], [U128MAX, U128MAX],
-      [5n, 7n], [(1n << 100n), 3n], [U128MAX - 1n, 1n], [2n, U128MAX],
+      [0n, 0n],
+      [1n, 2n],
+      [U128MAX, 0n],
+      [0n, U128MAX],
+      [U128MAX, U128MAX],
+      [5n, 7n],
+      [1n << 100n, 3n],
+      [U128MAX - 1n, 1n],
+      [2n, U128MAX],
     ];
 
     // aliasing chains
     for (const a of u128s) await eq('chain3(' + a + ')', encodeCall(sel('chain3(uint128)'), [a]));
-    for (const [a, b] of pairs) await eq('chainMid(' + a + ',' + b + ')', encodeCall(sel('chainMid(uint128,uint128)'), [a, b]));
-    for (const [a, b] of pairs) await eq('aliasPass(' + a + ',' + b + ')', encodeCall(sel('aliasPass(uint128,uint128)'), [a, b]));
+    for (const [a, b] of pairs)
+      await eq('chainMid(' + a + ',' + b + ')', encodeCall(sel('chainMid(uint128,uint128)'), [a, b]));
+    for (const [a, b] of pairs)
+      await eq('aliasPass(' + a + ',' + b + ')', encodeCall(sel('aliasPass(uint128,uint128)'), [a, b]));
 
     // pass-by-ref mutate vs no-mutate
     const ps: [bigint, bigint, bigint][] = [
-      [0n, 0n, 0n], [1n, 2n, 3n], [U256MAX, U8MAX, I64MAX], [42n, 200n, -7n],
+      [0n, 0n, 0n],
+      [1n, 2n, 3n],
+      [U256MAX, U8MAX, I64MAX],
+      [42n, 200n, -7n],
       [U256MAX, U8MAX, I64MIN_W - M], // c = -2^63 passed as signed bigint
-      [(1n << 200n), 17n, -1n],
+      [1n << 200n, 17n, -1n],
     ];
     for (const [a, b, c] of ps) {
       const cWord = c < 0n ? c + M : c;
       void cWord;
-      await eq('refMutate(' + a + ',' + b + ',' + c + ')', encodeCall(sel('refMutate(uint256,uint8,int64)'), [a, b, c < 0n ? c + M : c]));
+      await eq(
+        'refMutate(' + a + ',' + b + ',' + c + ')',
+        encodeCall(sel('refMutate(uint256,uint8,int64)'), [a, b, c < 0n ? c + M : c]),
+      );
     }
     for (const [a, b] of pairs) {
       await eq('noMutate(' + a + ',' + b + ')', encodeCall(sel('noMutate(uint128,uint128)'), [a, b]));
@@ -324,42 +356,70 @@ describe('memstruct', () => {
       [1n, 1n, 1n, 0x1n],
       [U256MAX, U8MAX, I64MAX, M - 1n],
       [U256MAX, U8MAX, I64MIN_W, 0xdeadbeefn],
-      [12345n, 7n, -42n < 0n ? (-42n + M) : 0n, 0x5555n],
-      [M - 2n, 254n, (-1n + M), 0xffffffffffffffffffffffffffffffffffffffffn],
+      [12345n, 7n, -42n < 0n ? -42n + M : 0n, 0x5555n],
+      [M - 2n, 254n, -1n + M, 0xffffffffffffffffffffffffffffffffffffffffn],
     ];
-    for (const [a, b, c, d] of Pcases) await eq('mkP(' + a + ',' + b + ',' + c + ',' + d + ')', encodeCall(sel('mkP(uint256,uint8,int64,address)'), [a, b, c, d]));
+    for (const [a, b, c, d] of Pcases)
+      await eq(
+        'mkP(' + a + ',' + b + ',' + c + ',' + d + ')',
+        encodeCall(sel('mkP(uint256,uint8,int64,address)'), [a, b, c, d]),
+      );
 
     const Wcases: [bigint, bigint, bigint, bigint][] = [
       [0n, 0n, 0n, 0n],
       [255n, I64MAX, 0x1234n, 0xdeadbeefn << 224n],
       [128n, I64MIN_W, 0xffffffffffffffffffffffffffffffffffffffffn, 0xcafebaben << 224n],
-      [1n, (-1n + M), 0xABCDn, 0x00000001n << 224n],
-      [200n, (-2n + M), 0xffn, 0xffffffffn << 224n],
+      [1n, -1n + M, 0xabcdn, 0x00000001n << 224n],
+      [200n, -2n + M, 0xffn, 0xffffffffn << 224n],
     ];
-    for (const [a, b, c, d] of Wcases) await eq('mkW(' + a + ',' + b + ',' + c + ',' + d + ')', encodeCall(sel('mkW(uint8,int64,address,bytes4)'), [a, b, c, d]));
+    for (const [a, b, c, d] of Wcases)
+      await eq(
+        'mkW(' + a + ',' + b + ',' + c + ',' + d + ')',
+        encodeCall(sel('mkW(uint8,int64,address,bytes4)'), [a, b, c, d]),
+      );
 
-    const I8MAX = (1n << 7n) - 1n, I8MIN = M - (1n << 7n);
-    const I16MAX = (1n << 15n) - 1n, I16MIN = M - (1n << 15n);
-    const I128MAX = (1n << 127n) - 1n, I128MIN = M - (1n << 127n);
-    const I256MAX = (1n << 255n) - 1n, I256MIN = M - (1n << 255n);
+    const I8MAX = (1n << 7n) - 1n,
+      I8MIN = M - (1n << 7n);
+    const I16MAX = (1n << 15n) - 1n,
+      I16MIN = M - (1n << 15n);
+    const I128MAX = (1n << 127n) - 1n,
+      I128MIN = M - (1n << 127n);
+    const I256MAX = (1n << 255n) - 1n,
+      I256MIN = M - (1n << 255n);
     const Scases: [bigint, bigint, bigint, bigint][] = [
       [0n, 0n, 0n, 0n],
       [I8MAX, I16MAX, I128MAX, I256MAX],
       [I8MIN, I16MIN, I128MIN, I256MIN],
-      [(-1n + M), (-1n + M), (-1n + M), (-1n + M)],
-      [42n, (-100n + M), 7n, (-9999n + M)],
+      [-1n + M, -1n + M, -1n + M, -1n + M],
+      [42n, -100n + M, 7n, -9999n + M],
     ];
-    for (const [a, b, c, d] of Scases) await eq('mkS(' + a + ',' + b + ',' + c + ',' + d + ')', encodeCall(sel('mkS(int8,int16,int128,int256)'), [a, b, c, d]));
+    for (const [a, b, c, d] of Scases)
+      await eq(
+        'mkS(' + a + ',' + b + ',' + c + ',' + d + ')',
+        encodeCall(sel('mkS(int8,int16,int128,int256)'), [a, b, c, d]),
+      );
 
     const b4 = (v: bigint) => v << 224n; // left-align a 4-byte value into the 256-bit word
-    for (const a of [0n, 1n, 200n, 255n]) for (const b of [0n, 1n, I64MAX, I64MIN_W, (-5n + M)]) await eq('mutW(' + a + ',' + b + ')', encodeCall(sel('mutW(uint8,int64,bytes4,bytes4)'), [a, b, b4(0xDEADBEEFn), b4(0xCAFEBABEn)]));
+    for (const a of [0n, 1n, 200n, 255n])
+      for (const b of [0n, 1n, I64MAX, I64MIN_W, -5n + M])
+        await eq(
+          'mutW(' + a + ',' + b + ')',
+          encodeCall(sel('mutW(uint8,int64,bytes4,bytes4)'), [a, b, b4(0xdeadbeefn), b4(0xcafebaben)]),
+        );
 
     // two distinct structs
     const quads: [bigint, bigint, bigint, bigint][] = [
-      [0n, 0n, 0n, 0n], [1n, 2n, 3n, 4n], [U128MAX, U128MAX, U128MAX, U128MAX],
-      [U128MAX, 0n, 0n, U128MAX], [10n, 20n, 30n, 40n],
+      [0n, 0n, 0n, 0n],
+      [1n, 2n, 3n, 4n],
+      [U128MAX, U128MAX, U128MAX, U128MAX],
+      [U128MAX, 0n, 0n, U128MAX],
+      [10n, 20n, 30n, 40n],
     ];
-    for (const [a, b, c, d] of quads) await eq('twoStructs(' + a + ',' + b + ',' + c + ',' + d + ')', encodeCall(sel('twoStructs(uint128,uint128,uint128,uint128)'), [a, b, c, d]));
+    for (const [a, b, c, d] of quads)
+      await eq(
+        'twoStructs(' + a + ',' + b + ',' + c + ',' + d + ')',
+        encodeCall(sel('twoStructs(uint128,uint128,uint128,uint128)'), [a, b, c, d]),
+      );
 
     // same struct passed twice / return then repass / sameTwice
     for (const [a, b] of pairs) {
@@ -370,29 +430,57 @@ describe('memstruct', () => {
 
     // recursion take+return / recursion mutate-by-ref
     for (const n of [0n, 1n, 2n, 5n, 10n, 32n, 50n]) {
-      await eq('climbE(n=' + n + ')', encodeCall(sel('climbE(uint256,uint8,int64,address,uint256)'), [1000n, 10n, 100n < I64MAX ? 100n : 0n, 0x42n, n]));
+      await eq(
+        'climbE(n=' + n + ')',
+        encodeCall(sel('climbE(uint256,uint8,int64,address,uint256)'), [
+          1000n,
+          10n,
+          100n < I64MAX ? 100n : 0n,
+          0x42n,
+          n,
+        ]),
+      );
     }
     // climb where the narrow fields wrap (u8 b++ past 255, i64 c-- below min)
-    for (const n of [0n, 250n, 256n, 300n]) await eq('climbWrap(n=' + n + ')', encodeCall(sel('climbE(uint256,uint8,int64,address,uint256)'), [0n, 250n, (I64MIN_W + 3n), 0x1n, n]));
-    for (const a of [0n, 1n, 100n]) for (const n of [0n, 1n, 10n, 50n, 100n]) await eq('accE(' + a + ',' + n + ')', encodeCall(sel('accE(uint128,uint128)'), [a, n]));
+    for (const n of [0n, 250n, 256n, 300n])
+      await eq(
+        'climbWrap(n=' + n + ')',
+        encodeCall(sel('climbE(uint256,uint8,int64,address,uint256)'), [0n, 250n, I64MIN_W + 3n, 0x1n, n]),
+      );
+    for (const a of [0n, 1n, 100n])
+      for (const n of [0n, 1n, 10n, 50n, 100n])
+        await eq('accE(' + a + ',' + n + ')', encodeCall(sel('accE(uint128,uint128)'), [a, n]));
 
     // @pure mutating helper
-    for (const a of [0n, 1n, U256MAX, U256MAX - 1n]) for (const b of [0n, 254n, 255n]) await eq('pureBumpE(' + a + ',' + b + ')', encodeCall(sel('pureBumpE(uint256,uint8)'), [a, b]));
+    for (const a of [0n, 1n, U256MAX, U256MAX - 1n])
+      for (const b of [0n, 254n, 255n])
+        await eq('pureBumpE(' + a + ',' + b + ')', encodeCall(sel('pureBumpE(uint256,uint8)'), [a, b]));
 
     // compound + inc/dec through aliases
-    for (const a of [0n, 1n, 2n, 3n, 5n, 100n, U128MAX, U128MAX - 1n, (1n << 64n)]) await eq('compoundAlias(' + a + ')', encodeCall(sel('compoundAlias(uint128)'), [a]));
+    for (const a of [0n, 1n, 2n, 3n, 5n, 100n, U128MAX, U128MAX - 1n, 1n << 64n])
+      await eq('compoundAlias(' + a + ')', encodeCall(sel('compoundAlias(uint128)'), [a]));
 
     // chain outer(inner(...))
-    for (const [a, b, c, d] of Pcases) await eq('chainCall(' + a + ',' + b + ',' + c + ',' + d + ')', encodeCall(sel('chainCall(uint256,uint8,int64,address)'), [a, b, c, d]));
+    for (const [a, b, c, d] of Pcases)
+      await eq(
+        'chainCall(' + a + ',' + b + ',' + c + ',' + d + ')',
+        encodeCall(sel('chainCall(uint256,uint8,int64,address)'), [a, b, c, d]),
+      );
 
     // bind + mutate fresh / combine two params
     for (const [a, b] of pairs) {
       await eq('bindMutate(' + a + ',' + b + ')', encodeCall(sel('bindMutate(uint128,uint128)'), [a, b]));
     }
-    for (const [a, b, c, d] of quads) await eq('combineE(' + a + ',' + b + ',' + c + ',' + d + ')', encodeCall(sel('combineE(uint128,uint128,uint128,uint128)'), [a, b, c, d]));
+    for (const [a, b, c, d] of quads)
+      await eq(
+        'combineE(' + a + ',' + b + ',' + c + ',' + d + ')',
+        encodeCall(sel('combineE(uint128,uint128,uint128,uint128)'), [a, b, c, d]),
+      );
 
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

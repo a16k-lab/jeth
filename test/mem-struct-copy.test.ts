@@ -50,21 +50,32 @@ contract C {
 
 describe('struct memory-local copy from storage/calldata (G9) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('storage -> memory copy + mutate (copy semantics) + snapshot', async () => {
-    for (const [a, b, c, d] of [[100n, 5n, 9n, 0x1234n], [M - 1n, 255n, M - (1n << 63n), 0xbeefn], [0n, 0n, 0n, 0n]] as [bigint, bigint, bigint, bigint][]) {
+    for (const [a, b, c, d] of [
+      [100n, 5n, 9n, 0x1234n],
+      [M - 1n, 255n, M - (1n << 63n), 0xbeefn],
+      [0n, 0n, 0n, 0n],
+    ] as [bigint, bigint, bigint, bigint][]) {
       await send(call('setS(uint256,uint8,int64,address)', [a, b, c, d]));
       await eq(`copyMutate`, call('copyMutate(uint256)', [42n]));
       // storage must be unchanged by the mutated memory copy

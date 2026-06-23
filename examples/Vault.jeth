@@ -6,7 +6,8 @@ class Vault {
 
   @event Deposited(@indexed account: address, amount: u256);
 
-  @external @payable
+  @external
+  @payable
   deposit(): void {
     this.balances[msg.sender] += msg.value; // checked add -> SSTORE at keccak slot
     this.total += msg.value;
@@ -15,25 +16,28 @@ class Vault {
 
   @external
   withdraw(amount: u256): void {
-    require(this.balances[msg.sender] >= amount, "insufficient");
+    require(this.balances[msg.sender] >= amount, 'insufficient');
     this.balances[msg.sender] -= amount;
     this.total -= amount;
   }
 
-  @external @payable
+  @external
+  @payable
   transfer(to: address, amount: u256): void {
-    require(to != address(0n), "zero address");
-    require(this.balances[msg.sender] >= amount, "insufficient");
+    require(to != address(0n), 'zero address');
+    require(this.balances[msg.sender] >= amount, 'insufficient');
     this.balances[msg.sender] -= amount;
     this.balances[to] += amount;
   }
 
-  @external @view
+  @external
+  @view
   balanceOf(account: address): u256 {
     return this.balances[account];
   }
 
-  @external @view
+  @external
+  @view
   totalSupply(): u256 {
     return this.total;
   }

@@ -63,24 +63,32 @@ contract C {
 
 describe('internal function calls vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('value-returning helpers, nesting, recursion', async () => {
-    for (const a of [0n, 1n, 7n, 1000n]) for (const b of [0n, 2n, 50n]) {
-      await eq(`sum3(${a},${b},3)`, encodeCall(sel('sum3(uint256,uint256,uint256)'), [a, b, 3n]));
-      await eq(`poly(${a},${b},4)`, encodeCall(sel('poly(uint256,uint256,uint256)'), [a, b, 4n]));
-    }
+    for (const a of [0n, 1n, 7n, 1000n])
+      for (const b of [0n, 2n, 50n]) {
+        await eq(`sum3(${a},${b},3)`, encodeCall(sel('sum3(uint256,uint256,uint256)'), [a, b, 3n]));
+        await eq(`poly(${a},${b},4)`, encodeCall(sel('poly(uint256,uint256,uint256)'), [a, b, 4n]));
+      }
     for (const n of [0n, 1n, 2n, 5n, 10n, 15n]) await eq(`fibE(${n})`, encodeCall(sel('fibE(uint256)'), [n]));
     for (const n of [0n, 1n, 2n, 7n, 20n]) await eq(`evenE(${n})`, encodeCall(sel('evenE(uint256)'), [n]));
   });

@@ -97,14 +97,21 @@ const getData = (fn: string, flat: bigint[], len: number, i: bigint) =>
   '0x' + sel(getSig(fn)) + pad(0x40n) + pad(i) + pad(BigInt(len)) + flat.map(pad).join('');
 
 // Canonical leaf values (head order a,b,c,d,e,f,g,h).
-const ADDR = BigInt('0x' + 'ab'.repeat(20));            // 160-bit address
-const B4 = BigInt('0xdeadbeef') << (256n - 32n);        // bytes4 left-aligned
-const I16 = ((-5n) % M + M) % M;                        // int16 = -5, sign-extended
-const I128 = ((-123456789n) % M + M) % M;               // int128 negative, sign-extended
+const ADDR = BigInt('0x' + 'ab'.repeat(20)); // 160-bit address
+const B4 = BigInt('0xdeadbeef') << (256n - 32n); // bytes4 left-aligned
+const I16 = ((-5n % M) + M) % M; // int16 = -5, sign-extended
+const I128 = ((-123456789n % M) + M) % M; // int128 negative, sign-extended
 // one canonical Big element, in head order
-const elem = (
-  a: bigint, b: bigint, c: bigint, d: bigint, e: bigint, f: bigint, g: bigint, h: bigint,
-) => [a, b, c, d, e, f, g, h];
+const elem = (a: bigint, b: bigint, c: bigint, d: bigint, e: bigint, f: bigint, g: bigint, h: bigint) => [
+  a,
+  b,
+  c,
+  d,
+  e,
+  f,
+  g,
+  h,
+];
 const BIG0 = elem(0xa5n, I16, 1n, ADDR, B4, 0xdeadbeefcafebaben, 0x1122334455667788n, I128);
 const BIG1 = elem(0x3cn, 7n, 0n, ADDR ^ 0xffn, B4 ^ (1n << 248n), 42n, M - 1n, 0x7fn);
 
@@ -169,13 +176,13 @@ describe('all-field-types-struct: Big[] dyn array of wide-leaf struct vs Solidit
   // dirty word per narrow leaf (non-canonical encoding). uint256 g has NO dirty form
   // (every 256-bit word is canonical), so it is excluded from dirty probes.
   const dirtyFor: Record<string, bigint> = {
-    a: 1n << 8n,          // uint8: bit above byte 0 set
-    b: 0x8000n,           // int16: low 16 bits negative (0x8000) but high bits 0 -> not sign-extended
-    c: 2n,                // bool: not 0/1
+    a: 1n << 8n, // uint8: bit above byte 0 set
+    b: 0x8000n, // int16: low 16 bits negative (0x8000) but high bits 0 -> not sign-extended
+    c: 2n, // bool: not 0/1
     d: (1n << 200n) | ADDR, // address: high bits above 160 set
-    e: B4 | 1n,           // bytes4: must be left-aligned, low 224 bits zero -> set a low bit
-    f: 1n << 64n,         // uint64: bit 64 set
-    h: 1n << 127n,        // int128: low 128 bits look negative, high bits 0 -> not sign-extended
+    e: B4 | 1n, // bytes4: must be left-aligned, low 224 bits zero -> set a low bit
+    f: 1n << 64n, // uint64: bit 64 set
+    h: 1n << 127n, // int128: low 128 bits look negative, high bits 0 -> not sign-extended
   };
 
   it('dirty narrow leaf read -> EMPTY revert; reading a clean sibling -> OK (lazy)', async () => {

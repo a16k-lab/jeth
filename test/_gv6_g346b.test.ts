@@ -18,17 +18,28 @@ const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const kc = (p: bigint) => BigInt('0x' + toHex(keccak(hexToBytes(('0x' + pad(p)) as `0x${string}`))));
-const encStrRaw = (lenBytes: number, rawHex: string) => pad(BigInt(lenBytes)) + rawHex.padEnd(Math.ceil(rawHex.length / 64) * 64, '0');
+const encStrRaw = (lenBytes: number, rawHex: string) =>
+  pad(BigInt(lenBytes)) + rawHex.padEnd(Math.ceil(rawHex.length / 64) * 64, '0');
 type Comp = { dyn: false; word: string } | { dyn: true; tail: string };
 const callData = (sig: string, comps: Comp[]) => {
-  let off = comps.length * 32, head = '', tails = '';
-  for (const c of comps) { if (!c.dyn) head += c.word; else { head += pad(BigInt(off)); tails += c.tail; off += c.tail.length / 2; } }
+  let off = comps.length * 32,
+    head = '',
+    tails = '';
+  for (const c of comps) {
+    if (!c.dyn) head += c.word;
+    else {
+      head += pad(BigInt(off));
+      tails += c.tail;
+      off += c.tail.length / 2;
+    }
+  }
   return '0x' + sel(sig) + head + tails;
 };
 const A = (tail: string): Comp => ({ dyn: true, tail });
 const V = (v: bigint): Comp => ({ dyn: false, word: pad(v) });
 const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
-  a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  a.length === b.length &&
+  a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 const JETH = `@contract class C {
   // G3 dirty-element cleaning
@@ -148,24 +159,57 @@ describe('g346b adversarial', () => {
   const mism: string[] = [];
   let count = 0;
   async function send(d: string) {
-    const j = await jeth.call(aj, d), s = await sol.call(as, d);
-    if (j.success !== s.success) mism.push('SEND jeth{' + j.success + ',err=' + j.exceptionError + '} sol{' + s.success + '} d=' + d.slice(0, 30));
+    const j = await jeth.call(aj, d),
+      s = await sol.call(as, d);
+    if (j.success !== s.success)
+      mism.push('SEND jeth{' + j.success + ',err=' + j.exceptionError + '} sol{' + s.success + '} d=' + d.slice(0, 30));
   }
   async function eqRet(label: string, d: string) {
     count++;
-    const j = await jeth.call(aj, d), s = await sol.call(as, d);
+    const j = await jeth.call(aj, d),
+      s = await sol.call(as, d);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push('RET ' + label + ' jeth{' + j.success + ',' + j.returnHex + ',err=' + j.exceptionError + '} sol{' + s.success + ',' + s.returnHex + '}');
+      mism.push(
+        'RET ' +
+          label +
+          ' jeth{' +
+          j.success +
+          ',' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{' +
+          s.success +
+          ',' +
+          s.returnHex +
+          '}',
+      );
   }
   async function eqLog(label: string, d: string) {
     count++;
-    const j = await jeth.call(aj, d), s = await sol.call(as, d);
+    const j = await jeth.call(aj, d),
+      s = await sol.call(as, d);
     if (j.success !== s.success || !eqLogs(j.logs, s.logs))
-      mism.push('LOG ' + label + ' jeth{ok=' + j.success + ',err=' + j.exceptionError + ',' + JSON.stringify(j.logs) + '} sol{ok=' + s.success + ',' + JSON.stringify(s.logs) + '}');
+      mism.push(
+        'LOG ' +
+          label +
+          ' jeth{ok=' +
+          j.success +
+          ',err=' +
+          j.exceptionError +
+          ',' +
+          JSON.stringify(j.logs) +
+          '} sol{ok=' +
+          s.success +
+          ',' +
+          JSON.stringify(s.logs) +
+          '}',
+      );
   }
   async function eqSlot(slot: bigint, label: string) {
     count++;
-    const a = await readSlot(jeth, aj, slot), b = await readSlot(sol, as, slot);
+    const a = await readSlot(jeth, aj, slot),
+      b = await readSlot(sol, as, slot);
     if (a !== b) mism.push('SLOT ' + label + ' @0x' + slot.toString(16) + ' jeth=' + a + ' sol=' + b);
   }
   beforeAll(async () => {
@@ -199,8 +243,9 @@ describe('g346b adversarial', () => {
 
     // ============ G6: push/pop SLOT REUSE on PACKED Arr<u8,4>[] ============
     for (let i = 0; i < 3; i++) await send(encodeCall(sel('pushPk8()'), []));
-    for (let i = 0; i < 3; i++) for (let j = 0; j < 4; j++)
-      await send(encodeCall(sel('setPk8(uint256,uint256,uint8)'), [BigInt(i), BigInt(j), BigInt(1 + i * 4 + j)]));
+    for (let i = 0; i < 3; i++)
+      for (let j = 0; j < 4; j++)
+        await send(encodeCall(sel('setPk8(uint256,uint256,uint8)'), [BigInt(i), BigInt(j), BigInt(1 + i * 4 + j)]));
     await send(encodeCall(sel('popPk8()'), []));
     await eqSlot(1n, 'pk8.length after pop');
     await eqSlot(kc(1n) + 2n, 'pk8[2] packed slot cleared on pop');
@@ -214,7 +259,8 @@ describe('g346b adversarial', () => {
     await eqRet('getPk8(2,3) clean', encodeCall(sel('getPk8(uint256,uint256)'), [2n, 3n]));
     await eqSlot(kc(1n) + 2n, 'pk8[2] packed (only lane 1 set)');
     // write all 4 lanes then overwrite one - masking must keep neighbors
-    for (let j = 0; j < 4; j++) await send(encodeCall(sel('setPk8(uint256,uint256,uint8)'), [2n, BigInt(j), BigInt(0xa0 + j)]));
+    for (let j = 0; j < 4; j++)
+      await send(encodeCall(sel('setPk8(uint256,uint256,uint8)'), [2n, BigInt(j), BigInt(0xa0 + j)]));
     await send(encodeCall(sel('setPk8(uint256,uint256,uint8)'), [2n, 2n, 0x11n]));
     await eqRet('getPk8(2,0) preserved', encodeCall(sel('getPk8(uint256,uint256)'), [2n, 0n]));
     await eqRet('getPk8(2,1) preserved', encodeCall(sel('getPk8(uint256,uint256)'), [2n, 1n]));
@@ -224,9 +270,11 @@ describe('g346b adversarial', () => {
 
     // ============ G6: PACKED uint16[8][] lane masking + pop ============
     for (let i = 0; i < 2; i++) await send(encodeCall(sel('pushPk16()'), []));
-    for (let j = 0; j < 8; j++) await send(encodeCall(sel('setPk16(uint256,uint256,uint16)'), [0n, BigInt(j), BigInt(0x1000 + j)]));
+    for (let j = 0; j < 8; j++)
+      await send(encodeCall(sel('setPk16(uint256,uint256,uint16)'), [0n, BigInt(j), BigInt(0x1000 + j)]));
     await send(encodeCall(sel('setPk16(uint256,uint256,uint16)'), [0n, 3n, 0xffffn]));
-    for (let j = 0; j < 8; j++) await eqRet('getPk16(0,' + j + ')', encodeCall(sel('getPk16(uint256,uint256)'), [0n, BigInt(j)]));
+    for (let j = 0; j < 8; j++)
+      await eqRet('getPk16(0,' + j + ')', encodeCall(sel('getPk16(uint256,uint256)'), [0n, BigInt(j)]));
     await eqSlot(kc(2n) + 0n, 'pk16[0] packed 8x16');
     await send(encodeCall(sel('popPk16()'), []));
     await eqSlot(2n, 'pk16.length after pop');
@@ -266,19 +314,33 @@ describe('g346b adversarial', () => {
   it('pop() zeroes all slots of a multi-slot fixed-array element (uint256[3][], uint256[2][2][])', async () => {
     // Arr<u256,3>[] : push 3, fill the last row, pop, re-push -> the reused element reads all-zero.
     for (let i = 0; i < 3; i++) await send(encodeCall(sel('pushB()'), []));
-    for (let j = 0; j < 3; j++) await send(encodeCall(sel('setB(uint256,uint256,uint256)'), [2n, BigInt(j), BigInt(0x2d0 + j)]));
+    for (let j = 0; j < 3; j++)
+      await send(encodeCall(sel('setB(uint256,uint256,uint256)'), [2n, BigInt(j), BigInt(0x2d0 + j)]));
     await send(encodeCall(sel('popB()'), []));
     await send(encodeCall(sel('pushB()'), []));
-    for (let j = 0; j < 3; j++) await eqRet(`B[2][${j}] after pop+repush`, encodeCall(sel('getB(uint256,uint256)'), [2n, BigInt(j)]));
+    for (let j = 0; j < 3; j++)
+      await eqRet(`B[2][${j}] after pop+repush`, encodeCall(sel('getB(uint256,uint256)'), [2n, BigInt(j)]));
 
     // Arr<Arr<u256,2>,2>[] : a 4-slot element, same path.
     for (let i = 0; i < 2; i++) await send(encodeCall(sel('pushDd()'), []));
-    for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++)
-      await send(encodeCall(sel('setDd(uint256,uint256,uint256,uint256)'), [1n, BigInt(j), BigInt(k), BigInt(0x83c + j * 2 + k)]));
+    for (let j = 0; j < 2; j++)
+      for (let k = 0; k < 2; k++)
+        await send(
+          encodeCall(sel('setDd(uint256,uint256,uint256,uint256)'), [
+            1n,
+            BigInt(j),
+            BigInt(k),
+            BigInt(0x83c + j * 2 + k),
+          ]),
+        );
     await send(encodeCall(sel('popDd()'), []));
     await send(encodeCall(sel('pushDd()'), []));
-    for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++)
-      await eqRet(`Dd[1][${j}][${k}] after pop+repush`, encodeCall(sel('getDd(uint256,uint256,uint256)'), [1n, BigInt(j), BigInt(k)]));
+    for (let j = 0; j < 2; j++)
+      for (let k = 0; k < 2; k++)
+        await eqRet(
+          `Dd[1][${j}][${k}] after pop+repush`,
+          encodeCall(sel('getDd(uint256,uint256,uint256)'), [1n, BigInt(j), BigInt(k)]),
+        );
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

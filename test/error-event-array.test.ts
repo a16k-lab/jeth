@@ -11,15 +11,23 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
-  a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  a.length === b.length &&
+  a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 // --- minimal ABI calldata encoder for the array/nested/string shapes (the test harness
 // encodeCall only handles flat words). ---
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const encArr = (els: bigint[]) => pad(BigInt(els.length)) + els.map(pad).join(''); // uintN[]/intN[]/address[] tail
 const encNest = (rows: bigint[][]) => {
-  let off = rows.length * 32, table = '', tails = '';
-  for (const row of rows) { table += pad(BigInt(off)); const t = encArr(row); tails += t; off += t.length / 2; }
+  let off = rows.length * 32,
+    table = '',
+    tails = '';
+  for (const row of rows) {
+    table += pad(BigInt(off));
+    const t = encArr(row);
+    tails += t;
+    off += t.length / 2;
+  }
   return pad(BigInt(rows.length)) + table + tails;
 };
 const encStr = (s: string) => {
@@ -28,10 +36,16 @@ const encStr = (s: string) => {
 };
 type Comp = { dyn: false; word: string } | { dyn: true; tail: string };
 const callData = (sig: string, comps: Comp[]) => {
-  let off = comps.length * 32, head = '', tails = '';
+  let off = comps.length * 32,
+    head = '',
+    tails = '';
   for (const c of comps) {
     if (!c.dyn) head += c.word;
-    else { head += pad(BigInt(off)); tails += c.tail; off += c.tail.length / 2; }
+    else {
+      head += pad(BigInt(off));
+      tails += c.tail;
+      off += c.tail.length / 2;
+    }
   }
   return '0x' + sel(sig) + head + tails;
 };
@@ -95,20 +109,27 @@ contract C {
 describe('error/event with dynamic-array args (G3) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eqRevert(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success`).toBe(s.success);
     expect(j.returnHex, `${label} revertdata`).toBe(s.returnHex);
   }
   async function eqLog(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
-    expect(eqLogs(j.logs, s.logs), `${label} logs\n jeth=${JSON.stringify(j.logs)}\n sol =${JSON.stringify(s.logs)}`).toBe(true);
+    expect(
+      eqLogs(j.logs, s.logs),
+      `${label} logs\n jeth=${JSON.stringify(j.logs)}\n sol =${JSON.stringify(s.logs)}`,
+    ).toBe(true);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   const arr = [1n, 2n, 3n, 0n, M - 1n];
@@ -116,9 +137,15 @@ describe('error/event with dynamic-array args (G3) vs Solidity', () => {
     await eqRevert('r1', callData('r1(uint256[])', [A(encArr(arr))]));
     await eqRevert('r1 empty', callData('r1(uint256[])', [A(encArr([]))]));
     await eqRevert('r2', callData('r2(uint256,uint256[])', [V(99n), A(encArr(arr))]));
-    await eqRevert('r3', callData('r3(uint256[],string)', [A(encArr(arr)), A(encStr('hello world this is over thirty-two bytes long'))]));
+    await eqRevert(
+      'r3',
+      callData('r3(uint256[],string)', [A(encArr(arr)), A(encStr('hello world this is over thirty-two bytes long'))]),
+    );
     await eqRevert('rAddr', callData('rAddr(address[])', [A(encArr([0x1111n, 0xbeefn, 0n]))]));
-    await eqRevert('rSigned', callData('rSigned(int64[])', [A(encArr([1n, M - 1n, (1n << 63n) - 1n, M - (1n << 63n)]))]));
+    await eqRevert(
+      'rSigned',
+      callData('rSigned(int64[])', [A(encArr([1n, M - 1n, (1n << 63n) - 1n, M - (1n << 63n)]))]),
+    );
     await eqRevert('rNest', callData('rNest(uint256[][])', [A(encNest([[1n, 2n], [3n], []]))]));
     await eqRevert('rMem', encodeCall(sel('rMem(uint256,uint256,uint256)'), [7n, 8n, 9n]));
   });

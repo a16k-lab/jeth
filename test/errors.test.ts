@@ -42,24 +42,41 @@ contract Errors {
   function reqThenAdd(uint256 a) external pure returns (uint256){ require(a > 0, "nz"); return a + 1; }
 }`;
 
-interface Case { sig: string; args: bigint[]; }
-function c(sig: string, args: bigint[] = []): Case { return { sig, args }; }
+interface Case {
+  sig: string;
+  args: bigint[];
+}
+function c(sig: string, args: bigint[] = []): Case {
+  return { sig, args };
+}
 
 const CASES: Case[] = [
-  c('reqTrue(uint256)', [7n]), c('reqTrue(uint256)', [0n]),
-  c('reqTrueMsg(uint256)', [5n]), c('reqTrueMsg(uint256)', [0n]),
-  c('reqFalseShort()'), c('reqFalseExact32()'), c('reqFalseLong()'),
-  c('revertShort()'), c('revertEmptyStr()'), c('revertBare()'),
-  c('r1(uint256,uint256)', [5n, 9n]), c('r1(uint256,uint256)', [U256_MAX, 0n]),
+  c('reqTrue(uint256)', [7n]),
+  c('reqTrue(uint256)', [0n]),
+  c('reqTrueMsg(uint256)', [5n]),
+  c('reqTrueMsg(uint256)', [0n]),
+  c('reqFalseShort()'),
+  c('reqFalseExact32()'),
+  c('reqFalseLong()'),
+  c('revertShort()'),
+  c('revertEmptyStr()'),
+  c('revertBare()'),
+  c('r1(uint256,uint256)', [5n, 9n]),
+  c('r1(uint256,uint256)', [U256_MAX, 0n]),
   c('r2(address)', [ADDR]),
-  c('r3(bool)', [1n]), c('r3(bool)', [0n]),
+  c('r3(bool)', [1n]),
+  c('r3(bool)', [0n]),
   c('r4(uint256,address,bool)', [7n, ADDR, 1n]),
-  c('r5(uint8,int8)', [255n, -1n]), c('r5(uint8,int8)', [0n, 127n]),
+  c('r5(uint8,int8)', [255n, -1n]),
+  c('r5(uint8,int8)', [0n, 127n]),
   c('r7()'),
-  c('rq(uint256,uint256)', [9n, 3n]), c('rq(uint256,uint256)', [3n, 9n]),
+  c('rq(uint256,uint256)', [9n, 3n]),
+  c('rq(uint256,uint256)', [3n, 9n]),
   c('rqEager(uint256,uint256)', [7n, 0n]), // Panic 0x12 despite cond true
   c('rqEager(uint256,uint256)', [7n, 2n]),
-  c('reqThenAdd(uint256)', [0n]), c('reqThenAdd(uint256)', [5n]), c('reqThenAdd(uint256)', [U256_MAX]), // overflow Panic
+  c('reqThenAdd(uint256)', [0n]),
+  c('reqThenAdd(uint256)', [5n]),
+  c('reqThenAdd(uint256)', [U256_MAX]), // overflow Panic
 ];
 
 describe('require/revert/custom errors vs Solidity', () => {

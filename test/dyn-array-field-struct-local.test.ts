@@ -15,8 +15,13 @@ import { CompileError } from '../src/diagnostics.js';
 const sel = (s: string) => functionSelector(s);
 const cdArr = (xs: readonly bigint[]) => pad32(BigInt(xs.length)) + xs.map(pad32).join('');
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 describe('dynamic-array-field struct memory local (JETH200) vs solc', () => {
@@ -51,26 +56,33 @@ contract C {
   function cpIdx(uint256 i) external view returns (uint256) { S memory p = s; return p.xs[i]; } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(So, 'C').creation);
   });
   const cmp = async (data: string, label: string) => {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success`).toBe(s.success);
     expect(j.returnHex, label).toBe(s.returnHex);
   };
 
   it('construct + read (value fields, p.xs[i], p.xs.length, for-of) byte-identical', async () => {
     const ys = [10n, 20n, 30n];
-    for (const [v, len] of [[[3n, 5n, 8n, 13n], 4], [[42n], 1], [[], 0]] as const) {
+    for (const [v, len] of [
+      [[3n, 5n, 8n, 13n], 4],
+      [[42n], 1],
+      [[], 0],
+    ] as const) {
       void len;
       const tail = pad32(BigInt(v.length)) + v.map(pad32).join('');
       await cmp('0x' + sel('rlen(uint256[])') + pad32(0x20n) + tail, `rlen(${v.length})`);
       await cmp('0x' + sel('rab(uint256[])') + pad32(0x20n) + tail, `rab(${v.length})`);
       await cmp('0x' + sel('sumLocal(uint256[])') + pad32(0x20n) + tail, `sumLocal(${v.length})`);
     }
-    for (const i of [0n, 1n, 2n, 5n]) await cmp('0x' + sel('rd(uint256[],uint256)') + pad32(0x40n) + pad32(i) + cdArr(ys), `rd[${i}]`);
+    for (const i of [0n, 1n, 2n, 5n])
+      await cmp('0x' + sel('rd(uint256[],uint256)') + pad32(0x40n) + pad32(i) + cdArr(ys), `rd[${i}]`);
   });
   it('whole-struct return (the array-field tail encoder) byte-identical', async () => {
     for (const ys of [[10n, 20n, 30n], [], [99n]] as const) {
@@ -79,7 +91,10 @@ contract C {
     }
   });
   it('copy from storage -> read + whole return byte-identical (raw slots independent)', async () => {
-    const run = async (d: string) => { await jeth.call(aj, d); await sol.call(as, d); };
+    const run = async (d: string) => {
+      await jeth.call(aj, d);
+      await sol.call(as, d);
+    };
     await run('0x' + sel('setSa(uint256)') + pad32(11n));
     await run('0x' + sel('setSb(uint256)') + pad32(99n));
     for (const v of [5n, 6n, 7n]) await run('0x' + sel('pushSx(uint256)') + pad32(v));
@@ -90,7 +105,16 @@ contract C {
     const Sd = '@struct class S { a: u256; xs: u256[]; b: u256; }\n';
     // (cd-struct -> mem local with a value-array field, and storage-struct construct with a value-array
     //  field, are now SUPPORTED and byte-identical to solc - see the dyn value-array assign tests.)
-    expect(codes(Sd + '@contract class C { @external @pure f(ys: u256[]): u256 { let p: S = S(1n, ys, 2n); p.xs = ys; return p.a; } }')).toContain('JETH200');
-    expect(codes('@struct class T { a: u256; ts: string[]; }\n@contract class C { @external @pure f(): u256 { let p: T = T(1n, []); return p.a; } }')).toContain('JETH200');
+    expect(
+      codes(
+        Sd +
+          '@contract class C { @external @pure f(ys: u256[]): u256 { let p: S = S(1n, ys, 2n); p.xs = ys; return p.a; } }',
+      ),
+    ).toContain('JETH200');
+    expect(
+      codes(
+        '@struct class T { a: u256; ts: string[]; }\n@contract class C { @external @pure f(): u256 { let p: T = T(1n, []); return p.a; } }',
+      ),
+    ).toContain('JETH200');
   });
 });

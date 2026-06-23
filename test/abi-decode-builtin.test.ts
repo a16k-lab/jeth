@@ -17,10 +17,20 @@ const P = (n: bigint) => pad32(n); // 32-byte big-endian word, NO 0x prefix
 const PANIC41 = '0x4e487b71' + P(0x41n);
 
 function jethAccepts(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return true; } catch { return false; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 function jethRejects(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return false; } catch { return true; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 /** Build calldata for a `fn(bytes)` selector with `payloadHex` (no 0x) as the bytes argument value:
@@ -33,11 +43,7 @@ function cdBytes(fnsig: string, payloadHex: string): string {
 
 /** Deploy a JETH decoder + a solc decoder, then for each (sig, payload) feed the same calldata and
  *  diff success + returndata. The two contracts must expose the SAME external signatures. */
-async function rtDecode(
-  jeth: string,
-  sol: string,
-  cases: { sig: string; payload: string; label: string }[],
-) {
+async function rtDecode(jeth: string, sol: string, cases: { sig: string; payload: string; label: string }[]) {
   const jb = compile(jeth, { fileName: 'D.jeth' });
   const sb = compileSolidity(SPDX + sol, 'D');
   const hj = await Harness.create();
@@ -104,7 +110,11 @@ describe('abi.decode: byte-identical vs solc', () => {
       { sig: 'dS(bytes)', payload: P(0x20n) + P(40n) + big.padEnd(128, '0'), label: 'string 40B (multi-word)' },
       { sig: 'dS(bytes)', payload: P(0x20n) + P(1n << 65n), label: 'oversized inner len -> Panic41' },
       { sig: 'dS(bytes)', payload: P(0x1000n), label: 'oob offset -> empty revert' },
-      { sig: 'dS(bytes)', payload: P(0x20n) + P(100n) + 'aabb'.padEnd(64, '0'), label: 'len past blob -> empty revert' },
+      {
+        sig: 'dS(bytes)',
+        payload: P(0x20n) + P(100n) + 'aabb'.padEnd(64, '0'),
+        label: 'len past blob -> empty revert',
+      },
       { sig: 'dS(bytes)', payload: P(1n << 70n), label: 'huge offset -> empty revert' },
     ]);
   });
@@ -127,8 +137,16 @@ describe('abi.decode: byte-identical vs solc', () => {
       { sig: 't2(bytes)', payload: P(7n) + P(0xabcdef1234567890abcdef1234567890abcdef12n), label: '(uint,address)' },
       { sig: 'tm(bytes)', payload: P(99n) + P(0x40n) + P(6n) + str.padEnd(64, '0'), label: '(uint,string)' },
       { sig: 'tsn(bytes)', payload: P(0x40n) + P(123n) + P(6n) + str.padEnd(64, '0'), label: '(string,uint)' },
-      { sig: 't3(bytes)', payload: P(5n) + P(0x60n) + P(1n) + P(6n) + str.padEnd(64, '0'), label: '(uint,string,bool)' },
-      { sig: 't3(bytes)', payload: P(5n) + P(0x60n) + P(2n) + P(6n) + str.padEnd(64, '0'), label: '(uint,string,bool) dirty bool -> revert' },
+      {
+        sig: 't3(bytes)',
+        payload: P(5n) + P(0x60n) + P(1n) + P(6n) + str.padEnd(64, '0'),
+        label: '(uint,string,bool)',
+      },
+      {
+        sig: 't3(bytes)',
+        payload: P(5n) + P(0x60n) + P(2n) + P(6n) + str.padEnd(64, '0'),
+        label: '(uint,string,bool) dirty bool -> revert',
+      },
       { sig: 'tm(bytes)', payload: P(99n) + P(0x40n) + P(1n << 65n), label: 'tuple oversized inner -> Panic41' },
       { sig: 'tm(bytes)', payload: P(99n) + P(0x1000n), label: 'tuple oob offset -> empty revert' },
     ]);
@@ -279,26 +297,56 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('accepts the supported decode targets', () => {
-    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, u256); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): string { return abi.decode(b, string); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): bytes { return abi.decode(b, bytes); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): u256 { return b.decode(u256); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): bytes { let xs: u256[] = abi.decode(b, u256[]); return abi.encode(xs); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): bytes { let xs: Arr<u256,3> = abi.decode(b, Arr<u256,3>); return abi.encode(xs); } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, u256); } }`)).toBe(
+      true,
+    );
+    expect(
+      jethAccepts(`@contract class C { @external @pure f(b: bytes): string { return abi.decode(b, string); } }`),
+    ).toBe(true);
+    expect(
+      jethAccepts(`@contract class C { @external @pure f(b: bytes): bytes { return abi.decode(b, bytes); } }`),
+    ).toBe(true);
+    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): u256 { return b.decode(u256); } }`)).toBe(
+      true,
+    );
+    expect(
+      jethAccepts(
+        `@contract class C { @external @pure f(b: bytes): bytes { let xs: u256[] = abi.decode(b, u256[]); return abi.encode(xs); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @external @pure f(b: bytes): bytes { let xs: Arr<u256,3> = abi.decode(b, Arr<u256,3>); return abi.encode(xs); } }`,
+      ),
+    ).toBe(true);
   });
 
   it('cleanly rejects (no crash) the unsupported decode targets', () => {
     // a struct target (the JETH dynamic-struct memory representation is pointer-headed, not ABI-offset)
-    expect(jethRejects(`@struct class P { a: u256; s: string; } @contract class C { @external @pure f(b: bytes): u256 { let p: P = abi.decode(b, P); return p.a; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@struct class P { a: u256; s: string; } @contract class C { @external @pure f(b: bytes): u256 { let p: P = abi.decode(b, P); return p.a; } }`,
+      ),
+    ).toBe(true);
     // a bytes/string-element array (no JETH memory-local representation)
-    expect(jethRejects(`@contract class C { @external @pure f(b: bytes): bytes { let xs: string[] = abi.decode(b, string[]); return abi.encode(xs); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external @pure f(b: bytes): bytes { let xs: string[] = abi.decode(b, string[]); return abi.encode(xs); } }`,
+      ),
+    ).toBe(true);
     // a non-bytes source
-    expect(jethRejects(`@contract class C { @external @pure f(n: u256): u256 { return abi.decode(n, u256); } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @external @pure f(n: u256): u256 { return abi.decode(n, u256); } }`)).toBe(
+      true,
+    );
     // wrong arity
     expect(jethRejects(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b); } }`)).toBe(true);
     // a tuple form used in value position (must be a destructuring)
-    expect(jethRejects(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, [u256, address]); } }`)).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, [u256, address]); } }`),
+    ).toBe(true);
     // an unknown type name
-    expect(jethRejects(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, NotAType); } }`)).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, NotAType); } }`),
+    ).toBe(true);
   });
 });

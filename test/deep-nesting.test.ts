@@ -100,7 +100,11 @@ describe('unbounded nested dynamic arrays vs Solidity', () => {
   it('string[][] element access a[i][j] (string leaf) byte-identical + OOB', async () => {
     const rs = await makeData('makeS()');
     const adata = rs.slice(2 + 64); // drop leading 0x20
-    for (const [i, j] of [[0n, 0n], [0n, 1n], [1n, 0n]] as [bigint, bigint][]) {
+    for (const [i, j] of [
+      [0n, 0n],
+      [0n, 1n],
+      [1n, 0n],
+    ] as [bigint, bigint][]) {
       const data = '0x' + sel('atS(string[][],uint256,uint256)') + pad(0x60n) + pad(i) + pad(j) + adata;
       const jr = await jeth.call(aj, data);
       const sr = await sol.call(as, data);
@@ -117,18 +121,28 @@ describe('unbounded nested dynamic arrays vs Solidity', () => {
     const r3 = await makeData('make3()');
     const mdata = r3.slice(2 + 64); // drop the leading 0x20 offset word
     const cases: [bigint, bigint, bigint, bigint][] = [
-      [0n, 0n, 0n, 1n], [0n, 0n, 1n, 2n], [0n, 1n, 0n, 3n], [1n, 0n, 0n, 4n], [1n, 0n, 2n, 6n],
+      [0n, 0n, 0n, 1n],
+      [0n, 0n, 1n, 2n],
+      [0n, 1n, 0n, 3n],
+      [1n, 0n, 0n, 4n],
+      [1n, 0n, 2n, 6n],
     ];
     for (const [i, j, k, want] of cases) {
-      const data = '0x' + sel('at3(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(i) + pad(j) + pad(k) + mdata;
+      const data =
+        '0x' + sel('at3(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(i) + pad(j) + pad(k) + mdata;
       const jr = await jeth.call(aj, data);
       const sr = await sol.call(as, data);
       expect(jr.returnHex, `m[${i}][${j}][${k}]`).toBe(sr.returnHex);
       expect(decodeUint(jr.returnHex)).toBe(want);
     }
     // OOB at each level -> Panic(0x32) identically
-    for (const [i, j, k] of [[2n, 0n, 0n], [0n, 2n, 0n], [0n, 0n, 2n]] as [bigint, bigint, bigint][]) {
-      const data = '0x' + sel('at3(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(i) + pad(j) + pad(k) + mdata;
+    for (const [i, j, k] of [
+      [2n, 0n, 0n],
+      [0n, 2n, 0n],
+      [0n, 0n, 2n],
+    ] as [bigint, bigint, bigint][]) {
+      const data =
+        '0x' + sel('at3(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(i) + pad(j) + pad(k) + mdata;
       const jr = await jeth.call(aj, data);
       const sr = await sol.call(as, data);
       expect(jr.success, `OOB [${i}][${j}][${k}]`).toBe(false);

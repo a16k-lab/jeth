@@ -15,10 +15,20 @@ const lower = 'a'.repeat(40); // all-lowercase letters: fails the checksum
 const valid = 'dCad3a6d3569DF655070DEd06cb7A1b2Ccd1D3AF'; // a real EIP-55 checksummed address
 
 function jethOk(jeth: string): boolean {
-  try { compile(jeth, { fileName: 'C.jeth' }); return true; } catch { return false; }
+  try {
+    compile(jeth, { fileName: 'C.jeth' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 function solcOk(sol: string): boolean {
-  try { compileSolidity(SPDX + sol, 'C'); return true; } catch { return false; }
+  try {
+    compileSolidity(SPDX + sol, 'C');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function diff(jeth: string, sol: string, calls: { sig: string; args?: string }[]) {
@@ -43,7 +53,13 @@ describe('EIP-55 address-literal acceptance matches solc', () => {
     ['numeric40 -> address', `0x${ones}n`, 'address', `0x${ones}`, 'address'],
     ['valid40 -> address', `0x${valid}n`, 'address', `0x${valid}`, 'address'],
     ['lower40 -> address (bad checksum)', `0x${lower}n`, 'address', `0x${lower}`, 'address'],
-    ['validLower -> address (bad checksum)', `0x${valid.toLowerCase()}n`, 'address', `0x${valid.toLowerCase()}`, 'address'],
+    [
+      'validLower -> address (bad checksum)',
+      `0x${valid.toLowerCase()}n`,
+      'address',
+      `0x${valid.toLowerCase()}`,
+      'address',
+    ],
     ['numeric40 -> u256 (address not implicit int)', `0x${ones}n`, 'u256', `0x${ones}`, 'uint256'],
     ['u160(numeric40)', `u160(0x${ones}n)`, 'u160', `uint160(0x${ones})`, 'uint160'],
     ['u256(numeric40) (no address->u256 cast)', `u256(0x${ones}n)`, 'u256', `uint256(0x${ones})`, 'uint256'],
@@ -67,8 +83,10 @@ describe('EIP-55 address-literal acceptance matches solc', () => {
 
   it('@constant address: bare checksummed/numeric accepted, bad-checksum rejected (matches solc)', () => {
     const con = (lit: { jeth: string; sol: string }, ty = 'address', sty = 'address') =>
-      [`@contract class C { @constant K: ${ty} = ${lit.jeth}; @external @view f(): ${ty} { return this.K; } }`,
-       `contract C { ${sty} constant K = ${lit.sol}; function f() external view returns(${sty}){ return K; } }`] as const;
+      [
+        `@contract class C { @constant K: ${ty} = ${lit.jeth}; @external @view f(): ${ty} { return this.K; } }`,
+        `contract C { ${sty} constant K = ${lit.sol}; function f() external view returns(${sty}){ return K; } }`,
+      ] as const;
     const pairs: [string, { jeth: string; sol: string }][] = [
       ['bare valid', { jeth: `0x${valid}n`, sol: `0x${valid}` }],
       ['bare numeric', { jeth: `0x${ones}n`, sol: `0x${ones}` }],
@@ -79,8 +97,13 @@ describe('EIP-55 address-literal acceptance matches solc', () => {
       expect(jethOk(j), `${label}: JETH vs solc`).toBe(solcOk(s));
     }
     // a 40-hex address literal in a u256 constant is rejected by both (address not convertible).
-    expect(jethOk(`@contract class C { @constant K: u256 = 0x${lower}n; @external @view f(): u256 { return this.K; } }`))
-      .toBe(solcOk(`contract C { uint256 constant K = 0x${lower}; function f() external view returns(uint256){ return K; } }`));
+    expect(
+      jethOk(`@contract class C { @constant K: u256 = 0x${lower}n; @external @view f(): u256 { return this.K; } }`),
+    ).toBe(
+      solcOk(
+        `contract C { uint256 constant K = 0x${lower}; function f() external view returns(uint256){ return K; } }`,
+      ),
+    );
   });
 });
 
@@ -97,7 +120,11 @@ describe('EIP-55 address literals: runtime byte-identity vs solc', () => {
     await diff(
       `@contract class C { @constant K: address = 0x${valid}n; @external @view getK(): address { return this.K; } @external @view isK(x: address): bool { return x == this.K; } }`,
       `contract C { address constant K = 0x${valid}; function getK() external view returns(address){ return K; } function isK(address x) external view returns(bool){ return x == K; } }`,
-      [{ sig: 'getK()' }, { sig: 'isK(address)', args: '00'.repeat(12) + valid }, { sig: 'isK(address)', args: pad32(0x2222n) }],
+      [
+        { sig: 'getK()' },
+        { sig: 'isK(address)', args: '00'.repeat(12) + valid },
+        { sig: 'isK(address)', args: pad32(0x2222n) },
+      ],
     );
   });
 });
@@ -106,11 +133,31 @@ describe('EIP-55 address literals: over-acceptances rejected (match solc)', () =
   // [label, jeth-body, sol-body] - all must be rejected by BOTH (an address literal is not an
   // arithmetic operand; uppercase 0X is not a valid hex prefix).
   const rejects: [string, string, string][] = [
-    ['address literal + int', `@external @pure f(): u256 { return 0x${valid}n + 2n; }`, `function f() external pure returns(uint256){ return 0x${valid} + 2; }`],
-    ['address literal & int', `@external @pure f(): u256 { return 0x${ones}n & 1n; }`, `function f() external pure returns(uint256){ return 0x${ones} & 1; }`],
-    ['address literal * int', `@external @pure f(): u256 { return 0x${ones}n * 3n; }`, `function f() external pure returns(uint256){ return 0x${ones} * 3; }`],
-    ['uppercase 0X prefix (bare)', `@external @pure f(): address { return 0X${valid}n; }`, `function f() external pure returns(address){ return address(0X${valid}); }`],
-    ['uppercase 0X in u160 cast', `@external @pure f(): u160 { return u160(0X${ones}n); }`, `function f() external pure returns(uint160){ return uint160(0X${ones}); }`],
+    [
+      'address literal + int',
+      `@external @pure f(): u256 { return 0x${valid}n + 2n; }`,
+      `function f() external pure returns(uint256){ return 0x${valid} + 2; }`,
+    ],
+    [
+      'address literal & int',
+      `@external @pure f(): u256 { return 0x${ones}n & 1n; }`,
+      `function f() external pure returns(uint256){ return 0x${ones} & 1; }`,
+    ],
+    [
+      'address literal * int',
+      `@external @pure f(): u256 { return 0x${ones}n * 3n; }`,
+      `function f() external pure returns(uint256){ return 0x${ones} * 3; }`,
+    ],
+    [
+      'uppercase 0X prefix (bare)',
+      `@external @pure f(): address { return 0X${valid}n; }`,
+      `function f() external pure returns(address){ return address(0X${valid}); }`,
+    ],
+    [
+      'uppercase 0X in u160 cast',
+      `@external @pure f(): u160 { return u160(0X${ones}n); }`,
+      `function f() external pure returns(uint160){ return uint160(0X${ones}); }`,
+    ],
   ];
   for (const [label, jb, sb] of rejects) {
     it(`${label}: rejected by both`, () => {
@@ -121,6 +168,8 @@ describe('EIP-55 address literals: over-acceptances rejected (match solc)', () =
 
   it('address literal comparison (==) is still accepted (both)', () => {
     expect(jethOk(`@contract class C { @external @pure f(a: address): bool { return a == 0x${valid}n; } }`)).toBe(true);
-    expect(solcOk(`contract C { function f(address a) external pure returns(bool){ return a == 0x${valid}; } }`)).toBe(true);
+    expect(solcOk(`contract C { function f(address a) external pure returns(bool){ return a == 0x${valid}; } }`)).toBe(
+      true,
+    );
   });
 });

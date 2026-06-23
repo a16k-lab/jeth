@@ -9,15 +9,35 @@ class Packed {
   @state d: bool;
   @state e: address;
 
-  @external setA(x: u128): void { this.a = x; }
-  @external setB(x: bytes4): void { this.b = x; }
-  @external setC(x: i16): void { this.c = x; }
-  @external setD(x: bool): void { this.d = x; }
-  @external setE(x: address): void { this.e = x; }
+  @external setA(x: u128): void {
+    this.a = x;
+  }
+  @external setB(x: bytes4): void {
+    this.b = x;
+  }
+  @external setC(x: i16): void {
+    this.c = x;
+  }
+  @external setD(x: bool): void {
+    this.d = x;
+  }
+  @external setE(x: address): void {
+    this.e = x;
+  }
 
-  @external @view getA(): u128 { return this.a; }
-  @external @view getB(): bytes4 { return this.b; }
-  @external @view getC(): i16 { return this.c; }
-  @external @view getD(): bool { return this.d; }
-  @external @view getE(): address { return this.e; }
+  @external @view getA(): u128 {
+    return this.a;
+  }
+  @external @view getB(): bytes4 {
+    return this.b;
+  }
+  @external @view getC(): i16 {
+    return this.c;
+  }
+  @external @view getD(): bool {
+    return this.d;
+  }
+  @external @view getE(): address {
+    return this.e;
+  }
 }

@@ -29,12 +29,14 @@ contract C {
   function fm(uint256[2] calldata a, uint256[] calldata b, uint256 x) external pure returns (uint256[2] memory, uint256[] memory, uint256) { return (a, b, x); } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
   const both = async (data: string) => {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success).toBe(s.success);
     expect(j.returnHex).toBe(s.returnHex);
   };
@@ -53,11 +55,16 @@ contract C {
   });
   it('mixed static + dynamic + value tuple [Arr<u256,2>, u256[], u256]', async () => {
     // calldata: a(2 words inline) + offset-to-b + x + b tail([len][e0][e1])
-    const data = '0x' + sel('fm(uint256[2],uint256[],uint256)') +
-      pad32(1n) + pad32(2n) +          // a inline
-      pad32(0x80n) +                    // offset to b (relative to after selector): 4 words in -> 0x80
-      pad32(42n) +                      // x
-      pad32(2n) + pad32(5n) + pad32(6n); // b = [5, 6]
+    const data =
+      '0x' +
+      sel('fm(uint256[2],uint256[],uint256)') +
+      pad32(1n) +
+      pad32(2n) + // a inline
+      pad32(0x80n) + // offset to b (relative to after selector): 4 words in -> 0x80
+      pad32(42n) + // x
+      pad32(2n) +
+      pad32(5n) +
+      pad32(6n); // b = [5, 6]
     await both(data);
   });
 });

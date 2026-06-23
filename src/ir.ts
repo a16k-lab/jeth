@@ -69,7 +69,15 @@ export type Expr =
   | { kind: 'localRead'; type: JethType; name: string }
   | { kind: 'binary'; type: JethType; op: BinOp; left: Expr; right: Expr; unchecked: boolean }
   | { kind: 'ternary'; type: JethType; cond: Expr; then: Expr; else: Expr } // c ? a : b (short-circuit)
-  | { kind: 'incDec'; type: JethType; target: LValue; readExpr: Expr; isInc: boolean; prefix: boolean; unchecked: boolean } // x++ / ++x in value position
+  | {
+      kind: 'incDec';
+      type: JethType;
+      target: LValue;
+      readExpr: Expr;
+      isInc: boolean;
+      prefix: boolean;
+      unchecked: boolean;
+    } // x++ / ++x in value position
   | { kind: 'assignExpr'; type: JethType; target: LValue; value: Expr } // (x = v)/(x += v) in value position: stores value, yields it
   | { kind: 'call'; type: JethType; fn: string; args: Expr[] } // internal/private function call f(args) yielding a value
   | { kind: 'cdAggregateValue'; type: JethType; param: string } // whole STATIC struct / fixed-array calldata param echo (return a)
@@ -126,7 +134,18 @@ export type Expr =
   // interface calls re-throw the callee's exact revert bytes). `codeGuard`: after the failure bubble,
   // `if iszero(extcodesize(addr)) { revert(0,0) }` (a high-level call to an EOA / non-contract reverts
   // empty). Both default false so the low-level addr.call path (success checks) is unchanged.
-  | { kind: 'extCall'; type: JethType; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[]; bubble?: boolean; codeGuard?: boolean }
+  | {
+      kind: 'extCall';
+      type: JethType;
+      op: 'call' | 'staticcall';
+      addr: Expr;
+      data: Expr;
+      value?: Expr;
+      gas?: Expr;
+      checks: SuccessCheck[];
+      bubble?: boolean;
+      codeGuard?: boolean;
+    }
   | { kind: 'byteIndex'; type: JethType; base: Expr; index: Expr } // b[i] -> bytes1
   // --- Phase 4: dynamic arrays T[] ---
   | { kind: 'arrayLen'; type: JethType; arr: ArrayExpr } // a.length -> u256
@@ -156,7 +175,16 @@ export type Expr =
   // --- Phase 4d: aggregate calldata params (struct / fixed-array field+index reads) ---
   | { kind: 'cdPlaceRead'; type: JethType; place: CalldataPlace }
   // --- Phase 4e-1: dynamic array of static struct (calldata param) field read ---
-  | { kind: 'cdArrayField'; type: JethType; arr: ArrayExpr; index: Expr; headWords: number; fieldType: JethType; elemIndex?: Expr; elemLength?: number }
+  | {
+      kind: 'cdArrayField';
+      type: JethType;
+      arr: ArrayExpr;
+      index: Expr;
+      headWords: number;
+      fieldType: JethType;
+      elemIndex?: Expr;
+      elemLength?: number;
+    }
   // whole struct element of a calldata struct array (return ps[i]); the element is copied
   // from its (contiguous for a static struct / offset-located for a dynamic struct) calldata
   // head into a fresh ABI return blob, with the same bounds-check (Panic 0x32) as ps[i].field.
@@ -282,7 +310,6 @@ export type LValue =
   | { kind: 'arrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // a[i] = v (bounds-checked)
   | { kind: 'strArrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // this.ss[i] = <bytes/string>
   | { kind: 'dynPlace'; type: JethType; path: AccessPath } // this.d.s = <bytes/string> (dyn-struct field)
-
   | { kind: 'place'; type: JethType; path: AccessPath } // nested storage place = v
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // p.x = v on a memory-aggregate local
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] = v on a fixed-array memory local (wordOffset: a fixed-array field of a memory struct, p.a[i])
@@ -302,7 +329,16 @@ export type DestructureSource =
   | { kind: 'tuple'; values: Expr[] } // `[a, b] = [x, y]` (parallel assign / swap)
   // `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: the raw escape hatch (no success checks).
   // Yields two components: ok (bool) and ret (bytes returndata, always captured even on failure).
-  | { kind: 'extCall'; op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr; bubble?: boolean; codeGuard?: boolean }
+  | {
+      kind: 'extCall';
+      op: 'call' | 'staticcall';
+      addr: Expr;
+      data: Expr;
+      value?: Expr;
+      gas?: Expr;
+      bubble?: boolean;
+      codeGuard?: boolean;
+    }
   // `let [a, b] = abi.decode(data, [T1, T2])` (and the `.decode([...])` sugar): decode the memory bytes
   // value `data` into N tuple components of `types`. Each component is materialized like the single form
   // (value -> a word, bytes/string/array/struct -> a memory image pointer).

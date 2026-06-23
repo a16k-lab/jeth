@@ -96,7 +96,10 @@ describe('string[] / bytes[] (array of dynamic) vs Solidity', () => {
     const three = [s('ab'), s(''), s(big)];
     await eq('echoS n=3 (empty + >32B)', callArr1('echoS(string[])', three));
     // exact-32-byte and 33-byte boundary elements.
-    await eq('echoS boundary 31/32/33', callArr1('echoS(string[])', [s('Y'.repeat(31)), s('Z'.repeat(32)), s('W'.repeat(33))]));
+    await eq(
+      'echoS boundary 31/32/33',
+      callArr1('echoS(string[])', [s('Y'.repeat(31)), s('Z'.repeat(32)), s('W'.repeat(33))]),
+    );
   });
 
   it('echoes bytes[] byte-identically (identical layout to string[])', async () => {
@@ -145,24 +148,21 @@ describe('string[] / bytes[] (array of dynamic) vs Solidity', () => {
     expect(r.j.returnHex).toBe('0x');
 
     // len=1, element offset points past calldata -> empty revert on the a[i] read.
-    const badElemOff =
-      '0x' + sel('at(string[],uint256)') + pad(0x40n) + pad(0n) + pad(1n) + pad(0x1000n);
+    const badElemOff = '0x' + sel('at(string[],uint256)') + pad(0x40n) + pad(0n) + pad(1n) + pad(0x1000n);
     r = await eq('at bad element offset', badElemOff);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
 
     // len=1, valid table word (off=0x20) but element length implies payload past
     // calldatasize (declares 0x40-byte string with no payload words).
-    const badPayload =
-      '0x' + sel('at(string[],uint256)') + pad(0x40n) + pad(0n) + pad(1n) + pad(0x20n) + pad(0x40n);
+    const badPayload = '0x' + sel('at(string[],uint256)') + pad(0x40n) + pad(0n) + pad(1n) + pad(0x20n) + pad(0x40n);
     r = await eq('at element payload past end', badPayload);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
 
     // element offsets given relative to the WRONG base (calldata byte 0 instead of
     // the table start): here a too-large table offset -> length word OOB -> empty.
-    const wrongBase =
-      '0x' + sel('at(string[],uint256)') + pad(0x40n) + pad(0n) + pad(1n) + pad(0x100n);
+    const wrongBase = '0x' + sel('at(string[],uint256)') + pad(0x40n) + pad(0n) + pad(1n) + pad(0x100n);
     r = await eq('at wrong-base offset', wrongBase);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');

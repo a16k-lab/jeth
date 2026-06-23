@@ -14,7 +14,10 @@ const enc = (s: string) => {
   const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
   const nwords = Math.ceil(b.length / 32);
   let data = '';
-  for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+  for (let i = 0; i < nwords; i++)
+    data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   return { len: BigInt(b.length), data, pad };
 };
 function strArg(sel: string, headStatic: bigint[], s: string): string {

@@ -18,7 +18,10 @@ function encIStr(sig: string, i: bigint, s: string): string {
   const b = Buffer.from(s, 'utf8');
   const nwords = Math.ceil(b.length / 32);
   let data = '';
-  for (let w = 0; w < nwords; w++) data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+  for (let w = 0; w < nwords; w++)
+    data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   return '0x' + sel(sig) + pad(i) + pad(0x40n) + pad(BigInt(b.length)) + data;
 }
 
@@ -126,7 +129,20 @@ describe('_vf_dynarray3 probe', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   const send = eq;
 
@@ -146,7 +162,7 @@ describe('_vf_dynarray3 probe', () => {
     await eq('all after self-copy', encodeCall(sel('all()')));
 
     // i256[] sign-extension whole return
-    for (const v of [0n, 1n, MAX /*-1*/, (1n << 255n) /*INT_MIN*/, (1n << 255n) - 1n /*INT_MAX*/, M - 100n /*-100*/]) {
+    for (const v of [0n, 1n, MAX /*-1*/, 1n << 255n /*INT_MIN*/, (1n << 255n) - 1n /*INT_MAX*/, M - 100n /*-100*/]) {
       await send('pushI', encodeCall(sel('pushI(int256)'), [v]));
     }
     await eq('allI sign array', encodeCall(sel('allI()')));
@@ -221,25 +237,50 @@ describe('_vf_dynarray3 probe', () => {
     await send('fb[1]=short overwrite', encIStr('fbSet(uint256,bytes)', 1n, 'q'));
     await eq('fbAll after shrink overwrite (no stale)', encodeCall(sel('fbAll()')));
 
-    if (mism.length) { process.stderr.write('MISMATCHES ' + mism.length + '/' + count + '\n'); for (const m of mism.slice(0, 40)) process.stderr.write(m + '\n'); }
-    else process.stderr.write('ALL3 ' + count + ' byte-identical\n');
+    if (mism.length) {
+      process.stderr.write('MISMATCHES ' + mism.length + '/' + count + '\n');
+      for (const m of mism.slice(0, 40)) process.stderr.write(m + '\n');
+    } else process.stderr.write('ALL3 ' + count + ' byte-identical\n');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 
   // ---- STORAGE array compositions now supported (G6); byte-identical incl. raw slots in
   // test/array-compositions.test.ts. Whole calldata-param / return of these shapes stays gated.
   it('Arr<u256[],N> (uint256[][N]) storage access now compiles (G6)', () => {
-    expect(() => compile(`@contract class C { @state a: Arr<u256[], 2>; @external p(i: u256, v: u256): void { this.a[i].push(v); } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@contract class C { @state a: Arr<u256[], 2>; @external p(i: u256, v: u256): void { this.a[i].push(v); } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
     // a whole-array calldata PARAM / return + element access of this shape now compile too
     // (JETH210/151, byte-identical incl. malformed-offset parity in test/calldata-composite-index).
-    expect(() => compile(`@contract class C { @external @pure f(a: Arr<u256[], 2>, i: u256, j: u256): u256 { return a[i][j]; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@contract class C { @external @pure f(a: Arr<u256[], 2>, i: u256, j: u256): u256 { return a[i][j]; } }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
   });
 
   it('Arr<u256,2>[] (uint256[2][]) storage access now compiles (G6)', () => {
-    expect(() => compile(`@contract class C { @state a: Arr<u256,2>[]; @external p(): void { this.a.push(); } @external s(i: u256, j: u256, v: u256): void { this.a[i][j] = v; } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@contract class C { @state a: Arr<u256,2>[]; @external p(): void { this.a.push(); } @external s(i: u256, j: u256, v: u256): void { this.a[i][j] = v; } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
     // whole-array RETURN and calldata-param ECHO of this shape now compile too (G6, byte-identical
     // in test/array-composition-abi.test.ts).
-    expect(() => compile(`@contract class C { @state a: Arr<u256,2>[]; @view all(): Arr<u256,2>[] { return this.a; } }`, { fileName: 'C.jeth' })).not.toThrow();
-    expect(() => compile(`@contract class C { @external @pure e(x: Arr<u256,2>[]): Arr<u256,2>[] { return x; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(`@contract class C { @state a: Arr<u256,2>[]; @view all(): Arr<u256,2>[] { return this.a; } }`, {
+        fileName: 'C.jeth',
+      }),
+    ).not.toThrow();
+    expect(() =>
+      compile(`@contract class C { @external @pure e(x: Arr<u256,2>[]): Arr<u256,2>[] { return x; } }`, {
+        fileName: 'C.jeth',
+      }),
+    ).not.toThrow();
   });
 });

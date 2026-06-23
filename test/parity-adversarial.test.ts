@@ -101,8 +101,10 @@ describe('adversarial offset/length parity vs Solidity (byte-for-byte)', () => {
     // string length; payload is the next words. dLen returns 0x20.
     await same('dLen((uint256,bytes))', w(0x20n) + w(7n) + w(WRAP), { success: true, ret: '0x' + w(0x20n) });
     // dGet echoes that wrapped 32-byte string back ([0x20][len=0x20][word 0x07]).
-    await same('dGet((uint256,bytes))', w(0x20n) + w(7n) + w(WRAP),
-      { success: true, ret: '0x' + w(0x20n) + w(0x20n) + w(7n) });
+    await same('dGet((uint256,bytes))', w(0x20n) + w(7n) + w(WRAP), {
+      success: true,
+      ret: '0x' + w(0x20n) + w(0x20n) + w(7n),
+    });
   });
 
   it('dyn-struct string-field off_s = 2^64-1 -> EMPTY (signed slt rejects huge positive)', async () => {
@@ -143,13 +145,15 @@ describe('adversarial offset/length parity vs Solidity (byte-for-byte)', () => {
   // ---------------------------------------------------------------------------
   it('string[] element offset = 2^255 -> wraps, empty string', async () => {
     // a[i] echoes the wrapped-to-empty element: [0x20][len=0].
-    await same('saAt(string[],uint256)', w(0x40n) + w(0n) + w(1n) + w(HI),
-      { success: true, ret: '0x' + w(0x20n) + w(0n) });
+    await same('saAt(string[],uint256)', w(0x40n) + w(0n) + w(1n) + w(HI), {
+      success: true,
+      ret: '0x' + w(0x20n) + w(0n),
+    });
   });
 
   it('string[] element offset = 2^256-32 -> wraps to B-0x20 (the array length word)', async () => {
     // B = 0x64; lp = 0x44 = the L word (=1) -> string length 1, payload = next word.
-    const body = w(0x40n) + w(0n) + w(1n) + w(WRAP) + w(0xABn << 248n); // one payload word after table
+    const body = w(0x40n) + w(0n) + w(1n) + w(WRAP) + w(0xabn << 248n); // one payload word after table
     // solc defines the exact bytes; we just assert identity (and that it succeeds).
     const { s } = await same('saAt(string[],uint256)', body);
     expect(s.success).toBe(true);
@@ -206,22 +210,28 @@ describe('adversarial offset/length parity vs Solidity (byte-for-byte)', () => {
   it('happy path: m[i][j] / mEcho honest (asymmetric inner lengths)', async () => {
     // m = [[1,2,3],[4],[5,6]] canonical encoding.
     const region =
-      w(3n) + w(0x60n) + w(0xE0n) + w(0x120n) +
-      w(3n) + w(1n) + w(2n) + w(3n) +
-      w(1n) + w(4n) +
-      w(2n) + w(5n) + w(6n);
-    await same('mGet(uint256[][],uint256,uint256)', w(0x60n) + w(0n) + w(2n) + region, { success: true, ret: '0x' + w(3n) });
+      w(3n) + w(0x60n) + w(0xe0n) + w(0x120n) + w(3n) + w(1n) + w(2n) + w(3n) + w(1n) + w(4n) + w(2n) + w(5n) + w(6n);
+    await same('mGet(uint256[][],uint256,uint256)', w(0x60n) + w(0n) + w(2n) + region, {
+      success: true,
+      ret: '0x' + w(3n),
+    });
     await same('mEcho(uint256[][])', w(0x20n) + region, { success: true });
   });
 
   it('happy path: a[i] / saEcho honest', async () => {
     // a = ["ab","cdef"] canonical encoding.
     const region =
-      w(2n) + w(0x40n) + w(0x80n) +
-      w(2n) + Buffer.from('ab').toString('hex').padEnd(64, '0') +
-      w(4n) + Buffer.from('cdef').toString('hex').padEnd(64, '0');
-    await same('saAt(string[],uint256)', w(0x40n) + w(1n) + region,
-      { success: true, ret: '0x' + w(0x20n) + w(4n) + Buffer.from('cdef').toString('hex').padEnd(64, '0') });
+      w(2n) +
+      w(0x40n) +
+      w(0x80n) +
+      w(2n) +
+      Buffer.from('ab').toString('hex').padEnd(64, '0') +
+      w(4n) +
+      Buffer.from('cdef').toString('hex').padEnd(64, '0');
+    await same('saAt(string[],uint256)', w(0x40n) + w(1n) + region, {
+      success: true,
+      ret: '0x' + w(0x20n) + w(4n) + Buffer.from('cdef').toString('hex').padEnd(64, '0'),
+    });
     await same('saEcho(string[])', w(0x20n) + region, { success: true });
   });
 });

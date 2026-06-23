@@ -97,8 +97,14 @@ describe('s6-arr-struct-with-struct-field vs Solidity', () => {
     await eqSlot(4n, 'items[2].id slot');
     await eqSlot(5n, 'items[2].pt slot');
 
-    for (const [g, i] of [['getId(uint256)', 0n], ['getX(uint256)', 0n], ['getY(uint256)', 0n],
-                          ['getId(uint256)', 2n], ['getX(uint256)', 2n], ['getY(uint256)', 2n]] as [string, bigint][]) {
+    for (const [g, i] of [
+      ['getId(uint256)', 0n],
+      ['getX(uint256)', 0n],
+      ['getY(uint256)', 0n],
+      ['getId(uint256)', 2n],
+      ['getX(uint256)', 2n],
+      ['getY(uint256)', 2n],
+    ] as [string, bigint][]) {
       const r = await both(encodeCall(sel(g), [i]));
       expect(r.j.returnHex, `${g}[${i}]`).toBe(r.s.returnHex);
     }

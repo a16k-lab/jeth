@@ -12,8 +12,13 @@ import { CompileError } from '../src/diagnostics.js';
 
 const sel = (s: string) => functionSelector(s);
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 const J = `enum Color { Red, Green, Blue }
@@ -63,12 +68,14 @@ contract C {
 describe('F5 switch', () => {
   let h: Harness, hs: Harness, jv: Address, sv: Address;
   async function eq(label: string, data: string) {
-    const j = await h.call(jv, data); const s = await hs.call(sv, data);
+    const j = await h.call(jv, data);
+    const s = await hs.call(sv, data);
     expect(j.success, `${label} jeth=${j.exceptionError}`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    h = await Harness.create(); hs = await Harness.create();
+    h = await Harness.create();
+    hs = await Harness.create();
     jv = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     sv = await hs.deploy(compileSolidity(SOL, 'C').creation);
   });
@@ -85,14 +92,19 @@ describe('F5 switch', () => {
   });
 
   it('stricter lints', () => {
-    const wrap = (b: string) => `enum Color { Red, Green, Blue }\n@contract class C { @external @pure f(c: Color, x: u256): u256 {\n${b}\nreturn 0n; } }`;
+    const wrap = (b: string) =>
+      `enum Color { Red, Green, Blue }\n@contract class C { @external @pure f(c: Color, x: u256): u256 {\n${b}\nreturn 0n; } }`;
     // non-exhaustive enum switch with no default
     expect(codes(wrap('switch (c) { case Color.Red: return 1n; case Color.Green: return 2n; }'))).toContain('JETH286');
     // implicit fall-through from a non-empty case
-    expect(codes(wrap('switch (x) { case 1n: { let y: u256 = x; } case 2n: return 2n; default: return 0n; }'))).toContain('JETH284');
+    expect(
+      codes(wrap('switch (x) { case 1n: { let y: u256 = x; } case 2n: return 2n; default: return 0n; }')),
+    ).toContain('JETH284');
     // default not last
     expect(codes(wrap('switch (x) { default: return 0n; case 1n: return 1n; }'))).toContain('JETH282');
     // exhaustive enum switch (all members) needs no default and is accepted
-    expect(codes(wrap('switch (c) { case Color.Red: return 1n; case Color.Green: return 2n; case Color.Blue: return 3n; }'))).toEqual([]);
+    expect(
+      codes(wrap('switch (c) { case Color.Red: return 1n; case Color.Green: return 2n; case Color.Blue: return 3n; }')),
+    ).toEqual([]);
   });
 });

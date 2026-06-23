@@ -52,7 +52,10 @@ contract BS {
 const LENGTHS = [0, 1, 5, 31, 32, 33, 63, 64, 65, 100];
 const repeat = (n: number, c = 'A') => c.repeat(n);
 function eqLogs(a: LogEntry[], b: LogEntry[]): boolean {
-  return a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  return (
+    a.length === b.length &&
+    a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics))
+  );
 }
 
 describe('dynamic bytes/string vs Solidity', () => {
@@ -82,21 +85,30 @@ describe('dynamic bytes/string vs Solidity', () => {
       const base = dataBase(0n);
       const words = Math.ceil(n / 32);
       for (let i = 0; i < words; i++) {
-        expect(await readSlot(jeth, aj, base + BigInt(i)), `data slot ${i} len=${n}`).toBe(await readSlot(sol, as, base + BigInt(i)));
+        expect(await readSlot(jeth, aj, base + BigInt(i)), `data slot ${i} len=${n}`).toBe(
+          await readSlot(sol, as, base + BigInt(i)),
+        );
       }
       expect(decodeUint(await readSlot(jeth, aj, 2n)), `canary len=${n}`).toBe(0xdeadbeefn);
     }
   });
 
   it('clears old tail slots on overwrite, identically', async () => {
-    const seqs = [[repeat(100), 'hi'], [repeat(100, 'F'), repeat(40, 'G')], ['hello', 'x'], [repeat(40), '']];
+    const seqs = [
+      [repeat(100), 'hi'],
+      [repeat(100, 'F'), repeat(40, 'G')],
+      ['hello', 'x'],
+      [repeat(40), ''],
+    ];
     for (const [a, b] of seqs) {
       await both(encStr('setS(string)', a!));
       await both(encStr('setS(string)', b!));
       const base = dataBase(0n);
       expect(await readSlot(jeth, aj, 0n), `slot0 ${a}->${b}`).toBe(await readSlot(sol, as, 0n));
       for (let i = 0; i < 4; i++) {
-        expect(await readSlot(jeth, aj, base + BigInt(i)), `cleared slot ${i} ${a}->${b}`).toBe(await readSlot(sol, as, base + BigInt(i)));
+        expect(await readSlot(jeth, aj, base + BigInt(i)), `cleared slot ${i} ${a}->${b}`).toBe(
+          await readSlot(sol, as, base + BigInt(i)),
+        );
       }
     }
   });

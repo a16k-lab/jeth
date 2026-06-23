@@ -1,15 +1,38 @@
 // Phase 4e-1: dynamic array of static struct as a calldata param. Whole-array echo
 // (decode + re-encode, head/tail) and element field reads ps[i].field.
-@struct class Pt { x: u128; y: u128; }
-@struct class Acct { bal: u128; nonce: u64; active: bool; }
+@struct
+class Pt {
+  x: u128;
+  y: u128;
+}
+@struct
+class Acct {
+  bal: u128;
+  nonce: u64;
+  active: bool;
+}
 
 @contract
 class DynStructArray {
-  @external @pure echoPts(ps: Pt[]): Pt[] { return ps; }
-  @external @pure echoAccts(a: Acct[]): Acct[] { return a; }
-  @external @pure ptX(ps: Pt[], i: u256): u128 { return ps[i].x; }
-  @external @pure ptY(ps: Pt[], i: u256): u128 { return ps[i].y; }
-  @external @pure acctNonce(a: Acct[], i: u256): u64 { return a[i].nonce; }
-  @external @pure acctActive(a: Acct[], i: u256): bool { return a[i].active; }
-  @external @pure len(ps: Pt[]): u256 { return ps.length; }
+  @external @pure echoPts(ps: Pt[]): Pt[] {
+    return ps;
+  }
+  @external @pure echoAccts(a: Acct[]): Acct[] {
+    return a;
+  }
+  @external @pure ptX(ps: Pt[], i: u256): u128 {
+    return ps[i].x;
+  }
+  @external @pure ptY(ps: Pt[], i: u256): u128 {
+    return ps[i].y;
+  }
+  @external @pure acctNonce(a: Acct[], i: u256): u64 {
+    return a[i].nonce;
+  }
+  @external @pure acctActive(a: Acct[], i: u256): bool {
+    return a[i].active;
+  }
+  @external @pure len(ps: Pt[]): u256 {
+    return ps.length;
+  }
 }

@@ -75,26 +75,38 @@ contract C {
 describe('nested-struct memory field access (G9) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('read/write nested value fields + deep chains', async () => {
-    for (const [a, b] of [[1n, 2n], [0n, -1n], [M - 1n, (1n << 63n) - 1n], [123n, M - (1n << 63n)]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [1n, 2n],
+      [0n, -1n],
+      [M - 1n, (1n << 63n) - 1n],
+      [123n, M - (1n << 63n)],
+    ] as [bigint, bigint][]) {
       await eq(`rd(7,${a},${b})`, encodeCall(sel('rd(uint8,uint256,int64,uint256)'), [7n, a, b, 50n]));
       await eq(`wr(${a},${b})`, encodeCall(sel('wr(uint256,int64)'), [a, b]));
       await eq(`deep(${a},${b})`, encodeCall(sel('deep(uint256,int64)'), [a, b]));
     }
   });
   it('nested struct through internal helpers (by-ref mutate + construct-return)', async () => {
-    for (const [a, b] of [[10n, 3n], [0n, -7n], [M - 5n, -1n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [10n, 3n],
+      [0n, -7n],
+      [M - 5n, -1n],
+    ] as [bigint, bigint][]) {
       await eq(`viaHelper(${a},${b})`, encodeCall(sel('viaHelper(uint256,int64)'), [a, b]));
       await eq(`mkE(5,${a},${b})`, encodeCall(sel('mkE(uint8,uint256,int64)'), [5n, a, b]));
     }

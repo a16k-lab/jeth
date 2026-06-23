@@ -16,7 +16,10 @@ function raw(selSig: string, words: bigint[]): string {
 }
 
 interface Pair {
-  jeth: Harness; sol: Harness; aj: Address; as: Address;
+  jeth: Harness;
+  sol: Harness;
+  aj: Address;
+  as: Address;
 }
 
 async function deployPair(jethSrc: string, solSrc: string, solName: string): Promise<Pair> {
@@ -402,10 +405,7 @@ contract C {
     const { keccak256 } = await import('ethereum-cryptography/keccak.js');
     const k = (1n << 200n) | 0xabcdn;
     const base = BigInt('0x' + Buffer.from(keccak256(Buffer.from(pad(k) + pad(0n), 'hex'))).toString('hex'));
-    const calls = [
-      raw('setA(bytes32,uint64)', [k << 0n, 0x1111n]),
-      raw('setFlag(bytes32,bool)', [k, 1n]),
-    ];
+    const calls = [raw('setA(bytes32,uint64)', [k << 0n, 0x1111n]), raw('setFlag(bytes32,bool)', [k, 1n])];
     await compareSlots(p, calls, [base, base + 1n], 'map-struct-packed');
   });
 });
@@ -517,10 +517,14 @@ contract C {
     for (let i = 0; i < 4; i++) slots.push(dataSlot + BigInt(i));
     // sequence designed to leave stale data slots that must be cleared
     const seq = [
-      'setLong()', 'setShort()',       // long -> short must clear data slots
-      'setLong()', 'setEmpty()',       // long -> empty must clear data slots
-      'setMed()', 'setExact32()',      // 31 -> 32 (short -> long boundary)
-      'setExact32()', 'setMed()',      // 32 -> 31 (long -> short boundary) clears slot
+      'setLong()',
+      'setShort()', // long -> short must clear data slots
+      'setLong()',
+      'setEmpty()', // long -> empty must clear data slots
+      'setMed()',
+      'setExact32()', // 31 -> 32 (short -> long boundary)
+      'setExact32()',
+      'setMed()', // 32 -> 31 (long -> short boundary) clears slot
     ];
     for (const fn of seq) {
       const c = raw(fn, []);

@@ -72,7 +72,9 @@ describe('multi-aggregate-head-cursor vs Solidity', () => {
   // assert JETH matches Solidity byte-for-byte (success + returndata).
   async function eq(label: string, data: string) {
     const { j, s } = await both(data);
-    expect(j.success, `${label} success (jeth err=${j.exceptionError}, jhex=${j.returnHex}, shex=${s.returnHex})`).toBe(s.success);
+    expect(j.success, `${label} success (jeth err=${j.exceptionError}, jhex=${j.returnHex}, shex=${s.returnHex})`).toBe(
+      s.success,
+    );
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     return { j, s };
   }
@@ -136,7 +138,9 @@ describe('multi-aggregate-head-cursor vs Solidity', () => {
   it('h: value-aggregate-value, trailing y past the array', async () => {
     const sig5 = 'hA(uint256,uint256[3],uint256,uint256)';
     const sig4 = (n: string) => `${n}(uint256,uint256[3],uint256)`;
-    const x = 0x77n, a = [0xa0n, 0xa1n, 0xa2n], y = 0x99n;
+    const x = 0x77n,
+      a = [0xa0n, 0xa1n, 0xa2n],
+      y = 0x99n;
     const head = [x, ...a, y];
     expect(decodeUint((await eq('hX', raw(sig4('hX'), head))).j.returnHex)).toBe(x);
     for (const i of [0n, 1n, 2n]) {

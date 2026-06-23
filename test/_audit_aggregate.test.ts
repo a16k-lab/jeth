@@ -6,7 +6,7 @@ import { Harness } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const M = (1n << 256n);
+const M = 1n << 256n;
 function pad(v: bigint): string {
   return (((v % M) + M) % M).toString(16).padStart(64, '0');
 }
@@ -113,7 +113,7 @@ describe('audit aggregate-params: signed/bytesN/bool/address leaves', () => {
   it('intN element + sign-extension via fixed array', async () => {
     // negative int64 element: high bytes should sign-extend on read
     // Provide a clean -5 (full sign extension)
-    const cleanNeg = ((-5n) % M + M) % M;
+    const cleanNeg = ((-5n % M) + M) % M;
     for (const i of [0n, 1n, 2n, 3n]) {
       await eq(`pickI clean i=${i}`, raw('pickI(int64[4],uint256)', [cleanNeg, 7n, M - 1n, 0n, i]));
     }
@@ -141,7 +141,7 @@ describe('audit aggregate-params: signed/bytesN/bool/address leaves', () => {
   it('mixed struct fields: address, bytes4, int64 alignment + validation', async () => {
     const addr = BigInt('0x' + 'ab'.repeat(20));
     const b4 = BigInt('0xcafebabe') << BigInt((32 - 4) * 8);
-    const c = ((-1000n) % M + M) % M;
+    const c = ((-1000n % M) + M) % M;
     await eq('mixA', raw('mixA((address,bytes4,int64))', [addr, b4, c]));
     await eq('mixB', raw('mixB((address,bytes4,int64))', [addr, b4, c]));
     await eq('mixC', raw('mixC((address,bytes4,int64))', [addr, b4, c]));
@@ -163,23 +163,34 @@ describe('audit aggregate-params: deep nested struct with matrix field', () => {
     return [tag, mat[0]![0]!, mat[0]![1]!, mat[1]![0]!, mat[1]![1]!, tail];
   }
   it('deepMat all i,j + tag + tail', async () => {
-    const mat = [[100n, 101n], [110n, 111n]];
+    const mat = [
+      [100n, 101n],
+      [110n, 111n],
+    ];
     const base = deepWords(7n, mat, 0x9999n);
     await eq('deepTag', raw('deepTag((uint32,uint64[2][2],uint16))', base));
     await eq('deepTail', raw('deepTail((uint32,uint64[2][2],uint16))', base));
-    for (const i of [0n, 1n]) for (const j of [0n, 1n]) {
-      await eq(`deepMat ${i},${j}`, raw('deepMat((uint32,uint64[2][2],uint16),uint256,uint256)', [...base, i, j]));
-    }
+    for (const i of [0n, 1n])
+      for (const j of [0n, 1n]) {
+        await eq(`deepMat ${i},${j}`, raw('deepMat((uint32,uint64[2][2],uint16),uint256,uint256)', [...base, i, j]));
+      }
     // OOB i and j
     await eq('deepMat OOB i', raw('deepMat((uint32,uint64[2][2],uint16),uint256,uint256)', [...base, 2n, 0n]));
     await eq('deepMat OOB j', raw('deepMat((uint32,uint64[2][2],uint16),uint256,uint256)', [...base, 0n, 2n]));
     // dirty mat element
     const dirtyMat = [...base];
     dirtyMat[3] = (1n << 100n) | 5n; // m10 dirty uint64
-    await eq('deepMat dirty read 1,0', raw('deepMat((uint32,uint64[2][2],uint16),uint256,uint256)', [...dirtyMat, 1n, 0n]));
-    await eq('deepMat dirty unread 0,0', raw('deepMat((uint32,uint64[2][2],uint16),uint256,uint256)', [...dirtyMat, 0n, 0n]));
+    await eq(
+      'deepMat dirty read 1,0',
+      raw('deepMat((uint32,uint64[2][2],uint16),uint256,uint256)', [...dirtyMat, 1n, 0n]),
+    );
+    await eq(
+      'deepMat dirty unread 0,0',
+      raw('deepMat((uint32,uint64[2][2],uint16),uint256,uint256)', [...dirtyMat, 0n, 0n]),
+    );
     // dirty tag/tail read
-    const dt = [...base]; dt[0] = (1n << 100n) | 7n;
+    const dt = [...base];
+    dt[0] = (1n << 100n) | 7n;
     await eq('deepTag dirty', raw('deepTag((uint32,uint64[2][2],uint16),uint256,uint256)', dt));
   });
 });

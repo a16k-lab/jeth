@@ -239,7 +239,10 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
         ['end+1', offExact + 1n],
         ['normal', 0x60n],
       ] as const) {
-        await eq(`fodAt bw=${bodyWords} off ${nm}`, '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(off) + pad(0n) + pad(0n) + filler);
+        await eq(
+          `fodAt bw=${bodyWords} off ${nm}`,
+          '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(off) + pad(0n) + pad(0n) + filler,
+        );
       }
       // fodLen has a 2-word head (off, i); recompute boundary for that head size.
       const filler2 = pad(1n).repeat(bodyWords);
@@ -250,7 +253,10 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
         ['end-1', offEx2 - 1n],
         ['end+1', offEx2 + 1n],
       ] as const) {
-        await eq(`fodLen bw=${bodyWords} off ${nm}`, '0x' + sel('fodLen(uint256[][2],uint256)') + pad(off) + pad(0n) + filler2);
+        await eq(
+          `fodLen bw=${bodyWords} off ${nm}`,
+          '0x' + sel('fodLen(uint256[][2],uint256)') + pad(off) + pad(0n) + filler2,
+        );
       }
     }
   });
@@ -281,7 +287,10 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
       await eq(`fb2Echo outer off ${nm}`, '0x' + sel('fb2Echo(bytes[2])') + pad(off) + region2);
       await eq(`fs2At outer off ${nm}`, '0x' + sel('fs2At(string[2],uint256)') + pad(off) + pad(0n) + sregion2);
       await eq(`fs2Echo outer off ${nm}`, '0x' + sel('fs2Echo(string[2])') + pad(off) + sregion2);
-      await eq(`fodAt outer off ${nm}`, '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(off) + pad(0n) + pad(0n) + fodRegion);
+      await eq(
+        `fodAt outer off ${nm}`,
+        '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(off) + pad(0n) + pad(0n) + fodRegion,
+      );
       await eq(`fodEcho outer off ${nm}`, '0x' + sel('fodEcho(uint256[][2])') + pad(off) + fodRegion);
       await eq(`fb3At outer off ${nm}`, '0x' + sel('fb3At(bytes[3],uint256)') + pad(off) + pad(0n) + fb3Region);
     }
@@ -308,8 +317,10 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
     const p0 = elemBody(sb('abc'));
     const off1Base = BigInt(64 + blen(p0));
     const build = (off0: bigint, off1: bigint) => pad(off0) + pad(off1) + p0 + elemBody(sb('z'));
-    const at = (off0: bigint, off1: bigint, i: bigint) => '0x' + sel('fb2At(bytes[2],uint256)') + pad(0x40n) + pad(i) + build(off0, off1);
-    const le = (off0: bigint, off1: bigint, i: bigint) => '0x' + sel('fb2Len(bytes[2],uint256)') + pad(0x40n) + pad(i) + build(off0, off1);
+    const at = (off0: bigint, off1: bigint, i: bigint) =>
+      '0x' + sel('fb2At(bytes[2],uint256)') + pad(0x40n) + pad(i) + build(off0, off1);
+    const le = (off0: bigint, off1: bigint, i: bigint) =>
+      '0x' + sel('fb2Len(bytes[2],uint256)') + pad(0x40n) + pad(i) + build(off0, off1);
     await eq('fb2 valid read[0]', at(64n, off1Base, 0n));
     await eq('fb2 valid read[1]', at(64n, off1Base, 1n));
     for (const [nm, off0] of [
@@ -336,7 +347,8 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
       const off1 = BigInt(64 + blen(elemBody(sb('aa'))));
       return pad(64n) + pad(off1) + elemBody(sb('aa')) + elem1;
     };
-    const at = (len1: bigint, pw: number, i: bigint) => '0x' + sel('fb2At(bytes[2],uint256)') + pad(0x40n) + pad(i) + build(len1, pw);
+    const at = (len1: bigint, pw: number, i: bigint) =>
+      '0x' + sel('fb2At(bytes[2],uint256)') + pad(0x40n) + pad(i) + build(len1, pw);
     await eq('fb2 len1=2^64-1', at(U64, 0, 1n));
     await eq('fb2 len1=2^64', at(1n << 64n, 0, 1n));
     await eq('fb2 len1=2^256-1', at(M - 1n, 0, 1n));
@@ -393,17 +405,35 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
   it('fb2/fb3/fod index OOB (i>=N) parity incl high-bit i', async () => {
     const r2 = fixedBytesRegion([sb('aa'), sb('bb')]);
     const r3 = fixedBytesRegion([sb('a'), sb('bb'), sb('ccc')]);
-    const rfod = fixedU256ArrRegion([[1n, 2n], [3n, 4n]]);
-    for (const [nm, i] of [['2', 2n], ['3', 3n], ['2^64', 1n << 64n], ['2^255', 1n << 255n], ['max', M - 1n]] as const) {
+    const rfod = fixedU256ArrRegion([
+      [1n, 2n],
+      [3n, 4n],
+    ]);
+    for (const [nm, i] of [
+      ['2', 2n],
+      ['3', 3n],
+      ['2^64', 1n << 64n],
+      ['2^255', 1n << 255n],
+      ['max', M - 1n],
+    ] as const) {
       await eq(`fb2At i=${nm}`, '0x' + sel('fb2At(bytes[2],uint256)') + pad(0x40n) + pad(i) + r2);
       await eq(`fb2Len i=${nm}`, '0x' + sel('fb2Len(bytes[2],uint256)') + pad(0x40n) + pad(i) + r2);
       await eq(`fb3At i=${nm}`, '0x' + sel('fb3At(bytes[3],uint256)') + pad(0x40n) + pad(i) + r3);
       await eq(`fodLen i=${nm}`, '0x' + sel('fodLen(uint256[][2],uint256)') + pad(0x40n) + pad(i) + rfod);
-      await eq(`fodAt i=${nm}`, '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(0x60n) + pad(i) + pad(0n) + rfod);
+      await eq(
+        `fodAt i=${nm}`,
+        '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(0x60n) + pad(i) + pad(0n) + rfod,
+      );
     }
     // valid i, j OOB on the inner dynamic array
-    await eq('fodAt [0][2] j OOB', '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(2n) + rfod);
-    await eq('fodAt [1][2] j OOB', '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(0x60n) + pad(1n) + pad(2n) + rfod);
+    await eq(
+      'fodAt [0][2] j OOB',
+      '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(2n) + rfod,
+    );
+    await eq(
+      'fodAt [1][2] j OOB',
+      '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(0x60n) + pad(1n) + pad(2n) + rfod,
+    );
   });
 
   // ============================================================================
@@ -478,18 +508,26 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
       const tag = rows.map((r) => r.length).join(',');
       await eq(`fodEcho [${tag}]`, '0x' + sel('fodEcho(uint256[][2])') + pad(0x20n) + region);
       for (let i = 0; i < 2; i++) {
-        await eq(`fodLen[${i}] [${tag}]`, '0x' + sel('fodLen(uint256[][2],uint256)') + pad(0x40n) + pad(BigInt(i)) + region);
+        await eq(
+          `fodLen[${i}] [${tag}]`,
+          '0x' + sel('fodLen(uint256[][2],uint256)') + pad(0x40n) + pad(BigInt(i)) + region,
+        );
         for (let j = 0; j < rows[i]!.length; j++)
-          await eq(`fodAt[${i}][${j}] [${tag}]`, '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(0x60n) + pad(BigInt(i)) + pad(BigInt(j)) + region);
+          await eq(
+            `fodAt[${i}][${j}] [${tag}]`,
+            '0x' + sel('fodAt(uint256[][2],uint256,uint256)') + pad(0x60n) + pad(BigInt(i)) + pad(BigInt(j)) + region,
+          );
       }
     }
     // fb3 echo vs element
     const r3 = fixedBytesRegion([sb('one'), sb(''), sb('three!!')]);
     await eq('fb3Echo', '0x' + sel('fb3Echo(bytes[3])') + pad(0x20n) + r3);
-    for (let i = 0n; i < 3n; i++) await eq(`fb3At[${i}]`, '0x' + sel('fb3At(bytes[3],uint256)') + pad(0x40n) + pad(i) + r3);
+    for (let i = 0n; i < 3n; i++)
+      await eq(`fb3At[${i}]`, '0x' + sel('fb3At(bytes[3],uint256)') + pad(0x40n) + pad(i) + r3);
     // fs3 element access
     const s3 = fixedBytesRegion([sb('alpha'), sb('beta'), sb('')]);
-    for (let i = 0n; i < 3n; i++) await eq(`fs3At[${i}]`, '0x' + sel('fs3At(string[3],uint256)') + pad(0x40n) + pad(i) + s3);
+    for (let i = 0n; i < 3n; i++)
+      await eq(`fs3At[${i}]`, '0x' + sel('fs3At(string[3],uint256)') + pad(0x40n) + pad(i) + s3);
   });
 
   // ============================================================================
@@ -533,7 +571,10 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
       const inner = rows.map(dynValRegion);
       let off = L * 32;
       let table = '';
-      for (const ir of inner) { table += pad(BigInt(off)); off += blen(ir); }
+      for (const ir of inner) {
+        table += pad(BigInt(off));
+        off += blen(ir);
+      }
       return pad(BigInt(L)) + table + inner.join('');
     }
     const m2 = nested2([[1n, 2n], [], [9n]]);
@@ -546,36 +587,73 @@ describe('_reaudit_calldata: Arr<dyn,N> head-extent + adjacent decode parity', (
       const inner = cube.map(nested2);
       let off = L * 32;
       let table = '';
-      for (const ir of inner) { table += pad(BigInt(off)); off += blen(ir); }
+      for (const ir of inner) {
+        table += pad(BigInt(off));
+        off += blen(ir);
+      }
       return pad(BigInt(L)) + table + inner.join('');
     }
     const m3 = nested3([[[1n, 2n], [3n]], [[7n]]]);
-    await eq('m3At[0][0][1]', '0x' + sel('m3At(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(0n) + pad(0n) + pad(1n) + m3);
-    await eq('m3At[1][0][0]', '0x' + sel('m3At(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(1n) + pad(0n) + pad(0n) + m3);
-    await eq('m3At[0][1][0] OOB-ish', '0x' + sel('m3At(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(0n) + pad(2n) + pad(0n) + m3);
+    await eq(
+      'm3At[0][0][1]',
+      '0x' + sel('m3At(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(0n) + pad(0n) + pad(1n) + m3,
+    );
+    await eq(
+      'm3At[1][0][0]',
+      '0x' + sel('m3At(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(1n) + pad(0n) + pad(0n) + m3,
+    );
+    await eq(
+      'm3At[0][1][0] OOB-ish',
+      '0x' + sel('m3At(uint256[][][],uint256,uint256,uint256)') + pad(0x80n) + pad(0n) + pad(2n) + pad(0n) + m3,
+    );
     // Arr<u256,2>[] dynamic-of-fixed
     const dof = pad(2n) + pad(1n) + pad(2n) + pad(3n) + pad(4n); // [len=2][e0w0][e0w1][e1w0][e1w1]
     await eq('dofAt[0][0]', '0x' + sel('dofAt(uint256[2][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(0n) + dof);
     await eq('dofAt[1][1]', '0x' + sel('dofAt(uint256[2][],uint256,uint256)') + pad(0x60n) + pad(1n) + pad(1n) + dof);
-    await eq('dofAt[2][0] OOB', '0x' + sel('dofAt(uint256[2][],uint256,uint256)') + pad(0x60n) + pad(2n) + pad(0n) + dof);
-    await eq('dofAt[0][2] j OOB', '0x' + sel('dofAt(uint256[2][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(2n) + dof);
+    await eq(
+      'dofAt[2][0] OOB',
+      '0x' + sel('dofAt(uint256[2][],uint256,uint256)') + pad(0x60n) + pad(2n) + pad(0n) + dof,
+    );
+    await eq(
+      'dofAt[0][2] j OOB',
+      '0x' + sel('dofAt(uint256[2][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(2n) + dof,
+    );
   });
 
   it('regression: static struct (fixed-array field) + dynamic struct echo', async () => {
     // WithArr static head: [id][data0][data1][data2][tag]
     const head = pad(7n) + pad(100n) + pad(200n) + pad(300n) + pad(9n);
-    for (let j = 0n; j < 3n; j++) await eq(`waData[${j}]`, '0x' + sel('waData((uint64,uint256[3],uint64),uint256)') + head + pad(j));
+    for (let j = 0n; j < 3n; j++)
+      await eq(`waData[${j}]`, '0x' + sel('waData((uint64,uint256[3],uint64),uint256)') + head + pad(j));
     await eq('waData[3] OOB', '0x' + sel('waData((uint64,uint256[3],uint64),uint256)') + head + pad(3n));
     // dirty id (uint64 high bits) read during nothing (waData doesn't read id) -> matches solc
     const dirtyHead = pad(M - 1n) + pad(100n) + pad(200n) + pad(300n) + pad(9n);
-    await eq('waData dirty id not read', '0x' + sel('waData((uint64,uint256[3],uint64),uint256)') + dirtyHead + pad(0n));
+    await eq(
+      'waData dirty id not read',
+      '0x' + sel('waData((uint64,uint256[3],uint64),uint256)') + dirtyHead + pad(0n),
+    );
     // WithDyn echo
     const tuple = (a: bigint, xs: bigint[], b: bigint) => pad(a) + pad(0x60n) + pad(b) + dynValRegion(xs);
     await eq('wdEcho 3', '0x' + sel('wdEcho((uint64,uint256[],uint64))') + pad(0x20n) + tuple(1n, [10n, 20n, 30n], 2n));
     await eq('wdEcho empty', '0x' + sel('wdEcho((uint64,uint256[],uint64))') + pad(0x20n) + tuple(5n, [], 6n));
-    await eq('wdEcho dirty a', '0x' + sel('wdEcho((uint64,uint256[],uint64))') + pad(0x20n) + (pad(M - 1n) + pad(0x60n) + pad(2n) + dynValRegion([1n])));
-    await eq('wdEcho outer off=2^64', '0x' + sel('wdEcho((uint64,uint256[],uint64))') + pad(1n << 64n) + tuple(1n, [1n], 2n));
-    await eq('wdEcho xs off=2^256-1', '0x' + sel('wdEcho((uint64,uint256[],uint64))') + pad(0x20n) + (pad(1n) + pad(M - 1n) + pad(2n) + dynValRegion([1n])));
+    await eq(
+      'wdEcho dirty a',
+      '0x' +
+        sel('wdEcho((uint64,uint256[],uint64))') +
+        pad(0x20n) +
+        (pad(M - 1n) + pad(0x60n) + pad(2n) + dynValRegion([1n])),
+    );
+    await eq(
+      'wdEcho outer off=2^64',
+      '0x' + sel('wdEcho((uint64,uint256[],uint64))') + pad(1n << 64n) + tuple(1n, [1n], 2n),
+    );
+    await eq(
+      'wdEcho xs off=2^256-1',
+      '0x' +
+        sel('wdEcho((uint64,uint256[],uint64))') +
+        pad(0x20n) +
+        (pad(1n) + pad(M - 1n) + pad(2n) + dynValRegion([1n])),
+    );
   });
 
   // ============================================================================

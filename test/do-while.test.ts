@@ -71,16 +71,23 @@ contract C {
 describe('do-while vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('runsOnce / sumTo / skipEvens / breakAt over many n', async () => {
@@ -88,11 +95,13 @@ describe('do-while vs Solidity', () => {
       await eq(`runsOnce(${n})`, encodeCall(sel('runsOnce(uint256)'), [n]));
       await eq(`sumTo(${n})`, encodeCall(sel('sumTo(uint256)'), [n]));
       await eq(`skipEvens(${n})`, encodeCall(sel('skipEvens(uint256)'), [n]));
-      for (const lim of [0n, 1n, 3n, 5n, 100n]) await eq(`breakAt(${n},${lim})`, encodeCall(sel('breakAt(uint256,uint256)'), [n, lim]));
+      for (const lim of [0n, 1n, 3n, 5n, 100n])
+        await eq(`breakAt(${n},${lim})`, encodeCall(sel('breakAt(uint256,uint256)'), [n, lim]));
     }
   });
   it('nested grid', async () => {
-    for (const a of [1n, 2n, 4n]) for (const b of [1n, 2n, 3n, 5n]) await eq(`grid(${a},${b})`, encodeCall(sel('grid(uint256,uint256)'), [a, b]));
+    for (const a of [1n, 2n, 4n])
+      for (const b of [1n, 2n, 3n, 5n]) await eq(`grid(${a},${b})`, encodeCall(sel('grid(uint256,uint256)'), [a, b]));
   });
   it('stateful pump', async () => {
     for (const s of [1n, 2n, 4n]) await send(encodeCall(sel('pump(uint256)'), [s]));

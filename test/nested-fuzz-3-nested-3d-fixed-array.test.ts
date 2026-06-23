@@ -62,9 +62,7 @@ contract Cube3D {
 }`;
 
 // Panic(0x32) ABI encoding: selector 0x4e487b71 + 0x32 word.
-const PANIC32 =
-  '0x4e487b71' +
-  '0000000000000000000000000000000000000000000000000000000000000032';
+const PANIC32 = '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
 
 describe('s3-nested-3d-fixed-array: cube[a][b][c] vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
@@ -108,8 +106,9 @@ describe('s3-nested-3d-fixed-array: cube[a][b][c] vs Solidity', () => {
           const slot = cubeSlot(a, b, c);
           await eqSlot(slot, `cube[${a}][${b}][${c}] raw slot ${slot}`);
           // And the slot actually holds the value we wrote (proves no aliasing).
-          expect(decodeUint(await readSlot(jeth, aj, slot)), `cube[${a}][${b}][${c}] value`)
-            .toBe(vals.get(`${a},${b},${c}`));
+          expect(decodeUint(await readSlot(jeth, aj, slot)), `cube[${a}][${b}][${c}] value`).toBe(
+            vals.get(`${a},${b},${c}`),
+          );
         }
       }
     }

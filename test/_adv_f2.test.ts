@@ -193,7 +193,9 @@ contract C {
   function sumEven(uint256[] calldata a) external pure returns (uint256) { uint256 s=0; for (uint256 i=0;i<a.length;i=i+1){ uint256 v=a[i]; if (v==0){ continue; } if (v==13){ break; } s=s+v; } return s; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await Pair.make(J, SOL); });
+  beforeAll(async () => {
+    p = await Pair.make(J, SOL);
+  });
   it('return-from-loop / break / continue match solc', async () => {
     // firstGt(t, a): head offset for the dynamic arg is at word index 1 -> offset 64.
     const fg = '0x' + sel('firstGt(uint256,uint256[])') + pad(5n) + pad(64n) + pad(3n) + pad(2n) + pad(9n) + pad(1n);
@@ -239,7 +241,9 @@ contract C {
   function doubleInPlace() external { uint256 i=0; for (uint256 k=0;k<xs.length;k=k+1){ uint256 v=xs[k]; xs[i]=v*2; i=i+1; } }
   function growBounded(uint256 cap) external { uint256 i=0; for (uint256 k=0;k<xs.length;k=k+1){ uint256 v=xs[k]; if (xs.length<cap){ xs.push(v); } i=i+1; } }
 }`;
-  async function seed(p: Pair, vals: bigint[]) { for (const v of vals) await p.both(encodeCall(sel('push(uint256)'), [v])); }
+  async function seed(p: Pair, vals: bigint[]) {
+    for (const v of vals) await p.both(encodeCall(sel('push(uint256)'), [v]));
+  }
 
   it('pop-each-iteration: length re-read, slots + observable state identical', async () => {
     const p = await Pair.make(J, SOL);
@@ -396,8 +400,11 @@ contract C {
 describe('F2 for-of: rejections (codes pinned, no crash)', () => {
   const base = (body: string) => `@contract class C { @state xs: u256[]; @state n: u256; ${body} }`;
   it('for-of over a non-array (uint) => JETH118', () => {
-    expect(errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (const v of this.n) { s = s + v; } return s; }`)))
-      .toContain('JETH118');
+    expect(
+      errCodes(
+        base(`@external @view f(): u256 { let s: u256 = 0n; for (const v of this.n) { s = s + v; } return s; }`),
+      ),
+    ).toContain('JETH118');
   });
   it('for-of over a mapping rejects cleanly (JETH153: mapping read forbidden, no crash)', () => {
     // The mapping read inside `for (const v of this.m)` is rejected before the for-of array
@@ -415,26 +422,38 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
     expect(errCodes(src)).toContain('JETH117');
   });
   it('type-annotated binding => JETH116', () => {
-    expect(errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (const v: u256 of this.xs) { s = s + v; } return s; }`)))
-      .toContain('JETH116');
+    expect(
+      errCodes(
+        base(`@external @view f(): u256 { let s: u256 = 0n; for (const v: u256 of this.xs) { s = s + v; } return s; }`),
+      ),
+    ).toContain('JETH116');
   });
   it('destructuring binding => JETH115', () => {
     const src = `@struct class P { x: u256; y: u256; } @contract class C { @state ps: P[]; @external @view f(): u256 { let s: u256 = 0n; for (const { x, y } of this.ps) { s = s + x; } return s; } }`;
     expect(errCodes(src)).toContain('JETH115');
   });
   it('for-in => JETH111', () => {
-    expect(errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (const k in this.xs) { s = s + 1n; } return s; }`)))
-      .toContain('JETH111');
+    expect(
+      errCodes(
+        base(`@external @view f(): u256 { let s: u256 = 0n; for (const k in this.xs) { s = s + 1n; } return s; }`),
+      ),
+    ).toContain('JETH111');
   });
   it('var binding => JETH115', () => {
-    expect(errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (var v of this.xs) { s = s + v; } return s; }`)))
-      .toContain('JETH115');
+    expect(
+      errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (var v of this.xs) { s = s + v; } return s; }`)),
+    ).toContain('JETH115');
   });
   it('nested for-of with the SAME element name compiles (the inner binding shadows the outer, like solc)', () => {
     // each loop body is its own scope, so the inner `v` shadows the outer `v` (cross-scope shadowing
     // is allowed, matching solc); the codegen gives each a unique Yul name, so it is sound.
-    expect(errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (const v of this.xs) { for (const v of this.xs) { s = s + v; } } return s; }`)))
-      .toEqual([]);
+    expect(
+      errCodes(
+        base(
+          `@external @view f(): u256 { let s: u256 = 0n; for (const v of this.xs) { for (const v of this.xs) { s = s + v; } } return s; }`,
+        ),
+      ),
+    ).toEqual([]);
   });
 
   // for-of over a struct[] (and the standalone `const v = this.ps[i]` it desugars to) is now
@@ -457,7 +476,10 @@ contract C { P[] ps; function add(uint256 x, uint256 y) external { ps.push(P(x,y
     const hs = await Harness.create();
     const aj = await hj.deploy(jb.creationBytecode);
     const as = await hs.deploy(sb.creation);
-    for (const args of [[3n, 4n], [10n, 20n]]) {
+    for (const args of [
+      [3n, 4n],
+      [10n, 20n],
+    ]) {
       const d = encodeCall(sel('add(uint256,uint256)'), args);
       await hj.call(aj, d);
       await hs.call(as, d);
@@ -504,13 +526,13 @@ contract C {
   it('packed-struct spread updates match solc on raw slot 0 and returndata', async () => {
     await p.eq('get initial', encodeCall(sel('get()'), []));
     await p.slots('after setRaw', 0n);
-    await p.both(encodeCall(sel('bumpA(uint8)'), [3n]));      // a: 7 -> 10
+    await p.both(encodeCall(sel('bumpA(uint8)'), [3n])); // a: 7 -> 10
     await p.slots('after bumpA', 0n);
     await p.eq('get after bumpA', encodeCall(sel('get()'), []));
-    await p.both(encodeCall(sel('toggleD()'), []));            // d: true -> false
+    await p.both(encodeCall(sel('toggleD()'), [])); // d: true -> false
     await p.slots('after toggleD', 0n);
     await p.eq('get after toggleD', encodeCall(sel('get()'), []));
-    await p.both('0x' + sel('setC(address)') + pad(C2));       // c -> C2
+    await p.both('0x' + sel('setC(address)') + pad(C2)); // c -> C2
     await p.slots('after setC', 0n);
     await p.eq('get after setC', encodeCall(sel('get()'), []));
   });
@@ -571,21 +593,49 @@ contract C {
   const E1 = 0xdeadbeefn << 224n;
   const negF = (1n << 256n) - 5n; // i64 = -5 sign-extended into a 256-bit ABI word
   // ABI-encode a Big tuple as 7 static words for calldata.
-  const bigWords = (a: bigint, b: bigint, c: bigint, d: bigint, e: bigint, f: bigint, g: bigint) =>
-    [a, b, c, d, e, f, g];
-  beforeAll(async () => { p = await Pair.make(J, SOL); });
+  const bigWords = (a: bigint, b: bigint, c: bigint, d: bigint, e: bigint, f: bigint, g: bigint) => [
+    a,
+    b,
+    c,
+    d,
+    e,
+    f,
+    g,
+  ];
+  beforeAll(async () => {
+    p = await Pair.make(J, SOL);
+  });
   it('shorthand and full literal produce identical Big as positional', async () => {
     const args = [1n, 2n, C1, 1n, E1, negF, 999n];
-    await p.eq('mkShorthand', '0x' + sel('mkShorthand(uint256,uint256,address,bool,bytes32,int64,uint256)') + args.map(pad).join(''));
-    await p.eq('mkFull', '0x' + sel('mkFull(uint256,uint256,address,bool,bytes32,int64,uint256)') + args.map(pad).join(''));
+    await p.eq(
+      'mkShorthand',
+      '0x' + sel('mkShorthand(uint256,uint256,address,bool,bytes32,int64,uint256)') + args.map(pad).join(''),
+    );
+    await p.eq(
+      'mkFull',
+      '0x' + sel('mkFull(uint256,uint256,address,bool,bytes32,int64,uint256)') + args.map(pad).join(''),
+    );
   });
   it('override-wins, override of address, and reordered overrides match solc', async () => {
     const base = bigWords(1n, 2n, C1, 1n, E1, negF, 999n);
-    const wc = '0x' + sel('withCOverride((uint256,uint256,address,bool,bytes32,int64,uint256),address)') + base.map(pad).join('') + pad(C2);
+    const wc =
+      '0x' +
+      sel('withCOverride((uint256,uint256,address,bool,bytes32,int64,uint256),address)') +
+      base.map(pad).join('') +
+      pad(C2);
     await p.eq('withCOverride', wc);
-    const ow = '0x' + sel('overrideWins((uint256,uint256,address,bool,bytes32,int64,uint256),uint256)') + base.map(pad).join('') + pad(77n);
+    const ow =
+      '0x' +
+      sel('overrideWins((uint256,uint256,address,bool,bytes32,int64,uint256),uint256)') +
+      base.map(pad).join('') +
+      pad(77n);
     await p.eq('overrideWins', ow);
-    const ro = '0x' + sel('reorder((uint256,uint256,address,bool,bytes32,int64,uint256),uint256,uint256)') + base.map(pad).join('') + pad(100n) + pad(200n);
+    const ro =
+      '0x' +
+      sel('reorder((uint256,uint256,address,bool,bytes32,int64,uint256),uint256,uint256)') +
+      base.map(pad).join('') +
+      pad(100n) +
+      pad(200n);
     await p.eq('reorder', ro);
   });
   it('single-field struct literal matches solc', async () => {
@@ -657,17 +707,37 @@ contract C {
 describe('F2 struct literal: rejections (codes pinned, no crash)', () => {
   it('non-value struct field via object literal: INLINE construction AND a non-inline (static) source both accepted', () => {
     // a nested STATIC struct field constructed INLINE (mirrors positional StructName(...)).
-    expect(errCodes(`@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @external @pure mk(y: u256): O { return { i: I(0n), y: y }; } }`)).toEqual([]);
+    expect(
+      errCodes(
+        `@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @external @pure mk(y: u256): O { return { i: I(0n), y: y }; } }`,
+      ),
+    ).toEqual([]);
     // a non-inline source (a struct local) for a STATIC nested struct field is now also accepted (the
     // codegen copies its leaves); verified byte-identical in fix-all-divergences.test.ts.
-    expect(errCodes(`@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @external @pure mk(y: u256): O { let z: I = I(0n); return { i: z, y: y }; } }`)).toEqual([]);
+    expect(
+      errCodes(
+        `@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @external @pure mk(y: u256): O { let z: I = I(0n); return { i: z, y: y }; } }`,
+      ),
+    ).toEqual([]);
   });
   it('dynamic-field (bytes) struct via object literal: a bytes literal is accepted', () => {
-    expect(errCodes(`@struct class D { x: u256; b: bytes; } @contract class C { @external @pure mk(x: u256): D { return { x: x, b: "hi" }; } }`)).toEqual([]);
+    expect(
+      errCodes(
+        `@struct class D { x: u256; b: bytes; } @contract class C { @external @pure mk(x: u256): D { return { x: x, b: "hi" }; } }`,
+      ),
+    ).toEqual([]);
   });
   it('array-field struct via object literal: an array LITERAL AND a non-inline fixed-array local both accepted', () => {
-    expect(errCodes(`@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { return { x: x, arr: [1n,2n] }; } }`)).toEqual([]);
-    expect(errCodes(`@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { let z: Arr<u256,2> = [1n,2n]; return { x: x, arr: z }; } }`)).toEqual([]);
+    expect(
+      errCodes(
+        `@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { return { x: x, arr: [1n,2n] }; } }`,
+      ),
+    ).toEqual([]);
+    expect(
+      errCodes(
+        `@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { let z: Arr<u256,2> = [1n,2n]; return { x: x, arr: z }; } }`,
+      ),
+    ).toEqual([]);
   });
   it('object literal with no struct context (return type u256) => JETH227', () => {
     const src = `@contract class C { @external @pure f(): u256 { return { x: 1n, y: 2n }; } }`;
@@ -757,17 +827,20 @@ contract C {
     const ps = await Pair.make(SPREAD, SOL);
     const pp = await Pair.make(POSITIONAL, SOL);
     const setData = '0x' + sel('set(uint256,uint256,address,bool)') + pad(11n) + pad(22n) + pad(Z) + pad(1n);
-    await ps.both(setData); await pp.both(setData);
+    await ps.both(setData);
+    await pp.both(setData);
     const bumpData = encodeCall(sel('bump(uint256)'), [5n]);
-    await ps.both(bumpData); await pp.both(bumpData);
+    await ps.both(bumpData);
+    await pp.both(bumpData);
     // spread vs solc slots
     await ps.slots('spread slots', 0n, 1n, 2n);
     // positional vs solc slots
     await pp.slots('positional slots', 0n, 1n, 2n);
     // spread vs positional raw slots
     for (const slot of [0n, 1n, 2n]) {
-      expect(await readSlot(ps.jeth, ps.aj, slot), `spread==positional slot ${slot}`)
-        .toBe(await readSlot(pp.jeth, pp.aj, slot));
+      expect(await readSlot(ps.jeth, ps.aj, slot), `spread==positional slot ${slot}`).toBe(
+        await readSlot(pp.jeth, pp.aj, slot),
+      );
     }
     // observable getter identical
     const g1 = await ps.jeth.call(ps.aj, encodeCall(sel('get()'), []));

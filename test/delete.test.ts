@@ -116,25 +116,38 @@ describe('delete x vs Solidity', () => {
   const STR_SLOTS = [0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n, 13n, 14n, 15n, 16n];
   // dynamic data slots: xs data (slot 11), s data (slot 13), ss element headers (slot 12), mappings
   const DATA = [
-    kecSlot(11n), kecSlot(11n) + 1n, kecSlot(11n) + 2n, // xs[0..2]
-    kecSlot(13n),                                       // s long-data
-    kecSlot(12n), kecSlot(12n) + 1n,                    // ss[0],ss[1] headers
-    kecSlot(kecSlot(12n)), kecSlot(kecSlot(12n) + 1n),  // ss element long-data
-    mapSlot(A, 14n),                                    // bal[A]
-    mapSlot(A, 15n), mapSlot(A, 15n) + 1n,              // mp[A] fields
-    mapSlot(A, 16n), kecSlot(mapSlot(A, 16n)),          // mb[A] header + long-data
+    kecSlot(11n),
+    kecSlot(11n) + 1n,
+    kecSlot(11n) + 2n, // xs[0..2]
+    kecSlot(13n), // s long-data
+    kecSlot(12n),
+    kecSlot(12n) + 1n, // ss[0],ss[1] headers
+    kecSlot(kecSlot(12n)),
+    kecSlot(kecSlot(12n) + 1n), // ss element long-data
+    mapSlot(A, 14n), // bal[A]
+    mapSlot(A, 15n),
+    mapSlot(A, 15n) + 1n, // mp[A] fields
+    mapSlot(A, 16n),
+    kecSlot(mapSlot(A, 16n)), // mb[A] header + long-data
   ];
   const ALL = [...STR_SLOTS, ...DATA];
 
   async function reseed(h: Harness, a: Address, str: string) {
-    const data = '0x' + sel('seed(string)') + b32(0x20n).toString('hex') +
+    const data =
+      '0x' +
+      sel('seed(string)') +
+      b32(0x20n).toString('hex') +
       b32(BigInt(Buffer.byteLength(str))).toString('hex') +
-      Buffer.from(str, 'utf8').toString('hex').padEnd(Math.ceil(str.length / 32) * 64, '0');
+      Buffer.from(str, 'utf8')
+        .toString('hex')
+        .padEnd(Math.ceil(str.length / 32) * 64, '0');
     await h.call(a, data);
   }
   async function runDelete(label: string, fnSig: string, str: string) {
-    await reseed(jeth, aj, str); await reseed(sol, as, str);
-    const j = await jeth.call(aj, encodeCall(sel(fnSig), [])); const s = await sol.call(as, encodeCall(sel(fnSig), []));
+    await reseed(jeth, aj, str);
+    await reseed(sol, as, str);
+    const j = await jeth.call(aj, encodeCall(sel(fnSig), []));
+    const s = await sol.call(as, encodeCall(sel(fnSig), []));
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     for (const slot of ALL) {
@@ -145,20 +158,35 @@ describe('delete x vs Solidity', () => {
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   const SHORT = 'hi';
   const LONG = 'this string is definitely longer than thirty-two bytes so it uses keccak data slots';
-  for (const [str, tag] of [[SHORT, 'short'], [LONG, 'long']] as const) {
+  for (const [str, tag] of [
+    [SHORT, 'short'],
+    [LONG, 'long'],
+  ] as const) {
     it(`delete (${tag} dynamic payloads): all 17 cases, returndata + raw slots`, async () => {
       for (const [label, sig] of [
-        ['packed-neighbor', 'delPacked()'], ['value-u256', 'delCount()'], ['value-address', 'delAddr()'],
-        ['static-struct', 'delStruct()'], ['dynamic-struct', 'delDynStruct()'], ['fixed-array', 'delFixed()'],
-        ['dynamic-array', 'delDynArr()'], ['string-array', 'delStrArr()'], ['bytes-string', 'delStr()'],
-        ['mapping-value', 'delMapVal()'], ['mapping-struct', 'delMapStruct()'], ['mapping-struct-field', 'delMapStructField()'],
-        ['mapping-bytes', 'delMapBytes()'], ['struct-field', 'delStructField()'], ['fixed-elem', 'delFixedElem()'],
+        ['packed-neighbor', 'delPacked()'],
+        ['value-u256', 'delCount()'],
+        ['value-address', 'delAddr()'],
+        ['static-struct', 'delStruct()'],
+        ['dynamic-struct', 'delDynStruct()'],
+        ['fixed-array', 'delFixed()'],
+        ['dynamic-array', 'delDynArr()'],
+        ['string-array', 'delStrArr()'],
+        ['bytes-string', 'delStr()'],
+        ['mapping-value', 'delMapVal()'],
+        ['mapping-struct', 'delMapStruct()'],
+        ['mapping-struct-field', 'delMapStructField()'],
+        ['mapping-bytes', 'delMapBytes()'],
+        ['struct-field', 'delStructField()'],
+        ['fixed-elem', 'delFixedElem()'],
       ] as const) {
         await runDelete(`${label}/${tag}`, sig, str);
       }
@@ -171,9 +199,10 @@ describe('delete x vs Solidity', () => {
   });
 
   it('delete a local value variable', async () => {
-    for (const x of [0n, 1n, 123456789n, (1n << 255n)]) {
+    for (const x of [0n, 1n, 123456789n, 1n << 255n]) {
       const data = encodeCall(sel('delLocal(uint256)'), [x]);
-      const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+      const j = await jeth.call(aj, data);
+      const s = await sol.call(as, data);
       expect(j.success).toBe(s.success);
       expect(j.returnHex, `delLocal(${x})`).toBe(s.returnHex);
     }

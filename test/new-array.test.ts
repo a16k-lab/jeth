@@ -15,11 +15,20 @@ const sel = (s: string) => functionSelector(s);
 const P = (n: bigint) => pad32(n);
 
 function jethAccepts(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return true; } catch { return false; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 function jethCodes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e: any) { return (e.diagnostics ?? []).map((d: any) => d.code); }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e: any) {
+    return (e.diagnostics ?? []).map((d: any) => d.code);
+  }
 }
 
 /** Deploy a JETH + a solc contract with matching external sigs; for each (sig, argWords) diff the call. */
@@ -163,7 +172,11 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
   it('cleanly rejects (no crash) unsupported new Array forms', () => {
     const f = (b: string) => `@contract class C { @external @pure f(n: u256): bytes { ${b} } }`;
     // signed-int length -> rejected (matches solc: no implicit int->uint256), no crash
-    expect(jethCodes(`@contract class C { @external @pure f(s: i128): bytes { let a: u256[] = new Array<u256>(s); return abi.encode(a); } }`).length > 0).toBe(true);
+    expect(
+      jethCodes(
+        `@contract class C { @external @pure f(s: i128): bytes { let a: u256[] = new Array<u256>(s); return abi.encode(a); } }`,
+      ).length > 0,
+    ).toBe(true);
     // string / bytes / nested / struct element -> clean reject (safe subset), NOT JETH900
     expect(jethCodes(f('let a: string[] = new Array<string>(n); return abi.encode(a);'))).not.toContain('JETH900');
     expect(jethCodes(f('let a: string[] = new Array<string>(n); return abi.encode(a);')).length > 0).toBe(true);
@@ -172,11 +185,14 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
     expect(jethCodes(f('let a: u256[] = new Array<u256>(); return abi.encode(a);'))).toContain('JETH363');
     expect(jethCodes(f('let a: u256[] = new Array<u256>(n, n); return abi.encode(a);'))).toContain('JETH363');
     // non-Array new -> JETH023, no crash
-    expect(jethCodes(`@contract class C { @external @pure f(n: u256): u256 { let x = new Foo(n); return 1n; } }`)).toContain('JETH023');
+    expect(
+      jethCodes(`@contract class C { @external @pure f(n: u256): u256 { let x = new Foo(n); return 1n; } }`),
+    ).toContain('JETH023');
     // none of the above is an internal crash
     for (const src of [
       f('let a: string[] = new Array<string>(n); return abi.encode(a);'),
       f('let a: u256[] = new Array<u256>(); return abi.encode(a);'),
-    ]) expect(jethCodes(src)).not.toContain('JETH900');
+    ])
+      expect(jethCodes(src)).not.toContain('JETH900');
   });
 });

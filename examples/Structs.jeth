@@ -1,22 +1,45 @@
 // Structs: mixed-width packing, field read/write, positional construction,
 // whole-struct assignment, and struct (tuple) return.
-@struct class Mixed { a: u128; b: u64; c: bool; d: address; e: u256; }
+@struct
+class Mixed {
+  a: u128;
+  b: u64;
+  c: bool;
+  d: address;
+  e: u256;
+}
 
 @contract
 class Structs {
-  @state s: Mixed;       // slots 0-2
-  @state after_: u256;   // slot 3 (must not pack into the struct's trailing space)
+  @state s: Mixed; // slots 0-2
+  @state after_: u256; // slot 3 (must not pack into the struct's trailing space)
 
   @external setAll(a: u128, b: u64, c: bool, d: address, e: u256): void {
     this.s = Mixed(a, b, c, d, e);
     this.after_ = 0x99n;
   }
-  @external setA(v: u128): void { this.s.a = v; }
-  @external @view getA(): u128 { return this.s.a; }
-  @external @view getB(): u64 { return this.s.b; }
-  @external @view getC(): bool { return this.s.c; }
-  @external @view getD(): address { return this.s.d; }
-  @external @view getE(): u256 { return this.s.e; }
-  @external @view getAll(): Mixed { return this.s; }
-  @external @pure make(a: u128, e: u256): Mixed { return Mixed(a, 0n, true, address(0n), e); }
+  @external setA(v: u128): void {
+    this.s.a = v;
+  }
+  @external @view getA(): u128 {
+    return this.s.a;
+  }
+  @external @view getB(): u64 {
+    return this.s.b;
+  }
+  @external @view getC(): bool {
+    return this.s.c;
+  }
+  @external @view getD(): address {
+    return this.s.d;
+  }
+  @external @view getE(): u256 {
+    return this.s.e;
+  }
+  @external @view getAll(): Mixed {
+    return this.s;
+  }
+  @external @pure make(a: u128, e: u256): Mixed {
+    return Mixed(a, 0n, true, address(0n), e);
+  }
 }

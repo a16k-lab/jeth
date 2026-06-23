@@ -41,7 +41,9 @@ describe('dynamic custom-error args vs Solidity', () => {
     const nwords = Math.ceil(bytes.length / 32);
     let dataWords = '';
     for (let i = 0; i < nwords; i++) {
-      dataWords += Buffer.concat([bytes.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+      dataWords += Buffer.concat([bytes.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+        .subarray(0, 32)
+        .toString('hex');
     }
     return '0x' + sel + pad(x) + pad(WHO) + pad(0x60n) + pad(len) + dataWords;
   }
@@ -69,7 +71,11 @@ describe('dynamic custom-error args vs Solidity', () => {
   });
   it('Mixed(uint, string param, bool) - dynamic arg from calldata, short + long', async () => {
     await eqRevert('Mixed short', 1n, 'hi');
-    await eqRevert('Mixed long', 1n, 'this string is definitely longer than thirty-two bytes to force multi-word padding');
+    await eqRevert(
+      'Mixed long',
+      1n,
+      'this string is definitely longer than thirty-two bytes to force multi-word padding',
+    );
     await eqRevert('Mixed empty', 1n, '');
     await eqRevert('Mixed exact32', 1n, 'abcdefghijklmnopqrstuvwxyz012345'); // exactly 32 bytes
   });

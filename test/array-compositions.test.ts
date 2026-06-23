@@ -52,9 +52,14 @@ contract C {
 
 describe('storage array compositions (G6) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
@@ -64,8 +69,10 @@ describe('storage array compositions (G6) vs Solidity', () => {
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('Arr<u256[],2> (uint256[][2]): per-row push/index + raw slots', async () => {
@@ -86,7 +93,12 @@ describe('storage array compositions (G6) vs Solidity', () => {
     await send(encodeCall(sel('pushB()'), []));
     await send(encodeCall(sel('pushB()'), []));
     await send(encodeCall(sel('pushB()'), []));
-    for (const [i, j, v] of [[0n, 0n, 100n], [0n, 1n, 101n], [1n, 0n, 110n], [2n, 1n, 121n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 100n],
+      [0n, 1n, 101n],
+      [1n, 0n, 110n],
+      [2n, 1n, 121n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setB(uint256,uint256,uint256)'), [i, j, v]));
     await eq('lenB', encodeCall(sel('lenB()'), []));
     await eq('getB(0,1)', encodeCall(sel('getB(uint256,uint256)'), [0n, 1n]));
@@ -115,7 +127,12 @@ describe('storage array compositions (G6) vs Solidity', () => {
   it('Arr<u8,4>[] (uint8[4][]): packed fixed element + raw slots', async () => {
     await send(encodeCall(sel('pushPk()'), []));
     await send(encodeCall(sel('pushPk()'), []));
-    for (const [i, j, v] of [[0n, 0n, 1n], [0n, 3n, 4n], [1n, 1n, 9n], [1n, 2n, 200n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 1n],
+      [0n, 3n, 4n],
+      [1n, 1n, 9n],
+      [1n, 2n, 200n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setPk(uint256,uint256,uint8)'), [i, j, v]));
     await eq('getPk(0,0)', encodeCall(sel('getPk(uint256,uint256)'), [0n, 0n]));
     await eq('getPk(0,3)', encodeCall(sel('getPk(uint256,uint256)'), [0n, 3n]));

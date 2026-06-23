@@ -12,17 +12,32 @@
 // Arithmetic is CHECKED by default: every +,-,*,/,% lowers to a helper that
 // reverts with Panic(0x11) on overflow / Panic(0x12) on division by zero,
 // matching Solidity >=0.8.
+import { ContractIR, FunctionIR, Stmt, Expr, BinOp, RevertReason, EventIR } from './ir.js';
 import {
-  ContractIR,
-  FunctionIR,
-  Stmt,
-  Expr,
-  BinOp,
-  RevertReason,
-  EventIR,
+  JethType,
+  StructField,
+  intRange,
+  storageByteSize,
+  storageSlotCount,
+  isBytesLike,
+  isDynamicType,
+  isStaticType,
+  isStaticValueType,
+  isImplicitWiden,
+  arrayElemPacks,
+  abiHeadWords,
+  abiLeaves,
+  structStorageLeaves,
+} from './types.js';
+import type {
+  ArrayExpr,
+  AccessPath,
+  CalldataPlace,
+  CdDynPlace,
+  LValue,
+  DestructureSource,
+  SuccessCheck,
 } from './ir.js';
-import { JethType, StructField, intRange, storageByteSize, storageSlotCount, isBytesLike, isDynamicType, isStaticType, isStaticValueType, isImplicitWiden, arrayElemPacks, abiHeadWords, abiLeaves, structStorageLeaves } from './types.js';
-import type { ArrayExpr, AccessPath, CalldataPlace, CdDynPlace, LValue, DestructureSource, SuccessCheck } from './ir.js';
 
 export class UnsupportedError extends Error {
   constructor(message: string) {
@@ -440,7 +455,8 @@ ${indent(runtime, 6)}
     }
 
     const last = fn.body[fn.body.length - 1];
-    const terminates = last !== undefined && (last.kind === 'return' || last.kind === 'revert' || last.kind === 'returnTuple');
+    const terminates =
+      last !== undefined && (last.kind === 'return' || last.kind === 'revert' || last.kind === 'returnTuple');
     // Lower the body + fall-through epilogue into a local buffer; a @nonReentrant function then
     // brackets it with the transient mutex (resetting before every normal return).
     const bodyLines: string[] = [];
@@ -504,9 +520,7 @@ ${indent(runtime, 6)}
         return t.bits === 256 ? '' : `if gt(${name}, ${uintMaxHex(t.bits)}) { revert(0, 0) }`;
       case 'int':
         // intN<256: must be a valid sign-extension of its low bytes.
-        return t.bits === 256
-          ? ''
-          : `if iszero(eq(signextend(${t.bits / 8 - 1}, ${name}), ${name})) { revert(0, 0) }`;
+        return t.bits === 256 ? '' : `if iszero(eq(signextend(${t.bits / 8 - 1}, ${name}), ${name})) { revert(0, 0) }`;
       case 'bool':
         return `if gt(${name}, 1) { revert(0, 0) }`;
       case 'address':
@@ -516,9 +530,7 @@ ${indent(runtime, 6)}
         // bytesN<32 is left-aligned: the low (32-size) bytes must be zero.
         return t.size === 32 ? '' : `if and(${name}, ${bytesNLowMaskHex(t.size)}) { revert(0, 0) }`;
       default:
-        throw new UnsupportedError(
-          `calldata decoding for type '${t.kind}' is not supported yet (Phase 4)`,
-        );
+        throw new UnsupportedError(`calldata decoding for type '${t.kind}' is not supported yet (Phase 4)`);
     }
   }
 
@@ -592,7 +604,11 @@ ${indent(runtime, 6)}
         // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
         // sub-pointer), or `return this.helper()` (struct-returning internal call): the
         // ABI-unpacked memory image at the (sub)pointer IS the flat return blob. G9.
-        if (isStaticType(s.value.type) && (s.value.type.kind === 'struct' || s.value.type.kind === 'array') && (s.value.kind === 'memAggregate' || s.value.kind === 'call' || s.value.kind === 'ternary')) {
+        if (
+          isStaticType(s.value.type) &&
+          (s.value.type.kind === 'struct' || s.value.type.kind === 'array') &&
+          (s.value.kind === 'memAggregate' || s.value.kind === 'call' || s.value.kind === 'ternary')
+        ) {
           // a STATIC memory-aggregate image (struct / fixed array): the image IS the flat return blob.
           // (A DYNAMIC-array call/ternary falls through to encodeMemArrayReturn below.)
           const ptr = this.lowerExpr(s.value, ctx, out);
@@ -658,7 +674,11 @@ ${indent(runtime, 6)}
           // a memory-array value produced by an expression (ternary `c ? xs : ys`, an incDec, or a
           // dynamic-array-returning internal call `return this.mk()`): lower to the [len][elems]
           // pointer, then encode the ABI [0x20][len][elems] return blob.
-          if (s.value.kind === 'ternary' || s.value.kind === 'incDec' || (s.value.kind === 'call' && isDynamicType(s.value.type))) {
+          if (
+            s.value.kind === 'ternary' ||
+            s.value.kind === 'incDec' ||
+            (s.value.kind === 'call' && isDynamicType(s.value.type))
+          ) {
             // FREEZE the pointer first: encodeMemArrayReturn reads it multiple times, and a `call`
             // lowers to an inline `userfn_x(...)` that would otherwise be re-invoked per use.
             const p = this.fresh();
@@ -681,11 +701,7 @@ ${indent(runtime, 6)}
           }
           // a whole STORAGE array whose element is DYNAMIC (string[], D[]) -> the
           // storage-source recursive encoder (unbounded nesting).
-          if (
-            s.value.kind === 'arrayValue' &&
-            s.value.arr.base.kind === 'stateArray' &&
-            isDynamicType(s.value.type)
-          ) {
+          if (s.value.kind === 'arrayValue' && s.value.arr.base.kind === 'stateArray' && isDynamicType(s.value.type)) {
             const { ptr, size } = this.echoStorage(s.value.arr.base.slot, s.value.type, out);
             out.push(`return(${ptr}, ${size})`);
             break;
@@ -799,10 +815,14 @@ ${indent(runtime, 6)}
             out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, String(s.init.arr.base.baseSlot), out)}`);
           } else if (s.init.kind === 'mapStorageValue') {
             // a storage mapping struct value (this.m[k]) COPIED into a fresh image
-            out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, this.mappingSlot(s.init.baseSlot, s.init.keys, ctx, out), out)}`);
+            out.push(
+              `let ${name} := ${this.allocAggFromStorage(s.init.type, this.mappingSlot(s.init.baseSlot, s.init.keys, ctx, out), out)}`,
+            );
           } else if (s.init.kind === 'structArrayElem') {
             // a storage struct-array element (this.arr[i]) COPIED into a fresh image (also the for-of desugar)
-            out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, this.structArrayElemSlot(s.init.arr, s.init.index, ctx, out), out)}`);
+            out.push(
+              `let ${name} := ${this.allocAggFromStorage(s.init.type, this.structArrayElemSlot(s.init.arr, s.init.index, ctx, out), out)}`,
+            );
           } else if (s.init.kind === 'cdAggregateValue') {
             out.push(`let ${name} := ${this.allocAggFromCalldata(s.init.param, s.init.type, ctx, out)}`);
           } else if (s.init.kind === 'abiDecode') {
@@ -1108,7 +1128,11 @@ ${indent(runtime, 6)}
         const temps = this.lowerDestructureSource(s.source, ctx, out);
         s.targets.forEach((tgt, i) => {
           if (tgt === null) return;
-          for (const l of this.lowerStmt({ kind: 'assign', target: tgt, value: { kind: 'rawReg', type: tgt.type, reg: temps[i]! } }, ctx)) out.push(l);
+          for (const l of this.lowerStmt(
+            { kind: 'assign', target: tgt, value: { kind: 'rawReg', type: tgt.type, reg: temps[i]! } },
+            ctx,
+          ))
+            out.push(l);
         });
         break;
       }
@@ -1266,11 +1290,7 @@ ${indent(runtime, 6)}
    *      <decode ret into the bound success vars (short returndata -> OUTER revert empty)>
    *      <run try body>
    *    } */
-  private lowerTryCatch(
-    s: Stmt & { kind: 'tryCatch' },
-    ctx: LowerCtx,
-    out: string[],
-  ): void {
+  private lowerTryCatch(s: Stmt & { kind: 'tryCatch' }, ctx: LowerCtx, out: string[]): void {
     // the controlling call WITHOUT bubble/codeGuard (the analyzer cleared both): we get ok + the
     // captured returndata blob + the addr register (for the in-ok-branch extcodesize guard).
     const { okReg, dataPtr, addrReg } = this.emitExtCall(s.call, ctx, out);
@@ -1538,7 +1558,11 @@ ${indent(runtime, 6)}
   private lowerEmit(ev: EventIR, args: Expr[], ctx: LowerCtx, out: string[]): string[] {
     // partition into indexed topics (static) and the non-indexed data tuple.
     const idxVals: string[] = [];
-    type Part = { word: string } | { mp: string; len: string } | { mp: string; size: string } | { inline: true; mp: string; words: number };
+    type Part =
+      | { word: string }
+      | { mp: string; len: string }
+      | { mp: string; size: string }
+      | { inline: true; mp: string; words: number };
     const data: Part[] = [];
     ev.params.forEach((p, i) => {
       const arg = args[i]!;
@@ -1557,7 +1581,11 @@ ${indent(runtime, 6)}
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(${mp}, ${size})`);
         idxVals.push(topic);
-      } else if (p.indexed && isStaticType(p.type) && (p.type.kind === 'struct' || (p.type.kind === 'array' && p.type.length !== undefined))) {
+      } else if (
+        p.indexed &&
+        isStaticType(p.type) &&
+        (p.type.kind === 'struct' || (p.type.kind === 'array' && p.type.length !== undefined))
+      ) {
         // an indexed STATIC fixed-array / struct topic is keccak256(abi.encode(value)) = keccak over
         // the padded leaf words (no length word). Verified byte-identical to solc.
         const { mp, size } = this.materializeStaticAggToMem(arg, ctx, out);
@@ -1611,8 +1639,13 @@ ${indent(runtime, 6)}
       let hw = 0;
       for (const d of data) {
         const head = hw === 0 ? m : `add(${m}, ${32 * hw})`;
-        if ('word' in d) { lines.push(`mstore(${head}, ${d.word})`); hw += 1; }
-        else { lines.push(`mcopy(${head}, ${(d as { mp: string }).mp}, ${(d as { words: number }).words * 32})`); hw += (d as { words: number }).words; }
+        if ('word' in d) {
+          lines.push(`mstore(${head}, ${d.word})`);
+          hw += 1;
+        } else {
+          lines.push(`mcopy(${head}, ${(d as { mp: string }).mp}, ${(d as { words: number }).words * 32})`);
+          hw += (d as { words: number }).words;
+        }
       }
       lines.push(`log${n}(${m}, ${headSize}${topics})`);
       return lines;
@@ -1719,7 +1752,8 @@ ${indent(runtime, 6)}
           // a static aggregate uses the flat ABI-image materializer (aggToMemPtr).
           const dynStruct = e.type.kind === 'struct' && isDynamicType(e.type);
           const matPtr = (br: Expr, o: string[]): string =>
-            dynStruct ? this.buildDynStructLocal(e.type as JethType & { kind: 'struct' }, br, ctx, o)
+            dynStruct
+              ? this.buildDynStructLocal(e.type as JethType & { kind: 'struct' }, br, ctx, o)
               : this.aggToMemPtr(br, ctx, o);
           const cc = this.lowerExpr(e.cond, ctx, out);
           const p = this.fresh();
@@ -1788,7 +1822,9 @@ ${indent(runtime, 6)}
         out.push(`let ${old} := ${this.lowerExpr(e.readExpr, ctx, out)}`);
         const nv = this.fresh();
         const raw = e.isInc ? `add(${old}, 1)` : `sub(${old}, 1)`;
-        out.push(`let ${nv} := ${e.unchecked ? this.wrapToType(e.type, raw) : `${this.checkedArith(e.isInc ? 'add' : 'sub', e.type)}(${old}, 1)`}`);
+        out.push(
+          `let ${nv} := ${e.unchecked ? this.wrapToType(e.type, raw) : `${this.checkedArith(e.isInc ? 'add' : 'sub', e.type)}(${old}, 1)`}`,
+        );
         this.lowerAssignValue(e.target, nv, ctx, out);
         return e.prefix ? nv : old;
       }
@@ -1952,9 +1988,10 @@ ${indent(runtime, 6)}
           const j = this.fresh();
           out.push(`let ${j} := ${this.lowerExpr(e.elemIndex, ctx, out)}`);
           out.push(`if iszero(lt(${j}, ${e.elemLength})) { ${this.panic()}(0x32) }`);
-          const at2 = disp === 0
-            ? `add(mul(${i}, ${stride}), mul(${j}, 0x20))`
-            : `add(add(mul(${i}, ${stride}), ${disp}), mul(${j}, 0x20))`;
+          const at2 =
+            disp === 0
+              ? `add(mul(${i}, ${stride}), mul(${j}, 0x20))`
+              : `add(add(mul(${i}, ${stride}), ${disp}), mul(${j}, 0x20))`;
           const w2 = this.fresh();
           out.push(`let ${w2} := calldataload(add(${ref.offset}, ${at2}))`);
           const g2 = this.validateInput(e.fieldType, w2);
@@ -2061,7 +2098,10 @@ ${indent(runtime, 6)}
         if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
           this.encodeArrayLitHead(arg, w, ctx, out);
           w += abiHeadWords(f.type);
-        } else if ((f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) && arg.kind === 'structNew') {
+        } else if (
+          (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) &&
+          arg.kind === 'structNew'
+        ) {
           // a nested inline static struct field (Outer(id, Inner(...))): flatten its leaf words
           // inline at consecutive head words, recursing into deeper nested structs.
           this.staticNewLeaves(f.type, arg, ctx, out).forEach((lw, k) => out.push(`mstore(${(w + k) * 32}, ${lw})`));
@@ -2091,11 +2131,21 @@ ${indent(runtime, 6)}
         let fw = wb;
         el.fields.forEach((sf, sj) => {
           const sarg = el.args[sj]!;
-          if (sf.type.kind === 'array' && sarg.kind === 'arrayLit') { this.encodeArrayLitHead(sarg, fw, ctx, out); fw += abiHeadWords(sf.type); }
-          else if ((sf.type.kind === 'struct' || (sf.type.kind === 'array' && sf.type.length !== undefined)) && sarg.kind === 'structNew') {
-            this.staticNewLeaves(sf.type, sarg, ctx, out).forEach((lw, k) => out.push(`mstore(${(fw + k) * 32}, ${lw})`));
+          if (sf.type.kind === 'array' && sarg.kind === 'arrayLit') {
+            this.encodeArrayLitHead(sarg, fw, ctx, out);
             fw += abiHeadWords(sf.type);
-          } else { out.push(`mstore(${fw * 32}, ${this.lowerExpr(sarg, ctx, out)})`); fw += abiHeadWords(sf.type); }
+          } else if (
+            (sf.type.kind === 'struct' || (sf.type.kind === 'array' && sf.type.length !== undefined)) &&
+            sarg.kind === 'structNew'
+          ) {
+            this.staticNewLeaves(sf.type, sarg, ctx, out).forEach((lw, k) =>
+              out.push(`mstore(${(fw + k) * 32}, ${lw})`),
+            );
+            fw += abiHeadWords(sf.type);
+          } else {
+            out.push(`mstore(${fw * 32}, ${this.lowerExpr(sarg, ctx, out)})`);
+            fw += abiHeadWords(sf.type);
+          }
         });
       } else out.push(`mstore(${wb * 32}, ${this.lowerExpr(el, ctx, out)})`);
     });
@@ -2107,7 +2157,12 @@ ${indent(runtime, 6)}
    *  source struct/array (static -> inline head words; dynamic -> offset word + tail, via
    *  the recursive storage encoder). bytes/string sources are materialized BEFORE the blob
    *  pointer is captured so a later allocation cannot alias the blob. */
-  private encodeReturnTuple(values: Expr[], types: JethType[], ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+  private encodeReturnTuple(
+    values: Expr[],
+    types: JethType[],
+    ctx: LowerCtx,
+    out: string[],
+  ): { ptr: string; size: string } {
     const refs: ({ mp: string; len: string } | null)[] = types.map((t, i) =>
       isBytesLike(t) ? this.toMemory(this.lowerDynamic(values[i]!, ctx, out), out) : null,
     );
@@ -2125,9 +2180,14 @@ ${indent(runtime, 6)}
     // that allocation from aliasing the head buffer (mirrors `litRefs` above). A plain memArray
     // local needs no pre-pass (its ctxLookup pointer already aliases an existing image).
     const memExprRefs: (string | null)[] = types.map((t, i) =>
-      t.kind === 'array' && values[i]!.kind === 'arrayValue' &&
+      t.kind === 'array' &&
+      values[i]!.kind === 'arrayValue' &&
       (values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArrayExpr'
-        ? this.lowerExpr(((values[i] as Expr & { kind: 'arrayValue' }).arr.base as { kind: 'memArrayExpr'; expr: Expr }).expr, ctx, out)
+        ? this.lowerExpr(
+            ((values[i] as Expr & { kind: 'arrayValue' }).arr.base as { kind: 'memArrayExpr'; expr: Expr }).expr,
+            ctx,
+            out,
+          )
         : null,
     );
     // PRE-PASS: an INLINE-constructed DYNAMIC struct component (return [D("nm",[1,2,3]), 99]) is
@@ -2158,7 +2218,12 @@ ${indent(runtime, 6)}
       } else if (isStaticValueType(t)) {
         out.push(`mstore(add(${ptr}, ${headPos}), ${this.lowerExpr(values[i]!, ctx, out)})`);
         hw += 1;
-      } else if (t.kind === 'array' && (values[i]!.kind === 'arrayValue') && ((values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArray' || (values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArrayExpr')) {
+      } else if (
+        t.kind === 'array' &&
+        values[i]!.kind === 'arrayValue' &&
+        ((values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArray' ||
+          (values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArrayExpr')
+      ) {
         // a MEMORY value-array component (return [xs, n]): a dynamic component whose tail
         // is the memory [len][data] (value elements are one word each, the ABI layout).
         const av = values[i] as Expr & { kind: 'arrayValue' };
@@ -2186,7 +2251,8 @@ ${indent(runtime, 6)}
         const name = this.staticCdComponentName(values[i]!, t)!;
         const ph = ctx.cdParamHead.get(name);
         if (!ph) throw new UnsupportedError(`unbound calldata component '${name}'`);
-        const leaf = (ty: JethType): JethType => (ty.kind === 'array' && ty.length !== undefined ? leaf(ty.element) : ty);
+        const leaf = (ty: JethType): JethType =>
+          ty.kind === 'array' && ty.length !== undefined ? leaf(ty.element) : ty;
         const validate = !(t.kind === 'array' && isStaticValueType(leaf(t)));
         this.abiEncFromCd(t, String(ph.head), `add(${ptr}, ${headPos})`, validate, out);
         hw += abiHeadWords(t);
@@ -2273,7 +2339,8 @@ ${indent(runtime, 6)}
    *  multi-return component, else undefined. The component is encoded INLINE in the tuple head. */
   private staticCdComponentName(value: Expr, t: JethType): string | undefined {
     if (value.kind === 'cdAggregateValue') return value.param;
-    if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray' && !isDynamicType(t)) return value.arr.base.name;
+    if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray' && !isDynamicType(t))
+      return value.arr.base.name;
     return undefined;
   }
 
@@ -2287,10 +2354,13 @@ ${indent(runtime, 6)}
     if (value.kind === 'arrayValue') {
       if (value.arr.base.kind === 'stateArray') return String(value.arr.base.slot);
       if (value.arr.base.kind === 'fixedArray') return String(value.arr.base.baseSlot);
-      if (value.arr.base.kind === 'mapArray') return this.mappingSlot(value.arr.base.baseSlot, value.arr.base.keys, ctx, out);
+      if (value.arr.base.kind === 'mapArray')
+        return this.mappingSlot(value.arr.base.baseSlot, value.arr.base.keys, ctx, out);
       if (value.arr.base.kind === 'placeArray') return this.lowerPlace(value.arr.base.path, ctx, out).slot;
     }
-    throw new UnsupportedError(`a multi-return ${value.type.kind} component must be a storage value (this.x / this.m[k] / this.arr[i])`);
+    throw new UnsupportedError(
+      `a multi-return ${value.type.kind} component must be a storage value (this.x / this.m[k] / this.arr[i])`,
+    );
   }
 
   /** Encode a DYNAMIC struct return value (Phase 4e-6): sole return is
@@ -2357,7 +2427,14 @@ ${indent(runtime, 6)}
 
   /** Topic-encode a struct's fields sequentially at `tuplePtr` (no head/tail split, no
    *  offsets, no length words). Returns a Yul expr for the cursor just past the payload. */
-  private topicEncodeStruct(struct: JethType & { kind: 'struct' }, src: TupleSrc, tuplePtr: string, ctx: LowerCtx, out: string[], nextRef: () => DynRef): string {
+  private topicEncodeStruct(
+    struct: JethType & { kind: 'struct' },
+    src: TupleSrc,
+    tuplePtr: string,
+    ctx: LowerCtx,
+    out: string[],
+    nextRef: () => DynRef,
+  ): string {
     const cursor = this.fresh();
     out.push(`let ${cursor} := ${tuplePtr}`);
     let hw = 0; // running head-word offset within the source tuple (for mem/cd field resolution)
@@ -2379,7 +2456,16 @@ ${indent(runtime, 6)}
   /** Topic-encode a single DYNAMIC field's payload at `cursor`; returns the new cursor.
    *  bytes/string -> content padded to a word (no length); dynamic value-array -> element
    *  words (no length); nested dynamic struct -> recurse (members concatenated). */
-  private topicEncodeDynField(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, cursor: string, ctx: LowerCtx, out: string[], nextRef: () => DynRef): string {
+  private topicEncodeDynField(
+    f: StructField,
+    src: TupleSrc,
+    fieldIdx: number,
+    headWord: number,
+    cursor: string,
+    ctx: LowerCtx,
+    out: string[],
+    nextRef: () => DynRef,
+  ): string {
     if (isBytesLike(f.type)) {
       const ref = nextRef();
       const len = this.fresh();
@@ -2403,7 +2489,8 @@ ${indent(runtime, 6)}
       return nc;
     }
     if (f.type.kind === 'array' && f.type.length === undefined) {
-      if (f.type.element.kind === 'struct') throw new UnsupportedError('indexed-topic encoding of a struct-element array field is not supported yet');
+      if (f.type.element.kind === 'struct')
+        throw new UnsupportedError('indexed-topic encoding of a struct-element array field is not supported yet');
       // dynamic value-array: its element words, NO length word (each element is one 32-byte word).
       const ref = nextRef();
       const len = this.fresh();
@@ -2432,7 +2519,13 @@ ${indent(runtime, 6)}
    *  before the output blob pointer is captured, so they cannot alias the blob).
    *  Calldata sources need no materialization. Recurses into nested structs in the
    *  exact order encodeTupleInto consumes them. */
-  private collectTupleDyn(struct: JethType & { kind: 'struct' }, src: TupleSrc, queue: DynRef[], ctx: LowerCtx, out: string[]): void {
+  private collectTupleDyn(
+    struct: JethType & { kind: 'struct' },
+    src: TupleSrc,
+    queue: DynRef[],
+    ctx: LowerCtx,
+    out: string[],
+  ): void {
     let hw = 0;
     struct.fields.forEach((f, i) => {
       if (isDynamicType(f.type)) {
@@ -2484,7 +2577,12 @@ ${indent(runtime, 6)}
     // into a fresh memory image (value fields inline, bytes/string + dyn value-array fields a
     // [len][data] pointer) via the same helper buildDynStructLocal uses, then encode from 'mem'.
     // structSrcSlot throws for genuinely unsupported source kinds, preserving the fail-safe below.
-    if (value.kind === 'structValue' || value.kind === 'mapStorageValue' || value.kind === 'structArrayElem' || value.kind === 'placeRead') {
+    if (
+      value.kind === 'structValue' ||
+      value.kind === 'mapStorageValue' ||
+      value.kind === 'structArrayElem' ||
+      value.kind === 'placeRead'
+    ) {
       const struct = value.type as JethType & { kind: 'struct' };
       const headPtr = this.buildDynStructFromStorage(struct, this.structSrcSlot(value, ctx, out), ctx, out);
       return { kind: 'mem', headPtr };
@@ -2497,7 +2595,14 @@ ${indent(runtime, 6)}
    *  field gets a head OFFSET word (relative to tuplePtr) and its payload in the
    *  tail (field order). Returns a Yul expr for the memory pointer just past the
    *  tail. Mirrors spec section 3.1 exactly: offsets reset to THIS tuple's start. */
-  private encodeTupleInto(struct: JethType & { kind: 'struct' }, src: TupleSrc, tuplePtr: string, ctx: LowerCtx, out: string[], nextRef: () => DynRef): string {
+  private encodeTupleInto(
+    struct: JethType & { kind: 'struct' },
+    src: TupleSrc,
+    tuplePtr: string,
+    ctx: LowerCtx,
+    out: string[],
+    nextRef: () => DynRef,
+  ): string {
     const headWords = tupleHeadWords(struct);
     // tail cursor starts right after the tuple head.
     const cursor = this.fresh();
@@ -2525,7 +2630,16 @@ ${indent(runtime, 6)}
    *  bytes/string -> [byteLen][right-padded data] (value pulled from the pre-
    *  materialized queue, so no aliasing alloc happens here); a nested dynamic
    *  struct -> its own head/tail tuple (base resets to the nested tuple start). */
-  private encodeDynFieldInto(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, cursor: string, ctx: LowerCtx, out: string[], nextRef: () => DynRef): string {
+  private encodeDynFieldInto(
+    f: StructField,
+    src: TupleSrc,
+    fieldIdx: number,
+    headWord: number,
+    cursor: string,
+    ctx: LowerCtx,
+    out: string[],
+    nextRef: () => DynRef,
+  ): string {
     if (isBytesLike(f.type)) {
       // Write [byteLen][right-padded data] directly at the cursor, copying from the
       // pre-materialized source. calldata -> calldatacopy; memory -> mcopy; then
@@ -2581,7 +2695,9 @@ ${indent(runtime, 6)}
         out.push(`mstore(${cursor}, ${len})`);
         out.push(`mcopy(add(${cursor}, 0x20), add(${ref.ptr}, 0x20), ${byteLen})`);
       } else {
-        throw new UnsupportedError('encoding a calldata-array struct field in a whole-struct return is not supported yet');
+        throw new UnsupportedError(
+          'encoding a calldata-array struct field in a whole-struct return is not supported yet',
+        );
       }
       return nc;
     }
@@ -2597,7 +2713,14 @@ ${indent(runtime, 6)}
    *  the WHOLE-struct ECHO path (return d), so the calldata case uses the ECHO-DECODE
    *  helper (unsigned offset cap, no length cap / payload-fits); the alloc Panic(0x41)
    *  and the payload-within-calldatasize check land in encodeDynFieldInto's copy. */
-  private dynFieldRef(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, ctx: LowerCtx, out: string[]): DynRef {
+  private dynFieldRef(
+    f: StructField,
+    src: TupleSrc,
+    fieldIdx: number,
+    headWord: number,
+    ctx: LowerCtx,
+    out: string[],
+  ): DynRef {
     if (src.kind === 'new') return this.lowerDynamic(src.args[fieldIdx]!, ctx, out);
     if (src.kind === 'mem') {
       // the head word holds the [len][data] memory pointer of the bytes/string field.
@@ -2618,7 +2741,14 @@ ${indent(runtime, 6)}
    *  (for whole-struct `return d` encoding). A memory source's head word already holds the pointer; a
    *  constructor arg is materialized via aggArgToMemPtr. A calldata source stays gated (the analyzer
    *  rejects returning a calldata struct param that carries an array field). */
-  private arrayFieldRef(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, ctx: LowerCtx, out: string[]): DynRef {
+  private arrayFieldRef(
+    f: StructField,
+    src: TupleSrc,
+    fieldIdx: number,
+    headWord: number,
+    ctx: LowerCtx,
+    out: string[],
+  ): DynRef {
     // A STRUCT-element dynamic array field (Q[]): materialize the WHOLE ABI tail blob [len][...] (an
     // offset table + element payloads for dynamic-struct elements; contiguous abiHeadWords element
     // words for static ones), and carry its full byte size so the tail copy is exact (the
@@ -2632,7 +2762,10 @@ ${indent(runtime, 6)}
       return { src: 'memory', ptr: this.aggArgToMemPtr(src.args[fieldIdx]!, ctx, out) };
     }
     if (src.kind === 'mem') {
-      if (elemIsStruct) throw new UnsupportedError('encoding a struct-element array field from a memory dynamic struct is not supported yet');
+      if (elemIsStruct)
+        throw new UnsupportedError(
+          'encoding a struct-element array field from a memory dynamic struct is not supported yet',
+        );
       const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
       const ptr = this.fresh();
       out.push(`let ${ptr} := mload(${at})`);
@@ -2642,14 +2775,22 @@ ${indent(runtime, 6)}
   }
 
   /** Build the value source for a nested (sub)struct field. */
-  private nestedTupleSrc(f: StructField, src: TupleSrc, fieldIdx: number, headWord: number, ctx: LowerCtx, out: string[]): TupleSrc {
+  private nestedTupleSrc(
+    f: StructField,
+    src: TupleSrc,
+    fieldIdx: number,
+    headWord: number,
+    ctx: LowerCtx,
+    out: string[],
+  ): TupleSrc {
     const nested = f.type as JethType & { kind: 'struct' };
     if (src.kind === 'new') {
       const arg = src.args[fieldIdx]!;
       if (arg.kind !== 'structNew') throw new UnsupportedError('nested struct field must be constructed inline');
       return { kind: 'new', fields: arg.fields, args: arg.args };
     }
-    if (src.kind === 'mem') throw new UnsupportedError('nested struct field in a memory dynamic struct is not supported');
+    if (src.kind === 'mem')
+      throw new UnsupportedError('nested struct field in a memory dynamic struct is not supported');
     // calldata echo. If the nested struct is dynamic, its head slot is an offset
     // word (base resets to base + offset); if static, it is inline at base+head.
     const fieldOff = headWord === 0 ? src.base : `add(${src.base}, ${headWord * 32})`;
@@ -2665,7 +2806,15 @@ ${indent(runtime, 6)}
    *  unpacked ABI word per leaf). new source: lower each leaf value (recursing into
    *  nested static structs); cd source: copy + validate each leaf word from the
    *  calldata tuple at base + headWord*32. */
-  private encodeStaticInline(type: JethType, src: TupleSrc, fieldIdx: number, headWord: number, dstPtr: string, ctx: LowerCtx, out: string[]): void {
+  private encodeStaticInline(
+    type: JethType,
+    src: TupleSrc,
+    fieldIdx: number,
+    headWord: number,
+    dstPtr: string,
+    ctx: LowerCtx,
+    out: string[],
+  ): void {
     if (src.kind === 'new') {
       // a static value field, or a nested static struct constructed inline.
       const arg = src.args[fieldIdx]!;
@@ -2720,7 +2869,8 @@ ${indent(runtime, 6)}
     if (type.kind === 'array' && type.length !== undefined) {
       // a static fixed-array field, built from an array literal: flatten each element's leaf words
       // (recursing into nested fixed-arrays / structs), one ABI word per value leaf.
-      if (arg.kind !== 'arrayLit') throw new UnsupportedError('a static fixed-array struct field must be constructed from an array literal');
+      if (arg.kind !== 'arrayLit')
+        throw new UnsupportedError('a static fixed-array struct field must be constructed from an array literal');
       const words: string[] = [];
       arg.elements.forEach((el) => words.push(...this.staticNewLeaves(type.element, el, ctx, out)));
       return words;
@@ -2734,7 +2884,11 @@ ${indent(runtime, 6)}
    *  constant slot; mapping keys and dynamic indices produce runtime slot temps.
    *  Index steps are over whole-slot elements (stride in slots), offset stays 0;
    *  field steps add the field slot and set the packing offset. */
-  private lowerPlace(path: AccessPath, ctx: LowerCtx, out: string[]): { slot: string; offset: number; byteShift?: string } {
+  private lowerPlace(
+    path: AccessPath,
+    ctx: LowerCtx,
+    out: string[],
+  ): { slot: string; offset: number; byteShift?: string } {
     let constSlot: number | null = path.baseSlot;
     let slot = String(path.baseSlot);
     let offset = 0;
@@ -2774,8 +2928,12 @@ ${indent(runtime, 6)}
         if (step.index.kind === 'literalInt') {
           const k = Number(step.index.value);
           const slotAdd = Math.floor(k / step.perSlot);
-          if (constSlot !== null) { constSlot += slotAdd; slot = String(constSlot); }
-          else if (slotAdd !== 0) { slot = `add(${slot}, ${slotAdd})`; }
+          if (constSlot !== null) {
+            constSlot += slotAdd;
+            slot = String(constSlot);
+          } else if (slotAdd !== 0) {
+            slot = `add(${slot}, ${slotAdd})`;
+          }
           offset = (k % step.perSlot) * step.size;
           byteShift = undefined;
         } else {
@@ -3246,10 +3404,19 @@ ${indent(runtime, 6)}
    *  storage `stateArray`/`mapArray`) into a storage dynamic array at `dstLenSlot`. Clears
    *  the dst's OLD data first (so it works for both a fresh push slot, oldLen 0 = no-op,
    *  and an overwrite assign), then sets the length and copies every element. */
-  private copyArrayValueIntoStorage(innerElem: JethType, value: Expr, dstLenSlot: string, ctx: LowerCtx, out: string[]): void {
+  private copyArrayValueIntoStorage(
+    innerElem: JethType,
+    value: Expr,
+    dstLenSlot: string,
+    ctx: LowerCtx,
+    out: string[],
+  ): void {
     const storageSrc =
       value.kind === 'mapStorageValue' ||
-      (value.kind === 'arrayValue' && (value.arr.base.kind === 'stateArray' || value.arr.base.kind === 'mapArray' || value.arr.base.kind === 'placeArray'));
+      (value.kind === 'arrayValue' &&
+        (value.arr.base.kind === 'stateArray' ||
+          value.arr.base.kind === 'mapArray' ||
+          value.arr.base.kind === 'placeArray'));
     if (storageSrc) {
       this.copyArray(innerElem, this.arraySrcLenSlot(value, ctx, out), dstLenSlot, out);
       return;
@@ -3257,17 +3424,23 @@ ${indent(runtime, 6)}
     // calldata source (a calldata value-array param: this.a = p): decode + validate each element
     // (like solc's per-element calldata read) and packed-store into storage. Value elements only.
     if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray') {
-      if (!isStaticValueType(innerElem)) throw new UnsupportedError('a calldata array of non-value elements is not supported');
+      if (!isStaticValueType(innerElem))
+        throw new UnsupportedError('a calldata array of non-value elements is not supported');
       const b = ctx.cdArrays.get(value.arr.base.name);
       if (!b) throw new UnsupportedError(`unbound calldata array ${value.arr.base.name}`);
       const dstData = this.fresh();
       out.push(`let ${dstData} := ${this.arrayDataSlotHelper()}(${dstLenSlot})`);
       const packs = arrayElemPacks(innerElem);
-      const slotsFor = (L: string): string => (packs.packed ? `div(add(${L}, ${packs.perSlot - 1}), ${packs.perSlot})` : `mul(${L}, ${storageSlotCount(innerElem)})`);
+      const slotsFor = (L: string): string =>
+        packs.packed
+          ? `div(add(${L}, ${packs.perSlot - 1}), ${packs.perSlot})`
+          : `mul(${L}, ${storageSlotCount(innerElem)})`;
       const oldSlots = this.fresh();
       out.push(`let ${oldSlots} := ${slotsFor(`sload(${dstLenSlot})`)}`);
       const c = this.fresh();
-      out.push(`for { let ${c} := 0 } lt(${c}, ${oldSlots}) { ${c} := add(${c}, 1) } { sstore(add(${dstData}, ${c}), 0) }`);
+      out.push(
+        `for { let ${c} := 0 } lt(${c}, ${oldSlots}) { ${c} := add(${c}, 1) } { sstore(add(${dstData}, ${c}), 0) }`,
+      );
       out.push(`sstore(${dstLenSlot}, ${b.length})`);
       const i = this.fresh();
       out.push(`for { let ${i} := 0 } lt(${i}, ${b.length}) { ${i} := add(${i}, 1) } {`);
@@ -3282,7 +3455,8 @@ ${indent(runtime, 6)}
       return;
     }
     // memory source (a memArray local or an array literal): value elements only.
-    if (!isStaticValueType(innerElem)) throw new UnsupportedError('a memory array of non-value elements is not supported');
+    if (!isStaticValueType(innerElem))
+      throw new UnsupportedError('a memory array of non-value elements is not supported');
     this.copyMemArrayIntoStorage(innerElem, this.lowerExpr(value, ctx, out), dstLenSlot, out);
   }
 
@@ -3295,11 +3469,16 @@ ${indent(runtime, 6)}
     const dstData = this.fresh();
     out.push(`let ${dstData} := ${this.arrayDataSlotHelper()}(${dstLenSlot})`);
     const packs = arrayElemPacks(innerElem);
-    const slotsFor = (L: string): string => (packs.packed ? `div(add(${L}, ${packs.perSlot - 1}), ${packs.perSlot})` : `mul(${L}, ${storageSlotCount(innerElem)})`);
+    const slotsFor = (L: string): string =>
+      packs.packed
+        ? `div(add(${L}, ${packs.perSlot - 1}), ${packs.perSlot})`
+        : `mul(${L}, ${storageSlotCount(innerElem)})`;
     const oldSlots = this.fresh();
     out.push(`let ${oldSlots} := ${slotsFor(`sload(${dstLenSlot})`)}`);
     const c = this.fresh();
-    out.push(`for { let ${c} := 0 } lt(${c}, ${oldSlots}) { ${c} := add(${c}, 1) } { sstore(add(${dstData}, ${c}), 0) }`);
+    out.push(
+      `for { let ${c} := 0 } lt(${c}, ${oldSlots}) { ${c} := add(${c}, 1) } { sstore(add(${dstData}, ${c}), 0) }`,
+    );
     out.push(`sstore(${dstLenSlot}, ${n})`);
     const i = this.fresh();
     out.push(`for { let ${i} := 0 } lt(${i}, ${n}) { ${i} := add(${i}, 1) } {`);
@@ -3375,7 +3554,8 @@ ${indent(runtime, 6)}
    *  to solc). */
   private writeStruct(fields: StructField[], args: Expr[], baseSlot: string, ctx: LowerCtx, out: string[]): void {
     const isConst = /^\d+$/.test(baseSlot);
-    const slotAt = (n: number): string => (isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`);
+    const slotAt = (n: number): string =>
+      isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
     fields.forEach((f, i) => {
       const arg = args[i]!;
       if (f.type.kind === 'struct' && arg.kind === 'structNew') {
@@ -3388,7 +3568,10 @@ ${indent(runtime, 6)}
       } else if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
         // a fixed-array field constructed from a (possibly nested) literal.
         this.writeArrayLit(arg, slotAt(f.slot), ctx, out);
-      } else if ((f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) && isStaticType(f.type)) {
+      } else if (
+        (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) &&
+        isStaticType(f.type)
+      ) {
         // a non-inline STATIC aggregate field source (a local / param / storage value): materialize its
         // ABI-unpacked image, then transcode it into the field's packed storage slots.
         this.storeStaticAggFromMem(f.type, this.aggToMemPtr(arg, ctx, out), slotAt(f.slot), out);
@@ -3411,10 +3594,13 @@ ${indent(runtime, 6)}
     if (e.kind === 'structNew' || e.kind === 'arrayLit') return this.allocAggToMem(e, ctx, out);
     if (e.kind === 'memAggregate' || e.kind === 'ternary') return this.lowerExpr(e, ctx, out); // a nested aggregate ternary recurses (materialize + select)
     if (e.kind === 'structValue') return this.allocAggFromStorage(e.type, String(e.baseSlot), out);
-    if (e.kind === 'mapStorageValue') return this.allocAggFromStorage(e.type, this.mappingSlot(e.baseSlot, e.keys, ctx, out), out);
-    if (e.kind === 'structArrayElem') return this.allocAggFromStorage(e.type, this.structArrayElemSlot(e.arr, e.index, ctx, out), out);
+    if (e.kind === 'mapStorageValue')
+      return this.allocAggFromStorage(e.type, this.mappingSlot(e.baseSlot, e.keys, ctx, out), out);
+    if (e.kind === 'structArrayElem')
+      return this.allocAggFromStorage(e.type, this.structArrayElemSlot(e.arr, e.index, ctx, out), out);
     if (e.kind === 'placeRead') return this.allocAggFromStorage(e.type, this.lowerPlace(e.path, ctx, out).slot, out);
-    if (e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray') return this.allocAggFromStorage(e.type, String(e.arr.base.baseSlot), out);
+    if (e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray')
+      return this.allocAggFromStorage(e.type, String(e.arr.base.baseSlot), out);
     if (e.kind === 'cdAggregateValue') return this.allocAggFromCalldata(e.param, e.type, ctx, out);
     if (e.kind === 'call') {
       const p = this.fresh();
@@ -3506,13 +3692,19 @@ ${indent(runtime, 6)}
   /** Copy a storage dynamic-field struct at `baseSlot` into a fresh memory image: value fields
    *  are read (packed-aware) and stored inline; bytes/string fields are copied to a memory blob
    *  whose pointer is stored in the head word. Scoped to value + bytes/string fields. */
-  private buildDynStructFromStorage(struct: JethType & { kind: 'struct' }, baseSlot: string, ctx: LowerCtx, out: string[]): string {
+  private buildDynStructFromStorage(
+    struct: JethType & { kind: 'struct' },
+    baseSlot: string,
+    ctx: LowerCtx,
+    out: string[],
+  ): string {
     const headWords = tupleHeadWords(struct);
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(0x40, add(${ptr}, ${headWords * 32}))`);
     const isConst = /^\d+$/.test(baseSlot);
-    const slotAt = (n: number): string => (isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`);
+    const slotAt = (n: number): string =>
+      isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
     let hw = 0;
     for (const f of struct.fields) {
       const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
@@ -3548,7 +3740,12 @@ ${indent(runtime, 6)}
   /** Decode a calldata dynamic-field struct param into a fresh memory image: value fields are
    *  read + VALIDATED inline (encodeStaticInline 'cd'), bytes/string fields are calldatacopied
    *  to a memory blob whose pointer is stored in the head word. Matches solc's copy-to-memory. */
-  private buildDynStructFromCalldata(struct: JethType & { kind: 'struct' }, init: Expr, ctx: LowerCtx, out: string[]): string {
+  private buildDynStructFromCalldata(
+    struct: JethType & { kind: 'struct' },
+    init: Expr,
+    ctx: LowerCtx,
+    out: string[],
+  ): string {
     const src = this.tupleSrc(init, ctx, out); // { kind: 'cd', base }
     const headWords = tupleHeadWords(struct);
     const ptr = this.fresh();
@@ -3575,7 +3772,8 @@ ${indent(runtime, 6)}
         // absolute = base + offset, bounded exactly like solc's tuple-member decode), decode +
         // VALIDATE it into a fresh [len][elems] memory image via abiEncFromCd, then store the
         // pointer in the head word (the pointer-headed image writeDynStructFromMem consumes).
-        if (src.kind !== 'cd') throw new UnsupportedError('calldata dynamic-array struct field decode needs a calldata source');
+        if (src.kind !== 'cd')
+          throw new UnsupportedError('calldata dynamic-array struct field decode needs a calldata source');
         const so = this.fresh();
         out.push(`let ${so} := calldataload(${hw === 0 ? src.base : `add(${src.base}, ${hw * 32})`})`);
         out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
@@ -3588,7 +3786,9 @@ ${indent(runtime, 6)}
         const alen = this.fresh();
         out.push(`let ${alen} := calldataload(${se})`);
         out.push(`if gt(${alen}, 0xffffffffffffffff) { revert(0, 0) }`);
-        out.push(`if gt(add(add(${se}, 0x20), mul(${alen}, ${abiHeadWords(f.type.element) * 32})), calldatasize()) { revert(0, 0) }`);
+        out.push(
+          `if gt(add(add(${se}, 0x20), mul(${alen}, ${abiHeadWords(f.type.element) * 32})), calldatasize()) { revert(0, 0) }`,
+        );
         const dst = this.fresh();
         out.push(`let ${dst} := mload(0x40)`);
         const size = this.abiEncFromCd(f.type, se, dst, true, out);
@@ -3621,7 +3821,9 @@ ${indent(runtime, 6)}
     if (v.kind === 'arrayLit') {
       const aggElem = v.elem.kind === 'struct' || (v.elem.kind === 'array' && v.elem.length !== undefined);
       if (!aggElem) return false;
-      return v.elements.some((el) => (el.kind !== 'structNew' && el.kind !== 'arrayLit') || this.aggHasNonInlineField(el));
+      return v.elements.some(
+        (el) => (el.kind !== 'structNew' && el.kind !== 'arrayLit') || this.aggHasNonInlineField(el),
+      );
     }
     return false;
   }
@@ -3662,12 +3864,15 @@ ${indent(runtime, 6)}
   private writeArrayLit(lit: Expr & { kind: 'arrayLit' }, baseSlot: string, ctx: LowerCtx, out: string[]): void {
     const elem = lit.elem;
     if (isStaticValueType(elem)) {
-      lit.elements.forEach((el, k) => this.arrayElemStore(elem, baseSlot, String(k), this.lowerExpr(el, ctx, out), out));
+      lit.elements.forEach((el, k) =>
+        this.arrayElemStore(elem, baseSlot, String(k), this.lowerExpr(el, ctx, out), out),
+      );
       return;
     }
     const sc = storageSlotCount(elem);
     const isConst = /^\d+$/.test(baseSlot);
-    const slotAt = (n: number): string => (isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`);
+    const slotAt = (n: number): string =>
+      isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
     lit.elements.forEach((el, k) => {
       const es = slotAt(k * sc);
       if (el.kind === 'arrayLit') this.writeArrayLit(el, es, ctx, out);
@@ -3706,7 +3911,8 @@ ${indent(runtime, 6)}
   private arraySrcLenSlot(value: Expr, ctx: LowerCtx, out: string[]): string {
     if (value.kind === 'arrayValue') {
       if (value.arr.base.kind === 'stateArray') return String(value.arr.base.slot);
-      if (value.arr.base.kind === 'mapArray') return this.mappingSlot(value.arr.base.baseSlot, value.arr.base.keys, ctx, out);
+      if (value.arr.base.kind === 'mapArray')
+        return this.mappingSlot(value.arr.base.baseSlot, value.arr.base.keys, ctx, out);
       if (value.arr.base.kind === 'placeArray') return this.lowerPlace(value.arr.base.path, ctx, out).slot;
     }
     if (value.kind === 'mapStorageValue') return this.mappingSlot(value.baseSlot, value.keys, ctx, out);
@@ -3735,15 +3941,21 @@ ${indent(runtime, 6)}
     if (isStaticType(elem)) {
       const packs = arrayElemPacks(elem);
       const slotsFor = (L: string): string =>
-        packs.packed ? `div(add(${L}, ${packs.perSlot - 1}), ${packs.perSlot})` : `mul(${L}, ${storageSlotCount(elem)})`;
+        packs.packed
+          ? `div(add(${L}, ${packs.perSlot - 1}), ${packs.perSlot})`
+          : `mul(${L}, ${storageSlotCount(elem)})`;
       const srcSlots = this.fresh();
       const dstSlots = this.fresh();
       out.push(`let ${srcSlots} := ${slotsFor(srcLen)}`);
       out.push(`let ${dstSlots} := ${slotsFor(dstLen)}`);
       const i = this.fresh();
-      out.push(`for { let ${i} := 0 } lt(${i}, ${srcSlots}) { ${i} := add(${i}, 1) } { sstore(add(${dstData}, ${i}), sload(add(${srcData}, ${i}))) }`);
+      out.push(
+        `for { let ${i} := 0 } lt(${i}, ${srcSlots}) { ${i} := add(${i}, 1) } { sstore(add(${dstData}, ${i}), sload(add(${srcData}, ${i}))) }`,
+      );
       const j = this.fresh();
-      out.push(`for { let ${j} := ${srcSlots} } lt(${j}, ${dstSlots}) { ${j} := add(${j}, 1) } { sstore(add(${dstData}, ${j}), 0) }`);
+      out.push(
+        `for { let ${j} := ${srcSlots} } lt(${j}, ${dstSlots}) { ${j} := add(${j}, 1) } { sstore(add(${dstData}, ${j}), 0) }`,
+      );
       out.push(`sstore(${dstLenSlot}, ${srcLen})`);
       return;
     }
@@ -3806,8 +4018,10 @@ ${indent(runtime, 6)}
     const N = arrType.length!;
     const sConst = /^\d+$/.test(srcBase);
     const dConst = /^\d+$/.test(dstBase);
-    const sAt = (n: number): string => (sConst ? String(Number(srcBase) + n) : n === 0 ? srcBase : `add(${srcBase}, ${n})`);
-    const dAt = (n: number): string => (dConst ? String(Number(dstBase) + n) : n === 0 ? dstBase : `add(${dstBase}, ${n})`);
+    const sAt = (n: number): string =>
+      sConst ? String(Number(srcBase) + n) : n === 0 ? srcBase : `add(${srcBase}, ${n})`;
+    const dAt = (n: number): string =>
+      dConst ? String(Number(dstBase) + n) : n === 0 ? dstBase : `add(${dstBase}, ${n})`;
     if (isStaticType(elem)) {
       const slots = storageSlotCount(arrType);
       for (let i = 0; i < slots; i++) out.push(`sstore(${dAt(i)}, sload(${sAt(i)}))`);
@@ -3828,8 +4042,17 @@ ${indent(runtime, 6)}
    *  (structNew) is written field-by-field; a MEMORY / CALLDATA struct (memAggregate from a
    *  `let m: S = ...` local, or a calldata struct param) is transcoded from its ABI-unpacked image
    *  into packed storage; a STORAGE struct lvalue is a storage-to-storage deep copy. */
-  private storeStructTo(type: JethType & { kind: 'struct' }, value: Expr, dst: string, ctx: LowerCtx, out: string[]): void {
-    if (value.kind === 'structNew') { this.writeStruct(value.fields, value.args, dst, ctx, out); return; }
+  private storeStructTo(
+    type: JethType & { kind: 'struct' },
+    value: Expr,
+    dst: string,
+    ctx: LowerCtx,
+    out: string[],
+  ): void {
+    if (value.kind === 'structNew') {
+      this.writeStruct(value.fields, value.args, dst, ctx, out);
+      return;
+    }
     if (value.kind === 'memAggregate' || value.kind === 'cdAggregateValue') {
       // a STATIC struct from a memory/calldata source: transcode its ABI-unpacked image to packed storage.
       this.storeStaticAggFromMem(type, this.aggToMemPtr(value, ctx, out), dst, out);
@@ -3849,7 +4072,12 @@ ${indent(runtime, 6)}
    *  storage: each value field via storeState (packed), each bytes/string field via storeDynamic from
    *  the head-word pointer (overwrite-clearing the old tail). Scoped to value + bytes/string fields;
    *  a dynamic-array field from a memory/calldata source is a later step (clean rejection). */
-  private writeDynStructFromMem(struct: JethType & { kind: 'struct' }, memPtr: string, slot: string, out: string[]): void {
+  private writeDynStructFromMem(
+    struct: JethType & { kind: 'struct' },
+    memPtr: string,
+    slot: string,
+    out: string[],
+  ): void {
     const sConst = /^\d+$/.test(slot);
     const fslotAt = (n: number): string => (n === 0 ? slot : sConst ? String(Number(slot) + n) : `add(${slot}, ${n})`);
     let hw = 0;
@@ -3870,7 +4098,9 @@ ${indent(runtime, 6)}
         out.push(`let ${p} := mload(${at})`);
         this.copyMemArrayIntoStorage(f.type.element, p, fslotAt(f.slot), out);
       } else {
-        throw new UnsupportedError(`storing a struct with a '${f.type.kind}' field from a memory/calldata source is not supported yet`);
+        throw new UnsupportedError(
+          `storing a struct with a '${f.type.kind}' field from a memory/calldata source is not supported yet`,
+        );
       }
       hw += isDynamicType(f.type) ? 1 : abiHeadWords(f.type);
     }
@@ -3883,7 +4113,12 @@ ${indent(runtime, 6)}
   private storeStaticAggFromMem(t: JethType, memPtr: string, slot: string, out: string[]): void {
     const sConst = /^\d+$/.test(slot);
     for (const leaf of structStorageLeaves(t)) {
-      const ls = leaf.storageSlot === 0 ? slot : sConst ? String(Number(slot) + leaf.storageSlot) : `add(${slot}, ${leaf.storageSlot})`;
+      const ls =
+        leaf.storageSlot === 0
+          ? slot
+          : sConst
+            ? String(Number(slot) + leaf.storageSlot)
+            : `add(${slot}, ${leaf.storageSlot})`;
       const w = this.fresh();
       out.push(`let ${w} := mload(${leaf.abiWord === 0 ? memPtr : `add(${memPtr}, ${leaf.abiWord * 32})`})`);
       for (const l of this.storeState(leaf.type, ls, leaf.storageOffset, w)) out.push(l);
@@ -3910,8 +4145,10 @@ ${indent(runtime, 6)}
   private copyStruct(struct: JethType & { kind: 'struct' }, srcBase: string, dstBase: string, out: string[]): void {
     const sConst = /^\d+$/.test(srcBase);
     const dConst = /^\d+$/.test(dstBase);
-    const sAt = (n: number): string => (sConst ? String(Number(srcBase) + n) : n === 0 ? srcBase : `add(${srcBase}, ${n})`);
-    const dAt = (n: number): string => (dConst ? String(Number(dstBase) + n) : n === 0 ? dstBase : `add(${dstBase}, ${n})`);
+    const sAt = (n: number): string =>
+      sConst ? String(Number(srcBase) + n) : n === 0 ? srcBase : `add(${srcBase}, ${n})`;
+    const dAt = (n: number): string =>
+      dConst ? String(Number(dstBase) + n) : n === 0 ? dstBase : `add(${dstBase}, ${n})`;
     const copied = new Set<number>();
     for (const f of struct.fields) {
       if (f.type.kind === 'struct') {
@@ -4080,7 +4317,9 @@ ${indent(runtime, 6)}
     if (isStaticType(elem) && elem.kind !== 'struct') {
       const packs = arrayElemPacks(elem);
       const slots = this.fresh();
-      out.push(`let ${slots} := ${packs.packed ? `div(add(${len}, ${packs.perSlot - 1}), ${packs.perSlot})` : `mul(${len}, ${storageSlotCount(elem)})`}`);
+      out.push(
+        `let ${slots} := ${packs.packed ? `div(add(${len}, ${packs.perSlot - 1}), ${packs.perSlot})` : `mul(${len}, ${storageSlotCount(elem)})`}`,
+      );
       const i = this.fresh();
       out.push(`for { let ${i} := 0 } lt(${i}, ${slots}) { ${i} := add(${i}, 1) } { sstore(add(${data}, ${i}), 0) }`);
     } else {
@@ -4145,11 +4384,16 @@ ${indent(runtime, 6)}
    *  assignment uses, so a .push/.pop/b[i]=x mutation lands on the identical slot. */
   private bytesLocSlot(loc: LValue, ctx: LowerCtx, out: string[]): string {
     switch (loc.kind) {
-      case 'dynState': return String(loc.slot);
-      case 'mapDynState': return this.mappingSlot(loc.baseSlot, loc.keys, ctx, out);
-      case 'strArrayElem': return this.strArrayElemSlot(loc.arr, loc.index, ctx, out);
-      case 'dynPlace': return this.lowerPlace(loc.path, ctx, out).slot;
-      default: throw new UnsupportedError(`bytes mutation through a '${loc.kind}' location is not supported`);
+      case 'dynState':
+        return String(loc.slot);
+      case 'mapDynState':
+        return this.mappingSlot(loc.baseSlot, loc.keys, ctx, out);
+      case 'strArrayElem':
+        return this.strArrayElemSlot(loc.arr, loc.index, ctx, out);
+      case 'dynPlace':
+        return this.lowerPlace(loc.path, ctx, out).slot;
+      default:
+        throw new UnsupportedError(`bytes mutation through a '${loc.kind}' location is not supported`);
     }
   }
 
@@ -4226,14 +4470,16 @@ ${indent(runtime, 6)}
     // base is the table start (spec section 4.1). Only the calldata-source path is
     // reachable (the analyzer gates storage/mapping string[] elements).
     if (isBytesLike(ref.elem)) {
-      if (ref.src !== 'calldata') throw new UnsupportedError('returning a string[]/bytes[] is only supported from a calldata source');
+      if (ref.src !== 'calldata')
+        throw new UnsupportedError('returning a string[]/bytes[] is only supported from a calldata source');
       return this.encodeDynArrayReturn(ref.offset, ref.length, ctx, out);
     }
     // Nested dynamic array T[][] (4e-5): re-encode each inner array as a [innerLen]
     // [elements] tail behind a per-inner pointer table whose base is the pointer-region
     // start (spec section 2.1). Only the calldata-source path is reachable.
     if (ref.elem.kind === 'array' && ref.elem.length === undefined) {
-      if (ref.src !== 'calldata') throw new UnsupportedError('returning a nested dynamic array is only supported from a calldata source');
+      if (ref.src !== 'calldata')
+        throw new UnsupportedError('returning a nested dynamic array is only supported from a calldata source');
       return this.encodeNestedArrayReturn(ref.offset, ref.length, ref.elem.element, ctx, out);
     }
     const len = this.fresh();
@@ -4300,7 +4546,12 @@ ${indent(runtime, 6)}
    *  Each payload is [byteLen][right-padded data]; the offset table base is the table
    *  start (spec section 4.1). Element bounds are validated per element on decode.
    *  The total byte size is computed at runtime (variable payload lengths). */
-  private encodeDynArrayReturn(tableStart: string, len: string, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+  private encodeDynArrayReturn(
+    tableStart: string,
+    len: string,
+    ctx: LowerCtx,
+    out: string[],
+  ): { ptr: string; size: string } {
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(${ptr}, 0x20)`); // outer offset
@@ -4349,7 +4600,13 @@ ${indent(runtime, 6)}
    *  its in-register form on copy (does not revert on dirty bits), matching solc's
    *  array-copy semantics for value elements. Inner bounds / pointer faults -> EMPTY
    *  revert inside calldataInnerArray. Total byte size is computed at runtime. */
-  private encodeNestedArrayReturn(base: string, len: string, elemType: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+  private encodeNestedArrayReturn(
+    base: string,
+    len: string,
+    elemType: JethType,
+    ctx: LowerCtx,
+    out: string[],
+  ): { ptr: string; size: string } {
     const stride = abiHeadWords(elemType) * 32; // value element stride (32)
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
@@ -4403,7 +4660,13 @@ ${indent(runtime, 6)}
   /** Echo a whole calldata PARAM `name` of dynamic type `t` into a fresh ABI return
    *  blob: [0x20][value encoding]. The general recursive encoder gives UNBOUNDED
    *  nesting depth. The top-level offset is signed-range-checked (solc form). */
-  private echoParam(name: string, t: JethType, ctx: LowerCtx, out: string[], forceValidate = false): { ptr: string; size: string } {
+  private echoParam(
+    name: string,
+    t: JethType,
+    ctx: LowerCtx,
+    out: string[],
+    forceValidate = false,
+  ): { ptr: string; size: string } {
     const ph = ctx.cdParamHead.get(name);
     if (!ph) throw new UnsupportedError(`unbound echo param ${name}`);
     const off = this.fresh();
@@ -4493,7 +4756,8 @@ ${indent(runtime, 6)}
       const mp = this.lowerExpr(arg, ctx, out);
       return { mp, size: `mul(add(mload(${mp}), 1), 0x20)` };
     }
-    if (arg.kind !== 'arrayValue') throw new UnsupportedError(`array argument must be an array value, got '${arg.kind}'`);
+    if (arg.kind !== 'arrayValue')
+      throw new UnsupportedError(`array argument must be an array value, got '${arg.kind}'`);
     const base = arg.arr.base;
     let mpExpr: string;
     let sizeExpr: string;
@@ -4519,7 +4783,10 @@ ${indent(runtime, 6)}
       if (base.kind === 'stateArray') lenSlot = String(base.slot);
       else if (base.kind === 'mapArray') lenSlot = this.mappingSlot(base.baseSlot, base.keys, ctx, out);
       else if (base.kind === 'placeArray') lenSlot = this.lowerPlace(base.path, ctx, out).slot;
-      else throw new UnsupportedError(`a dynamic-array @error/@event argument from a '${base.kind}' source is not supported yet`);
+      else
+        throw new UnsupportedError(
+          `a dynamic-array @error/@event argument from a '${base.kind}' source is not supported yet`,
+        );
       const sdst = this.fresh();
       out.push(`let ${sdst} := mload(0x40)`);
       const ssz = this.abiEncFromStorage(arg.type, lenSlot, 0, sdst, out);
@@ -4569,7 +4836,13 @@ ${indent(runtime, 6)}
    *  are returned inline). Matching solc's decode-to-memory: a pure VALUE-leaf fixed array
    *  CLEANS (masks) its leaves, while a struct (or struct-element array) VALIDATES its fields
    *  (the struct branch of abiEncFromCd forces field validation regardless of this flag). */
-  private echoStaticParam(name: string, t: JethType, ctx: LowerCtx, out: string[], forceValidate = false): { ptr: string; size: string } {
+  private echoStaticParam(
+    name: string,
+    t: JethType,
+    ctx: LowerCtx,
+    out: string[],
+    forceValidate = false,
+  ): { ptr: string; size: string } {
     const ph = ctx.cdParamHead.get(name);
     if (!ph) throw new UnsupportedError(`unbound echo param ${name}`);
     const leaf = (ty: JethType): JethType => (ty.kind === 'array' && ty.length !== undefined ? leaf(ty.element) : ty);
@@ -4588,7 +4861,14 @@ ${indent(runtime, 6)}
    *  oversized payloads Panic(0x41) then EMPTY-revert on calldata overrun. `validate`:
    *  value leaves revert on dirty bits (nested/struct decode) vs clean (flat value
    *  array). */
-  private abiEncFromCd(t: JethType, cdPtr: string, dst: string, validate: boolean, out: string[], capEmptyRevert = false): string {
+  private abiEncFromCd(
+    t: JethType,
+    cdPtr: string,
+    dst: string,
+    validate: boolean,
+    out: string[],
+    capEmptyRevert = false,
+  ): string {
     // In a DECODE/re-encode context (abi.encode/encodeWith*/emit/error materialization, reached via
     // echoParam's forceValidate), an oversized length or memory-overflow cap is an ABI-DECODE FAILURE ->
     // revert(0, 0) (empty), matching solc. In the plain return-echo copy context it Panics 0x41 (also
@@ -4608,7 +4888,9 @@ ${indent(runtime, 6)}
         // solc reverts Panic(0x21) on an out-of-range element during the copy. (The empty-revert
         // sites are the ABI-decode boundary, lazy element access, and event/error materialization;
         // a whole-aggregate echo to a memory return Panics instead.)
-        out.push(`if iszero(lt(${w}, ${(t as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`);
+        out.push(
+          `if iszero(lt(${w}, ${(t as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`,
+        );
         out.push(`mstore(${dst}, ${w})`);
       } else {
         out.push(`mstore(${dst}, ${this.cleanCalldataElem(t, w)})`);
@@ -4629,7 +4911,9 @@ ${indent(runtime, 6)}
         } else if ((leaf.type as { enumMembers?: string[] }).enumMembers) {
           // enum leaf in a whole-aggregate echo: Panic(0x21) on out-of-range (see the value-leaf
           // case above), not a silent mask.
-          out.push(`if iszero(lt(${w}, ${(leaf.type as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`);
+          out.push(
+            `if iszero(lt(${w}, ${(leaf.type as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`,
+          );
           out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${w})`);
         } else {
           out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${this.cleanCalldataElem(leaf.type, w)})`);
@@ -5021,7 +5305,13 @@ ${indent(runtime, 6)}
    *  2^64 cap + readability check), then re-encode it into a fresh ABI return blob via the
    *  recursive calldata codec (a static struct flat; a dynamic struct with the [0x20]
    *  wrapper). The calldata twin of returnStorageValue/structArrayElem. */
-  private returnCdArrayElem(arr: ArrayExpr, index: Expr, t: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+  private returnCdArrayElem(
+    arr: ArrayExpr,
+    index: Expr,
+    t: JethType,
+    ctx: LowerCtx,
+    out: string[],
+  ): { ptr: string; size: string } {
     const ref = this.lowerArrayRef(arr, ctx, out);
     if (ref.src !== 'calldata') throw new UnsupportedError('returnCdArrayElem requires a calldata array');
     const i = this.fresh();
@@ -5102,7 +5392,9 @@ ${indent(runtime, 6)}
           inner.push(`let ${eb} := add(${dataSlot}, mul(${i}, ${storageSlotCount(elem)}))`);
           for (const leaf of structStorageLeaves(elem)) {
             const ls = leaf.storageSlot === 0 ? eb : `add(${eb}, ${leaf.storageSlot})`;
-            inner.push(`mstore(add(add(${dstHead}, mul(${i}, ${es})), ${leaf.abiWord * 32}), ${this.loadState(leaf.type, ls, leaf.storageOffset)})`);
+            inner.push(
+              `mstore(add(add(${dstHead}, mul(${i}, ${es})), ${leaf.abiWord * 32}), ${this.loadState(leaf.type, ls, leaf.storageOffset)})`,
+            );
           }
         }
         for (const l of inner) out.push('  ' + l);
@@ -5172,7 +5464,14 @@ ${indent(runtime, 6)}
   /** Build an abi.encode* bytes value in memory ([len][data]) and return its pointer. With a
    *  `selector` (encodeWithSelector) or `sig` (encodeWithSignature: bytes4(keccak256(sig))), a 4-byte
    *  selector is prepended to the standard encoding of the remaining args. */
-  private buildAbiEncode(args: Expr[], packed: boolean, ctx: LowerCtx, out: string[], selector?: Expr, sig?: Expr): string {
+  private buildAbiEncode(
+    args: Expr[],
+    packed: boolean,
+    ctx: LowerCtx,
+    out: string[],
+    selector?: Expr,
+    sig?: Expr,
+  ): string {
     if (selector || sig) {
       let pfx: string;
       if (selector) {
@@ -5222,7 +5521,8 @@ ${indent(runtime, 6)}
     const parts: Part[] = args.map((a) => {
       const t = a.type;
       if (isBytesLike(t)) return this.toMemory(this.lowerDynamic(a, ctx, out), out);
-      if (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) return { inline: true, mp: this.aggToMemPtr(a, ctx, out), words: abiHeadWords(t) };
+      if (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array'))
+        return { inline: true, mp: this.aggToMemPtr(a, ctx, out), words: abiHeadWords(t) };
       if (t.kind === 'struct') return this.encodeDynStructToBlob(a, ctx, out); // dynamic struct -> offset + head/tail tail
       if (t.kind === 'array') return this.materializeArrayArg(a, ctx, out); // dynamic array (value or nested) -> {mp, size} tail
       return { word: this.lowerExpr(a, ctx, out) };
@@ -5525,7 +5825,15 @@ ${indent(runtime, 6)}
    *  (extCall expr) and raw (tryCall destructure) forms; the data blob is fully materialized BEFORE
    *  the call so it cannot alias the returndata buffer. */
   private emitExtCall(
-    e: { op: 'call' | 'staticcall'; addr: Expr; data: Expr; value?: Expr; gas?: Expr; bubble?: boolean; codeGuard?: boolean },
+    e: {
+      op: 'call' | 'staticcall';
+      addr: Expr;
+      data: Expr;
+      value?: Expr;
+      gas?: Expr;
+      bubble?: boolean;
+      codeGuard?: boolean;
+    },
     ctx: LowerCtx,
     out: string[],
   ): { okReg: string; dataPtr: string; addrReg: string } {
@@ -5578,7 +5886,13 @@ ${indent(runtime, 6)}
   /** Lower the ordered success checks of a `.call/.staticcall`. Each condition is evaluated with
    *  `this.ok` (the success bool) and `this.data` (the returndata blob) bound; the FIRST condition
    *  that is false reverts with its reason (the others are not evaluated past the revert). */
-  private lowerSuccessChecks(checks: SuccessCheck[], okReg: string, dataPtr: string, ctx: LowerCtx, out: string[]): void {
+  private lowerSuccessChecks(
+    checks: SuccessCheck[],
+    okReg: string,
+    dataPtr: string,
+    ctx: LowerCtx,
+    out: string[],
+  ): void {
     if (checks.length === 0) return;
     this.ctxPush(ctx);
     this.ctxDeclare(ctx, EXT_CALL_OK_BINDING, okReg);
@@ -5641,10 +5955,13 @@ ${indent(runtime, 6)}
   private alloc(): string {
     const name = 'jeth_alloc';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(size) -> ptr {
+      this.helpers.set(
+        name,
+        `function ${name}(size) -> ptr {
   ptr := mload(0x40)
   mstore(0x40, add(ptr, and(add(size, 0x1f), not(0x1f))))
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5666,7 +5983,9 @@ ${indent(runtime, 6)}
   private calldataArray(): string {
     const name = 'jeth_calldata_array';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(off, stride) -> dataOff, len {
+      this.helpers.set(
+        name,
+        `function ${name}(off, stride) -> dataOff, len {
   if gt(off, 0xffffffffffffffff) { revert(0, 0) }
   let p := add(4, off)
   if iszero(slt(add(p, 0x1f), calldatasize())) { revert(0, 0) }
@@ -5674,7 +5993,8 @@ ${indent(runtime, 6)}
   if gt(len, 0xffffffffffffffff) { revert(0, 0) }
   dataOff := add(p, 0x20)
   if gt(add(dataOff, mul(len, stride)), calldatasize()) { revert(0, 0) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5687,7 +6007,9 @@ ${indent(runtime, 6)}
   private calldataArrayAt(): string {
     const name = 'jeth_calldata_array_at';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(base, offPtr, stride) -> dataOff, len {
+      this.helpers.set(
+        name,
+        `function ${name}(base, offPtr, stride) -> dataOff, len {
   let off := calldataload(offPtr)
   if gt(off, 0xffffffffffffffff) { revert(0, 0) }
   let p := add(base, off)
@@ -5696,7 +6018,8 @@ ${indent(runtime, 6)}
   if gt(len, 0xffffffffffffffff) { revert(0, 0) }
   dataOff := add(p, 0x20)
   if gt(add(dataOff, mul(len, stride)), calldatasize()) { revert(0, 0) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5711,7 +6034,9 @@ ${indent(runtime, 6)}
   private calldataDynArray(): string {
     const name = 'jeth_calldata_dyn_array';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(off) -> tableStart, len {
+      this.helpers.set(
+        name,
+        `function ${name}(off) -> tableStart, len {
   if gt(off, 0xffffffffffffffff) { revert(0, 0) }
   let p := add(4, off)
   if iszero(slt(add(p, 0x1f), calldatasize())) { revert(0, 0) }
@@ -5719,7 +6044,8 @@ ${indent(runtime, 6)}
   if gt(len, 0xffffffffffffffff) { revert(0, 0) }
   tableStart := add(p, 0x20)
   if gt(add(tableStart, mul(len, 0x20)), calldatasize()) { revert(0, 0) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5742,7 +6068,9 @@ ${indent(runtime, 6)}
   private calldataDynElem(): string {
     const name = 'jeth_calldata_dyn_elem';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(tableStart, i) -> dataPtr, len {
+      this.helpers.set(
+        name,
+        `function ${name}(tableStart, i) -> dataPtr, len {
   let offPtr := add(tableStart, mul(i, 0x20))
   let elOff := calldataload(offPtr)
   if iszero(slt(elOff, sub(sub(calldatasize(), tableStart), 0x1f))) { revert(0, 0) }
@@ -5751,7 +6079,8 @@ ${indent(runtime, 6)}
   if gt(len, 0xffffffffffffffff) { revert(0, 0) }
   if sgt(lenPtr, sub(calldatasize(), add(len, 0x20))) { revert(0, 0) }
   dataPtr := add(lenPtr, 0x20)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5767,7 +6096,9 @@ ${indent(runtime, 6)}
   private calldataDynElemEcho(): string {
     const name = 'jeth_calldata_dyn_elem_echo';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(tableStart, i) -> dataPtr, len {
+      this.helpers.set(
+        name,
+        `function ${name}(tableStart, i) -> dataPtr, len {
   let offPtr := add(tableStart, mul(i, 0x20))
   let elOff := calldataload(offPtr)
   if gt(elOff, 0xffffffffffffffff) { revert(0, 0) }
@@ -5775,7 +6106,8 @@ ${indent(runtime, 6)}
   if gt(add(lenPtr, 0x20), calldatasize()) { revert(0, 0) }
   len := calldataload(lenPtr)
   dataPtr := add(lenPtr, 0x20)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5796,7 +6128,9 @@ ${indent(runtime, 6)}
   private calldataInnerArray(): string {
     const name = 'jeth_calldata_inner_array';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(base, i, stride) -> dataOff, innerLen {
+      this.helpers.set(
+        name,
+        `function ${name}(base, i, stride) -> dataOff, innerLen {
   let offPtr := add(base, mul(i, 0x20))
   let innerOff := calldataload(offPtr)
   if iszero(slt(innerOff, sub(sub(calldatasize(), base), 0x1f))) { revert(0, 0) }
@@ -5805,7 +6139,8 @@ ${indent(runtime, 6)}
   if gt(innerLen, 0xffffffffffffffff) { revert(0, 0) }
   if sgt(lenPtr, sub(calldatasize(), add(mul(innerLen, stride), 0x20))) { revert(0, 0) }
   dataOff := add(lenPtr, 0x20)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5817,11 +6152,14 @@ ${indent(runtime, 6)}
   private calldataNestedOff(): string {
     const name = 'jeth_calldata_nested_off';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(base, idx) -> elemData {
+      this.helpers.set(
+        name,
+        `function ${name}(base, idx) -> elemData {
   let off := calldataload(add(base, mul(idx, 0x20)))
   if iszero(slt(off, sub(sub(calldatasize(), base), 0x1f))) { revert(0, 0) }
   elemData := add(base, off)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5835,7 +6173,9 @@ ${indent(runtime, 6)}
   private calldataInnerArrayEcho(): string {
     const name = 'jeth_calldata_inner_array_echo';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(base, i) -> dataOff, innerLen {
+      this.helpers.set(
+        name,
+        `function ${name}(base, i) -> dataOff, innerLen {
   let offPtr := add(base, mul(i, 0x20))
   let innerOff := calldataload(offPtr)
   if gt(innerOff, 0xffffffffffffffff) { revert(0, 0) }
@@ -5843,7 +6183,8 @@ ${indent(runtime, 6)}
   if gt(add(lenPtr, 0x20), calldatasize()) { revert(0, 0) }
   innerLen := calldataload(lenPtr)
   dataOff := add(lenPtr, 0x20)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5856,11 +6197,14 @@ ${indent(runtime, 6)}
   private calldataTuple(): string {
     const name = 'jeth_calldata_tuple';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(off, headSize) -> tupleStart {
+      this.helpers.set(
+        name,
+        `function ${name}(off, headSize) -> tupleStart {
   if gt(off, 0xffffffffffffffff) { revert(0, 0) }
   tupleStart := add(4, off)
   if gt(add(tupleStart, headSize), calldatasize()) { revert(0, 0) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5877,13 +6221,16 @@ ${indent(runtime, 6)}
   private calldataTupleAt(): string {
     const name = 'jeth_calldata_tuple_at';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(base, offPtr, headSize) -> tupleStart {
+      this.helpers.set(
+        name,
+        `function ${name}(base, offPtr, headSize) -> tupleStart {
   if gt(add(offPtr, 0x20), calldatasize()) { revert(0, 0) }
   let off := calldataload(offPtr)
   if gt(off, 0xffffffffffffffff) { revert(0, 0) }
   tupleStart := add(base, off)
   if gt(add(tupleStart, headSize), calldatasize()) { revert(0, 0) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5891,14 +6238,17 @@ ${indent(runtime, 6)}
   private calldataDyn(): string {
     const name = 'jeth_calldata_dyn';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(off) -> dataPtr, len {
+      this.helpers.set(
+        name,
+        `function ${name}(off) -> dataPtr, len {
   let argsLen := sub(calldatasize(), 4)
   if or(lt(argsLen, 0x20), gt(off, sub(argsLen, 0x20))) { revert(0, 0) }
   let lp := add(4, off)
   len := calldataload(lp)
   if gt(len, sub(sub(argsLen, off), 0x20)) { revert(0, 0) }
   dataPtr := add(lp, 0x20)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5918,7 +6268,9 @@ ${indent(runtime, 6)}
   private calldataDynAt(): string {
     const name = 'jeth_calldata_dyn_at';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(base, offPtr) -> dataPtr, len {
+      this.helpers.set(
+        name,
+        `function ${name}(base, offPtr) -> dataPtr, len {
   let off := calldataload(offPtr)
   if iszero(slt(off, sub(sub(calldatasize(), base), 0x1f))) { revert(0, 0) }
   let lp := add(base, off)
@@ -5926,7 +6278,8 @@ ${indent(runtime, 6)}
   if gt(len, 0xffffffffffffffff) { revert(0, 0) }
   if sgt(lp, sub(calldatasize(), add(len, 0x20))) { revert(0, 0) }
   dataPtr := add(lp, 0x20)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5940,14 +6293,17 @@ ${indent(runtime, 6)}
   private calldataDynAtEcho(): string {
     const name = 'jeth_calldata_dyn_at_echo';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(base, offPtr) -> dataPtr, len {
+      this.helpers.set(
+        name,
+        `function ${name}(base, offPtr) -> dataPtr, len {
   let off := calldataload(offPtr)
   if gt(off, 0xffffffffffffffff) { revert(0, 0) }
   let lp := add(base, off)
   if gt(add(lp, 0x20), calldatasize()) { revert(0, 0) }
   len := calldataload(lp)
   dataPtr := add(lp, 0x20)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5955,12 +6311,15 @@ ${indent(runtime, 6)}
   private strLen(): string {
     const name = 'jeth_str_len';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(slot) -> l {
+      this.helpers.set(
+        name,
+        `function ${name}(slot) -> l {
   let w := sload(slot)
   switch and(w, 1)
   case 0 { l := shr(1, and(w, 0xff)) }
   default { l := shr(1, sub(w, 1)) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -5971,7 +6330,9 @@ ${indent(runtime, 6)}
   private copyStrToMem(): string {
     const name = 'jeth_copy_str_to_mem';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(slot, dst) -> size {
+      this.helpers.set(
+        name,
+        `function ${name}(slot, dst) -> size {
   let w := sload(slot)
   let len
   switch and(w, 1)
@@ -5991,7 +6352,8 @@ ${indent(runtime, 6)}
     }
   }
   size := add(0x20, and(add(len, 0x1f), not(0x1f)))
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6000,7 +6362,9 @@ ${indent(runtime, 6)}
     const name = 'jeth_load_str';
     if (!this.helpers.has(name)) {
       this.alloc();
-      this.helpers.set(name, `function ${name}(slot) -> mp, len {
+      this.helpers.set(
+        name,
+        `function ${name}(slot) -> mp, len {
   let w := sload(slot)
   switch and(w, 1)
   case 0 {
@@ -6020,7 +6384,8 @@ ${indent(runtime, 6)}
       mstore(add(add(mp, 0x20), mul(i, 0x20)), sload(add(base, i)))
     }
   }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6028,7 +6393,9 @@ ${indent(runtime, 6)}
   private strByteAt(): string {
     const name = 'jeth_str_byte_at';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(slot, i) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(slot, i) -> r {
   let w := sload(slot)
   switch and(w, 1)
   case 0 { r := and(shl(mul(i, 8), w), ${TOP_BYTE}) }
@@ -6037,7 +6404,8 @@ ${indent(runtime, 6)}
     let base := keccak256(0x00, 0x20)
     r := and(shl(mul(mod(i, 0x20), 8), sload(add(base, div(i, 0x20)))), ${TOP_BYTE})
   }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6048,7 +6416,9 @@ ${indent(runtime, 6)}
   private strByteSet(): string {
     const name = 'jeth_str_byte_set';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(slot, i, b) {
+      this.helpers.set(
+        name,
+        `function ${name}(slot, i, b) {
   let w := sload(slot)
   switch and(w, 1)
   case 0 {
@@ -6063,7 +6433,8 @@ ${indent(runtime, 6)}
     let sh := mul(mod(i, 0x20), 8)
     sstore(ds, or(and(sload(ds), not(shr(sh, ${TOP_BYTE}))), shr(sh, and(b, ${TOP_BYTE}))))
   }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6074,7 +6445,9 @@ ${indent(runtime, 6)}
   private strPush(): string {
     const name = 'jeth_str_push';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(slot, b) {
+      this.helpers.set(
+        name,
+        `function ${name}(slot, b) {
   let w := sload(slot)
   switch and(w, 1)
   case 0 {
@@ -6098,7 +6471,8 @@ ${indent(runtime, 6)}
     sstore(ds, or(and(sload(ds), not(shr(sh, ${TOP_BYTE}))), shr(sh, and(b, ${TOP_BYTE}))))
     sstore(slot, add(w, 2))
   }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6109,7 +6483,9 @@ ${indent(runtime, 6)}
   private strPop(): string {
     const name = 'jeth_str_pop';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(slot) {
+      this.helpers.set(
+        name,
+        `function ${name}(slot) {
   let w := sload(slot)
   switch and(w, 1)
   case 0 {
@@ -6136,7 +6512,8 @@ ${indent(runtime, 6)}
       sstore(slot, sub(w, 2))
     }
   }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6146,7 +6523,9 @@ ${indent(runtime, 6)}
   private clearStr(): string {
     const name = 'jeth_clear_str';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(slot) {
+      this.helpers.set(
+        name,
+        `function ${name}(slot) {
   let oldw := sload(slot)
   sstore(slot, 0)
   if and(oldw, 1) {
@@ -6156,7 +6535,8 @@ ${indent(runtime, 6)}
     let base := keccak256(0x00, 0x20)
     for { let i := 0 } lt(i, oldWords) { i := add(i, 1) } { sstore(add(base, i), 0) }
   }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6164,7 +6544,9 @@ ${indent(runtime, 6)}
   private storeStrMem(): string {
     const name = 'jeth_store_str_mem';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(slot, mp, len) {
+      this.helpers.set(
+        name,
+        `function ${name}(slot, mp, len) {
   let oldw := sload(slot)
   let oldLen := 0
   if and(oldw, 1) { oldLen := shr(1, sub(oldw, 1)) }
@@ -6192,7 +6574,8 @@ ${indent(runtime, 6)}
     }
     for { let i := nwords } lt(i, oldWords) { i := add(i, 1) } { sstore(add(base, i), 0) }
   }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6342,20 +6725,34 @@ ${indent(runtime, 6)}
 
   private lowerGlobal(e: Expr & { kind: 'global' }): string {
     switch (e.op) {
-      case 'caller': return 'caller()';
-      case 'callvalue': return 'callvalue()';
-      case 'origin': return 'origin()';
-      case 'gasprice': return 'gasprice()';
-      case 'address': return 'address()';
-      case 'timestamp': return 'timestamp()';
-      case 'number': return 'number()';
-      case 'chainid': return 'chainid()';
-      case 'coinbase': return 'coinbase()';
-      case 'basefee': return 'basefee()';
-      case 'gaslimit': return 'gaslimit()';
-      case 'prevrandao': return 'prevrandao()';
-      case 'blobbasefee': return 'blobbasefee()';
-      case 'gas': return 'gas()';
+      case 'caller':
+        return 'caller()';
+      case 'callvalue':
+        return 'callvalue()';
+      case 'origin':
+        return 'origin()';
+      case 'gasprice':
+        return 'gasprice()';
+      case 'address':
+        return 'address()';
+      case 'timestamp':
+        return 'timestamp()';
+      case 'number':
+        return 'number()';
+      case 'chainid':
+        return 'chainid()';
+      case 'coinbase':
+        return 'coinbase()';
+      case 'basefee':
+        return 'basefee()';
+      case 'gaslimit':
+        return 'gaslimit()';
+      case 'prevrandao':
+        return 'prevrandao()';
+      case 'blobbasefee':
+        return 'blobbasefee()';
+      case 'gas':
+        return 'gas()';
       case 'msgsig':
         // bytes4 left-aligned: high 4 bytes = selector. Matches solc.
         return 'and(calldataload(0), 0xffffffff00000000000000000000000000000000000000000000000000000000)';
@@ -6411,7 +6808,8 @@ ${indent(runtime, 6)}
     // uintN <-> bytesM of equal byte size: uint is right-aligned (low M bytes), bytesM is
     // left-aligned (high M bytes); shift by (32 - M) bytes between the two layouts.
     if (from.kind === 'uint' && to.kind === 'bytesN') return to.size === 32 ? v : `shl(${(32 - to.size) * 8}, ${v})`;
-    if (from.kind === 'bytesN' && to.kind === 'uint') return from.size === 32 ? v : `shr(${(32 - from.size) * 8}, ${v})`;
+    if (from.kind === 'bytesN' && to.kind === 'uint')
+      return from.size === 32 ? v : `shr(${(32 - from.size) * 8}, ${v})`;
     throw new UnsupportedError(`cast ${from.kind} -> ${to.kind} is not supported`);
   }
 
@@ -6525,7 +6923,8 @@ ${indent(runtime, 6)}
         if (opType.kind === 'int') return `sar(${r}, ${l})`;
         // bytesN >> n: shr leaks data bits into the low padding region; mask back to the high
         // `size` bytes so the result stays a canonical left-aligned bytesN (byte-identical to solc).
-        if (opType.kind === 'bytesN' && opType.size < 32) return `and(shr(${r}, ${l}), ${bytesNHighMaskHex(opType.size)})`;
+        if (opType.kind === 'bytesN' && opType.size < 32)
+          return `and(shr(${r}, ${l}), ${bytesNHighMaskHex(opType.size)})`;
         return `shr(${r}, ${l})`;
       case '<':
         return opType.kind === 'int' ? `slt(${l}, ${r})` : `lt(${l}, ${r})`;
@@ -6547,20 +6946,30 @@ ${indent(runtime, 6)}
   private checkedArith(op: 'add' | 'sub' | 'mul' | 'div' | 'mod', t: JethType): string {
     if (t.kind === 'uint') {
       switch (op) {
-        case 'add': return this.checkedAddUint(t.bits);
-        case 'sub': return this.checkedSubUint(t.bits);
-        case 'mul': return this.checkedMulUint(t.bits);
-        case 'div': return this.checkedDivUint();
-        case 'mod': return this.checkedModUint();
+        case 'add':
+          return this.checkedAddUint(t.bits);
+        case 'sub':
+          return this.checkedSubUint(t.bits);
+        case 'mul':
+          return this.checkedMulUint(t.bits);
+        case 'div':
+          return this.checkedDivUint();
+        case 'mod':
+          return this.checkedModUint();
       }
     }
     if (t.kind === 'int') {
       switch (op) {
-        case 'add': return this.checkedAddInt(t.bits);
-        case 'sub': return this.checkedSubInt(t.bits);
-        case 'mul': return this.checkedMulInt(t.bits);
-        case 'div': return this.checkedDivInt(t.bits);
-        case 'mod': return this.checkedModInt();
+        case 'add':
+          return this.checkedAddInt(t.bits);
+        case 'sub':
+          return this.checkedSubInt(t.bits);
+        case 'mul':
+          return this.checkedMulInt(t.bits);
+        case 'div':
+          return this.checkedDivInt(t.bits);
+        case 'mod':
+          return this.checkedModInt();
       }
     }
     throw new UnsupportedError(`arithmetic on type '${t.kind}' is not supported`);
@@ -6582,13 +6991,16 @@ ${indent(runtime, 6)}
     if (!this.helpers.has(name)) {
       const cmul = t.kind === 'int' ? this.checkedMulInt(256) : this.checkedMulUint(256);
       let rangeCheck = '';
-      if (t.kind === 'uint' && t.bits < 256) rangeCheck = `if gt(power, ${uintMaxHex(t.bits)}) { ${this.panic()}(0x11) }`;
+      if (t.kind === 'uint' && t.bits < 256)
+        rangeCheck = `if gt(power, ${uintMaxHex(t.bits)}) { ${this.panic()}(0x11) }`;
       if (t.kind === 'int' && t.bits < 256) {
         const max = toWord((1n << BigInt(t.bits - 1)) - 1n);
         const min = toWord(-(1n << BigInt(t.bits - 1)));
         rangeCheck = `if or(sgt(power, ${max}), slt(power, ${min})) { ${this.panic()}(0x11) }`;
       }
-      this.helpers.set(name, `function ${name}(base, exponent) -> power {
+      this.helpers.set(
+        name,
+        `function ${name}(base, exponent) -> power {
   power := 1
   if exponent {
     for { } gt(exponent, 1) { } {
@@ -6599,7 +7011,8 @@ ${indent(runtime, 6)}
     power := ${cmul}(power, base)
   }
   ${rangeCheck}
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6609,7 +7022,10 @@ ${indent(runtime, 6)}
   private uncheckedDivInt(): string {
     const name = 'jeth_unchecked_div_int';
     if (!this.helpers.has(name)) {
-      this.helpers.set(name, `function ${name}(a, b) -> r {\n  if iszero(b) { ${this.panic()}(0x12) }\n  r := sdiv(a, b)\n}`);
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {\n  if iszero(b) { ${this.panic()}(0x12) }\n  r := sdiv(a, b)\n}`,
+      );
     }
     return name;
   }
@@ -6631,10 +7047,13 @@ ${indent(runtime, 6)}
     if (!this.helpers.has(name)) {
       this.panic();
       const ov = bits === 256 ? `lt(r, a)` : `gt(r, ${uintMaxHex(bits)})`;
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   r := add(a, b)
   if ${ov} { panic(0x11) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6642,10 +7061,13 @@ ${indent(runtime, 6)}
     const name = `checked_sub_uint${bits}`;
     if (!this.helpers.has(name)) {
       this.panic();
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   if gt(b, a) { panic(0x11) }
   r := sub(a, b)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6654,10 +7076,13 @@ ${indent(runtime, 6)}
     if (!this.helpers.has(name)) {
       this.panic();
       const widthChk = bits === 256 ? '0' : `gt(r, ${uintMaxHex(bits)})`;
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   r := mul(a, b)
   if or(and(iszero(iszero(a)), iszero(eq(div(r, a), b))), ${widthChk}) { panic(0x11) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6665,10 +7090,13 @@ ${indent(runtime, 6)}
     const name = `checked_div_uint`;
     if (!this.helpers.has(name)) {
       this.panic();
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   if iszero(b) { panic(0x12) }
   r := div(a, b)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6676,10 +7104,13 @@ ${indent(runtime, 6)}
     const name = `checked_mod_uint`;
     if (!this.helpers.has(name)) {
       this.panic();
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   if iszero(b) { panic(0x12) }
   r := mod(a, b)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6693,10 +7124,13 @@ ${indent(runtime, 6)}
         bits === 256
           ? `or(and(iszero(slt(b, 0)), slt(r, a)), and(slt(b, 0), sgt(r, a)))`
           : `or(sgt(r, ${toWord(max)}), slt(r, ${toWord(min)}))`;
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   r := add(a, b)
   if ${chk} { panic(0x11) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6709,10 +7143,13 @@ ${indent(runtime, 6)}
         bits === 256
           ? `or(and(iszero(slt(b, 0)), sgt(r, a)), and(slt(b, 0), slt(r, a)))`
           : `or(sgt(r, ${toWord(max)}), slt(r, ${toWord(min)}))`;
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   r := sub(a, b)
   if ${chk} { panic(0x11) }
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6723,13 +7160,16 @@ ${indent(runtime, 6)}
       const { min, max } = intRange({ kind: 'int', bits });
       const widthChk = bits === 256 ? '' : ` if or(sgt(r, ${toWord(max)}), slt(r, ${toWord(min)})) { panic(0x11) }`;
       const minHex = toWord(min);
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   r := mul(a, b)
   if iszero(iszero(a)) {
     if iszero(eq(sdiv(r, a), b)) { panic(0x11) }
   }
   if and(eq(a, ${toWord(-1n)}), eq(b, ${minHex})) { panic(0x11) }${widthChk}
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6738,11 +7178,14 @@ ${indent(runtime, 6)}
     if (!this.helpers.has(name)) {
       this.panic();
       const { min } = intRange({ kind: 'int', bits });
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   if iszero(b) { panic(0x12) }
   if and(eq(a, ${toWord(min)}), eq(b, ${toWord(-1n)})) { panic(0x11) }
   r := sdiv(a, b)
-}`);
+}`,
+      );
     }
     return name;
   }
@@ -6750,10 +7193,13 @@ ${indent(runtime, 6)}
     const name = `checked_mod_int`;
     if (!this.helpers.has(name)) {
       this.panic();
-      this.helpers.set(name, `function ${name}(a, b) -> r {
+      this.helpers.set(
+        name,
+        `function ${name}(a, b) -> r {
   if iszero(b) { panic(0x12) }
   r := smod(a, b)
-}`);
+}`,
+      );
     }
     return name;
   }

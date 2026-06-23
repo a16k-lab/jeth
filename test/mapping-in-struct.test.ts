@@ -13,7 +13,8 @@ import { compileSolidity, readSlot } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
-const mapSlot = (key: bigint, slot: bigint) => BigInt('0x' + toHex(keccak(hexToBytes(('0x' + pad(key) + pad(slot)) as `0x${string}`))));
+const mapSlot = (key: bigint, slot: bigint) =>
+  BigInt('0x' + toHex(keccak(hexToBytes(('0x' + pad(key) + pad(slot)) as `0x${string}`))));
 
 const JETH = `@struct class Acct { head: u256; bal: mapping<address, u256>; tail: u64; }
 @struct class Pk { a: u64; m: mapping<u256, u256>; b: u64; }
@@ -84,9 +85,14 @@ contract C {
 
 describe('mapping as a struct field (G7) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
@@ -96,11 +102,14 @@ describe('mapping as a struct field (G7) vs Solidity', () => {
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
-  const A1 = 0x1111n, A2 = 0xbeefn;
+  const A1 = 0x1111n,
+    A2 = 0xbeefn;
   // Layout: s @ slots 0(head),1(bal base),2(tail);  mp @ slot 3;  pk @ 4(a),5(m base),6(b);  tw @ 7(x),8(m1),9(m2),10(y)
   it('struct with a mapping field: per-key set/get + raw slots', async () => {
     await send(encodeCall(sel('setHead(uint256)'), [12345n]));
@@ -163,16 +172,28 @@ describe('mapping as a struct field (G7) vs Solidity', () => {
 
 describe('mapping-in-struct gate parity (storage-only)', () => {
   function jethCodes(src: string): string[] | null {
-    try { compile(src, { fileName: 'C.jeth' }); return null; }
-    catch (e) { if (e instanceof CompileError) return e.diagnostics.filter((d) => d.severity === 'error').map((d) => d.code); throw e; }
+    try {
+      compile(src, { fileName: 'C.jeth' });
+      return null;
+    } catch (e) {
+      if (e instanceof CompileError) return e.diagnostics.filter((d) => d.severity === 'error').map((d) => d.code);
+      throw e;
+    }
   }
   function solcRejects(src: string): boolean {
-    try { compileSolidity('// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n' + src, 'C'); return false; } catch { return true; }
+    try {
+      compileSolidity('// SPDX-License-Identifier: MIT\npragma solidity ^0.8.20;\n' + src, 'C');
+      return false;
+    } catch {
+      return true;
+    }
   }
   const DECL = `@struct class S { head: u256; bal: mapping<address, u256>; }`;
   const SOLDECL = `contract C { struct S { uint256 head; mapping(address=>uint256) bal; }`;
   it('cannot RETURN a struct-with-mapping (JETH247, like solc)', () => {
-    expect(jethCodes(`${DECL} @contract class C { @state s: S; @view f(): S { return this.s; } }`)).toContain('JETH247');
+    expect(jethCodes(`${DECL} @contract class C { @state s: S; @view f(): S { return this.s; } }`)).toContain(
+      'JETH247',
+    );
     expect(solcRejects(`${SOLDECL} S s; function f() external view returns (S memory){ return s; } }`)).toBe(true);
   });
   it('cannot take a struct-with-mapping PARAM (JETH247, like solc)', () => {
@@ -180,11 +201,15 @@ describe('mapping-in-struct gate parity (storage-only)', () => {
     expect(solcRejects(`${SOLDECL} function f(S memory p) external {} }`)).toBe(true);
   });
   it('cannot CONSTRUCT a struct-with-mapping (JETH247, like solc)', () => {
-    expect(jethCodes(`${DECL} @contract class C { @state s: S; @external f(): void { let x: S = S(1n); } }`)).not.toBeNull();
+    expect(
+      jethCodes(`${DECL} @contract class C { @state s: S; @external f(): void { let x: S = S(1n); } }`),
+    ).not.toBeNull();
     expect(solcRejects(`${SOLDECL} function f() external { S memory x = S(1); } }`)).toBe(true);
   });
   it('cannot whole-COPY a struct-with-mapping (JETH247, like solc)', () => {
-    expect(jethCodes(`${DECL} @contract class C { @state s: S; @state t: S; @external f(): void { this.s = this.t; } }`)).toContain('JETH247');
+    expect(
+      jethCodes(`${DECL} @contract class C { @state s: S; @state t: S; @external f(): void { this.s = this.t; } }`),
+    ).toContain('JETH247');
     expect(solcRejects(`${SOLDECL} S s; S t; function f() external { s = t; } }`)).toBe(true);
   });
 });

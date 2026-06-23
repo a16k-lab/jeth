@@ -12,13 +12,28 @@ const sel = (s: string) => functionSelector(s);
 const W = (n: bigint) => pad32(n);
 
 function jethAccepts(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return true; } catch { return false; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 function jethRejects(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return false; } catch { return true; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return false;
+  } catch {
+    return true;
+  }
 }
 function solcRejects(src: string): boolean {
-  try { compileSolidity(SPDX + src, 'C'); return false; } catch { return true; }
+  try {
+    compileSolidity(SPDX + src, 'C');
+    return false;
+  } catch {
+    return true;
+  }
 }
 async function rt(jeth: string, sol: string, calls: { sig: string; args?: string }[]) {
   const jb = compile(jeth, { fileName: 'C.jeth' });
@@ -48,22 +63,37 @@ describe('sweep soundness fixes (miscompiles + over-acceptances)', () => {
 
   it('over-acceptances now rejected (match solc)', () => {
     // addmod/mulmod with a compile-time zero modulus
-    expect(jethRejects(`@contract class C { @external @pure f(a: u256, b: u256): u256 { return addmod(a, b, 0n); } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @external @pure f(a: u256, b: u256): u256 { return mulmod(a, b, 1n - 1n); } }`)).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @external @pure f(a: u256, b: u256): u256 { return addmod(a, b, 0n); } }`),
+    ).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @external @pure f(a: u256, b: u256): u256 { return mulmod(a, b, 1n - 1n); } }`),
+    ).toBe(true);
     // @internal/@payable
     expect(jethRejects(`@contract class C { @payable g(): void {} @external f(): void { this.g(); } }`)).toBe(true);
     // nested unchecked
-    expect(jethRejects(`@contract class C { @external @pure f(): u256 { let x: u256 = 0n; unchecked: { unchecked: { x = x + 1n; } } return x; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external @pure f(): u256 { let x: u256 = 0n; unchecked: { unchecked: { x = x + 1n; } } return x; } }`,
+      ),
+    ).toBe(true);
     // stray decorators on event / error param
-    expect(jethRejects(`@contract class C { @view @event E(a: u256); @external f(): void { emit(E(1n)); } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @error Bad(@indexed a: u256); @external f(): void { revert(Bad(1n)); } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @view @event E(a: u256); @external f(): void { emit(E(1n)); } }`)).toBe(
+      true,
+    );
+    expect(
+      jethRejects(`@contract class C { @error Bad(@indexed a: u256); @external f(): void { revert(Bad(1n)); } }`),
+    ).toBe(true);
   });
 
   it('non-zero runtime modulus still reverts Panic(0x12) byte-identical', async () => {
     await rt(
       `@contract class C { @external @pure f(a: u256, b: u256, m: u256): u256 { return addmod(a, b, m); } }`,
       `contract C { function f(uint256 a, uint256 b, uint256 m) external pure returns(uint256){ return addmod(a,b,m); } }`,
-      [{ sig: 'f(uint256,uint256,uint256)', args: W(10n) + W(20n) + W(0n) }, { sig: 'f(uint256,uint256,uint256)', args: W(10n) + W(20n) + W(7n) }],
+      [
+        { sig: 'f(uint256,uint256,uint256)', args: W(10n) + W(20n) + W(0n) },
+        { sig: 'f(uint256,uint256,uint256)', args: W(10n) + W(20n) + W(7n) },
+      ],
     );
   });
 });
@@ -157,7 +187,17 @@ describe('sweep @constant folder enhancements', () => {
         function flag2() external pure returns(bool){ return FLAG2; }
         function t() external pure returns(uint256){ return T; }
       }`,
-      [{ sig: 'b()' }, { sig: 'm()' }, { sig: 'h()' }, { sig: 'n()' }, { sig: 'mask()' }, { sig: 'neg()' }, { sig: 'flag()' }, { sig: 'flag2()' }, { sig: 't()' }],
+      [
+        { sig: 'b()' },
+        { sig: 'm()' },
+        { sig: 'h()' },
+        { sig: 'n()' },
+        { sig: 'mask()' },
+        { sig: 'neg()' },
+        { sig: 'flag()' },
+        { sig: 'flag2()' },
+        { sig: 't()' },
+      ],
     );
   });
 
@@ -259,7 +299,10 @@ describe('constant arithmetic accept/reject parity vs solc (already solc-accurat
 describe('@payable on internal/private/hidden is rejected (solc parity)', () => {
   // solc: "internal" and "private" functions cannot be payable. is an explicitly-internal fn.
   const reject: [string, string][] = [
-    ['@payable', `@contract class C { @payable v(): u256 { return msg.value; } @external @payable f(): u256 { return this.v(); } }`],
+    [
+      '@payable',
+      `@contract class C { @payable v(): u256 { return msg.value; } @external @payable f(): u256 { return this.v(); } }`,
+    ],
     ['@payable', `@contract class C { @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
     ['@payable', `@contract class C { @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
   ];
@@ -278,17 +321,27 @@ describe('fixed-array field of a memory struct local (p.a[i]) read/write vs solc
     await rt(
       `@struct class P { x: u256; a: Arr<u256,3>; y: u256; } @contract class C { @external @pure f(i: u256, v: u256): u256 { let p: P = P(7n, [10n, 20n, 30n], 9n); p.a[i] = v; return p.a[i] + p.x + p.y; } }`,
       `struct P { uint256 x; uint256[3] a; uint256 y; } contract C { function f(uint256 i, uint256 v) external pure returns(uint256){ P memory p = P(7, [uint256(10),20,30], 9); p.a[i] = v; return p.a[i] + p.x + p.y; } }`,
-      [{ sig: 'f(uint256,uint256)', args: W(1n) + W(99n) }, { sig: 'f(uint256,uint256)', args: W(0n) + W(5n) }, { sig: 'f(uint256,uint256)', args: W(3n) + W(1n) }],
+      [
+        { sig: 'f(uint256,uint256)', args: W(1n) + W(99n) },
+        { sig: 'f(uint256,uint256)', args: W(0n) + W(5n) },
+        { sig: 'f(uint256,uint256)', args: W(3n) + W(1n) },
+      ],
     );
     await rt(
       `@struct class P { a: Arr<u8,4>; n: u256; } @contract class C { @external @pure f(i: u256): u256 { let p: P = P([1n, 2n, 3n, 4n], 0n); p.a[i] = 200n; return u256(p.a[0n]) + u256(p.a[i]); } }`,
       `struct P { uint8[4] a; uint256 n; } contract C { function f(uint256 i) external pure returns(uint256){ P memory p = P([uint8(1),2,3,4], 0); p.a[i] = 200; return uint256(p.a[0]) + uint256(p.a[i]); } }`,
-      [{ sig: 'f(uint256)', args: W(2n) }, { sig: 'f(uint256)', args: W(0n) }],
+      [
+        { sig: 'f(uint256)', args: W(2n) },
+        { sig: 'f(uint256)', args: W(0n) },
+      ],
     );
     await rt(
       `@struct class I { a: Arr<u256,2>; } @struct class O { x: u256; inner: I; } @contract class C { @external @pure f(i: u256, v: u256): u256 { let o: O = O(5n, I([1n, 2n])); o.inner.a[i] = v; return o.inner.a[i] + o.x; } }`,
       `struct I { uint256[2] a; } struct O { uint256 x; I inner; } contract C { function f(uint256 i, uint256 v) external pure returns(uint256){ O memory o = O(5, I([uint256(1),2])); o.inner.a[i] = v; return o.inner.a[i] + o.x; } }`,
-      [{ sig: 'f(uint256,uint256)', args: W(1n) + W(77n) }, { sig: 'f(uint256,uint256)', args: W(0n) + W(8n) }],
+      [
+        { sig: 'f(uint256,uint256)', args: W(1n) + W(77n) },
+        { sig: 'f(uint256,uint256)', args: W(0n) + W(8n) },
+      ],
     );
   });
 });
@@ -298,12 +351,22 @@ describe('whole storage fixed-array copy via element/mapping/struct-field vs sol
     await rt(
       `@contract class C { @state a: Arr<u256,2>[]; @external seed(): void { this.a.push(); this.a.push(); this.a[0n][0n]=11n; this.a[0n][1n]=22n; this.a[1n][0n]=33n; } @external cp(): void { this.a[1n] = this.a[0n]; } @external @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`,
       `contract C { uint256[2][] a; function seed() external { a.push(); a.push(); a[0][0]=11; a[0][1]=22; a[1][0]=33; } function cp() external { a[1] = a[0]; } function g(uint256 i, uint256 j) external view returns(uint256){ return a[i][j]; } }`,
-      [{ sig: 'seed()' }, { sig: 'cp()' }, { sig: 'g(uint256,uint256)', args: W(1n) + W(0n) }, { sig: 'g(uint256,uint256)', args: W(1n) + W(1n) }],
+      [
+        { sig: 'seed()' },
+        { sig: 'cp()' },
+        { sig: 'g(uint256,uint256)', args: W(1n) + W(0n) },
+        { sig: 'g(uint256,uint256)', args: W(1n) + W(1n) },
+      ],
     );
     await rt(
       `@contract class C { @state m: mapping<u256,Arr<u256,2>>; @external seed(): void { this.m[0n][0n]=5n; this.m[0n][1n]=6n; } @external cp(): void { this.m[1n] = this.m[0n]; } @external @view g(k: u256, j: u256): u256 { return this.m[k][j]; } }`,
       `contract C { mapping(uint256=>uint256[2]) m; function seed() external { m[0][0]=5; m[0][1]=6; } function cp() external { m[1] = m[0]; } function g(uint256 k, uint256 j) external view returns(uint256){ return m[k][j]; } }`,
-      [{ sig: 'seed()' }, { sig: 'cp()' }, { sig: 'g(uint256,uint256)', args: W(1n) + W(0n) }, { sig: 'g(uint256,uint256)', args: W(1n) + W(1n) }],
+      [
+        { sig: 'seed()' },
+        { sig: 'cp()' },
+        { sig: 'g(uint256,uint256)', args: W(1n) + W(0n) },
+        { sig: 'g(uint256,uint256)', args: W(1n) + W(1n) },
+      ],
     );
     await rt(
       `@struct class S { x: u256; arr: Arr<u256,2>; } @contract class C { @state e: S; @state g: S; @external seed(): void { this.g.arr[0n]=11n; this.g.arr[1n]=22n; } @external cp(): void { this.e.arr = this.g.arr; } @external @view ge(j: u256): u256 { return this.e.arr[j]; } }`,
@@ -375,12 +438,23 @@ describe('storage bytes index write b[i] = x vs solc', () => {
     await rt(
       `@contract class C { @state b: bytes; @external init(v: bytes): void { this.b = v; } @external set(i: u256, x: bytes1): void { this.b[i] = x; } @external @view get(i: u256): bytes1 { return this.b[i]; } @external @view all(): bytes { return this.b; } }`,
       `contract C { bytes b; function init(bytes calldata v) external { b = v; } function set(uint256 i, bytes1 x) external { b[i] = x; } function get(uint256 i) external view returns(bytes1){ return b[i]; } function all() external view returns(bytes memory){ return b; } }`,
-      [{ sig: 'init(bytes)', args: W(0x20n) + W(5n) + B1('aabbccddee') }, { sig: 'set(uint256,bytes1)', args: W(2n) + B1('ff') }, { sig: 'get(uint256)', args: W(2n) }, { sig: 'all()' }, { sig: 'set(uint256,bytes1)', args: W(9n) + B1('11') }],
+      [
+        { sig: 'init(bytes)', args: W(0x20n) + W(5n) + B1('aabbccddee') },
+        { sig: 'set(uint256,bytes1)', args: W(2n) + B1('ff') },
+        { sig: 'get(uint256)', args: W(2n) },
+        { sig: 'all()' },
+        { sig: 'set(uint256,bytes1)', args: W(9n) + B1('11') },
+      ],
     );
     await rt(
       `@contract class C { @state b: bytes; @external init(v: bytes): void { this.b = v; } @external set(i: u256, x: bytes1): void { this.b[i] = x; } @external @view all(): bytes { return this.b; } }`,
       `contract C { bytes b; function init(bytes calldata v) external { b = v; } function set(uint256 i, bytes1 x) external { b[i] = x; } function all() external view returns(bytes memory){ return b; } }`,
-      [{ sig: 'init(bytes)', args: W(0x20n) + W(40n) + '00'.repeat(40).padEnd(128, '0') }, { sig: 'set(uint256,bytes1)', args: W(35n) + B1('ab') }, { sig: 'set(uint256,bytes1)', args: W(0n) + B1('cd') }, { sig: 'all()' }],
+      [
+        { sig: 'init(bytes)', args: W(0x20n) + W(40n) + '00'.repeat(40).padEnd(128, '0') },
+        { sig: 'set(uint256,bytes1)', args: W(35n) + B1('ab') },
+        { sig: 'set(uint256,bytes1)', args: W(0n) + B1('cd') },
+        { sig: 'all()' },
+      ],
     );
   });
 });
@@ -388,9 +462,16 @@ describe('storage bytes index write b[i] = x vs solc', () => {
 describe('storage bytes .push / .pop vs solc (short<->long transitions)', () => {
   const B1 = (h: string) => h.padEnd(64, '0');
   it('push across 31->32, pop across 32->31, push(), and pop-empty Panic', async () => {
-    const calls: { sig: string; args?: string }[] = [{ sig: 'init(bytes)', args: W(0x20n) + W(30n) + 'aa'.repeat(30).padEnd(64, '0') }];
+    const calls: { sig: string; args?: string }[] = [
+      { sig: 'init(bytes)', args: W(0x20n) + W(30n) + 'aa'.repeat(30).padEnd(64, '0') },
+    ];
     for (let i = 0; i < 5; i++) calls.push({ sig: 'pb(bytes1)', args: B1((0x10 + i).toString(16).padStart(2, '0')) }); // 30 -> 35 (crosses 31->32)
-    calls.push({ sig: 'all()' }, { sig: 'len()' }, { sig: 'at(uint256)', args: W(34n) }, { sig: 'at(uint256)', args: W(0n) });
+    calls.push(
+      { sig: 'all()' },
+      { sig: 'len()' },
+      { sig: 'at(uint256)', args: W(34n) },
+      { sig: 'at(uint256)', args: W(0n) },
+    );
     for (let i = 0; i < 5; i++) calls.push({ sig: 'pop()' }); // 35 -> 30 (crosses 32->31)
     calls.push({ sig: 'all()' }, { sig: 'len()' });
     calls.push({ sig: 'p0()' }, { sig: 'all()' }); // push() zero byte
@@ -445,7 +526,12 @@ describe('indexed DYNAMIC-struct event param: topic = keccak(flattened payload) 
     rt(
       `@struct class D { x: u256; s: string; } @contract class C { @event E(@indexed d: D); @external g(d: D): void { emit(E(d)); } }`,
       `struct D { uint256 x; string s; } contract C { event E(D indexed d); function g(D calldata d) external { emit E(d); } }`,
-      [{ sig: 'g((uint256,string))', args: W(7n) + W(0x20n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') }],
+      [
+        {
+          sig: 'g((uint256,string))',
+          args: W(7n) + W(0x20n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0'),
+        },
+      ],
     ));
   it('mixed: indexed static + indexed dyn struct + non-indexed data word', () =>
     rt(
@@ -457,28 +543,64 @@ describe('indexed DYNAMIC-struct event param: topic = keccak(flattened payload) 
 
 describe('re-sweep over-acceptance fixes (solc rejects, JETH must too)', () => {
   it('a fixed-array literal with the wrong element count is rejected (no silent pad/truncate)', () => {
-    expect(jethRejects(`@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n,3n,4n,5n]; return a; } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n]; return a; } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n,3n]; return a; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n,3n,4n,5n]; return a; } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n]; return a; } }`),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @external @pure f(): Arr<u256,3> { let a: Arr<u256,3> = [1n,2n,3n]; return a; } }`,
+      ),
+    ).toBe(true);
   });
   it('enum -> intN cast is rejected for every width (runtime value and member literal)', () => {
-    expect(jethRejects(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): i8 { return i8(c); } }`)).toBe(true);
-    expect(jethRejects(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(): i8 { return i8(Color.Blue); } }`)).toBe(true);
-    expect(jethAccepts(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): u8 { return u8(c); } }`)).toBe(true);
-    expect(jethAccepts(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): u256 { return u256(c); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): i8 { return i8(c); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethRejects(
+        `enum Color { Red, Green, Blue } @contract class C { @external @pure f(): i8 { return i8(Color.Blue); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): u8 { return u8(c); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `enum Color { Red, Green, Blue } @contract class C { @external @pure f(c: Color): u256 { return u256(c); } }`,
+      ),
+    ).toBe(true);
   });
   it('@error named Error or Panic is rejected (reserved); a same-named @event is fine', () => {
-    expect(jethRejects(`@contract class C { @error Panic(code: u256); @external f(): void { revert(Panic(1n)); } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @error Error(s: string); @external f(): void { revert(Error("x")); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @event Panic(code: u256); @external f(): void { emit(Panic(1n)); } }`)).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @error Panic(code: u256); @external f(): void { revert(Panic(1n)); } }`),
+    ).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @error Error(s: string); @external f(): void { revert(Error("x")); } }`),
+    ).toBe(true);
+    expect(
+      jethAccepts(`@contract class C { @event Panic(code: u256); @external f(): void { emit(Panic(1n)); } }`),
+    ).toBe(true);
   });
   it('cross-kind identifier collisions are rejected; function/event overloading is allowed', () => {
-    expect(jethRejects(`@contract class C { @error X(a: u256); @event X(a: u256); @external f(): void { revert(X(1n)); } }`)).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @error X(a: u256); @event X(a: u256); @external f(): void { revert(X(1n)); } }`),
+    ).toBe(true);
     expect(jethRejects(`@struct class X { a: u256; } @contract class C { @external X(): void {} }`)).toBe(true);
     expect(jethRejects(`@contract class C { @state x: u256; @external x(): void {} }`)).toBe(true);
     expect(jethRejects(`enum X { A, B } @contract class C { @event X(a: u256); @external f(): void {} }`)).toBe(true);
     expect(jethAccepts(`@contract class C { @external f(): void {} @external f(a: u256): void {} }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @event E(a: u256); @event E(b: bool); @external f(): void { emit(E(1n)); } }`)).toBe(true);
+    expect(
+      jethAccepts(`@contract class C { @event E(a: u256); @event E(b: bool); @external f(): void { emit(E(1n)); } }`),
+    ).toBe(true);
   });
 });
 
@@ -487,7 +609,12 @@ describe('re-sweep over-rejection fixes: hex literal -> bytesN + rational @const
     rt(
       `@contract class C { @constant B: bytes4 = 0x12345678n; @external @pure f(): bytes4 { return 0x12345678n; } @external @pure g(): bytes4 { return this.B; } @external @pure h(x: bytes4): bool { return x == 0x12345678n; } @external @pure e(a: u256): bytes { return abi.encodeWithSelector(0x12345678n, a); } }`,
       `contract C { bytes4 constant B=0x12345678; function f() external pure returns(bytes4){ return 0x12345678; } function g() external pure returns(bytes4){ return B; } function h(bytes4 x) external pure returns(bool){ return x==0x12345678; } function e(uint256 a) external pure returns(bytes memory){ return abi.encodeWithSelector(0x12345678, a); } }`,
-      [{ sig: 'f()' }, { sig: 'g()' }, { sig: 'h(bytes4)', args: '12345678'.padEnd(64, '0') }, { sig: 'e(uint256)', args: W(99n) }],
+      [
+        { sig: 'f()' },
+        { sig: 'g()' },
+        { sig: 'h(bytes4)', args: '12345678'.padEnd(64, '0') },
+        { sig: 'e(uint256)', args: W(99n) },
+      ],
     ));
   it('a wrong-width hex literal still needs an explicit cast (parity: both reject)', () => {
     expect(jethRejects(`@contract class C { @external @pure f(): bytes4 { return 0x1234n; } }`)).toBe(true);
@@ -500,8 +627,12 @@ describe('re-sweep over-rejection fixes: hex literal -> bytesN + rational @const
       [{ sig: 'a()' }, { sig: 'b()' }],
     ));
   it('constant div/mod by zero and a fractional final value are rejected (parity)', () => {
-    expect(jethRejects(`@contract class C { @constant K: u256 = 5n/0n; @external @pure f(): u256 { return this.K; } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @constant K: u256 = 7n/2n; @external @pure f(): u256 { return this.K; } }`)).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @constant K: u256 = 5n/0n; @external @pure f(): u256 { return this.K; } }`),
+    ).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @constant K: u256 = 7n/2n; @external @pure f(): u256 { return this.K; } }`),
+    ).toBe(true);
   });
 });
 
@@ -521,8 +652,11 @@ describe('re-sweep batch 2: storage-bytes mutators through any base vs solc', ()
     );
   });
   it('mapping(u256=>bytes) value .push / [i]=x byte-identical', async () => {
-    const c: { sig: string; args?: string }[] = [{ sig: 'init(uint256,bytes)', args: W(7n) + W(0x40n) + W(30n) + 'bb'.repeat(30).padEnd(64, '0') }];
-    for (let i = 0; i < 4; i++) c.push({ sig: 'p(uint256,bytes1)', args: W(7n) + B1((0x20 + i).toString(16).padStart(2, '0')) });
+    const c: { sig: string; args?: string }[] = [
+      { sig: 'init(uint256,bytes)', args: W(7n) + W(0x40n) + W(30n) + 'bb'.repeat(30).padEnd(64, '0') },
+    ];
+    for (let i = 0; i < 4; i++)
+      c.push({ sig: 'p(uint256,bytes1)', args: W(7n) + B1((0x20 + i).toString(16).padStart(2, '0')) });
     c.push({ sig: 's(uint256,uint256,bytes1)', args: W(7n) + W(2n) + B1('ff') }, { sig: 'get(uint256)', args: W(7n) });
     await rt(
       `@contract class C { @state m: mapping<u256, bytes>; @external init(k: u256, v: bytes): void { this.m[k] = v; } @external p(k: u256, b: bytes1): void { this.m[k].push(b); } @external s(k: u256, i: u256, x: bytes1): void { this.m[k][i] = x; } @external @view get(k: u256): bytes { return this.m[k]; } }`,
@@ -532,7 +666,8 @@ describe('re-sweep batch 2: storage-bytes mutators through any base vs solc', ()
   });
   it('bytes[] element and Arr<bytes,N> element .push byte-identical', async () => {
     const c: { sig: string; args?: string }[] = [{ sig: 'init(bytes)', args: initB(30) }];
-    for (let i = 0; i < 4; i++) c.push({ sig: 'p(uint256,bytes1)', args: W(0n) + B1((0x30 + i).toString(16).padStart(2, '0')) });
+    for (let i = 0; i < 4; i++)
+      c.push({ sig: 'p(uint256,bytes1)', args: W(0n) + B1((0x30 + i).toString(16).padStart(2, '0')) });
     c.push({ sig: 'get(uint256)', args: W(0n) });
     await rt(
       `@contract class C { @state a: bytes[]; @external init(v: bytes): void { this.a.push(v); } @external p(i: u256, b: bytes1): void { this.a[i].push(b); } @external @view get(i: u256): bytes { return this.a[i]; } }`,
@@ -554,7 +689,13 @@ describe('re-sweep batch 2: bytes(string)[i] / nested ctor / fixed-array copy / 
     rt(
       `@contract class C { @state s: string; @external set(v: string): void { this.s = v; } @external @view atStore(i: u256): bytes1 { return bytes(this.s)[i]; } @external @pure atCd(t: string, i: u256): bytes1 { return bytes(t)[i]; } @external @pure atMem(t: string, i: u256): bytes1 { let m: string = t; return bytes(m)[i]; } }`,
       `contract C { string s; function set(string calldata v) external { s=v; } function atStore(uint256 i) external view returns(bytes1){ return bytes(s)[i]; } function atCd(string calldata t,uint256 i) external pure returns(bytes1){ return bytes(t)[i]; } function atMem(string calldata t,uint256 i) external pure returns(bytes1){ string memory m=t; return bytes(m)[i]; } }`,
-      [{ sig: 'set(string)', args: strArg('hello world') }, { sig: 'atStore(uint256)', args: W(4n) }, { sig: 'atCd(string,uint256)', args: strArg('abcdef') + '' }, { sig: 'atCd(string,uint256)', args: strArg('abcdef') }, { sig: 'atMem(string,uint256)', args: strArg('xyz123') }],
+      [
+        { sig: 'set(string)', args: strArg('hello world') },
+        { sig: 'atStore(uint256)', args: W(4n) },
+        { sig: 'atCd(string,uint256)', args: strArg('abcdef') + '' },
+        { sig: 'atCd(string,uint256)', args: strArg('abcdef') },
+        { sig: 'atMem(string,uint256)', args: strArg('xyz123') },
+      ],
     ));
   it('nested inline struct constructor in a return position (positional), incl. deep nesting', () =>
     rt(
@@ -577,7 +718,12 @@ describe('re-sweep batch 2: bytes(string)[i] / nested ctor / fixed-array copy / 
 });
 
 describe('re-sweep batch 3: object literals, internal aggregate params, Arr<dynElem,N>[] vs solc', () => {
-  const strArg = (s: string) => W(0x20n) + W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
+  const strArg = (s: string) =>
+    W(0x20n) +
+    W(BigInt(s.length)) +
+    Buffer.from(s)
+      .toString('hex')
+      .padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
   const LONG = 'abcdefghijklmnopqrstuvwxyz0123456789';
   it('object-literal struct construction with nested struct / bytes / fixed-array fields', () =>
     rt(
@@ -586,17 +732,34 @@ describe('re-sweep batch 3: object literals, internal aggregate params, Arr<dynE
       [{ sig: 'f()' }, { sig: 'gb()' }, { sig: 'ga()' }],
     ));
   it('object-literal spread keeps value fields; a non-value field must be explicit (not spread)', () => {
-    expect(jethAccepts(`@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(p: P): P { return { ...p, a: 9n }; } }`)).toBe(true);
-    expect(jethRejects(`@struct class In { c: u8; } @struct class O { id: u256; inner: In; } @contract class C { @external @pure f(o: O): O { return { ...o, id: 1n }; } }`)).toBe(true);
+    expect(
+      jethAccepts(
+        `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(p: P): P { return { ...p, a: 9n }; } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethRejects(
+        `@struct class In { c: u8; } @struct class O { id: u256; inner: In; } @contract class C { @external @pure f(o: O): O { return { ...o, id: 1n }; } }`,
+      ),
+    ).toBe(true);
   });
   it('internal call: struct + fixed-array params/return + calldata aggregate forwarding (byte-identical)', () =>
     rt(
       `@struct class P { a: u8; b: u32; } @contract class C { @pure gs(p: P): u32 { return p.b; } @pure ga(a: Arr<u256,3>): u256 { return a[2n]; } @pure mk(): Arr<u256,2> { return [9n, 8n]; } @external @pure fs(x: u8, y: u32): u32 { return gs(P(x, y)); } @external @pure fa(): u256 { return ga([10n,20n,30n]); } @external @pure fr(): u256 { let a: Arr<u256,2> = mk(); return a[0n] + a[1n]; } @external @pure fwd(x: P): u32 { return gs(x); } }`,
       `contract C { struct P{uint8 a;uint32 b;} function gs(P memory p) internal pure returns(uint32){return p.b;} function ga(uint256[3] memory a) internal pure returns(uint256){return a[2];} function mk() internal pure returns(uint256[2] memory){return [uint256(9),8];} function fs(uint8 x,uint32 y) external pure returns(uint32){ return gs(P(x,y)); } function fa() external pure returns(uint256){ return ga([uint256(10),20,30]); } function fr() external pure returns(uint256){ uint256[2] memory a=mk(); return a[0]+a[1]; } function fwd(P calldata x) external pure returns(uint32){ return gs(x); } }`,
-      [{ sig: 'fs(uint8,uint32)', args: W(7n) + W(0xcafen) }, { sig: 'fa()' }, { sig: 'fr()' }, { sig: 'fwd((uint8,uint32))', args: W(1n) + W(2n) }],
+      [
+        { sig: 'fs(uint8,uint32)', args: W(7n) + W(0xcafen) },
+        { sig: 'fa()' },
+        { sig: 'fr()' },
+        { sig: 'fwd((uint8,uint32))', args: W(1n) + W(2n) },
+      ],
     ));
   it('@external aggregate internal call stays a clean rejection (broader dual-entry feature)', () => {
-    expect(jethRejects(`@struct class P { a: u8; } @contract class C { @external @pure g(p: P): u8 { return p.a; } @external @pure f(): u8 { return g(P(5n)); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@struct class P { a: u8; } @contract class C { @external @pure g(p: P): u8 { return p.a; } @external @pure f(): u8 { return g(P(5n)); } }`,
+      ),
+    ).toBe(true);
   });
   it('bare @state Arr<string,N>[] / Arr<bytes,N>[]: push/set/get/pop deep-clear/delete byte-identical', async () => {
     const calls: { sig: string; args?: string }[] = [{ sig: 'grow()' }, { sig: 'grow()' }, { sig: 'len()' }];
@@ -618,30 +781,65 @@ describe('remaining over-rejections R1/R3/R5 vs solc (byte-identical)', () => {
     rt(
       `@struct class D { x: u256; s: bytes; a: Arr<u256,2>; } @contract class C { @state d: D; @external @pure f(): D { return D(9n, "hello", [4n,5n]); } @external set(): void { this.d = D(1n, "stored value here, fairly long!!", [7n,8n]); } @external @view ga(i: u256): u256 { return this.d.a[i]; } @external @view gs(): bytes { return this.d.s; } }`,
       `struct D{uint256 x;bytes s;uint256[2] a;} contract C { D d; function f() external pure returns(D memory){ return D(9,"hello",[uint256(4),5]); } function set() external { d=D(1,"stored value here, fairly long!!",[uint256(7),8]); } function ga(uint256 i) external view returns(uint256){ return d.a[i]; } function gs() external view returns(bytes memory){ return d.s; } }`,
-      [{ sig: 'f()' }, { sig: 'set()' }, { sig: 'ga(uint256)', args: W(0n) }, { sig: 'ga(uint256)', args: W(1n) }, { sig: 'gs()' }],
+      [
+        { sig: 'f()' },
+        { sig: 'set()' },
+        { sig: 'ga(uint256)', args: W(0n) },
+        { sig: 'ga(uint256)', args: W(1n) },
+        { sig: 'gs()' },
+      ],
     ));
   it('R1: struct/fixed-array field from a non-inline source (local/param/storage) in return/let/storage', () =>
     rt(
       `@struct class I { a: u256; b: u32; } @struct class O { i: I; y: u256; } @struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @state o: O; @state src: I; @external @pure fLocal(y: u256): O { let z: I = I(7n, 8n); return O(z, y); } @external @pure fParam(z: I, y: u256): O { return O(z, y); } @external @pure fArr(x: u256): A { let z: Arr<u256,2> = [1n,2n]; return A(x, z); } @external seed(): void { this.src = I(11n, 22n); } @external setO(): void { let z: I = I(3n, 4n); this.o = O(z, 99n); } @external @view ga(): u256 { return this.o.i.a; } @external @view fStore(y: u256): O { return O(this.src, y); } }`,
       `struct I{uint256 a;uint32 b;} struct O{I i;uint256 y;} struct A{uint256 x;uint256[2] arr;} contract C { O o; I src; function fLocal(uint256 y) external pure returns(O memory){ I memory z=I(7,8); return O(z,y); } function fParam(I calldata z,uint256 y) external pure returns(O memory){ return O(z,y); } function fArr(uint256 x) external pure returns(A memory){ uint256[2] memory z=[uint256(1),2]; return A(x,z); } function seed() external { src=I(11,22); } function setO() external { I memory z=I(3,4); o=O(z,99); } function ga() external view returns(uint256){ return o.i.a; } function fStore(uint256 y) external view returns(O memory){ return O(src,y); } }`,
-      [{ sig: 'fLocal(uint256)', args: W(5n) }, { sig: 'fParam((uint256,uint32),uint256)', args: W(1n) + W(2n) + W(5n) }, { sig: 'fArr(uint256)', args: W(9n) }, { sig: 'seed()' }, { sig: 'setO()' }, { sig: 'ga()' }, { sig: 'fStore(uint256)', args: W(7n) }],
+      [
+        { sig: 'fLocal(uint256)', args: W(5n) },
+        { sig: 'fParam((uint256,uint32),uint256)', args: W(1n) + W(2n) + W(5n) },
+        { sig: 'fArr(uint256)', args: W(9n) },
+        { sig: 'seed()' },
+        { sig: 'setO()' },
+        { sig: 'ga()' },
+        { sig: 'fStore(uint256)', args: W(7n) },
+      ],
     ));
   it('R5: msg.value in an internal function is allowed (forwarded byte-identical); externally requires @payable', () => {
-    expect(jethAccepts(`@contract class C { @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`)).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @view h(): u256 { return msg.value; } @external @payable f(): u256 { return this.h(); } }`,
+      ),
+    ).toBe(true);
     // internal (unmarked) reading msg.value directly is allowed (forwarded byte-identical)
     expect(jethAccepts(`@contract class C { @read bad(): u256 { return msg.value; } }`)).toBe(true);
     // external non-payable reading msg.value directly still requires @payable -> rejected
     expect(jethRejects(`@contract class C { @external @read bad(): u256 { return msg.value; } }`)).toBe(true);
     // external non-payable reading msg.value rejected; @pure internal rejected (env read)
     expect(jethRejects(`@contract class C { @external f(): u256 { return msg.value; } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @pure h(): u256 { return msg.value; } @external f(): u256 { return this.h(); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @pure h(): u256 { return msg.value; } @external f(): u256 { return this.h(); } }`,
+      ),
+    ).toBe(true);
   });
 });
 
 describe('R4: Arr<dynElem,N>[] as a calldata param / whole-array return vs solc', () => {
-  const strArg = (s: string) => W(0x20n) + W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
-  const strBlk = (s: string) => W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
+  const strArg = (s: string) =>
+    W(0x20n) +
+    W(BigInt(s.length)) +
+    Buffer.from(s)
+      .toString('hex')
+      .padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
+  const strBlk = (s: string) =>
+    W(BigInt(s.length)) +
+    Buffer.from(s)
+      .toString('hex')
+      .padEnd(Math.ceil(s.length / 32) * 64 || 64, '0');
   it('calldata string[3][] param: length + a[i][j] byte-identical', async () => {
     // a = [["a","bb","ccc"]] : outer [off=0x20][len=1][elemOff=0x20] then elem [3 offsets][3 blocks]
     const elem = W(0x60n) + W(0x120n) + W(0x180n) + strBlk('a') + strBlk('bb') + strBlk('ccc');
@@ -649,39 +847,99 @@ describe('R4: Arr<dynElem,N>[] as a calldata param / whole-array return vs solc'
     await rt(
       `@contract class C { @external @pure len(a: Arr<string,3>[]): u256 { return a.length; } @external @pure at(a: Arr<string,3>[], i: u256, j: u256): string { return a[i][j]; } }`,
       `contract C { function len(string[3][] calldata a) external pure returns(uint256){ return a.length; } function at(string[3][] calldata a,uint256 i,uint256 j) external pure returns(string memory){ return a[i][j]; } }`,
-      [{ sig: 'len(string[3][])', args: cd }, { sig: 'at(string[3][],uint256,uint256)', args: W(0x60n) + W(0n) + W(2n) + cd.slice(2) }],
+      [
+        { sig: 'len(string[3][])', args: cd },
+        { sig: 'at(string[3][],uint256,uint256)', args: W(0x60n) + W(0n) + W(2n) + cd.slice(2) },
+      ],
     );
   });
   it('whole storage Arr<string,3>[] / Arr<bytes,2>[] return byte-identical', async () => {
     await rt(
       `@contract class C { @state a: Arr<string,3>[]; @external grow(): void { this.a.push(); } @external s(i: u256, j: u256, v: string): void { this.a[i][j] = v; } @external @view r(): Arr<string,3>[] { return this.a; } }`,
       `contract C { string[3][] a; function grow() external { a.push(); } function s(uint256 i,uint256 j,string calldata v) external { a[i][j]=v; } function r() external view returns(string[3][] memory){ return a; } }`,
-      [{ sig: 'grow()' }, { sig: 'grow()' }, { sig: 's(uint256,uint256,string)', args: W(0n) + W(1n) + strArg('hi') }, { sig: 's(uint256,uint256,string)', args: W(1n) + W(0n) + strArg('a fairly long string crossing 32!!') }, { sig: 'r()' }],
+      [
+        { sig: 'grow()' },
+        { sig: 'grow()' },
+        { sig: 's(uint256,uint256,string)', args: W(0n) + W(1n) + strArg('hi') },
+        { sig: 's(uint256,uint256,string)', args: W(1n) + W(0n) + strArg('a fairly long string crossing 32!!') },
+        { sig: 'r()' },
+      ],
     );
   });
   // VARIABLE-LENGTH nested string arrays via calldata. (A prior version navigated outer elements with a
   // CONTIGUOUS stride - correct only for equal-length elements - which silently miscompiled; these use
   // intentionally unequal lengths so contiguous-vs-offset-table navigation must differ.)
-  const encStr = (s: string) => W(BigInt(s.length)) + Buffer.from(s).toString('hex').padEnd((Math.ceil(s.length / 32) || 0) * 64, '0');
-  const block = (parts: string[]) => { const offs: string[] = []; let cur = parts.length * 32; for (const p of parts) { offs.push(W(BigInt(cur))); cur += p.length / 2; } return offs.join('') + parts.join(''); };
+  const encStr = (s: string) =>
+    W(BigInt(s.length)) +
+    Buffer.from(s)
+      .toString('hex')
+      .padEnd((Math.ceil(s.length / 32) || 0) * 64, '0');
+  const block = (parts: string[]) => {
+    const offs: string[] = [];
+    let cur = parts.length * 32;
+    for (const p of parts) {
+      offs.push(W(BigInt(cur)));
+      cur += p.length / 2;
+    }
+    return offs.join('') + parts.join('');
+  };
   it('string[3][] (single-level) variable-length a[i][j] + OOB byte-identical', async () => {
-    const aBody = W(2n) + block([block(['aa', 'b', 'cccccc'].map(encStr)), block(['d', 'this-one-is-quite-a-bit-longer!!!', 'f'].map(encStr))]); // [len][offset table + tails]
-    const at = (i: bigint, j: bigint) => ({ sig: 'at(string[3][],uint256,uint256)', args: W(0x60n) + W(i) + W(j) + aBody }); // head: [off_a=0x60][i][j]
+    const aBody =
+      W(2n) +
+      block([
+        block(['aa', 'b', 'cccccc'].map(encStr)),
+        block(['d', 'this-one-is-quite-a-bit-longer!!!', 'f'].map(encStr)),
+      ]); // [len][offset table + tails]
+    const at = (i: bigint, j: bigint) => ({
+      sig: 'at(string[3][],uint256,uint256)',
+      args: W(0x60n) + W(i) + W(j) + aBody,
+    }); // head: [off_a=0x60][i][j]
     await rt(
       `@contract class C { @external @pure at(a: Arr<string,3>[], i: u256, j: u256): string { return a[i][j]; } @external @pure len(a: Arr<string,3>[]): u256 { return a.length; } }`,
       `contract C { function at(string[3][] calldata a,uint256 i,uint256 j) external pure returns(string memory){ return a[i][j]; } function len(string[3][] calldata a) external pure returns(uint256){ return a.length; } }`,
-      [at(0n, 0n), at(1n, 1n), at(0n, 2n), at(1n, 0n), at(0n, 3n), at(2n, 0n), { sig: 'len(string[3][])', args: W(0x20n) + aBody }],
+      [
+        at(0n, 0n),
+        at(1n, 1n),
+        at(0n, 2n),
+        at(1n, 0n),
+        at(0n, 3n),
+        at(2n, 0n),
+        { sig: 'len(string[3][])', args: W(0x20n) + aBody },
+      ],
     );
   });
   it('string[2][3][] (double-level) variable-length a[i][j][k] + OOB + whole-array echo byte-identical', async () => {
     const enc23 = (a: string[][]) => block(a.map((p) => block(p.map(encStr)))); // string[2][3]
-    const val = [[['a0', 'b1longer'], ['c2', 'd3'], ['e4', 'f5']], [['g6', ''], ['', 'k10longeryes'], ['l11', 'm12']]];
+    const val = [
+      [
+        ['a0', 'b1longer'],
+        ['c2', 'd3'],
+        ['e4', 'f5'],
+      ],
+      [
+        ['g6', ''],
+        ['', 'k10longeryes'],
+        ['l11', 'm12'],
+      ],
+    ];
     const aBody = W(BigInt(val.length)) + block(val.map(enc23)); // [len][table + per-element string[2][3] blocks]
-    const at = (i: bigint, j: bigint, k: bigint) => ({ sig: 'at(string[2][3][],uint256,uint256,uint256)', args: W(0x80n) + W(i) + W(j) + W(k) + aBody });
+    const at = (i: bigint, j: bigint, k: bigint) => ({
+      sig: 'at(string[2][3][],uint256,uint256,uint256)',
+      args: W(0x80n) + W(i) + W(j) + W(k) + aBody,
+    });
     await rt(
       `@contract class C { @external @pure at(a: Arr<Arr<string,2>,3>[], i: u256, j: u256, k: u256): string { return a[i][j][k]; } @external @pure len(a: Arr<Arr<string,2>,3>[]): u256 { return a.length; } @external @pure echo(a: Arr<Arr<string,2>,3>[]): Arr<Arr<string,2>,3>[] { return a; } }`,
       `contract C { function at(string[2][3][] calldata a,uint256 i,uint256 j,uint256 k) external pure returns(string memory){ return a[i][j][k]; } function len(string[2][3][] calldata a) external pure returns(uint256){ return a.length; } function echo(string[2][3][] calldata a) external pure returns(string[2][3][] memory){ return a; } }`,
-      [at(0n, 0n, 1n), at(1n, 1n, 1n), at(1n, 2n, 0n), at(0n, 2n, 0n), at(0n, 3n, 0n), at(0n, 0n, 2n), { sig: 'len(string[2][3][])', args: W(0x20n) + aBody }, { sig: 'echo(string[2][3][])', args: W(0x20n) + aBody }],
+      [
+        at(0n, 0n, 1n),
+        at(1n, 1n, 1n),
+        at(1n, 2n, 0n),
+        at(0n, 2n, 0n),
+        at(0n, 3n, 0n),
+        at(0n, 0n, 2n),
+        { sig: 'len(string[2][3][])', args: W(0x20n) + aBody },
+        { sig: 'echo(string[2][3][])', args: W(0x20n) + aBody },
+      ],
     );
   });
 });
@@ -703,21 +961,40 @@ describe('dynamic nested struct field from a non-inline (side-effect-free) sourc
          function fParam(Inner calldata z) external pure returns(Outer memory){ return Outer(2, z); }
          function fBytes() external pure returns(OB memory){ IB memory z = IB(9, "deadbeefdeadbeef", 8); return OB(z, 5); }
        }`,
-      [{ sig: 'fLocal()' }, { sig: 'fParam((uint256,string))', args: W(0x20n) + W(7n) + W(0x40n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') }, { sig: 'fBytes()' }],
+      [
+        { sig: 'fLocal()' },
+        {
+          sig: 'fParam((uint256,string))',
+          args: W(0x20n) + W(7n) + W(0x40n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0'),
+        },
+        { sig: 'fBytes()' },
+      ],
     ));
   it('a function-call source (side-effecting) is still rejected (no double-eval)', () => {
     // a non-inline source that is a CALL is rejected (would re-evaluate); must bind to a local first.
-    expect(jethRejects(`@struct class I { p: u256; s: string; } @struct class O { i: I; } @contract class C { @pure mk(): I { return I(1n,"x"); } @external @pure f(): O { return O(mk()); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@struct class I { p: u256; s: string; } @struct class O { i: I; } @contract class C { @pure mk(): I { return I(1n,"x"); } @external @pure f(): O { return O(mk()); } }`,
+      ),
+    ).toBe(true);
   });
 });
 
 describe('all-issues sweep: miscompile + over-accepts + easy over-rejects vs solc', () => {
   it('[1] pop() deep-clears a popped dynamic-array element (no stale inner data) - raw slots byte-identical', async () => {
     // unequal inner lengths so a header-only clear leaves distinct stale data; re-grow must read 0.
-    const seq: { sig: string; args?: string }[] = [{ sig: 'grow()' }, { sig: 'grow()' },
-      { sig: 'add(uint256,uint256)', args: W(0n) + W(1n) }, { sig: 'add(uint256,uint256)', args: W(0n) + W(2n) }, { sig: 'add(uint256,uint256)', args: W(0n) + W(3n) },
-      { sig: 'add(uint256,uint256)', args: W(1n) + W(4n) }, { sig: 'add(uint256,uint256)', args: W(1n) + W(5n) },
-      { sig: 'pop()' }, { sig: 'grow()' }, { sig: 'ilen(uint256)', args: W(1n) }];
+    const seq: { sig: string; args?: string }[] = [
+      { sig: 'grow()' },
+      { sig: 'grow()' },
+      { sig: 'add(uint256,uint256)', args: W(0n) + W(1n) },
+      { sig: 'add(uint256,uint256)', args: W(0n) + W(2n) },
+      { sig: 'add(uint256,uint256)', args: W(0n) + W(3n) },
+      { sig: 'add(uint256,uint256)', args: W(1n) + W(4n) },
+      { sig: 'add(uint256,uint256)', args: W(1n) + W(5n) },
+      { sig: 'pop()' },
+      { sig: 'grow()' },
+      { sig: 'ilen(uint256)', args: W(1n) },
+    ];
     await rt(
       `@contract class C { @state xs: u256[][]; @external grow(): void { this.xs.push(); } @external add(i: u256, v: u256): void { this.xs[i].push(v); } @external pop(): void { this.xs.pop(); } @external @view ilen(i: u256): u256 { return this.xs[i].length; } @external @view at(i: u256, j: u256): u256 { return this.xs[i][j]; } }`,
       `contract C { uint256[][] xs; function grow() external { xs.push(); } function add(uint256 i,uint256 v) external { xs[i].push(v); } function pop() external { xs.pop(); } function ilen(uint256 i) external view returns(uint256){ return xs[i].length; } function at(uint256 i,uint256 j) external view returns(uint256){ return xs[i][j]; } }`,
@@ -725,14 +1002,42 @@ describe('all-issues sweep: miscompile + over-accepts + easy over-rejects vs sol
     );
   });
   it('over-accepts now rejected (match solc): ternary dead-arm error, duplicate names, duplicate signature', () => {
-    expect(jethRejects(`@contract class C { @constant K: u256 = false ? (1n/0n) : 5n; @external @pure k(): u256 { return this.K; } }`)).toBe(true); // [2]
-    expect(jethRejects(`@contract class C { @constant K: u8 = false ? 9999n : 5n; @external @pure k(): u8 { return this.K; } }`)).toBe(true); // [2] dead-arm overflow
-    expect(jethAccepts(`@contract class C { @constant K: u256 = true ? 5n : 6n; @external @pure k(): u256 { return this.K; } }`)).toBe(true); // [2] control
-    expect(jethRejects(`@contract class C { @event E(a: u256, a: u256); @external f(): void { emit(E(1n,2n)); } }`)).toBe(true); // [3]
-    expect(jethRejects(`@contract class C { @error E(a: u256, a: u256); @external f(): void { revert(E(1n,2n)); } }`)).toBe(true); // [3]
-    expect(jethRejects(`@struct class D { a: u256; a: u256 } @contract class C { @external @pure f(): u256 { return D(1n,2n).a; } }`)).toBe(true); // [3]
-    expect(jethRejects(`@contract class C { f(x: u256): u256 { return x; } f(x: u256): u256 { return x+1n; } @external g(): u256 { return 0n; } }`)).toBe(true); // [4]
-    expect(jethAccepts(`@contract class C { @pure a(x: u256): u256 { return x; } @pure a(x: u256, y: u256): u256 { return x+y; } @external @pure g(): u256 { return a(1n)+a(2n,3n); } }`)).toBe(true); // [4] valid overload
+    expect(
+      jethRejects(
+        `@contract class C { @constant K: u256 = false ? (1n/0n) : 5n; @external @pure k(): u256 { return this.K; } }`,
+      ),
+    ).toBe(true); // [2]
+    expect(
+      jethRejects(
+        `@contract class C { @constant K: u8 = false ? 9999n : 5n; @external @pure k(): u8 { return this.K; } }`,
+      ),
+    ).toBe(true); // [2] dead-arm overflow
+    expect(
+      jethAccepts(
+        `@contract class C { @constant K: u256 = true ? 5n : 6n; @external @pure k(): u256 { return this.K; } }`,
+      ),
+    ).toBe(true); // [2] control
+    expect(
+      jethRejects(`@contract class C { @event E(a: u256, a: u256); @external f(): void { emit(E(1n,2n)); } }`),
+    ).toBe(true); // [3]
+    expect(
+      jethRejects(`@contract class C { @error E(a: u256, a: u256); @external f(): void { revert(E(1n,2n)); } }`),
+    ).toBe(true); // [3]
+    expect(
+      jethRejects(
+        `@struct class D { a: u256; a: u256 } @contract class C { @external @pure f(): u256 { return D(1n,2n).a; } }`,
+      ),
+    ).toBe(true); // [3]
+    expect(
+      jethRejects(
+        `@contract class C { f(x: u256): u256 { return x; } f(x: u256): u256 { return x+1n; } @external g(): u256 { return 0n; } }`,
+      ),
+    ).toBe(true); // [4]
+    expect(
+      jethAccepts(
+        `@contract class C { @pure a(x: u256): u256 { return x; } @pure a(x: u256, y: u256): u256 { return x+y; } @external @pure g(): u256 { return a(1n)+a(2n,3n); } }`,
+      ),
+    ).toBe(true); // [4] valid overload
   });
   it('[14] bytes/string of a string literal; [17] bytesN.length is the constant N (byte-identical)', async () => {
     await rt(
@@ -748,7 +1053,10 @@ describe('sweep batch 2 over-rejections (byte-identical to solc)', () => {
     await rt(
       `@struct class P { a: u256; s: string; } @contract class C { @external @pure pick(b: bool): P { let x: P = P(1n,"xx"); let y: P = P(2n,"yyyyyyyyyyyy"); let p: P = b ? x : y; return p; } }`,
       `contract C { struct P { uint256 a; string s; } function pick(bool b) external pure returns(P memory){ P memory x=P(1,"xx"); P memory y=P(2,"yyyyyyyyyyyy"); P memory p=b?x:y; return p; } }`,
-      [{ sig: 'pick(bool)', args: W(0n) }, { sig: 'pick(bool)', args: W(1n) }],
+      [
+        { sig: 'pick(bool)', args: W(0n) },
+        { sig: 'pick(bool)', args: W(1n) },
+      ],
     );
   });
 
@@ -756,7 +1064,12 @@ describe('sweep batch 2 over-rejections (byte-identical to solc)', () => {
     await rt(
       `@contract class C { @state nums: u256[]; @event E(a: u256[]); @external add(v: u256): void { this.nums.push(v); } @external fire(): void { emit(E(this.nums)); } }`,
       `contract C { uint256[] nums; event E(uint256[] a); function add(uint256 v) external { nums.push(v); } function fire() external { emit E(nums); } }`,
-      [{ sig: 'add(uint256)', args: W(11n) }, { sig: 'add(uint256)', args: W(22n) }, { sig: 'add(uint256)', args: W(33n) }, { sig: 'fire()' }],
+      [
+        { sig: 'add(uint256)', args: W(11n) },
+        { sig: 'add(uint256)', args: W(22n) },
+        { sig: 'add(uint256)', args: W(33n) },
+        { sig: 'fire()' },
+      ],
     );
   });
 
@@ -810,16 +1123,33 @@ describe('sweep batch 2 over-rejections (byte-identical to solc)', () => {
     await rt(
       `@struct class Q { m: u256 } @struct class P { a: u256; qs: Q[] } @contract class C { @external @pure f(qs: Q[]): P { return P(9n, qs); } }`,
       `contract C { struct Q { uint256 m; } struct P { uint256 a; Q[] qs; } function f(Q[] calldata qs) external pure returns(P memory){ return P(9, qs); } }`,
-      [{ sig: 'f((uint256)[])', args: W(0x20n) + W(2n) + W(11n) + W(22n) }, { sig: 'f((uint256)[])', args: W(0x20n) + W(0n) }],
+      [
+        { sig: 'f((uint256)[])', args: W(0x20n) + W(2n) + W(11n) + W(22n) },
+        { sig: 'f((uint256)[])', args: W(0x20n) + W(0n) },
+      ],
     );
     // dynamic struct element Q{m,s}: offset table + variable-length string payloads (q0="ab", q1="this-one-is-longer!!")
     await rt(
       `@struct class Q { m: u256; s: string } @struct class P { a: u256; qs: Q[] } @contract class C { @external @pure f(qs: Q[]): P { return P(9n, qs); } }`,
       `contract C { struct Q { uint256 m; string s; } struct P { uint256 a; Q[] qs; } function f(Q[] calldata qs) external pure returns(P memory){ return P(9, qs); } }`,
-      [{ sig: 'f((uint256,string)[])', args:
-          W(0x20n) + W(2n) + W(0x40n) + W(0xc0n) +
-          W(1n) + W(0x40n) + W(2n) + '6162'.padEnd(64, '0') +
-          W(2n) + W(0x40n) + W(20n) + Buffer.from('this-one-is-longer!!', 'utf8').toString('hex').padEnd(64, '0') }],
+      [
+        {
+          sig: 'f((uint256,string)[])',
+          args:
+            W(0x20n) +
+            W(2n) +
+            W(0x40n) +
+            W(0xc0n) +
+            W(1n) +
+            W(0x40n) +
+            W(2n) +
+            '6162'.padEnd(64, '0') +
+            W(2n) +
+            W(0x40n) +
+            W(20n) +
+            Buffer.from('this-one-is-longer!!', 'utf8').toString('hex').padEnd(64, '0'),
+        },
+      ],
     );
   });
 });
@@ -827,16 +1157,16 @@ describe('sweep batch 2 over-rejections (byte-identical to solc)', () => {
 describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to solc)', () => {
   it('rejects the over-acceptances the sweep found (match solc)', () => {
     const rej = [
-      `@contract class C { @external @pure f(): bytes4 { return bytes4(255n); } }`,               // #0 decimal -> bytesN
-      `@contract class C { @external @pure f(): bytes32 { return bytes32(0x1122n); } }`,           // #0 wrong-width hex -> bytesN
-      `@contract class C { @external f(x: bytes): string { let y: string = x; return y; } }`,      // #1 implicit bytes<->string
+      `@contract class C { @external @pure f(): bytes4 { return bytes4(255n); } }`, // #0 decimal -> bytesN
+      `@contract class C { @external @pure f(): bytes32 { return bytes32(0x1122n); } }`, // #0 wrong-width hex -> bytesN
+      `@contract class C { @external f(x: bytes): string { let y: string = x; return y; } }`, // #1 implicit bytes<->string
       `@contract class C { @constant A: u16 = 300n; @constant K: u8 = A & 0xFFn; @external @pure f(): u8 { return this.K; } }`, // #4 typed result u16 -> u8
       `@contract class C { @constant K: u16 = type(u8).max * 2n; @external @pure f(): u16 { return this.K; } }`, // #3 typed-overflow constant (safe reject)
-      `@contract class C { @external @pure f(): u256 { let a: Arr<u256,3> = [10n,20n,30n]; return a[3n]; } }`,    // #15 const-OOB memory fixed-array
+      `@contract class C { @external @pure f(): u256 { let a: Arr<u256,3> = [10n,20n,30n]; return a[3n]; } }`, // #15 const-OOB memory fixed-array
       `@contract class C { @state m: mapping<u256,u256>; @state i: u256; @external go(v: u256): void { this.m[this.i++] += v; } }`, // #16 side-effecting compound key
-      `@contract class C { @external @pure f(): u256 { return 0x12__34n; } }`,                     // #31 bad underscores
-      `@contract class C { @external @pure f(): u256 { return 0o17n; } }`,                         // #32 octal
-      `@contract class C { @external @pure f(): u256 { return 0xn; } }`,                           // #33 empty hex
+      `@contract class C { @external @pure f(): u256 { return 0x12__34n; } }`, // #31 bad underscores
+      `@contract class C { @external @pure f(): u256 { return 0o17n; } }`, // #32 octal
+      `@contract class C { @external @pure f(): u256 { return 0xn; } }`, // #33 empty hex
     ];
     for (const s of rej) expect(jethRejects(s), s).toBe(true);
   });
@@ -861,7 +1191,10 @@ describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to
     await rt(
       `@contract class C { @external @pure f(c: bool): [u256, u256[]] { return [7n, c ? [10n, 20n] : [30n]]; } }`,
       `contract C { function f(bool c) external pure returns(uint256, uint256[] memory){ uint256[] memory a; if(c){a=new uint256[](2);a[0]=10;a[1]=20;}else{a=new uint256[](1);a[0]=30;} return (7, a); } }`,
-      [{ sig: 'f(bool)', args: W(0n) }, { sig: 'f(bool)', args: W(1n) }],
+      [
+        { sig: 'f(bool)', args: W(0n) },
+        { sig: 'f(bool)', args: W(1n) },
+      ],
     );
   });
 
@@ -870,7 +1203,10 @@ describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to
     await rt(
       `@contract class C { @external @pure f(x: bool): void { revert(x ? "${long}" : "q"); } }`,
       `contract C { function f(bool x) external pure { revert(x ? "${long}" : "q"); } }`,
-      [{ sig: 'f(bool)', args: W(1n) }, { sig: 'f(bool)', args: W(0n) }],
+      [
+        { sig: 'f(bool)', args: W(1n) },
+        { sig: 'f(bool)', args: W(0n) },
+      ],
     );
   });
 
@@ -895,7 +1231,9 @@ describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to
     const jeth = `@struct class S { a: u256; s: string } @contract class C { @state st: S; @external set(x: S): void { this.st = x; } @external @view gets(): string { return this.st.s; } }`;
     const sol = `contract C { struct S { uint256 a; string s; } S st; function set(S calldata x) external { st = x; } function gets() external view returns (string memory) { return st.s; } }`;
     const str = 'a string that is definitely longer than thirty-two bytes!';
-    const hex = Buffer.from(str).toString('hex').padEnd(Math.ceil(str.length / 32) * 64, '0');
+    const hex = Buffer.from(str)
+      .toString('hex')
+      .padEnd(Math.ceil(str.length / 32) * 64, '0');
     await rt(jeth, sol, [
       { sig: 'set((uint256,string))', args: W(0x20n) + W(7n) + W(0x40n) + W(BigInt(str.length)) + hex },
       { sig: 'gets()' },
@@ -922,7 +1260,10 @@ describe('calldata dynamic-struct DEEP field access (byte-identical to solc)', (
     };
     const O = (id: bigint, nm: string, vals: bigint[], tag: bigint) => W(id) + W(0x60n) + W(tag) + inner(nm, vals);
     await rt(jeth, sol, [
-      { sig: 'g((uint256,(string,uint256[]),uint256))', args: W(0x20n) + O(1n, 'hello-world-inner-name', [11n, 22n, 33n], 99n) },
+      {
+        sig: 'g((uint256,(string,uint256[]),uint256))',
+        args: W(0x20n) + O(1n, 'hello-world-inner-name', [11n, 22n, 33n], 99n),
+      },
       { sig: 'g((uint256,(string,uint256[]),uint256))', args: W(0x20n) + O(5n, '', [], 7n) }, // empty name + empty vals
     ]);
   });
@@ -931,30 +1272,54 @@ describe('calldata dynamic-struct DEEP field access (byte-identical to solc)', (
     const jeth = `@struct class S { id: u256; tags: string[] } @contract class C { @external @pure g(s: S, i: u256): string { return s.tags[i]; } }`;
     const sol = `contract C { struct S { uint256 id; string[] tags; } function g(S calldata s, uint256 i) external pure returns(string memory){ return s.tags[i]; } }`;
     const t = ['ab', 'this-is-a-much-longer-tag-value!!', ''].map(strT);
-    const table = W(BigInt(3 * 32)) + W(BigInt(3 * 32 + t[0]!.length / 2)) + W(BigInt(3 * 32 + (t[0]!.length + t[1]!.length) / 2));
+    const table =
+      W(BigInt(3 * 32)) + W(BigInt(3 * 32 + t[0]!.length / 2)) + W(BigInt(3 * 32 + (t[0]!.length + t[1]!.length) / 2));
     const Sval = W(7n) + W(0x40n) + W(3n) + table + t.join('');
     const cd = (i: bigint) => W(0x40n) + W(i) + Sval;
-    await rt(jeth, sol, [0n, 1n, 2n, 3n].map((i) => ({ sig: 'g((uint256,string[]),uint256)', args: cd(i) })));
+    await rt(
+      jeth,
+      sol,
+      [0n, 1n, 2n, 3n].map((i) => ({ sig: 'g((uint256,string[]),uint256)', args: cd(i) })),
+    );
   });
 
   it('#12 element of a T[][] field (s.grid[i][j]) incl both-dim OOB', async () => {
     const jeth = `@struct class S { id: u256; grid: u256[][] } @contract class C { @external @pure g(s: S, i: u256, j: u256): u256 { return s.grid[i][j]; } }`;
     const sol = `contract C { struct S { uint256 id; uint256[][] grid; } function g(S calldata s, uint256 i, uint256 j) external pure returns(uint256){ return s.grid[i][j]; } }`;
     const rows = [[1n], [2n, 3n, 4n, 5n], []].map((r) => W(BigInt(r.length)) + r.map(W).join(''));
-    const table = W(BigInt(3 * 32)) + W(BigInt(3 * 32 + rows[0]!.length / 2)) + W(BigInt(3 * 32 + (rows[0]!.length + rows[1]!.length) / 2));
+    const table =
+      W(BigInt(3 * 32)) +
+      W(BigInt(3 * 32 + rows[0]!.length / 2)) +
+      W(BigInt(3 * 32 + (rows[0]!.length + rows[1]!.length) / 2));
     const Sval = W(9n) + W(0x40n) + W(3n) + table + rows.join('');
     const cd = (i: bigint, j: bigint) => W(0x60n) + W(i) + W(j) + Sval;
-    await rt(jeth, sol, ([[1n, 2n], [0n, 0n], [0n, 1n], [3n, 0n]] as [bigint, bigint][]).map(([i, j]) => ({ sig: 'g((uint256,uint256[][]),uint256,uint256)', args: cd(i, j) })));
+    await rt(
+      jeth,
+      sol,
+      (
+        [
+          [1n, 2n],
+          [0n, 0n],
+          [0n, 1n],
+          [3n, 0n],
+        ] as [bigint, bigint][]
+      ).map(([i, j]) => ({ sig: 'g((uint256,uint256[][]),uint256,uint256)', args: cd(i, j) })),
+    );
   });
 
   it('#13 field of a dynamic-struct-array element field (s.items[i].name) incl OOB', async () => {
     const jeth = `@struct class It { name: string; v: u256 } @struct class S { id: u256; items: It[] } @contract class C { @external @pure g(s: S, i: u256): string { return s.items[i].name; } }`;
     const sol = `contract C { struct It { string name; uint256 v; } struct S { uint256 id; It[] items; } function g(S calldata s, uint256 i) external pure returns(string memory){ return s.items[i].name; } }`;
     const mkIt = (nm: string, v: bigint) => W(0x40n) + W(v) + strT(nm);
-    const i0 = mkIt('aa', 10n), i1 = mkIt('this-name-is-deliberately-longer!', 20n);
+    const i0 = mkIt('aa', 10n),
+      i1 = mkIt('this-name-is-deliberately-longer!', 20n);
     const Sval = W(8n) + W(0x40n) + W(2n) + W(BigInt(2 * 32)) + W(BigInt(2 * 32 + i0.length / 2)) + i0 + i1;
     const cd = (i: bigint) => W(0x40n) + W(i) + Sval;
-    await rt(jeth, sol, [0n, 1n, 2n].map((i) => ({ sig: 'g((uint256,(string,uint256)[]),uint256)', args: cd(i) })));
+    await rt(
+      jeth,
+      sol,
+      [0n, 1n, 2n].map((i) => ({ sig: 'g((uint256,(string,uint256)[]),uint256)', args: cd(i) })),
+    );
   });
 });
 
@@ -964,52 +1329,99 @@ describe('assignment evaluation order: RHS before LHS index/key (byte-identical 
   const INC = `@state i: u256; inc(): u256 { let v: u256 = this.i; this.i = this.i + 1n; return v; }`;
   const SINC = `uint256 i; function inc() internal returns (uint256){ uint256 v=i; i++; return v; }`;
   const cases: [string, string, string][] = [
-    ['fixed Arr a[inc()]=inc()',
+    [
+      'fixed Arr a[inc()]=inc()',
       `@contract class C { @state a: Arr<u256,2>; ${INC} @external f(): u256 { this.a[this.inc()] = this.inc(); return this.a[0n]*10n + this.a[1n]; } }`,
-      `contract C { uint256[2] a; ${SINC} function f() external returns (uint256){ a[inc()]=inc(); return a[0]*10 + a[1]; } }`],
-    ['dyn array a[inc()]=inc()',
+      `contract C { uint256[2] a; ${SINC} function f() external returns (uint256){ a[inc()]=inc(); return a[0]*10 + a[1]; } }`,
+    ],
+    [
+      'dyn array a[inc()]=inc()',
       `@contract class C { @state a: u256[]; ${INC} @external f(): u256 { this.a.push(0n); this.a.push(0n); this.a[this.inc()] = this.inc(); return this.a[0n]*100n + this.a[1n]; } }`,
-      `contract C { uint256[] a; ${SINC} function f() external returns (uint256){ a.push(0); a.push(0); a[inc()]=inc(); return a[0]*100 + a[1]; } }`],
-    ['mapping m[inc()]=inc()',
+      `contract C { uint256[] a; ${SINC} function f() external returns (uint256){ a.push(0); a.push(0); a[inc()]=inc(); return a[0]*100 + a[1]; } }`,
+    ],
+    [
+      'mapping m[inc()]=inc()',
       `@contract class C { @state m: mapping<u256,u256>; ${INC} @external f(): u256 { this.m[this.inc()] = this.inc(); return this.m[0n]*100n + this.m[1n]; } }`,
-      `contract C { mapping(uint256=>uint256) m; ${SINC} function f() external returns (uint256){ m[inc()]=inc(); return m[0]*100 + m[1]; } }`],
-    ['nested mapping m[inc()][inc()]=inc()',
+      `contract C { mapping(uint256=>uint256) m; ${SINC} function f() external returns (uint256){ m[inc()]=inc(); return m[0]*100 + m[1]; } }`,
+    ],
+    [
+      'nested mapping m[inc()][inc()]=inc()',
       `@contract class C { @state m: mapping<u256, mapping<u256, u256>>; ${INC} @external f(): u256 { this.m[this.inc()][this.inc()] = this.inc(); return this.m[0n][1n]*1000n + this.m[1n][2n]; } }`,
-      `contract C { mapping(uint256=>mapping(uint256=>uint256)) m; ${SINC} function f() external returns (uint256){ m[inc()][inc()]=inc(); return m[0][1]*1000 + m[1][2]; } }`],
-    ['memory-local a[inc()]=inc()',
+      `contract C { mapping(uint256=>mapping(uint256=>uint256)) m; ${SINC} function f() external returns (uint256){ m[inc()][inc()]=inc(); return m[0][1]*1000 + m[1][2]; } }`,
+    ],
+    [
+      'memory-local a[inc()]=inc()',
       `@contract class C { ${INC} @external f(): u256 { let a: Arr<u256,2> = [0n,0n]; a[this.inc()] = this.inc(); return a[0n]*10n + a[1n]; } }`,
-      `contract C { ${SINC} function f() external returns (uint256){ uint256[2] memory a; a[inc()]=inc(); return a[0]*10 + a[1]; } }`],
-    ['nested fixed aa[inc()][inc()]=inc() (success-vs-revert)',
+      `contract C { ${SINC} function f() external returns (uint256){ uint256[2] memory a; a[inc()]=inc(); return a[0]*10 + a[1]; } }`,
+    ],
+    [
+      'nested fixed aa[inc()][inc()]=inc() (success-vs-revert)',
       `@contract class C { @state aa: Arr<Arr<u256,2>,2>; ${INC} @external f(): u256 { this.aa[this.inc()][this.inc()] = this.inc(); return this.aa[0n][1n]; } }`,
-      `contract C { uint256[2][2] aa; ${SINC} function f() external returns (uint256){ aa[inc()][inc()]=inc(); return aa[0][1]; } }`],
-    ['storage string m[inc()]=ternary',
+      `contract C { uint256[2][2] aa; ${SINC} function f() external returns (uint256){ aa[inc()][inc()]=inc(); return aa[0][1]; } }`,
+    ],
+    [
+      'storage string m[inc()]=ternary',
       `@contract class C { @state m: mapping<u256, string>; ${INC} @external f(): string { this.m[this.inc()] = (this.i > 0n) ? "longstringvalue!!" : "x"; return this.m[0n]; } }`,
-      `contract C { mapping(uint256=>string) m; ${SINC} function f() external returns (string memory){ m[inc()] = (i>0) ? "longstringvalue!!" : "x"; return m[0]; } }`],
+      `contract C { mapping(uint256=>string) m; ${SINC} function f() external returns (string memory){ m[inc()] = (i>0) ? "longstringvalue!!" : "x"; return m[0]; } }`,
+    ],
   ];
   for (const [name, jeth, sol] of cases) {
-    it(name, async () => { await rt(jeth, sol, [{ sig: 'f()' }]); });
+    it(name, async () => {
+      await rt(jeth, sol, [{ sig: 'f()' }]);
+    });
   }
 
   it('aggregate-element assign with a side-effecting index is rejected (JETH331); pure/derived keys still accept', () => {
     // a whole-aggregate element write with a side-effecting index cannot reorder in codegen -> safe reject.
-    expect(jethRejects(`@struct class P { x: u256; y: u256 } @contract class C { @state recs: P[]; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.recs.push(P(0n,0n)); this.recs[this.inc()] = P(this.inc(), 9n); } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @state dd: Arr<Arr<u256,2>,2>; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.dd[this.inc()] = [this.inc(), 9n]; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@struct class P { x: u256; y: u256 } @contract class C { @state recs: P[]; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.recs.push(P(0n,0n)); this.recs[this.inc()] = P(this.inc(), 9n); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @state dd: Arr<Arr<u256,2>,2>; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.dd[this.inc()] = [this.inc(), 9n]; } }`,
+      ),
+    ).toBe(true);
     // a PURE value-type cast key (address(lit), u8(x)) is NOT side-effecting: must stay accepted (this was
     // a regression-prone false positive in the side-effecting-key detector).
-    expect(jethAccepts(`@struct class P { a: u256; b: u8 } @contract class C { @state mp: mapping<address, P>; @external f(): void { this.mp[address(0x1n)] = P(1n, 2n); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @state bal: mapping<address, u256>; @external f(k: address, v: u256): void { this.bal[address(0x1n)] += v; } }`)).toBe(true);
+    expect(
+      jethAccepts(
+        `@struct class P { a: u256; b: u8 } @contract class C { @state mp: mapping<address, P>; @external f(): void { this.mp[address(0x1n)] = P(1n, 2n); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @state bal: mapping<address, u256>; @external f(k: address, v: u256): void { this.bal[address(0x1n)] += v; } }`,
+      ),
+    ).toBe(true);
   });
 });
 
 describe('creation callvalue guard + storage dyn-struct nested-aggregate event (byte-identical)', () => {
   it('a constructorless contract rejects deploy value (non-payable creation), like solc', async () => {
-    const jb = compile(`@contract class C { @state x: u256 = 9n; @external @view g(): u256 { return this.x; } }`, { fileName: 'C.jeth' });
-    const sb = compileSolidity(SPDX + `contract C { uint256 x = 9; function g() external view returns(uint256){ return x; } }`, 'C');
+    const jb = compile(`@contract class C { @state x: u256 = 9n; @external @view g(): u256 { return this.x; } }`, {
+      fileName: 'C.jeth',
+    });
+    const sb = compileSolidity(
+      SPDX + `contract C { uint256 x = 9; function g() external view returns(uint256){ return x; } }`,
+      'C',
+    );
     for (const value of [0n, 5n]) {
-      const hj = await Harness.create(), hs = await Harness.create();
-      let jr = 'created', sr = 'created';
-      try { await hj.deploy(jb.creationBytecode, { value }); } catch { jr = 'reverted'; }
-      try { await hs.deploy(sb.creation, { value }); } catch { sr = 'reverted'; }
+      const hj = await Harness.create(),
+        hs = await Harness.create();
+      let jr = 'created',
+        sr = 'created';
+      try {
+        await hj.deploy(jb.creationBytecode, { value });
+      } catch {
+        jr = 'reverted';
+      }
+      try {
+        await hs.deploy(sb.creation, { value });
+      } catch {
+        sr = 'reverted';
+      }
       expect(jr, `deploy value=${value}`).toBe(sr);
     }
   });
@@ -1059,7 +1471,11 @@ describe('deep-sweep #2 over-rejections (byte-identical to solc)', () => {
       `contract C { function f(string calldata s) external pure returns (string memory) { string memory b = s; delete b; return b; } }`,
       [{ sig: 'f(string)', args: W(0x20n) + W(3n) + Buffer.from('abc').toString('hex').padEnd(64, '0') }],
     );
-    expect(jethAccepts(`@contract class C { @external @pure f(): u256 { let a: u256[] = [1n,2n,3n]; delete a; return a.length; } }`)).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @external @pure f(): u256 { let a: u256[] = [1n,2n,3n]; delete a; return a.length; } }`,
+      ),
+    ).toBe(true);
   });
 
   it('return a tuple-valued internal call directly', async () => {
@@ -1092,7 +1508,10 @@ describe('deep-sweep #2 over-rejections (byte-identical to solc)', () => {
       `@struct class S { a: u256; b: u256 } @contract class C { @state m: mapping<string, S>; @external f(key: string, a: u256): void { this.m[key].a = a; } @external @view g(key: string): u256 { return this.m[key].a; } }`,
       `contract C { struct S { uint256 a; uint256 b; } mapping(string=>S) m; function f(string calldata key, uint256 a) external { m[key].a = a; } function g(string calldata key) external view returns(uint256){ return m[key].a; } }`,
       [
-        { sig: 'f(string,uint256)', args: W(0x40n) + W(77n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') },
+        {
+          sig: 'f(string,uint256)',
+          args: W(0x40n) + W(77n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0'),
+        },
         { sig: 'g(string)', args: W(0x20n) + W(2n) + Buffer.from('hi').toString('hex').padEnd(64, '0') },
       ],
     );
@@ -1110,7 +1529,10 @@ describe('abi.encode of an array of dynamic elements: oversized length is an ABI
       [
         { sig: 'r(bytes[])', args: W(0x20n) + W(1n) + W(0x20n) + big }, // inner bytes length 2^65 -> both empty-revert
         { sig: 'r(bytes[])', args: W(0x20n) + big }, // outer array length 2^65 -> both empty-revert
-        { sig: 'r(bytes[])', args: W(0x20n) + W(1n) + W(0x20n) + W(3n) + Buffer.from('abc').toString('hex').padEnd(64, '0') }, // well-formed
+        {
+          sig: 'r(bytes[])',
+          args: W(0x20n) + W(1n) + W(0x20n) + W(3n) + Buffer.from('abc').toString('hex').padEnd(64, '0'),
+        }, // well-formed
         { sig: 'r(bytes[])', args: W(0x20n) + W(0n) }, // empty array
       ],
     );

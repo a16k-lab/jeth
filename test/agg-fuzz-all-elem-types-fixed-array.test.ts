@@ -84,22 +84,52 @@ const TYPES: Elem[] = [
   { sol: 'uint128', base: 'u128', clean: [0n, 0xcafen, (1n << 128n) - 1n], dirty: 1n << 128n },
   // signed: canonical = word == signextend(low N bits). clean incl max (2^(N-1)-1), min, and a
   //   negative two's-complement value. dirty = a value whose top bits disagree with the sign bit.
-  { sol: 'int8', base: 'i8', clean: [0n, 0x7fn /*max*/, M - 1n /*-1*/, M - 5n /*-5*/, M - (1n << 7n) /*min -128*/], dirty: 0x80n /*=128 unsigned, not signextended -> dirty for int8*/ },
+  {
+    sol: 'int8',
+    base: 'i8',
+    clean: [0n, 0x7fn /*max*/, M - 1n /*-1*/, M - 5n /*-5*/, M - (1n << 7n) /*min -128*/],
+    dirty: 0x80n /*=128 unsigned, not signextended -> dirty for int8*/,
+  },
   { sol: 'int16', base: 'i16', clean: [0n, (1n << 15n) - 1n, M - 1n, M - 0x1234n, M - (1n << 15n)], dirty: 1n << 15n },
   { sol: 'int64', base: 'i64', clean: [0n, (1n << 63n) - 1n, M - 1n, M - 0xfeedn, M - (1n << 63n)], dirty: 1n << 63n },
-  { sol: 'int128', base: 'i128', clean: [0n, (1n << 127n) - 1n, M - 1n, M - 0xcafen, M - (1n << 127n)], dirty: 1n << 127n },
+  {
+    sol: 'int128',
+    base: 'i128',
+    clean: [0n, (1n << 127n) - 1n, M - 1n, M - 0xcafen, M - (1n << 127n)],
+    dirty: 1n << 127n,
+  },
   // int256: every 256-bit word is canonical, so there is NO dirty form. We will skip the
   //   dirty/unread probes for it (handled specially below). clean incl max, min, -1.
-  { sol: 'int256', base: 'i256', clean: [0n, (1n << 255n) - 1n, M - 1n, M - 0x12345678n, 1n << 255n /*min*/], dirty: -1n /*sentinel: none*/ },
+  {
+    sol: 'int256',
+    base: 'i256',
+    clean: [0n, (1n << 255n) - 1n, M - 1n, M - 0x12345678n, 1n << 255n /*min*/],
+    dirty: -1n /*sentinel: none*/,
+  },
   // bool: canonical in {0,1}. dirty = 2.
   { sol: 'bool', base: 'bool', clean: [0n, 1n], dirty: 2n },
   // address: canonical high 96 bits 0. clean incl all-FF low 160 bits. dirty = bit 160 set.
   { sol: 'address', base: 'addr', clean: [0n, BigInt('0x' + '11'.repeat(20)), (1n << 160n) - 1n], dirty: 1n << 160n },
   // bytesM: left-aligned; low (256-8M) bits must be 0. dirty = a low bit set.
   { sol: 'bytes1', base: 'b1', clean: [0n, left(1, 0xabn), left(1, 0xffn)], dirty: left(1, 0xabn) | 1n },
-  { sol: 'bytes4', base: 'b4', clean: [0n, left(4, 0xdeadbeefn), left(4, 0xffffffffn)], dirty: left(4, 0xdeadbeefn) | 1n },
-  { sol: 'bytes20', base: 'b20', clean: [0n, left(20, BigInt('0x' + 'aa'.repeat(20))), left(20, (1n << 160n) - 1n)], dirty: left(20, BigInt('0x' + 'aa'.repeat(20))) | 1n },
-  { sol: 'bytes32', base: 'b32', clean: [BigInt('0x' + 'ab'.repeat(32)), 0n, (1n << 256n) - 1n], dirty: -1n /*sentinel: none (full word canonical)*/ },
+  {
+    sol: 'bytes4',
+    base: 'b4',
+    clean: [0n, left(4, 0xdeadbeefn), left(4, 0xffffffffn)],
+    dirty: left(4, 0xdeadbeefn) | 1n,
+  },
+  {
+    sol: 'bytes20',
+    base: 'b20',
+    clean: [0n, left(20, BigInt('0x' + 'aa'.repeat(20))), left(20, (1n << 160n) - 1n)],
+    dirty: left(20, BigInt('0x' + 'aa'.repeat(20))) | 1n,
+  },
+  {
+    sol: 'bytes32',
+    base: 'b32',
+    clean: [BigInt('0x' + 'ab'.repeat(32)), 0n, (1n << 256n) - 1n],
+    dirty: -1n /*sentinel: none (full word canonical)*/,
+  },
 ];
 
 // Build Solidity mirror contract from the same table (both T[5] and T[3] getters).
@@ -151,15 +181,17 @@ describe('all element types in a fixed-array param vs Solidity', () => {
     for (const t of TYPES) {
       describe(`${t.sol}[${n}] (${t.base}_${n})`, () => {
         // a deterministic clean filler for the "other" positions (canonical 0 is always clean).
-        const fill = (over: Map<number, bigint>): bigint[] =>
-          Array.from({ length: n }, (_, k) => over.get(k) ?? 0n);
+        const fill = (over: Map<number, bigint>): bigint[] => Array.from({ length: n }, (_, k) => over.get(k) ?? 0n);
 
         it('CLEAN in-range reads (incl type max / negatives)', async () => {
           // For each clean value, place it at index 0 and at the last index, read it back.
           for (const cv of t.clean) {
             for (const idx of [0, n - 1]) {
               const elems = fill(new Map([[idx, cv]]));
-              const r = await eq(`${t.base}_${n} clean v=0x${cv.toString(16)} @${idx}`, raw(t.base, t.sol, n, elems, BigInt(idx)));
+              const r = await eq(
+                `${t.base}_${n} clean v=0x${cv.toString(16)} @${idx}`,
+                raw(t.base, t.sol, n, elems, BigInt(idx)),
+              );
               // a successful read must return exactly the canonical ABI word.
               expect(r.j.success, 'clean read should succeed').toBe(true);
               expect(r.j.returnHex).toBe('0x' + pad(cv));
@@ -197,7 +229,12 @@ describe('all element types in a fixed-array param vs Solidity', () => {
           const d2 = n - 1; // distinct because n>=3
           const other = hasDirty ? t.dirty : fullWord;
           const cleanVal = t.clean.find((v) => v !== other) ?? 0n;
-          const elems = fill(new Map([[d1, other], [d2, cleanVal]]));
+          const elems = fill(
+            new Map([
+              [d1, other],
+              [d2, cleanVal],
+            ]),
+          );
           const r = await eq(`${t.base}_${n} unread @${d2}`, raw(t.base, t.sol, n, elems, BigInt(d2)));
           expect(r.j.success, 'reading a clean index past a dirty/full-word one must succeed').toBe(true);
           expect(r.j.returnHex).toBe('0x' + pad(cleanVal));
@@ -226,7 +263,10 @@ describe('all element types in a fixed-array param vs Solidity', () => {
         for (const p of probes) {
           for (const idx of [0, n - 1]) {
             const elems = Array.from({ length: n }, (_, k) => (k === idx ? p : 0n));
-            const r = await eq(`${base}_${n} verbatim 0x${p.toString(16)} @${idx}`, raw(base, solType, n, elems, BigInt(idx)));
+            const r = await eq(
+              `${base}_${n} verbatim 0x${p.toString(16)} @${idx}`,
+              raw(base, solType, n, elems, BigInt(idx)),
+            );
             expect(r.j.success).toBe(true);
             expect(r.j.returnHex).toBe('0x' + pad(p));
           }

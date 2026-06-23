@@ -16,11 +16,16 @@ import { CompileError } from '../src/diagnostics.js';
 import { compileSolidity, readSlot } from './_solidity.js';
 
 const sel = (s: string) => functionSelector(s);
-const pad = (v: bigint) => { let x = v % (1n << 256n); if (x < 0n) x += 1n << 256n; return x.toString(16).padStart(64, '0'); };
+const pad = (v: bigint) => {
+  let x = v % (1n << 256n);
+  if (x < 0n) x += 1n << 256n;
+  return x.toString(16).padStart(64, '0');
+};
 
 type LogEntry = { topics: string[]; data: string };
 const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
-  a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  a.length === b.length &&
+  a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 // Capture the first JETH error code (or 'CRASH' if the compiler threw something other than a
 // CompileError, or 'OK' if it compiled clean). Never lets an exception escape.
@@ -49,8 +54,10 @@ async function buildPair(jSrc: string, sSrc: string) {
     const s = await sol.call(as, data);
     expect(j.success, `${label} jeth=${j.exceptionError} sol=${s.exceptionError}`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
-    expect(eqLogs(j.logs as LogEntry[], s.logs as LogEntry[]),
-      `${label} logs\n jeth=${JSON.stringify(j.logs)}\n sol =${JSON.stringify(s.logs)}`).toBe(true);
+    expect(
+      eqLogs(j.logs as LogEntry[], s.logs as LogEntry[]),
+      `${label} logs\n jeth=${JSON.stringify(j.logs)}\n sol =${JSON.stringify(s.logs)}`,
+    ).toBe(true);
     return { j, s };
   }
   async function slotsEq(label: string, slots: bigint[]) {
@@ -108,7 +115,9 @@ describe('F3 adv: a default of every kind matches the spelled-out constant', () 
     function t255(uint8 a) external pure returns (uint8) { return d255(a, uint8(255)); }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
-  beforeAll(async () => { P = await buildPair(J, S); });
+  beforeAll(async () => {
+    P = await buildPair(J, S);
+  });
   it('each default kind equals the explicit constant in solc', async () => {
     await P.eq('uint default', encodeCall(sel('tu(uint256)'), [100n]));
     await P.eq('int64 NEGATIVE default', encodeCall(sel('ti(int64)'), [10n]));
@@ -145,7 +154,9 @@ describe('F3 adv: multiple trailing defaults, omit none / some / all', () => {
     function all(uint256 x, uint256 y, uint256 z) external pure returns (uint256) { return f(x, y, z); }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
-  beforeAll(async () => { P = await buildPair(J, S); });
+  beforeAll(async () => {
+    P = await buildPair(J, S);
+  });
   it('omit-all (zero args), omit-some, omit-none', async () => {
     await P.eq('none', encodeCall(sel('none()'), []));
     await P.eq('one', encodeCall(sel('one(uint256)'), [4n]));
@@ -181,7 +192,9 @@ describe('F3 adv: defaulted arg flowing into storage + into an event', () => {
     function ann(uint256 amount) external { announce(amount, address(uint160(0xbeef))); }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
-  beforeAll(async () => { P = await buildPair(J, S); });
+  beforeAll(async () => {
+    P = await buildPair(J, S);
+  });
   it('storage slots and event logs match solc', async () => {
     await P.eq('setIt (default b=1000)', encodeCall(sel('setIt(uint256)'), [5n]));
     await P.slotsEq('after setIt', [0n, 1n]);
@@ -206,7 +219,9 @@ describe('F3 adv: recursion with a defaulted accumulator', () => {
     function sumTo(uint256 n) external pure returns (uint256) { return rec(n, 0); }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
-  beforeAll(async () => { P = await buildPair(J, S); });
+  beforeAll(async () => {
+    P = await buildPair(J, S);
+  });
   it('deep-ish recursion matches solc', async () => {
     await P.eq('sumTo(0)', encodeCall(sel('sumTo(uint256)'), [0n]));
     await P.eq('sumTo(1)', encodeCall(sel('sumTo(uint256)'), [1n]));
@@ -249,7 +264,9 @@ describe('F3 adv: named arguments bind by NAME not position', () => {
     function structParamLiteral(uint256 x, uint256 y, uint256 z) external pure returns (uint256) { return viaStruct(P3(x, y, z)); }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
-  beforeAll(async () => { P = await buildPair(J, S); });
+  beforeAll(async () => {
+    P = await buildPair(J, S);
+  });
   it('named full / reordered / partial / shorthand / struct-param-named / struct-literal', async () => {
     await P.eq('full', encodeCall(sel('full(uint256,uint256,uint256)'), [1n, 2n, 3n]));
     // reorder: keys given as { c, a, b } but must bind by name; with a=1,b=2,c=3 result is identical to full.
@@ -257,8 +274,14 @@ describe('F3 adv: named arguments bind by NAME not position', () => {
     await P.eq('reorder distinct', encodeCall(sel('reorder(uint256,uint256,uint256)'), [4n, 5n, 6n]));
     await P.eq('partial (c default 9)', encodeCall(sel('part(uint256,uint256)'), [1n, 2n]));
     await P.eq('shorthand', encodeCall(sel('shorthand(uint256,uint256)'), [7n, 8n]));
-    await P.eq('struct-param NAMED { p: value }', encodeCall(sel('structParamNamed(uint256,uint256,uint256)'), [1n, 2n, 3n]));
-    await P.eq('struct-LITERAL { x,y,z }', encodeCall(sel('structParamLiteral(uint256,uint256,uint256)'), [4n, 5n, 6n]));
+    await P.eq(
+      'struct-param NAMED { p: value }',
+      encodeCall(sel('structParamNamed(uint256,uint256,uint256)'), [1n, 2n, 3n]),
+    );
+    await P.eq(
+      'struct-LITERAL { x,y,z }',
+      encodeCall(sel('structParamLiteral(uint256,uint256,uint256)'), [4n, 5n, 6n]),
+    );
   });
 });
 
@@ -282,7 +305,9 @@ describe('F3 adv: a defaulted param does NOT leak into the ABI / selector', () =
     @external @pure g(a: u256, b: u256): u256 { return a + b; }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
-  beforeAll(async () => { P = await buildPair(J, S); });
+  beforeAll(async () => {
+    P = await buildPair(J, S);
+  });
   it('selector lists both params and equals g(uint256,uint256)', () => {
     const abi = P.jb.abi;
     const g = abi.find((e: any) => e.name === 'g');
@@ -319,7 +344,9 @@ describe('F3 adv: truncated calldata parity (solc zero-pads static args)', () =>
     function g(uint256 a, uint256 b) external pure returns (uint256) { return a + b; }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
-  beforeAll(async () => { P = await buildPair(J, S); });
+  beforeAll(async () => {
+    P = await buildPair(J, S);
+  });
   it('one-word, zero-word and over-long calldata behave like solc', async () => {
     // only ONE word of args (b missing) -> solc reads b as 0.
     await P.eq('one word', '0x' + sel('g(uint256,uint256)') + pad(40n));
@@ -350,7 +377,9 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
   });
 
   it('JETH252: default on a non-value-type param (struct / array / bytes)', () => {
-    expect(jethCodes(`@struct class P { x: u256; }\n` + base(`f(p: P = P(0n)): u256 { return p.x; }`))).toContain('JETH252');
+    expect(jethCodes(`@struct class P { x: u256; }\n` + base(`f(p: P = P(0n)): u256 { return p.x; }`))).toContain(
+      'JETH252',
+    );
     expect(jethCodes(base(`f(a: u256[] = [1n]): u256 { return a.length; }`))).toContain('JETH252');
     expect(jethCodes(base(`f(b: bytes = 0x00n): u256 { return b.length; }`))).toContain('JETH252');
   });
@@ -365,38 +394,70 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
   });
 
   it('wrong-type default (bool = 1n) is diagnosed when filled at a call site', () => {
-    const codes = jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`));
+    const codes = jethCodes(
+      base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`),
+    );
     // an integer literal coerced into bool -> JETH084 (cannot use integer literal as bool).
     expect(codes.some((c) => c === 'JETH084' || c === 'JETH085')).toBe(true);
   });
 
   it('JETH148: too many positional args, and omitting a non-defaulted arg', () => {
-    expect(jethCodes(base(`f(a: u256, b: u256 = 1n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, 2n, 3n); }`))).toContain('JETH148');
-    expect(jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n); }`))).toContain('JETH148');
+    expect(
+      jethCodes(
+        base(
+          `f(a: u256, b: u256 = 1n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, 2n, 3n); }`,
+        ),
+      ),
+    ).toContain('JETH148');
+    expect(
+      jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n); }`)),
+    ).toContain('JETH148');
   });
 
   it('named: unknown key, missing no-default param, duplicate key', () => {
     // an unknown key makes looksLikeNamedArgs false -> the object is treated as a positional arg,
     // which then fails to coerce into the u256 param. Whatever the code, it must reject (no crash).
-    const unknown = jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, zzz: 2n }); }`));
+    const unknown = jethCodes(
+      base(
+        `f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, zzz: 2n }); }`,
+      ),
+    );
     expect(unknown).not.toContain('OK');
     expect(unknown.every((c) => !c.startsWith('CRASH'))).toBe(true);
     // named call missing a param that has no default -> JETH254
-    expect(jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n }); }`))).toContain('JETH254');
+    expect(
+      jethCodes(
+        base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n }); }`),
+      ),
+    ).toContain('JETH254');
     // duplicate named key -> JETH253 (parser may also reject a literal duplicate; accept either way as long as it diagnoses)
-    const dup = jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, a: 2n, b: 3n }); }`));
+    const dup = jethCodes(
+      base(
+        `f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, a: 2n, b: 3n }); }`,
+      ),
+    );
     expect(dup).not.toContain('OK');
     expect(dup.every((c) => !c.startsWith('CRASH'))).toBe(true);
   });
 
   it('JETH240: a named call to an @external function is rejected', () => {
-    expect(jethCodes(base(`@external @pure f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, b: 2n }); }`))).toContain('JETH240');
+    expect(
+      jethCodes(
+        base(
+          `@external @pure f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, b: 2n }); }`,
+        ),
+      ),
+    ).toContain('JETH240');
   });
 
   it('mixing positional + named: this.f(1n, {b:2n}) is sound (rejected, never silently mis-binds)', () => {
     // provided.length == 2 so the named-args branch (length==1) is skipped; arg[1] is the object
     // literal coerced into u256 param b -> must be rejected, not silently accepted.
-    const codes = jethCodes(base(`f(a: u256, b: u256 = 7n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, { b: 2n }); }`));
+    const codes = jethCodes(
+      base(
+        `f(a: u256, b: u256 = 7n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, { b: 2n }); }`,
+      ),
+    );
     expect(codes).not.toContain('OK');
     expect(codes.every((c) => !c.startsWith('CRASH'))).toBe(true);
   });
@@ -448,19 +509,37 @@ describe('F3 adv: default validation is eager (declaration-time)', () => {
   const base = (members: string) => `@contract class C {\n${members}\n}`;
   it('a bad default errors even on an UNCALLED helper', () => {
     // bool = 1n: wrong type. u8 = 300n: out of range. u128 = type(u256).max: out of range.
-    expect(jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return 0n; }`))
-      .some((c) => c === 'JETH084' || c === 'JETH085')).toBe(true);
-    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return 0n; }`))).toContain('JETH070');
-    expect(jethCodes(base(`f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return 0n; }`))).toContain('JETH070');
+    expect(
+      jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return 0n; }`)).some(
+        (c) => c === 'JETH084' || c === 'JETH085',
+      ),
+    ).toBe(true);
+    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return 0n; }`))).toContain(
+      'JETH070',
+    );
+    expect(
+      jethCodes(base(`f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return 0n; }`)),
+    ).toContain('JETH070');
   });
   it('the SAME bad default also errors when the helper IS internally called', () => {
-    expect(jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`))
-      .some((c) => c === 'JETH084' || c === 'JETH085')).toBe(true);
-    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`))).toContain('JETH070');
-    expect(jethCodes(base(`f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return this.f(); }`))).toContain('JETH070');
+    expect(
+      jethCodes(
+        base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`),
+      ).some((c) => c === 'JETH084' || c === 'JETH085'),
+    ).toBe(true);
+    expect(
+      jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`)),
+    ).toContain('JETH070');
+    expect(
+      jethCodes(
+        base(`f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return this.f(); }`),
+      ),
+    ).toContain('JETH070');
   });
   it('a bad default errors even when every call supplies the arg (validated at the declaration)', () => {
-    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(5n); }`))).toContain('JETH070');
+    expect(
+      jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(5n); }`)),
+    ).toContain('JETH070');
   });
 });
 
@@ -482,7 +561,9 @@ describe('F3 adv: positional struct-literal arg alongside an ordinary positional
     function t(uint256 a, uint256 bx, uint256 by) external pure returns (uint256) { return f(a, S(bx, by)); }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
-  beforeAll(async () => { P = await buildPair(J, Sol); });
+  beforeAll(async () => {
+    P = await buildPair(J, Sol);
+  });
   it('mixed positional + struct-literal arg matches solc', async () => {
     await P.eq('mixed', encodeCall(sel('t(uint256,uint256,uint256)'), [1n, 2n, 3n]));
   });

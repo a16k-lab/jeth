@@ -242,10 +242,8 @@ describe('errors+events adversarial', () => {
     const probs: string[] = [];
     if (j.success !== s.success) probs.push('ok j=' + j.success + ' s=' + s.success);
     if (j.returnHex !== s.returnHex) probs.push('ret j=' + j.returnHex + ' s=' + s.returnHex);
-    if (!eqLogs(j.logs, s.logs))
-      probs.push('logs j=' + JSON.stringify(j.logs) + ' s=' + JSON.stringify(s.logs));
-    if (probs.length)
-      mism.push(label + ' {jethErr=' + j.exceptionError + '} :: ' + probs.join(' | '));
+    if (!eqLogs(j.logs, s.logs)) probs.push('logs j=' + JSON.stringify(j.logs) + ' s=' + JSON.stringify(s.logs));
+    if (probs.length) mism.push(label + ' {jethErr=' + j.exceptionError + '} :: ' + probs.join(' | '));
   }
   function raw(s: string) {
     return '0x' + strip(s);
@@ -275,15 +273,25 @@ describe('errors+events adversarial', () => {
     await eq('revertEmptyStr', encodeCall(sel('revertEmptyStr()')));
     await eq('revertBare', encodeCall(sel('revertBare()')));
     for (const [a, b] of [
-      [5n, 3n], [3n, 5n], [0n, 0n], [U256_MAX, 0n], [0n, U256_MAX], [10n, 10n],
+      [5n, 3n],
+      [3n, 5n],
+      [0n, 0n],
+      [U256_MAX, 0n],
+      [0n, U256_MAX],
+      [10n, 10n],
     ] as [bigint, bigint][]) {
       await eq('reqCond ' + a + ',' + b, encodeCall(sel('reqCond(uint256,uint256)'), [a, b]));
     }
 
     // ---------- Panic codes 0x11/0x12/0x01? ----------
     const pairs: [bigint, bigint][] = [
-      [1n, 2n], [U256_MAX, 0n], [U256_MAX, 1n], [U256_MAX, 2n], [0n, 0n],
-      [I256_MAX % M, 0n], [2n, U256_MAX],
+      [1n, 2n],
+      [U256_MAX, 0n],
+      [U256_MAX, 1n],
+      [U256_MAX, 2n],
+      [0n, 0n],
+      [I256_MAX % M, 0n],
+      [2n, U256_MAX],
     ];
     for (const [a, b] of pairs) {
       await eq('add ' + a + ',' + b, encodeCall(sel('panicOverflowAdd(uint256,uint256)'), [a, b]));
@@ -295,7 +303,12 @@ describe('errors+events adversarial', () => {
     }
     // signed div: INT_MIN / -1 overflow Panic(0x11), x/0 Panic(0x12)
     for (const [a, b] of [
-      [I256_MIN, -1n], [I256_MIN, 1n], [5n, 0n], [I256_MIN, 0n], [-7n, 2n], [7n, -2n],
+      [I256_MIN, -1n],
+      [I256_MIN, 1n],
+      [5n, 0n],
+      [I256_MIN, 0n],
+      [-7n, 2n],
+      [7n, -2n],
     ] as [bigint, bigint][]) {
       await eq('idiv ' + a + ',' + b, encodeCall(sel('panicNegI(int256,int256)'), [a, b]));
     }
@@ -308,15 +321,22 @@ describe('errors+events adversarial', () => {
     await eq('r3 t', encodeCall(sel('r3(bool)'), [1n]));
     await eq('r3 f', encodeCall(sel('r3(bool)'), [0n]));
     await eq('r4', encodeCall(sel('r4(uint256,address,bool)'), [7n, ADDR, 1n]));
-    await eq('r5 255,-1', encodeCall(sel('r5(uint8,int8)'), [255n, (-1n) % M]));
+    await eq('r5 255,-1', encodeCall(sel('r5(uint8,int8)'), [255n, -1n % M]));
     await eq('r5 0,127', encodeCall(sel('r5(uint8,int8)'), [0n, 127n]));
-    await eq('r5 0,-128', encodeCall(sel('r5(uint8,int8)'), [0n, (-128n) % M]));
-    await eq('r6', encodeCall(sel('r6(int256,bytes32,uint128,int16)'), [
-      (-12345n) % M, BigInt('0x' + 'cd'.repeat(32)), (1n << 100n), (-30000n) % M,
-    ]));
-    await eq('r6 min', encodeCall(sel('r6(int256,bytes32,uint128,int16)'), [
-      I256_MIN % M, 0n, (1n << 128n) - 1n, (-32768n) % M,
-    ]));
+    await eq('r5 0,-128', encodeCall(sel('r5(uint8,int8)'), [0n, -128n % M]));
+    await eq(
+      'r6',
+      encodeCall(sel('r6(int256,bytes32,uint128,int16)'), [
+        -12345n % M,
+        BigInt('0x' + 'cd'.repeat(32)),
+        1n << 100n,
+        -30000n % M,
+      ]),
+    );
+    await eq(
+      'r6 min',
+      encodeCall(sel('r6(int256,bytes32,uint128,int16)'), [I256_MIN % M, 0n, (1n << 128n) - 1n, -32768n % M]),
+    );
     await eq('r7', encodeCall(sel('r7()')));
     await eq('rq 9,3', encodeCall(sel('rq(uint256,uint256)'), [9n, 3n]));
     await eq('rq 3,9', encodeCall(sel('rq(uint256,uint256)'), [3n, 9n]));
@@ -328,26 +348,40 @@ describe('errors+events adversarial', () => {
 
     // ---------- dirty high bits in narrow custom-error args (r5 takes u8,i8) ----------
     // Solidity validates incoming calldata; clean here, dirty bits set in word.
-    const dirty8 = pad(0x1234567890n) ; // high bits set beyond 8 bits
+    const dirty8 = pad(0x1234567890n); // high bits set beyond 8 bits
     await eq('r5 dirtyU8', '0x' + sel('r5(uint8,int8)') + dirty8 + pad(5n));
     await eq('r5 dirtyI8', '0x' + sel('r5(uint8,int8)') + pad(3n) + pad(0xffffff00n));
 
     // ---------- custom errors: dynamic (bytes/string) args ----------
-    const strCases = ['', 'hi', 'abcdefghijklmnopqrstuvwxyz012345', 'this string is definitely longer than thirty-two bytes to force multi-word padding'];
+    const strCases = [
+      '',
+      'hi',
+      'abcdefghijklmnopqrstuvwxyz012345',
+      'this string is definitely longer than thirty-two bytes to force multi-word padding',
+    ];
     for (const s of strCases) {
       // eWithStr(uint256, string, bool): head [code][off=0x60][flag] + tail
       const cd = '0x' + sel('eWithStr(uint256,string,bool)') + pad(42n) + pad(0x60n) + pad(1n) + strTail(s);
       await eq('eWithStr "' + s.slice(0, 8) + '" len' + s.length, cd);
     }
     // eTwoStr(string,string): head [off1=0x40][off2] + tail1 + tail2
-    for (const [a, b] of [['', ''], ['x', 'yy'], ['first', 'second longer string value goes here for padding test ok']] as [string, string][]) {
+    for (const [a, b] of [
+      ['', ''],
+      ['x', 'yy'],
+      ['first', 'second longer string value goes here for padding test ok'],
+    ] as [string, string][]) {
       const t1 = strTail(a);
       const off2 = 0x40n + BigInt(t1.length / 2);
       const cd = '0x' + sel('eTwoStr(string,string)') + pad(0x40n) + pad(off2) + t1 + strTail(b);
       await eq('eTwoStr "' + a + '","' + b.slice(0, 6) + '"', cd);
     }
     // eJustBytes(bytes): head [off=0x20] + tail
-    for (const s of ['', 'ab', 'deadbeefdeadbeefdeadbeefdeadbeef00', 'a longer bytes blob that exceeds a single thirty-two byte word for sure yes']) {
+    for (const s of [
+      '',
+      'ab',
+      'deadbeefdeadbeefdeadbeefdeadbeef00',
+      'a longer bytes blob that exceeds a single thirty-two byte word for sure yes',
+    ]) {
       const cd = '0x' + sel('eJustBytes(bytes)') + pad(0x20n) + strTail(s);
       await eq('eJustBytes len' + s.length, cd);
     }
@@ -370,18 +404,42 @@ describe('errors+events adversarial', () => {
     await eq('evTransfer', encodeCall(sel('evTransfer(address,address,uint256)'), [A, B, 1000n]));
     await eq('evTransfer zero', encodeCall(sel('evTransfer(address,address,uint256)'), [0n, 0n, 0n]));
     await eq('evThreeIdx', encodeCall(sel('evThreeIdx(uint256,uint256,uint256,uint256)'), [7n, 8n, 9n, 42n]));
-    await eq('evThreeIdx max', encodeCall(sel('evThreeIdx(uint256,uint256,uint256,uint256)'), [U256_MAX, 0n, U256_MAX, U256_MAX]));
+    await eq(
+      'evThreeIdx max',
+      encodeCall(sel('evThreeIdx(uint256,uint256,uint256,uint256)'), [U256_MAX, 0n, U256_MAX, U256_MAX]),
+    );
     await eq('evBare', encodeCall(sel('evBare()')));
     await eq('evOneIdxNoData', encodeCall(sel('evOneIdxNoData(address)'), [A]));
 
     // mixed indexed value/int/bool/bytesN topics, dirty high bits
-    await eq('evMixed', encodeCall(sel('evMixed(uint8,int16,bool,address,bytes4)'), [255n, (-3n) % M, 1n, A, BigInt('0xdeadbeef' + '00'.repeat(28))]));
-    await eq('evMixed min', encodeCall(sel('evMixed(uint8,int16,bool,address,bytes4)'), [0n, (-32768n) % M, 0n, 0n, 0n]));
-    await eq('evMixed maxbytes', encodeCall(sel('evMixed(uint8,int16,bool,address,bytes4)'), [128n, 32767n, 1n, B, BigInt('0xffffffff' + '00'.repeat(28))]));
+    await eq(
+      'evMixed',
+      encodeCall(sel('evMixed(uint8,int16,bool,address,bytes4)'), [
+        255n,
+        -3n % M,
+        1n,
+        A,
+        BigInt('0xdeadbeef' + '00'.repeat(28)),
+      ]),
+    );
+    await eq('evMixed min', encodeCall(sel('evMixed(uint8,int16,bool,address,bytes4)'), [0n, -32768n % M, 0n, 0n, 0n]));
+    await eq(
+      'evMixed maxbytes',
+      encodeCall(sel('evMixed(uint8,int16,bool,address,bytes4)'), [
+        128n,
+        32767n,
+        1n,
+        B,
+        BigInt('0xffffffff' + '00'.repeat(28)),
+      ]),
+    );
 
     // declaration order reshuffle (indexed interleaved with data)
     await eq('evOrder', encodeCall(sel('evOrder(uint256,uint256,uint256,uint256,uint256)'), [1n, 2n, 3n, 4n, 5n]));
-    await eq('evOrder max', encodeCall(sel('evOrder(uint256,uint256,uint256,uint256,uint256)'), [U256_MAX, U256_MAX, 0n, U256_MAX, 7n]));
+    await eq(
+      'evOrder max',
+      encodeCall(sel('evOrder(uint256,uint256,uint256,uint256,uint256)'), [U256_MAX, U256_MAX, 0n, U256_MAX, 7n]),
+    );
 
     // indexed signed int topic (sign-extension into 32-byte topic)
     for (const s of [0n, -1n, 1n, I256_MIN, I256_MAX, -123456789n]) {
@@ -401,19 +459,41 @@ describe('errors+events adversarial', () => {
       await eq('evDataBytes len' + s.length, cd);
     }
     // event with two dynamic data fields (string + bytes)
-    for (const [a, b] of [['', ''], ['s', 'b'], ['a string here longer than thirty-two bytes for tail spread test ok', 'bytes blob also longer than one full word goes here for the test']] as [string, string][]) {
+    for (const [a, b] of [
+      ['', ''],
+      ['s', 'b'],
+      [
+        'a string here longer than thirty-two bytes for tail spread test ok',
+        'bytes blob also longer than one full word goes here for the test',
+      ],
+    ] as [string, string][]) {
       const t1 = strTail(a);
       const off2 = 0x40n + BigInt(t1.length / 2);
       const cd = '0x' + sel('evStrAndBytes(string,bytes)') + pad(0x40n) + pad(off2) + t1 + strTail(b);
       await eq('evStrAndBytes "' + a.slice(0, 4) + '"', cd);
     }
     // multi data: static, dynamic, static, dynamic interleaved
-    for (const [bs, ds] of [['', ''], ['xx', 'yy'], ['some bytes here that span more than thirty two bytes total for the test', 'and a string that also is quite long enough to need two words at least']] as [string, string][]) {
+    for (const [bs, ds] of [
+      ['', ''],
+      ['xx', 'yy'],
+      [
+        'some bytes here that span more than thirty two bytes total for the test',
+        'and a string that also is quite long enough to need two words at least',
+      ],
+    ] as [string, string][]) {
       const t1 = strTail(bs);
       // head: [a][off_b][c][off_d]; off_b = 0x80; off_d = 0x80 + |tail_b|
       const offB = 0x80n;
       const offD = offB + BigInt(t1.length / 2);
-      const cd = '0x' + sel('evMultiData(uint256,bytes,uint256,string)') + pad(11n) + pad(offB) + pad(22n) + pad(offD) + t1 + strTail(ds);
+      const cd =
+        '0x' +
+        sel('evMultiData(uint256,bytes,uint256,string)') +
+        pad(11n) +
+        pad(offB) +
+        pad(22n) +
+        pad(offD) +
+        t1 +
+        strTail(ds);
       await eq('evMultiData "' + bs.slice(0, 4) + '"', cd);
     }
     // indexed topics + dynamic data
@@ -422,7 +502,16 @@ describe('errors+events adversarial', () => {
       await eq('evIdxAndStr len' + s.length, cd);
     }
     // all static, two indexed + three data incl bytes32/bool
-    await eq('evAllStatic', encodeCall(sel('evAllStatic(uint8,int8,uint256,bytes32,bool)'), [200n, (-5n) % M, U256_MAX, BigInt('0x' + '7f'.repeat(32)), 1n]));
+    await eq(
+      'evAllStatic',
+      encodeCall(sel('evAllStatic(uint8,int8,uint256,bytes32,bool)'), [
+        200n,
+        -5n % M,
+        U256_MAX,
+        BigInt('0x' + '7f'.repeat(32)),
+        1n,
+      ]),
+    );
     await eq('evAllStatic2', encodeCall(sel('evAllStatic(uint8,int8,uint256,bytes32,bool)'), [0n, 127n, 0n, 0n, 0n]));
 
     // ---------- multiple events per call / event then revert / conditional ----------
@@ -456,14 +545,14 @@ describe('errors+events adversarial', () => {
     // Both compilers must reject identically (same success + same returndata).
     const msel = sel('eWithStr(uint256,string,bool)'); // (uint256, string, bool)
     // garbage in head[1] (the string offset) -> out-of-bounds / non-canonical
-    const badOffsets: bigint[] = [0x0n, 0x20n, 0x40n, 0x80n, 0xffffffffn, U256_MAX, (1n << 64n), (1n << 255n)];
+    const badOffsets: bigint[] = [0x0n, 0x20n, 0x40n, 0x80n, 0xffffffffn, U256_MAX, 1n << 64n, 1n << 255n];
     for (const off of badOffsets) {
       // head: [code=1][offset][flag=1], then a 1-word "tail" claiming len=0x20 but no data
       const cd = '0x' + msel + pad(1n) + pad(off) + pad(1n) + pad(0x20n);
       await eq('eWithStr badOff ' + off.toString(16), cd);
     }
     // valid offset (0x60) but length larger than remaining calldata
-    for (const len of [0x21n, 0x100n, U256_MAX, (1n << 64n)]) {
+    for (const len of [0x21n, 0x100n, U256_MAX, 1n << 64n]) {
       const cd = '0x' + msel + pad(1n) + pad(0x60n) + pad(1n) + pad(len) + pad(0xabcdn);
       await eq('eWithStr badLen ' + len.toString(16), cd);
     }
@@ -475,11 +564,11 @@ describe('errors+events adversarial', () => {
 
     // malformed event dynamic-arg calldata: evDataStr(uint256, string)
     const esel = sel('evDataStr(uint256,string)');
-    for (const off of [0x20n, 0x60n, 0xffffffffn, U256_MAX, (1n << 64n)]) {
+    for (const off of [0x20n, 0x60n, 0xffffffffn, U256_MAX, 1n << 64n]) {
       const cd = '0x' + esel + pad(7n) + pad(off) + pad(0x20n);
       await eq('evDataStr badOff ' + off.toString(16), cd);
     }
-    for (const len of [0x21n, U256_MAX, (1n << 64n)]) {
+    for (const len of [0x21n, U256_MAX, 1n << 64n]) {
       const cd = '0x' + esel + pad(7n) + pad(0x40n) + pad(len) + pad(0xeeeen);
       await eq('evDataStr badLen ' + len.toString(16), cd);
     }
@@ -487,7 +576,7 @@ describe('errors+events adversarial', () => {
 
     // malformed eJustBytes(bytes): bad offset / overlong length
     const bsel = sel('eJustBytes(bytes)');
-    for (const off of [0x0n, 0x40n, U256_MAX, (1n << 64n)]) {
+    for (const off of [0x0n, 0x40n, U256_MAX, 1n << 64n]) {
       await eq('eJustBytes badOff ' + off.toString(16), '0x' + bsel + pad(off) + pad(0n));
     }
     for (const len of [0x21n, U256_MAX]) {
@@ -500,8 +589,20 @@ describe('errors+events adversarial', () => {
     await eq('r5 hiU8only', '0x' + sel('r5(uint8,int8)') + pad(0x100n) + pad(5n));
     await eq('r5 i8outRange', '0x' + sel('r5(uint8,int8)') + pad(5n) + pad(0x80n)); // 0x80 = 128, out of int8 range
     // evMixed narrow indexed topics with dirty high bits
-    await eq('evMixed garbage', '0x' + sel('evMixed(uint8,int16,bool,address,bytes4)') + pad(U256_MAX) + pad(U256_MAX) + pad(U256_MAX) + pad(U256_MAX) + pad(U256_MAX));
-    await eq('evMixed boolHi', '0x' + sel('evMixed(uint8,int16,bool,address,bytes4)') + pad(1n) + pad(1n) + pad(2n) + pad(A) + pad(0n));
+    await eq(
+      'evMixed garbage',
+      '0x' +
+        sel('evMixed(uint8,int16,bool,address,bytes4)') +
+        pad(U256_MAX) +
+        pad(U256_MAX) +
+        pad(U256_MAX) +
+        pad(U256_MAX) +
+        pad(U256_MAX),
+    );
+    await eq(
+      'evMixed boolHi',
+      '0x' + sel('evMixed(uint8,int16,bool,address,bytes4)') + pad(1n) + pad(1n) + pad(2n) + pad(A) + pad(0n),
+    );
 
     // ---------- boundary-length sweep for dynamic string/bytes encoding ----------
     // off-by-one padding bugs hide at word boundaries: 0,1,31,32,33,63,64,65,95,96.
@@ -524,15 +625,27 @@ describe('errors+events adversarial', () => {
       const words = Math.ceil(nb / 32);
       return pad(BigInt(nb)) + hex.padEnd(words * 64, '0');
     };
-    for (const hexPay of ['00', 'ff', '00ff00ff', 'ff'.repeat(40), '0011223344556677889900112233445566778899aabbccddeeff']) {
+    for (const hexPay of [
+      '00',
+      'ff',
+      '00ff00ff',
+      'ff'.repeat(40),
+      '0011223344556677889900112233445566778899aabbccddeeff',
+    ]) {
       const cdB = '0x' + bsel + pad(0x20n) + rawBytesHex(hexPay);
       await eq('eJustBytes rawHex ' + hexPay.slice(0, 8) + ':' + hexPay.length / 2, cdB);
       const cdEvB = '0x' + sel('evDataBytes(uint256,bytes)') + pad(1n) + pad(0x40n) + rawBytesHex(hexPay);
       await eq('evDataBytes rawHex ' + hexPay.slice(0, 8), cdEvB);
     }
     // two interleaved dynamic event fields at boundary lengths (tail offset arithmetic)
-    for (const [na, nb] of [[31, 33], [32, 32], [0, 64], [65, 1]] as [number, number][]) {
-      const a = 'a'.repeat(na), b = 'b'.repeat(nb);
+    for (const [na, nb] of [
+      [31, 33],
+      [32, 32],
+      [0, 64],
+      [65, 1],
+    ] as [number, number][]) {
+      const a = 'a'.repeat(na),
+        b = 'b'.repeat(nb);
       const t1 = strTail(a);
       const off2 = 0x40n + BigInt(t1.length / 2);
       const cd = '0x' + sel('evStrAndBytes(string,bytes)') + pad(0x40n) + pad(off2) + t1 + strTail(b);

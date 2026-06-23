@@ -52,7 +52,15 @@ describe('structs vs Solidity', () => {
   });
 
   it('packs mixed-width fields into the right slots (raw slots + after_ untouched)', async () => {
-    await both(encodeCall(sel('setAll(uint128,uint64,bool,address,uint256)'), [U128_MAX, 0x1122334455667788n, 1n, DADDR, 0xdeadbeefn]));
+    await both(
+      encodeCall(sel('setAll(uint128,uint64,bool,address,uint256)'), [
+        U128_MAX,
+        0x1122334455667788n,
+        1n,
+        DADDR,
+        0xdeadbeefn,
+      ]),
+    );
     await eqSlot(0n, 'slot0 (a|b|c packed)');
     await eqSlot(1n, 'slot1 (d address)');
     await eqSlot(2n, 'slot2 (e)');

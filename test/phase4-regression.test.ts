@@ -77,16 +77,36 @@ describe('Phase 4 regression: struct field/return gating (Bug B)', () => {
     // returning a struct with a fixed-array or nested-static-struct field is now SUPPORTED
     // (the storage-source recursive encoder flattens it via structStorageLeaves;
     // byte-identical to solc, verified in fixed-array-return.test.ts).
-    expect(codesFor(`@struct class S { a: u256; arr: Arr<u256,2>; b: u256; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`)).toEqual([]);
-    expect(codesFor(`@struct class Inner { x: u256; }\n@struct class S { a: u256; inner: Inner; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`)).toEqual([]);
+    expect(
+      codesFor(
+        `@struct class S { a: u256; arr: Arr<u256,2>; b: u256; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`,
+      ),
+    ).toEqual([]);
+    expect(
+      codesFor(
+        `@struct class Inner { x: u256; }\n@struct class S { a: u256; inner: Inner; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`,
+      ),
+    ).toEqual([]);
     // a dynamic (string) struct is now SUPPORTED in storage as a bare @state var
     // (each bytes/string field is a normal storage bytes/string at base+fieldSlot);
     // the bare declaration compiles cleanly.
-    expect(codesFor(`@struct class S { a: u256; b: string; }\n@contract class T { @state s: S; @external set(v: string): void { this.s.b = v; } }`)).toEqual([]);
+    expect(
+      codesFor(
+        `@struct class S { a: u256; b: string; }\n@contract class T { @state s: S; @external set(v: string): void { this.s.b = v; } }`,
+      ),
+    ).toEqual([]);
     // returning a WHOLE storage dynamic struct is now SUPPORTED (storage-source
     // recursive head/tail encoder; byte-identical to solc).
-    expect(codesFor(`@struct class S { a: u256; b: string; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`)).toEqual([]);
+    expect(
+      codesFor(
+        `@struct class S { a: u256; b: string; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`,
+      ),
+    ).toEqual([]);
     // a flat value-only struct return still compiles
-    expect(codesFor(`@struct class S { a: u128; b: bool; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`)).toEqual([]);
+    expect(
+      codesFor(
+        `@struct class S { a: u128; b: bool; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`,
+      ),
+    ).toEqual([]);
   });
 });

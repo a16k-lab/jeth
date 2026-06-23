@@ -38,7 +38,7 @@ contract AggParams {
   function afterAgg(uint256[3] calldata a, uint256 x) external pure returns (uint256){ return a[2]+x; }
 }`;
 
-const M = (1n << 256n);
+const M = 1n << 256n;
 function pad(v: bigint): string {
   return (((v % M) + M) % M).toString(16).padStart(64, '0');
 }
@@ -123,15 +123,23 @@ describe('aggregate calldata params vs Solidity', () => {
   it('nested struct param flattened inline', async () => {
     // Outer{p, inner{a,b}, q} -> 4 head words: p, a, b, q
     const o = [0x11n, 0xaaaan, 0xbbbbn, 0x22n];
-    expect(decodeUint((await eq('outerInnerB', raw('outerInnerB((uint64,(uint128,uint128),uint64))', o))).j.returnHex)).toBe(0xbbbbn);
-    expect(decodeUint((await eq('outerQ', raw('outerQ((uint64,(uint128,uint128),uint64))', o))).j.returnHex)).toBe(0x22n);
+    expect(
+      decodeUint((await eq('outerInnerB', raw('outerInnerB((uint64,(uint128,uint128),uint64))', o))).j.returnHex),
+    ).toBe(0xbbbbn);
+    expect(decodeUint((await eq('outerQ', raw('outerQ((uint64,(uint128,uint128),uint64))', o))).j.returnHex)).toBe(
+      0x22n,
+    );
   });
 
   it('struct-with-array-field param', async () => {
     const t = [9n, 0x111n, 0x222n]; // id, data[0], data[1]
     expect(decodeUint((await eq('withId', raw('withId((uint64,uint256[2]))', t))).j.returnHex)).toBe(9n);
-    expect(decodeUint((await eq('dataAt j=0', raw('dataAt((uint64,uint256[2]),uint256)', [...t, 0n]))).j.returnHex)).toBe(0x111n);
-    expect(decodeUint((await eq('dataAt j=1', raw('dataAt((uint64,uint256[2]),uint256)', [...t, 1n]))).j.returnHex)).toBe(0x222n);
+    expect(
+      decodeUint((await eq('dataAt j=0', raw('dataAt((uint64,uint256[2]),uint256)', [...t, 0n]))).j.returnHex),
+    ).toBe(0x111n);
+    expect(
+      decodeUint((await eq('dataAt j=1', raw('dataAt((uint64,uint256[2]),uint256)', [...t, 1n]))).j.returnHex),
+    ).toBe(0x222n);
     // OOB j=2 -> Panic(0x32)
     const r = await eq('dataAt OOB', raw('dataAt((uint64,uint256[2]),uint256)', [...t, 2n]));
     expect(r.j.success).toBe(false);
@@ -140,8 +148,12 @@ describe('aggregate calldata params vs Solidity', () => {
   it('fixed-array-of-struct param + OOB', async () => {
     // ps[0]={1,2}, ps[1]={3,4}
     const ps = [1n, 2n, 3n, 4n];
-    expect(decodeUint((await eq('ptsX i=1', raw('ptsX((uint128,uint128)[2],uint256)', [...ps, 1n]))).j.returnHex)).toBe(3n);
-    expect(decodeUint((await eq('ptsY i=0', raw('ptsY((uint128,uint128)[2],uint256)', [...ps, 0n]))).j.returnHex)).toBe(2n);
+    expect(decodeUint((await eq('ptsX i=1', raw('ptsX((uint128,uint128)[2],uint256)', [...ps, 1n]))).j.returnHex)).toBe(
+      3n,
+    );
+    expect(decodeUint((await eq('ptsY i=0', raw('ptsY((uint128,uint128)[2],uint256)', [...ps, 0n]))).j.returnHex)).toBe(
+      2n,
+    );
     const r = await eq('ptsX OOB', raw('ptsX((uint128,uint128)[2],uint256)', [...ps, 2n]));
     expect(r.j.success).toBe(false);
   });

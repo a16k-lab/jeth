@@ -46,7 +46,7 @@ describe('Phase 2 diagnostics', () => {
 
   it('allows a nested local to shadow an outer-scope variable (like solc), but rejects same-scope redeclaration', () => {
     expect(codesFor(fn('let a: u256 = 1n; if (a > 0n) { let a: u256 = 2n; }'))).toEqual([]); // cross-scope shadow: allowed
-    expect(codesFor(fn('let a: u256 = 1n; let a: u256 = 2n;'))).toContain('JETH068');        // same-scope redecl: rejected
+    expect(codesFor(fn('let a: u256 = 1n; let a: u256 = 2n;'))).toContain('JETH068'); // same-scope redecl: rejected
   });
 
   it('allows disjoint sibling blocks to reuse a name', () => {
@@ -82,7 +82,11 @@ describe('Phase 2 diagnostics', () => {
   it('rejects malformed @event declarations and emits', () => {
     expect(codesFor(fn('emit(Missing(1n));'))).toContain('JETH147'); // unknown event
     expect(codesFor(fn('emit(Ev(1n, 2n, 3n));'))).toContain('JETH148'); // arg count
-    expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256, @indexed b: u256, @indexed c: u256, @indexed d: u256); }`)).toContain('JETH143'); // >3 indexed
+    expect(
+      codesFor(
+        `@contract\nclass T { @event E(@indexed a: u256, @indexed b: u256, @indexed c: u256, @indexed d: u256); }`,
+      ),
+    ).toContain('JETH143'); // >3 indexed
     // an indexed dynamic VALUE-element array is now allowed (keccak topic of the element words)
     expect(codesFor(`@contract\nclass T { @event E(@indexed a: u256[]); }`)).toEqual([]);
     // an indexed FIXED array / static struct is now supported (keccak topic); a supported DYNAMIC struct too
@@ -90,7 +94,11 @@ describe('Phase 2 diagnostics', () => {
     expect(codesFor(`@struct\nclass D { s: string; }\n@contract\nclass T { @event E(@indexed d: D); }`)).toEqual([]);
     // a dynamic struct with a NESTED dynamic struct field is now supported (indexed topic = keccak of
     // the recursively flattened payload; byte-identical to solc, verified in fix-all-divergences.test.ts)
-    expect(codesFor(`@struct\nclass I { p: u256; s: string; }\n@struct\nclass D2 { x: u256; i: I; }\n@contract\nclass T { @event E(@indexed d: D2); }`)).toEqual([]);
+    expect(
+      codesFor(
+        `@struct\nclass I { p: u256; s: string; }\n@struct\nclass D2 { x: u256; i: I; }\n@contract\nclass T { @event E(@indexed d: D2); }`,
+      ),
+    ).toEqual([]);
     // an indexed bytes/string event param is now allowed (keccak topic, G4)
     expect(codesFor(`@contract\nclass T { @event E(@indexed s: string, v: u256); }`)).toEqual([]);
     // a non-indexed string event param is allowed (Phase 4)

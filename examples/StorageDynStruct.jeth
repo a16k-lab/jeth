@@ -3,72 +3,168 @@
 // storage and each bytes/string field at base+fieldSlot is a normal storage
 // bytes/string (short <32 inline, long >=32 with keccak(headerSlot) data slots).
 // Byte-identical to Solidity incl. raw storage slots.
-@struct class D { a: u256; s: string; }            // 2 slots: a, s
-@struct class E { id: u64; b: bytes; x: u64; }      // 3 slots: id(slot0), b(slot1), x(slot2)
-@struct class Outer { x: u256; inner: D; y: u256; } // x(slot0), inner(slot1..2), y(slot3)
+@struct
+class D {
+  a: u256;
+  s: string;
+} // 2 slots: a, s
+@struct
+class E {
+  id: u64;
+  b: bytes;
+  x: u64;
+} // 3 slots: id(slot0), b(slot1), x(slot2)
+@struct
+class Outer {
+  x: u256;
+  inner: D;
+  y: u256;
+} // x(slot0), inner(slot1..2), y(slot3)
 
 @contract
 class StorageDynStruct {
-  @state d: D;                          // slot 0..1
-  @state sentinel: u256;                // slot 2 (must never be disturbed)
-  @state recs: D[];                     // slot 3 (length); data at keccak(3), stride 2
-  @state byKey: mapping<address, D>;    // slot 4
-  @state e: E;                          // slot 5..7
-  @state o: Outer;                      // slot 8..11
+  @state d: D; // slot 0..1
+  @state sentinel: u256; // slot 2 (must never be disturbed)
+  @state recs: D[]; // slot 3 (length); data at keccak(3), stride 2
+  @state byKey: mapping<address, D>; // slot 4
+  @state e: E; // slot 5..7
+  @state o: Outer; // slot 8..11
   @state byKeyArr: mapping<address, D[]>; // slot 12
 
   // --- bare struct d ---
-  @external setDa(v: u256): void { this.d.a = v; }
-  @external setDs(v: string): void { this.d.s = v; }
-  @external setD(a: u256, s: string): void { this.d = D(a, s); }
-  @external @view getDa(): u256 { return this.d.a; }
-  @external @view getDs(): string { return this.d.s; }
+  @external setDa(v: u256): void {
+    this.d.a = v;
+  }
+  @external setDs(v: string): void {
+    this.d.s = v;
+  }
+  @external setD(a: u256, s: string): void {
+    this.d = D(a, s);
+  }
+  @external @view getDa(): u256 {
+    return this.d.a;
+  }
+  @external @view getDs(): string {
+    return this.d.s;
+  }
 
   // --- D[] recs ---
-  @external pushRec(a: u256, s: string): void { this.recs.push(D(a, s)); }
-  @external pushEmptyRec(): void { this.recs.push(); }
-  @external popRec(): void { this.recs.pop(); }
-  @external setRecA(i: u256, v: u256): void { this.recs[i].a = v; }
-  @external setRecS(i: u256, v: string): void { this.recs[i].s = v; }
-  @external @view recsLen(): u256 { return this.recs.length; }
-  @external @view recAt(i: u256): string { return this.recs[i].s; }
-  @external @view recAtA(i: u256): u256 { return this.recs[i].a; }
+  @external pushRec(a: u256, s: string): void {
+    this.recs.push(D(a, s));
+  }
+  @external pushEmptyRec(): void {
+    this.recs.push();
+  }
+  @external popRec(): void {
+    this.recs.pop();
+  }
+  @external setRecA(i: u256, v: u256): void {
+    this.recs[i].a = v;
+  }
+  @external setRecS(i: u256, v: string): void {
+    this.recs[i].s = v;
+  }
+  @external @view recsLen(): u256 {
+    return this.recs.length;
+  }
+  @external @view recAt(i: u256): string {
+    return this.recs[i].s;
+  }
+  @external @view recAtA(i: u256): u256 {
+    return this.recs[i].a;
+  }
 
   // --- mapping<address, D> byKey ---
-  @external setKa(k: address, v: u256): void { this.byKey[k].a = v; }
-  @external setKs(k: address, v: string): void { this.byKey[k].s = v; }
-  @external @view getKa(k: address): u256 { return this.byKey[k].a; }
-  @external @view getKs(k: address): string { return this.byKey[k].s; }
+  @external setKa(k: address, v: u256): void {
+    this.byKey[k].a = v;
+  }
+  @external setKs(k: address, v: string): void {
+    this.byKey[k].s = v;
+  }
+  @external @view getKa(k: address): u256 {
+    return this.byKey[k].a;
+  }
+  @external @view getKs(k: address): string {
+    return this.byKey[k].s;
+  }
 
   // --- E{uint64 id; bytes b; uint64 x}: a bytes field, .length and byte index ---
-  @external setEid(v: u64): void { this.e.id = v; }
-  @external setEb(v: bytes): void { this.e.b = v; }
-  @external setEx(v: u64): void { this.e.x = v; }
-  @external @view getEid(): u64 { return this.e.id; }
-  @external @view getEb(): bytes { return this.e.b; }
-  @external @view getEx(): u64 { return this.e.x; }
-  @external @view ebLen(): u256 { return this.e.b.length; }
-  @external @view ebByte(j: u256): bytes1 { return this.e.b[j]; }
+  @external setEid(v: u64): void {
+    this.e.id = v;
+  }
+  @external setEb(v: bytes): void {
+    this.e.b = v;
+  }
+  @external setEx(v: u64): void {
+    this.e.x = v;
+  }
+  @external @view getEid(): u64 {
+    return this.e.id;
+  }
+  @external @view getEb(): bytes {
+    return this.e.b;
+  }
+  @external @view getEx(): u64 {
+    return this.e.x;
+  }
+  @external @view ebLen(): u256 {
+    return this.e.b.length;
+  }
+  @external @view ebByte(j: u256): bytes1 {
+    return this.e.b[j];
+  }
 
   // --- nested Outer{x; D inner; y} ---
-  @external setOx(v: u256): void { this.o.x = v; }
-  @external setOy(v: u256): void { this.o.y = v; }
-  @external setOInnerA(v: u256): void { this.o.inner.a = v; }
-  @external setOInnerS(v: string): void { this.o.inner.s = v; }
-  @external @view getOx(): u256 { return this.o.x; }
-  @external @view getOy(): u256 { return this.o.y; }
-  @external @view getOInnerA(): u256 { return this.o.inner.a; }
-  @external @view getOInnerS(): string { return this.o.inner.s; }
+  @external setOx(v: u256): void {
+    this.o.x = v;
+  }
+  @external setOy(v: u256): void {
+    this.o.y = v;
+  }
+  @external setOInnerA(v: u256): void {
+    this.o.inner.a = v;
+  }
+  @external setOInnerS(v: string): void {
+    this.o.inner.s = v;
+  }
+  @external @view getOx(): u256 {
+    return this.o.x;
+  }
+  @external @view getOy(): u256 {
+    return this.o.y;
+  }
+  @external @view getOInnerA(): u256 {
+    return this.o.inner.a;
+  }
+  @external @view getOInnerS(): string {
+    return this.o.inner.s;
+  }
 
   // --- mapping<address, D[]> byKeyArr (a mapping value that is a dynamic array of
   // dynamic struct: per-key length at keccak(k.12), data at keccak(that)) ---
-  @external pushKA(k: address, a: u256, s: string): void { this.byKeyArr[k].push(D(a, s)); }
-  @external popKA(k: address): void { this.byKeyArr[k].pop(); }
-  @external @view kaLen(k: address): u256 { return this.byKeyArr[k].length; }
-  @external setKAs(k: address, i: u256, v: string): void { this.byKeyArr[k][i].s = v; }
-  @external @view kaAtA(k: address, i: u256): u256 { return this.byKeyArr[k][i].a; }
-  @external @view kaAt(k: address, i: u256): string { return this.byKeyArr[k][i].s; }
+  @external pushKA(k: address, a: u256, s: string): void {
+    this.byKeyArr[k].push(D(a, s));
+  }
+  @external popKA(k: address): void {
+    this.byKeyArr[k].pop();
+  }
+  @external @view kaLen(k: address): u256 {
+    return this.byKeyArr[k].length;
+  }
+  @external setKAs(k: address, i: u256, v: string): void {
+    this.byKeyArr[k][i].s = v;
+  }
+  @external @view kaAtA(k: address, i: u256): u256 {
+    return this.byKeyArr[k][i].a;
+  }
+  @external @view kaAt(k: address, i: u256): string {
+    return this.byKeyArr[k][i].s;
+  }
 
-  @external setSentinel(c: u256): void { this.sentinel = c; }
-  @external @view getSentinel(): u256 { return this.sentinel; }
+  @external setSentinel(c: u256): void {
+    this.sentinel = c;
+  }
+  @external @view getSentinel(): u256 {
+    return this.sentinel;
+  }
 }

@@ -31,15 +31,18 @@ describe('ternary-result array index vs Solidity', () => {
   const sel = (s: string) => functionSelector(s);
   async function eq(label: string, args: bigint[]) {
     const data = '0x' + sel('pick(bool,uint256,uint256,uint256)') + args.map(pad).join('');
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'TI.jeth' });
     const sb = compileSolidity(SOL, 'TI');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('selects + indexes the right branch (incl OOB)', async () => {

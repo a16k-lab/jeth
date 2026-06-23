@@ -47,16 +47,20 @@ contract C {
 describe('ternary over a static struct / fixed array (JETH074) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
-    await jeth.call(aj, encodeCall(sel('seed()'), [])); await sol.call(as, encodeCall(sel('seed()'), []));
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
+    await jeth.call(aj, encodeCall(sel('seed()'), []));
+    await sol.call(as, encodeCall(sel('seed()'), []));
   });
 
   it('struct / fixed-array ternary (both directions) + field read + ctor branch', async () => {

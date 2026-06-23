@@ -14,8 +14,13 @@ import { CompileError } from '../src/diagnostics.js';
 const sel = (s: string) => functionSelector(s);
 const wrap = (v: bigint) => (((v % (1n << 256n)) + (1n << 256n)) % (1n << 256n)).toString(16).padStart(64, '0');
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 const J = `@contract class C {
@@ -49,22 +54,25 @@ describe('bytesN bitwise/shift + signedness + bool-cast conformance', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, sig: string, ...args: bigint[]) {
     const data = '0x' + sel(sig) + args.map(wrap).join('');
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
 
   it('bytesN & | ^ ~ are byte-identical to solc', async () => {
-    const A = 0xaabbccddn << 224n, B = 0x0f0f0f0fn << 224n;
+    const A = 0xaabbccddn << 224n,
+      B = 0x0f0f0f0fn << 224n;
     await eq('and4', 'and4(bytes4,bytes4)', A, B);
     await eq('or4', 'or4(bytes4,bytes4)', A, B);
     await eq('xor4', 'xor4(bytes4,bytes4)', A, B);
-    await eq('not4', 'not4(bytes4)', A);                 // low 28 bytes must stay zero
+    await eq('not4', 'not4(bytes4)', A); // low 28 bytes must stay zero
     await eq('not32', 'not32(bytes32)', 0xffffffffn << 224n);
     await eq('and32', 'and32(bytes32,bytes32)', (1n << 255n) | 7n, (1n << 255n) | 3n);
   });
@@ -91,7 +99,10 @@ describe('bytesN bitwise/shift + signedness + bool-cast conformance', () => {
 
   it('still rejects what solc rejects: arithmetic (+ - * / %) on bytesN', () => {
     for (const op of ['+', '-', '*', '/', '%']) {
-      expect(codes(`@contract class C { @external @pure f(a: bytes4, b: bytes4): bytes4 { return a ${op} b; } }`), `'${op}' on bytesN`).toContain('JETH082');
+      expect(
+        codes(`@contract class C { @external @pure f(a: bytes4, b: bytes4): bytes4 { return a ${op} b; } }`),
+        `'${op}' on bytesN`,
+      ).toContain('JETH082');
     }
   });
 
@@ -102,12 +113,13 @@ describe('bytesN bitwise/shift + signedness + bool-cast conformance', () => {
   });
 
   it('the literal 0 implicitly converts to bytesN like solc; any other literal does not', async () => {
-    expect(codes('@contract class C { @external @pure f(): bytes32 { return 0n; } }')).toEqual([]);     // solc accepts
+    expect(codes('@contract class C { @external @pure f(): bytes32 { return 0n; } }')).toEqual([]); // solc accepts
     expect(codes('@contract class C { @external @pure f(): bytes4 { let b: bytes4 = 0n; return b; } }')).toEqual([]);
     expect(codes('@contract class C { @external @pure f(): bytes32 { return 1n; } }')).toContain('JETH084'); // only 0
     // runtime: 0n -> bytes32 is the all-zero word
     const J0 = '@contract class C { @external @pure z(): bytes32 { return 0n; } }';
-    const h0 = await Harness.create(); const a0 = await h0.deploy(compile(J0, { fileName: 'C.jeth' }).creationBytecode);
+    const h0 = await Harness.create();
+    const a0 = await h0.deploy(compile(J0, { fileName: 'C.jeth' }).creationBytecode);
     expect((await h0.call(a0, '0x' + sel('z()'))).returnHex).toBe('0x' + '0'.repeat(64));
   });
 });

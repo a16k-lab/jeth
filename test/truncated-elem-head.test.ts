@@ -29,7 +29,9 @@ describe('truncated dynamic-struct element head reverts like solc', () => {
   async function both(data: string, label: string) {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
-    expect(j.success, `${label}: success parity (jeth=${j.success}/${j.exceptionError}, sol=${s.success})`).toBe(s.success);
+    expect(j.success, `${label}: success parity (jeth=${j.success}/${j.exceptionError}, sol=${s.success})`).toBe(
+      s.success,
+    );
     expect(j.returnHex, `${label}: returndata parity`).toBe(s.returnHex);
   }
   beforeAll(async () => {
@@ -50,8 +52,7 @@ describe('truncated dynamic-struct element head reverts like solc', () => {
 
   it('element head fully present but string body truncated reverts EMPTY in both', async () => {
     // full 64-byte head, s-offset points just past the head, but the length word of s is missing.
-    const data =
-      '0x' + selHex + pad(0x20n) + pad(1n) + pad(0x20n) + pad(0xaan) + pad(0x40n);
+    const data = '0x' + selHex + pad(0x20n) + pad(1n) + pad(0x20n) + pad(0xaan) + pad(0x40n);
     await both(data, 'truncated-string-len');
   });
 

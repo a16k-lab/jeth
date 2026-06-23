@@ -271,7 +271,19 @@ describe('mapinstruct', () => {
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
       mism.push(
-        'RET ' + label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}',
+        'RET ' +
+          label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
       );
   }
   async function eqSlot(slot: bigint, label: string) {
@@ -284,7 +296,17 @@ describe('mapinstruct', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success)
-      mism.push('SEND ' + data.slice(0, 10) + ': jeth{ok=' + j.success + ',err=' + j.exceptionError + '} sol{ok=' + s.success + '}');
+      mism.push(
+        'SEND ' +
+          data.slice(0, 10) +
+          ': jeth{ok=' +
+          j.success +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          '}',
+      );
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
@@ -311,8 +333,8 @@ describe('mapinstruct', () => {
     await send(encodeCall(sel('setBal(address,uint256)'), [A1, 100n]));
     await send(encodeCall(sel('setBal(address,uint256)'), [A2, 999n]));
     await send(encodeCall(sel('setBal(address,uint256)'), [A3, MAXU])); // max addr key, max value
-    await send(encodeCall(sel('incBal(address,uint256)'), [A1, 5n]));    // read-modify-write
-    await send(encodeCall(sel('setBal(address,uint256)'), [0n, 7n]));    // zero (address(0)) key
+    await send(encodeCall(sel('incBal(address,uint256)'), [A1, 5n])); // read-modify-write
+    await send(encodeCall(sel('setBal(address,uint256)'), [0n, 7n])); // zero (address(0)) key
     await eq('getHead', encodeCall(sel('getHead()'), []));
     await eq('getTail', encodeCall(sel('getTail()'), []));
     await eq('getBal(A1)', encodeCall(sel('getBal(address)'), [A1]));
@@ -329,7 +351,16 @@ describe('mapinstruct', () => {
     await eqSlot(mapSlot(0n, 1n), 'acct.bal[0]');
 
     // ============ Pk: mapping packed between small fields on BOTH sides ============
-    await send(encodeCall(sel('setPkPacked(uint8,uint16,bool,uint8,uint32,address)'), [0xa5n, 0xbeefn, 1n, 0x7fn, 0xcafef00dn, A2]));
+    await send(
+      encodeCall(sel('setPkPacked(uint8,uint16,bool,uint8,uint32,address)'), [
+        0xa5n,
+        0xbeefn,
+        1n,
+        0x7fn,
+        0xcafef00dn,
+        A2,
+      ]),
+    );
     await send(encodeCall(sel('setPkM(uint256,uint256)'), [3n, 777n]));
     await send(encodeCall(sel('setPkM(uint256,uint256)'), [MAXU, 888n]));
     await eq('getPkA', encodeCall(sel('getPkA()'), []));
@@ -527,7 +558,7 @@ describe('mapinstruct', () => {
 
     // int8 key (negative, sign-extended to a full word for the preimage)
     await send(encodeCall(sel('setKi8(int8,uint256)'), [-128n, 77n])); // INT8_MIN
-    await send(encodeCall(sel('setKi8(int8,uint256)'), [127n, 88n]));   // INT8_MAX
+    await send(encodeCall(sel('setKi8(int8,uint256)'), [127n, 88n])); // INT8_MAX
     await send(encodeCall(sel('setKi8(int8,uint256)'), [-1n, 99n]));
     await eq('getKi8(-128)', encodeCall(sel('getKi8(int8)'), [-128n]));
     await eq('getKi8(127)', encodeCall(sel('getKi8(int8)'), [127n]));

@@ -236,7 +236,8 @@ describe('storage / mapping-valued dynamic structs vs Solidity', () => {
     await eq('setKs A1 long', callDyn('setKs(address,string)', [A1], s(LONG40)));
     await eq('setKa A2', encodeCall(sel('setKa(address,uint256)'), [A2, 0xaaaan]));
     await eq('setKs A2 short', callDyn('setKs(address,string)', [A2], s(SHORT)));
-    const b1 = mapSlot(A1, 4n), b2 = mapSlot(A2, 4n);
+    const b1 = mapSlot(A1, 4n),
+      b2 = mapSlot(A2, 4n);
     await eqSlot(b1 + 0n, 'byKey[A1].a');
     await eqSlot(b1 + 1n, 'byKey[A1].s header (long)');
     await eqSlot(slotKeccak(b1 + 1n), 'byKey[A1].s long data');
@@ -346,7 +347,8 @@ describe('storage / mapping-valued dynamic structs vs Solidity', () => {
   it('adversarial setD / setRecS / pushRec calldata: byte-identical revert, no partial write', async () => {
     // First establish a known d (so we can confirm a malformed setD does NOT clobber it).
     await eq('setD known', callDyn('setD(uint256,string)', [0xa11n], s('ok')));
-    await eqSlot(0n, 'd.a known'); await eqSlot(1n, 'd.s known');
+    await eqSlot(0n, 'd.a known');
+    await eqSlot(1n, 'd.s known');
     // setD with the string offset pointing past calldatasize: solc reverts at param
     // decode BEFORE writing a -> a must be UNCHANGED in both.
     const badSetD = '0x' + sel('setD(uint256,string)') + pad(0x999n) + pad(0xffffffffffffffffn);

@@ -161,19 +161,40 @@ describe('environment & builtins vs Solidity', () => {
   // default block for most calls
   const blockOf = (env: BlockEnv) => makeBlock(env, common);
 
-  type Opts = { caller?: Address; origin?: Address; value?: bigint; block?: ReturnType<typeof makeBlock>; rawData?: string };
+  type Opts = {
+    caller?: Address;
+    origin?: Address;
+    value?: bigint;
+    block?: ReturnType<typeof makeBlock>;
+    rawData?: string;
+  };
 
   async function eq(label: string, sigStr: string, words: bigint[], opts: Opts = {}) {
     count++;
     const data = opts.rawData ?? encodeCall(sel(sigStr), words);
-    const callOpts = { caller: opts.caller ?? CALLER, origin: opts.origin ?? ORIGIN, value: opts.value, block: opts.block };
+    const callOpts = {
+      caller: opts.caller ?? CALLER,
+      origin: opts.origin ?? ORIGIN,
+      value: opts.value,
+      block: opts.block,
+    };
     const j = await jeth.call(aj, data, callOpts);
     const s = await sol.call(as, data, callOpts);
     if (j.success !== s.success || j.returnHex !== s.returnHex) {
       mism.push(
         label +
-          ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} ' +
-          'sol{ok=' + s.success + ',ret=' + s.returnHex + '}',
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} ' +
+          'sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
       );
     }
   }
@@ -193,19 +214,91 @@ describe('environment & builtins vs Solidity', () => {
     // ---- a matrix of block envs, incl. boundary values ----
     const MAX = M - 1n;
     const blocks: { name: string; env: BlockEnv }[] = [
-      { name: 'b0', env: { number: 0n, timestamp: 0n, coinbase: addr('00'.repeat(20)), gasLimit: 0n, baseFeePerGas: 0n, prevRandao: hexToBytes(('0x' + '00'.repeat(32)) as `0x${string}`) } },
-      { name: 'b1', env: { number: 1n, timestamp: 1n, coinbase: COINBASE, gasLimit: 1n, baseFeePerGas: 1n, prevRandao: hexToBytes(('0x' + '00'.repeat(31) + '01') as `0x${string}`) } },
-      { name: 'bnorm', env: { number: 12345678n, timestamp: 1700000000n, coinbase: COINBASE, gasLimit: 30000000n, baseFeePerGas: 7n, prevRandao: RANDAO } },
-      { name: 'bmax', env: { number: MAX, timestamp: MAX, coinbase: addr('ff'.repeat(20)), gasLimit: MAX, baseFeePerGas: MAX, prevRandao: hexToBytes(('0x' + 'ff'.repeat(32)) as `0x${string}`) } },
-      { name: 'btop', env: { number: 1n << 255n, timestamp: (1n << 255n) + 5n, coinbase: COINBASE, gasLimit: 1n << 200n, baseFeePerGas: (1n << 128n) - 1n, prevRandao: hexToBytes(('0x80' + '00'.repeat(31)) as `0x${string}`) } },
+      {
+        name: 'b0',
+        env: {
+          number: 0n,
+          timestamp: 0n,
+          coinbase: addr('00'.repeat(20)),
+          gasLimit: 0n,
+          baseFeePerGas: 0n,
+          prevRandao: hexToBytes(('0x' + '00'.repeat(32)) as `0x${string}`),
+        },
+      },
+      {
+        name: 'b1',
+        env: {
+          number: 1n,
+          timestamp: 1n,
+          coinbase: COINBASE,
+          gasLimit: 1n,
+          baseFeePerGas: 1n,
+          prevRandao: hexToBytes(('0x' + '00'.repeat(31) + '01') as `0x${string}`),
+        },
+      },
+      {
+        name: 'bnorm',
+        env: {
+          number: 12345678n,
+          timestamp: 1700000000n,
+          coinbase: COINBASE,
+          gasLimit: 30000000n,
+          baseFeePerGas: 7n,
+          prevRandao: RANDAO,
+        },
+      },
+      {
+        name: 'bmax',
+        env: {
+          number: MAX,
+          timestamp: MAX,
+          coinbase: addr('ff'.repeat(20)),
+          gasLimit: MAX,
+          baseFeePerGas: MAX,
+          prevRandao: hexToBytes(('0x' + 'ff'.repeat(32)) as `0x${string}`),
+        },
+      },
+      {
+        name: 'btop',
+        env: {
+          number: 1n << 255n,
+          timestamp: (1n << 255n) + 5n,
+          coinbase: COINBASE,
+          gasLimit: 1n << 200n,
+          baseFeePerGas: (1n << 128n) - 1n,
+          prevRandao: hexToBytes(('0x80' + '00'.repeat(31)) as `0x${string}`),
+        },
+      },
     ];
 
     const VIEW_FNS = [
-      'sender()', 'origin()', 'self()', 'coinbase()', 'ts()', 'num()', 'cid()', 'fee()', 'glimit()', 'rand()',
-      'senderU160()', 'senderBytes20()', 'selfU160()', 'selfBytes20()', 'originPayable()',
-      'senderRoundTrip()', 'senderB20RT()',
-      'tsPlusNum()', 'feeTimesGas()', 'numMinusOne()', 'randXorTs()', 'randShr()', 'valPlus()',
-      'senderEqOrigin()', 'senderNeSelf()', 'selfIsZero()', 'cidEq()',
+      'sender()',
+      'origin()',
+      'self()',
+      'coinbase()',
+      'ts()',
+      'num()',
+      'cid()',
+      'fee()',
+      'glimit()',
+      'rand()',
+      'senderU160()',
+      'senderBytes20()',
+      'selfU160()',
+      'selfBytes20()',
+      'originPayable()',
+      'senderRoundTrip()',
+      'senderB20RT()',
+      'tsPlusNum()',
+      'feeTimesGas()',
+      'numMinusOne()',
+      'randXorTs()',
+      'randShr()',
+      'valPlus()',
+      'senderEqOrigin()',
+      'senderNeSelf()',
+      'selfIsZero()',
+      'cidEq()',
     ];
 
     for (const b of blocks) {
@@ -254,14 +347,23 @@ describe('environment & builtins vs Solidity', () => {
     await eq('isOwner:other', 'isOwner()', [], { caller: ORIGIN });
 
     // ---- adversarial msg.sender / tx.origin: dirty-looking & boundary addresses ----
-    const advCallers = [addr('00'.repeat(20)), addr('00'.repeat(19) + 'ff'), addr('ff'.repeat(20)), addr('de'.repeat(20))];
+    const advCallers = [
+      addr('00'.repeat(20)),
+      addr('00'.repeat(19) + 'ff'),
+      addr('ff'.repeat(20)),
+      addr('de'.repeat(20)),
+    ];
     const advOrigins = [addr('00'.repeat(20)), addr('ff'.repeat(20)), addr('be'.repeat(20))];
     for (const c of advCallers) {
       await eq('senderAdv:' + c.toString().slice(2, 6), 'sender()', [], { caller: c, block });
       await eq('senderU160Adv:' + c.toString().slice(2, 6), 'senderU160()', [], { caller: c, block });
       await eq('senderBytes20Adv:' + c.toString().slice(2, 6), 'senderBytes20()', [], { caller: c, block });
       for (const o of advOrigins) {
-        await eq('eqOrigin:' + c.toString().slice(2, 6) + '/' + o.toString().slice(2, 6), 'senderEqOrigin()', [], { caller: c, origin: o, block });
+        await eq('eqOrigin:' + c.toString().slice(2, 6) + '/' + o.toString().slice(2, 6), 'senderEqOrigin()', [], {
+          caller: c,
+          origin: o,
+          block,
+        });
       }
     }
 
@@ -305,7 +407,7 @@ describe('environment & builtins vs Solidity', () => {
       const n = b.env.number ?? 0n;
       for (const dv of [n === 0n ? 0n : n - 1n, n, n + 1n, n + 2n]) {
         // cap value to a sane fundable amount to avoid harness funding overflow at bmax
-        const v = dv > (1n << 120n) ? (1n << 120n) : dv;
+        const v = dv > 1n << 120n ? 1n << 120n : dv;
         await eq('gateVGN:' + b.name + ':' + v, 'gateValGtNum()', [], { block: blk, value: v });
       }
     }

@@ -54,14 +54,18 @@ contract C {
 describe('F3 default + named arguments', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} jeth=${j.exceptionError}`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    const jb = compile(J, { fileName: 'C.jeth' }); const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(J, { fileName: 'C.jeth' });
+    const sb = compileSolidity(SOL, 'C');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('defaults and named calls match the fully-spelled-out Solidity equivalents', async () => {
     await eq('feeDefault(1e6)', encodeCall(sel('feeDefault(uint256)'), [1_000_000n]));

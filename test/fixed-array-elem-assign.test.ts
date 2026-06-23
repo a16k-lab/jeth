@@ -40,7 +40,8 @@ contract C {
   function getEE(uint256 i, uint256 j) external view returns (uint256) { return ee[i][j]; } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
@@ -48,12 +49,22 @@ contract C {
   const both = async (data: string) => [await jeth.call(aj, data), await sol.call(as, data)] as const;
 
   it('literal-source element assign: raw slots + reads match solc', async () => {
-    for (const [i, a, b] of [[0n, 7n, 8n], [1n, 9n, 10n], [0n, 111n, 222n]] as const) {
+    for (const [i, a, b] of [
+      [0n, 7n, 8n],
+      [1n, 9n, 10n],
+      [0n, 111n, 222n],
+    ] as const) {
       const [j, s] = await both('0x' + sel('setDD(uint256,uint256,uint256)') + pad32(i) + pad32(a) + pad32(b));
       expect(j.success).toBe(s.success);
     }
-    for (const slot of [0n, 1n, 2n, 3n]) expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
-    for (const [i, jx] of [[0n, 0n], [0n, 1n], [1n, 0n], [1n, 1n]] as const) {
+    for (const slot of [0n, 1n, 2n, 3n])
+      expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
+    for (const [i, jx] of [
+      [0n, 0n],
+      [0n, 1n],
+      [1n, 0n],
+      [1n, 1n],
+    ] as const) {
       const [j, s] = await both('0x' + sel('get(uint256,uint256)') + pad32(i) + pad32(jx));
       expect(j.returnHex).toBe(s.returnHex);
     }
@@ -61,7 +72,8 @@ contract C {
   it('storage-source element assign (this.dd[i] = this.src): raw slots match solc', async () => {
     await both('0x' + sel('setSrc(uint256,uint256)') + pad32(333n) + pad32(444n));
     await both('0x' + sel('copyToDD(uint256)') + pad32(1n));
-    for (const slot of [0n, 1n, 2n, 3n, 4n, 5n]) expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
+    for (const slot of [0n, 1n, 2n, 3n, 4n, 5n])
+      expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
   });
   it('OOB element assign reverts Panic 0x32, matching solc', async () => {
     const [j, s] = await both('0x' + sel('setDD(uint256,uint256,uint256)') + pad32(2n) + pad32(1n) + pad32(2n));
@@ -72,7 +84,12 @@ contract C {
     await both('0x' + sel('pushEE(uint256,uint256)') + pad32(1n) + pad32(2n));
     await both('0x' + sel('pushEE(uint256,uint256)') + pad32(3n) + pad32(4n));
     await both('0x' + sel('setEE(uint256,uint256,uint256)') + pad32(1n) + pad32(55n) + pad32(66n));
-    for (const [i, jx] of [[0n, 0n], [0n, 1n], [1n, 0n], [1n, 1n]] as const) {
+    for (const [i, jx] of [
+      [0n, 0n],
+      [0n, 1n],
+      [1n, 0n],
+      [1n, 1n],
+    ] as const) {
       const [j, s] = await both('0x' + sel('getEE(uint256,uint256)') + pad32(i) + pad32(jx));
       expect(j.returnHex, `ee[${i}][${jx}]`).toBe(s.returnHex);
     }
@@ -99,19 +116,24 @@ contract C { uint8[4][] ee; uint8[4] src;
   function pushSrc() external { ee.push(src); }
   function get(uint256 i, uint256 j) external view returns (uint8) { return ee[i][j]; } }`;
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
   it('packed uint8[4][] push(literal) + push(storage src) + read are byte-identical', async () => {
-    const run = async (d: string) => { await jeth.call(aj, d); await sol.call(as, d); };
+    const run = async (d: string) => {
+      await jeth.call(aj, d);
+      await sol.call(as, d);
+    };
     await run('0x' + sel('pushLit(uint8,uint8,uint8,uint8)') + pad32(10n) + pad32(20n) + pad32(30n) + pad32(40n));
     await run('0x' + sel('setSrc(uint8,uint8,uint8,uint8)') + pad32(50n) + pad32(60n) + pad32(70n) + pad32(80n));
     await run('0x' + sel('pushSrc()'));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 4n; j++) {
-      const data = '0x' + sel('get(uint256,uint256)') + pad32(i) + pad32(j);
-      expect((await jeth.call(aj, data)).returnHex, `ee[${i}][${j}]`).toBe((await sol.call(as, data)).returnHex);
-    }
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 4n; j++) {
+        const data = '0x' + sel('get(uint256,uint256)') + pad32(i) + pad32(j);
+        expect((await jeth.call(aj, data)).returnHex, `ee[${i}][${j}]`).toBe((await sol.call(as, data)).returnHex);
+      }
     expect(await readSlot(jeth, aj, 0n)).toBe(await readSlot(sol, as, 0n)); // ee length
   });
 });

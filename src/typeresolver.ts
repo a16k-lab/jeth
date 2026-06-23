@@ -5,8 +5,10 @@ import ts from 'typescript';
 import type { JethType } from './types.js';
 import type { DiagnosticBag } from './diagnostics.js';
 
-const UINT_RE = /^u(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)$/;
-const INT_RE = /^i(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)$/;
+const UINT_RE =
+  /^u(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)$/;
+const INT_RE =
+  /^i(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)$/;
 const BYTESN_RE = /^bytes([1-9]|[12][0-9]|3[0-2])$/; // bytes1..bytes32
 
 /** Resolve a primitive identifier type name. Returns undefined if not primitive. */
@@ -108,11 +110,7 @@ export function resolveType(
 
   // Reject `number`, floats, `any`, etc. with a precise message.
   if (node.kind === ts.SyntaxKind.NumberKeyword) {
-    diags.error(
-      node,
-      'JETH001',
-      "the JS 'number' type has no on-chain meaning; use a sized integer (u256, i128, ...)",
-    );
+    diags.error(node, 'JETH001', "the JS 'number' type has no on-chain meaning; use a sized integer (u256, i128, ...)");
     return undefined;
   }
   if (node.kind === ts.SyntaxKind.AnyKeyword) {

@@ -59,29 +59,37 @@ contract C {
 describe('static struct memory locals (G9) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('construct + return, field read', async () => {
-    for (const [a, b, c, d] of [[1n, 2n, 3n, 0x55n], [M - 1n, 255n, M - 1n, 0xdeadn], [0n, 0n, 0n, 0n]] as [bigint, bigint, bigint, bigint][]) {
+    for (const [a, b, c, d] of [
+      [1n, 2n, 3n, 0x55n],
+      [M - 1n, 255n, M - 1n, 0xdeadn],
+      [0n, 0n, 0n, 0n],
+    ] as [bigint, bigint, bigint, bigint][]) {
       await eq(`mk(${a},${b})`, encodeCall(sel('mk(uint256,uint8,int64,address)'), [a, b, c, d]));
       await eq(`getB(${a},${b})`, encodeCall(sel('getB(uint256,uint8)'), [a, b]));
     }
   });
   it('mutate fields + signs', async () => {
     for (const a of [0n, 41n, M - 2n]) await eq(`mutate(${a})`, encodeCall(sel('mutate(uint256,uint8)'), [a, 7n]));
-    for (const c of [0n, 1n, -1n, (1n << 63n) - 1n, M - (1n << 63n), -42n]) await eq(`signs(${c})`, encodeCall(sel('signs(int64)'), [c]));
+    for (const c of [0n, 1n, -1n, (1n << 63n) - 1n, M - (1n << 63n), -42n])
+      await eq(`signs(${c})`, encodeCall(sel('signs(int64)'), [c]));
   });
   it('compound/inc-dec on memory fields', async () => {
-    for (const a of [0n, 1n, 100n, (1n << 100n)]) await eq(`ops(${a})`, encodeCall(sel('ops(uint256)'), [a]));
+    for (const a of [0n, 1n, 100n, 1n << 100n]) await eq(`ops(${a})`, encodeCall(sel('ops(uint256)'), [a]));
   });
   it('memory aliasing (q = p; q.x = 99 mutates p)', async () => {
     for (const a of [0n, 5n, 12345n]) await eq(`aliasing(${a})`, encodeCall(sel('aliasing(uint128)'), [a]));

@@ -14,7 +14,9 @@ const I256_MIN = -(1n << 255n);
 const B4 = BigInt('0xdeadbeef' + '00'.repeat(28)); // bytes4 left-aligned register word
 
 function pad32(v: bigint): Uint8Array {
-  return hexToBytes(('0x' + (((v % (1n << 256n)) + (1n << 256n)) % (1n << 256n)).toString(16).padStart(64, '0')) as `0x${string}`);
+  return hexToBytes(
+    ('0x' + (((v % (1n << 256n)) + (1n << 256n)) % (1n << 256n)).toString(16).padStart(64, '0')) as `0x${string}`,
+  );
 }
 function mapSlot(keyWord: bigint, baseSlot: bigint): bigint {
   const buf = new Uint8Array(64);

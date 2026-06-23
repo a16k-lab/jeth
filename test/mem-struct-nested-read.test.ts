@@ -71,19 +71,27 @@ contract C {
 describe('whole nested-struct-field read on a memory struct (G9) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('return p.inner / alias-mutate / read-via / pass-by-ref', async () => {
-    for (const [a, b] of [[1n, 2n], [0n, -1n], [M - 1n, (1n << 63n) - 1n], [42n, M - (1n << 63n)]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [1n, 2n],
+      [0n, -1n],
+      [M - 1n, (1n << 63n) - 1n],
+      [42n, M - (1n << 63n)],
+    ] as [bigint, bigint][]) {
       await eq('getInner', encodeCall(sel('getInner(uint256,uint256,int64)'), [9n, a, b]));
       await eq('aliasMutate', encodeCall(sel('aliasMutate(uint256,int64)'), [a, b]));
       await eq('readVia', encodeCall(sel('readVia(uint256,int64)'), [a, b]));

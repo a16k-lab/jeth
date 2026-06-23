@@ -11,7 +11,10 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
-const encStr = (s: string) => { const h = Buffer.from(s, 'utf8').toString('hex'); return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0'); };
+const encStr = (s: string) => {
+  const h = Buffer.from(s, 'utf8').toString('hex');
+  return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0');
+};
 // single bytes/string arg: selector + offset(0x20) + [len][data]
 const cd1 = (sig: string, s: string) => '0x' + sel(sig) + pad(0x20n) + encStr(s);
 // (string, uint256): offset(0x40) + value + [len][data]
@@ -42,20 +45,32 @@ contract C {
 
 describe('bytes/string memory locals (G9) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
-  const STRS = ['', 'abc', 'abcdefghijklmnopqrstuvwxyz012345', 'this string is definitely longer than thirty-two bytes for testing'];
+  const STRS = [
+    '',
+    'abc',
+    'abcdefghijklmnopqrstuvwxyz012345',
+    'this string is definitely longer than thirty-two bytes for testing',
+  ];
   it('echo (calldata copy) / literal / .length / keccak / alias', async () => {
     await eq('echoLit', encodeCall(sel('echoLit()'), []));
     for (const s of STRS) {

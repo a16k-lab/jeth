@@ -88,7 +88,14 @@ describe('dynamic struct (calldata param + return) vs Solidity', () => {
   });
 
   it('reads d.a and d.s (short / 32 / 33 / empty string)', async () => {
-    for (const s of ['', 'hi', 'x'.repeat(31), 'y'.repeat(32), 'z'.repeat(33), 'hello world this is a longer string!!']) {
+    for (const s of [
+      '',
+      'hi',
+      'x'.repeat(31),
+      'y'.repeat(32),
+      'z'.repeat(33),
+      'hello world this is a longer string!!',
+    ]) {
       const r = await eq(`getA s.len=${s.length}`, dCalldata(`getA(${Dsig})`, 0xdeadn, s));
       expect(decodeUint(r.j.returnHex)).toBe(0xdeadn);
       await eq(`getS s.len=${s.length}`, dCalldata(`getS(${Dsig})`, 1n, s));
@@ -123,8 +130,7 @@ describe('dynamic struct (calldata param + return) vs Solidity', () => {
     const Esig = '(uint64,bytes)';
     await eq('echoE', eCalldata(`echoE(${Esig})`, 0x99n, 'payload-bytes'));
     // dirty id (high bits set beyond uint64) -> the echo decodes+validates -> EMPTY.
-    const dirty = '0x' + sel(`echoE(${Esig})`) + pad(0x20n) +
-      pad(1n << 200n) + pad(0x40n) + pad(3n) + enc('abc');
+    const dirty = '0x' + sel(`echoE(${Esig})`) + pad(0x20n) + pad(1n << 200n) + pad(0x40n) + pad(3n) + enc('abc');
     const r = await eq('echoE dirty id', dirty);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
@@ -137,9 +143,15 @@ describe('dynamic struct (calldata param + return) vs Solidity', () => {
     // tuple: [a][off_s][off_b][z][s.len][s pad][b.len][b pad]
     const offS = 0x80n; // 4 head words
     const offB = offS + 0x20n + BigInt(words(s)) * 0x20n;
-    const tuple = pad(11n) + pad(offS) + pad(offB) + pad(22n) +
-      pad(BigInt(Buffer.from(s, 'utf8').length)) + enc(s) +
-      pad(BigInt(Buffer.from(b, 'utf8').length)) + enc(b);
+    const tuple =
+      pad(11n) +
+      pad(offS) +
+      pad(offB) +
+      pad(22n) +
+      pad(BigInt(Buffer.from(s, 'utf8').length)) +
+      enc(s) +
+      pad(BigInt(Buffer.from(b, 'utf8').length)) +
+      enc(b);
     const data = '0x' + sel(`echoMulti(${Msig})`) + pad(0x20n) + tuple;
     await eq('echoMulti', data);
   });
@@ -147,8 +159,7 @@ describe('dynamic struct (calldata param + return) vs Solidity', () => {
   it('constructs + returns a D (mk / mkLit)', async () => {
     // mk(a, s): plain (uint256, string) params -> returns D.
     const mkData = (a: bigint, s: string) =>
-      '0x' + sel('mk(uint256,string)') + pad(a) + pad(0x40n) +
-      pad(BigInt(Buffer.from(s, 'utf8').length)) + enc(s);
+      '0x' + sel('mk(uint256,string)') + pad(a) + pad(0x40n) + pad(BigInt(Buffer.from(s, 'utf8').length)) + enc(s);
     for (const s of ['', 'mk-string', 'q'.repeat(40)]) {
       await eq(`mk s.len=${s.length}`, mkData(0xabcn, s));
     }
@@ -178,8 +189,14 @@ describe('dynamic struct (calldata param + return) vs Solidity', () => {
     }
     // mkOuter(x, a, s, y) -> Outer
     const mko = (x: bigint, a: bigint, s: string, y: bigint) =>
-      '0x' + sel('mkOuter(uint256,uint256,string,uint256)') + pad(x) + pad(a) + pad(0x80n) + pad(y) +
-      pad(BigInt(Buffer.from(s, 'utf8').length)) + enc(s);
+      '0x' +
+      sel('mkOuter(uint256,uint256,string,uint256)') +
+      pad(x) +
+      pad(a) +
+      pad(0x80n) +
+      pad(y) +
+      pad(BigInt(Buffer.from(s, 'utf8').length)) +
+      enc(s);
     await eq('mkOuter', mko(0x1111n, 0x2222n, 'built nested', 0x3333n));
     await eq('mkOuter empty', mko(0x1111n, 0x2222n, '', 0x3333n));
   });
@@ -211,7 +228,7 @@ describe('dynamic struct (calldata param + return) vs Solidity', () => {
     r = await eq('off_s past end', '0x' + sel(`getS(${Dsig3})`) + pad(0x20n) + t);
     expect(r.j.success).toBe(false);
     // s.len implies payload past end
-    const t2 = pad(1n) + pad(0x40n) + pad(0x40n) /* len=64 but no payload */;
+    const t2 = pad(1n) + pad(0x40n) + pad(0x40n); /* len=64 but no payload */
     r = await eq('s.len past end', '0x' + sel(`getS(${Dsig3})`) + pad(0x20n) + t2);
     expect(r.j.success).toBe(false);
     // truncated tuple head (only the head word, no tuple)
@@ -227,7 +244,10 @@ describe('dynamic struct (calldata param + return) vs Solidity', () => {
     expect(r.j.success).toBe(true);
     expect(decodeUint(r.j.returnHex)).toBe(0xabcn);
     // off_s in head bounds, but s.len huge (never read): still ignored -> SUCCESS.
-    r = await eq('getA huge s.len unread', '0x' + sel(`getA(${Dsig4})`) + pad(0x20n) + pad(0xabcn) + pad(0x40n) + pad(1n << 200n));
+    r = await eq(
+      'getA huge s.len unread',
+      '0x' + sel(`getA(${Dsig4})`) + pad(0x20n) + pad(0xabcn) + pad(0x40n) + pad(1n << 200n),
+    );
     expect(r.j.success).toBe(true);
   });
 });

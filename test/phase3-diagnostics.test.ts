@@ -37,7 +37,7 @@ describe('Phase 3 diagnostics', () => {
     expect(codesFor(C('this.m[msg.sender] = 1n;'))).toEqual([]);
   });
 
-  it("rejects msg.value outside a @payable function", () => {
+  it('rejects msg.value outside a @payable function', () => {
     expect(codesFor(C('this.total = msg.value;'))).toContain('JETH162'); // nonpayable
     expect(codesFor(C('return msg.value;', '@external @view', 'u256'))).toContain('JETH162'); // view
   });

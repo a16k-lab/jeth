@@ -9,26 +9,47 @@ import { Harness, pad32 } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e: any) { return e.diagnostics ? [...new Set<string>(e.diagnostics.map((d: any) => d.code as string))] : ['ERR']; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e: any) {
+    return e.diagnostics ? [...new Set<string>(e.diagnostics.map((d: any) => d.code as string))] : ['ERR'];
+  }
 }
-const abiNames = (src: string): string[] => compile(src, { fileName: 'C.jeth' }).abi.filter((a: any) => 'name' in a).map((a: any) => a.name as string);
+const abiNames = (src: string): string[] =>
+  compile(src, { fileName: 'C.jeth' })
+    .abi.filter((a: any) => 'name' in a)
+    .map((a: any) => a.name as string);
 
 describe('visibility model: @external only, private-by-default', () => {
   it('removed keywords @public/@internal/@private/@hidden -> JETH054', () => {
     for (const kw of ['public', 'internal', 'private', 'hidden']) {
-      expect(codes(`@contract class C { @${kw} f(): u256 { return 1n; } @external g(): void {} }`), kw).toContain('JETH054');
+      expect(codes(`@contract class C { @${kw} f(): u256 { return 1n; } @external g(): void {} }`), kw).toContain(
+        'JETH054',
+      );
     }
   });
   it('@external is exposed; a no-decorator function is internal (not in the ABI)', () => {
-    expect(abiNames(`@contract class C { @external @pure f(): u256 { return 1n; } @pure helper(): u256 { return 2n; } }`)).toEqual(['f']);
+    expect(
+      abiNames(`@contract class C { @external @pure f(): u256 { return 1n; } @pure helper(): u256 { return 2n; } }`),
+    ).toEqual(['f']);
   });
   it('a no-decorator helper is callable internally by name', () => {
-    expect(codes(`@contract class C { @pure helper(x: u256): u256 { return x + 1n; } @external @pure f(): u256 { return helper(5n); } }`)).toEqual([]);
+    expect(
+      codes(
+        `@contract class C { @pure helper(x: u256): u256 { return x + 1n; } @external @pure f(): u256 { return helper(5n); } }`,
+      ),
+    ).toEqual([]);
   });
   it('getter trigger is @external @state (not @public)', () => {
-    expect(abiNames(`@contract class C { @external @state count: u256; @external inc(): void { this.count = this.count + 1n; } }`)).toEqual(['inc', 'count']);
-    expect(abiNames(`@contract class C { @state hidden: u256; @external inc(): void { this.hidden = this.hidden + 1n; } }`)).toEqual(['inc']); // no getter for a plain @state
+    expect(
+      abiNames(
+        `@contract class C { @external @state count: u256; @external inc(): void { this.count = this.count + 1n; } }`,
+      ),
+    ).toEqual(['inc', 'count']);
+    expect(
+      abiNames(`@contract class C { @state hidden: u256; @external inc(): void { this.hidden = this.hidden + 1n; } }`),
+    ).toEqual(['inc']); // no getter for a plain @state
   });
   it('@payable / @nonReentrant require @external', () => {
     expect(codes(`@contract class C { @payable @pure f(): u256 { return msg.value; } }`)).toContain('JETH131');

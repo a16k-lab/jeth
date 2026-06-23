@@ -19,14 +19,26 @@ import { CompileError } from '../src/diagnostics.js';
 
 const sel = (s: string) => functionSelector(s);
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 const PRE = 'enum Color { Red, Green, Blue }\n';
 const J = (body: string) => `${PRE}@contract class C { ${body} }`;
 const S = (body: string) =>
   `// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\ncontract C { enum Color { Red, Green, Blue }\n${body} }`;
-const solRejects = (src: string) => { try { compileSolidity(src, 'C'); return false; } catch { return true; } };
+const solRejects = (src: string) => {
+  try {
+    compileSolidity(src, 'C');
+    return false;
+  } catch {
+    return true;
+  }
+};
 
 describe('enum member literal is not implicitly convertible to an integer (vs solc)', () => {
   // (1) return Color.Blue from a uint-returning function: JETH-REJECT, solc-REJECT.
@@ -38,20 +50,24 @@ describe('enum member literal is not implicitly convertible to an integer (vs so
   // (2) let x: u256 = Color.Green: JETH-REJECT, solc-REJECT.
   it('rejects `let x: u256 = Color.Green;` (both reject)', () => {
     expect(codes(J('@external @pure f(): u256 { let x: u256 = Color.Green; return x; }'))).toContain('JETH085');
-    expect(solRejects(S('function f() external pure returns (uint256) { uint256 x = Color.Green; return x; }'))).toBe(true);
+    expect(solRejects(S('function f() external pure returns (uint256) { uint256 x = Color.Green; return x; }'))).toBe(
+      true,
+    );
   });
 
   // (3) an enum literal argument into a single (non-overloaded) uint param: JETH-REJECT, solc-REJECT.
   it('rejects an enum-literal argument into a u256 parameter (both reject)', () => {
     const j = 'pick(u: u256): u256 { return u; } @external @pure f(): u256 { return this.pick(Color.Blue); }';
     expect(codes(J(j))).toContain('JETH085');
-    const s = 'function pick(uint256 u) internal pure returns (uint256) { return u; } function f() external pure returns (uint256) { return pick(Color.Blue); }';
+    const s =
+      'function pick(uint256 u) internal pure returns (uint256) { return u; } function f() external pure returns (uint256) { return pick(Color.Blue); }';
     expect(solRejects(S(s))).toBe(true);
   });
 
   // (4) cross-enum implicit conversion is also rejected (the literal only converts to its OWN enum).
   it('rejects an enum-literal of one enum used where another enum is expected (both reject)', () => {
-    const j = 'enum Color { Red, Green, Blue }\nenum Status { Off, On }\n@contract class C { @external @pure f(): Status { return Color.Red; } }';
+    const j =
+      'enum Color { Red, Green, Blue }\nenum Status { Off, On }\n@contract class C { @external @pure f(): Status { return Color.Red; } }';
     expect(codes(j)).toContain('JETH085');
     const s = 'enum Status { Off, On } function f() external pure returns (Status) { return Color.Red; }';
     expect(solRejects(S(s))).toBe(true);
@@ -73,12 +89,14 @@ describe('enum member literal is not implicitly convertible to an integer (vs so
       function pick(Color c) internal pure returns (uint256) { return 100; }
       function pick(uint256 u) internal pure returns (uint256) { return 200; }`;
     beforeAll(async () => {
-      jeth = await Harness.create(); sol = await Harness.create();
+      jeth = await Harness.create();
+      sol = await Harness.create();
       aj = await jeth.deploy(compile(J(body), { fileName: 'C.jeth' }).creationBytecode);
       as = await sol.deploy(compileSolidity(S(sbody), 'C').creation);
     });
     const cmp = async (fn: string, label: string) => {
-      const j = await jeth.call(aj, '0x' + sel(fn)); const s = await sol.call(as, '0x' + sel(fn));
+      const j = await jeth.call(aj, '0x' + sel(fn));
+      const s = await sol.call(as, '0x' + sel(fn));
       expect(j.success, `${label} success`).toBe(s.success);
       expect(j.returnHex, label).toBe(s.returnHex);
     };

@@ -156,7 +156,14 @@ describe('dynamic arrays vs Solidity', () => {
       expect(r.j.returnHex, `${label} returndata`).toBe(r.s.returnHex);
     }
     // mixed static+dynamic args
-    const mixData = '0x' + functionSelector('mix(uint256,uint256[])') + pad32(100n) + pad32(0x40n) + pad32(2n) + pad32(1n) + pad32(2n);
+    const mixData =
+      '0x' +
+      functionSelector('mix(uint256,uint256[])') +
+      pad32(100n) +
+      pad32(0x40n) +
+      pad32(2n) +
+      pad32(1n) +
+      pad32(2n);
     const r = await both(mixData);
     expect(decodeUint(r.j.returnHex)).toBe(102n);
     expect(r.j.returnHex).toBe(r.s.returnHex);
@@ -166,7 +173,7 @@ describe('dynamic arrays vs Solidity', () => {
     const s4 = functionSelector('echoU(uint256[])');
     const cases = [
       '0x' + s4 + pad32(0x1000n), // offset past calldata -> revert
-      '0x' + s4 + pad32(0x20n) + pad32((1n << 200n)) + pad32(1n), // huge length -> revert
+      '0x' + s4 + pad32(0x20n) + pad32(1n << 200n) + pad32(1n), // huge length -> revert
       '0x' + s4 + pad32(0x20n) + pad32(5n) + pad32(1n), // length says 5 but tail truncated -> revert
     ];
     for (const data of cases) {

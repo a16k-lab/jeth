@@ -20,7 +20,7 @@ function mapSlot(keyWord: bigint, baseSlot: bigint): bigint {
 
 // Fixed keys.
 const BKEY = BigInt('0x' + 'ab'.repeat(32)); // bytes32 key
-const UKEY = 0xdeadbeefn;                     // u256 key
+const UKEY = 0xdeadbeefn; // u256 key
 
 const JETH = `// s2-map-struct-multikey
 @struct class Acct { bal: u128; nonce: u64; active: bool; }
@@ -100,9 +100,9 @@ describe('s2-map-struct-multikey: two maps of packed struct vs Solidity', () => 
     // Sanity: the packed layout must reflect all three fields (non-zero, low 16
     // bytes = bal, next 8 = nonce, next byte = active).
     const word = BigInt(jv);
-    expect(word & ((1n << 128n) - 1n)).toBe(0x1111222233334444n);            // bal
-    expect((word >> 128n) & ((1n << 64n) - 1n)).toBe(0x55n);                  // nonce
-    expect((word >> 192n) & 0xffn).toBe(1n);                                  // active
+    expect(word & ((1n << 128n) - 1n)).toBe(0x1111222233334444n); // bal
+    expect((word >> 128n) & ((1n << 64n) - 1n)).toBe(0x55n); // nonce
+    expect((word >> 192n) & 0xffn).toBe(1n); // active
 
     for (const g of ['getBBal(bytes32)', 'getBNonce(bytes32)', 'getBActive(bytes32)']) {
       const r = await both(encodeCall(sel(g), [BKEY]));

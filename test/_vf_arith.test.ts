@@ -299,212 +299,309 @@ describe('probe arith', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('runs', async () => {
     // boundary value sets per width
-    const max = (bits: bigint) => (1n << bits) - 1n;          // uintN max
-    const smax = (bits: bigint) => (1n << (bits - 1n)) - 1n;  // intN max
-    const smin = (bits: bigint) => -(1n << (bits - 1n));      // intN min
+    const max = (bits: bigint) => (1n << bits) - 1n; // uintN max
+    const smax = (bits: bigint) => (1n << (bits - 1n)) - 1n; // intN max
+    const smin = (bits: bigint) => -(1n << (bits - 1n)); // intN min
     const sword = (bits: bigint, v: bigint) => ((v % (1n << bits)) + (1n << bits)) % (1n << bits); // intN -> word
 
     // ---------------- checked add/sub/mul boundaries ----------------
     const u16v = [0n, 1n, 2n, 100n, max(16n) - 1n, max(16n), max(16n) / 2n, max(16n) / 2n + 1n, 255n, 256n, 65280n];
-    for (const a of u16v) for (const b of u16v) {
-      await eq(`addU16(${a},${b})`, encodeCall(sel('addU16(uint16,uint16)'), [a, b]));
-      await eq(`subU16(${a},${b})`, encodeCall(sel('subU16(uint16,uint16)'), [a, b]));
-      await eq(`mulU16(${a},${b})`, encodeCall(sel('mulU16(uint16,uint16)'), [a, b]));
-      await eq(`uAddU16(${a},${b})`, encodeCall(sel('uAddU16(uint16,uint16)'), [a, b]));
-      await eq(`uSubU16(${a},${b})`, encodeCall(sel('uSubU16(uint16,uint16)'), [a, b]));
-      await eq(`uMulU16(${a},${b})`, encodeCall(sel('uMulU16(uint16,uint16)'), [a, b]));
-    }
-    const u32v = [0n, 1n, max(32n), max(32n) - 1n, max(16n), max(16n) + 1n, (1n << 31n), max(32n) / 2n];
-    for (const a of u32v) for (const b of u32v) {
-      await eq(`addU32(${a},${b})`, encodeCall(sel('addU32(uint32,uint32)'), [a, b]));
-      await eq(`subU32(${a},${b})`, encodeCall(sel('subU32(uint32,uint32)'), [a, b]));
-      await eq(`mulU32(${a},${b})`, encodeCall(sel('mulU32(uint32,uint32)'), [a, b]));
-    }
+    for (const a of u16v)
+      for (const b of u16v) {
+        await eq(`addU16(${a},${b})`, encodeCall(sel('addU16(uint16,uint16)'), [a, b]));
+        await eq(`subU16(${a},${b})`, encodeCall(sel('subU16(uint16,uint16)'), [a, b]));
+        await eq(`mulU16(${a},${b})`, encodeCall(sel('mulU16(uint16,uint16)'), [a, b]));
+        await eq(`uAddU16(${a},${b})`, encodeCall(sel('uAddU16(uint16,uint16)'), [a, b]));
+        await eq(`uSubU16(${a},${b})`, encodeCall(sel('uSubU16(uint16,uint16)'), [a, b]));
+        await eq(`uMulU16(${a},${b})`, encodeCall(sel('uMulU16(uint16,uint16)'), [a, b]));
+      }
+    const u32v = [0n, 1n, max(32n), max(32n) - 1n, max(16n), max(16n) + 1n, 1n << 31n, max(32n) / 2n];
+    for (const a of u32v)
+      for (const b of u32v) {
+        await eq(`addU32(${a},${b})`, encodeCall(sel('addU32(uint32,uint32)'), [a, b]));
+        await eq(`subU32(${a},${b})`, encodeCall(sel('subU32(uint32,uint32)'), [a, b]));
+        await eq(`mulU32(${a},${b})`, encodeCall(sel('mulU32(uint32,uint32)'), [a, b]));
+      }
     const u64v = [0n, 1n, max(64n), max(64n) - 1n, max(32n), max(32n) + 1n, 1n << 33n, (1n << 64n) / 2n];
-    for (const a of u64v) for (const b of u64v) {
-      await eq(`addU64(${a},${b})`, encodeCall(sel('addU64(uint64,uint64)'), [a, b]));
-      await eq(`mulU64(${a},${b})`, encodeCall(sel('mulU64(uint64,uint64)'), [a, b]));
-    }
+    for (const a of u64v)
+      for (const b of u64v) {
+        await eq(`addU64(${a},${b})`, encodeCall(sel('addU64(uint64,uint64)'), [a, b]));
+        await eq(`mulU64(${a},${b})`, encodeCall(sel('mulU64(uint64,uint64)'), [a, b]));
+      }
     const u128v = [0n, 1n, max(128n), max(128n) - 1n, max(64n), max(64n) + 1n, 1n << 100n];
-    for (const a of u128v) for (const b of u128v) {
-      await eq(`addU128(${a},${b})`, encodeCall(sel('addU128(uint128,uint128)'), [a, b]));
-      await eq(`mulU128(${a},${b})`, encodeCall(sel('mulU128(uint128,uint128)'), [a, b]));
-    }
-    const u256v = [0n, 1n, 2n, M - 1n, M - 2n, 1n << 128n, (1n << 128n) - 1n, (1n << 255n), (M - 1n) / 2n, (M - 1n) / 2n + 1n];
-    for (const a of u256v) for (const b of u256v) {
-      await eq(`addU256(${a},${b})`, encodeCall(sel('addU256(uint256,uint256)'), [a, b]));
-      await eq(`subU256(${a},${b})`, encodeCall(sel('subU256(uint256,uint256)'), [a, b]));
-      await eq(`mulU256(${a},${b})`, encodeCall(sel('mulU256(uint256,uint256)'), [a, b]));
-      await eq(`uSubU256(${a},${b})`, encodeCall(sel('uSubU256(uint256,uint256)'), [a, b]));
-      await eq(`uMulU256(${a},${b})`, encodeCall(sel('uMulU256(uint256,uint256)'), [a, b]));
-    }
+    for (const a of u128v)
+      for (const b of u128v) {
+        await eq(`addU128(${a},${b})`, encodeCall(sel('addU128(uint128,uint128)'), [a, b]));
+        await eq(`mulU128(${a},${b})`, encodeCall(sel('mulU128(uint128,uint128)'), [a, b]));
+      }
+    const u256v = [
+      0n,
+      1n,
+      2n,
+      M - 1n,
+      M - 2n,
+      1n << 128n,
+      (1n << 128n) - 1n,
+      1n << 255n,
+      (M - 1n) / 2n,
+      (M - 1n) / 2n + 1n,
+    ];
+    for (const a of u256v)
+      for (const b of u256v) {
+        await eq(`addU256(${a},${b})`, encodeCall(sel('addU256(uint256,uint256)'), [a, b]));
+        await eq(`subU256(${a},${b})`, encodeCall(sel('subU256(uint256,uint256)'), [a, b]));
+        await eq(`mulU256(${a},${b})`, encodeCall(sel('mulU256(uint256,uint256)'), [a, b]));
+        await eq(`uSubU256(${a},${b})`, encodeCall(sel('uSubU256(uint256,uint256)'), [a, b]));
+        await eq(`uMulU256(${a},${b})`, encodeCall(sel('uMulU256(uint256,uint256)'), [a, b]));
+      }
 
     // signed boundaries: encode intN values as their N-bit two's complement word
-    const i16raw = [smin(16n), smin(16n) + 1n, -1n, 0n, 1n, smax(16n), smax(16n) - 1n, -100n, 100n, smin(16n) / 2n].map(v => sword(16n, v));
-    for (const a of i16raw) for (const b of i16raw) {
-      await eq(`addI16(${a},${b})`, encodeCall(sel('addI16(int16,int16)'), [a, b]));
-      await eq(`subI16(${a},${b})`, encodeCall(sel('subI16(int16,int16)'), [a, b]));
-      await eq(`mulI16(${a},${b})`, encodeCall(sel('mulI16(int16,int16)'), [a, b]));
-      await eq(`divI16(${a},${b})`, encodeCall(sel('divI16(int16,int16)'), [a, b]));
-      await eq(`modI16(${a},${b})`, encodeCall(sel('modI16(int16,int16)'), [a, b]));
-      await eq(`uAddI16(${a},${b})`, encodeCall(sel('uAddI16(int16,int16)'), [a, b]));
-      await eq(`uSubI16(${a},${b})`, encodeCall(sel('uSubI16(int16,int16)'), [a, b]));
-      await eq(`uMulI16(${a},${b})`, encodeCall(sel('uMulI16(int16,int16)'), [a, b]));
-    }
-    const i32raw = [smin(32n), smin(32n) + 1n, -1n, 0n, 1n, smax(32n), -65536n, 65536n].map(v => sword(32n, v));
-    for (const a of i32raw) for (const b of i32raw) {
-      await eq(`addI32(${a},${b})`, encodeCall(sel('addI32(int32,int32)'), [a, b]));
-      await eq(`mulI32(${a},${b})`, encodeCall(sel('mulI32(int32,int32)'), [a, b]));
-      await eq(`divI32(${a},${b})`, encodeCall(sel('divI32(int32,int32)'), [a, b]));
-      await eq(`modI32(${a},${b})`, encodeCall(sel('modI32(int32,int32)'), [a, b]));
-    }
-    const i128raw = [smin(128n), smin(128n) + 1n, -1n, 0n, 1n, smax(128n)].map(v => sword(128n, v));
-    for (const a of i128raw) for (const b of i128raw) {
-      await eq(`addI128(${a},${b})`, encodeCall(sel('addI128(int128,int128)'), [a, b]));
-      await eq(`mulI128(${a},${b})`, encodeCall(sel('mulI128(int128,int128)'), [a, b]));
-      await eq(`divI128(${a},${b})`, encodeCall(sel('divI128(int128,int128)'), [a, b]));
-      await eq(`modI128(${a},${b})`, encodeCall(sel('modI128(int128,int128)'), [a, b]));
-    }
-    const i256raw = [-(1n << 255n), -(1n << 255n) + 1n, -1n, 0n, 1n, (1n << 255n) - 1n, -42n, 1n << 254n].map(v => sword(256n, v));
-    for (const a of i256raw) for (const b of i256raw) {
-      await eq(`addI256(${a},${b})`, encodeCall(sel('addI256(int256,int256)'), [a, b]));
-      await eq(`subI256(${a},${b})`, encodeCall(sel('subI256(int256,int256)'), [a, b]));
-      await eq(`mulI256(${a},${b})`, encodeCall(sel('mulI256(int256,int256)'), [a, b]));
-      await eq(`divI256(${a},${b})`, encodeCall(sel('divI256(int256,int256)'), [a, b]));
-      await eq(`modI256(${a},${b})`, encodeCall(sel('modI256(int256,int256)'), [a, b]));
-    }
+    const i16raw = [smin(16n), smin(16n) + 1n, -1n, 0n, 1n, smax(16n), smax(16n) - 1n, -100n, 100n, smin(16n) / 2n].map(
+      (v) => sword(16n, v),
+    );
+    for (const a of i16raw)
+      for (const b of i16raw) {
+        await eq(`addI16(${a},${b})`, encodeCall(sel('addI16(int16,int16)'), [a, b]));
+        await eq(`subI16(${a},${b})`, encodeCall(sel('subI16(int16,int16)'), [a, b]));
+        await eq(`mulI16(${a},${b})`, encodeCall(sel('mulI16(int16,int16)'), [a, b]));
+        await eq(`divI16(${a},${b})`, encodeCall(sel('divI16(int16,int16)'), [a, b]));
+        await eq(`modI16(${a},${b})`, encodeCall(sel('modI16(int16,int16)'), [a, b]));
+        await eq(`uAddI16(${a},${b})`, encodeCall(sel('uAddI16(int16,int16)'), [a, b]));
+        await eq(`uSubI16(${a},${b})`, encodeCall(sel('uSubI16(int16,int16)'), [a, b]));
+        await eq(`uMulI16(${a},${b})`, encodeCall(sel('uMulI16(int16,int16)'), [a, b]));
+      }
+    const i32raw = [smin(32n), smin(32n) + 1n, -1n, 0n, 1n, smax(32n), -65536n, 65536n].map((v) => sword(32n, v));
+    for (const a of i32raw)
+      for (const b of i32raw) {
+        await eq(`addI32(${a},${b})`, encodeCall(sel('addI32(int32,int32)'), [a, b]));
+        await eq(`mulI32(${a},${b})`, encodeCall(sel('mulI32(int32,int32)'), [a, b]));
+        await eq(`divI32(${a},${b})`, encodeCall(sel('divI32(int32,int32)'), [a, b]));
+        await eq(`modI32(${a},${b})`, encodeCall(sel('modI32(int32,int32)'), [a, b]));
+      }
+    const i128raw = [smin(128n), smin(128n) + 1n, -1n, 0n, 1n, smax(128n)].map((v) => sword(128n, v));
+    for (const a of i128raw)
+      for (const b of i128raw) {
+        await eq(`addI128(${a},${b})`, encodeCall(sel('addI128(int128,int128)'), [a, b]));
+        await eq(`mulI128(${a},${b})`, encodeCall(sel('mulI128(int128,int128)'), [a, b]));
+        await eq(`divI128(${a},${b})`, encodeCall(sel('divI128(int128,int128)'), [a, b]));
+        await eq(`modI128(${a},${b})`, encodeCall(sel('modI128(int128,int128)'), [a, b]));
+      }
+    const i256raw = [-(1n << 255n), -(1n << 255n) + 1n, -1n, 0n, 1n, (1n << 255n) - 1n, -42n, 1n << 254n].map((v) =>
+      sword(256n, v),
+    );
+    for (const a of i256raw)
+      for (const b of i256raw) {
+        await eq(`addI256(${a},${b})`, encodeCall(sel('addI256(int256,int256)'), [a, b]));
+        await eq(`subI256(${a},${b})`, encodeCall(sel('subI256(int256,int256)'), [a, b]));
+        await eq(`mulI256(${a},${b})`, encodeCall(sel('mulI256(int256,int256)'), [a, b]));
+        await eq(`divI256(${a},${b})`, encodeCall(sel('divI256(int256,int256)'), [a, b]));
+        await eq(`modI256(${a},${b})`, encodeCall(sel('modI256(int256,int256)'), [a, b]));
+      }
 
     // div/mod by zero (Panic 0x12) + by one + INT_MIN/-1 already covered above
-    for (const a of [0n, 1n, 255n, 128n, 100n]) for (const b of [0n, 1n, 2n, 7n, 255n]) {
-      await eq(`divU8(${a},${b})`, encodeCall(sel('divU8(uint8,uint8)'), [a, b]));
-      await eq(`modU8(${a},${b})`, encodeCall(sel('modU8(uint8,uint8)'), [a, b]));
-    }
-    for (const a of u256v) for (const b of [0n, 1n, 2n, M - 1n, 7n]) {
-      await eq(`divU256(${a},${b})`, encodeCall(sel('divU256(uint256,uint256)'), [a, b]));
-      await eq(`modU256(${a},${b})`, encodeCall(sel('modU256(uint256,uint256)'), [a, b]));
-    }
+    for (const a of [0n, 1n, 255n, 128n, 100n])
+      for (const b of [0n, 1n, 2n, 7n, 255n]) {
+        await eq(`divU8(${a},${b})`, encodeCall(sel('divU8(uint8,uint8)'), [a, b]));
+        await eq(`modU8(${a},${b})`, encodeCall(sel('modU8(uint8,uint8)'), [a, b]));
+      }
+    for (const a of u256v)
+      for (const b of [0n, 1n, 2n, M - 1n, 7n]) {
+        await eq(`divU256(${a},${b})`, encodeCall(sel('divU256(uint256,uint256)'), [a, b]));
+        await eq(`modU256(${a},${b})`, encodeCall(sel('modU256(uint256,uint256)'), [a, b]));
+      }
 
     // ---------------- negation of INT_MIN at each width ----------------
-    for (const v of [smin(16n), smin(16n) + 1n, -1n, 0n, 1n, smax(16n)]) await eq(`negI16(${v})`, encodeCall(sel('negI16(int16)'), [sword(16n, v)]));
-    for (const v of [smin(32n), smin(32n) + 1n, -1n, 0n, smax(32n)]) await eq(`negI32(${v})`, encodeCall(sel('negI32(int32)'), [sword(32n, v)]));
-    for (const v of [smin(64n), smin(64n) + 1n, -1n, 0n, smax(64n)]) await eq(`negI64(${v})`, encodeCall(sel('negI64(int64)'), [sword(64n, v)]));
-    for (const v of [smin(128n), smin(128n) + 1n, -1n, 0n, smax(128n)]) await eq(`negI128(${v})`, encodeCall(sel('negI128(int128)'), [sword(128n, v)]));
-    for (const v of [-(1n << 255n), -(1n << 255n) + 1n, -1n, 0n, (1n << 255n) - 1n]) await eq(`negI256b(${v})`, encodeCall(sel('negI256b(int256)'), [sword(256n, v)]));
-    for (const v of [smin(16n), -1n, 0n, smax(16n)]) await eq(`uNegI16(${v})`, encodeCall(sel('uNegI16(int16)'), [sword(16n, v)]));
-    for (const v of [-(1n << 255n), -1n, 0n]) await eq(`uNegI256(${v})`, encodeCall(sel('uNegI256(int256)'), [sword(256n, v)]));
+    for (const v of [smin(16n), smin(16n) + 1n, -1n, 0n, 1n, smax(16n)])
+      await eq(`negI16(${v})`, encodeCall(sel('negI16(int16)'), [sword(16n, v)]));
+    for (const v of [smin(32n), smin(32n) + 1n, -1n, 0n, smax(32n)])
+      await eq(`negI32(${v})`, encodeCall(sel('negI32(int32)'), [sword(32n, v)]));
+    for (const v of [smin(64n), smin(64n) + 1n, -1n, 0n, smax(64n)])
+      await eq(`negI64(${v})`, encodeCall(sel('negI64(int64)'), [sword(64n, v)]));
+    for (const v of [smin(128n), smin(128n) + 1n, -1n, 0n, smax(128n)])
+      await eq(`negI128(${v})`, encodeCall(sel('negI128(int128)'), [sword(128n, v)]));
+    for (const v of [-(1n << 255n), -(1n << 255n) + 1n, -1n, 0n, (1n << 255n) - 1n])
+      await eq(`negI256b(${v})`, encodeCall(sel('negI256b(int256)'), [sword(256n, v)]));
+    for (const v of [smin(16n), -1n, 0n, smax(16n)])
+      await eq(`uNegI16(${v})`, encodeCall(sel('uNegI16(int16)'), [sword(16n, v)]));
+    for (const v of [-(1n << 255n), -1n, 0n])
+      await eq(`uNegI256(${v})`, encodeCall(sel('uNegI256(int256)'), [sword(256n, v)]));
 
     // ---------------- exponent edges ----------------
     const expSmall = [0n, 1n, 2n, 3n, 4n, 5n, 7n, 8n, 15n, 16n, 17n, 255n, 256n, 1000n, 65535n];
-    for (const a of [0n, 1n, 2n, 3n, 10n, 255n, 256n, max(16n)]) for (const b of expSmall) {
-      await eq(`powU16(${a},${b})`, encodeCall(sel('powU16(uint16,uint16)'), [a, b]));
-      await eq(`uPowU16(${a},${b})`, encodeCall(sel('uPowU16(uint16,uint16)'), [a, b]));
-    }
-    for (const a of [0n, 1n, 2n, 3n, 10n, max(32n)]) for (const b of [0n, 1n, 2n, 5n, 10n, 16n, 31n, 32n, 33n]) {
-      await eq(`powU32(${a},${b})`, encodeCall(sel('powU32(uint32,uint32)'), [a, b]));
-    }
-    for (const a of [0n, 1n, 2n, 3n, max(64n)]) for (const b of [0n, 1n, 2n, 32n, 63n, 64n, 65n]) {
-      await eq(`powU64(${a},${b})`, encodeCall(sel('powU64(uint64,uint64)'), [a, b]));
-    }
-    for (const a of [0n, 1n, 2n, 3n, max(128n)]) for (const b of [0n, 1n, 2n, 64n, 127n, 128n, 129n]) {
-      await eq(`powU128(${a},${b})`, encodeCall(sel('powU128(uint128,uint128)'), [a, b]));
-    }
-    for (const a of [0n, 1n, max(256n)]) for (const b of [0n, 1n, 2n, 3n, 255n, 256n, 257n]) {
-      await eq(`uPowU256(${a},${b})`, encodeCall(sel('uPowU256(uint256,uint256)'), [a, b]));
-    }
+    for (const a of [0n, 1n, 2n, 3n, 10n, 255n, 256n, max(16n)])
+      for (const b of expSmall) {
+        await eq(`powU16(${a},${b})`, encodeCall(sel('powU16(uint16,uint16)'), [a, b]));
+        await eq(`uPowU16(${a},${b})`, encodeCall(sel('uPowU16(uint16,uint16)'), [a, b]));
+      }
+    for (const a of [0n, 1n, 2n, 3n, 10n, max(32n)])
+      for (const b of [0n, 1n, 2n, 5n, 10n, 16n, 31n, 32n, 33n]) {
+        await eq(`powU32(${a},${b})`, encodeCall(sel('powU32(uint32,uint32)'), [a, b]));
+      }
+    for (const a of [0n, 1n, 2n, 3n, max(64n)])
+      for (const b of [0n, 1n, 2n, 32n, 63n, 64n, 65n]) {
+        await eq(`powU64(${a},${b})`, encodeCall(sel('powU64(uint64,uint64)'), [a, b]));
+      }
+    for (const a of [0n, 1n, 2n, 3n, max(128n)])
+      for (const b of [0n, 1n, 2n, 64n, 127n, 128n, 129n]) {
+        await eq(`powU128(${a},${b})`, encodeCall(sel('powU128(uint128,uint128)'), [a, b]));
+      }
+    for (const a of [0n, 1n, max(256n)])
+      for (const b of [0n, 1n, 2n, 3n, 255n, 256n, 257n]) {
+        await eq(`uPowU256(${a},${b})`, encodeCall(sel('uPowU256(uint256,uint256)'), [a, b]));
+      }
     const i16e = [smin(16n), -100n, -2n, -1n, 0n, 1n, 2n, 3n, smax(16n)];
-    for (const a of i16e) for (const b of [0n, 1n, 2n, 3n, 4n, 5n, 8n, 15n, 16n, 17n]) {
-      await eq(`powI16(${a},${b})`, encodeCall(sel('powI16(int16,uint16)'), [sword(16n, a), b]));
-      await eq(`uPowI16(${a},${b})`, encodeCall(sel('uPowI16(int16,uint16)'), [sword(16n, a), b]));
-    }
-    for (const a of [smin(32n), -2n, -1n, 0n, 1n, 2n, smax(32n)]) for (const b of [0n, 1n, 2n, 16n, 31n, 32n]) {
-      await eq(`powI32(${a},${b})`, encodeCall(sel('powI32(int32,uint32)'), [sword(32n, a), b]));
-    }
-    for (const a of i256raw) for (const b of [0n, 1n, 2n, 3n, 5n, 200n, 255n, 256n]) {
-      await eq(`powI256b(${a},${b})`, encodeCall(sel('powI256b(int256,uint256)'), [a, b]));
-    }
+    for (const a of i16e)
+      for (const b of [0n, 1n, 2n, 3n, 4n, 5n, 8n, 15n, 16n, 17n]) {
+        await eq(`powI16(${a},${b})`, encodeCall(sel('powI16(int16,uint16)'), [sword(16n, a), b]));
+        await eq(`uPowI16(${a},${b})`, encodeCall(sel('uPowI16(int16,uint16)'), [sword(16n, a), b]));
+      }
+    for (const a of [smin(32n), -2n, -1n, 0n, 1n, 2n, smax(32n)])
+      for (const b of [0n, 1n, 2n, 16n, 31n, 32n]) {
+        await eq(`powI32(${a},${b})`, encodeCall(sel('powI32(int32,uint32)'), [sword(32n, a), b]));
+      }
+    for (const a of i256raw)
+      for (const b of [0n, 1n, 2n, 3n, 5n, 200n, 255n, 256n]) {
+        await eq(`powI256b(${a},${b})`, encodeCall(sel('powI256b(int256,uint256)'), [a, b]));
+      }
 
     // ---------------- shifts: amount >= width, dirty/huge amounts ----------------
-    const shAmts = [0n, 1n, 2n, 4n, 7n, 8n, 9n, 15n, 16n, 17n, 31n, 32n, 63n, 64n, 127n, 128n, 255n, 256n, 257n, 1000n, M - 1n, 1n << 200n];
-    for (const a of [0n, 1n, max(16n), 0x8000n, 0x00ffn, 0xff00n, 12345n]) for (const s of shAmts) {
-      await eq(`shlU16(${a},${s})`, encodeCall(sel('shlU16(uint16,uint256)'), [a, s]));
-      await eq(`shrU16(${a},${s})`, encodeCall(sel('shrU16(uint16,uint256)'), [a, s]));
-    }
-    for (const a of [0n, 1n, max(32n), 0x80000000n, 0xdeadbeefn]) for (const s of shAmts) {
-      await eq(`shlU32(${a},${s})`, encodeCall(sel('shlU32(uint32,uint256)'), [a, s]));
-      await eq(`shrU32(${a},${s})`, encodeCall(sel('shrU32(uint32,uint256)'), [a, s]));
-    }
-    for (const a of [smin(16n), -1n, -2n, 1n, smax(16n), -256n].map(v => sword(16n, v))) for (const s of shAmts) {
-      await eq(`shlI16(${a},${s})`, encodeCall(sel('shlI16(int16,uint256)'), [a, s]));
-      await eq(`shrI16(${a},${s})`, encodeCall(sel('shrI16(int16,uint256)'), [a, s]));
-    }
-    for (const a of i256raw) for (const s of shAmts) {
-      await eq(`shlI256(${a},${s})`, encodeCall(sel('shlI256(int256,uint256)'), [a, s]));
-      await eq(`shrI256b(${a},${s})`, encodeCall(sel('shrI256b(int256,uint256)'), [a, s]));
-    }
-    for (const a of u256v) for (const s of shAmts) {
-      await eq(`shlU256(${a},${s})`, encodeCall(sel('shlU256(uint256,uint256)'), [a, s]));
-      await eq(`shrU256(${a},${s})`, encodeCall(sel('shrU256(uint256,uint256)'), [a, s]));
-    }
-    for (const a of [0n, 1n, 128n, 255n]) for (const s of [0n, 1n, 7n, 8n, 9n, 255n]) {
-      await eq(`shlU8b(${a},${s})`, encodeCall(sel('shlU8b(uint8,uint8)'), [a, s]));
-    }
+    const shAmts = [
+      0n,
+      1n,
+      2n,
+      4n,
+      7n,
+      8n,
+      9n,
+      15n,
+      16n,
+      17n,
+      31n,
+      32n,
+      63n,
+      64n,
+      127n,
+      128n,
+      255n,
+      256n,
+      257n,
+      1000n,
+      M - 1n,
+      1n << 200n,
+    ];
+    for (const a of [0n, 1n, max(16n), 0x8000n, 0x00ffn, 0xff00n, 12345n])
+      for (const s of shAmts) {
+        await eq(`shlU16(${a},${s})`, encodeCall(sel('shlU16(uint16,uint256)'), [a, s]));
+        await eq(`shrU16(${a},${s})`, encodeCall(sel('shrU16(uint16,uint256)'), [a, s]));
+      }
+    for (const a of [0n, 1n, max(32n), 0x80000000n, 0xdeadbeefn])
+      for (const s of shAmts) {
+        await eq(`shlU32(${a},${s})`, encodeCall(sel('shlU32(uint32,uint256)'), [a, s]));
+        await eq(`shrU32(${a},${s})`, encodeCall(sel('shrU32(uint32,uint256)'), [a, s]));
+      }
+    for (const a of [smin(16n), -1n, -2n, 1n, smax(16n), -256n].map((v) => sword(16n, v)))
+      for (const s of shAmts) {
+        await eq(`shlI16(${a},${s})`, encodeCall(sel('shlI16(int16,uint256)'), [a, s]));
+        await eq(`shrI16(${a},${s})`, encodeCall(sel('shrI16(int16,uint256)'), [a, s]));
+      }
+    for (const a of i256raw)
+      for (const s of shAmts) {
+        await eq(`shlI256(${a},${s})`, encodeCall(sel('shlI256(int256,uint256)'), [a, s]));
+        await eq(`shrI256b(${a},${s})`, encodeCall(sel('shrI256b(int256,uint256)'), [a, s]));
+      }
+    for (const a of u256v)
+      for (const s of shAmts) {
+        await eq(`shlU256(${a},${s})`, encodeCall(sel('shlU256(uint256,uint256)'), [a, s]));
+        await eq(`shrU256(${a},${s})`, encodeCall(sel('shrU256(uint256,uint256)'), [a, s]));
+      }
+    for (const a of [0n, 1n, 128n, 255n])
+      for (const s of [0n, 1n, 7n, 8n, 9n, 255n]) {
+        await eq(`shlU8b(${a},${s})`, encodeCall(sel('shlU8b(uint8,uint8)'), [a, s]));
+      }
 
     // ---------------- mixed-width arithmetic ----------------
-    for (const a of [0n, 1n, 255n]) for (const b of [0n, 1n, max(32n)]) for (const c of [0n, 1n, max(16n)]) {
-      await eq(`mixAddDiff(${a},${b},${c})`, encodeCall(sel('mixAddDiff(uint8,uint32,uint16)'), [a, b, c]));
-    }
-    for (const a of [-128n, -1n, 0n, 1n, 127n].map(v => sword(8n, v))) for (const b of [smin(64n), -1n, 0n, 1n, smax(64n)].map(v => sword(64n, v))) {
-      await eq(`mixSubI(${a},${b})`, encodeCall(sel('mixSubI(int8,int64)'), [a, b]));
-    }
-    for (const a of [smin(16n), -1n, 0n, 1n, smax(16n)].map(v => sword(16n, v))) for (const b of [smin(128n), -1n, 0n, 1n, smax(128n)].map(v => sword(128n, v))) {
-      await eq(`mixMulI(${a},${b})`, encodeCall(sel('mixMulI(int16,int128)'), [a, b]));
-    }
-    for (const a of [0n, 1n, 2n, 7n, 255n]) for (const b of [0n, 1n, 100n, max(64n)]) {
-      await eq(`mixDivU(${a},${b})`, encodeCall(sel('mixDivU(uint8,uint64)'), [a, b]));
-      await eq(`mixModU(${a % (1n << 16n)},${b})`, encodeCall(sel('mixModU(uint16,uint128)'), [a, b]));
-    }
-    for (const a of [0n, max(32n), 1000n]) for (const b of [0n, 1n, 255n]) {
-      await eq(`mixCmpAdd(${a},${b})`, encodeCall(sel('mixCmpAdd(uint32,uint8)'), [a, b]));
-    }
+    for (const a of [0n, 1n, 255n])
+      for (const b of [0n, 1n, max(32n)])
+        for (const c of [0n, 1n, max(16n)]) {
+          await eq(`mixAddDiff(${a},${b},${c})`, encodeCall(sel('mixAddDiff(uint8,uint32,uint16)'), [a, b, c]));
+        }
+    for (const a of [-128n, -1n, 0n, 1n, 127n].map((v) => sword(8n, v)))
+      for (const b of [smin(64n), -1n, 0n, 1n, smax(64n)].map((v) => sword(64n, v))) {
+        await eq(`mixSubI(${a},${b})`, encodeCall(sel('mixSubI(int8,int64)'), [a, b]));
+      }
+    for (const a of [smin(16n), -1n, 0n, 1n, smax(16n)].map((v) => sword(16n, v)))
+      for (const b of [smin(128n), -1n, 0n, 1n, smax(128n)].map((v) => sword(128n, v))) {
+        await eq(`mixMulI(${a},${b})`, encodeCall(sel('mixMulI(int16,int128)'), [a, b]));
+      }
+    for (const a of [0n, 1n, 2n, 7n, 255n])
+      for (const b of [0n, 1n, 100n, max(64n)]) {
+        await eq(`mixDivU(${a},${b})`, encodeCall(sel('mixDivU(uint8,uint64)'), [a, b]));
+        await eq(`mixModU(${a % (1n << 16n)},${b})`, encodeCall(sel('mixModU(uint16,uint128)'), [a, b]));
+      }
+    for (const a of [0n, max(32n), 1000n])
+      for (const b of [0n, 1n, 255n]) {
+        await eq(`mixCmpAdd(${a},${b})`, encodeCall(sel('mixCmpAdd(uint32,uint8)'), [a, b]));
+      }
 
     // ---------------- compound assignment ----------------
     const u8v = [0n, 1n, 100n, 127n, 128n, 200n, 254n, 255n];
-    for (const a of u8v) for (const b of u8v) {
-      await eq(`cAddU8(${a},${b})`, encodeCall(sel('cAddU8(uint8,uint8)'), [a, b]));
-      await eq(`cSubU8(${a},${b})`, encodeCall(sel('cSubU8(uint8,uint8)'), [a, b]));
-      await eq(`cMulU8(${a},${b})`, encodeCall(sel('cMulU8(uint8,uint8)'), [a, b]));
-    }
-    for (const a of [-128n, -1n, 0n, 1n, 127n].map(v => sword(8n, v))) for (const b of [-128n, -1n, 0n, 1n, 2n, 127n].map(v => sword(8n, v))) {
-      await eq(`cMulI8(${a},${b})`, encodeCall(sel('cMulI8(int8,int8)'), [a, b]));
-      await eq(`cModI8(${a},${b})`, encodeCall(sel('cModI8(int8,int8)'), [a, b]));
-    }
-    for (const a of u8v) for (const b of [0n, 1n, 2n, 7n, 255n]) {
-      await eq(`cDivU8(${a},${b})`, encodeCall(sel('cDivU8(uint8,uint8)'), [a, b]));
-    }
-    for (const a of [0n, 1n, 0x8000n, max(16n), 0x00ffn]) for (const s of [0n, 1n, 8n, 15n, 16n, 17n, 255n, 256n, M - 1n]) {
-      await eq(`cShlU16(${a},${s})`, encodeCall(sel('cShlU16(uint16,uint256)'), [a, s]));
-      await eq(`cShrI16(${sword(16n, a)},${s})`, encodeCall(sel('cShrI16(int16,uint256)'), [sword(16n, a), s]));
-    }
-    for (const a of [0n, 0xff00n, 0x00ffn, max(16n)]) for (const b of [0n, 0xff00n, 0x00ffn, max(16n)]) {
-      await eq(`cAndU16(${a},${b})`, encodeCall(sel('cAndU16(uint16,uint16)'), [a, b]));
-      await eq(`cXorU16(${a},${b})`, encodeCall(sel('cXorU16(uint16,uint16)'), [a, b]));
-      await eq(`cOrU16(${a},${b})`, encodeCall(sel('cOrU16(uint16,uint16)'), [a, b]));
-    }
+    for (const a of u8v)
+      for (const b of u8v) {
+        await eq(`cAddU8(${a},${b})`, encodeCall(sel('cAddU8(uint8,uint8)'), [a, b]));
+        await eq(`cSubU8(${a},${b})`, encodeCall(sel('cSubU8(uint8,uint8)'), [a, b]));
+        await eq(`cMulU8(${a},${b})`, encodeCall(sel('cMulU8(uint8,uint8)'), [a, b]));
+      }
+    for (const a of [-128n, -1n, 0n, 1n, 127n].map((v) => sword(8n, v)))
+      for (const b of [-128n, -1n, 0n, 1n, 2n, 127n].map((v) => sword(8n, v))) {
+        await eq(`cMulI8(${a},${b})`, encodeCall(sel('cMulI8(int8,int8)'), [a, b]));
+        await eq(`cModI8(${a},${b})`, encodeCall(sel('cModI8(int8,int8)'), [a, b]));
+      }
+    for (const a of u8v)
+      for (const b of [0n, 1n, 2n, 7n, 255n]) {
+        await eq(`cDivU8(${a},${b})`, encodeCall(sel('cDivU8(uint8,uint8)'), [a, b]));
+      }
+    for (const a of [0n, 1n, 0x8000n, max(16n), 0x00ffn])
+      for (const s of [0n, 1n, 8n, 15n, 16n, 17n, 255n, 256n, M - 1n]) {
+        await eq(`cShlU16(${a},${s})`, encodeCall(sel('cShlU16(uint16,uint256)'), [a, s]));
+        await eq(`cShrI16(${sword(16n, a)},${s})`, encodeCall(sel('cShrI16(int16,uint256)'), [sword(16n, a), s]));
+      }
+    for (const a of [0n, 0xff00n, 0x00ffn, max(16n)])
+      for (const b of [0n, 0xff00n, 0x00ffn, max(16n)]) {
+        await eq(`cAndU16(${a},${b})`, encodeCall(sel('cAndU16(uint16,uint16)'), [a, b]));
+        await eq(`cXorU16(${a},${b})`, encodeCall(sel('cXorU16(uint16,uint16)'), [a, b]));
+        await eq(`cOrU16(${a},${b})`, encodeCall(sel('cOrU16(uint16,uint16)'), [a, b]));
+      }
 
     // ---------------- type(T).max/min arithmetic ----------------
     for (const a of u8v) await eq(`maxAddU8(${a})`, encodeCall(sel('maxAddU8(uint8)'), [a]));
-    for (const a of [-128n, -1n, 0n, 1n, 127n].map(v => sword(8n, v))) await eq(`minSubI8(${a})`, encodeCall(sel('minSubI8(int8)'), [a]));
+    for (const a of [-128n, -1n, 0n, 1n, 127n].map((v) => sword(8n, v)))
+      await eq(`minSubI8(${a})`, encodeCall(sel('minSubI8(int8)'), [a]));
     await eq('maxPlusOneU16', encodeCall(sel('maxPlusOneU16()'), []));
     await eq('minNegI16', encodeCall(sel('minNegI16()'), []));
 
@@ -526,16 +623,19 @@ describe('probe arith', () => {
     for (const v of [0n, 0x01020304050607n, BigInt('0xdeadbeefcafe01')]) {
       await eq(`b7ToB32(${v})`, encodeCall(sel('b7ToB32(bytes7)'), [wordsForBytes(7n, v)]));
     }
-    for (const v of [0n, 0xa5n, 0xffn]) await eq(`b1ToB32(${v})`, encodeCall(sel('b1ToB32(bytes1)'), [wordsForBytes(1n, v)]));
-    for (const v of [0n, 0x0102030405n, BigInt('0xffffffffff')]) await eq(`b5ToU40ToB5(${v})`, encodeCall(sel('b5ToU40ToB5(bytes5)'), [wordsForBytes(5n, v)]));
-    for (const v of [0n, 0x010203n, 0xffffffn, M - 1n, 0x1000000n]) await eq(`narrowU256ToU24(${v})`, encodeCall(sel('narrowU256ToU24(uint256)'), [v]));
-    for (const v of [0n, 1n, smax(40n), smin(40n), -1n].map(x => sword(40n, x))) {
+    for (const v of [0n, 0xa5n, 0xffn])
+      await eq(`b1ToB32(${v})`, encodeCall(sel('b1ToB32(bytes1)'), [wordsForBytes(1n, v)]));
+    for (const v of [0n, 0x0102030405n, BigInt('0xffffffffff')])
+      await eq(`b5ToU40ToB5(${v})`, encodeCall(sel('b5ToU40ToB5(bytes5)'), [wordsForBytes(5n, v)]));
+    for (const v of [0n, 0x010203n, 0xffffffn, M - 1n, 0x1000000n])
+      await eq(`narrowU256ToU24(${v})`, encodeCall(sel('narrowU256ToU24(uint256)'), [v]));
+    for (const v of [0n, 1n, smax(40n), smin(40n), -1n].map((x) => sword(40n, x))) {
       await eq(`i40ToI256(${v})`, encodeCall(sel('i40ToI256(int40)'), [v]));
     }
-    for (const v of [0n, 1n, -1n, smin(40n), smax(40n), 1n << 254n, M - 1n].map(x => sword(256n, x))) {
+    for (const v of [0n, 1n, -1n, smin(40n), smax(40n), 1n << 254n, M - 1n].map((x) => sword(256n, x))) {
       await eq(`i256ToI40(${v})`, encodeCall(sel('i256ToI40(int256)'), [v]));
     }
-    for (const v of [0n, 1n, smax(24n), smin(24n), -1n].map(x => sword(24n, x))) {
+    for (const v of [0n, 1n, smax(24n), smin(24n), -1n].map((x) => sword(24n, x))) {
       await eq(`i24ToU24(${v})`, encodeCall(sel('i24ToU24(int24)'), [v]));
     }
     for (const v of [0n, 1n, max(24n), max(24n) / 2n, max(24n) / 2n + 1n]) {
@@ -543,7 +643,7 @@ describe('probe arith', () => {
     }
 
     // ---------------- address <-> u160 <-> bytes20 ----------------
-    const addrs = [0n, 1n, BigInt('0x' + '11'.repeat(20)), (1n << 160n) - 1n, BigInt('0xdeadbeef') ];
+    const addrs = [0n, 1n, BigInt('0x' + '11'.repeat(20)), (1n << 160n) - 1n, BigInt('0xdeadbeef')];
     for (const a of addrs) {
       await eq(`addrToU160(${a})`, encodeCall(sel('addrToU160(address)'), [a]));
       await eq(`u160ToAddr(${a})`, encodeCall(sel('u160ToAddr(uint160)'), [a]));
@@ -560,38 +660,42 @@ describe('probe arith', () => {
       await eq(`notI16(${a})`, encodeCall(sel('notI16(int16)'), [sword(16n, a)]));
     }
     for (const v of [0n, 1n, max(24n), 0x800000n]) await eq(`notU24(${v})`, encodeCall(sel('notU24(uint24)'), [v]));
-    for (const a of [0n, 0xff00n, 0x00ffn, max(16n)]) for (const b of [0n, 0xff00n, 0x00ffn, max(16n)]) {
-      await eq(`xorU16(${a},${b})`, encodeCall(sel('xorU16(uint16,uint16)'), [a, b]));
-      await eq(`orU16(${a},${b})`, encodeCall(sel('orU16(uint16,uint16)'), [a, b]));
-    }
+    for (const a of [0n, 0xff00n, 0x00ffn, max(16n)])
+      for (const b of [0n, 0xff00n, 0x00ffn, max(16n)]) {
+        await eq(`xorU16(${a},${b})`, encodeCall(sel('xorU16(uint16,uint16)'), [a, b]));
+        await eq(`orU16(${a},${b})`, encodeCall(sel('orU16(uint16,uint16)'), [a, b]));
+      }
 
     // ---------------- comparisons ----------------
-    for (const a of [smin(16n), -1n, 0n, 1n, smax(16n)].map(v => sword(16n, v))) for (const b of [smin(16n), -1n, 0n, 1n, smax(16n)].map(v => sword(16n, v))) {
-      await eq(`ltI16(${a},${b})`, encodeCall(sel('ltI16(int16,int16)'), [a, b]));
-    }
-    for (const a of [0n, 1n, 255n]) for (const b of [0n, 1n, 255n, max(32n)]) {
-      await eq(`gtMixed(${a},${b})`, encodeCall(sel('gtMixed(uint8,uint32)'), [a, b]));
-    }
+    for (const a of [smin(16n), -1n, 0n, 1n, smax(16n)].map((v) => sword(16n, v)))
+      for (const b of [smin(16n), -1n, 0n, 1n, smax(16n)].map((v) => sword(16n, v))) {
+        await eq(`ltI16(${a},${b})`, encodeCall(sel('ltI16(int16,int16)'), [a, b]));
+      }
+    for (const a of [0n, 1n, 255n])
+      for (const b of [0n, 1n, 255n, max(32n)]) {
+        await eq(`gtMixed(${a},${b})`, encodeCall(sel('gtMixed(uint8,uint32)'), [a, b]));
+      }
 
     // ---------------- DIRTY calldata high bits (input validation parity) ----------------
     // Pass words with bits set ABOVE the declared param width. solc 0.8 rejects dirty
     // calldata for narrow types; JETH should match. Each yields a clean low-bits value
     // plus garbage in high bits.
     const dirty16 = [
-      (1n << 16n) | 5n,                // bit just above u16
-      (M - 1n),                        // all ones
-      (0xdeadn << 16n) | 0x42n,        // high garbage, low valid
-      (1n << 255n) | 1n,               // top bit + low
+      (1n << 16n) | 5n, // bit just above u16
+      M - 1n, // all ones
+      (0xdeadn << 16n) | 0x42n, // high garbage, low valid
+      (1n << 255n) | 1n, // top bit + low
     ];
-    for (const a of dirty16) for (const b of [0n, 1n]) {
-      await eq(`dirty.addU16(${a},${b})`, encodeCall(sel('addU16(uint16,uint16)'), [a, b]));
-    }
+    for (const a of dirty16)
+      for (const b of [0n, 1n]) {
+        await eq(`dirty.addU16(${a},${b})`, encodeCall(sel('addU16(uint16,uint16)'), [a, b]));
+      }
     for (const a of dirty16) {
       await eq(`dirty.notU16(${a})`, encodeCall(sel('notU16(uint16)'), [a]));
-      await eq(`dirty.shlU16amt(${a})`, encodeCall(sel('shlU16(uint16,uint256)'), [1n, a]));  // dirty amount is fine (u256), but a fine
-      await eq(`dirty.addrToU160(${a})`, encodeCall(sel('addrToU160(address)'), [a]));        // address dirty above 160
-      await eq(`dirty.b3ToU24(${a})`, encodeCall(sel('b3ToU24(bytes3)'), [a]));               // bytes3 with dirty low 29 bytes
-      await eq(`dirty.negI16(${a})`, encodeCall(sel('negI16(int16)'), [a]));                  // int16 dirty above 16
+      await eq(`dirty.shlU16amt(${a})`, encodeCall(sel('shlU16(uint16,uint256)'), [1n, a])); // dirty amount is fine (u256), but a fine
+      await eq(`dirty.addrToU160(${a})`, encodeCall(sel('addrToU160(address)'), [a])); // address dirty above 160
+      await eq(`dirty.b3ToU24(${a})`, encodeCall(sel('b3ToU24(bytes3)'), [a])); // bytes3 with dirty low 29 bytes
+      await eq(`dirty.negI16(${a})`, encodeCall(sel('negI16(int16)'), [a])); // int16 dirty above 16
       await eq(`dirty.divI16(${a},1)`, encodeCall(sel('divI16(int16,int16)'), [a, 1n]));
     }
     // bool param dirtiness via gtMixed first arg is uint8 -> dirty above 8 bits
@@ -599,8 +703,10 @@ describe('probe arith', () => {
       await eq(`dirty.gtMixed(${a},0)`, encodeCall(sel('gtMixed(uint8,uint32)'), [a, 0n]));
     }
 
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

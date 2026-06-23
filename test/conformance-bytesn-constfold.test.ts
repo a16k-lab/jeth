@@ -11,8 +11,13 @@ import { CompileError } from '../src/diagnostics.js';
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => v.toString(16).padStart(64, '0');
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 describe('bytesN[i] indexing (#10) vs solc', () => {
@@ -28,11 +33,13 @@ contract C { bytes32 s;
   function at(uint256 i) external view returns (bytes1) { return s[i]; }
   function atP(bytes32 b, uint256 i) external pure returns (bytes1) { return b[i]; } }`;
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
     const V = (0xaabbccddn << 224n) | (0xeen << 8n);
-    await jeth.call(aj, '0x' + sel('setS(bytes32)') + pad(V)); await sol.call(as, '0x' + sel('setS(bytes32)') + pad(V));
+    await jeth.call(aj, '0x' + sel('setS(bytes32)') + pad(V));
+    await sol.call(as, '0x' + sel('setS(bytes32)') + pad(V));
   });
   it('every index (state + value base) is byte-identical incl. OOB Panic 0x32', async () => {
     const V = (0xaabbccddn << 224n) | (0xeen << 8n);
@@ -41,7 +48,8 @@ contract C { bytes32 s;
         [`at(${i})`, '0x' + sel('at(uint256)') + pad(i)] as const,
         [`atP(${i})`, '0x' + sel('atP(bytes32,uint256)') + pad(V) + pad(i)] as const,
       ]) {
-        const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+        const j = await jeth.call(aj, data);
+        const s = await sol.call(as, data);
         expect(j.success, `${label}`).toBe(s.success);
         expect(j.returnHex, `${label}`).toBe(s.returnHex);
       }
@@ -63,7 +71,16 @@ describe('empty statement (#13)', () => {
 describe('constant folding in state initializers (#9) vs solc', () => {
   it('folds + - * ** << >> & | ^ % (and exact /) with unbounded intermediates + final range-check', () => {
     // accepted (final value fits, intermediates unbounded)
-    for (const init of ['100n + 50n', '300n - 200n', '2n * 100n', '1n << 4n', '0xffn & 0x0fn', '6n / 2n', '10n % 3n', '255n >> 1n']) {
+    for (const init of [
+      '100n + 50n',
+      '300n - 200n',
+      '2n * 100n',
+      '1n << 4n',
+      '0xffn & 0x0fn',
+      '6n / 2n',
+      '10n % 3n',
+      '255n >> 1n',
+    ]) {
       expect(codes(`@contract class C { @state x: u8 = ${init}; }`), init).toEqual([]);
     }
     for (const init of ['10n ** 18n', '2n ** 255n', '(2n ** 256n) - 1n']) {
@@ -79,9 +96,12 @@ describe('constant folding in state initializers (#9) vs solc', () => {
     expect(codes('@contract class C { @state x: u8 = 7n / 2n; }')).toContain('JETH048');
   });
   it('a folded initializer is byte-identical to solc at runtime', async () => {
-    const J = '@contract class C { @state DEC: u256 = 10n ** 18n; @state Y: u8 = 300n - 200n; @external @view dec(): u256 { return this.DEC; } @external @view y(): u8 { return this.Y; } }';
-    const S = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\ncontract C { uint256 public DEC = 10**18; uint8 public Y = 300-200; }';
-    const h = await Harness.create(); const hs = await Harness.create();
+    const J =
+      '@contract class C { @state DEC: u256 = 10n ** 18n; @state Y: u8 = 300n - 200n; @external @view dec(): u256 { return this.DEC; } @external @view y(): u8 { return this.Y; } }';
+    const S =
+      '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\ncontract C { uint256 public DEC = 10**18; uint8 public Y = 300-200; }';
+    const h = await Harness.create();
+    const hs = await Harness.create();
     const a = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     const b = await hs.deploy(compileSolidity(S, 'C').creation);
     expect((await h.call(a, '0x' + sel('dec()'))).returnHex).toBe((await hs.call(b, '0x' + sel('DEC()'))).returnHex);

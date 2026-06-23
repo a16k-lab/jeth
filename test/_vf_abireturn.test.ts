@@ -209,7 +209,8 @@ function callValBytesVal(sig: string, n: bigint, b: Uint8Array, m: bigint): stri
 }
 // (string a, string b) -> two tails.
 function callTwoStr(sig: string, a: Uint8Array, b: Uint8Array): string {
-  const ea = dynElem(a), eb = dynElem(b);
+  const ea = dynElem(a),
+    eb = dynElem(b);
   const offA = 0x40n;
   const offB = 0x40n + BigInt(ea.length / 2);
   return '0x' + sel(sig) + pad(offA) + pad(offB) + ea + eb;
@@ -222,7 +223,8 @@ function callFD(sig: string, a: bigint, s: Uint8Array): string {
 // (Mix m) where Mix={u64 p;u64 q;string s;bytes b;u256 z}. dynamic tuple.
 // tuple head: [p][q][off_s][off_b][z]; off relative to tuple start.
 function callMix(sig: string, p: bigint, q: bigint, s: Uint8Array, b: Uint8Array, z: bigint): string {
-  const es = dynElem(s), eb = dynElem(b);
+  const es = dynElem(s),
+    eb = dynElem(b);
   const headWords = 5;
   const offS = BigInt(headWords * 32);
   const offB = offS + BigInt(es.length / 2);
@@ -264,14 +266,27 @@ describe('VF abireturn', () => {
     if (j.success !== s.success || j.returnHex !== s.returnHex)
       mism.push(
         label +
-          ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}',
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
       );
   }
   async function send(data: string) {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     // sanity: both sides should agree on send success too
-    if (j.success !== s.success) mism.push('SEND ' + data.slice(0, 12) + ': jeth ok=' + j.success + ' err=' + j.exceptionError + ' sol ok=' + s.success);
+    if (j.success !== s.success)
+      mism.push(
+        'SEND ' + data.slice(0, 12) + ': jeth ok=' + j.success + ' err=' + j.exceptionError + ' sol ok=' + s.success,
+      );
   }
 
   beforeAll(async () => {
@@ -302,7 +317,8 @@ describe('VF abireturn', () => {
 
     // ---- struct FD{a; s}: fixed+dynamic, built from args ----
     for (const [ln, s] of strs)
-      for (const v of [0n, M - 1n, 1n << 128n]) await eq(`mkFD a=${v} s=${ln}`, callValStr('mkFD(uint256,string)', v, s));
+      for (const v of [0n, M - 1n, 1n << 128n])
+        await eq(`mkFD a=${v} s=${ln}`, callValStr('mkFD(uint256,string)', v, s));
     // ---- struct DF{s; a}: dynamic-then-fixed ----
     for (const [ln, s] of strs)
       for (const v of [0n, M - 1n]) await eq(`mkDF s=${ln} a=${v}`, callStrVal('mkDF(string,uint256)', s, v));
@@ -319,7 +335,10 @@ describe('VF abireturn', () => {
     ];
     for (const [sn, s] of [strs[0], strs[2], strs[4], strs[6]] as [string, Uint8Array][])
       for (const [bn, b] of blobs)
-        await eq(`mkMix s=${sn} b=${bn}`, callMix('mkMix(uint64,uint64,string,bytes,uint256)', 0xdeadn, 0xbeefn, s, b, (1n << 200n) | 9n));
+        await eq(
+          `mkMix s=${sn} b=${bn}`,
+          callMix('mkMix(uint64,uint64,string,bytes,uint256)', 0xdeadn, 0xbeefn, s, b, (1n << 200n) | 9n),
+        );
     for (const [sn, s] of [strs[1], strs[3], strs[5]] as [string, Uint8Array][])
       for (const [bn, b] of blobs)
         await eq(`echoMix s=${sn} b=${bn}`, callMix('echoMix((uint64,uint64,string,bytes,uint256))', 1n, 2n, s, b, 0n));
@@ -332,14 +351,24 @@ describe('VF abireturn', () => {
     // ---- Nest{x; FD inner; y}: nested dynamic struct field ----
     // mkNest has 4 args (x,a,s,y); build proper calldata: head [x][a][off_s=0x80][y], tail string.
     for (const [ln, s] of strs)
-      for (const [x, a, y] of [[1n, 2n, 3n], [M - 1n, 0n, 1n << 128n]] as [bigint, bigint, bigint][]) {
-        const data = '0x' + sel('mkNest(uint256,uint256,string,uint256)') + pad(x) + pad(a) + pad(0x80n) + pad(y) + dynElem(s);
+      for (const [x, a, y] of [
+        [1n, 2n, 3n],
+        [M - 1n, 0n, 1n << 128n],
+      ] as [bigint, bigint, bigint][]) {
+        const data =
+          '0x' + sel('mkNest(uint256,uint256,string,uint256)') + pad(x) + pad(a) + pad(0x80n) + pad(y) + dynElem(s);
         await eq(`mkNest x=${x} s=${ln} y=${y}`, data);
       }
 
     // ---- struct array FD[] each with dynamic field (from storage) ----
     await eq('allFD empty', encodeCall(sel('allFD()'), []));
-    const fdSeed: [bigint, string][] = [[10n, ''], [20n, 'hi'], [30n, 'Z'.repeat(32)], [40n, 'Q'.repeat(70)], [50n, 'm'.repeat(33)]];
+    const fdSeed: [bigint, string][] = [
+      [10n, ''],
+      [20n, 'hi'],
+      [30n, 'Z'.repeat(32)],
+      [40n, 'Q'.repeat(70)],
+      [50n, 'm'.repeat(33)],
+    ];
     for (let i = 0; i < fdSeed.length; i++) {
       const [a, s] = fdSeed[i]!;
       await send(callValStr('pushFD(uint256,string)', a, sb(s)));
@@ -349,10 +378,21 @@ describe('VF abireturn', () => {
     //      This is the gnarliest return shape: element offset table -> per-element tuple
     //      with its own two dynamic head-offsets. Mix string/bytes lengths across boundary.
     function callPushMix(p: bigint, q: bigint, str: Uint8Array, byt: Uint8Array, z: bigint): string {
-      const es = dynElem(str), eb = dynElem(byt);
+      const es = dynElem(str),
+        eb = dynElem(byt);
       const offS = BigInt(5 * 32);
       const offB = offS + BigInt(es.length / 2);
-      return '0x' + sel('pushMix(uint64,uint64,string,bytes,uint256)') + pad(p) + pad(q) + pad(offS) + pad(offB) + pad(z) + es + eb;
+      return (
+        '0x' +
+        sel('pushMix(uint64,uint64,string,bytes,uint256)') +
+        pad(p) +
+        pad(q) +
+        pad(offS) +
+        pad(offB) +
+        pad(z) +
+        es +
+        eb
+      );
     }
     await eq('allMix empty', encodeCall(sel('allMix()'), []));
     const mixSeed: [bigint, bigint, string, Uint8Array, bigint][] = [
@@ -370,7 +410,11 @@ describe('VF abireturn', () => {
 
     // ---- struct array StatPack[] (fully static, packed) ----
     await eq('allStat empty', encodeCall(sel('allStat()'), []));
-    for (const [a, b, c] of [[1n, 2n, 1n], [(1n << 127n) | 5n, 0n, 0n], [AMAX & ((1n << 128n) - 1n), 7n, 1n]] as [bigint, bigint, bigint][]) {
+    for (const [a, b, c] of [
+      [1n, 2n, 1n],
+      [(1n << 127n) | 5n, 0n, 0n],
+      [AMAX & ((1n << 128n) - 1n), 7n, 1n],
+    ] as [bigint, bigint, bigint][]) {
       await send(encodeCall(sel('pushStat(uint128,uint128,bool)'), [a, b, c]));
       await eq('allStat grow', encodeCall(sel('allStat()'), []));
     }
@@ -391,7 +435,14 @@ describe('VF abireturn', () => {
     await send(encodeCall(sel('gridPush()'), []));
     await send(encodeCall(sel('gridPush()'), []));
     await eq('allGrid 3 empty rows', encodeCall(sel('allGrid()'), []));
-    for (const [i, v] of [[0n, 11n], [0n, 12n], [1n, 99n], [2n, 1n], [2n, 2n], [2n, 3n]] as [bigint, bigint][])
+    for (const [i, v] of [
+      [0n, 11n],
+      [0n, 12n],
+      [1n, 99n],
+      [2n, 1n],
+      [2n, 2n],
+      [2n, 3n],
+    ] as [bigint, bigint][])
       await send(encodeCall(sel('gridPushInner(uint256,uint256)'), [i, v]));
     await eq('allGrid filled', encodeCall(sel('allGrid()'), []));
 
@@ -404,7 +455,8 @@ describe('VF abireturn', () => {
       [sb(''), sb(''), sb('')],
       [sb('a'.repeat(100)), sb('b')],
     ];
-    for (let i = 0; i < nameSets.length; i++) await eq(`echoNames #${i}`, callArr1('echoNames(string[])', nameSets[i]!));
+    for (let i = 0; i < nameSets.length; i++)
+      await eq(`echoNames #${i}`, callArr1('echoNames(string[])', nameSets[i]!));
     const blobSets: Uint8Array[][] = [
       [],
       [new Uint8Array([0, 1, 2, 255])],
@@ -420,7 +472,8 @@ describe('VF abireturn', () => {
       [[], [], []],
       [[M - 1n, 0n, 1n << 255n], [7n]],
     ];
-    for (let i = 0; i < gridSets.length; i++) await eq(`echoGrid #${i}`, callGrid('echoGrid(uint256[][])', gridSets[i]!));
+    for (let i = 0; i < gridSets.length; i++)
+      await eq(`echoGrid #${i}`, callGrid('echoGrid(uint256[][])', gridSets[i]!));
 
     // ---- multi-value returns mixing components ----
     for (const [ln, s] of strs) {
@@ -454,7 +507,11 @@ describe('VF abireturn', () => {
     }
     await eq('mvStrArr names', encodeCall(sel('mvStrArr(uint256)'), [0x1234n]));
     // mvAllStatic
-    for (const [a, b, c] of [[0n, A1, 0n], [M - 1n, AMAX, 1n], [1n << 128n, A2, 1n]] as [bigint, bigint, bigint][])
+    for (const [a, b, c] of [
+      [0n, A1, 0n],
+      [M - 1n, AMAX, 1n],
+      [1n << 128n, A2, 1n],
+    ] as [bigint, bigint, bigint][])
       await eq(`mvAllStatic`, encodeCall(sel('mvAllStatic(uint256,address,bool)'), [a, b, c]));
 
     // ---- ADVERSARIAL: non-canonical INPUT offset tables (reordered tails, gaps,
@@ -535,22 +592,47 @@ describe('VF abireturn', () => {
     //      ABI return exactly as solc does (decode cleans, re-encode is canonical) ----
     // echoMix with dirty p/q (u64) high bits + dirty z is full width.
     for (const dp of [M - 1n, (1n << 100n) | 5n, (1n << 64n) | 0xabn]) {
-      await eq(`echoMix dirty p=${dp.toString(16)}`, callMix('echoMix((uint64,uint64,string,bytes,uint256))', dp, M - 1n, sb('hi'), new Uint8Array([1, 2, 3]), M - 1n));
+      await eq(
+        `echoMix dirty p=${dp.toString(16)}`,
+        callMix(
+          'echoMix((uint64,uint64,string,bytes,uint256))',
+          dp,
+          M - 1n,
+          sb('hi'),
+          new Uint8Array([1, 2, 3]),
+          M - 1n,
+        ),
+      );
     }
     // echoVals: dirty bool/u8/i8/bytes4 must each be cleaned per solc rules.
     // bytes4 is left-aligned: pass full 32-byte word; low 28 bytes are garbage to be dropped.
     function callEchoVals(a: bigint, b: bigint, c: bigint, d: bigint, e: bigint, f: bigint): string {
-      return '0x' + sel('echoVals(uint256,address,bool,uint8,int8,bytes4)') + pad(a) + pad(b) + pad(c) + pad(d) + pad(e) + pad(f);
+      return (
+        '0x' +
+        sel('echoVals(uint256,address,bool,uint8,int8,bytes4)') +
+        pad(a) +
+        pad(b) +
+        pad(c) +
+        pad(d) +
+        pad(e) +
+        pad(f)
+      );
     }
     const dirtyAddr = [(1n << 200n) | A1, M - 1n, AMAX];
     const dirtyU8 = [0n, 0xffn, 0x100n, (1n << 200n) | 0x42n, M - 1n];
     const dirtyI8 = [0n, 0x7fn, 0x80n, 0xffn, (1n << 200n) | 0x80n, M - 1n];
     const dirtyB4 = [0x11223344n << 224n, M - 1n, (0xdeadbeefn << 224n) | 0x123n, 0n];
-    for (const b of dirtyAddr) for (const c of [0n, 1n, 0xffn]) for (const d of dirtyU8) {
-      await eq(`echoVals b=${b.toString(16)} c=${c} d=${d.toString(16)}`, callEchoVals(0x99n, b, c, d, 0x7fn, 0x11223344n << 224n));
-    }
-    for (const e of dirtyI8) for (const f of dirtyB4)
-      await eq(`echoVals e=${e.toString(16)} f=${f.toString(16)}`, callEchoVals(1n, A1, 1n, 0x55n, e, f));
+    for (const b of dirtyAddr)
+      for (const c of [0n, 1n, 0xffn])
+        for (const d of dirtyU8) {
+          await eq(
+            `echoVals b=${b.toString(16)} c=${c} d=${d.toString(16)}`,
+            callEchoVals(0x99n, b, c, d, 0x7fn, 0x11223344n << 224n),
+          );
+        }
+    for (const e of dirtyI8)
+      for (const f of dirtyB4)
+        await eq(`echoVals e=${e.toString(16)} f=${f.toString(16)}`, callEchoVals(1n, A1, 1n, 0x55n, e, f));
 
     // ---- empty dynamic returns ----
     await eq('emptyStr', encodeCall(sel('emptyStr()'), []));

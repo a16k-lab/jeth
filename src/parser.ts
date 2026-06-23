@@ -44,17 +44,46 @@ function hoistInClassEnums(text: string): string {
       const q = c;
       i++;
       while (i < n) {
-        if (text[i] === '\\') { i += 2; continue; }
-        if (text[i] === q) { i++; break; }
+        if (text[i] === '\\') {
+          i += 2;
+          continue;
+        }
+        if (text[i] === q) {
+          i++;
+          break;
+        }
         i++;
       }
       continue;
     }
-    if (c === '/' && text[i + 1] === '/') { i += 2; while (i < n && text[i] !== '\n') i++; continue; }
-    if (c === '/' && text[i + 1] === '*') { i += 2; while (i < n && !(text[i] === '*' && text[i + 1] === '/')) i++; i += 2; continue; }
-    if (c === '{') { depth++; i++; continue; }
-    if (c === '}') { depth--; i++; continue; }
-    if (depth >= 1 && c === 'e' && text.startsWith('enum', i) && !isWord(text[i - 1] ?? '') && !isWord(text[i + 4] ?? '')) {
+    if (c === '/' && text[i + 1] === '/') {
+      i += 2;
+      while (i < n && text[i] !== '\n') i++;
+      continue;
+    }
+    if (c === '/' && text[i + 1] === '*') {
+      i += 2;
+      while (i < n && !(text[i] === '*' && text[i + 1] === '/')) i++;
+      i += 2;
+      continue;
+    }
+    if (c === '{') {
+      depth++;
+      i++;
+      continue;
+    }
+    if (c === '}') {
+      depth--;
+      i++;
+      continue;
+    }
+    if (
+      depth >= 1 &&
+      c === 'e' &&
+      text.startsWith('enum', i) &&
+      !isWord(text[i - 1] ?? '') &&
+      !isWord(text[i + 4] ?? '')
+    ) {
       let j = i + 4;
       while (j < n && text[j] !== '{' && text[j] !== '}' && text[j] !== ';') j++;
       if (j < n && text[j] === '{') {
@@ -62,7 +91,13 @@ function hoistInClassEnums(text: string): string {
         let k = j;
         for (; k < n; k++) {
           if (text[k] === '{') d2++;
-          else if (text[k] === '}') { d2--; if (d2 === 0) { k++; break; } }
+          else if (text[k] === '}') {
+            d2--;
+            if (d2 === 0) {
+              k++;
+              break;
+            }
+          }
         }
         spans.push({ start: i, end: k });
         i = k;

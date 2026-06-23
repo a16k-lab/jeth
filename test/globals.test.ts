@@ -50,12 +50,31 @@ describe('environment globals vs Solidity', () => {
     as = await sol.deploy(sb.creation);
     expect(aj.toString()).toBe(as.toString());
     block = makeBlock(
-      { number: 12345678n, timestamp: 1700000000n, coinbase: COINBASE, gasLimit: 30000000n, baseFeePerGas: 7n, prevRandao: RANDAO },
+      {
+        number: 12345678n,
+        timestamp: 1700000000n,
+        coinbase: COINBASE,
+        gasLimit: 30000000n,
+        baseFeePerGas: 7n,
+        prevRandao: RANDAO,
+      },
       common,
     );
   });
 
-  const VIEW_FNS = ['sender()', 'origin()', 'self()', 'coinbase()', 'ts()', 'num()', 'cid()', 'fee()', 'glimit()', 'rand()', 'sig()'];
+  const VIEW_FNS = [
+    'sender()',
+    'origin()',
+    'self()',
+    'coinbase()',
+    'ts()',
+    'num()',
+    'cid()',
+    'fee()',
+    'glimit()',
+    'rand()',
+    'sig()',
+  ];
 
   it('returns identical values to Solidity for every global', async () => {
     for (const sig of VIEW_FNS) {

@@ -97,15 +97,18 @@ describe('enums (branded uint8) are byte-identical to solc', () => {
   // success/returndata parity for a single call (covers Panic + empty-revert data, which live in
   // returnHex), against the real solc twin running on the same EVM.
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(J, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('the ABI types an enum exactly as uint8 (param, return, mapping key/value)', () => {
@@ -198,7 +201,8 @@ describe('enums (branded uint8) are byte-identical to solc', () => {
     // enum value: setPref(addr, Color) stores a uint8 at keccak(addr . slot).
     const A = 0xa11ce0000000000000000000000000000000n;
     const setP = '0x' + sel('setPref(address,uint8)') + pad(A) + pad(1n);
-    await jeth.call(aj, setP); await sol.call(as, setP);
+    await jeth.call(aj, setP);
+    await sol.call(as, setP);
     await eq('prefOf', encodeCall(sel('prefOf(address)'), [A]));
   });
 
@@ -226,9 +230,15 @@ const wrap = (body: string) => `${E}@contract class C { ${body} }`;
 
 describe('enum compile-time rules (solc parity)', () => {
   it('rejects arithmetic on an enum (JETH279)', () => {
-    expect(errCodes(wrap('@external @pure f(c: Color): Color { let x: Color = c + c; return x; }'))).toContain('JETH279');
-    expect(errCodes(wrap('@external @pure f(c: Color): u8 { let x: Color = c & c; return u8(x); }'))).toContain('JETH279');
-    expect(errCodes(wrap('@external @pure f(c: Color): u8 { let x: Color = c << 1n; return u8(x); }'))).toContain('JETH279');
+    expect(errCodes(wrap('@external @pure f(c: Color): Color { let x: Color = c + c; return x; }'))).toContain(
+      'JETH279',
+    );
+    expect(errCodes(wrap('@external @pure f(c: Color): u8 { let x: Color = c & c; return u8(x); }'))).toContain(
+      'JETH279',
+    );
+    expect(errCodes(wrap('@external @pure f(c: Color): u8 { let x: Color = c << 1n; return u8(x); }'))).toContain(
+      'JETH279',
+    );
   });
 
   it('rejects mixing two different enums in a comparison (JETH083)', () => {
@@ -265,12 +275,18 @@ describe('enum compile-time rules (solc parity)', () => {
   });
 
   it('rejects an enum name colliding with a primitive (JETH272) / a duplicate member (JETH274)', () => {
-    expect(errCodes(`enum u8 { A, B }\n@contract class C { @external @pure f(): u8 { return 0n; } }`)).toContain('JETH272');
-    expect(errCodes(`enum Color { Red, Green, Red }\n@contract class C { @external @pure f(): u8 { return 0n; } }`)).toContain('JETH274');
+    expect(errCodes(`enum u8 { A, B }\n@contract class C { @external @pure f(): u8 { return 0n; } }`)).toContain(
+      'JETH272',
+    );
+    expect(
+      errCodes(`enum Color { Red, Green, Red }\n@contract class C { @external @pure f(): u8 { return 0n; } }`),
+    ).toContain('JETH274');
   });
 
   it('accepts the legal enum operations (member constants, comparisons, both-way casts)', () => {
-    expect(errCodes(wrap('@external @pure f(c: Color): bool { return c == Color.Red || c < Color.Blue; }'))).toEqual([]);
+    expect(errCodes(wrap('@external @pure f(c: Color): bool { return c == Color.Red || c < Color.Blue; }'))).toEqual(
+      [],
+    );
     expect(errCodes(wrap('@external @pure f(x: u8): Color { return Color(x); }'))).toEqual([]);
     expect(errCodes(wrap('@external @pure f(c: Color): u256 { return u256(c); }'))).toEqual([]);
     expect(errCodes(wrap('@external @pure f(): Color { return Color.Green; }'))).toEqual([]);

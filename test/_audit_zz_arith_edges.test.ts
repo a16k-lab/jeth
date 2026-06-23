@@ -137,44 +137,61 @@ describe('arithmetic/cast/shift/exponent edge differential', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex) {
-      mismatches.push(`${label}: jeth{ok=${j.success},ret=${j.returnHex},err=${j.exceptionError}} sol{ok=${s.success},ret=${s.returnHex}}`);
+      mismatches.push(
+        `${label}: jeth{ok=${j.success},ret=${j.returnHex},err=${j.exceptionError}} sol{ok=${s.success},ret=${s.returnHex}}`,
+      );
     }
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'A.jeth' });
     const sb = compileSolidity(SOL, 'A');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('runs', async () => {
     const u8s = [0n, 1n, 2n, 3n, 7n, 15n, 16n, 100n, 127n, 128n, 200n, 254n, 255n];
     const i8s = [-128n, -127n, -100n, -2n, -1n, 0n, 1n, 2n, 100n, 126n, 127n];
-    const bigs = [0n, 1n, 2n, (1n<<255n)-1n, 1n<<255n, (1n<<255n)+1n, M-1n, M-2n, (1n<<128n), 0xdeadbeefn];
-    const i256s = [-(1n<<255n), -(1n<<255n)+1n, -1n, 0n, 1n, (1n<<255n)-1n, -42n, 12345n, -(1n<<200n)];
+    const bigs = [
+      0n,
+      1n,
+      2n,
+      (1n << 255n) - 1n,
+      1n << 255n,
+      (1n << 255n) + 1n,
+      M - 1n,
+      M - 2n,
+      1n << 128n,
+      0xdeadbeefn,
+    ];
+    const i256s = [-(1n << 255n), -(1n << 255n) + 1n, -1n, 0n, 1n, (1n << 255n) - 1n, -42n, 12345n, -(1n << 200n)];
 
-    for (const a of u8s) for (const b of u8s) {
-      await eq(`addU8(${a},${b})`, encodeCall(sel('addU8(uint8,uint8)'), [a,b]));
-      await eq(`subU8(${a},${b})`, encodeCall(sel('subU8(uint8,uint8)'), [a,b]));
-      await eq(`mulU8(${a},${b})`, encodeCall(sel('mulU8(uint8,uint8)'), [a,b]));
-      await eq(`uAddU8(${a},${b})`, encodeCall(sel('uAddU8(uint8,uint8)'), [a,b]));
-      await eq(`uSubU8(${a},${b})`, encodeCall(sel('uSubU8(uint8,uint8)'), [a,b]));
-      await eq(`uMulU8(${a},${b})`, encodeCall(sel('uMulU8(uint8,uint8)'), [a,b]));
-      await eq(`andU8(${a},${b})`, encodeCall(sel('andU8(uint8,uint8)'), [a,b]));
-    }
-    for (const a of i8s) for (const b of i8s) {
-      await eq(`addI8(${a},${b})`, encodeCall(sel('addI8(int8,int8)'), [a,b]));
-      await eq(`subI8(${a},${b})`, encodeCall(sel('subI8(int8,int8)'), [a,b]));
-      await eq(`mulI8(${a},${b})`, encodeCall(sel('mulI8(int8,int8)'), [a,b]));
-      await eq(`divI8(${a},${b})`, encodeCall(sel('divI8(int8,int8)'), [a,b]));
-      await eq(`modI8(${a},${b})`, encodeCall(sel('modI8(int8,int8)'), [a,b]));
-      await eq(`uDivI8(${a},${b})`, encodeCall(sel('uDivI8(int8,int8)'), [a,b]));
-    }
+    for (const a of u8s)
+      for (const b of u8s) {
+        await eq(`addU8(${a},${b})`, encodeCall(sel('addU8(uint8,uint8)'), [a, b]));
+        await eq(`subU8(${a},${b})`, encodeCall(sel('subU8(uint8,uint8)'), [a, b]));
+        await eq(`mulU8(${a},${b})`, encodeCall(sel('mulU8(uint8,uint8)'), [a, b]));
+        await eq(`uAddU8(${a},${b})`, encodeCall(sel('uAddU8(uint8,uint8)'), [a, b]));
+        await eq(`uSubU8(${a},${b})`, encodeCall(sel('uSubU8(uint8,uint8)'), [a, b]));
+        await eq(`uMulU8(${a},${b})`, encodeCall(sel('uMulU8(uint8,uint8)'), [a, b]));
+        await eq(`andU8(${a},${b})`, encodeCall(sel('andU8(uint8,uint8)'), [a, b]));
+      }
+    for (const a of i8s)
+      for (const b of i8s) {
+        await eq(`addI8(${a},${b})`, encodeCall(sel('addI8(int8,int8)'), [a, b]));
+        await eq(`subI8(${a},${b})`, encodeCall(sel('subI8(int8,int8)'), [a, b]));
+        await eq(`mulI8(${a},${b})`, encodeCall(sel('mulI8(int8,int8)'), [a, b]));
+        await eq(`divI8(${a},${b})`, encodeCall(sel('divI8(int8,int8)'), [a, b]));
+        await eq(`modI8(${a},${b})`, encodeCall(sel('modI8(int8,int8)'), [a, b]));
+        await eq(`uDivI8(${a},${b})`, encodeCall(sel('uDivI8(int8,int8)'), [a, b]));
+      }
     for (const a of i8s) {
       await eq(`negI8(${a})`, encodeCall(sel('negI8(int8)'), [a]));
       await eq(`uNegI8(${a})`, encodeCall(sel('uNegI8(int8)'), [a]));
       await eq(`notI8(${a})`, encodeCall(sel('notI8(int8)'), [a]));
-      await eq(`u8ToI8(${(a&255n)})`, encodeCall(sel('u8ToI8(uint8)'), [a&255n]));
+      await eq(`u8ToI8(${a & 255n})`, encodeCall(sel('u8ToI8(uint8)'), [a & 255n]));
     }
     for (const a of u8s) {
       await eq(`notU8(${a})`, encodeCall(sel('notU8(uint8)'), [a]));
@@ -182,44 +199,53 @@ describe('arithmetic/cast/shift/exponent edge differential', () => {
       await eq(`u8ToU256(${a})`, encodeCall(sel('u8ToU256(uint8)'), [a]));
       await eq(`i8ToI256(${a})`, encodeCall(sel('i8ToI256(int8)'), [a]));
     }
-    for (const a of i256s) for (const b of i256s) {
-      await eq(`divI256(${a},${b})`, encodeCall(sel('divI256(int256,int256)'), [a,b]));
-      await eq(`modI256(${a},${b})`, encodeCall(sel('modI256(int256,int256)'), [a,b]));
-      await eq(`uDivI256(${a},${b})`, encodeCall(sel('uDivI256(int256,int256)'), [a,b]));
-      await eq(`uAddI256(${a},${b})`, encodeCall(sel('uAddI256(int256,int256)'), [a,b]));
-      await eq(`uMulI256(${a},${b})`, encodeCall(sel('uMulI256(int256,int256)'), [a,b]));
-    }
+    for (const a of i256s)
+      for (const b of i256s) {
+        await eq(`divI256(${a},${b})`, encodeCall(sel('divI256(int256,int256)'), [a, b]));
+        await eq(`modI256(${a},${b})`, encodeCall(sel('modI256(int256,int256)'), [a, b]));
+        await eq(`uDivI256(${a},${b})`, encodeCall(sel('uDivI256(int256,int256)'), [a, b]));
+        await eq(`uAddI256(${a},${b})`, encodeCall(sel('uAddI256(int256,int256)'), [a, b]));
+        await eq(`uMulI256(${a},${b})`, encodeCall(sel('uMulI256(int256,int256)'), [a, b]));
+      }
     for (const a of i256s) await eq(`negI256(${a})`, encodeCall(sel('negI256(int256)'), [a]));
     // exponent
-    for (const a of u8s) for (const b of [0n,1n,2n,3n,4n,5n,7n,8n,255n]) {
-      await eq(`powU8(${a},${b})`, encodeCall(sel('powU8(uint8,uint8)'), [a,b]));
-      await eq(`uPowU8(${a},${b})`, encodeCall(sel('uPowU8(uint8,uint8)'), [a,b]));
-    }
-    for (const a of i8s) for (const b of [0n,1n,2n,3n,4n,5n,7n]) {
-      await eq(`powI8(${a},${b})`, encodeCall(sel('powI8(int8,uint8)'), [a,b]));
-      await eq(`uPowI8(${a},${b})`, encodeCall(sel('uPowI8(int8,uint8)'), [a,b]));
-    }
-    for (const a of [0n,1n,2n,3n,10n,255n,256n,65535n,(1n<<200n)]) for (const b of [0n,1n,2n,3n,5n,32n,64n,255n,256n,1000n]) {
-      await eq(`powU256(${a},${b})`, encodeCall(sel('powU256(uint256,uint256)'), [a,b]));
-    }
-    for (const a of i256s) for (const b of [0n,1n,2n,3n,5n,200n,255n]) {
-      await eq(`powI256(${a},${b})`, encodeCall(sel('powI256(int256,uint256)'), [a,b]));
-    }
+    for (const a of u8s)
+      for (const b of [0n, 1n, 2n, 3n, 4n, 5n, 7n, 8n, 255n]) {
+        await eq(`powU8(${a},${b})`, encodeCall(sel('powU8(uint8,uint8)'), [a, b]));
+        await eq(`uPowU8(${a},${b})`, encodeCall(sel('uPowU8(uint8,uint8)'), [a, b]));
+      }
+    for (const a of i8s)
+      for (const b of [0n, 1n, 2n, 3n, 4n, 5n, 7n]) {
+        await eq(`powI8(${a},${b})`, encodeCall(sel('powI8(int8,uint8)'), [a, b]));
+        await eq(`uPowI8(${a},${b})`, encodeCall(sel('uPowI8(int8,uint8)'), [a, b]));
+      }
+    for (const a of [0n, 1n, 2n, 3n, 10n, 255n, 256n, 65535n, 1n << 200n])
+      for (const b of [0n, 1n, 2n, 3n, 5n, 32n, 64n, 255n, 256n, 1000n]) {
+        await eq(`powU256(${a},${b})`, encodeCall(sel('powU256(uint256,uint256)'), [a, b]));
+      }
+    for (const a of i256s)
+      for (const b of [0n, 1n, 2n, 3n, 5n, 200n, 255n]) {
+        await eq(`powI256(${a},${b})`, encodeCall(sel('powI256(int256,uint256)'), [a, b]));
+      }
     // shifts
-    for (const a of u8s) for (const s of [0n,1n,2n,4n,7n,8n,9n,16n,255n,256n,300n]) {
-      await eq(`shlU8(${a},${s})`, encodeCall(sel('shlU8(uint8,uint8)'), [a,s]));
-      await eq(`shrU8(${a},${s})`, encodeCall(sel('shrU8(uint8,uint8)'), [a,s]));
-    }
-    for (const a of i8s) for (const s of [0n,1n,2n,4n,7n,8n,9n,16n,255n]) {
-      await eq(`shlI8(${a},${s})`, encodeCall(sel('shlI8(int8,uint8)'), [a,s]));
-      await eq(`shrI8(${a},${s})`, encodeCall(sel('shrI8(int8,uint8)'), [a,s]));
-    }
-    for (const a of bigs) for (const s of [0n,1n,127n,128n,255n,256n,257n,1000n]) {
-      await eq(`shlU256(${a},${s})`, encodeCall(sel('shlU256(uint256,uint256)'), [a,s]));
-    }
-    for (const a of i256s) for (const s of [0n,1n,127n,128n,255n,256n,300n]) {
-      await eq(`shrI256(${a},${s})`, encodeCall(sel('shrI256(int256,uint256)'), [a,s]));
-    }
+    for (const a of u8s)
+      for (const s of [0n, 1n, 2n, 4n, 7n, 8n, 9n, 16n, 255n, 256n, 300n]) {
+        await eq(`shlU8(${a},${s})`, encodeCall(sel('shlU8(uint8,uint8)'), [a, s]));
+        await eq(`shrU8(${a},${s})`, encodeCall(sel('shrU8(uint8,uint8)'), [a, s]));
+      }
+    for (const a of i8s)
+      for (const s of [0n, 1n, 2n, 4n, 7n, 8n, 9n, 16n, 255n]) {
+        await eq(`shlI8(${a},${s})`, encodeCall(sel('shlI8(int8,uint8)'), [a, s]));
+        await eq(`shrI8(${a},${s})`, encodeCall(sel('shrI8(int8,uint8)'), [a, s]));
+      }
+    for (const a of bigs)
+      for (const s of [0n, 1n, 127n, 128n, 255n, 256n, 257n, 1000n]) {
+        await eq(`shlU256(${a},${s})`, encodeCall(sel('shlU256(uint256,uint256)'), [a, s]));
+      }
+    for (const a of i256s)
+      for (const s of [0n, 1n, 127n, 128n, 255n, 256n, 300n]) {
+        await eq(`shrI256(${a},${s})`, encodeCall(sel('shrI256(int256,uint256)'), [a, s]));
+      }
     // casts (full-word inputs)
     for (const a of bigs) {
       await eq(`i256ToI8(${a})`, encodeCall(sel('i256ToI8(int256)'), [a]));
@@ -229,21 +255,23 @@ describe('arithmetic/cast/shift/exponent edge differential', () => {
       await eq(`b32ToB4(${a})`, encodeCall(sel('b32ToB4(bytes32)'), [a]));
     }
     for (const a of [0n, 0xffffffffn, 0x12345678n, 0xdeadbeefn, 0x80000000n]) {
-      await eq(`b4ToU32(${a})`, encodeCall(sel('b4ToU32(bytes4)'), [a << (28n*8n)]));
+      await eq(`b4ToU32(${a})`, encodeCall(sel('b4ToU32(bytes4)'), [a << (28n * 8n)]));
       await eq(`u32ToB4(${a})`, encodeCall(sel('u32ToB4(uint32)'), [a]));
-      await eq(`b4ToB32(${a})`, encodeCall(sel('b4ToB32(bytes4)'), [a << (28n*8n)]));
+      await eq(`b4ToB32(${a})`, encodeCall(sel('b4ToB32(bytes4)'), [a << (28n * 8n)]));
     }
-    for (const a of [0n,1n,127n,128n,255n,256n,1000n,32767n,32768n,65535n]) {
+    for (const a of [0n, 1n, 127n, 128n, 255n, 256n, 1000n, 32767n, 32768n, 65535n]) {
       await eq(`i16ToU8(${a})`, encodeCall(sel('i16ToU8(int16)'), [a]));
       await eq(`u16ToI8(${a})`, encodeCall(sel('u16ToI8(uint16)'), [a]));
     }
     // mixed-width
-    for (const a of u8s) for (const b of [0n,1n,255n,256n,65535n,65280n]) {
-      await eq(`mixAdd(${a},${b})`, encodeCall(sel('mixAdd(uint8,uint16)'), [a,b]));
-    }
-    for (const a of i8s) for (const b of [0n,1n,-1n,100n,-100n,(1n<<31n)-1n,-(1n<<31n),1000000n]) {
-      await eq(`mixMul(${a},${b})`, encodeCall(sel('mixMul(int8,int32)'), [a,b]));
-    }
+    for (const a of u8s)
+      for (const b of [0n, 1n, 255n, 256n, 65535n, 65280n]) {
+        await eq(`mixAdd(${a},${b})`, encodeCall(sel('mixAdd(uint8,uint16)'), [a, b]));
+      }
+    for (const a of i8s)
+      for (const b of [0n, 1n, -1n, 100n, -100n, (1n << 31n) - 1n, -(1n << 31n), 1000000n]) {
+        await eq(`mixMul(${a},${b})`, encodeCall(sel('mixMul(int8,int32)'), [a, b]));
+      }
 
     if (mismatches.length) {
       console.log(`\n=== ${mismatches.length} MISMATCHES (of ${count} cases) ===`);
@@ -251,6 +279,6 @@ describe('arithmetic/cast/shift/exponent edge differential', () => {
     } else {
       console.log(`\nAll ${count} arith/cast/shift cases byte-identical.`);
     }
-    expect(mismatches, mismatches.slice(0,20).join('\n')).toEqual([]);
+    expect(mismatches, mismatches.slice(0, 20).join('\n')).toEqual([]);
   });
 });

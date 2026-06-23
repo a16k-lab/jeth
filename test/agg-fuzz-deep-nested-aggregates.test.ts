@@ -109,8 +109,12 @@ describe('deep-nested-aggregates vs Solidity', () => {
     expect(decodeUint((await eq('bigId i=1', raw(SIG_ID, [...ARR, 1n]))).j.returnHex)).toBe(0xb0n);
     // arr[i].xs[j] across both i and all j
     for (const [i, j, exp] of [
-      [0n, 0n, 1n], [0n, 1n, 2n], [0n, 2n, 3n],
-      [1n, 0n, 4n], [1n, 1n, 5n], [1n, 2n, 6n],
+      [0n, 0n, 1n],
+      [0n, 1n, 2n],
+      [0n, 2n, 3n],
+      [1n, 0n, 4n],
+      [1n, 1n, 5n],
+      [1n, 2n, 6n],
     ] as [bigint, bigint, bigint][]) {
       expect(decodeUint((await eq(`bigXs i=${i} j=${j}`, raw(SIG_XS, [...ARR, i, j]))).j.returnHex)).toBe(exp);
     }
@@ -143,7 +147,8 @@ describe('deep-nested-aggregates vs Solidity', () => {
 
   it('(1) lazy dirty-leaf reads: dirty u64 id and dirty u128 element revert EMPTY; unread dirty ignored', async () => {
     // dirty id1 (bit64 set) read via bigId i=1 -> revert empty
-    const dirtyId = [...ARR]; dirtyId[4] = (1n << 64n) | 0xb0n; // word 4 = id1
+    const dirtyId = [...ARR];
+    dirtyId[4] = (1n << 64n) | 0xb0n; // word 4 = id1
     let r = await eq('bigId dirty id1', raw(SIG_ID, [...dirtyId, 1n]));
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
@@ -152,7 +157,8 @@ describe('deep-nested-aggregates vs Solidity', () => {
     expect(r.j.success).toBe(true);
     expect(decodeUint(r.j.returnHex)).toBe(0xa0n);
     // dirty xs[0][2] (bit128 set) read via bigXs i=0 j=2 -> revert empty
-    const dirtyXs = [...ARR]; dirtyXs[3] = (1n << 128n) | 3n; // word 3 = xs0[2]
+    const dirtyXs = [...ARR];
+    dirtyXs[3] = (1n << 128n) | 3n; // word 3 = xs0[2]
     r = await eq('bigXs dirty xs0[2]', raw(SIG_XS, [...dirtyXs, 0n, 2n]));
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
@@ -175,7 +181,9 @@ describe('deep-nested-aggregates vs Solidity', () => {
     expect(decodeUint((await eq('sH', raw('sH((uint64,(uint128,uint128)[2]))', SVAL))).j.returnHex)).toBe(0x55n);
     expect(decodeUint((await eq('sPtsY i=0', raw(SIG_SY, [...SVAL, 0n]))).j.returnHex)).toBe(0x11n);
     expect(decodeUint((await eq('sPtsY i=1', raw(SIG_SY, [...SVAL, 1n]))).j.returnHex)).toBe(0x21n);
-    expect(decodeUint((await eq('sPtsX0', raw('sPtsX0((uint64,(uint128,uint128)[2]))', SVAL))).j.returnHex)).toBe(0x10n);
+    expect(decodeUint((await eq('sPtsX0', raw('sPtsX0((uint64,(uint128,uint128)[2]))', SVAL))).j.returnHex)).toBe(
+      0x10n,
+    );
   });
 
   it('(2) OOB on pts index i -> Panic(0x32)', async () => {
@@ -185,7 +193,8 @@ describe('deep-nested-aggregates vs Solidity', () => {
   });
 
   it('(2) lazy dirty-leaf: dirty pts[1].y read reverts empty; unread dirty ignored', async () => {
-    const dirty = [...SVAL]; dirty[4] = (1n << 128n) | 0x21n; // word4 = pts[1].y dirty
+    const dirty = [...SVAL];
+    dirty[4] = (1n << 128n) | 0x21n; // word4 = pts[1].y dirty
     let r = await eq('sPtsY dirty pts1.y', raw(SIG_SY, [...dirty, 1n]));
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');

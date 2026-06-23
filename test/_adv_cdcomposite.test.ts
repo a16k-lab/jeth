@@ -59,8 +59,7 @@ contract C {
 
 // ---- Encoders -----------------------------------------------------------------
 // dynamic-of-fixed uint256[N][]: [len][e0w0..e0w(N-1)][e1w0..]...  (contiguous)
-const encDof = (rows: bigint[][]) =>
-  pad(BigInt(rows.length)) + rows.map((r) => r.map(pad).join('')).join('');
+const encDof = (rows: bigint[][]) => pad(BigInt(rows.length)) + rows.map((r) => r.map(pad).join('')).join('');
 // raw inner uint-array body: [len][x0][x1]...
 const encU256Arr = (xs: bigint[]) => pad(BigInt(xs.length)) + xs.map(pad).join('');
 // fixed-of-dynamic uint256[][N]: [off0..off(N-1)][inner0][inner1]...  offsets rel. to array start
@@ -151,7 +150,19 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
   });
 
   it('dof a.length and echo', async () => {
-    for (const rows of [[], [[1n, 2n]], [[1n, 2n], [3n, 4n]], [[9n, 8n], [7n, 6n], [5n, 4n]]] as bigint[][][]) {
+    for (const rows of [
+      [],
+      [[1n, 2n]],
+      [
+        [1n, 2n],
+        [3n, 4n],
+      ],
+      [
+        [9n, 8n],
+        [7n, 6n],
+        [5n, 4n],
+      ],
+    ] as bigint[][][]) {
       await eq(`dofLen n=${rows.length}`, '0x' + sel('dofLen(uint256[2][])') + pad(0x20n) + encDof(rows));
       await eq(`dofEcho n=${rows.length}`, '0x' + sel('dofEcho(uint256[2][])') + pad(0x20n) + encDof(rows));
     }
@@ -169,13 +180,27 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
     await eq('dof len 2^256-1', mk(M - 1n, [[1n, 2n]], 0n, 0n));
     await eq('dof len=3 payload=1row (truncated)', mk(3n, [[1n, 2n]], 0n, 0n));
     await eq('dof len=3 payload=1row read[2]', mk(3n, [[1n, 2n]], 2n, 0n));
-    await eq('dof len=2 payload=2rows read[1][1]', mk(2n, [[1n, 2n], [3n, 4n]], 1n, 1n));
+    await eq(
+      'dof len=2 payload=2rows read[1][1]',
+      mk(
+        2n,
+        [
+          [1n, 2n],
+          [3n, 4n],
+        ],
+        1n,
+        1n,
+      ),
+    );
     // length word present but data offset (0x60) made dirty/oob below
   });
 
   it('dof dirty outer param offset word', async () => {
     const sl = sel('dof(uint256[2][],uint256,uint256)');
-    const tail = encDof([[1n, 2n], [3n, 4n]]);
+    const tail = encDof([
+      [1n, 2n],
+      [3n, 4n],
+    ]);
     const mk = (off: bigint) => '0x' + sl + pad(off) + pad(0n) + pad(0n) + tail;
     await eq('dof off 0x60 ok', mk(0x60n));
     await eq('dof off 2^64', mk(1n << 64n));
@@ -208,7 +233,10 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
     const sll = sel('fodLen(uint256[][2],uint256)');
     const fod = (i: bigint, j: bigint) => '0x' + slf + pad(0x60n) + pad(i) + pad(j) + encFod(rows);
     const fodLen = (i: bigint) => '0x' + sll + pad(0x40n) + pad(i) + encFod(rows);
-    for (const [i, n] of [[0n, 3n], [1n, 2n]] as const) {
+    for (const [i, n] of [
+      [0n, 3n],
+      [1n, 2n],
+    ] as const) {
       await eq(`fodLen[${i}]`, fodLen(i));
       for (let j = 0n; j < n; j++) await eq(`fod[${i}][${j}]`, fod(i, j));
       await eq(`fod[${i}] j justPast`, fod(i, n));
@@ -246,10 +274,16 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
     for (const rows of [
       [[], []],
       [[1n], [2n, 3n]],
-      [[1n, 2n, 3n], [4n, 5n]],
+      [
+        [1n, 2n, 3n],
+        [4n, 5n],
+      ],
       [[M - 1n], []],
     ] as bigint[][][]) {
-      await eq(`fodEcho ${JSON.stringify(rows.map((r) => r.length))}`, '0x' + sel('fodEcho(uint256[][2])') + pad(0x20n) + encFod(rows));
+      await eq(
+        `fodEcho ${JSON.stringify(rows.map((r) => r.length))}`,
+        '0x' + sel('fodEcho(uint256[][2])') + pad(0x20n) + encFod(rows),
+      );
     }
   });
 
@@ -261,12 +295,9 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
     const inner0 = encU256Arr([10n, 11n]); // 3 words
     const inner1 = encU256Arr([20n]); // 2 words
     const off1Valid = BigInt(64 + inner0.length / 2); // byte offset of inner1
-    const build = (off0: bigint) =>
-      pad(off0) + pad(off1Valid) + inner0 + inner1;
-    const fod = (off0: bigint, i: bigint, j: bigint) =>
-      '0x' + slf + pad(0x60n) + pad(i) + pad(j) + build(off0);
-    const fodLen = (off0: bigint, i: bigint) =>
-      '0x' + sll + pad(0x40n) + pad(i) + build(off0);
+    const build = (off0: bigint) => pad(off0) + pad(off1Valid) + inner0 + inner1;
+    const fod = (off0: bigint, i: bigint, j: bigint) => '0x' + slf + pad(0x60n) + pad(i) + pad(j) + build(off0);
+    const fodLen = (off0: bigint, i: bigint) => '0x' + sll + pad(0x40n) + pad(i) + build(off0);
     const OFF0 = 64n; // valid byte offset of inner0
     // sanity: valid
     await eq('fod valid a[0][0]', fod(OFF0, 0n, 0n));
@@ -389,11 +420,30 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
   it('dof narrow uint8[3][]: clean and dirty elements', async () => {
     const slu8 = sel('dofU8(uint8[3][],uint256,uint256)');
     // each element word holds a uint8; high bits dirty -> validate-revert expected.
-    const mk = (rows: bigint[][], i: bigint, j: bigint) =>
-      '0x' + slu8 + pad(0x60n) + pad(i) + pad(j) + encDof(rows);
+    const mk = (rows: bigint[][], i: bigint, j: bigint) => '0x' + slu8 + pad(0x60n) + pad(i) + pad(j) + encDof(rows);
     // clean
-    await eq('dofU8 clean [0][0]', mk([[1n, 2n, 3n], [4n, 5n, 6n]], 0n, 0n));
-    await eq('dofU8 clean [1][2]', mk([[1n, 2n, 3n], [4n, 5n, 6n]], 1n, 2n));
+    await eq(
+      'dofU8 clean [0][0]',
+      mk(
+        [
+          [1n, 2n, 3n],
+          [4n, 5n, 6n],
+        ],
+        0n,
+        0n,
+      ),
+    );
+    await eq(
+      'dofU8 clean [1][2]',
+      mk(
+        [
+          [1n, 2n, 3n],
+          [4n, 5n, 6n],
+        ],
+        1n,
+        2n,
+      ),
+    );
     await eq('dofU8 max 0xff', mk([[0xffn, 0n, 0n]], 0n, 0n));
     // dirty: high bit set
     await eq('dofU8 dirty 0x100', mk([[0x100n, 0n, 0n]], 0n, 0n));
@@ -407,8 +457,7 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
 
   it('dof signed int128[2][]: clean and dirty (bad sign-extension)', async () => {
     const sli = sel('dofI128(int128[2][],uint256,uint256)');
-    const mk = (rows: bigint[][], i: bigint, j: bigint) =>
-      '0x' + sli + pad(0x60n) + pad(i) + pad(j) + encDof(rows);
+    const mk = (rows: bigint[][], i: bigint, j: bigint) => '0x' + sli + pad(0x60n) + pad(i) + pad(j) + encDof(rows);
     const neg = M - 5n; // -5 as int128 sign-extended into 256 bits -> all high bits 1 (valid)
     await eq('dofI128 +ve', mk([[7n, 8n]], 0n, 0n));
     await eq('dofI128 -ve valid', mk([[neg, 0n]], 0n, 0n)); // 2^256-5: valid int128 sign-ext
@@ -423,10 +472,8 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
   it('dof address[2][] and bytes4[2][]: dirty validation', async () => {
     const sla = sel('dofAddr(address[2][],uint256,uint256)');
     const slb = sel('dofB4(bytes4[2][],uint256,uint256)');
-    const mka = (rows: bigint[][], i: bigint, j: bigint) =>
-      '0x' + sla + pad(0x60n) + pad(i) + pad(j) + encDof(rows);
-    const mkb = (rows: bigint[][], i: bigint, j: bigint) =>
-      '0x' + slb + pad(0x60n) + pad(i) + pad(j) + encDof(rows);
+    const mka = (rows: bigint[][], i: bigint, j: bigint) => '0x' + sla + pad(0x60n) + pad(i) + pad(j) + encDof(rows);
+    const mkb = (rows: bigint[][], i: bigint, j: bigint) => '0x' + slb + pad(0x60n) + pad(i) + pad(j) + encDof(rows);
     const A = 0x1234567890abcdef1234567890abcdef12345678n;
     await eq('dofAddr clean', mka([[A, 0n]], 0n, 0n));
     await eq('dofAddr dirty high96', mka([[(1n << 200n) | A, 0n]], 0n, 0n));
@@ -455,7 +502,11 @@ describe('adversarial: MIXED calldata composite element access vs Solidity', () 
 
   // ====================== CROSS-CHECK: element vs echo consistency ============
   it('dof element reads match echo for the same payload', async () => {
-    const rows = [[11n, 22n], [33n, 44n], [55n, 66n]];
+    const rows = [
+      [11n, 22n],
+      [33n, 44n],
+      [55n, 66n],
+    ];
     await eq('dofEcho xcheck', '0x' + sel('dofEcho(uint256[2][])') + pad(0x20n) + encDof(rows));
     const slf = sel('dof(uint256[2][],uint256,uint256)');
     for (let i = 0n; i < 3n; i++)

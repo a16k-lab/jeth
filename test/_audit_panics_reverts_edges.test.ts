@@ -64,8 +64,14 @@ contract C {
     // head: [off_m=0x60][i=0][j=0]; region@0x64: [outer_len=1][inner_off0=2^255][real inner len=2,...]
     const data =
       sel('mm(uint256[][],uint256,uint256)') +
-      pad32(0x60n) + pad32(0n) + pad32(0n) +
-      pad32(1n) + pad32(HI) + pad32(2n) + pad32(0x77n) + pad32(0x88n);
+      pad32(0x60n) +
+      pad32(0n) +
+      pad32(0n) +
+      pad32(1n) +
+      pad32(HI) +
+      pad32(2n) +
+      pad32(0x77n) +
+      pad32(0x88n);
     const { s } = await same(data);
     // solc: inner_off high bit -> wrapped lenPtr reads 0 -> innerLen 0 -> j=0 OOB -> Panic(0x32)
     expect(s.success).toBe(false);
@@ -76,8 +82,14 @@ contract C {
     const WRAP = (1n << 256n) - 0x20n;
     const data =
       sel('mm(uint256[][],uint256,uint256)') +
-      pad32(0x60n) + pad32(0n) + pad32(0n) +
-      pad32(1n) + pad32(WRAP) + pad32(2n) + pad32(0x77n) + pad32(0x88n);
+      pad32(0x60n) +
+      pad32(0n) +
+      pad32(0n) +
+      pad32(1n) +
+      pad32(WRAP) +
+      pad32(2n) +
+      pad32(0x77n) +
+      pad32(0x88n);
     const { s } = await same(data);
     expect(s.success).toBe(true); // solc reads a wrapped element; JETH matches byte-for-byte
   });
@@ -85,10 +97,15 @@ contract C {
   it('string[] element offset = 2^255: byte-identical (solc returns empty string)', async () => {
     const data =
       sel('saAt(string[],uint256)') +
-      pad32(0x40n) + pad32(0n) +
-      pad32(2n) + pad32(HI) + pad32(0xa0n) +
-      pad32(2n) + '6162'.padEnd(64, '0') +
-      pad32(4n) + '63646566'.padEnd(64, '0');
+      pad32(0x40n) +
+      pad32(0n) +
+      pad32(2n) +
+      pad32(HI) +
+      pad32(0xa0n) +
+      pad32(2n) +
+      '6162'.padEnd(64, '0') +
+      pad32(4n) +
+      '63646566'.padEnd(64, '0');
     const { s } = await same(data);
     expect(s.success).toBe(true); // solc returns "" ; JETH matches
   });
@@ -104,8 +121,14 @@ contract C {
     for (const o of [0x20n, 0x40n, (1n << 64n) - 1n, 1n << 64n, 1n << 200n, (1n << 255n) - 1n]) {
       const data =
         sel('mm(uint256[][],uint256,uint256)') +
-        pad32(0x60n) + pad32(0n) + pad32(0n) +
-        pad32(1n) + pad32(o) + pad32(2n) + pad32(0x77n) + pad32(0x88n);
+        pad32(0x60n) +
+        pad32(0n) +
+        pad32(0n) +
+        pad32(1n) +
+        pad32(o) +
+        pad32(2n) +
+        pad32(0x77n) +
+        pad32(0x88n);
       const j = await jeth.call(aj, data);
       const s = await sol.call(as, data);
       expect(j.success, `o=${o}`).toBe(s.success);

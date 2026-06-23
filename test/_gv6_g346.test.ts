@@ -22,14 +22,28 @@ const kc = (p: bigint) => BigInt('0x' + toHex(keccak(hexToBytes(('0x' + pad(p)) 
 // --- head/tail calldata encoders (encodeCall is flat-words-only) ---
 const encArr = (els: bigint[]) => pad(BigInt(els.length)) + els.map(pad).join('');
 const encNest = (rows: bigint[][]) => {
-  let off = rows.length * 32, table = '', tails = '';
-  for (const row of rows) { table += pad(BigInt(off)); const t = encArr(row); tails += t; off += t.length / 2; }
+  let off = rows.length * 32,
+    table = '',
+    tails = '';
+  for (const row of rows) {
+    table += pad(BigInt(off));
+    const t = encArr(row);
+    tails += t;
+    off += t.length / 2;
+  }
   return pad(BigInt(rows.length)) + table + tails;
 };
 const encNest3 = (cube: bigint[][][]) => {
   // uint256[][][]: outer length, table of offsets to each 2D block, then each 2D block.
-  let off = cube.length * 32, table = '', tails = '';
-  for (const plane of cube) { table += pad(BigInt(off)); const t = encNest(plane); tails += t; off += t.length / 2; }
+  let off = cube.length * 32,
+    table = '',
+    tails = '';
+  for (const plane of cube) {
+    table += pad(BigInt(off));
+    const t = encNest(plane);
+    tails += t;
+    off += t.length / 2;
+  }
   return pad(BigInt(cube.length)) + table + tails;
 };
 const encStr = (s: string) => {
@@ -39,10 +53,16 @@ const encStr = (s: string) => {
 
 type Comp = { dyn: false; word: string } | { dyn: true; tail: string };
 const callData = (sig: string, comps: Comp[]) => {
-  let off = comps.length * 32, head = '', tails = '';
+  let off = comps.length * 32,
+    head = '',
+    tails = '';
   for (const c of comps) {
     if (!c.dyn) head += c.word;
-    else { head += pad(BigInt(off)); tails += c.tail; off += c.tail.length / 2; }
+    else {
+      head += pad(BigInt(off));
+      tails += c.tail;
+      off += c.tail.length / 2;
+    }
   }
   return '0x' + sel(sig) + head + tails;
 };
@@ -50,7 +70,8 @@ const A = (tail: string): Comp => ({ dyn: true, tail });
 const V = (v: bigint): Comp => ({ dyn: false, word: pad(v) });
 
 const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
-  a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  a.length === b.length &&
+  a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 // ---------------------------------------------------------------------------
 const JETH = `@contract class C {
@@ -325,24 +346,59 @@ describe('g346', () => {
   const mism: string[] = [];
   let count = 0;
   async function send(d: string) {
-    const j = await jeth.call(aj, d), s = await sol.call(as, d);
-    if (j.success !== s.success) mism.push('SEND mismatch jeth{' + j.success + ',err=' + j.exceptionError + '} sol{' + s.success + '} d=' + d.slice(0, 30));
+    const j = await jeth.call(aj, d),
+      s = await sol.call(as, d);
+    if (j.success !== s.success)
+      mism.push(
+        'SEND mismatch jeth{' + j.success + ',err=' + j.exceptionError + '} sol{' + s.success + '} d=' + d.slice(0, 30),
+      );
   }
   async function eqRet(label: string, d: string) {
     count++;
-    const j = await jeth.call(aj, d), s = await sol.call(as, d);
+    const j = await jeth.call(aj, d),
+      s = await sol.call(as, d);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push('RET ' + label + ' jeth{' + j.success + ',' + j.returnHex + ',err=' + j.exceptionError + '} sol{' + s.success + ',' + s.returnHex + '}');
+      mism.push(
+        'RET ' +
+          label +
+          ' jeth{' +
+          j.success +
+          ',' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{' +
+          s.success +
+          ',' +
+          s.returnHex +
+          '}',
+      );
   }
   async function eqLog(label: string, d: string) {
     count++;
-    const j = await jeth.call(aj, d), s = await sol.call(as, d);
+    const j = await jeth.call(aj, d),
+      s = await sol.call(as, d);
     if (j.success !== s.success || !eqLogs(j.logs, s.logs))
-      mism.push('LOG ' + label + ' jeth{ok=' + j.success + ',err=' + j.exceptionError + ',' + JSON.stringify(j.logs) + '} sol{ok=' + s.success + ',' + JSON.stringify(s.logs) + '}');
+      mism.push(
+        'LOG ' +
+          label +
+          ' jeth{ok=' +
+          j.success +
+          ',err=' +
+          j.exceptionError +
+          ',' +
+          JSON.stringify(j.logs) +
+          '} sol{ok=' +
+          s.success +
+          ',' +
+          JSON.stringify(s.logs) +
+          '}',
+      );
   }
   async function eqSlot(slot: bigint, label: string) {
     count++;
-    const a = await readSlot(jeth, aj, slot), b = await readSlot(sol, as, slot);
+    const a = await readSlot(jeth, aj, slot),
+      b = await readSlot(sol, as, slot);
     if (a !== b) mism.push('SLOT ' + label + ' @0x' + slot.toString(16) + ' jeth=' + a + ' sol=' + b);
   }
   beforeAll(async () => {
@@ -375,7 +431,10 @@ describe('g346', () => {
     await eqRet('r4 (empty+arr)', callData('r4(uint256[],uint256[])', [A(encArr([])), A(encArr([7n, 8n]))]));
     await eqRet('rAddr', callData('rAddr(address[])', [A(encArr([0x1111n, 0xbeefn, 0n, (1n << 160n) - 1n]))]));
     await eqRet('rAddr empty', callData('rAddr(address[])', [A(encArr([]))]));
-    await eqRet('rSigned', callData('rSigned(int64[])', [A(encArr([1n, M - 1n, (1n << 63n) - 1n, M - (1n << 63n), 0n]))]));
+    await eqRet(
+      'rSigned',
+      callData('rSigned(int64[])', [A(encArr([1n, M - 1n, (1n << 63n) - 1n, M - (1n << 63n), 0n]))]),
+    );
     await eqRet('rU8', callData('rU8(uint8[])', [A(encArr([0n, 1n, 127n, 128n, 255n]))]));
     await eqRet('rB32', callData('rB32(bytes32[])', [A(encArr([0n, M - 1n, 0xdeadbeefn << 224n]))]));
     await eqRet('rNest', callData('rNest(uint256[][])', [A(encNest([[1n, 2n], [3n], []]))]));
@@ -383,7 +442,10 @@ describe('g346', () => {
     await eqRet('rNest varied', callData('rNest(uint256[][])', [A(encNest([[], [1n], [2n, 3n, 4n, 5n]]))]));
     await eqRet('rNest3', callData('rNest3(uint256[][][])', [A(encNest3([[[1n, 2n], [3n]], [[4n]], []]))]));
     await eqRet('rNest3 deep', callData('rNest3(uint256[][][])', [A(encNest3([[[]], [[1n, 2n, 3n], [], [4n]]]))]));
-    await eqRet('rMixNest', callData('rMixNest(uint256,uint256[][],string)', [V(7n), A(encNest([[1n], [2n, 3n]])), A(encStr(LONG))]));
+    await eqRet(
+      'rMixNest',
+      callData('rMixNest(uint256,uint256[][],string)', [V(7n), A(encNest([[1n], [2n, 3n]])), A(encStr(LONG))]),
+    );
     // memory array sources
     await eqRet('rMemU', encodeCall(sel('rMemU(uint256,uint256,uint256)'), [7n, 8n, 9n]));
     await eqRet('rMemI', encodeCall(sel('rMemI(int64,int64)'), [(1n << 63n) - 1n, M - (1n << 63n)]));
@@ -461,7 +523,12 @@ describe('g346', () => {
     await send(encodeCall(sel('pushB()'), []));
     await send(encodeCall(sel('pushB()'), []));
     await send(encodeCall(sel('pushB()'), []));
-    for (const [i, j, v] of [[0n, 0n, 100n], [0n, 1n, 101n], [1n, 0n, 110n], [2n, 1n, 121n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 100n],
+      [0n, 1n, 101n],
+      [1n, 0n, 110n],
+      [2n, 1n, 121n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setB(uint256,uint256,uint256)'), [i, j, v]));
     await eqRet('lenB', encodeCall(sel('lenB()'), []));
     await eqRet('getB(0,1)', encodeCall(sel('getB(uint256,uint256)'), [0n, 1n]));
@@ -475,7 +542,11 @@ describe('g346', () => {
     // G6: Arr<u256,3>[] (uint256[3][]) at slot 8
     await send(encodeCall(sel('pushC()'), []));
     await send(encodeCall(sel('pushC()'), []));
-    for (const [i, j, v] of [[0n, 0n, 300n], [0n, 2n, 302n], [1n, 1n, 311n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 300n],
+      [0n, 2n, 302n],
+      [1n, 1n, 311n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setC(uint256,uint256,uint256)'), [i, j, v]));
     await eqRet('lenC', encodeCall(sel('lenC()'), []));
     await eqRet('getC(0,2)', encodeCall(sel('getC(uint256,uint256)'), [0n, 2n]));
@@ -488,7 +559,11 @@ describe('g346', () => {
     // G6: Arr<u256,5>[] (uint256[5][]) at slot 9
     await send(encodeCall(sel('pushD()'), []));
     await send(encodeCall(sel('pushD()'), []));
-    for (const [i, j, v] of [[0n, 0n, 500n], [0n, 4n, 504n], [1n, 2n, 512n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 500n],
+      [0n, 4n, 504n],
+      [1n, 2n, 512n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setD(uint256,uint256,uint256)'), [i, j, v]));
     await eqRet('lenD', encodeCall(sel('lenD()'), []));
     await eqRet('getD(0,4)', encodeCall(sel('getD(uint256,uint256)'), [0n, 4n]));
@@ -502,7 +577,12 @@ describe('g346', () => {
     // pk8 uint8[4][] at slot 10: each element = uint8[4] packed in ONE slot at keccak(10)+i
     await send(encodeCall(sel('pushPk8()'), []));
     await send(encodeCall(sel('pushPk8()'), []));
-    for (const [i, j, v] of [[0n, 0n, 1n], [0n, 3n, 4n], [1n, 1n, 9n], [1n, 2n, 200n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 1n],
+      [0n, 3n, 4n],
+      [1n, 1n, 9n],
+      [1n, 2n, 200n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setPk8(uint256,uint256,uint8)'), [i, j, v]));
     await eqRet('getPk8(0,0)', encodeCall(sel('getPk8(uint256,uint256)'), [0n, 0n]));
     await eqRet('getPk8(0,3)', encodeCall(sel('getPk8(uint256,uint256)'), [0n, 3n]));
@@ -514,7 +594,12 @@ describe('g346', () => {
     // pk16 uint16[8][] at slot 11: each element = uint16[8] packed in ONE slot at keccak(11)+i
     await send(encodeCall(sel('pushPk16()'), []));
     await send(encodeCall(sel('pushPk16()'), []));
-    for (const [i, j, v] of [[0n, 0n, 0x1111n], [0n, 7n, 0x7777n], [1n, 3n, 0xffffn], [1n, 4n, 0x1234n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 0x1111n],
+      [0n, 7n, 0x7777n],
+      [1n, 3n, 0xffffn],
+      [1n, 4n, 0x1234n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setPk16(uint256,uint256,uint16)'), [i, j, v]));
     await eqRet('getPk16(0,0)', encodeCall(sel('getPk16(uint256,uint256)'), [0n, 0n]));
     await eqRet('getPk16(0,7)', encodeCall(sel('getPk16(uint256,uint256)'), [0n, 7n]));
@@ -527,7 +612,12 @@ describe('g346', () => {
     // pkI64 int64[2][] at slot 12: each element = int64[2] packed in ONE slot at keccak(12)+i
     await send(encodeCall(sel('pushPkI64()'), []));
     await send(encodeCall(sel('pushPkI64()'), []));
-    for (const [i, j, v] of [[0n, 0n, (1n << 63n) - 1n], [0n, 1n, M - (1n << 63n)], [1n, 0n, M - 1n], [1n, 1n, 42n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, (1n << 63n) - 1n],
+      [0n, 1n, M - (1n << 63n)],
+      [1n, 0n, M - 1n],
+      [1n, 1n, 42n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setPkI64(uint256,uint256,int64)'), [i, j, v]));
     await eqRet('getPkI64(0,0) max', encodeCall(sel('getPkI64(uint256,uint256)'), [0n, 0n]));
     await eqRet('getPkI64(0,1) min', encodeCall(sel('getPkI64(uint256,uint256)'), [0n, 1n]));
@@ -540,7 +630,11 @@ describe('g346', () => {
     // ba bytes32[2][] at slot 13: full-word fixed element, stride 2
     await send(encodeCall(sel('pushBa()'), []));
     await send(encodeCall(sel('pushBa()'), []));
-    for (const [i, j, v] of [[0n, 0n, 0xaan << 248n], [0n, 1n, 0xbbn << 248n], [1n, 1n, M - 1n]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 0xaan << 248n],
+      [0n, 1n, 0xbbn << 248n],
+      [1n, 1n, M - 1n],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setBa(uint256,uint256,bytes32)'), [i, j, v]));
     await eqRet('getBa(0,1)', encodeCall(sel('getBa(uint256,uint256)'), [0n, 1n]));
     await eqRet('getBa(1,1)', encodeCall(sel('getBa(uint256,uint256)'), [1n, 1n]));
@@ -552,7 +646,11 @@ describe('g346', () => {
     // ad address[2][] at slot 14: address fixed element, stride 2 (one word each)
     await send(encodeCall(sel('pushAd()'), []));
     await send(encodeCall(sel('pushAd()'), []));
-    for (const [i, j, v] of [[0n, 0n, 0xdeadn], [0n, 1n, (1n << 160n) - 1n], [1n, 0n, 0xbeefn]] as [bigint, bigint, bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 0xdeadn],
+      [0n, 1n, (1n << 160n) - 1n],
+      [1n, 0n, 0xbeefn],
+    ] as [bigint, bigint, bigint][])
       await send(encodeCall(sel('setAd(uint256,uint256,address)'), [i, j, v]));
     await eqRet('getAd(0,1)', encodeCall(sel('getAd(uint256,uint256)'), [0n, 1n]));
     await eqRet('getAd(1,0)', encodeCall(sel('getAd(uint256,uint256)'), [1n, 0n]));
@@ -564,7 +662,13 @@ describe('g346', () => {
     // dd uint256[2][2][] at slot 15: element = uint256[2][2] (4 words), stride 4
     await send(encodeCall(sel('pushDd()'), []));
     await send(encodeCall(sel('pushDd()'), []));
-    for (const [i, j, k, v] of [[0n, 0n, 0n, 1000n], [0n, 0n, 1n, 1001n], [0n, 1n, 0n, 1010n], [0n, 1n, 1n, 1011n], [1n, 1n, 1n, 1111n]] as [bigint, bigint, bigint, bigint][])
+    for (const [i, j, k, v] of [
+      [0n, 0n, 0n, 1000n],
+      [0n, 0n, 1n, 1001n],
+      [0n, 1n, 0n, 1010n],
+      [0n, 1n, 1n, 1011n],
+      [1n, 1n, 1n, 1111n],
+    ] as [bigint, bigint, bigint, bigint][])
       await send(encodeCall(sel('setDd(uint256,uint256,uint256,uint256)'), [i, j, k, v]));
     await eqRet('lenDd', encodeCall(sel('lenDd()'), []));
     await eqRet('getDd(0,1,1)', encodeCall(sel('getDd(uint256,uint256,uint256)'), [0n, 1n, 1n]));

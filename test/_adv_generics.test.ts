@@ -55,7 +55,8 @@ const yulFns = (src: string): string[] =>
   [...compile(src, { fileName: 'C.jeth' }).yul.matchAll(/function (userfn_[A-Za-z0-9_$]+)\(/g)].map((m) => m[1]!);
 
 const eqLogs = (a: LogEntry[], b: LogEntry[]): boolean =>
-  a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  a.length === b.length &&
+  a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 // =====================================================================================
 // PROBE 1 - DEDUP / MANY-TYPES-IN-ONE-CONTRACT. One generic family instantiated at u8, u16, u256,
@@ -119,15 +120,18 @@ contract C {
 describe('F6-adv 1: many-types-in-one-contract dedup is byte-identical to solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH_MANY, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL_MANY, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('every concrete instantiation returns the solc-identical value', async () => {
     const M = (1n << 256n) - 1n;
@@ -158,9 +162,9 @@ describe('F6-adv 1: many-types-in-one-contract dedup is byte-identical to solc',
     expect(idFns.size).toBe(10);
     expect(idFns.has('userfn_idg$uint256')).toBe(true);
     expect(idFns.has('userfn_idg$int256')).toBe(true);
-    expect([...idFns].some((n) => n.includes('b_Wei'))).toBe(true);   // branded distinct from base
-    expect([...idFns].some((n) => n.includes('b_Col'))).toBe(true);   // enum distinct from uint8
-    expect(idFns.has('userfn_idg$uint8')).toBe(true);                 // and plain uint8 also present
+    expect([...idFns].some((n) => n.includes('b_Wei'))).toBe(true); // branded distinct from base
+    expect([...idFns].some((n) => n.includes('b_Col'))).toBe(true); // enum distinct from uint8
+    expect(idFns.has('userfn_idg$uint8')).toBe(true); // and plain uint8 also present
   });
 });
 
@@ -288,9 +292,12 @@ contract C {
 }`;
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   beforeAll(async () => {
-    const jb = compile(J, { fileName: 'C.jeth' }); const sb = compileSolidity(S, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(J, { fileName: 'C.jeth' });
+    const sb = compileSolidity(S, 'C');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('dbl and inc are not cross-wired', async () => {
     for (const v of [0n, 7n, 1000n]) {
@@ -428,14 +435,18 @@ contract C {
 describe('F6-adv 4: same-type recursion and mutual generic recursion match solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    const jb = compile(JETH_REC, { fileName: 'C.jeth' }); const sb = compileSolidity(SOL_REC, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(JETH_REC, { fileName: 'C.jeth' });
+    const sb = compileSolidity(SOL_REC, 'C');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('recursive sum at u256 and u32 (overflow-prone narrow) match solc', async () => {
     await eq('sumU(10)', encodeCall(sel('sumU(uint256)'), [10n]));
@@ -496,14 +507,18 @@ contract C {
 describe('F6-adv 5: inference from enum/brand/bytesN/bool and multi-param matches solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    const jb = compile(JETH_INFER, { fileName: 'C.jeth' }); const sb = compileSolidity(SOL_INFER, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(JETH_INFER, { fileName: 'C.jeth' });
+    const sb = compileSolidity(SOL_INFER, 'C');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('inference picks the right specialization for each value type', async () => {
     await eq('pickE true', encodeCall(sel('pickE(bool,uint8,uint8)'), [1n, 1n, 2n]));
@@ -607,10 +622,16 @@ contract C {
   function s(uint256 a, uint256 b) external pure returns (uint256) { return a + b; }
   function o(uint256 a, uint256 b) external pure returns (bool) { return a > b; }
 }`;
-    const jb = compile(J, { fileName: 'C.jeth' }); const sb = compileSolidity(S, 'C');
-    const jeth = await Harness.create(); const sol = await Harness.create();
-    const aj = await jeth.deploy(jb.creationBytecode); const as = await sol.deploy(sb.creation);
-    for (const [a, b] of [[3n, 4n], [10n, 2n]] as const) {
+    const jb = compile(J, { fileName: 'C.jeth' });
+    const sb = compileSolidity(S, 'C');
+    const jeth = await Harness.create();
+    const sol = await Harness.create();
+    const aj = await jeth.deploy(jb.creationBytecode);
+    const as = await sol.deploy(sb.creation);
+    for (const [a, b] of [
+      [3n, 4n],
+      [10n, 2n],
+    ] as const) {
       const jr = await jeth.call(aj, encodeCall(sel('s(uint256,uint256)'), [a, b]));
       const sr = await sol.call(as, encodeCall(sel('s(uint256,uint256)'), [a, b]));
       expect(jr.returnHex, `s(${a},${b})`).toBe(sr.returnHex);
@@ -740,14 +761,18 @@ contract C {
 describe('F6-adv 8: generic result into raw slots, a struct field, and a multi-value return', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    const jb = compile(JETH_BYTE, { fileName: 'C.jeth' }); const sb = compileSolidity(SOL_BYTE, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(JETH_BYTE, { fileName: 'C.jeth' });
+    const sb = compileSolidity(SOL_BYTE, 'C');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('struct field + multi-value returns match solc', async () => {
     await eq('spread(3,9)', encodeCall(sel('spread(uint256,uint256)'), [3n, 9n]));
@@ -757,7 +782,8 @@ describe('F6-adv 8: generic result into raw slots, a struct field, and a multi-v
   });
   it('a state write through the generic matches solc on raw slots', async () => {
     const data = '0x' + sel('setBoth(uint256,uint256)') + pad(7n) + pad(99n);
-    await jeth.call(aj, data); await sol.call(as, data);
+    await jeth.call(aj, data);
+    await sol.call(as, data);
     expect(await readSlot(jeth, aj, 0n), 'slot0 (max)').toBe(await readSlot(sol, as, 0n));
     expect(await readSlot(jeth, aj, 1n), 'slot1 (min)').toBe(await readSlot(sol, as, 1n));
   });
@@ -826,15 +852,19 @@ contract C {
 describe('F6-adv 9: interactions with F3 defaults, F5 switch, F2 for-of, brand, events', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     expect(eqLogs(j.logs, s.logs), `${label} logs`).toBe(true);
   }
   beforeAll(async () => {
-    const jb = compile(JETH_MIX, { fileName: 'C.jeth' }); const sb = compileSolidity(SOL_MIX, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(JETH_MIX, { fileName: 'C.jeth' });
+    const sb = compileSolidity(SOL_MIX, 'C');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('generic in a switch arm matches solc', async () => {
     await eq('dispatch Add', encodeCall(sel('dispatch(uint8,uint256,uint256)'), [0n, 10n, 3n]));
@@ -864,28 +894,61 @@ describe('F6-adv 9: interactions with F3 defaults, F5 switch, F2 for-of, brand, 
 // =====================================================================================
 describe('F6-adv 10: soundness-rejection diagnostics (capture code, no crash)', () => {
   const cases: [string, string, string][] = [
-    ['JETH290', 'external generic',
-      '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
-    ['JETH290', 'public generic',
-      '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
-    ['JETH290', '@nonReentrant generic',
-      '@contract class C { @nonReentrant f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
-    ['JETH291', 'array type arg f<u256[]>',
-      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<u256[]>(x); } }'],
-    ['JETH291', 'bytes type arg',
-      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<bytes>(x); } }'],
-    ['JETH291', 'string type arg',
-      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<string>(x); } }'],
-    ['JETH292', 'infer-from-return-only',
-      '@contract class C { f<T>(a: u256): T { return T(a); } @external g(x:u256):u256 { return u256(this.f(x)); } }'],
-    ['JETH293', 'inference conflict',
-      '@contract class C { f<T>(a: T, b: T): T { return a; } @external g(a:u256,b:u8):u256 { return this.f(a, b); } }'],
-    ['JETH294', 'type param shadows a primitive (u256)',
-      '@contract class C { f<u256>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f(x); } }'],
-    ['JETH294', 'duplicate type param <T, T>',
-      '@contract class C { f<T, T>(a: T, b: T): T { return a; } @external g(a:u256,b:u256):u256 { return this.f(a, b); } }'],
-    ['JETH296', 'user fn collides with specialization name',
-      '@contract class C { idf<T>(a: T): T { return a; } idf$uint256(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.idf(x) + this.idf$uint256(x); } }'],
+    [
+      'JETH290',
+      'external generic',
+      '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
+    ],
+    [
+      'JETH290',
+      'public generic',
+      '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
+    ],
+    [
+      'JETH290',
+      '@nonReentrant generic',
+      '@contract class C { @nonReentrant f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
+    ],
+    [
+      'JETH291',
+      'array type arg f<u256[]>',
+      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<u256[]>(x); } }',
+    ],
+    [
+      'JETH291',
+      'bytes type arg',
+      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<bytes>(x); } }',
+    ],
+    [
+      'JETH291',
+      'string type arg',
+      '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<string>(x); } }',
+    ],
+    [
+      'JETH292',
+      'infer-from-return-only',
+      '@contract class C { f<T>(a: u256): T { return T(a); } @external g(x:u256):u256 { return u256(this.f(x)); } }',
+    ],
+    [
+      'JETH293',
+      'inference conflict',
+      '@contract class C { f<T>(a: T, b: T): T { return a; } @external g(a:u256,b:u8):u256 { return this.f(a, b); } }',
+    ],
+    [
+      'JETH294',
+      'type param shadows a primitive (u256)',
+      '@contract class C { f<u256>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f(x); } }',
+    ],
+    [
+      'JETH294',
+      'duplicate type param <T, T>',
+      '@contract class C { f<T, T>(a: T, b: T): T { return a; } @external g(a:u256,b:u256):u256 { return this.f(a, b); } }',
+    ],
+    [
+      'JETH296',
+      'user fn collides with specialization name',
+      '@contract class C { idf<T>(a: T): T { return a; } idf$uint256(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.idf(x) + this.idf$uint256(x); } }',
+    ],
   ];
   for (const [code, label, src] of cases) {
     it(`${code}: ${label}`, () => {

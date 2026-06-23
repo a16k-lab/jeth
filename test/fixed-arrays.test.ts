@@ -110,8 +110,12 @@ describe('fixed arrays vs Solidity', () => {
     const src = `@contract\nclass T { @state a: Arr<u256, 3>; @view f(): u256 { return this.a[3n]; } }`;
     expect(codesFor(src)).toContain('JETH211');
     // in-bounds constant compiles
-    expect(codesFor(`@contract\nclass T { @state a: Arr<u256, 3>; @view f(): u256 { return this.a[2n]; } }`)).toEqual([]);
+    expect(codesFor(`@contract\nclass T { @state a: Arr<u256, 3>; @view f(): u256 { return this.a[2n]; } }`)).toEqual(
+      [],
+    );
     // push/pop on a fixed array is rejected
-    expect(codesFor(`@contract\nclass T { @state a: Arr<u256, 3>; @external f(): void { this.a.push(1n); } }`)).toContain('JETH218');
+    expect(
+      codesFor(`@contract\nclass T { @state a: Arr<u256, 3>; @external f(): void { this.a.push(1n); } }`),
+    ).toContain('JETH218');
   });
 });

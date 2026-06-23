@@ -35,7 +35,9 @@
       {
         "scopeName": "jeth.injection",
         "path": "./syntaxes/jeth.injection.json",
-        "injectTo": ["source.jeth"]
+        "injectTo": [
+          "source.jeth"
+        ]
       }
     ]
   }

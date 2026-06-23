@@ -67,12 +67,17 @@ describe('adv2: T[][] and string[] offset/length sweep', () => {
     const sigG = 'mGet(uint256[][],uint256,uint256)';
     const sigL = 'innerLen(uint256[][],uint256)';
     const pre = w(0x60n) + w(0n) + w(0n); // off_m,i,j for mGet
-    const preL = w(0x40n) + w(0n);        // off_m,i for innerLen
+    const preL = w(0x40n) + w(0n); // off_m,i for innerLen
 
     // inner_off near signed/64 boundaries
     for (const [lbl, off] of [
-      ['ino=2^64-32', U64m32], ['ino=2^64', U64p1], ['ino=2^64-1', U64],
-      ['ino=2^255-1', SBm1], ['ino=2^255', SB], ['ino=2^256-32', WRAP], ['ino=2^256-1', M - 1n],
+      ['ino=2^64-32', U64m32],
+      ['ino=2^64', U64p1],
+      ['ino=2^64-1', U64],
+      ['ino=2^255-1', SBm1],
+      ['ino=2^255', SB],
+      ['ino=2^256-32', WRAP],
+      ['ino=2^256-1', M - 1n],
     ] as [string, bigint][]) {
       await same(`mGet ${lbl}`, sigG, pre + w(1n) + w(off) + w(2n) + w(0x77n) + w(0x88n));
       await same(`innerLen ${lbl}`, sigL, preL + w(1n) + w(off));
@@ -85,7 +90,9 @@ describe('adv2: T[][] and string[] offset/length sweep', () => {
     await same('mGet ino=0x40 overlap', sigG, pre + w(1n) + w(0x40n) + w(2n) + w(111n) + w(222n));
     // outer off_m sweep
     for (const [lbl, off] of [
-      ['offm=2^64-1', U64], ['offm=2^255', SB], ['offm=2^256-32', WRAP],
+      ['offm=2^64-1', U64],
+      ['offm=2^255', SB],
+      ['offm=2^256-32', WRAP],
     ] as [string, bigint][]) {
       await same(`mGet ${lbl}`, sigG, w(off) + w(0n) + w(0n) + w(1n) + w(0x20n) + w(2n) + w(111n) + w(222n));
     }
@@ -99,21 +106,31 @@ describe('adv2: T[][] and string[] offset/length sweep', () => {
     const sig = 'mEcho(uint256[][])';
     // region:[outerLen=1][off0=0x20][innerLen][...]
     for (const [lbl, len] of [
-      ['ilen=2^63', 1n << 63n], ['ilen=2^64-32', U64m32], ['ilen=2^64-1', U64],
-      ['ilen=2^64', U64p1], ['ilen=2^255', SB], ['ilen=2^256-1', M - 1n],
+      ['ilen=2^63', 1n << 63n],
+      ['ilen=2^64-32', U64m32],
+      ['ilen=2^64-1', U64],
+      ['ilen=2^64', U64p1],
+      ['ilen=2^255', SB],
+      ['ilen=2^256-1', M - 1n],
     ] as [string, bigint][]) {
       await same(`mEcho ${lbl}`, sig, w(0x20n) + w(1n) + w(0x20n) + w(len));
     }
     // inner offset wrap/high-bit in echo (unsigned cap)
     for (const [lbl, off] of [
-      ['ino=2^64-32', U64m32], ['ino=2^64', U64p1], ['ino=2^64-1', U64],
-      ['ino=2^255', SB], ['ino=2^256-32', WRAP], ['ino=2^256-1', M - 1n],
+      ['ino=2^64-32', U64m32],
+      ['ino=2^64', U64p1],
+      ['ino=2^64-1', U64],
+      ['ino=2^255', SB],
+      ['ino=2^256-32', WRAP],
+      ['ino=2^256-1', M - 1n],
     ] as [string, bigint][]) {
       await same(`mEcho ${lbl}`, sig, w(0x20n) + w(1n) + w(off));
     }
     // outer offset wrap in echo
     for (const [lbl, off] of [
-      ['offm=2^64-1', U64], ['offm=2^255', SB], ['offm=2^256-32', WRAP],
+      ['offm=2^64-1', U64],
+      ['offm=2^255', SB],
+      ['offm=2^256-32', WRAP],
     ] as [string, bigint][]) {
       await same(`mEcho ${lbl}`, sig, w(off) + w(1n) + w(0x20n) + w(2n) + w(1n) + w(2n));
     }
@@ -136,8 +153,13 @@ describe('adv2: T[][] and string[] offset/length sweep', () => {
     // saAt: [off_a=0x40][i=0] + region@0x44:[L=1][el_off0][...] table base B=0x64
     const preA = w(0x40n) + w(0n);
     for (const [lbl, off] of [
-      ['eo=2^64-32', U64m32], ['eo=2^64', U64p1], ['eo=2^64-1', U64],
-      ['eo=2^255-1', SBm1], ['eo=2^255', SB], ['eo=2^256-32', WRAP], ['eo=2^256-1', M - 1n],
+      ['eo=2^64-32', U64m32],
+      ['eo=2^64', U64p1],
+      ['eo=2^64-1', U64],
+      ['eo=2^255-1', SBm1],
+      ['eo=2^255', SB],
+      ['eo=2^256-32', WRAP],
+      ['eo=2^256-1', M - 1n],
     ] as [string, bigint][]) {
       await same(`saAt ${lbl}`, sigA, preA + w(1n) + w(off) + w(2n) + w(0n));
     }
@@ -151,14 +173,22 @@ describe('adv2: T[][] and string[] offset/length sweep', () => {
 
     // saEcho: [off_a=0x20] + region:[L=1][off0=0x20][len][...]
     for (const [lbl, len] of [
-      ['elen=2^63', 1n << 63n], ['elen=2^64-32', U64m32], ['elen=2^64-1', U64],
-      ['elen=2^64', U64p1], ['elen=2^255', SB], ['elen=2^256-1', M - 1n],
+      ['elen=2^63', 1n << 63n],
+      ['elen=2^64-32', U64m32],
+      ['elen=2^64-1', U64],
+      ['elen=2^64', U64p1],
+      ['elen=2^255', SB],
+      ['elen=2^256-1', M - 1n],
     ] as [string, bigint][]) {
       await same(`saEcho ${lbl}`, sigE, w(0x20n) + w(1n) + w(0x20n) + w(len));
     }
     for (const [lbl, off] of [
-      ['eo=2^64-32', U64m32], ['eo=2^64', U64p1], ['eo=2^64-1', U64],
-      ['eo=2^255', SB], ['eo=2^256-32', WRAP], ['eo=2^256-1', M - 1n],
+      ['eo=2^64-32', U64m32],
+      ['eo=2^64', U64p1],
+      ['eo=2^64-1', U64],
+      ['eo=2^255', SB],
+      ['eo=2^256-32', WRAP],
+      ['eo=2^256-1', M - 1n],
     ] as [string, bigint][]) {
       await same(`saEcho ${lbl}`, sigE, w(0x20n) + w(1n) + w(off));
     }

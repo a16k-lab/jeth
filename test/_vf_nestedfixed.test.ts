@@ -199,7 +199,20 @@ describe('nestedfixed probe', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   // raw calldata with a dirty index word (high bits) to test calldata cleaning
   function raw(sig: string, words: bigint[]): string {
@@ -221,42 +234,59 @@ describe('nestedfixed probe', () => {
 
     // ---- u2: Arr<Arr<u256,3>,2> : write every cell distinct, then whole/row/elem ----
     let n = 1n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 3n; j++)
-      await eq(`setU2[${i}][${j}]`, raw('setU2(uint256,uint256,uint256)', [i, j, (0xa11ce000n << 8n) | n++]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 3n; j++)
+        await eq(`setU2[${i}][${j}]`, raw('setU2(uint256,uint256,uint256)', [i, j, (0xa11ce000n << 8n) | n++]));
     await eq('getU2', encodeCall(sel('getU2()')));
     for (let i = 0n; i < 2n; i++) await eq(`rowU2[${i}]`, raw('rowU2(uint256)', [i]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 3n; j++)
-      await eq(`elemU2[${i}][${j}]`, raw('elemU2(uint256,uint256)', [i, j]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 3n; j++) await eq(`elemU2[${i}][${j}]`, raw('elemU2(uint256,uint256)', [i, j]));
 
     // ---- u3: Arr<Arr<Arr<u256,2>,2>,2> : boundary values at corners ----
     n = 0n;
     const u3vals = [0n, M - 1n, 1n << 255n, (1n << 255n) - 1n, 0xffn, M - 0x100n, 1n, M - 1n];
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) for (let k = 0n; k < 2n; k++)
-      await eq(`setU3[${i}][${j}][${k}]`, raw('setU3(uint256,uint256,uint256,uint256)', [i, j, k, u3vals[Number(n++)]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        for (let k = 0n; k < 2n; k++)
+          await eq(
+            `setU3[${i}][${j}][${k}]`,
+            raw('setU3(uint256,uint256,uint256,uint256)', [i, j, k, u3vals[Number(n++)]!]),
+          );
     await eq('getU3', encodeCall(sel('getU3()')));
     for (let i = 0n; i < 2n; i++) await eq(`planeU3[${i}]`, raw('planeU3(uint256)', [i]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`rowU3[${i}][${j}]`, raw('rowU3(uint256,uint256)', [i, j]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) for (let k = 0n; k < 2n; k++)
-      await eq(`elemU3[${i}][${j}][${k}]`, raw('elemU3(uint256,uint256,uint256)', [i, j, k]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++) await eq(`rowU3[${i}][${j}]`, raw('rowU3(uint256,uint256)', [i, j]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        for (let k = 0n; k < 2n; k++)
+          await eq(`elemU3[${i}][${j}][${k}]`, raw('elemU3(uint256,uint256,uint256)', [i, j, k]));
 
     // ---- u4: Arr deep 4D, all 16 cells distinct ----
     n = 100n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) for (let k = 0n; k < 2n; k++) for (let l = 0n; l < 2n; l++)
-      await eq(`setU4[${i}][${j}][${k}][${l}]`, raw('setU4(uint256,uint256,uint256,uint256,uint256)', [i, j, k, l, n++]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        for (let k = 0n; k < 2n; k++)
+          for (let l = 0n; l < 2n; l++)
+            await eq(
+              `setU4[${i}][${j}][${k}][${l}]`,
+              raw('setU4(uint256,uint256,uint256,uint256,uint256)', [i, j, k, l, n++]),
+            );
     await eq('getU4', encodeCall(sel('getU4()')));
     for (let i = 0n; i < 2n; i++) await eq(`cubeU4[${i}]`, raw('cubeU4(uint256)', [i]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) for (let k = 0n; k < 2n; k++) for (let l = 0n; l < 2n; l++)
-      await eq(`elemU4[${i}][${j}][${k}][${l}]`, raw('elemU4(uint256,uint256,uint256,uint256)', [i, j, k, l]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        for (let k = 0n; k < 2n; k++)
+          for (let l = 0n; l < 2n; l++)
+            await eq(`elemU4[${i}][${j}][${k}][${l}]`, raw('elemU4(uint256,uint256,uint256,uint256)', [i, j, k, l]));
 
     // ---- p2: packed Arr<Arr<u8,4>,3> : distinct each lane (1..12), then whole/row/elem ----
     n = 1n;
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 4n; j++)
-      await eq(`setP2[${i}][${j}]`, raw('setP2(uint256,uint256,uint8)', [i, j, n++]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 4n; j++) await eq(`setP2[${i}][${j}]`, raw('setP2(uint256,uint256,uint8)', [i, j, n++]));
     await eq('getP2', encodeCall(sel('getP2()')));
     for (let i = 0n; i < 3n; i++) await eq(`rowP2[${i}]`, raw('rowP2(uint256)', [i]));
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 4n; j++)
-      await eq(`elemP2[${i}][${j}]`, raw('elemP2(uint256,uint256)', [i, j]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 4n; j++) await eq(`elemP2[${i}][${j}]`, raw('elemP2(uint256,uint256)', [i, j]));
     // overwrite a packed lane then re-read (no neighbor corruption)
     await eq('setP2-overwrite', raw('setP2(uint256,uint256,uint8)', [1n, 2n, 0xffn]));
     await eq('getP2-after-ow', encodeCall(sel('getP2()')));
@@ -264,87 +294,122 @@ describe('nestedfixed probe', () => {
 
     // ---- p3: packed 3D u8 Arr<Arr<Arr<u8,5>,3>,2> : 30 lanes distinct ----
     n = 1n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 3n; j++) for (let k = 0n; k < 5n; k++)
-      await eq(`setP3[${i}][${j}][${k}]`, raw('setP3(uint256,uint256,uint256,uint8)', [i, j, k, n++]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 3n; j++)
+        for (let k = 0n; k < 5n; k++)
+          await eq(`setP3[${i}][${j}][${k}]`, raw('setP3(uint256,uint256,uint256,uint8)', [i, j, k, n++]));
     await eq('getP3', encodeCall(sel('getP3()')));
     for (let i = 0n; i < 2n; i++) await eq(`planeP3[${i}]`, raw('planeP3(uint256)', [i]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 3n; j++) for (let k = 0n; k < 5n; k++)
-      await eq(`elemP3[${i}][${j}][${k}]`, raw('elemP3(uint256,uint256,uint256)', [i, j, k]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 3n; j++)
+        for (let k = 0n; k < 5n; k++)
+          await eq(`elemP3[${i}][${j}][${k}]`, raw('elemP3(uint256,uint256,uint256)', [i, j, k]));
 
     // ---- s2: signed Arr<Arr<i64,2>,3> : negatives + INT_MIN/MAX, sign-extend on return ----
     const i64vals = [5n, M - 7n, (1n << 63n) - 1n, M - (1n << 63n), 0n, M - 1n];
     n = 0n;
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`setS2[${i}][${j}]`, raw('setS2(uint256,uint256,int64)', [i, j, i64vals[Number(n++)]!]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 2n; j++)
+        await eq(`setS2[${i}][${j}]`, raw('setS2(uint256,uint256,int64)', [i, j, i64vals[Number(n++)]!]));
     await eq('getS2', encodeCall(sel('getS2()')));
     for (let i = 0n; i < 3n; i++) await eq(`rowS2[${i}]`, raw('rowS2(uint256)', [i]));
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`elemS2[${i}][${j}]`, raw('elemS2(uint256,uint256)', [i, j]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 2n; j++) await eq(`elemS2[${i}][${j}]`, raw('elemS2(uint256,uint256)', [i, j]));
 
     // ---- b2: Arr<Arr<bytes4,2>,2> left-aligned bytesN ----
     const b4vals = [0xdeadbeefn << 224n, 0x11223344n << 224n, 0xffffffffn << 224n, 0n];
     n = 0n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`setB2[${i}][${j}]`, raw('setB2(uint256,uint256,bytes4)', [i, j, b4vals[Number(n++)]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        await eq(`setB2[${i}][${j}]`, raw('setB2(uint256,uint256,bytes4)', [i, j, b4vals[Number(n++)]!]));
     await eq('getB2', encodeCall(sel('getB2()')));
     for (let i = 0n; i < 2n; i++) await eq(`rowB2[${i}]`, raw('rowB2(uint256)', [i]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`elemB2[${i}][${j}]`, raw('elemB2(uint256,uint256)', [i, j]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++) await eq(`elemB2[${i}][${j}]`, raw('elemB2(uint256,uint256)', [i, j]));
 
     // ---- bl2: Arr<Arr<bool,5>,2> packed bools ----
     const blvals = [1n, 0n, 1n, 1n, 0n, 0n, 1n, 0n, 1n, 1n];
     n = 0n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 5n; j++)
-      await eq(`setBl2[${i}][${j}]`, raw('setBl2(uint256,uint256,bool)', [i, j, blvals[Number(n++)]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 5n; j++)
+        await eq(`setBl2[${i}][${j}]`, raw('setBl2(uint256,uint256,bool)', [i, j, blvals[Number(n++)]!]));
     await eq('getBl2', encodeCall(sel('getBl2()')));
     for (let i = 0n; i < 2n; i++) await eq(`rowBl2[${i}]`, raw('rowBl2(uint256)', [i]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 5n; j++)
-      await eq(`elemBl2[${i}][${j}]`, raw('elemBl2(uint256,uint256)', [i, j]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 5n; j++) await eq(`elemBl2[${i}][${j}]`, raw('elemBl2(uint256,uint256)', [i, j]));
 
     // ---- structs with nested fixed-array fields ----
-    for (const [i, j, v] of [[0n,0n,1n],[0n,1n,2n],[1n,0n,3n],[1n,1n,4n]] as [bigint,bigint,bigint][])
+    for (const [i, j, v] of [
+      [0n, 0n, 1n],
+      [0n, 1n, 2n],
+      [1n, 0n, 3n],
+      [1n, 1n, 4n],
+    ] as [bigint, bigint, bigint][])
       await eq(`setG2[${i}][${j}]`, raw('setG2(uint256,uint256,uint256,uint256)', [9n, i, j, v]));
     await eq('getG2', encodeCall(sel('getG2()')));
 
     // Pk: u64; packed 2D u8; u64 - packed neighbours preserved
     n = 1n;
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 4n; j++)
-      await eq(`setPk[${i}][${j}]`, raw('setPk(uint64,uint64,uint256,uint256,uint8)', [0xaaaan, 0xbbbbn, i, j, n++]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 4n; j++)
+        await eq(`setPk[${i}][${j}]`, raw('setPk(uint64,uint64,uint256,uint256,uint8)', [0xaaaan, 0xbbbbn, i, j, n++]));
     await eq('getPk', encodeCall(sel('getPk()')));
 
     // Sg: i32; 2D i64 negatives; i32
     n = 0n;
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`setSg[${i}][${j}]`, raw('setSg(int32,int32,uint256,uint256,int64)', [M - 5n, 7n, i, j, i64vals[Number(n++)]!]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 2n; j++)
+        await eq(
+          `setSg[${i}][${j}]`,
+          raw('setSg(int32,int32,uint256,uint256,int64)', [M - 5n, 7n, i, j, i64vals[Number(n++)]!]),
+        );
     await eq('getSg', encodeCall(sel('getSg()')));
 
     // Bz: bytes8; 2D bytes4; left-aligned
     n = 0n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`setBz[${i}][${j}]`, raw('setBz(bytes8,uint256,uint256,bytes4)', [0xcafebabecafebaben << 192n, i, j, b4vals[Number(n++)]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        await eq(
+          `setBz[${i}][${j}]`,
+          raw('setBz(bytes8,uint256,uint256,bytes4)', [0xcafebabecafebaben << 192n, i, j, b4vals[Number(n++)]!]),
+        );
     await eq('getBz', encodeCall(sel('getBz()')));
 
     // Bl: bool; 2D bool; bool
     n = 0n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 5n; j++)
-      await eq(`setBl[${i}][${j}]`, raw('setBl(bool,bool,uint256,uint256,bool)', [1n, 1n, i, j, blvals[Number(n++)]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 5n; j++)
+        await eq(
+          `setBl[${i}][${j}]`,
+          raw('setBl(bool,bool,uint256,uint256,bool)', [1n, 1n, i, j, blvals[Number(n++)]!]),
+        );
     await eq('getBl', encodeCall(sel('getBl()')));
 
     // StructGrid: lead; Arr<Arr<Inner,2>,2> of struct elements; trail
     n = 1n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) {
-      await eq(`setSgr[${i}][${j}]`, raw('setSgr(uint256,uint256,uint256,uint256,uint32,uint32)', [0x1111n, 0x2222n, i, j, n, n + 1000n]));
-      n++;
-    }
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++) {
+        await eq(
+          `setSgr[${i}][${j}]`,
+          raw('setSgr(uint256,uint256,uint256,uint256,uint32,uint32)', [0x1111n, 0x2222n, i, j, n, n + 1000n]),
+        );
+        n++;
+      }
     await eq('getSgr', encodeCall(sel('getSgr()')));
 
     // ---- fixed array of structs that themselves have a 2D fixed field (dynamic array) ----
     await eq('pushG2-a', encodeCall(sel('pushG2()')));
     await eq('pushG2-b', encodeCall(sel('pushG2()')));
     for (const [idx, t, i, j, v] of [
-      [0n,1n,0n,0n,10n],[0n,1n,0n,1n,11n],[0n,1n,1n,0n,12n],[0n,1n,1n,1n,13n],
-      [1n,2n,0n,0n,20n],[1n,2n,0n,1n,21n],[1n,2n,1n,0n,22n],[1n,2n,1n,1n,23n],
-    ] as [bigint,bigint,bigint,bigint,bigint][])
+      [0n, 1n, 0n, 0n, 10n],
+      [0n, 1n, 0n, 1n, 11n],
+      [0n, 1n, 1n, 0n, 12n],
+      [0n, 1n, 1n, 1n, 13n],
+      [1n, 2n, 0n, 0n, 20n],
+      [1n, 2n, 0n, 1n, 21n],
+      [1n, 2n, 1n, 0n, 22n],
+      [1n, 2n, 1n, 1n, 23n],
+    ] as [bigint, bigint, bigint, bigint, bigint][])
       await eq(`setG2arr[${idx}]`, raw('setG2arr(uint256,uint256,uint256,uint256,uint256)', [idx, t, i, j, v]));
     await eq('getG2arr', encodeCall(sel('getG2arr()')));
     await eq('getG2arrI[0]', raw('getG2arrI(uint256)', [0n]));
@@ -355,8 +420,19 @@ describe('nestedfixed probe', () => {
     await eq('pushPk-b', encodeCall(sel('pushPk()')));
     for (const idx of [0n, 1n]) {
       let m = 1n;
-      for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 4n; j++)
-        await eq(`setPkarr[${idx}][${i}][${j}]`, raw('setPkarr(uint256,uint64,uint64,uint256,uint256,uint8)', [idx, 0x1234n + idx, 0x5678n + idx, i, j, m++]));
+      for (let i = 0n; i < 3n; i++)
+        for (let j = 0n; j < 4n; j++)
+          await eq(
+            `setPkarr[${idx}][${i}][${j}]`,
+            raw('setPkarr(uint256,uint64,uint64,uint256,uint256,uint8)', [
+              idx,
+              0x1234n + idx,
+              0x5678n + idx,
+              i,
+              j,
+              m++,
+            ]),
+          );
     }
     await eq('getPkarr', encodeCall(sel('getPkarr()')));
     await eq('getPkarrI[0]', raw('getPkarrI(uint256)', [0n]));
@@ -401,8 +477,10 @@ describe('nestedfixed probe', () => {
     await eq('getSentBefore', encodeCall(sel('getSentBefore()')));
     await eq('getSentAfter', encodeCall(sel('getSentAfter()')));
 
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

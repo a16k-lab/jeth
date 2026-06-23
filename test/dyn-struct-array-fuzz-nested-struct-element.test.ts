@@ -109,7 +109,8 @@ describe('nested-struct-element: Outer[] (uint64,(uint128,uint128),uint64)[] vs 
     // revert EMPTY on the whole-array copy (struct-element echo reads all leaves).
     const dirtyOuter = (slot: 0 | 1 | 2 | 3) => {
       const o = outer(1n, 2n, 3n, 4n);
-      if (slot === 0 || slot === 3) o[slot] = (1n << 64n) | o[slot]!; // u64 leaf: bit64 dirty
+      if (slot === 0 || slot === 3)
+        o[slot] = (1n << 64n) | o[slot]!; // u64 leaf: bit64 dirty
       else o[slot] = (1n << 128n) | o[slot]!; // u128 leaf: bit128 dirty
       return o;
     };

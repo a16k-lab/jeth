@@ -212,8 +212,7 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
   let count = 0;
 
   // raw calldata from selector + 32-byte words.
-  const raw = (selSig: string, words: bigint[], tail = '') =>
-    '0x' + sel(selSig) + words.map(pad).join('') + tail;
+  const raw = (selSig: string, words: bigint[], tail = '') => '0x' + sel(selSig) + words.map(pad).join('') + tail;
   // raw calldata from selector + an already-built hex body (no 0x).
   const rawHex = (selSig: string, bodyHex: string) => '0x' + sel(selSig) + bodyHex;
 
@@ -224,8 +223,17 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
     if (j.success !== s.success || j.returnHex !== s.returnHex)
       mism.push(
         label +
-          ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError +
-          '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}',
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
       );
   }
 
@@ -241,8 +249,16 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
   it('runs', async () => {
     // ===== (A) narrow scalar params with dirty high bits =====
     const dirties = [
-      0n, 1n, 0xffn, 0x100n, 0x1ffn, (1n << 64n) | 7n, (1n << 200n) | 0xabn,
-      M - 1n, 1n << 255n, (1n << 255n) | 0x7fn,
+      0n,
+      1n,
+      0xffn,
+      0x100n,
+      0x1ffn,
+      (1n << 64n) | 7n,
+      (1n << 200n) | 0xabn,
+      M - 1n,
+      1n << 255n,
+      (1n << 255n) | 0x7fn,
     ];
     for (const v of dirties) {
       await eq('echoU8 ' + v.toString(16), raw('echoU8(uint8)', [v]));
@@ -257,7 +273,15 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
         await eq('addU8 ' + a.toString(16) + ',' + b.toString(16), raw('addU8(uint8,uint8)', [a, b]));
 
     // ===== (B) bytes/string scalar params =====
-    for (const body of [sb(''), sb('a'), sb('hello'), sb('Z'.repeat(31)), sb('Z'.repeat(32)), sb('W'.repeat(33)), sb('Q'.repeat(96))]) {
+    for (const body of [
+      sb(''),
+      sb('a'),
+      sb('hello'),
+      sb('Z'.repeat(31)),
+      sb('Z'.repeat(32)),
+      sb('W'.repeat(33)),
+      sb('Q'.repeat(96)),
+    ]) {
       await eq('echoBytes len' + body.length, rawHex('echoBytes(bytes)', pad(0x20n) + elemBody(body)));
       await eq('echoStr len' + body.length, rawHex('echoStr(string)', pad(0x20n) + elemBody(body)));
       await eq('bytesLen len' + body.length, rawHex('bytesLen(bytes)', pad(0x20n) + elemBody(body)));
@@ -301,51 +325,99 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
     for (const arr of [[], [0n], [1n, 2n, 3n], [M - 1n, 0n, 7n, 42n, 99n]]) {
       await eq('dynLen n=' + arr.length, rawHex('dynLen(uint256[])', pad(0x20n) + dynValRegion(arr)));
       for (let i = 0; i < arr.length; i++)
-        await eq('dynAt n=' + arr.length + ' i=' + i, rawHex('dynAt(uint256[],uint256)', pad(0x40n) + pad(BigInt(i)) + dynValRegion(arr)));
+        await eq(
+          'dynAt n=' + arr.length + ' i=' + i,
+          rawHex('dynAt(uint256[],uint256)', pad(0x40n) + pad(BigInt(i)) + dynValRegion(arr)),
+        );
       // OOB index
-      await eq('dynAt OOB n=' + arr.length, rawHex('dynAt(uint256[],uint256)', pad(0x40n) + pad(BigInt(arr.length)) + dynValRegion(arr)));
+      await eq(
+        'dynAt OOB n=' + arr.length,
+        rawHex('dynAt(uint256[],uint256)', pad(0x40n) + pad(BigInt(arr.length)) + dynValRegion(arr)),
+      );
     }
     // dynAtU8: element value cleaning / dirty-bit
     await eq('dynAtU8 clean', rawHex('dynAtU8(uint8[],uint256)', pad(0x40n) + pad(0n) + dynValRegion([0x7fn, 2n])));
-    await eq('dynAtU8 dirty-read', rawHex('dynAtU8(uint8[],uint256)', pad(0x40n) + pad(0n) + dynValRegion([0x1ffn, 2n])));
-    await eq('dynAtU8 dirty-unread', rawHex('dynAtU8(uint8[],uint256)', pad(0x40n) + pad(1n) + dynValRegion([0x1ffn, 2n])));
+    await eq(
+      'dynAtU8 dirty-read',
+      rawHex('dynAtU8(uint8[],uint256)', pad(0x40n) + pad(0n) + dynValRegion([0x1ffn, 2n])),
+    );
+    await eq(
+      'dynAtU8 dirty-unread',
+      rawHex('dynAtU8(uint8[],uint256)', pad(0x40n) + pad(1n) + dynValRegion([0x1ffn, 2n])),
+    );
     // dynamic array malformed
     await eq('dynLen bad-offset', raw('dynLen(uint256[])', [0x1000n]));
     await eq('dynLen off=2^255', raw('dynLen(uint256[])', [1n << 255n]));
     await eq('dynLen huge-len', raw('dynLen(uint256[])', [0x20n, 1n << 64n]));
     await eq('dynLen len2-payload1', raw('dynLen(uint256[])', [0x20n, 2n, 5n])); // declare 2, supply 1
-    await eq('dynLen off=0x28 nonalign', rawHex('dynLen(uint256[])', pad(0x28n) + '00'.repeat(8) + dynValRegion([1n, 2n])));
-    await eq('dynLen trailing-junk', rawHex('dynLen(uint256[])', pad(0x20n) + dynValRegion([1n, 2n]) + 'ab'.repeat(32)));
+    await eq(
+      'dynLen off=0x28 nonalign',
+      rawHex('dynLen(uint256[])', pad(0x28n) + '00'.repeat(8) + dynValRegion([1n, 2n])),
+    );
+    await eq(
+      'dynLen trailing-junk',
+      rawHex('dynLen(uint256[])', pad(0x20n) + dynValRegion([1n, 2n]) + 'ab'.repeat(32)),
+    );
 
     // ===== (E) nested dynamic arrays u256[][] =====
-    const grids: bigint[][][] = [
-      [],
-      [[]],
-      [[1n, 2n], [3n]],
-      [[], [7n], [8n, 9n, 10n]],
-      [[M - 1n], [0n, 0n], []],
-    ];
+    const grids: bigint[][][] = [[], [[]], [[1n, 2n], [3n]], [[], [7n], [8n, 9n, 10n]], [[M - 1n], [0n, 0n], []]];
     for (const g of grids) {
-      await eq('mLen ' + JSON.stringify(g.map((r) => r.length)), rawHex('mLen(uint256[][])', pad(0x20n) + nestedRegion(g)));
-      await eq('echoM ' + JSON.stringify(g.map((r) => r.length)), rawHex('echoM(uint256[][])', pad(0x20n) + nestedRegion(g)));
+      await eq(
+        'mLen ' + JSON.stringify(g.map((r) => r.length)),
+        rawHex('mLen(uint256[][])', pad(0x20n) + nestedRegion(g)),
+      );
+      await eq(
+        'echoM ' + JSON.stringify(g.map((r) => r.length)),
+        rawHex('echoM(uint256[][])', pad(0x20n) + nestedRegion(g)),
+      );
       for (let i = 0; i < g.length; i++) {
-        await eq('mInnerLen i=' + i, rawHex('mInnerLen(uint256[][],uint256)', pad(0x40n) + pad(BigInt(i)) + nestedRegion(g)));
+        await eq(
+          'mInnerLen i=' + i,
+          rawHex('mInnerLen(uint256[][],uint256)', pad(0x40n) + pad(BigInt(i)) + nestedRegion(g)),
+        );
         for (let j = 0; j < g[i]!.length; j++)
-          await eq('mAt i=' + i + ' j=' + j, rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(BigInt(i)) + pad(BigInt(j)) + nestedRegion(g)));
+          await eq(
+            'mAt i=' + i + ' j=' + j,
+            rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(BigInt(i)) + pad(BigInt(j)) + nestedRegion(g)),
+          );
         // inner OOB
-        await eq('mAt inner-OOB i=' + i, rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(BigInt(i)) + pad(BigInt(g[i]!.length)) + nestedRegion(g)));
+        await eq(
+          'mAt inner-OOB i=' + i,
+          rawHex(
+            'mAt(uint256[][],uint256,uint256)',
+            pad(0x60n) + pad(BigInt(i)) + pad(BigInt(g[i]!.length)) + nestedRegion(g),
+          ),
+        );
       }
       // outer OOB
-      await eq('mAt outer-OOB', rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(BigInt(g.length)) + pad(0n) + nestedRegion(g)));
+      await eq(
+        'mAt outer-OOB',
+        rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(BigInt(g.length)) + pad(0n) + nestedRegion(g)),
+      );
     }
     // nested malformed: bad inner offset, truncated inner table, huge inner len.
     await eq('mLen bad-outer', raw('mLen(uint256[][])', [0x1000n]));
     await eq('mLen trunc-table', raw('mLen(uint256[][])', [0x20n, 3n, 0x60n])); // declare 3 inner, 1 table word
-    await eq('mAt inner-bad-off', rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x1000n)));
-    await eq('mAt inner-huge-len', rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x20n) + pad(1n << 64n)));
+    await eq(
+      'mAt inner-bad-off',
+      rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x1000n)),
+    );
+    await eq(
+      'mAt inner-huge-len',
+      rawHex(
+        'mAt(uint256[][],uint256,uint256)',
+        pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x20n) + pad(1n << 64n),
+      ),
+    );
     // u8[][] element cleaning / dirty
-    await eq('mAtU8 clean', rawHex('mAtU8(uint8[][],uint256,uint256)', pad(0x60n) + pad(0n) + pad(0n) + nestedRegion([[0x7fn]])));
-    await eq('mAtU8 dirty-read', rawHex('mAtU8(uint8[][],uint256,uint256)', pad(0x60n) + pad(0n) + pad(0n) + nestedRegion([[0x1ffn]])));
+    await eq(
+      'mAtU8 clean',
+      rawHex('mAtU8(uint8[][],uint256,uint256)', pad(0x60n) + pad(0n) + pad(0n) + nestedRegion([[0x7fn]])),
+    );
+    await eq(
+      'mAtU8 dirty-read',
+      rawHex('mAtU8(uint8[][],uint256,uint256)', pad(0x60n) + pad(0n) + pad(0n) + nestedRegion([[0x1ffn]])),
+    );
 
     // ===== (F) string[] / bytes[] =====
     const big = 'X'.repeat(40);
@@ -359,8 +431,14 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
       await eq('saLen ' + l.length, rawHex('saLen(string[])', pad(0x20n) + arrayRegion(l)));
       await eq('echoSA ' + l.length, rawHex('echoSA(string[])', pad(0x20n) + arrayRegion(l)));
       for (let i = 0; i < l.length; i++)
-        await eq('saAt ' + l.length + ' i=' + i, rawHex('saAt(string[],uint256)', pad(0x40n) + pad(BigInt(i)) + arrayRegion(l)));
-      await eq('saAt OOB ' + l.length, rawHex('saAt(string[],uint256)', pad(0x40n) + pad(BigInt(l.length)) + arrayRegion(l)));
+        await eq(
+          'saAt ' + l.length + ' i=' + i,
+          rawHex('saAt(string[],uint256)', pad(0x40n) + pad(BigInt(i)) + arrayRegion(l)),
+        );
+      await eq(
+        'saAt OOB ' + l.length,
+        rawHex('saAt(string[],uint256)', pad(0x40n) + pad(BigInt(l.length)) + arrayRegion(l)),
+      );
     }
     await eq('baAt', rawHex('baAt(bytes[],uint256)', pad(0x40n) + pad(0n) + arrayRegion([new Uint8Array([1, 2, 3])])));
     // string[] malformed
@@ -399,12 +477,21 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
       await eq('ptsLen n=' + n, rawHex('ptsLen((uint128,uint128)[])', pad(0x20n) + region));
       await eq('echoPts n=' + n, rawHex('echoPts((uint128,uint128)[])', pad(0x20n) + region));
       for (let i = 0; i < n; i++)
-        await eq('ptsX n=' + n + ' i=' + i, rawHex('ptsX((uint128,uint128)[],uint256)', pad(0x40n) + pad(BigInt(i)) + region));
+        await eq(
+          'ptsX n=' + n + ' i=' + i,
+          rawHex('ptsX((uint128,uint128)[],uint256)', pad(0x40n) + pad(BigInt(i)) + region),
+        );
       await eq('ptsX OOB n=' + n, rawHex('ptsX((uint128,uint128)[],uint256)', pad(0x40n) + pad(BigInt(n)) + region));
     }
     // Pt[] dirty field read vs unread; echo validates all fields.
-    await eq('ptsX dirty-x-read', rawHex('ptsX((uint128,uint128)[],uint256)', pad(0x40n) + pad(0n) + pad(1n) + pad((1n << 200n) | 1n) + pad(2n)));
-    await eq('echoPts dirty-y', rawHex('echoPts((uint128,uint128)[])', pad(0x20n) + pad(1n) + pad(1n) + pad((1n << 200n) | 2n)));
+    await eq(
+      'ptsX dirty-x-read',
+      rawHex('ptsX((uint128,uint128)[],uint256)', pad(0x40n) + pad(0n) + pad(1n) + pad((1n << 200n) | 1n) + pad(2n)),
+    );
+    await eq(
+      'echoPts dirty-y',
+      rawHex('echoPts((uint128,uint128)[])', pad(0x20n) + pad(1n) + pad(1n) + pad((1n << 200n) | 2n)),
+    );
     // Pt[] one-word short / huge len
     await eq('ptsLen short', raw('ptsLen((uint128,uint128)[])', [0x20n, 2n, 1n, 2n, 3n]));
     await eq('ptsLen huge', raw('ptsLen((uint128,uint128)[])', [0x20n, 1n << 64n]));
@@ -417,7 +504,7 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
       const bBody = elemBody(b);
       const offS = 4n * 32n;
       const offB = offS + BigInt(sBody.length / 2);
-      return (pad(a) + pad(offS) + pad(offB) + pad(z) + sBody + bBody);
+      return pad(a) + pad(offS) + pad(offB) + pad(z) + sBody + bBody;
     }
     const dynCases: [bigint, Uint8Array, Uint8Array, bigint][] = [
       [1n, sb(''), new Uint8Array(0), 2n],
@@ -448,15 +535,24 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
       await eq('echoDyn dirty-a', rawHex('echoDyn((uint64,string,bytes,uint64))', pad(0x20n) + dirtyA));
     }
     // dynamic struct malformed: bad inner offset for s
-    await eq('dynS bad-off-s', rawHex('dynS((uint64,string,bytes,uint64))', pad(0x20n) + pad(1n) + pad(0x1000n) + pad(0x80n) + pad(2n)));
+    await eq(
+      'dynS bad-off-s',
+      rawHex('dynS((uint64,string,bytes,uint64))', pad(0x20n) + pad(1n) + pad(0x1000n) + pad(0x80n) + pad(2n)),
+    );
 
     // ===== (J) nested dynamic struct NestDyn{x, Dyn d, y} =====
     {
       // outer tuple head: [x][off_d][y]; d is a dynamic tuple itself.
-      const a = 5n, z = 6n, x = 0x10n, y = 0x20n;
-      const s = sb('inner'), b = new Uint8Array([7, 8]);
-      const sBody = elemBody(s), bBody = elemBody(b);
-      const dOffS = 4n * 32n, dOffB = dOffS + BigInt(sBody.length / 2);
+      const a = 5n,
+        z = 6n,
+        x = 0x10n,
+        y = 0x20n;
+      const s = sb('inner'),
+        b = new Uint8Array([7, 8]);
+      const sBody = elemBody(s),
+        bBody = elemBody(b);
+      const dOffS = 4n * 32n,
+        dOffB = dOffS + BigInt(sBody.length / 2);
       const dTuple = pad(a) + pad(dOffS) + pad(dOffB) + pad(z) + sBody + bBody;
       const outOffD = 3n * 32n; // after [x][off_d][y]
       const outerTuple = pad(x) + pad(outOffD) + pad(y) + dTuple;
@@ -466,8 +562,14 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
     }
 
     // ===== (K) mixed static + dynamic args =====
-    await eq('mix1', rawHex('mix1(uint256,uint256[],uint256)', pad(100n) + pad(0x60n) + pad(7n) + dynValRegion([1n, 2n, 3n])));
-    await eq('mix1 overflow', rawHex('mix1(uint256,uint256[],uint256)', pad(M - 1n) + pad(0x60n) + pad(5n) + dynValRegion([1n])));
+    await eq(
+      'mix1',
+      rawHex('mix1(uint256,uint256[],uint256)', pad(100n) + pad(0x60n) + pad(7n) + dynValRegion([1n, 2n, 3n])),
+    );
+    await eq(
+      'mix1 overflow',
+      rawHex('mix1(uint256,uint256[],uint256)', pad(M - 1n) + pad(0x60n) + pad(5n) + dynValRegion([1n])),
+    );
     // mix2(a, s, b): three offsets, then regions in order a,s,b. base = byte 4.
     {
       const aReg = dynValRegion([1n, 2n]);
@@ -476,17 +578,32 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
       const offA = 0x60n; // 3 head words
       const offS = offA + BigInt(aReg.length / 2);
       const offB = offS + BigInt(sReg.length / 2);
-      await eq('mix2', rawHex('mix2(uint256[],string,uint256[])', pad(offA) + pad(offS) + pad(offB) + aReg + sReg + bReg));
+      await eq(
+        'mix2',
+        rawHex('mix2(uint256[],string,uint256[])', pad(offA) + pad(offS) + pad(offB) + aReg + sReg + bReg),
+      );
     }
     // mix3(Pt p, a, q): p inline (2 words), then offset to a, then q.
     {
       const aReg = dynValRegion([1n, 2n, 3n, 4n]);
       // head: [p.x][p.y][off_a][q] -> off_a base byte4 = 0x80
-      await eq('mix3', rawHex('mix3((uint128,uint128),uint256[],uint64)', pad(0x05n) + pad(0n) + pad(0x80n) + pad(0x07n) + aReg));
+      await eq(
+        'mix3',
+        rawHex('mix3((uint128,uint128),uint256[],uint64)', pad(0x05n) + pad(0n) + pad(0x80n) + pad(0x07n) + aReg),
+      );
       // dirty p.y (unread) -> still ok
-      await eq('mix3 dirty-py', rawHex('mix3((uint128,uint128),uint256[],uint64)', pad(0x05n) + pad((1n << 200n)) + pad(0x80n) + pad(0x07n) + aReg));
+      await eq(
+        'mix3 dirty-py',
+        rawHex(
+          'mix3((uint128,uint128),uint256[],uint64)',
+          pad(0x05n) + pad(1n << 200n) + pad(0x80n) + pad(0x07n) + aReg,
+        ),
+      );
       // dirty q (bit64) -> read q in length sum? q is used; dirty must revert
-      await eq('mix3 dirty-q', rawHex('mix3((uint128,uint128),uint256[],uint64)', pad(0x05n) + pad(0n) + pad(0x80n) + pad(1n << 64n) + aReg));
+      await eq(
+        'mix3 dirty-q',
+        rawHex('mix3((uint128,uint128),uint256[],uint64)', pad(0x05n) + pad(0n) + pad(0x80n) + pad(1n << 64n) + aReg),
+      );
     }
 
     // ===== (M) deep adversarial decode-validation edges =====
@@ -500,15 +617,24 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
       // place a after head, b after a; give s a bogus huge offset.
       const sBogus = 0x100000n;
       const bOff = aOff + BigInt(aReg.length / 2);
-      await eq('mix2 unread-s bad-offset', rawHex('mix2(uint256[],string,uint256[])', pad(aOff) + pad(sBogus) + pad(bOff) + aReg + bReg));
+      await eq(
+        'mix2 unread-s bad-offset',
+        rawHex('mix2(uint256[],string,uint256[])', pad(aOff) + pad(sBogus) + pad(bOff) + aReg + bReg),
+      );
       // s length declares payload past end (unread) -> entry decode revert EMPTY.
       const sBad = pad(0x40n); // declares 64-byte string, no payload
       const aOff2 = 0x60n;
       const sOff2 = aOff2 + BigInt(aReg.length / 2);
       const bOff2 = sOff2 + 32n; // s body is 1 word (just the bad length)
-      await eq('mix2 unread-s payload-past', rawHex('mix2(uint256[],string,uint256[])', pad(aOff2) + pad(sOff2) + pad(bOff2) + aReg + sBad + bReg));
+      await eq(
+        'mix2 unread-s payload-past',
+        rawHex('mix2(uint256[],string,uint256[])', pad(aOff2) + pad(sOff2) + pad(bOff2) + aReg + sBad + bReg),
+      );
       // s offset = 2^256-32 (wraps near top) unread.
-      await eq('mix2 unread-s off-wrap', rawHex('mix2(uint256[],string,uint256[])', pad(aOff) + pad(M - 32n) + pad(bOff) + aReg + bReg));
+      await eq(
+        'mix2 unread-s off-wrap',
+        rawHex('mix2(uint256[],string,uint256[])', pad(aOff) + pad(M - 32n) + pad(bOff) + aReg + bReg),
+      );
     }
 
     // (M2) bytes payload exact-fit vs one byte over the last word.
@@ -555,7 +681,10 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
       const tableStart = 2n * 32n; // first inner sits right after 2-word table
       const region = pad(2n) + pad(tableStart) + pad(tableStart) + innerBody;
       await eq('echoM overlap-inner', rawHex('echoM(uint256[][])', pad(0x20n) + region));
-      await eq('mAt overlap i=1 j=0', rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(1n) + pad(0n) + region));
+      await eq(
+        'mAt overlap i=1 j=0',
+        rawHex('mAt(uint256[][],uint256,uint256)', pad(0x60n) + pad(1n) + pad(0n) + region),
+      );
     }
 
     // (M7) dynamic struct: bytes/string field offset that wraps / points backward.
@@ -584,7 +713,10 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
       const offA = 0x60n;
       const offS = offA + BigInt(aReg.length / 2);
       // b offset = a offset (alias). length sum = 3 + 3 = 6.
-      await eq('mix2 alias-ab', rawHex('mix2(uint256[],string,uint256[])', pad(offA) + pad(offS) + pad(offA) + aReg + sReg));
+      await eq(
+        'mix2 alias-ab',
+        rawHex('mix2(uint256[],string,uint256[])', pad(offA) + pad(offS) + pad(offA) + aReg + sReg),
+      );
     }
 
     // (M10) string param with multi-word length whose top bits are set (huge) and a
@@ -608,8 +740,14 @@ describe('_vf_calldata: adversarial calldata decode parity', () => {
 
     // (N4) echo of a string[] whose element forces multi-word allocation + a 0-len
     // element sandwiched between long elements (re-encode offset table parity).
-    await eq('echoSA mixed-long', rawHex('echoSA(string[])', pad(0x20n) + arrayRegion([sb('A'.repeat(65)), sb(''), sb('B'.repeat(64)), sb('c')])));
-    await eq('echoM jagged-large', rawHex('echoM(uint256[][])', pad(0x20n) + nestedRegion([[1n, 2n, 3n, 4n, 5n], [], [9n], [0n, 0n]])));
+    await eq(
+      'echoSA mixed-long',
+      rawHex('echoSA(string[])', pad(0x20n) + arrayRegion([sb('A'.repeat(65)), sb(''), sb('B'.repeat(64)), sb('c')])),
+    );
+    await eq(
+      'echoM jagged-large',
+      rawHex('echoM(uint256[][])', pad(0x20n) + nestedRegion([[1n, 2n, 3n, 4n, 5n], [], [9n], [0n, 0n]])),
+    );
 
     // (N5) waData: dirty id (unread) ok; dirty data element (read) cleaned (uint256 = no clean).
     await eq('waData dirty-id-unread', raw('waData((uint64,uint256[2]),uint256)', [1n << 100n, 0x111n, 0x222n, 0n]));

@@ -55,21 +55,32 @@ contract C {
 
 describe('fixed-array memory locals (G9) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('construct / element RMW / return / sum / alias', async () => {
-    for (const [x, y, z] of [[1n, 2n, 3n], [0n, 0n, 0n], [M - 1n, M - 2n, 5n]] as [bigint, bigint, bigint][]) {
+    for (const [x, y, z] of [
+      [1n, 2n, 3n],
+      [0n, 0n, 0n],
+      [M - 1n, M - 2n, 5n],
+    ] as [bigint, bigint, bigint][]) {
       await eq('build', call('build(uint256,uint256,uint256)', [x, y, z]));
       await eq('sum', call('sum(uint256,uint256,uint256)', [x, y, z]));
       await eq('aliasing', call('aliasing(uint256)', [x]));
@@ -80,10 +91,14 @@ describe('fixed-array memory locals (G9) vs Solidity', () => {
   });
   it('narrow / signed elements', async () => {
     await eq('narrow', call('narrow(uint8,uint8)', [7n, 9n]));
-    for (const [p, q] of [[1n, -1n], [(1n << 63n) - 1n, M - (1n << 63n)]] as [bigint, bigint][]) await eq('signed', call('signed(int64,int64)', [p, q]));
+    for (const [p, q] of [
+      [1n, -1n],
+      [(1n << 63n) - 1n, M - (1n << 63n)],
+    ] as [bigint, bigint][])
+      await eq('signed', call('signed(int64,int64)', [p, q]));
   });
   it('copy from a storage fixed array', async () => {
-    for (const v of [10n, 20n, 30n]) await send(call('setG(uint256,uint256)', [(v / 10n) - 1n, v]));
+    for (const v of [10n, 20n, 30n]) await send(call('setG(uint256,uint256)', [v / 10n - 1n, v]));
     await eq('fromG', call('fromG()', []));
     await eq('getG(0) unchanged by the memory copy', call('getG(uint256)', [0n]));
   });

@@ -127,10 +127,13 @@ describe('mapping<uint256, Rec[]> with fixed-array struct field vs Solidity', ()
 
   it('push(Rec(id,[d0,d1])) packs id and data[] identically (raw slots), per-key', async () => {
     // K1: two records
-    await eqCall('addRec K1 #0', encodeCall(sel('addRec(uint256,uint64,uint256,uint256)'), [K1, 7n, 0xAAn, 0xBBn]));
-    await eqCall('addRec K1 #1', encodeCall(sel('addRec(uint256,uint64,uint256,uint256)'), [K1, 8n, 0xCCn, 0xDDn]));
+    await eqCall('addRec K1 #0', encodeCall(sel('addRec(uint256,uint64,uint256,uint256)'), [K1, 7n, 0xaan, 0xbbn]));
+    await eqCall('addRec K1 #1', encodeCall(sel('addRec(uint256,uint64,uint256,uint256)'), [K1, 8n, 0xccn, 0xddn]));
     // K2: one record (isolation)
-    await eqCall('addRec K2 #0', encodeCall(sel('addRec(uint256,uint64,uint256,uint256)'), [K2, 99n, 0x1234n, 0x5678n]));
+    await eqCall(
+      'addRec K2 #0',
+      encodeCall(sel('addRec(uint256,uint64,uint256,uint256)'), [K2, 99n, 0x1234n, 0x5678n]),
+    );
 
     let r = await eqCall('recLen K1', encodeCall(sel('recLen(uint256)'), [K1]));
     expect(decodeUint(r.j.returnHex)).toBe(2n);
@@ -159,11 +162,11 @@ describe('mapping<uint256, Rec[]> with fixed-array struct field vs Solidity', ()
     r = await eqCall('getId K1 1', encodeCall(sel('getId(uint256,uint256)'), [K1, 1n]));
     expect(decodeUint(r.j.returnHex)).toBe(8n);
     r = await eqCall('getData K1 0 0', encodeCall(sel('getData(uint256,uint256,uint256)'), [K1, 0n, 0n]));
-    expect(decodeUint(r.j.returnHex)).toBe(0xAAn);
+    expect(decodeUint(r.j.returnHex)).toBe(0xaan);
     r = await eqCall('getData K1 0 1', encodeCall(sel('getData(uint256,uint256,uint256)'), [K1, 0n, 1n]));
-    expect(decodeUint(r.j.returnHex)).toBe(0xBBn);
+    expect(decodeUint(r.j.returnHex)).toBe(0xbbn);
     r = await eqCall('getData K1 1 1', encodeCall(sel('getData(uint256,uint256,uint256)'), [K1, 1n, 1n]));
-    expect(decodeUint(r.j.returnHex)).toBe(0xDDn);
+    expect(decodeUint(r.j.returnHex)).toBe(0xddn);
   });
 
   it('write this.m[k][i].id and this.m[k][i].data[j] (RMW) byte-identical', async () => {
@@ -177,8 +180,8 @@ describe('mapping<uint256, Rec[]> with fixed-array struct field vs Solidity', ()
     await eqSlot(d + 2n, 'recs[K1][0].data[1] preserved');
 
     // setData data[0] and data[1] on record 1
-    await eqCall('setData K1 1 0', encodeCall(sel('setData(uint256,uint256,uint256,uint256)'), [K1, 1n, 0n, 0xFEEDn]));
-    await eqCall('setData K1 1 1', encodeCall(sel('setData(uint256,uint256,uint256,uint256)'), [K1, 1n, 1n, 0xCAFEn]));
+    await eqCall('setData K1 1 0', encodeCall(sel('setData(uint256,uint256,uint256,uint256)'), [K1, 1n, 0n, 0xfeedn]));
+    await eqCall('setData K1 1 1', encodeCall(sel('setData(uint256,uint256,uint256,uint256)'), [K1, 1n, 1n, 0xcafen]));
     const base1 = d + 1n * SLOTS_PER_REC;
     await eqSlot(base1, 'recs[K1][1].id preserved after setData');
     await eqSlot(base1 + 1n, 'recs[K1][1].data[0] after setData');
@@ -188,9 +191,9 @@ describe('mapping<uint256, Rec[]> with fixed-array struct field vs Solidity', ()
     let r = await eqCall('getId K1 0', encodeCall(sel('getId(uint256,uint256)'), [K1, 0n]));
     expect(decodeUint(r.j.returnHex)).toBe(0x4242n);
     r = await eqCall('getData K1 1 0', encodeCall(sel('getData(uint256,uint256,uint256)'), [K1, 1n, 0n]));
-    expect(decodeUint(r.j.returnHex)).toBe(0xFEEDn);
+    expect(decodeUint(r.j.returnHex)).toBe(0xfeedn);
     r = await eqCall('getData K1 1 1', encodeCall(sel('getData(uint256,uint256,uint256)'), [K1, 1n, 1n]));
-    expect(decodeUint(r.j.returnHex)).toBe(0xCAFEn);
+    expect(decodeUint(r.j.returnHex)).toBe(0xcafen);
     // record 1 id preserved
     r = await eqCall('getId K1 1 preserved', encodeCall(sel('getId(uint256,uint256)'), [K1, 1n]));
     expect(decodeUint(r.j.returnHex)).toBe(8n);
@@ -204,10 +207,13 @@ describe('mapping<uint256, Rec[]> with fixed-array struct field vs Solidity', ()
     expect(r2.j.success).toBe(false);
     const r3 = await eqCall('setId K1 OOB i=5', encodeCall(sel('setId(uint256,uint256,uint64)'), [K1, 5n, 1n]));
     expect(r3.j.success).toBe(false);
-    const r4 = await eqCall('setData K1 OOB i=5', encodeCall(sel('setData(uint256,uint256,uint256,uint256)'), [K1, 5n, 0n, 1n]));
+    const r4 = await eqCall(
+      'setData K1 OOB i=5',
+      encodeCall(sel('setData(uint256,uint256,uint256,uint256)'), [K1, 5n, 0n, 1n]),
+    );
     expect(r4.j.success).toBe(false);
     // empty key: any index OOB
-    const r5 = await eqCall('getId emptyKey OOB', encodeCall(sel('getId(uint256,uint256)'), [0xDEADn, 0n]));
+    const r5 = await eqCall('getId emptyKey OOB', encodeCall(sel('getId(uint256,uint256)'), [0xdeadn, 0n]));
     expect(r5.j.success).toBe(false);
     // both should carry Panic(0x32): selector 0x4e487b71 + word 0x32
     const PANIC32 = '0x4e487b71' + pad32(0x32n);
@@ -219,7 +225,10 @@ describe('mapping<uint256, Rec[]> with fixed-array struct field vs Solidity', ()
     // data is uint256[2]; j=2 is OOB on the fixed-array field
     const r = await eqCall('getData K1 0 OOB j=2', encodeCall(sel('getData(uint256,uint256,uint256)'), [K1, 0n, 2n]));
     expect(r.j.success).toBe(false);
-    const r2 = await eqCall('setData K1 0 OOB j=7', encodeCall(sel('setData(uint256,uint256,uint256,uint256)'), [K1, 0n, 7n, 1n]));
+    const r2 = await eqCall(
+      'setData K1 0 OOB j=7',
+      encodeCall(sel('setData(uint256,uint256,uint256,uint256)'), [K1, 0n, 7n, 1n]),
+    );
     expect(r2.j.success).toBe(false);
     const PANIC32 = '0x4e487b71' + pad32(0x32n);
     expect(r.j.returnHex, 'jeth OOB j returndata is Panic(0x32)').toBe(PANIC32);

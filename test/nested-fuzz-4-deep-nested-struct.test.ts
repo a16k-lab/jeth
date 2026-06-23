@@ -82,8 +82,8 @@ describe('s4 deep nested struct vs Solidity', () => {
     // distinct sentinel values per field so a misrouted write is visible
     await both(encodeCall(sel('setP(uint128)'), [0x1111_2222_3333_4444n]));
     await both(encodeCall(sel('setQ(uint128)'), [0xaaaa_bbbb_cccc_ddddn]));
-    await both(encodeCall(sel('setM(uint64)'),  [0x0102_0304_0506_0708n]));
-    await both(encodeCall(sel('setX(uint64)'),  [0x1112_1314_1516_1718n]));
+    await both(encodeCall(sel('setM(uint64)'), [0x0102_0304_0506_0708n]));
+    await both(encodeCall(sel('setX(uint64)'), [0x1112_1314_1516_1718n]));
 
     // a.b.c lives at slot 3: p in low 16 bytes, q in high 16 bytes (packed)
     await eqSlot(3n, 'a.b.c slot (p|q packed) = slot 3');
@@ -99,7 +99,7 @@ describe('s4 deep nested struct vs Solidity', () => {
     // explicit packing check on the JETH side: slot3 = q<<128 | p
     const slot3 = decodeUint(await readSlot(jeth, aj, 3n));
     expect(slot3 & ((1n << 128n) - 1n)).toBe(0x1111_2222_3333_4444n); // p low
-    expect(slot3 >> 128n).toBe(0xaaaa_bbbb_cccc_ddddn);               // q high
+    expect(slot3 >> 128n).toBe(0xaaaa_bbbb_cccc_ddddn); // q high
   });
 
   it('getters return byte-identical returndata vs Solidity', async () => {

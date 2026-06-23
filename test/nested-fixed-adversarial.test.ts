@@ -72,22 +72,30 @@ contract NA {
 describe('nested fixed-array adversarial (structStorageLeaves) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = (s: string) => functionSelector(s);
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'NA.jeth' });
     const sb = compileSolidity(SOL, 'NA');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('packed Arr<Arr<u8,4>,3> whole return (distinct every lane)', async () => {
     let n = 1n;
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 4n; j++) await send(encodeCall(sel('setUp(uint256,uint256,uint8)'), [i, j, n++]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 4n; j++) await send(encodeCall(sel('setUp(uint256,uint256,uint8)'), [i, j, n++]));
     await eq('getUp', encodeCall(sel('getUp()'), []));
   });
   it('signed Arr<Arr<i64,2>,2> whole return (negatives, sign-extend)', async () => {
@@ -99,7 +107,10 @@ describe('nested fixed-array adversarial (structStorageLeaves) vs Solidity', () 
   });
   it('4D-ish Arr<Arr<Arr<u256,2>,2>,2> whole return', async () => {
     let n = 100n;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) for (let k = 0n; k < 2n; k++) await send(encodeCall(sel('setD4(uint256,uint256,uint256,uint256)'), [i, j, k, n++]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        for (let k = 0n; k < 2n; k++)
+          await send(encodeCall(sel('setD4(uint256,uint256,uint256,uint256)'), [i, j, k, n++]));
     await eq('getD4', encodeCall(sel('getD4()'), []));
   });
   it('struct W{tag; 2D grid} whole return + mapping value', async () => {
@@ -113,13 +124,24 @@ describe('nested fixed-array adversarial (structStorageLeaves) vs Solidity', () 
   });
   it('struct Pk{u64; packed 2D; u64} whole return (packed neighbours preserved)', async () => {
     let n = 1n;
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 4n; j++) await send(encodeCall(sel('setPk(uint64,uint64,uint256,uint256,uint8)'), [0xaaaan, 0xbbbbn, i, j, n++]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 4n; j++)
+        await send(encodeCall(sel('setPk(uint64,uint64,uint256,uint256,uint8)'), [0xaaaan, 0xbbbbn, i, j, n++]));
     await eq('getPk', encodeCall(sel('getPk()'), []));
   });
   it('W[] (struct array with nested fixed field) whole + element return', async () => {
     await send(encodeCall(sel('pushW()'), []));
     await send(encodeCall(sel('pushW()'), []));
-    for (const [idx, t, i, j, v] of [[0n,1n,0n,0n,10n],[0n,1n,0n,1n,11n],[0n,1n,1n,0n,12n],[0n,1n,1n,1n,13n],[1n,2n,0n,0n,20n],[1n,2n,0n,1n,21n],[1n,2n,1n,0n,22n],[1n,2n,1n,1n,23n]] as [bigint,bigint,bigint,bigint,bigint][])
+    for (const [idx, t, i, j, v] of [
+      [0n, 1n, 0n, 0n, 10n],
+      [0n, 1n, 0n, 1n, 11n],
+      [0n, 1n, 1n, 0n, 12n],
+      [0n, 1n, 1n, 1n, 13n],
+      [1n, 2n, 0n, 0n, 20n],
+      [1n, 2n, 0n, 1n, 21n],
+      [1n, 2n, 1n, 0n, 22n],
+      [1n, 2n, 1n, 1n, 23n],
+    ] as [bigint, bigint, bigint, bigint, bigint][])
       await send(encodeCall(sel('setWarr(uint256,uint256,uint256,uint256,uint256)'), [idx, t, i, j, v]));
     await eq('getWarr', encodeCall(sel('getWarr()'), []));
     await eq('getWarrI[1]', encodeCall(sel('getWarrI(uint256)'), [1n]));

@@ -179,21 +179,24 @@ describe('nested dynamic array T[][] vs Solidity', () => {
     expect(r.j.returnHex).toBe('0x');
 
     // outerLen=1, inner pointer points past calldata -> EMPTY on the m[i][j] read.
-    const badInnerOff = '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x1000n);
+    const badInnerOff =
+      '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x1000n);
     r = await eq('at bad inner offset', badInnerOff);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
 
     // outerLen=1, valid inner pointer (0x20) but innerLen implies elements past
     // calldatasize (declares innerLen=4 with no element words).
-    const badPayload = '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x20n) + pad(4n);
+    const badPayload =
+      '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x20n) + pad(4n);
     r = await eq('at inner payload past end', badPayload);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
 
     // inner offsets relative to the WRONG base (calldata byte 0): a too-large pointer
     // -> length word OOB -> EMPTY.
-    const wrongBase = '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x100n);
+    const wrongBase =
+      '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(0n) + pad(1n) + pad(0x100n);
     r = await eq('at wrong-base inner offset', wrongBase);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
@@ -204,9 +207,15 @@ describe('nested dynamic array T[][] vs Solidity', () => {
     // first). solc accepts overlapping/non-canonical pointers; both reads succeed.
     // region: [outerLen=2][offA][offB][innerLen=2][7][8]  with offA=offB=0x40.
     const region = pad(2n) + pad(0x40n) + pad(0x40n) + pad(2n) + pad(7n) + pad(8n);
-    let r = await eq('at overlap (1,0)->first', '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(1n) + pad(0n) + region);
+    let r = await eq(
+      'at overlap (1,0)->first',
+      '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(1n) + pad(0n) + region,
+    );
     expect(decodeUint(r.j.returnHex)).toBe(7n);
-    r = await eq('at overlap (0,1)->first', '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(1n) + region);
+    r = await eq(
+      'at overlap (0,1)->first',
+      '0x' + sel('at(uint256[][],uint256,uint256)') + pad(0x60n) + pad(0n) + pad(1n) + region,
+    );
     expect(decodeUint(r.j.returnHex)).toBe(8n);
     // echo of an overlapping/aliased value still matches solc byte-for-byte (solc
     // re-canonicalizes the layout on re-encode).

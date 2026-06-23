@@ -85,12 +85,12 @@ describe('packed-leaf-offsets-and-bytesN: ABI head is unpacked, one word per lea
   }
 
   // Canonical leaf values (left-aligned for bytesN; sign/zero correct).
-  const ADDR = BigInt('0x' + 'ab'.repeat(20));                 // 160-bit address
-  const B4 = BigInt('0xdeadbeef') << (256n - 32n);             // bytes4 left-aligned
-  const B32 = BigInt('0x' + 'ff'.repeat(16) + '00'.repeat(16));// arbitrary full word
+  const ADDR = BigInt('0x' + 'ab'.repeat(20)); // 160-bit address
+  const B4 = BigInt('0xdeadbeef') << (256n - 32n); // bytes4 left-aligned
+  const B32 = BigInt('0x' + 'ff'.repeat(16) + '00'.repeat(16)); // arbitrary full word
   // int16 = -5 -> sign-extended 256-bit; int128 = -123456789
-  const I16 = ((-5n) % M + M) % M;
-  const I128 = ((-123456789n) % M + M) % M;
+  const I16 = ((-5n % M) + M) % M;
+  const I128 = ((-123456789n % M) + M) % M;
   // canonical struct words, in head order a,b,c,d,e,f,g,h
   const OK = [1n, 0xa5n, I16, ADDR, B4, 0xdeadbeefcafebaben, B32, I128];
 
@@ -189,14 +189,14 @@ describe('packed-leaf-offsets-and-bytesN: ABI head is unpacked, one word per lea
     // succeed because only the accessed leaf is validated.
     // Read b (clean) while a,c,d,e,f,h are all dirty:
     const dirtyAll = [
-      2n,            // a dirty
-      0xa5n,         // b CLEAN (read target)
-      0x8000n,       // c dirty
-      (1n << 200n),  // d dirty
-      B4 | 1n,       // e dirty
-      1n << 64n,     // f dirty
-      B32,           // g (full word, never dirty)
-      1n << 127n,    // h dirty
+      2n, // a dirty
+      0xa5n, // b CLEAN (read target)
+      0x8000n, // c dirty
+      1n << 200n, // d dirty
+      B4 | 1n, // e dirty
+      1n << 64n, // f dirty
+      B32, // g (full word, never dirty)
+      1n << 127n, // h dirty
     ];
     const r = await eq('clean b amid dirty siblings', raw('mixB' + TUP, dirtyAll));
     expect(r.j.success).toBe(true);

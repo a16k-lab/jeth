@@ -13,8 +13,13 @@ import { CompileError } from '../src/diagnostics.js';
 
 const sel = (s: string) => functionSelector(s);
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 describe('internal/private function overloading (#47) vs solc', () => {
@@ -63,12 +68,14 @@ contract C {
   function rd(uint256 e) external view returns (uint256) { return readN() + readN(e); } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
   const cmp = async (data: string, label: string) => {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success`).toBe(s.success);
     expect(j.returnHex, label).toBe(s.returnHex);
   };
@@ -86,15 +93,26 @@ contract C {
     for (const x of [0n, 1n, 4n, 10n]) await cmp('0x' + sel('cd(uint256)') + pad32(x), `cd(${x})`);
   });
   it('a @view-inducing overload (readN reads state) keeps the purity fixpoint correct per key', async () => {
-    await jeth.call(aj, '0x' + sel('setN(uint256)') + pad32(50n)); await sol.call(as, '0x' + sel('setN(uint256)') + pad32(50n));
+    await jeth.call(aj, '0x' + sel('setN(uint256)') + pad32(50n));
+    await sol.call(as, '0x' + sel('setN(uint256)') + pad32(50n));
     await cmp('0x' + sel('rd(uint256)') + pad32(7n), 'rd');
   });
   it('rejects an ambiguous / no-matching-overload call (like solc)', () => {
     // a duplicate signature cannot overload (solc errors too)
-    expect(codes('@contract class C { g(a: u256): u256 { return a; } g(a: u256): u256 { return 2n; } @external @pure f(): u256 { return this.g(1n); } }')).toContain('JETH901');
+    expect(
+      codes(
+        '@contract class C { g(a: u256): u256 { return a; } g(a: u256): u256 { return 2n; } @external @pure f(): u256 { return this.g(1n); } }',
+      ),
+    ).toContain('JETH901');
     // no overload accepts 3 arguments
-    expect(codes('@contract class C { g(a: u256): u256 { return a; } g(a: u256, b: u256): u256 { return a + b; } @external @pure f(): u256 { return this.g(1n, 2n, 3n); } }')).toContain('JETH148');
+    expect(
+      codes(
+        '@contract class C { g(a: u256): u256 { return a; } g(a: u256, b: u256): u256 { return a + b; } @external @pure f(): u256 { return this.g(1n, 2n, 3n); } }',
+      ),
+    ).toContain('JETH148');
     // a single (non-overloaded) function is unaffected
-    expect(codes('@contract class C { g(a: u256): u256 { return a; } @external @pure f(): u256 { return this.g(5n); } }')).toEqual([]);
+    expect(
+      codes('@contract class C { g(a: u256): u256 { return a; } @external @pure f(): u256 { return this.g(5n); } }'),
+    ).toEqual([]);
   });
 });

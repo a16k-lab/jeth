@@ -1,37 +1,89 @@
 // Phase 4d: aggregate calldata params (struct + fixed-array), ABI head is unpacked
 // (one 32-byte word per leaf), decoded lazily on field/element read.
-@struct class Pt { x: u128; y: u128; }
-@struct class Acct { bal: u128; nonce: u64; active: bool; }
-@struct class Inner { a: u128; b: u128; }
-@struct class Outer { p: u64; inner: Inner; q: u64; }
-@struct class WithArr { id: u64; data: Arr<u256, 2>; }
+@struct
+class Pt {
+  x: u128;
+  y: u128;
+}
+@struct
+class Acct {
+  bal: u128;
+  nonce: u64;
+  active: bool;
+}
+@struct
+class Inner {
+  a: u128;
+  b: u128;
+}
+@struct
+class Outer {
+  p: u64;
+  inner: Inner;
+  q: u64;
+}
+@struct
+class WithArr {
+  id: u64;
+  data: Arr<u256, 2>;
+}
 
 @contract
 class AggParams {
   // fixed-array value param: constant + runtime index
-  @external @pure sumTriple(a: Arr<u256, 3>): u256 { return a[0n] + a[1n] + a[2n]; }
-  @external @pure pick(a: Arr<u8, 4>, i: u256): u8 { return a[i]; }
-  @external @pure pickAddr(a: Arr<address, 3>, i: u256): address { return a[i]; }
-  @external @pure lenOf(a: Arr<u256, 3>): u256 { return a.length; }
+  @external @pure sumTriple(a: Arr<u256, 3>): u256 {
+    return a[0n] + a[1n] + a[2n];
+  }
+  @external @pure pick(a: Arr<u8, 4>, i: u256): u8 {
+    return a[i];
+  }
+  @external @pure pickAddr(a: Arr<address, 3>, i: u256): address {
+    return a[i];
+  }
+  @external @pure lenOf(a: Arr<u256, 3>): u256 {
+    return a.length;
+  }
 
   // static struct param (packed leaves are still 1 word each in calldata)
-  @external @pure ptX(p: Pt): u128 { return p.x; }
-  @external @pure ptY(p: Pt): u128 { return p.y; }
-  @external @pure acctNonce(a: Acct): u64 { return a.nonce; }
-  @external @pure acctActive(a: Acct): bool { return a.active; }
+  @external @pure ptX(p: Pt): u128 {
+    return p.x;
+  }
+  @external @pure ptY(p: Pt): u128 {
+    return p.y;
+  }
+  @external @pure acctNonce(a: Acct): u64 {
+    return a.nonce;
+  }
+  @external @pure acctActive(a: Acct): bool {
+    return a.active;
+  }
 
   // nested struct param: flattened inline
-  @external @pure outerInnerB(o: Outer): u128 { return o.inner.b; }
-  @external @pure outerQ(o: Outer): u64 { return o.q; }
+  @external @pure outerInnerB(o: Outer): u128 {
+    return o.inner.b;
+  }
+  @external @pure outerQ(o: Outer): u64 {
+    return o.q;
+  }
 
   // struct-with-array-field param
-  @external @pure withId(t: WithArr): u64 { return t.id; }
-  @external @pure dataAt(t: WithArr, j: u256): u256 { return t.data[j]; }
+  @external @pure withId(t: WithArr): u64 {
+    return t.id;
+  }
+  @external @pure dataAt(t: WithArr, j: u256): u256 {
+    return t.data[j];
+  }
 
   // fixed-array-of-struct param
-  @external @pure ptsX(ps: Arr<Pt, 2>, i: u256): u128 { return ps[i].x; }
-  @external @pure ptsY(ps: Arr<Pt, 2>, i: u256): u128 { return ps[i].y; }
+  @external @pure ptsX(ps: Arr<Pt, 2>, i: u256): u128 {
+    return ps[i].x;
+  }
+  @external @pure ptsY(ps: Arr<Pt, 2>, i: u256): u128 {
+    return ps[i].y;
+  }
 
   // mixed: an aggregate consumes N head words, so the trailing value sits past it
-  @external @pure afterAgg(a: Arr<u256, 3>, x: u256): u256 { return a[2n] + x; }
+  @external @pure afterAgg(a: Arr<u256, 3>, x: u256): u256 {
+    return a[2n] + x;
+  }
 }

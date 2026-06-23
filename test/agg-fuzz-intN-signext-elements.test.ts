@@ -233,7 +233,10 @@ describe('intN sign-extension in array & struct params vs Solidity', () => {
     bad = await eq('triB dirty b', raw('triB((int8,int128,int256))', [1n, SIGNED.i128!.dirty, 0n]));
     expect(bad.j.success).toBe(false);
     expect(bad.j.returnHex).toBe('0x');
-    const ok2 = await eq('triA clean (dirty b unread)', raw('triA((int8,int128,int256))', [3n, SIGNED.i128!.dirty, 0n]));
+    const ok2 = await eq(
+      'triA clean (dirty b unread)',
+      raw('triA((int8,int128,int256))', [3n, SIGNED.i128!.dirty, 0n]),
+    );
     expect(ok2.j.success).toBe(true);
     expect(ok2.j.returnHex).toBe('0x' + pad(3n));
   });

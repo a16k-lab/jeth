@@ -64,23 +64,36 @@ describe('whole fixed-array storage copy vs Solidity', () => {
   // direct slots 0..18 + keccak data slots for the two string arrays (strg @ slot 13, strs @ 15 if layout matches; compare a broad set)
   const SLOTS: bigint[] = [];
   for (let i = 0n; i <= 18n; i++) SLOTS.push(i);
-  for (const base of [13n, 14n, 15n, 16n]) { SLOTS.push(kecSlot(base), kecSlot(base) + 1n, kecSlot(kecSlot(base)), kecSlot(kecSlot(base) + 1n)); }
+  for (const base of [13n, 14n, 15n, 16n]) {
+    SLOTS.push(kecSlot(base), kecSlot(base) + 1n, kecSlot(kecSlot(base)), kecSlot(kecSlot(base) + 1n));
+  }
   async function seedBoth(x: string) {
-    const data = '0x' + sel('seed(string)') + b32(0x20n).toString('hex') + b32(BigInt(Buffer.byteLength(x))).toString('hex') +
-      Buffer.from(x, 'utf8').toString('hex').padEnd(Math.ceil(x.length / 32) * 64, '0');
-    await jeth.call(aj, data); await sol.call(as, data);
+    const data =
+      '0x' +
+      sel('seed(string)') +
+      b32(0x20n).toString('hex') +
+      b32(BigInt(Buffer.byteLength(x))).toString('hex') +
+      Buffer.from(x, 'utf8')
+        .toString('hex')
+        .padEnd(Math.ceil(x.length / 32) * 64, '0');
+    await jeth.call(aj, data);
+    await sol.call(as, data);
   }
   async function run(label: string, data: string, x: string) {
     await seedBoth(x);
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
-    for (const slot of SLOTS) expect(await readSlot(jeth, aj, slot), `${label} slot ${slot.toString(16)}`).toBe(await readSlot(sol, as, slot));
+    for (const slot of SLOTS)
+      expect(await readSlot(jeth, aj, slot), `${label} slot ${slot.toString(16)}`).toBe(await readSlot(sol, as, slot));
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   for (const x of ['hi', 'a string longer than thirty-two bytes to exercise the keccak long-data slots']) {

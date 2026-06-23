@@ -28,7 +28,10 @@ function encStr(sig: string, s: string): string {
   const b = Buffer.from(s, 'utf8');
   const nwords = Math.ceil(b.length / 32);
   let data = '';
-  for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+  for (let i = 0; i < nwords; i++)
+    data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   return '0x' + sel(sig) + pad(0x20n) + pad(BigInt(b.length)) + data;
 }
 // Build calldata for (uint256 head, string) param: head=[i][0x40], tail=[len][data]
@@ -36,7 +39,10 @@ function encIStr(sig: string, i: bigint, s: string): string {
   const b = Buffer.from(s, 'utf8');
   const nwords = Math.ceil(b.length / 32);
   let data = '';
-  for (let w = 0; w < nwords; w++) data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+  for (let w = 0; w < nwords; w++)
+    data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   return '0x' + sel(sig) + pad(i) + pad(0x40n) + pad(BigInt(b.length)) + data;
 }
 
@@ -246,7 +252,20 @@ describe('_vf_dynarray probe', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   // send (state change) then implicitly compare success via eq on a follow-up read; but
   // also assert success parity here.
@@ -255,7 +274,20 @@ describe('_vf_dynarray probe', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + '(send): jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          '(send): jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
 
   beforeAll(async () => {
@@ -319,7 +351,8 @@ describe('_vf_dynarray probe', () => {
     for (const v of [1n, 2n]) await send('grow u to 5', encodeCall(sel('pushU(uint256)'), [v]));
     await send('memToStore2 (shrink 5->2)', encodeCall(sel('memToStore2(uint256,uint256)'), [0xa1n, 0xa2n]));
     await eq('allU after memToStore2 shrink', encodeCall(sel('allU()')));
-    for (const v of [0xb1n, 0xb2n, 0xb3n] as bigint[]) await send('regrow after mem shrink', encodeCall(sel('pushU(uint256)'), [v]));
+    for (const v of [0xb1n, 0xb2n, 0xb3n] as bigint[])
+      await send('regrow after mem shrink', encodeCall(sel('pushU(uint256)'), [v]));
     await eq('allU regrow after mem shrink (no stale)', encodeCall(sel('allU()')));
 
     // ---- 5. packed uint8[] (32/slot), partial-byte pop clearing --------
@@ -369,7 +402,8 @@ describe('_vf_dynarray probe', () => {
     await eq('getAdr OOB', encodeCall(sel('getAdr(uint256)'), [9n]));
 
     // ---- 9. bytes16[] (packed 2/slot) + dirty low bits --------
-    for (const v of [0n, MAX, 1n << 255n, 0xabcdn]) await send('pushB16', encodeCall(sel('pushB16(bytes16)'), [v << 128n]));
+    for (const v of [0n, MAX, 1n << 255n, 0xabcdn])
+      await send('pushB16', encodeCall(sel('pushB16(bytes16)'), [v << 128n]));
     // bytes16 ABI is left-aligned; pass already shifted. Also pass a "dirty" low-half value:
     await send('pushB16 dirty low', '0x' + sel('pushB16(bytes16)') + pad(MAX)); // low 16 bytes nonzero -> solc masks
     await eq('allB16 (dirty masked)', encodeCall(sel('allB16()')));
@@ -380,7 +414,12 @@ describe('_vf_dynarray probe', () => {
     await eq('allB16 after pop (boundary clear)', encodeCall(sel('allB16()')));
 
     // ---- 10. static-struct array P[] copy + element field read --------
-    for (const [x, y] of [[1n, 2n], [3n, 4n], [5n, 6n]] as [bigint, bigint][]) await send('pushPb', encodeCall(sel('pushPb(uint128,uint128)'), [x, y]));
+    for (const [x, y] of [
+      [1n, 2n],
+      [3n, 4n],
+      [5n, 6n],
+    ] as [bigint, bigint][])
+      await send('pushPb', encodeCall(sel('pushPb(uint128,uint128)'), [x, y]));
     await send('copyPa=Pb', encodeCall(sel('copyPaFromPb()')));
     await eq('allPa after copy', encodeCall(sel('allPa()')));
     await eq('getPaX[1]', encodeCall(sel('getPaX(uint256)'), [1n]));
@@ -393,7 +432,14 @@ describe('_vf_dynarray probe', () => {
     await send('pushOuter x3', encodeCall(sel('pushOuter()')));
     await send('pushOuter x3', encodeCall(sel('pushOuter()')));
     await send('pushOuter x3', encodeCall(sel('pushOuter()')));
-    for (const [i, v] of [[0n, 11n], [0n, 12n], [0n, 13n], [1n, 21n], [2n, 31n], [2n, 32n]] as [bigint, bigint][])
+    for (const [i, v] of [
+      [0n, 11n],
+      [0n, 12n],
+      [0n, 13n],
+      [1n, 21n],
+      [2n, 31n],
+      [2n, 32n],
+    ] as [bigint, bigint][])
       await send('pushInner', encodeCall(sel('pushInner(uint256,uint256)'), [i, v]));
     await eq('ddOuterLen=3', encodeCall(sel('ddOuterLen()')));
     await eq('ddInnerLen[0]=3', encodeCall(sel('ddInnerLen(uint256)'), [0n]));
@@ -482,8 +528,10 @@ describe('_vf_dynarray probe', () => {
     // extra trailing bytes beyond declared array (solc ignores tail)
     await eq('echoU [1,2] with trailing junk', encArr('echoU(uint256[])', [1n, 2n]) + pad(0xdeadn));
 
-    if (mism.length) { process.stderr.write('MISMATCHES ' + mism.length + '/' + count + '\n'); for (const m of mism.slice(0, 40)) process.stderr.write(m + '\n'); }
-    else process.stderr.write('ALL ' + count + ' byte-identical\n');
+    if (mism.length) {
+      process.stderr.write('MISMATCHES ' + mism.length + '/' + count + '\n');
+      for (const m of mism.slice(0, 40)) process.stderr.write(m + '\n');
+    } else process.stderr.write('ALL ' + count + ' byte-identical\n');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

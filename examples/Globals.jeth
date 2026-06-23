@@ -1,16 +1,40 @@
 // Environment globals: msg.*, block.*, tx.*, address(this).
 @contract
 class Globals {
-  @view sender(): address { return msg.sender; }
-  @view origin(): address { return tx.origin; }
-  @view self(): address { return address(this); }
-  @view coinbase(): address { return block.coinbase; }
-  @view ts(): u256 { return block.timestamp; }
-  @view num(): u256 { return block.number; }
-  @view cid(): u256 { return block.chainid; }
-  @view fee(): u256 { return block.basefee; }
-  @view glimit(): u256 { return block.gaslimit; }
-  @view rand(): u256 { return block.prevrandao; }
-  @view sig(): bytes4 { return msg.sig; }
-  @payable val(): u256 { return msg.value; }
+  @view sender(): address {
+    return msg.sender;
+  }
+  @view origin(): address {
+    return tx.origin;
+  }
+  @view self(): address {
+    return address(this);
+  }
+  @view coinbase(): address {
+    return block.coinbase;
+  }
+  @view ts(): u256 {
+    return block.timestamp;
+  }
+  @view num(): u256 {
+    return block.number;
+  }
+  @view cid(): u256 {
+    return block.chainid;
+  }
+  @view fee(): u256 {
+    return block.basefee;
+  }
+  @view glimit(): u256 {
+    return block.gaslimit;
+  }
+  @view rand(): u256 {
+    return block.prevrandao;
+  }
+  @view sig(): bytes4 {
+    return msg.sig;
+  }
+  @payable val(): u256 {
+    return msg.value;
+  }
 }

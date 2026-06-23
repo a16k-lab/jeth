@@ -7,10 +7,18 @@ class DynErrors {
   @error JustStr(msg: string);
 
   @external @pure check(x: u256, who: address, s: string): void {
-    if (x == 0n) { revert(Unauthorized(who, "not allowed here")); }
-    if (x == 1n) { revert(Mixed(42n, s, true)); }
-    if (x == 2n) { revert(TwoStr("first", "second longer string value goes here for padding test ok")); }
-    if (x == 3n) { revert(JustStr(s)); }
-    revert(JustStr(""));
+    if (x == 0n) {
+      revert(Unauthorized(who, 'not allowed here'));
+    }
+    if (x == 1n) {
+      revert(Mixed(42n, s, true));
+    }
+    if (x == 2n) {
+      revert(TwoStr('first', 'second longer string value goes here for padding test ok'));
+    }
+    if (x == 3n) {
+      revert(JustStr(s));
+    }
+    revert(JustStr(''));
   }
 }

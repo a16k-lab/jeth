@@ -15,10 +15,20 @@ const sel = (s: string) => functionSelector(s);
 const W = (n: bigint) => pad32(n);
 
 function jethAccepts(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return true; } catch { return false; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 function jethRejects(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return false; } catch { return true; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 // A shared target: echo doubles, boom reverts a string, pay returns the received value, big returns a
@@ -345,42 +355,100 @@ describe('external low-level calls: byte-identical vs solc', () => {
 
 describe('external low-level calls: accept / reject parity', () => {
   it('accepts the supported forms', () => {
-    expect(jethAccepts(`@contract class C { @external f(t: address, d: bytes): bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: d }); return r; } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.ok, revert: "x" } }); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @view f(t: address, d: bytes): bytes { return t.staticcall({ data: d, success: { condition: this.ok, revert: "x" } }); } }`)).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @external f(t: address, d: bytes): bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: d }); return r; } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        `@contract class C { @external @view f(t: address, d: bytes): bytes { return t.staticcall({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
     expect(jethAccepts(`@contract class C { @external @view f(t: address): bytes { return t.code; } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @view f(t: address): bytes32 { return t.codehash; } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external f(t: address, d: bytes): void { let [ok, r]: [bool, bytes] = t.tryCall({ data: d }); if (!ok) { revertWith(r); } } }`)).toBe(true);
+    expect(jethAccepts(`@contract class C { @external @view f(t: address): bytes32 { return t.codehash; } }`)).toBe(
+      true,
+    );
+    expect(
+      jethAccepts(
+        `@contract class C { @external f(t: address, d: bytes): void { let [ok, r]: [bool, bytes] = t.tryCall({ data: d }); if (!ok) { revertWith(r); } } }`,
+      ),
+    ).toBe(true);
   });
 
   it('rejects unsound / malformed forms (mirrors solc structural rules)', () => {
     // staticcall cannot send value
-    expect(jethRejects(`@contract class C { @external @view f(t: address, d: bytes): bytes { return t.staticcall({ data: d, value: 1n, success: { condition: this.ok, revert: "x" } }); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external @view f(t: address, d: bytes): bytes { return t.staticcall({ data: d, value: 1n, success: { condition: this.ok, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
     // call requires a mandatory success field
-    expect(jethRejects(`@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d }); } }`)).toBe(true);
+    expect(
+      jethRejects(`@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d }); } }`),
+    ).toBe(true);
     // tryCall takes no success field
-    expect(jethRejects(`@contract class C { @external f(t: address, d: bytes): bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: d, success: { condition: this.ok, revert: "x" } }); return r; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external f(t: address, d: bytes): bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: d, success: { condition: this.ok, revert: "x" } }); return r; } }`,
+      ),
+    ).toBe(true);
     // data is required
-    expect(jethRejects(`@contract class C { @external f(t: address): bytes { return t.call({ success: { condition: this.ok, revert: "x" } }); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external f(t: address): bytes { return t.call({ success: { condition: this.ok, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
     // unknown option
-    expect(jethRejects(`@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, bogus: 1n, success: { condition: this.ok, revert: "x" } }); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, bogus: 1n, success: { condition: this.ok, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
     // a state-mutating call cannot be @view
-    expect(jethRejects(`@contract class C { @external @view f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.ok, revert: "x" } }); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external @view f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
     // a state-mutating call cannot be @pure
-    expect(jethRejects(`@contract class C { @external @pure f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.ok, revert: "x" } }); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external @pure f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
     // a staticcall reads the environment -> not @pure
-    expect(jethRejects(`@contract class C { @external @pure f(t: address, d: bytes): bytes { return t.staticcall({ data: d, success: { condition: this.ok, revert: "x" } }); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external @pure f(t: address, d: bytes): bytes { return t.staticcall({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
     // tryCall in value position (must be destructured)
-    expect(jethRejects(`@contract class C { @external f(t: address, d: bytes): bool { let x: bool = t.tryCall({ data: d }); return x; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external f(t: address, d: bytes): bool { let x: bool = t.tryCall({ data: d }); return x; } }`,
+      ),
+    ).toBe(true);
     // this.ok / this.data leak outside a success condition
     expect(jethRejects(`@contract class C { @external f(): bool { return this.ok; } }`)).toBe(true);
     expect(jethRejects(`@contract class C { @external f(): bytes { return this.data; } }`)).toBe(true);
     // success condition must be bool
-    expect(jethRejects(`@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.data.length, revert: "x" } }); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.data.length, revert: "x" } }); } }`,
+      ),
+    ).toBe(true);
     // revertWith requires bytes
     expect(jethRejects(`@contract class C { @external f(): void { revertWith(5n); } }`)).toBe(true);
     // .code / .codehash read the environment -> not @pure
     expect(jethRejects(`@contract class C { @external @pure f(t: address): bytes { return t.code; } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @external @pure f(t: address): bytes32 { return t.codehash; } }`)).toBe(true);
+    expect(jethRejects(`@contract class C { @external @pure f(t: address): bytes32 { return t.codehash; } }`)).toBe(
+      true,
+    );
   });
 });

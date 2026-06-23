@@ -26,11 +26,7 @@ export interface LayoutResult {
 function occupiesWholeSlot(t: JethType): boolean {
   // Structs and fixed arrays occupy whole (possibly multiple) slots and never pack
   // alongside other vars; reference / dynamic types and full-word value types too.
-  return (
-    t.kind === 'struct' ||
-    (t.kind === 'array' && t.length !== undefined) ||
-    storageByteSize(t) === 32
-  );
+  return t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined) || storageByteSize(t) === 32;
 }
 
 export function planLayout(raw: RawStateVar[]): LayoutResult {

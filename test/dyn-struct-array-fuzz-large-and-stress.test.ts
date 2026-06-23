@@ -74,7 +74,10 @@ describe('Phase 4e-1 large-and-stress: dyn array of static struct vs Solidity', 
   // Build a deterministic Pt[] flat word list of `n` structs: x=10*k+1, y=10*k+2.
   const ptsFlat = (n: number): bigint[] => {
     const out: bigint[] = [];
-    for (let k = 0; k < n; k++) { out.push(BigInt(10 * k + 1)); out.push(BigInt(10 * k + 2)); }
+    for (let k = 0; k < n; k++) {
+      out.push(BigInt(10 * k + 1));
+      out.push(BigInt(10 * k + 2));
+    }
     return out;
   };
 
@@ -102,8 +105,7 @@ describe('Phase 4e-1 large-and-stress: dyn array of static struct vs Solidity', 
   it('getter at last index (length-1) ok; OOB at exactly length Panics(0x32)', async () => {
     const PTX = 'ptX((uint128,uint128)[],uint256)';
     const PTY = 'ptY((uint128,uint128)[],uint256)';
-    const PANIC32 =
-      '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
+    const PANIC32 = '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
     for (const n of [1, 2, 17, 64]) {
       const flat = ptsFlat(n);
       const last = BigInt(n - 1);
@@ -140,8 +142,7 @@ describe('Phase 4e-1 large-and-stress: dyn array of static struct vs Solidity', 
     let r = await eq('sV i=len-1', arr2(SV, flat, 3, 2n));
     expect(decodeUint(r.j.returnHex)).toBe(333n);
     // OOB at exactly length -> Panic(0x32).
-    const PANIC32 =
-      '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
+    const PANIC32 = '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
     r = await eq('sV i==len OOB', arr2(SV, flat, 3, 3n));
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe(PANIC32);

@@ -269,7 +269,12 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
     await eq('fbLen[0]', len(0n));
     await eq('fbLen[1]', len(1n));
     // i OOB (N=2): solc reverts (no length to bound). Panic 0x32 or empty?
-    for (const [nm, v] of [['2', 2n], ['2^64', 1n << 64n], ['2^255', 1n << 255n], ['max', M - 1n]] as const) {
+    for (const [nm, v] of [
+      ['2', 2n],
+      ['2^64', 1n << 64n],
+      ['2^255', 1n << 255n],
+      ['max', M - 1n],
+    ] as const) {
       await eq(`fbAt i OOB ${nm}`, at(v));
       await eq(`fbLen i OOB ${nm}`, len(v));
     }
@@ -543,7 +548,10 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
       const off1 = BigInt(64 + inner0.length / 2);
       return pad(2n) + pad(64n) + pad(off1) + inner0 + e1;
     };
-    await eq('m2 inner1 len=2^64-1 read[1][0]', '0x' + slf + pad(0x60n) + pad(1n) + pad(0n) + buildLen((1n << 64n) - 1n));
+    await eq(
+      'm2 inner1 len=2^64-1 read[1][0]',
+      '0x' + slf + pad(0x60n) + pad(1n) + pad(0n) + buildLen((1n << 64n) - 1n),
+    );
     await eq('m2 inner1 len=2^256-1 read[1][0]', '0x' + slf + pad(0x60n) + pad(1n) + pad(0n) + buildLen(M - 1n));
   });
 
@@ -551,11 +559,7 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
   it('m3 element + echo (3-level nested)', async () => {
     const slf = sel('m3At(uint256[][][],uint256,uint256,uint256)');
     const sle = sel('m3Echo(uint256[][][])');
-    const cube = [
-      [[1n, 2n], [3n]],
-      [[]],
-      [[7n], [8n, 9n, 10n]],
-    ];
+    const cube = [[[1n, 2n], [3n]], [[]], [[7n], [8n, 9n, 10n]]];
     const region = nested3Region(cube);
     await eq('m3Echo', '0x' + sle + pad(0x20n) + region);
     for (let i = 0; i < cube.length; i++) {
@@ -563,7 +567,10 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
       for (let j = 0; j < plane.length; j++) {
         const row = plane[j]!;
         for (let k = 0; k < row.length; k++)
-          await eq(`m3At[${i}][${j}][${k}]`, '0x' + slf + pad(0x80n) + pad(BigInt(i)) + pad(BigInt(j)) + pad(BigInt(k)) + region);
+          await eq(
+            `m3At[${i}][${j}][${k}]`,
+            '0x' + slf + pad(0x80n) + pad(BigInt(i)) + pad(BigInt(j)) + pad(BigInt(k)) + region,
+          );
       }
     }
     // OOB at each level
@@ -596,10 +603,7 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
   it('fsaAt fixed array of string[]', async () => {
     const slf = sel('fsaAt(string[][2],uint256,uint256)');
     const sll = sel('fsaLen(string[][2],uint256)');
-    const region = fixedStringArrRegion([
-      [sb('a'), sb('bb')],
-      [sb('ccc')],
-    ]);
+    const region = fixedStringArrRegion([[sb('a'), sb('bb')], [sb('ccc')]]);
     const at = (i: bigint, j: bigint) => '0x' + slf + pad(0x40n) + pad(i) + pad(j) + region;
     const len = (i: bigint) => '0x' + sll + pad(0x40n) + pad(i) + region;
     await eq('fsaLen[0]', len(0n));
@@ -634,7 +638,10 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
     await eq('dsS[3] OOB', '0x' + slS + pad(0x40n) + pad(3n) + region);
     await eq('dsS[2^255] OOB', '0x' + slS + pad(0x40n) + pad(1n << 255n) + region);
     // dirty a-field (high bits in uint64) -> validate revert
-    const dirtyA = pad(2n) + pad(0x40n) + pad(0x80n) +
+    const dirtyA =
+      pad(2n) +
+      pad(0x40n) +
+      pad(0x80n) +
       (pad(M - 1n) + pad(0x40n) + elemBody(sb('q'))) +
       (pad(5n) + pad(0x40n) + elemBody(sb('w')));
     await eq('dsA[0] dirty high bits', '0x' + slA + pad(0x40n) + pad(0n) + dirtyA);
@@ -722,8 +729,7 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
   it('WithDyn (dynamic-array field) echo', async () => {
     const sle = sel('wdEcho(WithDyn)');
     // WithDyn dynamic: outer offset 0x20; tuple = [a][offset-to-xs=0x60][b][xs body].
-    const tuple = (a: bigint, xs: bigint[], b: bigint) =>
-      pad(a) + pad(0x60n) + pad(b) + dynValRegion(xs);
+    const tuple = (a: bigint, xs: bigint[], b: bigint) => pad(a) + pad(0x60n) + pad(b) + dynValRegion(xs);
     await eq('wdEcho 3 elems', '0x' + sle + pad(0x20n) + tuple(1n, [10n, 20n, 30n], 2n));
     await eq('wdEcho empty xs', '0x' + sle + pad(0x20n) + tuple(5n, [], 6n));
     await eq('wdEcho big xs', '0x' + sle + pad(0x20n) + tuple(7n, [M - 1n, 0n, 1n, 2n], 8n));
@@ -826,7 +832,12 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
     await eq('dsLen len=2^256-1', '0x' + slL + pad(0x20n) + body(M - 1n));
     await eq('dsS len=2 (table truncated) read[1]', '0x' + slS + pad(0x40n) + pad(1n) + body(2n));
     // outer offset corruption
-    for (const [nm, off] of [['2^64', 1n << 64n], ['2^256-1', M - 1n], ['0', 0n], ['midword', 0x21n]] as const)
+    for (const [nm, off] of [
+      ['2^64', 1n << 64n],
+      ['2^256-1', M - 1n],
+      ['0', 0n],
+      ['midword', 0x21n],
+    ] as const)
       await eq(`dsLen outer off ${nm}`, '0x' + slL + pad(off) + body(1n));
   });
 
@@ -909,7 +920,13 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
     const inner0 = dynValRegion([1n, 2n]);
     const off1Base = BigInt(64 + inner0.length / 2);
     const m2body = (off1: bigint) => pad(2n) + pad(64n) + pad(off1) + inner0 + dynValRegion([3n]);
-    for (const [nm, off1] of [['valid', off1Base], ['2^64', 1n << 64n], ['2^255', 1n << 255n], ['2^256-1', M - 1n], ['0', 0n]] as const)
+    for (const [nm, off1] of [
+      ['valid', off1Base],
+      ['2^64', 1n << 64n],
+      ['2^255', 1n << 255n],
+      ['2^256-1', M - 1n],
+      ['0', 0n],
+    ] as const)
       await eq(`m2Echo off1=${nm}`, '0x' + e2 + pad(0x20n) + m2body(off1));
     // m2 with huge inner length (Panic 0x41 alloc region)
     const m2len = (len: bigint) => pad(1n) + pad(0x20n) + pad(len);
@@ -926,7 +943,10 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
     await eq('baEcho elem off=2^64', '0x' + eb + pad(0x20n) + (pad(1n) + pad(1n << 64n)));
     // m3Echo malformed
     await eq('m3Echo outer off 2^64', '0x' + e3 + pad(1n << 64n));
-    await eq('m3Echo inner len 2^256-1', '0x' + e3 + pad(0x20n) + (pad(1n) + pad(0x20n) + pad(1n) + pad(0x20n) + pad(M - 1n)));
+    await eq(
+      'm3Echo inner len 2^256-1',
+      '0x' + e3 + pad(0x20n) + (pad(1n) + pad(0x20n) + pad(1n) + pad(0x20n) + pad(M - 1n)),
+    );
   });
 
   it('fbEcho / fsEcho whole-fixed-bytes echo with malformed element offsets/lengths', async () => {
@@ -988,7 +1008,10 @@ describe('_audit_calldata-decode: adversarial calldata decode parity', () => {
     // declaredLen 33, payload 33 (2 words) -> ok
     await eq('baAt len=33 payload=33', mk(33n, 33));
     // declaredLen 33, payload only 32 bytes present (1 word) -> past end revert
-    await eq('baAt len=33 payload=32 (short)', '0x' + slf + pad(0x40n) + pad(0n) + pad(1n) + pad(0x20n) + pad(33n) + 'aa'.repeat(32));
+    await eq(
+      'baAt len=33 payload=32 (short)',
+      '0x' + slf + pad(0x40n) + pad(0n) + pad(1n) + pad(0x20n) + pad(33n) + 'aa'.repeat(32),
+    );
     // declaredLen 0 payload 0 -> empty ok
     await eq('baAt len=0', '0x' + slf + pad(0x40n) + pad(0n) + pad(1n) + pad(0x20n) + pad(0n));
     // declaredLen 1 with 1 word payload -> ok

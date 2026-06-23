@@ -281,21 +281,41 @@ contract C {
 
 describe('probe', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const mism: string[] = []; let count = 0;
+  const mism: string[] = [];
+  let count = 0;
   async function eq(label: string, data: string) {
     count++;
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   // For stateful tests: drive both, then compare a view.
-  async function drive(data: string) { await jeth.call(aj, data); await sol.call(as, data); }
+  async function drive(data: string) {
+    await jeth.call(aj, data);
+    await sol.call(as, data);
+  }
 
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('runs', async () => {
@@ -308,34 +328,87 @@ describe('probe', () => {
     await eq('chain4 ovf', encodeCall(sel('chain4(uint256)'), [(M - 1n) / 8n + 1n]));
 
     // recursion: fib, fact (incl overflow), ack
-    for (const n of [0n, 1n, 2n, 5n, 10n, 15n, 18n, 20n, 24n]) await eq('fibE(' + n + ')', encodeCall(sel('fibE(uint256)'), [n]));
-    for (const n of [0n, 1n, 5n, 10n, 20n, 50n, 57n, 58n, 59n]) await eq('factE(' + n + ')', encodeCall(sel('factE(uint256)'), [n]));
+    for (const n of [0n, 1n, 2n, 5n, 10n, 15n, 18n, 20n, 24n])
+      await eq('fibE(' + n + ')', encodeCall(sel('fibE(uint256)'), [n]));
+    for (const n of [0n, 1n, 5n, 10n, 20n, 50n, 57n, 58n, 59n])
+      await eq('factE(' + n + ')', encodeCall(sel('factE(uint256)'), [n]));
     // factU(n: u8): for n>=58 the u256 product overflows -> checked revert in callee
     for (let n = 0n; n <= 60n; n++) await eq('factUE(' + n + ')', encodeCall(sel('factUE(uint8)'), [n]));
     // dirty high bits on the u8 param
     await eq('factUE dirty', encodeCall(sel('factUE(uint8)'), [(0xffn << 8n) | 5n]));
-    for (const [m, n] of [[0n, 0n], [0n, 5n], [1n, 0n], [1n, 3n], [2n, 0n], [2n, 2n], [2n, 3n], [3n, 1n], [3n, 2n], [3n, 3n]] as [bigint, bigint][])
+    for (const [m, n] of [
+      [0n, 0n],
+      [0n, 5n],
+      [1n, 0n],
+      [1n, 3n],
+      [2n, 0n],
+      [2n, 2n],
+      [2n, 3n],
+      [3n, 1n],
+      [3n, 2n],
+      [3n, 3n],
+    ] as [bigint, bigint][])
       await eq('ackE(' + m + ',' + n + ')', encodeCall(sel('ackE(uint256,uint256)'), [m, n]));
 
     // mutual recursion
-    for (const n of [0n, 1n, 2n, 3n, 10n, 11n, 50n]) await eq('evenE(' + n + ')', encodeCall(sel('evenE(uint256)'), [n]));
-    for (const n of [0n, 1n, 2n, 3n, 4n, 5n, 6n, 20n]) await eq('pingE(' + n + ')', encodeCall(sel('pingE(uint256)'), [n]));
+    for (const n of [0n, 1n, 2n, 3n, 10n, 11n, 50n])
+      await eq('evenE(' + n + ')', encodeCall(sel('evenE(uint256)'), [n]));
+    for (const n of [0n, 1n, 2n, 3n, 4n, 5n, 6n, 20n])
+      await eq('pingE(' + n + ')', encodeCall(sel('pingE(uint256)'), [n]));
 
     // many params
-    const five: bigint[][] = [[1n, 2n, 3n, 4n, 5n], [0n, 0n, 0n, 0n, 0n], [M - 1n, 0n, 0n, 0n, 0n], [100n, 200n, 300n, 400n, 500n]];
-    for (const p of five) await eq('s5E(' + p.join(',') + ')', encodeCall(sel('s5E(uint256,uint256,uint256,uint256,uint256)'), p));
+    const five: bigint[][] = [
+      [1n, 2n, 3n, 4n, 5n],
+      [0n, 0n, 0n, 0n, 0n],
+      [M - 1n, 0n, 0n, 0n, 0n],
+      [100n, 200n, 300n, 400n, 500n],
+    ];
+    for (const p of five)
+      await eq('s5E(' + p.join(',') + ')', encodeCall(sel('s5E(uint256,uint256,uint256,uint256,uint256)'), p));
     // s5 with values that overflow at e*5
     await eq('s5E ovf', encodeCall(sel('s5E(uint256,uint256,uint256,uint256,uint256)'), [0n, 0n, 0n, 0n, M - 1n]));
     const eight: bigint[] = [1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n];
     await eq('s8E', encodeCall(sel('s8E(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)'), eight));
-    await eq('s8E ovf', encodeCall(sel('s8E(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)'), [M - 1n, 1n, 1n, 0n, 0n, 0n, 0n, 0n]));
-    for (const p of [[1n, 2n, 3n, 4n, 5n, 6n], [9n, 8n, 7n, 6n, 5n, 4n], [M - 1n, 1n, 1n, 1n, 1n, 1n]] as bigint[][])
-      await eq('mix6E(' + p.join(',') + ')', encodeCall(sel('mix6E(uint256,uint256,uint256,uint256,uint256,uint256)'), p));
+    await eq(
+      's8E ovf',
+      encodeCall(sel('s8E(uint256,uint256,uint256,uint256,uint256,uint256,uint256,uint256)'), [
+        M - 1n,
+        1n,
+        1n,
+        0n,
+        0n,
+        0n,
+        0n,
+        0n,
+      ]),
+    );
+    for (const p of [
+      [1n, 2n, 3n, 4n, 5n, 6n],
+      [9n, 8n, 7n, 6n, 5n, 4n],
+      [M - 1n, 1n, 1n, 1n, 1n, 1n],
+    ] as bigint[][])
+      await eq(
+        'mix6E(' + p.join(',') + ')',
+        encodeCall(sel('mix6E(uint256,uint256,uint256,uint256,uint256,uint256)'), p),
+      );
 
     // args that are internal calls
-    for (const [a, b, c] of [[1n, 2n, 3n], [10n, 20n, 30n], [0n, 0n, 0n], [M - 1n, 1n, 0n]] as [bigint, bigint, bigint][])
-      await eq('nestArgs(' + a + ',' + b + ',' + c + ')', encodeCall(sel('nestArgs(uint256,uint256,uint256)'), [a, b, c]));
-    for (const [a, b] of [[1n, 2n], [100n, 50n], [M >> 3n, 0n], [M - 1n, 0n]] as [bigint, bigint][])
+    for (const [a, b, c] of [
+      [1n, 2n, 3n],
+      [10n, 20n, 30n],
+      [0n, 0n, 0n],
+      [M - 1n, 1n, 0n],
+    ] as [bigint, bigint, bigint][])
+      await eq(
+        'nestArgs(' + a + ',' + b + ',' + c + ')',
+        encodeCall(sel('nestArgs(uint256,uint256,uint256)'), [a, b, c]),
+      );
+    for (const [a, b] of [
+      [1n, 2n],
+      [100n, 50n],
+      [M >> 3n, 0n],
+      [M - 1n, 0n],
+    ] as [bigint, bigint][])
       await eq('manySites(' + a + ',' + b + ')', encodeCall(sel('manySites(uint256,uint256)'), [a, b]));
 
     // call in loop / cond / ternary / for
@@ -343,42 +416,65 @@ describe('probe', () => {
       await eq('loopSum(' + n + ')', encodeCall(sel('loopSum(uint256)'), [n]));
       await eq('forCall(' + n + ')', encodeCall(sel('forCall(uint256)'), [n]));
     }
-    for (const f of [0n, 1n]) for (const x of [3n, 100n, M - 1n]) {
-      await eq('condCall(' + f + ',' + x + ')', encodeCall(sel('condCall(bool,uint256)'), [f, x]));
-      await eq('ternCall(' + f + ',' + x + ')', encodeCall(sel('ternCall(bool,uint256)'), [f, x]));
-    }
+    for (const f of [0n, 1n])
+      for (const x of [3n, 100n, M - 1n]) {
+        await eq('condCall(' + f + ',' + x + ')', encodeCall(sel('condCall(bool,uint256)'), [f, x]));
+        await eq('ternCall(' + f + ',' + x + ')', encodeCall(sel('ternCall(bool,uint256)'), [f, x]));
+      }
     // dirty bool high bits (nonzero -> true)
     await eq('condCall dirty', encodeCall(sel('condCall(bool,uint256)'), [0xffn, 5n]));
     await eq('ternCall dirty', encodeCall(sel('ternCall(bool,uint256)'), [256n, 5n]));
 
     // overflow via call result in arithmetic
-    for (const [a, b] of [[M - 1n, 1n], [M - 2n, 1n], [M - 1n, 0n], [M >> 1n, M >> 1n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [M - 1n, 1n],
+      [M - 2n, 1n],
+      [M - 1n, 0n],
+      [M >> 1n, M >> 1n],
+    ] as [bigint, bigint][]) {
       await eq('ovf(' + a + ',' + b + ')', encodeCall(sel('ovf(uint256,uint256)'), [a, b]));
       await eq('ovfMul(' + a + ',' + b + ')', encodeCall(sel('ovfMul(uint256,uint256)'), [a, b]));
       await eq('addStrictE(' + a + ',' + b + ')', encodeCall(sel('addStrictE(uint256,uint256)'), [a, b]));
     }
 
     // signed/narrow params + returns, INT_MIN / type-max boundaries
-    const i64min = -(1n << 63n), i64max = (1n << 63n) - 1n;
+    const i64min = -(1n << 63n),
+      i64max = (1n << 63n) - 1n;
     for (const x of [0n, 1n, -1n, 100n, -100n, i64max, i64min, i64min + 1n]) {
       const xv = ((x % M) + M) % M;
       await eq('negateE(' + x + ')', encodeCall(sel('negateE(int64)'), [xv]));
     }
-    const i8min = -128n, i8max = 127n;
+    const i8min = -128n,
+      i8max = 127n;
     for (const x of [0n, 1n, -1n, 5n, -5n, i8max, i8min, i8min + 1n]) {
       const xv = ((x % M) + M) % M;
       await eq('absI8E(' + x + ')', encodeCall(sel('absI8E(int8)'), [xv]));
     }
-    for (const [a, b] of [[1n, 2n], [127n, 1n], [-128n, -1n], [100n, 100n], [-100n, -100n], [127n, 127n]] as [bigint, bigint][]) {
-      const av = ((a % M) + M) % M, bv = ((b % M) + M) % M;
+    for (const [a, b] of [
+      [1n, 2n],
+      [127n, 1n],
+      [-128n, -1n],
+      [100n, 100n],
+      [-100n, -100n],
+      [127n, 127n],
+    ] as [bigint, bigint][]) {
+      const av = ((a % M) + M) % M,
+        bv = ((b % M) + M) % M;
       await eq('sumI8E(' + a + ',' + b + ')', encodeCall(sel('sumI8E(int8,int8)'), [av, bv]));
     }
-    for (const [a, b] of [[1n, 2n], [255n, 1n], [200n, 100n], [255n, 255n], [128n, 128n]] as [bigint, bigint][])
+    for (const [a, b] of [
+      [1n, 2n],
+      [255n, 1n],
+      [200n, 100n],
+      [255n, 255n],
+      [128n, 128n],
+    ] as [bigint, bigint][])
       await eq('addU8E(' + a + ',' + b + ')', encodeCall(sel('addU8E(uint8,uint8)'), [a, b]));
     // dirty high bits on narrow signed param (sign-extension correctness)
     await eq('sumI8E dirty', encodeCall(sel('sumI8E(int8,int8)'), [(0xffffn << 8n) | 0x7fn, 1n])); // payload 0x7f=127
     await eq('absI8E dirty', encodeCall(sel('absI8E(int8)'), [(0xffn << 8n) | 0x80n])); // payload 0x80=-128
-    const i256min = -(1n << 255n), i256max = (1n << 255n) - 1n;
+    const i256min = -(1n << 255n),
+      i256max = (1n << 255n) - 1n;
     for (const x of [0n, 1n, -1n, i256max, i256min, i256min + 1n]) {
       const xv = ((x % M) + M) % M;
       await eq('clampE(' + x + ')', encodeCall(sel('clampE(int256)'), [xv]));
@@ -387,10 +483,16 @@ describe('probe', () => {
       const xv = ((x % M) + M) % M;
       await eq('widenE(' + x + ')', encodeCall(sel('widenE(int8)'), [xv]));
     }
-    for (const x of [0n, 1n, 255n, 256n, 257n, M - 1n, 0x1ffn]) await eq('narrowE(' + x + ')', encodeCall(sel('narrowE(uint256)'), [x]));
+    for (const x of [0n, 1n, 255n, 256n, 257n, M - 1n, 0x1ffn])
+      await eq('narrowE(' + x + ')', encodeCall(sel('narrowE(uint256)'), [x]));
 
     // bool return used in control flow
-    for (const [a, b] of [[5n, 3n], [3n, 5n], [0n, 0n], [M - 1n, 0n]] as [bigint, bigint][])
+    for (const [a, b] of [
+      [5n, 3n],
+      [3n, 5n],
+      [0n, 0n],
+      [M - 1n, 0n],
+    ] as [bigint, bigint][])
       await eq('pick(' + a + ',' + b + ')', encodeCall(sel('pick(uint256,uint256)'), [a, b]));
 
     // deep compose of inc
@@ -398,7 +500,13 @@ describe('probe', () => {
 
     // callee reverting via require / checked sub underflow
     for (const x of [0n, 1n, 100n]) await eq('mustPosE(' + x + ')', encodeCall(sel('mustPosE(uint256)'), [x]));
-    for (const [a, b] of [[5n, 3n], [3n, 5n], [0n, 1n], [1n, 0n], [M - 1n, M - 1n]] as [bigint, bigint][])
+    for (const [a, b] of [
+      [5n, 3n],
+      [3n, 5n],
+      [0n, 1n],
+      [1n, 0n],
+      [M - 1n, M - 1n],
+    ] as [bigint, bigint][])
       await eq('subcE(' + a + ',' + b + ')', encodeCall(sel('subcE(uint256,uint256)'), [a, b]));
 
     // ---- void / state propagation (drive both, compare a view) -----------
@@ -414,8 +522,10 @@ describe('probe', () => {
     await drive(encodeCall(sel('doTrans(uint256)'), [11n]));
     await eq('getCnt after trans', encodeCall(sel('getCnt()'), []));
 
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

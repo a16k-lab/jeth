@@ -15,7 +15,10 @@ function strArg(sel: string, headStatic: bigint[], s: string): string {
   const b = Buffer.from(s, 'utf8');
   const nwords = Math.ceil(b.length / 32);
   let data = '';
-  for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+  for (let i = 0; i < nwords; i++)
+    data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   let h = '0x' + functionSelector(sel);
   for (const w of headStatic) h += pad(w);
   h += pad(BigInt((headStatic.length + 1) * 32)) + pad(BigInt(b.length)) + data;
@@ -64,7 +67,10 @@ const LONG = 'a value string definitely longer than thirty-two bytes for the lon
 describe('returning a whole mapping value vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = (s: string) => functionSelector(s);
-  async function send(data: string) { await jeth.call(aj, data); await sol.call(as, data); }
+  async function send(data: string) {
+    await jeth.call(aj, data);
+    await sol.call(as, data);
+  }
   async function eqGet(label: string, selSig: string) {
     const data = encodeCall(sel(selSig), [K]);
     const j = await jeth.call(aj, data);

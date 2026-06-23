@@ -49,13 +49,15 @@ function encArrRegion(items: Uint8Array[]): string {
   const payloads = items.map(dynElem);
   let off = L * 32;
   let table = '';
-  for (const p of payloads) { table += pad(BigInt(off)); off += p.length / 2; }
+  for (const p of payloads) {
+    table += pad(BigInt(off));
+    off += p.length / 2;
+  }
   return pad(BigInt(L)) + table + payloads.join('');
 }
 const encU256Arr = (xs: bigint[]) => pad(BigInt(xs.length)) + xs.map(pad).join('');
 // build calldata: selector + flat inline words, then optional raw-hex tail
-const call = (sig: string, words: bigint[] = [], extra = '') =>
-  '0x' + sel(sig) + words.map(pad).join('') + extra;
+const call = (sig: string, words: bigint[] = [], extra = '') => '0x' + sel(sig) + words.map(pad).join('') + extra;
 
 const JETH = `
 @struct class P { a: u256; b: u8; c: address; }
@@ -261,14 +263,27 @@ describe('AUDIT return-encode vs Solidity', () => {
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
       mism.push(
-        label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError +
-          '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}',
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
       );
   }
   async function send(data: string) {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
-    if (j.success !== s.success) mism.push('SEND ' + data.slice(0, 12) + ': jeth ok=' + j.success + ' err=' + j.exceptionError + ' sol ok=' + s.success);
+    if (j.success !== s.success)
+      mism.push(
+        'SEND ' + data.slice(0, 12) + ': jeth ok=' + j.success + ' err=' + j.exceptionError + ' sol ok=' + s.success,
+      );
   }
 
   beforeAll(async () => {
@@ -286,7 +301,8 @@ describe('AUDIT return-encode vs Solidity', () => {
     const u8c = [1n, 2n, 3n, 4n];
     await eq('echoU8Fix clean', call('echoU8Fix(uint8[4])', u8c));
     for (let i = 0; i < 4; i++) {
-      const d = [...u8c]; d[i] = (DIRTY << 8n) | 0x42n;
+      const d = [...u8c];
+      d[i] = (DIRTY << 8n) | 0x42n;
       await eq('echoU8Fix dirty[' + i + ']', call('echoU8Fix(uint8[4])', d));
     }
     await eq('echoU8Fix all-max', call('echoU8Fix(uint8[4])', [MAX, MAX, MAX, MAX]));
@@ -296,50 +312,101 @@ describe('AUDIT return-encode vs Solidity', () => {
       await eq('echoU8Dyn clean[' + xs.length + ']', '0x' + sel('echoU8Dyn(uint8[])') + buildDynArr(xs));
     }
     for (const dv of [DIRTY, (1n << 8n) | 0x42n, MAX, TOP, U64 | 0x99n]) {
-      await eq('echoU8Dyn dirty(' + dv.toString(16) + ')', call('echoU8Dyn(uint8[])', [], buildDynArr([dv, 0x11n, dv])));
+      await eq(
+        'echoU8Dyn dirty(' + dv.toString(16) + ')',
+        call('echoU8Dyn(uint8[])', [], buildDynArr([dv, 0x11n, dv])),
+      );
     }
     // bool[] : non-canonical bool values => solc CLEANS via iszero(iszero)
     for (const dv of [2n, 0xffn, DIRTY, TOP, MAX]) {
       await eq('echoBoolDyn(' + dv.toString(16) + ')', call('echoBoolDyn(bool[])', [], buildDynArr([1n, dv, 0n, dv])));
     }
     // int8[] : sign-extend from bit 7 (mask) => success
-    for (const dv of [(1n << 7n), (1n << 8n) | 0x7fn, MAX, TOP | 0x80n, U64]) {
+    for (const dv of [1n << 7n, (1n << 8n) | 0x7fn, MAX, TOP | 0x80n, U64]) {
       await eq('echoI8Dyn(' + dv.toString(16) + ')', call('echoI8Dyn(int8[])', [], buildDynArr([0n, 0x7fn, dv])));
     }
     // bytes4[] : dirty LOW bytes => solc masks unused low 28 bytes => success
     for (const dv of [0xffffffffffffffn, (1n << 224n) - 1n, MAX, 1n]) {
-      await eq('echoB4Dyn(' + dv.toString(16) + ')', call('echoB4Dyn(bytes4[])', [], buildDynArr([bytesN(0x11223344n, 4) | dv])));
+      await eq(
+        'echoB4Dyn(' + dv.toString(16) + ')',
+        call('echoB4Dyn(bytes4[])', [], buildDynArr([bytesN(0x11223344n, 4) | dv])),
+      );
     }
     // address[] : dirty above 160 bits => masked
-    for (const dv of [(1n << 200n), (1n << 160n), MAX, TOP]) {
-      await eq('echoAddrDyn(' + dv.toString(16) + ')', call('echoAddrDyn(address[])', [], buildDynArr([dv | 0x1234n, 0n])));
+    for (const dv of [1n << 200n, 1n << 160n, MAX, TOP]) {
+      await eq(
+        'echoAddrDyn(' + dv.toString(16) + ')',
+        call('echoAddrDyn(address[])', [], buildDynArr([dv | 0x1234n, 0n])),
+      );
     }
 
     // ===== struct / struct-element echoes: dirty => solc VALIDATES => REVERT =====
     await eq('echoStruct clean', call('echoStruct((uint256,uint8,address))', [42n, 7n, 0x1234n]));
     await eq('echoStruct dirty b', call('echoStruct((uint256,uint8,address))', [42n, (1n << 8n) | 7n, 0x1234n]));
-    await eq('echoStruct dirty b high', call('echoStruct((uint256,uint8,address))', [42n, DIRTY << 8n | 7n, 0x1234n]));
+    await eq(
+      'echoStruct dirty b high',
+      call('echoStruct((uint256,uint8,address))', [42n, (DIRTY << 8n) | 7n, 0x1234n]),
+    );
     await eq('echoStruct dirty c', call('echoStruct((uint256,uint8,address))', [42n, 7n, (1n << 200n) | 0x1234n]));
     await eq('echoStruct dirty c top', call('echoStruct((uint256,uint8,address))', [42n, 7n, TOP | 0x1234n]));
     await eq('echoStruct max-ok', call('echoStruct((uint256,uint8,address))', [MAX, 0xffn, (1n << 160n) - 1n]));
 
     // P[] DYNAMIC array of struct: dirty element field VALIDATES (revert), unlike a value array
     const psig = 'echoStructArr((uint256,uint8,address)[])';
-    await eq('echoStructArr clean', call(psig, [], buildStructArr([[1n, 2n, 0xaaaan], [3n, 4n, 0xbbbbn]])));
-    await eq('echoStructArr dirty[0].b', call(psig, [], buildStructArr([[1n, (1n << 8n) | 2n, 0xaaaan], [3n, 4n, 0xbbbbn]])));
-    await eq('echoStructArr dirty[1].c', call(psig, [], buildStructArr([[1n, 2n, 0xaaaan], [3n, 4n, (1n << 161n) | 0xbbbbn]])));
+    await eq(
+      'echoStructArr clean',
+      call(
+        psig,
+        [],
+        buildStructArr([
+          [1n, 2n, 0xaaaan],
+          [3n, 4n, 0xbbbbn],
+        ]),
+      ),
+    );
+    await eq(
+      'echoStructArr dirty[0].b',
+      call(
+        psig,
+        [],
+        buildStructArr([
+          [1n, (1n << 8n) | 2n, 0xaaaan],
+          [3n, 4n, 0xbbbbn],
+        ]),
+      ),
+    );
+    await eq(
+      'echoStructArr dirty[1].c',
+      call(
+        psig,
+        [],
+        buildStructArr([
+          [1n, 2n, 0xaaaan],
+          [3n, 4n, (1n << 161n) | 0xbbbbn],
+        ]),
+      ),
+    );
     await eq('echoStructArr empty', call(psig, [], buildStructArr([])));
 
     // P[2] fixed array of struct
-    await eq('echoStructFix clean', call('echoStructFix((uint256,uint8,address)[2])', [1n, 2n, 0xaaaan, 3n, 4n, 0xbbbbn]));
-    await eq('echoStructFix dirty[1].b', call('echoStructFix((uint256,uint8,address)[2])', [1n, 2n, 0xaaaan, 3n, (1n << 9n) | 4n, 0xbbbbn]));
-    await eq('echoStructFix dirty[0].c', call('echoStructFix((uint256,uint8,address)[2])', [1n, 2n, (1n << 200n) | 0xaaaan, 3n, 4n, 0xbbbbn]));
+    await eq(
+      'echoStructFix clean',
+      call('echoStructFix((uint256,uint8,address)[2])', [1n, 2n, 0xaaaan, 3n, 4n, 0xbbbbn]),
+    );
+    await eq(
+      'echoStructFix dirty[1].b',
+      call('echoStructFix((uint256,uint8,address)[2])', [1n, 2n, 0xaaaan, 3n, (1n << 9n) | 4n, 0xbbbbn]),
+    );
+    await eq(
+      'echoStructFix dirty[0].c',
+      call('echoStructFix((uint256,uint8,address)[2])', [1n, 2n, (1n << 200n) | 0xaaaan, 3n, 4n, 0xbbbbn]),
+    );
 
     // Mixed: every narrow field validated
     const mc = [0x1122n, 0x33n, 1n, BigInt('0x' + 'a1'.repeat(20)), bytesN(0xdeadbeefcafef00dn, 8), 0x1234n];
     const MS = 'echoMixed((uint128,uint64,bool,address,bytes8,int40))';
     await eq('echoMixed clean', call(MS, mc));
-    await eq('echoMixed dirty a u128', call(MS, withIdx(mc, 0, U64 * U64 | 0x1122n)));
+    await eq('echoMixed dirty a u128', call(MS, withIdx(mc, 0, (U64 * U64) | 0x1122n)));
     await eq('echoMixed dirty b u64', call(MS, withIdx(mc, 1, U64 | 0x33n)));
     await eq('echoMixed dirty c bool2', call(MS, withIdx(mc, 2, 2n)));
     await eq('echoMixed dirty c boolHigh', call(MS, withIdx(mc, 2, DIRTY)));
@@ -355,7 +422,10 @@ describe('AUDIT return-encode vs Solidity', () => {
     }
     // bytes8 unused-byte validation per byte
     for (let b = 1; b <= 8; b++) {
-      await eq('echoMixed bytes8 dirty(b' + b + ')', call(MS, withIdx(mc, 4, bytesN(0xdeadbeefcafef00dn, 8) | (1n << BigInt(8 * (24 - 1) + b)))));
+      await eq(
+        'echoMixed bytes8 dirty(b' + b + ')',
+        call(MS, withIdx(mc, 4, bytesN(0xdeadbeefcafef00dn, 8) | (1n << BigInt(8 * (24 - 1) + b)))),
+      );
     }
 
     // WithNarrArr { u64 id; u8[3] data; bytes4 tag }: data is a STRUCT-FIELD fixed narrow array.
@@ -364,7 +434,7 @@ describe('AUDIT return-encode vs Solidity', () => {
     const wc = [0x99n, 0x11n, 0x22n, 0x33n, bytesN(0xcafebaben, 4)];
     await eq('echoWithNarrArr clean', call(wsig, wc));
     await eq('echoWithNarrArr dirty data[0]', call(wsig, withIdx(wc, 1, (1n << 8n) | 0x11n)));
-    await eq('echoWithNarrArr dirty data[2]', call(wsig, withIdx(wc, 3, DIRTY << 8n | 0x33n)));
+    await eq('echoWithNarrArr dirty data[2]', call(wsig, withIdx(wc, 3, (DIRTY << 8n) | 0x33n)));
     await eq('echoWithNarrArr dirty id', call(wsig, withIdx(wc, 0, U64 | 0x99n)));
     await eq('echoWithNarrArr dirty tag', call(wsig, withIdx(wc, 4, bytesN(0xcafebaben, 4) | 0x1n)));
   });
@@ -374,8 +444,10 @@ describe('AUDIT return-encode vs Solidity', () => {
     const sig = 'echoU16Nest(uint16[][2])';
     // build: [off0][off1] then two dyn u16 arrays
     function nest2(a: bigint[], b: bigint[]): string {
-      const ea = encU256Arr(a), eb = encU256Arr(b);
-      const off0 = 0x40n, off1 = 0x40n + BigInt(ea.length / 2);
+      const ea = encU256Arr(a),
+        eb = encU256Arr(b);
+      const off0 = 0x40n,
+        off1 = 0x40n + BigInt(ea.length / 2);
       return '0x' + sel(sig) + pad(0x20n) + pad(off0) + pad(off1) + ea + eb;
     }
     await eq('echoU16Nest clean', nest2([0n, 0xffffn], [0x1234n]));
@@ -385,9 +457,15 @@ describe('AUDIT return-encode vs Solidity', () => {
     // u8[][] dyn-of-dyn narrow
     function dyn2(rows: bigint[][]): string {
       const inner = rows.map(encU256Arr);
-      let off = rows.length * 32; const table: string[] = [];
-      for (const e of inner) { table.push(pad(BigInt(off))); off += e.length / 2; }
-      return '0x' + sel('echoU8DynNest(uint8[][])') + pad(0x20n) + pad(BigInt(rows.length)) + table.join('') + inner.join('');
+      let off = rows.length * 32;
+      const table: string[] = [];
+      for (const e of inner) {
+        table.push(pad(BigInt(off)));
+        off += e.length / 2;
+      }
+      return (
+        '0x' + sel('echoU8DynNest(uint8[][])') + pad(0x20n) + pad(BigInt(rows.length)) + table.join('') + inner.join('')
+      );
     }
     await eq('echoU8DynNest clean', dyn2([[1n, 2n], [3n]]));
     await eq('echoU8DynNest dirty', dyn2([[(DIRTY << 8n) | 0x5n], [MAX, 0n]]));
@@ -397,9 +475,15 @@ describe('AUDIT return-encode vs Solidity', () => {
     // u256[][] echo (full-width leaves: pure offset re-encode)
     function grid(rows: bigint[][]): string {
       const inner = rows.map(encU256Arr);
-      let off = rows.length * 32; const table: string[] = [];
-      for (const e of inner) { table.push(pad(BigInt(off))); off += e.length / 2; }
-      return '0x' + sel('echoGrid(uint256[][])') + pad(0x20n) + pad(BigInt(rows.length)) + table.join('') + inner.join('');
+      let off = rows.length * 32;
+      const table: string[] = [];
+      for (const e of inner) {
+        table.push(pad(BigInt(off)));
+        off += e.length / 2;
+      }
+      return (
+        '0x' + sel('echoGrid(uint256[][])') + pad(0x20n) + pad(BigInt(rows.length)) + table.join('') + inner.join('')
+      );
     }
     await eq('echoGrid clean', grid([[1n, 2n, 3n], [], [MAX]]));
     await eq('echoGrid empty', grid([]));
@@ -407,8 +491,13 @@ describe('AUDIT return-encode vs Solidity', () => {
 
   it('dynamic-struct echoes (FD / Nest / arrays of dyn struct)', async () => {
     const strs: [string, Uint8Array][] = [
-      ['empty', sb('')], ['1', sb('a')], ['31', sb('Y'.repeat(31))],
-      ['32', sb('Z'.repeat(32))], ['33', sb('W'.repeat(33))], ['64', sb('r'.repeat(64))], ['100', sb('X'.repeat(100))],
+      ['empty', sb('')],
+      ['1', sb('a')],
+      ['31', sb('Y'.repeat(31))],
+      ['32', sb('Z'.repeat(32))],
+      ['33', sb('W'.repeat(33))],
+      ['64', sb('r'.repeat(64))],
+      ['100', sb('X'.repeat(100))],
     ];
     // echoFD: head[off=0x20] then tuple [a][off=0x40][s]
     for (const [ln, s] of strs)
@@ -427,24 +516,48 @@ describe('AUDIT return-encode vs Solidity', () => {
     function fdArr(items: [bigint, Uint8Array][]): string {
       const L = items.length;
       const encs = items.map(([a, s]) => pad(a) + pad(0x40n) + dynElem(s));
-      let off = L * 32; const table: string[] = [];
-      for (const e of encs) { table.push(pad(BigInt(off))); off += e.length / 2; }
+      let off = L * 32;
+      const table: string[] = [];
+      for (const e of encs) {
+        table.push(pad(BigInt(off)));
+        off += e.length / 2;
+      }
       return '0x' + sel('echoFDArr((uint256,string)[])') + pad(0x20n) + pad(BigInt(L)) + table.join('') + encs.join('');
     }
     await eq('echoFDArr empty', fdArr([]));
     await eq('echoFDArr 1', fdArr([[10n, sb('hi')]]));
-    await eq('echoFDArr 3', fdArr([[10n, sb('')], [20n, sb('Z'.repeat(40))], [30n, sb('q'.repeat(33))]]));
+    await eq(
+      'echoFDArr 3',
+      fdArr([
+        [10n, sb('')],
+        [20n, sb('Z'.repeat(40))],
+        [30n, sb('q'.repeat(33))],
+      ]),
+    );
     // Arr<FD,2> fixed array of dynamic struct: offset table of 2 then tails
     function fdFix(items: [bigint, Uint8Array][]): string {
       const encs = items.map(([a, s]) => pad(a) + pad(0x40n) + dynElem(s));
-      let off = 2 * 32; const table: string[] = [];
-      for (const e of encs) { table.push(pad(BigInt(off))); off += e.length / 2; }
+      let off = 2 * 32;
+      const table: string[] = [];
+      for (const e of encs) {
+        table.push(pad(BigInt(off)));
+        off += e.length / 2;
+      }
       return '0x' + sel('echoFDFix((uint256,string)[2])') + pad(0x20n) + table.join('') + encs.join('');
     }
-    await eq('echoFDFix', fdFix([[1n, sb('a')], [2n, sb('B'.repeat(50))]]));
+    await eq(
+      'echoFDFix',
+      fdFix([
+        [1n, sb('a')],
+        [2n, sb('B'.repeat(50))],
+      ]),
+    );
 
     // echoFD with truncated string tail: claims len=64 but provides no payload words -> revert parity
-    await eq('echoFD trunc tail', '0x' + sel('echoFD((uint256,string))') + pad(0x20n) + pad(1n) + pad(0x40n) + pad(64n));
+    await eq(
+      'echoFD trunc tail',
+      '0x' + sel('echoFD((uint256,string))') + pad(0x20n) + pad(1n) + pad(0x40n) + pad(64n),
+    );
   });
 
   it('bytes/string echoes (boundary lengths) + arrays of dyn byte sequences', async () => {
@@ -458,16 +571,42 @@ describe('AUDIT return-encode vs Solidity', () => {
     const seqs = [sb(''), sb('a'), new Uint8Array(32).fill(0xab), new Uint8Array(40).map((_, k) => (k * 13) & 0xff)];
     await eq('echoBytesArr', '0x' + sel('echoBytesArr(bytes[])') + pad(0x20n) + encArrRegion(seqs));
     await eq('echoBytesArr empty', '0x' + sel('echoBytesArr(bytes[])') + pad(0x20n) + encArrRegion([]));
-    await eq('echoStrArr', '0x' + sel('echoStrArr(string[])') + pad(0x20n) + encArrRegion([sb(''), sb('hello world this is a long string element over 32 bytes!!!')]));
+    await eq(
+      'echoStrArr',
+      '0x' +
+        sel('echoStrArr(string[])') +
+        pad(0x20n) +
+        encArrRegion([sb(''), sb('hello world this is a long string element over 32 bytes!!!')]),
+    );
 
     // constructed / literal returns
-    for (const [ln, s] of [['empty', sb('')], ['33', sb('m'.repeat(33))]] as [string, Uint8Array][])
+    for (const [ln, s] of [
+      ['empty', sb('')],
+      ['33', sb('m'.repeat(33))],
+    ] as [string, Uint8Array][])
       for (const a of [0n, MAX]) {
         await eq('mkFD ' + ln + ' a=' + a, '0x' + sel('mkFD(uint256,string)') + pad(a) + pad(0x40n) + dynElem(s));
         await eq('mkDF ' + ln + ' a=' + a, '0x' + sel('mkDF(string,uint256)') + pad(0x40n) + pad(a) + dynElem(s));
       }
-    await eq('mkTwoDyn', '0x' + sel('mkTwoDyn(string,string)') + pad(0x40n) + pad(0x40n + BigInt(dynElem(sb('first')).length / 2)) + dynElem(sb('first')) + dynElem(sb('a long second string element well over thirty-two bytes for sure')));
-    await eq('mkNest', '0x' + sel('mkNest(uint256,uint256,string,uint256)') + pad(1n) + pad(2n) + pad(0x80n) + pad(3n) + dynElem(sb('nested')));
+    await eq(
+      'mkTwoDyn',
+      '0x' +
+        sel('mkTwoDyn(string,string)') +
+        pad(0x40n) +
+        pad(0x40n + BigInt(dynElem(sb('first')).length / 2)) +
+        dynElem(sb('first')) +
+        dynElem(sb('a long second string element well over thirty-two bytes for sure')),
+    );
+    await eq(
+      'mkNest',
+      '0x' +
+        sel('mkNest(uint256,uint256,string,uint256)') +
+        pad(1n) +
+        pad(2n) +
+        pad(0x80n) +
+        pad(3n) +
+        dynElem(sb('nested')),
+    );
     await eq('emptyStr', encodeCall(sel('emptyStr()'), []));
     await eq('emptyStructStr', encodeCall(sel('emptyStructStr()'), []));
   });
@@ -480,14 +619,23 @@ describe('AUDIT return-encode vs Solidity', () => {
     await eq('getNums zero', encodeCall(sel('getNums()'), []));
     // seed
     for (const v of [0n, 1n, MAX, 1n << 200n, 42n]) await send(call('pushVal(uint256)', [v]));
-    for (const s of ['', 'hi', 'Z'.repeat(40), 'q'.repeat(33)]) await send('0x' + sel('pushName(string)') + pad(0x20n) + dynElem(sb(s)));
-    for (const [a, s] of [[10n, ''], [20n, 'aa'], [30n, 'W'.repeat(50)]] as [bigint, string][]) await send('0x' + sel('pushFD(uint256,string)') + pad(a) + pad(0x40n) + dynElem(sb(s)));
-    for (const b of ['', 'ff', 'ab'.repeat(40)]) await send('0x' + sel('pushBlob(bytes)') + pad(0x20n) + dynElem(Uint8Array.from(Buffer.from(b, 'hex'))));
+    for (const s of ['', 'hi', 'Z'.repeat(40), 'q'.repeat(33)])
+      await send('0x' + sel('pushName(string)') + pad(0x20n) + dynElem(sb(s)));
+    for (const [a, s] of [
+      [10n, ''],
+      [20n, 'aa'],
+      [30n, 'W'.repeat(50)],
+    ] as [bigint, string][])
+      await send('0x' + sel('pushFD(uint256,string)') + pad(a) + pad(0x40n) + dynElem(sb(s)));
+    for (const b of ['', 'ff', 'ab'.repeat(40)])
+      await send('0x' + sel('pushBlob(bytes)') + pad(0x20n) + dynElem(Uint8Array.from(Buffer.from(b, 'hex'))));
     await send(encodeCall(sel('gridPush()'), []));
     await send(encodeCall(sel('gridPush()'), []));
     for (const v of [5n, 6n, 7n]) await send(call('gridPushInner(uint256,uint256)', [0n, v]));
     await send(call('setNums(uint256,uint256,uint256)', [11n, 22n, 33n]));
-    await send(call('setFd1(uint256,string)', [7n], dynElem(sb('field one string longer than thirty-two bytes to span slots'))));
+    await send(
+      call('setFd1(uint256,string)', [7n], dynElem(sb('field one string longer than thirty-two bytes to span slots'))),
+    );
 
     await eq('allVals', encodeCall(sel('allVals()'), []));
     await eq('allNames', encodeCall(sel('allNames()'), []));
@@ -511,7 +659,13 @@ describe('AUDIT return-encode vs Solidity', () => {
     await eq('getMs unset', call('getMs(uint256)', [99n]));
     await eq('getMb unset', call('getMb(uint256)', [99n]));
     await send(call('setM(uint256,uint256,uint256)', [1n, 111n, 222n]));
-    await send(call('setMs(uint256,uint256,string)', [2n], dynElem(sb('mapping struct string field over thirty-two bytes long!!!'))));
+    await send(
+      call(
+        'setMs(uint256,uint256,string)',
+        [2n],
+        dynElem(sb('mapping struct string field over thirty-two bytes long!!!')),
+      ),
+    );
     await send('0x' + sel('setMb(uint256,bytes)') + pad(3n) + pad(0x40n) + dynElem(new Uint8Array(40).fill(0xcd)));
     await eq('getM set', call('getM(uint256)', [1n]));
     await eq('getMs set', call('getMs(uint256)', [2n]));
@@ -520,18 +674,43 @@ describe('AUDIT return-encode vs Solidity', () => {
 
   it('multi-value tuples mixing components (CLEAN cd-array vs VALIDATE struct)', async () => {
     // mvValStr / mvStrVal
-    for (const [ln, s] of [['empty', sb('')], ['short', sb('hi')], ['long', sb('x'.repeat(70))]] as [string, Uint8Array][]) {
+    for (const [ln, s] of [
+      ['empty', sb('')],
+      ['short', sb('hi')],
+      ['long', sb('x'.repeat(70))],
+    ] as [string, Uint8Array][]) {
       await eq('mvValStr ' + ln, '0x' + sel('mvValStr(uint256,string)') + pad(42n) + pad(0x40n) + dynElem(s));
       await eq('mvStrVal ' + ln, '0x' + sel('mvStrVal(string,uint256)') + pad(0x40n) + pad(42n) + dynElem(s));
     }
     // mvValBytesVal
-    await eq('mvValBytesVal', '0x' + sel('mvValBytesVal(uint256,bytes,uint256)') + pad(1n) + pad(0x60n) + pad(2n) + dynElem(new Uint8Array(33).fill(0x7)));
+    await eq(
+      'mvValBytesVal',
+      '0x' +
+        sel('mvValBytesVal(uint256,bytes,uint256)') +
+        pad(1n) +
+        pad(0x60n) +
+        pad(2n) +
+        dynElem(new Uint8Array(33).fill(0x7)),
+    );
 
     // mvCdArrVal: value-array component => CLEANS dirty leaves (no revert)
-    await eq('mvCdArrVal clean', '0x' + sel('mvCdArrVal(uint256[],uint256)') + pad(0x40n) + pad(9n) + encU256Arr([1n, 2n, 3n]));
+    await eq(
+      'mvCdArrVal clean',
+      '0x' + sel('mvCdArrVal(uint256[],uint256)') + pad(0x40n) + pad(9n) + encU256Arr([1n, 2n, 3n]),
+    );
     // mvCdNarrArrVal: u8[] component => CLEANS (the key: even as a tuple component)
-    await eq('mvCdNarrArrVal clean', '0x' + sel('mvCdNarrArrVal(uint8[],uint256)') + pad(0x40n) + pad(9n) + encU256Arr([1n, 2n, 3n]));
-    await eq('mvCdNarrArrVal dirty', '0x' + sel('mvCdNarrArrVal(uint8[],uint256)') + pad(0x40n) + pad(9n) + encU256Arr([(DIRTY << 8n) | 0x5n, MAX, U64 | 0x1n]));
+    await eq(
+      'mvCdNarrArrVal clean',
+      '0x' + sel('mvCdNarrArrVal(uint8[],uint256)') + pad(0x40n) + pad(9n) + encU256Arr([1n, 2n, 3n]),
+    );
+    await eq(
+      'mvCdNarrArrVal dirty',
+      '0x' +
+        sel('mvCdNarrArrVal(uint8[],uint256)') +
+        pad(0x40n) +
+        pad(9n) +
+        encU256Arr([(DIRTY << 8n) | 0x5n, MAX, U64 | 0x1n]),
+    );
 
     // mvAllStatic
     await eq('mvAllStatic clean', call('mvAllStatic(uint256,address,bool)', [42n, 0x1234n, 1n]));
@@ -539,9 +718,25 @@ describe('AUDIT return-encode vs Solidity', () => {
     await eq('mvAllStatic dirty bool', call('mvAllStatic(uint256,address,bool)', [42n, 0x1234n, 2n]));
 
     // mvBytesCdArr: bytes + cd value array
-    await eq('mvBytesCdArr', '0x' + sel('mvBytesCdArr(bytes,uint256[])') + pad(0x40n) + pad(BigInt(0x40 + dynElem(sb('payload')).length / 2)) + dynElem(sb('payload')) + encU256Arr([7n, 8n]));
+    await eq(
+      'mvBytesCdArr',
+      '0x' +
+        sel('mvBytesCdArr(bytes,uint256[])') +
+        pad(0x40n) +
+        pad(BigInt(0x40 + dynElem(sb('payload')).length / 2)) +
+        dynElem(sb('payload')) +
+        encU256Arr([7n, 8n]),
+    );
     // mvBytesCdArr with DIRTY u256 elems (full-width => no change, success)
-    await eq('mvBytesCdArr dirtyu256', '0x' + sel('mvBytesCdArr(bytes,uint256[])') + pad(0x40n) + pad(BigInt(0x40 + dynElem(sb('p')).length / 2)) + dynElem(sb('p')) + encU256Arr([DIRTY, MAX]));
+    await eq(
+      'mvBytesCdArr dirtyu256',
+      '0x' +
+        sel('mvBytesCdArr(bytes,uint256[])') +
+        pad(0x40n) +
+        pad(BigInt(0x40 + dynElem(sb('p')).length / 2)) +
+        dynElem(sb('p')) +
+        encU256Arr([DIRTY, MAX]),
+    );
   });
 
   it('storage-backed tuple components (need seeding first)', async () => {
@@ -565,7 +760,10 @@ describe('AUDIT return-encode vs Solidity', () => {
     await eq('echoBytes len=2^64', '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(U64) + '00'.repeat(32));
     await eq('echoBytes len=2^64-1', '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(U64 - 1n) + '00'.repeat(32));
     await eq('echoBytes len past-end', '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(0x40n) + '00'.repeat(32)); // claims 64 but only 32 follow
-    await eq('echoBytes len truncated tail', '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(0x20n) + '00'.repeat(16)); // claims 32, 16 present
+    await eq(
+      'echoBytes len truncated tail',
+      '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(0x20n) + '00'.repeat(16),
+    ); // claims 32, 16 present
     await eq('echoBytes empty payload', '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(0n));
     await eq('echoBytes no payload at all', '0x' + sel('echoBytes(bytes)') + pad(0x20n)); // offset valid but no len word
 
@@ -577,19 +775,37 @@ describe('AUDIT return-encode vs Solidity', () => {
     await eq('echoU8Dyn off aliased', '0x' + sel('echoU8Dyn(uint8[])') + pad(0x40n) + pad(0n) + encU256Arr([1n, 2n])); // offset points past first word
 
     // struct-array malformed offset (inner element offset out of range)
-    await eq('echoStructArr off len huge', '0x' + sel('echoStructArr((uint256,uint8,address)[])') + pad(0x20n) + pad(U64));
+    await eq(
+      'echoStructArr off len huge',
+      '0x' + sel('echoStructArr((uint256,uint8,address)[])') + pad(0x20n) + pad(U64),
+    );
 
     // FD echo: inner string offset malformed
-    await eq('echoFD inner off 2^64', '0x' + sel('echoFD((uint256,string))') + pad(0x20n) + pad(1n) + pad(U64) + dynElem(sb('x')));
-    await eq('echoFD inner off high', '0x' + sel('echoFD((uint256,string))') + pad(0x20n) + pad(1n) + pad(TOP) + dynElem(sb('x')));
-    await eq('echoFD outer off past', '0x' + sel('echoFD((uint256,string))') + pad(0x1000n) + pad(1n) + pad(0x40n) + dynElem(sb('x')));
+    await eq(
+      'echoFD inner off 2^64',
+      '0x' + sel('echoFD((uint256,string))') + pad(0x20n) + pad(1n) + pad(U64) + dynElem(sb('x')),
+    );
+    await eq(
+      'echoFD inner off high',
+      '0x' + sel('echoFD((uint256,string))') + pad(0x20n) + pad(1n) + pad(TOP) + dynElem(sb('x')),
+    );
+    await eq(
+      'echoFD outer off past',
+      '0x' + sel('echoFD((uint256,string))') + pad(0x1000n) + pad(1n) + pad(0x40n) + dynElem(sb('x')),
+    );
 
     // echoStr trailing extra (solc ignores trailing) and a mid-word truncated tail
-    await eq('echoStr trailing extra', '0x' + sel('echoStr(string)') + pad(0x20n) + dynElem(sb('hi')) + 'de'.repeat(40));
+    await eq(
+      'echoStr trailing extra',
+      '0x' + sel('echoStr(string)') + pad(0x20n) + dynElem(sb('hi')) + 'de'.repeat(40),
+    );
     // len=33 with only 33 bytes (not 64) of payload -> tail is short by 31 bytes -> revert parity
     await eq('echoBytes short pad', '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(0x21n) + 'ff'.repeat(33));
     // len=33 with full 64-byte payload present -> success, echoes 33 bytes
-    await eq('echoBytes ok 33', '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(0x21n) + 'ff'.repeat(33) + '00'.repeat(31));
+    await eq(
+      'echoBytes ok 33',
+      '0x' + sel('echoBytes(bytes)') + pad(0x20n) + pad(0x21n) + 'ff'.repeat(33) + '00'.repeat(31),
+    );
   });
 
   it('WAVE2: bytes[]/string[] echo with pathological inner offsets/lengths', async () => {
@@ -598,21 +814,39 @@ describe('AUDIT return-encode vs Solidity', () => {
     const okData = '0x' + bsel + pad(0x20n) + encArrRegion([sb('aa'), sb('bbbb')]);
     await eq('echoBytesArr ok', okData);
     // inner element offset = 2^64 (echo-decode uses unsigned gt cap -> revert)
-    await eq('echoBytesArr inner off 2^64', '0x' + bsel + pad(0x20n) + pad(2n) + pad(U64) + pad(0x80n) + dynElem(sb('a')) + dynElem(sb('b')));
+    await eq(
+      'echoBytesArr inner off 2^64',
+      '0x' + bsel + pad(0x20n) + pad(2n) + pad(U64) + pad(0x80n) + dynElem(sb('a')) + dynElem(sb('b')),
+    );
     // inner element offset = 2^64-1
-    await eq('echoBytesArr inner off 2^64-1', '0x' + bsel + pad(0x20n) + pad(2n) + pad(U64 - 1n) + pad(0x80n) + dynElem(sb('a')) + dynElem(sb('b')));
+    await eq(
+      'echoBytesArr inner off 2^64-1',
+      '0x' + bsel + pad(0x20n) + pad(2n) + pad(U64 - 1n) + pad(0x80n) + dynElem(sb('a')) + dynElem(sb('b')),
+    );
     // inner element offset high-bit (2^255) -> echo-decode unsigned cap rejects
     await eq('echoBytesArr inner off 2^255', '0x' + bsel + pad(0x20n) + pad(1n) + pad(TOP) + dynElem(sb('a')));
     // inner element offset aliased: both point to same payload word
-    await eq('echoBytesArr inner aliased', '0x' + bsel + pad(0x20n) + pad(2n) + pad(0x40n) + pad(0x40n) + dynElem(sb('shared')));
+    await eq(
+      'echoBytesArr inner aliased',
+      '0x' + bsel + pad(0x20n) + pad(2n) + pad(0x40n) + pad(0x40n) + dynElem(sb('shared')),
+    );
     // inner element offset points back into the offset table (off=0 -> reads off0 as length)
     await eq('echoBytesArr inner off=0', '0x' + bsel + pad(0x20n) + pad(1n) + pad(0n) + dynElem(sb('x')));
     // inner element length = 2^64 -> Panic(0x41) region
-    await eq('echoBytesArr inner len 2^64', '0x' + bsel + pad(0x20n) + pad(1n) + pad(0x40n) + pad(U64) + '00'.repeat(32));
+    await eq(
+      'echoBytesArr inner len 2^64',
+      '0x' + bsel + pad(0x20n) + pad(1n) + pad(0x40n) + pad(U64) + '00'.repeat(32),
+    );
     // inner element length = 2^64-1 -> oversized alloc Panic(0x41)
-    await eq('echoBytesArr inner len 2^64-1', '0x' + bsel + pad(0x20n) + pad(1n) + pad(0x40n) + pad(U64 - 1n) + '00'.repeat(32));
+    await eq(
+      'echoBytesArr inner len 2^64-1',
+      '0x' + bsel + pad(0x20n) + pad(1n) + pad(0x40n) + pad(U64 - 1n) + '00'.repeat(32),
+    );
     // inner element payload runs past calldatasize -> revert
-    await eq('echoBytesArr inner len past-end', '0x' + bsel + pad(0x20n) + pad(1n) + pad(0x40n) + pad(0x60n) + '00'.repeat(32));
+    await eq(
+      'echoBytesArr inner len past-end',
+      '0x' + bsel + pad(0x20n) + pad(1n) + pad(0x40n) + pad(0x60n) + '00'.repeat(32),
+    );
     // outer length = 2^64 -> revert (gt cap)
     await eq('echoBytesArr outer len 2^64', '0x' + bsel + pad(0x20n) + pad(U64));
     // outer length huge but offset table doesn't fit -> revert
@@ -626,7 +860,10 @@ describe('AUDIT return-encode vs Solidity', () => {
     const ssel = sel('echoStrArr(string[])');
     await eq('echoStrArr ok', '0x' + ssel + pad(0x20n) + encArrRegion([sb('hi'), sb('Z'.repeat(40))]));
     await eq('echoStrArr inner off 2^64', '0x' + ssel + pad(0x20n) + pad(1n) + pad(U64) + dynElem(sb('a')));
-    await eq('echoStrArr inner len 2^64-1', '0x' + ssel + pad(0x20n) + pad(1n) + pad(0x40n) + pad(U64 - 1n) + '00'.repeat(32));
+    await eq(
+      'echoStrArr inner len 2^64-1',
+      '0x' + ssel + pad(0x20n) + pad(1n) + pad(0x40n) + pad(U64 - 1n) + '00'.repeat(32),
+    );
     await eq('echoStrArr empty len0', '0x' + ssel + pad(0x20n) + pad(0n));
 
     // grid (uint256[][]) echo malformed inner offsets/lengths
@@ -649,9 +886,15 @@ describe('AUDIT return-encode vs Solidity', () => {
     // element offset 2^255
     await eq('echoFDArr elem-off 2^255', '0x' + fsel + pad(0x20n) + pad(1n) + pad(TOP) + goodFD(7n, sb('hi')));
     // FD inner string offset 2^64
-    await eq('echoFDArr inner-str-off 2^64', '0x' + fsel + pad(0x20n) + pad(1n) + pad(0x20n) + pad(7n) + pad(U64) + dynElem(sb('hi')));
+    await eq(
+      'echoFDArr inner-str-off 2^64',
+      '0x' + fsel + pad(0x20n) + pad(1n) + pad(0x20n) + pad(7n) + pad(U64) + dynElem(sb('hi')),
+    );
     // FD inner string len 2^64-1
-    await eq('echoFDArr inner-str-len 2^64-1', '0x' + fsel + pad(0x20n) + pad(1n) + pad(0x20n) + pad(7n) + pad(0x40n) + pad(U64 - 1n) + '00'.repeat(32));
+    await eq(
+      'echoFDArr inner-str-len 2^64-1',
+      '0x' + fsel + pad(0x20n) + pad(1n) + pad(0x20n) + pad(7n) + pad(0x40n) + pad(U64 - 1n) + '00'.repeat(32),
+    );
     // outer length 2^64
     await eq('echoFDArr outer-len 2^64', '0x' + fsel + pad(0x20n) + pad(U64));
     // empty FD[]
@@ -659,11 +902,23 @@ describe('AUDIT return-encode vs Solidity', () => {
 
     // Nest echo: outer off, tuple [x][off_inner][y], FD inner tail. inner FD offset malformed.
     const nsel = sel('echoNest((uint256,(uint256,string),uint256))');
-    const okNest = (s: Uint8Array) => { const fd = pad(2n) + pad(0x40n) + dynElem(s); return pad(1n) + pad(0x80n) + pad(3n) + fd; };
+    const okNest = (s: Uint8Array) => {
+      const fd = pad(2n) + pad(0x40n) + dynElem(s);
+      return pad(1n) + pad(0x80n) + pad(3n) + fd;
+    };
     await eq('echoNest ok', '0x' + nsel + pad(0x20n) + okNest(sb('z')));
-    await eq('echoNest inner-off 2^64', '0x' + nsel + pad(0x20n) + pad(1n) + pad(U64) + pad(3n) + pad(2n) + pad(0x40n) + dynElem(sb('z')));
-    await eq('echoNest inner-off 2^255', '0x' + nsel + pad(0x20n) + pad(1n) + pad(TOP) + pad(3n) + pad(2n) + pad(0x40n) + dynElem(sb('z')));
-    await eq('echoNest str-off 2^64', '0x' + nsel + pad(0x20n) + pad(1n) + pad(0x80n) + pad(3n) + pad(2n) + pad(U64) + dynElem(sb('z')));
+    await eq(
+      'echoNest inner-off 2^64',
+      '0x' + nsel + pad(0x20n) + pad(1n) + pad(U64) + pad(3n) + pad(2n) + pad(0x40n) + dynElem(sb('z')),
+    );
+    await eq(
+      'echoNest inner-off 2^255',
+      '0x' + nsel + pad(0x20n) + pad(1n) + pad(TOP) + pad(3n) + pad(2n) + pad(0x40n) + dynElem(sb('z')),
+    );
+    await eq(
+      'echoNest str-off 2^64',
+      '0x' + nsel + pad(0x20n) + pad(1n) + pad(0x80n) + pad(3n) + pad(2n) + pad(U64) + dynElem(sb('z')),
+    );
     await eq('echoNest outer-off past', '0x' + nsel + pad(0x8000n) + okNest(sb('z')));
   });
 
@@ -671,22 +926,33 @@ describe('AUDIT return-encode vs Solidity', () => {
     const fsel = sel('echoFD((uint256,string))');
     // outer struct offset variants
     for (const off of [0x20n, 0n, TOP, U64, U64 - 1n, 0x21n, 0x1000n]) {
-      await eq('echoFD outer-off ' + off.toString(16), '0x' + fsel + pad(off) + pad(7n) + pad(0x40n) + dynElem(sb('hello')));
+      await eq(
+        'echoFD outer-off ' + off.toString(16),
+        '0x' + fsel + pad(off) + pad(7n) + pad(0x40n) + dynElem(sb('hello')),
+      );
     }
     // inner string offset variants (relative to tuple start)
     for (const off of [0x40n, 0x41n, 0n, 0x20n, TOP, U64, U64 - 1n, 0x2000n]) {
-      await eq('echoFD inner-off ' + off.toString(16), '0x' + fsel + pad(0x20n) + pad(7n) + pad(off) + dynElem(sb('world')));
+      await eq(
+        'echoFD inner-off ' + off.toString(16),
+        '0x' + fsel + pad(0x20n) + pad(7n) + pad(off) + dynElem(sb('world')),
+      );
     }
     // inner string length variants
     for (const len of [0n, 1n, 32n, 33n, U64, U64 - 1n, 0x40n]) {
       // provide a generous payload so only length validation triggers
-      await eq('echoFD inner-len ' + len.toString(16), '0x' + fsel + pad(0x20n) + pad(7n) + pad(0x40n) + pad(len) + '11'.repeat(64));
+      await eq(
+        'echoFD inner-len ' + len.toString(16),
+        '0x' + fsel + pad(0x20n) + pad(7n) + pad(0x40n) + pad(len) + '11'.repeat(64),
+      );
     }
   });
 
   it('FINALIZE: report all mismatches', async () => {
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 60)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 60)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 20).join('\n')).toEqual([]);
   });
 });
@@ -703,5 +969,7 @@ function buildStructArr(rows: bigint[][]): string {
   return h;
 }
 function withIdx(arr: bigint[], i: number, v: bigint): bigint[] {
-  const d = [...arr]; d[i] = v; return d;
+  const d = [...arr];
+  d[i] = v;
+  return d;
 }

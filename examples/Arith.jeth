@@ -1,33 +1,79 @@
 // Exercises the integer-width + signed matrix for differential testing vs Solidity.
 @contract
 class Arith {
-  @external @pure addU256(a: u256, b: u256): u256 { return a + b; }
-  @external @pure subU256(a: u256, b: u256): u256 { return a - b; }
-  @external @pure mulU256(a: u256, b: u256): u256 { return a * b; }
-  @external @pure divU256(a: u256, b: u256): u256 { return a / b; }
-  @external @pure modU256(a: u256, b: u256): u256 { return a % b; }
+  @external @pure addU256(a: u256, b: u256): u256 {
+    return a + b;
+  }
+  @external @pure subU256(a: u256, b: u256): u256 {
+    return a - b;
+  }
+  @external @pure mulU256(a: u256, b: u256): u256 {
+    return a * b;
+  }
+  @external @pure divU256(a: u256, b: u256): u256 {
+    return a / b;
+  }
+  @external @pure modU256(a: u256, b: u256): u256 {
+    return a % b;
+  }
 
-  @external @pure addU8(a: u8, b: u8): u8 { return a + b; }
-  @external @pure mulU8(a: u8, b: u8): u8 { return a * b; }
-  @external @pure shlU8(a: u8, b: u8): u8 { return a << b; }
+  @external @pure addU8(a: u8, b: u8): u8 {
+    return a + b;
+  }
+  @external @pure mulU8(a: u8, b: u8): u8 {
+    return a * b;
+  }
+  @external @pure shlU8(a: u8, b: u8): u8 {
+    return a << b;
+  }
 
-  @external @pure addI256(a: i256, b: i256): i256 { return a + b; }
-  @external @pure subI256(a: i256, b: i256): i256 { return a - b; }
-  @external @pure mulI256(a: i256, b: i256): i256 { return a * b; }
-  @external @pure divI256(a: i256, b: i256): i256 { return a / b; }
-  @external @pure modI256(a: i256, b: i256): i256 { return a % b; }
+  @external @pure addI256(a: i256, b: i256): i256 {
+    return a + b;
+  }
+  @external @pure subI256(a: i256, b: i256): i256 {
+    return a - b;
+  }
+  @external @pure mulI256(a: i256, b: i256): i256 {
+    return a * b;
+  }
+  @external @pure divI256(a: i256, b: i256): i256 {
+    return a / b;
+  }
+  @external @pure modI256(a: i256, b: i256): i256 {
+    return a % b;
+  }
 
-  @external @pure addI8(a: i8, b: i8): i8 { return a + b; }
-  @external @pure mulI8(a: i8, b: i8): i8 { return a * b; }
-  @external @pure negI8(a: i8): i8 { return -a; }
+  @external @pure addI8(a: i8, b: i8): i8 {
+    return a + b;
+  }
+  @external @pure mulI8(a: i8, b: i8): i8 {
+    return a * b;
+  }
+  @external @pure negI8(a: i8): i8 {
+    return -a;
+  }
 
-  @external @pure ltU256(a: u256, b: u256): bool { return a < b; }
-  @external @pure ltI256(a: i256, b: i256): bool { return a < b; }
-  @external @pure shrI256(a: i256, b: u256): i256 { return a >> b; }
-  @external @pure shlI8(a: i8, b: u8): i8 { return a << b; }
-  @external @pure shlI16(a: i16, b: u8): i16 { return a << b; }
+  @external @pure ltU256(a: u256, b: u256): bool {
+    return a < b;
+  }
+  @external @pure ltI256(a: i256, b: i256): bool {
+    return a < b;
+  }
+  @external @pure shrI256(a: i256, b: u256): i256 {
+    return a >> b;
+  }
+  @external @pure shlI8(a: i8, b: u8): i8 {
+    return a << b;
+  }
+  @external @pure shlI16(a: i16, b: u8): i16 {
+    return a << b;
+  }
 
   // short-circuit: the RHS divides, which would revert if evaluated when a == 0
-  @external @pure scAnd(a: u256): bool { return (a > 0n) && ((10n / a) > 0n); }
-  @external @pure scOr(a: u256): bool { return (a == 0n) || ((10n / a) > 5n); }
+  @external @pure scAnd(a: u256): bool {
+    return a > 0n && 10n / a > 0n;
+  }
+  @external @pure scOr(a: u256): bool {
+    return a == 0n || 10n / a > 5n;
+  }
 }

@@ -158,36 +158,74 @@ contract SC {
 
 describe('probe', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const mism: string[] = []; let count = 0;
+  const mism: string[] = [];
+  let count = 0;
   async function eq(label: string, data: string) {
     count++;
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   // raw calldata builder allowing dirty high bits (for u8/u64/bytes4 etc.)
   function rawCall(sig: string, words: bigint[]): string {
     let h = '0x' + sel(sig);
-    for (const w of words) { let x = ((w % M) + M) % M; h += x.toString(16).padStart(64, '0'); }
+    for (const w of words) {
+      let x = ((w % M) + M) % M;
+      h += x.toString(16).padStart(64, '0');
+    }
     return h;
   }
 
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'SC.jeth' });
     const sb = compileSolidity(SOL, 'SC');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('runs', async () => {
     const MAX = M - 1n;
     const HALF = 1n << 255n;
     // interesting u256 corpus
-    const U: bigint[] = [0n, 1n, 2n, 255n, 256n, 0xffffn, MAX, MAX - 1n, HALF, HALF - 1n, HALF + 1n, 0xdeadbeefn, 12345678901234567890n];
+    const U: bigint[] = [
+      0n,
+      1n,
+      2n,
+      255n,
+      256n,
+      0xffffn,
+      MAX,
+      MAX - 1n,
+      HALF,
+      HALF - 1n,
+      HALF + 1n,
+      0xdeadbeefn,
+      12345678901234567890n,
+    ];
 
     // ---- W: store then whole-return, and pure return ----
     for (let i = 0; i < U.length; i++) {
-      const t = U[i]!, a = U[(i + 1) % U.length]!, b = U[(i + 2) % U.length]!, c = U[(i + 3) % U.length]!, d = U[(i + 4) % U.length]!;
+      const t = U[i]!,
+        a = U[(i + 1) % U.length]!,
+        b = U[(i + 2) % U.length]!,
+        c = U[(i + 3) % U.length]!,
+        d = U[(i + 4) % U.length]!;
       await eq('setW#' + i, encodeCall(sel('setW(uint256,uint256,uint256,uint256,uint256)'), [t, a, b, c, d]));
       await eq('getW#' + i, encodeCall(sel('getW()'), []));
       await eq('mkW#' + i, encodeCall(sel('mkW(uint256,uint256,uint256,uint256,uint256)'), [t, a, b, c, d]));
@@ -195,13 +233,28 @@ describe('probe', () => {
 
     // ---- M: struct-array literal pure return ----
     for (let i = 0; i < U.length; i++) {
-      const t = U[i]!, x0 = U[(i + 1) % U.length]!, y0 = U[(i + 2) % U.length]!, x1 = U[(i + 3) % U.length]!, y1 = U[(i + 4) % U.length]!;
+      const t = U[i]!,
+        x0 = U[(i + 1) % U.length]!,
+        y0 = U[(i + 2) % U.length]!,
+        x1 = U[(i + 3) % U.length]!,
+        y1 = U[(i + 4) % U.length]!;
       await eq('mkM#' + i, encodeCall(sel('mkM(uint256,uint256,uint256,uint256,uint256)'), [t, x0, y0, x1, y1]));
     }
     // M3
     for (let i = 0; i < U.length; i++) {
       const v = (k: number) => U[(i + k) % U.length]!;
-      await eq('mkM3#' + i, encodeCall(sel('mkM3(uint256,uint256,uint256,uint256,uint256,uint256,uint256)'), [v(0), v(1), v(2), v(3), v(4), v(5), v(6)]));
+      await eq(
+        'mkM3#' + i,
+        encodeCall(sel('mkM3(uint256,uint256,uint256,uint256,uint256,uint256,uint256)'), [
+          v(0),
+          v(1),
+          v(2),
+          v(3),
+          v(4),
+          v(5),
+          v(6),
+        ]),
+      );
     }
 
     // ---- D3: deeper nest store + pure. Cube via uint256[8] inline static param. ----
@@ -221,7 +274,8 @@ describe('probe', () => {
     const DIRTY8 = (1n << 250n) | 0x5an; // should mask to 0x5a
     const DIRTY64 = (1n << 200n) | 0xcafen;
     for (let i = 0; i < 8; i++) {
-      const t = U64[i % U64.length]!, tail = U64[(i + 1) % U64.length]!;
+      const t = U64[i % U64.length]!,
+        tail = U64[(i + 1) % U64.length]!;
       const g = (k: number) => U8[(i + k) % U8.length]!;
       const sig = 'setPk(uint64,uint64,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)';
       const msig = 'mkPk(uint64,uint64,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)';
@@ -231,19 +285,50 @@ describe('probe', () => {
       await eq('mkPk#' + i, rawCall(msig, args));
     }
     // dirty-high-bit cases for Pk (solc masks function-param inputs; both should agree)
-    await eq('mkPk-dirty', rawCall('mkPk(uint64,uint64,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)',
-      [DIRTY64, DIRTY64, DIRTY8, DIRTY8, DIRTY8, DIRTY8, DIRTY8, DIRTY8, DIRTY8, DIRTY8]));
-    await eq('setPk-dirty', rawCall('setPk(uint64,uint64,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)',
-      [DIRTY64, DIRTY64, DIRTY8, DIRTY8, DIRTY8, DIRTY8, DIRTY8, DIRTY8, DIRTY8, DIRTY8]));
+    await eq(
+      'mkPk-dirty',
+      rawCall('mkPk(uint64,uint64,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)', [
+        DIRTY64,
+        DIRTY64,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+      ]),
+    );
+    await eq(
+      'setPk-dirty',
+      rawCall('setPk(uint64,uint64,uint8,uint8,uint8,uint8,uint8,uint8,uint8,uint8)', [
+        DIRTY64,
+        DIRTY64,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+        DIRTY8,
+      ]),
+    );
     await eq('getPk-dirty', encodeCall(sel('getPk()'), []));
 
     // ---- Sg: signed grid (i256 tag, i64 grid). negatives / INT_MIN / INT_MAX ----
-    const I64MAX = (1n << 63n) - 1n, I64MIN = -(1n << 63n);
-    const I256MAX = (1n << 255n) - 1n, I256MIN = -(1n << 255n);
+    const I64MAX = (1n << 63n) - 1n,
+      I64MIN = -(1n << 63n);
+    const I256MAX = (1n << 255n) - 1n,
+      I256MIN = -(1n << 255n);
     const Scorp: bigint[] = [0n, 1n, -1n, 7n, -7n, I64MAX, I64MIN, I64MAX - 1n, I64MIN + 1n, 42n, -42n];
     for (let i = 0; i < Scorp.length; i++) {
       const t = [0n, -1n, I256MAX, I256MIN, 12345n][i % 5]!;
-      const a = Scorp[i]!, b = Scorp[(i + 1) % Scorp.length]!, c = Scorp[(i + 2) % Scorp.length]!, d = Scorp[(i + 3) % Scorp.length]!;
+      const a = Scorp[i]!,
+        b = Scorp[(i + 1) % Scorp.length]!,
+        c = Scorp[(i + 2) % Scorp.length]!,
+        d = Scorp[(i + 3) % Scorp.length]!;
       await eq('setSg#' + i, encodeCall(sel('setSg(int256,int64,int64,int64,int64)'), [t, a, b, c, d]));
       await eq('getSg#' + i, encodeCall(sel('getSg()'), []));
       await eq('mkSg#' + i, encodeCall(sel('mkSg(int256,int64,int64,int64,int64)'), [t, a, b, c, d]));
@@ -251,14 +336,21 @@ describe('probe', () => {
     // i8 grid
     const I8: bigint[] = [0n, 1n, -1n, 127n, -128n, 42n, -42n, 100n, -100n];
     for (let i = 0; i < I8.length; i++) {
-      const a = I8[i]!, b = I8[(i + 1) % I8.length]!, c = I8[(i + 2) % I8.length]!, d = I8[(i + 3) % I8.length]!;
+      const a = I8[i]!,
+        b = I8[(i + 1) % I8.length]!,
+        c = I8[(i + 2) % I8.length]!,
+        d = I8[(i + 3) % I8.length]!;
       await eq('mkSg8#' + i, encodeCall(sel('mkSg8(int8,int8,int8,int8)'), [a, b, c, d]));
     }
     // i128 grid
-    const I128MAX = (1n << 127n) - 1n, I128MIN = -(1n << 127n);
+    const I128MAX = (1n << 127n) - 1n,
+      I128MIN = -(1n << 127n);
     const I128: bigint[] = [0n, 1n, -1n, I128MAX, I128MIN, I128MAX - 1n, I128MIN + 1n, 999n, -999n];
     for (let i = 0; i < I128.length; i++) {
-      const a = I128[i]!, b = I128[(i + 1) % I128.length]!, c = I128[(i + 2) % I128.length]!, d = I128[(i + 3) % I128.length]!;
+      const a = I128[i]!,
+        b = I128[(i + 1) % I128.length]!,
+        c = I128[(i + 2) % I128.length]!,
+        d = I128[(i + 3) % I128.length]!;
       await eq('mkSg128#' + i, encodeCall(sel('mkSg128(int128,int128,int128,int128)'), [a, b, c, d]));
     }
 
@@ -274,45 +366,89 @@ describe('probe', () => {
     ];
     for (let i = 0; i < B4.length; i++) {
       const t = U[i % U.length]!;
-      const a = B4[i]!, b = B4[(i + 1) % B4.length]!, c = B4[(i + 2) % B4.length]!, d = B4[(i + 3) % B4.length]!;
+      const a = B4[i]!,
+        b = B4[(i + 1) % B4.length]!,
+        c = B4[(i + 2) % B4.length]!,
+        d = B4[(i + 3) % B4.length]!;
       await eq('setBg#' + i, rawCall('setBg(uint256,bytes4,bytes4,bytes4,bytes4)', [t, a, b, c, d]));
       await eq('getBg#' + i, encodeCall(sel('getBg()'), []));
       await eq('mkBg#' + i, rawCall('mkBg(uint256,bytes4,bytes4,bytes4,bytes4)', [t, a, b, c, d]));
     }
     // dirty low bits in bytes4 slots: bytes4 only takes top 4 bytes; low bytes dirty -> both mask
-    await eq('mkBg-dirty', rawCall('mkBg(uint256,bytes4,bytes4,bytes4,bytes4)',
-      [7n, (0x11223344n << 224n) | 0xabcdefn, (0xaabbccddn << 224n) | 0x123n, 0xffffffffffffffffn << 192n, 0n]));
+    await eq(
+      'mkBg-dirty',
+      rawCall('mkBg(uint256,bytes4,bytes4,bytes4,bytes4)', [
+        7n,
+        (0x11223344n << 224n) | 0xabcdefn,
+        (0xaabbccddn << 224n) | 0x123n,
+        0xffffffffffffffffn << 192n,
+        0n,
+      ]),
+    );
     // bytes32 grid
     const B32: bigint[] = [0n, MAX, 1n, HALF, 0xdeadbeefn, M - 12345n];
     for (let i = 0; i < B32.length; i++) {
-      const a = B32[i]!, b = B32[(i + 1) % B32.length]!, c = B32[(i + 2) % B32.length]!, d = B32[(i + 3) % B32.length]!;
+      const a = B32[i]!,
+        b = B32[(i + 1) % B32.length]!,
+        c = B32[(i + 2) % B32.length]!,
+        d = B32[(i + 3) % B32.length]!;
       await eq('mkBg32#' + i, rawCall('mkBg32(bytes32,bytes32,bytes32,bytes32)', [a, b, c, d]));
     }
 
     // ---- Mix: scalar + 2D grid + trailing scalar ----
     for (let i = 0; i < U.length; i++) {
-      const s = U[i]!, e = U[(i + 1) % U.length]!, a = U[(i + 2) % U.length]!, b = U[(i + 3) % U.length]!, c = U[(i + 4) % U.length]!, d = U[(i + 5) % U.length]!;
-      await eq('setMix#' + i, encodeCall(sel('setMix(uint256,uint256,uint256,uint256,uint256,uint256)'), [s, e, a, b, c, d]));
+      const s = U[i]!,
+        e = U[(i + 1) % U.length]!,
+        a = U[(i + 2) % U.length]!,
+        b = U[(i + 3) % U.length]!,
+        c = U[(i + 4) % U.length]!,
+        d = U[(i + 5) % U.length]!;
+      await eq(
+        'setMix#' + i,
+        encodeCall(sel('setMix(uint256,uint256,uint256,uint256,uint256,uint256)'), [s, e, a, b, c, d]),
+      );
       await eq('getMix#' + i, encodeCall(sel('getMix()'), []));
-      await eq('mkMix#' + i, encodeCall(sel('mkMix(uint256,uint256,uint256,uint256,uint256,uint256)'), [s, e, a, b, c, d]));
+      await eq(
+        'mkMix#' + i,
+        encodeCall(sel('mkMix(uint256,uint256,uint256,uint256,uint256,uint256)'), [s, e, a, b, c, d]),
+      );
     }
 
     // ---- MW: struct-array literal with packed i128 fields, pure return ----
     for (let i = 0; i < I128.length; i++) {
-      const x0 = I128[i]!, y0 = I128[(i + 1) % I128.length]!, x1 = I128[(i + 2) % I128.length]!, y1 = I128[(i + 3) % I128.length]!;
-      await eq('mkMW#' + i, encodeCall(sel('mkMW(uint256,int128,int128,int128,int128)'), [U[i % U.length]!, x0, y0, x1, y1]));
+      const x0 = I128[i]!,
+        y0 = I128[(i + 1) % I128.length]!,
+        x1 = I128[(i + 2) % I128.length]!,
+        y1 = I128[(i + 3) % I128.length]!;
+      await eq(
+        'mkMW#' + i,
+        encodeCall(sel('mkMW(uint256,int128,int128,int128,int128)'), [U[i % U.length]!, x0, y0, x1, y1]),
+      );
     }
     // ---- MP: struct-array literal with packed u8 fields, pure return ----
     for (let i = 0; i < U8.length; i++) {
-      const a0 = U8[i]!, b0 = U8[(i + 1) % U8.length]!, a1 = U8[(i + 2) % U8.length]!, b1 = U8[(i + 3) % U8.length]!;
+      const a0 = U8[i]!,
+        b0 = U8[(i + 1) % U8.length]!,
+        a1 = U8[(i + 2) % U8.length]!,
+        b1 = U8[(i + 3) % U8.length]!;
       await eq('mkMP#' + i, rawCall('mkMP(uint256,uint8,uint8,uint8,uint8)', [U[i % U.length]!, a0, b0, a1, b1]));
     }
     // dirty MP
-    await eq('mkMP-dirty', rawCall('mkMP(uint256,uint8,uint8,uint8,uint8)',
-      [9n, (1n << 100n) | 0x12n, (1n << 80n) | 0x34n, 0xffn, (1n << 9n) | 0x56n]));
+    await eq(
+      'mkMP-dirty',
+      rawCall('mkMP(uint256,uint8,uint8,uint8,uint8)', [
+        9n,
+        (1n << 100n) | 0x12n,
+        (1n << 80n) | 0x34n,
+        0xffn,
+        (1n << 9n) | 0x56n,
+      ]),
+    );
 
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });
@@ -408,23 +544,43 @@ contract D {
 
 describe('probe2', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const mism: string[] = []; let count = 0;
+  const mism: string[] = [];
+  let count = 0;
   async function eq(label: string, data: string) {
     count++;
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   function rawCall(sig: string, words: bigint[]): string {
     let h = '0x' + sel(sig);
-    for (const w of words) { let x = ((w % M) + M) % M; h += x.toString(16).padStart(64, '0'); }
+    for (const w of words) {
+      let x = ((w % M) + M) % M;
+      h += x.toString(16).padStart(64, '0');
+    }
     return h;
   }
   beforeAll(async () => {
     const jb = compile(JETH2, { fileName: 'D.jeth' });
     const sb = compileSolidity(SOL2, 'D');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('runs', async () => {
@@ -432,17 +588,21 @@ describe('probe2', () => {
     const U: bigint[] = [0n, 1n, 255n, MAX, 1n << 255n, 0xdeadbeefn, 12345n];
     // address corpus: includes a full 20-byte value, and a value with dirty high bits above 160
     const ADDR: bigint[] = [
-      0n, 1n,
-      BigInt('0x' + 'ab'.repeat(20)),         // full 20 bytes
+      0n,
+      1n,
+      BigInt('0x' + 'ab'.repeat(20)), // full 20 bytes
       BigInt('0x' + 'ff'.repeat(20)),
       0x00112233445566778899aabbccddeeff00112233n,
-      (1n << 200n) | 0x1234n,                  // dirty high bits -> solc masks to 160; both should mask
+      (1n << 200n) | 0x1234n, // dirty high bits -> solc masks to 160; both should mask
     ];
 
     // ---- address grid ----
     for (let i = 0; i < ADDR.length; i++) {
       const t = U[i % U.length]!;
-      const a = ADDR[i]!, b = ADDR[(i + 1) % ADDR.length]!, c = ADDR[(i + 2) % ADDR.length]!, d = ADDR[(i + 3) % ADDR.length]!;
+      const a = ADDR[i]!,
+        b = ADDR[(i + 1) % ADDR.length]!,
+        c = ADDR[(i + 2) % ADDR.length]!,
+        d = ADDR[(i + 3) % ADDR.length]!;
       await eq('setAg#' + i, rawCall('setAg(uint256,address,address,address,address)', [t, a, b, c, d]));
       await eq('getAg#' + i, encodeCall(sel('getAg()'), []));
       await eq('mkAg#' + i, rawCall('mkAg(uint256,address,address,address,address)', [t, a, b, c, d]));
@@ -452,7 +612,10 @@ describe('probe2', () => {
     for (let i = 0; i < U.length; i++) {
       const v = (k: number) => U[(i + k) % U.length]!;
       const args = [v(0), v(1), v(2), v(3), v(4), v(5), v(6)];
-      await eq('setAsym#' + i, encodeCall(sel('setAsym(uint256,uint256,uint256,uint256,uint256,uint256,uint256)'), args));
+      await eq(
+        'setAsym#' + i,
+        encodeCall(sel('setAsym(uint256,uint256,uint256,uint256,uint256,uint256,uint256)'), args),
+      );
       await eq('getAsym#' + i, encodeCall(sel('getAsym()'), []));
       await eq('mkAsym#' + i, encodeCall(sel('mkAsym(uint256,uint256,uint256,uint256,uint256,uint256,uint256)'), args));
     }
@@ -466,22 +629,35 @@ describe('probe2', () => {
     const U64: bigint[] = [0n, 1n, (1n << 64n) - 1n, 0xcafen];
     for (let i = 0; i < U.length; i++) {
       const v = (k: number) => U[(i + k) % U.length]!;
-      const id0 = U64[i % U64.length]!, id1 = U64[(i + 1) % U64.length]!;
-      await eq('mkMM#' + i, encodeCall(sel('mkMM(uint256,uint64,uint256,uint256,uint64,uint256,uint256)'),
-        [v(0), id0, v(1), v(2), id1, v(3), v(4)]));
+      const id0 = U64[i % U64.length]!,
+        id1 = U64[(i + 1) % U64.length]!;
+      await eq(
+        'mkMM#' + i,
+        encodeCall(sel('mkMM(uint256,uint64,uint256,uint256,uint64,uint256,uint256)'), [
+          v(0),
+          id0,
+          v(1),
+          v(2),
+          id1,
+          v(3),
+          v(4),
+        ]),
+      );
     }
 
     // ---- ternary + cast subexpressions inside grid literal ----
     for (let i = 0; i < U.length; i++) {
-      const a = U[i]!, b = U[(i + 2) % U.length]!;
+      const a = U[i]!,
+        b = U[(i + 2) % U.length]!;
       await eq('mkWtern-T#' + i, rawCall('mkWtern(uint256,bool,uint256,uint256)', [U[(i + 1) % U.length]!, 1n, a, b]));
       await eq('mkWtern-F#' + i, rawCall('mkWtern(uint256,bool,uint256,uint256)', [U[(i + 1) % U.length]!, 0n, a, b]));
     }
     const SMALL_A: bigint[] = [0n, 1n, 255n];
     const SMALL_B: bigint[] = [0n, 1n, 65535n, 1000n];
-    for (let i = 0; i < SMALL_A.length; i++) for (let k = 0; k < SMALL_B.length; k++) {
-      await eq(`mkWcast#${i}_${k}`, rawCall('mkWcast(uint256,uint8,uint16)', [7n, SMALL_A[i]!, SMALL_B[k]!]));
-    }
+    for (let i = 0; i < SMALL_A.length; i++)
+      for (let k = 0; k < SMALL_B.length; k++) {
+        await eq(`mkWcast#${i}_${k}`, rawCall('mkWcast(uint256,uint8,uint16)', [7n, SMALL_A[i]!, SMALL_B[k]!]));
+      }
 
     // ---- struct with two grids + nested packed struct field (STORE path; the
     //      construct-and-return path is rejected by JETH900, documented in notes) ----
@@ -489,16 +665,22 @@ describe('probe2', () => {
     const U8: bigint[] = [0n, 1n, 127n, 255n];
     for (let i = 0; i < U.length; i++) {
       const v = (k: number) => U[(i + k) % U.length]!;
-      const px = U128[i % U128.length]!, py = U128[(i + 1) % U128.length]!;
-      const e = U8[i % U8.length]!, f = U8[(i + 1) % U8.length]!, g = U8[(i + 2) % U8.length]!, h = U8[(i + 3) % U8.length]!;
+      const px = U128[i % U128.length]!,
+        py = U128[(i + 1) % U128.length]!;
+      const e = U8[i % U8.length]!,
+        f = U8[(i + 1) % U8.length]!,
+        g = U8[(i + 2) % U8.length]!,
+        h = U8[(i + 3) % U8.length]!;
       const sig = 'setTwo(uint256,uint256,uint256,uint256,uint128,uint128,uint8,uint8,uint8,uint8)';
       const args = [v(0), v(1), v(2), v(3), px, py, e, f, g, h];
       await eq('setTwo#' + i, rawCall(sig, args));
       await eq('getTwo#' + i, encodeCall(sel('getTwo()'), []));
     }
 
-    if (mism.length) { console.log('W2 MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('W2 ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('W2 MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('W2 ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });
@@ -514,10 +696,13 @@ describe('nested struct-literal field in RETURN position vs solc (byte-identical
   async function sameReturn(J: string, S: string, sig: string, args: bigint[]): Promise<void> {
     const jb = compile(J, { fileName: 'D.jeth' });
     const sb = compileSolidity(S, 'D');
-    const hj = await Harness.create(); const hs = await Harness.create();
-    const aj = await hj.deploy(jb.creationBytecode); const as = await hs.deploy(sb.creation);
-    const data = '0x' + sel(sig) + args.map((w) => ((w % M + M) % M).toString(16).padStart(64, '0')).join('');
-    const rj = await hj.call(aj, data); const rs = await hs.call(as, data);
+    const hj = await Harness.create();
+    const hs = await Harness.create();
+    const aj = await hj.deploy(jb.creationBytecode);
+    const as = await hs.deploy(sb.creation);
+    const data = '0x' + sel(sig) + args.map((w) => (((w % M) + M) % M).toString(16).padStart(64, '0')).join('');
+    const rj = await hj.call(aj, data);
+    const rs = await hs.call(as, data);
     expect(rj.success, `jeth err=${rj.exceptionError}`).toBe(rs.success);
     expect(rj.returnHex).toBe(rs.returnHex);
   }
@@ -531,7 +716,9 @@ describe('nested struct-literal field in RETURN position vs solc (byte-identical
 pragma solidity ^0.8.20;
 contract D { struct Pt { uint256 x; uint256 y; } struct M { Pt p; uint256 z; }
   function f(uint256 x, uint256 y, uint256 z) external pure returns (M memory){ return M(Pt(x, y), z); } }`,
-      'f(uint256,uint256,uint256)', [7n, 8n, 9n]));
+      'f(uint256,uint256,uint256)',
+      [7n, 8n, 9n],
+    ));
 
   it('struct field + array-literal sibling returned: T2(P2(px,py), [[..]])', () =>
     sameReturn(
@@ -542,7 +729,9 @@ contract D { struct Pt { uint256 x; uint256 y; } struct M { Pt p; uint256 z; }
 pragma solidity ^0.8.20;
 contract D { struct P2 { uint128 a; uint128 b; } struct T2 { P2 pt; uint256[2][2] g; }
   function f(uint128 px, uint128 py, uint256 a, uint256 b, uint256 c, uint256 d) external pure returns (T2 memory){ return T2(P2(px, py), [[a, b], [c, d]]); } }`,
-      'f(uint128,uint128,uint256,uint256,uint256,uint256)', [3n, 4n, 10n, 11n, 12n, 13n]));
+      'f(uint128,uint128,uint256,uint256,uint256,uint256)',
+      [3n, 4n, 10n, 11n, 12n, 13n],
+    ));
 
   it('struct-array literal element with nested struct subfield returned: M(t,[Row(Pt(..),z),..])', () =>
     sameReturn(
@@ -556,7 +745,9 @@ pragma solidity ^0.8.20;
 contract D { struct Pt { uint8 x; uint8 y; } struct Row { Pt p; uint256 z; } struct M { uint256 tag; Row[2] rows; }
   function f(uint256 t, uint8 x0, uint8 y0, uint256 z0, uint8 x1, uint8 y1, uint256 z1) external pure returns (M memory){
     return M(t, [Row(Pt(x0, y0), z0), Row(Pt(x1, y1), z1)]); } }`,
-      'f(uint256,uint8,uint8,uint256,uint8,uint8,uint256)', [99n, 1n, 2n, 100n, 3n, 4n, 200n]));
+      'f(uint256,uint8,uint8,uint256,uint8,uint8,uint256)',
+      [99n, 1n, 2n, 100n, 3n, 4n, 200n],
+    ));
 
   it('CONTROL: the identical struct stored to state IS byte-identical at runtime', async () => {
     // construct-and-store compiles; verify runtime parity for M(Pt(x,y), z) via the STORE path.
@@ -572,14 +763,18 @@ contract D { struct Pt { uint256 x; uint256 y; } struct M { Pt p; uint256 z; } M
   function get() external view returns (M memory){ return m; } }`;
     const jb = compile(J, { fileName: 'D.jeth' });
     const sb = compileSolidity(S, 'D');
-    const hj = await Harness.create(); const hs = await Harness.create();
-    const aj = await hj.deploy(jb.creationBytecode); const as = await hs.deploy(sb.creation);
-    const data = '0x' + sel('set(uint256,uint256,uint256)') +
-      [7n, 8n, 9n].map((w) => w.toString(16).padStart(64, '0')).join('');
-    const j1 = await hj.call(aj, data); const s1 = await hs.call(as, data);
+    const hj = await Harness.create();
+    const hs = await Harness.create();
+    const aj = await hj.deploy(jb.creationBytecode);
+    const as = await hs.deploy(sb.creation);
+    const data =
+      '0x' + sel('set(uint256,uint256,uint256)') + [7n, 8n, 9n].map((w) => w.toString(16).padStart(64, '0')).join('');
+    const j1 = await hj.call(aj, data);
+    const s1 = await hs.call(as, data);
     expect(j1.success, `set jeth err=${j1.exceptionError}`).toBe(s1.success);
     const g = '0x' + sel('get()');
-    const j2 = await hj.call(aj, g); const s2 = await hs.call(as, g);
+    const j2 = await hj.call(aj, g);
+    const s2 = await hs.call(as, g);
     expect(j2.success).toBe(s2.success);
     expect(j2.returnHex).toBe(s2.returnHex);
   });

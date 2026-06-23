@@ -157,7 +157,14 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
   // ---- 1. narrow element types: clean values -----------------------------
   it('u256[] sizes: empty / 1 / 2 / many / 100', async () => {
     const big = Array.from({ length: 100 }, (_, i) => BigInt(i) * 7n + 1n);
-    for (const xs of [[], [0n], [M - 1n], [1n, 2n], [1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n], big] as bigint[][]) {
+    for (const xs of [
+      [],
+      [0n],
+      [M - 1n],
+      [1n, 2n],
+      [1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n],
+      big,
+    ] as bigint[][]) {
       await eq(`eu([${xs.length}])`, '0x' + sel('eu(uint256[])') + pad(0x20n) + arr(xs));
     }
   });
@@ -209,25 +216,34 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
   const DIRTY = M - 1n; // all 256 bits set
   it('MISCOMPILE: DIRTY u8[] elements -> solc reverts, JETH emits', async () => {
     for (const xs of [[DIRTY], [0x1ffn], [255n, 0x100n], [DIRTY, 0n, 0x3ffn]] as bigint[][])
-      await divergesSolReverts(`e8 dirty [${xs.map((x) => x.toString(16))}]`, '0x' + sel('e8(uint8[])') + pad(0x20n) + arr(xs));
+      await divergesSolReverts(
+        `e8 dirty [${xs.map((x) => x.toString(16))}]`,
+        '0x' + sel('e8(uint8[])') + pad(0x20n) + arr(xs),
+      );
   });
   it('MISCOMPILE: DIRTY u16[] / u128[] elements', async () => {
     for (const xs of [[DIRTY], [0x1ffffn], [65535n, 0x10000n]] as bigint[][])
       await divergesSolReverts(`e16 dirty`, '0x' + sel('e16(uint16[])') + pad(0x20n) + arr(xs));
-    for (const xs of [[DIRTY], [1n << 128n], [(1n << 128n) - 1n, (1n << 200n)]] as bigint[][])
+    for (const xs of [[DIRTY], [1n << 128n], [(1n << 128n) - 1n, 1n << 200n]] as bigint[][])
       await divergesSolReverts(`e128 dirty`, '0x' + sel('e128(uint128[])') + pad(0x20n) + arr(xs));
   });
   it('MISCOMPILE: DIRTY int8[] / int128[] elements (bad sign-extension)', async () => {
     // 0x...0080 raw is +128, not a valid int8 sign-extension of -128 (which is 0xff..80).
     // 0xff..ff is -1 (well-formed) and is NOT dirty, so it is excluded here.
     for (const xs of [[0x80n], [0x17fn], [0xff00n]] as bigint[][])
-      await divergesSolReverts(`ei8 dirty [${xs.map((x) => x.toString(16))}]`, '0x' + sel('ei8(int8[])') + pad(0x20n) + arr(xs));
+      await divergesSolReverts(
+        `ei8 dirty [${xs.map((x) => x.toString(16))}]`,
+        '0x' + sel('ei8(int8[])') + pad(0x20n) + arr(xs),
+      );
     for (const xs of [[1n << 127n], [1n << 128n]] as bigint[][])
       await divergesSolReverts(`ei128 dirty`, '0x' + sel('ei128(int128[])') + pad(0x20n) + arr(xs));
   });
   it('MISCOMPILE: DIRTY bool[] elements (only 0/1 valid)', async () => {
     for (const xs of [[2n], [DIRTY], [1n, 2n], [0n, 0xffn]] as bigint[][])
-      await divergesSolReverts(`eb dirty [${xs.map((x) => x.toString(16))}]`, '0x' + sel('eb(bool[])') + pad(0x20n) + arr(xs));
+      await divergesSolReverts(
+        `eb dirty [${xs.map((x) => x.toString(16))}]`,
+        '0x' + sel('eb(bool[])') + pad(0x20n) + arr(xs),
+      );
   });
   it('MISCOMPILE: DIRTY address[] elements (high 96 bits garbage)', async () => {
     for (const xs of [[DIRTY], [1n << 160n], [0xa1n, (1n << 200n) | 0xb2n]] as bigint[][])
@@ -255,15 +271,23 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
     for (const [a, b] of [
       [[], []],
       [[1n], [0xa1n]],
-      [[1n, 2n, 3n], [0xa1n, 0xb2n]],
+      [
+        [1n, 2n, 3n],
+        [0xa1n, 0xb2n],
+      ],
     ] as [bigint[], bigint[]][]) {
       const headWords = 3;
       const offA = headWords * 32;
       const aTail = arr(a);
       const offB = offA + aTail.length / 2;
       const data =
-        '0x' + sel('ethree(uint256,uint256[],address[])') +
-        pad(5n) + pad(BigInt(offA)) + pad(BigInt(offB)) + aTail + arr(b);
+        '0x' +
+        sel('ethree(uint256,uint256[],address[])') +
+        pad(5n) +
+        pad(BigInt(offA)) +
+        pad(BigInt(offB)) +
+        aTail +
+        arr(b);
       await eq(`ethree(a=${a.length},b=${b.length})`, data);
     }
   });
@@ -271,13 +295,15 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
     for (const [a, b] of [
       [[], []],
       [[7n], [255n]],
-      [[1n, 2n], [1n, 0n, 9n]],
+      [
+        [1n, 2n],
+        [1n, 0n, 9n],
+      ],
     ] as [bigint[], bigint[]][]) {
       const offA = 2 * 32;
       const aTail = arr(a);
       const offB = offA + aTail.length / 2;
-      const data =
-        '0x' + sel('emulti(uint256[],uint8[])') + pad(BigInt(offA)) + pad(BigInt(offB)) + aTail + arr(b);
+      const data = '0x' + sel('emulti(uint256[],uint8[])') + pad(BigInt(offA)) + pad(BigInt(offB)) + aTail + arr(b);
       await eq(`emulti(a=${a.length},b=${b.length})`, data);
     }
   });
@@ -294,8 +320,13 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
         const aTail = arr(xs);
         const offS = offA + aTail.length / 2;
         const data =
-          '0x' + sel('emixdata(uint256[],string,uint256)') +
-          pad(BigInt(offA)) + pad(BigInt(offS)) + pad(123n) + aTail + encStr(s);
+          '0x' +
+          sel('emixdata(uint256[],string,uint256)') +
+          pad(BigInt(offA)) +
+          pad(BigInt(offS)) +
+          pad(123n) +
+          aTail +
+          encStr(s);
         await eq(`emixdata(a=${xs.length},s="${s.slice(0, 6)}")`, data);
       }
     }
@@ -324,8 +355,11 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
 
   // ---- 7. an indexed STATIC fixed-array / struct param is now SUPPORTED (keccak topic) -----
   it('fixed-array indexed event param now compiles (keccak topic, JETH207 lifted)', () => {
-    expect(() => compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' }))
-      .not.toThrow();
+    expect(() =>
+      compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, {
+        fileName: 'C.jeth',
+      }),
+    ).not.toThrow();
   });
   it('struct indexed event param now compiles (keccak topic, JETH207 lifted)', () => {
     const src = `@struct class S { x: u256; }

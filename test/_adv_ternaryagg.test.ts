@@ -16,13 +16,18 @@ const sel = (s: string) => functionSelector(s);
 
 // A pair of (jeth,sol) harnesses for one contract, seeded once.
 interface Pair {
-  jeth: Harness; sol: Harness; aj: Address; as: Address;
+  jeth: Harness;
+  sol: Harness;
+  aj: Address;
+  as: Address;
 }
 async function build(jethSrc: string, solSrc: string, seedCalls: string[] = []): Promise<Pair> {
   const jb = compile(jethSrc, { fileName: 'C.jeth' });
   const sb = compileSolidity(solSrc, 'C');
-  const jeth = await Harness.create(); const sol = await Harness.create();
-  const aj = await jeth.deploy(jb.creationBytecode); const as = await sol.deploy(sb.creation);
+  const jeth = await Harness.create();
+  const sol = await Harness.create();
+  const aj = await jeth.deploy(jb.creationBytecode);
+  const as = await sol.deploy(sb.creation);
   for (const s of seedCalls) {
     await jeth.call(aj, encodeCall(sel(s), []));
     await sol.call(as, encodeCall(sel(s), []));
@@ -31,7 +36,8 @@ async function build(jethSrc: string, solSrc: string, seedCalls: string[] = []):
 }
 function mkEq(p: Pair) {
   return async (label: string, data: string) => {
-    const j = await p.jeth.call(p.aj, data); const s = await p.sol.call(p.as, data);
+    const j = await p.jeth.call(p.aj, data);
+    const s = await p.sol.call(p.as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     return { j, s };
@@ -269,8 +275,12 @@ contract C {
 describe('adversarial: static-aggregate ternary vs Solidity', () => {
   // ── Contract 1: storage independence, packed/signed/bytesN fields, field reads ──
   describe('storage-copy independence + packed/signed/bytesN fields', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(J1, S1, ['seed()']); eq = mkEq(p); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(J1, S1, ['seed()']);
+      eq = mkEq(p);
+    });
     it('pickStruct / pickStructLocal whole-struct, both directions', async () => {
       for (const c of [1n, 0n]) {
         await eq(`pickStruct(${c})`, encodeCall(sel('pickStruct(bool)'), [c]));
@@ -301,8 +311,12 @@ describe('adversarial: static-aggregate ternary vs Solidity', () => {
 
   // ── Contract 2: short-circuit (untaken ctor revert must not fire) ──
   describe('short-circuit: untaken constructor revert', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(J2, S2, ['seed()']); eq = mkEq(p); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(J2, S2, ['seed()']);
+      eq = mkEq(p);
+    });
     it('div-by-zero in untaken ctor branch (c=true: no revert; c=false: revert)', async () => {
       // c=true picks storage; ctor 1000/0 must NOT be evaluated -> success on both
       await eq('divBranch(true, 0)', encodeCall(sel('divBranch(bool,uint256)'), [1n, 0n]));
@@ -314,22 +328,26 @@ describe('adversarial: static-aggregate ternary vs Solidity', () => {
       await eq('divBranch(false, 4)', encodeCall(sel('divBranch(bool,uint256)'), [0n, 4n]));
     });
     it('underflow in untaken ctor branch', async () => {
-      await eq('subBranch(true, 9)', encodeCall(sel('subBranch(bool,uint256)'), [1n, 9n]));   // taken=storage -> ok
-      await eq('subBranch(false, 9)', encodeCall(sel('subBranch(bool,uint256)'), [0n, 9n]));  // 5-9 underflow -> revert
-      await eq('subBranch(false, 2)', encodeCall(sel('subBranch(bool,uint256)'), [0n, 2n]));  // 5-2 ok
+      await eq('subBranch(true, 9)', encodeCall(sel('subBranch(bool,uint256)'), [1n, 9n])); // taken=storage -> ok
+      await eq('subBranch(false, 9)', encodeCall(sel('subBranch(bool,uint256)'), [0n, 9n])); // 5-9 underflow -> revert
+      await eq('subBranch(false, 2)', encodeCall(sel('subBranch(bool,uint256)'), [0n, 2n])); // 5-2 ok
     });
     it('overflow in untaken ctor branch', async () => {
-      const big = (1n << 200n);
-      await eq('mulBranch(true, big)', encodeCall(sel('mulBranch(bool,uint256)'), [1n, big]));   // storage -> ok
-      await eq('mulBranch(false, big)', encodeCall(sel('mulBranch(bool,uint256)'), [0n, big]));  // overflow -> revert
-      await eq('mulBranch(false, 3)', encodeCall(sel('mulBranch(bool,uint256)'), [0n, 3n]));     // ok
+      const big = 1n << 200n;
+      await eq('mulBranch(true, big)', encodeCall(sel('mulBranch(bool,uint256)'), [1n, big])); // storage -> ok
+      await eq('mulBranch(false, big)', encodeCall(sel('mulBranch(bool,uint256)'), [0n, big])); // overflow -> revert
+      await eq('mulBranch(false, 3)', encodeCall(sel('mulBranch(bool,uint256)'), [0n, 3n])); // ok
     });
   });
 
   // ── Contract 3: nested aggregates ──
   describe('nested aggregates (struct-with-array, array-of-struct, nested arrays, packed)', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(J3, S3, ['seed()']); eq = mkEq(p); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(J3, S3, ['seed()']);
+      eq = mkEq(p);
+    });
     it('whole-aggregate ternary returns, both directions', async () => {
       for (const c of [1n, 0n]) {
         await eq(`pickWithArr(${c})`, encodeCall(sel('pickWithArr(bool)'), [c]));
@@ -340,9 +358,10 @@ describe('adversarial: static-aggregate ternary vs Solidity', () => {
       }
     });
     it('packed element read after select', async () => {
-      for (const c of [1n, 0n]) for (const i of [0n, 1n, 2n, 3n, 4n]) {
-        await eq(`packedElem(${c},${i})`, encodeCall(sel('packedElem(bool,uint256)'), [c, i]));
-      }
+      for (const c of [1n, 0n])
+        for (const i of [0n, 1n, 2n, 3n, 4n]) {
+          await eq(`packedElem(${c},${i})`, encodeCall(sel('packedElem(bool,uint256)'), [c, i]));
+        }
     });
     it('mutate struct-with-array local: returndata matches AND storage untouched', async () => {
       // wx occupies slots 0..3 (tag + arr[0..2]); wy occupies slots 4..7.
@@ -357,10 +376,15 @@ describe('adversarial: static-aggregate ternary vs Solidity', () => {
 
   // ── Contract 4: mixed sources + nested ternary + boundaries ──
   describe('mixed branch sources + nested ternary + boundary values', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(J4, S4, ['seed()']); eq = mkEq(p); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(J4, S4, ['seed()']);
+      eq = mkEq(p);
+    });
     it('storage vs ctor / vs local / two ctors, both directions, boundary args', async () => {
-      const sMin = -(1n << 255n); const sMax = (1n << 255n) - 1n;
+      const sMin = -(1n << 255n);
+      const sMax = (1n << 255n) - 1n;
       for (const c of [1n, 0n]) {
         for (const v of [0n, 1n, -1n, sMin, sMax]) {
           await eq(`sVsCtor(${c},${v})`, encodeCall(sel('sVsCtor(bool,int256)'), [c, v]));
@@ -391,17 +415,26 @@ contract C {
   function seed() external { x = P(1, 2, address(0xa1)); y = P(3, 4, address(0xb2)); z = P(5, 6, address(0xc3)); }
   function nested(bool c, bool d) external view returns (P memory) { return c ? x : (d ? y : z); }
 }`;
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(Jn, Sn, ['seed()']); eq = mkEq(p); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(Jn, Sn, ['seed()']);
+      eq = mkEq(p);
+    });
     it('all (c,d) combinations byte-identical', async () => {
-      for (const c of [1n, 0n]) for (const d of [1n, 0n]) await eq(`nested(${c},${d})`, encodeCall(sel('nested(bool,bool)'), [c, d]));
+      for (const c of [1n, 0n])
+        for (const d of [1n, 0n]) await eq(`nested(${c},${d})`, encodeCall(sel('nested(bool,bool)'), [c, d]));
     });
   });
 
   // ── Contract 5: fixed-array element-type variety + element write independence ──
   describe('fixed-array element variety (address/bytesN) + element-write independence', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(J5, S5, ['seed()']); eq = mkEq(p); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(J5, S5, ['seed()']);
+      eq = mkEq(p);
+    });
     it('pickAddrs / pickBytes4 whole arrays, both directions', async () => {
       for (const c of [1n, 0n]) {
         await eq(`pickAddrs(${c})`, encodeCall(sel('pickAddrs(bool)'), [c]));
@@ -409,9 +442,10 @@ contract C {
       }
     });
     it('element read after select', async () => {
-      for (const c of [1n, 0n]) for (const i of [0n, 1n, 2n]) {
-        await eq(`addrElem(${c},${i})`, encodeCall(sel('addrElem(bool,uint256)'), [c, i]));
-      }
+      for (const c of [1n, 0n])
+        for (const i of [0n, 1n, 2n]) {
+          await eq(`addrElem(${c},${i})`, encodeCall(sel('addrElem(bool,uint256)'), [c, i]));
+        }
     });
     it('element write after select: returndata matches AND storage untouched', async () => {
       // ax: slots 0,1,2 ; ay: slots 3,4,5

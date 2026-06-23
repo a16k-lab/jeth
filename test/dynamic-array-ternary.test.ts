@@ -39,15 +39,20 @@ contract C {
   function litTern(bool c) external pure returns (uint256[] memory) { uint256[] memory m=new uint256[](1); m[0]=100; if (c) { uint256[] memory r=new uint256[](3); r[0]=3;r[1]=4;r[2]=5; return r; } return m; } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
-    const both = async (d: string) => { await jeth.call(aj, d); await sol.call(as, d); };
+    const both = async (d: string) => {
+      await jeth.call(aj, d);
+      await sol.call(as, d);
+    };
     for (const v of [10n, 20n, 30n]) await both('0x' + sel('pushA(uint256)') + pad32(v));
     for (const v of [100n, 200n]) await both('0x' + sel('pushB(uint256)') + pad32(v));
   });
   const cmp = async (data: string, label: string) => {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success`).toBe(s.success);
     expect(j.returnHex, label).toBe(s.returnHex);
   };
@@ -56,7 +61,8 @@ contract C {
     for (const c of [1n, 0n]) {
       await cmp('0x' + sel('ret(bool)') + pad32(c), `ret(${c})`);
       await cmp('0x' + sel('len(bool)') + pad32(c), `len(${c})`);
-      for (const i of [0n, 1n, 2n, 5n]) await cmp('0x' + sel('idx(bool,uint256)') + pad32(c) + pad32(i), `idx(${c},${i})`); // i=5 OOB
+      for (const i of [0n, 1n, 2n, 5n])
+        await cmp('0x' + sel('idx(bool,uint256)') + pad32(c) + pad32(i), `idx(${c},${i})`); // i=5 OOB
     }
   });
   it('mixed memory-local vs calldata branches', async () => {
@@ -70,12 +76,25 @@ contract C {
   });
   it('data-location parity: storage|calldata rejects (like solc); calldata|calldata indexed is gated', () => {
     const codes = (src: string): string[] => {
-      try { compile(src, { fileName: 'C.jeth' }); return []; }
-      catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+      try {
+        compile(src, { fileName: 'C.jeth' });
+        return [];
+      } catch (e) {
+        if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+        throw e;
+      }
     };
     // solc rejects a storage<->calldata data-location mismatch in a ternary
-    expect(codes('@contract class C { @state s: u256[]; @external @view f(c: bool, x: u256[]): u256[] { return c ? this.s : x; } }')).toContain('JETH074');
+    expect(
+      codes(
+        '@contract class C { @state s: u256[]; @external @view f(c: bool, x: u256[]): u256[] { return c ? this.s : x; } }',
+      ),
+    ).toContain('JETH074');
     // calldata|calldata indexed: solc keeps a calldata ref (validates dirty on index); we gate it
-    expect(codes('@contract class C { @external @pure f(c: bool, x: u256[], y: u256[], i: u256): u256 { return (c ? x : y)[i]; } }')).toContain('JETH074');
+    expect(
+      codes(
+        '@contract class C { @external @pure f(c: bool, x: u256[], y: u256[], i: u256): u256 { return (c ? x : y)[i]; } }',
+      ),
+    ).toContain('JETH074');
   });
 });

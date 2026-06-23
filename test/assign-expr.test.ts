@@ -55,15 +55,18 @@ contract C {
 describe('assignment-as-expression vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('value/compound/chained/arg/cond/return positions', async () => {
@@ -74,12 +77,14 @@ describe('assignment-as-expression vs Solidity', () => {
       await eq(`inCond(${v})`, encodeCall(sel('inCond(uint256)'), [v]));
       await eq(`inReturn(${v})`, encodeCall(sel('inReturn(uint256)'), [v]));
       await eq(`multiCompound(${v})`, encodeCall(sel('multiCompound(uint256)'), [v]));
-      for (const a of [0n, 3n, 100n]) await eq(`compound(${a},${v})`, encodeCall(sel('compound(uint256,uint256)'), [a, v]));
+      for (const a of [0n, 3n, 100n])
+        await eq(`compound(${a},${v})`, encodeCall(sel('compound(uint256,uint256)'), [a, v]));
     }
   });
   it('narrow/signed masked yields', async () => {
-    for (const a of [0n, 1n, 200n, 255n]) for (const b of [0n, 7n, 128n, 255n])
-      await eq(`narrowYield(${a},${b})`, encodeCall(sel('narrowYield(uint8,uint8)'), [a, b]));
+    for (const a of [0n, 1n, 200n, 255n])
+      for (const b of [0n, 7n, 128n, 255n])
+        await eq(`narrowYield(${a},${b})`, encodeCall(sel('narrowYield(uint8,uint8)'), [a, b]));
     for (const v of [0n, 1n, -1n, (1n << 63n) - 1n, M - (1n << 63n), -42n])
       await eq(`signedYield(${v})`, encodeCall(sel('signedYield(int64)'), [v]));
   });

@@ -27,7 +27,9 @@ type AbiFn = { type: string; name?: string; stateMutability?: string };
 const fnMap = (abi: AbiFn[]) =>
   Object.fromEntries(abi.filter((e) => e.type === 'function').map((f) => [f.name, f.stateMutability]));
 
-function compileOrDiags(src: string): { ok: true; abi: AbiFn[]; creationBytecode: string } | { ok: false; codes: string[] } {
+function compileOrDiags(
+  src: string,
+): { ok: true; abi: AbiFn[]; creationBytecode: string } | { ok: false; codes: string[] } {
   try {
     const r = compile(src, { fileName: 'C.jeth' });
     return { ok: true, abi: r.abi as AbiFn[], creationBytecode: r.creationBytecode };
@@ -170,7 +172,10 @@ const twins: Twin[] = [
     }`,
     expectedFnMap: { setN: 'nonpayable', isEven: 'view' },
     seed: { sig: 'setN(uint256)', words: [0n] },
-    calls: [{ sig: 'isEven(uint256)', words: [4n] }, { sig: 'isEven(uint256)', words: [5n] }],
+    calls: [
+      { sig: 'isEven(uint256)', words: [4n] },
+      { sig: 'isEven(uint256)', words: [5n] },
+    ],
   },
 
   // 5. SELF-RECURSION pure (Fibonacci) -> infer pure. The recursion lives in an INTERNAL helper
@@ -553,15 +558,43 @@ describe('decorator inference: rejection parity', () => {
       code: 'JETH149',
     },
     // @read mutability conflicts -> JETH052
-    { name: '@read + @view conflict -> JETH052', src: `@contract class C { @read @view bad(): u256 { return 1n; } }`, code: 'JETH052' },
-    { name: '@read + @pure conflict -> JETH052', src: `@contract class C { @read @pure bad(): u256 { return 1n; } }`, code: 'JETH052' },
-    { name: '@read + @payable conflict -> JETH052', src: `@contract class C { @read @payable bad(): u256 { return 1n; } }`, code: 'JETH052' },
+    {
+      name: '@read + @view conflict -> JETH052',
+      src: `@contract class C { @read @view bad(): u256 { return 1n; } }`,
+      code: 'JETH052',
+    },
+    {
+      name: '@read + @pure conflict -> JETH052',
+      src: `@contract class C { @read @pure bad(): u256 { return 1n; } }`,
+      code: 'JETH052',
+    },
+    {
+      name: '@read + @payable conflict -> JETH052',
+      src: `@contract class C { @read @payable bad(): u256 { return 1n; } }`,
+      code: 'JETH052',
+    },
     // removed visibility decorators -> JETH054 (the @external-only model: write @external to expose,
     // everything else is internal by default; @public/@internal/@private/@hidden no longer exist).
-    { name: '@public is removed -> JETH054', src: `@contract class C { @public bad(): u256 { return 1n; } }`, code: 'JETH054' },
-    { name: '@internal is removed -> JETH054', src: `@contract class C { @internal bad(): u256 { return 1n; } }`, code: 'JETH054' },
-    { name: '@private is removed -> JETH054', src: `@contract class C { @private bad(): u256 { return 1n; } }`, code: 'JETH054' },
-    { name: '@hidden is removed -> JETH054', src: `@contract class C { @hidden bad(): u256 { return 1n; } }`, code: 'JETH054' },
+    {
+      name: '@public is removed -> JETH054',
+      src: `@contract class C { @public bad(): u256 { return 1n; } }`,
+      code: 'JETH054',
+    },
+    {
+      name: '@internal is removed -> JETH054',
+      src: `@contract class C { @internal bad(): u256 { return 1n; } }`,
+      code: 'JETH054',
+    },
+    {
+      name: '@private is removed -> JETH054',
+      src: `@contract class C { @private bad(): u256 { return 1n; } }`,
+      code: 'JETH054',
+    },
+    {
+      name: '@hidden is removed -> JETH054',
+      src: `@contract class C { @hidden bad(): u256 { return 1n; } }`,
+      code: 'JETH054',
+    },
   ];
 
   for (const r of rej) {
@@ -638,7 +671,11 @@ describe('transitive emit makes a function non-read-only (parity with solc)', ()
       function bar() internal returns (uint256){ emit E(1); return 5; }
     }`;
     let rejected = false;
-    try { compileSolidity(sol, 'C'); } catch { rejected = true; }
+    try {
+      compileSolidity(sol, 'C');
+    } catch {
+      rejected = true;
+    }
     expect(rejected, 'solc should reject a view function that transitively emits').toBe(true);
   });
 

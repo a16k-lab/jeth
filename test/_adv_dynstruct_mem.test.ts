@@ -31,7 +31,8 @@ const cd_v_s = (sig: string, v: bigint, s: string) => '0x' + sel(sig) + pad(v) +
 // One leading string, one trailing value: head=[off=0x40][v], tail=[len][data].
 const cd_s_v = (sig: string, s: string, v: bigint) => '0x' + sel(sig) + pad(0x40n) + pad(v) + encStr(s);
 // (value, string, value): head=[v][off=0x60][n], tail=[len][data].
-const cd_v_s_v = (sig: string, v: bigint, s: string, n: bigint) => '0x' + sel(sig) + pad(v) + pad(0x60n) + pad(n) + encStr(s);
+const cd_v_s_v = (sig: string, v: bigint, s: string, n: bigint) =>
+  '0x' + sel(sig) + pad(v) + pad(0x60n) + pad(n) + encStr(s);
 // (string, value, string): head=[off1][v][off2], tail two blocks.
 const cd_s_v_s = (sig: string, s1: string, v: bigint, s2: string) => {
   const off1 = 0x60;
@@ -259,14 +260,18 @@ const BUFS = LENS.map(bufOf);
 describe('ADV dynamic-field struct memory locals vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   let divergence = 0;
-  let nOk = 0, nRevert = 0;
+  let nOk = 0,
+    nRevert = 0;
   async function eq(label: string, data: string) {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
-    if (s.success) nOk++; else nRevert++;
+    if (s.success) nOk++;
+    else nRevert++;
     if (j.success !== s.success || j.returnHex !== s.returnHex) {
       divergence++;
-      console.error(`DIVERGENCE @ ${label}\n  data=${data}\n  jeth success=${j.success} err=${j.exceptionError} ret=${j.returnHex}\n  sol  success=${s.success} ret=${s.returnHex}`);
+      console.error(
+        `DIVERGENCE @ ${label}\n  data=${data}\n  jeth success=${j.success} err=${j.exceptionError} ret=${j.returnHex}\n  sol  success=${s.success} ret=${s.returnHex}`,
+      );
     }
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
@@ -274,8 +279,10 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('1+2: field-order permutations, whole-struct return, all dyn lengths', async () => {
@@ -284,20 +291,22 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
         await eq(`mkVS len=${s.length}`, cd_v_s('mkVS(uint256,string)', a, s));
         await eq(`mkSV len=${s.length}`, cd_s_v('mkSV(string,uint256)', s, a));
       }
-      for (const a of [0n, 42n]) for (const b of [0n, M - 1n]) {
-        await eq(`mkVSV len=${s.length}`, cd_v_s_v('mkVSV(uint256,string,uint256)', a, s, b));
-      }
+      for (const a of [0n, 42n])
+        for (const b of [0n, M - 1n]) {
+          await eq(`mkVSV len=${s.length}`, cd_v_s_v('mkVSV(uint256,string,uint256)', a, s, b));
+        }
     }
   });
 
   it('1: two-dynamic and dyn-value-dyn permutations, every length in each position', async () => {
-    for (const s1 of STRS) for (const s2 of [STRS[0], STRS[3], STRS[4], STRS[8]] as string[]) {
-      await eq(`mkSS ${s1.length}/${s2.length}`, cd_s_s('mkSS(string,string)', s1, s2));
-      for (const a of [0n, M - 1n]) {
-        await eq(`mkSVS ${s1.length}/${s2.length}`, cd_s_v_s('mkSVS(string,uint256,string)', s1, a, s2));
-        await eq(`mkDVD ${s1.length}/${s2.length}`, cd_s_v_s('mkDVD(string,uint256,string)', s1, a, s2));
+    for (const s1 of STRS)
+      for (const s2 of [STRS[0], STRS[3], STRS[4], STRS[8]] as string[]) {
+        await eq(`mkSS ${s1.length}/${s2.length}`, cd_s_s('mkSS(string,string)', s1, s2));
+        for (const a of [0n, M - 1n]) {
+          await eq(`mkSVS ${s1.length}/${s2.length}`, cd_s_v_s('mkSVS(string,uint256,string)', s1, a, s2));
+          await eq(`mkDVD ${s1.length}/${s2.length}`, cd_s_v_s('mkDVD(string,uint256,string)', s1, a, s2));
+        }
       }
-    }
   });
 
   it('2+3: narrow/signed/address/bool/bytesN value fields, boundary values', async () => {
@@ -305,16 +314,20 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
     const sShort = 'hi';
     for (const s2 of [sShort, s, '']) {
       for (const v of [0n, 1n, 127n, 128n, 200n, 255n]) await eq(`mkU8 ${v}`, cd_v_s('mkU8(uint8,string)', v, s2));
-      for (const v of [0n, 1n, 255n, 256n, 32767n, 32768n, 65535n]) await eq(`mkU16 ${v}`, cd_v_s('mkU16(uint16,string)', v, s2));
+      for (const v of [0n, 1n, 255n, 256n, 32767n, 32768n, 65535n])
+        await eq(`mkU16 ${v}`, cd_v_s('mkU16(uint16,string)', v, s2));
       // signed i8: min=-128, -1, 0, 1, max=127. encode as two's complement word.
       for (const v of [-128n, -1n, 0n, 1n, 127n]) await eq(`mkI8 ${v}`, cd_v_s('mkI8(int8,string)', v, s2));
       for (const v of [-32768n, -1n, 0n, 1n, 32767n]) await eq(`mkI16 ${v}`, cd_v_s('mkI16(int16,string)', v, s2));
-      for (const v of [-(1n << 63n), -1n, 0n, 1n, (1n << 63n) - 1n]) await eq(`mkI64 ${v}`, cd_v_s('mkI64(int64,string)', v, s2));
-      for (const v of [-(1n << 127n), -1n, 0n, 1n, (1n << 127n) - 1n]) await eq(`mkI128 ${v}`, cd_v_s('mkI128(int128,string)', v, s2));
-      for (const v of [0n, 1n, (1n << 160n) - 1n, 0xdeadbeefn]) await eq(`mkADDR ${v}`, cd_v_s('mkADDR(address,string)', v, s2));
+      for (const v of [-(1n << 63n), -1n, 0n, 1n, (1n << 63n) - 1n])
+        await eq(`mkI64 ${v}`, cd_v_s('mkI64(int64,string)', v, s2));
+      for (const v of [-(1n << 127n), -1n, 0n, 1n, (1n << 127n) - 1n])
+        await eq(`mkI128 ${v}`, cd_v_s('mkI128(int128,string)', v, s2));
+      for (const v of [0n, 1n, (1n << 160n) - 1n, 0xdeadbeefn])
+        await eq(`mkADDR ${v}`, cd_v_s('mkADDR(address,string)', v, s2));
       for (const v of [0n, 1n]) await eq(`mkBOOL ${v}`, cd_v_s('mkBOOL(bool,string)', v, s2));
       // bytes4 is left-aligned: low 28 bytes must be zero. test a few clean values.
-      for (const v of [0n, (0xaabbccddn << 224n), (0xffffffffn << 224n), (0x01000000n << 224n)]) {
+      for (const v of [0n, 0xaabbccddn << 224n, 0xffffffffn << 224n, 0x01000000n << 224n]) {
         await eq(`mkB4 ${v.toString(16)}`, cd_v_s('mkB4(bytes4,string)', v, s2));
       }
     }
@@ -334,7 +347,7 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
     await eq('mkBOOL dirty', cd_v_s('mkBOOL(bool,string)', 2n, s));
     await eq('mkBOOL dirty big', cd_v_s('mkBOOL(bool,string)', M - 1n, s));
     // address high bits set -> revert.
-    await eq('mkADDR dirty', cd_v_s('mkADDR(address,string)', (1n << 160n), s));
+    await eq('mkADDR dirty', cd_v_s('mkADDR(address,string)', 1n << 160n, s));
     await eq('mkADDR dirty full', cd_v_s('mkADDR(address,string)', M - 1n, s));
     // bytes4 with low bytes nonzero -> revert.
     await eq('mkB4 dirty', cd_v_s('mkB4(bytes4,string)', 0xffn, s));
@@ -342,21 +355,24 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
   });
 
   it('4: value+string reads (value before/after dyn), .length, whole dyn field', async () => {
-    for (const s of STRS) for (const a of [0n, 42n, M - 1n]) {
-      await eq('getVSa', cd_v_s('getVSa(uint256,string)', a, s));
-      await eq('getVSs', cd_v_s('getVSs(uint256,string)', a, s));
-      await eq('getSVa', cd_s_v('getSVa(string,uint256)', s, a));
-      await eq('getSVs', cd_s_v('getSVs(string,uint256)', s, a));
-      await eq('getVSVb', cd_v_s_v('getVSVb(uint256,string,uint256)', a, s, a ^ 0x1234n));
-      await eq('getU8a', cd_v_s('getU8a(uint8,string)', a & 0xffn, s));
-      await eq('getI16a', cd_v_s('getI16a(int16,string)', (a & 0x7fffn) - (a & 0x8000n), s));
-    }
-    for (const s1 of [STRS[1], STRS[4]] as string[]) for (const s2 of [STRS[0], STRS[5]] as string[]) {
-      await eq('getSVSt', cd_s_v_s('getSVSt(string,uint256,string)', s1, 9n, s2));
-    }
-    for (const b of BUFS) for (const n of [0n, 1n, M - 1n]) {
-      await eq(`bLen ${b.length}`, cd_b_u('bLen(bytes,uint64)', b, n & 0xffffffffffffffffn));
-    }
+    for (const s of STRS)
+      for (const a of [0n, 42n, M - 1n]) {
+        await eq('getVSa', cd_v_s('getVSa(uint256,string)', a, s));
+        await eq('getVSs', cd_v_s('getVSs(uint256,string)', a, s));
+        await eq('getSVa', cd_s_v('getSVa(string,uint256)', s, a));
+        await eq('getSVs', cd_s_v('getSVs(string,uint256)', s, a));
+        await eq('getVSVb', cd_v_s_v('getVSVb(uint256,string,uint256)', a, s, a ^ 0x1234n));
+        await eq('getU8a', cd_v_s('getU8a(uint8,string)', a & 0xffn, s));
+        await eq('getI16a', cd_v_s('getI16a(int16,string)', (a & 0x7fffn) - (a & 0x8000n), s));
+      }
+    for (const s1 of [STRS[1], STRS[4]] as string[])
+      for (const s2 of [STRS[0], STRS[5]] as string[]) {
+        await eq('getSVSt', cd_s_v_s('getSVSt(string,uint256,string)', s1, 9n, s2));
+      }
+    for (const b of BUFS)
+      for (const n of [0n, 1n, M - 1n]) {
+        await eq(`bLen ${b.length}`, cd_b_u('bLen(bytes,uint64)', b, n & 0xffffffffffffffffn));
+      }
   });
 
   it('5: value field write / read-modify-write, value field BEFORE and AFTER dyn', async () => {
@@ -369,9 +385,11 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
       await eq('writeVSVb', cd_v_s_v_v('writeVSVb(uint256,string,uint256,uint256)', 1n, s, 2n, 3n));
     }
     // narrow field write after dyn field (POST.a is u8 at the SECOND head word):
-    for (const s of [STRS[0], STRS[1], STRS[4]] as string[]) for (const a of [0n, 200n]) for (const na of [0n, 1n, 255n]) {
-      await eq('writePOSTa', cd_s_v_v_narrow('writePOSTa(string,uint8,uint8)', s, a, na));
-    }
+    for (const s of [STRS[0], STRS[1], STRS[4]] as string[])
+      for (const a of [0n, 200n])
+        for (const na of [0n, 1n, 255n]) {
+          await eq('writePOSTa', cd_s_v_v_narrow('writePOSTa(string,uint8,uint8)', s, a, na));
+        }
   });
 
   it('6: byte indexing in-bounds across length, and OOB reverts identically', async () => {
@@ -397,32 +415,38 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
   });
 
   it('9+10: multiple distinct structs, same struct two functions, combo body, MIX/D3', async () => {
-    for (const s of [STRS[0], STRS[2], STRS[4], STRS[7]] as string[]) for (const a of [0n, 7n, M - 1n]) {
-      await eq('mkVSagain', cd_v_s('mkVSagain(uint256,string)', a, s));
-    }
-    for (const s of STRS) for (const a of [0n, 42n]) for (const b of [0n, M - 1n]) {
-      await eq('combo', cd_v_s_v('combo(uint256,string,uint256)', a, s, b));
-    }
+    for (const s of [STRS[0], STRS[2], STRS[4], STRS[7]] as string[])
+      for (const a of [0n, 7n, M - 1n]) {
+        await eq('mkVSagain', cd_v_s('mkVSagain(uint256,string)', a, s));
+      }
+    for (const s of STRS)
+      for (const a of [0n, 42n])
+        for (const b of [0n, M - 1n]) {
+          await eq('combo', cd_v_s_v('combo(uint256,string,uint256)', a, s, b));
+        }
     // MIX: u8, string, i16, bytes, address, bool. head=[a][off_s][b][off_t][c][n].
-    for (const s of [STRS[0], STRS[3], STRS[5]] as string[]) for (const t of [BUFS[0], BUFS[4], BUFS[6]] as Buffer[]) {
-      const data = mkMIXcalldata(s, t, 200n, -5n, 0xcafen, 1n);
-      await eq(`mkMIX ${s.length}/${t.length}`, data);
-    }
+    for (const s of [STRS[0], STRS[3], STRS[5]] as string[])
+      for (const t of [BUFS[0], BUFS[4], BUFS[6]] as Buffer[]) {
+        const data = mkMIXcalldata(s, t, 200n, -5n, 0xcafen, 1n);
+        await eq(`mkMIX ${s.length}/${t.length}`, data);
+      }
     // mk3: u8, string, bytes, u64.
-    for (const s of [STRS[0], STRS[2], STRS[6]] as string[]) for (const b of [BUFS[0], BUFS[3], BUFS[7]] as Buffer[]) {
-      await eq(`mk3 ${s.length}/${b.length}`, cd_v_s_b_v('mk3(uint8,string,bytes,uint64)', 9n, s, b, 0x1234n));
-    }
+    for (const s of [STRS[0], STRS[2], STRS[6]] as string[])
+      for (const b of [BUFS[0], BUFS[3], BUFS[7]] as Buffer[]) {
+        await eq(`mk3 ${s.length}/${b.length}`, cd_v_s_b_v('mk3(uint8,string,bytes,uint64)', 9n, s, b, 0x1234n));
+      }
   });
 
   it('EXTRA: other bytesN widths interspersed with a dyn field', async () => {
     const ss = [STRS[0], STRS[1], STRS[3], STRS[4]] as string[];
     for (const s of ss) {
       // bytes1: top byte significant, low 31 must be zero.
-      for (const v of [0n, (0xffn << 248n), (0x01n << 248n)]) await eq('mkB1', cd_v_s('mkB1(bytes1,string)', v, s));
+      for (const v of [0n, 0xffn << 248n, 0x01n << 248n]) await eq('mkB1', cd_v_s('mkB1(bytes1,string)', v, s));
       // bytes16: top 16 bytes significant.
-      for (const v of [0n, ((1n << 128n) - 1n) << 128n, 0xabcdef0123456789n << 192n]) await eq('mkB16', cd_v_s('mkB16(bytes16,string)', v, s));
+      for (const v of [0n, ((1n << 128n) - 1n) << 128n, 0xabcdef0123456789n << 192n])
+        await eq('mkB16', cd_v_s('mkB16(bytes16,string)', v, s));
       // bytes32: full word, no masking.
-      for (const v of [0n, M - 1n, 1n, (1n << 200n)]) await eq('mkB32', cd_v_s('mkB32(bytes32,string)', v, s));
+      for (const v of [0n, M - 1n, 1n, 1n << 200n]) await eq('mkB32', cd_v_s('mkB32(bytes32,string)', v, s));
     }
     // dirty bytes1/bytes16 (low bytes nonzero) -> revert on both.
     await eq('mkB1 dirty', cd_v_s('mkB1(bytes1,string)', 1n, 'x'));
@@ -449,17 +473,21 @@ describe('ADV dynamic-field struct memory locals vs Solidity', () => {
   });
 
   it('EXTRA: aliasing stress - allocate after construct, two structs, byte-then-write', async () => {
-    for (const s of STRS) for (const a of [0n, 7n, M - 1n]) {
-      await eq('allocAfter', cd_v_s('allocAfter(uint256,string)', a, s));
-      await eq('byteThenWrite', cd_s_v('byteThenWrite(string,uint256)', s, a));
-    }
-    for (const s of [STRS[0], STRS[3], STRS[4]] as string[]) for (const t of [STRS[0], STRS[4], STRS[7]] as string[]) {
-      await eq('twoStructs', mkTwoStructs(5n, s, t));
-    }
+    for (const s of STRS)
+      for (const a of [0n, 7n, M - 1n]) {
+        await eq('allocAfter', cd_v_s('allocAfter(uint256,string)', a, s));
+        await eq('byteThenWrite', cd_s_v('byteThenWrite(string,uint256)', s, a));
+      }
+    for (const s of [STRS[0], STRS[3], STRS[4]] as string[])
+      for (const t of [STRS[0], STRS[4], STRS[7]] as string[]) {
+        await eq('twoStructs', mkTwoStructs(5n, s, t));
+      }
   });
 
   it('summary: zero divergence', () => {
-    console.log(`[adv-dynstruct] cases: ${nOk + nRevert} total, ${nOk} succeeded, ${nRevert} reverted (both sides), ${divergence} divergences`);
+    console.log(
+      `[adv-dynstruct] cases: ${nOk + nRevert} total, ${nOk} succeeded, ${nRevert} reverted (both sides), ${divergence} divergences`,
+    );
     expect(divergence, 'total divergences').toBe(0);
   });
 });
@@ -481,8 +509,15 @@ function cd_s_v_v_narrow(sig: string, s: string, a: bigint, na: bigint) {
 function mkTwoStructs(a: bigint, s: string, t: string) {
   const off1 = 0x60;
   const off2 = off1 + 32 + Math.ceil(Buffer.byteLength(s, 'utf8') / 32) * 32;
-  return '0x' + functionSelector('twoStructs(uint256,string,string)')
-    + pad(a) + pad(BigInt(off1)) + pad(BigInt(off2)) + encStr(s) + encStr(t);
+  return (
+    '0x' +
+    functionSelector('twoStructs(uint256,string,string)') +
+    pad(a) +
+    pad(BigInt(off1)) +
+    pad(BigInt(off2)) +
+    encStr(s) +
+    encStr(t)
+  );
 }
 // MIX(uint8 a, string s, int16 b, bytes t, address c, bool n):
 // head=[a][off_s][b][off_t][c][n] (6 words), tail two blocks.
@@ -490,7 +525,16 @@ function mkMIXcalldata(s: string, t: Buffer, a: bigint, b: bigint, c: bigint, n:
   const head = 6 * 32; // 0xc0
   const offS = head;
   const offT = offS + wordsFor(Buffer.byteLength(s, 'utf8'));
-  return '0x' + sel('mkMIX(uint8,string,int16,bytes,address,bool)')
-    + pad(a) + pad(BigInt(offS)) + pad(b) + pad(BigInt(offT)) + pad(c) + pad(n)
-    + encStr(s) + encBytes(t);
+  return (
+    '0x' +
+    sel('mkMIX(uint8,string,int16,bytes,address,bool)') +
+    pad(a) +
+    pad(BigInt(offS)) +
+    pad(b) +
+    pad(BigInt(offT)) +
+    pad(c) +
+    pad(n) +
+    encStr(s) +
+    encBytes(t)
+  );
 }

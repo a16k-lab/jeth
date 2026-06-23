@@ -17,7 +17,10 @@ function bytesArg(sel: string, k: bigint, s: string): string {
   const b = Buffer.from(s, 'utf8');
   const nwords = Math.ceil(b.length / 32) || 0;
   let data = '';
-  for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+  for (let i = 0; i < nwords; i++)
+    data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   let h = '0x' + functionSelector(sel);
   h += pad(k) + pad(0x40n) + pad(BigInt(b.length)) + data;
   return h;

@@ -60,7 +60,7 @@ describe('returning a storage struct array vs Solidity', () => {
 
   it('returns Pt[] (whole-slot fields) byte-identical', async () => {
     await eqCall('addPt#0', encodeCall(sel('addPt(uint256,uint256)'), [(1n << 200n) | 7n, 8n]));
-    await eqCall('addPt#1', encodeCall(sel('addPt(uint256,uint256)'), [0n, (1n << 255n)]));
+    await eqCall('addPt#1', encodeCall(sel('addPt(uint256,uint256)'), [0n, 1n << 255n]));
     await eqCall('allPts n=2', encodeCall(sel('allPts()'), []));
   });
 });

@@ -25,12 +25,17 @@ describe('storage dynamic struct: deeper forms stay gated', () => {
   });
 
   it('returning a whole STORAGE D[] is now SUPPORTED (storage-source recursive encoder)', () => {
-    const d = diags(HEAD + '@contract class G {\n  @state recs: D[];\n  @external @view f(): D[] { return this.recs; }\n}');
+    const d = diags(
+      HEAD + '@contract class G {\n  @state recs: D[];\n  @external @view f(): D[] { return this.recs; }\n}',
+    );
     expect(d).toEqual([]);
   });
 
   it('fixed Arr<D, N> of a dynamic struct is now SUPPORTED in storage (contiguous N*slotCount slots)', () => {
-    const d = diags(HEAD + '@contract class G {\n  @state fa: Arr<D, 3>;\n  @external @view f(i: u256): u256 { return this.fa[i].a; }\n}');
+    const d = diags(
+      HEAD +
+        '@contract class G {\n  @state fa: Arr<D, 3>;\n  @external @view f(i: u256): u256 { return this.fa[i].a; }\n}',
+    );
     expect(d).toEqual([]);
   });
 
@@ -40,22 +45,31 @@ describe('storage dynamic struct: deeper forms stay gated', () => {
   });
 
   it('returning a whole struct mapping value is now SUPPORTED (storage-source encoder)', () => {
-    const d = diags(HEAD + '@contract class G {\n  @state m: mapping<address, D>;\n  @external @view f(k: address): D { return this.m[k]; }\n}');
+    const d = diags(
+      HEAD +
+        '@contract class G {\n  @state m: mapping<address, D>;\n  @external @view f(k: address): D { return this.m[k]; }\n}',
+    );
     expect(d).toEqual([]);
   });
 
   it('a string[] struct field is now SUPPORTED in storage (array at the field slot)', () => {
-    const d = diags('@struct class B { a: u256; ss: string[]; }\n@contract class G {\n  @state b: B;\n  @external push(s: string): void { this.b.ss.push(s); }\n}');
+    const d = diags(
+      '@struct class B { a: u256; ss: string[]; }\n@contract class G {\n  @state b: B;\n  @external push(s: string): void { this.b.ss.push(s); }\n}',
+    );
     expect(d).toEqual([]);
   });
 
   it('a T[] (dynamic-array) struct field is now SUPPORTED in storage (array at the field slot)', () => {
-    const d = diags('@struct class B { a: u256; xs: u256[]; }\n@contract class G {\n  @state b: B;\n  @external push(v: u256): void { this.b.xs.push(v); }\n}');
+    const d = diags(
+      '@struct class B { a: u256; xs: u256[]; }\n@contract class G {\n  @state b: B;\n  @external push(v: u256): void { this.b.xs.push(v); }\n}',
+    );
     expect(d).toEqual([]);
   });
 
   it('mapping<K, D[]> of a dynamic struct COMPILES (storage, recursive)', () => {
-    const src = HEAD + `@contract class G {
+    const src =
+      HEAD +
+      `@contract class G {
   @state m: mapping<address, D[]>;
   @external pushK(k: address, a: u256, s: string): void { this.m[k].push(D(a, s)); }
   @external popK(k: address): void { this.m[k].pop(); }

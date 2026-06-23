@@ -11,8 +11,10 @@ import { Harness } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const M = (1n << 256n);
-function pad(v: bigint): string { return (((v % M) + M) % M).toString(16).padStart(64, '0'); }
+const M = 1n << 256n;
+function pad(v: bigint): string {
+  return (((v % M) + M) % M).toString(16).padStart(64, '0');
+}
 const W = (v: bigint) => pad(v);
 const HB = 1n << 255n; // high bit set
 
@@ -41,13 +43,16 @@ let jeth: Harness, sol: Harness, aj: Address, as: Address;
 beforeAll(async () => {
   const jb = compile(JETH, { fileName: 'A.jeth' });
   const sb = compileSolidity(SOL, 'A');
-  jeth = await Harness.create(); sol = await Harness.create();
-  aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+  jeth = await Harness.create();
+  sol = await Harness.create();
+  aj = await jeth.deploy(jb.creationBytecode);
+  as = await sol.deploy(sb.creation);
 });
 
 // These tests now assert BYTE-IDENTITY: JETH must match solc on success + returndata.
 async function pair(label: string, data: string) {
-  const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+  const j = await jeth.call(aj, data);
+  const s = await sol.call(as, data);
   expect(j.success, `${label} success`).toBe(s.success);
   expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   return { j, s, label };
@@ -77,7 +82,8 @@ describe('high-bit member/inner offset: JETH matches solc byte-for-byte', () => 
 
   it('mGet: inner_off = 2^255 -> Panic(0x32)', async () => {
     // head: off_m=0x60, i=0, j=0; region @0x60: [outer_len=1][inner_off0=HB]
-    const data = '0x' + functionSelector('mGet(uint256[][],uint256,uint256)') + [W(0x60n), W(0n), W(0n), W(1n), W(HB)].join('');
+    const data =
+      '0x' + functionSelector('mGet(uint256[][],uint256,uint256)') + [W(0x60n), W(0n), W(0n), W(1n), W(HB)].join('');
     const { s } = await pair('mGet', data);
     expect(s.success).toBe(false);
     expect(s.returnHex).toBe('0x4e487b71' + W(0x32n));

@@ -289,7 +289,8 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
     expect(io('pair').outputs.map((o: any) => o.type)).toEqual(['uint8', 'uint256']);
     expect(io('ColorSet').inputs.map((i: any) => i.type)).toEqual(['uint8']);
     expect(io('ColorIdx').inputs.map((i: any) => ({ t: i.type, ix: i.indexed }))).toEqual([
-      { t: 'uint8', ix: true }, { t: 'uint256', ix: false },
+      { t: 'uint8', ix: true },
+      { t: 'uint256', ix: false },
     ]);
     expect(io('BadColor').inputs.map((i: any) => i.type)).toEqual(['uint8']);
     // selectors hash uint8 so they hit the solc twin
@@ -304,7 +305,13 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
     const r = await jeth.call(aj, encodeCall(sel('mk(uint8)'), [3n]));
     expect(r.returnHex).toBe('0x4e487b71' + pad(0x21n));
     // Color(uint256) with a wide value > N and dirty high bits -> Panic 0x21 (matches solc)
-    for (const v of [3n, 100n, (1n << 255n), (1n << 256n) - 1n, 0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff03n])
+    for (const v of [
+      3n,
+      100n,
+      1n << 255n,
+      (1n << 256n) - 1n,
+      0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff03n,
+    ])
       await eq(`mkFromU256(${v}) OOR`, encodeCall(sel('mkFromU256(uint256)'), [v]));
     for (const v of [0n, 1n, 2n]) await eq(`mkFromU256(${v}) ok`, encodeCall(sel('mkFromU256(uint256)'), [v]));
     // NEGATIVE int -> Color(u8(-1)) = Color(255) -> Panic 0x21
@@ -312,7 +319,7 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
     await eq('mkFromI8(2) ok', encodeCall(sel('mkFromI8(int8)'), [2n]));
     // DIRECT signed cast Color(i8) / Color(i256): the unsigned lt naturally rejects negatives.
     for (const v of [0n, 1n, 2n, -1n, 3n, 127n, -128n]) await eq(`mkI8(${v})`, encodeCall(sel('mkI8(int8)'), [v]));
-    for (const v of [0n, 2n, -1n, 3n, (1n << 255n)]) await eq(`mkI256(${v})`, encodeCall(sel('mkI256(int256)'), [v]));
+    for (const v of [0n, 2n, -1n, 3n, 1n << 255n]) await eq(`mkI256(${v})`, encodeCall(sel('mkI256(int256)'), [v]));
     // the LEGAL enum->bytes1 path (via u8): left-aligned byte, matches solc
     for (const v of [0n, 1n, 2n]) await eq(`cToBytes1(${v})`, encodeCall(sel('cToBytes1(uint8)'), [v]));
     // roundtrip decode-cast-extract
@@ -331,7 +338,7 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
   });
 
   it('an out-of-range enum SCALAR calldata word reverts EMPTY (not a Panic), like solc', async () => {
-    for (const v of [3n, 4n, 255n, (1n << 255n)]) {
+    for (const v of [3n, 4n, 255n, 1n << 255n]) {
       const { j, s } = await eq(`mark(${v}) OOR empty revert`, encodeCall(sel('mark(uint8)'), [v]));
       expect(j.success).toBe(false);
       expect(j.returnHex).toBe('0x');
@@ -441,7 +448,10 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
       // narrows the miscompile to TOP-LEVEL / nested bare value-leaf arrays only.
       const head = pad(0x20n) + pad(0x40n) + pad(9n); // outer off, struct{a_off, n}
       await eq('echoStruct in-range', '0x' + sel('echoStruct((uint8[],uint256))') + head + dynArr([0n, 1n, 2n]));
-      const { j, s } = await eq('echoStruct OOR -> both revert', '0x' + sel('echoStruct((uint8[],uint256))') + head + dynArr([0n, 7n, 2n]));
+      const { j, s } = await eq(
+        'echoStruct OOR -> both revert',
+        '0x' + sel('echoStruct((uint8[],uint256))') + head + dynArr([0n, 7n, 2n]),
+      );
       expect(j.success).toBe(false);
       expect(s.success).toBe(false);
     });
@@ -449,9 +459,11 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
 
   // ===== 1. STORAGE PACKING =====
   it('enum packs in a slot beside u8 / Status / bool / address (raw slot parity)', async () => {
-    const A = 0xCafe0000000000000000000000000000BEEF0001n;
-    const d = '0x' + sel('setPacked(uint8,uint8,uint8,bool,address)') + pad(2n) + pad(0xABn) + pad(3n) + pad(1n) + pad(A);
-    await jeth.call(aj, d); await sol.call(as, d);
+    const A = 0xcafe0000000000000000000000000000beef0001n;
+    const d =
+      '0x' + sel('setPacked(uint8,uint8,uint8,bool,address)') + pad(2n) + pad(0xabn) + pad(3n) + pad(1n) + pad(A);
+    await jeth.call(aj, d);
+    await sol.call(as, d);
     await slots('packed', 0n);
     await eq('getPackedA', encodeCall(sel('getPackedA()'), []));
     await eq('getPackedC', encodeCall(sel('getPackedC()'), []));
@@ -460,7 +472,8 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
   it('enum struct field across a slot boundary (u248 fills slot, enum starts next slot)', async () => {
     const lead = (1n << 248n) - 1n;
     const d = '0x' + sel('setBnd(uint248,uint8,uint8)') + pad(lead) + pad(2n) + pad(0x77n);
-    await jeth.call(aj, d); await sol.call(as, d);
+    await jeth.call(aj, d);
+    await sol.call(as, d);
     await slots('bnd', 1n, 2n);
     await eq('bndCol', encodeCall(sel('bndCol()'), []));
     // whole-struct return of the boundary struct
@@ -469,7 +482,8 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
 
   it('enum struct field packed beside u32/bool (Item) raw slot parity', async () => {
     const d = '0x' + sel('setItem(uint8,uint32,bool)') + pad(1n) + pad(0xdeadbeefn) + pad(1n);
-    await jeth.call(aj, d); await sol.call(as, d);
+    await jeth.call(aj, d);
+    await sol.call(as, d);
     await slots('item', 3n);
     await eq('itemColor', encodeCall(sel('itemColor()'), []));
   });
@@ -489,7 +503,11 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
     await eq('getCdyn', encodeCall(sel('getCdyn()'), []));
     await eq('cdynElem[4]', encodeCall(sel('cdynElem(uint256)'), [4n]));
     // fixed Arr<Color,3> @ slot 5: solc packs 3 uint8 enums into ONE slot. Write each element.
-    for (const [i, c] of [[0n, 2n], [1n, 0n], [2n, 1n]] as [bigint, bigint][]) {
+    for (const [i, c] of [
+      [0n, 2n],
+      [1n, 0n],
+      [2n, 1n],
+    ] as [bigint, bigint][]) {
       await jeth.call(aj, encodeCall(sel('setCfixElem(uint256,uint8)'), [i, c]));
       await sol.call(as, encodeCall(sel('setCfixElem(uint256,uint8)'), [i, c]));
     }
@@ -502,7 +520,7 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
   it('enum events: non-indexed, indexed, two-enum -> topics/data byte-identical to solc', async () => {
     // eq() already compares logs (topics + data) against solc for each call.
     for (const v of [0n, 1n, 2n]) await eq(`emitColor(${v})`, encodeCall(sel('emitColor(uint8)'), [v]));
-    for (const v of [0n, 1n, 2n]) await eq(`emitIdx(${v})`, encodeCall(sel('emitIdx(uint8,uint256)'), [v, 0xABCDn]));
+    for (const v of [0n, 1n, 2n]) await eq(`emitIdx(${v})`, encodeCall(sel('emitIdx(uint8,uint256)'), [v, 0xabcdn]));
     await eq('emitTwo', '0x' + sel('emitTwo(uint8,uint8)') + pad(2n) + pad(3n));
     // topic0 of a non-indexed enum event hashes the uint8 signature (full 32-byte keccak).
     const ev = await jeth.call(aj, encodeCall(sel('emitColor(uint8)'), [1n]));
@@ -511,7 +529,7 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
     // the non-indexed enum member sits in the data word (not a topic)
     expect(ev.logs[0]!.data).toBe('0x' + pad32(1n));
     // indexed enum: member is topic1, brand-erased to a uint8-padded word
-    const ix = await jeth.call(aj, encodeCall(sel('emitIdx(uint8,uint256)'), [2n, 0xABCDn]));
+    const ix = await jeth.call(aj, encodeCall(sel('emitIdx(uint8,uint256)'), [2n, 0xabcdn]));
     expect(ix.logs[0]!.topics[1]).toBe('0x' + pad32(2n));
   });
 
@@ -520,11 +538,17 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
     // branch, so an OOR / dirty enum element is range-checked and the call reverts EMPTY in BOTH
     // JETH and solc. This proves the enum-element check IS wired on the event/error encode path.
     await eq('emitArr in-range', '0x' + sel('emitArr(uint8[])') + pad(0x20n) + dynArr([0n, 1n, 2n]));
-    const { j, s } = await eq('emitArr OOR -> both revert empty', '0x' + sel('emitArr(uint8[])') + pad(0x20n) + dynArr([0n, 7n, 2n]));
+    const { j, s } = await eq(
+      'emitArr OOR -> both revert empty',
+      '0x' + sel('emitArr(uint8[])') + pad(0x20n) + dynArr([0n, 7n, 2n]),
+    );
     expect(j.success).toBe(false);
     expect(j.returnHex).toBe('0x');
     expect(s.returnHex).toBe('0x');
-    await eq('emitArr dirty -> both revert empty', '0x' + sel('emitArr(uint8[])') + pad(0x20n) + dynArr([0n, (1n << 16n) | 1n, 2n]));
+    await eq(
+      'emitArr dirty -> both revert empty',
+      '0x' + sel('emitArr(uint8[])') + pad(0x20n) + dynArr([0n, (1n << 16n) | 1n, 2n]),
+    );
   });
 
   // ===== 4. CUSTOM ERRORS =====
@@ -540,7 +564,7 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
 
   // ===== 6. DEFAULT 0 + DELETE =====
   it('unset mapping enum reads default member 0 (Red); delete resets storage enum (raw slot)', async () => {
-    const A = 0xDEAD0000000000000000000000000000DEAD0002n;
+    const A = 0xdead0000000000000000000000000000dead0002n;
     await eq('unsetMapping default 0', encodeCall(sel('unsetMapping(address)'), [A]));
     // set then delete; cur lives at slot 8 (standalone enum)
     await jeth.call(aj, encodeCall(sel('setCur(uint8)'), [2n]));
@@ -554,7 +578,14 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
 
   // ===== 7. COMPARISONS + CONTROL FLOW + MAPPING KEY/VALUE =====
   it('all six comparisons + ternary + if-chain over enums match solc', async () => {
-    const pairs: [bigint, bigint][] = [[0n, 0n], [0n, 1n], [1n, 0n], [2n, 2n], [0n, 2n], [2n, 0n]];
+    const pairs: [bigint, bigint][] = [
+      [0n, 0n],
+      [0n, 1n],
+      [1n, 0n],
+      [2n, 2n],
+      [0n, 2n],
+      [2n, 0n],
+    ];
     for (const op of ['eq', 'ne', 'lt', 'le', 'gt', 'ge']) {
       for (const [a, b] of pairs) await eq(`${op}(${a},${b})`, encodeCall(sel(`${op}(uint8,uint8)`), [a, b]));
     }
@@ -570,7 +601,8 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
     for (const v of [0n, 1n, 2n]) await eq(`isSeen(${v})`, encodeCall(sel('isSeen(uint8)'), [v]));
     const A = 0xa11ce0000000000000000000000000000000n;
     const setP = '0x' + sel('setPref(address,uint8)') + pad(A) + pad(1n);
-    await jeth.call(aj, setP); await sol.call(as, setP);
+    await jeth.call(aj, setP);
+    await sol.call(as, setP);
     await eq('prefOf', encodeCall(sel('prefOf(address)'), [A]));
   });
 
@@ -578,11 +610,13 @@ describe('ADV enums: byte-identical to solc (runtime / storage / logs / revert d
   it('enum in a multi-value tuple return + enum nested in struct-in-struct + enum array in struct', async () => {
     await eq('pair', '0x' + sel('pair(uint8,uint256)') + pad(2n) + pad(0x1234n));
     const setN = '0x' + sel('setNested(uint16,uint8,uint32,bool)') + pad(0x0102n) + pad(1n) + pad(0xcafen) + pad(1n);
-    await jeth.call(aj, setN); await sol.call(as, setN);
+    await jeth.call(aj, setN);
+    await sol.call(as, setN);
     await eq('nestedColor', encodeCall(sel('nestedColor()'), []));
     // enum array inside a struct
-    const setW = '0x' + sel('setWa(uint8,uint8,uint8,uint8)') + pad(0xABn) + pad(2n) + pad(0n) + pad(1n);
-    await jeth.call(aj, setW); await sol.call(as, setW);
+    const setW = '0x' + sel('setWa(uint8,uint8,uint8,uint8)') + pad(0xabn) + pad(2n) + pad(0n) + pad(1n);
+    await jeth.call(aj, setW);
+    await sol.call(as, setW);
     for (const i of [0n, 1n, 2n]) await eq(`waElem[${i}]`, encodeCall(sel('waElem(uint256)'), [i]));
   });
 
@@ -648,7 +682,9 @@ describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () =>
   });
   it('rejects an empty enum (JETH275) and explicit member values (JETH270)', () => {
     expect(errCodes('enum E {}\n@contract class C { @external @pure f(): u8 { return 0n; } }')).toContain('JETH275');
-    expect(errCodes('enum E { A = 5 }\n@contract class C { @external @pure f(): u8 { return 0n; } }')).toContain('JETH270');
+    expect(errCodes('enum E { A = 5 }\n@contract class C { @external @pure f(): u8 { return 0n; } }')).toContain(
+      'JETH270',
+    );
   });
   it('rejects an unknown member (JETH271) and out-of-range constant cast (JETH278)', () => {
     expect(errCodes(wrap('@external @pure f(): Color { return Color.Purple; }'))).toContain('JETH271');
@@ -663,11 +699,17 @@ describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () =>
     expect(errCodes(wrap('@external @pure f(a: address): Color { return Color(a); }'))).toContain('JETH277');
     expect(errCodes(wrap('@external @pure f(b: bytes32): Color { return Color(b); }'))).toContain('JETH277');
     expect(errCodes(wrap('@external @pure f(b: bool): Color { return Color(b); }'))).toContain('JETH277');
-    expect(errCodes('enum Color { Red, Green, Blue }\n@struct class P { x: u256; }\n@contract class C { @external @pure f(p: P): Color { return Color(p); } }')).toContain('JETH277');
+    expect(
+      errCodes(
+        'enum Color { Red, Green, Blue }\n@struct class P { x: u256; }\n@contract class C { @external @pure f(p: P): Color { return Color(p); } }',
+      ),
+    ).toContain('JETH277');
   });
   it('rejects an enum used as a non-bool if/loop discriminant (JETH110)', () => {
     expect(errCodes(wrap('@external @pure f(c: Color): u8 { if (c) { return 1n; } return 0n; }'))).toContain('JETH110');
-    expect(errCodes(wrap('@external @pure f(c: Color): u8 { while (c) { return 1n; } return 0n; }'))).toContain('JETH110');
+    expect(errCodes(wrap('@external @pure f(c: Color): u8 { while (c) { return 1n; } return 0n; }'))).toContain(
+      'JETH110',
+    );
   });
 
   // REGRESSION (was over-acceptance, now FIXED). solc REJECTS a direct enum->bytesN conversion

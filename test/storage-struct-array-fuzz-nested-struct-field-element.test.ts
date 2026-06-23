@@ -109,7 +109,8 @@ describe('nested-struct-field-element vs Solidity', () => {
       throw new Error(
         'JETH rejected this.recs[i].inner.x: ' +
           (compileError.message ?? String(compileError)) +
-          ' codes=' + JSON.stringify(codes),
+          ' codes=' +
+          JSON.stringify(codes),
       );
     }
     expect(compileError).toBeNull();

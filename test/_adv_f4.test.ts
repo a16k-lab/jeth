@@ -248,8 +248,7 @@ describe('F4 @nonReentrant ADVERSARIAL: every return path resets vs a transient-
     // hammerRaw(address v, bytes data, uint256 n): head = [v][off=0x60][n], then bytes(len,data padded)
     const dataPadded = innerHex.padEnd(Math.ceil(innerHex.length / 64) * 64, '0');
     const build = (vault: Address) =>
-      '0x' + sel('hammerRaw(address,bytes,uint256)') +
-      addrWord(vault) + pad(0x60n) + pad(n) + lenWord + dataPadded;
+      '0x' + sel('hammerRaw(address,bytes,uint256)') + addrWord(vault) + pad(0x60n) + pad(n) + lenWord + dataPadded;
     const j = await h.call(atk, build(jv));
     const s = await h.call(atk, build(sv));
     expect(j.success, `${label} JETH attacker err=${j.exceptionError}`).toBe(true);
@@ -392,8 +391,15 @@ describe('F4 @nonReentrant ADVERSARIAL: every return path resets vs a transient-
     const bPadded = b.padEnd(Math.ceil(b.length / 64) * 64, '0');
     const offB = 0x60n + 32n + BigInt(aPadded.length / 2);
     const build = (vault: Address) =>
-      '0x' + sel('callTwo(address,bytes,bytes)') +
-      addrWord(vault) + pad(0x60n) + pad(offB) + aLen + aPadded + bLen + bPadded;
+      '0x' +
+      sel('callTwo(address,bytes,bytes)') +
+      addrWord(vault) +
+      pad(0x60n) +
+      pad(offB) +
+      aLen +
+      aPadded +
+      bLen +
+      bPadded;
     const j = await h.call(atk, build(jv));
     const s = await h.call(atk, build(sv));
     expect(j.success, `JETH callTwo err=${j.exceptionError}`).toBe(true);
@@ -535,15 +541,25 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
   };
 
   it('rejects @nonReentrant on @view / @pure / @read with JETH260', () => {
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @view f(): u256 { return this.x; } }`)).toContain('JETH260');
+    expect(
+      tryCompile(`@contract class C { @state x: u256; @nonReentrant @view f(): u256 { return this.x; } }`),
+    ).toContain('JETH260');
     expect(tryCompile(`@contract class C { @nonReentrant @pure f(): u256 { return 1n; } }`)).toContain('JETH260');
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @read f(): u256 { return this.x; } }`)).toContain('JETH260');
+    expect(
+      tryCompile(`@contract class C { @state x: u256; @nonReentrant @read f(): u256 { return this.x; } }`),
+    ).toContain('JETH260');
   });
 
   it('rejects @nonReentrant on / / with JETH261', () => {
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain('JETH261');
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain('JETH261');
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain('JETH261');
+    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
+      'JETH261',
+    );
+    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
+      'JETH261',
+    );
+    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
+      'JETH261',
+    );
   });
 
   it('rejects an internal call to a @nonReentrant function', () => {
@@ -551,14 +567,20 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
     // is always an external entry. Calling it by name from inside the contract is therefore rejected
     // by the general "cannot internally call @external" rule (JETH240), which subsumes the old
     // reentrancy-specific JETH262: there is no internally-callable guarded function to bypass.
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant @external f(): void { this.x = 1n; } @external g(): void { this.f(); } }`)).toContain('JETH240');
+    expect(
+      tryCompile(
+        `@contract class C { @state x: u256; @nonReentrant @external f(): void { this.x = 1n; } @external g(): void { this.f(); } }`,
+      ),
+    ).toContain('JETH240');
   });
 
   it('the guard does NOT change the ABI/selector/mutability vs the same fn without the decorator', () => {
     const guarded = `@contract class V { @state x: u256; @nonReentrant @external bump(): u256 { this.x = this.x + 1n; return this.x; } @nonReentrant @payable @external dep(): u256 { return msg.value; } }`;
     const plain = `@contract class V { @state x: u256; @external bump(): u256 { this.x = this.x + 1n; return this.x; } @payable @external dep(): u256 { return msg.value; } }`;
     const pick = (abi: any[]) =>
-      abi.filter((e) => e.type === 'function').map((e) => ({ name: e.name, mut: e.stateMutability, inputs: (e.inputs ?? []).map((i: any) => i.type) }));
+      abi
+        .filter((e) => e.type === 'function')
+        .map((e) => ({ name: e.name, mut: e.stateMutability, inputs: (e.inputs ?? []).map((i: any) => i.type) }));
     const g = pick(compile(guarded, { fileName: 'V.jeth' }).abi);
     const p = pick(compile(plain, { fileName: 'V.jeth' }).abi);
     expect(g, 'guarded ABI equals plain ABI').toEqual(p);

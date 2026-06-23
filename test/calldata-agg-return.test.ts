@@ -36,15 +36,18 @@ contract C {
 describe('whole static-aggregate calldata param echo (G5) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eqRaw(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('echo2 / echo3 (nested fixed value arrays)', async () => {
@@ -61,9 +64,11 @@ describe('whole static-aggregate calldata param echo (G5) vs Solidity', () => {
   it('dirty narrow leaf: non-canonical uint8 / address reverts like solc', async () => {
     const clean = [1n, 2n, 3n, 4n, 5n, 6n, 7n, 8n, 9n, 10n, 11n, 12n];
     await eqRaw('echoPacked clean', call('echoPacked(uint8[4][3])', clean));
-    const d0 = [...clean]; d0[0] = (1n << 255n) | 5n;
+    const d0 = [...clean];
+    d0[0] = (1n << 255n) | 5n;
     await eqRaw('echoPacked dirty[0]', call('echoPacked(uint8[4][3])', d0));
-    const d7 = [...clean]; d7[7] = (0xffn << 8n) | 9n;
+    const d7 = [...clean];
+    d7[7] = (0xffn << 8n) | 9n;
     await eqRaw('echoPacked dirty[7]', call('echoPacked(uint8[4][3])', d7));
     // dirty address high bits on echoStruct.c (word 2, address is 160-bit)
     const ds = [42n, 7n, (1n << 200n) | 0x1234n];

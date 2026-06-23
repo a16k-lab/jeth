@@ -44,7 +44,12 @@ function dynArg(selSig: string, head: bigint[], s: string): string {
   return h;
 }
 
-interface Pair { jeth: Harness; sol: Harness; aj: Address; as: Address; }
+interface Pair {
+  jeth: Harness;
+  sol: Harness;
+  aj: Address;
+  as: Address;
+}
 
 async function build(jethSrc: string, solSrc: string, name = 'C'): Promise<Pair> {
   const jb = compile(jethSrc, { fileName: name + '.jeth' });
@@ -63,8 +68,9 @@ async function step(p: Pair, label: string, data: string, slots: bigint[]) {
   expect(j.success, `${label}: success (jeth err=${j.exceptionError})`).toBe(s.success);
   expect(j.returnHex, `${label}: returndata`).toBe(s.returnHex);
   for (const slot of slots) {
-    expect(await readSlot(p.jeth, p.aj, slot), `${label}: slot 0x${slot.toString(16)}`)
-      .toBe(await readSlot(p.sol, p.as, slot));
+    expect(await readSlot(p.jeth, p.aj, slot), `${label}: slot 0x${slot.toString(16)}`).toBe(
+      await readSlot(p.sol, p.as, slot),
+    );
   }
 }
 
@@ -113,7 +119,9 @@ contract C {
   function setPost(uint256 v) external { post = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const slots = [0n, 1n, 2n, 3n];
 
   it('dirty narrow ints / bool / short bytesN must be masked identically', async () => {
@@ -172,15 +180,21 @@ contract C {
   function setTail(uint8 v) external { o.tail = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   it('writes land in the right slot/offset, neighbors preserved', async () => {
-    await seq(p, [0n, 1n, 2n, 3n], [
-      ['setTag', raw('setTag(uint128)', [(1n << 128n) - 1n])],
-      ['setX dirty', raw('setX(uint64)', [(MAXU << 64n) | 0xaaaaaaaaaaaaaaaan])],
-      ['setY', raw('setY(uint64)', [0xbbbbbbbbbbbbbbbbn])],
-      ['setFlag dirty', raw('setFlag(bool)', [0xff00n | 1n])],
-      ['setTail dirty', raw('setTail(uint8)', [(MAXU << 8n) | 0x5an])],
-    ]);
+    await seq(
+      p,
+      [0n, 1n, 2n, 3n],
+      [
+        ['setTag', raw('setTag(uint128)', [(1n << 128n) - 1n])],
+        ['setX dirty', raw('setX(uint64)', [(MAXU << 64n) | 0xaaaaaaaaaaaaaaaan])],
+        ['setY', raw('setY(uint64)', [0xbbbbbbbbbbbbbbbbn])],
+        ['setFlag dirty', raw('setFlag(bool)', [0xff00n | 1n])],
+        ['setTail dirty', raw('setTail(uint8)', [(MAXU << 8n) | 0x5an])],
+      ],
+    );
   });
 });
 
@@ -207,7 +221,9 @@ contract C {
   function len() external view returns (uint256) { return a.length; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n);
   const slots = [0n, d, d + 1n, d + 2n];
 
@@ -261,9 +277,12 @@ contract C {
   function setC(uint256 i, uint128 v) external { recs[i].c = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n);
-  const slots = [0n]; for (let i = 0; i < 9n; i++) slots.push(d + BigInt(i));
+  const slots = [0n];
+  for (let i = 0; i < 9n; i++) slots.push(d + BigInt(i));
 
   it('push full + push empty + setB/C dirty + pop frees all 3 slots', async () => {
     await seq(p, slots, [
@@ -307,8 +326,11 @@ contract C {
   function setPost(uint256 v) external { post = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH2, SOL); });
-  const ds = kec(1n), db = kec(2n);
+  beforeAll(async () => {
+    p = await build(JETH2, SOL);
+  });
+  const ds = kec(1n),
+    db = kec(2n);
   const slots = [0n, 1n, 2n, 3n, ds, ds + 1n, ds + 2n, ds + 3n, db, db + 1n, db + 2n, db + 3n];
 
   it('string long->short->empty->exact31->exact32 boundary clears tail', async () => {
@@ -316,9 +338,9 @@ contract C {
       ['pre', raw('setPre(uint256)', [MAXU])],
       ['post', raw('setPost(uint256)', [MAXU])],
       ['setS long', dynArg('setS(string)', [], LONG)],
-      ['setS short', dynArg('setS(string)', [], SHORT)],   // long->short clears data slots
+      ['setS short', dynArg('setS(string)', [], SHORT)], // long->short clears data slots
       ['setS long2', dynArg('setS(string)', [], LONG2)],
-      ['setS empty', dynArg('setS(string)', [], '')],       // long->empty clears data slots
+      ['setS empty', dynArg('setS(string)', [], '')], // long->empty clears data slots
       ['setS 31', dynArg('setS(string)', [], '0'.repeat(31))], // short (fits inline)
       ['setS 32', dynArg('setS(string)', [], '0'.repeat(32))], // long (boundary!)
       ['setS 31 again', dynArg('setS(string)', [], '1'.repeat(31))], // long->short
@@ -367,10 +389,27 @@ contract C {
   function copySAB() external { sa = sb; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  const da = kec(0n), dsa = kec(2n);
-  const slots = [0n, 1n, 2n, 3n, da, da + 1n, da + 2n, da + 3n, da + 4n,
-    dsa, dsa + 1n, dsa + 2n, kec(dsa), kec(dsa + 1n)];
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  const da = kec(0n),
+    dsa = kec(2n);
+  const slots = [
+    0n,
+    1n,
+    2n,
+    3n,
+    da,
+    da + 1n,
+    da + 2n,
+    da + 3n,
+    da + 4n,
+    dsa,
+    dsa + 1n,
+    dsa + 2n,
+    kec(dsa),
+    kec(dsa + 1n),
+  ];
 
   it('copy a=b: grow then shrink-by-recopy must clear the freed tail', async () => {
     await seq(p, slots, [
@@ -378,11 +417,11 @@ contract C {
       ['pushA2', raw('pushA(uint256)', [0x22n])],
       ['pushA3', raw('pushA(uint256)', [0x33n])],
       ['pushA4', raw('pushA(uint256)', [0x44n])],
-      ['pushA5', raw('pushA(uint256)', [0x55n])],   // a now len 5
+      ['pushA5', raw('pushA(uint256)', [0x55n])], // a now len 5
       ['pushB1', raw('pushB(uint256)', [0xaan])],
-      ['pushB2', raw('pushB(uint256)', [0xbbn])],   // b len 2
+      ['pushB2', raw('pushB(uint256)', [0xbbn])], // b len 2
       ['copyAB (shrink 5->2, clears tail)', raw('copyAB()')],
-      ['pushB3', raw('pushB(uint256)', [0xccn])],   // b len 3
+      ['pushB3', raw('pushB(uint256)', [0xccn])], // b len 3
       ['copyAB (grow 2->3)', raw('copyAB()')],
     ]);
   });
@@ -391,7 +430,7 @@ contract C {
       ['pushSA1', dynArg('pushSA(string)', [], LONG)],
       ['pushSA2', dynArg('pushSA(string)', [], LONG2)],
       ['pushSA3', dynArg('pushSA(string)', [], SHORT)], // sa len 3
-      ['pushSB1', dynArg('pushSB(string)', [], 'x')],   // sb len 1
+      ['pushSB1', dynArg('pushSB(string)', [], 'x')], // sb len 1
       ['copySAB (shrink 3->1, clear headers+long data)', raw('copySAB()')],
     ]);
   });
@@ -423,7 +462,9 @@ contract C {
   function copyS() external { s1 = s2; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const slots = [0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n];
   it('fixed-array copy + struct copy land identically with dirty inputs', async () => {
     await seq(p, slots, [
@@ -457,10 +498,15 @@ contract C {
   function len(uint256 k) external view returns (uint256) { return m[k].length; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  const K1 = 7n, K2 = MAXU; // adversarial key = max u256
-  const len1 = mapSlot(K1, 0n), data1 = kec(len1);
-  const len2 = mapSlot(K2, 0n), data2 = kec(len2);
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  const K1 = 7n,
+    K2 = MAXU; // adversarial key = max u256
+  const len1 = mapSlot(K1, 0n),
+    data1 = kec(len1);
+  const len2 = mapSlot(K2, 0n),
+    data2 = kec(len2);
   const slots = [0n, len1, data1, data1 + 1n, data1 + 2n, len2, data2, data2 + 1n];
 
   it('two keys stay isolated; pop frees tail; OOB set/pop Panic', async () => {
@@ -501,7 +547,9 @@ contract C {
   function setSflag(bytes32 k, bool v) external { ms[k].flag = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const A = 0x1234567890abcdef1234567890abcdef12345678n;
   const inner = mapSlot(A, 0n);
   const valSlot = mapSlot(42n, inner);
@@ -545,10 +593,13 @@ contract C {
   function delS() external { delete s; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const A = 0xa11ce0000000000000000000000000000000n;
   const B = 0xb0b0000000000000000000000000000000000n;
-  const mA = mapSlot(A, 1n), mB = mapSlot(B, 1n);
+  const mA = mapSlot(A, 1n),
+    mB = mapSlot(B, 1n);
   const slots = [0n, 1n, 2n, 3n, mA, mB];
   it('delete struct zeroes value fields, keeps guard + mapping entries', async () => {
     await seq(p, slots, [
@@ -567,8 +618,10 @@ contract C {
   });
   it('dirty address key (high 96 bits set) reverts identically (no write)', async () => {
     // solc 0.8.x ABI decoder validates address params; both must revert and store nothing.
-    await step(p, 'setM dirty-addr revert', raw('setM(address,uint256)', [(MAXU << 160n) | A, 777n]),
-      [mapSlot((MAXU << 160n) | A, 1n), mapSlot(A, 1n)]);
+    await step(p, 'setM dirty-addr revert', raw('setM(address,uint256)', [(MAXU << 160n) | A, 777n]), [
+      mapSlot((MAXU << 160n) | A, 1n),
+      mapSlot(A, 1n),
+    ]);
   });
 });
 
@@ -591,9 +644,12 @@ contract C {
   function lenB(address k) external view returns (uint256) { return mb[k].length; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const A = 0xa11ce0000000000000000000000000000000n;
-  const head = mapSlot(A, 0n), data = kec(head);
+  const head = mapSlot(A, 0n),
+    data = kec(head);
   const slots = [head, data, data + 1n, data + 2n];
   it('long->short->delete clears the long-data slots', async () => {
     await seq(p, slots, [
@@ -644,7 +700,9 @@ contract C {
   function delS() external { delete s; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const dx = kec(2n);
   const slots = [0n, 1n, 2n, 3n, dx, dx + 1n, dx + 2n];
   async function reseed() {
@@ -652,10 +710,14 @@ contract C {
     await p.sol.call(p.as, raw('seed()'));
   }
   it('delete whole packed array, single lane, dyn-array, struct', async () => {
-    await reseed(); await step(p, 'delA8', raw('delA8()'), slots);
-    await reseed(); await step(p, 'delA8e', raw('delA8e()'), slots);
-    await reseed(); await step(p, 'delXs', raw('delXs()'), slots);
-    await reseed(); await step(p, 'delS', raw('delS()'), slots);
+    await reseed();
+    await step(p, 'delA8', raw('delA8()'), slots);
+    await reseed();
+    await step(p, 'delA8e', raw('delA8e()'), slots);
+    await reseed();
+    await step(p, 'delXs', raw('delXs()'), slots);
+    await reseed();
+    await step(p, 'delS', raw('delS()'), slots);
   });
 });
 
@@ -683,7 +745,9 @@ contract C {
   function setS(string calldata v) external { s = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n);
   const ds = kec(1n);
   const slots = [0n, 1n, d, d + 1n, ds, ds + 1n, ds + 2n];
@@ -727,10 +791,13 @@ contract C {
   function setInner(uint256 i, uint256 j, uint256 v) external { dd[i][j] = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   // dd at slot 6; outer data @ kec(6); dd[i] len @ kec(6)+i; dd[i] data @ kec(kec(6)+i).
   const o = kec(6n);
-  const d0 = kec(o), d1 = kec(o + 1n);
+  const d0 = kec(o),
+    d1 = kec(o + 1n);
   const slots = [0n, 1n, 2n, 3n, 4n, 5n, 6n, o, o + 1n, d0, d0 + 1n, d1];
   it('ff[i][j] lands in slot 2i+j; nested dyn dd[i][j] keccak chain matches', async () => {
     await seq(p, slots, [
@@ -771,7 +838,9 @@ contract C {
   function setGuard(uint256 v) external { guard = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const slots = [0n, 1n, 2n, 3n];
   it('writing x must not disturb y in same slot; guard intact', async () => {
     await seq(p, slots, [
@@ -804,7 +873,9 @@ contract C {
   function len() external view returns (uint256) { return a.length; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n);
   const slots = [0n, d, d + 1n, d + 2n, d + 3n];
   it('push 4 / pop 2: length + data slots match (whole-slot elements)', async () => {
@@ -839,12 +910,14 @@ contract C {
   function get(uint256 i) external view returns (int128) { return a[i]; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n);
   const slots = [0n, d, d + 1n];
   it('push/set negatives pack correctly; sign-ext on get', async () => {
     await seq(p, slots, [
-      ['push -1', raw('push(int128)', [MAXU])],            // -1 in 128 bits
+      ['push -1', raw('push(int128)', [MAXU])], // -1 in 128 bits
       ['push min', raw('push(int128)', [-(1n << 127n)])],
       ['push max', raw('push(int128)', [(1n << 127n) - 1n])],
       ['set[0] dirty', raw('set(uint256,int128)', [0n, (MAXU << 128n) | 0x7fffffffffffffffffffffffffffffffn])],
@@ -876,7 +949,9 @@ contract C {
   function setData(uint256 i, uint256 v) external { t.data[i] = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const slots = [0n, 1n, 2n, 3n, 4n];
   it('seed then delete clears all 5 slots; OOB data index Panic', async () => {
     await seq(p, slots, [
@@ -897,9 +972,18 @@ describe('storage-agg: length semantics & push return-of-ref parity', () => {
     const s = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract C { uint256[] a; function f() external { a.length = 3; } }`;
-    let jThrew = false, sThrew = false;
-    try { compile(j, { fileName: 'C.jeth' }); } catch { jThrew = true; }
-    try { compileSolidity(s, 'C'); } catch { sThrew = true; }
+    let jThrew = false,
+      sThrew = false;
+    try {
+      compile(j, { fileName: 'C.jeth' });
+    } catch {
+      jThrew = true;
+    }
+    try {
+      compileSolidity(s, 'C');
+    } catch {
+      sThrew = true;
+    }
     expect(sThrew, 'solc rejects .length=').toBe(true);
     expect(jThrew, 'jeth rejects .length=').toBe(true);
   });
@@ -926,7 +1010,9 @@ contract C {
   function getS(uint256 i) external view returns (string memory) { return recs[i].s; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n);
   // elem k: n @ d+2k, s-header @ d+2k+1, s-longdata @ kec(d+2k+1)
   const slots = [0n, d, d + 1n, d + 2n, d + 3n, kec(d + 1n), kec(d + 1n) + 1n, kec(d + 3n)];
@@ -978,17 +1064,23 @@ contract C {
   function delFlagE() external { delete flags[3]; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const slots = [0n, 1n, 2n, 3n, 4n];
   async function reseed() {
     await p.jeth.call(p.aj, raw('seed()'));
     await p.sol.call(p.as, raw('seed()'));
   }
   it('delete whole / single element of address[] and bool[]', async () => {
-    await reseed(); await step(p, 'delAddr', raw('delAddr()'), slots);
-    await reseed(); await step(p, 'delAddrE', raw('delAddrE()'), slots);
-    await reseed(); await step(p, 'delFlags', raw('delFlags()'), slots);
-    await reseed(); await step(p, 'delFlagE', raw('delFlagE()'), slots);
+    await reseed();
+    await step(p, 'delAddr', raw('delAddr()'), slots);
+    await reseed();
+    await step(p, 'delAddrE', raw('delAddrE()'), slots);
+    await reseed();
+    await step(p, 'delFlags', raw('delFlags()'), slots);
+    await reseed();
+    await step(p, 'delFlagE', raw('delFlagE()'), slots);
   });
 });
 
@@ -1015,13 +1107,22 @@ contract C {
   function get() external view returns (S memory) { return s; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const slots = [0n, 1n];
   it('store dirty, return ABI words match (sign-ext, left-align bytesN)', async () => {
     await seq(p, slots, [
-      ['setAll dirty', raw('setAll(int64,uint32,bytes4,bool,address)', [
-        MAXU, (MAXU << 32n) | 0xdeadbeefn, (0x11223344n << 224n) | 0xffffn, 0xff00n | 1n,
-        (MAXU << 160n) | 0x1234567890abcdef1234567890abcdef12345678n])],
+      [
+        'setAll dirty',
+        raw('setAll(int64,uint32,bytes4,bool,address)', [
+          MAXU,
+          (MAXU << 32n) | 0xdeadbeefn,
+          (0x11223344n << 224n) | 0xffffn,
+          0xff00n | 1n,
+          (MAXU << 160n) | 0x1234567890abcdef1234567890abcdef12345678n,
+        ]),
+      ],
       ['get', raw('get()')],
       ['setA -9999', raw('setA(int64)', [-9999n])],
       ['get', raw('get()')],
@@ -1041,7 +1142,9 @@ describe('storage-agg: malformed dynamic offsets/lengths into storage write', ()
 pragma solidity ^0.8.20;
 contract C { string s; function setS(string calldata v) external { s = v; } }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n);
   const slots = [0n, d, d + 1n, d + 2n, d + 3n];
   const selS = sel('setS(string)');
@@ -1089,7 +1192,9 @@ contract C {
   function setI8(int8 k, uint256 v) external { mi8[k] = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   // bool key true -> keccak(1 . 0). i8 key -1 -> keccak(padded-signext . 1).
   const boolTrue = mapSlot(1n, 0n);
   const i8neg1 = mapSlot(MAXU, 1n); // -1 sign-extended to 256 bits
@@ -1130,10 +1235,11 @@ contract C {
   function copy() external { dst = src; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   // dst headers at slots 1,3; their long-data at kec(1),kec(3). src at 5,7 -> kec(5),kec(7).
-  const slots = [0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n,
-    kec(1n), kec(1n) + 1n, kec(3n), kec(5n), kec(5n) + 1n, kec(7n)];
+  const slots = [0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n, kec(1n), kec(1n) + 1n, kec(3n), kec(5n), kec(5n) + 1n, kec(7n)];
   it('copy short src over long dst clears dst long-data slots', async () => {
     await seq(p, slots, [
       ['setDst0 long', dynArg('setDst(uint256,uint256,string)', [0n, 0xa0n], LONG)],
@@ -1171,7 +1277,9 @@ contract C {
   function at(uint256 i) external view returns (bytes memory) { return a[i]; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n); // data base: element headers at d, d+1, ...
   const slots = [0n, d, d + 1n, d + 2n, kec(d), kec(d) + 1n, kec(d + 1n), kec(d + 1n) + 1n, kec(d + 2n)];
   it('push 3 (long,short,long2), pop 2: freed headers + long-data zeroed', async () => {
@@ -1204,16 +1312,18 @@ contract C {
   function len() external view returns (uint256) { return bs.length; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   const d = kec(0n);
   const slots = [0n, d, d + 1n, d + 2n];
   it('31 (short) -> 32 (long) -> 33 -> back to 31 clears long-data slot', async () => {
     await seq(p, slots, [
-      ['setBs 31', dynArg('setBs(bytes)', [], 'p'.repeat(31))],   // short: inline, low byte = 2*31
+      ['setBs 31', dynArg('setBs(bytes)', [], 'p'.repeat(31))], // short: inline, low byte = 2*31
       ['len', raw('len()')],
-      ['setBs 32', dynArg('setBs(bytes)', [], 'q'.repeat(32))],   // long: slot0 = 2*32+1, data @ kec(0)
+      ['setBs 32', dynArg('setBs(bytes)', [], 'q'.repeat(32))], // long: slot0 = 2*32+1, data @ kec(0)
       ['len', raw('len()')],
-      ['setBs 65', dynArg('setBs(bytes)', [], 'r'.repeat(65))],   // long, 3 data slots
+      ['setBs 65', dynArg('setBs(bytes)', [], 'r'.repeat(65))], // long, 3 data slots
       ['setBs 31 again', dynArg('setBs(bytes)', [], 's'.repeat(31))], // long->short: must clear all data slots
     ]);
   });
@@ -1238,9 +1348,12 @@ contract C {
   function set(uint256 k1, uint256 k2, uint256 i, uint256 v) external { m[k1][k2][i] = v; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   // inner = keccak(k1 . 0); len = keccak(k2 . inner); data = keccak(len).
-  const k1 = MAXU, k2 = 0n; // adversarial keys: max and zero
+  const k1 = MAXU,
+    k2 = 0n; // adversarial keys: max and zero
   const inner = mapSlot(k1, 0n);
   const len = mapSlot(k2, inner);
   const data = kec(len);

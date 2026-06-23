@@ -81,9 +81,7 @@ function ctorAbi(c: NonNullable<ContractIR['ctor']>): AbiConstructor {
 export function emitAbi(contract: ContractIR): AbiItem[] {
   return [
     ...(contract.ctor ? [ctorAbi(contract.ctor)] : []),
-    ...contract.functions
-      .filter((f) => f.visibility === 'external' || f.visibility === 'public')
-      .map(fnAbi),
+    ...contract.functions.filter((f) => f.visibility === 'external' || f.visibility === 'public').map(fnAbi),
     ...contract.errors.map(errorAbi),
     ...contract.events.map(eventAbi),
   ];

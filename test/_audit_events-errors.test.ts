@@ -35,7 +35,8 @@ const rawBytesTail = (hex: string) => {
 const strTail = (s: string) => rawBytesTail(Buffer.from(s, 'utf8').toString('hex'));
 
 const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
-  a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  a.length === b.length &&
+  a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 // ----------------------------------------------------------------------------
 // One JETH contract and the parallel Solidity contract exercising every shape.
@@ -226,8 +227,7 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     const probs: string[] = [];
     if (j.success !== s.success) probs.push('ok j=' + j.success + ' s=' + s.success);
     if (j.returnHex !== s.returnHex) probs.push('ret j=' + j.returnHex + ' s=' + s.returnHex);
-    if (!eqLogs(j.logs, s.logs))
-      probs.push('logs\n  j=' + JSON.stringify(j.logs) + '\n  s=' + JSON.stringify(s.logs));
+    if (!eqLogs(j.logs, s.logs)) probs.push('logs\n  j=' + JSON.stringify(j.logs) + '\n  s=' + JSON.stringify(s.logs));
     if (probs.length) mism.push(label + ' {jethErr=' + j.exceptionError + '} :: ' + probs.join(' | '));
   }
 
@@ -248,7 +248,13 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // ============================================================
     // 1. CLEAN value-array args: error + event (data) + indexed topic
     // ============================================================
-    const cleanU256: bigint[][] = [[], [0n], [U256_MAX], [1n, 2n, 3n], Array.from({ length: 40 }, (_, i) => BigInt(i) * 13n + 1n)];
+    const cleanU256: bigint[][] = [
+      [],
+      [0n],
+      [U256_MAX],
+      [1n, 2n, 3n],
+      Array.from({ length: 40 }, (_, i) => BigInt(i) * 13n + 1n),
+    ];
     for (const xs of cleanU256) {
       await eq(`rEU clean[${xs.length}]`, '0x' + sel('rEU(uint256[])') + pad(0x20n) + arr(xs));
       await eq(`veu clean[${xs.length}]`, '0x' + sel('veu(uint256[])') + pad(0x20n) + arr(xs));
@@ -274,12 +280,12 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
       await eq(`veB4 clean`, '0x' + sel('veB4(bytes4[])') + pad(0x20n) + arr(xs));
       await eq(`iB4 clean`, '0x' + sel('iB4(bytes4[])') + pad(0x20n) + arr(xs));
     }
-    for (const xs of [[], [0n], [127n], [(-1n) % M], [(-128n) % M], [127n, (-128n) % M, (-1n) % M, 5n]] as bigint[][]) {
+    for (const xs of [[], [0n], [127n], [-1n % M], [-128n % M], [127n, -128n % M, -1n % M, 5n]] as bigint[][]) {
       await eq(`rEI8 clean`, '0x' + sel('rEI8(int8[])') + pad(0x20n) + arr(xs));
       await eq(`veI8 clean`, '0x' + sel('veI8(int8[])') + pad(0x20n) + arr(xs));
       await eq(`iI8 clean`, '0x' + sel('iI8(int8[])') + pad(0x20n) + arr(xs));
     }
-    for (const xs of [[], [(-1n) % M], [(1n << 127n) - 1n], [(-(1n << 127n)) % M]] as bigint[][]) {
+    for (const xs of [[], [-1n % M], [(1n << 127n) - 1n], [-(1n << 127n) % M]] as bigint[][]) {
       await eq(`rEI128 clean`, '0x' + sel('rEI128(int128[])') + pad(0x20n) + arr(xs));
     }
 
@@ -317,7 +323,7 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
       await eq(`iB4 dirty (topic)`, '0x' + sel('iB4(bytes4[])') + pad(0x20n) + arr(xs));
     }
     // dirty int8: bad sign extension. 0x80 is +128 (not valid int8), 0xff..00 dirty.
-    for (const xs of [[0x80n], [0x17fn], [0xff00n], [(-1n) % M, 0x80n]] as bigint[][]) {
+    for (const xs of [[0x80n], [0x17fn], [0xff00n], [-1n % M, 0x80n]] as bigint[][]) {
       await eq(`rEI8 dirty`, '0x' + sel('rEI8(int8[])') + pad(0x20n) + arr(xs));
       await eq(`veI8 dirty (data)`, '0x' + sel('veI8(int8[])') + pad(0x20n) + arr(xs));
       await eq(`iI8 dirty (topic)`, '0x' + sel('iI8(int8[])') + pad(0x20n) + arr(xs));
@@ -360,7 +366,11 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
         const offS = offA + aTail.length / 2;
         return pad(BigInt(offA)) + pad(BigInt(offS)) + aTail + strTail(s);
       };
-      for (const [xs, s] of [[[], ''], [[1n, 2n], 'hi'], [[1n, 2n, 3n], 'over thirty-two bytes string goes here for the tail test ok yes!!']] as [bigint[], string][]) {
+      for (const [xs, s] of [
+        [[], ''],
+        [[1n, 2n], 'hi'],
+        [[1n, 2n, 3n], 'over thirty-two bytes string goes here for the tail test ok yes!!'],
+      ] as [bigint[], string][]) {
         await eq(`rEArrStr`, '0x' + sel('rEArrStr(uint256[],string)') + mk(xs, s));
         await eq(`veArrStr`, '0x' + sel('veArrStr(uint256[],string)') + mk(xs, s));
       }
@@ -373,10 +383,15 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
         const offS = offA + aTail.length / 2;
         return pad(BigInt(offA)) + pad(BigInt(offS)) + pad(123n) + aTail + strTail(s);
       };
-      for (const [xs, s] of [[[], ''], [[1n, 2n, 3n], 'data section string longer than thirty-two bytes for spread!!']] as [bigint[], string][]) {
+      for (const [xs, s] of [
+        [[], ''],
+        [[1n, 2n, 3n], 'data section string longer than thirty-two bytes for spread!!'],
+      ] as [bigint[], string][]) {
         await eq(`iMixData`, '0x' + sel('iMixData(uint256[],string,uint256)') + mk(xs, s));
       }
-      await eq('iMixData dirty topic', '0x' + sel('iMixData(uint256[],string,uint256)') + mk([0n, 0n], 'x') // u256 never dirty
+      await eq(
+        'iMixData dirty topic',
+        '0x' + sel('iMixData(uint256[],string,uint256)') + mk([0n, 0n], 'x'), // u256 never dirty
       );
     }
 
@@ -403,7 +418,12 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // ============================================================
     // 5. indexed bytes/string topic (keccak of content): short/exact32/long/empty
     // ============================================================
-    const strCases = ['', 'abc', 'abcdefghijklmnopqrstuvwxyz012345', 'this string is definitely longer than thirty-two bytes for the keccak topic test'];
+    const strCases = [
+      '',
+      'abc',
+      'abcdefghijklmnopqrstuvwxyz012345',
+      'this string is definitely longer than thirty-two bytes for the keccak topic test',
+    ];
     for (const s of strCases) {
       const t = strTail(s);
       await eq(`is_ "${s.slice(0, 6)}"`, '0x' + sel('is_(string,uint256)') + pad(0x40n) + pad(7n) + t);
@@ -421,7 +441,10 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     }
     // raw non-ascii / NUL / 0xff content (no UTF-8 normalization in topic hash)
     for (const hex of ['00', 'ff', '00ff00ff', 'ff'.repeat(40)]) {
-      await eq(`iby rawHex ${hex.slice(0, 6)}`, '0x' + sel('iby(bytes,uint256)') + pad(0x40n) + pad(1n) + rawBytesTail(hex));
+      await eq(
+        `iby rawHex ${hex.slice(0, 6)}`,
+        '0x' + sel('iby(bytes,uint256)') + pad(0x40n) + pad(1n) + rawBytesTail(hex),
+      );
     }
 
     // (struct args to error/event are a clean JETH reject; see gate-parity tests below.)
@@ -431,15 +454,48 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     //    These dirty bits hit the FUNCTION PROLOGUE decode (validateInput), which
     //    solc also does; both should revert before the emit.
     // ============================================================
-    await eq('eMixed clean', encodeCall(sel('eMixed(uint8,int16,bool,address,bytes4)'), [255n, (-3n) % M, 1n, A, b4(0xdeadbeefn)]));
-    await eq('eMixed minmax', encodeCall(sel('eMixed(uint8,int16,bool,address,bytes4)'), [0n, (-32768n) % M, 0n, 0n, 0n]));
-    await eq('eMixed dirtyU8', '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(0x100n) + pad(5n) + pad(1n) + pad(A) + pad(b4(0x1n)));
-    await eq('eMixed dirtyI16', '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(5n) + pad(0x8000n) + pad(1n) + pad(A) + pad(b4(0x1n)));
-    await eq('eMixed dirtyBool', '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(5n) + pad(5n) + pad(2n) + pad(A) + pad(b4(0x1n)));
-    await eq('eMixed dirtyAddr', '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(5n) + pad(5n) + pad(1n) + pad(DIRTY) + pad(b4(0x1n)));
-    await eq('eMixed dirtyBytes4', '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(5n) + pad(5n) + pad(1n) + pad(A) + pad(0x1n)); // bytes4 right-aligned -> dirty
-    await eq('eScalars clean', encodeCall(sel('eScalars(uint8,int16,bool,bytes4,address)'), [200n, (-5n) % M, 1n, b4(0xaabbccddn), A]));
-    await eq('eScalars dirtyAll', '0x' + sel('eScalars(uint8,int16,bool,bytes4,address)') + pad(DIRTY) + pad(DIRTY) + pad(DIRTY) + pad(DIRTY) + pad(DIRTY));
+    await eq(
+      'eMixed clean',
+      encodeCall(sel('eMixed(uint8,int16,bool,address,bytes4)'), [255n, -3n % M, 1n, A, b4(0xdeadbeefn)]),
+    );
+    await eq(
+      'eMixed minmax',
+      encodeCall(sel('eMixed(uint8,int16,bool,address,bytes4)'), [0n, -32768n % M, 0n, 0n, 0n]),
+    );
+    await eq(
+      'eMixed dirtyU8',
+      '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(0x100n) + pad(5n) + pad(1n) + pad(A) + pad(b4(0x1n)),
+    );
+    await eq(
+      'eMixed dirtyI16',
+      '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(5n) + pad(0x8000n) + pad(1n) + pad(A) + pad(b4(0x1n)),
+    );
+    await eq(
+      'eMixed dirtyBool',
+      '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(5n) + pad(5n) + pad(2n) + pad(A) + pad(b4(0x1n)),
+    );
+    await eq(
+      'eMixed dirtyAddr',
+      '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(5n) + pad(5n) + pad(1n) + pad(DIRTY) + pad(b4(0x1n)),
+    );
+    await eq(
+      'eMixed dirtyBytes4',
+      '0x' + sel('eMixed(uint8,int16,bool,address,bytes4)') + pad(5n) + pad(5n) + pad(1n) + pad(A) + pad(0x1n),
+    ); // bytes4 right-aligned -> dirty
+    await eq(
+      'eScalars clean',
+      encodeCall(sel('eScalars(uint8,int16,bool,bytes4,address)'), [200n, -5n % M, 1n, b4(0xaabbccddn), A]),
+    );
+    await eq(
+      'eScalars dirtyAll',
+      '0x' +
+        sel('eScalars(uint8,int16,bool,bytes4,address)') +
+        pad(DIRTY) +
+        pad(DIRTY) +
+        pad(DIRTY) +
+        pad(DIRTY) +
+        pad(DIRTY),
+    );
 
     // ============================================================
     // 8. MALFORMED calldata for value-array event/error args (decoder parity).
@@ -450,7 +506,16 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
       ['veu(uint256[])', 'ev-data'],
       ['iu(uint256[])', 'ev-topic'],
     ];
-    const badOffsets: bigint[] = [0x0n, 0x21n, 0x40n, 0xffffffffn, U256_MAX, 1n << 64n, 1n << 255n, (1n << 255n) + 0x20n];
+    const badOffsets: bigint[] = [
+      0x0n,
+      0x21n,
+      0x40n,
+      0xffffffffn,
+      U256_MAX,
+      1n << 64n,
+      1n << 255n,
+      (1n << 255n) + 0x20n,
+    ];
     for (const [s, tag] of arrSels) {
       for (const off of badOffsets) {
         await eq(`${tag} badOff ${off.toString(16)}`, '0x' + sel(s) + pad(off) + arr([1n, 2n]));
@@ -523,7 +588,10 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
   it('gate: >3 indexed event params rejected (JETH143)', () => {
     let threw = false;
     try {
-      compile(`@contract class C { @event E(@indexed a: u256, @indexed b: u256, @indexed c: u256, @indexed d: u256); @external f(): void {} }`, { fileName: 'C.jeth' });
+      compile(
+        `@contract class C { @event E(@indexed a: u256, @indexed b: u256, @indexed c: u256, @indexed d: u256); @external f(): void {} }`,
+        { fileName: 'C.jeth' },
+      );
     } catch (e: any) {
       threw = true;
       expect(JSON.stringify(e.diagnostics ?? e.message)).toContain('JETH143');
@@ -531,21 +599,39 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     expect(threw).toBe(true);
   });
   it('indexed fixed-array event param now compiles (keccak topic, JETH207 lifted)', () => {
-    expect(() => compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, { fileName: 'C.jeth' }))
-      .not.toThrow();
+    expect(() =>
+      compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, {
+        fileName: 'C.jeth',
+      }),
+    ).not.toThrow();
   });
   it('indexed static-struct, dynamic struct, AND nested-dynamic-struct-field event params all compile (keccak topic)', () => {
-    expect(() => compile(`@struct class S { x: u256; }
-@contract class C { @event E(@indexed s: S); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@struct class S { x: u256; }
+@contract class C { @event E(@indexed s: S); @external f(): void {} }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
     // a supported dynamic struct (string field) indexed param now compiles too (keccak of the
     // flattened payload; verified byte-identical in fix-all-divergences.test.ts).
-    expect(() => compile(`@struct class D { s: string; }
-@contract class C { @event E(@indexed d: D); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@struct class D { s: string; }
+@contract class C { @event E(@indexed d: D); @external f(): void {} }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
     // a dynamic struct with a NESTED dynamic struct field is now supported too (the topic is keccak of
     // the recursively flattened payload; byte-identical to solc, verified in fix-all-divergences.test.ts).
-    expect(() => compile(`@struct class Inner { p: u256; s: string; }
+    expect(() =>
+      compile(
+        `@struct class Inner { p: u256; s: string; }
 @struct class D2 { x: u256; inner: Inner; }
-@contract class C { @event E(@indexed d: D2); @external f(): void {} }`, { fileName: 'C.jeth' })).not.toThrow();
+@contract class C { @event E(@indexed d: D2); @external f(): void {} }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
   });
   it('gate: indexed nested dynamic array (u256[][]) event param rejected', () => {
     let threw = false;
@@ -558,21 +644,41 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
   });
   it('non-indexed static fixed-array event param now compiles (encoded inline in the data tuple)', () => {
     // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).
-    expect(() => compile(`@contract class C { @event E(a: Arr<u256, 3>); @external f(a: u256, b: u256, c: u256): void { emit(E([a, b, c])); } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@contract class C { @event E(a: Arr<u256, 3>); @external f(a: u256, b: u256, c: u256): void { emit(E([a, b, c])); } }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
   });
   it('@error with a STATIC struct param AND a DYNAMIC struct param both compile (revert data byte-identical)', () => {
     // a static struct error param is now supported (revert data byte-identical to solc, verified in
     // fix-all-divergences.test.ts).
-    expect(() => compile(`@struct class S { a: u256; b: bool; }
-@contract class C { @error E(s: S); @external @pure f(s: S): void { revert(E(s)); } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@struct class S { a: u256; b: bool; }
+@contract class C { @error E(s: S); @external @pure f(s: S): void { revert(E(s)); } }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
     // a DYNAMIC struct (bytes/string field) error param is now supported too (revert returndata
     // byte-identical to solc, verified in fix-all-divergences.test.ts).
-    expect(() => compile(`@struct class D { a: u256; s: string; }
-@contract class C { @error E(d: D); @external f(): void { revert(E(D(1n, "x"))); } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@struct class D { a: u256; s: string; }
+@contract class C { @error E(d: D); @external f(): void { revert(E(D(1n, "x"))); } }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
   });
   it('non-indexed static struct event param now compiles (encoded inline in the data tuple)', () => {
     // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).
-    expect(() => compile(`@struct class S { a: u256; b: bool; }
-@contract class C { @event E(s: S); @external f(s: S): void { emit(E(s)); } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() =>
+      compile(
+        `@struct class S { a: u256; b: bool; }
+@contract class C { @event E(s: S); @external f(s: S): void { emit(E(s)); } }`,
+        { fileName: 'C.jeth' },
+      ),
+    ).not.toThrow();
   });
 });

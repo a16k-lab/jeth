@@ -103,7 +103,7 @@ describe('aggregate + dynamic sibling vs Solidity', () => {
     const a = [1n, 2n, 3n];
     const b = [7n, 8n];
     // offset 0xffffffff... is absurd; the length word read is OOB -> solc reverts EMPTY.
-    const r = await eq('bAt bad-offset huge', p1('bAt(uint256[3],uint256[],uint256)', a, b, 0n, (1n << 64n)));
+    const r = await eq('bAt bad-offset huge', p1('bAt(uint256[3],uint256[],uint256)', a, b, 0n, 1n << 64n));
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
   });
@@ -113,7 +113,7 @@ describe('aggregate + dynamic sibling vs Solidity', () => {
     // array length; if that length implies elements past calldatasize, reading
     // an element reverts EMPTY. Use offset 0x80 (the i word) with i set huge.
     const a = [1n, 2n, 3n];
-    const head = [a[0]!, a[1]!, a[2]!, 0x80n, (1n << 200n)]; // offset->i word; i = huge "length"
+    const head = [a[0]!, a[1]!, a[2]!, 0x80n, 1n << 200n]; // offset->i word; i = huge "length"
     const data = '0x' + sel('bAt(uint256[3],uint256[],uint256)') + head.map(pad).join('');
     const r = await eq('bAt offset->huge-len', data);
     expect(r.j.success).toBe(false);
@@ -134,13 +134,23 @@ describe('aggregate + dynamic sibling vs Solidity', () => {
     // layout does not spuriously revert.)
     const a = [0n, 0n, 0n];
     const b = [42n];
-    expect(decodeUint((await eq('bAt clean tail', p1('bAt(uint256[3],uint256[],uint256)', a, b, 0n))).j.returnHex)).toBe(42n);
+    expect(
+      decodeUint((await eq('bAt clean tail', p1('bAt(uint256[3],uint256[],uint256)', a, b, 0n))).j.returnHex),
+    ).toBe(42n);
   });
 
   // ---- Part 2: Pt p, bytes data ----
   // Head = p.x, p.y, offset(data) => 3 words (96 bytes). Tail base = byte 4.
   // data tail placed right after head => offset(data) = 96 = 0x60.
-  function p2(selSig: string, x: bigint, y: bigint, data: Uint8Array, tailWords: bigint[] | null = null, offD = 0x60n, extraHead: bigint[] = []): string {
+  function p2(
+    selSig: string,
+    x: bigint,
+    y: bigint,
+    data: Uint8Array,
+    tailWords: bigint[] | null = null,
+    offD = 0x60n,
+    extraHead: bigint[] = [],
+  ): string {
     const head = [x, y, offD, ...extraHead];
     let tail: bigint[];
     if (tailWords) {
@@ -160,9 +170,15 @@ describe('aggregate + dynamic sibling vs Solidity', () => {
 
   it('struct inline + bytes tail: p.x, p.y, data.length', async () => {
     const data = new Uint8Array([0xde, 0xad, 0xbe, 0xef, 0x01]);
-    expect(decodeUint((await eq('ptXof', p2('ptXof((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex)).toBe(0xcafen);
-    expect(decodeUint((await eq('ptYof', p2('ptYof((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex)).toBe(0xbeefn);
-    expect(decodeUint((await eq('dataLen', p2('dataLen((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex)).toBe(5n);
+    expect(
+      decodeUint((await eq('ptXof', p2('ptXof((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex),
+    ).toBe(0xcafen);
+    expect(
+      decodeUint((await eq('ptYof', p2('ptYof((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex),
+    ).toBe(0xbeefn);
+    expect(
+      decodeUint((await eq('dataLen', p2('dataLen((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex),
+    ).toBe(5n);
   });
 
   it('bytes data[k] indexing: valid k and OOB k -> Panic(0x32)', async () => {

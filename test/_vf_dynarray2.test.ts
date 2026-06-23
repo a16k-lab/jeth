@@ -19,7 +19,10 @@ function encIStr(sig: string, i: bigint, s: string): string {
   const b = Buffer.from(s, 'utf8');
   const nwords = Math.ceil(b.length / 32);
   let data = '';
-  for (let w = 0; w < nwords; w++) data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+  for (let w = 0; w < nwords; w++)
+    data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)])
+      .subarray(0, 32)
+      .toString('hex');
   return '0x' + sel(sig) + pad(i) + pad(0x40n) + pad(BigInt(b.length)) + data;
 }
 
@@ -125,7 +128,20 @@ describe('_vf_dynarray2 probe', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   const send = eq;
 
@@ -160,7 +176,8 @@ describe('_vf_dynarray2 probe', () => {
     await eq('getU[0] on empty -> 0x32', encodeCall(sel('getU(uint256)'), [0n]));
 
     // ---- clear then regrow: freed slots must read clean ----
-    for (const v of [0xaaaan, 0xbbbbn, 0xccccn, 0xddddn]) await send('regrow after clear', encodeCall(sel('pushU(uint256)'), [v]));
+    for (const v of [0xaaaan, 0xbbbbn, 0xccccn, 0xddddn])
+      await send('regrow after clear', encodeCall(sel('pushU(uint256)'), [v]));
     await eq('allU regrow after clear', encodeCall(sel('allU()')));
 
     // ---- this.u = [] empty clear then check stale ----
@@ -185,7 +202,10 @@ describe('_vf_dynarray2 probe', () => {
 
     // ---- struct array field RMW (u128 packed) checked overflow ----
     await send('pushPa(1,2)', encodeCall(sel('pushPa(uint128,uint128)'), [1n, 2n]));
-    await send('pushPa(max128,max128)', encodeCall(sel('pushPa(uint128,uint128)'), [(1n << 128n) - 1n, (1n << 128n) - 1n]));
+    await send(
+      'pushPa(max128,max128)',
+      encodeCall(sel('pushPa(uint128,uint128)'), [(1n << 128n) - 1n, (1n << 128n) - 1n]),
+    );
     await eq('bumpY[0] +5', encodeCall(sel('bumpY(uint256,uint128)'), [0n, 5n]));
     await eq('getY[0]==7', encodeCall(sel('getY(uint256)'), [0n]));
     await eq('bumpY[1] +1 -> u128 overflow 0x11', encodeCall(sel('bumpY(uint256,uint128)'), [1n, 1n]));
@@ -219,8 +239,17 @@ describe('_vf_dynarray2 probe', () => {
     {
       const s = 'hi';
       const b = Buffer.from(s, 'utf8');
-      const data = Buffer.concat([b, Buffer.alloc(32 - b.length)]).subarray(0, 32).toString('hex');
-      const dd = '0x' + sel('pushDAInner(uint256,uint256,string)') + pad(0n) + pad(5n) + pad(0x60n) + pad(BigInt(b.length)) + data;
+      const data = Buffer.concat([b, Buffer.alloc(32 - b.length)])
+        .subarray(0, 32)
+        .toString('hex');
+      const dd =
+        '0x' +
+        sel('pushDAInner(uint256,uint256,string)') +
+        pad(0n) +
+        pad(5n) +
+        pad(0x60n) +
+        pad(BigInt(b.length)) +
+        data;
       await send('da[0] push (5,hi) proper', dd);
     }
     {
@@ -228,21 +257,32 @@ describe('_vf_dynarray2 probe', () => {
       const b = Buffer.from(s, 'utf8');
       const nwords = Math.ceil(b.length / 32);
       let data = '';
-      for (let w = 0; w < nwords; w++) data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
-      const dd = '0x' + sel('pushDAInner(uint256,uint256,string)') + pad(0n) + pad(6n) + pad(0x60n) + pad(BigInt(b.length)) + data;
+      for (let w = 0; w < nwords; w++)
+        data += Buffer.concat([b.subarray(w * 32, w * 32 + 32), Buffer.alloc(32)])
+          .subarray(0, 32)
+          .toString('hex');
+      const dd =
+        '0x' +
+        sel('pushDAInner(uint256,uint256,string)') +
+        pad(0n) +
+        pad(6n) +
+        pad(0x60n) +
+        pad(BigInt(b.length)) +
+        data;
       await send('da[0] push (6,LONG) proper', dd);
     }
     await eq('allDA', encodeCall(sel('allDA()')));
 
     // ---- bytes16[] packed 2/slot, pop at exact boundary ----
-    for (const v of [0n, MAX, (1n << 255n), 0xabcdn, 1n]) await send('pushB16', encodeCall(sel('pushB16(bytes16)'), [v << 128n]));
+    for (const v of [0n, MAX, 1n << 255n, 0xabcdn, 1n])
+      await send('pushB16', encodeCall(sel('pushB16(bytes16)'), [v << 128n]));
     await eq('allB16 5 elems', encodeCall(sel('allB16()')));
     // pop from 5->4 (4 is in slot index 2 lower half) -> the half must be cleared
     await send('popB16 5->4', encodeCall(sel('popB16()')));
     await eq('allB16 after pop', encodeCall(sel('allB16()')));
     // pop 4->3 then regrow, no stale upper half
     await send('popB16 4->3', encodeCall(sel('popB16()')));
-    await send('pushB16 regrow', encodeCall(sel('pushB16(bytes16)'), [(0x7777n) << 128n]));
+    await send('pushB16 regrow', encodeCall(sel('pushB16(bytes16)'), [0x7777n << 128n]));
     await eq('allB16 regrow no-stale', encodeCall(sel('allB16()')));
 
     // ---- memory OOB write/read -> panic 0x32 ----
@@ -256,8 +296,10 @@ describe('_vf_dynarray2 probe', () => {
     await eq('getU idx exactly len -> 0x32', encodeCall(sel('getU(uint256)'), [3n]));
     await eq('getU idx max -> 0x32', encodeCall(sel('getU(uint256)'), [MAX]));
 
-    if (mism.length) { process.stderr.write('MISMATCHES ' + mism.length + '/' + count + '\n'); for (const m of mism.slice(0, 40)) process.stderr.write(m + '\n'); }
-    else process.stderr.write('ALL2 ' + count + ' byte-identical\n');
+    if (mism.length) {
+      process.stderr.write('MISMATCHES ' + mism.length + '/' + count + '\n');
+      for (const m of mism.slice(0, 40)) process.stderr.write(m + '\n');
+    } else process.stderr.write('ALL2 ' + count + ' byte-identical\n');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

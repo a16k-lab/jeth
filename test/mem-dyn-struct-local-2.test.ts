@@ -12,17 +12,22 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
-const encStr = (s: string) => { const h = Buffer.from(s, 'utf8').toString('hex'); return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0'); };
+const encStr = (s: string) => {
+  const h = Buffer.from(s, 'utf8').toString('hex');
+  return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0');
+};
 // seed(uint256 av, string s): head [av][off=0x40] then [len][data]
 const cdUS = (sig: string, a: bigint, s: string) => '0x' + sel(sig) + pad(a) + pad(0x40n) + encStr(s);
 // (uint256, string, string)
 const cdUSS = (sig: string, a: bigint, s1: string, s2: string) => {
-  const t1 = encStr(s1); const off2 = 0x60 + t1.length / 2;
+  const t1 = encStr(s1);
+  const off2 = 0x60 + t1.length / 2;
   return '0x' + sel(sig) + pad(a) + pad(0x60n) + pad(BigInt(off2)) + t1 + encStr(s2);
 };
 // (uint256, string, string, uint256)
 const cdUSSU = (sig: string, a: bigint, s1: string, s2: string, nv: bigint) => {
-  const t1 = encStr(s1); const off2 = 0x80 + t1.length / 2;
+  const t1 = encStr(s1);
+  const off2 = 0x80 + t1.length / 2;
   return '0x' + sel(sig) + pad(a) + pad(0x80n) + pad(BigInt(off2)) + pad(nv) + t1 + encStr(s2);
 };
 // fromCalldata(D x): D=(uint256,string) dynamic -> selector + off(0x20) + tuple[a, off_s=0x40, [len][data]]
@@ -72,29 +77,41 @@ contract C {
 describe('dyn-struct memory local: write + copy vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
-  async function seedBoth(data: string) { await jeth.call(aj, data); await sol.call(as, data); }
+  async function seedBoth(data: string) {
+    await jeth.call(aj, data);
+    await sol.call(as, data);
+  }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
-  const SHORT = 'hi', LONG = 'a string that is definitely longer than thirty-two bytes for the dynamic case';
+  const SHORT = 'hi',
+    LONG = 'a string that is definitely longer than thirty-two bytes for the dynamic case';
   const NS = ['', 'x', 'a replacement string that exceeds thirty-two bytes so it needs a fresh blob'];
 
   it('bytes/string field write (short<->long<->empty) + write both fields', async () => {
-    for (const s of [SHORT, LONG]) for (const ns of NS) {
-      await eq(`writeBytes(${s.length},${ns.length})`, cdUSS('writeBytes(uint256,string,string)', 7n, s, ns));
-      await eq(`writeBoth`, cdUSSU('writeBoth(uint256,string,string,uint256)', 7n, s, ns, 0xabcn));
-    }
+    for (const s of [SHORT, LONG])
+      for (const ns of NS) {
+        await eq(`writeBytes(${s.length},${ns.length})`, cdUSS('writeBytes(uint256,string,string)', 7n, s, ns));
+        await eq(`writeBoth`, cdUSSU('writeBoth(uint256,string,string,uint256)', 7n, s, ns, 0xabcn));
+      }
   });
   it('copy-init from storage struct / mapping / struct-array element', async () => {
-    for (const [av, s] of [[1n, SHORT], [M - 1n, LONG], [0n, '']] as const) {
+    for (const [av, s] of [
+      [1n, SHORT],
+      [M - 1n, LONG],
+      [0n, ''],
+    ] as const) {
       await seedBoth(cdUS('seedSt(uint256,string)', av, s));
       await seedBoth(cdUS('seedMap(uint256,string)', av, s));
       await eq('fromStorage', encodeCall(sel('fromStorage()'), []));
@@ -105,9 +122,16 @@ describe('dyn-struct memory local: write + copy vs Solidity', () => {
     await eq('fromRec', encodeCall(sel('fromRec()'), []));
   });
   it('copy-init from a calldata struct param (+ mutate)', async () => {
-    for (const [av, s] of [[5n, SHORT], [M - 1n, LONG], [0n, '']] as const) {
+    for (const [av, s] of [
+      [5n, SHORT],
+      [M - 1n, LONG],
+      [0n, ''],
+    ] as const) {
       await eq('fromCalldata', cdD('fromCalldata((uint256,string))', av, s));
-      await eq('copyCdMut', '0x' + sel('copyCdMut((uint256,string),uint256)') + pad(0x40n) + pad(0x111n) + pad(av) + pad(0x40n) + encStr(s));
+      await eq(
+        'copyCdMut',
+        '0x' + sel('copyCdMut((uint256,string),uint256)') + pad(0x40n) + pad(0x111n) + pad(av) + pad(0x40n) + encStr(s),
+      );
     }
   });
   it('another-local alias: mutation through the alias is visible in the original', async () => {

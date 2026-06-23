@@ -130,8 +130,7 @@ describe('struct-with-fixed-array-field (WithArr[]) vs Solidity', () => {
     // up-front length*stride bound exceeds calldatasize, decode reverts EMPTY
     // BEFORE touching any index -- proving stride 3 (not stride 1).
     const fiveWords = [1n, 10n, 11n, 2n, 20n]; // 5 words < 6 required
-    const truncated =
-      '0x' + sel(ECHO) + pad(0x20n) + pad(2n) + fiveWords.map(pad).join('');
+    const truncated = '0x' + sel(ECHO) + pad(0x20n) + pad(2n) + fiveWords.map(pad).join('');
     const r = await eq('echoArr len=2 short payload -> EMPTY', truncated);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
@@ -150,8 +149,7 @@ describe('struct-with-fixed-array-field (WithArr[]) vs Solidity', () => {
 
     // If stride were mistakenly 1, len=5 over 5 supplied words would pass; it must
     // NOT (needs 15 words) -> EMPTY, further pinning stride=3 behavior.
-    const wrongStride =
-      '0x' + sel(ECHO) + pad(0x20n) + pad(5n) + fiveWords.map(pad).join('');
+    const wrongStride = '0x' + sel(ECHO) + pad(0x20n) + pad(5n) + fiveWords.map(pad).join('');
     const rw = await eq('echoArr len=5 over 5 words -> EMPTY', wrongStride);
     expect(rw.j.success).toBe(false);
     expect(rw.j.returnHex).toBe('0x');

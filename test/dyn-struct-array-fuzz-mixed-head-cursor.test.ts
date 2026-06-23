@@ -91,8 +91,7 @@ describe('mixed-head-cursor: Pt[] with surrounding params, byte-identical to Sol
   const tail = (flat: bigint[], len: number) => pad(BigInt(len)) + flat.map(pad).join('');
 
   // (1) f(Pt[] ps, uint256 i): head = [offset=0x40][i]; tail at 0x40
-  const buildF = (flat: bigint[], len: number, i: bigint) =>
-    '0x' + sel(SIG_F) + pad(0x40n) + pad(i) + tail(flat, len);
+  const buildF = (flat: bigint[], len: number, i: bigint) => '0x' + sel(SIG_F) + pad(0x40n) + pad(i) + tail(flat, len);
   const buildEchoF = (flat: bigint[], len: number, i: bigint) =>
     '0x' + sel(SIG_ECHOF) + pad(0x40n) + pad(i) + tail(flat, len);
 
@@ -253,8 +252,15 @@ describe('mixed-head-cursor: Pt[] with surrounding params, byte-identical to Sol
     const offA = 0x60n;
     const wrongOffB = offA; // b aliases a
     const bad =
-      '0x' + sel(SIG_H) + pad(offA) + pad(wrongOffB) + pad(0n) +
-      pad(2n) + flatA.map(pad).join('') + pad(3n) + flatB.map(pad).join('');
+      '0x' +
+      sel(SIG_H) +
+      pad(offA) +
+      pad(wrongOffB) +
+      pad(0n) +
+      pad(2n) +
+      flatA.map(pad).join('') +
+      pad(3n) +
+      flatB.map(pad).join('');
     await eq('h wrong-offB (oracle-defined)', bad);
   });
 
@@ -276,8 +282,7 @@ describe('mixed-head-cursor: Pt[] with surrounding params, byte-identical to Sol
     expect(r.j.returnHex).toBe('0x');
     // h: second offset past calldatasize -> EMPTY
     const flatA = [1n, 2n];
-    const badOffH =
-      '0x' + sel(SIG_H) + pad(0x60n) + pad(0x9000n) + pad(0n) + pad(1n) + flatA.map(pad).join('');
+    const badOffH = '0x' + sel(SIG_H) + pad(0x60n) + pad(0x9000n) + pad(0n) + pad(1n) + flatA.map(pad).join('');
     r = await eq('h bad offB', badOffH);
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');

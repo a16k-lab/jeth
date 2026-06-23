@@ -158,7 +158,10 @@ describe('nested-mapping-to-array: mapping<A, mapping<B, T[]>> vs Solidity', () 
     // g[A1][B2] has length 1; index 1 is OOB
     const r = await eqCall('gat A1 B2 OOB', encodeCall(sel('gat(address,uint256,uint256)'), [A1, B2, 1n]));
     expect(r.j.success).toBe(false);
-    const r2 = await eqCall('gset A1 B2 OOB', encodeCall(sel('gset(address,uint256,uint256,uint256)'), [A1, B2, 5n, 1n]));
+    const r2 = await eqCall(
+      'gset A1 B2 OOB',
+      encodeCall(sel('gset(address,uint256,uint256,uint256)'), [A1, B2, 5n, 1n]),
+    );
     expect(r2.j.success).toBe(false);
   });
 

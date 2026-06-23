@@ -9,10 +9,25 @@ import { compileSolidity } from './_solidity.js';
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => functionSelector(s);
 const W = (n: bigint) => pad32(n);
-const cdBytes = (hex: string) => W(0x20n) + W(BigInt(hex.length / 2)) + (hex || '').padEnd(Math.ceil(Math.max(hex.length / 2, 1) / 32) * 64, '0');
+const cdBytes = (hex: string) =>
+  W(0x20n) + W(BigInt(hex.length / 2)) + (hex || '').padEnd(Math.ceil(Math.max(hex.length / 2, 1) / 32) * 64, '0');
 
-function jOk(src: string): boolean { try { compile(src, { fileName: 'C.jeth' }); return true; } catch { return false; } }
-function sOk(src: string): boolean { try { compileSolidity(SPDX + src, 'C'); return true; } catch { return false; } }
+function jOk(src: string): boolean {
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function sOk(src: string): boolean {
+  try {
+    compileSolidity(SPDX + src, 'C');
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function diff(jeth: string, sol: string, calls: { sig: string; args?: string }[]) {
   const jb = compile(jeth, { fileName: 'C.jeth' });

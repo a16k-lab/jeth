@@ -108,7 +108,20 @@ describe('nestedfixed probe part 2', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   function raw(sig: string, words: bigint[]): string {
     return '0x' + functionSelector(sig) + words.map(pad).join('');
@@ -128,22 +141,30 @@ describe('nestedfixed probe part 2', () => {
 
     // ---- 5D array: write a SPARSE set of corners + a couple of interior cells ----
     const d5cells: [bigint, bigint, bigint, bigint, bigint, bigint][] = [
-      [0n,0n,0n,0n,0n, 1n], [1n,1n,1n,1n,1n, M - 1n], [0n,1n,0n,1n,0n, 0xabcn],
-      [1n,0n,1n,0n,1n, 1n << 255n], [0n,0n,1n,1n,0n, 0xdeadn], [1n,1n,0n,0n,1n, M - 0x100n],
+      [0n, 0n, 0n, 0n, 0n, 1n],
+      [1n, 1n, 1n, 1n, 1n, M - 1n],
+      [0n, 1n, 0n, 1n, 0n, 0xabcn],
+      [1n, 0n, 1n, 0n, 1n, 1n << 255n],
+      [0n, 0n, 1n, 1n, 0n, 0xdeadn],
+      [1n, 1n, 0n, 0n, 1n, M - 0x100n],
     ];
-    for (const [i,j,k,l,m,v] of d5cells)
-      await eq(`setD5[${i}${j}${k}${l}${m}]`, raw('setD5(uint256,uint256,uint256,uint256,uint256,uint256)', [i,j,k,l,m,v]));
+    for (const [i, j, k, l, m, v] of d5cells)
+      await eq(
+        `setD5[${i}${j}${k}${l}${m}]`,
+        raw('setD5(uint256,uint256,uint256,uint256,uint256,uint256)', [i, j, k, l, m, v]),
+      );
     await eq('getD5', encodeCall(sel('getD5()')));
-    for (const [i,j,k,l,m] of d5cells)
-      await eq(`elemD5[${i}${j}${k}${l}${m}]`, raw('elemD5(uint256,uint256,uint256,uint256,uint256)', [i,j,k,l,m]));
+    for (const [i, j, k, l, m] of d5cells)
+      await eq(`elemD5[${i}${j}${k}${l}${m}]`, raw('elemD5(uint256,uint256,uint256,uint256,uint256)', [i, j, k, l, m]));
     // a few zero cells (never written) - prove zero-init parity in whole return
-    await eq('elemD5-zero', raw('elemD5(uint256,uint256,uint256,uint256,uint256)', [0n,1n,1n,0n,1n]));
+    await eq('elemD5-zero', raw('elemD5(uint256,uint256,uint256,uint256,uint256)', [0n, 1n, 1n, 0n, 1n]));
 
     // ---- i8 grid: INT8_MIN/MAX, -1, sign-extend on whole + row return ----
     const i8vals = [127n, M - 128n, M - 1n, 0n, 42n, M - 100n];
     let n = 0;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 3n; j++)
-      await eq(`setS8[${i}][${j}]`, raw('setS8(uint256,uint256,int8)', [i, j, i8vals[n++]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 3n; j++)
+        await eq(`setS8[${i}][${j}]`, raw('setS8(uint256,uint256,int8)', [i, j, i8vals[n++]!]));
     await eq('getS8', encodeCall(sel('getS8()')));
     await eq('rowS8[0]', raw('rowS8(uint256)', [0n]));
     await eq('rowS8[1]', raw('rowS8(uint256)', [1n]));
@@ -151,33 +172,40 @@ describe('nestedfixed probe part 2', () => {
     // ---- i128 grid ----
     const i128vals = [(1n << 127n) - 1n, M - (1n << 127n), M - 1n, 0x1234567890n];
     n = 0;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`setS128[${i}][${j}]`, raw('setS128(uint256,uint256,int128)', [i, j, i128vals[n++]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        await eq(`setS128[${i}][${j}]`, raw('setS128(uint256,uint256,int128)', [i, j, i128vals[n++]!]));
     await eq('getS128', encodeCall(sel('getS128()')));
 
     // ---- i256 grid: full-width INT256_MIN/MAX ----
     const i256vals = [(1n << 255n) - 1n, 1n << 255n, M - 1n, 0n];
     n = 0;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`setS256[${i}][${j}]`, raw('setS256(uint256,uint256,int256)', [i, j, i256vals[n++]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        await eq(`setS256[${i}][${j}]`, raw('setS256(uint256,uint256,int256)', [i, j, i256vals[n++]!]));
     await eq('getS256', encodeCall(sel('getS256()')));
 
     // ---- bytes32 grid ----
     const b32vals = [M - 1n, 0n, 0xdeadbeefn << 224n, 0x0123456789abcdefn];
     n = 0;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++)
-      await eq(`setB32[${i}][${j}]`, raw('setB32(uint256,uint256,bytes32)', [i, j, b32vals[n++]!]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        await eq(`setB32[${i}][${j}]`, raw('setB32(uint256,uint256,bytes32)', [i, j, b32vals[n++]!]));
     await eq('getB32', encodeCall(sel('getB32()')));
 
     // ---- Cell grid (struct with u128 + i128 packed in one slot) ----
     const cellPairs: [bigint, bigint][] = [
-      [(1n << 128n) - 1n, (1n << 127n) - 1n], [1n, M - 1n], [0xaan, M - (1n << 127n)], [0n, 5n],
+      [(1n << 128n) - 1n, (1n << 127n) - 1n],
+      [1n, M - 1n],
+      [0xaan, M - (1n << 127n)],
+      [0n, 5n],
     ];
     n = 0;
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) {
-      const [lo, hi] = cellPairs[n++]!;
-      await eq(`setCell[${i}][${j}]`, raw('setCell(uint256,uint256,uint128,int128)', [i, j, lo, hi]));
-    }
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++) {
+        const [lo, hi] = cellPairs[n++]!;
+        await eq(`setCell[${i}][${j}]`, raw('setCell(uint256,uint256,uint128,int128)', [i, j, lo, hi]));
+      }
     await eq('getCells', encodeCall(sel('getCells()')));
     await eq('rowCells[0]', raw('rowCells(uint256)', [0n]));
     await eq('rowCells[1]', raw('rowCells(uint256)', [1n]));
@@ -185,8 +213,12 @@ describe('nestedfixed probe part 2', () => {
     // ---- pkgrid: fixed array of struct-with-packed-2D-field ----
     for (const idx of [0n, 1n]) {
       let m = 1n;
-      for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 4n; j++)
-        await eq(`setPkgrid[${idx}][${i}][${j}]`, raw('setPkgrid(uint256,uint64,uint64,uint256,uint256,uint8)', [idx, 0xa0n + idx, 0xb0n + idx, i, j, m++]));
+      for (let i = 0n; i < 3n; i++)
+        for (let j = 0n; j < 4n; j++)
+          await eq(
+            `setPkgrid[${idx}][${i}][${j}]`,
+            raw('setPkgrid(uint256,uint64,uint64,uint256,uint256,uint8)', [idx, 0xa0n + idx, 0xb0n + idx, i, j, m++]),
+          );
     }
     await eq('getPkgrid', encodeCall(sel('getPkgrid()')));
     await eq('elemPkgrid[0]', raw('elemPkgrid(uint256)', [0n]));
@@ -195,8 +227,21 @@ describe('nestedfixed probe part 2', () => {
     // ---- deep: struct{u256; Arr<Pk,2>; u256} - struct holding fixed array of struct w/ 2D field ----
     for (const idx of [0n, 1n]) {
       let m = 1n;
-      for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 4n; j++)
-        await eq(`setDeep[${idx}][${i}][${j}]`, raw('setDeep(uint256,uint256,uint256,uint64,uint64,uint256,uint256,uint8)', [0x111n, 0x222n, idx, 0xc0n + idx, 0xd0n + idx, i, j, m++]));
+      for (let i = 0n; i < 3n; i++)
+        for (let j = 0n; j < 4n; j++)
+          await eq(
+            `setDeep[${idx}][${i}][${j}]`,
+            raw('setDeep(uint256,uint256,uint256,uint64,uint64,uint256,uint256,uint8)', [
+              0x111n,
+              0x222n,
+              idx,
+              0xc0n + idx,
+              0xd0n + idx,
+              i,
+              j,
+              m++,
+            ]),
+          );
     }
     await eq('getDeep', encodeCall(sel('getDeep()')));
 
@@ -209,8 +254,8 @@ describe('nestedfixed probe part 2', () => {
     await eq('getPart-after-clear', encodeCall(sel('getPart()')));
 
     // ---- OOB on the deeper dims ----
-    await eq('oob-d5-m', raw('elemD5(uint256,uint256,uint256,uint256,uint256)', [0n,0n,0n,0n,2n]));
-    await eq('oob-d5-i', raw('elemD5(uint256,uint256,uint256,uint256,uint256)', [2n,0n,0n,0n,0n]));
+    await eq('oob-d5-m', raw('elemD5(uint256,uint256,uint256,uint256,uint256)', [0n, 0n, 0n, 0n, 2n]));
+    await eq('oob-d5-i', raw('elemD5(uint256,uint256,uint256,uint256,uint256)', [2n, 0n, 0n, 0n, 0n]));
     await eq('oob-pkgrid', raw('elemPkgrid(uint256)', [2n]));
     await eq('oob-cells-row', raw('rowCells(uint256)', [2n]));
     await eq('oob-s8-i', raw('rowS8(uint256)', [2n]));
@@ -220,8 +265,10 @@ describe('nestedfixed probe part 2', () => {
     await eq('dirty-i128', raw('setS128(uint256,uint256,int128)', [0n, 0n, 1n << 128n]));
     await eq('dirty-u128-cell', raw('setCell(uint256,uint256,uint128,int128)', [0n, 0n, 1n << 128n, 1n]));
 
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

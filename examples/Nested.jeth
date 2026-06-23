@@ -1,36 +1,86 @@
 // Nested storage access: array-of-struct, mapping-of-struct, nested fixed arrays,
 // nested structs. Exercises the unified AccessPath (field/index/mapKey steps).
-@struct class Pt { x: u128; y: u128; }
-@struct class Acct { bal: u128; nonce: u64; active: bool; }
-@struct class Inner { a: u128; b: u128; }
-@struct class Outer { p: u64; inner: Inner; q: u64; }
+@struct
+class Pt {
+  x: u128;
+  y: u128;
+}
+@struct
+class Acct {
+  bal: u128;
+  nonce: u64;
+  active: bool;
+}
+@struct
+class Inner {
+  a: u128;
+  b: u128;
+}
+@struct
+class Outer {
+  p: u64;
+  inner: Inner;
+  q: u64;
+}
 
 @contract
 class Nested {
-  @state pts: Arr<Pt, 3>;        // slots 0-2
-  @state sentinel1: u256;        // slot 3
+  @state pts: Arr<Pt, 3>; // slots 0-2
+  @state sentinel1: u256; // slot 3
   @state accts: mapping<address, Acct>; // slot 4
-  @state mat: Arr<Arr<u256, 2>, 3>;     // slots 5-10
-  @state sentinel2: u256;        // slot 11
-  @state outer: Outer;           // slots 12-14
+  @state mat: Arr<Arr<u256, 2>, 3>; // slots 5-10
+  @state sentinel2: u256; // slot 11
+  @state outer: Outer; // slots 12-14
 
-  @external setPtX(i: u256, v: u128): void { this.pts[i].x = v; }
-  @external setPtY(i: u256, v: u128): void { this.pts[i].y = v; }
-  @external @view getPtX(i: u256): u128 { return this.pts[i].x; }
-  @external @view getPtY(i: u256): u128 { return this.pts[i].y; }
+  @external setPtX(i: u256, v: u128): void {
+    this.pts[i].x = v;
+  }
+  @external setPtY(i: u256, v: u128): void {
+    this.pts[i].y = v;
+  }
+  @external @view getPtX(i: u256): u128 {
+    return this.pts[i].x;
+  }
+  @external @view getPtY(i: u256): u128 {
+    return this.pts[i].y;
+  }
 
-  @external setBal(k: address, v: u128): void { this.accts[k].bal = v; }
-  @external setNonce(k: address, v: u64): void { this.accts[k].nonce = v; }
-  @external setActive(k: address, v: bool): void { this.accts[k].active = v; }
-  @external @view getBal(k: address): u128 { return this.accts[k].bal; }
-  @external @view getNonce(k: address): u64 { return this.accts[k].nonce; }
-  @external @view getActive(k: address): bool { return this.accts[k].active; }
+  @external setBal(k: address, v: u128): void {
+    this.accts[k].bal = v;
+  }
+  @external setNonce(k: address, v: u64): void {
+    this.accts[k].nonce = v;
+  }
+  @external setActive(k: address, v: bool): void {
+    this.accts[k].active = v;
+  }
+  @external @view getBal(k: address): u128 {
+    return this.accts[k].bal;
+  }
+  @external @view getNonce(k: address): u64 {
+    return this.accts[k].nonce;
+  }
+  @external @view getActive(k: address): bool {
+    return this.accts[k].active;
+  }
 
-  @external setMat(r: u256, c: u256, v: u256): void { this.mat[r][c] = v; }
-  @external @view getMat(r: u256, c: u256): u256 { return this.mat[r][c]; }
+  @external setMat(r: u256, c: u256, v: u256): void {
+    this.mat[r][c] = v;
+  }
+  @external @view getMat(r: u256, c: u256): u256 {
+    return this.mat[r][c];
+  }
 
-  @external setInnerA(v: u128): void { this.outer.inner.a = v; }
-  @external setOuterP(v: u64): void { this.outer.p = v; }
-  @external @view getInnerA(): u128 { return this.outer.inner.a; }
-  @external @view getOuterP(): u64 { return this.outer.p; }
+  @external setInnerA(v: u128): void {
+    this.outer.inner.a = v;
+  }
+  @external setOuterP(v: u64): void {
+    this.outer.p = v;
+  }
+  @external @view getInnerA(): u128 {
+    return this.outer.inner.a;
+  }
+  @external @view getOuterP(): u64 {
+    return this.outer.p;
+  }
 }

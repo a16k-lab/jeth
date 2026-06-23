@@ -19,16 +19,30 @@ const owner = new Address(Buffer.from('1111111111111111111111111111111111111111'
 const other = new Address(Buffer.from('2222222222222222222222222222222222222222', 'hex'));
 const sel = (s: string) => functionSelector(s);
 const codes = (src: string): string[] => {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 };
-const solcRejects = (src: string): boolean => { try { compileSolidity(SPDX + src, 'C'); return false; } catch { return true; } };
+const solcRejects = (src: string): boolean => {
+  try {
+    compileSolidity(SPDX + src, 'C');
+    return false;
+  } catch {
+    return true;
+  }
+};
 async function depJ(src: string, caller = owner) {
-  const h = await Harness.create(); await h.fund(caller, 10n ** 20n);
+  const h = await Harness.create();
+  await h.fund(caller, 10n ** 20n);
   return { h, a: await h.deploy(compile(src, { fileName: 'C.jeth' }).creationBytecode, { caller }) };
 }
 async function depS(src: string, caller = owner) {
-  const h = await Harness.create(); await h.fund(caller, 10n ** 20n);
+  const h = await Harness.create();
+  await h.fund(caller, 10n ** 20n);
   return { h, a: await h.deploy(compileSolidity(SPDX + src, 'C').creation, { caller }) };
 }
 
@@ -37,7 +51,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     const J = `@contract class C { @state owner: address; @state n: u256; @modifier onlyOwner() { require(msg.sender == this.owner, "not owner"); _; } constructor(){ this.owner = msg.sender; } @external @onlyOwner bump(): void { this.n = this.n + 1n; } }`;
     const S = `contract C { address owner; uint256 n; modifier onlyOwner(){ require(msg.sender==owner,"not owner"); _; } constructor(){ owner=msg.sender; } function bump() external onlyOwner { n=n+1; } }`;
     for (const who of [owner, other]) {
-      const j = await depJ(J), s = await depS(S);
+      const j = await depJ(J),
+        s = await depS(S);
       const rj = await j.h.call(j.a, '0x' + sel('bump()'), { caller: who });
       const rs = await s.h.call(s.a, '0x' + sel('bump()'), { caller: who });
       expect(rj.success).toBe(rs.success);
@@ -50,7 +65,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     const J = `@contract class C { @state n: u256; @modifier atLeast(lo: u256) { require(this.n >= lo, "lo"); _; } @external setN(v: u256): void { this.n = v; } @external @atLeast(10n) doit(): void { this.n = this.n + 1n; } }`;
     const S = `contract C { uint256 n; modifier atLeast(uint256 lo){ require(n>=lo,"lo"); _; } function setN(uint256 v) external { n=v; } function doit() external atLeast(10) { n=n+1; } }`;
     for (const v of [5n, 20n]) {
-      const j = await depJ(J), s = await depS(S);
+      const j = await depJ(J),
+        s = await depS(S);
       await j.h.call(j.a, '0x' + sel('setN(uint256)') + pad32(v));
       await s.h.call(s.a, '0x' + sel('setN(uint256)') + pad32(v));
       const rj = await j.h.call(j.a, '0x' + sel('doit()'));
@@ -63,7 +79,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
   it('a function body return value passes through a modifier (-> 42)', async () => {
     const J = `@contract class C { @modifier g2() { require(true, "g2"); _; } @external @pure @g2 plain(x: u256): u256 { return x * 2n; } }`;
     const S = `contract C { modifier g2(){ require(true,"g2"); _; } function plain(uint256 x) external pure g2 returns(uint256){ return x*2; } }`;
-    const j = await depJ(J), s = await depS(S);
+    const j = await depJ(J),
+      s = await depS(S);
     const rj = await j.h.call(j.a, '0x' + sel('plain(uint256)') + pad32(21n));
     const rs = await s.h.call(s.a, '0x' + sel('plain(uint256)') + pad32(21n));
     expect(rj.returnHex).toBe(rs.returnHex);
@@ -73,7 +90,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
   it('multiple modifiers nest leftmost-outermost (a, b, body -> 129)', async () => {
     const J = `@contract class C { @state log: u256; @modifier a() { this.log = this.log * 10n + 1n; _; } @modifier b() { this.log = this.log * 10n + 2n; _; } @external @a @b run(): void { this.log = this.log * 10n + 9n; } }`;
     const S = `contract C { uint256 log; modifier a(){ log=log*10+1; _; } modifier b(){ log=log*10+2; _; } function run() external a b { log=log*10+9; } }`;
-    const j = await depJ(J), s = await depS(S);
+    const j = await depJ(J),
+      s = await depS(S);
     await j.h.call(j.a, '0x' + sel('run()'));
     await s.h.call(s.a, '0x' + sel('run()'));
     expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
@@ -83,7 +101,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
   it('the same modifier applied twice runs its pre-code twice (-> 102)', async () => {
     const J = `@contract class C { @state n: u256; @modifier inc() { this.n = this.n + 1n; _; } @external @inc @inc run(): void { this.n = this.n + 100n; } }`;
     const S = `contract C { uint256 n; modifier inc(){ n=n+1; _; } function run() external inc inc { n=n+100; } }`;
-    const j = await depJ(J), s = await depS(S);
+    const j = await depJ(J),
+      s = await depS(S);
     await j.h.call(j.a, '0x' + sel('run()'));
     await s.h.call(s.a, '0x' + sel('run()'));
     expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
@@ -93,7 +112,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
   it('a modifier argument is evaluated EXACTLY ONCE (side-effecting arg -> calls == 1)', async () => {
     const J = `@contract class C { @state calls: u256; @state sum: u256; @modifier use(v: u256) { this.sum = this.sum + v; _; } bump(): u256 { this.calls = this.calls + 1n; return 7n; } @external @use(this.bump()) f(): void {} }`;
     const S = `contract C { uint256 calls; uint256 sum; modifier use(uint256 v){ sum=sum+v; _; } function bump() internal returns(uint256){ calls=calls+1; return 7; } function f() external use(bump()) {} }`;
-    const j = await depJ(J), s = await depS(S);
+    const j = await depJ(J),
+      s = await depS(S);
     await j.h.call(j.a, '0x' + sel('f()'));
     await s.h.call(s.a, '0x' + sel('f()'));
     expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n)); // calls
@@ -119,40 +139,66 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     it('@pure + an env-reading (msg.sender) modifier -> both reject', () =>
       parity(
         `@contract class C { @modifier g() { require(msg.sender != address(0n), "z"); _; } @external @pure @g f(x: u256): u256 { return x; } }`,
-        `contract C { modifier g(){ require(msg.sender!=address(0),"z"); _; } function f(uint256 x) external pure g returns(uint256){ return x; } }`, true));
+        `contract C { modifier g(){ require(msg.sender!=address(0),"z"); _; } function f(uint256 x) external pure g returns(uint256){ return x; } }`,
+        true,
+      ));
     it('@view + a state-reading modifier -> both accept', () =>
       parity(
         `@contract class C { @state n: u256; @modifier g() { require(this.n > 0n, "z"); _; } @external @view @g f(): u256 { return this.n; } }`,
-        `contract C { uint256 n; modifier g(){ require(n>0,"z"); _; } function f() external view g returns(uint256){ return n; } }`, false));
+        `contract C { uint256 n; modifier g(){ require(n>0,"z"); _; } function f() external view g returns(uint256){ return n; } }`,
+        false,
+      ));
     it('@view + a state-WRITING modifier -> both reject', () =>
       parity(
         `@contract class C { @state n: u256; @modifier g() { this.n = this.n + 1n; _; } @external @view @g f(): u256 { return this.n; } }`,
-        `contract C { uint256 n; modifier g(){ n=n+1; _; } function f() external view g returns(uint256){ return n; } }`, true));
+        `contract C { uint256 n; modifier g(){ n=n+1; _; } function f() external view g returns(uint256){ return n; } }`,
+        true,
+      ));
   });
 
   describe('clean gates', () => {
     it('post-placeholder code -> JETH321', () =>
-      expect(codes(`@contract class C { @state n: u256; @modifier m() { _; this.n = 1n; } @external @m f(): void {} }`)).toContain('JETH321'));
+      expect(
+        codes(`@contract class C { @state n: u256; @modifier m() { _; this.n = 1n; } @external @m f(): void {} }`),
+      ).toContain('JETH321'));
     it('a placeholder inside a conditional -> JETH321', () =>
-      expect(codes(`@contract class C { @state n: u256; @modifier m() { if (this.n > 0n) { _; } } @external @m f(): void {} }`)).toContain('JETH321'));
+      expect(
+        codes(
+          `@contract class C { @state n: u256; @modifier m() { if (this.n > 0n) { _; } } @external @m f(): void {} }`,
+        ),
+      ).toContain('JETH321'));
     it('more than one placeholder -> JETH320', () =>
       expect(codes(`@contract class C { @modifier m() { _; _; } @external @m f(): void {} }`)).toContain('JETH320'));
     it('zero placeholders -> JETH328', () =>
-      expect(codes(`@contract class C { @modifier m() { let x: u256 = 1n; } @external @m f(): void {} }`)).toContain('JETH328'));
+      expect(codes(`@contract class C { @modifier m() { let x: u256 = 1n; } @external @m f(): void {} }`)).toContain(
+        'JETH328',
+      ));
     it('`return expr` in a modifier -> JETH324 (parity: solc also rejects)', () =>
-      expect(codes(`@contract class C { @modifier m() { return 5n; _; } @external @m f(): u256 { return 1n; } }`)).toContain('JETH324'));
+      expect(
+        codes(`@contract class C { @modifier m() { return 5n; _; } @external @m f(): u256 { return 1n; } }`),
+      ).toContain('JETH324'));
     it('bare `return;` in a modifier -> JETH325', () =>
-      expect(codes(`@contract class C { @state n: u256; @modifier m() { if (this.n > 0n) { return; } _; } @external @m f(): void {} }`)).toContain('JETH325'));
+      expect(
+        codes(
+          `@contract class C { @state n: u256; @modifier m() { if (this.n > 0n) { return; } _; } @external @m f(): void {} }`,
+        ),
+      ).toContain('JETH325'));
     it('an unknown applied modifier -> JETH329', () =>
       expect(codes(`@contract class C { @external @nope f(): void {} }`)).toContain('JETH329'));
     it('a modifier arg-count mismatch -> JETH329', () =>
-      expect(codes(`@contract class C { @modifier m(x: u256) { _; } @external @m f(): void {} }`)).toContain('JETH329'));
+      expect(codes(`@contract class C { @modifier m(x: u256) { _; } @external @m f(): void {} }`)).toContain(
+        'JETH329',
+      ));
     it('an aggregate modifier parameter -> JETH322', () =>
-      expect(codes(`@contract class C { @modifier m(a: Arr<u256,2>) { _; } @external @m(([1n,2n])) f(): void {} }`)).toContain('JETH322'));
+      expect(
+        codes(`@contract class C { @modifier m(a: Arr<u256,2>) { _; } @external @m(([1n,2n])) f(): void {} }`),
+      ).toContain('JETH322'));
     it('a visibility/mutability decorator on the modifier itself -> JETH330', () =>
       expect(codes(`@contract class C { @view @modifier m() { _; } @external @m f(): void {} }`)).toContain('JETH330'));
     it('a (pre-only) modifier on a multi-value-return function is supported', () =>
-      expect(codes(`@contract class C { @modifier m() { _; } @external @m f(): [u256, u256] { return [1n, 2n]; } }`)).toEqual([]));
+      expect(
+        codes(`@contract class C { @modifier m() { _; } @external @m f(): [u256, u256] { return [1n, 2n]; } }`),
+      ).toEqual([]));
   });
 
   // Regression: a modifier param/local sharing a NAME with a function param must NOT shadow it in the
@@ -162,7 +208,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     it('returndata reads the function param, not the modifier arg', async () => {
       const J = `@contract class C { @modifier g(v: u256) { require(v < 1000n, "g"); _; } @external @pure @g(99n) f(v: u256): u256 { return v; } }`;
       const S = `contract C { modifier g(uint256 v){ require(v<1000,"g"); _; } function f(uint256 v) external pure g(99) returns(uint256){ return v; } }`;
-      const j = await depJ(J), s = await depS(S);
+      const j = await depJ(J),
+        s = await depS(S);
       const rj = await j.h.call(j.a, '0x' + sel('f(uint256)') + pad32(7n));
       const rs = await s.h.call(s.a, '0x' + sel('f(uint256)') + pad32(7n));
       expect(rj.returnHex).toBe(rs.returnHex);
@@ -171,7 +218,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     it('raw storage slot uses the function param (withdraw(amount) with @maxOut(100))', async () => {
       const J = `@contract class C { @state bal: u256; @modifier maxOut(amount: u256) { require(amount <= 100n, "cap"); _; } constructor(){ this.bal = 1000n; } @external @maxOut(100n) withdraw(amount: u256): void { this.bal = this.bal - amount; } }`;
       const S = `contract C { uint256 bal; modifier maxOut(uint256 amount){ require(amount<=100,"cap"); _; } constructor(){ bal=1000; } function withdraw(uint256 amount) external maxOut(100) { bal = bal - amount; } }`;
-      const j = await depJ(J), s = await depS(S);
+      const j = await depJ(J),
+        s = await depS(S);
       await j.h.call(j.a, '0x' + sel('withdraw(uint256)') + pad32(30n));
       await s.h.call(s.a, '0x' + sel('withdraw(uint256)') + pad32(30n));
       expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
@@ -185,26 +233,60 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     const J = `@contract class C { @state n: u256; @modifier pos(x: u256) { require(x > 0n, "pos"); _; } @external @view getN(): u256 { return this.n; } @pos(v) constructor(v: u256) { this.n = v; } }`;
     const S = `contract C { uint256 n; modifier pos(uint256 x){ require(x>0,"pos"); _; } function getN() external view returns(uint256){return n;} constructor(uint256 v) pos(v) { n = v; } }`;
     for (const v of [9n, 0n]) {
-      let jr = false, sr = false, sj = '', ss = '';
-      const hj = await Harness.create(); await hj.fund(owner, 10n ** 20n);
-      const hs = await Harness.create(); await hs.fund(owner, 10n ** 20n);
-      try { const a = await hj.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode + pad32(v), { caller: owner }); sj = await readSlot(hj, a, 0n); } catch { jr = true; }
-      try { const a = await hs.deploy(compileSolidity(SPDX + S, 'C').creation + pad32(v), { caller: owner }); ss = await readSlot(hs, a, 0n); } catch { sr = true; }
+      let jr = false,
+        sr = false,
+        sj = '',
+        ss = '';
+      const hj = await Harness.create();
+      await hj.fund(owner, 10n ** 20n);
+      const hs = await Harness.create();
+      await hs.fund(owner, 10n ** 20n);
+      try {
+        const a = await hj.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode + pad32(v), { caller: owner });
+        sj = await readSlot(hj, a, 0n);
+      } catch {
+        jr = true;
+      }
+      try {
+        const a = await hs.deploy(compileSolidity(SPDX + S, 'C').creation + pad32(v), { caller: owner });
+        ss = await readSlot(hs, a, 0n);
+      } catch {
+        sr = true;
+      }
       expect({ jr, sj }).toEqual({ jr: sr, sj: ss });
     }
   });
 
   describe("the reserved identifier '_' (JETH034)", () => {
-    const par = (J: string, S: string) => { expect(codes(J)).toContain('JETH034'); expect(solcRejects(S)).toBe(true); };
+    const par = (J: string, S: string) => {
+      expect(codes(J)).toContain('JETH034');
+      expect(solcRejects(S)).toBe(true);
+    };
     it('rejects a local named _', () =>
-      par(`@contract class C { @external @pure f(): u256 { let _: u256 = 3n; return _; } }`, `contract C { function f() external pure returns(uint256){ uint256 _ = 3; return _; } }`));
+      par(
+        `@contract class C { @external @pure f(): u256 { let _: u256 = 3n; return _; } }`,
+        `contract C { function f() external pure returns(uint256){ uint256 _ = 3; return _; } }`,
+      ));
     it('rejects a parameter named _', () =>
-      par(`@contract class C { @external @pure f(_: u256): u256 { return _; } }`, `contract C { function f(uint256 _) external pure returns(uint256){ return _; } }`));
+      par(
+        `@contract class C { @external @pure f(_: u256): u256 { return _; } }`,
+        `contract C { function f(uint256 _) external pure returns(uint256){ return _; } }`,
+      ));
     it('rejects a @state field named _', () =>
-      par(`@contract class C { @state _: u256; @external @view g(): u256 { return this._; } }`, `contract C { uint256 _; function g() external view returns(uint256){ return _; } }`));
+      par(
+        `@contract class C { @state _: u256; @external @view g(): u256 { return this._; } }`,
+        `contract C { uint256 _; function g() external view returns(uint256){ return _; } }`,
+      ));
     it('rejects a modifier parameter named _', () =>
-      par(`@contract class C { @state s: u256; @modifier m(_: u256) { require(_ > 0n); _; } @external @m(1n) f(): void { this.s = 1n; } }`, `contract C { uint256 s; modifier m(uint256 _){ require(_>0); _; } function f() external m(1) { s=1; } }`));
+      par(
+        `@contract class C { @state s: u256; @modifier m(_: u256) { require(_ > 0n); _; } @external @m(1n) f(): void { this.s = 1n; } }`,
+        `contract C { uint256 s; modifier m(uint256 _){ require(_>0); _; } function f() external m(1) { s=1; } }`,
+      ));
     it('the _ placeholder itself still works', () =>
-      expect(codes(`@contract class C { @state s: u256; @modifier m() { require(true); _; } @external @m f(): void { this.s = 1n; } }`)).toEqual([]));
+      expect(
+        codes(
+          `@contract class C { @state s: u256; @modifier m() { require(true); _; } @external @m f(): void { this.s = 1n; } }`,
+        ),
+      ).toEqual([]));
   });
 });

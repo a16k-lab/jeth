@@ -99,8 +99,13 @@ describe('nested / narrow-value / non-address-key mappings vs Solidity', () => {
     for (const [setSig, args, getSig] of cases) {
       await both(encodeCall(functionSelector(setSig), args));
       const key = setSig.startsWith('setFlag') || setSig.startsWith('setName') ? A : args[0]!;
-      const baseSlot =
-        setSig.startsWith('setFlag') ? 1n : setSig.startsWith('setCount') ? 2n : setSig.startsWith('setName') ? 3n : 4n;
+      const baseSlot = setSig.startsWith('setFlag')
+        ? 1n
+        : setSig.startsWith('setCount')
+          ? 2n
+          : setSig.startsWith('setName')
+            ? 3n
+            : 4n;
       // raw slot byte-identical
       const slot = mapSlot(key, baseSlot);
       expect(await readSlot(jeth, aj, slot), `${setSig} raw slot`).toBe(await readSlot(sol, as, slot));

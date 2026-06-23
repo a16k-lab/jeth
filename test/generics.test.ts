@@ -125,7 +125,8 @@ describe('generics: monomorphization is byte-identical to solc', () => {
     await eq('maxI(-5, 3)', encodeCall(sel('maxI(int128,int128)'), [neg(-5n), 3n]));
     await eq('maxI(-5,-9)', encodeCall(sel('maxI(int128,int128)'), [neg(-5n), neg(-9n)]));
     await eq('minI(-5, 3)', encodeCall(sel('minI(int128,int128)'), [neg(-5n), 3n]));
-    const I128MIN = -(1n << 127n), I128MAX = (1n << 127n) - 1n;
+    const I128MIN = -(1n << 127n),
+      I128MAX = (1n << 127n) - 1n;
     await eq('maxI(min,max)', encodeCall(sel('maxI(int128,int128)'), [neg(I128MIN), neg(I128MAX)]));
   });
 
@@ -336,13 +337,29 @@ function errCodes(src: string): string[] {
 
 describe('generics: compile-time diagnostics', () => {
   it('JETH290: a generic @external/@external function (the ABI cannot be generic)', () => {
-    expect(errCodes('@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }')).toContain('JETH290');
-    expect(errCodes('@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }')).toContain('JETH290');
+    expect(
+      errCodes(
+        '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
+      ),
+    ).toContain('JETH290');
+    expect(
+      errCodes(
+        '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
+      ),
+    ).toContain('JETH290');
   });
 
   it('JETH291: a non-value type argument (array / struct / bytes)', () => {
-    expect(errCodes('@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<u256[]>(x); } }')).toContain('JETH291');
-    expect(errCodes('@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<bytes>(x); } }')).toContain('JETH291');
+    expect(
+      errCodes(
+        '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<u256[]>(x); } }',
+      ),
+    ).toContain('JETH291');
+    expect(
+      errCodes(
+        '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<bytes>(x); } }',
+      ),
+    ).toContain('JETH291');
     const structSrc = `@struct class P { x: u256; y: u256; }
     @contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<P>(x); } }`;
     expect(errCodes(structSrc)).toContain('JETH291');

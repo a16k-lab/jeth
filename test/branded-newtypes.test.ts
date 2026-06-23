@@ -65,15 +65,18 @@ describe('branded newtypes', () => {
   describe('runtime byte-identical to solc', () => {
     let jeth: Harness, sol: Harness, aj: Address, as: Address;
     async function eq(label: string, data: string) {
-      const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+      const j = await jeth.call(aj, data);
+      const s = await sol.call(as, data);
       expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
       expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     }
     beforeAll(async () => {
       const jb = compile(BRANDED, { fileName: 'C.jeth' });
       const sb = compileSolidity(SOL, 'C');
-      jeth = await Harness.create(); sol = await Harness.create();
-      aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+      jeth = await Harness.create();
+      sol = await Harness.create();
+      aj = await jeth.deploy(jb.creationBytecode);
+      as = await sol.deploy(sb.creation);
     });
     it('value ops + storage (mapping/struct) match solc incl. raw slots', async () => {
       const pad = (v: bigint) => v.toString(16).padStart(64, '0');
@@ -83,12 +86,15 @@ describe('branded newtypes', () => {
       await eq('eqId false', encodeCall(sel('eqId(uint256,uint256)'), [7n, 8n]));
       // mapping write/read
       const setO = '0x' + sel('setOwner(uint256,address)') + pad(99n) + pad(A);
-      await jeth.call(aj, setO); await sol.call(as, setO);
+      await jeth.call(aj, setO);
+      await sol.call(as, setO);
       await eq('ownerOf(99)', encodeCall(sel('ownerOf(uint256)'), [99n]));
       // struct write -> raw slots
       const setR = '0x' + sel('setRec(uint256,uint256)') + pad(123n) + pad(456n);
-      await jeth.call(aj, setR); await sol.call(as, setR);
-      for (const slot of [1n, 2n]) expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
+      await jeth.call(aj, setR);
+      await sol.call(as, setR);
+      for (const slot of [1n, 2n])
+        expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
       await eq('recId', encodeCall(sel('recId()'), []));
     });
   });

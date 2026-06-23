@@ -56,12 +56,15 @@ let jeth: Harness, sol: Harness, aj: Address, as: Address;
 beforeAll(async () => {
   const jb = compile(JETH, { fileName: 'A.jeth' });
   const sb = compileSolidity(SOL, 'A');
-  jeth = await Harness.create(); sol = await Harness.create();
-  aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+  jeth = await Harness.create();
+  sol = await Harness.create();
+  aj = await jeth.deploy(jb.creationBytecode);
+  as = await sol.deploy(sb.creation);
 });
 
 async function eq(label: string, data: string) {
-  const j = await jeth.call(aj, data); const sr = await sol.call(as, data);
+  const j = await jeth.call(aj, data);
+  const sr = await sol.call(as, data);
   expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(sr.success);
   expect(j.returnHex, `${label} returndata`).toBe(sr.returnHex);
   return { j, s: sr };
@@ -73,7 +76,7 @@ async function eqSlot(slot: bigint, label: string) {
 describe('AUDIT probe2: shrink clearing & whole-assign', () => {
   it('long->long shrink: trailing data words cleared (100 bytes -> 40 bytes)', async () => {
     const LONG100 = 'A'.repeat(100); // 4 words
-    const LONG40 = 'B'.repeat(40);   // 2 words
+    const LONG40 = 'B'.repeat(40); // 2 words
     await eq('setDs 100', callDyn('setDs(string)', [], s(LONG100)));
     await eqSlot(1n, 'd.s header 100');
     for (let i = 0n; i < 4n; i++) await eqSlot(slotKeccak(1n) + i, `d.s 100 data w${i}`);

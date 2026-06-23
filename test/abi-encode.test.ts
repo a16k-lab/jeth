@@ -148,8 +148,15 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
       [
         { sig: 'st(uint256,string)', args: W(42n) + W(0x40n) + W(5n) + '68656c6c6f'.padEnd(64, '0') },
         { sig: 'mix(uint256,uint256,string)', args: W(7n) + W(8n) + W(0x60n) + W(3n) + '616263'.padEnd(64, '0') },
-        { sig: 'sa(string[])', args: W(0x20n) + W(2n) + W(0x40n) + W(0x80n) + W(2n) + '6161'.padEnd(64, '0') + W(3n) + '626263'.padEnd(64, '0') },
-        { sig: 'nn(uint256[][])', args: W(0x20n) + W(2n) + W(0x40n) + W(0xa0n) + W(2n) + W(1n) + W(2n) + W(1n) + W(9n) },
+        {
+          sig: 'sa(string[])',
+          args:
+            W(0x20n) + W(2n) + W(0x40n) + W(0x80n) + W(2n) + '6161'.padEnd(64, '0') + W(3n) + '626263'.padEnd(64, '0'),
+        },
+        {
+          sig: 'nn(uint256[][])',
+          args: W(0x20n) + W(2n) + W(0x40n) + W(0xa0n) + W(2n) + W(1n) + W(2n) + W(1n) + W(9n),
+        },
       ],
     );
   });
@@ -172,10 +179,20 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
       }`,
       [
         { sig: 'ws(bytes4,uint256,address)', args: '12345678'.padEnd(64, '0') + W(42n) + W(0xbeefn) },
-        { sig: 'wsd(bytes4,uint256,bytes)', args: '11223344'.padEnd(64, '0') + W(7n) + W(0x60n) + W(3n) + 'aabbcc'.padEnd(64, '0') },
+        {
+          sig: 'wsd(bytes4,uint256,bytes)',
+          args: '11223344'.padEnd(64, '0') + W(7n) + W(0x60n) + W(3n) + 'aabbcc'.padEnd(64, '0'),
+        },
         { sig: 'sig(uint256,address)', args: W(100n) + W(0x1234n) },
         { sig: 'sigh(uint256)', args: W(5n) },
-        { sig: 'rt(string,uint256)', args: W(0x40n) + W(9n) + W(11n) + '666f6f28290000000000000000000000000000000000000000000000000000'.padEnd(64, '0') },
+        {
+          sig: 'rt(string,uint256)',
+          args:
+            W(0x40n) +
+            W(9n) +
+            W(11n) +
+            '666f6f28290000000000000000000000000000000000000000000000000000'.padEnd(64, '0'),
+        },
       ],
     );
   });

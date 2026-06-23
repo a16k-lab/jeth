@@ -50,15 +50,18 @@ contract C {
 describe('tuple destructuring + multi-return internal calls vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('destructure from a multi-value internal call (decl / assign / skip / mixed types / args)', async () => {
@@ -66,12 +69,20 @@ describe('tuple destructuring + multi-return internal calls vs Solidity', () => 
     await eq('assignCall', encodeCall(sel('assignCall()'), []));
     await eq('skipCall', encodeCall(sel('skipCall()'), []));
     await eq('mixed', encodeCall(sel('mixed()'), []));
-    for (const [p, q] of [[10n, 3n], [100n, 100n], [5n, 0n]] as const) {
+    for (const [p, q] of [
+      [10n, 3n],
+      [100n, 100n],
+      [5n, 0n],
+    ] as const) {
       await eq(`callArgs(${p},${q})`, encodeCall(sel('callArgs(uint256,uint256)'), [p, q]));
     }
   });
   it('destructure from a tuple literal (decl / swap local / swap state / mixed targets)', async () => {
-    for (const [p, q] of [[3n, 9n], [42n, 7n], [0n, 1n]] as const) {
+    for (const [p, q] of [
+      [3n, 9n],
+      [42n, 7n],
+      [0n, 1n],
+    ] as const) {
       await eq(`declTuple(${p},${q})`, encodeCall(sel('declTuple(uint256,uint256)'), [p, q]));
       await eq(`swapLocal(${p},${q})`, encodeCall(sel('swapLocal(uint256,uint256)'), [p, q]));
       await eq(`swapState(${p},${q})`, encodeCall(sel('swapState(uint256,uint256)'), [p, q]));

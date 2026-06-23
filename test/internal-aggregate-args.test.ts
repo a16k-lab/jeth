@@ -69,12 +69,14 @@ contract C {
   function sumStore() external view returns (uint256) { return sum(s); } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
   const cmp = async (data: string, label: string) => {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success`).toBe(s.success);
     expect(j.returnHex, label).toBe(s.returnHex);
   };
@@ -83,8 +85,10 @@ contract C {
     await cmp('0x' + sel('sumCd(uint256[])') + cdArr([5n, 6n, 7n, 8n]), 'sum(calldata)');
     await cmp('0x' + sel('sumMem()'), 'sum(memory)');
     await cmp('0x' + sel('emptySum(uint256[])') + cdArr([]), 'sum(empty calldata)');
-    await jeth.call(aj, '0x' + sel('pushS(uint256)') + pad32(11n)); await sol.call(as, '0x' + sel('pushS(uint256)') + pad32(11n));
-    await jeth.call(aj, '0x' + sel('pushS(uint256)') + pad32(22n)); await sol.call(as, '0x' + sel('pushS(uint256)') + pad32(22n));
+    await jeth.call(aj, '0x' + sel('pushS(uint256)') + pad32(11n));
+    await sol.call(as, '0x' + sel('pushS(uint256)') + pad32(11n));
+    await jeth.call(aj, '0x' + sel('pushS(uint256)') + pad32(22n));
+    await sol.call(as, '0x' + sel('pushS(uint256)') + pad32(22n));
     await cmp('0x' + sel('sumStore()'), 'sum(storage)');
   });
   it('a NARROW value-array calldata arg COPIES with masking (dirty bits do not revert), like solc', async () => {
@@ -106,7 +110,10 @@ contract C {
   });
   it('bytes/string param + return compose with the external encoder', async () => {
     await cmp('0x' + sel('mkBytes()'), 'mkBytes');
-    await cmp('0x' + sel('blenCd(bytes)') + pad32(0x20n) + pad32(11n) + 'aabbccddeeff0011223344'.padEnd(64, '0'), 'blenCd');
+    await cmp(
+      '0x' + sel('blenCd(bytes)') + pad32(0x20n) + pad32(11n) + 'aabbccddeeff0011223344'.padEnd(64, '0'),
+      'blenCd',
+    );
   });
   it('a memory-array LITERAL with a memory-allocating CALL element is not corrupted (pre-existing fix)', async () => {
     // [this.alloc(n), n, this.alloc(n+1)]: each call element itself allocates a temp array. The

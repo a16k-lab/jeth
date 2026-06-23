@@ -57,8 +57,14 @@ describe('nested struct construction vs Solidity', () => {
   });
 
   it('push(Outer(p, Inner(a,b), q)) flattens into packed slots', async () => {
-    await eqCall('addOuter#0', encodeCall(sel('addOuter(uint64,uint128,uint128,uint64)'), [11n, 0xaaaan, 0xbbbbn, 22n]));
-    await eqCall('addOuter#1', encodeCall(sel('addOuter(uint64,uint128,uint128,uint64)'), [33n, 0xccccn, 0xddddn, 44n]));
+    await eqCall(
+      'addOuter#0',
+      encodeCall(sel('addOuter(uint64,uint128,uint128,uint64)'), [11n, 0xaaaan, 0xbbbbn, 22n]),
+    );
+    await eqCall(
+      'addOuter#1',
+      encodeCall(sel('addOuter(uint64,uint128,uint128,uint64)'), [33n, 0xccccn, 0xddddn, 44n]),
+    );
     // Outer = 3 slots: slot0 p(u64), slot1 inner.a|inner.b, slot2 q(u64)
     for (let i = 0; i < 2; i++) {
       for (let s = 0; s < 3; s++) await eqSlot(DATA0 + BigInt(i) * 3n + BigInt(s), `outers[${i}].slot${s}`);

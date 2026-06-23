@@ -12,8 +12,13 @@ import { CompileError } from '../src/diagnostics.js';
 
 const sel = (s: string) => functionSelector(s);
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 describe('@constant slot-free inlined constant', () => {
@@ -48,7 +53,8 @@ contract C {
   function xv() external view returns (uint256) { return x; } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
@@ -67,7 +73,8 @@ contract C {
   });
   it('the constant consumes NO storage slot: x=slot0, y=slot1 (raw slots match solc)', async () => {
     const data = '0x' + sel('set(uint256,uint256)') + pad32(7n) + pad32(9n);
-    await jeth.call(aj, data); await sol.call(as, data);
+    await jeth.call(aj, data);
+    await sol.call(as, data);
     for (const slot of [0n, 1n, 2n]) {
       expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
     }
@@ -75,10 +82,16 @@ contract C {
     expect((await jeth.call(aj, '0x' + sel('xv()'))).returnHex).toBe('0x' + pad32(7n));
   });
   it('compile-time behavior: assigning to a @constant rejects; reading works', () => {
-    expect(codes('@contract class C { @constant K: u256 = 1n; @external f(): void { this.K = 2n; } }')).toContain('JETH054');
-    expect(codes('@contract class C { @constant K: u256 = 1n; @external @pure f(): u256 { return this.K; } }')).toEqual([]);
+    expect(codes('@contract class C { @constant K: u256 = 1n; @external f(): void { this.K = 2n; } }')).toContain(
+      'JETH054',
+    );
+    expect(codes('@contract class C { @constant K: u256 = 1n; @external @pure f(): u256 { return this.K; } }')).toEqual(
+      [],
+    );
     // a @constant requires a foldable initializer
-    expect(codes('@contract class C { @constant K: u256; @external @pure f(): u256 { return this.K; } }')).toContain('JETH048');
+    expect(codes('@contract class C { @constant K: u256; @external @pure f(): u256 { return this.K; } }')).toContain(
+      'JETH048',
+    );
     // a @constant + @state with the same shape compiles; @constant is excluded from the ABI (no getter)
     const o = compile(J, { fileName: 'C.jeth' });
     expect(o.abi.some((it: any) => it.name === 'FEE')).toBe(false);

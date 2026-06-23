@@ -28,26 +28,39 @@ contract Packed {
 describe('packed element in a nested mapping/struct/index chain vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = (s: string) => functionSelector(s);
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'Packed.jeth' });
     const sb = compileSolidity(SOL, 'Packed');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('this.accts[k].hist[i] packed write/read byte-identical (8 u32 per slot)', async () => {
-    for (const [i, v] of [[0n, 11n], [1n, 22n], [2n, 33n], [3n, (1n << 32n) - 1n]] as [bigint, bigint][])
+    for (const [i, v] of [
+      [0n, 11n],
+      [1n, 22n],
+      [2n, 33n],
+      [3n, (1n << 32n) - 1n],
+    ] as [bigint, bigint][])
       await send(encodeCall(sel('setHist(address,uint256,uint32)'), [K, i, v]));
     for (const i of [0n, 1n, 2n, 3n]) await eq(`getHist[${i}]`, encodeCall(sel('getHist(address,uint256)'), [K, i]));
     // OOB index parity
     const data = encodeCall(sel('getHist(address,uint256)'), [K, 4n]);
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success).toBe(s.success);
   });
 });

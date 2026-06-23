@@ -78,15 +78,19 @@ describe('multi-dim fixed u256 arrays whole + row returns', () => {
     function p4(uint256 i,uint256 j) external view returns (uint256[2][2] memory){ return a4[i][j]; }
     function r4(uint256 i,uint256 j,uint256 k) external view returns (uint256[2] memory){ return a4[i][j][k]; }
   }`;
-  beforeAll(async () => { H = await deployPair(JETH, 'M', SOL, 'M'); });
+  beforeAll(async () => {
+    H = await deployPair(JETH, 'M', SOL, 'M');
+  });
 
   async function send(data: string) {
-    const j = await H.jeth.call(H.aj, data); const s = await H.sol.call(H.as, data);
+    const j = await H.jeth.call(H.aj, data);
+    const s = await H.sol.call(H.as, data);
     expect(j.success, `setter jeth err=${j.exceptionError}`).toBe(true);
     expect(s.success).toBe(true);
   }
   async function eq(label: string, data: string) {
-    const j = await H.jeth.call(H.aj, data); const s = await H.sol.call(H.as, data);
+    const j = await H.jeth.call(H.aj, data);
+    const s = await H.sol.call(H.as, data);
     expect(j.success, `${label} success jeth err=${j.exceptionError}`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
@@ -94,23 +98,33 @@ describe('multi-dim fixed u256 arrays whole + row returns', () => {
   it('populate + return all dims with distinct leaves', async () => {
     let v = 1000n;
     // a2: 3x2
-    for (let i = 0n; i < 3n; i++) for (let j = 0n; j < 2n; j++)
-      await send(encodeCall(sel('s2(uint256,uint256,uint256)'), [i, j, v++]));
+    for (let i = 0n; i < 3n; i++)
+      for (let j = 0n; j < 2n; j++) await send(encodeCall(sel('s2(uint256,uint256,uint256)'), [i, j, v++]));
     // a3: 2x3x2
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 3n; j++) for (let k = 0n; k < 2n; k++)
-      await send(encodeCall(sel('s3(uint256,uint256,uint256,uint256)'), [i, j, k, v++]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 3n; j++)
+        for (let k = 0n; k < 2n; k++)
+          await send(encodeCall(sel('s3(uint256,uint256,uint256,uint256)'), [i, j, k, v++]));
     // a4: 2x2x2x2
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) for (let k = 0n; k < 2n; k++) for (let l = 0n; l < 2n; l++)
-      await send(encodeCall(sel('s4(uint256,uint256,uint256,uint256,uint256)'), [i, j, k, l, v++]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        for (let k = 0n; k < 2n; k++)
+          for (let l = 0n; l < 2n; l++)
+            await send(encodeCall(sel('s4(uint256,uint256,uint256,uint256,uint256)'), [i, j, k, l, v++]));
 
     await eq('w2', encodeCall(sel('w2()'), []));
     for (let i = 0n; i < 3n; i++) await eq(`r2[${i}]`, encodeCall(sel('r2(uint256)'), [i]));
     await eq('w3', encodeCall(sel('w3()'), []));
     for (let i = 0n; i < 2n; i++) await eq(`p3[${i}]`, encodeCall(sel('p3(uint256)'), [i]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 3n; j++) await eq(`r3[${i}][${j}]`, encodeCall(sel('r3(uint256,uint256)'), [i, j]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 3n; j++) await eq(`r3[${i}][${j}]`, encodeCall(sel('r3(uint256,uint256)'), [i, j]));
     await eq('w4', encodeCall(sel('w4()'), []));
     for (let i = 0n; i < 2n; i++) await eq(`c4[${i}]`, encodeCall(sel('c4(uint256)'), [i]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) await eq(`p4[${i}][${j}]`, encodeCall(sel('p4(uint256,uint256)'), [i, j]));
-    for (let i = 0n; i < 2n; i++) for (let j = 0n; j < 2n; j++) for (let k = 0n; k < 2n; k++) await eq(`r4[${i}][${j}][${k}]`, encodeCall(sel('r4(uint256,uint256,uint256)'), [i, j, k]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++) await eq(`p4[${i}][${j}]`, encodeCall(sel('p4(uint256,uint256)'), [i, j]));
+    for (let i = 0n; i < 2n; i++)
+      for (let j = 0n; j < 2n; j++)
+        for (let k = 0n; k < 2n; k++)
+          await eq(`r4[${i}][${j}][${k}]`, encodeCall(sel('r4(uint256,uint256,uint256)'), [i, j, k]));
   });
 });

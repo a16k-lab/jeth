@@ -135,9 +135,7 @@ describe('s9-map-of-fixed-array-then-struct vs Solidity', () => {
     const r = await both(encodeCall(sel('getLo(uint256,uint256)'), [K0, 2n]));
     expect(r.j.success, 'jeth getLo OOB reverts').toBe(false);
     expect(r.s.success, 'sol getLo OOB reverts').toBe(false);
-    const PANIC32 =
-      '0x4e487b71' +
-      '0000000000000000000000000000000000000000000000000000000000000032';
+    const PANIC32 = '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
     expect(r.j.returnHex, 'jeth Panic(0x32) returndata').toBe(PANIC32);
     expect(r.j.returnHex, 'jeth==sol revert returndata').toBe(r.s.returnHex);
   });

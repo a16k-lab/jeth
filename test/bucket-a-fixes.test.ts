@@ -75,17 +75,17 @@ describe('Bucket-A over-rejection fixes vs Solidity', () => {
         function unc(uint8 a) external pure returns (uint16){ unchecked { return a * 1000; } }
       }`,
       [
-        { sig: 'add(uint8)', args: W(255n) },          // 1255, no overflow at u16
-        { sig: 'mul(uint8)', args: W(1n) },            // 1000
-        { sig: 'mul(uint8)', args: W(255n) },          // 255000 -> Panic at u16
-        { sig: 'mul32(uint8)', args: W(255n) },        // overflow still at the common type u16 -> Panic
-        { sig: 'mul32(uint8)', args: W(60n) },         // 60000, ok
+        { sig: 'add(uint8)', args: W(255n) }, // 1255, no overflow at u16
+        { sig: 'mul(uint8)', args: W(1n) }, // 1000
+        { sig: 'mul(uint8)', args: W(255n) }, // 255000 -> Panic at u16
+        { sig: 'mul32(uint8)', args: W(255n) }, // overflow still at the common type u16 -> Panic
+        { sig: 'mul32(uint8)', args: W(60n) }, // 60000, ok
         { sig: 'left(uint8)', args: W(200n) },
         { sig: 'bor(uint8)', args: W(0x80n) },
-        { sig: 'fits(uint8)', args: W(200n) },         // 300 -> Panic at u8 (literal fits u8, stays u8)
+        { sig: 'fits(uint8)', args: W(200n) }, // 300 -> Panic at u8 (literal fits u8, stays u8)
         { sig: 'wide(uint16)', args: W(5n) },
         { sig: 'neg(int8)', args: W((1n << 256n) - 5n) },
-        { sig: 'unc(uint8)', args: W(255n) },          // wraps at u16
+        { sig: 'unc(uint8)', args: W(255n) }, // wraps at u16
       ],
     );
   });

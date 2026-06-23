@@ -38,11 +38,17 @@ contract Events {
   function twice(uint256 v) external { emit NoIdx(v); emit NoIdx(v); }
 }`;
 
-interface Case { sig: string; args: bigint[]; }
-function c(sig: string, args: bigint[] = []): Case { return { sig, args }; }
+interface Case {
+  sig: string;
+  args: bigint[];
+}
+function c(sig: string, args: bigint[] = []): Case {
+  return { sig, args };
+}
 
 const CASES: Case[] = [
-  c('noIdx(uint256)', [0n]), c('noIdx(uint256)', [U256_MAX]),
+  c('noIdx(uint256)', [0n]),
+  c('noIdx(uint256)', [U256_MAX]),
   c('oneIdx(uint256,uint256)', [5n, 99n]),
   c('transfer(address,address,uint256)', [A, B, 1000n]),
   c('transfer(address,address,uint256)', [0n, 0n, 0n]),
@@ -82,7 +88,10 @@ describe('events vs Solidity', () => {
       const label = `${tc.sig} [${tc.args.join(', ')}]`;
       expect(r1.success, `${label}: success`).toBe(true);
       expect(r2.success, `${label}: sol success`).toBe(true);
-      expect(eqLogs(r1.logs, r2.logs), `${label}: logs\n jeth=${JSON.stringify(r1.logs)}\n sol =${JSON.stringify(r2.logs)}`).toBe(true);
+      expect(
+        eqLogs(r1.logs, r2.logs),
+        `${label}: logs\n jeth=${JSON.stringify(r1.logs)}\n sol =${JSON.stringify(r2.logs)}`,
+      ).toBe(true);
     }
   });
 
@@ -92,7 +101,9 @@ describe('events vs Solidity', () => {
     const transfer = evs.find((e: any) => e.name === 'Transfer') as any;
     expect(transfer.anonymous).toBe(false);
     expect(transfer.inputs.map((i: any) => [i.type, i.indexed])).toEqual([
-      ['address', true], ['address', true], ['uint256', false],
+      ['address', true],
+      ['address', true],
+      ['uint256', false],
     ]);
   });
 });

@@ -47,21 +47,33 @@ describe('aggregate components in multi-value return vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = (s: string) => functionSelector(s);
   function strCall(sig: string, s: string): string {
-    const b = Buffer.from(s, 'utf8'); const nwords = Math.ceil(b.length / 32);
-    let data = ''; for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i*32, i*32+32), Buffer.alloc(32)]).subarray(0,32).toString('hex');
+    const b = Buffer.from(s, 'utf8');
+    const nwords = Math.ceil(b.length / 32);
+    let data = '';
+    for (let i = 0; i < nwords; i++)
+      data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+        .subarray(0, 32)
+        .toString('hex');
     return '0x' + sel(sig) + pad(0x20n) + pad(BigInt(b.length)) + data;
   }
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'MA.jeth' });
     const sb = compileSolidity(SOL, 'MA');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('static struct + value', async () => {

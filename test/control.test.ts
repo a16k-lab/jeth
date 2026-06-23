@@ -32,19 +32,33 @@ contract Control {
   function shortCircuit(uint256 a) external pure returns (bool){ return (a>0) && ((10/a)>0); }
 }`;
 
-interface Case { sig: string; args: bigint[]; }
-function pairs(sig: string, sets: bigint[][]): Case[] { return sets.map((args) => ({ sig, args })); }
+interface Case {
+  sig: string;
+  args: bigint[];
+}
+function pairs(sig: string, sets: bigint[][]): Case[] {
+  return sets.map((args) => ({ sig, args }));
+}
 
 const CASES: Case[] = [
   ...pairs('sumTo(uint256)', [[0n], [1n], [2n], [10n], [100n]]),
   ...pairs('factorial(uint256)', [[0n], [1n], [5n], [10n], [20n], [57n], [100n]]), // 57! overflows -> revert parity
   ...pairs('whileCountdown(uint256)', [[0n], [1n], [50n]]),
-  ...pairs('breakAt(uint256,uint256)', [[10n, 3n], [10n, 100n], [0n, 0n], [5n, 0n]]),
+  ...pairs('breakAt(uint256,uint256)', [
+    [10n, 3n],
+    [10n, 100n],
+    [0n, 0n],
+    [5n, 0n],
+  ]),
   ...pairs('skipEven(uint256)', [[0n], [1n], [2n], [5n], [10n]]),
   ...pairs('whileContinue(uint256)', [[0n], [1n], [2n], [3n], [6n], [7n]]),
   ...pairs('absI256(int256)', [[5n], [-5n], [0n], [I256_MAX], [I256_MIN]]), // I256_MIN negation reverts
   ...pairs('classify(uint256)', [[0n], [9n], [10n], [19n], [20n], [1000n]]),
-  ...pairs('earlyReturnInLoop(uint256,uint256)', [[10n, 3n], [10n, 100n], [0n, 0n]]),
+  ...pairs('earlyReturnInLoop(uint256,uint256)', [
+    [10n, 3n],
+    [10n, 100n],
+    [0n, 0n],
+  ]),
   ...pairs('fallThroughZero(uint256)', [[0n], [5n]]),
   ...pairs('nestedLoops(uint256)', [[0n], [1n], [3n], [5n]]),
   ...pairs('shortCircuit(uint256)', [[0n], [1n], [3n]]), // a==0 must NOT divide -> false, not revert

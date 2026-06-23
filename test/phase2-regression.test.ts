@@ -9,7 +9,10 @@ import { compileSolidity } from './_solidity.js';
 
 const I256_MIN = -(1n << 255n);
 
-interface Case { sig: string; args: bigint[]; }
+interface Case {
+  sig: string;
+  args: bigint[];
+}
 
 async function differential(jethSrc: string, solSrc: string, name: string, cases: Case[]) {
   const jb = compile(jethSrc, { fileName: `${name}.jeth` });

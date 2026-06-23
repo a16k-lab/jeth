@@ -34,17 +34,22 @@ contract C {
 }`;
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} jeth=${j.exceptionError}`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    const jb = compile(J, { fileName: 'C.jeth' }); const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(J, { fileName: 'C.jeth' });
+    const sb = compileSolidity(SOL, 'C');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
     for (const v of [5n, 0n, 12n, 7n, 0n, 30n]) {
       const d = encodeCall(sel('push(uint256)'), [v]);
-      await jeth.call(aj, d); await sol.call(as, d);
+      await jeth.call(aj, d);
+      await sol.call(as, d);
     }
   });
   it('storage / calldata / fixed-array iteration matches solc', async () => {
@@ -82,22 +87,30 @@ contract C {
   function get() external view returns (P memory) { return p; }
 }`;
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  async function both(data: string) { await jeth.call(aj, data); await sol.call(as, data); }
+  async function both(data: string) {
+    await jeth.call(aj, data);
+    await sol.call(as, data);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} jeth=${j.exceptionError}`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    const jb = compile(J, { fileName: 'C.jeth' }); const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(J, { fileName: 'C.jeth' });
+    const sb = compileSolidity(SOL, 'C');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
   it('spread update + full literal match solc incl. raw slots', async () => {
     await both('0x' + sel('setRaw(uint256,uint256,bool)') + pad(11n) + pad(22n) + pad(1n));
-    await both(encodeCall(sel('bumpX(uint256)'), [5n]));    // x: 11 -> 16, y/flag preserved
-    await both(encodeCall(sel('toggle()'), []));            // flag: true -> false
-    for (const slot of [0n, 1n, 2n]) expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
+    await both(encodeCall(sel('bumpX(uint256)'), [5n])); // x: 11 -> 16, y/flag preserved
+    await both(encodeCall(sel('toggle()'), [])); // flag: true -> false
+    for (const slot of [0n, 1n, 2n])
+      expect(await readSlot(jeth, aj, slot), `slot ${slot}`).toBe(await readSlot(sol, as, slot));
     await eq('get', encodeCall(sel('get()'), []));
     await eq('mk', encodeCall(sel('mk(uint256,uint256)'), [7n, 8n]));
     const wy = '0x' + sel('withY((uint256,uint256,bool),uint256)') + pad(100n) + pad(200n) + pad(1n) + pad(999n);

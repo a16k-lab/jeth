@@ -90,9 +90,7 @@ describe('s5-map-struct-array-field vs Solidity', () => {
       0x42n, // hist[2]
     ];
     for (let i = 0; i < 3; i++) {
-      const r = await both(
-        encodeCall(sel('setHist(address,uint256,uint256)'), [K, BigInt(i), vals[i]!]),
-      );
+      const r = await both(encodeCall(sel('setHist(address,uint256,uint256)'), [K, BigInt(i), vals[i]!]));
       expect(r.j.success, `setHist[${i}] jeth success`).toBe(true);
       expect(r.j.success).toBe(r.s.success);
       expect(r.j.returnHex).toBe(r.s.returnHex);
@@ -126,9 +124,7 @@ describe('s5-map-struct-array-field vs Solidity', () => {
     expect(r.j.success, 'jeth getHist[3] reverts').toBe(false);
     expect(r.s.success, 'sol getHist[3] reverts').toBe(false);
     // Panic(0x32): selector 0x4e487b71 + abi.encode(uint256(0x32)).
-    const PANIC32 =
-      '0x4e487b71' +
-      '0000000000000000000000000000000000000000000000000000000000000032';
+    const PANIC32 = '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
     expect(r.j.returnHex, 'jeth Panic(0x32) returndata').toBe(PANIC32);
     expect(r.j.returnHex, 'jeth==sol revert returndata').toBe(r.s.returnHex);
   });

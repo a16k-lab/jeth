@@ -67,8 +67,14 @@ describe('@read / inferred-visibility / inference', () => {
     expect(fnMap(inf)).toEqual(fnMap(exp));
     // explicit sanity on the resolved mutabilities
     expect(fnMap(inf)).toEqual({
-      setXY: 'nonpayable', addOne: 'pure', getX: 'view', who: 'view', viaHelper: 'view',
-      extOnly: 'nonpayable', pubTarget: 'nonpayable', caller: 'nonpayable',
+      setXY: 'nonpayable',
+      addOne: 'pure',
+      getX: 'view',
+      who: 'view',
+      viaHelper: 'view',
+      extOnly: 'nonpayable',
+      pubTarget: 'nonpayable',
+      caller: 'nonpayable',
     });
     expect(inf.some((e) => (e as { name?: string }).name === 'sum')).toBe(false); // -> not in ABI
   });
@@ -76,17 +82,22 @@ describe('@read / inferred-visibility / inference', () => {
   describe('runtime byte-identical to solc', () => {
     let jeth: Harness, sol: Harness, aj: Address, as: Address;
     async function eq(label: string, data: string) {
-      const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+      const j = await jeth.call(aj, data);
+      const s = await sol.call(as, data);
       expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
       expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     }
     beforeAll(async () => {
       const jb = compile(INFERRED, { fileName: 'C.jeth' });
       const sb = compileSolidity(SOL, 'C');
-      jeth = await Harness.create(); sol = await Harness.create();
-      aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
-      const seed = '0x' + sel('setXY(uint256,uint256)') + (5n).toString(16).padStart(64, '0') + (9n).toString(16).padStart(64, '0');
-      await jeth.call(aj, seed); await sol.call(as, seed);
+      jeth = await Harness.create();
+      sol = await Harness.create();
+      aj = await jeth.deploy(jb.creationBytecode);
+      as = await sol.deploy(sb.creation);
+      const seed =
+        '0x' + sel('setXY(uint256,uint256)') + 5n.toString(16).padStart(64, '0') + 9n.toString(16).padStart(64, '0');
+      await jeth.call(aj, seed);
+      await sol.call(as, seed);
     });
     it('every inferred function matches solc', async () => {
       await eq('addOne', encodeCall(sel('addOne(uint256)'), [123n]));

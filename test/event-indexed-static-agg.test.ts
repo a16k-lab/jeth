@@ -53,10 +53,14 @@ contract C {
   function emitPsState(uint256 v) external { emit EP(ps, v); } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
-    const run = async (data: string) => { await jeth.call(aj, data); await sol.call(as, data); };
+    const run = async (data: string) => {
+      await jeth.call(aj, data);
+      await sol.call(as, data);
+    };
     await run('0x' + sel('setFa(uint256,uint256)') + pad32(111n) + pad32(222n));
     await run('0x' + sel('setNa(uint8,uint8,uint8)') + pad32(7n) + pad32(200n) + pad32(255n));
     await run('0x' + sel('setPs(uint256,uint256)') + pad32(42n) + pad32(99n));
@@ -84,8 +88,12 @@ contract C {
     const fn = '0x' + sel('emitNaCd(uint8[3],uint256)');
     const clean = fn + pad32(7n) + pad32(8n) + pad32(9n) + pad32(5n);
     const dirty = fn + ('ff' + pad32(7n).slice(2)) + pad32(8n) + pad32(9n) + pad32(5n); // word0 has dirty high bits
-    for (const [label, data] of [['clean', clean], ['dirty', dirty]] as const) {
-      const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    for (const [label, data] of [
+      ['clean', clean],
+      ['dirty', dirty],
+    ] as const) {
+      const j = await jeth.call(aj, data);
+      const s = await sol.call(as, data);
       expect(j.success, `${label} success`).toBe(s.success);
       eqLogs(j.logs, s.logs);
     }

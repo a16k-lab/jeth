@@ -36,23 +36,37 @@ const smin = (bits: bigint) => -(1n << (bits - 1n));
 const sword = (bits: bigint, v: bigint) => ((v % (1n << bits)) + (1n << bits)) % (1n << bits); // intN -> word
 const leftAlign = (sz: bigint, v: bigint) => v << ((32n - sz) * 8n); // bytesN word
 
-interface Pair { jeth: Harness; sol: Harness; aj: Address; as: Address; }
+interface Pair {
+  jeth: Harness;
+  sol: Harness;
+  aj: Address;
+  as: Address;
+}
 async function build(jethSrc: string, solSrc: string, seedSigs: string[] = []): Promise<Pair> {
   const jb = compile(jethSrc, { fileName: 'C.jeth' });
   const sb = compileSolidity(solSrc, 'C');
-  const jeth = await Harness.create(); const sol = await Harness.create();
-  const aj = await jeth.deploy(jb.creationBytecode); const as = await sol.deploy(sb.creation);
-  for (const s of seedSigs) { await jeth.call(aj, encodeCall(sel(s), [])); await sol.call(as, encodeCall(sel(s), [])); }
+  const jeth = await Harness.create();
+  const sol = await Harness.create();
+  const aj = await jeth.deploy(jb.creationBytecode);
+  const as = await sol.deploy(sb.creation);
+  for (const s of seedSigs) {
+    await jeth.call(aj, encodeCall(sel(s), []));
+    await sol.call(as, encodeCall(sel(s), []));
+  }
   return { jeth, sol, aj, as };
 }
 // shared mismatch collector across a describe block
 function mkEq(p: Pair, mism: string[], counter: { n: number }) {
   return async (label: string, data: string) => {
     counter.n++;
-    const j = await p.jeth.call(p.aj, data); const s = await p.sol.call(p.as, data);
-    const jlog = JSON.stringify(j.logs); const slog = JSON.stringify(s.logs);
+    const j = await p.jeth.call(p.aj, data);
+    const s = await p.sol.call(p.as, data);
+    const jlog = JSON.stringify(j.logs);
+    const slog = JSON.stringify(s.logs);
     if (j.success !== s.success || j.returnHex !== s.returnHex || jlog !== slog) {
-      mism.push(`${label}: jeth{ok=${j.success},ret=${j.returnHex},err=${j.exceptionError},logs=${jlog}} sol{ok=${s.success},ret=${s.returnHex},logs=${slog}}`);
+      mism.push(
+        `${label}: jeth{ok=${j.success},ret=${j.returnHex},err=${j.exceptionError},logs=${jlog}} sol{ok=${s.success},ret=${s.returnHex},logs=${slog}}`,
+      );
     }
     return { j, s };
   };
@@ -109,7 +123,8 @@ contract C {
 // Contract B: bytes/string ternary — literal / storage / calldata / memory-local branches,
 // short-circuit, nesting, .length, indexing, use as event arg.
 // ════════════════════════════════════════════════════════════════════════════════════════════
-const SHORT = 'yes', LONG = 'no, this is a string that runs well past thirty-two bytes for the long case';
+const SHORT = 'yes',
+  LONG = 'no, this is a string that runs well past thirty-two bytes for the long case';
 const JB = `@contract class C {
   @state a: string; @state b: string;
   @event Ev(s: string);
@@ -346,41 +361,58 @@ describe('AUDIT ternary-arith-cast vs Solidity', () => {
   const counter = { n: 0 };
 
   describe('A: value ternary + short-circuit', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(JA, SA); eq = mkEq(p, mism, counter); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(JA, SA);
+      eq = mkEq(p, mism, counter);
+    });
     it('runs', async () => {
       const u8v = [0n, 1n, 127n, 128n, 255n];
-      for (const c of [1n, 0n]) for (const a of u8v) for (const b of u8v) {
-        await eq(`pick8(${c},${a},${b})`, encodeCall(sel('pick8(bool,uint8,uint8)'), [c, a, b]));
-      }
-      const i16v = [smin(16n), -1n, 0n, 1n, smax(16n)].map(v => sword(16n, v));
-      for (const c of [1n, 0n]) for (const a of i16v) for (const b of i16v) {
-        await eq(`pickI16(${c},${a},${b})`, encodeCall(sel('pickI16(bool,int16,int16)'), [c, a, b]));
-      }
+      for (const c of [1n, 0n])
+        for (const a of u8v)
+          for (const b of u8v) {
+            await eq(`pick8(${c},${a},${b})`, encodeCall(sel('pick8(bool,uint8,uint8)'), [c, a, b]));
+          }
+      const i16v = [smin(16n), -1n, 0n, 1n, smax(16n)].map((v) => sword(16n, v));
+      for (const c of [1n, 0n])
+        for (const a of i16v)
+          for (const b of i16v) {
+            await eq(`pickI16(${c},${a},${b})`, encodeCall(sel('pickI16(bool,int16,int16)'), [c, a, b]));
+          }
       // divGuard: b==0 must short-circuit to 0 (no Panic), else divide
-      for (const a of [0n, 1n, 100n, M - 1n]) for (const b of [0n, 1n, 3n, 7n]) {
-        await eq(`divGuard(${a},${b})`, encodeCall(sel('divGuard(uint256,uint256)'), [a, b]));
-      }
+      for (const a of [0n, 1n, 100n, M - 1n])
+        for (const b of [0n, 1n, 3n, 7n]) {
+          await eq(`divGuard(${a},${b})`, encodeCall(sel('divGuard(uint256,uint256)'), [a, b]));
+        }
       // ovGuard: c=true picks a (safe); c=false multiplies (may overflow)
-      for (const c of [1n, 0n]) for (const a of [0n, 1n, 1n << 200n, M - 1n]) for (const b of [0n, 1n, 2n, 1n << 200n]) {
-        await eq(`ovGuard(${c},${a},${b})`, encodeCall(sel('ovGuard(bool,uint256,uint256)'), [c, a, b]));
-      }
+      for (const c of [1n, 0n])
+        for (const a of [0n, 1n, 1n << 200n, M - 1n])
+          for (const b of [0n, 1n, 2n, 1n << 200n]) {
+            await eq(`ovGuard(${c},${a},${b})`, encodeCall(sel('ovGuard(bool,uint256,uint256)'), [c, a, b]));
+          }
       // negGuard: c=true -> 0; c=false -> -a (Panic if a==INT_MIN)
-      for (const c of [1n, 0n]) for (const a of [smin(256n), -1n, 0n, 1n, smax(256n)].map(v => sword(256n, v))) {
-        await eq(`negGuard(${c},${a})`, encodeCall(sel('negGuard(bool,int256)'), [c, a]));
-      }
+      for (const c of [1n, 0n])
+        for (const a of [smin(256n), -1n, 0n, 1n, smax(256n)].map((v) => sword(256n, v))) {
+          await eq(`negGuard(${c},${a})`, encodeCall(sel('negGuard(bool,int256)'), [c, a]));
+        }
       // nestedSeq: only one of three writes runs; check returndata AND storage
-      for (const c of [1n, 0n]) for (const d of [1n, 0n]) {
-        await eq(`nestedSeq(${c},${d})`, encodeCall(sel('nestedSeq(bool,bool)'), [c, d]));
-        await eq(`getSeq after nestedSeq(${c},${d})`, encodeCall(sel('getSeq()'), []));
-        await slotsEq(p, `seq slot after nestedSeq(${c},${d})`, [0n], mism);
-      }
-      for (const c of [1n, 0n]) for (const a of [0n, 1n, 255n]) for (const b of [0n, 1n, 65535n]) {
-        await eq(`widenArms(${c},${a},${b})`, encodeCall(sel('widenArms(bool,uint8,uint16)'), [c, a, b]));
-      }
-      for (const c of [1n, 0n]) for (const a of [255n, 200n]) for (const b of [1n, 0n]) {
-        await eq(`ternArith(${c},${a},${b})`, encodeCall(sel('ternArith(bool,uint8,uint8)'), [c, a, b]));
-      }
+      for (const c of [1n, 0n])
+        for (const d of [1n, 0n]) {
+          await eq(`nestedSeq(${c},${d})`, encodeCall(sel('nestedSeq(bool,bool)'), [c, d]));
+          await eq(`getSeq after nestedSeq(${c},${d})`, encodeCall(sel('getSeq()'), []));
+          await slotsEq(p, `seq slot after nestedSeq(${c},${d})`, [0n], mism);
+        }
+      for (const c of [1n, 0n])
+        for (const a of [0n, 1n, 255n])
+          for (const b of [0n, 1n, 65535n]) {
+            await eq(`widenArms(${c},${a},${b})`, encodeCall(sel('widenArms(bool,uint8,uint16)'), [c, a, b]));
+          }
+      for (const c of [1n, 0n])
+        for (const a of [255n, 200n])
+          for (const b of [1n, 0n]) {
+            await eq(`ternArith(${c},${a},${b})`, encodeCall(sel('ternArith(bool,uint8,uint8)'), [c, a, b]));
+          }
       // DIRTY bool condition: high garbage bits above bit 0. solc cleans to {0,1}.
       for (const c of [2n, (1n << 8n) | 1n, M - 1n, 1n << 255n]) {
         await eq(`dirty.boolPick(${c})`, encodeCall(sel('boolPick(bool,uint256,uint256)'), [c, 111n, 222n]));
@@ -389,27 +421,40 @@ describe('AUDIT ternary-arith-cast vs Solidity', () => {
   });
 
   describe('B: bytes/string ternary', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
     // calldata layout for (bool c, T x, T y): [c][off_x=0x60][off_y][x..][y..]
     const cdBSS = (sig: string, c: boolean, x: string, y: string) => {
-      const tx = encStr(x); const offY = 0x60 + tx.length / 2;
+      const tx = encStr(x);
+      const offY = 0x60 + tx.length / 2;
       return '0x' + sel(sig) + pad(c ? 1n : 0n) + pad(0x60n) + pad(BigInt(offY)) + tx + encStr(y);
     };
     // (string x, string y): [off_x=0x40][off_y][x..][y..]
     const cdSS = (sig: string, x: string, y: string) => {
-      const tx = encStr(x); const offY = 0x40 + tx.length / 2;
+      const tx = encStr(x);
+      const offY = 0x40 + tx.length / 2;
       return '0x' + sel(sig) + pad(0x40n) + pad(BigInt(offY)) + tx + encStr(y);
     };
     // (bool c, string x): [c][off_x=0x40][x..]
     const cdBS = (sig: string, c: boolean, x: string) => '0x' + sel(sig) + pad(c ? 1n : 0n) + pad(0x40n) + encStr(x);
     async function seedAB(x: string, y: string) {
       const d = cdSS('setAB(string,string)', x, y);
-      await p.jeth.call(p.aj, d); await p.sol.call(p.as, d);
+      await p.jeth.call(p.aj, d);
+      await p.sol.call(p.as, d);
     }
-    beforeAll(async () => { p = await build(JB, SB); eq = mkEq(p, mism, counter); });
+    beforeAll(async () => {
+      p = await build(JB, SB);
+      eq = mkEq(p, mism, counter);
+    });
     it('runs', async () => {
-      const pairs: [string, string][] = [[SHORT, LONG], [LONG, SHORT], ['', 'x'], ['ab', ''], ['', ''],
-        ['exactly thirty-two bytes long!!!', 'thirty-three bytes long string xx']];
+      const pairs: [string, string][] = [
+        [SHORT, LONG],
+        [LONG, SHORT],
+        ['', 'x'],
+        ['ab', ''],
+        ['', ''],
+        ['exactly thirty-two bytes long!!!', 'thirty-three bytes long string xx'],
+      ];
       for (const c of [true, false]) {
         await eq(`lit(${c})`, encodeCall(sel('lit(bool)'), [c ? 1n : 0n]));
         await eq(`memLocal(${c})`, cdBS('memLocal(bool,string)', c, c ? 'short cd' : LONG));
@@ -419,11 +464,25 @@ describe('AUDIT ternary-arith-cast vs Solidity', () => {
           await eq(`emitPick(${c})[${x.length},${y.length}]`, cdBSS('emitPick(bool,string,string)', c, x, y));
         }
         for (const d of [true, false]) {
-          await eq(`nested(${c},${d})`, '0x' + sel('nested(bool,bool,string,string)') + pad(c ? 1n : 0n) + pad(d ? 1n : 0n) + pad(0x80n) + pad(BigInt(0x80 + encStr(SHORT).length / 2)) + encStr(SHORT) + encStr(LONG));
+          await eq(
+            `nested(${c},${d})`,
+            '0x' +
+              sel('nested(bool,bool,string,string)') +
+              pad(c ? 1n : 0n) +
+              pad(d ? 1n : 0n) +
+              pad(0x80n) +
+              pad(BigInt(0x80 + encStr(SHORT).length / 2)) +
+              encStr(SHORT) +
+              encStr(LONG),
+          );
         }
       }
       // storage-string ternary both directions, short/long
-      for (const [x, y] of [[SHORT, LONG], [LONG, SHORT], ['', 'nonempty value here']] as [string, string][]) {
+      for (const [x, y] of [
+        [SHORT, LONG],
+        [LONG, SHORT],
+        ['', 'nonempty value here'],
+      ] as [string, string][]) {
         await seedAB(x, y);
         await eq('stor(true)', encodeCall(sel('stor(bool)'), [1n]));
         await eq('stor(false)', encodeCall(sel('stor(bool)'), [0n]));
@@ -432,17 +491,22 @@ describe('AUDIT ternary-arith-cast vs Solidity', () => {
   });
 
   describe('D: static struct / fixed-array ternary', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(JD, SD, ['seed()']); eq = mkEq(p, mism, counter); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(JD, SD, ['seed()']);
+      eq = mkEq(p, mism, counter);
+    });
     it('runs', async () => {
       for (const c of [1n, 0n]) {
         await eq(`pickStruct(${c})`, encodeCall(sel('pickStruct(bool)'), [c]));
         await eq(`pickArr(${c})`, encodeCall(sel('pickArr(bool)'), [c]));
         await eq(`fieldD(${c})`, encodeCall(sel('fieldD(bool)'), [c]));
       }
-      for (const c of [1n, 0n]) for (const d of [1n, 0n]) {
-        await eq(`nestedAgg(${c},${d})`, encodeCall(sel('nestedAgg(bool,bool)'), [c, d]));
-      }
+      for (const c of [1n, 0n])
+        for (const d of [1n, 0n]) {
+          await eq(`nestedAgg(${c},${d})`, encodeCall(sel('nestedAgg(bool,bool)'), [c, d]));
+        }
       // mutate copied local: returndata matches AND storage untouched (x:0..3, y:4..7)
       const structSlots = [0n, 1n, 2n, 3n, 4n, 5n, 6n, 7n];
       for (const c of [1n, 0n]) {
@@ -459,68 +523,82 @@ describe('AUDIT ternary-arith-cast vs Solidity', () => {
   });
 
   describe('E: arithmetic + casts at widths', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(JE, SE); eq = mkEq(p, mism, counter); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(JE, SE);
+      eq = mkEq(p, mism, counter);
+    });
     it('runs', async () => {
       const u8v = [0n, 1n, 2n, 16n, 127n, 128n, 200n, 254n, 255n];
-      for (const a of u8v) for (const b of u8v) {
-        await eq(`addU8(${a},${b})`, encodeCall(sel('addU8(uint8,uint8)'), [a, b]));
-        await eq(`subU8(${a},${b})`, encodeCall(sel('subU8(uint8,uint8)'), [a, b]));
-        await eq(`mulU8(${a},${b})`, encodeCall(sel('mulU8(uint8,uint8)'), [a, b]));
-        await eq(`uAddU8(${a},${b})`, encodeCall(sel('uAddU8(uint8,uint8)'), [a, b]));
-        await eq(`uMulU8(${a},${b})`, encodeCall(sel('uMulU8(uint8,uint8)'), [a, b]));
-      }
-      const i8v = [smin(8n), smin(8n) + 1n, -1n, 0n, 1n, smax(8n), -100n, 100n].map(v => sword(8n, v));
-      for (const a of i8v) for (const b of i8v) {
-        await eq(`addI8(${a},${b})`, encodeCall(sel('addI8(int8,int8)'), [a, b]));
-        await eq(`subI8(${a},${b})`, encodeCall(sel('subI8(int8,int8)'), [a, b]));
-        await eq(`mulI8(${a},${b})`, encodeCall(sel('mulI8(int8,int8)'), [a, b]));
-        await eq(`divI8(${a},${b})`, encodeCall(sel('divI8(int8,int8)'), [a, b]));
-        await eq(`modI8(${a},${b})`, encodeCall(sel('modI8(int8,int8)'), [a, b]));
-      }
-      for (const a of [smin(8n), -1n, 0n, 1n, smax(8n)].map(v => sword(8n, v))) {
+      for (const a of u8v)
+        for (const b of u8v) {
+          await eq(`addU8(${a},${b})`, encodeCall(sel('addU8(uint8,uint8)'), [a, b]));
+          await eq(`subU8(${a},${b})`, encodeCall(sel('subU8(uint8,uint8)'), [a, b]));
+          await eq(`mulU8(${a},${b})`, encodeCall(sel('mulU8(uint8,uint8)'), [a, b]));
+          await eq(`uAddU8(${a},${b})`, encodeCall(sel('uAddU8(uint8,uint8)'), [a, b]));
+          await eq(`uMulU8(${a},${b})`, encodeCall(sel('uMulU8(uint8,uint8)'), [a, b]));
+        }
+      const i8v = [smin(8n), smin(8n) + 1n, -1n, 0n, 1n, smax(8n), -100n, 100n].map((v) => sword(8n, v));
+      for (const a of i8v)
+        for (const b of i8v) {
+          await eq(`addI8(${a},${b})`, encodeCall(sel('addI8(int8,int8)'), [a, b]));
+          await eq(`subI8(${a},${b})`, encodeCall(sel('subI8(int8,int8)'), [a, b]));
+          await eq(`mulI8(${a},${b})`, encodeCall(sel('mulI8(int8,int8)'), [a, b]));
+          await eq(`divI8(${a},${b})`, encodeCall(sel('divI8(int8,int8)'), [a, b]));
+          await eq(`modI8(${a},${b})`, encodeCall(sel('modI8(int8,int8)'), [a, b]));
+        }
+      for (const a of [smin(8n), -1n, 0n, 1n, smax(8n)].map((v) => sword(8n, v))) {
         await eq(`negI8(${a})`, encodeCall(sel('negI8(int8)'), [a]));
         await eq(`uNegI8(${a})`, encodeCall(sel('uNegI8(int8)'), [a]));
       }
-      const u256v = [0n, 1n, 2n, M - 1n, 1n << 128n, (1n << 255n)];
-      for (const a of u256v) for (const b of u256v) {
-        await eq(`addU256(${a},${b})`, encodeCall(sel('addU256(uint256,uint256)'), [a, b]));
-        await eq(`subU256(${a},${b})`, encodeCall(sel('subU256(uint256,uint256)'), [a, b]));
-        await eq(`mulU256(${a},${b})`, encodeCall(sel('mulU256(uint256,uint256)'), [a, b]));
-        await eq(`uSubU256(${a},${b})`, encodeCall(sel('uSubU256(uint256,uint256)'), [a, b]));
-      }
+      const u256v = [0n, 1n, 2n, M - 1n, 1n << 128n, 1n << 255n];
+      for (const a of u256v)
+        for (const b of u256v) {
+          await eq(`addU256(${a},${b})`, encodeCall(sel('addU256(uint256,uint256)'), [a, b]));
+          await eq(`subU256(${a},${b})`, encodeCall(sel('subU256(uint256,uint256)'), [a, b]));
+          await eq(`mulU256(${a},${b})`, encodeCall(sel('mulU256(uint256,uint256)'), [a, b]));
+          await eq(`uSubU256(${a},${b})`, encodeCall(sel('uSubU256(uint256,uint256)'), [a, b]));
+        }
       // signed div/mod incl INT_MIN/-1 (Panic 0x11) and /0 (Panic 0x12)
-      const i256v = [smin(256n), smin(256n) + 1n, -1n, 0n, 1n, smax(256n), -7n, 7n].map(v => sword(256n, v));
-      for (const a of i256v) for (const b of i256v) {
-        await eq(`divI256(${a},${b})`, encodeCall(sel('divI256(int256,int256)'), [a, b]));
-        await eq(`modI256(${a},${b})`, encodeCall(sel('modI256(int256,int256)'), [a, b]));
-      }
-      for (const a of [smin(256n), smin(256n) + 1n, -1n, 0n, smax(256n)].map(v => sword(256n, v))) {
+      const i256v = [smin(256n), smin(256n) + 1n, -1n, 0n, 1n, smax(256n), -7n, 7n].map((v) => sword(256n, v));
+      for (const a of i256v)
+        for (const b of i256v) {
+          await eq(`divI256(${a},${b})`, encodeCall(sel('divI256(int256,int256)'), [a, b]));
+          await eq(`modI256(${a},${b})`, encodeCall(sel('modI256(int256,int256)'), [a, b]));
+        }
+      for (const a of [smin(256n), smin(256n) + 1n, -1n, 0n, smax(256n)].map((v) => sword(256n, v))) {
         await eq(`negI256(${a})`, encodeCall(sel('negI256(int256)'), [a]));
       }
       // exponentiation edges
-      for (const a of [0n, 1n, 2n, 3n, 15n, 16n, 255n]) for (const b of [0n, 1n, 2n, 3n, 7n, 8n, 9n, 255n]) {
-        await eq(`powU8(${a},${b})`, encodeCall(sel('powU8(uint8,uint8)'), [a, b]));
-        await eq(`uPowU8(${a},${b})`, encodeCall(sel('uPowU8(uint8,uint8)'), [a, b]));
-      }
-      for (const a of [smin(8n), -2n, -1n, 0n, 1n, 2n, smax(8n)].map(v => sword(8n, v))) for (const b of [0n, 1n, 2n, 3n, 7n, 8n]) {
-        await eq(`powI8(${a},${b})`, encodeCall(sel('powI8(int8,uint8)'), [a, b]));
-      }
-      for (const a of [0n, 1n, 2n, 3n, M - 1n]) for (const b of [0n, 1n, 2n, 3n, 255n, 256n]) {
-        await eq(`powU256(${a},${b})`, encodeCall(sel('powU256(uint256,uint256)'), [a, b]));
-      }
+      for (const a of [0n, 1n, 2n, 3n, 15n, 16n, 255n])
+        for (const b of [0n, 1n, 2n, 3n, 7n, 8n, 9n, 255n]) {
+          await eq(`powU8(${a},${b})`, encodeCall(sel('powU8(uint8,uint8)'), [a, b]));
+          await eq(`uPowU8(${a},${b})`, encodeCall(sel('uPowU8(uint8,uint8)'), [a, b]));
+        }
+      for (const a of [smin(8n), -2n, -1n, 0n, 1n, 2n, smax(8n)].map((v) => sword(8n, v)))
+        for (const b of [0n, 1n, 2n, 3n, 7n, 8n]) {
+          await eq(`powI8(${a},${b})`, encodeCall(sel('powI8(int8,uint8)'), [a, b]));
+        }
+      for (const a of [0n, 1n, 2n, 3n, M - 1n])
+        for (const b of [0n, 1n, 2n, 3n, 255n, 256n]) {
+          await eq(`powU256(${a},${b})`, encodeCall(sel('powU256(uint256,uint256)'), [a, b]));
+        }
       // implicit widening
-      for (const a of [0n, 1n, 255n]) for (const b of [0n, 1n, 65535n]) for (const c of [0n, 1n, umax(32n)]) {
-        await eq(`widen(${a},${b},${c})`, encodeCall(sel('widen(uint8,uint16,uint32)'), [a, b, c]));
-      }
-      for (const a of [smin(8n), -1n, 1n, smax(8n)].map(v => sword(8n, v))) for (const b of [smin(64n), -1n, 0n, 1n, smax(64n)].map(v => sword(64n, v))) {
-        await eq(`widenMul(${a},${b})`, encodeCall(sel('widenMul(int8,int64)'), [a, b]));
-      }
+      for (const a of [0n, 1n, 255n])
+        for (const b of [0n, 1n, 65535n])
+          for (const c of [0n, 1n, umax(32n)]) {
+            await eq(`widen(${a},${b},${c})`, encodeCall(sel('widen(uint8,uint16,uint32)'), [a, b, c]));
+          }
+      for (const a of [smin(8n), -1n, 1n, smax(8n)].map((v) => sword(8n, v)))
+        for (const b of [smin(64n), -1n, 0n, 1n, smax(64n)].map((v) => sword(64n, v))) {
+          await eq(`widenMul(${a},${b})`, encodeCall(sel('widenMul(int8,int64)'), [a, b]));
+        }
       // explicit casts: truncate / sign-extend / mask
       for (const a of [0n, 1n, 255n, 256n, 0x1ffn, M - 1n, 0xabcdn]) {
         await eq(`narrow(${a})`, encodeCall(sel('narrow(uint256)'), [a]));
       }
-      for (const a of [smin(8n), -1n, 0n, 1n, smax(8n)].map(v => sword(8n, v))) {
+      for (const a of [smin(8n), -1n, 0n, 1n, smax(8n)].map((v) => sword(8n, v))) {
         await eq(`signExt(${a})`, encodeCall(sel('signExt(int8)'), [a]));
         await eq(`u2i(${a})`, encodeCall(sel('u2i(uint8)'), [a]));
         await eq(`i2u(${a})`, encodeCall(sel('i2u(int8)'), [a]));
@@ -540,28 +618,34 @@ describe('AUDIT ternary-arith-cast vs Solidity', () => {
         await eq(`addrU160(${a})`, encodeCall(sel('addrU160(address)'), [a]));
         await eq(`u160addr(${a})`, encodeCall(sel('u160addr(uint160)'), [a]));
       }
-      for (const a of [smin(24n), -1n, 0n, 1n, smax(24n)].map(v => sword(24n, v))) {
+      for (const a of [smin(24n), -1n, 0n, 1n, smax(24n)].map((v) => sword(24n, v))) {
         await eq(`i24round(${a})`, encodeCall(sel('i24round(int24)'), [a]));
       }
-      for (const c of [1n, 0n]) for (const a of [0n, 255n, 256n, M - 1n]) {
-        await eq(`castInTern(${c},${a})`, encodeCall(sel('castInTern(bool,uint256)'), [c, a]));
-      }
+      for (const c of [1n, 0n])
+        for (const a of [0n, 255n, 256n, M - 1n]) {
+          await eq(`castInTern(${c},${a})`, encodeCall(sel('castInTern(bool,uint256)'), [c, a]));
+        }
       // DIRTY calldata high bits on narrow params (solc validates)
       const dirty = [(1n << 8n) | 5n, M - 1n, (0xdeadn << 8n) | 0x42n, (1n << 255n) | 1n];
-      for (const a of dirty) for (const b of [0n, 1n]) {
-        await eq(`dirty.addU8(${a},${b})`, encodeCall(sel('addU8(uint8,uint8)'), [a, b]));
-      }
+      for (const a of dirty)
+        for (const b of [0n, 1n]) {
+          await eq(`dirty.addU8(${a},${b})`, encodeCall(sel('addU8(uint8,uint8)'), [a, b]));
+        }
       for (const a of dirty) {
         await eq(`dirty.negI8(${a})`, encodeCall(sel('negI8(int8)'), [a]));
         await eq(`dirty.addrU160(${a})`, encodeCall(sel('addrU160(address)'), [a]));
-        await eq(`dirty.b1u8(${a})`, encodeCall(sel('b1u8(bytes1)'), [a]));   // bytes1 with dirty low 31 bytes
+        await eq(`dirty.b1u8(${a})`, encodeCall(sel('b1u8(bytes1)'), [a])); // bytes1 with dirty low 31 bytes
       }
     });
   });
 
   describe('F: eval-order + control flow + require/revert/error', () => {
-    let p: Pair; let eq: ReturnType<typeof mkEq>;
-    beforeAll(async () => { p = await build(JF, SF); eq = mkEq(p, mism, counter); });
+    let p: Pair;
+    let eq: ReturnType<typeof mkEq>;
+    beforeAll(async () => {
+      p = await build(JF, SF);
+      eq = mkEq(p, mism, counter);
+    });
     it('runs', async () => {
       for (const n of ['subOrder', 'mulOrder', 'argOrder', 'incBin', 'postBin', 'emitOrd', 'revArgs', 'revStr']) {
         await eq(n, encodeCall(sel(n + '()'), []));
@@ -571,15 +655,27 @@ describe('AUDIT ternary-arith-cast vs Solidity', () => {
       for (const n of [0n, 1n, 5n, 10n, 20n, 50n, 57n, 58n, 100n]) {
         await eq(`factorial(${n})`, encodeCall(sel('factorial(uint256)'), [n]));
       }
-      for (const n of [0n, 1n, 2n, 3n, 5n, 6n, 7n, 10n]) await eq(`skipEven(${n})`, encodeCall(sel('skipEven(uint256)'), [n]));
-      for (const [n, k] of [[10n, 3n], [10n, 100n], [0n, 0n], [5n, 0n]] as [bigint, bigint][]) {
+      for (const n of [0n, 1n, 2n, 3n, 5n, 6n, 7n, 10n])
+        await eq(`skipEven(${n})`, encodeCall(sel('skipEven(uint256)'), [n]));
+      for (const [n, k] of [
+        [10n, 3n],
+        [10n, 100n],
+        [0n, 0n],
+        [5n, 0n],
+      ] as [bigint, bigint][]) {
         await eq(`breakAt(${n},${k})`, encodeCall(sel('breakAt(uint256,uint256)'), [n, k]));
       }
-      for (const x of [0n, 9n, 10n, 19n, 20n, 1000n]) await eq(`classify(${x})`, encodeCall(sel('classify(uint256)'), [x]));
+      for (const x of [0n, 9n, 10n, 19n, 20n, 1000n])
+        await eq(`classify(${x})`, encodeCall(sel('classify(uint256)'), [x]));
       // require with string reason (true: ok; false: revert with Error(string))
       for (const a of [0n, 1n, 100n]) await eq(`reqStr(${a})`, encodeCall(sel('reqStr(uint256)'), [a]));
       // require with custom error
-      for (const [a, b] of [[5n, 3n], [3n, 5n], [0n, 0n], [M - 1n, 0n]] as [bigint, bigint][]) {
+      for (const [a, b] of [
+        [5n, 3n],
+        [3n, 5n],
+        [0n, 0n],
+        [M - 1n, 0n],
+      ] as [bigint, bigint][]) {
         await eq(`reqErr(${a},${b})`, encodeCall(sel('reqErr(uint256,uint256)'), [a, b]));
       }
       // short-circuit && / ||
@@ -591,8 +687,10 @@ describe('AUDIT ternary-arith-cast vs Solidity', () => {
   });
 
   it('SUMMARY: zero divergences', () => {
-    if (mism.length) { console.log(`MISMATCHES ${mism.length}/${counter.n}`); for (const m of mism.slice(0, 50)) console.log(m); }
-    else console.log(`ALL ${counter.n} cases byte-identical (returndata + success + logs + slots)`);
+    if (mism.length) {
+      console.log(`MISMATCHES ${mism.length}/${counter.n}`);
+      for (const m of mism.slice(0, 50)) console.log(m);
+    } else console.log(`ALL ${counter.n} cases byte-identical (returndata + success + logs + slots)`);
     expect(mism, mism.slice(0, 20).join('\n')).toEqual([]);
   });
 });

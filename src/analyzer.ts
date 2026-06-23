@@ -102,7 +102,6 @@ const GLOBALS: Record<string, Record<string, { op: GlobalOp; type: JethType; cat
 import { planLayout, RawStateVar } from './layout.js';
 import { functionSignature, functionSelector, eventTopic0, keccak, toHex } from './selectors.js';
 
-
 /** Unwrap redundant parentheses: `(xs)` / `((this.a))` -> the inner expression. */
 function stripParens(node: ts.Expression): ts.Expression {
   while (ts.isParenthesizedExpression(node)) node = node.expression;
@@ -290,7 +289,11 @@ export class Analyzer {
     const name = decl.name.text;
     const t = decl.type;
     if (!ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName) || t.typeName.text !== 'Brand') {
-      this.diags.error(decl, 'JETH015', `type alias '${name}' must be 'Brand<BaseType>' (a distinct newtype over a value type)`);
+      this.diags.error(
+        decl,
+        'JETH015',
+        `type alias '${name}' must be 'Brand<BaseType>' (a distinct newtype over a value type)`,
+      );
       return;
     }
     const args = t.typeArguments;
@@ -301,7 +304,11 @@ export class Analyzer {
     const base = resolveType(args[0], this.diags, this.structsByName);
     if (!base) return;
     if (!isStaticValueType(base) || (base as { brand?: string }).brand) {
-      this.diags.error(decl, 'JETH015', `Brand<...> base must be a plain value type (u8..u256, i8..i256, bool, address, bytesN), got ${displayName(base)}`);
+      this.diags.error(
+        decl,
+        'JETH015',
+        `Brand<...> base must be a plain value type (u8..u256, i8..i256, bool, address, bytesN), got ${displayName(base)}`,
+      );
       return;
     }
     if (this.structsByName.has(name) || resolvePrimitiveName(name)) {
@@ -339,7 +346,11 @@ export class Analyzer {
     const members: string[] = [];
     for (const m of decl.members) {
       if (m.initializer) {
-        this.diags.error(m, 'JETH270', `enum members cannot have explicit values (member '${m.name.getText()}'); enum members are 0,1,2,... in declaration order`);
+        this.diags.error(
+          m,
+          'JETH270',
+          `enum members cannot have explicit values (member '${m.name.getText()}'); enum members are 0,1,2,... in declaration order`,
+        );
         continue;
       }
       if (!ts.isIdentifier(m.name)) {
@@ -452,7 +463,11 @@ export class Analyzer {
       // ARRAY field (T[], string[], T[][]) inside a struct is still deferred (the
       // tuple codec would need an array-in-tuple tail walk we have not verified).
       if (!isStaticType(t) && !this.isSupportedDynStructField(t)) {
-        this.diags.error(member, 'JETH229', `struct field '${member.name.text}' of type ${displayName(t)} is not supported yet (supported dynamic field kinds: bytes/string and a nested struct)`);
+        this.diags.error(
+          member,
+          'JETH229',
+          `struct field '${member.name.text}' of type ${displayName(t)} is not supported yet (supported dynamic field kinds: bytes/string and a nested struct)`,
+        );
         continue;
       }
       raw.push({ name: member.name.text, type: t });
@@ -463,7 +478,12 @@ export class Analyzer {
     }
     // struct-internal field layout reuses the state-var packing planner.
     const layout = planLayout(raw);
-    const fields: StructField[] = layout.vars.map((v) => ({ name: v.name, type: v.type, slot: v.slot, offset: v.offset }));
+    const fields: StructField[] = layout.vars.map((v) => ({
+      name: v.name,
+      type: v.type,
+      slot: v.slot,
+      offset: v.offset,
+    }));
     this.structsByName.set(name, { kind: 'struct', name, fields });
   }
 
@@ -502,7 +522,11 @@ export class Analyzer {
       const m = this.collectInterfaceMethod(member, name);
       if (!m) continue;
       if (methods.has(m.name)) {
-        this.diags.error(member, 'JETH342', `@interface '${name}' method '${m.name}' is overloaded; method overloading inside an interface is not supported yet`);
+        this.diags.error(
+          member,
+          'JETH342',
+          `@interface '${name}' method '${m.name}' is overloaded; method overloading inside an interface is not supported yet`,
+        );
         continue;
       }
       methods.set(m.name, m);
@@ -527,7 +551,11 @@ export class Analyzer {
     }
     const explicitMuts = (['view', 'pure', 'payable'] as const).filter((m) => decs.includes(m));
     if (explicitMuts.length > 1) {
-      this.diags.error(member, 'JETH052', `@interface method '${ifaceName}.${mname}' has conflicting mutability decorators: ${explicitMuts.map((m) => '@' + m).join(', ')} (a method is at most one of @view/@pure/@payable)`);
+      this.diags.error(
+        member,
+        'JETH052',
+        `@interface method '${ifaceName}.${mname}' has conflicting mutability decorators: ${explicitMuts.map((m) => '@' + m).join(', ')} (a method is at most one of @view/@pure/@payable)`,
+      );
     }
     let mutability: Mutability = 'nonpayable';
     if (decs.includes('payable')) mutability = 'payable';
@@ -535,7 +563,11 @@ export class Analyzer {
     else if (decs.includes('pure')) mutability = 'pure';
     const stray = decs.filter((d) => !['external', 'view', 'pure', 'payable'].includes(d));
     if (stray.length) {
-      this.diags.error(member, 'JETH345', `@interface method '${ifaceName}.${mname}' has unsupported decorator(s): ${stray.map((d) => '@' + d).join(', ')} (allowed: @external, @view, @pure, @payable)`);
+      this.diags.error(
+        member,
+        'JETH345',
+        `@interface method '${ifaceName}.${mname}' has unsupported decorator(s): ${stray.map((d) => '@' + d).join(', ')} (allowed: @external, @view, @pure, @payable)`,
+      );
     }
     const params: Param[] = [];
     for (const p of member.parameters) {
@@ -544,18 +576,30 @@ export class Analyzer {
         continue;
       }
       if (p.initializer) {
-        this.diags.error(p, 'JETH346', `@interface method '${ifaceName}.${mname}' parameter '${p.name.text}' cannot have a default value`);
+        this.diags.error(
+          p,
+          'JETH346',
+          `@interface method '${ifaceName}.${mname}' parameter '${p.name.text}' cannot have a default value`,
+        );
       }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
       if (this.typeHasMapping(t)) {
-        this.diags.error(p, 'JETH247', `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
+        this.diags.error(
+          p,
+          'JETH247',
+          `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`,
+        );
         continue;
       }
       // The arg encoding reuses the abi.encode codec; restrict params to types that codec supports so a
       // call never silently miscompiles (value types, bytes/string, supported arrays, structs).
       if (!this.interfaceAbiTypeSupported(t)) {
-        this.diags.error(p, 'JETH347', `@interface method '${ifaceName}.${mname}' parameter '${p.name.text}' has type ${displayName(t)}, which is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
+        this.diags.error(
+          p,
+          'JETH347',
+          `@interface method '${ifaceName}.${mname}' parameter '${p.name.text}' has type ${displayName(t)}, which is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`,
+        );
         continue;
       }
       params.push({ name: p.name.text, type: t });
@@ -569,7 +613,11 @@ export class Analyzer {
         const t = resolveType(el, this.diags, this.structsByName);
         if (!t) continue;
         if (!this.decodeSupported(t)) {
-          this.diags.error(el, 'JETH348', `@interface method '${ifaceName}.${mname}' return component ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
+          this.diags.error(
+            el,
+            'JETH348',
+            `@interface method '${ifaceName}.${mname}' return component ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`,
+          );
           continue;
         }
         rts.push(t);
@@ -580,13 +628,20 @@ export class Analyzer {
       const t = resolveType(member.type, this.diags, this.structsByName);
       if (t && t.kind !== 'void') {
         if (!this.decodeSupported(t)) {
-          this.diags.error(member.type, 'JETH348', `@interface method '${ifaceName}.${mname}' return type ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
+          this.diags.error(
+            member.type,
+            'JETH348',
+            `@interface method '${ifaceName}.${mname}' return type ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`,
+          );
         } else {
           returnType = t;
         }
       }
     }
-    const signature = functionSignature(mname, params.map((p) => p.type));
+    const signature = functionSignature(
+      mname,
+      params.map((p) => p.type),
+    );
     const selector = functionSelector(signature);
     return { name: mname, params, returnType, returnTypes, mutability, signature, selector };
   }
@@ -656,7 +711,11 @@ export class Analyzer {
     // identifier). collectImmutable cannot see @state names yet (planned only here), so check now.
     for (const name of this.immutableOrder) {
       if (this.stateByName.has(name) || this.constantsByName.has(name)) {
-        this.diags.error(cls, 'JETH046', `field name '${name}' is declared more than once (@immutable conflicts with a @state/@constant of the same name)`);
+        this.diags.error(
+          cls,
+          'JETH046',
+          `field name '${name}' is declared more than once (@immutable conflicts with a @state/@constant of the same name)`,
+        );
       }
     }
 
@@ -694,25 +753,41 @@ export class Analyzer {
     for (const nm of this.immutableOrder) addId(nm, 'storage');
     for (const [nm, kinds] of idKinds) {
       if (kinds.size > 1) {
-        this.diags.error(cls, 'JETH133', `identifier '${nm}' is already declared (a ${[...kinds].join(' and a ')} share the name; solc reuses a name only among overloaded functions or events)`);
+        this.diags.error(
+          cls,
+          'JETH133',
+          `identifier '${nm}' is already declared (a ${[...kinds].join(' and a ')} share the name; solc reuses a name only among overloaded functions or events)`,
+        );
       }
     }
     // Assign each function a UNIQUE key: the bare name when that name is unique, else `name__ovN`
     // (decl order). This keys the effects map / Yul `userfn_` name / call-graph identity so two
     // overloads never collide. Solc allows overloading by arity or parameter types.
     for (const [nm, list] of this.candidatesByName) {
-      if (list.length > 1) list.forEach((rf, i) => { rf.key = `${nm}__ov${i}`; });
+      if (list.length > 1)
+        list.forEach((rf, i) => {
+          rf.key = `${nm}__ov${i}`;
+        });
     }
 
     // Type-check each function body, capturing each function's DIRECT effects and its
     // internal callees for the transitive-purity fixpoint below.
     const functions: FunctionIR[] = [];
-    const effects = new Map<string, { writes: boolean; reads: boolean; readsEnv: boolean; callees: Set<string>; rf: RawFunction }>();
+    const effects = new Map<
+      string,
+      { writes: boolean; reads: boolean; readsEnv: boolean; callees: Set<string>; rf: RawFunction }
+    >();
     for (const rf of rawFns) {
       const f = this.checkFunction(rf);
       if (f) {
         functions.push(f);
-        effects.set(this.fkey(rf), { writes: this.currentWritesState, reads: this.currentReadsState, readsEnv: this.currentReadsEnv, callees: this.currentCallees, rf });
+        effects.set(this.fkey(rf), {
+          writes: this.currentWritesState,
+          reads: this.currentReadsState,
+          readsEnv: this.currentReadsEnv,
+          callees: this.currentCallees,
+          rf,
+        });
       }
     }
 
@@ -729,7 +804,13 @@ export class Analyzer {
         const f = this.checkFunction(rf);
         if (f) {
           functions.push(f);
-          effects.set(this.fkey(rf), { writes: this.currentWritesState, reads: this.currentReadsState, readsEnv: this.currentReadsEnv, callees: this.currentCallees, rf });
+          effects.set(this.fkey(rf), {
+            writes: this.currentWritesState,
+            reads: this.currentReadsState,
+            readsEnv: this.currentReadsEnv,
+            callees: this.currentCallees,
+            rf,
+          });
         }
       });
     }
@@ -745,9 +826,18 @@ export class Analyzer {
         for (const callee of e.callees) {
           const ce = effects.get(callee);
           if (!ce) continue;
-          if (ce.writes && !e.writes) { e.writes = true; changed = true; }
-          if (ce.reads && !e.reads) { e.reads = true; changed = true; }
-          if (ce.readsEnv && !e.readsEnv) { e.readsEnv = true; changed = true; }
+          if (ce.writes && !e.writes) {
+            e.writes = true;
+            changed = true;
+          }
+          if (ce.reads && !e.reads) {
+            e.reads = true;
+            changed = true;
+          }
+          if (ce.readsEnv && !e.readsEnv) {
+            e.readsEnv = true;
+            changed = true;
+          }
         }
       }
     }
@@ -755,19 +845,43 @@ export class Analyzer {
       if (e.rf.inferRead) {
         // @read is read-only: a transitive state modification (storage write or emit) is an error;
         // @pure/@view is assigned below.
-        if (e.writes) this.diags.error(e.rf.node, 'JETH056', `@read function '${e.rf.name}' must not modify state (write to storage or emit an event) - it is read-only`);
+        if (e.writes)
+          this.diags.error(
+            e.rf.node,
+            'JETH056',
+            `@read function '${e.rf.name}' must not modify state (write to storage or emit an event) - it is read-only`,
+          );
         continue;
       }
-      if (e.rf.mutability === 'view' && e.writes) this.diags.error(e.rf.node, 'JETH054', `@view function '${e.rf.name}' modifies state (writes to storage or emits an event)`);
-      if (e.rf.mutability === 'pure' && (e.writes || e.reads)) this.diags.error(e.rf.node, 'JETH055', `@pure function '${e.rf.name}' accesses state (storage or emits an event)`);
-      if (e.rf.mutability === 'pure' && e.readsEnv) this.diags.error(e.rf.node, 'JETH164', `@pure function '${e.rf.name}' reads the execution environment (msg.*/block.*/tx.*/address(this))`);
+      if (e.rf.mutability === 'view' && e.writes)
+        this.diags.error(
+          e.rf.node,
+          'JETH054',
+          `@view function '${e.rf.name}' modifies state (writes to storage or emits an event)`,
+        );
+      if (e.rf.mutability === 'pure' && (e.writes || e.reads))
+        this.diags.error(
+          e.rf.node,
+          'JETH055',
+          `@pure function '${e.rf.name}' accesses state (storage or emits an event)`,
+        );
+      if (e.rf.mutability === 'pure' && e.readsEnv)
+        this.diags.error(
+          e.rf.node,
+          'JETH164',
+          `@pure function '${e.rf.name}' reads the execution environment (msg.*/block.*/tx.*/address(this))`,
+        );
     }
     // RESOLVE inference (mutability + visibility) from the transitive effects + call graph, then
     // mark internally-called functions. After this the FunctionIR carries concrete visibility +
     // mutability, so the ABI emitter and dispatcher (which read these) produce the TRUE ABI.
     for (const f of functions) {
       const e = effects.get(f.key);
-      if (e?.rf.inferRead) { const m: Mutability = e.reads || e.readsEnv ? 'view' : 'pure'; f.mutability = m; e.rf.mutability = m; }
+      if (e?.rf.inferRead) {
+        const m: Mutability = e.reads || e.readsEnv ? 'view' : 'pure';
+        f.mutability = m;
+        e.rf.mutability = m;
+      }
       if (this.internallyCalled.has(f.key)) f.internallyCalled = true;
     }
 
@@ -782,7 +896,11 @@ export class Analyzer {
       if (!this.publicStateNames.has(v.name)) continue;
       const getter = this.synthPublicGetter(v);
       if (!getter) {
-        this.diags.error(cls, 'JETH057', `@public getter for state variable '${v.name}' of type ${displayName(v.type)} is not supported yet (declare an explicit @view getter)`);
+        this.diags.error(
+          cls,
+          'JETH057',
+          `@public getter for state variable '${v.name}' of type ${displayName(v.type)} is not supported yet (declare an explicit @view getter)`,
+        );
         continue;
       }
       functions.push(getter);
@@ -807,7 +925,11 @@ export class Analyzer {
     for (const f of functions) {
       const isig = internalSig(f);
       if (seenSig.has(isig)) {
-        this.diags.error(cls, 'JETH044', `duplicate function '${f.signature}' (a function with the same name and parameter types is already declared)`);
+        this.diags.error(
+          cls,
+          'JETH044',
+          `duplicate function '${f.signature}' (a function with the same name and parameter types is already declared)`,
+        );
       } else seenSig.set(isig, true);
     }
 
@@ -871,8 +993,19 @@ export class Analyzer {
       t = t.element;
       if (t.kind === 'mapping') return null; // array-of-mapping (not valid Solidity anyway)
     }
-    const sig = functionSignature(v.name, params.map((p) => p.type));
-    const base = { name: v.name, key: `getter$${v.name}`, visibility: 'external' as const, mutability: 'view' as const, params, signature: sig, selector: functionSelector(sig) };
+    const sig = functionSignature(
+      v.name,
+      params.map((p) => p.type),
+    );
+    const base = {
+      name: v.name,
+      key: `getter$${v.name}`,
+      visibility: 'external' as const,
+      mutability: 'view' as const,
+      params,
+      signature: sig,
+      selector: functionSelector(sig),
+    };
 
     // STRUCT leaf: flatten to a value/bytes/string-field tuple, reached via the navigation prefix;
     // array-element OOB reverts EMPTY (solc parity). The TOP struct omits ALL array + mapping members;
@@ -880,7 +1013,12 @@ export class Analyzer {
     if (t.kind === 'struct') {
       const flat = this.flattenGetterStruct(t, v.slot, prefix, true);
       if (!flat) return null;
-      return { ...base, returnType: VOID, returnTypes: flat.types, body: [{ kind: 'returnTuple', values: flat.values, types: flat.types }] };
+      return {
+        ...base,
+        returnType: VOID,
+        returnTypes: flat.types,
+        body: [{ kind: 'returnTuple', values: flat.values, types: flat.types }],
+      };
     }
 
     // Value / bytes / string leaf.
@@ -924,11 +1062,24 @@ export class Analyzer {
     const packed = elem.kind !== 'struct' && elem.kind !== 'array' && storageByteSize(elem) < 32;
     if (arr.length !== undefined) {
       return packed
-        ? { kind: 'packedIndex', index: idx, perSlot: Math.floor(32 / storageByteSize(elem)), size: storageByteSize(elem), length: arr.length, elemType: elem }
+        ? {
+            kind: 'packedIndex',
+            index: idx,
+            perSlot: Math.floor(32 / storageByteSize(elem)),
+            size: storageByteSize(elem),
+            length: arr.length,
+            elemType: elem,
+          }
         : { kind: 'index', index: idx, strideSlots: storageSlotCount(elem), length: arr.length, elemType: elem };
     }
     return packed
-      ? { kind: 'packedDynIndex', index: idx, perSlot: Math.floor(32 / storageByteSize(elem)), size: storageByteSize(elem), elemType: elem }
+      ? {
+          kind: 'packedDynIndex',
+          index: idx,
+          perSlot: Math.floor(32 / storageByteSize(elem)),
+          size: storageByteSize(elem),
+          elemType: elem,
+        }
       : { kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(elem), elemType: elem };
   }
 
@@ -937,7 +1088,12 @@ export class Analyzer {
    *  from `baseSlot`; an all-static nested struct is recursively inlined (byte-identical to solc,
    *  whose static nested tuple encodes inline). Returns null when a nested struct is non-static (a
    *  dynamic nested tuple would not match a flattened encoding) or the result tuple is empty. */
-  private flattenGetterStruct(st: Extract<JethType, { kind: 'struct' }>, baseSlot: number, prefix: AccessStep[], top: boolean): { types: JethType[]; values: Expr[] } | null {
+  private flattenGetterStruct(
+    st: Extract<JethType, { kind: 'struct' }>,
+    baseSlot: number,
+    prefix: AccessStep[],
+    top: boolean,
+  ): { types: JethType[]; values: Expr[] } | null {
     const types: JethType[] = [];
     const values: Expr[] = [];
     for (const f of st.fields) {
@@ -946,7 +1102,10 @@ export class Analyzer {
       // sub-tuple whose FIXED arrays are included (a nested DYNAMIC array isn't flattenable -> defer).
       if (top && f.type.kind === 'array') continue;
       if (!top && f.type.kind === 'array' && f.type.length === undefined) return null;
-      const steps: AccessStep[] = [...prefix, { kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }];
+      const steps: AccessStep[] = [
+        ...prefix,
+        { kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type },
+      ];
       const r = this.flattenGetterLeaf(f.type, baseSlot, steps);
       if (!r) return null;
       types.push(...r.types);
@@ -960,7 +1119,11 @@ export class Analyzer {
    *  (solc INCLUDES fixed arrays, omitting only dynamic arrays/mappings). Returns null for shapes whose
    *  flattened encoding would not match solc's nested tuple (a dynamic nested struct, or a fixed array
    *  of bytes/string/array/dynamic-struct). */
-  private flattenGetterLeaf(type: JethType, baseSlot: number, steps: AccessStep[]): { types: JethType[]; values: Expr[] } | null {
+  private flattenGetterLeaf(
+    type: JethType,
+    baseSlot: number,
+    steps: AccessStep[],
+  ): { types: JethType[]; values: Expr[] } | null {
     const path: AccessPath = { baseSlot, steps, oobEmpty: true };
     if (isStaticValueType(type)) return { types: [type], values: [{ kind: 'placeRead', type, path }] };
     if (isBytesLike(type)) return { types: [type], values: [{ kind: 'dynPlaceRead', type, path }] };
@@ -978,7 +1141,10 @@ export class Analyzer {
       const types: JethType[] = [];
       const values: Expr[] = [];
       for (let j = 0; j < type.length; j++) {
-        const r = this.flattenGetterLeaf(el, baseSlot, [...steps, this.getterArrayStep(type, { kind: 'literalInt', type: U256, value: BigInt(j) })]);
+        const r = this.flattenGetterLeaf(el, baseSlot, [
+          ...steps,
+          this.getterArrayStep(type, { kind: 'literalInt', type: U256, value: BigInt(j) }),
+        ]);
         if (!r) return null;
         types.push(...r.types);
         values.push(...r.values);
@@ -1028,16 +1194,34 @@ export class Analyzer {
     // report ts.canHaveDecorators === false, so read the decorators via ts.getDecorators directly.
     let payable = false;
     const ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
-    const CTOR_BAD_DECORATORS = new Set(['view', 'pure', 'read', 'nonReentrant', 'external', 'public', 'internal', 'private', 'hidden']);
+    const CTOR_BAD_DECORATORS = new Set([
+      'view',
+      'pure',
+      'read',
+      'nonReentrant',
+      'external',
+      'public',
+      'internal',
+      'private',
+      'hidden',
+    ]);
     for (const dec of ts.getDecorators(ctorNode as unknown as ts.HasDecorators) ?? []) {
       const e = dec.expression;
       let nm: string | undefined;
       let args: ts.Expression[] = [];
       if (ts.isIdentifier(e)) nm = e.text;
-      else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) { nm = e.expression.text; args = [...e.arguments]; }
+      else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
+        nm = e.expression.text;
+        args = [...e.arguments];
+      }
       if (!nm) continue;
       if (nm === 'payable') payable = true;
-      else if (CTOR_BAD_DECORATORS.has(nm)) this.diags.error(ctorNode, 'JETH301', `a constructor cannot be @${nm} (a constructor is payable or non-payable only)`);
+      else if (CTOR_BAD_DECORATORS.has(nm))
+        this.diags.error(
+          ctorNode,
+          'JETH301',
+          `a constructor cannot be @${nm} (a constructor is payable or non-payable only)`,
+        );
       else ctorMods.push({ name: nm, argNodes: args, site: dec }); // a @modifier application, inlined below
     }
     if (ctorNode.type) this.diags.error(ctorNode.type, 'JETH301', 'a constructor cannot declare a return type');
@@ -1048,16 +1232,28 @@ export class Analyzer {
     // Params: value types only in increment 1 (decoded from memory via mload + validateInput).
     const params: Param[] = [];
     for (const p of ctorNode.parameters) {
-      if (!ts.isIdentifier(p.name)) { this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier'); continue; }
+      if (!ts.isIdentifier(p.name)) {
+        this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
+        continue;
+      }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
-      if (p.initializer) this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
+      if (p.initializer)
+        this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
       if (this.typeHasMapping(t)) {
-        this.diags.error(p, 'JETH247', `constructor parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
+        this.diags.error(
+          p,
+          'JETH247',
+          `constructor parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`,
+        );
         continue;
       }
       if (!isStaticValueType(t)) {
-        this.diags.error(p, 'JETH302', `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only: uintN/intN/bool/address/bytesN/enum/branded)`);
+        this.diags.error(
+          p,
+          'JETH302',
+          `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only: uintN/intN/bool/address/bytesN/enum/branded)`,
+        );
         continue;
       }
       params.push({ name: p.name.text, type: t });
@@ -1110,7 +1306,11 @@ export class Analyzer {
     // userfn_ in the RUNTIME object, unreachable from creation code, so reject cleanly (solc
     // accepts; a later increment will duplicate the callee into the creation object).
     if (this.currentCallees.size > 0) {
-      this.diags.error(ctorNode, 'JETH303', 'calling an internal/private function from a constructor is not supported yet (the callee lives in the runtime object); inline the logic into the constructor body');
+      this.diags.error(
+        ctorNode,
+        'JETH303',
+        'calling an internal/private function from a constructor is not supported yet (the callee lives in the runtime object); inline the logic into the constructor body',
+      );
     }
 
     return { params, payable, body };
@@ -1127,7 +1327,11 @@ export class Analyzer {
     // solc reserves the built-in error names Error and Panic: an @error may not redefine them
     // (a same-named @event or function IS allowed, so this guard is specific to @error).
     if (name === 'Error' || name === 'Panic') {
-      this.diags.error(member, 'JETH132', `@error name '${name}' is reserved: the built-in errors Error and Panic cannot be redefined`);
+      this.diags.error(
+        member,
+        'JETH132',
+        `@error name '${name}' is reserved: the built-in errors Error and Panic cannot be redefined`,
+      );
       return;
     }
     if (member.body) this.diags.error(member, 'JETH125', `@error '${name}' must be a bodyless declaration`);
@@ -1143,7 +1347,11 @@ export class Analyzer {
         continue;
       }
       if (decoratorNames(p).includes('indexed')) {
-        this.diags.error(p, 'JETH129', `@error parameter '${p.name.text}' cannot be @indexed (only event parameters are indexed)`);
+        this.diags.error(
+          p,
+          'JETH129',
+          `@error parameter '${p.name.text}' cannot be @indexed (only event parameters are indexed)`,
+        );
       }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
@@ -1165,13 +1373,20 @@ export class Analyzer {
     }
     const strayErr = decoratorNames(member).filter((d) => d !== 'error');
     if (strayErr.length) {
-      this.diags.error(member, 'JETH130', `@error '${name}' has unsupported decorator(s): ${strayErr.map((d) => '@' + d).join(', ')}`);
+      this.diags.error(
+        member,
+        'JETH130',
+        `@error '${name}' has unsupported decorator(s): ${strayErr.map((d) => '@' + d).join(', ')}`,
+      );
     }
     if (this.errorsByName.has(name)) {
       this.diags.error(member, 'JETH128', `duplicate @error declaration '${name}'`);
       return;
     }
-    const signature = functionSignature(name, params.map((p) => p.type));
+    const signature = functionSignature(
+      name,
+      params.map((p) => p.type),
+    );
     const selector = functionSelector(signature);
     const decl: ErrorDecl = { name, params, signature, selector };
     this.errorsByName.set(name, decl);
@@ -1217,10 +1432,15 @@ export class Analyzer {
           // concatenated). Verified byte-identical to solc. A fixed-array-of-dynamic indexed
           // param stays a later step.
           const indexedArrayOk = t.kind === 'array' && t.length === undefined && isStaticValueType(t.element);
-          const indexedStaticAgg = isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
+          const indexedStaticAgg =
+            isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
           const indexedDynStruct = t.kind === 'struct' && this.isSupportedStructReturn(t);
           if (!isBytesLike(t) && !indexedArrayOk && !indexedStaticAgg && !indexedDynStruct) {
-            this.diags.error(p, 'JETH207', `indexed ${displayName(t)} event parameter '${p.name.text}' is not supported yet (indexed bytes/string, a dynamic value-element array, a static fixed-array/struct, or a supported dynamic struct)`);
+            this.diags.error(
+              p,
+              'JETH207',
+              `indexed ${displayName(t)} event parameter '${p.name.text}' is not supported yet (indexed bytes/string, a dynamic value-element array, a static fixed-array/struct, or a supported dynamic struct)`,
+            );
             continue;
           }
           // indexed bytes/string, dynamic value array, static fixed-array/struct, or a supported
@@ -1231,7 +1451,8 @@ export class Analyzer {
           // value-array fields, encoded as a head offset + head/tail tail). A fixed-array-of-dynamic /
           // nested-dynamic struct field stays a later step.
           const nonIdxDynArray = t.kind === 'array' && t.length === undefined;
-          const nonIdxStaticAgg = isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
+          const nonIdxStaticAgg =
+            isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
           const nonIdxDynStruct = t.kind === 'struct' && this.isSupportedStructReturn(t);
           if (!isBytesLike(t) && !nonIdxDynArray && !nonIdxStaticAgg && !nonIdxDynStruct) {
             this.diags.error(
@@ -1250,16 +1471,27 @@ export class Analyzer {
     const anonymous = decoratorNames(member).includes('anonymous');
     const maxIndexed = anonymous ? 4 : 3;
     if (indexedCount > maxIndexed) {
-      this.diags.error(member, 'JETH143', `@event '${name}' has ${indexedCount} indexed parameters (max ${maxIndexed}${anonymous ? ' for an anonymous event' : ''})`);
+      this.diags.error(
+        member,
+        'JETH143',
+        `@event '${name}' has ${indexedCount} indexed parameters (max ${maxIndexed}${anonymous ? ' for an anonymous event' : ''})`,
+      );
     }
     // Only @event/@anonymous are meaningful on an event declaration (solc rejects other modifiers).
     const stray = decoratorNames(member).filter((d) => d !== 'event' && d !== 'anonymous');
     if (stray.length) {
-      this.diags.error(member, 'JETH145', `@event '${name}' has unsupported decorator(s): ${stray.map((d) => '@' + d).join(', ')}`);
+      this.diags.error(
+        member,
+        'JETH145',
+        `@event '${name}' has unsupported decorator(s): ${stray.map((d) => '@' + d).join(', ')}`,
+      );
     }
     // solc allows event overloading by signature (name + parameter types); only an EXACT duplicate
     // signature is an error.
-    const signature = functionSignature(name, params.map((p) => p.type));
+    const signature = functionSignature(
+      name,
+      params.map((p) => p.type),
+    );
     const overloads = this.eventsByName.get(name) ?? [];
     if (overloads.some((e) => e.signature === signature)) {
       this.diags.error(member, 'JETH144', `duplicate @event declaration '${signature}'`);
@@ -1279,13 +1511,19 @@ export class Analyzer {
       this.diags.error(member, 'JETH045', 'contract fields must be marked @state (or @constant / @immutable)');
       return;
     }
-    const kinds = [decs.includes('state') && 'state', isConstant && 'constant', isImmutable && 'immutable'].filter(Boolean);
+    const kinds = [decs.includes('state') && 'state', isConstant && 'constant', isImmutable && 'immutable'].filter(
+      Boolean,
+    );
     if (kinds.length > 1) {
       this.diags.error(member, 'JETH052', `a field cannot combine @${kinds.join(' and @')}`);
       return;
     }
     if (!ts.isIdentifier(member.name)) {
-      this.diags.error(member, 'JETH046', `${isConstant ? 'constant' : isImmutable ? 'immutable' : 'state variable'} name must be a plain identifier`);
+      this.diags.error(
+        member,
+        'JETH046',
+        `${isConstant ? 'constant' : isImmutable ? 'immutable' : 'state variable'} name must be a plain identifier`,
+      );
       return;
     }
     if (isConstant) {
@@ -1321,7 +1559,11 @@ export class Analyzer {
     // fixed array, though gateArrayType already rejects those element kinds) stays
     // gated rather than silently miscompiled.
     if (this.containsDynamicStruct(type) && !this.isStorageDynStruct(type)) {
-      this.diags.error(member, 'JETH231', 'storage dynamic struct in this position is not supported yet (supported: a bare @state d: D, or a mapping<K, D> value, where D is a @struct with bytes/string fields; a dynamic array of dynamic struct D[] / fixed Arr<D,N> is rejected separately)');
+      this.diags.error(
+        member,
+        'JETH231',
+        'storage dynamic struct in this position is not supported yet (supported: a bare @state d: D, or a mapping<K, D> value, where D is a @struct with bytes/string fields; a dynamic array of dynamic struct D[] / fixed Arr<D,N> is rejected separately)',
+      );
       return;
     }
 
@@ -1352,8 +1594,19 @@ export class Analyzer {
     if (!type) return;
     // Folding supports integer + bool + address + bytesN + string constants. A bytes/aggregate
     // constant stays a clean over-rejection (a later step), not a confusing fold-failure cascade.
-    if (type.kind !== 'uint' && type.kind !== 'int' && type.kind !== 'bool' && type.kind !== 'address' && type.kind !== 'bytesN' && type.kind !== 'string') {
-      this.diags.error(member, 'JETH050', `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address/bytesN/string constants)`);
+    if (
+      type.kind !== 'uint' &&
+      type.kind !== 'int' &&
+      type.kind !== 'bool' &&
+      type.kind !== 'address' &&
+      type.kind !== 'bytesN' &&
+      type.kind !== 'string'
+    ) {
+      this.diags.error(
+        member,
+        'JETH050',
+        `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address/bytesN/string constants)`,
+      );
       return;
     }
     if (!member.initializer) {
@@ -1392,15 +1645,25 @@ export class Analyzer {
     const decs = decoratorNames(member);
     // An immutable carries no visibility/mutability decorator: solc auto-generates a view getter for
     // a `public immutable`, which JETH's ABI emitter does not produce, so gate it cleanly.
-    const extra = ['public', 'external', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden'].find((d) => decs.includes(d));
+    const extra = ['public', 'external', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden'].find((d) =>
+      decs.includes(d),
+    );
     if (extra) {
-      this.diags.error(member, 'JETH312', `@immutable '${name}' cannot also be @${extra} (an immutable has no auto-generated getter; expose it with an explicit @view function)`);
+      this.diags.error(
+        member,
+        'JETH312',
+        `@immutable '${name}' cannot also be @${extra} (an immutable has no auto-generated getter; expose it with an explicit @view function)`,
+      );
       return;
     }
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
     if (!isStaticValueType(type)) {
-      this.diags.error(member, 'JETH310', `@immutable '${name}' of type ${displayName(type)} is not supported (immutables must be a value type: uintN/intN/bool/address/bytesN/enum/branded)`);
+      this.diags.error(
+        member,
+        'JETH310',
+        `@immutable '${name}' of type ${displayName(type)} is not supported (immutables must be a value type: uintN/intN/bool/address/bytesN/enum/branded)`,
+      );
       return;
     }
     // Inline initialization (`@immutable a: u256 = 7n`) is staged as an assignment at the START of the
@@ -1424,13 +1687,31 @@ export class Analyzer {
     // order (leftmost = outermost). A decorator whose name is not a built-in function decorator is a
     // candidate modifier application; it is resolved against modifiersByName in checkFunction (an
     // unknown name -> JETH329). The decorator's call-form arguments are captured for inlining.
-    const BUILTIN_FN_DECORATORS = new Set(['external', 'public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'nonReentrant', 'modifier', 'error', 'event']);
+    const BUILTIN_FN_DECORATORS = new Set([
+      'external',
+      'public',
+      'internal',
+      'private',
+      'view',
+      'pure',
+      'payable',
+      'read',
+      'hidden',
+      'nonReentrant',
+      'modifier',
+      'error',
+      'event',
+    ]);
     const appliedModifiers: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
     for (const d of ts.getDecorators(member) ?? []) {
       const e = d.expression;
       if (ts.isIdentifier(e) && !BUILTIN_FN_DECORATORS.has(e.text)) {
         appliedModifiers.push({ name: e.text, argNodes: [], site: d });
-      } else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression) && !BUILTIN_FN_DECORATORS.has(e.expression.text)) {
+      } else if (
+        ts.isCallExpression(e) &&
+        ts.isIdentifier(e.expression) &&
+        !BUILTIN_FN_DECORATORS.has(e.expression.text)
+      ) {
         appliedModifiers.push({ name: e.expression.text, argNodes: [...e.arguments], site: d });
       }
     }
@@ -1442,7 +1723,11 @@ export class Analyzer {
     // inheritance lands). This dissolves the dual external+internal ("public") function entirely.
     const removedVis = ['public', 'internal', 'private', 'hidden'].find((d) => decs.includes(d));
     if (removedVis) {
-      this.diags.error(member, 'JETH054', `@${removedVis} is not a JETH visibility decorator: write @external to expose a function; everything else is internal by default (the compiler infers private/internal)`);
+      this.diags.error(
+        member,
+        'JETH054',
+        `@${removedVis} is not a JETH visibility decorator: write @external to expose a function; everything else is internal by default (the compiler infers private/internal)`,
+      );
     }
     const visibility: Visibility = decs.includes('external') ? 'external' : 'internal';
 
@@ -1463,7 +1748,8 @@ export class Analyzer {
     let inferRead = false;
     if (read) {
       const explicitMut = ['view', 'pure', 'payable'].filter((m) => decs.includes(m));
-      if (explicitMut.length > 0) this.diags.error(member, 'JETH052', `conflicting mutability: @read with @${explicitMut[0]}`);
+      if (explicitMut.length > 0)
+        this.diags.error(member, 'JETH052', `conflicting mutability: @read with @${explicitMut[0]}`);
       mutability = 'view';
       inferRead = true;
     } else if (decs.includes('payable')) mutability = 'payable';
@@ -1472,7 +1758,11 @@ export class Analyzer {
     // solc: internal/private functions can never be payable (no message context of their own).
     // @hidden is an explicitly-internal function, so it is rejected with @payable too.
     if (decs.includes('payable') && !decs.includes('external')) {
-      this.diags.error(member, 'JETH131', '@payable requires @external (an internal function has no message-call value context of its own)');
+      this.diags.error(
+        member,
+        'JETH131',
+        '@payable requires @external (an internal function has no message-call value context of its own)',
+      );
     }
 
     // F4: @nonReentrant wraps the external entry in a transient-storage mutex. It must be a
@@ -1481,10 +1771,18 @@ export class Analyzer {
     const nonReentrant = decs.includes('nonReentrant');
     if (nonReentrant) {
       if (read || decs.includes('view') || decs.includes('pure')) {
-        this.diags.error(member, 'JETH260', '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)');
+        this.diags.error(
+          member,
+          'JETH260',
+          '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)',
+        );
       }
       if (!decs.includes('external')) {
-        this.diags.error(member, 'JETH261', '@nonReentrant requires an @external function (a reentrancy guard protects an externally-reachable entry)');
+        this.diags.error(
+          member,
+          'JETH261',
+          '@nonReentrant requires an @external function (a reentrancy guard protects an externally-reachable entry)',
+        );
       }
     }
 
@@ -1500,7 +1798,11 @@ export class Analyzer {
       if (!t) continue;
       // A type containing a mapping is storage-only: it cannot be a parameter (matches solc).
       if (this.typeHasMapping(t)) {
-        this.diags.error(p, 'JETH247', `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
+        this.diags.error(
+          p,
+          'JETH247',
+          `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`,
+        );
         continue;
       }
       if (!this.gateArrayType(t, p)) continue;
@@ -1511,9 +1813,17 @@ export class Analyzer {
       let def: ts.Expression | undefined;
       if (p.initializer) {
         if (!isStaticValueType(t)) {
-          this.diags.error(p, 'JETH252', `parameter '${p.name.text}' of type ${displayName(t)} cannot have a default value (only value types)`);
+          this.diags.error(
+            p,
+            'JETH252',
+            `parameter '${p.name.text}' of type ${displayName(t)} cannot have a default value (only value types)`,
+          );
         } else if (!this.isConstDefault(p.initializer)) {
-          this.diags.error(p.initializer, 'JETH250', `default for '${p.name.text}' must be a constant literal (e.g. 10n, true, address(0n), type(u256).max)`);
+          this.diags.error(
+            p.initializer,
+            'JETH250',
+            `default for '${p.name.text}' must be a constant literal (e.g. 10n, true, address(0n), type(u256).max)`,
+          );
         } else {
           def = p.initializer;
           seenDefault = true;
@@ -1537,7 +1847,10 @@ export class Analyzer {
       let ok = true;
       for (const el of member.type.elements) {
         const t = resolveType(el, this.diags, this.structsByName);
-        if (!t) { ok = false; break; }
+        if (!t) {
+          ok = false;
+          break;
+        }
         if (t.kind === 'mapping' || t.kind === 'void') {
           this.diags.error(el, 'JETH213', 'a multi-value return component cannot be a mapping or void');
           ok = false;
@@ -1546,22 +1859,75 @@ export class Analyzer {
         returnTypes.push(t);
       }
       if (ok && returnTypes.length >= 2) {
-        return { node: member, name: member.name.text, visibility, mutability, inferRead, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID, returnTypes };
+        return {
+          node: member,
+          name: member.name.text,
+          visibility,
+          mutability,
+          inferRead,
+          nonReentrant,
+          modifiers: appliedModifiers.length ? appliedModifiers : undefined,
+          params,
+          defaults,
+          returnType: VOID,
+          returnTypes,
+        };
       }
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID };
+      return {
+        node: member,
+        name: member.name.text,
+        visibility,
+        mutability,
+        inferRead,
+        nonReentrant,
+        modifiers: appliedModifiers.length ? appliedModifiers : undefined,
+        params,
+        defaults,
+        returnType: VOID,
+      };
     }
 
-    const returnType = member.type ? resolveType(member.type, this.diags, this.structsByName) ?? VOID : VOID;
+    const returnType = member.type ? (resolveType(member.type, this.diags, this.structsByName) ?? VOID) : VOID;
     if (this.typeHasMapping(returnType)) {
-      this.diags.error(member.type ?? member, 'JETH247', `return type ${displayName(returnType)} contains a mapping and cannot be returned (mappings are storage-only)`);
+      this.diags.error(
+        member.type ?? member,
+        'JETH247',
+        `return type ${displayName(returnType)} contains a mapping and cannot be returned (mappings are storage-only)`,
+      );
     } else if (returnType.kind === 'struct' && !this.isSupportedStructReturn(returnType)) {
-      this.diags.error(member.type ?? member, 'JETH225', 'returning a struct with this shape is not supported yet (supported: static value/nested-static-struct fields, and bytes/string or nested-struct dynamic fields)');
+      this.diags.error(
+        member.type ?? member,
+        'JETH225',
+        'returning a struct with this shape is not supported yet (supported: static value/nested-static-struct fields, and bytes/string or nested-struct dynamic fields)',
+      );
     }
     if (!this.gateArrayType(returnType, member.type ?? member)) {
-      return { node: member, name: member.name.text, visibility, mutability, inferRead, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType: VOID };
+      return {
+        node: member,
+        name: member.name.text,
+        visibility,
+        mutability,
+        inferRead,
+        nonReentrant,
+        modifiers: appliedModifiers.length ? appliedModifiers : undefined,
+        params,
+        defaults,
+        returnType: VOID,
+      };
     }
 
-    return { node: member, name: member.name.text, visibility, mutability, inferRead, nonReentrant, modifiers: appliedModifiers.length ? appliedModifiers : undefined, params, defaults, returnType };
+    return {
+      node: member,
+      name: member.name.text,
+      visibility,
+      mutability,
+      inferRead,
+      nonReentrant,
+      modifiers: appliedModifiers.length ? appliedModifiers : undefined,
+      params,
+      defaults,
+      returnType,
+    };
   }
 
   // ---- F6: compile-time generics (monomorphization) ------------------------
@@ -1580,15 +1946,27 @@ export class Analyzer {
     // A generic is callable ONLY internally (its specializations are internal functions and never
     // reach the ABI), so an explicit @external/@public is an error - the ABI cannot be generic.
     if (decs.includes('external') || decs.includes('public')) {
-      this.diags.error(member, 'JETH290', `generic function '${name}' cannot be @external/@public (its type is not expressible in the ABI); make it internal (@internal/@private/@hidden, or no visibility decorator)`);
+      this.diags.error(
+        member,
+        'JETH290',
+        `generic function '${name}' cannot be @external/@public (its type is not expressible in the ABI); make it internal (@internal/@private/@hidden, or no visibility decorator)`,
+      );
     }
     if (decs.includes('nonReentrant')) {
-      this.diags.error(member, 'JETH290', `generic function '${name}' cannot be @nonReentrant (a generic is internal-only and the reentrancy guard protects an external entry)`);
+      this.diags.error(
+        member,
+        'JETH290',
+        `generic function '${name}' cannot be @nonReentrant (a generic is internal-only and the reentrancy guard protects an external entry)`,
+      );
     }
     const typeParams: string[] = [];
     for (const tp of member.typeParameters!) {
       if (tp.constraint || tp.default) {
-        this.diags.error(tp, 'JETH294', `type parameter '${tp.name.text}' must be a plain identifier (constraints / defaults are not supported)`);
+        this.diags.error(
+          tp,
+          'JETH294',
+          `type parameter '${tp.name.text}' must be a plain identifier (constraints / defaults are not supported)`,
+        );
       }
       const pn = tp.name.text;
       if (resolvePrimitiveName(pn) || this.structsByName.has(pn)) {
@@ -1647,14 +2025,22 @@ export class Analyzer {
    *  node's `typeArguments`, otherwise inferred by matching each parameter annotated with a bare
    *  type-parameter identifier against the corresponding checked argument's concrete type. Returns
    *  the binding (typeParam -> JethType) or undefined (after emitting a diagnostic). */
-  private resolveGenericTypeArgs(node: ts.CallExpression, gen: { node: ts.MethodDeclaration; typeParams: string[] }, name: string): Map<string, JethType> | undefined {
+  private resolveGenericTypeArgs(
+    node: ts.CallExpression,
+    gen: { node: ts.MethodDeclaration; typeParams: string[] },
+    name: string,
+  ): Map<string, JethType> | undefined {
     const binding = new Map<string, JethType>();
     const params = gen.node.parameters;
 
     if (node.typeArguments && node.typeArguments.length > 0) {
       // EXPLICIT type arguments: `this.f<u256, address>(...)`.
       if (node.typeArguments.length !== gen.typeParams.length) {
-        this.diags.error(node, 'JETH292', `generic '${name}' expects ${gen.typeParams.length} type argument(s), got ${node.typeArguments.length}`);
+        this.diags.error(
+          node,
+          'JETH292',
+          `generic '${name}' expects ${gen.typeParams.length} type argument(s), got ${node.typeArguments.length}`,
+        );
         return undefined;
       }
       for (let i = 0; i < gen.typeParams.length; i++) {
@@ -1683,7 +2069,11 @@ export class Analyzer {
       const inferred = a.type;
       const prev = binding.get(tpName);
       if (prev && !typesEqual(prev, inferred)) {
-        this.diags.error(argNodes[i]!, 'JETH293', `conflicting type arguments inferred for '${tpName}' in '${name}': ${displayName(prev)} vs ${displayName(inferred)} (specify it explicitly, e.g. ${name}<${displayName(prev)}>(...))`);
+        this.diags.error(
+          argNodes[i]!,
+          'JETH293',
+          `conflicting type arguments inferred for '${tpName}' in '${name}': ${displayName(prev)} vs ${displayName(inferred)} (specify it explicitly, e.g. ${name}<${displayName(prev)}>(...))`,
+        );
         return undefined;
       }
       if (!prev) binding.set(tpName, inferred);
@@ -1691,7 +2081,11 @@ export class Analyzer {
 
     for (const tp of gen.typeParams) {
       if (!binding.has(tp)) {
-        this.diags.error(node, 'JETH292', `cannot infer type argument ${tp} for '${name}'; specify it explicitly, e.g. ${name}<u256>(...)`);
+        this.diags.error(
+          node,
+          'JETH292',
+          `cannot infer type argument ${tp} for '${name}'; specify it explicitly, e.g. ${name}<u256>(...)`,
+        );
         return undefined;
       }
       if (!this.gateGenericTypeArg(binding.get(tp)!, node, tp)) return undefined;
@@ -1704,14 +2098,22 @@ export class Analyzer {
    *  params exist but generic struct type-arguments are a future extension.) */
   private gateGenericTypeArg(t: JethType, node: ts.Node, tp: string): boolean {
     if (isStaticValueType(t)) return true; // covers uintN/intN/bool/address/bytesN, incl. enums + branded (a branded value type is one of these with a brand)
-    this.diags.error(node, 'JETH291', `type argument for '${tp}' must be a value type (uintN/intN/bool/address/bytesN/enum/branded newtype), got ${displayName(t)}`);
+    this.diags.error(
+      node,
+      'JETH291',
+      `type argument for '${tp}' must be a value type (uintN/intN/bool/address/bytesN/enum/branded newtype), got ${displayName(t)}`,
+    );
     return false;
   }
 
   /** Resolve a generic call: compute its concrete instantiation, synthesize (once) a mangled
    *  non-generic specialization that flows through the normal internal-function pipeline, and emit
    *  the call as an ordinary internal call to that mangled name. Returns undefined on error. */
-  private checkGenericCall(node: ts.CallExpression, name: string, asStatement: boolean): (Expr & { kind: 'call' }) | undefined {
+  private checkGenericCall(
+    node: ts.CallExpression,
+    name: string,
+    asStatement: boolean,
+  ): (Expr & { kind: 'call' }) | undefined {
     const gen = this.genericsByName.get(name)!;
     const binding = this.resolveGenericTypeArgs(node, gen, name);
     if (!binding) return undefined;
@@ -1723,7 +2125,11 @@ export class Analyzer {
       // user declared a non-generic function with the exact mangled name we reject it with a clear
       // diagnostic rather than letting two Yul defs collide (which would surface as a backend ICE).
       if (this.funcsByName.has(key) || this.genericsByName.has(key)) {
-        this.diags.error(node, 'JETH296', `specialization name '${key}' for generic '${name}' collides with an existing function; rename that function`);
+        this.diags.error(
+          node,
+          'JETH296',
+          `specialization name '${key}' for generic '${name}' collides with an existing function; rename that function`,
+        );
         return undefined;
       }
       // First time this exact instantiation is seen. Synthesize a non-generic RawFunction by
@@ -1805,14 +2211,18 @@ export class Analyzer {
     // internally (matching TypeScript, which flags type errors in unused code). Defaults are
     // self-contained constants, so snapshot/restore the effect flags to keep this purely diagnostic.
     if (rf.defaults) {
-      const rs = this.currentReadsState, ws = this.currentWritesState, re = this.currentReadsEnv;
+      const rs = this.currentReadsState,
+        ws = this.currentWritesState,
+        re = this.currentReadsEnv;
       for (let i = 0; i < rf.params.length; i++) {
         const d = rf.defaults[i];
         if (!d) continue;
         const e = this.checkExpr(d, rf.params[i]!.type);
         if (e) this.coerce(e, rf.params[i]!.type, d);
       }
-      this.currentReadsState = rs; this.currentWritesState = ws; this.currentReadsEnv = re;
+      this.currentReadsState = rs;
+      this.currentWritesState = ws;
+      this.currentReadsEnv = re;
     }
 
     const body: Stmt[] = [];
@@ -1838,7 +2248,10 @@ export class Analyzer {
     // all bodies are checked, against TRANSITIVE effects (see the call-graph fixpoint in
     // analyze()), so a @view/@pure function that violates via an internal callee is caught.
 
-    const signature = functionSignature(rf.name, rf.params.map((p) => p.type));
+    const signature = functionSignature(
+      rf.name,
+      rf.params.map((p) => p.type),
+    );
     const selector = functionSelector(signature);
     return {
       name: rf.name,
@@ -1872,11 +2285,19 @@ export class Analyzer {
   private inlineModifier(app: { name: string; argNodes: ts.Expression[]; site: ts.Node }, inner: Stmt[]): Stmt[] {
     const mod = this.modifiersByName.get(app.name);
     if (!mod) {
-      this.diags.error(app.site, 'JETH329', `unknown modifier '@${app.name}' (no @modifier with that name is declared)`);
+      this.diags.error(
+        app.site,
+        'JETH329',
+        `unknown modifier '@${app.name}' (no @modifier with that name is declared)`,
+      );
       return inner;
     }
     if (app.argNodes.length !== mod.params.length) {
-      this.diags.error(app.site, 'JETH329', `modifier '@${mod.name}' expects ${mod.params.length} argument(s), but got ${app.argNodes.length}`);
+      this.diags.error(
+        app.site,
+        'JETH329',
+        `modifier '@${mod.name}' expects ${mod.params.length} argument(s), but got ${app.argNodes.length}`,
+      );
       return inner;
     }
     // 1. Materialize each arg ONCE (solc evaluates a modifier arg exactly once) in the function param
@@ -1910,42 +2331,98 @@ export class Analyzer {
    *  `_;` placeholder in TAIL position (the last statement). The pre-code is the guard that runs
    *  before the wrapped function body; post-placeholder code and a conditional placeholder are gated. */
   private collectModifier(member: ts.MethodDeclaration): void {
-    if (!ts.isIdentifier(member.name)) { this.diags.error(member, 'JETH049', 'modifier name must be a plain identifier'); return; }
+    if (!ts.isIdentifier(member.name)) {
+      this.diags.error(member, 'JETH049', 'modifier name must be a plain identifier');
+      return;
+    }
     const name = member.name.text;
-    if (this.modifiersByName.has(name)) { this.diags.error(member, 'JETH046', `duplicate @modifier '${name}'`); return; }
+    if (this.modifiersByName.has(name)) {
+      this.diags.error(member, 'JETH046', `duplicate @modifier '${name}'`);
+      return;
+    }
     const decs = decoratorNames(member);
-    const bad = ['external', 'public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'nonReentrant'].find((d) => decs.includes(d));
-    if (bad) this.diags.error(member, 'JETH330', `a @modifier cannot also be @${bad} (a modifier has no visibility or mutability)`);
+    const bad = [
+      'external',
+      'public',
+      'internal',
+      'private',
+      'view',
+      'pure',
+      'payable',
+      'read',
+      'hidden',
+      'nonReentrant',
+    ].find((d) => decs.includes(d));
+    if (bad)
+      this.diags.error(
+        member,
+        'JETH330',
+        `a @modifier cannot also be @${bad} (a modifier has no visibility or mutability)`,
+      );
     if (member.type) this.diags.error(member.type, 'JETH330', 'a @modifier cannot declare a return type');
-    if (member.typeParameters && member.typeParameters.length > 0) this.diags.error(member, 'JETH327', 'a generic @modifier is not supported yet');
+    if (member.typeParameters && member.typeParameters.length > 0)
+      this.diags.error(member, 'JETH327', 'a generic @modifier is not supported yet');
 
     const params: { name: string; type: JethType }[] = [];
     for (const p of member.parameters) {
-      if (!ts.isIdentifier(p.name)) { this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier'); continue; }
+      if (!ts.isIdentifier(p.name)) {
+        this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
+        continue;
+      }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
-      if (p.initializer) this.diags.error(p, 'JETH304', `a @modifier parameter ('${p.name.text}') cannot have a default value`);
-      if (!isStaticValueType(t)) { this.diags.error(p, 'JETH322', `a @modifier parameter ('${p.name.text}') of type ${displayName(t)} is not supported yet (value types only)`); continue; }
+      if (p.initializer)
+        this.diags.error(p, 'JETH304', `a @modifier parameter ('${p.name.text}') cannot have a default value`);
+      if (!isStaticValueType(t)) {
+        this.diags.error(
+          p,
+          'JETH322',
+          `a @modifier parameter ('${p.name.text}') of type ${displayName(t)} is not supported yet (value types only)`,
+        );
+        continue;
+      }
       params.push({ name: p.name.text, type: t });
     }
 
-    if (!member.body) { this.diags.error(member, 'JETH328', `a @modifier must have a body containing the placeholder '_'`); return; }
+    if (!member.body) {
+      this.diags.error(member, 'JETH328', `a @modifier must have a body containing the placeholder '_'`);
+      return;
+    }
     const stmts = member.body.statements;
     const placeholders = this.findPlaceholders(member.body);
-    if (placeholders.length === 0) { this.diags.error(member, 'JETH328', `a @modifier body must contain the placeholder '_' exactly once`); return; }
-    if (placeholders.length > 1) { this.diags.error(placeholders[1]!, 'JETH320', `a @modifier with more than one '_' placeholder (the body would run multiple times) is not supported yet`); return; }
+    if (placeholders.length === 0) {
+      this.diags.error(member, 'JETH328', `a @modifier body must contain the placeholder '_' exactly once`);
+      return;
+    }
+    if (placeholders.length > 1) {
+      this.diags.error(
+        placeholders[1]!,
+        'JETH320',
+        `a @modifier with more than one '_' placeholder (the body would run multiple times) is not supported yet`,
+      );
+      return;
+    }
     // PRE-ONLY: the placeholder must be the LAST statement (no post-placeholder code, not inside a
     // conditional/loop). Otherwise gate (a later increment buffers the return for post-code).
     const last = stmts[stmts.length - 1];
     if (!last || !this.isPlaceholderStmt(last)) {
-      this.diags.error(placeholders[0]!, 'JETH321', `a @modifier's '_' placeholder must be the LAST statement of the body (pre-condition guards only); post-placeholder code or a placeholder inside a conditional/loop is not supported yet`);
+      this.diags.error(
+        placeholders[0]!,
+        'JETH321',
+        `a @modifier's '_' placeholder must be the LAST statement of the body (pre-condition guards only); post-placeholder code or a placeholder inside a conditional/loop is not supported yet`,
+      );
       return;
     }
     const preStmts = stmts.slice(0, stmts.length - 1);
     const returns = this.findReturns(preStmts);
     for (const r of returns) {
       if (r.expression) this.diags.error(r, 'JETH324', `a @modifier cannot 'return' a value`);
-      else this.diags.error(r, 'JETH325', `a @modifier with a 'return;' statement is not supported yet (it conditionally skips the wrapped body)`);
+      else
+        this.diags.error(
+          r,
+          'JETH325',
+          `a @modifier with a 'return;' statement is not supported yet (it conditionally skips the wrapped body)`,
+        );
     }
     if (returns.length > 0) return; // don't register a modifier with a return (avoids a cascade on inlining)
     this.modifiersByName.set(name, { name, node: member, params, preStmts });
@@ -1966,7 +2443,10 @@ export class Analyzer {
   }
   private findReturns(stmts: ts.Statement[]): ts.ReturnStatement[] {
     const out: ts.ReturnStatement[] = [];
-    const walk = (n: ts.Node) => { if (ts.isReturnStatement(n)) out.push(n); ts.forEachChild(n, walk); };
+    const walk = (n: ts.Node) => {
+      if (ts.isReturnStatement(n)) out.push(n);
+      ts.forEachChild(n, walk);
+    };
     for (const s of stmts) walk(s);
     return out;
   }
@@ -1989,7 +2469,11 @@ export class Analyzer {
           if (!r) return;
           for (let i = 0; i < rts.length; i++) {
             if (!typesEqual(r.types[i]!, rts[i]!) && !isImplicitWiden(r.types[i]!, rts[i]!)) {
-              this.diags.error(node.expression!, 'JETH060', `returned tuple component ${i} is ${displayName(r.types[i]!)}, expected ${displayName(rts[i]!)}`);
+              this.diags.error(
+                node.expression!,
+                'JETH060',
+                `returned tuple component ${i} is ${displayName(r.types[i]!)}, expected ${displayName(rts[i]!)}`,
+              );
               return;
             }
           }
@@ -1999,7 +2483,8 @@ export class Analyzer {
             this.declareLocal(nm, r.types[i]!);
             const ct = r.types[i]!;
             if (isBytesLike(ct)) this.memDynLocals.add(nm);
-            else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element)) this.memArrayLocals.add(nm);
+            else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element))
+              this.memArrayLocals.add(nm);
             else if (ct.kind === 'struct') this.memAggregateLocals.set(nm, ct);
             names.push(nm);
           }
@@ -2009,7 +2494,11 @@ export class Analyzer {
             let read: Expr;
             if (isBytesLike(ct)) read = { kind: 'dynLocalRead', type: ct, name: nm };
             else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element))
-              read = { kind: 'arrayValue', type: ct, arr: { base: { kind: 'memArray', varName: nm }, elem: ct.element } };
+              read = {
+                kind: 'arrayValue',
+                type: ct,
+                arr: { base: { kind: 'memArray', varName: nm }, elem: ct.element },
+              };
             else if (ct.kind === 'struct') read = { kind: 'memAggregate', type: ct, local: nm };
             else read = { kind: 'localRead', type: ct, name: nm };
             return this.coerce(read, rts[i]!, node.expression!);
@@ -2018,11 +2507,19 @@ export class Analyzer {
           return;
         }
         if (!node.expression || !ts.isArrayLiteralExpression(node.expression)) {
-          this.diags.error(node, 'JETH060', `function must return a ${rts.length}-tuple [${rts.map(displayName).join(', ')}]`);
+          this.diags.error(
+            node,
+            'JETH060',
+            `function must return a ${rts.length}-tuple [${rts.map(displayName).join(', ')}]`,
+          );
           return;
         }
         if (node.expression.elements.length !== rts.length) {
-          this.diags.error(node, 'JETH060', `return tuple has ${node.expression.elements.length} values, expected ${rts.length}`);
+          this.diags.error(
+            node,
+            'JETH060',
+            `return tuple has ${node.expression.elements.length} values, expected ${rts.length}`,
+          );
           return;
         }
         const values: Expr[] = [];
@@ -2043,7 +2540,11 @@ export class Analyzer {
               cv.kind === 'cdDynStructValue' ||
               cv.kind === 'cdAggregateValue';
             if (this.isCalldataAggregate(cv) && !cdParamOk) {
-              this.diags.error(node.expression.elements[i]!, 'JETH213', 'this calldata-aggregate component in a multi-value return is not supported yet (a whole calldata array/struct param works; a calldata array ELEMENT does not)');
+              this.diags.error(
+                node.expression.elements[i]!,
+                'JETH213',
+                'this calldata-aggregate component in a multi-value return is not supported yet (a whole calldata array/struct param works; a calldata array ELEMENT does not)',
+              );
               return;
             }
           }
@@ -2219,7 +2720,10 @@ export class Analyzer {
       {
         const ic = this.resolveInterfaceCall(e);
         if (ic === 'handled') return;
-        if (ic) { out.push({ kind: 'exprStmt', expr: ic.call }); return; }
+        if (ic) {
+          out.push({ kind: 'exprStmt', expr: ic.call });
+          return;
+        }
       }
       // array mutators: a.push(x) / a.pop()
       if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) {
@@ -2230,7 +2734,10 @@ export class Analyzer {
       if (ts.isPostfixUnaryExpression(e)) {
         return this.checkIncDec(e.operand, e.operator === ts.SyntaxKind.PlusPlusToken, e, out);
       }
-      if (ts.isPrefixUnaryExpression(e) && (e.operator === ts.SyntaxKind.PlusPlusToken || e.operator === ts.SyntaxKind.MinusMinusToken)) {
+      if (
+        ts.isPrefixUnaryExpression(e) &&
+        (e.operator === ts.SyntaxKind.PlusPlusToken || e.operator === ts.SyntaxKind.MinusMinusToken)
+      ) {
         return this.checkIncDec(e.operand, e.operator === ts.SyntaxKind.PlusPlusToken, e, out);
       }
       // `delete x` statement: reset a storage location to its zero value.
@@ -2267,7 +2774,11 @@ export class Analyzer {
     }
     const tryStmts = node.tryBlock.statements;
     if (tryStmts.length === 0) {
-      this.diags.error(node.tryBlock, 'JETH361', "the try block must begin with the controlling interface call (e.g. `let r = IFoo(addr).m(...)`)");
+      this.diags.error(
+        node.tryBlock,
+        'JETH361',
+        'the try block must begin with the controlling interface call (e.g. `let r = IFoo(addr).m(...)`)',
+      );
       return;
     }
     const first = tryStmts[0]!;
@@ -2283,49 +2794,77 @@ export class Analyzer {
 
     if (ts.isVariableStatement(first)) {
       if (first.declarationList.declarations.length !== 1) {
-        this.diags.error(first, 'JETH361', 'the controlling try statement must declare exactly one binding from the interface call');
+        this.diags.error(
+          first,
+          'JETH361',
+          'the controlling try statement must declare exactly one binding from the interface call',
+        );
         return;
       }
       const decl = first.declarationList.declarations[0]!;
       if (!decl.initializer) {
-        this.diags.error(decl, 'JETH361', 'the controlling try statement must initialize from an interface call (`= IFoo(addr).m(...)`)');
+        this.diags.error(
+          decl,
+          'JETH361',
+          'the controlling try statement must initialize from an interface call (`= IFoo(addr).m(...)`)',
+        );
         return;
       }
       const ic = this.resolveInterfaceCall(decl.initializer);
       if (ic === 'handled') return; // recognized but diagnosed
       if (!ic) {
-        this.diags.error(decl.initializer, 'JETH361', 'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)`');
+        this.diags.error(
+          decl.initializer,
+          'JETH361',
+          'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)`',
+        );
         return;
       }
       call = ic.call;
       if (ts.isArrayBindingPattern(decl.name)) {
         // tuple binding: `let [a, , c]: [T0, T1, T2] = IFoo(addr).pair();`
         if (!ic.returnTypes) {
-          this.diags.error(decl.name, 'JETH356', ic.returnType.kind === 'void'
-            ? 'this interface method returns void and cannot be destructured (call it without a binding)'
-            : 'this interface method returns a single value; bind it with `let x = ...`, not a destructuring');
+          this.diags.error(
+            decl.name,
+            'JETH356',
+            ic.returnType.kind === 'void'
+              ? 'this interface method returns void and cannot be destructured (call it without a binding)'
+              : 'this interface method returns a single value; bind it with `let x = ...`, not a destructuring',
+          );
           return;
         }
         const rts = ic.returnTypes;
         const pat = decl.name;
         if (pat.elements.length !== rts.length) {
-          this.diags.error(decl.name, 'JETH356', `this interface method returns ${rts.length} value(s), expected ${pat.elements.length} name(s)`);
+          this.diags.error(
+            decl.name,
+            'JETH356',
+            `this interface method returns ${rts.length} value(s), expected ${pat.elements.length} name(s)`,
+          );
           return;
         }
         // optional `: [T0, T1, ...]` annotation must match the method's return types
         if (decl.type) {
           const ann = this.tupleTypeAnnotation(decl.type, rts.length);
-          if (ann) for (let i = 0; i < rts.length; i++) {
-            if (!typesEqual(ann[i]!, rts[i]!)) {
-              this.diags.error(decl.type, 'JETH085', `try return type component ${i} is ${displayName(ann[i]!)}, expected ${displayName(rts[i]!)}`);
-              return;
+          if (ann)
+            for (let i = 0; i < rts.length; i++) {
+              if (!typesEqual(ann[i]!, rts[i]!)) {
+                this.diags.error(
+                  decl.type,
+                  'JETH085',
+                  `try return type component ${i} is ${displayName(ann[i]!)}, expected ${displayName(rts[i]!)}`,
+                );
+                return;
+              }
             }
-          }
         }
         retTypes = rts;
         for (let i = 0; i < rts.length; i++) {
           const el = pat.elements[i]!;
-          if (ts.isOmittedExpression(el)) { retNames.push(null); continue; }
+          if (ts.isOmittedExpression(el)) {
+            retNames.push(null);
+            continue;
+          }
           if (!ts.isBindingElement(el) || !ts.isIdentifier(el.name)) {
             this.diags.error(el, 'JETH062', 'only simple names are allowed in a try tuple binding');
             return;
@@ -2336,17 +2875,29 @@ export class Analyzer {
       } else if (ts.isIdentifier(decl.name)) {
         // single-value binding: `let r: T = IFoo(addr).m(args);`
         if (ic.returnTypes) {
-          this.diags.error(decl.name, 'JETH356', 'this interface method returns a tuple; bind it with a destructuring `let [a, b] = IFoo(addr).m(...)`');
+          this.diags.error(
+            decl.name,
+            'JETH356',
+            'this interface method returns a tuple; bind it with a destructuring `let [a, b] = IFoo(addr).m(...)`',
+          );
           return;
         }
         if (ic.returnType.kind === 'void') {
-          this.diags.error(decl.name, 'JETH357', 'this interface method returns void and cannot be bound to a name (call it without a binding: `IFoo(addr).m(...);`)');
+          this.diags.error(
+            decl.name,
+            'JETH357',
+            'this interface method returns void and cannot be bound to a name (call it without a binding: `IFoo(addr).m(...);`)',
+          );
           return;
         }
         if (decl.type) {
           const ann = resolveType(decl.type, this.diags, this.structsByName);
           if (ann && !typesEqual(ann, ic.returnType)) {
-            this.diags.error(decl.type, 'JETH085', `try return type is ${displayName(ann)}, but the method returns ${displayName(ic.returnType)}`);
+            this.diags.error(
+              decl.type,
+              'JETH085',
+              `try return type is ${displayName(ann)}, but the method returns ${displayName(ic.returnType)}`,
+            );
             return;
           }
         }
@@ -2361,7 +2912,11 @@ export class Analyzer {
       const ic = this.resolveInterfaceCall(first.expression);
       if (ic === 'handled') return;
       if (!ic) {
-        this.diags.error(first.expression, 'JETH361', 'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)`');
+        this.diags.error(
+          first.expression,
+          'JETH361',
+          'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)`',
+        );
         return;
       }
       call = ic.call;
@@ -2369,7 +2924,11 @@ export class Analyzer {
       retTypes = [];
       retNames = [];
     } else {
-      this.diags.error(first, 'JETH361', 'the first statement in a try block must be the controlling interface call `let r = IFoo(addr).m(...)` or `IFoo(addr).m(...);`');
+      this.diags.error(
+        first,
+        'JETH361',
+        'the first statement in a try block must be the controlling interface call `let r = IFoo(addr).m(...)` or `IFoo(addr).m(...);`',
+      );
       return;
     }
 
@@ -2383,7 +2942,8 @@ export class Analyzer {
       this.declareLocal(v.name, v.type);
       const ct = v.type;
       if (isBytesLike(ct)) this.memDynLocals.add(v.name);
-      else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element)) this.memArrayLocals.add(v.name);
+      else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element))
+        this.memArrayLocals.add(v.name);
       else if (ct.kind === 'array' && ct.length !== undefined) this.memAggregateLocals.set(v.name, ct);
       else if (ct.kind === 'struct' && isDynamicType(ct)) this.memDynStructLocals.set(v.name, ct);
       else if (ct.kind === 'struct') this.memAggregateLocals.set(v.name, ct);
@@ -2410,7 +2970,11 @@ export class Analyzer {
       if (vd.type) {
         const t = resolveType(vd.type, this.diags, this.structsByName);
         if (t && !isBytesLike(t)) {
-          this.diags.error(vd.type, 'JETH362', `the catch binding is the raw revert returndata and must be \`bytes\`, got ${displayName(t)}`);
+          this.diags.error(
+            vd.type,
+            'JETH362',
+            `the catch binding is the raw revert returndata and must be \`bytes\`, got ${displayName(t)}`,
+          );
           return;
         }
       }
@@ -2426,7 +2990,10 @@ export class Analyzer {
     const savedCatch = this.catchBindings;
     const savedUR = this.catchUsesReason;
     const savedUP = this.catchUsesPanic;
-    this.catchBindings = new Map<string, JethType>([['reason', STRING], ['panic', U256]]);
+    this.catchBindings = new Map<string, JethType>([
+      ['reason', STRING],
+      ['panic', U256],
+    ]);
     this.catchUsesReason = false;
     this.catchUsesPanic = false;
     const catchBody: Stmt[] = [];
@@ -2526,11 +3093,19 @@ export class Analyzer {
     // A struct that (transitively) contains a mapping is storage-only and cannot be
     // constructed in memory (matches solc).
     if (this.typeHasMapping(st)) {
-      this.diags.error(node, 'JETH247', `struct '${st.name}' contains a mapping and cannot be constructed (mappings are storage-only)`);
+      this.diags.error(
+        node,
+        'JETH247',
+        `struct '${st.name}' contains a mapping and cannot be constructed (mappings are storage-only)`,
+      );
       return undefined;
     }
     if (node.arguments.length !== st.fields.length) {
-      this.diags.error(node, 'JETH228', `struct '${st.name}' expects ${st.fields.length} field arg(s), got ${node.arguments.length}`);
+      this.diags.error(
+        node,
+        'JETH228',
+        `struct '${st.name}' expects ${st.fields.length} field arg(s), got ${node.arguments.length}`,
+      );
       return undefined;
     }
     const args: Expr[] = [];
@@ -2559,16 +3134,24 @@ export class Analyzer {
       // verified inline encoder and is byte-identical to solc's field-by-field copy.
       if (sameStruct && isStaticType(f.type)) return a;
       if (sameStruct && this.isPureReadExpr(argNode)) return this.desugarStructCopy(f.type, argNode);
-      this.diags.error(argNode, 'JETH226', sameStruct
-        ? `dynamic struct field '${f.name}' must be constructed inline or come from a simple (side-effect-free) struct value`
-        : `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
+      this.diags.error(
+        argNode,
+        'JETH226',
+        sameStruct
+          ? `dynamic struct field '${f.name}' must be constructed inline or come from a simple (side-effect-free) struct value`
+          : `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`,
+      );
       return undefined;
     }
     if (isBytesLike(f.type)) {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
       if (a.type.kind !== f.type.kind) {
-        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
+        this.diags.error(
+          argNode,
+          'JETH226',
+          `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`,
+        );
         return undefined;
       }
       return a;
@@ -2580,18 +3163,30 @@ export class Analyzer {
       // storage source, COPIED into the parent at codegen, matching solc).
       if (a.kind === 'arrayLit') {
         if (a.elements.length !== f.type.length) {
-          this.diags.error(argNode, 'JETH226', `struct field '${f.name}' (${displayName(f.type)}) must be an array literal of ${f.type.length} elements`);
+          this.diags.error(
+            argNode,
+            'JETH226',
+            `struct field '${f.name}' (${displayName(f.type)}) must be an array literal of ${f.type.length} elements`,
+          );
           return undefined;
         }
         return a;
       }
       if (!typesEqual(a.type, f.type)) {
-        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`);
+        this.diags.error(
+          argNode,
+          'JETH226',
+          `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`,
+        );
         return undefined;
       }
       return a;
     }
-    if (f.type.kind === 'array' && f.type.length === undefined && (isStaticValueType(f.type.element) || f.type.element.kind === 'struct')) {
+    if (
+      f.type.kind === 'array' &&
+      f.type.length === undefined &&
+      (isStaticValueType(f.type.element) || f.type.element.kind === 'struct')
+    ) {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
       // An array LITERAL ([a, b, c]) is a FIXED array (uint256[N]) in solc, which does NOT implicitly
@@ -2601,13 +3196,21 @@ export class Analyzer {
       // whole [len][...] array tail (offset table for dynamic-struct elements; contiguous abiHeadWords
       // for static ones), and the source must be a true Q[] value, not a fixed-array literal.
       if (a.kind === 'arrayLit' || !(a.type.kind === 'array' && a.type.length === undefined)) {
-        this.diags.error(argNode, 'JETH226', `struct field '${f.name}' expects ${displayName(f.type)}, got ${a.kind === 'arrayLit' ? `${displayName(f.type.element)}[${a.elements.length}]` : displayName(a.type)}`);
+        this.diags.error(
+          argNode,
+          'JETH226',
+          `struct field '${f.name}' expects ${displayName(f.type)}, got ${a.kind === 'arrayLit' ? `${displayName(f.type.element)}[${a.elements.length}]` : displayName(a.type)}`,
+        );
         return undefined;
       }
       return this.coerce(a, f.type, argNode);
     }
     if (!isStaticValueType(f.type)) {
-      this.diags.error(argNode, 'JETH226', `struct field '${f.name}' of type ${displayName(f.type)} is not constructible yet`);
+      this.diags.error(
+        argNode,
+        'JETH226',
+        `struct field '${f.name}' of type ${displayName(f.type)} is not constructible yet`,
+      );
       return undefined;
     }
     const a = this.checkExpr(argNode, f.type);
@@ -2621,7 +3224,8 @@ export class Analyzer {
   private isPureReadExpr(node: ts.Expression): boolean {
     if (ts.isIdentifier(node) || node.kind === ts.SyntaxKind.ThisKeyword) return true;
     if (ts.isPropertyAccessExpression(node)) return this.isPureReadExpr(node.expression);
-    if (ts.isElementAccessExpression(node)) return this.isPureReadExpr(node.expression) && this.isPureReadExpr(node.argumentExpression);
+    if (ts.isElementAccessExpression(node))
+      return this.isPureReadExpr(node.expression) && this.isPureReadExpr(node.argumentExpression);
     if (ts.isParenthesizedExpression(node)) return this.isPureReadExpr(node.expression);
     if (ts.isNumericLiteral(node) || ts.isBigIntLiteral(node)) return true;
     // a pure VALUE-TYPE cast (address(x)/payable(x)/uN(x)/iN(x)/bytesN(x)/Enum(x)) with pure args is a
@@ -2629,7 +3233,12 @@ export class Analyzer {
     // keeps a common constant/derived key (m[address(0x..)], m[u8(x)]) out of the side-effecting-key gate.
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const callee = node.expression.text;
-      if (callee === 'address' || callee === 'payable' || resolvePrimitiveName(callee) !== undefined || this.isEnumName(callee)) {
+      if (
+        callee === 'address' ||
+        callee === 'payable' ||
+        resolvePrimitiveName(callee) !== undefined ||
+        this.isEnumName(callee)
+      ) {
         return node.arguments.every((a) => this.isPureReadExpr(a));
       }
     }
@@ -2674,31 +3283,55 @@ export class Analyzer {
   // satisfies structNew's per-field contract (nested/dynamic/array fields still need StructName(...)).
   private checkStructLiteral(node: ts.ObjectLiteralExpression, st: JethType & { kind: 'struct' }): Expr | undefined {
     if (this.typeHasMapping(st)) {
-      this.diags.error(node, 'JETH247', `struct '${st.name}' contains a mapping and cannot be constructed (mappings are storage-only)`);
+      this.diags.error(
+        node,
+        'JETH247',
+        `struct '${st.name}' contains a mapping and cannot be constructed (mappings are storage-only)`,
+      );
       return undefined;
     }
     let base: ts.Expression | undefined;
     const overrides = new Map<string, ts.Expression>();
     for (const p of node.properties) {
       if (ts.isSpreadAssignment(p)) {
-        if (base) { this.diags.error(p, 'JETH230', 'at most one spread `...base` is allowed in a struct literal'); return undefined; }
+        if (base) {
+          this.diags.error(p, 'JETH230', 'at most one spread `...base` is allowed in a struct literal');
+          return undefined;
+        }
         base = p.expression;
         continue;
       }
       if (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) {
-        if (!ts.isIdentifier(p.name)) { this.diags.error(p.name, 'JETH231', 'struct field name must be a plain identifier'); return undefined; }
+        if (!ts.isIdentifier(p.name)) {
+          this.diags.error(p.name, 'JETH231', 'struct field name must be a plain identifier');
+          return undefined;
+        }
         const fn = p.name.text;
-        if (!st.fields.some((fl) => fl.name === fn)) { this.diags.error(p.name, 'JETH232', `struct '${st.name}' has no field '${fn}'`); return undefined; }
-        if (overrides.has(fn)) { this.diags.error(p.name, 'JETH233', `duplicate field '${fn}' in struct literal`); return undefined; }
+        if (!st.fields.some((fl) => fl.name === fn)) {
+          this.diags.error(p.name, 'JETH232', `struct '${st.name}' has no field '${fn}'`);
+          return undefined;
+        }
+        if (overrides.has(fn)) {
+          this.diags.error(p.name, 'JETH233', `duplicate field '${fn}' in struct literal`);
+          return undefined;
+        }
         // shorthand `{ x }` means `x: x` (the field name read as an identifier).
         overrides.set(fn, ts.isPropertyAssignment(p) ? p.initializer : p.name);
         continue;
       }
-      this.diags.error(p, 'JETH231', 'unsupported struct-literal member (use `field: value`, shorthand `field`, or `...base`)');
+      this.diags.error(
+        p,
+        'JETH231',
+        'unsupported struct-literal member (use `field: value`, shorthand `field`, or `...base`)',
+      );
       return undefined;
     }
     if (base && this.exprHasCall(base)) {
-      this.diags.error(base, 'JETH234', 'struct spread source must be a plain reference (bind a computed value to a const first)');
+      this.diags.error(
+        base,
+        'JETH234',
+        'struct spread source must be a plain reference (bind a computed value to a const first)',
+      );
       return undefined;
     }
     if (base) {
@@ -2715,14 +3348,22 @@ export class Analyzer {
       const argNode = overrides.get(fld.name);
       if (!argNode) {
         if (!base) {
-          this.diags.error(node, 'JETH235', `struct literal for '${st.name}' is missing field '${fld.name}' (add it, or spread a base value with ...base)`);
+          this.diags.error(
+            node,
+            'JETH235',
+            `struct literal for '${st.name}' is missing field '${fld.name}' (add it, or spread a base value with ...base)`,
+          );
           return undefined;
         }
         // A value field is re-read from the spread base. A non-value field (nested struct / bytes /
         // string / array) cannot be re-read - a field read is not an inline constructor / literal,
         // which the codegen requires - so it must be explicitly provided.
         if (!isStaticValueType(fld.type)) {
-          this.diags.error(node, 'JETH229', `struct literal for '${st.name}': non-value field '${fld.name}' (${displayName(fld.type)}) must be provided explicitly, not spread from a base`);
+          this.diags.error(
+            node,
+            'JETH229',
+            `struct literal for '${st.name}': non-value field '${fld.name}' (${displayName(fld.type)}) must be provided explicitly, not spread from a base`,
+          );
           return undefined;
         }
         const reread = this.synth(ts.factory.createPropertyAccessExpression(base, fld.name), base);
@@ -2752,7 +3393,11 @@ export class Analyzer {
     const diagLen = this.diags.items.length;
     const savedWrites = this.currentWritesState;
     const lv = this.checkLValue(node);
-    if (lv && lv.type.kind === 'bytes' && (lv.kind === 'dynState' || lv.kind === 'mapDynState' || lv.kind === 'strArrayElem' || lv.kind === 'dynPlace')) {
+    if (
+      lv &&
+      lv.type.kind === 'bytes' &&
+      (lv.kind === 'dynState' || lv.kind === 'mapDynState' || lv.kind === 'strArrayElem' || lv.kind === 'dynPlace')
+    ) {
       return lv;
     }
     this.diags.items.length = diagLen;
@@ -2828,12 +3473,20 @@ export class Analyzer {
     const target = this.checkLValue(operand);
     if (!target) return;
     if (!isInteger(target.type)) {
-      this.diags.error(node, 'JETH082', `'${isInc ? '++' : '--'}' requires an integer operand, got ${displayName(target.type)}`);
+      this.diags.error(
+        node,
+        'JETH082',
+        `'${isInc ? '++' : '--'}' requires an integer operand, got ${displayName(target.type)}`,
+      );
       return;
     }
     const idImpure = this.impureLValueKey(operand);
     if (idImpure) {
-      this.diags.error(idImpure, 'JETH331', `'${isInc ? '++' : '--'}' on an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`);
+      this.diags.error(
+        idImpure,
+        'JETH331',
+        `'${isInc ? '++' : '--'}' on an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`,
+      );
       return;
     }
     const left = this.lvalueAsExpr(target);
@@ -2849,15 +3502,31 @@ export class Analyzer {
     const target = this.checkLValue(operand);
     if (!target) return undefined;
     if (!isInteger(target.type)) {
-      this.diags.error(node, 'JETH082', `'${isInc ? '++' : '--'}' requires an integer operand, got ${displayName(target.type)}`);
+      this.diags.error(
+        node,
+        'JETH082',
+        `'${isInc ? '++' : '--'}' requires an integer operand, got ${displayName(target.type)}`,
+      );
       return undefined;
     }
     const idImpure = this.impureLValueKey(operand);
     if (idImpure) {
-      this.diags.error(idImpure, 'JETH331', `'${isInc ? '++' : '--'}' on an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`);
+      this.diags.error(
+        idImpure,
+        'JETH331',
+        `'${isInc ? '++' : '--'}' on an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`,
+      );
       return undefined;
     }
-    return { kind: 'incDec', type: target.type, target, readExpr: this.lvalueAsExpr(target), isInc, prefix, unchecked: this.currentUnchecked };
+    return {
+      kind: 'incDec',
+      type: target.type,
+      target,
+      readExpr: this.lvalueAsExpr(target),
+      isInc,
+      prefix,
+      unchecked: this.currentUnchecked,
+    };
   }
 
   /** True iff `e` is a calldata-source aggregate (a calldata array param echo or a
@@ -2958,17 +3627,28 @@ export class Analyzer {
     const brand = (t as { brand?: string }).brand;
     if (brand) return ref(brand);
     switch (t.kind) {
-      case 'bool': return ref('bool');
-      case 'address': return ref('address');
-      case 'uint': return ref('u' + t.bits);
-      case 'int': return ref('i' + t.bits);
-      case 'bytesN': return ref('bytes' + t.size);
-      case 'bytes': return ref('bytes');
-      case 'string': return ref('string');
-      case 'struct': return ref(t.name);
+      case 'bool':
+        return ref('bool');
+      case 'address':
+        return ref('address');
+      case 'uint':
+        return ref('u' + t.bits);
+      case 'int':
+        return ref('i' + t.bits);
+      case 'bytesN':
+        return ref('bytes' + t.size);
+      case 'bytes':
+        return ref('bytes');
+      case 'string':
+        return ref('string');
+      case 'struct':
+        return ref(t.name);
       case 'array':
         return t.length !== undefined
-          ? ref('Arr', [this.jethTypeToTypeNode(t.element, anchor), S(f.createLiteralTypeNode(S(f.createNumericLiteral(String(t.length)))))])
+          ? ref('Arr', [
+              this.jethTypeToTypeNode(t.element, anchor),
+              S(f.createLiteralTypeNode(S(f.createNumericLiteral(String(t.length))))),
+            ])
           : S(f.createArrayTypeNode(this.jethTypeToTypeNode(t.element, anchor)));
       default:
         return ref('void'); // unreachable for a well-formed array element; re-rejected downstream
@@ -2982,7 +3662,10 @@ export class Analyzer {
     let found = false;
     const walk = (n: ts.Node): void => {
       if (found) return;
-      if (ts.isCallExpression(n)) { found = true; return; }
+      if (ts.isCallExpression(n)) {
+        found = true;
+        return;
+      }
       ts.forEachChild(n, walk);
     };
     walk(node);
@@ -3018,7 +3701,11 @@ export class Analyzer {
     }
     const iterable = node.expression;
     if (this.exprHasCall(iterable)) {
-      this.diags.error(iterable, 'JETH117', 'for-of iterable must be a plain array reference (bind a computed value to a const first)');
+      this.diags.error(
+        iterable,
+        'JETH117',
+        'for-of iterable must be a plain array reference (bind a computed value to a const first)',
+      );
       return;
     }
     const probe = this.checkExpr(iterable);
@@ -3032,20 +3719,38 @@ export class Analyzer {
     const S = <T extends ts.Node>(n: T): T => this.synth(n, iterable);
     const idxName = this.freshSynthName('__jeth_of_');
     const idx = (): ts.Identifier => S(f.createIdentifier(idxName));
-    const initDecl = S(f.createVariableDeclaration(
-      idxName, undefined, S(f.createTypeReferenceNode('u256', undefined)), S(f.createBigIntLiteral('0n')),
-    ));
+    const initDecl = S(
+      f.createVariableDeclaration(
+        idxName,
+        undefined,
+        S(f.createTypeReferenceNode('u256', undefined)),
+        S(f.createBigIntLiteral('0n')),
+      ),
+    );
     const synInit = S(f.createVariableDeclarationList([initDecl], ts.NodeFlags.Let));
-    const cond = S(f.createBinaryExpression(
-      idx(), ts.SyntaxKind.LessThanToken, S(f.createPropertyAccessExpression(iterable, 'length')),
-    ));
-    const incr = S(f.createBinaryExpression(
-      idx(), ts.SyntaxKind.EqualsToken, S(f.createBinaryExpression(idx(), ts.SyntaxKind.PlusToken, S(f.createBigIntLiteral('1n')))),
-    ));
-    const elemDecl = S(f.createVariableDeclaration(
-      decl.name, undefined, this.jethTypeToTypeNode(elemType, iterable), S(f.createElementAccessExpression(iterable, idx())),
-    ));
-    const elemFlags = (initList.flags & ts.NodeFlags.Const) ? ts.NodeFlags.Const : ts.NodeFlags.Let;
+    const cond = S(
+      f.createBinaryExpression(
+        idx(),
+        ts.SyntaxKind.LessThanToken,
+        S(f.createPropertyAccessExpression(iterable, 'length')),
+      ),
+    );
+    const incr = S(
+      f.createBinaryExpression(
+        idx(),
+        ts.SyntaxKind.EqualsToken,
+        S(f.createBinaryExpression(idx(), ts.SyntaxKind.PlusToken, S(f.createBigIntLiteral('1n')))),
+      ),
+    );
+    const elemDecl = S(
+      f.createVariableDeclaration(
+        decl.name,
+        undefined,
+        this.jethTypeToTypeNode(elemType, iterable),
+        S(f.createElementAccessExpression(iterable, idx())),
+      ),
+    );
+    const elemFlags = initList.flags & ts.NodeFlags.Const ? ts.NodeFlags.Const : ts.NodeFlags.Let;
     const elemStmt = S(f.createVariableStatement(undefined, S(f.createVariableDeclarationList([elemDecl], elemFlags))));
     const bodyBlock = S(f.createBlock([elemStmt, node.statement], true));
     const forStmt = S(f.createForStatement(synInit, cond, incr, bodyBlock));
@@ -3057,9 +3762,19 @@ export class Analyzer {
   private straySwitchBreaks(stmts: readonly ts.Statement[]): ts.Node[] {
     const found: ts.Node[] = [];
     const walk = (n: ts.Node): void => {
-      if (ts.isForStatement(n) || ts.isForOfStatement(n) || ts.isForInStatement(n) ||
-          ts.isWhileStatement(n) || ts.isDoStatement(n) || ts.isSwitchStatement(n)) return; // own break target
-      if (n.kind === ts.SyntaxKind.BreakStatement) { found.push(n); return; }
+      if (
+        ts.isForStatement(n) ||
+        ts.isForOfStatement(n) ||
+        ts.isForInStatement(n) ||
+        ts.isWhileStatement(n) ||
+        ts.isDoStatement(n) ||
+        ts.isSwitchStatement(n)
+      )
+        return; // own break target
+      if (n.kind === ts.SyntaxKind.BreakStatement) {
+        found.push(n);
+        return;
+      }
       ts.forEachChild(n, walk);
     };
     for (const s of stmts) walk(s);
@@ -3077,7 +3792,11 @@ export class Analyzer {
     if (!probe) return;
     const dt = probe.type;
     if (!isStaticValueType(dt)) {
-      this.diags.error(disc, 'JETH281', `switch discriminant must be a value type (uint/int/enum/bool/address/bytesN), got ${displayName(dt)}`);
+      this.diags.error(
+        disc,
+        'JETH281',
+        `switch discriminant must be a value type (uint/int/enum/bool/address/bytesN), got ${displayName(dt)}`,
+      );
       return;
     }
     const clauses = node.caseBlock.clauses;
@@ -3088,27 +3807,58 @@ export class Analyzer {
     for (let i = 0; i < clauses.length; i++) {
       const cl = clauses[i]!;
       if (ts.isDefaultClause(cl)) {
-        if (i !== clauses.length - 1) { this.diags.error(cl, 'JETH282', 'a switch `default` must be the last clause'); return; }
-        if (pending.length > 0) { this.diags.error(cl, 'JETH283', 'a `case` label that falls through to `default` is not supported; give it a body'); return; }
+        if (i !== clauses.length - 1) {
+          this.diags.error(cl, 'JETH282', 'a switch `default` must be the last clause');
+          return;
+        }
+        if (pending.length > 0) {
+          this.diags.error(
+            cl,
+            'JETH283',
+            'a `case` label that falls through to `default` is not supported; give it a body',
+          );
+          return;
+        }
         defaultBody = [...cl.statements];
         continue;
       }
       pending.push(cl.expression);
-      if (cl.statements.length > 0) { groups.push({ labels: pending, body: [...cl.statements], node: cl }); pending = []; }
+      if (cl.statements.length > 0) {
+        groups.push({ labels: pending, body: [...cl.statements], node: cl });
+        pending = [];
+      }
     }
-    if (pending.length > 0) { this.diags.error(node, 'JETH283', 'a trailing `case` label with no body is not supported (it would fall off the end)'); return; }
+    if (pending.length > 0) {
+      this.diags.error(
+        node,
+        'JETH283',
+        'a trailing `case` label with no body is not supported (it would fall off the end)',
+      );
+      return;
+    }
 
     // Each group body must terminate; drop a trailing `break` (the case end) and forbid a stray one.
     for (const g of groups) {
       const last = g.body[g.body.length - 1];
       const terminated = last !== undefined && (last.kind === ts.SyntaxKind.BreakStatement || this.stmtDiverts(last));
       if (!terminated) {
-        this.diags.error(g.node, 'JETH284', 'a switch case must end in `break`, `return`, `revert(...)`, or `continue` (implicit fall-through is not allowed; add a trailing `break` after a nested switch)');
+        this.diags.error(
+          g.node,
+          'JETH284',
+          'a switch case must end in `break`, `return`, `revert(...)`, or `continue` (implicit fall-through is not allowed; add a trailing `break` after a nested switch)',
+        );
         return;
       }
       if (last!.kind === ts.SyntaxKind.BreakStatement) g.body = g.body.slice(0, -1); // case terminator
       const strays = this.straySwitchBreaks(g.body);
-      if (strays.length > 0) { this.diags.error(strays[0]!, 'JETH285', 'an early `break` in a switch case is not supported (a case ends only at its final `break`)'); return; }
+      if (strays.length > 0) {
+        this.diags.error(
+          strays[0]!,
+          'JETH285',
+          'an early `break` in a switch case is not supported (a case ends only at its final `break`)',
+        );
+        return;
+      }
     }
     if (defaultBody) {
       const strays = this.straySwitchBreaks(defaultBody);
@@ -3116,7 +3866,10 @@ export class Analyzer {
       const last = defaultBody[defaultBody.length - 1];
       if (last && last.kind === ts.SyntaxKind.BreakStatement) defaultBody = defaultBody.slice(0, -1);
       const stray2 = this.straySwitchBreaks(defaultBody);
-      if (stray2.length > 0) { this.diags.error(stray2[0]!, 'JETH285', 'an early `break` in a switch `default` is not supported'); return; }
+      if (stray2.length > 0) {
+        this.diags.error(stray2[0]!, 'JETH285', 'an early `break` in a switch `default` is not supported');
+        return;
+      }
       void strays;
     }
 
@@ -3130,10 +3883,16 @@ export class Analyzer {
     const seenBool = new Set<boolean>();
     for (const { node: ln, expr } of labelExprs) {
       if (expr?.kind === 'literalInt') {
-        if (seenInt.has(expr.value)) { this.diags.error(ln, 'JETH287', `duplicate case label ${expr.value} in switch`); return; }
+        if (seenInt.has(expr.value)) {
+          this.diags.error(ln, 'JETH287', `duplicate case label ${expr.value} in switch`);
+          return;
+        }
         seenInt.add(expr.value);
       } else if (expr?.kind === 'literalBool') {
-        if (seenBool.has(expr.value)) { this.diags.error(ln, 'JETH287', `duplicate case label ${expr.value} in switch`); return; }
+        if (seenBool.has(expr.value)) {
+          this.diags.error(ln, 'JETH287', `duplicate case label ${expr.value} in switch`);
+          return;
+        }
         seenBool.add(expr.value);
       }
     }
@@ -3142,9 +3901,14 @@ export class Analyzer {
       for (const { expr } of labelExprs) if (expr && expr.kind === 'literalInt') covered.add(expr.value);
       const n = (dt as { enumMembers: string[] }).enumMembers.length;
       const missing: string[] = [];
-      for (let i = 0; i < n; i++) if (!covered.has(BigInt(i))) missing.push((dt as { enumMembers: string[] }).enumMembers[i]!);
+      for (let i = 0; i < n; i++)
+        if (!covered.has(BigInt(i))) missing.push((dt as { enumMembers: string[] }).enumMembers[i]!);
       if (missing.length > 0) {
-        this.diags.error(node, 'JETH286', `switch over enum '${displayName(dt)}' is not exhaustive; missing: ${missing.join(', ')} (add the cases or a \`default\`)`);
+        this.diags.error(
+          node,
+          'JETH286',
+          `switch over enum '${displayName(dt)}' is not exhaustive; missing: ${missing.join(', ')} (add the cases or a \`default\`)`,
+        );
         return;
       }
     }
@@ -3155,9 +3919,12 @@ export class Analyzer {
     const swName = this.freshSynthName('__jeth_sw_');
     const swId = (): ts.Identifier => S(f.createIdentifier(swName));
     const decl = S(f.createVariableDeclaration(swName, undefined, this.jethTypeToTypeNode(dt, disc), disc));
-    const declStmt = S(f.createVariableStatement(undefined, S(f.createVariableDeclarationList([decl], ts.NodeFlags.Const))));
+    const declStmt = S(
+      f.createVariableStatement(undefined, S(f.createVariableDeclarationList([decl], ts.NodeFlags.Const))),
+    );
     const eqOr = (labels: ts.Expression[]): ts.Expression =>
-      labels.map((l) => S(f.createBinaryExpression(swId(), ts.SyntaxKind.EqualsEqualsToken, l)) as ts.Expression)
+      labels
+        .map((l) => S(f.createBinaryExpression(swId(), ts.SyntaxKind.EqualsEqualsToken, l)) as ts.Expression)
         .reduce((a, b) => S(f.createBinaryExpression(a, ts.SyntaxKind.BarBarToken, b)));
     let chain: ts.Statement | undefined = defaultBody ? S(f.createBlock(defaultBody, true)) : undefined;
     for (let i = groups.length - 1; i >= 0; i--) {
@@ -3175,8 +3942,12 @@ export class Analyzer {
    *  explicit trailing `break`), and `break` is handled separately as the case terminator. */
   private stmtDiverts(s: ts.Statement): boolean {
     if (ts.isReturnStatement(s) || this.isRevertOrThrow(s) || s.kind === ts.SyntaxKind.ContinueStatement) return true;
-    if (ts.isBlock(s)) { const l = s.statements[s.statements.length - 1]; return !!l && this.stmtDiverts(l); }
-    if (ts.isIfStatement(s)) return !!s.elseStatement && this.stmtDiverts(s.thenStatement) && this.stmtDiverts(s.elseStatement);
+    if (ts.isBlock(s)) {
+      const l = s.statements[s.statements.length - 1];
+      return !!l && this.stmtDiverts(l);
+    }
+    if (ts.isIfStatement(s))
+      return !!s.elseStatement && this.stmtDiverts(s.thenStatement) && this.stmtDiverts(s.elseStatement);
     // A switch diverts iff it has a `default` (the "else") AND every non-empty clause body diverts.
     // (An empty label falls through to the next clause's body, so skip it.) Mirrors the if/else rule.
     if (ts.isSwitchStatement(s)) {
@@ -3215,8 +3986,7 @@ export class Analyzer {
       this.diags.error(args[0]!, 'JETH121', `require condition must be bool, got ${displayName(cond.type)}`);
       return;
     }
-    const reason: RevertReason | undefined =
-      args.length === 2 ? this.checkRevertReason(args[1]!) : { kind: 'empty' };
+    const reason: RevertReason | undefined = args.length === 2 ? this.checkRevertReason(args[1]!) : { kind: 'empty' };
     if (reason) out.push({ kind: 'require', cond, reason });
   }
 
@@ -3243,8 +4013,7 @@ export class Analyzer {
       this.diags.error(call, 'JETH122', `revert(...) takes 0 or 1 arguments, got ${args.length}`);
       return;
     }
-    const reason: RevertReason | undefined =
-      args.length === 1 ? this.checkRevertReason(args[0]!) : { kind: 'empty' };
+    const reason: RevertReason | undefined = args.length === 1 ? this.checkRevertReason(args[0]!) : { kind: 'empty' };
     if (reason) out.push({ kind: 'revert', reason });
   }
 
@@ -3281,7 +4050,11 @@ export class Analyzer {
     if (e && (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node))) {
       this.diags.error(node, 'JETH206', `Error(string) message must be a string, got ${displayName(e.type)}`);
     } else {
-      this.diags.error(node, 'JETH123', 'revert/require reason must be a string (literal or value) or a custom error constructor');
+      this.diags.error(
+        node,
+        'JETH123',
+        'revert/require reason must be a string (literal or value) or a custom error constructor',
+      );
     }
     return undefined;
   }
@@ -3294,7 +4067,11 @@ export class Analyzer {
       return undefined;
     }
     if (node.arguments.length !== decl.params.length) {
-      this.diags.error(node, 'JETH130', `error '${name}' expects ${decl.params.length} argument(s), got ${node.arguments.length}`);
+      this.diags.error(
+        node,
+        'JETH130',
+        `error '${name}' expects ${decl.params.length} argument(s), got ${node.arguments.length}`,
+      );
       return undefined;
     }
     const args: Expr[] = [];
@@ -3326,7 +4103,9 @@ export class Analyzer {
     method: string,
     op: 'call' | 'staticcall',
     isTry: boolean,
-  ): { data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[]; decode?: { types: JethType[]; tuple: boolean } } | undefined {
+  ):
+    | { data: Expr; value?: Expr; gas?: Expr; checks: SuccessCheck[]; decode?: { types: JethType[]; tuple: boolean } }
+    | undefined {
     if (node.arguments.length !== 1 || !ts.isObjectLiteralExpression(node.arguments[0]!)) {
       this.diags.error(node, 'JETH300', `${method}(...) takes a single object literal { data, ... }`);
       return undefined;
@@ -3335,10 +4114,16 @@ export class Analyzer {
     const fields = new Map<string, ts.Expression>();
     for (const p of obj.properties) {
       if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
-        if (fields.has(p.name.text)) { this.diags.error(p.name, 'JETH301', `duplicate field '${p.name.text}'`); return undefined; }
+        if (fields.has(p.name.text)) {
+          this.diags.error(p.name, 'JETH301', `duplicate field '${p.name.text}'`);
+          return undefined;
+        }
         fields.set(p.name.text, p.initializer);
       } else if (ts.isShorthandPropertyAssignment(p)) {
-        if (fields.has(p.name.text)) { this.diags.error(p.name, 'JETH301', `duplicate field '${p.name.text}'`); return undefined; }
+        if (fields.has(p.name.text)) {
+          this.diags.error(p.name, 'JETH301', `duplicate field '${p.name.text}'`);
+          return undefined;
+        }
         fields.set(p.name.text, p.name);
       } else {
         this.diags.error(p, 'JETH301', `${method}(...) options must be plain 'field: value' members`);
@@ -3347,29 +4132,57 @@ export class Analyzer {
     }
     const allowed = new Set(['data', 'gas']);
     if (op === 'call') allowed.add('value'); // staticcall cannot send value
-    if (!isTry) { allowed.add('success'); allowed.add('decode'); } // decode/success only on the checked forms
+    if (!isTry) {
+      allowed.add('success');
+      allowed.add('decode');
+    } // decode/success only on the checked forms
     for (const k of fields.keys()) {
       if (!allowed.has(k)) {
         // give a precise message for the structural rules.
-        if (k === 'value' && op === 'staticcall') this.diags.error(obj, 'JETH302', `staticcall cannot send value (remove 'value')`);
-        else if (k === 'success' && isTry) this.diags.error(obj, 'JETH303', `${method}(...) is the raw escape hatch and takes no 'success' (handle [ok, ret] yourself)`);
-        else if (k === 'decode' && isTry) this.diags.error(obj, 'JETH303', `${method}(...) is the raw escape hatch and takes no 'decode' (decode the [ok, ret] bytes yourself)`);
-        else this.diags.error(obj, 'JETH301', `${method}(...): unknown option '${k}' (allowed: ${[...allowed].join(', ')})`);
+        if (k === 'value' && op === 'staticcall')
+          this.diags.error(obj, 'JETH302', `staticcall cannot send value (remove 'value')`);
+        else if (k === 'success' && isTry)
+          this.diags.error(
+            obj,
+            'JETH303',
+            `${method}(...) is the raw escape hatch and takes no 'success' (handle [ok, ret] yourself)`,
+          );
+        else if (k === 'decode' && isTry)
+          this.diags.error(
+            obj,
+            'JETH303',
+            `${method}(...) is the raw escape hatch and takes no 'decode' (decode the [ok, ret] bytes yourself)`,
+          );
+        else
+          this.diags.error(
+            obj,
+            'JETH301',
+            `${method}(...): unknown option '${k}' (allowed: ${[...allowed].join(', ')})`,
+          );
         return undefined;
       }
     }
     const dataNode = fields.get('data');
-    if (!dataNode) { this.diags.error(obj, 'JETH304', `${method}(...) requires a 'data' (bytes) field`); return undefined; }
+    if (!dataNode) {
+      this.diags.error(obj, 'JETH304', `${method}(...) requires a 'data' (bytes) field`);
+      return undefined;
+    }
     const data = this.checkExpr(dataNode, BYTES);
     if (!data) return undefined;
-    if (data.type.kind !== 'bytes') { this.diags.error(dataNode, 'JETH305', `${method}(...) 'data' must be bytes, got ${displayName(data.type)}`); return undefined; }
+    if (data.type.kind !== 'bytes') {
+      this.diags.error(dataNode, 'JETH305', `${method}(...) 'data' must be bytes, got ${displayName(data.type)}`);
+      return undefined;
+    }
     let value: Expr | undefined;
     if (op === 'call') {
       const vNode = fields.get('value');
       if (vNode) {
         const v = this.checkExpr(vNode, U256);
         if (!v) return undefined;
-        if (!isInteger(v.type)) { this.diags.error(vNode, 'JETH306', `${method}(...) 'value' must be an integer, got ${displayName(v.type)}`); return undefined; }
+        if (!isInteger(v.type)) {
+          this.diags.error(vNode, 'JETH306', `${method}(...) 'value' must be an integer, got ${displayName(v.type)}`);
+          return undefined;
+        }
         value = this.coerce(v, U256, vNode);
       }
     }
@@ -3378,18 +4191,35 @@ export class Analyzer {
     if (gNode) {
       const g = this.checkExpr(gNode, U256);
       if (!g) return undefined;
-      if (!isInteger(g.type)) { this.diags.error(gNode, 'JETH306', `${method}(...) 'gas' must be an integer, got ${displayName(g.type)}`); return undefined; }
+      if (!isInteger(g.type)) {
+        this.diags.error(gNode, 'JETH306', `${method}(...) 'gas' must be an integer, got ${displayName(g.type)}`);
+        return undefined;
+      }
       gas = this.coerce(g, U256, gNode);
     }
     // success checks (checked forms only). A single { condition, revert } OR an array of them.
     const checks: SuccessCheck[] = [];
     if (!isTry) {
       const sNode = fields.get('success');
-      if (!sNode) { this.diags.error(obj, 'JETH307', `${method}(...) requires a 'success' field (one { condition, revert } object or an array of them)`); return undefined; }
+      if (!sNode) {
+        this.diags.error(
+          obj,
+          'JETH307',
+          `${method}(...) requires a 'success' field (one { condition, revert } object or an array of them)`,
+        );
+        return undefined;
+      }
       const entries: ts.Expression[] = ts.isArrayLiteralExpression(sNode)
         ? sNode.elements.filter((el): el is ts.Expression => !ts.isOmittedExpression(el))
         : [sNode];
-      if (entries.length === 0) { this.diags.error(sNode, 'JETH307', `${method}(...) 'success' must contain at least one { condition, revert } entry`); return undefined; }
+      if (entries.length === 0) {
+        this.diags.error(
+          sNode,
+          'JETH307',
+          `${method}(...) 'success' must contain at least one { condition, revert } entry`,
+        );
+        return undefined;
+      }
       for (const entry of entries) {
         const c = this.checkSuccessEntry(entry, method);
         if (!c) return undefined;
@@ -3405,12 +4235,29 @@ export class Analyzer {
       if (decNode) {
         const tuple = ts.isArrayLiteralExpression(decNode);
         const typeExprs = tuple ? [...(decNode as ts.ArrayLiteralExpression).elements] : [decNode];
-        if (tuple && typeExprs.length < 1) { this.diags.error(decNode, 'JETH321', `${method}(...) 'decode' tuple type list must have at least one type`); return undefined; }
+        if (tuple && typeExprs.length < 1) {
+          this.diags.error(decNode, 'JETH321', `${method}(...) 'decode' tuple type list must have at least one type`);
+          return undefined;
+        }
         const types: JethType[] = [];
         for (const te of typeExprs) {
           const t = this.resolveTypeExpr(te as ts.Expression);
-          if (!t) { this.diags.error(te, 'JETH321', `${method}(...) 'decode' must be a type name, \`T[]\`, \`Arr<T, N>\`, or a tuple \`[T1, T2, ...]\` of those`); return undefined; }
-          if (!this.decodeSupported(t)) { this.diags.error(te, 'JETH322', `${method}(...) 'decode' does not support decoding to '${displayName(t)}' yet (supported: value types, bytes, string, T[], Arr<T, N>, and structs of those)`); return undefined; }
+          if (!t) {
+            this.diags.error(
+              te,
+              'JETH321',
+              `${method}(...) 'decode' must be a type name, \`T[]\`, \`Arr<T, N>\`, or a tuple \`[T1, T2, ...]\` of those`,
+            );
+            return undefined;
+          }
+          if (!this.decodeSupported(t)) {
+            this.diags.error(
+              te,
+              'JETH322',
+              `${method}(...) 'decode' does not support decoding to '${displayName(t)}' yet (supported: value types, bytes, string, T[], Arr<T, N>, and structs of those)`,
+            );
+            return undefined;
+          }
           types.push(t);
         }
         decode = { types, tuple };
@@ -3421,26 +4268,51 @@ export class Analyzer {
 
   /** One success entry `{ condition: <bool with this.ok/this.data>, revert: "msg" | E(args) }`. */
   private checkSuccessEntry(entry: ts.Expression, method: string): SuccessCheck | undefined {
-    if (!ts.isObjectLiteralExpression(entry)) { this.diags.error(entry, 'JETH308', `${method}(...) success entry must be an object { condition, revert }`); return undefined; }
+    if (!ts.isObjectLiteralExpression(entry)) {
+      this.diags.error(entry, 'JETH308', `${method}(...) success entry must be an object { condition, revert }`);
+      return undefined;
+    }
     let condNode: ts.Expression | undefined;
     let revertNode: ts.Expression | undefined;
     for (const p of entry.properties) {
       if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
         if (p.name.text === 'condition') condNode = p.initializer;
         else if (p.name.text === 'revert') revertNode = p.initializer;
-        else { this.diags.error(p.name, 'JETH308', `success entry: unknown field '${p.name.text}' (allowed: condition, revert)`); return undefined; }
-      } else { this.diags.error(p, 'JETH308', 'success entry options must be plain `condition:` / `revert:` members'); return undefined; }
+        else {
+          this.diags.error(
+            p.name,
+            'JETH308',
+            `success entry: unknown field '${p.name.text}' (allowed: condition, revert)`,
+          );
+          return undefined;
+        }
+      } else {
+        this.diags.error(p, 'JETH308', 'success entry options must be plain `condition:` / `revert:` members');
+        return undefined;
+      }
     }
-    if (!condNode) { this.diags.error(entry, 'JETH308', 'success entry is missing `condition`'); return undefined; }
-    if (!revertNode) { this.diags.error(entry, 'JETH308', 'success entry is missing `revert`'); return undefined; }
+    if (!condNode) {
+      this.diags.error(entry, 'JETH308', 'success entry is missing `condition`');
+      return undefined;
+    }
+    if (!revertNode) {
+      this.diags.error(entry, 'JETH308', 'success entry is missing `revert`');
+      return undefined;
+    }
     // Bind `this.ok` (bool) + `this.data` (bytes) ONLY while checking the condition; restore after so
     // they never leak. Nested calls are not expected, but save/restore makes it safe anyway.
     const saved = this.callResultBindings;
-    this.callResultBindings = new Map<string, JethType>([['ok', BOOL], ['data', BYTES]]);
+    this.callResultBindings = new Map<string, JethType>([
+      ['ok', BOOL],
+      ['data', BYTES],
+    ]);
     const cond = this.checkExpr(condNode, BOOL);
     this.callResultBindings = saved;
     if (!cond) return undefined;
-    if (cond.type.kind !== 'bool') { this.diags.error(condNode, 'JETH309', `success condition must be bool, got ${displayName(cond.type)}`); return undefined; }
+    if (cond.type.kind !== 'bool') {
+      this.diags.error(condNode, 'JETH309', `success condition must be bool, got ${displayName(cond.type)}`);
+      return undefined;
+    }
     const reason = this.checkRevertReason(revertNode);
     if (!reason) return undefined;
     return { cond, reason };
@@ -3465,11 +4337,24 @@ export class Analyzer {
     // mutability: a `call` may mutate callee/this state -> non-view; a `staticcall` is read-only (env).
     if (op === 'call') this.currentWritesState = true;
     else this.currentReadsEnv = true;
-    const expr: Expr = { kind: 'extCall', type: BYTES, op, addr: recv, data: shape.data, value: shape.value, gas: shape.gas, checks: shape.checks };
+    const expr: Expr = {
+      kind: 'extCall',
+      type: BYTES,
+      op,
+      addr: recv,
+      data: shape.data,
+      value: shape.value,
+      gas: shape.gas,
+      checks: shape.checks,
+    };
     if (shape.decode) {
       // `decode: [T1, ...]` yields a tuple; it must be destructured (handled by resolveCallDecodeTuple).
       if (shape.decode.tuple) {
-        this.diags.error(node, 'JETH323', `a multi-type ${method}(...) 'decode' yields a tuple; bind it with a destructuring \`let [a, b] = ${method}(...)\``);
+        this.diags.error(
+          node,
+          'JETH323',
+          `a multi-type ${method}(...) 'decode' yields a tuple; bind it with a destructuring \`let [a, b] = ${method}(...)\``,
+        );
         return undefined;
       }
       // `decode: T` yields one value: wrap the call's bytes result in the same abi.decode codec.
@@ -3490,7 +4375,9 @@ export class Analyzer {
    *  Returns the lowered extCall expr (bubble + codeGuard set) plus the declared return shape, or
    *  'handled' when the node IS an interface call/wrapper but is misused (a precise diagnostic was
    *  emitted; stop), or undefined when `node` is not an interface call (let other handling decide). */
-  private resolveInterfaceCall(node: ts.Expression): { call: Expr & { kind: 'extCall' }; returnType: JethType; returnTypes?: JethType[] } | 'handled' | undefined {
+  private resolveInterfaceCall(
+    node: ts.Expression,
+  ): { call: Expr & { kind: 'extCall' }; returnType: JethType; returnTypes?: JethType[] } | 'handled' | undefined {
     // shape: a CallExpression whose callee is `IFoo(addr [, opts]).method` (a PropertyAccess whose base
     // is the interface wrapper call). The bare wrapper `IFoo(addr)` (no .method() applied) is rejected
     // separately by checkExpr (an interface value is not usable on its own).
@@ -3504,13 +4391,21 @@ export class Analyzer {
 
     // ---- the wrapper: IFoo(addr) or IFoo(addr, { value?, gas? }) ----
     if (wrapper.arguments.length < 1 || wrapper.arguments.length > 2) {
-      this.diags.error(wrapper, 'JETH349', `${ifaceName}(...) takes an address and an optional { value?, gas? } options object`);
+      this.diags.error(
+        wrapper,
+        'JETH349',
+        `${ifaceName}(...) takes an address and an optional { value?, gas? } options object`,
+      );
       return 'handled';
     }
     const addr = this.checkExpr(wrapper.arguments[0]!, ADDRESS);
     if (!addr) return 'handled';
     if (addr.type.kind !== 'address') {
-      this.diags.error(wrapper.arguments[0]!, 'JETH350', `${ifaceName}(...) requires an address, got ${displayName(addr.type)}`);
+      this.diags.error(
+        wrapper.arguments[0]!,
+        'JETH350',
+        `${ifaceName}(...) requires an address, got ${displayName(addr.type)}`,
+      );
       return 'handled';
     }
     const recv = this.coerce(addr, ADDRESS, wrapper.arguments[0]!);
@@ -3521,7 +4416,8 @@ export class Analyzer {
       this.diags.error(pa, 'JETH351', `interface '${ifaceName}' has no method '${methodName}'`);
       return 'handled';
     }
-    const op: 'call' | 'staticcall' = (method.mutability === 'view' || method.mutability === 'pure') ? 'staticcall' : 'call';
+    const op: 'call' | 'staticcall' =
+      method.mutability === 'view' || method.mutability === 'pure' ? 'staticcall' : 'call';
 
     // ---- wrapper options: { value?, gas? } (value only on a @payable method) ----
     let value: Expr | undefined;
@@ -3535,10 +4431,16 @@ export class Analyzer {
       const fields = new Map<string, ts.Expression>();
       for (const p of optNode.properties) {
         if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
-          if (fields.has(p.name.text)) { this.diags.error(p.name, 'JETH352', `duplicate option '${p.name.text}'`); return 'handled'; }
+          if (fields.has(p.name.text)) {
+            this.diags.error(p.name, 'JETH352', `duplicate option '${p.name.text}'`);
+            return 'handled';
+          }
           fields.set(p.name.text, p.initializer);
         } else if (ts.isShorthandPropertyAssignment(p)) {
-          if (fields.has(p.name.text)) { this.diags.error(p.name, 'JETH352', `duplicate option '${p.name.text}'`); return 'handled'; }
+          if (fields.has(p.name.text)) {
+            this.diags.error(p.name, 'JETH352', `duplicate option '${p.name.text}'`);
+            return 'handled';
+          }
           fields.set(p.name.text, p.name);
         } else {
           this.diags.error(p, 'JETH352', `${ifaceName}(...) options must be plain 'field: value' members`);
@@ -3555,26 +4457,44 @@ export class Analyzer {
       if (vNode) {
         // solc: "Cannot set option value on a non-payable function type".
         if (method.mutability !== 'payable') {
-          this.diags.error(vNode, 'JETH353', `cannot set option 'value' on the non-payable method '${ifaceName}.${methodName}'`);
+          this.diags.error(
+            vNode,
+            'JETH353',
+            `cannot set option 'value' on the non-payable method '${ifaceName}.${methodName}'`,
+          );
           return 'handled';
         }
         const v = this.checkExpr(vNode, U256);
         if (!v) return 'handled';
-        if (!isInteger(v.type)) { this.diags.error(vNode, 'JETH306', `${ifaceName}(...) 'value' must be an integer, got ${displayName(v.type)}`); return 'handled'; }
+        if (!isInteger(v.type)) {
+          this.diags.error(
+            vNode,
+            'JETH306',
+            `${ifaceName}(...) 'value' must be an integer, got ${displayName(v.type)}`,
+          );
+          return 'handled';
+        }
         value = this.coerce(v, U256, vNode);
       }
       const gNode = fields.get('gas');
       if (gNode) {
         const g = this.checkExpr(gNode, U256);
         if (!g) return 'handled';
-        if (!isInteger(g.type)) { this.diags.error(gNode, 'JETH306', `${ifaceName}(...) 'gas' must be an integer, got ${displayName(g.type)}`); return 'handled'; }
+        if (!isInteger(g.type)) {
+          this.diags.error(gNode, 'JETH306', `${ifaceName}(...) 'gas' must be an integer, got ${displayName(g.type)}`);
+          return 'handled';
+        }
         gas = this.coerce(g, U256, gNode);
       }
     }
 
     // ---- the arguments: check + coerce to the method's param types ----
     if (node.arguments.length !== method.params.length) {
-      this.diags.error(node, 'JETH354', `'${ifaceName}.${methodName}' takes ${method.params.length} argument(s), got ${node.arguments.length}`);
+      this.diags.error(
+        node,
+        'JETH354',
+        `'${ifaceName}.${methodName}' takes ${method.params.length} argument(s), got ${node.arguments.length}`,
+      );
       return 'handled';
     }
     const args: Expr[] = [];
@@ -3584,7 +4504,11 @@ export class Analyzer {
       if (!a) return 'handled';
       if (pt.kind === 'struct') {
         if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
-          this.diags.error(node.arguments[i]!, 'JETH355', `argument ${i + 1} of '${ifaceName}.${methodName}' expects ${displayName(pt)}, got ${displayName(a.type)}`);
+          this.diags.error(
+            node.arguments[i]!,
+            'JETH355',
+            `argument ${i + 1} of '${ifaceName}.${methodName}' expects ${displayName(pt)}, got ${displayName(a.type)}`,
+          );
           return 'handled';
         }
         args.push(a);
@@ -3595,7 +4519,11 @@ export class Analyzer {
 
     // calldata = selector ++ abi.encode(args): a bytes value via the abiEncode codec with a precomputed
     // bytes4 selector literal (left-aligned in the high 4 bytes, exactly like abi.encodeWithSelector).
-    const selExpr: Expr = { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + method.selector) << 224n };
+    const selExpr: Expr = {
+      kind: 'literalInt',
+      type: { kind: 'bytesN', size: 4 },
+      value: BigInt('0x' + method.selector) << 224n,
+    };
     const data: Expr = { kind: 'abiEncode', type: BYTES, packed: false, args, selector: selExpr };
 
     // mutability: a CALL may mutate callee/this state (non-view); a STATICCALL is a read-only env effect.
@@ -3603,7 +4531,16 @@ export class Analyzer {
     else this.currentReadsEnv = true;
 
     const call: Expr & { kind: 'extCall' } = {
-      kind: 'extCall', type: BYTES, op, addr: recv, data, value, gas, checks: [], bubble: true, codeGuard: true,
+      kind: 'extCall',
+      type: BYTES,
+      op,
+      addr: recv,
+      data,
+      value,
+      gas,
+      checks: [],
+      bubble: true,
+      codeGuard: true,
     };
     return { call, returnType: method.returnType, returnTypes: method.returnTypes };
   }
@@ -3615,7 +4552,10 @@ export class Analyzer {
     const method = node.expression.name.text;
     if (method !== 'tryCall' && method !== 'tryStaticcall') return undefined;
     const recv = this.externalCallReceiver(node);
-    if (!recv) { this.diags.error(node, 'JETH310', `${method}(...) requires an address receiver`); return undefined; }
+    if (!recv) {
+      this.diags.error(node, 'JETH310', `${method}(...) requires an address receiver`);
+      return undefined;
+    }
     const op: 'call' | 'staticcall' = method === 'tryStaticcall' ? 'staticcall' : 'call';
     const shape = this.checkExternalCallShape(node, method, op, true);
     if (!shape) return undefined;
@@ -3632,7 +4572,9 @@ export class Analyzer {
    *  `<bytes>.decode([...])` sugar produces). Returns the source + component types, `'handled'` when the
    *  node IS an address call/staticcall but is misused (a precise diagnostic was emitted; stop), or
    *  undefined when the node is not an external call (let other handling decide). */
-  private resolveCallDecodeTuple(node: ts.Expression): { source: DestructureSource; types: JethType[] } | 'handled' | undefined {
+  private resolveCallDecodeTuple(
+    node: ts.Expression,
+  ): { source: DestructureSource; types: JethType[] } | 'handled' | undefined {
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
     const method = node.expression.name.text;
     if (method !== 'call' && method !== 'staticcall') return undefined;
@@ -3642,16 +4584,33 @@ export class Analyzer {
     const shape = this.checkExternalCallShape(node, method, op, false);
     if (!shape) return 'handled'; // shape already emitted a precise diagnostic
     if (!shape.decode) {
-      this.diags.error(node, 'JETH323', `${method}(...) yields a single bytes value; to destructure, add a 'decode: [T1, ...]' tuple to the options (or bind the bytes with 'let x = ...')`);
+      this.diags.error(
+        node,
+        'JETH323',
+        `${method}(...) yields a single bytes value; to destructure, add a 'decode: [T1, ...]' tuple to the options (or bind the bytes with 'let x = ...')`,
+      );
       return 'handled';
     }
     if (!shape.decode.tuple) {
-      this.diags.error(node, 'JETH323', `${method}(...) 'decode' is a single type, which yields one value; bind it with 'let x = ...' (use 'decode: [T1, ...]' to destructure)`);
+      this.diags.error(
+        node,
+        'JETH323',
+        `${method}(...) 'decode' is a single type, which yields one value; bind it with 'let x = ...' (use 'decode: [T1, ...]' to destructure)`,
+      );
       return 'handled';
     }
     if (op === 'call') this.currentWritesState = true;
     else this.currentReadsEnv = true;
-    const expr: Expr = { kind: 'extCall', type: BYTES, op, addr: recv, data: shape.data, value: shape.value, gas: shape.gas, checks: shape.checks };
+    const expr: Expr = {
+      kind: 'extCall',
+      type: BYTES,
+      op,
+      addr: recv,
+      data: shape.data,
+      value: shape.value,
+      gas: shape.gas,
+      checks: shape.checks,
+    };
     return { source: { kind: 'abiDecode', data: expr, types: shape.decode.types }, types: shape.decode.types };
   }
 
@@ -3664,14 +4623,22 @@ export class Analyzer {
     let dataNode: ts.Expression;
     let typeNode: ts.Expression;
     if (
-      ts.isIdentifier(pa.expression) && pa.expression.text === 'abi' &&
-      !this.isVisibleLocal('abi') && !this.stateByName.has('abi') && pa.name.text === 'decode'
+      ts.isIdentifier(pa.expression) &&
+      pa.expression.text === 'abi' &&
+      !this.isVisibleLocal('abi') &&
+      !this.stateByName.has('abi') &&
+      pa.name.text === 'decode'
     ) {
       // abi.decode(data, [T1, ...])
       if (node.arguments.length !== 2 || !ts.isArrayLiteralExpression(node.arguments[1]!)) return undefined;
       dataNode = node.arguments[0]!;
       typeNode = node.arguments[1]!;
-    } else if (pa.name.text === 'decode' && node.arguments.length === 1 && ts.isArrayLiteralExpression(node.arguments[0]!) && this.isBytesValueExpr(pa.expression)) {
+    } else if (
+      pa.name.text === 'decode' &&
+      node.arguments.length === 1 &&
+      ts.isArrayLiteralExpression(node.arguments[0]!) &&
+      this.isBytesValueExpr(pa.expression)
+    ) {
       // <bytes>.decode([T1, ...])
       dataNode = pa.expression;
       typeNode = node.arguments[0]!;
@@ -3685,10 +4652,20 @@ export class Analyzer {
 
   /** `revertWith(b)`: bubble raw bytes as the revert payload (revert(add(b,0x20), mload(b))). */
   private checkRevertWith(call: ts.CallExpression, out: Stmt[]): void {
-    if (call.arguments.length !== 1) { this.diags.error(call, 'JETH312', 'revertWith(...) takes exactly one bytes argument'); return; }
+    if (call.arguments.length !== 1) {
+      this.diags.error(call, 'JETH312', 'revertWith(...) takes exactly one bytes argument');
+      return;
+    }
     const v = this.checkExpr(call.arguments[0]!, BYTES);
     if (!v) return;
-    if (v.type.kind !== 'bytes') { this.diags.error(call.arguments[0]!, 'JETH313', `revertWith(...) requires a bytes argument, got ${displayName(v.type)}`); return; }
+    if (v.type.kind !== 'bytes') {
+      this.diags.error(
+        call.arguments[0]!,
+        'JETH313',
+        `revertWith(...) requires a bytes argument, got ${displayName(v.type)}`,
+      );
+      return;
+    }
     out.push({ kind: 'revertWith', value: v });
   }
 
@@ -3714,12 +4691,20 @@ export class Analyzer {
     // it through helpers: a @view/@pure/@read function that TRANSITIVELY emits is rejected too.
     this.currentWritesState = true;
     if (this.currentMutability === 'view' || this.currentMutability === 'pure') {
-      this.diags.error(call, 'JETH149', `cannot emit an event in a @${this.currentMutability} function (a log is a state change)`);
+      this.diags.error(
+        call,
+        'JETH149',
+        `cannot emit an event in a @${this.currentMutability} function (a log is a state change)`,
+      );
     }
     // Resolve the overload: by argument count, then (for same-arity overloads) by a trial type-match.
     const byArity = candidates.filter((c) => c.params.length === inner.arguments.length);
     if (byArity.length === 0) {
-      this.diags.error(inner, 'JETH148', `event '${inner.expression.text}' has no overload taking ${inner.arguments.length} argument(s)`);
+      this.diags.error(
+        inner,
+        'JETH148',
+        `event '${inner.expression.text}' has no overload taking ${inner.arguments.length} argument(s)`,
+      );
       return;
     }
     let ev: EventIR;
@@ -3728,7 +4713,13 @@ export class Analyzer {
       const viable = byArity.filter((c) => this.eventArgsMatch(inner, c));
       if (viable.length === 1) ev = viable[0]!;
       else {
-        this.diags.error(inner, viable.length === 0 ? 'JETH148' : 'JETH901', viable.length === 0 ? `no overload of event '${inner.expression.text}' matches the argument types` : `emit of '${inner.expression.text}' is ambiguous (matches ${viable.length} overloads)`);
+        this.diags.error(
+          inner,
+          viable.length === 0 ? 'JETH148' : 'JETH901',
+          viable.length === 0
+            ? `no overload of event '${inner.expression.text}' matches the argument types`
+            : `emit of '${inner.expression.text}' is ambiguous (matches ${viable.length} overloads)`,
+        );
         return;
       }
     }
@@ -3746,16 +4737,23 @@ export class Analyzer {
    *  (diagnostics, effect flags) - used for same-arity event-overload resolution. */
   private eventArgsMatch(inner: ts.CallExpression, ev: EventIR): boolean {
     const diagLen = this.diags.items.length;
-    const rs = this.currentReadsState, ws = this.currentWritesState, re = this.currentReadsEnv;
+    const rs = this.currentReadsState,
+      ws = this.currentWritesState,
+      re = this.currentReadsEnv;
     let ok = true;
     for (let i = 0; i < ev.params.length; i++) {
       const a = this.checkExpr(inner.arguments[i]!, ev.params[i]!.type);
-      if (!a) { ok = false; break; }
+      if (!a) {
+        ok = false;
+        break;
+      }
       this.coerce(a, ev.params[i]!.type, inner.arguments[i]!);
     }
     ok = ok && this.diags.items.length === diagLen;
     this.diags.items.length = diagLen;
-    this.currentReadsState = rs; this.currentWritesState = ws; this.currentReadsEnv = re;
+    this.currentReadsState = rs;
+    this.currentWritesState = ws;
+    this.currentReadsEnv = re;
     return ok;
   }
 
@@ -3791,7 +4789,11 @@ export class Analyzer {
         // `return d` reuse the dynamic-struct tuple encoder.
         if (this.isSupportedDynStructLocal(declared)) {
           if (!decl.initializer) {
-            this.diags.error(decl, 'JETH200', `a dynamic-field struct memory local must be initialized (e.g. let d: ${displayName(declared)} = ${(declared as JethType & { kind: 'struct' }).name}(...))`);
+            this.diags.error(
+              decl,
+              'JETH200',
+              `a dynamic-field struct memory local must be initialized (e.g. let d: ${displayName(declared)} = ${(declared as JethType & { kind: 'struct' }).name}(...))`,
+            );
             return;
           }
           const e = this.checkExpr(decl.initializer, declared);
@@ -3801,25 +4803,49 @@ export class Analyzer {
           // placeRead) COPIED into a fresh image; a calldata struct param (cdDynStructValue)
           // decoded into a fresh image; or another dynamic-struct memory local (ALIAS).
           const okInit =
-            e.kind === 'structNew' || e.kind === 'structValue' || e.kind === 'mapStorageValue' ||
-            e.kind === 'structArrayElem' || e.kind === 'cdDynStructValue' || e.kind === 'memDynStructValue' ||
+            e.kind === 'structNew' ||
+            e.kind === 'structValue' ||
+            e.kind === 'mapStorageValue' ||
+            e.kind === 'structArrayElem' ||
+            e.kind === 'cdDynStructValue' ||
+            e.kind === 'memDynStructValue' ||
             e.kind === 'ternary' ||
             (e.kind === 'call' && e.type.kind === 'struct') ||
             (e.kind === 'placeRead' && e.type.kind === 'struct');
           if (!okInit) {
-            this.diags.error(decl.initializer, 'JETH200', `a dynamic-field struct memory local must be initialized from a constructor ${(declared as JethType & { kind: 'struct' }).name}(...), a storage struct (this.s / this.m[k] / this.arr[i]), a calldata struct parameter, or another struct local`);
+            this.diags.error(
+              decl.initializer,
+              'JETH200',
+              `a dynamic-field struct memory local must be initialized from a constructor ${(declared as JethType & { kind: 'struct' }).name}(...), a storage struct (this.s / this.m[k] / this.arr[i]), a calldata struct parameter, or another struct local`,
+            );
             return;
           }
-          if (e.type.kind !== 'struct' || (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name) {
-            this.diags.error(decl.initializer, 'JETH085', `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`);
+          if (
+            e.type.kind !== 'struct' ||
+            (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name
+          ) {
+            this.diags.error(
+              decl.initializer,
+              'JETH085',
+              `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`,
+            );
             return;
           }
           // a struct built FROM a calldata struct param whose dynamic-array field has NON-value
           // elements (T[][], string[], DynStruct[]) would need a recursive calldata-tail decode -
           // a later step. A dynamic VALUE-element array field (u256[], ...) decodes via abiEncFromCd
           // (per-element validation, byte-identical to solc's calldata->memory copy).
-          if (e.kind === 'cdDynStructValue' && (declared as JethType & { kind: 'struct' }).fields.some((f) => f.type.kind === 'array' && f.type.length === undefined && !isStaticValueType(f.type.element))) {
-            this.diags.error(decl.initializer, 'JETH200', `constructing a memory struct with a dynamic-array field of non-value elements from a calldata struct parameter is not supported yet (use a constructor, a storage struct, or another struct local)`);
+          if (
+            e.kind === 'cdDynStructValue' &&
+            (declared as JethType & { kind: 'struct' }).fields.some(
+              (f) => f.type.kind === 'array' && f.type.length === undefined && !isStaticValueType(f.type.element),
+            )
+          ) {
+            this.diags.error(
+              decl.initializer,
+              'JETH200',
+              `constructing a memory struct with a dynamic-array field of non-value elements from a calldata struct parameter is not supported yet (use a constructor, a storage struct, or another struct local)`,
+            );
             return;
           }
           this.declareLocal(decl.name.text, declared);
@@ -3827,11 +4853,19 @@ export class Analyzer {
           out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
           return;
         }
-        this.diags.error(decl, 'JETH200', `local variables of dynamic struct type ${displayName(declared)} are not supported yet`);
+        this.diags.error(
+          decl,
+          'JETH200',
+          `local variables of dynamic struct type ${displayName(declared)} are not supported yet`,
+        );
         return;
       }
       if (!decl.initializer) {
-        this.diags.error(decl, 'JETH200', `a struct memory local must be initialized (e.g. let p: ${displayName(declared)} = ${(declared as JethType & { kind: 'struct' }).name}(...))`);
+        this.diags.error(
+          decl,
+          'JETH200',
+          `a struct memory local must be initialized (e.g. let p: ${displayName(declared)} = ${(declared as JethType & { kind: 'struct' }).name}(...))`,
+        );
         return;
       }
       const e = this.checkExpr(decl.initializer, declared);
@@ -3839,13 +4873,36 @@ export class Analyzer {
       // Allowed sources: a constructor StructName(...), another memory struct (ALIAS), a
       // struct-returning internal call, a whole STORAGE struct (this.s -> fresh COPY), or a
       // STATIC struct calldata param (q -> fresh COPY). The struct types must match.
-      const okInit = e.kind === 'structNew' || e.kind === 'memAggregate' || (e.kind === 'call' && e.type.kind === 'struct') || e.kind === 'structValue' || e.kind === 'cdAggregateValue' || e.kind === 'ternary' || e.kind === 'mapStorageValue' || e.kind === 'structArrayElem';
+      const okInit =
+        e.kind === 'structNew' ||
+        e.kind === 'memAggregate' ||
+        (e.kind === 'call' && e.type.kind === 'struct') ||
+        e.kind === 'structValue' ||
+        e.kind === 'cdAggregateValue' ||
+        e.kind === 'ternary' ||
+        e.kind === 'mapStorageValue' ||
+        e.kind === 'structArrayElem';
       if (!okInit) {
-        this.diags.error(decl.initializer, 'JETH900', 'a struct memory local must be initialized from a constructor StructName(...), another memory struct, a struct-returning internal call, a storage struct (this.s / this.m[k] / this.arr[i]), or a struct calldata parameter');
+        this.diags.error(
+          decl.initializer,
+          'JETH900',
+          'a struct memory local must be initialized from a constructor StructName(...), another memory struct, a struct-returning internal call, a storage struct (this.s / this.m[k] / this.arr[i]), or a struct calldata parameter',
+        );
         return;
       }
-      if ((e.kind === 'structValue' || e.kind === 'cdAggregateValue' || e.kind === 'mapStorageValue' || e.kind === 'structArrayElem') && (e.type.kind !== 'struct' || (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)) {
-        this.diags.error(decl.initializer, 'JETH085', `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`);
+      if (
+        (e.kind === 'structValue' ||
+          e.kind === 'cdAggregateValue' ||
+          e.kind === 'mapStorageValue' ||
+          e.kind === 'structArrayElem') &&
+        (e.type.kind !== 'struct' ||
+          (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)
+      ) {
+        this.diags.error(
+          decl.initializer,
+          'JETH085',
+          `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`,
+        );
         return;
       }
       this.declareLocal(decl.name.text, declared);
@@ -3863,15 +4920,30 @@ export class Analyzer {
         return;
       }
       if (!decl.initializer) {
-        this.diags.error(decl, 'JETH200', `a fixed-array memory local must be initialized (e.g. let a: ${displayName(declared)} = [...])`);
+        this.diags.error(
+          decl,
+          'JETH200',
+          `a fixed-array memory local must be initialized (e.g. let a: ${displayName(declared)} = [...])`,
+        );
         return;
       }
       const e = this.checkExpr(decl.initializer, declared);
       if (!e) return;
       const fromStorage = e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray';
-      const okInit = e.kind === 'arrayLit' || e.kind === 'memAggregate' || e.kind === 'cdAggregateValue' || e.kind === 'ternary' || e.kind === 'abiDecode' || (e.kind === 'call' && e.type.kind === 'array') || fromStorage;
+      const okInit =
+        e.kind === 'arrayLit' ||
+        e.kind === 'memAggregate' ||
+        e.kind === 'cdAggregateValue' ||
+        e.kind === 'ternary' ||
+        e.kind === 'abiDecode' ||
+        (e.kind === 'call' && e.type.kind === 'array') ||
+        fromStorage;
       if (!okInit) {
-        this.diags.error(decl.initializer, 'JETH900', `a fixed-array memory local must be initialized from a literal, another memory fixed array, a fixed-array calldata parameter, or a storage fixed array`);
+        this.diags.error(
+          decl.initializer,
+          'JETH900',
+          `a fixed-array memory local must be initialized from a literal, another memory fixed array, a fixed-array calldata parameter, or a storage fixed array`,
+        );
         return;
       }
       this.declareLocal(decl.name.text, declared);
@@ -3882,7 +4954,11 @@ export class Analyzer {
     // A value-element dynamic-array local is a MEMORY array (a pointer to [len][elems]);
     // bytes/string and aggregate-element memory locals are a later step.
     if (declared.kind === 'array' && !(declared.length === undefined && isStaticValueType(declared.element))) {
-      this.diags.error(decl, 'JETH200', `local variables of type ${displayName(declared)} are not supported yet (memory: dynamic arrays of a value element)`);
+      this.diags.error(
+        decl,
+        'JETH200',
+        `local variables of type ${displayName(declared)} are not supported yet (memory: dynamic arrays of a value element)`,
+      );
       return;
     }
     // G9: a bytes/string MEMORY local (let s: string = X). Its register holds a memory
@@ -3901,7 +4977,11 @@ export class Analyzer {
       const e = this.checkExpr(decl.initializer, declared);
       if (!e) return;
       if (!typesEqual(e.type, declared)) {
-        this.diags.error(decl.initializer, 'JETH085', `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`);
+        this.diags.error(
+          decl.initializer,
+          'JETH085',
+          `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`,
+        );
         return;
       }
       this.declareLocal(decl.name.text, declared);
@@ -3944,7 +5024,11 @@ export class Analyzer {
     // "types containing a mapping cannot be assigned"). Assigning its non-mapping fields
     // individually still works (their target type is a value, so this does not fire).
     if (this.typeHasMapping(target.type)) {
-      this.diags.error(e.left, 'JETH247', `cannot assign a whole ${displayName(target.type)} that contains a mapping (assign its non-mapping fields individually)`);
+      this.diags.error(
+        e.left,
+        'JETH247',
+        `cannot assign a whole ${displayName(target.type)} that contains a mapping (assign its non-mapping fields individually)`,
+      );
       return;
     }
     const opKind = e.operatorToken.kind;
@@ -3959,11 +5043,20 @@ export class Analyzer {
       // (u256[], address[], ...) is supported (writeStruct -> copyArrayValueIntoStorage).
       if (
         value.kind === 'structNew' &&
-        (target.kind === 'state' || target.kind === 'mapping' || target.kind === 'place' || target.kind === 'arrayElem') &&
+        (target.kind === 'state' ||
+          target.kind === 'mapping' ||
+          target.kind === 'place' ||
+          target.kind === 'arrayElem') &&
         target.type.kind === 'struct' &&
-        target.type.fields.some((f) => f.type.kind === 'array' && f.type.length === undefined && !isStaticValueType(f.type.element))
+        target.type.fields.some(
+          (f) => f.type.kind === 'array' && f.type.length === undefined && !isStaticValueType(f.type.element),
+        )
       ) {
-        this.diags.error(e.right, 'JETH200', `constructing a storage struct with a dynamic-array field of non-value elements is not supported yet (assign its fields individually: this.s.a = ...; this.s.xs.push(...))`);
+        this.diags.error(
+          e.right,
+          'JETH200',
+          `constructing a storage struct with a dynamic-array field of non-value elements is not supported yet (assign its fields individually: this.s.a = ...; this.s.xs.push(...))`,
+        );
         return;
       }
       // Eval-order: solc evaluates the RHS before the LHS location. The value-type and bytes/string
@@ -3974,7 +5067,11 @@ export class Analyzer {
       if (target.type.kind === 'struct' || target.type.kind === 'array') {
         const keyImpure = this.impureLValueKey(e.left);
         if (keyImpure) {
-          this.diags.error(keyImpure, 'JETH331', `assigning a whole ${displayName(target.type)} to an element with a side-effecting index/key would evaluate the index before the value (solc evaluates the value first); bind the index to a const first`);
+          this.diags.error(
+            keyImpure,
+            'JETH331',
+            `assigning a whole ${displayName(target.type)} to an element with a side-effecting index/key would evaluate the index before the value (solc evaluates the value first); bind the index to a const first`,
+          );
           return;
         }
       }
@@ -3990,7 +5087,11 @@ export class Analyzer {
     }
     const keyImpure = this.impureLValueKey(e.left);
     if (keyImpure) {
-      this.diags.error(keyImpure, 'JETH331', `a compound assignment to an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`);
+      this.diags.error(
+        keyImpure,
+        'JETH331',
+        `a compound assignment to an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`,
+      );
       return;
     }
     const left = this.lvalueAsExpr(target);
@@ -4010,7 +5111,11 @@ export class Analyzer {
     const target = this.checkLValue(e.left);
     if (!target) return undefined;
     if (!isStaticValueType(target.type)) {
-      this.diags.error(e, 'JETH075', `assignment in expression position is supported only for value types, not ${displayName(target.type)}`);
+      this.diags.error(
+        e,
+        'JETH075',
+        `assignment in expression position is supported only for value types, not ${displayName(target.type)}`,
+      );
       return undefined;
     }
     const opKind = e.operatorToken.kind;
@@ -4027,7 +5132,11 @@ export class Analyzer {
     }
     const keyImpure = this.impureLValueKey(e.left);
     if (keyImpure) {
-      this.diags.error(keyImpure, 'JETH331', `a compound assignment to an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`);
+      this.diags.error(
+        keyImpure,
+        'JETH331',
+        `a compound assignment to an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`,
+      );
       return undefined;
     }
     const left = this.lvalueAsExpr(target);
@@ -4050,11 +5159,18 @@ export class Analyzer {
     if (ts.isParenthesizedExpression(node)) return this.isConstDefault(node.expression);
     if (ts.isBigIntLiteral(node) || ts.isNumericLiteral(node)) return true;
     if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return true;
-    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) return this.isConstDefault(node.operand);
+    if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken)
+      return this.isConstDefault(node.operand);
     // type(T).max / type(T).min
-    if (ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min')) return this.isConstDefault(node.expression);
+    if (ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min'))
+      return this.isConstDefault(node.expression);
     // an enum member constant `Color.Red` is a compile-time constant.
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text)) return true;
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.isEnumName(node.expression.text)
+    )
+      return true;
     // a value cast / builtin over constants: address(0n), u8(255n), bytes4(0x..n), payable(0n), type(u256), Color(0n)
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const c = node.expression.text;
@@ -4085,11 +5201,18 @@ export class Analyzer {
     const params = callee.params;
     const defaults = callee.defaults ?? params.map(() => undefined);
     const provided = node.arguments;
-    if (provided.length === 1 && ts.isObjectLiteralExpression(provided[0]!) && this.looksLikeNamedArgs(provided[0] as ts.ObjectLiteralExpression, params)) {
+    if (
+      provided.length === 1 &&
+      ts.isObjectLiteralExpression(provided[0]!) &&
+      this.looksLikeNamedArgs(provided[0] as ts.ObjectLiteralExpression, params)
+    ) {
       const byName = new Map<string, ts.Expression>();
       for (const p of (provided[0] as ts.ObjectLiteralExpression).properties) {
         const key = (p.name as ts.Identifier).text;
-        if (byName.has(key)) { this.diags.error(p.name!, 'JETH253', `duplicate named argument '${key}' in call to '${name}'`); return undefined; }
+        if (byName.has(key)) {
+          this.diags.error(p.name!, 'JETH253', `duplicate named argument '${key}' in call to '${name}'`);
+          return undefined;
+        }
         byName.set(key, ts.isPropertyAssignment(p) ? p.initializer : (p.name as ts.Expression));
       }
       const out: ts.Expression[] = [];
@@ -4097,19 +5220,29 @@ export class Analyzer {
         const nm = params[i]!.name;
         if (byName.has(nm)) out.push(byName.get(nm)!);
         else if (defaults[i]) out.push(defaults[i]!);
-        else { this.diags.error(node, 'JETH254', `named call to '${name}' is missing argument '${nm}' (no default)`); return undefined; }
+        else {
+          this.diags.error(node, 'JETH254', `named call to '${name}' is missing argument '${nm}' (no default)`);
+          return undefined;
+        }
       }
       return out;
     }
     if (provided.length > params.length) {
-      this.diags.error(node, 'JETH148', `'${name}' expects at most ${params.length} argument(s), got ${provided.length}`);
+      this.diags.error(
+        node,
+        'JETH148',
+        `'${name}' expects at most ${params.length} argument(s), got ${provided.length}`,
+      );
       return undefined;
     }
     const out: ts.Expression[] = [];
     for (let i = 0; i < params.length; i++) {
       if (i < provided.length) out.push(provided[i]!);
       else if (defaults[i]) out.push(defaults[i]!);
-      else { this.diags.error(node, 'JETH148', `'${name}' is missing argument '${params[i]!.name}' (no default)`); return undefined; }
+      else {
+        this.diags.error(node, 'JETH148', `'${name}' is missing argument '${params[i]!.name}' (no default)`);
+        return undefined;
+      }
     }
     return out;
   }
@@ -4149,7 +5282,11 @@ export class Analyzer {
     const params = c.params;
     const defaults = c.defaults ?? params.map(() => undefined);
     const provided = node.arguments;
-    if (provided.length === 1 && ts.isObjectLiteralExpression(provided[0]!) && this.looksLikeNamedArgs(provided[0] as ts.ObjectLiteralExpression, params)) {
+    if (
+      provided.length === 1 &&
+      ts.isObjectLiteralExpression(provided[0]!) &&
+      this.looksLikeNamedArgs(provided[0] as ts.ObjectLiteralExpression, params)
+    ) {
       const keys = new Set<string>();
       for (const p of (provided[0] as ts.ObjectLiteralExpression).properties) keys.add((p.name as ts.Identifier).text);
       return params.every((p, i) => keys.has(p.name) || !!defaults[i]);
@@ -4164,7 +5301,9 @@ export class Analyzer {
    *  real analysis - the chosen overload's args are re-checked normally afterwards. */
   private overloadArgsMatch(node: ts.CallExpression, c: RawFunction): boolean {
     const diagLen = this.diags.items.length;
-    const rs = this.currentReadsState, ws = this.currentWritesState, re = this.currentReadsEnv;
+    const rs = this.currentReadsState,
+      ws = this.currentWritesState,
+      re = this.currentReadsEnv;
     const savedCallees = this.currentCallees;
     this.currentCallees = new Set();
     let ok = true;
@@ -4173,32 +5312,53 @@ export class Analyzer {
     else
       for (let i = 0; i < c.params.length; i++) {
         const a = this.checkExpr(argNodes[i]!, c.params[i]!.type);
-        if (!a) { ok = false; break; }
+        if (!a) {
+          ok = false;
+          break;
+        }
         this.coerce(a, c.params[i]!.type, argNodes[i]!);
       }
     ok = ok && this.diags.items.length === diagLen; // a clean check leaves no new diagnostics
     this.diags.items.length = diagLen; // discard trial diagnostics
-    this.currentReadsState = rs; this.currentWritesState = ws; this.currentReadsEnv = re;
+    this.currentReadsState = rs;
+    this.currentWritesState = ws;
+    this.currentReadsEnv = re;
     this.currentCallees = savedCallees;
     return ok;
   }
 
-  private checkInternalCall(node: ts.CallExpression, name: string, asStatement: boolean): (Expr & { kind: 'call' }) | undefined {
+  private checkInternalCall(
+    node: ts.CallExpression,
+    name: string,
+    asStatement: boolean,
+  ): (Expr & { kind: 'call' }) | undefined {
     const callee = this.resolveOverload(node, name);
     if (!callee) return undefined;
     if (callee.visibility === 'external') {
-      this.diags.error(node, 'JETH240', `cannot internally call @external function '${name}' (only internal/private/public functions are callable by name)`);
+      this.diags.error(
+        node,
+        'JETH240',
+        `cannot internally call @external function '${name}' (only internal/private/public functions are callable by name)`,
+      );
       return undefined;
     }
     if (callee.nonReentrant) {
       // The transient mutex is emitted on the EXTERNAL entry only; an internal call would bypass
       // it (or, if it did not, falsely trip the guard). Forbid it, matching how a Solidity
       // nonReentrant function is not meant to be re-entered through an internal call.
-      this.diags.error(node, 'JETH262', `cannot internally call @nonReentrant function '${name}' (the reentrancy guard protects the external entry only)`);
+      this.diags.error(
+        node,
+        'JETH262',
+        `cannot internally call @nonReentrant function '${name}' (the reentrancy guard protects the external entry only)`,
+      );
       return undefined;
     }
     if (callee.returnTypes) {
-      this.diags.error(node, 'JETH241', `internal call to a multi-value-return function '${name}' is not supported yet`);
+      this.diags.error(
+        node,
+        'JETH241',
+        `internal call to a multi-value-return function '${name}' is not supported yet`,
+      );
       return undefined;
     }
     // An aggregate (struct / fixed-array / dynamic value-array / bytes / string) param/return is
@@ -4216,18 +5376,30 @@ export class Analyzer {
       (t.kind === 'array' && t.length !== undefined && isStaticType(t)) || // a static fixed array Arr<T,N>
       (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) ||
       isBytesLike(t);
-    const paramSupported = (t: JethType): boolean => isStaticValueType(t) || (aggOK && (isMemByRef(t) || this.isSupportedDynStructLocal(t)));
+    const paramSupported = (t: JethType): boolean =>
+      isStaticValueType(t) || (aggOK && (isMemByRef(t) || this.isSupportedDynStructLocal(t)));
     for (const p of callee.params) {
       if (paramSupported(p.type)) continue;
-      const hint = isMemByRef(p.type) && !aggOK ? ' (aggregate params require the callee to be @internal or @private)' : '';
-      this.diags.error(node, 'JETH242', `internal call to '${name}' is not supported yet (parameter type ${displayName(p.type)} is not supported${hint})`);
+      const hint =
+        isMemByRef(p.type) && !aggOK ? ' (aggregate params require the callee to be @internal or @private)' : '';
+      this.diags.error(
+        node,
+        'JETH242',
+        `internal call to '${name}' is not supported yet (parameter type ${displayName(p.type)} is not supported${hint})`,
+      );
       return undefined;
     }
     const rt = callee.returnType;
-    const returnSupported = rt.kind === 'void' || isStaticValueType(rt) || (aggOK && (isMemByRef(rt) || this.isSupportedDynStructLocal(rt)));
+    const returnSupported =
+      rt.kind === 'void' || isStaticValueType(rt) || (aggOK && (isMemByRef(rt) || this.isSupportedDynStructLocal(rt)));
     if (!returnSupported) {
-      const hint = isMemByRef(rt) && !aggOK ? ' (aggregate returns require the callee to be @internal or @private)' : '';
-      this.diags.error(node, 'JETH243', `internal call to '${name}' is not supported yet (return type ${displayName(rt)} is not supported${hint})`);
+      const hint =
+        isMemByRef(rt) && !aggOK ? ' (aggregate returns require the callee to be @internal or @private)' : '';
+      this.diags.error(
+        node,
+        'JETH243',
+        `internal call to '${name}' is not supported yet (return type ${displayName(rt)} is not supported${hint})`,
+      );
       return undefined;
     }
     if (!asStatement && callee.returnType.kind === 'void') {
@@ -4244,7 +5416,11 @@ export class Analyzer {
       if (pt.kind === 'struct') {
         // a memory-struct argument (passed by reference): the argument must be the same struct.
         if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
-          this.diags.error(argNodes[i]!, 'JETH085', `argument ${i + 1} of '${name}' expects ${displayName(pt)}, got ${displayName(a.type)}`);
+          this.diags.error(
+            argNodes[i]!,
+            'JETH085',
+            `argument ${i + 1} of '${name}' expects ${displayName(pt)}, got ${displayName(a.type)}`,
+          );
           return undefined;
         }
         args.push(a);
@@ -4273,7 +5449,11 @@ export class Analyzer {
   /** Resolve a multi-value internal call `f(...)` / `this.f(...)` as a tuple destructuring
    *  source: the callee must be internal/private with `n` VALUE return components and value
    *  params. Returns {fn, args, types} or undefined (with a diagnostic). */
-  private resolveTupleCall(node: ts.CallExpression, name: string, n: number): { fn: string; args: Expr[]; types: JethType[] } | undefined {
+  private resolveTupleCall(
+    node: ts.CallExpression,
+    name: string,
+    n: number,
+  ): { fn: string; args: Expr[]; types: JethType[] } | undefined {
     const callee = this.resolveOverload(node, name);
     if (!callee) return undefined;
     if (callee.visibility === 'external') {
@@ -4285,18 +5465,30 @@ export class Analyzer {
       return undefined;
     }
     if (callee.returnTypes.length !== n) {
-      this.diags.error(node, 'JETH066', `destructuring expects ${n} value(s) but '${name}' returns ${callee.returnTypes.length}`);
+      this.diags.error(
+        node,
+        'JETH066',
+        `destructuring expects ${n} value(s) but '${name}' returns ${callee.returnTypes.length}`,
+      );
       return undefined;
     }
     for (const t of callee.returnTypes) {
       if (!this.destructurableComponent(t)) {
-        this.diags.error(node, 'JETH243', `tuple destructuring of a non-value return component (${displayName(t)}) is not supported yet`);
+        this.diags.error(
+          node,
+          'JETH243',
+          `tuple destructuring of a non-value return component (${displayName(t)}) is not supported yet`,
+        );
         return undefined;
       }
     }
     for (const p of callee.params) {
       if (!isStaticValueType(p.type)) {
-        this.diags.error(node, 'JETH242', `internal call to '${name}' is not supported yet (parameter type ${displayName(p.type)})`);
+        this.diags.error(
+          node,
+          'JETH242',
+          `internal call to '${name}' is not supported yet (parameter type ${displayName(p.type)})`,
+        );
         return undefined;
       }
     }
@@ -4342,14 +5534,22 @@ export class Analyzer {
     if (ifaceCall === 'handled') return; // recognized interface call, already diagnosed
     if (ifaceCall) {
       if (!ifaceCall.returnTypes) {
-        this.diags.error(decl.name, 'JETH356', ifaceCall.returnType.kind === 'void'
-          ? 'this interface method returns void and cannot be destructured (call it as a statement)'
-          : 'this interface method returns a single value; bind it with `let x = ...`, not a destructuring');
+        this.diags.error(
+          decl.name,
+          'JETH356',
+          ifaceCall.returnType.kind === 'void'
+            ? 'this interface method returns void and cannot be destructured (call it as a statement)'
+            : 'this interface method returns a single value; bind it with `let x = ...`, not a destructuring',
+        );
         return;
       }
       const rts = ifaceCall.returnTypes;
       if (rts.length !== n) {
-        this.diags.error(decl.name, 'JETH356', `this interface method returns ${rts.length} value(s), expected ${n} name(s)`);
+        this.diags.error(
+          decl.name,
+          'JETH356',
+          `this interface method returns ${rts.length} value(s), expected ${n} name(s)`,
+        );
         return;
       }
       this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: ifaceCall.call, types: rts }, out);
@@ -4359,14 +5559,18 @@ export class Analyzer {
     const tryCall = this.resolveTryCall(decl.initializer);
     const callDecode = tryCall ? undefined : this.resolveCallDecodeTuple(decl.initializer);
     if (callDecode === 'handled') return; // recognized address call/staticcall, already diagnosed
-    const abiDecodeTuple = (tryCall || callDecode) ? undefined : this.resolveAbiDecodeTuple(decl.initializer);
+    const abiDecodeTuple = tryCall || callDecode ? undefined : this.resolveAbiDecodeTuple(decl.initializer);
     let types: JethType[];
     let source: DestructureSource;
     if (callDecode) {
       // `let [a, b] = addr.call({..., decode: [T1, T2]})`: decode the call's bytes result (same binding
       // path as the abi.decode tuple form below - each component lands in its own register / mem image).
       if (callDecode.types.length !== n) {
-        this.diags.error(decl.name, 'JETH066', `call decode tuple has ${callDecode.types.length} type(s), expected ${n} name(s)`);
+        this.diags.error(
+          decl.name,
+          'JETH066',
+          `call decode tuple has ${callDecode.types.length} type(s), expected ${n} name(s)`,
+        );
         return;
       }
       types = callDecode.types;
@@ -4375,14 +5579,25 @@ export class Analyzer {
       // `let [a, b] = abi.decode(data, [T1, T2])`: each component is decoded into its own register
       // (value -> a word, bytes/string/array/struct -> a memory image pointer), bound below.
       if (abiDecodeTuple.types.length !== n) {
-        this.diags.error(decl.name, 'JETH066', `abi.decode tuple has ${abiDecodeTuple.types.length} type(s), expected ${n} name(s)`);
+        this.diags.error(
+          decl.name,
+          'JETH066',
+          `abi.decode tuple has ${abiDecodeTuple.types.length} type(s), expected ${n} name(s)`,
+        );
         return;
       }
       types = abiDecodeTuple.types;
       source = abiDecodeTuple.source;
     } else if (tryCall) {
       // `let [ok, ret] = addr.tryCall/tryStaticcall({...})` -> [bool, bytes].
-      if (n !== 2) { this.diags.error(decl.name, 'JETH314', `tryCall/tryStaticcall destructuring expects exactly 2 names [ok, ret], got ${n}`); return; }
+      if (n !== 2) {
+        this.diags.error(
+          decl.name,
+          'JETH314',
+          `tryCall/tryStaticcall destructuring expects exactly 2 names [ok, ret], got ${n}`,
+        );
+        return;
+      }
       types = tryCall.types;
       source = tryCall.source;
     } else if (callName) {
@@ -4392,7 +5607,11 @@ export class Analyzer {
       source = { kind: 'call', fn: r.fn, args: r.args };
     } else if (ts.isArrayLiteralExpression(decl.initializer)) {
       if (decl.initializer.elements.length !== n) {
-        this.diags.error(decl.initializer, 'JETH066', `tuple has ${decl.initializer.elements.length} value(s), expected ${n}`);
+        this.diags.error(
+          decl.initializer,
+          'JETH066',
+          `tuple has ${decl.initializer.elements.length} value(s), expected ${n}`,
+        );
         return;
       }
       const values: Expr[] = [];
@@ -4401,7 +5620,11 @@ export class Analyzer {
         const v = this.checkExpr(el);
         if (!v) return;
         if (!isStaticValueType(v.type)) {
-          this.diags.error(el, 'JETH066', `tuple destructuring of a non-value component (${displayName(v.type)}) is not supported yet`);
+          this.diags.error(
+            el,
+            'JETH066',
+            `tuple destructuring of a non-value component (${displayName(v.type)}) is not supported yet`,
+          );
           return;
         }
         values.push(v);
@@ -4409,7 +5632,11 @@ export class Analyzer {
       }
       source = { kind: 'tuple', values };
     } else {
-      this.diags.error(decl.initializer, 'JETH066', 'tuple destructuring requires a multi-value call or a tuple literal on the right');
+      this.diags.error(
+        decl.initializer,
+        'JETH066',
+        'tuple destructuring requires a multi-value call or a tuple literal on the right',
+      );
       return;
     }
     this.bindDestructure(pat, n, types, source, out);
@@ -4419,7 +5646,13 @@ export class Analyzer {
    *  tupleDecl. A non-value component binds a memory local in its kind's side-table (so later reads
    *  resolve through the right codec). Shared by the internal-call, abi.decode, tryCall, and
    *  interface-call tuple forms. */
-  private bindDestructure(pat: ts.ArrayBindingPattern, n: number, types: JethType[], source: DestructureSource, out: Stmt[]): void {
+  private bindDestructure(
+    pat: ts.ArrayBindingPattern,
+    n: number,
+    types: JethType[],
+    source: DestructureSource,
+    out: Stmt[],
+  ): void {
     const names: (string | null)[] = [];
     for (let i = 0; i < n; i++) {
       const el = pat.elements[i]!;
@@ -4468,7 +5701,11 @@ export class Analyzer {
       const lv = this.checkLValue(el);
       if (!lv) return;
       if (!isStaticValueType(lv.type)) {
-        this.diags.error(el, 'JETH066', `tuple assignment to a non-value target (${displayName(lv.type)}) is not supported yet`);
+        this.diags.error(
+          el,
+          'JETH066',
+          `tuple assignment to a non-value target (${displayName(lv.type)}) is not supported yet`,
+        );
         return;
       }
       targets.push(lv);
@@ -4481,7 +5718,11 @@ export class Analyzer {
       for (let i = 0; i < n; i++) {
         const tgt = targets[i];
         if (tgt && !typesEqual(r.types[i]!, tgt.type) && !isImplicitWiden(r.types[i]!, tgt.type)) {
-          this.diags.error(lhs.elements[i]!, 'JETH085', `cannot assign ${displayName(r.types[i]!)} to ${displayName(tgt.type)}`);
+          this.diags.error(
+            lhs.elements[i]!,
+            'JETH085',
+            `cannot assign ${displayName(r.types[i]!)} to ${displayName(tgt.type)}`,
+          );
           return;
         }
       }
@@ -4501,7 +5742,11 @@ export class Analyzer {
       }
       source = { kind: 'tuple', values };
     } else {
-      this.diags.error(e.right, 'JETH066', 'tuple assignment requires a multi-value call or a tuple literal on the right');
+      this.diags.error(
+        e.right,
+        'JETH066',
+        'tuple assignment requires a multi-value call or a tuple literal on the right',
+      );
       return;
     }
     out.push({ kind: 'tupleAssign', targets, source });
@@ -4509,7 +5754,10 @@ export class Analyzer {
 
   /** Word offset (and type) of a struct field within the ABI-unpacked memory image, for a
    *  memory-aggregate local (G9). Returns undefined if the field is absent. */
-  private memFieldOffset(structType: JethType & { kind: 'struct' }, fieldName: string): { wordOffset: number; type: JethType } | undefined {
+  private memFieldOffset(
+    structType: JethType & { kind: 'struct' },
+    fieldName: string,
+  ): { wordOffset: number; type: JethType } | undefined {
     let w = 0;
     for (const f of structType.fields) {
       if (f.name === fieldName) return { wordOffset: w, type: f.type };
@@ -4528,7 +5776,9 @@ export class Analyzer {
   /** Resolve `p.f1.f2...fn` rooted at a memory-aggregate (struct) local into the final field's
    *  {local, wordOffset, type}, descending through nested STRUCT fields (word offsets sum). The
    *  final field type may be a struct or a value (callers decide what they accept). */
-  private resolveMemFieldChain(node: ts.PropertyAccessExpression): { local: string; wordOffset: number; type: JethType } | undefined {
+  private resolveMemFieldChain(
+    node: ts.PropertyAccessExpression,
+  ): { local: string; wordOffset: number; type: JethType } | undefined {
     let base: { local: string; wordOffset: number; type: JethType };
     if (ts.isIdentifier(node.expression)) {
       const st = this.memAggregateLocals.get(node.expression.text);
@@ -4555,11 +5805,17 @@ export class Analyzer {
 
   /** A `p.f1...fn` read/write on a memory struct local where the FINAL field is a VALUE type:
    *  maps to a memory load/store at the accumulated word offset. Non-value final fields are gated. */
-  private resolveMemAggregateField(node: ts.PropertyAccessExpression): { local: string; wordOffset: number; type: JethType } | undefined {
+  private resolveMemAggregateField(
+    node: ts.PropertyAccessExpression,
+  ): { local: string; wordOffset: number; type: JethType } | undefined {
     const r = this.resolveMemFieldChain(node);
     if (!r) return undefined;
     if (!isStaticValueType(r.type)) {
-      this.diags.error(node, 'JETH245', `accessing a non-value field of a memory struct is not supported yet (read/write a value field)`);
+      this.diags.error(
+        node,
+        'JETH245',
+        `accessing a non-value field of a memory struct is not supported yet (read/write a value field)`,
+      );
       return undefined;
     }
     return r;
@@ -4583,7 +5839,9 @@ export class Analyzer {
 
   /** Resolve `d.field` where `d` is a DYNAMIC-field struct memory local into its head-word
    *  offset and field. Only a direct identifier base is supported (no nesting in scope). */
-  private memDynStructField(node: ts.PropertyAccessExpression): { local: string; headWord: number; field: StructField } | undefined {
+  private memDynStructField(
+    node: ts.PropertyAccessExpression,
+  ): { local: string; headWord: number; field: StructField } | undefined {
     if (!ts.isIdentifier(node.expression)) return undefined;
     const st = this.memDynStructLocals.get(node.expression.text);
     if (!st || st.kind !== 'struct') return undefined;
@@ -4592,7 +5850,9 @@ export class Analyzer {
       this.diags.error(node, 'JETH210', `struct '${st.name}' has no field '${node.name.text}'`);
       return undefined;
     }
-    const headWord = st.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+    const headWord = st.fields
+      .slice(0, idx)
+      .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
     return { local: node.expression.text, headWord, field: st.fields[idx]! };
   }
 
@@ -4602,7 +5862,11 @@ export class Analyzer {
     // `d.x = v` on a DYNAMIC-field struct memory local: a VALUE field is a plain memory store
     // at the head word. A bytes/string field write would re-point the head at a new blob (size
     // may change); that is gated for now (construction + reads + return are supported).
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.memDynStructLocals.has(node.expression.text)
+    ) {
       const mf = this.memDynStructField(node);
       if (!mf) return undefined;
       // a bytes/string field write re-points the head word at a freshly-materialized blob.
@@ -4635,14 +5899,26 @@ export class Analyzer {
       }
     }
     // G9: `p.a[i] = v` where a is a fixed-array VALUE field of a memory struct local.
-    if (ts.isElementAccessExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.argumentExpression && this.memChainRoot(node.expression)) {
+    if (
+      ts.isElementAccessExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.argumentExpression &&
+      this.memChainRoot(node.expression)
+    ) {
       const fld = this.resolveMemFieldChain(node.expression);
       if (fld && fld.type.kind === 'array' && fld.type.length !== undefined && isStaticValueType(fld.type.element)) {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
         if (!this.checkMemElemBound(idx, fld.type.length, node.argumentExpression)) return undefined;
-        return { kind: 'memElem', type: fld.type.element, local: fld.local, index: idx, length: fld.type.length, wordOffset: fld.wordOffset };
+        return {
+          kind: 'memElem',
+          type: fld.type.element,
+          local: fld.local,
+          index: idx,
+          length: fld.type.length,
+          wordOffset: fld.wordOffset,
+        };
       }
     }
     // this.b[i] = <bytes1>: byte assignment into a STORAGE `bytes` (RMW the containing slot/word).
@@ -4650,7 +5926,8 @@ export class Analyzer {
     // bytes[] or Arr<bytes,N> element. (string is not element-assignable in solc.) The bytes
     // LOCATION is resolved first; its slot is computed at codegen like the whole-value assignment.
     if (
-      ts.isElementAccessExpression(node) && node.argumentExpression &&
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression &&
       (ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression))
     ) {
       const loc = this.bytesLocation(node.expression);
@@ -4669,7 +5946,11 @@ export class Analyzer {
         // Assigning a whole FIXED-array leaf at depth (this.g3[i][j] = arr) is a later
         // step (no fixed-array value source to copy from); reading it works.
         if (acc.result.finalType.kind === 'array') {
-          this.diags.error(node, 'JETH226', 'assigning a whole fixed-array element at depth is a later step (assign its elements)');
+          this.diags.error(
+            node,
+            'JETH226',
+            'assigning a whole fixed-array element at depth is a later step (assign its elements)',
+          );
           return undefined;
         }
         this.currentWritesState = true;
@@ -4685,14 +5966,16 @@ export class Analyzer {
       if (ts.isPropertyAccessExpression(node)) {
         const dyn = this.resolveCdDynStruct(node);
         if (dyn) {
-          if (dyn.result) this.diags.error(node, 'JETH214', 'a calldata parameter is read-only (cannot assign to its fields)');
+          if (dyn.result)
+            this.diags.error(node, 'JETH214', 'a calldata parameter is read-only (cannot assign to its fields)');
           return undefined;
         }
       }
       // a struct / fixed-array calldata param is read-only.
       const cd = this.resolveCalldataPlace(node);
       if (cd) {
-        if (cd.result) this.diags.error(node, 'JETH214', 'a calldata parameter is read-only (cannot assign to its fields/elements)');
+        if (cd.result)
+          this.diags.error(node, 'JETH214', 'a calldata parameter is read-only (cannot assign to its fields/elements)');
         return undefined;
       }
     }
@@ -4715,33 +5998,67 @@ export class Analyzer {
         // a single-field path folds to that constant slot at codegen.
         if (isBytesLike(f.type)) {
           this.currentWritesState = true;
-          return { kind: 'dynPlace', type: f.type, path: { baseSlot: sv.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] } };
+          return {
+            kind: 'dynPlace',
+            type: f.type,
+            path: {
+              baseSlot: sv.slot,
+              steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }],
+            },
+          };
         }
         // this.o.inner = <struct>: a whole nested-struct field. Land writeStruct/copyStruct
         // at the field's slot (a storage place).
         if (f.type.kind === 'struct') {
           this.currentWritesState = true;
-          return { kind: 'place', type: f.type, path: { baseSlot: sv.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] } };
+          return {
+            kind: 'place',
+            type: f.type,
+            path: {
+              baseSlot: sv.slot,
+              steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }],
+            },
+          };
         }
         // this.e.arr = <fixed array>: a whole FIXED-array field copy (a storage place; copyFixedArray
         // handles value/static elements). A dynamic-array or fixed-array-of-dynamic field stays gated.
         if (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)) {
           this.currentWritesState = true;
-          return { kind: 'place', type: f.type, path: { baseSlot: sv.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] } };
+          return {
+            kind: 'place',
+            type: f.type,
+            path: {
+              baseSlot: sv.slot,
+              steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }],
+            },
+          };
         }
         // this.s.arr = <array> (whole DYNAMIC value-element array field copy): a storage place at the
         // field's length slot (sv.slot + f.slot). copyArrayValueIntoStorage deep-copies the array value
         // (memory / calldata / array-literal / storage source) in, overwrite-clearing the old data.
         if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
           this.currentWritesState = true;
-          return { kind: 'place', type: f.type, path: { baseSlot: sv.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] } };
+          return {
+            kind: 'place',
+            type: f.type,
+            path: {
+              baseSlot: sv.slot,
+              steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }],
+            },
+          };
         }
         if (!isStaticValueType(f.type)) {
           this.diags.error(node, 'JETH226', 'nested array field assignment is not supported yet');
           return undefined;
         }
         this.currentWritesState = true;
-        return { kind: 'state', type: f.type, slot: sv.slot + f.slot, offset: f.offset, varName: `${sv.name}.${f.name}` };
+        return {
+          kind: 'state',
+          type: f.type,
+          slot: sv.slot + f.slot,
+          offset: f.offset,
+          varName: `${sv.name}.${f.name}`,
+        };
       }
     }
 
@@ -4756,7 +6073,11 @@ export class Analyzer {
       if (this.immutablesByName.has(node.name.text)) {
         const im = this.immutablesByName.get(node.name.text)!;
         if (!this.currentInConstructor) {
-          this.diags.error(node, 'JETH313', `@immutable '${node.name.text}' can only be assigned directly in the constructor body`);
+          this.diags.error(
+            node,
+            'JETH313',
+            `@immutable '${node.name.text}' can only be assigned directly in the constructor body`,
+          );
           return undefined;
         }
         return { kind: 'immutableStaged', type: im.type, name: im.name };
@@ -4767,7 +6088,11 @@ export class Analyzer {
         return undefined;
       }
       if (v.type.kind === 'mapping') {
-        this.diags.error(node, 'JETH153', `cannot assign to mapping 'this.${node.name.text}' directly; assign an element (this.${node.name.text}[key] = ...)`);
+        this.diags.error(
+          node,
+          'JETH153',
+          `cannot assign to mapping 'this.${node.name.text}' directly; assign an element (this.${node.name.text}[key] = ...)`,
+        );
         return undefined;
       }
       this.currentWritesState = true;
@@ -4788,7 +6113,12 @@ export class Analyzer {
       if (isBytesLike(arr.elem)) {
         // placeArray covers a struct-field / nested dynamic-element array (this.d.xs[i], this.dd[i][j]);
         // the element slot resolves at keccak(lenSlot)+i exactly like the state/fixed/mapping bases.
-        if (arr.base.kind !== 'stateArray' && arr.base.kind !== 'mapArray' && arr.base.kind !== 'fixedArray' && arr.base.kind !== 'placeArray') {
+        if (
+          arr.base.kind !== 'stateArray' &&
+          arr.base.kind !== 'mapArray' &&
+          arr.base.kind !== 'fixedArray' &&
+          arr.base.kind !== 'placeArray'
+        ) {
           this.diags.error(node, 'JETH217', 'this string[]/bytes[] element write is not supported yet');
           return undefined;
         }
@@ -4826,7 +6156,14 @@ export class Analyzer {
         return { kind: 'mapDynState', type: r.valueType, baseSlot: r.baseSlot, keys: r.keys, keyTypes: r.keyTypes };
       }
       this.currentWritesState = true;
-      return { kind: 'mapping', type: r.valueType, baseSlot: r.baseSlot, keys: r.keys, keyTypes: r.keyTypes, varName: r.varName };
+      return {
+        kind: 'mapping',
+        type: r.valueType,
+        baseSlot: r.baseSlot,
+        keys: r.keys,
+        keyTypes: r.keyTypes,
+        varName: r.varName,
+      };
     }
     // local
     if (ts.isIdentifier(node)) {
@@ -4901,7 +6238,14 @@ export class Analyzer {
     }
     if (lv.kind === 'memElem') {
       // a fixed-array memory element read (for compound-assign / ++ on a[i] or p.a[i]): NOT storage.
-      return { kind: 'memElem', type: lv.type, local: lv.local, index: lv.index, length: lv.length, wordOffset: lv.wordOffset };
+      return {
+        kind: 'memElem',
+        type: lv.type,
+        local: lv.local,
+        index: lv.index,
+        length: lv.length,
+        wordOffset: lv.wordOffset,
+      };
     }
     if (lv.kind === 'memDynField') {
       // a bytes/string memory-struct field read (no compound-assign/++ applies; type-checked away).
@@ -4934,11 +6278,18 @@ export class Analyzer {
    *  kind is NOT supported (deferred). Static types are handled separately. */
   private isSupportedDynStructField(t: JethType): boolean {
     if (isBytesLike(t)) return true;
-    if (t.kind === 'struct') return t.fields.every((f) => isStaticType(f.type) || this.isSupportedDynStructField(f.type));
+    if (t.kind === 'struct')
+      return t.fields.every((f) => isStaticType(f.type) || this.isSupportedDynStructField(f.type));
     // a dynamic-array field (u256[], string[], D[], T[][]) or a fixed array of a dynamic
     // element: in storage the array lives at the field slot (length there, data at
     // keccak(fieldSlot)); the ABI codec encodes/decodes it via the recursive encoder.
-    if (t.kind === 'array') return isStaticType(t.element) || isBytesLike(t.element) || t.element.kind === 'array' || this.isSupportedDynStructField(t.element);
+    if (t.kind === 'array')
+      return (
+        isStaticType(t.element) ||
+        isBytesLike(t.element) ||
+        t.element.kind === 'array' ||
+        this.isSupportedDynStructField(t.element)
+      );
     return false;
   }
 
@@ -5166,13 +6517,22 @@ export class Analyzer {
       if (isBytesLike(t.element)) return true;
       // Arr<D,N> (fixed array of a DYNAMIC struct): N*slotCount(D) contiguous slots in
       // storage; an N-word offset table + per-element tuples as a calldata param/return.
-      if (t.element.kind === 'struct' && (storage ? this.isStorageDynStruct(t.element) : this.isSupportedDynStructField(t.element))) return true;
+      if (
+        t.element.kind === 'struct' &&
+        (storage ? this.isStorageDynStruct(t.element) : this.isSupportedDynStructField(t.element))
+      )
+        return true;
       // Arr<u256[],N> (= uint256[][N], a fixed array of DYNAMIC arrays). In STORAGE (G6):
       // element i is an inner dynamic array whose length slot is baseSlot+i*stride. As a
       // calldata PARAM / RETURN: an N-word offset table + per-element tails, handled by the
       // recursive head/tail codec (any supported nested dynamic-array element).
       if (t.element.kind === 'array') {
-        if (storage || this.isAbiNestedDynArray(t.element) || (t.element.length === undefined && isStaticValueType(t.element.element))) return true;
+        if (
+          storage ||
+          this.isAbiNestedDynArray(t.element) ||
+          (t.element.length === undefined && isStaticValueType(t.element.element))
+        )
+          return true;
         // a nested FIXED array element with dynamic leaves (Arr<Arr<string,2>,3> = string[2][3]): valid
         // as a calldata param / return if the inner element type is itself supported (recurse, with
         // diagnostic rollback so only our own JETH210 surfaces if the inner is unsupported).
@@ -5235,7 +6595,9 @@ export class Analyzer {
       // Tuple-head word offset: each preceding field contributes its inline static
       // words, or exactly ONE offset word if it is dynamic (spec section 3.0). Note
       // abiHeadWords would wrongly EXPAND a dynamic sub-struct into all its leaves.
-      const headWords = t.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+      const headWords = t.fields
+        .slice(0, idx)
+        .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
       steps.push({ headWords, fieldType: f.type, crossDynamic: isDynamicType(f.type) });
       t = f.type;
     }
@@ -5250,21 +6612,38 @@ export class Analyzer {
     // tuple tail offset. Indexing it (s.xs[i]) and echoing it whole (return s.xs) both decode the
     // array via calldataDynAt, then read/encode like any calldata array.
     if (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) {
-      return { committed: true, result: { kind: 'arrayValue', type: t, arr: { base: { kind: 'cdDynArrayField', place }, elem: t.element } } };
+      return {
+        committed: true,
+        result: { kind: 'arrayValue', type: t, arr: { base: { kind: 'cdDynArrayField', place }, elem: t.element } },
+      };
     }
     // an inline fixed-array-of-value field (s.xs where xs: Arr<T,N>): the N element words sit inline in
     // the tuple head at the field's byte offset (stride = 32, each static-value element is one ABI word).
     // Index it (s.xs[i], Panic 0x32 on i>=N) and read .length as the constant N. Mirrors the dynamic-field
     // index path but uses the inline head offset (no tail decode).
     if (t.kind === 'array' && t.length !== undefined && isStaticValueType(t.element)) {
-      return { committed: true, result: { kind: 'arrayValue', type: t, arr: { base: { kind: 'cdDynFixedField', place, length: t.length }, elem: t.element } } };
+      return {
+        committed: true,
+        result: {
+          kind: 'arrayValue',
+          type: t,
+          arr: { base: { kind: 'cdDynFixedField', place, length: t.length }, elem: t.element },
+        },
+      };
     }
     // a dynamic array field whose ELEMENT is itself dynamic (string[]/bytes[], a nested
     // T[][], or a dynamic-struct D[]): the field's tail decodes to (tableStart, len) - one
     // offset word per element - exactly like cdDynArrayField with a 0x20 stride. Index it
     // (s.xs[i] -> element via the per-element offset table) and read .length at runtime.
-    if (t.kind === 'array' && t.length === undefined && (isBytesLike(t.element) || t.element.kind === 'array' || t.element.kind === 'struct')) {
-      return { committed: true, result: { kind: 'arrayValue', type: t, arr: { base: { kind: 'cdDynArrayField', place }, elem: t.element } } };
+    if (
+      t.kind === 'array' &&
+      t.length === undefined &&
+      (isBytesLike(t.element) || t.element.kind === 'array' || t.element.kind === 'struct')
+    ) {
+      return {
+        committed: true,
+        result: { kind: 'arrayValue', type: t, arr: { base: { kind: 'cdDynArrayField', place }, elem: t.element } },
+      };
     }
     // a whole nested STRUCT field (return o.inner): re-encode it as a standalone tuple from
     // the field's resolved calldata tuple-start (the generic dynamic-struct echo encoder).
@@ -5272,7 +6651,11 @@ export class Analyzer {
       return { committed: true, result: { kind: 'cdDynStructValue', type: t, param: rootName, place } };
     }
     // Ended at a shape with no codec yet.
-    this.diags.error(node, 'JETH230', `reading a whole ${displayName(t)} from a dynamic-struct calldata parameter is not supported yet (access a value field)`);
+    this.diags.error(
+      node,
+      'JETH230',
+      `reading a whole ${displayName(t)} from a dynamic-struct calldata parameter is not supported yet (access a value field)`,
+    );
     return { committed: true };
   }
 
@@ -5288,9 +6671,14 @@ export class Analyzer {
         cur = cur.expression;
       } else if (ts.isIdentifier(cur)) {
         const t = this.lookupLocal(cur.text);
-        if (t && t.kind === 'struct' && isDynamicType(t)) { rootName = cur.text; rootType = t; }
+        if (t && t.kind === 'struct' && isDynamicType(t)) {
+          rootName = cur.text;
+          rootType = t;
+        }
         break;
-      } else { return undefined; }
+      } else {
+        return undefined;
+      }
     }
     if (!rootName || !rootType || rawFields.length === 0) return undefined;
     rawFields.reverse();
@@ -5301,7 +6689,9 @@ export class Analyzer {
       const idx = t.fields.findIndex((f) => f.name === fnode.name.text);
       if (idx < 0) return undefined;
       const f = t.fields[idx]!;
-      const headWords = t.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+      const headWords = t.fields
+        .slice(0, idx)
+        .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
       steps.push({ headWords, fieldType: f.type, crossDynamic: isDynamicType(f.type) });
       t = f.type;
     }
@@ -5333,7 +6723,8 @@ export class Analyzer {
         const t = this.lookupLocal(cur.text);
         // own only STATIC aggregate params (inline head): a static struct or a fixed
         // array of a static element. Arr<dyn,N> is a dynamic calldata array (cdArrays).
-        if (t && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined)) && isStaticType(t)) rootType = t;
+        if (t && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined)) && isStaticType(t))
+          rootType = t;
         break;
       } else {
         return undefined;
@@ -5376,7 +6767,11 @@ export class Analyzer {
         // own only STATIC aggregate params: a fully-static struct, or a fixed array of
         // a STATIC element. A DYNAMIC struct is owned by resolveCdDynStruct; an
         // Arr<dyn,N> is a dynamic calldata array (cdArrays element paths).
-        if (t && ((t.kind === 'struct' && isStaticType(t)) || (t.kind === 'array' && t.length !== undefined && isStaticType(t)))) {
+        if (
+          t &&
+          ((t.kind === 'struct' && isStaticType(t)) ||
+            (t.kind === 'array' && t.length !== undefined && isStaticType(t)))
+        ) {
           rootName = cur.text;
           rootType = t;
         }
@@ -5416,12 +6811,22 @@ export class Analyzer {
           this.diags.error(s.index, 'JETH211', `array index ${idx.value} out of bounds for length ${t.length}`);
           return { committed: true };
         }
-        steps.push({ kind: 'index', index: idx, strideWords: abiHeadWords(t.element), length: t.length, elemType: t.element });
+        steps.push({
+          kind: 'index',
+          index: idx,
+          strideWords: abiHeadWords(t.element),
+          length: t.length,
+          elemType: t.element,
+        });
         t = t.element;
       }
     }
     if (!isStaticValueType(t)) {
-      this.diags.error(node, 'JETH230', 'reading a whole struct/array from a calldata parameter is not supported yet (access a value field/element)');
+      this.diags.error(
+        node,
+        'JETH230',
+        'reading a whole struct/array from a calldata parameter is not supported yet (access a value field/element)',
+      );
       return { committed: true };
     }
     return { committed: true, result: { place: { param: rootName, steps, finalType: t }, finalType: t } };
@@ -5435,7 +6840,10 @@ export class Analyzer {
    *  element ds[i] is a dynamic tuple reached via the per-element offset table, then
    *  the field is read from that tuple (static leaf or bytes/string), reusing the
    *  dynamic-struct field access (CdDynPlace with an arrayRoot). */
-  private resolveCdDynArrayField(node: ts.PropertyAccessExpression, struct: JethType & { kind: 'struct' }): Expr | undefined {
+  private resolveCdDynArrayField(
+    node: ts.PropertyAccessExpression,
+    struct: JethType & { kind: 'struct' },
+  ): Expr | undefined {
     const elemAccess = node.expression as ts.ElementAccessExpression;
     const arr = this.resolveArrayExpr(elemAccess.expression);
     // the D[] is either a DIRECT calldata param (calldataArray) or a dynamic-struct-array
@@ -5456,21 +6864,38 @@ export class Analyzer {
       return undefined;
     }
     const f = struct.fields[fidx]!;
-    const headWords = struct.fields.slice(0, fidx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
-    const place: CdDynPlace = { param: '', steps: [{ headWords, fieldType: f.type, crossDynamic: isDynamicType(f.type) }], arrayRoot: { arr, index } };
+    const headWords = struct.fields
+      .slice(0, fidx)
+      .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+    const place: CdDynPlace = {
+      param: '',
+      steps: [{ headWords, fieldType: f.type, crossDynamic: isDynamicType(f.type) }],
+      arrayRoot: { arr, index },
+    };
     if (isStaticValueType(f.type)) return { kind: 'cdDynStructLeaf', type: f.type, place };
     if (isBytesLike(f.type)) return { kind: 'cdDynStructField', type: f.type, place };
     // a dynamic value-array field (ps[i].xs where xs: u256[]): a calldata array reached via the
     // tuple tail offset of the element tuple. Indexing it (ps[i].xs[j]) decodes the array via
     // calldataArrayAt, then reads the value element like any calldata array (mirrors s.xs).
     if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
-      return { kind: 'arrayValue', type: f.type, arr: { base: { kind: 'cdDynArrayField', place }, elem: f.type.element } };
+      return {
+        kind: 'arrayValue',
+        type: f.type,
+        arr: { base: { kind: 'cdDynArrayField', place }, elem: f.type.element },
+      };
     }
-    this.diags.error(node, 'JETH230', 'reading a whole nested struct/array field of a dynamic-struct array element is a later step');
+    this.diags.error(
+      node,
+      'JETH230',
+      'reading a whole nested struct/array field of a dynamic-struct array element is a later step',
+    );
     return undefined;
   }
 
-  private resolveCdArrayField(node: ts.PropertyAccessExpression, struct: JethType & { kind: 'struct' }): Expr | undefined {
+  private resolveCdArrayField(
+    node: ts.PropertyAccessExpression,
+    struct: JethType & { kind: 'struct' },
+  ): Expr | undefined {
     // Peel the property-access chain `arr[i].f1.f2...fn` down to the element access
     // `arr[i]`, collecting the field names root->leaf. A one-deep `arr[i].f` has
     // node.expression === the ElementAccessExpression; a deeper `arr[i].inn.v` has
@@ -5572,7 +6997,11 @@ export class Analyzer {
     }
     // p.xs: a dynamic value-array field of a dynamic-field struct memory local. The head word holds a
     // [len][elems] pointer; load it (memField) and wrap in memArrayExpr so index/.length consume it.
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.memDynStructLocals.has(node.expression.text)
+    ) {
       const mf = this.memDynStructField(node);
       if (mf && mf.field.type.kind === 'array' && mf.field.type.length === undefined) {
         const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
@@ -5619,7 +7048,14 @@ export class Analyzer {
       ) {
         const idx = this.checkExpr(node.argumentExpression, U256);
         if (!idx) return undefined;
-        return { base: { kind: 'cdSubElem', name: node.expression.text, index: this.coerce(idx, U256, node.argumentExpression) }, elem: t.element.element };
+        return {
+          base: {
+            kind: 'cdSubElem',
+            name: node.expression.text,
+            index: this.coerce(idx, U256, node.argumentExpression),
+          },
+          elem: t.element.element,
+        };
       }
     }
     // An inner array reached by a chain of index steps into a nested dynamic array
@@ -5712,7 +7148,10 @@ export class Analyzer {
     if (ts.isElementAccessExpression(node)) {
       let cur: ts.Expression = node;
       let numIndices = 0;
-      while (ts.isElementAccessExpression(cur)) { numIndices++; cur = cur.expression; }
+      while (ts.isElementAccessExpression(cur)) {
+        numIndices++;
+        cur = cur.expression;
+      }
       if (ts.isPropertyAccessExpression(cur) && cur.expression.kind === ts.SyntaxKind.ThisKeyword) {
         const sv = this.stateByName.get(cur.name.text);
         if (sv && sv.type.kind === 'mapping') {
@@ -5722,11 +7161,17 @@ export class Analyzer {
           // (placeArray) owns it - resolveMapAccess would otherwise emit JETH152.
           let t: JethType = sv.type;
           let mapKeys = 0;
-          while (t.kind === 'mapping' && mapKeys < numIndices) { t = t.value; mapKeys++; }
+          while (t.kind === 'mapping' && mapKeys < numIndices) {
+            t = t.value;
+            mapKeys++;
+          }
           if (mapKeys === numIndices && t.kind === 'array' && t.length === undefined) {
             const r = this.resolveMapAccess(node);
             if (r && r.valueType.kind === 'array' && r.valueType.length === undefined) {
-              return { base: { kind: 'mapArray', baseSlot: r.baseSlot, keys: r.keys, keyTypes: r.keyTypes }, elem: r.valueType.element };
+              return {
+                base: { kind: 'mapArray', baseSlot: r.baseSlot, keys: r.keys, keyTypes: r.keyTypes },
+                elem: r.valueType.element,
+              };
             }
           }
         }
@@ -5784,8 +7229,16 @@ export class Analyzer {
         const idxE = this.checkExpr(s.index, U256);
         if (!idxE) return undefined;
         const idx = this.coerce(idxE, U256, s.index);
-        if (t.length !== undefined) steps.push({ kind: 'index', index: idx, strideSlots: storageSlotCount(t.element), length: t.length, elemType: t.element });
-        else steps.push({ kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(t.element), elemType: t.element });
+        if (t.length !== undefined)
+          steps.push({
+            kind: 'index',
+            index: idx,
+            strideSlots: storageSlotCount(t.element),
+            length: t.length,
+            elemType: t.element,
+          });
+        else
+          steps.push({ kind: 'dynIndex', index: idx, strideSlots: storageSlotCount(t.element), elemType: t.element });
         t = t.element;
       } else if (t.kind === 'mapping') {
         const keyE = this.checkExpr(s.index, t.key);
@@ -5829,13 +7282,17 @@ export class Analyzer {
     }
     if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression)) {
       const fp = this.resolveCdDynFieldPlace(expr);
-      if (fp && fp.type.kind === 'array' && fp.type.length === undefined && fp.type.element.kind === 'struct') return fp.type;
+      if (fp && fp.type.kind === 'array' && fp.type.length === undefined && fp.type.element.kind === 'struct')
+        return fp.type;
     }
     // msg.data is a calldata `bytes`, so `msg.data[i]` indexes it like any bytes value (Panic 0x32 OOB).
     if (
-      ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression) &&
-      expr.expression.text === 'msg' && expr.name.text === 'data' &&
-      !this.isVisibleLocal('msg') && !this.stateByName.has('msg')
+      ts.isPropertyAccessExpression(expr) &&
+      ts.isIdentifier(expr.expression) &&
+      expr.expression.text === 'msg' &&
+      expr.name.text === 'data' &&
+      !this.isVisibleLocal('msg') &&
+      !this.stateByName.has('msg')
     ) {
       return { kind: 'bytes' };
     }
@@ -5854,7 +7311,9 @@ export class Analyzer {
    *  fixed-array index) rooted at `this.<var>` into an AccessPath + final value
    *  type. Returns undefined for chains the flat handlers own (single step, or a
    *  pure-mapping chain), letting them run. Emits a diagnostic on a genuine error. */
-  private resolveAccess(node: ts.Expression): { committed: true; result?: { path: AccessPath; finalType: JethType } } | undefined {
+  private resolveAccess(
+    node: ts.Expression,
+  ): { committed: true; result?: { path: AccessPath; finalType: JethType } } | undefined {
     const rawSteps: ({ field: ts.PropertyAccessExpression } | { index: ts.Expression })[] = [];
     let cur: ts.Expression = node;
     let baseSlot = -1;
@@ -5951,9 +7410,22 @@ export class Analyzer {
             if (packed) {
               // packed fixed-array element (perSlot per slot): runtime byte offset within the slot.
               const size = storageByteSize(elem);
-              steps.push({ kind: 'packedIndex', index: idx, perSlot: Math.floor(32 / size), size, length: t.length, elemType: elem });
+              steps.push({
+                kind: 'packedIndex',
+                index: idx,
+                perSlot: Math.floor(32 / size),
+                size,
+                length: t.length,
+                elemType: elem,
+              });
             } else {
-              steps.push({ kind: 'index', index: idx, strideSlots: storageSlotCount(elem), length: t.length, elemType: elem });
+              steps.push({
+                kind: 'index',
+                index: idx,
+                strideSlots: storageSlotCount(elem),
+                length: t.length,
+                elemType: elem,
+              });
             }
           } else {
             // dynamic T[]: runtime bound (sload) + data at keccak(lenSlot)
@@ -6001,7 +7473,11 @@ export class Analyzer {
       if (t.kind === 'array' && t.length !== undefined && lastStep) {
         return { committed: true, result: { path: { baseSlot, steps }, finalType: t } };
       }
-      this.diags.error(node, 'JETH226', `accessing a whole ${displayName(t)} is not supported yet (index/field it to a value)`);
+      this.diags.error(
+        node,
+        'JETH226',
+        `accessing a whole ${displayName(t)} is not supported yet (index/field it to a value)`,
+      );
       return { committed: true };
     }
     return { committed: true, result: { path: { baseSlot, steps }, finalType: t } };
@@ -6088,25 +7564,46 @@ export class Analyzer {
     let selector: Expr | undefined;
     let sig: Expr | undefined;
     if (method === 'encodeWithSelector') {
-      if (rest.length < 1) { this.diags.error(node, 'JETH173', 'abi.encodeWithSelector requires a bytes4 selector'); return undefined; }
+      if (rest.length < 1) {
+        this.diags.error(node, 'JETH173', 'abi.encodeWithSelector requires a bytes4 selector');
+        return undefined;
+      }
       // expect bytes4 so a 4-byte hex literal (0x12345678) converts implicitly, matching solc.
       const s = this.checkExpr(rest[0]!, { kind: 'bytesN', size: 4 });
       if (!s) return undefined;
-      if (!(s.type.kind === 'bytesN' && s.type.size === 4)) { this.diags.error(rest[0]!, 'JETH173', `abi.encodeWithSelector's first argument must be bytes4 (got ${displayName(s.type)})`); return undefined; }
+      if (!(s.type.kind === 'bytesN' && s.type.size === 4)) {
+        this.diags.error(
+          rest[0]!,
+          'JETH173',
+          `abi.encodeWithSelector's first argument must be bytes4 (got ${displayName(s.type)})`,
+        );
+        return undefined;
+      }
       selector = s;
       rest = rest.slice(1);
     } else if (method === 'encodeWithSignature') {
-      if (rest.length < 1) { this.diags.error(node, 'JETH173', 'abi.encodeWithSignature requires a string signature'); return undefined; }
+      if (rest.length < 1) {
+        this.diags.error(node, 'JETH173', 'abi.encodeWithSignature requires a string signature');
+        return undefined;
+      }
       const s = this.checkExpr(rest[0]!, { kind: 'string' }); // a string-literal sig needs the string context
       if (!s) return undefined;
-      if (s.type.kind !== 'string') { this.diags.error(rest[0]!, 'JETH173', `abi.encodeWithSignature's first argument must be string (got ${displayName(s.type)})`); return undefined; }
+      if (s.type.kind !== 'string') {
+        this.diags.error(
+          rest[0]!,
+          'JETH173',
+          `abi.encodeWithSignature's first argument must be string (got ${displayName(s.type)})`,
+        );
+        return undefined;
+      }
       sig = s;
       rest = rest.slice(1);
     }
     const args: Expr[] = [];
     for (const a of rest) {
       // a bare string literal arg (abi.encodePacked("DOMAIN")) needs the string context to type-check.
-      const exp = ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a) ? ({ kind: 'string' } as JethType) : undefined;
+      const exp =
+        ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a) ? ({ kind: 'string' } as JethType) : undefined;
       const e = this.checkExpr(a, exp);
       if (!e) return undefined;
       // packed: value + bytes/string only. standard (incl. encodeWith*) also accepts a STATIC
@@ -6114,14 +7611,12 @@ export class Analyzer {
       // Nested-dynamic (string[], T[][]) / dynamic struct args stay a later step.
       const t = e.type;
       const aggOk = packed
-        // packed: a value-element array (fixed or dynamic); each element padded to 32 bytes, no length.
-        // solc rejects a struct / nested-element array in packed mode (so JETH does too).
-        ? (t.kind === 'array' && isStaticValueType(t.element))
-        : (
-            (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) || // static struct/fixed-array (inline)
-            (t.kind === 'struct' && this.isSupportedDynStructLocal(t)) ||        // dynamic struct (offset + tail)
-            (t.kind === 'array')                                                 // dynamic array OR fixed array of dynamic elements (offset + tail)
-          );
+        ? // packed: a value-element array (fixed or dynamic); each element padded to 32 bytes, no length.
+          // solc rejects a struct / nested-element array in packed mode (so JETH does too).
+          t.kind === 'array' && isStaticValueType(t.element)
+        : (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) || // static struct/fixed-array (inline)
+          (t.kind === 'struct' && this.isSupportedDynStructLocal(t)) || // dynamic struct (offset + tail)
+          t.kind === 'array'; // dynamic array OR fixed array of dynamic elements (offset + tail)
       if (!isStaticValueType(t) && !isBytesLike(t) && !aggOk) {
         this.diags.error(
           a,
@@ -6180,7 +7675,11 @@ export class Analyzer {
     const data = this.checkExpr(dataNode, BYTES);
     if (!data) return undefined;
     if (data.type.kind !== 'bytes') {
-      this.diags.error(dataNode, 'JETH320', `abi.decode(...) requires a bytes value to decode, got ${displayName(data.type)}`);
+      this.diags.error(
+        dataNode,
+        'JETH320',
+        `abi.decode(...) requires a bytes value to decode, got ${displayName(data.type)}`,
+      );
       return undefined;
     }
     const tuple = ts.isArrayLiteralExpression(typeNode);
@@ -6193,11 +7692,19 @@ export class Analyzer {
     for (const te of typeExprs) {
       const t = this.resolveTypeExpr(te as ts.Expression);
       if (!t) {
-        this.diags.error(te, 'JETH321', 'abi.decode(...) second argument must be a type name, `T[]`, `Arr<T, N>`, or a tuple `[T1, T2, ...]` of those');
+        this.diags.error(
+          te,
+          'JETH321',
+          'abi.decode(...) second argument must be a type name, `T[]`, `Arr<T, N>`, or a tuple `[T1, T2, ...]` of those',
+        );
         return undefined;
       }
       if (!this.decodeSupported(t)) {
-        this.diags.error(te, 'JETH322', `abi.decode(...) does not support decoding to '${displayName(t)}' yet (supported: value types, bytes, string, T[], Arr<T, N>, and structs of those)`);
+        this.diags.error(
+          te,
+          'JETH322',
+          `abi.decode(...) does not support decoding to '${displayName(t)}' yet (supported: value types, bytes, string, T[], Arr<T, N>, and structs of those)`,
+        );
         return undefined;
       }
       types.push(t);
@@ -6210,13 +7717,21 @@ export class Analyzer {
    *  here (mirrors tryCall's value-position rejection). */
   private checkAbiDecode(node: ts.CallExpression): Expr | undefined {
     if (node.arguments.length !== 2) {
-      this.diags.error(node, 'JETH320', 'abi.decode(...) takes exactly two arguments: the bytes value and the target type');
+      this.diags.error(
+        node,
+        'JETH320',
+        'abi.decode(...) takes exactly two arguments: the bytes value and the target type',
+      );
       return undefined;
     }
     const r = this.resolveAbiDecode(node, node.arguments[0]!, node.arguments[1]!);
     if (!r) return undefined;
     if (r.tuple) {
-      this.diags.error(node, 'JETH323', 'a multi-type abi.decode(...) yields a tuple; bind it with a destructuring `let [a, b] = abi.decode(...)`');
+      this.diags.error(
+        node,
+        'JETH323',
+        'a multi-type abi.decode(...) yields a tuple; bind it with a destructuring `let [a, b] = abi.decode(...)`',
+      );
       return undefined;
     }
     return { kind: 'abiDecode', type: r.types[0]!, data: r.data };
@@ -6272,7 +7787,11 @@ export class Analyzer {
     if (this.isAddressConvertible(inner.type)) {
       return { kind: 'cast', type: ADDRESS, from: inner.type, operand: inner };
     }
-    this.diags.error(node, 'JETH170', `explicit conversion to address not allowed from ${displayName(inner.type)} (convert through u160)`);
+    this.diags.error(
+      node,
+      'JETH170',
+      `explicit conversion to address not allowed from ${displayName(inner.type)} (convert through u160)`,
+    );
     return undefined;
   }
 
@@ -6300,12 +7819,20 @@ export class Analyzer {
       const inner = this.checkExpr(arg);
       if (!inner) return undefined;
       if (!isInteger(inner.type) || isEnum(inner.type)) {
-        this.diags.error(node, 'JETH277', `enum conversion ${callee}(...) requires an integer operand, got ${displayName(inner.type)}`);
+        this.diags.error(
+          node,
+          'JETH277',
+          `enum conversion ${callee}(...) requires an integer operand, got ${displayName(inner.type)}`,
+        );
         return undefined;
       }
       if (inner.kind === 'literalInt') {
         if (inner.value < 0n || inner.value >= BigInt(et.enumMembers.length)) {
-          this.diags.error(node, 'JETH278', `value ${inner.value} is out of range for enum '${callee}' (0..${et.enumMembers.length - 1})`);
+          this.diags.error(
+            node,
+            'JETH278',
+            `value ${inner.value} is out of range for enum '${callee}' (0..${et.enumMembers.length - 1})`,
+          );
           return undefined;
         }
         return { kind: 'literalInt', type: et, value: inner.value };
@@ -6343,11 +7870,17 @@ export class Analyzer {
       // reinterpret; a different-size uint cast is an explicit-conversion error. This is distinct from a
       // BARE int literal (handled below), which solc restricts to the hex-width rule.
       const stripped = stripParens(arg);
-      const argCast = ts.isCallExpression(stripped) && ts.isIdentifier(stripped.expression)
-        ? resolvePrimitiveName(stripped.expression.text) : undefined;
+      const argCast =
+        ts.isCallExpression(stripped) && ts.isIdentifier(stripped.expression)
+          ? resolvePrimitiveName(stripped.expression.text)
+          : undefined;
       if (argCast && argCast.kind === 'uint') {
         if (argCast.bits !== target.size * 8) {
-          this.diags.error(node, 'JETH170', `explicit conversion not allowed from ${displayName(argCast)} to ${displayName(target)}`);
+          this.diags.error(
+            node,
+            'JETH170',
+            `explicit conversion not allowed from ${displayName(argCast)} to ${displayName(target)}`,
+          );
           return undefined;
         }
         return { kind: 'literalInt', type: target, value: v << BigInt((32 - target.size) * 8) };
@@ -6355,7 +7888,11 @@ export class Analyzer {
       // a BARE int literal -> bytesN: solc accepts ONLY the literal 0 (any spelling), or a HEX literal
       // whose source byte width == N. A decimal or wrong-width hex literal is an explicit-conversion error.
       if (v !== 0n && inner.hexBytes !== target.size) {
-        this.diags.error(node, 'JETH170', `explicit conversion not allowed from integer literal ${v} to ${displayName(target)}`);
+        this.diags.error(
+          node,
+          'JETH170',
+          `explicit conversion not allowed from integer literal ${v} to ${displayName(target)}`,
+        );
         return undefined;
       }
       return { kind: 'literalInt', type: target, value: v << BigInt((32 - target.size) * 8) };
@@ -6366,7 +7903,11 @@ export class Analyzer {
     if (this.isCastAllowed(inner.type, target)) {
       return { kind: 'cast', type: target, from: inner.type, operand: inner };
     }
-    this.diags.error(node, 'JETH170', `explicit conversion not allowed from ${displayName(inner.type)} to ${displayName(target)}`);
+    this.diags.error(
+      node,
+      'JETH170',
+      `explicit conversion not allowed from ${displayName(inner.type)} to ${displayName(target)}`,
+    );
     return undefined;
   }
 
@@ -6430,7 +7971,11 @@ export class Analyzer {
       const argName = (node.expression.arguments[0] as ts.Identifier).text;
       if (this.isEnumName(argName)) {
         const et = this.structsByName.get(argName)! as JethType & { kind: 'uint'; enumMembers: string[] };
-        return { kind: 'literalInt', type: et, value: node.name.text === 'max' ? BigInt(et.enumMembers.length - 1) : 0n };
+        return {
+          kind: 'literalInt',
+          type: et,
+          value: node.name.text === 'max' ? BigInt(et.enumMembers.length - 1) : 0n,
+        };
       }
       const t = resolvePrimitiveName(argName);
       if (!t || !isInteger(t)) {
@@ -6439,9 +7984,14 @@ export class Analyzer {
       }
       const isMax = node.name.text === 'max';
       const bits = t.kind === 'uint' ? t.bits : (t as { kind: 'int'; bits: number }).bits;
-      const value = t.kind === 'uint'
-        ? (isMax ? (1n << BigInt(bits)) - 1n : 0n)
-        : (isMax ? (1n << BigInt(bits - 1)) - 1n : -(1n << BigInt(bits - 1)));
+      const value =
+        t.kind === 'uint'
+          ? isMax
+            ? (1n << BigInt(bits)) - 1n
+            : 0n
+          : isMax
+            ? (1n << BigInt(bits - 1)) - 1n
+            : -(1n << BigInt(bits - 1));
       return { kind: 'literalInt', type: t, value };
     }
 
@@ -6472,7 +8022,11 @@ export class Analyzer {
       // unify the branch types (literal retyping / widening to a common type).
       const unified = this.unifyOperands(then, els, node);
       if (!unified) {
-        this.diags.error(node, 'JETH083', `ternary branches have incompatible types: ${displayName(then.type)} vs ${displayName(els.type)}`);
+        this.diags.error(
+          node,
+          'JETH083',
+          `ternary branches have incompatible types: ${displayName(then.type)} vs ${displayName(els.type)}`,
+        );
         return undefined;
       }
       // A DYNAMIC value-element array ternary (c ? a : b, incl. storage `this.a`/`this.b`): materialize
@@ -6485,26 +8039,48 @@ export class Analyzer {
           e.kind === 'arrayLit' ||
           e.kind === 'newArray' || // new Array<T>(n): a fresh [len][elems] memory pointer (mem location)
           (e.kind === 'arrayValue' &&
-            (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr' || e.arr.base.kind === 'stateArray' ||
-             e.arr.base.kind === 'mapArray' || e.arr.base.kind === 'placeArray' || e.arr.base.kind === 'calldataArray'));
+            (e.arr.base.kind === 'memArray' ||
+              e.arr.base.kind === 'memArrayExpr' ||
+              e.arr.base.kind === 'stateArray' ||
+              e.arr.base.kind === 'mapArray' ||
+              e.arr.base.kind === 'placeArray' ||
+              e.arr.base.kind === 'calldataArray'));
         if (dynArrOk(unified[0]) && dynArrOk(unified[1])) {
           // Match solc's data-location rules: storage|calldata is a hard type error, and
           // calldata|calldata yields a CALLDATA reference (an indexed read VALIDATES dirty elements)
           // which our materialize-to-memory (masking) does not replicate - gate both. memory|*,
           // storage|storage, and storage|memory all reduce to a memory image (byte-identical reads).
           const loc = (e: Expr): 'cd' | 'storage' | 'mem' =>
-            e.kind === 'arrayValue' && e.arr.base.kind === 'calldataArray' ? 'cd'
-              : e.kind === 'arrayValue' && (e.arr.base.kind === 'stateArray' || e.arr.base.kind === 'mapArray' || e.arr.base.kind === 'placeArray') ? 'storage'
+            e.kind === 'arrayValue' && e.arr.base.kind === 'calldataArray'
+              ? 'cd'
+              : e.kind === 'arrayValue' &&
+                  (e.arr.base.kind === 'stateArray' ||
+                    e.arr.base.kind === 'mapArray' ||
+                    e.arr.base.kind === 'placeArray')
+                ? 'storage'
                 : 'mem';
-          const l0 = loc(unified[0]), l1 = loc(unified[1]);
+          const l0 = loc(unified[0]),
+            l1 = loc(unified[1]);
           if ((l0 === 'cd' && l1 === 'cd') || (l0 === 'cd' && l1 === 'storage') || (l0 === 'storage' && l1 === 'cd')) {
-            this.diags.error(node, 'JETH074', `a ternary mixing a calldata array with a calldata/storage array (data-location mismatch) is not supported; copy a branch to a memory local first`);
+            this.diags.error(
+              node,
+              'JETH074',
+              `a ternary mixing a calldata array with a calldata/storage array (data-location mismatch) is not supported; copy a branch to a memory local first`,
+            );
             return undefined;
           }
           const tern: Expr = { kind: 'ternary', type: ut, cond, then: unified[0], else: unified[1] };
-          return { kind: 'arrayValue', type: ut, arr: { base: { kind: 'memArrayExpr', expr: tern }, elem: ut.element } };
+          return {
+            kind: 'arrayValue',
+            type: ut,
+            arr: { base: { kind: 'memArrayExpr', expr: tern }, elem: ut.element },
+          };
         }
-        this.diags.error(node, 'JETH074', `a ternary over a ${displayName(ut)} from this source is not supported; select the value before the aggregate operation`);
+        this.diags.error(
+          node,
+          'JETH074',
+          `a ternary over a ${displayName(ut)} from this source is not supported; select the value before the aggregate operation`,
+        );
         return undefined;
       }
       // A ternary branch must lower to a single register value (a value type, or a MEMORY array
@@ -6515,18 +8091,30 @@ export class Analyzer {
         isStaticValueType(e.type) ||
         isBytesLike(e.type) ||
         // a STATIC struct / fixed array: materialized to a memory image, selected by pointer.
-        (isStaticType(e.type) && (e.type.kind === 'struct' || (e.type.kind === 'array' && e.type.length !== undefined))) ||
+        (isStaticType(e.type) &&
+          (e.type.kind === 'struct' || (e.type.kind === 'array' && e.type.length !== undefined))) ||
         // a DYNAMIC-field struct: materialized to a pointer-headed memory image (buildDynStructLocal)
         // and selected by pointer; the ternary result re-encodes via the mem TupleSrc. Branch sources
         // are exactly the kinds buildDynStructLocal copies (constructor / mem local / calldata param /
         // storage struct sources).
-        (e.type.kind === 'struct' && isDynamicType(e.type) &&
-          (e.kind === 'memDynStructValue' || e.kind === 'structNew' || e.kind === 'cdDynStructValue' ||
-           e.kind === 'structValue' || e.kind === 'mapStorageValue' || e.kind === 'structArrayElem' || e.kind === 'placeRead')) ||
+        (e.type.kind === 'struct' &&
+          isDynamicType(e.type) &&
+          (e.kind === 'memDynStructValue' ||
+            e.kind === 'structNew' ||
+            e.kind === 'cdDynStructValue' ||
+            e.kind === 'structValue' ||
+            e.kind === 'mapStorageValue' ||
+            e.kind === 'structArrayElem' ||
+            e.kind === 'placeRead')) ||
         (e.type.kind === 'array' &&
-          (e.kind === 'arrayLit' || (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'))));
+          (e.kind === 'arrayLit' ||
+            (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'))));
       if (!lowerable(unified[0]) || !lowerable(unified[1])) {
-        this.diags.error(node, 'JETH074', `a ternary over a ${displayName(unified[0].type)} (dynamic storage aggregate) is not supported; select the value before the aggregate operation`);
+        this.diags.error(
+          node,
+          'JETH074',
+          `a ternary over a ${displayName(unified[0].type)} (dynamic storage aggregate) is not supported; select the value before the aggregate operation`,
+        );
         return undefined;
       }
       return { kind: 'ternary', type: unified[0].type, cond, then: unified[0], else: unified[1] };
@@ -6538,7 +8126,8 @@ export class Analyzer {
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
       const folded = this.asIntLiteral(node);
       if (folded !== undefined) {
-        if (this.rejectBadUnderscores(node)) return { kind: 'literalInt', type: folded < 0n ? I256 : U256, value: folded };
+        if (this.rejectBadUnderscores(node))
+          return { kind: 'literalInt', type: folded < 0n ? I256 : U256, value: folded };
         // an enum `expected` does NOT capture a bare integer literal: it keeps its plain int type
         // so coerce rejects the implicit int -> enum (solc forbids `Color c = 1;`).
         const type = expected && isInteger(expected) && !isEnum(expected) ? expected : folded < 0n ? I256 : U256;
@@ -6616,7 +8205,8 @@ export class Analyzer {
       // dynamic array length (state, calldata param, or mapping value this.m[k])
       const lenArr = this.resolveArrayExpr(node.expression);
       if (lenArr) {
-        if (lenArr.base.kind === 'fixedArray') return { kind: 'literalInt', type: U256, value: BigInt(lenArr.base.length) };
+        if (lenArr.base.kind === 'fixedArray')
+          return { kind: 'literalInt', type: U256, value: BigInt(lenArr.base.length) };
         // storage-backed arrays (stateArray / mapArray) read state; calldata sources
         // (calldataArray / cdNestedElem) do not.
         if (lenArr.base.kind === 'stateArray' || lenArr.base.kind === 'mapArray') this.currentReadsState = true;
@@ -6667,7 +8257,11 @@ export class Analyzer {
         return undefined;
       }
       if (!node.typeArguments || node.typeArguments.length !== 1) {
-        this.diags.error(node, 'JETH363', 'new Array<T>(n) requires exactly one element-type argument, e.g. new Array<u256>(n)');
+        this.diags.error(
+          node,
+          'JETH363',
+          'new Array<T>(n) requires exactly one element-type argument, e.g. new Array<u256>(n)',
+        );
         return undefined;
       }
       if (!node.arguments || node.arguments.length !== 1) {
@@ -6677,13 +8271,21 @@ export class Analyzer {
       const elem = resolveType(node.typeArguments[0]!, this.diags, this.structsByName);
       if (!elem) return undefined;
       if (!isStaticValueType(elem)) {
-        this.diags.error(node.typeArguments[0]!, 'JETH216', `new Array<T>(n) requires a value-type element (uint/int/bool/address/bytesN/enum); a ${displayName(elem)} element is not supported`);
+        this.diags.error(
+          node.typeArguments[0]!,
+          'JETH216',
+          `new Array<T>(n) requires a value-type element (uint/int/bool/address/bytesN/enum); a ${displayName(elem)} element is not supported`,
+        );
         return undefined;
       }
       const lenRaw = this.checkExpr(node.arguments[0]!, U256);
       if (!lenRaw) return undefined;
       if (!isInteger(lenRaw.type)) {
-        this.diags.error(node.arguments[0]!, 'JETH363', `new Array<T>(n) length must be an integer, got ${displayName(lenRaw.type)}`);
+        this.diags.error(
+          node.arguments[0]!,
+          'JETH363',
+          `new Array<T>(n) length must be an integer, got ${displayName(lenRaw.type)}`,
+        );
         return undefined;
       }
       const length = this.coerce(lenRaw, U256, node.arguments[0]!);
@@ -6731,15 +8333,24 @@ export class Analyzer {
     // `d.field` read on a DYNAMIC-field struct memory local: a value field -> a memory load
     // (memField at the head word); a bytes/string field -> the head word holds the [len][data]
     // pointer (memDynField, routed through the bytes/string codec). Must precede the resolvers below.
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.memDynStructLocals.has(node.expression.text)
+    ) {
       const mf = this.memDynStructField(node);
       if (!mf) return undefined;
-      if (isStaticValueType(mf.field.type)) return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+      if (isStaticValueType(mf.field.type))
+        return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
       // a dynamic value-array field: the head word holds a pointer to [len][elems]. Wrap a head-word
       // LOAD (memField) in memArrayExpr so index / .length / return consume it as a memory array.
       if (mf.field.type.kind === 'array' && mf.field.type.length === undefined) {
         const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
-        return { kind: 'arrayValue', type: mf.field.type, arr: { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element } };
+        return {
+          kind: 'arrayValue',
+          type: mf.field.type,
+          arr: { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element },
+        };
       }
       return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
     }
@@ -6750,9 +8361,15 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) && this.memChainRoot(node)) {
       const r = this.resolveMemFieldChain(node);
       if (!r) return undefined;
-      if (isStaticValueType(r.type)) return { kind: 'memField', type: r.type, local: r.local, wordOffset: r.wordOffset };
-      if (r.type.kind === 'struct') return { kind: 'memAggregate', type: r.type, local: r.local, wordOffset: r.wordOffset };
-      this.diags.error(node, 'JETH245', `reading a ${displayName(r.type)} field of a memory struct is not supported yet`);
+      if (isStaticValueType(r.type))
+        return { kind: 'memField', type: r.type, local: r.local, wordOffset: r.wordOffset };
+      if (r.type.kind === 'struct')
+        return { kind: 'memAggregate', type: r.type, local: r.local, wordOffset: r.wordOffset };
+      this.diags.error(
+        node,
+        'JETH245',
+        `reading a ${displayName(r.type)} field of a memory struct is not supported yet`,
+      );
       return undefined;
     }
     // G9: a[i] on a fixed-array MEMORY local (value element) -> a bounds-checked memory load.
@@ -6769,14 +8386,26 @@ export class Analyzer {
     }
     // G9: p.a[i] where a is a fixed-array VALUE field of a memory struct local -> memElem at a's word
     // offset within the image (the element words are inline, one per element).
-    if (ts.isElementAccessExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.argumentExpression && this.memChainRoot(node.expression)) {
+    if (
+      ts.isElementAccessExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.argumentExpression &&
+      this.memChainRoot(node.expression)
+    ) {
       const fld = this.resolveMemFieldChain(node.expression);
       if (fld && fld.type.kind === 'array' && fld.type.length !== undefined && isStaticValueType(fld.type.element)) {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
         if (!this.checkMemElemBound(idx, fld.type.length, node.argumentExpression)) return undefined;
-        return { kind: 'memElem', type: fld.type.element, local: fld.local, index: idx, length: fld.type.length, wordOffset: fld.wordOffset };
+        return {
+          kind: 'memElem',
+          type: fld.type.element,
+          local: fld.local,
+          index: idx,
+          length: fld.type.length,
+          wordOffset: fld.wordOffset,
+        };
       }
     }
 
@@ -6804,10 +8433,7 @@ export class Analyzer {
         return { kind: 'cdPlaceRead', type: cd.result.finalType, place: cd.result.place };
       }
       // dynamic-array-of-struct calldata param element field: ps[i].field
-      if (
-        ts.isPropertyAccessExpression(node) &&
-        ts.isElementAccessExpression(node.expression)
-      ) {
+      if (ts.isPropertyAccessExpression(node) && ts.isElementAccessExpression(node.expression)) {
         const bt = this.baseDynType(node.expression.expression);
         if (bt && bt.kind === 'array' && bt.element.kind === 'struct') {
           // a DYNAMIC-struct array element field (D[] or Arr<D,N>): tuple via the
@@ -6827,7 +8453,13 @@ export class Analyzer {
         while (ts.isPropertyAccessExpression(inner)) inner = inner.expression;
         if (ts.isElementAccessExpression(inner)) {
           const bt = this.baseDynType(inner.expression);
-          if (bt && bt.kind === 'array' && bt.length === undefined && bt.element.kind === 'struct' && isStaticType(bt.element)) {
+          if (
+            bt &&
+            bt.kind === 'array' &&
+            bt.length === undefined &&
+            bt.element.kind === 'struct' &&
+            isStaticType(bt.element)
+          ) {
             return this.resolveCdArrayField(node, bt.element);
           }
         }
@@ -6852,7 +8484,14 @@ export class Analyzer {
         // value on return, or .length / [i]).
         if (isBytesLike(f.type)) {
           this.currentReadsState = true;
-          return { kind: 'dynPlaceRead', type: f.type, path: { baseSlot: sv.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] } };
+          return {
+            kind: 'dynPlaceRead',
+            type: f.type,
+            path: {
+              baseSlot: sv.slot,
+              steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }],
+            },
+          };
         }
         // return this.o.inner: a whole nested-struct field, encoded from its slot by the
         // storage-source encoder (structValue reuses the whole-struct return machinery).
@@ -6866,16 +8505,42 @@ export class Analyzer {
         if (f.type.kind === 'array') {
           this.currentReadsState = true;
           if (f.type.length === undefined) {
-            return { kind: 'arrayValue', type: f.type, arr: { base: { kind: 'placeArray', path: { baseSlot: sv.slot, steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }] } }, elem: f.type.element } };
+            return {
+              kind: 'arrayValue',
+              type: f.type,
+              arr: {
+                base: {
+                  kind: 'placeArray',
+                  path: {
+                    baseSlot: sv.slot,
+                    steps: [{ kind: 'field', fieldSlot: f.slot, fieldOffset: f.offset, fieldType: f.type }],
+                  },
+                },
+                elem: f.type.element,
+              },
+            };
           }
-          return { kind: 'arrayValue', type: f.type, arr: { base: { kind: 'fixedArray', baseSlot: sv.slot + f.slot, length: f.type.length }, elem: f.type.element } };
+          return {
+            kind: 'arrayValue',
+            type: f.type,
+            arr: {
+              base: { kind: 'fixedArray', baseSlot: sv.slot + f.slot, length: f.type.length },
+              elem: f.type.element,
+            },
+          };
         }
         if (!isStaticValueType(f.type)) {
           this.diags.error(node, 'JETH226', 'nested array field access is not supported yet');
           return undefined;
         }
         this.currentReadsState = true;
-        return { kind: 'stateRead', type: f.type, slot: sv.slot + f.slot, offset: f.offset, varName: `${sv.name}.${f.name}` };
+        return {
+          kind: 'stateRead',
+          type: f.type,
+          slot: sv.slot + f.slot,
+          offset: f.offset,
+          varName: `${sv.name}.${f.name}`,
+        };
       }
     }
 
@@ -6903,13 +8568,20 @@ export class Analyzer {
       this.catchBindings.has(node.name.text)
     ) {
       const t = this.catchBindings.get(node.name.text)!;
-      if (node.name.text === 'reason') { this.catchUsesReason = true; return { kind: 'catchReason', type: t }; }
+      if (node.name.text === 'reason') {
+        this.catchUsesReason = true;
+        return { kind: 'catchReason', type: t };
+      }
       this.catchUsesPanic = true;
       return { kind: 'catchPanic', type: t };
     }
 
     // this.CONSTANT (read): inline the folded literal (no SLOAD; @constant is slot-free, like solc).
-    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && this.constantsByName.has(node.name.text)) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      this.constantsByName.has(node.name.text)
+    ) {
       const c = this.constantsByName.get(node.name.text)!;
       if (c.value instanceof Uint8Array) return { kind: 'stringLiteral', type: c.type, bytes: c.value }; // string constant
       return typeof c.value === 'boolean'
@@ -6921,7 +8593,11 @@ export class Analyzer {
     // but solc still requires `view` (rejects `pure`): it "reads the environment". Inside the
     // constructor body the read is the STAGED shadow (value assigned so far); elsewhere it lowers to
     // a runtime loadimmutable.
-    if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword && this.immutablesByName.has(node.name.text)) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      this.immutablesByName.has(node.name.text)
+    ) {
       const im = this.immutablesByName.get(node.name.text)!;
       this.currentReadsEnv = true; // forbidden in @pure, allowed in @view (matches solc)
       return this.currentInConstructor
@@ -6937,7 +8613,11 @@ export class Analyzer {
         return undefined;
       }
       if (v.type.kind === 'mapping') {
-        this.diags.error(node, 'JETH153', `mapping 'this.${node.name.text}' cannot be read directly; index it (this.${node.name.text}[key])`);
+        this.diags.error(
+          node,
+          'JETH153',
+          `mapping 'this.${node.name.text}' cannot be read directly; index it (this.${node.name.text}[key])`,
+        );
         return undefined;
       }
       this.currentReadsState = true;
@@ -6948,12 +8628,20 @@ export class Analyzer {
           // recursive encoder (static value / static-struct elements -> flat leaves).
           // A fixed array of a DYNAMIC element (Arr<string,N>/Arr<D,N>) is not a valid
           // state var (rejected at declaration), so this is always a static aggregate.
-          return { kind: 'arrayValue', type: v.type, arr: { base: { kind: 'fixedArray', baseSlot: v.slot, length: v.type.length }, elem: v.type.element } };
+          return {
+            kind: 'arrayValue',
+            type: v.type,
+            arr: { base: { kind: 'fixedArray', baseSlot: v.slot, length: v.type.length }, elem: v.type.element },
+          };
         }
         // a storage array of value / static-struct / DYNAMIC-struct (D[]) / bytes/string
         // (string[]) / nested dynamic-array (u256[][], string[][]) element: encoded by the
         // storage-source recursive encoder on return (unbounded nesting).
-        return { kind: 'arrayValue', type: v.type, arr: { base: { kind: 'stateArray', slot: v.slot }, elem: v.type.element } };
+        return {
+          kind: 'arrayValue',
+          type: v.type,
+          arr: { base: { kind: 'stateArray', slot: v.slot }, elem: v.type.element },
+        };
       }
       if (v.type.kind === 'struct') {
         // a whole struct read from storage (return this.d): a static struct flattens
@@ -6992,7 +8680,12 @@ export class Analyzer {
       if (base && base.type.kind === 'address') {
         this.currentReadsEnv = true; // forbidden in @pure
         const member = node.name.text as 'code' | 'codehash';
-        return { kind: 'extCode', type: member === 'code' ? { kind: 'bytes' } : { kind: 'bytesN', size: 32 }, addr: base, member };
+        return {
+          kind: 'extCode',
+          type: member === 'code' ? { kind: 'bytes' } : { kind: 'bytesN', size: 32 },
+          addr: base,
+          member,
+        };
       }
     }
 
@@ -7005,14 +8698,21 @@ export class Analyzer {
       if (node.argumentExpression) {
         let bt: JethType | undefined;
         if (ts.isIdentifier(node.expression)) bt = this.lookupLocal(node.expression.text);
-        else if (ts.isPropertyAccessExpression(node.expression) && node.expression.expression.kind === ts.SyntaxKind.ThisKeyword)
+        else if (
+          ts.isPropertyAccessExpression(node.expression) &&
+          node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
+        )
           bt = this.stateByName.get(node.expression.name.text)?.type;
         if (bt && bt.kind === 'bytesN') {
           const base = this.checkExpr(node.expression);
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!base || !index) return undefined;
           if (index.kind === 'literalInt' && (index.value < 0n || index.value >= BigInt(bt.size))) {
-            this.diags.error(node, 'JETH152', `byte index ${index.value} is out of range for ${displayName(bt)} (valid 0..${bt.size - 1})`);
+            this.diags.error(
+              node,
+              'JETH152',
+              `byte index ${index.value} is out of range for ${displayName(bt)} (valid 0..${bt.size - 1})`,
+            );
             return undefined;
           }
           return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
@@ -7039,11 +8739,24 @@ export class Analyzer {
             if (base.type.kind === 'bytesN' || base.type.kind === 'bytes') {
               const index = this.checkExpr(node.argumentExpression, U256);
               if (!index) return undefined;
-              if (base.type.kind === 'bytesN' && index.kind === 'literalInt' && (index.value < 0n || index.value >= BigInt(base.type.size))) {
-                this.diags.error(node, 'JETH152', `byte index ${index.value} is out of range for ${displayName(base.type)} (valid 0..${base.type.size - 1})`);
+              if (
+                base.type.kind === 'bytesN' &&
+                index.kind === 'literalInt' &&
+                (index.value < 0n || index.value >= BigInt(base.type.size))
+              ) {
+                this.diags.error(
+                  node,
+                  'JETH152',
+                  `byte index ${index.value} is out of range for ${displayName(base.type)} (valid 0..${base.type.size - 1})`,
+                );
                 return undefined;
               }
-              return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+              return {
+                kind: 'byteIndex',
+                type: BYTES1,
+                base,
+                index: this.coerce(index, U256, node.argumentExpression),
+              };
             }
             if (base.type.kind === 'string') {
               this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
@@ -7094,8 +8807,10 @@ export class Analyzer {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
           const idx = this.coerce(index, U256, node.argumentExpression);
-          if (isBytesLike(innerArr.elem)) return { kind: 'cdDynArrayElem', type: innerArr.elem, arr: innerArr, index: idx };
-          if (isStaticValueType(innerArr.elem)) return { kind: 'arrayGet', type: innerArr.elem, arr: innerArr, index: idx };
+          if (isBytesLike(innerArr.elem))
+            return { kind: 'cdDynArrayElem', type: innerArr.elem, arr: innerArr, index: idx };
+          if (isStaticValueType(innerArr.elem))
+            return { kind: 'arrayGet', type: innerArr.elem, arr: innerArr, index: idx };
           return undefined; // a still-deeper dynamic-array element is handled by the outer resolveArrayExpr
         }
       }
@@ -7108,8 +8823,10 @@ export class Analyzer {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
           const idx = this.coerce(index, U256, node.argumentExpression);
-          if (isBytesLike(innerArr.elem)) return { kind: 'cdDynArrayElem', type: innerArr.elem, arr: innerArr, index: idx };
-          if (isStaticValueType(innerArr.elem)) return { kind: 'arrayGet', type: innerArr.elem, arr: innerArr, index: idx };
+          if (isBytesLike(innerArr.elem))
+            return { kind: 'cdDynArrayElem', type: innerArr.elem, arr: innerArr, index: idx };
+          if (isStaticValueType(innerArr.elem))
+            return { kind: 'arrayGet', type: innerArr.elem, arr: innerArr, index: idx };
           return undefined;
         }
       }
@@ -7119,11 +8836,20 @@ export class Analyzer {
       // arrays (value elements) keep their existing arrayGet path via resolveMapAccess.
       if (ts.isElementAccessExpression(node.expression) && node.argumentExpression) {
         const mapArr = this.resolveArrayExpr(node.expression);
-        if (mapArr && (mapArr.base.kind === 'mapArray' || mapArr.base.kind === 'placeArray') && isBytesLike(mapArr.elem)) {
+        if (
+          mapArr &&
+          (mapArr.base.kind === 'mapArray' || mapArr.base.kind === 'placeArray') &&
+          isBytesLike(mapArr.elem)
+        ) {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
           this.currentReadsState = true;
-          return { kind: 'strArrayElem', type: mapArr.elem, arr: mapArr, index: this.coerce(index, U256, node.argumentExpression) };
+          return {
+            kind: 'strArrayElem',
+            type: mapArr.elem,
+            arr: mapArr,
+            index: this.coerce(index, U256, node.argumentExpression),
+          };
         }
       }
       // this.m[k][i] where m: mapping<K, bytes>: byte-index the dynamic mapping value
@@ -7184,7 +8910,12 @@ export class Analyzer {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
           this.currentReadsState = true;
-          return { kind: 'structArrayElem', type: sa.elem, arr: sa, index: this.coerce(index, U256, node.argumentExpression) };
+          return {
+            kind: 'structArrayElem',
+            type: sa.elem,
+            arr: sa,
+            index: this.coerce(index, U256, node.argumentExpression),
+          };
         }
       }
       // A string[]/bytes[] element of a STRUCT-FIELD / nested dynamic-element array (this.d.xs[i],
@@ -7197,7 +8928,12 @@ export class Analyzer {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
           this.currentReadsState = true;
-          return { kind: 'strArrayElem', type: da.elem, arr: da, index: this.coerce(index, U256, node.argumentExpression) };
+          return {
+            kind: 'strArrayElem',
+            type: da.elem,
+            arr: da,
+            index: this.coerce(index, U256, node.argumentExpression),
+          };
         }
       }
       const bt = this.baseDynType(node.expression);
@@ -7244,7 +8980,11 @@ export class Analyzer {
             const idx = this.coerce(index, U256, node.argumentExpression);
             return { kind: 'cdStructArrayElem', type: arr.elem, arr, index: idx };
           }
-          this.diags.error(node, 'JETH230', 'reading a whole struct element of a calldata array is not supported yet (access a value field)');
+          this.diags.error(
+            node,
+            'JETH230',
+            'reading a whole struct element of a calldata array is not supported yet (access a value field)',
+          );
           return undefined;
         }
         if (arr.elem.kind === 'array') {
@@ -7258,7 +8998,10 @@ export class Analyzer {
           // a whole FIXED inner-array row of a 2D fixed/storage array (return this.g[i]):
           // a static aggregate at the element slot; encoded inline by the storage encoder
           // (structArrayElem computes the slot and routes through returnStorageValue).
-          if (arr.elem.length !== undefined && (arr.base.kind === 'stateArray' || arr.base.kind === 'fixedArray' || arr.base.kind === 'mapArray')) {
+          if (
+            arr.elem.length !== undefined &&
+            (arr.base.kind === 'stateArray' || arr.base.kind === 'fixedArray' || arr.base.kind === 'mapArray')
+          ) {
             const index = this.checkExpr(node.argumentExpression, U256);
             if (!index) return undefined;
             const idx = this.coerce(index, U256, node.argumentExpression);
@@ -7266,14 +9009,19 @@ export class Analyzer {
             this.currentReadsState = true;
             return { kind: 'structArrayElem', type: arr.elem, arr, index: idx };
           }
-          this.diags.error(node, 'JETH230', 'reading a whole array-of-array element is a later step (access a value field)');
+          this.diags.error(
+            node,
+            'JETH230',
+            'reading a whole array-of-array element is a later step (access a value field)',
+          );
           return undefined;
         }
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
         if (!this.checkFixedBound(arr, idx, node.argumentExpression)) return undefined;
-        if (arr.base.kind !== 'calldataArray' && arr.base.kind !== 'memArray' && arr.base.kind !== 'memArrayExpr') this.currentReadsState = true;
+        if (arr.base.kind !== 'calldataArray' && arr.base.kind !== 'memArray' && arr.base.kind !== 'memArrayExpr')
+          this.currentReadsState = true;
         return { kind: 'arrayGet', type: arr.elem, arr, index: idx };
       }
       if (bt && isBytesLike(bt)) {
@@ -7380,7 +9128,9 @@ export class Analyzer {
         if (
           innerArr &&
           isBytesLike(innerArr.elem) &&
-          (innerArr.base.kind === 'stateArray' || innerArr.base.kind === 'mapArray' || innerArr.base.kind === 'calldataArray')
+          (innerArr.base.kind === 'stateArray' ||
+            innerArr.base.kind === 'mapArray' ||
+            innerArr.base.kind === 'calldataArray')
         ) {
           if (innerArr.elem.kind === 'string') {
             this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
@@ -7414,7 +9164,12 @@ export class Analyzer {
             if (arrBase && arrBase.kind === 'arrayValue' && arrBase.type.kind === 'array') {
               const index = this.checkExpr(node.argumentExpression, U256);
               if (!index) return undefined;
-              return { kind: 'arrayGet', type: arrBase.arr.elem, arr: arrBase.arr, index: this.coerce(index, U256, node.argumentExpression) };
+              return {
+                kind: 'arrayGet',
+                type: arrBase.arr.elem,
+                arr: arrBase.arr,
+                index: this.coerce(index, U256, node.argumentExpression),
+              };
             }
             return undefined; // resolveCdDynArrayField already emitted any diagnostic
           }
@@ -7432,11 +9187,24 @@ export class Analyzer {
                 if (!jE) return undefined;
                 const jIdx = this.coerce(jE, U256, node.argumentExpression);
                 if (jIdx.kind === 'literalInt' && (jIdx.value < 0n || jIdx.value >= BigInt(f.type.length))) {
-                  this.diags.error(node.argumentExpression, 'JETH211', `array index ${jIdx.value} out of bounds for length ${f.type.length}`);
+                  this.diags.error(
+                    node.argumentExpression,
+                    'JETH211',
+                    `array index ${jIdx.value} out of bounds for length ${f.type.length}`,
+                  );
                   return undefined;
                 }
                 const headWords = struct.fields.slice(0, fidx).reduce((n, ff) => n + abiHeadWords(ff.type), 0);
-                return { kind: 'cdArrayField', type: f.type.element, arr, index: eidx, headWords, fieldType: f.type.element, elemIndex: jIdx, elemLength: f.type.length };
+                return {
+                  kind: 'cdArrayField',
+                  type: f.type.element,
+                  arr,
+                  index: eidx,
+                  headWords,
+                  fieldType: f.type.element,
+                  elemIndex: jIdx,
+                  elemLength: f.type.length,
+                };
               }
             }
           }
@@ -7483,67 +9251,152 @@ export class Analyzer {
         return { kind: 'global', type: U256, op: 'gas' };
       }
       if (callee === 'keccak256') {
-        if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'keccak256(...) takes exactly one argument'); return undefined; }
+        if (node.arguments.length !== 1) {
+          this.diags.error(node, 'JETH170', 'keccak256(...) takes exactly one argument');
+          return undefined;
+        }
         const arg = this.checkExpr(node.arguments[0]!, this.bytesLiteralExpected(node.arguments[0]!));
         if (!arg) return undefined;
         // solc: keccak256 takes a single `bytes` (a string/bytesN does NOT implicitly convert).
-        if (arg.type.kind !== 'bytes') { this.diags.error(node, 'JETH171', `keccak256(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`); return undefined; }
+        if (arg.type.kind !== 'bytes') {
+          this.diags.error(
+            node,
+            'JETH171',
+            `keccak256(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`,
+          );
+          return undefined;
+        }
         return { kind: 'keccak', type: { kind: 'bytesN', size: 32 }, arg };
       }
       if (callee === 'sha256' || callee === 'ripemd160') {
-        if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', `${callee}(...) takes exactly one argument`); return undefined; }
+        if (node.arguments.length !== 1) {
+          this.diags.error(node, 'JETH170', `${callee}(...) takes exactly one argument`);
+          return undefined;
+        }
         const arg = this.checkExpr(node.arguments[0]!, this.bytesLiteralExpected(node.arguments[0]!));
         if (!arg) return undefined;
-        if (arg.type.kind !== 'bytes') { this.diags.error(node, 'JETH171', `${callee}(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`); return undefined; }
+        if (arg.type.kind !== 'bytes') {
+          this.diags.error(
+            node,
+            'JETH171',
+            `${callee}(...) requires a bytes argument, got ${displayName(arg.type)} (use abi.encodePacked(...) / bytes(...) for a string)`,
+          );
+          return undefined;
+        }
         const isSha = callee === 'sha256';
-        return { kind: 'precompileHash', type: { kind: 'bytesN', size: isSha ? 32 : 20 }, arg, addr: isSha ? 2 : 3, leftShift: isSha ? 0 : 96 };
+        return {
+          kind: 'precompileHash',
+          type: { kind: 'bytesN', size: isSha ? 32 : 20 },
+          arg,
+          addr: isSha ? 2 : 3,
+          leftShift: isSha ? 0 : 96,
+        };
       }
       if (callee === 'addmod' || callee === 'mulmod') {
         // addmod(a,b,m) = (a+b) % m, mulmod(a,b,m) = (a*b) % m, both full-precision (no overflow);
         // m==0 yields 0 (the EVM ADDMOD/MULMOD opcode, no revert). solc args are uint256.
-        if (node.arguments.length !== 3) { this.diags.error(node, 'JETH170', `${callee}(...) takes exactly three arguments`); return undefined; }
+        if (node.arguments.length !== 3) {
+          this.diags.error(node, 'JETH170', `${callee}(...) takes exactly three arguments`);
+          return undefined;
+        }
         const a = this.checkExpr(node.arguments[0]!, U256);
         const b = this.checkExpr(node.arguments[1]!, U256);
         const m = this.checkExpr(node.arguments[2]!, U256);
         if (!a || !b || !m) return undefined;
-        for (const [x, i] of [[a, 0], [b, 1], [m, 2]] as const) {
-          if (!isInteger(x.type)) { this.diags.error(node.arguments[i]!, 'JETH171', `${callee}(...) requires integer arguments, got ${displayName(x.type)}`); return undefined; }
+        for (const [x, i] of [
+          [a, 0],
+          [b, 1],
+          [m, 2],
+        ] as const) {
+          if (!isInteger(x.type)) {
+            this.diags.error(
+              node.arguments[i]!,
+              'JETH171',
+              `${callee}(...) requires integer arguments, got ${displayName(x.type)}`,
+            );
+            return undefined;
+          }
         }
         // solc rejects a compile-time-constant zero modulus ("Arithmetic modulo zero"). A constant
         // arithmetic modulus is already folded to a literalInt by checkExpr, so this catches `0n` and
         // folded forms like `1n - 1n` alike. (A runtime-zero modulus still reverts Panic(0x12).)
         if (m.kind === 'literalInt' && m.value === 0n) {
-          this.diags.error(node.arguments[2]!, 'JETH172', `${callee}(...) modulus is a compile-time zero (arithmetic modulo zero)`);
+          this.diags.error(
+            node.arguments[2]!,
+            'JETH172',
+            `${callee}(...) modulus is a compile-time zero (arithmetic modulo zero)`,
+          );
           return undefined;
         }
-        return { kind: 'modOp', type: U256, op: callee, a: this.coerce(a, U256, node.arguments[0]!), b: this.coerce(b, U256, node.arguments[1]!), m: this.coerce(m, U256, node.arguments[2]!) };
+        return {
+          kind: 'modOp',
+          type: U256,
+          op: callee,
+          a: this.coerce(a, U256, node.arguments[0]!),
+          b: this.coerce(b, U256, node.arguments[1]!),
+          m: this.coerce(m, U256, node.arguments[2]!),
+        };
       }
       if (callee === 'blockhash') {
-        if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'blockhash(...) takes exactly one argument'); return undefined; }
+        if (node.arguments.length !== 1) {
+          this.diags.error(node, 'JETH170', 'blockhash(...) takes exactly one argument');
+          return undefined;
+        }
         const arg = this.checkExpr(node.arguments[0]!, U256);
         if (!arg) return undefined;
-        if (!isInteger(arg.type)) { this.diags.error(node, 'JETH171', `blockhash(...) requires an integer argument, got ${displayName(arg.type)}`); return undefined; }
+        if (!isInteger(arg.type)) {
+          this.diags.error(
+            node,
+            'JETH171',
+            `blockhash(...) requires an integer argument, got ${displayName(arg.type)}`,
+          );
+          return undefined;
+        }
         this.currentReadsEnv = true; // forbidden in @pure
-        return { kind: 'blockhash', type: { kind: 'bytesN', size: 32 }, arg: this.coerce(arg, U256, node.arguments[0]!) };
+        return {
+          kind: 'blockhash',
+          type: { kind: 'bytesN', size: 32 },
+          arg: this.coerce(arg, U256, node.arguments[0]!),
+        };
       }
       if (callee === 'blobhash') {
         // EIP-4844 (cancun): blobhash(index) -> the versioned hash of the index-th blob, or 0 (out of range).
-        if (node.arguments.length !== 1) { this.diags.error(node, 'JETH170', 'blobhash(...) takes exactly one argument'); return undefined; }
+        if (node.arguments.length !== 1) {
+          this.diags.error(node, 'JETH170', 'blobhash(...) takes exactly one argument');
+          return undefined;
+        }
         const arg = this.checkExpr(node.arguments[0]!, U256);
         if (!arg) return undefined;
-        if (!isInteger(arg.type)) { this.diags.error(node, 'JETH171', `blobhash(...) requires an integer argument, got ${displayName(arg.type)}`); return undefined; }
+        if (!isInteger(arg.type)) {
+          this.diags.error(node, 'JETH171', `blobhash(...) requires an integer argument, got ${displayName(arg.type)}`);
+          return undefined;
+        }
         this.currentReadsEnv = true; // forbidden in @pure
-        return { kind: 'blobhash', type: { kind: 'bytesN', size: 32 }, arg: this.coerce(arg, U256, node.arguments[0]!) };
+        return {
+          kind: 'blobhash',
+          type: { kind: 'bytesN', size: 32 },
+          arg: this.coerce(arg, U256, node.arguments[0]!),
+        };
       }
       // `Color(x)` is an integer -> enum range-checked conversion; an enum is a branded uint8, so
       // isBrandedAlias already routes it, but name it explicitly for clarity.
-      if (callee === 'payable' || resolvePrimitiveName(callee) || this.isEnumName(callee) || this.isBrandedAlias(callee)) return this.checkCast(node, callee);
+      if (
+        callee === 'payable' ||
+        resolvePrimitiveName(callee) ||
+        this.isEnumName(callee) ||
+        this.isBrandedAlias(callee)
+      )
+        return this.checkCast(node, callee);
       const st = this.structsByName.get(callee);
       if (st && st.kind === 'struct') return this.checkStructConstruct(node, st);
       // Phase 6: a bare interface wrapper `IFoo(addr)` used as a VALUE (no .method() applied). An
       // interface-tagged address is not usable on its own; it must be followed by a method call.
       if (this.interfacesByName.has(callee) && !this.isVisibleLocal(callee)) {
-        this.diags.error(node, 'JETH358', `'${callee}(addr)' is an interface handle and cannot be used as a value; call a method on it, e.g. ${callee}(addr).someMethod(...)`);
+        this.diags.error(
+          node,
+          'JETH358',
+          `'${callee}(addr)' is an interface handle and cannot be used as a value; call a method on it, e.g. ${callee}(addr).someMethod(...)`,
+        );
         return undefined;
       }
       // an internal/private/public contract function called by name -> internal call.
@@ -7619,11 +9472,19 @@ export class Analyzer {
       if (ic === 'handled') return undefined;
       if (ic) {
         if (ic.returnTypes) {
-          this.diags.error(node, 'JETH356', `this interface method returns a tuple; bind it with a destructuring \`let [a, b] = IFoo(addr).${(node as ts.CallExpression & { expression: ts.PropertyAccessExpression }).expression.name.text}(...)\``);
+          this.diags.error(
+            node,
+            'JETH356',
+            `this interface method returns a tuple; bind it with a destructuring \`let [a, b] = IFoo(addr).${(node as ts.CallExpression & { expression: ts.PropertyAccessExpression }).expression.name.text}(...)\``,
+          );
           return undefined;
         }
         if (ic.returnType.kind === 'void') {
-          this.diags.error(node, 'JETH357', 'this interface method returns void and cannot be used as a value (call it as a statement)');
+          this.diags.error(
+            node,
+            'JETH357',
+            'this interface method returns void and cannot be used as a value (call it as a statement)',
+          );
           return undefined;
         }
         return { kind: 'abiDecode', type: ic.returnType, data: ic.call };
@@ -7645,7 +9506,11 @@ export class Analyzer {
     // expected type is a known struct; otherwise point at positional construction.
     if (ts.isObjectLiteralExpression(node)) {
       if (expected && expected.kind === 'struct') return this.checkStructLiteral(node, expected);
-      this.diags.error(node, 'JETH227', 'object-literal struct construction needs a known struct type from context (annotate the target), or use positional StructName(...)');
+      this.diags.error(
+        node,
+        'JETH227',
+        'object-literal struct construction needs a known struct type from context (annotate the target), or use positional StructName(...)',
+      );
       return undefined;
     }
 
@@ -7656,9 +9521,10 @@ export class Analyzer {
         this.diags.error(node, 'JETH072', `unknown identifier '${node.text}'`);
         return undefined;
       }
-      if (isBytesLike(t)) return this.memDynLocals.has(node.text)
-        ? { kind: 'dynLocalRead', type: t, name: node.text }
-        : { kind: 'dynParamRead', type: t, name: node.text };
+      if (isBytesLike(t))
+        return this.memDynLocals.has(node.text)
+          ? { kind: 'dynLocalRead', type: t, name: node.text }
+          : { kind: 'dynParamRead', type: t, name: node.text };
       // a whole MEMORY-aggregate (struct) local (return p / let q = p / arg p): the register
       // holds a pointer to the ABI-unpacked image. G9.
       if (this.memAggregateLocals.has(node.text)) {
@@ -7672,12 +9538,20 @@ export class Analyzer {
       // a MEMORY array local (return xs): the register holds a pointer to [len][elems];
       // ABI-encoded from memory on return.
       if (t.kind === 'array' && this.memArrayLocals.has(node.text)) {
-        return { kind: 'arrayValue', type: t, arr: { base: { kind: 'memArray', varName: node.text }, elem: t.element } };
+        return {
+          kind: 'arrayValue',
+          type: t,
+          arr: { base: { kind: 'memArray', varName: node.text }, elem: t.element },
+        };
       }
       // a whole dynamic-array param echo, OR a fixed array of a DYNAMIC element
       // (Arr<dyn,N>) echo: re-encoded head/tail via the recursive codec.
       if (t.kind === 'array' && (t.length === undefined || isDynamicType(t.element))) {
-        return { kind: 'arrayValue', type: t, arr: { base: { kind: 'calldataArray', name: node.text }, elem: t.element } };
+        return {
+          kind: 'arrayValue',
+          type: t,
+          arr: { base: { kind: 'calldataArray', name: node.text }, elem: t.element },
+        };
       }
       // a whole DYNAMIC-struct param echo (return d): re-encoded head/tail (4e-6).
       if (t.kind === 'struct' && isDynamicType(t)) {
@@ -7689,7 +9563,11 @@ export class Analyzer {
         return { kind: 'cdAggregateValue', type: t, param: node.text };
       }
       if (t.kind === 'array' || t.kind === 'struct') {
-        this.diags.error(node, 'JETH230', `passing or returning a whole ${displayName(t)} calldata parameter is not supported yet (access its fields/elements)`);
+        this.diags.error(
+          node,
+          'JETH230',
+          `passing or returning a whole ${displayName(t)} calldata parameter is not supported yet (access its fields/elements)`,
+        );
         return undefined;
       }
       return { kind: 'localRead', type: t, name: node.text };
@@ -7700,7 +9578,10 @@ export class Analyzer {
     if (ts.isPostfixUnaryExpression(node)) {
       return this.checkIncDecExpr(node.operand, node.operator === ts.SyntaxKind.PlusPlusToken, false, node);
     }
-    if (ts.isPrefixUnaryExpression(node) && (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)) {
+    if (
+      ts.isPrefixUnaryExpression(node) &&
+      (node.operator === ts.SyntaxKind.PlusPlusToken || node.operator === ts.SyntaxKind.MinusMinusToken)
+    ) {
       return this.checkIncDecExpr(node.operand, node.operator === ts.SyntaxKind.PlusPlusToken, true, node);
     }
 
@@ -7726,8 +9607,7 @@ export class Analyzer {
       // address (and rejects a bad-checksum literal outright). Fall through to checkExpr/buildBinary,
       // which types the operand as `address` (-> JETH082) or emits the checksum error (-> JETH049).
       const addrLike =
-        this.classifyAddressHexLiteral(node.left) !== 'plain' ||
-        this.classifyAddressHexLiteral(node.right) !== 'plain';
+        this.classifyAddressHexLiteral(node.left) !== 'plain' || this.classifyAddressHexLiteral(node.right) !== 'plain';
       if (!addrLike && ['+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^'].includes(op)) {
         const folded = this.foldConstRational(node);
         if (folded !== undefined) {
@@ -7749,11 +9629,12 @@ export class Analyzer {
       // outer expected, so `varN OP bigLit` widens to the common type instead of range-failing the
       // literal against the (narrower) variable type - matching solc (e.g. `u8 a + 1000` computes at u16).
       const rightLit = this.asIntLiteral(node.right) !== undefined;
-      const rightExpected = op === '**' || op === '<<' || op === '>>' || this.isComparison(op)
-        ? undefined
-        : rightLit
-          ? expected
-          : expected ?? left.type;
+      const rightExpected =
+        op === '**' || op === '<<' || op === '>>' || this.isComparison(op)
+          ? undefined
+          : rightLit
+            ? expected
+            : (expected ?? left.type);
       const right = this.checkExpr(node.right, rightExpected);
       if (!right) return undefined;
       return this.buildBinary(op, left, right, node);
@@ -7782,7 +9663,11 @@ export class Analyzer {
       case ts.SyntaxKind.TildeToken:
         // ~ is a bit-vector complement: solc allows it on integers AND fixed bytes (bytesN).
         if (!isInteger(operand.type) && operand.type.kind !== 'bytesN') {
-          this.diags.error(node, 'JETH077', `unary '~' requires an integer or bytesN, got ${displayName(operand.type)}`);
+          this.diags.error(
+            node,
+            'JETH077',
+            `unary '~' requires an integer or bytesN, got ${displayName(operand.type)}`,
+          );
           return undefined;
         }
         return { kind: 'unary', type: operand.type, op: '~', operand, unchecked: false };
@@ -7816,7 +9701,11 @@ export class Analyzer {
       // address, bytesN, and enums, but REJECTS them on bool (only == / != are valid on bool):
       // "Built-in binary operator > cannot be applied to types bool and bool."
       if (op !== '==' && op !== '!=' && unified[0].type.kind === 'bool') {
-        this.diags.error(node, 'JETH082', `operator '${op}' cannot be applied to bool operands (only == and != are valid on bool)`);
+        this.diags.error(
+          node,
+          'JETH082',
+          `operator '${op}' cannot be applied to bool operands (only == and != are valid on bool)`,
+        );
         return undefined;
       }
       return { kind: 'binary', type: BOOL, op, left: unified[0], right: unified[1], unchecked: false };
@@ -7827,7 +9716,11 @@ export class Analyzer {
     // integer first to do math. (Comparisons already returned; everything below is arithmetic-ish.)
     if (isEnum(left.type) || isEnum(right.type)) {
       const en = isEnum(left.type) ? left.type : right.type;
-      this.diags.error(node, 'JETH279', `arithmetic on enum '${displayName(en)}' is not allowed; cast to an integer first (e.g. u8(x))`);
+      this.diags.error(
+        node,
+        'JETH279',
+        `arithmetic on enum '${displayName(en)}' is not allowed; cast to an integer first (e.g. u8(x))`,
+      );
       return undefined;
     }
 
@@ -7836,7 +9729,11 @@ export class Analyzer {
     // shift amount ("the type of the shift amount ... must be unsigned").
     if (op === '<<' || op === '>>') {
       if (!isInteger(left.type) && left.type.kind !== 'bytesN') {
-        this.diags.error(node, 'JETH081', `shift requires an integer or bytesN left operand, got ${displayName(left.type)}`);
+        this.diags.error(
+          node,
+          'JETH081',
+          `shift requires an integer or bytesN left operand, got ${displayName(left.type)}`,
+        );
         return undefined;
       }
       if (right.type.kind !== 'uint') {
@@ -7859,7 +9756,11 @@ export class Analyzer {
       }
       // solc rejects a SIGNED exponent ("Exponentiation power is not allowed to be a signed type").
       if (right.type.kind === 'int') {
-        this.diags.error(node, 'JETH082', `'**' exponent cannot be a signed integer (solc requires an unsigned power), got ${displayName(right.type)}`);
+        this.diags.error(
+          node,
+          'JETH082',
+          `'**' exponent cannot be a signed integer (solc requires an unsigned power), got ${displayName(right.type)}`,
+        );
         return undefined;
       }
       return { kind: 'binary', type: left.type, op, left, right, unchecked: this.currentUnchecked };
@@ -7870,12 +9771,23 @@ export class Analyzer {
     const unified = this.unifyOperands(left, right, node);
     if (!unified) return undefined;
     const isBitwise = op === '&' || op === '|' || op === '^';
-    const ok = isBitwise ? (isInteger(unified[0].type) || unified[0].type.kind === 'bytesN') : isInteger(unified[0].type);
+    const ok = isBitwise ? isInteger(unified[0].type) || unified[0].type.kind === 'bytesN' : isInteger(unified[0].type);
     if (!ok) {
-      this.diags.error(node, 'JETH082', `operator '${op}' requires ${isBitwise ? 'integer or bytesN' : 'integer'} operands, got ${displayName(unified[0].type)}`);
+      this.diags.error(
+        node,
+        'JETH082',
+        `operator '${op}' requires ${isBitwise ? 'integer or bytesN' : 'integer'} operands, got ${displayName(unified[0].type)}`,
+      );
       return undefined;
     }
-    return { kind: 'binary', type: unified[0].type, op, left: unified[0], right: unified[1], unchecked: this.currentUnchecked };
+    return {
+      kind: 'binary',
+      type: unified[0].type,
+      op,
+      left: unified[0],
+      right: unified[1],
+      unchecked: this.currentUnchecked,
+    };
   }
 
   /** Make two operands share a type, retyping a literal toward the other side. */
@@ -7883,8 +9795,8 @@ export class Analyzer {
     if (typesEqual(left.type, right.type)) return [left, right];
     // address and address payable share the same EVM word; compare freely. But a branded
     // address is nominally distinct: only fold when both sides carry the same brand (or none).
-    if (left.type.kind === 'address' && right.type.kind === 'address' &&
-        left.type.brand === right.type.brand) return [left, right];
+    if (left.type.kind === 'address' && right.type.kind === 'address' && left.type.brand === right.type.brand)
+      return [left, right];
     // A literal operand that overflows the OTHER operand's type but fits a WIDER same-signedness type:
     // widen BOTH to that common type (solc: `uint8 a + 1000` computes in uint16, overflow at uint16).
     // Returns null when the literal fits (falls through to retype, staying at the operand type) or on a
@@ -7905,8 +9817,12 @@ export class Analyzer {
     // widen the narrower to the wider common type (Solidity-identical), no runtime op.
     const common = commonNumericType(left.type, right.type);
     if (common) {
-      const l = isImplicitWiden(left.type, common) ? ({ kind: 'cast', type: common, from: left.type, operand: left } as Expr) : left;
-      const r = isImplicitWiden(right.type, common) ? ({ kind: 'cast', type: common, from: right.type, operand: right } as Expr) : right;
+      const l = isImplicitWiden(left.type, common)
+        ? ({ kind: 'cast', type: common, from: left.type, operand: left } as Expr)
+        : left;
+      const r = isImplicitWiden(right.type, common)
+        ? ({ kind: 'cast', type: common, from: right.type, operand: right } as Expr)
+        : right;
       return [l, r];
     }
     this.diags.error(
@@ -7937,13 +9853,21 @@ export class Analyzer {
     // non-literal enum value, which also rejects with JETH085 via isImplicitWiden's brand check.
     if (isEnum(lit.type)) {
       if (!allowEnumToInt) {
-        this.diags.error(node, 'JETH085', `cannot implicitly convert enum '${displayName(lit.type)}' to ${displayName(target)} (no implicit enum conversion; use an explicit cast)`);
+        this.diags.error(
+          node,
+          'JETH085',
+          `cannot implicitly convert enum '${displayName(lit.type)}' to ${displayName(target)} (no implicit enum conversion; use an explicit cast)`,
+        );
         return undefined;
       }
       // an EXPLICIT enum -> integer cast: solc allows ONLY enum -> uintN (any width), never enum -> intN
       // (int8(Color.Blue) is rejected; go through uintN first). Mirrors isCastAllowed for runtime values.
       if (target.kind === 'int') {
-        this.diags.error(node, 'JETH170', `explicit conversion not allowed from enum '${displayName(lit.type)}' to ${displayName(target)} (an enum converts only to an unsigned integer)`);
+        this.diags.error(
+          node,
+          'JETH170',
+          `explicit conversion not allowed from enum '${displayName(lit.type)}' to ${displayName(target)} (an enum converts only to an unsigned integer)`,
+        );
         return undefined;
       }
     }
@@ -7951,7 +9875,11 @@ export class Analyzer {
     // `Color c = 1;`). An already-enum-typed literal (Color.Member / Color(x)) reaches coerce via
     // typesEqual and never lands here, so any literal arriving with an enum target is a bare int.
     if (isEnum(target) && !isEnum(lit.type)) {
-      this.diags.error(node, 'JETH280', `cannot use a bare integer literal as enum '${displayName(target)}'; use ${displayName(target)}(${lit.value}) or ${displayName(target)}.<Member>`);
+      this.diags.error(
+        node,
+        'JETH280',
+        `cannot use a bare integer literal as enum '${displayName(target)}'; use ${displayName(target)}(${lit.value}) or ${displayName(target)}.<Member>`,
+      );
       return undefined;
     }
     if (!isInteger(target)) {
@@ -7960,7 +9888,8 @@ export class Analyzer {
         if (lit.value === 0n) return { ...lit, type: target };
         // a HEX literal whose source byte width == N converts (left-aligned in the high N bytes); a
         // decimal literal or a wrong-width hex literal needs an explicit bytesN(...) cast.
-        if (lit.hexBytes === target.size) return { kind: 'literalInt', type: target, value: lit.value << BigInt((32 - target.size) * 8) };
+        if (lit.hexBytes === target.size)
+          return { kind: 'literalInt', type: target, value: lit.value << BigInt((32 - target.size) * 8) };
       }
       this.diags.error(node, 'JETH084', `cannot use integer literal as ${displayName(target)}`);
       return undefined;
@@ -7987,8 +9916,7 @@ export class Analyzer {
     // address payable -> address is implicit (same word); the reverse needs payable(). A branded
     // address is nominally distinct, so only this fast-path when the brands match (else fall
     // through to the generic no-implicit-conversion error, matching every other branded base).
-    if (expr.type.kind === 'address' && target.kind === 'address' &&
-        expr.type.brand === target.brand) {
+    if (expr.type.kind === 'address' && target.kind === 'address' && expr.type.brand === target.brand) {
       if (expr.type.payable || !target.payable) return expr;
       this.diags.error(node, 'JETH172', 'cannot implicitly convert address to address payable (use payable(...))');
       return expr;
@@ -8043,7 +9971,8 @@ export class Analyzer {
     // hard error. Checked before the integer/bytesN folders (which would otherwise read its value).
     const addrClass = this.classifyAddressHexLiteral(node);
     if (addrClass !== 'plain' && expected.kind !== 'address') {
-      if (addrClass === 'address') this.diags.error(node, 'JETH086', `cannot assign an address literal to ${displayName(expected)}`);
+      if (addrClass === 'address')
+        this.diags.error(node, 'JETH086', `cannot assign an address literal to ${displayName(expected)}`);
       else this.diags.error(node, addrClass.code, addrClass.msg);
       return undefined;
     }
@@ -8061,21 +9990,34 @@ export class Analyzer {
       if (this.containsTypedConstOperand(node)) {
         const tc = this.evalTypedConst(node);
         if (tc === undefined || 'err' in tc || 'revert' in tc) {
-          this.diags.error(node, 'JETH070', `${'err' in (tc ?? {}) ? (tc as { err: string }).err : 'constant'} is not a valid constant ${displayName(expected)}`);
-          return tc !== undefined && ('revert' in tc) ? (tc as { revert: true } & { value?: bigint }).value ?? 0n : 0n;
+          this.diags.error(
+            node,
+            'JETH070',
+            `${'err' in (tc ?? {}) ? (tc as { err: string }).err : 'constant'} is not a valid constant ${displayName(expected)}`,
+          );
+          return tc !== undefined && 'revert' in tc ? ((tc as { revert: true } & { value?: bigint }).value ?? 0n) : 0n;
         }
         if (tc.type !== 'const') {
           // a TYPED result is implicitly convertible to `expected` iff same signedness and not wider.
           const tb = (tc.type as { brand?: string }).brand;
           const eb = (expected as { brand?: string }).brand;
-          if (tc.type.kind !== expected.kind || (tc.type as { bits: number }).bits > (expected as { bits: number }).bits || tb !== eb) {
-            this.diags.error(node, 'JETH070', `type ${displayName(tc.type)} is not implicitly convertible to ${displayName(expected)}`);
+          if (
+            tc.type.kind !== expected.kind ||
+            (tc.type as { bits: number }).bits > (expected as { bits: number }).bits ||
+            tb !== eb
+          ) {
+            this.diags.error(
+              node,
+              'JETH070',
+              `type ${displayName(tc.type)} is not implicitly convertible to ${displayName(expected)}`,
+            );
             return tc.value;
           }
           return tc.value;
         }
         // an int_const result produced via a typed sub-operand (e.g. 1 << uint8(2)): range-check it.
-        if (!this.inRange(tc.value, expected)) this.diags.error(node, 'JETH070', `constant ${tc.value} out of range for ${displayName(expected)}`);
+        if (!this.inRange(tc.value, expected))
+          this.diags.error(node, 'JETH070', `constant ${tc.value} out of range for ${displayName(expected)}`);
         return tc.value;
       }
       // `~x` on an UNTYPED integer constant yields the signed int_const -x-1 (solc), folded by
@@ -8084,7 +10026,8 @@ export class Analyzer {
       // unsigned target exactly as solc rejects `uint K = ~1`. No type-width masking here.
       const v = this.evalConstInt(node);
       if (v !== undefined) {
-        if (!this.inRange(v, expected)) this.diags.error(node, 'JETH070', `constant ${v} out of range for ${displayName(expected)}`);
+        if (!this.inRange(v, expected))
+          this.diags.error(node, 'JETH070', `constant ${v} out of range for ${displayName(expected)}`);
         return v;
       }
       // Fall back to exact-RATIONAL folding for a constant with a FRACTIONAL intermediate that
@@ -8094,7 +10037,8 @@ export class Analyzer {
       // (div/mod by zero, negative shift) falls through to the caller's single JETH048, as before.
       const r = this.foldConstRational(node);
       if (r !== undefined && !('err' in r) && r.den === 1n) {
-        if (!this.inRange(r.num, expected)) this.diags.error(node, 'JETH070', `constant ${r.num} out of range for ${displayName(expected)}`);
+        if (!this.inRange(r.num, expected))
+          this.diags.error(node, 'JETH070', `constant ${r.num} out of range for ${displayName(expected)}`);
         return r.num;
       }
       return undefined; // not a constant integer expression -> caller emits JETH048
@@ -8102,7 +10046,10 @@ export class Analyzer {
     // address constant: a bare 40-hex-digit checksummed literal (= 0x...) or `address(<int literal>)`.
     if (expected.kind === 'address') {
       if (addrClass === 'address') return this.asIntLiteral(node)!;
-      if (addrClass !== 'plain') { this.diags.error(node, addrClass.code, addrClass.msg); return undefined; }
+      if (addrClass !== 'plain') {
+        this.diags.error(node, addrClass.code, addrClass.msg);
+        return undefined;
+      }
       if (
         ts.isCallExpression(node) &&
         ts.isIdentifier(node.expression) &&
@@ -8110,10 +10057,16 @@ export class Analyzer {
         node.arguments.length === 1
       ) {
         const argClass = this.classifyAddressHexLiteral(node.arguments[0]!);
-        if (argClass !== 'plain' && argClass !== 'address') { this.diags.error(node, argClass.code, argClass.msg); return undefined; }
+        if (argClass !== 'plain' && argClass !== 'address') {
+          this.diags.error(node, argClass.code, argClass.msg);
+          return undefined;
+        }
         const a = this.asIntLiteral(node.arguments[0]!);
         if (a !== undefined) {
-          if (a < 0n || a >= 1n << 160n) { this.diags.error(node, 'JETH070', `literal ${a} out of range for address`); return undefined; }
+          if (a < 0n || a >= 1n << 160n) {
+            this.diags.error(node, 'JETH070', `literal ${a} out of range for address`);
+            return undefined;
+          }
           return a;
         }
       }
@@ -8122,9 +10075,12 @@ export class Analyzer {
     // keccak256(<constant string/bytes>) in a bytes32 @constant -> the hash, folded at compile time
     // (the common typehash / domain-separator-component pattern). The 32-byte hash is the bytes32 word.
     if (
-      expected.kind === 'bytesN' && expected.size === 32 &&
-      ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
-      node.expression.text === 'keccak256' && node.arguments.length === 1
+      expected.kind === 'bytesN' &&
+      expected.size === 32 &&
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'keccak256' &&
+      node.arguments.length === 1
     ) {
       const bytes = this.constByteString(node.arguments[0]!);
       if (bytes) return BigInt('0x' + toHex(keccak(bytes)));
@@ -8138,7 +10094,7 @@ export class Analyzer {
         const v = this.foldConstant(node.operand, expected);
         if (typeof v !== 'bigint') return undefined;
         const highMask = ((1n << BigInt(expected.size * 8)) - 1n) << BigInt((32 - expected.size) * 8);
-        return (~v) & highMask;
+        return ~v & highMask;
       }
       if (
         ts.isCallExpression(node) &&
@@ -8147,13 +10103,20 @@ export class Analyzer {
         node.arguments.length === 1
       ) {
         const argClass = this.classifyAddressHexLiteral(node.arguments[0]!);
-        if (argClass !== 'plain' && argClass !== 'address') { this.diags.error(node, argClass.code, argClass.msg); return undefined; }
+        if (argClass !== 'plain' && argClass !== 'address') {
+          this.diags.error(node, argClass.code, argClass.msg);
+          return undefined;
+        }
         const a = this.asIntLiteral(node.arguments[0]!);
         if (a !== undefined) {
           // solc rule (mirrors the implicit bare-hex path below and convertCall): converts ONLY for the
           // literal 0 (any spelling) or a HEX literal whose source byte width == size.
           if (a !== 0n && this.hexLiteralBytes(node.arguments[0]!) !== expected.size) {
-            this.diags.error(node, 'JETH170', `explicit conversion not allowed from integer literal ${a} to bytes${expected.size}`);
+            this.diags.error(
+              node,
+              'JETH170',
+              `explicit conversion not allowed from integer literal ${a} to bytes${expected.size}`,
+            );
             return undefined;
           }
           return a << BigInt((32 - expected.size) * 8); // left-align into the high N bytes
@@ -8186,8 +10149,12 @@ export class Analyzer {
     if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
     if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
     const constBool = (n: ts.Expression): boolean | undefined => {
-      const name = ts.isIdentifier(n) && !this.lookupLocal(n.text) ? n.text
-        : ts.isPropertyAccessExpression(n) && n.expression.kind === ts.SyntaxKind.ThisKeyword ? n.name.text : undefined;
+      const name =
+        ts.isIdentifier(n) && !this.lookupLocal(n.text)
+          ? n.text
+          : ts.isPropertyAccessExpression(n) && n.expression.kind === ts.SyntaxKind.ThisKeyword
+            ? n.name.text
+            : undefined;
       if (name === undefined) return undefined;
       const c = this.constantsByName.get(name);
       return c && typeof c.value === 'boolean' ? c.value : undefined;
@@ -8201,15 +10168,19 @@ export class Analyzer {
     if (ts.isBinaryExpression(node)) {
       const op = this.binaryToBinOp(node.operatorToken.kind);
       if (op === '&&' || op === '||') {
-        const a = this.foldConstBool(node.left), b = this.foldConstBool(node.right);
+        const a = this.foldConstBool(node.left),
+          b = this.foldConstBool(node.right);
         return a === undefined || b === undefined ? undefined : op === '&&' ? a && b : a || b;
       }
       if (op === '==' || op === '!=' || op === '<' || op === '>' || op === '<=' || op === '>=') {
         // bool==bool or int-comparison of constants
-        const ba = this.foldConstBool(node.left), bb = this.foldConstBool(node.right);
+        const ba = this.foldConstBool(node.left),
+          bb = this.foldConstBool(node.right);
         let a: bigint | undefined, b: bigint | undefined;
-        if (ba !== undefined && bb !== undefined) { a = ba ? 1n : 0n; b = bb ? 1n : 0n; }
-        else {
+        if (ba !== undefined && bb !== undefined) {
+          a = ba ? 1n : 0n;
+          b = bb ? 1n : 0n;
+        } else {
           // type-aware operand fold: if either side references a TYPED operand (cast/type(T).max/typed
           // @constant), evaluate it with solc type semantics. A typed overflow / div-by-0 inside an
           // operand is a runtime revert in solc, so the whole bool @constant is rejected here (a safe
@@ -8219,16 +10190,23 @@ export class Analyzer {
             const r = this.evalTypedConst(n);
             return r === undefined || 'err' in r || 'revert' in r ? undefined : r.value;
           };
-          a = fold(node.left); b = fold(node.right);
+          a = fold(node.left);
+          b = fold(node.right);
         }
         if (a === undefined || b === undefined) return undefined;
         switch (op) {
-          case '==': return a === b;
-          case '!=': return a !== b;
-          case '<': return a < b;
-          case '>': return a > b;
-          case '<=': return a <= b;
-          case '>=': return a >= b;
+          case '==':
+            return a === b;
+          case '!=':
+            return a !== b;
+          case '<':
+            return a < b;
+          case '>':
+            return a > b;
+          case '<=':
+            return a <= b;
+          case '>=':
+            return a >= b;
         }
       }
     }
@@ -8239,13 +10217,21 @@ export class Analyzer {
    *  template literal (its UTF-8 bytes), `bytes(<that>)`, or `abi.encodePacked(<such literals>)`. */
   private constByteString(node: ts.Expression): Uint8Array | undefined {
     if (ts.isParenthesizedExpression(node)) return this.constByteString(node.expression);
-    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return new TextEncoder().encode(node.text);
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'bytes' && node.arguments.length === 1) {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
+      return new TextEncoder().encode(node.text);
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'bytes' &&
+      node.arguments.length === 1
+    ) {
       return this.constByteString(node.arguments[0]!);
     }
     if (
-      ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
-      ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'abi' &&
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'abi' &&
       node.expression.name.text === 'encodePacked'
     ) {
       const parts: Uint8Array[] = [];
@@ -8256,7 +10242,10 @@ export class Analyzer {
       }
       const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
       let o = 0;
-      for (const p of parts) { out.set(p, o); o += p.length; }
+      for (const p of parts) {
+        out.set(p, o);
+        o += p.length;
+      }
       return out;
     }
     return undefined;
@@ -8287,8 +10276,12 @@ export class Analyzer {
       const isMax = node.name.text === 'max';
       const bits = (t as { bits: number }).bits;
       return t.kind === 'uint'
-        ? (isMax ? (1n << BigInt(bits)) - 1n : 0n)
-        : (isMax ? (1n << BigInt(bits - 1)) - 1n : -(1n << BigInt(bits - 1)));
+        ? isMax
+          ? (1n << BigInt(bits)) - 1n
+          : 0n
+        : isMax
+          ? (1n << BigInt(bits - 1)) - 1n
+          : -(1n << BigInt(bits - 1));
     }
     return undefined;
   }
@@ -8300,7 +10293,8 @@ export class Analyzer {
   private constTypedRefType(node: ts.Expression): JethType | undefined {
     let nm: string | undefined;
     if (ts.isIdentifier(node) && !this.lookupLocal(node.text)) nm = node.text;
-    else if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) nm = node.name.text;
+    else if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword)
+      nm = node.name.text;
     if (nm === undefined) return undefined;
     const c = this.constantsByName.get(nm);
     return c && typeof c.value === 'bigint' && isInteger(c.type) ? c.type : undefined;
@@ -8315,17 +10309,21 @@ export class Analyzer {
     if (ts.isParenthesizedExpression(node)) return this.containsTypedConstOperand(node.expression);
     if (this.isEnumConstNode(node)) return true;
     if (
-      ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min') &&
-      ts.isCallExpression(node.expression) && ts.isIdentifier(node.expression.expression) &&
+      ts.isPropertyAccessExpression(node) &&
+      (node.name.text === 'max' || node.name.text === 'min') &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
       node.expression.expression.text === 'type'
-    ) return true;
+    )
+      return true;
     if (this.constTypedRefType(node) !== undefined) return true;
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && resolvePrimitiveName(node.expression.text)) {
       const ct = resolvePrimitiveName(node.expression.text)!;
       if (isInteger(ct)) return true;
     }
     if (ts.isPrefixUnaryExpression(node)) return this.containsTypedConstOperand(node.operand);
-    if (ts.isBinaryExpression(node)) return this.containsTypedConstOperand(node.left) || this.containsTypedConstOperand(node.right);
+    if (ts.isBinaryExpression(node))
+      return this.containsTypedConstOperand(node.left) || this.containsTypedConstOperand(node.right);
     return false;
   }
 
@@ -8353,14 +10351,23 @@ export class Analyzer {
     const promote = (lit: bigint, t: { kind: 'uint' | 'int'; bits: number }): JethType | null => {
       if (lit < 0n) {
         if (t.kind !== 'int') return null;
-        for (let m = t.bits; m <= 256; m += 8) { const tt = { kind: 'int' as const, bits: m }; if (this.inRange(lit, tt)) return tt; }
+        for (let m = t.bits; m <= 256; m += 8) {
+          const tt = { kind: 'int' as const, bits: m };
+          if (this.inRange(lit, tt)) return tt;
+        }
         return null;
       }
       if (t.kind === 'uint') {
-        for (let m = t.bits; m <= 256; m += 8) { const tt = { kind: 'uint' as const, bits: m }; if (this.inRange(lit, tt)) return tt; }
+        for (let m = t.bits; m <= 256; m += 8) {
+          const tt = { kind: 'uint' as const, bits: m };
+          if (this.inRange(lit, tt)) return tt;
+        }
         return null;
       }
-      for (let m = t.bits; m <= 256; m += 8) { const tt = { kind: 'int' as const, bits: m }; if (this.inRange(lit, tt)) return tt; }
+      for (let m = t.bits; m <= 256; m += 8) {
+        const tt = { kind: 'int' as const, bits: m };
+        if (this.inRange(lit, tt)) return tt;
+      }
       return null;
     };
     if (a.type === 'const') return promote(a.value, b.type as { kind: 'uint' | 'int'; bits: number });
@@ -8373,43 +10380,77 @@ export class Analyzer {
 
   private isEnumConstNode(node: ts.Expression): boolean {
     if (ts.isParenthesizedExpression(node)) return this.isEnumConstNode(node.expression);
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text)) return true;
     if (
-      ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min') &&
-      ts.isCallExpression(node.expression) && ts.isIdentifier(node.expression.expression) &&
-      node.expression.expression.text === 'type' && node.expression.arguments.length === 1 &&
-      ts.isIdentifier(node.expression.arguments[0]!) && this.isEnumName((node.expression.arguments[0] as ts.Identifier).text)
-    ) return true;
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text) && node.arguments.length === 1) return true;
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.isEnumName(node.expression.text)
+    )
+      return true;
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      (node.name.text === 'max' || node.name.text === 'min') &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'type' &&
+      node.expression.arguments.length === 1 &&
+      ts.isIdentifier(node.expression.arguments[0]!) &&
+      this.isEnumName((node.expression.arguments[0] as ts.Identifier).text)
+    )
+      return true;
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.isEnumName(node.expression.text) &&
+      node.arguments.length === 1
+    )
+      return true;
     return false;
   }
 
-  private evalEnumConst(
-    node: ts.Expression,
-  ): { value: bigint; type: JethType } | { err: string } | undefined {
+  private evalEnumConst(node: ts.Expression): { value: bigint; type: JethType } | { err: string } | undefined {
     if (ts.isParenthesizedExpression(node)) return this.evalEnumConst(node.expression);
-    if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text)) {
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.isEnumName(node.expression.text)
+    ) {
       const et = this.structsByName.get(node.expression.text)! as JethType & { kind: 'uint'; enumMembers: string[] };
       const idx = et.enumMembers.indexOf(node.name.text);
       if (idx < 0) return { err: `enum '${node.expression.text}' has no member '${node.name.text}'` };
       return { value: BigInt(idx), type: et };
     }
     if (
-      ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min') &&
-      ts.isCallExpression(node.expression) && ts.isIdentifier(node.expression.expression) &&
-      node.expression.expression.text === 'type' && node.expression.arguments.length === 1 &&
-      ts.isIdentifier(node.expression.arguments[0]!) && this.isEnumName((node.expression.arguments[0] as ts.Identifier).text)
+      ts.isPropertyAccessExpression(node) &&
+      (node.name.text === 'max' || node.name.text === 'min') &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'type' &&
+      node.expression.arguments.length === 1 &&
+      ts.isIdentifier(node.expression.arguments[0]!) &&
+      this.isEnumName((node.expression.arguments[0] as ts.Identifier).text)
     ) {
-      const et = this.structsByName.get((node.expression.arguments[0] as ts.Identifier).text)! as JethType & { kind: 'uint'; enumMembers: string[] };
+      const et = this.structsByName.get((node.expression.arguments[0] as ts.Identifier).text)! as JethType & {
+        kind: 'uint';
+        enumMembers: string[];
+      };
       return { value: node.name.text === 'max' ? BigInt(et.enumMembers.length - 1) : 0n, type: et };
     }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && this.isEnumName(node.expression.text) && node.arguments.length === 1) {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      this.isEnumName(node.expression.text) &&
+      node.arguments.length === 1
+    ) {
       const et = this.structsByName.get(node.expression.text)! as JethType & { kind: 'uint'; enumMembers: string[] };
       const inner = this.evalTypedConst(node.arguments[0]!);
       if (inner === undefined || 'revert' in inner) return undefined; // a runtime-reverting inner is not a foldable enum const
       if ('err' in inner) return inner;
-      if (inner.type !== 'const') return { err: `enum conversion ${node.expression.text}(...) requires a constant integer` };
-      if (inner.value < 0n || inner.value >= BigInt(et.enumMembers.length)) return { err: `value ${inner.value} is out of range for enum '${node.expression.text}' (0..${et.enumMembers.length - 1})` };
+      if (inner.type !== 'const')
+        return { err: `enum conversion ${node.expression.text}(...) requires a constant integer` };
+      if (inner.value < 0n || inner.value >= BigInt(et.enumMembers.length))
+        return {
+          err: `value ${inner.value} is out of range for enum '${node.expression.text}' (0..${et.enumMembers.length - 1})`,
+        };
       return { value: inner.value, type: et };
     }
     return undefined;
@@ -8434,9 +10475,12 @@ export class Analyzer {
     }
     // type(T).max/.min -> a TYPED value
     if (
-      ts.isPropertyAccessExpression(node) && (node.name.text === 'max' || node.name.text === 'min') &&
-      ts.isCallExpression(node.expression) && ts.isIdentifier(node.expression.expression) &&
-      node.expression.expression.text === 'type' && node.expression.arguments.length === 1 &&
+      ts.isPropertyAccessExpression(node) &&
+      (node.name.text === 'max' || node.name.text === 'min') &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'type' &&
+      node.expression.arguments.length === 1 &&
       ts.isIdentifier(node.expression.arguments[0]!)
     ) {
       const t = resolvePrimitiveName((node.expression.arguments[0] as ts.Identifier).text);
@@ -8464,7 +10508,8 @@ export class Analyzer {
         }
         // cast of an int_const: solc REJECTS an out-of-range literal (no truncation of int_const).
         if (inner.type === 'const') {
-          if (!this.inRange(inner.value, t)) return { err: `explicit conversion of constant ${inner.value} out of range for ${displayName(t)}` };
+          if (!this.inRange(inner.value, t))
+            return { err: `explicit conversion of constant ${inner.value} out of range for ${displayName(t)}` };
           return { value: inner.value, type: t };
         }
         // cast of a TYPED value: truncate into the target width.
@@ -8497,8 +10542,10 @@ export class Analyzer {
       if (a === undefined || 'err' in a || 'revert' in a) return a;
       const b = this.evalTypedConst(node.right);
       if (b === undefined || 'err' in b || 'revert' in b) return b;
-      if (a.type !== 'const' && isEnum(a.type)) return { err: `operator '${op}' cannot be applied to ${displayName(a.type)}` };
-      if (b.type !== 'const' && isEnum(b.type)) return { err: `operator '${op}' cannot be applied to ${displayName(b.type)}` };
+      if (a.type !== 'const' && isEnum(a.type))
+        return { err: `operator '${op}' cannot be applied to ${displayName(a.type)}` };
+      if (b.type !== 'const' && isEnum(b.type))
+        return { err: `operator '${op}' cannot be applied to ${displayName(b.type)}` };
       // shift: result type = LHS type. A typed LHS truncates to its width; an int_const LHS stays unbounded.
       if (op === '<<' || op === '>>') {
         if (b.value < 0n) return { err: 'negative shift amount' };
@@ -8507,22 +10554,48 @@ export class Analyzer {
         return { value: this.wrapToType(shifted, a.type as { kind: 'uint' | 'int'; bits: number }), type: a.type };
       }
       const ct = this.commonConstType(a, b);
-      if (ct === null) return { err: `operator '${op}' cannot be applied to ${displayName((a.type === 'const' ? b.type : a.type) as JethType)} and a mismatched operand` };
+      if (ct === null)
+        return {
+          err: `operator '${op}' cannot be applied to ${displayName((a.type === 'const' ? b.type : a.type) as JethType)} and a mismatched operand`,
+        };
       // exponent: result type = base (LHS) type, not common with the exponent.
       const rt: JethType | 'const' = op === '**' ? (a.type === 'const' ? 'const' : a.type) : ct;
-      const A = a.value, B = b.value;
+      const A = a.value,
+        B = b.value;
       let v: bigint;
       switch (op) {
-        case '+': v = A + B; break;
-        case '-': v = A - B; break;
-        case '*': v = A * B; break;
-        case '**': if (B < 0n) return { err: 'negative exponent in a constant expression' }; v = A ** B; break;
-        case '/': if (B === 0n) return { revert: true }; v = A / B; break;
-        case '%': if (B === 0n) return { revert: true }; v = A % B; break;
-        case '&': v = A & B; break;
-        case '|': v = A | B; break;
-        case '^': v = A ^ B; break;
-        default: return undefined;
+        case '+':
+          v = A + B;
+          break;
+        case '-':
+          v = A - B;
+          break;
+        case '*':
+          v = A * B;
+          break;
+        case '**':
+          if (B < 0n) return { err: 'negative exponent in a constant expression' };
+          v = A ** B;
+          break;
+        case '/':
+          if (B === 0n) return { revert: true };
+          v = A / B;
+          break;
+        case '%':
+          if (B === 0n) return { revert: true };
+          v = A % B;
+          break;
+        case '&':
+          v = A & B;
+          break;
+        case '|':
+          v = A | B;
+          break;
+        case '^':
+          v = A ^ B;
+          break;
+        default:
+          return undefined;
       }
       // bitwise: the result stays in the common type (two's complement); no overflow is possible.
       if (op === '&' || op === '|' || op === '^') {
@@ -8580,18 +10653,30 @@ export class Analyzer {
       const b = this.evalConstInt(node.right);
       if (b === undefined) return undefined;
       switch (op) {
-        case '+': return a + b;
-        case '-': return a - b;
-        case '*': return a * b;
-        case '**': return b < 0n ? undefined : a ** b;
-        case '<<': return b < 0n ? undefined : a << b;
-        case '>>': return b < 0n ? undefined : a >> b;
-        case '&': return a & b;
-        case '|': return a | b;
-        case '^': return a ^ b;
-        case '/': return b === 0n || a % b !== 0n ? undefined : a / b; // solc rejects a fractional constant division
-        case '%': return b === 0n ? undefined : a % b;
-        default: return undefined;
+        case '+':
+          return a + b;
+        case '-':
+          return a - b;
+        case '*':
+          return a * b;
+        case '**':
+          return b < 0n ? undefined : a ** b;
+        case '<<':
+          return b < 0n ? undefined : a << b;
+        case '>>':
+          return b < 0n ? undefined : a >> b;
+        case '&':
+          return a & b;
+        case '|':
+          return a | b;
+        case '^':
+          return a ^ b;
+        case '/':
+          return b === 0n || a % b !== 0n ? undefined : a / b; // solc rejects a fractional constant division
+        case '%':
+          return b === 0n ? undefined : a % b;
+        default:
+          return undefined;
       }
     }
     return undefined;
@@ -8606,9 +10691,15 @@ export class Analyzer {
    *  a bitwise/shift/% on a non-integer rational); {num,den} = the exact reduced value. */
   private foldConstRational(node: ts.Expression): { num: bigint; den: bigint } | { err: string } | undefined {
     const reduce = (num: bigint, den: bigint): { num: bigint; den: bigint } => {
-      if (den < 0n) { num = -num; den = -den; }
-      let a = num < 0n ? -num : num, b = den;
-      while (b) { [a, b] = [b, a % b]; }
+      if (den < 0n) {
+        num = -num;
+        den = -den;
+      }
+      let a = num < 0n ? -num : num,
+        b = den;
+      while (b) {
+        [a, b] = [b, a % b];
+      }
       const g = a === 0n ? 1n : a;
       return { num: num / g, den: den / g };
     };
@@ -8642,9 +10733,12 @@ export class Analyzer {
       if ('err' in a) return a;
       if ('err' in b) return b;
       switch (op) {
-        case '+': return reduce(a.num * b.den + b.num * a.den, a.den * b.den);
-        case '-': return reduce(a.num * b.den - b.num * a.den, a.den * b.den);
-        case '*': return reduce(a.num * b.num, a.den * b.den);
+        case '+':
+          return reduce(a.num * b.den + b.num * a.den, a.den * b.den);
+        case '-':
+          return reduce(a.num * b.den - b.num * a.den, a.den * b.den);
+        case '*':
+          return reduce(a.num * b.num, a.den * b.den);
         case '/':
           if (b.num === 0n) return { err: 'division by zero in a constant expression' };
           return reduce(a.num * b.den, a.den * b.num);
@@ -8655,14 +10749,21 @@ export class Analyzer {
       }
       // The remaining operators require integer operands (solc rejects them on a non-integer rational).
       if (a.den !== 1n || b.den !== 1n) return { err: `operator '${op}' requires integer constant operands` };
-      const A = a.num, B = b.num;
+      const A = a.num,
+        B = b.num;
       switch (op) {
-        case '%': return B === 0n ? { err: 'modulo by zero in a constant expression' } : { num: A % B, den: 1n };
-        case '<<': return B < 0n ? { err: 'negative shift amount' } : { num: A << B, den: 1n };
-        case '>>': return B < 0n ? { err: 'negative shift amount' } : { num: A >> B, den: 1n };
-        case '&': return { num: A & B, den: 1n };
-        case '|': return { num: A | B, den: 1n };
-        case '^': return { num: A ^ B, den: 1n };
+        case '%':
+          return B === 0n ? { err: 'modulo by zero in a constant expression' } : { num: A % B, den: 1n };
+        case '<<':
+          return B < 0n ? { err: 'negative shift amount' } : { num: A << B, den: 1n };
+        case '>>':
+          return B < 0n ? { err: 'negative shift amount' } : { num: A >> B, den: 1n };
+        case '&':
+          return { num: A & B, den: 1n };
+        case '|':
+          return { num: A | B, den: 1n };
+        case '^':
+          return { num: A ^ B, den: 1n };
       }
     }
     return undefined;
@@ -8700,12 +10801,18 @@ export class Analyzer {
     const digits = m[1]!.replace(/_/g, '');
     if (digits.length < 39 || digits.length > 41) return 'plain';
     if (digits.length !== 40) {
-      return { code: 'JETH049', msg: `this looks like an address but is not exactly 40 hex digits (it has ${digits.length}); prepend zeros if it is meant to be a number` };
+      return {
+        code: 'JETH049',
+        msg: `this looks like an address but is not exactly 40 hex digits (it has ${digits.length}); prepend zeros if it is meant to be a number`,
+      };
     }
     const rawMatch = /^0[xX]([0-9a-fA-F_]+)n?$/.exec(n.getText());
     const rawDigits = (rawMatch ? rawMatch[1]! : m[1]!).replace(/_/g, '');
     if (!this.isEip55Checksummed(rawDigits)) {
-      return { code: 'JETH049', msg: `this looks like an address but has an invalid EIP-55 checksum (use the checksummed form, or address(...) / a number with leading zeros)` };
+      return {
+        code: 'JETH049',
+        msg: `this looks like an address but has an invalid EIP-55 checksum (use the checksummed form, or address(...) / a number with leading zeros)`,
+      };
     }
     return 'address';
   }
@@ -8731,7 +10838,11 @@ export class Analyzer {
       return true;
     }
     if (/^0[oObB]/.test(raw)) {
-      this.diags.error(n, 'JETH049', `octal/binary integer literals (${raw}) are not valid Solidity; use a decimal (0x..) or hex literal`);
+      this.diags.error(
+        n,
+        'JETH049',
+        `octal/binary integer literals (${raw}) are not valid Solidity; use a decimal (0x..) or hex literal`,
+      );
       return true;
     }
     return false;
@@ -8752,9 +10863,16 @@ export class Analyzer {
       n = ts.isParenthesizedExpression(n) ? n.expression : n.operand;
     }
     if (!ts.isBigIntLiteral(n)) return false;
-    const digits = n.getText().replace(/n$/, '').replace(/^0[xXbBoO]/, '');
+    const digits = n
+      .getText()
+      .replace(/n$/, '')
+      .replace(/^0[xXbBoO]/, '');
     if (/^_|_$|__/.test(digits)) {
-      this.diags.error(n, 'JETH049', `invalid use of underscores in a number literal; a single underscore is allowed only between digits`);
+      this.diags.error(
+        n,
+        'JETH049',
+        `invalid use of underscores in a number literal; a single underscore is allowed only between digits`,
+      );
       return true;
     }
     return false;
@@ -8812,68 +10930,107 @@ export class Analyzer {
       const vt = other.type as { kind: 'uint' | 'int'; bits: number };
       if (lit.value >= 0n) {
         if (vt.kind !== 'uint') return null; // positive literal's mobile type is uint; an int var mismatches
-        for (let m = vt.bits; m <= 256; m += 8) if (lit.value <= (1n << BigInt(m)) - 1n) return { common: { kind: 'uint', bits: m } };
+        for (let m = vt.bits; m <= 256; m += 8)
+          if (lit.value <= (1n << BigInt(m)) - 1n) return { common: { kind: 'uint', bits: m } };
       } else {
         if (vt.kind !== 'int') return null; // negative literal's mobile type is int; a uint var mismatches
-        for (let m = vt.bits; m <= 256; m += 8) if (lit.value >= -(1n << BigInt(m - 1))) return { common: { kind: 'int', bits: m } };
+        for (let m = vt.bits; m <= 256; m += 8)
+          if (lit.value >= -(1n << BigInt(m - 1))) return { common: { kind: 'int', bits: m } };
       }
       return null; // does not fit any type of that signedness -> let unify reject it
     };
     // (var OP lit): widen left=var, right=lit
     const rl = fit(right, left);
-    if (rl) return [{ kind: 'cast', type: rl.common, from: left.type, operand: left }, { ...right, type: rl.common }];
+    if (rl)
+      return [
+        { kind: 'cast', type: rl.common, from: left.type, operand: left },
+        { ...right, type: rl.common },
+      ];
     // (lit OP var): widen left=lit, right=var
     const lr = fit(left, right);
-    if (lr) return [{ ...left, type: lr.common }, { kind: 'cast', type: lr.common, from: right.type, operand: right }];
+    if (lr)
+      return [
+        { ...left, type: lr.common },
+        { kind: 'cast', type: lr.common, from: right.type, operand: right },
+      ];
     return null;
   }
 
   private isAssignmentOperator(kind: ts.SyntaxKind): boolean {
-    return (
-      kind === ts.SyntaxKind.EqualsToken || this.compoundToBinOp(kind) !== undefined
-    );
+    return kind === ts.SyntaxKind.EqualsToken || this.compoundToBinOp(kind) !== undefined;
   }
 
   private compoundToBinOp(kind: ts.SyntaxKind): BinOp | undefined {
     switch (kind) {
-      case ts.SyntaxKind.PlusEqualsToken: return '+';
-      case ts.SyntaxKind.MinusEqualsToken: return '-';
-      case ts.SyntaxKind.AsteriskEqualsToken: return '*';
-      case ts.SyntaxKind.SlashEqualsToken: return '/';
-      case ts.SyntaxKind.PercentEqualsToken: return '%';
-      case ts.SyntaxKind.AmpersandEqualsToken: return '&';
-      case ts.SyntaxKind.BarEqualsToken: return '|';
-      case ts.SyntaxKind.CaretEqualsToken: return '^';
-      case ts.SyntaxKind.LessThanLessThanEqualsToken: return '<<';
-      case ts.SyntaxKind.GreaterThanGreaterThanEqualsToken: return '>>';
-      default: return undefined;
+      case ts.SyntaxKind.PlusEqualsToken:
+        return '+';
+      case ts.SyntaxKind.MinusEqualsToken:
+        return '-';
+      case ts.SyntaxKind.AsteriskEqualsToken:
+        return '*';
+      case ts.SyntaxKind.SlashEqualsToken:
+        return '/';
+      case ts.SyntaxKind.PercentEqualsToken:
+        return '%';
+      case ts.SyntaxKind.AmpersandEqualsToken:
+        return '&';
+      case ts.SyntaxKind.BarEqualsToken:
+        return '|';
+      case ts.SyntaxKind.CaretEqualsToken:
+        return '^';
+      case ts.SyntaxKind.LessThanLessThanEqualsToken:
+        return '<<';
+      case ts.SyntaxKind.GreaterThanGreaterThanEqualsToken:
+        return '>>';
+      default:
+        return undefined;
     }
   }
 
   private binaryToBinOp(kind: ts.SyntaxKind): BinOp | undefined {
     switch (kind) {
-      case ts.SyntaxKind.PlusToken: return '+';
-      case ts.SyntaxKind.MinusToken: return '-';
-      case ts.SyntaxKind.AsteriskToken: return '*';
-      case ts.SyntaxKind.AsteriskAsteriskToken: return '**';
-      case ts.SyntaxKind.SlashToken: return '/';
-      case ts.SyntaxKind.PercentToken: return '%';
-      case ts.SyntaxKind.LessThanToken: return '<';
-      case ts.SyntaxKind.GreaterThanToken: return '>';
-      case ts.SyntaxKind.LessThanEqualsToken: return '<=';
-      case ts.SyntaxKind.GreaterThanEqualsToken: return '>=';
+      case ts.SyntaxKind.PlusToken:
+        return '+';
+      case ts.SyntaxKind.MinusToken:
+        return '-';
+      case ts.SyntaxKind.AsteriskToken:
+        return '*';
+      case ts.SyntaxKind.AsteriskAsteriskToken:
+        return '**';
+      case ts.SyntaxKind.SlashToken:
+        return '/';
+      case ts.SyntaxKind.PercentToken:
+        return '%';
+      case ts.SyntaxKind.LessThanToken:
+        return '<';
+      case ts.SyntaxKind.GreaterThanToken:
+        return '>';
+      case ts.SyntaxKind.LessThanEqualsToken:
+        return '<=';
+      case ts.SyntaxKind.GreaterThanEqualsToken:
+        return '>=';
       case ts.SyntaxKind.EqualsEqualsToken:
-      case ts.SyntaxKind.EqualsEqualsEqualsToken: return '==';
+      case ts.SyntaxKind.EqualsEqualsEqualsToken:
+        return '==';
       case ts.SyntaxKind.ExclamationEqualsToken:
-      case ts.SyntaxKind.ExclamationEqualsEqualsToken: return '!=';
-      case ts.SyntaxKind.AmpersandToken: return '&';
-      case ts.SyntaxKind.BarToken: return '|';
-      case ts.SyntaxKind.CaretToken: return '^';
-      case ts.SyntaxKind.LessThanLessThanToken: return '<<';
-      case ts.SyntaxKind.GreaterThanGreaterThanToken: return '>>';
-      case ts.SyntaxKind.AmpersandAmpersandToken: return '&&';
-      case ts.SyntaxKind.BarBarToken: return '||';
-      default: return undefined;
+      case ts.SyntaxKind.ExclamationEqualsEqualsToken:
+        return '!=';
+      case ts.SyntaxKind.AmpersandToken:
+        return '&';
+      case ts.SyntaxKind.BarToken:
+        return '|';
+      case ts.SyntaxKind.CaretToken:
+        return '^';
+      case ts.SyntaxKind.LessThanLessThanToken:
+        return '<<';
+      case ts.SyntaxKind.GreaterThanGreaterThanToken:
+        return '>>';
+      case ts.SyntaxKind.AmpersandAmpersandToken:
+        return '&&';
+      case ts.SyntaxKind.BarBarToken:
+        return '||';
+      default:
+        return undefined;
     }
   }
 }

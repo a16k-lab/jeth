@@ -3,34 +3,85 @@
 // fields stay inline in the tuple head, each dynamic field gets a head OFFSET word
 // based at the tuple start (spec section 3). Supports reading d.staticField and
 // d.dynField (bytes/string), constructing/returning a D, and a nested Outer.
-@struct class D { a: u256; s: string; }
-@struct class E { id: u64; name: bytes; }
-@struct class Outer { x: u256; inner: D; y: u256; }
-@struct class Multi { a: u256; s: string; b: bytes; z: u256; }
+@struct
+class D {
+  a: u256;
+  s: string;
+}
+@struct
+class E {
+  id: u64;
+  name: bytes;
+}
+@struct
+class Outer {
+  x: u256;
+  inner: D;
+  y: u256;
+}
+@struct
+class Multi {
+  a: u256;
+  s: string;
+  b: bytes;
+  z: u256;
+}
 
 @contract
 class DynStruct {
   // --- read fields of a dynamic-struct param ---
-  @external @pure getA(d: D): u256 { return d.a; }
-  @external @pure getS(d: D): string { return d.s; }
-  @external @pure getName(e: E): bytes { return e.name; }
-  @external @pure getNameLen(e: E): u256 { return e.name.length; }
-  @external @pure nameByte(e: E, i: u256): bytes1 { return e.name[i]; }
+  @external @pure getA(d: D): u256 {
+    return d.a;
+  }
+  @external @pure getS(d: D): string {
+    return d.s;
+  }
+  @external @pure getName(e: E): bytes {
+    return e.name;
+  }
+  @external @pure getNameLen(e: E): u256 {
+    return e.name.length;
+  }
+  @external @pure nameByte(e: E, i: u256): bytes1 {
+    return e.name[i];
+  }
 
   // --- echo a dynamic-struct param (decode + re-encode head/tail) ---
-  @external @pure echo(d: D): D { return d; }
-  @external @pure echoE(e: E): E { return e; }
-  @external @pure echoMulti(m: Multi): Multi { return m; }
+  @external @pure echo(d: D): D {
+    return d;
+  }
+  @external @pure echoE(e: E): E {
+    return e;
+  }
+  @external @pure echoMulti(m: Multi): Multi {
+    return m;
+  }
 
   // --- construct + return a dynamic struct ---
-  @external @pure mk(a: u256, s: string): D { return D(a, s); }
-  @external @pure mkLit(): D { return D(7n, "hello"); }
+  @external @pure mk(a: u256, s: string): D {
+    return D(a, s);
+  }
+  @external @pure mkLit(): D {
+    return D(7n, 'hello');
+  }
 
   // --- nested Outer{x; D inner; y} ---
-  @external @pure innerA(o: Outer): u256 { return o.inner.a; }
-  @external @pure innerS(o: Outer): string { return o.inner.s; }
-  @external @pure outerX(o: Outer): u256 { return o.x; }
-  @external @pure outerY(o: Outer): u256 { return o.y; }
-  @external @pure echoOuter(o: Outer): Outer { return o; }
-  @external @pure mkOuter(x: u256, a: u256, s: string, y: u256): Outer { return Outer(x, D(a, s), y); }
+  @external @pure innerA(o: Outer): u256 {
+    return o.inner.a;
+  }
+  @external @pure innerS(o: Outer): string {
+    return o.inner.s;
+  }
+  @external @pure outerX(o: Outer): u256 {
+    return o.x;
+  }
+  @external @pure outerY(o: Outer): u256 {
+    return o.y;
+  }
+  @external @pure echoOuter(o: Outer): Outer {
+    return o;
+  }
+  @external @pure mkOuter(x: u256, a: u256, s: string, y: u256): Outer {
+    return Outer(x, D(a, s), y);
+  }
 }

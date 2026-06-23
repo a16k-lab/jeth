@@ -2,38 +2,80 @@
 // calldata decode, ABI return encode.
 @contract
 class Arrays {
-  @state u: u256[];     // slot 0 (whole-slot)
-  @state p: u8[];       // slot 1 (packed, 32/slot)
-  @state b: bool[];     // slot 2 (packed)
+  @state u: u256[]; // slot 0 (whole-slot)
+  @state p: u8[]; // slot 1 (packed, 32/slot)
+  @state b: bool[]; // slot 2 (packed)
   @state adr: address[]; // slot 3 (unpacked, 1/slot)
 
-  @external pushU(v: u256): void { this.u.push(v); }
-  @external @view lenU(): u256 { return this.u.length; }
-  @external @view getU(i: u256): u256 { return this.u[i]; }
-  @external setU(i: u256, v: u256): void { this.u[i] = v; }
-  @external popU(): void { this.u.pop(); }
+  @external pushU(v: u256): void {
+    this.u.push(v);
+  }
+  @external @view lenU(): u256 {
+    return this.u.length;
+  }
+  @external @view getU(i: u256): u256 {
+    return this.u[i];
+  }
+  @external setU(i: u256, v: u256): void {
+    this.u[i] = v;
+  }
+  @external popU(): void {
+    this.u.pop();
+  }
 
-  @external pushP(v: u8): void { this.p.push(v); }
-  @external @view getP(i: u256): u8 { return this.p[i]; }
-  @external @view lenP(): u256 { return this.p.length; }
-  @external popP(): void { this.p.pop(); }
+  @external pushP(v: u8): void {
+    this.p.push(v);
+  }
+  @external @view getP(i: u256): u8 {
+    return this.p[i];
+  }
+  @external @view lenP(): u256 {
+    return this.p.length;
+  }
+  @external popP(): void {
+    this.p.pop();
+  }
 
-  @external pushB(v: bool): void { this.b.push(v); }
-  @external @view getB(i: u256): bool { return this.b[i]; }
+  @external pushB(v: bool): void {
+    this.b.push(v);
+  }
+  @external @view getB(i: u256): bool {
+    return this.b[i];
+  }
 
-  @external pushAdr(v: address): void { this.adr.push(v); }
-  @external @view getAdr(i: u256): address { return this.adr[i]; }
+  @external pushAdr(v: address): void {
+    this.adr.push(v);
+  }
+  @external @view getAdr(i: u256): address {
+    return this.adr[i];
+  }
 
-  @external @pure mk(): u256[] { return [0xaan, 0xbbn, 0xccn]; }
-  @external @pure echoU(x: u256[]): u256[] { return x; }
-  @external @pure empty(): u256[] { return []; }
+  @external @pure mk(): u256[] {
+    return [0xaan, 0xbbn, 0xccn];
+  }
+  @external @pure echoU(x: u256[]): u256[] {
+    return x;
+  }
+  @external @pure empty(): u256[] {
+    return [];
+  }
   @external @pure sum(x: u256[]): u256 {
     let s: u256 = 0n;
-    for (let i: u256 = 0n; i < x.length; i += 1n) { s += x[i]; }
+    for (let i: u256 = 0n; i < x.length; i += 1n) {
+      s += x[i];
+    }
     return s;
   }
-  @external @pure echoP(x: u8[]): u8[] { return x; }
-  @external @pure echoAdr(x: address[]): address[] { return x; }
-  @external @pure mix(k: u256, x: u256[]): u256 { return k + x.length; }
-  @external @view echoStoreU(): u256[] { return this.u; }
+  @external @pure echoP(x: u8[]): u8[] {
+    return x;
+  }
+  @external @pure echoAdr(x: address[]): address[] {
+    return x;
+  }
+  @external @pure mix(k: u256, x: u256[]): u256 {
+    return k + x.length;
+  }
+  @external @view echoStoreU(): u256[] {
+    return this.u;
+  }
 }

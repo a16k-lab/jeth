@@ -2,21 +2,50 @@
 // element index/set/length, runtime + compile-time bounds checks.
 @contract
 class FixedArrays {
-  @state u: Arr<u256, 3>;   // slots 0-2 (whole-slot)
-  @state sentinel: u256;    // slot 3 (must not pack into the array's trailing space)
-  @state p: Arr<u8, 5>;     // slot 4 (packed, 5 bytes in one slot)
-  @state s2: u256;          // slot 5
-  @state w: Arr<u96, 5>;    // slots 6-8 (2 per slot, no straddle)
-  @state s3: u256;          // slot 9
+  @state u: Arr<u256, 3>; // slots 0-2 (whole-slot)
+  @state sentinel: u256; // slot 3 (must not pack into the array's trailing space)
+  @state p: Arr<u8, 5>; // slot 4 (packed, 5 bytes in one slot)
+  @state s2: u256; // slot 5
+  @state w: Arr<u96, 5>; // slots 6-8 (2 per slot, no straddle)
+  @state s3: u256; // slot 9
 
-  @external fillU(): void { this.u[0n] = 0xAAn; this.u[1n] = 0xBBn; this.u[2n] = 0xCCn; this.sentinel = 0xFFn; }
-  @external @view getU(i: u256): u256 { return this.u[i]; }
-  @external setU(i: u256, v: u256): void { this.u[i] = v; }
-  @external @view lenU(): u256 { return this.u.length; }
+  @external fillU(): void {
+    this.u[0n] = 0xaan;
+    this.u[1n] = 0xbbn;
+    this.u[2n] = 0xccn;
+    this.sentinel = 0xffn;
+  }
+  @external @view getU(i: u256): u256 {
+    return this.u[i];
+  }
+  @external setU(i: u256, v: u256): void {
+    this.u[i] = v;
+  }
+  @external @view lenU(): u256 {
+    return this.u.length;
+  }
 
-  @external fillP(): void { this.p[0n] = 0x11n; this.p[1n] = 0x22n; this.p[2n] = 0x33n; this.p[3n] = 0x44n; this.p[4n] = 0x55n; this.s2 = 0xFFn; }
-  @external @view getP(i: u256): u8 { return this.p[i]; }
+  @external fillP(): void {
+    this.p[0n] = 0x11n;
+    this.p[1n] = 0x22n;
+    this.p[2n] = 0x33n;
+    this.p[3n] = 0x44n;
+    this.p[4n] = 0x55n;
+    this.s2 = 0xffn;
+  }
+  @external @view getP(i: u256): u8 {
+    return this.p[i];
+  }
 
-  @external fillW(): void { this.w[0n] = 0x10n; this.w[1n] = 0x11n; this.w[2n] = 0x12n; this.w[3n] = 0x13n; this.w[4n] = 0x14n; this.s3 = 0xFFn; }
-  @external @view getW(i: u256): u96 { return this.w[i]; }
+  @external fillW(): void {
+    this.w[0n] = 0x10n;
+    this.w[1n] = 0x11n;
+    this.w[2n] = 0x12n;
+    this.w[3n] = 0x13n;
+    this.w[4n] = 0x14n;
+    this.s3 = 0xffn;
+  }
+  @external @view getW(i: u256): u96 {
+    return this.w[i];
+  }
 }

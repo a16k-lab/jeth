@@ -43,8 +43,7 @@ const LEN = 'len((uint128,uint128)[])';
 
 // Build raw calldata from selector + an explicit list of 32-byte words (as bigints).
 // Some cases need sub-word (non-32-aligned) padding; those pass an extra `tailHex`.
-const build = (selSig: string, words: bigint[], tailHex = '') =>
-  '0x' + sel(selSig) + words.map(pad).join('') + tailHex;
+const build = (selSig: string, words: bigint[], tailHex = '') => '0x' + sel(selSig) + words.map(pad).join('') + tailHex;
 
 describe('decode-bounds-and-malformed: Pt[] decode validity vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
@@ -53,9 +52,7 @@ describe('decode-bounds-and-malformed: Pt[] decode validity vs Solidity', () => 
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
-    expect(j.returnHex, `${label} returndata\n jeth=${j.returnHex}\n sol =${s.returnHex}`).toBe(
-      s.returnHex,
-    );
+    expect(j.returnHex, `${label} returndata\n jeth=${j.returnHex}\n sol =${s.returnHex}`).toBe(s.returnHex);
     return { j, s };
   }
 
@@ -193,9 +190,7 @@ describe('decode-bounds-and-malformed: Pt[] decode validity vs Solidity', () => 
   it('(6) trailing junk after a valid array -> ignored, OK', async () => {
     // Valid len=2 array, then append extra junk words past the consumed payload.
     // solc ignores trailing calldata; JETH must too.
-    const junk = ['dead'.repeat(16), 'beef'.repeat(16)]
-      .map((h) => h.padStart(64, '0'))
-      .join('');
+    const junk = ['dead'.repeat(16), 'beef'.repeat(16)].map((h) => h.padStart(64, '0')).join('');
     const data = build(ECHO, [0x20n, 2n, 1n, 2n, 3n, 4n], junk);
     const re = await eq('echoPts trailing-junk', data);
     expect(re.j.success).toBe(true);

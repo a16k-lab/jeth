@@ -78,7 +78,8 @@ describe('final-sweep fixes vs Solidity', () => {
   it('#5 struct ctor with fixed-array field (store + read + return)', async () => {
     {
       const data = encodeCall(sel('setS(uint256,uint256,uint256,uint256)'), [7n, 1n, 2n, 3n]);
-      const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+      const j = await jeth.call(aj, data);
+      const s = await sol.call(as, data);
       expect(j.success).toBe(s.success);
     }
     await eq('getId', 'getId()', []);

@@ -54,14 +54,22 @@ let jeth: Harness, sol: Harness, aj: Address, as: Address;
 beforeAll(async () => {
   const jb = compile(JETH, { fileName: 'A.jeth' });
   const sb = compileSolidity(SOL, 'A');
-  jeth = await Harness.create(); sol = await Harness.create();
-  aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+  jeth = await Harness.create();
+  sol = await Harness.create();
+  aj = await jeth.deploy(jb.creationBytecode);
+  as = await sol.deploy(sb.creation);
 });
 
 // deterministic xorshift RNG for reproducibility
 function makeRng(seed: number) {
   let s = seed >>> 0;
-  return () => { s ^= s << 13; s ^= s >>> 17; s ^= s << 5; s >>>= 0; return s; };
+  return () => {
+    s ^= s << 13;
+    s ^= s >>> 17;
+    s ^= s << 5;
+    s >>>= 0;
+    return s;
+  };
 }
 
 function randWord(rng: () => number): string {
@@ -70,9 +78,13 @@ function randWord(rng: () => number): string {
   if (r === 0) return '00'.repeat(32);
   if (r === 1) return 'ff'.repeat(32);
   if (r === 2) return (rng() % 8).toString(16).padStart(64, '0');
-  if (r === 3) { const k = rng() % 256; const v = (1n << BigInt(k)); return v.toString(16).padStart(64, '0').slice(-64); }
+  if (r === 3) {
+    const k = rng() % 256;
+    const v = 1n << BigInt(k);
+    return v.toString(16).padStart(64, '0').slice(-64);
+  }
   // small-ish offsets/lengths
-  if (r === 4) return ((rng() % 0x200)).toString(16).padStart(64, '0');
+  if (r === 4) return (rng() % 0x200).toString(16).padStart(64, '0');
   // full random
   let h = '';
   for (let k = 0; k < 8; k++) h += (rng() >>> 0).toString(16).padStart(8, '0');
@@ -81,8 +93,9 @@ function randWord(rng: () => number): string {
 
 describe('random calldata fuzz: JETH must equal solc on every input', () => {
   it('fuzz all 8 functions x many random calldatas', async () => {
-    const rng = makeRng(0xC0FFEE);
-    let diverged = 0; const examples: string[] = [];
+    const rng = makeRng(0xc0ffee);
+    let diverged = 0;
+    const examples: string[] = [];
     for (const [name, sig] of Object.entries(SIGS)) {
       const selHex = functionSelector(sig);
       for (let iter = 0; iter < 200; iter++) {
@@ -98,7 +111,9 @@ describe('random calldata fuzz: JETH must equal solc on every input', () => {
         if (j.success !== s.success || j.returnHex !== s.returnHex) {
           diverged++;
           if (examples.length < 8) {
-            examples.push(`${name} data=${data}\n   jeth=${j.success}/${j.returnHex} (${j.exceptionError})\n   sol =${s.success}/${s.returnHex}`);
+            examples.push(
+              `${name} data=${data}\n   jeth=${j.success}/${j.returnHex} (${j.exceptionError})\n   sol =${s.success}/${s.returnHex}`,
+            );
           }
         }
       }

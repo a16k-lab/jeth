@@ -16,8 +16,13 @@ import { CompileError } from '../src/diagnostics.js';
 
 const sel = (s: string) => functionSelector(s);
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 describe('variable shadowing accept/reject parity with solc (#11/#12)', () => {
@@ -25,12 +30,22 @@ describe('variable shadowing accept/reject parity with solc (#11/#12)', () => {
     // a body-top-level local shadowing a parameter (solc: function body is a child scope of the params)
     expect(codes('@contract class C { @external @pure f(a: u256): u256 { let a: u256 = 1n; return a; } }')).toEqual([]);
     // a nested-block local shadowing the parameter
-    expect(codes('@contract class C { @external @pure f(a: u256): u256 { let s: u256 = a; if (a > 0n) { let a: u256 = 100n; s = a; } return s; } }')).toEqual([]);
+    expect(
+      codes(
+        '@contract class C { @external @pure f(a: u256): u256 { let s: u256 = a; if (a > 0n) { let a: u256 = 100n; s = a; } return s; } }',
+      ),
+    ).toEqual([]);
     // a nested-block local shadowing an earlier local
-    expect(codes('@contract class C { @external @pure f(x: u256): u256 { let a: u256 = 1n; { let a: u256 = 2n; return a; } } }')).toEqual([]);
+    expect(
+      codes(
+        '@contract class C { @external @pure f(x: u256): u256 { let a: u256 = 1n; { let a: u256 = 2n; return a; } } }',
+      ),
+    ).toEqual([]);
   });
   it('rejects same-scope redeclaration (JETH068), exactly where solc errors', () => {
-    expect(codes('@contract class C { @external @pure f(x: u256): u256 { let a: u256 = 1n; let a: u256 = 2n; return a; } }')).toContain('JETH068');
+    expect(
+      codes('@contract class C { @external @pure f(x: u256): u256 { let a: u256 = 1n; let a: u256 = 2n; return a; } }'),
+    ).toContain('JETH068');
     // two parameters with the same name is a same-scope collision too (caught earlier as JETH056)
     expect(codes('@contract class C { @external @pure f(a: u256, a: u256): u256 { return a; } }')).toContain('JETH056');
   });
@@ -48,7 +63,8 @@ contract C {
   function nested(uint256 a) external pure returns (uint256) { uint256 s = a; if (a > 0) { uint256 a = 100; s = s + a; } return s; }
   function earlier(uint256 x) external pure returns (uint256) { uint256 a = x; { uint256 a = x + 5; return a; } } }`;
     beforeAll(async () => {
-      jeth = await Harness.create(); sol = await Harness.create();
+      jeth = await Harness.create();
+      sol = await Harness.create();
       aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
       as = await sol.deploy(compileSolidity(S, 'C').creation);
     });
@@ -56,7 +72,8 @@ contract C {
       for (const fn of ['pshadow', 'nested', 'earlier'] as const) {
         for (const a of [0n, 1n, 7n, 100n, 12345n]) {
           const data = '0x' + sel(`${fn}(uint256)`) + pad32(a);
-          const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+          const j = await jeth.call(aj, data);
+          const s = await sol.call(as, data);
           expect(j.returnHex, `${fn}(${a})`).toBe(s.returnHex);
         }
       }

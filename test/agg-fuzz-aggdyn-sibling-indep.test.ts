@@ -49,7 +49,10 @@ describe('aggregate + dynamic sibling vs Solidity (independent)', () => {
   // Byte-for-byte equality of success + returndata between JETH and solc.
   async function eq(label: string, data: string) {
     const { j, s } = await both(data);
-    expect(j.success, `${label} success (jeth err=${j.exceptionError}; jeth ret=${j.returnHex}; sol ret=${s.returnHex})`).toBe(s.success);
+    expect(
+      j.success,
+      `${label} success (jeth err=${j.exceptionError}; jeth ret=${j.returnHex}; sol ret=${s.returnHex})`,
+    ).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     return { j, s };
   }
@@ -90,9 +93,9 @@ describe('aggregate + dynamic sibling vs Solidity (independent)', () => {
     // here we deliberately move the tail one extra word out to test offset!=0xa0.
     const a = [1n, 2n, 3n];
     const b = [77n, 88n];
-    const head = [a[0]!, a[1]!, a[2]!, 0xc0n, 0n];     // offset(b)=0xc0, i=0
-    const gap = [0xdeadn];                              // junk word at 0xa0 (ignored)
-    const tail = [BigInt(b.length), ...b];              // length+elems at 0xc0
+    const head = [a[0]!, a[1]!, a[2]!, 0xc0n, 0n]; // offset(b)=0xc0, i=0
+    const gap = [0xdeadn]; // junk word at 0xa0 (ignored)
+    const tail = [BigInt(b.length), ...b]; // length+elems at 0xc0
     const data = '0x' + sel('bAt(uint256[3],uint256[],uint256)') + [...head, ...gap, ...tail].map(pad).join('');
     expect(decodeUint((await eq('bAt offset=0xc0', data)).j.returnHex)).toBe(77n);
   });
@@ -110,7 +113,10 @@ describe('aggregate + dynamic sibling vs Solidity (independent)', () => {
   });
 
   it('malformed b offset (huge, length word OOB) -> EMPTY revert identically', async () => {
-    const r = await eq('bAt bad-offset huge', p1('bAt(uint256[3],uint256[],uint256)', [1n, 2n, 3n], [7n, 8n], 0n, (1n << 64n)));
+    const r = await eq(
+      'bAt bad-offset huge',
+      p1('bAt(uint256[3],uint256[],uint256)', [1n, 2n, 3n], [7n, 8n], 0n, 1n << 64n),
+    );
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
   });
@@ -118,7 +124,7 @@ describe('aggregate + dynamic sibling vs Solidity (independent)', () => {
   it('b offset points at the i word claiming a huge length; element read OOB -> EMPTY', async () => {
     // offset -> the i word (0x80), which solc reads as the array length. With a
     // huge "length", reading element 0 lands past calldatasize -> EMPTY revert.
-    const head = [1n, 2n, 3n, 0x80n, (1n << 200n)];
+    const head = [1n, 2n, 3n, 0x80n, 1n << 200n];
     const data = '0x' + sel('bAt(uint256[3],uint256[],uint256)') + head.map(pad).join('');
     const r = await eq('bAt offset->huge-len', data);
     expect(r.j.success).toBe(false);
@@ -168,9 +174,15 @@ describe('aggregate + dynamic sibling vs Solidity (independent)', () => {
 
   it('struct inline + bytes tail: p.x, p.y, data.length', async () => {
     const data = new Uint8Array([0xde, 0xad, 0xbe, 0xef, 0x01]);
-    expect(decodeUint((await eq('ptXof', p2('ptXof((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex)).toBe(0xcafen);
-    expect(decodeUint((await eq('ptYof', p2('ptYof((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex)).toBe(0xbeefn);
-    expect(decodeUint((await eq('dataLen', p2('dataLen((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex)).toBe(5n);
+    expect(
+      decodeUint((await eq('ptXof', p2('ptXof((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex),
+    ).toBe(0xcafen);
+    expect(
+      decodeUint((await eq('ptYof', p2('ptYof((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex),
+    ).toBe(0xbeefn);
+    expect(
+      decodeUint((await eq('dataLen', p2('dataLen((uint128,uint128),bytes)', 0xcafen, 0xbeefn, data))).j.returnHex),
+    ).toBe(5n);
   });
 
   it('bytes data[k]: valid k (left-aligned bytes1) and OOB k -> Panic(0x32)', async () => {
@@ -214,7 +226,7 @@ describe('aggregate + dynamic sibling vs Solidity (independent)', () => {
 
   it('bytes data offset pointing past calldata -> EMPTY revert identically', async () => {
     const data = new Uint8Array([0x11, 0x22]);
-    const r = await eq('dataLen bad-offset', p2('dataLen((uint128,uint128),bytes)', 1n, 2n, data, (1n << 64n)));
+    const r = await eq('dataLen bad-offset', p2('dataLen((uint128,uint128),bytes)', 1n, 2n, data, 1n << 64n));
     expect(r.j.success).toBe(false);
     expect(r.j.returnHex).toBe('0x');
   });

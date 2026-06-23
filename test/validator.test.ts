@@ -48,7 +48,7 @@ describe('subset validator', () => {
     expect(codesFor(wrap('let y: u256 = typeof this.x;'))).toContain('JETH030');
   });
 
-  it("rejects a plain numeric literal in favor of BigInt", () => {
+  it('rejects a plain numeric literal in favor of BigInt', () => {
     expect(codesFor(wrap('this.x = 5;'))).toContain('JETH071');
   });
 

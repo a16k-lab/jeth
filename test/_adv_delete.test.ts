@@ -13,7 +13,8 @@ import { functionSelector, keccak, toHex } from '../src/selectors.js';
 import { compileSolidity, readSlot } from './_solidity.js';
 
 const sel = (s: string) => functionSelector(s);
-const b32 = (v: bigint) => Buffer.from(((((v % (1n << 256n)) + (1n << 256n)) % (1n << 256n)).toString(16)).padStart(64, '0'), 'hex');
+const b32 = (v: bigint) =>
+  Buffer.from((((v % (1n << 256n)) + (1n << 256n)) % (1n << 256n)).toString(16).padStart(64, '0'), 'hex');
 // keccak(slot) - the data slot of a dynamic array / long string at `slot`.
 const kecSlot = (n: bigint) => BigInt('0x' + toHex(keccak(b32(n))));
 // keccak(key . base) - the mapping value slot for `m[key]` where m is at `base`.
@@ -25,7 +26,12 @@ const LONG = 'this string is definitely longer than thirty-two bytes so it uses 
 const LONG2 = 'another long payload exceeding the thirty-two byte short-string inline cutoff for sure!';
 const SHORT = 'hi';
 
-interface Pair { jeth: Harness; sol: Harness; aj: Address; as: Address; }
+interface Pair {
+  jeth: Harness;
+  sol: Harness;
+  aj: Address;
+  as: Address;
+}
 
 async function build(jethSrc: string, solSrc: string): Promise<Pair> {
   const jb = compile(jethSrc, { fileName: 'C.jeth' });
@@ -39,14 +45,15 @@ async function build(jethSrc: string, solSrc: string): Promise<Pair> {
 
 // Run a no-arg fn on both, compare success + returndata + every slot in `slots`.
 async function cmp(p: Pair, label: string, fnSig: string, slots: bigint[], call?: string) {
-  const data = call ?? ('0x' + sel(fnSig));
+  const data = call ?? '0x' + sel(fnSig);
   const j = await p.jeth.call(p.aj, data);
   const s = await p.sol.call(p.as, data);
   expect(j.success, `${label}: success (jeth err=${j.exceptionError})`).toBe(s.success);
   expect(j.returnHex, `${label}: returndata`).toBe(s.returnHex);
   for (const slot of slots) {
-    expect(await readSlot(p.jeth, p.aj, slot), `${label}: slot 0x${slot.toString(16)}`)
-      .toBe(await readSlot(p.sol, p.as, slot));
+    expect(await readSlot(p.jeth, p.aj, slot), `${label}: slot 0x${slot.toString(16)}`).toBe(
+      await readSlot(p.sol, p.as, slot),
+    );
   }
 }
 
@@ -100,47 +107,84 @@ contract C {
   function delSDDelem() external { delete sdd[0]; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
 
   // Compute the full keccak chain of data slots for dd (slot 0).
   // dd len @ 0; outer data @ keccak(0); dd[i] len @ keccak(0)+i; dd[i] data @ keccak(keccak(0)+i).
   const dd0 = kecSlot(0n);
-  const dd0_0len = dd0, dd0_1len = dd0 + 1n;
-  const dd0_0data = kecSlot(dd0), dd0_1data = kecSlot(dd0 + 1n);
+  const dd0_0len = dd0,
+    dd0_1len = dd0 + 1n;
+  const dd0_0data = kecSlot(dd0),
+    dd0_1data = kecSlot(dd0 + 1n);
   const ddd1 = kecSlot(1n);
   const sdd2 = kecSlot(2n);
 
-  async function reseed() { await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()')); }
+  async function reseed() {
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
+  }
 
   it('delete whole dd / dd[i] zeroes all inner data + lengths, leaves neighbors', async () => {
-    const slots = [0n, 1n, 2n,
-      dd0_0len, dd0_1len, dd0_0data, dd0_0data + 1n, dd0_1data, dd0_1data + 1n, dd0_1data + 2n,
+    const slots = [
+      0n,
+      1n,
+      2n,
+      dd0_0len,
+      dd0_1len,
+      dd0_0data,
+      dd0_0data + 1n,
+      dd0_1data,
+      dd0_1data + 1n,
+      dd0_1data + 2n,
       // ddd chain (must stay intact when only dd is deleted)
-      ddd1, ddd1 + 1n, kecSlot(ddd1), kecSlot(ddd1 + 1n),
-      sdd2];
-    await reseed(); await cmp(p, 'delDD', 'delDD()', slots);
-    await reseed(); await cmp(p, 'delDDelem', 'delDDelem()', slots);
+      ddd1,
+      ddd1 + 1n,
+      kecSlot(ddd1),
+      kecSlot(ddd1 + 1n),
+      sdd2,
+    ];
+    await reseed();
+    await cmp(p, 'delDD', 'delDD()', slots);
+    await reseed();
+    await cmp(p, 'delDDelem', 'delDDelem()', slots);
   });
 
   it('delete whole ddd / ddd[i] (triple-nested) zeroes the full keccak chain', async () => {
     // ddd[0] is a uint256[][] at lenSlot keccak(1); its outer data @ keccak(keccak(1));
     // ddd[0][j] len @ keccak(keccak(1))+j; ddd[0][j] data @ keccak(keccak(keccak(1))+j).
-    const o = kecSlot(ddd1);                 // ddd[0] outer data
-    const slots = [0n, 1n, 2n, ddd1, ddd1 + 1n,
-      o, o + 1n, kecSlot(o), kecSlot(o) + 1n, kecSlot(o + 1n),
-      kecSlot(ddd1 + 1n), kecSlot(kecSlot(ddd1 + 1n))];
-    await reseed(); await cmp(p, 'delDDD', 'delDDD()', slots);
-    await reseed(); await cmp(p, 'delDDDelem', 'delDDDelem()', slots);
+    const o = kecSlot(ddd1); // ddd[0] outer data
+    const slots = [
+      0n,
+      1n,
+      2n,
+      ddd1,
+      ddd1 + 1n,
+      o,
+      o + 1n,
+      kecSlot(o),
+      kecSlot(o) + 1n,
+      kecSlot(o + 1n),
+      kecSlot(ddd1 + 1n),
+      kecSlot(kecSlot(ddd1 + 1n)),
+    ];
+    await reseed();
+    await cmp(p, 'delDDD', 'delDDD()', slots);
+    await reseed();
+    await cmp(p, 'delDDDelem', 'delDDDelem()', slots);
   });
 
   it('delete string[][] (sdd) and sdd[i] zeroes element headers + long-data slots', async () => {
     // sdd[0] inner string[] len @ keccak(2); its data @ keccak(keccak(2)); each string elem
     // header @ keccak(keccak(2))+k; a long elem's long-data @ keccak(header).
-    const inner = kecSlot(sdd2);          // sdd[0] inner string[] lenSlot
-    const data = kecSlot(inner);          // sdd[0] data base (string headers)
+    const inner = kecSlot(sdd2); // sdd[0] inner string[] lenSlot
+    const data = kecSlot(inner); // sdd[0] data base (string headers)
     const slots = [0n, 1n, 2n, inner, data, data + 1n, kecSlot(data + 1n)];
-    await reseed(); await cmp(p, 'delSDD', 'delSDD()', slots);
-    await reseed(); await cmp(p, 'delSDDelem', 'delSDDelem()', slots);
+    await reseed();
+    await cmp(p, 'delSDD', 'delSDD()', slots);
+    await reseed();
+    await cmp(p, 'delSDDelem', 'delSDDelem()', slots);
   });
 });
 
@@ -177,17 +221,24 @@ contract C {
   function delFD() external { delete fd; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  async function reseed() { await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()')); }
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  async function reseed() {
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
+  }
 
   it('delete Arr<string,N>: headers + long-data slots zeroed, guard intact', async () => {
     const slots = [0n, 1n, 2n, 7n, kecSlot(1n), kecSlot(2n), kecSlot(1n) + 1n, kecSlot(2n) + 1n];
-    await reseed(); await cmp(p, 'delFS', 'delFS()', slots);
+    await reseed();
+    await cmp(p, 'delFS', 'delFS()', slots);
   });
   it('delete Arr<D,N> with a string field: per-element clear, guard intact', async () => {
     // fd[0]: n@3, s header@4, s long-data @ keccak(4); fd[1]: n@5, s@6.
     const slots = [3n, 4n, 5n, 6n, 7n, kecSlot(4n), kecSlot(4n) + 1n, kecSlot(6n)];
-    await reseed(); await cmp(p, 'delFD', 'delFD()', slots);
+    await reseed();
+    await cmp(p, 'delFD', 'delFD()', slots);
   });
 });
 
@@ -222,12 +273,16 @@ contract C {
   function delS() external { delete s; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   it('delete struct: a/b zeroed, after intact, mapping entries SURVIVE', async () => {
     // m is at slot 1; entries at keccak(key . 1).
-    const mA = mapSlot(A, 1n), mB = mapSlot(B, 1n);
+    const mA = mapSlot(A, 1n),
+      mB = mapSlot(B, 1n);
     const slots = [0n, 1n, 2n, 3n, mA, mB];
-    await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()'));
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
     await cmp(p, 'delS', 'delS()', slots);
     // explicit sanity: the mapping entries must SURVIVE (not be zeroed by the struct delete).
     expect(await readSlot(p.jeth, p.aj, mA)).toBe('0x' + b32(777n).toString('hex'));
@@ -256,12 +311,19 @@ contract C {
   function delBs() external { delete d.bs; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  async function reseed() { await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()')); }
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  async function reseed() {
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
+  }
   it('delete d.s: header + long-data zeroed; n, bs, t untouched', async () => {
     const slots = [0n, 1n, 2n, 3n, kecSlot(1n), kecSlot(1n) + 1n, kecSlot(2n), kecSlot(2n) + 1n];
-    await reseed(); await cmp(p, 'delS', 'delS()', slots);
-    await reseed(); await cmp(p, 'delBs', 'delBs()', slots);
+    await reseed();
+    await cmp(p, 'delS', 'delS()', slots);
+    await reseed();
+    await cmp(p, 'delBs', 'delBs()', slots);
   });
 });
 
@@ -308,18 +370,29 @@ contract C {
   function delAbe() external { delete ab[3]; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  async function reseed() { await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()')); }
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  async function reseed() {
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
+  }
   const slots = [0n, 1n, 2n, 3n, 4n];
   it('delete whole packed arrays leaves no stray packed lanes, guard intact', async () => {
-    await reseed(); await cmp(p, 'delA8', 'delA8()', slots);
-    await reseed(); await cmp(p, 'delA128', 'delA128()', slots);
-    await reseed(); await cmp(p, 'delAb', 'delAb()', slots);
+    await reseed();
+    await cmp(p, 'delA8', 'delA8()', slots);
+    await reseed();
+    await cmp(p, 'delA128', 'delA128()', slots);
+    await reseed();
+    await cmp(p, 'delAb', 'delAb()', slots);
   });
   it('delete a single packed element zeroes only its lane (neighbors preserved)', async () => {
-    await reseed(); await cmp(p, 'delA8e', 'delA8e()', slots);
-    await reseed(); await cmp(p, 'delA128e', 'delA128e()', slots);
-    await reseed(); await cmp(p, 'delAbe', 'delAbe()', slots);
+    await reseed();
+    await cmp(p, 'delA8e', 'delA8e()', slots);
+    await reseed();
+    await cmp(p, 'delA128e', 'delA128e()', slots);
+    await reseed();
+    await cmp(p, 'delAbe', 'delAbe()', slots);
   });
 });
 
@@ -361,16 +434,34 @@ contract C {
   function delStrThenLong() external { delete s; s = "${LONG2}"; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  async function reseed() { await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()')); }
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  async function reseed() {
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
+  }
   it('delete + regrow array: freed tail slots must be clean', async () => {
-    const slots = [0n, 1n, kecSlot(0n), kecSlot(0n) + 1n, kecSlot(0n) + 2n, kecSlot(0n) + 3n, kecSlot(1n), kecSlot(1n) + 1n, kecSlot(1n) + 2n];
-    await reseed(); await cmp(p, 'delAndRegrow', 'delAndRegrow()', slots);
+    const slots = [
+      0n,
+      1n,
+      kecSlot(0n),
+      kecSlot(0n) + 1n,
+      kecSlot(0n) + 2n,
+      kecSlot(0n) + 3n,
+      kecSlot(1n),
+      kecSlot(1n) + 1n,
+      kecSlot(1n) + 2n,
+    ];
+    await reseed();
+    await cmp(p, 'delAndRegrow', 'delAndRegrow()', slots);
   });
   it('delete long string + reset short: long-data slots must be cleared', async () => {
     const slots = [0n, 1n, kecSlot(1n), kecSlot(1n) + 1n, kecSlot(1n) + 2n];
-    await reseed(); await cmp(p, 'delAndReset', 'delAndReset()', slots);
-    await reseed(); await cmp(p, 'delStrThenLong', 'delStrThenLong()', slots);
+    await reseed();
+    await cmp(p, 'delAndReset', 'delAndReset()', slots);
+    await reseed();
+    await cmp(p, 'delStrThenLong', 'delStrThenLong()', slots);
   });
 });
 
@@ -410,12 +501,26 @@ contract C {
   function delZero() external { delete c; delete c; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  async function reseed() { await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()')); }
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  async function reseed() {
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
+  }
   const slots = [0n, 1n, 2n, 3n, 4n, 5n, 6n, kecSlot(5n), kecSlot(5n) + 1n];
-  it('delete each element in a loop', async () => { await reseed(); await cmp(p, 'delLoop', 'delLoop()', slots); });
-  it('delete the same array twice (idempotent)', async () => { await reseed(); await cmp(p, 'delTwice', 'delTwice()', slots); });
-  it('delete an already-zeroed value twice (no-op)', async () => { await reseed(); await cmp(p, 'delZero', 'delZero()', slots); });
+  it('delete each element in a loop', async () => {
+    await reseed();
+    await cmp(p, 'delLoop', 'delLoop()', slots);
+  });
+  it('delete the same array twice (idempotent)', async () => {
+    await reseed();
+    await cmp(p, 'delTwice', 'delTwice()', slots);
+  });
+  it('delete an already-zeroed value twice (no-op)', async () => {
+    await reseed();
+    await cmp(p, 'delZero', 'delZero()', slots);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -451,19 +556,27 @@ contract C {
   function delMAv() external { delete ma[address(0xa11ce0000000000000000000000000000000)]; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  async function reseed() { await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()')); }
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  async function reseed() {
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
+  }
   it('delete nested mapping value mm[k1][k2]: only that leaf cleared', async () => {
     // inner base = keccak(k1 . 0); leaf7 = keccak(7 . inner); leaf8 = keccak(8 . inner).
     const inner = mapSlot(A, 0n);
-    const leaf7 = mapSlot(7n, inner), leaf8 = mapSlot(8n, inner);
-    await reseed(); await cmp(p, 'delMMv', 'delMMv()', [0n, 1n, leaf7, leaf8]);
+    const leaf7 = mapSlot(7n, inner),
+      leaf8 = mapSlot(8n, inner);
+    await reseed();
+    await cmp(p, 'delMMv', 'delMMv()', [0n, 1n, leaf7, leaf8]);
   });
   it('delete mapping-to-array ma[k]: length + data slots cleared', async () => {
     // ma[k] lenSlot = keccak(k . 1); data @ keccak(lenSlot).
     const lenSlot = mapSlot(A, 1n);
     const data = kecSlot(lenSlot);
-    await reseed(); await cmp(p, 'delMAv', 'delMAv()', [0n, 1n, lenSlot, data, data + 1n, data + 2n]);
+    await reseed();
+    await cmp(p, 'delMAv', 'delMAv()', [0n, 1n, lenSlot, data, data + 1n, data + 2n]);
   });
 });
 
@@ -494,16 +607,33 @@ contract C {
   function delMid() external { delete recs[1]; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
   it('delete recs[1]: element fully cleared, neighbors intact', async () => {
     // recs len @ 0; data @ keccak(0); each D spans 3 slots (n, s-header, t).
     const data = kecSlot(0n);
-    const e0 = data, e1 = data + 3n, e2 = data + 6n;
-    const slots = [0n,
-      e0, e0 + 1n, e0 + 2n, kecSlot(e0 + 1n), kecSlot(e0 + 1n) + 1n,  // recs[0]
-      e1, e1 + 1n, e1 + 2n, kecSlot(e1 + 1n), kecSlot(e1 + 1n) + 1n,  // recs[1] (deleted)
-      e2, e2 + 1n, e2 + 2n];                                          // recs[2]
-    await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()'));
+    const e0 = data,
+      e1 = data + 3n,
+      e2 = data + 6n;
+    const slots = [
+      0n,
+      e0,
+      e0 + 1n,
+      e0 + 2n,
+      kecSlot(e0 + 1n),
+      kecSlot(e0 + 1n) + 1n, // recs[0]
+      e1,
+      e1 + 1n,
+      e1 + 2n,
+      kecSlot(e1 + 1n),
+      kecSlot(e1 + 1n) + 1n, // recs[1] (deleted)
+      e2,
+      e2 + 1n,
+      e2 + 2n,
+    ]; // recs[2]
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
     await cmp(p, 'delMid', 'delMid()', slots);
   });
 });
@@ -562,18 +692,29 @@ contract C {
   function delS8() external { delete s8; }
 }`;
   let p: Pair;
-  beforeAll(async () => { p = await build(JETH, SOL); });
-  async function reseed() { await p.jeth.call(p.aj, '0x' + sel('seed()')); await p.sol.call(p.as, '0x' + sel('seed()')); }
+  beforeAll(async () => {
+    p = await build(JETH, SOL);
+  });
+  async function reseed() {
+    await p.jeth.call(p.aj, '0x' + sel('seed()'));
+    await p.sol.call(p.as, '0x' + sel('seed()'));
+  }
   const slots = [0n, 1n, 2n, 3n];
   it('delete one lane of a fully-packed slot leaves the other lanes', async () => {
-    await reseed(); await cmp(p, 'delWho', 'delWho()', slots);
-    await reseed(); await cmp(p, 'delExtra', 'delExtra()', slots);
-    await reseed(); await cmp(p, 'delFlag', 'delFlag()', slots);
-    await reseed(); await cmp(p, 'delS8', 'delS8()', slots);
+    await reseed();
+    await cmp(p, 'delWho', 'delWho()', slots);
+    await reseed();
+    await cmp(p, 'delExtra', 'delExtra()', slots);
+    await reseed();
+    await cmp(p, 'delFlag', 'delFlag()', slots);
+    await reseed();
+    await cmp(p, 'delS8', 'delS8()', slots);
   });
   it('delete max/min-width full-slot values', async () => {
-    await reseed(); await cmp(p, 'delBig', 'delBig()', slots);
-    await reseed(); await cmp(p, 'delSmin', 'delSmin()', slots);
+    await reseed();
+    await cmp(p, 'delBig', 'delBig()', slots);
+    await reseed();
+    await cmp(p, 'delSmin', 'delSmin()', slots);
   });
 });
 

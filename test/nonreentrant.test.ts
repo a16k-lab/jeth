@@ -75,19 +75,23 @@ describe('F4 @nonReentrant vs Solidity transient ReentrancyGuard', () => {
       ['bumpBy(7)', encodeCall(sel('bumpBy(uint256)'), [7n])] as const,
       ['bump2', encodeCall(sel('bump()'), [])] as const,
     ]) {
-      const j = await h.call(jv, data); const s = await h.call(sv, data);
+      const j = await h.call(jv, data);
+      const s = await h.call(sv, data);
       expect(j.success, `${label} jeth=${j.exceptionError}`).toBe(s.success);
       expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     }
     expect(await readSlot(h, jv, 0n), 'x slot after bumps').toBe(await readSlot(h, sv, 0n));
     // a direct guarded view of state matches
-    expect((await h.call(jv, encodeCall(sel('get()'), []))).returnHex).toBe((await h.call(sv, encodeCall(sel('get()'), []))).returnHex);
+    expect((await h.call(jv, encodeCall(sel('get()'), []))).returnHex).toBe(
+      (await h.call(sv, encodeCall(sel('get()'), []))).returnHex,
+    );
   });
 
   it('mutex resets between guarded entries in one tx (hammer x5 succeeds on both)', async () => {
     const data = '0x' + sel('hammer(address,uint256)') + pad(BigInt(jv.toString())) + pad(5n);
     const dataS = '0x' + sel('hammer(address,uint256)') + pad(BigInt(sv.toString())) + pad(5n);
-    const j = await h.call(atk, data); const s = await h.call(atk, dataS);
+    const j = await h.call(atk, data);
+    const s = await h.call(atk, dataS);
     expect(j.success, `jeth hammer err=${j.exceptionError}`).toBe(true);
     expect(s.success, `sol hammer err=${s.exceptionError}`).toBe(true);
     // 5 successful guarded bumps each; x advanced identically (started at the post-prev-test value).

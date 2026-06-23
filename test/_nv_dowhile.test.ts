@@ -267,28 +267,58 @@ contract C {
 
 describe('probe', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const mism: string[] = []; let count = 0;
+  const mism: string[] = [];
+  let count = 0;
   async function eq(label: string, data: string) {
     count++;
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   // stateful: send to BOTH, then read back from both and compare
   async function sendBoth(data: string) {
-    await jeth.call(aj, data); await sol.call(as, data);
+    await jeth.call(aj, data);
+    await sol.call(as, data);
   }
   async function eqRead(label: string, readData: string) {
     count++;
-    const j = await jeth.call(aj, readData); const s = await sol.call(as, readData);
+    const j = await jeth.call(aj, readData);
+    const s = await sol.call(as, readData);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('runs', async () => {
@@ -318,50 +348,67 @@ describe('probe', () => {
     await eq('bodyOnceCondVar(true)', encodeCall(sel('bodyOnceCondVar(bool)'), [1n]));
     await eq('bodyOnceCondVar(false)', encodeCall(sel('bodyOnceCondVar(bool)'), [0n]));
     // dirty bool high bits
-    await eq('bodyOnceCondVar(dirty)', '0x' + sel('bodyOnceCondVar(bool)').slice(2) + asWord(0xffn << 8n | 1n).toString(16).padStart(64, '0'));
+    await eq(
+      'bodyOnceCondVar(dirty)',
+      '0x' +
+        sel('bodyOnceCondVar(bool)').slice(2) +
+        asWord((0xffn << 8n) | 1n)
+          .toString(16)
+          .padStart(64, '0'),
+    );
 
     // breakAt / earlyReturn with (n, lim)
-    for (const n of [0n, 1n, 3n, 5n, 8n, 13n, 50n]) for (const lim of [0n, 1n, 2n, 3n, 5n, 8n, 100n]) {
-      await eq(`breakAt(${n},${lim})`, encodeCall(sel('breakAt(uint256,uint256)'), [n, lim]));
-      await eq(`earlyReturn(${n},${lim})`, encodeCall(sel('earlyReturn(uint256,uint256)'), [n, lim]));
-    }
+    for (const n of [0n, 1n, 3n, 5n, 8n, 13n, 50n])
+      for (const lim of [0n, 1n, 2n, 3n, 5n, 8n, 100n]) {
+        await eq(`breakAt(${n},${lim})`, encodeCall(sel('breakAt(uint256,uint256)'), [n, lim]));
+        await eq(`earlyReturn(${n},${lim})`, encodeCall(sel('earlyReturn(uint256,uint256)'), [n, lim]));
+      }
     for (const n of [0n, 1n, 2n, 5n, 10n]) await eq(`breakInElse(${n})`, encodeCall(sel('breakInElse(uint256)'), [n]));
 
     // nested grid / triple / innerBreakOuterContinue / returnFromNestedDw
-    for (const a of [1n, 2n, 3n, 4n, 5n]) for (const b of [1n, 2n, 3n, 4n, 5n, 6n]) {
-      await eq(`grid(${a},${b})`, encodeCall(sel('grid(uint256,uint256)'), [a, b]));
-      await eq(`innerBreakOuterContinue(${a},${b})`, encodeCall(sel('innerBreakOuterContinue(uint256,uint256)'), [a, b]));
-      await eq(`returnFromNestedDw(${a},${b})`, encodeCall(sel('returnFromNestedDw(uint256,uint256)'), [a, b]));
-      await eq(`condAnd(${a},${b})`, encodeCall(sel('condAnd(uint256,uint256)'), [a, b]));
-      await eq(`condOr(${a},${b})`, encodeCall(sel('condOr(uint256,uint256)'), [a, b]));
-    }
-    for (const a of [1n, 2n, 3n, 4n]) for (const b of [1n, 2n, 3n, 4n]) for (const c of [1n, 2n, 3n, 5n, 6n]) {
-      await eq(`triple(${a},${b},${c})`, encodeCall(sel('triple(uint256,uint256,uint256)'), [a, b, c]));
-    }
+    for (const a of [1n, 2n, 3n, 4n, 5n])
+      for (const b of [1n, 2n, 3n, 4n, 5n, 6n]) {
+        await eq(`grid(${a},${b})`, encodeCall(sel('grid(uint256,uint256)'), [a, b]));
+        await eq(
+          `innerBreakOuterContinue(${a},${b})`,
+          encodeCall(sel('innerBreakOuterContinue(uint256,uint256)'), [a, b]),
+        );
+        await eq(`returnFromNestedDw(${a},${b})`, encodeCall(sel('returnFromNestedDw(uint256,uint256)'), [a, b]));
+        await eq(`condAnd(${a},${b})`, encodeCall(sel('condAnd(uint256,uint256)'), [a, b]));
+        await eq(`condOr(${a},${b})`, encodeCall(sel('condOr(uint256,uint256)'), [a, b]));
+      }
+    for (const a of [1n, 2n, 3n, 4n])
+      for (const b of [1n, 2n, 3n, 4n])
+        for (const c of [1n, 2n, 3n, 5n, 6n]) {
+          await eq(`triple(${a},${b},${c})`, encodeCall(sel('triple(uint256,uint256,uint256)'), [a, b, c]));
+        }
 
     // dw nesting with for/while, (n, m)
-    for (const n of [0n, 1n, 2n, 3n, 5n]) for (const m of [0n, 1n, 2n, 3n, 4n]) {
-      await eq(`dwInFor(${n},${m})`, encodeCall(sel('dwInFor(uint256,uint256)'), [n, m]));
-      await eq(`dwInWhile(${n},${m})`, encodeCall(sel('dwInWhile(uint256,uint256)'), [n, m]));
-      await eq(`forInDw(${n},${m})`, encodeCall(sel('forInDw(uint256,uint256)'), [n, m]));
-      await eq(`whileInDw(${n},${m})`, encodeCall(sel('whileInDw(uint256,uint256)'), [n, m]));
-      await eq(`dwInForWithBreak(${n},${m})`, encodeCall(sel('dwInForWithBreak(uint256,uint256)'), [n, m]));
-    }
+    for (const n of [0n, 1n, 2n, 3n, 5n])
+      for (const m of [0n, 1n, 2n, 3n, 4n]) {
+        await eq(`dwInFor(${n},${m})`, encodeCall(sel('dwInFor(uint256,uint256)'), [n, m]));
+        await eq(`dwInWhile(${n},${m})`, encodeCall(sel('dwInWhile(uint256,uint256)'), [n, m]));
+        await eq(`forInDw(${n},${m})`, encodeCall(sel('forInDw(uint256,uint256)'), [n, m]));
+        await eq(`whileInDw(${n},${m})`, encodeCall(sel('whileInDw(uint256,uint256)'), [n, m]));
+        await eq(`dwInForWithBreak(${n},${m})`, encodeCall(sel('dwInForWithBreak(uint256,uint256)'), [n, m]));
+      }
 
     // unchecked arithmetic in body
     for (const n of [0n, 1n, 2n, 5n, 10n, 256n]) {
       await eq(`uncheckedSum(${n})`, encodeCall(sel('uncheckedSum(uint256)'), [n]));
     }
-    for (const start of [0n, 1n, 5n, 100n, U]) for (const n of [0n, 1n, 2n, 5n, 10n]) {
-      await eq(`uncheckedWrapBody(${start},${n})`, encodeCall(sel('uncheckedWrapBody(uint256,uint256)'), [start, n]));
-      await eq(`uncheckedCountUp(${start},${n})`, encodeCall(sel('uncheckedCountUp(uint256,uint256)'), [start, n]));
-    }
+    for (const start of [0n, 1n, 5n, 100n, U])
+      for (const n of [0n, 1n, 2n, 5n, 10n]) {
+        await eq(`uncheckedWrapBody(${start},${n})`, encodeCall(sel('uncheckedWrapBody(uint256,uint256)'), [start, n]));
+        await eq(`uncheckedCountUp(${start},${n})`, encodeCall(sel('uncheckedCountUp(uint256,uint256)'), [start, n]));
+      }
 
     // checked under/overflow boundaries (must revert at the right iteration)
-    for (const start of [0n, 1n, 2n, 3n, 5n, U, U - 1n, U - 2n]) for (const n of [0n, 1n, 2n, 3n, 4n, 6n]) {
-      await eq(`checkedUnderflow(${start},${n})`, encodeCall(sel('checkedUnderflow(uint256,uint256)'), [start, n]));
-      await eq(`checkedOverflow(${start},${n})`, encodeCall(sel('checkedOverflow(uint256,uint256)'), [start, n]));
-    }
+    for (const start of [0n, 1n, 2n, 3n, 5n, U, U - 1n, U - 2n])
+      for (const n of [0n, 1n, 2n, 3n, 4n, 6n]) {
+        await eq(`checkedUnderflow(${start},${n})`, encodeCall(sel('checkedUnderflow(uint256,uint256)'), [start, n]));
+        await eq(`checkedOverflow(${start},${n})`, encodeCall(sel('checkedOverflow(uint256,uint256)'), [start, n]));
+      }
     // signed boundaries
     for (const start of [I256_MIN, I256_MIN + 1n, I256_MIN + 2n, 0n, I256_MAX, I256_MAX - 1n, I256_MAX - 2n, -1n, 1n]) {
       for (const n of [0n, 1n, 2n, 3n]) {
@@ -377,11 +424,12 @@ describe('probe', () => {
       await eqRead(`pumpState(${s})->acc`, encodeCall(sel('getAcc()'), []));
     }
     // condReadsState: starts from current acc, runs body once, reads acc condition
-    for (const init of [0n, 5n, 10n]) for (const target of [0n, 1n, 3n, 8n, 12n]) {
-      await sendBoth(encodeCall(sel('setAcc(uint256)'), [init]));
-      await sendBoth(encodeCall(sel('condReadsState(uint256)'), [target]));
-      await eqRead(`condReadsState(init=${init},t=${target})->acc`, encodeCall(sel('getAcc()'), []));
-    }
+    for (const init of [0n, 5n, 10n])
+      for (const target of [0n, 1n, 3n, 8n, 12n]) {
+        await sendBoth(encodeCall(sel('setAcc(uint256)'), [init]));
+        await sendBoth(encodeCall(sel('condReadsState(uint256)'), [target]));
+        await eqRead(`condReadsState(init=${init},t=${target})->acc`, encodeCall(sel('getAcc()'), []));
+      }
     // drainWhileState: body runs once even if acc==0, so acc=0 underflows on entry-1
     for (const init of [0n, 1n, 2n, 3n, 5n]) {
       await sendBoth(encodeCall(sel('setAcc(uint256)'), [init]));
@@ -410,22 +458,29 @@ describe('probe', () => {
       await eq(`emptyBody(${n})`, encodeCall(sel('emptyBody(uint256)'), [n]));
       await eq(`chainedAssignCond(${n})`, encodeCall(sel('chainedAssignCond(uint256)'), [n]));
     }
-    for (const n of [1n, 2n, 3n, 5n, 8n]) for (const fail of [0n, 1n, 2n, 3n, 5n, 8n, 100n]) {
-      await eq(`requireInBody(${n},${fail})`, encodeCall(sel('requireInBody(uint256,uint256)'), [n, fail]));
-    }
+    for (const n of [1n, 2n, 3n, 5n, 8n])
+      for (const fail of [0n, 1n, 2n, 3n, 5n, 8n, 100n]) {
+        await eq(`requireInBody(${n},${fail})`, encodeCall(sel('requireInBody(uint256,uint256)'), [n, fail]));
+      }
     // body reverts via checked underflow at a precise iteration (start/step)
-    for (const start of [0n, 1n, 3n, 5n, 10n, 100n]) for (const step of [1n, 2n, 3n, 4n, 7n]) {
-      await eq(`bodyRevertAt(${start},${step})`, encodeCall(sel('bodyRevertAt(uint256,uint256)'), [start, step]));
-    }
+    for (const start of [0n, 1n, 3n, 5n, 10n, 100n])
+      for (const step of [1n, 2n, 3n, 4n, 7n]) {
+        await eq(`bodyRevertAt(${start},${step})`, encodeCall(sel('bodyRevertAt(uint256,uint256)'), [start, step]));
+      }
     for (const start of [0n, 1n, 2n, 3n, U, U - 1n]) {
       await eq(`uncheckedCondWrap(${start})`, encodeCall(sel('uncheckedCondWrap(uint256)'), [start]));
     }
     for (const n of [0n, 1n, 2n, 3n, 4n, 5n, 6n]) {
       await eq(`sharedSideEffect(${n})`, encodeCall(sel('sharedSideEffect(uint256)'), [n]));
     }
-    for (const n of [0n, 1n, 2n, 3n]) for (const m of [1n, 2n, 3n]) for (const target of [0n, 111n, 121n, 211n, 232n, 999999n]) {
-      await eq(`deepEarlyReturn(${n},${m},${target})`, encodeCall(sel('deepEarlyReturn(uint256,uint256,uint256)'), [n, m, target]));
-    }
+    for (const n of [0n, 1n, 2n, 3n])
+      for (const m of [1n, 2n, 3n])
+        for (const target of [0n, 111n, 121n, 211n, 232n, 999999n]) {
+          await eq(
+            `deepEarlyReturn(${n},${m},${target})`,
+            encodeCall(sel('deepEarlyReturn(uint256,uint256,uint256)'), [n, m, target]),
+          );
+        }
 
     // sanity: confirm the revert-path cases actually revert on BOTH sides (not silent no-ops)
     {
@@ -439,8 +494,10 @@ describe('probe', () => {
       const qs = await sol.call(as, encodeCall(sel('requireInBody(uint256,uint256)'), [5n, 3n]));
       console.log('SANITY requireInBody(5,3): jeth.success=' + qj.success + ' sol.success=' + qs.success);
     }
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

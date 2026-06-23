@@ -117,15 +117,8 @@ describe('s1-arr-of-packed-struct vs Solidity', () => {
   });
 
   it('OOB index 4: every getter Panic(0x32) byte-identical to Solidity', async () => {
-    const PANIC32 =
-      '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
-    for (const g of [
-      'getA(uint256)',
-      'getB(uint256)',
-      'getC(uint256)',
-      'getD(uint256)',
-      'getE(uint256)',
-    ]) {
+    const PANIC32 = '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032';
+    for (const g of ['getA(uint256)', 'getB(uint256)', 'getC(uint256)', 'getD(uint256)', 'getE(uint256)']) {
       const r = await both(encodeCall(sel(g), [4n]));
       expect(r.j.success, `jeth ${g}@4 should revert`).toBe(false);
       expect(r.s.success, `sol ${g}@4 should revert`).toBe(false);

@@ -5,10 +5,22 @@
 // > 255 -> EMPTY on read), m.length (outer count), and m[i].length (inner count).
 @contract
 class NestedArray {
-  @external @pure echo(m: u256[][]): u256[][] { return m; }
-  @external @pure echo8(m: u8[][]): u8[][] { return m; }
-  @external @pure at(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
-  @external @pure at8(m: u8[][], i: u256, j: u256): u8 { return m[i][j]; }
-  @external @pure outerLen(m: u256[][]): u256 { return m.length; }
-  @external @pure innerLen(m: u256[][], i: u256): u256 { return m[i].length; }
+  @external @pure echo(m: u256[][]): u256[][] {
+    return m;
+  }
+  @external @pure echo8(m: u8[][]): u8[][] {
+    return m;
+  }
+  @external @pure at(m: u256[][], i: u256, j: u256): u256 {
+    return m[i][j];
+  }
+  @external @pure at8(m: u8[][], i: u256, j: u256): u8 {
+    return m[i][j];
+  }
+  @external @pure outerLen(m: u256[][]): u256 {
+    return m.length;
+  }
+  @external @pure innerLen(m: u256[][], i: u256): u256 {
+    return m[i].length;
+  }
 }

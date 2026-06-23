@@ -64,13 +64,7 @@ describe('boundary-and-trailing: aggregate-param calldata length boundaries vs S
   // selSig: full canonical signature for the selector.
   // argHex: exact-need argument bytes (no 0x), expected.length == 2*needBytes.
   // expectVal: the uint value both contracts must return on a valid call.
-  async function boundary(
-    name: string,
-    selSig: string,
-    needBytes: number,
-    argHex: string,
-    expectVal: bigint,
-  ) {
+  async function boundary(name: string, selSig: string, needBytes: number, argHex: string, expectVal: bigint) {
     const selHex = sel(selSig);
     expect(argHex.length, `${name} argHex must be exactly need bytes`).toBe(2 * needBytes);
 

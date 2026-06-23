@@ -36,10 +36,14 @@ class AuditCd {
 }`;
 
 const M = 1n << 256n;
-function w(v: bigint): string { return (((v % M) + M) % M).toString(16).padStart(64, '0'); }
+function w(v: bigint): string {
+  return (((v % M) + M) % M).toString(16).padStart(64, '0');
+}
 
 let jeth: Harness, sol: Harness, aj: Address, as_: Address;
-function sel(s: string): string { return functionSelector(s); }
+function sel(s: string): string {
+  return functionSelector(s);
+}
 async function pair(sig: string, body: string) {
   const data = '0x' + sel(sig) + body;
   const j = await jeth.call(aj, data);

@@ -54,8 +54,18 @@ async function eq(p: Pair, label: string, data: string) {
   if (j.success !== s.success || j.returnHex !== s.returnHex) {
     mism.push(
       label +
-        ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} ' +
-        'sol{ok=' + s.success + ',ret=' + s.returnHex + '}',
+        ': jeth{ok=' +
+        j.success +
+        ',ret=' +
+        j.returnHex +
+        ',err=' +
+        j.exceptionError +
+        '} ' +
+        'sol{ok=' +
+        s.success +
+        ',ret=' +
+        s.returnHex +
+        '}',
     );
   }
 }
@@ -621,12 +631,12 @@ contract C {
     // JETH must clean exactly as solc does. We use OR with DIRTY masked to the slot.
     const p1cases: [string, bigint][] = [
       ['setA(uint8)', 0xffn],
-      ['setB(int16)', (-1n & mask(16n))], // -1 as 16-bit, but we widen below
+      ['setB(int16)', -1n & mask(16n)], // -1 as 16-bit, but we widen below
       ['setC(bytes3)', 0xaabbccn << 232n],
       ['setD(bool)', 1n],
       ['setE(uint32)', 0xdeadbeefn],
       ['setF(address)', 0x1234567890abcdef1234567890abcdef12345678n],
-      ['setG(int40)', ((-1234567n) % M + M) % M],
+      ['setG(int40)', ((-1234567n % M) + M) % M],
       ['setH(bytes7)', 0xaabbccddeeff00n << 200n],
     ];
     for (const [s, v] of p1cases) await send(P1, 'P1.' + s, encodeCall(sel(s), [v]));
@@ -642,16 +652,15 @@ contract C {
     await send(P1, 'P1.setG-dirty', encodeCall(sel('setG(int40)'), [DIRTY])); // -1
     await send(P1, 'P1.setC-dirty', encodeCall(sel('setC(bytes3)'), [DIRTY])); // top 3 bytes
     await eqSlot(P1, 'P1-dirty', 0n);
-    for (const g of ['getA()', 'getB()', 'getC()', 'getG()'])
-      await eq(P1, 'P1-dirty.' + g, encodeCall(sel(g)));
+    for (const g of ['getA()', 'getB()', 'getC()', 'getG()']) await eq(P1, 'P1-dirty.' + g, encodeCall(sel(g)));
 
     // boundary values for signed
-    await send(P1, 'P1.setB-min', encodeCall(sel('setB(int16)'), [(-(1n << 15n)) % M + M]));
+    await send(P1, 'P1.setB-min', encodeCall(sel('setB(int16)'), [(-(1n << 15n) % M) + M]));
     await eq(P1, 'P1.getB-min', encodeCall(sel('getB()')));
     await eqSlot(P1, 'P1-bmin', 0n);
     await send(P1, 'P1.setB-max', encodeCall(sel('setB(int16)'), [(1n << 15n) - 1n]));
     await eq(P1, 'P1.getB-max', encodeCall(sel('getB()')));
-    await send(P1, 'P1.setG-min', encodeCall(sel('setG(int40)'), [(-(1n << 39n)) % M + M]));
+    await send(P1, 'P1.setG-min', encodeCall(sel('setG(int40)'), [(-(1n << 39n) % M) + M]));
     await eq(P1, 'P1.getG-min', encodeCall(sel('getG()')));
     await eqSlot(P1, 'P1-gmin', 0n);
 
@@ -661,7 +670,11 @@ contract C {
     const dB4 = 0xaabbccddn << 224n;
     const e64 = 0xdeadbeefcafef00dn;
     const f32 = (1n << 256n) - 7n;
-    await send(P2, 'P2.setAll', encodeCall(sel('setAll(uint128,uint64,bool,bytes4,uint64,bytes32)'), [a128, b64, 1n, dB4, e64, f32]));
+    await send(
+      P2,
+      'P2.setAll',
+      encodeCall(sel('setAll(uint128,uint64,bool,bytes4,uint64,bytes32)'), [a128, b64, 1n, dB4, e64, f32]),
+    );
     for (const s of [0n, 1n, 2n, 3n]) await eqSlot(P2, 'P2', s);
     for (const g of ['getA()', 'getB()', 'getC()', 'getD()', 'getE()', 'getF()', 'getAll()', 'getSentinel()'])
       await eq(P2, 'P2.' + g, encodeCall(sel(g)));
@@ -682,13 +695,13 @@ contract C {
 
     // ===== P3: all-signed narrow struct, sign-bit packing ===================
     const signedVals: bigint[] = [
-      ((-1n) % M + M), // i8 = -1
-      ((-300n) % M + M), // i16
-      ((-1n << 23n) % M + M), // i24 min
+      (-1n % M) + M, // i8 = -1
+      (-300n % M) + M, // i16
+      ((-1n << 23n) % M) + M, // i24 min
       0x7fffffffn, // i32 max
-      ((-(1n << 39n)) % M + M), // i40 min
-      ((1n << 47n) - 1n), // i48 max
-      ((-12345678901234n) % M + M), // i56
+      (-(1n << 39n) % M) + M, // i40 min
+      (1n << 47n) - 1n, // i48 max
+      (-12345678901234n % M) + M, // i56
     ];
     await send(P3, 'P3.setAll', encodeCall(sel('setAll(int8,int16,int24,int32,int40,int48,int56)'), signedVals));
     await eqSlot(P3, 'P3', 0n);
@@ -698,7 +711,7 @@ contract C {
     await send(P3, 'P3.setC+', encodeCall(sel('setC(int24)'), [0x123456n]));
     await eqSlot(P3, 'P3-rmwC+', 0n);
     await eq(P3, 'P3-rmwC+.getAll', encodeCall(sel('getAll()')));
-    await send(P3, 'P3.setC-', encodeCall(sel('setC(int24)'), [((-2n) % M + M)]));
+    await send(P3, 'P3.setC-', encodeCall(sel('setC(int24)'), [(-2n % M) + M]));
     await eqSlot(P3, 'P3-rmwC-', 0n);
     await eq(P3, 'P3-rmwC-.getAll', encodeCall(sel('getAll()')));
     await send(P3, 'P3.setG-dirty', encodeCall(sel('setG(int56)'), [DIRTY])); // -1
@@ -710,7 +723,7 @@ contract C {
     await eq(P3, 'P3-rmwAmin.getAll', encodeCall(sel('getAll()')));
 
     // ===== P4: bool + address packing =======================================
-    const addr = 0xCaFE0000000000000000000000000000DeAd0001n;
+    const addr = 0xcafe0000000000000000000000000000dead0001n;
     await send(P4, 'P4.setAll', encodeCall(sel('setAll(bool,address,bool,uint8)'), [1n, addr, 1n, 0x7fn]));
     await eqSlot(P4, 'P4', 0n);
     for (const g of ['getF1()', 'getOwner()', 'getF2()', 'getSmall()', 'getAll()'])
@@ -722,14 +735,26 @@ contract C {
     await send(P4, 'P4.setF1-0', encodeCall(sel('setF1(bool)'), [0n]));
     await eqSlot(P4, 'P4-f10', 0n);
     await eq(P4, 'P4-f10.getAll', encodeCall(sel('getAll()')));
-    await send(P4, 'P4.setOwner-dirty', encodeCall(sel('setOwner(address)'), [0xffffffffffffffffffffffffffffffffffffffffn]));
+    await send(
+      P4,
+      'P4.setOwner-dirty',
+      encodeCall(sel('setOwner(address)'), [0xffffffffffffffffffffffffffffffffffffffffn]),
+    );
     await eqSlot(P4, 'P4-owner', 0n);
     await eq(P4, 'P4-owner.getOwner', encodeCall(sel('getOwner()')));
     await eq(P4, 'P4-owner.getAll', encodeCall(sel('getAll()')));
 
     // ===== P5: array of packed struct =======================================
-    await send(P5, 'P5.setRec0', encodeCall(sel('setRec(uint256,uint128,uint64,bool,bytes4)'), [0n, a128, b64, 1n, dB4]));
-    await send(P5, 'P5.setRec3', encodeCall(sel('setRec(uint256,uint128,uint64,bool,bytes4)'), [3n, 0x1234n, 0x5678n, 0n, 0x11223344n << 224n]));
+    await send(
+      P5,
+      'P5.setRec0',
+      encodeCall(sel('setRec(uint256,uint128,uint64,bool,bytes4)'), [0n, a128, b64, 1n, dB4]),
+    );
+    await send(
+      P5,
+      'P5.setRec3',
+      encodeCall(sel('setRec(uint256,uint128,uint64,bool,bytes4)'), [3n, 0x1234n, 0x5678n, 0n, 0x11223344n << 224n]),
+    );
     for (const s of [0n, 1n, 2n, 3n]) await eqSlot(P5, 'P5', s);
     for (const i of [0n, 1n, 3n]) {
       for (const g of ['getA(uint256)', 'getB(uint256)', 'getC(uint256)', 'getD(uint256)', 'getRec(uint256)'])
@@ -748,13 +773,21 @@ contract C {
     // ===== P6: dynamic array of packed struct, push/pop reuse ================
     const dataSlot6 = kdataSlot(0n);
     await send(P6, 'P6.push0', encodeCall(sel('pushV(uint128,uint64,bool,bytes4)'), [a128, e64, 1n, dB4]));
-    await send(P6, 'P6.push1', encodeCall(sel('pushV(uint128,uint64,bool,bytes4)'), [0x1234n, 0x5678n, 0n, 0x11223344n << 224n]));
+    await send(
+      P6,
+      'P6.push1',
+      encodeCall(sel('pushV(uint128,uint64,bool,bytes4)'), [0x1234n, 0x5678n, 0n, 0x11223344n << 224n]),
+    );
     await send(P6, 'P6.pop', encodeCall(sel('pop()')));
     await eqSlot(P6, 'P6-afterpop', 0n);
     await eqSlot(P6, 'P6-afterpop', dataSlot6);
     await eqSlot(P6, 'P6-afterpop', dataSlot6 + 1n); // freed slot must be zero
     // push again into reused slot, must fully overwrite (no stale bytes)
-    await send(P6, 'P6.push2', encodeCall(sel('pushV(uint128,uint64,bool,bytes4)'), [0x1n, 0x2n, 1n, 0x99aabbccn << 224n]));
+    await send(
+      P6,
+      'P6.push2',
+      encodeCall(sel('pushV(uint128,uint64,bool,bytes4)'), [0x1n, 0x2n, 1n, 0x99aabbccn << 224n]),
+    );
     await eqSlot(P6, 'P6-reuse', dataSlot6 + 1n);
     await send(P6, 'P6.setA0', encodeCall(sel('setA(uint256,uint128)'), [0n, 0x42n]));
     await send(P6, 'P6.setC1', encodeCall(sel('setC(uint256,bool)'), [1n, 0n]));
@@ -788,18 +821,18 @@ contract C {
 
     // ===== P8: signed packed value array + dynamic signed ====================
     const p8a: [bigint, bigint][] = [
-      [0n, ((-1n) % M + M)],
-      [1n, ((-(1n << 39n)) % M + M)], // i40 min
-      [3n, ((1n << 39n) - 1n)], // i40 max
-      [6n, ((-987654n) % M + M)],
+      [0n, (-1n % M) + M],
+      [1n, (-(1n << 39n) % M) + M], // i40 min
+      [3n, (1n << 39n) - 1n], // i40 max
+      [6n, (-987654n % M) + M],
     ];
     for (const [i, v] of p8a) await send(P8, 'P8.setA@' + i, encodeCall(sel('setA(uint256,int40)'), [i, v]));
     for (const s of [0n, 1n]) await eqSlot(P8, 'P8', s);
     for (const i of [0n, 1n, 3n, 6n]) await eq(P8, 'P8.getA@' + i, encodeCall(sel('getA(uint256)'), [i]));
     // dynamic i48[]
-    await send(P8, 'P8.pushB-1', encodeCall(sel('pushB(int48)'), [((-1n) % M + M)]));
-    await send(P8, 'P8.pushB-max', encodeCall(sel('pushB(int48)'), [((1n << 47n) - 1n)]));
-    await send(P8, 'P8.pushB-min', encodeCall(sel('pushB(int48)'), [((-(1n << 47n)) % M + M)]));
+    await send(P8, 'P8.pushB-1', encodeCall(sel('pushB(int48)'), [(-1n % M) + M]));
+    await send(P8, 'P8.pushB-max', encodeCall(sel('pushB(int48)'), [(1n << 47n) - 1n]));
+    await send(P8, 'P8.pushB-min', encodeCall(sel('pushB(int48)'), [(-(1n << 47n) % M) + M]));
     const dataSlot8 = kdataSlot(1n); // b is state var index 1
     await eqSlot(P8, 'P8-dyn', 1n);
     await eqSlot(P8, 'P8-dyn', dataSlot8);
@@ -810,7 +843,11 @@ contract C {
     // ===== P9: mapping value = packed struct =================================
     const key = (1n << 200n) | 0xabcdn;
     const base9 = kmapSlot(key, 0n);
-    await send(P9, 'P9.setAll', encodeCall(sel('setAll(uint256,uint64,int64,bool,address)'), [key, 0xdeadn, ((-77n) % M + M), 1n, addr]));
+    await send(
+      P9,
+      'P9.setAll',
+      encodeCall(sel('setAll(uint256,uint64,int64,bool,address)'), [key, 0xdeadn, (-77n % M) + M, 1n, addr]),
+    );
     await eqSlot(P9, 'P9', base9);
     await eqSlot(P9, 'P9', base9 + 1n);
     for (const g of ['getA(uint256)', 'getB(uint256)', 'getFlag(uint256)', 'getAddr(uint256)', 'getAll(uint256)'])
@@ -832,13 +869,16 @@ contract C {
     await send(P10, 'P10.setFlag', encodeCall(sel('setFlag(uint8)'), [0x99n]));
     await send(P10, 'P10.setMid-dirty', encodeCall(sel('setMid(bytes4)'), [DIRTY]));
     for (const s of [0n, 1n, 2n, 3n, 4n]) await eqSlot(P10, 'P10', s);
-    for (const g of ['getTag()', 'getFlag()', 'getMid()'])
-      await eq(P10, 'P10.' + g, encodeCall(sel(g)));
+    for (const g of ['getTag()', 'getFlag()', 'getMid()']) await eq(P10, 'P10.' + g, encodeCall(sel(g)));
     for (const i of [0n, 1n, 2n]) await eq(P10, 'P10.getData@' + i, encodeCall(sel('getData(uint256)'), [i]));
 
     // ===== P11: nested struct field packing ==================================
     const trail = 0xaabbccddeeff00112233445566778899aabbccddn << 96n; // bytes20 left-aligned
-    await send(P11, 'P11.setInner', encodeCall(sel('setInner(uint64,uint64,bool)'), [0x1111111111111111n, 0x2222222222222222n, 1n]));
+    await send(
+      P11,
+      'P11.setInner',
+      encodeCall(sel('setInner(uint64,uint64,bool)'), [0x1111111111111111n, 0x2222222222222222n, 1n]),
+    );
     await send(P11, 'P11.setLead', encodeCall(sel('setLead(uint8)'), [0x42n]));
     await send(P11, 'P11.setTrail', encodeCall(sel('setTrail(bytes20)'), [trail]));
     for (const s of [0n, 1n, 2n, 3n]) await eqSlot(P11, 'P11', s);
@@ -873,11 +913,23 @@ contract C {
     await eq(P12, 'P12-rmwA.getB', encodeCall(sel('getB()')));
 
     // ===== P13: storage-to-storage struct copy, trailing-space clearing ======
-    const k1 = 7n, k2 = 8n, k3 = 9n;
-    const b13_1 = kmapSlot(k1, 0n), b13_2 = kmapSlot(k2, 0n), b13_3 = kmapSlot(k3, 0n);
+    const k1 = 7n,
+      k2 = 8n,
+      k3 = 9n;
+    const b13_1 = kmapSlot(k1, 0n),
+      b13_2 = kmapSlot(k2, 0n),
+      b13_3 = kmapSlot(k3, 0n);
     // src has full data; dst3 pre-populated with DIFFERENT data then overwritten by copy.
-    await send(P13, 'P13.setSrc', encodeCall(sel('setAll(uint256,uint64,uint64,bool)'), [k1, 0xdeadbeefn, 0xcafef00dn, 1n]));
-    await send(P13, 'P13.setDst3', encodeCall(sel('setAll(uint256,uint64,uint64,bool)'), [k3, 0xffffffffffffffffn, 0xeeeeeeeeeeeeeeeen, 1n]));
+    await send(
+      P13,
+      'P13.setSrc',
+      encodeCall(sel('setAll(uint256,uint64,uint64,bool)'), [k1, 0xdeadbeefn, 0xcafef00dn, 1n]),
+    );
+    await send(
+      P13,
+      'P13.setDst3',
+      encodeCall(sel('setAll(uint256,uint64,uint64,bool)'), [k3, 0xffffffffffffffffn, 0xeeeeeeeeeeeeeeeen, 1n]),
+    );
     await send(P13, 'P13.copy-empty', encodeCall(sel('copy(uint256,uint256)'), [k2, 0x123n])); // copy zero src -> dst2
     await send(P13, 'P13.copy-over', encodeCall(sel('copy(uint256,uint256)'), [k3, k1])); // overwrite k3 with k1
     await eqSlot(P13, 'P13-src', b13_1);
@@ -889,26 +941,33 @@ contract C {
     }
 
     // ===== P14: bytesN packing forcing new slots =============================
-    const b16hi = (mask(128n)) << 128n; // bytes16 left-aligned all-ones
+    const b16hi = mask(128n) << 128n; // bytes16 left-aligned all-ones
     await send(P14, 'P14.setA', encodeCall(sel('setA(bytes16)'), [b16hi]));
     await send(P14, 'P14.setB', encodeCall(sel('setB(bytes16)'), [0xaabbccddeeff00112233445566778899n << 128n]));
     await send(P14, 'P14.setC', encodeCall(sel('setC(bytes1)'), [0x7fn << 248n]));
     await send(P14, 'P14.setD', encodeCall(sel('setD(bytes32)'), [(1n << 256n) - 3n]));
-    await send(P14, 'P14.setE', encodeCall(sel('setE(bytes30)'), [(mask(240n)) << 16n]));
+    await send(P14, 'P14.setE', encodeCall(sel('setE(bytes30)'), [mask(240n) << 16n]));
     await send(P14, 'P14.setF-dirty', encodeCall(sel('setF(bytes4)'), [DIRTY]));
     for (const s of [0n, 1n, 2n, 3n, 4n]) await eqSlot(P14, 'P14', s);
-    for (const g of ['getA()', 'getC()', 'getE()', 'getF()', 'getAll()'])
-      await eq(P14, 'P14.' + g, encodeCall(sel(g)));
+    for (const g of ['getA()', 'getC()', 'getE()', 'getF()', 'getAll()']) await eq(P14, 'P14.' + g, encodeCall(sel(g)));
     // RMW e (slot3) then f (slot4) and check no leak / left-alignment
-    await send(P14, 'P14.setE2', encodeCall(sel('setE(bytes30)'), [0x112233445566778899aabbccddeeff00112233445566778899aabbccddeen << 16n]));
+    await send(
+      P14,
+      'P14.setE2',
+      encodeCall(sel('setE(bytes30)'), [0x112233445566778899aabbccddeeff00112233445566778899aabbccddeen << 16n]),
+    );
     await eqSlot(P14, 'P14-rmwE', 3n);
     await eq(P14, 'P14-rmwE.getE', encodeCall(sel('getE()')));
     await eq(P14, 'P14-rmwE.getAll', encodeCall(sel('getAll()')));
 
     // ===== P15: overwrite + stale-bytes hazard, signed extremes ==============
     const i120max = (1n << 119n) - 1n;
-    const i120min = ((-(1n << 119n)) % M + M);
-    await send(P15, 'P15.setAll-big', encodeCall(sel('setAll(uint16,int120,bool,uint8)'), [0xffffn, i120min, 1n, 0xffn]));
+    const i120min = (-(1n << 119n) % M) + M;
+    await send(
+      P15,
+      'P15.setAll-big',
+      encodeCall(sel('setAll(uint16,int120,bool,uint8)'), [0xffffn, i120min, 1n, 0xffn]),
+    );
     await eqSlot(P15, 'P15-big', 0n);
     await eq(P15, 'P15-big.getAll', encodeCall(sel('getAll()')));
     // overwrite with a tiny set: stale high bytes of b must be cleared

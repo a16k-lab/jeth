@@ -36,12 +36,14 @@ contract C {
 describe('static fixed-array literal return vs solc', () => {
   let h: Harness, hs: Harness, jv: Address, sv: Address;
   async function eq(label: string, data: string) {
-    const j = await h.call(jv, data); const s = await hs.call(sv, data);
+    const j = await h.call(jv, data);
+    const s = await hs.call(sv, data);
     expect(j.success, `${label} jeth=${j.exceptionError}`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    h = await Harness.create(); hs = await Harness.create();
+    h = await Harness.create();
+    hs = await Harness.create();
     jv = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     sv = await hs.deploy(compileSolidity(S, 'C').creation);
   });
@@ -61,7 +63,12 @@ describe('static fixed-array literal return vs solc', () => {
     expect((r.returnHex.length - 2) / 2).toBe(128); // offset + length + 2 words
   });
   it('echoing a calldata Arr<u256,3> param still matches (static, unchanged)', async () => {
-    const data = '0x' + sel('echo(uint256[3])') + (5n).toString(16).padStart(64, '0') + (6n).toString(16).padStart(64, '0') + (7n).toString(16).padStart(64, '0');
+    const data =
+      '0x' +
+      sel('echo(uint256[3])') +
+      5n.toString(16).padStart(64, '0') +
+      6n.toString(16).padStart(64, '0') +
+      7n.toString(16).padStart(64, '0');
     await eq('echo', data);
   });
 });

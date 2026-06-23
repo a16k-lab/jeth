@@ -14,13 +14,21 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
     // anywhere (local, parameter, field, enum member, method, contract/struct, type alias). The
     // placeholder itself is an ExpressionStatement (`_;`), not a declaration, so it is unaffected.
     const declName =
-      ts.isVariableDeclaration(node) || ts.isParameter(node) || ts.isPropertyDeclaration(node) ||
-      ts.isEnumMember(node) || ts.isMethodDeclaration(node) || ts.isClassDeclaration(node) ||
+      ts.isVariableDeclaration(node) ||
+      ts.isParameter(node) ||
+      ts.isPropertyDeclaration(node) ||
+      ts.isEnumMember(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isClassDeclaration(node) ||
       ts.isTypeAliasDeclaration(node)
         ? node.name
         : undefined;
     if (declName && ts.isIdentifier(declName) && declName.text === '_') {
-      diags.error(declName, 'JETH034', "'_' is a reserved identifier (the @modifier placeholder) and cannot be used as a name");
+      diags.error(
+        declName,
+        'JETH034',
+        "'_' is a reserved identifier (the @modifier placeholder) and cannot be used as a name",
+      );
     }
 
     switch (node.kind) {
@@ -35,7 +43,11 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
         // exact shape. Every other `new` (object/contract construction) is unsupported.
         const ne = node as ts.NewExpression;
         if (ts.isIdentifier(ne.expression) && ne.expression.text === 'Array') break;
-        diags.error(node, 'JETH023', "'new' is only supported as 'new Array<T>(n)' (dynamic memory array); object/contract construction is not supported");
+        diags.error(
+          node,
+          'JETH023',
+          "'new' is only supported as 'new Array<T>(n)' (dynamic memory array); object/contract construction is not supported",
+        );
         break;
       }
       case ts.SyntaxKind.ArrowFunction:
@@ -81,10 +93,7 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
     }
 
     // Generator marker on methods.
-    if (
-      (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) &&
-      node.asteriskToken
-    ) {
+    if ((ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) && node.asteriskToken) {
       diags.error(node, 'JETH021', 'generators are not supported');
     }
 
@@ -109,7 +118,11 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
 
     // Float literal (contains a '.' or exponent) anywhere.
     if (ts.isNumericLiteral(node) && /[.eE]/.test(node.getText())) {
-      diags.error(node, 'JETH003', 'floating-point literals have no on-chain meaning (the EVM has only 256-bit integers)');
+      diags.error(
+        node,
+        'JETH003',
+        'floating-point literals have no on-chain meaning (the EVM has only 256-bit integers)',
+      );
     }
 
     // eval(...) call.

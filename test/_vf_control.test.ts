@@ -228,7 +228,17 @@ describe('control flow & expr order vs solc', () => {
     if (j.success !== s.success || j.returnHex !== s.returnHex)
       mism.push(
         label +
-          ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}',
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
       );
   }
   const C = (sig: string, args: bigint[] = []) => encodeCall(sel(sig), args);
@@ -277,7 +287,15 @@ describe('control flow & expr order vs solc', () => {
     await eq('fallThroughLoop 60', C('fallThroughLoop(uint256)', [60n]));
 
     // break/early-return with k
-    const PAIRS = [[10n, 3n], [10n, 0n], [10n, 9n], [10n, 100n], [0n, 0n], [5n, 5n], [1n, 0n]] as [bigint, bigint][];
+    const PAIRS = [
+      [10n, 3n],
+      [10n, 0n],
+      [10n, 9n],
+      [10n, 100n],
+      [0n, 0n],
+      [5n, 5n],
+      [1n, 0n],
+    ] as [bigint, bigint][];
     for (const [n, k] of PAIRS) {
       await eq('breakAt ' + n + ',' + k, C('breakAt(uint256,uint256)', [n, k]));
       await eq('earlyReturn ' + n + ',' + k, C('earlyReturn(uint256,uint256)', [n, k]));
@@ -296,7 +314,14 @@ describe('control flow & expr order vs solc', () => {
         await eq('negShort ' + c + ',' + a, C('negShort(bool,uint256)', [c, a]));
       }
     }
-    const SCPAIRS = [[0n, 0n], [0n, 5n], [5n, 0n], [3n, 4n], [1n, 1n], [U256_MAX, 2n]] as [bigint, bigint][];
+    const SCPAIRS = [
+      [0n, 0n],
+      [0n, 5n],
+      [5n, 0n],
+      [3n, 4n],
+      [1n, 1n],
+      [U256_MAX, 2n],
+    ] as [bigint, bigint][];
     for (const [a, b] of SCPAIRS) {
       await eq('chainAnd ' + a + ',' + b, C('chainAnd(uint256,uint256)', [a, b]));
       await eq('chainOr ' + a + ',' + b, C('chainOr(uint256,uint256)', [a, b]));
@@ -305,7 +330,14 @@ describe('control flow & expr order vs solc', () => {
     }
 
     // ternary
-    for (const [a, b] of [[5n, 9n], [9n, 5n], [5n, 5n], [0n, U256_MAX], [60n, 10n], [10n, 60n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [5n, 9n],
+      [9n, 5n],
+      [5n, 5n],
+      [0n, U256_MAX],
+      [60n, 10n],
+      [10n, 60n],
+    ] as [bigint, bigint][]) {
       await eq('ternMax ' + a + ',' + b, C('ternMax(uint256,uint256)', [a, b]));
       await eq('ternArith ' + a + ',' + b, C('ternArith(uint256,uint256)', [a, b]));
       await eq('ternInCond ' + a + ',' + b, C('ternInCond(uint256,uint256)', [a, b]));
@@ -336,9 +368,21 @@ describe('control flow & expr order vs solc', () => {
 
     // compound assign, every operator
     const UPAIRS = [
-      [0n, 0n], [5n, 3n], [3n, 5n], [U256_MAX, 1n], [1n, U256_MAX], [10n, 0n],
-      [0n, 10n], [100n, 7n], [U256_MAX, U256_MAX], [1n << 200n, 1n << 100n],
-      [0xffn, 0x0fn], [0n, 256n], [1n, 255n], [1n, 256n], [U256_MAX, 5n],
+      [0n, 0n],
+      [5n, 3n],
+      [3n, 5n],
+      [U256_MAX, 1n],
+      [1n, U256_MAX],
+      [10n, 0n],
+      [0n, 10n],
+      [100n, 7n],
+      [U256_MAX, U256_MAX],
+      [1n << 200n, 1n << 100n],
+      [0xffn, 0x0fn],
+      [0n, 256n],
+      [1n, 255n],
+      [1n, 256n],
+      [U256_MAX, 5n],
     ] as [bigint, bigint][];
     for (const [a, b] of UPAIRS) {
       await eq('cAdd ' + a + ',' + b, C('cAdd(uint256,uint256)', [a, b]));
@@ -357,9 +401,21 @@ describe('control flow & expr order vs solc', () => {
     }
     // signed compound
     const IPAIRS = [
-      [5n, 3n], [3n, 5n], [-5n, 3n], [-5n, -3n], [I256_MIN, 1n], [I256_MIN, -1n],
-      [I256_MAX, 1n], [I256_MAX, -1n], [-1n, I256_MIN], [I256_MIN, I256_MIN],
-      [10n, 0n], [-10n, 3n], [-10n, -3n], [I256_MIN, -1n], [7n, -2n],
+      [5n, 3n],
+      [3n, 5n],
+      [-5n, 3n],
+      [-5n, -3n],
+      [I256_MIN, 1n],
+      [I256_MIN, -1n],
+      [I256_MAX, 1n],
+      [I256_MAX, -1n],
+      [-1n, I256_MIN],
+      [I256_MIN, I256_MIN],
+      [10n, 0n],
+      [-10n, 3n],
+      [-10n, -3n],
+      [I256_MIN, -1n],
+      [7n, -2n],
     ] as [bigint, bigint][];
     for (const [a, b] of IPAIRS) {
       await eq('cAddSigned ' + a + ',' + b, C('cAddSigned(int256,int256)', [asWord(a), asWord(b)]));
@@ -368,7 +424,15 @@ describe('control flow & expr order vs solc', () => {
       await eq('cDivSigned ' + a + ',' + b, C('cDivSigned(int256,int256)', [asWord(a), asWord(b)]));
       await eq('cModSigned ' + a + ',' + b, C('cModSigned(int256,int256)', [asWord(a), asWord(b)]));
     }
-    for (const [a, b] of [[-8n, 1n], [-1n, 3n], [I256_MIN, 4n], [I256_MAX, 1n], [-256n, 8n], [-1n, 255n], [-1n, 256n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [-8n, 1n],
+      [-1n, 3n],
+      [I256_MIN, 4n],
+      [I256_MAX, 1n],
+      [-256n, 8n],
+      [-1n, 255n],
+      [-1n, 256n],
+    ] as [bigint, bigint][]) {
       await eq('cShrSigned ' + a + ',' + b, C('cShrSigned(int256,uint256)', [asWord(a), asWord(b)]));
     }
 
@@ -394,7 +458,16 @@ describe('control flow & expr order vs solc', () => {
     }
 
     // gcd
-    for (const [a, b] of [[12n, 18n], [48n, 36n], [17n, 5n], [0n, 9n], [9n, 0n], [1n, 1n], [100n, 100n], [U256_MAX, 7n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [12n, 18n],
+      [48n, 36n],
+      [17n, 5n],
+      [0n, 9n],
+      [9n, 0n],
+      [1n, 1n],
+      [100n, 100n],
+      [U256_MAX, 7n],
+    ] as [bigint, bigint][]) {
       await eq('gcd ' + a + ',' + b, C('gcd(uint256,uint256)', [a, b]));
     }
 

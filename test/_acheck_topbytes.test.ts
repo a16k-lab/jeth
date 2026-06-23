@@ -61,8 +61,13 @@ describe('top-level bytes calldata param adversarial parity', () => {
     for (const sig of ['bLen(bytes)', 'bGet(bytes)']) {
       await same(`${sig} honest`, sig, w(0x20n) + tail);
       for (const [lbl, off] of [
-        ['off=2^64-32', U64m32], ['off=2^64', U64p1], ['off=2^64-1', U64],
-        ['off=2^255-1', SBm1], ['off=2^255', SB], ['off=2^256-32', WRAP], ['off=2^256-1', M - 1n],
+        ['off=2^64-32', U64m32],
+        ['off=2^64', U64p1],
+        ['off=2^64-1', U64],
+        ['off=2^255-1', SBm1],
+        ['off=2^255', SB],
+        ['off=2^256-32', WRAP],
+        ['off=2^256-1', M - 1n],
       ] as [string, bigint][]) {
         await same(`${sig} ${lbl}`, sig, w(off) + tail);
       }
@@ -73,8 +78,12 @@ describe('top-level bytes calldata param adversarial parity', () => {
       await same(`${sig} off=0x21 nonaligned`, sig, w(0x21n) + tail + w(0n));
       // length sweep (offset honest, length adversarial)
       for (const [lbl, len] of [
-        ['len=2^63', 1n << 63n], ['len=2^64-32', U64m32], ['len=2^64-1', U64],
-        ['len=2^64', U64p1], ['len=2^255', SB], ['len=2^256-1', M - 1n],
+        ['len=2^63', 1n << 63n],
+        ['len=2^64-32', U64m32],
+        ['len=2^64-1', U64],
+        ['len=2^64', U64p1],
+        ['len=2^255', SB],
+        ['len=2^256-1', M - 1n],
       ] as [string, bigint][]) {
         await same(`${sig} ${lbl}`, sig, w(0x20n) + w(len) + w(0n));
       }
@@ -97,7 +106,9 @@ describe('top-level bytes calldata param adversarial parity', () => {
     await same('bAt honest i=4', sig, w(0x40n) + w(4n) + tail);
     await same('bAt oob i=5', sig, w(0x40n) + w(5n) + tail);
     for (const [lbl, off] of [
-      ['off=2^255', SB], ['off=2^256-32', WRAP], ['off=2^64-1', U64],
+      ['off=2^255', SB],
+      ['off=2^256-32', WRAP],
+      ['off=2^64-1', U64],
     ] as [string, bigint][]) {
       await same(`bAt ${lbl}`, sig, w(off) + w(0n) + tail);
     }

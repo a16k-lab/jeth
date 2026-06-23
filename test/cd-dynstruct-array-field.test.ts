@@ -13,7 +13,7 @@ const sel = (s: string) => functionSelector(s);
 // build calldata for a function whose FIRST param is S{a: uint256, xs: uint256[]} (dynamic) and an
 // optional trailing uint256. head = [off_s][trailing?]; s tuple at off_s = [a][off_xs=0x40][len][e..].
 const buildS = (selStr: string, a: bigint, xs: readonly bigint[], trailing?: bigint, dirtyFirst = false): string => {
-  const e0 = dirtyFirst && xs.length ? ('ff' + pad32(xs[0]!).slice(2)) : (xs.length ? pad32(xs[0]!) : '');
+  const e0 = dirtyFirst && xs.length ? 'ff' + pad32(xs[0]!).slice(2) : xs.length ? pad32(xs[0]!) : '';
   const elems = xs.map((v, k) => (k === 0 ? e0 : pad32(v))).join('');
   const tuple = pad32(a) + pad32(0x40n) + pad32(BigInt(xs.length)) + elems;
   const offS = trailing === undefined ? 0x20n : 0x40n;
@@ -43,18 +43,21 @@ contract C {
   function nidx(N calldata n, uint256 i) external pure returns (uint64) { return n.ns[i]; } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
   const cmp = async (data: string, label: string) => {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success`).toBe(s.success);
     expect(j.returnHex, label).toBe(s.returnHex);
   };
 
   it('s.xs[i] reads every element + OOB Panic 0x32, byte-identical', async () => {
-    for (const i of [0n, 1n, 2n, 3n, 99n]) await cmp(buildS('idx((uint256,uint256[]),uint256)', 7n, [10n, 20n, 30n], i), `xs[${i}]`);
+    for (const i of [0n, 1n, 2n, 3n, 99n])
+      await cmp(buildS('idx((uint256,uint256[]),uint256)', 7n, [10n, 20n, 30n], i), `xs[${i}]`);
     await cmp(buildS('idx((uint256,uint256[]),uint256)', 7n, [], 0n), 'xs[0] empty (OOB)');
   });
   it('s.xs.length + return s.xs (whole echo) match solc, incl. empty', async () => {
@@ -76,9 +79,15 @@ contract C {
     // bound), NOT the bytes/string helper (len+0x20 + signed offset). solc EMPTY-reverts on all three.
     const SL = 'len((uint256,uint256[]))';
     // (1) truncated tail: declares len=5 but supplies only 2 element words
-    await cmp('0x' + sel(SL) + pad32(0x20n) + pad32(7n) + pad32(0x40n) + pad32(5n) + pad32(1n) + pad32(2n), 'truncated tail');
+    await cmp(
+      '0x' + sel(SL) + pad32(0x20n) + pad32(7n) + pad32(0x40n) + pad32(5n) + pad32(1n) + pad32(2n),
+      'truncated tail',
+    );
     // (2) offset wrap: off_xs = 2^256 - 32 (a wrapped/negative offset)
-    await cmp('0x' + sel(SL) + pad32(0x20n) + pad32(7n) + pad32((1n << 256n) - 32n) + pad32(2n) + pad32(1n) + pad32(2n), 'offset wrap');
+    await cmp(
+      '0x' + sel(SL) + pad32(0x20n) + pad32(7n) + pad32((1n << 256n) - 32n) + pad32(2n) + pad32(1n) + pad32(2n),
+      'offset wrap',
+    );
     // (3) offset 0: the length word overlaps the leading scalar field (len = a = 7, no payload)
     await cmp('0x' + sel(SL) + pad32(0x20n) + pad32(7n) + pad32(0n) + pad32(1n) + pad32(2n), 'offset 0');
   });

@@ -199,7 +199,11 @@ describe('varied-struct-layouts: storage dyn-array element layouts vs Solidity',
   it('(a) single-slot {u128 a; u128 b}: 3 records, getters, raw slots, RMW, OOB', async () => {
     const { eqCall, eqSlot } = mk(A);
     const sc = 1n;
-    const rows: [bigint, bigint][] = [[1n, 2n], [0xaaaan, 0xbbbbn], [0xdeadn, 0xbeefn]];
+    const rows: [bigint, bigint][] = [
+      [1n, 2n],
+      [0xaaaan, 0xbbbbn],
+      [0xdeadn, 0xbeefn],
+    ];
     for (let i = 0; i < rows.length; i++) {
       await eqCall(`A.add#${i}`, encodeCall(sel('add(uint128,uint128)'), rows[i]));
     }
@@ -329,7 +333,12 @@ describe('varied-struct-layouts: storage dyn-array element layouts vs Solidity',
   });
 
   it('sentinel slot 1 stays zero and identical across all layouts', async () => {
-    for (const [name, p] of [['A', A], ['B', B], ['C', C], ['D', D]] as const) {
+    for (const [name, p] of [
+      ['A', A],
+      ['B', B],
+      ['C', C],
+      ['D', D],
+    ] as const) {
       expect(decodeUint(await readSlot(p.jeth, p.aj, 1n)), `${name} sentinel`).toBe(0n);
       expect(await readSlot(p.jeth, p.aj, 1n), `${name} sentinel eq`).toBe(await readSlot(p.sol, p.as, 1n));
     }

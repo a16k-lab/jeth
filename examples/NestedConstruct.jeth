@@ -1,12 +1,21 @@
 // Phase 4e-2c: nested struct construction Outer(p, Inner(a,b), q), flattened into
 // packed storage slots for push and whole-struct assignment.
-@struct class Inner { a: u128; b: u128; }
-@struct class Outer { p: u64; inner: Inner; q: u64; }
+@struct
+class Inner {
+  a: u128;
+  b: u128;
+}
+@struct
+class Outer {
+  p: u64;
+  inner: Inner;
+  q: u64;
+}
 
 @contract
 class NestedConstruct {
-  @state outers: Outer[];   // slot 0
-  @state one: Outer;        // slots 1..3
+  @state outers: Outer[]; // slot 0
+  @state one: Outer; // slots 1..3
 
   @external addOuter(p: u64, a: u128, b: u128, q: u64): void {
     this.outers.push(Outer(p, Inner(a, b), q));
@@ -14,10 +23,22 @@ class NestedConstruct {
   @external setOne(p: u64, a: u128, b: u128, q: u64): void {
     this.one = Outer(p, Inner(a, b), q);
   }
-  @external @view oP(i: u256): u64 { return this.outers[i].p; }
-  @external @view oA(i: u256): u128 { return this.outers[i].inner.a; }
-  @external @view oB(i: u256): u128 { return this.outers[i].inner.b; }
-  @external @view oQ(i: u256): u64 { return this.outers[i].q; }
-  @external @view oneA(): u128 { return this.one.inner.a; }
-  @external @view oneQ(): u64 { return this.one.q; }
+  @external @view oP(i: u256): u64 {
+    return this.outers[i].p;
+  }
+  @external @view oA(i: u256): u128 {
+    return this.outers[i].inner.a;
+  }
+  @external @view oB(i: u256): u128 {
+    return this.outers[i].inner.b;
+  }
+  @external @view oQ(i: u256): u64 {
+    return this.outers[i].q;
+  }
+  @external @view oneA(): u128 {
+    return this.one.inner.a;
+  }
+  @external @view oneQ(): u64 {
+    return this.one.q;
+  }
 }

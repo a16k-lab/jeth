@@ -17,18 +17,32 @@ const sel = (s: string) => functionSelector(s);
 const P = (n: bigint) => pad32(n);
 
 function jethAccepts(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return true; } catch { return false; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return true;
+  } catch {
+    return false;
+  }
 }
 function jethError(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e: any) { return (e.diagnostics ?? []).map((d: any) => d.code); }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e: any) {
+    return (e.diagnostics ?? []).map((d: any) => d.code);
+  }
 }
 
 /** Deploy a JETH caller+target and a solc caller+target with matching external signatures; for each
  *  (sig) call both with the same calldata (the target address as the sole arg) and diff success+returndata. */
 async function rtCross(
-  jethTarget: string, jethCaller: string, solTarget: string, solCaller: string,
-  tName: string, cName: string, sigs: string[],
+  jethTarget: string,
+  jethCaller: string,
+  solTarget: string,
+  solCaller: string,
+  tName: string,
+  cName: string,
+  sigs: string[],
 ) {
   const hj = await Harness.create();
   const hs = await Harness.create();
@@ -68,11 +82,15 @@ describe('decode field inside call/staticcall options', () => {
     // dynamic array + fixed array (re-encode the decoded value so the return shape is identical both ways)
     const arrInObj = `@contract class C { @external @view f(t: address): bytes { let xs: u256[] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" }, decode: u256[] }); return abi.encode(xs); } }`;
     const arrChain = `@contract class C { @external @view f(t: address): bytes { let xs: u256[] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" } }).decode(u256[]); return abi.encode(xs); } }`;
-    expect(compile(arrInObj, { fileName: 'C.jeth' }).creationBytecode).toBe(compile(arrChain, { fileName: 'C.jeth' }).creationBytecode);
+    expect(compile(arrInObj, { fileName: 'C.jeth' }).creationBytecode).toBe(
+      compile(arrChain, { fileName: 'C.jeth' }).creationBytecode,
+    );
     // tuple destructuring
     const tupInObj = `@contract class C { @external @view f(t: address): bytes { let [a, s]: [u256, string] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" }, decode: [u256, string] }); return abi.encode(a, s); } }`;
     const tupChain = `@contract class C { @external @view f(t: address): bytes { let [a, s]: [u256, string] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" } }).decode([u256, string]); return abi.encode(a, s); } }`;
-    expect(compile(tupInObj, { fileName: 'C.jeth' }).creationBytecode).toBe(compile(tupChain, { fileName: 'C.jeth' }).creationBytecode);
+    expect(compile(tupInObj, { fileName: 'C.jeth' }).creationBytecode).toBe(
+      compile(tupChain, { fileName: 'C.jeth' }).creationBytecode,
+    );
   });
 
   it('single value/dynamic decode is byte-identical to solc cross-contract', async () => {
@@ -183,34 +201,101 @@ describe('decode field inside call/staticcall options', () => {
 
   it('accepts the supported decode-in-call shapes', () => {
     const ok = (body: string) => `@contract class C { @external f(t: address): ${body} }`;
-    expect(jethAccepts(ok('u256 { return t.call({ data: abi.encode(), value: 1n, success: { condition: this.ok, revert: "x" }, decode: u256 }); }'))).toBe(true);
-    expect(jethAccepts(ok('string { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string }); }'))).toBe(true);
-    expect(jethAccepts(ok('bytes { let xs: u256[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: u256[] }); return abi.encode(xs); }'))).toBe(true);
-    expect(jethAccepts(ok('bytes { let xs: Arr<u256,3> = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: Arr<u256,3> }); return abi.encode(xs); }'))).toBe(true);
-    expect(jethAccepts(ok('bytes { let [a, b]: [u256, address] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [u256, address] }); return abi.encode(a, b); }'))).toBe(true);
+    expect(
+      jethAccepts(
+        ok(
+          'u256 { return t.call({ data: abi.encode(), value: 1n, success: { condition: this.ok, revert: "x" }, decode: u256 }); }',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        ok(
+          'string { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string }); }',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        ok(
+          'bytes { let xs: u256[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: u256[] }); return abi.encode(xs); }',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        ok(
+          'bytes { let xs: Arr<u256,3> = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: Arr<u256,3> }); return abi.encode(xs); }',
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      jethAccepts(
+        ok(
+          'bytes { let [a, b]: [u256, address] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [u256, address] }); return abi.encode(a, b); }',
+        ),
+      ),
+    ).toBe(true);
   });
 
   it('cleanly rejects (no crash) decode misuse with a precise diagnostic', () => {
     const f = (body: string) => `@contract class C { @external f(t: address): ${body} }`;
     // decode on the raw escape hatch -> JETH303
-    expect(jethError(f('bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: abi.encode(), decode: u256 }); return r; }'))).toContain('JETH303');
+    expect(
+      jethError(f('bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: abi.encode(), decode: u256 }); return r; }')),
+    ).toContain('JETH303');
     // unknown type name -> JETH321
-    expect(jethError(f('u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType }); }'))).toContain('JETH321');
+    expect(
+      jethError(
+        f(
+          'u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType }); }',
+        ),
+      ),
+    ).toContain('JETH321');
     // empty tuple -> JETH321
-    expect(jethError(f('u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [] }); }'))).toContain('JETH321');
+    expect(
+      jethError(
+        f(
+          'u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [] }); }',
+        ),
+      ),
+    ).toContain('JETH321');
     // a struct target is unsupported for decode -> JETH322 (a valid local type, so the decode check is reached)
-    expect(jethError(`@struct class P { a: u256; s: string; } @contract class C { @external f(t: address): u256 { let p: P = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: P }); return p.a; } }`)).toContain('JETH322');
+    expect(
+      jethError(
+        `@struct class P { a: u256; s: string; } @contract class C { @external f(t: address): u256 { let p: P = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: P }); return p.a; } }`,
+      ),
+    ).toContain('JETH322');
     // a string[]-element array is also rejected (cleanly): the local type itself is unsupported, so it fails
     // before the decode check, but it is still a clean rejection (never a crash) - assert it is rejected.
-    expect(jethAccepts(f('bytes { let xs: string[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string[] }); return abi.encode(xs); }'))).toBe(false);
+    expect(
+      jethAccepts(
+        f(
+          'bytes { let xs: string[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string[] }); return abi.encode(xs); }',
+        ),
+      ),
+    ).toBe(false);
     // tuple decode bound to a single name -> JETH323
-    expect(jethError(f('bytes { let x: bytes = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [u256, address] }); return x; }'))).toContain('JETH323');
+    expect(
+      jethError(
+        f(
+          'bytes { let x: bytes = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [u256, address] }); return x; }',
+        ),
+      ),
+    ).toContain('JETH323');
     // single decode destructured -> JETH323
-    expect(jethError(`@contract class C { @external f(t: address): u256 { let [a, b]: [u256, u256] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: u256 }); return a; } }`)).toContain('JETH323');
+    expect(
+      jethError(
+        `@contract class C { @external f(t: address): u256 { let [a, b]: [u256, u256] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: u256 }); return a; } }`,
+      ),
+    ).toContain('JETH323');
     // none of these crashed the compiler (JETH900)
     for (const src of [
       f('bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: abi.encode(), decode: u256 }); return r; }'),
-      f('u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType }); }'),
-    ]) expect(jethError(src)).not.toContain('JETH900');
+      f(
+        'u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType }); }',
+      ),
+    ])
+      expect(jethError(src)).not.toContain('JETH900');
   });
 });

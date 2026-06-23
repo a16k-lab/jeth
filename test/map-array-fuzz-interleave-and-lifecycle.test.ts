@@ -72,7 +72,11 @@ describe('mapping<K,u256[]> interleave-and-lifecycle vs Solidity', () => {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
     if (j.success !== s.success)
-      mismatches.push({ probe: `${label} success`, jeth: String(j.success) + ` (err=${j.exceptionError})`, solidity: String(s.success) });
+      mismatches.push({
+        probe: `${label} success`,
+        jeth: String(j.success) + ` (err=${j.exceptionError})`,
+        solidity: String(s.success),
+      });
     if (j.returnHex !== s.returnHex)
       mismatches.push({ probe: `${label} returndata`, jeth: j.returnHex, solidity: s.returnHex });
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
@@ -95,8 +99,8 @@ describe('mapping<K,u256[]> interleave-and-lifecycle vs Solidity', () => {
     as = await sol.deploy(sb.creation);
   });
 
-  const dLen = 0n;                       // direct length slot
-  const dData = plainData(0n);           // direct data start
+  const dLen = 0n; // direct length slot
+  const dData = plainData(0n); // direct data start
   const lenK1 = mapLenSlot(K1, 1n);
   const lenK2 = mapLenSlot(K2, 1n);
   const dK1 = dataSlot(lenK1);
@@ -142,11 +146,21 @@ describe('mapping<K,u256[]> interleave-and-lifecycle vs Solidity', () => {
     expect(new Set(all.map(String)).size).toBe(all.length);
 
     // Element reads byte-identical.
-    for (const [k, i, want] of [[K1, 0n, 11n], [K1, 1n, 12n], [K2, 0n, 21n], [K2, 1n, 22n], [K2, 2n, 23n]] as const) {
+    for (const [k, i, want] of [
+      [K1, 0n, 11n],
+      [K1, 1n, 12n],
+      [K2, 0n, 21n],
+      [K2, 1n, 22n],
+      [K2, 2n, 23n],
+    ] as const) {
       r = await eqCall(`getM ${k.toString(16).slice(0, 4)} ${i}`, encodeCall(sel('getM(address,uint256)'), [k, i]));
       expect(decodeUint(r.j.returnHex)).toBe(want);
     }
-    for (const [i, want] of [[0n, 100n], [1n, 200n], [2n, 300n]] as const) {
+    for (const [i, want] of [
+      [0n, 100n],
+      [1n, 200n],
+      [2n, 300n],
+    ] as const) {
       r = await eqCall(`getDirect ${i}`, encodeCall(sel('getDirect(uint256)'), [i]));
       expect(decodeUint(r.j.returnHex)).toBe(want);
     }

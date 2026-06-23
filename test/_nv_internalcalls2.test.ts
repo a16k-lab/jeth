@@ -177,20 +177,40 @@ contract C {
 
 describe('probe', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const mism: string[] = []; let count = 0;
+  const mism: string[] = [];
+  let count = 0;
   async function eq(label: string, data: string) {
     count++;
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex)
-      mism.push(label + ': jeth{ok=' + j.success + ',ret=' + j.returnHex + ',err=' + j.exceptionError + '} sol{ok=' + s.success + ',ret=' + s.returnHex + '}');
+      mism.push(
+        label +
+          ': jeth{ok=' +
+          j.success +
+          ',ret=' +
+          j.returnHex +
+          ',err=' +
+          j.exceptionError +
+          '} sol{ok=' +
+          s.success +
+          ',ret=' +
+          s.returnHex +
+          '}',
+      );
   }
-  async function drive(data: string) { await jeth.call(aj, data); await sol.call(as, data); }
+  async function drive(data: string) {
+    await jeth.call(aj, data);
+    await sol.call(as, data);
+  }
 
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('runs', async () => {
@@ -207,13 +227,23 @@ describe('probe', () => {
     await eq('multiTick', encodeCall(sel('multiTick()'), []));
 
     // @external called by name (this. and bare) + externally
-    for (const [a, b] of [[1n, 2n], [10n, 20n], [M >> 2n, M >> 2n], [M - 1n, 0n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [1n, 2n],
+      [10n, 20n],
+      [M >> 2n, M >> 2n],
+      [M - 1n, 0n],
+    ] as [bigint, bigint][]) {
       await eq('usePublic(' + a + ',' + b + ')', encodeCall(sel('usePublic(uint256,uint256)'), [a, b]));
       await eq('usePublicBare(' + a + ',' + b + ')', encodeCall(sel('usePublicBare(uint256,uint256)'), [a, b]));
     }
     // call the public functions directly via their external selectors
     for (const x of [0n, 5n, M - 1n, M >> 1n]) await eq('pdbl(' + x + ')', encodeCall(sel('pdbl(uint256)'), [x]));
-    for (const [a, b] of [[1n, 2n], [M - 1n, 1n], [M - 1n, 0n]] as [bigint, bigint][]) await eq('padd(' + a + ',' + b + ')', encodeCall(sel('padd(uint256,uint256)'), [a, b]));
+    for (const [a, b] of [
+      [1n, 2n],
+      [M - 1n, 1n],
+      [M - 1n, 0n],
+    ] as [bigint, bigint][])
+      await eq('padd(' + a + ',' + b + ')', encodeCall(sel('padd(uint256,uint256)'), [a, b]));
     for (const n of [0n, 1n, 2n, 7n, 12n, 20n]) await eq('pfib(' + n + ')', encodeCall(sel('pfib(uint256)'), [n]));
 
     // interleaved state mutation during recursion
@@ -227,21 +257,41 @@ describe('probe', () => {
     // recursion limit (~250 frames for this 1-extra-local callee), else the two diverge
     // on a STACK-DEPTH artifact (documented below), not on arithmetic. 10^78 overflows
     // uint256 at a shallow depth (78 frames) -> checked-mul revert on both.
-    for (const [b, e] of [[2n, 0n], [2n, 10n], [2n, 100n], [2n, 200n], [3n, 100n], [3n, 200n], [10n, 77n], [10n, 78n], [0n, 5n], [1n, 200n]] as [bigint, bigint][])
+    for (const [b, e] of [
+      [2n, 0n],
+      [2n, 10n],
+      [2n, 100n],
+      [2n, 200n],
+      [3n, 100n],
+      [3n, 200n],
+      [10n, 77n],
+      [10n, 78n],
+      [0n, 5n],
+      [1n, 200n],
+    ] as [bigint, bigint][])
       await eq('powcE(' + b + ',' + e + ')', encodeCall(sel('powcE(uint256,uint256)'), [b, e]));
 
     // bool result feeding require
-    for (const [a, b] of [[5n, 3n], [3n, 5n], [0n, 0n], [1n, 1n], [M - 1n, 0n]] as [bigint, bigint][])
+    for (const [a, b] of [
+      [5n, 3n],
+      [3n, 5n],
+      [0n, 0n],
+      [1n, 1n],
+      [M - 1n, 0n],
+    ] as [bigint, bigint][])
       await eq('needGt(' + a + ',' + b + ')', encodeCall(sel('needGt(uint256,uint256)'), [a, b]));
 
     // mutual recursion with state writes (step count parity)
-    for (const n of [0n, 1n, 2n, 5n, 10n, 21n]) await eq('runMutual(' + n + ')', encodeCall(sel('runMutual(uint256)'), [n]));
+    for (const n of [0n, 1n, 2n, 5n, 10n, 21n])
+      await eq('runMutual(' + n + ')', encodeCall(sel('runMutual(uint256)'), [n]));
 
     // Shallow linear recursion is byte-identical under solc's stack limit.
     for (const n of [0n, 1n, 100n, 300n, 337n]) await eq('downE(' + n + ')', encodeCall(sel('downE(uint256)'), [n]));
 
-    if (mism.length) { console.log('MISMATCHES ' + mism.length + '/' + count); for (const m of mism.slice(0, 40)) console.log(m); }
-    else console.log('ALL ' + count + ' byte-identical');
+    if (mism.length) {
+      console.log('MISMATCHES ' + mism.length + '/' + count);
+      for (const m of mism.slice(0, 40)) console.log(m);
+    } else console.log('ALL ' + count + ' byte-identical');
     expect(mism, mism.slice(0, 15).join('\n')).toEqual([]);
   });
 });

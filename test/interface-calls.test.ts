@@ -17,7 +17,12 @@ const sel = (s: string) => functionSelector(s);
 const W = (n: bigint) => pad32(n);
 
 function jethRejects(src: string): boolean {
-  try { compile(src, { fileName: 'C.jeth' }); return false; } catch { return true; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 // The interface, identical shape in JETH and solc.
@@ -325,9 +330,15 @@ describe('typed interface calls: returndatasize bounds (byte-identical vs solc)'
     expect(rj.success, `${sig}: success`).toBe(rs.success);
     expect(rj.returnHex, `${sig}: returndata`).toBe(rs.returnHex);
   }
-  it('0-byte returndata < head -> empty revert', async () => { await rtRet('zero'); });
-  it('31-byte returndata < head -> empty revert', async () => { await rtRet('short31'); });
-  it('64-byte returndata > head -> decode, extra trailing word ignored', async () => { await rtRet('extra64'); });
+  it('0-byte returndata < head -> empty revert', async () => {
+    await rtRet('zero');
+  });
+  it('31-byte returndata < head -> empty revert', async () => {
+    await rtRet('short31');
+  });
+  it('64-byte returndata > head -> decode, extra trailing word ignored', async () => {
+    await rtRet('extra64');
+  });
 });
 
 describe('typed interface calls: clean rejections (no crash)', () => {
@@ -337,48 +348,92 @@ describe('typed interface calls: clean rejections (no crash)', () => {
     @external @payable deposit(): u256;
   }`;
   it('rejects {value} on a non-payable method', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t, { value: 1n }).bar(5n); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t, { value: 1n }).bar(5n); } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects an unknown method', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).nope(5n); } }`)).toBe(true);
+    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).nope(5n); } }`)).toBe(
+      true,
+    );
   });
   it('rejects wrong arity', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).bar(); } }`)).toBe(true);
+    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).bar(); } }`)).toBe(
+      true,
+    );
   });
   it('rejects an argument type mismatch', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).bar(true); } }`)).toBe(true);
+    expect(
+      jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).bar(true); } }`),
+    ).toBe(true);
   });
   it('rejects a non-address receiver', () => {
     expect(jethRejects(`${IF}\n@contract class C { @external f(): u256 { return IFoo(5n).bar(7n); } }`)).toBe(true);
   });
   it('rejects an unknown wrapper option', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t, { gax: 1n }).bar(5n); } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t, { gax: 1n }).bar(5n); } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a bare interface handle as a value', () => {
     expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t); } }`)).toBe(true);
   });
   it('rejects a tuple return bound to a single name', () => {
-    expect(jethRejects(`@interface class IFoo { @external pair(): [u256, string]; }\n@contract class C { @external f(t: address): u256 { let x: u256 = IFoo(t).pair(); return x; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@interface class IFoo { @external pair(): [u256, string]; }\n@contract class C { @external f(t: address): u256 { let x: u256 = IFoo(t).pair(); return x; } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a void method used as a value', () => {
-    expect(jethRejects(`@interface class IFoo { @external nada(): void; }\n@contract class C { @external f(t: address): u256 { let x: u256 = IFoo(t).nada(); return x; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@interface class IFoo { @external nada(): void; }\n@contract class C { @external f(t: address): u256 { let x: u256 = IFoo(t).nada(); return x; } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a method body in an interface', () => {
-    expect(jethRejects(`@interface class IFoo { @external bar(): u256 { return 1n; } }\n@contract class C { @external f(): u256 { return 0n; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@interface class IFoo { @external bar(): u256 { return 1n; } }\n@contract class C { @external f(): u256 { return 0n; } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a state field in an interface', () => {
-    expect(jethRejects(`@interface class IFoo { x: u256; @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@interface class IFoo { x: u256; @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a non-@external method in an interface', () => {
-    expect(jethRejects(`@interface class IFoo { bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`)).toBe(true);
+    expect(
+      jethRejects(`@interface class IFoo { bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`),
+    ).toBe(true);
   });
   it('rejects method overloading in an interface', () => {
-    expect(jethRejects(`@interface class IFoo { @external bar(x: u256): u256; @external bar(x: bool): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@interface class IFoo { @external bar(x: u256): u256; @external bar(x: bool): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects a constructor in an interface', () => {
-    expect(jethRejects(`@interface class IFoo { constructor() {} @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@interface class IFoo { constructor() {} @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`,
+      ),
+    ).toBe(true);
   });
   it('rejects an interface name colliding with a struct', () => {
-    expect(jethRejects(`@struct class IFoo { x: u256; }\n@interface class IFoo { @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`)).toBe(true);
+    expect(
+      jethRejects(
+        `@struct class IFoo { x: u256; }\n@interface class IFoo { @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`,
+      ),
+    ).toBe(true);
   });
 });

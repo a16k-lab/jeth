@@ -62,7 +62,12 @@ describe('non-indexed struct / fixed-array event params vs Solidity', () => {
     await diffLogs(
       `@struct class D { a: u256; bs: bytes; xs: u256[]; } @contract class C { @event E(d: D); @external f(a: u256, bs: bytes, xs: u256[]): void { let m: D = D(a, bs, xs); emit(E(m)); } }`,
       `struct D { uint256 a; bytes bs; uint256[] xs; } contract C { event E(D d); function f(uint256 a, bytes calldata bs, uint256[] calldata xs) external { D memory m = D(a, bs, xs); emit E(m); } }`,
-      [{ sig: 'f(uint256,bytes,uint256[])', args: W(1n) + W(0x60n) + W(0xa0n) + W(2n) + 'aabb'.padEnd(64, '0') + W(2n) + W(5n) + W(6n) }],
+      [
+        {
+          sig: 'f(uint256,bytes,uint256[])',
+          args: W(1n) + W(0x60n) + W(0xa0n) + W(2n) + 'aabb'.padEnd(64, '0') + W(2n) + W(5n) + W(6n),
+        },
+      ],
     );
   });
 

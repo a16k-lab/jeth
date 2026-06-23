@@ -24,9 +24,15 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const hx = (s: string) => Buffer.from(s, 'utf8').toString('hex');
 // dynamic [len][right-padded data] tail block from a utf8 string
-const encStr = (s: string) => { const h = hx(s); return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0'); };
+const encStr = (s: string) => {
+  const h = hx(s);
+  return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0');
+};
 // same from a raw byte buffer (lets us inject arbitrary bytes / dirty payloads)
-const encBuf = (b: Buffer) => { const h = b.toString('hex'); return pad(BigInt(b.length)) + h.padEnd(Math.ceil(b.length / 32) * 64, '0'); };
+const encBuf = (b: Buffer) => {
+  const h = b.toString('hex');
+  return pad(BigInt(b.length)) + h.padEnd(Math.ceil(b.length / 32) * 64, '0');
+};
 const wordsFor = (byteLen: number) => 32 + Math.ceil(byteLen / 32) * 32; // tail size of one dyn block
 
 // payload zoo: empty / 1 / 31 / 32 / 33 / 63 / 64 / 65 / multi-word
@@ -327,7 +333,8 @@ contract C {
 
 describe('ADVERSARIAL memory-locals vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  let divergence = 0, count = 0;
+  let divergence = 0,
+    count = 0;
   const fails: string[] = [];
 
   async function eq(label: string, data: string, slots: bigint[] = []) {
@@ -336,47 +343,70 @@ describe('ADVERSARIAL memory-locals vs solc', () => {
     const s = await sol.call(as, data);
     if (j.success !== s.success || j.returnHex !== s.returnHex) {
       divergence++;
-      fails.push(`DIVERGENCE @ ${label}\n  data=${data}\n  jeth ok=${j.success} err=${j.exceptionError} ret=${j.returnHex}\n  sol  ok=${s.success} ret=${s.returnHex}`);
+      fails.push(
+        `DIVERGENCE @ ${label}\n  data=${data}\n  jeth ok=${j.success} err=${j.exceptionError} ret=${j.returnHex}\n  sol  ok=${s.success} ret=${s.returnHex}`,
+      );
     }
     for (const sl of slots) {
       const js = await readSlot(jeth, aj, sl);
       const ss = await readSlot(sol, as, sl);
-      if (js !== ss) { divergence++; fails.push(`SLOT DIVERGENCE @ ${label} slot ${sl}\n  jeth=${js}\n  sol =${ss}`); }
+      if (js !== ss) {
+        divergence++;
+        fails.push(`SLOT DIVERGENCE @ ${label} slot ${sl}\n  jeth=${js}\n  sol =${ss}`);
+      }
     }
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   // drive both then compare a view (for stateful sequences)
-  async function drive(data: string) { await jeth.call(aj, data); await sol.call(as, data); }
+  async function drive(data: string) {
+    await jeth.call(aj, data);
+    await sol.call(as, data);
+  }
 
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
-  const I64MAX = (1n << 63n) - 1n, I64MIN = M - (1n << 63n);
+  const I64MAX = (1n << 63n) - 1n,
+    I64MIN = M - (1n << 63n);
   const U128MAX = (1n << 128n) - 1n;
   const ADDRMAX = (1n << 160n) - 1n;
 
   it('static struct memory locals: construct/read/write/alias/nested/refmut', async () => {
     const Pcases: [bigint, bigint, bigint, bigint][] = [
-      [0n, 0n, 0n, 0n], [1n, 1n, 1n, 1n], [M - 1n, 255n, I64MAX, ADDRMAX],
-      [12345n, 7n, I64MIN, 0xdeadbeefn], [M - 2n, 254n, M - 1n, 0xcafen],
+      [0n, 0n, 0n, 0n],
+      [1n, 1n, 1n, 1n],
+      [M - 1n, 255n, I64MAX, ADDRMAX],
+      [12345n, 7n, I64MIN, 0xdeadbeefn],
+      [M - 2n, 254n, M - 1n, 0xcafen],
     ];
     for (const [a, b, c, d] of Pcases) {
       await eq(`mkP`, encodeCall(sel('mkP(uint256,uint8,int64,address)'), [a, b, c, d]));
       await eq(`readWrite`, encodeCall(sel('readWrite(uint256,uint8,int64,address,uint256)'), [a, b, c, d, 1000n]));
       await eq(`callStructPR`, encodeCall(sel('callStructPR(uint256,uint8,int64,address)'), [a, b, c, d]));
     }
-    const Qpairs: [bigint, bigint][] = [[0n, 0n], [1n, 2n], [U128MAX, 0n], [U128MAX, U128MAX], [5n, 7n]];
+    const Qpairs: [bigint, bigint][] = [
+      [0n, 0n],
+      [1n, 2n],
+      [U128MAX, 0n],
+      [U128MAX, U128MAX],
+      [5n, 7n],
+    ];
     for (const [a, b] of Qpairs) {
       await eq(`aliasMut`, encodeCall(sel('aliasMut(uint128,uint128,uint128)'), [a, b, 100n]));
       await eq(`refMut`, encodeCall(sel('refMut(uint128,uint128,uint128,uint128)'), [a, b, 9n, 8n]));
     }
     for (const nv of [0n, 1n, M - 1n, 1n << 200n]) {
-      await eq(`nestedAlias`, encodeCall(sel('nestedAlias(uint256,uint256,int64,uint8,uint256)'), [42n, 7n, I64MAX, 9n, nv]));
+      await eq(
+        `nestedAlias`,
+        encodeCall(sel('nestedAlias(uint256,uint256,int64,uint8,uint256)'), [42n, 7n, I64MAX, 9n, nv]),
+      );
     }
   });
 
@@ -388,21 +418,34 @@ describe('ADVERSARIAL memory-locals vs solc', () => {
   });
 
   it('fixed-array memory locals: r/w, OOB read/write Panic, alias, return, storage copy', async () => {
-    for (const i of [0n, 1n, 2n]) await eq(`fa_build i=${i}`, encodeCall(sel('fa_build(uint256,uint256,uint256,uint256)'), [10n, 20n, 30n, i]));
+    for (const i of [0n, 1n, 2n])
+      await eq(`fa_build i=${i}`, encodeCall(sel('fa_build(uint256,uint256,uint256,uint256)'), [10n, 20n, 30n, i]));
     for (const i of [3n, 4n, M - 1n, 1n << 200n]) {
       await eq(`fa_oobR i=${i}`, encodeCall(sel('fa_oobR(uint256,uint256)'), [5n, i]));
       await eq(`fa_oobW i=${i}`, encodeCall(sel('fa_oobW(uint256,uint256)'), [5n, i]));
     }
     await eq('fa_alias', encodeCall(sel('fa_alias(uint256)'), [7n]));
-    for (const [p, q] of [[0n, 0n], [M - 6n, 1n], [M - 1n, M - 1n]] as [bigint, bigint][]) await eq('fa_return', encodeCall(sel('fa_return(uint256,uint256)'), [p, q]));
-    for (const [p, q] of [[0n, 0n], [100n, 200n], [255n, 255n], [206n, 100n]] as [bigint, bigint][]) await eq('fa_narrow', encodeCall(sel('fa_narrow(uint8,uint8)'), [p, q]));
+    for (const [p, q] of [
+      [0n, 0n],
+      [M - 6n, 1n],
+      [M - 1n, M - 1n],
+    ] as [bigint, bigint][])
+      await eq('fa_return', encodeCall(sel('fa_return(uint256,uint256)'), [p, q]));
+    for (const [p, q] of [
+      [0n, 0n],
+      [100n, 200n],
+      [255n, 255n],
+      [206n, 100n],
+    ] as [bigint, bigint][])
+      await eq('fa_narrow', encodeCall(sel('fa_narrow(uint8,uint8)'), [p, q]));
     await drive(encodeCall(sel('setG3(uint256,uint256,uint256)'), [111n, 222n, 333n]));
     await eq('fa_fromStorage', encodeCall(sel('fa_fromStorage()'), []));
     await eq('fa_fromStorage again', encodeCall(sel('fa_fromStorage()'), []));
   });
 
   it('dynamic value-array memory locals: r/w, OOB read/write Panic, length', async () => {
-    for (const i of [0n, 1n, 2n]) await eq(`dv_build i=${i}`, encodeCall(sel('dv_build(uint256,uint256,uint256,uint256)'), [1n, 2n, 3n, i]));
+    for (const i of [0n, 1n, 2n])
+      await eq(`dv_build i=${i}`, encodeCall(sel('dv_build(uint256,uint256,uint256,uint256)'), [1n, 2n, 3n, i]));
     for (const i of [2n, 5n, M - 1n]) {
       await eq(`dv_oobR i=${i}`, encodeCall(sel('dv_oobR(uint256,uint256)'), [9n, i]));
       await eq(`dv_oobW i=${i}`, encodeCall(sel('dv_oobW(uint256,uint256)'), [9n, i]));
@@ -414,7 +457,8 @@ describe('ADVERSARIAL memory-locals vs solc', () => {
     for (const s of STRS) await eq(`bs_echo ${s.length}`, cd_s1('bs_echo(string)', s));
     for (const b of BUFS) await eq(`bs_len ${b.length}`, cd_b1('bs_len(bytes)', b));
     for (const b of [bufOf(5), bufOf(32), bufOf(33), bufOf(64)]) {
-      for (let i = 0n; i < BigInt(b.length); i++) await eq(`bs_at ${b.length}@${i}`, cd_b_u('bs_at(bytes,uint256)', b, i));
+      for (let i = 0n; i < BigInt(b.length); i++)
+        await eq(`bs_at ${b.length}@${i}`, cd_b_u('bs_at(bytes,uint256)', b, i));
       await eq(`bs_at OOB ${b.length}`, cd_b_u('bs_at(bytes,uint256)', b, BigInt(b.length)));
       await eq(`bs_at OOB huge ${b.length}`, cd_b_u('bs_at(bytes,uint256)', b, M - 1n));
     }
@@ -425,65 +469,153 @@ describe('ADVERSARIAL memory-locals vs solc', () => {
   });
 
   it('dynamic-field struct memory locals: construct/read/write/alias, all lengths', async () => {
-    for (const s of STRS) for (const a of [0n, 1n, M - 1n]) {
-      await eq(`dyn_mkVS ${s.length}`, cd_v_s('dyn_mkVS(uint256,string)', a, s));
-      await eq(`dyn_writeVal ${s.length}`, '0x' + sel('dyn_writeVal(uint256,string,uint256)') + pad(a) + pad(0x60n) + pad(99n) + encStr(s));
-      await eq(`dyn_writeStr ${s.length}`, mk_v_s_s('dyn_writeStr(uint256,string,string)', a, s, 'replacement string value!'));
-      await eq(`dyn_writeSVa ${s.length}`, '0x' + sel('dyn_writeSVa(string,uint256,uint256)') + pad(0x60n) + pad(a) + pad(7n) + encStr(s));
-      await eq(`dyn_aliasCross ${s.length}`, mk_v_s_s_v('dyn_aliasCross(uint256,string,string,uint256)', a, s, 'aliased!', 0xbeefn));
-    }
+    for (const s of STRS)
+      for (const a of [0n, 1n, M - 1n]) {
+        await eq(`dyn_mkVS ${s.length}`, cd_v_s('dyn_mkVS(uint256,string)', a, s));
+        await eq(
+          `dyn_writeVal ${s.length}`,
+          '0x' + sel('dyn_writeVal(uint256,string,uint256)') + pad(a) + pad(0x60n) + pad(99n) + encStr(s),
+        );
+        await eq(
+          `dyn_writeStr ${s.length}`,
+          mk_v_s_s('dyn_writeStr(uint256,string,string)', a, s, 'replacement string value!'),
+        );
+        await eq(
+          `dyn_writeSVa ${s.length}`,
+          '0x' + sel('dyn_writeSVa(string,uint256,uint256)') + pad(0x60n) + pad(a) + pad(7n) + encStr(s),
+        );
+        await eq(
+          `dyn_aliasCross ${s.length}`,
+          mk_v_s_s_v('dyn_aliasCross(uint256,string,string,uint256)', a, s, 'aliased!', 0xbeefn),
+        );
+      }
   });
 
   it('dyn-struct copy from storage struct: mutate local, storage slots unchanged', async () => {
-    for (const s of [STRS[1], STRS[4], STRS[7]] as string[]) for (const b of [BUFS[0], BUFS[3], BUFS[8]] as Buffer[]) {
-      await drive(mk_seedSt4(7n, s, b, 0x1234n));
-      await eq(`dyn_fromSt4 ${s.length}/${b.length}`, encodeCall(sel('dyn_fromSt4()'), []));
-      await eq(`dyn_fromSt4Write ${s.length}/${b.length}`, mk_st4write('dyn_fromSt4Write(string,bytes,uint256)', 'newstr', bufOf(40), 999n));
-      await eq(`dyn_aliasLen ${s.length}/${b.length}`, encodeCall(sel('dyn_aliasLen()'), []));
-    }
+    for (const s of [STRS[1], STRS[4], STRS[7]] as string[])
+      for (const b of [BUFS[0], BUFS[3], BUFS[8]] as Buffer[]) {
+        await drive(mk_seedSt4(7n, s, b, 0x1234n));
+        await eq(`dyn_fromSt4 ${s.length}/${b.length}`, encodeCall(sel('dyn_fromSt4()'), []));
+        await eq(
+          `dyn_fromSt4Write ${s.length}/${b.length}`,
+          mk_st4write('dyn_fromSt4Write(string,bytes,uint256)', 'newstr', bufOf(40), 999n),
+        );
+        await eq(`dyn_aliasLen ${s.length}/${b.length}`, encodeCall(sel('dyn_aliasLen()'), []));
+      }
   });
 
   it('dyn-struct byte index in/out of bounds', async () => {
     for (const b of [bufOf(5), bufOf(32), bufOf(33)]) {
-      for (let i = 0n; i < BigInt(b.length); i++) await eq(`dyn_bAt ${b.length}@${i}`, cd_b_u('dyn_bAt(bytes,uint256)', b, i));
+      for (let i = 0n; i < BigInt(b.length); i++)
+        await eq(`dyn_bAt ${b.length}@${i}`, cd_b_u('dyn_bAt(bytes,uint256)', b, i));
       await eq(`dyn_bAt OOB ${b.length}`, cd_b_u('dyn_bAt(bytes,uint256)', b, BigInt(b.length)));
     }
   });
 
   it('dyn-struct copy from calldata: clean fields succeed, DIRTY fields revert identically', async () => {
     // clean D4 copies of every length
-    for (const s of [STRS[0], STRS[3], STRS[5]] as string[]) for (const b of [BUFS[0], BUFS[4], BUFS[7]] as Buffer[]) {
-      await eq(`dyn_fromCd ${s.length}/${b.length}`, mk_D4_cd('dyn_fromCd((uint256,string,bytes,uint64))', 42n, s, b, 0x99n));
-    }
+    for (const s of [STRS[0], STRS[3], STRS[5]] as string[])
+      for (const b of [BUFS[0], BUFS[4], BUFS[7]] as Buffer[]) {
+        await eq(
+          `dyn_fromCd ${s.length}/${b.length}`,
+          mk_D4_cd('dyn_fromCd((uint256,string,bytes,uint64))', 42n, s, b, 0x99n),
+        );
+      }
     // clean DN copies (narrow/signed/address/bytes4/bool)
-    await eq('dyn_fromDNcd clean', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 200n, -5n, 0xcafen, 0xaabbccddn << 224n, 1n, 'hi'));
-    await eq('dyn_mkDN', mk_DN_flat('dyn_mkDN(uint8,int16,address,bytes4,bool,string)', 7n, 100n, 0xdeadn, 0xffffffffn << 224n, 0n, STRS[4] as string));
+    await eq(
+      'dyn_fromDNcd clean',
+      mk_DN_cd(
+        'dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))',
+        200n,
+        -5n,
+        0xcafen,
+        0xaabbccddn << 224n,
+        1n,
+        'hi',
+      ),
+    );
+    await eq(
+      'dyn_mkDN',
+      mk_DN_flat(
+        'dyn_mkDN(uint8,int16,address,bytes4,bool,string)',
+        7n,
+        100n,
+        0xdeadn,
+        0xffffffffn << 224n,
+        0n,
+        STRS[4] as string,
+      ),
+    );
     // DIRTY: each value field has junk high bits -> solc validates on copy-to-memory -> revert.
-    await eq('DN dirty u8', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 256n, 0n, 0n, 0n, 0n, 'x'));
-    await eq('DN dirty u8 max', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', M - 1n, 0n, 0n, 0n, 0n, 'x'));
-    await eq('DN dirty i16', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 32768n, 0n, 0n, 0n, 'x'));
-    await eq('DN dirty i16 unext', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0xffffn, 0n, 0n, 0n, 'x'));
-    await eq('DN dirty addr', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0n, 1n << 160n, 0n, 0n, 'x'));
-    await eq('DN dirty bytes4', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0n, 0n, 0xffn, 0n, 'x'));
-    await eq('DN dirty bool', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0n, 0n, 0n, 2n, 'x'));
-    await eq('DN dirty bool big', mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0n, 0n, 0n, M - 1n, 'x'));
+    await eq(
+      'DN dirty u8',
+      mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 256n, 0n, 0n, 0n, 0n, 'x'),
+    );
+    await eq(
+      'DN dirty u8 max',
+      mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', M - 1n, 0n, 0n, 0n, 0n, 'x'),
+    );
+    await eq(
+      'DN dirty i16',
+      mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 32768n, 0n, 0n, 0n, 'x'),
+    );
+    await eq(
+      'DN dirty i16 unext',
+      mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0xffffn, 0n, 0n, 0n, 'x'),
+    );
+    await eq(
+      'DN dirty addr',
+      mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0n, 1n << 160n, 0n, 0n, 'x'),
+    );
+    await eq(
+      'DN dirty bytes4',
+      mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0n, 0n, 0xffn, 0n, 'x'),
+    );
+    await eq(
+      'DN dirty bool',
+      mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0n, 0n, 0n, 2n, 'x'),
+    );
+    await eq(
+      'DN dirty bool big',
+      mk_DN_cd('dyn_fromDNcd((uint8,int16,address,bytes4,bool,string))', 0n, 0n, 0n, 0n, M - 1n, 'x'),
+    );
     // narrow value field AFTER a dyn field, both flat-param and struct-copy forms.
-    for (const s of [STRS[0], STRS[4], STRS[7]] as string[]) for (const a of [0n, 1n, 255n]) {
-      await eq(`dyn_mkPostNarrow ${s.length}/${a}`, '0x' + sel('dyn_mkPostNarrow(string,uint8)') + pad(0x40n) + pad(a) + encStr(s));
-      await eq(`dyn_fromCdPost ${s.length}/${a}`, mk_SV2_cd('dyn_fromCdPost((string,uint8))', s, a));
-    }
+    for (const s of [STRS[0], STRS[4], STRS[7]] as string[])
+      for (const a of [0n, 1n, 255n]) {
+        await eq(
+          `dyn_mkPostNarrow ${s.length}/${a}`,
+          '0x' + sel('dyn_mkPostNarrow(string,uint8)') + pad(0x40n) + pad(a) + encStr(s),
+        );
+        await eq(`dyn_fromCdPost ${s.length}/${a}`, mk_SV2_cd('dyn_fromCdPost((string,uint8))', s, a));
+      }
     // dirty u8 in both forms -> revert parity (flat-param checks eagerly; struct copy lazily).
-    await eq('postNarrow dirty flat', '0x' + sel('dyn_mkPostNarrow(string,uint8)') + pad(0x40n) + pad(256n) + encStr('z'));
-    await eq('postNarrow dirty flat max', '0x' + sel('dyn_mkPostNarrow(string,uint8)') + pad(0x40n) + pad(M - 1n) + encStr('z'));
+    await eq(
+      'postNarrow dirty flat',
+      '0x' + sel('dyn_mkPostNarrow(string,uint8)') + pad(0x40n) + pad(256n) + encStr('z'),
+    );
+    await eq(
+      'postNarrow dirty flat max',
+      '0x' + sel('dyn_mkPostNarrow(string,uint8)') + pad(0x40n) + pad(M - 1n) + encStr('z'),
+    );
     await eq('fromCdPost dirty', mk_SV2_cd('dyn_fromCdPost((string,uint8))', 'z', 256n));
     await eq('fromCdPost dirty max', mk_SV2_cd('dyn_fromCdPost((string,uint8))', 'z', M - 1n));
   });
 
   it('tuple destructuring into MEMORY-STRUCT fields: swap + call result', async () => {
-    for (const [a, b] of [[1n, 2n], [U128MAX, 0n], [0n, U128MAX], [5n, 5n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [1n, 2n],
+      [U128MAX, 0n],
+      [0n, U128MAX],
+      [5n, 5n],
+    ] as [bigint, bigint][]) {
       await eq(`td_memField`, encodeCall(sel('td_memField(uint128,uint128)'), [a, b]));
     }
-    for (const [a, b] of [[10n, 3n], [3n, 10n], [0n, 0n], [(1n << 64n) - 1n, 0n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [10n, 3n],
+      [3n, 10n],
+      [0n, 0n],
+      [(1n << 64n) - 1n, 0n],
+    ] as [bigint, bigint][]) {
       await eq(`td_memFieldCall`, encodeCall(sel('td_memFieldCall(uint256,uint256)'), [a, b]));
     }
   });
@@ -495,26 +627,52 @@ describe('ADVERSARIAL memory-locals vs solc', () => {
     await eq('D4 cd ok', mk_D4_cd('dyn_fromCd((uint256,string,bytes,uint64))', 1n, 'ab', bufOf(3), 5n));
     // craft a struct head with a corrupt inner string offset (huge), payloads present.
     // struct is dynamic so param head = [off=0x20]; struct tuple = [a][off_s][off_b][n]...
-    const badOffStr = '0x' + selr + pad(0x20n) + pad(7n) + pad(1n << 64n) + pad(0xc0n) + pad(9n) + encStr('aa') + encBuf(bufOf(2));
+    const badOffStr =
+      '0x' + selr + pad(0x20n) + pad(7n) + pad(1n << 64n) + pad(0xc0n) + pad(9n) + encStr('aa') + encBuf(bufOf(2));
     await eq('D4 cd str off 2^64', badOffStr);
-    const badOffHigh = '0x' + selr + pad(0x20n) + pad(7n) + pad(1n << 255n) + pad(0xc0n) + pad(9n) + encStr('aa') + encBuf(bufOf(2));
+    const badOffHigh =
+      '0x' + selr + pad(0x20n) + pad(7n) + pad(1n << 255n) + pad(0xc0n) + pad(9n) + encStr('aa') + encBuf(bufOf(2));
     await eq('D4 cd str off 2^255', badOffHigh);
     // bytes length = 2^64 (Panic 0x41 region on decode-to-memory)
-    const badLen = '0x' + selr + pad(0x20n) + pad(7n) + pad(0x80n) + pad(0xc0n) + pad(9n) + encStr('') + pad(1n << 64n) + pad(0n);
+    const badLen =
+      '0x' + selr + pad(0x20n) + pad(7n) + pad(0x80n) + pad(0xc0n) + pad(9n) + encStr('') + pad(1n << 64n) + pad(0n);
     await eq('D4 cd bytes len 2^64', badLen);
     // string length points past end (truncated tail)
-    const truncTail = '0x' + selr + pad(0x20n) + pad(7n) + pad(0x80n) + pad(0xe0n) + pad(9n) + pad(100n) /* claims 100 bytes */ + pad(0n) + pad(0n) + encBuf(bufOf(2));
+    const truncTail =
+      '0x' +
+      selr +
+      pad(0x20n) +
+      pad(7n) +
+      pad(0x80n) +
+      pad(0xe0n) +
+      pad(9n) +
+      pad(100n) /* claims 100 bytes */ +
+      pad(0n) +
+      pad(0n) +
+      encBuf(bufOf(2));
     await eq('D4 cd str len past end', truncTail);
   });
 
   it('internal/private calls: value/void/struct/recursion/transitive purity', async () => {
-    for (const [a, b] of [[1n, 2n], [M - 1n, 0n], [M >> 1n, M >> 1n]] as [bigint, bigint][]) {
+    for (const [a, b] of [
+      [1n, 2n],
+      [M - 1n, 0n],
+      [M >> 1n, M >> 1n],
+    ] as [bigint, bigint][]) {
       await eq('callV', encodeCall(sel('callV(uint256,uint256)'), [a, b]));
     }
-    for (const x of [0n, 1n, 100n, (M - 1n) / 8n + 1n /* d4 ovf */]) await eq('chainE', encodeCall(sel('chainE(uint256)'), [x]));
+    for (const x of [0n, 1n, 100n, (M - 1n) / 8n + 1n /* d4 ovf */])
+      await eq('chainE', encodeCall(sel('chainE(uint256)'), [x]));
     for (const a of [0n, 1n, M - 1n, M / 3n]) await eq('callPriv', encodeCall(sel('callPriv(uint256)'), [a]));
-    for (const n of [0n, 1n, 5n, 50n]) await eq(`climbE n=${n}`, encodeCall(sel('climbE(uint128,uint128,uint128)'), [10n, 20n, n]));
-    for (const [a, n] of [[0n, 0n], [5n, 1n], [3n, 10n], [100n, 100n]] as [bigint, bigint][]) await eq(`accE`, encodeCall(sel('accE(uint128,uint128)'), [a, n]));
+    for (const n of [0n, 1n, 5n, 50n])
+      await eq(`climbE n=${n}`, encodeCall(sel('climbE(uint128,uint128,uint128)'), [10n, 20n, n]));
+    for (const [a, n] of [
+      [0n, 0n],
+      [5n, 1n],
+      [3n, 10n],
+      [100n, 100n],
+    ] as [bigint, bigint][])
+      await eq(`accE`, encodeCall(sel('accE(uint128,uint128)'), [a, n]));
     // void with state: doBump accumulates acc (slot 8). Compare raw slot.
     await drive(encodeCall(sel('doBump(uint256)'), [5n]));
     await drive(encodeCall(sel('doBump(uint256)'), [11n]));
@@ -524,7 +682,12 @@ describe('ADVERSARIAL memory-locals vs solc', () => {
   it('tuple destructuring: decl/skip/swap/assign/underflow', async () => {
     await eq('td_decl', encodeCall(sel('td_decl()'), []));
     await eq('td_skip', encodeCall(sel('td_skip()'), []));
-    for (const [p, q] of [[10n, 3n], [3n, 10n], [0n, 0n], [M - 1n, M - 1n]] as [bigint, bigint][]) {
+    for (const [p, q] of [
+      [10n, 3n],
+      [3n, 10n],
+      [0n, 0n],
+      [M - 1n, M - 1n],
+    ] as [bigint, bigint][]) {
       await eq(`td_underflow`, encodeCall(sel('td_underflow(uint256,uint256)'), [p, q]));
       await eq(`td_assignLocal`, encodeCall(sel('td_assignLocal(uint256,uint256)'), [p, q]));
       await eq(`td_swap`, encodeCall(sel('td_swap(uint256,uint256)'), [p, q]));
@@ -533,12 +696,20 @@ describe('ADVERSARIAL memory-locals vs solc', () => {
 
   it('tuple destructuring to STORAGE targets: raw slots + RHS-before-LHS', async () => {
     // acc=slot8, cnt=slot7.
-    for (const [p, q] of [[5n, 3n], [100n, 50n], [0n, 0n]] as [bigint, bigint][]) {
+    for (const [p, q] of [
+      [5n, 3n],
+      [100n, 50n],
+      [0n, 0n],
+    ] as [bigint, bigint][]) {
       await eq(`td_storage`, encodeCall(sel('td_storage(uint256,uint256)'), [p, q]), [7n, 8n]);
       await eq(`td_rhsFirst`, encodeCall(sel('td_rhsFirst(uint256,uint256)'), [p, q]), [7n, 8n]);
     }
     // packed swap (q.x,q.y in slot 1)
-    for (const [p, q] of [[1n, 2n], [U128MAX, 0n], [0n, U128MAX]] as [bigint, bigint][]) {
+    for (const [p, q] of [
+      [1n, 2n],
+      [U128MAX, 0n],
+      [0n, U128MAX],
+    ] as [bigint, bigint][]) {
       await eq(`td_swapPacked`, encodeCall(sel('td_swapPacked(uint128,uint128)'), [p, q]), [1n]);
     }
     await eq('td_skipCall', encodeCall(sel('td_skipCall()'), []), [7n]);
@@ -569,7 +740,16 @@ function mk_v_s_s_v(sig: string, a: bigint, s1: string, s2: string, nv: bigint) 
 function mk_seedSt4(av: bigint, s: string, b: Buffer, n: bigint) {
   const offS = 0x80;
   const offB = offS + wordsFor(Buffer.byteLength(s, 'utf8'));
-  return '0x' + sel('seedSt4(uint256,string,bytes,uint64)') + pad(av) + pad(BigInt(offS)) + pad(BigInt(offB)) + pad(n) + encStr(s) + encBuf(b);
+  return (
+    '0x' +
+    sel('seedSt4(uint256,string,bytes,uint64)') +
+    pad(av) +
+    pad(BigInt(offS)) +
+    pad(BigInt(offB)) +
+    pad(n) +
+    encStr(s) +
+    encBuf(b)
+  );
 }
 // dyn_fromSt4Write(string ns, bytes nb, uint256 nv): head=[off_s][off_b][nv], two tails.
 function mk_st4write(sig: string, ns: string, nb: Buffer, nv: bigint) {
@@ -582,24 +762,18 @@ function mk_D4_cd(sig: string, a: bigint, s: string, b: Buffer, n: bigint) {
   const tupleHead = 4 * 32; // a, off_s, off_b, n
   const offS = tupleHead;
   const offB = offS + wordsFor(Buffer.byteLength(s, 'utf8'));
-  return '0x' + sel(sig) + pad(0x20n)
-    + pad(a) + pad(BigInt(offS)) + pad(BigInt(offB)) + pad(n)
-    + encStr(s) + encBuf(b);
+  return '0x' + sel(sig) + pad(0x20n) + pad(a) + pad(BigInt(offS)) + pad(BigInt(offB)) + pad(n) + encStr(s) + encBuf(b);
 }
 // DN calldata param: param head=[off=0x20]; tuple=[x][y][z][w][flag][off_s], one tail.
 function mk_DN_cd(sig: string, x: bigint, y: bigint, z: bigint, w: bigint, flag: bigint, s: string) {
   const tupleHead = 6 * 32;
   const offS = tupleHead;
-  return '0x' + sel(sig) + pad(0x20n)
-    + pad(x) + pad(y) + pad(z) + pad(w) + pad(flag) + pad(BigInt(offS))
-    + encStr(s);
+  return '0x' + sel(sig) + pad(0x20n) + pad(x) + pad(y) + pad(z) + pad(w) + pad(flag) + pad(BigInt(offS)) + encStr(s);
 }
 // six FLAT params (uint8,int16,address,bytes4,bool,string): [x][y][z][w][flag][off=0xc0] + tail.
 function mk_DN_flat(sig: string, x: bigint, y: bigint, z: bigint, w: bigint, flag: bigint, s: string) {
   const offS = 6 * 32; // 0xc0, relative to start of args
-  return '0x' + sel(sig)
-    + pad(x) + pad(y) + pad(z) + pad(w) + pad(flag) + pad(BigInt(offS))
-    + encStr(s);
+  return '0x' + sel(sig) + pad(x) + pad(y) + pad(z) + pad(w) + pad(flag) + pad(BigInt(offS)) + encStr(s);
 }
 // SV2 calldata param {string s; uint8 a}: param head=[off=0x20]; tuple=[off_s=0x40][a]; tail.
 function mk_SV2_cd(sig: string, s: string, a: bigint) {

@@ -16,14 +16,24 @@ const encStr = (s: string) => {
 };
 type Comp = { dyn: false; word: string } | { dyn: true; tail: string };
 const callData = (sig: string, comps: Comp[]) => {
-  let off = comps.length * 32, head = '', tails = '';
-  for (const c of comps) { if (!c.dyn) head += c.word; else { head += pad(BigInt(off)); tails += c.tail; off += c.tail.length / 2; } }
+  let off = comps.length * 32,
+    head = '',
+    tails = '';
+  for (const c of comps) {
+    if (!c.dyn) head += c.word;
+    else {
+      head += pad(BigInt(off));
+      tails += c.tail;
+      off += c.tail.length / 2;
+    }
+  }
   return '0x' + sel(sig) + head + tails;
 };
 const S = (s: string): Comp => ({ dyn: true, tail: encStr(s) });
 const V = (v: bigint): Comp => ({ dyn: false, word: pad(v) });
 const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
-  a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  a.length === b.length &&
+  a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 const JETH = `@contract class C {
   @event Es(@indexed s: string, v: u256);
@@ -55,15 +65,21 @@ contract C {
 describe('indexed bytes/string event topic (G4) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eqLog(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
-    expect(eqLogs(j.logs, s.logs), `${label} logs\n jeth=${JSON.stringify(j.logs)}\n sol =${JSON.stringify(s.logs)}`).toBe(true);
+    expect(
+      eqLogs(j.logs, s.logs),
+      `${label} logs\n jeth=${JSON.stringify(j.logs)}\n sol =${JSON.stringify(s.logs)}`,
+    ).toBe(true);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   const SHORT = 'abc';

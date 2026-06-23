@@ -48,12 +48,18 @@ describe('string[]/bytes[] element via a placeArray base vs Solidity', () => {
     await diff(
       `@struct class D { bs: bytes[]; } @contract class C { @state d: D; @external add(b: bytes): void { this.d.bs.push(b); } @external @view get(i: u256): bytes { return this.d.bs[i]; } }`,
       `struct D { bytes[] bs; } contract C { D d; function add(bytes calldata b) external { d.bs.push(b); } function get(uint256 i) external view returns (bytes memory){ return d.bs[i]; } }`,
-      [{ sig: 'add(bytes)', args: W(0x20n) + W(3n) + 'aabbcc'.padEnd(64, '0') }, { sig: 'get(uint256)', args: W(0n) }],
+      [
+        { sig: 'add(bytes)', args: W(0x20n) + W(3n) + 'aabbcc'.padEnd(64, '0') },
+        { sig: 'get(uint256)', args: W(0n) },
+      ],
     );
     await diff(
       `@struct class I { xs: string[]; } @struct class O { inner: I; n: u256; } @contract class C { @state o: O; @external add(s: string): void { this.o.inner.xs.push(s); } @external @view get(i: u256): string { return this.o.inner.xs[i]; } }`,
       `struct I { string[] xs; } struct O { I inner; uint256 n; } contract C { O o; function add(string calldata s) external { o.inner.xs.push(s); } function get(uint256 i) external view returns (string memory){ return o.inner.xs[i]; } }`,
-      [{ sig: 'add(string)', args: W(0x20n) + W(3n) + '616263'.padEnd(64, '0') }, { sig: 'get(uint256)', args: W(0n) }],
+      [
+        { sig: 'add(string)', args: W(0x20n) + W(3n) + '616263'.padEnd(64, '0') },
+        { sig: 'get(uint256)', args: W(0n) },
+      ],
     );
   });
 

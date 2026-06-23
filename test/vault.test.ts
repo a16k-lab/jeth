@@ -50,7 +50,10 @@ const SEL = {
 };
 
 function eqLogs(a: LogEntry[], b: LogEntry[]): boolean {
-  return a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  return (
+    a.length === b.length &&
+    a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics))
+  );
 }
 
 describe('Vault (mappings + msg.* + payable) vs Solidity', () => {

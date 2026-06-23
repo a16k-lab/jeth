@@ -14,7 +14,10 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
-const encStr = (s: string) => { const h = Buffer.from(s, 'utf8').toString('hex'); return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0'); };
+const encStr = (s: string) => {
+  const h = Buffer.from(s, 'utf8').toString('hex');
+  return pad(BigInt(h.length / 2)) + h.padEnd(Math.ceil(h.length / 64) * 64, '0');
+};
 // (uint256 a, string s): head [a][offset=0x40], then [len][data]
 const cdUS = (sig: string, a: bigint, s: string) => '0x' + sel(sig) + pad(a) + pad(0x40n) + encStr(s);
 // (string s, uint256 a): head [offset=0x40][a], then [len][data]
@@ -22,7 +25,8 @@ const cdSU = (sig: string, s: string, a: bigint) => '0x' + sel(sig) + pad(0x40n)
 // (bytes b, uint256 i): head [offset=0x40][i], then [len][data]
 const cdBU = (sig: string, b: string, i: bigint) => '0x' + sel(sig) + pad(0x40n) + pad(i) + encStr(b);
 // (uint256 a, string s, uint256 na): head [a][offset=0x60][na], then [len][data]
-const cdUSU = (sig: string, a: bigint, s: string, na: bigint) => '0x' + sel(sig) + pad(a) + pad(0x60n) + pad(na) + encStr(s);
+const cdUSU = (sig: string, a: bigint, s: string, na: bigint) =>
+  '0x' + sel(sig) + pad(a) + pad(0x60n) + pad(na) + encStr(s);
 
 const JETH = `@struct class D1 { a: u256; s: string; }
 @struct class D2 { s: string; a: u256; }
@@ -66,33 +70,43 @@ contract C {
 describe('dynamic-field struct memory locals vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
-  const STRS = ['', 'a', 'abcdefghijklmnopqrstuvwxyz012345', 'this string is definitely longer than thirty-two bytes for differential testing'];
-  const VALS = [0n, 1n, 255n, (1n << 255n), M - 1n];
+  const STRS = [
+    '',
+    'a',
+    'abcdefghijklmnopqrstuvwxyz012345',
+    'this string is definitely longer than thirty-two bytes for differential testing',
+  ];
+  const VALS = [0n, 1n, 255n, 1n << 255n, M - 1n];
   it('whole return: value+string (D1), string+value (D2)', async () => {
-    for (const s of STRS) for (const a of VALS) {
-      await eq(`mk(${a},"${s.slice(0, 4)}")`, cdUS('mk(uint256,string)', a, s));
-      await eq(`mk2("${s.slice(0, 4)}",${a})`, cdSU('mk2(string,uint256)', s, a));
-    }
+    for (const s of STRS)
+      for (const a of VALS) {
+        await eq(`mk(${a},"${s.slice(0, 4)}")`, cdUS('mk(uint256,string)', a, s));
+        await eq(`mk2("${s.slice(0, 4)}",${a})`, cdSU('mk2(string,uint256)', s, a));
+      }
   });
   it('field reads: value before/after dynamic, .length, whole dynamic field', async () => {
-    for (const s of STRS) for (const a of [0n, 42n, M - 1n]) {
-      await eq(`getA`, cdUS('getA(uint256,string)', a, s));
-      await eq(`getS`, cdUS('getS(uint256,string)', a, s));
-      await eq(`bLen`, cdBU('bLen(bytes,uint64)', s, a & 0xffffffffffffffffn));
-      await eq(`get2A`, cdSU('get2A(string,uint256)', s, a));
-      await eq(`get2S`, cdSU('get2S(string,uint256)', s, a));
-    }
+    for (const s of STRS)
+      for (const a of [0n, 42n, M - 1n]) {
+        await eq(`getA`, cdUS('getA(uint256,string)', a, s));
+        await eq(`getS`, cdUS('getS(uint256,string)', a, s));
+        await eq(`bLen`, cdBU('bLen(bytes,uint64)', s, a & 0xffffffffffffffffn));
+        await eq(`get2A`, cdSU('get2A(string,uint256)', s, a));
+        await eq(`get2S`, cdSU('get2S(string,uint256)', s, a));
+      }
   });
   it('value field write then return / read-modify-write', async () => {
     for (const s of STRS) {
@@ -104,11 +118,17 @@ describe('dynamic-field struct memory locals vs Solidity', () => {
     // mk3: head [a][off_s][off_b][n]; off_s=0x80, then s, then b.
     for (const s of ['', 'xy', 'a longer string spanning more than thirty-two bytes here ok']) {
       for (const b of ['', 'Q', 'bytes payload longer than thirty-two bytes for the second dynamic field']) {
-        const sLenPadded = Math.ceil((s.length) / 32) * 64;
+        const sLenPadded = Math.ceil(s.length / 32) * 64;
         const offB = 0x80 + 32 + sLenPadded / 2; // off_b = head(0x80) + s.len-word + s.data
-        const data = '0x' + sel('mk3(uint8,string,bytes,uint64)')
-          + pad(9n) + pad(0x80n) + pad(BigInt(offB)) + pad(0x1234n)
-          + encStr(s) + encStr(b);
+        const data =
+          '0x' +
+          sel('mk3(uint8,string,bytes,uint64)') +
+          pad(9n) +
+          pad(0x80n) +
+          pad(BigInt(offB)) +
+          pad(0x1234n) +
+          encStr(s) +
+          encStr(b);
         await eq(`mk3("${s.slice(0, 3)}","${b.slice(0, 3)}")`, data);
       }
     }

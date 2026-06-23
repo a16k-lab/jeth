@@ -36,21 +36,30 @@ contract G {
 }`;
 
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 describe('memory-array element ++/--/+= in @pure', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
-    const jb = compile(J, { fileName: 'C.jeth' }); const sb = compileSolidity(S, 'G');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    const jb = compile(J, { fileName: 'C.jeth' });
+    const sb = compileSolidity(S, 'G');
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('compiles in @pure (a memory-element write is not a state access)', () => {
@@ -72,7 +81,13 @@ describe('memory-array element ++/--/+= in @pure', () => {
   });
 
   it('+= (element and literal) match solc incl. overflow Panic 0x11', async () => {
-    for (const [a, b] of [[0n, 0n], [100n, 27n], [200n, 55n], [200n, 56n], [255n, 1n]] as const) {
+    for (const [a, b] of [
+      [0n, 0n],
+      [100n, 27n],
+      [200n, 55n],
+      [200n, 56n],
+      [255n, 1n],
+    ] as const) {
       await eq(`addAssign(${a},${b})`, '0x' + sel('addAssign(uint8,uint8)') + pad(a) + pad(b));
     }
     for (const a of [0n, 126n, 254n, 255n]) {
@@ -81,6 +96,10 @@ describe('memory-array element ++/--/+= in @pure', () => {
   });
 
   it('control: storage-element ++ is still correctly rejected in @view (JETH054), not memory', () => {
-    expect(codes('@contract class G { @state nums: u8[]; @external @view f(): u8 { this.nums[0n]++; return this.nums[0n]; } }')).toContain('JETH054');
+    expect(
+      codes(
+        '@contract class G { @state nums: u8[]; @external @view f(): u8 { this.nums[0n]++; return this.nums[0n]; } }',
+      ),
+    ).toContain('JETH054');
   });
 });

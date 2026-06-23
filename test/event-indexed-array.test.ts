@@ -15,7 +15,8 @@ const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const arr = (xs: bigint[]) => pad(BigInt(xs.length)) + xs.map(pad).join('');
 type LogEntry = { topics: string[]; data: string };
 const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
-  a.length === b.length && a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
+  a.length === b.length &&
+  a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 const JETH = `@contract class C {
   @event Eu(@indexed a: u256[], v: u256);
@@ -43,21 +44,30 @@ contract C {
 describe('indexed value-array event param (JETH207) vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} (jeth err=${j.exceptionError})`).toBe(s.success);
-    expect(eqLogs(j.logs as LogEntry[], s.logs as LogEntry[]), `${label} logs\n jeth=${JSON.stringify(j.logs)}\n sol =${JSON.stringify(s.logs)}`).toBe(true);
+    expect(
+      eqLogs(j.logs as LogEntry[], s.logs as LogEntry[]),
+      `${label} logs\n jeth=${JSON.stringify(j.logs)}\n sol =${JSON.stringify(s.logs)}`,
+    ).toBe(true);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'C.jeth' });
     const sb = compileSolidity(SOL, 'C');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('u256[] / u8[] / address[] / mixed indexed array topics', async () => {
     for (const xs of [[], [7n], [7n, 8n], [1n, 2n, 3n, 4n, 5n], [M - 1n, 0n]] as const) {
       await eq(`eu([${xs.length}])`, '0x' + sel('eu(uint256[])') + pad(0x20n) + arr([...xs]));
-      await eq(`emix([${xs.length}])`, '0x' + sel('emix(uint256,uint256[],uint256)') + pad(42n) + pad(0x60n) + pad(99n) + arr([...xs]));
+      await eq(
+        `emix([${xs.length}])`,
+        '0x' + sel('emix(uint256,uint256[],uint256)') + pad(42n) + pad(0x60n) + pad(99n) + arr([...xs]),
+      );
     }
     for (const xs of [[], [1n, 255n], [0n, 128n, 7n]] as const) {
       await eq(`e8([${xs.length}])`, '0x' + sel('e8(uint8[])') + pad(0x20n) + arr([...xs]));

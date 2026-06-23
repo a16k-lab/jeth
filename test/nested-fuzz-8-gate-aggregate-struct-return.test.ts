@@ -71,7 +71,10 @@ class ControlOk {
     // the storage-source recursive encoder flattens the fixed-array field via
     // structStorageLeaves (byte-identical to solc, verified in fixed-array-return.test.ts).
     const codes = codesFor(SRC_RETURN_FIXED_ARRAY, 'GateReturn.jeth');
-    expect(codes, 'returning a struct with a static fixed-array field must compile; got: ' + JSON.stringify(codes)).toBeNull();
+    expect(
+      codes,
+      'returning a struct with a static fixed-array field must compile; got: ' + JSON.stringify(codes),
+    ).toBeNull();
   });
 
   it('probe B: storage @state of a dynamic (string) struct now COMPILES (field access supported)', () => {
@@ -83,7 +86,10 @@ class ControlOk {
     expect(codes, 'a storage dynamic struct with field access must compile; got: ' + JSON.stringify(codes)).toBeNull();
     // A whole-struct RETURN of a storage dynamic struct is now SUPPORTED (the
     // storage-source recursive head/tail encoder; byte-identical to solc).
-    const whole = codesFor(`@struct class T { a: u256; name: string; }\n@contract class C { @state t: T; @view f(): T { return this.t; } }`, 'WholeRet.jeth');
+    const whole = codesFor(
+      `@struct class T { a: u256; name: string; }\n@contract class C { @state t: T; @view f(): T { return this.t; } }`,
+      'WholeRet.jeth',
+    );
     expect(whole, 'returning a whole storage dynamic struct now compiles; got: ' + JSON.stringify(whole)).toBeNull();
   });
 });

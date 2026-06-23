@@ -11,8 +11,13 @@ import { CompileError } from '../src/diagnostics.js';
 
 const sel = (s: string) => functionSelector(s);
 function codes(src: string): string[] {
-  try { compile(src, { fileName: 'C.jeth' }); return []; }
-  catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e) {
+    if (e instanceof CompileError) return e.diagnostics.map((d) => d.code);
+    throw e;
+  }
 }
 
 describe('msg.data calldata bytes view', () => {
@@ -31,7 +36,8 @@ contract C {
   function at(uint256 i, uint256 x) external pure returns (bytes1) { return msg.data[i]; } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
@@ -43,7 +49,8 @@ contract C {
   it('msg.data copy/return reproduces the whole calldata, byte-identical', async () => {
     for (const fn of ['echo', 'copy'] as const) {
       const data = '0x' + sel(`${fn}(uint256)`) + pad32(0xdeadbeefn);
-      const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+      const j = await jeth.call(aj, data);
+      const s = await sol.call(as, data);
       expect(j.success, fn).toBe(s.success);
       expect(j.returnHex, fn).toBe(s.returnHex);
     }
@@ -52,7 +59,8 @@ contract C {
     // calldata = selector(4) + pad32(i) + pad32(x) = 68 bytes; index every interesting byte + OOB
     for (const i of [0n, 1n, 3n, 4n, 35n, 36n, 67n, 68n, 100n]) {
       const data = '0x' + sel('at(uint256,uint256)') + pad32(i) + pad32(0xab12n);
-      const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+      const j = await jeth.call(aj, data);
+      const s = await sol.call(as, data);
       expect(j.success, `at(${i})`).toBe(s.success);
       expect(j.returnHex, `at(${i})`).toBe(s.returnHex);
     }

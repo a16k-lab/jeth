@@ -45,13 +45,18 @@ contract C {
   function mGet(uint256 k, uint256 i) external view returns (uint64) { return m[k].ps[i]; } }`;
 
   beforeAll(async () => {
-    jeth = await Harness.create(); sol = await Harness.create();
+    jeth = await Harness.create();
+    sol = await Harness.create();
     aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     as = await sol.deploy(compileSolidity(S, 'C').creation);
   });
-  const both = async (data: string) => { await jeth.call(aj, data); await sol.call(as, data); };
+  const both = async (data: string) => {
+    await jeth.call(aj, data);
+    await sol.call(as, data);
+  };
   const eq = async (data: string, label: string) => {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success`).toBe(s.success);
     expect(j.returnHex, label).toBe(s.returnHex);
   };
@@ -63,7 +68,8 @@ contract C {
     await eq('0x' + sel('getP(uint256)') + pad32(6n), 'ps OOB'); // Panic 0x32
     // raw data slots: ps length at slot 1 (tag=0, ps=1, ws=2); data at keccak(1), 4 u64 per slot -> 2 slots
     const psData = BigInt('0x' + bytesToHex(keccak256(hexToBytes(pad32(1n)))));
-    for (const k of [0n, 1n]) expect(await readSlot(jeth, aj, psData + k), `ps data+${k}`).toBe(await readSlot(sol, as, psData + k));
+    for (const k of [0n, 1n])
+      expect(await readSlot(jeth, aj, psData + k), `ps data+${k}`).toBe(await readSlot(sol, as, psData + k));
     expect(await readSlot(jeth, aj, 1n)).toBe(await readSlot(sol, as, 1n)); // ps length
   });
   it('u16[] struct field (16 per slot): packing within one slot matches solc', async () => {
@@ -73,9 +79,21 @@ contract C {
     expect(await readSlot(jeth, aj, wsData)).toBe(await readSlot(sol, as, wsData)); // all 5 packed in slot 0
   });
   it('mapping<u256,S> packed dyn-array element: reads + write match solc', async () => {
-    for (const [k, v] of [[1n, 11n], [1n, 22n], [1n, 33n], [2n, 99n]] as const) await both('0x' + sel('mPush(uint256,uint64)') + pad32(k) + pad32(v));
+    for (const [k, v] of [
+      [1n, 11n],
+      [1n, 22n],
+      [1n, 33n],
+      [2n, 99n],
+    ] as const)
+      await both('0x' + sel('mPush(uint256,uint64)') + pad32(k) + pad32(v));
     await both('0x' + sel('mSet(uint256,uint256,uint64)') + pad32(1n) + pad32(2n) + pad32(0xbeefn));
-    for (const [k, i] of [[1n, 0n], [1n, 1n], [1n, 2n], [2n, 0n]] as const) await eq('0x' + sel('mGet(uint256,uint256)') + pad32(k) + pad32(i), `m[${k}].ps[${i}]`);
+    for (const [k, i] of [
+      [1n, 0n],
+      [1n, 1n],
+      [1n, 2n],
+      [2n, 0n],
+    ] as const)
+      await eq('0x' + sel('mGet(uint256,uint256)') + pad32(k) + pad32(i), `m[${k}].ps[${i}]`);
     await eq('0x' + sel('mGet(uint256,uint256)') + pad32(2n) + pad32(5n), 'm OOB'); // Panic 0x32
   });
 });

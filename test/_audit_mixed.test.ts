@@ -6,8 +6,10 @@ import { Harness } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const M = (1n << 256n);
-function pad(v: bigint): string { return (((v % M) + M) % M).toString(16).padStart(64, '0'); }
+const M = 1n << 256n;
+function pad(v: bigint): string {
+  return (((v % M) + M) % M).toString(16).padStart(64, '0');
+}
 
 const JETH = `
 @struct class Pt { x: u128; y: u128; }
@@ -44,11 +46,14 @@ let jeth: Harness, sol: Harness, aj: Address, as: Address;
 beforeAll(async () => {
   const jb = compile(JETH, { fileName: 'A.jeth' });
   const sb = compileSolidity(SOL, 'A');
-  jeth = await Harness.create(); sol = await Harness.create();
-  aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+  jeth = await Harness.create();
+  sol = await Harness.create();
+  aj = await jeth.deploy(jb.creationBytecode);
+  as = await sol.deploy(sb.creation);
 });
 async function eq(label: string, data: string) {
-  const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+  const j = await jeth.call(aj, data);
+  const s = await sol.call(as, data);
   expect(j.success, `${label} success jeth=${j.success}/${j.exceptionError} sol=${s.success}`).toBe(s.success);
   expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   return { j, s };
@@ -61,7 +66,7 @@ describe('mixed aggregate + multiple dynamic params', () => {
     // head bytes = 5*32 = 0xA0. b tail at 0xA0.
     const sel = functionSelector('aggThenArr(uint256[3],uint256[],uint256)');
     const head = [W(10n), W(20n), W(30n), W(0xa0n), W(1n)].join(''); // a, off_b=0xA0, i=1
-    const tail = [W(3n), W(0xb0n), W(0xb1n), W(0xb2n)].join('');     // b.len=3, elems
+    const tail = [W(3n), W(0xb0n), W(0xb1n), W(0xb2n)].join(''); // b.len=3, elems
     await eq('aggThenArr canon', '0x' + sel + head + tail);
     // OOB i=3
     const head2 = [W(10n), W(20n), W(30n), W(0xa0n), W(3n)].join('');

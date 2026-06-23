@@ -133,9 +133,19 @@ interface KT {
   keys: bigint[]; // canonical 32-byte-padded key values (negatives ok for i128)
 }
 const KTS: KT[] = [
-  { name: 'address', code: 'A', base: 0n, keys: [BigInt('0x' + '11'.repeat(20)), BigInt('0x' + 'ab'.repeat(20)), BigInt('0x' + '00'.repeat(19) + '07')] },
+  {
+    name: 'address',
+    code: 'A',
+    base: 0n,
+    keys: [BigInt('0x' + '11'.repeat(20)), BigInt('0x' + 'ab'.repeat(20)), BigInt('0x' + '00'.repeat(19) + '07')],
+  },
   { name: 'uint256', code: 'U', base: 1n, keys: [0n, 1n, (1n << 256n) - 1n] },
-  { name: 'bytes32', code: 'B', base: 2n, keys: [BigInt('0x' + 'de'.repeat(32)), BigInt('0x' + '00'.repeat(31) + '01'), (1n << 256n) - 5n] },
+  {
+    name: 'bytes32',
+    code: 'B',
+    base: 2n,
+    keys: [BigInt('0x' + 'de'.repeat(32)), BigInt('0x' + '00'.repeat(31) + '01'), (1n << 256n) - 5n],
+  },
   { name: 'uint64', code: '6', base: 3n, keys: [0n, 42n, (1n << 64n) - 1n] },
   { name: 'int128', code: 'I', base: 4n, keys: [-1n, 7n, -(1n << 127n)] }, // exercise sign-extended keccak preimage
 ];
@@ -148,8 +158,14 @@ describe('mapping<K, uint256[]> key-types vs Solidity (byte-identical)', () => {
   async function eqCall(label: string, data: string) {
     const j = await jeth.call(aj, data);
     const s = await sol.call(as, data);
-    if (j.success !== s.success) mismatches.push({ probe: `${label} success`, jeth: String(j.success) + ` (err=${j.exceptionError})`, solidity: String(s.success) });
-    if (j.returnHex !== s.returnHex) mismatches.push({ probe: `${label} returndata`, jeth: j.returnHex, solidity: s.returnHex });
+    if (j.success !== s.success)
+      mismatches.push({
+        probe: `${label} success`,
+        jeth: String(j.success) + ` (err=${j.exceptionError})`,
+        solidity: String(s.success),
+      });
+    if (j.returnHex !== s.returnHex)
+      mismatches.push({ probe: `${label} returndata`, jeth: j.returnHex, solidity: s.returnHex });
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
     return { j, s };
@@ -173,7 +189,9 @@ describe('mapping<K, uint256[]> key-types vs Solidity (byte-identical)', () => {
   for (const kt of KTS) {
     it(`key=${kt.name}: push/length/index/set/pop + raw slots, per-key isolation`, async () => {
       const c = kt.code;
-      const k0 = kt.keys[0]!, k1 = kt.keys[1]!, k2 = kt.keys[2]!;
+      const k0 = kt.keys[0]!,
+        k1 = kt.keys[1]!,
+        k2 = kt.keys[2]!;
 
       // ---- push several values across distinct keys ----
       await eqCall(`${kt.name} push k0 #0`, encodeCall(sel(SIG.push(c)), [k0, 111n]));
@@ -233,9 +251,7 @@ describe('mapping<K, uint256[]> key-types vs Solidity (byte-identical)', () => {
       const oob = await eqCall(`${kt.name} at k0 OOB`, encodeCall(sel(SIG.at(c)), [k0, 5n]));
       expect(oob.j.success).toBe(false);
       // Panic(uint256) selector 0x4e487b71 with code 0x32
-      expect(oob.j.returnHex).toBe(
-        '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032'
-      );
+      expect(oob.j.returnHex).toBe('0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000032');
 
       // ---- pop down to empty, then pop empty -> Panic(0x31) ----
       await eqCall(`${kt.name} pop k0 b`, encodeCall(sel(SIG.pop(c)), [k0]));
@@ -244,9 +260,7 @@ describe('mapping<K, uint256[]> key-types vs Solidity (byte-identical)', () => {
       expect(decodeUint(r.j.returnHex)).toBe(0n);
       const pe = await eqCall(`${kt.name} pop k0 empty`, encodeCall(sel(SIG.pop(c)), [k0]));
       expect(pe.j.success).toBe(false);
-      expect(pe.j.returnHex).toBe(
-        '0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000031'
-      );
+      expect(pe.j.returnHex).toBe('0x4e487b71' + '0000000000000000000000000000000000000000000000000000000000000031');
     });
   }
 

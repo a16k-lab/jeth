@@ -83,24 +83,32 @@ describe('gate-parity: compile-time gate parity for aggregate calldata params', 
   // -------------------------------------------------------------------------
   describe('(1) constant out-of-bounds index is a COMPILE error (both compilers)', () => {
     // fixed-array param a: Arr<u256,3>, index a[3n] (length 3, valid 0..2).
-    const J_ARR_OOB = JETH_STRUCTS + `
+    const J_ARR_OOB =
+      JETH_STRUCTS +
+      `
 @contract
 class G {
   @external @pure f(a: Arr<u256, 3>): u256 { return a[3n]; }
 }
 `;
-    const S_ARR_OOB = SOL_HEAD + `
+    const S_ARR_OOB =
+      SOL_HEAD +
+      `
   function f(uint256[3] calldata a) external pure returns (uint256){ return a[3]; }
 }`;
 
     // struct-array param ps: Arr<Pt,2>, index ps[2n] (length 2, valid 0..1).
-    const J_STRUCTARR_OOB = JETH_STRUCTS + `
+    const J_STRUCTARR_OOB =
+      JETH_STRUCTS +
+      `
 @contract
 class G {
   @external @pure f(ps: Arr<Pt, 2>): u128 { return ps[2n].x; }
 }
 `;
-    const S_STRUCTARR_OOB = SOL_HEAD + `
+    const S_STRUCTARR_OOB =
+      SOL_HEAD +
+      `
   function f(Pt[2] calldata ps) external pure returns (uint128){ return ps[2].x; }
 }`;
 
@@ -137,13 +145,17 @@ class G {
 
     // Control: the LAST in-bounds constant index (a[2n], len 3) compiles in BOTH.
     it('control: last in-bounds constant index a[2n] compiles in BOTH', () => {
-      const jOk = JETH_STRUCTS + `
+      const jOk =
+        JETH_STRUCTS +
+        `
 @contract
 class G {
   @external @pure f(a: Arr<u256, 3>): u256 { return a[2n]; }
 }
 `;
-      const sOk = SOL_HEAD + `
+      const sOk =
+        SOL_HEAD +
+        `
   function f(uint256[3] calldata a) external pure returns (uint256){ return a[2]; }
 }`;
       expect(jethCodes(jOk, 'G.jeth'), 'in-bounds a[2n] must compile cleanly').toBeNull();
@@ -158,7 +170,9 @@ class G {
   // -------------------------------------------------------------------------
   describe('(2) whole struct/array param used as a value', () => {
     it('return a whole struct param now compiles (G5)', () => {
-      const src = JETH_STRUCTS + `
+      const src =
+        JETH_STRUCTS +
+        `
 @contract
 class G {
   @external @pure f(p: Pt): Pt { return p; }
@@ -168,7 +182,9 @@ class G {
     });
 
     it('return a whole fixed-array param now compiles (G5)', () => {
-      const src = JETH_STRUCTS + `
+      const src =
+        JETH_STRUCTS +
+        `
 @contract
 class G {
   @external @pure f(a: Arr<u256, 3>): Arr<u256, 3> { return a; }
@@ -178,7 +194,9 @@ class G {
     });
 
     it('copying a whole struct param to a memory local now compiles (G9)', () => {
-      const src = JETH_STRUCTS + `
+      const src =
+        JETH_STRUCTS +
+        `
 @contract
 class G {
   @external @pure f(p: Pt): u128 { let q: Pt = p; return q.x; }
@@ -194,7 +212,9 @@ class G {
   // -------------------------------------------------------------------------
   describe('(3) assigning to a calldata param field/element throws JETH214', () => {
     it('assign to a struct-param field (p.x = 1n) -> JETH214 AND solc rejects', () => {
-      const src = JETH_STRUCTS + `
+      const src =
+        JETH_STRUCTS +
+        `
 @contract
 class G {
   @external @pure f(p: Pt): u128 { p.x = 1n; return p.x; }
@@ -204,7 +224,9 @@ class G {
       expect(codes, 'assigning to a calldata struct field must be rejected').not.toBeNull();
       expect(codes, 'expected JETH214; got ' + JSON.stringify(codes)).toContain('JETH214');
 
-      const sSrc = SOL_HEAD + `
+      const sSrc =
+        SOL_HEAD +
+        `
   function f(Pt calldata p) external pure returns (uint128){ p.x = 1; return p.x; }
 }`;
       const sErr = solcErrors(sSrc);
@@ -212,7 +234,9 @@ class G {
     });
 
     it('assign to a fixed-array-param element (a[0n] = 1n) -> JETH214 AND solc rejects', () => {
-      const src = JETH_STRUCTS + `
+      const src =
+        JETH_STRUCTS +
+        `
 @contract
 class G {
   @external @pure f(a: Arr<u256, 3>): u256 { a[0n] = 1n; return a[0n]; }
@@ -222,7 +246,9 @@ class G {
       expect(codes, 'assigning to a calldata array element must be rejected').not.toBeNull();
       expect(codes, 'expected JETH214; got ' + JSON.stringify(codes)).toContain('JETH214');
 
-      const sSrc = SOL_HEAD + `
+      const sSrc =
+        SOL_HEAD +
+        `
   function f(uint256[3] calldata a) external pure returns (uint256){ a[0] = 1; return a[0]; }
 }`;
       const sErr = solcErrors(sSrc);
@@ -238,7 +264,9 @@ class G {
     const sel = (s: string) => functionSelector(s);
 
     // JETH contract exercising constant indices at every boundary position.
-    const J_RUN = JETH_STRUCTS + `
+    const J_RUN =
+      JETH_STRUCTS +
+      `
 @contract
 class G {
   // fixed-array constant indices a[0n], a[1n], a[2n]
@@ -249,7 +277,9 @@ class G {
   @external @pure psLastY(ps: Arr<Pt, 2>): u128 { return ps[1n].y; }
 }
 `;
-    const S_RUN = SOL_HEAD + `
+    const S_RUN =
+      SOL_HEAD +
+      `
   function first(uint256[3] calldata a) external pure returns (uint256){ return a[0]; }
   function mid(uint256[3] calldata a) external pure returns (uint256){ return a[1]; }
   function last(uint256[3] calldata a) external pure returns (uint256){ return a[2]; }

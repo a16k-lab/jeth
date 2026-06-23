@@ -40,17 +40,24 @@ contract PN {
 describe('packed fixed-array element via struct field vs Solidity', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = (s: string) => functionSelector(s);
-  async function send(data: string) { const j = await jeth.call(aj, data); const s = await sol.call(as, data); expect(j.success, `send ${j.exceptionError}`).toBe(s.success); }
+  async function send(data: string) {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `send ${j.exceptionError}`).toBe(s.success);
+  }
   async function eq(label: string, data: string) {
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success, `${label} success (jeth err=${j.exceptionError})`).toBe(s.success);
     expect(j.returnHex, `${label} returndata`).toBe(s.returnHex);
   }
   beforeAll(async () => {
     const jb = compile(JETH, { fileName: 'PN.jeth' });
     const sb = compileSolidity(SOL, 'PN');
-    jeth = await Harness.create(); sol = await Harness.create();
-    aj = await jeth.deploy(jb.creationBytecode); as = await sol.deploy(sb.creation);
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(jb.creationBytecode);
+    as = await sol.deploy(sb.creation);
   });
 
   it('signed packed element runtime write/read incl negatives + sign-extend', async () => {
@@ -63,7 +70,12 @@ describe('packed fixed-array element via struct field vs Solidity', () => {
     await eq('tag preserved', encodeCall(sel('tag()'), []));
   });
   it('unsigned packed element runtime write/read (4 per slot)', async () => {
-    for (const [i, v] of [[0n, 11n], [1n, 22n], [2n, 33n], [3n, (1n << 64n) - 1n]] as [bigint, bigint][])
+    for (const [i, v] of [
+      [0n, 11n],
+      [1n, 22n],
+      [2n, 33n],
+      [3n, (1n << 64n) - 1n],
+    ] as [bigint, bigint][])
       await send(encodeCall(sel('setUs(uint256,uint64)'), [i, v]));
     for (const i of [0n, 1n, 2n, 3n]) await eq(`getUs[${i}]`, encodeCall(sel('getUs(uint256)'), [i]));
   });
@@ -73,7 +85,8 @@ describe('packed fixed-array element via struct field vs Solidity', () => {
   });
   it('OOB packed index reverts identically', async () => {
     const data = encodeCall(sel('getPt(uint256)'), [3n]);
-    const j = await jeth.call(aj, data); const s = await sol.call(as, data);
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
     expect(j.success).toBe(s.success);
   });
 });

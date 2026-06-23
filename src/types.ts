@@ -183,7 +183,12 @@ export function structStorageLeaves(
         const packs = arrayElemPacks(ty.element);
         for (let j = 0; j < ty.length; j++) {
           if (packs.packed) {
-            out.push({ abiWord: abiBase + j, storageSlot: slotBase + Math.floor(j / packs.perSlot), storageOffset: (j % packs.perSlot) * packs.size, type: ty.element });
+            out.push({
+              abiWord: abiBase + j,
+              storageSlot: slotBase + Math.floor(j / packs.perSlot),
+              storageOffset: (j % packs.perSlot) * packs.size,
+              type: ty.element,
+            });
           } else {
             out.push({ abiWord: abiBase + j, storageSlot: slotBase + j, storageOffset: 0, type: ty.element });
           }
@@ -296,13 +301,7 @@ export function commonNumericType(a: JethType, b: JethType): JethType | undefine
  *  Used to gate Phase 2 features (error/event params, calldata decode) to the set
  *  that needs no head/tail ABI machinery. */
 export function isStaticValueType(t: JethType): boolean {
-  return (
-    t.kind === 'uint' ||
-    t.kind === 'int' ||
-    t.kind === 'bool' ||
-    t.kind === 'address' ||
-    t.kind === 'bytesN'
-  );
+  return t.kind === 'uint' || t.kind === 'int' || t.kind === 'bool' || t.kind === 'address' || t.kind === 'bytesN';
 }
 
 /** The two dynamic byte-sequence types, which share an identical storage and ABI

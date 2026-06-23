@@ -15,19 +15,39 @@
 //
 // D uses a `bytes` field (not `string`) so `d.s.length` is expressible (Solidity's
 // `string` has no .length); bytes and string share an identical ABI layout.
-@struct class D { a: u256; s: bytes; }
+@struct
+class D {
+  a: u256;
+  s: bytes;
+}
 
 @contract
 class AdversarialAbi {
   // --- lazy-access: a single calldata slice, read or re-encoded directly ---
-  @external @pure dLen(d: D): u256 { return d.s.length; }
-  @external @pure dGet(d: D): bytes { return d.s; }
-  @external @pure mGet(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
-  @external @pure innerLen(m: u256[][], i: u256): u256 { return m[i].length; }
-  @external @pure saAt(a: string[], i: u256): string { return a[i]; }
+  @external @pure dLen(d: D): u256 {
+    return d.s.length;
+  }
+  @external @pure dGet(d: D): bytes {
+    return d.s;
+  }
+  @external @pure mGet(m: u256[][], i: u256, j: u256): u256 {
+    return m[i][j];
+  }
+  @external @pure innerLen(m: u256[][], i: u256): u256 {
+    return m[i].length;
+  }
+  @external @pure saAt(a: string[], i: u256): string {
+    return a[i];
+  }
 
   // --- decode-to-memory echo: a whole aggregate decoded into fresh memory ---
-  @external @pure dEcho(d: D): D { return d; }
-  @external @pure saEcho(a: string[]): string[] { return a; }
-  @external @pure mEcho(m: u256[][]): u256[][] { return m; }
+  @external @pure dEcho(d: D): D {
+    return d;
+  }
+  @external @pure saEcho(a: string[]): string[] {
+    return a;
+  }
+  @external @pure mEcho(m: u256[][]): u256[][] {
+    return m;
+  }
 }

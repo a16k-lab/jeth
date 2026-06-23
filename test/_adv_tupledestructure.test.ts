@@ -466,7 +466,11 @@ describe('adversarial tuple destructuring vs solc', () => {
   });
 
   it('RHS snapshot vs same-target state / revert parity / dynamic-array targets', async () => {
-    for (const [p, q] of [[1n, 1n], [3n, 5n], [0n, 7n]] as const) {
+    for (const [p, q] of [
+      [1n, 1n],
+      [3n, 5n],
+      [0n, 7n],
+    ] as const) {
       await eq(`stateFib(${p},${q})`, encodeCall(sel('stateFib(uint256,uint256)'), [p, q]), [0n, 1n]);
     }
     // underflow: b > a reverts (Panic 0x11) in both; b <= a returns.
@@ -487,15 +491,27 @@ describe('adversarial tuple destructuring vs solc', () => {
   });
 
   it('swaps: local / rotate / no-op / state / packed', async () => {
-    for (const [p, q] of [[3n, 9n], [0n, 0n], [1n, 2n], [255n, 1n]] as const) {
+    for (const [p, q] of [
+      [3n, 9n],
+      [0n, 0n],
+      [1n, 2n],
+      [255n, 1n],
+    ] as const) {
       await eq(`swap2(${p},${q})`, encodeCall(sel('swap2(uint256,uint256)'), [p, q]));
       await eq(`noop2(${p},${q})`, encodeCall(sel('noop2(uint256,uint256)'), [p, q]));
       await eq(`swapState(${p},${q})`, encodeCall(sel('swapState(uint256,uint256)'), [p, q]), [0n, 1n]);
       await eq(`swapPacked(${p},${q})`, encodeCall(sel('swapPacked(uint128,uint128)'), [p, q]), [4n]);
     }
-    for (const [p, q, r] of [[1n, 2n, 3n], [9n, 0n, 5n]] as const) {
+    for (const [p, q, r] of [
+      [1n, 2n, 3n],
+      [9n, 0n, 5n],
+    ] as const) {
       await eq(`rotate3(${p},${q},${r})`, encodeCall(sel('rotate3(uint256,uint256,uint256)'), [p, q, r]));
-      await eq(`rotateState(${p},${q},${r})`, encodeCall(sel('rotateState(uint256,uint256,uint256)'), [p, q, r]), [0n, 1n, 2n]);
+      await eq(`rotateState(${p},${q},${r})`, encodeCall(sel('rotateState(uint256,uint256,uint256)'), [p, q, r]), [
+        0n,
+        1n,
+        2n,
+      ]);
     }
   });
 

@@ -48,7 +48,10 @@ describe('multi-value return vs Solidity', () => {
       const b = Buffer.from(s, 'utf8');
       const nwords = Math.ceil(b.length / 32);
       let data = '';
-      for (let i = 0; i < nwords; i++) data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)]).subarray(0, 32).toString('hex');
+      for (let i = 0; i < nwords; i++)
+        data += Buffer.concat([b.subarray(i * 32, i * 32 + 32), Buffer.alloc(32)])
+          .subarray(0, 32)
+          .toString('hex');
       tailBuf += pad(BigInt(b.length)) + data;
       off += 32 + nwords * 32;
     }
@@ -81,9 +84,29 @@ describe('multi-value return vs Solidity', () => {
     await eqRaw('withStr long', strArg('withStr(uint256,string)', [5n, 0n], [{ at: 1, s: LONG }]));
   });
   it('two strings (two dynamic tails)', async () => {
-    await eqRaw('twoStr', strArg('twoStr(string,string)', [0n, 0n], [{ at: 0, s: 'aa' }, { at: 1, s: LONG }]));
+    await eqRaw(
+      'twoStr',
+      strArg(
+        'twoStr(string,string)',
+        [0n, 0n],
+        [
+          { at: 0, s: 'aa' },
+          { at: 1, s: LONG },
+        ],
+      ),
+    );
   });
   it('string, value, string interleaved', async () => {
-    await eqRaw('strBetween', strArg('strBetween(string,uint256,string)', [0n, 99n, 0n], [{ at: 0, s: LONG }, { at: 2, s: 'zz' }]));
+    await eqRaw(
+      'strBetween',
+      strArg(
+        'strBetween(string,uint256,string)',
+        [0n, 99n, 0n],
+        [
+          { at: 0, s: LONG },
+          { at: 2, s: 'zz' },
+        ],
+      ),
+    );
   });
 });
