@@ -15,3 +15,7 @@ package-lock.json
 *.md
 docs
 .claude
+
+# a test-generated fixture: map-array-fuzz-struct-with-fixed-array-field.test.ts rewrites
+# this file from an inline constant on every run, so formatting it just causes churn.
+test/_gen4e2b_struct-with-fixed-array-field.jeth

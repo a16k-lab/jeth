@@ -1,14 +1,10 @@
 // scenario struct-with-fixed-array-field
-@struct
-class Rec {
-  id: u64;
-  data: Arr<u256, 2>;
-}
+@struct class Rec { id: u64; data: Arr<u256, 2>; }
 
 @contract
 class StructFixedArrField {
-  @state recs: mapping<u256, Rec[]>; // slot 0
-  @state sentinel: u256; // slot 1
+  @state recs: mapping<u256, Rec[]>;   // slot 0
+  @state sentinel: u256;               // slot 1
 
   // grow + populate: push a zero Rec, then write its fields (covers push + RMW)
   @external addRec(k: u256, id: u64, d0: u256, d1: u256): void {
@@ -18,27 +14,13 @@ class StructFixedArrField {
     this.recs[k][i].data[0n] = d0;
     this.recs[k][i].data[1n] = d1;
   }
-  @external pushEmpty(k: u256): void {
-    this.recs[k].push();
-  }
-  @external popRec(k: u256): void {
-    this.recs[k].pop();
-  }
+  @external pushEmpty(k: u256): void { this.recs[k].push(); }
+  @external popRec(k: u256): void { this.recs[k].pop(); }
 
-  @external setId(k: u256, i: u256, v: u64): void {
-    this.recs[k][i].id = v;
-  }
-  @external setData(k: u256, i: u256, j: u256, v: u256): void {
-    this.recs[k][i].data[j] = v;
-  }
+  @external setId(k: u256, i: u256, v: u64): void { this.recs[k][i].id = v; }
+  @external setData(k: u256, i: u256, j: u256, v: u256): void { this.recs[k][i].data[j] = v; }
 
-  @external @view recLen(k: u256): u256 {
-    return this.recs[k].length;
-  }
-  @external @view getId(k: u256, i: u256): u64 {
-    return this.recs[k][i].id;
-  }
-  @external @view getData(k: u256, i: u256, j: u256): u256 {
-    return this.recs[k][i].data[j];
-  }
+  @external @view recLen(k: u256): u256 { return this.recs[k].length; }
+  @external @view getId(k: u256, i: u256): u64 { return this.recs[k][i].id; }
+  @external @view getData(k: u256, i: u256, j: u256): u256 { return this.recs[k][i].data[j]; }
 }
