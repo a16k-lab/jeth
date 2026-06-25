@@ -290,9 +290,12 @@ describe('F3 adv: named arguments bind by NAME not position', () => {
 //    BOTH params; the default never shrinks the signature.
 // ---------------------------------------------------------------------------
 describe('F3 adv: a defaulted param does NOT leak into the ABI / selector', () => {
+  // solc-public g split into an @external wrapper (ABI/selector boundary, carries the default)
+  // plus an internal helper gI (also carries the default) that the internal caller uses.
   const J = `@contract class C {
-    @external @pure g(a: u256, b: u256 = 5n): u256 { return a + b; }
-    @external @pure useInternal(a: u256): u256 { return this.g(a); }
+    @pure gI(a: u256, b: u256 = 5n): u256 { return a + b; }
+    @external @pure g(a: u256, b: u256 = 5n): u256 { return this.gI(a, b); }
+    @external @pure useInternal(a: u256): u256 { return this.gI(a); }
   }`;
   const S = `// SPDX-License-Identifier: MIT
   pragma solidity ^0.8.20;

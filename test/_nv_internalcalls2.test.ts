@@ -45,13 +45,17 @@ const JETH = `@contract class C {
     return this.pass2((this.s = this.s + 1n), this.s) * 10n + this.s;
   }
 
-  // @external functions: callable externally AND by name internally
-  @external @pure pdbl(x: u256): u256 { return x * 2n; }
-  @external @pure padd(a: u256, b: u256): u256 { return a + b; }
-  @external @pure usePublic(a: u256, b: u256): u256 { return this.padd(this.pdbl(a), this.pdbl(b)); }
-  @external @pure usePublicBare(a: u256, b: u256): u256 { return padd(pdbl(a), pdbl(b)); }
-  // public recursive
-  @external @pure pfib(n: u256): u256 { if (n < 2n) { return n; } return this.pfib(n - 1n) + this.pfib(n - 2n); }
+  // solc-public split into @external wrapper + internal helper: callable externally
+  // (via the wrapper) AND by name internally (via the helper). solc public covers both.
+  @pure pdblI(x: u256): u256 { return x * 2n; }
+  @pure paddI(a: u256, b: u256): u256 { return a + b; }
+  @external @pure pdbl(x: u256): u256 { return this.pdblI(x); }
+  @external @pure padd(a: u256, b: u256): u256 { return this.paddI(a, b); }
+  @external @pure usePublic(a: u256, b: u256): u256 { return this.paddI(this.pdblI(a), this.pdblI(b)); }
+  @external @pure usePublicBare(a: u256, b: u256): u256 { return paddI(pdblI(a), pdblI(b)); }
+  // public recursive: internal helper recurses on itself; @external wrapper exposes it.
+  @pure pfibI(n: u256): u256 { if (n < 2n) { return n; } return this.pfibI(n - 1n) + this.pfibI(n - 2n); }
+  @external @pure pfib(n: u256): u256 { return this.pfibI(n); }
 
   // interleaved state mutation during recursion: each call writes then recurses
   accumDown(n: u256): u256 {
@@ -60,7 +64,7 @@ const JETH = `@contract class C {
     return this.accumDown(n - 1n);
   }
   @external runAccum(n: u256): u256 { this.s = 0n; return this.accumDown(n); }
-  @view getS(): u256 { return this.s; }
+  @external @view getS(): u256 { return this.s; }
 
   // a helper that both reads and writes, called in nested positions
   tick(): u256 { this.log = this.log + 1n; return this.log; }

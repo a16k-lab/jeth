@@ -34,64 +34,64 @@ class C {
   @state hits: mapping<address, u256>;
 
   // --- raw env reads ---
-  @view sender(): address { return msg.sender; }
-  @view origin(): address { return tx.origin; }
-  @view self(): address { return address(this); }
-  @view coinbase(): address { return block.coinbase; }
-  @view ts(): u256 { return block.timestamp; }
-  @view num(): u256 { return block.number; }
-  @view cid(): u256 { return block.chainid; }
-  @view fee(): u256 { return block.basefee; }
-  @view glimit(): u256 { return block.gaslimit; }
-  @view rand(): u256 { return block.prevrandao; }
-  @pure sig(): bytes4 { return msg.sig; }
-  @payable val(): u256 { return msg.value; }
+  @external @view sender(): address { return msg.sender; }
+  @external @view origin(): address { return tx.origin; }
+  @external @view self(): address { return address(this); }
+  @external @view coinbase(): address { return block.coinbase; }
+  @external @view ts(): u256 { return block.timestamp; }
+  @external @view num(): u256 { return block.number; }
+  @external @view cid(): u256 { return block.chainid; }
+  @external @view fee(): u256 { return block.basefee; }
+  @external @view glimit(): u256 { return block.gaslimit; }
+  @external @view rand(): u256 { return block.prevrandao; }
+  @external @pure sig(): bytes4 { return msg.sig; }
+  @external @payable val(): u256 { return msg.value; }
 
   // --- casts over env reads ---
-  @view senderU160(): u160 { return u160(msg.sender); }
-  @view senderBytes20(): bytes20 { return bytes20(msg.sender); }
-  @view selfU160(): u160 { return u160(address(this)); }
-  @view selfBytes20(): bytes20 { return bytes20(address(this)); }
-  @view originPayable(): address { return address(payable(tx.origin)); }
-  @view senderRoundTrip(): address { return address(u160(msg.sender)); }
-  @view senderB20RT(): address { return address(bytes20(msg.sender)); }
-  @pure sigAsU32(): u32 { return u32(msg.sig); }
-  @pure sigAsBytes4(): bytes4 { return bytes4(u32(msg.sig)); }
+  @external @view senderU160(): u160 { return u160(msg.sender); }
+  @external @view senderBytes20(): bytes20 { return bytes20(msg.sender); }
+  @external @view selfU160(): u160 { return u160(address(this)); }
+  @external @view selfBytes20(): bytes20 { return bytes20(address(this)); }
+  @external @view originPayable(): address { return address(payable(tx.origin)); }
+  @external @view senderRoundTrip(): address { return address(u160(msg.sender)); }
+  @external @view senderB20RT(): address { return address(bytes20(msg.sender)); }
+  @external @pure sigAsU32(): u32 { return u32(msg.sig); }
+  @external @pure sigAsBytes4(): bytes4 { return bytes4(u32(msg.sig)); }
 
   // --- arithmetic / comparisons over env (uses block.* which are u256) ---
-  @view tsPlusNum(): u256 { return block.timestamp + block.number; }
-  @view feeTimesGas(): u256 { return block.basefee * block.gaslimit; }
-  @view numMinusOne(): u256 { return block.number - 1n; }
-  @view randXorTs(): u256 { return block.prevrandao ^ block.timestamp; }
-  @view randShr(): u256 { return block.prevrandao >> 8n; }
-  @payable valPlus(): u256 { return msg.value + 1000n; }
-  @payable valDoubled(): u256 { return msg.value * 2n; }
-  @view senderEqOrigin(): bool { return msg.sender == tx.origin; }
-  @view senderNeSelf(): bool { return msg.sender != address(this); }
-  @view selfIsZero(): bool { return address(this) == address(0n); }
-  @view cidEq(): bool { return block.chainid == 1337n; }
+  @external @view tsPlusNum(): u256 { return block.timestamp + block.number; }
+  @external @view feeTimesGas(): u256 { return block.basefee * block.gaslimit; }
+  @external @view numMinusOne(): u256 { return block.number - 1n; }
+  @external @view randXorTs(): u256 { return block.prevrandao ^ block.timestamp; }
+  @external @view randShr(): u256 { return block.prevrandao >> 8n; }
+  @external @payable valPlus(): u256 { return msg.value + 1000n; }
+  @external @payable valDoubled(): u256 { return msg.value * 2n; }
+  @external @view senderEqOrigin(): bool { return msg.sender == tx.origin; }
+  @external @view senderNeSelf(): bool { return msg.sender != address(this); }
+  @external @view selfIsZero(): bool { return address(this) == address(0n); }
+  @external @view cidEq(): bool { return block.chainid == 1337n; }
 
   // --- value-conditioned control flow (require on msg.value) ---
-  @payable needsValue(): u256 { require(msg.value > 0n); return msg.value; }
-  @payable exactWei(): u256 { require(msg.value == 1n); return 42n; }
+  @external @payable needsValue(): u256 { require(msg.value > 0n); return msg.value; }
+  @external @payable exactWei(): u256 { require(msg.value == 1n); return 42n; }
 
   // --- env as mapping key / writes (state-changing) ---
-  bump(): u256 { this.hits[msg.sender] = this.hits[msg.sender] + 1n; return this.hits[msg.sender]; }
-  @view hitOf(a: address): u256 { return this.hits[a]; }
-  setOwner(): void { this.owner = msg.sender; }
-  @view getOwner(): address { return this.owner; }
-  @view isOwner(): bool { return msg.sender == this.owner; }
+  @external bump(): u256 { this.hits[msg.sender] = this.hits[msg.sender] + 1n; return this.hits[msg.sender]; }
+  @external @view hitOf(a: address): u256 { return this.hits[a]; }
+  @external setOwner(): void { this.owner = msg.sender; }
+  @external @view getOwner(): address { return this.owner; }
+  @external @view isOwner(): bool { return msg.sender == this.owner; }
 
   // --- bytes4 sig comparisons / returns of casts ---
-  @pure sigEqSelf(): bool { return msg.sig == msg.sig; }
+  @external @pure sigEqSelf(): bool { return msg.sig == msg.sig; }
   // sigIsSig() selector is 0xf7d6b9f1; compare msg.sig against that literal
-  @pure sigIsSig(): bool { return msg.sig == bytes4(u32(0xf7d6b9f1n)); }
-  @pure sigHi(): u256 { return u256(bytes32(msg.sig)); }
+  @external @pure sigIsSig(): bool { return msg.sig == bytes4(u32(0xf7d6b9f1n)); }
+  @external @pure sigHi(): u256 { return u256(bytes32(msg.sig)); }
   // chained address casts: address -> u160 -> bytes20 -> address round trip
-  @view selfChain(): address { return address(bytes20(u160(address(this)))); }
-  @view senderToB32(): bytes32 { return bytes32(u256(u160(msg.sender))); }
+  @external @view selfChain(): address { return address(bytes20(u160(address(this)))); }
+  @external @view senderToB32(): bytes32 { return bytes32(u256(u160(msg.sender))); }
   // mix env into a require comparison that can pass or fail by value
-  @payable gateValGtNum(): u256 { require(msg.value > block.number); return msg.value; }
+  @external @payable gateValGtNum(): u256 { require(msg.value > block.number); return msg.value; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
