@@ -542,11 +542,17 @@ and is never miscompiled.
   constructor rejects deploy-time value. `@immutable` value-type fields are assigned in the
   constructor and baked into the runtime code via `setimmutable`/`loadimmutable` - they consume NO
   storage slot (a constructor read sees the staged value, a runtime read is `loadimmutable`, and
-  reading one needs `@view` not `@pure`). PRE-ONLY user `@modifier`s (a single tail `_` placeholder,
-  i.e. a pre-condition guard like `require(cond); _;`, applied via `@name` / `@name(args)`) inline
-  their guard code before the body; multiple modifiers nest leftmost-outermost, the same modifier may
-  apply twice, arguments evaluate exactly once (a modifier param never shadows a same-named function
-  param in the body), their effects feed the purity fixpoint, and they compose with `@nonReentrant`.
+  reading one needs `@view` not `@pure`). User `@modifier`s (a single `_` placeholder, applied via
+  `@name` / `@name(args)`) inline their code around the body - both PRE-code (a guard like
+  `require(cond); _;`) and POST-code (after `_`). Post-code with an early `return` uses solc-identical
+  buffered-return semantics: the body's `return` runs the enclosing modifier post-code (inner-first,
+  from any depth incl. inside a body loop) before the value is encoded and returned once (the body is
+  lowered as a synthesized Yul function so `return` becomes `ret := v; leave`). Multiple modifiers nest
+  leftmost-outermost, the same modifier may apply twice, arguments evaluate exactly once (a modifier
+  param never shadows a same-named function param in the body), their effects feed the purity fixpoint,
+  and they compose with `@nonReentrant`. Post-code is scoped to value-type-param functions with a
+  void/value/bytes/string return (an aggregate/dynamic param, multi-value/aggregate return, or a
+  constructor with post-code is cleanly gated JETH323).
   A `@modifier` may also decorate the **constructor** (the canonical base-init guard, e.g.
   `@onlyValid constructor(...) { ... }`). The identifier `_` is reserved (the modifier placeholder)
   and cannot be a declared name (JETH034), matching solc.
@@ -583,10 +589,11 @@ Each of the following compiles to a clean compile-time error (verified), not a m
   function (JETH303), or a defaulted ctor param (JETH304); an `@immutable` that is inline-initialized
   (JETH311) or `@public` with an auto-generated getter (JETH312) - a non-value-type immutable
   (JETH310) and an immutable assigned outside the constructor (JETH313) are accept/reject parity
-  (solc rejects too); a `@modifier` with post-placeholder code or a conditional placeholder (JETH321),
-  more than one `_` (JETH320), a `return` (JETH324 = parity since solc rejects a value return / JETH325
-  for a bare `return`), an aggregate param (JETH322), on a multi-value-return function (JETH323), or
-  generic (JETH327). One known low-severity over-rejection: a constructor that *provably* overflows a
+  (solc rejects too); a `@modifier` whose `_` placeholder is inside a conditional/loop (JETH321 - the
+  0-or-N-times case; post-placeholder code in straight-line position IS supported), more than one `_`
+  (JETH320), a `return` (JETH324 = parity since solc rejects a value return / JETH325 for a bare
+  `return`), an aggregate param (JETH322), a generic modifier (JETH327), and (with POST-code) an
+  aggregate/dynamic-param or multi-value/aggregate-return function or a constructor (JETH323). One known low-severity over-rejection: a constructor that *provably* overflows a
   staged `@immutable` that is read at runtime is rejected (JETH901) where solc accepts and the deploy
   then reverts - solc's Yul optimizer strips the dead `setimmutable`, leaving an unassigned
   `loadimmutable`; the contract is non-functional (reverts at construction) in both compilers.
