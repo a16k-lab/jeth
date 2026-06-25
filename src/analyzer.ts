@@ -124,14 +124,19 @@ interface RawFunction {
   // overloaded (a generic specialization sets name=key=mangled). Unset => `name` (see fkey()).
 }
 
-// Phase 5: a user-defined @modifier (Solidity-style). Increment 1 supports a PRE-ONLY modifier:
-// a single `_;` placeholder in tail position (e.g. `require(cond); _;`), so the wrapped body is
-// just [pre-code, function body] - no post-placeholder code, hence no buffered-return machinery.
+// Phase 5: a user-defined @modifier (Solidity-style). A `_;` placeholder splits the body into PRE
+// code (runs before the wrapped function body) and POST code (runs after). A pre-only modifier (the
+// placeholder is the LAST statement) inlines as [pre, body] with no buffered-return machinery; a
+// modifier with POST code needs the buffered-return path (see FunctionIR.modifierWrap): the wrapped
+// body is lowered as a synthesized Yul function so a `return` in it runs the enclosing post-code
+// before the value is ABI-encoded once. EXACTLY ONE placeholder, at TOP LEVEL of the body (never
+// inside an if/for/while - that 0-or-N-times shape is gated JETH321).
 interface RawModifier {
   name: string;
   node: ts.MethodDeclaration;
   params: { name: string; type: JethType }[];
   preStmts: ts.Statement[]; // the statements before the placeholder (the pre-condition guard)
+  postStmts: ts.Statement[]; // the statements after the placeholder (run after the wrapped body)
 }
 
 export class Analyzer {
@@ -2241,7 +2246,12 @@ export class Analyzer {
     // still active so a modifier ARGUMENT can reference the function's parameters (its effects also
     // accumulate into this function's effect flags, feeding the purity fixpoint). The modifier BODY
     // is checked in a fresh scope (it sees only its own params + state, not the function's locals).
-    const finalBody = rf.modifiers && rf.modifiers.length ? this.wrapModifiers(rf, body) : body;
+    // When NO applied modifier has post-code, `wrap.body` is the inlined [pre, body] (pre-only path,
+    // modifierWrap undefined); when at least one has post-code, `wrap.body` stays the RAW wrapped body
+    // Z (emitted as userfn_<key>) and `wrap.modifierWrap` is the nested pre/post structure the dispatch
+    // lowers (see FunctionIR.modifierWrap).
+    const wrap =
+      rf.modifiers && rf.modifiers.length ? this.wrapModifiers(rf, body) : { body, modifierWrap: undefined };
     this.popScope();
 
     // Mutability enforcement (directive §2.7 STATICCALL view semantics) is performed AFTER
@@ -2263,20 +2273,138 @@ export class Analyzer {
       returnTypes: rf.returnTypes,
       signature,
       selector,
-      body: finalBody,
+      body: wrap.body,
       nonReentrant: rf.nonReentrant,
+      modifierWrap: wrap.modifierWrap,
+      // a function whose modifiers carry post-code is lowered via its synthesized body function
+      // userfn_<key> (the dispatch calls it, then runs the post-code + encodes once), so force it.
+      internallyCalled: wrap.modifierWrap ? true : undefined,
     };
   }
 
-  /** Phase 5: fold applied @modifiers around the function body (pre-only: each modifier contributes
-   *  pre-condition code that runs before the body). The leftmost decorator is OUTERMOST, so wrap
-   *  innermost-first (reverse source order). */
-  private wrapModifiers(rf: RawFunction, bodyIR: Stmt[]): Stmt[] {
-    // JETH modifiers are PRE-ONLY (the placeholder is in tail position), so the guard runs before the
-    // body and never touches the return values - a multi-value-return function is fine.
-    let inner = bodyIR;
-    for (const app of [...rf.modifiers!].reverse()) inner = this.inlineModifier(app, inner);
-    return inner;
+  /** Phase 5: fold applied @modifiers around the function body. The leftmost decorator is OUTERMOST,
+   *  so wrap innermost-first (reverse source order).
+   *
+   *  PRE-ONLY path (no applied modifier has post-code): the guard runs before the body and never
+   *  touches the return values - a multi-value / aggregate-return function is fine. Returns the
+   *  inlined [pre, body] (modifierWrap undefined).
+   *
+   *  POST path (>=1 applied modifier has post-code): a `return` in the body must run the enclosing
+   *  post-code before the value is ABI-encoded once. The body is kept RAW and lowered as a synthesized
+   *  Yul function (userfn_<key>); modifierWrap is the nested pre/post structure the dispatch lowers,
+   *  with a single {kind:'modifierBody'} marker (the userfn call) at its center. */
+  private wrapModifiers(rf: RawFunction, bodyIR: Stmt[]): { body: Stmt[]; modifierWrap?: Stmt[] } {
+    const apps = rf.modifiers!;
+    const anyPost = apps.some((app) => {
+      const m = this.modifiersByName.get(app.name);
+      return m !== undefined && m.postStmts.length > 0;
+    });
+    if (!anyPost) {
+      // PRE-ONLY: the guard runs before the body and never touches the return values.
+      let inner = bodyIR;
+      for (const app of [...apps].reverse()) inner = this.inlineModifier(app, inner);
+      return { body: inner };
+    }
+    // POST path. The buffered-return machinery lives in the DISPATCH case (it calls the synthesized
+    // body function userfn_<key>, runs the post-code, then ABI-encodes once); an INTERNAL function has
+    // no dispatch case, so its post-code would never run. Gate it cleanly (solc accepts a modifier on
+    // an internal function).
+    if (rf.visibility !== 'external') {
+      this.diags.error(
+        rf.node,
+        'JETH323',
+        `a @modifier with post-placeholder code on a non-@external function is not supported yet (the buffered-return path runs in the external dispatch entry, which an internal function does not have)`,
+      );
+      return { body: bodyIR };
+    }
+    // Gate shapes that cannot be passed to / returned from the synthesized userfn (the buffered-return
+    // machinery supports VALUE-TYPE params and a void or single value/bytes/string return). An
+    // aggregate/dynamic param or a multi-value/aggregate return is a clean over-rejection.
+    const aggParam = rf.params.find((p) => !isStaticValueType(p.type));
+    if (aggParam) {
+      this.diags.error(
+        rf.node,
+        'JETH323',
+        `a @modifier with post-placeholder code on a function with an aggregate/dynamic parameter ('${aggParam.name}': ${displayName(aggParam.type)}) is not supported yet (the buffered-return path passes only value-type parameters to the wrapped body)`,
+      );
+      return { body: bodyIR };
+    }
+    if (rf.returnTypes && rf.returnTypes.length >= 2) {
+      this.diags.error(
+        rf.node,
+        'JETH323',
+        `a @modifier with post-placeholder code on a function with a multi-value return is not supported yet (the buffered-return path encodes a single return value)`,
+      );
+      return { body: bodyIR };
+    }
+    // The buffered-return encoder handles a void / value-type / bytes / string single return. A single
+    // STRUCT or fixed/dynamic ARRAY return is gated: passing it back through the buffered `ret` reg +
+    // the aggregate return encoders is out of scope (a clean over-rejection - solc accepts it).
+    if (rf.returnType.kind === 'struct' || rf.returnType.kind === 'array') {
+      this.diags.error(
+        rf.node,
+        'JETH323',
+        `a @modifier with post-placeholder code on a function returning an aggregate (${displayName(rf.returnType)}) is not supported yet (the buffered-return path encodes a void/value/bytes/string return)`,
+      );
+      return { body: bodyIR };
+    }
+    // Build the nested wrap innermost-first: the innermost modifier's `inner` is the placeholder
+    // marker (the userfn call); each outer modifier wraps the inner modifier's wrap.
+    let inner: Stmt[] = [{ kind: 'modifierBody' }];
+    for (const app of [...apps].reverse()) inner = this.buildModifierWrap(app, inner);
+    return { body: bodyIR, modifierWrap: inner };
+  }
+
+  /** Phase 5 (POST path): build one modifier's wrap around `inner` (the inner modifier's wrap, or the
+   *  {modifierBody} marker for the innermost). The modifier's params are scoped to the WHOLE block so
+   *  they are visible to both pre and post code; pre and post are checked in the SAME fresh modifier
+   *  scope (params + state only). Result: [{block: [argDecls, ...pre, ...inner, ...post]}]. Here `inner`
+   *  is a CALL marker (not the inlined body), so the param-shadow concern that forces pre-only to keep
+   *  the body outside the block does not apply. */
+  private buildModifierWrap(
+    app: { name: string; argNodes: ts.Expression[]; site: ts.Node },
+    inner: Stmt[],
+  ): Stmt[] {
+    const mod = this.modifiersByName.get(app.name);
+    if (!mod) {
+      this.diags.error(
+        app.site,
+        'JETH329',
+        `unknown modifier '@${app.name}' (no @modifier with that name is declared)`,
+      );
+      return inner;
+    }
+    if (app.argNodes.length !== mod.params.length) {
+      this.diags.error(
+        app.site,
+        'JETH329',
+        `modifier '@${mod.name}' expects ${mod.params.length} argument(s), but got ${app.argNodes.length}`,
+      );
+      return inner;
+    }
+    // 1. Materialize each arg ONCE (in the function param scope, so a same-named function param is
+    //    resolved before the modifier param name is bound) - identical to the pre-only path.
+    const argDecls: Stmt[] = [];
+    for (let i = 0; i < mod.params.length; i++) {
+      const a = this.checkExpr(app.argNodes[i]!, mod.params[i]!.type);
+      if (!a) continue;
+      const coerced = this.coerce(a, mod.params[i]!.type, app.argNodes[i]!);
+      argDecls.push({ kind: 'localDecl', name: mod.params[i]!.name, type: mod.params[i]!.type, init: coerced });
+    }
+    // 2. Check pre AND post in the SAME fresh scope (only the modifier's params + contract state).
+    const savedScopes = this.scopes;
+    this.scopes = [new Map()];
+    this.pushScope();
+    for (const p of mod.params) this.declareLocal(p.name, p.type);
+    const pre: Stmt[] = [];
+    for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
+    const post: Stmt[] = [];
+    for (const s of mod.postStmts) this.checkStatement(s, VOID, post);
+    this.popScope();
+    this.scopes = savedScopes;
+    // 3. Wrap [argDecls, pre, inner, post] in a block so the modifier's params are scoped to the whole
+    //    wrap (visible to pre AND post). `inner` is a call marker, not the inlined body, so no shadow.
+    return [{ kind: 'block', body: [...argDecls, ...pre, ...inner, ...post] }];
   }
 
   /** Inline one PRE-ONLY modifier application around `inner`: materialize its args (in the function
@@ -2297,6 +2425,19 @@ export class Analyzer {
         app.site,
         'JETH329',
         `modifier '@${mod.name}' expects ${mod.params.length} argument(s), but got ${app.argNodes.length}`,
+      );
+      return inner;
+    }
+    // A modifier with POST-placeholder code reaches this inliner ONLY on a CONSTRUCTOR (a function
+    // routes any-post through buildModifierWrap). The constructor body runs in creation code with no
+    // synthesized body function, so the buffered-return machinery is unavailable: gate it cleanly. (A
+    // ctor rarely early-returns, but inlining [pre, body, post] would drop the post on a `return;` -
+    // a miscompile - so we reject rather than risk it.)
+    if (mod.postStmts.length > 0) {
+      this.diags.error(
+        app.site,
+        'JETH323',
+        `a @modifier with post-placeholder code applied to a constructor is not supported yet (the buffered-return path requires a function body, not creation code)`,
       );
       return inner;
     }
@@ -2402,19 +2543,23 @@ export class Analyzer {
       );
       return;
     }
-    // PRE-ONLY: the placeholder must be the LAST statement (no post-placeholder code, not inside a
-    // conditional/loop). Otherwise gate (a later increment buffers the return for post-code).
-    const last = stmts[stmts.length - 1];
-    if (!last || !this.isPlaceholderStmt(last)) {
+    // The placeholder must be a TOP-LEVEL statement of the body (pre code before it, post code after).
+    // A placeholder NESTED in a conditional/loop is the genuinely-hard 0-or-N-times shape: gate it.
+    const topIdx = stmts.findIndex((s) => this.isPlaceholderStmt(s));
+    if (topIdx < 0) {
       this.diags.error(
         placeholders[0]!,
         'JETH321',
-        `a @modifier's '_' placeholder must be the LAST statement of the body (pre-condition guards only); post-placeholder code or a placeholder inside a conditional/loop is not supported yet`,
+        `a @modifier's '_' placeholder must be a TOP-LEVEL statement of the body (not inside an if/for/while - that conditionally runs the body 0 or N times, which is not supported yet)`,
       );
       return;
     }
-    const preStmts = stmts.slice(0, stmts.length - 1);
-    const returns = this.findReturns(preStmts);
+    const preStmts = stmts.slice(0, topIdx);
+    const postStmts = stmts.slice(topIdx + 1);
+    // A `return` ANYWHERE in the modifier body (pre OR post) is rejected: a value-return is
+    // meaningless (the modifier has no return type) and a bare `return;` would conditionally skip
+    // the wrapped body / the rest of the modifier (the early-out shape, not supported yet).
+    const returns = this.findReturns([...preStmts, ...postStmts]);
     for (const r of returns) {
       if (r.expression) this.diags.error(r, 'JETH324', `a @modifier cannot 'return' a value`);
       else
@@ -2425,7 +2570,7 @@ export class Analyzer {
         );
     }
     if (returns.length > 0) return; // don't register a modifier with a return (avoids a cascade on inlining)
-    this.modifiersByName.set(name, { name, node: member, params, preStmts });
+    this.modifiersByName.set(name, { name, node: member, params, preStmts, postStmts });
   }
 
   private isPlaceholderStmt(s: ts.Statement): boolean {

@@ -346,6 +346,11 @@ export type DestructureSource =
 
 export type Stmt =
   | { kind: 'return'; value?: Expr }
+  // Phase 5 (full modifiers): the `_;` placeholder marker inside a function's `modifierWrap`. It
+  // lowers (in the dispatch case only) to a call of the synthesized body function userfn_<key> with
+  // the decoded params, capturing the result into the dispatch's `ret` register(s). Never appears in
+  // a normal body or a constructor.
+  | { kind: 'modifierBody' }
   | { kind: 'returnTuple'; values: Expr[]; types: JethType[] } // return [a, b, ...] (multi-value)
   | { kind: 'localDecl'; name: string; type: JethType; init?: Expr }
   | { kind: 'assign'; target: LValue; value: Expr } // plain `=` (value already folds compound ops)
@@ -471,6 +476,12 @@ export interface FunctionIR {
   body: Stmt[];
   internallyCalled?: boolean; // a target of at least one internal call -> emit a Yul function def
   nonReentrant?: boolean; // F4: wrap the external entry in a transient-storage (TSTORE/TLOAD) mutex
+  // Phase 5 (full modifiers): set when at least one applied @modifier has POST-placeholder code. The
+  // function `body` stays the RAW wrapped body Z (emitted as userfn_<key>, forced internallyCalled);
+  // the dispatch case lowers THIS nested pre/post structure instead of the body, where a single
+  // `{kind:'modifierBody'}` marker calls userfn_<key>(<decoded params>) and captures its result, then
+  // the dispatch ABI-encodes that result ONCE (so a `return` in Z runs the enclosing post-code first).
+  modifierWrap?: Stmt[];
 }
 
 /** A constructor (Phase 5): runs once in creation code. Not callable, not in the dispatcher;

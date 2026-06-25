@@ -454,12 +454,47 @@ ${indent(runtime, 6)}
       cursorWords += paramHeadWords(p.type);
     }
 
+    const bodyLines: string[] = [];
+    if (fn.modifierWrap) {
+      // Phase 5 (FULL MODIFIERS): at least one applied modifier has post-placeholder code. The wrapped
+      // body Z is the synthesized body function userfn_<key> (forced internallyCalled); the dispatch
+      // lowers modifierWrap (the nested pre/post block structure) where a single {modifierBody} marker
+      // calls userfn_<key>(<decoded value params>) and captures its single result into `ret`. A
+      // `return` inside Z sets userfn's ret and `leave`s, so it runs no further BODY code but returns
+      // here, letting the enclosing post-code run BEFORE the value is ABI-encoded ONCE. The gate in the
+      // analyzer (wrapModifiers) guarantees value-type params + a void/single value/bytes/string return.
+      const args = fn.params.map((p) => this.ctxLookup(ctx, p.name)); // decoded value-param Yul names
+      const isVoid = fn.returnType.kind === 'void';
+      const ret = isVoid ? null : this.fresh();
+      if (ret) bodyLines.push(`let ${ret} := 0`);
+      ctx.modifierDispatch = { userFn: this.userFnName(fn.key), args, ret };
+      for (const s of fn.modifierWrap) for (const l of this.lowerStmt(s, ctx)) bodyLines.push(l);
+      // Encode the buffered return value ONCE (reuse the full single-value/bytes/string return encoder
+      // by lowering a synthetic `return <rawReg ret>`). Void -> the empty return.
+      if (ret) {
+        for (const l of this.lowerStmt({ kind: 'return', value: { kind: 'rawReg', type: fn.returnType, reg: ret } }, ctx))
+          bodyLines.push(l);
+      } else {
+        bodyLines.push('return(0, 0)');
+      }
+      if (fn.nonReentrant) {
+        out.push(`if tload(${REENTRANCY_TSLOT}) { mstore(0, ${REENTRANCY_ERROR_WORD}) revert(0, 4) }`);
+        out.push(`tstore(${REENTRANCY_TSLOT}, 1)`);
+        for (const l of bodyLines) {
+          if (l.trimStart().startsWith('return(')) out.push(`tstore(${REENTRANCY_TSLOT}, 0)`);
+          out.push(l);
+        }
+      } else {
+        out.push(...bodyLines);
+      }
+      return out;
+    }
+
     const last = fn.body[fn.body.length - 1];
     const terminates =
       last !== undefined && (last.kind === 'return' || last.kind === 'revert' || last.kind === 'returnTuple');
     // Lower the body + fall-through epilogue into a local buffer; a @nonReentrant function then
     // brackets it with the transient mutex (resetting before every normal return).
-    const bodyLines: string[] = [];
     for (const s of fn.body) {
       for (const l of this.lowerStmt(s, ctx)) bodyLines.push(l);
     }
@@ -1140,6 +1175,17 @@ ${indent(runtime, 6)}
         out.push('{');
         for (const l of this.lowerBlock(s.body, ctx)) out.push('  ' + l);
         out.push('}');
+        break;
+      }
+      case 'modifierBody': {
+        // Phase 5 (full modifiers): the `_;` placeholder inside a dispatch-lowered modifierWrap. Call
+        // the synthesized body function userfn_<key>(<decoded params>); a `return` inside it sets the
+        // userfn's ret var and leaves (running no more body code) but returns control here so the
+        // ENCLOSING post-code still runs. Capture the single result into `ret` (void -> a bare call).
+        const md = ctx.modifierDispatch;
+        if (!md) throw new UnsupportedError('modifierBody marker lowered outside a modifier dispatch');
+        const call = `${md.userFn}(${md.args.join(', ')})`;
+        out.push(md.ret === null ? call : `${md.ret} := ${call}`);
         break;
       }
       case 'if': {
@@ -5637,6 +5683,10 @@ ${indent(runtime, 6)}
 
   private lowerDynamic(e: Expr, ctx: LowerCtx, out: string[]): DynRef {
     switch (e.kind) {
+      case 'rawReg':
+        // a pre-computed register holding a [len][data] MEMORY pointer (e.g. the buffered modifier
+        // return reg, set from userfn_<key> which returns a bytes/string aggregate as a memory ptr).
+        return { src: 'memory', ptr: e.reg };
       case 'cast':
         // bytes(string) / string(bytes): a no-op reinterpret of the same [len][data] dynamic value.
         return this.lowerDynamic(e.operand, ctx, out);
@@ -7241,6 +7291,10 @@ interface LowerCtx {
   cdParamHead: Map<string, { head: number; type: JethType }>; // calldata head byte of EVERY param (for whole-param echo via the recursive encoder)
   fnMode?: { retVar: string | null; retVars?: string[] }; // set when lowering an INTERNAL function body: `return` -> retVar:=v; leave (retVar null = void). retVars set for a multi-value return.
   immStaged?: Map<string, string>; // Phase 5: @immutable name -> its staged-shadow Yul var (constructor body only)
+  // Phase 5 (full modifiers): set ONLY while lowering a function's modifierWrap in its dispatch case.
+  // The {modifierBody} marker lowers to a call of the synthesized body function (userfn) with the
+  // decoded params, capturing the single result into `ret` (null for a void function -> a bare call).
+  modifierDispatch?: { userFn: string; args: string[]; ret: string | null };
 }
 
 // A lowered array reference, by source location.
