@@ -51,17 +51,22 @@ class Counter {
 
 ## Status
 
-Everything through Phase 4 is complete and verified on a live EVM with differential
+Everything through Phase 5 is complete and verified on a live EVM with differential
 tests against real Solidity (`solc-js`): Phase 0 (frontend + validator), Phase 1
 (Counter end-to-end), Phase 2 (control flow, `require`/`revert`/`Error(string)`/custom
 errors, events), Phase 3 (mappings with keccak slot derivation, `msg.*`/`block.*`/`tx.*`
-globals, `payable`, `address(this)`), and Phase 4 (the full ABI-v2 surface: arrays,
+globals, `payable`, `address(this)`), Phase 4 (the full ABI-v2 surface: arrays,
 structs, `bytes`/`string`, dynamic head/tail encode/decode with unbounded nesting,
-storage/calldata composites, memory locals, internal calls, tuple destructuring, `delete`,
-events/errors). Returndata, raw storage slots (including keccak-derived mapping slots),
-and event logs are asserted byte-identical to Solidity across **1500+ differential tests**
-plus repeated adversarial fuzzing (zero known miscompiles). The directive's `Vault`
-contract runs end-to-end.
+storage/calldata composites, memory locals, internal calls + overloading, tuple
+destructuring, `delete`, events/errors), and Phase 5 (functions in depth: constructors
+with ABI-encoded args, `@immutable` fields baked into code with no storage slot, and
+user `@modifier`s with pre/post code + solc-identical buffered return). Phase 6 is in
+progress (external low-level calls `addr.call`/`tryCall`/`staticcall`, `abi.decode`,
+typed interface calls `IFoo(addr).bar(x)`, `try`/`catch`, `new Array<T>(n)`,
+`addr.code`/`codehash`). Returndata, raw storage slots (including keccak-derived mapping
+slots), event logs, and revert data are asserted byte-identical to Solidity across
+**1900+ differential tests** plus repeated adversarial fuzzing (zero known miscompiles).
+The directive's `Vault` contract runs end-to-end.
 
 On top of Phase 4, JETH ships **enums** (Solidity-exact: ABI `uint8`, 1-byte storage,
 `Panic(0x21)` on an out-of-range conversion) plus six **distinctive features** that go
@@ -75,10 +80,12 @@ adversarially audited:
 - **Exhaustive `switch`** over enums/value types (no implicit fall-through, exhaustiveness checked)
 - **Generics** `f<T>(...)` (compile-time monomorphization, internal-only)
 
-plus an ergonomic **decorator-inference** layer (`@read`, `@hidden`, inferred visibility). See
+plus a `@read` **mutability-inference** helper (infers `@pure` vs `@view`) and a deliberately minimal
+visibility surface (`@external` exposes a function; everything else is internal). See
 [docs/distinctive-features.md](docs/distinctive-features.md) for these and [SUPPORTED.md](SUPPORTED.md)
-for the full Solidity-parity matrix. Phase 5 (constructors with arguments, modifiers, immutables)
-is the next milestone.
+for the full Solidity-parity matrix. Remaining Phase 6 work: inheritance, libraries (`using for` /
+`DELEGATECALL`), `ecrecover` + precompiles, `receive`/`fallback`, function types, `bytes`/`string.concat`,
+calldata slicing, and source maps / CLI polish.
 
 ## Layout
 

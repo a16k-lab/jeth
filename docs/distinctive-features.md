@@ -11,13 +11,12 @@ matrix lives in [`../SUPPORTED.md`](../SUPPORTED.md). This file records the thin
 
 ## 1. Decorator inference (JETH-only ergonomics)
 
-Solidity makes you spell out a function's visibility and mutability. JETH keeps all of those
-explicit decorators (and validates them identically), but adds a compile-time **inference**
-layer so devs don't have to think about the distinctions when they don't want to. Every
-inferred decorator resolves to a concrete visibility + mutability **before the ABI is emitted**,
-so the generated ABI is always the true one. (Verified: an inferred-decorator contract emits a
-**byte-identical ABI** to the same contract written with explicit decorators, and is
-byte-identical to solc at runtime.)
+Solidity makes you spell out every function's visibility and mutability. JETH simplifies the
+visibility surface to a single `@external` (everything else is internal - see below) and adds a
+compile-time mutability **inference** so devs don't have to choose `@pure` vs `@view`. The inferred
+`@read` resolves to a concrete mutability **before the ABI is emitted**, so the generated ABI is
+always the true one. (Verified: a `@read` contract emits a **byte-identical ABI** to the same
+contract written with explicit `@view`/`@pure`, and is byte-identical to solc at runtime.)
 
 ### `@read`: infer `@pure` vs `@view`
 
@@ -41,38 +40,27 @@ state change) directly or transitively is rejected (`JETH056`). `@read` combined
 explicit `@view`/`@pure`/`@payable` is a conflict (`JETH052`). Visibility and mutability are
 orthogonal, so `@external @read` etc. are fine.
 
-### No visibility decorator: infer `@external` vs `@public`
+### Visibility: `@external` exposes, everything else is internal
 
-Omit the visibility decorator entirely and the compiler resolves:
-
-- **`@public`** if the function is ever called internally (`f()` / `this.f()`), since only
-  public (or internal/private) functions are callable from inside the contract;
-- **`@external`** otherwise (the more gas-efficient choice for call-from-outside-only).
-
-```ts
-@contract class C {
-  helper(): u256 { return 7n; }              // called below -> @public
-  caller(): u256 { return this.helper() + 1n; } // never called internally -> @external
-  onlyOut(): u256 { return 42n; }            // never called internally -> @external
-}
-```
-
-`@public` and `@external` are identical in the ABI and produce identical observable behavior,
-so this never changes the contract's interface, only the internal codegen.
-
-### `@hidden`: infer `@internal`
-
-Mark a not-exposed helper `@hidden` and it resolves to `@internal` (excluded from the ABI; you
-can still call it internally). Until inheritance lands (Phase 6) `internal` and `private` are
-codegen- and ABI-identical, so `internal` is the forward-compatible pick. `@hidden` combined
-with an explicit visibility is a conflict (`JETH052`).
+JETH has exactly **one** visibility decorator, `@external`: it places a function in the ABI and the
+dispatcher. A function with **no** visibility decorator is **internal** - callable by name (`f()` /
+`this.f()`), absent from the ABI, and not reachable from outside. A function is therefore either
+externally exposed (`@external`, and NOT callable internally - that would be a message call) or
+internal (callable by name) - never both. This keeps the surface minimal and the call-vs-message-call
+boundary explicit, a deliberate safer-than-Solidity subset.
 
 ```ts
 @contract class C {
   @state x: u256;
-  @hidden bump(): void { this.x = this.x + 1n; }   // -> @internal, not in the ABI
+  helper(): u256 { return this.x; }                // no @external -> internal, not in the ABI
+  @external get(): u256 { return this.helper(); }   // @external -> in the ABI; calls the internal helper
 }
 ```
+
+`@public`, `@private`, `@internal`, and `@hidden` are rejected (`JETH054`); the compiler decides
+internal-vs-private itself (codegen-identical until inheritance lands). Calling an `@external` function
+internally is rejected (`JETH240`): expose an `@external` entry and have any internal caller go through
+a shared internal helper instead.
 
 ### Mixing manual + inferred
 

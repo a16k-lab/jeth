@@ -556,8 +556,14 @@ and is never miscompiled.
   A `@modifier` may also decorate the **constructor** (the canonical base-init guard, e.g.
   `@onlyValid constructor(...) { ... }`). The identifier `_` is reserved (the modifier placeholder)
   and cannot be a declared name (JETH034), matching solc.
-- Phase 6+: external calls, `address.balance`/`.call`/`.transfer`, `new` contract, inheritance,
-  libraries, interfaces, abstract contracts, receive/fallback.
+- Phase 6 (IN PROGRESS, each byte-identical to solc): external low-level calls
+  (`addr.call`/`tryCall`/`staticcall`/`code`/`codehash`/`revertWith`), `abi.decode`(+`<bytes>.decode`
+  + a `decode:` call option), typed interface calls `IFoo(addr).bar(x)`, `try`/`catch`,
+  `new Array<T>(n)`. STILL TO DO: inheritance (`is`/`virtual`/`override`/`super` + base ctors),
+  libraries (`using for` / `DELEGATECALL`), `ecrecover` + remaining precompiles, `receive`/`fallback`,
+  function types, `bytes`/`string.concat`, calldata slicing, `new` contract / CREATE2, and source
+  maps / CLI polish. (`address.transfer`/`.send` are deliberately omitted - the safe pattern is CEI +
+  `@nonReentrant` over a full-gas `addr.call`.)
 
 ### Still gated (the complete list of what is rejected with a diagnostic, never miscompiled)
 
@@ -597,8 +603,11 @@ Each of the following compiles to a clean compile-time error (verified), not a m
   staged `@immutable` that is read at runtime is rejected (JETH901) where solc accepts and the deploy
   then reverts - solc's Yul optimizer strips the dead `setimmutable`, leaving an unassigned
   `loadimmutable`; the contract is non-functional (reverts at construction) in both compilers.
-- **Phase 6+** (external/message calls, `address.balance`/`.call`/`.transfer`, `new` contract,
-  inheritance, libraries, interfaces, abstract contracts, receive/fallback).
+- **Phase 6 remaining** (external low-level/message calls, `abi.decode`, interface calls, `try`/`catch`
+  and `new Array<T>(n)` are DONE): inheritance, libraries (`using for`/`DELEGATECALL`), abstract
+  contracts, `ecrecover` + remaining precompiles, `receive`/`fallback`, function types,
+  `bytes`/`string.concat`, calldata slicing, `new` contract / CREATE2, `address.transfer`/`.send`
+  (deliberately omitted), source maps / CLI polish.
 
 ## Permanently rejected (no on-chain meaning)
 
