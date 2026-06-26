@@ -11,11 +11,13 @@
 // returning zero. KZG cannot be executed here (no trusted setup is loaded), so it is asserted at the
 // accept/codegen level only.
 import { describe, it, expect } from 'vitest';
-import { bytesToHex } from '@ethereumjs/util';
+import { bytesToHex, hexToBytes } from '@ethereumjs/util';
+import { sha256 } from 'ethereum-cryptography/sha256.js';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
+import { enableKzg, KZG_INFINITY } from './_kzg.js';
 
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => functionSelector(s);
@@ -147,17 +149,86 @@ describe('blake2f (0x09)', () => {
 });
 
 describe('pointEvaluation / KZG (0x0a)', () => {
-  // The test EVM has no KZG trusted setup loaded, so 0x0a cannot run here. Assert the surface compiles
-  // (the 192-byte input layout vh|z|y|commitment(48)|proof(48) and the [fe, modulus] destructure) and
-  // that misuse is rejected. Runtime byte-identity is covered by the codegen matching the EIP-4844 layout.
-  it('accepts the destructure form', () => {
+  // Run against a harness with the mainnet KZG trusted setup loaded (see _kzg.ts). JETH returns the two
+  // output words [fe, modulus]; the solc reference does the same staticcall(0x0a) and returns them, so a
+  // success or a revert is diffed byte-for-byte. The valid case uses the zero-polynomial / infinity
+  // vector (a real KZG proof, verified by the library the precompile uses).
+  const J = `@contract class C { @external @view pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): [u256, u256] { const [fe, modu] = pointEvaluation(vh, z, y, c, p); return [fe, modu]; } }`;
+  const S = `contract C { function pe(bytes32 vh, bytes32 z, bytes32 y, bytes calldata c, bytes calldata p) external view returns(uint256,uint256){ bytes memory input=abi.encodePacked(vh,z,y,c,p); uint256[2] memory o; assembly { if iszero(staticcall(gas(),0x0a,add(input,32),192,o,0x40)) { revert(0,0) } } return (o[0],o[1]); } }`;
+  const psel = sel('pe(bytes32,bytes32,bytes32,bytes,bytes)');
+  const ZERO32 = W(0n);
+  // versioned hash = 0x01 || sha256(commitment)[1:]
+  const versionedHash = (commitment: string) =>
+    '01' + bytesToHex(sha256(hexToBytes(`0x${commitment}`))).slice(4);
+  // pad a 48-byte hex blob to two 32-byte words (64 bytes)
+  const pad48 = (hex48: string) => hex48 + '00'.repeat(16);
+  function calldata(vh: string, z: string, y: string, commitment: string, proof: string): string {
+    const head = vh + z + y + W(0xa0n) + W(0x100n); // 5 words; offC=0xa0, offP=0x100
+    const tail = W(BigInt(commitment.length / 2)) + pad48(commitment) + W(BigInt(proof.length / 2)) + pad48(proof);
+    return psel + head + tail;
+  }
+  async function diffKzg(cd: string) {
+    const j = await enableKzg(await Harness.create());
+    const s = await enableKzg(await Harness.create());
+    const ja = await j.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const sa = await s.deploy(compileSolidity(SPDX + S, 'C').creation);
+    const rj = await j.call(ja, '0x' + cd);
+    const rs = await s.call(sa, '0x' + cd);
+    expect(rj.success).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex);
+    return rj;
+  }
+
+  it('valid proof -> (FIELD_ELEMENTS_PER_BLOB, BLS_MODULUS), byte-identical to solc', async () => {
+    const vh = versionedHash(KZG_INFINITY);
+    const rj = await diffKzg(calldata(vh, ZERO32, ZERO32, KZG_INFINITY, KZG_INFINITY));
+    expect(rj.success).toBe(true);
+    // FIELD_ELEMENTS_PER_BLOB = 4096, BLS_MODULUS
+    const BLS_MODULUS = 52435875175126190479447740508185965837690552500527637822603658699938581184513n;
+    expect(rj.returnHex).toBe('0x' + W(4096n) + W(BLS_MODULUS));
+  });
+  it('valid proof at a non-zero z', async () => {
+    const vh = versionedHash(KZG_INFINITY);
+    const z7 = W(7n);
+    const rj = await diffKzg(calldata(vh, z7, ZERO32, KZG_INFINITY, KZG_INFINITY));
+    expect(rj.success).toBe(true);
+  });
+  it('malformed proof -> revert (both)', async () => {
+    const vh = versionedHash(KZG_INFINITY);
+    const badProof = 'c0' + '00'.repeat(46) + '01'; // an invalid infinity encoding (nonzero tail)
+    const rj = await diffKzg(calldata(vh, ZERO32, ZERO32, KZG_INFINITY, badProof));
+    expect(rj.success).toBe(false);
+  });
+  it('wrong versioned hash -> revert before verification (both)', async () => {
+    const rj = await diffKzg(calldata(ZERO32, ZERO32, ZERO32, KZG_INFINITY, KZG_INFINITY));
+    expect(rj.success).toBe(false);
+  });
+  it('non-canonical z (>= BLS_MODULUS) -> revert (both)', async () => {
+    // a field element at/above the modulus is rejected by the precompile; JETH passes z through verbatim,
+    // so the revert must match solc.
+    const BLS_MODULUS = 52435875175126190479447740508185965837690552500527637822603658699938581184513n;
+    const vh = versionedHash(KZG_INFINITY);
+    const rj = await diffKzg(calldata(vh, W(BLS_MODULUS), ZERO32, KZG_INFINITY, KZG_INFINITY));
+    expect(rj.success).toBe(false);
+  });
+  it('commitment length != 48 -> JETH safety revert', async () => {
+    // the typed-input safety gate (solc's raw staticcall has no such check); assert JETH reverts.
+    const vh = versionedHash(KZG_INFINITY);
+    const j = await enableKzg(await Harness.create());
+    const ja = await j.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const short = 'c0' + '00'.repeat(46); // 47 bytes
+    const head = vh + ZERO32 + ZERO32 + W(0xa0n) + W(0x100n);
+    const tail = W(47n) + pad48(short + '00') + W(48n) + pad48(KZG_INFINITY);
+    const rj = await j.call(ja, '0x' + psel + head + tail);
+    expect(rj.success).toBe(false);
+  });
+
+  it('accepts the destructure form, rejects a scalar (non-destructured) use', () => {
     expect(
       jethAccepts(
         `@contract class C { @external @view pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): u256 { const [fe, modu] = pointEvaluation(vh, z, y, c, p); return fe + modu; } }`,
       ),
     ).toBe(true);
-  });
-  it('rejects a scalar (non-destructured) use', () => {
     expect(
       jethAccepts(
         `@contract class C { @external @view pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): u256 { return pointEvaluation(vh, z, y, c, p); } }`,
