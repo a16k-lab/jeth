@@ -99,6 +99,27 @@ supported and byte-identical to solc (incl. empty/short/long). `keccak256`/`sha2
 single dynamic `bytes` (a `string`/`bytesN` is rejected, matching solc; hash a string via
 `keccak256(abi.encodePacked(s))`).
 
+Signature recovery, all byte-identical to the matching solc 0.8.35 expansion:
+`ecrecover(hash, v, r, s)` -> `address` is the RAW solc builtin (staticcall 0x01: `address(0)` on any
+failure, never reverts, no malleability check). `recover(hash, sig)` and `recover(hash, v, r, s)` are
+the SAFE OpenZeppelin 5.x `ECDSA.recover`: the strict `s > HALF_ORDER` reject
+(`ECDSAInvalidSignatureS`), the 65-byte length reject on the `bytes` form
+(`ECDSAInvalidSignatureLength`), and the `signer == 0` reject (`ECDSAInvalidSignature`), with the exact
+custom-error selectors. `tryRecover(hash, sig)` -> `[bool, address]` is the never-reverting destructure
+form. (The `and(staticcall, eq(returndatasize, 0x20))` guard must bind the success bool first - Yul
+evaluates `and` arguments right-to-left, so an inline `returndatasize()` reads the stale pre-call value.)
+
+The niche crypto precompiles take typed inputs and REVERT on invalid input (instead of the raw
+precompile's silent zero): `modexp(base, exp, mod)` -> `bytes` (0x05); `bn256Add(p, q)` /
+`bn256Mul(p, s)` over a 2-`u256`-field `G1Point @struct` / `bn256Pairing(input: bytes)` -> `bool`
+(0x06/0x07/0x08); `blake2f(rounds, h, m, t, f)` -> `bytes(64)` (0x09); and
+`pointEvaluation(versionedHash, z, y, commitment, proof)` -> `[fe, modulus]` KZG (0x0a, destructure-only,
+192-byte `vh|z|y|commitment(48)|proof(48)` input matching EIP-4844).
+
+`@receive recv() { ... }` (payable implied) and `@fallback fb() { ... }` are the special entry points,
+dispatch byte-identical to Solidity's `receive()` / `fallback()` (empty calldata -> receive; a
+non-matching selector or value to a non-payable fallback -> fallback / revert).
+
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short
