@@ -77,3 +77,68 @@ functions; a library function used inside a loop / require / event; the `@using`
 method of the same name (built-in wins); the full accept/reject gate matrix vs solc (state in a library,
 ctor, @external method, unknown member, ambiguous attachment). Mirror each against a solc
 `library L { function f(...) internal ... }` + `using L for T;` contract.
+
+---
+
+# Phase B: EXTERNAL (delegatecall) libraries - design spec (solc 0.8.35 + Yul-linkersymbol verified)
+
+External/public library functions are deployed SEPARATELY and called via DELEGATECALL to a link-time
+address. VERIFIED feasible end-to-end: (a) solc external lib -> a separate library bytecode + the calling
+contract carries a `__$<34hex>$__` placeholder with `evm.bytecode.linkReferences {start,length:20}`; deploy
+lib -> link (substitute the 20-byte deployed address at each ref position) -> deploy contract -> the
+delegatecall runs (`C.g(3,4)`=8 for `add(a,b){return a+b+1}`). (b) solc's **Yul mode supports
+`linkersymbol("Name")`** and emits the same placeholder + linkReferences - so JETH emits
+`delegatecall(gas(), linkersymbol("L"), ...)` and solc produces the link reference for free.
+
+## Surface
+- An `@external` function in a `@library` is an EXTERNAL (delegatecall) function (lift the Phase-A JETH390
+  gate for `@external` on a library method). Mutability `@view`/`@pure` or inferred; `@payable` stays
+  REJECTED (a library delegatecall cannot take value). A library may MIX internal (inlined, Phase A) and
+  external (delegatecall) functions.
+- Call sites unchanged: `L.f(args)` qualified and `@using(L)` -> `x.f(args)` attached. The analyzer chooses
+  inlined-internal-call (Phase A) vs delegatecall (Phase B) by whether `f` is `@external`.
+
+## solc-verified semantics
+1. **Call = DELEGATECALL** to the library (always, even for view/pure) so the lib runs in the CALLER's
+   context. Lower `L.f(args)`: ABI-encode `(selector_f, args)` to memory; `let ok := delegatecall(gas(),
+   linkersymbol("L"), inPtr, inLen, 0, 0)`; `if iszero(ok) { returndatacopy + revert(...) }` (bubble the raw
+   revert); ABI-decode the return from returndata. `selector_f` = the 4-byte selector of the library
+   function's Solidity signature (same scheme as a contract external fn). Reuse the existing extCall encode/
+   decode + abiDecode machinery; this is a delegatecall variant of the extCall path (op = 'delegatecall').
+2. **Library artifact**: emit each `@library` that HAS an external function as its OWN deployable Yul object
+   (creation returns runtime; runtime = a selector dispatcher over its external functions: callvalue guard,
+   decode args, run body, ABI-encode return / bubble revert) - structurally the SAME as a contract's runtime
+   dispatcher, minus state/constructor. A library internal function CALLED BY an external one is emitted as a
+   `userfn_` inside the library object. Scope params/returns to value/memory/calldata (NO storage-ref).
+3. **Linking**: the contract's creation bytecode carries one `__$..$__` placeholder per referenced external
+   library; `evm.bytecode.linkReferences` (and deployedBytecode) gives the positions. The deployer
+   substitutes the deployed library's 20-byte address at each position.
+
+## JETH integration
+- **analyzer**: classify a `@library` function as internal (bare) vs external (`@external`). Reject
+  `@payable`/storage-ref. For an external library call build a new IR (e.g. `libExtCall { lib, fnKey,
+  selector, args, returnType(s) }`) instead of the internal `{kind:'call'}`. Track which libraries are
+  referenced externally (-> which library objects to emit + link).
+- **ir/yul**: a `libExtCall` lowers to encode -> `delegatecall(gas(), linkersymbol(lib), ...)` -> bubble ->
+  decode (reuse emitExtCall's structure with op delegatecall and a linkersymbol target; NO addr/value/gas
+  operands). Emit each referenced library as a separate top-level Yul object via a new emitter entry; the
+  library's external fns get a dispatcher.
+- **compile.ts / solc.ts**: solc.ts adds `evm.bytecode.linkReferences` + `evm.deployedBytecode.linkReferences`
+  to outputSelection and returns them. compile.ts: after analyze, if external libraries are referenced,
+  compile each library's Yul object to its own bytecode AND compile the contract; return a richer result:
+  `{ creationBytecode, runtimeBytecode, yul, libraries?: { name, creationBytecode, runtimeBytecode }[],
+  linkReferences? }`. Keep the existing single-contract result shape when no external libraries are used
+  (backward compatible - do NOT break the 2140 existing tests).
+- **test harness (test/_solidity.ts + a new test/_link.ts or evm.ts helper)**: `compileSolidity` gains a
+  link-aware variant (compile lib + contract with linkReferences, deploy lib, substitute, deploy contract).
+  A JETH-side `deployLinked(build)` helper: deploy each `build.libraries[i]`, substitute its address into
+  `build.linkReferences` positions of the creation bytecode, deploy the linked contract.
+
+## Verification (byte-identical to solc 0.8.35)
+Deploy-lib + link + deploy-contract + call, diff returndata + storage + logs + revert data vs the solc
+external-library mirror (`library L { function f(...) public ... }` + `contract C { ... L.f(...) }`):
+a pure-math external lib (qualified + attached); an external lib fn returning bytes/string and taking/
+returning a struct/array; an external lib fn that REVERTS (string + custom error) - the revert must bubble
+byte-identically; a contract using TWO external libraries (two placeholders/links); a library that MIXES an
+internal (inlined) and an external (delegatecall) function; @using attachment over an external lib fn. Gate
+(reject parity): @payable external lib fn; a storage-ref param.

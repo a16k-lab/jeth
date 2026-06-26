@@ -12,7 +12,7 @@
 // Arithmetic is CHECKED by default: every +,-,*,/,% lowers to a helper that
 // reverts with Panic(0x11) on overflow / Panic(0x12) on division by zero,
 // matching Solidity >=0.8.
-import { ContractIR, FunctionIR, SpecialEntryIR, Stmt, Expr, BinOp, RevertReason, EventIR } from './ir.js';
+import { ContractIR, FunctionIR, LibraryIR, SpecialEntryIR, Stmt, Expr, BinOp, RevertReason, EventIR } from './ir.js';
 import {
   JethType,
   StructField,
@@ -130,6 +130,54 @@ export class YulEmitter {
 ${indent(creation, 4)}
   }
   object "${contract.name}_runtime" {
+    code {
+${indent(runtime, 6)}
+    }
+  }
+}
+`;
+  }
+
+  /** Phase B: emit ONE external (delegatecall) library as its own top-level deployable Yul object.
+   *  The runtime is a selector dispatcher over the library's @external functions (same structure as a
+   *  contract runtime via emitRuntime) plus its object-local internal userfn_s. The creation copies the
+   *  runtime out and returns it (non-payable at deploy, like a constructorless contract). A library has
+   *  no state/constructor/immutables/special entries, so a synthetic ContractIR carries empty ones.
+   *  YulEmitter state (helpers/funcs/counters) is saved + isolated so a helper a library body pulls in
+   *  is defined INSIDE the library's runtime scope, not leaked into the contract object. */
+  emitLibraryObject(lib: LibraryIR): string {
+    const savedFuncs = this.funcs;
+    const savedHelpers = this.helpers;
+    const savedTmp = this.tmp;
+    this.funcs = new Map<string, FunctionIR>();
+    this.helpers = new Map<string, string>();
+    const fns = [...lib.external, ...lib.internal];
+    for (const f of fns) this.funcs.set(f.key, f);
+    const synthetic: ContractIR = {
+      name: lib.name,
+      stateVars: [],
+      functions: fns,
+      errors: [],
+      events: [],
+      slotCount: 0,
+      immutables: [],
+    };
+    const runtime = this.emitRuntime(synthetic);
+    // Creation: a library deploy takes no value (non-payable) and no args; copy the runtime out + return.
+    const creationLines = [
+      'if callvalue() { revert(0, 0) }',
+      `datacopy(0, dataoffset("${lib.name}_runtime"), datasize("${lib.name}_runtime"))`,
+      `return(0, datasize("${lib.name}_runtime"))`,
+    ];
+    const creation = creationLines.join('\n');
+    this.funcs = savedFuncs;
+    this.helpers = savedHelpers;
+    this.tmp = savedTmp;
+    return `object "${lib.name}" {
+  code {
+${indent(creation, 4)}
+  }
+  object "${lib.name}_runtime" {
     code {
 ${indent(runtime, 6)}
     }
@@ -6155,8 +6203,9 @@ ${indent(runtime, 6)}
    *  the call so it cannot alias the returndata buffer. */
   private emitExtCall(
     e: {
-      op: 'call' | 'staticcall';
-      addr: Expr;
+      op: 'call' | 'staticcall' | 'delegatecall';
+      addr?: Expr;
+      lib?: string;
       data: Expr;
       value?: Expr;
       gas?: Expr;
@@ -6166,9 +6215,18 @@ ${indent(runtime, 6)}
     ctx: LowerCtx,
     out: string[],
   ): { okReg: string; dataPtr: string; addrReg: string } {
+    // Phase B external library: a DELEGATECALL to a LINK-TIME library address. The target is
+    // `linkersymbol("<lib>")` (solc emits the `__$..$__` placeholder + a linkReference); no addr/value/
+    // gas operands. The whole rest (encode -> call -> capture returndata -> bubble) is shared with the
+    // call/staticcall path.
+    const isDelegate = e.op === 'delegatecall';
     // Evaluate operands left-to-right: target, then value (call only), then gas, then the data blob.
     const addr = this.fresh();
-    out.push(`let ${addr} := ${this.lowerExpr(e.addr, ctx, out)}`);
+    if (isDelegate) {
+      out.push(`let ${addr} := linkersymbol("${e.lib}")`);
+    } else {
+      out.push(`let ${addr} := ${this.lowerExpr(e.addr!, ctx, out)}`);
+    }
     let valueExpr = '0';
     if (e.op === 'call' && e.value) {
       const v = this.fresh();
@@ -6186,6 +6244,8 @@ ${indent(runtime, 6)}
     const argsOff = `add(${mp}, 0x20)`;
     if (e.op === 'staticcall') {
       out.push(`let ${okReg} := staticcall(${gasExpr}, ${addr}, ${argsOff}, ${len}, 0, 0)`);
+    } else if (e.op === 'delegatecall') {
+      out.push(`let ${okReg} := delegatecall(${gasExpr}, ${addr}, ${argsOff}, ${len}, 0, 0)`);
     } else {
       out.push(`let ${okReg} := call(${gasExpr}, ${addr}, ${valueExpr}, ${argsOff}, ${len}, 0, 0)`);
     }
@@ -7661,4 +7721,11 @@ function indent(text: string, spaces: number): string {
 
 export function emitYul(contract: ContractIR): string {
   return new YulEmitter().emit(contract);
+}
+
+/** Phase B: emit the standalone Yul source for ONE external (delegatecall) library object (compiled
+ *  to its own bytecode and linked into the contract at deploy time). A fresh YulEmitter per library
+ *  keeps each object's helper/scope state independent. */
+export function emitLibraryYul(lib: LibraryIR): string {
+  return new YulEmitter().emitLibraryObject(lib);
 }

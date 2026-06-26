@@ -151,8 +151,20 @@ ordinary internal functions (no separate deployment, no delegatecall, no linking
 library model), so qualified/attached calls, overloads, library-calls-library, struct/array/string params,
 and state writes/events through an attached call are all byte-identical. A built-in method of the receiver
 type wins over an attached library method (matching solc). Rejected (clean): a library with `@state` /
-constructor / `@external` method, `L.unknownMember`, and an ambiguous attachment. External (delegatecall,
-deployed-and-linked) libraries are Phase B - not yet supported.
+constructor, `L.unknownMember`, and an ambiguous attachment.
+
+External (delegatecall) library functions (Phase B) are also supported, byte-identical to solc's public/
+external library functions: an `@external` method in a `@library` is deployed in the library's own bytecode
+and called via `DELEGATECALL` to a link-time address. `compile()` returns the library artifacts +
+`linkReferences`; the deployer substitutes each deployed library's 20-byte address into the contract's
+`__$..$__` placeholders (the contract's Yul uses `linkersymbol("L")`, which solc resolves to the standard
+placeholder). Verified byte-identical (returndata + revert data + logs): qualified + attached external calls,
+string/bytes/struct/array params and returns, two-library linking, a library mixing internal (inlined) and
+external (delegatecall) functions, and - critically - revert bubbling (a string `revert` and a custom error
+both propagate through the delegatecall byte-for-byte). A library may not be `@payable` (a delegatecall takes
+no value); a `@pure`/`@view` caller of a nonpayable external library function is rejected exactly as solc
+rejects it. Storage-reference library parameters (solc's `using For` over a mutated storage type) remain
+unsupported - JETH has no storage-reference parameter, so the pattern is not expressible.
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and

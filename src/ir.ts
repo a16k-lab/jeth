@@ -154,8 +154,13 @@ export type Expr =
   | {
       kind: 'extCall';
       type: JethType;
-      op: 'call' | 'staticcall';
-      addr: Expr;
+      op: 'call' | 'staticcall' | 'delegatecall';
+      // For op 'call'/'staticcall' the target is a runtime address (`addr`). For op 'delegatecall'
+      // (Phase B external libraries) the target is a LINK-TIME library address: `addr` is omitted and
+      // `lib` names the library, lowered to `linkersymbol("<lib>")` (solc emits the `__$..$__`
+      // placeholder + a linkReference). A delegatecall has NO addr/value/gas operands.
+      addr?: Expr;
+      lib?: string;
       data: Expr;
       value?: Expr;
       gas?: Expr;
@@ -551,4 +556,18 @@ export interface ContractIR {
   immutables: ImmutableVar[]; // @immutable fields (declaration order), baked via setimmutable
   receive?: SpecialEntryIR; // @receive: empty-calldata ETH receiver (Phase 6)
   fallback?: SpecialEntryIR; // @fallback: catch-all entry (Phase 6)
+  // Phase B: external (delegatecall) libraries this contract references. Each is emitted as its OWN
+  // top-level Yul object (creation returns runtime; runtime = a selector dispatcher over its external
+  // functions) and linked at deploy time. Empty/absent when no external library is referenced.
+  libraries?: LibraryIR[];
+}
+
+/** Phase B: an external (delegatecall) library compiled to its OWN deployable Yul object. `external`
+ *  are its @external functions (the delegatecall entry points, dispatched by selector); `internal` are
+ *  the library's own functions reachable from an external one (emitted as object-local userfn_s). No
+ *  state, constructor, immutables, or special entries (a library has none). */
+export interface LibraryIR {
+  name: string;
+  external: FunctionIR[];
+  internal: FunctionIR[];
 }

@@ -5,8 +5,8 @@ import { parse } from './parser.js';
 import { DiagnosticBag, CompileError, Diagnostic } from './diagnostics.js';
 import { validateSubset } from './validator.js';
 import { analyze } from './analyzer.js';
-import { emitYul, UnsupportedError } from './yul.js';
-import { compileYul } from './solc.js';
+import { emitYul, emitLibraryYul, UnsupportedError } from './yul.js';
+import { compileYul, LinkReferences } from './solc.js';
 import { emitAbi, AbiItem } from './abi.js';
 import type { ContractIR } from './ir.js';
 import { displayName } from './types.js';
@@ -18,6 +18,15 @@ export interface StorageLayoutEntry {
   offset: number;
 }
 
+/** Phase B: a compiled external (delegatecall) library object, deployed separately and linked into
+ *  the contract at deploy time. `creationBytecode` deploys it; its address is substituted at every
+ *  `linkReferences` position of the contract's creation/runtime bytecode. */
+export interface CompiledLibrary {
+  name: string;
+  creationBytecode: string; // hex, no 0x
+  runtimeBytecode: string; // hex, no 0x
+}
+
 export interface CompileResult {
   contractName: string;
   abi: AbiItem[];
@@ -27,6 +36,12 @@ export interface CompileResult {
   storageLayout: StorageLayoutEntry[];
   ir: ContractIR;
   diagnostics: Diagnostic[];
+  // Phase B: present ONLY when the contract references an external (delegatecall) library. `libraries`
+  // are the separately-deployed library objects; `linkReferences` are the contract's creation-bytecode
+  // placeholder positions (library name -> positions) to substitute with each library's deployed
+  // address. Absent (undefined) for an ordinary single-contract compile (backward compatible).
+  libraries?: CompiledLibrary[];
+  linkReferences?: LinkReferences;
 }
 
 export interface CompileOptions {
@@ -98,6 +113,36 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
     offset: v.offset,
   }));
 
+  // Phase B: compile each referenced external (delegatecall) library to its own bytecode. The contract
+  // carries a `linkersymbol(...)` placeholder per library; solc returns its positions in linkReferences.
+  let libraries: CompiledLibrary[] | undefined;
+  let linkReferences: LinkReferences | undefined;
+  if (ir.libraries && ir.libraries.length > 0) {
+    libraries = ir.libraries.map((lib) => {
+      const libYul = emitLibraryYul(lib);
+      let libOut;
+      try {
+        libOut = compileYul(libYul, lib.name, opts.evmVersion);
+      } catch (e) {
+        throw new CompileError([
+          {
+            severity: 'error',
+            code: 'JETH901',
+            message: `internal compiler error: the backend rejected generated library Yul for '${lib.name}': ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+            file: fileName,
+            line: 1,
+            column: 1,
+            length: 1,
+          },
+        ]);
+      }
+      return { name: lib.name, creationBytecode: libOut.creationBytecode, runtimeBytecode: libOut.runtimeBytecode };
+    });
+    linkReferences = out.creationLinkReferences;
+  }
+
   return {
     contractName: ir.name,
     abi: emitAbi(ir),
@@ -107,5 +152,7 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
     storageLayout,
     ir,
     diagnostics: diags.items,
+    libraries,
+    linkReferences,
   };
 }

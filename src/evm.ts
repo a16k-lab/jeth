@@ -86,6 +86,41 @@ export class Harness {
     return res.createdAddress;
   }
 
+  /** Phase B: deploy an external-library-linked contract. Deploys each library object, substitutes its
+   *  20-byte address into every `linkReferences` position of the contract's creation bytecode, then
+   *  deploys the linked contract. `build` is the subset of a CompileResult needed for linking
+   *  (creationBytecode + libraries + linkReferences). Returns the linked contract's address. */
+  async deployLinked(
+    build: {
+      creationBytecode: string;
+      libraries?: { name: string; creationBytecode: string }[];
+      linkReferences?: Record<string, Record<string, { start: number; length: number }[]>>;
+    },
+    opts: { caller?: Address; value?: bigint } = {},
+  ): Promise<{ address: Address; libraries: Map<string, Address> }> {
+    const deployed = new Map<string, Address>();
+    for (const lib of build.libraries ?? []) {
+      deployed.set(lib.name, await this.deploy(lib.creationBytecode));
+    }
+    let hex = strip0x(build.creationBytecode);
+    // linkReferences: { file: { libName: [{start, length}] } }. start/length are BYTE offsets; the hex
+    // string has 2 chars per byte. Substitute each library's 20-byte address (40 hex) at every position.
+    for (const byLib of Object.values(build.linkReferences ?? {})) {
+      for (const [libName, positions] of Object.entries(byLib)) {
+        const addr = deployed.get(libName);
+        if (!addr) throw new Error(`deployLinked: no deployed library for link reference '${libName}'`);
+        const addrHex = strip0x(addr.toString()).padStart(40, '0');
+        for (const { start, length } of positions) {
+          if (length !== 20) throw new Error(`deployLinked: unexpected link reference length ${length} (expected 20)`);
+          const cstart = start * 2;
+          hex = hex.slice(0, cstart) + addrHex + hex.slice(cstart + 40);
+        }
+      }
+    }
+    const address = await this.deploy(hex, opts);
+    return { address, libraries: deployed };
+  }
+
   /** Call a deployed contract with raw calldata. `origin`/`block` set the
    *  tx.origin and block.* environment; a non-zero `value` auto-funds the caller. */
   async call(

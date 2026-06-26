@@ -62,6 +62,7 @@ import {
   DestructureSource,
   InterfaceDecl,
   InterfaceMethod,
+  LibraryIR,
 } from './ir.js';
 
 const ADDRESS: JethType = { kind: 'address', payable: false };
@@ -129,6 +130,11 @@ interface RawFunction {
   overrideList?: string[]; // the explicit base list of @override(B, C) (a diamond redefinition)
   bodyless?: boolean; // an unimplemented @virtual (no body): a base abstract method
   definingContract?: string; // the contract (in the linearization) that declared this function
+  // Phase B: this function belongs to a @library (libraryName set). libraryExternal -> an @external
+  // (delegatecall) library function: NOT inlined into the contract, called via DELEGATECALL to its own
+  // deployed library object, and emitted as a selector-dispatched entry in that object's runtime.
+  libraryName?: string;
+  libraryExternal?: boolean;
 }
 
 // Phase 5: a user-defined @modifier (Solidity-style). A `_;` placeholder splits the body into PRE
@@ -185,6 +191,10 @@ export class Analyzer {
   // RawFunctions (more than one => ambiguous attachment, rejected). A built-in method on T wins (the
   // attachment is consulted only AFTER the built-in method resolvers in the call dispatch).
   private libraryAttachments = new Map<string, RawFunction[]>();
+  // Phase B: names of @library declarations that an external (delegatecall) call site referenced (so
+  // compile.ts knows which library objects to emit + link). Populated when a `L.f`/attached `x.f`
+  // resolves to an @external library function.
+  private referencedExternalLibraries = new Set<string>();
   // per-function lexical scope stack (innermost last); each scope maps name -> type.
   private scopes: Map<string, JethType>[] = [];
   private loopDepth = 0; // > 0 inside a for/while body (gates break/continue)
@@ -758,17 +768,21 @@ export class Analyzer {
       }
       if (!ts.isMethodDeclaration(member)) continue;
       const decs = decoratorNames(member);
-      // A library function is INTERNAL (inlined) in Phase A: @external/@payable (Phase B external
-      // libraries / delegatecall) and the special @receive/@fallback runtime entries are rejected.
-      const banned = (['external', 'payable', 'receive', 'fallback'] as const).find((d) => decs.includes(d));
+      // A library function is EITHER internal (inlined, Phase A) OR @external (delegatecall, Phase B).
+      // @receive/@fallback are runtime entries with no place in a library; @payable is rejected because
+      // a library delegatecall cannot carry value (solc: "Library functions cannot be payable.").
+      const banned = (['payable', 'receive', 'fallback'] as const).find((d) => decs.includes(d));
       if (banned) {
         this.diags.error(
           member,
           'JETH390',
-          `@library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot be @${banned} (Phase A libraries provide only internal/inlined functions; external/delegatecall libraries are Phase B)`,
+          banned === 'payable'
+            ? `@library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot be @payable (a library delegatecall cannot carry value)`
+            : `@library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot be @${banned} (a library has no runtime entry points)`,
         );
         continue;
       }
+      const isExternal = decs.includes('external');
       // @modifier / @event / @error inside a library are not supported in Phase A (solc allows none
       // of these as a library's callable surface in the way JETH needs); keep the surface to plain
       // internal functions. Generic library functions are likewise deferred.
@@ -824,6 +838,15 @@ export class Analyzer {
       // function (and other libraries), keeps overloads grouped under the same qualified name (so the
       // existing overload resolver works), and makes the userfn_ / call-graph key unique.
       fn.name = `${name}.${fn.name}`;
+      fn.libraryName = name;
+      // Phase B: an @external library function is a DELEGATECALL entry (visibility 'external', dispatched
+      // by selector in the library's own runtime object). An @view/@pure external library fn is still a
+      // delegatecall (solc always delegatecalls a public/external library fn so it runs in the caller's
+      // context). A bare external fn keeps its inferred mutability via the normal @read path.
+      if (isExternal) {
+        fn.libraryExternal = true;
+        fn.visibility = 'external';
+      }
       fns.push(fn);
     }
     this.libraryByName.set(name, fns);
@@ -1351,14 +1374,25 @@ export class Analyzer {
       functions.push(getter);
     }
 
-    // Reject duplicate selectors (would make the dispatcher ambiguous).
-    const seen = new Map<string, string>();
+    // Reject duplicate selectors (would make a dispatcher ambiguous). The CONTRACT dispatcher and each
+    // external LIBRARY object have INDEPENDENT selector spaces (separate Yul objects), so a library
+    // external function (its selector is the bare `f(...)`) is checked within its own library, never
+    // against the contract. A library function's source name is qualified `L.f`.
+    const libNameOf = (f: FunctionIR): string | undefined => {
+      const dot = f.name.indexOf('.');
+      return dot > 0 && this.libraryByName.has(f.name.slice(0, dot)) ? f.name.slice(0, dot) : undefined;
+    };
+    const seen = new Map<string, string>(); // contract dispatcher selector space
+    const libSeen = new Map<string, Map<string, string>>(); // per-library selector space (external fns)
     for (const f of functions) {
       if (f.visibility === 'internal' || f.visibility === 'private') continue;
-      const prev = seen.get(f.selector);
+      const lib = libNameOf(f);
+      const space = lib ? (libSeen.get(lib) ?? new Map<string, string>()) : seen;
+      if (lib) libSeen.set(lib, space);
+      const prev = space.get(f.selector);
       if (prev) {
         this.diags.error(cls, 'JETH044', `selector clash 0x${f.selector} between ${prev} and ${f.signature}`);
-      } else seen.set(f.selector, f.signature);
+      } else space.set(f.selector, f.signature);
     }
     // Reject duplicate function SIGNATURES (name + parameter types) across ALL functions, including
     // internal/private and across visibilities - solc forbids two functions with the same name and
@@ -1393,10 +1427,29 @@ export class Analyzer {
     const receive = receiveNode ? this.checkSpecialEntry(receiveNode.member, 'receive') : undefined;
     const fallback = fallbackNode ? this.checkSpecialEntry(fallbackNode.member, 'fallback') : undefined;
 
+    // Phase B: partition out external (delegatecall) libraries. A library's @external functions are
+    // delegatecall entry points emitted in the LIBRARY's own object (NEVER the contract dispatcher); a
+    // library function reachable ONLY from such an external entry belongs to the library object, not the
+    // contract (solc would never bake a library-only function into the contract). A library INTERNAL
+    // function the CONTRACT inlines (Phase A) stays in the contract and is ALSO duplicated into the
+    // library object if a library-external fn calls it (Yul scopes userfn_s per object, so the same key
+    // in two objects is fine). Only libraries actually referenced via a delegatecall site are emitted.
+    const callGraph = new Map<string, Set<string>>();
+    for (const [k, e] of effects) callGraph.set(k, e.callees);
+    const libraries = this.partitionExternalLibraries(functions, callGraph);
+    // Any library declaring an @external function changes the contract function set: such a function is
+    // a delegatecall entry (NOT a contract dispatcher entry), and any library function reachable only
+    // from one of them belongs to the library object, never the contract. This holds even for an
+    // UNREFERENCED external library (no link site) - it must still not pollute the contract dispatcher.
+    const hasAnyExternalLibFn = [...this.libraryByName.values()].some((fns) => fns.some((rf) => rf.libraryExternal));
+    const contractFunctions = hasAnyExternalLibFn
+      ? this.contractRetainedFunctions(functions, callGraph)
+      : functions;
+
     return {
       name,
       stateVars: layout.vars,
-      functions,
+      functions: contractFunctions,
       errors: this.errors,
       events: this.events,
       slotCount: layout.slotCount,
@@ -1404,7 +1457,97 @@ export class Analyzer {
       immutables: this.immutableOrder.map((n) => ({ name: n, type: this.immutablesByName.get(n)!.type })),
       receive,
       fallback,
+      libraries: libraries.length > 0 ? libraries : undefined,
     };
+  }
+
+  /** Phase B: build the LibraryIR list for every referenced external (delegatecall) library. For each
+   *  such L, `external` = L's @external FunctionIRs; `internal` = the library functions reachable from
+   *  one of those external entries through internal-call edges (excluding the external entries). Each
+   *  internal one is forced `internallyCalled` so the library object emits its userfn_. Returns [] when
+   *  no external library was referenced. */
+  private partitionExternalLibraries(functions: FunctionIR[], callGraph: Map<string, Set<string>>): LibraryIR[] {
+    if (this.referencedExternalLibraries.size === 0) return [];
+    const byKey = new Map<string, FunctionIR>();
+    for (const f of functions) byKey.set(f.key, f);
+    // key -> the owning library name (a library FunctionIR).
+    const libOf = new Map<string, string>();
+    for (const [lib, fns] of this.libraryByName) {
+      for (const rf of fns) libOf.set(this.fkey(rf), lib);
+    }
+    const out: LibraryIR[] = [];
+    for (const lib of [...this.referencedExternalLibraries].sort()) {
+      const externalKeys = (this.libraryByName.get(lib) ?? [])
+        .filter((rf) => rf.libraryExternal)
+        .map((rf) => this.fkey(rf));
+      // BFS over internal-call edges from the external entries; collect the reachable LIBRARY functions.
+      const reachable = new Set<string>();
+      const stack = [...externalKeys];
+      while (stack.length) {
+        const k = stack.pop()!;
+        for (const c of callGraph.get(k) ?? []) {
+          if (reachable.has(c)) continue;
+          reachable.add(c);
+          stack.push(c);
+        }
+      }
+      const external: FunctionIR[] = [];
+      for (const k of externalKeys) {
+        const f = byKey.get(k);
+        if (f) external.push(f);
+      }
+      const internal: FunctionIR[] = [];
+      for (const k of reachable) {
+        if (externalKeys.includes(k)) continue;
+        const f = byKey.get(k);
+        if (!f) continue;
+        // Only LIBRARY functions become object-local userfn_s (a library never calls a contract fn).
+        if (!libOf.has(k)) continue;
+        const clone: FunctionIR = { ...f, internallyCalled: true };
+        internal.push(clone);
+      }
+      out.push({ name: lib, external, internal });
+    }
+    return out;
+  }
+
+  /** Phase B: the contract object's retained function list once external libraries are split out. Drops
+   *  every @external library function (a delegatecall entry, not a contract entry) and every library
+   *  function NOT reachable from a CONTRACT entry (it lives only in a library object). A library internal
+   *  function the contract inlines stays. */
+  private contractRetainedFunctions(functions: FunctionIR[], callGraph: Map<string, Set<string>>): FunctionIR[] {
+    // Keys of @external library functions (delegatecall entries) and of ALL library functions (by source
+    // name `L.f`). A non-library function is always contract-retained.
+    const libExternalKeys = new Set<string>();
+    const libFnKeys = new Set<string>();
+    for (const fns of this.libraryByName.values())
+      for (const rf of fns) {
+        libFnKeys.add(this.fkey(rf));
+        if (rf.libraryExternal) libExternalKeys.add(this.fkey(rf));
+      }
+    // Contract-reachable: BFS from every NON-library function (the contract's own functions + getters),
+    // following internal-call edges, so a library internal fn the contract inlines stays.
+    const contractReachable = new Set<string>();
+    const stack: string[] = [];
+    for (const f of functions) {
+      if (!libFnKeys.has(f.key)) {
+        contractReachable.add(f.key);
+        stack.push(f.key);
+      }
+    }
+    while (stack.length) {
+      const k = stack.pop()!;
+      for (const c of callGraph.get(k) ?? []) {
+        if (contractReachable.has(c)) continue;
+        contractReachable.add(c);
+        stack.push(c);
+      }
+    }
+    return functions.filter((f) => {
+      if (libExternalKeys.has(f.key)) return false; // a delegatecall entry, never in the contract
+      if (libFnKeys.has(f.key) && !contractReachable.has(f.key)) return false; // library-only function
+      return true;
+    });
   }
 
   // ---- inheritance: override resolution + super -----------------------------
@@ -3306,8 +3449,14 @@ export class Analyzer {
     // all bodies are checked, against TRANSITIVE effects (see the call-graph fixpoint in
     // analyze()), so a @view/@pure function that violates via an internal callee is caught.
 
+    // The ABI signature uses the SOURCE function name. An @external library function carries a qualified
+    // `L.f` name (to namespace its call-graph key) but its real ABI/selector identity is the BARE `f`, so
+    // the library's delegatecall dispatcher case + the call site's selector match solc's `f(...)`. An
+    // INTERNAL library function keeps its qualified name (its signature is never dispatched and stays
+    // distinct across libraries for the contract-level duplicate check; Phase A unchanged).
+    const sigName = rf.libraryExternal ? rf.name.slice(rf.libraryName!.length + 1) : rf.name;
     const signature = functionSignature(
-      rf.name,
+      sigName,
       rf.params.map((p) => p.type),
     );
     const selector = functionSelector(signature);
@@ -3926,7 +4075,7 @@ export class Analyzer {
         !this.stateByName.has(e.expression.expression.text)
       ) {
         const c = this.resolveQualifiedLibraryCall(e, e.expression.expression.text, e.expression.name.text, true);
-        if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
+        if (c) out.push(c.kind === 'call' ? { kind: 'callStmt', fn: c.fn, args: c.args } : { kind: 'exprStmt', expr: c });
         return;
       }
       // Phase 6: a high-level typed interface call as a statement `IFoo(addr).method(args);`. The call
@@ -3974,7 +4123,7 @@ export class Analyzer {
         if (recvType) {
           const r = this.resolveAttachedLibraryCall(e, e.expression.expression, recvType, e.expression.name.text, true);
           if (r !== 'no-match') {
-            if (r) out.push({ kind: 'callStmt', fn: r.fn, args: r.args });
+            if (r) out.push(r.kind === 'call' ? { kind: 'callStmt', fn: r.fn, args: r.args } : { kind: 'exprStmt', expr: r });
             return;
           }
         }
@@ -6191,6 +6340,10 @@ export class Analyzer {
         e.kind === 'structNew' ||
         e.kind === 'memAggregate' ||
         (e.kind === 'call' && e.type.kind === 'struct') ||
+        // Phase B / interface: a struct-returning external call (delegatecall library / interface call),
+        // decoded from returndata into a memory image (the ABI struct decode yields a memAggregate-shaped
+        // local). The struct type is validated by the checkExpr expected-type above.
+        (e.kind === 'abiDecode' && e.type.kind === 'struct') ||
         e.kind === 'structValue' ||
         e.kind === 'cdAggregateValue' ||
         e.kind === 'ternary' ||
@@ -6830,7 +6983,7 @@ export class Analyzer {
     libName: string,
     fnName: string,
     asStatement: boolean,
-  ): (Expr & { kind: 'call' }) | undefined {
+  ): Expr | undefined {
     const candidates = this.libraryByName.get(libName)!;
     const callee = this.resolveLibraryOverload(node, candidates, `${libName}.${fnName}`, fnName);
     if (callee === 'unknown') {
@@ -6838,6 +6991,9 @@ export class Analyzer {
       return undefined;
     }
     if (!callee) return undefined; // an ambiguity/no-match diagnostic was already emitted
+    // Phase B: an @external library function is a DELEGATECALL (not inlined); route through the shared
+    // arg-check + extCall builder. node.arguments is the full positional arg list (no receiver prepend).
+    if (callee.libraryExternal) return this.buildLibraryCall(node, callee, [...node.arguments], asStatement);
     return this.checkInternalCall(node, `${libName}.${fnName}`, asStatement, callee);
   }
 
@@ -6852,7 +7008,7 @@ export class Analyzer {
     recvType: JethType,
     fnName: string,
     asStatement: boolean,
-  ): (Expr & { kind: 'call' }) | undefined | 'no-match' {
+  ): Expr | undefined | 'no-match' {
     const list = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
     if (!list || list.length === 0) return 'no-match';
     // Disambiguate by the FULL synthetic arg list (receiver ++ node.arguments) - an overloaded
@@ -6968,10 +7124,10 @@ export class Analyzer {
     callee: RawFunction,
     argExprs: ts.Expression[],
     asStatement: boolean,
-  ): (Expr & { kind: 'call' }) | undefined {
-    // A library function is never @external/@payable/@nonReentrant (gated at collection) and is
-    // always treated as @internal for param/return support (its aggregate params are memory pointers,
-    // exactly like an @internal contract function - so the internal-call aggregate rules apply).
+  ): Expr | undefined {
+    // A library function is never @payable/@nonReentrant (gated at collection). An @external library
+    // function is a DELEGATECALL (Phase B); a bare one is inlined (Phase A). Both share the same param/
+    // return ABI-support gates and arg type-checking; only the produced IR differs.
     if (callee.returnTypes) {
       this.diags.error(node, 'JETH241', `call to a multi-value-return library function '${callee.name}' is not supported yet`);
       return undefined;
@@ -7042,10 +7198,64 @@ export class Analyzer {
         args.push(this.coerce(a, pt, argNodes[i]!));
       }
     }
+    if (callee.libraryExternal) {
+      // Phase B: a DELEGATECALL to the library's own deployed object (linked at deploy time). Do NOT add
+      // the callee to internallyCalled (it is not inlined into this contract): it is emitted as a
+      // selector-dispatched entry in the LIBRARY object. Build (selector ++ abi.encode(args)) and
+      // delegatecall, bubbling the callee's revert bytes verbatim; the returndata is abi.decoded.
+      return this.buildLibraryExtCall(callee, args, asStatement);
+    }
     const key = this.fkey(callee);
     this.currentCallees.add(key);
     this.internallyCalled.add(key);
     return { kind: 'call', type: rt, fn: key, args };
+  }
+
+  /** Phase B: build the delegatecall expression for an @external library function. `args` are the
+   *  already type-checked + coerced argument Exprs (receiver-prepended for an attached call). Encodes
+   *  (selector ++ abi.encode(args)) to memory, `delegatecall(gas(), linkersymbol("L"), ...)`, bubbles the
+   *  raw revert on failure, and abi.decodes the returndata into the declared return type. For a void
+   *  return the bare extCall is the (statement) expression. Marks the library as externally referenced. */
+  private buildLibraryExtCall(callee: RawFunction, args: Expr[], asStatement: boolean): Expr {
+    const lib = callee.libraryName!;
+    this.referencedExternalLibraries.add(lib);
+    const bareName = callee.name.slice(lib.length + 1); // strip the `L.` qualifier for the ABI signature
+    const signature = functionSignature(
+      bareName,
+      callee.params.map((p) => p.type),
+    );
+    const selector = functionSelector(signature);
+    const selExpr: Expr = {
+      kind: 'literalInt',
+      type: { kind: 'bytesN', size: 4 },
+      value: BigInt('0x' + selector) << 224n,
+    };
+    const data: Expr = { kind: 'abiEncode', type: BYTES, packed: false, args, selector: selExpr };
+    // The CALL's effect mirrors the library function's declared mutability (a JETH library function
+    // cannot touch contract storage anyway - JETH394 - so it is effectively pure/view): a non-view fn is
+    // a state-writing effect; a view fn reads state; a @pure fn has no effect (calling a pure library
+    // function from a @pure function is allowed, matching solc). An @read fn is provisionally view.
+    // Effect: add the callee to the purity CALL GRAPH (currentCallees) so the transitive-purity fixpoint
+    // propagates the library function's REAL (post-fixpoint) mutability to this caller - exactly like an
+    // internal call - instead of guessing at the call site (a bare external lib fn's @read mutability is
+    // not resolved yet). It is NOT added to internallyCalled: it is delegatecalled, never inlined here.
+    // A declared NONPAYABLE (not @read/@view/@pure) library function is a state-modifying call from the
+    // caller's view (solc rejects a @view caller delegatecalling a non-view library fn), so force a write.
+    this.currentCallees.add(this.fkey(callee));
+    if (!callee.inferRead && callee.mutability === 'nonpayable') this.currentWritesState = true;
+    const call: Expr & { kind: 'extCall' } = {
+      kind: 'extCall',
+      type: BYTES,
+      op: 'delegatecall',
+      lib,
+      data,
+      checks: [],
+      bubble: true,
+    };
+    const rt = callee.returnType;
+    if (rt.kind === 'void') return call; // a statement: run the delegatecall, discard the (empty) returndata
+    void asStatement;
+    return { kind: 'abiDecode', type: rt, data: call };
   }
 
   /** A return component that a tuple destructuring can bind to a fresh memory local: any value

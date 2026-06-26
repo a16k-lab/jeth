@@ -302,12 +302,16 @@ contract C { function f(uint256 a) external pure returns(uint256){ return L.f(a)
     expect(solcRejects(sol)).toBe(true);
   });
 
-  it('an @external method in a library -> JETH390 (deliberate Phase-A gate; solc accepts it as a Phase-B external library)', () => {
-    const jeth = `@library class L { @external f(a: u256): u256 { return a; } }
-@contract class C { @external @pure g(a: u256): u256 { return a; } }`;
-    // Phase A provides only INTERNAL/inlined library functions; @external (external/delegatecall
-    // libraries) is Phase B. solc accepts it, so this is a deliberate, documented over-rejection.
-    expect(jethRejectsWith(jeth, 'JETH390')).toBe(true);
+  it('an @external method in a library is now ACCEPTED (Phase B external/delegatecall library); @payable is still rejected', () => {
+    // Phase B: @external on a library method is an external (delegatecall) library function (no longer
+    // a JETH390 over-rejection). A call site referencing it is required for the library object to emit,
+    // but the declaration alone compiles. @payable on a library method stays rejected (JETH390).
+    const ok = `@library class L { @external @pure f(a: u256): u256 { return a; } }
+@contract class C { @external @pure g(a: u256): u256 { return L.f(a); } }`;
+    expect(() => compile(ok, { fileName: 'C.jeth' })).not.toThrow();
+    const payable = `@library class L { @external @payable f(a: u256): u256 { return a; } }
+@contract class C { @external @pure g(a: u256): u256 { return L.f(a); } }`;
+    expect(jethRejectsWith(payable, 'JETH390')).toBe(true);
   });
 
   it('L.unknownMember -> JETH392, solc also rejects', () => {
