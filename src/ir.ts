@@ -102,6 +102,20 @@ export type Expr =
   | { kind: 'keccak'; type: JethType; arg: Expr } // keccak256(bytes/string) -> bytes32
   | { kind: 'precompileHash'; type: JethType; arg: Expr; addr: number; leftShift: number } // sha256(0x02)->bytes32 / ripemd160(0x03)->bytes20
   | { kind: 'modOp'; type: JethType; op: 'addmod' | 'mulmod'; a: Expr; b: Expr; m: Expr } // addmod/mulmod -> u256
+  // ecrecover(hash, v, r, s) -> address: the RAW unsafe builtin (= solc ecrecover, staticcall 0x01).
+  // address(0) on any failure, NEVER reverts, NO malleability check (the returndatasize()==0x20 guard).
+  | { kind: 'ecrecover'; type: JethType; hash: Expr; v: Expr; r: Expr; s: Expr }
+  // recover(hash, sig) / recover(hash, v, r, s) -> address: the SAFE OZ-5.x ECDSA form. `sig` present =>
+  // the 65-byte bytes overload (length!=65 -> ECDSAInvalidSignatureLength); else the split form (no length
+  // check). Both check s>HALF_ORDER (STRICT) -> ECDSAInvalidSignatureS, signer==0 -> ECDSAInvalidSignature.
+  | { kind: 'recover'; type: JethType; hash: Expr; sig?: Expr; v?: Expr; r?: Expr; s?: Expr }
+  // modexp(base, exp, mod) -> bytes (length == mod.length): arbitrary-precision modexp, staticcall 0x05.
+  | { kind: 'modexp'; type: JethType; base: Expr; exp: Expr; mod: Expr }
+  // bn256Add/Mul/Pairing: alt_bn128 precompiles 0x06/0x07/0x08. add/mul yield a fresh 2-word memory G1Point
+  // image (memAggregate-shaped); pairing yields a bool. Reverts EMPTY on an invalid point / bad length.
+  | { kind: 'bn256'; type: JethType; op: 'add' | 'mul' | 'pairing'; addr: number; args: Expr[]; insize: number | 'dynamic'; outsize: number }
+  // blake2f(rounds, h(64), m(128), t:bytes16, f:bool) -> 64-byte bytes: BLAKE2b compression, staticcall 0x09.
+  | { kind: 'blake2f'; type: JethType; rounds: Expr; h: Expr; m: Expr; t: Expr; f: Expr }
   | { kind: 'abiEncode'; type: JethType; packed: boolean; args: Expr[]; selector?: Expr; sig?: Expr } // abi.encode/encodePacked/encodeWithSelector(selector)/encodeWithSignature(sig) -> bytes
   // abi.decode(data, T) / data.decode(T) -> the single decoded value of type T (memory-sourced ABI decode
   // of the [len][data] bytes value `data`). The tuple form abi.decode(data, [T1, ...]) is a DestructureSource
@@ -342,7 +356,14 @@ export type DestructureSource =
   // `let [a, b] = abi.decode(data, [T1, T2])` (and the `.decode([...])` sugar): decode the memory bytes
   // value `data` into N tuple components of `types`. Each component is materialized like the single form
   // (value -> a word, bytes/string/array/struct -> a memory image pointer).
-  | { kind: 'abiDecode'; data: Expr; types: JethType[] };
+  | { kind: 'abiDecode'; data: Expr; types: JethType[] }
+  // `let [ok, signer] = tryRecover(hash, sig)` -> [bool, address]: the never-reverting OZ ECDSA.tryRecover.
+  // (false, address(0)) on length!=65 / s>HALF / bad v / zero recovered signer; (true, signer) otherwise.
+  | { kind: 'tryRecover'; hash: Expr; sig: Expr }
+  // `let [fe, modulus] = pointEvaluation(versionedHash, z, y, commitment, proof)` -> [u256, u256]: the
+  // KZG point-evaluation precompile (0x0a, EIP-4844). Emits a length==48 guard on commitment/proof, reverts
+  // EMPTY on any failure, yields the two constant success words [FIELD_ELEMENTS_PER_BLOB, BLS_MODULUS].
+  | { kind: 'pointEvaluation'; versionedHash: Expr; z: Expr; y: Expr; commitment: Expr; proof: Expr };
 
 export type Stmt =
   | { kind: 'return'; value?: Expr }
@@ -505,6 +526,16 @@ export interface ImmutableVar {
   type: JethType;
 }
 
+/** Phase 6: a @receive / @fallback special runtime entry. Lowered INLINE in the dispatcher prologue
+ *  (emitRuntime), not a selectable function. @receive is always payable; @fallback is non-payable by
+ *  default (the `if callvalue(){revert}` guard) unless `payable`. `returnsBytes` stays false in v1
+ *  (the raw-bytes-returning fallback is gated). The body is ordinary Stmt[] (a constructor-like body). */
+export interface SpecialEntryIR {
+  payable: boolean;
+  returnsBytes: boolean;
+  body: Stmt[];
+}
+
 export interface ContractIR {
   name: string;
   stateVars: StateVar[];
@@ -515,4 +546,6 @@ export interface ContractIR {
   slotCount: number;
   ctor?: ConstructorIR; // a constructor, if declared (Phase 5)
   immutables: ImmutableVar[]; // @immutable fields (declaration order), baked via setimmutable
+  receive?: SpecialEntryIR; // @receive: empty-calldata ETH receiver (Phase 6)
+  fallback?: SpecialEntryIR; // @fallback: catch-all entry (Phase 6)
 }

@@ -36,6 +36,7 @@ import {
 import {
   ContractIR,
   ConstructorIR,
+  SpecialEntryIR,
   FunctionIR,
   StateVar,
   Stmt,
@@ -867,13 +868,34 @@ export class Analyzer {
     // modifier is usable in the derived contract). Decl order does not affect their semantics.
     // FUNCTIONS: collected per defining contract, tagged with definingContract, then run through
     // override resolution below (winner = most-derived; non-winners become per-contract super targets).
+    // Phase 6: @receive / @fallback special entries. The C3 linearization is most-derived-FIRST, so the
+    // FIRST one seen for each kind is the override winner. A second one in a MORE-BASE contract is the
+    // overridden base version (ignored); a second in the SAME contract is an error (JETH383).
+    let receiveNode: { member: ts.MethodDeclaration; contract: string } | undefined;
+    let fallbackNode: { member: ts.MethodDeclaration; contract: string } | undefined;
     const collectedFns: RawFunction[] = [];
     for (const c of lin) {
       const cn = c.name?.text ?? '<anon>';
       let ctorNode: ts.ConstructorDeclaration | undefined;
+      let sawReceiveHere = false;
+      let sawFallbackHere = false;
       for (const member of c.members) {
         if (ts.isMethodDeclaration(member)) {
           const decs = decoratorNames(member);
+          if (decs.includes('receive')) {
+            if (sawReceiveHere)
+              this.diags.error(member, 'JETH383', 'a contract may declare at most one @receive entry');
+            sawReceiveHere = true;
+            if (!receiveNode) receiveNode = { member, contract: cn };
+            continue;
+          }
+          if (decs.includes('fallback')) {
+            if (sawFallbackHere)
+              this.diags.error(member, 'JETH383', 'a contract may declare at most one @fallback entry');
+            sawFallbackHere = true;
+            if (!fallbackNode) fallbackNode = { member, contract: cn };
+            continue;
+          }
           if (decs.includes('error')) this.collectErrorDecl(member);
           else if (decs.includes('event')) this.collectEvent(member);
           else if (decs.includes('modifier')) this.collectModifier(member);
@@ -1173,6 +1195,11 @@ export class Analyzer {
     // the start (solc parity). With no constructor anywhere and no inline immutable init, no ctor.
     const ctor = this.mergeConstructors();
 
+    // Phase 6: type-check the @receive / @fallback bodies now that the symbol tables exist (a constructor-
+    // like context). The most-derived definition won during collection above.
+    const receive = receiveNode ? this.checkSpecialEntry(receiveNode.member, 'receive') : undefined;
+    const fallback = fallbackNode ? this.checkSpecialEntry(fallbackNode.member, 'fallback') : undefined;
+
     return {
       name,
       stateVars: layout.vars,
@@ -1182,6 +1209,8 @@ export class Analyzer {
       slotCount: layout.slotCount,
       ctor,
       immutables: this.immutableOrder.map((n) => ({ name: n, type: this.immutablesByName.get(n)!.type })),
+      receive,
+      fallback,
     };
   }
 
@@ -1780,6 +1809,70 @@ export class Analyzer {
     }
 
     return { params, payable, body };
+  }
+
+  /** Phase 6: type-check a @receive / @fallback special entry's body into a SpecialEntryIR (a constructor-
+   *  like, function-scoped context). @receive is ALWAYS payable (no params, no return, no redundant
+   *  @payable). @fallback is non-payable by default (opt-in @payable); v1 rejects params and a return type
+   *  (the raw-bytes fallback is gated, JETH384). Both reject @view/@pure/@external/etc. */
+  private checkSpecialEntry(member: ts.MethodDeclaration, kind: 'receive' | 'fallback'): SpecialEntryIR | undefined {
+    const decs = decoratorNames(member);
+    let payable = kind === 'receive'; // @receive is always payable
+    const BAD = ['view', 'pure', 'read', 'hidden', 'nonReentrant', 'external', 'public', 'internal', 'private', 'virtual', 'override', 'modifier', 'error', 'event'];
+    for (const d of decs) {
+      if (d === kind) continue;
+      if (d === 'payable') {
+        if (kind === 'receive') {
+          this.diags.error(member, 'JETH385', '@receive is always payable; drop the redundant @payable');
+        } else {
+          payable = true;
+        }
+      } else if (BAD.includes(d)) {
+        this.diags.error(member, 'JETH386', `a @${kind} entry cannot be @${d} (a special entry is payable or non-payable only)`);
+      } else {
+        // an applied @modifier on a special entry is not supported in v1.
+        this.diags.error(member, 'JETH386', `a @${kind} entry cannot carry a @modifier in v1`);
+      }
+    }
+    if (member.parameters.length > 0) {
+      this.diags.error(member, 'JETH384', `a @${kind} entry cannot declare parameters in v1 (the raw-bytes @fallback(d: bytes): bytes form is not yet supported)`);
+    }
+    if (member.type && member.type.kind !== ts.SyntaxKind.VoidKeyword) {
+      this.diags.error(member, 'JETH384', `a @${kind} entry cannot declare a return type in v1 (the raw-bytes @fallback(d: bytes): bytes form is not yet supported)`);
+    }
+
+    // Type-check the body in a fresh function-like context (modeled on checkConstructor), terminated as
+    // a void body. A @receive/@fallback is externally reachable and may read msg.value/msg.data; msg.value
+    // flows through the payable rule via currentMutability.
+    this.scopes = [];
+    this.loopDepth = 0;
+    this.pushScope();
+    this.currentMutability = payable ? 'payable' : 'nonpayable';
+    this.currentExternallyReachable = true;
+    this.currentWritesState = false;
+    this.currentReadsState = false;
+    this.currentReadsEnv = false;
+    this.currentReturnTypes = undefined;
+    this.currentCallees = new Set();
+    this.memArrayLocals.clear();
+    this.memAggregateLocals.clear();
+    this.memDynLocals.clear();
+    this.memDynStructLocals.clear();
+    const body: Stmt[] = [];
+    if (member.body) {
+      this.pushScope();
+      for (const s of member.body.statements) this.checkStatement(s, VOID, body);
+      this.popScope();
+    }
+    this.popScope();
+    if (this.currentCallees.size > 0) {
+      this.diags.error(
+        member,
+        'JETH387',
+        `calling an internal/private function from a @${kind} entry is not supported yet; inline the logic into the entry body`,
+      );
+    }
+    return { payable, returnsBytes: false, body };
   }
 
   /** @payable + applied-@modifier decorators on a constructor (shared by mergeConstructors). */
@@ -2444,6 +2537,9 @@ export class Analyzer {
       // inheritance: @virtual / @override (bare or @override(B,C)) are not @modifier applications.
       'virtual',
       'override',
+      // Phase 6: @receive / @fallback special runtime entries (handled in analyzeContract, not here).
+      'receive',
+      'fallback',
     ]);
     const appliedModifiers: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
     for (const d of ts.getDecorators(member) ?? []) {
@@ -5481,6 +5577,87 @@ export class Analyzer {
     };
   }
 
+  /** `let [ok, signer] = tryRecover(hash, sig)` -> [bool, address]: the never-reverting OZ ECDSA.tryRecover.
+   *  A destructure-only builtin (like addr.tryCall). Returns the DestructureSource + component types. */
+  private resolveTryRecover(node: ts.Expression): { source: DestructureSource; types: JethType[] } | undefined {
+    if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return undefined;
+    if (node.expression.text !== 'tryRecover') return undefined;
+    if (this.isVisibleLocal('tryRecover') || this.stateByName.has('tryRecover')) return undefined;
+    if (node.arguments.length !== 2) {
+      this.diags.error(node, 'JETH170', 'tryRecover(...) currently takes (hash: bytes32, sig: bytes)');
+      return undefined;
+    }
+    const BYTES32: JethType = { kind: 'bytesN', size: 32 };
+    const hash = this.checkExpr(node.arguments[0]!, BYTES32);
+    const sig = this.checkExpr(node.arguments[1]!, this.bytesLiteralExpected(node.arguments[1]!));
+    if (!hash || !sig) return undefined;
+    if (hash.type.kind !== 'bytesN' || hash.type.size !== 32) {
+      this.diags.error(node.arguments[0]!, 'JETH171', `tryRecover(...) requires a bytes32 hash, got ${displayName(hash.type)}`);
+      return undefined;
+    }
+    if (sig.type.kind !== 'bytes') {
+      this.diags.error(
+        node.arguments[1]!,
+        'JETH171',
+        `tryRecover(...) requires a bytes signature, got ${displayName(sig.type)} (use bytes(...) for a string)`,
+      );
+      return undefined;
+    }
+    return { source: { kind: 'tryRecover', hash, sig }, types: [BOOL, ADDRESS] };
+  }
+
+  /** `const [fe, modulus] = pointEvaluation(versionedHash, z, y, commitment, proof)` -> [u256, u256]: the
+   *  KZG point-evaluation precompile (0x0a). A destructure-only, env-reading (@view, NOT @pure) builtin. */
+  private resolvePointEvaluation(node: ts.Expression): { source: DestructureSource; types: JethType[] } | undefined {
+    if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return undefined;
+    if (node.expression.text !== 'pointEvaluation') return undefined;
+    if (this.isVisibleLocal('pointEvaluation') || this.stateByName.has('pointEvaluation')) return undefined;
+    // a STATICCALL reads the environment -> @view, not @pure (set even on a malformed call for consistency).
+    this.currentReadsEnv = true;
+    if (node.arguments.length !== 5) {
+      this.diags.error(node, 'JETH170', 'pointEvaluation(...) takes (versionedHash, z, y, commitment, proof)');
+      return undefined;
+    }
+    const BYTES32: JethType = { kind: 'bytesN', size: 32 };
+    const versionedHash = this.checkExpr(node.arguments[0]!, BYTES32);
+    const z = this.checkExpr(node.arguments[1]!, BYTES32);
+    const y = this.checkExpr(node.arguments[2]!, BYTES32);
+    const commitment = this.checkExpr(node.arguments[3]!, this.bytesLiteralExpected(node.arguments[3]!));
+    const proof = this.checkExpr(node.arguments[4]!, this.bytesLiteralExpected(node.arguments[4]!));
+    if (!versionedHash || !z || !y || !commitment || !proof) return undefined;
+    for (const [x, i] of [
+      [versionedHash, 0],
+      [z, 1],
+      [y, 2],
+    ] as const) {
+      if (x.type.kind !== 'bytesN' || x.type.size !== 32) {
+        this.diags.error(
+          node.arguments[i]!,
+          'JETH171',
+          `pointEvaluation(...) ${['versionedHash', 'z', 'y'][i]} must be bytes32, got ${displayName(x.type)}`,
+        );
+        return undefined;
+      }
+    }
+    for (const [x, i] of [
+      [commitment, 3],
+      [proof, 4],
+    ] as const) {
+      if (x.type.kind !== 'bytes') {
+        this.diags.error(
+          node.arguments[i]!,
+          'JETH171',
+          `pointEvaluation(...) ${['', '', '', 'commitment', 'proof'][i]} must be bytes (length 48), got ${displayName(x.type)}`,
+        );
+        return undefined;
+      }
+    }
+    return {
+      source: { kind: 'pointEvaluation', versionedHash, z, y, commitment, proof },
+      types: [U256, U256],
+    };
+  }
+
   /** `let [a, b] = addr.call/staticcall({..., decode: [T1, ...]})`: the in-object decode tuple form.
    *  The call's bytes result is wrapped in the abi.decode codec (same DestructureSource the tuple
    *  `<bytes>.decode([...])` sugar produces). Returns the source + component types, `'handled'` when the
@@ -6519,6 +6696,26 @@ export class Analyzer {
         return;
       }
       this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: ifaceCall.call, types: rts }, out);
+      return;
+    }
+    // `let [ok, signer] = tryRecover(...)` / `const [fe, modulus] = pointEvaluation(...)`: destructure-only
+    // builtins (mirror addr.tryCall). Recognized before the generic call/abi.decode resolvers.
+    const tryRecover = this.resolveTryRecover(decl.initializer);
+    if (tryRecover) {
+      if (n !== 2) {
+        this.diags.error(decl.name, 'JETH066', `tryRecover destructuring expects exactly 2 names [ok, signer], got ${n}`);
+        return;
+      }
+      this.bindDestructure(pat, n, tryRecover.types, tryRecover.source, out);
+      return;
+    }
+    const pointEval = this.resolvePointEvaluation(decl.initializer);
+    if (pointEval) {
+      if (n !== 2) {
+        this.diags.error(decl.name, 'JETH066', `pointEvaluation destructuring expects exactly 2 names [fe, modulus], got ${n}`);
+        return;
+      }
+      this.bindDestructure(pat, n, pointEval.types, pointEval.source, out);
       return;
     }
     const callName = this.tupleCallName(decl.initializer);
@@ -8723,6 +8920,127 @@ export class Analyzer {
     return !!e && e.type.kind === 'bytes';
   }
 
+  /** A G1Point/G2Point @struct shape check: exactly `n` u256 fields (n=2 for G1, n=4 for G2). A too-loose
+   *  check would emit a wrong-size staticcall buffer, so the field count and width are pinned. */
+  private isPointStruct(t: JethType, n: number): boolean {
+    return (
+      t.kind === 'struct' &&
+      t.fields.length === n &&
+      t.fields.every((f) => f.type.kind === 'uint' && f.type.bits === 256)
+    );
+  }
+
+  private checkBn256Call(node: ts.CallExpression, callee: 'bn256Add' | 'bn256Mul' | 'bn256Pairing'): Expr | undefined {
+    if (callee === 'bn256Pairing') {
+      // packed-bytes form: bn256Pairing(input: bytes): bool. staticcall 0x08, empty input -> true,
+      // a non-192-multiple length reverts EMPTY at runtime (byte-identical to solc).
+      if (node.arguments.length !== 1) {
+        this.diags.error(node, 'JETH170', 'bn256Pairing(...) takes exactly one argument (input: bytes)');
+        return undefined;
+      }
+      const input = this.checkExpr(node.arguments[0]!, this.bytesLiteralExpected(node.arguments[0]!));
+      if (!input) return undefined;
+      if (input.type.kind !== 'bytes') {
+        this.diags.error(
+          node.arguments[0]!,
+          'JETH171',
+          `bn256Pairing(...) requires a bytes argument, got ${displayName(input.type)} (pack pairs with abi.encodePacked(...))`,
+        );
+        return undefined;
+      }
+      return { kind: 'bn256', type: BOOL, op: 'pairing', addr: 8, args: [input], insize: 'dynamic', outsize: 32 };
+    }
+    if (callee === 'bn256Add') {
+      if (node.arguments.length !== 2) {
+        this.diags.error(node, 'JETH170', 'bn256Add(...) takes exactly two G1Point arguments');
+        return undefined;
+      }
+      const a = this.checkExpr(node.arguments[0]!);
+      const b = this.checkExpr(node.arguments[1]!);
+      if (!a || !b) return undefined;
+      for (const [x, i] of [
+        [a, 0],
+        [b, 1],
+      ] as const) {
+        if (!this.isPointStruct(x.type, 2)) {
+          this.diags.error(
+            node.arguments[i]!,
+            'JETH171',
+            `bn256Add(...) requires a G1Point (a @struct of exactly 2 u256 fields), got ${displayName(x.type)}`,
+          );
+          return undefined;
+        }
+      }
+      return { kind: 'bn256', type: a.type, op: 'add', addr: 6, args: [a, b], insize: 128, outsize: 64 };
+    }
+    // bn256Mul(p: G1Point, s: u256): G1Point
+    if (node.arguments.length !== 2) {
+      this.diags.error(node, 'JETH170', 'bn256Mul(...) takes a G1Point and a u256 scalar');
+      return undefined;
+    }
+    const p = this.checkExpr(node.arguments[0]!);
+    const s = this.checkExpr(node.arguments[1]!, U256);
+    if (!p || !s) return undefined;
+    if (!this.isPointStruct(p.type, 2)) {
+      this.diags.error(
+        node.arguments[0]!,
+        'JETH171',
+        `bn256Mul(...) requires a G1Point (a @struct of exactly 2 u256 fields), got ${displayName(p.type)}`,
+      );
+      return undefined;
+    }
+    if (!isInteger(s.type)) {
+      this.diags.error(node.arguments[1]!, 'JETH171', `bn256Mul(...) scalar must be an integer, got ${displayName(s.type)}`);
+      return undefined;
+    }
+    return {
+      kind: 'bn256',
+      type: p.type,
+      op: 'mul',
+      addr: 7,
+      args: [p, this.coerce(s, U256, node.arguments[1]!)],
+      insize: 96,
+      outsize: 64,
+    };
+  }
+
+  private checkBlake2fCall(node: ts.CallExpression): Expr | undefined {
+    // blake2f(rounds: u32, h: bytes(64), m: bytes(128), t: bytes16, f: bool): bytes (the 64-byte output).
+    if (node.arguments.length !== 5) {
+      this.diags.error(node, 'JETH170', 'blake2f(...) takes exactly five arguments (rounds, h, m, t, f)');
+      return undefined;
+    }
+    const U32: JethType = { kind: 'uint', bits: 32 };
+    const BYTES16: JethType = { kind: 'bytesN', size: 16 };
+    const rounds = this.checkExpr(node.arguments[0]!, U32);
+    const h = this.checkExpr(node.arguments[1]!, this.bytesLiteralExpected(node.arguments[1]!));
+    const m = this.checkExpr(node.arguments[2]!, this.bytesLiteralExpected(node.arguments[2]!));
+    const t = this.checkExpr(node.arguments[3]!, BYTES16);
+    const f = this.checkExpr(node.arguments[4]!, BOOL);
+    if (!rounds || !h || !m || !t || !f) return undefined;
+    if (!isInteger(rounds.type)) {
+      this.diags.error(node.arguments[0]!, 'JETH171', `blake2f(...) rounds must be a u32, got ${displayName(rounds.type)}`);
+      return undefined;
+    }
+    if (h.type.kind !== 'bytes') {
+      this.diags.error(node.arguments[1]!, 'JETH171', `blake2f(...) h must be bytes (length 64), got ${displayName(h.type)}`);
+      return undefined;
+    }
+    if (m.type.kind !== 'bytes') {
+      this.diags.error(node.arguments[2]!, 'JETH171', `blake2f(...) m must be bytes (length 128), got ${displayName(m.type)}`);
+      return undefined;
+    }
+    if (t.type.kind !== 'bytesN' || t.type.size !== 16) {
+      this.diags.error(node.arguments[3]!, 'JETH171', `blake2f(...) t must be bytes16, got ${displayName(t.type)}`);
+      return undefined;
+    }
+    if (f.type.kind !== 'bool') {
+      this.diags.error(node.arguments[4]!, 'JETH171', `blake2f(...) f (final-block flag) must be bool, got ${displayName(f.type)}`);
+      return undefined;
+    }
+    return { kind: 'blake2f', type: BYTES, rounds: this.coerce(rounds, U32, node.arguments[0]!), h, m, t, f };
+  }
+
   private checkAddressCall(node: ts.CallExpression): Expr | undefined {
     if (node.arguments.length !== 1) {
       this.diags.error(node, 'JETH170', 'address(...) takes exactly one argument');
@@ -10257,6 +10575,154 @@ export class Analyzer {
           addr: isSha ? 2 : 3,
           leftShift: isSha ? 0 : 96,
         };
+      }
+      if (callee === 'ecrecover') {
+        // RAW unsafe builtin (= solc ecrecover, the 0x01 precompile). ecrecover(hash, v, r, s) -> address:
+        // address(0) on ANY failure, NEVER reverts, NO malleability/v/zero checks. byte-identical to solc.
+        if (node.arguments.length !== 4) {
+          this.diags.error(node, 'JETH170', 'ecrecover(...) takes exactly four arguments (hash, v, r, s)');
+          return undefined;
+        }
+        const BYTES32: JethType = { kind: 'bytesN', size: 32 };
+        const U8: JethType = { kind: 'uint', bits: 8 };
+        const hash = this.checkExpr(node.arguments[0]!, BYTES32);
+        const v = this.checkExpr(node.arguments[1]!, U8);
+        const r = this.checkExpr(node.arguments[2]!, BYTES32);
+        const s = this.checkExpr(node.arguments[3]!, BYTES32);
+        if (!hash || !v || !r || !s) return undefined;
+        for (const [x, ty, i] of [
+          [hash, BYTES32, 0],
+          [r, BYTES32, 2],
+          [s, BYTES32, 3],
+        ] as const) {
+          if (x.type.kind !== 'bytesN' || x.type.size !== 32) {
+            this.diags.error(
+              node.arguments[i]!,
+              'JETH171',
+              `ecrecover(...) requires a bytes32 ${['hash', '', 'r', 's'][i]}, got ${displayName(x.type)}`,
+            );
+            return undefined;
+          }
+        }
+        if (!isInteger(v.type)) {
+          this.diags.error(node.arguments[1]!, 'JETH171', `ecrecover(...) v must be an integer, got ${displayName(v.type)}`);
+          return undefined;
+        }
+        return {
+          kind: 'ecrecover',
+          type: ADDRESS,
+          hash,
+          v: this.coerce(v, U8, node.arguments[1]!),
+          r,
+          s,
+        };
+      }
+      if (callee === 'recover') {
+        // SAFE OZ-5.x ECDSA.recover. Two overloads by arity: recover(hash, sig:bytes) (65-byte check) and
+        // recover(hash, v, r, s) (split form, no length check). Both reject high-s (s>HALF, STRICT) and a
+        // zero recovered signer with the exact OZ custom-error selectors. byte-identical to OZ ECDSA.
+        const BYTES32: JethType = { kind: 'bytesN', size: 32 };
+        const U8: JethType = { kind: 'uint', bits: 8 };
+        if (node.arguments.length === 2) {
+          const hash = this.checkExpr(node.arguments[0]!, BYTES32);
+          const sig = this.checkExpr(node.arguments[1]!, this.bytesLiteralExpected(node.arguments[1]!));
+          if (!hash || !sig) return undefined;
+          if (hash.type.kind !== 'bytesN' || hash.type.size !== 32) {
+            this.diags.error(node.arguments[0]!, 'JETH171', `recover(...) requires a bytes32 hash, got ${displayName(hash.type)}`);
+            return undefined;
+          }
+          if (sig.type.kind !== 'bytes') {
+            this.diags.error(
+              node.arguments[1]!,
+              'JETH171',
+              `recover(...) requires a bytes signature, got ${displayName(sig.type)} (use bytes(...) for a string)`,
+            );
+            return undefined;
+          }
+          return { kind: 'recover', type: ADDRESS, hash, sig };
+        }
+        if (node.arguments.length === 4) {
+          const hash = this.checkExpr(node.arguments[0]!, BYTES32);
+          const v = this.checkExpr(node.arguments[1]!, U8);
+          const r = this.checkExpr(node.arguments[2]!, BYTES32);
+          const s = this.checkExpr(node.arguments[3]!, BYTES32);
+          if (!hash || !v || !r || !s) return undefined;
+          for (const [x, i] of [
+            [hash, 0],
+            [r, 2],
+            [s, 3],
+          ] as const) {
+            if (x.type.kind !== 'bytesN' || x.type.size !== 32) {
+              this.diags.error(
+                node.arguments[i]!,
+                'JETH171',
+                `recover(...) requires a bytes32 ${['hash', '', 'r', 's'][i]}, got ${displayName(x.type)}`,
+              );
+              return undefined;
+            }
+          }
+          if (!isInteger(v.type)) {
+            this.diags.error(node.arguments[1]!, 'JETH171', `recover(...) v must be an integer, got ${displayName(v.type)}`);
+            return undefined;
+          }
+          return { kind: 'recover', type: ADDRESS, hash, v: this.coerce(v, U8, node.arguments[1]!), r, s };
+        }
+        this.diags.error(node, 'JETH170', 'recover(...) takes (hash, sig) or (hash, v, r, s)');
+        return undefined;
+      }
+      if (callee === 'tryRecover') {
+        // destructure-only (like addr.tryCall): `let [ok, signer] = tryRecover(hash, sig)`. A scalar use
+        // reaches here only as a misuse; the destructure path is handled by resolveTryRecover.
+        this.diags.error(
+          node,
+          'JETH066',
+          'tryRecover returns a tuple; destructure it as `let [ok, signer] = tryRecover(hash, sig)`',
+        );
+        return undefined;
+      }
+      if (callee === 'modexp') {
+        // modexp(base, exp, mod): arbitrary-precision modular exponentiation (precompile 0x05) -> bytes
+        // of length mod.length. mod=0 is a VALID input (returns mod.length zero bytes) - NO zero gate.
+        if (node.arguments.length !== 3) {
+          this.diags.error(node, 'JETH170', 'modexp(...) takes exactly three arguments (base, exp, mod)');
+          return undefined;
+        }
+        const base = this.checkExpr(node.arguments[0]!, this.bytesLiteralExpected(node.arguments[0]!));
+        const exp = this.checkExpr(node.arguments[1]!, this.bytesLiteralExpected(node.arguments[1]!));
+        const mod = this.checkExpr(node.arguments[2]!, this.bytesLiteralExpected(node.arguments[2]!));
+        if (!base || !exp || !mod) return undefined;
+        for (const [x, i] of [
+          [base, 0],
+          [exp, 1],
+          [mod, 2],
+        ] as const) {
+          if (x.type.kind !== 'bytes') {
+            this.diags.error(
+              node.arguments[i]!,
+              'JETH171',
+              `modexp(...) requires a bytes argument, got ${displayName(x.type)} (use abi.encodePacked(...) / bytes(...) for an integer)`,
+            );
+            return undefined;
+          }
+        }
+        return { kind: 'modexp', type: BYTES, base, exp, mod };
+      }
+      if (callee === 'bn256Add' || callee === 'bn256Mul' || callee === 'bn256Pairing') {
+        return this.checkBn256Call(node, callee);
+      }
+      if (callee === 'blake2f') {
+        return this.checkBlake2fCall(node);
+      }
+      if (callee === 'pointEvaluation') {
+        // destructure-only: `let [fe, modulus] = pointEvaluation(...)`. A scalar use is a misuse; the
+        // env-read flag is set on every path (incl. this rejection) so the @pure check stays consistent.
+        this.currentReadsEnv = true;
+        this.diags.error(
+          node,
+          'JETH066',
+          'pointEvaluation yields two values; destructure it as `const [fe, modulus] = pointEvaluation(versionedHash, z, y, commitment, proof)`',
+        );
+        return undefined;
       }
       if (callee === 'addmod' || callee === 'mulmod') {
         // addmod(a,b,m) = (a+b) % m, mulmod(a,b,m) = (a*b) % m, both full-precision (no overflow);

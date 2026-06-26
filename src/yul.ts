@@ -12,7 +12,7 @@
 // Arithmetic is CHECKED by default: every +,-,*,/,% lowers to a helper that
 // reverts with Panic(0x11) on overflow / Panic(0x12) on division by zero,
 // matching Solidity >=0.8.
-import { ContractIR, FunctionIR, Stmt, Expr, BinOp, RevertReason, EventIR } from './ir.js';
+import { ContractIR, FunctionIR, SpecialEntryIR, Stmt, Expr, BinOp, RevertReason, EventIR } from './ir.js';
 import {
   JethType,
   StructField,
@@ -59,6 +59,17 @@ const REENTRANCY_TSLOT = '0xe3c13ce1a6dbca2cd747af6cfb37b5bfaa572cf58e51980e617e
 // The OpenZeppelin custom error ReentrancyGuardReentrantCall() (selector 0x3ee5aeb5), left-aligned in
 // a word, so a reentrant call reverts with revert data byte-identical to OZ's transient guard.
 const REENTRANCY_ERROR_WORD = '0x3ee5aeb500000000000000000000000000000000000000000000000000000000';
+
+// OpenZeppelin 5.x ECDSA constants. HALF_ORDER == floor(secp256k1.N / 2); the high-s rejection is STRICT
+// `s > HALF_ORDER` (so s == HALF_ORDER is accepted). The three custom-error selectors are left-aligned in a
+// word for `mstore(0, <word>)` + revert(0, 4 [+0x20]), byte-identical to OZ's custom-error encoding.
+const HALF_ORDER = '0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0';
+const ECDSA_INVALID_SIGNATURE = '0xf645eedf00000000000000000000000000000000000000000000000000000000'; // ECDSAInvalidSignature()
+const ECDSA_INVALID_SIGNATURE_LENGTH = '0xfce698f700000000000000000000000000000000000000000000000000000000'; // ECDSAInvalidSignatureLength(uint256)
+const ECDSA_INVALID_SIGNATURE_S = '0xd78bce0c00000000000000000000000000000000000000000000000000000000'; // ECDSAInvalidSignatureS(bytes32)
+// EIP-4844 KZG point-evaluation (0x0a) success-output constants (cancun-pinned).
+const KZG_FIELD_ELEMENTS_PER_BLOB = '0x0000000000000000000000000000000000000000000000000000000000001000'; // 4096
+const KZG_BLS_MODULUS = '0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001';
 
 /** ABI head-word count of a struct's tuple HEAD (spec section 3.0): each field
  *  contributes its inline static words if static, or exactly ONE offset word if
@@ -276,7 +287,38 @@ ${indent(runtime, 6)}
     lines.push('mstore(0x40, 0x80) // init free memory pointer');
 
     const external = contract.functions.filter((f) => f.visibility === 'external');
-    if (external.length === 0) {
+    const hasSpecial = !!(contract.receive || contract.fallback);
+    if (hasSpecial) {
+      // Phase 6: receive/fallback dispatch (byte-identical to solc's optimized IR). The selector switch
+      // is wrapped in `if iszero(lt(calldatasize(),4))` with an EMPTY default (NEVER default{revert}),
+      // then the receive empty-calldata check, then the fallback (non-payable callvalue guard + body),
+      // else a trailing revert. Empty calldata with no receive falls through the switch into the fallback.
+      if (external.length > 0) {
+        lines.push('if iszero(lt(calldatasize(), 4)) {');
+        lines.push('  let selector := shr(224, calldataload(0))');
+        lines.push('  switch selector');
+        for (const fn of external) {
+          lines.push(`  case 0x${fn.selector} { // ${fn.signature}`);
+          for (const l of this.emitDispatchCase(fn)) lines.push('    ' + l);
+          lines.push('  }');
+        }
+        lines.push('  default {}');
+        lines.push('}');
+      }
+      if (contract.receive) {
+        lines.push('if iszero(calldatasize()) {');
+        for (const l of this.emitSpecialEntryBody(contract.receive)) lines.push('  ' + l);
+        lines.push('  stop()');
+        lines.push('}');
+      }
+      if (contract.fallback) {
+        if (!contract.fallback.payable) lines.push('if callvalue() { revert(0, 0) }');
+        for (const l of this.emitSpecialEntryBody(contract.fallback)) lines.push(l);
+        lines.push('stop()');
+      } else {
+        lines.push('revert(0, 0)');
+      }
+    } else if (external.length === 0) {
       // No externally-callable functions: any call reverts. (Avoid emitting a
       // `switch` with only a default, which solc warns about.)
       lines.push('revert(0, 0)');
@@ -308,6 +350,24 @@ ${indent(runtime, 6)}
       lines.push(def);
     }
     return lines.join('\n');
+  }
+
+  /** Phase 6: lower a @receive/@fallback body INLINE in the dispatcher (no params, no return). A bare
+   *  `return;` halts via stop() (specialEntry flag). The caller appends the trailing stop(). */
+  private emitSpecialEntryBody(entry: SpecialEntryIR): string[] {
+    const ctx: LowerCtx = {
+      scopes: [new Map()],
+      returnType: { kind: 'void' } as JethType,
+      dynParams: new Map(),
+      cdArrays: new Map(),
+      cdAggregates: new Map(),
+      cdDynStructs: new Map(),
+      cdParamHead: new Map(),
+      specialEntry: true,
+    };
+    const out: string[] = [];
+    for (const s of entry.body) for (const l of this.lowerStmt(s, ctx)) out.push(l);
+    return out;
   }
 
   /** A Yul `function userfn_<name>(args) -> ret { body }` for an internally-called function.
@@ -633,7 +693,9 @@ ${indent(runtime, 6)}
           break;
         }
         if (!s.value) {
-          out.push('return(0, 0)');
+          // a @receive/@fallback body's bare `return;` halts via stop() (byte-identical to solc), not
+          // return(0,0); a normal void function returns empty calldata.
+          out.push(ctx.specialEntry ? 'stop()' : 'return(0, 0)');
           break;
         }
         // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
@@ -642,7 +704,7 @@ ${indent(runtime, 6)}
         if (
           isStaticType(s.value.type) &&
           (s.value.type.kind === 'struct' || s.value.type.kind === 'array') &&
-          (s.value.kind === 'memAggregate' || s.value.kind === 'call' || s.value.kind === 'ternary')
+          (s.value.kind === 'memAggregate' || s.value.kind === 'call' || s.value.kind === 'ternary' || s.value.kind === 'bn256')
         ) {
           // a STATIC memory-aggregate image (struct / fixed array): the image IS the flat return blob.
           // (A DYNAMIC-array call/ternary falls through to encodeMemArrayReturn below.)
@@ -1944,6 +2006,109 @@ ${indent(runtime, 6)}
         out.push(`let ${r} := ${e.leftShift ? `shl(${e.leftShift}, mload(0x00))` : 'mload(0x00)'}`);
         return r;
       }
+      case 'ecrecover': {
+        // RAW solc ecrecover: staticcall(0x01) over [hash | left-padded-v | r | s] (128B) into a fresh
+        // buffer; address(0) on ANY failure, NEVER reverts (the returndatasize()==0x20 guard is mandatory
+        // so a failed call never leaks stale memory into the returned address).
+        const hash = this.lowerExpr(e.hash, ctx, out);
+        const v = this.lowerExpr(e.v, ctx, out);
+        const r = this.lowerExpr(e.r, ctx, out);
+        const s = this.lowerExpr(e.s, ctx, out);
+        return this.emitEcrecover(hash, v, r, s, out);
+      }
+      case 'recover': {
+        // SAFE OZ-5.x ECDSA.recover. The 65-byte bytes form reads r/s/v from the memory image of `sig`;
+        // the split form uses the v/r/s registers directly. Then s>HALF (STRICT) and signer==0 checks.
+        let rWord: string;
+        let sWord: string;
+        let vWord: string;
+        const hash = this.lowerExpr(e.hash, ctx, out);
+        if (e.sig) {
+          const { mp, len } = this.toMemory(this.lowerDynamic(e.sig, ctx, out), out);
+          // length != 65 -> ECDSAInvalidSignatureLength(uint256 length)
+          out.push(`if iszero(eq(${len}, 65)) {`);
+          out.push(`  mstore(0, ${ECDSA_INVALID_SIGNATURE_LENGTH})`);
+          out.push(`  mstore(4, ${len})`);
+          out.push('  revert(0, 0x24)');
+          out.push('}');
+          const rr = this.fresh();
+          const ss = this.fresh();
+          const vv = this.fresh();
+          out.push(`let ${rr} := mload(add(${mp}, 0x20))`);
+          out.push(`let ${ss} := mload(add(${mp}, 0x40))`);
+          out.push(`let ${vv} := byte(0, mload(add(${mp}, 0x60)))`);
+          rWord = rr;
+          sWord = ss;
+          vWord = vv;
+        } else {
+          rWord = this.lowerExpr(e.r!, ctx, out);
+          sWord = this.lowerExpr(e.s!, ctx, out);
+          vWord = this.lowerExpr(e.v!, ctx, out);
+        }
+        // s > HALF_ORDER (STRICT) -> ECDSAInvalidSignatureS(bytes32 s)
+        const sReg = this.fresh();
+        out.push(`let ${sReg} := ${sWord}`);
+        out.push(`if gt(${sReg}, ${HALF_ORDER}) {`);
+        out.push(`  mstore(0, ${ECDSA_INVALID_SIGNATURE_S})`);
+        out.push(`  mstore(4, ${sReg})`);
+        out.push('  revert(0, 0x24)');
+        out.push('}');
+        const signer = this.emitEcrecover(hash, vWord, rWord, sReg, out);
+        // signer == address(0) -> ECDSAInvalidSignature() (covers bad v / out-of-range r,s)
+        out.push(`if iszero(${signer}) {`);
+        out.push(`  mstore(0, ${ECDSA_INVALID_SIGNATURE})`);
+        out.push('  revert(0, 4)');
+        out.push('}');
+        return signer;
+      }
+      case 'bn256': {
+        if (e.op === 'pairing') {
+          // bn256Pairing(input): staticcall 0x08 over the packed bytes blob, read the single bool word.
+          // 0x00 scratch is safe (consumed immediately like precompileHash). Reverts EMPTY on failure.
+          const { mp, len } = this.toMemory(this.lowerDynamic(e.args[0]!, ctx, out), out);
+          const r = this.fresh();
+          out.push(`if iszero(staticcall(gas(), 8, add(${mp}, 0x20), ${len}, 0x00, 0x20)) { revert(0, 0) }`);
+          out.push(`let ${r} := mload(0x00)`);
+          return r;
+        }
+        // bn256Add(0x06) / bn256Mul(0x07): materialize each G1Point to a 2-word memory image FIRST (an
+        // allocating source must not bump the FMP between the buffer alloc and the field reads), then
+        // allocate a FRESH FMP buffer (NOT scratch - a 0x40 clobber OOGs), copy the input words, staticcall,
+        // and the 64-byte G1Point result lands in-place at the buffer. Bump the FMP past it; the result is a
+        // memAggregate-shaped 2-word memory image. Reverts EMPTY on an invalid point / bad input.
+        const aPtr = this.aggArgToMemPtr(e.args[0]!, ctx, out);
+        const aX = this.fresh();
+        const aY = this.fresh();
+        out.push(`let ${aX} := mload(${aPtr})`);
+        out.push(`let ${aY} := mload(add(${aPtr}, 0x20))`);
+        let bX = '';
+        let bY = '';
+        let scalar = '';
+        if (e.op === 'add') {
+          const bPtr = this.aggArgToMemPtr(e.args[1]!, ctx, out);
+          bX = this.fresh();
+          bY = this.fresh();
+          out.push(`let ${bX} := mload(${bPtr})`);
+          out.push(`let ${bY} := mload(add(${bPtr}, 0x20))`);
+        } else {
+          scalar = this.fresh();
+          out.push(`let ${scalar} := ${this.lowerExpr(e.args[1]!, ctx, out)}`);
+        }
+        const p = this.fresh();
+        out.push(`let ${p} := mload(0x40)`);
+        out.push(`mstore(${p}, ${aX})`);
+        out.push(`mstore(add(${p}, 0x20), ${aY})`);
+        if (e.op === 'add') {
+          out.push(`mstore(add(${p}, 0x40), ${bX})`);
+          out.push(`mstore(add(${p}, 0x60), ${bY})`);
+        } else {
+          out.push(`mstore(add(${p}, 0x40), ${scalar})`);
+        }
+        const insizeHex = e.insize === 'dynamic' ? '0' : `0x${e.insize.toString(16)}`;
+        out.push(`if iszero(staticcall(gas(), ${e.addr}, ${p}, ${insizeHex}, ${p}, 0x40)) { revert(0, 0) }`);
+        out.push(`mstore(0x40, add(${p}, 0x40))`);
+        return p;
+      }
       case 'blockhash':
         return `blockhash(${this.lowerExpr(e.arg, ctx, out)})`;
       case 'blobhash':
@@ -2116,6 +2281,8 @@ ${indent(runtime, 6)}
       case 'mapStorageValue':
       case 'mapDynValue':
       case 'abiEncode':
+      case 'modexp': // modexp(...) -> bytes (a reference value, lowered via lowerDynamic)
+      case 'blake2f': // blake2f(...) -> 64-byte bytes (a reference value, lowered via lowerDynamic)
       case 'extCall': // bytes returndata (a reference value, lowered via lowerDynamic)
       case 'callData': // this.data inside a success condition (the returndata bytes reference)
       case 'catchReason': // this.reason (string) inside a catch body (a reference value, lowered via lowerDynamic)
@@ -5727,6 +5894,53 @@ ${indent(runtime, 6)}
         out.push(`if mod(${sz}, 0x20) { mstore(add(add(${ptr}, 0x20), ${sz}), 0) }`);
         return { src: 'memory', ptr };
       }
+      case 'modexp': {
+        // modexp(base, exp, mod) (precompile 0x05). Materialize each operand to memory FIRST (an
+        // allocating arg must not bump the FMP between the input alloc and the mcopies), then build the
+        // input blob 32B Bsize || 32B Esize || 32B Msize || base || exp || mod (unpadded totalIn passed to
+        // staticcall), revert EMPTY on ok=0, capture the returndata into a fresh [len][data] blob.
+        const b = this.toMemory(this.lowerDynamic(e.base, ctx, out), out);
+        const ex = this.toMemory(this.lowerDynamic(e.exp, ctx, out), out);
+        const md = this.toMemory(this.lowerDynamic(e.mod, ctx, out), out);
+        const total = this.fresh();
+        out.push(`let ${total} := add(0x60, add(${b.len}, add(${ex.len}, ${md.len})))`);
+        const inp = this.fresh();
+        out.push(`let ${inp} := ${this.alloc()}(${total})`);
+        out.push(`mstore(${inp}, ${b.len})`);
+        out.push(`mstore(add(${inp}, 0x20), ${ex.len})`);
+        out.push(`mstore(add(${inp}, 0x40), ${md.len})`);
+        out.push(`mcopy(add(${inp}, 0x60), add(${b.mp}, 0x20), ${b.len})`);
+        out.push(`mcopy(add(add(${inp}, 0x60), ${b.len}), add(${ex.mp}, 0x20), ${ex.len})`);
+        out.push(`mcopy(add(add(add(${inp}, 0x60), ${b.len}), ${ex.len}), add(${md.mp}, 0x20), ${md.len})`);
+        out.push(`if iszero(staticcall(gas(), 0x05, ${inp}, ${total}, 0, 0)) { revert(0, 0) }`);
+        const ptr = this.captureReturndata(out);
+        return { src: 'memory', ptr };
+      }
+      case 'blake2f': {
+        // blake2f(rounds:u32, h(64), m(128), t:bytes16, f:bool) (precompile 0x09). Build the 213-byte
+        // EIP-152 blob: rounds(4 BE) | h(64) | m(128) | t(16) | f(1). h/m length-guards revert EMPTY.
+        const h = this.toMemory(this.lowerDynamic(e.h, ctx, out), out);
+        const m = this.toMemory(this.lowerDynamic(e.m, ctx, out), out);
+        out.push(`if iszero(eq(${h.len}, 64)) { revert(0, 0) }`);
+        out.push(`if iszero(eq(${m.len}, 128)) { revert(0, 0) }`);
+        const rounds = this.lowerExpr(e.rounds, ctx, out);
+        const t = this.lowerExpr(e.t, ctx, out);
+        const f = this.lowerExpr(e.f, ctx, out);
+        // allocate the 64-byte output bytes blob FIRST (so the t-store's zero-write past byte 212 cannot
+        // touch it); then the 213-byte input blob.
+        const o = this.fresh();
+        out.push(`let ${o} := ${this.alloc()}(0x60)`);
+        out.push(`mstore(${o}, 64)`);
+        const p = this.fresh();
+        out.push(`let ${p} := ${this.alloc()}(213)`);
+        out.push(`mstore(${p}, shl(224, ${rounds}))`);
+        out.push(`mcopy(add(${p}, 4), add(${h.mp}, 0x20), 64)`);
+        out.push(`mcopy(add(${p}, 68), add(${m.mp}, 0x20), 128)`);
+        out.push(`mstore(add(${p}, 196), ${t})`);
+        out.push(`mstore8(add(${p}, 212), ${f})`);
+        out.push(`if iszero(staticcall(gas(), 9, ${p}, 213, add(${o}, 0x20), 64)) { revert(0, 0) }`);
+        return { src: 'memory', ptr: o };
+      }
       case 'callData':
         // this.data inside a success condition: the returndata blob pointer bound for this check.
         return { src: 'memory', ptr: this.ctxLookup(ctx, EXT_CALL_DATA_BINDING) };
@@ -5866,6 +6080,42 @@ ${indent(runtime, 6)}
       out.push(`if mod(${len}, 0x20) { mstore(add(add(${mp}, 0x20), ${len}), 0) }`);
     }
     return { mp, len };
+  }
+
+  /** The raw solc `ecrecover` expansion: staticcall(0x01) over [hash | left-padded-v | r | s] (128 bytes)
+   *  into a FRESH free-memory buffer (avoids the 0x40/0x60 scratch clobber). Returns a register holding the
+   *  recovered address, or 0 on ANY failure - NEVER reverts. The `and(success, eq(returndatasize(),0x20))`
+   *  guard is mandatory: the precompile writes NOTHING on failure, so an unguarded mload leaks stale memory.
+   *  Reused by the raw `ecrecover`, the safe `recover`, and the never-reverting `tryRecover`. */
+  private emitEcrecover(hash: string, v: string, r: string, s: string, out: string[]): string {
+    const p = this.fresh();
+    const res = this.fresh();
+    out.push(`let ${p} := mload(0x40)`);
+    out.push(`mstore(${p}, ${hash})`);
+    out.push(`mstore(add(${p}, 0x20), and(${v}, 0xff))`);
+    out.push(`mstore(add(${p}, 0x40), ${r})`);
+    out.push(`mstore(add(${p}, 0x60), ${s})`);
+    out.push(`let ${res} := 0`);
+    // Bind the staticcall success to a variable FIRST: Yul evaluates an `and(a, b)`'s arguments
+    // right-to-left, so an inline `and(staticcall(...), eq(returndatasize(),0x20))` would read the
+    // STALE (pre-call) returndatasize and always discard the result. solc's expansion splits it too.
+    const ok = this.fresh();
+    out.push(`let ${ok} := staticcall(gas(), 1, ${p}, 0x80, ${p}, 0x20)`);
+    out.push(`if and(${ok}, eq(returndatasize(), 0x20)) { ${res} := mload(${p}) }`);
+    return res;
+  }
+
+  /** Copy the current returndata into a FRESH [len][data] memory bytes blob (length-word at the returned
+   *  pointer), tail-zeroing a partial last word. Used by modexp (the precompile returns Msize raw bytes). */
+  private captureReturndata(out: string[]): string {
+    const dataPtr = this.fresh();
+    const rlen = this.fresh();
+    out.push(`let ${rlen} := returndatasize()`);
+    out.push(`let ${dataPtr} := ${this.alloc()}(add(0x20, and(add(${rlen}, 0x1f), not(0x1f))))`);
+    out.push(`mstore(${dataPtr}, ${rlen})`);
+    out.push(`returndatacopy(add(${dataPtr}, 0x20), 0, ${rlen})`);
+    out.push(`if mod(${rlen}, 0x20) { mstore(add(add(${dataPtr}, 0x20), ${rlen}), 0) }`);
+    return dataPtr;
   }
 
   /** Phase 6: perform a low-level CALL/STATICCALL. Lowers the data/value/gas operands, executes the
@@ -6704,6 +6954,58 @@ ${indent(runtime, 6)}
       // registered the reference components in the matching side-tables, like a localDecl).
       return this.lowerAbiDecode(source.data, source.types, ctx, out);
     }
+    if (source.kind === 'tryRecover') {
+      // `let [ok, signer] = tryRecover(hash, sig)`: the never-reverting OZ ECDSA.tryRecover. Read r/s/v
+      // from the memory image of `sig`; init (0, 0); only a 65-byte, non-high-s, non-zero-signer case
+      // yields (1, signer). Mirrors the recover gate without any revert (every bad case is (false, 0)).
+      const hash = this.lowerExpr(source.hash, ctx, out);
+      const { mp, len } = this.toMemory(this.lowerDynamic(source.sig, ctx, out), out);
+      const okReg = this.fresh();
+      const signerReg = this.fresh();
+      out.push(`let ${okReg} := 0`);
+      out.push(`let ${signerReg} := 0`);
+      out.push(`if eq(${len}, 65) {`);
+      const rr = this.fresh();
+      const ss = this.fresh();
+      const vv = this.fresh();
+      out.push(`  let ${rr} := mload(add(${mp}, 0x20))`);
+      out.push(`  let ${ss} := mload(add(${mp}, 0x40))`);
+      out.push(`  let ${vv} := byte(0, mload(add(${mp}, 0x60)))`);
+      out.push(`  if iszero(gt(${ss}, ${HALF_ORDER})) {`);
+      const inner: string[] = [];
+      const sig = this.emitEcrecover(hash, vv, rr, ss, inner);
+      for (const l of inner) out.push('    ' + l);
+      out.push(`    if ${sig} { ${okReg} := 1 ${signerReg} := ${sig} }`);
+      out.push('  }');
+      out.push('}');
+      return [okReg, signerReg];
+    }
+    if (source.kind === 'pointEvaluation') {
+      // `const [fe, modulus] = pointEvaluation(versionedHash, z, y, commitment, proof)`: build the
+      // 192-byte input (vh||z||y||commitment(48)||proof(48)) in a FRESH FMP buffer (NOT 0x00-0x40 scratch,
+      // which the staticcall writes 64 bytes of output to), staticcall 0x0a, revert EMPTY on failure, and
+      // bind [mload(0x00), mload(0x20)] (the constant success words FIELD_ELEMENTS_PER_BLOB, BLS_MODULUS).
+      const vh = this.lowerExpr(source.versionedHash, ctx, out);
+      const z = this.lowerExpr(source.z, ctx, out);
+      const y = this.lowerExpr(source.y, ctx, out);
+      const c = this.toMemory(this.lowerDynamic(source.commitment, ctx, out), out);
+      const pr = this.toMemory(this.lowerDynamic(source.proof, ctx, out), out);
+      out.push(`if iszero(eq(${c.len}, 48)) { revert(0, 0) }`);
+      out.push(`if iszero(eq(${pr.len}, 48)) { revert(0, 0) }`);
+      const inp = this.fresh();
+      out.push(`let ${inp} := ${this.alloc()}(192)`);
+      out.push(`mstore(${inp}, ${vh})`);
+      out.push(`mstore(add(${inp}, 0x20), ${z})`);
+      out.push(`mstore(add(${inp}, 0x40), ${y})`);
+      out.push(`mcopy(add(${inp}, 0x60), add(${c.mp}, 0x20), 48)`);
+      out.push(`mcopy(add(${inp}, 0x90), add(${pr.mp}, 0x20), 48)`);
+      out.push(`if iszero(staticcall(gas(), 0x0a, ${inp}, 192, 0x00, 0x40)) { revert(0, 0) }`);
+      const feReg = this.fresh();
+      const modReg = this.fresh();
+      out.push(`let ${feReg} := mload(0x00)`);
+      out.push(`let ${modReg} := mload(0x20)`);
+      return [feReg, modReg];
+    }
     return source.values.map((v) => {
       const r = this.fresh();
       out.push(`let ${r} := ${this.lowerExpr(v, ctx, out)}`);
@@ -7290,6 +7592,7 @@ interface LowerCtx {
   cdDynStructs: Map<string, { tupleStart: string; type: JethType }>; // dynamic struct params (runtime tuple-start byte ptr)
   cdParamHead: Map<string, { head: number; type: JethType }>; // calldata head byte of EVERY param (for whole-param echo via the recursive encoder)
   fnMode?: { retVar: string | null; retVars?: string[] }; // set when lowering an INTERNAL function body: `return` -> retVar:=v; leave (retVar null = void). retVars set for a multi-value return.
+  specialEntry?: boolean; // Phase 6: lowering a @receive/@fallback body INLINE in the dispatcher; a bare `return;` -> stop() (matches solc).
   immStaged?: Map<string, string>; // Phase 5: @immutable name -> its staged-shadow Yul var (constructor body only)
   // Phase 5 (full modifiers): set ONLY while lowering a function's modifierWrap in its dispatch case.
   // The {modifierBody} marker lowers to a call of the synthesized body function (userfn) with the
