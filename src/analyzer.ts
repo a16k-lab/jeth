@@ -1802,6 +1802,26 @@ export class Analyzer {
     return { payable, ctorMods };
   }
 
+  /** Resolve a constructor's value-type parameters (shared by the deployed-ctor signature and base
+   *  ctors receiving heritage args). Mirrors the param validation in checkConstructor: value types
+   *  only (JETH302), no default (JETH304), no mapping (JETH247). A base ctor's params are bound as
+   *  memory localDecls (initialized from the provider's coerced arg exprs), so the same value-type
+   *  restriction applies. */
+  private ctorParams(ctorNode: ts.ConstructorDeclaration): Param[] {
+    const params: Param[] = [];
+    for (const p of ctorNode.parameters) {
+      if (!ts.isIdentifier(p.name)) { this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier'); continue; }
+      const t = resolveType(p.type, this.diags, this.structsByName);
+      if (!t) continue;
+      if (p.initializer) this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
+      if (this.typeHasMapping(t)) { this.diags.error(p, 'JETH247', `constructor parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`); continue; }
+      if (!isStaticValueType(t)) { this.diags.error(p, 'JETH302', `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only: uintN/intN/bool/address/bytesN/enum/branded)`); continue; }
+      if (params.some((q) => q.name === p.name!.getText())) this.diags.error(p, 'JETH056', `duplicate parameter name '${p.name.text}'`);
+      params.push({ name: p.name.text, type: t });
+    }
+    return params;
+  }
+
   /** Build the single merged constructor across the inheritance chain (this.ctorChain is most-derived
    *  first). With no inheritance this is exactly the Phase 5 checkConstructor. With a base chain, each
    *  contract's ctor body runs most-BASE-first (solc's body order), each checked in a fresh scope so a
@@ -1821,42 +1841,108 @@ export class Analyzer {
     if (!chain.some((c) => c.node) && !hasInlineImmInit) return undefined;
     const deployed = chain[0]!;
 
-    // Gate base-constructor arguments: a heritage `extends A(args)`, or a base (non-deployed) ctor
-    // that declares parameters (which could only be supplied via base args). solc accepts these; this
-    // increment supports only no-arg base constructors.
-    for (const c of chain) {
-      for (const b of c.bases) {
-        if (b.args && b.args.length > 0) {
-          this.diags.error(b.node, 'JETH379', `base-constructor arguments ('extends ${b.name}(...)') are not supported yet (a base constructor must take no arguments)`);
+    // ---- BASE-CONSTRUCTOR ARGUMENTS (lift JETH379 for the supported shapes) ----
+    // Resolve, per chain contract index, its ctor PARAMS (value-types only; same validation as the
+    // deployed ctor). Base params are bound as memory localDecls in the nested-block builder below, so
+    // they must be value types (isStaticValueType) just like the deployed formals.
+    const chainParams: Param[][] = chain.map((c) => (c.node ? this.ctorParams(c.node) : []));
+
+    // A base's args may be given by ANOTHER contract's heritage `extends B(args)`. (Modifier-style base
+    // args - a `@B(7)` decorator on the deployed ctor - are NOT supported in this increment: they are
+    // ambiguous with a real @modifier application; KEEP JETH379 for them, see the ctorMods check below.)
+    // Build basename -> provider (which chain contract supplied the args + the arg expr nodes).
+    const baseArgProvider = new Map<string, { providerIdx: number; argNodes: ts.Expression[]; site: ts.Node }>();
+    let baseArgsGate = false; // true once we have emitted a JETH379 and must not also try to codegen
+    for (let pi = 0; pi < chain.length; pi++) {
+      for (const b of chain[pi]!.bases) {
+        if (b.args === undefined) continue; // a bare `extends B` (no call-form) supplies no args
+        // The base named here must be a chain contract WITH a constructor to receive these args.
+        const targetIdx = chain.findIndex((c) => c.contract === b.name);
+        if (targetIdx < 0) continue; // not a known base (the linearizer already reported it)
+        const prior = baseArgProvider.get(b.name);
+        if (prior) {
+          // Base args given twice (heritage on two different contracts, e.g. both diamond branches
+          // specify a shared base). solc rejects ("Base constructor arguments given twice").
+          this.diags.error(b.node, 'JETH379', `base contract '${b.name}' is given constructor arguments more than once (each base's constructor arguments may be specified only once across the inheritance chain)`);
+          baseArgsGate = true;
+          continue;
+        }
+        baseArgProvider.set(b.name, { providerIdx: pi, argNodes: [...b.args], site: b.node });
+      }
+    }
+    // Modifier-style base args (a `@<BaseName>(...)` decorator on the deployed ctor) are GATED: keep
+    // JETH379 cleanly rather than guess. Detect a deployed-ctor decorator whose name is a chain base.
+    if (deployed.node) {
+      for (const dec of ts.getDecorators(deployed.node as unknown as ts.HasDecorators) ?? []) {
+        const e = dec.expression;
+        if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
+          const nm = e.expression.text;
+          if (chain.some((c, i) => i !== 0 && c.contract === nm)) {
+            this.diags.error(dec, 'JETH379', `modifier-style base-constructor arguments ('constructor() ${nm}(...)') are not supported yet; specify the base's arguments via the heritage clause ('extends ${nm}(...)')`);
+            baseArgsGate = true;
+          }
         }
       }
     }
+    // Required-args check: a base with a parameterized ctor that nobody supplied args for. The deployed
+    // is a concrete @contract, so solc requires every base ctor's args be supplied ("specify the
+    // arguments... or mark X as abstract"). A zero-param base ctor needs no provider.
     for (let i = 1; i < chain.length; i++) {
       const c = chain[i]!;
-      if (c.node && c.node.parameters.length > 0) {
-        this.diags.error(c.node, 'JETH379', `base contract '${c.contract}' declares a constructor with parameters; base-constructor arguments are not supported yet`);
+      if (chainParams[i]!.length === 0) continue; // no params -> no args needed
+      const prov = baseArgProvider.get(c.contract);
+      if (!prov) {
+        this.diags.error(deployed.node ?? deployed.cls, 'JETH379', `base contract '${c.contract}' has a constructor with ${chainParams[i]!.length} parameter(s) but no arguments are specified for it (add them via the heritage clause, e.g. 'extends ${c.contract}(...)')`);
+        baseArgsGate = true;
+        continue;
+      }
+      // Arity must match (a base ctor with params given empty `extends B()` is a missing-args reject).
+      if (prov.argNodes.length !== chainParams[i]!.length) {
+        this.diags.error(prov.site, 'JETH379', `base contract '${c.contract}' expects ${chainParams[i]!.length} constructor argument(s) but ${prov.argNodes.length} were given`);
+        baseArgsGate = true;
+      }
+    }
+    // Args given to a base whose ctor takes NO params (or which has no ctor) -> reject (solc: "Wrong
+    // argument count"). e.g. `extends A(7)` where A's ctor has 0 params, or A has no ctor.
+    for (const [name, prov] of baseArgProvider) {
+      const idx = chain.findIndex((c) => c.contract === name);
+      if (idx >= 0 && prov.argNodes.length > 0 && chainParams[idx]!.length === 0) {
+        this.diags.error(prov.site, 'JETH379', `base contract '${name}' constructor takes no arguments but ${prov.argNodes.length} were given`);
+        baseArgsGate = true;
+      }
+    }
+    // GATE the diamond-same-name-sibling hazard: if two bases that BOTH receive args (so both get
+    // their params bound as localDecls in the same enclosing provider block) share a ctor PARAM NAME,
+    // codegen's flat per-block name map would collide (the second binding shadows the first, so the
+    // first base's body would read the wrong value - a silent miscompile). Only a collision among bases
+    // bound IN THE SAME provider block matters; bind blocks are per-provider, so group by provider.
+    {
+      const byProvider = new Map<number, string[]>(); // providerIdx -> all param names it binds
+      for (let i = 1; i < chain.length; i++) {
+        const prov = baseArgProvider.get(chain[i]!.contract);
+        if (!prov || chainParams[i]!.length === 0) continue;
+        const names = byProvider.get(prov.providerIdx) ?? [];
+        for (const p of chainParams[i]!) {
+          if (names.includes(p.name)) {
+            this.diags.error(prov.site, 'JETH379', `two base constructors initialized by the same contract share the parameter name '${p.name}'; this collides in codegen and is not supported yet (rename one base ctor's parameter)`);
+            baseArgsGate = true;
+          }
+          names.push(p.name);
+        }
+        byProvider.set(prov.providerIdx, names);
       }
     }
 
-    // Deployed ctor signature: @payable + value-type params (the deploy ABI params).
+    // Deployed ctor signature: @payable + value-type params (the deploy ABI params = chainParams[0]).
     let payable = false;
     let deployedMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
-    const params: Param[] = [];
+    const params: Param[] = chainParams[0]!;
     if (deployed.node) {
       const d = this.ctorDecorators(deployed.node);
       payable = d.payable;
       deployedMods = d.ctorMods;
       if (deployed.node.typeParameters && deployed.node.typeParameters.length > 0) {
         this.diags.error(deployed.node, 'JETH301', 'a constructor cannot be generic');
-      }
-      for (const p of deployed.node.parameters) {
-        if (!ts.isIdentifier(p.name)) { this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier'); continue; }
-        const t = resolveType(p.type, this.diags, this.structsByName);
-        if (!t) continue;
-        if (p.initializer) this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
-        if (this.typeHasMapping(t)) { this.diags.error(p, 'JETH247', `constructor parameter '${p.name.text}' contains a mapping (mappings are storage-only)`); continue; }
-        if (!isStaticValueType(t)) { this.diags.error(p, 'JETH302', `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only)`); continue; }
-        params.push({ name: p.name.text, type: t });
       }
     }
 
@@ -1871,33 +1957,97 @@ export class Analyzer {
     this.currentReturnTypes = undefined;
     this.currentCallees = new Set();
     this.currentInConstructor = true;
+    this.memArrayLocals.clear();
+    this.memAggregateLocals.clear();
+    this.memDynLocals.clear();
+    this.memDynStructLocals.clear();
+
+    // ---- NESTED-BLOCK constructor merge (two-phase order, no renaming) ----
+    // Build blocks in LINEARIZATION order (most-derived outermost). Net effect: base-ctor ARGUMENT
+    // expressions evaluate most-DERIVED-first (outer levels emit their arg localDecls first), and ctor
+    // BODIES run most-BASE-first (the innermost level's body executes before the enclosing body that
+    // follows it). The analyzer scope stack MIRRORS the codegen block nesting (each `block` Stmt does a
+    // ctxPush/ctxPop in yul; freshLocal gives each localDecl a globally-unique Yul name), so each
+    // contract's params/body type-check in the correct scope: a base param is visible to its consumers
+    // (the nested block) but NOT to the providing contract's OWN body (which is emitted AFTER the
+    // block, in the provider's own param scope). Verified body order 101->...->200, args 902->901.
+    this.pushScope(); // scope 0: the deployed's formals (= the jeth_constructor params)
+    for (const p of params) this.declareLocal(p.name, p.type);
+
+    const buildLevel = (i: number): Stmt[] => {
+      const c = chain[i]!;
+      const out: Stmt[] = [];
+      // (a)+(b): the base params THIS contract provides args for, and the nested block, are wrapped in
+      // a block so the base params are scoped to their CONSUMERS (the inner block) and popped before
+      // this contract's own body runs (matching Solidity: a base ctor param is not visible in the
+      // derived body). The arg expressions are checked in THIS contract's param scope (active now). If
+      // this contract supplies NO base args, we DON'T introduce a block (preserving the exact no-arg
+      // codegen: the nested entry's body is inlined directly at this level, byte-identical to before).
+      const argDecls: Stmt[] = [];
+      this.pushScope(); // the bind scope: holds the base param bindings (consumed by the nested block)
+      for (const b of c.bases) {
+        if (b.args === undefined) continue;
+        const prov = baseArgProvider.get(b.name);
+        if (!prov || prov.providerIdx !== i) continue; // only the winning provider binds the params
+        const targetIdx = chain.findIndex((x) => x.contract === b.name);
+        if (targetIdx < 0) continue;
+        const bparams = chainParams[targetIdx]!;
+        const n = Math.min(bparams.length, prov.argNodes.length);
+        for (let k = 0; k < n; k++) {
+          // solc: a HERITAGE base-arg expression is evaluated in the inheritance-specifier scope, which
+          // sees constants / literals / msg.* / address(this) but NOT any constructor PARAMETER and NOT
+          // any STATE variable (both: solc "Undeclared identifier" - state isn't initialized yet). So
+          // check each arg with the ctor params HIDDEN (a fresh empty local scope) - a param reference
+          // then rejects (JETH072) at parity - AND reject if the expression READS STATE (currentReadsState
+          // flips). msg.sender / @constant / address(this) are allowed (they don't read storage). The
+          // localDecl init is still LOWERED in this provider's block at codegen (params in an enclosing
+          // ctx scope), but a valid program never references a param/state here, so codegen never does.
+          const savedArgScopes = this.scopes;
+          const savedReadsState = this.currentReadsState;
+          this.scopes = [new Map()];
+          this.currentReadsState = false;
+          const e = this.checkExpr(prov.argNodes[k]!, bparams[k]!.type);
+          const init = e ? this.coerce(e, bparams[k]!.type, prov.argNodes[k]!) : undefined;
+          if (this.currentReadsState) {
+            this.diags.error(prov.argNodes[k]!, 'JETH379', `a base-constructor argument for '${b.name}' reads contract state, which is not available in the inheritance clause (state is not yet initialized when base arguments are evaluated); use a constant or constructor-independent expression`);
+          }
+          this.scopes = savedArgScopes;
+          this.currentReadsState = savedReadsState;
+          this.declareLocal(bparams[k]!.name, bparams[k]!.type);
+          argDecls.push({ kind: 'localDecl', name: bparams[k]!.name, type: bparams[k]!.type, init });
+        }
+      }
+      const inner = i + 1 < chain.length ? buildLevel(i + 1) : []; // the next linearization entry, nested
+      this.popScope();
+      if (argDecls.length) {
+        // base params bound here -> wrap [argDecls, nested entry] in a block so they are scoped to the
+        // nested bodies only and popped before this contract's own body runs.
+        out.push({ kind: 'block', body: [...argDecls, ...inner] });
+      } else {
+        // no base params bound here -> inline the nested entry directly (no extra block; this is the
+        // exact no-arg structure: bodies most-base-first with no wrapping).
+        out.push(...inner);
+      }
+      // (c) this contract's OWN body, checked in its own param scope (base params NOT visible). The
+      // deployed's params are scope 0 (declared above); a base's params were bound by an ancestor's
+      // wrap block, which still encloses this body at codegen time (providerIdx < i always).
+      if (c.node) {
+        const cMods = i === 0 ? deployedMods : this.ctorDecorators(c.node).ctorMods;
+        let bstmts: Stmt[] = [];
+        if (c.node.body) {
+          this.pushScope();
+          for (const s of c.node.body.statements) this.checkStatement(s, VOID, bstmts);
+          this.popScope();
+        }
+        for (const app of [...cMods].reverse()) bstmts = this.inlineModifier(app, bstmts);
+        out.push(...bstmts);
+      }
+      return out;
+    };
 
     const body: Stmt[] = this.immutableInitStmts();
-    // Run each contract's ctor body most-BASE-first; each body is checked in a FRESH scope (its own
-    // params + contract state only) so a base body cannot reference the derived contract's params.
-    for (let i = chain.length - 1; i >= 0; i--) {
-      const c = chain[i]!;
-      if (!c.node) continue;
-      const isDeployed = i === 0;
-      const cParams = isDeployed ? params : [];
-      const cMods = isDeployed ? deployedMods : this.ctorDecorators(c.node).ctorMods;
-      this.memArrayLocals.clear();
-      this.memAggregateLocals.clear();
-      this.memDynLocals.clear();
-      this.memDynStructLocals.clear();
-      this.scopes = [];
-      this.pushScope();
-      for (const p of cParams) this.declareLocal(p.name, p.type);
-      let bstmts: Stmt[] = [];
-      if (c.node.body) {
-        this.pushScope();
-        for (const s of c.node.body.statements) this.checkStatement(s, VOID, bstmts);
-        this.popScope();
-      }
-      for (const app of [...cMods].reverse()) bstmts = this.inlineModifier(app, bstmts);
-      this.popScope();
-      body.push(...bstmts);
-    }
+    if (!baseArgsGate) body.push(...buildLevel(0));
+    this.popScope();
     this.currentInConstructor = false;
 
     if (this.currentCallees.size > 0) {

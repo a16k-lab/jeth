@@ -3,7 +3,11 @@
 // packing across the boundary), the override winner is the most-derived definition, super.f() walks
 // the full linearization, and constructor bodies run most-base-first. Every case is verified
 // byte-identical to solc 0.8.35 (raw storage slots + returndata + ABI + accept/reject). Base-ctor
-// ARGUMENTS are cleanly gated (JETH379) for a follow-up; no-arg base ctors (the Ownable pattern) work.
+// ARGUMENTS via the HERITAGE call-form (`extends A(7)`, `extends Owned(msg.sender)`) are supported: arg
+// expressions evaluate in the inheritance-specifier scope (constants / msg.* / address(this), NOT state or
+// ctor params - matching solc) and bodies still run most-base-first. MODIFIER-style base args
+// (`constructor() A(7)`) and the diamond-same-name-sibling-param shape stay gated (JETH379) - clean
+// over-rejections, never miscompiles.
 import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -20,11 +24,11 @@ const codes = (src: string): string[] => {
   catch (e) { if (e instanceof CompileError) return e.diagnostics.map((d) => d.code); throw e; }
 };
 const solcRejects = (src: string): boolean => { try { compileSolidity(SPDX + src, 'C'); return false; } catch { return true; } };
-async function dJ(s: string) { const h = await Harness.create(); await h.fund(me, 10n ** 20n); return { h, a: await h.deploy(compile(s, { fileName: 'C.jeth' }).creationBytecode, { caller: me }) }; }
-async function dS(s: string) { const h = await Harness.create(); await h.fund(me, 10n ** 20n); return { h, a: await h.deploy(compileSolidity(SPDX + s, 'C').creation, { caller: me }) }; }
-/** deploy J + S; assert each call's returndata/success + raw slots + the function ABI names are byte-identical. */
-async function same(J: string, S: string, calls: { sig: string; arg?: string }[], nslots = 3) {
-  const j = await dJ(J), s = await dS(S);
+async function dJ(s: string, argsHex = '') { const h = await Harness.create(); await h.fund(me, 10n ** 20n); return { h, a: await h.deploy(compile(s, { fileName: 'C.jeth' }).creationBytecode + argsHex, { caller: me }) }; }
+async function dS(s: string, argsHex = '') { const h = await Harness.create(); await h.fund(me, 10n ** 20n); return { h, a: await h.deploy(compileSolidity(SPDX + s, 'C').creation + argsHex, { caller: me }) }; }
+/** deploy J + S (optionally with appended ctor args); assert each call's returndata/success + raw slots are byte-identical. */
+async function same(J: string, S: string, calls: { sig: string; arg?: string }[], nslots = 3, argsHex = '') {
+  const j = await dJ(J, argsHex), s = await dS(S, argsHex);
   for (const c of calls) {
     const d = '0x' + sel(c.sig) + (c.arg ?? '');
     const rj = await j.h.call(j.a, d), rs = await s.h.call(s.a, d);
@@ -106,9 +110,83 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     it('a diamond override WITH @override(B,K) -> both accept', () => {
       expect(codes(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @abstract class B extends A { @virtual @override @external f(): u256 { return 2n; } } @abstract class K extends A { @virtual @override @external f(): u256 { return 3n; } } @contract class C extends B, K { @override(B, K) @external f(): u256 { return 9n; } }`)).toEqual([]);
     });
-    it('base-constructor arguments -> JETH379 (a clean over-rejection; solc accepts)', () => {
-      expect(codes(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(7n) { @external @view gx(): u256 { return this.x; } }`)).toContain('JETH379');
-      expect(solcRejects(`abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(7) { function gx() external view returns(uint256){return x;} }`)).toBe(false);
+    // ---- base-constructor-argument accept/reject parity ----
+    it('a heritage base-arg referencing a ctor parameter -> both reject (state/params not in scope)', () =>
+      par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(p + 1n) { constructor(p: u256){} }`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(p+1) { constructor(uint256 p){} }`));
+    it('a heritage base-arg reading contract state -> both reject (state not yet initialized)', () =>
+      par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(this.x) { constructor(){} }`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(x) { constructor(){} }`));
+    it('a missing required base-ctor arg on a concrete derived -> both reject', () =>
+      par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A {}`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A {}`));
+    it('args given to a no-parameter base ctor -> both reject', () =>
+      par(`@abstract class A { @state x: u256; constructor(){ this.x = 1n; } } @contract class C extends A(7n) {}`, `abstract contract A { uint256 x; constructor(){ x=1; } } contract C is A(7) {}`));
+    it('a base-ctor arg count mismatch -> both reject', () =>
+      par(`@abstract class A { @state x: u256; constructor(a: u256, b: u256){ this.x = a + b; } } @contract class C extends A(7n) {}`, `abstract contract A { uint256 x; constructor(uint256 a, uint256 b){ x=a+b; } } contract C is A(7) {}`));
+    it('a diamond shared base given args by BOTH branches -> both reject (given twice)', () =>
+      par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @abstract class B extends A(1n) {} @abstract class K extends A(2n) {} @contract class C extends B, K {}`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } abstract contract B is A(1) {} abstract contract K is A(2) {} contract C is B, K {}`));
+    it('a valid heritage base-arg (constant) -> both accept', () => {
+      expect(codes(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(7n) {}`)).toEqual([]);
+      expect(solcRejects(`abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(7) {}`)).toBe(false);
     });
+    it('modifier-style base args (`constructor() A(7)`) stay gated (JETH379; clean over-rejection)', () => {
+      // solc accepts modifier-style base init; JETH gates it (ambiguous with a real @modifier application).
+      expect(codes(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A { @A(7n) constructor(){} }`)).toContain('JETH379');
+      expect(solcRejects(`abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A { constructor() A(7) {} }`)).toBe(false);
+    });
+    it('a diamond where one provider gives two bases the SAME ctor-param name stays gated (JETH379)', () => {
+      // both bases bound in the same provider block -> a flat-name-map collision; gated (never a miscompile).
+      expect(codes(`@abstract class A {} @abstract class B extends A { @state bv: u256; constructor(x: u256){ this.bv = x; } } @abstract class K extends A { @state kv: u256; constructor(x: u256){ this.kv = x; } } @contract class C extends B(1n), K(2n) {}`)).toContain('JETH379');
+      expect(solcRejects(`abstract contract A {} abstract contract B is A { uint256 bv; constructor(uint256 x){ bv=x; } } abstract contract K is A { uint256 kv; constructor(uint256 x){ kv=x; } } contract C is B(1), K(2) {}`)).toBe(false);
+    });
+  });
+
+  // ---- base-constructor-argument codegen (byte-identical: raw slots + returndata) ----
+  describe('base-constructor arguments (heritage call-form)', () => {
+    it('single chain `extends A(7)`: A ctor sets state from its arg', () =>
+      same(
+        `@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } @external @view gx(): u256 { return this.x; } } @contract class C extends A(7n) { @state y: u256; constructor(){ this.y = 3n; } }`,
+        `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } function gx() external view returns(uint256){return x;} } contract C is A(7) { uint256 y; constructor(){ y=3; } }`,
+        [{ sig: 'gx()' }], 2));
+
+    it('deep chain with a constant base arg at each level + a deployed deploy-arg', () =>
+      same(
+        `@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @abstract class B extends A(11n) { @state b: u256; constructor(w: u256){ this.b = w; } } @contract class C extends B(22n) { @state c: u256; constructor(p: u256){ this.c = p; } }`,
+        `abstract contract A { uint256 a; constructor(uint256 v){ a=v; } } abstract contract B is A(11) { uint256 b; constructor(uint256 w){ b=w; } } contract C is B(22) { uint256 c; constructor(uint256 p){ c=p; } }`,
+        [], 3, pad32(99n)));
+
+    it('SIDE-EFFECT ORDER: ctor bodies run most-base-first (accumulator A,B,C => 123)', () =>
+      same(
+        `@abstract class A { @state log: u256; constructor(v: u256){ this.log = this.log * 10n + 1n; } } @abstract class B extends A(0n) { constructor(w: u256){ this.log = this.log * 10n + 2n; } } @contract class C extends B(0n) { constructor(){ this.log = this.log * 10n + 3n; } }`,
+        `abstract contract A { uint256 log; constructor(uint256 v){ log=log*10+1; } } abstract contract B is A(0) { constructor(uint256 w){ log=log*10+2; } } contract C is B(0) { constructor(){ log=log*10+3; } }`,
+        [], 1));
+
+    it('arg VALUES route to the correct base param at each level', () =>
+      same(
+        `@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @abstract class B extends A(5n) { @state b: u256; constructor(w: u256){ this.b = w; } } @contract class C extends B(6n) { @state c: u256; constructor(){ this.c = 7n; } }`,
+        `abstract contract A { uint256 a; constructor(uint256 v){ a=v; } } abstract contract B is A(5) { uint256 b; constructor(uint256 w){ b=w; } } contract C is B(6) { uint256 c; constructor(){ c=7; } }`,
+        [], 3));
+
+    it('Ownable(msg.sender, 999) base + a base @immutable set from a base ctor arg', () =>
+      same(
+        `@abstract class Owned { @state owner: address; @immutable cap: u256; constructor(o: address, m: u256){ this.owner = o; this.cap = m; } @external @view getOwner(): address { return this.owner; } @external @view getCap(): u256 { return this.cap; } } @contract class C extends Owned(msg.sender, 999n) { @state n: u256; constructor(){ this.n = 1n; } }`,
+        `abstract contract Owned { address owner; uint256 immutable cap; constructor(address o, uint256 m){ owner=o; cap=m; } function getOwner() external view returns(address){return owner;} function getCap() external view returns(uint256){return cap;} } contract C is Owned(msg.sender, 999) { uint256 n; constructor(){ n=1; } }`,
+        [{ sig: 'getOwner()' }, { sig: 'getCap()' }], 1));
+
+    it('a deployed ctor param used in the body, base initialized via a heritage constant', () =>
+      same(
+        `@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(100n) { @state c: u256; constructor(p: u256){ this.c = p + 1n; } }`,
+        `abstract contract A { uint256 a; constructor(uint256 v){ a=v; } } contract C is A(100) { uint256 c; constructor(uint256 p){ c=p+1; } }`,
+        [], 2, pad32(41n)));
+
+    it('diamond: only one branch gives the shared base args, the other is bare', () =>
+      same(
+        `@abstract class A { @state av: u256; constructor(p: u256){ this.av = p; } } @abstract class B extends A(1n) { @state bv: u256; constructor(q: u256){ this.bv = q; } } @abstract class K extends A { @state kv: u256; constructor(r: u256){ this.kv = r; } } @contract class C extends B(7n), K(8n) { @state cv: u256; constructor(){ this.cv = 9n; } }`,
+        `abstract contract A { uint256 av; constructor(uint256 p){ av=p; } } abstract contract B is A(1) { uint256 bv; constructor(uint256 q){ bv=q; } } abstract contract K is A { uint256 kv; constructor(uint256 r){ kv=r; } } contract C is B(7), K(8) { uint256 cv; constructor(){ cv=9; } }`,
+        [], 4));
+
+    it('diamond: the shared base args supplied by the deployed (listed first)', () =>
+      same(
+        `@abstract class A { @state av: u256; constructor(p: u256){ this.av = p; } } @abstract class B extends A { @state bv: u256; constructor(){ this.bv = 2n; } } @abstract class K extends A { @state kv: u256; constructor(){ this.kv = 3n; } } @contract class C extends A(55n), B, K { @state cv: u256; constructor(){ this.cv = 4n; } }`,
+        `abstract contract A { uint256 av; constructor(uint256 p){ av=p; } } abstract contract B is A { uint256 bv; constructor(){ bv=2; } } abstract contract K is A { uint256 kv; constructor(){ kv=3; } } contract C is A(55), B, K { uint256 cv; constructor(){ cv=4; } }`,
+        [], 4));
   });
 });
