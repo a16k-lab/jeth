@@ -172,6 +172,19 @@ export class Analyzer {
   private events: EventIR[] = [];
   // Phase 6: @interface declarations (name -> {methods}); emits no bytecode, names a type + ABI shape.
   private interfacesByName = new Map<string, InterfaceDecl>();
+  // Phase A libraries: `@library class L { f(...) {...} }`. Each library's functions are collected as
+  // ORDINARY internal functions (no state, no ctor, never @external/@payable) keyed by a qualified
+  // source name `L.f`, registered into the SAME candidatesByName/funcsByName/userfn_ machinery as a
+  // contract's internal functions - so `L.f(args)` and an attached `x.f(args)` lower to the existing
+  // internal-call path and are byte-identical to solc's internal library functions for free. The
+  // registry holds each library's RawFunctions (decl order) for overload resolution at the call site.
+  private libraryByName = new Map<string, RawFunction[]>();
+  // `@using(L)` attachment: when a @contract carries @using(L) decorators, each L function whose FIRST
+  // param type is T attaches as a method on T, so `x.f(args)` desugars to `L.f(x, ...args)`. Built per
+  // deployed contract from its @using list; keyed by `${canonicalName(T)}#${methodName}` -> the matching
+  // RawFunctions (more than one => ambiguous attachment, rejected). A built-in method on T wins (the
+  // attachment is consulted only AFTER the built-in method resolvers in the call dispatch).
+  private libraryAttachments = new Map<string, RawFunction[]>();
   // per-function lexical scope stack (innermost last); each scope maps name -> type.
   private scopes: Map<string, JethType>[] = [];
   private loopDepth = 0; // > 0 inside a for/while body (gates break/continue)
@@ -260,6 +273,7 @@ export class Analyzer {
     this.collectEnums(); // enums (branded uint8), before structs (a struct field / param may use one)
     this.collectStructs();
     this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
+    this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
     const classes = this.findContractClasses();
     if (classes.length === 0) {
       this.diags.error(this.sourceFile, 'JETH040', 'no @contract class found in source');
@@ -688,6 +702,175 @@ export class Analyzer {
     return out;
   }
 
+  // ---- Phase A: internal (inlined) libraries --------------------------------
+
+  /** Collect every `@library class L { ... }`. Each library's functions are gathered as ORDINARY
+   *  internal functions (reusing collectFunction), but keyed by a QUALIFIED source name `L.f` (a `.`
+   *  is illegal in a TS identifier, so a library function never collides with - nor is callable as -
+   *  a contract function by bare name). They are registered into the contract's normal function
+   *  machinery in analyzeContract, so they emit as `userfn_`s and flow through the purity fixpoint
+   *  exactly like a contract internal function - byte-identical to solc's internal library functions.
+   *  Gates (each a distinct diagnostic, never a crash): library state/immutable/constant fields, a
+   *  constructor, an @external/@payable method, @receive/@fallback/@modifier, and inheritance. */
+  private collectLibraries(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && decoratorNames(n).includes('library')) this.collectLibrary(n);
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  private collectLibrary(cls: ts.ClassDeclaration): void {
+    const name = cls.name?.text ?? 'Library';
+    // The library name shares the type/contract identifier namespace: a clash with a struct/enum/
+    // interface/another library is a redeclaration (solc: "Identifier already declared").
+    if (
+      this.libraryByName.has(name) ||
+      this.structsByName.has(name) ||
+      this.interfacesByName.has(name) ||
+      resolvePrimitiveName(name)
+    ) {
+      this.diags.error(cls, 'JETH386', `@library '${name}' redeclared (the name is already a type or library)`);
+      return;
+    }
+    // A library has no inheritance in Phase A (solc forbids a library `is` clause entirely).
+    if (heritageBases(cls).length > 0) {
+      this.diags.error(cls, 'JETH387', `@library '${name}' cannot extend another contract/library (libraries have no inheritance)`);
+    }
+    const fns: RawFunction[] = [];
+    for (const member of cls.members) {
+      if (ts.isPropertyDeclaration(member)) {
+        // @state / @immutable / @constant - a library has no storage and no baked-in fields.
+        this.diags.error(
+          member,
+          'JETH388',
+          `@library '${name}' cannot declare a field (a library has no state, immutable, or constant storage)`,
+        );
+        continue;
+      }
+      if (ts.isConstructorDeclaration(member)) {
+        this.diags.error(member, 'JETH389', `@library '${name}' cannot declare a constructor`);
+        continue;
+      }
+      if (ts.isGetAccessor(member) || ts.isSetAccessor(member)) {
+        this.diags.error(member, 'JETH043', 'getters/setters are not supported');
+        continue;
+      }
+      if (!ts.isMethodDeclaration(member)) continue;
+      const decs = decoratorNames(member);
+      // A library function is INTERNAL (inlined) in Phase A: @external/@payable (Phase B external
+      // libraries / delegatecall) and the special @receive/@fallback runtime entries are rejected.
+      const banned = (['external', 'payable', 'receive', 'fallback'] as const).find((d) => decs.includes(d));
+      if (banned) {
+        this.diags.error(
+          member,
+          'JETH390',
+          `@library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot be @${banned} (Phase A libraries provide only internal/inlined functions; external/delegatecall libraries are Phase B)`,
+        );
+        continue;
+      }
+      // @modifier / @event / @error inside a library are not supported in Phase A (solc allows none
+      // of these as a library's callable surface in the way JETH needs); keep the surface to plain
+      // internal functions. Generic library functions are likewise deferred.
+      if (decs.includes('modifier') || decs.includes('event') || decs.includes('error')) {
+        this.diags.error(
+          member,
+          'JETH390',
+          `@library '${name}' may only declare internal functions (no @modifier/@event/@error) in Phase A`,
+        );
+        continue;
+      }
+      if (member.typeParameters && member.typeParameters.length > 0) {
+        this.diags.error(
+          member,
+          'JETH390',
+          `@library '${name}' generic function is not supported in Phase A (a library function must be non-generic)`,
+        );
+        continue;
+      }
+      const fn = this.collectFunction(member);
+      if (!fn) continue;
+      // A library function needs an implementation (a bodyless method is meaningless: there is no
+      // override/virtual surface for a library in Phase A).
+      if (member.body === undefined) {
+        this.diags.error(member, 'JETH390', `@library '${name}' method '${fn.name}' must have a body`);
+        continue;
+      }
+      // A library function runs INLINED in the caller's context and has NO contract instance of its
+      // own. `this.<member>` (a contract-state read/write `this.x`, or an internal contract call
+      // `this.f()`) is meaningless in Phase A (a library scopes to value/memory/calldata params and
+      // cannot touch contract state) and is rejected. Bare `this` (e.g. `address(this)` - the calling
+      // contract's address) is LEFT alone: it is inlined, so it is byte-identical to solc, which also
+      // accepts `address(this)` in a library function. msg.*/block.*/tx.* (NOT via `this`) likewise
+      // remain legal - they read the caller's message context, exactly like a solc internal library
+      // function. One body scan catches every `this.<member>` use.
+      if (member.body) {
+        const scanThis = (n: ts.Node): void => {
+          if (
+            ts.isPropertyAccessExpression(n) &&
+            n.expression.kind === ts.SyntaxKind.ThisKeyword
+          ) {
+            this.diags.error(
+              n,
+              'JETH394',
+              `@library '${name}' function '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot access 'this.${n.name.text}' (a library has no contract state or instance; pass values as parameters)`,
+            );
+          }
+          ts.forEachChild(n, scanThis);
+        };
+        ts.forEachChild(member.body, scanThis);
+      }
+      // Re-key by the qualified source name `L.f`. This namespaces it away from every contract
+      // function (and other libraries), keeps overloads grouped under the same qualified name (so the
+      // existing overload resolver works), and makes the userfn_ / call-graph key unique.
+      fn.name = `${name}.${fn.name}`;
+      fns.push(fn);
+    }
+    this.libraryByName.set(name, fns);
+  }
+
+  /** True if `name` is a declared @library. */
+  private isLibraryName(name: string): boolean {
+    return this.libraryByName.has(name);
+  }
+
+  /** Build the `@using(L)` attachment map for the deployed contract: for each L in its @using
+   *  decorators, attach every L function whose FIRST parameter type is T as a method on T, keyed by
+   *  `${canonicalName(T)}#${methodName}` (the BARE method name, not the qualified `L.f`). More than
+   *  one matching function for a (T, name) => ambiguous attachment (rejected at the call site). A
+   *  function with zero parameters cannot attach (there is no receiver). An @using naming a
+   *  non-library is rejected here. */
+  private buildLibraryAttachments(cls: ts.ClassDeclaration): void {
+    this.libraryAttachments.clear();
+    const seen = new Set<string>();
+    for (const d of ts.getDecorators(cls) ?? []) {
+      const e = d.expression;
+      if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression) || e.expression.text !== 'using') continue;
+      for (const arg of e.arguments) {
+        if (!ts.isIdentifier(arg)) {
+          this.diags.error(arg, 'JETH391', `@using(...) argument must be a library name`);
+          continue;
+        }
+        const libName = arg.text;
+        if (!this.libraryByName.has(libName)) {
+          this.diags.error(arg, 'JETH391', `@using(${libName}): '${libName}' is not a @library declared in this file`);
+          continue;
+        }
+        if (seen.has(libName)) continue; // a duplicate @using(L) is harmless; attach once
+        seen.add(libName);
+        for (const fn of this.libraryByName.get(libName)!) {
+          if (fn.params.length === 0) continue; // no receiver to attach on
+          const t = fn.params[0]!.type;
+          const bare = fn.name.slice(libName.length + 1); // strip the `L.` prefix
+          const key = `${canonicalName(t)}#${bare}`;
+          const list = this.libraryAttachments.get(key);
+          if (list) list.push(fn);
+          else this.libraryAttachments.set(key, [fn]);
+        }
+      }
+    }
+  }
+
   // ---- inheritance: contract registry + C3 linearization --------------------
 
   // All contract-like classes by name: the deployed @contract plus every @abstract base. Built
@@ -926,6 +1109,16 @@ export class Analyzer {
     // targets, re-keyed `<Contract>__<name>`. Enforces all virtual/override/list/return/mutability/
     // visibility rules. Returns the function list to feed the existing register/check pipeline.
     rawFns.push(...this.resolveOverrides(lin, collectedFns));
+
+    // Phase A: register every @library's functions as ordinary internal functions of THIS compile.
+    // They were collected with a qualified source name `L.f` (namespaced away from contract names),
+    // so they flow through the same candidatesByName / key-assignment / checkFunction / purity-fixpoint
+    // / FunctionIR-emission pipeline as a contract internal function and emit as `userfn_`s - making
+    // `L.f(args)` and an attached `x.f(args)` byte-identical to solc's internal library functions.
+    for (const fns of this.libraryByName.values()) rawFns.push(...fns);
+    // Build the `@using(L)` attachment map for the deployed contract (so `x.f(args)` can desugar to
+    // `L.f(x, ...args)`); also validates each @using names a real library.
+    this.buildLibraryAttachments(cls);
 
     // Plan storage layout, then build the symbol table.
     const layout = planLayout(rawState);
@@ -3723,6 +3916,19 @@ export class Analyzer {
         if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
         return;
       }
+      // Phase A: qualified library call as a statement `L.f(args);` (void result or value discarded).
+      if (
+        ts.isCallExpression(e) &&
+        ts.isPropertyAccessExpression(e.expression) &&
+        ts.isIdentifier(e.expression.expression) &&
+        this.isLibraryName(e.expression.expression.text) &&
+        !this.isVisibleLocal(e.expression.expression.text) &&
+        !this.stateByName.has(e.expression.expression.text)
+      ) {
+        const c = this.resolveQualifiedLibraryCall(e, e.expression.expression.text, e.expression.name.text, true);
+        if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
+        return;
+      }
       // Phase 6: a high-level typed interface call as a statement `IFoo(addr).method(args);`. The call
       // (selector ++ args, bubble + extcodesize guard) runs; the returndata is captured but discarded
       // (no decode, even for a value-returning method). Performed before the array-mutator / fall-through
@@ -3753,6 +3959,25 @@ export class Analyzer {
       // `delete x` statement: reset a storage location to its zero value.
       if (ts.isDeleteExpression(e)) {
         return this.checkDelete(e, out);
+      }
+      // Phase A: an attached library method as a statement `x.f(args);` == `L.f(x, ...args);`.
+      // Placed AFTER the built-in statement handlers (this.f / interface call / push|pop / inc-dec /
+      // delete) so a built-in always wins; only fires when x's type has a (T, f) @using attachment.
+      if (
+        ts.isCallExpression(e) &&
+        ts.isPropertyAccessExpression(e.expression) &&
+        this.libraryAttachments.size > 0 &&
+        !(e.expression.expression.kind === ts.SyntaxKind.ThisKeyword) &&
+        !(e.expression.expression.kind === ts.SyntaxKind.SuperKeyword)
+      ) {
+        const recvType = this.trialExprType(e.expression.expression);
+        if (recvType) {
+          const r = this.resolveAttachedLibraryCall(e, e.expression.expression, recvType, e.expression.name.text, true);
+          if (r !== 'no-match') {
+            if (r) out.push({ kind: 'callStmt', fn: r.fn, args: r.args });
+            return;
+          }
+        }
       }
       this.checkExpressionStatement(e, out);
       return;
@@ -6573,6 +6798,254 @@ export class Analyzer {
     this.currentCallees.add(key);
     this.internallyCalled.add(key);
     return { kind: 'call', type: callee.returnType, fn: key, args };
+  }
+
+  // ---- Phase A: library call resolution (L.f(args) and attached x.f(args)) ----
+
+  /** Type-check `expr` purely to learn its type, rolling back ALL side effects (diagnostics, effect
+   *  flags, callee set). Used to peek a `.f(...)` receiver's type for attachment lookup WITHOUT
+   *  committing to it (the real check happens in buildLibraryCall). Returns the type or undefined. */
+  private trialExprType(expr: ts.Expression): JethType | undefined {
+    const diagLen = this.diags.items.length;
+    const rs = this.currentReadsState,
+      ws = this.currentWritesState,
+      re = this.currentReadsEnv;
+    const savedCallees = this.currentCallees;
+    this.currentCallees = new Set();
+    const r = this.checkExpr(expr);
+    this.diags.items.length = diagLen;
+    this.currentReadsState = rs;
+    this.currentWritesState = ws;
+    this.currentReadsEnv = re;
+    this.currentCallees = savedCallees;
+    return r?.type;
+  }
+
+  /** Resolve a qualified library call `L.f(args)` (the receiver is NOT prepended). `node.arguments`
+   *  is the full positional/named argument list, so this delegates to the SAME internal-call path
+   *  via a forced callee resolved against L's overload set - making it byte-identical to a contract
+   *  internal call. Returns the call Expr, or undefined (after a diagnostic). */
+  private resolveQualifiedLibraryCall(
+    node: ts.CallExpression,
+    libName: string,
+    fnName: string,
+    asStatement: boolean,
+  ): (Expr & { kind: 'call' }) | undefined {
+    const candidates = this.libraryByName.get(libName)!;
+    const callee = this.resolveLibraryOverload(node, candidates, `${libName}.${fnName}`, fnName);
+    if (callee === 'unknown') {
+      this.diags.error(node, 'JETH392', `@library '${libName}' has no function '${fnName}'`);
+      return undefined;
+    }
+    if (!callee) return undefined; // an ambiguity/no-match diagnostic was already emitted
+    return this.checkInternalCall(node, `${libName}.${fnName}`, asStatement, callee);
+  }
+
+  /** Resolve an attached library call `x.f(args)` == `L.f(x, ...args)`. The receiver `x` is the
+   *  first argument; the candidate set is the @using attachment list for (typeof x, f). Returns the
+   *  call Expr (byte-identical to the internal call `L.f(x, ...args)`), 'no-match' if no attached
+   *  function fits (so the caller falls through to non-library member handling), or undefined after a
+   *  diagnostic (an ambiguous attachment). */
+  private resolveAttachedLibraryCall(
+    node: ts.CallExpression,
+    receiver: ts.Expression,
+    recvType: JethType,
+    fnName: string,
+    asStatement: boolean,
+  ): (Expr & { kind: 'call' }) | undefined | 'no-match' {
+    const list = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
+    if (!list || list.length === 0) return 'no-match';
+    // Disambiguate by the FULL synthetic arg list (receiver ++ node.arguments) - an overloaded
+    // attached `f` for the same receiver type T resolves by the remaining args' arity/types.
+    const argExprs = [receiver, ...node.arguments];
+    const applicable = list.filter((c) => this.libraryArgsApplicable(argExprs, c));
+    if (applicable.length === 0) {
+      // Receiver type matched but no overload accepts these args. If there is a SINGLE attached fn,
+      // surface its arity/type mismatch (matches an internal-call diagnostic); otherwise fall through.
+      if (list.length === 1) return this.buildLibraryCall(node, list[0]!, argExprs, asStatement);
+      return 'no-match';
+    }
+    let callee = applicable[0]!;
+    if (applicable.length > 1) {
+      const viable = applicable.filter((c) => this.libraryArgsMatch(argExprs, c));
+      if (viable.length === 1) callee = viable[0]!;
+      else {
+        // Two @using libraries (or two overloads) attach `f` for T with indistinguishable args.
+        this.diags.error(
+          node,
+          'JETH393',
+          `attached call '.${fnName}(...)' on ${displayName(recvType)} is ambiguous (${applicable.length} @using library functions match)`,
+        );
+        return undefined;
+      }
+    }
+    return this.buildLibraryCall(node, callee, argExprs, asStatement);
+  }
+
+  /** Resolve an overload of a library function `name` from `candidates` against `node.arguments`
+   *  (positional/named). Returns the single matching RawFunction, undefined (a diagnostic was
+   *  emitted for ambiguity / no-arg-match), or 'unknown' when the candidate set is empty. */
+  private resolveLibraryOverload(
+    node: ts.CallExpression,
+    candidates: RawFunction[],
+    qualified: string,
+    fnName: string,
+  ): RawFunction | undefined | 'unknown' {
+    const named = candidates.filter((c) => c.name === `${qualified}`);
+    if (named.length === 0) {
+      // candidates are the WHOLE library; filter by the bare function name.
+      const byName = candidates.filter((c) => c.name.endsWith(`.${fnName}`));
+      if (byName.length === 0) return 'unknown';
+      return this.pickLibraryOverload(node, byName, qualified);
+    }
+    return this.pickLibraryOverload(node, named, qualified);
+  }
+
+  private pickLibraryOverload(node: ts.CallExpression, list: RawFunction[], qualified: string): RawFunction | undefined {
+    if (list.length === 1) return list[0]!;
+    const applicable = list.filter((c) => this.overloadApplicable(node, c));
+    if (applicable.length === 0) {
+      this.diags.error(node, 'JETH148', `no overload of '${qualified}' accepts this number of arguments`);
+      return undefined;
+    }
+    if (applicable.length === 1) return applicable[0]!;
+    const viable = applicable.filter((c) => this.overloadArgsMatch(node, c));
+    if (viable.length === 1) return viable[0]!;
+    if (viable.length === 0) {
+      this.diags.error(node, 'JETH148', `no overload of '${qualified}' matches the argument types`);
+      return undefined;
+    }
+    this.diags.error(node, 'JETH901', `call to '${qualified}' is ambiguous (matches ${viable.length} overloads)`);
+    return undefined;
+  }
+
+  /** Is the (already receiver-prepended) arg list `argExprs` callable on candidate `c` by arity?
+   *  Library attachment never uses the named-arg object form (the receiver is positional), so this
+   *  is a plain arity check, F3-default aware. */
+  private libraryArgsApplicable(argExprs: ts.Expression[], c: RawFunction): boolean {
+    const params = c.params;
+    const defaults = c.defaults ?? params.map(() => undefined);
+    if (argExprs.length > params.length) return false;
+    for (let i = argExprs.length; i < params.length; i++) if (!defaults[i]) return false;
+    return true;
+  }
+
+  /** Do ALL the (receiver-prepended) args fit candidate `c`'s parameter types? A TRIAL type-check
+   *  with every side effect rolled back (mirrors overloadArgsMatch but over an explicit arg list). */
+  private libraryArgsMatch(argExprs: ts.Expression[], c: RawFunction): boolean {
+    if (!this.libraryArgsApplicable(argExprs, c)) return false;
+    const diagLen = this.diags.items.length;
+    const rs = this.currentReadsState,
+      ws = this.currentWritesState,
+      re = this.currentReadsEnv;
+    const savedCallees = this.currentCallees;
+    this.currentCallees = new Set();
+    let ok = true;
+    for (let i = 0; i < c.params.length; i++) {
+      const node = i < argExprs.length ? argExprs[i]! : (c.defaults![i] as ts.Expression);
+      const a = this.checkExpr(node, c.params[i]!.type);
+      if (!a) {
+        ok = false;
+        break;
+      }
+      this.coerce(a, c.params[i]!.type, node);
+    }
+    ok = ok && this.diags.items.length === diagLen;
+    this.diags.items.length = diagLen;
+    this.currentReadsState = rs;
+    this.currentWritesState = ws;
+    this.currentReadsEnv = re;
+    this.currentCallees = savedCallees;
+    return ok;
+  }
+
+  /** Build a library call to `callee` from the explicit (receiver-prepended) arg expressions. This
+   *  mirrors checkInternalCall's gate + arg-check + IR construction but consumes an explicit arg list
+   *  (so the attached `x.f(args)` form can prepend the receiver). The result IR is the SAME
+   *  `{kind:'call', fn:<key>, args}` an internal call produces - so codegen needs no new path. */
+  private buildLibraryCall(
+    node: ts.CallExpression,
+    callee: RawFunction,
+    argExprs: ts.Expression[],
+    asStatement: boolean,
+  ): (Expr & { kind: 'call' }) | undefined {
+    // A library function is never @external/@payable/@nonReentrant (gated at collection) and is
+    // always treated as @internal for param/return support (its aggregate params are memory pointers,
+    // exactly like an @internal contract function - so the internal-call aggregate rules apply).
+    if (callee.returnTypes) {
+      this.diags.error(node, 'JETH241', `call to a multi-value-return library function '${callee.name}' is not supported yet`);
+      return undefined;
+    }
+    const isMemByRef = (t: JethType): boolean =>
+      (t.kind === 'struct' && isStaticType(t)) ||
+      (t.kind === 'array' && t.length !== undefined && isStaticType(t)) ||
+      (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) ||
+      isBytesLike(t);
+    const paramSupported = (t: JethType): boolean =>
+      isStaticValueType(t) || isMemByRef(t) || this.isSupportedDynStructLocal(t);
+    for (const p of callee.params) {
+      if (paramSupported(p.type)) continue;
+      this.diags.error(
+        node,
+        'JETH242',
+        `call to library function '${callee.name}' is not supported yet (parameter type ${displayName(p.type)} is not supported)`,
+      );
+      return undefined;
+    }
+    const rt = callee.returnType;
+    const returnSupported = rt.kind === 'void' || isStaticValueType(rt) || isMemByRef(rt) || this.isSupportedDynStructLocal(rt);
+    if (!returnSupported) {
+      this.diags.error(
+        node,
+        'JETH243',
+        `call to library function '${callee.name}' is not supported yet (return type ${displayName(rt)} is not supported)`,
+      );
+      return undefined;
+    }
+    if (!asStatement && rt.kind === 'void') {
+      this.diags.error(node, 'JETH244', `library function '${callee.name}' returns void and cannot be used as a value`);
+      return undefined;
+    }
+    // Resolve arg expressions (positional ++ trailing defaults), then type-check each against its
+    // parameter type. A wrong arity here is a real call error (the receiver/overload already matched).
+    const params = callee.params;
+    const defaults = callee.defaults ?? params.map(() => undefined);
+    if (argExprs.length > params.length) {
+      this.diags.error(node, 'JETH148', `'${callee.name}' expects at most ${params.length} argument(s), got ${argExprs.length}`);
+      return undefined;
+    }
+    const argNodes: ts.Expression[] = [];
+    for (let i = 0; i < params.length; i++) {
+      if (i < argExprs.length) argNodes.push(argExprs[i]!);
+      else if (defaults[i]) argNodes.push(defaults[i]!);
+      else {
+        this.diags.error(node, 'JETH148', `'${callee.name}' is missing argument '${params[i]!.name}' (no default)`);
+        return undefined;
+      }
+    }
+    const args: Expr[] = [];
+    for (let i = 0; i < params.length; i++) {
+      const pt = params[i]!.type;
+      const a = this.checkExpr(argNodes[i]!, pt);
+      if (!a) return undefined;
+      if (pt.kind === 'struct') {
+        if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
+          this.diags.error(
+            argNodes[i]!,
+            'JETH085',
+            `argument ${i + 1} of '${callee.name}' expects ${displayName(pt)}, got ${displayName(a.type)}`,
+          );
+          return undefined;
+        }
+        args.push(a);
+      } else {
+        args.push(this.coerce(a, pt, argNodes[i]!));
+      }
+    }
+    const key = this.fkey(callee);
+    this.currentCallees.add(key);
+    this.internallyCalled.add(key);
+    return { kind: 'call', type: rt, fn: key, args };
   }
 
   /** A return component that a tuple destructuring can bind to a fresh memory local: any value
@@ -11063,6 +11536,21 @@ export class Analyzer {
       return this.checkGenericCall(node, node.expression.name.text, false);
     }
 
+    // Phase A: qualified library call `L.f(args)` in value position. `L` is a known @library name
+    // (and not shadowed by a local/state value), `f` is one of its functions -> an internal call to
+    // the library function (byte-identical to a contract internal call). Placed before the built-in
+    // method resolvers (`L` is a library, never a value receiver, so there is no overlap).
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      this.isLibraryName(node.expression.expression.text) &&
+      !this.isVisibleLocal(node.expression.expression.text) &&
+      !this.stateByName.has(node.expression.expression.text)
+    ) {
+      return this.resolveQualifiedLibraryCall(node, node.expression.expression.text, node.expression.name.text, false);
+    }
+
     // abi.encode(...) / abi.encodePacked(...) / abi.encodeWithSelector(sel, ...) /
     // abi.encodeWithSignature(sig, ...) -> a bytes value.
     if (
@@ -11156,6 +11644,31 @@ export class Analyzer {
       EXT_CALL_METHODS.has(node.expression.name.text)
     ) {
       return this.checkExternalCall(node, node.expression.name.text);
+    }
+
+    // Phase A: an attached library method `x.f(args)` == `L.f(x, ...args)`. Placed AFTER every
+    // built-in method resolver (interface call / .decode / .slice / .concat / external call), so a
+    // built-in method of the same name on x's type ALWAYS wins (matches solc). Only fires when x's
+    // type has a (T, f) attachment from a @using(L) decorator AND the args fit; otherwise it returns
+    // 'no-match' and falls through to the normal member-access error.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      this.libraryAttachments.size > 0 &&
+      !(node.expression.expression.kind === ts.SyntaxKind.ThisKeyword) &&
+      !(node.expression.expression.kind === ts.SyntaxKind.SuperKeyword)
+    ) {
+      const recvType = this.trialExprType(node.expression.expression);
+      if (recvType) {
+        const r = this.resolveAttachedLibraryCall(
+          node,
+          node.expression.expression,
+          recvType,
+          node.expression.name.text,
+          false,
+        );
+        if (r !== 'no-match') return r;
+      }
     }
 
     // object literal { ...base, x: v } / { x: 1n, y: 2n } -> struct construction when the

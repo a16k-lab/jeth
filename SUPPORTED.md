@@ -142,6 +142,18 @@ concatenation: `` `Hello ${name}` `` desugars to `string.concat("Hello ", name)`
 concat) is a valid `revert` / `require` reason - lowered to a runtime `Error(string)`, byte-identical to
 solc `revert(string.concat(...))`.
 
+Libraries (Phase A: internal, inlined) match solc's internal library functions byte-identically:
+`@library class L { add(a: u256, b: u256): u256 { return a + b; } }` with internal (inlined) functions,
+called either qualified `L.add(x, 1n)` or - via a `@using(L)` decorator on the contract - as an attached
+method `x.add(1n)` (which desugars to `L.add(x, 1n)` when `x`'s type matches the first parameter; Solidity's
+`using L for T` does not parse in the TS subset, hence the decorator). Library functions are emitted as
+ordinary internal functions (no separate deployment, no delegatecall, no linking - exactly solc's internal
+library model), so qualified/attached calls, overloads, library-calls-library, struct/array/string params,
+and state writes/events through an attached call are all byte-identical. A built-in method of the receiver
+type wins over an attached library method (matching solc). Rejected (clean): a library with `@state` /
+constructor / `@external` method, `L.unknownMember`, and an ambiguous attachment. External (delegatecall,
+deployed-and-linked) libraries are Phase B - not yet supported.
+
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short
