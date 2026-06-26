@@ -482,6 +482,11 @@ export interface FunctionIR {
   // `{kind:'modifierBody'}` marker calls userfn_<key>(<decoded params>) and captures its result, then
   // the dispatch ABI-encodes that result ONCE (so a `return` in Z runs the enclosing post-code first).
   modifierWrap?: Stmt[];
+  // Inheritance: the contract (in the C3 linearization) that DEFINED this function body. The
+  // override WINNER (most-derived definition of a signature) keeps the bare ABI key + selector and
+  // is dispatched; non-winning base versions are retained ONLY as `super` targets and carry a
+  // per-contract key (e.g. `Base__f`). Unset for a non-inherited (single-contract) compile.
+  definingContract?: string;
 }
 
 /** A constructor (Phase 5): runs once in creation code. Not callable, not in the dispatcher;

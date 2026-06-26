@@ -163,3 +163,39 @@ export function decoratorCall(node: ts.Node, name: string): ts.CallExpression | 
   }
   return undefined;
 }
+
+/** A base contract reference from a `class C extends A, B(7) { ... }` heritage clause.
+ *  Each `extends` type node's `.expression` is either a bare `Identifier` (`A`, no base-ctor
+ *  args) or a `CallExpression` (`B(7)`, the heritage call-form carrying base-constructor args).
+ *  `node` is the type node, for diagnostic spans. */
+export interface HeritageBase {
+  name: string;
+  args?: ts.Expression[]; // present (possibly empty `B()`) when the call-form was used; undefined for a bare `A`
+  node: ts.Node;
+}
+
+/** Extract the base contracts of a class from its `extends` clause, in SOURCE order
+ *  (`extends A, B` -> [A, B]). TS puts every base in `heritageClauses[0].types` (a single
+ *  ExtendsKeyword clause); a TS class cannot have an `implements` clause without `extends`, and
+ *  JETH classes never implement, so only the ExtendsKeyword clause is consulted. A base written
+ *  in call-form (`B(7)`) yields `args`; a bare base (`A`) yields `args: undefined`. A base whose
+ *  expression is neither a plain identifier nor `Ident(...)` is skipped (caller reports it). */
+export function heritageBases(cls: ts.ClassDeclaration): HeritageBase[] {
+  const out: HeritageBase[] = [];
+  for (const clause of cls.heritageClauses ?? []) {
+    if (clause.token !== ts.SyntaxKind.ExtendsKeyword) continue;
+    for (const t of clause.types) {
+      const e = t.expression;
+      if (ts.isIdentifier(e)) {
+        out.push({ name: e.text, node: t });
+      } else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
+        out.push({ name: e.expression.text, args: [...e.arguments], node: t });
+      } else {
+        // an unsupported base expression (e.g. a qualified name); record nothing, let the caller
+        // see a missing base name and report it. Keep a placeholder so counts line up.
+        out.push({ name: e.getText(), node: t });
+      }
+    }
+  }
+  return out;
+}

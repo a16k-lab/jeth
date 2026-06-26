@@ -8,7 +8,7 @@
 //    enforcing integer widths, BigInt-literal rule, and view/pure mutability.
 import ts from 'typescript';
 import type { DiagnosticBag } from './diagnostics.js';
-import { decoratorNames, ctorDecoratorNames } from './parser.js';
+import { decoratorNames, ctorDecoratorNames, decoratorCall, heritageBases, HeritageBase } from './parser.js';
 import { resolveType, resolvePrimitiveName } from './typeresolver.js';
 import {
   JethType,
@@ -122,6 +122,12 @@ interface RawFunction {
   modifiers?: { name: string; argNodes: ts.Expression[]; site: ts.Node }[]; // Phase 5: applied @modifier decorators, in source order (leftmost = outermost)
   key?: string; // unique identity for the call graph: the bare name when unique, `name__ovN` when
   // overloaded (a generic specialization sets name=key=mangled). Unset => `name` (see fkey()).
+  // ---- inheritance metadata (set by collectFunction) ----
+  isVirtual?: boolean; // @virtual: this function may be overridden by a more-derived contract
+  isOverride?: boolean; // @override (bare or @override(B,C)): redefines a base function
+  overrideList?: string[]; // the explicit base list of @override(B, C) (a diamond redefinition)
+  bodyless?: boolean; // an unimplemented @virtual (no body): a base abstract method
+  definingContract?: string; // the contract (in the linearization) that declared this function
 }
 
 // Phase 5: a user-defined @modifier (Solidity-style). A `_;` placeholder splits the body into PRE
@@ -178,6 +184,10 @@ export class Analyzer {
   private memDynLocals = new Set<string>(); // bytes/string MEMORY locals (G9): register holds a [len][data] pointer
   private memDynStructLocals = new Map<string, JethType>(); // DYNAMIC-field struct MEMORY locals: name -> struct type (head = one word per field, value inline / bytes-string a pointer)
   private currentReadsEnv = false; // reads msg.*/block.*/tx.*/address(this) -> forbidden in @pure
+  // Inheritance: the contract whose body is currently being checked (for super.f() resolution). A
+  // super.f() inside this contract's function resolves to the FIRST version after it in the override
+  // chain. Undefined for a non-inherited single-contract compile (no super possible).
+  private currentDefiningContract: string | undefined;
   // Phase 6: scoped bindings visible ONLY inside a .call/.staticcall `success` condition. While checking
   // a condition expression, `this.ok` resolves to the call's success bool and `this.data` to the
   // returndata bytes (consulted in the `this.<X>` resolution BEFORE constant/immutable/state lookup,
@@ -257,7 +267,13 @@ export class Analyzer {
     if (classes.length > 1) {
       this.diags.error(classes[1]!, 'JETH041', 'multiple @contract classes per file are not supported in the MVP');
     }
-    return this.analyzeContract(classes[0]!);
+    // Inheritance: register EVERY contract class (the deployed @contract + any @abstract bases) so the
+    // C3 linearization can be resolved, then flatten the deployed contract's base chain into one merged
+    // member ordering fed to the existing analyze/emit pipeline (only the @contract deploys).
+    this.registerContractClasses();
+    const lin = this.linearize(classes[0]!);
+    if (!lin) return undefined; // a C3-impossible base order was reported
+    return this.analyzeContract(classes[0]!, lin);
   }
 
   /** Collect `type X = Brand<BaseValueType>` branded-newtype aliases. A branded type is a
@@ -671,42 +687,223 @@ export class Analyzer {
     return out;
   }
 
-  private analyzeContract(cls: ts.ClassDeclaration): ContractIR | undefined {
+  // ---- inheritance: contract registry + C3 linearization --------------------
+
+  // All contract-like classes by name: the deployed @contract plus every @abstract base. Built
+  // before flattening so a base reference in an `extends` clause resolves to its declaration.
+  private classByName = new Map<string, ts.ClassDeclaration>();
+
+  /** Register every `@contract`/`@abstract` class by name (for `extends` resolution). A `@contract`
+   *  deploys; an `@abstract` is a non-deployable base. A class that is neither is ignored (the TS
+   *  source may carry unrelated helper classes). JETH041 already forbids >1 `@contract`. */
+  private registerContractClasses(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && n.name) {
+        const decs = decoratorNames(n);
+        if (decs.includes('contract') || decs.includes('abstract')) {
+          this.classByName.set(n.name.text, n);
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  private isAbstractClass(cls: ts.ClassDeclaration): boolean {
+    return decoratorNames(cls).includes('abstract');
+  }
+
+  /** C3-linearize the deployed contract's base hierarchy (most-derived FIRST). solc's MRO is
+   *  Python C3 over the REVERSED `extends` lists with the contract prepended (so the LAST-listed
+   *  base wins priority): `D is B, C` (B is A, C is A) -> [D, C, B, A]. A non-resolvable base name
+   *  (JETH370) or an impossible merge (JETH371) is reported and undefined returned (the merged
+   *  contract cannot be built). Detects a cyclic `extends` (JETH372). */
+  private linearize(deployed: ts.ClassDeclaration): ts.ClassDeclaration[] | undefined {
+    // Resolve a class's direct bases (in source order) to their declarations, reporting unknowns.
+    const directBases = (cls: ts.ClassDeclaration): ts.ClassDeclaration[] | undefined => {
+      const bases: ts.ClassDeclaration[] = [];
+      for (const hb of heritageBases(cls)) {
+        const b = this.classByName.get(hb.name);
+        if (!b) {
+          this.diags.error(
+            hb.node,
+            'JETH370',
+            `base contract '${hb.name}' is not a @contract or @abstract class declared in this file`,
+          );
+          return undefined;
+        }
+        bases.push(b);
+      }
+      return bases;
+    };
+
+    const nameOf = (c: ts.ClassDeclaration) => c.name?.text ?? '<anon>';
+
+    // Recursive C3 with cycle detection. `stack` tracks the in-progress chain for a clear cyclic
+    // diagnostic; `memo` caches each class's linearization (a diamond's shared base is linearized once).
+    const stack = new Set<string>();
+    const memo = new Map<string, ts.ClassDeclaration[] | undefined>();
+    const c3 = (cls: ts.ClassDeclaration): ts.ClassDeclaration[] | undefined => {
+      const nm = nameOf(cls);
+      if (memo.has(nm)) return memo.get(nm);
+      if (stack.has(nm)) {
+        this.diags.error(cls, 'JETH372', `cyclic contract inheritance involving '${nm}'`);
+        return undefined;
+      }
+      stack.add(nm);
+      const bases = directBases(cls);
+      if (!bases) {
+        stack.delete(nm);
+        memo.set(nm, undefined);
+        return undefined;
+      }
+      // L[cls] = cls + merge(L[B1], ..., L[Bn], [B1, ..., Bn]) where the bases are taken in REVERSED
+      // source order (solc: rightmost base = highest priority). This matches solc's MRO direction.
+      const revBases = [...bases].reverse();
+      const seqs: ts.ClassDeclaration[][] = [];
+      for (const b of revBases) {
+        const lb = c3(b);
+        if (!lb) {
+          stack.delete(nm);
+          memo.set(nm, undefined);
+          return undefined;
+        }
+        seqs.push([...lb]);
+      }
+      seqs.push([...revBases]);
+      const merged = this.c3Merge(cls, seqs);
+      stack.delete(nm);
+      if (!merged) {
+        memo.set(nm, undefined);
+        return undefined;
+      }
+      const result = [cls, ...merged];
+      memo.set(nm, result);
+      return result;
+    };
+    return c3(deployed);
+  }
+
+  /** Standard C3 merge: repeatedly take the head of the first sequence that appears in no other
+   *  sequence's TAIL, remove it from every sequence, append it. A head blocked in every sequence
+   *  means no consistent ordering exists -> JETH371 (matches solc's "Linearization of inheritance
+   *  graph impossible"). Dedup is by class name. */
+  private c3Merge(deployed: ts.ClassDeclaration, seqsIn: ts.ClassDeclaration[][]): ts.ClassDeclaration[] | undefined {
+    const nameOf = (c: ts.ClassDeclaration) => c.name?.text ?? '<anon>';
+    const seqs = seqsIn.map((s) => [...s]).filter((s) => s.length > 0);
+    const out: ts.ClassDeclaration[] = [];
+    while (seqs.some((s) => s.length > 0)) {
+      let pick: ts.ClassDeclaration | undefined;
+      for (const s of seqs) {
+        if (s.length === 0) continue;
+        const head = s[0]!;
+        const hn = nameOf(head);
+        const inTail = seqs.some((o) => o.slice(1).some((c) => nameOf(c) === hn));
+        if (!inTail) {
+          pick = head;
+          break;
+        }
+      }
+      if (!pick) {
+        this.diags.error(
+          deployed,
+          'JETH371',
+          `inheritance graph of '${nameOf(deployed)}' cannot be linearized (the base order is C3-inconsistent; reorder the bases so a more-derived contract precedes its bases)`,
+        );
+        return undefined;
+      }
+      const pn = nameOf(pick);
+      out.push(pick);
+      for (const s of seqs) {
+        const i = s.findIndex((c) => nameOf(c) === pn);
+        if (i >= 0) s.splice(i, 1);
+      }
+    }
+    return out;
+  }
+
+  // Inheritance: per-contract constructors gathered while flattening (most-derived FIRST, matching
+  // the linearization), each with its heritage base-call args. Consumed by mergeConstructors.
+  private ctorChain: { contract: string; node?: ts.ConstructorDeclaration; bases: HeritageBase[]; cls: ts.ClassDeclaration }[] = [];
+
+  private analyzeContract(cls: ts.ClassDeclaration, lin: ts.ClassDeclaration[]): ContractIR | undefined {
     const name = cls.name?.text ?? 'Contract';
     const rawState: RawStateVar[] = [];
     const rawFns: RawFunction[] = [];
-    let ctorNode: ts.ConstructorDeclaration | undefined; // Phase 5: the single constructor, if any
 
-    // First pass: collect state, errors, and events. Errors/events are gathered
-    // before any function body is checked so emit(...)/revert(...) can resolve
-    // forward-referenced names (matches Solidity).
-    for (const member of cls.members) {
-      if (ts.isPropertyDeclaration(member)) {
-        this.collectStateVar(member, rawState);
-      } else if (ts.isMethodDeclaration(member)) {
-        const decs = decoratorNames(member);
-        if (decs.includes('error')) this.collectErrorDecl(member);
-        else if (decs.includes('event')) this.collectEvent(member);
-        else if (decs.includes('modifier')) this.collectModifier(member);
-        else if (member.typeParameters && member.typeParameters.length > 0) {
-          // F6: a generic function `f<T>(...)`. Do NOT collect it as a normal function (that would
-          // try to resolve the bare type param T and fail with JETH013); register it as a template
-          // to be monomorphized per concrete instantiation at each internal call site.
-          this.collectGeneric(member);
-        } else {
-          const fn = this.collectFunction(member);
-          if (fn) rawFns.push(fn);
+    // ---- FLATTEN the C3 linearization into one merged member ordering ----
+    // STATE: most-BASE first (REVERSE of the linearization), each contract's @state in declaration
+    // order, fed as ONE flat list to planLayout with NO per-contract reset (packing carries across
+    // the base/derived boundary, matching solc's storage layout). A same-name @state across the
+    // chain is rejected (JETH373): JETH has no `private` state surface, so the solc private-shadow
+    // exception cannot be expressed here.
+    const stateOwner = new Map<string, string>(); // @state name -> declaring contract (collision check)
+    for (const c of [...lin].reverse()) {
+      const cn = c.name?.text ?? '<anon>';
+      for (const member of c.members) {
+        if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
+          const nm = member.name.text;
+          const decs = decoratorNames(member);
+          // only a plain @state takes a slot and can collide across the chain; @constant/@immutable
+          // collisions are caught by the existing JETH046 path after collection.
+          if (decs.includes('state') && !decs.includes('constant') && !decs.includes('immutable')) {
+            const prior = stateOwner.get(nm);
+            if (prior) {
+              this.diags.error(
+                member,
+                'JETH373',
+                `state variable '${nm}' is declared in both '${prior}' and '${cn}' (a same-name @state across an inheritance chain is not allowed; JETH has no private state-var shadowing)`,
+              );
+            }
+            stateOwner.set(nm, cn);
+          }
+          this.collectStateVar(member, rawState);
         }
-      } else if (ts.isConstructorDeclaration(member)) {
-        // Phase 5: a constructor runs once in creation code. Collect the node now; type-check its
-        // body after the state symbol table + function effects are built (it may read/write state
-        // and call - gated - other functions). solc allows at most one constructor.
-        if (ctorNode) this.diags.error(member, 'JETH300', 'a contract may declare at most one constructor');
-        else ctorNode = member;
-      } else if (ts.isGetAccessor(member) || ts.isSetAccessor(member)) {
-        this.diags.error(member, 'JETH043', 'getters/setters are not supported');
       }
     }
+
+    // ERRORS / EVENTS / MODIFIERS / GENERICS: collected across ALL contracts in the linearization
+    // (most-derived first) - merged into the single declaration tables (an inherited error/event/
+    // modifier is usable in the derived contract). Decl order does not affect their semantics.
+    // FUNCTIONS: collected per defining contract, tagged with definingContract, then run through
+    // override resolution below (winner = most-derived; non-winners become per-contract super targets).
+    const collectedFns: RawFunction[] = [];
+    for (const c of lin) {
+      const cn = c.name?.text ?? '<anon>';
+      let ctorNode: ts.ConstructorDeclaration | undefined;
+      for (const member of c.members) {
+        if (ts.isMethodDeclaration(member)) {
+          const decs = decoratorNames(member);
+          if (decs.includes('error')) this.collectErrorDecl(member);
+          else if (decs.includes('event')) this.collectEvent(member);
+          else if (decs.includes('modifier')) this.collectModifier(member);
+          else if (member.typeParameters && member.typeParameters.length > 0) {
+            // F6: a generic function template - registered for monomorphization (not inherited-keyed;
+            // generics are internal-only and not part of the override surface).
+            this.collectGeneric(member);
+          } else {
+            const fn = this.collectFunction(member);
+            if (fn) {
+              fn.definingContract = cn;
+              collectedFns.push(fn);
+            }
+          }
+        } else if (ts.isConstructorDeclaration(member)) {
+          if (ctorNode) this.diags.error(member, 'JETH300', 'a contract may declare at most one constructor');
+          else ctorNode = member;
+        } else if (ts.isGetAccessor(member) || ts.isSetAccessor(member)) {
+          this.diags.error(member, 'JETH043', 'getters/setters are not supported');
+        }
+        // a PropertyDeclaration was already handled in the state pass above.
+      }
+      this.ctorChain.push({ contract: cn, node: ctorNode, bases: heritageBases(c), cls: c });
+    }
+
+    // Resolve overrides: the winner per (name + param types) is the most-derived definition; it keeps
+    // the bare ABI key/selector and is dispatched. Non-winning base versions are kept ONLY as `super`
+    // targets, re-keyed `<Contract>__<name>`. Enforces all virtual/override/list/return/mutability/
+    // visibility rules. Returns the function list to feed the existing register/check pipeline.
+    rawFns.push(...this.resolveOverrides(lin, collectedFns));
 
     // Plan storage layout, then build the symbol table.
     const layout = planLayout(rawState);
@@ -775,6 +972,13 @@ export class Analyzer {
         });
     }
 
+    // Inheritance: now that the WINNER keys are assigned, resolve each super-resolution chain's head
+    // (the winner) to its real key. resolveOverrides stored the winner RawFunction in winnerRef.
+    for (const chain of this.overrideChains.values()) {
+      const head = chain[0];
+      if (head && head.winnerRef) head.key = this.fkey(head.winnerRef);
+    }
+
     // Type-check each function body, capturing each function's DIRECT effects and its
     // internal callees for the transitive-purity fixpoint below.
     const functions: FunctionIR[] = [];
@@ -785,6 +989,27 @@ export class Analyzer {
     for (const rf of rawFns) {
       const f = this.checkFunction(rf);
       if (f) {
+        if (rf.definingContract) f.definingContract = rf.definingContract;
+        functions.push(f);
+        effects.set(this.fkey(rf), {
+          writes: this.currentWritesState,
+          reads: this.currentReadsState,
+          readsEnv: this.currentReadsEnv,
+          callees: this.currentCallees,
+          rf,
+        });
+      }
+    }
+
+    // Inheritance: check the non-winning base function versions kept as `super` targets. They are
+    // forced-internal (emitted as userfn_<key>, reachable only via super), so they carry their own
+    // effects into the purity fixpoint. The CURRENT defining contract is set so a super.f() inside a
+    // super target resolves up its own chain.
+    for (const rf of this.superTargets) {
+      const f = this.checkFunction(rf);
+      if (f) {
+        f.definingContract = rf.definingContract;
+        f.internallyCalled = true; // emit the userfn even if never internally referenced yet
         functions.push(f);
         effects.set(this.fkey(rf), {
           writes: this.currentWritesState,
@@ -924,8 +1149,11 @@ export class Analyzer {
     // internal/private and across visibilities - solc forbids two functions with the same name and
     // parameter types (a differing return type does not disambiguate). Distinct param types are valid
     // overloads (#47), so they have distinct signatures and are not flagged.
+    // Key by (defining contract, signature): two same-signature functions in ONE contract are a real
+    // duplicate, but the same signature across an inheritance chain is OVERRIDING (the override winner
+    // and the per-contract `super` targets legitimately share a signature) - not a duplicate.
     const internalSig = (f: FunctionIR) =>
-      `${f.name}(${f.params.map((p) => `${canonicalName(p.type)}|${displayName(p.type)}`).join(',')})`;
+      `${f.definingContract ?? ''}::${f.name}(${f.params.map((p) => `${canonicalName(p.type)}|${displayName(p.type)}`).join(',')})`;
     const seenSig = new Map<string, boolean>();
     for (const f of functions) {
       const isig = internalSig(f);
@@ -938,17 +1166,12 @@ export class Analyzer {
       } else seenSig.set(isig, true);
     }
 
-    // Phase 5: type-check the constructor body now that the state symbol table and function
-    // registry exist (the body may read/write state). The ctor is not in `functions` and is not
-    // subject to the purity fixpoint; it only needs the value-type param scope + state symbols.
-    // @immutable inline initializers run at the start of the constructor. With no explicit constructor,
-    // synthesize one holding just the inits (so they are still staged + baked via setimmutable).
-    const hasInlineImmInit = this.immutableOrder.some((n) => this.immutablesByName.get(n)!.init !== undefined);
-    const ctor = ctorNode
-      ? this.checkConstructor(ctorNode)
-      : hasInlineImmInit
-        ? { params: [], payable: false, body: this.immutableInitStmts() }
-        : undefined;
+    // Phase 5 + inheritance: build the single merged constructor now that the state symbol table and
+    // function registry exist. mergeConstructors encodes the two-phase order across the base chain:
+    // PHASE 1 evaluates all base-ctor ARGUMENT expressions most-DERIVED-first (binding each base's
+    // params), PHASE 2 runs the ctor bodies most-BASE-first. @immutable inline initializers stage at
+    // the start (solc parity). With no constructor anywhere and no inline immutable init, no ctor.
+    const ctor = this.mergeConstructors();
 
     return {
       name,
@@ -960,6 +1183,244 @@ export class Analyzer {
       ctor,
       immutables: this.immutableOrder.map((n) => ({ name: n, type: this.immutablesByName.get(n)!.type })),
     };
+  }
+
+  // ---- inheritance: override resolution + super -----------------------------
+
+  // The C3 linearization (most-derived first), set in resolveOverrides for super resolution.
+  private linOrder: string[] = [];
+  // Non-winning base function versions kept ONLY as `super` targets, keyed `<Contract>__<sig>`.
+  // Checked separately and emitted as forced-internal userfn_<key>. Keyed by the same per-contract
+  // super key set in resolveOverrides.
+  private superTargets: RawFunction[] = [];
+  // super dispatch table: for a signature, the ORDERED chain of (implemented) versions in the
+  // linearization that define it (most-derived first). super.f() inside `Cx` resolves to the FIRST
+  // version after Cx in this chain. The head's key is the winner's bare/overload key (resolved after
+  // overload keying via winnerRef); non-head entries carry per-contract super keys. `rf` is the
+  // version's RawFunction (for arg type-checking when super resolves to it).
+  private overrideChains = new Map<
+    string,
+    { contract: string; key: string; winnerRef?: RawFunction; rf: RawFunction }[]
+  >();
+
+  /** A signature key for grouping override sets: source name + canonical parameter types (a
+   *  differing RETURN type does not change identity; solc requires it to MATCH on an override). */
+  private sigKey(rf: RawFunction): string {
+    return `${rf.name}(${rf.params.map((p) => canonicalName(p.type)).join(',')})`;
+  }
+
+  /** Resolve the override sets across the linearization. Returns the WINNERS (most-derived definition
+   *  per signature) to feed the normal register/check/dispatch pipeline; non-winning base versions are
+   *  stashed in this.superTargets (reachable only via super). Enforces every virtual/override/list/
+   *  return-type/mutability/visibility rule the spec verified against solc. */
+  private resolveOverrides(lin: ts.ClassDeclaration[], collected: RawFunction[]): RawFunction[] {
+    this.linOrder = lin.map((c) => c.name?.text ?? '<anon>');
+    const linIndex = new Map(this.linOrder.map((n, i) => [n, i]));
+    const deployedName = this.linOrder[0]!;
+    const deployedAbstract = this.isAbstractClass(lin[0]!);
+
+    // Group by signature; within a group order by linearization (most-derived first). collected is
+    // already in linearization order (we iterated lin most-derived first), so a stable sort by the
+    // defining contract's linearization index preserves that.
+    const groups = new Map<string, RawFunction[]>();
+    for (const rf of collected) {
+      const k = this.sigKey(rf);
+      const g = groups.get(k);
+      if (g) g.push(rf);
+      else groups.set(k, [rf]);
+    }
+    for (const g of groups.values()) {
+      g.sort((a, b) => (linIndex.get(a.definingContract!) ?? 0) - (linIndex.get(b.definingContract!) ?? 0));
+    }
+
+    const winners: RawFunction[] = [];
+    const mutRank: Record<Mutability, number> = { payable: 3, nonpayable: 2, view: 1, pure: 0 };
+
+    // Transitive bases of each contract in the linearization (for the diamond override-list check):
+    // a function that overrides versions from 2+ SIBLING base contracts (neither a base of the other)
+    // must name them all in @override(B, K), matching solc.
+    const byName = new Map(lin.map((c) => [c.name?.text ?? '<anon>', c]));
+    const basesOf = new Map<string, Set<string>>();
+    const computeBases = (cn: string): Set<string> => {
+      const cached = basesOf.get(cn);
+      if (cached) return cached;
+      const out = new Set<string>();
+      basesOf.set(cn, out); // set first to tolerate a (rejected-elsewhere) cycle
+      const cls = byName.get(cn);
+      if (cls) for (const b of heritageBases(cls)) { out.add(b.name); for (const bb of computeBases(b.name)) out.add(bb); }
+      return out;
+    };
+    for (const cn of this.linOrder) computeBases(cn);
+
+    for (const [sk, versions] of groups) {
+      // If every version of this signature is declared in the SAME contract, this is NOT an override
+      // relationship - it is either a single function or a same-contract duplicate (handled by the
+      // overload resolver / JETH044). Pass them all through unchanged (pre-inheritance behaviour). An
+      // inherited (or own) bodyless @virtual that the non-@abstract deployed contract never implements
+      // is still unimplemented -> JETH380 (the check below is skipped with the rest of the loop).
+      if (new Set(versions.map((v) => v.definingContract)).size <= 1) {
+        const w = versions[0]!;
+        if (w.bodyless && !deployedAbstract) {
+          this.diags.error(
+            w.node,
+            'JETH380',
+            `contract '${deployedName}' is not @abstract but does not implement inherited @virtual function '${w.name}' (provide an @override implementation or mark the contract @abstract)`,
+          );
+        }
+        winners.push(...versions);
+        continue;
+      }
+      const winner = versions[0]!;
+      const isSingle = versions.length === 1;
+
+      // virtual/override correctness across the chain. Order in `versions` is most-derived -> base.
+      for (let i = 0; i < versions.length; i++) {
+        const v = versions[i]!;
+        const baseBelow = versions[i + 1]; // the immediately-more-base definition this one overrides
+        const isMostDerived = i === 0;
+
+        // @override is REQUIRED on every redefinition (including the first concrete impl of a bodyless
+        // @virtual). A definition with NO more-base version must NOT carry @override.
+        if (baseBelow) {
+          if (!v.isOverride) {
+            this.diags.error(
+              v.node,
+              'JETH374',
+              `function '${v.name}' in '${v.definingContract}' overrides a base function but is missing @override`,
+            );
+          }
+          // the overridden base version must be @virtual (a non-virtual base cannot be overridden).
+          if (!baseBelow.isVirtual) {
+            this.diags.error(
+              v.node,
+              'JETH375',
+              `function '${v.name}' overrides '${baseBelow.definingContract}.${baseBelow.name}', which is not @virtual`,
+            );
+          }
+          // an INTERMEDIATE override that is itself further overridden must ALSO be @virtual (a
+          // 3-level chain with a non-virtual middle is rejected by solc).
+          if (!isMostDerived && !v.isVirtual) {
+            this.diags.error(
+              v.node,
+              'JETH376',
+              `function '${v.name}' in '${v.definingContract}' is overridden by a more-derived contract but is not @virtual`,
+            );
+          }
+          // return type must be identical across the override pair.
+          if (!this.overrideReturnsEqual(v, baseBelow)) {
+            this.diags.error(
+              v.node,
+              'JETH377',
+              `override of '${v.name}' must keep the exact return type of '${baseBelow.definingContract}.${baseBelow.name}'`,
+            );
+          }
+          // mutability one-way ladder (payable > nonpayable > view > pure): the override may only be
+          // EQUAL or MORE restrictive; payable may be overridden only by payable.
+          const dr = mutRank[v.mutability];
+          const br = mutRank[baseBelow.mutability];
+          const crossesPayable = (v.mutability === 'payable') !== (baseBelow.mutability === 'payable');
+          if (dr > br || crossesPayable) {
+            this.diags.error(
+              v.node,
+              'JETH378',
+              `override of '${v.name}' cannot loosen mutability (@${baseBelow.mutability} -> @${v.mutability}); an override may only keep or tighten it, and payable crosses are forbidden`,
+            );
+          }
+          // visibility: external may be overridden by external (or, in solc, by public); JETH maps
+          // public->external. An external/internal mismatch across the pair is rejected.
+          if (v.visibility !== baseBelow.visibility) {
+            this.diags.error(
+              v.node,
+              'JETH379',
+              `override of '${v.name}' changes visibility (@${baseBelow.visibility} -> @${v.visibility}); the override must keep the base visibility`,
+            );
+          }
+        } else {
+          // a base-most definition carrying @override with nothing to override is an error.
+          if (v.isOverride) {
+            this.diags.error(
+              v.node,
+              'JETH374',
+              `function '${v.name}' in '${v.definingContract}' has @override but overrides no base function`,
+            );
+          }
+        }
+      }
+
+      // DIAMOND override-list completeness (solc: "Function needs to specify overridden contracts B
+      // and C"). The branch heads = overridden contracts that are NOT a base of another overridden
+      // contract (the maximal sibling versions). With 2+ heads, the winner must name them all in
+      // @override(B, K); a bare @override or an incomplete list is rejected.
+      const overridden = [...new Set(versions.slice(1).map((v) => v.definingContract!))];
+      const heads = overridden.filter((x) => !overridden.some((y) => y !== x && basesOf.get(y)?.has(x)));
+      if (heads.length >= 2) {
+        const list = winner.overrideList ?? [];
+        const missing = heads.filter((h) => !list.includes(h));
+        if (missing.length > 0) {
+          this.diags.error(
+            winner.node,
+            'JETH381',
+            `function '${winner.name}' overrides more than one base contract; it must specify @override(${heads.join(', ')})`,
+          );
+        }
+      }
+
+      // A bodyless (unimplemented @virtual) definition that is NEVER overridden by a concrete impl,
+      // in a NON-abstract deployed contract, is unimplemented -> reject. (If the winner itself is
+      // bodyless and the deployed contract is concrete, it stays abstract.)
+      if (winner.bodyless && !deployedAbstract) {
+        this.diags.error(
+          winner.node,
+          'JETH380',
+          `contract '${deployedName}' is not @abstract but does not implement inherited @virtual function '${winner.name}' (provide an @override implementation or mark the contract @abstract)`,
+        );
+      }
+
+      // Build the super-resolution chain for this signature: [{contract,key}] most-derived first,
+      // skipping bodyless versions (they are not callable super targets). The winner uses its bare
+      // key (assigned later by the normal overload-keying); non-winners get a per-contract key now.
+      const chain: { contract: string; key: string; winnerRef?: RawFunction; rf: RawFunction }[] = [];
+      for (let i = 0; i < versions.length; i++) {
+        const v = versions[i]!;
+        if (i === 0) {
+          // winner: register normally; its key is the bare name (or name__ovN). Mark definingContract.
+          // winnerRef lets analyzeContract backfill the real key after overload keying. A bodyless
+          // winner (a still-abstract method on an @abstract deployed contract) is not super-callable.
+          chain.push({ contract: v.definingContract!, key: '<winner>', winnerRef: v.bodyless ? undefined : v, rf: v });
+          winners.push(v);
+        } else {
+          // a super target: give it a deterministic per-contract key and stash it. It is forced
+          // internal (emitted as userfn_<key>), reachable only via super. A bodyless base version is
+          // NOT emitted (no body) but is skipped from the chain so super never targets it.
+          if (!v.bodyless) {
+            v.key = `${v.definingContract}__super__${this.sanitizeSig(sk)}`;
+            v.visibility = 'internal'; // a super target is an internal call target, never in the ABI
+            this.superTargets.push(v);
+            chain.push({ contract: v.definingContract!, key: v.key, rf: v });
+          }
+        }
+      }
+      this.overrideChains.set(sk, chain);
+      void isSingle;
+    }
+    return winners;
+  }
+
+  /** Stable identifier fragment for a signature (super-target key). Keep it readable + collision-free
+   *  by hashing the parens/commas away to underscores; the contract prefix already disambiguates. */
+  private sanitizeSig(sk: string): string {
+    return sk.replace(/[^A-Za-z0-9_]+/g, '_').replace(/_+$/g, '');
+  }
+
+  /** Whether two override versions have an identical return shape (single or multi-value). */
+  private overrideReturnsEqual(a: RawFunction, b: RawFunction): boolean {
+    if (a.returnTypes || b.returnTypes) {
+      const ra = a.returnTypes ?? [];
+      const rb = b.returnTypes ?? [];
+      if (ra.length !== rb.length) return false;
+      return ra.every((t, i) => typesEqual(t, rb[i]!));
+    }
+    return typesEqual(a.returnType, b.returnType);
   }
 
   /** Synthesize the solc auto-getter for a @public state variable, or null when its shape is not
@@ -1318,6 +1779,130 @@ export class Analyzer {
       );
     }
 
+    return { params, payable, body };
+  }
+
+  /** @payable + applied-@modifier decorators on a constructor (shared by mergeConstructors). */
+  private ctorDecorators(ctorNode: ts.ConstructorDeclaration): { payable: boolean; ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] } {
+    let payable = false;
+    const ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
+    const BAD = new Set(['view', 'pure', 'read', 'nonReentrant', 'external', 'public', 'internal', 'private', 'hidden']);
+    for (const dec of ts.getDecorators(ctorNode as unknown as ts.HasDecorators) ?? []) {
+      const e = dec.expression;
+      let nm: string | undefined;
+      let args: ts.Expression[] = [];
+      if (ts.isIdentifier(e)) nm = e.text;
+      else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) { nm = e.expression.text; args = [...e.arguments]; }
+      if (!nm) continue;
+      if (nm === 'payable') payable = true;
+      else if (BAD.has(nm)) this.diags.error(ctorNode, 'JETH301', `a constructor cannot be @${nm} (a constructor is payable or non-payable only)`);
+      else ctorMods.push({ name: nm, argNodes: args, site: dec });
+    }
+    if (ctorNode.type) this.diags.error(ctorNode.type, 'JETH301', 'a constructor cannot declare a return type');
+    return { payable, ctorMods };
+  }
+
+  /** Build the single merged constructor across the inheritance chain (this.ctorChain is most-derived
+   *  first). With no inheritance this is exactly the Phase 5 checkConstructor. With a base chain, each
+   *  contract's ctor body runs most-BASE-first (solc's body order), each checked in a fresh scope so a
+   *  base body cannot see the derived's params. Base-constructor ARGUMENTS (heritage `extends A(args)`
+   *  or a base ctor with parameters) are gated (JETH379) for a focused follow-up; the common no-arg
+   *  base constructor (the Ownable pattern) is supported. */
+  private mergeConstructors(): ConstructorIR | undefined {
+    const chain = this.ctorChain;
+    const hasInlineImmInit = this.immutableOrder.some((n) => this.immutablesByName.get(n)!.init !== undefined);
+    // No inheritance: exact Phase 5 behaviour (single contract). With no constructor but inline
+    // @immutable initializers, synthesize a body that stages them (they run in creation code).
+    if (chain.length <= 1) {
+      if (chain[0]?.node) return this.checkConstructor(chain[0].node);
+      return hasInlineImmInit ? { params: [], payable: false, body: this.immutableInitStmts() } : undefined;
+    }
+    // no constructor anywhere AND no inline immutable init -> no creation-time work beyond defaults.
+    if (!chain.some((c) => c.node) && !hasInlineImmInit) return undefined;
+    const deployed = chain[0]!;
+
+    // Gate base-constructor arguments: a heritage `extends A(args)`, or a base (non-deployed) ctor
+    // that declares parameters (which could only be supplied via base args). solc accepts these; this
+    // increment supports only no-arg base constructors.
+    for (const c of chain) {
+      for (const b of c.bases) {
+        if (b.args && b.args.length > 0) {
+          this.diags.error(b.node, 'JETH379', `base-constructor arguments ('extends ${b.name}(...)') are not supported yet (a base constructor must take no arguments)`);
+        }
+      }
+    }
+    for (let i = 1; i < chain.length; i++) {
+      const c = chain[i]!;
+      if (c.node && c.node.parameters.length > 0) {
+        this.diags.error(c.node, 'JETH379', `base contract '${c.contract}' declares a constructor with parameters; base-constructor arguments are not supported yet`);
+      }
+    }
+
+    // Deployed ctor signature: @payable + value-type params (the deploy ABI params).
+    let payable = false;
+    let deployedMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
+    const params: Param[] = [];
+    if (deployed.node) {
+      const d = this.ctorDecorators(deployed.node);
+      payable = d.payable;
+      deployedMods = d.ctorMods;
+      if (deployed.node.typeParameters && deployed.node.typeParameters.length > 0) {
+        this.diags.error(deployed.node, 'JETH301', 'a constructor cannot be generic');
+      }
+      for (const p of deployed.node.parameters) {
+        if (!ts.isIdentifier(p.name)) { this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier'); continue; }
+        const t = resolveType(p.type, this.diags, this.structsByName);
+        if (!t) continue;
+        if (p.initializer) this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
+        if (this.typeHasMapping(t)) { this.diags.error(p, 'JETH247', `constructor parameter '${p.name.text}' contains a mapping (mappings are storage-only)`); continue; }
+        if (!isStaticValueType(t)) { this.diags.error(p, 'JETH302', `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only)`); continue; }
+        params.push({ name: p.name.text, type: t });
+      }
+    }
+
+    // Fresh ctor analysis context (mirrors checkConstructor).
+    this.scopes = [];
+    this.loopDepth = 0;
+    this.currentMutability = payable ? 'payable' : 'nonpayable';
+    this.currentExternallyReachable = true;
+    this.currentWritesState = false;
+    this.currentReadsState = false;
+    this.currentReadsEnv = false;
+    this.currentReturnTypes = undefined;
+    this.currentCallees = new Set();
+    this.currentInConstructor = true;
+
+    const body: Stmt[] = this.immutableInitStmts();
+    // Run each contract's ctor body most-BASE-first; each body is checked in a FRESH scope (its own
+    // params + contract state only) so a base body cannot reference the derived contract's params.
+    for (let i = chain.length - 1; i >= 0; i--) {
+      const c = chain[i]!;
+      if (!c.node) continue;
+      const isDeployed = i === 0;
+      const cParams = isDeployed ? params : [];
+      const cMods = isDeployed ? deployedMods : this.ctorDecorators(c.node).ctorMods;
+      this.memArrayLocals.clear();
+      this.memAggregateLocals.clear();
+      this.memDynLocals.clear();
+      this.memDynStructLocals.clear();
+      this.scopes = [];
+      this.pushScope();
+      for (const p of cParams) this.declareLocal(p.name, p.type);
+      let bstmts: Stmt[] = [];
+      if (c.node.body) {
+        this.pushScope();
+        for (const s of c.node.body.statements) this.checkStatement(s, VOID, bstmts);
+        this.popScope();
+      }
+      for (const app of [...cMods].reverse()) bstmts = this.inlineModifier(app, bstmts);
+      this.popScope();
+      body.push(...bstmts);
+    }
+    this.currentInConstructor = false;
+
+    if (this.currentCallees.size > 0) {
+      this.diags.error(deployed.node ?? deployed.cls, 'JETH303', 'calling an internal/private function from a constructor is not supported yet (inline the logic into the constructor body)');
+    }
     return { params, payable, body };
   }
 
@@ -1706,6 +2291,9 @@ export class Analyzer {
       'modifier',
       'error',
       'event',
+      // inheritance: @virtual / @override (bare or @override(B,C)) are not @modifier applications.
+      'virtual',
+      'override',
     ]);
     const appliedModifiers: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
     for (const d of ts.getDecorators(member) ?? []) {
@@ -1720,6 +2308,22 @@ export class Analyzer {
         appliedModifiers.push({ name: e.expression.text, argNodes: [...e.arguments], site: d });
       }
     }
+
+    // Inheritance metadata: @virtual / @override (bare or @override(B, C)). A bodyless method is an
+    // unimplemented @virtual (a base abstract method). The explicit base list of @override(B, C)
+    // (the diamond redefinition list) is captured for the diamond completeness check. Spread into
+    // every RawFunction this method returns.
+    const overrideCall = decoratorCall(member, 'override');
+    let overrideList: string[] | undefined;
+    if (overrideCall && overrideCall.arguments.length > 0) {
+      overrideList = overrideCall.arguments.map((a) => (ts.isIdentifier(a) ? a.text : a.getText()));
+    }
+    const inhMeta = {
+      isVirtual: decs.includes('virtual'),
+      isOverride: decs.includes('override'),
+      overrideList,
+      bodyless: member.body === undefined,
+    };
 
     // VISIBILITY MODEL: the ONLY writable visibility decorator is @external (an exposed ABI entry).
     // A function WITHOUT @external is INTERNAL (private-by-default: callable by name, memory params,
@@ -1872,6 +2476,7 @@ export class Analyzer {
           inferRead,
           nonReentrant,
           modifiers: appliedModifiers.length ? appliedModifiers : undefined,
+          ...inhMeta,
           params,
           defaults,
           returnType: VOID,
@@ -1886,6 +2491,7 @@ export class Analyzer {
         inferRead,
         nonReentrant,
         modifiers: appliedModifiers.length ? appliedModifiers : undefined,
+        ...inhMeta,
         params,
         defaults,
         returnType: VOID,
@@ -1915,6 +2521,7 @@ export class Analyzer {
         inferRead,
         nonReentrant,
         modifiers: appliedModifiers.length ? appliedModifiers : undefined,
+        ...inhMeta,
         params,
         defaults,
         returnType: VOID,
@@ -1929,6 +2536,7 @@ export class Analyzer {
       inferRead,
       nonReentrant,
       modifiers: appliedModifiers.length ? appliedModifiers : undefined,
+      ...inhMeta,
       params,
       defaults,
       returnType,
@@ -2165,6 +2773,7 @@ export class Analyzer {
   private checkFunction(rf: RawFunction): FunctionIR | undefined {
     this.scopes = [];
     this.loopDepth = 0;
+    this.currentDefiningContract = rf.definingContract; // inheritance: scope super.f() to this contract
     this.pushScope(); // function/parameter scope
     this.currentMutability = rf.mutability;
     // only @external is externally reachable; an unmarked (internal) function is not. Gates the
@@ -2835,6 +3444,16 @@ export class Analyzer {
           if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
           return;
         }
+      }
+      // `super.method(args)` as a statement -> resolve up the linearization (inheritance).
+      if (
+        ts.isCallExpression(e) &&
+        ts.isPropertyAccessExpression(e.expression) &&
+        e.expression.expression.kind === ts.SyntaxKind.SuperKeyword
+      ) {
+        const c = this.checkSuperCall(e, e.expression.name.text, true);
+        if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
+        return;
       }
       // `this.method(args)` internal call as a statement (TS-idiomatic).
       if (
@@ -5472,12 +6091,64 @@ export class Analyzer {
     return ok;
   }
 
+  /** Inheritance: resolve `super.f(args)` to the next implementation in the linearization. Inside a
+   *  function defined by `Cx`, super.f resolves to the FIRST contract AFTER Cx (in the deployed
+   *  contract's full linearization) that DEFINES f - exactly solc's MRO super order. A super outside
+   *  an inherited function, or to an unimplemented next-in-line, is rejected cleanly. The resolved
+   *  base version is passed forced into checkInternalCall (which handles arg checking + IR). */
+  private checkSuperCall(node: ts.CallExpression, name: string, asStatement: boolean): (Expr & { kind: 'call' }) | undefined {
+    const here = this.currentDefiningContract;
+    if (here === undefined) {
+      this.diags.error(node, 'JETH382', `'super' is only valid inside an inherited contract function`);
+      return undefined;
+    }
+    const hereIdx = this.linOrder.indexOf(here);
+    // Among all override chains for source name `name`, pick the one whose params the args fit AND
+    // that contains `here`; then take the first entry strictly after `here`. Most signatures have a
+    // single chain; an overloaded `f` across the chain disambiguates by arg arity/types.
+    const candidates: { chain: { contract: string; key: string; rf: RawFunction }[]; nextIdx: number }[] = [];
+    for (const chain of this.overrideChains.values()) {
+      if (chain.length === 0 || chain[0]!.rf.name !== name) continue;
+      const pos = chain.findIndex((e) => e.contract === here);
+      // `here` must appear in this chain (it defines this signature) for super to climb past it.
+      if (pos < 0) {
+        // `here` may not itself define f (it inherits f) yet still call super.f: then super means the
+        // first version after `here` in the LINEARIZATION. Use the first chain entry whose contract is
+        // strictly more-base than `here`.
+        const ni = chain.findIndex((e) => this.linOrder.indexOf(e.contract) > hereIdx);
+        if (ni >= 0) candidates.push({ chain, nextIdx: ni });
+        continue;
+      }
+      if (pos + 1 < chain.length) candidates.push({ chain, nextIdx: pos + 1 });
+    }
+    if (candidates.length === 0) {
+      this.diags.error(
+        node,
+        'JETH381',
+        `super.${name}(...) has no implementation after '${here}' in the inheritance chain (the base method is abstract/unimplemented or does not exist)`,
+      );
+      return undefined;
+    }
+    // Disambiguate by which candidate's target params the args fit (overloaded super).
+    const viable = candidates.filter((c) => this.overloadApplicable(node, c.chain[c.nextIdx]!.rf) && this.overloadArgsMatch(node, c.chain[c.nextIdx]!.rf));
+    const chosen = viable.length === 1 ? viable[0]! : candidates.length === 1 ? candidates[0]! : viable[0];
+    if (!chosen) {
+      this.diags.error(node, 'JETH381', `super.${name}(...) does not match any base implementation's parameters`);
+      return undefined;
+    }
+    const target = chosen.chain[chosen.nextIdx]!.rf;
+    return this.checkInternalCall(node, name, asStatement, target);
+  }
+
   private checkInternalCall(
     node: ts.CallExpression,
     name: string,
     asStatement: boolean,
+    forcedCallee?: RawFunction,
   ): (Expr & { kind: 'call' }) | undefined {
-    const callee = this.resolveOverload(node, name);
+    // Inheritance: super.f() supplies the resolved base version directly (no name-based overload
+    // resolution); otherwise resolve the (possibly overloaded) callee from the source name.
+    const callee = forcedCallee ?? this.resolveOverload(node, name);
     if (!callee) return undefined;
     if (callee.visibility === 'external') {
       this.diags.error(
@@ -9550,6 +10221,14 @@ export class Analyzer {
       if (this.genericsByName.has(callee)) return this.checkGenericCall(node, callee, false);
     }
 
+    // `super.method(args)` in value position -> resolve up the linearization (inheritance).
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.expression.kind === ts.SyntaxKind.SuperKeyword
+    ) {
+      return this.checkSuperCall(node, node.expression.name.text, false);
+    }
     // `this.method(args)` (TS-idiomatic internal call) -> internal-call semantics.
     if (
       ts.isCallExpression(node) &&
