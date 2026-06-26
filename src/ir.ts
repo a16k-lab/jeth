@@ -96,6 +96,9 @@ export type Expr =
   | { kind: 'dynStateRead'; type: JethType; slot: number } // this.s (storage)
   | { kind: 'dynParamRead'; type: JethType; name: string } // calldata param (codegen binds ptr/len)
   | { kind: 'msgData'; type: JethType } // msg.data: a calldata bytes view over the WHOLE calldata [0, calldatasize())
+  // <calldata bytes>.slice(start[, end]) -> a zero-copy calldata bytes sub-view (solc data[start:end]).
+  // end defaults to the base length; lowering reverts EMPTY iff !(start <= end <= baseLen).
+  | { kind: 'calldataSlice'; type: JethType; base: Expr; start: Expr; end?: Expr }
   | { kind: 'dynLocalRead'; type: JethType; name: string } // bytes/string MEMORY local (register holds a [len][data] pointer)
   | { kind: 'stringLiteral'; type: JethType; bytes: Uint8Array } // a memory bytes/string literal
   | { kind: 'dynLength'; type: JethType; operand: Expr } // s.length -> u256

@@ -120,6 +120,18 @@ precompile's silent zero): `modexp(base, exp, mod)` -> `bytes` (0x05); `bn256Add
 dispatch byte-identical to Solidity's `receive()` / `fallback()` (empty calldata -> receive; a
 non-matching selector or value to a non-payable fallback -> fallback / revert).
 
+Calldata slicing uses a `.slice` method (Solidity's `data[start:end]` does not parse in the TS subset):
+`data.slice(start)`, `data.slice(start, end)`, and `data.slice()` (the whole value) on a CALLDATA
+bytes/string value - a `bytes`/`string` parameter, `msg.data`, a calldata struct's `bytes`/`string`
+field, or another slice. It is a zero-copy calldata sub-view, byte-identical to solc's `data[start:end]`:
+the result is `[base+start, end-start)`, `.length` is `end-start`, and the bounds check reverts EMPTY iff
+`!(start <= end <= length)`. Indices must be unsigned (a signed index is rejected, matching solc). A slice
+flows anywhere a calldata bytes value does (`return`, `abi.decode` / `.decode(T)`, `keccak256`/`sha256`,
+`abi.encode`/`encodePacked`, an event/error arg, `address.call({data})`), so `abi.decode(msg.data.slice(4), T)`
+skips the selector. A memory/storage value is not sliceable (matching solc); slicing a `bytes[]`/`string[]`
+calldata ELEMENT is not yet supported (blocked by a pre-existing gap: JETH has no standalone calldata
+array-element access).
+
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short

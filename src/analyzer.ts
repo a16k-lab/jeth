@@ -8920,6 +8920,93 @@ export class Analyzer {
     return !!e && e.type.kind === 'bytes';
   }
 
+  /** Is `e` a CALLDATA-located bytes/string value (sliceable)? A bytes/string parameter (dynParamRead),
+   *  msg.data (msgData), another slice (calldataSlice), a bytes/string field of a calldata dynamic-struct
+   *  param (cdDynStructField), or a bytes[]/string[] calldata element (cdDynArrayElem) - and a
+   *  bytes(string)/string(bytes) cast over any of those. Each of these lowers to a calldata DynRef
+   *  ({ src:'calldata', dataPtr, len }), which the slice adjusts in place. A memory/storage bytes is NOT
+   *  calldata (solc only slices calldata), so strArrayElem/dynPlaceRead (storage) are deliberately absent. */
+  private isCalldataBytes(e: Expr): boolean {
+    if (e.kind === 'cast') return this.isCalldataBytes(e.operand);
+    return (
+      e.kind === 'dynParamRead' ||
+      e.kind === 'msgData' ||
+      e.kind === 'calldataSlice' ||
+      e.kind === 'cdDynStructField' ||
+      e.kind === 'cdDynArrayElem'
+    );
+  }
+
+  /** `<calldata bytes>.slice(start [, end])` -> a zero-copy calldata bytes slice (solc data[start:end]).
+   *  Returns the Expr, 'reject' (a diagnostic was emitted, stop), or undefined (not a bytes `.slice` -
+   *  let other handlers try). Peek-rollback first so a non-bytes `.slice` receiver does not get claimed. */
+  private resolveCalldataSlice(node: ts.CallExpression): Expr | 'reject' | undefined {
+    if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'slice') return undefined;
+    const recvNode = node.expression.expression;
+    // peek whether the receiver is a bytes value, restoring diagnostics AND the mutability flags so a
+    // non-slice fall-through leaves no trace (the real handler re-checks the receiver and sets flags).
+    const savedEnv = this.currentReadsEnv;
+    const savedReads = this.currentReadsState;
+    const savedWrites = this.currentWritesState;
+    const diagLen = this.diags.items.length;
+    const peek = this.checkExpr(recvNode);
+    // bytes AND string calldata are sliceable (solc allows string calldata slices too).
+    const isSliceable = !!peek && (peek.type.kind === 'bytes' || peek.type.kind === 'string');
+    this.diags.items.length = diagLen;
+    this.currentReadsEnv = savedEnv;
+    this.currentReadsState = savedReads;
+    this.currentWritesState = savedWrites;
+    if (!isSliceable) return undefined;
+    // commit: re-check the receiver (keeping diagnostics + flags this time)
+    const base = this.checkExpr(recvNode);
+    if (!base) return 'reject';
+    if (!this.isCalldataBytes(base)) {
+      this.diags.error(
+        node,
+        'JETH382',
+        '.slice(...) is only valid on a calldata bytes/string value (a parameter, msg.data, a slice, or a calldata struct field / array element); a memory/storage value cannot be sliced',
+      );
+      return 'reject';
+    }
+    if (node.arguments.length > 2) {
+      this.diags.error(node, 'JETH170', '.slice(...) takes an optional start and end argument');
+      return 'reject';
+    }
+    // .slice() = the whole value (start 0), .slice(s) = [s:], .slice(s, e) = [s:e]. Indices must be uint.
+    let start: Expr;
+    if (node.arguments.length === 0) {
+      start = { kind: 'literalInt', type: U256, value: 0n };
+    } else {
+      const s = this.checkExpr(node.arguments[0]!, U256);
+      if (!s) return 'reject';
+      if (s.type.kind !== 'uint') {
+        this.diags.error(
+          node.arguments[0]!,
+          'JETH383',
+          `.slice(...) start must be an unsigned integer, got ${displayName(s.type)}`,
+        );
+        return 'reject';
+      }
+      start = this.coerce(s, U256, node.arguments[0]!);
+    }
+    let end: Expr | undefined;
+    if (node.arguments.length === 2) {
+      const e = this.checkExpr(node.arguments[1]!, U256);
+      if (!e) return 'reject';
+      if (e.type.kind !== 'uint') {
+        this.diags.error(
+          node.arguments[1]!,
+          'JETH383',
+          `.slice(...) end must be an unsigned integer, got ${displayName(e.type)}`,
+        );
+        return 'reject';
+      }
+      end = this.coerce(e, U256, node.arguments[1]!);
+    }
+    // the slice preserves the base location type (bytes -> bytes, string -> string).
+    return { kind: 'calldataSlice', type: base.type, base, start, end };
+  }
+
   /** A G1Point/G2Point @struct shape check: exactly `n` u256 fields (n=2 for G1, n=4 for G2). A too-loose
    *  check would emit a wrong-size staticcall buffer, so the field count and width are pinned. */
   private isPointStruct(t: JethType, n: number): boolean {
@@ -10902,6 +10989,15 @@ export class Analyzer {
         if (!r) return undefined;
         return { kind: 'abiDecode', type: r.types[0]!, data: r.data };
       }
+    }
+
+    // Phase 6: `<calldata bytes>.slice(start [, end])` -> a zero-copy calldata bytes slice, byte-identical
+    // to solc's data[start:end]. Only fires when the receiver is a CALLDATA bytes value (peek-rollback so a
+    // non-bytes `.slice` receiver falls through to the interface-call / other handlers below).
+    if (ts.isCallExpression(node)) {
+      const sl = this.resolveCalldataSlice(node);
+      if (sl === 'reject') return undefined;
+      if (sl) return sl;
     }
 
     // Phase 6: high-level typed interface call `IFoo(addr [, { value?, gas? }]).method(args)` in value

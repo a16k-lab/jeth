@@ -2264,6 +2264,7 @@ ${indent(runtime, 6)}
       case 'dynStateRead':
       case 'dynParamRead':
       case 'msgData':
+      case 'calldataSlice':
       case 'dynLocalRead':
       case 'memDynField':
       case 'memDynStructValue':
@@ -5874,6 +5875,30 @@ ${indent(runtime, 6)}
         // msg.data is the WHOLE calldata (selector included), so data starts at 0 and
         // length is calldatasize() (matches solc: msg.data.length == calldatasize()).
         return { src: 'calldata', dataPtr: '0', len: 'calldatasize()' };
+      case 'calldataSlice': {
+        // <calldata bytes>.slice(start[, end]) -> a zero-copy sub-view: dataPtr+start, len = end-start.
+        // Byte-identical to solc data[start:end]: require(start <= end && end <= baseLen) else revert EMPTY.
+        // Order: lower the base, then start, then end (matching solc left-to-right operand evaluation).
+        const ref = this.lowerDynamic(e.base, ctx, out);
+        if (ref.src !== 'calldata')
+          throw new UnsupportedError('calldataSlice base must be a calldata bytes value');
+        const baseData = this.fresh();
+        const baseLen = this.fresh();
+        out.push(`let ${baseData} := ${ref.dataPtr}`);
+        out.push(`let ${baseLen} := ${ref.len}`);
+        const start = this.fresh();
+        out.push(`let ${start} := ${this.lowerExpr(e.start, ctx, out)}`);
+        const end = this.fresh();
+        if (e.end) out.push(`let ${end} := ${this.lowerExpr(e.end, ctx, out)}`);
+        else out.push(`let ${end} := ${baseLen}`);
+        out.push(`if gt(${start}, ${end}) { revert(0, 0) }`);
+        out.push(`if gt(${end}, ${baseLen}) { revert(0, 0) }`);
+        const dataPtr = this.fresh();
+        const len = this.fresh();
+        out.push(`let ${dataPtr} := add(${baseData}, ${start})`);
+        out.push(`let ${len} := sub(${end}, ${start})`);
+        return { src: 'calldata', dataPtr, len };
+      }
       case 'abiEncode':
         return { src: 'memory', ptr: this.buildAbiEncode(e.args, e.packed, ctx, out, e.selector, e.sig) };
       case 'abiDecode':
