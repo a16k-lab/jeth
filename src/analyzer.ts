@@ -8956,7 +8956,9 @@ export class Analyzer {
    *  0 parts -> the empty value; 1 part -> that part unchanged; otherwise a packed abiEncode node. */
   private makeConcat(parts: Expr[], result: JethType): Expr {
     if (parts.length === 0) return { kind: 'stringLiteral', type: result, bytes: new Uint8Array(0) };
-    if (parts.length === 1) return parts[0]!;
+    // a single part can be returned unchanged ONLY if it already has the result type; a bytesN part in a
+    // bytes.concat (or any type mismatch) must be repacked through the encoder to become a `bytes` value.
+    if (parts.length === 1 && parts[0]!.type.kind === result.kind) return parts[0]!;
     return { kind: 'abiEncode', type: result, packed: true, args: parts };
   }
 

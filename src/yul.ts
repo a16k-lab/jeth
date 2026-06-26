@@ -5785,65 +5785,69 @@ ${indent(runtime, 6)}
 
   /** Packed encoding (abi.encodePacked) as a bytes value: each value contributes its byte-width
    *  (no padding/length), each bytes/string its raw content. The final partial word is zeroed so the
-   *  bytes value's tail padding is clean (a slack word is allocated to keep that write in-bounds). */
+   *  bytes value's tail padding is clean (a slack word is allocated to keep that write in-bounds).
+   *
+   *  Each part is normalized to a (dataPtr, byteLen) descriptor SPILLED to a memory array, then copied
+   *  in a runtime loop. This keeps only a constant number of Yul locals live regardless of arg count -
+   *  the previous version kept one local per part across the whole encode, so a long encodePacked / a
+   *  many-part string.concat / a 3+-interpolation template overflowed the 16-slot stack (StackTooDeep).
+   *  The descriptor array is allocated FIRST so part materializations (which bump the free pointer) never
+   *  clobber it, and the result buffer is allocated LAST. Intermediate memory differs from solc's, but the
+   *  RESULT bytes are identical (byte-identity targets returndata/storage/logs, not raw memory). */
   private buildAbiEncodePacked(args: Expr[], ctx: LowerCtx, out: string[]): string {
-    type Part =
-      | { val: string; width: number; leftAligned: boolean }
-      | { mp: string; len: string }
-      | { arrMp: string; byteSize: string }; // a value array: element words (each padded to 32), no length
-    const parts: Part[] = args.map((a) => {
-      const t = a.type;
-      if (isBytesLike(t)) return this.toMemory(this.lowerDynamic(a, ctx, out), out);
-      if (t.kind === 'array') {
-        // a value-element array: solc packs each element padded to 32 bytes (its ABI element words),
-        // with no length prefix. Get the element words from the array's memory image.
-        if (t.length !== undefined) {
-          // a fixed value array: aggToMemPtr gives N contiguous element words.
-          return { arrMp: this.aggToMemPtr(a, ctx, out), byteSize: String(t.length * 32) };
-        }
-        const m = this.materializeArrayArg(a, ctx, out); // {mp,size} = [len][elems]
-        const arrMp = this.fresh();
-        out.push(`let ${arrMp} := add(${m.mp}, 0x20)`); // skip the [len] word -> first element
-        const byteSize = this.fresh();
-        out.push(`let ${byteSize} := sub(${m.size}, 0x20)`);
-        return { arrMp, byteSize };
-      }
-      return { val: this.lowerExpr(a, ctx, out), width: storageByteSize(t), leftAligned: t.kind === 'bytesN' };
-    });
-    let staticBytes = 0;
-    const dynLens: string[] = [];
-    for (const p of parts) {
-      if ('len' in p) dynLens.push(p.len);
-      else if ('byteSize' in p) dynLens.push(p.byteSize);
-      else staticBytes += p.width;
-    }
+    const n = args.length;
+    // descriptor array: n entries of (dataPtr, byteLen), allocated before any part materializes.
+    const desc = this.fresh();
+    out.push(`let ${desc} := ${this.alloc()}(${Math.max(n, 1) * 0x40})`);
     const total = this.fresh();
-    out.push(`let ${total} := ${staticBytes}`);
-    for (const l of dynLens) out.push(`${total} := add(${total}, ${l})`);
+    out.push(`let ${total} := 0`);
+    const writeDesc = (i: number, dataPtr: string, len: string) => {
+      const dpSlot = i === 0 ? desc : `add(${desc}, ${i * 0x40})`;
+      out.push(`mstore(${dpSlot}, ${dataPtr})`);
+      out.push(`mstore(add(${desc}, ${i * 0x40 + 0x20}), ${len})`);
+      out.push(`${total} := add(${total}, ${len})`);
+    };
+    args.forEach((a, i) => {
+      const t = a.type;
+      if (isBytesLike(t)) {
+        // bytes/string: its raw content (data after the [len] word).
+        const { mp, len } = this.toMemory(this.lowerDynamic(a, ctx, out), out);
+        writeDesc(i, `add(${mp}, 0x20)`, len);
+      } else if (t.kind === 'array') {
+        // a value-element array: each element padded to 32 bytes (its ABI element words), no length.
+        if (t.length !== undefined) {
+          writeDesc(i, this.aggToMemPtr(a, ctx, out), String(t.length * 32));
+        } else {
+          const m = this.materializeArrayArg(a, ctx, out); // {mp,size} = [len][elems]
+          writeDesc(i, `add(${m.mp}, 0x20)`, `sub(${m.size}, 0x20)`);
+        }
+      } else {
+        // a value: stage its left-aligned `width` content bytes in a scratch word, descriptor -> that word.
+        const width = storageByteSize(t);
+        const val = this.lowerExpr(a, ctx, out);
+        const aligned = t.kind === 'bytesN' || width === 32 ? val : `shl(${(32 - width) * 8}, ${val})`;
+        const w = this.fresh();
+        out.push(`let ${w} := ${this.alloc()}(0x20)`);
+        out.push(`mstore(${w}, ${aligned})`);
+        writeDesc(i, w, String(width));
+      }
+    });
+    // allocate the result LAST (length word + rounded data + a slack word for the trailing zero).
     const ptr = this.fresh();
     out.push(`let ${ptr} := ${this.alloc()}(add(0x40, and(add(${total}, 0x1f), not(0x1f))))`);
     out.push(`mstore(${ptr}, ${total})`);
-    const data = this.fresh();
-    out.push(`let ${data} := add(${ptr}, 0x20)`);
     const cursor = this.fresh();
-    out.push(`let ${cursor} := ${data}`);
-    for (const p of parts) {
-      if ('len' in p) {
-        out.push(`mcopy(${cursor}, add(${p.mp}, 0x20), ${p.len})`);
-        out.push(`${cursor} := add(${cursor}, ${p.len})`);
-      } else if ('byteSize' in p) {
-        // a value array: the element words (each padded to 32), concatenated, no length.
-        out.push(`mcopy(${cursor}, ${p.arrMp}, ${p.byteSize})`);
-        out.push(`${cursor} := add(${cursor}, ${p.byteSize})`);
-      } else if (p.width === 32 || p.leftAligned) {
-        // a full 32-byte value, or a bytesN already left-aligned (content in the high width bytes).
-        out.push(`mstore(${cursor}, ${p.val})`);
-        out.push(`${cursor} := add(${cursor}, ${p.width})`);
-      } else {
-        // int/uint/bool/address: right-aligned register; left-align its low `width` bytes.
-        out.push(`mstore(${cursor}, shl(${(32 - p.width) * 8}, ${p.val}))`);
-        out.push(`${cursor} := add(${cursor}, ${p.width})`);
-      }
+    out.push(`let ${cursor} := add(${ptr}, 0x20)`);
+    if (n > 0) {
+      const i = this.fresh();
+      const dp = this.fresh();
+      const ln = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${n * 0x40}) { ${i} := add(${i}, 0x40) } {`);
+      out.push(`  let ${dp} := mload(add(${desc}, ${i}))`);
+      out.push(`  let ${ln} := mload(add(add(${desc}, ${i}), 0x20))`);
+      out.push(`  mcopy(${cursor}, ${dp}, ${ln})`);
+      out.push(`  ${cursor} := add(${cursor}, ${ln})`);
+      out.push(`}`);
     }
     out.push(`mstore(${cursor}, 0)`); // zero the trailing partial word
     return ptr;

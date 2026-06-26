@@ -154,6 +154,54 @@ describe('dynamic revert / require messages', () => {
   });
 });
 
+// Many-part concat / template (the packed-encode lowering spills part descriptors to memory, so it does
+// not overflow the 16-slot stack the way a long abi.encodePacked once did). A bytesN concat arg, and a
+// single-bytesN concat (which must repack to a bytes value), are also covered.
+describe('many-part concat + bytesN (no StackTooDeep)', () => {
+  it('template with 3 interpolations + literal parts', async () => {
+    const J = `@contract class C { @external @pure f(a: string, b: string, c: string): string { return \`transfer \${a} -> \${b}: \${c}\`; } }`;
+    const S = `contract C { function f(string calldata a, string calldata b, string calldata c) external pure returns(string memory){ return string.concat("transfer ", a, " -> ", b, ": ", c); } }`;
+    const j = await deployJeth(J);
+    const s = await deploySol(S);
+    const cd = sel('f(string,string,string)') + W(0x60n) + W(0xa0n) + W(0xe0n) + W(3n) + PAD('414141') + W(3n) + PAD('424242') + W(3n) + PAD('313030');
+    const rj = await j.h.call(j.a, '0x' + cd);
+    const rs = await s.h.call(s.a, '0x' + cd);
+    expect(rj.success).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex);
+  });
+  it('string.concat of 15 string literals', async () => {
+    const lits = Array.from({ length: 15 }, (_, i) => `"${String.fromCharCode(97 + i)}"`).join(', ');
+    const j = await deployJeth(`@contract class C { @external @pure f(): string { return string.concat(${lits}); } }`);
+    const s = await deploySol(`contract C { function f() external pure returns(string memory){ return string.concat(${lits}); } }`);
+    const rj = await j.h.call(j.a, '0x' + sel('f()'));
+    const rs = await s.h.call(s.a, '0x' + sel('f()'));
+    expect(rj.returnHex).toBe(rs.returnHex);
+  });
+  it('template with 10 interpolations (solc default StackTooDeeps; JETH compiles it) -> known answer', async () => {
+    // 20 parts. solc's default (non-via-IR) codegen throws StackTooDeep on the equivalent string.concat,
+    // so there is no solc contract to diff against; JETH's descriptor-spill lowering compiles it. Verify
+    // against the deterministic concatenation result instead.
+    const body = Array.from({ length: 10 }, () => 'x${a}').join('');
+    const j = await deployJeth(`@contract class C { @external @pure f(a: string): string { return \`${body}\`; } }`);
+    const cd = sel('f(string)') + W(0x20n) + W(2n) + PAD('4141'); // a = "AA"
+    const rj = await j.h.call(j.a, '0x' + cd);
+    expect(rj.success).toBe(true);
+    const o = rj.returnHex.slice(2);
+    const expected = Buffer.from('xAA'.repeat(10)).toString('hex'); // ("x" + "AA") * 10
+    expect(parseInt(o.slice(64, 128), 16)).toBe(30); // length
+    expect(o.slice(128, 128 + expected.length)).toBe(expected);
+  });
+  it('bytes.concat of a single bytesN repacks to bytes', async () => {
+    const J = `@contract class C { @external @pure f(): bytes { const b: bytes16 = bytes16(0xdeadbeefdeadbeefdeadbeefdeadbeefn); return bytes.concat(b); } }`;
+    const S = `contract C { function f() external pure returns(bytes memory){ bytes16 b=bytes16(0xdeadbeefdeadbeefdeadbeefdeadbeef); return bytes.concat(b); } }`;
+    const j = await deployJeth(J);
+    const s = await deploySol(S);
+    const rj = await j.h.call(j.a, '0x' + sel('f()'));
+    const rs = await s.h.call(s.a, '0x' + sel('f()'));
+    expect(rj.returnHex).toBe(rs.returnHex);
+  });
+});
+
 describe('concat accept/reject parity with solc', () => {
   const cases: { label: string; j: string; s: string }[] = [
     {
