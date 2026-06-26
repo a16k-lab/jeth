@@ -129,10 +129,9 @@ describe('calldata slicing - byte-identical to solc data[start:end]', () => {
 });
 
 // Extended calldata sources (verified byte-identical via the adversarial workflow): string calldata,
-// a bytes/string field of a calldata struct param, the zero-arg whole-slice form. A bytes[]/string[]
-// calldata ELEMENT slice is NOT supported - blocked by a pre-existing, non-slice gap (JETH has no
-// standalone bytes[]/string[] calldata element access in any context; solc's arr[0][1:] cannot be
-// mirrored until element access exists).
+// a bytes/string field of a calldata struct param, a bytes[]/string[] calldata ELEMENT (arr[i]), and
+// the zero-arg whole-slice form. (NOTE: the index must be a BigInt literal - arr[0n], not arr[0]; a plain
+// 0 is a JETH071 "use 0n" error, which earlier masked these as if element access were unsupported.)
 describe('calldata slicing - extended sources', () => {
   const EJ = `@struct class P { a: u256; data: bytes; }
 @struct class Q { a: u256; s: string; }
@@ -169,13 +168,90 @@ describe('calldata slicing - extended sources', () => {
   it('calldata struct string field q.s[1:]', () =>
     ediff(sel('sfld((uint256,string))') + W(0x20n) + W(7n) + W(0x40n) + W(5n) + PAD('aabbccddee')));
   it('zero-arg whole slice d[:]', () => ediff(sel('whole(bytes)') + W(0x20n) + W(DLEN) + DPAD));
-  it('bytes[] calldata element slice stays rejected (pre-existing element-access gap, not slice-specific)', () => {
-    expect(
-      jethAccepts(`@contract class C { @external @view f(arr: bytes[]): bytes { return arr[0].slice(1n); } }`),
-    ).toBe(false);
-    // and the gap is general: plain element access is rejected too, so this is not a slice regression
-    expect(jethAccepts(`@contract class C { @external @view f(arr: bytes[]): bytes { return arr[0]; } }`)).toBe(false);
+});
+
+// A bytes[]/string[] calldata ELEMENT (arr[i]) is a first-class calldata bytes/string value: it can be
+// returned, hashed, measured, and SLICED, byte-identical to solc (incl. an out-of-bounds Panic 0x32).
+// The index is a BigInt literal (arr[0n]) or any uint expression. Verified vs solc arr[i] / arr[i][s:e].
+describe('calldata array-element access + element slicing', () => {
+  const AJ = `@contract class C {
+    @external @view e0(arr: bytes[]): bytes { return arr[0n]; }
+    @external @view e1(arr: bytes[]): bytes { return arr[1n]; }
+    @external @view dyn(arr: bytes[], i: u256): bytes { return arr[i]; }
+    @external @view len1(arr: bytes[]): u256 { return arr[1n].length; }
+    @external @view kc(arr: bytes[]): bytes32 { return keccak256(arr[0n]); }
+    @external @view sl(arr: bytes[]): bytes { return arr[0n].slice(1n); }
+    @external @view sl1(arr: bytes[], s: u256, e: u256): bytes { return arr[1n].slice(s, e); }
+    @external @view se0(arr: string[]): string { return arr[0n]; }
+    @external @view ssl(arr: string[]): string { return arr[0n].slice(1n); }
+  }`;
+  const AS = `contract C {
+    function e0(bytes[] calldata arr) external pure returns(bytes memory){ return arr[0]; }
+    function e1(bytes[] calldata arr) external pure returns(bytes memory){ return arr[1]; }
+    function dyn(bytes[] calldata arr, uint i) external pure returns(bytes memory){ return arr[i]; }
+    function len1(bytes[] calldata arr) external pure returns(uint){ return arr[1].length; }
+    function kc(bytes[] calldata arr) external pure returns(bytes32){ return keccak256(arr[0]); }
+    function sl(bytes[] calldata arr) external pure returns(bytes memory){ return arr[0][1:]; }
+    function sl1(bytes[] calldata arr, uint s, uint e) external pure returns(bytes memory){ return arr[1][s:e]; }
+    function se0(string[] calldata arr) external pure returns(string memory){ return arr[0]; }
+    function ssl(string[] calldata arr) external pure returns(string memory){ return arr[0][1:]; }
+  }`;
+  const PAD = (h: string) => h + '00'.repeat((32 - (h.length / 2) % 32) % 32);
+  // a 2-element bytes[] [aabbccddee (5), 1122334455667788 (8)]
+  const arr2 = W(0x20n) + W(2n) + W(0x40n) + W(0x80n) + W(5n) + PAD('aabbccddee') + W(8n) + PAD('1122334455667788');
+  const arr2NoHead = W(2n) + W(0x40n) + W(0x80n) + W(5n) + PAD('aabbccddee') + W(8n) + PAD('1122334455667788');
+  const sarr1 = W(0x20n) + W(1n) + W(0x20n) + W(5n) + PAD('4142434445'); // ["ABCDE"]
+  async function adiff(calldata: string) {
+    const j = await deployJeth(AJ);
+    const s = await deploySol(AS);
+    const rj = await j.h.call(j.a, '0x' + calldata);
+    const rs = await s.h.call(s.a, '0x' + calldata);
+    expect(rj.success).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex);
+    return rj;
+  }
+  it('arr[0n]', () => adiff(sel('e0(bytes[])') + arr2));
+  it('arr[1n]', () => adiff(sel('e1(bytes[])') + arr2));
+  it('arr[i] dynamic index', () => adiff(sel('dyn(bytes[],uint256)') + W(0x40n) + W(0n) + arr2NoHead));
+  it('arr[i] out of bounds -> Panic 0x32', async () => {
+    expect((await adiff(sel('dyn(bytes[],uint256)') + W(0x40n) + W(2n) + arr2NoHead)).success).toBe(false);
   });
+  it('arr[1n].length', () => adiff(sel('len1(bytes[])') + arr2));
+  it('keccak256(arr[0n])', () => adiff(sel('kc(bytes[])') + arr2));
+  it('arr[0n].slice(1n)', () => adiff(sel('sl(bytes[])') + arr2));
+  it('arr[1n].slice(2, 6)', () => adiff(sel('sl1(bytes[],uint256,uint256)') + W(0x60n) + W(2n) + W(6n) + arr2NoHead));
+  it('string[] arr[0n]', () => adiff(sel('se0(string[])') + sarr1));
+  it('string[] arr[0n].slice(1n)', () => adiff(sel('ssl(string[])') + sarr1));
+});
+
+// Byte-indexing a calldata bytes value (a param or a slice) yields bytes1, byte-identical to solc d[i].
+describe('calldata bytes byte-indexing', () => {
+  const BJ = `@contract class C {
+    @external @view bi(d: bytes, i: u256): bytes1 { return d[i]; }
+    @external @view bsl(d: bytes): bytes1 { return d.slice(2n)[0n]; }
+    @external @view bu8(d: bytes): u8 { return u8(d[0n]); }
+  }`;
+  const BS = `contract C {
+    function bi(bytes calldata d, uint i) external pure returns(bytes1){ return d[i]; }
+    function bsl(bytes calldata d) external pure returns(bytes1){ return d[2:][0]; }
+    function bu8(bytes calldata d) external pure returns(uint8){ return uint8(d[0]); }
+  }`;
+  async function bdiff(calldata: string) {
+    const j = await deployJeth(BJ);
+    const s = await deploySol(BS);
+    const rj = await j.h.call(j.a, '0x' + calldata);
+    const rs = await s.h.call(s.a, '0x' + calldata);
+    expect(rj.success).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex);
+    return rj;
+  }
+  it('d[0]', () => bdiff(sel('bi(bytes,uint256)') + W(0x40n) + W(0n) + W(DLEN) + DPAD));
+  it('d[3]', () => bdiff(sel('bi(bytes,uint256)') + W(0x40n) + W(3n) + W(DLEN) + DPAD));
+  it('d[12] out of bounds -> Panic', async () => {
+    expect((await bdiff(sel('bi(bytes,uint256)') + W(0x40n) + W(12n) + W(DLEN) + DPAD)).success).toBe(false);
+  });
+  it('d.slice(2n)[0n]', () => bdiff(sel('bsl(bytes)') + W(0x20n) + W(DLEN) + DPAD));
+  it('u8(d[0n])', () => bdiff(sel('bu8(bytes)') + W(0x20n) + W(DLEN) + DPAD));
 });
 
 describe('calldata slicing - accept/reject parity with solc', () => {

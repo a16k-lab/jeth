@@ -128,9 +128,10 @@ the result is `[base+start, end-start)`, `.length` is `end-start`, and the bound
 `!(start <= end <= length)`. Indices must be unsigned (a signed index is rejected, matching solc). A slice
 flows anywhere a calldata bytes value does (`return`, `abi.decode` / `.decode(T)`, `keccak256`/`sha256`,
 `abi.encode`/`encodePacked`, an event/error arg, `address.call({data})`), so `abi.decode(msg.data.slice(4), T)`
-skips the selector. A memory/storage value is not sliceable (matching solc); slicing a `bytes[]`/`string[]`
-calldata ELEMENT is not yet supported (blocked by a pre-existing gap: JETH has no standalone calldata
-array-element access).
+skips the selector. A memory/storage value is not sliceable (matching solc). A `bytes[]`/`string[]` calldata
+ELEMENT is a first-class calldata value: `arr[i]` (a BigInt index, e.g. `arr[0n]`) can be returned, hashed,
+measured (`.length`), and sliced (`arr[i].slice(...)`), and a calldata bytes value can be byte-indexed
+(`d[i]` -> `bytes1`) - all byte-identical to solc, including an out-of-bounds Panic(0x32).
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
