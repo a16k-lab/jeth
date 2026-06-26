@@ -133,6 +133,15 @@ ELEMENT is a first-class calldata value: `arr[i]` (a BigInt index, e.g. `arr[0n]
 measured (`.length`), and sliced (`arr[i].slice(...)`), and a calldata bytes value can be byte-indexed
 (`d[i]` -> `bytes1`) - all byte-identical to solc, including an out-of-bounds Panic(0x32).
 
+String/bytes concatenation matches solc's `string.concat` / `bytes.concat` (a tightly-packed concatenation,
+byte-identical to `abi.encodePacked` of the parts): `string.concat(a, b, ...)` and `bytes.concat(a, b, ...)`
+plus the method forms `a.concat(b, ...)`. `string.concat` takes `string` args and yields a `string`;
+`bytes.concat` takes `bytes`/`bytesN` args and yields `bytes`. TS template literals are sugar for string
+concatenation: `` `Hello ${name}` `` desugars to `string.concat("Hello ", name)` (the interpolations must be
+`string`-typed, since Solidity has no implicit conversion to string). A computed string (a template or a
+concat) is a valid `revert` / `require` reason - lowered to a runtime `Error(string)`, byte-identical to
+solc `revert(string.concat(...))`.
+
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short

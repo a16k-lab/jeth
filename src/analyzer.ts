@@ -5037,12 +5037,10 @@ export class Analyzer {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && this.errorsByName.has(node.expression.text)) {
       return this.checkErrorConstructor(node);
     }
-    if (ts.isTemplateExpression(node)) {
-      this.diags.error(node, 'JETH124', 'revert/require message must be a constant string literal (no interpolation)');
-      return undefined;
-    }
+    // a template literal `bad: ${x}` is a runtime string-typed expression (it desugars to string.concat);
+    // it falls through to the dynamic Error(string) path below, byte-identical to solc revert(string.concat).
     // any runtime string-typed expression (a string param, this.s, a string(bytes) cast, a ternary
-    // whose branches are strings, ...) -> dynamic Error(string), matching solc. Snapshot the
+    // whose branches are strings, a concat / template, ...) -> dynamic Error(string), matching solc. Snapshot the
     // diagnostic length so an inner check that does not yield a string can be rolled back to emit a
     // single, precise reason diagnostic (mirrors the trial-check idiom at resolveOverload).
     const diagLen = this.diags.items.length;
@@ -8920,6 +8918,115 @@ export class Analyzer {
     return !!e && e.type.kind === 'bytes';
   }
 
+  /** A template literal `Hello ${name}` -> a string.concat of its cooked literal parts (as string
+   *  literals) and its interpolated expressions, each of which must be `string`-typed (Solidity has no
+   *  implicit conversion to string). Desugars to the packed-abiEncode machinery typed as a string,
+   *  byte-identical to solc `string.concat("Hello ", name)`. */
+  private checkTemplateLiteral(node: ts.TemplateExpression): Expr | undefined {
+    const parts: Expr[] = [];
+    const pushText = (text: string) => {
+      if (text.length > 0) parts.push({ kind: 'stringLiteral', type: STRING, bytes: new TextEncoder().encode(text) });
+    };
+    pushText(node.head.text);
+    let ok = true;
+    for (const span of node.templateSpans) {
+      const e = this.checkExpr(span.expression, STRING);
+      if (!e) {
+        ok = false;
+        continue;
+      }
+      if (e.type.kind !== 'string') {
+        this.diags.error(
+          span.expression,
+          'JETH384',
+          `a template interpolation must be a string, got ${displayName(e.type)} (Solidity string.concat only concatenates strings)`,
+        );
+        ok = false;
+        continue;
+      }
+      parts.push(e);
+      pushText(span.literal.text);
+    }
+    if (!ok) return undefined;
+    return this.makeConcat(parts, STRING);
+  }
+
+  /** Build a concatenation of bytes/string `parts` typed as `result` (STRING or BYTES), byte-identical to
+   *  solc string.concat / bytes.concat (a tightly-packed concatenation == abi.encodePacked of the parts):
+   *  0 parts -> the empty value; 1 part -> that part unchanged; otherwise a packed abiEncode node. */
+  private makeConcat(parts: Expr[], result: JethType): Expr {
+    if (parts.length === 0) return { kind: 'stringLiteral', type: result, bytes: new Uint8Array(0) };
+    if (parts.length === 1) return parts[0]!;
+    return { kind: 'abiEncode', type: result, packed: true, args: parts };
+  }
+
+  /** `<string|bytes>.concat(args...)` and the static `string.concat(...)` / `bytes.concat(...)` forms.
+   *  string.concat takes string args -> string; bytes.concat takes bytes/bytesN args -> bytes. Both are a
+   *  tightly-packed concatenation, byte-identical to solc (== abi.encodePacked, reinterpreted). Returns the
+   *  Expr, 'reject' (diagnostic emitted), or undefined (not a concat - let other handlers try). */
+  private resolveConcat(node: ts.CallExpression): Expr | 'reject' | undefined {
+    if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'concat') return undefined;
+    const recvNode = node.expression.expression;
+    // static `string.concat(...)` / `bytes.concat(...)`: the receiver is the bare type keyword.
+    if (ts.isIdentifier(recvNode) && (recvNode.text === 'string' || recvNode.text === 'bytes')) {
+      if (!this.isVisibleLocal(recvNode.text) && !this.stateByName.has(recvNode.text)) {
+        const isStr = recvNode.text === 'string';
+        const args = this.checkConcatArgs([...node.arguments], isStr);
+        if (args === undefined) return 'reject';
+        return this.makeConcat(args, isStr ? STRING : BYTES);
+      }
+    }
+    // method form `<value>.concat(...)`: peek-rollback so a non-string/bytes receiver falls through. A
+    // string-literal receiver ("x".concat(y)) needs an expected type to resolve as a string value.
+    const recvExpected =
+      ts.isStringLiteral(recvNode) || ts.isNoSubstitutionTemplateLiteral(recvNode) ? STRING : undefined;
+    const savedEnv = this.currentReadsEnv;
+    const savedReads = this.currentReadsState;
+    const savedWrites = this.currentWritesState;
+    const diagLen = this.diags.items.length;
+    const peek = this.checkExpr(recvNode, recvExpected);
+    const isStr = !!peek && peek.type.kind === 'string';
+    const isByt = !!peek && peek.type.kind === 'bytes';
+    this.diags.items.length = diagLen;
+    this.currentReadsEnv = savedEnv;
+    this.currentReadsState = savedReads;
+    this.currentWritesState = savedWrites;
+    if (!isStr && !isByt) return undefined;
+    const recv = this.checkExpr(recvNode, recvExpected);
+    if (!recv) return 'reject';
+    const args = this.checkConcatArgs([...node.arguments], isStr);
+    if (args === undefined) return 'reject';
+    return this.makeConcat([recv, ...args], isStr ? STRING : BYTES);
+  }
+
+  /** Type-check concat arguments: string.concat wants `string`, bytes.concat wants `bytes`/`bytesN`.
+   *  Returns the checked Exprs, or undefined if any arg is missing or the wrong type (diagnostic emitted). */
+  private checkConcatArgs(argNodes: ts.Expression[], isStr: boolean): Expr[] | undefined {
+    const out: Expr[] = [];
+    let ok = true;
+    for (const an of argNodes) {
+      const a = this.checkExpr(an, isStr ? STRING : BYTES);
+      if (!a) {
+        ok = false;
+        continue;
+      }
+      const good = isStr ? a.type.kind === 'string' : a.type.kind === 'bytes' || a.type.kind === 'bytesN';
+      if (!good) {
+        this.diags.error(
+          an,
+          'JETH385',
+          isStr
+            ? `string.concat(...) only accepts string arguments, got ${displayName(a.type)}`
+            : `bytes.concat(...) only accepts bytes / bytesN arguments, got ${displayName(a.type)}`,
+        );
+        ok = false;
+        continue;
+      }
+      out.push(a);
+    }
+    return ok ? out : undefined;
+  }
+
   /** Is `e` a CALLDATA-located bytes/string value (sliceable)? A bytes/string parameter (dynParamRead),
    *  msg.data (msgData), another slice (calldataSlice), a bytes/string field of a calldata dynamic-struct
    *  param (cdDynStructField), or a bytes[]/string[] calldata element (cdDynArrayElem) - and a
@@ -9561,6 +9668,9 @@ export class Analyzer {
       this.diags.error(node, 'JETH074', 'a string literal is only valid where a string/bytes value is expected');
       return undefined;
     }
+
+    // template literal `Hello ${name}` -> string.concat of the cooked parts + interpolated string exprs.
+    if (ts.isTemplateExpression(node)) return this.checkTemplateLiteral(node);
 
     // <array | bytes>.length -> u256
     if (
@@ -10998,6 +11108,14 @@ export class Analyzer {
       const sl = this.resolveCalldataSlice(node);
       if (sl === 'reject') return undefined;
       if (sl) return sl;
+    }
+
+    // Phase 6: `<string|bytes>.concat(...)` and static `string.concat(...)` / `bytes.concat(...)` -> a
+    // tightly-packed concatenation, byte-identical to solc string.concat / bytes.concat.
+    if (ts.isCallExpression(node)) {
+      const cc = this.resolveConcat(node);
+      if (cc === 'reject') return undefined;
+      if (cc) return cc;
     }
 
     // Phase 6: high-level typed interface call `IFoo(addr [, { value?, gas? }]).method(args)` in value

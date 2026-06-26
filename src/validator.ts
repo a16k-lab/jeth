@@ -71,9 +71,12 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
         // validates it precisely against the target struct type.
         diags.error(node, 'JETH028', 'array/call spread/rest is not supported');
         break;
-      case ts.SyntaxKind.TemplateExpression:
+      // a plain TemplateExpression (`Hello ${x}`) IS supported: the analyzer desugars it to a
+      // string.concat of the cooked literal parts + the interpolated string expressions (byte-identical
+      // to solc string.concat). Fall through to the default child recursion so the `${...}` expressions
+      // are still validated. A TAGGED template (tag`...`) has no on-chain meaning and stays rejected.
       case ts.SyntaxKind.TaggedTemplateExpression:
-        diags.error(node, 'JETH029', 'template literals are not supported in the MVP');
+        diags.error(node, 'JETH029', 'tagged template literals are not supported');
         break;
       case ts.SyntaxKind.TypeOfExpression:
         diags.error(node, 'JETH030', "'typeof' is not supported");
