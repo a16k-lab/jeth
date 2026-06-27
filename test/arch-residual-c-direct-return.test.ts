@@ -62,7 +62,7 @@ describe('Residual C (R1): direct return abi.decode(b, T) for an array target', 
       ['d_bs(bytes)', 'e_bs()'],
       ['d_ss(bytes)', 'e_ss()'],
       ['d_vv(bytes)', 'e_vv()'],
-    ]) {
+    ] as const) {
       const cd = sel(dec) + wrapBytes(await innerBlob(enc)).slice(2);
       const jr = await h.call(ja, cd);
       const sr = await h.call(sa, cd);

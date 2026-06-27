@@ -4193,6 +4193,7 @@ ${indent(runtime, 6)}
       const p = this.fresh();
       out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
       const ref = this.lowerArrayRef(target.arr, ctx, out); // src 'memory'
+      if (ref.src !== 'memory') throw new UnsupportedError('nested memory-array element write requires a memory array');
       const i = this.fresh();
       out.push(`let ${i} := ${this.lowerExpr(target.index, ctx, out)}`);
       const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
@@ -4207,6 +4208,7 @@ ${indent(runtime, 6)}
     const src = this.fresh();
     out.push(`let ${src} := ${this.aggToMemPtr(value, ctx, out)}`);
     const ref = this.lowerArrayRef(target.arr, ctx, out);
+    if (ref.src !== 'memory') throw new UnsupportedError('nested memory-array element write requires a memory array');
     const i = this.fresh();
     out.push(`let ${i} := ${this.lowerExpr(target.index, ctx, out)}`);
     const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
