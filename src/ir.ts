@@ -411,7 +411,8 @@ export type LValue =
   | { kind: 'place'; type: JethType; path: AccessPath } // nested storage place = v
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // p.x = v on a memory-aggregate local
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] = v on a fixed-array memory local (wordOffset: a fixed-array field of a memory struct, p.a[i])
-  | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number }; // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
+  | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number } // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
+  | { kind: 'aggFieldStore'; type: JethType; base: Expr; wordOffset: number }; // xs[i].a = v (value leaf) on a memory-array static-struct element: store at base(element image ptr) + wordOffset (mirror of the aggFieldRead read)
 
 // A success condition for an external .call/.staticcall. `cond` is a boolean expression in which the
 // scoped bindings `this.ok` (the CALL success bool) and `this.data` (the returndata bytes) are visible;

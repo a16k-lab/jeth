@@ -1692,6 +1692,9 @@ ${indent(runtime, 6)}
         } else if (s.target.kind === 'mapping') {
           const slot = this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out);
           for (const l of this.storeState(s.target.type, slot, 0, value)) out.push(l);
+        } else if (s.target.kind === 'aggFieldStore') {
+          // xs[i].a = v: a VALUE leaf of a memory-array static-struct element (RHS already bound above).
+          this.lowerAssignValue(s.target, value, ctx, out);
         } else {
           for (const l of this.storeState(s.target.type, String(s.target.slot), s.target.offset, value)) out.push(l);
         }
@@ -9349,6 +9352,14 @@ ${indent(runtime, 6)}
       } else {
         throw new UnsupportedError('cannot ++/-- a calldata array element');
       }
+      return;
+    }
+    if (target.kind === 'aggFieldStore') {
+      // xs[i].a = v on a memory-array static-struct element: lower the element image base (the same
+      // aggToMemPtr the aggFieldRead read uses), then store at the static field word offset. No mask -
+      // the RHS is coerced to the field type by the analyzer (like the memField store above).
+      const ptr = this.aggToMemPtr(target.base, ctx, out);
+      out.push(`mstore(${target.wordOffset === 0 ? ptr : `add(${ptr}, ${target.wordOffset * 32})`}, ${valueReg})`);
       return;
     }
     throw new UnsupportedError(`cannot ++/-- an lvalue of kind '${target.kind}'`);

@@ -8904,6 +8904,15 @@ export class Analyzer {
         };
       }
     }
+    // xs[i].a = v (and deeper: xs[i].q.m, xs[i].pre[0]) - a VALUE leaf of a memory-array static-struct
+    // element. resolveMemArrayElemFieldChain gives the element image base + static word offset; the store
+    // mirrors the aggFieldRead read (mstore at base + offset; the RHS is coerced clean, so no mask).
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const chain = this.resolveMemArrayElemFieldChain(node);
+      if (chain && isStaticValueType(chain.type)) {
+        return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset };
+      }
+    }
     // this.b[i] = <bytes1>: byte assignment into a STORAGE `bytes` (RMW the containing slot/word).
     // The bytes may be a direct state var OR reached through a struct field / mapping value /
     // bytes[] or Arr<bytes,N> element. (string is not element-assignable in solc.) The bytes
@@ -9243,6 +9252,12 @@ export class Analyzer {
       // a storage-bytes byte read (for symmetry; compound-assign/++ on a bytes1 byte is rejected
       // elsewhere - bytesN has no arithmetic). The base is the bytes location read back.
       return { kind: 'byteIndex', type: lv.type, base: this.lvalueAsExpr(lv.loc), index: lv.index };
+    }
+    if (lv.kind === 'aggFieldStore') {
+      // xs[i].a += v / xs[i].a++ : read the current value via aggFieldRead (same element base + word
+      // offset as the store). The compound-assign/++ path lowers the base twice (read + write), so an
+      // impure element index is gated by impureLValueKey below (rejected, never double-evaluated).
+      return { kind: 'aggFieldRead', type: lv.type, base: lv.base, wordOffset: lv.wordOffset };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }
