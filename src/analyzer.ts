@@ -9920,6 +9920,121 @@ export class Analyzer {
     return { kind: 'blake2f', type: BYTES, rounds: this.coerce(rounds, U32, node.arguments[0]!), h, m, t, f };
   }
 
+  /** Phase 1 proxies: the EIP-1167 minimal-proxy builtins (byte-identical to OZ Clones 5.1).
+   *  - isContract(addr): bool          -> gt(extcodesize(addr), 0); a code read (view-ok, pure-reject).
+   *  - clone(impl): address            -> CREATE an EIP-1167 clone; STATE-MUTATING (view/pure reject).
+   *  - cloneDeterministic(impl, salt)  -> CREATE2 (same creation code); STATE-MUTATING.
+   *  - cloneWithArgs(impl, args)       -> CREATE, modified init returns runtime+args; STATE-MUTATING.
+   *  - cloneDeterministicWithArgs(impl, salt, args) -> CREATE2 + args; STATE-MUTATING.
+   *  - predictClone(impl, salt): address              -> the CREATE2 address over the exact creation code.
+   *  - predictCloneWithArgs(impl, salt, args): address-> same, immutable-args creation code. Reads
+   *                                                       address(this) (env): view-ok, pure-reject.
+   *  - cloneArgs(): bytes              -> own appended immutable args (own code[0x2d:]); env read. */
+  private checkCloneBuiltin(node: ts.CallExpression, callee: string): Expr | undefined {
+    const BYTES32: JethType = { kind: 'bytesN', size: 32 };
+    // a helper to type-check an address argument (impl / addr); coerces u160/bytes20 -> address.
+    const addrArg = (idx: number, who: string): Expr | undefined => {
+      const a = this.checkExpr(node.arguments[idx]!, ADDRESS);
+      if (!a) return undefined;
+      if (a.type.kind === 'address') return a;
+      if (this.isAddressConvertible(a.type)) return { kind: 'cast', type: ADDRESS, from: a.type, operand: a };
+      this.diags.error(node.arguments[idx]!, 'JETH395', `${callee}(...) ${who} must be address, got ${displayName(a.type)}`);
+      return undefined;
+    };
+    const saltArg = (idx: number): Expr | undefined => {
+      const s = this.checkExpr(node.arguments[idx]!, BYTES32);
+      if (!s) return undefined;
+      if (s.type.kind !== 'bytesN' || s.type.size !== 32) {
+        this.diags.error(node.arguments[idx]!, 'JETH396', `${callee}(...) salt must be bytes32, got ${displayName(s.type)}`);
+        return undefined;
+      }
+      return s;
+    };
+    const bytesArg = (idx: number): Expr | undefined => {
+      const b = this.checkExpr(node.arguments[idx]!, this.bytesLiteralExpected(node.arguments[idx]!));
+      if (!b) return undefined;
+      if (b.type.kind !== 'bytes') {
+        this.diags.error(
+          node.arguments[idx]!,
+          'JETH397',
+          `${callee}(...) args must be bytes, got ${displayName(b.type)} (use bytes(...) / abi.encode(...))`,
+        );
+        return undefined;
+      }
+      return b;
+    };
+
+    if (callee === 'isContract') {
+      if (node.arguments.length !== 1) {
+        this.diags.error(node, 'JETH170', 'isContract(...) takes exactly one argument (address)');
+        return undefined;
+      }
+      const addr = addrArg(0, 'address');
+      if (!addr) return undefined;
+      this.currentReadsEnv = true; // EXTCODESIZE: a view op (forbidden in @pure)
+      return { kind: 'isContract', type: BOOL, addr };
+    }
+
+    if (callee === 'cloneArgs') {
+      if (node.arguments.length !== 0) {
+        this.diags.error(node, 'JETH170', 'cloneArgs() takes no arguments');
+        return undefined;
+      }
+      this.currentReadsEnv = true; // EXTCODECOPY of own code: a view op (forbidden in @pure)
+      return { kind: 'cloneArgs', type: BYTES };
+    }
+
+    if (callee === 'predictClone' || callee === 'predictCloneWithArgs') {
+      const withArgs = callee === 'predictCloneWithArgs';
+      const want = withArgs ? 3 : 2;
+      if (node.arguments.length !== want) {
+        this.diags.error(
+          node,
+          'JETH170',
+          `${callee}(...) takes ${want} arguments (${withArgs ? 'impl, salt, args' : 'impl, salt'})`,
+        );
+        return undefined;
+      }
+      const impl = addrArg(0, 'impl');
+      const salt = saltArg(1);
+      if (!impl || !salt) return undefined;
+      let args: Expr | undefined;
+      if (withArgs) {
+        args = bytesArg(2);
+        if (!args) return undefined;
+      }
+      this.currentReadsEnv = true; // reads address(this) (forbidden in @pure)
+      return { kind: 'predictClone', type: ADDRESS, impl, salt, args };
+    }
+
+    // clone / cloneDeterministic / cloneWithArgs / cloneDeterministicWithArgs: all DEPLOY (CREATE/CREATE2).
+    const deterministic = callee === 'cloneDeterministic' || callee === 'cloneDeterministicWithArgs';
+    const withArgs = callee === 'cloneWithArgs' || callee === 'cloneDeterministicWithArgs';
+    // expected arity: impl [, salt] [, args].
+    const want = 1 + (deterministic ? 1 : 0) + (withArgs ? 1 : 0);
+    if (node.arguments.length !== want) {
+      const sig = ['impl', deterministic ? 'salt' : '', withArgs ? 'args' : ''].filter(Boolean).join(', ');
+      this.diags.error(node, 'JETH170', `${callee}(...) takes ${want} arguments (${sig})`);
+      return undefined;
+    }
+    const impl = addrArg(0, 'impl');
+    if (!impl) return undefined;
+    let salt: Expr | undefined;
+    let args: Expr | undefined;
+    let next = 1;
+    if (deterministic) {
+      salt = saltArg(next++);
+      if (!salt) return undefined;
+    }
+    if (withArgs) {
+      args = bytesArg(next++);
+      if (!args) return undefined;
+    }
+    // a CREATE/CREATE2 deploy MUTATES state -> reject @view/@pure (matches solc: a deploying fn is nonpayable).
+    this.currentWritesState = true;
+    return { kind: 'cloneDeploy', type: ADDRESS, impl, salt, args };
+  }
+
   private checkAddressCall(node: ts.CallExpression): Expr | undefined {
     if (node.arguments.length !== 1) {
       this.diags.error(node, 'JETH170', 'address(...) takes exactly one argument');
@@ -11691,6 +11806,19 @@ export class Analyzer {
           type: { kind: 'bytesN', size: 32 },
           arg: this.coerce(arg, U256, node.arguments[0]!),
         };
+      }
+      // --- Phase 1 proxies: EIP-1167 minimal-proxy builtins (OZ Clones 5.1) ---
+      if (
+        callee === 'isContract' ||
+        callee === 'clone' ||
+        callee === 'cloneDeterministic' ||
+        callee === 'cloneWithArgs' ||
+        callee === 'cloneDeterministicWithArgs' ||
+        callee === 'predictClone' ||
+        callee === 'predictCloneWithArgs' ||
+        callee === 'cloneArgs'
+      ) {
+        return this.checkCloneBuiltin(node, callee);
       }
       // `Color(x)` is an integer -> enum range-checked conversion; an enum is a branded uint8, so
       // isBrandedAlias already routes it, but name it explicitly for clarity.

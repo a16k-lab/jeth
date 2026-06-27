@@ -166,6 +166,19 @@ no value); a `@pure`/`@view` caller of a nonpayable external library function is
 rejects it. Storage-reference library parameters (solc's `using For` over a mutated storage type) remain
 unsupported - JETH has no storage-reference parameter, so the pattern is not expressible.
 
+Minimal proxies (EIP-1167 clones) - the first of the safe-proxy patterns - are supported via builtins,
+byte-identical to OpenZeppelin `Clones` 5.1, and are the only way to deploy a contract from within a contract
+(there is no raw `CREATE`/`new` - this is the safe, structured form): `clone(impl)` (CREATE) /
+`cloneDeterministic(impl, salt)` (CREATE2) deploy a 45-byte EIP-1167 stub that delegatecalls a *fixed* impl;
+`cloneWithArgs(impl, args)` / `cloneDeterministicWithArgs(impl, salt, args)` append per-clone immutable data to
+the clone's code (read by the impl via `cloneArgs()` -> bytes, `.decode(T)` for typed args); `predictClone` /
+`predictCloneWithArgs` give the CREATE2 address; `isContract(addr)` -> bool. Verified byte-identical to a solc
+EIP-1167 factory: the deployed clone's runtime bytecode, the delegatecall round-trip (runs in the clone's
+storage), `predictClone == ` the actual deploy address, the `cloneArgs` round-trip, and clone-storage
+independence. A deploying builtin writes state, so it is rejected in a `@view`/`@pure` function (matching
+solc). New diagnostics JETH395-397. The EIP-1967 upgradeable proxies (Transparent / UUPS / Beacon - raw fixed
+slots + a delegate fallback) are the next phase.
+
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short

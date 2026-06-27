@@ -129,6 +129,21 @@ export type Expr =
   | { kind: 'blockhash'; type: JethType; arg: Expr } // blockhash(uint) -> bytes32
   | { kind: 'blobhash'; type: JethType; arg: Expr } // blobhash(uint) -> bytes32 (EIP-4844)
   | { kind: 'balance'; type: JethType; addr: Expr } // <address>.balance -> u256
+  // --- Phase 1 proxies: EIP-1167 minimal-proxy (OZ Clones 5.1) ---
+  // isContract(addr) -> bool: gt(extcodesize(addr), 0) (OZ `addr.code.length > 0`). A pure code read.
+  | { kind: 'isContract'; type: JethType; addr: Expr }
+  // clone*/cloneWithArgs*/cloneDeterministic*: deploy an EIP-1167 clone of `impl` via CREATE (salt
+  // unset) or CREATE2 (salt set). `args` (bytes) present => the OZ 5.1 cloneWithImmutableArgs modified
+  // init that returns runtime+args. Lowers to the EXACT canonical creation code + create/create2; a zero
+  // result reverts EMPTY. State-mutating (CREATE) -> requires a nonpayable/@payable caller. -> address.
+  | { kind: 'cloneDeploy'; type: JethType; impl: Expr; salt?: Expr; args?: Expr }
+  // predictClone(impl, salt) / predictCloneWithArgs(impl, salt, args) -> address: the CREATE2 address
+  // keccak256(0xff ++ address(this) ++ salt ++ keccak256(creationCode))[12:] over the EXACT creation
+  // code clone* would deploy. A pure read of address(this); does not mutate state.
+  | { kind: 'predictClone'; type: JethType; impl: Expr; salt: Expr; args?: Expr }
+  // cloneArgs() -> bytes: THIS clone's appended immutable args (OZ Clones.fetchCloneArgs(address(this)) =
+  // own code[0x2d:], via extcodecopy(address(), dst, 0x2d, extcodesize(address())-0x2d)). A code read.
+  | { kind: 'cloneArgs'; type: JethType }
   // --- Phase 6: external low-level calls ---
   // <addr>.code -> bytes (EXTCODESIZE + EXTCODECOPY); <addr>.codehash -> bytes32 (EXTCODEHASH)
   | { kind: 'extCode'; type: JethType; addr: Expr; member: 'code' | 'codehash' }

@@ -2163,6 +2163,15 @@ ${indent(runtime, 6)}
         return `blobhash(${this.lowerExpr(e.arg, ctx, out)})`;
       case 'balance':
         return `balance(${this.lowerExpr(e.addr, ctx, out)})`;
+      case 'isContract': {
+        // OZ `addr.code.length > 0`: gt(extcodesize(addr), 0).
+        const a = this.lowerExpr(e.addr, ctx, out);
+        return `gt(extcodesize(${a}), 0)`;
+      }
+      case 'cloneDeploy':
+        return this.lowerCloneDeploy(e, ctx, out);
+      case 'predictClone':
+        return this.lowerPredictClone(e, ctx, out);
       case 'extCode':
         // <addr>.codehash -> a single bytes32 word (EXTCODEHASH). The bytes form (<addr>.code) is a
         // reference value, lowered via lowerDynamic (it reaches the throw list below if misused).
@@ -2333,6 +2342,7 @@ ${indent(runtime, 6)}
       case 'modexp': // modexp(...) -> bytes (a reference value, lowered via lowerDynamic)
       case 'blake2f': // blake2f(...) -> 64-byte bytes (a reference value, lowered via lowerDynamic)
       case 'extCall': // bytes returndata (a reference value, lowered via lowerDynamic)
+      case 'cloneArgs': // cloneArgs() -> bytes (this clone's immutable args, lowered via lowerDynamic)
       case 'callData': // this.data inside a success condition (the returndata bytes reference)
       case 'catchReason': // this.reason (string) inside a catch body (a reference value, lowered via lowerDynamic)
         // reference/aggregate values are not single 256-bit words; they are
@@ -5971,6 +5981,20 @@ ${indent(runtime, 6)}
         out.push(`if mod(${sz}, 0x20) { mstore(add(add(${ptr}, 0x20), ${sz}), 0) }`);
         return { src: 'memory', ptr };
       }
+      case 'cloneArgs': {
+        // OZ Clones.fetchCloneArgs(address(this)) = own code[0x2d:]: this clone's appended immutable args.
+        // argsLen = extcodesize(address()) - 0x2d (a non-clone / no-args clone yields a 0-length blob; an
+        // impl whose own code is shorter than 0x2d would underflow, but cloneArgs is only meaningful when
+        // running as a clone, so sub is correct - matches OZ, which has the same precondition).
+        const sz = this.fresh();
+        out.push(`let ${sz} := sub(extcodesize(address()), 0x2d)`);
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := ${this.alloc()}(add(0x20, and(add(${sz}, 0x1f), not(0x1f))))`);
+        out.push(`mstore(${ptr}, ${sz})`);
+        out.push(`extcodecopy(address(), add(${ptr}, 0x20), 0x2d, ${sz})`);
+        out.push(`if mod(${sz}, 0x20) { mstore(add(add(${ptr}, 0x20), ${sz}), 0) }`);
+        return { src: 'memory', ptr };
+      }
       case 'modexp': {
         // modexp(base, exp, mod) (precompile 0x05). Materialize each operand to memory FIRST (an
         // allocating arg must not bump the FMP between the input alloc and the mcopies), then build the
@@ -6193,6 +6217,100 @@ ${indent(runtime, 6)}
     out.push(`returndatacopy(add(${dataPtr}, 0x20), 0, ${rlen})`);
     out.push(`if mod(${rlen}, 0x20) { mstore(add(add(${dataPtr}, 0x20), ${rlen}), 0) }`);
     return dataPtr;
+  }
+
+  // --- Phase 1 proxies: EIP-1167 minimal-proxy creation code (byte-identical to OZ Clones 5.1) ---
+  //
+  // Plain creation (0x37 = 55 bytes) = `3d602d80600a3d3981f3` (10-byte init: returns the 45-byte runtime)
+  //   ++ `363d3d373d3d3d363d73<impl:20>5af43d82803e903d91602b57fd5bf3` (45-byte EIP-1167 runtime).
+  //   Laid out as two left-aligned words at ptr:
+  //     w0 = 0x3d602d80600a3d3981f3363d3d373d3d3d363d73<00*12> | shr(64, impl)   (PRE20 + impl high 12)
+  //     w1 = shl(192, impl) | 0x5af43d82803e903d91602b57fd5bf3<00*9>            (impl low 8 + POST15)
+  //
+  // Immutable-args creation (OZ 5.1 cloneWithImmutableArgs) = `61<len:2>3d81600a3d39f3` (10-byte modified
+  //   init that returns runtime+args, len = 0x2d + args.length) ++ the 45-byte runtime ++ <args>. The head
+  //   skeleton word w0 swaps the init bytes and OR-s the len in at byte offset 1 (shl(232, len)); w1 is the
+  //   SAME as plain; then args are mcopied at offset 55. (Appending args to the PLAIN init does NOT work -
+  //   the plain init returns only 45 bytes, dropping the args.)
+
+  /** Materialize the EIP-1167 clone creation code at a fresh memory pointer (32-byte aligned head). Returns
+   *  the pointer and a register holding the creation-code byte length (0x37, or 0x37+argLen with args). */
+  private buildCloneCreationCode(impl: Expr, args: Expr | undefined, ctx: LowerCtx, out: string[]): { ptr: string; len: string } {
+    // Lower the impl to a clean 160-bit address register (mask high bits so the OR-injection is exact).
+    const implReg = this.fresh();
+    out.push(`let ${implReg} := and(${this.lowerExpr(impl, ctx, out)}, 0xffffffffffffffffffffffffffffffffffffffff)`);
+    // The POST15 constant (the EIP-1167 runtime suffix) at byte offset 8 within w1 (== << 72).
+    const W1_POST = '0x5af43d82803e903d91602b57fd5bf3000000000000000000';
+    const len = this.fresh();
+    if (!args) {
+      // Plain: head is exactly 0x37 bytes; allocate a 0x40-byte aligned head (the second word's 9 trailing
+      // zero bytes are inside the alloc and never read by CREATE, which uses only [ptr, ptr+0x37)).
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := ${this.alloc()}(0x40)`);
+      out.push(`mstore(${ptr}, or(0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000, shr(64, ${implReg})))`);
+      out.push(`mstore(add(${ptr}, 0x20), or(shl(192, ${implReg}), ${W1_POST}))`);
+      out.push(`let ${len} := 0x37`);
+      return { ptr, len };
+    }
+    // Immutable args: materialize the args bytes to memory FIRST (an allocating arg must not bump the FMP
+    // between the head alloc and the args mcopy).
+    const a = this.toMemory(this.lowerDynamic(args, ctx, out), out);
+    const argLen = a.len;
+    out.push(`let ${len} := add(0x37, ${argLen})`);
+    // The PUSH2 length field baked into the modified init = 0x2d + argLen.
+    const rtLen = this.fresh();
+    out.push(`let ${rtLen} := add(0x2d, ${argLen})`);
+    // Allocate head (0x40 aligned) + the args region; over-allocate to a word multiple so the tail is clean.
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := ${this.alloc()}(add(0x40, and(add(${argLen}, 0x1f), not(0x1f))))`);
+    // w0 skeleton (init bytes with the len field zeroed) | shr(64, impl) | shl(232, rtLen).
+    out.push(
+      `mstore(${ptr}, or(or(0x6100003d81600a3d39f3363d3d373d3d3d363d73000000000000000000000000, shr(64, ${implReg})), shl(232, ${rtLen})))`,
+    );
+    out.push(`mstore(add(${ptr}, 0x20), or(shl(192, ${implReg}), ${W1_POST}))`);
+    // append the immutable args at byte offset 55 (0x37).
+    out.push(`mcopy(add(${ptr}, 0x37), add(${a.mp}, 0x20), ${argLen})`);
+    return { ptr, len };
+  }
+
+  /** clone* / cloneDeterministic* / *WithArgs: deploy an EIP-1167 clone via CREATE (salt unset) or CREATE2
+   *  (salt set). A zero result (deployment failure) reverts EMPTY (the OZ failure path is a custom-error
+   *  revert; the spec gates the success-path bytes and accepts a clean empty revert on the degenerate
+   *  failure). Returns a register holding the new clone address. */
+  private lowerCloneDeploy(e: Expr & { kind: 'cloneDeploy' }, ctx: LowerCtx, out: string[]): string {
+    const { ptr, len } = this.buildCloneCreationCode(e.impl, e.args, ctx, out);
+    const inst = this.fresh();
+    if (e.salt) {
+      const salt = this.fresh();
+      out.push(`let ${salt} := ${this.lowerExpr(e.salt, ctx, out)}`);
+      out.push(`let ${inst} := create2(0, ${ptr}, ${len}, ${salt})`);
+    } else {
+      out.push(`let ${inst} := create(0, ${ptr}, ${len})`);
+    }
+    out.push(`if iszero(${inst}) { revert(0, 0) }`);
+    return inst;
+  }
+
+  /** predictClone* : the CREATE2 address keccak256(0xff ++ address(this) ++ salt ++ keccak256(creationCode))
+   *  [12:] over the EXACT creation code clone* would deploy. Layout the 85-byte preimage at a scratch ptr:
+   *  byte 11 = 0xff, [12..32) = address(this), [32..64) = salt, [64..96) = keccak(creationCode); hash the
+   *  region [ptr+0x0b, +0x55) and mask to 160 bits. */
+  private lowerPredictClone(e: Expr & { kind: 'predictClone' }, ctx: LowerCtx, out: string[]): string {
+    const { ptr: codePtr, len } = this.buildCloneCreationCode(e.impl, e.args, ctx, out);
+    const codeHash = this.fresh();
+    out.push(`let ${codeHash} := keccak256(${codePtr}, ${len})`);
+    const salt = this.fresh();
+    out.push(`let ${salt} := ${this.lowerExpr(e.salt, ctx, out)}`);
+    // Build the CREATE2 preimage in a fresh buffer (avoids clobbering the scratch 0x00/0x40 region).
+    const p = this.fresh();
+    out.push(`let ${p} := ${this.alloc()}(0x60)`);
+    out.push(`mstore(add(${p}, 0x40), ${codeHash})`); // [0x40..0x60) codehash
+    out.push(`mstore(add(${p}, 0x20), ${salt})`); // [0x20..0x40) salt
+    out.push(`mstore(${p}, address())`); // [0x0c..0x20) address (right-aligned)
+    out.push(`mstore8(add(${p}, 0x0b), 0xff)`); // byte 0x0b = 0xff
+    const res = this.fresh();
+    out.push(`let ${res} := and(keccak256(add(${p}, 0x0b), 0x55), 0xffffffffffffffffffffffffffffffffffffffff)`);
+    return res;
   }
 
   /** Phase 6: perform a low-level CALL/STATICCALL. Lowers the data/value/gas operands, executes the
