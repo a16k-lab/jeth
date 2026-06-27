@@ -248,8 +248,9 @@ Every diamond (any model) is **finalizable**: a synthesized owner-gated `freezeD
 EIP-2535-blessed "deploy upgradeable, freeze later" immutability path. The `_frozen` flag is appended at a fresh
 storage slot and the cut guard is a no-op while unfrozen, so a non-frozen diamond stays byte-identical to its
 reference; the frozen behavior is verified byte-identical to a solc mirror carrying the same flag + guard
-(`test/diamond-frozen.test.ts`). (True born-frozen-at-deploy - a diamond with no `diamondCut` and facets wired in
-the constructor - is not expressible because a `FacetCut[]` constructor parameter is gated, JETH302.) All
+(`test/diamond-frozen.test.ts`). (Now that JETH302 is lifted, a `FacetCut[]` constructor parameter is
+expressible, so a TRUE born-frozen-at-deploy diamond - facets wired once in the constructor, no callable
+`diamondCut` - is a possible follow-up; the finalizable freeze above already provides immutability.) All
 diamond/proxy patterns are delegatecall-only with no raw `delegatecall`/`CREATE` in user code.
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
@@ -743,19 +744,21 @@ Each of the following compiles to a clean compile-time error (verified), not a m
   fixed-array-through-a-struct-field case `this.q.pts[i]` works).
 - **Tuple ABI JSON shape**: struct params/returns render as `(t1,t2)` rather than `type:"tuple"` +
   `components` (selectors are canonical and correct; this is a JSON-shape gap, not a behavior gap).
-- **Phase 5 increment-1 gates** (each a clean diagnostic, never a miscompile; solc accepts unless
-  noted): a constructor with an aggregate/dynamic param (JETH302), one that calls an internal
-  function (JETH303), or a defaulted ctor param (JETH304); an `@immutable` that is inline-initialized
-  (JETH311) or `@public` with an auto-generated getter (JETH312) - a non-value-type immutable
-  (JETH310) and an immutable assigned outside the constructor (JETH313) are accept/reject parity
-  (solc rejects too); a `@modifier` whose `_` placeholder is inside a conditional/loop (JETH321 - the
-  0-or-N-times case; post-placeholder code in straight-line position IS supported), more than one `_`
-  (JETH320), a `return` (JETH324 = parity since solc rejects a value return / JETH325 for a bare
-  `return`), an aggregate param (JETH322), a generic modifier (JETH327), and (with POST-code) an
-  aggregate/dynamic-param or multi-value/aggregate-return function or a constructor (JETH323). One known low-severity over-rejection: a constructor that *provably* overflows a
-  staged `@immutable` that is read at runtime is rejected (JETH901) where solc accepts and the deploy
-  then reverts - solc's Yul optimizer strips the dead `setimmutable`, leaving an unassigned
-  `loadimmutable`; the contract is non-functional (reverts at construction) in both compilers.
+- **Phase 5 constructor / immutable / modifier - now at solc parity** (the main over-rejections were
+  lifted, byte-identical to solc): a constructor with an **aggregate/dynamic param** (`uint[]`/`bytes`/
+  `string`/struct - JETH302), a constructor that **calls an internal function** (JETH303), an
+  `@external @immutable` with its auto-generated **view getter** (JETH312), a `@modifier` with its `_`
+  placeholder **inside a conditional** (the 0-or-N-times shape; skipping `_` returns the function's zero
+  value - JETH321), and an inline-initialized `@immutable` (JETH311) are all now SUPPORTED. The
+  REMAINING clean gates (rare shapes; each a diagnostic, never a miscompile): a defaulted ctor param
+  (JETH304 - JETH-specific, no solc form); a non-value-type immutable (JETH310) and an immutable
+  assigned outside the constructor (JETH313) are accept/reject PARITY (solc rejects too); and a few rare
+  modifier shapes not yet lifted - more than one `_` placeholder (JETH320), an aggregate modifier param
+  (JETH322), a `return` inside the modifier body (JETH324 value-return = parity / JETH325 bare-return), a
+  generic modifier (JETH327), and a POST-code modifier on an aggregate/dynamic-param or
+  multi-value/aggregate-return function or constructor (JETH323). One known low-severity over-rejection:
+  a constructor that *provably* overflows a staged `@immutable` read at runtime is rejected (JETH901)
+  where solc accepts and the deploy then reverts (the contract is non-functional in both compilers).
 - **Phase 6 remaining** (external low-level/message calls, `abi.decode`, interface calls, `try`/`catch`
   and `new Array<T>(n)` are DONE): inheritance, libraries (`using for`/`DELEGATECALL`), abstract
   contracts, `ecrecover` + remaining precompiles, `receive`/`fallback`, function types,
