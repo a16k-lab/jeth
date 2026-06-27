@@ -13352,6 +13352,18 @@ export class Analyzer {
       // literal's mobile type is unsigned, or `uint8 == -1`) is left to unify, which rejects it.
       const unified = this.widenLiteralOperand(left, right) ?? this.unifyOperands(left, right, node);
       if (!unified) return undefined;
+      // == / != / ordered comparisons are valid ONLY on value types. solc rejects them on structs,
+      // arrays (fixed/dynamic), bytes/string and mappings ("Built-in binary operator == cannot be
+      // applied to types ..."), so we must too (closing a soundness over-acceptance: JETH emitted
+      // runtime bytecode for an aggregate comparison that solc never compiles at all).
+      if (!isStaticValueType(unified[0].type)) {
+        this.diags.error(
+          node,
+          'JETH088',
+          `operator '${op}' cannot be applied to ${displayName(unified[0].type)} operands (comparisons are only valid on value types: uintN/intN/bool/address/bytesN/enum)`,
+        );
+        return undefined;
+      }
       // ORDERED comparisons (< > <= >=) need an ordered type. solc allows them on int/uint,
       // address, bytesN, and enums, but REJECTS them on bool (only == / != are valid on bool):
       // "Built-in binary operator > cannot be applied to types bool and bool."
