@@ -169,6 +169,7 @@ function synthesizeDiamondBody(name: string, ctorText: string): { contract: stri
   ${NS} _facetAddresses: address[];
   ${NS} _supportedInterfaces: mapping<bytes4, bool>;
   ${NS} _contractOwner: address;
+  ${NS} _frozen: u256;
 
   @event OwnershipTransferred(@indexed previousOwner: address, @indexed newOwner: address): void;
   @event DiamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void;
@@ -197,8 +198,15 @@ function synthesizeDiamondBody(name: string, ctorText: string): { contract: stri
     return this._sel2facet[__functionSelector].facetAddress;
   }
 
+  @external @view isFrozen(): bool { return this._frozen != 0n; }
+  @external freezeDiamond(): void {
+    require(msg.sender == this._contractOwner, "LibDiamond: Must be contract owner");
+    this._frozen = 1n;
+  }
+
   @external diamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void {
     require(msg.sender == this._contractOwner, "LibDiamond: Must be contract owner");
+    require(this._frozen == 0n, "Diamond: diamond is frozen");
     for (let __c: u256 = 0n; __c < _diamondCut.length; __c = __c + 1n) {
       const __facet: address = _diamondCut[__c].facetAddress;
       const __action: u8 = _diamondCut[__c].action;
@@ -310,6 +318,7 @@ function synthesizeDiamondBodyPacked(name: string, ctorText: string): { contract
   ${NS} _selectorCount: u16;
   ${NS} _supportedInterfaces: mapping<bytes4, bool>;
   ${NS} _contractOwner: address;
+  ${NS} _frozen: u256;
 
   @event OwnershipTransferred(@indexed previousOwner: address, @indexed newOwner: address): void;
   @event DiamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void;
@@ -333,8 +342,15 @@ function synthesizeDiamondBodyPacked(name: string, ctorText: string): { contract
     return address(bytes20(this._facets[__functionSelector]));
   }
 
+  @external @view isFrozen(): bool { return this._frozen != 0n; }
+  @external freezeDiamond(): void {
+    require(msg.sender == this._contractOwner, "LibDiamond: Must be contract owner");
+    this._frozen = 1n;
+  }
+
   @external diamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void {
     require(msg.sender == this._contractOwner, "LibDiamond: Must be contract owner");
+    require(this._frozen == 0n, "Diamond: diamond is frozen");
     __diamondCutPacked();
     emit(DiamondCut(_diamondCut, _init, _calldata));
     __diamondDelegateInit(_init, _calldata);
@@ -376,6 +392,7 @@ function synthesizeDiamondBodySolidstate(name: string, ctorText: string): { cont
   ${DS} _selectorCount: u16;
   ${DS} _selectorSlots: mapping<u256, bytes32>;
   ${DS} _fallbackAddress: address;
+  ${DS} _frozen: u256;
   ${OW} _contractOwner: address;
   ${SO} _nomineeOwner: address;
   ${I165} _supportedInterfaces: mapping<bytes4, bool>;
@@ -419,8 +436,15 @@ function synthesizeDiamondBodySolidstate(name: string, ctorText: string): { cont
     return address(bytes20(this._facets[__functionSelector]));
   }
 
+  @external @view isFrozen(): bool { return this._frozen != 0n; }
+  @external freezeDiamond(): void {
+    if (msg.sender != this._contractOwner) { __revertSelector(0x2f7a8ee1n); } // Ownable__NotOwner()
+    this._frozen = 1n;
+  }
+
   @external diamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void {
     if (msg.sender != this._contractOwner) { __revertSelector(0x2f7a8ee1n); } // Ownable__NotOwner()
+    require(this._frozen == 0n, "Diamond: diamond is frozen");
     __diamondCutSolidstate();
     emit(DiamondCut(_diamondCut, _init, _calldata));
     __diamondDelegateInit(_init, _calldata);

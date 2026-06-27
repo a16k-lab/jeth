@@ -243,8 +243,14 @@ models (a different storage layout each, identical external surface):
   (`getFallbackAddress`/`setFallbackAddress`; a selector miss delegatecalls it or reverts
   `Proxy__ImplementationIsNotContract()`) and **SafeOwnable 2-step** ownership (`transferOwnership` sets the
   nominee, `acceptOwnership` finalizes). Verified byte-identical to a solc solidstate mirror.
-All diamond/proxy patterns are delegatecall-only with no raw `delegatecall`/`CREATE` in user code. The
-born-immutable (`'frozen'`) lifecycle is the remaining diamond follow-up.
+Every diamond (any model) is **finalizable**: a synthesized owner-gated `freezeDiamond()` permanently disables
+`diamondCut` (any later cut reverts `Diamond: diamond is frozen`), with `isFrozen()` to read the state - the
+EIP-2535-blessed "deploy upgradeable, freeze later" immutability path. The `_frozen` flag is appended at a fresh
+storage slot and the cut guard is a no-op while unfrozen, so a non-frozen diamond stays byte-identical to its
+reference; the frozen behavior is verified byte-identical to a solc mirror carrying the same flag + guard
+(`test/diamond-frozen.test.ts`). (True born-frozen-at-deploy - a diamond with no `diamondCut` and facets wired in
+the constructor - is not expressible because a `FacetCut[]` constructor parameter is gated, JETH302.) All
+diamond/proxy patterns are delegatecall-only with no raw `delegatecall`/`CREATE` in user code.
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
