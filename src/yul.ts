@@ -77,6 +77,10 @@ const EIP1967_IMPL_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a
 const EIP1967_ADMIN_SLOT = '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103';
 // keccak256("Upgraded(address)") - the EIP-1967 Upgraded(address indexed implementation) topic0.
 const UPGRADED_TOPIC = '0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b';
+// Phase 2b transparent proxy: the only selector the admin may call (upgradeToAndCall(address,bytes)), and
+// the OZ TransparentUpgradeableProxy revert when the admin calls anything else (ProxyDeniedAdminAccess()).
+const UPGRADE_TO_AND_CALL_SELECTOR = '0x4f1ef286';
+const PROXY_DENIED_ADMIN_ACCESS_SELECTOR = '0xd2b576ec';
 
 /** ABI head-word count of a struct's tuple HEAD (spec section 3.0): each field
  *  contributes its inline static words if static, or exactly ONE offset word if
@@ -344,13 +348,30 @@ ${indent(runtime, 6)}
     const external = contract.functions.filter((f) => f.visibility === 'external');
     const hasSpecial = !!(contract.receive || contract.fallback);
     if (contract.isProxy) {
-      // Phase 2a: an EIP-1967 upgradeable proxy. Dispatch the proxy's OWN @external functions (e.g. the
-      // user's admin-gated upgrade entry) with an EMPTY default, then fall through to the synthesized
-      // canonical delegate fallback (forward ALL calldata to the EIP-1967 impl slot). This matches the
-      // hand-written OZ ERC1967 proxy: any non-proxy selector / empty calldata is delegatecall'd to the
-      // implementation, which runs in the PROXY's storage context. (The analyzer forbids a user
-      // @receive/@fallback and any @state on a @proxy class, so this owns the fallback position.)
-      if (external.length > 0) {
+      // Phase 2b: a transparent proxy routes the synthesized fallback by CALLER (byte-identical to OZ
+      // TransparentUpgradeableProxy 5.x). caller()==admin -> the call MUST be upgradeToAndCall(address,bytes)
+      // (else revert ProxyDeniedAdminAccess()); the admin upgrade runs IN the proxy and returns empty.
+      // caller()!=admin -> fall through to the plain delegate fallback (EVEN an upgradeToAndCall selector -
+      // a non-admin always delegates, defeating the proxy/impl selector clash). A transparent proxy has no
+      // @external functions of its own (the analyzer gates them), so there is no selector switch here.
+      if (contract.proxyVariant === 'transparent') {
+        const admin = '_admin';
+        lines.push(`let ${admin} := and(sload(${EIP1967_ADMIN_SLOT}), 0xffffffffffffffffffffffffffffffffffffffff)`);
+        lines.push(`if eq(caller(), ${admin}) {`);
+        // msg.sig must be upgradeToAndCall(address,bytes); a too-short calldata can't be it either. OZ
+        // compares the 4-byte selector; we shift the first word right by 224. (calldatasize()<4 -> sig 0.)
+        lines.push(`  if iszero(eq(shr(224, calldataload(0)), ${UPGRADE_TO_AND_CALL_SELECTOR})) {`);
+        // ProxyDeniedAdminAccess(): store the 4-byte selector left-aligned and revert it. (The deny path
+        // reason is OZ-identical; the success path is what we primarily byte-match.)
+        lines.push(`    mstore(0, ${PROXY_DENIED_ADMIN_ACCESS_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+        lines.push('    revert(0, 4)');
+        lines.push('  }');
+        for (const l of this.emitTransparentAdminUpgrade()) lines.push('  ' + l);
+        lines.push('  return(0, 0)');
+        lines.push('}');
+      } else if (external.length > 0) {
+        // Phase 2a (plain proxy): dispatch the proxy's OWN @external functions (e.g. the user's admin-gated
+        // upgrade entry) with an EMPTY default, then fall through to the delegate fallback below.
         lines.push('if iszero(lt(calldatasize(), 4)) {');
         lines.push('  let selector := shr(224, calldataload(0))');
         lines.push('  switch selector');
@@ -362,7 +383,8 @@ ${indent(runtime, 6)}
         lines.push('  default {}');
         lines.push('}');
       }
-      // The canonical EIP-1967 delegate fallback. impl is read from the fixed slot, masked to 160 bits.
+      // The canonical EIP-1967 delegate fallback (the non-admin path for a transparent proxy). impl is read
+      // from the fixed slot, masked to 160 bits, then ALL calldata is delegatecall'd to it.
       lines.push(`let _impl := and(sload(${EIP1967_IMPL_SLOT}), 0xffffffffffffffffffffffffffffffffffffffff)`);
       lines.push('calldatacopy(0, 0, calldatasize())');
       lines.push('let _ok := delegatecall(gas(), _impl, 0, calldatasize(), 0, 0)');
@@ -6354,6 +6376,37 @@ ${indent(runtime, 6)}
     out.push(`  returndatacopy(0, 0, returndatasize())`);
     out.push(`  if iszero(${ok}) { revert(0, returndatasize()) }`);
     out.push(`}`);
+  }
+
+  /** Phase 2b transparent proxy: the admin-branch upgradeToAndCall(address,bytes) handler. Decodes
+   *  (newImpl, data) from calldata[4:] and runs the EIP-1967 upgrade sequence shared with upgradeProxy /
+   *  ERC1967Utils.upgradeToAndCall: require(isContract(newImpl)) -> sstore impl slot -> emit Upgraded ->
+   *  if data.length>0 delegatecall(newImpl, data) and BUBBLE the revert. The caller emits `return(0,0)`
+   *  after this so the admin upgrade returns empty returndata (OZ TransparentUpgradeableProxy behaviour).
+   *  Returns the lines (caller indents). Reads the data blob from calldata into memory at the free ptr. */
+  private emitTransparentAdminUpgrade(): string[] {
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    const out: string[] = [];
+    // newImpl: the first arg word (at calldata offset 4), masked to 160 bits.
+    out.push(`let _newImpl := and(calldataload(4), ${MASK})`);
+    // The bytes arg: word at offset 0x24 is its offset relative to the args region (calldata start + 4).
+    // length is at calldata offset 4 + thatOffset; the data follows. Copy [len][data] into memory.
+    out.push('let _dataOff := add(4, calldataload(0x24))');
+    out.push('let _dataLen := calldataload(_dataOff)');
+    out.push('let _dataPtr := mload(0x40)');
+    out.push('calldatacopy(_dataPtr, add(_dataOff, 0x20), _dataLen)');
+    // require(isContract(newImpl)) -> a clean empty revert on a non-contract (degenerate failure path).
+    out.push('if iszero(extcodesize(_newImpl)) { revert(0, 0) }');
+    out.push(`sstore(${EIP1967_IMPL_SLOT}, _newImpl)`);
+    // emit Upgraded(address indexed implementation): indexed-only event, log2 over no data.
+    out.push(`log2(0, 0, ${UPGRADED_TOPIC}, _newImpl)`);
+    // if data.length>0: delegatecall(gas(), newImpl, data) and bubble the callee's revert verbatim.
+    out.push('if gt(_dataLen, 0) {');
+    out.push('  let _ok2 := delegatecall(gas(), _newImpl, _dataPtr, _dataLen, 0, 0)');
+    out.push('  returndatacopy(0, 0, returndatasize())');
+    out.push('  if iszero(_ok2) { revert(0, returndatasize()) }');
+    out.push('}');
+    return out;
   }
 
   private lowerCloneDeploy(e: Expr & { kind: 'cloneDeploy' }, ctx: LowerCtx, out: string[]): string {

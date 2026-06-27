@@ -1437,13 +1437,38 @@ export class Analyzer {
     // fallback position. The proxy has no storage of its own (it lives in the impl) and may NOT declare
     // a user @receive/@fallback (the synthesized fallback owns that position).
     const isProxy = decoratorNames(cls).includes('proxy');
+    // Phase 2b: a variant argument on `@proxy(...)`. `@proxy('transparent')` -> the OZ
+    // TransparentUpgradeableProxy-equivalent (caller-routed fallback, synthesized below in yul). A bare
+    // `@proxy` (or `@proxy()`) is the plain Phase-2a delegate-only proxy. Any other argument is rejected.
+    let proxyVariant: 'transparent' | undefined;
     if (isProxy) {
+      const call = decoratorCall(cls, 'proxy');
+      if (call && call.arguments.length > 0) {
+        if (call.arguments.length !== 1) {
+          this.diags.error(call, 'JETH400', "@proxy(...) takes at most one variant argument (a string literal, e.g. @proxy('transparent'))");
+        } else {
+          const arg = call.arguments[0]!;
+          const variant = ts.isStringLiteralLike(arg) ? arg.text : undefined;
+          if (variant === 'transparent') proxyVariant = 'transparent';
+          else this.diags.error(arg, 'JETH400', `unknown @proxy variant ${ts.isStringLiteralLike(arg) ? `'${arg.text}'` : 'argument'} (only 'transparent' is supported; omit the argument for the plain delegate-only proxy)`);
+        }
+      }
       if (receiveNode)
         this.diags.error(receiveNode.member, 'JETH398', 'a @proxy class may not declare a @receive entry (the delegate fallback is synthesized)');
       if (fallbackNode)
         this.diags.error(fallbackNode.member, 'JETH398', 'a @proxy class may not declare a @fallback entry (the delegate fallback is synthesized)');
       if (layout.vars.length > 0)
         this.diags.error(cls, 'JETH399', 'a @proxy class may not declare @state (proxy storage belongs to the implementation; use proxyInit/upgradeProxy for the EIP-1967 slots)');
+      // Phase 2b: a transparent proxy exposes NO own functions to non-admins (every non-admin call
+      // delegates to the impl; an admin may ONLY call upgradeToAndCall, which the synthesized fallback
+      // handles). So an @external method on the contract is unreachable AND clashes the impl's selectors.
+      if (proxyVariant === 'transparent') {
+        for (const f of functions) {
+          if (f.visibility === 'external') {
+            this.diags.error(cls, 'JETH401', `a @proxy('transparent') class may not declare an @external method ('${f.signature}'): every non-admin call delegates to the implementation and the admin may only call upgradeToAndCall (the upgrade entry is synthesized)`);
+          }
+        }
+      }
     }
 
     // Phase B: partition out external (delegatecall) libraries. A library's @external functions are
@@ -1477,6 +1502,7 @@ export class Analyzer {
       receive,
       fallback,
       isProxy,
+      proxyVariant,
       libraries: libraries.length > 0 ? libraries : undefined,
     };
   }

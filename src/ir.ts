@@ -586,6 +586,11 @@ export interface ContractIR {
   // calldata to the EIP-1967 impl slot) in the runtime fallback position. The proxy has no @state of its
   // own (storage belongs to the impl) and may NOT declare a user @receive/@fallback.
   isProxy?: boolean;
+  // Phase 2b: the proxy variant. undefined = the plain Phase-2a delegate-only proxy. 'transparent' =
+  // `@proxy('transparent')`, an OZ TransparentUpgradeableProxy-equivalent: the synthesized fallback routes
+  // by caller() - the admin may ONLY call upgradeToAndCall(address,bytes) (else revert ProxyDeniedAdminAccess),
+  // a non-admin ALWAYS delegates to the impl (even an upgradeToAndCall selector - this defeats the clash).
+  proxyVariant?: 'transparent';
   // Phase B: external (delegatecall) libraries this contract references. Each is emitted as its OWN
   // top-level Yul object (creation returns runtime; runtime = a selector dispatcher over its external
   // functions) and linked at deploy time. Empty/absent when no external library is referenced.

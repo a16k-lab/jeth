@@ -90,9 +90,17 @@ canonical DELEGATE FALLBACK `calldatacopy(0,0,calldatasize()); r:=delegatecall(g
   The user never sees a raw slot number - only these named builtins.
 
 ## Variant routing (Phase 2b/c/d, on top of the foundation)
-- **Transparent**: the proxy stores an admin (EIP-1967 admin slot, set in proxyInit's 2nd arg); the generated
-  fallback, when caller()==admin, allows ONLY upgradeToAndCall(addr,bytes) (handled in the proxy) and reverts
-  other admin calls; non-admin -> delegate. Byte-identical to OZ TransparentUpgradeableProxy.
+- **Transparent (Phase 2b - DONE)**: `@proxy('transparent') class P { ... }` (a call-form variant arg on the
+  existing @proxy decorator; the empty/absent form stays the plain Phase-2a delegate-only proxy). The proxy
+  stores an admin (EIP-1967 admin slot, set in proxyInit's 2nd arg). The synthesized fallback routes by
+  caller(): caller()==admin requires the call be upgradeToAndCall(address,bytes) (selector 0x4f1ef286) and
+  runs the EIP-1967 upgrade in the proxy (isContract guard, sstore impl slot, emit Upgraded(indexed), if
+  data.length>0 delegatecall+bubble), returning empty; ANY OTHER admin selector reverts the OZ
+  ProxyDeniedAdminAccess() selector 0xd2b576ec (4 bytes, no args). caller()!=admin -> delegate to the impl,
+  EVEN for the upgradeToAndCall selector (this defeats the proxy/impl selector clash). A transparent proxy
+  exposes NO own functions: the user writes only the constructor (proxyInit with an admin); an @external
+  method is rejected (JETH401). An unknown/non-string/extra @proxy(...) argument is rejected (JETH400).
+  Byte-identical to OZ TransparentUpgradeableProxy 5.x (verified differentially in test/transparent-proxy.test.ts).
 - **UUPS**: `@uups @contract class Logic` - the IMPL opts in; @uups generates upgradeToAndCall (calls the
   user-defined authorizeUpgrade(newImpl), writes the impl slot via upgradeProxy) + proxiableUUID() returning
   the impl slot (anti-brick). The proxy is the minimal foundation @proxy (delegate-only fallback). OZ

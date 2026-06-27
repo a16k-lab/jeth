@@ -188,9 +188,14 @@ impl, writes the slot(s), runs the init delegatecall once, emits `Upgraded(addre
 (JETH398/399). Verified byte-identical (returndata + the proxy's storage slots + the `Upgraded` topic/data +
 revert): calls route into the proxy's storage (impl's own untouched), the impl/admin slots, the
 upgrade-and-event round-trip, the one-time init, the bubbled init-revert, and the auth / isContract gates.
-The Transparent admin-selector routing, UUPS (`@uups` impl-side upgrade mixin + `proxiableUUID`), Beacon
-(`@beacon` + staticcall), and the Diamond (EIP-2535 multi-facet) are the remaining proxy phases - all
-delegatecall-only, no raw `delegatecall`/`CREATE` in user code.
+The **Transparent** variant `@proxy('transparent')` is supported, byte-identical to OZ
+`TransparentUpgradeableProxy`: the generated fallback routes by caller - the admin may only call
+`upgradeToAndCall(address,bytes)` (any other admin selector reverts `ProxyDeniedAdminAccess()` `0xd2b576ec`),
+and every non-admin call delegates to the impl (so a non-admin call whose selector collides with
+`upgradeToAndCall` still hits the impl, defeating the selector clash). A transparent proxy may not declare
+`@external` methods (JETH400/401). UUPS (`@uups` impl-side upgrade mixin + `proxiableUUID`), Beacon (`@beacon`
++ staticcall), and the Diamond (EIP-2535 multi-facet) are the remaining proxy phases - all delegatecall-only,
+no raw `delegatecall`/`CREATE` in user code.
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
