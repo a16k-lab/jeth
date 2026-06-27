@@ -21,7 +21,7 @@ export interface DiamondExpansion {
   diagnostics: PreDiagnostic[];
   /** The diamond's name (for the analyzer/yul to flag the deployed contract). */
   name?: string;
-  variant?: 'array' | 'packed';
+  variant?: 'array' | 'packed' | 'solidstate';
 }
 
 export interface PreDiagnostic {
@@ -39,6 +39,16 @@ export const IDIAMOND_LOUPE_ID = '0x48e2b093';
 export const IERC173_ID = '0x7f5828d0';
 // The raw mudgen diamond-storage namespace (base = keccak256(of this string), NOT ERC-7201).
 export const DIAMOND_STORAGE_NS = 'diamond.standard.diamond.storage';
+
+// ---- solidstate (v0.0.61) namespaces (raw keccak256 bases, one struct each) ----
+// The diamond's selector storage is derived from mudgen diamond-2 (the SAME packing) but lives at
+// solidstate's own base, and ownership / supported interfaces live in SEPARATE namespaces (NOT in the
+// diamond struct, unlike mudgen). The field ORDER below matches solidstate's struct order exactly so the
+// raw storage slots are byte-identical to a solc solidstate v0.0.61 mirror.
+export const SS_DIAMOND_NS = 'solidstate.contracts.storage.DiamondBase'; // selectorInfo, selectorCount, selectorSlugs, fallbackAddress
+export const SS_OWNABLE_NS = 'solidstate.contracts.storage.Ownable'; // owner
+export const SS_SAFEOWNABLE_NS = 'solidstate.contracts.storage.SafeOwnable'; // nomineeOwner
+export const SS_ERC165_NS = 'solidstate.contracts.storage.ERC165Base'; // supportedInterfaces
 
 /** Detect + expand a `@diamond(...)` class. Returns the (possibly unchanged) source, an `expanded`
  *  flag, gate diagnostics, and the diamond's name/variant. A non-diamond file is returned untouched. */
@@ -72,8 +82,8 @@ export function expandDiamond(source: string, fileName: string): DiamondExpansio
   if (decoratorNamesOf(cls).includes('contract'))
     err(cls, 'JETH411', 'a @diamond class must not also be @contract (the @contract surface is synthesized)');
 
-  // variant arg: @diamond('array') | @diamond('packed') | @diamond() | @diamond. (frozen is a follow-up.)
-  let variant: 'array' | 'packed' = 'array';
+  // variant arg: @diamond('array') | @diamond('packed') | @diamond('solidstate') | @diamond() | @diamond.
+  let variant: 'array' | 'packed' | 'solidstate' = 'array';
   const dcall = diamondCallOf(cls);
   if (dcall && dcall.arguments.length > 0) {
     if (dcall.arguments.length > 1) {
@@ -83,7 +93,9 @@ export function expandDiamond(source: string, fileName: string): DiamondExpansio
       if (!ts.isStringLiteralLike(a)) err(a, 'JETH412', "@diamond's model argument must be a string literal");
       else if (a.text === 'array') variant = 'array';
       else if (a.text === 'packed') variant = 'packed';
-      else err(a, 'JETH412', `unknown @diamond model '${a.text}' (only 'array' and 'packed' are supported)`);
+      else if (a.text === 'solidstate') variant = 'solidstate';
+      else
+        err(a, 'JETH412', `unknown @diamond model '${a.text}' (only 'array', 'packed' and 'solidstate' are supported)`);
     }
   }
 
@@ -121,10 +133,17 @@ export function expandDiamond(source: string, fileName: string): DiamondExpansio
 
   // The constructor text is preserved verbatim (diamondInit is a recognized constructor builtin). If the
   // user omitted a constructor, synthesize a no-arg one that leaves owner unset (degenerate, but valid).
-  const ctorText = ctorNode ? ctorNode.getText(sf) : 'constructor(owner: address) { diamondInit(owner); }';
+  // The solidstate model uses diamondInitSolidstate (its own interface ids + the Ownable-namespace owner).
+  const defaultCtorInit = variant === 'solidstate' ? 'diamondInitSolidstate(owner)' : 'diamondInit(owner)';
+  const ctorText = ctorNode ? ctorNode.getText(sf) : `constructor(owner: address) { ${defaultCtorInit}; }`;
 
   // ---- build the synthesized contract source ----
-  const body = variant === 'packed' ? synthesizeDiamondBodyPacked(name, ctorText) : synthesizeDiamondBody(name, ctorText);
+  const body =
+    variant === 'solidstate'
+      ? synthesizeDiamondBodySolidstate(name, ctorText)
+      : variant === 'packed'
+        ? synthesizeDiamondBodyPacked(name, ctorText)
+        : synthesizeDiamondBody(name, ctorText);
 
   // Replace the `@diamond` class span (including its leading decorators) with the synthesized contract.
   const replaceStart = cls.getStart(sf); // start of decorators
@@ -317,6 +336,92 @@ function synthesizeDiamondBodyPacked(name: string, ctorText: string): { contract
   @external diamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void {
     require(msg.sender == this._contractOwner, "LibDiamond: Must be contract owner");
     __diamondCutPacked();
+    emit(DiamondCut(_diamondCut, _init, _calldata));
+    __diamondDelegateInit(_init, _calldata);
+  }
+}`;
+
+  const helpers = `@struct class __DiamondFacet { facetAddress: address; functionSelectors: bytes4[]; }
+@struct class __DiamondFacetCut { facetAddress: address; action: u8; functionSelectors: bytes4[]; }`;
+
+  return { contract, helpers };
+}
+
+/** The synthesized @diamond('solidstate') @contract body + helper structs (solidstate v0.0.61 layout).
+ *  solidstate's on-chain selector storage is DERIVED FROM mudgen diamond-2 (the SAME 8-selectors-per-slug
+ *  packing + address-in-high-20-bytes facet record), so the cut + the four loupe reconstructors are the
+ *  packed model's raw-Yul builtins. What is DISTINCTIVE to solidstate (and built here):
+ *    - its OWN storage bases (NOT mudgen's "diamond.standard.diamond.storage") in solidstate's field order:
+ *        DiamondBase ns: selectorInfo(0), selectorCount(1), selectorSlugs(2), fallbackAddress(3)
+ *      with ownership + supported interfaces in SEPARATE namespaces (Ownable.owner, SafeOwnable.nomineeOwner,
+ *      ERC165Base.supportedInterfaces) instead of inside the diamond struct.
+ *    - the settable DEFAULT FALLBACK ADDRESS: getFallbackAddress()/setFallbackAddress(address) (owner-gated);
+ *      the router delegatecalls the stored fallback on a selector MISS when it is non-zero (the headline feat).
+ *    - SafeOwnable 2-step ownership: transferOwnership(account) sets the NOMINEE (no transfer, no event),
+ *      acceptOwnership() finalizes (the nominee becomes owner, emits OwnershipTransferred, clears the nominee).
+ *  The cut uses __diamondCutSolidstate() (solidstate's custom-error revert set + require order); everything
+ *  else routes through the SAME packed loupe + the SAME storage field names (_facets/_selectorSlots/
+ *  _selectorCount) so the diamondSlot(name) lookups in yul.ts are unchanged - only the slots (= solidstate's
+ *  declaration order) differ. */
+function synthesizeDiamondBodySolidstate(name: string, ctorText: string): { contract: string; helpers: string } {
+  const DS = `@storage('${SS_DIAMOND_NS}', 'raw')`;
+  const OW = `@storage('${SS_OWNABLE_NS}', 'raw')`;
+  const SO = `@storage('${SS_SAFEOWNABLE_NS}', 'raw')`;
+  const I165 = `@storage('${SS_ERC165_NS}', 'raw')`;
+  // The selector record fields keep the packed model's NAMES (the loupe/cut builtins read them by name) but
+  // are declared in solidstate's struct ORDER: selectorInfo(0), selectorCount(1), selectorSlugs(2),
+  // fallbackAddress(3). _facets == selectorInfo, _selectorSlots == selectorSlugs.
+  const contract = `@contract class ${name} {
+  ${DS} _facets: mapping<bytes4, bytes32>;
+  ${DS} _selectorCount: u16;
+  ${DS} _selectorSlots: mapping<u256, bytes32>;
+  ${DS} _fallbackAddress: address;
+  ${OW} _contractOwner: address;
+  ${SO} _nomineeOwner: address;
+  ${I165} _supportedInterfaces: mapping<bytes4, bool>;
+
+  @event OwnershipTransferred(@indexed previousOwner: address, @indexed newOwner: address): void;
+  @event DiamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void;
+
+  ${ctorText}
+
+  @external @view owner(): address { return this._contractOwner; }
+  @external @view nomineeOwner(): address { return this._nomineeOwner; }
+
+  // SafeOwnable 2-step: transferOwnership sets the NOMINEE only (no transfer, no event); acceptOwnership
+  // (nominee-gated) finalizes - the nominee becomes owner (emits OwnershipTransferred) and the nominee clears.
+  @external transferOwnership(account: address): void {
+    if (msg.sender != this._contractOwner) { __revertSelector(0x2f7a8ee1n); } // Ownable__NotOwner()
+    this._nomineeOwner = account;
+  }
+  @external acceptOwnership(): void {
+    if (msg.sender != this._nomineeOwner) { __revertSelector(0xefd1052dn); } // SafeOwnable__NotNomineeOwner()
+    const __prev: address = this._contractOwner;
+    this._contractOwner = msg.sender;
+    emit(OwnershipTransferred(__prev, msg.sender));
+    this._nomineeOwner = address(0n);
+  }
+
+  // Default fallback address: getFallbackAddress()/setFallbackAddress(address) (owner-gated). The router
+  // delegatecalls this address on a selector MISS when it is non-zero.
+  @external @view getFallbackAddress(): address { return this._fallbackAddress; }
+  @external setFallbackAddress(__fallbackAddress: address): void {
+    if (msg.sender != this._contractOwner) { __revertSelector(0x2f7a8ee1n); } // Ownable__NotOwner()
+    this._fallbackAddress = __fallbackAddress;
+  }
+
+  @external @view supportsInterface(__id: bytes4): bool { return this._supportedInterfaces[__id]; }
+
+  @external @view facets(): __DiamondFacet[] { return __diamondFacetsPacked(); }
+  @external @view facetFunctionSelectors(__facet: address): bytes4[] { return __diamondFacetSelectorsPacked(__facet); }
+  @external @view facetAddresses(): address[] { return __diamondFacetAddressesPacked(); }
+  @external @view facetAddress(__functionSelector: bytes4): address {
+    return address(bytes20(this._facets[__functionSelector]));
+  }
+
+  @external diamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void {
+    if (msg.sender != this._contractOwner) { __revertSelector(0x2f7a8ee1n); } // Ownable__NotOwner()
+    __diamondCutSolidstate();
     emit(DiamondCut(_diamondCut, _init, _calldata));
     __diamondDelegateInit(_init, _calldata);
   }

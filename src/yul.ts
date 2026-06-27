@@ -104,6 +104,10 @@ const OWNERSHIP_TRANSFERRED_TOPIC = '0x8be0079c531659141344cd1fd0a4f28419497f972
 // The four ERC-165 interface ids diamondInit registers: IERC165, IDiamondCut (diamondCut.selector),
 // IDiamondLoupe (XOR of the 4 loupe selectors), IERC173. Each set true in supportedInterfaces.
 const DIAMOND_ERC165_IDS = ['0x01ffc9a7', '0x1f931c1c', '0x48e2b093', '0x7f5828d0'];
+// The FIVE ERC-165 interface ids the solidstate v0.0.61 SolidStateDiamond constructor registers:
+// IDiamondFallback (XOR of getFallbackAddress/setFallbackAddress), IERC2535DiamondCut, IERC2535DiamondLoupe,
+// IERC165, IERC173.
+const SOLIDSTATE_ERC165_IDS = ['0xbd02b73c', '0x1f931c1c', '0x48e2b093', '0x01ffc9a7', '0x7f5828d0'];
 
 /** ABI head-word count of a struct's tuple HEAD (spec section 3.0): each field
  *  contributes its inline static words if static, or exactly ONE offset word if
@@ -504,15 +508,31 @@ ${indent(runtime, 6)}
       lines.push('let _sig := shr(224, calldataload(0))');
       lines.push('mstore(0x00, shl(224, _sig))');
       lines.push(`mstore(0x20, ${sel2})`);
-      if (contract.diamondVariant === 'packed') {
+      if (contract.diamondVariant === 'packed' || contract.diamondVariant === 'solidstate') {
         lines.push('let _facet := shr(96, sload(keccak256(0x00, 0x40)))');
       } else {
         lines.push('let _facet := and(sload(keccak256(0x00, 0x40)), 0xffffffffffffffffffffffffffffffffffffffff)');
       }
-      lines.push('if iszero(_facet) {');
-      for (const l of this.lowerErrorString(new TextEncoder().encode('Diamond: Function does not exist')))
-        lines.push('  ' + l);
-      lines.push('}');
+      if (contract.diamondVariant === 'solidstate') {
+        // solidstate's headline feature: on a selector MISS, fall back to the settable default fallback
+        // address (DiamondBase.fallbackAddress, the 4th field). The Proxy then requires the resolved
+        // implementation to be a contract; if not (no fallback set, or it has no code) it reverts with the
+        // custom error Proxy__ImplementationIsNotContract() (selector 0x87c9fc34). Byte-identical to
+        // solidstate v0.0.61 DiamondFallback._getImplementation + Proxy.fallback().
+        const fbSlot = String(this.diamondSlot('_fallbackAddress'));
+        lines.push('if iszero(_facet) {');
+        lines.push(`  _facet := and(sload(${fbSlot}), 0xffffffffffffffffffffffffffffffffffffffff)`);
+        lines.push('}');
+        lines.push('if iszero(extcodesize(_facet)) {');
+        lines.push('  mstore(0x00, shl(224, 0x87c9fc34))'); // Proxy__ImplementationIsNotContract()
+        lines.push('  revert(0x00, 0x04)');
+        lines.push('}');
+      } else {
+        lines.push('if iszero(_facet) {');
+        for (const l of this.lowerErrorString(new TextEncoder().encode('Diamond: Function does not exist')))
+          lines.push('  ' + l);
+        lines.push('}');
+      }
       lines.push('calldatacopy(0, 0, calldatasize())');
       lines.push('let _ok := delegatecall(gas(), _facet, 0, calldatasize(), 0, 0)');
       lines.push('returndatacopy(0, 0, returndatasize())');
@@ -1488,6 +1508,21 @@ ${indent(runtime, 6)}
         // a void statement reading _diamondCut from calldata and SSTOREing the packed storage.
         if (s.expr.kind === 'diamondCutPacked') {
           this.lowerDiamondCutPacked(out);
+          break;
+        }
+        // Phase 3 DIAMOND (solidstate): the solidstate ctor primitive, the cut (custom-error variant), and
+        // the bare-selector custom-error revert - all void statements emitting Yul directly.
+        if (s.expr.kind === 'diamondInitSolidstate') {
+          this.lowerDiamondInitSolidstate(s.expr, ctx, out);
+          break;
+        }
+        if (s.expr.kind === 'diamondCutSolidstate') {
+          this.lowerDiamondCutSolidstate(out);
+          break;
+        }
+        if (s.expr.kind === 'revertSelector') {
+          out.push(`mstore(0x00, shl(224, ${'0x' + s.expr.selector.toString(16).padStart(8, '0')}))`);
+          out.push('revert(0x00, 0x04)');
           break;
         }
         const v = this.lowerExpr(s.expr, ctx, out);
@@ -2606,8 +2641,11 @@ ${indent(runtime, 6)}
       case 'upgradeProxy': // void EIP-1967 statement: lowered in exprStmt via lowerProxyMutate (never a value)
       case 'proxyInitBeacon': // void EIP-1967 BEACON statement: lowered in exprStmt (never a value)
       case 'diamondInit': // void diamond ctor primitive: lowered in exprStmt via lowerDiamondInit
+      case 'diamondInitSolidstate': // void solidstate diamond ctor primitive: lowered in exprStmt
       case 'diamondDelegateInit': // void diamond statement: lowered in exprStmt (never a value)
       case 'diamondCutPacked': // void diamond-2 cut: lowered in exprStmt via lowerDiamondCutPacked
+      case 'diamondCutSolidstate': // void solidstate diamond-2 cut: lowered in exprStmt
+      case 'revertSelector': // void custom-error revert: lowered in exprStmt
       case 'diamondFacets': // Facet[] aggregate: consumed by the return path (lowerDiamondFacetsReturn)
       case 'diamondFacetsPacked': // Facet[] aggregate: consumed by the return path (packed loupe)
       case 'diamondFacetSelectorsPacked': // bytes4[] aggregate: consumed by the return path (packed loupe)
@@ -6619,6 +6657,30 @@ ${indent(runtime, 6)}
     }
   }
 
+  /** Lower diamondInitSolidstate(owner): the @diamond('solidstate') ctor primitive (byte-identical to a
+   *  solc solidstate v0.0.61 SolidStateDiamond constructor's owner + ERC-165 registration). Sets owner in
+   *  the Ownable namespace (_contractOwner), emits OwnershipTransferred(address(0), owner) (both args
+   *  indexed -> log3, no data), then registers solidstate's FIVE supported interface ids in the ERC165Base
+   *  namespace (_supportedInterfaces): IDiamondFallback, IERC2535DiamondCut, IERC2535DiamondLoupe, IERC165,
+   *  IERC173. (solidstate's constructor pre-registers the diamond's own selectors into the selector storage
+   *  too, but JETH routes its own selectors via the dispatch switch; the loupe/routing observable output is
+   *  identical, and the test asserts byte-identity against a solc mirror built on the SAME routing model.) */
+  private lowerDiamondInitSolidstate(e: Expr & { kind: 'diamondInitSolidstate' }, ctx: LowerCtx, out: string[]): void {
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    const owner = this.fresh();
+    out.push(`let ${owner} := and(${this.lowerExpr(e.owner, ctx, out)}, ${MASK})`);
+    out.push(`sstore(${String(this.diamondSlot('_contractOwner'))}, ${owner})`);
+    // emit OwnershipTransferred(address(0) indexed, owner indexed): both args indexed -> log3, no data.
+    out.push(`log3(0, 0, ${OWNERSHIP_TRANSFERRED_TOPIC}, 0, ${owner})`);
+    // supportedInterfaces[id] = true: mapping(bytes4=>bool) at the ERC165Base-namespace field slot.
+    const siSlot = String(this.diamondSlot('_supportedInterfaces'));
+    for (const id of SOLIDSTATE_ERC165_IDS) {
+      out.push(`mstore(0x00, ${id}00000000000000000000000000000000000000000000000000000000)`);
+      out.push(`mstore(0x20, ${siSlot})`);
+      out.push(`sstore(keccak256(0x00, 0x40), 1)`);
+    }
+  }
+
   /** Lower __diamondDelegateInit(_init, _calldata): the initializeDiamondCut _init delegatecall, byte-
    *  identical to mudgen's LibDiamondCut.initializeDiamondCut: if _init==0 return (no-op); require
    *  extcodesize(_init)>0 (else a clean revert - the mudgen NoBytecodeAtAddress custom error is the
@@ -6929,6 +6991,191 @@ ${indent(runtime, 6)}
     L(`  mstore(0x00, shr(3, _selectorCount))`);
     L(`  mstore(0x20, ${SLOTS})`);
     L('  sstore(keccak256(0x00, 0x40), _selectorSlot)');
+    L('}');
+  }
+
+  /** Lower __diamondCutSolidstate(): the solidstate v0.0.61 _diamondCut + _add/_replace/_removeFacetSelectors.
+   *  The selector PACKING is identical to the packed/diamond-2 model (facet in the HIGH 20 bytes | uint16
+   *  global index in the LOW bytes of selectorInfo[sel]; 8 selectors per 32-byte slug, selector k at bit
+   *  position (k&7)<<5 from the MSB). The DIFFERENCES from the mudgen packed cut, all reproduced byte-exactly:
+   *    - the revert set is solidstate's custom errors (DiamondWritable__*) instead of mudgen's strings;
+   *    - ADD allows target == address(this) (an "immutable" self-route) and otherwise requires code;
+   *    - REPLACE's require order is not-found, immutable, target-identical;
+   *    - REMOVE decrements the count first, then swaps the trailing selector into the freed gap.
+   *  Reads _diamondCut (FacetCut[]) directly from calldata (the diamondCut(...) args region at offset 4),
+   *  matching solc's ABI v2 decode. */
+  private lowerDiamondCutSolidstate(out: string[]): void {
+    const FACETS = String(this.diamondSlot('_facets')); // selectorInfo
+    const SLOTS = String(this.diamondSlot('_selectorSlots')); // selectorSlugs
+    const COUNT = String(this.diamondSlot('_selectorCount'));
+    const ADDR = '0xffffffffffffffffffffffffffffffffffffffff';
+    const CLEAR_ADDR = '0xffffffffffffffffffffffff'; // CLEAR_ADDRESS_MASK: low 12 bytes set
+    const CLEAR_SEL = '0xffffffff00000000000000000000000000000000000000000000000000000000'; // CLEAR_SELECTOR_MASK
+    const SELMASK = '0xffffffff00000000000000000000000000000000000000000000000000000000';
+    const L = (s: string) => out.push(s);
+    // bare custom-error revert: mstore(0, shl(224, selector)); revert(0, 4).
+    const rev = (sel: string, indent: string) => {
+      L(`${indent}mstore(0x00, shl(224, ${sel}))`);
+      L(`${indent}revert(0x00, 0x04)`);
+    };
+    L('// diamondCut (solidstate v0.0.61): read _diamondCut[] from calldata, apply add/replace/remove');
+    L('let _argBase := 4');
+    L('let _cutArr := add(_argBase, calldataload(_argBase))');
+    L('let _cutLen := calldataload(_cutArr)');
+    L('let _cutElems := add(_cutArr, 0x20)');
+    L(`let _selectorCount := and(sload(${COUNT}), 0xffff)`);
+    L('let _originalCount := _selectorCount');
+    L('let _slug := 0');
+    // if selectorCount & 7 != 0: preload the partially-filled last slug.
+    L('if gt(and(_selectorCount, 7), 0) {');
+    L(`  mstore(0x00, shr(3, _selectorCount))`);
+    L(`  mstore(0x20, ${SLOTS})`);
+    L('  _slug := sload(keccak256(0x00, 0x40))');
+    L('}');
+    L('let _ci := 0');
+    L('for { } lt(_ci, _cutLen) { _ci := add(_ci, 1) } {');
+    L('  let _cut := add(_cutElems, calldataload(add(_cutElems, mul(_ci, 0x20))))');
+    L(`  let _facetAddr := and(calldataload(_cut), ${ADDR})`); // FacetCut.target
+    L('  let _action := calldataload(add(_cut, 0x20))'); // FacetCut.action
+    L('  let _selsPtr := add(_cut, calldataload(add(_cut, 0x40)))'); // FacetCut.selectors
+    L('  let _selsLen := calldataload(_selsPtr)');
+    L('  let _selsData := add(_selsPtr, 0x20)');
+    // if (facetCut.selectors.length == 0) revert DiamondWritable__SelectorNotSpecified()
+    L('  if iszero(_selsLen) {');
+    rev('0xeb6c3aeb', '    ');
+    L('  }');
+    L('  switch _action');
+    // ---- ADD (0) ----
+    L('  case 0 {');
+    // if (target.isContract()) { if (target == address(this)) revert SelectorIsImmutable; }
+    // else if (target != address(this)) revert TargetHasNoCode;
+    L('    switch iszero(extcodesize(_facetAddr))');
+    L('    case 0 {'); // target has code
+    L('      if eq(_facetAddr, address()) {');
+    rev('0xe9835731', '        '); // SelectorIsImmutable
+    L('      }');
+    L('    }');
+    L('    default {'); // target has no code
+    L('      if iszero(eq(_facetAddr, address())) {');
+    rev('0xf77172ac', '        '); // TargetHasNoCode
+    L('      }');
+    L('    }');
+    L('    let _si := 0');
+    L('    for { } lt(_si, _selsLen) { _si := add(_si, 1) } {');
+    L(`      let _sel := and(calldataload(add(_selsData, mul(_si, 0x20))), ${SELMASK})`);
+    L(`      mstore(0x00, _sel)`);
+    L(`      mstore(0x20, ${FACETS})`);
+    L('      let _fSlot := keccak256(0x00, 0x40)');
+    // if (selectorInfo[sel] != bytes32(0)) revert SelectorAlreadyAdded
+    L('      if sload(_fSlot) {');
+    rev('0x92474ee2', '        '); // SelectorAlreadyAdded
+    L('      }');
+    // selectorInfo[sel] = bytes32(selectorCount) | bytes20(target)
+    L('      sstore(_fSlot, or(shl(96, _facetAddr), _selectorCount))');
+    // pos = (selectorCount & 7) << 5; slug = (slug & ~(CLEAR_SEL >> pos)) | (sel >> pos)
+    L('      let _pos := shl(5, and(_selectorCount, 7))');
+    L(`      _slug := or(and(_slug, not(shr(_pos, ${CLEAR_SEL}))), shr(_pos, _sel))`);
+    // if (pos == 224) selectorSlugs[selectorCount >> 3] = slug
+    L('      if eq(_pos, 224) {');
+    L(`        mstore(0x00, shr(3, _selectorCount))`);
+    L(`        mstore(0x20, ${SLOTS})`);
+    L('        sstore(keccak256(0x00, 0x40), _slug)');
+    L('      }');
+    L('      _selectorCount := add(_selectorCount, 1)');
+    L('    }');
+    L('  }');
+    // ---- REPLACE (1) ----
+    L('  case 1 {');
+    // if (!target.isContract()) revert TargetHasNoCode
+    L('    if iszero(extcodesize(_facetAddr)) {');
+    rev('0xf77172ac', '      ');
+    L('    }');
+    L('    let _si := 0');
+    L('    for { } lt(_si, _selsLen) { _si := add(_si, 1) } {');
+    L(`      let _sel := and(calldataload(add(_selsData, mul(_si, 0x20))), ${SELMASK})`);
+    L(`      mstore(0x00, _sel)`);
+    L(`      mstore(0x20, ${FACETS})`);
+    L('      let _fSlot := keccak256(0x00, 0x40)');
+    L('      let _selectorInfo := sload(_fSlot)');
+    L('      let _oldFacet := shr(96, _selectorInfo)');
+    // solidstate order: not-found, immutable, identical
+    L('      if iszero(_oldFacet) {');
+    rev('0x6fc4b52e', '        '); // SelectorNotFound
+    L('      }');
+    L('      if eq(_oldFacet, address()) {');
+    rev('0xe9835731', '        '); // SelectorIsImmutable
+    L('      }');
+    L('      if eq(_oldFacet, _facetAddr) {');
+    rev('0x617557e6', '        '); // ReplaceTargetIsIdentical
+    L('      }');
+    // selectorInfo[sel] = (selectorInfo & CLEAR_ADDRESS_MASK) | bytes20(target)
+    L(`      sstore(_fSlot, or(and(_selectorInfo, ${CLEAR_ADDR}), shl(96, _facetAddr)))`);
+    L('    }');
+    L('  }');
+    // ---- REMOVE (2) ----
+    L('  case 2 {');
+    // if (target != address(0)) revert RemoveTargetNotZeroAddress
+    L('    if _facetAddr {');
+    rev('0xeacd2424', '      ');
+    L('    }');
+    L('    let _si := 0');
+    L('    for { } lt(_si, _selsLen) { _si := add(_si, 1) } {');
+    L('      _selectorCount := sub(_selectorCount, 1)');
+    L(`      let _sel := and(calldataload(add(_selsData, mul(_si, 0x20))), ${SELMASK})`);
+    L(`      mstore(0x00, _sel)`);
+    L(`      mstore(0x20, ${FACETS})`);
+    L('      let _fSlot := keccak256(0x00, 0x40)');
+    L('      let _selectorInfo := sload(_fSlot)');
+    L('      sstore(_fSlot, 0)'); // delete selectorInfo[sel]
+    L('      let _oldFacet := shr(96, _selectorInfo)');
+    L('      if iszero(_oldFacet) {');
+    rev('0x6fc4b52e', '        '); // SelectorNotFound
+    L('      }');
+    L('      if eq(_oldFacet, address()) {');
+    rev('0xe9835731', '        '); // SelectorIsImmutable
+    L('      }');
+    // if (selectorCount & 7 == 7) lastSlug = selectorSlugs[selectorCount >> 3]
+    L('      if eq(and(_selectorCount, 7), 7) {');
+    L(`        mstore(0x00, shr(3, _selectorCount))`);
+    L(`        mstore(0x20, ${SLOTS})`);
+    L('        _slug := sload(keccak256(0x00, 0x40))');
+    L('      }');
+    // lastSelector = bytes4(lastSlug << ((selectorCount & 7) << 5))
+    L(`      let _lastSelector := and(shl(shl(5, and(_selectorCount, 7)), _slug), ${SELMASK})`);
+    // if (lastSelector != selector) selectorInfo[lastSelector] = (selectorInfo & CLEAR_ADDRESS_MASK) | bytes20(selectorInfo[lastSelector])
+    L('      if iszero(eq(_lastSelector, _sel)) {');
+    L(`        mstore(0x00, _lastSelector)`);
+    L(`        mstore(0x20, ${FACETS})`);
+    L('        let _lastSlot := keccak256(0x00, 0x40)');
+    L(`        sstore(_lastSlot, or(and(_selectorInfo, ${CLEAR_ADDR}), and(sload(_lastSlot), shl(96, ${ADDR}))))`);
+    L('      }');
+    // slugIndex = uint16(selectorInfo) >> 3; pos = (uint16(selectorInfo) & 7) << 5
+    L('      let _slugIndex := shr(3, and(_selectorInfo, 0xffff))');
+    L('      let _posInSlug := shl(5, and(and(_selectorInfo, 0xffff), 7))');
+    // if (slugIndex == selectorCount >> 3) lastSlug = insert(lastSlug, lastSelector, pos)
+    // else selectorSlugs[slugIndex] = insert(selectorSlugs[slugIndex], lastSelector, pos)
+    L('      switch eq(_slugIndex, shr(3, _selectorCount))');
+    L('      case 1 {');
+    L(`        _slug := or(and(_slug, not(shr(_posInSlug, ${CLEAR_SEL}))), shr(_posInSlug, _lastSelector))`);
+    L('      }');
+    L('      default {');
+    L(`        mstore(0x00, _slugIndex)`);
+    L(`        mstore(0x20, ${SLOTS})`);
+    L('        let _gapKey := keccak256(0x00, 0x40)');
+    L(`        sstore(_gapKey, or(and(sload(_gapKey), not(shr(_posInSlug, ${CLEAR_SEL}))), shr(_posInSlug, _lastSelector)))`);
+    L('      }');
+    L('    }');
+    L('  }');
+    L('}');
+    // if (selectorCount != originalSelectorCount) $.selectorCount = uint16(selectorCount)
+    L('if iszero(eq(_selectorCount, _originalCount)) {');
+    L(`  sstore(${COUNT}, and(_selectorCount, 0xffff))`);
+    L('}');
+    // if (selectorCount & 7 != 0) selectorSlugs[selectorCount >> 3] = slug
+    L('if gt(and(_selectorCount, 7), 0) {');
+    L(`  mstore(0x00, shr(3, _selectorCount))`);
+    L(`  mstore(0x20, ${SLOTS})`);
+    L('  sstore(keccak256(0x00, 0x40), _slug)');
     L('}');
   }
 

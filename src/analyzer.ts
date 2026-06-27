@@ -261,7 +261,7 @@ export class Analyzer {
     private readonly diags: DiagnosticBag,
     // Phase 3: set when this compilation unit's deployed contract is a synthesized @diamond (the source
     // was expanded from `@diamond('array')`); marks the ContractIR so emitRuntime adds the router.
-    private readonly diamond?: { name: string; variant: 'array' | 'packed' },
+    private readonly diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
   ) {}
 
   // ---- lexical scope stack -------------------------------------------------
@@ -1594,11 +1594,16 @@ export class Analyzer {
       isBeacon: isBeacon || undefined,
       isDiamond: this.diamond ? true : undefined,
       diamondVariant: this.diamond?.variant,
-      // The router looks up selectorToFacetAndPosition[msg.sig].facetAddress. That mapping (_sel2facet)
-      // is the FIRST diamond-storage field, so its slot = the raw diamond-storage base (base + 0).
+      // The router looks up the selector->facet mapping at its actual planned slot. That mapping is the
+      // FIRST field of the diamond's selector-storage namespace: `_sel2facet` (array model) or `_facets`
+      // (packed / solidstate). For the array+packed models the namespace base = keccak256(mudgen string),
+      // so the field lands at base+0; for solidstate the field lives at the (different) DiamondBase
+      // namespace base+0. Resolving by name yields the correct slot for every model.
       diamondStorageBase: this.diamond ? BigInt('0x' + toHex(keccak('diamond.standard.diamond.storage'))) : undefined,
       diamondSel2FacetSlot: this.diamond
-        ? (this.stateByName.get('_sel2facet')?.slot ?? BigInt('0x' + toHex(keccak('diamond.standard.diamond.storage'))))
+        ? (this.stateByName.get('_sel2facet')?.slot ??
+          this.stateByName.get('_facets')?.slot ??
+          BigInt('0x' + toHex(keccak('diamond.standard.diamond.storage'))))
         : undefined,
       libraries: libraries.length > 0 ? libraries : undefined,
     };
@@ -10838,6 +10843,57 @@ export class Analyzer {
       this.currentWritesState = true; // the whole add/replace/remove loop SSTOREs the packed storage
       return { kind: 'diamondCutPacked', type: VOID };
     }
+    // --- solidstate builtins ---
+    // diamondInitSolidstate(owner): the solidstate @diamond ctor primitive. Sets owner in the Ownable
+    // namespace, registers solidstate's ERC-165 interface ids in the ERC165Base namespace, emits
+    // OwnershipTransferred(0, owner).
+    if (callee === 'diamondInitSolidstate') {
+      if (node.arguments.length !== 1) {
+        this.diags.error(node, 'JETH414', 'diamondInitSolidstate(owner) takes exactly one argument (the initial owner)');
+        return undefined;
+      }
+      const a = this.checkExpr(node.arguments[0]!, ADDRESS);
+      if (!a) return undefined;
+      let owner = a;
+      if (a.type.kind !== 'address') {
+        if (this.isAddressConvertible(a.type)) owner = { kind: 'cast', type: ADDRESS, from: a.type, operand: a };
+        else {
+          this.diags.error(
+            node.arguments[0]!,
+            'JETH414',
+            `diamondInitSolidstate(owner) owner must be address, got ${displayName(a.type)}`,
+          );
+          return undefined;
+        }
+      }
+      this.currentWritesState = true;
+      return { kind: 'diamondInitSolidstate', type: VOID, owner };
+    }
+    // __diamondCutSolidstate(): the solidstate diamond-2 add/replace/remove loop (same packing as
+    // __diamondCutPacked, but solidstate's custom-error revert set + require order).
+    if (callee === '__diamondCutSolidstate') {
+      if (node.arguments.length !== 0) {
+        this.diags.error(node, 'JETH414', '__diamondCutSolidstate() takes no arguments');
+        return undefined;
+      }
+      this.currentWritesState = true;
+      return { kind: 'diamondCutSolidstate', type: VOID };
+    }
+    // __revertSelector(sel): revert with a bare 4-byte custom-error selector (no ABI args), byte-identical
+    // to solc's `revert SomeError()`. The arg must be a compile-time u32 selector literal.
+    if (callee === '__revertSelector') {
+      if (node.arguments.length !== 1) {
+        this.diags.error(node, 'JETH414', '__revertSelector(sel) takes exactly one argument (a u32 selector literal)');
+        return undefined;
+      }
+      const arg = node.arguments[0]!;
+      const folded = this.evalConstInt(arg);
+      if (folded === undefined || folded < 0n || folded > 0xffffffffn) {
+        this.diags.error(arg, 'JETH414', '__revertSelector(sel) requires a constant 4-byte selector literal (0..0xffffffff)');
+        return undefined;
+      }
+      return { kind: 'revertSelector', type: VOID, selector: folded };
+    }
     if (callee === '__diamondFacetSelectorsPacked') {
       if (node.arguments.length !== 1) {
         this.diags.error(node, 'JETH414', '__diamondFacetSelectorsPacked(facet) takes exactly one argument');
@@ -12707,7 +12763,10 @@ export class Analyzer {
         callee === '__diamondCutPacked' ||
         callee === '__diamondFacetsPacked' ||
         callee === '__diamondFacetSelectorsPacked' ||
-        callee === '__diamondFacetAddressesPacked'
+        callee === '__diamondFacetAddressesPacked' ||
+        callee === 'diamondInitSolidstate' ||
+        callee === '__diamondCutSolidstate' ||
+        callee === '__revertSelector'
       ) {
         return this.checkDiamondBuiltin(node, callee);
       }
@@ -14436,7 +14495,7 @@ export class Analyzer {
 export function analyze(
   sourceFile: ts.SourceFile,
   diags: DiagnosticBag,
-  diamond?: { name: string; variant: 'array' | 'packed' },
+  diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
 ): ContractIR | undefined {
   return new Analyzer(sourceFile, diags, diamond).analyze();
 }

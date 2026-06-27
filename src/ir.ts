@@ -186,6 +186,16 @@ export type Expr =
   | { kind: 'diamondFacetsPacked'; type: JethType } // facets() -> Facet[]
   | { kind: 'diamondFacetSelectorsPacked'; type: JethType; facet: Expr } // facetFunctionSelectors(addr) -> bytes4[]
   | { kind: 'diamondFacetAddressesPacked'; type: JethType } // facetAddresses() -> address[]
+  // --- Phase 3 DIAMOND (solidstate / v0.0.61): synthesis-only builtins for the @diamond('solidstate') model ---
+  // diamondInitSolidstate(owner): sstore owner (Ownable namespace), register solidstate's ERC-165 ids
+  // (ERC165Base namespace), emit OwnershipTransferred(0, owner).
+  | { kind: 'diamondInitSolidstate'; type: JethType; owner: Expr }
+  // __diamondCutSolidstate(): the solidstate diamond-2 add/replace/remove loop (same packing as the packed
+  // model, but solidstate's custom-error revert set + require order).
+  | { kind: 'diamondCutSolidstate'; type: JethType }
+  // __revertSelector(sel): revert with a bare 4-byte custom-error selector (no ABI args) - byte-identical
+  // to solc's `revert SomeError()`.
+  | { kind: 'revertSelector'; type: JethType; selector: bigint }
   // --- Phase 6: external low-level calls ---
   // <addr>.code -> bytes (EXTCODESIZE + EXTCODECOPY); <addr>.codehash -> bytes32 (EXTCODEHASH)
   | { kind: 'extCode'; type: JethType; addr: Expr; member: 'code' | 'codehash' }
@@ -658,8 +668,10 @@ export interface ContractIR {
   // selector-routed delegatecall fallback (the router) after the diamond's own selector switch. The
   // facets() loupe is emitted as a raw-Yul dispatch case (it builds a Facet[] from the split storage).
   isDiamond?: boolean;
-  diamondVariant?: 'array' | 'packed'; // the storage layout model: 'array' (diamond-1/3 array-storing) or
-  // 'packed' (diamond-2: mapping(bytes4=>bytes32) facets + 8-selectors-per-slot selectorSlots + uint16 count).
+  diamondVariant?: 'array' | 'packed' | 'solidstate'; // the storage layout model: 'array' (diamond-1/3
+  // array-storing), 'packed' (diamond-2: mapping(bytes4=>bytes32) facets + 8-selectors-per-slot selectorSlots
+  // + uint16 count), or 'solidstate' (the packed diamond-2 selector storage at solidstate's own bases + a
+  // settable default fallback address + SafeOwnable 2-step ownership in separate namespaces).
   // The raw diamond-storage struct base = keccak256("diamond.standard.diamond.storage") and the field
   // SLOT (base + relative slot) of selectorToFacetAndPosition, used by the router's facet lookup.
   diamondStorageBase?: bigint;
