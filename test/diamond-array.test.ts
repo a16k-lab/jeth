@@ -634,7 +634,9 @@ describe('diamond-array: gates + facet surface (clean diagnostics)', () => {
     ).toContain('JETH413');
   });
   it('rejects a bad @diamond variant (JETH412)', () => {
-    expect(codes(`@diamond('packed') class D { constructor(o: address){ diamondInit(o); } }`)).toContain('JETH412');
+    // 'packed' is now a SUPPORTED model (the diamond-2 layout, test/diamond-packed.test.ts); use a
+    // genuinely-unknown variant to exercise the JETH412 unknown-model rejection.
+    expect(codes(`@diamond('frozen') class D { constructor(o: address){ diamondInit(o); } }`)).toContain('JETH412');
   });
   it('rejects @facet + @diamond on one class (JETH411)', () => {
     expect(codes(`@facet @diamond('array') class D { constructor(o: address){ diamondInit(o); } }`)).toContain(

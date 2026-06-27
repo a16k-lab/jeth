@@ -492,16 +492,23 @@ ${indent(runtime, 6)}
         lines.push('  default {}');
         lines.push('}');
       }
-      // The router: look up selectorToFacetAndPosition[msg.sig].facetAddress (a mapping(bytes4=>{address,
-      // uint96}) at the diamond-storage base; the address is the LOW 160 bits of the struct's single slot),
-      // then delegatecall the facet with all calldata and return-or-bubble. msg.sig is shr(224) (right-
-      // aligned); the bytes4 mapping key is stored LEFT-aligned, so shl(224) it for the keccak. Byte-
-      // identical to mudgen's Diamond.sol fallback.
+      // The router: look up the facet address for msg.sig from the facets mapping at the diamond-storage
+      // base, then delegatecall the facet with all calldata and return-or-bubble. msg.sig is shr(224)
+      // (right-aligned); the bytes4 mapping key is stored LEFT-aligned, so shl(224) it for the keccak.
+      // Byte-identical to mudgen's Diamond.sol fallback.
+      //   array  (diamond-1/3): value = mapping(bytes4 => {address facet; uint96 pos}); the address is the
+      //                         LOW 160 bits of the single packed slot -> and(value, ADDR_MASK).
+      //   packed (diamond-2):   value = mapping(bytes4 => bytes32) where the facet address is the HIGH 20
+      //                         bytes (address | uint16 position) -> shr(96, value) = address(bytes20(value)).
       const sel2 = String(contract.diamondSel2FacetSlot ?? contract.diamondStorageBase ?? 0n);
       lines.push('let _sig := shr(224, calldataload(0))');
       lines.push('mstore(0x00, shl(224, _sig))');
       lines.push(`mstore(0x20, ${sel2})`);
-      lines.push('let _facet := and(sload(keccak256(0x00, 0x40)), 0xffffffffffffffffffffffffffffffffffffffff)');
+      if (contract.diamondVariant === 'packed') {
+        lines.push('let _facet := shr(96, sload(keccak256(0x00, 0x40)))');
+      } else {
+        lines.push('let _facet := and(sload(keccak256(0x00, 0x40)), 0xffffffffffffffffffffffffffffffffffffffff)');
+      }
       lines.push('if iszero(_facet) {');
       for (const l of this.lowerErrorString(new TextEncoder().encode('Diamond: Function does not exist')))
         lines.push('  ' + l);
@@ -942,6 +949,20 @@ ${indent(runtime, 6)}
         // blob in raw Yul directly from the split diamond-3 storage (no JETH Facet[] memory local exists).
         if (s.value.kind === 'diamondFacets') {
           this.lowerDiamondFacetsReturn(out);
+          break;
+        }
+        // Phase 3 DIAMOND (packed): the three diamond-2 loupe reconstructors. Each rebuilds the facet
+        // grouping in memory from the packed selectorSlots + the facets mapping (raw Yul).
+        if (s.value.kind === 'diamondFacetsPacked') {
+          this.lowerDiamondFacetsReturnPacked(out);
+          break;
+        }
+        if (s.value.kind === 'diamondFacetSelectorsPacked') {
+          this.lowerDiamondFacetSelectorsReturnPacked(s.value.facet, ctx, out);
+          break;
+        }
+        if (s.value.kind === 'diamondFacetAddressesPacked') {
+          this.lowerDiamondFacetAddressesReturnPacked(out);
           break;
         }
         // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
@@ -1461,6 +1482,12 @@ ${indent(runtime, 6)}
         }
         if (s.expr.kind === 'diamondDelegateInit') {
           this.lowerDiamondDelegateInit(s.expr, ctx, out);
+          break;
+        }
+        // Phase 3 DIAMOND (packed): __diamondCutPacked() is the whole diamond-2 add/replace/remove loop,
+        // a void statement reading _diamondCut from calldata and SSTOREing the packed storage.
+        if (s.expr.kind === 'diamondCutPacked') {
+          this.lowerDiamondCutPacked(out);
           break;
         }
         const v = this.lowerExpr(s.expr, ctx, out);
@@ -2580,7 +2607,11 @@ ${indent(runtime, 6)}
       case 'proxyInitBeacon': // void EIP-1967 BEACON statement: lowered in exprStmt (never a value)
       case 'diamondInit': // void diamond ctor primitive: lowered in exprStmt via lowerDiamondInit
       case 'diamondDelegateInit': // void diamond statement: lowered in exprStmt (never a value)
+      case 'diamondCutPacked': // void diamond-2 cut: lowered in exprStmt via lowerDiamondCutPacked
       case 'diamondFacets': // Facet[] aggregate: consumed by the return path (lowerDiamondFacetsReturn)
+      case 'diamondFacetsPacked': // Facet[] aggregate: consumed by the return path (packed loupe)
+      case 'diamondFacetSelectorsPacked': // bytes4[] aggregate: consumed by the return path (packed loupe)
+      case 'diamondFacetAddressesPacked': // address[] aggregate: consumed by the return path (packed loupe)
         // reference/aggregate values are not single 256-bit words; they are
         // consumed by the return/assign/length/index paths.
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
@@ -6676,6 +6707,367 @@ ${indent(runtime, 6)}
     L('  _cursor := add(_cursor, add(0x60, mul(_selLen, 0x20)))');
     L('}');
     L('return(_ret, sub(_cursor, _ret))');
+  }
+
+  // ---- Phase 3 DIAMOND (packed / diamond-2 layout) ----------------------------------------------
+  // Storage (raw keccak base, the same as the array model):
+  //   _facets         (base+0): mapping(bytes4=>bytes32). value = bytes20(facet) | bytes32(uint16 position).
+  //   _selectorSlots  (base+1): mapping(uint256=>bytes32). slotIndex (count>>3) -> 8 packed bytes4 selectors,
+  //                             selector k at MSB bit position (k&7)<<5: stored bytes32(sel) >> pos.
+  //   _selectorCount  (base+2): uint16 total installed selectors (right-aligned alone in its slot).
+  // CLEAR_ADDRESS_MASK  = 0xffffffffffffffffffffffff  (low 12 bytes set: keep position, clear addr).
+  // CLEAR_SELECTOR_MASK = 0xffffffff << 224           (top 4 bytes set).
+
+  /** Lower __diamondCutPacked(): the entire diamond-2 add/replace/remove loop, byte-identical to mudgen's
+   *  LibDiamond.diamondCut + addReplaceRemoveFacetSelectors. Reads _diamondCut (FacetCut[]) directly from
+   *  calldata (the diamondCut(...) args region at offset 4). selectorCount + the in-memory selectorSlot are
+   *  threaded through; the partially-filled last slot is preloaded before the loop and flushed after. */
+  private lowerDiamondCutPacked(out: string[]): void {
+    const FACETS = String(this.diamondSlot('_facets'));
+    const SLOTS = String(this.diamondSlot('_selectorSlots'));
+    const COUNT = String(this.diamondSlot('_selectorCount'));
+    const ADDR = '0xffffffffffffffffffffffffffffffffffffffff';
+    const CLEAR_ADDR = '0xffffffffffffffffffffffff'; // low 12 bytes set
+    const CLEAR_SEL = '0xffffffff00000000000000000000000000000000000000000000000000000000'; // top 4 bytes set
+    const L = (s: string) => out.push(s);
+    // mapping element slot helper: keccak(key . mapBaseSlot) with key in word 0 (left-aligned bytes4 or the
+    // uint256 slotIndex), mapBaseSlot in word 1. We inline mstore pairs at scratch 0x00/0x20.
+
+    L('// diamondCut (packed / diamond-2): read _diamondCut[] from calldata, apply add/replace/remove');
+    // The diamondCut args region starts at calldata offset 4. Head: [off _diamondCut][_init][off _calldata].
+    // _diamondCut is a dynamic FacetCut[]; its data starts at 4 + head[0].
+    L('let _argBase := 4');
+    L('let _cutArr := add(_argBase, calldataload(_argBase))'); // points at the array [len] word
+    L('let _cutLen := calldataload(_cutArr)');
+    L('let _cutElems := add(_cutArr, 0x20)'); // the per-element offset table (each rel to _cutElems)
+    // originalSelectorCount + preload the partially-filled last slot.
+    L(`let _selectorCount := and(sload(${COUNT}), 0xffff)`);
+    L('let _originalCount := _selectorCount');
+    L('let _selectorSlot := 0');
+    L('if gt(and(_selectorCount, 7), 0) {');
+    L(`  mstore(0x00, shr(3, _selectorCount))`);
+    L(`  mstore(0x20, ${SLOTS})`);
+    L('  _selectorSlot := sload(keccak256(0x00, 0x40))');
+    L('}');
+    L('let _ci := 0');
+    L('for { } lt(_ci, _cutLen) { _ci := add(_ci, 1) } {');
+    // FacetCut tuple ptr (dynamic element): _cutElems + offsetTable[_ci]
+    L('  let _cut := add(_cutElems, calldataload(add(_cutElems, mul(_ci, 0x20))))');
+    L(`  let _facetAddr := and(calldataload(_cut), ${ADDR})`); // field 0: address
+    L('  let _action := calldataload(add(_cut, 0x20))'); // field 1: uint8 action
+    // field 2: bytes4[] functionSelectors -> offset (rel to _cut) at word 2; [len] then elements
+    L('  let _selsPtr := add(_cut, calldataload(add(_cut, 0x40)))');
+    L('  let _selsLen := calldataload(_selsPtr)');
+    L('  let _selsData := add(_selsPtr, 0x20)'); // first selector word (left-aligned bytes4)
+    // require(_selectors.length > 0) - shared across all actions (mudgen runs it BEFORE the action switch).
+    L('  if iszero(_selsLen) {');
+    for (const l of this.lowerErrorString(new TextEncoder().encode('LibDiamondCut: No selectors in facet to cut')))
+      L('    ' + l);
+    L('  }');
+    L('  switch _action');
+    // ---- ADD (action 0) ----
+    L('  case 0 {');
+    // enforceHasContractCode(facet, "LibDiamondCut: Add facet has no code") - the ONLY pre-loop check (no
+    // address(0) guard: extcodesize(0)==0 so a zero facet reverts here too).
+    L('    if iszero(extcodesize(_facetAddr)) {');
+    for (const l of this.lowerErrorString(new TextEncoder().encode('LibDiamondCut: Add facet has no code')))
+      L('      ' + l);
+    L('    }');
+    L('    let _si := 0');
+    L('    for { } lt(_si, _selsLen) { _si := add(_si, 1) } {');
+    L('      let _sel := and(calldataload(add(_selsData, mul(_si, 0x20))), 0xffffffff00000000000000000000000000000000000000000000000000000000)');
+    // bytes32 oldFacet = ds.facets[selector]; require(address(bytes20(oldFacet)) == address(0))
+    L(`      mstore(0x00, _sel)`);
+    L(`      mstore(0x20, ${FACETS})`);
+    L('      let _fSlot := keccak256(0x00, 0x40)');
+    L('      let _oldVal := sload(_fSlot)');
+    L('      if shr(96, _oldVal) {');
+    for (const l of this.lowerErrorString(
+      new TextEncoder().encode("LibDiamondCut: Can't add function that already exists"),
+    ))
+      L('        ' + l);
+    L('      }');
+    // facets[sel] = bytes20(facet) | bytes32(selectorCount): address high 20 bytes (shl 96), count in low.
+    L('      sstore(_fSlot, or(shl(96, _facetAddr), _selectorCount))');
+    // pack the selector into the working slot: pos = (count & 7) << 5
+    L('      let _pos := shl(5, and(_selectorCount, 7))');
+    L(`      _selectorSlot := or(and(_selectorSlot, not(shr(_pos, ${CLEAR_SEL}))), shr(_pos, _sel))`);
+    // if pos == 224 (8th selector) flush selectorSlots[count>>3] = slot, reset slot.
+    L('      if eq(_pos, 224) {');
+    L(`        mstore(0x00, shr(3, _selectorCount))`);
+    L(`        mstore(0x20, ${SLOTS})`);
+    L('        sstore(keccak256(0x00, 0x40), _selectorSlot)');
+    L('        _selectorSlot := 0');
+    L('      }');
+    L('      _selectorCount := add(_selectorCount, 1)');
+    L('    }');
+    L('  }');
+    // ---- REPLACE (action 1) ----
+    L('  case 1 {');
+    // enforceHasContractCode(facet, "LibDiamondCut: Replace facet has no code")
+    L('    if iszero(extcodesize(_facetAddr)) {');
+    for (const l of this.lowerErrorString(new TextEncoder().encode('LibDiamondCut: Replace facet has no code')))
+      L('      ' + l);
+    L('    }');
+    L('    let _si := 0');
+    L('    for { } lt(_si, _selsLen) { _si := add(_si, 1) } {');
+    L('      let _sel := and(calldataload(add(_selsData, mul(_si, 0x20))), 0xffffffff00000000000000000000000000000000000000000000000000000000)');
+    L(`      mstore(0x00, _sel)`);
+    L(`      mstore(0x20, ${FACETS})`);
+    L('      let _fSlot := keccak256(0x00, 0x40)');
+    L('      let _oldVal := sload(_fSlot)');
+    L('      let _oldFacet := shr(96, _oldVal)');
+    // mudgen REPLACE require order: immutable, then same-function, then doesn't-exist.
+    L('      if eq(_oldFacet, address()) {');
+    for (const l of this.lowerErrorString(new TextEncoder().encode("LibDiamondCut: Can't replace immutable function")))
+      L('        ' + l);
+    L('      }');
+    L('      if eq(_oldFacet, _facetAddr) {');
+    for (const l of this.lowerErrorString(
+      new TextEncoder().encode("LibDiamondCut: Can't replace function with same function"),
+    ))
+      L('        ' + l);
+    L('      }');
+    L('      if iszero(_oldFacet) {');
+    for (const l of this.lowerErrorString(
+      new TextEncoder().encode("LibDiamondCut: Can't replace function that doesn't exist"),
+    ))
+      L('        ' + l);
+    L('      }');
+    // facets[sel] = (oldVal & CLEAR_ADDRESS_MASK) | bytes20(facet): keep low position, swap high address.
+    L(`      sstore(_fSlot, or(and(_oldVal, ${CLEAR_ADDR}), shl(96, _facetAddr)))`);
+    L('    }');
+    L('  }');
+    // ---- REMOVE (action 2) ----
+    L('  case 2 {');
+    // require(_newFacetAddress == address(0))
+    L('    if _facetAddr {');
+    for (const l of this.lowerErrorString(new TextEncoder().encode('LibDiamondCut: Remove facet address must be address(0)')))
+      L('      ' + l);
+    L('    }');
+    L('    let _selectorSlotCount := shr(3, _selectorCount)');
+    L('    let _selectorInSlotIndex := and(_selectorCount, 7)');
+    L('    let _si := 0');
+    L('    for { } lt(_si, _selsLen) { _si := add(_si, 1) } {');
+    // step the cursor back
+    L('      switch _selectorInSlotIndex');
+    L('      case 0 {');
+    L('        _selectorSlotCount := sub(_selectorSlotCount, 1)');
+    L(`        mstore(0x00, _selectorSlotCount)`);
+    L(`        mstore(0x20, ${SLOTS})`);
+    L('        _selectorSlot := sload(keccak256(0x00, 0x40))');
+    L('        _selectorInSlotIndex := 7');
+    L('      }');
+    L('      default { _selectorInSlotIndex := sub(_selectorInSlotIndex, 1) }');
+    L('      let _sel := and(calldataload(add(_selsData, mul(_si, 0x20))), 0xffffffff00000000000000000000000000000000000000000000000000000000)');
+    // read the removed selector's facets record
+    L(`      mstore(0x00, _sel)`);
+    L(`      mstore(0x20, ${FACETS})`);
+    L('      let _fSlot := keccak256(0x00, 0x40)');
+    L('      let _oldVal := sload(_fSlot)');
+    L('      let _oldFacet := shr(96, _oldVal)');
+    L('      if iszero(_oldFacet) {');
+    for (const l of this.lowerErrorString(
+      new TextEncoder().encode("LibDiamondCut: Can't remove function that doesn't exist"),
+    ))
+      L('        ' + l);
+    L('      }');
+    L('      if eq(_oldFacet, address()) {');
+    for (const l of this.lowerErrorString(new TextEncoder().encode("LibDiamondCut: Can't remove immutable function")))
+      L('        ' + l);
+    L('      }');
+    // lastSelector = bytes4(selectorSlot << (selectorInSlotIndex << 5)) (left-aligned)
+    L('      let _lastSelector := and(shl(shl(5, _selectorInSlotIndex), _selectorSlot), 0xffffffff00000000000000000000000000000000000000000000000000000000)');
+    // if lastSelector != sel: move the last selector record over the removed one
+    L('      if iszero(eq(_lastSelector, _sel)) {');
+    // facets[lastSelector] = (oldVal & CLEAR_ADDRESS_MASK) | bytes20(facets[lastSelector])
+    L(`        mstore(0x00, _lastSelector)`);
+    L(`        mstore(0x20, ${FACETS})`);
+    L('        let _lastSlot := keccak256(0x00, 0x40)');
+    L(`        sstore(_lastSlot, or(and(_oldVal, ${CLEAR_ADDR}), and(sload(_lastSlot), shl(96, ${ADDR}))))`);
+    L('      }');
+    // delete facets[sel]
+    L('      sstore(_fSlot, 0)');
+    // recover the removed selector's old position from the LOW bytes of oldVal (uint16)
+    L('      let _oldSelectorCount := and(_oldVal, 0xffff)');
+    L('      let _oldSelectorsSlotCount := shr(3, _oldSelectorCount)');
+    L('      let _oldSelectorInSlotPosition := shl(5, and(_oldSelectorCount, 7))');
+    // write lastSelector into that gap
+    L('      switch eq(_oldSelectorsSlotCount, _selectorSlotCount)');
+    L('      case 0 {'); // gap is in a different (already-stored) slot
+    L(`        mstore(0x00, _oldSelectorsSlotCount)`);
+    L(`        mstore(0x20, ${SLOTS})`);
+    L('        let _gapSlotKey := keccak256(0x00, 0x40)');
+    L('        let _oldSlotVal := sload(_gapSlotKey)');
+    L(`        _oldSlotVal := or(and(_oldSlotVal, not(shr(_oldSelectorInSlotPosition, ${CLEAR_SEL}))), shr(_oldSelectorInSlotPosition, _lastSelector))`);
+    L('        sstore(_gapSlotKey, _oldSlotVal)');
+    L('      }');
+    L('      default {'); // gap is in the in-memory working slot
+    L(`        _selectorSlot := or(and(_selectorSlot, not(shr(_oldSelectorInSlotPosition, ${CLEAR_SEL}))), shr(_oldSelectorInSlotPosition, _lastSelector))`);
+    L('      }');
+    // if the trailing slot is now empty, delete it and reset the working slot
+    L('      if iszero(_selectorInSlotIndex) {');
+    L(`        mstore(0x00, _selectorSlotCount)`);
+    L(`        mstore(0x20, ${SLOTS})`);
+    L('        sstore(keccak256(0x00, 0x40), 0)');
+    L('        _selectorSlot := 0');
+    L('      }');
+    L('    }');
+    L('    _selectorCount := add(mul(_selectorSlotCount, 8), _selectorInSlotIndex)');
+    L('  }');
+    // ---- default: invalid action ----
+    L('  default {');
+    for (const l of this.lowerErrorString(new TextEncoder().encode('LibDiamondCut: Incorrect FacetCutAction')))
+      L('    ' + l);
+    L('  }');
+    L('}');
+    // after the loop: write selectorCount if changed; flush the partially-filled last slot.
+    L('if iszero(eq(_selectorCount, _originalCount)) {');
+    L(`  sstore(${COUNT}, _selectorCount)`);
+    L('}');
+    L('if gt(and(_selectorCount, 7), 0) {');
+    L(`  mstore(0x00, shr(3, _selectorCount))`);
+    L(`  mstore(0x20, ${SLOTS})`);
+    L('  sstore(keccak256(0x00, 0x40), _selectorSlot)');
+    L('}');
+  }
+
+  /** The common diamond-2 loupe scan, emitted into `out`: iterates the packed selectorSlots in order and,
+   *  for each installed selector, sets `_sel` (left-aligned bytes4) and `_fa` (facet address) and runs the
+   *  caller-supplied body lines. Uses fresh locals prefixed `_lp`. The body sees `_sel`, `_fa`, `_idx`
+   *  (0-based selector index). Mirrors mudgen's `for slotIndex { slot=selectorSlots[slotIndex]; for j 0..7 }`. */
+  private emitPackedLoupeScan(out: string[], body: string[]): void {
+    const SLOTS = String(this.diamondSlot('_selectorSlots'));
+    const FACETS = String(this.diamondSlot('_facets'));
+    const COUNT = String(this.diamondSlot('_selectorCount'));
+    const ADDR = '0xffffffffffffffffffffffffffffffffffffffff';
+    const L = (s: string) => out.push(s);
+    L(`let _lpCount := and(sload(${COUNT}), 0xffff)`);
+    L('let _idx := 0'); // 0-based global selector index
+    L('let _slotIndex := 0');
+    L('for { } lt(_idx, _lpCount) { _slotIndex := add(_slotIndex, 1) } {');
+    L(`  mstore(0x00, _slotIndex)`);
+    L(`  mstore(0x20, ${SLOTS})`);
+    L('  let _slot := sload(keccak256(0x00, 0x40))');
+    L('  let _j := 0');
+    L('  for { } and(lt(_j, 8), lt(_idx, _lpCount)) { _j := add(_j, 1) } {');
+    L('    let _sel := and(shl(shl(5, _j), _slot), 0xffffffff00000000000000000000000000000000000000000000000000000000)');
+    L(`    mstore(0x00, _sel)`);
+    L(`    mstore(0x20, ${FACETS})`);
+    L(`    let _fa := and(shr(96, sload(keccak256(0x00, 0x40))), ${ADDR})`);
+    for (const b of body) L('    ' + b);
+    L('    _idx := add(_idx, 1)');
+    L('  }');
+    L('}');
+  }
+
+  /** facets() -> Facet[] (diamond-2 reconstruct). Over-allocate Facet[](selectorCount) + per-facet selector
+   *  arrays at selectorCount each, linear-search-dedupe facet addresses while scanning the packed slots,
+   *  then build the ABI return blob with the REAL (shrunk) lengths. First-seen facet order; selectors in
+   *  scan order. Byte-identical to mudgen's DiamondLoupeFacet.facets() (the mstore-shrink result). */
+  private lowerDiamondFacetsReturnPacked(out: string[]): void {
+    const L = (s: string) => out.push(s);
+    const COUNT = String(this.diamondSlot('_selectorCount'));
+    L('// facets() packed: reconstruct facet grouping in memory, then ABI-encode Facet[]');
+    L(`let _n := and(sload(${COUNT}), 0xffff)`);
+    // Scratch tables in memory (above the return blob region). We use the free pointer as a work arena:
+    //   _addrs : address[_n]   (distinct facet addresses, first-seen order)        -> _work + 0
+    //   _counts: uint[_n]      (selector count per distinct facet)                  -> _work + _n*0x20
+    //   _sels  : bytes4[_n*_n] (selectors per facet, row-major: facet f row at f*_n) -> _work + 2*_n*0x20
+    L('let _work := mload(0x40)');
+    L('let _addrs := _work');
+    L('let _counts := add(_work, mul(_n, 0x20))');
+    L('let _sels := add(_work, mul(_n, 0x40))');
+    L('let _numFacets := 0');
+    // scan
+    const body: string[] = [];
+    body.push('let _fi := 0');
+    body.push('let _found := 0');
+    body.push('for { } lt(_fi, _numFacets) { _fi := add(_fi, 1) } {');
+    body.push('  if eq(mload(add(_addrs, mul(_fi, 0x20))), _fa) { _found := 1 break }');
+    body.push('}');
+    body.push('if iszero(_found) {');
+    body.push('  mstore(add(_addrs, mul(_numFacets, 0x20)), _fa)');
+    body.push('  mstore(add(_counts, mul(_numFacets, 0x20)), 0)');
+    body.push('  _fi := _numFacets');
+    body.push('  _numFacets := add(_numFacets, 1)');
+    body.push('}');
+    // append _sel to facet _fi's row at offset (count)
+    body.push('let _c := mload(add(_counts, mul(_fi, 0x20)))');
+    body.push('mstore(add(_sels, mul(add(mul(_fi, _n), _c), 0x20)), _sel)');
+    body.push('mstore(add(_counts, mul(_fi, 0x20)), add(_c, 1))');
+    this.emitPackedLoupeScan(out, body);
+    // build the ABI return blob AFTER the scratch arena (so we don't clobber it mid-encode).
+    L('let _ret := add(_sels, mul(mul(_n, _n), 0x20))');
+    L('mstore(_ret, 0x20)'); // offset to the array
+    L('let _arr := add(_ret, 0x20)');
+    L('mstore(_arr, _numFacets)');
+    L('let _head := add(_arr, 0x20)');
+    L('let _cursor := add(_head, mul(_numFacets, 0x20))');
+    L('let _f := 0');
+    L('for { } lt(_f, _numFacets) { _f := add(_f, 1) } {');
+    L('  let _fAddr := mload(add(_addrs, mul(_f, 0x20)))');
+    L('  let _fCount := mload(add(_counts, mul(_f, 0x20)))');
+    L('  mstore(add(_head, mul(_f, 0x20)), sub(_cursor, _head))'); // head[f] rel to head table start
+    L('  mstore(_cursor, _fAddr)'); // tuple head: [facetAddress][offset 0x40]
+    L('  mstore(add(_cursor, 0x20), 0x40)');
+    L('  mstore(add(_cursor, 0x40), _fCount)'); // bytes4[] tail: [len][elements]
+    L('  let _selBase := add(_cursor, 0x60)');
+    L('  let _k := 0');
+    L('  for { } lt(_k, _fCount) { _k := add(_k, 1) } {');
+    L('    mstore(add(_selBase, mul(_k, 0x20)), mload(add(_sels, mul(add(mul(_f, _n), _k), 0x20))))');
+    L('  }');
+    L('  _cursor := add(_cursor, add(0x60, mul(_fCount, 0x20)))');
+    L('}');
+    L('return(_ret, sub(_cursor, _ret))');
+  }
+
+  /** facetFunctionSelectors(facet) -> bytes4[] (diamond-2): scan the packed slots, collect the selectors
+   *  whose facet == the argument, in scan order. Byte-identical to mudgen's mstore-shrunk bytes4[]. */
+  private lowerDiamondFacetSelectorsReturnPacked(facet: Expr, ctx: LowerCtx, out: string[]): void {
+    const ADDR = '0xffffffffffffffffffffffffffffffffffffffff';
+    const L = (s: string) => out.push(s);
+    L('// facetFunctionSelectors(facet) packed: collect selectors whose facet == arg');
+    const fa = this.fresh();
+    L(`let ${fa} := and(${this.lowerExpr(facet, ctx, out)}, ${ADDR})`);
+    L('let _ret := mload(0x40)');
+    L('mstore(_ret, 0x20)'); // offset to the bytes4[]
+    L('let _arr := add(_ret, 0x20)'); // [len][elements]
+    L('let _data := add(_arr, 0x20)');
+    L('let _count := 0');
+    const body: string[] = [];
+    body.push(`if eq(_fa, ${fa}) {`);
+    body.push('  mstore(add(_data, mul(_count, 0x20)), _sel)');
+    body.push('  _count := add(_count, 1)');
+    body.push('}');
+    this.emitPackedLoupeScan(out, body);
+    L('mstore(_arr, _count)');
+    L('return(_ret, add(0x40, mul(_count, 0x20)))');
+  }
+
+  /** facetAddresses() -> address[] (diamond-2): scan the packed slots, dedupe facet addresses (linear
+   *  search), first-seen order. Byte-identical to mudgen's mstore-shrunk address[]. */
+  private lowerDiamondFacetAddressesReturnPacked(out: string[]): void {
+    const L = (s: string) => out.push(s);
+    L('// facetAddresses() packed: dedupe facet addresses in first-seen scan order');
+    L('let _ret := mload(0x40)');
+    L('mstore(_ret, 0x20)');
+    L('let _arr := add(_ret, 0x20)');
+    L('let _data := add(_arr, 0x20)');
+    L('let _count := 0');
+    const body: string[] = [];
+    body.push('let _fi := 0');
+    body.push('let _found := 0');
+    body.push('for { } lt(_fi, _count) { _fi := add(_fi, 1) } {');
+    body.push('  if eq(mload(add(_data, mul(_fi, 0x20))), _fa) { _found := 1 break }');
+    body.push('}');
+    body.push('if iszero(_found) {');
+    body.push('  mstore(add(_data, mul(_count, 0x20)), _fa)');
+    body.push('  _count := add(_count, 1)');
+    body.push('}');
+    this.emitPackedLoupeScan(out, body);
+    L('mstore(_arr, _count)');
+    L('return(_ret, add(0x40, mul(_count, 0x20)))');
   }
 
   /** Phase 2d (beacon proxy): lower proxyInitBeacon(beacon, initData), byte-identical to the OZ BeaconProxy

@@ -21,7 +21,7 @@ export interface DiamondExpansion {
   diagnostics: PreDiagnostic[];
   /** The diamond's name (for the analyzer/yul to flag the deployed contract). */
   name?: string;
-  variant?: 'array';
+  variant?: 'array' | 'packed';
 }
 
 export interface PreDiagnostic {
@@ -72,8 +72,8 @@ export function expandDiamond(source: string, fileName: string): DiamondExpansio
   if (decoratorNamesOf(cls).includes('contract'))
     err(cls, 'JETH411', 'a @diamond class must not also be @contract (the @contract surface is synthesized)');
 
-  // variant arg: @diamond('array') | @diamond() | @diamond. (frozen is a follow-up; reject for now.)
-  let variant: 'array' = 'array';
+  // variant arg: @diamond('array') | @diamond('packed') | @diamond() | @diamond. (frozen is a follow-up.)
+  let variant: 'array' | 'packed' = 'array';
   const dcall = diamondCallOf(cls);
   if (dcall && dcall.arguments.length > 0) {
     if (dcall.arguments.length > 1) {
@@ -82,7 +82,8 @@ export function expandDiamond(source: string, fileName: string): DiamondExpansio
       const a = dcall.arguments[0]!;
       if (!ts.isStringLiteralLike(a)) err(a, 'JETH412', "@diamond's model argument must be a string literal");
       else if (a.text === 'array') variant = 'array';
-      else err(a, 'JETH412', `unknown @diamond model '${a.text}' (only 'array' is supported)`);
+      else if (a.text === 'packed') variant = 'packed';
+      else err(a, 'JETH412', `unknown @diamond model '${a.text}' (only 'array' and 'packed' are supported)`);
     }
   }
 
@@ -123,7 +124,7 @@ export function expandDiamond(source: string, fileName: string): DiamondExpansio
   const ctorText = ctorNode ? ctorNode.getText(sf) : 'constructor(owner: address) { diamondInit(owner); }';
 
   // ---- build the synthesized contract source ----
-  const body = synthesizeDiamondBody(name, ctorText);
+  const body = variant === 'packed' ? synthesizeDiamondBodyPacked(name, ctorText) : synthesizeDiamondBody(name, ctorText);
 
   // Replace the `@diamond` class span (including its leading decorators) with the synthesized contract.
   const replaceStart = cls.getStart(sf); // start of decorators
@@ -265,6 +266,63 @@ function synthesizeDiamondBody(name: string, ctorText: string): { contract: stri
   const helpers = `@struct class __DiamondFAP { facetAddress: address; functionSelectorPosition: u96; }
 @struct class __DiamondFFS { functionSelectors: bytes4[]; facetAddressPosition: u256; }
 @struct class __DiamondFacet { facetAddress: address; functionSelectors: bytes4[]; }
+@struct class __DiamondFacetCut { facetAddress: address; action: u8; functionSelectors: bytes4[]; }`;
+
+  return { contract, helpers };
+}
+
+/** The synthesized @diamond('packed') @contract body + helper structs (diamond-2 / diamond-2-hardhat
+ *  layout). The diamond-2 storage struct lives at the SAME raw keccak base as the array model:
+ *    mapping(bytes4 => bytes32) facets;          // base+0  (facet addr in HIGH 20 bytes | uint16 pos LOW)
+ *    mapping(uint256 => bytes32) selectorSlots;  // base+1  (8 packed bytes4 selectors per slot)
+ *    uint16 selectorCount;                       // base+2  (right-aligned, alone in its slot)
+ *    mapping(bytes4 => bool) supportedInterfaces;// base+3
+ *    address contractOwner;                      // base+4
+ *  diamondCut and all 4 loupe functions route through raw-Yul builtins (src/yul.ts) because the packed
+ *  bit-math (CLEAR_ADDRESS_MASK/CLEAR_SELECTOR_MASK, slot flush on the 8th selector, swap-into-gap
+ *  removal) and the loupe's over-allocate-then-mstore-shrink reconstruction are not expressible in plain
+ *  JETH. Everything else (owner gate, emit DiamondCut, the _init delegatecall, ERC-165, ownership,
+ *  diamondInit) is byte-identical to the array model and reuses the same machinery. */
+function synthesizeDiamondBodyPacked(name: string, ctorText: string): { contract: string; helpers: string } {
+  const NS = `@storage('${DIAMOND_STORAGE_NS}', 'raw')`;
+  const contract = `@contract class ${name} {
+  ${NS} _facets: mapping<bytes4, bytes32>;
+  ${NS} _selectorSlots: mapping<u256, bytes32>;
+  ${NS} _selectorCount: u16;
+  ${NS} _supportedInterfaces: mapping<bytes4, bool>;
+  ${NS} _contractOwner: address;
+
+  @event OwnershipTransferred(@indexed previousOwner: address, @indexed newOwner: address): void;
+  @event DiamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void;
+
+  ${ctorText}
+
+  @external @view owner(): address { return this._contractOwner; }
+  @external transferOwnership(newOwner: address): void {
+    require(msg.sender == this._contractOwner, "LibDiamond: Must be contract owner");
+    const __prev: address = this._contractOwner;
+    this._contractOwner = newOwner;
+    emit(OwnershipTransferred(__prev, newOwner));
+  }
+
+  @external @view supportsInterface(__id: bytes4): bool { return this._supportedInterfaces[__id]; }
+
+  @external @view facets(): __DiamondFacet[] { return __diamondFacetsPacked(); }
+  @external @view facetFunctionSelectors(__facet: address): bytes4[] { return __diamondFacetSelectorsPacked(__facet); }
+  @external @view facetAddresses(): address[] { return __diamondFacetAddressesPacked(); }
+  @external @view facetAddress(__functionSelector: bytes4): address {
+    return address(bytes20(this._facets[__functionSelector]));
+  }
+
+  @external diamondCut(_diamondCut: __DiamondFacetCut[], _init: address, _calldata: bytes): void {
+    require(msg.sender == this._contractOwner, "LibDiamond: Must be contract owner");
+    __diamondCutPacked();
+    emit(DiamondCut(_diamondCut, _init, _calldata));
+    __diamondDelegateInit(_init, _calldata);
+  }
+}`;
+
+  const helpers = `@struct class __DiamondFacet { facetAddress: address; functionSelectors: bytes4[]; }
 @struct class __DiamondFacetCut { facetAddress: address; action: u8; functionSelectors: bytes4[]; }`;
 
   return { contract, helpers };

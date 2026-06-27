@@ -261,7 +261,7 @@ export class Analyzer {
     private readonly diags: DiagnosticBag,
     // Phase 3: set when this compilation unit's deployed contract is a synthesized @diamond (the source
     // was expanded from `@diamond('array')`); marks the ContractIR so emitRuntime adds the router.
-    private readonly diamond?: { name: string; variant: 'array' },
+    private readonly diamond?: { name: string; variant: 'array' | 'packed' },
   ) {}
 
   // ---- lexical scope stack -------------------------------------------------
@@ -10829,9 +10829,40 @@ export class Analyzer {
       this.currentWritesState = true; // delegatecall may mutate -> reject @view/@pure
       return { kind: 'diamondDelegateInit', type: VOID, init, data };
     }
-    // __diamondFacets()
+    // --- diamond-2 (packed) builtins ---
+    if (callee === '__diamondCutPacked') {
+      if (node.arguments.length !== 0) {
+        this.diags.error(node, 'JETH414', '__diamondCutPacked() takes no arguments');
+        return undefined;
+      }
+      this.currentWritesState = true; // the whole add/replace/remove loop SSTOREs the packed storage
+      return { kind: 'diamondCutPacked', type: VOID };
+    }
+    if (callee === '__diamondFacetSelectorsPacked') {
+      if (node.arguments.length !== 1) {
+        this.diags.error(node, 'JETH414', '__diamondFacetSelectorsPacked(facet) takes exactly one argument');
+        return undefined;
+      }
+      const f = this.checkExpr(node.arguments[0]!, ADDRESS);
+      if (!f) return undefined;
+      this.currentReadsState = true;
+      return {
+        kind: 'diamondFacetSelectorsPacked',
+        type: { kind: 'array', element: { kind: 'bytesN', size: 4 }, length: undefined },
+        facet: f,
+      };
+    }
+    if (callee === '__diamondFacetAddressesPacked') {
+      if (node.arguments.length !== 0) {
+        this.diags.error(node, 'JETH414', '__diamondFacetAddressesPacked() takes no arguments');
+        return undefined;
+      }
+      this.currentReadsState = true;
+      return { kind: 'diamondFacetAddressesPacked', type: { kind: 'array', element: ADDRESS, length: undefined } };
+    }
+    // __diamondFacets() and __diamondFacetsPacked() both return __DiamondFacet[]
     if (node.arguments.length !== 0) {
-      this.diags.error(node, 'JETH414', '__diamondFacets() takes no arguments');
+      this.diags.error(node, 'JETH414', `${callee}() takes no arguments`);
       return undefined;
     }
     const facetStruct = this.structsByName.get('__DiamondFacet');
@@ -10840,7 +10871,9 @@ export class Analyzer {
       return undefined;
     }
     this.currentReadsState = true; // reads the diamond-storage arrays -> not @pure
-    return { kind: 'diamondFacets', type: { kind: 'array', element: facetStruct, length: undefined } };
+    const facetArr: JethType = { kind: 'array', element: facetStruct, length: undefined };
+    if (callee === '__diamondFacetsPacked') return { kind: 'diamondFacetsPacked', type: facetArr };
+    return { kind: 'diamondFacets', type: facetArr };
   }
 
   private checkAddressCall(node: ts.CallExpression): Expr | undefined {
@@ -12667,7 +12700,15 @@ export class Analyzer {
         return this.checkProxyBuiltin(node, callee);
       }
       // --- Phase 3 DIAMOND: synthesis-only builtins (only valid inside a synthesized @diamond). ---
-      if (callee === 'diamondInit' || callee === '__diamondDelegateInit' || callee === '__diamondFacets') {
+      if (
+        callee === 'diamondInit' ||
+        callee === '__diamondDelegateInit' ||
+        callee === '__diamondFacets' ||
+        callee === '__diamondCutPacked' ||
+        callee === '__diamondFacetsPacked' ||
+        callee === '__diamondFacetSelectorsPacked' ||
+        callee === '__diamondFacetAddressesPacked'
+      ) {
         return this.checkDiamondBuiltin(node, callee);
       }
       // `Color(x)` is an integer -> enum range-checked conversion; an enum is a branded uint8, so
@@ -14395,7 +14436,7 @@ export class Analyzer {
 export function analyze(
   sourceFile: ts.SourceFile,
   diags: DiagnosticBag,
-  diamond?: { name: string; variant: 'array' },
+  diamond?: { name: string; variant: 'array' | 'packed' },
 ): ContractIR | undefined {
   return new Analyzer(sourceFile, diags, diamond).analyze();
 }

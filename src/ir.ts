@@ -178,6 +178,14 @@ export type Expr =
   | { kind: 'diamondDelegateInit'; type: JethType; init: Expr; data: Expr }
   // the facets() loupe: build a Facet[] (address + bytes4[]) from the split diamond-3 storage (raw Yul)
   | { kind: 'diamondFacets'; type: JethType }
+  // --- Phase 3 DIAMOND (packed / diamond-2 layout): synthesis-only builtins for the @diamond('packed') model ---
+  // __diamondCutPacked(): void; the whole diamond-2 add/replace/remove loop (reads _diamondCut from calldata,
+  // packs 8 selectors/slot, CLEAR_ADDRESS_MASK/CLEAR_SELECTOR_MASK + swap-into-gap removal) in raw Yul.
+  | { kind: 'diamondCutPacked'; type: JethType }
+  // The four diamond-2 loupe reconstructors (rebuild facet grouping in memory from the packed selectorSlots).
+  | { kind: 'diamondFacetsPacked'; type: JethType } // facets() -> Facet[]
+  | { kind: 'diamondFacetSelectorsPacked'; type: JethType; facet: Expr } // facetFunctionSelectors(addr) -> bytes4[]
+  | { kind: 'diamondFacetAddressesPacked'; type: JethType } // facetAddresses() -> address[]
   // --- Phase 6: external low-level calls ---
   // <addr>.code -> bytes (EXTCODESIZE + EXTCODECOPY); <addr>.codehash -> bytes32 (EXTCODEHASH)
   | { kind: 'extCode'; type: JethType; addr: Expr; member: 'code' | 'codehash' }
@@ -650,7 +658,8 @@ export interface ContractIR {
   // selector-routed delegatecall fallback (the router) after the diamond's own selector switch. The
   // facets() loupe is emitted as a raw-Yul dispatch case (it builds a Facet[] from the split storage).
   isDiamond?: boolean;
-  diamondVariant?: 'array'; // the storage layout model (diamond-1/3 array-storing). Future: 'packed'.
+  diamondVariant?: 'array' | 'packed'; // the storage layout model: 'array' (diamond-1/3 array-storing) or
+  // 'packed' (diamond-2: mapping(bytes4=>bytes32) facets + 8-selectors-per-slot selectorSlots + uint16 count).
   // The raw diamond-storage struct base = keccak256("diamond.standard.diamond.storage") and the field
   // SLOT (base + relative slot) of selectorToFacetAndPosition, used by the router's facet lookup.
   diamondStorageBase?: bigint;
