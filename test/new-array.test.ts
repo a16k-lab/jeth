@@ -167,6 +167,13 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
     expect(jethAccepts(ok('let a: bool[] = new Array<bool>(n); return abi.encode(a);'))).toBe(true);
     expect(jethAccepts(ok('let a: address[] = new Array<address>(n); return abi.encode(a);'))).toBe(true);
     expect(jethAccepts(ok('let a: bytes4[] = new Array<bytes4>(n); return abi.encode(a);'))).toBe(true);
+    // Residual B: new Array<bytes>(n) / new Array<string>(n) (B2, zero-init each element to an empty
+    // blob) and new Array<P>(n) for a STATIC struct P (B1) are now accepted, byte-identical to solc.
+    expect(jethAccepts(ok('let a: bytes[] = new Array<bytes>(n); return abi.encode(a);'))).toBe(true);
+    expect(jethAccepts(ok('let a: string[] = new Array<string>(n); return abi.encode(a);'))).toBe(true);
+    expect(
+      jethAccepts(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(n: u256): bytes { let a: P[] = new Array<P>(n); return abi.encode(a); } }`),
+    ).toBe(true);
   });
 
   it('cleanly rejects (no crash) unsupported new Array forms', () => {
@@ -177,9 +184,13 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
         `@contract class C { @external @pure f(s: i128): bytes { let a: u256[] = new Array<u256>(s); return abi.encode(a); } }`,
       ).length > 0,
     ).toBe(true);
-    // string / bytes / nested / struct element -> clean reject (safe subset), NOT JETH900
-    expect(jethCodes(f('let a: string[] = new Array<string>(n); return abi.encode(a);'))).not.toContain('JETH900');
-    expect(jethCodes(f('let a: string[] = new Array<string>(n); return abi.encode(a);')).length > 0).toBe(true);
+    // Residual-B DEFERRED element kinds (string[][] nested aggregate-leaf, a DYNAMIC struct element)
+    // -> clean reject (safe subset), NOT JETH900. (Flat bytes[]/string[]/P[] are now ACCEPTED above.)
+    expect(jethCodes(f('let a: string[][] = new Array<string[]>(n); return abi.encode(a);'))).not.toContain('JETH900');
+    expect(jethCodes(f('let a: string[][] = new Array<string[]>(n); return abi.encode(a);')).length > 0).toBe(true);
+    expect(
+      jethCodes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(n: u256): bytes { let a: P[] = new Array<P>(n); return abi.encode(a); } }`).length > 0,
+    ).toBe(true);
     expect(jethCodes(f('let a: u256[][] = new Array<u256[]>(n); return abi.encode(a);'))).not.toContain('JETH900');
     // wrong arity -> JETH363, no crash
     expect(jethCodes(f('let a: u256[] = new Array<u256>(); return abi.encode(a);'))).toContain('JETH363');

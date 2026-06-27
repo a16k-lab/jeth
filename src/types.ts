@@ -323,6 +323,22 @@ export function isNestedValueArray(t: JethType): boolean {
   return isValueLeafArray(t);
 }
 
+/** Residual B (this pass) scope: a FLAT DYNAMIC array `E[]` whose element `E` is itself
+ *  an aggregate or byte-sequence leaf that the nested-memory codec can lay out, but which
+ *  isNestedValueArray excludes (no further array nesting, and not a pure value leaf):
+ *   - B1: a STATIC struct element (`P[]`, P all value/static fields): each element is an
+ *     inline abiHeadWords(P) block in the image and an inline ABI block in the encoding.
+ *   - B2: a bytes/string element (`bytes[]`/`string[]`): each element is one absolute-pointer
+ *     word to a `[len][data]` blob.
+ *  DEFERRED (kept rejecting): a DYNAMIC struct element (P with a bytes/string/dyn-array field),
+ *  any nesting (`P[][]`, `bytes[][]`), and any FIXED outer (`Arr<P,N>`, `Arr<bytes,N>`). */
+export function isAggregateLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length !== undefined) return false; // flat DYNAMIC outer only
+  const e = t.element;
+  if (e.kind === 'struct') return isStaticType(e); // B1: static struct element
+  return isBytesLike(e); // B2: bytes/string element
+}
+
 /** A memory array (any mix of dynamic/fixed levels) whose ultimate leaf elements are all
  *  VALUE types. The base of isNestedValueArray's recursion: `u256[]`, `Arr<u256,2>`,
  *  `u256[][]`, `Arr<u256[],2>`, etc. all qualify; anything with a bytes/string/struct

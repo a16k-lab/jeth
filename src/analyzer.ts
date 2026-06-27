@@ -28,6 +28,7 @@ import {
   isDynamicType,
   isBytesLike,
   isNestedValueArray,
+  isAggregateLeafArray,
   isValueLeafArray,
   storageByteSize,
   storageSlotCount,
@@ -7281,6 +7282,48 @@ export class Analyzer {
       out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
+    // Residual B: a FLAT DYNAMIC array whose element is a STATIC STRUCT (P[]) or bytes/string
+    // (bytes[]/string[]) as a MEMORY local. Reuses the nested-memory codec (buildNestedMemArrayLit
+    // routes a static-struct element through writeAggToMem, a bytes/string element through a blob
+    // pointer; abiEncFromMem encodes both). Registered as a memArray (dynamic outer, [len] header).
+    // Construction from an array literal or new Array<E>(n); element/field/length/return/abi.encode
+    // go through the codec. A whole-array alias/copy is still a later step (stays JETH200).
+    if (declared.kind === 'array' && isAggregateLeafArray(declared)) {
+      if (this.inCurrentScope(decl.name.text)) {
+        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
+        return;
+      }
+      if (!decl.initializer) {
+        this.diags.error(
+          decl,
+          'JETH200',
+          `an aggregate-array memory local must be initialized (e.g. let xs: ${displayName(declared)} = [...] or = new Array<...>(n))`,
+        );
+        return;
+      }
+      const e = this.checkExpr(decl.initializer, declared);
+      if (!e) return;
+      if (!typesEqual(e.type, declared)) {
+        this.diags.error(
+          decl.initializer,
+          'JETH085',
+          `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`,
+        );
+        return;
+      }
+      if (e.kind !== 'arrayLit' && e.kind !== 'newArray') {
+        this.diags.error(
+          decl.initializer,
+          'JETH200',
+          `an aggregate-array memory local must be initialized from an array literal or new Array<...>(n) (copying a whole array from another source is not supported yet)`,
+        );
+        return;
+      }
+      this.declareLocal(decl.name.text, declared);
+      this.memArrayLocals.add(decl.name.text);
+      out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
+      return;
+    }
     // A value-element dynamic-array local is a MEMORY array (a pointer to [len][elems]);
     // bytes/string and aggregate-element memory locals are a later step.
     if (declared.kind === 'array' && !(declared.length === undefined && isStaticValueType(declared.element))) {
@@ -9896,7 +9939,7 @@ export class Analyzer {
         return {
           base: { kind: 'memArray', varName: node.text },
           elem: t.element,
-          memStaticElem: t.element.kind === 'array' ? isStaticType(t.element) : undefined,
+          memStaticElem: this.memElemStatic(t.element),
         };
       }
       // a FIXED nested-value-array MEMORY local registered as a memAggregate (Arr<u256[],N>,
@@ -10194,13 +10237,29 @@ export class Analyzer {
    *  value-array LOCAL: a dynamic-outer memArray local whose element is itself an array (u256[][]),
    *  or a fixed memAggregate nested-value-array local (Arr<Arr<u256,2>,2>, Arr<u256[],N>). Used to
    *  route the nested element read through resolveArrayExpr's chaining path. */
+  /** Whether a memory-array element is an INLINE sub-image (addressed by base + i*ew) vs a
+   *  single word. A static ARRAY or static STRUCT element is inline (memStaticElem = true); a
+   *  bytes/string element is a single absolute-pointer word (false); a value element is a single
+   *  value word (undefined - lowerArrayGet's value branch owns it). Drives the codec's inline-base
+   *  vs pointer-load choice for nested / aggregate-leaf memory arrays. */
+  private memElemStatic(elem: JethType): boolean | undefined {
+    if (elem.kind === 'array') return isStaticType(elem);
+    if (elem.kind === 'struct') return isStaticType(elem); // B1: static struct element -> inline base
+    if (isBytesLike(elem)) return false; // B2: bytes/string element -> pointer word
+    return undefined;
+  }
+
   private nestedMemArrayElemAccess(node: ts.Expression): boolean {
     let cur: ts.Expression = node;
     while (ts.isElementAccessExpression(cur) && cur.argumentExpression) cur = cur.expression;
     if (!ts.isIdentifier(cur)) return false;
     const t = this.lookupLocal(cur.text);
     if (!t || t.kind !== 'array') return false;
-    if (this.memArrayLocals.has(cur.text)) return t.element.kind === 'array'; // dynamic outer, nested
+    // dynamic outer: a nested value-array (T[][]), a static-struct element (P[]), or a bytes/string
+    // element (bytes[]/string[]) - all reach the nested-element resolver (the value/struct/bytes
+    // branches there pick the right read).
+    if (this.memArrayLocals.has(cur.text))
+      return t.element.kind === 'array' || t.element.kind === 'struct' || isBytesLike(t.element);
     const at = this.memAggregateLocals.get(cur.text);
     return at !== undefined && at.kind === 'array' && isNestedValueArray(at);
   }
@@ -11984,15 +12043,18 @@ export class Analyzer {
       }
       const elem = resolveType(node.typeArguments[0]!, this.diags, this.structsByName);
       if (!elem) return undefined;
-      // The element may be a VALUE type (flat dynamic array) OR a nested VALUE-leaf array
-      // (new Array<u256[]>(n) -> u256[][], new Array<Arr<u256,2>>(n), ...): solc zero-inits each
-      // outer element to a pointer to a fresh empty inner array. A bytes/string/struct element stays
-      // unsupported here.
-      if (!isStaticValueType(elem) && !isValueLeafArray(elem)) {
+      // The element may be a VALUE type (flat dynamic array), a nested VALUE-leaf array
+      // (new Array<u256[]>(n) -> u256[][], new Array<Arr<u256,2>>(n), ...), a STATIC STRUCT
+      // (Residual B1: new Array<P>(n) -> P[], zero-init each element to an all-zero struct image),
+      // or bytes/string (Residual B2: new Array<bytes>(n) -> bytes[], zero-init each element to an
+      // empty [0] blob). solc zero-inits each outer element accordingly. A DYNAMIC struct element
+      // (P with a bytes/dyn-array field) stays unsupported here.
+      const aggLeafElem = (elem.kind === 'struct' && isStaticType(elem)) || isBytesLike(elem);
+      if (!isStaticValueType(elem) && !isValueLeafArray(elem) && !aggLeafElem) {
         this.diags.error(
           node.typeArguments[0]!,
           'JETH216',
-          `new Array<T>(n) requires a value-type or nested value-array element (uint/int/bool/address/bytesN/enum, or T[]/Arr<T,N> thereof); a ${displayName(elem)} element is not supported`,
+          `new Array<T>(n) requires a value-type, nested value-array, static-struct, or bytes/string element; a ${displayName(elem)} element is not supported`,
         );
         return undefined;
       }
@@ -12018,19 +12080,20 @@ export class Analyzer {
         return undefined;
       }
       // A dynamic array literal of VALUE elements is supported, as is a NESTED value-leaf array
-      // literal (u256[][], Arr<u256[],2>, ...): each inner element is itself checked recursively
-      // against the inner array type below, and the nested memory codec lays it out. A dynamic
-      // literal whose elements are bytes/string/struct (or a string[]/S[] element) stays rejected:
-      // the recursive memory codec only handles value leaves.
-      if (
-        expected.length === undefined &&
-        !isStaticValueType(expected.element) &&
-        !(expected.element.kind === 'array' && isValueLeafArray(expected.element))
-      ) {
+      // literal (u256[][], Arr<u256[],2>, ...): each inner element is checked recursively against the
+      // inner array type below, and the nested memory codec lays it out. Residual B also accepts a
+      // STATIC STRUCT element (P[]) or a bytes/string element (bytes[]/string[]). A DYNAMIC struct
+      // element, or any nested/string[]/S[] element of a non-value-leaf kind, stays rejected.
+      const okElem =
+        isStaticValueType(expected.element) ||
+        (expected.element.kind === 'array' && isValueLeafArray(expected.element)) ||
+        (expected.element.kind === 'struct' && isStaticType(expected.element)) || // B1
+        isBytesLike(expected.element); // B2
+      if (expected.length === undefined && !okElem) {
         this.diags.error(
           node,
           'JETH216',
-          `a dynamic array literal must have value-type or nested value-array elements; a literal of ${displayName(expected.element)} elements is not supported`,
+          `a dynamic array literal must have value-type, nested value-array, static-struct, or bytes/string elements; a literal of ${displayName(expected.element)} elements is not supported`,
         );
         return undefined;
       }
@@ -12115,6 +12178,46 @@ export class Analyzer {
         }
       }
     }
+    // Residual B1: `xs[i].a` where xs is a P[] memory local (static-struct element). The base xs[i]
+    // is an arrayGet whose register is the element's inline struct-image BASE pointer; aggFieldRead
+    // mloads the VALUE field at its word offset. A non-value field (nested struct / dynamic field of a
+    // dynamic struct) stays gated (JETH245); P is a static struct here so all fields are value/static.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isElementAccessExpression(node.expression) &&
+      node.expression.argumentExpression &&
+      this.nestedMemArrayElemAccess(node.expression)
+    ) {
+      const baseArr = this.resolveArrayExpr(node.expression.expression);
+      if (
+        baseArr &&
+        (baseArr.base.kind === 'memArray' || baseArr.base.kind === 'memArrayExpr') &&
+        baseArr.elem.kind === 'struct'
+      ) {
+        const index = this.checkExpr(node.expression.argumentExpression, U256);
+        if (!index) return undefined;
+        const base: Expr = {
+          kind: 'arrayGet',
+          type: baseArr.elem,
+          arr: baseArr,
+          index: this.coerce(index, U256, node.expression.argumentExpression),
+        };
+        const fo = this.memFieldOffset(baseArr.elem, node.name.text);
+        if (!fo) {
+          this.diags.error(node, 'JETH210', `struct '${baseArr.elem.name}' has no field '${node.name.text}'`);
+          return undefined;
+        }
+        if (!isStaticValueType(fo.type)) {
+          this.diags.error(
+            node,
+            'JETH245',
+            `reading a ${displayName(fo.type)} field of a struct-array element is not supported yet`,
+          );
+          return undefined;
+        }
+        return { kind: 'aggFieldRead', type: fo.type, base, wordOffset: fo.wordOffset };
+      }
+    }
     // G9: `p.x` / `p.inner.x` / `p.inner` read where the chain is rooted at a memory-aggregate
     // (struct) local. A VALUE final field -> a memory load (memField); a whole nested STRUCT
     // field -> a sub-pointer into the parent image (memAggregate at the field offset, which
@@ -12159,6 +12262,32 @@ export class Analyzer {
           if (!index) return undefined;
           return {
             kind: 'arrayGet',
+            type: baseArr.elem,
+            arr: baseArr,
+            index: this.coerce(index, U256, node.argumentExpression),
+          };
+        }
+        // Residual B1: a STATIC STRUCT element (P[]). xs[i] -> arrayGet typed as the struct; the
+        // memory codec returns the element's inline image BASE pointer, which aggToMemPtr / aggFieldRead
+        // (xs[i].a) and the return/encode path consume as a struct image.
+        if (baseArr.elem.kind === 'struct') {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          return {
+            kind: 'arrayGet',
+            type: baseArr.elem,
+            arr: baseArr,
+            index: this.coerce(index, U256, node.argumentExpression),
+          };
+        }
+        // Residual B2: a bytes/string element (bytes[]/string[]). bs[i] -> strArrayElem over the
+        // memArray; the element word holds an absolute pointer to a [len][data] blob (a bytes value
+        // consumed by .length / [j] / return / keccak / concat via the bytes codec).
+        if (isBytesLike(baseArr.elem)) {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          return {
+            kind: 'strArrayElem',
             type: baseArr.elem,
             arr: baseArr,
             index: this.coerce(index, U256, node.argumentExpression),
@@ -12557,6 +12686,28 @@ export class Analyzer {
               this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
               return undefined;
             }
+          }
+        }
+        // Residual B2: `bs[i][j]` - byte-index j into a bytes element of a bytes[] memory local.
+        // The base bs[i] is an element-access that resolves to a bytes value (strArrayElem over the
+        // memArray); produce a byteIndex on it. (string[] gives a string element, not indexable - solc
+        // parity: JETH205.) Must run BEFORE the mapping/nested-array resolvers claim the base.
+        if (
+          ts.isElementAccessExpression(node.expression) &&
+          node.expression.argumentExpression &&
+          this.nestedMemArrayElemAccess(node.expression)
+        ) {
+          const baseArr = this.resolveArrayExpr(node.expression.expression);
+          if (baseArr && isBytesLike(baseArr.elem)) {
+            const base = this.checkExpr(node.expression);
+            if (!base) return undefined;
+            if (base.type.kind === 'string') {
+              this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+              return undefined;
+            }
+            const index = this.checkExpr(node.argumentExpression, U256);
+            if (!index) return undefined;
+            return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
           }
         }
       }
