@@ -106,10 +106,13 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
     ]);
   }
 
+  // stateVars only ever holds @state vars, which the planner lays out at small sequential slots
+  // (@storage('ns') namespaced fields are NOT in stateVars - they live at their keccak base and are
+  // never exported here), so narrowing to number for the debug layout table is exact and lossless.
   const storageLayout: StorageLayoutEntry[] = ir.stateVars.map((v) => ({
     name: v.name,
     type: displayName(v.type),
-    slot: v.slot,
+    slot: Number(v.slot),
     offset: v.offset,
   }));
 

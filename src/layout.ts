@@ -10,16 +10,27 @@
 //    packed: they finish the current slot and take their own.
 import type { JethType } from './types.js';
 import { storageByteSize, storageSlotCount } from './types.js';
-import type { StateVar } from './ir.js';
-
 export interface RawStateVar {
   name: string;
   type: JethType;
   initialValue?: bigint | boolean;
 }
 
+/** A planned storage var. `slot` is the SEQUENTIAL slot index within the contiguous space the
+ *  planner lays out (always a small number); the analyzer offsets it by a namespace base (a full
+ *  256-bit ERC-7201 keccak value) and widens to `bigint` when it builds the `StateVar` (see Part B).
+ *  Kept as `number` here so the planner stays pure number arithmetic and packing/slot tests are
+ *  byte-stable. */
+export interface PlannedVar {
+  name: string;
+  type: JethType;
+  slot: number;
+  offset: number;
+  initialValue?: bigint | boolean;
+}
+
 export interface LayoutResult {
-  vars: StateVar[];
+  vars: PlannedVar[];
   slotCount: number;
 }
 
@@ -30,7 +41,7 @@ function occupiesWholeSlot(t: JethType): boolean {
 }
 
 export function planLayout(raw: RawStateVar[]): LayoutResult {
-  const vars: StateVar[] = [];
+  const vars: PlannedVar[] = [];
   let slot = 0;
   let usedInSlot = 0; // bytes consumed in the current slot
 

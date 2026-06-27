@@ -166,6 +166,11 @@ export class Analyzer {
   private immutablesByName = new Map<string, { name: string; type: JethType; init?: ts.Expression }>();
   private immutableOrder: string[] = [];
   private currentInConstructor = false;
+  // @storage('ns') namespaced fields (EIP-7201): each distinct `ns` string forms one logical struct
+  // laid out from slot 0 by the SAME planLayout (sequential + packing), then offset by the namespace
+  // base (ERC-7201 keccak). Insertion-ordered: ns string -> the fields declared in it (most-base-first,
+  // matching the @state collection order). Kept OUT of rawState so @storage never shifts @state slots.
+  private namespacedStorage = new Map<string, RawStateVar[]>();
   // Phase 5: user-defined @modifier declarations (name -> RawModifier). A modifier is never a
   // standalone function (not callable, not in the ABI); it is inlined around each function it decorates.
   private modifiersByName = new Map<string, RawModifier>();
@@ -1150,9 +1155,21 @@ export class Analyzer {
     // `L.f(x, ...args)`); also validates each @using names a real library.
     this.buildLibraryAttachments(cls);
 
-    // Plan storage layout, then build the symbol table.
+    // Plan storage layout, then build the symbol table. The planner lays @state out from slot 0
+    // sequentially (small number slots); widen each to a `bigint` StateVar.slot here so every
+    // downstream IR base-slot field is bigint (Part A). @storage('ns') namespaced fields are then
+    // appended at their ERC-7201 keccak bases (Part B), in a DISJOINT slot space.
     const layout = planLayout(rawState);
-    for (const v of layout.vars) this.stateByName.set(v.name, v);
+    const stateVars: StateVar[] = layout.vars.map((v) => ({
+      name: v.name,
+      type: v.type,
+      slot: BigInt(v.slot),
+      offset: v.offset,
+      initialValue: v.initialValue,
+    }));
+    // Part B: lay out each @storage('ns') namespace and append its fields at base(ns)+relativeSlot.
+    stateVars.push(...this.planNamespacedStorage());
+    for (const v of stateVars) this.stateByName.set(v.name, v);
 
     // An @immutable name must not collide with a @state var or @constant (solc: duplicate
     // identifier). collectImmutable cannot see @state names yet (planned only here), so check now.
@@ -1195,7 +1212,7 @@ export class Analyzer {
     for (const nm of this.errorsByName.keys()) addId(nm, 'error');
     for (const nm of this.structsByName.keys()) addId(nm, 'type'); // structs + enums share the type namespace
     for (const nm of this.interfacesByName.keys()) addId(nm, 'type'); // interfaces share the type namespace too
-    for (const v of layout.vars) addId(v.name, 'storage');
+    for (const v of stateVars) addId(v.name, 'storage');
     for (const nm of this.constantsByName.keys()) addId(nm, 'storage');
     for (const nm of this.immutableOrder) addId(nm, 'storage');
     for (const [nm, kinds] of idKinds) {
@@ -1367,7 +1384,7 @@ export class Analyzer {
     // flattens into a value-field tuple) and a few nested combinations are not yet supported and are
     // rejected cleanly rather than silently producing no getter. Inserted before the selector-clash
     // check so a getter colliding with a same-named function is a clean JETH044 error (matches solc).
-    for (const v of layout.vars) {
+    for (const v of stateVars) {
       if (!this.publicStateNames.has(v.name)) continue;
       const getter = this.synthPublicGetter(v);
       if (!getter) {
@@ -1518,7 +1535,7 @@ export class Analyzer {
 
     return {
       name,
-      stateVars: layout.vars,
+      stateVars,
       functions: contractFunctions,
       errors: this.errors,
       events: this.events,
@@ -2192,7 +2209,7 @@ export class Analyzer {
    *  dynamic nested tuple would not match a flattened encoding) or the result tuple is empty. */
   private flattenGetterStruct(
     st: Extract<JethType, { kind: 'struct' }>,
-    baseSlot: number,
+    baseSlot: bigint,
     prefix: AccessStep[],
     top: boolean,
   ): { types: JethType[]; values: Expr[] } | null {
@@ -2223,7 +2240,7 @@ export class Analyzer {
    *  of bytes/string/array/dynamic-struct). */
   private flattenGetterLeaf(
     type: JethType,
-    baseSlot: number,
+    baseSlot: bigint,
     steps: AccessStep[],
   ): { types: JethType[]; values: Expr[] } | null {
     const path: AccessPath = { baseSlot, steps, oobEmpty: true };
@@ -2947,8 +2964,28 @@ export class Analyzer {
     const decs = decoratorNames(member);
     const isConstant = decs.includes('constant');
     const isImmutable = decs.includes('immutable');
-    if (!decs.includes('state') && !isConstant && !isImmutable) {
-      this.diags.error(member, 'JETH045', 'contract fields must be marked @state (or @constant / @immutable)');
+    const isStorage = decs.includes('storage');
+    // @storage('ns'): an ERC-7201 namespaced storage field (an alternative to @state). It cannot
+    // combine with @state/@constant/@immutable (each is its own slot model), and it carries EXACTLY
+    // one non-empty string-literal namespace argument. Once validated, it flows through the SAME
+    // field validation/layout as @state, just routed to the namespace's raw list (planNamespacedStorage).
+    let namespace: string | undefined;
+    if (isStorage) {
+      if (isConstant || isImmutable || decs.includes('state')) {
+        const other = isConstant ? 'constant' : isImmutable ? 'immutable' : 'state';
+        this.diags.error(member, 'JETH409', `a field cannot combine @storage with @${other}`);
+        return;
+      }
+      const ns = this.storageNamespaceArg(member);
+      if (ns === undefined) return;
+      namespace = ns;
+    }
+    if (!decs.includes('state') && !isConstant && !isImmutable && !isStorage) {
+      this.diags.error(
+        member,
+        'JETH045',
+        "contract fields must be marked @state (or @constant / @immutable / @storage('ns'))",
+      );
       return;
     }
     const kinds = [decs.includes('state') && 'state', isConstant && 'constant', isImmutable && 'immutable'].filter(
@@ -3020,8 +3057,82 @@ export class Analyzer {
         initialValue = folded; // zero/false is the storage default; no SSTORE needed
       }
     }
-    if (decs.includes('external')) this.publicStateNames.add(member.name.text); // @external @state -> auto-generated getter
+    if (decs.includes('external')) this.publicStateNames.add(member.name.text); // @external @state/@storage -> auto-generated getter
+    if (namespace !== undefined) {
+      // Route to the namespace's raw list; planNamespacedStorage lays each ns out from slot 0 and
+      // offsets by base(ns). Kept OUT of `out` (rawState) so @storage never shifts an @state slot.
+      const list = this.namespacedStorage.get(namespace) ?? [];
+      list.push({ name: member.name.text, type, initialValue });
+      this.namespacedStorage.set(namespace, list);
+      return;
+    }
     out.push({ name: member.name.text, type, initialValue });
+  }
+
+  /** Validate a `@storage('ns')` decorator's argument: it must be exactly one non-empty string
+   *  literal. Returns the namespace string, or undefined after reporting a clean diagnostic. */
+  private storageNamespaceArg(member: ts.PropertyDeclaration): string | undefined {
+    const call = decoratorCall(member, 'storage');
+    if (!call) {
+      this.diags.error(member, 'JETH410', "@storage requires a namespace argument: @storage('my.namespace')");
+      return undefined;
+    }
+    if (call.arguments.length !== 1) {
+      this.diags.error(call, 'JETH410', '@storage takes exactly one string-literal namespace argument');
+      return undefined;
+    }
+    const arg = call.arguments[0]!;
+    if (!ts.isStringLiteralLike(arg)) {
+      this.diags.error(arg, 'JETH410', '@storage namespace must be a string literal');
+      return undefined;
+    }
+    if (arg.text.length === 0) {
+      this.diags.error(arg, 'JETH410', '@storage namespace must be a non-empty string');
+      return undefined;
+    }
+    return arg.text;
+  }
+
+  /** ERC-7201 (EIP-7201) namespaced-storage base slot for `ns`:
+   *    base = keccak256(abi.encode(uint256(keccak256(bytes(ns))) - 1)) & ~bytes32(uint256(0xff))
+   *  i.e. inner = keccak256(utf8 bytes of ns) as a uint256; minus 1 (mod 2^256); abi.encode of that
+   *  uint256 is its 32-byte big-endian word; keccak256 of that word; then clear the low byte. Computed
+   *  at compile time so the namespaced slots match a hand-written solc ERC-7201 struct byte-for-byte. */
+  private erc7201Base(ns: string): bigint {
+    const M = 1n << 256n;
+    const inner = BigInt('0x' + toHex(keccak(ns))); // keccak256(bytes(ns)) as uint256
+    const minus = (inner - 1n + M) % M; // uint256(inner) - 1 (mod 2^256)
+    // abi.encode(uint256(minus)) is its 32-byte big-endian word.
+    const word = new Uint8Array(32);
+    let x = minus;
+    for (let i = 31; i >= 0; i--) {
+      word[i] = Number(x & 0xffn);
+      x >>= 8n;
+    }
+    const hashed = BigInt('0x' + toHex(keccak(word)));
+    return hashed & ~0xffn; // & ~bytes32(uint256(0xff)): clear the low byte
+  }
+
+  /** Lay out every `@storage('ns')` namespace and return its fields as StateVars at their absolute
+   *  slots. Each namespace is laid out from slot 0 by the SAME planLayout (sequential + packing) as
+   *  @state, then each field's slot is OFFSET by base(ns). Distinct namespaces are isolated (their own
+   *  keccak base); these vars live in a slot space DISJOINT from @state's sequential 0.. space. */
+  private planNamespacedStorage(): StateVar[] {
+    const result: StateVar[] = [];
+    for (const [ns, raw] of this.namespacedStorage) {
+      const base = this.erc7201Base(ns);
+      const layout = planLayout(raw); // sequential + packing within the namespace, from slot 0
+      for (const v of layout.vars) {
+        result.push({
+          name: v.name,
+          type: v.type,
+          slot: base + BigInt(v.slot),
+          offset: v.offset,
+          initialValue: v.initialValue,
+        });
+      }
+    }
+    return result;
   }
 
   // A `@constant` is a slot-free compile-time constant (solc's `type constant NAME = value`): the
@@ -8170,7 +8281,7 @@ export class Analyzer {
         return {
           kind: 'state',
           type: f.type,
-          slot: sv.slot + f.slot,
+          slot: sv.slot + BigInt(f.slot),
           offset: f.offset,
           varName: `${sv.name}.${f.name}`,
         };
@@ -9309,7 +9420,7 @@ export class Analyzer {
     const raw: ({ field: string } | { index: ts.Expression })[] = [];
     let cur: ts.Expression = node;
     let rootType: JethType | undefined;
-    let baseSlot = -1;
+    let baseSlot = -1n;
     for (;;) {
       if (ts.isPropertyAccessExpression(cur)) {
         if (cur.expression.kind === ts.SyntaxKind.ThisKeyword) {
@@ -9431,7 +9542,7 @@ export class Analyzer {
   ): { committed: true; result?: { path: AccessPath; finalType: JethType } } | undefined {
     const rawSteps: ({ field: ts.PropertyAccessExpression } | { index: ts.Expression })[] = [];
     let cur: ts.Expression = node;
-    let baseSlot = -1;
+    let baseSlot = -1n;
     let rootType: JethType | undefined;
     for (;;) {
       if (ts.isPropertyAccessExpression(cur)) {
@@ -9602,7 +9713,7 @@ export class Analyzer {
    *  types, and the final value type. */
   private resolveMapAccess(
     node: ts.ElementAccessExpression,
-  ): { baseSlot: number; keys: Expr[]; keyTypes: JethType[]; valueType: JethType; varName: string } | undefined {
+  ): { baseSlot: bigint; keys: Expr[]; keyTypes: JethType[]; valueType: JethType; varName: string } | undefined {
     const indices: ts.Expression[] = [];
     let cur: ts.Expression = node;
     while (ts.isElementAccessExpression(cur)) {
@@ -11144,7 +11255,7 @@ export class Analyzer {
         // storage-source encoder (structValue reuses the whole-struct return machinery).
         if (f.type.kind === 'struct') {
           this.currentReadsState = true;
-          return { kind: 'structValue', type: f.type, baseSlot: sv.slot + f.slot };
+          return { kind: 'structValue', type: f.type, baseSlot: sv.slot + BigInt(f.slot) };
         }
         // return this.s.xs: a whole array field. A DYNAMIC array field is a placeArray
         // (length at the field slot); a FIXED array field is a static aggregate at the
@@ -11171,7 +11282,7 @@ export class Analyzer {
             kind: 'arrayValue',
             type: f.type,
             arr: {
-              base: { kind: 'fixedArray', baseSlot: sv.slot + f.slot, length: f.type.length },
+              base: { kind: 'fixedArray', baseSlot: sv.slot + BigInt(f.slot), length: f.type.length },
               elem: f.type.element,
             },
           };
@@ -11184,7 +11295,7 @@ export class Analyzer {
         return {
           kind: 'stateRead',
           type: f.type,
-          slot: sv.slot + f.slot,
+          slot: sv.slot + BigInt(f.slot),
           offset: f.offset,
           varName: `${sv.name}.${f.name}`,
         };

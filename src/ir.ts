@@ -61,7 +61,7 @@ export type Expr =
   | { kind: 'literalInt'; type: JethType; value: bigint; hexBytes?: number }
   | { kind: 'literalBool'; type: JethType; value: boolean }
   | { kind: 'rawReg'; type: JethType; reg: string } // a pre-computed Yul register (internal; used to feed a value into the assign lowering, e.g. tuple destructuring)
-  | { kind: 'stateRead'; type: JethType; slot: number; offset: number; varName: string }
+  | { kind: 'stateRead'; type: JethType; slot: bigint; offset: number; varName: string }
   // Phase 5 immutables: a runtime read lowers to loadimmutable("name") (baked into code, no slot);
   // a read INSIDE the constructor body reads the staged shadow (the value assigned so far).
   | { kind: 'immutableRead'; type: JethType; name: string }
@@ -88,12 +88,12 @@ export type Expr =
   | {
       kind: 'mapGet'; // this.m[k]...[k] read
       type: JethType; // final value type
-      baseSlot: number;
+      baseSlot: bigint;
       keys: Expr[]; // outer-to-inner
       keyTypes: JethType[];
     }
   // --- Phase 4: dynamic bytes/string values (references, not 256-bit words) ---
-  | { kind: 'dynStateRead'; type: JethType; slot: number } // this.s (storage)
+  | { kind: 'dynStateRead'; type: JethType; slot: bigint } // this.s (storage)
   | { kind: 'dynParamRead'; type: JethType; name: string } // calldata param (codegen binds ptr/len)
   | { kind: 'msgData'; type: JethType } // msg.data: a calldata bytes view over the WHOLE calldata [0, calldatasize())
   // <calldata bytes>.slice(start[, end]) -> a zero-copy calldata bytes sub-view (solc data[start:end]).
@@ -211,15 +211,15 @@ export type Expr =
   | { kind: 'newArray'; type: JethType; elem: JethType; length: Expr } // new T[](n) -> zeroed memory T[]
   // --- Phase 4c: structs ---
   | { kind: 'structNew'; type: JethType; fields: StructField[]; args: Expr[] } // Point(a, b)
-  | { kind: 'structValue'; type: JethType; baseSlot: number } // whole storage struct (for return)
+  | { kind: 'structValue'; type: JethType; baseSlot: bigint } // whole storage struct (for return)
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // read a value field/element of a memory-aggregate local (p.x)
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] on a fixed-array memory local (value element, bounds-checked); wordOffset: a fixed-array FIELD of a memory struct (p.a[i]) starts that many words into the image
   | { kind: 'memAggregate'; type: JethType; local: string; wordOffset?: number } // a whole memory aggregate, or a nested struct field at wordOffset (sub-pointer into the parent image)
   | { kind: 'memDynStructValue'; type: JethType; local: string } // a whole DYNAMIC-field struct memory local (head: value fields inline, bytes/string fields as pointers)
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number } // a bytes/string field of a memory dynamic struct (the head word holds the [len][data] pointer)
   | { kind: 'structArrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // whole storage/fixed/mapping struct element this.recs[i] (for return / copy source)
-  | { kind: 'mapStorageValue'; type: JethType; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // return this.m[k] (whole struct/array mapping value)
-  | { kind: 'mapDynValue'; type: JethType; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // this.m[k] where the value is bytes/string (dynamic value at the mapping slot)
+  | { kind: 'mapStorageValue'; type: JethType; baseSlot: bigint; keys: Expr[]; keyTypes: JethType[] } // return this.m[k] (whole struct/array mapping value)
+  | { kind: 'mapDynValue'; type: JethType; baseSlot: bigint; keys: Expr[]; keyTypes: JethType[] } // this.m[k] where the value is bytes/string (dynamic value at the mapping slot)
   // --- Phase 4c-3: nested storage access (this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]) ---
   | { kind: 'placeRead'; type: JethType; path: AccessPath }
   // --- storage / mapping-valued DYNAMIC STRUCT bytes/string field (this.d.s,
@@ -267,7 +267,7 @@ export type Expr =
 /** A storage location reached by navigating a chain of field/index/key steps from
  *  a root state variable. Resolves at codegen to a (slot expr, byte offset). */
 export interface AccessPath {
-  baseSlot: number;
+  baseSlot: bigint;
   steps: AccessStep[];
   oobEmpty?: boolean; // index/dynIndex out-of-bounds reverts EMPTY (revert(0,0)) instead of Panic 0x32
   // (for @public auto-getters, whose array-element access matches solc's empty-revert on OOB).
@@ -317,10 +317,10 @@ export interface CdDynStep {
 /** A storage/calldata array reference (dynamic T[] or fixed Arr<T,N>). */
 export interface ArrayExpr {
   base:
-    | { kind: 'stateArray'; slot: number } // dynamic T[] state var (length at slot)
+    | { kind: 'stateArray'; slot: bigint } // dynamic T[] state var (length at slot)
     | { kind: 'calldataArray'; name: string } // dynamic T[] calldata param
-    | { kind: 'fixedArray'; baseSlot: number; length: number } // fixed Arr<T,N> (inline at baseSlot)
-    | { kind: 'mapArray'; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // dynamic T[] mapping value (length at keccak(key.baseSlot))
+    | { kind: 'fixedArray'; baseSlot: bigint; length: number } // fixed Arr<T,N> (inline at baseSlot)
+    | { kind: 'mapArray'; baseSlot: bigint; keys: Expr[]; keyTypes: JethType[] } // dynamic T[] mapping value (length at keccak(key.baseSlot))
     // --- Phase 4e-5 / 4e-8: an inner array reached by navigating a chain of index
     //     steps into a nested dynamic array (T[][], T[][][], string[][], ...). Each
     //     index descends one dynamic-array level via that container's inner-offset
@@ -349,20 +349,20 @@ export interface ArrayExpr {
 
 // Where an assignment target lives.
 export type LValue =
-  | { kind: 'state'; type: JethType; slot: number; offset: number; varName: string }
+  | { kind: 'state'; type: JethType; slot: bigint; offset: number; varName: string }
   | { kind: 'byteIndexStore'; type: JethType; loc: LValue; index: Expr } // this.b[i] = <bytes1> (loc is the storage `bytes`: direct var / struct field / mapping value / array elem): write byte i (RMW, bounds-checked)
   | { kind: 'immutableStaged'; type: JethType; name: string } // Phase 5: this.<imm> = v inside the constructor (writes the staged shadow; baked via setimmutable)
   | { kind: 'local'; type: JethType; varName: string }
   | {
       kind: 'mapping'; // this.m[k]...[k] write target
       type: JethType; // final value type
-      baseSlot: number;
+      baseSlot: bigint;
       keys: Expr[];
       keyTypes: JethType[];
       varName: string;
     }
-  | { kind: 'dynState'; type: JethType; slot: number; varName: string } // this.s = <bytes/string>
-  | { kind: 'mapDynState'; type: JethType; baseSlot: number; keys: Expr[]; keyTypes: JethType[] } // this.m[k] = <bytes/string> (dynamic value at the mapping slot)
+  | { kind: 'dynState'; type: JethType; slot: bigint; varName: string } // this.s = <bytes/string>
+  | { kind: 'mapDynState'; type: JethType; baseSlot: bigint; keys: Expr[]; keyTypes: JethType[] } // this.m[k] = <bytes/string> (dynamic value at the mapping slot)
   | { kind: 'arrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // a[i] = v (bounds-checked)
   | { kind: 'strArrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // this.ss[i] = <bytes/string>
   | { kind: 'dynPlace'; type: JethType; path: AccessPath } // this.d.s = <bytes/string> (dyn-struct field)
@@ -513,7 +513,7 @@ export interface EventIR {
 export interface StateVar {
   name: string;
   type: JethType;
-  slot: number;
+  slot: bigint;
   offset: number; // byte offset within the slot for packing
   // constant-folded initializer value, if any and non-zero (emitted in constructor)
   initialValue?: bigint | boolean;

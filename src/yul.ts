@@ -230,7 +230,7 @@ ${indent(runtime, 6)}
     if (!contract.ctor) lines.push('if callvalue() { revert(0, 0) }');
     // Write non-default state initializers. All are compile-time constants, so we
     // pack each affected slot into a single word and emit one sstore per slot.
-    const slotWords = new Map<number, bigint>();
+    const slotWords = new Map<bigint, bigint>();
     for (const v of contract.stateVars) {
       if (v.initialValue === undefined) continue;
       const size = storageByteSize(v.type);
@@ -240,7 +240,7 @@ ${indent(runtime, 6)}
       const shifted = raw << BigInt(v.offset * 8);
       slotWords.set(v.slot, (slotWords.get(v.slot) ?? 0n) | shifted);
     }
-    for (const [slot, word] of [...slotWords.entries()].sort((a, b) => a[0] - b[0])) {
+    for (const [slot, word] of [...slotWords.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
       lines.push(`sstore(${slot}, ${toWord(word)})`);
     }
     // Phase 5: run the constructor body (if any) AFTER the constant-field initializers and BEFORE
@@ -2520,7 +2520,7 @@ ${indent(runtime, 6)}
     if (value.kind === 'structValue') {
       const fields = (value.type as JethType & { kind: 'struct' }).fields;
       fields.forEach((f, j) => {
-        const w = this.loadState(f.type, String(value.baseSlot + f.slot), f.offset);
+        const w = this.loadState(f.type, String(value.baseSlot + BigInt(f.slot)), f.offset);
         out.push(`mstore(${j * 32}, ${w})`);
       });
       return fields.length * 32;
@@ -3325,7 +3325,7 @@ ${indent(runtime, 6)}
     ctx: LowerCtx,
     out: string[],
   ): { slot: string; offset: number; byteShift?: string } {
-    let constSlot: number | null = path.baseSlot;
+    let constSlot: bigint | null = path.baseSlot;
     let slot = String(path.baseSlot);
     let offset = 0;
     let byteShift: string | undefined; // a RUNTIME byte offset within the slot (packed elem)
@@ -3334,7 +3334,7 @@ ${indent(runtime, 6)}
     for (const step of path.steps) {
       if (step.kind === 'field') {
         if (constSlot !== null) {
-          constSlot += step.fieldSlot;
+          constSlot += BigInt(step.fieldSlot);
           slot = String(constSlot);
         } else if (step.fieldSlot !== 0) {
           slot = `add(${slot}, ${step.fieldSlot})`;
@@ -3342,11 +3342,11 @@ ${indent(runtime, 6)}
         offset = step.fieldOffset;
       } else if (step.kind === 'index') {
         if (step.index.kind === 'literalInt') {
-          const add = Number(step.index.value) * step.strideSlots;
+          const add = step.index.value * BigInt(step.strideSlots);
           if (constSlot !== null) {
             constSlot += add;
             slot = String(constSlot);
-          } else if (add !== 0) {
+          } else if (add !== 0n) {
             slot = `add(${slot}, ${add})`;
           }
         } else {
@@ -3362,15 +3362,15 @@ ${indent(runtime, 6)}
         // packed fixed-array element (perSlot per slot): slot = base + i/perSlot, with a
         // byte offset (i%perSlot)*size within that slot (constant if i is literal).
         if (step.index.kind === 'literalInt') {
-          const k = Number(step.index.value);
-          const slotAdd = Math.floor(k / step.perSlot);
+          const k = step.index.value;
+          const slotAdd = k / BigInt(step.perSlot); // bigint division truncates toward zero (k >= 0)
           if (constSlot !== null) {
             constSlot += slotAdd;
             slot = String(constSlot);
-          } else if (slotAdd !== 0) {
+          } else if (slotAdd !== 0n) {
             slot = `add(${slot}, ${slotAdd})`;
           }
-          offset = (k % step.perSlot) * step.size;
+          offset = Number(k % BigInt(step.perSlot)) * step.size;
           byteShift = undefined;
         } else {
           const it = this.fresh();
@@ -3404,9 +3404,10 @@ ${indent(runtime, 6)}
         const dataBase = this.fresh();
         out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${lenSlot})`);
         if (step.index.kind === 'literalInt') {
-          const k = Number(step.index.value);
-          slot = Math.floor(k / step.perSlot) === 0 ? dataBase : `add(${dataBase}, ${Math.floor(k / step.perSlot)})`;
-          offset = (k % step.perSlot) * step.size;
+          const k = step.index.value;
+          const slotAdd = k / BigInt(step.perSlot); // bigint division truncates toward zero (k >= 0)
+          slot = slotAdd === 0n ? dataBase : `add(${dataBase}, ${slotAdd})`;
+          offset = Number(k % BigInt(step.perSlot)) * step.size;
           byteShift = undefined;
         } else {
           slot = `add(${dataBase}, div(${it}, ${step.perSlot}))`;
@@ -3991,7 +3992,7 @@ ${indent(runtime, 6)}
   private writeStruct(fields: StructField[], args: Expr[], baseSlot: string, ctx: LowerCtx, out: string[]): void {
     const isConst = /^\d+$/.test(baseSlot);
     const slotAt = (n: number): string =>
-      isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
+      isConst ? String(BigInt(baseSlot) + BigInt(n)) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
     fields.forEach((f, i) => {
       const arg = args[i]!;
       if (f.type.kind === 'struct' && arg.kind === 'structNew') {
@@ -4140,7 +4141,7 @@ ${indent(runtime, 6)}
     out.push(`mstore(0x40, add(${ptr}, ${headWords * 32}))`);
     const isConst = /^\d+$/.test(baseSlot);
     const slotAt = (n: number): string =>
-      isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
+      isConst ? String(BigInt(baseSlot) + BigInt(n)) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
     let hw = 0;
     for (const f of struct.fields) {
       const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
@@ -4308,7 +4309,7 @@ ${indent(runtime, 6)}
     const sc = storageSlotCount(elem);
     const isConst = /^\d+$/.test(baseSlot);
     const slotAt = (n: number): string =>
-      isConst ? String(Number(baseSlot) + n) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
+      isConst ? String(BigInt(baseSlot) + BigInt(n)) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
     lit.elements.forEach((el, k) => {
       const es = slotAt(k * sc);
       if (el.kind === 'arrayLit') this.writeArrayLit(el, es, ctx, out);
@@ -4455,9 +4456,9 @@ ${indent(runtime, 6)}
     const sConst = /^\d+$/.test(srcBase);
     const dConst = /^\d+$/.test(dstBase);
     const sAt = (n: number): string =>
-      sConst ? String(Number(srcBase) + n) : n === 0 ? srcBase : `add(${srcBase}, ${n})`;
+      sConst ? String(BigInt(srcBase) + BigInt(n)) : n === 0 ? srcBase : `add(${srcBase}, ${n})`;
     const dAt = (n: number): string =>
-      dConst ? String(Number(dstBase) + n) : n === 0 ? dstBase : `add(${dstBase}, ${n})`;
+      dConst ? String(BigInt(dstBase) + BigInt(n)) : n === 0 ? dstBase : `add(${dstBase}, ${n})`;
     if (isStaticType(elem)) {
       const slots = storageSlotCount(arrType);
       for (let i = 0; i < slots; i++) out.push(`sstore(${dAt(i)}, sload(${sAt(i)}))`);
@@ -4515,7 +4516,8 @@ ${indent(runtime, 6)}
     out: string[],
   ): void {
     const sConst = /^\d+$/.test(slot);
-    const fslotAt = (n: number): string => (n === 0 ? slot : sConst ? String(Number(slot) + n) : `add(${slot}, ${n})`);
+    const fslotAt = (n: number): string =>
+      n === 0 ? slot : sConst ? String(BigInt(slot) + BigInt(n)) : `add(${slot}, ${n})`;
     let hw = 0;
     for (const f of struct.fields) {
       const at = hw === 0 ? memPtr : `add(${memPtr}, ${hw * 32})`;
@@ -4553,7 +4555,7 @@ ${indent(runtime, 6)}
         leaf.storageSlot === 0
           ? slot
           : sConst
-            ? String(Number(slot) + leaf.storageSlot)
+            ? String(BigInt(slot) + BigInt(leaf.storageSlot))
             : `add(${slot}, ${leaf.storageSlot})`;
       const w = this.fresh();
       out.push(`let ${w} := mload(${leaf.abiWord === 0 ? memPtr : `add(${memPtr}, ${leaf.abiWord * 32})`})`);
@@ -4582,9 +4584,9 @@ ${indent(runtime, 6)}
     const sConst = /^\d+$/.test(srcBase);
     const dConst = /^\d+$/.test(dstBase);
     const sAt = (n: number): string =>
-      sConst ? String(Number(srcBase) + n) : n === 0 ? srcBase : `add(${srcBase}, ${n})`;
+      sConst ? String(BigInt(srcBase) + BigInt(n)) : n === 0 ? srcBase : `add(${srcBase}, ${n})`;
     const dAt = (n: number): string =>
-      dConst ? String(Number(dstBase) + n) : n === 0 ? dstBase : `add(${dstBase}, ${n})`;
+      dConst ? String(BigInt(dstBase) + BigInt(n)) : n === 0 ? dstBase : `add(${dstBase}, ${n})`;
     const copied = new Set<number>();
     for (const f of struct.fields) {
       if (f.type.kind === 'struct') {
@@ -4637,7 +4639,8 @@ ${indent(runtime, 6)}
    *  dynamic structs recurse at their field slot offset. */
   private clearStructDyn(struct: JethType & { kind: 'struct' }, base: string, out: string[]): void {
     const isConst = /^\d+$/.test(base);
-    const slotAt = (n: number): string => (isConst ? String(Number(base) + n) : n === 0 ? base : `add(${base}, ${n})`);
+    const slotAt = (n: number): string =>
+      isConst ? String(BigInt(base) + BigInt(n)) : n === 0 ? base : `add(${base}, ${n})`;
     for (const f of struct.fields) {
       if (isBytesLike(f.type)) {
         out.push(`${this.clearStr()}(${slotAt(f.slot)})`);
@@ -4716,7 +4719,8 @@ ${indent(runtime, 6)}
    *  nested struct/array fields, and SKIP mapping fields (solc's delete leaves mappings). */
   private deleteStruct(struct: JethType & { kind: 'struct' }, base: string, out: string[]): void {
     const isConst = /^\d+$/.test(base);
-    const at = (n: number): string => (isConst ? String(Number(base) + n) : n === 0 ? base : `add(${base}, ${n})`);
+    const at = (n: number): string =>
+      isConst ? String(BigInt(base) + BigInt(n)) : n === 0 ? base : `add(${base}, ${n})`;
     for (const f of struct.fields) {
       if (f.type.kind === 'mapping') continue;
       if (isBytesLike(f.type)) out.push(`${this.clearStr()}(${at(f.slot)})`);
@@ -4731,7 +4735,8 @@ ${indent(runtime, 6)}
     const elem = arrType.element;
     const N = arrType.length!;
     const isConst = /^\d+$/.test(base);
-    const at = (n: number): string => (isConst ? String(Number(base) + n) : n === 0 ? base : `add(${base}, ${n})`);
+    const at = (n: number): string =>
+      isConst ? String(BigInt(base) + BigInt(n)) : n === 0 ? base : `add(${base}, ${n})`;
     if (isStaticType(elem) && elem.kind !== 'struct') {
       const packs = arrayElemPacks(elem);
       const slots = packs.packed ? Math.ceil(N / packs.perSlot) : N * storageSlotCount(elem);
@@ -5673,7 +5678,7 @@ ${indent(runtime, 6)}
   /** Echo a whole STORAGE state variable of dynamic type `t` (base storage slot
    *  `slot`) into a fresh ABI return blob [0x20][value encoding]. The storage-source
    *  twin of echoParam; UNBOUNDED nesting via abiEncFromStorage recursion. */
-  private echoStorage(slot: number, t: JethType, out: string[]): { ptr: string; size: string } {
+  private echoStorage(slot: bigint, t: JethType, out: string[]): { ptr: string; size: string } {
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(${ptr}, 0x20)`);
@@ -7457,7 +7462,7 @@ ${indent(runtime, 6)}
    *  recursive for nested mappings, using scratch 0x00-0x3f. The key's register
    *  word IS the hash key (uint zero-ext, int sign-ext, address zero-ext, bytesN
    *  left-aligned all match Solidity's padded key). Returns the final slot temp. */
-  private mappingSlot(baseSlot: number, keys: Expr[], ctx: LowerCtx, out: string[]): string {
+  private mappingSlot(baseSlot: bigint, keys: Expr[], ctx: LowerCtx, out: string[]): string {
     let slot = String(baseSlot);
     for (const key of keys) {
       if (isBytesLike(key.type)) {
@@ -8177,7 +8182,7 @@ interface LowerCtx {
 type ArrayRef =
   | { src: 'storage'; lenSlot: string; elem: JethType } // dynamic T[] (data at keccak(lenSlot))
   | { src: 'calldata'; offset: string; length: string; elem: JethType }
-  | { src: 'fixed'; baseSlot: number; length: number; elem: JethType } // Arr<T,N> inline
+  | { src: 'fixed'; baseSlot: bigint; length: number; elem: JethType } // Arr<T,N> inline
   | { src: 'memory'; ptr: string; elem: JethType }; // memory T[] (ptr -> [len][elem0]...)
 
 // The value source for a tuple (dynamic struct) being encoded: a constructed

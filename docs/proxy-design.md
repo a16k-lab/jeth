@@ -145,3 +145,100 @@ Deploy a JETH proxy + V1/V2 impls and a solc proxy + impls; diff returndata + th
 proxy hits V1 and writes the PROXY's storage (impl's own storage untouched); proxyImplementation == the impl;
 upgrade swaps to V2 (behaviour + event); the init delegatecall runs once; a non-authorized upgrade reverts;
 isContract guard on a non-contract impl reverts. Then the variant-specific routing per b/c/d.
+
+---
+
+# Phase 3: DIAMOND (EIP-2535) - research-verified build spec (source-fetched 2026-06-27)
+
+Six research agents fetched the actual mudgen sources + the EIP text + audited JETH infra. Key findings below.
+
+## What "diamond models" actually are (honest catalog)
+- The EIP-2535 SPEC itself ships ONE reference implementation (single-file + multi-file organization of the
+  same code). It does NOT define diamond-1/2/3 and draws no model comparison. The diamond-1/2/3 names are Nick
+  Mudge's EXTERNAL repos; they differ ONLY in the INTERNAL selector/loupe STORAGE LAYOUT + gas profile, never
+  in the external interface. So the byte-identity-relevant axis is: which storage layout you mirror.
+- There are really TWO distinct on-chain storage layouts among the references:
+  - **ARRAY-STORING** (diamond-1-hardhat / diamond-3-hardhat): the 5-field struct
+    `selectorToFacetAndPosition: mapping(bytes4 => {address facetAddress; uint96 functionSelectorPosition})`,
+    `facetFunctionSelectors: mapping(address => {bytes4[] functionSelectors; uint256 facetAddressPosition})`,
+    `facetAddresses: address[]`, `supportedInterfaces: mapping(bytes4=>bool)`, `contractOwner: address`. Loupe
+    reads are near-DIRECT array returns (cheap loupe, more SSTOREs on cut). Add appends; Remove is
+    SWAP-WITH-LAST-then-pop on both the per-facet `bytes4[]` and `facetAddresses[]` (the swap order is
+    storage- and loupe-observable, so byte-identity load-bearing). This is the simplest to make byte-checkable
+    and the most-targeted layout. RECOMMENDED default.
+  - **PACKED-SELECTOR** (diamond-2-hardhat / solidstate): `facets: mapping(bytes4 => bytes32)` (address in high
+    20 bytes | uint16 position in low bytes), `selectorSlots: mapping(uint256 => bytes32)` packing 8 bytes4
+    selectors per slot (MSB-first, bit offset `(k & 7) << 5`), `selectorCount: uint16`, supportedInterfaces,
+    owner. Cheaper cut (fewer SSTOREs), loupe RECONSTRUCTS facet grouping in memory with the
+    `mstore(arrayptr, newLen)` over-allocate-then-shrink trick. Higher byte-identity risk (exact bit math).
+- Shared by ALL three: same slot base `keccak256("diamond.standard.diamond.storage")` (the RAW keccak of the
+  dotted string, NOT the EIP-1967 minus-1 form, NOT abi.encode-wrapped); same `Diamond.sol` fallback
+  (`facet = ds...selectorToFacet[msg.sig]; require(facet != 0, "Diamond: Function does not exist");`
+  calldatacopy/delegatecall/returndatacopy/switch-return-or-revert); same `IDiamondCut`/`IDiamondLoupe`/
+  `IERC173`/`IERC165`; same `FacetCutAction {Add=0, Replace=1, Remove=2}`; same
+  `FacetCut {address facetAddress; FacetCutAction action; bytes4[] functionSelectors}`; same
+  `event DiamondCut(FacetCut[] _diamondCut, address _init, bytes _calldata)` (ZERO indexed params, whole
+  aggregate in data); same `_init`/`_calldata` delegatecall with revert-bubbling +
+  `InitializationFunctionReverted(address,bytes)` custom error fallback.
+
+## Mandatory vs optional (EIP-2535)
+- MANDATORY for compliance: the four loupe fns `facets()` / `facetFunctionSelectors(address)` /
+  `facetAddresses()` / `facetAddress(bytes4)` (struct `Facet {address facetAddress; bytes4[] functionSelectors}`),
+  the selector-routed fallback, and a `DiamondCut` event emitted on EVERY add/replace/remove AND at deploy.
+- OPTIONAL: `IDiamondCut.diamondCut` itself (an IMMUTABLE diamond omits it), ERC-165 `supportsInterface`
+  (interface IDs: `IDiamondCut` = `diamondCut.selector`; `IDiamondLoupe` = XOR of the 4 loupe selectors;
+  written by `DiamondInit.init()`, NOT during the cut), the `_init` contract, a default function.
+- Architectural variants the EIP DOES recognize (the real "models" axis): UPGRADEABLE (cut facet present) vs
+  IMMUTABLE/FROZEN (born-frozen single-cut = cut facet never registered; or finalizable = remove the
+  diamondCut selector later via a self-cut); IMMUTABLE FUNCTIONS defined in the diamond itself (facet ==
+  diamond's own address, execute WITHOUT delegatecall, loupe reports the diamond address); storage CONVENTION
+  (Diamond-Storage per-facet hashed slots [recommended] vs AppStorage struct-at-slot-0 [Aavegotchi, a
+  collision footgun] vs ERC-7201 namespaced).
+- A diamond that DROPS the loupe is NOT EIP-2535 compliant (it is an ERC-1538-style generic multi-facet proxy).
+
+## JETH feasibility (audited against the live tree)
+Both load-bearing pieces are byte-identically implementable on EXISTING infra; NO new Yul codegen primitive.
+- **Namespaced `@storage("ns")` storage** (a struct rooted at a keccak base instead of sequential slot 0):
+  the within-namespace layout is the EXISTING `planLayout` (sequential + packing, src/layout.ts:32-66); the
+  runtime slot derivation (`lowerPlace` src/yul.ts:3323-3443, `mappingSlot` 7460-7484, array-data
+  keccak(lenSlot)) ALREADY operates over an arbitrary 256-bit base. THE ONE LOAD-BEARING PREREQUISITE: widen
+  `baseSlot` from `number` to `bigint` across ir.ts (~9 sites: ir.ts:91,214,221,222,270,322,323,359,365) +
+  ~10 yul.ts arithmetic sites (the `constSlot += add` at yul.ts:3337/3347/3368 and the `Math.floor` packing
+  assume a JS number, which silently breaks above 2^53 for a keccak base). Plus an analyzer `@storage`
+  decorator that routes those fields to a namespace-offset layout pass and keeps them OUT of `rawState`. The
+  ERC-7201 / diamond base is a COMPILE-TIME keccak (reuse src/selectors.ts). MEDIUM effort.
+- **The diamond router fallback** (sload the facet for msg.sig, then delegatecall): every primitive exists -
+  selector extract `shr(224, calldataload(0))` (yul.ts:449/475), `mapping(bytes4=>address)` load via
+  `mappingSlot` keccak (yul.ts:7476-7481), and the delegatecall-and-return-or-bubble tail (yul.ts:461-467).
+  NEEDED: a new synthesized `isDiamond` fallback mode parallel to the `isProxy` branch (yul.ts:402-467) that
+  replaces the fixed-impl sload with the facet-mapping load, and a `diamondCut` admin entry that writes the
+  facets mapping (analogous to `lowerProxyMutate` at yul.ts:6444-6528). Raw user-level delegatecall stays
+  OMITTED (the router is fully synthesized, keeping the safer-subset philosophy).
+- ALL storage types a mirror needs are ALREADY supported + tested: mapping with a struct value containing a
+  dynamic-array field, `address[]`, packed `address+uint96` struct, `bytes4[]`, mapping(bytes4=>bool). The
+  `Facet[] = {address, bytes4[]}[]` loupe return is a dynamic-array-of-dynamic-tuples (JETH's ABI-v2 codec
+  handles it); `DiamondCut` is a non-indexed dynamic-aggregate event (supported).
+
+## SAFER-than-reference stance (the JETH philosophy applied)
+- ENFORCE namespaced `@storage("ns")` for facet state (kills the #1 diamond footgun: storage-slot collisions
+  across facets). Reject AppStorage-at-slot-0 (the colliding convention).
+- `diamondCut` is owner-gated (ERC-173); no raw `delegatecall`/`CREATE` in user code; facets deploy SEPARATELY
+  (like external libraries) and are cut in - the diamond never `new`s a facet.
+- Offer an IMMUTABLE/born-frozen diamond as a first-class safe default (no upgrade footgun), with the
+  upgradeable diamond as the opt-in.
+
+## Recommended scope + build order
+1. SHARED CORE (the bulk, needed by every model): bigint `baseSlot` widen -> `@storage("ns")` namespaced
+   storage -> the `@diamond` selector-router fallback -> `diamondCut(FacetCut[], _init, _calldata)` builtin
+   (Add/Replace/Remove + init delegatecall + DiamondCut event) -> the 4 loupe fns + ERC-165.
+2. DEFAULT MODEL: the ARRAY-STORING (diamond-1/3) layout (simplest byte-identity, direct loupe).
+3. Both LIFECYCLES: upgradeable (cut facet) + immutable/born-frozen (no cut facet) - cheap, same codegen.
+4. OPTIONAL later: the PACKED-SELECTOR (diamond-2) layout as a second gas-optimized model (higher risk), and
+   solidstate's default-fallback-address feature.
+
+## Verification (byte-identical to a hand-written solc diamond-3-hardhat-equivalent in 0.8.35)
+Deploy a JETH `@diamond` + facets and a solc diamond + the same facets; diff returndata + the diamond's raw
+storage (the namespaced struct slots, post swap-and-pop) + the DiamondCut/OwnershipTransferred logs + revert:
+selector routing into each facet, add/replace/remove (esp. the swap-and-pop ORDER, observable via
+facets()/facetFunctionSelectors() + raw slots), all four loupe returns, the owner gate, the `_init`
+delegatecall, ERC-165, and the "function does not exist" revert. Mirror the immutable/frozen variant too.
