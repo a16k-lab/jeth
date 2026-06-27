@@ -8634,6 +8634,78 @@ export class Analyzer {
     return undefined;
   }
 
+  /** Residual D: resolve a DEEP static sub-field/element chain rooted at a memory-array STATIC-struct
+   *  element - xs[i].a, xs[i].q.m, xs[i].pre[k] (k a CONSTANT index), xs[i].q.r[2], ... - where xs is a
+   *  P[] memory local (Residual B) of a static struct. Walks the access chain accumulating a STATIC word
+   *  offset into the element's inline image (field offsets + constant array-index offsets); the value
+   *  leaf is then read via aggFieldRead at that offset (the image stores clean ABI words, no mask).
+   *  Returns undefined for a non-(static-struct-array) root, a RUNTIME array index (a later step), or a
+   *  bare element with no sub-access; emits JETH210/JETH211 only after the struct-array root is confirmed. */
+  private resolveMemArrayElemFieldChain(
+    node: ts.Expression,
+  ): { base: Expr; wordOffset: number; type: JethType } | undefined {
+    const steps: ({ field: string } | { index: ts.Expression; node: ts.Node })[] = [];
+    let cur: ts.Expression = node;
+    let rootArr: ArrayExpr | undefined;
+    let rootIndex: ts.Expression | undefined;
+    for (;;) {
+      if (ts.isPropertyAccessExpression(cur)) {
+        steps.push({ field: cur.name.text });
+        cur = cur.expression;
+      } else if (ts.isElementAccessExpression(cur) && cur.argumentExpression) {
+        const baseArr = this.resolveArrayExpr(cur.expression);
+        if (
+          baseArr &&
+          (baseArr.base.kind === 'memArray' || baseArr.base.kind === 'memArrayExpr') &&
+          baseArr.elem.kind === 'struct'
+        ) {
+          rootArr = baseArr;
+          rootIndex = cur.argumentExpression;
+          break;
+        }
+        steps.push({ index: cur.argumentExpression, node: cur });
+        cur = cur.expression;
+      } else {
+        return undefined;
+      }
+    }
+    if (!rootArr || !rootIndex || steps.length === 0) return undefined; // bare xs[i] is handled elsewhere
+    const index = this.checkExpr(rootIndex, U256);
+    if (!index) return undefined;
+    const base: Expr = { kind: 'arrayGet', type: rootArr.elem, arr: rootArr, index: this.coerce(index, U256, rootIndex) };
+    steps.reverse(); // root -> leaf
+    let curType: JethType = rootArr.elem;
+    let wordOffset = 0;
+    for (const s of steps) {
+      if ('field' in s) {
+        if (curType.kind !== 'struct') {
+          this.diags.error(node, 'JETH210', `cannot read field '${s.field}' of ${displayName(curType)}`);
+          return undefined;
+        }
+        const fo = this.memFieldOffset(curType, s.field);
+        if (!fo) {
+          this.diags.error(node, 'JETH210', `struct '${curType.name}' has no field '${s.field}'`);
+          return undefined;
+        }
+        wordOffset += fo.wordOffset;
+        curType = fo.type;
+      } else {
+        if (!(curType.kind === 'array' && curType.length !== undefined)) return undefined;
+        const iexpr = this.checkExpr(s.index, U256);
+        if (!iexpr) return undefined;
+        const iv = this.coerce(iexpr, U256, s.index);
+        if (iv.kind !== 'literalInt') return undefined; // runtime index into a struct-array element field: a later step
+        if (iv.value < 0n || iv.value >= BigInt(curType.length)) {
+          this.diags.error(s.node, 'JETH211', `array index ${iv.value} out of bounds for length ${curType.length}`);
+          return undefined;
+        }
+        wordOffset += Number(iv.value) * abiHeadWords(curType.element);
+        curType = curType.element;
+      }
+    }
+    return { base, wordOffset, type: curType };
+  }
+
   /** The root memory-aggregate local name of a property-access chain `p.f1...fn`, else undefined. */
   private memChainRoot(node: ts.Expression): string | undefined {
     if (ts.isIdentifier(node)) return this.memAggregateLocals.has(node.text) ? node.text : undefined;
@@ -12190,44 +12262,22 @@ export class Analyzer {
         }
       }
     }
-    // Residual B1: `xs[i].a` where xs is a P[] memory local (static-struct element). The base xs[i]
-    // is an arrayGet whose register is the element's inline struct-image BASE pointer; aggFieldRead
-    // mloads the VALUE field at its word offset. A non-value field (nested struct / dynamic field of a
-    // dynamic struct) stays gated (JETH245); P is a static struct here so all fields are value/static.
-    if (
-      ts.isPropertyAccessExpression(node) &&
-      ts.isElementAccessExpression(node.expression) &&
-      node.expression.argumentExpression &&
-      this.nestedMemArrayElemAccess(node.expression)
-    ) {
-      const baseArr = this.resolveArrayExpr(node.expression.expression);
-      if (
-        baseArr &&
-        (baseArr.base.kind === 'memArray' || baseArr.base.kind === 'memArrayExpr') &&
-        baseArr.elem.kind === 'struct'
-      ) {
-        const index = this.checkExpr(node.expression.argumentExpression, U256);
-        if (!index) return undefined;
-        const base: Expr = {
-          kind: 'arrayGet',
-          type: baseArr.elem,
-          arr: baseArr,
-          index: this.coerce(index, U256, node.expression.argumentExpression),
-        };
-        const fo = this.memFieldOffset(baseArr.elem, node.name.text);
-        if (!fo) {
-          this.diags.error(node, 'JETH210', `struct '${baseArr.elem.name}' has no field '${node.name.text}'`);
-          return undefined;
+    // Residual B/D: a deep STATIC sub-field/element read on a memory-array STATIC-struct element
+    // (xs[i].a, xs[i].q.m, xs[i].pre[0], xs[i].q.r[2]): walk the chain to a static word offset in the
+    // element's inline image, then read the VALUE leaf via aggFieldRead. A whole nested struct / fixed-
+    // array leaf, or a RUNTIME array index into a field, stays a later step (JETH245 / falls through).
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const chain = this.resolveMemArrayElemFieldChain(node);
+      if (chain) {
+        if (isStaticValueType(chain.type)) {
+          return { kind: 'aggFieldRead', type: chain.type, base: chain.base, wordOffset: chain.wordOffset };
         }
-        if (!isStaticValueType(fo.type)) {
-          this.diags.error(
-            node,
-            'JETH245',
-            `reading a ${displayName(fo.type)} field of a struct-array element is not supported yet`,
-          );
-          return undefined;
-        }
-        return { kind: 'aggFieldRead', type: fo.type, base, wordOffset: fo.wordOffset };
+        this.diags.error(
+          node,
+          'JETH245',
+          `reading a ${displayName(chain.type)} of a struct-array element is not supported yet`,
+        );
+        return undefined;
       }
     }
     // G9: `p.x` / `p.inner.x` / `p.inner` read where the chain is rooted at a memory-aggregate
