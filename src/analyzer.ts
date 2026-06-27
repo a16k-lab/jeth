@@ -7064,6 +7064,12 @@ export class Analyzer {
             e.kind === 'mapStorageValue' ||
             e.kind === 'structArrayElem' ||
             e.kind === 'cdDynStructValue' ||
+            // a DYNAMIC-field struct ELEMENT of a calldata struct array (let d: D = ds[i]):
+            // copy the element's calldata tuple into a fresh pointer-headed memory image, the
+            // exact materialization the whole-param path uses (buildDynStructFromCalldata at the
+            // element base). isSupportedDynStructLocal (the surrounding gate) already restricts
+            // the field set, so a nested-array-field struct element stays rejected.
+            e.kind === 'cdStructArrayElem' ||
             e.kind === 'memDynStructValue' ||
             e.kind === 'ternary' ||
             (e.kind === 'call' && e.type.kind === 'struct') ||
@@ -7148,7 +7154,11 @@ export class Analyzer {
         e.kind === 'cdAggregateValue' ||
         e.kind === 'ternary' ||
         e.kind === 'mapStorageValue' ||
-        e.kind === 'structArrayElem';
+        e.kind === 'structArrayElem' ||
+        // a STATIC struct ELEMENT of a calldata struct array (let p: P = ps[i]): copy the
+        // element's (contiguous) calldata head into a fresh static-aggregate memory image, the
+        // existing static-aggregate copy path applied at the element base.
+        e.kind === 'cdStructArrayElem';
       if (!okInit) {
         this.diags.error(
           decl.initializer,
@@ -7161,7 +7171,8 @@ export class Analyzer {
         (e.kind === 'structValue' ||
           e.kind === 'cdAggregateValue' ||
           e.kind === 'mapStorageValue' ||
-          e.kind === 'structArrayElem') &&
+          e.kind === 'structArrayElem' ||
+          e.kind === 'cdStructArrayElem') &&
         (e.type.kind !== 'struct' ||
           (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)
       ) {

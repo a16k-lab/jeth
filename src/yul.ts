@@ -1371,6 +1371,12 @@ ${indent(runtime, 6)}
             );
           } else if (s.init.kind === 'cdAggregateValue') {
             out.push(`let ${name} := ${this.allocAggFromCalldata(s.init.param, s.init.type, ctx, out)}`);
+          } else if (s.init.kind === 'cdStructArrayElem') {
+            // a STATIC struct element of a calldata struct array (let p: P = ps[i]): copy the
+            // element's contiguous calldata head into a fresh static-aggregate memory image (the
+            // same abiEncFromCd transcode the whole-param copy uses, at the element base).
+            const eb = this.cdArrayElemBase(s.init.arr, s.init.index, s.init.type, ctx, out);
+            out.push(`let ${name} := ${this.allocAggFromCalldataBase(s.init.type, eb, out)}`);
           } else if (s.init.kind === 'abiDecode') {
             // a static fixed array Arr<T,N> from abi.decode: the decoded flat ABI image is the local.
             out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
@@ -4382,10 +4388,18 @@ ${indent(runtime, 6)}
   private allocAggFromCalldata(param: string, type: JethType, ctx: LowerCtx, out: string[]): string {
     const ph = ctx.cdParamHead.get(param);
     if (!ph) throw new UnsupportedError(`unbound struct-copy param ${param}`);
+    return this.allocAggFromCalldataBase(type, String(ph.head), out);
+  }
+
+  /** Allocate a fresh memory image for a static aggregate and COPY it from a precomputed CALLDATA
+   *  base (G9: `let p: P = ps[i]`, a calldata struct-array element). The same abiEncFromCd transcode
+   *  the whole-param copy uses (validating dirty narrow fields like solc), applied at the element's
+   *  contiguous calldata head. */
+  private allocAggFromCalldataBase(type: JethType, base: string, out: string[]): string {
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(0x40, add(${ptr}, ${abiHeadWords(type) * 32}))`);
-    this.abiEncFromCd(type, String(ph.head), ptr, true, out);
+    this.abiEncFromCd(type, base, ptr, true, out);
     return ptr;
   }
 
@@ -4431,6 +4445,10 @@ ${indent(runtime, 6)}
     if (init.kind === 'call') return this.lowerExpr(init, ctx, out); // a struct-returning internal call yields the pointer-headed image pointer (ALIAS, like solc memory references)
     if (init.kind === 'ternary') return this.lowerExpr(init, ctx, out); // selects an already-built branch image pointer
     if (init.kind === 'cdDynStructValue') return this.buildDynStructFromCalldata(struct, init, ctx, out);
+    // a DYNAMIC-field struct ELEMENT of a calldata struct array (let d: D = ds[i]): copy the
+    // element's calldata tuple into a fresh pointer-headed image (the same materializer the
+    // whole-param path uses, at the element's offset-located calldata base).
+    if (init.kind === 'cdStructArrayElem') return this.buildDynStructFromCalldata(struct, init, ctx, out);
     // a storage struct source (structValue / mapStorageValue / structArrayElem / placeRead).
     return this.buildDynStructFromStorage(struct, this.structSrcSlot(init, ctx, out), ctx, out);
   }
@@ -4492,7 +4510,13 @@ ${indent(runtime, 6)}
     ctx: LowerCtx,
     out: string[],
   ): string {
-    const src = this.tupleSrc(init, ctx, out); // { kind: 'cd', base }
+    // A whole calldata struct PARAM resolves its tuple-start via tupleSrc (the bound param
+    // offset); a calldata struct-array ELEMENT (let d: D = ds[i]) computes the element's
+    // (offset-located) calldata base via cdArrayElemBase. Both yield { kind: 'cd', base }.
+    const src: TupleSrc =
+      init.kind === 'cdStructArrayElem'
+        ? { kind: 'cd', base: this.cdArrayElemBase(init.arr, init.index, init.type, ctx, out) }
+        : this.tupleSrc(init, ctx, out); // { kind: 'cd', base }
     const headWords = tupleHeadWords(struct);
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
@@ -6100,15 +6124,14 @@ ${indent(runtime, 6)}
    *  2^64 cap + readability check), then re-encode it into a fresh ABI return blob via the
    *  recursive calldata codec (a static struct flat; a dynamic struct with the [0x20]
    *  wrapper). The calldata twin of returnStorageValue/structArrayElem. */
-  private returnCdArrayElem(
-    arr: ArrayExpr,
-    index: Expr,
-    t: JethType,
-    ctx: LowerCtx,
-    out: string[],
-  ): { ptr: string; size: string } {
+  /** Compute the CALLDATA tuple-start base of element `index` of a calldata struct array,
+   *  bounds-checked exactly like ps[i].field (Panic 0x32 on OOB; a dynamic element also bounds
+   *  its offset word + head against calldatasize). A STATIC element is contiguous (dataStart +
+   *  i*stride); a DYNAMIC element is offset-located (dataStart + offset[i]). Shared by the
+   *  `return ps[i]` echo and the memory-struct-local materialization (let p: P = ps[i]). */
+  private cdArrayElemBase(arr: ArrayExpr, index: Expr, t: JethType, ctx: LowerCtx, out: string[]): string {
     const ref = this.lowerArrayRef(arr, ctx, out);
-    if (ref.src !== 'calldata') throw new UnsupportedError('returnCdArrayElem requires a calldata array');
+    if (ref.src !== 'calldata') throw new UnsupportedError('cdArrayElemBase requires a calldata array');
     const i = this.fresh();
     out.push(`let ${i} := ${this.lowerExpr(index, ctx, out)}`);
     out.push(`if iszero(lt(${i}, ${ref.length})) { ${this.panic()}(0x32) }`);
@@ -6118,11 +6141,7 @@ ${indent(runtime, 6)}
       // already validated readable when the array was bound).
       const stride = abiHeadWords(t) * 32;
       out.push(`let ${eb} := add(${ref.offset}, mul(${i}, ${stride}))`);
-      const ptr = this.fresh();
-      out.push(`let ${ptr} := mload(0x40)`);
-      const size = this.abiEncFromCd(t, eb, ptr, true, out);
-      out.push(`mstore(0x40, add(${ptr}, ${size}))`);
-      return { ptr, size };
+      return eb;
     }
     // dynamic element: ref.offset is the per-element offset-table base (= data start). Element
     // i's data is at base + offset[i]; mirror abiEncFromCd's dynamic-array element resolution.
@@ -6131,6 +6150,24 @@ ${indent(runtime, 6)}
     out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
     out.push(`let ${eb} := add(${ref.offset}, ${so})`);
     out.push(`if gt(add(${eb}, ${cdElemHeadBytes(t)}), calldatasize()) { revert(0, 0) }`);
+    return eb;
+  }
+
+  private returnCdArrayElem(
+    arr: ArrayExpr,
+    index: Expr,
+    t: JethType,
+    ctx: LowerCtx,
+    out: string[],
+  ): { ptr: string; size: string } {
+    const eb = this.cdArrayElemBase(arr, index, t, ctx, out);
+    if (isStaticType(t)) {
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const size = this.abiEncFromCd(t, eb, ptr, true, out);
+      out.push(`mstore(0x40, add(${ptr}, ${size}))`);
+      return { ptr, size };
+    }
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(${ptr}, 0x20)`);
