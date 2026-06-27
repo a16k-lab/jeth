@@ -171,6 +171,10 @@ export class Analyzer {
   // base (ERC-7201 keccak). Insertion-ordered: ns string -> the fields declared in it (most-base-first,
   // matching the @state collection order). Kept OUT of rawState so @storage never shifts @state slots.
   private namespacedStorage = new Map<string, RawStateVar[]>();
+  // Synthesis-only: namespaces whose base slot is the RAW keccak256(ns) (the diamond-standard
+  // base, byte-matching mudgen's DIAMOND_STORAGE_POSITION) instead of the ERC-7201 user formula.
+  // A `@storage('ns', 'raw')` field (used only by the synthesized @diamond) lands here.
+  private rawNamespaces = new Set<string>();
   // Phase 5: user-defined @modifier declarations (name -> RawModifier). A modifier is never a
   // standalone function (not callable, not in the ABI); it is inlined around each function it decorates.
   private modifiersByName = new Map<string, RawModifier>();
@@ -255,6 +259,9 @@ export class Analyzer {
   constructor(
     private readonly sourceFile: ts.SourceFile,
     private readonly diags: DiagnosticBag,
+    // Phase 3: set when this compilation unit's deployed contract is a synthesized @diamond (the source
+    // was expanded from `@diamond('array')`); marks the ContractIR so emitRuntime adds the router.
+    private readonly diamond?: { name: string; variant: 'array' },
   ) {}
 
   // ---- lexical scope stack -------------------------------------------------
@@ -716,7 +723,11 @@ export class Analyzer {
         const decs = decoratorNames(n);
         // Phase 2d: `@beacon class B` is a deployable contract too (the OZ UpgradeableBeacon-equivalent);
         // like @proxy it needs no separate @contract decorator.
-        if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon')) out.push(n);
+        // Phase 3: `@facet class F` is a deployable contract too (it compiles to an ORDINARY contract -
+        // own bytecode + selector dispatch; it may use @storage('ns') freely - and is deployed standalone
+        // then cut into a diamond, like an external library). The only difference from @contract is the tag.
+        if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet'))
+          out.push(n);
       }
       ts.forEachChild(n, visit);
     };
@@ -757,7 +768,11 @@ export class Analyzer {
     }
     // A library has no inheritance in Phase A (solc forbids a library `is` clause entirely).
     if (heritageBases(cls).length > 0) {
-      this.diags.error(cls, 'JETH387', `@library '${name}' cannot extend another contract/library (libraries have no inheritance)`);
+      this.diags.error(
+        cls,
+        'JETH387',
+        `@library '${name}' cannot extend another contract/library (libraries have no inheritance)`,
+      );
     }
     const fns: RawFunction[] = [];
     for (const member of cls.members) {
@@ -832,10 +847,7 @@ export class Analyzer {
       // function. One body scan catches every `this.<member>` use.
       if (member.body) {
         const scanThis = (n: ts.Node): void => {
-          if (
-            ts.isPropertyAccessExpression(n) &&
-            n.expression.kind === ts.SyntaxKind.ThisKeyword
-          ) {
+          if (ts.isPropertyAccessExpression(n) && n.expression.kind === ts.SyntaxKind.ThisKeyword) {
             this.diags.error(
               n,
               'JETH394',
@@ -919,7 +931,7 @@ export class Analyzer {
     const visit = (n: ts.Node): void => {
       if (ts.isClassDeclaration(n) && n.name) {
         const decs = decoratorNames(n);
-        if (decs.includes('contract') || decs.includes('abstract')) {
+        if (decs.includes('contract') || decs.includes('abstract') || decs.includes('facet')) {
           this.classByName.set(n.name.text, n);
         }
       }
@@ -1043,7 +1055,12 @@ export class Analyzer {
 
   // Inheritance: per-contract constructors gathered while flattening (most-derived FIRST, matching
   // the linearization), each with its heritage base-call args. Consumed by mergeConstructors.
-  private ctorChain: { contract: string; node?: ts.ConstructorDeclaration; bases: HeritageBase[]; cls: ts.ClassDeclaration }[] = [];
+  private ctorChain: {
+    contract: string;
+    node?: ts.ConstructorDeclaration;
+    bases: HeritageBase[];
+    cls: ts.ClassDeclaration;
+  }[] = [];
 
   private analyzeContract(cls: ts.ClassDeclaration, lin: ts.ClassDeclaration[]): ContractIR | undefined {
     const name = cls.name?.text ?? 'Contract';
@@ -1477,28 +1494,53 @@ export class Analyzer {
       const call = decoratorCall(cls, 'proxy');
       if (call && call.arguments.length > 0) {
         if (call.arguments.length !== 1) {
-          this.diags.error(call, 'JETH400', "@proxy(...) takes at most one variant argument (a string literal, e.g. @proxy('transparent') or @proxy('beacon'))");
+          this.diags.error(
+            call,
+            'JETH400',
+            "@proxy(...) takes at most one variant argument (a string literal, e.g. @proxy('transparent') or @proxy('beacon'))",
+          );
         } else {
           const arg = call.arguments[0]!;
           const variant = ts.isStringLiteralLike(arg) ? arg.text : undefined;
           if (variant === 'transparent') proxyVariant = 'transparent';
           else if (variant === 'beacon') proxyVariant = 'beacon';
-          else this.diags.error(arg, 'JETH400', `unknown @proxy variant ${ts.isStringLiteralLike(arg) ? `'${arg.text}'` : 'argument'} (only 'transparent' and 'beacon' are supported; omit the argument for the plain delegate-only proxy)`);
+          else
+            this.diags.error(
+              arg,
+              'JETH400',
+              `unknown @proxy variant ${ts.isStringLiteralLike(arg) ? `'${arg.text}'` : 'argument'} (only 'transparent' and 'beacon' are supported; omit the argument for the plain delegate-only proxy)`,
+            );
         }
       }
       if (receiveNode)
-        this.diags.error(receiveNode.member, 'JETH398', 'a @proxy class may not declare a @receive entry (the delegate fallback is synthesized)');
+        this.diags.error(
+          receiveNode.member,
+          'JETH398',
+          'a @proxy class may not declare a @receive entry (the delegate fallback is synthesized)',
+        );
       if (fallbackNode)
-        this.diags.error(fallbackNode.member, 'JETH398', 'a @proxy class may not declare a @fallback entry (the delegate fallback is synthesized)');
+        this.diags.error(
+          fallbackNode.member,
+          'JETH398',
+          'a @proxy class may not declare a @fallback entry (the delegate fallback is synthesized)',
+        );
       if (layout.vars.length > 0)
-        this.diags.error(cls, 'JETH399', 'a @proxy class may not declare @state (proxy storage belongs to the implementation; use proxyInit/upgradeProxy for the EIP-1967 slots)');
+        this.diags.error(
+          cls,
+          'JETH399',
+          'a @proxy class may not declare @state (proxy storage belongs to the implementation; use proxyInit/upgradeProxy for the EIP-1967 slots)',
+        );
       // Phase 2b: a transparent proxy exposes NO own functions to non-admins (every non-admin call
       // delegates to the impl; an admin may ONLY call upgradeToAndCall, which the synthesized fallback
       // handles). So an @external method on the contract is unreachable AND clashes the impl's selectors.
       if (proxyVariant === 'transparent') {
         for (const f of functions) {
           if (f.visibility === 'external') {
-            this.diags.error(cls, 'JETH401', `a @proxy('transparent') class may not declare an @external method ('${f.signature}'): every non-admin call delegates to the implementation and the admin may only call upgradeToAndCall (the upgrade entry is synthesized)`);
+            this.diags.error(
+              cls,
+              'JETH401',
+              `a @proxy('transparent') class may not declare an @external method ('${f.signature}'): every non-admin call delegates to the implementation and the admin may only call upgradeToAndCall (the upgrade entry is synthesized)`,
+            );
           }
         }
       }
@@ -1508,7 +1550,11 @@ export class Analyzer {
       if (proxyVariant === 'beacon') {
         for (const f of functions) {
           if (f.visibility === 'external') {
-            this.diags.error(cls, 'JETH405', `a @proxy('beacon') class may not declare an @external method ('${f.signature}'): every call resolves the implementation via the beacon and delegates to it (the user writes only the constructor with proxyInitBeacon)`);
+            this.diags.error(
+              cls,
+              'JETH405',
+              `a @proxy('beacon') class may not declare an @external method ('${f.signature}'): every call resolves the implementation via the beacon and delegates to it (the user writes only the constructor with proxyInitBeacon)`,
+            );
           }
         }
       }
@@ -1529,9 +1575,7 @@ export class Analyzer {
     // from one of them belongs to the library object, never the contract. This holds even for an
     // UNREFERENCED external library (no link site) - it must still not pollute the contract dispatcher.
     const hasAnyExternalLibFn = [...this.libraryByName.values()].some((fns) => fns.some((rf) => rf.libraryExternal));
-    const contractFunctions = hasAnyExternalLibFn
-      ? this.contractRetainedFunctions(functions, callGraph)
-      : functions;
+    const contractFunctions = hasAnyExternalLibFn ? this.contractRetainedFunctions(functions, callGraph) : functions;
 
     return {
       name,
@@ -1548,6 +1592,14 @@ export class Analyzer {
       proxyVariant,
       isUups: isUups || undefined,
       isBeacon: isBeacon || undefined,
+      isDiamond: this.diamond ? true : undefined,
+      diamondVariant: this.diamond?.variant,
+      // The router looks up selectorToFacetAndPosition[msg.sig].facetAddress. That mapping (_sel2facet)
+      // is the FIRST diamond-storage field, so its slot = the raw diamond-storage base (base + 0).
+      diamondStorageBase: this.diamond ? BigInt('0x' + toHex(keccak('diamond.standard.diamond.storage'))) : undefined,
+      diamondSel2FacetSlot: this.diamond
+        ? (this.stateByName.get('_sel2facet')?.slot ?? BigInt('0x' + toHex(keccak('diamond.standard.diamond.storage'))))
+        : undefined,
       libraries: libraries.length > 0 ? libraries : undefined,
     };
   }
@@ -1675,35 +1727,63 @@ export class Analyzer {
   ): void {
     // A beacon owns fixed storage slots 0 (owner) and 1 (implementation); user state would collide.
     if (stateVarCount > 0)
-      this.diags.error(cls, 'JETH406', 'a @beacon class may not declare @state/@constant/@immutable (the owner and implementation live in reserved storage slots 0 and 1; the whole UpgradeableBeacon surface is synthesized)');
+      this.diags.error(
+        cls,
+        'JETH406',
+        'a @beacon class may not declare @state/@constant/@immutable (the owner and implementation live in reserved storage slots 0 and 1; the whole UpgradeableBeacon surface is synthesized)',
+      );
     if (hasReceive || hasFallback)
-      this.diags.error(cls, 'JETH406', 'a @beacon class may not declare a @receive/@fallback entry (the UpgradeableBeacon surface is fully synthesized)');
+      this.diags.error(
+        cls,
+        'JETH406',
+        'a @beacon class may not declare a @receive/@fallback entry (the UpgradeableBeacon surface is fully synthesized)',
+      );
     if (heritageBases(cls).length > 0)
-      this.diags.error(cls, 'JETH406', 'a @beacon class may not extend another contract (the UpgradeableBeacon surface is fully synthesized)');
+      this.diags.error(
+        cls,
+        'JETH406',
+        'a @beacon class may not extend another contract (the UpgradeableBeacon surface is fully synthesized)',
+      );
     // The user MUST declare `constructor(impl: address) {}` - exactly one address param, an EMPTY body
     // (JETH synthesizes the owner/impl init in creation). The single param defines the appended ctor arg.
     const ctorNode = this.ctorChain[0]?.node;
     if (!ctorNode) {
-      this.diags.error(cls, 'JETH407', "a @beacon class must declare 'constructor(impl: address) {}' (the implementation the beacon initially points at; the body must be empty)");
+      this.diags.error(
+        cls,
+        'JETH407',
+        "a @beacon class must declare 'constructor(impl: address) {}' (the implementation the beacon initially points at; the body must be empty)",
+      );
     } else {
       const ps = ctorNode.parameters;
       const ok =
         ps.length === 1 &&
         ts.isIdentifier(ps[0]!.name) &&
-        (resolveType(ps[0]!.type, this.diags, this.structsByName)?.kind === 'address');
+        resolveType(ps[0]!.type, this.diags, this.structsByName)?.kind === 'address';
       if (!ok)
         this.diags.error(ctorNode, 'JETH407', "a @beacon constructor must take exactly one parameter 'impl: address'");
       const bodyStmts = ctorNode.body?.statements ?? ts.factory.createNodeArray();
       if (bodyStmts.length > 0)
-        this.diags.error(ctorNode, 'JETH407', 'a @beacon constructor body must be empty (the owner/implementation initialization is synthesized)');
+        this.diags.error(
+          ctorNode,
+          'JETH407',
+          'a @beacon constructor body must be empty (the owner/implementation initialization is synthesized)',
+        );
       if (ctorDecoratorNames(ctorNode).includes('payable'))
-        this.diags.error(ctorNode, 'JETH407', 'a @beacon constructor may not be @payable (the UpgradeableBeacon constructor is non-payable, matching OZ)');
+        this.diags.error(
+          ctorNode,
+          'JETH407',
+          'a @beacon constructor may not be @payable (the UpgradeableBeacon constructor is non-payable, matching OZ)',
+        );
     }
     // Reject a user-declared upgradeTo/implementation/owner (clash with the synthesized entries). The
     // generic JETH044 would also catch it, but this is more precise.
     for (const name of ['upgradeTo', 'implementation', 'owner']) {
       if ((this.candidatesByName.get(name) ?? []).length > 0) {
-        this.diags.error(cls, 'JETH408', `a @beacon class may not declare '${name}' (the ${name}(...) entry is synthesized by @beacon)`);
+        this.diags.error(
+          cls,
+          'JETH408',
+          `a @beacon class may not declare '${name}' (the ${name}(...) entry is synthesized by @beacon)`,
+        );
         return;
       }
     }
@@ -1900,7 +1980,11 @@ export class Analyzer {
       const out = new Set<string>();
       basesOf.set(cn, out); // set first to tolerate a (rejected-elsewhere) cycle
       const cls = byName.get(cn);
-      if (cls) for (const b of heritageBases(cls)) { out.add(b.name); for (const bb of computeBases(b.name)) out.add(bb); }
+      if (cls)
+        for (const b of heritageBases(cls)) {
+          out.add(b.name);
+          for (const bb of computeBases(b.name)) out.add(bb);
+        }
       return out;
     };
     for (const cn of this.linOrder) computeBases(cn);
@@ -2442,7 +2526,22 @@ export class Analyzer {
   private checkSpecialEntry(member: ts.MethodDeclaration, kind: 'receive' | 'fallback'): SpecialEntryIR | undefined {
     const decs = decoratorNames(member);
     let payable = kind === 'receive'; // @receive is always payable
-    const BAD = ['view', 'pure', 'read', 'hidden', 'nonReentrant', 'external', 'public', 'internal', 'private', 'virtual', 'override', 'modifier', 'error', 'event'];
+    const BAD = [
+      'view',
+      'pure',
+      'read',
+      'hidden',
+      'nonReentrant',
+      'external',
+      'public',
+      'internal',
+      'private',
+      'virtual',
+      'override',
+      'modifier',
+      'error',
+      'event',
+    ];
     for (const d of decs) {
       if (d === kind) continue;
       if (d === 'payable') {
@@ -2452,17 +2551,29 @@ export class Analyzer {
           payable = true;
         }
       } else if (BAD.includes(d)) {
-        this.diags.error(member, 'JETH386', `a @${kind} entry cannot be @${d} (a special entry is payable or non-payable only)`);
+        this.diags.error(
+          member,
+          'JETH386',
+          `a @${kind} entry cannot be @${d} (a special entry is payable or non-payable only)`,
+        );
       } else {
         // an applied @modifier on a special entry is not supported in v1.
         this.diags.error(member, 'JETH386', `a @${kind} entry cannot carry a @modifier in v1`);
       }
     }
     if (member.parameters.length > 0) {
-      this.diags.error(member, 'JETH384', `a @${kind} entry cannot declare parameters in v1 (the raw-bytes @fallback(d: bytes): bytes form is not yet supported)`);
+      this.diags.error(
+        member,
+        'JETH384',
+        `a @${kind} entry cannot declare parameters in v1 (the raw-bytes @fallback(d: bytes): bytes form is not yet supported)`,
+      );
     }
     if (member.type && member.type.kind !== ts.SyntaxKind.VoidKeyword) {
-      this.diags.error(member, 'JETH384', `a @${kind} entry cannot declare a return type in v1 (the raw-bytes @fallback(d: bytes): bytes form is not yet supported)`);
+      this.diags.error(
+        member,
+        'JETH384',
+        `a @${kind} entry cannot declare a return type in v1 (the raw-bytes @fallback(d: bytes): bytes form is not yet supported)`,
+      );
     }
 
     // Type-check the body in a fresh function-like context (modeled on checkConstructor), terminated as
@@ -2500,19 +2611,40 @@ export class Analyzer {
   }
 
   /** @payable + applied-@modifier decorators on a constructor (shared by mergeConstructors). */
-  private ctorDecorators(ctorNode: ts.ConstructorDeclaration): { payable: boolean; ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] } {
+  private ctorDecorators(ctorNode: ts.ConstructorDeclaration): {
+    payable: boolean;
+    ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[];
+  } {
     let payable = false;
     const ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
-    const BAD = new Set(['view', 'pure', 'read', 'nonReentrant', 'external', 'public', 'internal', 'private', 'hidden']);
+    const BAD = new Set([
+      'view',
+      'pure',
+      'read',
+      'nonReentrant',
+      'external',
+      'public',
+      'internal',
+      'private',
+      'hidden',
+    ]);
     for (const dec of ts.getDecorators(ctorNode as unknown as ts.HasDecorators) ?? []) {
       const e = dec.expression;
       let nm: string | undefined;
       let args: ts.Expression[] = [];
       if (ts.isIdentifier(e)) nm = e.text;
-      else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) { nm = e.expression.text; args = [...e.arguments]; }
+      else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
+        nm = e.expression.text;
+        args = [...e.arguments];
+      }
       if (!nm) continue;
       if (nm === 'payable') payable = true;
-      else if (BAD.has(nm)) this.diags.error(ctorNode, 'JETH301', `a constructor cannot be @${nm} (a constructor is payable or non-payable only)`);
+      else if (BAD.has(nm))
+        this.diags.error(
+          ctorNode,
+          'JETH301',
+          `a constructor cannot be @${nm} (a constructor is payable or non-payable only)`,
+        );
       else ctorMods.push({ name: nm, argNodes: args, site: dec });
     }
     if (ctorNode.type) this.diags.error(ctorNode.type, 'JETH301', 'a constructor cannot declare a return type');
@@ -2527,13 +2659,32 @@ export class Analyzer {
   private ctorParams(ctorNode: ts.ConstructorDeclaration): Param[] {
     const params: Param[] = [];
     for (const p of ctorNode.parameters) {
-      if (!ts.isIdentifier(p.name)) { this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier'); continue; }
+      if (!ts.isIdentifier(p.name)) {
+        this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
+        continue;
+      }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
-      if (p.initializer) this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
-      if (this.typeHasMapping(t)) { this.diags.error(p, 'JETH247', `constructor parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`); continue; }
-      if (!isStaticValueType(t)) { this.diags.error(p, 'JETH302', `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only: uintN/intN/bool/address/bytesN/enum/branded)`); continue; }
-      if (params.some((q) => q.name === p.name!.getText())) this.diags.error(p, 'JETH056', `duplicate parameter name '${p.name.text}'`);
+      if (p.initializer)
+        this.diags.error(p, 'JETH304', `a constructor parameter ('${p.name.text}') cannot have a default value`);
+      if (this.typeHasMapping(t)) {
+        this.diags.error(
+          p,
+          'JETH247',
+          `constructor parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`,
+        );
+        continue;
+      }
+      if (!isStaticValueType(t)) {
+        this.diags.error(
+          p,
+          'JETH302',
+          `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only: uintN/intN/bool/address/bytesN/enum/branded)`,
+        );
+        continue;
+      }
+      if (params.some((q) => q.name === p.name!.getText()))
+        this.diags.error(p, 'JETH056', `duplicate parameter name '${p.name.text}'`);
       params.push({ name: p.name.text, type: t });
     }
     return params;
@@ -2580,7 +2731,11 @@ export class Analyzer {
         if (prior) {
           // Base args given twice (heritage on two different contracts, e.g. both diamond branches
           // specify a shared base). solc rejects ("Base constructor arguments given twice").
-          this.diags.error(b.node, 'JETH379', `base contract '${b.name}' is given constructor arguments more than once (each base's constructor arguments may be specified only once across the inheritance chain)`);
+          this.diags.error(
+            b.node,
+            'JETH379',
+            `base contract '${b.name}' is given constructor arguments more than once (each base's constructor arguments may be specified only once across the inheritance chain)`,
+          );
           baseArgsGate = true;
           continue;
         }
@@ -2595,7 +2750,11 @@ export class Analyzer {
         if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
           const nm = e.expression.text;
           if (chain.some((c, i) => i !== 0 && c.contract === nm)) {
-            this.diags.error(dec, 'JETH379', `modifier-style base-constructor arguments ('constructor() ${nm}(...)') are not supported yet; specify the base's arguments via the heritage clause ('extends ${nm}(...)')`);
+            this.diags.error(
+              dec,
+              'JETH379',
+              `modifier-style base-constructor arguments ('constructor() ${nm}(...)') are not supported yet; specify the base's arguments via the heritage clause ('extends ${nm}(...)')`,
+            );
             baseArgsGate = true;
           }
         }
@@ -2609,13 +2768,21 @@ export class Analyzer {
       if (chainParams[i]!.length === 0) continue; // no params -> no args needed
       const prov = baseArgProvider.get(c.contract);
       if (!prov) {
-        this.diags.error(deployed.node ?? deployed.cls, 'JETH379', `base contract '${c.contract}' has a constructor with ${chainParams[i]!.length} parameter(s) but no arguments are specified for it (add them via the heritage clause, e.g. 'extends ${c.contract}(...)')`);
+        this.diags.error(
+          deployed.node ?? deployed.cls,
+          'JETH379',
+          `base contract '${c.contract}' has a constructor with ${chainParams[i]!.length} parameter(s) but no arguments are specified for it (add them via the heritage clause, e.g. 'extends ${c.contract}(...)')`,
+        );
         baseArgsGate = true;
         continue;
       }
       // Arity must match (a base ctor with params given empty `extends B()` is a missing-args reject).
       if (prov.argNodes.length !== chainParams[i]!.length) {
-        this.diags.error(prov.site, 'JETH379', `base contract '${c.contract}' expects ${chainParams[i]!.length} constructor argument(s) but ${prov.argNodes.length} were given`);
+        this.diags.error(
+          prov.site,
+          'JETH379',
+          `base contract '${c.contract}' expects ${chainParams[i]!.length} constructor argument(s) but ${prov.argNodes.length} were given`,
+        );
         baseArgsGate = true;
       }
     }
@@ -2624,7 +2791,11 @@ export class Analyzer {
     for (const [name, prov] of baseArgProvider) {
       const idx = chain.findIndex((c) => c.contract === name);
       if (idx >= 0 && prov.argNodes.length > 0 && chainParams[idx]!.length === 0) {
-        this.diags.error(prov.site, 'JETH379', `base contract '${name}' constructor takes no arguments but ${prov.argNodes.length} were given`);
+        this.diags.error(
+          prov.site,
+          'JETH379',
+          `base contract '${name}' constructor takes no arguments but ${prov.argNodes.length} were given`,
+        );
         baseArgsGate = true;
       }
     }
@@ -2641,7 +2812,11 @@ export class Analyzer {
         const names = byProvider.get(prov.providerIdx) ?? [];
         for (const p of chainParams[i]!) {
           if (names.includes(p.name)) {
-            this.diags.error(prov.site, 'JETH379', `two base constructors initialized by the same contract share the parameter name '${p.name}'; this collides in codegen and is not supported yet (rename one base ctor's parameter)`);
+            this.diags.error(
+              prov.site,
+              'JETH379',
+              `two base constructors initialized by the same contract share the parameter name '${p.name}'; this collides in codegen and is not supported yet (rename one base ctor's parameter)`,
+            );
             baseArgsGate = true;
           }
           names.push(p.name);
@@ -2726,7 +2901,11 @@ export class Analyzer {
           const e = this.checkExpr(prov.argNodes[k]!, bparams[k]!.type);
           const init = e ? this.coerce(e, bparams[k]!.type, prov.argNodes[k]!) : undefined;
           if (this.currentReadsState) {
-            this.diags.error(prov.argNodes[k]!, 'JETH379', `a base-constructor argument for '${b.name}' reads contract state, which is not available in the inheritance clause (state is not yet initialized when base arguments are evaluated); use a constant or constructor-independent expression`);
+            this.diags.error(
+              prov.argNodes[k]!,
+              'JETH379',
+              `a base-constructor argument for '${b.name}' reads contract state, which is not available in the inheritance clause (state is not yet initialized when base arguments are evaluated); use a constant or constructor-independent expression`,
+            );
           }
           this.scopes = savedArgScopes;
           this.currentReadsState = savedReadsState;
@@ -2768,7 +2947,11 @@ export class Analyzer {
     this.currentInConstructor = false;
 
     if (this.currentCallees.size > 0) {
-      this.diags.error(deployed.node ?? deployed.cls, 'JETH303', 'calling an internal/private function from a constructor is not supported yet (inline the logic into the constructor body)');
+      this.diags.error(
+        deployed.node ?? deployed.cls,
+        'JETH303',
+        'calling an internal/private function from a constructor is not supported yet (inline the logic into the constructor body)',
+      );
     }
     return { params, payable, body };
   }
@@ -2976,9 +3159,10 @@ export class Analyzer {
         this.diags.error(member, 'JETH409', `a field cannot combine @storage with @${other}`);
         return;
       }
-      const ns = this.storageNamespaceArg(member);
-      if (ns === undefined) return;
-      namespace = ns;
+      const nsArg = this.storageNamespaceArg(member);
+      if (nsArg === undefined) return;
+      namespace = nsArg.ns;
+      if (nsArg.raw) this.rawNamespaces.add(nsArg.ns);
     }
     if (!decs.includes('state') && !isConstant && !isImmutable && !isStorage) {
       this.diags.error(
@@ -3069,16 +3253,18 @@ export class Analyzer {
     out.push({ name: member.name.text, type, initialValue });
   }
 
-  /** Validate a `@storage('ns')` decorator's argument: it must be exactly one non-empty string
-   *  literal. Returns the namespace string, or undefined after reporting a clean diagnostic. */
-  private storageNamespaceArg(member: ts.PropertyDeclaration): string | undefined {
+  /** Validate a `@storage('ns')` decorator's argument: a non-empty string-literal namespace, with an
+   *  OPTIONAL second string-literal mode `'raw'` (synthesis-only: the diamond struct's raw-keccak base).
+   *  A user `@storage('ns')` takes exactly one arg (raw is reserved for the synthesized @diamond).
+   *  Returns `{ ns, raw }`, or undefined after reporting a clean diagnostic. */
+  private storageNamespaceArg(member: ts.PropertyDeclaration): { ns: string; raw: boolean } | undefined {
     const call = decoratorCall(member, 'storage');
     if (!call) {
       this.diags.error(member, 'JETH410', "@storage requires a namespace argument: @storage('my.namespace')");
       return undefined;
     }
-    if (call.arguments.length !== 1) {
-      this.diags.error(call, 'JETH410', '@storage takes exactly one string-literal namespace argument');
+    if (call.arguments.length < 1 || call.arguments.length > 2) {
+      this.diags.error(call, 'JETH410', '@storage takes a string-literal namespace argument');
       return undefined;
     }
     const arg = call.arguments[0]!;
@@ -3090,7 +3276,16 @@ export class Analyzer {
       this.diags.error(arg, 'JETH410', '@storage namespace must be a non-empty string');
       return undefined;
     }
-    return arg.text;
+    let raw = false;
+    if (call.arguments.length === 2) {
+      const mode = call.arguments[1]!;
+      if (!ts.isStringLiteralLike(mode) || mode.text !== 'raw') {
+        this.diags.error(mode, 'JETH410', "@storage's optional second argument must be the literal 'raw'");
+        return undefined;
+      }
+      raw = true;
+    }
+    return { ns: arg.text, raw };
   }
 
   /** ERC-7201 (EIP-7201) namespaced-storage base slot for `ns`:
@@ -3120,7 +3315,10 @@ export class Analyzer {
   private planNamespacedStorage(): StateVar[] {
     const result: StateVar[] = [];
     for (const [ns, raw] of this.namespacedStorage) {
-      const base = this.erc7201Base(ns);
+      // The synthesized @diamond struct uses the RAW keccak256(ns) base (mudgen's
+      // DIAMOND_STORAGE_POSITION = keccak256("diamond.standard.diamond.storage")); a user
+      // @storage('ns') uses the ERC-7201 (-1, re-hash, clear-low-byte) base.
+      const base = this.rawNamespaces.has(ns) ? BigInt('0x' + toHex(keccak(ns))) : this.erc7201Base(ns);
       const layout = planLayout(raw); // sequential + packing within the namespace, from slot 0
       for (const v of layout.vars) {
         result.push({
@@ -3823,8 +4021,7 @@ export class Analyzer {
     // modifierWrap undefined); when at least one has post-code, `wrap.body` stays the RAW wrapped body
     // Z (emitted as userfn_<key>) and `wrap.modifierWrap` is the nested pre/post structure the dispatch
     // lowers (see FunctionIR.modifierWrap).
-    const wrap =
-      rf.modifiers && rf.modifiers.length ? this.wrapModifiers(rf, body) : { body, modifierWrap: undefined };
+    const wrap = rf.modifiers && rf.modifiers.length ? this.wrapModifiers(rf, body) : { body, modifierWrap: undefined };
     this.popScope();
 
     // Mutability enforcement (directive §2.7 STATICCALL view semantics) is performed AFTER
@@ -3940,10 +4137,7 @@ export class Analyzer {
    *  scope (params + state only). Result: [{block: [argDecls, ...pre, ...inner, ...post]}]. Here `inner`
    *  is a CALL marker (not the inlined body), so the param-shadow concern that forces pre-only to keep
    *  the body outside the block does not apply. */
-  private buildModifierWrap(
-    app: { name: string; argNodes: ts.Expression[]; site: ts.Node },
-    inner: Stmt[],
-  ): Stmt[] {
+  private buildModifierWrap(app: { name: string; argNodes: ts.Expression[]; site: ts.Node }, inner: Stmt[]): Stmt[] {
     const mod = this.modifiersByName.get(app.name);
     if (!mod) {
       this.diags.error(
@@ -4457,7 +4651,8 @@ export class Analyzer {
         !this.stateByName.has(e.expression.expression.text)
       ) {
         const c = this.resolveQualifiedLibraryCall(e, e.expression.expression.text, e.expression.name.text, true);
-        if (c) out.push(c.kind === 'call' ? { kind: 'callStmt', fn: c.fn, args: c.args } : { kind: 'exprStmt', expr: c });
+        if (c)
+          out.push(c.kind === 'call' ? { kind: 'callStmt', fn: c.fn, args: c.args } : { kind: 'exprStmt', expr: c });
         return;
       }
       // Phase 6: a high-level typed interface call as a statement `IFoo(addr).method(args);`. The call
@@ -4505,7 +4700,10 @@ export class Analyzer {
         if (recvType) {
           const r = this.resolveAttachedLibraryCall(e, e.expression.expression, recvType, e.expression.name.text, true);
           if (r !== 'no-match') {
-            if (r) out.push(r.kind === 'call' ? { kind: 'callStmt', fn: r.fn, args: r.args } : { kind: 'exprStmt', expr: r });
+            if (r)
+              out.push(
+                r.kind === 'call' ? { kind: 'callStmt', fn: r.fn, args: r.args } : { kind: 'exprStmt', expr: r },
+              );
             return;
           }
         }
@@ -6346,7 +6544,11 @@ export class Analyzer {
     const sig = this.checkExpr(node.arguments[1]!, this.bytesLiteralExpected(node.arguments[1]!));
     if (!hash || !sig) return undefined;
     if (hash.type.kind !== 'bytesN' || hash.type.size !== 32) {
-      this.diags.error(node.arguments[0]!, 'JETH171', `tryRecover(...) requires a bytes32 hash, got ${displayName(hash.type)}`);
+      this.diags.error(
+        node.arguments[0]!,
+        'JETH171',
+        `tryRecover(...) requires a bytes32 hash, got ${displayName(hash.type)}`,
+      );
       return undefined;
     }
     if (sig.type.kind !== 'bytes') {
@@ -7181,7 +7383,11 @@ export class Analyzer {
    *  contract's full linearization) that DEFINES f - exactly solc's MRO super order. A super outside
    *  an inherited function, or to an unimplemented next-in-line, is rejected cleanly. The resolved
    *  base version is passed forced into checkInternalCall (which handles arg checking + IR). */
-  private checkSuperCall(node: ts.CallExpression, name: string, asStatement: boolean): (Expr & { kind: 'call' }) | undefined {
+  private checkSuperCall(
+    node: ts.CallExpression,
+    name: string,
+    asStatement: boolean,
+  ): (Expr & { kind: 'call' }) | undefined {
     const here = this.currentDefiningContract;
     if (here === undefined) {
       this.diags.error(node, 'JETH382', `'super' is only valid inside an inherited contract function`);
@@ -7215,7 +7421,10 @@ export class Analyzer {
       return undefined;
     }
     // Disambiguate by which candidate's target params the args fit (overloaded super).
-    const viable = candidates.filter((c) => this.overloadApplicable(node, c.chain[c.nextIdx]!.rf) && this.overloadArgsMatch(node, c.chain[c.nextIdx]!.rf));
+    const viable = candidates.filter(
+      (c) =>
+        this.overloadApplicable(node, c.chain[c.nextIdx]!.rf) && this.overloadArgsMatch(node, c.chain[c.nextIdx]!.rf),
+    );
     const chosen = viable.length === 1 ? viable[0]! : candidates.length === 1 ? candidates[0]! : viable[0];
     if (!chosen) {
       this.diags.error(node, 'JETH381', `super.${name}(...) does not match any base implementation's parameters`);
@@ -7439,7 +7648,11 @@ export class Analyzer {
     return this.pickLibraryOverload(node, named, qualified);
   }
 
-  private pickLibraryOverload(node: ts.CallExpression, list: RawFunction[], qualified: string): RawFunction | undefined {
+  private pickLibraryOverload(
+    node: ts.CallExpression,
+    list: RawFunction[],
+    qualified: string,
+  ): RawFunction | undefined {
     if (list.length === 1) return list[0]!;
     const applicable = list.filter((c) => this.overloadApplicable(node, c));
     if (applicable.length === 0) {
@@ -7511,7 +7724,11 @@ export class Analyzer {
     // function is a DELEGATECALL (Phase B); a bare one is inlined (Phase A). Both share the same param/
     // return ABI-support gates and arg type-checking; only the produced IR differs.
     if (callee.returnTypes) {
-      this.diags.error(node, 'JETH241', `call to a multi-value-return library function '${callee.name}' is not supported yet`);
+      this.diags.error(
+        node,
+        'JETH241',
+        `call to a multi-value-return library function '${callee.name}' is not supported yet`,
+      );
       return undefined;
     }
     const isMemByRef = (t: JethType): boolean =>
@@ -7531,7 +7748,8 @@ export class Analyzer {
       return undefined;
     }
     const rt = callee.returnType;
-    const returnSupported = rt.kind === 'void' || isStaticValueType(rt) || isMemByRef(rt) || this.isSupportedDynStructLocal(rt);
+    const returnSupported =
+      rt.kind === 'void' || isStaticValueType(rt) || isMemByRef(rt) || this.isSupportedDynStructLocal(rt);
     if (!returnSupported) {
       this.diags.error(
         node,
@@ -7549,7 +7767,11 @@ export class Analyzer {
     const params = callee.params;
     const defaults = callee.defaults ?? params.map(() => undefined);
     if (argExprs.length > params.length) {
-      this.diags.error(node, 'JETH148', `'${callee.name}' expects at most ${params.length} argument(s), got ${argExprs.length}`);
+      this.diags.error(
+        node,
+        'JETH148',
+        `'${callee.name}' expects at most ${params.length} argument(s), got ${argExprs.length}`,
+      );
       return undefined;
     }
     const argNodes: ts.Expression[] = [];
@@ -7766,7 +7988,11 @@ export class Analyzer {
     const tryRecover = this.resolveTryRecover(decl.initializer);
     if (tryRecover) {
       if (n !== 2) {
-        this.diags.error(decl.name, 'JETH066', `tryRecover destructuring expects exactly 2 names [ok, signer], got ${n}`);
+        this.diags.error(
+          decl.name,
+          'JETH066',
+          `tryRecover destructuring expects exactly 2 names [ok, signer], got ${n}`,
+        );
         return;
       }
       this.bindDestructure(pat, n, tryRecover.types, tryRecover.source, out);
@@ -7775,7 +8001,11 @@ export class Analyzer {
     const pointEval = this.resolvePointEvaluation(decl.initializer);
     if (pointEval) {
       if (n !== 2) {
-        this.diags.error(decl.name, 'JETH066', `pointEvaluation destructuring expects exactly 2 names [fe, modulus], got ${n}`);
+        this.diags.error(
+          decl.name,
+          'JETH066',
+          `pointEvaluation destructuring expects exactly 2 names [fe, modulus], got ${n}`,
+        );
         return;
       }
       this.bindDestructure(pat, n, pointEval.types, pointEval.source, out);
@@ -10251,7 +10481,11 @@ export class Analyzer {
       return undefined;
     }
     if (!isInteger(s.type)) {
-      this.diags.error(node.arguments[1]!, 'JETH171', `bn256Mul(...) scalar must be an integer, got ${displayName(s.type)}`);
+      this.diags.error(
+        node.arguments[1]!,
+        'JETH171',
+        `bn256Mul(...) scalar must be an integer, got ${displayName(s.type)}`,
+      );
       return undefined;
     }
     return {
@@ -10280,15 +10514,27 @@ export class Analyzer {
     const f = this.checkExpr(node.arguments[4]!, BOOL);
     if (!rounds || !h || !m || !t || !f) return undefined;
     if (!isInteger(rounds.type)) {
-      this.diags.error(node.arguments[0]!, 'JETH171', `blake2f(...) rounds must be a u32, got ${displayName(rounds.type)}`);
+      this.diags.error(
+        node.arguments[0]!,
+        'JETH171',
+        `blake2f(...) rounds must be a u32, got ${displayName(rounds.type)}`,
+      );
       return undefined;
     }
     if (h.type.kind !== 'bytes') {
-      this.diags.error(node.arguments[1]!, 'JETH171', `blake2f(...) h must be bytes (length 64), got ${displayName(h.type)}`);
+      this.diags.error(
+        node.arguments[1]!,
+        'JETH171',
+        `blake2f(...) h must be bytes (length 64), got ${displayName(h.type)}`,
+      );
       return undefined;
     }
     if (m.type.kind !== 'bytes') {
-      this.diags.error(node.arguments[2]!, 'JETH171', `blake2f(...) m must be bytes (length 128), got ${displayName(m.type)}`);
+      this.diags.error(
+        node.arguments[2]!,
+        'JETH171',
+        `blake2f(...) m must be bytes (length 128), got ${displayName(m.type)}`,
+      );
       return undefined;
     }
     if (t.type.kind !== 'bytesN' || t.type.size !== 16) {
@@ -10296,7 +10542,11 @@ export class Analyzer {
       return undefined;
     }
     if (f.type.kind !== 'bool') {
-      this.diags.error(node.arguments[4]!, 'JETH171', `blake2f(...) f (final-block flag) must be bool, got ${displayName(f.type)}`);
+      this.diags.error(
+        node.arguments[4]!,
+        'JETH171',
+        `blake2f(...) f (final-block flag) must be bool, got ${displayName(f.type)}`,
+      );
       return undefined;
     }
     return { kind: 'blake2f', type: BYTES, rounds: this.coerce(rounds, U32, node.arguments[0]!), h, m, t, f };
@@ -10320,14 +10570,22 @@ export class Analyzer {
       if (!a) return undefined;
       if (a.type.kind === 'address') return a;
       if (this.isAddressConvertible(a.type)) return { kind: 'cast', type: ADDRESS, from: a.type, operand: a };
-      this.diags.error(node.arguments[idx]!, 'JETH395', `${callee}(...) ${who} must be address, got ${displayName(a.type)}`);
+      this.diags.error(
+        node.arguments[idx]!,
+        'JETH395',
+        `${callee}(...) ${who} must be address, got ${displayName(a.type)}`,
+      );
       return undefined;
     };
     const saltArg = (idx: number): Expr | undefined => {
       const s = this.checkExpr(node.arguments[idx]!, BYTES32);
       if (!s) return undefined;
       if (s.type.kind !== 'bytesN' || s.type.size !== 32) {
-        this.diags.error(node.arguments[idx]!, 'JETH396', `${callee}(...) salt must be bytes32, got ${displayName(s.type)}`);
+        this.diags.error(
+          node.arguments[idx]!,
+          'JETH396',
+          `${callee}(...) salt must be bytes32, got ${displayName(s.type)}`,
+        );
         return undefined;
       }
       return s;
@@ -10431,14 +10689,22 @@ export class Analyzer {
       if (!a) return undefined;
       if (a.type.kind === 'address') return a;
       if (this.isAddressConvertible(a.type)) return { kind: 'cast', type: ADDRESS, from: a.type, operand: a };
-      this.diags.error(node.arguments[idx]!, 'JETH395', `${callee}(...) ${who} must be address, got ${displayName(a.type)}`);
+      this.diags.error(
+        node.arguments[idx]!,
+        'JETH395',
+        `${callee}(...) ${who} must be address, got ${displayName(a.type)}`,
+      );
       return undefined;
     };
     const bytesArg = (idx: number, who: string): Expr | undefined => {
       const b = this.checkExpr(node.arguments[idx]!, this.bytesLiteralExpected(node.arguments[idx]!));
       if (!b) return undefined;
       if (b.type.kind !== 'bytes') {
-        this.diags.error(node.arguments[idx]!, 'JETH397', `${callee}(...) ${who} must be bytes, got ${displayName(b.type)} (use bytes(...) / abi.encode(...))`);
+        this.diags.error(
+          node.arguments[idx]!,
+          'JETH397',
+          `${callee}(...) ${who} must be bytes, got ${displayName(b.type)} (use bytes(...) / abi.encode(...))`,
+        );
         return undefined;
       }
       return b;
@@ -10492,7 +10758,11 @@ export class Analyzer {
     // proxyInit(impl, initData) | proxyInit(impl, admin, initData)
     if (callee === 'proxyInit') {
       if (node.arguments.length !== 2 && node.arguments.length !== 3) {
-        this.diags.error(node, 'JETH170', 'proxyInit(...) takes 2 (impl, initData) or 3 (impl, admin, initData) arguments');
+        this.diags.error(
+          node,
+          'JETH170',
+          'proxyInit(...) takes 2 (impl, initData) or 3 (impl, admin, initData) arguments',
+        );
         return undefined;
       }
       const impl = addrArg(0, 'impl');
@@ -10510,6 +10780,67 @@ export class Analyzer {
       return { kind: 'proxyInit', type: VOID, impl, admin, initData };
     }
     return undefined;
+  }
+
+  /** Phase 3 DIAMOND: the synthesis-only builtins emitted by the @diamond expansion (src/diamond.ts).
+   *  Each is only valid inside a synthesized @diamond contract (this.diamond is set); calling one in an
+   *  ordinary @contract is a clean JETH414 (the names are double-underscored / reserved).
+   *   - diamondInit(owner): void; ctor primitive. Sets contractOwner = owner, registers the 4 ERC-165
+   *     interface ids, emits OwnershipTransferred(0, owner). STATE-MUTATING.
+   *   - __diamondDelegateInit(_init, _calldata): void; the initializeDiamondCut _init delegatecall (raw
+   *     runtime-address delegatecall, bubble the revert). STATE-MUTATING.
+   *   - __diamondFacets(): __DiamondFacet[]; the facets() loupe return (raw-Yul builds Facet[] from the
+   *     split storage). A storage read. */
+  private checkDiamondBuiltin(node: ts.CallExpression, callee: string): Expr | undefined {
+    if (!this.diamond) {
+      this.diags.error(node, 'JETH414', `'${callee}' is a reserved diamond builtin (only valid inside a @diamond)`);
+      return undefined;
+    }
+    if (callee === 'diamondInit') {
+      if (node.arguments.length !== 1) {
+        this.diags.error(node, 'JETH414', 'diamondInit(owner) takes exactly one argument (the initial owner)');
+        return undefined;
+      }
+      const a = this.checkExpr(node.arguments[0]!, ADDRESS);
+      if (!a) return undefined;
+      let owner = a;
+      if (a.type.kind !== 'address') {
+        if (this.isAddressConvertible(a.type)) owner = { kind: 'cast', type: ADDRESS, from: a.type, operand: a };
+        else {
+          this.diags.error(
+            node.arguments[0]!,
+            'JETH414',
+            `diamondInit(owner) owner must be address, got ${displayName(a.type)}`,
+          );
+          return undefined;
+        }
+      }
+      this.currentWritesState = true; // SSTORE owner + the 4 ERC-165 ids + emit -> reject @view/@pure
+      return { kind: 'diamondInit', type: VOID, owner };
+    }
+    if (callee === '__diamondDelegateInit') {
+      if (node.arguments.length !== 2) {
+        this.diags.error(node, 'JETH414', '__diamondDelegateInit takes exactly 2 arguments');
+        return undefined;
+      }
+      const init = this.checkExpr(node.arguments[0]!, ADDRESS);
+      const data = this.checkExpr(node.arguments[1]!, BYTES);
+      if (!init || !data) return undefined;
+      this.currentWritesState = true; // delegatecall may mutate -> reject @view/@pure
+      return { kind: 'diamondDelegateInit', type: VOID, init, data };
+    }
+    // __diamondFacets()
+    if (node.arguments.length !== 0) {
+      this.diags.error(node, 'JETH414', '__diamondFacets() takes no arguments');
+      return undefined;
+    }
+    const facetStruct = this.structsByName.get('__DiamondFacet');
+    if (!facetStruct || facetStruct.kind !== 'struct') {
+      this.diags.error(node, 'JETH414', 'internal: __DiamondFacet struct missing');
+      return undefined;
+    }
+    this.currentReadsState = true; // reads the diamond-storage arrays -> not @pure
+    return { kind: 'diamondFacets', type: { kind: 'array', element: facetStruct, length: undefined } };
   }
 
   private checkAddressCall(node: ts.CallExpression): Expr | undefined {
@@ -10982,6 +11313,21 @@ export class Analyzer {
           return { kind: 'literalInt', type: U256, value: BigInt(dyn.result.arr.base.length) };
         }
         if (dyn && !dyn.result) return undefined; // committed but errored (diagnostic already emitted)
+      }
+      // ds[i].xs.length: a dynamic value-array FIELD of a calldata dynamic-struct ARRAY element
+      // (e.g. _diamondCut[i].functionSelectors.length). The element ds[i] is reached via the
+      // per-element offset table, then the field's array decodes to (start,len). Reuse the SAME
+      // resolver the indexed read ds[i].xs[j] uses (resolveCdDynArrayField -> a cdDynArrayField
+      // arrayValue), then read its length word - byte-identical to the working element path.
+      if (ts.isPropertyAccessExpression(node.expression) && ts.isElementAccessExpression(node.expression.expression)) {
+        const bt = this.baseDynType(node.expression.expression.expression);
+        if (bt && bt.kind === 'array' && bt.element.kind === 'struct' && isDynamicType(bt.element)) {
+          const av = this.resolveCdDynArrayField(node.expression, bt.element);
+          if (av && av.kind === 'arrayValue' && av.arr.base.kind === 'cdDynArrayField') {
+            return { kind: 'arrayLen', type: U256, arr: av.arr };
+          }
+          if (!av) return undefined; // committed but errored
+        }
       }
       // .length of a fixed-array field/element of a calldata aggregate param: a
       // compile-time constant (e.g. s.data.length where data: Arr<T,N>).
@@ -12079,7 +12425,11 @@ export class Analyzer {
           }
         }
         if (!isInteger(v.type)) {
-          this.diags.error(node.arguments[1]!, 'JETH171', `ecrecover(...) v must be an integer, got ${displayName(v.type)}`);
+          this.diags.error(
+            node.arguments[1]!,
+            'JETH171',
+            `ecrecover(...) v must be an integer, got ${displayName(v.type)}`,
+          );
           return undefined;
         }
         return {
@@ -12102,7 +12452,11 @@ export class Analyzer {
           const sig = this.checkExpr(node.arguments[1]!, this.bytesLiteralExpected(node.arguments[1]!));
           if (!hash || !sig) return undefined;
           if (hash.type.kind !== 'bytesN' || hash.type.size !== 32) {
-            this.diags.error(node.arguments[0]!, 'JETH171', `recover(...) requires a bytes32 hash, got ${displayName(hash.type)}`);
+            this.diags.error(
+              node.arguments[0]!,
+              'JETH171',
+              `recover(...) requires a bytes32 hash, got ${displayName(hash.type)}`,
+            );
             return undefined;
           }
           if (sig.type.kind !== 'bytes') {
@@ -12136,7 +12490,11 @@ export class Analyzer {
             }
           }
           if (!isInteger(v.type)) {
-            this.diags.error(node.arguments[1]!, 'JETH171', `recover(...) v must be an integer, got ${displayName(v.type)}`);
+            this.diags.error(
+              node.arguments[1]!,
+              'JETH171',
+              `recover(...) v must be an integer, got ${displayName(v.type)}`,
+            );
             return undefined;
           }
           return { kind: 'recover', type: ADDRESS, hash, v: this.coerce(v, U8, node.arguments[1]!), r, s };
@@ -12307,6 +12665,10 @@ export class Analyzer {
         callee === 'proxyBeacon'
       ) {
         return this.checkProxyBuiltin(node, callee);
+      }
+      // --- Phase 3 DIAMOND: synthesis-only builtins (only valid inside a synthesized @diamond). ---
+      if (callee === 'diamondInit' || callee === '__diamondDelegateInit' || callee === '__diamondFacets') {
+        return this.checkDiamondBuiltin(node, callee);
       }
       // `Color(x)` is an integer -> enum range-checked conversion; an enum is a branded uint8, so
       // isBrandedAlias already routes it, but name it explicitly for clarity.
@@ -14030,6 +14392,10 @@ export class Analyzer {
   }
 }
 
-export function analyze(sourceFile: ts.SourceFile, diags: DiagnosticBag): ContractIR | undefined {
-  return new Analyzer(sourceFile, diags).analyze();
+export function analyze(
+  sourceFile: ts.SourceFile,
+  diags: DiagnosticBag,
+  diamond?: { name: string; variant: 'array' },
+): ContractIR | undefined {
+  return new Analyzer(sourceFile, diags, diamond).analyze();
 }

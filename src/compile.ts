@@ -2,6 +2,7 @@
 // validation -> semantic analysis + type check -> storage layout -> Yul -> solc
 // -> bytecode + ABI.
 import { parse } from './parser.js';
+import { expandDiamond } from './diamond.js';
 import { DiagnosticBag, CompileError, Diagnostic } from './diagnostics.js';
 import { validateSubset } from './validator.js';
 import { analyze } from './analyzer.js';
@@ -51,14 +52,38 @@ export interface CompileOptions {
 
 export function compile(source: string, opts: CompileOptions = {}): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
-  const parsed = parse(source, fileName);
+
+  // Phase 3 (DIAMOND): expand a `@diamond('array')` class into the synthesized `@contract` BEFORE parse
+  // (a source-text transform, like the parser's enum hoist). Gate diagnostics (positions in the ORIGINAL
+  // source) are surfaced first; on a gate error we throw without parsing the (now invalid) expansion.
+  const dia = expandDiamond(source, fileName);
+  if (dia.diagnostics.length > 0) {
+    throw new CompileError(
+      dia.diagnostics.map((d) => ({
+        severity: 'error' as const,
+        code: d.code,
+        message: d.message,
+        file: fileName,
+        line: d.line,
+        column: d.column,
+        length: d.length,
+      })),
+    );
+  }
+  const effectiveSource = dia.expanded ? dia.source : source;
+
+  const parsed = parse(effectiveSource, fileName);
   const diags = new DiagnosticBag(parsed.sourceFile, fileName);
 
   // Phase 0: subset validation (collects, does not throw yet).
   validateSubset(parsed.sourceFile, diags);
 
   // Phase 1: semantic analysis + type checking.
-  const ir = analyze(parsed.sourceFile, diags);
+  const ir = analyze(
+    parsed.sourceFile,
+    diags,
+    dia.expanded && dia.name ? { name: dia.name, variant: dia.variant ?? 'array' } : undefined,
+  );
 
   // Surface all front-end diagnostics together.
   diags.throwIfErrors();

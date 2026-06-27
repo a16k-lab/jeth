@@ -98,6 +98,13 @@ const BEACON_UPGRADED_TOPIC = '0x1cf3b03a6cf19fa2baba4df148e9dcabedea7f8a5c07840
 // UpgradeableBeacon stores owner at slot 0 (Ownable._owner) and implementation at slot 1.
 const OWNABLE_UNAUTHORIZED_SELECTOR = '0x118cdaa7'; // OwnableUnauthorizedAccount(address)
 
+// Phase 3 (DIAMOND): keccak256("OwnershipTransferred(address,address)") - the ERC-173 topic0 (both args
+// indexed); emitted by diamondInit (raw Yul) and by the synthesized transferOwnership (normal emit path).
+const OWNERSHIP_TRANSFERRED_TOPIC = '0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0';
+// The four ERC-165 interface ids diamondInit registers: IERC165, IDiamondCut (diamondCut.selector),
+// IDiamondLoupe (XOR of the 4 loupe selectors), IERC173. Each set true in supportedInterfaces.
+const DIAMOND_ERC165_IDS = ['0x01ffc9a7', '0x1f931c1c', '0x48e2b093', '0x7f5828d0'];
+
 /** ABI head-word count of a struct's tuple HEAD (spec section 3.0): each field
  *  contributes its inline static words if static, or exactly ONE offset word if
  *  dynamic (string/bytes/dynamic-array/nested-dynamic-struct). This differs from
@@ -147,8 +154,10 @@ export class YulEmitter {
   private tmp = 0;
   private nameCounter = 0; // per-function unique local-name counter
   private funcs = new Map<string, FunctionIR>(); // contract functions by name (internal-call targets)
+  private contract?: ContractIR; // the contract being emitted (for the diamond storage base/slots)
 
   emit(contract: ContractIR): string {
+    this.contract = contract;
     for (const f of contract.functions) this.funcs.set(f.key, f); // by unique key (overload-safe)
     const runtime = this.emitRuntime(contract);
     const creation = this.emitCreation(contract);
@@ -415,7 +424,9 @@ ${indent(runtime, 6)}
         lines.push(`  if iszero(eq(shr(224, calldataload(0)), ${UPGRADE_TO_AND_CALL_SELECTOR})) {`);
         // ProxyDeniedAdminAccess(): store the 4-byte selector left-aligned and revert it. (The deny path
         // reason is OZ-identical; the success path is what we primarily byte-match.)
-        lines.push(`    mstore(0, ${PROXY_DENIED_ADMIN_ACCESS_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+        lines.push(
+          `    mstore(0, ${PROXY_DENIED_ADMIN_ACCESS_SELECTOR}00000000000000000000000000000000000000000000000000000000)`,
+        );
         lines.push('    revert(0, 4)');
         lines.push('  }');
         for (const l of this.emitTransparentAdminUpgrade()) lines.push('  ' + l);
@@ -461,6 +472,42 @@ ${indent(runtime, 6)}
       lines.push(`let _impl := and(sload(${EIP1967_IMPL_SLOT}), 0xffffffffffffffffffffffffffffffffffffffff)`);
       lines.push('calldatacopy(0, 0, calldatasize())');
       lines.push('let _ok := delegatecall(gas(), _impl, 0, calldatasize(), 0, 0)');
+      lines.push('returndatacopy(0, 0, returndatasize())');
+      lines.push('switch _ok');
+      lines.push('case 0 { revert(0, returndatasize()) }');
+      lines.push('default { return(0, returndatasize()) }');
+    } else if (contract.isDiamond) {
+      // Phase 3 DIAMOND: the diamond's OWN @external functions (diamondCut / the 4 loupe fns / owner /
+      // transferOwnership / supportsInterface - the "immutable functions" of EIP-2535) dispatch first in
+      // a normal selector switch with an EMPTY default; an unmatched selector FALLS THROUGH to the router.
+      if (external.length > 0) {
+        lines.push('if iszero(lt(calldatasize(), 4)) {');
+        lines.push('  let selector := shr(224, calldataload(0))');
+        lines.push('  switch selector');
+        for (const fn of external) {
+          lines.push(`  case 0x${fn.selector} { // ${fn.signature}`);
+          for (const l of this.emitDispatchCase(fn)) lines.push('    ' + l);
+          lines.push('  }');
+        }
+        lines.push('  default {}');
+        lines.push('}');
+      }
+      // The router: look up selectorToFacetAndPosition[msg.sig].facetAddress (a mapping(bytes4=>{address,
+      // uint96}) at the diamond-storage base; the address is the LOW 160 bits of the struct's single slot),
+      // then delegatecall the facet with all calldata and return-or-bubble. msg.sig is shr(224) (right-
+      // aligned); the bytes4 mapping key is stored LEFT-aligned, so shl(224) it for the keccak. Byte-
+      // identical to mudgen's Diamond.sol fallback.
+      const sel2 = String(contract.diamondSel2FacetSlot ?? contract.diamondStorageBase ?? 0n);
+      lines.push('let _sig := shr(224, calldataload(0))');
+      lines.push('mstore(0x00, shl(224, _sig))');
+      lines.push(`mstore(0x20, ${sel2})`);
+      lines.push('let _facet := and(sload(keccak256(0x00, 0x40)), 0xffffffffffffffffffffffffffffffffffffffff)');
+      lines.push('if iszero(_facet) {');
+      for (const l of this.lowerErrorString(new TextEncoder().encode('Diamond: Function does not exist')))
+        lines.push('  ' + l);
+      lines.push('}');
+      lines.push('calldatacopy(0, 0, calldatasize())');
+      lines.push('let _ok := delegatecall(gas(), _facet, 0, calldatasize(), 0, 0)');
       lines.push('returndatacopy(0, 0, returndatasize())');
       lines.push('switch _ok');
       lines.push('case 0 { revert(0, returndatasize()) }');
@@ -722,7 +769,10 @@ ${indent(runtime, 6)}
       // Encode the buffered return value ONCE (reuse the full single-value/bytes/string return encoder
       // by lowering a synthetic `return <rawReg ret>`). Void -> the empty return.
       if (ret) {
-        for (const l of this.lowerStmt({ kind: 'return', value: { kind: 'rawReg', type: fn.returnType, reg: ret } }, ctx))
+        for (const l of this.lowerStmt(
+          { kind: 'return', value: { kind: 'rawReg', type: fn.returnType, reg: ret } },
+          ctx,
+        ))
           bodyLines.push(l);
       } else {
         bodyLines.push('return(0, 0)');
@@ -888,13 +938,22 @@ ${indent(runtime, 6)}
           out.push(ctx.specialEntry ? 'stop()' : 'return(0, 0)');
           break;
         }
+        // Phase 3 DIAMOND: `return __diamondFacets()` (the facets() loupe). Build the Facet[] ABI return
+        // blob in raw Yul directly from the split diamond-3 storage (no JETH Facet[] memory local exists).
+        if (s.value.kind === 'diamondFacets') {
+          this.lowerDiamondFacetsReturn(out);
+          break;
+        }
         // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
         // sub-pointer), or `return this.helper()` (struct-returning internal call): the
         // ABI-unpacked memory image at the (sub)pointer IS the flat return blob. G9.
         if (
           isStaticType(s.value.type) &&
           (s.value.type.kind === 'struct' || s.value.type.kind === 'array') &&
-          (s.value.kind === 'memAggregate' || s.value.kind === 'call' || s.value.kind === 'ternary' || s.value.kind === 'bn256')
+          (s.value.kind === 'memAggregate' ||
+            s.value.kind === 'call' ||
+            s.value.kind === 'ternary' ||
+            s.value.kind === 'bn256')
         ) {
           // a STATIC memory-aggregate image (struct / fixed array): the image IS the flat return blob.
           // (A DYNAMIC-array call/ternary falls through to encodeMemArrayReturn below.)
@@ -1392,6 +1451,16 @@ ${indent(runtime, 6)}
         // BeaconUpgraded + optional beacon-routed delegatecall); emits Yul directly, no value to pop.
         if (s.expr.kind === 'proxyInitBeacon') {
           this.lowerProxyInitBeacon(s.expr, ctx, out);
+          break;
+        }
+        // Phase 3 DIAMOND: diamondInit (owner wiring + ERC-165 ids + event) and __diamondDelegateInit
+        // (the _init delegatecall) are void statements emitting Yul directly, no value to pop.
+        if (s.expr.kind === 'diamondInit') {
+          this.lowerDiamondInit(s.expr, ctx, out);
+          break;
+        }
+        if (s.expr.kind === 'diamondDelegateInit') {
+          this.lowerDiamondDelegateInit(s.expr, ctx, out);
           break;
         }
         const v = this.lowerExpr(s.expr, ctx, out);
@@ -2509,6 +2578,9 @@ ${indent(runtime, 6)}
       case 'proxyInit': // void EIP-1967 statement: lowered in exprStmt via lowerProxyMutate (never a value)
       case 'upgradeProxy': // void EIP-1967 statement: lowered in exprStmt via lowerProxyMutate (never a value)
       case 'proxyInitBeacon': // void EIP-1967 BEACON statement: lowered in exprStmt (never a value)
+      case 'diamondInit': // void diamond ctor primitive: lowered in exprStmt via lowerDiamondInit
+      case 'diamondDelegateInit': // void diamond statement: lowered in exprStmt (never a value)
+      case 'diamondFacets': // Facet[] aggregate: consumed by the return path (lowerDiamondFacetsReturn)
         // reference/aggregate values are not single 256-bit words; they are
         // consumed by the return/assign/length/index paths.
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
@@ -6111,8 +6183,7 @@ ${indent(runtime, 6)}
         // Byte-identical to solc data[start:end]: require(start <= end && end <= baseLen) else revert EMPTY.
         // Order: lower the base, then start, then end (matching solc left-to-right operand evaluation).
         const ref = this.lowerDynamic(e.base, ctx, out);
-        if (ref.src !== 'calldata')
-          throw new UnsupportedError('calldataSlice base must be a calldata bytes value');
+        if (ref.src !== 'calldata') throw new UnsupportedError('calldataSlice base must be a calldata bytes value');
         const baseData = this.fresh();
         const baseLen = this.fresh();
         out.push(`let ${baseData} := ${ref.dataPtr}`);
@@ -6404,7 +6475,12 @@ ${indent(runtime, 6)}
 
   /** Materialize the EIP-1167 clone creation code at a fresh memory pointer (32-byte aligned head). Returns
    *  the pointer and a register holding the creation-code byte length (0x37, or 0x37+argLen with args). */
-  private buildCloneCreationCode(impl: Expr, args: Expr | undefined, ctx: LowerCtx, out: string[]): { ptr: string; len: string } {
+  private buildCloneCreationCode(
+    impl: Expr,
+    args: Expr | undefined,
+    ctx: LowerCtx,
+    out: string[],
+  ): { ptr: string; len: string } {
     // Lower the impl to a clean 160-bit address register (mask high bits so the OR-injection is exact).
     const implReg = this.fresh();
     out.push(`let ${implReg} := and(${this.lowerExpr(impl, ctx, out)}, 0xffffffffffffffffffffffffffffffffffffffff)`);
@@ -6416,7 +6492,9 @@ ${indent(runtime, 6)}
       // zero bytes are inside the alloc and never read by CREATE, which uses only [ptr, ptr+0x37)).
       const ptr = this.fresh();
       out.push(`let ${ptr} := ${this.alloc()}(0x40)`);
-      out.push(`mstore(${ptr}, or(0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000, shr(64, ${implReg})))`);
+      out.push(
+        `mstore(${ptr}, or(0x3d602d80600a3d3981f3363d3d373d3d3d363d73000000000000000000000000, shr(64, ${implReg})))`,
+      );
       out.push(`mstore(add(${ptr}, 0x20), or(shl(192, ${implReg}), ${W1_POST}))`);
       out.push(`let ${len} := 0x37`);
       return { ptr, len };
@@ -6477,6 +6555,127 @@ ${indent(runtime, 6)}
     out.push(`  returndatacopy(0, 0, returndatasize())`);
     out.push(`  if iszero(${ok}) { revert(0, returndatasize()) }`);
     out.push(`}`);
+  }
+
+  // ---- Phase 3 DIAMOND helpers ----------------------------------------------------------------
+
+  /** The absolute storage slot of a synthesized diamond-storage field by name (base + relative slot).
+   *  The five fields are laid out from the raw diamond-storage base by planNamespacedStorage. */
+  private diamondSlot(name: string): bigint {
+    const v = this.contract?.stateVars.find((s) => s.name === name);
+    if (v === undefined) throw new UnsupportedError(`internal: diamond storage field '${name}' missing`);
+    return v.slot;
+  }
+
+  /** Lower diamondInit(owner): the @diamond constructor primitive (byte-identical to mudgen's
+   *  LibDiamond.setContractOwner + DiamondInit's ERC-165 registration). Sets contractOwner = owner,
+   *  emits OwnershipTransferred(address(0), owner) (both args indexed, log3 over no data), then sets
+   *  supportedInterfaces[id] = true for the four diamond interface ids. */
+  private lowerDiamondInit(e: Expr & { kind: 'diamondInit' }, ctx: LowerCtx, out: string[]): void {
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    const owner = this.fresh();
+    out.push(`let ${owner} := and(${this.lowerExpr(e.owner, ctx, out)}, ${MASK})`);
+    out.push(`sstore(${String(this.diamondSlot('_contractOwner'))}, ${owner})`);
+    // emit OwnershipTransferred(address(0) indexed, owner indexed): both args indexed -> log3, no data.
+    out.push(`log3(0, 0, ${OWNERSHIP_TRANSFERRED_TOPIC}, 0, ${owner})`);
+    // supportedInterfaces[id] = true: mapping(bytes4=>bool) at the field slot; the key (a bytes4) is
+    // stored LEFT-aligned (shl 224), then keccak(key . slot), sstore(slot, 1). Matches solc's mapping.
+    const siSlot = String(this.diamondSlot('_supportedInterfaces'));
+    for (const id of DIAMOND_ERC165_IDS) {
+      out.push(`mstore(0x00, ${id}00000000000000000000000000000000000000000000000000000000)`);
+      out.push(`mstore(0x20, ${siSlot})`);
+      out.push(`sstore(keccak256(0x00, 0x40), 1)`);
+    }
+  }
+
+  /** Lower __diamondDelegateInit(_init, _calldata): the initializeDiamondCut _init delegatecall, byte-
+   *  identical to mudgen's LibDiamondCut.initializeDiamondCut: if _init==0 return (no-op); require
+   *  extcodesize(_init)>0 (else a clean revert - the mudgen NoBytecodeAtAddress custom error is the
+   *  degenerate path); delegatecall(gas(), _init, _calldata) and on failure bubble the returndata
+   *  verbatim (the InitializationFunctionReverted empty-revert path is degenerate). */
+  private lowerDiamondDelegateInit(e: Expr & { kind: 'diamondDelegateInit' }, ctx: LowerCtx, out: string[]): void {
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    const init = this.fresh();
+    out.push(`let ${init} := and(${this.lowerExpr(e.init, ctx, out)}, ${MASK})`);
+    // if _init != address(0): require code, delegatecall _calldata, bubble the revert. (init==0 -> no-op.)
+    out.push(`if ${init} {`);
+    out.push(`  if iszero(extcodesize(${init})) { revert(0, 0) }`);
+    const { mp, len } = this.toMemory(this.lowerDynamic(e.data, ctx, out), out);
+    const ok = this.fresh();
+    out.push(`  let ${ok} := delegatecall(gas(), ${init}, add(${mp}, 0x20), ${len}, 0, 0)`);
+    out.push(`  returndatacopy(0, 0, returndatasize())`);
+    out.push(`  if iszero(${ok}) { revert(0, returndatasize()) }`);
+    out.push(`}`);
+  }
+
+  /** Phase 3 DIAMOND: lower the facets() loupe (`return __diamondFacets()`). Builds the ABI return blob
+   *  for `Facet[]` (Facet = {address facetAddress; bytes4[] functionSelectors}) directly from the split
+   *  diamond-3 storage in raw Yul, byte-identical to a solc loupe that reads facetAddresses[] then each
+   *  facet's functionSelectors[]. JETH has no Facet[] memory local, so this is hand-encoded.
+   *
+   *  Storage: _facetAddresses is address[] at slot FA (len = sload(FA), data at keccak256(FA));
+   *  _facetSelectors is mapping(address=>{bytes4[] sels; uint pos}) at slot FS - facet f's struct is at
+   *  keccak256(f . FS), the sels field is field 0 so its bytes4[] len = sload(structSlot), data at
+   *  keccak256(structSlot). Each bytes4 element occupies one word LEFT-aligned (solc bytesN packing).
+   *
+   *  ABI layout of the single dynamic return value Facet[]:
+   *    word0: 0x20 (offset to the array)
+   *    array: [len] then len head-offset words (each -> a Facet tuple), then the Facet tuples.
+   *    Facet tuple (dynamic): head [facetAddress][offset=0x40], tail = bytes4[] ([len][elements]).
+   *  All offsets are relative to the array start (the array's own [len] word) for the head table, and to
+   *  the tuple start for the tuple's inner offset - matching solc's nested dynamic ABI v2 encoding. */
+  private lowerDiamondFacetsReturn(out: string[]): void {
+    const FA = String(this.diamondSlot('_facetAddresses'));
+    const FS = String(this.diamondSlot('_facetSelectors'));
+    const L = (s: string) => out.push(s);
+    L('// facets() -> Facet[] : build the ABI return blob from the split diamond-3 storage');
+    L(`let _faLen := sload(${FA})`);
+    // The free pointer is the return-blob base. word0 = 0x20 (offset to the array).
+    L('let _ret := mload(0x40)');
+    L('mstore(_ret, 0x20)');
+    L('let _arr := add(_ret, 0x20)'); // the array start ([len] word lives here)
+    L('mstore(_arr, _faLen)');
+    L('let _head := add(_arr, 0x20)'); // the head offset-table (one word per facet)
+    // The first tuple sits right after the head table: _faLen words of head.
+    L('let _cursor := add(_head, mul(_faLen, 0x20))');
+    // data slot of _facetAddresses[]: keccak256(FA)
+    L(`mstore(0x00, ${FA})`);
+    L('let _faData := keccak256(0x00, 0x20)');
+    L('let _i := 0');
+    L('for { } lt(_i, _faLen) { _i := add(_i, 1) } {');
+    // facet address = _facetAddresses[_i]
+    L('  let _facet := and(sload(add(_faData, _i)), 0xffffffffffffffffffffffffffffffffffffffff)');
+    // head[_i] = offset of this tuple relative to the HEAD table start (i.e. after the array [len] word),
+    // matching solc's array-of-dynamic-tuple ABI v2 encoding.
+    L('  mstore(add(_head, mul(_i, 0x20)), sub(_cursor, _head))');
+    // tuple head: [facetAddress][offset 0x40 to the bytes4[] tail]
+    L('  mstore(_cursor, _facet)');
+    L('  mstore(add(_cursor, 0x20), 0x40)');
+    // locate the facet's struct slot: keccak256(facet . FS); sels field is field 0 (struct slot itself)
+    L('  mstore(0x00, _facet)');
+    L(`  mstore(0x20, ${FS})`);
+    L('  let _structSlot := keccak256(0x00, 0x40)');
+    L('  let _selLen := sload(_structSlot)');
+    // bytes4[] tail at _cursor+0x40: [len][elements]
+    L('  mstore(add(_cursor, 0x40), _selLen)');
+    // data slot of the bytes4[]: keccak256(_structSlot)
+    L('  mstore(0x00, _structSlot)');
+    L('  let _selData := keccak256(0x00, 0x20)');
+    L('  let _selBase := add(_cursor, 0x60)'); // first element word
+    L('  let _j := 0');
+    L('  for { } lt(_j, _selLen) { _j := add(_j, 1) } {');
+    // bytes4[] packs 8 elements per slot (4 bytes each). solc stores element k at byte offset (k%8)*4 from
+    // the slot's LOW end: value = (sload(slot) >> ((k%8)*32)) & 0xffffffff, then shl(224) to LEFT-align the
+    // bytes4 in its ABI word. Matches JETH's own bytes4[]-element read (the working facetFunctionSelectors).
+    L('    let _slot := sload(add(_selData, div(_j, 8)))');
+    L('    let _shift := mul(mod(_j, 8), 32)');
+    L('    let _elem := shl(224, and(shr(_shift, _slot), 0xffffffff))');
+    L('    mstore(add(_selBase, mul(_j, 0x20)), _elem)');
+    L('  }');
+    // advance the cursor past this tuple: head (0x40) + bytes4[] (0x20 len + selLen words)
+    L('  _cursor := add(_cursor, add(0x60, mul(_selLen, 0x20)))');
+    L('}');
+    L('return(_ret, sub(_cursor, _ret))');
   }
 
   /** Phase 2d (beacon proxy): lower proxyInitBeacon(beacon, initData), byte-identical to the OZ BeaconProxy
@@ -6574,7 +6773,9 @@ ${indent(runtime, 6)}
     out.push('let _puOk := staticcall(gas(), _newImpl, 0, 4, 0, 0x20)');
     out.push('if or(iszero(_puOk), lt(returndatasize(), 0x20)) {');
     // ERC1967InvalidImplementation(address): selector + the newImpl word.
-    out.push(`  mstore(0, ${ERC1967_INVALID_IMPLEMENTATION_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+    out.push(
+      `  mstore(0, ${ERC1967_INVALID_IMPLEMENTATION_SELECTOR}00000000000000000000000000000000000000000000000000000000)`,
+    );
     out.push('  mstore(4, _newImpl)');
     out.push('  revert(0, 0x24)');
     out.push('}');
@@ -6582,7 +6783,9 @@ ${indent(runtime, 6)}
     out.push('let _slot := mload(0)');
     out.push(`if iszero(eq(_slot, ${EIP1967_IMPL_SLOT})) {`);
     // UUPSUnsupportedProxiableUUID(bytes32): selector + the returned slot.
-    out.push(`  mstore(0, ${UUPS_UNSUPPORTED_PROXIABLE_UUID_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+    out.push(
+      `  mstore(0, ${UUPS_UNSUPPORTED_PROXIABLE_UUID_SELECTOR}00000000000000000000000000000000000000000000000000000000)`,
+    );
     out.push('  mstore(4, _slot)');
     out.push('  revert(0, 0x24)');
     out.push('}');

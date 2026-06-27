@@ -116,7 +116,15 @@ export type Expr =
   | { kind: 'modexp'; type: JethType; base: Expr; exp: Expr; mod: Expr }
   // bn256Add/Mul/Pairing: alt_bn128 precompiles 0x06/0x07/0x08. add/mul yield a fresh 2-word memory G1Point
   // image (memAggregate-shaped); pairing yields a bool. Reverts EMPTY on an invalid point / bad length.
-  | { kind: 'bn256'; type: JethType; op: 'add' | 'mul' | 'pairing'; addr: number; args: Expr[]; insize: number | 'dynamic'; outsize: number }
+  | {
+      kind: 'bn256';
+      type: JethType;
+      op: 'add' | 'mul' | 'pairing';
+      addr: number;
+      args: Expr[];
+      insize: number | 'dynamic';
+      outsize: number;
+    }
   // blake2f(rounds, h(64), m(128), t:bytes16, f:bool) -> 64-byte bytes: BLAKE2b compression, staticcall 0x09.
   | { kind: 'blake2f'; type: JethType; rounds: Expr; h: Expr; m: Expr; t: Expr; f: Expr }
   | { kind: 'abiEncode'; type: JethType; packed: boolean; args: Expr[]; selector?: Expr; sig?: Expr } // abi.encode/encodePacked/encodeWithSelector(selector)/encodeWithSignature(sig) -> bytes
@@ -163,6 +171,13 @@ export type Expr =
   | { kind: 'proxyInitBeacon'; type: JethType; beacon: Expr; initData: Expr }
   // proxyBeacon() -> address: SLOAD the EIP-1967 beacon slot. A storage read (view-ok, pure-reject).
   | { kind: 'proxyBeaconRead'; type: JethType }
+  // --- Phase 3 DIAMOND: synthesis-only builtins (emitted by the @diamond expansion, src/diamond.ts) ---
+  // diamondInit(owner): sstore contractOwner, register the 4 ERC-165 ids, emit OwnershipTransferred(0,owner)
+  | { kind: 'diamondInit'; type: JethType; owner: Expr }
+  // initializeDiamondCut's _init delegatecall: if init==0 return; require code; delegatecall + bubble revert
+  | { kind: 'diamondDelegateInit'; type: JethType; init: Expr; data: Expr }
+  // the facets() loupe: build a Facet[] (address + bytes4[]) from the split diamond-3 storage (raw Yul)
+  | { kind: 'diamondFacets'; type: JethType }
   // --- Phase 6: external low-level calls ---
   // <addr>.code -> bytes (EXTCODESIZE + EXTCODECOPY); <addr>.codehash -> bytes32 (EXTCODEHASH)
   | { kind: 'extCode'; type: JethType; addr: Expr; member: 'code' | 'codehash' }
@@ -629,6 +644,17 @@ export interface ContractIR {
   // the EIP-1967 upgrade) and proxiableUUID() (returns the EIP-1967 impl slot). Byte-identical to OZ
   // UUPSUpgradeable 5.x. The two entries are ordinary FunctionIRs carrying a uupsKind flag.
   isUups?: boolean;
+  // Phase 3 (DIAMOND): `@diamond('array')` - an EIP-2535 diamond. JETH synthesizes the whole surface
+  // (the diamond-3 namespaced storage struct, diamondCut + the 4 loupe fns + ERC-165 + ownership, the
+  // DiamondCut/OwnershipTransferred events) as ordinary contract members, then emitRuntime adds the
+  // selector-routed delegatecall fallback (the router) after the diamond's own selector switch. The
+  // facets() loupe is emitted as a raw-Yul dispatch case (it builds a Facet[] from the split storage).
+  isDiamond?: boolean;
+  diamondVariant?: 'array'; // the storage layout model (diamond-1/3 array-storing). Future: 'packed'.
+  // The raw diamond-storage struct base = keccak256("diamond.standard.diamond.storage") and the field
+  // SLOT (base + relative slot) of selectorToFacetAndPosition, used by the router's facet lookup.
+  diamondStorageBase?: bigint;
+  diamondSel2FacetSlot?: bigint;
   // Phase B: external (delegatecall) libraries this contract references. Each is emitted as its OWN
   // top-level Yul object (creation returns runtime; runtime = a selector dispatcher over its external
   // functions) and linked at deploy time. Empty/absent when no external library is referenced.
