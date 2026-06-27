@@ -5932,9 +5932,15 @@ ${indent(runtime, 6)}
       out.push(`mstore(0x40, add(${dst}, ${sz}))`);
       return { mp: dst, size: sz };
     }
-    if (arg.kind === 'newArray') {
-      // new Array<T>(n) used directly as an abi.encode/encodePacked arg: it lowers to a [len][elems]
-      // memory pointer (value elements, ABI tail layout already), exactly like a memArray local.
+    if (
+      (arg.kind === 'newArray' || arg.kind === 'call') &&
+      arg.type.kind === 'array' &&
+      arg.type.length === undefined &&
+      isStaticValueType(arg.type.element)
+    ) {
+      // a value-element dynamic array produced directly by `new Array<T>(n)` or an internal call
+      // (this.mk()) used as an abi.encode/encodePacked arg: lower it to its [len][elems] memory
+      // pointer (value elements, ABI tail layout already), exactly like a memArray local.
       const mp = this.lowerExpr(arg, ctx, out);
       return { mp, size: `mul(add(mload(${mp}), 1), 0x20)` };
     }
