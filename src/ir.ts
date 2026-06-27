@@ -578,6 +578,11 @@ export interface FunctionIR {
   // `{kind:'modifierBody'}` marker calls userfn_<key>(<decoded params>) and captures its result, then
   // the dispatch ABI-encodes that result ONCE (so a `return` in Z runs the enclosing post-code first).
   modifierWrap?: Stmt[];
+  // Phase 5 (full modifiers, JETH323): one argument Expr per wrapped-function param that the
+  // {modifierBody} marker passes to userfn_<key>(...). A value param echoes as a register; an
+  // aggregate/dynamic param echoes as a memory pointer (the dispatch's lowerCallArgs materializes it).
+  // Set iff modifierWrap is set. Lets the userfn take aggregate/dynamic params byte-identical to solc.
+  modifierArgs?: Expr[];
   // Inheritance: the contract (in the C3 linearization) that DEFINED this function body. The
   // override WINNER (most-derived definition of a signature) keeps the bare ABI key + selector and
   // is dispatched; non-winning base versions are retained ONLY as `super` targets and carry a

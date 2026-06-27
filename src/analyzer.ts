@@ -4001,7 +4001,14 @@ export class Analyzer {
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
     this.memDynStructLocals.clear();
-    const internalOnly = rf.visibility === 'internal' || rf.visibility === 'private';
+    // A buffered-modifier function (a post-code / conditional-placeholder / multi-placeholder / return;
+    // modifier applied) has its BODY emitted as a synthesized internal function userfn_<key> that the
+    // dispatch calls with each aggregate param passed BY MEMORY REFERENCE (JETH323). So its body's
+    // aggregate params resolve to MEMORY places exactly like an @internal function's, even though the
+    // function is @external (the buffered path is gated to @external). Treat it as internalOnly for the
+    // param-memory registration below.
+    const bufferedModifier = this.usesBufferedModifierPath(rf);
+    const internalOnly = rf.visibility === 'internal' || rf.visibility === 'private' || bufferedModifier;
     for (const p of rf.params) {
       if (this.inCurrentScope(p.name)) {
         this.diags.error(rf.node, 'JETH056', `duplicate parameter name '${p.name}'`);
@@ -4072,7 +4079,10 @@ export class Analyzer {
     // modifierWrap undefined); when at least one has post-code, `wrap.body` stays the RAW wrapped body
     // Z (emitted as userfn_<key>) and `wrap.modifierWrap` is the nested pre/post structure the dispatch
     // lowers (see FunctionIR.modifierWrap).
-    const wrap = rf.modifiers && rf.modifiers.length ? this.wrapModifiers(rf, body) : { body, modifierWrap: undefined };
+    const wrap =
+      rf.modifiers && rf.modifiers.length
+        ? this.wrapModifiers(rf, body)
+        : { body, modifierWrap: undefined, modifierArgs: undefined };
     this.popScope();
 
     // Mutability enforcement (directive §2.7 STATICCALL view semantics) is performed AFTER
@@ -4103,6 +4113,7 @@ export class Analyzer {
       body: wrap.body,
       nonReentrant: rf.nonReentrant,
       modifierWrap: wrap.modifierWrap,
+      modifierArgs: wrap.modifierArgs,
       // a function whose modifiers carry post-code is lowered via its synthesized body function
       // userfn_<key> (the dispatch calls it, then runs the post-code + encodes once), so force it.
       internallyCalled: wrap.modifierWrap ? true : undefined,
@@ -4120,15 +4131,44 @@ export class Analyzer {
    *  post-code before the value is ABI-encoded once. The body is kept RAW and lowered as a synthesized
    *  Yul function (userfn_<key>); modifierWrap is the nested pre/post structure the dispatch lowers,
    *  with a single {kind:'modifierBody'} marker (the userfn call) at its center. */
-  private wrapModifiers(rf: RawFunction, bodyIR: Stmt[]): { body: Stmt[]; modifierWrap?: Stmt[] } {
-    const apps = rf.modifiers!;
-    // The buffered userfn path is required when a modifier has POST-placeholder code OR a CONDITIONAL
-    // placeholder (the 0-or-N-times shape): both need the body lowered as a synthesized userfn so a
-    // value-returning function's `ret` register can zero-init (the skip-body / zero-value branch).
-    const anyBuffered = apps.some((app) => {
+  /** Does any applied @modifier route this function through the BUFFERED userfn path? True iff at least
+   *  one applied modifier has post-placeholder code OR a whole-body (conditional / multi-placeholder /
+   *  bare-`return;`) shape - exactly the shapes that need the body emitted as userfn_<key> and the
+   *  buffered-return machinery. Used both to choose the wrap path AND, at body-check time, to register
+   *  the function's aggregate params as MEMORY references (the userfn takes them by memory pointer). */
+  private usesBufferedModifierPath(rf: RawFunction): boolean {
+    if (!rf.modifiers || !rf.modifiers.length) return false;
+    return rf.modifiers.some((app) => {
       const m = this.modifiersByName.get(app.name);
       return m !== undefined && (m.postStmts.length > 0 || m.bodyStmts !== undefined);
     });
+  }
+
+  /** JETH323: can the buffered modifier-dispatch encode this aggregate RETURN type ONCE from the
+   *  userfn's memory pointer (emitModifierReturn)? The supported memory-pointer encoders cover a static
+   *  struct / static fixed array (the image is the flat blob), a value-element dynamic array (T[]), bytes/
+   *  string, and a supported dynamic-field struct. A nested-dynamic-element array (string[], D[], T[][],
+   *  Arr<dyn,N>) has no buffered memory-pointer encoder, so it stays gated. A value type is trivially
+   *  encodable (not an aggregate). */
+  private isBufferedModifierReturnable(t: JethType): boolean {
+    if (isBytesLike(t)) return true;
+    if (t.kind === 'struct') return isStaticType(t) || this.isSupportedDynStructLocal(t);
+    if (t.kind === 'array') {
+      if (t.length !== undefined) return isStaticType(t); // Arr<value,N>: flat image
+      return isStaticValueType(t.element); // T[] of a value element: encodeMemArrayReturn
+    }
+    return true; // a value type
+  }
+
+  private wrapModifiers(
+    rf: RawFunction,
+    bodyIR: Stmt[],
+  ): { body: Stmt[]; modifierWrap?: Stmt[]; modifierArgs?: Expr[] } {
+    const apps = rf.modifiers!;
+    // The buffered userfn path is required when a modifier has POST-placeholder code OR a whole-body
+    // (conditional / multi-placeholder / return;) shape: both need the body lowered as a synthesized
+    // userfn so a value-returning function's `ret` register can zero-init (the skip-body branch).
+    const anyBuffered = this.usesBufferedModifierPath(rf);
     if (!anyBuffered) {
       // PRE-ONLY: the guard runs before the body and never touches the return values.
       let inner = bodyIR;
@@ -4147,42 +4187,61 @@ export class Analyzer {
       );
       return { body: bodyIR };
     }
-    // Gate shapes that cannot be passed to / returned from the synthesized userfn (the buffered-return
-    // machinery supports VALUE-TYPE params and a void or single value/bytes/string return). An
-    // aggregate/dynamic param or a multi-value/aggregate return is a clean over-rejection.
-    const aggParam = rf.params.find((p) => !isStaticValueType(p.type));
-    if (aggParam) {
+    // JETH323 LIFTED for FUNCTION shapes: the synthesized body function userfn_<key> is a NORMAL
+    // internal function, so it supports aggregate/dynamic PARAMS, a MULTI-VALUE return, and an aggregate
+    // RETURN (struct / fixed / value-element dynamic array). The dispatch materializes each decoded param
+    // as the userfn expects (a memory pointer for an aggregate), captures the userfn's result(s) into the
+    // buffered `ret` var(s), runs the post-code, then ABI-encodes ONCE. A CONSTRUCTOR with post-code stays
+    // gated (no userfn body in creation code - handled in inlineModifier).
+    //
+    // The dispatch encodes the buffered return ONCE from a MEMORY pointer (emitModifierReturn): value
+    // types, bytes/string, a static struct/fixed-array, a value-element dynamic array, and a supported
+    // dynamic-field struct. Return shapes whose memory-pointer encoder is not wired through the buffered
+    // path (a nested-dynamic-element array string[]/D[]/T[][]/Arr<dyn,N>, or a multi-value tuple with an
+    // aggregate component) stay gated JETH323 (a clean over-rejection: solc accepts them).
+    const aggRet = rf.returnType.kind === 'struct' || rf.returnType.kind === 'array';
+    if (aggRet && !this.isBufferedModifierReturnable(rf.returnType)) {
       this.diags.error(
         rf.node,
         'JETH323',
-        `a @modifier with post-placeholder code on a function with an aggregate/dynamic parameter ('${aggParam.name}': ${displayName(aggParam.type)}) is not supported yet (the buffered-return path passes only value-type parameters to the wrapped body)`,
+        `a @modifier with post-placeholder code on a function returning ${displayName(rf.returnType)} is not supported yet (the buffered-return path encodes value types, bytes/string, a static struct/fixed-array, a value-element dynamic array, or a supported dynamic struct)`,
       );
       return { body: bodyIR };
     }
-    if (rf.returnTypes && rf.returnTypes.length >= 2) {
+    if (rf.returnTypes && rf.returnTypes.some((t) => t.kind === 'struct' || t.kind === 'array')) {
       this.diags.error(
         rf.node,
         'JETH323',
-        `a @modifier with post-placeholder code on a function with a multi-value return is not supported yet (the buffered-return path encodes a single return value)`,
+        `a @modifier with post-placeholder code on a multi-value return containing an aggregate component is not supported yet (the buffered-return path encodes value/bytes/string tuple components)`,
       );
       return { body: bodyIR };
     }
-    // The buffered-return encoder handles a void / value-type / bytes / string single return. A single
-    // STRUCT or fixed/dynamic ARRAY return is gated: passing it back through the buffered `ret` reg +
-    // the aggregate return encoders is out of scope (a clean over-rejection - solc accepts it).
-    if (rf.returnType.kind === 'struct' || rf.returnType.kind === 'array') {
-      this.diags.error(
-        rf.node,
-        'JETH323',
-        `a @modifier with post-placeholder code on a function returning an aggregate (${displayName(rf.returnType)}) is not supported yet (the buffered-return path encodes a void/value/bytes/string return)`,
-      );
-      return { body: bodyIR };
-    }
+    // The {modifierBody} marker calls userfn_<key>(<args>); build one argument Expr per function param
+    // (a value-type param echoes as a register, an aggregate/dynamic param echoes as a memory pointer)
+    // using the SAME resolution a normal arg pass would, so the dispatch's lowerCallArgs materializes
+    // each correctly (JETH323: aggregate params are now supported).
+    const modifierArgs = rf.params.map((p) => this.paramRefExpr(p.name, p.type));
     // Build the nested wrap innermost-first: the innermost modifier's `inner` is the placeholder
     // marker (the userfn call); each outer modifier wraps the inner modifier's wrap.
     let inner: Stmt[] = [{ kind: 'modifierBody' }];
     for (const app of [...apps].reverse()) inner = this.buildModifierWrap(app, inner);
-    return { body: bodyIR, modifierWrap: inner };
+    return { body: bodyIR, modifierWrap: inner, modifierArgs };
+  }
+
+  /** JETH323: build the argument Expr that echoes a wrapped function's parameter `name` of type `t`
+   *  into the synthesized body call userfn_<key>(...). Mirrors the identifier-read resolution in
+   *  checkExpr: a value type -> localRead; bytes/string -> dynParamRead; a dynamic array / Arr<dyn,N>
+   *  -> a calldataArray echo; a dynamic struct -> cdDynStructValue; a static struct / fixed array ->
+   *  cdAggregateValue. The dispatch's lowerCallArgs then passes a value as a register and materializes
+   *  an aggregate into the memory pointer the (internal) userfn expects - identical to a normal call. */
+  private paramRefExpr(name: string, t: JethType): Expr {
+    if (isBytesLike(t)) return { kind: 'dynParamRead', type: t, name };
+    if (t.kind === 'array' && (t.length === undefined || isDynamicType(t.element)))
+      return { kind: 'arrayValue', type: t, arr: { base: { kind: 'calldataArray', name }, elem: t.element } };
+    if (t.kind === 'struct' && isDynamicType(t)) return { kind: 'cdDynStructValue', type: t, param: name };
+    if ((t.kind === 'array' || t.kind === 'struct') && isStaticType(t))
+      return { kind: 'cdAggregateValue', type: t, param: name };
+    return { kind: 'localRead', type: t, name };
   }
 
   /** Phase 5 (POST path): build one modifier's wrap around `inner` (the inner modifier's wrap, or the
@@ -4217,6 +4276,9 @@ export class Analyzer {
       if (!a) continue;
       const coerced = this.coerce(a, mod.params[i]!.type, app.argNodes[i]!);
       argDecls.push({ kind: 'localDecl', name: mod.params[i]!.name, type: mod.params[i]!.type, init: coerced });
+      // An AGGREGATE/DYNAMIC modifier param (JETH322): register it in the memory-local maps so a body
+      // read p.length / p[i] / p.x resolves to the materialized memory place (see inlineModifier).
+      this.registerAggregateModifierParam(mod.params[i]!.name, mod.params[i]!.type);
     }
     // 2. CONDITIONAL-placeholder shape (`if (c) { _; }` etc.): lower the WHOLE body in a fresh modifier
     //    scope with the single `_;` placeholder replaced IN PLACE by `inner` (the {modifierBody} marker,
@@ -4309,6 +4371,10 @@ export class Analyzer {
       if (!a) continue;
       const coerced = this.coerce(a, mod.params[i]!.type, app.argNodes[i]!);
       argDecls.push({ kind: 'localDecl', name: mod.params[i]!.name, type: mod.params[i]!.type, init: coerced });
+      // An AGGREGATE/DYNAMIC modifier param (JETH322): the localDecl materializes the arg into a memory
+      // local, so register the param name in the memory-local maps (exactly like a function/ctor by-ref
+      // param) so a pre-code read p.length / p[i] / p.x resolves to that memory place.
+      this.registerAggregateModifierParam(mod.params[i]!.name, mod.params[i]!.type);
     }
     // 2. Check the modifier pre-code in a FRESH scope (only its own params + contract state visible).
     const savedScopes = this.scopes;
@@ -4373,11 +4439,15 @@ export class Analyzer {
       if (!t) continue;
       if (p.initializer)
         this.diags.error(p, 'JETH304', `a @modifier parameter ('${p.name.text}') cannot have a default value`);
-      if (!isStaticValueType(t)) {
+      // A @modifier parameter may be any type a FUNCTION parameter may be: a value type, bytes/string, a
+      // supported array, or a struct of those. The modifier ARG is materialized once in the function's
+      // param scope (an aggregate arg into a memory local), exactly like a function call argument. KEEP
+      // the mapping reject (storage-only, never passable as an argument) - matches solc + function params.
+      if (this.typeHasMapping(t)) {
         this.diags.error(
           p,
-          'JETH322',
-          `a @modifier parameter ('${p.name.text}') of type ${displayName(t)} is not supported yet (value types only)`,
+          'JETH247',
+          `a @modifier parameter ('${p.name.text}') of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`,
         );
         continue;
       }
@@ -4394,50 +4464,40 @@ export class Analyzer {
       this.diags.error(member, 'JETH328', `a @modifier body must contain the placeholder '_' exactly once`);
       return;
     }
-    if (placeholders.length > 1) {
-      this.diags.error(
-        placeholders[1]!,
-        'JETH320',
-        `a @modifier with more than one '_' placeholder (the body would run multiple times) is not supported yet`,
-      );
-      return;
-    }
-    // Two shapes:
-    //  (a) TOP-LEVEL placeholder: `_;` is a top-level statement (pre code before it, post code after).
-    //      Stored as flat preStmts/postStmts slices.
-    //  (b) CONDITIONAL placeholder: the single `_;` is nested in an if/for/while (the 0-or-N-times
-    //      shape, e.g. `if (c) { _; }`). The body cannot be split into flat slices, so the WHOLE body
-    //      is stored (bodyStmts) and later lowered with the placeholder replaced IN PLACE by the
-    //      {modifierBody} marker; the body call sits inside the conditional and runs 0-or-N times. A
-    //      0-times path leaves the buffered `ret` register at its zero-init = solc's zero value.
-    const topIdx = stmts.findIndex((s) => this.isPlaceholderStmt(s));
-    const isConditional = topIdx < 0;
-    const preStmts = isConditional ? [] : stmts.slice(0, topIdx);
-    const postStmts = isConditional ? [] : stmts.slice(topIdx + 1);
-    // A `return` ANYWHERE in the modifier body (excluding the placeholder, which is not a return) is
-    // rejected: a value-return is meaningless (the modifier has no return type) and a bare `return;`
-    // would conditionally skip the wrapped body / the rest of the modifier (the early-out shape, not
-    // supported yet). This gate is UNCHANGED for both shapes - only the placeholder-position gate is
-    // relaxed; `return` inside the body is still rejected.
-    const returnCheckStmts = isConditional ? [...stmts] : [...preStmts, ...postStmts];
-    const returns = this.findReturns(returnCheckStmts);
+    // A `return expr;` is meaningless (a modifier has no return type) - solc rejects it too (JETH324,
+    // kept). A bare `return;` is ALLOWED (JETH325 lifted): it early-exits the wrapped function with the
+    // CURRENT return values (the buffered `ret` register, zero-init or whatever the body/modifier set so
+    // far), byte-identical to solc. A modifier with a `return;` therefore needs the whole-body buffered
+    // path (the `return;` lowers to the dispatch's encode-once of the buffered `ret`), so it routes
+    // through bodyStmts below regardless of placeholder position.
+    const returns = this.findReturns([...stmts]);
+    let hasBareReturn = false;
+    let hasValueReturn = false;
     for (const r of returns) {
-      if (r.expression) this.diags.error(r, 'JETH324', `a @modifier cannot 'return' a value`);
-      else
-        this.diags.error(
-          r,
-          'JETH325',
-          `a @modifier with a 'return;' statement is not supported yet (it conditionally skips the wrapped body)`,
-        );
+      if (r.expression) {
+        this.diags.error(r, 'JETH324', `a @modifier cannot 'return' a value`);
+        hasValueReturn = true;
+      } else hasBareReturn = true;
     }
-    if (returns.length > 0) return; // don't register a modifier with a return (avoids a cascade on inlining)
+    if (hasValueReturn) return; // don't register a modifier with a value-return (avoids a cascade on inlining)
+    // Shape selection. The flat pre/post FAST path is used ONLY for the canonical shape: EXACTLY ONE
+    // placeholder, at TOP LEVEL of the body, with NO `return;`. Every other shape (multiple placeholders,
+    // a nested/conditional placeholder, or a bare `return;`) routes through the WHOLE-BODY buffered path:
+    // the body is stored (bodyStmts) and later lowered with EACH `_;` replaced IN PLACE by the
+    // {modifierBody} marker (the userfn call) - so the body runs once per placeholder (N placeholders =>
+    // N calls, `ret` holds the last call's value) and a `return;` early-out leaves `ret` at its current
+    // value. A 0-times conditional path leaves the buffered `ret` at its zero-init = solc's zero value.
+    const topIdx = stmts.findIndex((s) => this.isPlaceholderStmt(s));
+    const useFlat = placeholders.length === 1 && topIdx >= 0 && !hasBareReturn;
+    const preStmts = useFlat ? stmts.slice(0, topIdx) : [];
+    const postStmts = useFlat ? stmts.slice(topIdx + 1) : [];
     this.modifiersByName.set(name, {
       name,
       node: member,
       params,
       preStmts,
       postStmts,
-      bodyStmts: isConditional ? [...stmts] : undefined,
+      bodyStmts: useFlat ? undefined : [...stmts],
     });
   }
 
@@ -8410,6 +8470,14 @@ export class Analyzer {
     else if (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) this.memArrayLocals.add(name);
     else if (isBytesLike(t)) this.memDynLocals.add(name);
     else if (this.isSupportedDynStructLocal(t)) this.memDynStructLocals.set(name, t);
+  }
+
+  /** JETH322: register an aggregate/dynamic @modifier parameter into the memory-local maps, so a body
+   *  read p.length / p[i] / p.x (and a pass-through to the wrapped userfn) resolves to the materialized
+   *  memory place. A value-type param needs no entry (it binds as a plain Yul register via localDecl). */
+  private registerAggregateModifierParam(name: string, t: JethType): void {
+    if (isStaticValueType(t)) return;
+    this.registerAggregateCtorParam(name, t);
   }
 
   /** A dynamic-field struct is supported as a MEMORY local only when every field is a value

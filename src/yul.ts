@@ -883,30 +883,34 @@ ${indent(runtime, 6)}
 
     const bodyLines: string[] = [];
     if (fn.modifierWrap) {
-      // Phase 5 (FULL MODIFIERS): at least one applied modifier has post-placeholder code. The wrapped
-      // body Z is the synthesized body function userfn_<key> (forced internallyCalled); the dispatch
-      // lowers modifierWrap (the nested pre/post block structure) where a single {modifierBody} marker
-      // calls userfn_<key>(<decoded value params>) and captures its single result into `ret`. A
-      // `return` inside Z sets userfn's ret and `leave`s, so it runs no further BODY code but returns
-      // here, letting the enclosing post-code run BEFORE the value is ABI-encoded ONCE. The gate in the
-      // analyzer (wrapModifiers) guarantees value-type params + a void/single value/bytes/string return.
-      const args = fn.params.map((p) => this.ctxLookup(ctx, p.name)); // decoded value-param Yul names
-      const isVoid = fn.returnType.kind === 'void';
-      const ret = isVoid ? null : this.fresh();
-      if (ret) bodyLines.push(`let ${ret} := 0`);
-      ctx.modifierDispatch = { userFn: this.userFnName(fn.key), args, ret };
+      // Phase 5 (FULL MODIFIERS): at least one applied modifier has post-placeholder code (or a
+      // conditional placeholder / multiple placeholders / a `return;`). The wrapped body Z is the
+      // synthesized body function userfn_<key> (forced internallyCalled); the dispatch lowers modifierWrap
+      // (the nested pre/post block structure) where EACH {modifierBody} marker calls userfn_<key>(<args>)
+      // and captures its result(s) into the buffered `retVars`. A `return` inside Z sets userfn's ret and
+      // `leave`s, so it runs no further BODY code but returns here, letting the enclosing post-code run
+      // BEFORE the value is ABI-encoded ONCE. userfn_<key> is a normal internal function, so it supports
+      // aggregate/dynamic params + a multi-value / aggregate return (JETH323); a bare `return;` in the
+      // modifier body encodes the CURRENT retVars + returns (JETH325).
+      // retVars: one buffered var per return value. A MULTI-VALUE function has returnTypes set (and a
+      // VOID returnType placeholder), so check returnTypes FIRST; otherwise a void function has none and
+      // a single-value/bytes/string/aggregate function has one.
+      const retVars = fn.returnTypes
+        ? fn.returnTypes.map(() => this.fresh())
+        : fn.returnType.kind === 'void'
+          ? []
+          : [this.fresh()];
+      for (const r of retVars) bodyLines.push(`let ${r} := 0`); // zero-init: a 0-times path / early `return;` returns solc's zero value
+      ctx.modifierDispatch = {
+        userFn: this.userFnName(fn.key),
+        args: this.lowerCallArgs(fn.modifierArgs ?? [], ctx, bodyLines),
+        retVars,
+        returnType: fn.returnType,
+        returnTypes: fn.returnTypes,
+      };
       for (const s of fn.modifierWrap) for (const l of this.lowerStmt(s, ctx)) bodyLines.push(l);
-      // Encode the buffered return value ONCE (reuse the full single-value/bytes/string return encoder
-      // by lowering a synthetic `return <rawReg ret>`). Void -> the empty return.
-      if (ret) {
-        for (const l of this.lowerStmt(
-          { kind: 'return', value: { kind: 'rawReg', type: fn.returnType, reg: ret } },
-          ctx,
-        ))
-          bodyLines.push(l);
-      } else {
-        bodyLines.push('return(0, 0)');
-      }
+      // Encode the buffered return value(s) ONCE (same encoder a `return;` early-out uses).
+      for (const l of this.emitModifierReturn(ctx.modifierDispatch, ctx)) bodyLines.push(l);
       if (fn.nonReentrant) {
         out.push(`if tload(${REENTRANCY_TSLOT}) { mstore(0, ${REENTRANCY_ERROR_WORD}) revert(0, 4) }`);
         out.push(`tstore(${REENTRANCY_TSLOT}, 1)`);
@@ -965,6 +969,51 @@ ${indent(runtime, 6)}
       }
     } else {
       out.push(...bodyLines);
+    }
+    return out;
+  }
+
+  /** Phase 5 (full modifiers): encode the buffered modifier-dispatch return var(s) ONCE and emit the
+   *  Yul `return(...)`. Reused by the dispatch's final encode AND by a bare `return;` inside the modifier
+   *  body (JETH325) - both return the CURRENT buffered values. Void -> empty return; a multi-value return
+   *  re-uses the tuple encoder via a synthetic `returnTuple` of rawReg components; a single value / bytes
+   *  / string / aggregate return re-uses the single-value return encoder via a synthetic `return`. The
+   *  rawReg value(s) carry the original return type(s) so the encoder picks the right codec (a value reg,
+   *  a bytes/string/array/struct memory pointer). */
+  private emitModifierReturn(md: NonNullable<LowerCtx['modifierDispatch']>, ctx: LowerCtx): string[] {
+    const out: string[] = [];
+    if (md.returnTypes) {
+      this.lowerStmt(
+        {
+          kind: 'returnTuple',
+          values: md.retVars.map((r, i) => ({ kind: 'rawReg', type: md.returnTypes![i]!, reg: r })),
+          types: md.returnTypes,
+        },
+        ctx,
+      ).forEach((l) => out.push(l));
+    } else if (md.retVars.length === 1) {
+      const rt = md.returnType;
+      const reg = md.retVars[0]!;
+      // An AGGREGATE return: the buffered var holds a MEMORY POINTER (the userfn returns a struct/array
+      // image pointer, like a struct-returning internal call). Bind it to a synthetic ctx local and emit
+      // the matching MEMORY-SOURCE return Expr so the encoder is byte-identical to `return <memLocal>`.
+      // bytes/string + value types use the rawReg single-value return (which lowerDynamic/lowerExpr both
+      // handle from a register / a memory ptr). The analyzer gates aggregate returns to this safe set.
+      if ((rt.kind === 'struct' || rt.kind === 'array') && !isBytesLike(rt)) {
+        const local = `__jeth_mret_${this.fresh().replace(/[^a-zA-Z0-9_]/g, '')}`;
+        this.ctxDeclare(ctx, local, reg);
+        const memExpr: Expr =
+          rt.kind === 'array' && (rt.length === undefined || isDynamicType(rt.element))
+            ? { kind: 'arrayValue', type: rt, arr: { base: { kind: 'memArray', varName: local }, elem: rt.element } }
+            : rt.kind === 'struct' && isDynamicType(rt)
+              ? { kind: 'memDynStructValue', type: rt, local }
+              : { kind: 'memAggregate', type: rt, local };
+        this.lowerStmt({ kind: 'return', value: memExpr }, ctx).forEach((l) => out.push(l));
+      } else {
+        this.lowerStmt({ kind: 'return', value: { kind: 'rawReg', type: rt, reg } }, ctx).forEach((l) => out.push(l));
+      }
+    } else {
+      out.push('return(0, 0)'); // void
     }
     return out;
   }
@@ -1063,6 +1112,13 @@ ${indent(runtime, 6)}
           break;
         }
         if (!s.value) {
+          // Phase 5 (JETH325): a bare `return;` inside a modifier body (lowered in the dispatch, where
+          // ctx.modifierDispatch is set but ctx.fnMode is not) early-exits the wrapped function with the
+          // CURRENT buffered return values - encode them ONCE and return, byte-identical to solc.
+          if (ctx.modifierDispatch) {
+            for (const l of this.emitModifierReturn(ctx.modifierDispatch, ctx)) out.push(l);
+            break;
+          }
           // a @receive/@fallback body's bare `return;` halts via stop() (byte-identical to solc), not
           // return(0,0); a normal void function returns empty calldata.
           out.push(ctx.specialEntry ? 'stop()' : 'return(0, 0)');
@@ -1676,14 +1732,16 @@ ${indent(runtime, 6)}
         break;
       }
       case 'modifierBody': {
-        // Phase 5 (full modifiers): the `_;` placeholder inside a dispatch-lowered modifierWrap. Call
-        // the synthesized body function userfn_<key>(<decoded params>); a `return` inside it sets the
-        // userfn's ret var and leaves (running no more body code) but returns control here so the
-        // ENCLOSING post-code still runs. Capture the single result into `ret` (void -> a bare call).
+        // Phase 5 (full modifiers): a `_;` placeholder inside a dispatch-lowered modifierWrap. Call the
+        // synthesized body function userfn_<key>(<args>); a `return` inside it sets the userfn's ret
+        // var(s) and leaves (running no more body code) but returns control here so the ENCLOSING
+        // post-code still runs. Capture the result(s) into the buffered retVars (void -> a bare call;
+        // multi-value -> `r0, r1 := userfn(...)`). With N placeholders this marker recurs N times, so
+        // the body runs N times and retVars hold the LAST run's value(s) - byte-identical to solc.
         const md = ctx.modifierDispatch;
         if (!md) throw new UnsupportedError('modifierBody marker lowered outside a modifier dispatch');
         const call = `${md.userFn}(${md.args.join(', ')})`;
-        out.push(md.ret === null ? call : `${md.ret} := ${call}`);
+        out.push(md.retVars.length === 0 ? call : `${md.retVars.join(', ')} := ${call}`);
         break;
       }
       case 'if': {
@@ -9164,8 +9222,18 @@ interface LowerCtx {
   immStaged?: Map<string, string>; // Phase 5: @immutable name -> its staged-shadow Yul var (constructor body only)
   // Phase 5 (full modifiers): set ONLY while lowering a function's modifierWrap in its dispatch case.
   // The {modifierBody} marker lowers to a call of the synthesized body function (userfn) with the
-  // decoded params, capturing the single result into `ret` (null for a void function -> a bare call).
-  modifierDispatch?: { userFn: string; args: string[]; ret: string | null };
+  // materialized args, capturing the result(s) into the buffered `retVars`. retVars is [] for a void
+  // function, [r] for a single value/bytes/string/aggregate return (r holds the value or the memory
+  // pointer), or [r0,r1,...] for a multi-value return. `returnType`/`returnTypes` describe how to
+  // encode those buffered vars ONCE - reused both for the dispatch's final encode and for an early
+  // `return;` inside the modifier body (JETH325), which encodes the CURRENT buffered vars and returns.
+  modifierDispatch?: {
+    userFn: string;
+    args: string[];
+    retVars: string[];
+    returnType: JethType;
+    returnTypes?: JethType[];
+  };
 }
 
 // A lowered array reference, by source location.

@@ -167,8 +167,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
           `@contract class C { @state n: u256; @modifier m() { if (this.n > 0n) { _; } } @external @m f(): void {} }`,
         ),
       ).toEqual([]));
-    it('more than one placeholder -> JETH320', () =>
-      expect(codes(`@contract class C { @modifier m() { _; _; } @external @m f(): void {} }`)).toContain('JETH320'));
+    it('more than one placeholder is now supported (JETH320 lifted: the body runs N times)', () =>
+      expect(codes(`@contract class C { @modifier m() { _; _; } @external @m f(): void {} }`)).toEqual([]));
     it('zero placeholders -> JETH328', () =>
       expect(codes(`@contract class C { @modifier m() { let x: u256 = 1n; } @external @m f(): void {} }`)).toContain(
         'JETH328',
@@ -177,22 +177,26 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(
         codes(`@contract class C { @modifier m() { return 5n; _; } @external @m f(): u256 { return 1n; } }`),
       ).toContain('JETH324'));
-    it('bare `return;` in a modifier -> JETH325', () =>
+    it('bare `return;` in a modifier is now supported (JETH325 lifted: early-out returns the current values)', () =>
       expect(
         codes(
           `@contract class C { @state n: u256; @modifier m() { if (this.n > 0n) { return; } _; } @external @m f(): void {} }`,
         ),
-      ).toContain('JETH325'));
+      ).toEqual([]));
     it('an unknown applied modifier -> JETH329', () =>
       expect(codes(`@contract class C { @external @nope f(): void {} }`)).toContain('JETH329'));
     it('a modifier arg-count mismatch -> JETH329', () =>
       expect(codes(`@contract class C { @modifier m(x: u256) { _; } @external @m f(): void {} }`)).toContain(
         'JETH329',
       ));
-    it('an aggregate modifier parameter -> JETH322', () =>
+    it('an aggregate modifier parameter is now supported (JETH322 lifted)', () =>
       expect(
         codes(`@contract class C { @modifier m(a: Arr<u256,2>) { _; } @external @m(([1n,2n])) f(): void {} }`),
-      ).toContain('JETH322'));
+      ).toEqual([]));
+    it('a mapping modifier parameter still rejects (JETH247: mappings are storage-only)', () =>
+      expect(
+        codes(`@contract class C { @modifier m(a: mapping<u256, u256>) { _; } @external @m f(): void {} }`),
+      ).toContain('JETH247'));
     it('a visibility/mutability decorator on the modifier itself -> JETH330', () =>
       expect(codes(`@contract class C { @view @modifier m() { _; } @external @m f(): void {} }`)).toContain('JETH330'));
     it('a (pre-only) modifier on a multi-value-return function is supported', () =>
@@ -455,33 +459,53 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
     });
   });
 
-  // The buffered-return (post-code) path is gated to value-type params + a void/single value/bytes/
-  // string return on an @external function. Out-of-scope shapes reject cleanly (solc accepts them =
-  // documented over-rejections). A conditional placeholder is now SUPPORTED; a return in a modifier
-  // stays JETH324/JETH325. These are accept/reject gates, not codegen.
+  // JETH323 LIFTED for FUNCTION shapes: a post-code modifier on a function with an aggregate/dynamic
+  // PARAM, a MULTI-VALUE return, or a supported aggregate RETURN (static struct/fixed-array, value-element
+  // dynamic array, bytes/string) is now SUPPORTED (the body is a normal internal userfn). The genuine
+  // remaining rejects stay JETH323: a non-@external function, a constructor (no userfn body in creation
+  // code), and a return shape with no buffered memory-pointer encoder (string[], D[], T[][], Arr<dyn,N>,
+  // or a multi-value tuple with an aggregate component). A return in a modifier stays JETH324/JETH325.
   describe('post-code gates (clean over-rejections vs solc)', () => {
-    it('aggregate/dynamic param + post-modifier -> JETH323', () => {
+    it('aggregate/dynamic param + post-modifier is now supported (JETH323 lifted)', () => {
       expect(
         codes(
           `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @external @m f(xs: Arr<u256,2>): u256 { return xs[0n]; } }`,
         ),
-      ).toContain('JETH323');
+      ).toEqual([]);
       expect(
         codes(
           `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @external @m f(b: bytes): u256 { return b.length; } }`,
         ),
-      ).toContain('JETH323');
+      ).toEqual([]);
     });
-    it('multi-value return + post-modifier -> JETH323', () =>
+    it('multi-value (value-component) return + post-modifier is now supported (JETH323 lifted)', () =>
       expect(
         codes(
           `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @external @m f(): [u256, u256] { return [1n, 2n]; } }`,
         ),
-      ).toContain('JETH323'));
-    it('aggregate (struct) return + post-modifier -> JETH323', () =>
+      ).toEqual([]));
+    it('aggregate (static struct) return + post-modifier is now supported (JETH323 lifted)', () =>
       expect(
         codes(
           `@struct class P { x: u256; y: u256; } @contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @external @m f(): P { return P(1n, 2n); } }`,
+        ),
+      ).toEqual([]));
+    it('a value-element dynamic-array return + post-modifier is now supported (JETH323 lifted)', () =>
+      expect(
+        codes(
+          `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @external @m f(): u256[] { return [1n, 2n, 3n]; } }`,
+        ),
+      ).toEqual([]));
+    it('a nested-dynamic-element array return (string[]) + post-modifier still rejects (JETH323: no buffered encoder)', () =>
+      expect(
+        codes(
+          `@contract class C { @state ss: string[]; @modifier m() { _; this.ss.push('x'); } @external @m f(): string[] { return this.ss; } }`,
+        ),
+      ).toContain('JETH323'));
+    it('a multi-value return with an aggregate component + post-modifier still rejects (JETH323)', () =>
+      expect(
+        codes(
+          `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @external @m f(): [u256[], u256] { return [[1n], 2n]; } }`,
         ),
       ).toContain('JETH323'));
     it('post-modifier on a non-@external (internal) function -> JETH323', () =>
