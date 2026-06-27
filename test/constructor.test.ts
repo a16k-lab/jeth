@@ -3,7 +3,8 @@
 // (@payable) / address(this), and take value-type params ABI-encoded + appended to the init code
 // (decoded FROM MEMORY via datasize/codesize/codecopy). A non-payable ctor rejects deploy-time value.
 // Every supported case is verified byte-identical to solc 0.8.35 on RAW STORAGE SLOTS + revert
-// parity; aggregate params and ctor->internal-calls are cleanly gated.
+// parity. Aggregate/dynamic params (JETH302) and ctor->internal-calls (JETH303) are now SUPPORTED
+// (lifted to solc parity); see test/ctor-parity.test.ts for their byte-identity coverage.
 import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -181,14 +182,12 @@ describe('Phase 5 constructors vs solc 0.8.35', () => {
       expect(codes(`@contract class C { @state x: u256; constructor(): u256 { this.x=1n; } }`)).toContain('JETH301'));
     it('a @view constructor -> JETH301', () =>
       expect(codes(`@contract class C { @state x: u256; @view constructor(){this.x=1n;} }`)).toContain('JETH301'));
-    it('an aggregate (fixed-array) constructor param -> JETH302', () =>
-      expect(codes(`@contract class C { @state x: u256; constructor(a: Arr<u256,3>){this.x=a[0n];} }`)).toContain(
-        'JETH302',
-      ));
-    it('calling an internal function from the constructor -> JETH303', () =>
+    it('an aggregate (fixed-array) constructor param is now accepted (JETH302 lifted)', () =>
+      expect(codes(`@contract class C { @state x: u256; constructor(a: Arr<u256,3>){this.x=a[0n];} }`)).toEqual([]));
+    it('calling an internal function from the constructor is now accepted (JETH303 lifted)', () =>
       expect(
         codes(`@contract class C { @state x: u256; h(): u256 { return 5n; } constructor(){ this.x = this.h(); } }`),
-      ).toContain('JETH303'));
+      ).toEqual([]));
     it('msg.value in a non-payable constructor -> JETH162', () =>
       expect(codes(`@contract class C { @state x: u256; constructor(){ this.x = msg.value; } }`)).toContain('JETH162'));
     it('a default value on a constructor param -> JETH304', () =>

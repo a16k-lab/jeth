@@ -2456,11 +2456,11 @@ export class Analyzer {
         );
         continue;
       }
-      if (!isStaticValueType(t)) {
+      if (!this.ctorParamSupported(t)) {
         this.diags.error(
           p,
           'JETH302',
-          `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only: uintN/intN/bool/address/bytesN/enum/branded)`,
+          `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet`,
         );
         continue;
       }
@@ -2487,6 +2487,10 @@ export class Analyzer {
     for (const p of params) {
       if (this.inCurrentScope(p.name)) this.diags.error(ctorNode, 'JETH056', `duplicate parameter name '${p.name}'`);
       this.declareLocal(p.name, p.type);
+      // An aggregate/dynamic ctor param is decoded into MEMORY (from the appended creation args) and
+      // behaves like an @internal function's memory-reference param, so register it in the same maps
+      // (a body read of p[i]/p.x/p.length/return p then resolves to a memory place, not calldata).
+      this.registerAggregateCtorParam(p.name, p.type);
     }
     // currentInConstructor routes a `this.<imm>` read to the staged shadow (the value assigned so
     // far) instead of a runtime loadimmutable, and permits an @immutable write (only here). It spans
@@ -2510,16 +2514,9 @@ export class Analyzer {
     this.currentInConstructor = false;
     this.popScope();
 
-    // Increment-1 gate: a ctor calling an internal/private function. The callee is emitted as a
-    // userfn_ in the RUNTIME object, unreachable from creation code, so reject cleanly (solc
-    // accepts; a later increment will duplicate the callee into the creation object).
-    if (this.currentCallees.size > 0) {
-      this.diags.error(
-        ctorNode,
-        'JETH303',
-        'calling an internal/private function from a constructor is not supported yet (the callee lives in the runtime object); inline the logic into the constructor body',
-      );
-    }
+    // A ctor calling an internal/private function: the transitively-reachable callees are duplicated
+    // into the CREATION object by emitConstructor (the call graph keys are recorded in this.callGraph),
+    // so the ctor body's calls resolve there. JETH303 (the over-rejection) is lifted.
 
     return { params, payable, body };
   }
@@ -2680,11 +2677,11 @@ export class Analyzer {
         );
         continue;
       }
-      if (!isStaticValueType(t)) {
+      if (!this.ctorParamSupported(t)) {
         this.diags.error(
           p,
           'JETH302',
-          `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet (value-type constructor parameters only: uintN/intN/bool/address/bytesN/enum/branded)`,
+          `constructor parameter '${p.name.text}' of type ${displayName(t)} is not supported yet`,
         );
         continue;
       }
@@ -2869,7 +2866,12 @@ export class Analyzer {
     // (the nested block) but NOT to the providing contract's OWN body (which is emitted AFTER the
     // block, in the provider's own param scope). Verified body order 101->...->200, args 902->901.
     this.pushScope(); // scope 0: the deployed's formals (= the jeth_constructor params)
-    for (const p of params) this.declareLocal(p.name, p.type);
+    for (const p of params) {
+      this.declareLocal(p.name, p.type);
+      // the deployed ctor's aggregate params are decoded from the appended creation args into memory
+      // (emitConstructor), so they read like @internal memory-reference params (see checkConstructor).
+      this.registerAggregateCtorParam(p.name, p.type);
+    }
 
     const buildLevel = (i: number): Stmt[] => {
       const c = chain[i]!;
@@ -2915,6 +2917,9 @@ export class Analyzer {
           this.scopes = savedArgScopes;
           this.currentReadsState = savedReadsState;
           this.declareLocal(bparams[k]!.name, bparams[k]!.type);
+          // a base ctor's aggregate param is bound as a memory local (from the coerced base-arg
+          // expression), so register it like the deployed aggregate params for the base body's reads.
+          this.registerAggregateCtorParam(bparams[k]!.name, bparams[k]!.type);
           argDecls.push({ kind: 'localDecl', name: bparams[k]!.name, type: bparams[k]!.type, init });
         }
       }
@@ -2951,13 +2956,8 @@ export class Analyzer {
     this.popScope();
     this.currentInConstructor = false;
 
-    if (this.currentCallees.size > 0) {
-      this.diags.error(
-        deployed.node ?? deployed.cls,
-        'JETH303',
-        'calling an internal/private function from a constructor is not supported yet (inline the logic into the constructor body)',
-      );
-    }
+    // A ctor (or a base ctor in the chain) calling an internal/private function: emitConstructor
+    // duplicates the transitively-reachable callees into the creation object. JETH303 is lifted.
     return { params, payable, body };
   }
 
@@ -8280,6 +8280,39 @@ export class Analyzer {
       return undefined;
     }
     return r;
+  }
+
+  /** A constructor param type that JETH supports (JETH302). Value types decode to a single head word;
+   *  the aggregate/dynamic shapes are exactly those an @internal/@private function passes BY MEMORY
+   *  REFERENCE - a static struct, a static fixed array Arr<T,N>, a dynamic value-element array T[],
+   *  bytes/string, or a supported dynamic-field struct - so the ctor decodes each from the appended
+   *  creation args (abiDecFromMem) and the body reads it from memory, byte-identical to solc. A type
+   *  containing a mapping (JETH247) and a defaulted param (JETH304) are rejected before this. */
+  private ctorParamSupported(t: JethType): boolean {
+    return isStaticValueType(t) || this.isMemByRefAggregate(t) || this.isSupportedDynStructLocal(t);
+  }
+
+  /** The aggregate shapes a constructor decodes into a MEMORY image and binds like an @internal memory-
+   *  reference param (mirrors the isMemByRef closure in checkInternalCall): a static struct, a static
+   *  fixed array Arr<T,N>, a dynamic value-element array T[], or bytes/string. */
+  private isMemByRefAggregate(t: JethType): boolean {
+    return (
+      (t.kind === 'struct' && isStaticType(t)) ||
+      (t.kind === 'array' && t.length !== undefined && isStaticType(t)) ||
+      (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) ||
+      isBytesLike(t)
+    );
+  }
+
+  /** Register an aggregate/dynamic constructor parameter into the memory-local maps, exactly as
+   *  checkFunction does for an @internal/@private function's by-reference params, so a body read of
+   *  p[i] / p.x / p.length / return p resolves to a memory place. A value-type param needs no entry. */
+  private registerAggregateCtorParam(name: string, t: JethType): void {
+    if (t.kind === 'struct' && isStaticType(t)) this.memAggregateLocals.set(name, t);
+    else if (t.kind === 'array' && t.length !== undefined && isStaticType(t)) this.memAggregateLocals.set(name, t);
+    else if (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) this.memArrayLocals.add(name);
+    else if (isBytesLike(t)) this.memDynLocals.add(name);
+    else if (this.isSupportedDynStructLocal(t)) this.memDynStructLocals.set(name, t);
   }
 
   /** A dynamic-field struct is supported as a MEMORY local only when every field is a value

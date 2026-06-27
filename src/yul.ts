@@ -325,21 +325,43 @@ ${indent(runtime, 6)}
     };
 
     // Decode the constructor args (ABI-encoded, appended after the init code). They begin at code
-    // offset datasize("C") (the init-code size) and run to codesize(). Copy them into memory at
-    // 0x80 and decode from MEMORY (each value param is one 32-byte ABI head word). solc reverts
-    // EMPTY when the args region is shorter than the static head, and ignores trailing bytes.
+    // offset datasize("C") (the init-code size) and run to codesize(). Copy them into memory at 0x80
+    // and decode from MEMORY. A STATIC param occupies abiHeadWords inline words in the head; a DYNAMIC
+    // param (T[]/bytes/string/dynamic struct/Arr<dyn,N>) occupies ONE head OFFSET word (its tail lives
+    // later in the blob), exactly as solc lays it out (matching the calldata + abi.decode disciplines).
+    // solc reverts EMPTY when the args region is shorter than the static head, and ignores trailing bytes.
     const ARGS = 0x80;
-    const headWords = ctor.params.reduce((n, p) => n + abiHeadWords(p.type), 0);
-    const argBytes = headWords * 32;
+    // a static aggregate occupies all its leaf words inline; a dynamic param occupies one offset word.
+    const paramHeadWords = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
+    const headWords = ctor.params.reduce((n, p) => n + paramHeadWords(p.type), 0);
+    const headBytes = headWords * 32;
+    // Are any params aggregate/dynamic (i.e. do we need the WHOLE args blob, with tails, in memory)?
+    const anyAggregate = ctor.params.some((p) => !isStaticValueType(p.type));
+    const blobEnd = this.fresh(); // absolute memory end of the args blob (for abiDecFromMem bounds)
     if (headWords > 0) {
       lines.push(`let _argsLen := sub(codesize(), datasize("${contract.name}"))`);
-      lines.push(`if lt(_argsLen, ${argBytes}) { revert(0, 0) }`);
-      lines.push(`codecopy(${ARGS}, datasize("${contract.name}"), ${argBytes})`);
-      // free-memory pointer past the decoded args, so a body allocation cannot clobber them.
-      lines.push(`mstore(0x40, ${ARGS + argBytes})`);
+      lines.push(`if lt(_argsLen, ${headBytes}) { revert(0, 0) }`);
+      if (anyAggregate) {
+        // copy the ENTIRE args region (head + every dynamic tail) so a tail offset resolves in memory.
+        lines.push(`codecopy(${ARGS}, datasize("${contract.name}"), _argsLen)`);
+        lines.push(`let ${blobEnd} := add(${ARGS}, _argsLen)`);
+        // free pointer past the whole copied blob (word-rounded) so materialized images never clobber it.
+        lines.push(`mstore(0x40, add(${ARGS}, and(add(_argsLen, 0x1f), not(0x1f))))`);
+      } else {
+        lines.push(`codecopy(${ARGS}, datasize("${contract.name}"), ${headBytes})`);
+        lines.push(`let ${blobEnd} := add(${ARGS}, _argsLen)`);
+        // free-memory pointer past the decoded args, so a body allocation cannot clobber them.
+        lines.push(`mstore(0x40, ${ARGS + headBytes})`);
+      }
     } else {
+      lines.push(`let ${blobEnd} := ${ARGS}`); // no params: unused, but keep the binding well-formed
       lines.push('mstore(0x40, 0x80)'); // init the free-memory pointer for any body allocation
     }
+    // Open the FRESH helpers window NOW (before decoding), so any helper the aggregate-param decode
+    // pulls in (panic/alloc/...) is defined in THIS creation block, not the runtime object. The window
+    // also covers the body lowering + the ctor-reachable internal-function emission below.
+    const savedHelpers = this.helpers;
+    this.helpers = new Map();
     const formals: string[] = []; // the synthesized function's parameter names (v_<name>_N)
     const decoded: string[] = []; // the outer decode locals (_tN) passed at the call site
     let cursorWords = 0;
@@ -347,20 +369,59 @@ ${indent(runtime, 6)}
       const formal = this.freshLocal(p.name);
       this.ctxDeclare(ctx, p.name, formal);
       formals.push(formal);
-      const dec = this.fresh();
-      lines.push(`let ${dec} := mload(${ARGS + cursorWords * 32})`);
-      const guard = this.validateInput(p.type, dec);
-      if (guard) lines.push(guard);
-      decoded.push(dec);
-      cursorWords += abiHeadWords(p.type);
+      const head = `${ARGS + cursorWords * 32}`;
+      cursorWords += paramHeadWords(p.type);
+      if (isStaticValueType(p.type)) {
+        // a value param: one validated head word, passed by value (existing path).
+        const dec = this.fresh();
+        lines.push(`let ${dec} := mload(${head})`);
+        const guard = this.validateInput(p.type, dec);
+        if (guard) lines.push(guard);
+        decoded.push(dec);
+      } else if (!isDynamicType(p.type)) {
+        // a STATIC aggregate (struct / Arr<T,N> of static leaves): materialize the inline head words
+        // into a fresh memory image via the abi.decode-from-memory codec; pass the image pointer.
+        const ptr = this.fresh();
+        lines.push(`let ${ptr} := mload(0x40)`);
+        const sz = this.abiDecFromMem(p.type, head, ptr, blobEnd, lines);
+        lines.push(`mstore(0x40, add(${ptr}, ${sz}))`);
+        decoded.push(ptr);
+      } else {
+        // a DYNAMIC param: the head word is an offset relative to the blob start (ARGS). Bound it,
+        // then decode the tail into a fresh image (byte-identical to solc's memory-decode revert
+        // semantics, which abiDecFromMem encodes). The image pointer is the param's memory reference.
+        const so = this.fresh();
+        lines.push(`let ${so} := mload(${head})`);
+        lines.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        lines.push(`let ${se} := add(${ARGS}, ${so})`);
+        lines.push(`if gt(add(${se}, ${cdElemHeadBytes(p.type)}), ${blobEnd}) { revert(0, 0) }`);
+        if (p.type.kind === 'struct') {
+          // a DYNAMIC-field struct param: build the POINTER-HEADED image a memDynStruct local reads
+          // (the abiDecFromMem standard-ABI image uses relative tail offsets, which memDynField cannot
+          // consume). The pointer is the param's memory reference.
+          decoded.push(this.buildDynStructFromMemBlob(p.type, se, blobEnd, lines));
+        } else {
+          const ptr = this.fresh();
+          lines.push(`let ${ptr} := mload(0x40)`);
+          const sz = this.abiDecFromMem(p.type, se, ptr, blobEnd, lines);
+          lines.push(`mstore(0x40, add(${ptr}, ${sz}))`);
+          decoded.push(ptr);
+        }
+      }
     }
 
-    // Lower the body with a FRESH helpers map so any helper it pulls in (keccak/checked-math/alloc)
-    // is defined in THIS creation block, not the runtime object (separate Yul scope).
-    const savedHelpers = this.helpers;
-    this.helpers = new Map();
+    // Lower the body in the same helpers window (any helper it pulls in lands in THIS creation block,
+    // a separate Yul scope from the runtime object). The internal/private functions the ctor calls
+    // (JETH303) live as userfn_<key> in the RUNTIME object only, so duplicate the transitively-reachable
+    // ones into THIS creation block too (emitted inside the same window, so any helper THEY pull in also
+    // lands here). Each emitted function resets the nameCounter, but the ctor's own fresh names are
+    // already materialized above, so the jeth_constructor signature stays stable.
     const body: string[] = [];
     for (const s of ctor.body) for (const l of this.lowerStmt(s, ctx)) body.push(l);
+    // Emit each transitively-reachable internal callee as a userfn_ in this creation block.
+    const ctorFnDefs: string[] = [];
+    for (const fn of this.ctorReachableFns(ctor.body)) ctorFnDefs.push(this.emitInternalFunction(fn));
     const helperDefs = [...this.helpers.values()];
     this.helpers = savedHelpers;
 
@@ -372,7 +433,49 @@ ${indent(runtime, 6)}
         ? `let ${outerRets.join(', ')} := jeth_constructor(${decoded.join(', ')})`
         : `jeth_constructor(${decoded.join(', ')})`,
     );
-    return { lines, helpers: [ctorFn, ...helperDefs], staged };
+    return { lines, helpers: [ctorFn, ...ctorFnDefs, ...helperDefs], staged };
+  }
+
+  /** JETH303: collect the contract internal/private functions TRANSITIVELY reachable from the
+   *  constructor body, so they can be duplicated into the creation object (where the ctor's calls
+   *  resolve). Walks the IR tree for every internal-call site (`{kind:'call'|'callStmt', fn:<key>}`),
+   *  then takes the transitive closure over each callee's own body via this.funcs (keyed by `key`).
+   *  A function emitted with a modifierWrap is keyed the same (`internallyCalled` userfn_<key>), so the
+   *  key set is sufficient. Returns the unique FunctionIRs in a stable (insertion) order. */
+  private ctorReachableFns(body: Stmt[]): FunctionIR[] {
+    const seen = new Set<string>();
+    const order: FunctionIR[] = [];
+    const visitKey = (key: string): void => {
+      if (seen.has(key)) return;
+      seen.add(key);
+      const fn = this.funcs.get(key);
+      if (!fn) return; // not a contract function (e.g. an external/library entry has no userfn here)
+      order.push(fn);
+      // recurse into the callee body (and its modifierWrap, if any) for transitive callees.
+      for (const k of this.collectCallKeys(fn.body)) visitKey(k);
+      if (fn.modifierWrap) for (const k of this.collectCallKeys(fn.modifierWrap)) visitKey(k);
+    };
+    for (const k of this.collectCallKeys(body)) visitKey(k);
+    return order;
+  }
+
+  /** Structurally walk an IR subtree collecting the `fn` key of every internal-call node
+   *  (`kind === 'call'` an Expr/tuple-call, or `kind === 'callStmt'` a statement call). A generic
+   *  walk (over array/object children) is robust to the full Stmt/Expr union without enumerating it. */
+  private collectCallKeys(root: unknown): string[] {
+    const keys: string[] = [];
+    const walk = (n: unknown): void => {
+      if (n === null || typeof n !== 'object') return;
+      if (Array.isArray(n)) {
+        for (const c of n) walk(c);
+        return;
+      }
+      const o = n as Record<string, unknown>;
+      if ((o.kind === 'call' || o.kind === 'callStmt') && typeof o.fn === 'string') keys.push(o.fn);
+      for (const v of Object.values(o)) walk(v);
+    };
+    walk(root);
+    return keys;
   }
 
   /** Phase 2d (BEACON contract): the fully-synthesized creation code for a `@beacon class`, byte-identical
@@ -4378,6 +4481,51 @@ ${indent(runtime, 6)}
         hw += abiHeadWords(f.type);
       }
     });
+    return ptr;
+  }
+
+  /** Decode a DYNAMIC-field struct from an in-MEMORY ABI tuple (the constructor args blob) into the
+   *  POINTER-HEADED image a memDynStruct local consumes (value fields inline; a bytes/string or
+   *  dynamic-value-array field's head word holds an ABSOLUTE pointer to a fresh [len][data] image).
+   *  The memory twin of buildDynStructFromCalldata: reads via mload, bounds every field tail against
+   *  `blobEnd` (the absolute end of the args blob), and reuses abiDecFromMem for each tail (so the
+   *  short-args / oversized-length revert semantics are byte-identical to solc's memory decode). The
+   *  shape is restricted to isSupportedDynStructLocal (value / bytes/string / dynamic value-array
+   *  fields), the same set the analyzer admits for a memDynStruct local. `base` is the tuple start. */
+  private buildDynStructFromMemBlob(
+    struct: JethType & { kind: 'struct' },
+    base: string,
+    blobEnd: string,
+    out: string[],
+  ): string {
+    const headWords = tupleHeadWords(struct);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${headWords * 32}))`);
+    let hw = 0;
+    for (const f of struct.fields) {
+      const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
+      const headAt = hw === 0 ? base : `add(${base}, ${hw * 32})`;
+      if (isBytesLike(f.type) || (f.type.kind === 'array' && f.type.length === undefined)) {
+        // a dynamic field: head word = offset (relative to the tuple start) to the field tail.
+        const so = this.fresh();
+        out.push(`let ${so} := mload(${headAt})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${base}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), ${blobEnd}) { revert(0, 0) }`);
+        const dst = this.fresh();
+        out.push(`let ${dst} := mload(0x40)`);
+        const size = this.abiDecFromMem(f.type, se, dst, blobEnd, out);
+        out.push(`mstore(0x40, add(${dst}, ${size}))`);
+        out.push(`mstore(${at}, ${dst})`);
+        hw += 1;
+      } else {
+        // a static value field: one validated word, inline (abiDecFromMem validates dirty bits).
+        this.abiDecFromMem(f.type, headAt, at, blobEnd, out);
+        hw += abiHeadWords(f.type);
+      }
+    }
     return ptr;
   }
 
