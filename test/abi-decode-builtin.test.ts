@@ -322,9 +322,10 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('cleanly rejects (no crash) the unsupported decode targets', () => {
-    // a struct target (the JETH dynamic-struct memory representation is pointer-headed, not ABI-offset)
+    // a struct target is now SUPPORTED: buildDynStructFromMemBlob builds the pointer-headed image from the
+    // decode blob (the decoder the constructor aggregate-param path uses); see arch-abi-decode-aggregate.test.ts
     expect(
-      jethRejects(
+      jethAccepts(
         `@struct class P { a: u256; s: string; } @contract class C { @external @pure f(b: bytes): u256 { let p: P = abi.decode(b, P); return p.a; } }`,
       ),
     ).toBe(true);

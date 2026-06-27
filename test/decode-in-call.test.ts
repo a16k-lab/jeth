@@ -260,12 +260,13 @@ describe('decode field inside call/staticcall options', () => {
         ),
       ),
     ).toContain('JETH321');
-    // a struct target is unsupported for decode -> JETH322 (a valid local type, so the decode check is reached)
+    // a struct target is now SUPPORTED for decode (decode: P reuses the same abiDecode codec - the memory
+    // decoder builds the pointer-headed struct image; byte-identical, see arch-abi-decode-aggregate.test.ts)
     expect(
       jethError(
         `@struct class P { a: u256; s: string; } @contract class C { @external f(t: address): u256 { let p: P = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: P }); return p.a; } }`,
       ),
-    ).toContain('JETH322');
+    ).toEqual([]);
     // a string[]-element array is also rejected (cleanly): the local type itself is unsupported, so it fails
     // before the decode check, but it is still a clean rejection (never a crash) - assert it is rejected.
     expect(

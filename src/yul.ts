@@ -4635,6 +4635,9 @@ ${indent(runtime, 6)}
     // element's calldata tuple into a fresh pointer-headed image (the same materializer the
     // whole-param path uses, at the element's offset-located calldata base).
     if (init.kind === 'cdStructArrayElem') return this.buildDynStructFromCalldata(struct, init, ctx, out);
+    // abi.decode(b, D) into a dynamic-field struct: lowerAbiDecode routes the single struct component to
+    // buildDynStructFromMemBlob, which builds the same pointer-headed image (memory-decode revert semantics).
+    if (init.kind === 'abiDecode') return this.lowerAbiDecode(init.data, [init.type], ctx, out)[0]!;
     // a storage struct source (structValue / mapStorageValue / structArrayElem / placeRead).
     return this.buildDynStructFromStorage(struct, this.structSrcSlot(init, ctx, out), ctx, out);
   }
@@ -6368,11 +6371,17 @@ ${indent(runtime, 6)}
         const se = this.fresh();
         out.push(`let ${se} := add(${blobData}, ${so})`);
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(t)}), ${blobEnd}) { revert(0, 0) }`);
-        const ptr = this.fresh();
-        out.push(`let ${ptr} := mload(0x40)`);
-        const sz = this.abiDecFromMem(t, se, ptr, blobEnd, out);
-        out.push(`mstore(0x40, add(${ptr}, ${sz}))`);
-        regs.push(ptr);
+        if (t.kind === 'struct') {
+          // a dynamic-field struct: build the POINTER-HEADED image a JETH struct local consumes (NOT the
+          // standard ABI image abiDecFromMem produces); buildDynStructFromMemBlob manages its own alloc.
+          regs.push(this.buildDynStructFromMemBlob(t, se, blobEnd, out));
+        } else {
+          const ptr = this.fresh();
+          out.push(`let ${ptr} := mload(0x40)`);
+          const sz = this.abiDecFromMem(t, se, ptr, blobEnd, out);
+          out.push(`mstore(0x40, add(${ptr}, ${sz}))`);
+          regs.push(ptr);
+        }
       }
     });
     return regs;

@@ -7072,6 +7072,10 @@ export class Analyzer {
             // element base). isSupportedDynStructLocal (the surrounding gate) already restricts
             // the field set, so a nested-array-field struct element stays rejected.
             e.kind === 'cdStructArrayElem' ||
+            // abi.decode(b, D): the memory-decode codec (buildDynStructFromMemBlob, via lowerAbiDecode)
+            // builds the same pointer-headed image from the decode blob (solc memory-decode revert
+            // semantics). isSupportedDynStructLocal (the surrounding gate) restricts the field set.
+            e.kind === 'abiDecode' ||
             e.kind === 'memDynStructValue' ||
             e.kind === 'ternary' ||
             (e.kind === 'call' && e.type.kind === 'struct') ||
@@ -10572,10 +10576,11 @@ export class Analyzer {
       // a static fixed array: supported when its leaves are static value types (inline aggregate).
       return isStaticType(t) && this.isStaticLeafArray(t);
     }
-    // struct results stay a CLEAN rejection in v1: the decode codec produces the standard ABI
-    // head/tail layout, but a JETH dynamic-struct memory local is POINTER-headed (a head word holds a
-    // memory pointer to each dynamic field's [len][data] image, not an ABI offset). Reconciling the
-    // two representations cannot be verified byte-identical cheaply, so a struct target is rejected.
+    // a struct target: a STATIC struct (value-only fields) decodes via abiDecFromMem's static-aggregate
+    // branch; a DYNAMIC-field struct via buildDynStructFromMemBlob (the pointer-headed image a JETH struct
+    // local consumes), the same decoder the constructor aggregate-param path uses. The historical
+    // "pointer-headed vs ABI-offset" blocker was solved by that decoder (commit 9f704dc).
+    if (t.kind === 'struct') return isStaticType(t) || this.isSupportedDynStructLocal(t);
     return false;
   }
 

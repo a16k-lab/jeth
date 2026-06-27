@@ -674,12 +674,15 @@ and is never miscompiled.
   FIXED-array field through the local (`s.a[i]`, JETH900); a NON-value field of a struct-returning call
   result (`this.mk(a).inner`, JETH245 - bind the call to a local first); a struct param to a PUBLIC/
   EXTERNAL callee via an internal call (an external/message call, Phase 6); `new T[](n)` (use an array
-  literal). DEFERRED (architectural, not yet supported): a memory struct local initialized FROM a
-  calldata struct-ARRAY element (`let p: P = ps[0n]` / `for (const p of ps)` over `ps: P[]` calldata -
-  the manual index loop works); NESTED / multi-dim memory-array locals (`u256[][]`, `Arr<Arr<T,N>,M>`,
-  `new Array<u256[][]>(n)`, JETH200); and AGGREGATE `abi.decode` targets (struct / struct-array /
-  `bytes[]`/`string[]` / nested, JETH322/JETH200 - JETH's pointer-headed dynamic-struct memory image is
-  not ABI-offset, so this needs a new decode codec).
+  literal). A calldata struct-ARRAY element bound to a memory struct local (`let p: P = ps[0n]` /
+  `for (const p of ps)`), NESTED / multi-dim value-leaf memory-array locals (`u256[][]`,
+  `Arr<Arr<T,N>,M>`, `new Array<u256[][]>(n)`), and the aggregate `abi.decode` STRUCT + tuple-with-struct
+  targets (via the pointer-headed `buildDynStructFromMemBlob` decoder) are all now SUPPORTED, byte-identical.
+  REMAINING residuals (clean over-rejections, never miscompiles): a whole-inner-array ASSIGNMENT
+  `m[i] = [...]` to a nested memory array (JETH900) and a nested array with a `bytes`/`string`/struct LEAF
+  (`bytes[][]`, `P[][]`, JETH200); and the aggregate `abi.decode` ARRAY targets (struct-array `P[]`,
+  `bytes[]`/`string[]`, nested `u256[][]` - JETH322/JETH200; each needs new array-decode machinery, and
+  `bytes[]`/`string[]` additionally has no memory-local binding representation).
 - Tuple destructuring works: `let [a, , c] = src` and `[a, , c] = src` where `src` is a multi-value
   internal call (`this.f()`) or a tuple literal (`[x, y]`, e.g. swap `[a, b] = [b, a]`); new locals,
   existing value lvalues incl. storage, or skipped components; value components only.
