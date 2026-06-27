@@ -1296,6 +1296,22 @@ ${indent(runtime, 6)}
             out.push(`return(${ptr}, ${size})`);
             break;
           }
+          // return abi.decode(b, T) DIRECTLY for an array T (no intermediate local): materialize the
+          // decoded image (the SAME lowerAbiDecode the `let a: T = abi.decode(b,T); return a;` local
+          // form uses, via lowerArrayRef's abiDecode case), then encode it with the SAME encoder that
+          // local form's return uses - encodeNestedMemReturn for an aggregate-leaf / nested-value image
+          // (P[], bytes[]/string[], u256[][]), encodeMemArrayReturn for a flat value array. Byte-
+          // identical to solc's direct-return decode (and to the local form, already verified).
+          if (s.value.kind === 'abiDecode') {
+            const mp = this.lowerAbiDecode(s.value.data, [s.value.type], ctx, out)[0]!;
+            const codecSourced =
+              (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) || isAggregateLeafArray(s.value.type);
+            const { ptr, size } = codecSourced
+              ? this.encodeNestedMemReturn(s.value.type, mp, out)
+              : this.encodeMemArrayReturn(mp, out);
+            out.push(`return(${ptr}, ${size})`);
+            break;
+          }
           const { ptr, size } = this.encodeArrayReturn(s.value, ctx, out);
           out.push(`return(${ptr}, ${size})`);
           break;
@@ -6434,6 +6450,129 @@ ${indent(runtime, 6)}
     throw new UnsupportedError(`abiDecFromMem: unsupported type '${t.kind}'`);
   }
 
+  /** Residual C: decode a MEMORY-sourced ABI value of type `t` (the DATA word at `memPtr`) into a fresh
+   *  ALLOCATED memory image in Residual B's ABSOLUTE-POINTER layout, returning the image pointer. The
+   *  decode twin of abiEncFromMem and the inverse of buildNestedMemArrayLit: where abiDecFromMem writes
+   *  the STANDARD ABI image (a dynamic element becomes a RELATIVE offset into a contiguous block), this
+   *  writes B's image (a dynamic element becomes an ABSOLUTE pointer to a fresh sub-image), which is what
+   *  B's memory-array readers mload. Keeps EXACTLY the bounds/cap/payload-fit checks abiDecFromMem does,
+   *  so a truncated/malformed blob reverts BYTE-IDENTICALLY to solc's memory decode. Used for C1
+   *  (u256[][] and other nested value arrays) and C3 (bytes[]/string[]); a STATIC element (C2's P[]) is
+   *  decoded inline via abiDecFromMem (no pointers, so its standard image already matches B's). */
+  private abiDecFromMemToImage(t: JethType, memPtr: string, blobEnd: string, out: string[]): string {
+    const cap = `${this.panic()}(0x41)`;
+    // a bytes/string leaf: alloc a [len][data] blob, return its absolute pointer.
+    if (isBytesLike(t)) {
+      const len = this.fresh();
+      out.push(`let ${len} := mload(${memPtr})`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${cap} }`);
+      const padded = this.fresh();
+      out.push(`let ${padded} := and(add(${len}, 0x1f), not(0x1f))`);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const nc = this.fresh();
+      out.push(`let ${nc} := add(add(${ptr}, 0x20), ${padded})`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${ptr})) { ${cap} }`);
+      out.push(`if gt(add(add(${memPtr}, 0x20), ${len}), ${blobEnd}) { revert(0, 0) }`);
+      out.push(`mstore(${ptr}, ${len})`);
+      out.push(`mcopy(add(${ptr}, 0x20), add(${memPtr}, 0x20), ${len})`);
+      out.push(`if mod(${len}, 0x20) { mstore(add(add(${ptr}, 0x20), ${len}), 0) }`);
+      out.push(`mstore(0x40, ${nc})`);
+      return ptr;
+    }
+    // a STATIC element (value / static struct / static fixed array): its image is the abiHeadWords(t)
+    // inline words; decode them inline (validated) into a fresh block, return the block pointer. (B's
+    // image stores a static element inline; for a static-element array this branch is not used, but it
+    // keeps the recursion total.)
+    if (isStaticType(t)) {
+      const hw = abiHeadWords(t);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(0x40, add(${ptr}, ${hw * 32}))`);
+      this.abiDecFromMem(t, memPtr, ptr, blobEnd, out);
+      return ptr;
+    }
+    // a dynamic array T[]: alloc [len] + an len-word table; each element word holds either an inline
+    // block (static element) or an ABSOLUTE pointer to a fresh element sub-image (dynamic element).
+    if (t.kind === 'array' && t.length === undefined) {
+      const len = this.fresh();
+      out.push(`let ${len} := mload(${memPtr})`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${cap} }`);
+      const elemRegion = this.fresh();
+      out.push(`let ${elemRegion} := add(${memPtr}, 0x20)`);
+      if (isStaticType(t.element)) {
+        // a STATIC element (P[] of a static struct, Arr<u256,N>[]): inline blocks, exactly abiDecFromMem's
+        // static-element layout (B1's image == the standard ABI image for a static element). Decode inline.
+        const es = abiHeadWords(t.element) * 32;
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(0x40)`);
+        const nc = this.fresh();
+        out.push(`let ${nc} := add(add(${ptr}, 0x20), mul(${len}, ${es}))`);
+        out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${ptr})) { ${cap} }`);
+        out.push(`if gt(add(${elemRegion}, mul(${len}, ${es})), ${blobEnd}) { revert(0, 0) }`);
+        out.push(`mstore(${ptr}, ${len})`);
+        out.push(`mstore(0x40, ${nc})`);
+        const dstHead = this.fresh();
+        out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+        const i = this.fresh();
+        out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+        const inner: string[] = [];
+        const ecd = this.fresh();
+        inner.push(`let ${ecd} := add(${elemRegion}, mul(${i}, ${es}))`);
+        const edst = this.fresh();
+        inner.push(`let ${edst} := add(${dstHead}, mul(${i}, ${es}))`);
+        this.abiDecFromMem(t.element, ecd, edst, blobEnd, inner);
+        for (const l of inner) out.push('  ' + l);
+        out.push('}');
+        return ptr;
+      }
+      // a DYNAMIC element (u256[] inner, bytes/string): [len] + an len-word ABSOLUTE-pointer table.
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const tableEnd = this.fresh();
+      out.push(`let ${tableEnd} := add(add(${ptr}, 0x20), mul(${len}, 0x20))`);
+      out.push(`if or(gt(${tableEnd}, 0xffffffffffffffff), lt(${tableEnd}, ${ptr})) { ${cap} }`);
+      out.push(`mstore(${ptr}, ${len})`);
+      out.push(`mstore(0x40, ${tableEnd})`); // claim the table; sub-images alloc PAST it
+      const dstHead = this.fresh();
+      out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const so = this.fresh();
+      inner.push(`let ${so} := mload(add(${elemRegion}, mul(${i}, 0x20)))`);
+      inner.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+      const se = this.fresh();
+      inner.push(`let ${se} := add(${elemRegion}, ${so})`);
+      inner.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), ${blobEnd}) { revert(0, 0) }`);
+      const ip = this.fresh();
+      inner.push(`let ${ip} := ${this.abiDecFromMemToImage(t.element, se, blobEnd, inner)}`);
+      inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+      return ptr;
+    }
+    // a FIXED array of a DYNAMIC element (Arr<u256[],N>): N absolute-pointer words, no length header.
+    if (t.kind === 'array' && t.length !== undefined) {
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(0x40, add(${ptr}, ${t.length * 32}))`); // claim the table; sub-images alloc PAST it
+      for (let k = 0; k < t.length; k++) {
+        const so = this.fresh();
+        out.push(`let ${so} := mload(add(${memPtr}, ${k * 32}))`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${memPtr}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), ${blobEnd}) { revert(0, 0) }`);
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromMemToImage(t.element, se, blobEnd, out)}`);
+        out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
+      }
+      return ptr;
+    }
+    throw new UnsupportedError(`abiDecFromMemToImage: unsupported type '${t.kind}'`);
+  }
+
   /** Decode the bytes value `data` into N components of `types` (abi.decode). Materializes the source
    *  to a memory [len][data] image, then for each top-level component reads its head word at
    *  blobData+32*i: a STATIC component is decoded inline at that head position; a DYNAMIC component
@@ -6487,7 +6626,15 @@ ${indent(runtime, 6)}
           // a dynamic-field struct: build the POINTER-HEADED image a JETH struct local consumes (NOT the
           // standard ABI image abiDecFromMem produces); buildDynStructFromMemBlob manages its own alloc.
           regs.push(this.buildDynStructFromMemBlob(t, se, blobEnd, out));
+        } else if (t.kind === 'array' && isDynamicType(t.element)) {
+          // Residual C1/C3: an array with a DYNAMIC element (u256[][], Arr<u256[],N>, bytes[], string[]).
+          // abiDecFromMem would write the STANDARD ABI image (relative element offsets), but Residual B's
+          // memory-array readers expect ABSOLUTE pointers. Decode into B's pointer-headed image, which
+          // abiDecFromMemToImage allocates and returns (with the SAME blob bounds checks for revert parity).
+          regs.push(this.abiDecFromMemToImage(t, se, blobEnd, out));
         } else {
+          // a value-element array (u256[]) or a STATIC-element array (C2's P[]): abiDecFromMem's standard
+          // image already matches B's representation ([len][elems] / [len][inline blocks], no pointers).
           const ptr = this.fresh();
           out.push(`let ${ptr} := mload(0x40)`);
           const sz = this.abiDecFromMem(t, se, ptr, blobEnd, out);

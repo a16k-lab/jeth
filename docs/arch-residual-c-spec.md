@@ -38,17 +38,30 @@ rejecting (decodeSupported returns false -> JETH322/200) until B3/B4 exist.
   must likewise accept an `abiDecode` init (extend B's localDecl branch to allow `e.kind === 'abiDecode'`
   with a type-matched target, and lower it through lowerAbiDecode like #3 did for the struct case).
 
-## Decoders to add (mirror abiEncFromMem's structure, but ABI blob -> memory image)
-- C1 nested value array: read `[len]`, validate the offset table + inner tails fit within blobEnd,
-  decode each inner via recursion, producing the #2 pointer-headed image (`[len][ptr0]...`). This is the
-  inverse of abiEncFromMem's dynamic-array branch. The existing `abiDecFromMem` already decodes a FLAT
-  value array; extend it (or add a sibling) so a nested element produces the inner image pointer.
-- C2 static-struct array: read `[len]`; for each element copy abiHeadWords(P) words (validating fit)
-  into the inline block - identical layout to B1's materializer output. (A static struct has no inner
-  offsets, so this is a bounded copy.)
-- C3 bytes/string array: read `[len]` + the per-element offset table; for each element decode the
-  `[len][data]` tail into a blob pointer (reuse the bytes/string memory decoder used by
-  abi.decode(b, bytes)), storing the pointer in B2's pointer array.
+## CRITICAL representation insight (read before writing any decoder)
+`abiDecFromMem` (yul.ts ~6329) ALREADY decodes dynamic arrays, BUT for a DYNAMIC element it writes a
+RELATIVE OFFSET into the dst image (`mstore(dstHead + i*0x20, sub(cursor, dstHead))`) - i.e. the
+STANDARD ABI image (self-describing relative offsets), which is what #3's struct/tuple readers consume.
+Residual B's memory-array readers expect a DIFFERENT image: ABSOLUTE POINTERS for a dynamic element
+(bytes[]/u256[][]: each element word is an absolute pointer to the inner blob/array, exactly what
+`buildNestedMemArrayLit` produces and `abiEncFromMem` READS). So:
+- C2 (static-struct P[]): a static struct has NO dynamic elements, so abiDecFromMem's output for a
+  dynamic array of a STATIC element is `[len][P0 inline][P1 inline]...` == B1's exact inline-block image.
+  Route C2 STRAIGHT through abiDecFromMem into a fresh image and bind it to the P[] memArray local. (Reuse,
+  not new codegen.)
+- C1 (u256[][]) and C3 (bytes[]/string[]): these have DYNAMIC elements, so abiDecFromMem's relative-offset
+  output does NOT match B's absolute-pointer image. Add a NEW decoder `abiDecFromMemToImage(t, src,
+  blobEnd, out): ptr` (the decode twin of abiEncFromMem, the inverse of buildNestedMemArrayLit) that
+  ALLOCATES and returns a pointer to a B-FORMAT image:
+  * value/static leaf or static element: inline (validated), same as abiDecFromMem's static path.
+  * dynamic array, dynamic element: alloc `[len]` + an `len`-word pointer table; per element read the ABI
+    offset (relative to elemRegion), bounds-check vs blobEnd (EXACT same checks abiDecFromMem does, for
+    revert parity), recursively decode the element into a FRESH sub-image, store its ABSOLUTE pointer in
+    the table.
+  * bytes/string leaf: alloc a `[len][data]` blob, return its absolute pointer.
+  Use this for C1/C3; the element-access (B's readers) then mloads absolute pointers correctly.
+  IMPORTANT: keep ALL the bounds/cap/payload-fit checks abiDecFromMem already performs so a truncated or
+  malformed blob reverts BYTE-IDENTICALLY to solc's memory decode.
 
 ## Verification (MANDATORY)
 Mirror test/arch-abi-decode-aggregate.test.ts. For each of u256[][], P[] (static), bytes[], string[]:

@@ -329,9 +329,11 @@ describe('abi.decode: byte-identical vs solc', () => {
         `@struct class P { a: u256; s: string; } @contract class C { @external @pure f(b: bytes): u256 { let p: P = abi.decode(b, P); return p.a; } }`,
       ),
     ).toBe(true);
-    // a bytes/string-element array (no JETH memory-local representation)
+    // Residual C lifted a bytes/string-element array (string[]/bytes[]) as a decode target + Residual B
+    // memory-array local: now ACCEPTED (the decode + re-encode round-trip compiles; byte-identical decode is
+    // verified in arch-residual-c-decode-array.test.ts).
     expect(
-      jethRejects(
+      jethAccepts(
         `@contract class C { @external @pure f(b: bytes): bytes { let xs: string[] = abi.decode(b, string[]); return abi.encode(xs); } }`,
       ),
     ).toBe(true);

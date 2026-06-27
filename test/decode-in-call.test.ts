@@ -267,15 +267,16 @@ describe('decode field inside call/staticcall options', () => {
         `@struct class P { a: u256; s: string; } @contract class C { @external f(t: address): u256 { let p: P = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: P }); return p.a; } }`,
       ),
     ).toEqual([]);
-    // a string[]-element array is also rejected (cleanly): the local type itself is unsupported, so it fails
-    // before the decode check, but it is still a clean rejection (never a crash) - assert it is rejected.
+    // Residual C lifted string[] (and P[] / bytes[] / u256[][]) as decode targets and Residual B memory-array
+    // locals, so `decode: string[]` bound to a `let xs: string[]` is now ACCEPTED (byte-identical decode is
+    // verified in arch-residual-c-decode-array.test.ts; the low-level-call decode reuses the same abiDecode IR).
     expect(
       jethAccepts(
         f(
           'bytes { let xs: string[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string[] }); return abi.encode(xs); }',
         ),
       ),
-    ).toBe(false);
+    ).toBe(true);
     // tuple decode bound to a single name -> JETH323
     expect(
       jethError(

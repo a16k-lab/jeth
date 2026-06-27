@@ -57,7 +57,17 @@ describe('abi.decode into a struct / tuple-with-struct target (JETH322 core lift
     expect(bad.success).toBe(false);
   });
 
-  it('still rejects the residual array decode targets (clean over-rejections, not miscompiles)', () => {
+  it('now ACCEPTS the Residual C array decode targets (P[], bytes[], u256[][]); compiles to bytecode', () => {
+    // Residual C lifted P[] (static struct), bytes[]/string[], and u256[][] (nested value arrays) as
+    // abi.decode targets (byte-identical decode verified in arch-residual-c-decode-array.test.ts). Here we
+    // assert they now COMPILE (no longer JETH322/200). Genuinely-deferred targets stay rejecting below.
+    const pre = `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(b: bytes): u256 {`;
+    expect(() => compile(`${pre} let ps: P[] = abi.decode(b, P[]); return ps[0n].a; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() => compile(`${pre} let bs: bytes[] = abi.decode(b, bytes[]); return bs.length; } }`, { fileName: 'C.jeth' })).not.toThrow();
+    expect(() => compile(`${pre} let m: u256[][] = abi.decode(b, u256[][]); return m[0n][0n]; } }`, { fileName: 'C.jeth' })).not.toThrow();
+  });
+
+  it('still rejects the genuinely-deferred array decode targets (clean over-rejections, not miscompiles)', () => {
     const codes = (src: string): string[] => {
       try {
         compile(src, { fileName: 'C.jeth' });
@@ -66,9 +76,13 @@ describe('abi.decode into a struct / tuple-with-struct target (JETH322 core lift
         return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
       }
     };
-    const pre = `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(b: bytes): u256 {`;
-    expect(codes(`${pre} let ps: P[] = abi.decode(b, P[]); return ps[0n].a; } }`).length).toBeGreaterThan(0);
-    expect(codes(`${pre} let bs: bytes[] = abi.decode(b, bytes[]); return bs.length; } }`).length).toBeGreaterThan(0);
-    expect(codes(`${pre} let m: u256[][] = abi.decode(b, u256[][]); return m[0n][0n]; } }`).length).toBeGreaterThan(0);
+    // a DYNAMIC-field struct array (D has a bytes field): no memory-local representation / decoder yet.
+    const preD = `@struct class D { a: u256; tags: bytes; } @contract class C { @external @pure f(b: bytes): u256 {`;
+    expect(codes(`${preD} let ds: D[] = abi.decode(b, D[]); return ds.length; } }`).length).toBeGreaterThan(0);
+    // nested-aggregate arrays (array of static-struct arrays / array of bytes arrays).
+    const preP = `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(b: bytes): u256 {`;
+    expect(codes(`${preP} let m: P[][] = abi.decode(b, P[][]); return m.length; } }`).length).toBeGreaterThan(0);
+    const preC = `@contract class C { @external @pure f(b: bytes): u256 {`;
+    expect(codes(`${preC} let m: bytes[][] = abi.decode(b, bytes[][]); return m.length; } }`).length).toBeGreaterThan(0);
   });
 });

@@ -7224,14 +7224,15 @@ export class Analyzer {
         );
         return;
       }
-      // Only a fresh literal / new Array source is laid out by the nested codec today; aliasing or
-      // copying a whole nested array from another local / param / storage is a later step (stays
-      // JETH200 unless it is one of those constructors).
-      if (e.kind !== 'arrayLit' && e.kind !== 'newArray') {
+      // A fresh literal / new Array source is laid out by the nested codec; Residual C: abi.decode(b, T)
+      // builds the SAME pointer-headed image via abiDecFromMemToImage (memory-decode revert semantics).
+      // Aliasing or copying a whole nested array from another local / param / storage is a later step
+      // (stays JETH200 unless it is one of those constructors).
+      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode') {
         this.diags.error(
           decl.initializer,
           'JETH200',
-          `a nested-array memory local must be initialized from an array literal or new Array<...>(n) (copying a whole nested array from another source is not supported yet)`,
+          `a nested-array memory local must be initialized from an array literal, new Array<...>(n), or abi.decode(...) (copying a whole nested array from another source is not supported yet)`,
         );
         return;
       }
@@ -7311,11 +7312,14 @@ export class Analyzer {
         );
         return;
       }
-      if (e.kind !== 'arrayLit' && e.kind !== 'newArray') {
+      // Residual C2/C3: abi.decode(b, P[]) / abi.decode(b, bytes[]) / abi.decode(b, string[]) builds the
+      // SAME image (C2 inline blocks via abiDecFromMem, C3 absolute-pointer-of-blobs via abiDecFromMemToImage),
+      // with solc memory-decode revert semantics. A whole-array alias/copy is still a later step (JETH200).
+      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode') {
         this.diags.error(
           decl.initializer,
           'JETH200',
-          `an aggregate-array memory local must be initialized from an array literal or new Array<...>(n) (copying a whole array from another source is not supported yet)`,
+          `an aggregate-array memory local must be initialized from an array literal, new Array<...>(n), or abi.decode(...) (copying a whole array from another source is not supported yet)`,
         );
         return;
       }
@@ -10632,13 +10636,21 @@ export class Analyzer {
     if (isStaticValueType(t) || isBytesLike(t)) return true;
     if (t.kind === 'array') {
       if (t.length === undefined) {
-        // a dynamic array of a VALUE element (head/tail). A bytes/string-element array (string[] /
-        // bytes[]) is a CLEAN rejection: JETH has no memory-local representation for it (the codec
-        // could decode it, but there is nowhere to bind the result), so reject rather than miscompile.
-        return isStaticValueType(t.element);
+        // a dynamic array of a VALUE element (head/tail) binds the [len][elems] memArray image.
+        if (isStaticValueType(t.element)) return true;
+        // Residual C1: a NESTED VALUE array (u256[][], ...) decodes into B's pointer-headed image via
+        // abiDecFromMemToImage; C2: a STATIC-struct element array (P[]) decodes inline via abiDecFromMem;
+        // C3: a bytes[]/string[] decodes into B's absolute-pointer-of-blobs image. All three bind a
+        // Residual B memory-array local. DEFERRED (kept rejecting via isAggregateLeafArray excluding
+        // them): a DYNAMIC-struct element array (P with a dynamic field), and nested-aggregate arrays
+        // (P[][], bytes[][]) - no memory-local representation / decoder twin yet, so a CLEAN rejection.
+        return isNestedValueArray(t) || isAggregateLeafArray(t);
       }
       // a static fixed array: supported when its leaves are static value types (inline aggregate).
-      return isStaticType(t) && this.isStaticLeafArray(t);
+      // A fixed-outer nested value array bearing a DYNAMIC element (Arr<u256[],N>) decodes into B's
+      // N-word absolute-pointer table (abiDecFromMemToImage's fixed-array branch).
+      if (isStaticType(t)) return this.isStaticLeafArray(t);
+      return isNestedValueArray(t);
     }
     // a struct target: a STATIC struct (value-only fields) decodes via abiDecFromMem's static-aggregate
     // branch; a DYNAMIC-field struct via buildDynStructFromMemBlob (the pointer-headed image a JETH struct

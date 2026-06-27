@@ -676,13 +676,17 @@ and is never miscompiled.
   EXTERNAL callee via an internal call (an external/message call, Phase 6); `new T[](n)` (use an array
   literal). A calldata struct-ARRAY element bound to a memory struct local (`let p: P = ps[0n]` /
   `for (const p of ps)`), NESTED / multi-dim value-leaf memory-array locals (`u256[][]`,
-  `Arr<Arr<T,N>,M>`, `new Array<u256[][]>(n)`), and the aggregate `abi.decode` STRUCT + tuple-with-struct
-  targets (via the pointer-headed `buildDynStructFromMemBlob` decoder) are all now SUPPORTED, byte-identical.
+  `Arr<Arr<T,N>,M>`, `new Array<u256[][]>(n)`), the aggregate `abi.decode` STRUCT + tuple-with-struct
+  targets (via the pointer-headed `buildDynStructFromMemBlob` decoder), and the aggregate `abi.decode`
+  ARRAY targets - a STATIC-struct array (`P[]`, decoded inline via `abiDecFromMem`), `bytes[]`/`string[]`,
+  and nested value arrays (`u256[][]`, `u256[][][]`, `Arr<u256[],N>`, decoded into Residual B's absolute-
+  pointer image via the new `abiDecFromMemToImage`), plus the `[u256, P[]]` tuple form - are all now
+  SUPPORTED, byte-identical (truncated/malformed blobs revert exactly like solc's memory decode).
   REMAINING residuals (clean over-rejections, never miscompiles): a whole-inner-array ASSIGNMENT
-  `m[i] = [...]` to a nested memory array (JETH900) and a nested array with a `bytes`/`string`/struct LEAF
-  (`bytes[][]`, `P[][]`, JETH200); and the aggregate `abi.decode` ARRAY targets (struct-array `P[]`,
-  `bytes[]`/`string[]`, nested `u256[][]` - JETH322/JETH200; each needs new array-decode machinery, and
-  `bytes[]`/`string[]` additionally has no memory-local binding representation).
+  `m[i] = [...]` to a nested memory array (JETH900); a nested array with a `bytes`/`string`/struct LEAF
+  (`bytes[][]`, `P[][]`, JETH200); and the still-deferred `abi.decode` ARRAY targets - a DYNAMIC-struct
+  array `P[]` (P with a `bytes`/`string`/dyn-array field) and nested-aggregate arrays (`P[][]`,
+  `bytes[][]`) - JETH322/JETH200, pending the B3/B4 memory representations.
 - Tuple destructuring works: `let [a, , c] = src` and `[a, , c] = src` where `src` is a multi-value
   internal call (`this.f()`) or a tuple literal (`[x, y]`, e.g. swap `[a, b] = [b, a]`); new locals,
   existing value lvalues incl. storage, or skipped components; value components only.
