@@ -81,6 +81,12 @@ const UPGRADED_TOPIC = '0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39
 // the OZ TransparentUpgradeableProxy revert when the admin calls anything else (ProxyDeniedAdminAccess()).
 const UPGRADE_TO_AND_CALL_SELECTOR = '0x4f1ef286';
 const PROXY_DENIED_ADMIN_ACCESS_SELECTOR = '0xd2b576ec';
+// Phase 2c (UUPS): the anti-brick check selectors (byte-identical to OZ UUPSUpgradeable / ERC1967Utils).
+// proxiableUUID() = the selector STATICCALL'd on the new impl; the two revert errors on a failed/mismatched
+// anti-brick check. All keccak256(sig)[0:4], verified via functionSelector.
+const PROXIABLE_UUID_SELECTOR = '0x52d1902d';
+const ERC1967_INVALID_IMPLEMENTATION_SELECTOR = '0x4c9c8ce3'; // ERC1967InvalidImplementation(address)
+const UUPS_UNSUPPORTED_PROXIABLE_UUID_SELECTOR = '0xaa1d49a4'; // UUPSUnsupportedProxiableUUID(bytes32)
 
 /** ABI head-word count of a struct's tuple HEAD (spec section 3.0): each field
  *  contributes its inline static words if static, or exactly ONE offset word if
@@ -520,6 +526,13 @@ ${indent(runtime, 6)}
     this.nameCounter = 0; // deterministic, function-local unique names
     if (fn.mutability !== 'payable') {
       out.push('if callvalue() { revert(0, 0) } // reject value to non-payable');
+    }
+    // Phase 2c (UUPS): a synthesized @uups entry has a hand-written body (no source `body`/params to
+    // lower). The callvalue guard above already matches OZ (upgradeToAndCall is payable -> no guard;
+    // proxiableUUID is view -> guard). Emit the dedicated body and return.
+    if (fn.uupsKind) {
+      for (const l of this.emitUupsEntry(fn)) out.push(l);
+      return out;
     }
 
     // Decode params from calldata. Each param has one head word at 4+32*i; a
@@ -6406,6 +6419,71 @@ ${indent(runtime, 6)}
     out.push('  returndatacopy(0, 0, returndatasize())');
     out.push('  if iszero(_ok2) { revert(0, returndatasize()) }');
     out.push('}');
+    return out;
+  }
+
+  /** Phase 2c (UUPS): emit the hand-written body of a synthesized `@uups @contract` entry, byte-identical
+   *  to OZ UUPSUpgradeable 5.x. Two kinds:
+   *   - proxiableUUID(): return the EIP-1967 impl slot constant as a bytes32.
+   *   - upgradeToAndCall(address newImpl, bytes data): decode (newImpl, data) from calldata, call the user
+   *     gate authorizeUpgrade(newImpl), run the anti-brick proxiableUUID staticcall (revert
+   *     ERC1967InvalidImplementation(newImpl) on a failed/short staticcall; UUPSUnsupportedProxiableUUID(slot)
+   *     on a returned slot != the EIP-1967 impl slot), then the EIP-1967 upgrade shared with upgradeProxy
+   *     (sstore impl slot, emit Upgraded(indexed), data.length>0 -> delegatecall+bubble), return empty. */
+  private emitUupsEntry(fn: FunctionIR): string[] {
+    const out: string[] = [];
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    if (fn.uupsKind === 'proxiableUUID') {
+      // proxiableUUID(): no params; return the EIP-1967 impl slot constant (a bytes32 in word 0).
+      out.push(`mstore(0, ${EIP1967_IMPL_SLOT})`);
+      out.push('return(0, 0x20)');
+      return out;
+    }
+    // upgradeToAndCall(address newImpl, bytes data): the args mirror the transparent admin upgrade decode
+    // (newImpl at calldata 4; the bytes arg's offset word at 0x24 is relative to the args region at 4).
+    // solc requires the full 2-word static head to be present.
+    out.push('if lt(calldatasize(), 0x44) { revert(0, 0) }');
+    out.push(`let _newImpl := and(calldataload(4), ${MASK})`);
+    // require the address arg's high 96 bits are zero (a dirty word reverts empty, like solc's ABI decode).
+    out.push(`if shr(160, calldataload(4)) { revert(0, 0) }`);
+    // (1) the user access gate authorizeUpgrade(newImpl). A bare internal void function: call its userfn_.
+    out.push(`${this.userFnName(fn.authorizeKey!)}(_newImpl)`);
+    // (2) anti-brick: STATICCALL newImpl.proxiableUUID() (selector 0x52d1902d). A failed staticcall (incl.
+    // a non-contract impl) OR a return shorter than 32 bytes -> revert ERC1967InvalidImplementation(newImpl).
+    out.push(`mstore(0, ${PROXIABLE_UUID_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+    out.push('let _puOk := staticcall(gas(), _newImpl, 0, 4, 0, 0x20)');
+    out.push('if or(iszero(_puOk), lt(returndatasize(), 0x20)) {');
+    // ERC1967InvalidImplementation(address): selector + the newImpl word.
+    out.push(`  mstore(0, ${ERC1967_INVALID_IMPLEMENTATION_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+    out.push('  mstore(4, _newImpl)');
+    out.push('  revert(0, 0x24)');
+    out.push('}');
+    // the returned bytes32 (the impl's claimed proxiable slot) must equal the EIP-1967 impl slot.
+    out.push('let _slot := mload(0)');
+    out.push(`if iszero(eq(_slot, ${EIP1967_IMPL_SLOT})) {`);
+    // UUPSUnsupportedProxiableUUID(bytes32): selector + the returned slot.
+    out.push(`  mstore(0, ${UUPS_UNSUPPORTED_PROXIABLE_UUID_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+    out.push('  mstore(4, _slot)');
+    out.push('  revert(0, 0x24)');
+    out.push('}');
+    // (3) the EIP-1967 upgrade (shared with proxyInit/upgradeProxy/the transparent admin upgrade):
+    // require(isContract) -> sstore impl slot -> emit Upgraded(indexed) -> data.length>0 delegatecall+bubble.
+    out.push(`if iszero(extcodesize(_newImpl)) { revert(0, 0) }`);
+    out.push(`sstore(${EIP1967_IMPL_SLOT}, _newImpl)`);
+    out.push(`log2(0, 0, ${UPGRADED_TOPIC}, _newImpl)`);
+    // decode the bytes arg [len][data] into memory at the free ptr (offset word at calldata 0x24, relative
+    // to the args region at byte 4).
+    out.push('let _dataOff := add(4, calldataload(0x24))');
+    out.push('let _dataLen := calldataload(_dataOff)');
+    out.push('let _dataPtr := mload(0x40)');
+    out.push('calldatacopy(_dataPtr, add(_dataOff, 0x20), _dataLen)');
+    out.push('if gt(_dataLen, 0) {');
+    out.push('  let _ok := delegatecall(gas(), _newImpl, _dataPtr, _dataLen, 0, 0)');
+    out.push('  returndatacopy(0, 0, returndatasize())');
+    out.push('  if iszero(_ok) { revert(0, returndatasize()) }');
+    out.push('}');
+    // the upgrade entry returns empty (OZ upgradeToAndCall returns void).
+    out.push('return(0, 0)');
     return out;
   }
 

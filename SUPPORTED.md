@@ -193,9 +193,16 @@ The **Transparent** variant `@proxy('transparent')` is supported, byte-identical
 `upgradeToAndCall(address,bytes)` (any other admin selector reverts `ProxyDeniedAdminAccess()` `0xd2b576ec`),
 and every non-admin call delegates to the impl (so a non-admin call whose selector collides with
 `upgradeToAndCall` still hits the impl, defeating the selector clash). A transparent proxy may not declare
-`@external` methods (JETH400/401). UUPS (`@uups` impl-side upgrade mixin + `proxiableUUID`), Beacon (`@beacon`
-+ staticcall), and the Diamond (EIP-2535 multi-facet) are the remaining proxy phases - all delegatecall-only,
-no raw `delegatecall`/`CREATE` in user code.
+`@external` methods (JETH400/401). The **UUPS** variant is supported, byte-identical to OZ `UUPSUpgradeable`:
+the proxy is the plain `@proxy` (delegate-only) and a `@uups @contract` carries the upgrade logic -
+`@uups` synthesizes `upgradeToAndCall(address,bytes)` (calls the user-defined `authorizeUpgrade(newImpl)`
+gate; the anti-brick `proxiableUUID()` staticcall on the new impl - a failed/short call reverts
+`ERC1967InvalidImplementation(address)` `0x4c9c8ce3`, a wrong slot reverts `UUPSUnsupportedProxiableUUID(bytes32)`
+`0xaa1d49a4`; then the EIP-1967 upgrade) and `proxiableUUID()` returning the impl slot. `@uups` without a
+`authorizeUpgrade` method is rejected (JETH402). Verified byte-identical (returndata + storage + `Upgraded`
+event + revert): the authorized upgrade-through-proxy round-trip, both anti-brick reverts, the auth gate, and
+state preservation. **Beacon** (`@beacon` + staticcall) and the **Diamond** (EIP-2535 multi-facet) are the
+remaining proxy phases - all delegatecall-only, no raw `delegatecall`/`CREATE` in user code.
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and

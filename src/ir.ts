@@ -542,6 +542,14 @@ export interface FunctionIR {
   // is dispatched; non-winning base versions are retained ONLY as `super` targets and carry a
   // per-contract key (e.g. `Base__f`). Unset for a non-inherited (single-contract) compile.
   definingContract?: string;
+  // Phase 2c (UUPS): a SYNTHESIZED upgrade entry of a `@uups @contract`. The body is NOT lowered from
+  // `body` (which is empty); yul.ts emits a dedicated hand-written body (byte-identical to OZ
+  // UUPSUpgradeable 5.x). 'upgradeToAndCall' = the upgrade entry (calls authorizeKey, the anti-brick
+  // proxiableUUID staticcall, then the EIP-1967 upgrade); 'proxiableUUID' = returns the EIP-1967 impl slot.
+  uupsKind?: 'upgradeToAndCall' | 'proxiableUUID';
+  // Phase 2c (UUPS): for a uupsKind==='upgradeToAndCall' entry, the Yul userfn_<key> of the user-declared
+  // `authorizeUpgrade(address)` gate, called with the decoded newImpl before the upgrade runs.
+  authorizeKey?: string;
 }
 
 /** A constructor (Phase 5): runs once in creation code. Not callable, not in the dispatcher;
@@ -591,6 +599,12 @@ export interface ContractIR {
   // by caller() - the admin may ONLY call upgradeToAndCall(address,bytes) (else revert ProxyDeniedAdminAccess),
   // a non-admin ALWAYS delegates to the impl (even an upgradeToAndCall selector - this defeats the clash).
   proxyVariant?: 'transparent';
+  // Phase 2c: `@uups @contract` - the IMPLEMENTATION opts into the UUPS upgrade surface (the proxy used
+  // with it is the plain Phase-2a `@proxy`). JETH synthesizes two @external dispatcher entries:
+  // upgradeToAndCall(address,bytes) (user authorizeUpgrade gate -> anti-brick proxiableUUID staticcall ->
+  // the EIP-1967 upgrade) and proxiableUUID() (returns the EIP-1967 impl slot). Byte-identical to OZ
+  // UUPSUpgradeable 5.x. The two entries are ordinary FunctionIRs carrying a uupsKind flag.
+  isUups?: boolean;
   // Phase B: external (delegatecall) libraries this contract references. Each is emitted as its OWN
   // top-level Yul object (creation returns runtime; runtime = a selector dispatcher over its external
   // functions) and linked at deploy time. Empty/absent when no external library is referenced.

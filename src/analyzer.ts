@@ -1379,6 +1379,13 @@ export class Analyzer {
       functions.push(getter);
     }
 
+    // Phase 2c (UUPS): `@uups @contract` synthesizes upgradeToAndCall(address,bytes) + proxiableUUID()
+    // BEFORE the selector-clash check, so a user-declared upgradeToAndCall/proxiableUUID clashes via the
+    // normal JETH044 path. Validates the user `authorizeUpgrade(address)` gate exists and marks it
+    // internally-called (so its userfn_ is emitted for the synthesized entry to call).
+    const isUups = decoratorNames(cls).includes('uups');
+    if (isUups) this.synthesizeUups(cls, decoratorNames(cls).includes('proxy'), rawFns, functions);
+
     // Reject duplicate selectors (would make a dispatcher ambiguous). The CONTRACT dispatcher and each
     // external LIBRARY object have INDEPENDENT selector spaces (separate Yul objects), so a library
     // external function (its selector is the bare `f(...)`) is checked within its own library, never
@@ -1503,8 +1510,110 @@ export class Analyzer {
       fallback,
       isProxy,
       proxyVariant,
+      isUups: isUups || undefined,
       libraries: libraries.length > 0 ? libraries : undefined,
     };
+  }
+
+  /** Phase 2c (UUPS): synthesize the two @external entries of a `@uups @contract` (byte-identical to OZ
+   *  UUPSUpgradeable 5.x):
+   *   - upgradeToAndCall(address newImpl, bytes data): payable. Calls the user gate authorizeUpgrade(newImpl),
+   *     then the anti-brick proxiableUUID staticcall on newImpl (revert ERC1967InvalidImplementation on a
+   *     failed staticcall; revert UUPSUnsupportedProxiableUUID on a wrong slot), then the EIP-1967 upgrade
+   *     (sstore impl slot, emit Upgraded(indexed), data delegatecall+bubble). yul.ts emits the body.
+   *   - proxiableUUID(): view returns bytes32. Returns the EIP-1967 impl slot constant.
+   *  Gates: @uups requires a bare internal/private `authorizeUpgrade(newImpl: address): void`; rejects
+   *  @uups + @proxy on one class; rejects a user-declared upgradeToAndCall/proxiableUUID (clash). The two
+   *  synthesized FunctionIRs are pushed into `functions` (ordinary dispatcher entries). */
+  private synthesizeUups(
+    cls: ts.ClassDeclaration,
+    alsoProxy: boolean,
+    rawFns: RawFunction[],
+    functions: FunctionIR[],
+  ): void {
+    // @uups marks an IMPLEMENTATION contract; it is mutually exclusive with @proxy (the proxy used with a
+    // UUPS impl is the plain Phase-2a @proxy, a SEPARATE contract).
+    if (alsoProxy) {
+      this.diags.error(
+        cls,
+        'JETH404',
+        '@uups may not be combined with @proxy (a UUPS implementation is a normal @contract; the proxy deployed against it is the plain @proxy)',
+      );
+      return;
+    }
+    // The user MUST declare the upgrade gate `authorizeUpgrade(newImpl: address)` (internal/private, void,
+    // exactly one address param). OZ's `_authorizeUpgrade(address)` is abstract and the integrator MUST
+    // implement it; without it the upgrade is ungated (a brick risk), so reject @uups outright.
+    const candidates = this.candidatesByName.get('authorizeUpgrade') ?? [];
+    const gate = candidates.find(
+      (rf) =>
+        (rf.visibility === 'internal' || rf.visibility === 'private') &&
+        rf.params.length === 1 &&
+        rf.params[0]!.type.kind === 'address' &&
+        rf.returnType.kind === 'void' &&
+        !rf.returnTypes,
+    );
+    if (!gate) {
+      this.diags.error(
+        cls,
+        'JETH402',
+        "a @uups contract must declare an internal upgrade gate 'authorizeUpgrade(newImpl: address): void' (the access check run before every upgrade; declare it @internal/@private)",
+      );
+      return;
+    }
+    // The synthesized selectors clash with a user-declared function of the same signature - reject early
+    // with a clear message (the generic JETH044 below would also catch it, but this is more precise).
+    for (const sig of ['upgradeToAndCall(address,bytes)', 'proxiableUUID()']) {
+      const name = sig.slice(0, sig.indexOf('('));
+      if ((this.candidatesByName.get(name) ?? []).length > 0) {
+        this.diags.error(
+          cls,
+          'JETH403',
+          `a @uups contract may not declare '${name}' (the ${sig} entry is synthesized by @uups)`,
+        );
+        return;
+      }
+    }
+    // The gate is reached only from the synthesized upgradeToAndCall body, so force-emit its userfn_.
+    // The internallyCalled SWEEP over `functions` already ran above, so set the FunctionIR flag directly
+    // (the gate's checked FunctionIR is already in `functions`) AND add the key to the set for symmetry.
+    const gateKey = this.fkey(gate);
+    this.internallyCalled.add(gateKey);
+    const gateFn = functions.find((f) => f.key === gateKey);
+    if (gateFn) gateFn.internallyCalled = true;
+    const BYTES32: JethType = { kind: 'bytesN', size: 32 };
+    // upgradeToAndCall(address,bytes): payable (OZ `public payable`). body is empty (yul.ts emits it).
+    const upgradeSig = functionSignature('upgradeToAndCall', [ADDRESS, BYTES]);
+    functions.push({
+      name: 'upgradeToAndCall',
+      key: 'upgradeToAndCall',
+      visibility: 'external',
+      mutability: 'payable',
+      params: [
+        { name: 'newImplementation', type: ADDRESS },
+        { name: 'data', type: BYTES },
+      ],
+      returnType: VOID,
+      signature: upgradeSig,
+      selector: functionSelector(upgradeSig),
+      body: [],
+      uupsKind: 'upgradeToAndCall',
+      authorizeKey: this.fkey(gate),
+    });
+    // proxiableUUID(): view returns bytes32 (OZ `external view`).
+    const proxiableSig = functionSignature('proxiableUUID', []);
+    functions.push({
+      name: 'proxiableUUID',
+      key: 'proxiableUUID',
+      visibility: 'external',
+      mutability: 'view',
+      params: [],
+      returnType: BYTES32,
+      signature: proxiableSig,
+      selector: functionSelector(proxiableSig),
+      body: [],
+      uupsKind: 'proxiableUUID',
+    });
   }
 
   /** Phase B: build the LibraryIR list for every referenced external (delegatecall) library. For each
