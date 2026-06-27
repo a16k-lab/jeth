@@ -162,13 +162,9 @@ contract C {
     await cmp('aliasMut()');
   });
 
-  it('residuals stay rejected (whole-inner-array assignment, struct/bytes leaves): clean over-rejection, not a miscompile', () => {
-    // m[i] = [...] (whole-inner-array assignment): a later step (the inner-array write codec).
-    expect(() =>
-      compile(`@contract class C { @external @pure f(): u256[][] { let m: u256[][] = [[1n],[2n]]; m[0n] = [9n,8n]; return m; } }`, {
-        fileName: 'C.jeth',
-      }),
-    ).toThrow();
+  it('residuals stay rejected (struct/bytes leaves): clean over-rejection, not a miscompile', () => {
+    // (whole-inner-array assignment m[i] = [...] is now supported - Residual A, see
+    // arch-residual-a-nested-array-assign.test.ts.)
     // a STRUCT-leaf nested array (P[][]) stays JETH200 (the codec only lays out value leaves).
     expect(() =>
       compile(`@struct class P { a: u256; } @contract class C { @external @pure f(): u256 { let m: P[][] = [[P(1n)]]; return 0n; } }`, {

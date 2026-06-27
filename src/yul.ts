@@ -1582,6 +1582,14 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'arrayElem' && s.target.type.kind === 'array') {
+          // A whole-inner-array element write on a NESTED MEMORY array local (m[i] = [...]): not a
+          // storage place. The element is either an absolute pointer word (a DYNAMIC inner array) or an
+          // inline static sub-block (a STATIC inner array); mirror the read side (lowerArrayGet memory
+          // branch). solc evaluates the RHS before the LHS location, so materialize the RHS first.
+          if (s.target.arr.base.kind === 'memArray' || s.target.arr.base.kind === 'memArrayExpr') {
+            this.writeNestedMemArrayElem(s.target, s.value, ctx, out);
+            break;
+          }
           if (s.target.type.length !== undefined) {
             // this.dd[i] = <array> (a whole FIXED inner-array element): copy the static aggregate
             // into the element BASE slot (base + i*storageSlotCount), like the whole-array assign.
@@ -4126,6 +4134,47 @@ ${indent(runtime, 6)}
     const guard = this.validateInput(ref.elem, w); // validate dirty calldata elements on read
     if (guard) out.push(guard);
     return w;
+  }
+
+  /** Write a whole inner array into element i of a NESTED MEMORY array local (m[i] = <array>). The
+   *  mirror of the lowerArrayGet memory branch: a DYNAMIC inner element is one absolute-pointer word
+   *  (store the materialized RHS pointer, a reference assignment exactly like solc); a STATIC inner
+   *  element is an inline sub-block (copy the RHS image's words in). RHS materialized FIRST (solc
+   *  evaluates the value before the LHS location); i is bound-checked (Panic 0x32). */
+  private writeNestedMemArrayElem(
+    target: LValue & { kind: 'arrayElem' },
+    value: Expr,
+    ctx: LowerCtx,
+    out: string[],
+  ): void {
+    const innerT = target.type as JethType & { kind: 'array' };
+    if (!isStaticType(innerT)) {
+      // dynamic inner: materialize -> pointer, store at the element word (reference assignment).
+      const p = this.fresh();
+      out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
+      const ref = this.lowerArrayRef(target.arr, ctx, out); // src 'memory'
+      const i = this.fresh();
+      out.push(`let ${i} := ${this.lowerExpr(target.index, ctx, out)}`);
+      const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
+      out.push(`if iszero(lt(${i}, ${bound})) { ${this.panic()}(0x32) }`);
+      const dataBase = ref.fixedLen !== undefined ? ref.ptr! : `add(${ref.ptr}, 0x20)`;
+      out.push(`mstore(add(${dataBase}, mul(${i}, 0x20)), ${p})`);
+      return;
+    }
+    // static inline inner (Arr<value,N> / Arr<static,N>): materialize the RHS image, then copy its
+    // ew bytes (abiHeadWords words, the inline element width) into element i's inline sub-block.
+    const ew = abiHeadWords(innerT) * 32;
+    const src = this.fresh();
+    out.push(`let ${src} := ${this.aggToMemPtr(value, ctx, out)}`);
+    const ref = this.lowerArrayRef(target.arr, ctx, out);
+    const i = this.fresh();
+    out.push(`let ${i} := ${this.lowerExpr(target.index, ctx, out)}`);
+    const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
+    out.push(`if iszero(lt(${i}, ${bound})) { ${this.panic()}(0x32) }`);
+    const dataBase = ref.fixedLen !== undefined ? ref.ptr! : `add(${ref.ptr}, 0x20)`;
+    const dst = this.fresh();
+    out.push(`let ${dst} := add(${dataBase}, mul(${i}, ${ew}))`);
+    for (let k = 0; k < ew / 32; k++) out.push(`mstore(add(${dst}, ${k * 32}), mload(add(${src}, ${k * 32})))`);
   }
 
   /** Load array element i (register form) from storage data base `dataSlot`. */

@@ -9628,11 +9628,16 @@ export class Analyzer {
         cur = cur.expression;
       } else if (ts.isIdentifier(cur)) {
         const t = this.lookupLocal(cur.text);
-        // own only STATIC aggregate params: a fully-static struct, or a fixed array of
+        // own only STATIC aggregate CALLDATA params: a fully-static struct, or a fixed array of
         // a STATIC element. A DYNAMIC struct is owned by resolveCdDynStruct; an
-        // Arr<dyn,N> is a dynamic calldata array (cdArrays element paths).
+        // Arr<dyn,N> is a dynamic calldata array (cdArrays element paths). A static fixed-array /
+        // struct MEMORY local or an @internal memory-reference param (both in memAggregateLocals,
+        // e.g. a nested fixed array Arr<Arr<u256,2>,2> local from the nested-memory codec) is a
+        // memory place, not calldata: exclude it so its element write (m[i] = [...]) is not
+        // mis-claimed here as a read-only calldata place (which mislabels it JETH230).
         if (
           t &&
+          !this.memAggregateLocals.has(cur.text) &&
           ((t.kind === 'struct' && isStaticType(t)) ||
             (t.kind === 'array' && t.length !== undefined && isStaticType(t)))
         ) {
