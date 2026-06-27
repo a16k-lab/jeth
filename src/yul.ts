@@ -23,6 +23,7 @@ import {
   isDynamicType,
   isStaticType,
   isStaticValueType,
+  isNestedValueArray,
   isImplicitWiden,
   arrayElemPacks,
   abiHeadWords,
@@ -1208,6 +1209,25 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.value.type.kind === 'array') {
+          // a MEMORY-sourced NESTED value array bearing a DYNAMIC level (u256[][], Arr<u256[],N>,
+          // u256[][][], ...): resolve its memory image pointer, then ABI-encode it (relative offsets)
+          // via abiEncFromMem. (A CALLDATA / STORAGE nested array keeps the echoParam / echoStorage
+          // recursive encoder via the source-specific branches below; a pure-static nested array
+          // Arr<Arr<u256,2>,2> is handled by the static-image / literal-head paths below.)
+          {
+            const memSourced =
+              s.value.kind === 'arrayLit' ||
+              s.value.kind === 'newArray' ||
+              s.value.kind === 'memAggregate' ||
+              (s.value.kind === 'arrayValue' &&
+                (s.value.arr.base.kind === 'memArray' || s.value.arr.base.kind === 'memArrayExpr'));
+            if (isNestedValueArray(s.value.type) && isDynamicType(s.value.type) && memSourced) {
+              const mp = this.nestedMemImagePtr(s.value, ctx, out);
+              const { ptr, size } = this.encodeNestedMemReturn(s.value.type, mp, out);
+              out.push(`return(${ptr}, ${size})`);
+              break;
+            }
+          }
           // a STATIC fixed-array LITERAL (return [a, b, c] typed Arr<T,N>, incl. nested static):
           // the ABI encoding is the N inline head words, with NO dynamic offset/length wrapper
           // (a dynamic-array return keeps the wrapper via encodeArrayReturn below). Writing the
@@ -1353,7 +1373,13 @@ ${indent(runtime, 6)}
           // arrayValue with a fixedArray base) or a calldata aggregate param (cdAggregateValue) is
           // COPIED into a fresh image; aliasing another memory aggregate (memAggregate) or a
           // struct-returning call copies the POINTER (matching Solidity memory references).
-          if (s.init.kind === 'structNew' || s.init.kind === 'arrayLit') {
+          if (s.type.kind === 'array' && isNestedValueArray(s.type) && isDynamicType(s.type)) {
+            // a FIXED array whose element is a DYNAMIC value-array (Arr<u256[],N>): the image is an
+            // N-word table of absolute pointers, not a flat static image. A literal builds it directly;
+            // any other source (alias / call) lowers to the table pointer.
+            if (s.init.kind === 'arrayLit') out.push(`let ${name} := ${this.buildNestedMemArrayLit(s.init, ctx, out)}`);
+            else out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
+          } else if (s.init.kind === 'structNew' || s.init.kind === 'arrayLit') {
             out.push(`let ${name} := ${this.allocAggToMem(s.init, ctx, out)}`);
           } else if (s.init.kind === 'structValue') {
             out.push(`let ${name} := ${this.allocAggFromStorage(s.init.type, String(s.init.baseSlot), out)}`);
@@ -2674,7 +2700,7 @@ ${indent(runtime, 6)}
         const ref = this.lowerArrayRef(e.arr, ctx, out);
         if (ref.src === 'storage') return `sload(${ref.lenSlot})`;
         if (ref.src === 'fixed') return String(ref.length);
-        if (ref.src === 'memory') return `mload(${ref.ptr})`;
+        if (ref.src === 'memory') return ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
         return ref.length;
       }
       case 'placeRead': {
@@ -2742,6 +2768,14 @@ ${indent(runtime, 6)}
       case 'arrayGet':
         return this.lowerArrayGet(e, ctx, out);
       case 'arrayLit': {
+        // a NESTED value array (u256[][], Arr<u256[],2>, ...): build JETH's nested image (dynamic
+        // outer = [len][inline static blocks | absolute pointers]; fixed-of-dynamic outer = N pointer
+        // words). A pure-static nested array (Arr<Arr<u256,2>,2>) goes through the memAggregate /
+        // arrayLit-static path elsewhere (its image is inline words), so only the dynamic-bearing
+        // nestings dispatch here.
+        if (isNestedValueArray(e.type) && isDynamicType(e.type)) {
+          return this.buildNestedMemArrayLit(e, ctx, out);
+        }
         // a MEMORY T[] (value elements): build [len][e0][e1]...] at the free pointer; the
         // register value IS the pointer. (The ABI-return form is handled by encodeArrayReturn.)
         // FREEZE each element into a register FIRST (left-to-right): an element may be a call that
@@ -2760,6 +2794,12 @@ ${indent(runtime, 6)}
         return ptr;
       }
       case 'newArray': {
+        // new Array<E>(n) where E is itself an array (u256[][] = new Array<u256[]>(n), ...): a
+        // length-n outer image, each element zero-initialized to a pointer to a fresh EMPTY inner
+        // image (solc actively zero-inits each outer element to an empty inner array).
+        if (e.elem.kind === 'array') {
+          return this.zeroInitNestedMemArray(e.type as JethType & { kind: 'array' }, this.lowerExpr(e.length, ctx, out), ctx, out);
+        }
         // new Array<T>(n) -> a length-n zero-initialized memory T[] ([len][n words], one full word
         // per value element - memory arrays are never packed). Byte-identical to solc new T[](n):
         // cap the element count at 2^64-1 (Panic 0x41, matching solc's deterministic overflow guard,
@@ -3942,14 +3982,22 @@ ${indent(runtime, 6)}
       return { src: 'calldata', offset, length: String(arr.base.length), elem: arr.elem };
     }
     if (arr.base.kind === 'memArray') {
-      // a memory array local: the register holds a pointer to [len][elem0]...
-      return { src: 'memory', ptr: this.ctxLookup(ctx, arr.base.varName), elem: arr.elem };
+      // a memory array local: the register holds a pointer to [len][elem0]... (dynamic outer).
+      return {
+        src: 'memory',
+        ptr: this.ctxLookup(ctx, arr.base.varName),
+        elem: arr.elem,
+        fixedLen: arr.memFixedLen,
+        staticElem: arr.memStaticElem,
+      };
     }
     if (arr.base.kind === 'memArrayExpr') {
-      // a memory array produced by an expression (a ternary): lower it to its pointer.
+      // a memory array produced by an expression (a ternary, or a nested inner array m[i]): lower it
+      // to its pointer. memFixedLen marks a FIXED outer (no [len] header) - e.g. an Arr<u256[],N> local
+      // or a fixed inner reached by indexing.
       const ptr = this.fresh();
       out.push(`let ${ptr} := ${this.lowerExpr(arr.base.expr, ctx, out)}`);
-      return { src: 'memory', ptr, elem: arr.elem };
+      return { src: 'memory', ptr, elem: arr.elem, fixedLen: arr.memFixedLen, staticElem: arr.memStaticElem };
     }
     if (arr.base.kind === 'cdSubElem') {
       // a[i] inner array of a MIXED calldata composite. The param is bound as a calldata array
@@ -4057,9 +4105,20 @@ ${indent(runtime, 6)}
       return this.arrayElemLoad(ref.elem, String(ref.baseSlot), i); // data inline at baseSlot
     }
     if (ref.src === 'memory') {
-      // memory T[] (value element, one word each): bound vs mload(ptr); data at ptr+0x20.
-      out.push(`if iszero(lt(${i}, mload(${ref.ptr}))) { ${oob} }`);
-      return `mload(add(${ref.ptr}, add(0x20, mul(${i}, 0x20))))`;
+      // bound: a DYNAMIC outer has a [len] header word (mload(ptr)); a FIXED outer (ref.fixedLen)
+      // bounds against the constant N and has NO header (data starts at ptr).
+      const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
+      out.push(`if iszero(lt(${i}, ${bound})) { ${oob} }`);
+      const dataBase = ref.fixedLen !== undefined ? ref.ptr : `add(${ref.ptr}, 0x20)`;
+      // an ARRAY element: a STATIC inline sub-image yields a BASE pointer (dataBase + i*ew); a DYNAMIC
+      // element word holds the absolute pointer to the inner image.
+      if (ref.elem.kind === 'array') {
+        const ew = abiHeadWords(ref.elem) * 32;
+        if (ref.staticElem) return `add(${dataBase}, mul(${i}, ${ew}))`;
+        return `mload(add(${dataBase}, mul(${i}, 0x20)))`;
+      }
+      // a value element: one word per element at dataBase + i*32.
+      return `mload(add(${dataBase}, mul(${i}, 0x20)))`;
     }
     out.push(`if iszero(lt(${i}, ${ref.length})) { ${oob} }`);
     const w = this.fresh();
@@ -4369,6 +4428,133 @@ ${indent(runtime, 6)}
     out.push(`mstore(0x40, add(${ptr}, ${words * 32}))`);
     this.writeAggToMem(value, ptr, 0, ctx, out);
     return ptr;
+  }
+
+  /** Build JETH's nested-VALUE-array memory image (the representation abiEncFromMem reads) for a
+   *  type `t` whose leaves are all value types but at least one nesting level is DYNAMIC (so it is
+   *  not a pure static aggregate). Returns the image pointer.
+   *   - DYNAMIC array `T[]`: allocate [len] then, per element, an inline static block (static element)
+   *     or an absolute pointer to the element's own freshly-built image (dynamic element).
+   *   - FIXED array `Arr<T,N>` with a DYNAMIC element: N absolute-pointer words (no length header).
+   *   - a STATIC array element (Arr<value,N> / Arr<Arr<value,N>,M>) is built inline via allocAggToMem.
+   *  `lit` is the matching array literal (its element count drives a dynamic length). FREEZE each
+   *  inner image FIRST (its allocation bumps the free pointer) before claiming the parent block,
+   *  mirroring the value-element arrayLit case. */
+  private buildNestedMemArrayLit(lit: Expr & { kind: 'arrayLit' }, ctx: LowerCtx, out: string[]): string {
+    const t = lit.type as JethType & { kind: 'array' };
+    const elem = t.element as JethType;
+    // Materialize each element FIRST (left-to-right), freezing its register, so any inner allocation
+    // bumps the free pointer before we claim this level's header.
+    const elemVals = lit.elements.map((el) => {
+      if (isStaticType(elem)) {
+        // a static element (value word, or a static fixed sub-array): build its inline image and copy
+        // it into place below; here just capture its source.
+        return null; // handled inline in the static-element copy loop
+      }
+      // a dynamic element: build the inner image, capture its absolute pointer.
+      const p = this.fresh();
+      out.push(`let ${p} := ${this.buildNestedMemArrayValue(el as Expr, ctx, out)}`);
+      return p;
+    });
+    if (t.length === undefined) {
+      // DYNAMIC outer.
+      if (isStaticType(elem)) {
+        // static element: [len] + inline element blocks (one abiHeadWords(elem) block each).
+        const ew = abiHeadWords(elem);
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(0x40)`);
+        out.push(`mstore(${ptr}, ${lit.elements.length})`);
+        out.push(`mstore(0x40, add(${ptr}, ${(1 + lit.elements.length * ew) * 32}))`);
+        lit.elements.forEach((el, k) => this.writeStaticElemBlock(elem, el as Expr, ptr, 1 + k * ew, ctx, out));
+        return ptr;
+      }
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(${ptr}, ${lit.elements.length})`);
+      out.push(`mstore(0x40, add(${ptr}, ${(1 + lit.elements.length) * 32}))`);
+      elemVals.forEach((p, k) => out.push(`mstore(add(${ptr}, ${(1 + k) * 32}), ${p})`));
+      return ptr;
+    }
+    // FIXED outer with a DYNAMIC element: N absolute-pointer words, no length header.
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${t.length * 32}))`);
+    elemVals.forEach((p, k) => out.push(`mstore(add(${ptr}, ${k * 32}), ${p})`));
+    return ptr;
+  }
+
+  /** Write a STATIC array element (a value word, or a static fixed sub-array literal) inline into a
+   *  nested-array image at word `wordBase`. A value element mstores its lowered word; a static
+   *  aggregate literal (Arr<value,N> as an element of a dynamic outer) recurses via writeAggToMem. */
+  private writeStaticElemBlock(elem: JethType, el: Expr, ptr: string, wordBase: number, ctx: LowerCtx, out: string[]): void {
+    const at = wordBase === 0 ? ptr : `add(${ptr}, ${wordBase * 32})`;
+    if (isStaticValueType(elem)) {
+      out.push(`mstore(${at}, ${this.lowerExpr(el, ctx, out)})`);
+      return;
+    }
+    this.writeAggToMem(el, ptr, wordBase, ctx, out);
+  }
+
+  /** Build a nested-value-array ELEMENT image (recursion helper for buildNestedMemArrayLit). A static
+   *  element (value or static fixed sub-array) uses allocAggToMem; a nested DYNAMIC sub-array literal
+   *  recurses into buildNestedMemArrayLit. Returns the element image pointer. */
+  private buildNestedMemArrayValue(el: Expr, ctx: LowerCtx, out: string[]): string {
+    if (el.kind === 'arrayLit') {
+      if (isStaticType(el.type)) return this.allocAggToMem(el, ctx, out);
+      return this.buildNestedMemArrayLit(el, ctx, out);
+    }
+    if (el.kind === 'newArray') return this.lowerExpr(el, ctx, out);
+    // a memory-array expression (alias / element of another nested array): its register IS the pointer.
+    return this.lowerExpr(el, ctx, out);
+  }
+
+  /** Zero-initialize a nested-value-array memory image for `new Array<E>(n)` where E is itself an
+   *  array (the outer is dynamic, length n at runtime). solc ACTIVELY zero-inits each outer element
+   *  to a POINTER to a fresh EMPTY inner image. Returns the outer image pointer. The inner empty
+   *  image is a single zero word ([len=0] for a dynamic inner; for a STATIC inner element, solc still
+   *  allocates an all-zero block of abiHeadWords words). */
+  private zeroInitNestedMemArray(outer: JethType & { kind: 'array' }, nExpr: string, ctx: LowerCtx, out: string[]): string {
+    const elem = outer.element as JethType;
+    const n = this.fresh();
+    out.push(`let ${n} := ${nExpr}`);
+    out.push(`if gt(${n}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
+    if (isStaticType(elem)) {
+      // a static element (e.g. Arr<u256,2>): [len] + n inline zero blocks. calldatacopy zeros.
+      const ew = abiHeadWords(elem);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(${ptr}, ${n})`);
+      out.push(`calldatacopy(add(${ptr}, 0x20), calldatasize(), mul(${n}, ${ew * 32}))`);
+      out.push(`mstore(0x40, add(${ptr}, mul(add(mul(${n}, ${ew}), 1), 0x20)))`);
+      return ptr;
+    }
+    // a DYNAMIC element: build the outer [len][ptr...] then, per element, an empty inner image. solc
+    // emits one shared empty inner per element via a loop. Each inner empty image is built by
+    // zeroInitInnerEmpty (recursively zero for deeper nesting).
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(${ptr}, ${n})`);
+    out.push(`mstore(0x40, add(${ptr}, mul(add(${n}, 1), 0x20)))`);
+    const i = this.fresh();
+    out.push(`for { let ${i} := 0 } lt(${i}, ${n}) { ${i} := add(${i}, 1) } {`);
+    const inner: string[] = [];
+    const ip = this.fresh();
+    inner.push(`let ${ip} := ${this.emptyInnerImage(elem as JethType & { kind: 'array' }, inner)}`);
+    inner.push(`mstore(add(${ptr}, mul(add(${i}, 1), 0x20)), ${ip})`);
+    for (const l of inner) out.push('  ' + l);
+    out.push('}');
+    return ptr;
+  }
+
+  /** Build a fresh EMPTY image for a (dynamic) inner array element of a zero-initialized nested array:
+   *  a single [len=0] word. (A deeper dynamic inner is still empty at length 0, so one zero word
+   *  suffices; abiEncFromMem reads len=0 and emits no tail.) */
+  private emptyInnerImage(_t: JethType & { kind: 'array' }, out: string[]): string {
+    const p = this.fresh();
+    out.push(`let ${p} := mload(0x40)`);
+    out.push(`mstore(${p}, 0)`);
+    out.push(`mstore(0x40, add(${p}, 0x20))`);
+    return p;
   }
 
   /** Allocate a fresh memory image for a static aggregate and COPY it from a STORAGE source
@@ -5252,6 +5438,44 @@ ${indent(runtime, 6)}
     return { ptr, size: `add(0x20, ${total})` };
   }
 
+  /** Resolve a NESTED value-array value expression to its memory-image pointer (JETH's nested
+   *  representation, the input abiEncFromMem reads). Sources: an array literal / new Array builds a
+   *  fresh image; a memory-array local / fixed-array aggregate local / nested element / ternary
+   *  ALIASES its pointer. */
+  private nestedMemImagePtr(value: Expr, ctx: LowerCtx, out: string[]): string {
+    if (value.kind === 'arrayLit') {
+      if (isDynamicType(value.type)) return this.buildNestedMemArrayLit(value, ctx, out);
+      return this.allocAggToMem(value, ctx, out); // a static nested literal: inline image
+    }
+    if (value.kind === 'newArray') return this.lowerExpr(value, ctx, out);
+    if (value.kind === 'memAggregate') return this.lowerExpr(value, ctx, out);
+    if (value.kind === 'arrayValue') {
+      const b = value.arr.base;
+      if (b.kind === 'memArray') return this.ctxLookup(ctx, b.varName);
+      if (b.kind === 'memArrayExpr') {
+        const p = this.fresh();
+        out.push(`let ${p} := ${this.lowerExpr(b.expr, ctx, out)}`);
+        return p;
+      }
+    }
+    const p = this.fresh();
+    out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
+    return p;
+  }
+
+  /** ABI-encode a NESTED value-array memory image at `mp` (type `t`) into a fresh return blob. A
+   *  type with a DYNAMIC level gets the leading [0x20] offset wrapper (it is a dynamic top-level
+   *  return); abiEncFromMem writes the inner [len]/offset-table/tails. Returns {ptr, size}. */
+  private encodeNestedMemReturn(t: JethType, mp: string, out: string[]): { ptr: string; size: string } {
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(${ptr}, 0x20)`);
+    const size = this.fresh();
+    out.push(`let ${size} := ${this.abiEncFromMem(t, mp, `add(${ptr}, 0x20)`, out)}`);
+    out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
+    return { ptr, size: `add(0x20, ${size})` };
+  }
+
   /** Encode an arrayValue/arrayLit as ABI [0x20][len][elem words...] in memory. */
   private encodeArrayReturn(value: Expr, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
     if (value.kind === 'arrayLit') {
@@ -5569,6 +5793,27 @@ ${indent(runtime, 6)}
    *  Calldata-param arrays reuse echoParam (unbounded element nesting); value-element memory
    *  arrays are already in ABI tail layout. Other sources are gated. */
   private materializeArrayArg(arg: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
+    // a MEMORY-sourced NESTED value array bearing a DYNAMIC level (u256[][], Arr<u256[],N>, ...): resolve
+    // its memory image, then ABI-encode it (relative offsets) into a fresh tail blob via abiEncFromMem.
+    // The blob IS the ABI tail (mp points at [len]/the offset table, size is its byte length) - the
+    // contract buildAbiEncodeStd / the event/error tail expects. A CALLDATA-sourced nested array keeps
+    // the existing echoParam recursive encoder (the calldataArray branch below); a storage source keeps
+    // abiEncFromStorage. Only an in-memory image (literal / new Array / memArray / memAggregate / a
+    // nested inner element) is laid out by abiEncFromMem.
+    const memSourced =
+      arg.kind === 'arrayLit' ||
+      arg.kind === 'newArray' ||
+      (arg.kind === 'arrayValue' &&
+        (arg.arr.base.kind === 'memArray' || arg.arr.base.kind === 'memArrayExpr'));
+    if (isNestedValueArray(arg.type) && isDynamicType(arg.type) && memSourced) {
+      const mp = this.nestedMemImagePtr(arg, ctx, out);
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const sz = this.fresh();
+      out.push(`let ${sz} := ${this.abiEncFromMem(arg.type, mp, dst, out)}`);
+      out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+      return { mp: dst, size: sz };
+    }
     if (arg.kind === 'newArray') {
       // new Array<T>(n) used directly as an abi.encode/encodePacked arg: it lowers to a [len][elems]
       // memory pointer (value elements, ABI tail layout already), exactly like a memArray local.
@@ -5862,6 +6107,86 @@ ${indent(runtime, 6)}
    *  EMPTY (revert(0, 0)). Value leaves are always VALIDATED (dirty narrow bits revert empty, like
    *  solc's decode of a tuple component / array element). Compile-time recursion over `t` => unbounded
    *  nesting; array lengths drive runtime loops. */
+  /** ABI-encode a NESTED VALUE-array memory image into the canonical ABI blob. The memory image is
+   *  JETH's own nested-array representation (built by the arrayLit / new Array lowering and the index/
+   *  assign paths): a value/static-element array is `[len][inline element words]` (or, for a static
+   *  fixed array, just the inline words, no length); a dynamic-ELEMENT array stores, per element, an
+   *  ABSOLUTE memory pointer to that element's own image. This encoder reads the image (mload, following
+   *  the absolute pointers) and writes the ABI form at `dst`, where each dynamic element becomes a
+   *  RELATIVE offset + tail (solc's canonical encoding). Returns a Yul expr for the bytes written.
+   *  Only the value-leaf array nestings the analyzer accepts reach here (no bytes/string/struct leaves),
+   *  so no length/offset validation is needed: the image was built from trusted literals / zero-init. */
+  private abiEncFromMem(t: JethType, memPtr: string, dst: string, out: string[]): string {
+    if (t.kind !== 'array') {
+      // a value/static leaf: copy each ABI head word inline (abiHeadWords words, contiguous).
+      const hw = abiHeadWords(t);
+      for (let k = 0; k < hw; k++) {
+        const off = k * 32;
+        out.push(`mstore(add(${dst}, ${off}), mload(add(${memPtr}, ${off})))`);
+      }
+      return String(hw * 32);
+    }
+    // a STATIC array (fixed length, static leaves: Arr<u256,N>, Arr<Arr<u256,2>,2>): the image is
+    // abiHeadWords(t) contiguous inline words; copy them verbatim (no offsets, no length).
+    if (isStaticType(t)) {
+      const hw = abiHeadWords(t);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${hw * 32}) { ${i} := add(${i}, 0x20) } {`);
+      out.push(`  mstore(add(${dst}, ${i}), mload(add(${memPtr}, ${i})))`);
+      out.push('}');
+      return String(hw * 32);
+    }
+    if (t.length === undefined) {
+      // a DYNAMIC array T[]. Image: [len] then, per element, either an inline element block (static
+      // element) or an absolute pointer (dynamic element). ABI: [len][ elements inline | offset table + tails ].
+      const len = this.fresh();
+      out.push(`let ${len} := mload(${memPtr})`);
+      out.push(`mstore(${dst}, ${len})`);
+      const srcHead = this.fresh();
+      out.push(`let ${srcHead} := add(${memPtr}, 0x20)`);
+      const dstHead = this.fresh();
+      out.push(`let ${dstHead} := add(${dst}, 0x20)`);
+      if (isStaticType(t.element)) {
+        // a STATIC element (value or fixed-static-array): the image stores the element inline; copy
+        // abiHeadWords(element) words per element straight across.
+        const es = abiHeadWords(t.element) * 32;
+        const i = this.fresh();
+        out.push(`for { let ${i} := 0 } lt(${i}, mul(${len}, ${es})) { ${i} := add(${i}, 0x20) } {`);
+        out.push(`  mstore(add(${dstHead}, ${i}), mload(add(${srcHead}, ${i})))`);
+        out.push('}');
+        return `add(0x20, mul(${len}, ${es}))`;
+      }
+      // a DYNAMIC element: offset table of `len` words then the inner tails, each inner reached via
+      // the absolute pointer stored in the image head word.
+      const cursor = this.fresh();
+      out.push(`let ${cursor} := add(${dstHead}, mul(${len}, 0x20))`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const ip = this.fresh();
+      inner.push(`let ${ip} := mload(add(${srcHead}, mul(${i}, 0x20)))`); // absolute ptr to inner image
+      inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), sub(${cursor}, ${dstHead}))`);
+      const sz = this.abiEncFromMem(t.element, ip, cursor, inner);
+      inner.push(`${cursor} := add(${cursor}, ${sz})`);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+      return `sub(${cursor}, ${dst})`;
+    }
+    // a FIXED array of a DYNAMIC element (Arr<u256[],N>): no length word; an N-word offset table
+    // (relative to dst) then the inner tails, each inner reached via the absolute pointer stored in
+    // the image's N pointer words.
+    const cursor = this.fresh();
+    out.push(`let ${cursor} := add(${dst}, ${t.length * 32})`);
+    for (let k = 0; k < t.length; k++) {
+      const ip = this.fresh();
+      out.push(`let ${ip} := mload(add(${memPtr}, ${k * 32}))`); // absolute ptr to inner image
+      out.push(`mstore(add(${dst}, ${k * 32}), sub(${cursor}, ${dst}))`);
+      const sz = this.abiEncFromMem(t.element, ip, cursor, out);
+      out.push(`${cursor} := add(${cursor}, ${sz})`);
+    }
+    return `sub(${cursor}, ${dst})`;
+  }
+
   private abiDecFromMem(t: JethType, memPtr: string, dst: string, blobEnd: string, out: string[]): string {
     const cap = `${this.panic()}(0x41)`;
     // a single value leaf: one word, validated.
@@ -9285,7 +9610,7 @@ type ArrayRef =
   | { src: 'storage'; lenSlot: string; elem: JethType } // dynamic T[] (data at keccak(lenSlot))
   | { src: 'calldata'; offset: string; length: string; elem: JethType }
   | { src: 'fixed'; baseSlot: bigint; length: number; elem: JethType } // Arr<T,N> inline
-  | { src: 'memory'; ptr: string; elem: JethType }; // memory T[] (ptr -> [len][elem0]...)
+  | { src: 'memory'; ptr: string; elem: JethType; fixedLen?: number; staticElem?: boolean }; // memory T[] (ptr -> [len][elem0]...); fixedLen = FIXED outer (no [len] header, bound vs constant); staticElem = the element is an inline sub-image (vs an absolute pointer)
 
 // The value source for a tuple (dynamic struct) being encoded: a constructed
 // value (structNew args) or a calldata echo (the bound tuple-start byte ptr).

@@ -379,6 +379,14 @@ export interface ArrayExpr {
     | { kind: 'memArray'; varName: string } // a MEMORY array local (register holds a pointer to [len][elems])
     | { kind: 'memArrayExpr'; expr: Expr }; // a MEMORY array produced by an expression (a ternary etc.); expr lowers to the pointer
   elem: JethType;
+  // For a NESTED memory value-array whose OUTER level is FIXED (Arr<u256[],N>, Arr<Arr<u256,2>,2>):
+  // the image has NO length header, and element access bounds against this constant N (not mload).
+  // Undefined for a dynamic outer (memArray local / dynamic-inner result), which carries a [len] word.
+  memFixedLen?: number;
+  // For a nested memory value-array element access, whether the element is itself STATIC (an inline
+  // sub-image, addressed by base+offset) vs DYNAMIC (the word holds an absolute pointer). Set together
+  // with memFixedLen / on a memArray nested access so the codec picks inline-base vs pointer-load.
+  memStaticElem?: boolean;
 }
 
 // Where an assignment target lives.

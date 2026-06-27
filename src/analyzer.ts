@@ -27,6 +27,8 @@ import {
   isStaticType,
   isDynamicType,
   isBytesLike,
+  isNestedValueArray,
+  isValueLeafArray,
   storageByteSize,
   storageSlotCount,
   abiHeadWords,
@@ -7188,6 +7190,52 @@ export class Analyzer {
       out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
+    // A NESTED VALUE-array MEMORY local (u256[][], Arr<Arr<u256,2>,2>, Arr<u256[],2>, u256[][][], ...):
+    // the recursive memory codec lays out a dynamic outer level as [len][inline blocks | absolute
+    // pointers] (registered as a memArray), and a fixed outer level as an inline static image or an
+    // N-word pointer table (registered as a memAggregate). Element/length access chains through the
+    // codec; return / abi.encode go through abiEncFromMem. Must be initialized from a literal or a
+    // new Array (other sources - alias/copy of a whole nested array - are a later step).
+    if (declared.kind === 'array' && isNestedValueArray(declared)) {
+      if (this.inCurrentScope(decl.name.text)) {
+        this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
+        return;
+      }
+      if (!decl.initializer) {
+        this.diags.error(
+          decl,
+          'JETH200',
+          `a nested-array memory local must be initialized (e.g. let m: ${displayName(declared)} = [...] or = new Array<...>(n))`,
+        );
+        return;
+      }
+      const e = this.checkExpr(decl.initializer, declared);
+      if (!e) return;
+      if (!typesEqual(e.type, declared)) {
+        this.diags.error(
+          decl.initializer,
+          'JETH085',
+          `cannot initialize ${displayName(declared)} from ${displayName(e.type)}`,
+        );
+        return;
+      }
+      // Only a fresh literal / new Array source is laid out by the nested codec today; aliasing or
+      // copying a whole nested array from another local / param / storage is a later step (stays
+      // JETH200 unless it is one of those constructors).
+      if (e.kind !== 'arrayLit' && e.kind !== 'newArray') {
+        this.diags.error(
+          decl.initializer,
+          'JETH200',
+          `a nested-array memory local must be initialized from an array literal or new Array<...>(n) (copying a whole nested array from another source is not supported yet)`,
+        );
+        return;
+      }
+      this.declareLocal(decl.name.text, declared);
+      if (declared.length === undefined) this.memArrayLocals.add(decl.name.text);
+      else this.memAggregateLocals.set(decl.name.text, declared);
+      out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
+      return;
+    }
     // G9: a FIXED array of VALUE elements as a MEMORY local (let a: Arr<u256,3> = [...]). A
     // memAggregate (pointer to N words); a[i] reads/writes a word with a bounds check. Init from
     // an array literal, another fixed-array memory local (alias), a fixed-array calldata param,
@@ -8697,10 +8745,12 @@ export class Analyzer {
       if (!mf) return undefined;
       return { kind: 'memField', type: mf.type, local: mf.local, wordOffset: mf.wordOffset };
     }
-    // G9: `a[i] = v` on a fixed-array MEMORY local (value element) -> a bounds-checked store.
+    // G9: `a[i] = v` on a fixed-array MEMORY local (value element) -> a bounds-checked store. A NESTED
+    // fixed value-array (Arr<Arr<u256,2>,2>, Arr<u256[],N>) falls through (its element is an array, not a
+    // word); a deeper element write a[i][j] = v is reached via the nested array-element lvalue path.
     if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression) {
       const at = this.memAggregateLocals.get(node.expression.text);
-      if (at && at.kind === 'array' && at.length !== undefined) {
+      if (at && at.kind === 'array' && at.length !== undefined && isStaticValueType(at.element)) {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
@@ -9831,15 +9881,64 @@ export class Analyzer {
     }
     if (ts.isIdentifier(node)) {
       const t = this.lookupLocal(node.text);
-      // a MEMORY array local (let xs: u256[] = [...]): the register holds a pointer to
-      // [len][elems]; element/length access reads memory.
+      // a MEMORY array local (let xs: u256[] = [...] or a nested u256[][] dynamic-outer local): the
+      // register holds a pointer to [len][elems]; element/length access reads memory.
       if (t && t.kind === 'array' && this.memArrayLocals.has(node.text)) {
-        return { base: { kind: 'memArray', varName: node.text }, elem: t.element };
+        return {
+          base: { kind: 'memArray', varName: node.text },
+          elem: t.element,
+          memStaticElem: t.element.kind === 'array' ? isStaticType(t.element) : undefined,
+        };
+      }
+      // a FIXED nested-value-array MEMORY local registered as a memAggregate (Arr<u256[],N>,
+      // Arr<Arr<u256,2>,2>): the register holds a pointer to its image; element/length access reads
+      // memory via memArrayExpr with the constant outer length. (A flat fixed value-array Arr<u256,N>
+      // stays a memElem, handled in checkExpr, not an ArrayExpr.)
+      const at = this.memAggregateLocals.get(node.text);
+      if (at && at.kind === 'array' && isNestedValueArray(at)) {
+        return {
+          base: { kind: 'memArrayExpr', expr: { kind: 'memAggregate', type: at, local: node.text } },
+          elem: at.element,
+          memFixedLen: at.length,
+          memStaticElem: at.element.kind === 'array' ? isStaticType(at.element) : undefined,
+        };
       }
       // a dynamic array param, OR a fixed array of a DYNAMIC element (Arr<dyn,N>),
       // both bound at codegen as a calldata array (the latter with a constant length).
-      if (t && t.kind === 'array' && (t.length === undefined || isDynamicType(t.element))) {
+      // Exclude a memory aggregate local (handled just above) so a fixed-of-dynamic memory local is
+      // never mis-bound as a calldata param.
+      if (
+        t &&
+        t.kind === 'array' &&
+        (t.length === undefined || isDynamicType(t.element)) &&
+        !this.memAggregateLocals.has(node.text)
+      ) {
         return { base: { kind: 'calldataArray', name: node.text }, elem: t.element };
+      }
+    }
+    // `m[i]` where the base resolves to a NESTED MEMORY value-array (a memArray local, a fixed
+    // memAggregate nested local, or a deeper m[i] step) and the OUTER element is itself an array:
+    // descend one level. The inner array's pointer is read by an arrayGet (lowered in yul to return
+    // the element word, which holds the inner image's absolute pointer / an inline sub-image base),
+    // wrapped in memArrayExpr so a following [j] / .length consumes it. Chains to any depth.
+    if (ts.isElementAccessExpression(node) && node.argumentExpression) {
+      const baseArr = this.resolveArrayExpr(node.expression);
+      if (
+        baseArr &&
+        (baseArr.base.kind === 'memArray' || baseArr.base.kind === 'memArrayExpr') &&
+        baseArr.elem.kind === 'array'
+      ) {
+        const index = this.checkExpr(node.argumentExpression, U256);
+        if (!index) return undefined;
+        const idx = this.coerce(index, U256, node.argumentExpression);
+        const inner = baseArr.elem as JethType & { kind: 'array' }; // the inner array type
+        const getInner: Expr = { kind: 'arrayGet', type: inner, arr: baseArr, index: idx };
+        return {
+          base: { kind: 'memArrayExpr', expr: getInner },
+          elem: inner.element,
+          memFixedLen: inner.length,
+          memStaticElem: inner.element.kind === 'array' ? isStaticType(inner.element) : undefined,
+        };
       }
     }
     // `a[i]` where `a` is a MIXED calldata composite array param whose element is itself an
@@ -10080,6 +10179,21 @@ export class Analyzer {
       t.element.kind === 'array' && // a nested-array root: T[][], string[][], string[2][3][], ...
       !this.memArrayLocals.has(cur.text)
     );
+  }
+
+  /** True iff `node` is an element access (m[i] / m[i][j] / ...) rooted at a NESTED MEMORY
+   *  value-array LOCAL: a dynamic-outer memArray local whose element is itself an array (u256[][]),
+   *  or a fixed memAggregate nested-value-array local (Arr<Arr<u256,2>,2>, Arr<u256[],N>). Used to
+   *  route the nested element read through resolveArrayExpr's chaining path. */
+  private nestedMemArrayElemAccess(node: ts.Expression): boolean {
+    let cur: ts.Expression = node;
+    while (ts.isElementAccessExpression(cur) && cur.argumentExpression) cur = cur.expression;
+    if (!ts.isIdentifier(cur)) return false;
+    const t = this.lookupLocal(cur.text);
+    if (!t || t.kind !== 'array') return false;
+    if (this.memArrayLocals.has(cur.text)) return t.element.kind === 'array'; // dynamic outer, nested
+    const at = this.memAggregateLocals.get(cur.text);
+    return at !== undefined && at.kind === 'array' && isNestedValueArray(at);
   }
 
   /** Type of a directly-resolvable index base (`this.s` or a local/param), used to
@@ -11860,11 +11974,15 @@ export class Analyzer {
       }
       const elem = resolveType(node.typeArguments[0]!, this.diags, this.structsByName);
       if (!elem) return undefined;
-      if (!isStaticValueType(elem)) {
+      // The element may be a VALUE type (flat dynamic array) OR a nested VALUE-leaf array
+      // (new Array<u256[]>(n) -> u256[][], new Array<Arr<u256,2>>(n), ...): solc zero-inits each
+      // outer element to a pointer to a fresh empty inner array. A bytes/string/struct element stays
+      // unsupported here.
+      if (!isStaticValueType(elem) && !isValueLeafArray(elem)) {
         this.diags.error(
           node.typeArguments[0]!,
           'JETH216',
-          `new Array<T>(n) requires a value-type element (uint/int/bool/address/bytesN/enum); a ${displayName(elem)} element is not supported`,
+          `new Array<T>(n) requires a value-type or nested value-array element (uint/int/bool/address/bytesN/enum, or T[]/Arr<T,N> thereof); a ${displayName(elem)} element is not supported`,
         );
         return undefined;
       }
@@ -11889,15 +12007,20 @@ export class Analyzer {
         this.diags.error(node, 'JETH213', 'cannot infer array-literal type here (expected an array type)');
         return undefined;
       }
-      // Only a 1-D dynamic array literal of value-type elements is supported. A dynamic array
-      // literal whose elements are themselves dynamic/aggregate (e.g. u256[][], string[], S[],
-      // Arr<u256,2>[]) is rejected: the return/copy encoder cannot represent it (solc likewise
-      // rejects these literals, which type as fixed T[N] and don't convert to a dynamic array).
-      if (expected.length === undefined && !isStaticValueType(expected.element)) {
+      // A dynamic array literal of VALUE elements is supported, as is a NESTED value-leaf array
+      // literal (u256[][], Arr<u256[],2>, ...): each inner element is itself checked recursively
+      // against the inner array type below, and the nested memory codec lays it out. A dynamic
+      // literal whose elements are bytes/string/struct (or a string[]/S[] element) stays rejected:
+      // the recursive memory codec only handles value leaves.
+      if (
+        expected.length === undefined &&
+        !isStaticValueType(expected.element) &&
+        !(expected.element.kind === 'array' && isValueLeafArray(expected.element))
+      ) {
         this.diags.error(
           node,
           'JETH216',
-          `a dynamic array literal must have value-type elements; a literal of ${displayName(expected.element)} elements is not supported`,
+          `a dynamic array literal must have value-type or nested value-array elements; a literal of ${displayName(expected.element)} elements is not supported`,
         );
         return undefined;
       }
@@ -12001,15 +12124,47 @@ export class Analyzer {
       return undefined;
     }
     // G9: a[i] on a fixed-array MEMORY local (value element) -> a bounds-checked memory load.
-    // Must precede the calldata/storage access resolvers below.
+    // Must precede the calldata/storage access resolvers below. A NESTED fixed value-array local
+    // (Arr<Arr<u256,2>,2>, Arr<u256[],N>) has an ARRAY element, so it is NOT a memElem; it falls
+    // through to the nested element-access block below.
     if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression) {
       const at = this.memAggregateLocals.get(node.expression.text);
-      if (at && at.kind === 'array' && at.length !== undefined) {
+      if (at && at.kind === 'array' && at.length !== undefined && isStaticValueType(at.element)) {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
         if (!this.checkMemElemBound(idx, at.length, node.argumentExpression)) return undefined;
         return { kind: 'memElem', type: at.element, local: node.expression.text, index: idx, length: at.length };
+      }
+    }
+    // m[i][j] / m[i] read on a NESTED MEMORY value-array local (a dynamic-outer memArray, or a fixed
+    // memAggregate Arr<Arr<u256,2>,2> / Arr<u256[],N>): resolveArrayExpr chains the index steps. A
+    // VALUE-leaf final index -> arrayGet; a WHOLE inner array -> arrayValue. Reached BEFORE the
+    // calldata/storage resolvers so the local is never mis-bound as a calldata param.
+    if (ts.isElementAccessExpression(node) && node.argumentExpression && this.nestedMemArrayElemAccess(node)) {
+      const baseArr = this.resolveArrayExpr(node.expression);
+      if (baseArr && (baseArr.base.kind === 'memArrayExpr' || baseArr.base.kind === 'memArray')) {
+        if (isStaticValueType(baseArr.elem)) {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          return {
+            kind: 'arrayGet',
+            type: baseArr.elem,
+            arr: baseArr,
+            index: this.coerce(index, U256, node.argumentExpression),
+          };
+        }
+        if (baseArr.elem.kind === 'array') {
+          const whole = this.resolveArrayExpr(node);
+          if (
+            whole &&
+            whole.base.kind === 'memArrayExpr' &&
+            whole.base.expr.kind === 'arrayGet' &&
+            whole.base.expr.type.kind === 'array'
+          ) {
+            return { kind: 'arrayValue', type: whole.base.expr.type, arr: whole };
+          }
+        }
       }
     }
     // G9: p.a[i] where a is a fixed-array VALUE field of a memory struct local -> memElem at a's word
@@ -12506,6 +12661,23 @@ export class Analyzer {
             if (!base || !index) return undefined;
             return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
           }
+        }
+      }
+      // m[i] read on a NESTED MEMORY value-array where the result is itself a WHOLE inner array
+      // (return m[i], let r = m[i], m[i].length): resolveArrayExpr(node) folds it to a memArrayExpr
+      // whose inner expr is an arrayGet typed with the inner array type; surface it as an arrayValue
+      // so the return / .length paths consume it. (The VALUE-leaf read m[i][j] is handled by the
+      // memArrayExpr value-element branch below.)
+      if (node.argumentExpression) {
+        const whole = this.resolveArrayExpr(node);
+        if (
+          whole &&
+          whole.base.kind === 'memArrayExpr' &&
+          whole.base.expr.kind === 'arrayGet' &&
+          whole.base.expr.arr.base.kind !== 'calldataArray' &&
+          whole.base.expr.type.kind === 'array'
+        ) {
+          return { kind: 'arrayValue', type: whole.base.expr.type, arr: whole };
         }
       }
       // (c ? xs : ys)[i]: index a memory array produced by an expression (a ternary).

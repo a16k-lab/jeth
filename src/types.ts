@@ -310,6 +310,29 @@ export function isBytesLike(t: JethType): boolean {
   return t.kind === 'bytes' || t.kind === 'string';
 }
 
+/** A MULTI-DIMENSIONAL memory array whose ultimate leaf elements are all VALUE types
+ *  (uint/int/bool/address/bytesN/enum): u256[][], Arr<Arr<u256,2>,2>, Arr<u256[],2>,
+ *  u256[][][], ... Every nesting level may be dynamic (T[]) or fixed (Arr<T,N>); the
+ *  innermost element must be a value type. bytes/string/struct leaves are excluded (the
+ *  recursive memory codec only lays out value leaves). Used to gate the nested
+ *  memory-array-local feature (a flat value array `u256[]` / `Arr<u256,N>` is NOT
+ *  "nested" - it has a value element - so this returns false for it). */
+export function isNestedValueArray(t: JethType): boolean {
+  if (t.kind !== 'array') return false;
+  if (!(t.element.kind === 'array')) return false; // a flat value/static array is not nested
+  return isValueLeafArray(t);
+}
+
+/** A memory array (any mix of dynamic/fixed levels) whose ultimate leaf elements are all
+ *  VALUE types. The base of isNestedValueArray's recursion: `u256[]`, `Arr<u256,2>`,
+ *  `u256[][]`, `Arr<u256[],2>`, etc. all qualify; anything with a bytes/string/struct
+ *  leaf does not. */
+export function isValueLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array') return false;
+  if (isStaticValueType(t.element)) return true;
+  return isValueLeafArray(t.element);
+}
+
 /** Storage packing of a dynamic-array element. Solidity packs small value types
  *  (bool, uintN<256, intN<256, bytesN<32) several per slot, but NOT address (it
  *  is whole-slot in arrays despite being 20 bytes) nor full-word types. Verified. */

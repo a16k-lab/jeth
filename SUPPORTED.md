@@ -22,9 +22,12 @@ Silent miscompiles fixed (the dangerous class - JETH accepted + ran but produced
 - **enum declared INSIDE the `@contract class`** previously produced an EMPTY ABI (every function
   silently dropped, all calls revert). In-class enums are now hoisted to top level pre-parse and the
   contract compiles normally (TS cannot parse an enum as a class member).
-- **Nested array literal returns** (`return [[1n,2n],[3n,4n]]` for `u256[][]`) previously emitted
-  malformed ABI (inner offsets past the returndata). A dynamic array literal must now have value-type
-  elements (`JETH216`); nested/aggregate-element literals are rejected (solc rejects them too).
+- **Nested array literal returns** (`return [[1n,2n],[3n,4n]]` directly typed as a dynamic `u256[][]`)
+  previously emitted malformed ABI (inner offsets past the returndata). A dynamic array literal must
+  have value-type OR nested VALUE-LEAF-array elements (`u256[][]`, `Arr<u256[],2>`, ...); a literal
+  with a `bytes`/`string`/`struct` element is rejected (`JETH216`). NOTE: a nested value-leaf literal
+  bound to a typed nested MEMORY LOCAL (`let m: u256[][] = [[..],[..]]; return m`) is now fully
+  supported byte-identical to solc (see "Nested / multi-dimensional MEMORY-array LOCALS" below).
 
 Over-acceptances fixed (JETH accepted programs solc rejects):
 - Conflicting state mutability (`@view @payable`, `@pure @payable`) is now rejected (`JETH052`).
@@ -334,8 +337,23 @@ a dynamic-element array reached via a struct field or nested array (`this.d.xs[i
 - Exponentiation `a ** b` (checked, Panic 0x11); `unchecked: { ... }` labeled block (wrapping
   `+ - * ** ` and unary `-`); ternary `c ? a : b` (short-circuit); `type(T).max` / `.min`;
   `x++` / `x--` / `++x` / `--x` (statement form); memory array locals `let xs: u256[] = [a, b]`
-  (value element: index read/write, `.length`, return); multi-value return `f(): [T1, T2]`
+  (value element: index read/write, `.length`, return), incl. NESTED / multi-dimensional value-leaf
+  arrays (see below); multi-value return `f(): [T1, T2]`
   with `return [a, b]` (value + bytes/string components). All byte-identical to Solidity.
+
+Nested / multi-dimensional MEMORY-array LOCALS (value leaves), byte-identical to solc: `u256[][]`,
+`Arr<Arr<u256,2>,2>`, `Arr<u256[],2>`, `u256[][][]`, `address[][]`, `new Array<u256[][]>(n)`
+(zero-init: each outer element a pointer to a fresh empty inner array, matching solc), and an array
+literal `[[..],[..]]` at any value-leaf depth. A recursive memory codec lays out each level (a DYNAMIC
+outer = `[len]` + per-element inline static block / absolute inner pointer; a FIXED-of-dynamic = an
+N-word pointer table, no length header; a FIXED-of-fixed = inline static words). Element read `m[i][j]`
+(OOB `Panic(0x32)`), mutation `m[i][j] = v`, `.length` of the outer and an inner, aliasing a whole
+inner array into a flat local (`let r: u256[] = m[i]`, reference semantics), the whole-array RETURN
+(ABI dyn-/fixed-array encoding), and `abi.encode(m)` (keccak parity) are all byte-identical to solc.
+Residual (clean over-rejections, NOT miscompiles): whole-inner-array ASSIGNMENT `m[i] = [...]`
+(`JETH900`) and nested arrays with a `bytes`/`string`/`struct` LEAF (`bytes[][]`, `P[][]`; stay
+`JETH200`) - the recursive memory codec only lays out value leaves. (A nested STORAGE array `u256[][]`,
+and a nested-array CALLDATA param / RETURN at any depth, were already fully supported.)
 
 ## Supported now (compiles to bytecode + executes on EVM)
 
