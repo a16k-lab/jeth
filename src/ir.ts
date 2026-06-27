@@ -54,6 +54,15 @@ export type GlobalOp =
   | 'gas' // gasleft()
   | 'msgsig'; // msg.sig
 
+// A RUNTIME index step into a fixed-array field within a memory-array struct element's inline image
+// (xs[i].pre[j]): a bounds-checked (index < length) byte offset of index * strideBytes. Static indices
+// are folded into the wordOffset; only runtime indices become steps.
+export interface ArrIndexStep {
+  index: Expr;
+  length: number;
+  strideBytes: number;
+}
+
 export type Expr =
   // hexBytes: when the literal was written as a HEX number (0x...), the source byte width
   // (hex digits / 2). solc converts a hex literal to bytesN iff hexBytes === N. undefined for
@@ -246,7 +255,7 @@ export type Expr =
   | { kind: 'structNew'; type: JethType; fields: StructField[]; args: Expr[] } // Point(a, b)
   | { kind: 'structValue'; type: JethType; baseSlot: bigint } // whole storage struct (for return)
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // read a value field/element of a memory-aggregate local (p.x)
-  | { kind: 'aggFieldRead'; type: JethType; base: Expr; wordOffset: number } // read a VALUE field of a struct-valued Expr base (e.g. this.mk(a).x) - materialize base to a memory pointer, mload at the offset
+  | { kind: 'aggFieldRead'; type: JethType; base: Expr; wordOffset: number; runSteps?: ArrIndexStep[] } // read a VALUE field of a struct-valued Expr base (e.g. this.mk(a).x, xs[i].pre[j]) - materialize base to a memory pointer, add the static word offset + any runtime index steps, mload
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] on a fixed-array memory local (value element, bounds-checked); wordOffset: a fixed-array FIELD of a memory struct (p.a[i]) starts that many words into the image
   | { kind: 'memAggregate'; type: JethType; local: string; wordOffset?: number } // a whole memory aggregate, or a nested struct field at wordOffset (sub-pointer into the parent image)
   | { kind: 'memDynStructValue'; type: JethType; local: string } // a whole DYNAMIC-field struct memory local (head: value fields inline, bytes/string fields as pointers)
@@ -412,7 +421,7 @@ export type LValue =
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // p.x = v on a memory-aggregate local
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] = v on a fixed-array memory local (wordOffset: a fixed-array field of a memory struct, p.a[i])
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number } // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
-  | { kind: 'aggFieldStore'; type: JethType; base: Expr; wordOffset: number }; // xs[i].a = v (value leaf) on a memory-array static-struct element: store at base(element image ptr) + wordOffset (mirror of the aggFieldRead read)
+  | { kind: 'aggFieldStore'; type: JethType; base: Expr; wordOffset: number; runSteps?: ArrIndexStep[] }; // xs[i].a = v / xs[i].pre[j] = v (value leaf) on a memory-array static-struct element: store at base(element image ptr) + wordOffset + runtime index steps (mirror of aggFieldRead)
 
 // A success condition for an external .call/.staticcall. `cond` is a boolean expression in which the
 // scoped bindings `this.ok` (the CALL success bool) and `this.data` (the returndata bytes) are visible;

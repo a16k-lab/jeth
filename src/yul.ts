@@ -12,7 +12,7 @@
 // Arithmetic is CHECKED by default: every +,-,*,/,% lowers to a helper that
 // reverts with Panic(0x11) on overflow / Panic(0x12) on division by zero,
 // matching Solidity >=0.8.
-import { ContractIR, FunctionIR, LibraryIR, SpecialEntryIR, Stmt, Expr, BinOp, RevertReason, EventIR } from './ir.js';
+import { ContractIR, FunctionIR, LibraryIR, SpecialEntryIR, Stmt, Expr, BinOp, RevertReason, EventIR, ArrIndexStep } from './ir.js';
 import {
   JethType,
   StructField,
@@ -2518,11 +2518,17 @@ ${indent(runtime, 6)}
         return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
       }
       case 'aggFieldRead': {
-        // read a VALUE field of a struct-valued Expr base (e.g. this.mk(a).x): materialize the base
-        // to a memory pointer (a struct-returning call yields its pointer-headed image), then mload at
-        // the field's word offset. The image stores clean values (one ABI word per leaf), so no mask.
+        // read a VALUE field of a struct-valued Expr base (e.g. this.mk(a).x, xs[i].pre[j]): materialize
+        // the base to a memory pointer, add the static word offset + any runtime index steps (each
+        // bounds-checked, in chain order), then mload. The image stores clean values, so no mask.
         const ptr = this.aggToMemPtr(e.base, ctx, out);
-        return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
+        let cur = e.wordOffset === 0 ? ptr : `add(${ptr}, ${e.wordOffset * 32})`;
+        if (e.runSteps && e.runSteps.length) {
+          const b = this.fresh();
+          out.push(`let ${b} := ${cur}`);
+          cur = this.applyRunSteps(b, e.runSteps, ctx, out);
+        }
+        return `mload(${cur})`;
       }
       case 'memElem': {
         // a[i] on a fixed-array memory local (value element): bounds-check then mload. A fixed-array
@@ -9295,6 +9301,22 @@ ${indent(runtime, 6)}
     });
   }
 
+  /** Apply runtime fixed-array index steps (xs[i].pre[j]) to a base memory pointer: for each step lower
+   *  the index, bounds-check it (Panic 0x32), and advance by index * strideBytes. Steps run in chain
+   *  order, matching solc's bounds-check sequence. Returns the final pointer register. */
+  private applyRunSteps(ptr: string, runSteps: ArrIndexStep[], ctx: LowerCtx, out: string[]): string {
+    let cur = ptr;
+    for (const step of runSteps) {
+      const idx = this.fresh();
+      out.push(`let ${idx} := ${this.lowerExpr(step.index, ctx, out)}`);
+      out.push(`if iszero(lt(${idx}, ${step.length})) { ${this.panic()}(0x32) }`);
+      const next = this.fresh();
+      out.push(`let ${next} := add(${cur}, mul(${idx}, ${step.strideBytes}))`);
+      cur = next;
+    }
+    return cur;
+  }
+
   private lowerAssignValue(target: LValue, valueReg: string, ctx: LowerCtx, out: string[]): void {
     if (target.kind === 'local') {
       out.push(`${this.ctxLookup(ctx, target.varName)} := ${valueReg}`);
@@ -9355,11 +9377,17 @@ ${indent(runtime, 6)}
       return;
     }
     if (target.kind === 'aggFieldStore') {
-      // xs[i].a = v on a memory-array static-struct element: lower the element image base (the same
-      // aggToMemPtr the aggFieldRead read uses), then store at the static field word offset. No mask -
-      // the RHS is coerced to the field type by the analyzer (like the memField store above).
+      // xs[i].a = v / xs[i].pre[j] = v on a memory-array static-struct element: lower the element image
+      // base (the same aggToMemPtr the aggFieldRead read uses), add the static field offset + any runtime
+      // index steps, then store. No mask - the RHS is coerced to the field type by the analyzer.
       const ptr = this.aggToMemPtr(target.base, ctx, out);
-      out.push(`mstore(${target.wordOffset === 0 ? ptr : `add(${ptr}, ${target.wordOffset * 32})`}, ${valueReg})`);
+      let cur = target.wordOffset === 0 ? ptr : `add(${ptr}, ${target.wordOffset * 32})`;
+      if (target.runSteps && target.runSteps.length) {
+        const b = this.fresh();
+        out.push(`let ${b} := ${cur}`);
+        cur = this.applyRunSteps(b, target.runSteps, ctx, out);
+      }
+      out.push(`mstore(${cur}, ${valueReg})`);
       return;
     }
     throw new UnsupportedError(`cannot ++/-- an lvalue of kind '${target.kind}'`);

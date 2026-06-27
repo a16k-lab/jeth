@@ -80,4 +80,44 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
       expect(rj.returnHex, sig).toBe(rs.returnHex);
     }
   });
+
+  it('runtime array index into a struct-array-element field xs[i].pre[j] (read+write, 2D, OOB) [was JETH151]', async () => {
+    const J = `@struct class P { pre: Arr<u256, 2>; tag: u256; }
+    @struct class G { grid: Arr<Arr<u256, 2>, 2>; }
+    @contract class C {
+      @external @pure rd(i: u256, j: u256): u256 { let xs: P[] = new Array<P>(3n); xs[0n].pre[0n] = 5n; xs[0n].pre[1n] = 6n; xs[2n].pre[0n] = 77n; xs[2n].pre[1n] = 88n; return xs[i].pre[j]; }
+      @external @pure wr(i: u256, j: u256, v: u256): bytes { let xs: P[] = new Array<P>(3n); xs[i].pre[j] = v; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); }
+      @external @pure rdoob(i: u256, j: u256): u256 { let xs: P[] = new Array<P>(2n); return xs[i].pre[j]; }
+      @external @pure twoD(i: u256, j: u256, k: u256): u256 { let xs: G[] = new Array<G>(2n); xs[1n].grid[0n][1n] = 42n; return xs[i].grid[j][k]; }
+    }`;
+    const S = `struct P { uint256[2] pre; uint256 tag; }
+    struct G { uint256[2][2] grid; }
+    contract C {
+      function rd(uint256 i, uint256 j) external pure returns (uint256){ P[] memory xs = new P[](3); xs[0].pre[0]=5; xs[0].pre[1]=6; xs[2].pre[0]=77; xs[2].pre[1]=88; return xs[i].pre[j]; }
+      function wr(uint256 i, uint256 j, uint256 v) external pure returns (bytes memory){ P[] memory xs = new P[](3); xs[i].pre[j]=v; return abi.encode(xs[i].pre[0], xs[i].pre[1]); }
+      function rdoob(uint256 i, uint256 j) external pure returns (uint256){ P[] memory xs = new P[](2); return xs[i].pre[j]; }
+      function twoD(uint256 i, uint256 j, uint256 k) external pure returns (uint256){ G[] memory xs = new G[](2); xs[1].grid[0][1]=42; return xs[i].grid[j][k]; }
+    }`;
+    const hj = await Harness.create();
+    const hs = await Harness.create();
+    const aj = await hj.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const as = await hs.deploy(compileSolidity(SPDX + S, 'C').creation);
+    const P = (await import('../src/evm.js')).pad32;
+    const cases: [string, string][] = [
+      ['rd(uint256,uint256)', P(0n) + P(1n)],
+      ['rd(uint256,uint256)', P(2n) + P(0n)],
+      ['wr(uint256,uint256,uint256)', P(1n) + P(0n) + P(99n)],
+      ['rdoob(uint256,uint256)', P(0n) + P(2n)], // inner OOB -> Panic 0x32
+      ['rdoob(uint256,uint256)', P(2n) + P(0n)], // outer OOB -> Panic 0x32
+      ['twoD(uint256,uint256,uint256)', P(1n) + P(0n) + P(1n)],
+      ['twoD(uint256,uint256,uint256)', P(0n) + P(0n) + P(2n)], // inner-inner OOB
+    ];
+    for (const [sig, args] of cases) {
+      const data = '0x' + sel(sig) + args;
+      const rj = await hj.call(aj, data);
+      const rs = await hs.call(as, data);
+      expect(rj.success, sig).toBe(rs.success);
+      expect(rj.returnHex, sig).toBe(rs.returnHex);
+    }
+  });
 });

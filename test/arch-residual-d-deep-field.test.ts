@@ -72,7 +72,7 @@ describe('Residual D: deep sub-field read on a memory-array struct element (lite
     }
   });
 
-  it('still rejects a RUNTIME array index into a struct-array-element field (clean over-rejection)', () => {
+  it('now ACCEPTS a RUNTIME array index into a struct-array-element field (over-rejection lifted; byte-identity in lift-over-rejections.test.ts)', () => {
     const codes = (src: string): string[] => {
       try {
         compile(src, { fileName: 'C.jeth' });
@@ -82,7 +82,7 @@ describe('Residual D: deep sub-field read on a memory-array struct element (lite
       }
     };
     expect(
-      codes(`@struct class P { a: u256; pre: Arr<u256,2>; } @contract class C { @external @pure f(j: u256): u256 { let xs: P[] = [P(1n,[2n,3n])]; return xs[0n].pre[j]; } }`).length,
-    ).toBeGreaterThan(0);
+      codes(`@struct class P { a: u256; pre: Arr<u256,2>; } @contract class C { @external @pure f(j: u256): u256 { let xs: P[] = [P(1n,[2n,3n])]; return xs[0n].pre[j]; } }`),
+    ).toEqual([]);
   });
 });

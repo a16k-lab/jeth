@@ -66,6 +66,7 @@ import {
   InterfaceDecl,
   InterfaceMethod,
   LibraryIR,
+  ArrIndexStep,
 } from './ir.js';
 
 const ADDRESS: JethType = { kind: 'address', payable: false };
@@ -8643,7 +8644,7 @@ export class Analyzer {
    *  bare element with no sub-access; emits JETH210/JETH211 only after the struct-array root is confirmed. */
   private resolveMemArrayElemFieldChain(
     node: ts.Expression,
-  ): { base: Expr; wordOffset: number; type: JethType } | undefined {
+  ): { base: Expr; wordOffset: number; type: JethType; runSteps: ArrIndexStep[] } | undefined {
     const steps: ({ field: string } | { index: ts.Expression; node: ts.Node })[] = [];
     let cur: ts.Expression = node;
     let rootArr: ArrayExpr | undefined;
@@ -8676,6 +8677,7 @@ export class Analyzer {
     steps.reverse(); // root -> leaf
     let curType: JethType = rootArr.elem;
     let wordOffset = 0;
+    const runSteps: ArrIndexStep[] = [];
     for (const s of steps) {
       if ('field' in s) {
         if (curType.kind !== 'struct') {
@@ -8694,16 +8696,24 @@ export class Analyzer {
         const iexpr = this.checkExpr(s.index, U256);
         if (!iexpr) return undefined;
         const iv = this.coerce(iexpr, U256, s.index);
-        if (iv.kind !== 'literalInt') return undefined; // runtime index into a struct-array element field: a later step
-        if (iv.value < 0n || iv.value >= BigInt(curType.length)) {
-          this.diags.error(s.node, 'JETH211', `array index ${iv.value} out of bounds for length ${curType.length}`);
-          return undefined;
+        const strideWords = abiHeadWords(curType.element);
+        if (iv.kind === 'literalInt') {
+          if (iv.value < 0n || iv.value >= BigInt(curType.length)) {
+            this.diags.error(s.node, 'JETH211', `array index ${iv.value} out of bounds for length ${curType.length}`);
+            return undefined;
+          }
+          wordOffset += Number(iv.value) * strideWords;
+        } else {
+          // a RUNTIME index into a fixed-array field of the element (xs[i].pre[j]): a bounds-checked
+          // runtime byte-offset step. Static parts stay in wordOffset; runtime parts are runSteps (all
+          // additive). The bounds check (and side-effecting-index gate) are applied at codegen / by
+          // impureLValueKey for compound-assign.
+          runSteps.push({ index: iv, length: curType.length, strideBytes: strideWords * 32 });
         }
-        wordOffset += Number(iv.value) * abiHeadWords(curType.element);
         curType = curType.element;
       }
     }
-    return { base, wordOffset, type: curType };
+    return { base, wordOffset, type: curType, runSteps };
   }
 
   /** The root memory-aggregate local name of a property-access chain `p.f1...fn`, else undefined. */
@@ -8910,7 +8920,7 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const chain = this.resolveMemArrayElemFieldChain(node);
       if (chain && isStaticValueType(chain.type)) {
-        return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset };
+        return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
       }
     }
     // this.b[i] = <bytes1>: byte assignment into a STORAGE `bytes` (RMW the containing slot/word).
@@ -12285,7 +12295,7 @@ export class Analyzer {
       const chain = this.resolveMemArrayElemFieldChain(node);
       if (chain) {
         if (isStaticValueType(chain.type)) {
-          return { kind: 'aggFieldRead', type: chain.type, base: chain.base, wordOffset: chain.wordOffset };
+          return { kind: 'aggFieldRead', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
         }
         this.diags.error(
           node,
