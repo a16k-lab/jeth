@@ -212,8 +212,39 @@ so one `beacon.upgradeTo` swaps every proxy at once. A beacon proxy may not decl
 `@state` (JETH405-408). Verified byte-identical (returndata + each proxy's own storage + the `Upgraded`
 topic/data + revert): per-call routing into each proxy's separate storage, the beacon slot, the
 `implementation()`/`owner()` getters, the owner gate, and an upgrade-all-at-once over two proxies on one
-beacon (both swap, independent state preserved). The **Diamond** (EIP-2535 multi-facet) is the remaining
-proxy phase - all delegatecall-only, no raw `delegatecall`/`CREATE` in user code.
+beacon (both swap, independent state preserved).
+
+The **Diamond** (EIP-2535 multi-facet proxy) is supported in all three reference storage layouts, byte-identical
+to hand-written solc 0.8.35 mirrors. The foundation is **`@storage('ns')` namespaced storage** (EIP-7201): a
+storage field marked `@storage('ns')` (instead of `@state`) lives in a struct rooted at
+`base(ns) = keccak256(abi.encode(uint256(keccak256(bytes(ns))) - 1)) & ~0xff`; fields sharing a namespace string
+form one logical struct (sequential + packing within it), different namespaces are isolated, and `@state` fields
+stay at sequential slot 0 - all collision-safe (verified byte-identical to a solc ERC-7201 struct across scalars,
+packed fields, mappings, dynamic/fixed arrays, `mapping(K=>struct)` values, and `bytes`; JETH409 gates `@storage`
+against `@state`/`@constant`/`@immutable`). A **`@facet class F { ... }`** is an ordinary deployable contract
+whose `@storage('ns')` state and `@external` selectors are cut into a diamond. A **`@diamond('<model>') class D`**
+synthesizes the whole EIP-2535 surface (the user writes only `constructor(owner) { diamondInit*(owner); }`): the
+selector-router fallback (sload the facet for `msg.sig`, delegatecall, return-or-bubble, "Diamond: Function does
+not exist" on a miss), an owner-gated `diamondCut(FacetCut[],_init,_calldata)` with the model's exact
+Add/Replace/Remove + the `_init` delegatecall + the `DiamondCut` event, the four `IDiamondLoupe` functions
+(`facets`/`facetFunctionSelectors`/`facetAddresses`/`facetAddress`), ERC-165, and ownership. A `@diamond` may not
+declare `@state`/`@external`/`@receive`/`@fallback`/events (all synthesized); diagnostics JETH411-414. The three
+models (a different storage layout each, identical external surface):
+- **`@diamond('array')`** (the diamond-1/3-hardhat layout): `selectorToFacetAndPosition` + per-facet
+  `bytes4[] functionSelectors` + `address[] facetAddresses` at `keccak256("diamond.standard.diamond.storage")`;
+  direct-read loupe, swap-and-pop Add/Replace/Remove. Verified byte-identical to a solc diamond-3 mirror.
+- **`@diamond('packed')`** (the diamond-2-hardhat layout): `mapping(bytes4=>bytes32) facets` (addr | position) +
+  `mapping(uint256=>bytes32) selectorSlots` (8 selectors packed per slot, MSB-first) + `uint16 selectorCount`;
+  reconstruct-in-memory loupe. Verified byte-identical (incl. a >8-selector multi-slot Add and a slot-crossing
+  Remove).
+- **`@diamond('solidstate')`** (solidstate v0.0.61): the diamond-2 packing in solidstate's field order
+  (`selectorInfo`/`selectorCount`/`selectorSlugs`/`fallbackAddress`) with ownership in separate Ownable/SafeOwnable
+  namespaces, plus solidstate's distinctive features - a settable **default fallback address**
+  (`getFallbackAddress`/`setFallbackAddress`; a selector miss delegatecalls it or reverts
+  `Proxy__ImplementationIsNotContract()`) and **SafeOwnable 2-step** ownership (`transferOwnership` sets the
+  nominee, `acceptOwnership` finalizes). Verified byte-identical to a solc solidstate mirror.
+All diamond/proxy patterns are delegatecall-only with no raw `delegatecall`/`CREATE` in user code. The
+born-immutable (`'frozen'`) lifecycle is the remaining diamond follow-up.
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
