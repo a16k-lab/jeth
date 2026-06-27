@@ -64,3 +64,53 @@ deploys to the address predictClone predicted, AND that address matches solc's C
 code; (4) cloneArgs reads back the exact appended args (single + multiple, value + bytes via .decode);
 (5) two clones of one impl are independent (separate storage); (6) the @view/@pure-deploy gate. Mirror the
 immutable-args case against the modified-init solc factory.
+
+---
+
+# Phase 2: EIP-1967 UPGRADEABLE proxies (Transparent / UUPS / Beacon) - verified baseline
+
+Verified on the harness: a hand-written ERC1967 proxy (raw `sstore`/`sload` at the EIP-1967 impl slot
+`0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc` + a delegate fallback) forwards calls
+into the proxy's own storage (impl storage untouched), upgrade swaps the logic, and a non-admin upgrade
+reverts. So the two new primitives are: (1) raw FIXED-SLOT sstore/sload at the EIP-1967 addresses; (2) the
+canonical DELEGATE FALLBACK `calldatacopy(0,0,calldatasize()); r:=delegatecall(gas(),impl,0,calldatasize(),
+0,0); returndatacopy(0,0,returndatasize()); switch r case 0 {revert(0,returndatasize())} default
+{return(0,returndatasize())}`.
+
+## Foundation (Phase 2a - build first, the shared core of all 3 upgradeable variants)
+- `@proxy class P { ... }` decorator: marks a proxy contract. JETH GENERATES the delegate fallback (forward
+  all calldata to the EIP-1967 impl slot). The proxy has NO @state of its own (storage belongs to the impl).
+- Constructor builtin `proxyInit(impl: address, initData: bytes)`: require(isContract(impl)); write the
+  EIP-1967 impl slot; if initData.length>0 delegatecall(impl, initData) and bubble its revert; emit
+  Upgraded(impl) (event topic = the EIP-1967 layout, an indexed address).
+- `upgradeProxy(newImpl: address, data: bytes)`: require(isContract(newImpl)); write impl slot; emit
+  Upgraded; if data.length>0 delegatecall(newImpl, data) + bubble. The user gates WHO can call it.
+- `proxyImplementation(): address` / `proxyAdmin(): address`: read the EIP-1967 impl / admin slots.
+- EIP-1967 slots are FIXED constants (collision-resistant): impl 0x360894…, admin 0xb53127…, beacon 0xa3f0ad….
+  The user never sees a raw slot number - only these named builtins.
+
+## Variant routing (Phase 2b/c/d, on top of the foundation)
+- **Transparent**: the proxy stores an admin (EIP-1967 admin slot, set in proxyInit's 2nd arg); the generated
+  fallback, when caller()==admin, allows ONLY upgradeToAndCall(addr,bytes) (handled in the proxy) and reverts
+  other admin calls; non-admin -> delegate. Byte-identical to OZ TransparentUpgradeableProxy.
+- **UUPS**: `@uups @contract class Logic` - the IMPL opts in; @uups generates upgradeToAndCall (calls the
+  user-defined authorizeUpgrade(newImpl), writes the impl slot via upgradeProxy) + proxiableUUID() returning
+  the impl slot (anti-brick). The proxy is the minimal foundation @proxy (delegate-only fallback). OZ
+  ERC1967Proxy + UUPSUpgradeable.
+- **Beacon**: `@beacon class B` holds impl+owner+upgradeTo+implementation(); `@proxy('beacon')` stores the
+  beacon in the EIP-1967 beacon slot, the fallback staticcalls beacon.implementation() then delegatecalls.
+  OZ BeaconProxy + UpgradeableBeacon.
+
+## JETH integration (Phase 2a)
+- analyzer: `@proxy` class decorator -> a ProxyIR flag; the proxy gets a synthesized delegate fallback (no
+  user @receive/@fallback allowed alongside). proxyInit/upgradeProxy/proxyImplementation/proxyAdmin builtins
+  (writes-state for init/upgrade -> nonpayable/@payable; reads for the getters). isContract reused from Phase1.
+- yul: emit the EIP-1967 slot sstore/sload at the fixed constants; the delegate fallback in the runtime
+  dispatcher's fallback position; the init/upgrade delegatecall reuses the libraries' delegatecall codegen.
+
+## Verification (byte-identical to a hand-written OZ-equivalent ERC1967/Transparent proxy in solc 0.8.35)
+Deploy a JETH proxy + V1/V2 impls and a solc proxy + impls; diff returndata + the proxy's STORAGE (impl slot
++ the impl's state slots, which live in the proxy) + the Upgraded event + revert: a call routed through the
+proxy hits V1 and writes the PROXY's storage (impl's own storage untouched); proxyImplementation == the impl;
+upgrade swaps to V2 (behaviour + event); the init delegatecall runs once; a non-authorized upgrade reverts;
+isContract guard on a non-contract impl reverts. Then the variant-specific routing per b/c/d.

@@ -705,7 +705,12 @@ export class Analyzer {
   private findContractClasses(): ts.ClassDeclaration[] {
     const out: ts.ClassDeclaration[] = [];
     const visit = (n: ts.Node): void => {
-      if (ts.isClassDeclaration(n) && decoratorNames(n).includes('contract')) out.push(n);
+      // Phase 2a: `@proxy class P` is a deployable contract too (the EIP-1967 upgradeable proxy). It is
+      // the deployed @contract for this file (it needs no separate @contract decorator).
+      if (ts.isClassDeclaration(n)) {
+        const decs = decoratorNames(n);
+        if (decs.includes('contract') || decs.includes('proxy')) out.push(n);
+      }
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
@@ -1427,6 +1432,20 @@ export class Analyzer {
     const receive = receiveNode ? this.checkSpecialEntry(receiveNode.member, 'receive') : undefined;
     const fallback = fallbackNode ? this.checkSpecialEntry(fallbackNode.member, 'fallback') : undefined;
 
+    // Phase 2a: `@proxy class P` -> the EIP-1967 upgradeable-proxy foundation. JETH synthesizes the
+    // canonical delegate fallback (forward ALL calldata to the EIP-1967 impl slot) in the runtime
+    // fallback position. The proxy has no storage of its own (it lives in the impl) and may NOT declare
+    // a user @receive/@fallback (the synthesized fallback owns that position).
+    const isProxy = decoratorNames(cls).includes('proxy');
+    if (isProxy) {
+      if (receiveNode)
+        this.diags.error(receiveNode.member, 'JETH398', 'a @proxy class may not declare a @receive entry (the delegate fallback is synthesized)');
+      if (fallbackNode)
+        this.diags.error(fallbackNode.member, 'JETH398', 'a @proxy class may not declare a @fallback entry (the delegate fallback is synthesized)');
+      if (layout.vars.length > 0)
+        this.diags.error(cls, 'JETH399', 'a @proxy class may not declare @state (proxy storage belongs to the implementation; use proxyInit/upgradeProxy for the EIP-1967 slots)');
+    }
+
     // Phase B: partition out external (delegatecall) libraries. A library's @external functions are
     // delegatecall entry points emitted in the LIBRARY's own object (NEVER the contract dispatcher); a
     // library function reachable ONLY from such an external entry belongs to the library object, not the
@@ -1457,6 +1476,7 @@ export class Analyzer {
       immutables: this.immutableOrder.map((n) => ({ name: n, type: this.immutablesByName.get(n)!.type })),
       receive,
       fallback,
+      isProxy,
       libraries: libraries.length > 0 ? libraries : undefined,
     };
   }
@@ -10035,6 +10055,77 @@ export class Analyzer {
     return { kind: 'cloneDeploy', type: ADDRESS, impl, salt, args };
   }
 
+  /** Phase 2a proxies: the EIP-1967 upgradeable-proxy foundation builtins (byte-identical to OZ ERC1967).
+   *  These are the ONLY way to touch the fixed EIP-1967 slots; the user never writes a raw slot number,
+   *  and delegatecall stays unavailable as a free primitive.
+   *  - proxyInit(impl, initData)         -> void; require(isContract(impl)); write impl slot; emit Upgraded;
+   *  - proxyInit(impl, admin, initData)  -> void; also write the admin slot. STATE-MUTATING (the ctor uses it).
+   *  - upgradeProxy(newImpl, data)       -> void; require(isContract); write impl slot; emit Upgraded + run.
+   *  - proxyImplementation(): address    -> SLOAD the EIP-1967 impl slot. A storage read (view-ok, pure-reject).
+   *  - proxyAdmin(): address             -> SLOAD the EIP-1967 admin slot. A storage read. */
+  private checkProxyBuiltin(node: ts.CallExpression, callee: string): Expr | undefined {
+    const addrArg = (idx: number, who: string): Expr | undefined => {
+      const a = this.checkExpr(node.arguments[idx]!, ADDRESS);
+      if (!a) return undefined;
+      if (a.type.kind === 'address') return a;
+      if (this.isAddressConvertible(a.type)) return { kind: 'cast', type: ADDRESS, from: a.type, operand: a };
+      this.diags.error(node.arguments[idx]!, 'JETH395', `${callee}(...) ${who} must be address, got ${displayName(a.type)}`);
+      return undefined;
+    };
+    const bytesArg = (idx: number, who: string): Expr | undefined => {
+      const b = this.checkExpr(node.arguments[idx]!, this.bytesLiteralExpected(node.arguments[idx]!));
+      if (!b) return undefined;
+      if (b.type.kind !== 'bytes') {
+        this.diags.error(node.arguments[idx]!, 'JETH397', `${callee}(...) ${who} must be bytes, got ${displayName(b.type)} (use bytes(...) / abi.encode(...))`);
+        return undefined;
+      }
+      return b;
+    };
+
+    if (callee === 'proxyImplementation' || callee === 'proxyAdmin') {
+      if (node.arguments.length !== 0) {
+        this.diags.error(node, 'JETH170', `${callee}() takes no arguments`);
+        return undefined;
+      }
+      this.currentReadsEnv = true; // SLOAD of a fixed slot: a state read -> forbidden in @pure
+      return { kind: 'proxySlotRead', type: ADDRESS, slot: callee === 'proxyAdmin' ? 'admin' : 'impl' };
+    }
+
+    if (callee === 'upgradeProxy') {
+      if (node.arguments.length !== 2) {
+        this.diags.error(node, 'JETH170', 'upgradeProxy(...) takes exactly 2 arguments (newImpl, data)');
+        return undefined;
+      }
+      const impl = addrArg(0, 'newImpl');
+      const data = bytesArg(1, 'data');
+      if (!impl || !data) return undefined;
+      this.currentWritesState = true; // SSTORE + emit + delegatecall -> reject @view/@pure
+      return { kind: 'upgradeProxy', type: VOID, impl, data };
+    }
+
+    // proxyInit(impl, initData) | proxyInit(impl, admin, initData)
+    if (callee === 'proxyInit') {
+      if (node.arguments.length !== 2 && node.arguments.length !== 3) {
+        this.diags.error(node, 'JETH170', 'proxyInit(...) takes 2 (impl, initData) or 3 (impl, admin, initData) arguments');
+        return undefined;
+      }
+      const impl = addrArg(0, 'impl');
+      if (!impl) return undefined;
+      let admin: Expr | undefined;
+      let dataIdx = 1;
+      if (node.arguments.length === 3) {
+        admin = addrArg(1, 'admin');
+        if (!admin) return undefined;
+        dataIdx = 2;
+      }
+      const initData = bytesArg(dataIdx, 'initData');
+      if (!initData) return undefined;
+      this.currentWritesState = true; // SSTORE + emit + delegatecall -> reject @view/@pure
+      return { kind: 'proxyInit', type: VOID, impl, admin, initData };
+    }
+    return undefined;
+  }
+
   private checkAddressCall(node: ts.CallExpression): Expr | undefined {
     if (node.arguments.length !== 1) {
       this.diags.error(node, 'JETH170', 'address(...) takes exactly one argument');
@@ -11819,6 +11910,15 @@ export class Analyzer {
         callee === 'cloneArgs'
       ) {
         return this.checkCloneBuiltin(node, callee);
+      }
+      // --- Phase 2a proxies: EIP-1967 upgradeable-proxy foundation builtins ---
+      if (
+        callee === 'proxyInit' ||
+        callee === 'upgradeProxy' ||
+        callee === 'proxyImplementation' ||
+        callee === 'proxyAdmin'
+      ) {
+        return this.checkProxyBuiltin(node, callee);
       }
       // `Color(x)` is an integer -> enum range-checked conversion; an enum is a branded uint8, so
       // isBrandedAlias already routes it, but name it explicitly for clarity.

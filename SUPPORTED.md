@@ -176,8 +176,21 @@ the clone's code (read by the impl via `cloneArgs()` -> bytes, `.decode(T)` for 
 EIP-1167 factory: the deployed clone's runtime bytecode, the delegatecall round-trip (runs in the clone's
 storage), `predictClone == ` the actual deploy address, the `cloneArgs` round-trip, and clone-storage
 independence. A deploying builtin writes state, so it is rejected in a `@view`/`@pure` function (matching
-solc). New diagnostics JETH395-397. The EIP-1967 upgradeable proxies (Transparent / UUPS / Beacon - raw fixed
-slots + a delegate fallback) are the next phase.
+solc). New diagnostics JETH395-397.
+
+EIP-1967 upgradeable proxies (the foundation of the Transparent / UUPS / Beacon variants) are supported,
+byte-identical to a solc ERC1967 proxy. A `@proxy class P { ... }` is a proxy contract: JETH generates the
+canonical delegate fallback (forward all calldata to the EIP-1967 implementation slot, `0x360894…`). Builtins
+over the collision-resistant fixed slots: `proxyInit(impl[, admin], initData)` (constructor - code-checks the
+impl, writes the slot(s), runs the init delegatecall once, emits `Upgraded(address indexed)`);
+`upgradeProxy(newImpl, data)` (the user gates who may call it); `proxyImplementation()` / `proxyAdmin()`. A
+`@proxy` may not declare `@state` (storage belongs to the impl) or a user `@receive`/`@fallback`
+(JETH398/399). Verified byte-identical (returndata + the proxy's storage slots + the `Upgraded` topic/data +
+revert): calls route into the proxy's storage (impl's own untouched), the impl/admin slots, the
+upgrade-and-event round-trip, the one-time init, the bubbled init-revert, and the auth / isContract gates.
+The Transparent admin-selector routing, UUPS (`@uups` impl-side upgrade mixin + `proxiableUUID`), Beacon
+(`@beacon` + staticcall), and the Diamond (EIP-2535 multi-facet) are the remaining proxy phases - all
+delegatecall-only, no raw `delegatecall`/`CREATE` in user code.
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and

@@ -144,6 +144,17 @@ export type Expr =
   // cloneArgs() -> bytes: THIS clone's appended immutable args (OZ Clones.fetchCloneArgs(address(this)) =
   // own code[0x2d:], via extcodecopy(address(), dst, 0x2d, extcodesize(address())-0x2d)). A code read.
   | { kind: 'cloneArgs'; type: JethType }
+  // --- Phase 2a proxies: EIP-1967 upgradeable-proxy foundation (byte-identical to OZ ERC1967) ---
+  // proxyInit(impl, [admin,] initData): the @proxy constructor primitive. require(isContract(impl)); write
+  // the EIP-1967 impl slot; (admin form) write the EIP-1967 admin slot; emit Upgraded(impl); if
+  // initData.length>0 delegatecall(impl, initData) and BUBBLE its revert verbatim. STATE-MUTATING.
+  | { kind: 'proxyInit'; type: JethType; impl: Expr; admin?: Expr; initData: Expr }
+  // upgradeProxy(newImpl, data): require(isContract(newImpl)); write the EIP-1967 impl slot; emit
+  // Upgraded(newImpl); if data.length>0 delegatecall(newImpl, data) + bubble. The USER gates who may call
+  // it (e.g. require(msg.sender == proxyAdmin())). STATE-MUTATING. -> void.
+  | { kind: 'upgradeProxy'; type: JethType; impl: Expr; data: Expr }
+  // proxyImplementation() / proxyAdmin() -> address: SLOAD the EIP-1967 impl / admin slot. A storage read.
+  | { kind: 'proxySlotRead'; type: JethType; slot: 'impl' | 'admin' }
   // --- Phase 6: external low-level calls ---
   // <addr>.code -> bytes (EXTCODESIZE + EXTCODECOPY); <addr>.codehash -> bytes32 (EXTCODEHASH)
   | { kind: 'extCode'; type: JethType; addr: Expr; member: 'code' | 'codehash' }
@@ -571,6 +582,10 @@ export interface ContractIR {
   immutables: ImmutableVar[]; // @immutable fields (declaration order), baked via setimmutable
   receive?: SpecialEntryIR; // @receive: empty-calldata ETH receiver (Phase 6)
   fallback?: SpecialEntryIR; // @fallback: catch-all entry (Phase 6)
+  // Phase 2a: `@proxy class P` -> JETH synthesizes the canonical EIP-1967 delegate fallback (forward ALL
+  // calldata to the EIP-1967 impl slot) in the runtime fallback position. The proxy has no @state of its
+  // own (storage belongs to the impl) and may NOT declare a user @receive/@fallback.
+  isProxy?: boolean;
   // Phase B: external (delegatecall) libraries this contract references. Each is emitted as its OWN
   // top-level Yul object (creation returns runtime; runtime = a selector dispatcher over its external
   // functions) and linked at deploy time. Empty/absent when no external library is referenced.

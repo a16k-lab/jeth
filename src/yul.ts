@@ -71,6 +71,13 @@ const ECDSA_INVALID_SIGNATURE_S = '0xd78bce0c00000000000000000000000000000000000
 const KZG_FIELD_ELEMENTS_PER_BLOB = '0x0000000000000000000000000000000000000000000000000000000000001000'; // 4096
 const KZG_BLS_MODULUS = '0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001';
 
+// Phase 2a proxies: the canonical EIP-1967 fixed slots (collision-resistant, the OZ ERC1967 layout).
+// impl  = keccak256("eip1967.proxy.implementation") - 1; admin = keccak256("eip1967.proxy.admin") - 1.
+const EIP1967_IMPL_SLOT = '0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc';
+const EIP1967_ADMIN_SLOT = '0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103';
+// keccak256("Upgraded(address)") - the EIP-1967 Upgraded(address indexed implementation) topic0.
+const UPGRADED_TOPIC = '0xbc7cd75a20ee27fd9adebab32041f755214dbc6bffa90cc0225b39da2e5c2d3b';
+
 /** ABI head-word count of a struct's tuple HEAD (spec section 3.0): each field
  *  contributes its inline static words if static, or exactly ONE offset word if
  *  dynamic (string/bytes/dynamic-array/nested-dynamic-struct). This differs from
@@ -336,7 +343,34 @@ ${indent(runtime, 6)}
 
     const external = contract.functions.filter((f) => f.visibility === 'external');
     const hasSpecial = !!(contract.receive || contract.fallback);
-    if (hasSpecial) {
+    if (contract.isProxy) {
+      // Phase 2a: an EIP-1967 upgradeable proxy. Dispatch the proxy's OWN @external functions (e.g. the
+      // user's admin-gated upgrade entry) with an EMPTY default, then fall through to the synthesized
+      // canonical delegate fallback (forward ALL calldata to the EIP-1967 impl slot). This matches the
+      // hand-written OZ ERC1967 proxy: any non-proxy selector / empty calldata is delegatecall'd to the
+      // implementation, which runs in the PROXY's storage context. (The analyzer forbids a user
+      // @receive/@fallback and any @state on a @proxy class, so this owns the fallback position.)
+      if (external.length > 0) {
+        lines.push('if iszero(lt(calldatasize(), 4)) {');
+        lines.push('  let selector := shr(224, calldataload(0))');
+        lines.push('  switch selector');
+        for (const fn of external) {
+          lines.push(`  case 0x${fn.selector} { // ${fn.signature}`);
+          for (const l of this.emitDispatchCase(fn)) lines.push('    ' + l);
+          lines.push('  }');
+        }
+        lines.push('  default {}');
+        lines.push('}');
+      }
+      // The canonical EIP-1967 delegate fallback. impl is read from the fixed slot, masked to 160 bits.
+      lines.push(`let _impl := and(sload(${EIP1967_IMPL_SLOT}), 0xffffffffffffffffffffffffffffffffffffffff)`);
+      lines.push('calldatacopy(0, 0, calldatasize())');
+      lines.push('let _ok := delegatecall(gas(), _impl, 0, calldatasize(), 0, 0)');
+      lines.push('returndatacopy(0, 0, returndatasize())');
+      lines.push('switch _ok');
+      lines.push('case 0 { revert(0, returndatasize()) }');
+      lines.push('default { return(0, returndatasize()) }');
+    } else if (hasSpecial) {
       // Phase 6: receive/fallback dispatch (byte-identical to solc's optimized IR). The selector switch
       // is wrapped in `if iszero(lt(calldatasize(),4))` with an EMPTY default (NEVER default{revert}),
       // then the receive empty-calldata check, then the fallback (non-payable callvalue guard + body),
@@ -1238,6 +1272,12 @@ ${indent(runtime, 6)}
         // is dropped. lowerExpr would throw (a reference value in a non-reference context).
         if (s.expr.kind === 'extCall') {
           this.lowerDynamic(s.expr, ctx, out);
+          break;
+        }
+        // Phase 2a: proxyInit/upgradeProxy are void EIP-1967 statements (sstore + emit + optional
+        // delegatecall); they emit Yul statements directly, with no value to pop.
+        if (s.expr.kind === 'proxyInit' || s.expr.kind === 'upgradeProxy') {
+          this.lowerProxyMutate(s.expr, ctx, out);
           break;
         }
         const v = this.lowerExpr(s.expr, ctx, out);
@@ -2172,6 +2212,10 @@ ${indent(runtime, 6)}
         return this.lowerCloneDeploy(e, ctx, out);
       case 'predictClone':
         return this.lowerPredictClone(e, ctx, out);
+      case 'proxySlotRead':
+        // proxyImplementation()/proxyAdmin(): SLOAD the EIP-1967 impl/admin slot, masked to 160 bits
+        // (the slot holds a right-aligned address; the high 96 bits are zero on a clean write).
+        return `and(sload(${e.slot === 'admin' ? EIP1967_ADMIN_SLOT : EIP1967_IMPL_SLOT}), 0xffffffffffffffffffffffffffffffffffffffff)`;
       case 'extCode':
         // <addr>.codehash -> a single bytes32 word (EXTCODEHASH). The bytes form (<addr>.code) is a
         // reference value, lowered via lowerDynamic (it reaches the throw list below if misused).
@@ -2345,6 +2389,8 @@ ${indent(runtime, 6)}
       case 'cloneArgs': // cloneArgs() -> bytes (this clone's immutable args, lowered via lowerDynamic)
       case 'callData': // this.data inside a success condition (the returndata bytes reference)
       case 'catchReason': // this.reason (string) inside a catch body (a reference value, lowered via lowerDynamic)
+      case 'proxyInit': // void EIP-1967 statement: lowered in exprStmt via lowerProxyMutate (never a value)
+      case 'upgradeProxy': // void EIP-1967 statement: lowered in exprStmt via lowerProxyMutate (never a value)
         // reference/aggregate values are not single 256-bit words; they are
         // consumed by the return/assign/length/index paths.
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
@@ -6277,6 +6323,39 @@ ${indent(runtime, 6)}
    *  (salt set). A zero result (deployment failure) reverts EMPTY (the OZ failure path is a custom-error
    *  revert; the spec gates the success-path bytes and accepts a clean empty revert on the degenerate
    *  failure). Returns a register holding the new clone address. */
+  /** Phase 2a: lower proxyInit / upgradeProxy (the EIP-1967 upgrade primitive, byte-identical to OZ
+   *  ERC1967Utils.upgradeToAndCall). Both share: require(isContract(impl)) -> store the EIP-1967 impl
+   *  slot -> emit Upgraded(impl) -> if data.length>0 delegatecall(impl, data) and BUBBLE the revert.
+   *  proxyInit's admin form additionally writes the EIP-1967 admin slot first. Address operands are
+   *  masked to 160 bits before the extcodesize check + store (a clean address in the slot). */
+  private lowerProxyMutate(e: Expr & { kind: 'proxyInit' | 'upgradeProxy' }, ctx: LowerCtx, out: string[]): void {
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    // Evaluate operands left-to-right, exactly as written: impl (then admin for the 3-arg proxyInit),
+    // then the data bytes are materialized just before the delegatecall.
+    const impl = this.fresh();
+    out.push(`let ${impl} := and(${this.lowerExpr(e.impl, ctx, out)}, ${MASK})`);
+    if (e.kind === 'proxyInit' && e.admin) {
+      const admin = this.fresh();
+      out.push(`let ${admin} := and(${this.lowerExpr(e.admin, ctx, out)}, ${MASK})`);
+      out.push(`sstore(${EIP1967_ADMIN_SLOT}, ${admin})`);
+    }
+    // require(isContract(impl)): OZ ERC1967InvalidImplementation -> here a clean empty revert (the
+    // failure path is degenerate; the success-path bytes are what we byte-match).
+    out.push(`if iszero(extcodesize(${impl})) { revert(0, 0) }`);
+    out.push(`sstore(${EIP1967_IMPL_SLOT}, ${impl})`);
+    // emit Upgraded(address indexed implementation): an indexed-only event, so log2 over no data.
+    out.push(`log2(0, 0, ${UPGRADED_TOPIC}, ${impl})`);
+    // if data.length>0: delegatecall(gas(), impl, data, 0, 0) and bubble the callee's revert verbatim.
+    const data = e.kind === 'proxyInit' ? e.initData : e.data;
+    const { mp, len } = this.toMemory(this.lowerDynamic(data, ctx, out), out);
+    out.push(`if gt(${len}, 0) {`);
+    const ok = this.fresh();
+    out.push(`  let ${ok} := delegatecall(gas(), ${impl}, add(${mp}, 0x20), ${len}, 0, 0)`);
+    out.push(`  returndatacopy(0, 0, returndatasize())`);
+    out.push(`  if iszero(${ok}) { revert(0, returndatasize()) }`);
+    out.push(`}`);
+  }
+
   private lowerCloneDeploy(e: Expr & { kind: 'cloneDeploy' }, ctx: LowerCtx, out: string[]): string {
     const { ptr, len } = this.buildCloneCreationCode(e.impl, e.args, ctx, out);
     const inst = this.fresh();
