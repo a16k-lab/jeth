@@ -161,12 +161,12 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(
         codes(`@contract class C { @state n: u256; @modifier m() { _; this.n = 1n; } @external @m f(): void {} }`),
       ).toEqual([]));
-    it('a placeholder inside a conditional -> JETH321', () =>
+    it('a placeholder inside a conditional (0-or-N-times) is now SUPPORTED -> no diagnostics', () =>
       expect(
         codes(
           `@contract class C { @state n: u256; @modifier m() { if (this.n > 0n) { _; } } @external @m f(): void {} }`,
         ),
-      ).toContain('JETH321'));
+      ).toEqual([]));
     it('more than one placeholder -> JETH320', () =>
       expect(codes(`@contract class C { @modifier m() { _; _; } @external @m f(): void {} }`)).toContain('JETH320'));
     it('zero placeholders -> JETH328', () =>
@@ -295,7 +295,7 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
   // RETURN TRAP) before the value is ABI-encoded ONCE. Multiple modifiers: pre outer-first, post
   // inner-first. Verified byte-identical to solc 0.8.35 on raw storage slots + returndata + logs +
   // revert data. Out-of-scope shapes (aggregate/dynamic param, multi-value/aggregate return, internal
-  // function, constructor) are cleanly gated JETH323; a conditional placeholder stays JETH321.
+  // function, constructor) are cleanly gated JETH323; a conditional placeholder is now SUPPORTED.
   describe('post-placeholder code (full modifiers) vs solc 0.8.35', () => {
     it('1. post-code state write after the body commits (read back), byte-identical slots', async () => {
       const J = `@contract class C { @state n: u256; @state post: u256; @modifier track() { this.n = this.n + 1n; _; this.post = this.n * 100n; } @external @track go(): void { this.n = this.n + 10n; } @external @view readPost(): u256 { return this.post; } }`;
@@ -457,8 +457,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
 
   // The buffered-return (post-code) path is gated to value-type params + a void/single value/bytes/
   // string return on an @external function. Out-of-scope shapes reject cleanly (solc accepts them =
-  // documented over-rejections). A conditional placeholder stays JETH321; a return in a modifier stays
-  // JETH324/JETH325. These are accept/reject gates, not codegen.
+  // documented over-rejections). A conditional placeholder is now SUPPORTED; a return in a modifier
+  // stays JETH324/JETH325. These are accept/reject gates, not codegen.
   describe('post-code gates (clean over-rejections vs solc)', () => {
     it('aggregate/dynamic param + post-modifier -> JETH323', () => {
       expect(

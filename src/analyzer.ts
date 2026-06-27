@@ -150,6 +150,13 @@ interface RawModifier {
   params: { name: string; type: JethType }[];
   preStmts: ts.Statement[]; // the statements before the placeholder (the pre-condition guard)
   postStmts: ts.Statement[]; // the statements after the placeholder (run after the wrapped body)
+  // The 0-or-N-times shape: the SINGLE `_;` placeholder is nested inside an if/for/while, so the body
+  // cannot be split into flat pre/post slices. Instead the WHOLE body is lowered with the placeholder
+  // replaced IN PLACE by the {modifierBody} marker (the body call sits inside the conditional, running
+  // 0-or-N times; a 0-times path leaves the buffered `ret` at its zero-init = solc's zero value). Set
+  // ONLY for this shape (preStmts/postStmts stay empty); it always routes through the buffered userfn
+  // path (like POST code) so a value-returning function's zero-value branch works.
+  bodyStmts?: ts.Statement[];
 }
 
 export class Analyzer {
@@ -165,7 +172,13 @@ export class Analyzer {
   // staged ctor-body read (the value assigned so far) from a runtime loadimmutable read.
   private immutablesByName = new Map<string, { name: string; type: JethType; init?: ts.Expression }>();
   private immutableOrder: string[] = [];
+  private publicImmutableNames = new Set<string>(); // @external @immutable fields that get an auto-generated view getter
   private currentInConstructor = false;
+  // Set ONLY while lowering a CONDITIONAL-placeholder modifier body (the 0-or-N-times shape): when
+  // checkStatement encounters the single `_;` placeholder (anywhere, incl. nested in an if/for/while),
+  // it splices THESE marker statements in place instead of treating `_` as an expression. The marker
+  // is the {modifierBody} call (or the inner modifier's wrap), so the body runs where `_;` sat.
+  private placeholderInner: Stmt[] | undefined;
   // @storage('ns') namespaced fields (EIP-7201): each distinct `ns` string forms one logical struct
   // laid out from slot 0 by the SAME planLayout (sequential + packing), then offset by the namespace
   // base (ERC-7201 keccak). Insertion-ordered: ns string -> the fields declared in it (most-base-first,
@@ -1415,6 +1428,15 @@ export class Analyzer {
       functions.push(getter);
     }
 
+    // Auto-generate a view getter for each `@external @immutable` field (solc's `public immutable`
+    // auto-getter). `name() view returns (T)` returns the immutable via loadimmutable (a code read,
+    // NO storage slot). Inserted BEFORE the selector-clash check so a getter colliding with a
+    // same-named function is a clean JETH044 (matches solc). The selector is keccak(name+"()")[:4].
+    for (const name of this.immutableOrder) {
+      if (!this.publicImmutableNames.has(name)) continue;
+      functions.push(this.synthImmutableGetter(this.immutablesByName.get(name)!));
+    }
+
     // Phase 2c (UUPS): `@uups @contract` synthesizes upgradeToAndCall(address,bytes) + proxiableUUID()
     // BEFORE the selector-clash check, so a user-declared upgradeToAndCall/proxiableUUID clashes via the
     // normal JETH044 path. Validates the user `authorizeUpgrade(address)` gate exists and marks it
@@ -2261,6 +2283,27 @@ export class Analyzer {
       value = isBytesLike(t) ? { kind: 'dynPlaceRead', type: t, path } : { kind: 'placeRead', type: t, path };
     }
     return { ...base, returnType: t, body: [{ kind: 'return', value }] };
+  }
+
+  /** Synthesize the view getter for an `@external @immutable` field (solc's `public immutable`
+   *  auto-getter). `name() view returns (T)` returns the immutable via a loadimmutable read (a code
+   *  read, NOT a storage read - it consumes no slot), byte-identical to solc's generated getter:
+   *  selector = keccak(name+"()")[:4], returndata = the immutable value ABI-encoded. An immutable is
+   *  always a value type (collectImmutable gates it via isStaticValueType), so no parameters / no
+   *  aggregate encoding is needed. VIEW (not pure): a loadimmutable "reads the environment". */
+  private synthImmutableGetter(im: { name: string; type: JethType }): FunctionIR {
+    const sig = functionSignature(im.name, []);
+    return {
+      name: im.name,
+      key: `immGetter$${im.name}`,
+      visibility: 'external',
+      mutability: 'view',
+      params: [],
+      signature: sig,
+      selector: functionSelector(sig),
+      returnType: im.type,
+      body: [{ kind: 'return', value: { kind: 'immutableRead', type: im.type, name: im.name } }],
+    };
   }
 
   /** Build the AccessStep for one array level of a @public getter, mirroring the element-access codec
@@ -3397,19 +3440,22 @@ export class Analyzer {
   private collectImmutable(member: ts.PropertyDeclaration): void {
     const name = (member.name as ts.Identifier).text;
     const decs = decoratorNames(member);
-    // An immutable carries no visibility/mutability decorator: solc auto-generates a view getter for
-    // a `public immutable`, which JETH's ABI emitter does not produce, so gate it cleanly.
-    const extra = ['public', 'external', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden'].find((d) =>
+    // An `@external @immutable` mirrors solc's `public immutable`: a view getter is auto-generated
+    // (name() view returns (T), reading the immutable via loadimmutable - NO storage slot). It is
+    // synthesized in analyzeContract (see publicImmutableNames). The OTHER visibility/mutability
+    // decorators are nonsensical on an immutable (no parameterized getter, no storage) and stay gated.
+    const extra = ['public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden'].find((d) =>
       decs.includes(d),
     );
     if (extra) {
       this.diags.error(
         member,
         'JETH312',
-        `@immutable '${name}' cannot also be @${extra} (an immutable has no auto-generated getter; expose it with an explicit @view function)`,
+        `@immutable '${name}' cannot also be @${extra} (only @external is allowed, synthesizing solc's public-immutable view getter; for any other visibility expose it with an explicit @view function)`,
       );
       return;
     }
+    if (decs.includes('external')) this.publicImmutableNames.add(name); // @external @immutable -> auto-generated view getter
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
     if (!isStaticValueType(type)) {
@@ -4076,11 +4122,14 @@ export class Analyzer {
    *  with a single {kind:'modifierBody'} marker (the userfn call) at its center. */
   private wrapModifiers(rf: RawFunction, bodyIR: Stmt[]): { body: Stmt[]; modifierWrap?: Stmt[] } {
     const apps = rf.modifiers!;
-    const anyPost = apps.some((app) => {
+    // The buffered userfn path is required when a modifier has POST-placeholder code OR a CONDITIONAL
+    // placeholder (the 0-or-N-times shape): both need the body lowered as a synthesized userfn so a
+    // value-returning function's `ret` register can zero-init (the skip-body / zero-value branch).
+    const anyBuffered = apps.some((app) => {
       const m = this.modifiersByName.get(app.name);
-      return m !== undefined && m.postStmts.length > 0;
+      return m !== undefined && (m.postStmts.length > 0 || m.bodyStmts !== undefined);
     });
-    if (!anyPost) {
+    if (!anyBuffered) {
       // PRE-ONLY: the guard runs before the body and never touches the return values.
       let inner = bodyIR;
       for (const app of [...apps].reverse()) inner = this.inlineModifier(app, inner);
@@ -4169,7 +4218,28 @@ export class Analyzer {
       const coerced = this.coerce(a, mod.params[i]!.type, app.argNodes[i]!);
       argDecls.push({ kind: 'localDecl', name: mod.params[i]!.name, type: mod.params[i]!.type, init: coerced });
     }
-    // 2. Check pre AND post in the SAME fresh scope (only the modifier's params + contract state).
+    // 2. CONDITIONAL-placeholder shape (`if (c) { _; }` etc.): lower the WHOLE body in a fresh modifier
+    //    scope with the single `_;` placeholder replaced IN PLACE by `inner` (the {modifierBody} marker,
+    //    intercepted in checkStatement via placeholderInner). The marker lands wherever `_;` sat - even
+    //    nested in a conditional/loop - so the wrapped body runs 0-or-N times; a 0-times path leaves the
+    //    buffered `ret` at its zero-init = solc's zero value. The result is wrapped in a block so the
+    //    modifier's params/locals are scoped to the whole body.
+    if (mod.bodyStmts) {
+      const savedScopesC = this.scopes;
+      this.scopes = [new Map()];
+      this.pushScope();
+      for (const p of mod.params) this.declareLocal(p.name, p.type);
+      const lowered: Stmt[] = [];
+      const savedPlaceholder = this.placeholderInner;
+      this.placeholderInner = inner;
+      for (const s of mod.bodyStmts) this.checkStatement(s, VOID, lowered);
+      this.placeholderInner = savedPlaceholder;
+      this.popScope();
+      this.scopes = savedScopesC;
+      return [{ kind: 'block', body: [...argDecls, ...lowered] }];
+    }
+    // 2. (top-level placeholder) Check pre AND post in the SAME fresh scope (only the modifier's params
+    //    + contract state).
     const savedScopes = this.scopes;
     this.scopes = [new Map()];
     this.pushScope();
@@ -4216,6 +4286,17 @@ export class Analyzer {
         app.site,
         'JETH323',
         `a @modifier with post-placeholder code applied to a constructor is not supported yet (the buffered-return path requires a function body, not creation code)`,
+      );
+      return inner;
+    }
+    // A CONDITIONAL-placeholder modifier (the 0-or-N-times shape) likewise reaches this inliner ONLY
+    // on a CONSTRUCTOR. Inlining it would need the marker replaced inside the conditional, but the
+    // ctor body has no synthesized userfn to call - so gate it cleanly (solc accepts it).
+    if (mod.bodyStmts) {
+      this.diags.error(
+        app.site,
+        'JETH323',
+        `a @modifier with a conditional '_' placeholder applied to a constructor is not supported yet (the 0-or-N-times path requires a function body, not creation code)`,
       );
       return inner;
     }
@@ -4321,23 +4402,25 @@ export class Analyzer {
       );
       return;
     }
-    // The placeholder must be a TOP-LEVEL statement of the body (pre code before it, post code after).
-    // A placeholder NESTED in a conditional/loop is the genuinely-hard 0-or-N-times shape: gate it.
+    // Two shapes:
+    //  (a) TOP-LEVEL placeholder: `_;` is a top-level statement (pre code before it, post code after).
+    //      Stored as flat preStmts/postStmts slices.
+    //  (b) CONDITIONAL placeholder: the single `_;` is nested in an if/for/while (the 0-or-N-times
+    //      shape, e.g. `if (c) { _; }`). The body cannot be split into flat slices, so the WHOLE body
+    //      is stored (bodyStmts) and later lowered with the placeholder replaced IN PLACE by the
+    //      {modifierBody} marker; the body call sits inside the conditional and runs 0-or-N times. A
+    //      0-times path leaves the buffered `ret` register at its zero-init = solc's zero value.
     const topIdx = stmts.findIndex((s) => this.isPlaceholderStmt(s));
-    if (topIdx < 0) {
-      this.diags.error(
-        placeholders[0]!,
-        'JETH321',
-        `a @modifier's '_' placeholder must be a TOP-LEVEL statement of the body (not inside an if/for/while - that conditionally runs the body 0 or N times, which is not supported yet)`,
-      );
-      return;
-    }
-    const preStmts = stmts.slice(0, topIdx);
-    const postStmts = stmts.slice(topIdx + 1);
-    // A `return` ANYWHERE in the modifier body (pre OR post) is rejected: a value-return is
-    // meaningless (the modifier has no return type) and a bare `return;` would conditionally skip
-    // the wrapped body / the rest of the modifier (the early-out shape, not supported yet).
-    const returns = this.findReturns([...preStmts, ...postStmts]);
+    const isConditional = topIdx < 0;
+    const preStmts = isConditional ? [] : stmts.slice(0, topIdx);
+    const postStmts = isConditional ? [] : stmts.slice(topIdx + 1);
+    // A `return` ANYWHERE in the modifier body (excluding the placeholder, which is not a return) is
+    // rejected: a value-return is meaningless (the modifier has no return type) and a bare `return;`
+    // would conditionally skip the wrapped body / the rest of the modifier (the early-out shape, not
+    // supported yet). This gate is UNCHANGED for both shapes - only the placeholder-position gate is
+    // relaxed; `return` inside the body is still rejected.
+    const returnCheckStmts = isConditional ? [...stmts] : [...preStmts, ...postStmts];
+    const returns = this.findReturns(returnCheckStmts);
     for (const r of returns) {
       if (r.expression) this.diags.error(r, 'JETH324', `a @modifier cannot 'return' a value`);
       else
@@ -4348,7 +4431,14 @@ export class Analyzer {
         );
     }
     if (returns.length > 0) return; // don't register a modifier with a return (avoids a cascade on inlining)
-    this.modifiersByName.set(name, { name, node: member, params, preStmts, postStmts });
+    this.modifiersByName.set(name, {
+      name,
+      node: member,
+      params,
+      preStmts,
+      postStmts,
+      bodyStmts: isConditional ? [...stmts] : undefined,
+    });
   }
 
   private isPlaceholderStmt(s: ts.Statement): boolean {
@@ -4593,6 +4683,13 @@ export class Analyzer {
 
     if (ts.isExpressionStatement(node)) {
       const e = node.expression;
+      // The `_;` placeholder of a CONDITIONAL-placeholder modifier body: splice the {modifierBody}
+      // marker (the wrapped-body call) in place. Active ONLY while buildModifierWrap lowers such a
+      // body (placeholderInner set); at any other site `_` is an ordinary (and unknown) identifier.
+      if (this.placeholderInner && ts.isIdentifier(e) && e.text === '_') {
+        out.push(...this.placeholderInner);
+        return;
+      }
       // built-in statement-only calls: require / revert / emit
       if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
         const callee = e.expression.text;
