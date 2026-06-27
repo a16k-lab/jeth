@@ -414,7 +414,8 @@ describe('transparent-proxy (Phase 2b)', () => {
       expect(jethCodes(src)).toContain('JETH401');
     });
     it('an unknown @proxy variant is rejected (JETH400)', () => {
-      const src = `@proxy('beacon') class P { constructor(i: address) { proxyInit(i, abi.encode()); } }`;
+      // ('transparent' and 'beacon' are the supported variants; 'diamond' is not.)
+      const src = `@proxy('diamond') class P { constructor(i: address) { proxyInit(i, abi.encode()); } }`;
       expect(jethRejects(src)).toBe(true);
       expect(jethCodes(src)).toContain('JETH400');
     });

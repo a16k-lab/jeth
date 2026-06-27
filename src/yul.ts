@@ -87,6 +87,16 @@ const PROXY_DENIED_ADMIN_ACCESS_SELECTOR = '0xd2b576ec';
 const PROXIABLE_UUID_SELECTOR = '0x52d1902d';
 const ERC1967_INVALID_IMPLEMENTATION_SELECTOR = '0x4c9c8ce3'; // ERC1967InvalidImplementation(address)
 const UUPS_UNSUPPORTED_PROXIABLE_UUID_SELECTOR = '0xaa1d49a4'; // UUPSUnsupportedProxiableUUID(bytes32)
+// Phase 2d (BEACON): the EIP-1967 beacon slot (keccak256("eip1967.proxy.beacon") - 1), the beacon's
+// implementation() selector STATICCALL'd on every proxied call, and the OZ BeaconUpgraded(address indexed)
+// topic0 (emitted by a beacon PROXY when its beacon slot is set, distinct from Upgraded). The beacon
+// CONTRACT itself emits Upgraded(address indexed) (same UPGRADED_TOPIC as ERC1967). All verified via keccak.
+const EIP1967_BEACON_SLOT = '0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50';
+const IMPLEMENTATION_SELECTOR = '0x5c60da1b'; // implementation()
+const BEACON_UPGRADED_TOPIC = '0x1cf3b03a6cf19fa2baba4df148e9dcabedea7f8a5c07840e207e5c089be95d3e'; // BeaconUpgraded(address)
+// Phase 2d (BEACON contract): the OZ Ownable owner-gate revert (OwnableUnauthorizedAccount(address)). The
+// UpgradeableBeacon stores owner at slot 0 (Ownable._owner) and implementation at slot 1.
+const OWNABLE_UNAUTHORIZED_SELECTOR = '0x118cdaa7'; // OwnableUnauthorizedAccount(address)
 
 /** ABI head-word count of a struct's tuple HEAD (spec section 3.0): each field
  *  contributes its inline static words if static, or exactly ONE offset word if
@@ -206,6 +216,13 @@ ${indent(runtime, 6)}
   // ---- creation / constructor code ----------------------------------------
 
   private emitCreation(contract: ContractIR): string {
+    // Phase 2d (BEACON contract): a `@beacon class` has a FULLY-synthesized creation, byte-identical to the
+    // OZ UpgradeableBeacon 5.x constructor (Ownable(msg.sender) + _setImplementation(impl)): non-payable;
+    // owner = msg.sender at slot 0; decode the single appended `impl` address arg; require(isContract(impl));
+    // store impl at slot 1; emit Upgraded(indexed impl); then copy out + return the runtime. The user's
+    // `constructor(impl: address) {}` body is empty (enforced by the analyzer) - only its single param
+    // defines the appended ABI arg, so we ignore contract.ctor.body entirely here.
+    if (contract.isBeacon) return this.emitBeaconCreation(contract);
     const lines: string[] = [];
     // A constructorless contract is non-payable at creation: reject any deploy value, exactly like
     // solc (which always emits this guard at the start of creation unless the constructor is explicitly
@@ -345,6 +362,35 @@ ${indent(runtime, 6)}
     return { lines, helpers: [ctorFn, ...helperDefs], staged };
   }
 
+  /** Phase 2d (BEACON contract): the fully-synthesized creation code for a `@beacon class`, byte-identical
+   *  to the OZ UpgradeableBeacon 5.x constructor: non-payable; owner = msg.sender (slot 0, Ownable._owner);
+   *  decode the single appended `impl` address arg; require(isContract(impl)); store impl at slot 1; emit
+   *  Upgraded(indexed impl); copy out + return the runtime. */
+  private emitBeaconCreation(contract: ContractIR): string {
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    const lines: string[] = [];
+    // non-payable constructor (OZ UpgradeableBeacon's is non-payable).
+    lines.push('if callvalue() { revert(0, 0) }');
+    // owner = msg.sender at slot 0 (OZ Ownable constructor: _transferOwnership(initialOwner=msg.sender)).
+    lines.push('sstore(0, caller())');
+    // decode the single appended `impl` address arg (one ABI head word at code offset datasize("C")).
+    lines.push(`let _argsLen := sub(codesize(), datasize("${contract.name}"))`);
+    lines.push('if lt(_argsLen, 0x20) { revert(0, 0) }');
+    lines.push('mstore(0x40, 0x80) // init free memory pointer');
+    lines.push(`codecopy(0x80, datasize("${contract.name}"), 0x20)`);
+    // a dirty high-96-bit word reverts empty (solc's address ABI decode of the ctor arg).
+    lines.push('if shr(160, mload(0x80)) { revert(0, 0) }');
+    lines.push(`let _impl := and(mload(0x80), ${MASK})`);
+    // require(isContract(impl)) -> a clean empty revert on a non-contract (degenerate failure path).
+    lines.push('if iszero(extcodesize(_impl)) { revert(0, 0) }');
+    lines.push('sstore(1, _impl)');
+    // emit Upgraded(address indexed implementation): an indexed-only event, log2 over no data.
+    lines.push(`log2(0, 0, ${UPGRADED_TOPIC}, _impl)`);
+    lines.push(`datacopy(0, dataoffset("${contract.name}_runtime"), datasize("${contract.name}_runtime"))`);
+    lines.push(`return(0, datasize("${contract.name}_runtime"))`);
+    return lines.join('\n');
+  }
+
   // ---- runtime / dispatcher ------------------------------------------------
 
   private emitRuntime(contract: ContractIR): string {
@@ -375,6 +421,27 @@ ${indent(runtime, 6)}
         for (const l of this.emitTransparentAdminUpgrade()) lines.push('  ' + l);
         lines.push('  return(0, 0)');
         lines.push('}');
+      } else if (contract.proxyVariant === 'beacon') {
+        // Phase 2d (beacon proxy, byte-identical to OZ BeaconProxy 5.x): the impl is NOT a fixed slot. On
+        // EVERY call, read the beacon from the EIP-1967 BEACON slot, STATICCALL beacon.implementation()
+        // (selector 0x5c60da1b) for the CURRENT impl, then the standard delegate tail. A failed staticcall
+        // or a short return reverts (the beacon must be a live contract returning an address). This is the
+        // upgrade-all-at-once property: the proxy holds no impl of its own, the beacon dictates it.
+        lines.push(`let _beacon := and(sload(${EIP1967_BEACON_SLOT}), 0xffffffffffffffffffffffffffffffffffffffff)`);
+        // implementation() takes no args: store the 4-byte selector left-aligned in word 0, staticcall it.
+        lines.push(`mstore(0, ${IMPLEMENTATION_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+        lines.push('let _sok := staticcall(gas(), _beacon, 0, 4, 0, 0x20)');
+        // a failed staticcall or a return shorter than a word -> revert (degenerate; the success path bytes
+        // are what we byte-match; OZ's BeaconProxy bubbles the staticcall failure / decodes a 32-byte word).
+        lines.push('if or(iszero(_sok), lt(returndatasize(), 0x20)) { revert(0, 0) }');
+        lines.push('let _impl := and(mload(0), 0xffffffffffffffffffffffffffffffffffffffff)');
+        lines.push('calldatacopy(0, 0, calldatasize())');
+        lines.push('let _ok := delegatecall(gas(), _impl, 0, calldatasize(), 0, 0)');
+        lines.push('returndatacopy(0, 0, returndatasize())');
+        lines.push('switch _ok');
+        lines.push('case 0 { revert(0, returndatasize()) }');
+        lines.push('default { return(0, returndatasize()) }');
+        return lines.join('\n');
       } else if (external.length > 0) {
         // Phase 2a (plain proxy): dispatch the proxy's OWN @external functions (e.g. the user's admin-gated
         // upgrade entry) with an EMPTY default, then fall through to the delegate fallback below.
@@ -532,6 +599,12 @@ ${indent(runtime, 6)}
     // proxiableUUID is view -> guard). Emit the dedicated body and return.
     if (fn.uupsKind) {
       for (const l of this.emitUupsEntry(fn)) out.push(l);
+      return out;
+    }
+    // Phase 2d (BEACON): a synthesized @beacon entry has a hand-written body (the OZ UpgradeableBeacon 5.x
+    // surface). The callvalue guard above matches OZ (all three are non-payable: view getters + upgradeTo).
+    if (fn.beaconKind) {
+      for (const l of this.emitBeaconEntry(fn)) out.push(l);
       return out;
     }
 
@@ -1313,6 +1386,12 @@ ${indent(runtime, 6)}
         // delegatecall); they emit Yul statements directly, with no value to pop.
         if (s.expr.kind === 'proxyInit' || s.expr.kind === 'upgradeProxy') {
           this.lowerProxyMutate(s.expr, ctx, out);
+          break;
+        }
+        // Phase 2d: proxyInitBeacon is a void EIP-1967 BEACON-slot statement (sstore beacon + emit
+        // BeaconUpgraded + optional beacon-routed delegatecall); emits Yul directly, no value to pop.
+        if (s.expr.kind === 'proxyInitBeacon') {
+          this.lowerProxyInitBeacon(s.expr, ctx, out);
           break;
         }
         const v = this.lowerExpr(s.expr, ctx, out);
@@ -2251,6 +2330,9 @@ ${indent(runtime, 6)}
         // proxyImplementation()/proxyAdmin(): SLOAD the EIP-1967 impl/admin slot, masked to 160 bits
         // (the slot holds a right-aligned address; the high 96 bits are zero on a clean write).
         return `and(sload(${e.slot === 'admin' ? EIP1967_ADMIN_SLOT : EIP1967_IMPL_SLOT}), 0xffffffffffffffffffffffffffffffffffffffff)`;
+      case 'proxyBeaconRead':
+        // proxyBeacon(): SLOAD the EIP-1967 beacon slot, masked to 160 bits (a right-aligned address).
+        return `and(sload(${EIP1967_BEACON_SLOT}), 0xffffffffffffffffffffffffffffffffffffffff)`;
       case 'extCode':
         // <addr>.codehash -> a single bytes32 word (EXTCODEHASH). The bytes form (<addr>.code) is a
         // reference value, lowered via lowerDynamic (it reaches the throw list below if misused).
@@ -2426,6 +2508,7 @@ ${indent(runtime, 6)}
       case 'catchReason': // this.reason (string) inside a catch body (a reference value, lowered via lowerDynamic)
       case 'proxyInit': // void EIP-1967 statement: lowered in exprStmt via lowerProxyMutate (never a value)
       case 'upgradeProxy': // void EIP-1967 statement: lowered in exprStmt via lowerProxyMutate (never a value)
+      case 'proxyInitBeacon': // void EIP-1967 BEACON statement: lowered in exprStmt (never a value)
         // reference/aggregate values are not single 256-bit words; they are
         // consumed by the return/assign/length/index paths.
         throw new UnsupportedError(`reference value '${e.kind}' used in a non-reference context`);
@@ -6391,6 +6474,38 @@ ${indent(runtime, 6)}
     out.push(`}`);
   }
 
+  /** Phase 2d (beacon proxy): lower proxyInitBeacon(beacon, initData), byte-identical to the OZ BeaconProxy
+   *  5.x constructor (ERC1967Utils._setBeacon + the optional init delegatecall): require(isContract(beacon))
+   *  -> sstore the EIP-1967 BEACON slot -> emit BeaconUpgraded(indexed beacon) -> if initData.length>0,
+   *  STATICCALL beacon.implementation() (0x5c60da1b) for the current impl (revert on a failed/short
+   *  staticcall), then delegatecall(impl, initData) and BUBBLE the revert verbatim. */
+  private lowerProxyInitBeacon(e: Expr & { kind: 'proxyInitBeacon' }, ctx: LowerCtx, out: string[]): void {
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    const beacon = this.fresh();
+    out.push(`let ${beacon} := and(${this.lowerExpr(e.beacon, ctx, out)}, ${MASK})`);
+    // require(isContract(beacon)) -> a clean empty revert on a non-contract (degenerate failure path).
+    out.push(`if iszero(extcodesize(${beacon})) { revert(0, 0) }`);
+    out.push(`sstore(${EIP1967_BEACON_SLOT}, ${beacon})`);
+    // emit BeaconUpgraded(address indexed beacon): an indexed-only event, log2 over no data.
+    out.push(`log2(0, 0, ${BEACON_UPGRADED_TOPIC}, ${beacon})`);
+    // if initData.length>0: fetch the current impl via the beacon's implementation() staticcall, then run
+    // initData against it by delegatecall and bubble the callee's revert verbatim. Materialize the data
+    // FIRST (at the free ptr), then use scratch word 0 for the staticcall (the data is untouched at the ptr).
+    const { mp, len } = this.toMemory(this.lowerDynamic(e.initData, ctx, out), out);
+    out.push(`if gt(${len}, 0) {`);
+    out.push(`  mstore(0, ${IMPLEMENTATION_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+    const sok = this.fresh();
+    out.push(`  let ${sok} := staticcall(gas(), ${beacon}, 0, 4, 0, 0x20)`);
+    out.push(`  if or(iszero(${sok}), lt(returndatasize(), 0x20)) { revert(0, 0) }`);
+    const impl = this.fresh();
+    out.push(`  let ${impl} := and(mload(0), ${MASK})`);
+    const ok = this.fresh();
+    out.push(`  let ${ok} := delegatecall(gas(), ${impl}, add(${mp}, 0x20), ${len}, 0, 0)`);
+    out.push(`  returndatacopy(0, 0, returndatasize())`);
+    out.push(`  if iszero(${ok}) { revert(0, returndatasize()) }`);
+    out.push(`}`);
+  }
+
   /** Phase 2b transparent proxy: the admin-branch upgradeToAndCall(address,bytes) handler. Decodes
    *  (newImpl, data) from calldata[4:] and runs the EIP-1967 upgrade sequence shared with upgradeProxy /
    *  ERC1967Utils.upgradeToAndCall: require(isContract(newImpl)) -> sstore impl slot -> emit Upgraded ->
@@ -6483,6 +6598,47 @@ ${indent(runtime, 6)}
     out.push('  if iszero(_ok) { revert(0, returndatasize()) }');
     out.push('}');
     // the upgrade entry returns empty (OZ upgradeToAndCall returns void).
+    out.push('return(0, 0)');
+    return out;
+  }
+
+  /** Phase 2d (BEACON contract): emit the hand-written body of a synthesized `@beacon class` entry,
+   *  byte-identical to OZ UpgradeableBeacon 5.x. Storage: owner at slot 0 (Ownable._owner), implementation
+   *  at slot 1. Three kinds:
+   *   - owner()          : return the owner address (SLOAD slot 0, masked).
+   *   - implementation() : return the impl address (SLOAD slot 1, masked).
+   *   - upgradeTo(address newImpl): onlyOwner (revert OwnableUnauthorizedAccount(caller) on a non-owner);
+   *     require the address arg's high 96 bits are zero (solc ABI decode); require(isContract(newImpl));
+   *     sstore slot 1; emit Upgraded(indexed newImpl); return empty. */
+  private emitBeaconEntry(fn: FunctionIR): string[] {
+    const out: string[] = [];
+    const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
+    if (fn.beaconKind === 'owner') {
+      out.push(`mstore(0, and(sload(0), ${MASK}))`);
+      out.push('return(0, 0x20)');
+      return out;
+    }
+    if (fn.beaconKind === 'implementation') {
+      out.push(`mstore(0, and(sload(1), ${MASK}))`);
+      out.push('return(0, 0x20)');
+      return out;
+    }
+    // upgradeTo(address newImpl): onlyOwner -> isContract -> store slot 1 -> emit Upgraded -> return empty.
+    out.push('if lt(calldatasize(), 0x24) { revert(0, 0) }');
+    // onlyOwner: revert OwnableUnauthorizedAccount(msg.sender) when caller() != owner (slot 0).
+    out.push(`if iszero(eq(caller(), and(sload(0), ${MASK}))) {`);
+    out.push(`  mstore(0, ${OWNABLE_UNAUTHORIZED_SELECTOR}00000000000000000000000000000000000000000000000000000000)`);
+    out.push('  mstore(4, caller())');
+    out.push('  revert(0, 0x24)');
+    out.push('}');
+    // decode newImpl: a dirty high-96-bit word reverts empty (like solc's address ABI decode).
+    out.push('if shr(160, calldataload(4)) { revert(0, 0) }');
+    out.push(`let _newImpl := and(calldataload(4), ${MASK})`);
+    // require(isContract(newImpl)) -> a clean empty revert on a non-contract (degenerate failure path).
+    out.push('if iszero(extcodesize(_newImpl)) { revert(0, 0) }');
+    out.push('sstore(1, _newImpl)');
+    // emit Upgraded(address indexed implementation): an indexed-only event, log2 over no data.
+    out.push(`log2(0, 0, ${UPGRADED_TOPIC}, _newImpl)`);
     out.push('return(0, 0)');
     return out;
   }

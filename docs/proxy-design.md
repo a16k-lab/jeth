@@ -105,9 +105,32 @@ canonical DELEGATE FALLBACK `calldatacopy(0,0,calldatasize()); r:=delegatecall(g
   user-defined authorizeUpgrade(newImpl), writes the impl slot via upgradeProxy) + proxiableUUID() returning
   the impl slot (anti-brick). The proxy is the minimal foundation @proxy (delegate-only fallback). OZ
   ERC1967Proxy + UUPSUpgradeable.
-- **Beacon**: `@beacon class B` holds impl+owner+upgradeTo+implementation(); `@proxy('beacon')` stores the
-  beacon in the EIP-1967 beacon slot, the fallback staticcalls beacon.implementation() then delegatecalls.
-  OZ BeaconProxy + UpgradeableBeacon.
+- **Beacon (Phase 2d - DONE)**: TWO pieces, byte-identical (observable: returndata/storage/logs/revert) to
+  OZ BeaconProxy + UpgradeableBeacon 5.x (verified differentially in test/beacon-proxy.test.ts).
+  (1) `@proxy('beacon') class P { constructor(beacon: address, ...) { proxyInitBeacon(beacon, initData); } }` -
+  the beacon PROXY. Its synthesized fallback reads the EIP-1967 BEACON slot
+  (0xa3f0ad74e5423aebfd80d3ef4346578335a9a72aeaee59ff6cb3582b35133d50 = keccak256("eip1967.proxy.beacon")-1),
+  STATICCALLs beacon.implementation() (selector 0x5c60da1b) for the CURRENT impl on EVERY call (revert on a
+  failed/short staticcall), then the standard delegate tail (calldatacopy + delegatecall + returndatacopy +
+  switch). `proxyInitBeacon(beacon, initData)`: require(isContract(beacon)); sstore the BEACON slot; emit
+  BeaconUpgraded(address indexed beacon) (topic0 0x1cf3b03a...); if initData.length>0, fetch the impl via the
+  beacon staticcall then delegatecall(impl, initData) + bubble. `proxyBeacon(): address` reads the BEACON
+  slot. A beacon proxy exposes NO own functions (an @external method is rejected, JETH405). This is the
+  upgrade-all-at-once property: the proxy holds NO impl of its own; the beacon dictates the impl for ALL its
+  proxies at once.
+  (2) `@beacon class B { constructor(impl: address) {} }` - the UpgradeableBeacon. JETH GENERATES the whole
+  surface (the user writes only the empty-bodied ctor): a synthesized creation (owner = msg.sender at storage
+  slot 0 [OZ Ownable._owner], require(isContract(impl)), impl at slot 1, emit Upgraded(indexed impl)) plus
+  three @external entries - upgradeTo(address) (owner-gated; revert OwnableUnauthorizedAccount(caller)
+  [0x118cdaa7] on a non-owner; isContract; sstore slot 1; emit Upgraded(indexed)), implementation() (SLOAD
+  slot 1) and owner() (SLOAD slot 0). Gates: a @beacon may not declare @state/@constant/@immutable (JETH406),
+  a @receive/@fallback (JETH406), inheritance (JETH406), a clashing upgradeTo/implementation/owner (JETH408);
+  it MUST declare `constructor(impl: address) {}` with exactly one address param + an empty non-payable body
+  (JETH407). Decorators: `@proxy('beacon')` (extends the existing JETH400 variant set) + a new `@beacon` class
+  decorator (a deployable contract, like @proxy, needing no separate @contract). Diagnostics: JETH405 (beacon
+  proxy @external method), JETH406/407/408 (@beacon gates). NOTE: the DEPLOYED bytecode is JETH's own Yul, so
+  it differs from solc's optimizer output (true for every JETH-vs-solc contract); the byte-identity target is
+  the OBSERVABLE behaviour (returndata/storage/logs/revert), diffed word-for-word in the tests.
 
 ## JETH integration (Phase 2a)
 - analyzer: `@proxy` class decorator -> a ProxyIR flag; the proxy gets a synthesized delegate fallback (no

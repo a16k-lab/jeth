@@ -155,6 +155,14 @@ export type Expr =
   | { kind: 'upgradeProxy'; type: JethType; impl: Expr; data: Expr }
   // proxyImplementation() / proxyAdmin() -> address: SLOAD the EIP-1967 impl / admin slot. A storage read.
   | { kind: 'proxySlotRead'; type: JethType; slot: 'impl' | 'admin' }
+  // --- Phase 2d proxies: the BEACON proxy variant (byte-identical to OZ BeaconProxy 5.x) ---
+  // proxyInitBeacon(beacon, initData): the @proxy('beacon') constructor primitive. require(isContract(beacon));
+  // write the EIP-1967 BEACON slot; emit BeaconUpgraded(beacon); if initData.length>0 fetch the current impl
+  // via the beacon's implementation() staticcall, then delegatecall(impl, initData) and BUBBLE its revert.
+  // STATE-MUTATING.
+  | { kind: 'proxyInitBeacon'; type: JethType; beacon: Expr; initData: Expr }
+  // proxyBeacon() -> address: SLOAD the EIP-1967 beacon slot. A storage read (view-ok, pure-reject).
+  | { kind: 'proxyBeaconRead'; type: JethType }
   // --- Phase 6: external low-level calls ---
   // <addr>.code -> bytes (EXTCODESIZE + EXTCODECOPY); <addr>.codehash -> bytes32 (EXTCODEHASH)
   | { kind: 'extCode'; type: JethType; addr: Expr; member: 'code' | 'codehash' }
@@ -550,6 +558,13 @@ export interface FunctionIR {
   // Phase 2c (UUPS): for a uupsKind==='upgradeToAndCall' entry, the Yul userfn_<key> of the user-declared
   // `authorizeUpgrade(address)` gate, called with the decoded newImpl before the upgrade runs.
   authorizeKey?: string;
+  // Phase 2d (BEACON): a SYNTHESIZED entry of a `@beacon class` (the OZ UpgradeableBeacon 5.x surface).
+  // The body is NOT lowered from `body` (empty); yul.ts emits a dedicated hand-written body.
+  //  - 'upgradeTo'      : upgradeTo(address newImpl) - owner-gated; isContract(newImpl); store impl slot;
+  //                       emit Upgraded(indexed newImpl). (owner held in fixed storage slot 0.)
+  //  - 'implementation' : implementation() view returns address - SLOAD the impl slot (fixed slot 1).
+  //  - 'owner'          : owner() view returns address - SLOAD slot 0 (the OZ Ownable._owner layout).
+  beaconKind?: 'upgradeTo' | 'implementation' | 'owner';
 }
 
 /** A constructor (Phase 5): runs once in creation code. Not callable, not in the dispatcher;
@@ -594,11 +609,20 @@ export interface ContractIR {
   // calldata to the EIP-1967 impl slot) in the runtime fallback position. The proxy has no @state of its
   // own (storage belongs to the impl) and may NOT declare a user @receive/@fallback.
   isProxy?: boolean;
-  // Phase 2b: the proxy variant. undefined = the plain Phase-2a delegate-only proxy. 'transparent' =
+  // Phase 2b/2d: the proxy variant. undefined = the plain Phase-2a delegate-only proxy. 'transparent' =
   // `@proxy('transparent')`, an OZ TransparentUpgradeableProxy-equivalent: the synthesized fallback routes
   // by caller() - the admin may ONLY call upgradeToAndCall(address,bytes) (else revert ProxyDeniedAdminAccess),
   // a non-admin ALWAYS delegates to the impl (even an upgradeToAndCall selector - this defeats the clash).
-  proxyVariant?: 'transparent';
+  // 'beacon' = `@proxy('beacon')`, an OZ BeaconProxy-equivalent: the fallback reads the EIP-1967 BEACON slot,
+  // STATICCALLs beacon.implementation() (0x5c60da1b) for the CURRENT impl on EVERY call (revert if it fails),
+  // then the standard delegate tail. The proxy stores no impl slot of its own (it lives behind the beacon).
+  proxyVariant?: 'transparent' | 'beacon';
+  // Phase 2d: `@beacon class B` - the UpgradeableBeacon contract (byte-identical to OZ UpgradeableBeacon 5.x).
+  // JETH synthesizes the whole boilerplate: a constructor (owner = msg.sender at slot 0; impl arg
+  // isContract-checked + stored at slot 1; emit Upgraded(indexed impl)) and three @external entries -
+  // upgradeTo(address) (owner-gated upgrade + Upgraded event), implementation() and owner() (view getters).
+  // The user writes only `@beacon class B { constructor(impl: address) {} }`.
+  isBeacon?: boolean;
   // Phase 2c: `@uups @contract` - the IMPLEMENTATION opts into the UUPS upgrade surface (the proxy used
   // with it is the plain Phase-2a `@proxy`). JETH synthesizes two @external dispatcher entries:
   // upgradeToAndCall(address,bytes) (user authorizeUpgrade gate -> anti-brick proxiableUUID staticcall ->

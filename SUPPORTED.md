@@ -201,8 +201,19 @@ gate; the anti-brick `proxiableUUID()` staticcall on the new impl - a failed/sho
 `0xaa1d49a4`; then the EIP-1967 upgrade) and `proxiableUUID()` returning the impl slot. `@uups` without a
 `authorizeUpgrade` method is rejected (JETH402). Verified byte-identical (returndata + storage + `Upgraded`
 event + revert): the authorized upgrade-through-proxy round-trip, both anti-brick reverts, the auth gate, and
-state preservation. **Beacon** (`@beacon` + staticcall) and the **Diamond** (EIP-2535 multi-facet) are the
-remaining proxy phases - all delegatecall-only, no raw `delegatecall`/`CREATE` in user code.
+state preservation. The **Beacon** variant is supported, byte-identical to OZ `BeaconProxy` +
+`UpgradeableBeacon`: a `@beacon class B { constructor(impl: address) {} }` generates the beacon (owner =
+`msg.sender` at slot 0, implementation at slot 1, an owner-gated `upgradeTo(address)` that code-checks the
+new impl and emits `Upgraded(address indexed)`, plus `implementation()` / `owner()` getters; a non-owner
+caller reverts `OwnableUnauthorizedAccount(address)` `0x118cdaa7`), and a `@proxy('beacon') class P {
+constructor(beacon, initData) { proxyInitBeacon(beacon, ...); } }` is the beacon proxy: its fallback reads
+the EIP-1967 beacon slot, staticcalls `implementation()` (`0x5c60da1b`) on every call, then delegatecalls,
+so one `beacon.upgradeTo` swaps every proxy at once. A beacon proxy may not declare `@external` methods or
+`@state` (JETH405-408). Verified byte-identical (returndata + each proxy's own storage + the `Upgraded`
+topic/data + revert): per-call routing into each proxy's separate storage, the beacon slot, the
+`implementation()`/`owner()` getters, the owner gate, and an upgrade-all-at-once over two proxies on one
+beacon (both swap, independent state preserved). The **Diamond** (EIP-2535 multi-facet) is the remaining
+proxy phase - all delegatecall-only, no raw `delegatecall`/`CREATE` in user code.
 
 A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and

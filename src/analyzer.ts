@@ -709,7 +709,9 @@ export class Analyzer {
       // the deployed @contract for this file (it needs no separate @contract decorator).
       if (ts.isClassDeclaration(n)) {
         const decs = decoratorNames(n);
-        if (decs.includes('contract') || decs.includes('proxy')) out.push(n);
+        // Phase 2d: `@beacon class B` is a deployable contract too (the OZ UpgradeableBeacon-equivalent);
+        // like @proxy it needs no separate @contract decorator.
+        if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon')) out.push(n);
       }
       ts.forEachChild(n, visit);
     };
@@ -1386,6 +1388,12 @@ export class Analyzer {
     const isUups = decoratorNames(cls).includes('uups');
     if (isUups) this.synthesizeUups(cls, decoratorNames(cls).includes('proxy'), rawFns, functions);
 
+    // Phase 2d (BEACON): `@beacon class B` synthesizes the OZ UpgradeableBeacon 5.x surface - three
+    // @external entries (upgradeTo(address), implementation(), owner()) plus a hand-written creation
+    // (emitted in yul) - BEFORE the selector-clash check so a user-declared clash hits the normal path.
+    const isBeacon = decoratorNames(cls).includes('beacon');
+    if (isBeacon) this.synthesizeBeacon(cls, functions, layout.vars.length, !!receiveNode, !!fallbackNode);
+
     // Reject duplicate selectors (would make a dispatcher ambiguous). The CONTRACT dispatcher and each
     // external LIBRARY object have INDEPENDENT selector spaces (separate Yul objects), so a library
     // external function (its selector is the bare `f(...)`) is checked within its own library, never
@@ -1447,17 +1455,18 @@ export class Analyzer {
     // Phase 2b: a variant argument on `@proxy(...)`. `@proxy('transparent')` -> the OZ
     // TransparentUpgradeableProxy-equivalent (caller-routed fallback, synthesized below in yul). A bare
     // `@proxy` (or `@proxy()`) is the plain Phase-2a delegate-only proxy. Any other argument is rejected.
-    let proxyVariant: 'transparent' | undefined;
+    let proxyVariant: 'transparent' | 'beacon' | undefined;
     if (isProxy) {
       const call = decoratorCall(cls, 'proxy');
       if (call && call.arguments.length > 0) {
         if (call.arguments.length !== 1) {
-          this.diags.error(call, 'JETH400', "@proxy(...) takes at most one variant argument (a string literal, e.g. @proxy('transparent'))");
+          this.diags.error(call, 'JETH400', "@proxy(...) takes at most one variant argument (a string literal, e.g. @proxy('transparent') or @proxy('beacon'))");
         } else {
           const arg = call.arguments[0]!;
           const variant = ts.isStringLiteralLike(arg) ? arg.text : undefined;
           if (variant === 'transparent') proxyVariant = 'transparent';
-          else this.diags.error(arg, 'JETH400', `unknown @proxy variant ${ts.isStringLiteralLike(arg) ? `'${arg.text}'` : 'argument'} (only 'transparent' is supported; omit the argument for the plain delegate-only proxy)`);
+          else if (variant === 'beacon') proxyVariant = 'beacon';
+          else this.diags.error(arg, 'JETH400', `unknown @proxy variant ${ts.isStringLiteralLike(arg) ? `'${arg.text}'` : 'argument'} (only 'transparent' and 'beacon' are supported; omit the argument for the plain delegate-only proxy)`);
         }
       }
       if (receiveNode)
@@ -1473,6 +1482,16 @@ export class Analyzer {
         for (const f of functions) {
           if (f.visibility === 'external') {
             this.diags.error(cls, 'JETH401', `a @proxy('transparent') class may not declare an @external method ('${f.signature}'): every non-admin call delegates to the implementation and the admin may only call upgradeToAndCall (the upgrade entry is synthesized)`);
+          }
+        }
+      }
+      // Phase 2d: a beacon proxy is delegate-only (every call resolves the impl via the beacon and
+      // delegatecalls). It exposes NO own functions - the user writes only the constructor (proxyInitBeacon).
+      // An @external method would be unreachable behind the synthesized delegate fallback, so reject it.
+      if (proxyVariant === 'beacon') {
+        for (const f of functions) {
+          if (f.visibility === 'external') {
+            this.diags.error(cls, 'JETH405', `a @proxy('beacon') class may not declare an @external method ('${f.signature}'): every call resolves the implementation via the beacon and delegates to it (the user writes only the constructor with proxyInitBeacon)`);
           }
         }
       }
@@ -1511,6 +1530,7 @@ export class Analyzer {
       isProxy,
       proxyVariant,
       isUups: isUups || undefined,
+      isBeacon: isBeacon || undefined,
       libraries: libraries.length > 0 ? libraries : undefined,
     };
   }
@@ -1613,6 +1633,102 @@ export class Analyzer {
       selector: functionSelector(proxiableSig),
       body: [],
       uupsKind: 'proxiableUUID',
+    });
+  }
+
+  /** Phase 2d (BEACON): synthesize the OpenZeppelin UpgradeableBeacon 5.x surface for a `@beacon class B`.
+   *  JETH generates the ENTIRE boilerplate so the user writes only `@beacon class B { constructor(impl:
+   *  address) {} }`:
+   *   - a hand-written creation (emitted in yul): owner = msg.sender at storage slot 0 (OZ Ownable._owner
+   *     layout); require(isContract(impl)); store impl at slot 1; emit Upgraded(indexed impl).
+   *   - upgradeTo(address newImpl): owner-gated (revert OwnableUnauthorizedAccount on a non-owner caller);
+   *     require(isContract(newImpl)); store slot 1; emit Upgraded(indexed newImpl). -> void.
+   *   - implementation(): view returns address - SLOAD slot 1.
+   *   - owner(): view returns address - SLOAD slot 0.
+   *  Gates (each a distinct JETH40x, never a crash): @beacon may not declare @state/@constant/@immutable
+   *  (fixed slots 0/1 are reserved), a @receive/@fallback, inheritance, or a clashing upgradeTo/implementation/
+   *  owner; it MUST declare `constructor(impl: address) {}` (exactly one address param, empty body). The three
+   *  synthesized FunctionIRs are pushed into `functions` (ordinary dispatcher entries with a beaconKind). */
+  private synthesizeBeacon(
+    cls: ts.ClassDeclaration,
+    functions: FunctionIR[],
+    stateVarCount: number,
+    hasReceive: boolean,
+    hasFallback: boolean,
+  ): void {
+    // A beacon owns fixed storage slots 0 (owner) and 1 (implementation); user state would collide.
+    if (stateVarCount > 0)
+      this.diags.error(cls, 'JETH406', 'a @beacon class may not declare @state/@constant/@immutable (the owner and implementation live in reserved storage slots 0 and 1; the whole UpgradeableBeacon surface is synthesized)');
+    if (hasReceive || hasFallback)
+      this.diags.error(cls, 'JETH406', 'a @beacon class may not declare a @receive/@fallback entry (the UpgradeableBeacon surface is fully synthesized)');
+    if (heritageBases(cls).length > 0)
+      this.diags.error(cls, 'JETH406', 'a @beacon class may not extend another contract (the UpgradeableBeacon surface is fully synthesized)');
+    // The user MUST declare `constructor(impl: address) {}` - exactly one address param, an EMPTY body
+    // (JETH synthesizes the owner/impl init in creation). The single param defines the appended ctor arg.
+    const ctorNode = this.ctorChain[0]?.node;
+    if (!ctorNode) {
+      this.diags.error(cls, 'JETH407', "a @beacon class must declare 'constructor(impl: address) {}' (the implementation the beacon initially points at; the body must be empty)");
+    } else {
+      const ps = ctorNode.parameters;
+      const ok =
+        ps.length === 1 &&
+        ts.isIdentifier(ps[0]!.name) &&
+        (resolveType(ps[0]!.type, this.diags, this.structsByName)?.kind === 'address');
+      if (!ok)
+        this.diags.error(ctorNode, 'JETH407', "a @beacon constructor must take exactly one parameter 'impl: address'");
+      const bodyStmts = ctorNode.body?.statements ?? ts.factory.createNodeArray();
+      if (bodyStmts.length > 0)
+        this.diags.error(ctorNode, 'JETH407', 'a @beacon constructor body must be empty (the owner/implementation initialization is synthesized)');
+      if (ctorDecoratorNames(ctorNode).includes('payable'))
+        this.diags.error(ctorNode, 'JETH407', 'a @beacon constructor may not be @payable (the UpgradeableBeacon constructor is non-payable, matching OZ)');
+    }
+    // Reject a user-declared upgradeTo/implementation/owner (clash with the synthesized entries). The
+    // generic JETH044 would also catch it, but this is more precise.
+    for (const name of ['upgradeTo', 'implementation', 'owner']) {
+      if ((this.candidatesByName.get(name) ?? []).length > 0) {
+        this.diags.error(cls, 'JETH408', `a @beacon class may not declare '${name}' (the ${name}(...) entry is synthesized by @beacon)`);
+        return;
+      }
+    }
+    // Push the three @external entries (hand-written bodies emitted in yul via beaconKind).
+    const upgradeSig = functionSignature('upgradeTo', [ADDRESS]);
+    functions.push({
+      name: 'upgradeTo',
+      key: 'upgradeTo',
+      visibility: 'external',
+      mutability: 'nonpayable',
+      params: [{ name: 'newImplementation', type: ADDRESS }],
+      returnType: VOID,
+      signature: upgradeSig,
+      selector: functionSelector(upgradeSig),
+      body: [],
+      beaconKind: 'upgradeTo',
+    });
+    const implSig = functionSignature('implementation', []);
+    functions.push({
+      name: 'implementation',
+      key: 'implementation',
+      visibility: 'external',
+      mutability: 'view',
+      params: [],
+      returnType: ADDRESS,
+      signature: implSig,
+      selector: functionSelector(implSig),
+      body: [],
+      beaconKind: 'implementation',
+    });
+    const ownerSig = functionSignature('owner', []);
+    functions.push({
+      name: 'owner',
+      key: 'owner',
+      visibility: 'external',
+      mutability: 'view',
+      params: [],
+      returnType: ADDRESS,
+      signature: ownerSig,
+      selector: functionSelector(ownerSig),
+      body: [],
+      beaconKind: 'owner',
     });
   }
 
@@ -10226,6 +10342,30 @@ export class Analyzer {
       return { kind: 'proxySlotRead', type: ADDRESS, slot: callee === 'proxyAdmin' ? 'admin' : 'impl' };
     }
 
+    // Phase 2d (beacon proxy): proxyBeacon() -> address: SLOAD the EIP-1967 beacon slot. A storage read.
+    if (callee === 'proxyBeacon') {
+      if (node.arguments.length !== 0) {
+        this.diags.error(node, 'JETH170', `${callee}() takes no arguments`);
+        return undefined;
+      }
+      this.currentReadsEnv = true; // SLOAD of the fixed beacon slot: a state read -> forbidden in @pure
+      return { kind: 'proxyBeaconRead', type: ADDRESS };
+    }
+
+    // Phase 2d (beacon proxy): proxyInitBeacon(beacon, initData): the @proxy('beacon') constructor primitive.
+    if (callee === 'proxyInitBeacon') {
+      if (node.arguments.length !== 2) {
+        this.diags.error(node, 'JETH170', 'proxyInitBeacon(...) takes exactly 2 arguments (beacon, initData)');
+        return undefined;
+      }
+      const beacon = addrArg(0, 'beacon');
+      if (!beacon) return undefined;
+      const initData = bytesArg(1, 'initData');
+      if (!initData) return undefined;
+      this.currentWritesState = true; // SSTORE beacon slot + emit + (optional) delegatecall -> reject @view/@pure
+      return { kind: 'proxyInitBeacon', type: VOID, beacon, initData };
+    }
+
     if (callee === 'upgradeProxy') {
       if (node.arguments.length !== 2) {
         this.diags.error(node, 'JETH170', 'upgradeProxy(...) takes exactly 2 arguments (newImpl, data)');
@@ -12051,7 +12191,9 @@ export class Analyzer {
         callee === 'proxyInit' ||
         callee === 'upgradeProxy' ||
         callee === 'proxyImplementation' ||
-        callee === 'proxyAdmin'
+        callee === 'proxyAdmin' ||
+        callee === 'proxyInitBeacon' ||
+        callee === 'proxyBeacon'
       ) {
         return this.checkProxyBuiltin(node, callee);
       }
