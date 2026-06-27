@@ -4829,6 +4829,20 @@ export class Analyzer {
           return;
         }
       }
+      // A same-name collision between an @using attached fn and a BUILT-IN member of the SAME
+      // receiver type is ambiguous in solc (rejected). Check BEFORE the built-in handlers (push/pop)
+      // so the built-in cannot silently win. A lib fn attached to a DIFFERENT type is not a collision.
+      if (
+        ts.isCallExpression(e) &&
+        ts.isPropertyAccessExpression(e.expression) &&
+        this.libraryAttachments.size > 0 &&
+        !(e.expression.expression.kind === ts.SyntaxKind.ThisKeyword) &&
+        !(e.expression.expression.kind === ts.SyntaxKind.SuperKeyword)
+      ) {
+        const recvType = this.trialExprType(e.expression.expression);
+        if (recvType && this.attachedBuiltinCollision(e, e.expression.expression, recvType, e.expression.name.text))
+          return;
+      }
       // array mutators: a.push(x) / a.pop()
       if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression)) {
         const method = e.expression.name.text;
@@ -5400,6 +5414,27 @@ export class Analyzer {
       args.push(a);
     }
     return { kind: 'structNew', type: st, fields: st.fields, args };
+  }
+
+  /** Build the zero/default-value Expr for a STATIC type, used to lower a struct/aggregate memory
+   *  local declared without an initializer (`let p: P;`), which solc zero-initializes. A value type
+   *  defaults to 0 (bool -> false; enum -> member 0; address/bytesN -> all-zero); a nested static
+   *  struct -> an inline `structNew` of its own field defaults; a static fixed-array -> an `arrayLit`
+   *  of N element defaults. These are exactly the verified encoders the explicit-constructor path
+   *  uses, so the result is byte-identical to solc's `P memory p;`. Caller must pass a STATIC type. */
+  private defaultStaticValue(t: JethType): Expr {
+    if (t.kind === 'bool') return { kind: 'literalBool', type: t, value: false };
+    if (isStaticValueType(t)) return { kind: 'literalInt', type: t, value: 0n };
+    if (t.kind === 'struct') {
+      const args = t.fields.map((f) => this.defaultStaticValue(f.type));
+      return { kind: 'structNew', type: t, fields: t.fields, args };
+    }
+    // a static fixed-array (length defined, static element)
+    const elem = (t as JethType & { kind: 'array' }).element;
+    const len = (t as JethType & { kind: 'array' }).length!;
+    const elements: Expr[] = [];
+    for (let i = 0; i < len; i++) elements.push(this.defaultStaticValue(elem));
+    return { kind: 'arrayLit', type: t, elem, elements };
   }
 
   // Object-literal / spread struct construction: `{ ...base, x: v }` (immutable update) or a
@@ -6982,6 +7017,18 @@ export class Analyzer {
       return;
     }
     if (!declared) return;
+    // A local whose type IS or CONTAINS a mapping is rejected (matches solc: "Uninitialized
+    // mapping. Mappings cannot be created dynamically, you have to assign them from a state
+    // variable."). Mappings are storage-only; a `let m: mapping<K,V>;` was previously inert
+    // (no codegen) but is an over-acceptance. Reuse the same predicate as the ctor JETH247 gate.
+    if (this.typeHasMapping(declared)) {
+      this.diags.error(
+        decl,
+        'JETH340',
+        `a ${displayName(declared)} cannot be a local variable - mappings are storage-only and cannot be created in memory`,
+      );
+      return;
+    }
     // G9: a STATIC struct MEMORY local (let p: P = P(...)). The register holds a pointer to
     // an ABI-unpacked memory image (one word per leaf). It must be initialized from a
     // constructor P(...) or aliased from another memory struct (memAggregate); copies from a
@@ -7070,11 +7117,18 @@ export class Analyzer {
         return;
       }
       if (!decl.initializer) {
-        this.diags.error(
-          decl,
-          'JETH200',
-          `a struct memory local must be initialized (e.g. let p: ${displayName(declared)} = ${(declared as JethType & { kind: 'struct' }).name}(...))`,
-        );
+        // A STATIC struct memory local declared without an initializer (`let p: P;`) is
+        // zero-initialized by solc. Lower it to a default-value constructor (the verified
+        // structNew encoder over each field's zero default), which is byte-identical to
+        // solc's `P memory p;`. (Dynamic-field structs returned above; they never reach here.)
+        if (this.inCurrentScope(decl.name.text)) {
+          this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
+          return;
+        }
+        const init = this.defaultStaticValue(declared);
+        this.declareLocal(decl.name.text, declared);
+        this.memAggregateLocals.set(decl.name.text, declared);
+        out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init });
         return;
       }
       const e = this.checkExpr(decl.initializer, declared);
@@ -7727,6 +7781,40 @@ export class Analyzer {
     return r?.type;
   }
 
+  /** `<funcref>.selector` -> the 4-byte ABI selector of an EXTERNAL/PUBLIC function `fnName`, as a
+   *  compile-time bytes4 literal (the selector left-aligned in the high 4 bytes, identical to
+   *  abi.encodeWithSelector's literal). Returns undefined after a diagnostic when `fnName` names a
+   *  function that is internal/private or has multiple overloads (an ambiguous selector); returns
+   *  undefined with NO diagnostic when `fnName` is not a known function (caller falls through). */
+  private functionSelectorOf(node: ts.Node, fnName: string): Expr | undefined {
+    const overloads = this.candidatesByName.get(fnName);
+    if (!overloads || overloads.length === 0) return undefined; // not a function name: caller falls through
+    const exposed = overloads.filter((f) => f.visibility === 'external' || f.visibility === 'public');
+    if (exposed.length === 0) {
+      this.diags.error(
+        node,
+        'JETH074',
+        `.selector requires an external or public function ('${fnName}' is internal/private and has no ABI selector)`,
+      );
+      return undefined;
+    }
+    if (exposed.length > 1) {
+      this.diags.error(
+        node,
+        'JETH074',
+        `.selector on overloaded function '${fnName}' is ambiguous (it has ${exposed.length} external/public overloads)`,
+      );
+      return undefined;
+    }
+    const f = exposed[0]!;
+    const sig = functionSignature(
+      f.name,
+      f.params.map((p) => p.type),
+    );
+    const selector = functionSelector(sig);
+    return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + selector) << 224n };
+  }
+
   /** Resolve a qualified library call `L.f(args)` (the receiver is NOT prepended). `node.arguments`
    *  is the full positional/named argument list, so this delegates to the SAME internal-call path
    *  via a forced callee resolved against L's overload set - making it byte-identical to a contract
@@ -7755,6 +7843,58 @@ export class Analyzer {
    *  call Expr (byte-identical to the internal call `L.f(x, ...args)`), 'no-match' if no attached
    *  function fits (so the caller falls through to non-library member handling), or undefined after a
    *  diagnostic (an ambiguous attachment). */
+  /** Names of the BUILT-IN members of the receiver type `t` that a call `x.f(...)` could dispatch to.
+   *  Used to detect a same-name collision with an `@using(L)` attached function: solc makes the member
+   *  access AMBIGUOUS in that case ("Member \"f\" not unique after argument-dependent lookup ...") and
+   *  rejects, where JETH would otherwise silently let the built-in win. Mirrors solc's member sets for
+   *  the types `@using` can attach to (arrays, bytes/string, address). A lib fn attached to a DIFFERENT
+   *  type than the receiver is not a collision (this set is per-receiver-type). */
+  private builtinMemberOfReceiver(t: JethType, fnName: string): boolean {
+    if (t.kind === 'array') {
+      // every array (fixed or dynamic) has the built-in `.length`; a dynamic array also has push/pop.
+      // (Verified vs solc 0.8.35: a same-name @using fn on uint256[]/uint256[N]/uint256[] storage is
+      // "Member ... not unique after argument-dependent lookup".)
+      return fnName === 'length' || (t.length === undefined && (fnName === 'push' || fnName === 'pop'));
+    }
+    if (t.kind === 'address') {
+      // address built-in MEMBERS that solc treats as a collision: balance/code/codehash. NOT call/
+      // staticcall/transfer/send - solc 0.8.35 ACCEPTS a same-name @using fn for those on a plain
+      // `address` receiver (the library function wins; no ambiguity), so they are not gated here.
+      return fnName === 'balance' || fnName === 'code' || fnName === 'codehash';
+    }
+    // bytes/string: `.length` only. `.concat`/`.slice` are JETH SURFACE sugar (solc has no such member;
+    // `data[start:end]` is the calldata-slice OPERATOR), so an attached `slice`/`concat` is NOT a solc
+    // collision (verified: solc resolves `data.slice(...)` to the attached library function).
+    if (isBytesLike(t)) return fnName === 'length';
+    return false;
+  }
+
+  /** Detect an `@using(L)` attached-function name that collides with a BUILT-IN member of the SAME
+   *  receiver type (e.g. a lib `length(u256[])` vs the built-in `.length`). solc rejects the member
+   *  access as ambiguous; JETH otherwise lets the built-in silently win. Fires only when an applicable
+   *  attachment exists AND the name is a built-in of the receiver type; emits JETH341 and returns true
+   *  (handled). Checked at the dispatch sites BEFORE the built-in handlers so the built-in cannot win. */
+  private attachedBuiltinCollision(
+    node: ts.CallExpression | ts.PropertyAccessExpression,
+    receiver: ts.Expression,
+    recvType: JethType,
+    fnName: string,
+  ): boolean {
+    if (!this.builtinMemberOfReceiver(recvType, fnName)) return false;
+    const list = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
+    if (!list || list.length === 0) return false;
+    // a PROPERTY member access (`a.length`, `addr.balance`) has only the receiver as its argument; a
+    // CALL (`a.length()`) appends its args. solc rejects BOTH forms when the name collides.
+    const argExprs = ts.isCallExpression(node) ? [receiver, ...node.arguments] : [receiver];
+    if (!list.some((c) => this.libraryArgsApplicable(argExprs, c))) return false;
+    this.diags.error(
+      node,
+      'JETH341',
+      `member '.${fnName}' on ${displayName(recvType)} is ambiguous: it is both a built-in member and an @using attached library function (solc rejects this collision; rename the library function or call it qualified as L.${fnName}(${receiver.getText()}, ...))`,
+    );
+    return true;
+  }
+
   private resolveAttachedLibraryCall(
     node: ts.CallExpression,
     receiver: ts.Expression,
@@ -11331,6 +11471,27 @@ export class Analyzer {
       return this.checkAssignmentExpr(node);
     }
 
+    // A same-name collision between an @using attached fn and a BUILT-IN member of the SAME receiver
+    // type (e.g. lib length(u256[]) vs built-in .length) is ambiguous in solc (rejected). Check
+    // BEFORE the built-in member resolvers (.length / .balance / .code / .concat / .slice / external
+    // call) so the built-in cannot silently win. A lib fn attached to a DIFFERENT type is not a
+    // collision (attachedBuiltinCollision keys on the receiver type).
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      this.libraryAttachments.size > 0 &&
+      !(node.expression.expression.kind === ts.SyntaxKind.ThisKeyword) &&
+      !(node.expression.expression.kind === ts.SyntaxKind.SuperKeyword)
+    ) {
+      const recvType = this.trialExprType(node.expression.expression);
+      if (
+        recvType &&
+        this.attachedBuiltinCollision(node, node.expression.expression, recvType, node.expression.name.text)
+      ) {
+        return undefined;
+      }
+    }
+
     // type(T).max / type(T).min -> a compile-time integer constant (Solidity-identical).
     if (
       ts.isPropertyAccessExpression(node) &&
@@ -11366,6 +11527,29 @@ export class Analyzer {
             ? (1n << BigInt(bits - 1)) - 1n
             : -(1n << BigInt(bits - 1));
       return { kind: 'literalInt', type: t, value };
+    }
+
+    // function `.selector` -> the 4-byte ABI selector, a compile-time bytes4 constant (left-aligned in
+    // the high 4 bytes, exactly like abi.encodeWithSelector's literal). solc allows it on an EXTERNAL/
+    // PUBLIC function reference (`this.f.selector`, or a bare `f.selector`); an internal/private function
+    // has no ABI selector. Scoped to an unambiguous (non-overloaded) function name.
+    if (ts.isPropertyAccessExpression(node) && node.name.text === 'selector') {
+      let fnName: string | undefined;
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
+      ) {
+        fnName = node.expression.name.text; // this.f.selector
+      } else if (ts.isIdentifier(node.expression) && !this.isVisibleLocal(node.expression.text)) {
+        fnName = node.expression.text; // bare f.selector (not shadowed by a local)
+      }
+      if (fnName !== undefined) {
+        const sel = this.functionSelectorOf(node, fnName);
+        if (sel) return sel;
+        // fnName matched a function name but was ambiguous/internal: a diagnostic was emitted.
+        if (this.candidatesByName.has(fnName)) return undefined;
+        // not a function name at all: fall through to the normal property-access handling/error.
+      }
     }
 
     // enum member access `Color.Red` -> a compile-time uint8 constant of the enum type with the
@@ -11574,6 +11758,10 @@ export class Analyzer {
       node.expression.kind !== ts.SyntaxKind.ThisKeyword
     ) {
       const bt = this.baseDynType(node.expression);
+      // an @using lib fn named `length` attached to the receiver's array/bytes type collides with the
+      // built-in `.length` (solc: "Member length not unique after argument-dependent lookup"). Reject
+      // the PROPERTY form too - the call form `a.length()` is already gated at the attached-call dispatch.
+      if (bt && this.attachedBuiltinCollision(node, node.expression, bt, 'length')) return undefined;
       // a fixed array's length is a compile-time constant (state or calldata param)
       if (bt && bt.kind === 'array' && bt.length !== undefined) {
         return { kind: 'literalInt', type: U256, value: BigInt(bt.length) };
@@ -11744,6 +11932,44 @@ export class Analyzer {
         };
       }
       return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+    }
+    // `this.mk(a).x` / `mk(a).x`: member access whose BASE is a struct-returning internal call.
+    // solc materializes the call result to a memory struct and reads the field. We do the same: a
+    // struct-returning `call` Expr lowers to its pointer-headed memory image, then mload at the
+    // field's word offset (aggFieldRead). Scoped to a STATIC struct return with a VALUE final field
+    // (a nested struct / non-value field is the existing memory-struct-field gate, left deferred).
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isCallExpression(node.expression) &&
+      !this.memChainRoot(node) &&
+      node.expression.expression.kind !== ts.SyntaxKind.SuperKeyword
+    ) {
+      // Peek the base call's type (rolled back) before committing, so a non-struct call falls through
+      // to the normal resolvers without a duplicate diagnostic or leaked effect flags.
+      const bt = this.trialExprType(node.expression);
+      if (bt && bt.kind === 'struct' && isStaticType(bt)) {
+        const base = this.checkExpr(node.expression);
+        if (!base) return undefined;
+        if (base.kind !== 'call') {
+          // a struct VALUE that is not a fresh internal-call result (alias/storage source) reached
+          // here is unexpected; fall through to the normal handlers rather than mishandle it.
+        } else {
+          const fo = this.memFieldOffset(bt, node.name.text);
+          if (!fo) {
+            this.diags.error(node, 'JETH210', `struct '${bt.name}' has no field '${node.name.text}'`);
+            return undefined;
+          }
+          if (!isStaticValueType(fo.type)) {
+            this.diags.error(
+              node,
+              'JETH245',
+              `reading a ${displayName(fo.type)} field of a struct-returning call result is not supported yet (bind the call to a local first)`,
+            );
+            return undefined;
+          }
+          return { kind: 'aggFieldRead', type: fo.type, base, wordOffset: fo.wordOffset };
+        }
+      }
     }
     // G9: `p.x` / `p.inner.x` / `p.inner` read where the chain is rooted at a memory-aggregate
     // (struct) local. A VALUE final field -> a memory load (memField); a whole nested STRUCT
@@ -12059,6 +12285,7 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) && node.name.text === 'balance') {
       const base = this.checkExpr(node.expression);
       if (base && base.type.kind === 'address') {
+        if (this.attachedBuiltinCollision(node, node.expression, base.type, 'balance')) return undefined;
         this.currentReadsEnv = true; // forbidden in @pure
         return { kind: 'balance', type: U256, addr: base };
       }
@@ -12069,6 +12296,7 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) && (node.name.text === 'code' || node.name.text === 'codehash')) {
       const base = this.checkExpr(node.expression);
       if (base && base.type.kind === 'address') {
+        if (this.attachedBuiltinCollision(node, node.expression, base.type, node.name.text)) return undefined;
         this.currentReadsEnv = true; // forbidden in @pure
         const member = node.name.text as 'code' | 'codehash';
         return {

@@ -94,6 +94,11 @@ hashing (`keccak256(abi.encode...)`), returning, and storing the result, incl. m
 ints, dynamic args, nesting, and empty. Arrays/structs as args, and `abi.encodeWithSelector/Signature`,
 remain a later step.
 
+A function's `.selector` is supported: `this.f.selector` / `f.selector` on an EXTERNAL or PUBLIC,
+non-overloaded function -> the compile-time `bytes4` selector (`functionSelector(signature)`,
+left-aligned in the high 4 bytes), byte-identical to solc's `f.selector`. An internal/private function
+(no ABI selector) or an overloaded name is rejected (`JETH074`).
+
 `sha256(bytes)` -> `bytes32` and `ripemd160(bytes)` -> `bytes20` (precompiles 0x02/0x03) are
 supported and byte-identical to solc (incl. empty/short/long). `keccak256`/`sha256`/`ripemd160` take a
 single dynamic `bytes` (a `string`/`bytesN` is rejected, matching solc; hash a string via
@@ -149,8 +154,13 @@ method `x.add(1n)` (which desugars to `L.add(x, 1n)` when `x`'s type matches the
 `using L for T` does not parse in the TS subset, hence the decorator). Library functions are emitted as
 ordinary internal functions (no separate deployment, no delegatecall, no linking - exactly solc's internal
 library model), so qualified/attached calls, overloads, library-calls-library, struct/array/string params,
-and state writes/events through an attached call are all byte-identical. A built-in method of the receiver
-type wins over an attached library method (matching solc). Rejected (clean): a library with `@state` /
+and state writes/events through an attached call are all byte-identical. When an attached library function
+name collides with a genuine BUILT-IN member of the same receiver type (`.length` on any array, `push`/`pop`
+on a dynamic array, `.balance`/`.code`/`.codehash` on `address`), the member access is AMBIGUOUS and is
+REJECTED `JETH341` (matching solc's "Member ... not unique after argument-dependent lookup"); rename the
+library function or call it qualified `L.f(x, ...)`. A library function attached to a DIFFERENT type than the
+receiver, or whose name is not a built-in member of the receiver type, is not a collision and resolves to the
+attached function (no-collision attached calls still work). Rejected (clean): a library with `@state` /
 constructor, `L.unknownMember`, and an ambiguous attachment.
 
 External (delegatecall) library functions (Phase B) are also supported, byte-identical to solc's public/
@@ -636,10 +646,22 @@ and is never miscompiled.
   `this.recs[i]`), a calldata struct parameter (`let d: D = x`, decoded + validated into a fresh image),
   or ALIASED from another struct local (`let e: D = d`, a Solidity memory reference); and a `bytes`/
   `string` field may be WRITTEN (`d.s = x`, re-pointing the head word at a fresh blob). A NESTED-STRUCT
-  field works fully in a struct memory local (construct + deep read). Still gated: a struct memory local
-  with a DYNAMIC-array field (JETH200), and ELEMENT access into a FIXED-array field through the local
-  (`s.a[i]`, JETH900); a struct param to a PUBLIC/EXTERNAL callee via an internal call (an external/
-  message call, Phase 6); `new T[](n)` (use an array literal).
+  field works fully in a struct memory local (construct + deep read). A STATIC struct memory local may
+  also be declared WITHOUT an initializer (`let p: P;`): it is zero-initialized (every value field 0,
+  bool false, enum member 0, nested static struct + fixed array all-zero) exactly like solc's `P memory
+  p;`, then field-assigned (byte-identical, verified on returndata + raw storage). Member access whose
+  BASE is a struct-returning internal call is also supported (`this.mk(a).x` / `mk(a).x`): the call
+  result is materialized to a memory image and the VALUE field is read (byte-identical to solc). Still
+  gated: a struct memory local with a DYNAMIC-array field (JETH200), and ELEMENT access into a
+  FIXED-array field through the local (`s.a[i]`, JETH900); a NON-value field of a struct-returning call
+  result (`this.mk(a).inner`, JETH245 - bind the call to a local first); a struct param to a PUBLIC/
+  EXTERNAL callee via an internal call (an external/message call, Phase 6); `new T[](n)` (use an array
+  literal). DEFERRED (architectural, not yet supported): a memory struct local initialized FROM a
+  calldata struct-ARRAY element (`let p: P = ps[0n]` / `for (const p of ps)` over `ps: P[]` calldata -
+  the manual index loop works); NESTED / multi-dim memory-array locals (`u256[][]`, `Arr<Arr<T,N>,M>`,
+  `new Array<u256[][]>(n)`, JETH200); and AGGREGATE `abi.decode` targets (struct / struct-array /
+  `bytes[]`/`string[]` / nested, JETH322/JETH200 - JETH's pointer-headed dynamic-struct memory image is
+  not ABI-offset, so this needs a new decode codec).
 - Tuple destructuring works: `let [a, , c] = src` and `[a, , c] = src` where `src` is a multi-value
   internal call (`this.f()`) or a tuple literal (`[x, y]`, e.g. swap `[a, b] = [b, a]`); new locals,
   existing value lvalues incl. storage, or skipped components; value components only.

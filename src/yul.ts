@@ -2450,6 +2450,13 @@ ${indent(runtime, 6)}
         const ptr = this.ctxLookup(ctx, e.local);
         return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
       }
+      case 'aggFieldRead': {
+        // read a VALUE field of a struct-valued Expr base (e.g. this.mk(a).x): materialize the base
+        // to a memory pointer (a struct-returning call yields its pointer-headed image), then mload at
+        // the field's word offset. The image stores clean values (one ABI word per leaf), so no mask.
+        const ptr = this.aggToMemPtr(e.base, ctx, out);
+        return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
+      }
       case 'memElem': {
         // a[i] on a fixed-array memory local (value element): bounds-check then mload. A fixed-array
         // FIELD of a memory struct (p.a[i]) starts wordOffset words into the image.
