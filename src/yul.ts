@@ -4880,6 +4880,11 @@ ${indent(runtime, 6)}
     // abi.decode(b, D) into a dynamic-field struct: lowerAbiDecode routes the single struct component to
     // buildDynStructFromMemBlob, which builds the same pointer-headed image (memory-decode revert semantics).
     if (init.kind === 'abiDecode') return this.lowerAbiDecode(init.data, [init.type], ctx, out)[0]!;
+    // a DYNAMIC-field struct ELEMENT of a MEMORY struct array (let d: D = ds[i], ds: D[]): D[] is
+    // POINTER-HEADED, so aggToMemPtr returns the element slot's absolute pointer VALUE - binding d
+    // ALIASES the element image (no copy). Mutating d writes through to ds[i]; re-pointing ds[i] = D(...)
+    // rewrites the slot pointer and leaves d on the old image, byte-identical to solc memory references.
+    if (init.kind === 'arrayGet') return this.aggToMemPtr(init, ctx, out);
     // a storage struct source (structValue / mapStorageValue / structArrayElem / placeRead).
     return this.buildDynStructFromStorage(struct, this.structSrcSlot(init, ctx, out), ctx, out);
   }

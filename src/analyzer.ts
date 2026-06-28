@@ -7080,6 +7080,13 @@ export class Analyzer {
             // semantics). isSupportedDynStructLocal (the surrounding gate) restricts the field set.
             e.kind === 'abiDecode' ||
             e.kind === 'memDynStructValue' ||
+            // a DYNAMIC-field struct ELEMENT of a MEMORY struct array (let d: D = ds[i], ds: D[]):
+            // D[] is POINTER-HEADED (each slot holds an absolute pointer to a dyn-struct image), so
+            // binding d ALIASES the element (copies the pointer VALUE). This is byte-identical to solc:
+            // mutating d writes through to ds[i]; re-pointing ds[i] = D(...) leaves d on the old image.
+            // (A STATIC-struct array stays inline and is NOT reachable here - this block is gated by
+            // isSupportedDynStructLocal, i.e. declared is a dynamic-field struct.)
+            e.kind === 'arrayGet' ||
             e.kind === 'ternary' ||
             (e.kind === 'call' && e.type.kind === 'struct') ||
             (e.kind === 'placeRead' && e.type.kind === 'struct');
@@ -7317,11 +7324,17 @@ export class Analyzer {
       // Residual C2/C3: abi.decode(b, P[]) / abi.decode(b, bytes[]) / abi.decode(b, string[]) builds the
       // SAME image (C2 inline blocks via abiDecFromMem, C3 absolute-pointer-of-blobs via abiDecFromMemToImage),
       // with solc memory-decode revert semantics. A whole-array alias/copy is still a later step (JETH200).
-      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode') {
+      // EXCEPTION: an ELEMENT of a POINTER-HEADED nested array (let row: bytes[] = xs[i], xs: bytes[][])
+      // binds row by ALIASING the element (the inner array's absolute pointer stored in the outer slot).
+      // This is byte-identical to solc: mutating row writes through to xs[i]; re-pointing xs[i] leaves row
+      // on the old image. Gated to a MEMORY source (an inline static-struct array stays JETH200).
+      const fromMemElem =
+        e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr');
+      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode' && !fromMemElem) {
         this.diags.error(
           decl.initializer,
           'JETH200',
-          `an aggregate-array memory local must be initialized from an array literal, new Array<...>(n), or abi.decode(...) (copying a whole array from another source is not supported yet)`,
+          `an aggregate-array memory local must be initialized from an array literal, new Array<...>(n), abi.decode(...), or an element of a memory nested array (copying a whole array from another source is not supported yet)`,
         );
         return;
       }
