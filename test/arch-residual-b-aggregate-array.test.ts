@@ -105,17 +105,21 @@ describe('Residual B2: bytes[] / string[] memory local - byte-identical to solc 
   });
 });
 
-describe('Residual B: DEFERRED shapes still reject cleanly (no silent miscompile)', () => {
-  it('nested aggregate-leaf arrays (P[][], bytes[][]) are rejected', () => {
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): P[][] { let m: P[][] = [[P(1n,2n)]]; return m; } }`).length).toBeGreaterThan(0);
-    expect(codes(`@contract class C { @external @pure f(): bytes[][] { let m: bytes[][] = [[bytes("a")]]; return m; } }`).length).toBeGreaterThan(0);
+describe('Residual B4/B3: nested-dynamic-leaf + dyn-struct arrays now ACCEPT (lifted, byte-identical)', () => {
+  it('B4: nested-dynamic-leaf arrays (bytes[][]) now ACCEPT (byte-identity in nested-dynamic-leaf-array.test.ts)', () => {
+    // bytes[][] / string[][] are the B4 lift: pointer-headed [len][ptr..] outer, each ptr -> inner bytes[].
+    expect(codes(`@contract class C { @external @pure f(): bytes[][] { let m: bytes[][] = [[bytes("a")]]; return m; } }`)).toEqual([]);
   });
-  it('FIXED aggregate-leaf arrays (Arr<P,N>, Arr<bytes,N>) are rejected', () => {
+  it('B3: a DYNAMIC struct element array (P with a bytes field) now ACCEPTS (byte-identity in dyn-array-field-struct-local.test.ts)', () => {
+    // each P[] element is an absolute pointer to a pointer-headed dyn-struct image (empty sentinels on new).
+    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): P[] { let m: P[] = [P(1n,bytes("x"))]; return m; } }`)).toEqual([]);
+  });
+  it('DEFERRED (still reject cleanly, no miscompile): static-struct nested array P[][], FIXED outer Arr<P,N>/Arr<bytes,N>', () => {
+    // P[][] (a STATIC-struct leaf nested array) stays rejected: its deep field read m[i][j].f is not yet
+    // byte-identical, so a clean rejection is preferred over a miscompile. FIXED outers are also deferred.
+    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): P[][] { let m: P[][] = [[P(1n,2n)]]; return m; } }`).length).toBeGreaterThan(0);
     expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`).length).toBeGreaterThan(0);
     expect(codes(`@contract class C { @external @pure f(): Arr<bytes,2> { let m: Arr<bytes,2> = [bytes("a"),bytes("b")]; return m; } }`).length).toBeGreaterThan(0);
-  });
-  it('a DYNAMIC struct element array (P with a bytes field) is rejected', () => {
-    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): P[] { let m: P[] = [P(1n,bytes("x"))]; return m; } }`).length).toBeGreaterThan(0);
   });
   it('struct-array element WRITE xs[i] = P(...) and bytes[] element write bs[i] = bytes(..) now ACCEPT (lifted)', () => {
     // both are now byte-identical to solc (byte-identity covered in lift-over-rejections.test.ts):

@@ -118,3 +118,121 @@ contract C {
     ).toContain('JETH200');
   });
 });
+
+// B3: an ARRAY of dynamic-field structs as a MEMORY local (`let xs: P[]`, P with a bytes/string or
+// dynamic value-array field). Each element is an absolute pointer to a pointer-headed dyn-struct image
+// (the same image a single dyn-struct local uses), zero-init'd to empty sentinels by `new P[](n)`.
+// Construct (new / literal), read (xs[i].a / xs[i].s / xs[i].arr[j] / .length / whole xs[i]), write
+// (xs[i].a=v / xs[i].s=<bytes> / xs[i].arr=<u256[]> / xs[i].arr[j]=v / xs[i]=P(..)), return, encode,
+// abi.decode. Byte-identical to solc 0.8.35; OOB -> Panic 0x32, new n>=2^64 -> Panic 0x41.
+describe('B3: dynamic-field struct ARRAY memory local (P[]) vs solc', () => {
+  let jeth: Harness, sol: Harness, aj: Address, as: Address;
+  const J = `@struct class P { a: u256; s: bytes; }
+@struct class Q { a: u256; arr: u256[]; }
+@contract class C {
+  @external @pure mk(n: u256): P[] { let xs: P[] = new Array<P>(n); return xs; }
+  @external @pure mkLen(n: u256): u256 { let xs: P[] = new Array<P>(n); return xs.length; }
+  @external @pure zeroSLen(): u256 { let xs: P[] = new Array<P>(2n); return xs[1n].s.length; }
+  @external @pure lit(a1: u256, s1: bytes, a2: u256, s2: bytes): P[] { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs; }
+  @external @pure getA(a1: u256, s1: bytes, a2: u256, s2: bytes): u256 { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[1n].a; }
+  @external @pure getS(a1: u256, s1: bytes, a2: u256, s2: bytes): bytes { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[0n].s; }
+  @external @pure getElem(a1: u256, s1: bytes, a2: u256, s2: bytes): P { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[0n]; }
+  @external @pure oob(a1: u256, s1: bytes): u256 { let xs: P[] = [P(a1,s1)]; return xs[5n].a; }
+  @external @pure huge(): P[] { let xs: P[] = new Array<P>(18446744073709551616n); return xs; }
+  @external @pure enc(a1: u256, s1: bytes, a2: u256, s2: bytes): bytes { let xs: P[] = [P(a1,s1), P(a2,s2)]; return abi.encode(xs); }
+  @external @pure setA(v: u256): P[] { let xs: P[] = new Array<P>(2n); xs[0n].a = v; xs[1n].a = v + 1n; return xs; }
+  @external @pure setS(b: bytes): P[] { let xs: P[] = new Array<P>(2n); xs[0n].s = b; return xs; }
+  @external @pure setElem(a1: u256, s1: bytes): P[] { let xs: P[] = new Array<P>(2n); xs[0n] = P(a1, s1); return xs; }
+  @external @pure setArr(arr: u256[]): Q[] { let xs: Q[] = new Array<Q>(2n); xs[1n].arr = arr; xs[1n].a = 7n; return xs; }
+  @external @pure setArrElem(): Q[] { let xs: Q[] = new Array<Q>(1n); xs[0n].arr = [1n,2n,3n]; xs[0n].arr[1n] = 99n; return xs; }
+  @external @pure readBack(arr: u256[]): u256 { let xs: Q[] = new Array<Q>(2n); xs[1n].arr = arr; return xs[1n].arr[0n] + xs[1n].arr.length; }
+  @external @pure oobW(v: u256): u256 { let xs: P[] = new Array<P>(1n); xs[5n].a = v; return xs[0n].a; }
+  @external dec(data: bytes): bytes { let xs: P[] = abi.decode(data, P[]); return abi.encode(xs); } }`;
+  const So = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.35;
+contract C {
+  struct P { uint256 a; bytes s; }
+  struct Q { uint256 a; uint256[] arr; }
+  function mk(uint256 n) external pure returns (P[] memory) { P[] memory xs=new P[](n); return xs; }
+  function mkLen(uint256 n) external pure returns (uint256) { P[] memory xs=new P[](n); return xs.length; }
+  function zeroSLen() external pure returns (uint256) { P[] memory xs=new P[](2); return xs[1].s.length; }
+  function lit(uint256 a1, bytes calldata s1, uint256 a2, bytes calldata s2) external pure returns (P[] memory) { P[] memory xs=new P[](2); xs[0]=P(a1,s1); xs[1]=P(a2,s2); return xs; }
+  function getA(uint256 a1, bytes calldata s1, uint256 a2, bytes calldata s2) external pure returns (uint256) { P[] memory xs=new P[](2); xs[0]=P(a1,s1); xs[1]=P(a2,s2); return xs[1].a; }
+  function getS(uint256 a1, bytes calldata s1, uint256 a2, bytes calldata s2) external pure returns (bytes memory) { P[] memory xs=new P[](2); xs[0]=P(a1,s1); xs[1]=P(a2,s2); return xs[0].s; }
+  function getElem(uint256 a1, bytes calldata s1, uint256 a2, bytes calldata s2) external pure returns (P memory) { P[] memory xs=new P[](2); xs[0]=P(a1,s1); xs[1]=P(a2,s2); return xs[0]; }
+  function oob(uint256 a1, bytes calldata s1) external pure returns (uint256) { P[] memory xs=new P[](1); xs[0]=P(a1,s1); return xs[5].a; }
+  function huge() external pure returns (P[] memory) { P[] memory xs=new P[](18446744073709551616); return xs; }
+  function enc(uint256 a1, bytes calldata s1, uint256 a2, bytes calldata s2) external pure returns (bytes memory) { P[] memory xs=new P[](2); xs[0]=P(a1,s1); xs[1]=P(a2,s2); return abi.encode(xs); }
+  function setA(uint256 v) external pure returns (P[] memory) { P[] memory xs=new P[](2); xs[0].a=v; xs[1].a=v+1; return xs; }
+  function setS(bytes calldata b) external pure returns (P[] memory) { P[] memory xs=new P[](2); xs[0].s=b; return xs; }
+  function setElem(uint256 a1, bytes calldata s1) external pure returns (P[] memory) { P[] memory xs=new P[](2); xs[0]=P(a1,s1); return xs; }
+  function setArr(uint256[] calldata arr) external pure returns (Q[] memory) { Q[] memory xs=new Q[](2); xs[1].arr=arr; xs[1].a=7; return xs; }
+  function setArrElem() external pure returns (Q[] memory) { Q[] memory xs=new Q[](1); xs[0].arr=new uint256[](3); xs[0].arr[0]=1; xs[0].arr[1]=2; xs[0].arr[2]=3; xs[0].arr[1]=99; return xs; }
+  function readBack(uint256[] calldata arr) external pure returns (uint256) { Q[] memory xs=new Q[](2); xs[1].arr=arr; return xs[1].arr[0]+xs[1].arr.length; }
+  function oobW(uint256 v) external pure returns (uint256) { P[] memory xs=new P[](1); xs[5].a=v; return xs[0].a; }
+  function dec(bytes calldata data) external pure returns (bytes memory) { P[] memory xs=abi.decode(data,(P[])); return abi.encode(xs); } }`;
+
+  const eb = (h: string) => { const len = h.length / 2; return pad32(BigInt(len)) + h + '00'.repeat((32 - (len % 32)) % 32); };
+  const bytesParam = (h: string) => pad32(0x20n) + eb(h);
+  const args4 = (a1: bigint, s1: string, a2: bigint, s2: string) => {
+    const b1 = eb(s1), b2 = eb(s2); const o1 = 4 * 32, o2 = o1 + b1.length / 2;
+    return pad32(a1) + pad32(BigInt(o1)) + pad32(a2) + pad32(BigInt(o2)) + b1 + b2;
+  };
+  const u256arr = (vals: bigint[]) => pad32(0x20n) + pad32(BigInt(vals.length)) + vals.map(pad32).join('');
+
+  beforeAll(async () => {
+    jeth = await Harness.create();
+    sol = await Harness.create();
+    aj = await jeth.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    as = await sol.deploy(compileSolidity(So, 'C').creation);
+  });
+  const cmp = async (data: string, label: string) => {
+    const j = await jeth.call(aj, data);
+    const s = await sol.call(as, data);
+    expect(j.success, `${label} success`).toBe(s.success);
+    expect(j.returnHex, label).toBe(s.returnHex);
+  };
+
+  it('new P[](n): zero-init (empty sentinels) + length + return + huge Panic 0x41', async () => {
+    for (const n of [0n, 1n, 3n]) await cmp('0x' + sel('mk(uint256)') + pad32(n), `mk(${n})`);
+    await cmp('0x' + sel('mkLen(uint256)') + pad32(4n), 'mkLen(4)');
+    await cmp('0x' + sel('zeroSLen()'), 'zeroSLen');
+    await cmp('0x' + sel('huge()'), 'huge');
+  });
+  it('literal construct + field reads (xs[i].a / xs[i].s) + whole element + encode/return', async () => {
+    const a = args4(7n, 'aabbcc', 99n, 'deadbeef0102');
+    await cmp('0x' + sel('lit(uint256,bytes,uint256,bytes)') + a, 'lit');
+    await cmp('0x' + sel('getA(uint256,bytes,uint256,bytes)') + a, 'getA');
+    await cmp('0x' + sel('getS(uint256,bytes,uint256,bytes)') + a, 'getS');
+    await cmp('0x' + sel('getElem(uint256,bytes,uint256,bytes)') + a, 'getElem');
+    await cmp('0x' + sel('enc(uint256,bytes,uint256,bytes)') + a, 'enc');
+  });
+  it('OOB element access -> Panic 0x32 (byte-identical)', async () => {
+    await cmp('0x' + sel('oob(uint256,bytes)') + pad32(7n) + pad32(0x40n) + eb('aabbcc'), 'oob');
+    await cmp('0x' + sel('oobW(uint256)') + pad32(1n), 'oobW');
+  });
+  it('writes: xs[i].a=v / xs[i].s=<bytes> / xs[i]=P(..) / xs[i].arr=<u256[]> / xs[i].arr[j]=v', async () => {
+    await cmp('0x' + sel('setA(uint256)') + pad32(42n), 'setA');
+    await cmp('0x' + sel('setS(bytes)') + bytesParam('cafebabe'), 'setS');
+    await cmp('0x' + sel('setElem(uint256,bytes)') + pad32(5n) + pad32(0x40n) + eb('001122'), 'setElem');
+    await cmp('0x' + sel('setArr(uint256[])') + u256arr([10n, 20n, 30n]), 'setArr');
+    await cmp('0x' + sel('setArrElem()'), 'setArrElem');
+    await cmp('0x' + sel('readBack(uint256[])') + u256arr([100n, 200n]), 'readBack');
+  });
+  it('abi.decode(data, P[]) -> re-encode: well-formed + malformed (byte-identical revert)', async () => {
+    // canonical blob from solc enc, fed back as the `data` bytes param.
+    const encData = '0x' + sel('enc(uint256,bytes,uint256,bytes)') + args4(7n, 'aabbcc', 99n, 'deadbeef0102');
+    const sE = await sol.call(as, encData);
+    const ret = sE.returnHex.slice(2);
+    const len = parseInt(ret.slice(64, 128), 16);
+    const blob = ret.slice(128, 128 + len * 2);
+    await cmp('0x' + sel('dec(bytes)') + bytesParam(blob), 'dec well-formed');
+    await cmp('0x' + sel('dec(bytes)') + bytesParam(blob.slice(0, blob.length - 64)), 'dec truncated');
+    const corrupt = blob.slice(0, 128) + pad32(BigInt('0xffffffffffffffffffff')) + blob.slice(192);
+    await cmp('0x' + sel('dec(bytes)') + bytesParam(corrupt), 'dec corrupt-offset');
+  });
+  it('clean rejections (no miscompile): static-struct nested array R[][], FIXED outer Arr<P,N>', () => {
+    expect(codes(`@struct class R{a:u256;b:u256;} @contract class C { @external @pure f(): R[][] { let m: R[][] = [[R(1n,2n)]]; return m; } }`).length).toBeGreaterThan(0);
+    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,bytes("x")),P(2n,bytes("y"))]; return m; } }`).length).toBeGreaterThan(0);
+  });
+});

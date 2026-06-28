@@ -255,7 +255,7 @@ export type Expr =
   | { kind: 'structNew'; type: JethType; fields: StructField[]; args: Expr[] } // Point(a, b)
   | { kind: 'structValue'; type: JethType; baseSlot: bigint } // whole storage struct (for return)
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // read a value field/element of a memory-aggregate local (p.x)
-  | { kind: 'aggFieldRead'; type: JethType; base: Expr; wordOffset: number; runSteps?: ArrIndexStep[] } // read a VALUE field of a struct-valued Expr base (e.g. this.mk(a).x, xs[i].pre[j]) - materialize base to a memory pointer, add the static word offset + any runtime index steps, mload
+  | { kind: 'aggFieldRead'; type: JethType; base: Expr; wordOffset: number; runSteps?: ArrIndexStep[]; deref?: boolean } // read a VALUE field of a struct-valued Expr base (e.g. this.mk(a).x, xs[i].pre[j]) - materialize base to a memory pointer, add the static word offset + any runtime index steps, mload. deref: a DYNAMIC field (bytes/string/dyn-array) of a B3 dyn-struct array element - the head word HOLDS the blob/array pointer, so always mload it (return the pointer VALUE, consumed as a reference by .length / [j] / return / encode)
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] on a fixed-array memory local (value element, bounds-checked); wordOffset: a fixed-array FIELD of a memory struct (p.a[i]) starts that many words into the image
   | { kind: 'memAggregate'; type: JethType; local: string; wordOffset?: number } // a whole memory aggregate, or a nested struct field at wordOffset (sub-pointer into the parent image)
   | { kind: 'memDynStructValue'; type: JethType; local: string } // a whole DYNAMIC-field struct memory local (head: value fields inline, bytes/string fields as pointers)
@@ -421,7 +421,8 @@ export type LValue =
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // p.x = v on a memory-aggregate local
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] = v on a fixed-array memory local (wordOffset: a fixed-array field of a memory struct, p.a[i])
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number } // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
-  | { kind: 'aggFieldStore'; type: JethType; base: Expr; wordOffset: number; runSteps?: ArrIndexStep[] }; // xs[i].a = v / xs[i].pre[j] = v (value leaf) on a memory-array static-struct element: store at base(element image ptr) + wordOffset + runtime index steps (mirror of aggFieldRead)
+  | { kind: 'aggFieldStore'; type: JethType; base: Expr; wordOffset: number; runSteps?: ArrIndexStep[] } // xs[i].a = v / xs[i].pre[j] = v (value leaf) on a memory-array static-struct element: store at base(element image ptr) + wordOffset + runtime index steps (mirror of aggFieldRead)
+  | { kind: 'aggDynFieldStore'; type: JethType; base: Expr; wordOffset: number }; // xs[i].s = <bytes/string> / xs[i].arr = <u256[]> on a memory-array DYN-struct element (B3): re-point the dyn-struct image head word at the materialized blob/array pointer (a reference assignment, like solc)
 
 // A success condition for an external .call/.staticcall. `cond` is a boolean expression in which the
 // scoped bindings `this.ok` (the CALL success bool) and `this.data` (the returndata bytes) are visible;

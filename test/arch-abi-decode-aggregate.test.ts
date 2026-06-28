@@ -76,13 +76,14 @@ describe('abi.decode into a struct / tuple-with-struct target (JETH322 core lift
         return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
       }
     };
-    // a DYNAMIC-field struct array (D has a bytes field): no memory-local representation / decoder yet.
+    // B3: a DYNAMIC-field struct array (D has a bytes field) is now ACCEPTED (byte-identical decode).
     const preD = `@struct class D { a: u256; tags: bytes; } @contract class C { @external @pure f(b: bytes): u256 {`;
-    expect(codes(`${preD} let ds: D[] = abi.decode(b, D[]); return ds.length; } }`).length).toBeGreaterThan(0);
-    // nested-aggregate arrays (array of static-struct arrays / array of bytes arrays).
+    expect(codes(`${preD} let ds: D[] = abi.decode(b, D[]); return ds.length; } }`)).toEqual([]);
+    // B4: a nested-dynamic-leaf array (bytes[][]) is now ACCEPTED (byte-identical decode).
+    const preC = `@contract class C { @external @pure f(b: bytes): u256 {`;
+    expect(codes(`${preC} let m: bytes[][] = abi.decode(b, bytes[][]); return m.length; } }`)).toEqual([]);
+    // DEFERRED (still rejects cleanly, not a miscompile): a STATIC-struct-leaf nested array P[][].
     const preP = `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(b: bytes): u256 {`;
     expect(codes(`${preP} let m: P[][] = abi.decode(b, P[][]); return m.length; } }`).length).toBeGreaterThan(0);
-    const preC = `@contract class C { @external @pure f(b: bytes): u256 {`;
-    expect(codes(`${preC} let m: bytes[][] = abi.decode(b, bytes[][]); return m.length; } }`).length).toBeGreaterThan(0);
   });
 });

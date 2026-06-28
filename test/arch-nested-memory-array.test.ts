@@ -162,20 +162,22 @@ contract C {
     await cmp('aliasMut()');
   });
 
-  it('residuals stay rejected (struct/bytes leaves): clean over-rejection, not a miscompile', () => {
+  it('residuals: a STATIC-STRUCT-leaf nested array (P[][]) stays rejected (clean over-rejection, not a miscompile)', () => {
     // (whole-inner-array assignment m[i] = [...] is now supported - Residual A, see
     // arch-residual-a-nested-array-assign.test.ts.)
-    // a STRUCT-leaf nested array (P[][]) stays JETH200 (the codec only lays out value leaves).
+    // a STATIC-STRUCT-leaf nested array (P[][]) stays rejected: the deep field read m[i][j].f is not yet
+    // byte-identical, so a clean rejection is preferred over risking a miscompile.
     expect(() =>
       compile(`@struct class P { a: u256; } @contract class C { @external @pure f(): u256 { let m: P[][] = [[P(1n)]]; return 0n; } }`, {
         fileName: 'C.jeth',
       }),
     ).toThrow();
-    // a BYTES-leaf nested array (bytes[][]) stays JETH200.
+  });
+  it('B4: a BYTES-leaf nested array (bytes[][]) now ACCEPTS (lifted, byte-identical - see nested-dynamic-leaf-array.test.ts)', () => {
     expect(() =>
       compile(`@contract class C { @external @pure f(): u256 { let m: bytes[][] = [[]]; return 0n; } }`, {
         fileName: 'C.jeth',
       }),
-    ).toThrow();
+    ).not.toThrow();
   });
 });

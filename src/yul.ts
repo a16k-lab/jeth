@@ -1231,7 +1231,7 @@ ${indent(runtime, 6)}
               isAggregateLeafArray(s.value.type);
             if (codecSourced && memSourced) {
               const mp = this.nestedMemImagePtr(s.value, ctx, out);
-              const { ptr, size } = this.encodeNestedMemReturn(s.value.type, mp, out);
+              const { ptr, size } = this.encodeNestedMemReturn(s.value.type, mp, ctx, out);
               out.push(`return(${ptr}, ${size})`);
               break;
             }
@@ -1307,7 +1307,7 @@ ${indent(runtime, 6)}
             const codecSourced =
               (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) || isAggregateLeafArray(s.value.type);
             const { ptr, size } = codecSourced
-              ? this.encodeNestedMemReturn(s.value.type, mp, out)
+              ? this.encodeNestedMemReturn(s.value.type, mp, ctx, out)
               : this.encodeMemArrayReturn(mp, out);
             out.push(`return(${ptr}, ${size})`);
             break;
@@ -1582,6 +1582,20 @@ ${indent(runtime, 6)}
           out.push(`mstore(${s.target.wordOffset === 0 ? head : `add(${head}, ${s.target.wordOffset * 32})`}, ${mp})`);
           break;
         }
+        if (s.target.kind === 'aggDynFieldStore') {
+          // Residual B3: xs[i].s = <bytes/string> or xs[i].arr = <u256[]> on a memory P[] dyn-struct
+          // element: re-point the dyn-struct image head word at a freshly-materialized blob/array pointer
+          // (a reference assignment, like solc). RHS materialized FIRST (solc evaluates it before the LHS
+          // location, incl the element index); then resolve the element image head word and store.
+          const srcRaw = isBytesLike(s.target.type)
+            ? this.toMemory(this.lowerDynamic(s.value, ctx, out), out).mp
+            : this.aggArgToMemPtr(s.value, ctx, out);
+          const src = this.fresh();
+          out.push(`let ${src} := ${srcRaw}`);
+          const head = this.aggToMemPtr(s.target.base, ctx, out);
+          out.push(`mstore(${s.target.wordOffset === 0 ? head : `add(${head}, ${s.target.wordOffset * 32})`}, ${src})`);
+          break;
+        }
         if (s.target.kind === 'dynState') {
           const ref = this.lowerDynamic(s.value, ctx, out);
           this.storeDynamic(String(s.target.slot), ref, out);
@@ -1653,6 +1667,26 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'arrayElem' && s.target.type.kind === 'struct') {
+          if (
+            (s.target.arr.base.kind === 'memArray' || s.target.arr.base.kind === 'memArrayExpr') &&
+            isDynamicType(s.target.type)
+          ) {
+            // Residual B3: xs[i] = P(..) on a MEMORY P[] dyn-struct array: build a fresh pointer-headed
+            // dyn-struct image from the source (constructor / alias / storage copy), then RE-POINT the
+            // element's pointer word at it (a reference assignment, like solc). RHS materialized FIRST,
+            // then the element slot (bounds-checked) is resolved.
+            const img = this.fresh();
+            out.push(`let ${img} := ${this.buildDynStructLocal(s.target.type as JethType & { kind: 'struct' }, s.value, ctx, out)}`);
+            const ref = this.lowerArrayRef(s.target.arr, ctx, out);
+            if (ref.src !== 'memory') throw new UnsupportedError('B3 element write requires a memory array');
+            const idx = this.fresh();
+            out.push(`let ${idx} := ${this.lowerExpr(s.target.index, ctx, out)}`);
+            const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
+            out.push(`if iszero(lt(${idx}, ${bound})) { ${this.panic()}(0x32) }`);
+            const dataBase = ref.fixedLen !== undefined ? ref.ptr! : `add(${ref.ptr}, 0x20)`;
+            out.push(`mstore(add(${dataBase}, mul(${idx}, 0x20)), ${img})`);
+            break;
+          }
           if (s.target.arr.base.kind === 'memArray' || s.target.arr.base.kind === 'memArrayExpr') {
             // xs[i] = <struct> on a MEMORY static-struct array: copy the constructed/source struct image
             // into the element's image (the SAME element pointer the read path uses via aggToMemPtr, so
@@ -2561,6 +2595,10 @@ ${indent(runtime, 6)}
         // leaf is mload'd (image stores clean values, no mask); a whole STATIC AGGREGATE leaf yields the
         // sub-image pointer (consumed as a memory aggregate by aggToMemPtr / abi.encode / return).
         const cur = this.aggFieldPtr(e.base, e.wordOffset, e.runSteps, ctx, out);
+        // Residual B3: a DYNAMIC field (bytes/string/dyn value-array) of a memory-array dyn-struct
+        // element - the head word at `cur` HOLDS the blob/array absolute pointer; mload it to yield
+        // the pointer VALUE (a reference consumed by lowerDynamic / .length / [j] / return / encode).
+        if (e.deref) return `mload(${cur})`;
         return isStaticValueType(e.type) ? `mload(${cur})` : cur;
       }
       case 'memElem': {
@@ -3109,7 +3147,7 @@ ${indent(runtime, 6)}
           // pointer-headed): reconstruct the ABI tail from the memory image via the recursive codec -
           // the SAME encoder the single-return `return xs` path uses. A verbatim mcopy would truncate
           // the struct array (wrong stride) and corrupt the pointer-headed shapes.
-          const sz = this.abiEncFromMem(t, mp, cursor, out);
+          const sz = this.abiEncFromMem(t, mp, cursor, ctx, out);
           out.push(`${cursor} := add(${cursor}, ${sz})`);
         }
         hw += 1;
@@ -3447,6 +3485,12 @@ ${indent(runtime, 6)}
     }
     if (value.kind === 'memDynStructValue') {
       return { kind: 'mem', headPtr: this.ctxLookup(ctx, value.local) };
+    }
+    // Residual B3: a whole DYNAMIC-field struct ELEMENT of a memory P[] (xs[i]): lowerArrayGet returns
+    // the element's pointer-headed dyn-struct image pointer (an absolute pointer word, deref'd), the
+    // same shape a dyn-struct memory local has, so encode it from a 'mem' source.
+    if (value.kind === 'arrayGet' && value.type.kind === 'struct' && isDynamicType(value.type)) {
+      return { kind: 'mem', headPtr: this.lowerArrayGet(value, ctx, out) };
     }
     if (value.kind === 'ternary') {
       // a DYNAMIC-struct ternary: lower it to a pointer-headed memory image (short-circuit
@@ -4663,6 +4707,12 @@ ${indent(runtime, 6)}
       return this.buildNestedMemArrayLit(el, ctx, out);
     }
     if (el.kind === 'newArray') return this.lowerExpr(el, ctx, out);
+    // Residual B3: a DYNAMIC-field struct element built by a constructor `P(...)` (P[] literal): the
+    // element word holds an absolute pointer to a pointer-headed dyn-struct image (value fields inline,
+    // bytes/string + dynamic value-array fields a head pointer), the same image buildDynStructLocal uses.
+    if (el.kind === 'structNew' && el.type.kind === 'struct' && isDynamicType(el.type)) {
+      return this.allocDynStructToMem(el as Expr & { kind: 'structNew' }, ctx, out);
+    }
     // a memory-array expression (alias / element of another nested array): its register IS the pointer.
     return this.lowerExpr(el, ctx, out);
   }
@@ -4705,16 +4755,48 @@ ${indent(runtime, 6)}
     return ptr;
   }
 
-  /** Build a fresh EMPTY image for a (dynamic) inner array element of a zero-initialized nested array:
+  /** Build a fresh EMPTY image for a (dynamic) inner element of a zero-initialized nested array:
    *  a single [len=0] word. (A deeper dynamic inner is still empty at length 0, so one zero word
    *  suffices; abiEncFromMem reads len=0 and emits no tail.) A bytes/string element (Residual B2)
-   *  uses the SAME [len=0] image - an empty blob - so this serves both inner-array and bytes elements. */
-  private emptyInnerImage(_t: JethType, out: string[]): string {
+   *  uses the SAME [len=0] image - an empty blob - so this serves both inner-array and bytes elements.
+   *  Residual B3: a DYNAMIC-field struct element (P with bytes/string/dyn-array fields) zero-inits to a
+   *  full pointer-headed dyn-struct image: value fields are 0, each dynamic field's head word points to
+   *  an empty [len=0] sentinel (a safe read; indexing it Panics 0x32 - matching solc's `new P[](n)`). */
+  private emptyInnerImage(t: JethType, out: string[]): string {
+    if (t.kind === 'struct' && isDynamicType(t)) return this.emptyDynStructImage(t, out);
     const p = this.fresh();
     out.push(`let ${p} := mload(0x40)`);
     out.push(`mstore(${p}, 0)`);
     out.push(`mstore(0x40, add(${p}, 0x20))`);
     return p;
+  }
+
+  /** Build a fresh zero-value dyn-struct image (Residual B3 element of `new Array<P>(n)`): one head
+   *  word per field (value fields = 0; bytes/string + dynamic value-array fields a pointer to a fresh
+   *  empty [len=0] sentinel blob). Byte-identical to solc's zero element image. */
+  private emptyDynStructImage(struct: JethType & { kind: 'struct' }, out: string[]): string {
+    const headWords = tupleHeadWords(struct);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${headWords * 32}))`);
+    let hw = 0;
+    for (const f of struct.fields) {
+      const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
+      if (isDynamicType(f.type)) {
+        // a bytes/string or dynamic value-array field: head word -> a fresh empty [len=0] sentinel.
+        const blob = this.fresh();
+        out.push(`let ${blob} := mload(0x40)`);
+        out.push(`mstore(${blob}, 0)`);
+        out.push(`mstore(0x40, add(${blob}, 0x20))`);
+        out.push(`mstore(${at}, ${blob})`);
+        hw += 1;
+      } else {
+        // a value field: one (or more, for a static aggregate - excluded by isDynStructLeaf) zero head word.
+        for (let k = 0; k < abiHeadWords(f.type); k++) out.push(`mstore(${hw + k === 0 ? ptr : `add(${ptr}, ${(hw + k) * 32})`}, 0)`);
+        hw += abiHeadWords(f.type);
+      }
+    }
+    return ptr;
   }
 
   /** Allocate a fresh memory image for a static aggregate and COPY it from a STORAGE source
@@ -5629,12 +5711,12 @@ ${indent(runtime, 6)}
   /** ABI-encode a NESTED value-array memory image at `mp` (type `t`) into a fresh return blob. A
    *  type with a DYNAMIC level gets the leading [0x20] offset wrapper (it is a dynamic top-level
    *  return); abiEncFromMem writes the inner [len]/offset-table/tails. Returns {ptr, size}. */
-  private encodeNestedMemReturn(t: JethType, mp: string, out: string[]): { ptr: string; size: string } {
+  private encodeNestedMemReturn(t: JethType, mp: string, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(${ptr}, 0x20)`);
     const size = this.fresh();
-    out.push(`let ${size} := ${this.abiEncFromMem(t, mp, `add(${ptr}, 0x20)`, out)}`);
+    out.push(`let ${size} := ${this.abiEncFromMem(t, mp, `add(${ptr}, 0x20)`, ctx, out)}`);
     out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
     return { ptr, size: `add(0x20, ${size})` };
   }
@@ -5977,7 +6059,7 @@ ${indent(runtime, 6)}
       const dst = this.fresh();
       out.push(`let ${dst} := mload(0x40)`);
       const sz = this.fresh();
-      out.push(`let ${sz} := ${this.abiEncFromMem(arg.type, mp, dst, out)}`);
+      out.push(`let ${sz} := ${this.abiEncFromMem(arg.type, mp, dst, ctx, out)}`);
       out.push(`mstore(0x40, add(${dst}, ${sz}))`);
       return { mp: dst, size: sz };
     }
@@ -6289,7 +6371,14 @@ ${indent(runtime, 6)}
    *  RELATIVE offset + tail (solc's canonical encoding). Returns a Yul expr for the bytes written.
    *  Only the value-leaf array nestings the analyzer accepts reach here (no bytes/string/struct leaves),
    *  so no length/offset validation is needed: the image was built from trusted literals / zero-init. */
-  private abiEncFromMem(t: JethType, memPtr: string, dst: string, out: string[]): string {
+  private abiEncFromMem(t: JethType, memPtr: string, dst: string, ctx: LowerCtx, out: string[]): string {
+    // Residual B3: a DYNAMIC-field struct leaf (an element of a P[] image, P with bytes/string/dyn-array
+    // fields). memPtr is the element's pointer-headed dyn-struct image; encode it as a self-contained ABI
+    // dynamic tuple at `dst` (value fields inline, dynamic fields head OFFSET relative to THIS tuple +
+    // tail), reusing the verified whole-struct tuple encoder. Returns the encoded byte size.
+    if (t.kind === 'struct' && isDynamicType(t)) {
+      return this.abiEncDynStructFromMem(t, memPtr, dst, ctx, out);
+    }
     // Residual B2: a bytes/string leaf (an element of a bytes[]/string[] image). memPtr is the blob's
     // absolute pointer ([len][right-padded data]); the ABI tail is [len][data padded to 32]. Returns the
     // encoded byte size. (Reached via the dynamic-element recursion below for bytes[]/string[].)
@@ -6354,7 +6443,7 @@ ${indent(runtime, 6)}
       const ip = this.fresh();
       inner.push(`let ${ip} := mload(add(${srcHead}, mul(${i}, 0x20)))`); // absolute ptr to inner image
       inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), sub(${cursor}, ${dstHead}))`);
-      const sz = this.abiEncFromMem(t.element, ip, cursor, inner);
+      const sz = this.abiEncFromMem(t.element, ip, cursor, ctx, inner);
       inner.push(`${cursor} := add(${cursor}, ${sz})`);
       for (const l of inner) out.push('  ' + l);
       out.push('}');
@@ -6369,10 +6458,32 @@ ${indent(runtime, 6)}
       const ip = this.fresh();
       out.push(`let ${ip} := mload(add(${memPtr}, ${k * 32}))`); // absolute ptr to inner image
       out.push(`mstore(add(${dst}, ${k * 32}), sub(${cursor}, ${dst}))`);
-      const sz = this.abiEncFromMem(t.element, ip, cursor, out);
+      const sz = this.abiEncFromMem(t.element, ip, cursor, ctx, out);
       out.push(`${cursor} := add(${cursor}, ${sz})`);
     }
     return `sub(${cursor}, ${dst})`;
+  }
+
+  /** Encode a DYNAMIC-field struct from its pointer-headed memory image (`memPtr`) into a self-contained
+   *  ABI dynamic tuple at `dst` (Residual B3: a P[] element). Value fields stay inline in the head; each
+   *  dynamic field gets a head OFFSET word relative to THIS tuple's start, then its tail. Reuses the
+   *  verified whole-struct tuple encoder (encodeTupleInto) with a 'mem' source. Returns the byte size. */
+  private abiEncDynStructFromMem(
+    struct: JethType & { kind: 'struct' },
+    memPtr: string,
+    dst: string,
+    ctx: LowerCtx,
+    out: string[],
+  ): string {
+    const src: TupleSrc = { kind: 'mem', headPtr: memPtr };
+    // PRE-PASS: materialize each dynamic field's source DynRef from the image (mirrors the whole-struct
+    // encoders), so the dyn-field queue feeds encodeTupleInto in field order.
+    const queue: DynRef[] = [];
+    this.collectTupleDyn(struct, src, queue, ctx, out);
+    let qi = 0;
+    const nextRef = (): DynRef => queue[qi++]!;
+    const end = this.encodeTupleInto(struct, src, dst, ctx, out, nextRef);
+    return `sub(${end}, ${dst})`;
   }
 
   private abiDecFromMem(t: JethType, memPtr: string, dst: string, blobEnd: string, out: string[]): string {
@@ -6445,6 +6556,12 @@ ${indent(runtime, 6)}
       const cursor = this.fresh();
       out.push(`let ${cursor} := add(${dstHead}, mul(${len}, 0x20))`);
       out.push(`if or(gt(${cursor}, 0xffffffffffffffff), lt(${cursor}, ${dstHead})) { ${cap} }`);
+      // The SOURCE offset table (len words) must fit in the blob, exactly as the static-element path
+      // checks above: solc reverts EMPTY (data out of bounds) when it does not. This comes AFTER the
+      // allocation-size cap so an oversized length still Panics 0x41 (solc allocates the array - which
+      // Panics on the huge size - BEFORE its data-bounds revert). mul cannot overflow here: the cursor
+      // cap already rejected any len large enough to overflow (len <= 2^64-1 from the cap above too).
+      out.push(`if gt(add(${elemRegion}, mul(${len}, 0x20)), ${blobEnd}) { revert(0, 0) }`);
       const i = this.fresh();
       out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
       const inner: string[] = [];
@@ -6589,6 +6706,11 @@ ${indent(runtime, 6)}
       const tableEnd = this.fresh();
       out.push(`let ${tableEnd} := add(add(${ptr}, 0x20), mul(${len}, 0x20))`);
       out.push(`if or(gt(${tableEnd}, 0xffffffffffffffff), lt(${tableEnd}, ${ptr})) { ${cap} }`);
+      // The SOURCE offset table (len words) must fit in the blob, exactly as the static-element path
+      // above checks: solc reverts EMPTY (data out of bounds) when it does not. AFTER the allocation
+      // cap so an oversized length still Panics 0x41 (solc allocates the array - Panicking on the size -
+      // BEFORE its data-bounds revert). mul cannot overflow: the table cap already rejected any such len.
+      out.push(`if gt(add(${elemRegion}, mul(${len}, 0x20)), ${blobEnd}) { revert(0, 0) }`);
       out.push(`mstore(${ptr}, ${len})`);
       out.push(`mstore(0x40, ${tableEnd})`); // claim the table; sub-images alloc PAST it
       const dstHead = this.fresh();
@@ -6626,6 +6748,14 @@ ${indent(runtime, 6)}
         out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
       }
       return ptr;
+    }
+    // Residual B3: a DYNAMIC-field struct element (a P[] element, P with bytes/string/dyn value-array
+    // fields). memPtr is the element tuple's start; decode it into a fresh pointer-headed dyn-struct
+    // image (value fields inline + validated, dynamic fields a head pointer to a freshly-decoded blob/
+    // array) via the SAME memory-blob decoder the top-level abi.decode(b, P) path uses (identical solc
+    // revert semantics: OOB offset/length -> revert(0,0), oversized alloc -> Panic 0x41).
+    if (t.kind === 'struct' && isDynamicType(t)) {
+      return this.buildDynStructFromMemBlob(t, memPtr, blobEnd, out);
     }
     throw new UnsupportedError(`abiDecFromMemToImage: unsupported type '${t.kind}'`);
   }
@@ -7302,6 +7432,13 @@ ${indent(runtime, 6)}
         const at = e.wordOffset === 0 ? head : `add(${head}, ${e.wordOffset * 32})`;
         const ptr = this.fresh();
         out.push(`let ${ptr} := mload(${at})`);
+        return { src: 'memory', ptr };
+      }
+      case 'aggFieldRead': {
+        // Residual B3: a bytes/string field of a memory-array dyn-struct element (xs[i].s). With deref,
+        // aggFieldRead lowers to the head word VALUE = the [len][data] blob's absolute pointer.
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := ${this.lowerExpr(e, ctx, out)}`);
         return { src: 'memory', ptr };
       }
       case 'strArrayElem': {

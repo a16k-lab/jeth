@@ -323,20 +323,59 @@ export function isNestedValueArray(t: JethType): boolean {
   return isValueLeafArray(t);
 }
 
-/** Residual B (this pass) scope: a FLAT DYNAMIC array `E[]` whose element `E` is itself
- *  an aggregate or byte-sequence leaf that the nested-memory codec can lay out, but which
- *  isNestedValueArray excludes (no further array nesting, and not a pure value leaf):
+/** Residual B (this pass) scope: a DYNAMIC array `E[]` whose element `E` is an aggregate or
+ *  byte-sequence leaf that the pointer-headed nested-memory codec can lay out, but which
+ *  isNestedValueArray excludes (the leaf is not a pure value):
  *   - B1: a STATIC struct element (`P[]`, P all value/static fields): each element is an
  *     inline abiHeadWords(P) block in the image and an inline ABI block in the encoding.
  *   - B2: a bytes/string element (`bytes[]`/`string[]`): each element is one absolute-pointer
  *     word to a `[len][data]` blob.
- *  DEFERRED (kept rejecting): a DYNAMIC struct element (P with a bytes/string/dyn-array field),
- *  any nesting (`P[][]`, `bytes[][]`), and any FIXED outer (`Arr<P,N>`, `Arr<bytes,N>`). */
+ *   - B3: a DYNAMIC-field struct element (`P[]`, P with a bytes/string or dynamic value-array
+ *     field): each element is one absolute-pointer word to a pointer-headed dyn-struct image
+ *     (the same image a single dynamic-field struct memory local uses). Gated to the field set
+ *     isDynStructLeaf admits (value / bytes / string / dynamic value-array fields).
+ *   - B4: a nested-dynamic-leaf array element (`bytes[][]`/`string[][]`, and deeper): each
+ *     element is one absolute-pointer word to its own inner aggregate-leaf / nested-value image.
+ *  DEFERRED (kept rejecting): any FIXED outer (`Arr<P,N>`, `Arr<bytes,N>`), and any struct
+ *  element with a static-aggregate / nested-struct / non-value-element-array field. */
 export function isAggregateLeafArray(t: JethType): boolean {
   if (t.kind !== 'array' || t.length !== undefined) return false; // flat DYNAMIC outer only
   const e = t.element;
-  if (e.kind === 'struct') return isStaticType(e); // B1: static struct element
-  return isBytesLike(e); // B2: bytes/string element
+  if (e.kind === 'struct') return isStaticType(e) || isDynStructLeaf(e); // B1 static / B3 dynamic struct
+  if (isBytesLike(e)) return true; // B2: bytes/string element
+  // B4: a nested array element whose ultimate leaf is a DYNAMIC byte-sequence (bytes[][]/string[][],
+  // and deeper, e.g. bytes[][][]). The inner array image is itself laid out by the recursive codec.
+  // A static-struct-leaf nested array (P[][]) is EXCLUDED here - its deep field read m[i][j].f is not
+  // byte-identical yet, so it stays a clean rejection rather than risk a miscompile.
+  if (e.kind === 'array') return isDynBytesLeafArray(e);
+  return false;
+}
+
+/** True if `t` is a DYNAMIC array whose ultimate leaf (descending through any number of dynamic-array
+ *  nesting levels) is a bytes/string byte-sequence: bytes[], string[], bytes[][], string[][][], ...
+ *  Used to gate B4 (nested-dynamic-leaf arrays). A value leaf, static-struct leaf, or dyn-struct leaf
+ *  returns false (those are owned by isNestedValueArray / B1 / B3 respectively). */
+export function isDynBytesLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length !== undefined) return false;
+  if (isBytesLike(t.element)) return true;
+  if (t.element.kind === 'array') return isDynBytesLeafArray(t.element);
+  return false;
+}
+
+/** A struct whose every field is one of the pointer-headed dyn-struct-image leaves the codec
+ *  can build (value -> inline head word; bytes/string -> head pointer to [len][data]; dynamic
+ *  value-element array -> head pointer to [len][elems]) AND which has at least one dynamic
+ *  field (so it is a genuine dynamic-field struct, not a static struct that B1 owns). Mirrors
+ *  Analyzer.isSupportedDynStructLocal (kept here so the array gate can recurse without an
+ *  Analyzer instance). Static-array / nested-struct / non-value-element-array fields stay gated. */
+export function isDynStructLeaf(t: JethType): boolean {
+  if (t.kind !== 'struct' || !isDynamicType(t)) return false;
+  return t.fields.every(
+    (f) =>
+      isStaticValueType(f.type) ||
+      isBytesLike(f.type) ||
+      (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)),
+  );
 }
 
 /** A memory array (any mix of dynamic/fixed levels) whose ultimate leaf elements are all

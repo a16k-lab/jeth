@@ -184,13 +184,16 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
         `@contract class C { @external @pure f(s: i128): bytes { let a: u256[] = new Array<u256>(s); return abi.encode(a); } }`,
       ).length > 0,
     ).toBe(true);
-    // Residual-B DEFERRED element kinds (string[][] nested aggregate-leaf, a DYNAMIC struct element)
-    // -> clean reject (safe subset), NOT JETH900. (Flat bytes[]/string[]/P[] are now ACCEPTED above.)
-    expect(jethCodes(f('let a: string[][] = new Array<string[]>(n); return abi.encode(a);'))).not.toContain('JETH900');
-    expect(jethCodes(f('let a: string[][] = new Array<string[]>(n); return abi.encode(a);')).length > 0).toBe(true);
+    // B4: a nested-dynamic-leaf array (string[][]) is now ACCEPTED (byte-identical, see
+    // nested-dynamic-leaf-array.test.ts). B3: a DYNAMIC-field struct element array (P with a bytes
+    // field) is also ACCEPTED (dyn-array-field-struct-local.test.ts).
+    expect(jethCodes(f('let a: string[][] = new Array<string[]>(n); return abi.encode(a);'))).toEqual([]);
     expect(
-      jethCodes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(n: u256): bytes { let a: P[] = new Array<P>(n); return abi.encode(a); } }`).length > 0,
-    ).toBe(true);
+      jethCodes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(n: u256): bytes { let a: P[] = new Array<P>(n); return abi.encode(a); } }`),
+    ).toEqual([]);
+    // a STATIC-struct-leaf nested array (P[][]) stays DEFERRED -> clean reject (safe subset), NOT JETH900.
+    expect(jethCodes(`@struct class Q{a:u256;b:u256;} @contract class C { @external @pure f(n: u256): bytes { let a: Q[][] = new Array<Q[]>(n); return abi.encode(a); } }`)).not.toContain('JETH900');
+    expect(jethCodes(`@struct class Q{a:u256;b:u256;} @contract class C { @external @pure f(n: u256): bytes { let a: Q[][] = new Array<Q[]>(n); return abi.encode(a); } }`).length > 0).toBe(true);
     expect(jethCodes(f('let a: u256[][] = new Array<u256[]>(n); return abi.encode(a);'))).not.toContain('JETH900');
     // wrong arity -> JETH363, no crash
     expect(jethCodes(f('let a: u256[] = new Array<u256>(); return abi.encode(a);'))).toContain('JETH363');

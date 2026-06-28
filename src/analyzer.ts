@@ -29,6 +29,7 @@ import {
   isBytesLike,
   isNestedValueArray,
   isAggregateLeafArray,
+  isDynStructLeaf,
   isValueLeafArray,
   storageByteSize,
   storageSlotCount,
@@ -7437,6 +7438,30 @@ export class Analyzer {
         );
         return;
       }
+      // SOUNDNESS: a whole-struct write to a MEMORY struct-array element (xs[i] = <struct>) copies the
+      // inline element image, but solc's memory struct-array elements are REFERENCES (pointers) - so
+      // assigning a LIVE memory reference (another element xs[j], a struct local, a sub-aggregate field)
+      // ALIASES in solc, and a later mutation of the source would then diverge from JETH's independent
+      // copy. Accept only a FRESH RHS (a constructor, a storage/calldata copy, or a call result, where
+      // copy == alias observably); reject a memory-reference RHS (clean over-rejection, NOT a miscompile).
+      if (
+        target.kind === 'arrayElem' &&
+        target.type.kind === 'struct' &&
+        (target.arr.base.kind === 'memArray' || target.arr.base.kind === 'memArrayExpr')
+      ) {
+        const FRESH_STRUCT_RHS = new Set([
+          'structNew', 'structValue', 'mapStorageValue', 'structArrayElem', 'placeRead',
+          'cdAggregateValue', 'cdStructArrayElem', 'call',
+        ]);
+        if (!FRESH_STRUCT_RHS.has(value.kind)) {
+          this.diags.error(
+            e.right,
+            'JETH200',
+            `assigning a memory struct reference to a memory struct-array element (xs[i] = <ref>) is not supported: solc aliases the element while JETH would copy it, so a later mutation of the source would diverge. Use a fresh value (xs[i] = P(...)) or copy field-by-field.`,
+          );
+          return;
+        }
+      }
       // Eval-order: solc evaluates the RHS before the LHS location. The value-type and bytes/string
       // element paths reorder correctly in codegen, but the WHOLE-AGGREGATE element write path
       // (recs[i] = P(...), dd[i] = [...]) does not, so a side-effecting index/key would run before the
@@ -8658,7 +8683,9 @@ export class Analyzer {
         if (
           baseArr &&
           (baseArr.base.kind === 'memArray' || baseArr.base.kind === 'memArrayExpr') &&
-          baseArr.elem.kind === 'struct'
+          baseArr.elem.kind === 'struct' &&
+          isStaticType(baseArr.elem) // B1: a STATIC struct element has an inline image with static word offsets;
+          // a B3 DYNAMIC-field struct element is pointer-headed (resolveMemDynStructArrayField owns it).
         ) {
           rootArr = baseArr;
           rootIndex = cur.argumentExpression;
@@ -8714,6 +8741,53 @@ export class Analyzer {
       }
     }
     return { base, wordOffset, type: curType, runSteps };
+  }
+
+  /** Residual B3: resolve `xs[i].field` where `xs` is a memory P[] whose element P is a DYNAMIC-field
+   *  struct (isDynStructLeaf). The element xs[i] (arrayGet) lowers to the element's dyn-struct image
+   *  pointer (mload of the element pointer word); the field lives at the dyn-struct HEAD-WORD offset
+   *  (value fields inline = abiHeadWords each; dynamic fields = 1 pointer word). Returns the typed Expr:
+   *   - a VALUE field -> aggFieldRead (mload at base + headWord, the inline value);
+   *   - a bytes/string field -> aggFieldRead{deref} (mload the head word = the blob pointer, a bytes value);
+   *   - a dynamic value-array field -> aggFieldRead{deref} typed as the array, wrapped in a memArrayExpr
+   *     so `xs[i].arr[j]` / `xs[i].arr.length` consume the [len][elems] image.
+   *  Only a SINGLE direct field access is in scope (no further nesting beyond the array-field index). */
+  private resolveMemDynStructArrayField(node: ts.PropertyAccessExpression): Expr | undefined {
+    if (!ts.isElementAccessExpression(node.expression) || !node.expression.argumentExpression) return undefined;
+    const elemAccess = node.expression;
+    const arr = this.resolveArrayExpr(elemAccess.expression);
+    if (
+      !arr ||
+      (arr.base.kind !== 'memArray' && arr.base.kind !== 'memArrayExpr') ||
+      arr.elem.kind !== 'struct' ||
+      !isDynStructLeaf(arr.elem)
+    )
+      return undefined;
+    const struct = arr.elem as JethType & { kind: 'struct' };
+    const index = this.checkExpr(elemAccess.argumentExpression, U256);
+    if (!index) return undefined;
+    const idx = this.coerce(index, U256, elemAccess.argumentExpression);
+    const fidx = struct.fields.findIndex((f) => f.name === node.name.text);
+    if (fidx < 0) {
+      this.diags.error(node, 'JETH210', `struct '${struct.name}' has no field '${node.name.text}'`);
+      return undefined;
+    }
+    const f = struct.fields[fidx]!;
+    // the dyn-struct HEAD-word offset: value fields take abiHeadWords words inline, dynamic fields 1 word.
+    const headWord = struct.fields
+      .slice(0, fidx)
+      .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+    const base: Expr = { kind: 'arrayGet', type: struct, arr, index: idx };
+    if (isStaticValueType(f.type)) return { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord };
+    if (isBytesLike(f.type)) return { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord, deref: true };
+    if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
+      // a dynamic value-array field: deref the head word to the [len][elems] image pointer, wrap as a
+      // memArrayExpr so a following [j] / .length reads it like any memory value-array.
+      const load: Expr = { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord, deref: true };
+      return { kind: 'arrayValue', type: f.type, arr: { base: { kind: 'memArrayExpr', expr: load }, elem: f.type.element } };
+    }
+    this.diags.error(node, 'JETH245', `reading a ${displayName(f.type)} field of a dynamic-struct-array element is not supported yet`);
+    return undefined;
   }
 
   /** The root memory-aggregate local name of a property-access chain `p.f1...fn`, else undefined. */
@@ -8913,6 +8987,55 @@ export class Analyzer {
           wordOffset: fld.wordOffset,
         };
       }
+    }
+    // Residual B3: writes on a memory P[] dyn-struct element. xs[i].a = v (value field store),
+    // xs[i].s = <bytes> / xs[i].arr = <u256[]> (re-point the head word at a fresh blob/array), and
+    // xs[i].arr[j] = v (element store into the field's array image). Must precede the static-struct chain.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isElementAccessExpression(node.expression) &&
+      this.memArrayDynStructElemAccess(node.expression)
+    ) {
+      const fv = this.resolveMemDynStructArrayField(node);
+      if (!fv) return undefined;
+      if (fv.kind === 'aggFieldRead' && isStaticValueType(fv.type)) {
+        // a value field: store at the head word (mirror of the value-field read).
+        return { kind: 'aggFieldStore', type: fv.type, base: fv.base, wordOffset: fv.wordOffset };
+      }
+      if (fv.kind === 'aggFieldRead' && isBytesLike(fv.type)) {
+        // a bytes/string field: re-point the head word at the materialized RHS blob.
+        return { kind: 'aggDynFieldStore', type: fv.type, base: fv.base, wordOffset: fv.wordOffset };
+      }
+      if (
+        fv.kind === 'arrayValue' &&
+        fv.arr.base.kind === 'memArrayExpr' &&
+        fv.arr.base.expr.kind === 'aggFieldRead'
+      ) {
+        // a whole dynamic value-array field (xs[i].arr = <u256[]>): re-point the head word at the
+        // materialized [len][elems] image pointer.
+        const af = fv.arr.base.expr;
+        return { kind: 'aggDynFieldStore', type: fv.type, base: af.base, wordOffset: af.wordOffset };
+      }
+      this.diags.error(node, 'JETH200', `writing a ${displayName(fv.type)} field of a dynamic-struct-array element is not supported yet`);
+      return undefined;
+    }
+    // Residual B3: xs[i].arr[j] = v - a VALUE element write into a memory P[] dyn-struct element's
+    // dynamic value-array field (the field's [len][elems] image). Resolve the field to its arrayValue
+    // (memArrayExpr), then a bounds-checked element store (strArrayElem reuses the memArray write path).
+    if (
+      ts.isElementAccessExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isElementAccessExpression(node.expression.expression) &&
+      node.argumentExpression &&
+      this.memArrayDynStructElemAccess(node.expression.expression)
+    ) {
+      const fv = this.resolveMemDynStructArrayField(node.expression);
+      if (fv && fv.kind === 'arrayValue' && isStaticValueType(fv.arr.elem)) {
+        const index = this.checkExpr(node.argumentExpression, U256);
+        if (!index) return undefined;
+        return { kind: 'arrayElem', type: fv.arr.elem, arr: fv.arr, index: this.coerce(index, U256, node.argumentExpression) };
+      }
+      if (fv && !isStaticValueType(fv.type) && fv.kind !== 'arrayValue') return undefined; // errored
     }
     // xs[i].a = v (and deeper: xs[i].q.m, xs[i].pre[0]) - a VALUE leaf of a memory-array static-struct
     // element. resolveMemArrayElemFieldChain gives the element image base + static word offset; the store
@@ -9275,6 +9398,12 @@ export class Analyzer {
       // offset as the store). The compound-assign/++ path lowers the base twice (read + write), so an
       // impure element index is gated by impureLValueKey below (rejected, never double-evaluated).
       return { kind: 'aggFieldRead', type: lv.type, base: lv.base, wordOffset: lv.wordOffset };
+    }
+    if (lv.kind === 'aggDynFieldStore') {
+      // a bytes/string / dynamic value-array field of a B3 dyn-struct array element: the read form is the
+      // deref'd head word (the blob/array pointer). Compound-assign on a reference field is not valid
+      // (no arithmetic on bytes/array), so this read only services symmetry helpers, never `+=`.
+      return { kind: 'aggFieldRead', type: lv.type, base: lv.base, wordOffset: lv.wordOffset, deref: true };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }
@@ -10029,6 +10158,18 @@ export class Analyzer {
       }
       return undefined;
     }
+    // Residual B3: xs[i].arr - a dynamic value-array field of a memory P[] dyn-struct element. The field
+    // resolver yields the deref'd head word (the [len][elems] image) wrapped in a memArrayExpr, so a
+    // following [j] / .length / element write consume it like any memory value-array.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isElementAccessExpression(node.expression) &&
+      this.memArrayDynStructElemAccess(node.expression)
+    ) {
+      const fv = this.resolveMemDynStructArrayField(node);
+      if (fv && fv.kind === 'arrayValue') return fv.arr;
+      return undefined;
+    }
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
       const fp = this.resolveCdDynFieldPlace(node);
       // a struct-array field of a dyn-struct param (s.items where items: It[] or Pt[]): the
@@ -10355,6 +10496,20 @@ export class Analyzer {
     if (elem.kind === 'struct') return isStaticType(elem); // B1: static struct element -> inline base
     if (isBytesLike(elem)) return false; // B2: bytes/string element -> pointer word
     return undefined;
+  }
+
+  /** True if `xs[i]` resolves to a MEMORY array whose element is a DYNAMIC-field struct (B3): the
+   *  element is a pointer-headed dyn-struct image, so `xs[i].field` is resolved by
+   *  resolveMemDynStructArrayField (not the static-inline chain resolver). */
+  private memArrayDynStructElemAccess(node: ts.ElementAccessExpression): boolean {
+    if (!node.argumentExpression) return false;
+    const arr = this.resolveArrayExpr(node.expression);
+    return (
+      !!arr &&
+      (arr.base.kind === 'memArray' || arr.base.kind === 'memArrayExpr') &&
+      arr.elem.kind === 'struct' &&
+      isDynStructLeaf(arr.elem)
+    );
   }
 
   private nestedMemArrayElemAccess(node: ts.Expression): boolean {
@@ -12099,6 +12254,26 @@ export class Analyzer {
         }
         if (dyn && !dyn.result) return undefined; // committed but errored (diagnostic already emitted)
       }
+      // Residual B3: xs[i].s.length / xs[i].arr.length on a MEMORY P[] dyn-struct element. Resolve the
+      // field (bytes -> dynLength of the blob; dynamic value-array -> arrayLen of the [len][elems] image)
+      // via the B3 field resolver, BEFORE the calldata-array-element block below (which would mis-route a
+      // memArray base into resolveCdDynArrayField -> JETH217).
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isElementAccessExpression(node.expression.expression) &&
+        this.memArrayDynStructElemAccess(node.expression.expression)
+      ) {
+        const fv = this.resolveMemDynStructArrayField(node.expression);
+        if (!fv) return undefined; // committed but errored
+        if (fv.kind === 'arrayValue') return { kind: 'arrayLen', type: U256, arr: fv.arr };
+        if (fv.type.kind === 'string') {
+          this.diags.error(node, 'JETH202', "'string' has no .length in Solidity; only 'bytes' does");
+          return undefined;
+        }
+        if (fv.type.kind === 'bytes') return { kind: 'dynLength', type: U256, operand: fv };
+        this.diags.error(node, 'JETH202', `.length is not valid on ${displayName(fv.type)}`);
+        return undefined;
+      }
       // ds[i].xs.length: a dynamic value-array FIELD of a calldata dynamic-struct ARRAY element
       // (e.g. _diamondCut[i].functionSelectors.length). The element ds[i] is reached via the
       // per-element offset table, then the field's array decodes to (start,len). Reuse the SAME
@@ -12162,10 +12337,15 @@ export class Analyzer {
       // The element may be a VALUE type (flat dynamic array), a nested VALUE-leaf array
       // (new Array<u256[]>(n) -> u256[][], new Array<Arr<u256,2>>(n), ...), a STATIC STRUCT
       // (Residual B1: new Array<P>(n) -> P[], zero-init each element to an all-zero struct image),
-      // or bytes/string (Residual B2: new Array<bytes>(n) -> bytes[], zero-init each element to an
-      // empty [0] blob). solc zero-inits each outer element accordingly. A DYNAMIC struct element
-      // (P with a bytes/dyn-array field) stays unsupported here.
-      const aggLeafElem = (elem.kind === 'struct' && isStaticType(elem)) || isBytesLike(elem);
+      // bytes/string (Residual B2: new Array<bytes>(n) -> bytes[], empty [0] blob per element),
+      // a DYNAMIC-field struct (Residual B3: new Array<P>(n) -> P[], P with a bytes/string/dyn-array
+      // field; each element zero-inits to a pointer-headed dyn-struct image with empty sentinels), or
+      // a nested-dynamic-leaf array (Residual B4: new Array<bytes[]>(n) -> bytes[][]; each element
+      // zero-inits to a fresh empty inner array [0]). solc zero-inits each outer element accordingly.
+      const aggLeafElem =
+        (elem.kind === 'struct' && (isStaticType(elem) || isDynStructLeaf(elem))) ||
+        isBytesLike(elem) ||
+        isAggregateLeafArray(elem); // B4: a nested-dynamic-leaf array element (bytes[][], ...)
       if (!isStaticValueType(elem) && !isValueLeafArray(elem) && !aggLeafElem) {
         this.diags.error(
           node.typeArguments[0]!,
@@ -12203,7 +12383,9 @@ export class Analyzer {
       const okElem =
         isStaticValueType(expected.element) ||
         (expected.element.kind === 'array' && isValueLeafArray(expected.element)) ||
+        (expected.element.kind === 'array' && isAggregateLeafArray(expected.element)) || // B4: bytes[][], ...
         (expected.element.kind === 'struct' && isStaticType(expected.element)) || // B1
+        (expected.element.kind === 'struct' && isDynStructLeaf(expected.element)) || // B3 dynamic-field struct
         isBytesLike(expected.element); // B2
       if (expected.length === undefined && !okElem) {
         this.diags.error(
@@ -12293,6 +12475,17 @@ export class Analyzer {
           return { kind: 'aggFieldRead', type: fo.type, base, wordOffset: fo.wordOffset };
         }
       }
+    }
+    // Residual B3: `xs[i].field` on a memory P[] whose element is a DYNAMIC-field struct: read a value
+    // field (aggFieldRead at the dyn head word), a bytes/string field (aggFieldRead{deref} -> the blob
+    // pointer), or a dynamic value-array field (memArrayExpr over the deref'd image). Must precede the
+    // STATIC-struct chain resolver and the calldata field resolvers.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isElementAccessExpression(node.expression) &&
+      this.memArrayDynStructElemAccess(node.expression)
+    ) {
+      return this.resolveMemDynStructArrayField(node);
     }
     // Residual B/D: a deep STATIC sub-field/element read on a memory-array STATIC-struct element
     // (xs[i].a, xs[i].q.m, xs[i].pre[0], xs[i].q.r[2]): walk the chain to a static word offset in the
