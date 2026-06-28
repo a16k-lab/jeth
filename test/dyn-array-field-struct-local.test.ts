@@ -101,7 +101,7 @@ contract C {
     await cmp('0x' + sel('cpRet()'), 'cpRet');
     for (const i of [0n, 1n, 2n]) await cmp('0x' + sel('cpIdx(uint256)') + pad32(i), `cpIdx[${i}]`);
   });
-  it('clean gates (JETH200): cd-construct, storage construct, array-field write, string[] field', () => {
+  it('clean gates (JETH200): cd-construct, storage construct, array-field write', () => {
     const Sd = '@struct class S { a: u256; xs: u256[]; b: u256; }\n';
     // (cd-struct -> mem local with a value-array field, and storage-struct construct with a value-array
     //  field, are now SUPPORTED and byte-identical to solc - see the dyn value-array assign tests.)
@@ -111,11 +111,20 @@ contract C {
           '@contract class C { @external @pure f(ys: u256[]): u256 { let p: S = S(1n, ys, 2n); p.xs = ys; return p.a; } }',
       ),
     ).toContain('JETH200');
+    // A string[] / bytes[] struct FIELD is now SUPPORTED (Cat C, byte-identical to solc - see
+    // dyn-struct-nested-leaf-array-field.test.ts). The constructor takes a typed array value.
+    expect(
+      codes(
+        '@struct class T { a: u256; ts: string[]; }\n@contract class C { @external @pure f(): u256 { let t: string[] = ["x"]; let p: T = T(1n, t); return p.a; } }',
+      ),
+    ).toEqual([]);
+    // An array LITERAL as a struct-constructor arg still rejects (JETH226), exactly as solc rejects it
+    // (solc requires a typed `new string[](0)`, not a `[]` literal, for a struct array field arg).
     expect(
       codes(
         '@struct class T { a: u256; ts: string[]; }\n@contract class C { @external @pure f(): u256 { let p: T = T(1n, []); return p.a; } }',
       ),
-    ).toContain('JETH200');
+    ).toContain('JETH226');
   });
 });
 

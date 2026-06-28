@@ -30,6 +30,7 @@ import {
   isNestedValueArray,
   isAggregateLeafArray,
   isDynStructLeaf,
+  isDynStructLeafArrayField,
   isValueLeafArray,
   storageByteSize,
   storageSlotCount,
@@ -5330,7 +5331,7 @@ export class Analyzer {
     if (
       f.type.kind === 'array' &&
       f.type.length === undefined &&
-      (isStaticValueType(f.type.element) || f.type.element.kind === 'struct')
+      (isStaticValueType(f.type.element) || f.type.element.kind === 'struct' || isDynStructLeafArrayField(f.type))
     ) {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
@@ -5339,7 +5340,9 @@ export class Analyzer {
       // dynamic-array value (a memory/calldata/storage source) is accepted here. A dynamic array of
       // STRUCT elements (Q[]) is accepted identically: the dynamic-struct ABI encoder re-encodes the
       // whole [len][...] array tail (offset table for dynamic-struct elements; contiguous abiHeadWords
-      // for static ones), and the source must be a true Q[] value, not a fixed-array literal.
+      // for static ones), and the source must be a true Q[] value, not a fixed-array literal. A
+      // NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][], Cat C) is the same: its B4 image source
+      // must be a true dynamic-array value (a memory bytes[][] local / new Array), not a literal.
       if (a.kind === 'arrayLit' || !(a.type.kind === 'array' && a.type.length === undefined)) {
         this.diags.error(
           argNode,
@@ -7126,6 +7129,25 @@ export class Analyzer {
             );
             return;
           }
+          // Cat C: a struct with a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]) is supported
+          // from a constructor / abi.decode / another memory local (the B4 image is built directly), but
+          // a STORAGE / CALLDATA-ARRAY-ELEMENT source would need a storage/calldata -> B4 pointer-headed
+          // transcode that is not implemented; keep those SOURCES a clean reject (no miscompile).
+          if (
+            (e.kind === 'structValue' ||
+              e.kind === 'mapStorageValue' ||
+              e.kind === 'structArrayElem' ||
+              e.kind === 'cdStructArrayElem' ||
+              (e.kind === 'placeRead' && e.type.kind === 'struct')) &&
+            (declared as JethType & { kind: 'struct' }).fields.some((f) => isDynStructLeafArrayField(f.type))
+          ) {
+            this.diags.error(
+              decl.initializer,
+              'JETH200',
+              `building a memory struct with a nested-dynamic-leaf array field (bytes[]/string[]/T[][]) from a storage or calldata-array source is not supported yet (use a constructor, abi.decode, or another struct local)`,
+            );
+            return;
+          }
           this.declareLocal(decl.name.text, declared);
           this.memDynStructLocals.set(decl.name.text, declared);
           out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
@@ -7438,7 +7460,12 @@ export class Analyzer {
         (target.kind === 'state' ||
           target.kind === 'mapping' ||
           target.kind === 'place' ||
-          target.kind === 'arrayElem') &&
+          // a STORAGE struct-array element only - a MEMORY P[] element (memArray/memArrayExpr base) is a
+          // pointer-headed image whose nested-leaf field is built by allocDynStructToMem (Cat C), so do
+          // NOT route it through this storage-only reject.
+          (target.kind === 'arrayElem' &&
+            target.arr.base.kind !== 'memArray' &&
+            target.arr.base.kind !== 'memArrayExpr')) &&
         target.type.kind === 'struct' &&
         target.type.fields.some(
           (f) => f.type.kind === 'array' && f.type.length === undefined && !isStaticValueType(f.type.element),
@@ -8793,9 +8820,15 @@ export class Analyzer {
     const base: Expr = { kind: 'arrayGet', type: struct, arr, index: idx };
     if (isStaticValueType(f.type)) return { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord };
     if (isBytesLike(f.type)) return { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord, deref: true };
-    if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
-      // a dynamic value-array field: deref the head word to the [len][elems] image pointer, wrap as a
-      // memArrayExpr so a following [j] / .length reads it like any memory value-array.
+    if (
+      f.type.kind === 'array' &&
+      f.type.length === undefined &&
+      (isStaticValueType(f.type.element) || isDynStructLeafArrayField(f.type))
+    ) {
+      // a dynamic value-array field, OR a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][], Cat C):
+      // deref the head word to the [len][...] image pointer (value-elems for the value case, the B4
+      // pointer-headed image for the nested-leaf case), wrap as a memArrayExpr so a following [j] /
+      // .length reads it like any memory array (the element codec handles the inner dynamic leaf).
       const load: Expr = { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord, deref: true };
       return { kind: 'arrayValue', type: f.type, arr: { base: { kind: 'memArrayExpr', expr: load }, elem: f.type.element } };
     }
@@ -8905,13 +8938,15 @@ export class Analyzer {
   private isSupportedDynStructLocal(t: JethType): boolean {
     if (t.kind !== 'struct' || !isDynamicType(t)) return false;
     // every field must be a value type (inline head word), bytes/string (head pointer to [len][data]),
-    // or a dynamic value-element array (head pointer to [len][elems]). Static-array / nested-struct /
-    // string[] / T[][] fields stay gated.
+    // a dynamic value-element array (head pointer to [len][elems]), or a NESTED-DYNAMIC-LEAF array
+    // (bytes[]/string[]/T[][]) whose head word points to the B4 pointer-headed image (Cat C).
+    // Static-array / nested-struct / struct-element-array fields stay gated.
     return t.fields.every(
       (f) =>
         isStaticValueType(f.type) ||
         isBytesLike(f.type) ||
-        (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)),
+        (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
+        isDynStructLeafArrayField(f.type),
     );
   }
 
@@ -10523,6 +10558,42 @@ export class Analyzer {
       arr.elem.kind === 'struct' &&
       isDynStructLeaf(arr.elem)
     );
+  }
+
+  /** Cat C: true if `node` is an index chain into a NESTED-DYNAMIC-LEAF array FIELD of a dynamic-struct
+   *  memory local OR of a dynamic-struct memory-ARRAY element: `p.tags[j]`, `p.tags[j][k]`,
+   *  `xs[i].tags[j]`, ... The field's head word holds the B4 pointer-headed image, which resolveArrayExpr
+   *  wraps in a memArrayExpr; the index dispatch (bytes/string/array element) reads it like any memory
+   *  nested array. Innermost element access only (the base resolveArrayExpr resolves the field). */
+  private memDynStructLeafArrayElemAccess(node: ts.Expression): boolean {
+    if (!ts.isElementAccessExpression(node) || !node.argumentExpression) return false;
+    const arr = this.resolveArrayExpr(node.expression);
+    return (
+      !!arr &&
+      (arr.base.kind === 'memArrayExpr' || arr.base.kind === 'memArray') &&
+      (arr.elem.kind === 'array' || isBytesLike(arr.elem)) &&
+      this.isMemDynStructLeafArrayFieldChain(node.expression)
+    );
+  }
+
+  /** Whether `node` is `p.field` (field of a dyn-struct memory local) or `xs[i].field` (field of a
+   *  dyn-struct memory-array element) where `field` is a NESTED-DYNAMIC-LEAF array (Cat C). Used to gate
+   *  the dyn-struct-leaf-array element-access branch without re-triggering the storage/nested-local paths. */
+  private isMemDynStructLeafArrayFieldChain(node: ts.Expression): boolean {
+    if (!ts.isPropertyAccessExpression(node)) return false;
+    // p.field on a dyn-struct memory local
+    if (ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
+      const mf = this.memDynStructField(node);
+      return !!mf && isDynStructLeafArrayField(mf.field.type);
+    }
+    // xs[i].field on a dyn-struct memory-array element
+    if (ts.isElementAccessExpression(node.expression) && this.memArrayDynStructElemAccess(node.expression)) {
+      const arr = this.resolveArrayExpr(node.expression.expression);
+      if (!arr || arr.elem.kind !== 'struct') return false;
+      const f = arr.elem.fields.find((ff) => ff.name === node.name.text);
+      return !!f && isDynStructLeafArrayField(f.type);
+    }
+    return false;
   }
 
   private nestedMemArrayElemAccess(node: ts.Expression): boolean {
@@ -12550,6 +12621,48 @@ export class Analyzer {
         const idx = this.coerce(index, U256, node.argumentExpression);
         if (!this.checkMemElemBound(idx, at.length, node.argumentExpression)) return undefined;
         return { kind: 'memElem', type: at.element, local: node.expression.text, index: idx, length: at.length };
+      }
+    }
+    // Cat C: p.tags[j] / p.tags[j][k] / xs[i].tags[j] - an index into a NESTED-DYNAMIC-LEAF array field
+    // (bytes[]/string[]/T[][]) of a dyn-struct memory local / memory-array element. resolveArrayExpr wraps
+    // the field's B4 image in a memArrayExpr; dispatch by element type exactly like a standalone B4 local
+    // (bytes/string -> strArrayElem absolute-pointer load; an inner array -> arrayValue/arrayGet via the
+    // outer resolveArrayExpr; a value leaf -> arrayGet). Reached BEFORE the storage/mapping resolvers.
+    if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression &&
+      this.memDynStructLeafArrayElemAccess(node)
+    ) {
+      const baseArr = this.resolveArrayExpr(node.expression);
+      if (baseArr && (baseArr.base.kind === 'memArrayExpr' || baseArr.base.kind === 'memArray')) {
+        if (isBytesLike(baseArr.elem)) {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          return {
+            kind: 'strArrayElem',
+            type: baseArr.elem,
+            arr: baseArr,
+            index: this.coerce(index, U256, node.argumentExpression),
+          };
+        }
+        if (isStaticValueType(baseArr.elem)) {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          return {
+            kind: 'arrayGet',
+            type: baseArr.elem,
+            arr: baseArr,
+            index: this.coerce(index, U256, node.argumentExpression),
+          };
+        }
+        if (baseArr.elem.kind === 'array') {
+          // a still-deeper inner array (p.grid[i] where grid is u256[][]): yield the whole inner array
+          // value; a following [k] is owned by the outer resolveArrayExpr / nested element resolver.
+          const whole = this.resolveArrayExpr(node);
+          if (whole && (whole.base.kind === 'memArrayExpr' || whole.base.kind === 'memArray')) {
+            return { kind: 'arrayValue', type: baseArr.elem, arr: whole };
+          }
+        }
       }
     }
     // m[i][j] / m[i] read on a NESTED MEMORY value-array local (a dynamic-outer memArray, or a fixed

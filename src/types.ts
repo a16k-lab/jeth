@@ -362,19 +362,36 @@ export function isDynBytesLeafArray(t: JethType): boolean {
   return false;
 }
 
+/** Cat C: a dynamic-field struct FIELD that is a NESTED-DYNAMIC-LEAF array - `bytes[]`, `string[]`,
+ *  or a `T[][]` (nested VALUE array bearing a dynamic outer level: u256[][], u256[][][], ...). Its
+ *  pointer-headed memory image is the SAME B4 image a standalone such array uses, so the dyn-struct
+ *  head word holds an absolute pointer to it and encode/decode/read DELEGATE to the existing B4
+ *  machinery (abiEncFromMem / abiDecFromMemToImage / the memArrayExpr element codec). A struct-element
+ *  array field (`P[]`) and any FIXED outer (`Arr<bytes,N>`) are EXCLUDED here - those stay gated. */
+export function isDynStructLeafArrayField(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length !== undefined) return false; // dynamic outer only
+  if (isStaticValueType(t.element)) return false; // a flat value array (u256[]) is the 3rd clause, not this
+  // bytes[] / string[] / deeper byte-sequence-leaf arrays (bytes[][], string[][][], ...)
+  if (isDynBytesLeafArray(t)) return true;
+  // T[][] and deeper nested VALUE arrays (the inner levels may be dynamic OR fixed; the leaf is a value).
+  return isNestedValueArray(t);
+}
+
 /** A struct whose every field is one of the pointer-headed dyn-struct-image leaves the codec
  *  can build (value -> inline head word; bytes/string -> head pointer to [len][data]; dynamic
- *  value-element array -> head pointer to [len][elems]) AND which has at least one dynamic
- *  field (so it is a genuine dynamic-field struct, not a static struct that B1 owns). Mirrors
+ *  value-element array -> head pointer to [len][elems]; a NESTED-DYNAMIC-LEAF array (bytes[]/string[]/
+ *  T[][]) -> head pointer to the B4 pointer-headed image) AND which has at least one dynamic field (so
+ *  it is a genuine dynamic-field struct, not a static struct that B1 owns). Mirrors
  *  Analyzer.isSupportedDynStructLocal (kept here so the array gate can recurse without an
- *  Analyzer instance). Static-array / nested-struct / non-value-element-array fields stay gated. */
+ *  Analyzer instance). Static-array / nested-struct / struct-element-array fields stay gated. */
 export function isDynStructLeaf(t: JethType): boolean {
   if (t.kind !== 'struct' || !isDynamicType(t)) return false;
   return t.fields.every(
     (f) =>
       isStaticValueType(f.type) ||
       isBytesLike(f.type) ||
-      (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)),
+      (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
+      isDynStructLeafArrayField(f.type),
   );
 }
 

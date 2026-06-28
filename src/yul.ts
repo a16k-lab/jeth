@@ -25,6 +25,7 @@ import {
   isStaticValueType,
   isNestedValueArray,
   isAggregateLeafArray,
+  isDynStructLeafArrayField,
   isImplicitWiden,
   arrayElemPacks,
   abiHeadWords,
@@ -3311,6 +3312,18 @@ ${indent(runtime, 6)}
    *  pre-pass + encodeTupleInto sequence. */
   private encodeDynStructToBlob(value: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
     const struct = value.type as JethType & { kind: 'struct' };
+    // Cat C: a STORAGE struct (this.s -> structValue) with a NESTED-DYNAMIC-LEAF array field cannot be
+    // routed through the memory codec (buildDynStructFromStorage would need a storage -> B4 transcode);
+    // encode it DIRECTLY from storage with abiEncFromStorage - the SAME recursive encoder `return this.s`
+    // uses (echoStorage), proven byte-identical to solc. Produces the bare tuple blob (no return wrapper).
+    if (value.kind === 'structValue' && struct.fields.some((f) => isDynStructLeafArrayField(f.type))) {
+      const mp = this.fresh();
+      out.push(`let ${mp} := mload(0x40)`);
+      const size = this.fresh();
+      out.push(`let ${size} := ${this.abiEncFromStorage(struct, String(value.baseSlot), 0, mp, out)}`);
+      out.push(`mstore(0x40, add(${mp}, ${size}))`);
+      return { mp, size };
+    }
     const src = this.tupleSrc(value, ctx, out);
     const queue: DynRef[] = [];
     this.collectTupleDyn(struct, src, queue, ctx, out);
@@ -3595,6 +3608,19 @@ ${indent(runtime, 6)}
     }
     if (f.type.kind === 'array' && f.type.length === undefined) {
       const ref = nextRef();
+      // Cat C: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]). The materialized memory image
+      // is the B4 pointer-headed image (NOT a self-contained ABI blob), so transcode it to the canonical
+      // ABI tail (relative offsets) at the cursor via abiEncFromMem - the SAME encoder a standalone such
+      // array uses. A verbatim mcopy would copy absolute pointers and corrupt the encoding. NOTE: this is
+      // ONLY the nested-leaf case (isDynStructLeafArrayField); a struct-element array field (Q[]) keeps the
+      // verbatim-copy path below, whose materialized image IS already a self-contained ABI tail blob.
+      if (ref.src === 'memory' && isDynStructLeafArrayField(f.type)) {
+        const sz = this.fresh();
+        out.push(`let ${sz} := ${this.abiEncFromMem(f.type, ref.ptr, cursor, ctx, out)}`);
+        const nc = this.fresh();
+        out.push(`let ${nc} := add(${cursor}, ${sz})`);
+        return nc;
+      }
       // A STRUCT-element array field: the materialized memory image IS the full ABI tail blob
       // [len][offset-table?][element payloads], a self-contained, position-independent encoding.
       // Copy it verbatim at the cursor (relative offsets stay valid after the move); the new cursor
@@ -4851,9 +4877,15 @@ ${indent(runtime, 6)}
         const { mp } = this.toMemory(this.lowerDynamic(value.args[i]!, ctx, out), out);
         out.push(`mstore(${at}, ${mp})`);
         hw += 1;
-      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+      } else if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
         // a dynamic value-array field: materialize the arg to a [len][elems] memory pointer, store it.
         out.push(`mstore(${at}, ${this.aggArgToMemPtr(value.args[i]!, ctx, out)})`);
+        hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // Cat C: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]). Build the B4 pointer-headed
+        // image of the arg (an array literal / new Array<E>(n) / a memory aggregate-array source), store
+        // its absolute pointer in the head word - the same image abiEncFromMem/read/decode consume.
+        out.push(`mstore(${at}, ${this.nestedMemImagePtr(value.args[i]!, ctx, out)})`);
         hw += 1;
       } else {
         out.push(`mstore(${at}, ${this.lowerExpr(value.args[i]!, ctx, out)})`);
@@ -4912,7 +4944,7 @@ ${indent(runtime, 6)}
         const { mp } = this.toMemory({ src: 'storage', slot: slotAt(f.slot) }, out);
         out.push(`mstore(${at}, ${mp})`);
         hw += 1;
-      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+      } else if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
         // a dynamic value-array field: copy the storage array (length slot = f's slot) to a fresh
         // [len][elems] memory image (storage is canonical, no masking needed); store the pointer.
         const dst = this.fresh();
@@ -4921,6 +4953,14 @@ ${indent(runtime, 6)}
         out.push(`mstore(0x40, add(${dst}, ${size}))`);
         out.push(`mstore(${at}, ${dst})`);
         hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // Cat C: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]) from a STORAGE struct would
+        // need a storage -> B4 pointer-headed transcode that is not implemented. This source is gated by
+        // the analyzer (checkLocalDecl storage-source guard / the return/encode-of-storage-struct gates),
+        // so reaching here is a bug; fail loud rather than emit a wrong image (no silent miscompile).
+        throw new UnsupportedError(
+          `copying a storage dynamic-field struct with a nested-dynamic-leaf array field is not supported yet`,
+        );
       } else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
         // a nested STATIC aggregate field (struct / fixed-array): flatten ALL its leaves into the head
         // (one ABI head word per leaf) directly from storage, via the same storage->ABI transcoder the
@@ -5031,7 +5071,10 @@ ${indent(runtime, 6)}
     for (const f of struct.fields) {
       const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
       const headAt = hw === 0 ? base : `add(${base}, ${hw * 32})`;
-      if (isBytesLike(f.type) || (f.type.kind === 'array' && f.type.length === undefined)) {
+      if (
+        isBytesLike(f.type) ||
+        (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element))
+      ) {
         // a dynamic field: head word = offset (relative to the tuple start) to the field tail.
         const so = this.fresh();
         out.push(`let ${so} := mload(${headAt})`);
@@ -5044,6 +5087,21 @@ ${indent(runtime, 6)}
         const size = this.abiDecFromMem(f.type, se, dst, blobEnd, out);
         out.push(`mstore(0x40, add(${dst}, ${size}))`);
         out.push(`mstore(${at}, ${dst})`);
+        hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // Cat C: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]). Head word = offset (relative
+        // to the tuple start) to the field tail; decode the tail into a fresh B4 pointer-headed image via
+        // abiDecFromMemToImage and store ITS absolute pointer (not a relative-offset ABI block) in the
+        // head word - the layout the read/encode paths consume. Same OOB/cap revert semantics as solc.
+        const so = this.fresh();
+        out.push(`let ${so} := mload(${headAt})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${base}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), ${blobEnd}) { revert(0, 0) }`);
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromMemToImage(f.type, se, blobEnd, out)}`);
+        out.push(`mstore(${at}, ${ip})`);
         hw += 1;
       } else {
         // a static value field: one validated word, inline (abiDecFromMem validates dirty bits).
