@@ -116,9 +116,9 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
     }
   });
 
-  it('SOUNDNESS: a memory struct-array element write rejects a reference RHS (would alias in solc, copy in JETH)', () => {
-    // xs[i] = P(...) (fresh) accepts; xs[i] = xs[j] / xs[i] = <struct local> reject cleanly (JETH200, NOT a
-    // crash, NOT a miscompile) because solc aliases the element while JETH copies the inline image.
+  it('a memory struct-array element write now ACCEPTS a reference RHS (static-struct arrays are pointer-headed)', () => {
+    // static-struct memory arrays are now POINTER-HEADED like solc, so xs[i] = xs[j] / xs[i] = <local>
+    // ALIASES (copies the element pointer) byte-identically (covered in pointer-headed-static-struct-array.test.ts).
     const codes = (src: string): string[] => {
       try {
         compile(src, { fileName: 'C.jeth' });
@@ -129,9 +129,8 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
     };
     const C = (body: string) => `@struct class P { a: u256; b: u256; }\n@contract class C { @external @pure f(i: u256, j: u256): u256 { let xs: P[] = new Array<P>(2n); ${body} return xs[0n].a; } }`;
     expect(codes(C('xs[i] = P(1n, 2n);'))).toEqual([]); // fresh -> accept
-    expect(codes(C('xs[0n] = xs[1n];'))).toContain('JETH200'); // element ref -> reject
-    expect(codes(C('let s: P = P(1n, 2n); xs[0n] = s;'))).toContain('JETH200'); // local ref -> reject
-    expect(codes(C('xs[0n] = xs[1n];'))).not.toContain('JETH900'); // clean reject, not a crash
+    expect(codes(C('xs[0n] = xs[1n];'))).toEqual([]); // element ref -> aliases
+    expect(codes(C('let s: P = P(1n, 2n); xs[0n] = s;'))).toEqual([]); // local ref -> aliases
   });
 
   it('bytes[]/string[] memory element write bs[i] = bytes(..) (re-point, OOB, alias, re-encode) [was JETH217]', async () => {

@@ -82,8 +82,10 @@ describe('abi.decode into a struct / tuple-with-struct target (JETH322 core lift
     // B4: a nested-dynamic-leaf array (bytes[][]) is now ACCEPTED (byte-identical decode).
     const preC = `@contract class C { @external @pure f(b: bytes): u256 {`;
     expect(codes(`${preC} let m: bytes[][] = abi.decode(b, bytes[][]); return m.length; } }`)).toEqual([]);
-    // DEFERRED (still rejects cleanly, not a miscompile): a STATIC-struct-leaf nested array P[][].
+    // A STATIC-struct array P[] / nested P[][] are now ACCEPTED (pointer-headed; byte-identical decode
+    // covered in pointer-headed-static-struct-array.test.ts).
     const preP = `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(b: bytes): u256 {`;
-    expect(codes(`${preP} let m: P[][] = abi.decode(b, P[][]); return m.length; } }`).length).toBeGreaterThan(0);
+    expect(codes(`${preP} let m: P[] = abi.decode(b, P[]); return m.length; } }`)).toEqual([]);
+    expect(codes(`${preP} let m: P[][] = abi.decode(b, P[][]); return m.length; } }`)).toEqual([]);
   });
 });

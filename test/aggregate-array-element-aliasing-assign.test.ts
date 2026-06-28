@@ -66,11 +66,11 @@ describe('Cat A2: pointer-headed aggregate-array element aliasing assignment - b
     await diff(J, S, ['be2e()', 'benc()', 'ue2e()', 'blocal()', 'blit()']);
   });
 
-  it('SOUNDNESS: an INLINE static-struct array element ref-assign stays a clean reject; fresh RHS accepts', () => {
+  it('a static-struct array element ref-assign now ACCEPTS (static-struct arrays are pointer-headed)', () => {
     const C = (body: string) => `@struct class P { a: u256; b: u256; }\n@contract class C { @external @pure f(): u256 { let xs: P[] = new Array<P>(2n); ${body} return xs[0n].a; } }`;
     expect(codes(C('xs[0n] = P(1n, 2n);'))).toEqual([]); // fresh -> accept
-    expect(codes(C('xs[0n] = P(1n, 2n); xs[1n] = xs[0n];'))).toContain('JETH200'); // inline ref -> reject
-    // pointer-headed (dyn-field struct) element ref-assign ACCEPTS (lifted):
+    expect(codes(C('xs[0n] = P(1n, 2n); xs[1n] = xs[0n];'))).toEqual([]); // element ref -> now aliases (pointer-headed)
+    // pointer-headed (dyn-field struct) element ref-assign also ACCEPTS:
     expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): u256 { let xs: P[] = new Array<P>(2n); xs[0n]=P(1n,bytes("x")); xs[1n]=xs[0n]; return xs[1n].a; } }`)).toEqual([]);
   });
 });

@@ -191,9 +191,9 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
     expect(
       jethCodes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(n: u256): bytes { let a: P[] = new Array<P>(n); return abi.encode(a); } }`),
     ).toEqual([]);
-    // a STATIC-struct-leaf nested array (P[][]) stays DEFERRED -> clean reject (safe subset), NOT JETH900.
-    expect(jethCodes(`@struct class Q{a:u256;b:u256;} @contract class C { @external @pure f(n: u256): bytes { let a: Q[][] = new Array<Q[]>(n); return abi.encode(a); } }`)).not.toContain('JETH900');
-    expect(jethCodes(`@struct class Q{a:u256;b:u256;} @contract class C { @external @pure f(n: u256): bytes { let a: Q[][] = new Array<Q[]>(n); return abi.encode(a); } }`).length > 0).toBe(true);
+    // a STATIC-struct-leaf nested array (Q[][]) now ACCEPTS (pointer-headed, byte-identical - see
+    // pointer-headed-static-struct-array.test.ts).
+    expect(jethCodes(`@struct class Q{a:u256;b:u256;} @contract class C { @external @pure f(n: u256): bytes { let a: Q[][] = new Array<Q[]>(n); return abi.encode(a); } }`)).toEqual([]);
     expect(jethCodes(f('let a: u256[][] = new Array<u256[]>(n); return abi.encode(a);'))).not.toContain('JETH900');
     // wrong arity -> JETH363, no crash
     expect(jethCodes(f('let a: u256[] = new Array<u256>(); return abi.encode(a);'))).toContain('JETH363');

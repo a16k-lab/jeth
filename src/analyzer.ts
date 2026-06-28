@@ -7196,7 +7196,12 @@ export class Analyzer {
         // a STATIC struct ELEMENT of a calldata struct array (let p: P = ps[i]): copy the
         // element's (contiguous) calldata head into a fresh static-aggregate memory image, the
         // existing static-aggregate copy path applied at the element base.
-        e.kind === 'cdStructArrayElem';
+        e.kind === 'cdStructArrayElem' ||
+        // a static-struct ELEMENT of a MEMORY struct array (let p: P = xs[i], xs: P[]): now that
+        // static-struct arrays are POINTER-HEADED, the element slot holds an absolute pointer, so
+        // binding p ALIASES the element image (pointer copy) - byte-identical to solc (mutating p
+        // writes through to xs[i]; re-pointing xs[i] = P(...) leaves p on the old image).
+        e.kind === 'arrayGet';
       if (!okInit) {
         this.diags.error(
           decl.initializer,
@@ -7210,7 +7215,8 @@ export class Analyzer {
           e.kind === 'cdAggregateValue' ||
           e.kind === 'mapStorageValue' ||
           e.kind === 'structArrayElem' ||
-          e.kind === 'cdStructArrayElem') &&
+          e.kind === 'cdStructArrayElem' ||
+          e.kind === 'arrayGet') &&
         (e.type.kind !== 'struct' ||
           (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)
       ) {
@@ -7343,16 +7349,22 @@ export class Analyzer {
         );
         return;
       }
-      // Residual C2/C3: abi.decode(b, P[]) / abi.decode(b, bytes[]) / abi.decode(b, string[]) builds the
-      // SAME image (C2 inline blocks via abiDecFromMem, C3 absolute-pointer-of-blobs via abiDecFromMemToImage),
-      // with solc memory-decode revert semantics. A whole-array alias/copy is still a later step (JETH200).
-      // EXCEPTION: an ELEMENT of a POINTER-HEADED nested array (let row: bytes[] = xs[i], xs: bytes[][])
-      // binds row by ALIASING the element (the inner array's absolute pointer stored in the outer slot).
-      // This is byte-identical to solc: mutating row writes through to xs[i]; re-pointing xs[i] leaves row
-      // on the old image. Gated to a MEMORY source (an inline static-struct array stays JETH200).
+      // Residual C2/C3 + Cat B: abi.decode(b, P[]) / abi.decode(b, bytes[]) / abi.decode(b, string[]) /
+      // abi.decode(b, P[][]) all build a POINTER-HEADED image (a static-struct P[] is now pointer-headed
+      // too, via abiDecFromMemToImage), with solc memory-decode revert semantics. A whole-array alias/copy
+      // from an arbitrary source is still a later step (JETH200), EXCEPT a call result (fromCall below).
+      // EXCEPTION: an ELEMENT of a POINTER-HEADED nested array (let row: bytes[] = xs[i], xs: bytes[][];
+      // or let row: P[] = pp[i], pp: P[][]) binds row by ALIASING the element (the inner array's absolute
+      // pointer stored in the outer slot). This is byte-identical to solc: mutating row writes through to
+      // xs[i]; re-pointing xs[i] leaves row on the old image. Gated to a MEMORY source.
       const fromMemElem =
         e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr');
-      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode' && !fromMemElem) {
+      // Cat B: an internal call returning an aggregate-leaf array (let xs: P[] = this.mk()) binds the
+      // returned memory image pointer directly (the callee already built the pointer-headed image), the
+      // same as a value-element-array call result. The internal-call gate (isMemByRef) validates the
+      // callee return type.
+      const fromCall = e.kind === 'call' && e.type.kind === 'array';
+      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode' && !fromMemElem && !fromCall) {
         this.diags.error(
           decl.initializer,
           'JETH200',
@@ -7478,33 +7490,12 @@ export class Analyzer {
         );
         return;
       }
-      // SOUNDNESS: a whole-struct write to an INLINE (static-struct) MEMORY array element (xs[i] = <struct>)
-      // copies the inline element image, but solc's memory struct-array elements are REFERENCES - so
-      // assigning a LIVE memory reference (another element xs[j], a struct local, a sub-aggregate field)
-      // ALIASES in solc, and a later mutation of the source would then diverge from JETH's independent
-      // copy. Accept only a FRESH RHS (a constructor, a storage/calldata copy, or a call result, where
-      // copy == alias observably); reject a memory-reference RHS (clean over-rejection, NOT a miscompile).
-      // A POINTER-HEADED (dynamic-field) struct array is NOT gated here: its element write re-points the
-      // slot at the RHS image pointer (yul.ts ~1670), so a reference RHS ALIASES exactly like solc.
-      if (
-        target.kind === 'arrayElem' &&
-        target.type.kind === 'struct' &&
-        isStaticType(target.type) &&
-        (target.arr.base.kind === 'memArray' || target.arr.base.kind === 'memArrayExpr')
-      ) {
-        const FRESH_STRUCT_RHS = new Set([
-          'structNew', 'structValue', 'mapStorageValue', 'structArrayElem', 'placeRead',
-          'cdAggregateValue', 'cdStructArrayElem', 'call',
-        ]);
-        if (!FRESH_STRUCT_RHS.has(value.kind)) {
-          this.diags.error(
-            e.right,
-            'JETH200',
-            `assigning a memory struct reference to a memory struct-array element (xs[i] = <ref>) is not supported: solc aliases the element while JETH would copy it, so a later mutation of the source would diverge. Use a fresh value (xs[i] = P(...)) or copy field-by-field.`,
-          );
-          return;
-        }
-      }
+      // Cat B: a static-struct MEMORY array is now POINTER-HEADED (each element is an absolute pointer
+      // to a fresh per-element image), so a whole-element write xs[i] = <struct> RE-POINTS the slot at
+      // the RHS image (yul.ts ~1691): a constructor xs[i] = P(..) re-points to a fresh image; a memory
+      // reference xs[i] = xs[j] / = ref ALIASES by storing the source's image pointer - byte-identical
+      // to solc's reference semantics. The old "fresh RHS only" soundness gate is therefore removed
+      // (the copy-vs-alias divergence it guarded no longer exists).
       // Eval-order: solc evaluates the RHS before the LHS location. The value-type and bytes/string
       // element paths reorder correctly in codegen, but the WHOLE-AGGREGATE element write path
       // (recs[i] = P(...), dd[i] = [...]) does not, so a side-effecting index/key would run before the
@@ -7880,9 +7871,20 @@ export class Analyzer {
       (t.kind === 'struct' && isStaticType(t)) ||
       (t.kind === 'array' && t.length !== undefined && isStaticType(t)) || // a static fixed array Arr<T,N>
       (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) ||
+      // Cat B: a STATIC-STRUCT dynamic array (P[]) is a pointer-headed memory image (a single pointer),
+      // so it passes BY MEMORY REFERENCE exactly like a value-element array - a memory source aliases,
+      // a literal/storage/calldata source is copied to a fresh image.
+      (t.kind === 'array' && t.length === undefined && t.element.kind === 'struct' && isStaticType(t.element)) ||
       isBytesLike(t);
+    // A static-struct dynamic array P[] passes by-reference as a RETURN (supported), but passing one
+    // as an internal-call PARAMETER is not wired in codegen yet (the same broad gap that keeps a
+    // dynamic-field struct array D[] / bytes[] internal param rejected) - so keep P[] params a clean
+    // JETH242 reject rather than reaching a codegen crash.
+    const isStaticStructDynArray = (t: JethType): boolean =>
+      t.kind === 'array' && t.length === undefined && t.element.kind === 'struct' && isStaticType(t.element);
     const paramSupported = (t: JethType): boolean =>
-      isStaticValueType(t) || (aggOK && (isMemByRef(t) || this.isSupportedDynStructLocal(t)));
+      isStaticValueType(t) ||
+      (aggOK && ((isMemByRef(t) && !isStaticStructDynArray(t)) || this.isSupportedDynStructLocal(t)));
     for (const p of callee.params) {
       if (paramSupported(p.type)) continue;
       const hint =
@@ -10538,13 +10540,16 @@ export class Analyzer {
    *  or a fixed memAggregate nested-value-array local (Arr<Arr<u256,2>,2>, Arr<u256[],N>). Used to
    *  route the nested element read through resolveArrayExpr's chaining path. */
   /** Whether a memory-array element is an INLINE sub-image (addressed by base + i*ew) vs a
-   *  single word. A static ARRAY or static STRUCT element is inline (memStaticElem = true); a
-   *  bytes/string element is a single absolute-pointer word (false); a value element is a single
-   *  value word (undefined - lowerArrayGet's value branch owns it). Drives the codec's inline-base
-   *  vs pointer-load choice for nested / aggregate-leaf memory arrays. */
+   *  single absolute-pointer word. A static VALUE ARRAY element (Arr<u256,N>) is inline
+   *  (memStaticElem = true); a STRUCT element is a REFERENCE type -> a single absolute-pointer
+   *  word (false), matching solc's memory model (every element of a P[] is a pointer to a fresh
+   *  per-element image), so `xs[i]=xs[j]` / `let p=xs[i]` / `P[][]` ALIAS like solc; a bytes/string
+   *  element is also a single pointer word (false); a value element is a single value word
+   *  (undefined - lowerArrayGet's value branch owns it). Drives the codec's inline-base vs
+   *  pointer-load choice for nested / aggregate-leaf memory arrays. */
   private memElemStatic(elem: JethType): boolean | undefined {
-    if (elem.kind === 'array') return isStaticType(elem);
-    if (elem.kind === 'struct') return isStaticType(elem); // B1: static struct element -> inline base
+    if (elem.kind === 'array') return isStaticType(elem); // static VALUE sub-array -> inline base
+    if (elem.kind === 'struct') return false; // a struct is a reference type -> absolute-pointer word
     if (isBytesLike(elem)) return false; // B2: bytes/string element -> pointer word
     return undefined;
   }

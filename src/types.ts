@@ -345,9 +345,20 @@ export function isAggregateLeafArray(t: JethType): boolean {
   if (isBytesLike(e)) return true; // B2: bytes/string element
   // B4: a nested array element whose ultimate leaf is a DYNAMIC byte-sequence (bytes[][]/string[][],
   // and deeper, e.g. bytes[][][]). The inner array image is itself laid out by the recursive codec.
-  // A static-struct-leaf nested array (P[][]) is EXCLUDED here - its deep field read m[i][j].f is not
-  // byte-identical yet, so it stays a clean rejection rather than risk a miscompile.
-  if (e.kind === 'array') return isDynBytesLeafArray(e);
+  // Cat B: a static-struct-leaf nested array (P[][], and deeper) is ALSO admitted now - static structs
+  // are pointer-headed, so the inner P[] is a pointer-headed image the recursive codec builds/reads
+  // exactly like B4, and pp[i][j].f / abi.encode/decode / aliasing are byte-identical to solc.
+  if (e.kind === 'array') return isDynBytesLeafArray(e) || isStaticStructLeafArray(e);
+  return false;
+}
+
+/** Cat B: a DYNAMIC array whose ultimate leaf (descending through any number of DYNAMIC-array nesting
+ *  levels) is a STATIC struct: P[][], P[][][], ... (the inner levels must be dynamic; a fixed level
+ *  Arr<P,N>[] stays gated). Each level is pointer-headed, so the recursive memory codec handles it. */
+export function isStaticStructLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length !== undefined) return false;
+  if (t.element.kind === 'struct') return isStaticType(t.element);
+  if (t.element.kind === 'array') return isStaticStructLeafArray(t.element);
   return false;
 }
 

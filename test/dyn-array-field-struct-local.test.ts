@@ -240,8 +240,8 @@ contract C {
     const corrupt = blob.slice(0, 128) + pad32(BigInt('0xffffffffffffffffffff')) + blob.slice(192);
     await cmp('0x' + sel('dec(bytes)') + bytesParam(corrupt), 'dec corrupt-offset');
   });
-  it('clean rejections (no miscompile): static-struct nested array R[][], FIXED outer Arr<P,N>', () => {
-    expect(codes(`@struct class R{a:u256;b:u256;} @contract class C { @external @pure f(): R[][] { let m: R[][] = [[R(1n,2n)]]; return m; } }`).length).toBeGreaterThan(0);
+  it('R[][] (static-struct nested array) now ACCEPTS (pointer-headed); FIXED outer Arr<P,N> still rejects', () => {
+    expect(codes(`@struct class R{a:u256;b:u256;} @contract class C { @external @pure f(): R[][] { let m: R[][] = [[R(1n,2n)]]; return m; } }`)).toEqual([]);
     expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,bytes("x")),P(2n,bytes("y"))]; return m; } }`).length).toBeGreaterThan(0);
   });
 });

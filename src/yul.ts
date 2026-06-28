@@ -24,6 +24,7 @@ import {
   isStaticType,
   isStaticValueType,
   isNestedValueArray,
+  isValueLeafArray,
   isAggregateLeafArray,
   isDynStructLeafArrayField,
   isImplicitWiden,
@@ -47,6 +48,17 @@ export class UnsupportedError extends Error {
     super(message);
     this.name = 'UnsupportedError';
   }
+}
+
+/** Cat B: a STATIC-STRUCT memory-array element is laid out POINTER-HEADED (one absolute-pointer
+ *  word per element -> a fresh per-element image), like solc's memory model for reference types,
+ *  while a static VALUE leaf or static VALUE sub-array (u256[], Arr<u256,N>[]) stays INLINE. Used
+ *  at every codec / construct / zero-init / write site that forks on `isStaticType(t.element)` to
+ *  add the pointer-headed sub-branch for a struct element WITHOUT touching the value-leaf path.
+ *  A DYNAMIC-FIELD struct (B3, isStaticType=false) is NOT matched here: it stays on the existing
+ *  dynamic/else branch (already pointer-headed), so this predicate requires a STATIC struct. */
+function isPointerHeadedStaticElem(e: JethType): boolean {
+  return e.kind === 'struct' && isStaticType(e);
 }
 
 // Phase 6 external-call scoped bindings (this.ok / this.data inside a success condition). These keys
@@ -1254,11 +1266,20 @@ ${indent(runtime, 6)}
             s.value.kind === 'incDec' ||
             (s.value.kind === 'call' && isDynamicType(s.value.type))
           ) {
-            // FREEZE the pointer first: encodeMemArrayReturn reads it multiple times, and a `call`
+            // FREEZE the pointer first: the encoder reads it multiple times, and a `call`
             // lowers to an inline `userfn_x(...)` that would otherwise be re-invoked per use.
             const p = this.fresh();
             out.push(`let ${p} := ${this.lowerExpr(s.value, ctx, out)}`);
-            const { ptr, size } = this.encodeMemArrayReturn(p, out);
+            // An aggregate-leaf / nested-value image (P[] static-struct now pointer-headed, bytes[]/string[],
+            // u256[][], P[][]) must go through the recursive codec (abiEncFromMem flattens a static-struct
+            // element INLINE, follows a dynamic-element pointer) - the SAME encoder the abiDecode-return and
+            // return-via-local paths use. encodeMemArrayReturn is only for a FLAT value array; using it on a
+            // pointer-headed static-struct image would emit a wrong per-element offset table.
+            const codecSourced =
+              (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) || isAggregateLeafArray(s.value.type);
+            const { ptr, size } = codecSourced
+              ? this.encodeNestedMemReturn(s.value.type, p, ctx, out)
+              : this.encodeMemArrayReturn(p, out);
             out.push(`return(${ptr}, ${size})`);
             break;
           }
@@ -1431,6 +1452,11 @@ ${indent(runtime, 6)}
           } else if (s.init.kind === 'abiDecode') {
             // a static fixed array Arr<T,N> from abi.decode: the decoded flat ABI image is the local.
             out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
+          } else if (s.init.kind === 'arrayGet') {
+            // a static-struct ELEMENT of a now-POINTER-HEADED memory struct array (let p: P = xs[i]):
+            // aggToMemPtr returns the element slot's absolute pointer, so p ALIASES the element image
+            // (no copy) - byte-identical to solc (mutating p writes through; re-pointing xs[i] leaves p).
+            out.push(`let ${name} := ${this.aggToMemPtr(s.init, ctx, out)}`);
           } else {
             out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
           }
@@ -1689,18 +1715,23 @@ ${indent(runtime, 6)}
             break;
           }
           if (s.target.arr.base.kind === 'memArray' || s.target.arr.base.kind === 'memArrayExpr') {
-            // xs[i] = <struct> on a MEMORY static-struct array: copy the constructed/source struct image
-            // into the element's image (the SAME element pointer the read path uses via aggToMemPtr, so
-            // it is layout-agnostic and visible to later reads). solc evaluates the RHS before the LHS
-            // location, so materialize the source FIRST, then resolve the element (bound-checks i).
-            const src = this.aggToMemPtr(s.value, ctx, out);
-            const dst = this.aggToMemPtr(
-              { kind: 'arrayGet', type: s.target.type, arr: s.target.arr, index: s.target.index },
-              ctx,
-              out,
-            );
-            const ew = abiHeadWords(s.target.type) * 32;
-            for (let k = 0; k < ew / 32; k++) out.push(`mstore(add(${dst}, ${k * 32}), mload(add(${src}, ${k * 32})))`);
+            // Cat B: xs[i] = <struct> on a MEMORY static-struct array, now POINTER-HEADED (each slot is
+            // an absolute pointer to a per-element image). RE-POINT the element's pointer word at the RHS
+            // image (a reference assignment, exactly like solc and like the B3 dyn-struct branch above):
+            // a constructor xs[i] = P(..) materializes a FRESH image; a reference xs[i] = xs[j] / = ref
+            // ALIASES by storing the source's image pointer. aggToMemPtr does both (fresh alloc for a
+            // constructor / storage / calldata copy; the source pointer for a memory ref). solc evaluates
+            // the RHS before the LHS location, so materialize the source FIRST, then resolve the element
+            // slot (bound-checks i).
+            const img = this.aggToMemPtr(s.value, ctx, out);
+            const ref = this.lowerArrayRef(s.target.arr, ctx, out);
+            if (ref.src !== 'memory') throw new UnsupportedError('B1 element write requires a memory array');
+            const idx = this.fresh();
+            out.push(`let ${idx} := ${this.lowerExpr(s.target.index, ctx, out)}`);
+            const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
+            out.push(`if iszero(lt(${idx}, ${bound})) { ${this.panic()}(0x32) }`);
+            const dataBase = ref.fixedLen !== undefined ? ref.ptr! : `add(${ref.ptr}, 0x20)`;
+            out.push(`mstore(add(${dataBase}, mul(${idx}, 0x20)), ${img})`);
             break;
           }
           // this.recs[i] = <struct>: write the constructed/copied struct into the
@@ -4269,9 +4300,10 @@ ${indent(runtime, 6)}
       const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
       out.push(`if iszero(lt(${i}, ${bound})) { ${oob} }`);
       const dataBase = ref.fixedLen !== undefined ? ref.ptr : `add(${ref.ptr}, 0x20)`;
-      // an ARRAY or STATIC-STRUCT element (Residual B1): a STATIC inline sub-image yields a BASE
-      // pointer (dataBase + i*ew, ew = abiHeadWords words); a DYNAMIC element word (bytes/string,
-      // Residual B2; or a dynamic inner array) holds the absolute pointer to the inner blob/image.
+      // an ARRAY or STRUCT element: a STATIC inline VALUE-array sub-image yields a BASE pointer
+      // (dataBase + i*ew, ew = abiHeadWords words, staticElem = true); a POINTER-HEADED element word
+      // (Cat B static struct; a DYNAMIC bytes/string/inner-array element) holds the absolute pointer to
+      // the inner image (mload(dataBase + i*0x20)).
       if (ref.elem.kind === 'array' || ref.elem.kind === 'struct') {
         const ew = abiHeadWords(ref.elem) * 32;
         if (ref.staticElem) return `add(${dataBase}, mul(${i}, ${ew}))`;
@@ -4300,11 +4332,16 @@ ${indent(runtime, 6)}
     out: string[],
   ): void {
     const innerT = target.type as JethType & { kind: 'array' };
-    if (!isStaticType(innerT)) {
-      // dynamic inner: materialize -> pointer, store at the element word (reference assignment). Use
-      // aggArgToMemPtr so a memory-reference RHS (xs[i] = xs[j], or = a bytes[]/u256[] local) ALIASES
-      // by storing its pointer (matching solc memory references), while a literal / calldata / storage
-      // source is materialized/copied to a fresh image - exactly the binding path's resolution.
+    // Keep the inline-copy branch ONLY for a STATIC VALUE-ARRAY inner (Arr<u256,N>, Arr<Arr<u256,2>,2>):
+    // it stays an inline sub-block in the outer image. Re-point (a reference assignment) for any other
+    // inner that is POINTER-HEADED in the outer image: a DYNAMIC inner (u256[], bytes[], P[]) OR a static
+    // array whose ultimate leaf is a struct (Cat B: Arr<P,N>, now pointer-headed).
+    const inlineValueArrayInner = isStaticType(innerT) && isValueLeafArray(innerT);
+    if (!inlineValueArrayInner) {
+      // pointer-headed inner: materialize -> pointer, store at the element word (reference assignment).
+      // Use aggArgToMemPtr so a memory-reference RHS (xs[i] = xs[j], or = a bytes[]/u256[]/P[] local)
+      // ALIASES by storing its pointer (matching solc memory references), while a literal / calldata /
+      // storage source is materialized/copied to a fresh image - exactly the binding path's resolution.
       const p = this.fresh();
       out.push(`let ${p} := ${this.aggArgToMemPtr(value, ctx, out)}`);
       const ref = this.lowerArrayRef(target.arr, ctx, out); // src 'memory'
@@ -4317,7 +4354,7 @@ ${indent(runtime, 6)}
       out.push(`mstore(add(${dataBase}, mul(${i}, 0x20)), ${p})`);
       return;
     }
-    // static inline inner (Arr<value,N> / Arr<static,N>): materialize the RHS image, then copy its
+    // static inline VALUE-array inner (Arr<value,N>): materialize the RHS image, then copy its
     // ew bytes (abiHeadWords words, the inline element width) into element i's inline sub-block.
     const ew = abiHeadWords(innerT) * 32;
     const src = this.fresh();
@@ -4620,9 +4657,9 @@ ${indent(runtime, 6)}
       return this.allocAggFromStorage(e.type, String(e.arr.base.baseSlot), out);
     if (e.kind === 'cdAggregateValue') return this.allocAggFromCalldata(e.param, e.type, ctx, out);
     if (e.kind === 'arrayGet') {
-      // Residual B1: a STATIC STRUCT element of a memory P[] (xs[i]). lowerArrayGet returns the
-      // element's inline image BASE pointer (one abiHeadWords(P) block), which IS a struct image - so
-      // aggFieldRead (xs[i].a) / passing xs[i] / encoding it all consume it directly. Freeze it.
+      // Cat B: a STATIC STRUCT element of a memory P[] (xs[i]). lowerArrayGet returns the element's
+      // ABSOLUTE image pointer (the pointer-headed slot), which IS a struct image - so aggFieldRead
+      // (xs[i].a) / passing xs[i] / encoding it / aliasing it all consume it directly. Freeze it.
       const p = this.fresh();
       out.push(`let ${p} := ${this.lowerArrayGet(e, ctx, out)}`);
       return p;
@@ -4667,19 +4704,20 @@ ${indent(runtime, 6)}
     // Materialize each element FIRST (left-to-right), freezing its register, so any inner allocation
     // bumps the free pointer before we claim this level's header.
     const elemVals = lit.elements.map((el) => {
-      if (isStaticType(elem)) {
-        // a static element (value word, or a static fixed sub-array): build its inline image and copy
-        // it into place below; here just capture its source.
+      if (isStaticType(elem) && !isPointerHeadedStaticElem(elem)) {
+        // a static VALUE element (value word, or a static fixed VALUE sub-array): build its inline
+        // image and copy it into place below; here just capture its source.
         return null; // handled inline in the static-element copy loop
       }
-      // a dynamic element: build the inner image, capture its absolute pointer.
+      // a dynamic element OR a Cat-B static-struct element (pointer-headed): build the per-element
+      // image, capture its absolute pointer.
       const p = this.fresh();
       out.push(`let ${p} := ${this.buildNestedMemArrayValue(el as Expr, ctx, out)}`);
       return p;
     });
     if (t.length === undefined) {
       // DYNAMIC outer.
-      if (isStaticType(elem)) {
+      if (isStaticType(elem) && !isPointerHeadedStaticElem(elem)) {
         // static element: [len] + inline element blocks (one abiHeadWords(elem) block each).
         const ew = abiHeadWords(elem);
         const ptr = this.fresh();
@@ -4742,6 +4780,15 @@ ${indent(runtime, 6)}
     if (el.kind === 'structNew' && el.type.kind === 'struct' && isDynamicType(el.type)) {
       return this.allocDynStructToMem(el as Expr & { kind: 'structNew' }, ctx, out);
     }
+    // Cat B: a STATIC-struct element of a P[] literal is now POINTER-HEADED. A constructor P(...)
+    // allocates a fresh per-element image; a reference source (another element xs[j], a struct local,
+    // a storage/calldata struct) is materialized via aggToMemPtr (a memory ref ALIASES its image
+    // pointer, a storage/calldata source COPIES into a fresh image) - reference semantics matching
+    // solc's array literal of struct references.
+    if (el.type.kind === 'struct' && isStaticType(el.type)) {
+      if (el.kind === 'structNew') return this.allocAggToMem(el as Expr & { kind: 'structNew' }, ctx, out);
+      return this.aggToMemPtr(el, ctx, out);
+    }
     // a memory-array expression (alias / element of another nested array): its register IS the pointer.
     return this.lowerExpr(el, ctx, out);
   }
@@ -4756,8 +4803,8 @@ ${indent(runtime, 6)}
     const n = this.fresh();
     out.push(`let ${n} := ${nExpr}`);
     out.push(`if gt(${n}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
-    if (isStaticType(elem)) {
-      // a static element (e.g. Arr<u256,2>): [len] + n inline zero blocks. calldatacopy zeros.
+    if (isStaticType(elem) && !isPointerHeadedStaticElem(elem)) {
+      // a static VALUE element (e.g. Arr<u256,2>): [len] + n inline zero blocks. calldatacopy zeros.
       const ew = abiHeadWords(elem);
       const ptr = this.fresh();
       out.push(`let ${ptr} := mload(0x40)`);
@@ -4793,6 +4840,17 @@ ${indent(runtime, 6)}
    *  an empty [len=0] sentinel (a safe read; indexing it Panics 0x32 - matching solc's `new P[](n)`). */
   private emptyInnerImage(t: JethType, out: string[]): string {
     if (t.kind === 'struct' && isDynamicType(t)) return this.emptyDynStructImage(t, out);
+    // Cat B: a STATIC-struct element of `new P[](n)` is POINTER-HEADED; each slot points to a fresh
+    // ALL-ZERO element image of abiHeadWords(P) words (every leaf default-initialized to 0), matching
+    // solc's zero element. calldatacopy from an out-of-range source zeros the block.
+    if (t.kind === 'struct' && isStaticType(t)) {
+      const hw = abiHeadWords(t);
+      const p = this.fresh();
+      out.push(`let ${p} := mload(0x40)`);
+      out.push(`calldatacopy(${p}, calldatasize(), ${hw * 32})`);
+      out.push(`mstore(0x40, add(${p}, ${hw * 32}))`);
+      return p;
+    }
     const p = this.fresh();
     out.push(`let ${p} := mload(0x40)`);
     out.push(`mstore(${p}, 0)`);
@@ -6333,6 +6391,11 @@ ${indent(runtime, 6)}
       const dstHead = this.fresh();
       out.push(`let ${dstHead} := add(${dst}, 0x20)`);
       if (isStaticType(t.element)) {
+        // INLINE for BOTH a static value element AND a static struct element: abiEncFromCd is the
+        // calldata->ABI encoder (its output doubles as the ABI return blob via echoParam, and as the
+        // inline element block inside a parent aggregate's ABI image), so a static-struct element stays
+        // INLINE here. (Cat B's POINTER-HEADED layout is a MEMORY-IMAGE concern; the calldata->memory
+        // bind of a static-struct array is separately gated, so no pointer-headed consumer exists here.)
         const es = abiHeadWords(t.element) * 32;
         const nc = this.fresh();
         out.push(`let ${nc} := add(${dstHead}, mul(${len}, ${es}))`);
@@ -6489,13 +6552,32 @@ ${indent(runtime, 6)}
       out.push(`let ${srcHead} := add(${memPtr}, 0x20)`);
       const dstHead = this.fresh();
       out.push(`let ${dstHead} := add(${dst}, 0x20)`);
-      if (isStaticType(t.element)) {
-        // a STATIC element (value or fixed-static-array): the image stores the element inline; copy
-        // abiHeadWords(element) words per element straight across.
+      if (isStaticType(t.element) && !isPointerHeadedStaticElem(t.element)) {
+        // a STATIC VALUE element (value word or fixed-static-value-array): the image stores the element
+        // inline; copy abiHeadWords(element) words per element straight across.
         const es = abiHeadWords(t.element) * 32;
         const i = this.fresh();
         out.push(`for { let ${i} := 0 } lt(${i}, mul(${len}, ${es})) { ${i} := add(${i}, 0x20) } {`);
         out.push(`  mstore(add(${dstHead}, ${i}), mload(add(${srcHead}, ${i})))`);
+        out.push('}');
+        return `add(0x20, mul(${len}, ${es}))`;
+      }
+      if (isPointerHeadedStaticElem(t.element)) {
+        // Cat B: a STATIC-STRUCT element (P[]) is POINTER-HEADED in memory but the ABI output stays
+        // INLINE (no offset table - a static-struct array element occupies its abiHeadWords words inline,
+        // exactly as solc encodes it). Per element follow the absolute pointer in the image head word,
+        // then copy its es contiguous words (the static struct image, no nested pointers) into the inline
+        // ABI slot. Return value UNCHANGED (the inline [len][P0 inline][P1 inline]... byte size).
+        const es = abiHeadWords(t.element) * 32;
+        const i = this.fresh();
+        out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+        const inner: string[] = [];
+        const ip = this.fresh();
+        inner.push(`let ${ip} := mload(add(${srcHead}, mul(${i}, 0x20)))`); // absolute ptr to element image
+        const edst = this.fresh();
+        inner.push(`let ${edst} := add(${dstHead}, mul(${i}, ${es}))`);
+        for (let k = 0; k < es / 32; k++) inner.push(`mstore(add(${edst}, ${k * 32}), mload(add(${ip}, ${k * 32})))`);
+        for (const l of inner) out.push('  ' + l);
         out.push('}');
         return `add(0x20, mul(${len}, ${es}))`;
       }
@@ -6600,7 +6682,7 @@ ${indent(runtime, 6)}
       out.push(`let ${elemRegion} := add(${memPtr}, 0x20)`);
       const dstHead = this.fresh();
       out.push(`let ${dstHead} := add(${dst}, 0x20)`);
-      if (isStaticType(t.element)) {
+      if (isStaticType(t.element) && !isPointerHeadedStaticElem(t.element)) {
         const es = abiHeadWords(t.element) * 32;
         const nc = this.fresh();
         out.push(`let ${nc} := add(${dstHead}, mul(${len}, ${es}))`);
@@ -6617,6 +6699,33 @@ ${indent(runtime, 6)}
         for (const l of inner) out.push('  ' + l);
         out.push('}');
         return `add(0x20, mul(${len}, ${es}))`;
+      }
+      if (isPointerHeadedStaticElem(t.element)) {
+        // Cat B: a STATIC-STRUCT element (P[]) is POINTER-HEADED: the [len] header + a len-word
+        // ABSOLUTE-pointer table go INTO `dst`; each per-element image is allocated FRESH past the
+        // parent block via 0x40 (the self-managed allocator inside abiDecFromMemToImage's struct
+        // self-branch). The returned size spans the table only; per-element images live PAST the free
+        // pointer abiDecFromMemToImage leaves bumped, so the caller's `mstore(0x40, add(dst, sz))` is
+        // NEVER smaller than that free pointer for any reachable caller (a top-level / nested-dynamic
+        // P[] is rerouted to abiDecFromMemToImage, which self-manages 0x40 and does NOT advance by a
+        // size). Source layout is still INLINE ABI (element stride es), bounds/cap order unchanged.
+        const es = abiHeadWords(t.element) * 32;
+        const tableEnd = this.fresh();
+        out.push(`let ${tableEnd} := add(${dstHead}, mul(${len}, 0x20))`);
+        out.push(`if or(gt(${tableEnd}, 0xffffffffffffffff), lt(${tableEnd}, ${dstHead})) { ${cap} }`);
+        out.push(`if gt(add(${elemRegion}, mul(${len}, ${es})), ${blobEnd}) { revert(0, 0) }`);
+        out.push(`mstore(0x40, ${tableEnd})`); // claim the table; per-element images alloc PAST it
+        const i = this.fresh();
+        out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+        const inner: string[] = [];
+        const esrc = this.fresh();
+        inner.push(`let ${esrc} := add(${elemRegion}, mul(${i}, ${es}))`);
+        const ip = this.fresh();
+        inner.push(`let ${ip} := ${this.abiDecFromMemToImage(t.element, esrc, blobEnd, inner)}`);
+        inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
+        for (const l of inner) out.push('  ' + l);
+        out.push('}');
+        return `add(0x20, mul(${len}, 0x20))`;
       }
       // dynamic element (bytes/string/...): an N-word offset table relative to elemRegion, plus tails.
       const cursor = this.fresh();
@@ -6740,9 +6849,9 @@ ${indent(runtime, 6)}
       out.push(`if gt(${len}, 0xffffffffffffffff) { ${cap} }`);
       const elemRegion = this.fresh();
       out.push(`let ${elemRegion} := add(${memPtr}, 0x20)`);
-      if (isStaticType(t.element)) {
-        // a STATIC element (P[] of a static struct, Arr<u256,N>[]): inline blocks, exactly abiDecFromMem's
-        // static-element layout (B1's image == the standard ABI image for a static element). Decode inline.
+      if (isStaticType(t.element) && !isPointerHeadedStaticElem(t.element)) {
+        // a STATIC VALUE element (Arr<u256,N>[]): inline blocks, exactly abiDecFromMem's static-element
+        // layout (the image == the standard ABI image for a static value element). Decode inline.
         const es = abiHeadWords(t.element) * 32;
         const ptr = this.fresh();
         out.push(`let ${ptr} := mload(0x40)`);
@@ -6762,6 +6871,36 @@ ${indent(runtime, 6)}
         const edst = this.fresh();
         inner.push(`let ${edst} := add(${dstHead}, mul(${i}, ${es}))`);
         this.abiDecFromMem(t.element, ecd, edst, blobEnd, inner);
+        for (const l of inner) out.push('  ' + l);
+        out.push('}');
+        return ptr;
+      }
+      if (isPointerHeadedStaticElem(t.element)) {
+        // Cat B: a STATIC-STRUCT element (P[]). The SOURCE is still INLINE ABI (element stride es =
+        // abiHeadWords(P)*32, NO offset table), but the in-memory IMAGE is now POINTER-HEADED: alloc
+        // [len] + a len-word ABSOLUTE-pointer table, then per element decode the inline source block
+        // (the self-branch allocs+validates an es-word element image and returns its pointer) and store
+        // that pointer. Allocation CAP (oversized -> Panic 0x41) BEFORE the source data-bounds revert
+        // (truncated -> empty), matching the inline path's revert ordering byte-for-byte.
+        const es = abiHeadWords(t.element) * 32;
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(0x40)`);
+        const tableEnd = this.fresh();
+        out.push(`let ${tableEnd} := add(add(${ptr}, 0x20), mul(${len}, 0x20))`);
+        out.push(`if or(gt(${tableEnd}, 0xffffffffffffffff), lt(${tableEnd}, ${ptr})) { ${cap} }`);
+        out.push(`if gt(add(${elemRegion}, mul(${len}, ${es})), ${blobEnd}) { revert(0, 0) }`);
+        out.push(`mstore(${ptr}, ${len})`);
+        out.push(`mstore(0x40, ${tableEnd})`); // claim the table; per-element images alloc PAST it
+        const dstHead = this.fresh();
+        out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+        const i = this.fresh();
+        out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+        const inner: string[] = [];
+        const esrc = this.fresh();
+        inner.push(`let ${esrc} := add(${elemRegion}, mul(${i}, ${es}))`);
+        const ip = this.fresh();
+        inner.push(`let ${ip} := ${this.abiDecFromMemToImage(t.element, esrc, blobEnd, inner)}`);
+        inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
         for (const l of inner) out.push('  ' + l);
         out.push('}');
         return ptr;
@@ -6879,15 +7018,23 @@ ${indent(runtime, 6)}
           // a dynamic-field struct: build the POINTER-HEADED image a JETH struct local consumes (NOT the
           // standard ABI image abiDecFromMem produces); buildDynStructFromMemBlob manages its own alloc.
           regs.push(this.buildDynStructFromMemBlob(t, se, blobEnd, out));
-        } else if (t.kind === 'array' && isDynamicType(t.element)) {
+        } else if (
+          t.kind === 'array' &&
+          (isDynamicType(t.element) ||
+            // Cat B: a DYNAMIC-outer STATIC-STRUCT-element array (P[]) is pointer-headed too.
+            (t.length === undefined && t.element.kind === 'struct'))
+        ) {
           // Residual C1/C3: an array with a DYNAMIC element (u256[][], Arr<u256[],N>, bytes[], string[]).
-          // abiDecFromMem would write the STANDARD ABI image (relative element offsets), but Residual B's
-          // memory-array readers expect ABSOLUTE pointers. Decode into B's pointer-headed image, which
-          // abiDecFromMemToImage allocates and returns (with the SAME blob bounds checks for revert parity).
+          // Cat B: a STATIC-STRUCT element array (P[]) is ALSO pointer-headed now (each element is an
+          // absolute pointer to a fresh per-element image). abiDecFromMem would write the STANDARD ABI
+          // image (relative offsets / inline blocks), but Residual B's memory-array readers expect
+          // ABSOLUTE pointers. Decode into B's pointer-headed image, which abiDecFromMemToImage allocates
+          // and returns (with the SAME blob bounds checks for revert parity).
           regs.push(this.abiDecFromMemToImage(t, se, blobEnd, out));
         } else {
-          // a value-element array (u256[]) or a STATIC-element array (C2's P[]): abiDecFromMem's standard
-          // image already matches B's representation ([len][elems] / [len][inline blocks], no pointers).
+          // a value-element array (u256[]) or a static fixed VALUE-array-element array (Arr<u256,N>[]):
+          // abiDecFromMem's standard image already matches B's representation ([len][elems] / [len][inline
+          // blocks], no pointers).
           const ptr = this.fresh();
           out.push(`let ${ptr} := mload(0x40)`);
           const sz = this.abiDecFromMem(t, se, ptr, blobEnd, out);

@@ -114,10 +114,10 @@ describe('Residual B4/B3: nested-dynamic-leaf + dyn-struct arrays now ACCEPT (li
     // each P[] element is an absolute pointer to a pointer-headed dyn-struct image (empty sentinels on new).
     expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): P[] { let m: P[] = [P(1n,bytes("x"))]; return m; } }`)).toEqual([]);
   });
-  it('DEFERRED (still reject cleanly, no miscompile): static-struct nested array P[][], FIXED outer Arr<P,N>/Arr<bytes,N>', () => {
-    // P[][] (a STATIC-struct leaf nested array) stays rejected: its deep field read m[i][j].f is not yet
-    // byte-identical, so a clean rejection is preferred over a miscompile. FIXED outers are also deferred.
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): P[][] { let m: P[][] = [[P(1n,2n)]]; return m; } }`).length).toBeGreaterThan(0);
+  it('P[][] (static-struct nested array) now ACCEPTS (pointer-headed, byte-identical); FIXED outer Arr<P,N>/Arr<bytes,N> still reject', () => {
+    // P[][] is now POINTER-HEADED like solc (byte-identity covered in pointer-headed-static-struct-array.test.ts).
+    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): P[][] { let m: P[][] = [[P(1n,2n)]]; return m; } }`)).toEqual([]);
+    // FIXED outers stay deferred (a clean over-rejection, not a miscompile).
     expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`).length).toBeGreaterThan(0);
     expect(codes(`@contract class C { @external @pure f(): Arr<bytes,2> { let m: Arr<bytes,2> = [bytes("a"),bytes("b")]; return m; } }`).length).toBeGreaterThan(0);
   });

@@ -73,13 +73,14 @@ describe('Cat A: bind a pointer-headed aggregate-array element (alias) - byte-id
     await diff(J, S, ['read()', 'aliasw()', 'repoint()', 'once()', 'oob()', 'forof()']);
   });
 
-  it('SOUNDNESS: binding a STATIC-struct (inline) array element stays a clean reject (no miscompile)', () => {
-    // inline P[]: alias would fail re-point (xs[i]=fresh overwrites the slot p points to -> p sees new,
-    // solc sees old); copy would fail write-through. Neither is byte-identical, so it stays rejected.
+  it('binding a static-struct array element now ACCEPTS (static-struct arrays are pointer-headed)', () => {
+    // static-struct P[] is now POINTER-HEADED like solc, so `let p = xs[i]` binds the element pointer
+    // (alias): mutating p writes through to xs[i], re-pointing xs[i] leaves p on the old image.
+    // Byte-identity covered in pointer-headed-static-struct-array.test.ts.
     const C = (body: string) => `@struct class P { a: u256; b: u256; }\n@contract class C { @external @pure f(): u256 { let xs: P[] = [P(1n, 2n)]; ${body} } }`;
-    expect(codes(C('let p: P = xs[0n]; return p.a;')).length).toBeGreaterThan(0);
-    expect(codes(C('let n: u256 = 0n; for (const p of xs) { n = n + p.a; } return n;')).length).toBeGreaterThan(0);
-    // the pointer-headed forms ACCEPT (lifted):
+    expect(codes(C('let p: P = xs[0n]; return p.a;'))).toEqual([]);
+    expect(codes(C('let n: u256 = 0n; for (const p of xs) { n = n + p.a; } return n;'))).toEqual([]);
+    // the pointer-headed dynamic forms ACCEPT too:
     expect(codes(`@contract class C { @external @pure f(): u256 { let xs: bytes[][] = [[bytes("a")]]; let row: bytes[] = xs[0n]; return row.length; } }`)).toEqual([]);
     expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): u256 { let ps: P[] = [P(1n,bytes("x"))]; let d: P = ps[0n]; return d.a; } }`)).toEqual([]);
   });
