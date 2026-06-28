@@ -1464,6 +1464,16 @@ ${indent(runtime, 6)}
         break;
       }
       case 'assign': {
+        if (s.target.kind === 'aggFieldStore' && !isStaticValueType(s.target.type)) {
+          // xs[i].q = Q(..) / xs[i].pre = [..]: a whole STATIC AGGREGATE field of a memory-array struct
+          // element. Copy the constructed/source image into the field's sub-image (the same pointer the
+          // read uses, layout-agnostic). solc evaluates the RHS before the LHS, so materialize src first.
+          const src = this.aggToMemPtr(s.value, ctx, out);
+          const dst = this.aggFieldPtr(s.target.base, s.target.wordOffset, s.target.runSteps, ctx, out);
+          const ew = abiHeadWords(s.target.type) * 32;
+          for (let k = 0; k < ew / 32; k++) out.push(`mstore(add(${dst}, ${k * 32}), mload(add(${src}, ${k * 32})))`);
+          break;
+        }
         if (s.target.kind === 'state' && s.target.type.kind === 'struct') {
           // whole-struct write: a constructed value (structNew), a memory/calldata struct
           // (this.d = m / this.d = calldataParam), or a storage-to-storage copy (this.d = this.e).
@@ -2533,17 +2543,12 @@ ${indent(runtime, 6)}
         return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
       }
       case 'aggFieldRead': {
-        // read a VALUE field of a struct-valued Expr base (e.g. this.mk(a).x, xs[i].pre[j]): materialize
-        // the base to a memory pointer, add the static word offset + any runtime index steps (each
-        // bounds-checked, in chain order), then mload. The image stores clean values, so no mask.
-        const ptr = this.aggToMemPtr(e.base, ctx, out);
-        let cur = e.wordOffset === 0 ? ptr : `add(${ptr}, ${e.wordOffset * 32})`;
-        if (e.runSteps && e.runSteps.length) {
-          const b = this.fresh();
-          out.push(`let ${b} := ${cur}`);
-          cur = this.applyRunSteps(b, e.runSteps, ctx, out);
-        }
-        return `mload(${cur})`;
+        // read a field of a struct-valued Expr base (this.mk(a).x, xs[i].pre[j], xs[i].q): the field
+        // pointer is the element image + static offset + runtime index steps (bounds-checked). A VALUE
+        // leaf is mload'd (image stores clean values, no mask); a whole STATIC AGGREGATE leaf yields the
+        // sub-image pointer (consumed as a memory aggregate by aggToMemPtr / abi.encode / return).
+        const cur = this.aggFieldPtr(e.base, e.wordOffset, e.runSteps, ctx, out);
+        return isStaticValueType(e.type) ? `mload(${cur})` : cur;
       }
       case 'memElem': {
         // a[i] on a fixed-array memory local (value element): bounds-check then mload. A fixed-array
@@ -4540,6 +4545,13 @@ ${indent(runtime, 6)}
       const p = this.fresh();
       out.push(`let ${p} := ${this.lowerExpr(e, ctx, out)}`);
       return p;
+    }
+    if (e.kind === 'aggFieldRead') {
+      // a whole STATIC AGGREGATE field of a memory-array struct element (xs[i].pre / xs[i].q): the
+      // sub-image pointer into the element image. Freeze it (consumers read multiple words from it).
+      const r = this.fresh();
+      out.push(`let ${r} := ${this.aggFieldPtr(e.base, e.wordOffset, e.runSteps, ctx, out)}`);
+      return r;
     }
     throw new UnsupportedError(`cannot materialize aggregate ternary branch '${e.kind}'`);
   }
@@ -9332,6 +9344,20 @@ ${indent(runtime, 6)}
     return cur;
   }
 
+  /** The memory pointer to a field/element within a memory-array struct element's image: the element
+   *  image pointer (aggToMemPtr of the base) + the static word offset + any runtime index steps. Shared
+   *  by the aggFieldRead read, aggToMemPtr (whole-aggregate leaf), and the aggFieldStore write. */
+  private aggFieldPtr(base: Expr, wordOffset: number, runSteps: ArrIndexStep[] | undefined, ctx: LowerCtx, out: string[]): string {
+    const ptr = this.aggToMemPtr(base, ctx, out);
+    let cur = wordOffset === 0 ? ptr : `add(${ptr}, ${wordOffset * 32})`;
+    if (runSteps && runSteps.length) {
+      const b = this.fresh();
+      out.push(`let ${b} := ${cur}`);
+      cur = this.applyRunSteps(b, runSteps, ctx, out);
+    }
+    return cur;
+  }
+
   private lowerAssignValue(target: LValue, valueReg: string, ctx: LowerCtx, out: string[]): void {
     if (target.kind === 'local') {
       out.push(`${this.ctxLookup(ctx, target.varName)} := ${valueReg}`);
@@ -9392,16 +9418,10 @@ ${indent(runtime, 6)}
       return;
     }
     if (target.kind === 'aggFieldStore') {
-      // xs[i].a = v / xs[i].pre[j] = v on a memory-array static-struct element: lower the element image
-      // base (the same aggToMemPtr the aggFieldRead read uses), add the static field offset + any runtime
-      // index steps, then store. No mask - the RHS is coerced to the field type by the analyzer.
-      const ptr = this.aggToMemPtr(target.base, ctx, out);
-      let cur = target.wordOffset === 0 ? ptr : `add(${ptr}, ${target.wordOffset * 32})`;
-      if (target.runSteps && target.runSteps.length) {
-        const b = this.fresh();
-        out.push(`let ${b} := ${cur}`);
-        cur = this.applyRunSteps(b, target.runSteps, ctx, out);
-      }
+      // a VALUE leaf (xs[i].a = v / xs[i].pre[j] = v): store one word at the field pointer (element image
+      // + static offset + runtime index steps). No mask - the RHS is coerced to the field type by the
+      // analyzer. (An AGGREGATE leaf xs[i].q = Q(..) is an image copy, handled in the 'assign' codegen.)
+      const cur = this.aggFieldPtr(target.base, target.wordOffset, target.runSteps, ctx, out);
       out.push(`mstore(${cur}, ${valueReg})`);
       return;
     }

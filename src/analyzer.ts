@@ -8919,7 +8919,10 @@ export class Analyzer {
     // mirrors the aggFieldRead read (mstore at base + offset; the RHS is coerced clean, so no mask).
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const chain = this.resolveMemArrayElemFieldChain(node);
-      if (chain && isStaticValueType(chain.type)) {
+      // a VALUE leaf -> store one word; a STATIC AGGREGATE leaf (nested struct / fixed array, e.g.
+      // xs[i].q = Q(..)) -> copy the image (handled in the assign codegen). A dynamic-field leaf is
+      // excluded by isStaticType (a later step).
+      if (chain && isStaticType(chain.type)) {
         return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
       }
     }
@@ -12294,7 +12297,9 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const chain = this.resolveMemArrayElemFieldChain(node);
       if (chain) {
-        if (isStaticValueType(chain.type)) {
+        // a VALUE leaf -> mload; a whole STATIC AGGREGATE leaf (xs[i].pre, xs[i].q) -> the sub-image
+        // pointer (aggFieldRead returns it for aggregate types, consumed by abi.encode / return).
+        if (isStaticType(chain.type)) {
           return { kind: 'aggFieldRead', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
         }
         this.diags.error(
