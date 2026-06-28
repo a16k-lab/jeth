@@ -4301,9 +4301,12 @@ ${indent(runtime, 6)}
   ): void {
     const innerT = target.type as JethType & { kind: 'array' };
     if (!isStaticType(innerT)) {
-      // dynamic inner: materialize -> pointer, store at the element word (reference assignment).
+      // dynamic inner: materialize -> pointer, store at the element word (reference assignment). Use
+      // aggArgToMemPtr so a memory-reference RHS (xs[i] = xs[j], or = a bytes[]/u256[] local) ALIASES
+      // by storing its pointer (matching solc memory references), while a literal / calldata / storage
+      // source is materialized/copied to a fresh image - exactly the binding path's resolution.
       const p = this.fresh();
-      out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
+      out.push(`let ${p} := ${this.aggArgToMemPtr(value, ctx, out)}`);
       const ref = this.lowerArrayRef(target.arr, ctx, out); // src 'memory'
       if (ref.src !== 'memory') throw new UnsupportedError('nested memory-array element write requires a memory array');
       const i = this.fresh();

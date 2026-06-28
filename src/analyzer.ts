@@ -7478,15 +7478,18 @@ export class Analyzer {
         );
         return;
       }
-      // SOUNDNESS: a whole-struct write to a MEMORY struct-array element (xs[i] = <struct>) copies the
-      // inline element image, but solc's memory struct-array elements are REFERENCES (pointers) - so
+      // SOUNDNESS: a whole-struct write to an INLINE (static-struct) MEMORY array element (xs[i] = <struct>)
+      // copies the inline element image, but solc's memory struct-array elements are REFERENCES - so
       // assigning a LIVE memory reference (another element xs[j], a struct local, a sub-aggregate field)
       // ALIASES in solc, and a later mutation of the source would then diverge from JETH's independent
       // copy. Accept only a FRESH RHS (a constructor, a storage/calldata copy, or a call result, where
       // copy == alias observably); reject a memory-reference RHS (clean over-rejection, NOT a miscompile).
+      // A POINTER-HEADED (dynamic-field) struct array is NOT gated here: its element write re-points the
+      // slot at the RHS image pointer (yul.ts ~1670), so a reference RHS ALIASES exactly like solc.
       if (
         target.kind === 'arrayElem' &&
         target.type.kind === 'struct' &&
+        isStaticType(target.type) &&
         (target.arr.base.kind === 'memArray' || target.arr.base.kind === 'memArrayExpr')
       ) {
         const FRESH_STRUCT_RHS = new Set([
