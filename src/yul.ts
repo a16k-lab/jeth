@@ -1630,8 +1630,23 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'arrayElem' && s.target.type.kind === 'struct') {
+          if (s.target.arr.base.kind === 'memArray' || s.target.arr.base.kind === 'memArrayExpr') {
+            // xs[i] = <struct> on a MEMORY static-struct array: copy the constructed/source struct image
+            // into the element's image (the SAME element pointer the read path uses via aggToMemPtr, so
+            // it is layout-agnostic and visible to later reads). solc evaluates the RHS before the LHS
+            // location, so materialize the source FIRST, then resolve the element (bound-checks i).
+            const src = this.aggToMemPtr(s.value, ctx, out);
+            const dst = this.aggToMemPtr(
+              { kind: 'arrayGet', type: s.target.type, arr: s.target.arr, index: s.target.index },
+              ctx,
+              out,
+            );
+            const ew = abiHeadWords(s.target.type) * 32;
+            for (let k = 0; k < ew / 32; k++) out.push(`mstore(add(${dst}, ${k * 32}), mload(add(${src}, ${k * 32})))`);
+            break;
+          }
           // this.recs[i] = <struct>: write the constructed/copied struct into the
-          // bounds-checked element slot (writeStruct/copyStruct clear dynamic-field
+          // bounds-checked storage element slot (writeStruct/copyStruct clear dynamic-field
           // tails per field, byte-identical to solc).
           const elemSlot = this.structArrayElemSlot(s.target.arr, s.target.index, ctx, out);
           this.storeStructTo(s.target.type, s.value, elemSlot, ctx, out);

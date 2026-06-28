@@ -81,6 +81,44 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
     }
   });
 
+  it('whole memory-array struct-element write xs[i] = P(...) (incl fixed-array field, OOB, copy) [was JETH900]', async () => {
+    const J = `@struct class P { a: u256; b: u256; }
+    @struct class N { a: u256; pre: Arr<u256, 2>; }
+    @contract class C {
+      @external @pure we(i: u256): bytes { let xs: P[] = new Array<P>(3n); xs[i] = P(11n, 22n); xs[0n] = P(1n, 2n); return abi.encode(xs[i].a, xs[i].b, xs[0n].a, xs[0n].b); }
+      @external @pure wn(i: u256): bytes { let xs: N[] = new Array<N>(2n); xs[i] = N(5n, [6n, 7n]); return abi.encode(xs[i].a, xs[i].pre[0n], xs[i].pre[1n]); }
+      @external @pure weoob(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i] = P(1n, 2n); return abi.encode(xs[0n].a); }
+      @external @pure wcopy(i: u256): bytes { let xs: P[] = new Array<P>(2n); let src: P = P(8n, 9n); xs[i] = src; return abi.encode(xs[i].a, xs[i].b); }
+    }`;
+    const S = `struct P { uint256 a; uint256 b; }
+    struct N { uint256 a; uint256[2] pre; }
+    contract C {
+      function we(uint256 i) external pure returns (bytes memory){ P[] memory xs=new P[](3); xs[i]=P(11,22); xs[0]=P(1,2); return abi.encode(xs[i].a, xs[i].b, xs[0].a, xs[0].b); }
+      function wn(uint256 i) external pure returns (bytes memory){ N[] memory xs=new N[](2); uint256[2] memory pp; pp[0]=6; pp[1]=7; xs[i]=N(5, pp); return abi.encode(xs[i].a, xs[i].pre[0], xs[i].pre[1]); }
+      function weoob(uint256 i) external pure returns (bytes memory){ P[] memory xs=new P[](2); xs[i]=P(1,2); return abi.encode(xs[0].a); }
+      function wcopy(uint256 i) external pure returns (bytes memory){ P[] memory xs=new P[](2); P memory src=P(8,9); xs[i]=src; return abi.encode(xs[i].a, xs[i].b); }
+    }`;
+    const hj = await Harness.create();
+    const hs = await Harness.create();
+    const aj = await hj.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const as = await hs.deploy(compileSolidity(SPDX + S, 'C').creation);
+    const P = (await import('../src/evm.js')).pad32;
+    const cases: [string, string][] = [
+      ['we(uint256)', P(1n)],
+      ['wn(uint256)', P(1n)],
+      ['weoob(uint256)', P(1n)],
+      ['weoob(uint256)', P(2n)], // OOB i -> Panic 0x32
+      ['wcopy(uint256)', P(1n)],
+    ];
+    for (const [sig, args] of cases) {
+      const data = '0x' + sel(sig) + args;
+      const rj = await hj.call(aj, data);
+      const rs = await hs.call(as, data);
+      expect(rj.success, sig).toBe(rs.success);
+      expect(rj.returnHex, sig).toBe(rs.returnHex);
+    }
+  });
+
   it('runtime array index into a struct-array-element field xs[i].pre[j] (read+write, 2D, OOB) [was JETH151]', async () => {
     const J = `@struct class P { pre: Arr<u256, 2>; tag: u256; }
     @struct class G { grid: Arr<Arr<u256, 2>, 2>; }

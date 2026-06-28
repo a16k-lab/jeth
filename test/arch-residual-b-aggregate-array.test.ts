@@ -117,8 +117,15 @@ describe('Residual B: DEFERRED shapes still reject cleanly (no silent miscompile
   it('a DYNAMIC struct element array (P with a bytes field) is rejected', () => {
     expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): P[] { let m: P[] = [P(1n,bytes("x"))]; return m; } }`).length).toBeGreaterThan(0);
   });
-  it('element WRITE (xs[i] = P(...), bs[i] = ...) is rejected', () => {
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): u256 { let xs: P[] = [P(1n,2n)]; xs[0n] = P(9n,9n); return xs[0n].a; } }`).length).toBeGreaterThan(0);
-    expect(codes(`@contract class C { @external @pure f(): u256 { let bs: bytes[] = [bytes("a")]; bs[0n] = bytes("zz"); return bs[0n].length; } }`).length).toBeGreaterThan(0);
+  it('struct-array element WRITE xs[i] = P(...) now ACCEPTS (lifted); bytes[] element write still rejects', () => {
+    // xs[i] = P(...) on a memory static-struct array is now byte-identical to solc (a whole-element image
+    // copy; byte-identity covered in lift-over-rejections.test.ts).
+    expect(
+      codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): u256 { let xs: P[] = [P(1n,2n)]; xs[0n] = P(9n,9n); return xs[0n].a; } }`),
+    ).toEqual([]);
+    // a bytes[] (dynamic-element) memory-array element write is still a clean over-rejection (B-tier).
+    expect(
+      codes(`@contract class C { @external @pure f(): u256 { let bs: bytes[] = [bytes("a")]; bs[0n] = bytes("zz"); return bs[0n].length; } }`).length,
+    ).toBeGreaterThan(0);
   });
 });
