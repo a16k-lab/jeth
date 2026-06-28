@@ -9118,18 +9118,22 @@ export class Analyzer {
       if (isBytesLike(arr.elem)) {
         // placeArray covers a struct-field / nested dynamic-element array (this.d.xs[i], this.dd[i][j]);
         // the element slot resolves at keccak(lenSlot)+i exactly like the state/fixed/mapping bases.
+        const memSrc = arr.base.kind === 'memArray' || arr.base.kind === 'memArrayExpr';
         if (
           arr.base.kind !== 'stateArray' &&
           arr.base.kind !== 'mapArray' &&
           arr.base.kind !== 'fixedArray' &&
-          arr.base.kind !== 'placeArray'
+          arr.base.kind !== 'placeArray' &&
+          !memSrc
         ) {
           this.diags.error(node, 'JETH217', 'this string[]/bytes[] element write is not supported yet');
           return undefined;
         }
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
-        this.currentWritesState = true;
+        // a STORAGE bytes[]/string[] element write touches state; a MEMORY one (bs[i] = <bytes>) is a
+        // local re-point (reference assignment), so it stays @pure/@view-clean.
+        if (!memSrc) this.currentWritesState = true;
         return { kind: 'strArrayElem', type: arr.elem, arr, index: this.coerce(index, U256, node.argumentExpression) };
       }
       // this.dd[i] = <array>: a whole inner-array element write. A DYNAMIC inner array

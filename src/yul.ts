@@ -1597,6 +1597,19 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'strArrayElem') {
+          if (s.target.arr.base.kind === 'memArray' || s.target.arr.base.kind === 'memArrayExpr') {
+            // bs[i] = <bytes/string> on a MEMORY bytes[]/string[]: materialize the RHS to a [len][data]
+            // blob FIRST (alias if already memory), bounds-check i, then re-point the element pointer word
+            // (a reference assignment, like solc's memory bytes[] element store). RHS-first eval order.
+            const { mp } = this.toMemory(this.lowerDynamic(s.value, ctx, out), out);
+            const ref = this.lowerArrayRef(s.target.arr, ctx, out);
+            if (ref.src !== 'memory') throw new UnsupportedError('memory bytes[]/string[] element write requires a memory array');
+            const idx = this.fresh();
+            out.push(`let ${idx} := ${this.lowerExpr(s.target.index, ctx, out)}`);
+            out.push(`if iszero(lt(${idx}, mload(${ref.ptr}))) { ${this.panic()}(0x32) }`);
+            out.push(`mstore(add(${ref.ptr}, add(0x20, mul(${idx}, 0x20))), ${mp})`);
+            break;
+          }
           // this.ss[i] = <bytes/string>: materialize the RHS FIRST (solc evaluates the RHS before the
           // LHS index), then bounds-check i and overwrite the element header at keccak(lenSlot)+i
           // (storeStrMem clears the old tail).
