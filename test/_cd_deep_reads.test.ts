@@ -186,17 +186,25 @@ describe('cd-deep-reads: deferred sub-cases stay CLEAN rejects (no miscompile)',
 @contract class C{@external @pure rd(xs:Arr<P,2>[],i:u256):Arr<P,2>{return xs[i];}}`),
     ).toBe(true);
   });
-  it('(C-deep) nested-array field xs[i].grid[j] is rejected (deeper codec)', () => {
+  // cd-nested-fields LIFT: the deeper element/leaf reads are now ACCEPTED byte-identically (see the
+  // cd-nested-fields describe block below). The remaining clean reject is the WHOLE-field value form.
+  it('(C-deep) whole nested-array field xs[i].grid is rejected (no whole-field codec)', () => {
     expect(
       rejects(`@struct class S{a:u256;grid:u256[][];}
-@contract class C{@external @pure rd(xs:S[],i:u256,j:u256):u256{return xs[i].grid[j].length;}}`),
+@contract class C{@external @pure rd(xs:S[],i:u256):u256[][]{return xs[i].grid;}}`),
     ).toBe(true);
   });
-  it('(C-deep) dyn-struct-array field xs[i].items[j].v is rejected (deeper codec)', () => {
+  it('(C-deep) whole inner array xs[i].grid[j] (value) is rejected (no whole-field codec)', () => {
+    expect(
+      rejects(`@struct class S{a:u256;grid:u256[][];}
+@contract class C{@external @pure rd(xs:S[],i:u256,j:u256):u256[]{return xs[i].grid[j];}}`),
+    ).toBe(true);
+  });
+  it('(C-deep) whole dyn-struct-array field xs[i].items is rejected (no whole-field codec)', () => {
     expect(
       rejects(`@struct class D{v:u256;s:string;}
 @struct class S{a:u256;items:D[];}
-@contract class C{@external @pure rd(xs:S[],i:u256,j:u256):u256{return xs[i].items[j].v;}}`),
+@contract class C{@external @pure rd(xs:S[],i:u256):D[]{return xs[i].items;}}`),
     ).toBe(true);
   });
 });

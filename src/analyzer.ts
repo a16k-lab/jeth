@@ -10391,6 +10391,72 @@ export class Analyzer {
     return { place: { param: rootName, steps }, type: t };
   }
 
+  /** Resolve a field chain rooted at `xs[i]`, the i-th element of a calldata
+   *  DYNAMIC-struct ARRAY (xs: S[] with S dynamic), into a CdDynPlace whose base
+   *  tuple is resolved at codegen via the array's per-element offset table
+   *  (arrayRoot). Mirrors resolveCdDynFieldPlace but the root is an element of a
+   *  struct array rather than a bare dynamic-struct param, so `xs[i].grid` /
+   *  `xs[i].items` are reachable through the same step machinery (lowerCdDynBase
+   *  folds the arrayRoot then the steps). Returns undefined when the shape does not
+   *  match (no diagnostic), letting other resolvers run. */
+  private resolveCdDynElemFieldPlace(
+    node: ts.Expression,
+  ): { place: CdDynPlace; type: JethType } | undefined {
+    const rawFields: ts.PropertyAccessExpression[] = [];
+    let cur: ts.Expression = node;
+    for (;;) {
+      if (ts.isPropertyAccessExpression(cur)) {
+        if (cur.name.text === 'length') return undefined;
+        rawFields.push(cur);
+        cur = cur.expression;
+      } else {
+        break;
+      }
+    }
+    if (rawFields.length === 0) return undefined;
+    // the root must be `xs[i]`: an element access into a calldata DYNAMIC-struct array.
+    if (!ts.isElementAccessExpression(cur) || !cur.argumentExpression) return undefined;
+    const bt = this.baseDynType(cur.expression);
+    if (!(bt && bt.kind === 'array' && bt.length === undefined && bt.element.kind === 'struct')) return undefined;
+    const elemStruct: JethType & { kind: 'struct' } = bt.element;
+    // only the DYNAMIC-struct-array element flows through the per-element offset-table
+    // navigator (arrayRoot). A static-struct element is contiguous and owned by the
+    // inline cdArrayField path (resolveCdArrayField), so leave it alone.
+    if (!isDynamicType(elemStruct)) return undefined;
+    const arr = this.resolveArrayExpr(cur.expression);
+    if (!arr || (arr.base.kind !== 'calldataArray' && arr.base.kind !== 'cdDynArrayField')) return undefined;
+    const indexE = this.checkExpr(cur.argumentExpression, U256);
+    if (!indexE) return undefined;
+    const index = this.coerce(indexE, U256, cur.argumentExpression);
+    rawFields.reverse();
+    const built = this.buildCdDynSteps(elemStruct, rawFields);
+    if (!built) return undefined;
+    return { place: { param: '', steps: built.steps, arrayRoot: { arr, index } }, type: built.type };
+  }
+
+  /** Walk a chain of property accesses (root->leaf) through (possibly nested dynamic)
+   *  structs, accumulating CdDynSteps with each field's head-word offset. Shared by the
+   *  bare-param and the struct-array-element field-place resolvers. */
+  private buildCdDynSteps(
+    rootStruct: JethType & { kind: 'struct' },
+    rawFields: ts.PropertyAccessExpression[],
+  ): { steps: CdDynStep[]; type: JethType } | undefined {
+    let t: JethType = rootStruct;
+    const steps: CdDynStep[] = [];
+    for (const fnode of rawFields) {
+      if (t.kind !== 'struct') return undefined;
+      const idx = t.fields.findIndex((f) => f.name === fnode.name.text);
+      if (idx < 0) return undefined;
+      const f = t.fields[idx]!;
+      const headWords = t.fields
+        .slice(0, idx)
+        .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+      steps.push({ headWords, fieldType: f.type, crossDynamic: isDynamicType(f.type) });
+      t = f.type;
+    }
+    return { steps, type: t };
+  }
+
   /** Resolve a field/index chain rooted at an aggregate (struct or FIXED-array)
    *  function parameter into a CalldataPlace. Returns undefined when the root is
    *  not an aggregate param, letting the other handlers run. Once it owns the
@@ -10779,6 +10845,25 @@ export class Analyzer {
         return { base: { kind: 'cdDynArrayField', place: fp.place }, elem: fp.type.element };
       }
     }
+    // cd-nested-fields (#2/#3): the WHOLE dynamic-array field `xs[i].grid` / `xs[i].items` of a
+    // calldata DYNAMIC-struct array element. The element tuple is resolved via the per-element offset
+    // table (arrayRoot); the field's tail decodes to (tableStart, outerLen). Produced as a
+    // cdDynArrayField so .length, a struct-array element index (xs[i].items[j], via resolveCdDynArrayField),
+    // and a nested-array element index (xs[i].grid[j], via the cdDynFieldNested block above) all consume
+    // it. Fires for a struct-element field (#3) OR a nested-dynamic-array-element field (#2), both decoded
+    // with the array helper at stride 0x20 (one offset word per element, since the element is dynamic).
+    if (ts.isPropertyAccessExpression(node) && ts.isElementAccessExpression(node.expression)) {
+      const fp = this.resolveCdDynElemFieldPlace(node);
+      if (
+        fp &&
+        fp.type.kind === 'array' &&
+        fp.type.length === undefined &&
+        (fp.type.element.kind === 'struct' ||
+          (fp.type.element.kind === 'array' && fp.type.element.length === undefined))
+      ) {
+        return { base: { kind: 'cdDynArrayField', place: fp.place }, elem: fp.type.element };
+      }
+    }
     if (ts.isIdentifier(node)) {
       const t = this.lookupLocal(node.text);
       // a MEMORY array local (let xs: u256[] = [...] or a nested u256[][] dynamic-outer local): the
@@ -10945,6 +11030,36 @@ export class Analyzer {
           fp.type.kind === 'array' &&
           fp.type.length === undefined &&
           fp.type.element.kind === 'array' // a nested-dynamic-array field: T[][], T[][][], string[][], ...
+        ) {
+          indexNodes.reverse(); // outer-to-inner
+          let t: JethType = fp.type;
+          for (let s = 0; s < indexNodes.length; s++) {
+            if (t.kind !== 'array') return undefined;
+            t = t.element;
+          }
+          if (t.kind !== 'array') return undefined; // the resolved value must itself be an array
+          const indices: Expr[] = [];
+          for (const inode of indexNodes) {
+            const index = this.checkExpr(inode, U256);
+            if (!index) return undefined;
+            indices.push(this.coerce(index, U256, inode));
+          }
+          return { base: { kind: 'cdDynFieldNested', place: fp.place, indices }, elem: t.element };
+        }
+      }
+      // cd-nested-fields (#2): the same shape but rooted at `xs[i].grid` (an element of a
+      // calldata DYNAMIC-struct array, not a bare dyn-struct param): xs[i].grid[j][k] of
+      // u256[][]. resolveCdDynElemFieldPlace yields a CdDynPlace with arrayRoot (the element
+      // tuple resolved via the per-element offset table); the field's outermost element must be
+      // a dynamic array, and the value after the indices must itself be an array. Identical
+      // cdDynFieldNested codec (lowerCdDynBase folds arrayRoot then the field steps).
+      if (ts.isPropertyAccessExpression(cur) && ts.isElementAccessExpression(cur.expression)) {
+        const fp = this.resolveCdDynElemFieldPlace(cur);
+        if (
+          fp &&
+          fp.type.kind === 'array' &&
+          fp.type.length === undefined &&
+          fp.type.element.kind === 'array'
         ) {
           indexNodes.reverse(); // outer-to-inner
           let t: JethType = fp.type;
@@ -11195,6 +11310,16 @@ export class Analyzer {
     }
     if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.expression)) {
       const fp = this.resolveCdDynFieldPlace(expr);
+      if (fp && fp.type.kind === 'array' && fp.type.length === undefined && fp.type.element.kind === 'struct')
+        return fp.type;
+    }
+    // cd-nested-fields (#3): `xs[i].items` - a dynamic struct-ARRAY field of a calldata
+    // DYNAMIC-struct array element. Returns the field's D[] type so the element-field read
+    // dispatcher (xs[i].items[j].v) routes through resolveCdDynArrayField, and .length
+    // resolves the runtime count. Only a dynamic-array-of-struct field qualifies (a value /
+    // nested-array field is owned by the cdDynFieldNested paths, not baseDynType).
+    if (ts.isPropertyAccessExpression(expr) && ts.isElementAccessExpression(expr.expression)) {
+      const fp = this.resolveCdDynElemFieldPlace(expr);
       if (fp && fp.type.kind === 'array' && fp.type.length === undefined && fp.type.element.kind === 'struct')
         return fp.type;
     }
@@ -13091,6 +13216,39 @@ export class Analyzer {
         return undefined;
       }
       return { kind: 'dynLength', type: U256, operand };
+    }
+
+    // cd-nested-fields: a WHOLE inner array / struct-array field of a calldata DYNAMIC-struct array
+    // element used as a VALUE (return / abi.encode / binding): `xs[i].grid`, `xs[i].grid[j]`,
+    // `xs[i].items`. These resolve (via resolveArrayExpr) to a cdDynFieldNested / arrayRoot-based
+    // cdDynArrayField, but re-encoding a WHOLE such field from a struct-array element has no codec yet,
+    // so it is a CLEAN reject - exactly like the bare-param `s.grid[j]` / `s.items` whole-field forms.
+    // ELEMENT-LEAF reads (xs[i].grid[j][k], xs[i].items[j].v) are NOT caught here: resolveArrayExpr(node)
+    // returns undefined for a value-leaf node, so they flow on to their leaf resolvers. Placed before the
+    // element/property read dispatch so the whole-value form never reaches a wrong-bytes lowering.
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const wholeArr = this.resolveArrayExpr(node);
+      // A WHOLE inner array reached by DESCENDING a nested-array field (cdDynFieldNested:
+      // xs[i].grid[j] of u256[][]) has no re-encode codec from a struct-array element - always
+      // reject it (a naive single-table re-encode produced wrong bytes). A direct dynamic-array
+      // FIELD (cdDynArrayField with arrayRoot) is re-encoded by the existing echo / value-array
+      // paths for a bytes/string LEAF (xs[i].tags) or a value LEAF element (xs[i].nums: u256[]);
+      // only reject it when the element is itself an AGGREGATE (xs[i].grid: u256[][] -> array elem,
+      // xs[i].items: D[] -> struct elem), which has no whole-field codec.
+      if (
+        wholeArr &&
+        (wholeArr.base.kind === 'cdDynFieldNested' ||
+          (wholeArr.base.kind === 'cdDynArrayField' &&
+            wholeArr.base.place.arrayRoot !== undefined &&
+            (wholeArr.elem.kind === 'array' || wholeArr.elem.kind === 'struct')))
+      ) {
+        this.diags.error(
+          node,
+          'JETH230',
+          'reading a whole nested struct/array field of a calldata struct-array element is a later step (access a value element/field)',
+        );
+        return undefined;
+      }
     }
 
     // new Array<T>(n) -> a length-n zero-initialized dynamic memory array T[] (byte-identical to solc
