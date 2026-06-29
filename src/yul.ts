@@ -4621,10 +4621,68 @@ ${indent(runtime, 6)}
       out.push('}');
       return;
     }
-    // memory source (a memArray local or an array literal): value elements only.
-    if (!isStaticValueType(innerElem))
-      throw new UnsupportedError('a memory array of non-value elements is not supported');
-    this.copyMemArrayIntoStorage(innerElem, this.lowerExpr(value, ctx, out), dstLenSlot, out);
+    // memory source (a memArray local, a nested array literal, or new Array<T>(n)).
+    const memPtr = this.lowerExpr(value, ctx, out);
+    if (isStaticValueType(innerElem)) {
+      this.copyMemArrayIntoStorage(innerElem, memPtr, dstLenSlot, out);
+      return;
+    }
+    // a NON-VALUE element (bytes/string, or a nested dynamic array): the memory image is
+    // pointer-headed ([len] + per-element absolute pointers, the same B4 image JETH builds for
+    // bytes[][]/string[][]/u256[][] memory locals). Deep-copy it recursively into storage (each
+    // dynamic element gets its own keccak-located data region). Byte-identical to solc.
+    if (isBytesLike(innerElem) || innerElem.kind === 'array') {
+      this.copyMemAggArrayIntoStorage(innerElem, memPtr, dstLenSlot, out);
+      return;
+    }
+    throw new UnsupportedError('a memory array of non-value elements is not supported');
+  }
+
+  /** Deep-copy a MEMORY pointer-headed aggregate array image ([len] header at `memPtr`, then `len`
+   *  absolute-pointer words) into a storage dynamic array at `dstLenSlot` (length there, data at
+   *  keccak(slot)). The element `innerElem` is a NON-VALUE type: bytes/string (each element pointer
+   *  -> a [len][data] blob, written with the storage bytes/string writer) or a nested dynamic array
+   *  (recurse one level - the inner storage element is itself a dynamic array at its own keccak
+   *  region). Mirrors copyArray's dynamic-element path (deep-clear the shrink range, set length,
+   *  overwrite-copy [0,len)) so it is correct for a fresh push slot AND a reused/stale slot. */
+  private copyMemAggArrayIntoStorage(innerElem: JethType, memPtr: string, dstLenSlot: string, out: string[]): void {
+    const srcLen = this.fresh();
+    out.push(`let ${srcLen} := mload(${memPtr})`);
+    const dstLen = this.fresh();
+    out.push(`let ${dstLen} := sload(${dstLenSlot})`);
+    const dstData = this.fresh();
+    out.push(`let ${dstData} := ${this.arrayDataSlotHelper()}(${dstLenSlot})`);
+    const sc = storageSlotCount(innerElem); // a dynamic element occupies 1 slot (its header/length slot)
+    // deep-clear elements [srcLen, dstLen) that will be dropped (frees their keccak-located tails).
+    const k = this.fresh();
+    out.push(`for { let ${k} := ${srcLen} } lt(${k}, ${dstLen}) { ${k} := add(${k}, 1) } {`);
+    const clearInner: string[] = [];
+    const ceb = this.fresh();
+    clearInner.push(`let ${ceb} := add(${dstData}, mul(${k}, ${sc}))`);
+    this.deleteAgg(innerElem, ceb, clearInner);
+    for (const l of clearInner) out.push('  ' + l);
+    out.push('}');
+    out.push(`sstore(${dstLenSlot}, ${srcLen})`);
+    // overwrite-copy [0, srcLen): each element pointer in the image -> a deep storage write.
+    const m = this.fresh();
+    out.push(`for { let ${m} := 0 } lt(${m}, ${srcLen}) { ${m} := add(${m}, 1) } {`);
+    const copyInner: string[] = [];
+    const eptr = this.fresh();
+    copyInner.push(`let ${eptr} := mload(add(${memPtr}, add(0x20, mul(${m}, 0x20))))`);
+    const deb = this.fresh();
+    copyInner.push(`let ${deb} := add(${dstData}, mul(${m}, ${sc}))`);
+    if (isBytesLike(innerElem)) {
+      // a string/bytes element: the image pointer addresses a [len][data] blob. The storage
+      // bytes/string writer overwrite-clears its own old tail, so a stale dst element is handled.
+      copyInner.push(`${this.storeStrMem()}(${deb}, ${eptr}, mload(${eptr}))`);
+    } else {
+      // a nested dynamic-array element (string[][]'s string[], u256[][][]'s u256[][]): recurse.
+      const inner = (innerElem as JethType & { kind: 'array' }).element;
+      if (isStaticValueType(inner)) this.copyMemArrayIntoStorage(inner, eptr, deb, copyInner);
+      else this.copyMemAggArrayIntoStorage(inner, eptr, deb, copyInner);
+    }
+    for (const l of copyInner) out.push('  ' + l);
+    out.push('}');
   }
 
   /** Deep-copy a MEMORY value-element array ([len][elems] at `memPtr`) into a storage dynamic array
