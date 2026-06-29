@@ -13259,35 +13259,47 @@ export class Analyzer {
     // element/property read dispatch so the whole-value form never reaches a wrong-bytes lowering.
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const wholeArr = this.resolveArrayExpr(node);
-      // A WHOLE inner array reached by DESCENDING a nested-array field (cdDynFieldNested:
-      // xs[i].grid[j] of u256[][]) has no re-encode codec from a struct-array element - always
-      // reject it (a naive single-table re-encode produced wrong bytes). A direct dynamic-array
-      // FIELD (cdDynArrayField with arrayRoot) is re-encoded by the existing echo / value-array
-      // paths for a bytes/string LEAF (xs[i].tags) or a value LEAF element (xs[i].nums: u256[]);
-      // only reject it when the element is itself an AGGREGATE (xs[i].grid: u256[][] -> array elem,
-      // xs[i].items: D[] -> struct elem), which has no whole-field codec.
+      // A WHOLE DYNAMIC-ARRAY FIELD of a calldata dyn-struct ARRAY element used as a VALUE:
+      // `xs[i].grid` (grid: u256[][] -> array elem) / `xs[i].items` (items: D[] -> struct elem).
+      // The field's head holds an offset to the array `[len][...]` header; echoCdFieldArray ->
+      // abiEncFromCd re-encodes the WHOLE array from that header into a fresh blob (any element
+      // shape, unbounded nesting). The bytes/string-LEAF (xs[i].tags) and value-LEAF (xs[i].nums)
+      // forms are already handled by the existing value-array echo paths, so they are NOT routed
+      // here (their wholeArr.elem is bytes/string/value, not array/struct).
       if (
         wholeArr &&
-        (wholeArr.base.kind === 'cdDynFieldNested' ||
-          (wholeArr.base.kind === 'cdDynArrayField' &&
-            wholeArr.base.place.arrayRoot !== undefined &&
-            (wholeArr.elem.kind === 'array' || wholeArr.elem.kind === 'struct')))
+        wholeArr.base.kind === 'cdDynArrayField' &&
+        wholeArr.base.place.arrayRoot !== undefined &&
+        (wholeArr.elem.kind === 'array' || wholeArr.elem.kind === 'struct')
       ) {
-        this.diags.error(
-          node,
-          'JETH230',
-          'reading a whole nested struct/array field of a calldata struct-array element is a later step (access a value element/field)',
-        );
-        return undefined;
+        const arrType: JethType = { kind: 'array', length: undefined, element: wholeArr.elem };
+        return { kind: 'cdFieldAggValue', type: arrType, place: wholeArr.base.place };
       }
-      // ALSO: an INDEX yielding a WHOLE AGGREGATE element of such a field - `xs[i].items[j]` where the
-      // dyn-struct-array field's element is itself a STRUCT (or array). resolveArrayExpr(node) above returns
-      // undefined for a STRUCT-typed node (it only resolves array-typed expressions), so the whole-struct-
-      // element value slipped the guard and was silently mis-encoded (zero words, no bounds check - a
-      // MISCOMPILE). There is no whole-aggregate-element re-encode codec from a struct-array field, so reject
-      // it as a value too. A SCALAR-leaf element is NOT caught: `xs[i].items[j].v` reaches checkExpr as a
-      // PropertyAccess (not this ElementAccess), and `xs[i].grid[j][k]` has node.expression `xs[i].grid[j]`
-      // whose resolved element is a VALUE (u256), not an aggregate.
+      // A WHOLE inner array reached by DESCENDING a nested-array field (cdDynFieldNested:
+      // xs[i].grid[j] of u256[][]) used as a VALUE: re-encode the inner array whole from its
+      // resolved calldata header via echoCdNestedFieldArray -> abiEncFromCd, bounds-checking each
+      // descended dimension (Panic 0x32). Only the WHOLE inner array (a u256[] / aggregate) routes
+      // here; a value LEAF (xs[i].grid[j][k]) resolves to undefined above and flows to its leaf reader.
+      if (wholeArr && wholeArr.base.kind === 'cdDynFieldNested') {
+        const arrType: JethType = { kind: 'array', length: undefined, element: wholeArr.elem };
+        return {
+          kind: 'cdNestedFieldAggValue',
+          type: arrType,
+          place: wholeArr.base.place,
+          indices: wholeArr.base.indices,
+          elem: wholeArr.elem,
+        };
+      }
+      // ALSO: an INDEX yielding a WHOLE AGGREGATE element of such a field - `xs[i].items[j]` (items: D[],
+      // a STRUCT element) or an array element reached via cdDynFieldNested / cdDynArrayField. resolveArrayExpr
+      // (node) above returns undefined for a STRUCT-typed node (it only resolves array-typed expressions), so
+      // the whole-struct-element value would slip the first guard and be SILENTLY mis-encoded (the normal
+      // element resolver produces a cdStructArrayElem from a cdDynArrayField-with-arrayRoot base, which
+      // returnCdArrayElem/cdArrayElemBase mis-routes: wrong bytes AND no OOB bounds check - a MISCOMPILE,
+      // empirically reproduced vs solc 0.8.35). There is no byte-identical whole-aggregate-element re-encode
+      // codec from a struct-array FIELD element, so reject it as a value - the existing reject is SOUND. A
+      // SCALAR-leaf element is NOT caught: `xs[i].items[j].v` reaches checkExpr as a PropertyAccess (not this
+      // ElementAccess), and `xs[i].grid[j][k]` resolves to a VALUE (handled by its leaf reader).
       if (ts.isElementAccessExpression(node)) {
         const baseArr = this.resolveArrayExpr(node.expression);
         if (
@@ -14369,16 +14381,20 @@ export class Analyzer {
             this.currentReadsState = true;
             return { kind: 'structArrayElem', type: arr.elem, arr, index: idx };
           }
-          // LIFT #1: a whole sub-AGGREGATE element of a CALLDATA array-of-array (return xs[i] where
-          // xs: Arr<P,N>[] or P[][], element a fixed/dynamic STATIC-STRUCT-leaf sub-array). The element
-          // is re-encoded from its calldata head into a fresh ABI return blob via the recursive calldata
-          // codec (a STATIC element flat; a DYNAMIC element with the [0x20] wrapper), bounds-checked
-          // (Panic 0x32) exactly like xs[i][j]. Restricted to a static-struct-leaf or value-leaf element
-          // sub-array (the shapes abiEncFromCd encodes inline); a bytes/string-leaf or dyn-struct-leaf
-          // element sub-array stays gated (its calldata->blob re-encode is a later step).
+          // LIFT #1: a whole sub-AGGREGATE element of a CALLDATA array-of-array (return xs[i]). The
+          // element is re-encoded from its calldata head into a fresh ABI return blob via the recursive
+          // calldata codec abiEncFromCd (a STATIC element flat; a DYNAMIC element with the [0x20]
+          // wrapper), bounds-checked (Panic 0x32) exactly like xs[i][j], with cap=empty-revert so a
+          // malformed inner copy reverts like solc's calldata->memory copy. The element's calldata data
+          // offset is resolved precisely by cdArrayElemBase (contiguous for a static element; per-level
+          // offset table for a dynamic element). Admitted element shapes:
+          //   - static-struct-leaf (P[][], Arr<P,N>[]) / value-leaf (u8[][], u256[][]): inline encoding.
+          //   - aggregate-leaf (bytes[][] -> bytes[], string[][] -> string[], D[][] -> D[] dyn-struct):
+          //     the dynamic-element offset-table + tail encoding (abiEncFromCd's dynamic-array branch).
+          // abiEncFromCd handles unbounded nesting, so any of these re-encodes byte-identically.
           if (
             arr.base.kind === 'calldataArray' &&
-            (isStaticStructAnyLeafArray(arr.elem) || isValueLeafArray(arr.elem))
+            (isStaticStructAnyLeafArray(arr.elem) || isValueLeafArray(arr.elem) || isAggregateLeafArray(arr.elem))
           ) {
             const index = this.checkExpr(node.argumentExpression, U256);
             if (!index) return undefined;

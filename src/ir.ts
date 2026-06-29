@@ -312,7 +312,18 @@ export type Expr =
   // `place` (when set) targets a nested STRUCT field of a dynamic-struct param
   // (return o.inner): the encoder resolves that field's tuple-start base via the
   // navigator and re-encodes it as a standalone tuple (param is then unused).
-  | { kind: 'cdDynStructValue'; type: JethType; param: string; place?: CdDynPlace };
+  | { kind: 'cdDynStructValue'; type: JethType; param: string; place?: CdDynPlace }
+  // A whole DYNAMIC-ARRAY field of a calldata dyn-struct (array) element used as a VALUE:
+  // `xs[i].grid` (grid: u256[][]), `xs[i].items` (items: D[]). The CdDynPlace (with an
+  // arrayRoot navigator) resolves to the containing tuple; the field's head holds an offset
+  // to the array `[len][...]` header, which the recursive calldata codec (echoCdFieldArray ->
+  // abiEncFromCd) re-encodes whole into a fresh ABI return/encode blob (any element shape).
+  | { kind: 'cdFieldAggValue'; type: JethType; place: CdDynPlace }
+  // A whole inner array reached by DESCENDING a nested-dynamic-array field of a calldata
+  // dyn-struct (array) element used as a VALUE: `xs[i].grid[j]` (grid: u256[][] -> inner u256[]).
+  // The CdDynPlace resolves the field header; `indices` descends per-level offset tables (each
+  // bounds-checked Panic 0x32) to the inner array header, which abiEncFromCd re-encodes whole.
+  | { kind: 'cdNestedFieldAggValue'; type: JethType; place: CdDynPlace; indices: Expr[]; elem: JethType };
 
 /** A storage location reached by navigating a chain of field/index/key steps from
  *  a root state variable. Resolves at codegen to a (slot expr, byte offset). */

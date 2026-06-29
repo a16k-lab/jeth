@@ -1168,6 +1168,21 @@ ${indent(runtime, 6)}
           this.lowerDiamondFacetAddressesReturnPacked(out);
           break;
         }
+        // `return xs[i].grid` / `return xs[i].items` (a whole DYNAMIC-ARRAY field of a calldata
+        // dyn-struct array element used as a value): re-encode the whole array from its calldata
+        // header via the recursive calldata codec.
+        if (s.value.kind === 'cdFieldAggValue') {
+          const { ptr, size } = this.echoCdFieldArray(s.value.place, s.value.type, ctx, out);
+          out.push(`return(${ptr}, ${size})`);
+          break;
+        }
+        // `return xs[i].grid[j]` (a whole INNER array reached by descending such a nested-array field):
+        // descend the per-level offset tables to the inner array header, then re-encode whole.
+        if (s.value.kind === 'cdNestedFieldAggValue') {
+          const { ptr, size } = this.echoCdNestedFieldArray(s.value.place, s.value.indices, s.value.type, ctx, out);
+          out.push(`return(${ptr}, ${size})`);
+          break;
+        }
         // `return p` (memory STATIC struct local), `return p.inner` (a nested struct field, a
         // sub-pointer), or `return this.helper()` (struct-returning internal call): the
         // ABI-unpacked memory image at the (sub)pointer IS the flat return blob. G9.
@@ -3107,6 +3122,8 @@ ${indent(runtime, 6)}
       case 'structArrayElem':
       case 'cdStructArrayElem':
       case 'cdAggArrayElem':
+      case 'cdFieldAggValue': // whole dyn-array field of a cd struct-array element: return path / aggArgToMemPtr
+      case 'cdNestedFieldAggValue': // whole inner array of such a nested field: return path / aggArgToMemPtr
       case 'mapStorageValue':
       case 'mapDynValue':
       case 'abiEncode':
@@ -6082,6 +6099,17 @@ ${indent(runtime, 6)}
         return this.abiDecFromCdToImage(value.type, `sub(${cd.offset}, 0x20)`, out, `${this.panic()}(0x41)`);
       }
     }
+    // a whole DYNAMIC-ARRAY field of a calldata dyn-struct array element (xs[i].grid / xs[i].items) used
+    // as an abi.encode arg / a memory-image source: DEEP-COPY it from its resolved calldata header into a
+    // fresh pointer-headed memory image. cap = Panic(0x41), matching solc's calldata->memory deep copy.
+    if (value.kind === 'cdFieldAggValue') {
+      const hdr = this.cdFieldArrayHeader(value.place, ctx, out);
+      return this.abiDecFromCdToImage(value.type, hdr, out, `${this.panic()}(0x41)`);
+    }
+    if (value.kind === 'cdNestedFieldAggValue') {
+      const hdr = this.cdNestedFieldArrayHeader(value.place, value.indices, ctx, out);
+      return this.abiDecFromCdToImage(value.type, hdr, out, `${this.panic()}(0x41)`);
+    }
     const p = this.fresh();
     out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
     return p;
@@ -6367,6 +6395,17 @@ ${indent(runtime, 6)}
     // a fresh decoded memory image pointer in the right layout ([len][elems] for an array, the
     // pointer-headed image for a dynamic struct, the flat ABI image for a static aggregate).
     if (a.kind === 'abiDecode') return this.lowerAbiDecode(a.data, [a.type], ctx, out)[0]!;
+    // a whole DYNAMIC-ARRAY field of a calldata dyn-struct array element (xs[i].grid / xs[i].items) used
+    // as a return-tuple component / fn arg: DEEP-COPY from its resolved calldata header into a fresh
+    // pointer-headed memory image (cap = Panic 0x41, solc's calldata->memory deep-copy semantics).
+    if (a.kind === 'cdFieldAggValue') {
+      const hdr = this.cdFieldArrayHeader(a.place, ctx, out);
+      return this.abiDecFromCdToImage(a.type, hdr, out, `${this.panic()}(0x41)`);
+    }
+    if (a.kind === 'cdNestedFieldAggValue') {
+      const hdr = this.cdNestedFieldArrayHeader(a.place, a.indices, ctx, out);
+      return this.abiDecFromCdToImage(a.type, hdr, out, `${this.panic()}(0x41)`);
+    }
     // a DYNAMIC-array literal lowers to a fresh [len][elems] memory image (lowerExpr's arrayLit case);
     // a structNew / static fixed-array literal uses the static-aggregate image (allocAggToMem).
     if (a.kind === 'arrayLit') {
@@ -6483,6 +6522,25 @@ ${indent(runtime, 6)}
       (isNestedValueArray(arg.type) && isDynamicType(arg.type)) ||
       isAggregateLeafArray(arg.type) ||
       (isStaticStructAnyLeafArray(arg.type) && isDynamicType(arg.type)); // Batch A: Arr<P,N>[] dynamic outer
+    // a whole DYNAMIC-ARRAY field of a calldata dyn-struct array element (xs[i].grid / xs[i].items) /
+    // a descended inner array (xs[i].grid[j]) as an abi.encode/encodePacked arg: re-encode it DIRECTLY
+    // from its resolved calldata header into a fresh ABI TAIL blob (mp points at [len]/the offset table,
+    // size is the tail byte length). This is solc's abi.encode behavior: a direct calldata->ABI re-encode
+    // with NO memory materialization, so a malformed inner length/offset is an ABI-decode failure ->
+    // EMPTY revert (capEmptyRevert=true), empirically verified vs solc 0.8.35 (oversized inner len -> 0x).
+    if (arg.kind === 'cdFieldAggValue' || arg.kind === 'cdNestedFieldAggValue') {
+      const hdr =
+        arg.kind === 'cdFieldAggValue'
+          ? this.cdFieldArrayHeader(arg.place, ctx, out)
+          : this.cdNestedFieldArrayHeader(arg.place, arg.indices, ctx, out);
+      const validate = !isValueLeafArray(arg.type);
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const sz = this.fresh();
+      out.push(`let ${sz} := ${this.abiEncFromCd(arg.type, hdr, dst, validate, out, true)}`);
+      out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+      return { mp: dst, size: sz };
+    }
     if (codecSourced && memSourced) {
       const mp = this.nestedMemImagePtr(arg, ctx, out);
       const dst = this.fresh();
@@ -7812,6 +7870,125 @@ ${indent(runtime, 6)}
     return { ptr, size: `add(0x20, ${size})` };
   }
 
+  /** Echo a whole DYNAMIC-ARRAY field of a calldata dyn-struct (array) element as a VALUE:
+   *  `xs[i].grid` (grid: u256[][]) / `xs[i].items` (items: D[]). The field's head slot holds an
+   *  OFFSET (relative to the containing tuple base) to the array's `[len][...]` header. Resolve
+   *  that header, then re-encode the WHOLE array via the recursive calldata codec abiEncFromCd
+   *  (which reads `[len]` itself and lays out the offset table + tails for any element shape).
+   *  The array is dynamic, so the return blob is `[0x20][encoding]`. A value-leaf array (u256[][])
+   *  MASKS dirty leaves; a struct- / bytes-leaf array VALIDATES (the struct/bytes branches force
+   *  field validation). cap = empty-revert, matching solc's calldata->memory copy of a malformed
+   *  inner length/offset (truncated/OOB -> empty revert, oversized inner len -> Panic 0x41 inside
+   *  the bytes/struct leaf decode is itself capped to empty-revert here). */
+  /** Resolve the calldata HEADER pointer (the [len] word, or the N-word table for a fixed array) of a
+   *  whole DYNAMIC-ARRAY field of a calldata dyn-struct (array) element: the field's head holds an
+   *  offset (relative to the containing tuple base) to the array header. Unsigned 2^64 cap + length-word
+   *  readability check; deep payload bounds are the codec's responsibility. */
+  private cdFieldArrayHeader(place: CdDynPlace, ctx: LowerCtx, out: string[]): string {
+    const base = this.lowerCdDynBase(place, ctx, out);
+    const last = place.steps[place.steps.length - 1]!;
+    const offPtr = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
+    const off = this.fresh();
+    out.push(`let ${off} := calldataload(${offPtr})`);
+    out.push(`if gt(${off}, 0xffffffffffffffff) { revert(0, 0) }`);
+    const hdr = this.fresh();
+    out.push(`let ${hdr} := add(${base}, ${off})`);
+    out.push(`if iszero(slt(add(${hdr}, 0x1f), calldatasize())) { revert(0, 0) }`);
+    return hdr;
+  }
+
+  private echoCdFieldArray(place: CdDynPlace, t: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+    const hdr = this.cdFieldArrayHeader(place, ctx, out);
+    const validate = !isValueLeafArray(t);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(${ptr}, 0x20)`);
+    // RETURN of a whole field array = a full calldata->memory DECODE/copy: an oversized inner length /
+    // alloc overflow Panics 0x41 (capEmptyRevert=false), matching solc (empirically verified vs 0.8.35:
+    // grid/items oversized inner len -> Panic 0x41). Truncated / OOB source still EMPTY-reverts (those
+    // checks are unconditional). NOTE: this differs from `return xs[i]` (the array-of-array ELEMENT
+    // lazy-access slice, which empty-reverts on oversized) - a struct FIELD is a whole decode, not a slice.
+    const size = this.abiEncFromCd(t, hdr, `add(${ptr}, 0x20)`, validate, out, false);
+    out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
+    return { ptr, size: `add(0x20, ${size})` };
+  }
+
+  /** Echo a whole INNER array reached by DESCENDING a nested-dynamic-array field of a calldata
+   *  dyn-struct (array) element as a VALUE: `xs[i].grid[j]` (grid: u256[][] -> inner u256[]). Mirror
+   *  lowerArrayRef's cdDynFieldNested descent EXACTLY (resolve the field's offset table, then descend
+   *  one offset-table level per index with a Panic(0x32) bound), but stop at the inner array's HEADER
+   *  (the [len] word = dataOff - 0x20 for a dynamic inner level), then re-encode the whole array via
+   *  abiEncFromCd. The return blob is [0x20][encoding]; a value-leaf inner array MASKS, an aggregate
+   *  inner array VALIDATES. cap = empty-revert (solc's calldata->memory copy semantics). */
+  /** Resolve the calldata HEADER pointer of a whole INNER array reached by DESCENDING a nested-dynamic-
+   *  array field (`xs[i].grid[j]`): decode the field's offset table, then descend one offset-table level
+   *  per index (Panic(0x32) bound on each), stopping at the inner array's header (the [len] word for a
+   *  dynamic inner level; the N-word table for a fixed inner level). Mirrors lowerArrayRef's
+   *  cdDynFieldNested descent exactly. */
+  private cdNestedFieldArrayHeader(place: CdDynPlace, indices: Expr[], ctx: LowerCtx, out: string[]): string {
+    const cbase = this.lowerCdDynBase(place, ctx, out);
+    const last = place.steps[place.steps.length - 1]!;
+    const offPtr = last.headWords === 0 ? cbase : `add(${cbase}, ${last.headWords * 32})`;
+    const tableStart = this.fresh();
+    const outerLen = this.fresh();
+    out.push(`let ${tableStart}, ${outerLen} := ${this.calldataArrayAt()}(${cbase}, ${offPtr}, 0x20)`);
+    const fieldArr = last.fieldType as JethType & { kind: 'array' };
+    let base = tableStart;
+    let count: string = outerLen;
+    let elemT: JethType = fieldArr.element;
+    let header = ''; // the [len] word of the resolved inner array (set on the final descent)
+    indices.forEach((idxExpr) => {
+      const i = this.fresh();
+      out.push(`let ${i} := ${this.lowerExpr(idxExpr, ctx, out)}`);
+      out.push(`if iszero(lt(${i}, ${count})) { ${this.panic()}(0x32) }`);
+      if (elemT.kind === 'array' && elemT.length === undefined) {
+        const stride = isDynamicType(elemT.element) ? 32 : abiHeadWords(elemT.element) * 32;
+        const nb = this.fresh();
+        const nl = this.fresh();
+        out.push(`let ${nb}, ${nl} := ${this.calldataInnerArray()}(${base}, ${i}, ${stride})`);
+        // nb = data start (after [len]); the inner array HEADER (length word) is nb - 0x20.
+        header = `sub(${nb}, 0x20)`;
+        base = nb;
+        count = nl;
+      } else if (elemT.kind === 'array' && elemT.length !== undefined) {
+        const nb = this.fresh();
+        out.push(`let ${nb} := ${this.calldataNestedOff()}(${base}, ${i})`);
+        // a FIXED inner level has NO length word: the resolved offset IS the header (the N-word table).
+        header = nb;
+        base = nb;
+        count = String(elemT.length);
+      } else {
+        throw new UnsupportedError(`cannot index calldata dyn-struct nested field element of kind '${elemT.kind}'`);
+      }
+      elemT = (elemT as JethType & { kind: 'array' }).element;
+    });
+    return header;
+  }
+
+  private echoCdNestedFieldArray(
+    place: CdDynPlace,
+    indices: Expr[],
+    t: JethType,
+    ctx: LowerCtx,
+    out: string[],
+  ): { ptr: string; size: string } {
+    const header = this.cdNestedFieldArrayHeader(place, indices, ctx, out);
+    const validate = !isValueLeafArray(t);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    // RETURN = a full calldata->memory decode: oversized inner length -> Panic 0x41 (capEmptyRevert=false),
+    // truncated/OOB -> empty revert (unconditional). Same whole-decode semantics as echoCdFieldArray.
+    if (isDynamicType(t)) {
+      out.push(`mstore(${ptr}, 0x20)`);
+      const size = this.abiEncFromCd(t, header, `add(${ptr}, 0x20)`, validate, out, false);
+      out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
+      return { ptr, size: `add(0x20, ${size})` };
+    }
+    const size = this.abiEncFromCd(t, header, ptr, validate, out, false);
+    out.push(`mstore(0x40, add(${ptr}, ${size}))`);
+    return { ptr, size };
+  }
+
   /** Echo a whole nested-STRUCT field of a dynamic-struct calldata param (return o.inner)
    *  into a fresh ABI return blob [0x20][tuple encoding]. Resolve the inner struct's tuple
    *  start via the navigator: lowerCdDynBase folds every step but the last to the containing
@@ -7909,17 +8086,24 @@ ${indent(runtime, 6)}
     capEmptyRevert = false,
   ): { ptr: string; size: string } {
     const eb = this.cdArrayElemBase(arr, index, t, ctx, out);
+    // A whole sub-aggregate ELEMENT whose ultimate leaf is a pure VALUE type (u8[][] -> u8[],
+    // bool[][] -> bool[], Arr<u8,N>[] -> Arr<u8,N>, and any deeper value-leaf nesting) is a
+    // calldata->memory COPY: solc MASKS dirty leaves (and 1ifies a non-0/1 bool) rather than
+    // reverting, exactly like a plain top-level value-array return (uint8[]). validateInput would
+    // EMPTY-revert on dirty bits (a fail-safe over-validation). A struct- / bytes/string-leaf element
+    // still VALIDATES (the struct/bytes branches of abiEncFromCd force field validation regardless).
+    const validate = !isValueLeafArray(t);
     if (isStaticType(t)) {
       const ptr = this.fresh();
       out.push(`let ${ptr} := mload(0x40)`);
-      const size = this.abiEncFromCd(t, eb, ptr, true, out, capEmptyRevert);
+      const size = this.abiEncFromCd(t, eb, ptr, validate, out, capEmptyRevert);
       out.push(`mstore(0x40, add(${ptr}, ${size}))`);
       return { ptr, size };
     }
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(${ptr}, 0x20)`);
-    const size = this.abiEncFromCd(t, eb, `add(${ptr}, 0x20)`, true, out, capEmptyRevert);
+    const size = this.abiEncFromCd(t, eb, `add(${ptr}, 0x20)`, validate, out, capEmptyRevert);
     const total = this.fresh();
     out.push(`let ${total} := add(0x20, ${size})`);
     out.push(`mstore(0x40, add(${ptr}, ${total}))`);

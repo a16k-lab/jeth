@@ -261,7 +261,7 @@ describe('cd-nested-fields #3: xs[i].items[j].v on a calldata S[] (D[] field)', 
   });
 });
 
-describe('cd-nested-fields: whole-field value forms stay CLEAN rejects (no whole-field codec)', () => {
+describe('cd-nested-fields: whole-field value forms (lifted; only the struct-ELEMENT form stays a reject)', () => {
   const rejects = (src: string) => {
     try {
       compile(src, { fileName: 'C.jeth' });
@@ -270,18 +270,20 @@ describe('cd-nested-fields: whole-field value forms stay CLEAN rejects (no whole
       return true;
     }
   };
-  it('xs[i].grid (whole u256[][]) rejected', () => {
+  // cd-mask-and-whole-encode LIFT: the whole dynamic-ARRAY field value forms now COMPILE (return + abi.encode)
+  // byte-identically to solc - the differential proof is in cd-mask-and-whole-encode.test.ts.
+  it('xs[i].grid (whole u256[][]) now COMPILES (lifted)', () => {
     expect(rejects(`@struct class S{a:u256;grid:u256[][];}
-@contract class C{@external @pure r(xs:S[],i:u256):u256[][]{return xs[i].grid;}}`)).toBe(true);
+@contract class C{@external @pure r(xs:S[],i:u256):u256[][]{return xs[i].grid;}}`)).toBe(false);
   });
-  it('xs[i].grid[j] (whole u256[]) rejected', () => {
+  it('xs[i].grid[j] (whole u256[]) now COMPILES (lifted)', () => {
     expect(rejects(`@struct class S{a:u256;grid:u256[][];}
-@contract class C{@external @pure r(xs:S[],i:u256,j:u256):u256[]{return xs[i].grid[j];}}`)).toBe(true);
+@contract class C{@external @pure r(xs:S[],i:u256,j:u256):u256[]{return xs[i].grid[j];}}`)).toBe(false);
   });
-  it('xs[i].items (whole D[]) rejected', () => {
+  it('xs[i].items (whole D[]) now COMPILES (lifted)', () => {
     expect(rejects(`@struct class D{v:u256;t:string;}
 @struct class S{a:u256;items:D[];}
-@contract class C{@external @pure r(xs:S[],i:u256):D[]{return xs[i].items;}}`)).toBe(true);
+@contract class C{@external @pure r(xs:S[],i:u256):D[]{return xs[i].items;}}`)).toBe(false);
   });
   // SOUNDNESS: a whole struct ELEMENT of a dyn-struct-array field used as a VALUE (xs[i].items[j]) has no
   // calldata->ABI re-encode codec and silently produced zero words (a MISCOMPILE the adversarial sweep

@@ -40,15 +40,6 @@ async function expectSame(a: { aj: any; as: any }, sig: string, cd: string) {
   expect({ success: j.s, ret: j.r }).toEqual({ success: s.s, ret: s.r });
 }
 
-function rejects(src: string): string[] {
-  try {
-    compile(src, { fileName: 'C.jeth' });
-    return [];
-  } catch (e: any) {
-    return (e?.diagnostics ?? []).map((d: any) => d.code);
-  }
-}
-
 describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (return xs[i])', () => {
   it('Arr<P,2>[] -> Arr<P,2> (static-struct fixed sub-array, inline)', async () => {
     const a = await pair(
@@ -140,15 +131,59 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
     }
   });
 
-  it('still cleanly rejects a bytes/string-leaf or dyn-struct-leaf element sub-array (JETH230)', () => {
-    expect(rejects(`@contract class C { @external f(xs: bytes[][], i: u256): bytes[] { return xs[i]; } }`)).toContain(
-      'JETH230',
+  it('whole bytes[][] element (return xs[i] -> bytes[]) is byte-identical', async () => {
+    const ap = await pair(
+      `@contract class C { @external @pure f(xs: bytes[][], i: u256): bytes[] { return xs[i]; } }`,
+      `contract C { function f(bytes[][] calldata xs, uint256 i) external pure returns (bytes[] memory) { return xs[i]; } }`,
     );
-    expect(
-      rejects(
-        `@struct class D{a:u256;b:bytes;} @contract class C { @external f(xs: D[][], i: u256): D[] { return xs[i]; } }`,
-      ),
-    ).toContain('JETH230');
+    // outer offset table for 2 inner bytes[]; inner0 = ["hi", 40-byte], inner1 = []
+    const blob = (s: string) => {
+      const hex = Buffer.from(s, 'utf8').toString('hex');
+      const padded = hex.length ? hex.padEnd(Math.ceil(hex.length / 64) * 64, '0') : '';
+      return W(s.length) + padded;
+    };
+    const arrTab = (items: string[]) => {
+      let off = items.length * 32;
+      const offs: number[] = [];
+      for (const it of items) {
+        offs.push(off);
+        off += it.length / 2;
+      }
+      return W(items.length) + offs.map((o) => W(o)).join('') + items.join('');
+    };
+    const inner0 = arrTab([blob('hi'), blob('this-string-is-definitely-longer-than-32b')]);
+    const inner1 = arrTab([]);
+    const xs = arrTab([inner0, inner1]);
+    await expectSame(ap, 'f(bytes[][],uint256)', W(0x40) + W(0) + xs);
+    await expectSame(ap, 'f(bytes[][],uint256)', W(0x40) + W(1) + xs);
+    await expectSame(ap, 'f(bytes[][],uint256)', W(0x40) + W(2) + xs); // OOB -> Panic 0x32
+  });
+
+  it('whole D[][] element (return xs[i] -> D[], D dynamic) is byte-identical', async () => {
+    const ap = await pair(
+      `@struct class D{a:u256;b:bytes;} @contract class C { @external @pure f(xs: D[][], i: u256): D[] { return xs[i]; } }`,
+      `struct D{uint256 a;bytes b;} contract C { function f(D[][] calldata xs, uint256 i) external pure returns (D[] memory) { return xs[i]; } }`,
+    );
+    const dynD = (a: number, s: string) => {
+      const hex = Buffer.from(s, 'utf8').toString('hex');
+      const padded = hex.length ? hex.padEnd(Math.ceil(hex.length / 64) * 64, '0') : '';
+      return W(a) + W(0x40) + W(s.length) + padded;
+    };
+    const arrTab = (items: string[]) => {
+      let off = items.length * 32;
+      const offs: number[] = [];
+      for (const it of items) {
+        offs.push(off);
+        off += it.length / 2;
+      }
+      return W(items.length) + offs.map((o) => W(o)).join('') + items.join('');
+    };
+    const inner0 = arrTab([dynD(1, 'abc'), dynD(2, 'a-string-that-spans-more-than-thirty-two-bytes')]);
+    const inner1 = arrTab([dynD(3, '')]);
+    const xs = arrTab([inner0, inner1]);
+    await expectSame(ap, 'f((uint256,bytes)[][],uint256)', W(0x40) + W(0) + xs);
+    await expectSame(ap, 'f((uint256,bytes)[][],uint256)', W(0x40) + W(1) + xs);
+    await expectSame(ap, 'f((uint256,bytes)[][],uint256)', W(0x40) + W(2) + xs); // OOB -> Panic 0x32
   });
 });
 

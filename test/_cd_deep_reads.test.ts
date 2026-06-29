@@ -188,25 +188,35 @@ describe('cd-deep-reads: deferred sub-cases stay CLEAN rejects (no miscompile)',
 @contract class C{@external @pure rd(xs:Arr<P,2>[],i:u256):Arr<P,2>{return xs[i];}}`),
     ).toBe(false);
   });
-  // cd-nested-fields LIFT: the deeper element/leaf reads are now ACCEPTED byte-identically (see the
-  // cd-nested-fields describe block below). The remaining clean reject is the WHOLE-field value form.
-  it('(C-deep) whole nested-array field xs[i].grid is rejected (no whole-field codec)', () => {
+  // cd-mask-and-whole-encode LIFT: the whole DYNAMIC-ARRAY field value forms are now ACCEPTED byte-
+  // identically (return + abi.encode), verified differentially in cd-whole-field-aggregate.test.ts.
+  it('(C-deep) whole nested-array field xs[i].grid now COMPILES (lifted byte-identical)', () => {
     expect(
       rejects(`@struct class S{a:u256;grid:u256[][];}
 @contract class C{@external @pure rd(xs:S[],i:u256):u256[][]{return xs[i].grid;}}`),
-    ).toBe(true);
+    ).toBe(false);
   });
-  it('(C-deep) whole inner array xs[i].grid[j] (value) is rejected (no whole-field codec)', () => {
+  it('(C-deep) whole inner array xs[i].grid[j] (value) now COMPILES (lifted byte-identical)', () => {
     expect(
       rejects(`@struct class S{a:u256;grid:u256[][];}
 @contract class C{@external @pure rd(xs:S[],i:u256,j:u256):u256[]{return xs[i].grid[j];}}`),
-    ).toBe(true);
+    ).toBe(false);
   });
-  it('(C-deep) whole dyn-struct-array field xs[i].items is rejected (no whole-field codec)', () => {
+  it('(C-deep) whole dyn-struct-array field xs[i].items now COMPILES (lifted byte-identical)', () => {
     expect(
       rejects(`@struct class D{v:u256;s:string;}
 @struct class S{a:u256;items:D[];}
 @contract class C{@external @pure rd(xs:S[],i:u256):D[]{return xs[i].items;}}`),
+    ).toBe(false);
+  });
+  it('(C-deep) whole STRUCT ELEMENT of a struct-array field xs[i].items[j] STAYS a clean reject (deferred; mis-routed codec)', () => {
+    // No byte-identical whole-struct-element re-encode codec from a struct-array FIELD element exists yet:
+    // the cdStructArrayElem path mis-routes a cdDynArrayField-with-arrayRoot base (wrong bytes + no OOB
+    // bounds check). Kept a SOUND clean reject rather than ship a miscompile.
+    expect(
+      rejects(`@struct class D{v:u256;s:string;}
+@struct class S{a:u256;items:D[];}
+@contract class C{@external @pure rd(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`),
     ).toBe(true);
   });
 });
