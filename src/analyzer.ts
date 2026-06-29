@@ -14156,6 +14156,22 @@ export class Analyzer {
             this.currentReadsState = true;
             return { kind: 'structArrayElem', type: arr.elem, arr, index: idx };
           }
+          // LIFT #1: a whole sub-AGGREGATE element of a CALLDATA array-of-array (return xs[i] where
+          // xs: Arr<P,N>[] or P[][], element a fixed/dynamic STATIC-STRUCT-leaf sub-array). The element
+          // is re-encoded from its calldata head into a fresh ABI return blob via the recursive calldata
+          // codec (a STATIC element flat; a DYNAMIC element with the [0x20] wrapper), bounds-checked
+          // (Panic 0x32) exactly like xs[i][j]. Restricted to a static-struct-leaf or value-leaf element
+          // sub-array (the shapes abiEncFromCd encodes inline); a bytes/string-leaf or dyn-struct-leaf
+          // element sub-array stays gated (its calldata->blob re-encode is a later step).
+          if (
+            arr.base.kind === 'calldataArray' &&
+            (isStaticStructAnyLeafArray(arr.elem) || isValueLeafArray(arr.elem))
+          ) {
+            const index = this.checkExpr(node.argumentExpression, U256);
+            if (!index) return undefined;
+            const idx = this.coerce(index, U256, node.argumentExpression);
+            return { kind: 'cdAggArrayElem', type: arr.elem, arr, index: idx };
+          }
           this.diags.error(
             node,
             'JETH230',

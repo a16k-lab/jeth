@@ -288,6 +288,13 @@ export type Expr =
   // from its (contiguous for a static struct / offset-located for a dynamic struct) calldata
   // head into a fresh ABI return blob, with the same bounds-check (Panic 0x32) as ps[i].field.
   | { kind: 'cdStructArrayElem'; type: JethType; arr: ArrayExpr; index: Expr }
+  // LIFT #1: whole sub-AGGREGATE element of a calldata array-of-array (return xs[i] where
+  // xs: Arr<P,N>[] / P[][]). The element (a fixed/dynamic sub-array) is copied from its
+  // (contiguous for a static element / offset-located for a dynamic element) calldata head
+  // into a fresh ABI return blob via the recursive calldata codec, bounds-checked (Panic 0x32)
+  // exactly like xs[i][j]. Kept distinct from cdStructArrayElem so the dyn-struct local-bind
+  // paths (let p: P = ps[i]) never see an array element.
+  | { kind: 'cdAggArrayElem'; type: JethType; arr: ArrayExpr; index: Expr }
   // --- Phase 4e-4: string[] / bytes[] (calldata param) element read -> a dynamic value ---
   | { kind: 'cdDynArrayElem'; type: JethType; arr: ArrayExpr; index: Expr }
   // --- storage / mapping-valued string[] / bytes[] element -> a dynamic value ---

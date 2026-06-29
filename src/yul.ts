@@ -1220,6 +1220,17 @@ ${indent(runtime, 6)}
           out.push(`return(${ptr}, ${size})`);
           break;
         }
+        // LIFT #1: `return xs[i]` (whole sub-aggregate element of a calldata array-of-array): the SAME
+        // bounds-check + calldata-codec re-encode as a struct element (returnCdArrayElem is type-generic:
+        // a STATIC element is flat, a DYNAMIC element gets the [0x20] wrapper). solc treats this as a
+        // calldata->memory DECODE/copy: an oversized inner length / alloc overflow EMPTY-reverts (NOT
+        // Panic 0x41) - empirically verified vs solc 0.8.35 for both a value-leaf (u256[][]) and a
+        // static-struct-leaf (P[][]) element - so pass capEmptyRevert = true.
+        if (s.value.kind === 'cdAggArrayElem') {
+          const { ptr, size } = this.returnCdArrayElem(s.value.arr, s.value.index, s.value.type, ctx, out, true);
+          out.push(`return(${ptr}, ${size})`);
+          break;
+        }
         // `return this.m[k]` (whole struct/array mapping value): encode from the
         // runtime mapping slot via the storage-source encoder.
         if (s.value.kind === 'mapStorageValue') {
@@ -3082,6 +3093,7 @@ ${indent(runtime, 6)}
       case 'structValue':
       case 'structArrayElem':
       case 'cdStructArrayElem':
+      case 'cdAggArrayElem':
       case 'mapStorageValue':
       case 'mapDynValue':
       case 'abiEncode':
@@ -7495,10 +7507,20 @@ ${indent(runtime, 6)}
       }
       return ptr;
     }
-    // a DYNAMIC-field struct element (a P[] element, P with bytes/string/dyn fields) from a RAW calldata
-    // base: buildDynStructFromCalldata takes an Expr source, not a raw cd offset, so a calldata struct
-    // decoder over an arbitrary offset is not wired. SAFE clean reject (the mem-source path covers this
-    // shape; a clean reject beats a miscompile). The required Edge-F leaf shapes never reach here.
+    // LIFT #5: a DYNAMIC-field struct element (a D[] element where D has a bytes/string/dynamic-array
+    // field) from a RAW calldata base. Decode the tuple at `cdPtr` into the SAME pointer-headed image a
+    // memDynStruct local / a B3 P[]-of-dyn-struct element uses (value/static-aggregate fields inline;
+    // each dynamic field's head word = an ABSOLUTE pointer to its own fresh [len][..] sub-image). The
+    // calldata twin of buildDynStructFromMemBlob; uses calldatasize() as the source data-bounds limit
+    // and the caller-selected `cap` for oversized-length / alloc-overflow (panic(0x41) in the cd->mem
+    // copy context, matching solc's calldata->memory deep copy). Restricted to the isDynStructLeaf field
+    // set the rest of the dyn-struct machinery admits (a nested-struct / struct-element-array field stays
+    // gated upstream, so it never reaches here).
+    if (t.kind === 'struct' && isDynamicType(t)) {
+      return this.buildDynStructFromCdBase(t, cdPtr, out, cap);
+    }
+    // any other shape (a calldata struct over an arbitrary offset whose field set is unsupported, etc.):
+    // SAFE clean reject (a clean reject beats a miscompile).
     throw new UnsupportedError(`abiDecFromCdToImage: unsupported type '${t.kind}'`);
   }
 
@@ -7592,6 +7614,63 @@ ${indent(runtime, 6)}
       return this.buildDynStructFromStorage(t, slot, ctx, out);
     }
     throw new UnsupportedError(`abiDecFromStorageToImage: unsupported type '${t.kind}'`);
+  }
+
+  /** LIFT #5: decode a DYNAMIC-field struct from a RAW calldata tuple base `cdBase` into the POINTER-
+   *  HEADED image a memDynStruct local / a B3 P[]-of-dyn-struct element consumes (value & nested-static-
+   *  aggregate fields inline; a bytes/string / dynamic-array / nested-dynamic-leaf-array field's head word
+   *  holds an ABSOLUTE pointer to a fresh sub-image). The calldata twin of buildDynStructFromMemBlob:
+   *  reads via calldataload, bounds every field tail against calldatasize(), and reuses abiDecFromCdToImage
+   *  for each tail (so the short-args / OOB / oversized-length revert semantics are byte-identical to solc's
+   *  calldata tuple-member decode). `cap` selects the oversized-length / alloc-overflow behavior (revert(0,0)
+   *  for an abi.decode-style member, panic(0x41) for a calldata->memory deep copy). The field shape is
+   *  restricted to isDynStructLeaf (validated upstream by the analyzer gates), the same set
+   *  buildDynStructFromMemBlob / buildDynStructFromCalldata admit. */
+  private buildDynStructFromCdBase(
+    struct: JethType & { kind: 'struct' },
+    cdBase: string,
+    out: string[],
+    cap: string,
+  ): string {
+    const headWords = tupleHeadWords(struct);
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${ptr}, ${headWords * 32}))`); // claim the head; sub-images alloc PAST it
+    let hw = 0;
+    for (const f of struct.fields) {
+      const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
+      const headAt = hw === 0 ? cdBase : `add(${cdBase}, ${hw * 32})`;
+      if (isDynamicType(f.type)) {
+        // a dynamic field (bytes/string, a dynamic value-array, or a nested-dynamic-leaf array): the head
+        // word is an OFFSET relative to the tuple start. Resolve + bound the tail, then decode it into a
+        // fresh sub-image via the self-recursion and store ITS absolute pointer in the head word.
+        const so = this.fresh();
+        out.push(`let ${so} := calldataload(${headAt})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${cdBase}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), calldatasize()) { revert(0, 0) }`);
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(f.type, se, out, cap)}`);
+        out.push(`mstore(${at}, ${ip})`);
+        hw += 1;
+      } else {
+        // a static field (value / nested static struct / static fixed array): its abiHeadWords(type) leaf
+        // words are inline at the tuple head; copy + validate each leaf word (the cd-source leaf copy is
+        // exactly encodeStaticInline's calldata branch, inlined here to stay ctx-free).
+        for (const leaf of abiLeaves(f.type)) {
+          const disp = leaf.wordOffset * 32;
+          const src = disp === 0 ? headAt : `add(${headAt}, ${disp})`;
+          const w = this.fresh();
+          out.push(`let ${w} := calldataload(${src})`);
+          const guard = this.validateInput(leaf.type, w);
+          if (guard) out.push(guard);
+          out.push(`mstore(${disp === 0 ? at : `add(${at}, ${disp})`}, ${w})`);
+        }
+        hw += abiHeadWords(f.type);
+      }
+    }
+    return ptr;
   }
 
   /** Decode the bytes value `data` into N components of `types` (abi.decode). Materializes the source
@@ -7789,19 +7868,20 @@ ${indent(runtime, 6)}
     t: JethType,
     ctx: LowerCtx,
     out: string[],
+    capEmptyRevert = false,
   ): { ptr: string; size: string } {
     const eb = this.cdArrayElemBase(arr, index, t, ctx, out);
     if (isStaticType(t)) {
       const ptr = this.fresh();
       out.push(`let ${ptr} := mload(0x40)`);
-      const size = this.abiEncFromCd(t, eb, ptr, true, out);
+      const size = this.abiEncFromCd(t, eb, ptr, true, out, capEmptyRevert);
       out.push(`mstore(0x40, add(${ptr}, ${size}))`);
       return { ptr, size };
     }
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(${ptr}, 0x20)`);
-    const size = this.abiEncFromCd(t, eb, `add(${ptr}, 0x20)`, true, out);
+    const size = this.abiEncFromCd(t, eb, `add(${ptr}, 0x20)`, true, out, capEmptyRevert);
     const total = this.fresh();
     out.push(`let ${total} := add(0x20, ${size})`);
     out.push(`mstore(0x40, add(${ptr}, ${total}))`);
