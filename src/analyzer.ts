@@ -3127,7 +3127,19 @@ export class Analyzer {
           // length; dyn value-array -> element words, no length; nested struct -> members
           // concatenated). Verified byte-identical to solc. A fixed-array-of-dynamic indexed
           // param stays a later step.
-          const indexedArrayOk = t.kind === 'array' && t.length === undefined && isStaticValueType(t.element);
+          // a DYNAMIC array indexed topic = keccak over its abi-encoded elements (no length word), the
+          // SAME path for value elements and STATIC-aggregate elements (P[], Arr<P,N>[]) - materializeArrayArg
+          // flattens a pointer-headed static-struct element array to its inline element words. A dynamic-
+          // element array (bytes[], P-with-dyn-field[], P[][]) stays a later step.
+          // ONLY a STATIC-element dynamic array (value element u256[], or a static-struct / static-fixed-
+          // array element P[]/Arr<P,N>[]) hashes correctly via the inline-element-words path. A DYNAMIC-
+          // element array (bytes[]/string[]/u256[][]/dyn-field-P[]) has a DIFFERENT solc topic preimage
+          // (verified to diverge from the inline path), so it stays a clean reject (a later step).
+          const indexedArrayOk =
+            t.kind === 'array' &&
+            t.length === undefined &&
+            (isStaticValueType(t.element) ||
+              (isStaticType(t.element) && (t.element.kind === 'struct' || t.element.kind === 'array')));
           const indexedStaticAgg =
             isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
           const indexedDynStruct = t.kind === 'struct' && this.isSupportedStructReturn(t);

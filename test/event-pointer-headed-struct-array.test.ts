@@ -95,3 +95,37 @@ describe('emit of a pointer-headed memory Arr<P,N> (static-struct fixed array) -
     expect(r.jeth).toBe(r.solc);
   });
 });
+
+// OR9 (FIX-ALL sweep): an indexed DYNAMIC array whose element is STATIC (a value u256[], or a static-struct
+// P[] / static-fixed-array Arr<P,N>[]) now compiles - its topic is keccak over the inline element words,
+// the same path as a value array. A DYNAMIC-element array (bytes[]/string[]/u256[][]/dyn-field P[]) has a
+// different solc topic preimage and stays a clean reject (verified NOT a miscompile).
+describe('OR9: indexed static-element dynamic array event topic - byte-identical to solc 0.8.35', () => {
+  const codes = (src: string): string[] => {
+    try {
+      compile(src, { fileName: 'C.jeth' });
+      return [];
+    } catch (e: any) {
+      return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
+    }
+  };
+  it('indexed P[] (packed + all-u256) and Arr<P,2>[] topics match solc', async () => {
+    const a = await logDiff(
+      `@struct class P { x: u256; y: u8; } @contract class C { @event E(@indexed ps: P[], n: u256); @external f(): void { let ps: P[] = [P(1n,2n), P(3n,4n)]; emit(E(ps, 9n)); } }`,
+      `contract C { struct P { uint256 x; uint8 y; } event E(P[] indexed ps, uint256 n); function f() external { P[] memory ps = new P[](2); ps[0]=P(1,2); ps[1]=P(3,4); emit E(ps, 9); } }`,
+      'f()',
+    );
+    expect(a.jeth).toBe(a.solc);
+    const b = await logDiff(
+      `@struct class P { x: u256; y: u256; } @contract class C { @event E(@indexed ps: Arr<P,2>[]); @external f(): void { let ps: Arr<P,2>[] = [[P(1n,2n),P(3n,4n)],[P(5n,6n),P(7n,8n)]]; emit(E(ps)); } }`,
+      `contract C { struct P { uint256 x; uint256 y; } event E(P[2][] indexed ps); function f() external { P[2][] memory ps = new P[2][](2); ps[0]=[P(1,2),P(3,4)]; ps[1]=[P(5,6),P(7,8)]; emit E(ps); } }`,
+      'f()',
+    );
+    expect(b.jeth).toBe(b.solc);
+  });
+  it('indexed dynamic-element arrays (bytes[]/string[]/u256[][]/dyn-field P[]) stay a clean reject (NOT a miscompile)', () => {
+    expect(codes(`@contract class C { @event E(@indexed a: bytes[]); @external f(): void { let a: bytes[]=[bytes("x")]; emit(E(a)); } }`)).toContain('JETH207');
+    expect(codes(`@contract class C { @event E(@indexed a: u256[][]); @external f(): void { let a: u256[][]=[[1n]]; emit(E(a)); } }`)).toContain('JETH207');
+    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @event E(@indexed ps: P[]); @external f(): void { let ps: P[]=[P(1n,bytes("x"))]; emit(E(ps)); } }`)).toContain('JETH207');
+  });
+});
