@@ -29,6 +29,8 @@ import {
   isBytesLike,
   isNestedValueArray,
   isAggregateLeafArray,
+  isStaticStructFixedLeafArray,
+  isStaticStructAnyLeafArray,
   isDynStructLeaf,
   isDynStructLeafArrayField,
   isValueLeafArray,
@@ -7341,7 +7343,18 @@ export class Analyzer {
     // pointer; abiEncFromMem encodes both). Registered as a memArray (dynamic outer, [len] header).
     // Construction from an array literal or new Array<E>(n); element/field/length/return/abi.encode
     // go through the codec. A whole-array alias/copy is still a later step (stays JETH200).
-    if (declared.kind === 'array' && isAggregateLeafArray(declared)) {
+    // Batch A: ALSO accept a FIXED-outer static-struct array (Arr<P,N>, Arr<Arr<P,N>,M>, Arr<P,N>[][]...)
+    // and a dynamic-outer fixed-struct-array (Arr<P,N>[]). Both are POINTER-HEADED and ride the SAME codec.
+    // A FIXED outer (declared.length !== undefined) is registered as a memAggregate (no [len] header);
+    // a dynamic outer stays a memArray. (The narrower fixed predicate is OR'd in ONLY here; the dynamic-
+    // outer reject set owned by isAggregateLeafArray / isStaticStructLeafArray is unchanged.)
+    if (
+      declared.kind === 'array' &&
+      (isAggregateLeafArray(declared) ||
+        isStaticStructFixedLeafArray(declared) ||
+        (isStaticStructAnyLeafArray(declared) && declared.length === undefined))
+    ) {
+      const fixedOuter = declared.length !== undefined;
       if (this.inCurrentScope(decl.name.text)) {
         this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
         return;
@@ -7388,7 +7401,10 @@ export class Analyzer {
         return;
       }
       this.declareLocal(decl.name.text, declared);
-      this.memArrayLocals.add(decl.name.text);
+      // a FIXED outer (Arr<P,N>) is a memAggregate (pointer to N pointer words, no [len] header);
+      // a DYNAMIC outer (P[], Arr<P,N>[]) is a memArray (pointer to [len][elems]).
+      if (fixedOuter) this.memAggregateLocals.set(decl.name.text, declared);
+      else this.memArrayLocals.add(decl.name.text);
       out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
@@ -10377,6 +10393,18 @@ export class Analyzer {
           memStaticElem: at.element.kind === 'array' ? isStaticType(at.element) : undefined,
         };
       }
+      // Batch A: a FIXED static-struct array MEMORY local registered as a memAggregate (Arr<P,N>,
+      // Arr<Arr<P,N>,M>, Arr<P,N>[][]): N POINTER words (no [len] header). xs[i] reads the i-th pointer
+      // word (memStaticElem = false: a struct / static-struct-leaf-array element is a reference type), with
+      // a runtime bounds check (i >= N -> Panic 0x32) and a const-index compile error, exactly like P[].
+      if (at && at.kind === 'array' && isStaticStructFixedLeafArray(at)) {
+        return {
+          base: { kind: 'memArrayExpr', expr: { kind: 'memAggregate', type: at, local: node.text } },
+          elem: at.element,
+          memFixedLen: at.length,
+          memStaticElem: this.memElemStatic(at.element),
+        };
+      }
       // a dynamic array param, OR a fixed array of a DYNAMIC element (Arr<dyn,N>),
       // both bound at codegen as a calldata array (the latter with a constant length).
       // Exclude a memory aggregate local (handled just above) so a fixed-of-dynamic memory local is
@@ -10668,7 +10696,12 @@ export class Analyzer {
    *  (undefined - lowerArrayGet's value branch owns it). Drives the codec's inline-base vs
    *  pointer-load choice for nested / aggregate-leaf memory arrays. */
   private memElemStatic(elem: JethType): boolean | undefined {
-    if (elem.kind === 'array') return isStaticType(elem); // static VALUE sub-array -> inline base
+    if (elem.kind === 'array') {
+      // Batch A: a static-struct-leaf array element (Arr<P,N> / P[]) is a REFERENCE type -> a single
+      // absolute-pointer word (false), NOT an inline base. A static VALUE sub-array (Arr<u256,N>) is inline.
+      if (isStaticStructAnyLeafArray(elem)) return false;
+      return isStaticType(elem); // static VALUE sub-array -> inline base
+    }
     if (elem.kind === 'struct') return false; // a struct is a reference type -> absolute-pointer word
     if (isBytesLike(elem)) return false; // B2: bytes/string element -> pointer word
     return undefined;
@@ -10735,8 +10768,11 @@ export class Analyzer {
     // branches there pick the right read).
     if (this.memArrayLocals.has(cur.text))
       return t.element.kind === 'array' || t.element.kind === 'struct' || isBytesLike(t.element);
+    // a FIXED memAggregate local: a nested value array (Arr<u256[],N>), OR a fixed static-struct array
+    // (Batch A: Arr<P,N>, Arr<Arr<P,N>,M>, Arr<P,N>[][]) - both reach the nested-element resolver, which
+    // picks the value/struct/array branch by the element type.
     const at = this.memAggregateLocals.get(cur.text);
-    return at !== undefined && at.kind === 'array' && isNestedValueArray(at);
+    return at !== undefined && at.kind === 'array' && (isNestedValueArray(at) || isStaticStructFixedLeafArray(at));
   }
 
   /** Type of a directly-resolvable index base (`this.s` or a local/param), used to
@@ -11115,13 +11151,16 @@ export class Analyzer {
         // Residual B memory-array local. DEFERRED (kept rejecting via isAggregateLeafArray excluding
         // them): a DYNAMIC-struct element array (P with a dynamic field), and nested-aggregate arrays
         // (P[][], bytes[][]) - no memory-local representation / decoder twin yet, so a CLEAN rejection.
-        return isNestedValueArray(t) || isAggregateLeafArray(t);
+        // Batch A: Arr<P,N>[] (dynamic outer, fixed-struct-array element) decodes into B's pointer-headed
+        // image via abiDecFromMemToImage (the dynamic-outer pointer branch recurses on the fixed inner).
+        return isNestedValueArray(t) || isAggregateLeafArray(t) || isStaticStructAnyLeafArray(t);
       }
       // a static fixed array: supported when its leaves are static value types (inline aggregate).
       // A fixed-outer nested value array bearing a DYNAMIC element (Arr<u256[],N>) decodes into B's
-      // N-word absolute-pointer table (abiDecFromMemToImage's fixed-array branch).
-      if (isStaticType(t)) return this.isStaticLeafArray(t);
-      return isNestedValueArray(t);
+      // N-word absolute-pointer table (abiDecFromMemToImage's fixed-array branch). Batch A: a fixed-outer
+      // STATIC-STRUCT array (Arr<P,N>, Arr<Arr<P,N>,M>) decodes into B's N-word pointer table too.
+      if (isStaticType(t)) return this.isStaticLeafArray(t) || isStaticStructFixedLeafArray(t);
+      return isNestedValueArray(t) || isStaticStructAnyLeafArray(t);
     }
     // a struct target: a STATIC struct (value-only fields) decodes via abiDecFromMem's static-aggregate
     // branch; a DYNAMIC-field struct via buildDynStructFromMemBlob (the pointer-headed image a JETH struct
@@ -12351,6 +12390,27 @@ export class Analyzer {
         );
         return undefined;
       }
+      // Batch A: an Arr<P,N> ternary materializes each branch via aggToMemPtr. A storage / array-literal
+      // branch yields an INLINE image (the representation the ternary result is consumed as); but a
+      // POINTER-HEADED memory source (a memAggregate Arr<P,N> local, a struct-array element m[i], or an
+      // internal-call return) yields a pointer-headed image the inline consumers would mis-read. Those
+      // mixed-representation branches are a CLEAN reject (select the value before the ternary), never a
+      // miscompile. The common storage-branch ternary (c ? this.sx : this.sy) stays accepted (inline).
+      if (isStaticStructFixedLeafArray(unified[0].type)) {
+        const ptrHeaded = (e: Expr): boolean =>
+          e.kind === 'memAggregate' ||
+          e.kind === 'arrayGet' ||
+          e.kind === 'call' ||
+          (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'));
+        if (ptrHeaded(unified[0]) || ptrHeaded(unified[1])) {
+          this.diags.error(
+            node,
+            'JETH074',
+            `a ternary over a memory ${displayName(unified[0].type)} (pointer-headed static-struct array) is not supported; bind a branch to the result instead`,
+          );
+          return undefined;
+        }
+      }
       return { kind: 'ternary', type: unified[0].type, cond, then: unified[0], else: unified[1] };
     }
 
@@ -12557,7 +12617,8 @@ export class Analyzer {
       const aggLeafElem =
         (elem.kind === 'struct' && (isStaticType(elem) || isDynStructLeaf(elem))) ||
         isBytesLike(elem) ||
-        isAggregateLeafArray(elem); // B4: a nested-dynamic-leaf array element (bytes[][], ...)
+        isAggregateLeafArray(elem) || // B4: a nested-dynamic-leaf array element (bytes[][], ...); P[]/P[][]
+        isStaticStructFixedLeafArray(elem); // Batch A: a fixed static-struct array element (Arr<P,N>[])
       if (!isStaticValueType(elem) && !isValueLeafArray(elem) && !aggLeafElem) {
         this.diags.error(
           node.typeArguments[0]!,
@@ -12596,6 +12657,8 @@ export class Analyzer {
         isStaticValueType(expected.element) ||
         (expected.element.kind === 'array' && isValueLeafArray(expected.element)) ||
         (expected.element.kind === 'array' && isAggregateLeafArray(expected.element)) || // B4: bytes[][], ...
+        (expected.element.kind === 'array' && isStaticStructFixedLeafArray(expected.element)) || // Batch A: Arr<P,N>[]
+        (expected.element.kind === 'array' && isStaticStructAnyLeafArray(expected.element)) || // Batch A: P[][] etc. inner
         (expected.element.kind === 'struct' && isStaticType(expected.element)) || // B1
         (expected.element.kind === 'struct' && isDynStructLeaf(expected.element)) || // B3 dynamic-field struct
         isBytesLike(expected.element); // B2

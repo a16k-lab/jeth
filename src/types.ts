@@ -362,6 +362,39 @@ export function isStaticStructLeafArray(t: JethType): boolean {
   return false;
 }
 
+/** Batch A: a FIXED array (`Arr<P,N>`) whose ultimate leaf is a STATIC struct, reachable through any
+ *  mix of further FIXED or DYNAMIC static-struct levels: `Arr<P,N>`, `Arr<P,N>[]`, `Arr<Arr<P,N>,M>`,
+ *  `Arr<P,N>[][]`, ... The outermost level MUST be fixed (`t.length !== undefined`); a dynamic outer
+ *  is owned by isAggregateLeafArray / isStaticStructLeafArray. Each level is POINTER-HEADED in memory
+ *  (a static struct, and a static-struct-leaf array, are reference types: one absolute-pointer word per
+ *  element, NO inline length header on the fixed level), so the recursive memory codec lays it out the
+ *  same way it does a dynamic static-struct array, minus the [len] word. A FIXED array whose leaf is a
+ *  VALUE type (`Arr<u256,N>`, `Arr<u256,N>[]`) is NOT matched here - those stay INLINE and byte-invariant
+ *  (owned by the fixed-of-value / nested-value paths). Used ONLY to widen the local-decl / read gates and
+ *  the codec's codecSourced checks; do NOT widen isAggregateLeafArray / isStaticStructLeafArray with it. */
+export function isStaticStructFixedLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length === undefined) return false; // FIXED outer only
+  const e = t.element;
+  if (e.kind === 'struct') return isStaticType(e);
+  // descend through a further fixed (Arr<P,N>) or dynamic (P[]) static-struct level.
+  if (e.kind === 'array') return isStaticStructAnyLeafArray(e);
+  return false;
+}
+
+/** Batch A (codec scope): a memory array whose ultimate leaf is a STATIC struct, reachable through ANY
+ *  mix of fixed (`Arr<P,N>`) or dynamic (`P[]`) levels at ANY position: `P[]`, `Arr<P,N>`, `Arr<P,N>[]`,
+ *  `P[][]`, `Arr<P,N>[][]`, `Arr<Arr<P,N>,M>`, ... Every level is POINTER-HEADED, so the recursive memory
+ *  codec (buildNestedMemArrayLit / abiEncFromMem / abiDecFromMem(ToImage)) lays it out uniformly. A VALUE
+ *  leaf (`u256[]`, `Arr<u256,N>[]`) is excluded (those stay inline / on the value codec). Used ONLY at the
+ *  codec dispatch sites (where the type is already known to be a memory array routed through the codec);
+ *  the local-decl / read GATES use the narrower per-shape predicates so the reject set is unchanged. */
+export function isStaticStructAnyLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array') return false;
+  if (t.element.kind === 'struct') return isStaticType(t.element);
+  if (t.element.kind === 'array') return isStaticStructAnyLeafArray(t.element);
+  return false;
+}
+
 /** True if `t` is a DYNAMIC array whose ultimate leaf (descending through any number of dynamic-array
  *  nesting levels) is a bytes/string byte-sequence: bytes[], string[], bytes[][], string[][][], ...
  *  Used to gate B4 (nested-dynamic-leaf arrays). A value leaf, static-struct leaf, or dyn-struct leaf

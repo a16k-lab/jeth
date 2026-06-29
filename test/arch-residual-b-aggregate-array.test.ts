@@ -114,11 +114,12 @@ describe('Residual B4/B3: nested-dynamic-leaf + dyn-struct arrays now ACCEPT (li
     // each P[] element is an absolute pointer to a pointer-headed dyn-struct image (empty sentinels on new).
     expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): P[] { let m: P[] = [P(1n,bytes("x"))]; return m; } }`)).toEqual([]);
   });
-  it('P[][] (static-struct nested array) now ACCEPTS (pointer-headed, byte-identical); FIXED outer Arr<P,N>/Arr<bytes,N> still reject', () => {
-    // P[][] is now POINTER-HEADED like solc (byte-identity covered in pointer-headed-static-struct-array.test.ts).
+  it('P[][] and FIXED-outer Arr<P,N> static-struct arrays now ACCEPT (pointer-headed); Arr<bytes,N> still rejects', () => {
+    // P[][] (Cat B) and Arr<P,N> (Batch A) are now POINTER-HEADED like solc (byte-identity in
+    // pointer-headed-static-struct-array.test.ts / fixed-static-struct-array.test.ts).
     expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): P[][] { let m: P[][] = [[P(1n,2n)]]; return m; } }`)).toEqual([]);
-    // FIXED outers stay deferred (a clean over-rejection, not a miscompile).
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`).length).toBeGreaterThan(0);
+    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`)).toEqual([]);
+    // a FIXED array of a DYNAMIC element (Arr<bytes,N>) stays deferred (clean over-rejection, not a miscompile).
     expect(codes(`@contract class C { @external @pure f(): Arr<bytes,2> { let m: Arr<bytes,2> = [bytes("a"),bytes("b")]; return m; } }`).length).toBeGreaterThan(0);
   });
   it('struct-array element WRITE xs[i] = P(...) and bytes[] element write bs[i] = bytes(..) now ACCEPT (lifted)', () => {

@@ -122,9 +122,10 @@ describe('Cat B: pointer-headed static-struct memory arrays - byte-identical to 
     }
   });
 
-  it('still cleanly rejects FIXED-outer / FIXED-element static-struct arrays (no over-acceptance)', () => {
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`).length).toBeGreaterThan(0);
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): u256 { let m: Arr<P,2>[] = [[P(1n,2n)]]; return 0n; } }`).length).toBeGreaterThan(0);
+  it('FIXED-outer / FIXED-element static-struct arrays now ACCEPT (Batch A, byte-identical)', () => {
+    // Arr<P,N> / Arr<P,N>[] are pointer-headed like solc (byte-identity in fixed-static-struct-array.test.ts).
+    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`)).toEqual([]);
+    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): u256 { let m: Arr<P,2>[] = [[P(1n,2n),P(3n,4n)]]; return m[0n][0n].a; } }`)).toEqual([]);
     // value arrays stay inline (unchanged) and accept:
     expect(codes(`@contract class C { @external @pure f(): u256 { let a: u256[] = [1n,2n]; return a[1n]; } }`)).toEqual([]);
   });
