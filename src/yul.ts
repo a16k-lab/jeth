@@ -1834,9 +1834,15 @@ ${indent(runtime, 6)}
             const data = this.arrayDataSlot(ref.lenSlot, out);
             this.arrayElemStore(s.target.type, data, idx, value, out);
           } else if (ref.src === 'memory') {
-            // memory T[] element write (value element, one word): bound vs mload(ptr).
-            out.push(`if iszero(lt(${idx}, mload(${ref.ptr}))) { ${this.panic()}(0x32) }`);
-            out.push(`mstore(add(${ref.ptr}, add(0x20, mul(${idx}, 0x20))), ${value})`);
+            // memory value-element array write (one word). A DYNAMIC outer T[] has a [len] header word
+            // (bound mload(ptr), data at ptr+0x20); a FIXED inner Arr<T,N> (ref.fixedLen, e.g. m[i] of an
+            // Arr<T,N>[]) is HEADER-LESS - bound vs the constant N, data at ptr. Mirrors the read path so
+            // the write lands at base+idx*0x20 exactly like solc (the old mload/+0x20 form read element-0
+            // as a phantom length: a spurious Panic when it is 0, a 1-word skew when it is non-zero).
+            const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
+            out.push(`if iszero(lt(${idx}, ${bound})) { ${this.panic()}(0x32) }`);
+            const dataBase = ref.fixedLen !== undefined ? ref.ptr : `add(${ref.ptr}, 0x20)`;
+            out.push(`mstore(add(${dataBase}, mul(${idx}, 0x20)), ${value})`);
           } else {
             throw new UnsupportedError('cannot assign to a calldata array element');
           }

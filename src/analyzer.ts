@@ -9133,7 +9133,34 @@ export class Analyzer {
       if (mf.field.type.kind === 'array' && mf.field.type.length === undefined) {
         return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
       }
+      // E: re-point a whole NESTED STATIC AGGREGATE field (p.inner = In(..) / p.fa = [..]). It is stored
+      // INLINE (tuple-head) in the dyn-struct image, so the write copies the RHS image's abiHeadWords words
+      // inline at the field's head word (an aggFieldStore image copy, NOT a pointer re-point); the single-word
+      // memField writer below would corrupt a multi-word aggregate.
+      if (
+        (mf.field.type.kind === 'struct' && isStaticType(mf.field.type)) ||
+        (mf.field.type.kind === 'array' && mf.field.type.length !== undefined && isStaticType(mf.field.type))
+      ) {
+        return {
+          kind: 'aggFieldStore',
+          type: mf.field.type,
+          base: { kind: 'memDynStructValue', type: this.memDynStructLocals.get(mf.local)!, local: mf.local },
+          wordOffset: mf.headWord,
+        };
+      }
       return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+    }
+    // E: a deep WRITE chain into a NESTED STATIC AGGREGATE field of a dyn-struct local - p.inner.x = v
+    // (value leaf), p.fa[j] = v (fixed-array element). resolveMemDynStructStaticAggChain yields the same
+    // {base: memDynStructValue, wordOffset, runSteps} the READ side (aggFieldRead) uses; the write is an
+    // aggFieldStore (a value leaf -> mstore via aggFieldPtr; a deeper whole aggregate -> inline image copy).
+    // Placed BEFORE memChainRoot: the resolver returns undefined (no diag) unless the chain roots at a
+    // dyn-struct local with a static-aggregate first hop, so it never steals a memAggregate lvalue.
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const chain = this.resolveMemDynStructStaticAggChain(node);
+      if (chain && isStaticType(chain.type)) {
+        return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
+      }
     }
     // G9: `p.x = v` / `p.inner.x = v` on a memory-aggregate (struct) local -> a memory store.
     if (ts.isPropertyAccessExpression(node) && this.memChainRoot(node)) {
