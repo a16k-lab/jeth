@@ -7543,6 +7543,37 @@ export class Analyzer {
           return;
         }
       }
+      // SOUNDNESS: re-pointing a dyn-struct LEAF-array field (p.tags = <bytes[]/string[]/T[][]>, or
+      // xs[i].tags = ...) builds the field's B4 pointer-headed image from the RHS via aggArgToMemPtr, which
+      // builds that image correctly from a MEMORY / LITERAL / call / ternary / abi.decode source but FLATTENS a
+      // CALLDATA or STORAGE array source to a plain ABI blob (echoParam / abiEncFromStorage) that the leaf-array
+      // field would then misread (wrong bytes). Reject ONLY those calldata/storage array sources - a clean
+      // over-rejection consistent with `let row: bytes[] = <calldata leaf array>`, until that copy is wired.
+      // (A VALUE-array field, u256[], is unaffected: its [len][elems] image is built correctly from any source.)
+      if (
+        (target.kind === 'memDynField' || target.kind === 'aggDynFieldStore') &&
+        target.type.kind === 'array' &&
+        target.type.length === undefined &&
+        !isStaticValueType(target.type.element)
+      ) {
+        // aggArgToMemPtr builds the B4 image correctly from a MEMORY / LITERAL / call / ternary / abi.decode
+        // source, but FLATTENS a CALLDATA or STORAGE array source to a plain ABI blob (echoParam /
+        // abiEncFromStorage), which the leaf-array field would then misread. Reject only those array sources.
+        const unsafeCdOrStorage =
+          value.kind === 'arrayValue' &&
+          (value.arr.base.kind === 'calldataArray' ||
+            value.arr.base.kind === 'stateArray' ||
+            value.arr.base.kind === 'mapArray' ||
+            value.arr.base.kind === 'placeArray');
+        if (unsafeCdOrStorage) {
+          this.diags.error(
+            e.right,
+            'JETH200',
+            `re-pointing a dynamic-struct leaf-array field (bytes[]/string[]/T[][]) from a calldata or storage source is not supported yet (assign a memory value; copy a calldata/storage leaf array to a memory local first)`,
+          );
+          return;
+        }
+      }
       out.push({ kind: 'assign', target, value });
       return;
     }

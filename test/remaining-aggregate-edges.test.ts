@@ -61,3 +61,32 @@ describe('E: dyn-struct nested static-aggregate field WRITES vs solc 0.8.35', ()
     await diff(J, Sol, [['vleaf()', ''], ['felem()', ''], ['fdyn(uint256)', pad32(2n)], ['fdyn(uint256)', pad32(9n)], ['repoint()', '']]);
   });
 });
+
+describe('SOUNDNESS: dyn-struct leaf-array field re-point from a calldata/storage source rejects cleanly', () => {
+  const codes = (src: string): string[] => {
+    try {
+      compile(src, { fileName: 'C.jeth' });
+      return [];
+    } catch (e: any) {
+      return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
+    }
+  };
+  it('p.tags = <calldata/storage leaf array> rejects (JETH200, NOT a miscompile); memory/literal/value-array accept', () => {
+    // re-pointing a leaf-array field (bytes[]/string[]/T[][]) from a calldata or storage source would
+    // flatten the source to a plain ABI blob (then misread as a B4 pointer image) -> was a silent
+    // miscompile; now a clean reject. A memory/literal leaf-array source, and a VALUE-array field from
+    // any source, are unaffected and accept byte-identical.
+    expect(
+      codes(`@struct class P{a:u256;tags:bytes[];} @contract class C { @external @pure f(cd: bytes[]): bytes { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); p.tags=cd; return abi.encode(p); } }`),
+    ).toContain('JETH200');
+    expect(
+      codes(`@struct class P{a:u256;tags:bytes[];} @contract class C { @state st: bytes[]; @external f(): bytes { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); p.tags=this.st; return abi.encode(p); } }`),
+    ).toContain('JETH200');
+    expect(
+      codes(`@struct class P{a:u256;tags:bytes[];} @contract class C { @external @pure f(): bytes { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); let n:bytes[]=[bytes("aa")]; p.tags=n; return abi.encode(p); } }`),
+    ).toEqual([]);
+    expect(
+      codes(`@struct class P{a:u256;xs:u256[];} @contract class C { @external @pure f(cd: u256[]): bytes { let t:u256[]=[9n]; let p:P=P(1n,t); p.xs=cd; return abi.encode(p); } }`),
+    ).toEqual([]);
+  });
+});
