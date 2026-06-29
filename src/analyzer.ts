@@ -4571,10 +4571,23 @@ export class Analyzer {
         // reusing the tested tuple-destructure (call source) + multi-return lowering. The synthetic
         // locals are registered in the same side-tables checkTupleDecl uses, so the returnTuple
         // component reads resolve through the right codec per component kind.
-        const tcName = node.expression ? this.tupleCallName(node.expression) : undefined;
+        // `return this.f(args)` where `f` is an @external tuple-returning method: an external
+        // self-call whose bytes returndata is decoded into the N components (abiDecode source),
+        // then forwarded. Recognized BEFORE the internal-call forward (tupleCallName matches
+        // `this.f` for an @external f too, but resolveTupleCall would reject it as JETH240).
+        let r: { types: JethType[]; source: DestructureSource } | undefined;
+        if (node.expression) {
+          const sc = this.resolveExternalSelfTupleSource(node.expression, rts.length);
+          if (sc === 'handled') return;
+          if (sc) r = sc;
+        }
+        const tcName = !r && node.expression ? this.tupleCallName(node.expression) : undefined;
         if (tcName) {
-          const r = this.resolveTupleCall(node.expression as ts.CallExpression, tcName, rts.length);
-          if (!r) return;
+          const tc = this.resolveTupleCall(node.expression as ts.CallExpression, tcName, rts.length);
+          if (!tc) return;
+          r = { types: tc.types, source: { kind: 'call', fn: tc.fn, args: tc.args } };
+        }
+        if (r) {
           for (let i = 0; i < rts.length; i++) {
             if (!typesEqual(r.types[i]!, rts[i]!) && !isImplicitWiden(r.types[i]!, rts[i]!)) {
               this.diags.error(
@@ -4596,9 +4609,9 @@ export class Analyzer {
             else if (ct.kind === 'struct') this.memAggregateLocals.set(nm, ct);
             names.push(nm);
           }
-          out.push({ kind: 'tupleDecl', names, types: r.types, source: { kind: 'call', fn: r.fn, args: r.args } });
+          out.push({ kind: 'tupleDecl', names, types: r.types, source: r.source });
           const fwd: Expr[] = names.map((nm, i) => {
-            const ct = r.types[i]!;
+            const ct = r!.types[i]!;
             let read: Expr;
             if (isBytesLike(ct)) read = { kind: 'dynLocalRead', type: ct, name: nm };
             else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element))
@@ -4996,13 +5009,17 @@ export class Analyzer {
         );
         return;
       }
-      const ic = this.resolveInterfaceCall(decl.initializer);
+      // An @external `this.f(...)` self-call is a message call too, so it is a valid controlling
+      // try expression (same extCall shape as an interface call). Recognized before the interface form.
+      const sc = this.resolveExternalSelfCall(decl.initializer);
+      if (sc === 'handled') return;
+      const ic = sc || this.resolveInterfaceCall(decl.initializer);
       if (ic === 'handled') return; // recognized but diagnosed
       if (!ic) {
         this.diags.error(
           decl.initializer,
           'JETH361',
-          'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)`',
+          'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)` or an @external self-call `this.f(...)`',
         );
         return;
       }
@@ -5095,13 +5112,15 @@ export class Analyzer {
         return;
       }
     } else if (ts.isExpressionStatement(first)) {
-      const ic = this.resolveInterfaceCall(first.expression);
+      const scE = this.resolveExternalSelfCall(first.expression);
+      if (scE === 'handled') return;
+      const ic = scE || this.resolveInterfaceCall(first.expression);
       if (ic === 'handled') return;
       if (!ic) {
         this.diags.error(
           first.expression,
           'JETH361',
-          'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)`',
+          'the first statement in a try block must be a high-level interface call `IFoo(addr).m(...)` or an @external self-call `this.f(...)`',
         );
         return;
       }
@@ -6667,6 +6686,39 @@ export class Analyzer {
       codeGuard: true,
     };
     return { call, returnType: callee.returnType, returnTypes: callee.returnTypes };
+  }
+
+  /** `[a, b] = this.f(args)` / `return this.f(args)` where `f` is an @external method with a
+   *  >=2-component tuple return: an external self-call (message-call to address(this)) whose bytes
+   *  returndata is decoded into N components via the same abiDecode-tuple DestructureSource the
+   *  `let [a, b] = this.f()` destructure form uses (resolveExternalSelfCall -> extCall). Returns the
+   *  decode source + component types when `node` is exactly this shape and the arity matches `n`,
+   *  'handled' when it IS a this.f() self-call but is misused (a diagnostic was emitted; stop), or
+   *  undefined when `node` is not an @external this.f() self-call (let other resolvers decide). */
+  private resolveExternalSelfTupleSource(
+    node: ts.Expression,
+    n: number,
+  ): { types: JethType[]; source: DestructureSource } | 'handled' | undefined {
+    const sc = this.resolveExternalSelfCall(node);
+    if (sc === 'handled') return 'handled';
+    if (!sc) return undefined;
+    const fnName = (node as ts.CallExpression & { expression: ts.PropertyAccessExpression }).expression.name.text;
+    if (!sc.returnTypes) {
+      this.diags.error(
+        node,
+        'JETH356',
+        sc.returnType.kind === 'void'
+          ? `this.${fnName}(...) returns void and cannot be used as a tuple`
+          : `this.${fnName}(...) returns a single value, not a tuple`,
+      );
+      return 'handled';
+    }
+    const rts = sc.returnTypes;
+    if (rts.length !== n) {
+      this.diags.error(node, 'JETH356', `this.${fnName}(...) returns ${rts.length} value(s), expected ${n}`);
+      return 'handled';
+    }
+    return { types: rts, source: { kind: 'abiDecode', data: sc.call, types: rts } };
   }
 
   /** Resolve a high-level typed interface call `IFoo(addr [, { value?, gas? }]).method(args)`.
@@ -8912,9 +8964,28 @@ export class Analyzer {
       }
       targets.push(lv);
     }
-    const callName = this.tupleCallName(e.right);
-    let source: { kind: 'call'; fn: string; args: Expr[] } | { kind: 'tuple'; values: Expr[] };
-    if (callName) {
+    let source: DestructureSource;
+    // `[a, b] = this.f(args)` where `f` is an @external tuple-returning method: an external self-call
+    // whose bytes returndata is decoded into the N value components (abiDecode source). Recognized
+    // BEFORE the internal-call form (tupleCallName matches `this.f` for an @external f too, but
+    // resolveTupleCall would reject it as JETH240).
+    const selfTuple = this.resolveExternalSelfTupleSource(e.right, n);
+    if (selfTuple === 'handled') return;
+    const callName = !selfTuple ? this.tupleCallName(e.right) : undefined;
+    if (selfTuple) {
+      for (let i = 0; i < n; i++) {
+        const tgt = targets[i];
+        if (tgt && !typesEqual(selfTuple.types[i]!, tgt.type) && !isImplicitWiden(selfTuple.types[i]!, tgt.type)) {
+          this.diags.error(
+            lhs.elements[i]!,
+            'JETH085',
+            `cannot assign ${displayName(selfTuple.types[i]!)} to ${displayName(tgt.type)}`,
+          );
+          return;
+        }
+      }
+      source = selfTuple.source;
+    } else if (callName) {
       const r = this.resolveTupleCall(e.right as ts.CallExpression, callName, n);
       if (!r) return;
       for (let i = 0; i < n; i++) {

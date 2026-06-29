@@ -419,9 +419,12 @@ describe('try/catch: clean rejections (no crash)', () => {
     ).toBe(true);
   });
   it('rejects a first statement that is an internal call', () => {
+    // An INTERNAL `this.g()` (no @external) is an in-frame call, not a message call, so it is not a
+    // valid controlling try expression. (An @external `this.g()` self-call IS a valid controlling
+    // try expression - it is a message call - covered in selfcall-tuples.test.ts.)
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external g(): u256 { return 1n; } @external f(t: address): u256 { try { let r: u256 = this.g(); return r; } catch (e) { return 0n; } } }`,
+        `${IF}\n@contract class C { g(): u256 { return 1n; } @external f(t: address): u256 { try { let r: u256 = this.g(); return r; } catch (e) { return 0n; } } }`,
       ),
     ).toBe(true);
   });
