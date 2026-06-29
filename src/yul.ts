@@ -3615,13 +3615,18 @@ ${indent(runtime, 6)}
       // calldata-source array encoder (arrayFieldRef/encodeDynFieldInto throw on a 'cd' source). Materialize
       // it into a fresh pointer-headed memory image (the SAME buildDynStructFromCalldata the local-binding
       // path uses), then encode from a 'mem' source - byte-identical, reusing the proven mem-source path.
-      // Only when EVERY array field is a value-array (what buildDynStructFromCalldata supports); a struct
-      // with only value/bytes/string fields keeps the direct calldata fast path below. (A leaf-array field
-      // bytes[]/T[][] from calldata is a deeper case - the calldata leaf-array decode is not wired.)
+      // Admit any array field that is a value-array (Batch C value path) OR a LEAF-array (Edge F:
+      // bytes[]/string[]/T[][], a dynamic array whose element is itself dynamic): both are produced by
+      // buildDynStructFromCalldata into the SAME pointer-headed image, then encoded from a 'mem' source -
+      // byte-identical, reusing the proven mem-source path. A struct with only value/bytes/string fields
+      // keeps the direct calldata fast path below (arrFields.length === 0).
       const arrFields = cdStruct.fields.filter((f) => f.type.kind === 'array' && f.type.length === undefined);
       if (
         arrFields.length > 0 &&
-        arrFields.every((f) => isStaticValueType((f.type as JethType & { kind: 'array' }).element))
+        arrFields.every((f) => {
+          const el = (f.type as JethType & { kind: 'array' }).element;
+          return isStaticValueType(el) || isBytesLike(el) || el.kind === 'array';
+        })
       ) {
         const headPtr = this.buildDynStructFromCalldata(cdStruct, value, ctx, out);
         return { kind: 'mem', headPtr };
@@ -5227,6 +5232,25 @@ ${indent(runtime, 6)}
         const size = this.abiEncFromCd(f.type, se, dst, true, out);
         out.push(`mstore(0x40, add(${dst}, ${size}))`);
         out.push(`mstore(${at}, ${dst})`);
+        hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length === undefined && !isStaticValueType(f.type.element)) {
+        // Edge F: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]; the value-array case is
+        // caught above). Head word = offset (relative to the tuple start) to the field tail; decode the
+        // tail into a fresh B4 pointer-headed image via abiDecFromCdToImage and store ITS absolute pointer
+        // (not a relative-offset ABI block) in the head word - the layout the read/encode paths consume.
+        // Mirrors buildDynStructFromMemBlob's Cat-C leaf-array branch but from a CALLDATA source; same
+        // OOB/cap revert semantics as solc's calldata tuple-member decode.
+        if (src.kind !== 'cd')
+          throw new UnsupportedError('calldata leaf-array struct field decode needs a calldata source');
+        const so = this.fresh();
+        out.push(`let ${so} := calldataload(${hw === 0 ? src.base : `add(${src.base}, ${hw * 32})`})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${src.base}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), calldatasize()) { revert(0, 0) }`);
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(f.type, se, out)}`);
+        out.push(`mstore(${at}, ${ip})`);
         hw += 1;
       } else {
         this.encodeStaticInline(f.type, src, i, hw, at, ctx, out);
@@ -7160,6 +7184,184 @@ ${indent(runtime, 6)}
       return this.buildDynStructFromMemBlob(t, memPtr, blobEnd, out);
     }
     throw new UnsupportedError(`abiDecFromMemToImage: unsupported type '${t.kind}'`);
+  }
+
+  /** The CALLDATA twin of abiDecFromMemToImage: decodes an ABI tail at calldata offset `cdPtr` into a
+   *  fresh pointer-headed memory IMAGE and returns its absolute pointer. Mechanical mirror of the mem
+   *  twin: calldataload for source reads, calldatacopy for the bytes/string payload, and calldatasize()
+   *  as the source data-bounds limit everywhere (the mem twin uses `blobEnd`). PARITY (load-bearing):
+   *  the allocation CAP `panic(0x41)` (oversized length / alloc overflow) fires BEFORE the source
+   *  data-bounds `revert(0, 0)` (truncated payload), exactly as the mem twin and solc's calldata
+   *  tuple-member decode. Used only by buildDynStructFromCalldata's leaf-array branch.
+   *
+   *  PARITY NOTE (differs from the mem twin): solc's CALLDATA tuple-member decode EMPTY-reverts on an
+   *  oversized length / allocation overflow (revert(0, 0)), it does NOT Panic(0x41) the way the MEMORY
+   *  decode (abi.decode) does. So the cap here is revert(0, 0), matching buildDynStructFromCalldata's
+   *  value-array branch and solc's calldata decode (empirically verified vs solc 0.8.35). */
+  private abiDecFromCdToImage(t: JethType, cdPtr: string, out: string[]): string {
+    const cap = `revert(0, 0)`;
+    // a bytes/string leaf: alloc a [len][data] blob, return its absolute pointer.
+    if (isBytesLike(t)) {
+      const len = this.fresh();
+      out.push(`let ${len} := calldataload(${cdPtr})`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${cap} }`);
+      const padded = this.fresh();
+      out.push(`let ${padded} := and(add(${len}, 0x1f), not(0x1f))`);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const nc = this.fresh();
+      out.push(`let ${nc} := add(add(${ptr}, 0x20), ${padded})`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${ptr})) { ${cap} }`);
+      out.push(`if gt(add(add(${cdPtr}, 0x20), ${len}), calldatasize()) { revert(0, 0) }`);
+      out.push(`mstore(${ptr}, ${len})`);
+      out.push(`calldatacopy(add(${ptr}, 0x20), add(${cdPtr}, 0x20), ${len})`);
+      out.push(`if mod(${len}, 0x20) { mstore(add(add(${ptr}, 0x20), ${len}), 0) }`);
+      out.push(`mstore(0x40, ${nc})`);
+      return ptr;
+    }
+    // a STATIC element (value / static struct / static VALUE fixed array): its image is the abiHeadWords(t)
+    // inline words; decode them inline (validated) into a fresh block, return the block pointer. A static
+    // STRUCT-leaf fixed array (Arr<P,N>) is STATIC but its IMAGE is POINTER-HEADED, so it is excluded here
+    // and handled by the FIXED-outer branch below.
+    if (isStaticType(t) && !isStaticStructFixedLeafArray(t)) {
+      const hw = abiHeadWords(t);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(0x40, add(${ptr}, ${hw * 32}))`);
+      this.abiEncFromCd(t, cdPtr, ptr, true, out);
+      return ptr;
+    }
+    // a dynamic array T[]: alloc [len] + an len-word table; each element word holds either an inline
+    // block (static element) or an ABSOLUTE pointer to a fresh element sub-image (dynamic element).
+    if (t.kind === 'array' && t.length === undefined) {
+      const len = this.fresh();
+      out.push(`let ${len} := calldataload(${cdPtr})`);
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${cap} }`);
+      const elemRegion = this.fresh();
+      out.push(`let ${elemRegion} := add(${cdPtr}, 0x20)`);
+      if (isStaticType(t.element) && !isPointerHeadedStaticElem(t.element)) {
+        // a STATIC VALUE element (Arr<u256,N>[]): inline blocks, exactly abiDecFromCd's static-element
+        // layout (the image == the standard ABI image for a static value element). Decode inline.
+        const es = abiHeadWords(t.element) * 32;
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(0x40)`);
+        const nc = this.fresh();
+        out.push(`let ${nc} := add(add(${ptr}, 0x20), mul(${len}, ${es}))`);
+        out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${ptr})) { ${cap} }`);
+        out.push(`if gt(add(${elemRegion}, mul(${len}, ${es})), calldatasize()) { revert(0, 0) }`);
+        out.push(`mstore(${ptr}, ${len})`);
+        out.push(`mstore(0x40, ${nc})`);
+        const dstHead = this.fresh();
+        out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+        const i = this.fresh();
+        out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+        const inner: string[] = [];
+        const ecd = this.fresh();
+        inner.push(`let ${ecd} := add(${elemRegion}, mul(${i}, ${es}))`);
+        const edst = this.fresh();
+        inner.push(`let ${edst} := add(${dstHead}, mul(${i}, ${es}))`);
+        this.abiEncFromCd(t.element, ecd, edst, true, inner);
+        for (const l of inner) out.push('  ' + l);
+        out.push('}');
+        return ptr;
+      }
+      if (isPointerHeadedStaticElem(t.element)) {
+        // a STATIC-STRUCT element (P[]). The SOURCE is INLINE ABI (element stride es = abiHeadWords(P)*32,
+        // NO offset table), but the in-memory IMAGE is POINTER-HEADED: alloc [len] + a len-word ABSOLUTE-
+        // pointer table, then per element decode the inline source block (the self-branch allocs+validates
+        // an es-word element image and returns its pointer) and store that pointer. Allocation CAP BEFORE
+        // the source data-bounds revert, matching the inline path's revert ordering byte-for-byte.
+        const es = abiHeadWords(t.element) * 32;
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(0x40)`);
+        const tableEnd = this.fresh();
+        out.push(`let ${tableEnd} := add(add(${ptr}, 0x20), mul(${len}, 0x20))`);
+        out.push(`if or(gt(${tableEnd}, 0xffffffffffffffff), lt(${tableEnd}, ${ptr})) { ${cap} }`);
+        out.push(`if gt(add(${elemRegion}, mul(${len}, ${es})), calldatasize()) { revert(0, 0) }`);
+        out.push(`mstore(${ptr}, ${len})`);
+        out.push(`mstore(0x40, ${tableEnd})`); // claim the table; per-element images alloc PAST it
+        const dstHead = this.fresh();
+        out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+        const i = this.fresh();
+        out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+        const inner: string[] = [];
+        const esrc = this.fresh();
+        inner.push(`let ${esrc} := add(${elemRegion}, mul(${i}, ${es}))`);
+        const ip = this.fresh();
+        inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, inner)}`);
+        inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
+        for (const l of inner) out.push('  ' + l);
+        out.push('}');
+        return ptr;
+      }
+      // a DYNAMIC element (u256[] inner, bytes/string): [len] + an len-word ABSOLUTE-pointer table.
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const tableEnd = this.fresh();
+      out.push(`let ${tableEnd} := add(add(${ptr}, 0x20), mul(${len}, 0x20))`);
+      out.push(`if or(gt(${tableEnd}, 0xffffffffffffffff), lt(${tableEnd}, ${ptr})) { ${cap} }`);
+      out.push(`if gt(add(${elemRegion}, mul(${len}, 0x20)), calldatasize()) { revert(0, 0) }`);
+      out.push(`mstore(${ptr}, ${len})`);
+      out.push(`mstore(0x40, ${tableEnd})`); // claim the table; sub-images alloc PAST it
+      const dstHead = this.fresh();
+      out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const so = this.fresh();
+      inner.push(`let ${so} := calldataload(add(${elemRegion}, mul(${i}, 0x20)))`);
+      inner.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+      const se = this.fresh();
+      inner.push(`let ${se} := add(${elemRegion}, ${so})`);
+      inner.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), calldatasize()) { revert(0, 0) }`);
+      const ip = this.fresh();
+      inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, inner)}`);
+      inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+      return ptr;
+    }
+    // a FIXED array (Arr<P,N>) of a POINTER-HEADED STATIC element (static struct, or a nested static-struct
+    // array). The SOURCE is N inline es-word blocks (NO offset table, NO length); the IMAGE is N absolute-
+    // pointer words. Claim the N-word table first (sub-images alloc PAST it); source data-bounds check up
+    // front (truncated -> empty revert), mirroring the dynamic-outer pointer branch's ordering.
+    if (t.kind === 'array' && t.length !== undefined && isPointerHeadedStaticElem(t.element)) {
+      const es = abiHeadWords(t.element) * 32;
+      out.push(`if gt(add(${cdPtr}, ${t.length * es}), calldatasize()) { revert(0, 0) }`);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(0x40, add(${ptr}, ${t.length * 32}))`); // claim the table; sub-images alloc PAST it
+      for (let k = 0; k < t.length; k++) {
+        const esrc = k === 0 ? cdPtr : `add(${cdPtr}, ${k * es})`;
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, out)}`);
+        out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
+      }
+      return ptr;
+    }
+    // a FIXED array of a DYNAMIC element (Arr<u256[],N>): N absolute-pointer words, no length header.
+    if (t.kind === 'array' && t.length !== undefined) {
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(0x40, add(${ptr}, ${t.length * 32}))`); // claim the table; sub-images alloc PAST it
+      for (let k = 0; k < t.length; k++) {
+        const so = this.fresh();
+        out.push(`let ${so} := calldataload(add(${cdPtr}, ${k * 32}))`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${cdPtr}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), calldatasize()) { revert(0, 0) }`);
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, out)}`);
+        out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
+      }
+      return ptr;
+    }
+    // a DYNAMIC-field struct element (a P[] element, P with bytes/string/dyn fields) from a RAW calldata
+    // base: buildDynStructFromCalldata takes an Expr source, not a raw cd offset, so a calldata struct
+    // decoder over an arbitrary offset is not wired. SAFE clean reject (the mem-source path covers this
+    // shape; a clean reject beats a miscompile). The required Edge-F leaf shapes never reach here.
+    throw new UnsupportedError(`abiDecFromCdToImage: unsupported type '${t.kind}'`);
   }
 
   /** Decode the bytes value `data` into N components of `types` (abi.decode). Materializes the source
