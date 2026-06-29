@@ -6377,12 +6377,20 @@ ${indent(runtime, 6)}
         out.push(`let ${mp} := add(${ptr}, 0x20)`); // skip the [0x20] offset wrapper -> [len][elems]
         return mp;
       }
-      // storage source (this.arr / this.m[k] / a nested inner array): COPY a fresh [len][elems] image.
+      // storage source (this.arr / this.m[k] / a nested inner array): DEEP-COPY a fresh memory image.
       let lenSlot: string;
       if (b.kind === 'stateArray') lenSlot = String(b.slot);
       else if (b.kind === 'mapArray') lenSlot = this.mappingSlot(b.baseSlot, b.keys, ctx, out);
       else if (b.kind === 'placeArray') lenSlot = this.lowerPlace(b.path, ctx, out).slot;
       else throw new UnsupportedError(`aggregate argument from array source '${b.kind}' is not supported`);
+      // A REFERENCE-element array (bytes[]/string[]/u256[][]/P[]) needs a POINTER-HEADED memory image
+      // (absolute pointers), which abiEncFromStorage does NOT produce (it emits RELATIVE ABI offsets -
+      // a silent miscompile if bound as a memArray local). Route it through the storage->image twin.
+      // A VALUE-element array (u256[]) is byte-invariant ([len][inline]); keep the abiEncFromStorage
+      // copy to avoid churning the proven value-element path.
+      if (a.type.kind === 'array' && !isStaticValueType(a.type.element)) {
+        return this.abiDecFromStorageToImage(a.type, lenSlot, ctx, out);
+      }
       const dst = this.fresh();
       out.push(`let ${dst} := mload(0x40)`);
       const size = this.abiEncFromStorage(a.type, lenSlot, 0, dst, out);
@@ -7492,6 +7500,98 @@ ${indent(runtime, 6)}
     // decoder over an arbitrary offset is not wired. SAFE clean reject (the mem-source path covers this
     // shape; a clean reject beats a miscompile). The required Edge-F leaf shapes never reach here.
     throw new UnsupportedError(`abiDecFromCdToImage: unsupported type '${t.kind}'`);
+  }
+
+  /** The STORAGE twin of abiDecFromMemToImage / abiDecFromCdToImage: deep-copy a STORAGE reference at
+   *  `slot` into a fresh pointer-headed memory IMAGE and return its absolute pointer (`let row: bytes[] =
+   *  this.blobs`). Mirrors the calldata/mem twins, but reads canonical storage (no malformed-input bounds
+   *  or Panic(0x41): solc's storage->memory deep copy never reverts on size, the stored length is trusted),
+   *  so it is the structural mirror without the source-bounds guards. The CRUX vs abiEncFromStorage: that
+   *  function emits the ABI-encoded blob (RELATIVE offsets) for a reference-element array, which is NOT a
+   *  memory image; here every dynamic / pointer-headed element word holds an ABSOLUTE pointer to a fresh
+   *  sub-image, exactly the layout the memArray read/write/encode codec consumes. Value-element arrays and
+   *  static elements are byte-invariant ([len][inline]), so this is identical to the abiEncFromStorage
+   *  result there - but routing them here too keeps one path. */
+  private abiDecFromStorageToImage(t: JethType, slot: string, ctx: LowerCtx, out: string[]): string {
+    // a bytes/string leaf: alloc a [len][data] blob, return its absolute pointer (copyStrToMem allocs at
+    // the free pointer and bumps it).
+    if (isBytesLike(t)) {
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const sz = this.fresh();
+      out.push(`let ${sz} := ${this.copyStrToMem()}(${slot}, ${ptr})`);
+      out.push(`mstore(0x40, add(${ptr}, ${sz}))`);
+      return ptr;
+    }
+    // a STATIC element (value / static struct / static VALUE fixed array): its image is abiHeadWords(t)
+    // inline words, copied leaf-by-leaf from storage. A static-STRUCT-leaf fixed array (Arr<P,N>) is
+    // STATIC but POINTER-HEADED, so it is excluded here and handled by the FIXED-outer branch below.
+    if (isStaticType(t) && !isStaticStructFixedLeafArray(t)) {
+      const hw = abiHeadWords(t);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(0x40, add(${ptr}, ${hw * 32}))`);
+      this.abiEncFromStorage(t, slot, 0, ptr, out); // static leaves are inline-identical in image and ABI
+      return ptr;
+    }
+    // a dynamic array T[]: alloc [len] + an len-word table; each element word holds either an inline block
+    // (static value element) or an ABSOLUTE pointer to a fresh element sub-image (pointer-headed / dynamic).
+    if (t.kind === 'array' && t.length === undefined) {
+      const len = this.fresh();
+      out.push(`let ${len} := sload(${slot})`);
+      const dataSlot = this.fresh();
+      out.push(`let ${dataSlot} := ${this.arrayDataSlotHelper()}(${slot})`);
+      const elem = t.element;
+      if (isStaticType(elem) && !isPointerHeadedStaticElem(elem)) {
+        // a STATIC VALUE element (u256[] or Arr<u256,N>[]): inline blocks ([len][e0..]), byte-identical to
+        // the value-element memArray image. Reuse abiEncFromStorage (image == ABI for static value elems).
+        const dst = this.fresh();
+        out.push(`let ${dst} := mload(0x40)`);
+        const size = this.abiEncFromStorage(t, slot, 0, dst, out);
+        out.push(`mstore(0x40, add(${dst}, ${size}))`);
+        return dst;
+      }
+      const sc = storageSlotCount(elem);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(0x40, add(add(${ptr}, 0x20), mul(${len}, 0x20)))`); // [len] + ptr table; sub-images alloc PAST
+      out.push(`mstore(${ptr}, ${len})`);
+      const dstHead = this.fresh();
+      out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${len}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const eb = this.fresh();
+      inner.push(`let ${eb} := add(${dataSlot}, mul(${i}, ${sc}))`);
+      const ip = this.fresh();
+      inner.push(`let ${ip} := ${this.abiDecFromStorageToImage(elem, eb, ctx, inner)}`);
+      inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+      return ptr;
+    }
+    // a FIXED array (Arr<P,N> / Arr<u256[],N>): N absolute-pointer words, no length header. Each element is
+    // sc storage slots apart; per element build a fresh sub-image and store its pointer.
+    if (t.kind === 'array' && t.length !== undefined) {
+      const elem = t.element;
+      const sc = storageSlotCount(elem);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(0x40, add(${ptr}, ${t.length * 32}))`); // claim the table; sub-images alloc PAST it
+      for (let k = 0; k < t.length; k++) {
+        const eb = k === 0 ? slot : `add(${slot}, ${k * sc})`;
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromStorageToImage(elem, eb, ctx, out)}`);
+        out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
+      }
+      return ptr;
+    }
+    // a DYNAMIC-field struct element (P with bytes/string/dyn fields): build its pointer-headed image via
+    // the existing storage dyn-struct copier (value fields inline, dynamic fields a fresh-blob pointer).
+    if (t.kind === 'struct' && isDynamicType(t)) {
+      return this.buildDynStructFromStorage(t, slot, ctx, out);
+    }
+    throw new UnsupportedError(`abiDecFromStorageToImage: unsupported type '${t.kind}'`);
   }
 
   /** Decode the bytes value `data` into N components of `types` (abi.decode). Materializes the source

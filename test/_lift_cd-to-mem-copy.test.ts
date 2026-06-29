@@ -11,8 +11,9 @@
 // INVARIANT: byte-identical to solc on (success, returnHex) for honest AND malformed calldata. A
 // value-element copy (let row: u256[] = a) and a value-element constructor field (Q(7n, valArr)) are
 // UNCHANGED (they already worked, via echoParam / aggArgToMemPtr); we re-assert them as a no-regression
-// guard. A storage-source reference-element copy and a DYNAMIC-struct-element array (D[]) copy stay
-// clean rejects (deferred); we assert they still reject loudly (never a miscompile).
+// guard. The storage-source reference-element copy is now LIFTED too (its own suite is
+// test/_storage_to_mem_copy.test.ts); a DYNAMIC-struct-element array (D[]) calldata copy stays a clean
+// reject (deferred); we assert it still rejects loudly (never a miscompile).
 import { describe, it, expect, beforeAll } from 'vitest';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';
@@ -342,18 +343,20 @@ contract C { function f(uint256[] calldata t) external pure returns (Q memory) {
   });
 
   // ---------------------------------------------------------------------------------------------
-  // DEFERRED: a STORAGE-source reference-element copy and a DYNAMIC-struct-element array (D[]) copy
-  // stay clean rejects (loud diagnostic), never a miscompile.
+  // LIFTED (storage twin): a STORAGE-source reference-element copy now DEEP-COPIES into a fresh
+  // pointer-headed memory image (abiDecFromStorageToImage), byte-identical to solc - see the dedicated
+  // suite test/_storage_to_mem_copy.test.ts for the full differential matrix. Here we just assert it now
+  // COMPILES (the over-rejection is gone). A DYNAMIC-struct-element array (D[]) calldata copy stays a
+  // clean reject (deferred); we assert it still rejects loudly (never a miscompile).
   // ---------------------------------------------------------------------------------------------
-  it('storage-source reference-element copy stays a clean reject (deferred)', () => {
+  it('storage-source reference-element copy now compiles (lifted)', () => {
     const r = compileJeth(`
 @contract
 class C {
   @state blobs: bytes[];
-  @external f(): u256 { let row: bytes[] = this.blobs; return row.length; }
+  @external f(): u256 { let row: bytes[] = this.blobs; return u256(row.length); }
 }`);
-    expect(r.ok).toBe(false);
-    expect(r.codes).toContain('JETH200');
+    expect(r.ok).toBe(true);
   });
 
   it('dynamic-struct-element array (D[]) calldata copy stays a clean reject (deferred)', () => {

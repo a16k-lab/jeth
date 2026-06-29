@@ -33,6 +33,7 @@ import {
   isStaticStructAnyLeafArray,
   isDynStructLeaf,
   isDynStructLeafArrayField,
+  isStorageCopyableRef,
   isValueLeafArray,
   storageByteSize,
   storageSlotCount,
@@ -7451,7 +7452,23 @@ export class Analyzer {
       // EMPTY-revert on OOB/truncated/oversized, NOT Panic 0x41). Aliasing or copying a whole nested array
       // from another local / storage source is still a later step (stays JETH200).
       const fromCdArray = e.kind === 'arrayValue' && e.arr.base.kind === 'calldataArray';
-      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode' && !fromCdArray) {
+      // storage-to-mem-copy: a WHOLE storage reference-element array (u256[][], bytes[][], ...) DEEP-COPIES
+      // into a fresh pointer-headed memory image via abiDecFromStorageToImage (the storage twin of the
+      // calldata copy). Storage is canonical (no malformed-input revert), so it is byte-identical to solc's
+      // storage->memory deep copy.
+      const fromStorageArray =
+        e.kind === 'arrayValue' &&
+        (e.arr.base.kind === 'stateArray' ||
+          e.arr.base.kind === 'mapArray' ||
+          e.arr.base.kind === 'placeArray') &&
+        isStorageCopyableRef(declared);
+      if (
+        e.kind !== 'arrayLit' &&
+        e.kind !== 'newArray' &&
+        e.kind !== 'abiDecode' &&
+        !fromCdArray &&
+        !fromStorageArray
+      ) {
         this.diags.error(
           decl.initializer,
           'JETH200',
@@ -7564,15 +7581,31 @@ export class Analyzer {
       // cd-to-mem-copy: a WHOLE calldata reference-element array param (bytes[]/string[]/u256[][]/P[]...)
       // DEEP-COPIES into a fresh pointer-headed memory image via abiDecFromCdToImage (the calldata twin of
       // abiDecFromMemToImage; solc calldata-decode revert semantics: EMPTY-revert on OOB/truncated/oversized,
-      // NOT Panic 0x41). A storage reference-element source stays a later step (JETH200).
+      // NOT Panic 0x41).
       const fromCdArray = e.kind === 'arrayValue' && e.arr.base.kind === 'calldataArray';
+      // storage-to-mem-copy: a WHOLE storage reference-element array (this.blobs: bytes[]/string[]/P[]/...)
+      // DEEP-COPIES into a fresh pointer-headed memory image via abiDecFromStorageToImage (the storage twin;
+      // storage is canonical, so no malformed-input revert - byte-identical to solc's storage->memory copy).
+      // Gated to a shape the storage codec provably lays out (isStorageCopyableRef); any unhandled element
+      // (e.g. a dyn-struct with a nested-dynamic-leaf array field) stays a clean JETH200 reject. Scoped to
+      // a DYNAMIC OUTER (the local-decl lowering routes a dynamic-outer array through aggArgToMemPtr's
+      // storage->image twin; a FIXED-outer storage source - Arr<P,N> - uses a different lowering path that
+      // is NOT yet wired from storage, so it stays a clean reject here).
+      const fromStorageArray =
+        !fixedOuter &&
+        e.kind === 'arrayValue' &&
+        (e.arr.base.kind === 'stateArray' ||
+          e.arr.base.kind === 'mapArray' ||
+          e.arr.base.kind === 'placeArray') &&
+        isStorageCopyableRef(declared);
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
         e.kind !== 'abiDecode' &&
         !fromMemElem &&
         !fromCall &&
-        !fromCdArray
+        !fromCdArray &&
+        !fromStorageArray
       ) {
         this.diags.error(
           decl.initializer,

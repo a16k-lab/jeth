@@ -443,6 +443,37 @@ export function isDynStructLeaf(t: JethType): boolean {
   );
 }
 
+/** storage-to-mem-copy scope: a REFERENCE type (`let row: bytes[] = this.blobs`) whose deep copy
+ *  from STORAGE into a fresh pointer-headed memory image is PROVABLY byte-identical to solc - i.e.
+ *  every leaf abiDecFromStorageToImage / buildDynStructFromStorage can lay out. Conservatively scoped
+ *  so any unhandled shape stays a CLEAN analyzer reject (JETH200) rather than crashing the codegen:
+ *   - bytes/string leaf, static value type (inline word) - always OK.
+ *   - a STATIC struct (all leaves copied inline from storage).
+ *   - a dynamic/fixed array: recurse on the element.
+ *   - a DYNAMIC-field struct: every field must itself be storage-copyable AND must NOT be a
+ *     nested-dynamic-leaf array field (bytes[]/string[]/T[][]) - the storage dyn-struct copier
+ *     (buildDynStructFromStorage) does not yet transcode that field, so it is excluded here. */
+export function isStorageCopyableRef(t: JethType): boolean {
+  if (isBytesLike(t)) return true;
+  if (isStaticValueType(t)) return true;
+  if (t.kind === 'array') return isStorageCopyableRef(t.element);
+  if (t.kind === 'struct') {
+    if (isStaticType(t)) return true; // a static struct copies all leaves inline
+    // a dynamic-field struct: gate to the field set buildDynStructFromStorage handles (value / bytes /
+    // string / dynamic value-array / nested static aggregate). A nested-dynamic-leaf array field
+    // (bytes[]/string[]/T[][]) is NOT yet wired from storage -> exclude (clean reject upstream).
+    return t.fields.every(
+      (f) =>
+        isStaticValueType(f.type) ||
+        isBytesLike(f.type) ||
+        (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
+        (f.type.kind === 'struct' && isStaticType(f.type)) ||
+        (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
+    );
+  }
+  return false;
+}
+
 /** A memory array (any mix of dynamic/fixed levels) whose ultimate leaf elements are all
  *  VALUE types. The base of isNestedValueArray's recursion: `u256[]`, `Arr<u256,2>`,
  *  `u256[][]`, `Arr<u256[],2>`, etc. all qualify; anything with a bytes/string/struct
