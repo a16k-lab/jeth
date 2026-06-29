@@ -169,10 +169,13 @@ describe('storage push of a whole nested-dynamic-array element', () => {
     ]);
   });
 
-  it('E: string[][].push of an empty inner array literal', async () => {
+  it('E: string[][].push of an empty inner array (via new Array<string>(0n))', async () => {
+    // NOTE: a BARE empty array literal push `this.a.push([])` is now correctly REJECTED (solc rejects it too -
+    // it cannot deduce the empty literal's type in push-arg position; see _push_empty_literal.test.ts). The
+    // valid way to push an empty inner array is `new Array<string>(0n)` (== solc `new string[](0)`), tested here.
     const J = `@contract class C {
       @state a: string[][];
-      @external set(): void { this.a.push([]); this.a.push(["only"]); }
+      @external set(): void { let e: string[] = new Array<string>(0n); this.a.push(e); this.a.push(["only"]); }
       @external outer(): u256 { return this.a.length; }
       @external leni(i: u256): u256 { return this.a[i].length; }
       @external get(i: u256, j: u256): string { return this.a[i][j]; }
