@@ -7481,11 +7481,15 @@ export class Analyzer {
       // into a fresh pointer-headed memory image via abiDecFromStorageToImage (the storage twin of the
       // calldata copy). Storage is canonical (no malformed-input revert), so it is byte-identical to solc's
       // storage->memory deep copy.
+      // #2: a whole MAPPING-VALUE array (let row = this.m[k]) is typed as a mapStorageValue, not an
+      // arrayValue with a mapArray base; accept it too (the codec resolves the mapping slot, then runs
+      // the same storage->image transcode).
       const fromStorageArray =
-        e.kind === 'arrayValue' &&
-        (e.arr.base.kind === 'stateArray' ||
-          e.arr.base.kind === 'mapArray' ||
-          e.arr.base.kind === 'placeArray') &&
+        ((e.kind === 'arrayValue' &&
+          (e.arr.base.kind === 'stateArray' ||
+            e.arr.base.kind === 'mapArray' ||
+            e.arr.base.kind === 'placeArray')) ||
+          (e.kind === 'mapStorageValue' && e.type.kind === 'array')) &&
         isStorageCopyableRef(declared);
       if (
         e.kind !== 'arrayLit' &&
@@ -7612,16 +7616,18 @@ export class Analyzer {
       // DEEP-COPIES into a fresh pointer-headed memory image via abiDecFromStorageToImage (the storage twin;
       // storage is canonical, so no malformed-input revert - byte-identical to solc's storage->memory copy).
       // Gated to a shape the storage codec provably lays out (isStorageCopyableRef); any unhandled element
-      // (e.g. a dyn-struct with a nested-dynamic-leaf array field) stays a clean JETH200 reject. Scoped to
-      // a DYNAMIC OUTER (the local-decl lowering routes a dynamic-outer array through aggArgToMemPtr's
-      // storage->image twin; a FIXED-outer storage source - Arr<P,N> - uses a different lowering path that
-      // is NOT yet wired from storage, so it stays a clean reject here).
+      // (e.g. a dyn-struct with a nested-dynamic-leaf array field NOT handled by buildDynStructFromStorage)
+      // stays a clean JETH200 reject. #4: a FIXED-outer storage source (let row: Arr<P,N> = this.fa) now
+      // rides the SAME storage->image twin (abiDecFromStorageToImage's fixed-array branch) - its fixedArray
+      // base is routed through aggArgToMemPtr in the local-decl lowering. #2: a whole mapping-VALUE array
+      // (this.m[k]) is typed as a mapStorageValue, not an arrayValue with a mapArray base; accept it too.
       const fromStorageArray =
-        !fixedOuter &&
-        e.kind === 'arrayValue' &&
-        (e.arr.base.kind === 'stateArray' ||
-          e.arr.base.kind === 'mapArray' ||
-          e.arr.base.kind === 'placeArray') &&
+        ((e.kind === 'arrayValue' &&
+          (e.arr.base.kind === 'stateArray' ||
+            e.arr.base.kind === 'mapArray' ||
+            e.arr.base.kind === 'placeArray' ||
+            e.arr.base.kind === 'fixedArray')) ||
+          (e.kind === 'mapStorageValue' && e.type.kind === 'array')) &&
         isStorageCopyableRef(declared);
       if (
         e.kind !== 'arrayLit' &&

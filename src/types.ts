@@ -461,7 +461,9 @@ export function isStorageCopyableRef(t: JethType): boolean {
     if (isStaticType(t)) return true; // a static struct copies all leaves inline
     // a dynamic-field struct: gate to the field set buildDynStructFromStorage handles (value / bytes /
     // string / dynamic value-array / nested static aggregate). A nested-dynamic-leaf array field
-    // (bytes[]/string[]/T[][]) is NOT yet wired from storage -> exclude (clean reject upstream).
+    // (bytes[]/string[]/T[][]) is NOT yet wired from storage -> exclude (clean reject upstream). The
+    // deeper storage transcode for this shape is not byte-identical even via the direct return path
+    // (#5 deferred), so lifting the mem-copy would be unsound; keep it a clean JETH200 reject.
     return t.fields.every(
       (f) =>
         isStaticValueType(f.type) ||

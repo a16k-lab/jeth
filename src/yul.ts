@@ -1508,6 +1508,19 @@ ${indent(runtime, 6)}
             // A literal builds it via the nested codec; any other source (alias / call) lowers to the table
             // pointer. (A FIXED array of a VALUE leaf - Arr<u256,N> - is NOT here: it stays inline below.)
             if (s.init.kind === 'arrayLit') out.push(`let ${name} := ${this.buildNestedMemArrayLit(s.init, ctx, out)}`);
+            // #4 a FIXED-outer storage source (let row: Arr<P,N> = this.fa / this.m[k]): DEEP-COPY into a
+            // fresh pointer-headed image via aggArgToMemPtr (which routes the fixedArray / mapStorageValue
+            // base through abiDecFromStorageToImage's fixed-array branch). A memory alias / call result still
+            // lowers to the existing table pointer below.
+            else if (
+              (s.init.kind === 'arrayValue' &&
+                (s.init.arr.base.kind === 'fixedArray' ||
+                  s.init.arr.base.kind === 'stateArray' ||
+                  s.init.arr.base.kind === 'mapArray' ||
+                  s.init.arr.base.kind === 'placeArray')) ||
+              s.init.kind === 'mapStorageValue'
+            )
+              out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
             else out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
           } else if (s.init.kind === 'structNew' || s.init.kind === 'arrayLit') {
             out.push(`let ${name} := ${this.allocAggToMem(s.init, ctx, out)}`);
@@ -5217,6 +5230,10 @@ ${indent(runtime, 6)}
         // need a storage -> B4 pointer-headed transcode that is not implemented. This source is gated by
         // the analyzer (checkLocalDecl storage-source guard / the return/encode-of-storage-struct gates),
         // so reaching here is a bug; fail loud rather than emit a wrong image (no silent miscompile).
+        // NOTE (#5 deferred): even the EXISTING direct storage encoder for this shape (return this.vals,
+        // D = {id; tags: bytes[]}) is NOT byte-identical to solc, so lifting the mem-copy here cannot be
+        // made provably byte-identical without first fixing that deeper storage transcode. Kept a clean
+        // reject per the zero-miscompile bar.
         throw new UnsupportedError(
           `copying a storage dynamic-field struct with a nested-dynamic-leaf array field is not supported yet`,
         );
@@ -6365,6 +6382,23 @@ ${indent(runtime, 6)}
     // pointer-headed image builder; only a STATIC structNew uses the flat ABI image.
     if (a.type.kind === 'struct' && isDynamicType(a.type)) return this.buildDynStructLocal(a.type, a, ctx, out);
     if (a.kind === 'structNew') return this.allocAggToMem(a, ctx, out);
+    // #2 storage-to-mem-copy: a whole MAPPING-VALUE array (let row = this.m[k], m: mapping<K, u256[]> /
+    // bytes[] / u256[][] / Arr<P,N> / ...). resolveMapAccess types this.m[k] as a mapStorageValue (NOT
+    // an arrayValue with a mapArray base), so route it here: resolve the value-array's root slot
+    // (mappingSlot), then deep-copy from that slot exactly like a stateArray source (a reference-element
+    // array -> the pointer-headed image twin; a value-element array -> the byte-invariant
+    // abiEncFromStorage copy that must not regress).
+    if (a.kind === 'mapStorageValue' && a.type.kind === 'array') {
+      const rootSlot = this.mappingSlot(a.baseSlot, a.keys, ctx, out);
+      if (!isStaticValueType(a.type.element)) {
+        return this.abiDecFromStorageToImage(a.type, rootSlot, ctx, out);
+      }
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const size = this.abiEncFromStorage(a.type, rootSlot, 0, dst, out);
+      out.push(`mstore(0x40, add(${dst}, ${size}))`);
+      return dst;
+    }
     if (a.kind === 'arrayValue') {
       const b = a.arr.base;
       if (b.kind === 'memArray') return this.ctxLookup(ctx, b.varName); // memory local: ALIAS
@@ -6389,11 +6423,15 @@ ${indent(runtime, 6)}
         out.push(`let ${mp} := add(${ptr}, 0x20)`); // skip the [0x20] offset wrapper -> [len][elems]
         return mp;
       }
-      // storage source (this.arr / this.m[k] / a nested inner array): DEEP-COPY a fresh memory image.
+      // storage source (this.arr / this.m[k] / a nested inner array / a FIXED-outer array this.fa):
+      // DEEP-COPY a fresh memory image. For a dynamic outer the slot holds [len]; for a FIXED outer
+      // (fixedArray base, #4) it is the base slot of element 0 (no length header), which is exactly
+      // what abiDecFromStorageToImage's fixed-array branch consumes.
       let lenSlot: string;
       if (b.kind === 'stateArray') lenSlot = String(b.slot);
       else if (b.kind === 'mapArray') lenSlot = this.mappingSlot(b.baseSlot, b.keys, ctx, out);
       else if (b.kind === 'placeArray') lenSlot = this.lowerPlace(b.path, ctx, out).slot;
+      else if (b.kind === 'fixedArray') lenSlot = String(b.baseSlot);
       else throw new UnsupportedError(`aggregate argument from array source '${b.kind}' is not supported`);
       // A REFERENCE-element array (bytes[]/string[]/u256[][]/P[]) needs a POINTER-HEADED memory image
       // (absolute pointers), which abiEncFromStorage does NOT produce (it emits RELATIVE ABI offsets -
