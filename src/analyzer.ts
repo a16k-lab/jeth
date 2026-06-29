@@ -4816,6 +4816,17 @@ export class Analyzer {
         if (c) out.push({ kind: 'callStmt', fn: c.fn, args: c.args });
         return;
       }
+      // `this.method(args)` as an EXTERNAL self-call statement (a message-call to address(this); the
+      // returndata is captured but discarded). Recognized before the internal-call form so an
+      // @external callee is a real CALL rather than a JETH240 rejection.
+      {
+        const sc = this.resolveExternalSelfCall(e);
+        if (sc === 'handled') return;
+        if (sc) {
+          out.push({ kind: 'exprStmt', expr: sc.call });
+          return;
+        }
+      }
       // `this.method(args)` internal call as a statement (TS-idiomatic).
       if (
         ts.isCallExpression(e) &&
@@ -6565,6 +6576,97 @@ export class Analyzer {
     if (!ts.isCallExpression(node) || !ts.isIdentifier(node.expression)) return undefined;
     const nm = node.expression.text;
     return this.interfacesByName.has(nm) && !this.isVisibleLocal(nm) ? nm : undefined;
+  }
+
+  /** Resolve an EXTERNAL self-call `this.f(args)` where `f` is an @external method of the current
+   *  contract. solc lowers this to a real message-call to address(this) through the public ABI
+   *  (encodeWithSelector(f.selector, ...args) -> CALL/STATICCALL -> bubble revert -> decode return),
+   *  which also forces virtual dispatch to the most-derived override. We reuse the interface-call
+   *  machinery: treat the current contract as its own interface at address(this).
+   *
+   *  Returns the lowered extCall + the declared return shape, 'handled' when `this.f(...)` IS an
+   *  external self-call but is misused (a diagnostic was emitted; stop), or undefined when the node is
+   *  not a `this.<external-fn>(...)` form (let the existing internal-call path handle `this.f()`). */
+  private resolveExternalSelfCall(
+    node: ts.Expression,
+  ): { call: Expr & { kind: 'extCall' }; returnType: JethType; returnTypes?: JethType[] } | 'handled' | undefined {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+    const pa = node.expression;
+    if (pa.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
+    const fnName = pa.name.text;
+    if (!this.funcsByName.has(fnName)) return undefined; // not a contract function: not our shape
+    // Resolve the (possibly overloaded) callee from the source name + the call's arguments.
+    const callee = this.resolveOverload(node, fnName);
+    if (!callee) return 'handled'; // an arity/ambiguity diagnostic was already emitted
+    // Only an @external function is reached through `this.f(...)` as a MESSAGE call. An internal/
+    // private/public function keeps the existing in-frame internal-call semantics (let it fall
+    // through to checkInternalCall). `this.f()` on a @public function is also an internal call in
+    // JETH today (the existing path), matching JETH's @public dispatch model.
+    if (callee.visibility !== 'external') return undefined;
+
+    // value/gas are NOT part of the bare `this.f()` form; the only way to attach them in TS would be
+    // a trailing options object, which we do not parse here. (Deferred: `this.f(args, {value,gas})`.)
+
+    // ---- arguments: resolve named/positional/defaults, then check + coerce to the callee's params ----
+    const argNodes = this.resolveCallArgs(node, callee, fnName);
+    if (!argNodes) return 'handled';
+    const args: Expr[] = [];
+    for (let i = 0; i < callee.params.length; i++) {
+      const pt = callee.params[i]!.type;
+      const a = this.checkExpr(argNodes[i]!, pt);
+      if (!a) return 'handled';
+      if (pt.kind === 'struct') {
+        if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
+          this.diags.error(
+            argNodes[i]!,
+            'JETH355',
+            `argument ${i + 1} of 'this.${fnName}' expects ${displayName(pt)}, got ${displayName(a.type)}`,
+          );
+          return 'handled';
+        }
+        args.push(a);
+      } else {
+        args.push(this.coerce(a, pt, argNodes[i]!));
+      }
+    }
+
+    // @view/@pure -> STATICCALL (read-only frame); anything else -> CALL.
+    const op: 'call' | 'staticcall' =
+      callee.mutability === 'view' || callee.mutability === 'pure' ? 'staticcall' : 'call';
+
+    // The selector is the most-derived ABI selector for f's signature (an override shares the base
+    // signature, so this is stable). Left-aligned in the high 4 bytes, like abi.encodeWithSelector.
+    const sig = functionSignature(
+      callee.name,
+      callee.params.map((p) => p.type),
+    );
+    const selector = functionSelector(sig);
+    const selExpr: Expr = {
+      kind: 'literalInt',
+      type: { kind: 'bytesN', size: 4 },
+      value: BigInt('0x' + selector) << 224n,
+    };
+    const data: Expr = { kind: 'abiEncode', type: BYTES, packed: false, args, selector: selExpr };
+
+    // A self-call is NOT @pure/@view-clean: a CALL frame may mutate this contract's state (and reads
+    // the environment); a STATICCALL reads the environment. Setting writesState for a CALL (and
+    // readsEnv for a STATICCALL) makes a @pure caller that uses this.f() rejected like solc.
+    if (op === 'call') this.currentWritesState = true;
+    else this.currentReadsEnv = true;
+
+    const call: Expr & { kind: 'extCall' } = {
+      kind: 'extCall',
+      type: BYTES,
+      op,
+      addr: { kind: 'global', type: ADDRESS, op: 'address' }, // address(this)
+      data,
+      value: undefined,
+      gas: undefined,
+      checks: [],
+      bubble: true,
+      codeGuard: true,
+    };
+    return { call, returnType: callee.returnType, returnTypes: callee.returnTypes };
   }
 
   /** Resolve a high-level typed interface call `IFoo(addr [, { value?, gas? }]).method(args)`.
@@ -8556,6 +8658,34 @@ export class Analyzer {
     if (!decl.initializer) {
       this.diags.error(decl, 'JETH066', 'a tuple destructuring declaration requires an initializer');
       return;
+    }
+    // `let [a, b] = this.f(args)` where `f` is an @external method with a >=2-component tuple return:
+    // an external self-call (message-call to address(this)); decode the bytes returndata into N
+    // components (same abi.decode path as the interface-call tuple form below).
+    {
+      const sc = this.resolveExternalSelfCall(decl.initializer);
+      if (sc === 'handled') return;
+      if (sc) {
+        const fnName = (decl.initializer as ts.CallExpression & { expression: ts.PropertyAccessExpression }).expression
+          .name.text;
+        if (!sc.returnTypes) {
+          this.diags.error(
+            decl.name,
+            'JETH356',
+            sc.returnType.kind === 'void'
+              ? `this.${fnName}(...) returns void and cannot be destructured (call it as a statement)`
+              : `this.${fnName}(...) returns a single value; bind it with \`let x = ...\`, not a destructuring`,
+          );
+          return;
+        }
+        const rts = sc.returnTypes;
+        if (rts.length !== n) {
+          this.diags.error(decl.name, 'JETH356', `this.${fnName}(...) returns ${rts.length} value(s), expected ${n} name(s)`);
+          return;
+        }
+        this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: sc.call, types: rts }, out);
+        return;
+      }
     }
     // Phase 6: `let [a, b] = IFoo(addr).method(args)` where the method has a >=2-component tuple return:
     // decode the call's bytes returndata into N components (same abi.decode path as a tuple addr.call).
@@ -14425,6 +14555,33 @@ export class Analyzer {
       node.expression.expression.kind === ts.SyntaxKind.SuperKeyword
     ) {
       return this.checkSuperCall(node, node.expression.name.text, false);
+    }
+    // `this.method(args)` as an EXTERNAL self-call: when `f` is an @external method, solc lowers this
+    // to a real message-call to address(this). Recognized BEFORE the internal-call form below (which
+    // would reject an @external callee with JETH240). A single-value method yields the abi.decode of
+    // the returndata; void cannot be a value; a tuple must be destructured (handled in checkTupleDecl).
+    {
+      const sc = this.resolveExternalSelfCall(node);
+      if (sc === 'handled') return undefined;
+      if (sc) {
+        if (sc.returnTypes) {
+          this.diags.error(
+            node,
+            'JETH356',
+            `this.${(node as ts.CallExpression & { expression: ts.PropertyAccessExpression }).expression.name.text}(...) returns a tuple; bind it with a destructuring \`let [a, b] = this.${(node as ts.CallExpression & { expression: ts.PropertyAccessExpression }).expression.name.text}(...)\``,
+          );
+          return undefined;
+        }
+        if (sc.returnType.kind === 'void') {
+          this.diags.error(
+            node,
+            'JETH357',
+            `this.${(node as ts.CallExpression & { expression: ts.PropertyAccessExpression }).expression.name.text}(...) returns void and cannot be used as a value (call it as a statement)`,
+          );
+          return undefined;
+        }
+        return { kind: 'abiDecode', type: sc.returnType, data: sc.call };
+      }
     }
     // `this.method(args)` (TS-idiomatic internal call) -> internal-call semantics.
     if (
