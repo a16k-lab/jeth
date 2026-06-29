@@ -180,11 +180,13 @@ describe('cd-deep-reads: deferred sub-cases stay CLEAN rejects (no miscompile)',
       return true;
     }
   }
-  it('(B) whole sub-aggregate element read xs[i] is rejected', () => {
+  it('(B) whole sub-aggregate element read xs[i] now COMPILES (lifted byte-identical, see _lift_cd_aggregate_copy.test.ts)', () => {
+    // cd-whole-and-dynstruct-copy LIFT #1: `return xs[i]` for a calldata Arr<P,N>[] / P[][] now decodes the
+    // inner sub-array to memory byte-identically to solc (the value/static-struct leaf forms). No longer rejected.
     expect(
       rejects(`@struct class P{a:u256;b:u256;}
 @contract class C{@external @pure rd(xs:Arr<P,2>[],i:u256):Arr<P,2>{return xs[i];}}`),
-    ).toBe(true);
+    ).toBe(false);
   });
   // cd-nested-fields LIFT: the deeper element/leaf reads are now ACCEPTED byte-identically (see the
   // cd-nested-fields describe block below). The remaining clean reject is the WHOLE-field value form.

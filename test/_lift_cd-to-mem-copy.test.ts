@@ -359,12 +359,14 @@ class C {
     expect(r.ok).toBe(true);
   });
 
-  it('dynamic-struct-element array (D[]) calldata copy stays a clean reject (deferred)', () => {
+  it('dynamic-struct-element array (D[]) calldata copy now COMPILES (lifted byte-identical, see _lift_cd_aggregate_copy.test.ts)', () => {
+    // cd-whole-and-dynstruct-copy LIFT #5: a dyn-struct-element calldata array deep-copies into a pointer-headed
+    // memory image via buildDynStructFromCdBase, byte-identical to solc. No longer a JETH900 reject.
     const r = compileJeth(`
 @struct
 class D { a: u256; tag: bytes; }
 @contract
-class C { @external f(a: D[]): D[] { let row: D[] = a; return row; } }`);
-    expect(r.ok).toBe(false);
+class C { @external @pure f(a: D[]): D[] { let row: D[] = a; return row; } }`);
+    expect(r.ok).toBe(true);
   });
 });
