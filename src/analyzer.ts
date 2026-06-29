@@ -5689,9 +5689,34 @@ export class Analyzer {
       out.push({ kind: 'push', arr });
       return;
     }
-    const v = this.checkExpr(call.arguments[0]!, arr.elem);
+    // solc does NOT propagate the push parameter type into an array-literal argument
+    // (unlike an assignment LHS), so a literal whose element type cannot be deduced
+    // FROM THE LITERAL ITSELF - i.e. it is empty ([]) or recursively contains an
+    // empty/undeducible sub-literal ([[]]) - is rejected at the push-arg position.
+    const argExpr = call.arguments[0]!;
+    if (ts.isArrayLiteralExpression(argExpr) && !this.arrayLiteralSelfDeducible(argExpr)) {
+      this.diags.error(
+        argExpr,
+        'JETH074',
+        `cannot deduce the element type of this array literal as a push() argument; solc does not propagate the push parameter type into the literal (use a non-empty literal or assign to a typed local first)`,
+      );
+      return;
+    }
+    const v = this.checkExpr(argExpr, arr.elem);
     if (!v) return;
     out.push({ kind: 'push', arr, value: this.coerce(v, arr.elem, call.arguments[0]!) });
+  }
+
+  /** Whether an array literal's element type is deducible FROM THE LITERAL ITSELF
+   *  (no external expected-type help). A non-empty literal whose elements are all
+   *  themselves self-deducible (or are not array literals at all) is deducible; an
+   *  empty literal [], or one containing an undeducible sub-literal ([[]]), is not. */
+  private arrayLiteralSelfDeducible(lit: ts.ArrayLiteralExpression): boolean {
+    if (lit.elements.length === 0) return false;
+    for (const el of lit.elements) {
+      if (ts.isArrayLiteralExpression(el) && !this.arrayLiteralSelfDeducible(el)) return false;
+    }
+    return true;
   }
 
   /** x++ / x-- / ++x / --x as a STATEMENT (value discarded): x = x +/- 1, on any integer
