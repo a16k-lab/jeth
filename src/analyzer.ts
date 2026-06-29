@@ -13249,6 +13249,30 @@ export class Analyzer {
         );
         return undefined;
       }
+      // ALSO: an INDEX yielding a WHOLE AGGREGATE element of such a field - `xs[i].items[j]` where the
+      // dyn-struct-array field's element is itself a STRUCT (or array). resolveArrayExpr(node) above returns
+      // undefined for a STRUCT-typed node (it only resolves array-typed expressions), so the whole-struct-
+      // element value slipped the guard and was silently mis-encoded (zero words, no bounds check - a
+      // MISCOMPILE). There is no whole-aggregate-element re-encode codec from a struct-array field, so reject
+      // it as a value too. A SCALAR-leaf element is NOT caught: `xs[i].items[j].v` reaches checkExpr as a
+      // PropertyAccess (not this ElementAccess), and `xs[i].grid[j][k]` has node.expression `xs[i].grid[j]`
+      // whose resolved element is a VALUE (u256), not an aggregate.
+      if (ts.isElementAccessExpression(node)) {
+        const baseArr = this.resolveArrayExpr(node.expression);
+        if (
+          baseArr &&
+          (baseArr.base.kind === 'cdDynFieldNested' ||
+            (baseArr.base.kind === 'cdDynArrayField' && baseArr.base.place.arrayRoot !== undefined)) &&
+          (baseArr.elem.kind === 'struct' || baseArr.elem.kind === 'array')
+        ) {
+          this.diags.error(
+            node,
+            'JETH230',
+            'reading a whole struct/array element of a calldata struct-array field is a later step (access a value field/element)',
+          );
+          return undefined;
+        }
+      }
     }
 
     // new Array<T>(n) -> a length-n zero-initialized dynamic memory array T[] (byte-identical to solc

@@ -283,4 +283,24 @@ describe('cd-nested-fields: whole-field value forms stay CLEAN rejects (no whole
 @struct class S{a:u256;items:D[];}
 @contract class C{@external @pure r(xs:S[],i:u256):D[]{return xs[i].items;}}`)).toBe(true);
   });
+  // SOUNDNESS: a whole struct ELEMENT of a dyn-struct-array field used as a VALUE (xs[i].items[j]) has no
+  // calldata->ABI re-encode codec and silently produced zero words (a MISCOMPILE the adversarial sweep
+  // caught - it slipped the whole-FIELD guard because resolveArrayExpr(node) is undefined for a struct-
+  // typed node). It MUST be a clean reject. The scalar-leaf reads (xs[i].items[j].v/.tag/.length,
+  // xs[i].grid[j][k]) remain byte-identical (covered by the differential cases above).
+  it('xs[i].items[j] whole STRUCT element (dynamic D) used as a value rejected (was a silent miscompile)', () => {
+    expect(rejects(`@struct class D{v:u256;tag:string;}
+@struct class S{a:u256;items:D[];}
+@contract class C{@external @pure r(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`)).toBe(true);
+  });
+  it('xs[i].items[j] whole STRUCT element (static D) used as a value rejected', () => {
+    expect(rejects(`@struct class D{v:u256;w:u256;}
+@struct class S{a:u256;items:D[];}
+@contract class C{@external @pure r(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`)).toBe(true);
+  });
+  it('abi.encode(xs[i].items[j]) whole struct element rejected', () => {
+    expect(rejects(`@struct class D{v:u256;tag:string;}
+@struct class S{a:u256;items:D[];}
+@contract class C{@external @pure r(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}}`)).toBe(true);
+  });
 });
