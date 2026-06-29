@@ -10463,6 +10463,22 @@ export class Analyzer {
         arr: { base: { kind: 'cdDynArrayField', place }, elem: f.type.element },
       };
     }
+    // cd-deep-reads (C): a dynamic array field whose ELEMENT is itself DYNAMIC (string[]/bytes[],
+    // a nested T[][], a dyn-struct D[]): xs[i].tags where tags: string[]. The field's tail decodes
+    // to (tableStart, len) via the SAME calldataArrayAt as a value array (stride = abiHeadWords =
+    // one offset word per element), so xs[i].tags[j] reads the string/bytes element via the per-
+    // element offset table - identical to the dynamic-struct-PARAM field path (s.tags[j]).
+    // Restricted to a string/bytes LEAF element only: a NESTED ARRAY element (T[][]) or a dyn-STRUCT
+    // element (D[]) needs the per-level cdDynFieldNested codec / a struct echo and is NOT byte-identical
+    // through this single-table cdDynArrayField path (it would misread the inner offset table as a value),
+    // so those stay gated below as a clean reject.
+    if (f.type.kind === 'array' && f.type.length === undefined && isBytesLike(f.type.element)) {
+      return {
+        kind: 'arrayValue',
+        type: f.type,
+        arr: { base: { kind: 'cdDynArrayField', place }, elem: f.type.element },
+      };
+    }
     this.diags.error(
       node,
       'JETH230',
@@ -10498,7 +10514,15 @@ export class Analyzer {
     // a DIRECT calldata array param (calldataArray) OR a dynamic-struct param's array
     // FIELD (cdDynArrayField, e.g. p.pts[i].x): both lower to a calldata array ref with
     // a static-struct element stride, so cdArrayField indexes the leaf word identically.
-    if (!arr || (arr.base.kind !== 'calldataArray' && arr.base.kind !== 'cdDynArrayField')) {
+    // cd-deep-reads (A): a cdSubElem inner array (the xs[i] of an Arr<P,N>[] composite,
+    // a contiguous fixed array of static structs) lowers to the same calldata array ref
+    // shape, so xs[i][j].field reads the leaf word identically.
+    if (
+      !arr ||
+      (arr.base.kind !== 'calldataArray' &&
+        arr.base.kind !== 'cdDynArrayField' &&
+        arr.base.kind !== 'cdSubElem')
+    ) {
       this.diags.error(node, 'JETH217', 'this dynamic-array-of-struct access is a later step');
       return undefined;
     }
@@ -10599,6 +10623,32 @@ export class Analyzer {
       const fv = this.resolveMemDynStructArrayField(node);
       if (fv && fv.kind === 'arrayValue') return fv.arr;
       return undefined;
+    }
+    // cd-deep-reads (C): xs[i].tags - a string[]/bytes[] FIELD of a CALLDATA dynamic-struct
+    // ARRAY element (xs: S[], tags: string[]/bytes[]). resolveCdDynArrayField yields a
+    // cdDynArrayField arrayValue (the field tail decodes to the per-element offset table), so a
+    // following [j] reads the bytes/string element. Gate on the base array's DYNAMIC struct
+    // element AND a string/bytes-leaf field type, so a NESTED-array / dyn-struct-array field (a
+    // deeper codec) is left for the read dispatcher to cleanly reject (no speculative diagnostic).
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isElementAccessExpression(node.expression) &&
+      !this.memArrayDynStructElemAccess(node.expression)
+    ) {
+      const bt = this.baseDynType(node.expression.expression);
+      if (bt && bt.kind === 'array' && bt.element.kind === 'struct' && isDynamicType(bt.element)) {
+        const fld = bt.element.fields.find((f) => f.name === node.name.text);
+        if (
+          fld &&
+          fld.type.kind === 'array' &&
+          fld.type.length === undefined &&
+          isBytesLike(fld.type.element)
+        ) {
+          const av = this.resolveCdDynArrayField(node, bt.element);
+          if (av && av.kind === 'arrayValue' && av.arr.base.kind === 'cdDynArrayField') return av.arr;
+          return undefined;
+        }
+      }
     }
     if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
       const fp = this.resolveCdDynFieldPlace(node);
@@ -13345,6 +13395,21 @@ export class Analyzer {
           if (bt.length === undefined) return this.resolveCdArrayField(node, bt.element);
           // Arr<staticStruct,N>: owned by resolveCalldataPlace (cdAggregates) above.
         }
+        // cd-deep-reads (A): field of a DOUBLE-indexed MIXED calldata composite element,
+        // xs[i][j].field where xs: Arr<P,N>[] (P[N][]) - the inner array xs[i] resolves via
+        // cdSubElem to a contiguous fixed array of STATIC struct elements. resolveCdArrayField
+        // peels `.field` off, reads the leaf word at the inner array's offset + j*stride +
+        // headWords. lowerArrayRef(cdSubElem) bounds-checks i, cdArrayField bounds-checks j
+        // (Panic 0x32 each), exactly like solc's outer-then-inner check.
+        if (
+          ts.isElementAccessExpression(node.expression.expression) &&
+          node.expression.argumentExpression
+        ) {
+          const innerArr = this.resolveArrayExpr(node.expression.expression);
+          if (innerArr && innerArr.base.kind === 'cdSubElem' && innerArr.elem.kind === 'struct') {
+            return this.resolveCdArrayField(node, innerArr.elem);
+          }
+        }
       }
       // deeper static field chain off a dynamic array element: ps[i].inn.v. The outer
       // `.v` has a PropertyAccessExpression base (ps[i].inn), so the one-deep matcher
@@ -13731,6 +13796,25 @@ export class Analyzer {
       if (ts.isElementAccessExpression(node.expression) && node.argumentExpression) {
         const innerArr = this.resolveArrayExpr(node.expression);
         if (innerArr && innerArr.base.kind === 'cdDynFieldNested') {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          if (isBytesLike(innerArr.elem))
+            return { kind: 'cdDynArrayElem', type: innerArr.elem, arr: innerArr, index: idx };
+          if (isStaticValueType(innerArr.elem))
+            return { kind: 'arrayGet', type: innerArr.elem, arr: innerArr, index: idx };
+          return undefined; // a still-deeper dynamic-array element is handled by the outer resolveArrayExpr
+        }
+      }
+      // cd-deep-reads (C): a read xs[i].tags[j] where xs: S[] (calldata) and tags is a DYNAMIC-leaf
+      // array FIELD of the struct element (string[]/bytes[]). node.expression is the PROPERTY access
+      // xs[i].tags, which resolveArrayExpr folds to a cdDynArrayField (its tail decodes to (tableStart,
+      // len)); [j] reads the bytes/string element through the per-element offset table (cdDynArrayElem)
+      // or a value element (arrayGet), with the same outer-then-inner bounds check (Panic 0x32) as
+      // the dynamic-struct-PARAM field path s.tags[j].
+      if (ts.isPropertyAccessExpression(node.expression) && node.argumentExpression) {
+        const innerArr = this.resolveArrayExpr(node.expression);
+        if (innerArr && innerArr.base.kind === 'cdDynArrayField') {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
           const idx = this.coerce(index, U256, node.argumentExpression);
