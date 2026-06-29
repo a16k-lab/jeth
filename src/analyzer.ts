@@ -7394,9 +7394,12 @@ export class Analyzer {
       }
       // A fresh literal / new Array source is laid out by the nested codec; Residual C: abi.decode(b, T)
       // builds the SAME pointer-headed image via abiDecFromMemToImage (memory-decode revert semantics).
-      // Aliasing or copying a whole nested array from another local / param / storage is a later step
-      // (stays JETH200 unless it is one of those constructors).
-      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode') {
+      // cd-to-mem-copy: a WHOLE calldata reference-element array param (u256[][], ...) DEEP-COPIES into a
+      // fresh pointer-headed memory image via abiDecFromCdToImage (solc calldata-decode revert semantics:
+      // EMPTY-revert on OOB/truncated/oversized, NOT Panic 0x41). Aliasing or copying a whole nested array
+      // from another local / storage source is still a later step (stays JETH200).
+      const fromCdArray = e.kind === 'arrayValue' && e.arr.base.kind === 'calldataArray';
+      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode' && !fromCdArray) {
         this.diags.error(
           decl.initializer,
           'JETH200',
@@ -7506,7 +7509,19 @@ export class Analyzer {
       // same as a value-element-array call result. The internal-call gate (isMemByRef) validates the
       // callee return type.
       const fromCall = e.kind === 'call' && e.type.kind === 'array';
-      if (e.kind !== 'arrayLit' && e.kind !== 'newArray' && e.kind !== 'abiDecode' && !fromMemElem && !fromCall) {
+      // cd-to-mem-copy: a WHOLE calldata reference-element array param (bytes[]/string[]/u256[][]/P[]...)
+      // DEEP-COPIES into a fresh pointer-headed memory image via abiDecFromCdToImage (the calldata twin of
+      // abiDecFromMemToImage; solc calldata-decode revert semantics: EMPTY-revert on OOB/truncated/oversized,
+      // NOT Panic 0x41). A storage reference-element source stays a later step (JETH200).
+      const fromCdArray = e.kind === 'arrayValue' && e.arr.base.kind === 'calldataArray';
+      if (
+        e.kind !== 'arrayLit' &&
+        e.kind !== 'newArray' &&
+        e.kind !== 'abiDecode' &&
+        !fromMemElem &&
+        !fromCall &&
+        !fromCdArray
+      ) {
         this.diags.error(
           decl.initializer,
           'JETH200',

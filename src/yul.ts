@@ -6042,6 +6042,16 @@ ${indent(runtime, 6)}
         out.push(`let ${p} := ${this.lowerExpr(b.expr, ctx, out)}`);
         return p;
       }
+      // cd-to-mem-copy: a whole REFERENCE-element calldata array used as a constructor leaf-array field
+      // (P(7n, t) where t is bytes[]/string[]/u256[][] calldata) DEEP-COPIES into a fresh pointer-headed
+      // memory image via abiDecFromCdToImage. The param's [len] word is one word before its table base
+      // (cdArrays.offset = the word AFTER [len]). solc's calldata->memory copy hits the MEMORY allocation
+      // guard (Panic 0x41) on an oversized inner length / alloc overflow, so pass that cap.
+      if (b.kind === 'calldataArray' && value.type.kind === 'array' && !isStaticValueType(value.type.element)) {
+        const cd = ctx.cdArrays.get(b.name);
+        if (!cd) throw new UnsupportedError(`calldata array '${b.name}' is not registered`);
+        return this.abiDecFromCdToImage(value.type, `sub(${cd.offset}, 0x20)`, out, `${this.panic()}(0x41)`);
+      }
     }
     const p = this.fresh();
     out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
@@ -6348,6 +6358,20 @@ ${indent(runtime, 6)}
       if (b.kind === 'memArray') return this.ctxLookup(ctx, b.varName); // memory local: ALIAS
       if (b.kind === 'memArrayExpr') return this.lowerExpr(b.expr, ctx, out);
       if (b.kind === 'calldataArray') {
+        // cd-to-mem-copy: a whole REFERENCE-element calldata array (bytes[]/string[]/u256[][]/P[]...) deep-
+        // copies into a fresh POINTER-HEADED memory image via abiDecFromCdToImage (the calldata twin of
+        // abiDecFromMemToImage). The param's [len] word sits one word before its element/offset-table base
+        // (cdArrays stores `offset` = tableStart = the word AFTER [len], so the [len] word is offset - 0x20).
+        // Reuses solc's calldata-decode revert semantics (EMPTY-revert on OOB / truncated / oversized). A
+        // VALUE-element array (u256[]) is NOT routed here: it keeps the echoParam [len][elems] copy below
+        // (byte-invariant, must not regress).
+        if (a.type.kind === 'array' && !isStaticValueType(a.type.element)) {
+          const cd = ctx.cdArrays.get(b.name);
+          if (!cd) throw new UnsupportedError(`calldata array '${b.name}' is not registered`);
+          // solc's calldata->memory deep copy hits the MEMORY allocation guard (Panic 0x41) on an
+          // oversized inner length / alloc overflow, NOT the calldata-decode empty revert; pass it.
+          return this.abiDecFromCdToImage(a.type, `sub(${cd.offset}, 0x20)`, out, `${this.panic()}(0x41)`);
+        }
         const { ptr } = this.echoParam(b.name, a.type, ctx, out, false); // COPY, masking dirty elements
         const mp = this.fresh();
         out.push(`let ${mp} := add(${ptr}, 0x20)`); // skip the [0x20] offset wrapper -> [len][elems]
@@ -7297,12 +7321,15 @@ ${indent(runtime, 6)}
    *  data-bounds `revert(0, 0)` (truncated payload), exactly as the mem twin and solc's calldata
    *  tuple-member decode. Used only by buildDynStructFromCalldata's leaf-array branch.
    *
-   *  PARITY NOTE (differs from the mem twin): solc's CALLDATA tuple-member decode EMPTY-reverts on an
-   *  oversized length / allocation overflow (revert(0, 0)), it does NOT Panic(0x41) the way the MEMORY
-   *  decode (abi.decode) does. So the cap here is revert(0, 0), matching buildDynStructFromCalldata's
-   *  value-array branch and solc's calldata decode (empirically verified vs solc 0.8.35). */
-  private abiDecFromCdToImage(t: JethType, cdPtr: string, out: string[]): string {
-    const cap = `revert(0, 0)`;
+   *  PARITY NOTE (the allocation `cap` is caller-selected, default revert(0, 0)):
+   *   - buildDynStructFromCalldata's leaf-array branch (a constructor field built FROM a calldata struct
+   *     param) keeps the DEFAULT revert(0, 0) cap, matching solc's calldata-aggregate decode there.
+   *   - the cd-to-mem-copy cluster (a WHOLE calldata reference-element array DEEP-COPIED into a memory
+   *     local, `let row: bytes[] = a`) passes cap = panic(0x41): solc's calldata->memory deep copy hits
+   *     the MEMORY allocation guard on an oversized inner length / alloc overflow exactly like abi.decode /
+   *     the mem twin (empirically verified vs solc 0.8.35: inner len 2^64-1 -> Panic 0x41). Truncated /
+   *     OOB source ALWAYS empty-reverts (revert(0, 0)) regardless of cap, like solc. */
+  private abiDecFromCdToImage(t: JethType, cdPtr: string, out: string[], cap = `revert(0, 0)`): string {
     // a bytes/string leaf: alloc a [len][data] blob, return its absolute pointer.
     if (isBytesLike(t)) {
       const len = this.fresh();
@@ -7391,7 +7418,7 @@ ${indent(runtime, 6)}
         const esrc = this.fresh();
         inner.push(`let ${esrc} := add(${elemRegion}, mul(${i}, ${es}))`);
         const ip = this.fresh();
-        inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, inner)}`);
+        inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, inner, cap)}`);
         inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
         for (const l of inner) out.push('  ' + l);
         out.push('}');
@@ -7418,7 +7445,7 @@ ${indent(runtime, 6)}
       inner.push(`let ${se} := add(${elemRegion}, ${so})`);
       inner.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), calldatasize()) { revert(0, 0) }`);
       const ip = this.fresh();
-      inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, inner)}`);
+      inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, inner, cap)}`);
       inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
       for (const l of inner) out.push('  ' + l);
       out.push('}');
@@ -7437,7 +7464,7 @@ ${indent(runtime, 6)}
       for (let k = 0; k < t.length; k++) {
         const esrc = k === 0 ? cdPtr : `add(${cdPtr}, ${k * es})`;
         const ip = this.fresh();
-        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, out)}`);
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, out, cap)}`);
         out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
       }
       return ptr;
@@ -7455,7 +7482,7 @@ ${indent(runtime, 6)}
         out.push(`let ${se} := add(${cdPtr}, ${so})`);
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), calldatasize()) { revert(0, 0) }`);
         const ip = this.fresh();
-        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, out)}`);
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, out, cap)}`);
         out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
       }
       return ptr;
