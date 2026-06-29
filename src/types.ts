@@ -402,7 +402,11 @@ export function isDynStructLeaf(t: JethType): boolean {
       isStaticValueType(f.type) ||
       isBytesLike(f.type) ||
       (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
-      isDynStructLeafArrayField(f.type),
+      isDynStructLeafArrayField(f.type) ||
+      // B(1) mirror of Analyzer.isSupportedDynStructLocal: a NESTED STATIC AGGREGATE field (nested static
+      // struct / static fixed array Arr<T,N>) stored INLINE as flattened head words. Keep byte-parallel.
+      (f.type.kind === 'struct' && isStaticType(f.type)) ||
+      (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
   );
 }
 

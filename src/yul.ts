@@ -1171,7 +1171,13 @@ ${indent(runtime, 6)}
             s.value.kind === 'bn256' ||
             // Residual B1: `return xs[i]` (a static-struct element of a P[] memory local). The
             // arrayGet lowers to the element's inline image BASE pointer, which IS the flat return blob.
-            (s.value.kind === 'arrayGet' && s.value.type.kind === 'struct'))
+            (s.value.kind === 'arrayGet' && s.value.type.kind === 'struct') ||
+            // B4 / B3: `return p.inner` / `return p.fa` (a whole nested STATIC AGGREGATE field of a
+            // dyn-struct memory local), or `return xs[i].q` / `return xs[i].pre` (a whole static-aggregate
+            // field of a struct-array element). aggFieldRead lowers to the field's inline sub-image pointer,
+            // which IS the flat return blob (the image stores clean ABI head words). A DYNAMIC field
+            // (bytes/dyn-array, deref'd) is not a static struct/array, so it is excluded by isStaticType.
+            s.value.kind === 'aggFieldRead')
         ) {
           // a STATIC memory-aggregate image (struct / fixed array): the image IS the flat return blob.
           // (A DYNAMIC-array call/ternary falls through to encodeMemArrayReturn below.)
@@ -1601,12 +1607,15 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'memDynField') {
-          // d.s = <bytes/string> on a dynamic-field struct memory local: materialize the value
-          // to a memory [len][data] blob (alias if it is already memory), then re-point the
-          // field's head word at it (Solidity memory-struct field assignment is a reference).
-          const { mp } = this.toMemory(this.lowerDynamic(s.value, ctx, out), out);
+          // d.s = <bytes/string> OR d.xs = <array> on a dynamic-field struct memory local: materialize the
+          // value (a bytes/string [len][data] blob, or a value-array [len][elems] / leaf-array B4 image),
+          // then re-point the field's head word at it (Solidity memory-struct field assignment is a reference
+          // re-point), exactly like the aggDynFieldStore (xs[i].field = ...) path just below.
+          const srcRaw = isBytesLike(s.target.type)
+            ? this.toMemory(this.lowerDynamic(s.value, ctx, out), out).mp
+            : this.aggArgToMemPtr(s.value, ctx, out);
           const head = this.ctxLookup(ctx, s.target.local);
-          out.push(`mstore(${s.target.wordOffset === 0 ? head : `add(${head}, ${s.target.wordOffset * 32})`}, ${mp})`);
+          out.push(`mstore(${s.target.wordOffset === 0 ? head : `add(${head}, ${s.target.wordOffset * 32})`}, ${srcRaw})`);
           break;
         }
         if (s.target.kind === 'aggDynFieldStore') {
@@ -4663,6 +4672,7 @@ ${indent(runtime, 6)}
   private aggToMemPtr(e: Expr, ctx: LowerCtx, out: string[]): string {
     if (e.kind === 'structNew' || e.kind === 'arrayLit') return this.allocAggToMem(e, ctx, out);
     if (e.kind === 'memAggregate' || e.kind === 'ternary') return this.lowerExpr(e, ctx, out); // a nested aggregate ternary recurses (materialize + select)
+    if (e.kind === 'memDynStructValue') return this.ctxLookup(ctx, e.local); // B4: the dyn-struct local's image pointer; a nested static-aggregate field is INLINE at headWord (aggFieldRead adds the offset)
     if (e.kind === 'structValue') return this.allocAggFromStorage(e.type, String(e.baseSlot), out);
     if (e.kind === 'mapStorageValue')
       return this.allocAggFromStorage(e.type, this.mappingSlot(e.baseSlot, e.keys, ctx, out), out);
@@ -4964,6 +4974,17 @@ ${indent(runtime, 6)}
         // its absolute pointer in the head word - the same image abiEncFromMem/read/decode consume.
         out.push(`mstore(${at}, ${this.nestedMemImagePtr(value.args[i]!, ctx, out)})`);
         hw += 1;
+      } else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
+        // B(1): a NESTED STATIC AGGREGATE field (nested static struct / fixed array Arr<T,N>). Materialize
+        // the arg to its flat static image, then copy its abiHeadWords leaf words INLINE at word offset hw
+        // (the tuple-head layout solc uses). The single-word else below would write ONLY the first leaf
+        // while hw advances by abiHeadWords, corrupting every later field of a multi-word aggregate.
+        const fsrc = this.aggArgToMemPtr(value.args[i]!, ctx, out);
+        const fw = abiHeadWords(f.type);
+        for (let k = 0; k < fw; k++) {
+          out.push(`mstore(add(${ptr}, ${(hw + k) * 32}), mload(add(${fsrc}, ${k * 32})))`);
+        }
+        hw += fw;
       } else {
         out.push(`mstore(${at}, ${this.lowerExpr(value.args[i]!, ctx, out)})`);
         hw += abiHeadWords(f.type);

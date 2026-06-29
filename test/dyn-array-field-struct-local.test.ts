@@ -101,16 +101,17 @@ contract C {
     await cmp('0x' + sel('cpRet()'), 'cpRet');
     for (const i of [0n, 1n, 2n]) await cmp('0x' + sel('cpIdx(uint256)') + pad32(i), `cpIdx[${i}]`);
   });
-  it('clean gates (JETH200): cd-construct, storage construct, array-field write', () => {
+  it('clean gates: cd-construct, storage construct; array-field re-point now ACCEPTS', () => {
     const Sd = '@struct class S { a: u256; xs: u256[]; b: u256; }\n';
-    // (cd-struct -> mem local with a value-array field, and storage-struct construct with a value-array
-    //  field, are now SUPPORTED and byte-identical to solc - see the dyn value-array assign tests.)
+    // re-pointing a dynamic-array field of a memory struct (p.xs = ys) is now SUPPORTED (Batch B,
+    // byte-identical to solc - see dyn-struct-nested-aggregate-field.test.ts). A calldata source is
+    // copied to memory, exactly like solc's calldata->memory assignment.
     expect(
       codes(
         Sd +
           '@contract class C { @external @pure f(ys: u256[]): u256 { let p: S = S(1n, ys, 2n); p.xs = ys; return p.a; } }',
       ),
-    ).toContain('JETH200');
+    ).toEqual([]);
     // A string[] / bytes[] struct FIELD is now SUPPORTED (Cat C, byte-identical to solc - see
     // dyn-struct-nested-leaf-array-field.test.ts). The constructor takes a typed array value.
     expect(

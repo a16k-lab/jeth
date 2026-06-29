@@ -8806,6 +8806,101 @@ export class Analyzer {
     return { base, wordOffset, type: curType, runSteps };
   }
 
+  /** Batch B4: resolve a chain rooted at a DYNAMIC-field struct MEMORY local whose FIRST hop is a
+   *  NESTED STATIC AGGREGATE field (a nested static struct, or a static fixed array Arr<T,N>), e.g.
+   *  `p.inner`, `p.inner.x`, `p.fa`, `p.fa[j]`, `p.outer.inner.x`. The nested aggregate is stored
+   *  INLINE in the dyn-struct image at the field's head-word offset (abiHeadWords ABI-flattened, the
+   *  tuple-head layout, NOT pointer-headed). So the base is the local's image pointer (memDynStructValue)
+   *  and the starting word offset is the field's head word; the remaining steps descend the static
+   *  aggregate exactly like resolveMemArrayElemFieldChain does for a struct-array element (field offsets
+   *  sum into wordOffset, a CONSTANT index folds into wordOffset, a RUNTIME index becomes a bounds-checked
+   *  runStep). Returns the typed aggFieldRead descriptor (base + wordOffset + runSteps + final type), or
+   *  undefined when the chain is not rooted at such a local / the first hop is not a static aggregate (so
+   *  the value-field / bytes-string / dyn-array-field paths and the other resolvers keep their behavior). */
+  private resolveMemDynStructStaticAggChain(
+    node: ts.Expression,
+  ): { base: Expr; wordOffset: number; type: JethType; runSteps: ArrIndexStep[] } | undefined {
+    // collect access steps leaf -> root, stopping at `p.field` where p is a memDynStructLocal.
+    const steps: ({ field: string } | { index: ts.Expression; node: ts.Node })[] = [];
+    let cur: ts.Expression = node;
+    let local: string | undefined;
+    let firstField: string | undefined;
+    for (;;) {
+      if (
+        ts.isPropertyAccessExpression(cur) &&
+        ts.isIdentifier(cur.expression) &&
+        this.memDynStructLocals.has(cur.expression.text)
+      ) {
+        local = cur.expression.text;
+        firstField = cur.name.text;
+        break;
+      }
+      if (ts.isPropertyAccessExpression(cur)) {
+        steps.push({ field: cur.name.text });
+        cur = cur.expression;
+      } else if (ts.isElementAccessExpression(cur) && cur.argumentExpression) {
+        steps.push({ index: cur.argumentExpression, node: cur });
+        cur = cur.expression;
+      } else {
+        return undefined;
+      }
+    }
+    if (local === undefined || firstField === undefined) return undefined;
+    // the first hop must be a NESTED STATIC AGGREGATE field (a nested static struct, or a static fixed
+    // array); a value / bytes-string / dynamic-array first field is owned by the other resolvers.
+    const st = this.memDynStructLocals.get(local)!;
+    if (st.kind !== 'struct') return undefined;
+    const fidx = st.fields.findIndex((f) => f.name === firstField);
+    if (fidx < 0) return undefined;
+    const fld = st.fields[fidx]!;
+    const isStaticAgg =
+      (fld.type.kind === 'struct' && isStaticType(fld.type)) ||
+      (fld.type.kind === 'array' && fld.type.length !== undefined && isStaticType(fld.type));
+    if (!isStaticAgg) return undefined;
+    // the field's head-word offset in the dyn-struct image (value/static fields take abiHeadWords words,
+    // dynamic fields take 1 pointer word) - identical math to memDynStructField.
+    const headWord = st.fields
+      .slice(0, fidx)
+      .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+    const base: Expr = { kind: 'memDynStructValue', type: st, local };
+    steps.reverse(); // root -> leaf
+    let curType: JethType = fld.type;
+    let wordOffset = headWord;
+    const runSteps: ArrIndexStep[] = [];
+    for (const s of steps) {
+      if ('field' in s) {
+        if (curType.kind !== 'struct') {
+          this.diags.error(node, 'JETH210', `cannot read field '${s.field}' of ${displayName(curType)}`);
+          return undefined;
+        }
+        const fo = this.memFieldOffset(curType, s.field);
+        if (!fo) {
+          this.diags.error(node, 'JETH210', `struct '${curType.name}' has no field '${s.field}'`);
+          return undefined;
+        }
+        wordOffset += fo.wordOffset;
+        curType = fo.type;
+      } else {
+        if (!(curType.kind === 'array' && curType.length !== undefined)) return undefined;
+        const iexpr = this.checkExpr(s.index, U256);
+        if (!iexpr) return undefined;
+        const iv = this.coerce(iexpr, U256, s.index);
+        const strideWords = abiHeadWords(curType.element);
+        if (iv.kind === 'literalInt') {
+          if (iv.value < 0n || iv.value >= BigInt(curType.length)) {
+            this.diags.error(s.node, 'JETH211', `array index ${iv.value} out of bounds for length ${curType.length}`);
+            return undefined;
+          }
+          wordOffset += Number(iv.value) * strideWords;
+        } else {
+          runSteps.push({ index: iv, length: curType.length, strideBytes: strideWords * 32 });
+        }
+        curType = curType.element;
+      }
+    }
+    return { base, wordOffset, type: curType, runSteps };
+  }
+
   /** Residual B3: resolve `xs[i].field` where `xs` is a memory P[] whose element P is a DYNAMIC-field
    *  struct (isDynStructLeaf). The element xs[i] (arrayGet) lowers to the element's dyn-struct image
    *  pointer (mload of the element pointer word); the field lives at the dyn-struct HEAD-WORD offset
@@ -8969,7 +9064,13 @@ export class Analyzer {
         isStaticValueType(f.type) ||
         isBytesLike(f.type) ||
         (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
-        isDynStructLeafArrayField(f.type),
+        isDynStructLeafArrayField(f.type) ||
+        // B(1): a NESTED STATIC AGGREGATE field (a nested static struct, or a static fixed array Arr<T,N>)
+        // is stored INLINE as abiHeadWords ABI-flattened head words (the tuple-head layout), exactly like
+        // solc; the static-leaf codec (encodeStaticInline / abiDecFromMem / buildDynStructFromStorage) and
+        // memDynStructField's abiHeadWords offset math already handle it.
+        (f.type.kind === 'struct' && isStaticType(f.type)) ||
+        (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
     );
   }
 
@@ -9009,11 +9110,12 @@ export class Analyzer {
       if (isBytesLike(mf.field.type)) {
         return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
       }
-      // writing a whole dynamic-array field of a memory struct (re-pointing the head word) is a later
-      // step; element writes (p.xs[i] = v) are gated separately.
+      // B(2): re-point a whole DYNAMIC-array field of a memory struct (p.xs = arr): the head word holds
+      // an absolute pointer, so the write materializes the RHS and stores ITS pointer (a reference
+      // re-point, like solc) - a value-array field (u256[] -> [len][elems]) or a leaf-array field
+      // (bytes[]/T[][] -> the B4 image). Element writes (p.xs[i] = v) are gated separately.
       if (mf.field.type.kind === 'array' && mf.field.type.length === undefined) {
-        this.diags.error(node, 'JETH200', `writing a dynamic-array field of a memory struct is not supported yet`);
-        return undefined;
+        return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
       }
       return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
     }
@@ -12546,7 +12648,43 @@ export class Analyzer {
           arr: { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element },
         };
       }
+      // B4: a WHOLE nested STATIC AGGREGATE field (a nested static struct, or a static fixed array
+      // Arr<T,N>). It is stored INLINE in the dyn-struct image at the field's head word (abiHeadWords
+      // ABI-flattened, the tuple-head layout); the read yields the sub-image pointer (aggFieldRead over
+      // the local's image base), consumed as a memory aggregate by abi.encode / return.
+      if (
+        (mf.field.type.kind === 'struct' && isStaticType(mf.field.type)) ||
+        (mf.field.type.kind === 'array' && mf.field.type.length !== undefined && isStaticType(mf.field.type))
+      ) {
+        return {
+          kind: 'aggFieldRead',
+          type: mf.field.type,
+          base: { kind: 'memDynStructValue', type: this.memDynStructLocals.get(mf.local)!, local: mf.local },
+          wordOffset: mf.headWord,
+        };
+      }
       return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+    }
+    // B4: a DEEP chain rooted at a dyn-struct memory local whose FIRST hop is a nested STATIC AGGREGATE
+    // field - p.inner.x (a value leaf of a nested static struct), p.fa[j] (a fixed-array element, j a
+    // runtime or constant index, OOB -> Panic 0x32), p.outer.inner.x, ... The aggregate is inline in the
+    // dyn-struct image, so the base is the local image pointer + the field head word + the descent. A VALUE
+    // leaf -> mload (aggFieldRead); a whole nested STATIC aggregate leaf -> the sub-image pointer. Must
+    // precede the static struct-array chain resolver and the calldata/storage resolvers. (node.expression
+    // is `p.field` / `p.field[..]`, not a bare identifier, so the direct-field block above did not fire.)
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const dchain = this.resolveMemDynStructStaticAggChain(node);
+      if (dchain) {
+        if (isStaticType(dchain.type)) {
+          return { kind: 'aggFieldRead', type: dchain.type, base: dchain.base, wordOffset: dchain.wordOffset, runSteps: dchain.runSteps };
+        }
+        this.diags.error(
+          node,
+          'JETH245',
+          `reading a ${displayName(dchain.type)} of a dynamic-struct nested aggregate is not supported yet`,
+        );
+        return undefined;
+      }
     }
     // `this.mk(a).x` / `mk(a).x`: member access whose BASE is a struct-returning internal call.
     // solc materializes the call result to a memory struct and reads the field. We do the same: a
