@@ -7963,7 +7963,9 @@ export class Analyzer {
     }
     const rt = callee.returnType;
     const returnSupported =
-      rt.kind === 'void' || isStaticValueType(rt) || (aggOK && (isMemByRef(rt) || this.isSupportedDynStructLocal(rt)));
+      rt.kind === 'void' ||
+      isStaticValueType(rt) ||
+      (aggOK && (isMemByRef(rt) || aggArrayByRef(rt) || this.isSupportedDynStructLocal(rt)));
     if (!returnSupported) {
       const hint =
         isMemByRef(rt) && !aggOK ? ' (aggregate returns require the callee to be @internal or @private)' : '';
@@ -8430,7 +8432,37 @@ export class Analyzer {
     name: string,
     n: number,
   ): { fn: string; args: Expr[]; types: JethType[] } | undefined {
-    const callee = this.resolveOverload(node, name);
+    // a qualified internal-library call L.f(...) resolves against the library's overload set (the bare
+    // name has no contract-level binding); an @external (DELEGATECALL) library tuple return stays a
+    // clean reject. Otherwise the regular contract-internal overload resolution.
+    let callee: RawFunction | undefined;
+    const pa = node.expression;
+    if (
+      ts.isPropertyAccessExpression(pa) &&
+      ts.isIdentifier(pa.expression) &&
+      this.libraryByName.has(pa.expression.text) &&
+      !this.isVisibleLocal(pa.expression.text)
+    ) {
+      const libName = pa.expression.text;
+      const fnName = pa.name.text;
+      const resolved = this.resolveLibraryOverload(node, this.libraryByName.get(libName)!, `${libName}.${fnName}`, fnName);
+      if (resolved === 'unknown') {
+        this.diags.error(node, 'JETH392', `@library '${libName}' has no function '${fnName}'`);
+        return undefined;
+      }
+      if (!resolved) return undefined;
+      if (resolved.libraryExternal) {
+        this.diags.error(
+          node,
+          'JETH243',
+          `tuple destructuring of an @external (delegatecall) library call is not supported yet`,
+        );
+        return undefined;
+      }
+      callee = resolved;
+    } else {
+      callee = this.resolveOverload(node, name);
+    }
     if (!callee) return undefined;
     if (callee.visibility === 'external') {
       this.diags.error(node, 'JETH240', `cannot internally call @external function '${name}'`);
@@ -8492,6 +8524,15 @@ export class Analyzer {
       this.funcsByName.has(node.expression.name.text)
     )
       return node.expression.name.text;
+    // a qualified internal-library call L.f(...) (inlined like a contract internal call), so a tuple-
+    // returning library function destructures / tuple-assigns / direct-returns like an internal call.
+    if (
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      this.libraryByName.has(node.expression.expression.text) &&
+      !this.isVisibleLocal(node.expression.expression.text)
+    )
+      return `${node.expression.expression.text}.${node.expression.name.text}`;
     return undefined;
   }
 
@@ -11191,6 +11232,86 @@ export class Analyzer {
     return { kind: 'abiEncode', type: { kind: 'bytes' }, packed, args, selector, sig };
   }
 
+  /** abi.encodeCall(IFoo.bar, [a, b]) -> bytes. The first argument is an @interface method REFERENCE
+   *  (IFoo.bar); the second is an array literal of the call arguments (JETH's tuple form, checked against
+   *  bar's parameter types). Byte-identical to solc's encodeCall = the method's 4-byte selector prepended
+   *  to abi.encode(args). Emitted as the standard abiEncode IR with the resolved selector (the SAME
+   *  codegen as abi.encodeWithSelector), so it shares the proven head/tail encoder. */
+  private checkAbiEncodeCall(node: ts.CallExpression): Expr | undefined {
+    if (node.arguments.length !== 2) {
+      this.diags.error(node, 'JETH173', 'abi.encodeCall(IFoo.method, [args]) takes exactly two arguments');
+      return undefined;
+    }
+    const fnRef = node.arguments[0]!;
+    if (
+      !ts.isPropertyAccessExpression(fnRef) ||
+      !ts.isIdentifier(fnRef.expression) ||
+      !this.interfacesByName.has(fnRef.expression.text) ||
+      this.isVisibleLocal(fnRef.expression.text)
+    ) {
+      this.diags.error(
+        fnRef,
+        'JETH173',
+        "abi.encodeCall's first argument must be an @interface method reference (e.g. IFoo.bar)",
+      );
+      return undefined;
+    }
+    const ifaceName = fnRef.expression.text;
+    const iface = this.interfacesByName.get(ifaceName)!;
+    const methodName = fnRef.name.text;
+    const method = iface.methods.get(methodName);
+    if (!method) {
+      this.diags.error(fnRef, 'JETH351', `interface '${ifaceName}' has no method '${methodName}'`);
+      return undefined;
+    }
+    const argsNode = node.arguments[1]!;
+    if (!ts.isArrayLiteralExpression(argsNode)) {
+      this.diags.error(
+        argsNode,
+        'JETH173',
+        "abi.encodeCall's second argument must be an array literal of the call arguments (e.g. [a, b])",
+      );
+      return undefined;
+    }
+    if (argsNode.elements.length !== method.params.length) {
+      this.diags.error(
+        argsNode,
+        'JETH354',
+        `abi.encodeCall to '${ifaceName}.${methodName}' expects ${method.params.length} argument(s), got ${argsNode.elements.length}`,
+      );
+      return undefined;
+    }
+    const args: Expr[] = [];
+    for (let i = 0; i < method.params.length; i++) {
+      const pt = method.params[i]!.type;
+      const a = this.checkExpr(argsNode.elements[i]!, pt);
+      if (!a) return undefined;
+      const ce = this.coerce(a, pt, argsNode.elements[i]!);
+      // The standard head/tail encoder backs encodeCall; gate arg types it can encode (same set as the
+      // non-packed abi.encode: value, bytes/string, static struct/fixed-array, dynamic array, dynamic struct).
+      const t = ce.type;
+      const aggOk =
+        (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) ||
+        (t.kind === 'struct' && this.isSupportedDynStructLocal(t)) ||
+        t.kind === 'array';
+      if (!isStaticValueType(t) && !isBytesLike(t) && !aggOk) {
+        this.diags.error(
+          argsNode.elements[i]!,
+          'JETH173',
+          `abi.encodeCall argument ${i + 1} has unsupported type ${displayName(t)}`,
+        );
+        return undefined;
+      }
+      args.push(ce);
+    }
+    const selector: Expr = {
+      kind: 'literalInt',
+      type: { kind: 'bytesN', size: 4 },
+      value: BigInt('0x' + method.selector) << 224n,
+    };
+    return { kind: 'abiEncode', type: { kind: 'bytes' }, packed: false, args, selector };
+  }
+
   /** Which decoded types abi.decode supports (v1). The memory-sourced decode codec (abiDecFromMem,
    *  the analogue of the calldata->memory codec) composes over: any value type (uintN/intN/bool/
    *  address/bytesN/enum/branded), bytes/string, a dynamic value-element array T[], a static fixed
@@ -12301,6 +12422,24 @@ export class Analyzer {
             ? (1n << BigInt(bits - 1)) - 1n
             : -(1n << BigInt(bits - 1));
       return { kind: 'literalInt', type: t, value };
+    }
+
+    // type(C).name -> the contract / interface name as a compile-time string constant (Solidity-identical).
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === 'name' &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'type' &&
+      node.expression.arguments.length === 1 &&
+      ts.isIdentifier(node.expression.arguments[0]!)
+    ) {
+      const argName = (node.expression.arguments[0] as ts.Identifier).text;
+      if (this.classByName.has(argName) || this.interfacesByName.has(argName)) {
+        return { kind: 'stringLiteral', type: STRING, bytes: new TextEncoder().encode(argName) };
+      }
+      this.diags.error(node, 'JETH074', 'type(T).name requires a contract or interface type T');
+      return undefined;
     }
 
     // function `.selector` -> the 4-byte ABI selector, a compile-time bytes4 constant (left-aligned in
@@ -14321,6 +14460,20 @@ export class Analyzer {
       ['encode', 'encodePacked', 'encodeWithSelector', 'encodeWithSignature'].includes(node.expression.name.text)
     ) {
       return this.checkAbiEncode(node, node.expression.name.text);
+    }
+
+    // abi.encodeCall(IFoo.bar, [args]) -> bytes: type-checked selector + ABI-encoded args. Exact sugar for
+    // abi.encodeWithSelector(IFoo.bar.selector, ...args) with the args STRICTLY checked against bar's params.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'abi' &&
+      !this.isVisibleLocal('abi') &&
+      !this.stateByName.has('abi') &&
+      node.expression.name.text === 'encodeCall'
+    ) {
+      return this.checkAbiEncodeCall(node);
     }
 
     // abi.decode(data, T) / abi.decode(data, [T1, ...]) -> the decoded typed value (single form) or a
