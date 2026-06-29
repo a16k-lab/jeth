@@ -2460,10 +2460,15 @@ ${indent(runtime, 6)}
         const ref = this.lowerDynamic(arg, ctx, out);
         data.push(this.toMemory(ref, out)); // materialize before the buffer is allocated
       } else if (isStaticType(p.type) && (p.type.kind === 'struct' || p.type.kind === 'array')) {
-        // a non-indexed STATIC struct / fixed-array: encoded INLINE in the data head (abiHeadWords
-        // leaf words, no offset/tail). aggToMemPtr materializes the ABI-unpacked image from any source
-        // (a constructor, a memory/storage aggregate), then we mcopy it into the head.
-        data.push({ inline: true, mp: this.aggToMemPtr(arg, ctx, out), words: abiHeadWords(p.type) });
+        // a non-indexed STATIC struct / fixed-array: encoded INLINE in the data head (abiHeadWords leaf
+        // words, no offset/tail). A POINTER-HEADED memory Arr<P,N> (static-struct fixed array) must first
+        // be transcoded to its flat inline ABI body via abiEncFromMem (its image is N pointer words - a raw
+        // mcopy would leak the pointer words into the log data, the MISCOMPILE the redesign introduced);
+        // every other static aggregate keeps its already-flat aggToMemPtr image. Mirrors buildAbiEncodeStd.
+        const mp = this.isPointerHeadedStaticAggArg(arg)
+          ? this.flattenPointerHeadedStaticAgg(arg, ctx, out)
+          : this.aggToMemPtr(arg, ctx, out);
+        data.push({ inline: true, mp, words: abiHeadWords(p.type) });
       } else if (p.type.kind === 'struct') {
         // a non-indexed DYNAMIC struct: a head offset + its head/tail blob in the tail.
         data.push(this.encodeDynStructToBlob(arg, ctx, out));
@@ -6409,6 +6414,39 @@ ${indent(runtime, 6)}
    *  padded leaf words (one word per leaf), for an indexed-event keccak topic. Sources: a @state
    *  fixed array / struct (storage -> abiEncFromStorage) or a whole static calldata aggregate param
    *  (echoStaticParam). Returns {mp, size}; keccak256(mp, size) == solc's keccak256(abi.encode(v)). */
+  /** A static-struct fixed array (Arr<P,N> / Arr<Arr<P,M>,N>) whose MEMORY image is POINTER-HEADED
+   *  (N absolute-pointer words, post the Cat-B / Batch-A redesign) AND whose source is a standalone
+   *  memory image (NOT an ABI-flattened-inline struct FIELD). Such a value must be transcoded to the
+   *  flat inline ABI body via abiEncFromMem before keccak/mcopy (an event topic preimage / event data
+   *  head / abi.encode). Mirrors the memFixedSrc test in buildAbiEncodeStd, which EXCLUDES aggFieldRead
+   *  (a nested static-agg field is already flattened inline in its parent image - transcoding it would
+   *  misread the inline words as pointers). A static VALUE aggregate (Arr<u256,N>, a value struct) is
+   *  already flat and is NOT matched here. */
+  private isPointerHeadedStaticAggArg(a: Expr): boolean {
+    if (!isStaticStructFixedLeafArray(a.type)) return false;
+    return (
+      a.kind === 'arrayLit' ||
+      a.kind === 'newArray' ||
+      a.kind === 'memAggregate' ||
+      a.kind === 'arrayGet' ||
+      a.kind === 'call' ||
+      (a.kind === 'arrayValue' && (a.arr.base.kind === 'memArray' || a.arr.base.kind === 'memArrayExpr'))
+    );
+  }
+
+  /** Transcode a pointer-headed memory static-struct fixed array (Arr<P,N>) to a fresh FLAT inline ABI
+   *  image (abiHeadWords words) via abiEncFromMem - the identical flattening abi.encode uses. Returns the
+   *  blob pointer. Only valid when isPointerHeadedStaticAggArg(a) is true. */
+  private flattenPointerHeadedStaticAgg(a: Expr, ctx: LowerCtx, out: string[]): string {
+    const mp = this.aggArgToMemPtr(a, ctx, out);
+    const blob = this.fresh();
+    out.push(`let ${blob} := mload(0x40)`);
+    const sz = this.fresh();
+    out.push(`let ${sz} := ${this.abiEncFromMem(a.type, mp, blob, ctx, out)}`);
+    out.push(`mstore(0x40, add(${blob}, ${sz}))`);
+    return blob;
+  }
+
   private materializeStaticAggToMem(arg: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
     if (arg.kind === 'cdAggregateValue') {
       // An indexed event arg emitted DIRECTLY from a calldata param: solc VALIDATES the value-leaf
@@ -6421,6 +6459,13 @@ ${indent(runtime, 6)}
     if (arg.kind === 'structValue') slot = String(arg.baseSlot);
     else if (arg.kind === 'arrayValue' && arg.arr.base.kind === 'fixedArray') slot = String(arg.arr.base.baseSlot);
     else {
+      // a POINTER-HEADED memory Arr<P,N> (static-struct fixed array): its image is N pointer words, so
+      // transcode to the flat inline ABI body first (keccak over the pointer header would be wrong bytes -
+      // the indexed-topic / event-data MISCOMPILE the redesign introduced). Every other memory source
+      // (value arrays/structs, a flattened-inline static-agg field) keeps its already-flat aggToMemPtr image.
+      if (this.isPointerHeadedStaticAggArg(arg)) {
+        return { mp: this.flattenPointerHeadedStaticAgg(arg, ctx, out), size: String(abiHeadWords(arg.type) * 32) };
+      }
       // a constructed / memory / mapping-value / struct-array-element source: aggToMemPtr builds the
       // ABI-unpacked image (one word per leaf), so keccak256(mp, abiHeadWords*32) == keccak256(abi.encode(v)).
       return { mp: this.aggToMemPtr(arg, ctx, out), size: String(abiHeadWords(arg.type) * 32) };
