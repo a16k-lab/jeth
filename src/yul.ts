@@ -4827,10 +4827,13 @@ ${indent(runtime, 6)}
       const arg = args[i]!;
       if (f.type.kind === 'struct' && arg.kind === 'structNew') {
         this.writeStruct(arg.fields, arg.args, slotAt(f.slot), ctx, out);
-      } else if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
-        // a DYNAMIC value-element array field (u256[], address[], ...): deep-copy the array value
-        // (memory / calldata / array-literal / storage source) into the field's storage dynamic
-        // array (length at slotAt(f.slot), data at keccak(slot)), overwrite-clearing the old data.
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // a DYNAMIC-array field: a value-element array (u256[], address[], ...) OR a nested-dynamic-leaf
+        // array (bytes[]/string[]/T[][], isDynStructLeafArrayField). Both deep-copy the array VALUE (the
+        // analyzer guarantees a true dynamic-array source, not a literal) into the field's storage
+        // dynamic array (length at slotAt(f.slot), data at keccak(slot)), overwrite-clearing the old
+        // data. copyArrayValueIntoStorage dispatches the value-element vs pointer-headed (B4) image
+        // deep-copy by element kind; byte-identical to solc (the same path as `this.field = arr`).
         this.copyArrayValueIntoStorage(f.type.element, arg, slotAt(f.slot), ctx, out);
       } else if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
         // a fixed-array field constructed from a (possibly nested) literal.
@@ -5243,17 +5246,15 @@ ${indent(runtime, 6)}
         out.push(`mstore(${at}, ${dst})`);
         hw += 1;
       } else if (f.type.kind === 'array' && f.type.length === undefined) {
-        // Cat C: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]) from a STORAGE struct would
-        // need a storage -> B4 pointer-headed transcode that is not implemented. This source is gated by
-        // the analyzer (checkLocalDecl storage-source guard / the return/encode-of-storage-struct gates),
-        // so reaching here is a bug; fail loud rather than emit a wrong image (no silent miscompile).
-        // NOTE (#5 deferred): even the EXISTING direct storage encoder for this shape (return this.vals,
-        // D = {id; tags: bytes[]}) is NOT byte-identical to solc, so lifting the mem-copy here cannot be
-        // made provably byte-identical without first fixing that deeper storage transcode. Kept a clean
-        // reject per the zero-miscompile bar.
-        throw new UnsupportedError(
-          `copying a storage dynamic-field struct with a nested-dynamic-leaf array field is not supported yet`,
-        );
+        // a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]): build its pointer-headed B4 image
+        // directly from storage (the [len] + per-element absolute-pointer table abiDecFromStorageToImage
+        // produces for a dynamic-element array), then store that absolute pointer in the head word - the
+        // same image shape a dynamic value-array field stores. The dyn-struct ABI encoders read it back
+        // as a pointer-headed leaf-array field; byte-identical to solc (verified on the harness).
+        const dst = this.fresh();
+        out.push(`let ${dst} := ${this.abiDecFromStorageToImage(f.type, slotAt(f.slot), ctx, out)}`);
+        out.push(`mstore(${at}, ${dst})`);
+        hw += 1;
       } else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
         // a nested STATIC aggregate field (struct / fixed-array): flatten ALL its leaves into the head
         // (one ABI head word per leaf) directly from storage, via the same storage->ABI transcoder the
@@ -5721,12 +5722,16 @@ ${indent(runtime, 6)}
         const w = this.fresh();
         out.push(`let ${w} := mload(${at})`);
         for (const l of this.storeState(f.type, fslotAt(f.slot), f.offset, w)) out.push(l);
-      } else if (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) {
-        // a dynamic value-element array field: the head word is a memory [len][elems] pointer;
-        // deep-copy it into the field's storage dynamic array (length at fslot, data at keccak(fslot)).
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // a dynamic-array field: the head word is the memory image pointer. A value-element array
+        // ([len][elems]) deep-copies via copyMemArrayIntoStorage; a nested-dynamic-leaf array
+        // (bytes[]/string[]/T[][], a pointer-headed B4 image) deep-copies via copyMemAggArrayIntoStorage.
+        // Both target the field's storage dynamic array (length at fslot, data at keccak(fslot)),
+        // byte-identical to solc (the same helpers `this.field = arr` uses).
         const p = this.fresh();
         out.push(`let ${p} := mload(${at})`);
-        this.copyMemArrayIntoStorage(f.type.element, p, fslotAt(f.slot), out);
+        if (isStaticValueType(f.type.element)) this.copyMemArrayIntoStorage(f.type.element, p, fslotAt(f.slot), out);
+        else this.copyMemAggArrayIntoStorage(f.type.element, p, fslotAt(f.slot), out);
       } else {
         throw new UnsupportedError(
           `storing a struct with a '${f.type.kind}' field from a memory/calldata source is not supported yet`,
@@ -6176,6 +6181,22 @@ ${indent(runtime, 6)}
       if (ref.src !== 'calldata')
         throw new UnsupportedError('returning a nested dynamic array is only supported from a calldata source');
       return this.encodeNestedArrayReturn(ref.offset, ref.length, ref.elem.element, ctx, out);
+    }
+    // a STORAGE D[] whose element struct D is itself DYNAMIC (a bytes/string/dynamic-array/nested-
+    // dynamic-leaf field): the element is NOT byte-invariant, so the static-inline transcode below
+    // (a fixed abiHeadWords(elem)*32 stride) emits garbage. Encode head/tail (a per-element offset
+    // table + per-element dynamic encoding) via the recursive storage->ABI encoder - the SAME path
+    // `return this.s` uses for a single dynamic struct, proven byte-identical to solc. Wrap with the
+    // sole-return [0x20] offset.
+    if (ref.src === 'storage' && ref.elem.kind === 'struct' && isDynamicType(ref.elem)) {
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      out.push(`mstore(${ptr}, 0x20)`);
+      const arrType: JethType = { kind: 'array', element: ref.elem, length: undefined };
+      const size = this.fresh();
+      out.push(`let ${size} := ${this.abiEncFromStorage(arrType, ref.lenSlot, 0, `add(${ptr}, 0x20)`, out)}`);
+      out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
+      return { ptr, size: `add(0x20, ${size})` };
     }
     const len = this.fresh();
     out.push(`let ${len} := ${ref.src === 'storage' ? `sload(${ref.lenSlot})` : ref.length}`);
