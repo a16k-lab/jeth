@@ -4030,6 +4030,21 @@ export class Analyzer {
       if (internalOnly && p.type.kind === 'array' && p.type.length === undefined && isStaticValueType(p.type.element)) {
         this.memArrayLocals.add(p.name);
       }
+      // C(1): an AGGREGATE-element dynamic array param (P[] static struct, D[] dyn-struct, bytes[]/string[],
+      // u256[][]/bytes[][]/P[][]) of an @internal/@private function is also a MEMORY pointer ([len][...]);
+      // register it as a memArray so the body's p[i] / p.length / abi.encode(p) / return p resolve. The
+      // caller passes the pointer (aggArgToMemPtr) and the callee binds it to a plain Yul arg, both
+      // representation-agnostic. A FIXED-sub-array element (Arr<P,N>[]) is excluded (Batch A codec).
+      if (
+        internalOnly &&
+        p.type.kind === 'array' &&
+        p.type.length === undefined &&
+        (p.type.element.kind === 'struct' ||
+          isBytesLike(p.type.element) ||
+          (p.type.element.kind === 'array' && p.type.element.length === undefined))
+      ) {
+        this.memArrayLocals.add(p.name);
+      }
       // a STATIC fixed-array param (Arr<T,N>) is a MEMORY pointer too, so `p[i]` resolves to a
       // memory element (memElem) and `return p` to the image, like a struct param.
       if (internalOnly && p.type.kind === 'array' && p.type.length !== undefined && isStaticType(p.type)) {
@@ -7876,15 +7891,18 @@ export class Analyzer {
       // a literal/storage/calldata source is copied to a fresh image.
       (t.kind === 'array' && t.length === undefined && t.element.kind === 'struct' && isStaticType(t.element)) ||
       isBytesLike(t);
-    // A static-struct dynamic array P[] passes by-reference as a RETURN (supported), but passing one
-    // as an internal-call PARAMETER is not wired in codegen yet (the same broad gap that keeps a
-    // dynamic-field struct array D[] / bytes[] internal param rejected) - so keep P[] params a clean
-    // JETH242 reject rather than reaching a codegen crash.
-    const isStaticStructDynArray = (t: JethType): boolean =>
-      t.kind === 'array' && t.length === undefined && t.element.kind === 'struct' && isStaticType(t.element);
+    // C(1): an aggregate-element DYNAMIC array (P[]/D[]/bytes[]/string[]/u256[][]/bytes[][]/P[][]) passes
+    // BY MEMORY REFERENCE on an @internal/@private call - the caller materializes the pointer (aggArgToMemPtr)
+    // and the callee binds it as a memArray (the checkFunction C(1) registration). A FIXED-sub-array element
+    // (Arr<P,N>[]) stays gated (Batch A codec). This set matches the checkFunction registration exactly.
+    const aggArrayByRef = (t: JethType): boolean =>
+      t.kind === 'array' &&
+      t.length === undefined &&
+      (t.element.kind === 'struct' ||
+        isBytesLike(t.element) ||
+        (t.element.kind === 'array' && t.element.length === undefined));
     const paramSupported = (t: JethType): boolean =>
-      isStaticValueType(t) ||
-      (aggOK && ((isMemByRef(t) && !isStaticStructDynArray(t)) || this.isSupportedDynStructLocal(t)));
+      isStaticValueType(t) || (aggOK && (isMemByRef(t) || aggArrayByRef(t) || this.isSupportedDynStructLocal(t)));
     for (const p of callee.params) {
       if (paramSupported(p.type)) continue;
       const hint =

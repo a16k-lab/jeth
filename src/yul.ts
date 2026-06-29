@@ -3523,6 +3523,22 @@ ${indent(runtime, 6)}
   private tupleSrc(value: Expr, ctx: LowerCtx, out: string[]): TupleSrc {
     if (value.kind === 'structNew') return { kind: 'new', fields: value.fields, args: value.args };
     if (value.kind === 'cdDynStructValue') {
+      const cdStruct = value.type as JethType & { kind: 'struct' };
+      // C(2): a calldata dyn-struct with a dynamic VALUE-array field (S{a; tags:u256[]}) has no direct
+      // calldata-source array encoder (arrayFieldRef/encodeDynFieldInto throw on a 'cd' source). Materialize
+      // it into a fresh pointer-headed memory image (the SAME buildDynStructFromCalldata the local-binding
+      // path uses), then encode from a 'mem' source - byte-identical, reusing the proven mem-source path.
+      // Only when EVERY array field is a value-array (what buildDynStructFromCalldata supports); a struct
+      // with only value/bytes/string fields keeps the direct calldata fast path below. (A leaf-array field
+      // bytes[]/T[][] from calldata is a deeper case - the calldata leaf-array decode is not wired.)
+      const arrFields = cdStruct.fields.filter((f) => f.type.kind === 'array' && f.type.length === undefined);
+      if (
+        arrFields.length > 0 &&
+        arrFields.every((f) => isStaticValueType((f.type as JethType & { kind: 'array' }).element))
+      ) {
+        const headPtr = this.buildDynStructFromCalldata(cdStruct, value, ctx, out);
+        return { kind: 'mem', headPtr };
+      }
       const bound = ctx.cdDynStructs.get(value.param);
       if (!bound) throw new UnsupportedError(`dynamic struct param '${value.param}' is not bound`);
       return { kind: 'cd', base: bound.tupleStart };
@@ -5047,13 +5063,21 @@ ${indent(runtime, 6)}
     ctx: LowerCtx,
     out: string[],
   ): string {
-    // A whole calldata struct PARAM resolves its tuple-start via tupleSrc (the bound param
-    // offset); a calldata struct-array ELEMENT (let d: D = ds[i]) computes the element's
-    // (offset-located) calldata base via cdArrayElemBase. Both yield { kind: 'cd', base }.
-    const src: TupleSrc =
-      init.kind === 'cdStructArrayElem'
-        ? { kind: 'cd', base: this.cdArrayElemBase(init.arr, init.index, init.type, ctx, out) }
-        : this.tupleSrc(init, ctx, out); // { kind: 'cd', base }
+    // Resolve the calldata tuple-start DIRECTLY (do NOT route through tupleSrc: tupleSrc now materializes
+    // an array-field calldata struct to memory by calling THIS function, which would recurse). A whole
+    // calldata struct PARAM -> the bound param tuple offset; a struct-array ELEMENT (let d: D = ds[i]) ->
+    // the offset-located element base via cdArrayElemBase. Both yield { kind: 'cd', base }.
+    let cdBase: string;
+    if (init.kind === 'cdStructArrayElem') {
+      cdBase = this.cdArrayElemBase(init.arr, init.index, init.type, ctx, out);
+    } else if (init.kind === 'cdDynStructValue') {
+      const bound = ctx.cdDynStructs.get(init.param);
+      if (!bound) throw new UnsupportedError(`dynamic struct param '${init.param}' is not bound`);
+      cdBase = bound.tupleStart;
+    } else {
+      throw new UnsupportedError(`buildDynStructFromCalldata: unsupported calldata source '${init.kind}'`);
+    }
+    const src: TupleSrc = { kind: 'cd', base: cdBase };
     const headWords = tupleHeadWords(struct);
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
