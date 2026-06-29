@@ -562,16 +562,21 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
     );
   });
 
-  it('rejects an internal call to a @nonReentrant function', () => {
-    // In the @external-only model @nonReentrant REQUIRES @external (JETH261), so a guarded function
-    // is always an external entry. Calling it by name from inside the contract is therefore rejected
-    // by the general "cannot internally call @external" rule (JETH240), which subsumes the old
-    // reentrancy-specific JETH262: there is no internally-callable guarded function to bypass.
+  it('a BARE-name call to a @nonReentrant function is rejected (JETH240); a this.f() self-call is a valid external call', () => {
+    // @nonReentrant REQUIRES @external (JETH261), so a guarded function is always an external entry. A
+    // BARE-name call f() from inside the contract is rejected by "cannot internally call @external" (JETH240).
+    expect(
+      tryCompile(
+        `@contract class C { @state x: u256; @nonReentrant @external f(): void { this.x = 1n; } @external g(): void { f(); } }`,
+      ),
+    ).toContain('JETH240');
+    // this.f() from a NON-pure @external function is a real external self-call to address(this) that runs
+    // the guard normally - byte-identical to solc (external-self-call.test.ts), so it COMPILES clean.
     expect(
       tryCompile(
         `@contract class C { @state x: u256; @nonReentrant @external f(): void { this.x = 1n; } @external g(): void { this.f(); } }`,
       ),
-    ).toContain('JETH240');
+    ).toEqual([]);
   });
 
   it('the guard does NOT change the ABI/selector/mutability vs the same fn without the decorator', () => {

@@ -66,11 +66,16 @@ describe('internal-call gates (G8)', () => {
       ),
     ).toBeNull();
   });
-  it('internal call to an @external function is rejected (JETH240)', () => {
-    const codes = jethCodes(
-      `@contract class C { @external g(n: u256): u256 { return n; } @external f(n: u256): u256 { return this.g(n); } }`,
-    );
-    expect(codes).toContain('JETH240');
+  it('a BARE-name call to an @external function is rejected (JETH240); a this.-prefixed self-call is a valid external call', () => {
+    // bare g(n) (no this.) cannot call an @external function by name (solc rejects too) -> JETH240.
+    expect(
+      jethCodes(`@contract class C { @external g(n: u256): u256 { return n; } @external f(n: u256): u256 { return g(n); } }`),
+    ).toContain('JETH240');
+    // this.g(n) from a NON-pure @external caller is a real external self-call to address(this), byte-identical
+    // to solc (covered in external-self-call.test.ts) -> now compiles.
+    expect(
+      jethCodes(`@contract class C { @external g(n: u256): u256 { return n; } @external f(n: u256): u256 { return this.g(n); } }`),
+    ).toBeNull();
   });
   it('struct arg to an internal callee now compiles (G8+G9)', () => {
     expect(
@@ -79,15 +84,20 @@ describe('internal-call gates (G8)', () => {
       ),
     ).toBeNull();
   });
-  it('struct arg to an @external callee called internally is rejected (JETH240, new visibility model)', () => {
-    // New model: an undecorated callee is INTERNAL, so an internal struct call to it now compiles
-    // (covered by the G8+G9 case above). To make the callee an exposed ABI entry it must be
-    // @external, but an @external function is not internally callable: this.h(p) -> JETH240.
+  it('struct arg to an @external callee: BARE-name rejects (JETH240); a this.-prefixed self-call is a valid external call', () => {
+    // bare h(p) to an @external h is not internally callable -> JETH240.
+    expect(
+      jethCodes(
+        `@struct class P { a: u256; b: u256; } @contract class C { @external @pure h(p: P): u256 { return p.a; } @external f(): u256 { let p: P = P(1n, 2n); return h(p); } }`,
+      ),
+    ).toEqual(expect.arrayContaining(['JETH240']));
+    // this.h(p) from a NON-pure @external caller is a real external self-call (staticcall, h is @pure),
+    // byte-identical to solc (covered in external-self-call.test.ts) -> now compiles.
     expect(
       jethCodes(
         `@struct class P { a: u256; b: u256; } @contract class C { @external @pure h(p: P): u256 { return p.a; } @external f(): u256 { let p: P = P(1n, 2n); return this.h(p); } }`,
       ),
-    ).toEqual(expect.arrayContaining(['JETH240']));
+    ).toBeNull();
   });
   it('multi-value return through an internal call is gated (JETH241)', () => {
     expect(

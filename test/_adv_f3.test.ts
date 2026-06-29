@@ -443,14 +443,18 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
     expect(dup.every((c) => !c.startsWith('CRASH'))).toBe(true);
   });
 
-  it('JETH240: a named call to an @external function is rejected', () => {
+  it('JETH164: a @pure function cannot make a this.f() external self-call (matches solc pure restriction)', () => {
+    // this.f(...) to an @external f is now a real external message-call to address(this) (lifted from the
+    // old blanket JETH240). A @pure function may NOT make it - it reads address(this) / the environment -
+    // so solc rejects it too; JETH rejects with the purity code JETH164. Still a rejection probe (never a
+    // silent accept). A NON-pure caller doing this.f(...) compiles byte-identically (external-self-call.test.ts).
     expect(
       jethCodes(
         base(
           `@external @pure f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, b: 2n }); }`,
         ),
       ),
-    ).toContain('JETH240');
+    ).toContain('JETH164');
   });
 
   it('mixing positional + named: this.f(1n, {b:2n}) is sound (rejected, never silently mis-binds)', () => {
