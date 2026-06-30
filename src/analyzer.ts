@@ -16233,7 +16233,16 @@ export class Analyzer {
           this.diags.error(node, argClass.code, argClass.msg);
           return undefined;
         }
-        const a = this.asIntLiteral(node.arguments[0]!);
+        // fold a bare int literal, OR a typed-const arg (e.g. address(uint160(x))): solc accepts the
+        // uintN<->address const cast. Without the evalTypedConst fallback the cast over-rejects.
+        let a = this.asIntLiteral(node.arguments[0]!);
+        if (a === undefined && this.containsTypedConstOperand(node.arguments[0]!)) {
+          const tc = this.evalTypedConst(node.arguments[0]!);
+          const addrT: JethType = { kind: 'address', payable: false };
+          if (tc !== undefined && !('err' in tc) && !('revert' in tc) && this.isCastAllowed(tc.type === 'const' ? U256 : tc.type, addrT)) {
+            a = tc.value;
+          }
+        }
         if (a !== undefined) {
           if (a < 0n || a >= 1n << 160n) {
             this.diags.error(node, 'JETH070', `literal ${a} out of range for address`);
@@ -16274,6 +16283,34 @@ export class Analyzer {
         node.expression.text === `bytes${expected.size}` &&
         node.arguments.length === 1
       ) {
+        // bytesN(uintM(x)) / bytesN(bytesM(x)) explicit cast of a CONSTANT. solc: uintM->bytesN requires
+        // M == N*8 (value reinterpret); bytesM->bytesN is allowed for any M (keep the high N bytes:
+        // zero-pad on the right when N>M, truncate when N<M). The runtime checkCast applies these same
+        // rules - the const folder must too, else it over-rejects (the value already folds at runtime).
+        const bnArg = stripParens(node.arguments[0]!);
+        const bnCast =
+          ts.isCallExpression(bnArg) && ts.isIdentifier(bnArg.expression)
+            ? resolvePrimitiveName(bnArg.expression.text)
+            : undefined;
+        if (bnCast && bnCast.kind === 'uint') {
+          if (bnCast.bits !== expected.size * 8) {
+            this.diags.error(
+              node,
+              'JETH170',
+              `explicit conversion not allowed from ${displayName(bnCast)} to bytes${expected.size}`,
+            );
+            return undefined;
+          }
+          const inner = this.foldConstant(bnArg, bnCast);
+          if (typeof inner !== 'bigint') return undefined;
+          return (inner & ((1n << BigInt(expected.size * 8)) - 1n)) << BigInt((32 - expected.size) * 8);
+        }
+        if (bnCast && bnCast.kind === 'bytesN') {
+          const inner = this.foldConstant(bnArg, bnCast); // a left-aligned bytesM value
+          if (typeof inner !== 'bigint') return undefined;
+          const highMaskN = ((1n << BigInt(expected.size * 8)) - 1n) << BigInt((32 - expected.size) * 8);
+          return inner & highMaskN; // keep the high N bytes (truncate / zero-pad on the right)
+        }
         const argClass = this.classifyAddressHexLiteral(node.arguments[0]!);
         if (argClass !== 'plain' && argClass !== 'address') {
           this.diags.error(node, argClass.code, argClass.msg);
@@ -16672,6 +16709,17 @@ export class Analyzer {
     // a cast uN(x)/iN(x)
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const t = resolvePrimitiveName(node.expression.text);
+      // address(x): a typed address const (value in [0, 2^160)). Lets address<->uintN const casts fold
+      // (u160(address(0x..)) and the inner of address(u160(0x..))), matching solc + the runtime path.
+      if (t && t.kind === 'address' && node.arguments.length === 1) {
+        const inner = this.evalTypedConst(node.arguments[0]!);
+        if (inner === undefined || 'err' in inner || 'revert' in inner) return inner;
+        if (inner.type !== 'const' && !this.isCastAllowed(inner.type, t)) {
+          return { err: `explicit conversion not allowed from ${displayName(inner.type)} to address` };
+        }
+        if (inner.value < 0n || inner.value >= 1n << 160n) return { err: `value ${inner.value} out of range for address` };
+        return { value: inner.value, type: t };
+      }
       if (t && isInteger(t) && node.arguments.length === 1) {
         const inner = this.evalTypedConst(node.arguments[0]!);
         if (inner === undefined || 'err' in inner || 'revert' in inner) return inner;
