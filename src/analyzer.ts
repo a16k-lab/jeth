@@ -3266,8 +3266,12 @@ export class Analyzer {
           const nonIdxDynArray = t.kind === 'array' && t.length === undefined;
           const nonIdxStaticAgg =
             isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
+          // a fixed-array-of-dynamic (Arr<string,2>, Arr<bytes,N>, Arr<u256[],N>): whole-thing dynamic,
+          // emitted in the log data as a head offset + its abi.encode tail (the SAME materializeArrayArg
+          // codec a dynamic array param uses). Byte-identical to solc's log data.
+          const nonIdxFixedArrayOfDyn = t.kind === 'array' && t.length !== undefined && isDynamicType(t);
           const nonIdxDynStruct = t.kind === 'struct' && this.isSupportedStructReturn(t);
-          if (!isBytesLike(t) && !nonIdxDynArray && !nonIdxStaticAgg && !nonIdxDynStruct) {
+          if (!isBytesLike(t) && !nonIdxDynArray && !nonIdxStaticAgg && !nonIdxFixedArrayOfDyn && !nonIdxDynStruct) {
             this.diags.error(
               p,
               'JETH142',
