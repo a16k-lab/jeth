@@ -2426,12 +2426,18 @@ ${indent(runtime, 6)}
       case 'errorString':
         return this.lowerErrorString(r.message);
       case 'errorStringDyn': {
-        // Error(string) from a runtime value: build the blob lazily inside the
-        // revert. selector + [0x20][len][padded data]. Verified byte-exact.
+        // Error(string) from a runtime value. solc evaluates the message EXPRESSION eagerly - its
+        // side effects run even when a require condition holds (require(cond, ev()) runs ev() either
+        // way) - so materialize the message into memory NOW (into `out`, before any cond guard),
+        // mirroring the 'custom' path's eager-arg evaluation. Only the Error(string) blob build +
+        // revert are deferred into the returned (guarded) lines. Deferring the eval was a silent
+        // MISCOMPILE: the message's state writes were dropped on the require-passes path.
+        const ref = this.lowerDynamic(r.value, ctx, out);
+        const { mp, len } = this.toMemory(ref, out);
+        const lenTmp = this.fresh();
+        out.push(`let ${lenTmp} := ${len}`);
         const lines: string[] = [];
-        const ref = this.lowerDynamic(r.value, ctx, lines);
-        const { mp, len } = this.toMemory(ref, lines);
-        const padded = `and(add(${len}, 0x1f), not(0x1f))`;
+        const padded = `and(add(${lenTmp}, 0x1f), not(0x1f))`;
         // Build the Error(string) blob at the FREE POINTER (past the materialized source), NOT at the
         // memory-0 scratch: when the source string was freshly allocated (a string literal, a ternary
         // selecting a literal), the scratch blob's data region [0x44, 0x44+padded) overlaps that buffer,
@@ -2440,7 +2446,7 @@ ${indent(runtime, 6)}
         lines.push(`let ${p} := mload(0x40)`);
         lines.push(`mstore(${p}, shl(224, 0x08c379a0))`);
         lines.push(`mstore(add(${p}, 4), 0x20)`);
-        lines.push(`mstore(add(${p}, 0x24), ${len})`);
+        lines.push(`mstore(add(${p}, 0x24), ${lenTmp})`);
         lines.push(`mcopy(add(${p}, 0x44), add(${mp}, 0x20), ${padded})`);
         lines.push(`revert(${p}, add(0x44, ${padded}))`);
         return lines;
@@ -2569,21 +2575,27 @@ ${indent(runtime, 6)}
 
   private lowerEmit(ev: EventIR, args: Expr[], ctx: LowerCtx, out: string[]): string[] {
     // partition into indexed topics (static) and the non-indexed data tuple.
-    const idxVals: string[] = [];
     type Part =
       | { word: string }
       | { mp: string; len: string }
       | { mp: string; size: string }
       | { inline: true; mp: string; words: number };
-    const data: Part[] = [];
-    ev.params.forEach((p, i) => {
+    // solc evaluates an event's INDEXED args FIRST in REVERSE source order, then its NON-INDEXED args
+    // in forward source order (verified vs solc 0.8.35). The OUTPUT layout stays source order (topics[]
+    // and the data tuple both follow source order), so materialize each param into a source-INDEXED
+    // slot while VISITING in solc's eval order. (Visiting strictly source-order was a MISCOMPILE: a
+    // mixed indexed/non-indexed event with side-effecting args produced different topic/data bytes.)
+    const topicSlot: (string | null)[] = ev.params.map(() => null);
+    const dataSlot: (Part | null)[] = ev.params.map(() => null);
+    const materialize = (i: number): void => {
+      const p = ev.params[i]!;
       const arg = args[i]!;
       if (p.indexed && isBytesLike(p.type)) {
         // an indexed bytes/string topic is keccak256 of the CONTENT bytes (G4), not the value.
         const { mp, len } = this.toMemory(this.lowerDynamic(arg, ctx, out), out);
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(add(${mp}, 0x20), ${len})`);
-        idxVals.push(topic);
+        topicSlot[i] = topic;
       } else if (p.indexed && p.type.kind === 'struct' && isDynamicType(p.type)) {
         // an indexed DYNAMIC struct topic is keccak256 over the recursively FLATTENED payload
         // (static leaves inline; bytes/string -> content padded to a word, no length; dyn value-
@@ -2592,7 +2604,7 @@ ${indent(runtime, 6)}
         const { mp, size } = this.encodeTopicBlob(arg, ctx, out);
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(${mp}, ${size})`);
-        idxVals.push(topic);
+        topicSlot[i] = topic;
       } else if (
         p.indexed &&
         isStaticType(p.type) &&
@@ -2603,7 +2615,7 @@ ${indent(runtime, 6)}
         const { mp, size } = this.materializeStaticAggToMem(arg, ctx, out);
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(${mp}, ${size})`);
-        idxVals.push(topic);
+        topicSlot[i] = topic;
       } else if (p.indexed && p.type.kind === 'array' && isDynLeafTopicArray(p.type)) {
         // an indexed DYNAMIC-LEAF array (string[], bytes[], u256[][], string[][], Arr<string,N>,
         // Arr<u256[],N>, ...): topic = keccak256 of the packed-padded preimage - each leaf laid out
@@ -2614,19 +2626,22 @@ ${indent(runtime, 6)}
         const blob = this.encodeArrayTopicBlob(p.type as JethType & { kind: 'array' }, mp, out);
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(${blob.mp}, ${blob.size})`);
-        idxVals.push(topic);
+        topicSlot[i] = topic;
       } else if (p.indexed && p.type.kind === 'array') {
         // an indexed DYNAMIC value-element array topic is keccak256 of the element words (the
         // ABI tail minus its length word), not the value. Verified byte-identical to solc.
         const { mp, size } = this.materializeArrayArg(arg, ctx, out);
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(add(${mp}, 0x20), sub(${size}, 0x20))`);
-        idxVals.push(topic);
+        topicSlot[i] = topic;
       } else if (p.indexed) {
-        idxVals.push(this.lowerExpr(arg, ctx, out)); // a static-value indexed topic
+        // a static-value indexed topic: bind to a temp so the value is captured at eval time.
+        const t = this.fresh();
+        out.push(`let ${t} := ${this.lowerExpr(arg, ctx, out)}`);
+        topicSlot[i] = t;
       } else if (isBytesLike(p.type)) {
         const ref = this.lowerDynamic(arg, ctx, out);
-        data.push(this.toMemory(ref, out)); // materialize before the buffer is allocated
+        dataSlot[i] = this.toMemory(ref, out); // materialize before the buffer is allocated
       } else if (isStaticType(p.type) && (p.type.kind === 'struct' || p.type.kind === 'array')) {
         // a non-indexed STATIC struct / fixed-array: encoded INLINE in the data head (abiHeadWords leaf
         // words, no offset/tail). A POINTER-HEADED memory Arr<P,N> (static-struct fixed array) must first
@@ -2636,15 +2651,30 @@ ${indent(runtime, 6)}
         const mp = this.isPointerHeadedStaticAggArg(arg)
           ? this.flattenPointerHeadedStaticAgg(arg, ctx, out)
           : this.aggToMemPtr(arg, ctx, out);
-        data.push({ inline: true, mp, words: abiHeadWords(p.type) });
+        dataSlot[i] = { inline: true, mp, words: abiHeadWords(p.type) };
       } else if (p.type.kind === 'struct') {
         // a non-indexed DYNAMIC struct: a head offset + its head/tail blob in the tail.
-        data.push(this.encodeDynStructToBlob(arg, ctx, out));
+        dataSlot[i] = this.encodeDynStructToBlob(arg, ctx, out);
       } else if (p.type.kind === 'array') {
-        data.push(this.materializeArrayArg(arg, ctx, out)); // {mp, size}: ABI tail blob (G3)
+        dataSlot[i] = this.materializeArrayArg(arg, ctx, out); // {mp, size}: ABI tail blob (G3)
       } else {
-        data.push({ word: this.lowerExpr(arg, ctx, out) });
+        // a static-value data word: bind to a temp so the value is captured at eval time.
+        const t = this.fresh();
+        out.push(`let ${t} := ${this.lowerExpr(arg, ctx, out)}`);
+        dataSlot[i] = { word: t };
       }
+    };
+    const indexedRev: number[] = [];
+    const plainFwd: number[] = [];
+    ev.params.forEach((p, i) => (p.indexed ? indexedRev.push(i) : plainFwd.push(i)));
+    indexedRev.reverse();
+    for (const i of [...indexedRev, ...plainFwd]) materialize(i);
+    // assemble topics + data in SOURCE order from the per-param slots.
+    const idxVals: string[] = [];
+    const data: Part[] = [];
+    ev.params.forEach((p, i) => {
+      if (p.indexed) idxVals.push(topicSlot[i]!);
+      else data.push(dataSlot[i]!);
     });
     // anonymous events carry NO topic0 (the signature hash); only the indexed params are topics
     // (LOG0 when there are none). Non-anonymous events always lead with topic0.
