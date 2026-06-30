@@ -4189,8 +4189,15 @@ ${indent(runtime, 6)}
       if (arg.kind !== 'structNew') throw new UnsupportedError('nested struct field must be constructed inline');
       return { kind: 'new', fields: arg.fields, args: arg.args };
     }
-    if (src.kind === 'mem')
-      throw new UnsupportedError('nested struct field in a memory dynamic struct is not supported');
+    if (src.kind === 'mem') {
+      // a nested DYNAMIC struct field of a memory dyn-struct image: the head word holds a POINTER to the
+      // nested struct's own pointer-headed image (stored by allocDynStructToMem); follow it. (A nested
+      // STATIC struct is encoded inline via encodeStaticInline and never reaches nestedTupleSrc.)
+      const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
+      const nb = this.fresh();
+      out.push(`let ${nb} := mload(${at})`);
+      return { kind: 'mem', headPtr: nb };
+    }
     // calldata echo. If the nested struct is dynamic, its head slot is an offset
     // word (base resets to base + offset); if static, it is inline at base+head.
     const fieldOff = headWord === 0 ? src.base : `add(${src.base}, ${headWord * 32})`;
@@ -5452,6 +5459,16 @@ ${indent(runtime, 6)}
         // image of the arg (an array literal / new Array<E>(n) / a memory aggregate-array source), store
         // its absolute pointer in the head word - the same image abiEncFromMem/read/decode consume.
         out.push(`mstore(${at}, ${this.nestedMemImagePtr(value.args[i]!, ctx, out)})`);
+        hw += 1;
+      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        // a NESTED DYNAMIC struct field: its head word is a POINTER to the nested struct's own
+        // pointer-headed image (1 head word, matching tupleHeadWords/memDynStructField). Build that image
+        // recursively from the inline constructor arg and store the pointer. The dyn-struct encoders read
+        // it back via nestedTupleSrc (the `mem` branch follows this pointer).
+        const narg = value.args[i]!;
+        if (narg.kind !== 'structNew')
+          throw new UnsupportedError('a nested dynamic struct field must be constructed inline');
+        out.push(`mstore(${at}, ${this.allocDynStructToMem(narg as Expr & { kind: 'structNew' }, ctx, out)})`);
         hw += 1;
       } else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
         // B(1): a NESTED STATIC AGGREGATE field (nested static struct / fixed array Arr<T,N>). Materialize

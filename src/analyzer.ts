@@ -9741,7 +9741,10 @@ export class Analyzer {
         // solc; the static-leaf codec (encodeStaticInline / abiDecFromMem / buildDynStructFromStorage) and
         // memDynStructField's abiHeadWords offset math already handle it.
         (f.type.kind === 'struct' && isStaticType(f.type)) ||
-        (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
+        (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)) ||
+        // a NESTED DYNAMIC STRUCT field (its own head word is a pointer to the nested struct's image),
+        // itself a supported dyn-struct shape: the recursive dyn-struct codec already encodes/decodes it.
+        (f.type.kind === 'struct' && isDynamicType(f.type) && this.isSupportedDynStructLocal(f.type)),
     );
   }
 

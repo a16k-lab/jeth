@@ -63,6 +63,50 @@ describe('audit over-rejections lifted byte-identical', () => {
     );
   });
 
+  it('OR6: a nested-dynamic-struct memory local (construct / return / emit / abi.encode / field)', async () => {
+    const T = '@struct class T { n: u256; s: string; } @struct class S { a: u256; t: T; }';
+    const Ts = 'struct T { uint256 n; string s; } struct S { uint256 a; T t; }';
+    // return v (build + read-back), v.a value-field read, abi.encode(v), deep 3-level, value-nested-value layout
+    await eqValue(
+      `${T} @contract class C { @external @pure f(): S { let v: S = S(1n, T(2n, "deep")); return v; } }`,
+      `contract C { ${Ts} function f() external pure returns(S memory){ S memory v = S(1, T(2, "deep")); return v; } }`,
+      'f()',
+    );
+    await eqValue(
+      `${T} @contract class C { @external @pure f(): bytes { let v: S = S(1n, T(2n, "deep")); return abi.encode(v); } }`,
+      `contract C { ${Ts} function f() external pure returns(bytes memory){ S memory v = S(1, T(2, "deep")); return abi.encode(v); } }`,
+      'f()',
+    );
+    await eqValue(
+      `${T} @contract class C { @external @pure f(): u256 { let v: S = S(5n, T(2n,"x")); v.a = 99n; return v.a; } }`,
+      `contract C { ${Ts} function f() external pure returns(uint256){ S memory v = S(5, T(2,"x")); v.a = 99; return v.a; } }`,
+      'f()',
+    );
+    // 3-level dynamic nesting
+    const D = '@struct class U { m: u256; s: string; } @struct class T2 { n: u256; u: U; } @struct class S2 { a: u256; t: T2; }';
+    const Ds = 'struct U { uint256 m; string s; } struct T2 { uint256 n; U u; } struct S2 { uint256 a; T2 t; }';
+    await eqValue(
+      `${D} @contract class C { @external @pure f(): S2 { let v: S2 = S2(1n, T2(2n, U(3n, "deepest"))); return v; } }`,
+      `contract C { ${Ds} function f() external pure returns(S2 memory){ S2 memory v = S2(1, T2(2, U(3, "deepest"))); return v; } }`,
+      'f()',
+    );
+  });
+
+  it('OR6: a nested-dynamic-struct memory local emits a byte-identical event log', async () => {
+    const T = '@struct class T { n: u256; s: string; } @struct class S { a: u256; t: T; }';
+    const Ts = 'struct T { uint256 n; string s; } struct S { uint256 a; T t; }';
+    const hj = await Harness.create();
+    const hs = await Harness.create();
+    const aj = await hj.deploy(
+      compile(`${T} @contract class C { @event E(v: S); @external f(): void { let v: S = S(1n, T(2n, "deep")); emit(E(v)); } }`, { fileName: 'C.jeth' }).creationBytecode,
+    );
+    const as = await hs.deploy(compileSolidity(SPDX + `contract C { ${Ts} event E(S v); function f() external { S memory v = S(1, T(2, "deep")); emit E(v); } }`, 'C').creation);
+    const rj = await hj.call(aj, sel('f()'));
+    const rs = await hs.call(as, sel('f()'));
+    const logs = (r: { logs?: { topics: string[]; data: string }[] }) => JSON.stringify(r.logs?.map((l) => ({ t: l.topics, d: l.data })) ?? []);
+    expect(logs(rj)).toBe(logs(rs));
+  });
+
   it('still rejects illegal const casts (no over-acceptance regression)', () => {
     const rej = (s: string) => {
       try {
