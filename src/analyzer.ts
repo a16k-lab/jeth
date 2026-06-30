@@ -2016,7 +2016,7 @@ export class Analyzer {
   // version's RawFunction (for arg type-checking when super resolves to it).
   private overrideChains = new Map<
     string,
-    { contract: string; key: string; winnerRef?: RawFunction; rf: RawFunction }[]
+    { contract: string; key: string; winnerRef?: RawFunction; rf: RawFunction; external?: boolean }[]
   >();
 
   /** A signature key for grouping override sets: source name + canonical parameter types (a
@@ -2080,6 +2080,26 @@ export class Analyzer {
       // is still unimplemented -> JETH380 (the check below is skipped with the rest of the loop).
       if (new Set(versions.map((v) => v.definingContract)).size <= 1) {
         const w = versions[0]!;
+        // @override with nothing to override: this signature group has only ONE contract's version, so
+        // no BASE contract declares the same SIGNATURE. If a base contract declares the same NAME with a
+        // DIFFERENT signature, this is a botched override (the user meant to override but got the
+        // parameter types wrong) - solc rejects it ("overrides no base function"), it is NOT a silent
+        // overload. (Scoped to a same-name base CONTRACT function, so a legitimate interface impl that
+        // carries @override - whose only same-name declaration is in an interface, not collected here -
+        // is unaffected.)
+        if (w.isOverride) {
+          const myIdx = linIndex.get(w.definingContract!) ?? 0;
+          const sameNameBase = collected.some(
+            (rf) => rf.name === w.name && (linIndex.get(rf.definingContract!) ?? 0) > myIdx,
+          );
+          if (sameNameBase) {
+            this.diags.error(
+              w.node,
+              'JETH374',
+              `function '${w.name}' in '${w.definingContract}' has @override but overrides no base function (no base declares it with this signature)`,
+            );
+          }
+        }
         if (w.bodyless && !deployedAbstract) {
           this.diags.error(
             w.node,
@@ -2199,7 +2219,8 @@ export class Analyzer {
       // Build the super-resolution chain for this signature: [{contract,key}] most-derived first,
       // skipping bodyless versions (they are not callable super targets). The winner uses its bare
       // key (assigned later by the normal overload-keying); non-winners get a per-contract key now.
-      const chain: { contract: string; key: string; winnerRef?: RawFunction; rf: RawFunction }[] = [];
+      const chain: { contract: string; key: string; winnerRef?: RawFunction; rf: RawFunction; external?: boolean }[] =
+        [];
       for (let i = 0; i < versions.length; i++) {
         const v = versions[i]!;
         if (i === 0) {
@@ -2213,10 +2234,14 @@ export class Analyzer {
           // internal (emitted as userfn_<key>), reachable only via super. A bodyless base version is
           // NOT emitted (no body) but is skipped from the chain so super never targets it.
           if (!v.bodyless) {
+            // Capture the DECLARED visibility before reclassifying: solc forbids super.f() from reaching
+            // an EXTERNAL base function (external functions aren't in the internal super dispatch), even
+            // though overriding external-by-external is itself legal. The flag is checked at the call site.
+            const wasExternal = v.visibility === 'external';
             v.key = `${v.definingContract}__super__${this.sanitizeSig(sk)}`;
             v.visibility = 'internal'; // a super target is an internal call target, never in the ABI
             this.superTargets.push(v);
-            chain.push({ contract: v.definingContract!, key: v.key, rf: v });
+            chain.push({ contract: v.definingContract!, key: v.key, rf: v, external: wasExternal });
           }
         }
       }
@@ -8287,7 +8312,10 @@ export class Analyzer {
     // Among all override chains for source name `name`, pick the one whose params the args fit AND
     // that contains `here`; then take the first entry strictly after `here`. Most signatures have a
     // single chain; an overloaded `f` across the chain disambiguates by arg arity/types.
-    const candidates: { chain: { contract: string; key: string; rf: RawFunction }[]; nextIdx: number }[] = [];
+    const candidates: {
+      chain: { contract: string; key: string; rf: RawFunction; external?: boolean }[];
+      nextIdx: number;
+    }[] = [];
     for (const chain of this.overrideChains.values()) {
       if (chain.length === 0 || chain[0]!.rf.name !== name) continue;
       const pos = chain.findIndex((e) => e.contract === here);
@@ -8318,6 +8346,16 @@ export class Analyzer {
     const chosen = viable.length === 1 ? viable[0]! : candidates.length === 1 ? candidates[0]! : viable[0];
     if (!chosen) {
       this.diags.error(node, 'JETH381', `super.${name}(...) does not match any base implementation's parameters`);
+      return undefined;
+    }
+    if (chosen.chain[chosen.nextIdx]!.external) {
+      // solc: an EXTERNAL base function is not reachable via super (super is internal dispatch); the
+      // base method must be internal/public to be super-called, even when overriding it is legal.
+      this.diags.error(
+        node,
+        'JETH240',
+        `super.${name}(...) targets an @external base function, which is not callable via super (only internal/public/private functions participate in super dispatch)`,
+      );
       return undefined;
     }
     const target = chosen.chain[chosen.nextIdx]!.rf;
@@ -9345,6 +9383,7 @@ export class Analyzer {
     let cur: ts.Expression = node;
     let rootArr: ArrayExpr | undefined;
     let rootIndex: ts.Expression | undefined;
+    let rootArrNode: ts.Expression | undefined;
     for (;;) {
       if (ts.isPropertyAccessExpression(cur)) {
         steps.push({ field: cur.name.text });
@@ -9360,6 +9399,7 @@ export class Analyzer {
         ) {
           rootArr = baseArr;
           rootIndex = cur.argumentExpression;
+          rootArrNode = cur.expression;
           break;
         }
         steps.push({ index: cur.argumentExpression, node: cur });
@@ -9371,7 +9411,24 @@ export class Analyzer {
     if (!rootArr || !rootIndex || steps.length === 0) return undefined; // bare xs[i] is handled elsewhere
     const index = this.checkExpr(rootIndex, U256);
     if (!index) return undefined;
-    const base: Expr = { kind: 'arrayGet', type: rootArr.elem, arr: rootArr, index: this.coerce(index, U256, rootIndex) };
+    const rootIdx = this.coerce(index, U256, rootIndex);
+    // compile-time OOB on the OUTER FIXED array (xs[5].a where xs: Arr<P,2>): solc errors "Out of bounds
+    // array access" at compile time, exactly as for the inner fixed-array steps below and value-element
+    // memory arrays. (A dynamic outer array P[] has an unknown compile-time length, so it is not checked
+    // here - matching solc, which only static-checks fixed-size arrays.)
+    if (rootIdx.kind === 'literalInt' && rootArrNode && ts.isIdentifier(rootArrNode)) {
+      const ot = this.memAggregateLocals.get(rootArrNode.text);
+      if (
+        ot &&
+        ot.kind === 'array' &&
+        ot.length !== undefined &&
+        (rootIdx.value < 0n || rootIdx.value >= BigInt(ot.length))
+      ) {
+        this.diags.error(rootIndex, 'JETH211', `array index ${rootIdx.value} out of bounds for length ${ot.length}`);
+        return undefined;
+      }
+    }
+    const base: Expr = { kind: 'arrayGet', type: rootArr.elem, arr: rootArr, index: rootIdx };
     steps.reverse(); // root -> leaf
     let curType: JethType = rootArr.elem;
     let wordOffset = 0;
@@ -13025,6 +13082,29 @@ export class Analyzer {
     // An integer-literal cast is range-checked at compile time (uint8(300) is an error
     // in solc, not a runtime truncation): retype the literal to the target directly.
     if (inner.kind === 'literalInt' && isInteger(target)) {
+      // If the operand was itself an EXPLICIT integer cast iM(...)/uM(...) that folded to a literal,
+      // the source type's identity is otherwise lost; apply the SAME type-legality rule the runtime
+      // (non-constant) path uses (isCastAllowed), so a cross-signedness+width cast like u8(i16(x)) is
+      // rejected as a CONSTANT exactly as solc rejects it - and exactly as JETH already rejects the
+      // non-constant form. Without this the @constant folder over-accepts an illegal cast.
+      const strippedInt = stripParens(arg);
+      const innerCastT =
+        ts.isCallExpression(strippedInt) && ts.isIdentifier(strippedInt.expression)
+          ? resolvePrimitiveName(strippedInt.expression.text)
+          : undefined;
+      if (
+        innerCastT &&
+        isInteger(innerCastT) &&
+        !typesEqual(innerCastT, target) &&
+        !this.isCastAllowed(innerCastT, target)
+      ) {
+        this.diags.error(
+          node,
+          'JETH170',
+          `explicit conversion not allowed from ${displayName(innerCastT)} to ${displayName(target)}`,
+        );
+        return undefined;
+      }
       // an EXPLICIT cast: an enum-member literal may be cast to an integer here (uint256(Color.Blue)).
       const r = this.retypeLiteral(inner, target, node, /* allowEnumToInt */ true);
       if (r) return r;
@@ -16604,7 +16684,14 @@ export class Analyzer {
             return { err: `explicit conversion of constant ${inner.value} out of range for ${displayName(t)}` };
           return { value: inner.value, type: t };
         }
-        // cast of a TYPED value: truncate into the target width.
+        // cast of a TYPED value: enforce the SAME explicit-conversion legality the runtime path uses
+        // (isCastAllowed), so an illegal cross-signedness+width cast like u8(i16(x)) is rejected as a
+        // CONSTANT exactly as solc rejects it (and as JETH already rejects the non-constant form).
+        // Enums reaching here are enum->uint (the enum->non-uint case is rejected above), which is legal.
+        if (!isEnum(inner.type) && !typesEqual(inner.type, t) && !this.isCastAllowed(inner.type, t)) {
+          return { err: `explicit conversion not allowed from ${displayName(inner.type)} to ${displayName(t)}` };
+        }
+        // then truncate into the target width.
         return { value: this.wrapToType(inner.value, t as { kind: 'uint' | 'int'; bits: number }), type: t };
       }
       return undefined;
