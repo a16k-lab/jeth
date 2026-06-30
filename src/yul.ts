@@ -6878,6 +6878,26 @@ ${indent(runtime, 6)}
     // a DYNAMIC-field struct arg: pointer-headed image (memory source ALIASES; storage/calldata/
     // constructor source is COPIED to fresh memory) - the same builder a dynamic-struct local uses.
     if (a.type.kind === 'struct' && isDynamicType(a.type)) return this.buildDynStructLocal(a.type, a, ctx, out);
+    // a STATIC struct from a STORAGE source (this.st / this.m[k] / this.arr[i] / a nested place)
+    // forwarded as an internal-fn / @library struct arg: solc copies it storage->memory (the param is
+    // `S memory`), so build a fresh flat inline memory image via abiEncFromStorage - the same image a
+    // memory static-struct local holds. Without this the structValue fell through to lowerExpr and threw
+    // (a reference value in a non-reference context). A MEMORY struct arg keeps its alias (lowerExpr).
+    if (
+      a.type.kind === 'struct' &&
+      isStaticType(a.type) &&
+      (a.kind === 'structValue' ||
+        a.kind === 'mapStorageValue' ||
+        a.kind === 'structArrayElem' ||
+        a.kind === 'placeRead')
+    ) {
+      const slot = this.structSrcSlot(a, ctx, out);
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const size = this.abiEncFromStorage(a.type, slot, 0, dst, out);
+      out.push(`mstore(0x40, add(${dst}, ${size}))`);
+      return dst;
+    }
     // a struct value (memAggregate alias / storage) or a call result (already a pointer).
     return this.lowerExpr(a, ctx, out);
   }
