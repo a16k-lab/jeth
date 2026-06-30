@@ -461,14 +461,16 @@ export function isStorageCopyableRef(t: JethType): boolean {
     if (isStaticType(t)) return true; // a static struct copies all leaves inline
     // a dynamic-field struct: gate to the field set buildDynStructFromStorage handles (value / bytes /
     // string / dynamic value-array / nested static aggregate). A nested-dynamic-leaf array field
-    // (bytes[]/string[]/T[][]) is NOT yet wired from storage -> exclude (clean reject upstream). The
-    // deeper storage transcode for this shape is not byte-identical even via the direct return path
-    // (#5 deferred), so lifting the mem-copy would be unsound; keep it a clean JETH200 reject.
+    // (bytes[]/string[]/T[][]) is NOW transcoded from storage too (commit 19aa9a1:
+    // buildDynStructFromStorage builds its pointer-headed B4 image via abiDecFromStorageToImage), so it
+    // is admitted. Any other unhandled field (e.g. a nested DYNAMIC-field sub-struct) still excludes the
+    // shape -> clean JETH200 reject upstream rather than wrong bytes.
     return t.fields.every(
       (f) =>
         isStaticValueType(f.type) ||
         isBytesLike(f.type) ||
         (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
+        isDynStructLeafArrayField(f.type) || // bytes[] / string[] / T[][] (the new lift)
         (f.type.kind === 'struct' && isStaticType(f.type)) ||
         (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
     );

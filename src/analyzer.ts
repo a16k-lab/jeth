@@ -7739,10 +7739,15 @@ export class Analyzer {
       const rhs = this.checkExpr(e.right, target.type);
       if (!rhs) return;
       const value = this.coerce(rhs, target.type, e.right);
-      // Constructing a whole STORAGE struct that has a dynamic-array field of NON-value elements
-      // (T[][], string[], DynStruct[]) is a later step (writeStruct deep-copies only value-element
-      // dynamic arrays); assign those fields individually. A dynamic VALUE-element array field
-      // (u256[], address[], ...) is supported (writeStruct -> copyArrayValueIntoStorage).
+      // Constructing a whole STORAGE struct that has a dynamic-array field whose element is a
+      // STRUCT (DynStruct[]) is a later step (writeStruct/copyArrayValueIntoStorage cannot deep-copy a
+      // struct-element array into storage); assign those fields individually. A dynamic VALUE-element
+      // array (u256[]) AND a NESTED-DYNAMIC-LEAF array (bytes[]/string[]/T[][], isDynStructLeafArrayField)
+      // ARE now supported: writeStruct -> copyArrayValueIntoStorage deep-copies both the value-element
+      // ([len][elems]) and the pointer-headed B4 image (commit 19aa9a1), the EXACT same path
+      // `this.vals.push(D(...))` uses (byte-identical, verified). #4 lifts the whole-element index-assign
+      // this.vals[i] = D(9n, t) onto this path. A calldata leaf-array field arg is independently rejected
+      // by buildStructFieldArg (JETH900), so no codegen crash reaches here.
       if (
         value.kind === 'structNew' &&
         (target.kind === 'state' ||
@@ -7756,13 +7761,17 @@ export class Analyzer {
             target.arr.base.kind !== 'memArrayExpr')) &&
         target.type.kind === 'struct' &&
         target.type.fields.some(
-          (f) => f.type.kind === 'array' && f.type.length === undefined && !isStaticValueType(f.type.element),
+          (f) =>
+            f.type.kind === 'array' &&
+            f.type.length === undefined &&
+            !isStaticValueType(f.type.element) &&
+            !isDynStructLeafArrayField(f.type),
         )
       ) {
         this.diags.error(
           e.right,
           'JETH200',
-          `constructing a storage struct with a dynamic-array field of non-value elements is not supported yet (assign its fields individually: this.s.a = ...; this.s.xs.push(...))`,
+          `constructing a storage struct with a dynamic-array field of struct elements is not supported yet (assign its fields individually: this.s.a = ...; this.s.xs.push(...))`,
         );
         return;
       }
@@ -10849,7 +10858,11 @@ export class Analyzer {
     if (
       ts.isPropertyAccessExpression(node) &&
       ts.isElementAccessExpression(node.expression) &&
-      !this.memArrayDynStructElemAccess(node.expression)
+      !this.memArrayDynStructElemAccess(node.expression) &&
+      // #3 a STORAGE dyn-struct array element field (this.vals[i].tags) is NOT a calldata read: it is
+      // owned by resolveStorageArrayPlace (placeArray) below, which builds the AccessPath to the inner
+      // array's slot. Only a calldata-rooted base (a param / a dyn-struct param field) belongs here.
+      !this.isThisRootedElemBase(node.expression)
     ) {
       const bt = this.baseDynType(node.expression.expression);
       if (bt && bt.kind === 'array' && bt.element.kind === 'struct' && isDynamicType(bt.element)) {
@@ -11329,6 +11342,24 @@ export class Analyzer {
     // picks the value/struct/array branch by the element type.
     const at = this.memAggregateLocals.get(cur.text);
     return at !== undefined && at.kind === 'array' && (isNestedValueArray(at) || isStaticStructFixedLeafArray(at));
+  }
+
+  /** True iff `node` is an element access `<arr>[i]` whose array `<arr>` is ROOTED at `this.`
+   *  (a storage state variable, possibly through field / index / key steps), as opposed to a
+   *  calldata param. Used to keep #3's storage dyn-struct-array element field reads
+   *  (this.vals[i].tags) out of the calldata cdDynArrayField path so resolveStorageArrayPlace
+   *  (placeArray) owns them. */
+  private isThisRootedElemBase(node: ts.ElementAccessExpression): boolean {
+    let cur: ts.Expression = node.expression;
+    for (;;) {
+      cur = stripParens(cur);
+      if (ts.isPropertyAccessExpression(cur)) {
+        if (cur.expression.kind === ts.SyntaxKind.ThisKeyword) return true;
+        cur = cur.expression;
+      } else if (ts.isElementAccessExpression(cur)) {
+        cur = cur.expression;
+      } else return false;
+    }
   }
 
   /** Type of a directly-resolvable index base (`this.s` or a local/param), used to
@@ -13719,6 +13750,20 @@ export class Analyzer {
           return { kind: 'dynPlaceRead', type: acc.result.finalType, path: acc.result.path };
         }
         return { kind: 'placeRead', type: acc.result.finalType, path: acc.result.path };
+      }
+      // #3 a WHOLE inner DYNAMIC-array field of a STORAGE dyn-struct array element
+      // (return this.vals[i].tags / this.vals[i].ns): resolveStorageArrayPlace folds the chain to a
+      // placeArray at the field's length slot (this.vals[i] -> keccak(slot)+i*stride, +f.slot). The
+      // storage-source array encoder reads it on return / abi.encode, exactly like a single struct's
+      // whole-array field (this.s.tags). Resolved BEFORE the calldata dispatch so a this.-rooted base
+      // never mis-routes to resolveCdDynArrayField (JETH217). Only a node that is itself a dynamic
+      // array (placeArray) matches.
+      if (ts.isPropertyAccessExpression(node) && ts.isElementAccessExpression(node.expression)) {
+        const whole = this.resolveArrayExpr(node);
+        if (whole && whole.base.kind === 'placeArray' && whole.elem) {
+          this.currentReadsState = true;
+          return { kind: 'arrayValue', type: { kind: 'array', element: whole.elem }, arr: whole };
+        }
       }
       // dynamic-struct calldata param: d.field (static leaf or bytes/string field)
       const dyn = this.resolveCdDynStruct(node);
