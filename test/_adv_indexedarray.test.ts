@@ -378,15 +378,16 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
 @contract class C { @event E(@indexed d: D2); @external f(): void {} }`;
     expect(() => compile(nested, { fileName: 'C.jeth' })).not.toThrow();
   });
-  it('nested dynamic array (u256[][]) indexed event param is rejected', () => {
+  it('nested dynamic array (u256[][]) indexed event param is now ACCEPTED (packed-padded topic)', () => {
+    // Previously a sound reject; the packed-padded topic codec lifts it byte-identical to solc
+    // (verified on the harness in event-dynamic-aggregate-params.test.ts).
     let threw = false;
     try {
       compile(`@contract class C { @event E(@indexed a: u256[][]); @external f(): void {} }`, { fileName: 'C.jeth' });
     } catch (e: any) {
       threw = true;
     }
-    // either JETH207 (indexed gate) or an earlier type-support gate is acceptable parity.
-    expect(threw, 'nested dynamic array indexed param must be rejected').toBe(true);
+    expect(threw, 'u256[][] indexed param is now accepted').toBe(false);
   });
 
   it('reports total case count', () => {

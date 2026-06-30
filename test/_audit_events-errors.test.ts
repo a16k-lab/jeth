@@ -633,14 +633,16 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
       ),
     ).not.toThrow();
   });
-  it('gate: indexed nested dynamic array (u256[][]) event param rejected', () => {
+  it('indexed nested dynamic array (u256[][]) event param now compiles (packed-padded topic)', () => {
+    // previously over-rejected (JETH207); now lifted byte-identical to solc (the indexed topic is the
+    // keccak of the packed-padded preimage - see event-dynamic-aggregate-params.test.ts).
     let threw = false;
     try {
       compile(`@contract class C { @event E(@indexed a: u256[][]); @external f(): void {} }`, { fileName: 'C.jeth' });
     } catch {
       threw = true;
     }
-    expect(threw).toBe(true);
+    expect(threw).toBe(false);
   });
   it('non-indexed static fixed-array event param now compiles (encoded inline in the data tuple)', () => {
     // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).

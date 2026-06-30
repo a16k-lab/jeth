@@ -30,6 +30,7 @@ import {
   isStaticStructFixedLeafArray,
   isStaticStructAnyLeafArray,
   isDynStructLeafArrayField,
+  isDynLeafTopicArray,
   isImplicitWiden,
   arrayElemPacks,
   abiHeadWords,
@@ -2603,6 +2604,17 @@ ${indent(runtime, 6)}
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(${mp}, ${size})`);
         idxVals.push(topic);
+      } else if (p.indexed && p.type.kind === 'array' && isDynLeafTopicArray(p.type)) {
+        // an indexed DYNAMIC-LEAF array (string[], bytes[], u256[][], string[][], Arr<string,N>,
+        // Arr<u256[],N>, ...): topic = keccak256 of the packed-padded preimage - each leaf laid out
+        // with NO length words and NO offset tables (a value leaf as its word; a bytes/string leaf as
+        // its content padded to a 32-byte boundary; nested arrays concatenated). Built from the
+        // materializeArrayArg ABI tail. Verified byte-identical to solc.
+        const { mp } = this.materializeArrayArg(arg, ctx, out);
+        const blob = this.encodeArrayTopicBlob(p.type as JethType & { kind: 'array' }, mp, out);
+        const topic = this.fresh();
+        out.push(`let ${topic} := keccak256(${blob.mp}, ${blob.size})`);
+        idxVals.push(topic);
       } else if (p.indexed && p.type.kind === 'array') {
         // an indexed DYNAMIC value-element array topic is keccak256 of the element words (the
         // ABI tail minus its length word), not the value. Verified byte-identical to solc.
@@ -3748,6 +3760,76 @@ ${indent(runtime, 6)}
       return this.topicEncodeStruct(f.type, nestedSrc, cursor, ctx, out, nextRef);
     }
     throw new UnsupportedError(`unsupported dynamic struct field kind '${f.type.kind}'`);
+  }
+
+  /** Build solc's indexed-event TOPIC payload for a value/bytes/string-leaf array (string[], bytes[],
+   *  u256[][], string[][], Arr<string,N>, Arr<u256[],N>, ...). The preimage is the recursively
+   *  FLATTENED "packed-padded" form, with NO length words and NO offset tables: a value leaf is its
+   *  32-byte word, a bytes/string leaf is its content right-padded to a 32-byte boundary, nested
+   *  arrays are concatenated in order. keccak256 of this blob is the topic (verified byte-identical to
+   *  solc across string[], bytes[], u256[][], Arr<string,2>, Arr<u256,3>, multi-word elements).
+   *  `tail` is the ABI tail blob from materializeArrayArg: a dynamic outer starts at its [len] header,
+   *  a fixed outer at its offset table / element words. The packed blob is built ABOVE the source tail
+   *  (materializeArrayArg already advanced the free pointer past it), so reads and writes never alias. */
+  private encodeArrayTopicBlob(
+    t: JethType & { kind: 'array' },
+    tail: string,
+    out: string[],
+  ): { mp: string; size: string } {
+    const mp = this.fresh();
+    out.push(`let ${mp} := mload(0x40)`);
+    const cursor = this.fresh();
+    out.push(`let ${cursor} := ${mp}`);
+    const count = t.length === undefined ? `mload(${tail})` : String(t.length);
+    const base = t.length === undefined ? `add(${tail}, 0x20)` : tail;
+    this.packTopicArray(t, base, count, cursor, out);
+    out.push(`mstore(0x40, ${cursor})`);
+    return { mp, size: `sub(${cursor}, ${mp})` };
+  }
+
+  /** Append array `t`'s packed-padded topic payload (its `count` elements laid out at `base`, with
+   *  dynamic-element offsets relative to `base`) to `cursor` (a Yul var mutated in place). Recurses
+   *  for nested arrays. See encodeArrayTopicBlob. */
+  private packTopicArray(
+    t: JethType & { kind: 'array' },
+    base: string,
+    count: string,
+    cursor: string,
+    out: string[],
+  ): void {
+    const elem = t.element;
+    if (isStaticType(elem)) {
+      // STATIC elements (a value type, a static fixed-array like Arr<u256,2>, a static struct) are laid
+      // out INLINE - abiHeadWords each, no offset table, no length. The packed-padded preimage is
+      // exactly those inline words, so copy them verbatim in one shot.
+      const bytes = abiHeadWords(elem) * 32;
+      out.push(`mcopy(${cursor}, ${base}, mul(${count}, ${bytes}))`);
+      out.push(`${cursor} := add(${cursor}, mul(${count}, ${bytes}))`);
+      return;
+    }
+    // dynamic elements: the element area at `base` is an offset table; each offset is relative to base.
+    const k = this.fresh();
+    out.push(`for { let ${k} := 0 } lt(${k}, ${count}) { ${k} := add(${k}, 1) } {`);
+    const et = this.fresh();
+    out.push(`let ${et} := add(${base}, mload(add(${base}, mul(${k}, 0x20))))`);
+    if (isBytesLike(elem)) {
+      const len = this.fresh();
+      out.push(`let ${len} := mload(${et})`);
+      out.push(`mcopy(${cursor}, add(${et}, 0x20), ${len})`);
+      out.push(`if mod(${len}, 0x20) { mstore(add(${cursor}, ${len}), 0) }`); // zero the partial-word tail
+      out.push(`${cursor} := add(${cursor}, and(add(${len}, 0x1f), not(0x1f)))`);
+    } else if (elem.kind === 'array') {
+      if (elem.length === undefined) {
+        const ic = this.fresh();
+        out.push(`let ${ic} := mload(${et})`);
+        this.packTopicArray(elem, `add(${et}, 0x20)`, ic, cursor, out);
+      } else {
+        this.packTopicArray(elem, et, String(elem.length), cursor, out);
+      }
+    } else {
+      throw new UnsupportedError(`indexed-topic array element kind '${elem.kind}' is not supported`);
+    }
+    out.push(`}`);
   }
 
   /** PRE-PASS: walk a tuple in encode order and materialize each bytes/string

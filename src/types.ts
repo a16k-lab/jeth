@@ -310,6 +310,28 @@ export function isBytesLike(t: JethType): boolean {
   return t.kind === 'bytes' || t.kind === 'string';
 }
 
+/** An array whose ELEMENT is dynamic (a bytes/string, or a dynamic nested array) with a value or
+ *  bytes/string leaf: string[], bytes[], u256[][], string[][], Arr<string,N>, Arr<u256[],N>, ... .
+ *  These route to the packed-padded indexed-event topic codec (yul encodeArrayTopicBlob), whose
+ *  preimage walks the element OFFSET TABLE. The element MUST be dynamic for that walk to be correct -
+ *  an array with a STATIC element (uint256[2][], P_static[], Arr<u256,N>[]) is laid out INLINE (no
+ *  offset table) and is handled byte-identically by the value-element / static-element path instead;
+ *  a fully-static aggregate (Arr<u256,N>) by the static-agg path. A STRUCT leaf is excluded (a
+ *  separate, unsupported case). */
+export function isDynLeafTopicArray(t: JethType): boolean {
+  if (t.kind !== 'array') return false;
+  const el = t.element;
+  if (isBytesLike(el)) return true; // string[] / bytes[] / Arr<string,N> / Arr<bytes,N>
+  if (el.kind === 'array' && isDynamicType(el)) {
+    // a dynamic nested-array element (u256[][], string[][], Arr<u256[],N>, ...): leaf must be
+    // value or bytes/string (no struct leaf).
+    let leaf: JethType = el;
+    while (leaf.kind === 'array') leaf = leaf.element;
+    return isStaticValueType(leaf) || isBytesLike(leaf);
+  }
+  return false;
+}
+
 /** A MULTI-DIMENSIONAL memory array whose ultimate leaf elements are all VALUE types
  *  (uint/int/bool/address/bytesN/enum): u256[][], Arr<Arr<u256,2>,2>, Arr<u256[],2>,
  *  u256[][][], ... Every nesting level may be dynamic (T[]) or fixed (Arr<T,N>); the

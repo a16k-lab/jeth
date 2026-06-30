@@ -123,9 +123,14 @@ describe('OR9: indexed static-element dynamic array event topic - byte-identical
     );
     expect(b.jeth).toBe(b.solc);
   });
-  it('indexed dynamic-element arrays (bytes[]/string[]/u256[][]/dyn-field P[]) stay a clean reject (NOT a miscompile)', () => {
-    expect(codes(`@contract class C { @event E(@indexed a: bytes[]); @external f(): void { let a: bytes[]=[bytes("x")]; emit(E(a)); } }`)).toContain('JETH207');
-    expect(codes(`@contract class C { @event E(@indexed a: u256[][]); @external f(): void { let a: u256[][]=[[1n]]; emit(E(a)); } }`)).toContain('JETH207');
+  it('indexed dynamic-element arrays (bytes[]/u256[][]) are now ACCEPTED (lifted, packed-padded topic)', () => {
+    // These were previously sound rejects (JETH207); the packed-padded topic codec lifts them
+    // byte-identical to solc (verified on the harness in event-dynamic-aggregate-params.test.ts).
+    expect(codes(`@contract class C { @event E(@indexed a: bytes[]); @external f(): void { let a: bytes[]=[bytes("x")]; emit(E(a)); } }`)).toEqual([]);
+    expect(codes(`@contract class C { @event E(@indexed a: u256[][]); @external f(): void { let a: u256[][]=[[1n]]; emit(E(a)); } }`)).toEqual([]);
+  });
+  it('an indexed DYNAMIC-STRUCT-element array (dyn-field P[]) stays a clean reject (NOT a miscompile)', () => {
+    // a struct leaf is excluded from the packed-padded topic codec (a separate, unsupported case).
     expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @event E(@indexed ps: P[]); @external f(): void { let ps: P[]=[P(1n,bytes("x"))]; emit(E(ps)); } }`)).toContain('JETH207');
   });
 });

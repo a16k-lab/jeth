@@ -33,6 +33,7 @@ import {
   isStaticStructAnyLeafArray,
   isDynStructLeaf,
   isDynStructLeafArrayField,
+  isDynLeafTopicArray,
   isStorageCopyableRef,
   isValueLeafArray,
   storageByteSize,
@@ -3248,7 +3249,10 @@ export class Analyzer {
           const indexedStaticAgg =
             isStaticType(t) && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined));
           const indexedDynStruct = t.kind === 'struct' && this.isSupportedStructReturn(t);
-          if (!isBytesLike(t) && !indexedArrayOk && !indexedStaticAgg && !indexedDynStruct) {
+          // a dynamic-LEAF array (string[], bytes[], u256[][], string[][], Arr<string,N>, Arr<u256[],N>):
+          // topic = keccak256 of the packed-padded preimage (yul encodeArrayTopicBlob). Verified solc.
+          const indexedDynLeafArray = isDynLeafTopicArray(t);
+          if (!isBytesLike(t) && !indexedArrayOk && !indexedStaticAgg && !indexedDynStruct && !indexedDynLeafArray) {
             this.diags.error(
               p,
               'JETH207',
