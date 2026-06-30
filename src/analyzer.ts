@@ -13375,19 +13375,24 @@ export class Analyzer {
       // such a whole-element value would otherwise slip the first guards.
       if (ts.isElementAccessExpression(node)) {
         const baseArr = this.resolveArrayExpr(node.expression);
-        // LIFT: a whole STRUCT element of a D[] FIELD of a calldata dyn-struct ARRAY element
-        // (`xs[i].items[j]`, items: D[] - a per-element offset table for a dynamic D, a contiguous
-        // run for a static D). The base resolves to a cdDynArrayField with an arrayRoot navigator
-        // and a STRUCT element; route it through the SAME cdStructArrayElem path the bare-param form
-        // `s.items[j]` uses. cdArrayElemBase resolves the element tuple base from that field's table
-        // (dynamic element: tableStart + offset[j]; static element: dataStart + j*stride) with the
-        // unsigned/readability/Panic-0x32 bounds, then abiEncFromCd re-encodes the WHOLE D element.
-        // Both the dynamic-D and static-D shapes are admitted; verified byte-identical to solc 0.8.35
-        // incl honest reads at multiple i,j, OOB i/j (Panic 0x32), truncated/oversized calldata.
+        // LIFT: a whole STRUCT element of a D[] FIELD of a calldata dyn-struct (`items: D[]` - a
+        // per-element offset table for a dynamic D, a contiguous run for a static D). Two base shapes:
+        //   - the ARRAY-element form `xs[i].items[j]` (xs: S[] calldata): a cdDynArrayField WITH an
+        //     arrayRoot navigator that folds `xs[i]` first;
+        //   - the bare-PARAM form `s.items[j]` (s: S calldata): a cdDynArrayField with arrayRoot
+        //     undefined (the field tail decodes directly off the param's tuple start).
+        // BOTH route through the SAME cdStructArrayElem codec: cdArrayElemBase resolves the element
+        // tuple base from the field's table (dynamic element: tableStart + offset[j]; static element:
+        // dataStart + j*stride) with the unsigned/readability/Panic-0x32 bounds, then abiEncFromCd
+        // re-encodes the WHOLE D element. (Previously only the arrayRoot form was lifted; the bare-param
+        // form FELL THROUGH to the cd-deep-reads block below, which silently `return undefined`'d for a
+        // STRUCT element - dropping the return statement and emitting wrong bytes [two zero words] with
+        // no bounds check. Routing it here eliminates that miscompile.) Both dynamic-D and static-D
+        // shapes are admitted; verified byte-identical to solc 0.8.35 incl honest reads at multiple
+        // i,j, OOB i/j (Panic 0x32 on return), truncated/oversized calldata (empty revert / Panic 0x41).
         if (
           baseArr &&
           baseArr.base.kind === 'cdDynArrayField' &&
-          baseArr.base.place.arrayRoot !== undefined &&
           baseArr.elem.kind === 'struct' &&
           node.argumentExpression
         ) {
