@@ -14543,11 +14543,19 @@ export class Analyzer {
           return { kind: 'arrayValue', type: { kind: 'array', element: whole.elem }, arr: whole };
         }
       }
-      // A whole struct element of a mapping-valued struct array (this.md[k][i]): the
-      // base this.md[k] is not a direct this.x so baseDynType is undefined; resolve it
-      // via resolveArrayExpr (mapArray). Direct state/fixed struct arrays are handled in
-      // the baseDynType block below. Bounds-checked at codegen (Panic 0x32).
-      if (node.argumentExpression && ts.isElementAccessExpression(node.expression)) {
+      // A whole struct element of a mapping-valued struct array (this.md[k][i]) OR of a
+      // dyn-struct-array FIELD of an outer storage struct (this.b.items[i], items: D[]):
+      // the base (this.md[k] / this.b.items) is not a direct this.x so baseDynType is
+      // undefined; resolve it via resolveArrayExpr (mapArray for the former, placeArray for
+      // the latter struct-field case). A property-access base (this.b.items) folds to a
+      // placeArray here exactly like an element-access base (this.md[k]); the cdDynArrayField
+      // field reads are claimed earlier, so this only catches the storage struct-array element.
+      // Direct state/fixed struct arrays are handled in the baseDynType block below.
+      // Bounds-checked at codegen (Panic 0x32 / const OOB compile error).
+      if (
+        node.argumentExpression &&
+        (ts.isElementAccessExpression(node.expression) || ts.isPropertyAccessExpression(node.expression))
+      ) {
         const sa = this.resolveArrayExpr(node.expression);
         if (sa && sa.elem.kind === 'struct' && (sa.base.kind === 'mapArray' || sa.base.kind === 'placeArray')) {
           const index = this.checkExpr(node.argumentExpression, U256);

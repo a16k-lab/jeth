@@ -6796,6 +6796,11 @@ ${indent(runtime, 6)}
       if (base.kind === 'stateArray') lenSlot = String(base.slot);
       else if (base.kind === 'mapArray') lenSlot = this.mappingSlot(base.baseSlot, base.keys, ctx, out);
       else if (base.kind === 'placeArray') lenSlot = this.lowerPlace(base.path, ctx, out).slot;
+      // a FIXED-outer storage array whose element is DYNAMIC (Arr<D,N>, D has a dynamic field): the
+      // base slot is element 0 (no length header). abiEncFromStorage's fixed-array-of-dynamic branch
+      // emits the N-word offset table + per-element tails (no length word), the canonical ABI tail of
+      // a fixed dynamic-element array - byte-identical to solc's abi.encode/return of this aggregate.
+      else if (base.kind === 'fixedArray') lenSlot = String(base.baseSlot);
       else
         throw new UnsupportedError(
           `a dynamic-array @error/@event argument from a '${base.kind}' source is not supported yet`,
