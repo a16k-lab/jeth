@@ -13372,15 +13372,36 @@ export class Analyzer {
       // ALSO: an INDEX yielding a WHOLE AGGREGATE element of such a field - `xs[i].items[j]` (items: D[],
       // a STRUCT element) or an array element reached via cdDynFieldNested / cdDynArrayField. resolveArrayExpr
       // (node) above returns undefined for a STRUCT-typed node (it only resolves array-typed expressions), so
-      // the whole-struct-element value would slip the first guard and be SILENTLY mis-encoded (the normal
-      // element resolver produces a cdStructArrayElem from a cdDynArrayField-with-arrayRoot base, which
-      // returnCdArrayElem/cdArrayElemBase mis-routes: wrong bytes AND no OOB bounds check - a MISCOMPILE,
-      // empirically reproduced vs solc 0.8.35). There is no byte-identical whole-aggregate-element re-encode
-      // codec from a struct-array FIELD element, so reject it as a value - the existing reject is SOUND. A
-      // SCALAR-leaf element is NOT caught: `xs[i].items[j].v` reaches checkExpr as a PropertyAccess (not this
-      // ElementAccess), and `xs[i].grid[j][k]` resolves to a VALUE (handled by its leaf reader).
+      // such a whole-element value would otherwise slip the first guards.
       if (ts.isElementAccessExpression(node)) {
         const baseArr = this.resolveArrayExpr(node.expression);
+        // LIFT: a whole STRUCT element of a D[] FIELD of a calldata dyn-struct ARRAY element
+        // (`xs[i].items[j]`, items: D[] - a per-element offset table for a dynamic D, a contiguous
+        // run for a static D). The base resolves to a cdDynArrayField with an arrayRoot navigator
+        // and a STRUCT element; route it through the SAME cdStructArrayElem path the bare-param form
+        // `s.items[j]` uses. cdArrayElemBase resolves the element tuple base from that field's table
+        // (dynamic element: tableStart + offset[j]; static element: dataStart + j*stride) with the
+        // unsigned/readability/Panic-0x32 bounds, then abiEncFromCd re-encodes the WHOLE D element.
+        // Both the dynamic-D and static-D shapes are admitted; verified byte-identical to solc 0.8.35
+        // incl honest reads at multiple i,j, OOB i/j (Panic 0x32), truncated/oversized calldata.
+        if (
+          baseArr &&
+          baseArr.base.kind === 'cdDynArrayField' &&
+          baseArr.base.place.arrayRoot !== undefined &&
+          baseArr.elem.kind === 'struct' &&
+          node.argumentExpression
+        ) {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          return { kind: 'cdStructArrayElem', type: baseArr.elem, arr: baseArr, index: idx };
+        }
+        // Any OTHER whole-aggregate element of such a field - an ARRAY element (a whole inner row,
+        // reached via cdDynFieldNested or a cdDynArrayField whose element is itself an array) - has no
+        // byte-identical whole-element re-encode codec from this position, so it stays a CLEAN reject
+        // (the existing reject is SOUND). A SCALAR-leaf element is NOT caught: `xs[i].items[j].v` reaches
+        // checkExpr as a PropertyAccess (not this ElementAccess), and `xs[i].grid[j][k]` resolves to a
+        // VALUE (handled by its leaf reader).
         if (
           baseArr &&
           (baseArr.base.kind === 'cdDynFieldNested' ||

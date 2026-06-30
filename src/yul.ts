@@ -3729,6 +3729,18 @@ ${indent(runtime, 6)}
       const headPtr = this.buildDynStructFromStorage(struct, this.structSrcSlot(value, ctx, out), ctx, out);
       return { kind: 'mem', headPtr };
     }
+    // abi.encode(xs[i].items[j]) / abi.encode(ds[i]): a whole DYNAMIC struct ELEMENT of a calldata
+    // struct array (a direct D[] param, or a D[] FIELD of a calldata dyn-struct array element). Decode
+    // the element tuple into a fresh pointer-headed memory image (the SAME buildDynStructFromCalldata the
+    // `let d: D = xs[i].items[j]` binding path uses, which resolves the element base via cdArrayElemBase
+    // with the unsigned/readability/Panic-0x32 bounds and EMPTY-reverts a malformed inner length - solc's
+    // abi.encode calldata->memory decode semantics), then encode from a 'mem' source. cdAggArrayElem is
+    // never a dynamic STRUCT (its element is an array), so only cdStructArrayElem reaches here.
+    if (value.kind === 'cdStructArrayElem') {
+      const struct = value.type as JethType & { kind: 'struct' };
+      const headPtr = this.buildDynStructFromCalldata(struct, value, ctx, out);
+      return { kind: 'mem', headPtr };
+    }
     throw new UnsupportedError(`cannot encode dynamic struct from ${value.kind}`);
   }
 
@@ -4289,7 +4301,15 @@ ${indent(runtime, 6)}
       const offPtr = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
       const dataPtr = this.fresh();
       const len = this.fresh();
-      const stride = abiHeadWords(arr.elem) * 32;
+      // stride = the per-element width of the array's HEADER region after [len]: a STATIC element
+      // (a value u256, or a static struct in D[]) is contiguous, abiHeadWords(elem)*32 bytes each;
+      // a DYNAMIC element (a dynamic struct in D[], bytes[]/string[], T[][]) is offset-located, ONE
+      // 0x20 offset word each. calldataArrayAt validates `dataOff + len*stride <= calldatasize()`, so
+      // the stride MUST match the actual header layout (a dynamic struct's offset table is 0x20 per
+      // element, NOT abiHeadWords*32 - which would over-require payload and EMPTY-revert valid input).
+      // `dataPtr` is then the offset-table base for a dynamic element (consumed by cdArrayElemBase's
+      // dynamic branch) or the contiguous element-0 base for a static element.
+      const stride = isDynamicType(arr.elem) ? 32 : abiHeadWords(arr.elem) * 32;
       out.push(`let ${dataPtr}, ${len} := ${this.calldataArrayAt()}(${base}, ${offPtr}, ${stride})`);
       return { src: 'calldata', offset: dataPtr, length: len, elem: arr.elem };
     }
@@ -4911,6 +4931,19 @@ ${indent(runtime, 6)}
       const r = this.fresh();
       out.push(`let ${r} := ${this.aggFieldPtr(e.base, e.wordOffset, e.runSteps, ctx, out)}`);
       return r;
+    }
+    if (e.kind === 'cdStructArrayElem' && isStaticType(e.type)) {
+      // abi.encode(xs[i].items[j]) where D is a STATIC struct: the element is contiguous in calldata
+      // (no offset table) and its calldata layout IS the ABI-unpacked image. Resolve the element base
+      // (Panic 0x32 on OOB i/j, the array payload already validated readable), then decode + VALIDATE it
+      // into a fresh image via abiEncFromCd. cap = empty-revert (abi.encode's calldata->memory decode);
+      // a static struct has no inner length, so the only faults (truncated/OOB) EMPTY-revert regardless.
+      const eb = this.cdArrayElemBase(e.arr, e.index, e.type, ctx, out);
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const size = this.abiEncFromCd(e.type, eb, ptr, true, out, true);
+      out.push(`mstore(0x40, add(${ptr}, ${size}))`);
+      return ptr;
     }
     throw new UnsupportedError(`cannot materialize aggregate ternary branch '${e.kind}'`);
   }

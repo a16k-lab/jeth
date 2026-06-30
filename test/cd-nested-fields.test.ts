@@ -285,24 +285,25 @@ describe('cd-nested-fields: whole-field value forms (lifted; only the struct-ELE
 @struct class S{a:u256;items:D[];}
 @contract class C{@external @pure r(xs:S[],i:u256):D[]{return xs[i].items;}}`)).toBe(false);
   });
-  // SOUNDNESS: a whole struct ELEMENT of a dyn-struct-array field used as a VALUE (xs[i].items[j]) has no
-  // calldata->ABI re-encode codec and silently produced zero words (a MISCOMPILE the adversarial sweep
-  // caught - it slipped the whole-FIELD guard because resolveArrayExpr(node) is undefined for a struct-
-  // typed node). It MUST be a clean reject. The scalar-leaf reads (xs[i].items[j].v/.tag/.length,
-  // xs[i].grid[j][k]) remain byte-identical (covered by the differential cases above).
-  it('xs[i].items[j] whole STRUCT element (dynamic D) used as a value rejected (was a silent miscompile)', () => {
+  // calldata-whole-struct-element LIFT: a whole struct ELEMENT of a dyn-struct-array field used as a VALUE
+  // (xs[i].items[j]) now COMPILES byte-identically to solc (return + abi.encode), for both a dynamic D
+  // {v;tag:string} and a static D {v;w}. The element tuple base is resolved from the items[] field's
+  // header (dynamic element: offset table; static element: contiguous run) and re-encoded by the recursive
+  // calldata codec. The full differential proof (honest reads, OOB i/j -> Panic 0x32, truncated/oversized
+  // calldata, return Panic 0x41 vs abi.encode EMPTY revert) is in calldata-whole-struct-element.test.ts.
+  it('xs[i].items[j] whole STRUCT element (dynamic D) now COMPILES (lifted)', () => {
     expect(rejects(`@struct class D{v:u256;tag:string;}
 @struct class S{a:u256;items:D[];}
-@contract class C{@external @pure r(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`)).toBe(true);
+@contract class C{@external @pure r(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`)).toBe(false);
   });
-  it('xs[i].items[j] whole STRUCT element (static D) used as a value rejected', () => {
+  it('xs[i].items[j] whole STRUCT element (static D) now COMPILES (lifted)', () => {
     expect(rejects(`@struct class D{v:u256;w:u256;}
 @struct class S{a:u256;items:D[];}
-@contract class C{@external @pure r(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`)).toBe(true);
+@contract class C{@external @pure r(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`)).toBe(false);
   });
-  it('abi.encode(xs[i].items[j]) whole struct element rejected', () => {
+  it('abi.encode(xs[i].items[j]) whole struct element now COMPILES (lifted)', () => {
     expect(rejects(`@struct class D{v:u256;tag:string;}
 @struct class S{a:u256;items:D[];}
-@contract class C{@external @pure r(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}}`)).toBe(true);
+@contract class C{@external @pure r(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}}`)).toBe(false);
   });
 });

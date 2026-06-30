@@ -218,12 +218,66 @@ contract C{
   });
 });
 
-describe('still a clean reject (deferred, sound)', () => {
-  it('whole STRUCT element of a struct-array field xs[i].items[j] (mis-routed codec)', () => {
-    expect(
-      rejects(`@struct class D{v:u256;tag:string;}
+describe('whole STRUCT element of a struct-array field xs[i].items[j] (lifted byte-identical)', () => {
+  it('dynamic D: return + abi.encode + OOB + malformed', async () => {
+    const a = await pair(
+      `@struct class D{v:u256;tag:string;}
 @struct class S{a:u256;items:D[];}
-@contract class C{ @external @pure f(xs:S[],i:u256,j:u256):D{return xs[i].items[j];} }`),
-    ).toContain('JETH230');
+@contract class C{
+  @external @pure f(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}
+  @external @pure e(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}
+}`,
+      `struct D{uint256 v;string tag;}
+struct S{uint256 a;D[] items;}
+contract C{
+  function f(S[] calldata xs,uint256 i,uint256 j)external pure returns(D memory){return xs[i].items[j];}
+  function e(S[] calldata xs,uint256 i,uint256 j)external pure returns(bytes memory){return abi.encode(xs[i].items[j]);}
+}`,
+    );
+    const dynD = (v: number, s: string) => W(v) + W(0x40) + blob(s);
+    const SelemItems = (av: number, ds: [number, string][]) => W(av) + W(0x40) + arrTab(ds.map(([v, s]) => dynD(v, s)));
+    const xs = arrTab([SelemItems(1, [[11, 'abc'], [22, 'a-string-larger-than-thirty-two-bytes!!']]), SelemItems(2, [[33, '']])]);
+    const TYD = '(uint256,string)';
+    const sigF = `f((uint256,${TYD}[])[],uint256,uint256)`;
+    const sigE = `e((uint256,${TYD}[])[],uint256,uint256)`;
+    await same(a, sigF, W(0x60) + W(0) + W(0) + xs);
+    await same(a, sigF, W(0x60) + W(0) + W(1) + xs); // multi-word tag
+    await same(a, sigF, W(0x60) + W(1) + W(0) + xs); // empty tag
+    await same(a, sigE, W(0x60) + W(0) + W(1) + xs);
+    await same(a, sigF, W(0x60) + W(2) + W(0) + xs); // OOB i -> Panic 0x32
+    await same(a, sigF, W(0x60) + W(0) + W(9) + xs); // OOB j -> Panic 0x32
+    // oversized inner string len: return Panic 0x41, abi.encode empty revert
+    const dBad = W(7) + W(0x40) + W(1n << 64n);
+    const xsBad = arrTab([W(1) + W(0x40) + (W(1) + W(0x20) + dBad)]);
+    await same(a, sigF, W(0x60) + W(0) + W(0) + xsBad);
+    await same(a, sigE, W(0x60) + W(0) + W(0) + xsBad);
+  });
+
+  it('static D: return + abi.encode + OOB byte-identical', async () => {
+    const a = await pair(
+      `@struct class D{v:u256;w:u256;}
+@struct class S{a:u256;items:D[];}
+@contract class C{
+  @external @pure f(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}
+  @external @pure e(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}
+}`,
+      `struct D{uint256 v;uint256 w;}
+struct S{uint256 a;D[] items;}
+contract C{
+  function f(S[] calldata xs,uint256 i,uint256 j)external pure returns(D memory){return xs[i].items[j];}
+  function e(S[] calldata xs,uint256 i,uint256 j)external pure returns(bytes memory){return abi.encode(xs[i].items[j]);}
+}`,
+    );
+    const itemsStat = (ds: [number, number][]) => W(ds.length) + ds.map(([v, w]) => W(v) + W(w)).join('');
+    const Selem = (av: number, ds: [number, number][]) => W(av) + W(0x40) + itemsStat(ds);
+    const xs = arrTab([Selem(1, [[10, 11], [20, 21]]), Selem(2, [[30, 31]])]);
+    const TYDb = '(uint256,uint256)';
+    const sigF = `f((uint256,${TYDb}[])[],uint256,uint256)`;
+    const sigE = `e((uint256,${TYDb}[])[],uint256,uint256)`;
+    await same(a, sigF, W(0x60) + W(0) + W(0) + xs);
+    await same(a, sigF, W(0x60) + W(0) + W(1) + xs);
+    await same(a, sigE, W(0x60) + W(1) + W(0) + xs);
+    await same(a, sigF, W(0x60) + W(2) + W(0) + xs); // OOB i
+    await same(a, sigF, W(0x60) + W(1) + W(1) + xs); // OOB j (e1 has 1 item)
   });
 });

@@ -209,14 +209,15 @@ describe('cd-deep-reads: deferred sub-cases stay CLEAN rejects (no miscompile)',
 @contract class C{@external @pure rd(xs:S[],i:u256):D[]{return xs[i].items;}}`),
     ).toBe(false);
   });
-  it('(C-deep) whole STRUCT ELEMENT of a struct-array field xs[i].items[j] STAYS a clean reject (deferred; mis-routed codec)', () => {
-    // No byte-identical whole-struct-element re-encode codec from a struct-array FIELD element exists yet:
-    // the cdStructArrayElem path mis-routes a cdDynArrayField-with-arrayRoot base (wrong bytes + no OOB
-    // bounds check). Kept a SOUND clean reject rather than ship a miscompile.
+  it('(C-deep) whole STRUCT ELEMENT of a struct-array field xs[i].items[j] now COMPILES (lifted byte-identical)', () => {
+    // The cdDynArrayField-with-arrayRoot base now resolves the element tuple correctly (dynamic-element
+    // offset table / static-element contiguous run, stride-fixed in lowerArrayRef), and cdArrayElemBase
+    // bounds-checks (Panic 0x32) before the recursive codec re-encodes the whole D. Differential proof in
+    // calldata-whole-struct-element.test.ts.
     expect(
       rejects(`@struct class D{v:u256;s:string;}
 @struct class S{a:u256;items:D[];}
 @contract class C{@external @pure rd(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`),
-    ).toBe(true);
+    ).toBe(false);
   });
 });
