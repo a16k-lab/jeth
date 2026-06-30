@@ -10070,6 +10070,20 @@ export class Analyzer {
         this.diags.error(node, 'JETH066', `assignment to unknown variable '${node.text}'`);
         return undefined;
       }
+      // A whole-value re-point of a bytes/string variable: `d = bytes("x")` / `s = "x"`. A MEMORY
+      // bytes/string local OR an @internal/@private bytes/string param (both in memDynLocals, register
+      // holds a [len][data] pointer) re-points the register at the new value (a reference rebind, exactly
+      // like solc's `bytes memory`); the codegen materializes the RHS and stores its pointer. An @external
+      // bytes/string param is a read-only calldata view (solc's default `bytes calldata`), so its reassign
+      // is a clean reject - not the JETH900 a value-context lowering would throw.
+      if (isBytesLike(t) && !this.memDynLocals.has(node.text)) {
+        this.diags.error(
+          node,
+          'JETH214',
+          'a calldata `bytes`/`string` parameter is read-only (cannot reassign it); copy it into a memory local first',
+        );
+        return undefined;
+      }
       return { kind: 'local', type: t, varName: node.text };
     }
     this.diags.error(node, 'JETH067', 'invalid assignment target');

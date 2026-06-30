@@ -2005,6 +2005,16 @@ ${indent(runtime, 6)}
           out.push(`${reg} := ${ptr}`);
           break;
         }
+        if (s.target.kind === 'local' && isBytesLike(s.target.type)) {
+          // Re-point a bytes/string MEMORY local (or an @internal/@private bytes/string param, both held
+          // as a [len][data] memory pointer): `d = bytes("x")` / `s = "x"`. Materialize the RHS into a
+          // memory blob (toMemory aliases an already-in-memory value, COPIES a calldata/storage source)
+          // and rebind the register at it - Solidity's `bytes memory` reference re-point, byte-identical.
+          // An @external (calldata, read-only) param never reaches here (the analyzer rejects it cleanly).
+          const { mp } = this.toMemory(this.lowerDynamic(s.value, ctx, out), out);
+          out.push(`${this.ctxLookup(ctx, s.target.varName)} := ${mp}`);
+          break;
+        }
         // Bind the RHS before resolving a mapping key (or any keyed/indexed target below) so a
         // side-effecting key (m[inc()] = inc()) does not run before a side-effecting RHS - solc
         // evaluates the RHS first. The optimizer collapses the temp for pure operands (byte-identical).
