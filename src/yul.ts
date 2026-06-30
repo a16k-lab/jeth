@@ -1718,6 +1718,22 @@ ${indent(runtime, 6)}
           out.push(`${this.strByteSet()}(${bslot}, ${i}, ${v})`);
           break;
         }
+        if (s.target.kind === 'memByteIndexStore') {
+          // d[i] = <bytes1> on a MEMORY `bytes` value: bounds-checked in-place mstore8.
+          // solc evaluates the RHS byte value FIRST, then the base location and the index.
+          const v = this.fresh();
+          out.push(`let ${v} := ${this.lowerExpr(s.value, ctx, out)}`);
+          const ref = this.lowerDynamic(s.target.base, ctx, out);
+          if (ref.src !== 'memory') throw new UnsupportedError('memByteIndexStore base must be a memory bytes value');
+          const len = this.fresh();
+          out.push(`let ${len} := mload(${ref.ptr})`);
+          const i = this.fresh();
+          out.push(`let ${i} := ${this.lowerExpr(s.target.index, ctx, out)}`);
+          out.push(`if iszero(lt(${i}, ${len})) { ${this.panic()}(0x32) }`);
+          // the RHS bytes1 is left-aligned; its byte lives at byte index 0 (the MSB).
+          out.push(`mstore8(add(${ref.ptr}, add(0x20, ${i})), byte(0, ${v}))`);
+          break;
+        }
         if (s.target.kind === 'memDynField') {
           // d.s = <bytes/string> OR d.xs = <array> on a dynamic-field struct memory local: materialize the
           // value (a bytes/string [len][data] blob, or a value-array [len][elems] / leaf-array B4 image),

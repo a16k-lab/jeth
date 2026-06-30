@@ -420,6 +420,7 @@ export interface ArrayExpr {
 export type LValue =
   | { kind: 'state'; type: JethType; slot: bigint; offset: number; varName: string }
   | { kind: 'byteIndexStore'; type: JethType; loc: LValue; index: Expr } // this.b[i] = <bytes1> (loc is the storage `bytes`: direct var / struct field / mapping value / array elem): write byte i (RMW, bounds-checked)
+  | { kind: 'memByteIndexStore'; type: JethType; base: Expr; index: Expr } // d[i] = <bytes1> on a MEMORY/param `bytes` value (base is the bytes value): mstore8 byte i (bounds-checked, in place)
   | { kind: 'immutableStaged'; type: JethType; name: string } // Phase 5: this.<imm> = v inside the constructor (writes the staged shadow; baked via setimmutable)
   | { kind: 'local'; type: JethType; varName: string }
   | {

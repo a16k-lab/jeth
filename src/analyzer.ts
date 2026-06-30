@@ -533,6 +533,7 @@ export class Analyzer {
       // matching Solidity). It occupies its own slot (planLayout); inner[k] resolves to
       // keccak(key . (structBase + fieldSlot)).
       if (t.kind === 'mapping') {
+        if (!this.validateMappingKeys(t, member.type ?? member)) continue;
         raw.push({ name: member.name.text, type: t });
         continue;
       }
@@ -734,6 +735,40 @@ export class Analyzer {
     if (t.kind === 'array') return true; // standard abi.encode supports value/dyn arrays + fixed arrays
     if (t.kind === 'struct') return true; // static (inline) or dynamic (offset+tail) struct
     return false;
+  }
+
+  /** A type usable as a mapping KEY: solc allows only "elementary" types - value types
+   *  (uint/int/bool/address/enum, all branded uints in JETH), bytesN, and bytes/string.
+   *  A struct/array/mapping key is rejected by solc. */
+  private isValidMappingKeyType(t: JethType): boolean {
+    return isStaticValueType(t) || isBytesLike(t);
+  }
+
+  /** Walk a state-var / struct-field type and emit a clean diagnostic for any mapping whose
+   *  KEY type is not elementary (solc: "Only elementary types ... are allowed as mapping keys").
+   *  Without this, a struct/array key reaches lowering and leaks an internal JETH900 error.
+   *  Returns true when every mapping key in the type is valid. */
+  private validateMappingKeys(t: JethType, node: ts.Node): boolean {
+    if (t.kind === 'mapping') {
+      let ok = true;
+      if (!this.isValidMappingKeyType(t.key)) {
+        this.diags.error(
+          node,
+          'JETH154',
+          `'${displayName(t.key)}' is not a valid mapping key type (only value types, bytesN, bytes, and string are allowed)`,
+        );
+        ok = false;
+      }
+      // a mapping value may itself contain mappings (mapping<K, mapping<K2, V>>); validate recursively.
+      return this.validateMappingKeys(t.value, node) && ok;
+    }
+    if (t.kind === 'array') return this.validateMappingKeys(t.element, node);
+    if (t.kind === 'struct') {
+      let ok = true;
+      for (const f of t.fields) if (!this.validateMappingKeys(f.type, node)) ok = false;
+      return ok;
+    }
+    return true;
   }
 
   private findContractClasses(): ts.ClassDeclaration[] {
@@ -3270,6 +3305,9 @@ export class Analyzer {
       this.diags.error(member, 'JETH047', 'state variable cannot be void');
       return;
     }
+    // Reject a non-elementary mapping key (struct/array/mapping) cleanly BEFORE lowering, which
+    // would otherwise leak a JETH900 ("reference value used in a non-reference context").
+    if (!this.validateMappingKeys(type, member.type ?? member)) return;
     if (!this.gateArrayType(type, member, true)) return;
     // string[]/bytes[] (array of dynamic elements) in storage: the bare array, or a
     // mapping<K, string[]> value, mirrors solc (length at slot p / keccak(key.base);
@@ -9686,6 +9724,38 @@ export class Analyzer {
         return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
       }
     }
+    // d[i] = <bytes1>: byte assignment into a MEMORY `bytes` value (a memory bytes local, or an
+    // @internal/@private function's bytes param which is materialized into memory). The element is
+    // written in place via mstore8 (bounds-checked), mirroring solc's `bytes memory` element store.
+    // (string is not element-assignable in solc; a calldata bytes value is read-only -> clean reject.)
+    if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression &&
+      ts.isIdentifier(node.expression)
+    ) {
+      const lt = this.lookupLocal(node.expression.text);
+      if (lt && lt.kind === 'bytes') {
+        if (!this.memDynLocals.has(node.expression.text)) {
+          // a calldata bytes param (an @external bytes argument is a read-only calldata view).
+          this.diags.error(
+            node,
+            'JETH214',
+            'a calldata `bytes` value is read-only (cannot assign its elements); copy it into a `bytes` memory local first',
+          );
+          return undefined;
+        }
+        const base = this.checkExpr(node.expression);
+        if (!base) return undefined;
+        const idx = this.checkExpr(node.argumentExpression, U256);
+        if (!idx) return undefined;
+        // an in-place memory element store does NOT touch storage; stays @pure/@view-clean.
+        return { kind: 'memByteIndexStore', type: BYTES1, base, index: this.coerce(idx, U256, node.argumentExpression) };
+      }
+      if (lt && lt.kind === 'string') {
+        this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+        return undefined;
+      }
+    }
     // this.b[i] = <bytes1>: byte assignment into a STORAGE `bytes` (RMW the containing slot/word).
     // The bytes may be a direct state var OR reached through a struct field / mapping value /
     // bytes[] or Arr<bytes,N> element. (string is not element-assignable in solc.) The bytes
@@ -10029,6 +10099,10 @@ export class Analyzer {
       // a storage-bytes byte read (for symmetry; compound-assign/++ on a bytes1 byte is rejected
       // elsewhere - bytesN has no arithmetic). The base is the bytes location read back.
       return { kind: 'byteIndex', type: lv.type, base: this.lvalueAsExpr(lv.loc), index: lv.index };
+    }
+    if (lv.kind === 'memByteIndexStore') {
+      // a memory-bytes byte read (symmetry only; compound-assign/++ on a bytes1 is rejected elsewhere).
+      return { kind: 'byteIndex', type: lv.type, base: lv.base, index: lv.index };
     }
     if (lv.kind === 'aggFieldStore') {
       // xs[i].a += v / xs[i].a++ : read the current value via aggFieldRead (same element base + word
@@ -13209,8 +13283,27 @@ export class Analyzer {
       return { kind: 'literalInt', type, value, hexBytes };
     }
 
-    // numeric literal (no 'n') -> error: must use BigInt
+    // numeric literal (no 'n') -> error: JETH integers are BigInt (need the `n` suffix). EXCEPTION:
+    // a bare HEX literal whose source byte width EXACTLY equals an expected bytesN is a valid bytesN
+    // literal in solc (left-aligned: `bytes4 b = 0x12345678` -> 0x1234567800..00). The decimal value
+    // is in node.text; the original hex spelling (for the byte width) is only in getText().
     if (ts.isNumericLiteral(node)) {
+      const raw = node.getText();
+      const hexMatch = /^0x([0-9a-fA-F]+)$/.exec(raw); // 0X prefix is rejected separately as a parity lint
+      if (hexMatch && expected && expected.kind === 'bytesN') {
+        const hexDigits = hexMatch[1]!.length;
+        if (hexDigits % 2 === 0 && hexDigits / 2 === expected.size) {
+          const value = BigInt(raw);
+          return { kind: 'literalInt', type: expected, value: value << BigInt((32 - expected.size) * 8) };
+        }
+        // a wrong-width hex literal for the expected bytesN: solc also rejects (no implicit resize).
+        this.diags.error(
+          node,
+          'JETH072',
+          `hex literal ${raw} is ${hexDigits % 2 === 0 ? hexDigits / 2 : `${hexDigits}-nibble`} bytes wide; expected exactly ${expected.size} bytes for ${displayName(expected)} (a bytesN hex literal must match the type width)`,
+        );
+        return undefined;
+      }
       this.diags.error(node, 'JETH071', `use a BigInt literal (${node.text}n) - JETH integers are BigInt`);
       return undefined;
     }
@@ -15434,6 +15527,22 @@ export class Analyzer {
           return this.literalFromConst(folded, node, expected);
         }
       }
+      // A bare HEX literal on the RIGHT of a comparison whose LEFT operand is a bytesN value
+      // (msg.sig == 0x12345678, b32 == 0x<64 hex>) is a matching-width bytesN literal in solc. The
+      // literal carries no `n` suffix (a NumericLiteral), so feed the LEFT operand's bytesN type as
+      // `expected` to the literal so it types as that bytesN. solc's implicit conversion is ASYMMETRIC:
+      // it targets the LEFT operand's type, so `0xLIT == bytesN` is rejected (literal stays int_const);
+      // we mirror that by only handling the literal-on-the-RIGHT case (the left-literal form falls
+      // through and is rejected by unify, matching solc).
+      if (this.isComparison(op) && this.bareHexByteWidth(node.right) !== undefined && this.bareHexByteWidth(node.left) === undefined) {
+        const l = this.checkExpr(node.left, undefined);
+        if (!l) return undefined;
+        if (l.type.kind === 'bytesN') {
+          const r = this.checkExpr(node.right, l.type);
+          if (!r) return undefined;
+          return this.buildBinary(op, l, r, node);
+        }
+      }
       const left = this.checkExpr(node.left, expected);
       if (!left) return undefined;
       // the exponent of `**` and the amount of a shift are independent (unsigned) values, not
@@ -16724,6 +16833,18 @@ export class Analyzer {
 
   /** If `node` is an integer literal, optionally wrapped in unary minus and/or
    *  parentheses, return its signed value; otherwise undefined. */
+  /** If `node` is a bare HEX numeric literal (no `n` suffix, e.g. 0x12345678 - which TS parses as a
+   *  NumericLiteral whose .text is decimal), return its even-digit source byte width, else undefined.
+   *  Used to type a hex literal as a matching-width bytesN when compared to a bytesN operand. */
+  private bareHexByteWidth(node: ts.Expression): number | undefined {
+    if (ts.isParenthesizedExpression(node)) return this.bareHexByteWidth(node.expression);
+    if (!ts.isNumericLiteral(node)) return undefined;
+    const m = /^0x([0-9a-fA-F]+)$/.exec(node.getText());
+    if (!m) return undefined;
+    const digits = m[1]!.length;
+    return digits % 2 === 0 ? digits / 2 : undefined;
+  }
+
   private asIntLiteral(node: ts.Expression): bigint | undefined {
     if (ts.isParenthesizedExpression(node)) return this.asIntLiteral(node.expression);
     if (ts.isBigIntLiteral(node)) return BigInt(node.text.replace(/n$/, ''));
