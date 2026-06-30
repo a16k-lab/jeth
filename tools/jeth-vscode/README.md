@@ -31,10 +31,12 @@ To uninstall: remove `~/.vscode/extensions/jeth-syntax-0.2.0` and reload the win
 
 ## The `.jeth` file icon
 
-`icons/jeth-icon-gradient.svg` (the gradient mark from the brand kit) is contributed as the
-language icon (`contributes.languages[].icon`). Being SVG it is resolution-independent, so it
-stays crisp from the 16px Explorer glyph up to any size. The same artwork (the 1024px PNG) is
-the extension's Marketplace icon.
+`icons/jeth-file-icon.svg` (the gradient mark from the brand kit, on a transparent background)
+is contributed as the language icon (`contributes.languages[].icon`). Being SVG it is
+resolution-independent, so it stays crisp from the 16px Explorer glyph up to any size, and the
+transparent background lets it sit naturally on any editor theme (light or dark). The Marketplace
+listing icon (`icons/jeth-icon-gradient-1024.png`) keeps a solid tile, since Marketplace icons
+must be PNG and need a backdrop to read on the listing card; it is never shown in your editor.
 
 The language icon is shown by any file icon theme that defers to language icons - including the
 built-in default, **Seti** (which has no `.jeth` icon of its own, so it uses ours), and

@@ -26,8 +26,8 @@
         ],
         "configuration": "./language-configuration.json",
         "icon": {
-          "light": "./icons/jeth-icon-gradient.svg",
-          "dark": "./icons/jeth-icon-gradient.svg"
+          "light": "./icons/jeth-file-icon.svg",
+          "dark": "./icons/jeth-file-icon.svg"
         }
       }
     ],
