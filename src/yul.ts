@@ -4055,6 +4055,18 @@ ${indent(runtime, 6)}
       const headPtr = this.buildDynStructFromCalldata(struct, value, ctx, out);
       return { kind: 'mem', headPtr };
     }
+    // a whole NESTED DYNAMIC struct FIELD of a dyn-struct memory local (v.t single-level, v.t.u multi-level):
+    // the field's head word holds an absolute pointer to the nested image (the OR6 / Edge-A layout), so
+    // lowerDynamic yields that image pointer - the same pointer-headed mem source the cases above use.
+    if (
+      (value.kind === 'memDynField' || value.kind === 'memDynNestedField') &&
+      value.type.kind === 'struct' &&
+      isDynamicType(value.type)
+    ) {
+      const ref = this.lowerDynamic(value, ctx, out);
+      if (ref.src !== 'memory') throw new UnsupportedError('expected a memory dynamic-struct reference');
+      return { kind: 'mem', headPtr: ref.ptr };
+    }
     throw new UnsupportedError(`cannot encode dynamic struct from ${value.kind}`);
   }
 
@@ -5165,9 +5177,15 @@ ${indent(runtime, 6)}
     out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${ref.lenSlot})`);
     const base = this.fresh();
     out.push(`let ${base} := add(${dataBase}, mul(${len}, ${slots}))`);
-    if (value && value.kind === 'structNew') {
-      this.writeStruct(value.fields, value.args, base, ctx, out);
+    if (value) {
+      // arr.push(v): write the pushed struct VALUE into the freshly-grown element slot. storeStructTo
+      // dispatches every source kind correctly - a constructor (writeStruct), a static struct
+      // local/param (storeStaticAggFromMem), a dynamic-field struct from a memory local / calldata param /
+      // nested-dyn-struct field (writeDynStructFromMem), or a storage struct (copyStruct). (Previously only
+      // a structNew was written and every other source silently stored a zero element - a miscompile.)
+      this.storeStructTo(struct, value, base, ctx, out);
     } else {
+      // arr.push() with no argument: append a default (all-zero) element.
       for (let j = 0; j < slots; j++) out.push(`sstore(${j === 0 ? base : `add(${base}, ${j})`}, 0)`);
     }
   }
@@ -5592,6 +5610,15 @@ ${indent(runtime, 6)}
     // ALIASES the element image (no copy). Mutating d writes through to ds[i]; re-pointing ds[i] = D(...)
     // rewrites the slot pointer and leaves d on the old image, byte-identical to solc memory references.
     if (init.kind === 'arrayGet') return this.aggToMemPtr(init, ctx, out);
+    // a whole NESTED DYNAMIC struct FIELD of a dyn-struct memory local (let t: T = v.t, g(v.t), v.t.u):
+    // the field's head word holds an absolute pointer to the nested image (the OR6 / Edge-A layout), so
+    // lowerDynamic yields that pointer - binding/passing it ALIASES the image (solc memory references),
+    // exactly like the memDynStructValue / arrayGet / call cases above.
+    if (init.kind === 'memDynField' || init.kind === 'memDynNestedField') {
+      const ref = this.lowerDynamic(init, ctx, out);
+      if (ref.src !== 'memory') throw new UnsupportedError('expected a memory dynamic-struct reference');
+      return ref.ptr;
+    }
     // a storage struct source (structValue / mapStorageValue / structArrayElem / placeRead).
     return this.buildDynStructFromStorage(struct, this.structSrcSlot(init, ctx, out), ctx, out);
   }
@@ -6071,10 +6098,16 @@ ${indent(runtime, 6)}
       this.storeStaticAggFromMem(type, this.aggToMemPtr(value, ctx, out), dst, out);
       return;
     }
-    if (value.kind === 'memDynStructValue' || value.kind === 'cdDynStructValue') {
-      // a DYNAMIC-field struct from a memory local or calldata param: materialize the pointer-headed
-      // image (handling the source uniformly), then write value fields packed and bytes/string fields
-      // with overwrite-clear into storage.
+    if (
+      value.kind === 'memDynStructValue' ||
+      value.kind === 'cdDynStructValue' ||
+      value.kind === 'memDynField' ||
+      value.kind === 'memDynNestedField'
+    ) {
+      // a DYNAMIC-field struct from a memory local, calldata param, or a whole nested-dyn-struct field of a
+      // dyn-struct local (this.d = v.t / this.m[k] = v.t): materialize the pointer-headed image (handling
+      // the source uniformly - buildDynStructLocal aliases the field's image pointer), then write value
+      // fields packed and bytes/string fields with overwrite-clear into storage.
       this.writeDynStructFromMem(type, this.buildDynStructLocal(type, value, ctx, out), dst, out);
       return;
     }

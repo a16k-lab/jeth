@@ -153,3 +153,72 @@ describe('Edge A: nested dynamic-struct leaf field read/write - byte-identical t
     ).toContain('JETH210');
   });
 });
+
+// Edge B: consuming a WHOLE nested dynamic-struct field value (v.t single-level, v.t.u multi-level) as an
+// aggregate - return it, abi.encode it, pass it to an internal function, bind it to a local (an ALIAS,
+// solc memory-reference semantics), emit it, write it to a storage struct / mapping value / nested storage
+// field. The field's head word holds an absolute pointer to the nested image; the codecs (tupleSrc /
+// buildDynStructLocal / storeStructTo) take that pointer. Previously JETH900; now byte-identical to solc.
+describe('Edge B: whole nested dyn-struct field as an aggregate value - byte-identical to solc 0.8.35', () => {
+  const D1 = '@struct class T { n: u256; s: string } @struct class S { a: u256; t: T }';
+  const D1s = 'struct T { uint256 n; string s; } struct S { uint256 a; T t; }';
+
+  it('return v.t (single) and v.t.u (multi)', async () => {
+    await eqCalls(
+      `${D1} @contract class C { @external @pure go(): T { let v: S=S(1n,T(7n,"hi")); return v.t; } }`,
+      `${D1s} contract C { function go() external pure returns(T memory){ S memory v=S(1,T(7,"hi")); return v.t; } }`,
+      [['go()', '']],
+    );
+    await eqCalls(
+      '@struct class U { m: u256; s: string } @struct class T { u: U; n: u256 } @struct class S { a: u256; t: T } @contract class C { @external @pure go(): U { let v: S=S(1n,T(U(7n,"hi"),2n)); return v.t.u; } }',
+      'struct U { uint256 m; string s; } struct T { U u; uint256 n; } struct S { uint256 a; T t; } contract C { function go() external pure returns(U memory){ S memory v=S(1,T(U(7,"hi"),2)); return v.t.u; } }',
+      [['go()', '']],
+    );
+  });
+
+  it('abi.encode(v.t), keccak256(abi.encode(v.t)), abi.encode(v.a, v.t)', async () => {
+    await eqCalls(
+      `@struct class T { n: u256; m: u256 } @struct class S { a: u256; t: T } @contract class C { @external @pure enc(): bytes { let v: S=S(1n,T(7n,8n)); return abi.encode(v.t); } @external @pure kk(): bytes32 { let v: S=S(1n,T(7n,8n)); return keccak256(abi.encode(v.t)); } @external @pure mx(): bytes { let v: S=S(3n,T(7n,8n)); return abi.encode(v.a, v.t); } }`,
+      `struct T { uint256 n; uint256 m; } struct S { uint256 a; T t; } contract C { function enc() external pure returns(bytes memory){ S memory v=S(1,T(7,8)); return abi.encode(v.t); } function kk() external pure returns(bytes32){ S memory v=S(1,T(7,8)); return keccak256(abi.encode(v.t)); } function mx() external pure returns(bytes memory){ S memory v=S(3,T(7,8)); return abi.encode(v.a, v.t); } }`,
+      [['enc()', ''], ['kk()', ''], ['mx()', '']],
+    );
+  });
+
+  it('pass v.t to an internal fn; aliasing write-through; 2-hop chain', async () => {
+    await eqCalls(
+      `${D1} @contract class C { g(t: T): u256 { return t.n; } mut(t: T): void { t.n = 99n; } h(t: T): T { t.n = t.n + 1n; return t; } @external @pure callit(): u256 { let v: S=S(1n,T(7n,"hi")); return this.g(v.t); } @external @pure aliasw(): u256 { let v: S=S(1n,T(7n,"hi")); this.mut(v.t); return v.t.n; } @external @pure chain(): u256 { let v: S=S(1n,T(7n,"hi")); return this.g(this.h(v.t)); } }`,
+      `${D1s} contract C { function g(T memory t) internal pure returns(uint256){ return t.n; } function mut(T memory t) internal pure { t.n=99; } function h(T memory t) internal pure returns(T memory){ t.n=t.n+1; return t; } function callit() external pure returns(uint256){ S memory v=S(1,T(7,"hi")); return g(v.t); } function aliasw() external pure returns(uint256){ S memory v=S(1,T(7,"hi")); mut(v.t); return v.t.n; } function chain() external pure returns(uint256){ S memory v=S(1,T(7,"hi")); return g(h(v.t)); } }`,
+      [['callit()', ''], ['aliasw()', ''], ['chain()', '']],
+    );
+  });
+
+  it('bind let t: T = v.t aliases (mutating t writes through to v)', async () => {
+    await eqCalls(
+      `${D1} @contract class C { @external @pure go(): u256 { let v: S=S(1n,T(7n,"hi")); let t: T = v.t; t.n = 9n; return v.t.n; } }`,
+      `${D1s} contract C { function go() external pure returns(uint256){ S memory v=S(1,T(7,"hi")); T memory t=v.t; t.n=9; return v.t.n; } }`,
+      [['go()', '']],
+    );
+  });
+
+  it('emit(E(v.t)) non-indexed log is byte-identical', async () => {
+    const hj = await Harness.create();
+    const hs = await Harness.create();
+    const J = `${D1} @contract class C { @event E(t: T); @external go(): void { let v: S=S(1n,T(42n,"hello")); emit(E(v.t)); } }`;
+    const So = `${D1s} contract C { event E(T t); function go() external { S memory v=S(1,T(42,"hello")); emit E(v.t); } }`;
+    const aj = await hj.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const as = await hs.deploy(compileSolidity(SPDX + So, 'C').creation);
+    const rj = await hj.call(aj, sel('go()'));
+    const rs = await hs.call(as, sel('go()'));
+    const fmt = (r: { logs?: { topics: string[]; data: string }[] }) =>
+      JSON.stringify((r.logs ?? []).map((l) => ({ t: l.topics, d: l.data })));
+    expect(fmt(rj)).toBe(fmt(rs));
+  });
+
+  it('storage struct field / mapping value / nested storage field = v.t round-trips', async () => {
+    await eqCalls(
+      `${D1} @contract class C { @state d: T; @state m: mapping<u256,T>; @external sd(): void { let v: S=S(1n,T(42n,"stored")); this.d = v.t; } @external sm(k: u256): void { let v: S=S(1n,T(5n,"mapval")); this.m[k] = v.t; } @external @view dn(): u256 { return this.d.n; } @external @view ds(): string { return this.d.s; } @external @view mn(k: u256): u256 { return this.m[k].n; } @external @view ms(k: u256): string { return this.m[k].s; } }`,
+      `${D1s} contract C { T d; mapping(uint256=>T) m; function sd() external { S memory v=S(1,T(42,"stored")); d=v.t; } function sm(uint256 k) external { S memory v=S(1,T(5,"mapval")); m[k]=v.t; } function dn() external view returns(uint256){ return d.n; } function ds() external view returns(string memory){ return d.s; } function mn(uint256 k) external view returns(uint256){ return m[k].n; } function ms(uint256 k) external view returns(string memory){ return m[k].s; } }`,
+      [['sd()', ''], ['sm(uint256)', W(3n)], ['dn()', ''], ['ds()', ''], ['mn(uint256)', W(3n)], ['ms(uint256)', W(3n)]],
+    );
+  });
+});

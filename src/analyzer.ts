@@ -7487,7 +7487,12 @@ export class Analyzer {
             e.kind === 'arrayGet' ||
             e.kind === 'ternary' ||
             (e.kind === 'call' && e.type.kind === 'struct') ||
-            (e.kind === 'placeRead' && e.type.kind === 'struct');
+            (e.kind === 'placeRead' && e.type.kind === 'struct') ||
+            // a whole NESTED DYNAMIC struct FIELD of a dyn-struct memory local (let t: T = v.t / v.t.u):
+            // the field head word holds an absolute pointer to the nested image, so binding ALIASES it
+            // (buildDynStructLocal returns lowerDynamic's pointer) - byte-identical to solc memory references.
+            (e.kind === 'memDynField' && e.type.kind === 'struct') ||
+            (e.kind === 'memDynNestedField' && e.type.kind === 'struct');
           if (!okInit) {
             this.diags.error(
               decl.initializer,
