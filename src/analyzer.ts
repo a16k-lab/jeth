@@ -9774,6 +9774,52 @@ export class Analyzer {
     return { local: node.expression.text, headWord, field: st.fields[idx]! };
   }
 
+  // Resolve an expression that denotes a NESTED DYNAMIC struct reference rooted at a dyn-struct memory
+  // local, reached ONLY through nested dynamic-struct fields (each such field's head word is a POINTER to
+  // the nested image, so it is a deref hop). `v` -> {root:v, derefWords:[]}; `v.t` (t a dynamic struct)
+  // -> {root:v, derefWords:[headWordOf(t)]}; `v.t.u` -> append headWordOf(u). Returns undefined for a
+  // non-dynamic-struct hop (a static aggregate field is INLINE, handled by the static-agg chain resolver).
+  private resolveMemDynNestedStructRef(
+    expr: ts.Expression,
+  ): { rootLocal: string; derefWords: number[]; structType: JethType } | undefined {
+    if (ts.isIdentifier(expr)) {
+      const st = this.memDynStructLocals.get(expr.text);
+      if (st && st.kind === 'struct' && isDynamicType(st)) return { rootLocal: expr.text, derefWords: [], structType: st };
+      return undefined;
+    }
+    if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.name)) {
+      const inner = this.resolveMemDynNestedStructRef(expr.expression);
+      if (!inner || inner.structType.kind !== 'struct') return undefined;
+      const st = inner.structType;
+      const idx = st.fields.findIndex((f) => f.name === expr.name.text);
+      if (idx < 0) return undefined;
+      const f = st.fields[idx]!;
+      // only a NESTED DYNAMIC STRUCT field is a derefable hop (head word holds a pointer to the image).
+      if (!(f.type.kind === 'struct' && isDynamicType(f.type))) return undefined;
+      const headWord = st.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+      return { rootLocal: inner.rootLocal, derefWords: [...inner.derefWords, headWord], structType: f.type };
+    }
+    return undefined;
+  }
+
+  // Resolve `base.field` where `base` is a NESTED dynamic-struct reference reached through >=1 deref hop
+  // (v.t.n). The single-level case (a bare-identifier base, v.t) is handled by memDynStructField, so this
+  // requires derefWords.length >= 1. Returns the deref chain + the final field's head word.
+  private memDynNestedField(
+    node: ts.PropertyAccessExpression,
+  ): { rootLocal: string; derefWords: number[]; finalWord: number; field: StructField } | undefined {
+    const ref = this.resolveMemDynNestedStructRef(node.expression);
+    if (!ref || ref.derefWords.length === 0 || ref.structType.kind !== 'struct') return undefined;
+    const st = ref.structType;
+    const idx = st.fields.findIndex((f) => f.name === node.name.text);
+    if (idx < 0) {
+      this.diags.error(node, 'JETH210', `struct '${st.name}' has no field '${node.name.text}'`);
+      return undefined;
+    }
+    const finalWord = st.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+    return { rootLocal: ref.rootLocal, derefWords: ref.derefWords, finalWord, field: st.fields[idx]! };
+  }
+
   // ---- lvalues -------------------------------------------------------------
 
   private checkLValue(node: ts.Expression): LValue | undefined {
@@ -9814,6 +9860,28 @@ export class Analyzer {
         };
       }
       return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+    }
+    // Edge A: a deep WRITE into a leaf field of a NESTED DYNAMIC struct of a dyn-struct memory local
+    // (v.t.n = x, value; v.t.s = <bytes/string> / v.t.arr = <array>, re-point). The base is a nested
+    // dynamic-struct field whose head word is a POINTER to the nested image (>=1 deref). A value leaf -> an
+    // mstore at the deref'd field word; a bytes/string/dyn-array leaf -> re-point the head word at a fresh
+    // blob/array. Must precede the static-aggregate write-chain resolver (that handles INLINE aggregates).
+    if (ts.isPropertyAccessExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const nf = this.memDynNestedField(node);
+      if (nf) {
+        const ft = nf.field.type;
+        if (isStaticValueType(ft) || isBytesLike(ft) || (ft.kind === 'array' && ft.length === undefined)) {
+          return {
+            kind: 'memDynNestedFieldStore',
+            type: ft,
+            local: nf.rootLocal,
+            derefWords: nf.derefWords,
+            finalWord: nf.finalWord,
+            deref: !isStaticValueType(ft),
+          };
+        }
+        // a nested static-aggregate field write / whole nested-dyn-struct re-point is rare; left a clean reject.
+      }
     }
     // E: a deep WRITE chain into a NESTED STATIC AGGREGATE field of a dyn-struct local - p.inner.x = v
     // (value leaf), p.fa[j] = v (fixed-array element). resolveMemDynStructStaticAggChain yields the same
@@ -10335,6 +10403,18 @@ export class Analyzer {
       // deref'd head word (the blob/array pointer). Compound-assign on a reference field is not valid
       // (no arithmetic on bytes/array), so this read only services symmetry helpers, never `+=`.
       return { kind: 'aggFieldRead', type: lv.type, base: lv.base, wordOffset: lv.wordOffset, deref: true };
+    }
+    if (lv.kind === 'memDynNestedFieldStore') {
+      // v.t.n += 1 / v.t.n++ : the read form is the same deref chain (a value leaf). A reference leaf
+      // (deref=true) has no arithmetic compound form, so it only services symmetry helpers, never `+=`.
+      return {
+        kind: 'memDynNestedField',
+        type: lv.type,
+        local: lv.local,
+        derefWords: lv.derefWords,
+        finalWord: lv.finalWord,
+        deref: lv.deref,
+      };
     }
     return { kind: 'localRead', type: lv.type, name: lv.varName };
   }
@@ -13901,6 +13981,27 @@ export class Analyzer {
         };
       }
       return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
+    }
+    // Edge A: a DEEP read into a leaf field of a NESTED DYNAMIC struct of a dyn-struct memory local (v.t.n).
+    // The single-level block above only handles a bare-identifier base; here the base is itself a nested
+    // dynamic-struct field whose head word is a POINTER to the nested image (>=1 deref). A value leaf -> a
+    // value read (memDynNestedField); a dyn value-array leaf -> a memory array view; a bytes/string or
+    // deeper nested-dynamic-struct leaf -> a deref read (consumed via lowerDynamic). Must precede the
+    // static-aggregate chain resolver below (that handles INLINE nested static aggregates).
+    if (ts.isPropertyAccessExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      const nf = this.memDynNestedField(node);
+      if (nf) {
+        const ft = nf.field.type;
+        if (isStaticValueType(ft))
+          return { kind: 'memDynNestedField', type: ft, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord };
+        if (ft.kind === 'array' && ft.length === undefined) {
+          const load: Expr = { kind: 'memDynNestedField', type: U256, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord };
+          return { kind: 'arrayValue', type: ft, arr: { base: { kind: 'memArrayExpr', expr: load }, elem: ft.element } };
+        }
+        if (isBytesLike(ft) || (ft.kind === 'struct' && isDynamicType(ft)))
+          return { kind: 'memDynNestedField', type: ft, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord, deref: true };
+        // a nested STATIC aggregate leaf (inline) is rare under a dynamic-struct deref chain; left a clean reject.
+      }
     }
     // B4: a DEEP chain rooted at a dyn-struct memory local whose FIRST hop is a nested STATIC AGGREGATE
     // field - p.inner.x (a value leaf of a nested static struct), p.fa[j] (a fixed-array element, j a

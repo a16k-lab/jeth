@@ -1783,10 +1783,14 @@ ${indent(runtime, 6)}
           else for (const l of this.storeState(s.target.type, p.slot, p.offset, value)) out.push(l);
           break;
         }
-        if (s.target.kind === 'memField' || s.target.kind === 'memElem') {
-          // p.x = v / a[i] = v on a memory aggregate local: bounds-checked memory store. Bind the RHS
-          // FIRST (solc evaluates it before the LHS index); the optimizer collapses the temp for pure
-          // operands, so the bytecode is unchanged for the common case.
+        if (
+          s.target.kind === 'memField' ||
+          s.target.kind === 'memElem' ||
+          (s.target.kind === 'memDynNestedFieldStore' && !s.target.deref)
+        ) {
+          // p.x = v / a[i] = v / v.t.n = v on a memory aggregate local (value leaf): bounds-checked memory
+          // store. Bind the RHS FIRST (solc evaluates it before the LHS index); the optimizer collapses the
+          // temp for pure operands, so the bytecode is unchanged for the common case.
           const value = this.fresh();
           out.push(`let ${value} := ${this.lowerExpr(s.value, ctx, out)}`);
           this.lowerAssignValue(s.target, value, ctx, out);
@@ -1831,6 +1835,20 @@ ${indent(runtime, 6)}
             : this.aggArgToMemPtr(s.value, ctx, out);
           const head = this.ctxLookup(ctx, s.target.local);
           out.push(`mstore(${s.target.wordOffset === 0 ? head : `add(${head}, ${s.target.wordOffset * 32})`}, ${srcRaw})`);
+          break;
+        }
+        if (s.target.kind === 'memDynNestedFieldStore' && s.target.deref) {
+          // v.t.s = <bytes/string> / v.t.arr = <array> on a NESTED dynamic-struct field: materialize the RHS
+          // blob/array FIRST (solc evaluates the RHS before the LHS location), then deref the chain to the
+          // inner image and re-point the field's head word at it (a reference re-point, like the single-level
+          // memDynField store above).
+          const srcRaw = isBytesLike(s.target.type)
+            ? this.toMemory(this.lowerDynamic(s.value, ctx, out), out).mp
+            : this.aggArgToMemPtr(s.value, ctx, out);
+          const src = this.fresh();
+          out.push(`let ${src} := ${srcRaw}`);
+          const inner = this.nestedInnerPtr(s.target.local, s.target.derefWords, ctx, out);
+          out.push(`mstore(${s.target.finalWord === 0 ? inner : `add(${inner}, ${s.target.finalWord * 32})`}, ${src})`);
           break;
         }
         if (s.target.kind === 'aggDynFieldStore') {
@@ -2041,8 +2059,9 @@ ${indent(runtime, 6)}
         } else if (s.target.kind === 'mapping') {
           const slot = this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out);
           for (const l of this.storeState(s.target.type, slot, 0, value)) out.push(l);
-        } else if (s.target.kind === 'aggFieldStore') {
-          // xs[i].a = v: a VALUE leaf of a memory-array static-struct element (RHS already bound above).
+        } else if (s.target.kind === 'aggFieldStore' || s.target.kind === 'memDynNestedFieldStore') {
+          // xs[i].a = v / v.t.n = v: a VALUE leaf of a memory aggregate (RHS already bound above). (A value
+          // leaf normally breaks in an earlier special-case block; this is the type-safe fall-through.)
           this.lowerAssignValue(s.target, value, ctx, out);
         } else {
           for (const l of this.storeState(s.target.type, String(s.target.slot), s.target.offset, value)) out.push(l);
@@ -2915,6 +2934,14 @@ ${indent(runtime, 6)}
         // read a value field of a memory-aggregate (struct) local: mload at ptr + offset.
         const ptr = this.ctxLookup(ctx, e.local);
         return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
+      }
+      case 'memDynNestedField': {
+        // read a leaf of a nested DYNAMIC struct (v.t.n): deref the chain to the inner image, then read the
+        // final word. A value leaf -> mload IS the value. A deref leaf (bytes/string/dyn-array/dyn-struct)
+        // is a reference value, not a 256-bit word - it is consumed via lowerDynamic, never here.
+        if (e.deref) throw new UnsupportedError(`reference value 'memDynNestedField' used in a non-reference context`);
+        const inner = this.nestedInnerPtr(e.local, e.derefWords, ctx, out);
+        return e.finalWord === 0 ? `mload(${inner})` : `mload(add(${inner}, ${e.finalWord * 32}))`;
       }
       case 'aggFieldRead': {
         // read a field of a struct-valued Expr base (this.mk(a).x, xs[i].pre[j], xs[i].q): the field
@@ -9054,6 +9081,15 @@ ${indent(runtime, 6)}
         out.push(`let ${ptr} := mload(${at})`);
         return { src: 'memory', ptr };
       }
+      case 'memDynNestedField': {
+        // a bytes/string/dyn-array/nested-dyn-struct leaf of a NESTED dynamic struct (v.t.s, v.t.u): deref
+        // the chain to the inner image, then the final head word holds the blob/array/sub-image pointer.
+        const inner = this.nestedInnerPtr(e.local, e.derefWords, ctx, out);
+        const at = e.finalWord === 0 ? inner : `add(${inner}, ${e.finalWord * 32})`;
+        const ptr = this.fresh();
+        out.push(`let ${ptr} := mload(${at})`);
+        return { src: 'memory', ptr };
+      }
       case 'aggFieldRead': {
         // Residual B3: a bytes/string field of a memory-array dyn-struct element (xs[i].s). With deref,
         // aggFieldRead lowers to the head word VALUE = the [len][data] blob's absolute pointer.
@@ -11128,7 +11164,26 @@ ${indent(runtime, 6)}
     return cur;
   }
 
+  // Walk a nested-dynamic-struct deref chain: start at the dyn-struct local's image, then mload each head
+  // word in derefWords (a pointer to the next nested image). Returns the innermost struct's image pointer.
+  private nestedInnerPtr(local: string, derefWords: number[], ctx: LowerCtx, out: string[]): string {
+    let ptr = this.ctxLookup(ctx, local);
+    for (const off of derefWords) {
+      const next = this.fresh();
+      out.push(`let ${next} := mload(${off === 0 ? ptr : `add(${ptr}, ${off * 32})`})`);
+      ptr = next;
+    }
+    return ptr;
+  }
+
   private lowerAssignValue(target: LValue, valueReg: string, ctx: LowerCtx, out: string[]): void {
+    if (target.kind === 'memDynNestedFieldStore') {
+      // v.t.n = x (value leaf of a nested dynamic struct): deref the chain to the inner image, mstore at
+      // the final word. (The deref re-point form is handled in the assignment dispatch, not here.)
+      const inner = this.nestedInnerPtr(target.local, target.derefWords, ctx, out);
+      out.push(`mstore(${target.finalWord === 0 ? inner : `add(${inner}, ${target.finalWord * 32})`}, ${valueReg})`);
+      return;
+    }
     if (target.kind === 'local') {
       out.push(`${this.ctxLookup(ctx, target.varName)} := ${valueReg}`);
       return;

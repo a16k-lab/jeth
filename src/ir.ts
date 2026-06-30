@@ -260,6 +260,10 @@ export type Expr =
   | { kind: 'memAggregate'; type: JethType; local: string; wordOffset?: number } // a whole memory aggregate, or a nested struct field at wordOffset (sub-pointer into the parent image)
   | { kind: 'memDynStructValue'; type: JethType; local: string } // a whole DYNAMIC-field struct memory local (head: value fields inline, bytes/string fields as pointers)
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number } // a bytes/string field of a memory dynamic struct (the head word holds the [len][data] pointer)
+  // a leaf field of a NESTED DYNAMIC struct of a dyn-struct memory local (v.t.n): deref each head word in
+  // derefWords (a pointer to the nested image), then read finalWord. deref=false -> a value leaf (mload IS
+  // the value); deref=true -> a bytes/string/dyn-array/dyn-struct leaf (mload IS the blob/image pointer).
+  | { kind: 'memDynNestedField'; type: JethType; local: string; derefWords: number[]; finalWord: number; deref?: boolean }
   | { kind: 'structArrayElem'; type: JethType; arr: ArrayExpr; index: Expr } // whole storage/fixed/mapping struct element this.recs[i] (for return / copy source)
   | { kind: 'mapStorageValue'; type: JethType; baseSlot: bigint; keys: Expr[]; keyTypes: JethType[] } // return this.m[k] (whole struct/array mapping value)
   | { kind: 'mapDynValue'; type: JethType; baseSlot: bigint; keys: Expr[]; keyTypes: JethType[] } // this.m[k] where the value is bytes/string (dynamic value at the mapping slot)
@@ -440,6 +444,10 @@ export type LValue =
   | { kind: 'memField'; type: JethType; local: string; wordOffset: number } // p.x = v on a memory-aggregate local
   | { kind: 'memElem'; type: JethType; local: string; index: Expr; length: number; wordOffset?: number } // a[i] = v on a fixed-array memory local (wordOffset: a fixed-array field of a memory struct, p.a[i])
   | { kind: 'memDynField'; type: JethType; local: string; wordOffset: number } // d.s = <bytes/string> on a dynamic-field struct memory local (re-point the head word to a fresh blob)
+  // v.t.n = x on a leaf field of a NESTED DYNAMIC struct of a dyn-struct memory local: deref derefWords to
+  // the nested image, then store at finalWord. deref=false -> a value leaf (mstore the value); deref=true ->
+  // re-point the bytes/string/dyn-array head word at a freshly-materialized blob/array (a reference re-point).
+  | { kind: 'memDynNestedFieldStore'; type: JethType; local: string; derefWords: number[]; finalWord: number; deref?: boolean }
   | { kind: 'aggFieldStore'; type: JethType; base: Expr; wordOffset: number; runSteps?: ArrIndexStep[] } // xs[i].a = v / xs[i].pre[j] = v (value leaf) on a memory-array static-struct element: store at base(element image ptr) + wordOffset + runtime index steps (mirror of aggFieldRead)
   | { kind: 'aggDynFieldStore'; type: JethType; base: Expr; wordOffset: number }; // xs[i].s = <bytes/string> / xs[i].arr = <u256[]> on a memory-array DYN-struct element (B3): re-point the dyn-struct image head word at the materialized blob/array pointer (a reference assignment, like solc)
 
