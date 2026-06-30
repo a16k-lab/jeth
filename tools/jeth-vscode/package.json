@@ -1,8 +1,8 @@
 {
   "name": "jeth-syntax",
   "displayName": "JETH Syntax",
-  "description": "Syntax highlighting for JETH (.jeth) - a TypeScript-subset smart-contract language compiling to EVM.",
-  "version": "0.1.0",
+  "description": "Syntax highlighting and the JETH file icon for .jeth files - a TypeScript-subset smart-contract language compiling to EVM.",
+  "version": "0.2.0",
   "publisher": "jeth",
   "private": true,
   "license": "MIT",
@@ -12,6 +12,7 @@
   "categories": [
     "Programming Languages"
   ],
+  "icon": "icons/jeth-icon-gradient-1024.png",
   "contributes": {
     "languages": [
       {
@@ -23,7 +24,11 @@
         "extensions": [
           ".jeth"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/jeth-icon-gradient.svg",
+          "dark": "./icons/jeth-icon-gradient.svg"
+        }
       }
     ],
     "grammars": [
