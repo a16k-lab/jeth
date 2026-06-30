@@ -1163,12 +1163,23 @@ describe('pre-Phase-6 sweep: soundness + over-rejection fixes (byte-identical to
       `@contract class C { @constant A: u16 = 300n; @constant K: u8 = A & 0xFFn; @external @pure f(): u8 { return this.K; } }`, // #4 typed result u16 -> u8
       `@contract class C { @constant K: u16 = type(u8).max * 2n; @external @pure f(): u16 { return this.K; } }`, // #3 typed-overflow constant (safe reject)
       `@contract class C { @external @pure f(): u256 { let a: Arr<u256,3> = [10n,20n,30n]; return a[3n]; } }`, // #15 const-OOB memory fixed-array
-      `@contract class C { @state m: mapping<u256,u256>; @state i: u256; @external go(v: u256): void { this.m[this.i++] += v; } }`, // #16 side-effecting compound key
+      // (#16 side-effecting compound key `m[i++] += v` is no longer a reject: it is now lifted and
+      //  byte-identical to solc - the index is hoisted to a temp evaluated once. See the positive
+      //  check below and test/compound-assign-side-effecting-index.test.ts.)
       `@contract class C { @external @pure f(): u256 { return 0x12__34n; } }`, // #31 bad underscores
       `@contract class C { @external @pure f(): u256 { return 0o17n; } }`, // #32 octal
       `@contract class C { @external @pure f(): u256 { return 0xn; } }`, // #33 empty hex
     ];
     for (const s of rej) expect(jethRejects(s), s).toBe(true);
+  });
+
+  it('#16 side-effecting compound key m[i++] += v is now accepted (was a sound reject)', () => {
+    // Previously rejected (JETH331) to avoid the double-eval miscompile; now the index is hoisted to
+    // a temp evaluated exactly once, so it is accepted and byte-identical to solc (verified on the
+    // EVM harness in test/compound-assign-side-effecting-index.test.ts).
+    expect(
+      jethRejects(`@contract class C { @state m: mapping<u256,u256>; @state i: u256; @external go(v: u256): void { this.m[this.i++] += v; } }`),
+    ).toBe(false);
   });
 
   it('#2 typed-operand @constant shift truncates to the type (254, not 510)', async () => {

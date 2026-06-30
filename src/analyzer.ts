@@ -310,6 +310,17 @@ export class Analyzer {
   private declareLocal(name: string, t: JethType): void {
     this.scopes[this.scopes.length - 1]!.set(name, t);
   }
+  /** Counter for synthetic temp locals introduced when hoisting a side-effecting lvalue index/key
+   *  (compound-assign / ++ / -- with m[f()] etc). The returned name is checked against every visible
+   *  local so a hoisted temp can never shadow a real one. */
+  private hoistTmpCounter = 0;
+  private freshHoistName(): string {
+    let name: string;
+    do {
+      name = `__jeth_ca_${this.hoistTmpCounter++}`;
+    } while (this.isVisibleLocal(name));
+    return name;
+  }
 
   analyze(): ContractIR | undefined {
     this.rejectEmptyHexLiterals(); // lexer-level: `0x`/`0X` with no hex digits is a parse error in any context
@@ -5566,6 +5577,41 @@ export class Analyzer {
     return undefined;
   }
 
+  /** Rewrite an lvalue navigation that contains SIDE-EFFECTING index/key sub-expressions (m[f()],
+   *  xs[i++], m[a()][b()]) so each impure index is hoisted into a fresh temp local evaluated EXACTLY
+   *  ONCE, then return a now-pure navigation node that references the temps. solc evaluates each
+   *  lvalue index once; sharing one temp between the desugared read and write of `lhs op= rhs` (or
+   *  `lhs = lhs +/- 1`) makes it byte-identical instead of double-evaluating the index. The temps are
+   *  emitted to `out` in SOURCE order (innermost navigation first = left-to-right), matching solc's
+   *  order; the caller emits the RHS temp (if any) BEFORE calling this, since solc evaluates the RHS
+   *  first. A PURE index (identifier/literal/this.x) is left inline. Returns undefined after a
+   *  diagnostic (a sub-expression failed to type-check). */
+  private hoistImpureLValueKeys(node: ts.Expression, out: Stmt[]): ts.Expression | undefined {
+    const f = ts.factory;
+    if (ts.isParenthesizedExpression(node)) return this.hoistImpureLValueKeys(node.expression, out);
+    if (ts.isPropertyAccessExpression(node)) {
+      const base = this.hoistImpureLValueKeys(node.expression, out);
+      if (!base) return undefined;
+      return this.synth(f.createPropertyAccessExpression(base, node.name), node);
+    }
+    if (ts.isElementAccessExpression(node)) {
+      // Source order: hoist the BASE navigation's impure indices first, then this index.
+      const base = this.hoistImpureLValueKeys(node.expression, out);
+      if (!base) return undefined;
+      let arg = node.argumentExpression;
+      if (!this.isPureReadExpr(arg)) {
+        const checked = this.checkExpr(arg);
+        if (!checked) return undefined;
+        const name = this.freshHoistName();
+        this.declareLocal(name, checked.type);
+        out.push({ kind: 'localDecl', name, type: checked.type, init: checked });
+        arg = this.synth(f.createIdentifier(name), node.argumentExpression);
+      }
+      return this.synth(f.createElementAccessExpression(base, arg), node);
+    }
+    return node; // identifier / this / other pure leaf
+  }
+
   /** Desugar a non-inline DYNAMIC struct value `src` into an inline constructor that reads each of its
    *  fields: `StructName(src.f0, src.f1, ...)`. This reuses the verified inline struct encoder and is
    *  byte-identical to a field-by-field copy. `src` must be side-effect-free (checked by the caller). */
@@ -5830,13 +5876,18 @@ export class Analyzer {
       );
       return;
     }
-    const idImpure = this.impureLValueKey(operand);
-    if (idImpure) {
-      this.diags.error(
-        idImpure,
-        'JETH331',
-        `'${isInc ? '++' : '--'}' on an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`,
-      );
+    if (this.impureLValueKey(operand)) {
+      // Hoist the side-effecting index(es) to temps evaluated once, then `xs[t] = xs[t] +/- 1`
+      // reads and writes the SAME location - byte-identical to solc (was rejected as JETH331).
+      const rewritten = this.hoistImpureLValueKeys(operand, out);
+      if (!rewritten) return;
+      const t2 = this.checkLValue(rewritten);
+      if (!t2) return;
+      const left2 = this.lvalueAsExpr(t2);
+      const one2: Expr = { kind: 'literalInt', type: t2.type, value: 1n };
+      const combined2 = this.buildBinary(isInc ? '+' : '-', left2, one2, node);
+      if (!combined2) return;
+      out.push({ kind: 'assign', target: t2, value: this.coerce(combined2, t2.type, node) });
       return;
     }
     const left = this.lvalueAsExpr(target);
@@ -7898,8 +7949,10 @@ export class Analyzer {
       // Eval-order: solc evaluates the RHS before the LHS location. The value-type and bytes/string
       // element paths reorder correctly in codegen, but the WHOLE-AGGREGATE element write path
       // (recs[i] = P(...), dd[i] = [...]) does not, so a side-effecting index/key would run before the
-      // RHS aggregate's constructor args and miscompile. Reject it (bind the index to a const first),
-      // consistent with the JETH331 guard already applied to ++/-- and compound assignments.
+      // RHS aggregate's constructor args and miscompile. Reject it (bind the index to a const first).
+      // (The compound-assign and ++/-- STATEMENT forms hoist the index to a temp instead - see
+      // hoistImpureLValueKeys - but the whole-aggregate write has deep-copy-vs-alias subtleties that
+      // make a temp-RHS lowering risky, so this stays a sound reject.)
       if (target.type.kind === 'struct' || target.type.kind === 'array') {
         const keyImpure = this.impureLValueKey(e.left);
         if (keyImpure) {
@@ -7952,13 +8005,26 @@ export class Analyzer {
       this.diags.error(e.operatorToken, 'JETH064', `unsupported assignment operator`);
       return;
     }
-    const keyImpure = this.impureLValueKey(e.left);
-    if (keyImpure) {
-      this.diags.error(
-        keyImpure,
-        'JETH331',
-        `a compound assignment to an element with a side-effecting index/key would evaluate the index twice (solc evaluates it once); bind the index to a const first`,
-      );
+    if (this.impureLValueKey(e.left)) {
+      // solc evaluates the RHS first, then each lvalue index EXACTLY ONCE (source order). Bind the
+      // RHS and every side-effecting index to temps so the desugared `lhs = lhs op rhs` reads and
+      // writes the SAME location - byte-identical to solc (was rejected as JETH331). The RHS temp is
+      // emitted before the index temps to preserve solc's RHS-first order (verified: a RHS that
+      // mutates the lvalue is observed by the subsequent read).
+      const rhsChecked = this.checkExpr(e.right, target.type);
+      if (!rhsChecked) return;
+      const rname = this.freshHoistName();
+      this.declareLocal(rname, rhsChecked.type);
+      out.push({ kind: 'localDecl', name: rname, type: rhsChecked.type, init: rhsChecked });
+      const rewritten = this.hoistImpureLValueKeys(e.left, out);
+      if (!rewritten) return;
+      const t2 = this.checkLValue(rewritten);
+      if (!t2) return;
+      const left2 = this.lvalueAsExpr(t2);
+      const rhsRef: Expr = { kind: 'localRead', type: rhsChecked.type, name: rname };
+      const combined2 = this.buildBinary(binOp, left2, rhsRef, e);
+      if (!combined2) return;
+      out.push({ kind: 'assign', target: t2, value: this.coerce(combined2, t2.type, e) });
       return;
     }
     const left = this.lvalueAsExpr(target);
