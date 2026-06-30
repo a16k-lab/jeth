@@ -276,20 +276,15 @@ describe('storage-to-mem-copy: deep-copy a storage reference-element array into 
 // wired from storage -> memory (buildDynStructFromStorage does not transcode that field). It MUST stay a
 // clean analyzer reject (JETH200), not a codegen crash, per the zero-miscompile bar.
 describe('storage-to-mem-copy: deferred dyn-struct-leaf-array-field element is a clean reject', () => {
-  it('let row: D[] = this.ds, D has a bytes[] field -> JETH200', () => {
+  it('let row: D[] = this.ds, D has a bytes[] field -> now COMPILES (lifted byte-identical)', () => {
+    // Deferred ONLY because the storage dyn-struct codec was broken; now fixed (commits 19aa9a1 + 908936b)
+    // and this storage->memory deep copy of a dyn-struct array with a nested-dynamic-leaf field is
+    // byte-identical to solc (covered in storage-dynstruct-array-cluster.test.ts). It now compiles clean.
     const src = `@struct class D { tag: u256; xs: bytes[]; }
 @contract class C {
   @state ds: D[];
   @external ret(): D[] { let row: D[] = this.ds; return row; }
 }`;
-    let codes: string[] = [];
-    try {
-      compile(src, { fileName: 'C.jeth' });
-      throw new Error('expected a clean reject, but compilation succeeded');
-    } catch (e: any) {
-      codes = (e?.diagnostics ?? []).map((d: any) => d.code);
-    }
-    expect(codes.length, 'must reject with a diagnostic (no crash)').toBeGreaterThan(0);
-    expect(codes).toContain('JETH200');
+    expect(() => compile(src, { fileName: 'C.jeth' })).not.toThrow();
   });
 });

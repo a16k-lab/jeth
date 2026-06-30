@@ -241,19 +241,15 @@ describe('storage-to-mem-extend: mapping-value arrays (#2) + fixed-outer storage
 // The deeper storage transcode for this shape is not byte-identical even via the direct return path, so
 // lifting the mem-copy would be unsound. It MUST stay a clean analyzer reject (JETH200), not a crash.
 describe('storage-to-mem-extend: #5 dyn-struct-leaf-array-field element stays a clean reject', () => {
-  it('let row: D[] = this.vals, D has a bytes[] field -> JETH200 (no crash)', () => {
+  it('let row: D[] = this.vals, D has a bytes[] field -> now COMPILES (lifted byte-identical)', () => {
+    // The storage dyn-struct-array copy with a nested-dynamic-leaf field was deferred ONLY because the
+    // storage codec was broken; it is now fixed (commits 19aa9a1 + 908936b) and this whole-array copy is
+    // byte-identical to solc (covered in storage-dynstruct-array-cluster.test.ts). It now compiles clean.
     const src = `@struct class D { id: u256; tags: bytes[]; }
 @contract class C {
   @state vals: D[];
-  @external f(): u256 { let row: D[] = this.vals; return u256(row.length); }
+  @external f(): u256 { let row: D[] = this.vals; return row.length; }
 }`;
-    let codes: string[] = [];
-    try {
-      compile(src, { fileName: 'C.jeth' });
-      throw new Error('expected a clean reject');
-    } catch (e: any) {
-      codes = (e.diagnostics ?? []).map((d: any) => d.code);
-    }
-    expect(codes).toContain('JETH200');
+    expect(() => compile(src, { fileName: 'C.jeth' })).not.toThrow();
   });
 });
