@@ -7726,11 +7726,18 @@ export class Analyzer {
       const e = this.checkExpr(decl.initializer, declared);
       if (!e) return;
       const fromStorage = e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray';
+      // a FIXED value-array ELEMENT of a MEMORY outer array (let row: Arr<u256,N> = xs[i], xs: Arr<u256,N>[]):
+      // solc memory arrays are reference types, so this ALIASES the element (writes through). resolveArrayExpr
+      // resolves xs[i] to an arrayValue whose base is a memArrayExpr wrapping an arrayGet (the inner array's
+      // absolute pointer); binding row to that pointer aliases byte-identically, so a later row[j] = v writes
+      // through to xs[i][j] (the same reference semantics as the P[] struct-element bind).
+      const fromMemElem = e.kind === 'arrayValue' && e.arr.base.kind === 'memArrayExpr';
       const okInit =
         e.kind === 'arrayLit' ||
         e.kind === 'memAggregate' ||
         e.kind === 'cdAggregateValue' ||
         e.kind === 'cdAggArrayElem' || // a FIXED VALUE-leaf inner element of a calldata array-of-array (let row: Arr<u256,N> = xs[i])
+        fromMemElem ||
         e.kind === 'ternary' ||
         e.kind === 'abiDecode' ||
         (e.kind === 'call' && e.type.kind === 'array') ||
@@ -14463,8 +14470,13 @@ export class Analyzer {
         else if (
           ts.isPropertyAccessExpression(node.expression) &&
           node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
-        )
-          bt = this.stateByName.get(node.expression.name.text)?.type;
+        ) {
+          // a @state var OR a @constant bytesN (this.B[i]). A bytesN @constant folds to a literalInt
+          // bytesN (the `this.CONSTANT (read)` branch), which byteIndex lowers like any bytesN register;
+          // without checking constantsByName the base hit the 'unknown state variable' path (JETH065).
+          const nm = node.expression.name.text;
+          bt = this.stateByName.get(nm)?.type ?? this.constantsByName.get(nm)?.type;
+        }
         if (bt && bt.kind === 'bytesN') {
           const base = this.checkExpr(node.expression);
           const index = this.checkExpr(node.argumentExpression, U256);

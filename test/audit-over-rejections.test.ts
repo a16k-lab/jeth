@@ -10,6 +10,7 @@ import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
 const sel = (s: string) => '0x' + functionSelector(s);
+const W = (n: bigint) => n.toString(16).padStart(64, '0');
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 
 async function eqValue(jeth: string, sol: string, sig: string) {
@@ -21,6 +22,19 @@ async function eqValue(jeth: string, sol: string, sig: string) {
   const rs = await hs.call(as, sel(sig));
   expect(rj.success).toBe(rs.success);
   expect(rj.returnHex).toBe(rs.returnHex);
+}
+
+async function eqCalls(jeth: string, sol: string, calls: [string, string][]) {
+  const hj = await Harness.create();
+  const hs = await Harness.create();
+  const aj: Address = await hj.deploy(compile(jeth, { fileName: 'C.jeth' }).creationBytecode);
+  const as: Address = await hs.deploy(compileSolidity(SPDX + sol, 'C').creation);
+  for (const [sig, args] of calls) {
+    const rj = await hj.call(aj, sel(sig) + args);
+    const rs = await hs.call(as, sel(sig) + args);
+    expect(rj.success, `${sig} success`).toBe(rs.success);
+    expect(rj.returnHex, `${sig} return`).toBe(rs.returnHex);
+  }
 }
 
 describe('audit over-rejections lifted byte-identical', () => {
@@ -155,6 +169,57 @@ describe('audit over-rejections lifted byte-identical', () => {
     };
     expect(rej('@struct class P { a: u256; tags: u256[]; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }')).toContain('JETH207');
     expect(rej('@struct class T { n: u256; s: string; } @struct class P { a: u256; t: T; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }')).toContain('JETH207');
+  });
+
+  it('OR1: indexing a @constant bytesN value (this.B[i]) returns the indexed byte', async () => {
+    // const index (each byte) + runtime index (incl OOB) byte-identical to solc.
+    await eqValue(
+      '@contract class C { @constant B: bytes4 = bytes4(0x12345678n); @external @pure g0(): bytes1 { return this.B[0n]; } @external @pure g3(): bytes1 { return this.B[3n]; } }',
+      'contract C { bytes4 constant B = 0x12345678; function g0() external pure returns(bytes1){ return B[0]; } function g3() external pure returns(bytes1){ return B[3]; } }',
+      'g0()',
+    );
+    await eqCalls(
+      '@contract class C { @constant B: bytes4 = bytes4(0x12345678n); @external @pure g(i: u256): bytes1 { return this.B[i]; } }',
+      'contract C { bytes4 constant B = 0x12345678; function g(uint256 i) external pure returns(bytes1){ return B[i]; } }',
+      [['g(uint256)', W(0n)], ['g(uint256)', W(3n)], ['g(uint256)', W(4n)]], // 4 = runtime OOB
+    );
+    // a const OOB index is a compile reject in both
+    let codes: string[] = [];
+    try {
+      compile('@contract class C { @constant B: bytes4 = bytes4(0x12345678n); @external @pure g(): bytes1 { return this.B[4n]; } }', { fileName: 'C.jeth' });
+    } catch (e: unknown) {
+      codes = ((e as { diagnostics?: { code: string }[] })?.diagnostics ?? []).map((d) => d.code);
+    }
+    expect(codes).toContain('JETH152');
+  });
+
+  it('OR4: abi.encode of a calldata dyn-struct leaf value-array field (abi.encode(p.tags))', async () => {
+    const cd = W(9n) + W(0x40n) + W(3n) + W(11n) + W(22n) + W(33n); // P(9, [11,22,33])
+    await eqCalls(
+      '@struct class P { a: u256; tags: u256[]; } @contract class C { @external @pure f(p: P): bytes { return abi.encode(p.tags); } @external @pure g(p: P): bytes { return abi.encodePacked(p.tags); } @external @pure h(p: P): bytes32 { return keccak256(abi.encode(p.tags)); } @external @pure m(p: P): bytes { return abi.encode(p.a, p.tags); } }',
+      'contract C { struct P { uint256 a; uint256[] tags; } function f(P calldata p) external pure returns(bytes memory){ return abi.encode(p.tags); } function g(P calldata p) external pure returns(bytes memory){ return abi.encodePacked(p.tags); } function h(P calldata p) external pure returns(bytes32){ return keccak256(abi.encode(p.tags)); } function m(P calldata p) external pure returns(bytes memory){ return abi.encode(p.a, p.tags); } }',
+      [['f((uint256,uint256[]))', cd], ['g((uint256,uint256[]))', cd], ['h((uint256,uint256[]))', cd], ['m((uint256,uint256[]))', cd], ['f((uint256,uint256[]))', W(9n) + W(0x40n) + W(0n)]],
+    );
+  });
+
+  it('OR3: binding a fixed value-array element of a memory outer array aliases (write-through)', async () => {
+    await eqValue(
+      '@contract class C { @external @pure f(): u256 { let xs: Arr<u256,2>[] = [[1n,2n],[3n,4n]]; let row: Arr<u256,2> = xs[0n]; row[0n] = 99n; return xs[0n][0n]; } }',
+      'contract C { function f() external pure returns(uint256){ uint256[2][] memory xs = new uint256[2][](2); xs[0]=[uint256(1),2]; xs[1]=[uint256(3),4]; uint256[2] memory row = xs[0]; row[0]=99; return xs[0][0]; } }',
+      'f()',
+    );
+    // for-of over the outer array (reads each fixed-array element)
+    await eqValue(
+      '@contract class C { @external @pure f(): u256 { let xs: Arr<u256,2>[] = [[1n,2n],[3n,4n]]; let s: u256 = 0n; for (let row of xs) { s = s + row[0n] + row[1n]; } return s; } }',
+      'contract C { function f() external pure returns(uint256){ uint256[2][] memory xs = new uint256[2][](2); xs[0]=[uint256(1),2]; xs[1]=[uint256(3),4]; uint256 s=0; for (uint i=0;i<xs.length;i++){ uint256[2] memory row=xs[i]; s+=row[0]+row[1]; } return s; } }',
+      'f()',
+    );
+    // runtime index bind + write-through
+    await eqCalls(
+      '@contract class C { @external @pure f(i: u256): u256 { let xs: Arr<u256,2>[] = [[1n,2n],[3n,4n]]; let row: Arr<u256,2> = xs[i]; row[1n] = 77n; return xs[i][1n]; } }',
+      'contract C { function f(uint256 i) external pure returns(uint256){ uint256[2][] memory xs = new uint256[2][](2); xs[0]=[uint256(1),2]; xs[1]=[uint256(3),4]; uint256[2] memory row = xs[i]; row[1]=77; return xs[i][1]; } }',
+      [['f(uint256)', W(0n)], ['f(uint256)', W(1n)]],
+    );
   });
 
   it('still rejects illegal const casts (no over-acceptance regression)', () => {

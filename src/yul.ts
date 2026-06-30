@@ -1656,6 +1656,12 @@ ${indent(runtime, 6)}
             // DEEP-COPY the element's calldata head into a fresh memory image via the calldata->memory codec
             // (aggArgToMemPtr's cdAggArrayElem branch resolves the element base + materializes).
             out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
+          } else if (s.init.kind === 'arrayValue' && s.init.arr.base.kind === 'memArrayExpr') {
+            // a FIXED VALUE-array ELEMENT of a MEMORY outer array (let row: Arr<u256,N> = xs[i], xs:
+            // Arr<u256,N>[]): aggArgToMemPtr lowers the memArrayExpr's inner arrayGet to the element's
+            // absolute pointer, so row ALIASES the element image (no copy) - a later row[j] = v writes
+            // through to xs[i][j], byte-identical to solc memory references.
+            out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
           } else {
             out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
           }
@@ -6979,6 +6985,21 @@ ${indent(runtime, 6)}
     if (arg.kind !== 'arrayValue')
       throw new UnsupportedError(`array argument must be an array value, got '${arg.kind}'`);
     const base = arg.arr.base;
+    if (base.kind === 'cdDynArrayField') {
+      // a calldata dyn-struct's leaf dynamic-array field (abi.encode(p.tags)): re-encode it DIRECTLY
+      // from its resolved calldata header into a fresh ABI TAIL blob (the same cdFieldArrayHeader +
+      // abiEncFromCd codec the cdFieldAggValue path and a return component use). A malformed inner
+      // length/offset is an ABI-decode failure -> EMPTY revert (capEmptyRevert), byte-identical to
+      // solc's abi.encode. (Previously fell to the storage-source else and threw JETH900.)
+      const hdr = this.cdFieldArrayHeader(base.place, ctx, out);
+      const validate = !isValueLeafArray(arg.type);
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const sz = this.fresh();
+      out.push(`let ${sz} := ${this.abiEncFromCd(arg.type, hdr, dst, validate, out, true)}`);
+      out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+      return { mp: dst, size: sz };
+    }
     let mpExpr: string;
     let sizeExpr: string;
     if (base.kind === 'calldataArray') {
