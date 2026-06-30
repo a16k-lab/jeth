@@ -6,9 +6,9 @@
 import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
-import { Harness } from '../src/evm.js';
+import { Harness, pad32 } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
-import { compileSolidity } from './_solidity.js';
+import { compileSolidity, compileSolidityLinked, deploySolLinked } from './_solidity.js';
 
 const sel = (s: string) => '0x' + functionSelector(s);
 const W = (n: bigint) => n.toString(16).padStart(64, '0');
@@ -55,5 +55,34 @@ describe('audit library/struct over-rejections lifted byte-identical', () => {
       'contract C { struct S { uint128 a; uint128 b; } S st; function mut(S memory s) internal pure returns(uint256){ s.a=999; return uint256(s.a)+uint256(s.b); } function set(uint128 x, uint128 y) external { st.a=x; st.b=y; } function go() external returns(uint256){ return mut(st); } function ra() external view returns(uint128){ return st.a; } }',
       [['set(uint128,uint128)', W(12n) + W(34n)], ['go()', ''], ['ra()', '']],
     );
+  });
+
+  it('OR9: an @external (delegatecall) @library function that RETURNS a struct', async () => {
+    const jeth = '@struct class P { x: u256; y: u256; } @library class L { @external @pure mk(a: u256): P { return P(a, a + 1n); } } @contract class C { @external @pure go(a: u256): P { return L.mk(a); } @external @pure go2(a: u256): P { let p: P = L.mk(a); return p; } }';
+    const sol = `${SPDX}\nstruct P { uint256 x; uint256 y; }\nlibrary L { function mk(uint256 a) external pure returns(P memory){ return P(a, a+1); } }\ncontract C { function go(uint256 a) external pure returns(P memory){ return L.mk(a); } function go2(uint256 a) external pure returns(P memory){ P memory p = L.mk(a); return p; } }`;
+    const jb = compile(jeth, { fileName: 'C.jeth' });
+    const sb = compileSolidityLinked(sol, 'C', ['L']);
+    const jeth_h = await Harness.create();
+    const sol_h = await Harness.create();
+    const aj = (await jeth_h.deployLinked(jb)).address;
+    const as = await deploySolLinked(sol_h, sb);
+    for (const sig of ['go(uint256)', 'go2(uint256)']) {
+      for (const a of [5n, 0n, 1n << 255n]) {
+        const data = sel(sig) + pad32(a).toString();
+        const jr = await jeth_h.call(aj, data);
+        const sr = await sol_h.call(as, data);
+        expect({ ok: jr.success, ret: jr.returnHex }, `${sig}(${a})`).toEqual({ ok: sr.success, ret: sr.returnHex });
+      }
+    }
+  });
+
+  it('OR9: return abi.decode(b, P) (a struct) is byte-identical incl malformed-input revert', async () => {
+    const jeth = '@struct class P { x: u256; y: u256; } @contract class C { @external @pure go(b: bytes): P { return abi.decode(b, P); } }';
+    const sol = 'contract C { struct P { uint256 x; uint256 y; } function go(bytes calldata b) external pure returns(P memory){ return abi.decode(b, (P)); } }';
+    await eqCalls(jeth, sol, [
+      ['go(bytes)', W(0x20n) + W(0x40n) + W(7n) + W(8n)], // well-formed
+      ['go(bytes)', W(0x20n) + W(0x40n) + W(7n)], // truncated -> revert
+      ['go(bytes)', W(0x20n) + W(0n)], // empty -> revert
+    ]);
   });
 });

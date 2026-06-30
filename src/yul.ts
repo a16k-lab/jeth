@@ -3349,6 +3349,17 @@ ${indent(runtime, 6)}
       });
       return w * 32;
     }
+    if (value.kind === 'abiDecode') {
+      // a STATIC struct decoded from a blob (return abi.decode(b, P)) or returned by an @external
+      // (delegatecall) @library function whose result is decoded as a struct (return L.mk(a)).
+      // lowerAbiDecode builds the flat inline static-struct image (abiHeadWords words, with solc's
+      // decode revert semantics on malformed input); copy it to the memory-0 return scratch. Without
+      // this the abiDecode struct fell through and threw (cannot encode struct from abiDecode).
+      const mp = this.lowerAbiDecode(value.data, [value.type], ctx, out)[0]!;
+      const w = abiHeadWords(value.type);
+      out.push(`mcopy(0, ${mp}, ${w * 32})`);
+      return w * 32;
+    }
     throw new UnsupportedError(`cannot encode struct from ${value.kind}`);
   }
 
