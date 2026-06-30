@@ -273,6 +273,12 @@ ${indent(runtime, 6)}
       const size = storageByteSize(v.type);
       let raw: bigint;
       if (typeof v.initialValue === 'boolean') raw = v.initialValue ? 1n : 0n;
+      else if (v.type.kind === 'bytesN')
+        // foldConstant returns a bytesN in its LEFT-aligned register form (the value in the high N bytes
+        // of a word); storage holds it RIGHT-aligned within the field's `size` bytes (exactly what
+        // storeState does via shr((32-size)*8)), so right-align before packing. Masking the left-aligned
+        // form to the low `size` bytes would zero it (the silent bytesN state-initializer miscompile).
+        raw = (v.initialValue >> BigInt((32 - v.type.size) * 8)) & ((1n << BigInt(size * 8)) - 1n);
       else raw = v.initialValue & ((1n << BigInt(size * 8)) - 1n);
       const shifted = raw << BigInt(v.offset * 8);
       slotWords.set(v.slot, (slotWords.get(v.slot) ?? 0n) | shifted);
