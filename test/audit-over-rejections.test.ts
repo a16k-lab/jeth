@@ -55,6 +55,14 @@ describe('audit over-rejections lifted byte-identical', () => {
     );
   });
 
+  it('OR7: two unrelated sibling bases with same-sig @virtual, merged with @override(A,B)', async () => {
+    await eqValue(
+      '@abstract class A { @virtual @external f(): u256 { return 1n; } } @abstract class B { @virtual @external f(): u256 { return 2n; } } @contract class C extends A, B { @override(A,B) @external f(): u256 { return 9n; } }',
+      'abstract contract A { function f() external virtual returns(uint256){ return 1; } } abstract contract B { function f() external virtual returns(uint256){ return 2; } } contract C is A, B { function f() external override(A,B) returns(uint256){ return 9; } }',
+      'f()',
+    );
+  });
+
   it('still rejects illegal const casts (no over-acceptance regression)', () => {
     const rej = (s: string) => {
       try {

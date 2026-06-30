@@ -2116,7 +2116,13 @@ export class Analyzer {
       // virtual/override correctness across the chain. Order in `versions` is most-derived -> base.
       for (let i = 0; i < versions.length; i++) {
         const v = versions[i]!;
-        const baseBelow = versions[i + 1]; // the immediately-more-base definition this one overrides
+        // The definition `v` overrides only versions in a contract that is an ANCESTOR of v's contract -
+        // NOT merely the next entry in linearization order. Two UNRELATED sibling bases (A, B; neither
+        // extends the other) that each declare the same-signature @virtual f do NOT override each other;
+        // only a derived contract that extends both overrides them (with @override(A,B)). Picking the
+        // next-in-order entry wrongly flagged the second sibling as "missing @override" (OR7).
+        const vBases = basesOf.get(v.definingContract!);
+        const baseBelow = versions.slice(i + 1).find((b) => vBases?.has(b.definingContract!));
         const isMostDerived = i === 0;
 
         // @override is REQUIRED on every redefinition (including the first concrete impl of a bodyless
