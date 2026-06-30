@@ -1650,6 +1650,11 @@ ${indent(runtime, 6)}
             // aggToMemPtr returns the element slot's absolute pointer, so p ALIASES the element image
             // (no copy) - byte-identical to solc (mutating p writes through; re-pointing xs[i] leaves p).
             out.push(`let ${name} := ${this.aggToMemPtr(s.init, ctx, out)}`);
+          } else if (s.init.kind === 'cdAggArrayElem') {
+            // a FIXED-inner VALUE-leaf element of a calldata array-of-array (let row: Arr<u256,N> = xs[i]):
+            // DEEP-COPY the element's calldata head into a fresh memory image via the calldata->memory codec
+            // (aggArgToMemPtr's cdAggArrayElem branch resolves the element base + materializes).
+            out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
           } else {
             out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
           }
@@ -6585,6 +6590,19 @@ ${indent(runtime, 6)}
       const hdr = this.cdNestedFieldArrayHeader(a.place, a.indices, ctx, out);
       return this.abiDecFromCdToImage(a.type, hdr, out, `${this.panic()}(0x41)`);
     }
+    // a whole VALUE-leaf sub-aggregate ELEMENT of a calldata array-of-array (let row: u256[] = xs[i],
+    // for u256[][] / address[][] / Arr<u256,N>[]) bound to a memory local: resolve the element's calldata
+    // base (bounds-checked, Panic 0x32 on OOB), then DEEP-COPY it into a fresh memory image via the
+    // calldata->memory codec, MASKING value leaves (abiDecFromCdToImage's value-leaf rule). cap =
+    // EMPTY revert: for a VALUE-element inner array (each element is 32 inline calldata bytes) any
+    // oversized inner length fails the calldatasize bound BEFORE a memory-alloc overflow, so solc
+    // empty-reverts (never Panic 0x41) - byte-identical to the `return xs[i]` echo (capEmptyRevert).
+    // A reference-leaf element (bytes[][]/D[][]) never reaches here: the analyzer cleanly rejects that
+    // bind (JETH200/JETH072), so the Panic-0x41 cd-to-mem cap is not needed on this path.
+    if (a.kind === 'cdAggArrayElem') {
+      const eb = this.cdArrayElemBase(a.arr, a.index, a.type, ctx, out);
+      return this.abiDecFromCdToImage(a.type, eb, out);
+    }
     // a DYNAMIC-array literal lowers to a fresh [len][elems] memory image (lowerExpr's arrayLit case);
     // a structNew / static fixed-array literal uses the static-aggregate image (allocAggToMem).
     if (a.kind === 'arrayLit') {
@@ -7663,7 +7681,10 @@ ${indent(runtime, 6)}
       const ptr = this.fresh();
       out.push(`let ${ptr} := mload(0x40)`);
       out.push(`mstore(0x40, add(${ptr}, ${hw * 32}))`);
-      this.abiEncFromCd(t, cdPtr, ptr, true, out);
+      // a calldata->memory copy MASKS value leaves (a fixed value array Arr<u256,N> / Arr<address,N>),
+      // matching solc's copy semantics (dirty narrow leaves are cleaned, not reverted); a static struct
+      // still validates its fields (validate stays true).
+      this.abiEncFromCd(t, cdPtr, ptr, !isValueLeafArray(t), out);
       return ptr;
     }
     // a dynamic array T[]: alloc [len] + an len-word table; each element word holds either an inline
@@ -7695,7 +7716,10 @@ ${indent(runtime, 6)}
         inner.push(`let ${ecd} := add(${elemRegion}, mul(${i}, ${es}))`);
         const edst = this.fresh();
         inner.push(`let ${edst} := add(${dstHead}, mul(${i}, ${es}))`);
-        this.abiEncFromCd(t.element, ecd, edst, true, inner);
+        // a STATIC VALUE element of a calldata->memory copy MASKS its value leaves (u256[][] inner
+        // u256[], Arr<u256,N>[] inner Arr<u256,N>), matching solc's copy semantics; a static struct
+        // element still validates (validate stays true).
+        this.abiEncFromCd(t.element, ecd, edst, !isValueLeafArray(t), inner);
         for (const l of inner) out.push('  ' + l);
         out.push('}');
         return ptr;

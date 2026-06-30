@@ -7640,6 +7640,7 @@ export class Analyzer {
         e.kind === 'arrayLit' ||
         e.kind === 'memAggregate' ||
         e.kind === 'cdAggregateValue' ||
+        e.kind === 'cdAggArrayElem' || // a FIXED VALUE-leaf inner element of a calldata array-of-array (let row: Arr<u256,N> = xs[i])
         e.kind === 'ternary' ||
         e.kind === 'abiDecode' ||
         (e.kind === 'call' && e.type.kind === 'array') ||
