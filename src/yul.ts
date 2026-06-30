@@ -354,13 +354,37 @@ ${indent(runtime, 6)}
       immStaged,
     };
 
+    // Determine which @immutables are READ by a function reachable from the constructor (a loadimmutable
+    // in the creation block would collide with the ctor's setimmutable of the same immutable: solc's
+    // legacy assembler rejects push+assign of one immutable in one subroutine). Each such immutable gets a
+    // reserved creation-block MEMORY cell holding its staged value; the helper copy reads it via mload and
+    // the staged write mirrors into it. The cells occupy a fixed prefix [0x80, 0x80 + 32*nShadow); ARGS and
+    // the initial free pointer start ABOVE the prefix so neither the args blob nor body allocations clobber
+    // them. (A direct ctor-body read uses the staged ret-var, not loadimmutable, so it never needs a cell.)
+    const ctorReachable = this.ctorReachableFns(ctor.body);
+    const immReadByHelper = new Set<string>();
+    for (const fn of ctorReachable) {
+      for (const nm of this.collectImmutableReads(fn.body)) immReadByHelper.add(nm);
+      if (fn.modifierWrap) for (const nm of this.collectImmutableReads(fn.modifierWrap)) immReadByHelper.add(nm);
+    }
+    const ctorImmShadow = new Map<string, string>(); // @immutable name -> reserved memory cell address
+    let shadowBytes = 0;
+    for (const im of contract.immutables) {
+      if (immReadByHelper.has(im.name)) {
+        ctorImmShadow.set(im.name, String(0x80 + shadowBytes));
+        shadowBytes += 32;
+      }
+    }
+    if (ctorImmShadow.size > 0) ctx.ctorImmShadow = ctorImmShadow;
+    const MEM0 = 0x80 + shadowBytes; // memory base above the immutable-shadow prefix
+
     // Decode the constructor args (ABI-encoded, appended after the init code). They begin at code
-    // offset datasize("C") (the init-code size) and run to codesize(). Copy them into memory at 0x80
+    // offset datasize("C") (the init-code size) and run to codesize(). Copy them into memory at MEM0
     // and decode from MEMORY. A STATIC param occupies abiHeadWords inline words in the head; a DYNAMIC
     // param (T[]/bytes/string/dynamic struct/Arr<dyn,N>) occupies ONE head OFFSET word (its tail lives
     // later in the blob), exactly as solc lays it out (matching the calldata + abi.decode disciplines).
     // solc reverts EMPTY when the args region is shorter than the static head, and ignores trailing bytes.
-    const ARGS = 0x80;
+    const ARGS = MEM0;
     // a static aggregate occupies all its leaf words inline; a dynamic param occupies one offset word.
     const paramHeadWords = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
     const headWords = ctor.params.reduce((n, p) => n + paramHeadWords(p.type), 0);
@@ -385,8 +409,12 @@ ${indent(runtime, 6)}
       }
     } else {
       lines.push(`let ${blobEnd} := ${ARGS}`); // no params: unused, but keep the binding well-formed
-      lines.push('mstore(0x40, 0x80)'); // init the free-memory pointer for any body allocation
+      lines.push(`mstore(0x40, ${MEM0})`); // init the free-memory pointer above the immutable-shadow prefix
     }
+    // Zero-init each reserved immutable-shadow cell so a helper read BEFORE the immutable is assigned
+    // sees 0 (solc: a not-yet-assigned immutable reads as 0 during construction). The cells sit below the
+    // free pointer (the [0x80, MEM0) prefix), so allocations never overwrite them.
+    for (const cell of ctorImmShadow.values()) lines.push(`mstore(${cell}, 0)`);
     // Open the FRESH helpers window NOW (before decoding), so any helper the aggregate-param decode
     // pulls in (panic/alloc/...) is defined in THIS creation block, not the runtime object. The window
     // also covers the body lowering + the ctor-reachable internal-function emission below.
@@ -449,9 +477,12 @@ ${indent(runtime, 6)}
     // already materialized above, so the jeth_constructor signature stays stable.
     const body: string[] = [];
     for (const s of ctor.body) for (const l of this.lowerStmt(s, ctx)) body.push(l);
-    // Emit each transitively-reachable internal callee as a userfn_ in this creation block.
+    // Emit each transitively-reachable internal callee as a userfn_ in this creation block. Pass the
+    // immutable-shadow map (when non-empty) so a helper's @immutable read lowers to mload(cell) instead
+    // of loadimmutable, avoiding the same-subroutine setimmutable+loadimmutable collision.
     const ctorFnDefs: string[] = [];
-    for (const fn of this.ctorReachableFns(ctor.body)) ctorFnDefs.push(this.emitInternalFunction(fn));
+    const shadowArg = ctorImmShadow.size > 0 ? ctorImmShadow : undefined;
+    for (const fn of ctorReachable) ctorFnDefs.push(this.emitInternalFunction(fn, shadowArg));
     const helperDefs = [...this.helpers.values()];
     this.helpers = savedHelpers;
 
@@ -487,6 +518,29 @@ ${indent(runtime, 6)}
     };
     for (const k of this.collectCallKeys(body)) visitKey(k);
     return order;
+  }
+
+  /** Collect the names of every @immutable READ (an `immutableRead` IR node, i.e. a runtime
+   *  loadimmutable read) anywhere in the given subtrees. Used to decide which immutables need a
+   *  staged-value memory shadow in the creation block: a helper reachable from the constructor that
+   *  reads an immutable would emit loadimmutable in the SAME assembly subroutine as the ctor's
+   *  setimmutable, which solc's legacy assembler rejects. The shadow lets the helper copy read the
+   *  staged value from memory instead. (A direct ctor-body read is an `immutableStagedRead`, not an
+   *  `immutableRead`, so it is NOT collected here - the direct-read case never needs the shadow.) */
+  private collectImmutableReads(root: unknown): Set<string> {
+    const names = new Set<string>();
+    const walk = (n: unknown): void => {
+      if (n === null || typeof n !== 'object') return;
+      if (Array.isArray(n)) {
+        for (const c of n) walk(c);
+        return;
+      }
+      const o = n as Record<string, unknown>;
+      if (o.kind === 'immutableRead' && typeof o.name === 'string') names.add(o.name);
+      for (const v of Object.values(o)) walk(v);
+    };
+    walk(root);
+    return names;
   }
 
   /** Structurally walk an IR subtree collecting the `fn` key of every internal-call node
@@ -698,6 +752,10 @@ ${indent(runtime, 6)}
       if (contract.fallback) {
         if (!contract.fallback.payable) lines.push('if callvalue() { revert(0, 0) }');
         for (const l of this.emitSpecialEntryBody(contract.fallback)) lines.push(l);
+        // Fall-off the end with no return: solc returns the default `bytes memory` value, whose RAW
+        // returndata content is EMPTY (a fallback's bytes return is the literal returndata, not an
+        // ABI-encoded tuple - so empty, not [0x20][0]). A bare (void) fallback halts via stop(); both
+        // produce empty returndata, so stop() is byte-identical for either form.
         lines.push('stop()');
       } else {
         lines.push('revert(0, 0)');
@@ -741,7 +799,7 @@ ${indent(runtime, 6)}
   private emitSpecialEntryBody(entry: SpecialEntryIR): string[] {
     const ctx: LowerCtx = {
       scopes: [new Map()],
-      returnType: { kind: 'void' } as JethType,
+      returnType: entry.returnsBytes ? ({ kind: 'bytes' } as JethType) : ({ kind: 'void' } as JethType),
       dynParams: new Map(),
       cdArrays: new Map(),
       cdAggregates: new Map(),
@@ -749,6 +807,11 @@ ${indent(runtime, 6)}
       cdParamHead: new Map(),
       specialEntry: true,
     };
+    // The data-passing @fallback's bytes param is the WHOLE calldata (== msg.data): bind it as a
+    // calldata bytes view (dataPtr 0, len calldatasize()), exactly like solc's `bytes calldata input`.
+    // A `return <bytes>` ABI-encodes + returns it (the general bytes-return path); a bare `return;` /
+    // fall-off returns empty bytes (handled by the dispatcher caller).
+    if (entry.bytesParam) ctx.dynParams.set(entry.bytesParam, { dataPtr: '0', len: 'calldatasize()' });
     const out: string[] = [];
     for (const s of entry.body) for (const l of this.lowerStmt(s, ctx)) out.push(l);
     return out;
@@ -757,7 +820,7 @@ ${indent(runtime, 6)}
   /** A Yul `function userfn_<name>(args) -> ret { body }` for an internally-called function.
    *  Params bind to the Yul args (already-clean JETH values - no calldata decode/validation);
    *  `return v` inside the body sets `ret` and `leave`s (see lowerStmt 'return' fnMode). */
-  private emitInternalFunction(fn: FunctionIR): string {
+  private emitInternalFunction(fn: FunctionIR, ctorImmShadow?: Map<string, string>): string {
     this.nameCounter = 0;
     const ctx: LowerCtx = {
       scopes: [new Map()],
@@ -767,6 +830,10 @@ ${indent(runtime, 6)}
       cdAggregates: new Map(),
       cdDynStructs: new Map(),
       cdParamHead: new Map(),
+      // When this is a CREATION-block copy of a ctor-reachable helper, an @immutable read uses the
+      // staged-value memory cell (mload) instead of loadimmutable (solc forbids the latter alongside
+      // setimmutable in one subroutine). Undefined for the normal runtime-object copy.
+      ctorImmShadow,
     };
     const argNames: string[] = [];
     for (const p of fn.params) {
@@ -1278,6 +1345,14 @@ ${indent(runtime, 6)}
           break;
         }
         if (isBytesLike(s.value.type)) {
+          // A data-passing @fallback's `return <bytes>` returns the RAW bytes CONTENT (no ABI [0x20][len]
+          // wrapper): solc's fallback/bytes-return is the literal returndata, not an ABI-encoded tuple.
+          // Materialize the bytes into a [len][data] image, then return (dataPtr, len) directly.
+          if (ctx.specialEntry) {
+            const { mp, len } = this.toMemory(this.lowerDynamic(s.value, ctx, out), out);
+            out.push(`return(add(${mp}, 0x20), ${len})`);
+            break;
+          }
           const ref = this.lowerDynamic(s.value, ctx, out);
           const { ptr, size } = this.encodeDynToMem(ref, out);
           out.push(`return(${ptr}, ${size})`);
@@ -1936,6 +2011,11 @@ ${indent(runtime, 6)}
         } else if (s.target.kind === 'immutableStaged') {
           // this.<imm> = v in the constructor: write the staged shadow (baked via setimmutable).
           out.push(`${ctx.immStaged!.get(s.target.name)!} := ${value}`);
+          // Mirror into the reserved creation-block memory cell (if any ctor-reachable helper reads this
+          // immutable) so the helper's mload sees the staged value at the point it is called (solc reads
+          // the staged value during construction, last-write-wins).
+          if (ctx.ctorImmShadow && ctx.ctorImmShadow.has(s.target.name))
+            out.push(`mstore(${ctx.ctorImmShadow.get(s.target.name)!}, ${value})`);
         } else if (s.target.kind === 'mapping') {
           const slot = this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out);
           for (const l of this.storeState(s.target.type, slot, 0, value)) out.push(l);
@@ -2656,6 +2736,10 @@ ${indent(runtime, 6)}
         return this.loadState(e.type, String(e.slot), e.offset);
       case 'immutableRead':
         // a runtime read of an @immutable: the value baked into the code by setimmutable.
+        // EXCEPT inside a creation-block copy of a ctor-reachable helper: solc forbids loadimmutable +
+        // setimmutable of the same immutable in one assembly subroutine, so read the STAGED value from
+        // the reserved creation-block memory cell instead (set up by emitConstructor).
+        if (ctx.ctorImmShadow && ctx.ctorImmShadow.has(e.name)) return `mload(${ctx.ctorImmShadow.get(e.name)!})`;
         return `loadimmutable("${e.name}")`;
       case 'immutableStagedRead':
         // a read inside the constructor body: the staged shadow (a jeth_constructor return var).
@@ -10799,6 +10883,9 @@ ${indent(runtime, 6)}
     if (target.kind === 'immutableStaged') {
       // assign the staged shadow (a jeth_constructor return var); baked via setimmutable at the end.
       out.push(`${ctx.immStaged!.get(target.name)!} := ${valueReg}`);
+      // Mirror into the reserved creation-block memory cell (see lowerStmt 'assign' / ctorImmShadow).
+      if (ctx.ctorImmShadow && ctx.ctorImmShadow.has(target.name))
+        out.push(`mstore(${ctx.ctorImmShadow.get(target.name)!}, ${valueReg})`);
       return;
     }
     if (target.kind === 'mapping') {
@@ -11376,6 +11463,13 @@ interface LowerCtx {
   fnMode?: { retVar: string | null; retVars?: string[] }; // set when lowering an INTERNAL function body: `return` -> retVar:=v; leave (retVar null = void). retVars set for a multi-value return.
   specialEntry?: boolean; // Phase 6: lowering a @receive/@fallback body INLINE in the dispatcher; a bare `return;` -> stop() (matches solc).
   immStaged?: Map<string, string>; // Phase 5: @immutable name -> its staged-shadow Yul var (constructor body only)
+  // Phase 5 ctor-reachable-immutable-read fix: @immutable name -> a reserved CREATION-block memory cell
+  // holding its staged value. solc forbids loadimmutable + setimmutable of one immutable in a single
+  // assembly subroutine, so a helper reachable from the constructor (a Yul function in the creation
+  // block, which cannot close over jeth_constructor's staged ret-vars) reads the staged value from this
+  // memory cell instead of loadimmutable, and the staged write mirrors each assignment into the cell.
+  // Set on the ctor body's ctx AND on each ctor-reachable helper copy's ctx; absent everywhere else.
+  ctorImmShadow?: Map<string, string>;
   // Phase 5 (full modifiers): set ONLY while lowering a function's modifierWrap in its dispatch case.
   // The {modifierBody} marker lowers to a call of the synthesized body function (userfn) with the
   // materialized args, capturing the result(s) into the buffered `retVars`. retVars is [] for a void

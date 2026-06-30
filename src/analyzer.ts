@@ -2650,24 +2650,77 @@ export class Analyzer {
         this.diags.error(member, 'JETH386', `a @${kind} entry cannot carry a @modifier in v1`);
       }
     }
-    if (member.parameters.length > 0) {
-      this.diags.error(
-        member,
-        'JETH384',
-        `a @${kind} entry cannot declare parameters in v1 (the raw-bytes @fallback(d: bytes): bytes form is not yet supported)`,
-      );
-    }
-    if (member.type && member.type.kind !== ts.SyntaxKind.VoidKeyword) {
-      this.diags.error(
-        member,
-        'JETH384',
-        `a @${kind} entry cannot declare a return type in v1 (the raw-bytes @fallback(d: bytes): bytes form is not yet supported)`,
-      );
+    // The data-passing @fallback form: `fallback(input: bytes): bytes` (solc's
+    // `fallback(bytes calldata input) external [payable] returns (bytes memory)`). The lone param
+    // receives the WHOLE calldata (== msg.data) as a calldata bytes view; the body may `return <bytes>`.
+    // @receive never takes a param or a return type. The bare no-arg/no-return @fallback also works.
+    let bytesParam: string | undefined;
+    let returnsBytes = false;
+    if (kind === 'fallback') {
+      if (member.parameters.length > 1) {
+        this.diags.error(
+          member,
+          'JETH384',
+          'a @fallback entry takes at most one parameter (the data-passing form is `fallback(input: bytes): bytes`)',
+        );
+      } else if (member.parameters.length === 1) {
+        const p = member.parameters[0]!;
+        const pt = resolveType(p.type, this.diags, this.structsByName);
+        if (!ts.isIdentifier(p.name)) {
+          this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
+        } else if (!pt || pt.kind !== 'bytes') {
+          this.diags.error(
+            p,
+            'JETH384',
+            "a @fallback parameter must be typed 'bytes' (it receives the whole calldata: `fallback(input: bytes): bytes`)",
+          );
+        } else if (p.initializer) {
+          this.diags.error(p, 'JETH304', `a @fallback parameter ('${p.name.text}') cannot have a default value`);
+        } else {
+          bytesParam = p.name.text;
+        }
+      }
+      // The return type, if present, must be `bytes` (solc: `returns (bytes memory)`).
+      const hasReturn = !!member.type && member.type.kind !== ts.SyntaxKind.VoidKeyword;
+      if (hasReturn) {
+        const rt = resolveType(member.type, this.diags, this.structsByName);
+        if (!rt || rt.kind !== 'bytes') {
+          this.diags.error(
+            member.type!,
+            'JETH384',
+            "a @fallback return type must be 'bytes' (the data-passing form is `fallback(input: bytes): bytes`)",
+          );
+        } else {
+          returnsBytes = true;
+        }
+      }
+      // solc requires the data-passing form to be ALL-or-NOTHING: either both the `bytes` param AND the
+      // `bytes` return, or neither (the bare form). Reject a half-form (param without return, or return
+      // without param), matching solc's "fallback must either take a single bytes calldata argument and
+      // return bytes memory, or have no arguments and not return anything".
+      const hasBytesParam = bytesParam !== undefined;
+      if (hasBytesParam !== returnsBytes && (hasBytesParam || hasReturn)) {
+        this.diags.error(
+          member,
+          'JETH384',
+          'a data-passing @fallback must declare BOTH a bytes parameter and a bytes return type (`fallback(input: bytes): bytes`), or NEITHER (the bare `fallback(): void` form)',
+        );
+      }
+    } else {
+      // @receive: no params, no return type.
+      if (member.parameters.length > 0) {
+        this.diags.error(member, 'JETH384', 'a @receive entry cannot declare parameters');
+      }
+      if (member.type && member.type.kind !== ts.SyntaxKind.VoidKeyword) {
+        this.diags.error(member, 'JETH384', 'a @receive entry cannot declare a return type');
+      }
     }
 
-    // Type-check the body in a fresh function-like context (modeled on checkConstructor), terminated as
-    // a void body. A @receive/@fallback is externally reachable and may read msg.value/msg.data; msg.value
-    // flows through the payable rule via currentMutability.
+    // Type-check the body in a fresh function-like context (modeled on checkConstructor). A bare
+    // (void) @receive/@fallback terminates as a void body; the data-passing @fallback returns bytes
+    // (its body's `return <bytes>` is checked against bytes). A @receive/@fallback is externally
+    // reachable and may read msg.value/msg.data; msg.value flows through the payable rule via
+    // currentMutability.
     this.scopes = [];
     this.loopDepth = 0;
     this.pushScope();
@@ -2682,10 +2735,15 @@ export class Analyzer {
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
     this.memDynStructLocals.clear();
+    // Bind the data-passing @fallback's bytes param: like a calldata bytes param, a read lowers to a
+    // calldata view (the whole msg.data, wired in the dispatcher). declareLocal records its type;
+    // checkExpr's `dynParamRead` path resolves it (registered as a calldata dyn param at lowering).
+    const bodyReturn = returnsBytes ? BYTES : VOID;
+    if (bytesParam) this.declareLocal(bytesParam, BYTES);
     const body: Stmt[] = [];
     if (member.body) {
       this.pushScope();
-      for (const s of member.body.statements) this.checkStatement(s, VOID, body);
+      for (const s of member.body.statements) this.checkStatement(s, bodyReturn, body);
       this.popScope();
     }
     this.popScope();
@@ -2696,7 +2754,7 @@ export class Analyzer {
         `calling an internal/private function from a @${kind} entry is not supported yet; inline the logic into the entry body`,
       );
     }
-    return { payable, returnsBytes: false, body };
+    return { payable, returnsBytes, body, bytesParam };
   }
 
   /** @payable + applied-@modifier decorators on a constructor (shared by mergeConstructors). */

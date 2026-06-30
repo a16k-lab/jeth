@@ -662,12 +662,16 @@ export interface ImmutableVar {
 
 /** Phase 6: a @receive / @fallback special runtime entry. Lowered INLINE in the dispatcher prologue
  *  (emitRuntime), not a selectable function. @receive is always payable; @fallback is non-payable by
- *  default (the `if callvalue(){revert}` guard) unless `payable`. `returnsBytes` stays false in v1
- *  (the raw-bytes-returning fallback is gated). The body is ordinary Stmt[] (a constructor-like body). */
+ *  default (the `if callvalue(){revert}` guard) unless `payable`. The data-passing @fallback form
+ *  (`fallback(input: bytes): bytes`) sets `bytesParam` (the param name, bound to the WHOLE calldata as a
+ *  bytes memory local) and `returnsBytes` (the body `return <bytes>` ABI-encodes + returns the bytes; a
+ *  bare `return;`/fall-off returns empty). The bare no-arg/no-return form leaves both unset/false.
+ *  The body is ordinary Stmt[] (a constructor-like body). */
 export interface SpecialEntryIR {
   payable: boolean;
   returnsBytes: boolean;
   body: Stmt[];
+  bytesParam?: string; // the data-passing @fallback's bytes param name (bound to msg.data); undefined for the bare form
 }
 
 export interface ContractIR {
