@@ -322,6 +322,11 @@ export function isDynLeafTopicArray(t: JethType): boolean {
   if (t.kind !== 'array') return false;
   const el = t.element;
   if (isBytesLike(el)) return true; // string[] / bytes[] / Arr<string,N> / Arr<bytes,N>
+  // a DYNAMIC struct element (P[] / Arr<P,N> where P has a bytes/string field): topic-encode each
+  // element's members packed-padded (yul packTopicStructFromAbi). A STATIC-struct element array
+  // (P_static[]) stays on the inline value-element path. The element struct's fields must all be
+  // value / bytes-string / static-aggregate (deeper dynamic fields stay a clean reject).
+  if (el.kind === 'struct' && isDynamicType(el) && isTopicEncodableDynStruct(el)) return true;
   if (el.kind === 'array' && isDynamicType(el)) {
     // a dynamic nested-array element (u256[][], string[][], Arr<u256[],N>, ...): leaf must be
     // value or bytes/string (no struct leaf).
@@ -330,6 +335,15 @@ export function isDynLeafTopicArray(t: JethType): boolean {
     return isStaticValueType(leaf) || isBytesLike(leaf);
   }
   return false;
+}
+
+/** A DYNAMIC struct whose indexed-event TOPIC payload the packed-padded codec can lay out from its
+ *  ABI memory layout (packTopicStructFromAbi): every field is a value type (inline word), bytes/string
+ *  (offset -> content padded), or a static aggregate (inline leaf words). A dynamic-array field or a
+ *  nested dynamic struct field is excluded (a separate, unsupported case -> a clean reject). */
+export function isTopicEncodableDynStruct(t: JethType): boolean {
+  if (t.kind !== 'struct' || !isDynamicType(t)) return false;
+  return t.fields.every((f) => isStaticType(f.type) || isBytesLike(f.type));
 }
 
 /** A MULTI-DIMENSIONAL memory array whose ultimate leaf elements are all VALUE types

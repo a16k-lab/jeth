@@ -131,8 +131,11 @@ describe('dynamic-aggregate event params (indexed topic + non-indexed data) vs S
     }
   });
 
-  it('a struct-leaf indexed array stays a sound reject (JETH207)', () => {
-    const reject = (src: string) => {
+  it('an indexed dynamic-struct-element array is now ACCEPTED (OR5, packed-padded struct topic)', () => {
+    // Previously a sound reject; the topic codec now encodes each struct element's members
+    // packed-padded (byte-identical to solc, verified in audit-over-rejections.test.ts). A struct
+    // element with a deeper dynamic field (dyn array / nested dyn struct) stays a clean reject.
+    const codes = (src: string) => {
       try {
         compile(src, { fileName: 'C.jeth' });
         return [];
@@ -141,7 +144,10 @@ describe('dynamic-aggregate event params (indexed topic + non-indexed data) vs S
       }
     };
     expect(
-      reject('@struct class P { a: u256; s: string } @contract class C { @event E(@indexed a: P[]); @external go(xs: P[]): void { emit(E(xs)); } }'),
+      codes('@struct class P { a: u256; s: string } @contract class C { @event E(@indexed a: P[]); @external go(xs: P[]): void { emit(E(xs)); } }'),
+    ).toEqual([]);
+    expect(
+      codes('@struct class P { a: u256; tags: u256[] } @contract class C { @event E(@indexed a: P[]); @external go(xs: P[]): void { emit(E(xs)); } }'),
     ).toContain('JETH207');
   });
 });

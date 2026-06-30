@@ -107,6 +107,56 @@ describe('audit over-rejections lifted byte-identical', () => {
     expect(logs(rj)).toBe(logs(rs));
   });
 
+  it('OR5: indexed dynamic-struct-element array event emits a byte-identical keccak topic', async () => {
+    const W = (n: bigint) => n.toString(16).padStart(64, '0');
+    const padR = (h: string) => h + '0'.repeat((64 - (h.length % 64)) % 64);
+    const logs = (r: { logs?: { topics: string[]; data: string }[] }) => JSON.stringify(r.logs?.map((l) => ({ t: l.topics, d: l.data })) ?? []);
+    const run = async (jeth: string, sol: string, sig: string, args: string) => {
+      const hj = await Harness.create();
+      const hs = await Harness.create();
+      const aj = await hj.deploy(compile(jeth, { fileName: 'C.jeth' }).creationBytecode);
+      const as = await hs.deploy(compileSolidity(SPDX + sol, 'C').creation);
+      const rj = await hj.call(aj, sel(sig) + args);
+      const rs = await hs.call(as, sel(sig) + args);
+      expect(rj.success).toBe(rs.success);
+      expect(logs(rj)).toBe(logs(rs));
+    };
+    // P[] = [P(7,"aa"), P(9,"bbbb")]
+    await run(
+      '@struct class P { a: u256; s: string; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }',
+      'contract C { struct P { uint256 a; string s; } event E(P[] indexed ps); function f(P[] calldata ps) external { emit E(ps); } }',
+      'f((uint256,string)[])',
+      W(0x20n) + W(2n) + W(0x40n) + W(0xc0n) + W(7n) + W(0x40n) + W(2n) + padR('6161') + W(9n) + W(0x40n) + W(4n) + padR('62626262'),
+    );
+    // empty array
+    await run(
+      '@struct class P { a: u256; s: string; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }',
+      'contract C { struct P { uint256 a; string s; } event E(P[] indexed ps); function f(P[] calldata ps) external { emit E(ps); } }',
+      'f((uint256,string)[])',
+      W(0x20n) + W(0n),
+    );
+    // fixed outer Arr<P,2>
+    await run(
+      '@struct class P { a: u256; s: string; } @contract class C { @event E(@indexed ps: Arr<P,2>); @external f(ps: Arr<P,2>): void { emit(E(ps)); } }',
+      'contract C { struct P { uint256 a; string s; } event E(P[2] indexed ps); function f(P[2] calldata ps) external { emit E(ps); } }',
+      'f((uint256,string)[2])',
+      W(0x20n) + W(0x40n) + W(0xc0n) + W(7n) + W(0x40n) + W(2n) + padR('6161') + W(9n) + W(0x40n) + W(4n) + padR('62626262'),
+    );
+  });
+
+  it('OR5: a struct element with a dyn-array / nested-dyn-struct field stays a clean reject', () => {
+    const rej = (s: string) => {
+      try {
+        compile(s, { fileName: 'C.jeth' });
+        return [];
+      } catch (e: unknown) {
+        return ((e as { diagnostics?: { code: string }[] })?.diagnostics ?? []).map((d) => d.code);
+      }
+    };
+    expect(rej('@struct class P { a: u256; tags: u256[]; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }')).toContain('JETH207');
+    expect(rej('@struct class T { n: u256; s: string; } @struct class P { a: u256; t: T; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }')).toContain('JETH207');
+  });
+
   it('still rejects illegal const casts (no over-acceptance regression)', () => {
     const rej = (s: string) => {
       try {

@@ -3856,10 +3856,47 @@ ${indent(runtime, 6)}
       } else {
         this.packTopicArray(elem, et, String(elem.length), cursor, out);
       }
+    } else if (elem.kind === 'struct') {
+      // a DYNAMIC struct element: topic-encode its members packed-padded from its ABI tail at `et`.
+      this.packTopicStructFromAbi(elem, et, cursor, out);
     } else {
       throw new UnsupportedError(`indexed-topic array element kind '${elem.kind}' is not supported`);
     }
     out.push(`}`);
+  }
+
+  /** Topic-encode a DYNAMIC struct from its ABI-encoded memory layout at `ptr` (the layout
+   *  materializeArrayArg produces for a struct array element): value fields are inline at the head;
+   *  a bytes/string field is behind a head OFFSET (relative to `ptr`); a static-aggregate field is
+   *  inline leaf words. Emits the packed-padded preimage to `cursor` (a Yul var mutated in place):
+   *  a value -> its word, a bytes/string -> content right-padded to a 32-byte boundary, a static
+   *  aggregate -> its inline leaf words; NO length/offset words. Scoped to value / bytes-string /
+   *  static-aggregate fields (isTopicEncodableDynStruct gates deeper dynamic fields out). Verified
+   *  byte-identical to solc (keccak256 of the concatenation == the topic). */
+  private packTopicStructFromAbi(struct: JethType & { kind: 'struct' }, ptr: string, cursor: string, out: string[]): void {
+    let hw = 0; // head-word offset within the struct's ABI head (value=1, static-agg=abiHeadWords, dynamic=1 offset word)
+    for (const f of struct.fields) {
+      const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
+      if (isBytesLike(f.type)) {
+        const off = this.fresh();
+        out.push(`let ${off} := add(${ptr}, mload(${at}))`); // offset relative to the struct start
+        const len = this.fresh();
+        out.push(`let ${len} := mload(${off})`);
+        out.push(`mcopy(${cursor}, add(${off}, 0x20), ${len})`);
+        out.push(`if mod(${len}, 0x20) { mstore(add(${cursor}, ${len}), 0) }`); // zero the partial-word tail
+        out.push(`${cursor} := add(${cursor}, and(add(${len}, 0x1f), not(0x1f)))`);
+        hw += 1;
+      } else if (isStaticType(f.type)) {
+        // a value (1 word) or a static aggregate (abiHeadWords inline leaf words): the inline words ARE
+        // the packed-padded form, copy them verbatim.
+        const w = abiHeadWords(f.type);
+        out.push(`mcopy(${cursor}, ${at}, ${w * 32})`);
+        out.push(`${cursor} := add(${cursor}, ${w * 32})`);
+        hw += w;
+      } else {
+        throw new UnsupportedError(`indexed-topic struct field kind '${f.type.kind}' is not supported`);
+      }
+    }
   }
 
   /** PRE-PASS: walk a tuple in encode order and materialize each bytes/string
