@@ -14046,9 +14046,10 @@ export class Analyzer {
       if (bt && bt.kind === 'struct' && isStaticType(bt)) {
         const base = this.checkExpr(node.expression);
         if (!base) return undefined;
-        if (base.kind !== 'call') {
-          // a struct VALUE that is not a fresh internal-call result (alias/storage source) reached
-          // here is unexpected; fall through to the normal handlers rather than mishandle it.
+        if (base.kind !== 'call' && base.kind !== 'abiDecode') {
+          // a struct VALUE that is not a fresh internal-call result or a decoded image (abi.decode(b, P) /
+          // an @external library delegatecall result, both `abiDecode`) reached here is unexpected; fall
+          // through to the normal handlers rather than mishandle it.
         } else {
           const fo = this.memFieldOffset(bt, node.name.text);
           if (!fo) {

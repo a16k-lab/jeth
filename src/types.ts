@@ -338,12 +338,34 @@ export function isDynLeafTopicArray(t: JethType): boolean {
 }
 
 /** A DYNAMIC struct whose indexed-event TOPIC payload the packed-padded codec can lay out from its
- *  ABI memory layout (packTopicStructFromAbi): every field is a value type (inline word), bytes/string
- *  (offset -> content padded), or a static aggregate (inline leaf words). A dynamic-array field or a
- *  nested dynamic struct field is excluded (a separate, unsupported case -> a clean reject). */
+ *  ABI memory layout (packTopicStructFromAbi): each field is a value type (inline word), a static
+ *  aggregate (inline leaf words), bytes/string (offset -> content padded), a DYNAMIC array whose leaf is
+ *  topic-encodable (Edge C: tags: u256[], names: string[], grid: u256[][]), or a NESTED DYNAMIC struct
+ *  that is itself topic-encodable (Edge C: inner: Q). The recursion mirrors packTopicArray /
+ *  packTopicStructFromAbi exactly. */
 export function isTopicEncodableDynStruct(t: JethType): boolean {
   if (t.kind !== 'struct' || !isDynamicType(t)) return false;
-  return t.fields.every((f) => isStaticType(f.type) || isBytesLike(f.type));
+  return t.fields.every(
+    (f) =>
+      isStaticType(f.type) ||
+      isBytesLike(f.type) ||
+      (f.type.kind === 'array' && f.type.length === undefined && isTopicEncodableArray(f.type)) ||
+      (f.type.kind === 'struct' && isDynamicType(f.type) && isTopicEncodableDynStruct(f.type)),
+  );
+}
+
+/** An array whose elements the packed-padded indexed-topic codec (packTopicArray) can lay out: a value
+ *  element (inline), a static aggregate element (inline), bytes/string (padded), a nested array whose
+ *  leaf is itself topic-encodable, or a DYNAMIC struct element that is topic-encodable. Mirrors
+ *  packTopicArray's element dispatch. */
+export function isTopicEncodableArray(t: JethType): boolean {
+  if (t.kind !== 'array') return false;
+  const e = t.element;
+  if (isStaticType(e)) return true; // value / static struct / static fixed-array element (inline, no offset table)
+  if (isBytesLike(e)) return true; // bytes/string element
+  if (e.kind === 'array') return isTopicEncodableArray(e); // nested array
+  if (e.kind === 'struct' && isDynamicType(e)) return isTopicEncodableDynStruct(e); // dynamic struct element
+  return false;
 }
 
 /** A MULTI-DIMENSIONAL memory array whose ultimate leaf elements are all VALUE types

@@ -6,7 +6,7 @@
 //     words and NO offset tables (a value leaf as its word; a bytes/string leaf as its content
 //     right-padded to a 32-byte boundary; nested arrays concatenated). Verified across calldata,
 //     memory, and storage sources, multi-word elements, empty arrays/strings, and mixed events.
-// A STRUCT-leaf array (P[] / Arr<P,2> where P has a dynamic field) stays a sound reject (JETH207).
+// A STRUCT-leaf array (P[] / Arr<P,2> where P has a dynamic field) is supported too (OR5 + Edge C).
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -146,8 +146,10 @@ describe('dynamic-aggregate event params (indexed topic + non-indexed data) vs S
     expect(
       codes('@struct class P { a: u256; s: string } @contract class C { @event E(@indexed a: P[]); @external go(xs: P[]): void { emit(E(xs)); } }'),
     ).toEqual([]);
+    // Edge C: a struct element with a deeper dynamic field (dyn array / nested dyn struct) is now ACCEPTED
+    // too (packTopicStructFromAbi recurses; byte-identical to solc - see event-indexed-dyn-struct-array).
     expect(
       codes('@struct class P { a: u256; tags: u256[] } @contract class C { @event E(@indexed a: P[]); @external go(xs: P[]): void { emit(E(xs)); } }'),
-    ).toContain('JETH207');
+    ).toEqual([]);
   });
 });

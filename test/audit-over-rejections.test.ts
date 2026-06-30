@@ -158,8 +158,11 @@ describe('audit over-rejections lifted byte-identical', () => {
     );
   });
 
-  it('OR5: a struct element with a dyn-array / nested-dyn-struct field stays a clean reject', () => {
-    const rej = (s: string) => {
+  it('Edge C: a struct element with a dyn-array / nested-dyn-struct field is now ACCEPTED (byte-identical topic)', () => {
+    // Lifted by Edge C: packTopicStructFromAbi follows a dyn-array field / nested-dyn-struct field through
+    // its head offset and recurses, byte-identical to solc (verified on the harness in
+    // event-indexed-dyn-struct-array.test.ts). These were previously sound JETH207 rejects.
+    const codes = (s: string) => {
       try {
         compile(s, { fileName: 'C.jeth' });
         return [];
@@ -167,8 +170,8 @@ describe('audit over-rejections lifted byte-identical', () => {
         return ((e as { diagnostics?: { code: string }[] })?.diagnostics ?? []).map((d) => d.code);
       }
     };
-    expect(rej('@struct class P { a: u256; tags: u256[]; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }')).toContain('JETH207');
-    expect(rej('@struct class T { n: u256; s: string; } @struct class P { a: u256; t: T; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }')).toContain('JETH207');
+    expect(codes('@struct class P { a: u256; tags: u256[]; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }')).toEqual([]);
+    expect(codes('@struct class T { n: u256; s: string; } @struct class P { a: u256; t: T; } @contract class C { @event E(@indexed ps: P[]); @external f(ps: P[]): void { emit(E(ps)); } }')).toEqual([]);
   });
 
   it('OR1: indexing a @constant bytesN value (this.B[i]) returns the indexed byte', async () => {

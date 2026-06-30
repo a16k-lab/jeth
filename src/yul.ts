@@ -3937,6 +3937,23 @@ ${indent(runtime, 6)}
         out.push(`mcopy(${cursor}, ${at}, ${w * 32})`);
         out.push(`${cursor} := add(${cursor}, ${w * 32})`);
         hw += w;
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // Edge C: a DYNAMIC value/bytes/string-element array field (tags: u256[], names: string[]): behind a
+        // head OFFSET (relative to the struct start ptr). The data at off is [len][...]; recurse into
+        // packTopicArray with the SAME packed-padded element rules a top-level indexed array uses.
+        const off = this.fresh();
+        out.push(`let ${off} := add(${ptr}, mload(${at}))`);
+        const len = this.fresh();
+        out.push(`let ${len} := mload(${off})`);
+        this.packTopicArray(f.type, `add(${off}, 0x20)`, len, cursor, out);
+        hw += 1;
+      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        // Edge C: a NESTED DYNAMIC struct field (inner: Q): behind a head OFFSET (relative to ptr). Recurse
+        // from the nested struct's own start - its members lay out packed-padded by the same rules.
+        const off = this.fresh();
+        out.push(`let ${off} := add(${ptr}, mload(${at}))`);
+        this.packTopicStructFromAbi(f.type, off, cursor, out);
+        hw += 1;
       } else {
         throw new UnsupportedError(`indexed-topic struct field kind '${f.type.kind}' is not supported`);
       }
@@ -5283,6 +5300,14 @@ ${indent(runtime, 6)}
       const size = this.abiEncFromCd(e.type, eb, ptr, true, out, true);
       out.push(`mstore(0x40, add(${ptr}, ${size}))`);
       return ptr;
+    }
+    if (e.kind === 'abiDecode') {
+      // abi.decode(b, P).x / an @external library delegatecall result L.mk(a).x: lowerAbiDecode produces a
+      // fresh decoded image (the flat ABI image for a static struct), the same pointer aggFieldRead reads
+      // the field word from. Freeze it (the consumer may read multiple words).
+      const p = this.fresh();
+      out.push(`let ${p} := ${this.lowerAbiDecode(e.data, [e.type], ctx, out)[0]!}`);
+      return p;
     }
     throw new UnsupportedError(`cannot materialize aggregate ternary branch '${e.kind}'`);
   }
