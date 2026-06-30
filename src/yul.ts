@@ -3272,6 +3272,15 @@ ${indent(runtime, 6)}
         ? this.encodeDynStructToBlob(values[i]!, ctx, out)
         : null,
     );
+    // PRE-PASS: a WHOLE dynamic-array FIELD of a calldata dyn-struct array element used as a tuple
+    // component (return [xs[i].grid, xs[i].a], grid: u256[][] -> cdFieldAggValue; or xs[i].grid[j] ->
+    // cdNestedFieldAggValue) is DEEP-COPIED from its resolved calldata header into a fresh pointer-headed
+    // memory image BEFORE the tuple ptr is captured below, so the copy's allocations cannot alias the
+    // tuple buffer. The loop then re-encodes the image into the tail via abiEncFromMem (offset word +
+    // recursive tail) - the SAME encoder the memArray component / single `return xs[i].grid` path uses.
+    const cdFieldRefs: (string | null)[] = values.map((v) =>
+      v.kind === 'cdFieldAggValue' || v.kind === 'cdNestedFieldAggValue' ? this.nestedMemImagePtr(v, ctx, out) : null,
+    );
     const headWordsOf = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
     const totalHead = types.reduce((n, t) => n + headWordsOf(t), 0);
     const ptr = this.fresh();
@@ -3327,6 +3336,16 @@ ${indent(runtime, 6)}
         const total = `mul(add(mload(${mp}), 1), 0x20)`;
         out.push(`mcopy(${cursor}, ${mp}, ${total})`);
         out.push(`${cursor} := add(${cursor}, ${total})`);
+        hw += 1;
+      } else if (cdFieldRefs[i]) {
+        // a WHOLE calldata-field-array component (xs[i].grid / xs[i].grid[j]) deep-copied to a memory
+        // image in the pre-pass: offset word + re-encode the image into the tail via abiEncFromMem (the
+        // recursive codec follows the pointer-headed image; a value/struct/bytes leaf is flattened
+        // exactly like the memArray-component / single-return path).
+        const mp = cdFieldRefs[i]!;
+        out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
+        const sz = this.abiEncFromMem(t, mp, cursor, ctx, out);
+        out.push(`${cursor} := add(${cursor}, ${sz})`);
         hw += 1;
       } else if (this.staticCdComponentName(values[i]!, t)) {
         // a whole STATIC calldata aggregate param (Arr<T,N> / static struct): INLINE in the head
@@ -6463,6 +6482,16 @@ ${indent(runtime, 6)}
       const b = a.arr.base;
       if (b.kind === 'memArray') return this.ctxLookup(ctx, b.varName); // memory local: ALIAS
       if (b.kind === 'memArrayExpr') return this.lowerExpr(b.expr, ctx, out);
+      // a WHOLE dynamic-array FIELD of a calldata dyn-struct (param `s.tags` or array element
+      // `xs[i].tags`) bound to a memory local: DEEP-COPY from the field's resolved calldata header
+      // into a fresh memory image. Reuses the SAME cdFieldArrayHeader + abiDecFromCdToImage codec the
+      // cdFieldAggValue (array/struct field) path uses; here the leaf is bytes/string (B2) or a value
+      // element (u256[]). cap = Panic 0x41 (an oversized inner len / alloc overflow), matching solc's
+      // calldata->memory deep-copy; truncated/OOB source EMPTY-reverts via the codec's bounds checks.
+      if (b.kind === 'cdDynArrayField') {
+        const hdr = this.cdFieldArrayHeader(b.place, ctx, out);
+        return this.abiDecFromCdToImage(a.type, hdr, out, `${this.panic()}(0x41)`);
+      }
       if (b.kind === 'calldataArray') {
         // cd-to-mem-copy: a whole REFERENCE-element calldata array (bytes[]/string[]/u256[][]/P[]...) deep-
         // copies into a fresh POINTER-HEADED memory image via abiDecFromCdToImage (the calldata twin of

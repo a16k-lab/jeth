@@ -7491,12 +7491,21 @@ export class Analyzer {
             e.arr.base.kind === 'placeArray')) ||
           (e.kind === 'mapStorageValue' && e.type.kind === 'array')) &&
         isStorageCopyableRef(declared);
+      // cd-field-to-mem-copy: a WHOLE dynamic-array FIELD of a calldata dyn-struct array element
+      // (let row: u256[][] = xs[i].grid; let inner: u256[] = xs[i].grid[j]) DEEP-COPIES into a fresh
+      // pointer-headed memory image via abiDecFromCdToImage (the same calldata->memory deep-copy
+      // semantics as a whole calldata-array param: Panic 0x41 on an oversized inner len / alloc
+      // overflow, plus the per-dimension field-header bounds checks in cdFieldArrayHeader /
+      // cdNestedFieldArrayHeader). aggArgToMemPtr in the local-decl lowering already routes
+      // cdFieldAggValue / cdNestedFieldAggValue here.
+      const fromCdField = e.kind === 'cdFieldAggValue' || e.kind === 'cdNestedFieldAggValue';
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
         e.kind !== 'abiDecode' &&
         !fromCdArray &&
-        !fromStorageArray
+        !fromStorageArray &&
+        !fromCdField
       ) {
         this.diags.error(
           decl.initializer,
@@ -7612,6 +7621,13 @@ export class Analyzer {
       // abiDecFromMemToImage; solc calldata-decode revert semantics: EMPTY-revert on OOB/truncated/oversized,
       // NOT Panic 0x41).
       const fromCdArray = e.kind === 'arrayValue' && e.arr.base.kind === 'calldataArray';
+      // cd-field-to-mem-copy: a WHOLE bytes[]/string[] FIELD of a calldata dyn-struct (param `s.tags`
+      // or array element `xs[i].tags`) resolves to an arrayValue with a cdDynArrayField base. DEEP-COPY
+      // it into a fresh pointer-headed memory image via cdFieldArrayHeader + abiDecFromCdToImage in the
+      // local-decl lowering (aggArgToMemPtr handles the cdDynArrayField base), the same field-header
+      // codec the cdFieldAggValue (array/struct field) path uses. (A NESTED-array / dyn-struct element
+      // field never reaches here: it is rejected upstream or routed via cdFieldAggValue.)
+      const fromCdField = e.kind === 'arrayValue' && e.arr.base.kind === 'cdDynArrayField';
       // storage-to-mem-copy: a WHOLE storage reference-element array (this.blobs: bytes[]/string[]/P[]/...)
       // DEEP-COPIES into a fresh pointer-headed memory image via abiDecFromStorageToImage (the storage twin;
       // storage is canonical, so no malformed-input revert - byte-identical to solc's storage->memory copy).
@@ -7636,6 +7652,7 @@ export class Analyzer {
         !fromMemElem &&
         !fromCall &&
         !fromCdArray &&
+        !fromCdField &&
         !fromStorageArray
       ) {
         this.diags.error(
@@ -9027,7 +9044,17 @@ export class Analyzer {
       }
       const lv = this.checkLValue(el);
       if (!lv) return;
-      if (!isStaticValueType(lv.type)) {
+      // A DYNAMIC component (bytes/string or a dynamic value-element array) may be assigned to a
+      // PRE-DECLARED MEMORY LOCAL of the same type: the tupleAssign lowering re-points the local's
+      // register at the decoded memory image (exactly like the `let [a,b] = ...` DECLARATION form,
+      // which binds the same register to the same temp). Restricted to a simple `local` target of a
+      // re-pointable kind: a bytes/string local (memDynLocals) or a dynamic value-array local
+      // (memArrayLocals). A STORAGE / FIELD / ELEMENT target, a struct local, or a fixed-array local
+      // would need a deep-copy that the tupleAssign path does not wire, so those stay clean rejects.
+      const repointableDynLocal =
+        lv.kind === 'local' &&
+        (isBytesLike(lv.type) || (lv.type.kind === 'array' && lv.type.length === undefined && isStaticValueType(lv.type.element)));
+      if (!isStaticValueType(lv.type) && !repointableDynLocal) {
         this.diags.error(
           el,
           'JETH066',
@@ -9042,36 +9069,57 @@ export class Analyzer {
     // whose bytes returndata is decoded into the N value components (abiDecode source). Recognized
     // BEFORE the internal-call form (tupleCallName matches `this.f` for an @external f too, but
     // resolveTupleCall would reject it as JETH240).
-    const selfTuple = this.resolveExternalSelfTupleSource(e.right, n);
-    if (selfTuple === 'handled') return;
-    const callName = !selfTuple ? this.tupleCallName(e.right) : undefined;
-    if (selfTuple) {
+    // Shared LHS/RHS type-compatibility check for a resolved tuple source (each component i must be
+    // assignable to target i; a skipped slot is unconstrained). Returns false (and reports) on mismatch.
+    const checkTupleTypes = (compTypes: JethType[]): boolean => {
       for (let i = 0; i < n; i++) {
         const tgt = targets[i];
-        if (tgt && !typesEqual(selfTuple.types[i]!, tgt.type) && !isImplicitWiden(selfTuple.types[i]!, tgt.type)) {
+        if (tgt && !typesEqual(compTypes[i]!, tgt.type) && !isImplicitWiden(compTypes[i]!, tgt.type)) {
           this.diags.error(
             lhs.elements[i]!,
             'JETH085',
-            `cannot assign ${displayName(selfTuple.types[i]!)} to ${displayName(tgt.type)}`,
+            `cannot assign ${displayName(compTypes[i]!)} to ${displayName(tgt.type)}`,
           );
-          return;
+          return false;
         }
       }
+      return true;
+    };
+    const selfTuple = this.resolveExternalSelfTupleSource(e.right, n);
+    if (selfTuple === 'handled') return;
+    // Phase 6: `[a, b] = IFoo(addr).method(args)` with a >=2-component tuple return: decode the call's
+    // bytes returndata into the N components (the same abi.decode source the DECLARATION form uses).
+    const ifaceCall = !selfTuple ? this.resolveInterfaceCall(e.right) : undefined;
+    if (ifaceCall === 'handled') return;
+    // `[a, b] = abi.decode(data, [T1, T2])`: each component is decoded into its own register / memory
+    // image (the same abiDecode source the declaration form uses); recognized before the internal call.
+    const abiDecodeTuple = !selfTuple && !ifaceCall ? this.resolveAbiDecodeTuple(e.right) : undefined;
+    const callName = !selfTuple && !ifaceCall && !abiDecodeTuple ? this.tupleCallName(e.right) : undefined;
+    if (selfTuple) {
+      if (!checkTupleTypes(selfTuple.types)) return;
       source = selfTuple.source;
+    } else if (ifaceCall) {
+      if (!ifaceCall.returnTypes || ifaceCall.returnTypes.length !== n) {
+        this.diags.error(
+          e.right,
+          'JETH066',
+          `this interface method returns ${ifaceCall.returnTypes?.length ?? 1} value(s), expected ${n} target(s)`,
+        );
+        return;
+      }
+      if (!checkTupleTypes(ifaceCall.returnTypes)) return;
+      source = { kind: 'abiDecode', data: ifaceCall.call, types: ifaceCall.returnTypes };
+    } else if (abiDecodeTuple) {
+      if (abiDecodeTuple.types.length !== n) {
+        this.diags.error(e.right, 'JETH066', `abi.decode tuple has ${abiDecodeTuple.types.length} type(s), expected ${n} target(s)`);
+        return;
+      }
+      if (!checkTupleTypes(abiDecodeTuple.types)) return;
+      source = abiDecodeTuple.source;
     } else if (callName) {
       const r = this.resolveTupleCall(e.right as ts.CallExpression, callName, n);
       if (!r) return;
-      for (let i = 0; i < n; i++) {
-        const tgt = targets[i];
-        if (tgt && !typesEqual(r.types[i]!, tgt.type) && !isImplicitWiden(r.types[i]!, tgt.type)) {
-          this.diags.error(
-            lhs.elements[i]!,
-            'JETH085',
-            `cannot assign ${displayName(r.types[i]!)} to ${displayName(tgt.type)}`,
-          );
-          return;
-        }
-      }
+      if (!checkTupleTypes(r.types)) return;
       source = { kind: 'call', fn: r.fn, args: r.args };
     } else if (ts.isArrayLiteralExpression(e.right)) {
       if (e.right.elements.length !== n) {
