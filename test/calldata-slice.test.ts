@@ -49,7 +49,7 @@ const J = `@contract class C {
   @external @view tail(data: bytes): bytes { return data.slice(4n); }
   @external @view mid(data: bytes): bytes { return data.slice(2n, 5n); }
   @external @view dyn(data: bytes, s: u256, e: u256): bytes { return data.slice(s, e); }
-  @external @view slen(data: bytes, s: u256, e: u256): u256 { return data.slice(s, e).length; }
+  @external @view slen(data: bytes, s: u256, e: u256): u256 { const x: bytes = data.slice(s, e); return x.length; }
   @external @view ss(data: bytes): bytes { return data.slice(1n).slice(2n); }
   @external @view u8s(data: bytes, i: u8): bytes { return data.slice(i); }
   @external @view selSkip(): bytes { return msg.data.slice(4n); }
@@ -96,7 +96,9 @@ describe('calldata slicing - byte-identical to solc data[start:end]', () => {
   it('mid d[2:5]', () => diff(sel('mid(bytes)') + oneBytesArg));
   it('slice of slice d[1:][2:]', () => diff(sel('ss(bytes)') + oneBytesArg));
   it('uint8 start index', () => diff(sel('u8s(bytes,uint8)') + W(0x40n) + W(3n) + W(DLEN) + DPAD));
-  it('.length of a slice', () => diff(sel('slen(bytes,uint256,uint256)') + W(0x60n) + W(3n) + W(7n) + W(DLEN) + DPAD));
+  // .length is read via the BOUND-local form (bytes calldata x = d[s:e]; x.length) in BOTH compilers -
+  // solc rejects `.length` DIRECTLY on an unbound slice expression (see the accept/reject block below).
+  it('.length of a bound slice', () => diff(sel('slen(bytes,uint256,uint256)') + W(0x60n) + W(3n) + W(7n) + W(DLEN) + DPAD));
   it('local bind', () => diff(sel('bind(bytes)') + oneBytesArg));
   it('@pure param slice', () => diff(sel('purep(bytes)') + oneBytesArg));
   it('keccak256(d[2:])', () => diff(sel('kc(bytes)') + oneBytesArg));
@@ -271,6 +273,40 @@ describe('calldata slicing - accept/reject parity with solc', () => {
       j: `@contract class C { @external @view f(data: bytes, i: i256): bytes { return data.slice(i); } }`,
       s: `contract C { function f(bytes calldata d, int i) external pure returns(bytes memory){ return d[i:]; } }`,
     },
+    // `.length` DIRECTLY on an unbound bytes/string calldata slice expression: solc rejects with
+    // "Member \"length\" not found ... in bytes calldata slice" (a slice type exposes NO members).
+    // JETH mirrors this with JETH202 - across every slice form. Binding to a local first is accepted
+    // (the positive control below + the `slen` behavioural case). All forms must BOTH-REJECT.
+    {
+      label: '.length on a bytes slice expression is rejected',
+      j: `@contract class C { @external @view f(d: bytes): u256 { return d.slice(2n, 5n).length; } }`,
+      s: `contract C { function f(bytes calldata d) external pure returns(uint){ return d[2:5].length; } }`,
+    },
+    {
+      label: '.length on an open-ended bytes slice is rejected',
+      j: `@contract class C { @external @view f(d: bytes): u256 { return d.slice(4n).length; } }`,
+      s: `contract C { function f(bytes calldata d) external pure returns(uint){ return d[4:].length; } }`,
+    },
+    {
+      label: '.length on a whole bytes slice d.slice() is rejected',
+      j: `@contract class C { @external @view f(d: bytes): u256 { return d.slice().length; } }`,
+      s: `contract C { function f(bytes calldata d) external pure returns(uint){ return d[:].length; } }`,
+    },
+    {
+      label: '.length on a slice-of-slice is rejected',
+      j: `@contract class C { @external @view f(d: bytes): u256 { return d.slice(1n, 9n).slice(0n, 2n).length; } }`,
+      s: `contract C { function f(bytes calldata d) external pure returns(uint){ return d[1:9][0:2].length; } }`,
+    },
+    {
+      label: '.length on a msg.data slice is rejected',
+      j: `@contract class C { @external @view f(): u256 { return msg.data.slice(4n).length; } }`,
+      s: `contract C { function f() external view returns(uint){ return msg.data[4:].length; } }`,
+    },
+    {
+      label: '.length on a string slice expression is rejected',
+      j: `@contract class C { @external @view f(s: string): u256 { return s.slice(1n, 4n).length; } }`,
+      s: `contract C { function f(string calldata s) external pure returns(uint){ return s[1:4].length; } }`,
+    },
   ];
   for (const c of cases) {
     it(c.label, () => {
@@ -281,6 +317,12 @@ describe('calldata slicing - accept/reject parity with solc', () => {
   it('uint8 index is accepted (matches solc)', () => {
     const j = `@contract class C { @external @view f(data: bytes, i: u8): bytes { return data.slice(i); } }`;
     const s = `contract C { function f(bytes calldata d, uint8 i) external pure returns(bytes memory){ return d[i:]; } }`;
+    expect(jethAccepts(j)).toBe(true);
+    expect(solAccepts(s)).toBe(true);
+  });
+  it('.length on a slice BOUND to a local is accepted (matches solc)', () => {
+    const j = `@contract class C { @external @view f(d: bytes): u256 { const x: bytes = d.slice(2n, 5n); return x.length; } }`;
+    const s = `contract C { function f(bytes calldata d) external pure returns(uint){ bytes calldata x = d[2:5]; return x.length; } }`;
     expect(jethAccepts(j)).toBe(true);
     expect(solAccepts(s)).toBe(true);
   });

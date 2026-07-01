@@ -14009,6 +14009,22 @@ export class Analyzer {
       if (bt && bt.kind === 'array') return undefined; // array but unresolvable -> no diagnostic doubling
       const operand = this.checkExpr(node.expression);
       if (!operand) return undefined;
+      // A bytes/string calldata SLICE EXPRESSION has NO members - not even `.length`: solc's
+      // `bytes/string calldata slice` type exposes no member access, so `d.slice(...).length`,
+      // `msg.data.slice(...).length`, and slice-of-slice `.length` all reject with
+      // "Member \"length\" not found ... in bytes calldata slice". The STRING analogue already
+      // rejected (via the string branch below); this mirrors that for the BYTES slice too. Binding
+      // the slice to a local first (const x: bytes = d.slice(...); x.length) reads back as a plain
+      // bytes value (dynParamRead), which solc DOES accept, so this only fires on the unbound
+      // slice EXPRESSION (a `calldataSlice`), never on the bound-local form.
+      if (operand.kind === 'calldataSlice') {
+        this.diags.error(
+          node,
+          'JETH202',
+          `.length is not valid on a ${displayName(operand.type)} calldata slice expression; bind it to a local first`,
+        );
+        return undefined;
+      }
       if (operand.type.kind === 'bytesN') {
         // a fixed-bytes value: .length is the compile-time constant N (solc: bytesN(x).length == N).
         return { kind: 'literalInt', type: U256, value: BigInt(operand.type.size) };
