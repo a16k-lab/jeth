@@ -2295,7 +2295,20 @@ export class Analyzer {
       // contract (the maximal sibling versions). With 2+ heads, the winner must name them all in
       // @override(B, K); a bare @override or an incomplete list is rejected.
       const overridden = [...new Set(versions.slice(1).map((v) => v.definingContract!))];
-      const heads = overridden.filter((x) => !overridden.some((y) => y !== x && basesOf.get(y)?.has(x)));
+      // The branch heads = for each DIRECT base of the contract that DECLARES the winning override, the
+      // MOST-DERIVED contract that (re)declares this signature within that base's own hierarchy. A base
+      // whose version reaches the winner UN-overridden along some path is a head that must be listed in
+      // @override(...) - including a shared root A reachable via a sibling K that does NOT override it.
+      // (The old "maximal among ALL overridden" filter wrongly dropped such an A because A is also a base
+      // of another overrider on a DIFFERENT path, causing both an over-acceptance - a bare/incomplete list
+      // accepted - and, once membership was enforced, an over-rejection of the valid @override(A, ...).)
+      const winnerCls = this.classByName.get(winner.definingContract!);
+      const directBases = winnerCls ? heritageBases(winnerCls).map((h) => h.name) : [];
+      const definerWithin = (base: string): string | undefined => {
+        const cand = overridden.filter((x) => x === base || (basesOf.get(base)?.has(x) ?? false));
+        return cand.find((x) => !cand.some((y) => y !== x && basesOf.get(y)?.has(x)));
+      };
+      const heads = [...new Set(directBases.map(definerWithin).filter((x): x is string => x !== undefined))];
 
       // OVERRIDE-LIST MEMBERSHIP (solc: "Invalid contract specified in override list" / "Identifier not
       // found or not unique" for an undeclared name; "Duplicate contract found in override list"). Every
