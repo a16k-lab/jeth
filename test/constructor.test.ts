@@ -221,4 +221,49 @@ describe('Phase 5 constructors vs solc 0.8.35', () => {
     );
     expect(BigInt(await readSlot(h, a, 0n))).toBe(5n);
   });
+
+  // msg.value/callvalue payability (JETH162) is per-CONSTRUCTOR: a read must be checked against the
+  // payability of the constructor whose body contains it, not the concrete/most-derived constructor.
+  // Previously JETH keyed it off the merged concrete ctor, giving both an over-acceptance (msg.value in
+  // a non-payable base allowed when the derived ctor is @payable) and the mirror over-rejection.
+  describe('constructor msg.value payability is per-constructor (JETH162) vs solc 0.8.35', () => {
+    it('over-acceptance closed: msg.value in a NON-payable base ctor rejects even when the derived ctor is @payable', () => {
+      expect(
+        codes('@abstract class A { @state v: u256; constructor(){ this.v = msg.value; } } @contract class C extends A { @payable constructor(){ } }'),
+      ).toContain('JETH162');
+      // 3 levels deep: a non-payable MIDDLE base reading msg.value, concrete ctor @payable
+      expect(
+        codes('@abstract class A { @state v: u256; } @abstract class B extends A { constructor(){ this.v = msg.value; } } @contract class C extends B { @payable constructor(){ } }'),
+      ).toContain('JETH162');
+    });
+
+    it('mirror over-rejection closed: msg.value in a @payable base ctor + a NON-payable derived ctor compiles and is byte-identical', async () => {
+      // The @payable BASE reading msg.value now COMPILES (previously JETH162 over-rejected it). The
+      // CONCRETE contract C is non-payable, so it cannot be deployed WITH value (the non-payable creation
+      // guard reverts, matching solc); deployed value-less, the base ctor reads msg.value == 0 -> v == 0
+      // on both, byte-identical.
+      const J = '@abstract class A { @state v: u256; @payable constructor(){ this.v = msg.value; } } @contract class C extends A { constructor(){ } }';
+      const S = 'abstract contract A { uint256 v; constructor() payable { v=msg.value; } } contract C is A { constructor() {} }';
+      expect(codes(J)).toEqual([]); // JETH accepts (over-rejection closed); solc also accepts
+      await sameSlots(J, S, '', 0n, 1);
+    });
+
+    it('control: msg.sender in a non-payable base ctor + payable derived is accepted (not payability-gated) and byte-identical', () =>
+      sameSlots(
+        '@abstract class A { @state o: address; constructor(){ this.o = msg.sender; } } @contract class C extends A { @payable constructor(){ } }',
+        'abstract contract A { address o; constructor(){ o=msg.sender; } } contract C is A { constructor() payable {} }',
+        '',
+        0n,
+        1,
+      ));
+
+    it('control: msg.value in a non-payable base ctor + non-payable / absent derived ctor still rejects', () => {
+      expect(
+        codes('@abstract class A { @state v: u256; constructor(){ this.v = msg.value; } } @contract class C extends A { constructor(){ } }'),
+      ).toContain('JETH162');
+      expect(
+        codes('@abstract class A { @state v: u256; constructor(){ this.v = msg.value; } } @contract class C extends A { }'),
+      ).toContain('JETH162');
+    });
+  });
 });
