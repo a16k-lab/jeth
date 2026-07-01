@@ -41,6 +41,7 @@ import {
   storageSlotCount,
   abiHeadWords,
   intRange,
+  numericLiteralWholeValue,
   StructField,
 } from './types.js';
 import {
@@ -17847,7 +17848,9 @@ export class Analyzer {
     if (ts.isBigIntLiteral(node)) return true;
     if (!ts.isNumericLiteral(node)) return false;
     const raw = node.getText();
-    return /^[0-9][0-9_]*$/.test(raw) || /^0x[0-9a-fA-F][0-9a-fA-F_]*$/.test(raw);
+    // a bare hex integer (0x1a), OR a decimal literal whose exact rational is a WHOLE number (16, 1e18,
+    // 1.5e18, 10e-1, 1_000e3 - solc accepts these as integers; a genuine fraction 1.5 / 1e-1 / 25e-1 is not).
+    return /^0x[0-9a-fA-F][0-9a-fA-F_]*$/.test(raw) || numericLiteralWholeValue(raw) !== undefined;
   }
 
   /** Build the Expr for an accepted integer literal, shared by the BigInt (`5n`) and the bare
@@ -17857,9 +17860,11 @@ export class Analyzer {
    *  `n` (node.text for BigInt - ts normalizes octal/binary to decimal there; getText() for the bare
    *  form so a large hex stays exact). */
   private integerLiteralExpr(node: ts.Expression, raw: string, expected: JethType | undefined): Expr {
-    const value = BigInt(raw.replace(/_/g, ''));
     // a HEX literal carries its source byte width (digits / 2, even-digit only) for bytesN conversion.
     const bare = raw.replace(/_/g, '');
+    // value: a hex literal via BigInt; a decimal / scientific literal (16, 1e18, 1.5e18) via the exact
+    // whole-number rational (BigInt('1e18') would throw). isIntegerLiteralNode already gated non-whole forms.
+    const value = /^0[xX]/.test(bare) ? BigInt(bare) : (numericLiteralWholeValue(bare) ?? 0n);
     const hexDigits = /^0x/i.test(bare) ? bare.length - 2 : -1;
     const hexBytes = hexDigits >= 0 && hexDigits % 2 === 0 ? hexDigits / 2 : undefined;
     if (this.rejectUppercaseHexPrefix(node)) return { kind: 'literalInt', type: U256, value, hexBytes };
@@ -17893,7 +17898,11 @@ export class Analyzer {
     if (ts.isParenthesizedExpression(node)) return this.asIntLiteral(node.expression);
     if (ts.isBigIntLiteral(node)) return BigInt(node.text.replace(/n$/, ''));
     // a bare integer-shaped NumericLiteral (no `n`): value from the SOURCE TEXT (exact for a large hex).
-    if (ts.isNumericLiteral(node) && this.isIntegerLiteralNode(node)) return BigInt(node.getText().replace(/_/g, ''));
+    if (ts.isNumericLiteral(node) && this.isIntegerLiteralNode(node)) {
+      const raw = node.getText().replace(/_/g, '');
+      // hex via BigInt; decimal / scientific (1e18) via the exact whole-number rational (BigInt('1e18') throws).
+      return /^0[xX]/.test(raw) ? BigInt(raw) : numericLiteralWholeValue(raw);
+    }
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
       const inner = this.asIntLiteral(node.operand);
       return inner === undefined ? undefined : -inner;

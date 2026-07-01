@@ -583,3 +583,24 @@ export function intRange(t: JethType): { min: bigint; max: bigint } {
   }
   throw new Error(`intRange on non-integer ${t.kind}`);
 }
+
+/** If `text` is a DECIMAL numeric literal (integer part, optional `.frac`, optional `e±exp`, with `_`
+ *  digit separators) whose EXACT rational value is a WHOLE number, return that integer; else undefined
+ *  (a genuine fraction like 1.5 / 1e-1 / 2.5e1's twin 25e-1, or a non-decimal/hex form handled elsewhere,
+ *  or an out-of-cap exponent). Mirrors solc, which treats every number literal as a rational and accepts
+ *  it as an integer iff the rational is integral: 1e18, 1.5e18, 10e-1, 100e-2, 2.5e1, 1.25e2, 1.0, 1_000e3
+ *  are integers; 1.5, 1.5e0, 1e-1, 25e-1, 0.5 are not. Overflow is NOT judged here (the caller range-checks;
+ *  solc likewise computes the integer then rejects it if it exceeds the target type). */
+export function numericLiteralWholeValue(text: string): bigint | undefined {
+  const m = /^([0-9][0-9_]*)(?:\.([0-9][0-9_]*))?(?:[eE]([+-]?[0-9][0-9_]*))?$/.exec(text);
+  if (!m) return undefined; // not a decimal literal (hex 0x.., or malformed) - handled by the caller
+  const fracD = (m[2] ?? '').replace(/_/g, '');
+  const exp = m[3] ? Number(m[3].replace(/_/g, '')) : 0;
+  const digits = m[1]!.replace(/_/g, '') + fracD; // significant digits, decimal point removed
+  const shift = exp - fracD.length; // net power of ten applied to `digits`
+  if (Math.abs(shift) > 4096) return undefined; // guard pathological exponents (solc also caps literal size)
+  const num = BigInt(digits);
+  if (shift >= 0) return num * 10n ** BigInt(shift);
+  const div = 10n ** BigInt(-shift);
+  return num % div === 0n ? num / div : undefined; // integral only if it divides evenly
+}

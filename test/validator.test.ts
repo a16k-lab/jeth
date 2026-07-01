@@ -59,9 +59,17 @@ describe('subset validator', () => {
     expect(codesFor(wrap('this.x = 0xcafe;'))).toEqual([]);
     expect(codesFor(wrap('this.x = 0xdeadBEEF;'))).toEqual([]);
     expect(codesFor(wrap('this.x = 0xe;'))).toEqual([]);
-    // a genuine decimal float / scientific literal still rejects (JETH003).
+    // a whole-number decimal / scientific literal IS a valid integer to solc and is accepted (1e18, 1.5e18,
+    // 10e-1==1, 2.5e1==25, 1.0==1). Its exact value is computed downstream (BigInt('1e18') would throw).
+    expect(codesFor(wrap('this.x = 1e18;'))).toEqual([]);
+    expect(codesFor(wrap('this.x = 1.5e18;'))).toEqual([]);
+    expect(codesFor(wrap('this.x = 10e-1;'))).toEqual([]);
+    expect(codesFor(wrap('this.x = 2.5e1;'))).toEqual([]);
+    expect(codesFor(wrap('this.x = 1.0;'))).toEqual([]);
+    // a GENUINE fraction still rejects (JETH003): a non-whole rational.
     expect(codesFor(wrap('this.x = 1.5;'))).toContain('JETH003');
-    expect(codesFor(wrap('this.x = 1e18;'))).toContain('JETH003');
+    expect(codesFor(wrap('this.x = 1e-1;'))).toContain('JETH003');
+    expect(codesFor(wrap('this.x = 25e-1;'))).toContain('JETH003');
   });
 
   it('rejects an unmarked contract field', () => {

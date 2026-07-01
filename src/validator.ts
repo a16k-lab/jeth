@@ -7,6 +7,7 @@
 // the type checker.
 import ts from 'typescript';
 import type { DiagnosticBag } from './diagnostics.js';
+import { numericLiteralWholeValue } from './types.js';
 
 export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag): void {
   const visit = (node: ts.Node): void => {
@@ -119,10 +120,16 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
       }
     }
 
-    // Float literal (a DECIMAL literal with a '.' or an e/E exponent) anywhere. A HEX literal (0x..) is
-    // excluded: `e`/`E` are hex DIGITS there (0xcafe), not a scientific exponent, and a hex literal has no
-    // fractional form - so the float guard must not misfire on a valid bare hex integer (now accepted).
-    if (ts.isNumericLiteral(node) && !/^0[xX]/.test(node.getText()) && /[.eE]/.test(node.getText())) {
+    // Genuine float literal: a DECIMAL literal with a '.' or e/E exponent whose exact rational is NOT a
+    // whole number (1.5, 1e-1, 25e-1, 0.5). A whole-number decimal/scientific literal (1e18, 1.5e18, 10e-1,
+    // 1.0) IS a valid integer to solc and is accepted (its value computed exactly downstream). A HEX literal
+    // (0x..) is excluded here entirely: e/E are hex DIGITS, not an exponent, and it has no fractional form.
+    if (
+      ts.isNumericLiteral(node) &&
+      !/^0[xX]/.test(node.getText()) &&
+      /[.eE]/.test(node.getText()) &&
+      numericLiteralWholeValue(node.getText()) === undefined
+    ) {
       diags.error(
         node,
         'JETH003',
