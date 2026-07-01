@@ -13,9 +13,12 @@
 // reverts with Panic(0x11) on overflow / Panic(0x12) on division by zero,
 // matching Solidity >=0.8.
 import { ContractIR, FunctionIR, LibraryIR, SpecialEntryIR, Stmt, Expr, BinOp, RevertReason, EventIR, ArrIndexStep } from './ir.js';
+import { keccak, toHex } from './selectors.js';
 import {
   JethType,
   StructField,
+  canonicalName,
+  typesEqual,
   intRange,
   storageByteSize,
   storageSlotCount,
@@ -558,6 +561,22 @@ ${indent(runtime, 6)}
       }
       const o = n as Record<string, unknown>;
       if ((o.kind === 'call' || o.kind === 'callStmt') && typeof o.fn === 'string') keys.push(o.fn);
+      // A CALL THROUGH a function pointer reaches, via its dispatcher, EVERY address-taken function whose
+      // signature matches the pointer type. Those userfn_ targets must be duplicated into the creation
+      // object when a constructor calls through a pointer (else the dispatcher references an undefined
+      // userfn_). Include each matching target key so the ctor-reachability closure pulls them in.
+      if (o.kind === 'funcRefCall' && o.sig && typeof o.sig === 'object') {
+        const sig = o.sig as JethType;
+        for (const [key, fn] of this.funcs) {
+          if (fn.returnTypes) continue;
+          const fsig: JethType = {
+            kind: 'funcref',
+            params: fn.params.map((p) => p.type),
+            ret: fn.returnType.kind === 'void' ? undefined : fn.returnType,
+          };
+          if ((this.contract?.funcRefIds?.has(key) ?? false) && typesEqual(fsig, sig)) keys.push(key);
+        }
+      }
       for (const v of Object.values(o)) walk(v);
     };
     walk(root);
@@ -2149,6 +2168,18 @@ ${indent(runtime, 6)}
           out.push('revert(0x00, 0x04)');
           break;
         }
+        // A VOID-returning call through a function pointer as a statement: the dispatcher returns no
+        // value, so emit the call bare (a `pop(...)` on a 0-value call is a Yul type error).
+        if (s.expr.kind === 'funcRefCall' && s.expr.sig.kind === 'funcref' && s.expr.sig.ret === undefined) {
+          const sig = s.expr.sig as JethType & { kind: 'funcref' };
+          this.ensureFuncRefDispatcher(sig);
+          const idReg = this.lowerExpr(s.expr.ptr, ctx, out);
+          const idTmp = this.fresh();
+          out.push(`let ${idTmp} := ${idReg}`);
+          const args = this.lowerCallArgs(s.expr.args, ctx, out);
+          out.push(`${this.funcRefDispatcherName(sig)}(${[idTmp, ...args].join(', ')})`);
+          break;
+        }
         const v = this.lowerExpr(s.expr, ctx, out);
         out.push(`pop(${v})`);
         break;
@@ -2610,6 +2641,55 @@ ${indent(runtime, 6)}
     return lines;
   }
 
+  /** A stable Yul name for the per-signature function-pointer dispatcher. Derived from the funcref
+   *  signature's canonical name so every call through the same pointer type shares one dispatcher. */
+  private funcRefDispatcherName(sig: JethType & { kind: 'funcref' }): string {
+    const key = `${sig.params.map(canonicalName).join(',')}->${sig.ret ? canonicalName(sig.ret) : 'void'}`;
+    return `funcref_dispatch_${toHex(keccak(key)).slice(0, 16)}`;
+  }
+
+  /** Emit (once, into the helpers map) the dispatcher for a function-pointer signature: a Yul function
+   *  `f(id, args...) -> ret` that switches on the stable dispatch id and calls the matching userfn_. The
+   *  default arm (id 0 = the null pointer, or any unknown id) REVERTS with empty data - exactly solc's
+   *  behavior on calling a zero-initialized/invalid internal function pointer. Every address-taken
+   *  function whose signature equals `sig` becomes a case; the analyzer guaranteed each is emitted. */
+  private ensureFuncRefDispatcher(sig: JethType & { kind: 'funcref' }): void {
+    const name = this.funcRefDispatcherName(sig);
+    if (this.helpers.has(name)) return;
+    const argNames = sig.params.map((_, i) => `a${i}`);
+    const retDecl = sig.ret ? ' -> ret' : '';
+    const cases: string[] = [];
+    // Collect the matching targets (by exact signature) with their ids, ordered by id for stable output.
+    const targets: { id: number; key: string }[] = [];
+    for (const [key, id] of this.contract?.funcRefIds ?? []) {
+      const fn = this.funcs.get(key);
+      if (!fn || fn.returnTypes) continue;
+      const fsig: JethType = {
+        kind: 'funcref',
+        params: fn.params.map((p) => p.type),
+        ret: fn.returnType.kind === 'void' ? undefined : fn.returnType,
+      };
+      if (typesEqual(fsig, sig)) targets.push({ id, key });
+    }
+    targets.sort((x, y) => x.id - y.id);
+    for (const t of targets) {
+      const callExpr = `${this.userFnName(t.key)}(${argNames.join(', ')})`;
+      cases.push(`  case ${t.id} { ${sig.ret ? `ret := ${callExpr}` : callExpr} }`);
+    }
+    // The default arm handles the NULL / unassigned pointer (id 0) and any unknown id: solc reverts a
+    // call through a zero-initialized internal function pointer with Panic(0x51), so emit that exact
+    // Panic (byte-identical returndata) rather than an empty revert.
+    const panicFn = this.panic();
+    const body = [
+      `function ${name}(id${argNames.length ? ', ' + argNames.join(', ') : ''})${retDecl} {`,
+      '  switch id',
+      ...cases,
+      `  default { ${panicFn}(0x51) }`,
+      '}',
+    ].join('\n');
+    this.helpers.set(name, body);
+  }
+
   /** Deduplicated custom-error revert helper for a given static-arg arity.
    *  Selector passed as the raw 4-byte value; shl(224,...) applied inside. */
   private errorRevert(n: number): string {
@@ -2975,6 +3055,24 @@ ${indent(runtime, 6)}
         // each frozen into a temp), then the Yul function call IS the value.
         const args = this.lowerCallArgs(e.args, ctx, out);
         return `${this.userFnName(e.fn)}(${args.join(', ')})`;
+      }
+      case 'funcRef': {
+        // An internal function-pointer VALUE: the target function's stable dispatch id, a plain word.
+        const id = this.contract?.funcRefIds?.get(e.fn);
+        if (id === undefined) throw new UnsupportedError(`no dispatch id assigned for function pointer '${e.fn}'`);
+        return String(id);
+      }
+      case 'funcRefCall': {
+        // A CALL THROUGH a function pointer: evaluate the id, then the arguments (left-to-right, each
+        // frozen into a temp, matching an ordinary internal call), then invoke the per-signature
+        // dispatcher which switches on the id and calls the matching userfn_.
+        const sig = e.sig as JethType & { kind: 'funcref' };
+        this.ensureFuncRefDispatcher(sig);
+        const idReg = this.lowerExpr(e.ptr, ctx, out);
+        const idTmp = this.fresh();
+        out.push(`let ${idTmp} := ${idReg}`);
+        const args = this.lowerCallArgs(e.args, ctx, out);
+        return `${this.funcRefDispatcherName(sig)}(${[idTmp, ...args].join(', ')})`;
       }
       case 'memField': {
         // read a value field of a memory-aggregate (struct) local: mload at ptr + offset.

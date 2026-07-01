@@ -18,6 +18,12 @@ export type JethType =
   | { kind: 'mapping'; key: JethType; value: JethType }
   | { kind: 'array'; element: JethType; length?: number } // T[N] | T[]
   | { kind: 'struct'; name: string; fields: StructField[] } // @struct class
+  // An INTERNAL function pointer `(p1, p2, ...) => R` (Solidity `function(...) returns(R)`). A VALUE
+  // TYPE occupying one 32-byte word: a stable small integer id identifying an address-taken internal
+  // function (NOT solc's raw code offset - the id is JETH-internal). `params`/`ret` give the signature;
+  // `ret` undefined = a void-returning function type. Not ABI-encodable (rejected in ABI positions,
+  // exactly like solc's internal function types), and the raw id is never observable as an integer.
+  | { kind: 'funcref'; params: JethType[]; ret: JethType | undefined; brand?: string }
   | { kind: 'void' };
 
 /** A struct field with its resolved storage location relative to the struct base. */
@@ -58,6 +64,9 @@ export function canonicalName(t: JethType): string {
     case 'struct':
       // ABI tuple form: (t1,t2,...)
       return `(${t.fields.map((f) => canonicalName(f.type)).join(',')})`;
+    case 'funcref':
+      // internal function pointers are NOT ABI types; this is for diagnostics only.
+      return `function(${t.params.map(canonicalName).join(',')})${t.ret ? ` returns(${canonicalName(t.ret)})` : ''}`;
     case 'void':
       return 'void';
   }
@@ -80,6 +89,8 @@ export function displayName(t: JethType): string {
       return `mapping<${displayName(t.key)}, ${displayName(t.value)}>`;
     case 'struct':
       return t.name;
+    case 'funcref':
+      return `(${t.params.map(displayName).join(', ')}) => ${t.ret ? displayName(t.ret) : 'void'}`;
     default:
       return canonicalName(t);
   }
@@ -250,6 +261,15 @@ export function typesEqual(a: JethType, b: JethType): boolean {
     case 'struct':
       // structs are nominal in Solidity: equal iff same name.
       return a.name === (b as typeof a).name;
+    case 'funcref': {
+      // two function pointer types are equal iff same arity, same param types, and same return type
+      // (a void-returning type has ret === undefined). Mutability is not part of JETH's surface type.
+      const bb = b as typeof a;
+      if (a.params.length !== bb.params.length) return false;
+      if (!a.params.every((p, i) => typesEqual(p, bb.params[i]!))) return false;
+      if ((a.ret === undefined) !== (bb.ret === undefined)) return false;
+      return a.ret === undefined || typesEqual(a.ret, bb.ret!);
+    }
     default:
       return true;
   }

@@ -89,6 +89,14 @@ export type Expr =
     } // x++ / ++x in value position
   | { kind: 'assignExpr'; type: JethType; target: LValue; value: Expr } // (x = v)/(x += v) in value position: stores value, yields it
   | { kind: 'call'; type: JethType; fn: string; args: Expr[] } // internal/private function call f(args) yielding a value
+  // An INTERNAL FUNCTION-POINTER VALUE: taking the address of an internal function (`this.inc` / bare
+  // `inc`). `fn` is the callee's fkey; codegen lowers it to the function's stable small integer id.
+  // The `type` is the funcref signature type.
+  | { kind: 'funcRef'; type: JethType; fn: string }
+  // A CALL THROUGH a function pointer `f(args)` (f a funcref-typed value). `ptr` evaluates to the id
+  // word; codegen dispatches on the id (switch over every candidate target) and calls the matching
+  // `userfn_`. `type` is the pointer's return type. `sig` is the funcref signature (for the dispatcher).
+  | { kind: 'funcRefCall'; type: JethType; ptr: Expr; args: Expr[]; sig: JethType }
   | { kind: 'cdAggregateValue'; type: JethType; param: string } // whole STATIC struct / fixed-array calldata param echo (return a)
   | { kind: 'unary'; type: JethType; op: UnOp; operand: Expr; unchecked: boolean }
   // --- Phase 3 ---
@@ -739,6 +747,10 @@ export interface ContractIR {
   // top-level Yul object (creation returns runtime; runtime = a selector dispatcher over its external
   // functions) and linked at deploy time. Empty/absent when no external library is referenced.
   libraries?: LibraryIR[];
+  // INTERNAL FUNCTION POINTERS: the fkey -> stable dispatch id map for every address-taken internal
+  // function. A `funcRef` value lowers to its id; a `funcRefCall` dispatches on the id via a switch over
+  // these targets. Absent when no function's address is taken.
+  funcRefIds?: Map<string, number>;
 }
 
 /** Phase B: an external (delegatecall) library compiled to its OWN deployable Yul object. `external`

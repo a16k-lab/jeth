@@ -323,6 +323,23 @@ a dynamic-element array reached via a struct field or nested array (`this.d.xs[i
   specialization per concrete value-type instantiation, deduplicated, type-checked per instantiation,
   byte-identical to a hand-written type-specific function). A generic is never in the ABI.
 
+## Internal function pointers
+An INTERNAL function-type value `(p1: T1, p2: T2, ...) => R` (Solidity's `function(...) returns(R)`
+internal type) is supported behaviorally byte-identical to solc 0.8.35. Address-taking `this.f` / `f`
+yields a value-typed pointer (a stable small integer id identifying the target function); a call `f(v)`
+through it dispatches on the id (a switch over every address-taken target of the matching signature) and
+invokes the target, so `apply(this.inc, 5n) == inc(5) == 6`. Supported surface: a function-pointer
+PARAMETER and RETURN of an `@internal`/`@private` function; a `let`-bound / `@state` pointer variable; a
+conditional pointer (`c ? this.inc : this.dec`); a pointer passed through several functions or returned
+then called; `@pure`/`@view`/mutating targets (the enclosing function's mutability is validated against
+every same-signature target it may invoke); `f == g` / `f != g` (equal iff the same target function).
+Value-typed signatures only. A call through a NULL/unset pointer reverts `Panic(0x51)`, exactly like
+solc's zero-initialized internal function type. REJECTED (clean, matching solc): observing the raw pointer
+as an integer (`u256(f)`, returning it as a uint), ABI-encoding a pointer, a funcref in an `@external`/
+`@public` signature (not ABI-encodable), taking the address of an `@external` or OVERLOADED function, and
+external function types / selectors-as-values (out of scope). Not supported yet (clean reject): an ARRAY or
+STRUCT of function pointers.
+
 ## Language + type-system features (solc-parity sweep)
 - Whole-aggregate storage ops: nested-struct field read/write/copy (`this.o.inner = D(...)`,
   `return this.o.inner`); whole fixed-array & struct-with-fixed-array return (`return this.fa`);

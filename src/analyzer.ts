@@ -283,6 +283,12 @@ export class Analyzer {
   private candidatesByName = new Map<string, RawFunction[]>(); // source name -> all overloads (decl order)
   private currentCallees = new Set<string>(); // internal callee KEYS of the function being checked
   private internallyCalled = new Set<string>(); // KEYS of functions that are the target of an internal call
+  // Internal function pointers: the KEYS of functions whose address was taken (`this.f` / bare `f` used as
+  // a value). Each such function is assigned a stable small integer id (funcRefIds) so a call through a
+  // pointer can dispatch on the id at runtime. Populated during body checking; the ids are finalized once
+  // all bodies are checked. addressTaken forces the target to be EMITTED as a userfn_ (like internallyCalled).
+  private addressTaken = new Set<string>(); // KEYS of address-taken internal functions
+  private funcRefIds = new Map<string, number>(); // fkey -> stable dispatch id (assigned after checking)
   // F6: compile-time generics (monomorphization). A generic internal function `f<T>(...)` is NOT a
   // normal function; it is a template. On each internal call we resolve concrete type arguments
   // (explicit `f<u256>(x)` or inferred from the value args), register the type params -> concrete
@@ -580,7 +586,9 @@ export class Analyzer {
         this.diags.error(
           member,
           'JETH229',
-          `struct field '${member.name.text}' of type ${displayName(t)} is not supported yet (supported dynamic field kinds: bytes/string and a nested struct)`,
+          this.typeHasFuncref(t)
+            ? `struct field '${member.name.text}' of type ${displayName(t)} is not supported yet (an internal function pointer as a struct field is not supported; use a single function-pointer variable)`
+            : `struct field '${member.name.text}' of type ${displayName(t)} is not supported yet (supported dynamic field kinds: bytes/string and a nested struct)`,
         );
         continue;
       }
@@ -1640,6 +1648,21 @@ export class Analyzer {
     const receive = receiveNode ? this.checkSpecialEntry(receiveNode.member, 'receive') : undefined;
     const fallback = fallbackNode ? this.checkSpecialEntry(fallbackNode.member, 'fallback') : undefined;
 
+    // INTERNAL FUNCTION POINTERS: assign each address-taken function a stable, deterministic dispatch id
+    // (>= 1; id 0 is reserved for the null/unassigned pointer, matching solc's zero-initialized function
+    // type which reverts on call). Sorted by key for a reproducible id scheme. Done AFTER every body,
+    // the merged constructor, and the receive/fallback are checked, so `addressTaken` is complete. Each
+    // such function is force-emitted as a userfn_ (internallyCalled) so the dispatcher can call it; the
+    // ids are carried on the ContractIR (funcRefIds) for the codegen dispatcher.
+    {
+      let nextId = 1;
+      for (const key of [...this.addressTaken].sort()) {
+        this.funcRefIds.set(key, nextId++);
+        const f = functions.find((fn) => fn.key === key);
+        if (f) f.internallyCalled = true;
+      }
+    }
+
     // Phase 2a: `@proxy class P` -> the EIP-1967 upgradeable-proxy foundation. JETH synthesizes the
     // canonical delegate fallback (forward ALL calldata to the EIP-1967 impl slot) in the runtime
     // fallback position. The proxy has no storage of its own (it lives in the impl) and may NOT declare
@@ -1765,6 +1788,7 @@ export class Analyzer {
           BigInt('0x' + toHex(keccak('diamond.standard.diamond.storage'))))
         : undefined,
       libraries: libraries.length > 0 ? libraries : undefined,
+      funcRefIds: this.funcRefIds.size > 0 ? new Map(this.funcRefIds) : undefined,
     };
   }
 
@@ -4654,6 +4678,24 @@ export class Analyzer {
     // param-memory registration below.
     const bufferedModifier = this.usesBufferedModifierPath(rf);
     const internalOnly = rf.visibility === 'internal' || rf.visibility === 'private' || bufferedModifier;
+    // An INTERNAL function-pointer type is not ABI-encodable, so it cannot cross an @external/@public
+    // boundary (as a calldata param or a returndata value). solc likewise rejects an internal function
+    // type in an external signature (only internal/private functions may take/return one). A clean reject
+    // here (never a codegen crash). @external's own @modifier-buffered internal body is still external.
+    if (rf.visibility === 'external' || rf.visibility === 'public') {
+      const bad =
+        rf.params.find((p) => this.typeHasFuncref(p.type)) ??
+        (this.typeHasFuncref(rf.returnType) ? { name: '<return>', type: rf.returnType } : undefined) ??
+        (rf.returnTypes?.some((t) => this.typeHasFuncref(t)) ? { name: '<return>', type: rf.returnType } : undefined);
+      if (bad) {
+        this.diags.error(
+          rf.node,
+          'JETH426',
+          `an internal function-pointer type cannot appear in the signature of @${rf.visibility} function '${rf.name}' (it is not ABI-encodable; only @internal/@private functions may take or return one)`,
+        );
+        return undefined;
+      }
+    }
     for (const p of rf.params) {
       if (this.inCurrentScope(p.name)) {
         this.diags.error(rf.node, 'JETH056', `duplicate parameter name '${p.name}'`);
@@ -5612,6 +5654,18 @@ export class Analyzer {
         if (callee === 'revert') return this.checkRevert(e, out);
         if (callee === 'revertWith') return this.checkRevertWith(e, out);
         if (callee === 'emit') return this.checkEmit(e, out);
+        // a call THROUGH a function-pointer LOCAL as a statement (`f(v);`): void result, or a value
+        // result discarded. Checked before the bare-internal-call form (a funcref local shadows any
+        // same-named function). A void-returning pointer yields a funcRefCallStmt; a value-returning
+        // one is evaluated and dropped.
+        {
+          const lt = this.lookupLocal(callee);
+          if (lt && lt.kind === 'funcref') {
+            const c = this.checkFuncRefCallStmt(e, lt);
+            if (c) out.push(c);
+            return;
+          }
+        }
         // a bare internal call as a statement (void result, or a value result discarded).
         if (this.funcsByName.has(callee)) {
           const c = this.checkInternalCall(e, callee, true);
@@ -8579,6 +8633,20 @@ export class Analyzer {
       out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
+    // An ARRAY whose element is an INTERNAL FUNCTION POINTER is a clean reject (an aggregate of function
+    // pointers is not supported yet; a struct-of-funcref is already rejected at struct collection). A
+    // funcref is a value word, but the memory array codec is shared with the ABI/storage paths (which
+    // cannot encode a funcref), so this shape stays a clean analyzer reject rather than risk a wrong-bytes
+    // lowering. The headline single-pointer forms (param / local / state / ternary / comparison) are fully
+    // supported. (declared.kind is already known not to be 'struct' here - the struct block returned above.)
+    if (declared.kind === 'array' && this.typeHasFuncref(declared)) {
+      this.diags.error(
+        decl,
+        'JETH427',
+        `an array of internal function pointers (${displayName(declared)}) is not supported yet (use a single function-pointer variable)`,
+      );
+      return;
+    }
     // A value-element dynamic-array local is a MEMORY array (a pointer to [len][elems]);
     // bytes/string and aggregate-element memory locals are a later step.
     if (declared.kind === 'array' && !(declared.length === undefined && isStaticValueType(declared.element))) {
@@ -8982,6 +9050,156 @@ export class Analyzer {
     return rf.key ?? rf.name;
   }
 
+  /** The JETH funcref TYPE of an internal function `rf`: its parameter types, return type (void -> ret
+   *  undefined), from the resolved signature. Used to type an address-taken function value and to match
+   *  it against a funcref param type. */
+  private funcRefTypeOf(rf: RawFunction): JethType {
+    return { kind: 'funcref', params: rf.params.map((p) => p.type), ret: rf.returnType.kind === 'void' ? undefined : rf.returnType };
+  }
+
+  /** ADDRESS-TAKING: interpret `node` as an internal function-pointer VALUE `expected` (a funcref type).
+   *  `node` is either a bare identifier `f` naming an internal function, or `this.f`. Resolves the target
+   *  among that name's overloads by MATCHING the expected funcref signature (params + return), records it
+   *  as address-taken (forcing a userfn_ emission + a dispatch id), propagates the target's transitive
+   *  effects into the current function (so a @pure/@view enclosing function is validated against the
+   *  target it may invoke), and returns a `funcRef` Expr. Returns undefined (no diagnostic) when `node`
+   *  is not a function-name reference, so the caller can fall through. A name that IS a function but whose
+   *  signature does not match `expected` emits a precise JETH error. External functions are rejected. */
+  private tryAddressTake(node: ts.Expression, expected: JethType): Expr | undefined | 'reject' {
+    if (expected.kind !== 'funcref') return undefined;
+    let name: string | undefined;
+    if (ts.isIdentifier(node) && !this.isVisibleLocal(node.text)) name = node.text;
+    else if (
+      ts.isPropertyAccessExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      ts.isIdentifier(node.name)
+    )
+      name = node.name.text;
+    if (name === undefined) return undefined;
+    const candidates = this.candidatesByName.get(name);
+    if (!candidates || candidates.length === 0) return undefined; // not a function name -> normal handling
+    const want = expected;
+    // solc does NOT resolve an OVERLOADED function by the target function-type when its address is taken:
+    // `ap(f, ...)` with two `f` overloads is rejected ("No matching declaration found after variable
+    // lookup"), even if exactly one overload's signature matches. Mirror that reject to avoid an
+    // over-acceptance; only a UNIQUELY-named internal function may have its address taken.
+    if (candidates.length > 1) {
+      this.diags.error(
+        node,
+        'JETH421',
+        `cannot take the address of overloaded function '${name}' (Solidity does not resolve an overloaded function by the target function-pointer type)`,
+      );
+      return 'reject';
+    }
+    const rf = candidates[0]!;
+    if (!typesEqual(this.funcRefTypeOf(rf), want)) {
+      // The name is a function but its signature does not match the pointer type: a precise error
+      // (mirrors solc "Type function ... is not implicitly convertible to expected type ...").
+      this.diags.error(
+        node,
+        'JETH428',
+        `'${name}' does not match the function-pointer type ${displayName(want)} (its signature is ${displayName(this.funcRefTypeOf(rf))})`,
+      );
+      return 'reject';
+    }
+    if (rf.visibility === 'external') {
+      this.diags.error(
+        node,
+        'JETH422',
+        `cannot take the address of @external function '${name}' as an internal function pointer (external function types are out of scope)`,
+      );
+      return 'reject';
+    }
+    if (rf.returnTypes) {
+      this.diags.error(
+        node,
+        'JETH423',
+        `cannot take the address of multi-value-return function '${name}' as an internal function pointer`,
+      );
+      return 'reject';
+    }
+    const key = this.fkey(rf);
+    this.addressTaken.add(key);
+    this.internallyCalled.add(key);
+    // Propagate the target's effects: taking a pointer that will be called flows the callee's transitive
+    // state/env effects into the current function via the callee-set fixpoint (checkFunction records the
+    // callee keys). This makes the enclosing @pure/@view validation account for the target it may invoke.
+    this.currentCallees.add(key);
+    return { kind: 'funcRef', type: this.funcRefTypeOf(rf), fn: key };
+  }
+
+  /** A CALL THROUGH a function-pointer value: `f(a1, a2, ...)` where the evaluated `fnExpr` has funcref
+   *  type `sig`. Checks arity + argument types against `sig`, coerces each argument, and propagates the
+   *  effects of EVERY function that could be behind the pointer (every candidate whose signature equals
+   *  `sig`, since any of them may have been assigned): those functions are added to the current callee set
+   *  so the transitive-purity fixpoint accounts for them. Produces a `funcRefCall` IR the codegen lowers
+   *  to a runtime id-dispatch over the candidate targets. Only static value / aggregate-by-ref parameter
+   *  and return types are supported (the same set an ordinary internal call allows). */
+  private buildFuncRefCall(
+    node: ts.CallExpression,
+    sig: JethType & { kind: 'funcref' },
+  ): (Expr & { kind: 'funcRefCall' }) | undefined {
+    const ptr = this.checkExpr(node.expression);
+    if (!ptr) return undefined;
+    if (ptr.type.kind !== 'funcref' || !typesEqual(ptr.type, sig)) {
+      this.diags.error(node.expression, 'JETH424', `this value is not callable as ${displayName(sig)}`);
+      return undefined;
+    }
+    // Only the value-typed / nested-funcref parameter & return shapes are supported through a pointer
+    // (the dispatcher hands the id and the same-ABI argument words to a userfn_). Aggregate-by-reference
+    // pointer params are deferred (a clean reject, never a miscompile).
+    const supported = (t: JethType): boolean => isStaticValueType(t) || t.kind === 'funcref';
+    if (!sig.params.every(supported) || (sig.ret !== undefined && !supported(sig.ret))) {
+      this.diags.error(
+        node,
+        'JETH425',
+        `calling through a function pointer with an aggregate parameter/return type is not supported yet (only value-typed signatures)`,
+      );
+      return undefined;
+    }
+    if (node.arguments.length !== sig.params.length) {
+      this.diags.error(node, 'JETH148', `function pointer expects ${sig.params.length} argument(s), got ${node.arguments.length}`);
+      return undefined;
+    }
+    const args: Expr[] = [];
+    for (let i = 0; i < sig.params.length; i++) {
+      const a = this.checkExpr(node.arguments[i]!, sig.params[i]!);
+      if (!a) return undefined;
+      args.push(this.coerce(a, sig.params[i]!, node.arguments[i]!));
+    }
+    // A call through the pointer runs one of the candidate targets, so the current function inherits the
+    // union of their effects. Add EVERY function whose signature matches `sig` to the callee set; the
+    // fixpoint later folds in each one's transitive state/env effects. (This is a superset of what any
+    // single assigned target does, keeping @pure/@view validation sound.)
+    for (const list of this.candidatesByName.values()) {
+      for (const c of list) {
+        if (c.visibility === 'external' || c.returnTypes) continue;
+        if (typesEqual(this.funcRefTypeOf(c), sig)) this.currentCallees.add(this.fkey(c));
+      }
+    }
+    return { kind: 'funcRefCall', type: sig.ret ?? VOID, ptr, args, sig };
+  }
+
+  /** A call through a function pointer in VALUE position (`= f(v)`, `return f(v)`, ...): a void-returning
+   *  pointer cannot be a value. */
+  private checkFuncRefCall(node: ts.CallExpression, sig: JethType & { kind: 'funcref' }): Expr | undefined {
+    const c = this.buildFuncRefCall(node, sig);
+    if (!c) return undefined;
+    if (sig.ret === undefined) {
+      this.diags.error(node, 'JETH244', `this function pointer returns void and cannot be used as a value`);
+      return undefined;
+    }
+    return c;
+  }
+
+  /** A call through a function pointer in STATEMENT position (`f(v);`): the result (if any) is discarded.
+   *  Returns the wrapping exprStmt. */
+  private checkFuncRefCallStmt(node: ts.CallExpression, sig: JethType & { kind: 'funcref' }): Stmt | undefined {
+    const c = this.buildFuncRefCall(node, sig);
+    if (!c) return undefined;
+    return { kind: 'exprStmt', expr: c };
+  }
+
   /** Resolve a (possibly overloaded) internal call `name(...)` to a single callee. One candidate ->
    *  that one. Several (overloading by arity or parameter types, like solc) -> filter by callable
    *  arity (accounting for F3 defaults / named-arg form), then by which candidate's parameter types
@@ -9191,8 +9409,16 @@ export class Analyzer {
       (t.element.kind === 'struct' ||
         isBytesLike(t.element) ||
         (t.element.kind === 'array' && t.element.length === undefined));
+    // An INTERNAL FUNCTION-POINTER param/return is a value type (a one-word dispatch id) with a value
+    // signature: passed and returned by value on an internal call, byte-identical to any other word.
+    // Only value-typed signatures are supported through a pointer (the funcRefCall gate enforces this);
+    // gate the pointer type itself here so an aggregate-signature funcref param is a clean reject.
+    const funcRefOK = (t: JethType): boolean =>
+      t.kind === 'funcref' &&
+      t.params.every((p) => isStaticValueType(p) || funcRefOK(p)) &&
+      (t.ret === undefined || isStaticValueType(t.ret) || funcRefOK(t.ret));
     const paramSupported = (t: JethType): boolean =>
-      isStaticValueType(t) || (aggOK && (isMemByRef(t) || aggArrayByRef(t) || this.isSupportedDynStructLocal(t)));
+      isStaticValueType(t) || funcRefOK(t) || (aggOK && (isMemByRef(t) || aggArrayByRef(t) || this.isSupportedDynStructLocal(t)));
     for (const p of callee.params) {
       if (paramSupported(p.type)) continue;
       const hint =
@@ -9208,6 +9434,7 @@ export class Analyzer {
     const returnSupported =
       rt.kind === 'void' ||
       isStaticValueType(rt) ||
+      funcRefOK(rt) ||
       (aggOK && (isMemByRef(rt) || aggArrayByRef(rt) || this.isSupportedDynStructLocal(rt)));
     if (!returnSupported) {
       const hint =
@@ -11457,6 +11684,16 @@ export class Analyzer {
     if (t.kind === 'mapping') return true;
     if (t.kind === 'struct') return t.fields.some((f) => this.typeHasMapping(f.type));
     if (t.kind === 'array') return this.typeHasMapping(t.element);
+    return false;
+  }
+
+  /** True iff `t` is, or transitively contains, an internal function-pointer type. Used to reject a
+   *  funcref in an ABI position (an @external/@public signature), where it is not encodable. */
+  private typeHasFuncref(t: JethType): boolean {
+    if (t.kind === 'funcref') return true;
+    if (t.kind === 'struct') return t.fields.some((f) => this.typeHasFuncref(f.type));
+    if (t.kind === 'array') return this.typeHasFuncref(t.element);
+    if (t.kind === 'mapping') return this.typeHasFuncref(t.value) || this.typeHasFuncref(t.key);
     return false;
   }
 
@@ -14279,6 +14516,27 @@ export class Analyzer {
     // parenthesized
     if (ts.isParenthesizedExpression(node)) return this.checkExpr(node.expression, expected);
 
+    // ADDRESS-TAKING an internal function as a function-pointer value: when the EXPECTED type is a
+    // funcref and `node` is a bare function name `f` or `this.f` (NOT a call), resolve it to a stable
+    // dispatch id. Placed before every other resolver so `this.inc` / `inc` in a funcref position is a
+    // pointer value, never a state read or an "unknown identifier". Only fires when a funcref is expected;
+    // in every other context these forms keep their existing meaning.
+    if (expected?.kind === 'funcref' && (ts.isIdentifier(node) || ts.isPropertyAccessExpression(node))) {
+      const fr = this.tryAddressTake(node, expected);
+      if (fr === 'reject') return undefined;
+      if (fr) return fr;
+    }
+
+    // A CALL THROUGH a function pointer `f(args)`, where `f` is a VISIBLE LOCAL of funcref type (a
+    // function-pointer parameter, a `let g = ...` binding, a ternary result, etc). Placed before the
+    // builtin-call block (which requires a non-local callee), so a funcref local always dispatches here.
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const lt = this.lookupLocal(node.expression.text);
+      if (lt && lt.kind === 'funcref') {
+        return this.checkFuncRefCall(node, lt);
+      }
+    }
+
     // assignment used as a value-producing expression: (x = v), (x += v), chained x = y = a.
     // Yields the assigned (LHS-typed) value, exactly like Solidity. Statement-position
     // assignments are handled earlier in checkStatement and never reach here.
@@ -14566,6 +14824,8 @@ export class Analyzer {
       // no single materialization here, so select before the aggregate operation.
       const lowerable = (e: Expr): boolean =>
         isStaticValueType(e.type) ||
+        // an internal function pointer is a single register word (its dispatch id), selected like any value.
+        e.type.kind === 'funcref' ||
         isBytesLike(e.type) ||
         // a STATIC struct / fixed array: materialized to a memory image, selected by pointer.
         (isStaticType(e.type) &&
@@ -17047,6 +17307,21 @@ export class Analyzer {
       // literal's mobile type is unsigned, or `uint8 == -1`) is left to unify, which rejects it.
       const unified = this.widenLiteralOperand(left, right) ?? this.unifyOperands(left, right, node);
       if (!unified) return undefined;
+      // INTERNAL FUNCTION POINTERS support == / != (solc compares the underlying code reference; the
+      // stable-id scheme yields the SAME bool - equal iff the same target function). Ordered comparisons
+      // are NOT valid on a function type. Both operands must be the same funcref type (unifyOperands
+      // returned them only when typesEqual). The id words compare directly, byte-identical to solc's bool.
+      if (unified[0].type.kind === 'funcref') {
+        if (op !== '==' && op !== '!=') {
+          this.diags.error(
+            node,
+            'JETH082',
+            `operator '${op}' cannot be applied to function-pointer operands (only == and != are valid on a function type)`,
+          );
+          return undefined;
+        }
+        return { kind: 'binary', type: BOOL, op, left: unified[0], right: unified[1], unchecked: false };
+      }
       // == / != / ordered comparisons are valid ONLY on value types. solc rejects them on structs,
       // arrays (fixed/dynamic), bytes/string and mappings ("Built-in binary operator == cannot be
       // applied to types ..."), so we must too (closing a soundness over-acceptance: JETH emitted

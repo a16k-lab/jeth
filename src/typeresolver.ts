@@ -42,6 +42,27 @@ export function resolveType(
   // JETH dynamic string type so callers can resolve and then gate it by phase.
   if (node.kind === ts.SyntaxKind.StringKeyword) return { kind: 'string' };
 
+  // An internal function-pointer type `(p1: T1, p2: T2, ...) => R` -> a JETH funcref. Each parameter
+  // annotation and the return type must themselves resolve; `=> void` yields a void-returning pointer.
+  // This is the surface for Solidity's `function(T1, T2) returns(R)` internal function type. External
+  // function types / mutability keywords are out of scope (the arrow syntax cannot express them).
+  if (ts.isFunctionTypeNode(node)) {
+    const params: JethType[] = [];
+    for (const p of node.parameters) {
+      // a rest/optional parameter, or a missing annotation, is not a valid function-pointer signature.
+      if (p.dotDotDotToken || p.questionToken || !p.type) {
+        diags.error(node, 'JETH014', 'a function-pointer type parameter must have a plain type annotation');
+        return undefined;
+      }
+      const pt = resolveType(p.type, diags, structs);
+      if (!pt) return undefined;
+      params.push(pt);
+    }
+    const ret = resolveType(node.type, diags, structs);
+    if (!ret) return undefined;
+    return { kind: 'funcref', params, ret: ret.kind === 'void' ? undefined : ret };
+  }
+
   // T[] array (fixed-length T[N] is written via a tuple-ish annotation; TS arrays
   // are always dynamic here -> JETH dynamic array).
   if (ts.isArrayTypeNode(node)) {
