@@ -13880,17 +13880,27 @@ export class Analyzer {
       // solc's rule for the case that differs: at least one branch is a plain (non-enum, non-branded)
       // integer literal and BOTH branches are plain integers. Two non-literals already unify identically.
       {
-        const litT = this.asIntLiteral(node.whenTrue);
-        const litF = this.asIntLiteral(node.whenFalse);
         const plainInt = (t: JethType): boolean => isInteger(t) && !isEnum(t) && (t as { brand?: string }).brand === undefined;
-        // The mobile type of an integer branch: a literal's smallest-fitting signed/unsigned type, else
+        // The compile-time integer VALUE of a branch, if it is a plain literal OR a pure constant-
+        // arithmetic expression (1n + 1n, 2n * 3n, 10n - 4n): solc types EITHER by its VALUE's mobile
+        // type, not the pushed `expected`. A cast (i256(..)), a @constant reference, or a variable is NOT
+        // captured here - its own checked type stands (a signed cast / signed const keeps its signedness).
+        const constVal = (n: ts.Expression): bigint | undefined => {
+          const lit = this.asIntLiteral(n);
+          if (lit !== undefined) return lit;
+          const f = this.foldConstRational(n);
+          return f !== undefined && !('err' in f) && f.den === 1n ? f.num : undefined;
+        };
+        const cvT = constVal(node.whenTrue);
+        const cvF = constVal(node.whenFalse);
+        // The mobile type of an integer branch: a constant's smallest-fitting signed/unsigned type, else
         // the checked expression's own (plain, non-branded, non-enum) integer type. undefined => this
         // branch is not a plain integer (bool / string / array / enum / branded), leave it to the paths below.
-        const mobile = (lit: bigint | undefined, checked: Expr): JethType | undefined =>
-          lit !== undefined ? this.literalMobileType(lit) : plainInt(checked.type) ? checked.type : undefined;
-        const mT = mobile(litT, then);
-        const mF = mobile(litF, els);
-        if (mT && mF && (litT !== undefined || litF !== undefined)) {
+        const mobile = (cv: bigint | undefined, checked: Expr): JethType | undefined =>
+          cv !== undefined ? this.literalMobileType(cv) : plainInt(checked.type) ? checked.type : undefined;
+        const mT = mobile(cvT, then);
+        const mF = mobile(cvF, els);
+        if (mT && mF && (cvT !== undefined || cvF !== undefined)) {
           // (i) the two branches' families differ -> no common type (solc: "True expression's type
           // <a> does not match false expression's type <b>").
           if (mT.kind !== mF.kind) {
