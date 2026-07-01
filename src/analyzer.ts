@@ -8194,7 +8194,12 @@ export class Analyzer {
         // static-struct arrays are POINTER-HEADED, the element slot holds an absolute pointer, so
         // binding p ALIASES the element image (pointer copy) - byte-identical to solc (mutating p
         // writes through to xs[i]; re-pointing xs[i] = P(...) leaves p on the old image).
-        e.kind === 'arrayGet';
+        e.kind === 'arrayGet' ||
+        // E-mem-struct-fixed-array-of-struct-field: a static-struct ELEMENT of a memory struct's INLINE
+        // fixed-struct-array field (let x: Inner = o.items[i]): aggFieldRead's sub-image pointer is a
+        // pointer INTO o's image, so binding x ALIASES o.items[i] (mutating x.v writes through), exactly
+        // like the arrayGet element case and byte-identical to solc memory references.
+        (e.kind === 'aggFieldRead' && e.type.kind === 'struct');
       if (!okInit) {
         this.diags.error(
           decl.initializer,
@@ -8209,7 +8214,8 @@ export class Analyzer {
           e.kind === 'mapStorageValue' ||
           e.kind === 'structArrayElem' ||
           e.kind === 'cdStructArrayElem' ||
-          e.kind === 'arrayGet') &&
+          e.kind === 'arrayGet' ||
+          e.kind === 'aggFieldRead') &&
         (e.type.kind !== 'struct' ||
           (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)
       ) {
@@ -10314,6 +10320,82 @@ export class Analyzer {
     return { base, wordOffset, type: curType, runSteps };
   }
 
+  /** Resolve a DEEP chain rooted at a STATIC-STRUCT MEMORY local (a memAggregate local) that descends
+   *  through a FIXED array-of-STRUCT field and indexes a sub-field/element - `o.items[i].v`, `o.items[i]`
+   *  (whole element), `o.items[i].q.m`, `o.items[i].pre[k]`. The whole struct image is fully STATIC and
+   *  ABI-flattened INLINE (a static struct memAggregate image, the same layout resolveMemFieldChain reads
+   *  a value field from), so a static aggregate field/array/index is an INLINE word offset into the local's
+   *  image - the base is the local's image pointer (memAggregate) and the descent sums field offsets +
+   *  constant index offsets into wordOffset while a RUNTIME index becomes a bounds-checked runStep, exactly
+   *  like resolveMemDynStructStaticAggChain does inside a dyn-struct image. Returns undefined when the chain
+   *  is not rooted at such a local, when NO array-index step is present (a bare `o.field` / `o.a.b` value/
+   *  whole-field chain is owned by resolveMemFieldChain, unchanged), or when a hop is ill-typed (a struct
+   *  field diag is emitted). Placed as a sibling to the dyn-struct resolver; callers gate on it before the
+   *  resolveMemFieldChain fallback so it only claims a memory-struct chain that indexes into an inline
+   *  fixed-struct-array field. */
+  private resolveMemAggregateStaticChain(
+    node: ts.Expression,
+  ): { base: Expr; wordOffset: number; type: JethType; runSteps: ArrIndexStep[] } | undefined {
+    // collect access steps leaf -> root, stopping at the bare identifier root.
+    const steps: ({ field: string } | { index: ts.Expression; node: ts.Node })[] = [];
+    let cur: ts.Expression = node;
+    let hasIndex = false;
+    for (;;) {
+      if (ts.isPropertyAccessExpression(cur)) {
+        steps.push({ field: cur.name.text });
+        cur = cur.expression;
+      } else if (ts.isElementAccessExpression(cur) && cur.argumentExpression) {
+        hasIndex = true;
+        steps.push({ index: cur.argumentExpression, node: cur });
+        cur = cur.expression;
+      } else {
+        break;
+      }
+    }
+    // the root must be a memAggregate STATIC-STRUCT local, and the chain must index at least once (a
+    // pure `o.field...` value/whole-field chain is resolveMemFieldChain's; this owns the indexed form).
+    if (!ts.isIdentifier(cur) || !hasIndex) return undefined;
+    const st = this.memAggregateLocals.get(cur.text);
+    if (!st || st.kind !== 'struct' || !isStaticType(st)) return undefined;
+    const base: Expr = { kind: 'memAggregate', type: st, local: cur.text };
+    steps.reverse(); // root -> leaf
+    let curType: JethType = st;
+    let wordOffset = 0;
+    const runSteps: ArrIndexStep[] = [];
+    for (const s of steps) {
+      if ('field' in s) {
+        if (curType.kind !== 'struct') {
+          this.diags.error(node, 'JETH210', `cannot read field '${s.field}' of ${displayName(curType)}`);
+          return undefined;
+        }
+        const fo = this.memFieldOffset(curType, s.field);
+        if (!fo) {
+          this.diags.error(node, 'JETH210', `struct '${curType.name}' has no field '${s.field}'`);
+          return undefined;
+        }
+        wordOffset += fo.wordOffset;
+        curType = fo.type;
+      } else {
+        if (!(curType.kind === 'array' && curType.length !== undefined)) return undefined;
+        const iexpr = this.checkExpr(s.index, U256);
+        if (!iexpr) return undefined;
+        const iv = this.coerce(iexpr, U256, s.index);
+        const strideWords = abiHeadWords(curType.element);
+        if (iv.kind === 'literalInt') {
+          if (iv.value < 0n || iv.value >= BigInt(curType.length)) {
+            this.diags.error(s.node, 'JETH211', `array index ${iv.value} out of bounds for length ${curType.length}`);
+            return undefined;
+          }
+          wordOffset += Number(iv.value) * strideWords;
+        } else {
+          runSteps.push({ index: iv, length: curType.length, strideBytes: strideWords * 32 });
+        }
+        curType = curType.element;
+      }
+    }
+    return { base, wordOffset, type: curType, runSteps };
+  }
+
   /** Residual B3: resolve `xs[i].field` where `xs` is a memory P[] whose element P is a DYNAMIC-field
    *  struct (isDynStructLeaf). The element xs[i] (arrayGet) lowers to the element's dyn-struct image
    *  pointer (mload of the element pointer word); the field lives at the dyn-struct HEAD-WORD offset
@@ -10733,6 +10815,16 @@ export class Analyzer {
         return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
       }
     }
+    // E-mem-struct-fixed-array-of-struct-field: o.items[i].v = x (and deeper: o.items[i].q.m, o.items[i]
+    // whole element) - an INDEXED write into a memory STATIC-STRUCT local's fixed-struct-array field. The
+    // write mirrors the aggFieldRead read (mstore at the local's image base + word offset + runtime index
+    // steps; RHS coerced clean). Roots at a struct local, so it never overlaps the ARRAY-rooted chain above.
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const chain = this.resolveMemAggregateStaticChain(node);
+      if (chain && isStaticType(chain.type)) {
+        return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
+      }
+    }
     // d[i] = <bytes1>: byte assignment into a MEMORY `bytes` value (a memory bytes local, or an
     // @internal/@private function's bytes param which is materialized into memory). The element is
     // written in place via mstore8 (bounds-checked), mirroring solc's `bytes memory` element store.
@@ -11132,10 +11224,13 @@ export class Analyzer {
       return { kind: 'byteIndex', type: lv.type, base: lv.base, index: lv.index };
     }
     if (lv.kind === 'aggFieldStore') {
-      // xs[i].a += v / xs[i].a++ : read the current value via aggFieldRead (same element base + word
-      // offset as the store). The compound-assign/++ path lowers the base twice (read + write), so an
-      // impure element index is gated by impureLValueKey below (rejected, never double-evaluated).
-      return { kind: 'aggFieldRead', type: lv.type, base: lv.base, wordOffset: lv.wordOffset };
+      // xs[i].a += v / xs[i].a++ / o.items[i].v += v : read the current value via aggFieldRead at the
+      // SAME element base + static word offset + RUNTIME index steps as the store, so a runtime-indexed
+      // field reads and writes the SAME slot (dropping runSteps read the wrong element - offset 0 - and
+      // MISCOMPILED). The compound-assign/++ path evaluates the lvalue navigation twice (read + write);
+      // an impure index is hoisted to a once-evaluated temp (hoistImpureLValueKeys) or gated, so the
+      // runSteps' index is always PURE here and re-evaluating it yields the identical slot.
+      return { kind: 'aggFieldRead', type: lv.type, base: lv.base, wordOffset: lv.wordOffset, runSteps: lv.runSteps };
     }
     if (lv.kind === 'aggDynFieldStore') {
       // a bytes/string / dynamic value-array field of a B3 dyn-struct array element: the read form is the
@@ -14921,6 +15016,26 @@ export class Analyzer {
           node,
           'JETH245',
           `reading a ${displayName(chain.type)} of a struct-array element is not supported yet`,
+        );
+        return undefined;
+      }
+    }
+    // E-mem-struct-fixed-array-of-struct-field: a DEEP INDEXED read into a memory STATIC-STRUCT local whose
+    // field is a FIXED array-of-STRUCT (o.items[i].v, o.items[i] whole element, o.items[i].q.m). The whole
+    // image is inline (a static struct memAggregate); the descent is a word offset (+ runtime index steps)
+    // into it, read via aggFieldRead. Placed after the memory-array chain resolver (roots at an ARRAY local,
+    // never a struct local, so no overlap) and before the resolveMemFieldChain fallback (which handles the
+    // non-indexed `o.field` / `o.a.b` chains). Only fires when the chain indexes a struct-rooted local.
+    if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+      const chain = this.resolveMemAggregateStaticChain(node);
+      if (chain) {
+        if (isStaticType(chain.type)) {
+          return { kind: 'aggFieldRead', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
+        }
+        this.diags.error(
+          node,
+          'JETH245',
+          `reading a ${displayName(chain.type)} of a memory struct's fixed-struct-array field is not supported yet`,
         );
         return undefined;
       }
