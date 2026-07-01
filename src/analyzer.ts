@@ -13858,61 +13858,16 @@ export class Analyzer {
       }
     }
 
-    // BigInt literal -> integer
-    if (ts.isBigIntLiteral(node)) {
-      const raw = node.text.replace(/n$/, '');
-      const value = BigInt(raw);
-      // a HEX literal carries its source byte width (digits / 2, even-digit only) for bytesN conversion.
-      const hexDigits = /^0x/i.test(raw) ? raw.length - 2 : -1;
-      const hexBytes = hexDigits >= 0 && hexDigits % 2 === 0 ? hexDigits / 2 : undefined;
-      if (this.rejectUppercaseHexPrefix(node)) return { kind: 'literalInt', type: U256, value, hexBytes };
-      if (this.rejectBadUnderscores(node)) return { kind: 'literalInt', type: U256, value, hexBytes };
-      // A 40-hex-digit checksummed literal is of type `address` (and only converts to uint160/bytes20,
-      // never implicitly to an integer); a 39/41-digit or bad-checksum hex literal is a hard error.
-      const addrClass = this.classifyAddressHexLiteral(node);
-      if (addrClass === 'address') {
-        return { kind: 'literalInt', type: ADDRESS, value };
-      }
-      if (addrClass !== 'plain') {
-        this.diags.error(node, addrClass.code, addrClass.msg);
-        return { kind: 'literalInt', type: U256, value, hexBytes };
-      }
-      // solc implicitly converts a hex literal to bytesN iff its source byte width == N (left-aligned in
-      // the high N bytes). e.g. `bytes4 b = 0x12345678` -> 0x1234567800..00. A shorter/longer hex
-      // literal, or a decimal literal, does NOT convert (only the literal 0 does, handled in coerce).
-      if (expected && expected.kind === 'bytesN' && hexBytes === expected.size) {
-        return { kind: 'literalInt', type: expected, value: value << BigInt((32 - expected.size) * 8) };
-      }
-      // an enum `expected` does NOT capture a bare integer literal (see the negated-literal case
-      // above): keep the plain int type so coerce rejects the implicit int -> enum.
-      const type = expected && isInteger(expected) && !isEnum(expected) ? expected : U256;
-      if (!this.inRange(value, type)) {
-        this.diags.error(node, 'JETH070', `literal ${value} out of range for ${displayName(type)}`);
-      }
-      return { kind: 'literalInt', type, value, hexBytes };
-    }
-
-    // numeric literal (no 'n') -> error: JETH integers are BigInt (need the `n` suffix). EXCEPTION:
-    // a bare HEX literal whose source byte width EXACTLY equals an expected bytesN is a valid bytesN
-    // literal in solc (left-aligned: `bytes4 b = 0x12345678` -> 0x1234567800..00). The decimal value
-    // is in node.text; the original hex spelling (for the byte width) is only in getText().
+    // Integer literal: a BigInt (`5n` / `0x1an`) OR a bare integer-shaped NumericLiteral (`16` / `0x1a`,
+    // no `n`). The bare form is accepted for solc parity (JETH historically required the `n` suffix); both
+    // route through integerLiteralExpr so a bare literal is byte-identical to its n-suffixed twin (EIP-55
+    // address classification, implicit bytesN width, enum guard, range check). A float / exponent / octal
+    // / binary NumericLiteral is NOT an integer literal and is rejected (the `n`-suffix hint). BigInt uses
+    // node.text (ts normalizes octal/binary to decimal there); the bare form uses getText() so a large hex
+    // stays exact (NumericLiteral.text is a lossy decimal).
+    if (ts.isBigIntLiteral(node)) return this.integerLiteralExpr(node, node.text.replace(/n$/, ''), expected);
     if (ts.isNumericLiteral(node)) {
-      const raw = node.getText();
-      const hexMatch = /^0x([0-9a-fA-F]+)$/.exec(raw); // 0X prefix is rejected separately as a parity lint
-      if (hexMatch && expected && expected.kind === 'bytesN') {
-        const hexDigits = hexMatch[1]!.length;
-        if (hexDigits % 2 === 0 && hexDigits / 2 === expected.size) {
-          const value = BigInt(raw);
-          return { kind: 'literalInt', type: expected, value: value << BigInt((32 - expected.size) * 8) };
-        }
-        // a wrong-width hex literal for the expected bytesN: solc also rejects (no implicit resize).
-        this.diags.error(
-          node,
-          'JETH072',
-          `hex literal ${raw} is ${hexDigits % 2 === 0 ? hexDigits / 2 : `${hexDigits}-nibble`} bytes wide; expected exactly ${expected.size} bytes for ${displayName(expected)} (a bytesN hex literal must match the type width)`,
-        );
-        return undefined;
-      }
+      if (this.isIntegerLiteralNode(node)) return this.integerLiteralExpr(node, node.getText(), expected);
       this.diags.error(node, 'JETH071', `use a BigInt literal (${node.text}n) - JETH integers are BigInt`);
       return undefined;
     }
@@ -16198,6 +16153,26 @@ export class Analyzer {
             : (expected ?? left.type);
       const right = this.checkExpr(node.right, rightExpected);
       if (!right) return undefined;
+      // Asymmetric bytesN-literal comparison (solc parity): solc types a comparison's literal by the
+      // LEFT operand's type, so a hex literal on the LEFT vs a bytesN on the RIGHT is rejected (the
+      // literal stays int_const, never a bytesN). The right-literal form (bytesN == 0xLIT) is pre-typed
+      // above; here a left hex-width literal (bare `0x..` per the lifted n-suffix rule, or `0x..n`) that
+      // is still an integer vs a bytesN right must REJECT, rather than let unify coerce it to the right's
+      // bytesN via its source width (which would break the asymmetry solc enforces).
+      if (
+        this.isComparison(op) &&
+        left.kind === 'literalInt' &&
+        left.hexBytes !== undefined &&
+        left.type.kind !== 'bytesN' &&
+        right.type.kind === 'bytesN'
+      ) {
+        this.diags.error(
+          node,
+          'JETH084',
+          `a hex literal on the left of a comparison is not implicitly a ${displayName(right.type)} (solc types the literal by the left operand); put it on the right (e.g. x == ${node.left.getText().trim()}) or cast it (${displayName(right.type)}(...))`,
+        );
+        return undefined;
+      }
       return this.buildBinary(op, left, right, node);
     }
 
@@ -17509,10 +17484,11 @@ export class Analyzer {
   private classifyAddressHexLiteral(node: ts.Expression): 'plain' | 'address' | { code: string; msg: string } {
     let n: ts.Expression = node;
     while (ts.isParenthesizedExpression(n)) n = n.expression;
-    if (!ts.isBigIntLiteral(n)) return 'plain';
-    // ts normalizes BigIntLiteral.text to lowercase, so use it only for length; the EIP-55 checksum
-    // is case-sensitive and must read the ORIGINAL source spelling via getText().
-    const m = /^0[xX]([0-9a-fA-F_]+)n?$/.exec(n.text);
+    if (!ts.isBigIntLiteral(n) && !ts.isNumericLiteral(n)) return 'plain';
+    // Read the ORIGINAL source spelling (getText): a bare hex NumericLiteral has a lossy DECIMAL .text,
+    // and the EIP-55 checksum is case-sensitive. Handles `0x..n` (BigInt) and `0x..` (bare) alike.
+    const src = n.getText().replace(/n$/, '');
+    const m = /^0[xX]([0-9a-fA-F_]+)$/.exec(src);
     if (!m) return 'plain';
     const digits = m[1]!.replace(/_/g, '');
     if (digits.length < 39 || digits.length > 41) return 'plain';
@@ -17522,9 +17498,7 @@ export class Analyzer {
         msg: `this looks like an address but is not exactly 40 hex digits (it has ${digits.length}); prepend zeros if it is meant to be a number`,
       };
     }
-    const rawMatch = /^0[xX]([0-9a-fA-F_]+)n?$/.exec(n.getText());
-    const rawDigits = (rawMatch ? rawMatch[1]! : m[1]!).replace(/_/g, '');
-    if (!this.isEip55Checksummed(rawDigits)) {
+    if (!this.isEip55Checksummed(digits)) {
       return {
         code: 'JETH049',
         msg: `this looks like an address but has an invalid EIP-55 checksum (use the checksummed form, or address(...) / a number with leading zeros)`,
@@ -17547,7 +17521,7 @@ export class Analyzer {
   private rejectUppercaseHexPrefix(node: ts.Expression): boolean {
     let n: ts.Expression = node;
     while (ts.isParenthesizedExpression(n)) n = n.expression;
-    if (!ts.isBigIntLiteral(n)) return false;
+    if (!ts.isBigIntLiteral(n) && !ts.isNumericLiteral(n)) return false;
     const raw = n.getText();
     if (/^0X/.test(raw)) {
       this.diags.error(n, 'JETH049', `uppercase '0X' hex prefix is not allowed; use a lowercase '0x' prefix`);
@@ -17578,7 +17552,7 @@ export class Analyzer {
     ) {
       n = ts.isParenthesizedExpression(n) ? n.expression : n.operand;
     }
-    if (!ts.isBigIntLiteral(n)) return false;
+    if (!ts.isBigIntLiteral(n) && !ts.isNumericLiteral(n)) return false;
     const digits = n
       .getText()
       .replace(/n$/, '')
@@ -17624,9 +17598,61 @@ export class Analyzer {
     return digits % 2 === 0 ? digits / 2 : undefined;
   }
 
+  /** Is `node` an integer literal we accept as an integer value: a BigInt literal (`5n` / `0x1an`) OR a
+   *  bare integer-shaped NumericLiteral without the `n` suffix - a decimal (`16` / `1_000`) or a hex
+   *  (`0x1a` / `0xdead_beef`). A float, exponent, octal, or binary numeric literal is NOT accepted. The
+   *  bare form is a solc-parity relaxation of the historic `n`-suffix requirement. */
+  private isIntegerLiteralNode(node: ts.Expression): boolean {
+    if (ts.isBigIntLiteral(node)) return true;
+    if (!ts.isNumericLiteral(node)) return false;
+    const raw = node.getText();
+    return /^[0-9][0-9_]*$/.test(raw) || /^0x[0-9a-fA-F][0-9a-fA-F_]*$/.test(raw);
+  }
+
+  /** Build the Expr for an accepted integer literal, shared by the BigInt (`5n`) and the bare
+   *  NumericLiteral (`16` / `0x1a`) branches so a bare literal is byte-identical to its n-suffixed twin:
+   *  EIP-55 address classification, implicit bytesN width (a hex literal whose source byte width == N
+   *  left-aligns into bytesN), enum guard, and range check. `raw` is the source spelling sans trailing
+   *  `n` (node.text for BigInt - ts normalizes octal/binary to decimal there; getText() for the bare
+   *  form so a large hex stays exact). */
+  private integerLiteralExpr(node: ts.Expression, raw: string, expected: JethType | undefined): Expr {
+    const value = BigInt(raw.replace(/_/g, ''));
+    // a HEX literal carries its source byte width (digits / 2, even-digit only) for bytesN conversion.
+    const bare = raw.replace(/_/g, '');
+    const hexDigits = /^0x/i.test(bare) ? bare.length - 2 : -1;
+    const hexBytes = hexDigits >= 0 && hexDigits % 2 === 0 ? hexDigits / 2 : undefined;
+    if (this.rejectUppercaseHexPrefix(node)) return { kind: 'literalInt', type: U256, value, hexBytes };
+    if (this.rejectBadUnderscores(node)) return { kind: 'literalInt', type: U256, value, hexBytes };
+    // A 40-hex-digit checksummed literal is of type `address` (and only converts to uint160/bytes20,
+    // never implicitly to an integer); a 39/41-digit or bad-checksum hex literal is a hard error.
+    const addrClass = this.classifyAddressHexLiteral(node);
+    if (addrClass === 'address') {
+      return { kind: 'literalInt', type: ADDRESS, value };
+    }
+    if (addrClass !== 'plain') {
+      this.diags.error(node, addrClass.code, addrClass.msg);
+      return { kind: 'literalInt', type: U256, value, hexBytes };
+    }
+    // solc implicitly converts a hex literal to bytesN iff its source byte width == N (left-aligned in
+    // the high N bytes). e.g. `bytes4 b = 0x12345678` -> 0x1234567800..00. A shorter/longer hex literal,
+    // or a decimal literal, does NOT convert (only the literal 0 does, handled in coerce).
+    if (expected && expected.kind === 'bytesN' && hexBytes === expected.size) {
+      return { kind: 'literalInt', type: expected, value: value << BigInt((32 - expected.size) * 8) };
+    }
+    // an enum `expected` does NOT capture a bare integer literal: keep the plain int type so coerce
+    // rejects the implicit int -> enum.
+    const type = expected && isInteger(expected) && !isEnum(expected) ? expected : U256;
+    if (!this.inRange(value, type)) {
+      this.diags.error(node, 'JETH070', `literal ${value} out of range for ${displayName(type)}`);
+    }
+    return { kind: 'literalInt', type, value, hexBytes };
+  }
+
   private asIntLiteral(node: ts.Expression): bigint | undefined {
     if (ts.isParenthesizedExpression(node)) return this.asIntLiteral(node.expression);
     if (ts.isBigIntLiteral(node)) return BigInt(node.text.replace(/n$/, ''));
+    // a bare integer-shaped NumericLiteral (no `n`): value from the SOURCE TEXT (exact for a large hex).
+    if (ts.isNumericLiteral(node) && this.isIntegerLiteralNode(node)) return BigInt(node.getText().replace(/_/g, ''));
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
       const inner = this.asIntLiteral(node.operand);
       return inner === undefined ? undefined : -inner;

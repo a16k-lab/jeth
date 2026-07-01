@@ -48,8 +48,13 @@ describe('subset validator', () => {
     expect(codesFor(wrap('let y: u256 = typeof this.x;'))).toContain('JETH030');
   });
 
-  it('rejects a plain numeric literal in favor of BigInt', () => {
-    expect(codesFor(wrap('this.x = 5;'))).toContain('JETH071');
+  it('accepts a bare integer literal (the n-suffix requirement was lifted for solc parity)', () => {
+    // A bare decimal / hex integer literal is now accepted as an integer, identical to its `n`-suffixed
+    // form (JETH historically required the `n`; solc has no such distinction). A FLOAT still rejects
+    // (see 'rejects floating-point literals'), as does a non-integer numeric form.
+    expect(codesFor(wrap('this.x = 5;'))).toEqual([]);
+    expect(codesFor(wrap('this.x = 0x2a;'))).toEqual([]);
+    expect(codesFor(wrap('this.x = 1_000_000;'))).toEqual([]);
   });
 
   it('rejects an unmarked contract field', () => {
