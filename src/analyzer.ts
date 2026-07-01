@@ -7,7 +7,7 @@
 //  - type-check each function body into typed IR (checked-by-default arithmetic),
 //    enforcing integer widths, BigInt-literal rule, and view/pure mutability.
 import ts from 'typescript';
-import type { DiagnosticBag } from './diagnostics.js';
+import { DiagnosticBag } from './diagnostics.js';
 import { decoratorNames, ctorDecoratorNames, decoratorCall, heritageBases, HeritageBase } from './parser.js';
 import { resolveType, resolvePrimitiveName } from './typeresolver.js';
 import {
@@ -9190,6 +9190,107 @@ export class Analyzer {
     return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + selector) << 224n };
   }
 
+  /** A qualified function `.selector`: `I.g.selector` (I an @interface) or `T.g.selector` (T a
+   *  @contract / @abstract type). solc resolves `g` against the members DECLARED DIRECTLY in that type's
+   *  body (never an inherited one - `Derived.baseFn.selector` where baseFn is inherited is rejected) and
+   *  requires an ABI selector, i.e. an @external method (JETH's only selector-bearing visibility; an
+   *  internal method has no selector). Returns the bytes4 selector Expr (left-aligned in the high 4
+   *  bytes, identical to the own-function case), or undefined after a JETH074 (unknown/internal/ambiguous
+   *  member). Returns 'not-a-type' when the head does not name an interface/contract type (the caller
+   *  then falls through to normal property-access handling). */
+  private qualifiedSelectorOf(node: ts.Node, typeName: string, memberName: string): Expr | undefined | 'not-a-type' {
+    // (1) an @interface: every interface method is @external, so any declared method has a selector.
+    // interfacesByName holds ONLY the directly-declared methods (interface overloading is rejected at
+    // collection, and inherited methods are NOT flattened in) - exactly solc's resolution set.
+    const iface = this.interfacesByName.get(typeName);
+    if (iface) {
+      const m = iface.methods.get(memberName);
+      if (!m) {
+        this.diags.error(
+          node,
+          'JETH074',
+          `interface '${typeName}' has no method '${memberName}' (a qualified .selector resolves only methods declared directly in the interface)`,
+        );
+        return undefined;
+      }
+      return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + m.selector) << 224n };
+    }
+    // (2) a @contract / @abstract type: resolve `memberName` among the methods DECLARED DIRECTLY in that
+    // class's body (not inherited - solc rejects `Derived.baseFn.selector`). The method must be @external
+    // to have an ABI selector; overloading among the @external ones makes the reference ambiguous.
+    const cls = this.classByName.get(typeName);
+    if (cls) {
+      const declared = cls.members.filter(
+        (mem): mem is ts.MethodDeclaration =>
+          ts.isMethodDeclaration(mem) && ts.isIdentifier(mem.name) && mem.name.text === memberName,
+      );
+      if (declared.length === 0) {
+        this.diags.error(
+          node,
+          'JETH074',
+          `'${typeName}' has no member '${memberName}' (a qualified .selector resolves only methods declared directly in that contract, not inherited ones)`,
+        );
+        return undefined;
+      }
+      const external = declared.filter((mem) => decoratorNames(mem).includes('external'));
+      if (external.length === 0) {
+        this.diags.error(
+          node,
+          'JETH074',
+          `.selector requires an @external function ('${typeName}.${memberName}' is internal and has no ABI selector)`,
+        );
+        return undefined;
+      }
+      if (external.length > 1) {
+        this.diags.error(
+          node,
+          'JETH074',
+          `.selector on overloaded function '${typeName}.${memberName}' is ambiguous (it has ${external.length} @external overloads)`,
+        );
+        return undefined;
+      }
+      const m = external[0]!;
+      // Resolve the parameter types EXACTLY as the collection path does (resolveType against the same
+      // struct/alias registry). Use a throwaway diagnostics bag so a speculative resolution of a method
+      // already collected elsewhere cannot double-report; a genuinely unresolvable param type falls back
+      // to a JETH074 here (the method is unusable as a selector source).
+      const scratch = new DiagnosticBag(this.sourceFile, this.sourceFile.fileName);
+      const ptypes: JethType[] = [];
+      let bad = false;
+      for (const p of m.parameters) {
+        const t = resolveType(p.type, scratch, this.structsByName);
+        if (!t) {
+          bad = true;
+          break;
+        }
+        ptypes.push(t);
+      }
+      if (bad) {
+        this.diags.error(node, 'JETH074', `cannot resolve the signature of '${typeName}.${memberName}' for .selector`);
+        return undefined;
+      }
+      const sig = functionSignature(memberName, ptypes);
+      const selector = functionSelector(sig);
+      return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + selector) << 224n };
+    }
+    return 'not-a-type';
+  }
+
+  /** `type(I).interfaceId` (EIP-165): the compile-time XOR of the selectors of the functions declared
+   *  DIRECTLY in interface I's body (solc EXCLUDES inherited functions), returned as a bytes4 left-
+   *  aligned in the high 4 bytes. An empty interface (no own methods) yields 0x00000000. I must be an
+   *  @interface (solc rejects `type(C).interfaceId` on a contract). */
+  private interfaceIdOf(node: ts.Node, typeName: string): Expr | undefined {
+    const iface = this.interfacesByName.get(typeName);
+    if (!iface) {
+      this.diags.error(node, 'JETH074', 'type(I).interfaceId requires an interface type I');
+      return undefined;
+    }
+    let acc = 0n;
+    for (const m of iface.methods.values()) acc ^= BigInt('0x' + m.selector);
+    return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: acc << 224n };
+  }
+
   /** Resolve a qualified library call `L.f(args)` (the receiver is NOT prepended). `node.arguments`
    *  is the full positional/named argument list, so this delegates to the SAME internal-call path
    *  via a forced callee resolved against L's overload set - making it byte-identical to a contract
@@ -14050,6 +14151,21 @@ export class Analyzer {
       return undefined;
     }
 
+    // type(I).interfaceId (EIP-165) -> the compile-time XOR of interface I's OWN function selectors, a
+    // bytes4 constant (left-aligned in the high 4 bytes). solc rejects it on a contract type; only an
+    // @interface has an interfaceId.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === 'interfaceId' &&
+      ts.isCallExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'type' &&
+      node.expression.arguments.length === 1 &&
+      ts.isIdentifier(node.expression.arguments[0]!)
+    ) {
+      return this.interfaceIdOf(node, (node.expression.arguments[0] as ts.Identifier).text);
+    }
+
     // function `.selector` -> the 4-byte ABI selector, a compile-time bytes4 constant (left-aligned in
     // the high 4 bytes, exactly like abi.encodeWithSelector's literal). solc allows it on an EXTERNAL/
     // PUBLIC function reference (`this.f.selector`, or a bare `f.selector`); an internal/private function
@@ -14061,6 +14177,18 @@ export class Analyzer {
         node.expression.expression.kind === ts.SyntaxKind.ThisKeyword
       ) {
         fnName = node.expression.name.text; // this.f.selector
+      } else if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isIdentifier(node.expression.expression) &&
+        !this.isVisibleLocal(node.expression.expression.text) &&
+        (this.interfacesByName.has(node.expression.expression.text) ||
+          this.classByName.has(node.expression.expression.text))
+      ) {
+        // TYPE-qualified selector: `I.g.selector` (I an @interface) / `T.g.selector` (T a @contract or
+        // @abstract type). Resolve g among that type's directly-declared @external methods (solc's rule).
+        const qsel = this.qualifiedSelectorOf(node, node.expression.expression.text, node.expression.name.text);
+        if (qsel !== 'not-a-type') return qsel; // resolved bytes4 selector, or undefined after a JETH074
+        // head names a type but the resolver declined it: fall through to normal handling.
       } else if (ts.isIdentifier(node.expression) && !this.isVisibleLocal(node.expression.text)) {
         fnName = node.expression.text; // bare f.selector (not shadowed by a local)
       }
