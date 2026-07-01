@@ -1503,6 +1503,18 @@ ${indent(runtime, 6)}
               out.push(`return(${dst}, ${size})`);
               break;
             }
+            // Fix 1a: a STATIC fixed-outer VALUE-leaf array (Arr<u256,N>, Arr<address,N>, nested static
+            // Arr<Arr<u256,2>,3>, ...) reached DIRECTLY from an extCall / @interface-call return
+            // (`return this.mk()` / `return IFace(a).mk()`, analyzed as abiDecode(extCall, T)): the decoded
+            // image mp is ALREADY the flat inline ABI blob (abiHeadWords(T) inline words, NO [len] header).
+            // solc returns it INLINE with no [0x20] offset wrapper - the SAME layout the let-bound form
+            // (`let r: Arr<u256,N> = this.mk(); return r;`) emits via the verbatim static-image return path.
+            // encodeMemArrayReturn would MISREAD the first element as a dynamic-array length (a wrong-bytes
+            // miscompile), so return the flat image directly.
+            if (isStaticType(s.value.type)) {
+              out.push(`return(${mp}, ${abiHeadWords(s.value.type) * 32})`);
+              break;
+            }
             const codecSourced =
               (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) ||
               isAggregateLeafArray(s.value.type) ||
