@@ -2289,8 +2289,28 @@ export class Analyzer {
       // @override(B, K); a bare @override or an incomplete list is rejected.
       const overridden = [...new Set(versions.slice(1).map((v) => v.definingContract!))];
       const heads = overridden.filter((x) => !overridden.some((y) => y !== x && basesOf.get(y)?.has(x)));
+
+      // OVERRIDE-LIST MEMBERSHIP (solc: "Invalid contract specified in override list" / "Identifier not
+      // found or not unique" for an undeclared name; "Duplicate contract found in override list"). Every
+      // name written in @override(...) must be exactly a branch HEAD - a maximal sibling that this winner
+      // directly overrides. A name that is NOT a head is invalid whether it is a non-inherited/undeclared
+      // contract, the deployed contract itself, or a NON-maximal base (a shared root, or a transitive base
+      // that another named base already derives from - solc only accepts the immediate maximal siblings).
+      // This runs unconditionally (even for a single head, where @override(A) is valid but @override(B) is
+      // not), and also rejects a duplicated name. It complements JETH381 (completeness: all heads present).
+      const list = winner.overrideList ?? [];
+      const headSet = new Set(heads);
+      const seen = new Set<string>();
+      const badName = list.find((n) => !headSet.has(n) || seen.has(n) || (seen.add(n), false));
+      if (badName !== undefined) {
+        this.diags.error(
+          winner.node,
+          'JETH415',
+          `function '${winner.name}' names '${badName}' in its @override list, which is not a directly-overridden base contract`,
+        );
+      }
+
       if (heads.length >= 2) {
-        const list = winner.overrideList ?? [];
         const missing = heads.filter((h) => !list.includes(h));
         if (missing.length > 0) {
           this.diags.error(
