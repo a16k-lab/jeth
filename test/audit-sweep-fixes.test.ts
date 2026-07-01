@@ -51,6 +51,14 @@ describe('audit sweep fixes - byte-identical to solc 0.8.35', () => {
     );
   });
 
+  it('\\xNN in a template-literal static part (with substitution) is a raw byte too', async () => {
+    await eqCalls(
+      '@contract class C { @external @pure f(x: string): string { return `A\\xc3\\xa9${x}`; } }',
+      'contract C { function f(string calldata x) external pure returns(string memory){ return string.concat("A\\xc3\\xa9", x); } }',
+      [['f(string)', W(0x20n) + W(1n) + '7a'.padEnd(64, '0')]],
+    );
+  });
+
   it('a \\xNN-invalid-UTF-8 string literal is rejected (JETH281); valid UTF-8 / ascii accepted', () => {
     expect(codes('@contract class C { @external @pure f(): string { return "\\xe9"; } }')).toContain('JETH281');
     expect(codes('@contract class C { @external @pure f(): string { return "\\xc3\\xa9"; } }')).toEqual([]);

@@ -12439,10 +12439,11 @@ export class Analyzer {
    *  byte-identical to solc `string.concat("Hello ", name)`. */
   private checkTemplateLiteral(node: ts.TemplateExpression): Expr | undefined {
     const parts: Expr[] = [];
-    const pushText = (text: string) => {
-      if (text.length > 0) parts.push({ kind: 'stringLiteral', type: STRING, bytes: new TextEncoder().encode(text) });
+    const pushText = (partNode: ts.TemplateLiteralLikeNode) => {
+      const bytes = this.templatePartBytes(partNode); // Solidity-style decode (a \xNN static part is a raw byte)
+      if (bytes.length > 0) parts.push({ kind: 'stringLiteral', type: STRING, bytes });
     };
-    pushText(node.head.text);
+    pushText(node.head);
     let ok = true;
     for (const span of node.templateSpans) {
       const e = this.checkExpr(span.expression, STRING);
@@ -12460,7 +12461,7 @@ export class Analyzer {
         continue;
       }
       parts.push(e);
-      pushText(span.literal.text);
+      pushText(span.literal);
     }
     if (!ok) return undefined;
     return this.makeConcat(parts, STRING);
@@ -16606,7 +16607,20 @@ export class Analyzer {
    *  otherwise). `\uNNNN` / `\u{...}` is the UTF-8 of the code point; the simple escapes and line
    *  continuations follow their usual meaning; every other char is UTF-8 encoded. */
   private strLitBytes(node: ts.StringLiteralLike): Uint8Array {
-    const s = node.getText().slice(1, -1); // strip the surrounding quote / backtick delimiters
+    return this.decodeStrEscapes(node.getText().slice(1, -1)); // strip the surrounding quote / backtick delimiters
+  }
+
+  /** A template-literal part (head / middle / tail) decoded Solidity-style: strip the part's delimiters
+   *  (head opens with `` ` ``, middle/tail open with `}`; head/middle close with `${`, tail with `` ` ``),
+   *  then decode its escapes - so a `\xNN` in a template static part is a raw byte too (not mis-UTF-8-ed). */
+  private templatePartBytes(node: ts.TemplateLiteralLikeNode): Uint8Array {
+    const raw = node.getText();
+    const content = raw.endsWith('${') ? raw.slice(1, -2) : raw.slice(1, -1);
+    return this.decodeStrEscapes(content);
+  }
+
+  /** Decode a string-literal CONTENT (delimiters already stripped) to bytes with Solidity semantics. */
+  private decodeStrEscapes(s: string): Uint8Array {
     const out: number[] = [];
     const pushCp = (cp: number): void => {
       if (cp < 0x80) out.push(cp);
