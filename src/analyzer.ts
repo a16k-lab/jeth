@@ -2118,7 +2118,8 @@ export class Analyzer {
           // contract's version exists among collected functions). solc rejects: "Function has override
           // specified but does not override anything." This fires whether or not a base declares the same
           // NAME (a same-name-different-signature base is a botched override; NO same-name base at all -
-          // no base, or bases with unrelated names - is an override of nothing). Both are rejected.
+          // no base, or bases with unrelated names - is an override of nothing). Both are rejected. This is
+          // JETH369 (distinct from JETH374 = a base function overridden WITHOUT @override - the inverse).
           // EXEMPTION: implementing an @interface-declared function may legally carry @override in solc,
           // and interface methods are NOT in `collected` (they live in this.interfacesByName). So skip the
           // error when w implements an interface method of the same signature. (Interface-implementation
@@ -2127,7 +2128,7 @@ export class Analyzer {
           if (!this.overrideImplementsInterfaceMethod(w)) {
             this.diags.error(
               w.node,
-              'JETH374',
+              'JETH369',
               sameNameBase
                 ? `function '${w.name}' in '${w.definingContract}' has @override but overrides no base function (no base declares it with this signature)`
                 : `function '${w.name}' in '${w.definingContract}' has @override but does not override anything (no base function to override)`,
@@ -2216,11 +2217,12 @@ export class Analyzer {
             );
           }
         } else {
-          // a base-most definition carrying @override with nothing to override is an error.
+          // a base-most definition carrying @override with nothing to override is an error (JETH369 -
+          // "@override but overrides nothing"; distinct from JETH374 = a base fn overridden WITHOUT @override).
           if (v.isOverride) {
             this.diags.error(
               v.node,
-              'JETH374',
+              'JETH369',
               `function '${v.name}' in '${v.definingContract}' has @override but overrides no base function`,
             );
           }

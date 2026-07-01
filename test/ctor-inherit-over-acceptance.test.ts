@@ -4,9 +4,10 @@
 //   BUG 1 (JETH379): base constructor arguments given twice - `constructor() A(2n)` (which TypeScript
 //     mis-parses as a phantom method named A) alongside a heritage `extends A(1n)`. JETH silently dropped
 //     the A(2n) form; solc: "Base constructor arguments given twice."
-//   BUG 2 (JETH374): `@override` on a function that overrides nothing (no base, or bases with unrelated
+//   BUG 2 (JETH369): `@override` on a function that overrides nothing (no base, or bases with unrelated
 //     names). The gate previously fired only when a base declared a same-named function; solc rejects
-//     unconditionally: "Function has override specified but does not override anything."
+//     unconditionally: "Function has override specified but does not override anything." (JETH369 is the
+//     inverse of JETH374 = a base function overridden WITHOUT @override.)
 //   BUG 3 (JETH162): `msg.value` read in a NON-payable BASE constructor even when the derived ctor is
 //     @payable. Each constructor body is now checked under its own payability; solc: "msg.value can only
 //     be used in payable constructors."
@@ -49,11 +50,11 @@ describe('constructor / inheritance over-acceptances now reject like solc 0.8.35
     expect(codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(1n) { }')).toEqual([]);
   });
 
-  it('BUG2: @override that overrides nothing is rejected (JETH374) - no base, and base lacking the fn', () => {
-    expect(codes('@contract class C { @override @external f(): u256 { return 42n; } }')).toContain('JETH374');
+  it('BUG2: @override that overrides nothing is rejected (JETH369) - no base, and base lacking the fn', () => {
+    expect(codes('@contract class C { @override @external f(): u256 { return 42n; } }')).toContain('JETH369');
     expect(
       codes('@abstract class A { @state x: u256; } @contract class C extends A { @override @external f(): u256 { return 42n; } }'),
-    ).toContain('JETH374');
+    ).toContain('JETH369');
   });
 
   it('BUG3: msg.value in a non-payable base constructor is rejected (JETH162), even with a payable derived ctor', () => {

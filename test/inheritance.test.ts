@@ -190,29 +190,40 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
         [], 4));
   });
 
-  // A function marked @override that does NOT override any base function is rejected (JETH374 - the same
-  // code JETH already uses for a base-most @override-with-nothing-to-override), matching solc 0.8.35's
-  // "Function has override specified but does not override anything." A genuine override of a @virtual
-  // base must still compile. (Previously JETH accepted the no-target cases: an over-acceptance.)
-  describe('@override that overrides nothing is rejected (JETH374, matching solc 0.8.35)', () => {
-    it('no base at all', () => {
-      expect(codes('@contract class C { @override @external f(): u256 { return 42n; } }')).toContain('JETH374');
+  // The two @override-specifier problems carry DISTINCT codes (as solc uses two distinct TypeErrors):
+  //   JETH369 - @override present but overrides NOTHING ("has override specified but does not override
+  //             anything"). No base / bases with unrelated names / a same-name-different-signature base.
+  //   JETH374 - a base @virtual function redefined WITHOUT @override ("overriding function is missing
+  //             'override' specifier"). The inverse condition.
+  // A genuine override of a @virtual base must still compile (no over-rejection). JETH369 previously
+  // did not fire when there was no same-named base function - an over-acceptance now closed.
+  describe('@override specifier problems reject with distinct codes, matching solc 0.8.35', () => {
+    it('JETH369: @override overrides nothing - no base at all', () => {
+      expect(codes('@contract class C { @override @external f(): u256 { return 42n; } }')).toContain('JETH369');
       expect(solcRejects('contract C { function f() external override returns(uint256){ return 42; } }')).toBe(true);
     });
-    it('extends a base that does not declare the function', () => {
+    it('JETH369: @override overrides nothing - extends a base that does not declare the function', () => {
       expect(
         codes('@abstract class A { @state x: u256; } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
-      ).toContain('JETH374');
+      ).toContain('JETH369');
       expect(
         solcRejects('abstract contract A { uint256 x; } contract C is A { function f() external override returns(uint256){ return 1; } }'),
       ).toBe(true);
     });
-    it('base declares a DIFFERENT-named virtual function (still overrides nothing)', () => {
+    it('JETH369: @override overrides nothing - base declares a DIFFERENT-named virtual function', () => {
       expect(
         codes('@abstract class A { @virtual @external g(): u256 { return 0n; } } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
-      ).toContain('JETH374');
+      ).toContain('JETH369');
     });
-    it('control: @override of a real @virtual base function still compiles on both (no over-rejection)', () => {
+    it('JETH374: a @virtual base function redefined WITHOUT @override (the inverse) still rejects', () => {
+      expect(
+        codes('@abstract class A { @virtual @external f(): u256 { return 0n; } } @contract class C extends A { @external f(): u256 { return 1n; } }'),
+      ).toContain('JETH374');
+      expect(
+        solcRejects('abstract contract A { function f() external virtual returns(uint256){ return 0; } } contract C is A { function f() external returns(uint256){ return 1; } }'),
+      ).toBe(true);
+    });
+    it('control: a genuine @override of a real @virtual base function still compiles on both', () => {
       expect(
         codes('@abstract class A { @virtual @external f(): u256 { return 0n; } } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
       ).toEqual([]);

@@ -55,7 +55,7 @@ describe('audit over-acceptances now reject like solc', () => {
   });
 
   it('OA4: @override with a signature that overrides nothing is rejected (botched override)', () => {
-    expect(codesOf('@abstract class A { @virtual @external f(x: u256): u256 { return x; } } @contract class C extends A { @override @external f(x: u128): u256 { return u256(x) + 1000n; } }')).toContain('JETH374');
+    expect(codesOf('@abstract class A { @virtual @external f(x: u256): u256 { return x; } } @contract class C extends A { @override @external f(x: u128): u256 { return u256(x) + 1000n; } }')).toContain('JETH369');
     // a real override (same signature) and a real overload (no @override) still accepted
     expect(accepts('@abstract class A { @virtual @external f(x: u256): u256 { return x; } } @contract class C extends A { @override @external f(x: u256): u256 { return x + 1n; } }')).toBe(true);
     expect(accepts('@abstract class A { @virtual @external f(x: u256): u256 { return x; } } @contract class C extends A { @external f(x: u128): u256 { return u256(x); } @override @external f(x: u256): u256 { return x; } }')).toBe(true);
