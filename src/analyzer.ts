@@ -3187,12 +3187,31 @@ export class Analyzer {
     return params;
   }
 
+  /** If the FIRST statement of a constructor body is a bare `super(args)` call (SuperKeyword as the
+   *  direct callee, not `super.method(...)`), return that CallExpression; otherwise undefined. TS forbids
+   *  `this` before super and solc runs base ctors before the derived body, so only the leading position
+   *  is the modifier-equivalent base-arg form (a super call anywhere else is left to the body checker). */
+  private firstSuperCallStmt(ctor: ts.ConstructorDeclaration): ts.CallExpression | undefined {
+    const first = ctor.body?.statements[0];
+    if (
+      first &&
+      ts.isExpressionStatement(first) &&
+      ts.isCallExpression(first.expression) &&
+      first.expression.expression.kind === ts.SyntaxKind.SuperKeyword
+    ) {
+      return first.expression;
+    }
+    return undefined;
+  }
+
   /** Build the single merged constructor across the inheritance chain (this.ctorChain is most-derived
    *  first). With no inheritance this is exactly the Phase 5 checkConstructor. With a base chain, each
    *  contract's ctor body runs most-BASE-first (solc's body order), each checked in a fresh scope so a
-   *  base body cannot see the derived's params. Base-constructor ARGUMENTS (heritage `extends A(args)`
-   *  or a base ctor with parameters) are gated (JETH379) for a focused follow-up; the common no-arg
-   *  base constructor (the Ownable pattern) is supported. */
+   *  base body cannot see the derived's params. Base-constructor ARGUMENTS come via the heritage call-form
+   *  `extends A(args)` (evaluated with ctor params HIDDEN) OR a leading `super(args)` call in the derived
+   *  ctor body (the modifier form, evaluated in the ctor's PARAM scope so a base arg may depend on the
+   *  derived params). Unsupported shapes (the phantom modifier form, the diamond-same-name-sibling-param
+   *  collision, a super/heritage-provided-twice conflict) are gated (JETH379) - clean over-rejections. */
   private mergeConstructors(): ConstructorIR | undefined {
     const chain = this.ctorChain;
     const hasInlineImmInit = this.immutableOrder.some((n) => this.immutablesByName.get(n)!.init !== undefined);
@@ -3216,7 +3235,13 @@ export class Analyzer {
     // args - a `@B(7)` decorator on the deployed ctor - are NOT supported in this increment: they are
     // ambiguous with a real @modifier application; KEEP JETH379 for them, see the ctorMods check below.)
     // Build basename -> provider (which chain contract supplied the args + the arg expr nodes).
-    const baseArgProvider = new Map<string, { providerIdx: number; argNodes: ts.Expression[]; site: ts.Node }>();
+    // `fromSuper` marks a provider that comes from a `super(args)` call in the deployed ctor body
+    // (the TS-native modifier form): its args evaluate in the ctor's PARAM scope (params VISIBLE),
+    // whereas a heritage `extends B(args)` provider evaluates them with params HIDDEN.
+    const baseArgProvider = new Map<
+      string,
+      { providerIdx: number; argNodes: ts.Expression[]; site: ts.Node; fromSuper?: boolean }
+    >();
     let baseArgsGate = false; // true once we have emitted a JETH379 and must not also try to codegen
     for (let pi = 0; pi < chain.length; pi++) {
       for (const b of chain[pi]!.bases) {
@@ -3237,6 +3262,62 @@ export class Analyzer {
           continue;
         }
         baseArgProvider.set(b.name, { providerIdx: pi, argNodes: [...b.args], site: b.node });
+      }
+    }
+
+    // ---- super(args) in the DEPLOYED constructor body (the TS-native modifier form) ----
+    // solc lets a base-ctor arg depend on the derived ctor's parameters ONLY via the modifier form
+    // `constructor(uint s) Base(s*2){}`; that syntax is not valid TS, so the TS equivalent is a
+    // `super(args)` call as the FIRST statement of the derived ctor body. It provides the args for the
+    // deployed contract's DIRECT parameterized base. TS forbids `this` before super, and solc runs base
+    // ctors before the derived body, so super must be the first statement. Unlike a heritage provider,
+    // super args evaluate in the ctor's own PARAM scope (params VISIBLE) - see `fromSuper` in buildLevel.
+    const superCall = deployed.node ? this.firstSuperCallStmt(deployed.node) : undefined;
+    if (superCall) {
+      // The direct bases of the deployed contract that have a parameterized ctor are the eligible
+      // targets. A single one is unambiguous (the main case). Zero -> the base takes no args ("wrong
+      // argument count"). 2+ -> ambiguous; require the heritage form for the others (clean reject).
+      const directBaseNames = new Set(deployed.bases.map((b) => b.name));
+      const paramBases: number[] = [];
+      for (let i = 1; i < chain.length; i++) {
+        if (directBaseNames.has(chain[i]!.contract) && chainParams[i]!.length > 0) paramBases.push(i);
+      }
+      if (paramBases.length === 0) {
+        // super() to a base with no parameterized ctor: solc "wrong argument count" (a no-arg base
+        // constructor takes no super arguments). Keep a clean reject; never guess/drop the args.
+        this.diags.error(
+          superCall,
+          'JETH379',
+          `super(...) passes arguments but no direct base of '${deployed.contract}' has a constructor with parameters`,
+        );
+        baseArgsGate = true;
+      } else if (paramBases.length > 1) {
+        this.diags.error(
+          superCall,
+          'JETH379',
+          `super(...) is ambiguous: '${deployed.contract}' has more than one direct base with a parameterized constructor (${paramBases
+            .map((i) => chain[i]!.contract)
+            .join(', ')}); specify each base's arguments via its heritage clause instead`,
+        );
+        baseArgsGate = true;
+      } else {
+        const tgt = chain[paramBases[0]!]!.contract;
+        if (baseArgProvider.has(tgt)) {
+          // super() + a heritage `extends Base(args)` for the SAME base: args given twice (solc).
+          this.diags.error(
+            superCall,
+            'JETH379',
+            `base contract '${tgt}' is given constructor arguments more than once (via both a heritage clause and super(...))`,
+          );
+          baseArgsGate = true;
+        } else {
+          baseArgProvider.set(tgt, {
+            providerIdx: 0,
+            argNodes: [...superCall.arguments],
+            site: superCall,
+            fromSuper: true,
+          });
+        }
       }
     }
     // Modifier-style base args (a `@<BaseName>(...)` decorator on the deployed ctor) are GATED: keep
@@ -3403,12 +3484,16 @@ export class Analyzer {
       // codegen: the nested entry's body is inlined directly at this level, byte-identical to before).
       const argDecls: Stmt[] = [];
       this.pushScope(); // the bind scope: holds the base param bindings (consumed by the nested block)
-      for (const b of c.bases) {
-        if (b.args === undefined) continue;
-        const prov = baseArgProvider.get(b.name);
-        if (!prov || prov.providerIdx !== i) continue; // only the winning provider binds the params
-        const targetIdx = chain.findIndex((x) => x.contract === b.name);
-        if (targetIdx < 0) continue;
+      // The bases THIS level provides args for. A HERITAGE base is named in c.bases with a call-form
+      // (b.args); a super(args) provider (fromSuper) targets a direct base whose heritage clause is bare
+      // (b.args === undefined), so it is not found by scanning c.bases - drive the binding off the
+      // provider MAP (keyed by base name) filtered to providerIdx === i, which covers both forms.
+      const bound = new Set<string>();
+      const bindBaseArgs = (baseName: string, prov: NonNullable<ReturnType<typeof baseArgProvider.get>>): void => {
+        if (bound.has(baseName)) return;
+        bound.add(baseName);
+        const targetIdx = chain.findIndex((x) => x.contract === baseName);
+        if (targetIdx < 0) return;
         const bparams = chainParams[targetIdx]!;
         const n = Math.min(bparams.length, prov.argNodes.length);
         for (let k = 0; k < n; k++) {
@@ -3420,9 +3505,13 @@ export class Analyzer {
           // flips). msg.sender / @constant / address(this) are allowed (they don't read storage). The
           // localDecl init is still LOWERED in this provider's block at codegen (params in an enclosing
           // ctx scope), but a valid program never references a param/state here, so codegen never does.
+          //   A super(args) provider (fromSuper) is the MODIFIER form: its args evaluate in the deployed
+          // ctor's OWN param scope (params VISIBLE - that is the whole point, `super(s*2)`), so DON'T swap
+          // to the empty scope. State reads are STILL rejected (state is not yet initialized). The active
+          // scope stack here is exactly [deployed formals, this bind scope] for level 0, matching codegen.
           const savedArgScopes = this.scopes;
           const savedReadsState = this.currentReadsState;
-          this.scopes = [new Map()];
+          if (!prov.fromSuper) this.scopes = [new Map()];
           this.currentReadsState = false;
           const e = this.checkExpr(prov.argNodes[k]!, bparams[k]!.type);
           const init = e ? this.coerce(e, bparams[k]!.type, prov.argNodes[k]!) : undefined;
@@ -3430,7 +3519,9 @@ export class Analyzer {
             this.diags.error(
               prov.argNodes[k]!,
               'JETH379',
-              `a base-constructor argument for '${b.name}' reads contract state, which is not available in the inheritance clause (state is not yet initialized when base arguments are evaluated); use a constant or constructor-independent expression`,
+              prov.fromSuper
+                ? `a base-constructor argument in super(...) for '${baseName}' reads contract state, which is not yet initialized when base arguments are evaluated; use a constant or a constructor-parameter expression`
+                : `a base-constructor argument for '${baseName}' reads contract state, which is not available in the inheritance clause (state is not yet initialized when base arguments are evaluated); use a constant or constructor-independent expression`,
             );
           }
           this.scopes = savedArgScopes;
@@ -3441,6 +3532,18 @@ export class Analyzer {
           this.registerAggregateCtorParam(bparams[k]!.name, bparams[k]!.type);
           argDecls.push({ kind: 'localDecl', name: bparams[k]!.name, type: bparams[k]!.type, init });
         }
+      };
+      for (const b of c.bases) {
+        if (b.args === undefined) continue;
+        const prov = baseArgProvider.get(b.name);
+        if (!prov || prov.providerIdx !== i) continue; // only the winning provider binds the params
+        bindBaseArgs(b.name, prov);
+      }
+      // The fromSuper provider(s) this level supplies (its target base has a bare heritage clause, so it
+      // is not reached by the c.bases scan above). Ordered by the base's linearization index for a stable
+      // localDecl order (a single super target is the common case).
+      for (const [name, prov] of baseArgProvider) {
+        if (prov.fromSuper && prov.providerIdx === i) bindBaseArgs(name, prov);
       }
       const inner = i + 1 < chain.length ? buildLevel(i + 1) : []; // the next linearization entry, nested
       this.popScope();
@@ -3467,7 +3570,14 @@ export class Analyzer {
         let bstmts: Stmt[] = [];
         if (c.node.body) {
           this.pushScope();
-          for (const s of c.node.body.statements) this.checkStatement(s, VOID, bstmts);
+          for (const s of c.node.body.statements) {
+            // The deployed ctor's leading `super(args)` was already consumed as base-constructor args
+            // (bound as localDecls above); it is NOT a runtime statement, so skip lowering it here (solc
+            // runs the base ctor from the modifier form, not as a body call). Any statements AFTER it run
+            // after the base ctor, in the derived body, exactly as written.
+            if (i === 0 && superCall && ts.isExpressionStatement(s) && s.expression === superCall) continue;
+            this.checkStatement(s, VOID, bstmts);
+          }
           this.popScope();
         }
         this.currentMutability = savedMut;

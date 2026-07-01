@@ -3,11 +3,17 @@
 // packing across the boundary), the override winner is the most-derived definition, super.f() walks
 // the full linearization, and constructor bodies run most-base-first. Every case is verified
 // byte-identical to solc 0.8.35 (raw storage slots + returndata + ABI + accept/reject). Base-ctor
-// ARGUMENTS via the HERITAGE call-form (`extends A(7)`, `extends Owned(msg.sender)`) are supported: arg
-// expressions evaluate in the inheritance-specifier scope (constants / msg.* / address(this), NOT state or
-// ctor params - matching solc) and bodies still run most-base-first. MODIFIER-style base args
-// (`constructor() A(7)`) and the diamond-same-name-sibling-param shape stay gated (JETH379) - clean
-// over-rejections, never miscompiles.
+// ARGUMENTS come in two forms. (1) The HERITAGE call-form (`extends A(7)`, `extends Owned(msg.sender)`):
+// arg expressions evaluate in the inheritance-specifier scope (constants / msg.* / address(this), NOT
+// state or ctor params - matching solc). (2) The MODIFIER form, expressed TS-natively as a `super(args)`
+// call as the FIRST statement of the derived ctor body (`constructor(s){ super(s*2); }` == solc's
+// `constructor(s) Base(s*2){}`): its args evaluate in the ctor's own PARAM scope (params VISIBLE), so a
+// base-ctor arg may depend on the derived ctor's parameters. Both lower through the same base-ctor-arg
+// machinery (so `super(5n)` and `extends B(5n)` emit identical bytecode) and bodies run most-base-first.
+// The PHANTOM modifier form `constructor() A(7)` (TS mis-parses `A(7)` as a phantom method) and the
+// diamond-same-name-sibling-param shape stay gated (JETH379) - clean over-rejections, never miscompiles.
+// A super arg reading contract STATE is also a sound over-rejection (solc reads the zeroed slot; JETH
+// rejects the footgun).
 import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -40,6 +46,14 @@ async function same(J: string, S: string, calls: { sig: string; arg?: string }[]
   const js: string[] = [], ss: string[] = [];
   for (let i = 0; i < nslots; i++) { js.push(await readSlot(j.h, j.a, BigInt(i))); ss.push(await readSlot(s.h, s.a, BigInt(i))); }
   expect(js).toEqual(ss);
+}
+/** deploy J + S with the same appended ctor args; assert BOTH revert at deploy (e.g. a base-arg
+ *  expression that overflows u256 under checked arithmetic). */
+async function bothDeployRevert(J: string, S: string, argsHex = '') {
+  let jr = false, sr = false;
+  try { await dJ(J, argsHex); } catch { jr = true; }
+  try { await dS(S, argsHex); } catch { sr = true; }
+  expect({ jeth: jr, solc: sr }).toEqual({ jeth: true, solc: true });
 }
 
 describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
@@ -276,6 +290,152 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
         `@abstract class A { @state av: u256; constructor(p: u256){ this.av = p; } } @abstract class B extends A { @state bv: u256; constructor(){ this.bv = 2n; } } @abstract class K extends A { @state kv: u256; constructor(){ this.kv = 3n; } } @contract class C extends A(55n), B, K { @state cv: u256; constructor(){ this.cv = 4n; } }`,
         `abstract contract A { uint256 av; constructor(uint256 p){ av=p; } } abstract contract B is A { uint256 bv; constructor(){ bv=2; } } abstract contract K is A { uint256 kv; constructor(){ kv=3; } } contract C is A(55), B, K { uint256 cv; constructor(){ cv=4; } }`,
         [], 4));
+  });
+
+  // ---- super(args): PARAMETER-DEPENDENT base-ctor arguments (the TS-native modifier form) ----------
+  // solc lets a base-ctor arg depend on the derived ctor's params ONLY via the modifier form
+  // `constructor(uint s) Base(s*2){}` - which is not valid TypeScript. The TS-native equivalent is a
+  // `super(args)` call as the FIRST statement of the derived ctor body (TS forbids `this` before super,
+  // and solc runs base ctors before the derived body). super args are the MODIFIER form: unlike a
+  // heritage `extends B(args)` (params HIDDEN), they evaluate in the ctor's own PARAM scope (params
+  // VISIBLE). Every case is verified byte-identical to solc 0.8.35 (raw slots + returndata + accept/
+  // reject). super() lowers through the exact base-ctor-arg machinery, so `super(5n)` produces the same
+  // bytecode as `extends B(5n)`.
+  describe('super(args) parameter-dependent base-constructor arguments (modifier form)', () => {
+    it('TARGET super(s*2): getCap() == 2*s, byte-identical to solc modifier form', () =>
+      same(
+        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor(s: u256) { super(s * 2n); } @external @view getCap(): u256 { return this.cap; } }`,
+        `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor(uint256 s) Token(s*2){} function getCap() external view returns(uint256){ return cap; } }`,
+        [{ sig: 'getCap()' }], 1, pad32(21n)));
+
+    it('super(5n) constant == the heritage extends Token(5n) form', () =>
+      same(
+        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() { super(5n); } @external @view g(): u256 { return this.cap; } }`,
+        `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor() Token(5){} function g() external view returns(uint256){ return cap; } }`,
+        [{ sig: 'g()' }], 1));
+
+    it('super(5n) produces byte-identical creation bytecode to `extends Token(5n)`', () => {
+      const bySuper = compile(
+        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() { super(5n); } @external @view g(): u256 { return this.cap; } }`,
+        { fileName: 'C.jeth' },
+      ).creationBytecode;
+      const byHeritage = compile(
+        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token(5n) { @external @view g(): u256 { return this.cap; } }`,
+        { fileName: 'C.jeth' },
+      ).creationBytecode;
+      expect(bySuper).toBe(byHeritage);
+    });
+
+    it('super(a+b) references multiple ctor params', () =>
+      same(
+        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor(a: u256, b: u256) { super(a + b); } @external @view g(): u256 { return this.cap; } }`,
+        `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor(uint256 a, uint256 b) Token(a+b){} function g() external view returns(uint256){ return cap; } }`,
+        [{ sig: 'g()' }], 1, pad32(10n) + pad32(7n)));
+
+    it('super(msg.sender) address argument', () =>
+      same(
+        `@abstract class Own { @state o: address; constructor(x: address){ this.o = x; } } @contract class C extends Own { constructor() { super(msg.sender); } @external @view getO(): address { return this.o; } }`,
+        `abstract contract Own { address o; constructor(address x){ o=x; } } contract C is Own { constructor() Own(msg.sender){} function getO() external view returns(address){ return o; } }`,
+        [{ sig: 'getO()' }], 1));
+
+    it('super(msg.sender, m): two base params, one a ctor param', () =>
+      same(
+        `@abstract class Owned { @state owner: address; @state cap: u256; constructor(o: address, m: u256){ this.owner = o; this.cap = m; } } @contract class C extends Owned { constructor(m: u256) { super(msg.sender, m); } @external @view go(): address { return this.owner; } @external @view gc(): u256 { return this.cap; } }`,
+        `abstract contract Owned { address owner; uint256 cap; constructor(address o, uint256 m){ owner=o; cap=m; } } contract C is Owned { constructor(uint256 m) Owned(msg.sender, m){} function go() external view returns(address){ return owner; } function gc() external view returns(uint256){ return cap; } }`,
+        [{ sig: 'go()' }, { sig: 'gc()' }], 2, pad32(999n)));
+
+    it('super then derived-body statements run AFTER the base ctor (this.n = s)', () =>
+      same(
+        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { @state n: u256; constructor(s: u256) { super(s * 2n); this.n = s; } @external @view gc(): u256 { return this.cap; } @external @view gn(): u256 { return this.n; } }`,
+        `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { uint256 n; constructor(uint256 s) Token(s*2){ n = s; } function gc() external view returns(uint256){ return cap; } function gn() external view returns(uint256){ return n; } }`,
+        [{ sig: 'gc()' }, { sig: 'gn()' }], 2, pad32(5n)));
+
+    it('3-level chain: C super() to B, B initialized A via heritage', () =>
+      same(
+        `@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @abstract class B extends A(11n) { @state b: u256; constructor(w: u256){ this.b = w; } } @contract class C extends B { constructor(p: u256) { super(p + 1n); } @external @view ga(): u256 { return this.a; } @external @view gb(): u256 { return this.b; } }`,
+        `abstract contract A { uint256 a; constructor(uint256 v){ a=v; } } abstract contract B is A(11) { uint256 b; constructor(uint256 w){ b=w; } } contract C is B { constructor(uint256 p) B(p+1){} function ga() external view returns(uint256){ return a; } function gb() external view returns(uint256){ return b; } }`,
+        [{ sig: 'ga()' }, { sig: 'gb()' }], 2, pad32(40n)));
+
+    it('super arg OVERFLOW (s*2 wraps u256) deploy-reverts on both', () =>
+      bothDeployRevert(
+        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor(s: u256) { super(s * 2n); } }`,
+        `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor(uint256 s) Token(s*2){} }`,
+        pad32(1n << 255n)));
+
+    it('super(msg.value) in a @payable ctor routes the deploy value', async () => {
+      const J = `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { @payable constructor() { super(msg.value); } @external @view g(): u256 { return this.cap; } }`;
+      const S = `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor() payable Token(msg.value){} function g() external view returns(uint256){ return cap; } }`;
+      const hj = await Harness.create();
+      await hj.fund(me, 10n ** 20n);
+      const aj = await hj.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode, { caller: me, value: 777n });
+      const hs = await Harness.create();
+      await hs.fund(me, 10n ** 20n);
+      const as = await hs.deploy(compileSolidity(SPDX + S, 'C').creation, { caller: me, value: 777n });
+      expect(await readSlot(hj, aj, 0n)).toBe(await readSlot(hs, as, 0n));
+      const d = '0x' + sel('g()');
+      const rj = await hj.call(aj, d), rs = await hs.call(as, d);
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(BigInt(rj.returnHex)).toBe(777n);
+    });
+
+    describe('super(args) accept/reject parity', () => {
+      const par = (J: string, S: string) => {
+        expect(codes(J).length > 0).toBe(true);
+        expect(solcRejects(S)).toBe(true);
+      };
+      it('super args given to a NO-param base -> both reject (wrong argument count)', () =>
+        par(
+          `@abstract class Token { @state cap: u256; constructor(){ this.cap = 1n; } } @contract class C extends Token { constructor() { super(5n); } }`,
+          `abstract contract Token { uint256 cap; constructor(){ cap=1; } } contract C is Token { constructor() Token(5){} }`,
+        ));
+      it('super() AND heritage extends Token(1n) for the SAME base -> both reject (given twice)', () =>
+        par(
+          `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token(1n) { constructor(s: u256) { super(s * 2n); } }`,
+          `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token(1) { constructor(uint256 s) Token(s*2){} }`,
+        ));
+      it('super arity mismatch (too few / too many) -> both reject', () => {
+        par(
+          `@abstract class T { @state a: u256; @state b: u256; constructor(x: u256, y: u256){ this.a = x; this.b = y; } } @contract class C extends T { constructor(s: u256) { super(s); } }`,
+          `abstract contract T { uint256 a; uint256 b; constructor(uint256 x, uint256 y){ a=x; b=y; } } contract C is T { constructor(uint256 s) T(s){} }`,
+        );
+        par(
+          `@abstract class T { @state a: u256; constructor(x: u256){ this.a = x; } } @contract class C extends T { constructor(s: u256) { super(s, s); } }`,
+          `abstract contract T { uint256 a; constructor(uint256 x){ a=x; } } contract C is T { constructor(uint256 s) T(s, s){} }`,
+        );
+      });
+      it('super(msg.value) in a NON-payable ctor -> both reject (JETH162 / payability)', () =>
+        par(
+          `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() { super(msg.value); } }`,
+          `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor() Token(msg.value){} }`,
+        ));
+      it('super() ambiguous: two direct bases with parameterized ctors -> JETH rejects (heritage form required)', () => {
+        expect(
+          codes(
+            `@abstract class A { @state a: u256; constructor(x: u256){ this.a = x; } } @abstract class B { @state b: u256; constructor(y: u256){ this.b = y; } } @contract class C extends A, B { constructor() { super(1n); } }`,
+          ),
+        ).toContain('JETH379');
+      });
+      it('super arg reading contract STATE stays a SOUND JETH over-rejection (solc accepts the modifier form)', () => {
+        // solc ACCEPTS `constructor() Token(s)` reading a state variable (it reads the zeroed slot); JETH
+        // deliberately rejects (state is not yet initialized when base args are evaluated - a footgun, and
+        // a clean reject always beats risking wrong bytes on this degenerate case). Documented boundary.
+        expect(
+          codes(
+            `@abstract class Token { @state cap: u256; @state s: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() { super(this.s); } }`,
+          ),
+        ).toContain('JETH379');
+        expect(
+          solcRejects(
+            `abstract contract Token { uint256 cap; uint256 s; constructor(uint256 c){ cap=c; } } contract C is Token { constructor() Token(s){} }`,
+          ),
+        ).toBe(false); // solc accepts it (the boundary we sound-over-reject)
+      });
+      it('the phantom modifier form `constructor() Token(5n)` STILL cleanly rejects (JETH379, not parsed as super)', () => {
+        expect(
+          codes(`@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() Token(5n) {} }`),
+        ).toContain('JETH379');
+      });
+    });
   });
 
   // The two @override-specifier problems carry DISTINCT codes (as solc uses two distinct TypeErrors):
