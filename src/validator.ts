@@ -119,8 +119,10 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
       }
     }
 
-    // Float literal (contains a '.' or exponent) anywhere.
-    if (ts.isNumericLiteral(node) && /[.eE]/.test(node.getText())) {
+    // Float literal (a DECIMAL literal with a '.' or an e/E exponent) anywhere. A HEX literal (0x..) is
+    // excluded: `e`/`E` are hex DIGITS there (0xcafe), not a scientific exponent, and a hex literal has no
+    // fractional form - so the float guard must not misfire on a valid bare hex integer (now accepted).
+    if (ts.isNumericLiteral(node) && !/^0[xX]/.test(node.getText()) && /[.eE]/.test(node.getText())) {
       diags.error(
         node,
         'JETH003',
