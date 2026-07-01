@@ -228,16 +228,6 @@ describe('internal function pointers: reject parity', () => {
       @pure inc(x: u256): u256 { return x + 1n; }
       @external @pure run(): u256 { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = a + a; return b(1n); }
     }`,
-    'array of pointers': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @external @pure run(i: u256, v: u256): u256 { let fs: Arr<(x: u256) => u256, 2> = [this.inc, this.dec]; let g: (x: u256) => u256 = fs[i]; return g(v); }
-    }`,
-    'struct of pointers': `@struct class Ops { a: (x: u256) => u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external @pure run(v: u256): u256 { let o: Ops = Ops(this.inc); return o.a(v); }
-    }`,
     'pure ptr type holding a state-writing target': `@contract class C {
       @state s: u256;
       wr(x: u256): u256 { this.s = x; return x; }

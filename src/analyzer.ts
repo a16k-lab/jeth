@@ -24,6 +24,8 @@ import {
   isImplicitWiden,
   commonNumericType,
   isStaticValueType,
+  isValueWord,
+  isFuncrefValueAggregate,
   isStaticType,
   isDynamicType,
   isBytesLike,
@@ -573,6 +575,18 @@ export class Analyzer {
       // keccak(key . (structBase + fieldSlot)).
       if (t.kind === 'mapping') {
         if (!this.validateMappingKeys(t, member.type ?? member)) continue;
+        raw.push({ name: member.name.text, type: t });
+        continue;
+      }
+      // FIX 4: an INTERNAL FUNCTION POINTER field is a one-word VALUE (its stable id), laid out in
+      // memory/storage exactly like a uint256 field. Accept a funcref field - or a NESTED value-word
+      // aggregate field (a struct / fixed array whose leaves are all value words, e.g. a struct-in-struct
+      // whose inner has a funcref field) - so a struct with a funcref field works for construction / field
+      // read / field write / indexed call in memory AND storage. Such an aggregate is NOT an ABI static
+      // type (isStaticType is false while it contains a funcref), so the struct stays non-ABI-encodable:
+      // every ABI/getter/event/return path (gating on isStaticType / isSupportedDynStructField) keeps
+      // rejecting it, byte-identical to solc's "internal type in ABI" reject.
+      if (isFuncrefValueAggregate(t)) {
         raw.push({ name: member.name.text, type: t });
         continue;
       }
@@ -5700,6 +5714,16 @@ export class Analyzer {
           return;
         }
       }
+      // FIX 1: a direct call of a @state funcref FIELD `this.p(v);` as a statement (result, if any,
+      // discarded). Placed BEFORE the internal-call form so a state funcref field shadows a same-named fn.
+      if (ts.isCallExpression(e)) {
+        const fsig = this.funcrefStateCallSig(e);
+        if (fsig) {
+          const c = this.checkFuncRefCallStmt(e, fsig);
+          if (c) out.push(c);
+          return;
+        }
+      }
       // `this.method(args)` internal call as a statement (TS-idiomatic).
       if (
         ts.isCallExpression(e) &&
@@ -6279,7 +6303,9 @@ export class Analyzer {
       }
       return this.coerce(a, f.type, argNode);
     }
-    if (!isStaticValueType(f.type)) {
+    if (!isValueWord(f.type)) {
+      // isValueWord: a funcref field (FIX 4) is a value word; the arg (an address-take) is checked against
+      // the field's funcref type below and lowered to its id, exactly like a uint256 field.
       this.diags.error(
         argNode,
         'JETH226',
@@ -8198,7 +8224,11 @@ export class Analyzer {
         this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
         return;
       }
-      if (!isStaticType(declared)) {
+      // FIX 4: a struct whose (only) non-static field is a FUNCREF is a flat value-word aggregate - its
+      // memory image is one inline word per field, identical to the same struct with each funcref replaced
+      // by uint256. Route it through the STATIC memory-struct path below (not the dynamic-field path), so
+      // construction / field read / field write / indexed call all reuse the static-aggregate codec.
+      if (!isStaticType(declared) && !isFuncrefValueAggregate(declared)) {
         // a DYNAMIC-field struct MEMORY local, scoped to value + bytes/string fields,
         // constructed inline (let d: D = D(x, str)). The image is a pointer-headed tuple
         // (value fields inline, bytes/string fields a [len][data] pointer), so reads and
@@ -8478,7 +8508,7 @@ export class Analyzer {
     // memAggregate (pointer to N words); a[i] reads/writes a word with a bounds check. Init from
     // an array literal, another fixed-array memory local (alias), a fixed-array calldata param,
     // or a storage fixed array (copy).
-    if (declared.kind === 'array' && declared.length !== undefined && isStaticValueType(declared.element)) {
+    if (declared.kind === 'array' && declared.length !== undefined && isValueWord(declared.element)) {
       if (this.inCurrentScope(decl.name.text)) {
         this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
         return;
@@ -8633,23 +8663,24 @@ export class Analyzer {
       out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
       return;
     }
-    // An ARRAY whose element is an INTERNAL FUNCTION POINTER is a clean reject (an aggregate of function
-    // pointers is not supported yet; a struct-of-funcref is already rejected at struct collection). A
-    // funcref is a value word, but the memory array codec is shared with the ABI/storage paths (which
-    // cannot encode a funcref), so this shape stays a clean analyzer reject rather than risk a wrong-bytes
-    // lowering. The headline single-pointer forms (param / local / state / ternary / comparison) are fully
-    // supported. (declared.kind is already known not to be 'struct' here - the struct block returned above.)
-    if (declared.kind === 'array' && this.typeHasFuncref(declared)) {
+    // FIX 3: an ARRAY whose element is an INTERNAL FUNCTION POINTER, at a MEMORY-LOCAL declaration.
+    // A funcref is a one-word VALUE (its stable id), so a `Arr<(x)=>R,N>` / `((x)=>R)[]` memory local
+    // has the SAME layout as a uint256 array. A FLAT funcref-element array rides the fixed value-word path
+    // above (Arr, length!==undefined) or the dynamic value-word path just below (via isValueWord); a
+    // DEEPER funcref nesting (a funcref array-of-array, or a funcref buried in an aggregate element) is NOT
+    // a flat value-word array, so it stays a clean JETH427 reject here. (declared.kind is not 'struct'.)
+    if (declared.kind === 'array' && this.typeHasFuncref(declared) && declared.element.kind !== 'funcref') {
       this.diags.error(
         decl,
         'JETH427',
-        `an array of internal function pointers (${displayName(declared)}) is not supported yet (use a single function-pointer variable)`,
+        `an array of this internal-function-pointer shape (${displayName(declared)}) is not supported yet (a flat Arr<(x)=>R,N> / ((x)=>R)[] works; use a single function-pointer variable otherwise)`,
       );
       return;
     }
     // A value-element dynamic-array local is a MEMORY array (a pointer to [len][elems]);
-    // bytes/string and aggregate-element memory locals are a later step.
-    if (declared.kind === 'array' && !(declared.length === undefined && isStaticValueType(declared.element))) {
+    // bytes/string and aggregate-element memory locals are a later step. (A funcref element is a value
+    // word, so a dynamic ((x)=>R)[] memory local rides this same path via isValueWord.)
+    if (declared.kind === 'array' && !(declared.length === undefined && isValueWord(declared.element))) {
       this.diags.error(
         decl,
         'JETH200',
@@ -9065,6 +9096,47 @@ export class Analyzer {
    *  target it may invoke), and returns a `funcRef` Expr. Returns undefined (no diagnostic) when `node`
    *  is not a function-name reference, so the caller can fall through. A name that IS a function but whose
    *  signature does not match `expected` emits a precise JETH error. External functions are rejected. */
+  /** Is `node` a bare-function-name address-take form: a bare identifier `f` (not a visible local) that
+   *  names an internal function, or `this.f` where `f` names a function? Used to recognize an address-take
+   *  used directly as a comparison operand (FIX 2), where there is no expected funcref to drive it. Does
+   *  NOT commit anything (no diagnostic, no address-taken record); the caller re-checks with tryAddressTake. */
+  private isAddressTakeForm(node: ts.Expression): boolean {
+    let name: string | undefined;
+    if (ts.isIdentifier(node) && !this.isVisibleLocal(node.text)) name = node.text;
+    else if (
+      ts.isPropertyAccessExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      ts.isIdentifier(node.name)
+    )
+      name = node.name.text;
+    if (name === undefined) return false;
+    // `this.f` also matches a state variable; only treat it as an address-take when `f` is a FUNCTION
+    // name AND not a state variable (a state funcref field `this.p` is a value operand, not an address-take).
+    const candidates = this.candidatesByName.get(name);
+    return !!candidates && candidates.length > 0 && !this.stateByName.has(name);
+  }
+
+  /** The funcref TYPE of an address-take form (`f` / `this.f`), when `f` is a UNIQUELY-named internal
+   *  (non-external, single-value-return) function. Used to type BOTH operands of `inc == dec` (two direct
+   *  address-takes). Returns undefined for an overloaded / external / multi-return name (the caller falls
+   *  through so tryAddressTake emits the precise reject when the form is later re-checked with a funcref). */
+  private addressTakeFuncrefType(node: ts.Expression): (JethType & { kind: 'funcref' }) | undefined {
+    let name: string | undefined;
+    if (ts.isIdentifier(node) && !this.isVisibleLocal(node.text)) name = node.text;
+    else if (
+      ts.isPropertyAccessExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      ts.isIdentifier(node.name)
+    )
+      name = node.name.text;
+    if (name === undefined || this.stateByName.has(name)) return undefined;
+    const candidates = this.candidatesByName.get(name);
+    if (!candidates || candidates.length !== 1) return undefined;
+    const rf = candidates[0]!;
+    if (rf.visibility === 'external' || rf.returnTypes) return undefined;
+    return this.funcRefTypeOf(rf) as JethType & { kind: 'funcref' };
+  }
+
   private tryAddressTake(node: ts.Expression, expected: JethType): Expr | undefined | 'reject' {
     if (expected.kind !== 'funcref') return undefined;
     let name: string | undefined;
@@ -9198,6 +9270,31 @@ export class Analyzer {
     const c = this.buildFuncRefCall(node, sig);
     if (!c) return undefined;
     return { kind: 'exprStmt', expr: c };
+  }
+
+  /** The funcref signature of a callee expression that evaluates to a function pointer VALUE (a funcref
+   *  array element `arr[i]`, or a funcref struct field `s.f` on a memory/storage struct). A side-effect-
+   *  free TRIAL check of `callee` (diagnostics + effect flags + callee set rolled back): if it types to a
+   *  funcref, return that signature; otherwise undefined (the caller falls through). The real dispatch
+   *  re-checks the callee inside buildFuncRefCall, so no analysis state leaks from the trial. */
+  private funcrefCalleeSig(callee: ts.Expression): (JethType & { kind: 'funcref' }) | undefined {
+    const t = this.trialExprType(callee);
+    return t && t.kind === 'funcref' ? (t as JethType & { kind: 'funcref' }) : undefined;
+  }
+
+  /** The funcref signature of a callee expression whose VALUE is a function pointer, when the callee is
+   *  a `this.<field>` state read of funcref type (FIX 1: a direct call of a @state funcref field
+   *  `this.p(v)`). Returns undefined when `node`'s callee is not such a form (the caller falls through to
+   *  the ordinary internal-call / other resolvers). Only a bare `this.<name>` (name a state funcref var,
+   *  not shadowed) qualifies; loading the field to a local first ALREADY works byte-identical, so this
+   *  routes the direct form through the very same buildFuncRefCall on the loaded field value. */
+  private funcrefStateCallSig(node: ts.CallExpression): (JethType & { kind: 'funcref' }) | undefined {
+    if (!ts.isPropertyAccessExpression(node.expression)) return undefined;
+    if (node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
+    const name = node.expression.name.text;
+    const v = this.stateByName.get(name);
+    if (!v || v.type.kind !== 'funcref') return undefined;
+    return v.type;
   }
 
   /** Resolve a (possibly overloaded) internal call `name(...)` to a single callee. One candidate ->
@@ -10830,7 +10927,8 @@ export class Analyzer {
   ): { local: string; wordOffset: number; type: JethType } | undefined {
     const r = this.resolveMemFieldChain(node);
     if (!r) return undefined;
-    if (!isStaticValueType(r.type)) {
+    // isValueWord: a funcref field (FIX 4) is written as a memField word (the id from an address-take RHS).
+    if (!isValueWord(r.type)) {
       this.diags.error(
         node,
         'JETH245',
@@ -11060,7 +11158,8 @@ export class Analyzer {
     // word); a deeper element write a[i][j] = v is reached via the nested array-element lvalue path.
     if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression) {
       const at = this.memAggregateLocals.get(node.expression.text);
-      if (at && at.kind === 'array' && at.length !== undefined && isStaticValueType(at.element)) {
+      // isValueWord: a funcref element (FIX 3) is written like a uint256 word (the id from an address-take).
+      if (at && at.kind === 'array' && at.length !== undefined && isValueWord(at.element)) {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
@@ -11320,7 +11419,9 @@ export class Analyzer {
             },
           };
         }
-        if (!isStaticValueType(f.type)) {
+        // isValueWord: a funcref field (FIX 4) is stored as a packed word (its id from an address-take RHS),
+        // exactly like a uint256 field at the same slot/offset.
+        if (!isValueWord(f.type)) {
           this.diags.error(node, 'JETH226', 'nested array field assignment is not supported yet');
           return undefined;
         }
@@ -11838,12 +11939,20 @@ export class Analyzer {
       // dynamic array of dynamic byte-sequence element (string[] / bytes[], 4e-4):
       // head/tail of dynamic elements. Only supported as a calldata param / return.
       if (isBytesLike(t.element)) return true;
+      // FIX 3: a dynamic array of a FUNCREF element (`((x)=>R)[]`) is a value-word array in storage /
+      // as an @internal reference (an @external ABI position is pre-rejected by the typeHasFuncref gate
+      // in checkFunction). A funcref word is stored/laid-out exactly like uint256.
+      if (t.element.kind === 'funcref') return true;
       if (!isStaticValueType(t.element)) {
         this.diags.error(node, 'JETH210', `array element type ${displayName(t.element)} is not supported yet`);
         return false;
       }
       return true;
     }
+    // FIX 3: a FIXED array of a FUNCREF element (`Arr<(x)=>R,N>`): a value-word array (funcref laid out
+    // like uint256), same as the dynamic case. (isStaticType(funcref) is false - a funcref is deliberately
+    // not an ABI static type - so it would otherwise fall into the non-static-element reject below.)
+    if (t.element.kind === 'funcref') return true;
     // fixed Arr<T,N>: any static element (value, struct, or nested fixed array), OR a
     // DYNAMIC element (Arr<string,N>, Arr<bytes,N>, Arr<D,N>) as a calldata param /
     // return via the recursive codec (an N-word per-element offset table, no length).
@@ -13335,10 +13444,22 @@ export class Analyzer {
         ts.isStringLiteral(a) || ts.isNoSubstitutionTemplateLiteral(a) ? ({ kind: 'string' } as JethType) : undefined;
       const e = this.checkExpr(a, exp);
       if (!e) return undefined;
+      const t = e.type;
+      // HARD CONSTRAINT: an internal function pointer (or an aggregate CONTAINING one) is NOT ABI-
+      // encodable. solc rejects abi.encode of a funcref / funcref array / funcref-field struct outright;
+      // reject cleanly here (a funcref array would otherwise pass the `t.kind === 'array'` clause below
+      // and reach lowering as a JETH900). Byte-identical to solc's "internal type in ABI" reject.
+      if (this.typeHasFuncref(t)) {
+        this.diags.error(
+          a,
+          'JETH173',
+          `abi.${method} cannot encode ${displayName(t)}: an internal function pointer is not ABI-encodable`,
+        );
+        return undefined;
+      }
       // packed: value + bytes/string only. standard (incl. encodeWith*) also accepts a STATIC
       // struct/fixed-array (encoded inline) and a DYNAMIC value-element array (offset + tail).
       // Nested-dynamic (string[], T[][]) / dynamic struct args stay a later step.
-      const t = e.type;
       const aggOk = packed
         ? // packed: a value-element array (fixed or dynamic); each element padded to 32 bytes, no length.
           // solc rejects a struct / nested-element array in packed mode (so JETH does too).
@@ -14536,6 +14657,19 @@ export class Analyzer {
         return this.checkFuncRefCall(node, lt);
       }
     }
+    // FIX 3 / FIX 4: a CALL THROUGH a funcref-valued ELEMENT or FIELD, `arr[i](v)` / `s.f(v)` where the
+    // callee expression evaluates to a funcref (a funcref-array element, or a funcref struct field). The
+    // element/field is read (its id word), then dispatched, exactly like a funcref local. Recognized here
+    // for an ElementAccess / (non-this) PropertyAccess callee; `this.p(v)` (state field) is FIX 1 above.
+    if (
+      ts.isCallExpression(node) &&
+      (ts.isElementAccessExpression(node.expression) ||
+        (ts.isPropertyAccessExpression(node.expression) &&
+          node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword))
+    ) {
+      const csig = this.funcrefCalleeSig(node.expression);
+      if (csig) return this.checkFuncRefCall(node, csig);
+    }
 
     // assignment used as a value-producing expression: (x = v), (x += v), chained x = y = a.
     // Yields the assigned (LHS-typed) value, exactly like Solidity. Statement-position
@@ -15175,7 +15309,7 @@ export class Analyzer {
         isBytesLike(elem) ||
         isAggregateLeafArray(elem) || // B4: a nested-dynamic-leaf array element (bytes[][], ...); P[]/P[][]
         isStaticStructFixedLeafArray(elem); // Batch A: a fixed static-struct array element (Arr<P,N>[])
-      if (!isStaticValueType(elem) && !isValueLeafArray(elem) && !aggLeafElem) {
+      if (!isValueWord(elem) && !isValueLeafArray(elem) && !aggLeafElem) {
         this.diags.error(
           node.typeArguments[0]!,
           'JETH216',
@@ -15210,7 +15344,7 @@ export class Analyzer {
       // STATIC STRUCT element (P[]) or a bytes/string element (bytes[]/string[]). A DYNAMIC struct
       // element, or any nested/string[]/S[] element of a non-value-leaf kind, stays rejected.
       const okElem =
-        isStaticValueType(expected.element) ||
+        isValueWord(expected.element) || // a value type OR a funcref element (FIX 3: a funcref value word)
         (expected.element.kind === 'array' && isValueLeafArray(expected.element)) ||
         (expected.element.kind === 'array' && isAggregateLeafArray(expected.element)) || // B4: bytes[][], ...
         (expected.element.kind === 'array' && isStaticStructFixedLeafArray(expected.element)) || // Batch A: Arr<P,N>[]
@@ -15423,7 +15557,9 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) && this.memChainRoot(node)) {
       const r = this.resolveMemFieldChain(node);
       if (!r) return undefined;
-      if (isStaticValueType(r.type))
+      // isValueWord: a funcref field (FIX 4) reads as a memField word (its id); its funcref type is kept so
+      // a following `o.a(v)` dispatches through the id.
+      if (isValueWord(r.type))
         return { kind: 'memField', type: r.type, local: r.local, wordOffset: r.wordOffset };
       if (r.type.kind === 'struct')
         return { kind: 'memAggregate', type: r.type, local: r.local, wordOffset: r.wordOffset };
@@ -15440,7 +15576,9 @@ export class Analyzer {
     // through to the nested element-access block below.
     if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.argumentExpression) {
       const at = this.memAggregateLocals.get(node.expression.text);
-      if (at && at.kind === 'array' && at.length !== undefined && isStaticValueType(at.element)) {
+      // isValueWord: a funcref element (FIX 3) is read like a uint256 word; the memElem keeps its funcref
+      // type so a following `fs[i](v)` dispatches through the id.
+      if (at && at.kind === 'array' && at.length !== undefined && isValueWord(at.element)) {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
@@ -15705,7 +15843,9 @@ export class Analyzer {
             },
           };
         }
-        if (!isStaticValueType(f.type)) {
+        // isValueWord: a funcref field (FIX 4) reads as a packed-word stateRead (its id); the funcref type
+        // is kept so a following `this.o.a(v)` dispatches through the id.
+        if (!isValueWord(f.type)) {
           this.diags.error(node, 'JETH226', 'nested array field access is not supported yet');
           return undefined;
         }
@@ -16908,6 +17048,13 @@ export class Analyzer {
         return { kind: 'abiDecode', type: sc.returnType, data: sc.call };
       }
     }
+    // FIX 1: a direct call of a @state funcref FIELD `this.p(v)` -> read the field's id and dispatch,
+    // exactly like binding it to a local first (which already works byte-identical). Placed BEFORE the
+    // internal-call form so a state funcref field wins over any same-named function (a field shadows it).
+    if (ts.isCallExpression(node)) {
+      const fsig = this.funcrefStateCallSig(node);
+      if (fsig) return this.checkFuncRefCall(node, fsig);
+    }
     // `this.method(args)` (TS-idiomatic internal call) -> internal-call semantics.
     if (
       ts.isCallExpression(node) &&
@@ -17206,6 +17353,51 @@ export class Analyzer {
           const r = this.checkExpr(node.right, l.type);
           if (!r) return undefined;
           return this.buildBinary(op, l, r, node);
+        }
+      }
+      // FIX 2: an address-take used DIRECTLY as a `==`/`!=` operand (`g == this.inc`, `this.inc == g`).
+      // An address-take (`f` / `this.f`) has no type without an expected funcref, so if the OTHER operand
+      // is a funcref, feed its type in so the name resolves to a pointer id (binding it to a local first
+      // ALREADY works byte-identical; this reuses the same funcref == machinery on the same two ids). Only
+      // for == / != (the sole operators valid on function pointers); ordered comparisons still reject below.
+      if ((op === '==' || op === '!=') && (this.isAddressTakeForm(node.left) || this.isAddressTakeForm(node.right))) {
+        const lTake = this.isAddressTakeForm(node.left);
+        const rTake = this.isAddressTakeForm(node.right);
+        if (lTake && rTake) {
+          // BOTH operands are address-takes (`inc == dec`): solc accepts this, comparing the two code
+          // references (equal iff the same target). Infer each side's funcref type from its (unique)
+          // named function, then check both operands against the LEFT's type. A signature mismatch ->
+          // a precise JETH428, matching solc's type error. (No probe checkExpr here: a bare address-take
+          // with no expected funcref would emit a spurious JETH065; the inferred types drive both re-checks.)
+          const lsig = this.addressTakeFuncrefType(node.left);
+          const rsig = this.addressTakeFuncrefType(node.right);
+          if (lsig && rsig) {
+            if (!typesEqual(lsig, rsig)) {
+              this.diags.error(
+                node,
+                'JETH428',
+                `cannot compare function pointers of different types: ${displayName(lsig)} vs ${displayName(rsig)}`,
+              );
+              return undefined;
+            }
+            const lt = this.checkExpr(node.left, lsig);
+            const rt = this.checkExpr(node.right, lsig);
+            if (!lt || !rt) return undefined;
+            return this.buildBinary(op, lt, rt, node);
+          }
+          // one side was overloaded/external/multi-return: fall through so tryAddressTake emits its error.
+        } else if (lTake !== rTake) {
+          // Type the NON-address-take operand first (an address-take yields undefined without an expected
+          // funcref). If it is a funcref, re-check the address-take operand against that funcref type.
+          const valueSide = lTake ? node.right : node.left;
+          const v = this.checkExpr(valueSide, undefined);
+          if (v && v.type.kind === 'funcref') {
+            const takeSide = lTake ? node.left : node.right;
+            const t = this.checkExpr(takeSide, v.type);
+            if (!t) return undefined;
+            return this.buildBinary(op, lTake ? t : v, lTake ? v : t, node);
+          }
+          // the value side did not resolve to a funcref: fall through (an ordinary error surfaces).
         }
       }
       const left = this.checkExpr(node.left, expected);

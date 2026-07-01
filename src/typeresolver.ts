@@ -36,6 +36,11 @@ export function resolveType(
   if (!node) {
     return undefined;
   }
+  // A parenthesized type `(T)` -> resolve the inner type. Needed for a dynamic array of an internal
+  // function pointer written `((x: T) => R)[]`: the `[]` binds tighter than `=>`, so the element must be
+  // parenthesized, giving an ArrayTypeNode whose elementType is a ParenthesizedTypeNode wrapping the arrow.
+  if (ts.isParenthesizedTypeNode(node)) return resolveType(node.type, diags, structs);
+
   // void
   if (node.kind === ts.SyntaxKind.VoidKeyword) return { kind: 'void' };
   // `string` is a TS keyword (not a type-reference identifier); map it to the

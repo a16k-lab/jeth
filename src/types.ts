@@ -319,9 +319,42 @@ export function commonNumericType(a: JethType, b: JethType): JethType | undefine
 
 /** Static (fixed-size, head-only) value types: encodable as a single 32-byte word.
  *  Used to gate Phase 2 features (error/event params, calldata decode) to the set
- *  that needs no head/tail ABI machinery. */
+ *  that needs no head/tail ABI machinery. NOTE: a funcref is a value WORD but NOT an
+ *  ABI type (never true here), so ABI-boundary gates keyed on this stay sound. */
 export function isStaticValueType(t: JethType): boolean {
   return t.kind === 'uint' || t.kind === 'int' || t.kind === 'bool' || t.kind === 'address' || t.kind === 'bytesN';
+}
+
+/** A one-word VALUE type for internal (non-ABI) layout: a static value type OR an internal
+ *  function pointer (funcref, whose value is a single-word stable id). Used ONLY at the
+ *  internal array-element / storage layout sites that treat a funcref array exactly like a
+ *  uint256 array. A funcref is deliberately EXCLUDED from isStaticValueType so every
+ *  ABI/event/getter/return path (which gates on isStaticValueType / isStaticType) keeps
+ *  rejecting a funcref-containing aggregate, byte-identical to solc's "internal type in ABI"
+ *  reject. The element/word memory+storage layout of a funcref is identical to uint256. */
+export function isValueWord(t: JethType): boolean {
+  return isStaticValueType(t) || t.kind === 'funcref';
+}
+
+/** Like isStaticType (a fixed-size, head-only inline aggregate) but with a FUNCREF leaf counting as a
+ *  value word. True for a value word, a struct all of whose fields are value-word aggregates, or a fixed
+ *  array of a value-word aggregate. Used ONLY at the internal struct/array memory+storage layout sites
+ *  (FIX 3/4): such an aggregate has a flat inline image (one word per leaf), identical to the same
+ *  aggregate with each funcref replaced by uint256. A funcref makes isStaticType FALSE, so an ABI/getter/
+ *  event/return path never treats this aggregate as encodable - the internal-only sites opt in explicitly. */
+export function isValueWordAggregate(t: JethType): boolean {
+  if (isValueWord(t)) return true;
+  if (t.kind === 'struct') return t.fields.every((f) => isValueWordAggregate(f.type));
+  if (t.kind === 'array') return t.length !== undefined && isValueWordAggregate(t.element);
+  return false;
+}
+
+/** True iff `t` contains a funcref AND is otherwise a flat value-word aggregate (isValueWordAggregate but
+ *  not already isStaticType). Marks exactly the FIX-3/FIX-4 shapes whose memory/storage layout matches a
+ *  uint256-substituted aggregate; used to route them through the static-value-aggregate codec while
+ *  keeping every ABI path rejecting (those still see isStaticType === false). */
+export function isFuncrefValueAggregate(t: JethType): boolean {
+  return !isStaticType(t) && isValueWordAggregate(t);
 }
 
 /** The two dynamic byte-sequence types, which share an identical storage and ABI
