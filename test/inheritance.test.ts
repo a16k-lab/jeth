@@ -128,6 +128,26 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       expect(codes(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @contract class C extends A { @override(A) @external f(): u256 { return 9n; } }`)).toEqual([]);
       expect(solcRejects(`abstract contract A { function f() external virtual returns(uint256){return 1;} } contract C is A { function f() external override(A) returns(uint256){return 9;} }`)).toBe(false);
     });
+    // Completeness across an UN-overridden sibling path (the heads fix). A defines virtual f, B extends A
+    // but does NOT override f, K overrides f, C is B, K: A's version reaches C un-overridden via B, so C
+    // must name BOTH A and K (solc: "needs to specify overridden contract A"). The old "maximal among all
+    // overridden" heads filter dropped A (hidden behind K on the other path) -> an incomplete list was
+    // over-accepted, and once JETH415 membership was enforced the valid @override(A, K) was over-rejected.
+    it('diamond completeness via an un-overridden sibling: incomplete rejects, @override(A,K) accepts', () => {
+      const A = `@abstract class A { @virtual @external f(): u256 { return 1n; } }`;
+      const B = `@abstract class B extends A { @external gg(): u256 { return 0n; } }`;
+      const K = `@abstract class K extends A { @virtual @override @external f(): u256 { return 3n; } }`;
+      const sA = `abstract contract A { function f() external virtual returns(uint256){return 1;} }`;
+      const sB = `abstract contract B is A { function gg() external returns(uint256){return 0;} }`;
+      const sK = `abstract contract K is A { function f() external virtual override returns(uint256){return 3;} }`;
+      const C = (l: string) => `${A} ${B} ${K} @contract class C extends B, K { @override${l} @external f(): u256 { return 9n; } }`;
+      const sC = (l: string) => `${sA} ${sB} ${sK} contract C is B, K { function f() external override${l} returns(uint256){return 9;} }`;
+      par(C('(K)'), sC('(K)')); // needs A too
+      par(C(''), sC('')); // bare, needs A and K
+      par(C('(A)'), sC('(A)')); // needs K too
+      expect(codes(C('(A, K)'))).toEqual([]); // complete -> accept (was over-rejected)
+      expect(codes(C('(K, A)'))).toEqual([]); // order-insensitive
+    });
     // ---- base-constructor-argument accept/reject parity ----
     it('a heritage base-arg referencing a ctor parameter -> both reject (state/params not in scope)', () =>
       par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(p + 1n) { constructor(p: u256){} }`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(p+1) { constructor(uint256 p){} }`));

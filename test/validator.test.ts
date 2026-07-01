@@ -55,6 +55,13 @@ describe('subset validator', () => {
     expect(codesFor(wrap('this.x = 5;'))).toEqual([]);
     expect(codesFor(wrap('this.x = 0x2a;'))).toEqual([]);
     expect(codesFor(wrap('this.x = 1_000_000;'))).toEqual([]);
+    // a hex literal whose digits contain e/E is NOT a float: the guard must not misfire (0xcafe/0xdead).
+    expect(codesFor(wrap('this.x = 0xcafe;'))).toEqual([]);
+    expect(codesFor(wrap('this.x = 0xdeadBEEF;'))).toEqual([]);
+    expect(codesFor(wrap('this.x = 0xe;'))).toEqual([]);
+    // a genuine decimal float / scientific literal still rejects (JETH003).
+    expect(codesFor(wrap('this.x = 1.5;'))).toContain('JETH003');
+    expect(codesFor(wrap('this.x = 1e18;'))).toContain('JETH003');
   });
 
   it('rejects an unmarked contract field', () => {
