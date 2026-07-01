@@ -3590,7 +3590,25 @@ export class Analyzer {
         this.diags.error(init, 'JETH048', `@constant '${name}' must be a string literal`);
         return;
       }
-      this.constantsByName.set(name, { value: new TextEncoder().encode(init.text), type });
+      const cbytes = this.strLitBytes(init);
+      if (!this.isValidUtf8(cbytes)) {
+        this.diags.error(init, 'JETH048', `@constant '${name}' string literal contains an invalid UTF-8 sequence`);
+        return;
+      }
+      this.constantsByName.set(name, { value: cbytes, type });
+      return;
+    }
+    // An ENUM @constant (an enum is a branded uintN) must be initialized from an enum MEMBER
+    // (Color.Blue) or an enum CAST (Color(x)) - a bare integer literal implicitly converted to the enum
+    // is rejected by solc ("int_const not implicitly convertible to enum"), and JETH would otherwise bake
+    // it (even an out-of-range value). Mirrors the local-binding JETH280 check, which the const-fold path
+    // bypassed. A member access / cast call passes; any other form (numeric literal, arithmetic, ~) rejects.
+    if (isEnum(type) && !ts.isPropertyAccessExpression(member.initializer) && !ts.isCallExpression(member.initializer)) {
+      this.diags.error(
+        member.initializer,
+        'JETH280',
+        `cannot use a bare integer literal as enum '${displayName(type)}'; use ${displayName(type)}.<Member> or ${displayName(type)}(...)`,
+      );
       return;
     }
     const folded = this.foldConstant(member.initializer, type);
@@ -5025,14 +5043,21 @@ export class Analyzer {
         return;
       }
       // Phase 6: a high-level typed interface call as a statement `IFoo(addr).method(args);`. The call
-      // (selector ++ args, bubble + extcodesize guard) runs; the returndata is captured but discarded
-      // (no decode, even for a value-returning method). Performed before the array-mutator / fall-through
-      // handling so the wrapper's `IFoo(addr).method` PropertyAccess is recognized first.
+      // (selector ++ args, bubble + extcodesize guard) runs. For a method DECLARED to return a value, solc
+      // still VALIDATES the returndata (size check + ABI decode) even though the result is discarded - so a
+      // short/malformed return reverts identically. Route a non-void discarded call through abiDecode (which
+      // runs that validation, then drops the value); a void method needs no decode. Performed before the
+      // array-mutator / fall-through handling so the wrapper's `IFoo(addr).method` PropertyAccess wins first.
       {
         const ic = this.resolveInterfaceCall(e);
         if (ic === 'handled') return;
         if (ic) {
-          out.push({ kind: 'exprStmt', expr: ic.call });
+          const rts = ic.returnTypes ?? (ic.returnType.kind === 'void' ? [] : [ic.returnType]);
+          out.push(
+            rts.length > 0
+              ? { kind: 'exprStmt', expr: { kind: 'abiDecode', type: rts[0]!, types: rts, data: ic.call } }
+              : { kind: 'exprStmt', expr: ic.call },
+          );
           return;
         }
       }
@@ -6460,7 +6485,7 @@ export class Analyzer {
 
   private checkRevertReason(node: ts.Expression): RevertReason | undefined {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
-      return { kind: 'errorString', message: new TextEncoder().encode(node.text) };
+      return { kind: 'errorString', message: this.strLitBytes(node) };
     }
     // a custom-error constructor: a call whose callee is a DECLARED error name. A call to any other
     // identifier (e.g. the type-conversion `string(b)`) is NOT an error call - it falls through to the
@@ -13675,7 +13700,14 @@ export class Analyzer {
     // string/bytes literal -> a memory dynamic value (only where bytes/string expected)
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       if (expected && isBytesLike(expected)) {
-        return { kind: 'stringLiteral', type: expected, bytes: new TextEncoder().encode(node.text) };
+        const b = this.strLitBytes(node);
+        // a solc `string` literal must be valid UTF-8 (a `\xNN` byte sequence that is not, e.g. a lone
+        // `\xe9`, is rejected for string but allowed for bytes). Matches solc's "invalid UTF-8" error.
+        if (expected.kind === 'string' && !this.isValidUtf8(b)) {
+          this.diags.error(node, 'JETH281', 'string literal contains an invalid UTF-8 sequence');
+          return undefined;
+        }
+        return { kind: 'stringLiteral', type: expected, bytes: b };
       }
       this.diags.error(node, 'JETH074', 'a string literal is only valid where a string/bytes value is expected');
       return undefined;
@@ -16567,12 +16599,87 @@ export class Analyzer {
     return undefined;
   }
 
+  /** Decode a string / no-substitution-template literal to bytes with SOLIDITY semantics. The crux: a `\xNN`
+   *  escape is a single RAW byte (NOT a JS/TS code unit). TS's `node.text` has already collapsed `\xff` to
+   *  the char U+00FF, which UTF-8-encodes to two bytes (c3 bf) - so re-decode from the raw SOURCE text to
+   *  match solc, which keeps `\xff` as the single byte ff (a silent, security-relevant hash divergence
+   *  otherwise). `\uNNNN` / `\u{...}` is the UTF-8 of the code point; the simple escapes and line
+   *  continuations follow their usual meaning; every other char is UTF-8 encoded. */
+  private strLitBytes(node: ts.StringLiteralLike): Uint8Array {
+    const s = node.getText().slice(1, -1); // strip the surrounding quote / backtick delimiters
+    const out: number[] = [];
+    const pushCp = (cp: number): void => {
+      if (cp < 0x80) out.push(cp);
+      else if (cp < 0x800) out.push(0xc0 | (cp >> 6), 0x80 | (cp & 0x3f));
+      else if (cp < 0x10000) out.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+      else out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
+    };
+    let i = 0;
+    while (i < s.length) {
+      if (s[i] !== '\\') {
+        const cp = s.codePointAt(i)!;
+        pushCp(cp);
+        i += cp > 0xffff ? 2 : 1;
+        continue;
+      }
+      const e = s[i + 1];
+      switch (e) {
+        case 'x': out.push(parseInt(s.slice(i + 2, i + 4), 16)); i += 4; break; // RAW byte (the fix)
+        case 'u':
+          if (s[i + 2] === '{') { const end = s.indexOf('}', i + 3); pushCp(parseInt(s.slice(i + 3, end), 16)); i = end + 1; }
+          else { pushCp(parseInt(s.slice(i + 2, i + 6), 16)); i += 6; }
+          break;
+        case 'n': out.push(0x0a); i += 2; break;
+        case 'r': out.push(0x0d); i += 2; break;
+        case 't': out.push(0x09); i += 2; break;
+        case 'b': out.push(0x08); i += 2; break;
+        case 'f': out.push(0x0c); i += 2; break;
+        case 'v': out.push(0x0b); i += 2; break;
+        case '0': out.push(0x00); i += 2; break;
+        case '\\': out.push(0x5c); i += 2; break;
+        case "'": out.push(0x27); i += 2; break;
+        case '"': out.push(0x22); i += 2; break;
+        case '`': out.push(0x60); i += 2; break;
+        case '\r': i += s[i + 2] === '\n' ? 3 : 2; break; // line continuation (CR / CRLF)
+        case '\n': i += 2; break; // line continuation
+        default: { const cp = s.codePointAt(i + 1)!; pushCp(cp); i += 1 + (cp > 0xffff ? 2 : 1); } // unknown escape: keep the char
+      }
+    }
+    return Uint8Array.from(out);
+  }
+
+  /** True if `bytes` is well-formed UTF-8. A solc `string` literal must be valid UTF-8; a `\xNN` byte
+   *  sequence that is not (e.g. a lone `\xe9`) is rejected in string context (accepted for `bytes`). */
+  private isValidUtf8(bytes: Uint8Array): boolean {
+    let i = 0;
+    while (i < bytes.length) {
+      const b = bytes[i]!;
+      let n: number;
+      let min: number;
+      if (b < 0x80) { i += 1; continue; }
+      else if ((b & 0xe0) === 0xc0) { n = 1; min = 0x80; }
+      else if ((b & 0xf0) === 0xe0) { n = 2; min = 0x800; }
+      else if ((b & 0xf8) === 0xf0) { n = 3; min = 0x10000; }
+      else return false;
+      if (i + n >= bytes.length) return false;
+      let cp = b & (0x7f >> (n + 1));
+      for (let k = 1; k <= n; k++) {
+        const c = bytes[i + k]!;
+        if ((c & 0xc0) !== 0x80) return false;
+        cp = (cp << 6) | (c & 0x3f);
+      }
+      if (cp < min || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) return false;
+      i += n + 1;
+    }
+    return true;
+  }
+
   /** Evaluate a node to a constant byte string (for compile-time keccak256 in a @constant): a string/
    *  template literal (its UTF-8 bytes), `bytes(<that>)`, or `abi.encodePacked(<such literals>)`. */
   private constByteString(node: ts.Expression): Uint8Array | undefined {
     if (ts.isParenthesizedExpression(node)) return this.constByteString(node.expression);
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
-      return new TextEncoder().encode(node.text);
+      return this.strLitBytes(node);
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&

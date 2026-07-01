@@ -142,7 +142,10 @@ export type Expr =
   // (see below). A value-type result is one word (lowered via lowerExpr); a bytes/string/array/struct result
   // is a memory image pointer (lowered via lowerDynamic / aggArgToMemPtr). Malformed input reverts like solc:
   // Panic(0x41) on an oversized length / memory-alloc cap, empty revert on an out-of-bounds offset/length.
-  | { kind: 'abiDecode'; type: JethType; data: Expr }
+  // `type` is the primary decoded type; `types` (optional) carries all return types for a value-returning
+  // high-level call whose result is DISCARDED as a statement (multi-return), so the exprStmt decode-and-drop
+  // validates the full returndata (size + ABI decode) exactly as solc does even when the value is unused.
+  | { kind: 'abiDecode'; type: JethType; data: Expr; types?: JethType[] }
   | { kind: 'blockhash'; type: JethType; arg: Expr } // blockhash(uint) -> bytes32
   | { kind: 'blobhash'; type: JethType; arg: Expr } // blobhash(uint) -> bytes32 (EIP-4844)
   | { kind: 'balance'; type: JethType; addr: Expr } // <address>.balance -> u256

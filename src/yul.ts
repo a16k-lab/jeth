@@ -2087,6 +2087,13 @@ ${indent(runtime, 6)}
           this.lowerDynamic(s.expr, ctx, out);
           break;
         }
+        // a value-returning high-level interface call whose result is DISCARDED (`IFoo(a).f();`): solc still
+        // VALIDATES the returndata (size + ABI decode) even when unused, so run the decode for its side
+        // effect (a short/malformed return reverts identically) and drop the decoded value.
+        if (s.expr.kind === 'abiDecode') {
+          this.lowerAbiDecode(s.expr.data, s.expr.types ?? (s.expr.type ? [s.expr.type] : []), ctx, out);
+          break;
+        }
         // Phase 2a: proxyInit/upgradeProxy are void EIP-1967 statements (sstore + emit + optional
         // delegatecall); they emit Yul statements directly, with no value to pop.
         if (s.expr.kind === 'proxyInit' || s.expr.kind === 'upgradeProxy') {
@@ -5700,6 +5707,15 @@ ${indent(runtime, 6)}
         // as a pointer-headed leaf-array field; byte-identical to solc (verified on the harness).
         const dst = this.fresh();
         out.push(`let ${dst} := ${this.abiDecFromStorageToImage(f.type, slotAt(f.slot), ctx, out)}`);
+        out.push(`mstore(${at}, ${dst})`);
+        hw += 1;
+      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        // a nested DYNAMIC struct field (T with a bytes/string/dyn-array/nested-dyn member): its head word
+        // holds an absolute POINTER to a recursively-built nested pointer-headed image (from the field's
+        // sub-slot), NOT an inline flatten. tupleHeadWords counts it as 1. (The static-aggregate branch
+        // below would mis-flatten it inline and over-advance hw, corrupting the head/tail offsets - a
+        // silent miscompile of abi.encode(this.w) / passing this.w onward.)
+        const dst = this.buildDynStructFromStorage(f.type, slotAt(f.slot), ctx, out);
         out.push(`mstore(${at}, ${dst})`);
         hw += 1;
       } else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
