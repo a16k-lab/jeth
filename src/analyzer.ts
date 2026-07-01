@@ -25,6 +25,7 @@ import {
   commonNumericType,
   isStaticValueType,
   isValueWord,
+  isValueWordAggregate,
   isFuncrefValueAggregate,
   isStaticType,
   isDynamicType,
@@ -4717,12 +4718,21 @@ export class Analyzer {
       this.declareLocal(p.name, p.type);
       // G9: a STATIC struct param of an @internal/@private function is a MEMORY pointer
       // (passed by reference), so `p.x` resolves to a memory field, not a calldata place.
-      if (internalOnly && p.type.kind === 'struct' && isStaticType(p.type)) {
+      // FIX B (funcref): a struct whose fields are all VALUE WORDS but includes a funcref field
+      // (isFuncrefValueAggregate = isValueWordAggregate yet NOT isStaticType) has the identical flat
+      // inline memory image as the uint256-substituted struct, so it rides this same memAggregate path
+      // for INTERNAL use (the caller passes the image pointer, the callee reads memory fields). It is
+      // still NOT isStaticType, so every ABI/getter/event/return path keeps rejecting it (JETH426),
+      // byte-identical to solc's "internal type cannot be in the ABI" error.
+      if (internalOnly && p.type.kind === 'struct' && (isStaticType(p.type) || isFuncrefValueAggregate(p.type))) {
         this.memAggregateLocals.set(p.name, p.type);
       }
       // JETH242/243: a dynamic value-element array / bytes / string param of an @internal/@private
       // function is likewise a MEMORY reference, so `p[i]`/`p.length`/`return p` resolve to memory.
-      if (internalOnly && p.type.kind === 'array' && p.type.length === undefined && isStaticValueType(p.type.element)) {
+      // FIX A (funcref): a DYNAMIC funcref array (((x)=>R)[]) is a value-word array with the identical
+      // [len][id...] image as uint256[], so it rides this same memArray path for INTERNAL use (isValueWord
+      // element). Still NOT ABI-encodable, so the @external/@public path rejects it (JETH426).
+      if (internalOnly && p.type.kind === 'array' && p.type.length === undefined && isValueWord(p.type.element)) {
         this.memArrayLocals.add(p.name);
       }
       // C(1): an AGGREGATE-element dynamic array param (P[] static struct, D[] dyn-struct, bytes[]/string[],
@@ -4742,7 +4752,16 @@ export class Analyzer {
       }
       // a STATIC fixed-array param (Arr<T,N>) is a MEMORY pointer too, so `p[i]` resolves to a
       // memory element (memElem) and `return p` to the image, like a struct param.
-      if (internalOnly && p.type.kind === 'array' && p.type.length !== undefined && isStaticType(p.type)) {
+      // FIX A (funcref): a fixed array whose element is a funcref (or a funcref-value aggregate), e.g.
+      // Arr<(x)=>R,N>, is a value-word aggregate with the identical flat inline image as the uint256
+      // version (isFuncrefValueAggregate), so it rides this same memAggregate path for INTERNAL use.
+      // Still NOT isStaticType, so the ABI/getter/event/return paths keep rejecting it (JETH426).
+      if (
+        internalOnly &&
+        p.type.kind === 'array' &&
+        p.type.length !== undefined &&
+        (isStaticType(p.type) || isFuncrefValueAggregate(p.type))
+      ) {
         this.memAggregateLocals.set(p.name, p.type);
       }
       if (internalOnly && isBytesLike(p.type)) {
@@ -6252,7 +6271,12 @@ export class Analyzer {
       }
       return a;
     }
-    if (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)) {
+    // FIX C (funcref): a fixed-array FIELD whose element is a funcref, Arr<(x)=>R,N>, is a value-word
+    // aggregate (isValueWordAggregate covers both isStaticType and the funcref-value case). Its inline
+    // image is one word per element, identical to a uint256 fixed-array field, so it is constructed and
+    // read exactly like a value-word fixed-array field (the arrayLit / typesEqual checks and the element
+    // codec are representation-agnostic). It is still NOT isStaticType, so ABI paths keep rejecting.
+    if (f.type.kind === 'array' && f.type.length !== undefined && isValueWordAggregate(f.type)) {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
       // an array literal of exactly N, OR any fixed-array value of the same type (a local / param /
@@ -9487,10 +9511,14 @@ export class Analyzer {
     // dynamic value-element array (u256[]/u64[]/address[]...), or bytes/string. A memory-source arg
     // ALIASES (a callee mutation is visible to the caller, like solc); a storage/calldata/literal
     // source is COPIED to fresh memory (the codegen materializes it).
+    // FIX A/B (funcref): a struct-with-funcref-field or a Arr<funcref,N> is a value-word aggregate with
+    // the identical flat inline image as the uint256 version (isFuncrefValueAggregate), so it passes BY
+    // MEMORY REFERENCE exactly like the static struct / static fixed array. This set matches the
+    // checkFunction memAggregate registration exactly. It is still NOT isStaticType, so ABI paths reject.
     const isMemByRef = (t: JethType): boolean =>
-      (t.kind === 'struct' && isStaticType(t)) ||
-      (t.kind === 'array' && t.length !== undefined && isStaticType(t)) || // a static fixed array Arr<T,N>
-      (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) ||
+      (t.kind === 'struct' && (isStaticType(t) || isFuncrefValueAggregate(t))) ||
+      (t.kind === 'array' && t.length !== undefined && (isStaticType(t) || isFuncrefValueAggregate(t))) || // a static (or funcref-value) fixed array Arr<T,N>
+      (t.kind === 'array' && t.length === undefined && isValueWord(t.element)) || // dynamic value-word array (incl. ((x)=>R)[])
       // Cat B: a STATIC-STRUCT dynamic array (P[]) is a pointer-headed memory image (a single pointer),
       // so it passes BY MEMORY REFERENCE exactly like a value-element array - a memory source aliases,
       // a literal/storage/calldata source is copied to a fresh image.
@@ -10788,9 +10816,13 @@ export class Analyzer {
     }
     // the root must be a memAggregate STATIC-STRUCT local, and the chain must index at least once (a
     // pure `o.field...` value/whole-field chain is resolveMemFieldChain's; this owns the indexed form).
+    // FIX C (funcref): a struct with a funcref fixed-array field (H{ fs: Arr<(x)=>R,N> }) is a value-word
+    // aggregate (isValueWordAggregate) with the identical flat inline image as the uint256 version, so
+    // `h.fs[i]` descends by the same word offsets (abiHeadWords(funcref)===1); its funcref leaf reads as
+    // one word (its id). NOT isStaticType, so ABI paths still reject the aggregate.
     if (!ts.isIdentifier(cur) || !hasIndex) return undefined;
     const st = this.memAggregateLocals.get(cur.text);
-    if (!st || st.kind !== 'struct' || !isStaticType(st)) return undefined;
+    if (!st || st.kind !== 'struct' || !isValueWordAggregate(st)) return undefined;
     const base: Expr = { kind: 'memAggregate', type: st, local: cur.text };
     steps.reverse(); // root -> leaf
     let curType: JethType = st;
@@ -11257,7 +11289,9 @@ export class Analyzer {
     // steps; RHS coerced clean). Roots at a struct local, so it never overlaps the ARRAY-rooted chain above.
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const chain = this.resolveMemAggregateStaticChain(node);
-      if (chain && isStaticType(chain.type)) {
+      // FIX C (funcref): a funcref LEAF (h.fs[i] = this.g) is a value word (isValueWord, not isStaticType);
+      // the store is an mstore of the RHS id at the computed offset, identical to a uint256 leaf write.
+      if (chain && (isStaticType(chain.type) || isValueWord(chain.type))) {
         return { kind: 'aggFieldStore', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
       }
     }
@@ -12234,7 +12268,16 @@ export class Analyzer {
         const t = this.lookupLocal(cur.text);
         // own only STATIC aggregate params (inline head): a static struct or a fixed
         // array of a static element. Arr<dyn,N> is a dynamic calldata array (cdArrays).
-        if (t && (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined)) && isStaticType(t))
+        // FIX C (funcref): a funcref-value aggregate local (a struct with a funcref field / a
+        // Arr<funcref,N>) has the identical flat inline image, so a `.length` on its fixed-array
+        // field descends the same field/index offsets. This caller uses the result ONLY to return
+        // the compile-time constant N for `.length`, which is byte-identical to solc (funcref never
+        // reaches an ABI path here; the aggregate is still not isStaticType).
+        if (
+          t &&
+          (t.kind === 'struct' || (t.kind === 'array' && t.length !== undefined)) &&
+          (isStaticType(t) || isFuncrefValueAggregate(t))
+        )
           rootType = t;
         break;
       } else {
@@ -13286,7 +13329,11 @@ export class Analyzer {
     // this.m[k].s, this.o.inner.s): the field header lives at the path's slot and
     // is a normal storage bytes/string. The caller branches on isBytesLike to emit
     // the dynamic-value node (dynPlaceRead / dynPlace) vs the static-leaf node.
-    if (!isStaticValueType(t) && !isBytesLike(t)) {
+    // FIX C (funcref): a funcref LEAF reached through a struct field (this.h.fs[i]) is a value word
+    // (its id) whose storage layout is identical to uint256, so it is a packed-storage leaf exactly
+    // like a static value type - it must NOT enter the whole-aggregate block below (which would emit
+    // a spurious JETH226). The direct @state Arr<funcref,N> array already reads/writes the id word.
+    if (!isStaticValueType(t) && t.kind !== 'funcref' && !isBytesLike(t)) {
       // A whole STRUCT leaf reached by an array-index last step (this.md[k][i],
       // this.recs[i] through a longer chain) is a struct array element: decline so the
       // dedicated structArrayElem handler (read via the storage encoder / write via
@@ -15539,7 +15586,10 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const chain = this.resolveMemAggregateStaticChain(node);
       if (chain) {
-        if (isStaticType(chain.type)) {
+        // FIX C (funcref): a funcref LEAF (h.fs[i]) is a value word (isValueWord, not isStaticType) and reads
+        // as one mload of its id at the computed offset, identical to a uint256 leaf; the aggFieldRead keeps
+        // the funcref type so a following `h.fs[i](v)` dispatches through the id.
+        if (isStaticType(chain.type) || isValueWord(chain.type)) {
           return { kind: 'aggFieldRead', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
         }
         this.diags.error(

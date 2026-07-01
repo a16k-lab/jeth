@@ -1733,10 +1733,12 @@ ${indent(runtime, 6)}
         break;
       }
       case 'assign': {
-        if (s.target.kind === 'aggFieldStore' && !isStaticValueType(s.target.type)) {
+        if (s.target.kind === 'aggFieldStore' && !isStaticValueType(s.target.type) && s.target.type.kind !== 'funcref') {
           // xs[i].q = Q(..) / xs[i].pre = [..]: a whole STATIC AGGREGATE field of a memory-array struct
           // element. Copy the constructed/source image into the field's sub-image (the same pointer the
           // read uses, layout-agnostic). solc evaluates the RHS before the LHS, so materialize src first.
+          // FIX C (funcref): a funcref LEAF (h.fs[i] = this.g) is a single value WORD, not an aggregate,
+          // so it is EXCLUDED here and falls through to the scalar aggFieldStore path (an mstore of its id).
           const src = this.aggToMemPtr(s.value, ctx, out);
           const dst = this.aggFieldPtr(s.target.base, s.target.wordOffset, s.target.runSteps, ctx, out);
           const ew = abiHeadWords(s.target.type) * 32;
@@ -3097,7 +3099,10 @@ ${indent(runtime, 6)}
         // element - the head word at `cur` HOLDS the blob/array absolute pointer; mload it to yield
         // the pointer VALUE (a reference consumed by lowerDynamic / .length / [j] / return / encode).
         if (e.deref) return `mload(${cur})`;
-        return isStaticValueType(e.type) ? `mload(${cur})` : cur;
+        // FIX C (funcref): a funcref LEAF (h.fs[i]) is a value word (its id) stored inline, so it is
+        // mload'd exactly like a static value leaf; a following funcRefCall dispatches through the id.
+        // A whole STATIC AGGREGATE leaf (struct/array) yields the sub-image pointer instead.
+        return isStaticValueType(e.type) || e.type.kind === 'funcref' ? `mload(${cur})` : cur;
       }
       case 'memElem': {
         // a[i] on a fixed-array memory local (value element): bounds-check then mload. A fixed-array
