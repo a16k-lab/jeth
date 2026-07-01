@@ -2109,6 +2109,26 @@ export class Analyzer {
     return false;
   }
 
+  /** The @interface DIRECT bases of `rf`'s declaring contract that declare a method with `rf`'s exact
+   *  canonical signature. Each such interface is its OWN override "head" - solc counts it as an
+   *  overridden contract that must be named in @override(...), exactly like a base-contract branch head.
+   *  (Interface methods live in this.interfacesByName, never in the flattened `collected`/`overridden`
+   *  contract-function list, so the heads computation must add them explicitly. Only DIRECT bases count:
+   *  solc's "Invalid contract specified in override list" for a transitively-inherited interface I named
+   *  when C only lists J-is-I means a non-direct interface is NOT a head.) InterfaceMethod.signature and
+   *  this.sigKey share the identical canonical format, so a name lookup + signature compare suffices. */
+  private interfaceOverrideHeads(rf: RawFunction): string[] {
+    const cls = this.classByName.get(rf.definingContract!);
+    if (!cls) return [];
+    const want = this.sigKey(rf);
+    return heritageBases(cls)
+      .map((h) => h.name)
+      .filter((b) => {
+        const m = this.interfacesByName.get(b)?.methods.get(rf.name);
+        return m !== undefined && m.signature === want;
+      });
+  }
+
   /** Resolve the override sets across the linearization. Returns the WINNERS (most-derived definition
    *  per signature) to feed the normal register/check/dispatch pipeline; non-winning base versions are
    *  stashed in this.superTargets (reachable only via super). Enforces every virtual/override/list/
@@ -2203,6 +2223,36 @@ export class Analyzer {
             'JETH380',
             `contract '${deployedName}' is not @abstract but does not implement inherited @virtual function '${w.name}' (provide an @override implementation or mark the contract @abstract)`,
           );
+        }
+        // INTERFACE-ONLY override list (no base CONTRACT declares this signature, so this group never
+        // reaches the diamond block below). When w implements 2+ DIRECT-base @interface methods of this
+        // signature, solc requires @override(I, J) naming them all (completeness); and every name in the
+        // list must be exactly such a direct-base interface head (membership - a transitively-inherited
+        // interface, an undeclared/unrelated name, or a duplicate is rejected). A SINGLE interface head
+        // needs no list (bare @override or @override(I) both accepted upstream). Mirrors JETH381/JETH415.
+        const ifHeads = this.interfaceOverrideHeads(w);
+        if (ifHeads.length >= 1) {
+          const headSet = new Set(ifHeads);
+          const seen = new Set<string>();
+          const badName = (w.overrideList ?? []).find(
+            (n) => !headSet.has(n) || seen.has(n) || (seen.add(n), false),
+          );
+          if (badName !== undefined) {
+            this.diags.error(
+              w.node,
+              'JETH415',
+              `function '${w.name}' names '${badName}' in its @override list, which is not a directly-overridden base contract`,
+            );
+          } else if (ifHeads.length >= 2) {
+            const list = w.overrideList ?? [];
+            if (ifHeads.some((h) => !list.includes(h))) {
+              this.diags.error(
+                w.node,
+                'JETH381',
+                `function '${w.name}' overrides more than one base contract; it must specify @override(${ifHeads.join(', ')})`,
+              );
+            }
+          }
         }
         winners.push(...versions);
         continue;
@@ -2309,7 +2359,12 @@ export class Analyzer {
         const cand = overridden.filter((x) => x === base || (basesOf.get(base)?.has(x) ?? false));
         return cand.find((x) => !cand.some((y) => y !== x && basesOf.get(y)?.has(x)));
       };
-      const heads = [...new Set(directBases.map(definerWithin).filter((x): x is string => x !== undefined))];
+      // Contract-side heads (versions in `overridden` reachable un-overridden via a direct base) PLUS the
+      // interface-side heads (a DIRECT-base @interface declaring this winner's signature is its own head -
+      // interface methods live in a separate registry and are never in `overridden`, so solc still counts
+      // the interface as an overridden contract that must be named in @override(...)).
+      const contractHeads = directBases.map(definerWithin).filter((x): x is string => x !== undefined);
+      const heads = [...new Set([...contractHeads, ...this.interfaceOverrideHeads(winner)])];
 
       // OVERRIDE-LIST MEMBERSHIP (solc: "Invalid contract specified in override list" / "Identifier not
       // found or not unique" for an undeclared name; "Duplicate contract found in override list"). Every

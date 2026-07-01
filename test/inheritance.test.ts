@@ -148,6 +148,56 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       expect(codes(C('(A, K)'))).toEqual([]); // complete -> accept (was over-rejected)
       expect(codes(C('(K, A)'))).toEqual([]); // order-insensitive
     });
+    // An @interface counts as an override HEAD. A base CONTRACT B (@virtual) and an @interface I both
+    // declaring g(): solc requires @override(B, I) naming BOTH. Interface methods live in a separate
+    // registry (never in the flattened contract-function list), so the heads computation must add a
+    // direct-base interface declaring the winner's signature as its own head. Previously an @override(B)
+    // omitting I was over-accepted, and the valid @override(B, I) was over-rejected (JETH415).
+    it('interface + base-contract override heads: incomplete/bare reject, @override(B,I) accepts', () => {
+      const j = (l: string) =>
+        `@interface class I { @external g(): u256; } @abstract class B { @virtual @external g(): u256 { return 1n; } @virtual @external f(): u256 { return 2n; } } @contract class C extends B, I { @override${l} @external g(): u256 { return 30n; } @override @external f(): u256 { return 20n; } }`;
+      const s = (l: string) =>
+        `interface I { function g() external returns(uint256); } abstract contract B { function g() external virtual returns(uint256){ return 1; } function f() external virtual returns(uint256){ return 2; } } contract C is B, I { function g() external override${l} returns(uint256){ return 30; } function f() external override returns(uint256){ return 20; } }`;
+      par(j('(B)'), s('(B)')); // omits I
+      par(j('(I)'), s('(I)')); // omits B
+      par(j(''), s('')); // bare, needs B and I
+      par(j('(B, I, B)'), s('(B, I, B)')); // duplicate
+      expect(codes(j('(B, I)'))).toEqual([]); // complete -> accept
+      expect(codes(j('(I, B)'))).toEqual([]); // order-insensitive
+    });
+    it('interface + base-contract override(B,I): g()=30 / f()=20 byte-identical to solc', async () => {
+      await same(
+        `@interface class I { @external g(): u256; } @abstract class B { @virtual @external g(): u256 { return 1n; } @virtual @external f(): u256 { return 2n; } } @contract class C extends B, I { @override(B, I) @external g(): u256 { return 30n; } @override @external f(): u256 { return 20n; } }`,
+        `interface I { function g() external returns(uint256); } abstract contract B { function g() external virtual returns(uint256){ return 1; } function f() external virtual returns(uint256){ return 2; } } contract C is B, I { function g() external override(B,I) returns(uint256){ return 30; } function f() external override returns(uint256){ return 20; } }`,
+        [{ sig: 'g()' }, { sig: 'f()' }],
+        1,
+      );
+    });
+    // Two direct-base @interface heads (no base contract): the group never reaches the diamond block (only
+    // C declares g() among contracts), so the completeness/membership must also be enforced there. solc:
+    // @override(I, J) required; a single interface head needs no list; a transitively-inherited interface
+    // named in the list is "Invalid contract specified".
+    it('two-interface override heads (no base contract): @override(I,J) required, single head not', () => {
+      const j2 = (l: string) =>
+        `@interface class I { @external g(): u256; } @interface class J { @external g(): u256; } @contract class C extends I, J { @override${l} @external g(): u256 { return 7n; } }`;
+      const s2 = (l: string) =>
+        `interface I { function g() external returns(uint256); } interface J { function g() external returns(uint256); } contract C is I, J { function g() external override${l} returns(uint256){ return 7; } }`;
+      par(j2(''), s2('')); // bare, needs I and J
+      par(j2('(I)'), s2('(I)')); // omits J
+      par(j2('(I, J, I)'), s2('(I, J, I)')); // duplicate
+      expect(codes(j2('(I, J)'))).toEqual([]); // complete -> accept
+      expect(codes(j2('(J, I)'))).toEqual([]); // order-insensitive
+      // J extends I, C extends J only: single DIRECT head J; naming I (a transitive, non-direct interface) is invalid.
+      par(
+        `@interface class I { @external g(): u256; } @interface class J extends I { @external g(): u256; } @contract class C extends J { @override(I, J) @external g(): u256 { return 8n; } }`,
+        `interface I { function g() external returns(uint256); } interface J is I { function g() external returns(uint256); } contract C is J { function g() external override(I,J) returns(uint256){ return 8; } }`,
+      );
+      expect(
+        codes(
+          `@interface class I { @external g(): u256; } @interface class J extends I { @external g(): u256; } @contract class C extends J { @override(J) @external g(): u256 { return 8n; } }`,
+        ),
+      ).toEqual([]); // single direct head J -> @override(J) accepts
+    });
     // ---- base-constructor-argument accept/reject parity ----
     it('a heritage base-arg referencing a ctor parameter -> both reject (state/params not in scope)', () =>
       par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(p + 1n) { constructor(p: u256){} }`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(p+1) { constructor(uint256 p){} }`));
