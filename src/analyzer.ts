@@ -211,6 +211,10 @@ export class Analyzer {
   private events: EventIR[] = [];
   // Phase 6: @interface declarations (name -> {methods}); emits no bytecode, names a type + ABI shape.
   private interfacesByName = new Map<string, InterfaceDecl>();
+  // Phase 6: the @interface's class node (`@interface class I extends J {..}`), kept so C3 linearization
+  // can include interfaces as ORDERING nodes exactly as solc does (an interface is a base in the graph),
+  // while flattening skips them (no storage/ctor/functions). name -> the `@interface class` declaration.
+  private interfaceClassByName = new Map<string, ts.ClassDeclaration>();
   // Phase A libraries: `@library class L { f(...) {...} }`. Each library's functions are collected as
   // ORDINARY internal functions (no state, no ctor, never @external/@payable) keyed by a qualified
   // source name `L.f`, registered into the SAME candidatesByName/funcsByName/userfn_ machinery as a
@@ -626,6 +630,12 @@ export class Analyzer {
       methods.set(m.name, m);
     }
     this.interfacesByName.set(name, { name, methods });
+    // Keep the interface's class node so C3 linearization can include it as an ordering NODE (solc
+    // treats an interface as a first-class base in the inheritance graph). An interface node carries no
+    // storage/constructor/function collection (it is filtered out during flattening); only its ORDER in
+    // the merged linearization matters, so an inconsistent `is B, I` (where B already implements I) is
+    // rejected byte-for-byte like solc's "Linearization impossible".
+    this.interfaceClassByName.set(name, cls);
   }
 
   private collectInterfaceMethod(member: ts.MethodDeclaration, ifaceName: string): InterfaceMethod | undefined {
@@ -1014,6 +1024,12 @@ export class Analyzer {
     return decoratorNames(cls).includes('abstract');
   }
 
+  /** Is this linearization node an @interface (not a @contract/@abstract contract)? An interface is a
+   *  C3 ORDERING node only: it contributes no storage/constructor/functions, so flattening skips it. */
+  private isInterfaceClass(cls: ts.ClassDeclaration): boolean {
+    return decoratorNames(cls).includes('interface');
+  }
+
   /** C3-linearize the deployed contract's base hierarchy (most-derived FIRST). solc's MRO is
    *  Python C3 over the REVERSED `extends` lists with the contract prepended (so the LAST-listed
    *  base wins priority): `D is B, C` (B is A, C is A) -> [D, C, B, A]. A non-resolvable base name
@@ -1023,7 +1039,35 @@ export class Analyzer {
     // Resolve a class's direct bases (in source order) to their declarations, reporting unknowns.
     const directBases = (cls: ts.ClassDeclaration): ts.ClassDeclaration[] | undefined => {
       const bases: ts.ClassDeclaration[] = [];
+      const seen = new Set<string>(); // a base named twice in ONE heritage clause is a duplicate (solc: "Duplicate explicit base")
       for (const hb of heritageBases(cls)) {
+        if (seen.has(hb.name)) {
+          this.diags.error(
+            hb.node,
+            'JETH389',
+            `base '${hb.name}' is listed more than once in the heritage clause of '${cls.name?.text ?? '<anon>'}' (a base may be named only once)`,
+          );
+          return undefined;
+        }
+        seen.add(hb.name);
+        // A base name is either a @contract/@abstract class OR an @interface. An @interface is a
+        // first-class ORDERING node in solc's C3 graph (`contract C is B, I` is a linearization error
+        // when B already implements I), so include it in the linearization; it is filtered OUT during
+        // flattening (no storage/constructor/functions - only the must-implement obligation, checked
+        // after override resolution). A call-form `extends IFoo(args)` on an interface is meaningless
+        // (an interface has no constructor) - solc rejects it - so reject cleanly here.
+        const iface = this.interfaceClassByName.get(hb.name);
+        if (iface) {
+          if (hb.args !== undefined) {
+            this.diags.error(
+              hb.node,
+              'JETH384',
+              `interface '${hb.name}' cannot be given constructor arguments (an interface has no constructor)`,
+            );
+          }
+          bases.push(iface);
+          continue;
+        }
         const b = this.classByName.get(hb.name);
         if (!b) {
           this.diags.error(
@@ -1145,6 +1189,7 @@ export class Analyzer {
     // exception cannot be expressed here.
     const stateOwner = new Map<string, string>(); // @state name -> declaring contract (collision check)
     for (const c of [...lin].reverse()) {
+      if (this.isInterfaceClass(c)) continue; // an interface node carries no storage
       const cn = c.name?.text ?? '<anon>';
       for (const member of c.members) {
         if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
@@ -1180,6 +1225,7 @@ export class Analyzer {
     let fallbackNode: { member: ts.MethodDeclaration; contract: string } | undefined;
     const collectedFns: RawFunction[] = [];
     for (const c of lin) {
+      if (this.isInterfaceClass(c)) continue; // an interface node has no bodies/ctor to collect or chain
       const cn = c.name?.text ?? '<anon>';
       let ctorNode: ts.ConstructorDeclaration | undefined;
       let sawReceiveHere = false;
@@ -1230,7 +1276,15 @@ export class Analyzer {
     // the bare ABI key/selector and is dispatched. Non-winning base versions are kept ONLY as `super`
     // targets, re-keyed `<Contract>__<name>`. Enforces all virtual/override/list/return/mutability/
     // visibility rules. Returns the function list to feed the existing register/check pipeline.
-    rawFns.push(...this.resolveOverrides(lin, collectedFns));
+    const winnerFns = this.resolveOverrides(lin, collectedFns);
+    rawFns.push(...winnerFns);
+
+    // Phase 6: enforce @interface implementation obligations. Every function declared by an interface
+    // listed in any contract's heritage clause (`extends IFoo`) must be implemented by a compatible
+    // function in the deployed contract - unless the deployed contract is @abstract (solc: an abstract
+    // contract may leave interface functions unimplemented; a concrete one is rejected). Runs on the
+    // override WINNERS (the most-derived, dispatched definitions) so it sees exactly the deployed ABI.
+    this.enforceInterfaceImplementation(lin, winnerFns);
 
     // Phase A: register every @library's functions as ordinary internal functions of THIS compile.
     // They were collected with a qualified source name `L.f` (namespaced away from contract names),
@@ -2291,6 +2345,109 @@ export class Analyzer {
       void isSingle;
     }
     return winners;
+  }
+
+  /** Enforce the @interface implementation obligation (`contract C is I`). For every method declared
+   *  by an interface listed in ANY contract's heritage clause across the linearization, the deployed
+   *  contract must expose a compatible implementing function. Matches solc 0.8.35:
+   *    - a CONCRETE (non-@abstract) deployed contract must implement EVERY interface method, else it is
+   *      rejected ("Contract should be marked as abstract" / does not implement) -> JETH385;
+   *    - an @abstract deployed contract may leave them unimplemented (no error);
+   *    - @override on the impl is OPTIONAL (solc >= 0.8.8 for a single interface): this check never
+   *      requires nor rejects @override (that is handled by the JETH369 exemption / JETH374 machinery);
+   *    - the impl's RETURN type + PARAM types must match the interface method EXACTLY (params already
+   *      match by signature key; returns are checked here) -> JETH386;
+   *    - the impl's MUTABILITY may be EQUAL or MORE restrictive on the one-way ladder
+   *      (payable>nonpayable>view>pure) and may not cross payable -> JETH387;
+   *    - the impl's VISIBILITY must be external (JETH maps @public->external); a non-external impl of an
+   *      interface method is rejected -> JETH388.
+   *  An interface contributes NO storage/constructor/codegen: C already declares+implements the method
+   *  as its own external function, so the existing dispatcher routes it (no new codegen). NOTE: the
+   *  mutability read here is the DECLARED/provisional value at override-resolution time (an @read impl
+   *  is provisionally 'view'), identical to how the sibling JETH378 override check reads it - so an
+   *  impl inferred stricter than the interface never spuriously fails, and a loosening is still caught. */
+  private enforceInterfaceImplementation(lin: ts.ClassDeclaration[], winners: RawFunction[]): void {
+    // The implementation obligations are exactly the @interface NODES present in the linearization (an
+    // interface reached via a base contract obliges the deployed contract just as a direct `extends I`
+    // does). C3 already placed each interface once.
+    const ifaceNames = new Set<string>();
+    for (const c of lin) {
+      const nm = c.name?.text;
+      if (nm && this.isInterfaceClass(c)) ifaceNames.add(nm);
+    }
+    if (ifaceNames.size === 0) return;
+
+    const deployedName = lin[0]!.name?.text ?? '<anon>';
+    const deployedAbstract = this.isAbstractClass(lin[0]!);
+    const mutRank: Record<Mutability, number> = { payable: 3, nonpayable: 2, view: 1, pure: 0 };
+
+    // Index the winners (deployed, dispatched definitions) by canonical signature key. A winner is
+    // bodyless only when the deployed contract is @abstract (otherwise JETH380 already fired); a
+    // bodyless winner does NOT satisfy a concrete contract's obligation.
+    const winnerBySig = new Map<string, RawFunction>();
+    for (const w of winners) {
+      const k = this.sigKey(w);
+      if (!winnerBySig.has(k)) winnerBySig.set(k, w);
+    }
+
+    for (const ifaceName of ifaceNames) {
+      const iface = this.interfacesByName.get(ifaceName);
+      if (!iface) continue; // recorded only for real interfaces, but stay defensive
+      for (const m of iface.methods.values()) {
+        const w = winnerBySig.get(m.signature);
+        if (!w || w.bodyless) {
+          // Unimplemented interface method. An @abstract deployed contract may leave it open (solc). A
+          // concrete contract is rejected. Anchor the diagnostic on the interface method's node.
+          if (!deployedAbstract) {
+            this.diags.error(
+              lin[0]!,
+              'JETH385',
+              `contract '${deployedName}' is not @abstract but does not implement '${ifaceName}.${m.name}' declared in interface '${ifaceName}' (implement it as an @external function or mark the contract @abstract)`,
+            );
+          }
+          continue;
+        }
+        // RETURN type must match the interface exactly.
+        if (!this.interfaceReturnsEqual(m, w)) {
+          this.diags.error(
+            w.node,
+            'JETH386',
+            `implementation of '${ifaceName}.${m.name}' must keep the exact return type declared in interface '${ifaceName}'`,
+          );
+        }
+        // MUTABILITY: equal or more restrictive, no payable cross (same one-way ladder as an override).
+        const dr = mutRank[w.mutability];
+        const br = mutRank[m.mutability];
+        const crossesPayable = (w.mutability === 'payable') !== (m.mutability === 'payable');
+        if (dr > br || crossesPayable) {
+          this.diags.error(
+            w.node,
+            'JETH387',
+            `implementation of '${ifaceName}.${m.name}' cannot loosen mutability (@${m.mutability} -> @${w.mutability}); it may only keep or tighten it, and payable crosses are forbidden`,
+          );
+        }
+        // VISIBILITY: an interface method is external; the impl must be external (JETH maps public->external).
+        if (w.visibility !== 'external') {
+          this.diags.error(
+            w.node,
+            'JETH388',
+            `implementation of '${ifaceName}.${m.name}' must be @external (an interface method is external); found @${w.visibility}`,
+          );
+        }
+      }
+    }
+  }
+
+  /** Whether an interface method's return shape matches an implementing function's exactly (single or
+   *  multi-value). Mirrors overrideReturnsEqual but compares an InterfaceMethod against a RawFunction. */
+  private interfaceReturnsEqual(m: InterfaceMethod, w: RawFunction): boolean {
+    if (m.returnTypes || w.returnTypes) {
+      const rm = m.returnTypes ?? (m.returnType.kind === 'void' ? [] : [m.returnType]);
+      const rw = w.returnTypes ?? (w.returnType.kind === 'void' ? [] : [w.returnType]);
+      if (rm.length !== rw.length) return false;
+      return rm.every((t, i) => typesEqual(t, rw[i]!));
+    }
+    return typesEqual(m.returnType, w.returnType);
   }
 
   /** Stable identifier fragment for a signature (super-target key). Keep it readable + collision-free
