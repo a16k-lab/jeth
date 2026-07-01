@@ -13239,6 +13239,12 @@ export class Analyzer {
     const parts: Expr[] = [];
     const pushText = (partNode: ts.TemplateLiteralLikeNode) => {
       const bytes = this.templatePartBytes(partNode); // Solidity-style decode (a \xNN static part is a raw byte)
+      // A template literal builds a `string` (string.concat), so each STATIC part must be valid UTF-8 - a
+      // `\xNN` producing a lone high byte is rejected exactly as for a plain string literal (JETH281), which
+      // the string.concat path in solc also rejects. (A non-ASCII SOURCE char is caught in decodeStrEscapes.)
+      if (!this.isValidUtf8(bytes)) {
+        this.diags.error(partNode, 'JETH281', 'string literal contains an invalid UTF-8 sequence');
+      }
       if (bytes.length > 0) parts.push({ kind: 'stringLiteral', type: STRING, bytes });
     };
     pushText(node.head);
@@ -17538,6 +17544,9 @@ export class Analyzer {
     let i = 0;
     while (i < s.length) {
       if (s[i] !== '\\') {
+        // A LITERAL non-ASCII character (cp >= 0x80) is DELIBERATELY accepted: JETH has no `unicode"..."`
+        // form, so a plain string with unicode chars maps to (and is byte-identical to) solc's unicode
+        // string literal (see test/_vf_errorsevents.test.ts, which pins `"héllo 世界"` == solc unicode"...").
         const cp = s.codePointAt(i)!;
         pushCp(cp);
         i += cp > 0xffff ? 2 : 1;

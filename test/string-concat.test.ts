@@ -239,4 +239,15 @@ describe('concat accept/reject parity with solc', () => {
   it('tagged template literals stay rejected', () => {
     expect(jethAccepts('@contract class C { @external @pure f(): string { return tag`x`; } }')).toBe(false);
   });
+  it('a template static part with invalid UTF-8 is rejected like a plain string (both reject)', () => {
+    // a template literal builds a `string` (string.concat), so a static part producing a lone high byte
+    // (\xff) is invalid UTF-8 and must reject (JETH281), exactly as the plain-string form does and as
+    // solc's string.concat rejects. A VALID non-ASCII part (byte-identical to solc unicode"...") accepts.
+    const jbad = '@contract class C { @external @pure f(x: string): string { return `a\\xffb${x}`; } }';
+    const sbad = 'contract C { function f(string calldata x) external pure returns(string memory){ return string.concat("a\\xffb", x); } }';
+    expect(jethAccepts(jbad)).toBe(false);
+    expect(solAccepts(sbad)).toBe(false);
+    // control: a valid non-ASCII template part (maps to solc unicode"...") is accepted by JETH.
+    expect(jethAccepts('@contract class C { @external @pure f(x: string): string { return `世界${x}`; } }')).toBe(true);
+  });
 });
