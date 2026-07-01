@@ -50,6 +50,31 @@ describe('constructor / inheritance over-acceptances now reject like solc 0.8.35
     expect(codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(1n) { }')).toEqual([]);
   });
 
+  it('BOUNDARY: modifier-style base args used ALONE stay a SOUND reject (not liftable), never miscompiled', () => {
+    // `constructor() A(7n)` is not valid TypeScript: TS error-recovery parses `A(7n)` as a phantom method
+    // named A whose "parameter" is an empty identifier - the argument VALUE is destroyed by the parse
+    // (`A(v*2)` mangles into three empty params, `A(3,4)` loses both values). The args are unrecoverable
+    // from the AST, so this form can never be safely lowered (a guessed value would be a MISCOMPILE). It
+    // is therefore a clean JETH379 reject that points the user at the fully-supported heritage form
+    // `extends A(args)`, even when it is the ONLY provider (no heritage args to conflict with). solc
+    // ACCEPTS these (modifier-style base args are its idiom), so JETH is a sound over-rejection here - a
+    // deliberate, fail-safe boundary of the TS-subset, never wrong bytes.
+    // single base with a parameterized ctor, args only via the modifier form -> the required-args check fires
+    expect(
+      codes('@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A { constructor() A(7n) { } }'),
+    ).toContain('JETH379');
+    // a TYPED phantom (`A(v: u256)`) is treated as a real member, so the base is left without args -> reject
+    expect(
+      codes('@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A { constructor() A(v: u256) { } }'),
+    ).toContain('JETH379');
+    // a no-arg phantom `A()` against a parameterized base -> reject (never accepted with a defaulted arg)
+    expect(
+      codes('@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A { constructor() A() { } }'),
+    ).toContain('JETH379');
+    // control: the SAME program expressed via the supported heritage form compiles cleanly (the lift path)
+    expect(codes('@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(7n) { constructor() { } }')).toEqual([]);
+  });
+
   it('BUG2: @override that overrides nothing is rejected (JETH369) - no base, and base lacking the fn', () => {
     expect(codes('@contract class C { @override @external f(): u256 { return 42n; } }')).toContain('JETH369');
     expect(
