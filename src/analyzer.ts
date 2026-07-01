@@ -2026,6 +2026,27 @@ export class Analyzer {
     return `${rf.name}(${rf.params.map((p) => canonicalName(p.type)).join(',')})`;
   }
 
+  /** Does `rf` implement an @interface-declared function of the same signature? An interface is
+   *  implemented by listing it in a contract's heritage clause (`extends IFoo`). Interface methods
+   *  are NOT in the `collected` base-function list (they live in this.interfacesByName), so an
+   *  @override on a genuine interface implementation must not be flagged "overrides nothing". We scan
+   *  every contract in the current linearization: if any lists an interface whose method matches this
+   *  signature, the override is a legal interface implementation. (No interface overloading in v1, so a
+   *  name lookup + canonical-signature compare suffices.) */
+  private overrideImplementsInterfaceMethod(rf: RawFunction): boolean {
+    const want = this.sigKey(rf);
+    for (const cn of this.linOrder) {
+      const cls = this.classByName.get(cn);
+      if (!cls) continue;
+      for (const hb of heritageBases(cls)) {
+        const iface = this.interfacesByName.get(hb.name);
+        const m = iface?.methods.get(rf.name);
+        if (m && m.signature === want) return true;
+      }
+    }
+    return false;
+  }
+
   /** Resolve the override sets across the linearization. Returns the WINNERS (most-derived definition
    *  per signature) to feed the normal register/check/dispatch pipeline; non-winning base versions are
    *  stashed in this.superTargets (reachable only via super). Enforces every virtual/override/list/
@@ -2093,11 +2114,23 @@ export class Analyzer {
           const sameNameBase = collected.some(
             (rf) => rf.name === w.name && (linIndex.get(rf.definingContract!) ?? 0) > myIdx,
           );
-          if (sameNameBase) {
+          // @override overrides NOTHING: no BASE contract declares this signature (size<=1 -> only this
+          // contract's version exists among collected functions). solc rejects: "Function has override
+          // specified but does not override anything." This fires whether or not a base declares the same
+          // NAME (a same-name-different-signature base is a botched override; NO same-name base at all -
+          // no base, or bases with unrelated names - is an override of nothing). Both are rejected.
+          // EXEMPTION: implementing an @interface-declared function may legally carry @override in solc,
+          // and interface methods are NOT in `collected` (they live in this.interfacesByName). So skip the
+          // error when w implements an interface method of the same signature. (Interface-implementation
+          // via `extends IFoo` is currently gated at JETH370 upstream, so this exemption is defensive; it
+          // keeps the fix correct if/when a contract may implement an interface.)
+          if (!this.overrideImplementsInterfaceMethod(w)) {
             this.diags.error(
               w.node,
               'JETH374',
-              `function '${w.name}' in '${w.definingContract}' has @override but overrides no base function (no base declares it with this signature)`,
+              sameNameBase
+                ? `function '${w.name}' in '${w.definingContract}' has @override but overrides no base function (no base declares it with this signature)`
+                : `function '${w.name}' in '${w.definingContract}' has @override but does not override anything (no base function to override)`,
             );
           }
         }
@@ -2950,6 +2983,30 @@ export class Analyzer {
           }
         }
       }
+      // The source form `constructor() A(2)` is NOT a decorator on the ctor: TypeScript parses the
+      // `A(2)` as a SEPARATE method member named `A` (a phantom `A(2){}`) declared right after an empty
+      // constructor. So it never appears in ts.getDecorators above. Detect it by scanning the deployed
+      // contract's OWN members for a method whose name matches a chain BASE contract (i != 0). solc
+      // treats `constructor() A(2)` as modifier-style base args; combined with a heritage `extends A(1)`
+      // it is "Base constructor arguments given twice", and even alone it is the modifier-style form we
+      // do not support yet - GATE it (JETH379) rather than silently drop the phantom method's args.
+      // Guard: only the PHANTOM shape (a method whose "parameters" are the passed args, i.e. UNTYPED and
+      // undecorated) is treated as base args; a genuine `@external A(x: u256)` method (typed params, or
+      // any decorator) that merely happens to share a base's name is a real function, not base args.
+      for (const m of deployed.cls.members) {
+        if (!ts.isMethodDeclaration(m) || !ts.isIdentifier(m.name)) continue;
+        const nm = m.name.text;
+        if (!chain.some((c, i) => i !== 0 && c.contract === nm)) continue;
+        const hasDecorators = (ts.getDecorators(m as unknown as ts.HasDecorators) ?? []).length > 0;
+        const paramsUntyped = m.parameters.every((p) => p.type === undefined);
+        if (hasDecorators || !paramsUntyped) continue; // a real method named like a base, not base args
+        this.diags.error(
+          m,
+          'JETH379',
+          `modifier-style base-constructor arguments ('constructor() ${nm}(...)') are not supported yet; specify the base's arguments via the heritage clause ('extends ${nm}(...)')`,
+        );
+        baseArgsGate = true;
+      }
     }
     // Required-args check: a base with a parameterized ctor that nobody supplied args for. The deployed
     // is a concrete @contract, so solc requires every base ctor's args be supplied ("specify the
@@ -3128,12 +3185,19 @@ export class Analyzer {
       // wrap block, which still encloses this body at codegen time (providerIdx < i always).
       if (c.node) {
         const cMods = i === 0 ? deployedMods : this.ctorDecorators(c.node).ctorMods;
+        // Each contract's OWN ctor body is checked under ITS OWN @payable, not the deployed ctor's:
+        // solc's "msg.value can only be used in payable constructors" (JETH162) is per-constructor. A
+        // NON-payable base ctor reading msg.value is rejected even when the DEPLOYED ctor is @payable.
+        // (The deployed ctor's payability, set at ~line 3035, is restored after this body.)
+        const savedMut = this.currentMutability;
+        this.currentMutability = (i === 0 ? payable : this.ctorDecorators(c.node).payable) ? 'payable' : 'nonpayable';
         let bstmts: Stmt[] = [];
         if (c.node.body) {
           this.pushScope();
           for (const s of c.node.body.statements) this.checkStatement(s, VOID, bstmts);
           this.popScope();
         }
+        this.currentMutability = savedMut;
         for (const app of [...cMods].reverse()) bstmts = this.inlineModifier(app, bstmts);
         out.push(...bstmts);
       }

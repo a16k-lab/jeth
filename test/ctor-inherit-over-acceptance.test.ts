@@ -1,0 +1,67 @@
+// SOUNDNESS regression: three constructor/inheritance OVER-ACCEPTANCES found by the whole-surface
+// differential sweep - JETH compiled programs that solc 0.8.35 rejects at compile time. Each is now a
+// clean reject (matching solc), with no over-rejection introduced for valid patterns.
+//   BUG 1 (JETH379): base constructor arguments given twice - `constructor() A(2n)` (which TypeScript
+//     mis-parses as a phantom method named A) alongside a heritage `extends A(1n)`. JETH silently dropped
+//     the A(2n) form; solc: "Base constructor arguments given twice."
+//   BUG 2 (JETH374): `@override` on a function that overrides nothing (no base, or bases with unrelated
+//     names). The gate previously fired only when a base declared a same-named function; solc rejects
+//     unconditionally: "Function has override specified but does not override anything."
+//   BUG 3 (JETH162): `msg.value` read in a NON-payable BASE constructor even when the derived ctor is
+//     @payable. Each constructor body is now checked under its own payability; solc: "msg.value can only
+//     be used in payable constructors."
+import { describe, it, expect } from 'vitest';
+import { compile } from '../src/compile.js';
+
+const codes = (src: string): string[] => {
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e: unknown) {
+    return ((e as { diagnostics?: { code: string }[] })?.diagnostics ?? []).map((d) => d.code);
+  }
+};
+
+describe('constructor / inheritance over-acceptances now reject like solc 0.8.35', () => {
+  it('BUG1: base constructor arguments given twice is rejected (JETH379)', () => {
+    expect(
+      codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(1n) { constructor() A(2n) { } }'),
+    ).toContain('JETH379');
+  });
+
+  it('BUG2: @override that overrides nothing is rejected (JETH374) - no base, and base lacking the fn', () => {
+    expect(codes('@contract class C { @override @external f(): u256 { return 42n; } }')).toContain('JETH374');
+    expect(
+      codes('@abstract class A { @state x: u256; } @contract class C extends A { @override @external f(): u256 { return 42n; } }'),
+    ).toContain('JETH374');
+  });
+
+  it('BUG3: msg.value in a non-payable base constructor is rejected (JETH162), even with a payable derived ctor', () => {
+    expect(
+      codes('@abstract class A { @state v: u256; constructor(){ this.v = msg.value; } } @contract class C extends A { @payable constructor(){ } }'),
+    ).toContain('JETH162');
+    // deeper: a non-payable MIDDLE base reading msg.value is still caught.
+    expect(
+      codes('@abstract class A { @state v: u256; constructor(){ this.v = msg.value; } } @abstract class B extends A { } @contract class C extends B { @payable constructor(){ } }'),
+    ).toContain('JETH162');
+  });
+
+  it('valid inheritance / constructor / override / payable patterns still compile (no over-rejection)', () => {
+    // single heritage base-arg provider
+    expect(codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(1n) { }')).toEqual([]);
+    // valid @override of a @virtual base function
+    expect(codes('@abstract class A { @virtual f(): u256 { return 1n; } } @contract class C extends A { @override f(): u256 { return 2n; } }')).toEqual([]);
+    // payable base + payable derived reading msg.value
+    expect(codes('@abstract class A { @state v: u256; @payable constructor(){ this.v = msg.value; } } @contract class C extends A { @payable constructor(){ } }')).toEqual([]);
+    // msg.sender (NOT payability-gated) in a non-payable base + payable derived
+    expect(codes('@abstract class A { @state o: address; constructor(){ this.o = msg.sender; } } @contract class C extends A { @payable constructor(){ } }')).toEqual([]);
+    // a single payable constructor reading msg.value
+    expect(codes('@contract class C { @state v: u256; @payable constructor(){ this.v = msg.value; } }')).toEqual([]);
+    // a 3-level chain with base args
+    expect(codes('@abstract class A { @state a: u256; constructor(x: u256){ this.a = x; } } @abstract class B extends A(1n) { @state b: u256; constructor(y: u256){ this.b = y; } } @contract class C extends B(2n) { constructor() { } }')).toEqual([]);
+    // a real method whose name matches a base but is a genuine function (typed params) is not mistaken for base args
+    expect(codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } @external @view A(z: u256): u256 { return z; } } @contract class C extends A(1n) { }')).toEqual([]);
+    // same-name / different-signature botched override still rejects (unchanged)
+    expect(codes('@abstract class A { @virtual g(x: u256): u256 { return x; } } @contract class C extends A { @override g(): u256 { return 1n; } }').length).toBeGreaterThan(0);
+  });
+});
