@@ -434,6 +434,24 @@ export function isNestedValueArray(t: JethType): boolean {
   return isValueLeafArray(t);
 }
 
+/** FIX (nested funcref): the funcref-admitting twin of isNestedValueArray. A MULTI-DIMENSIONAL memory
+ *  array whose ultimate leaf is a VALUE WORD (a static value type OR an internal function pointer):
+ *  Arr<Arr<(x)=>R,2>,2>, ((x)=>R)[][], Arr<((x)=>R)[],N>, and every value-leaf case isNestedValueArray
+ *  already matched (isValueLeafArray => isValueWordLeafArray, so this is a strict SUPERSET). A funcref is
+ *  ONE WORD (its stable id), so a nested funcref array's memory layout is byte-identical to the same shape
+ *  with each funcref replaced by uint256; the recursive memory codec lays it out the SAME way (the inline
+ *  vs pointer-headed element dispatch treats a fully-fixed value-word sub-aggregate - isValueWordAggregate
+ *  - INLINE, exactly as it treats a static value sub-array). Used ONLY at the INTERNAL codec sites (the
+ *  memory-local gate, the array-literal / new Array gate, the resolveArrayExpr nested-element resolver,
+ *  and the nested element read/write); the ABI-encode / return / abi.decode paths keep gating on
+ *  isNestedValueArray so a nested funcref array is NEVER ABI-encoded (funcref stays !isStaticValueType,
+ *  so every ABI boundary rejects it, byte-identical to solc's "internal type in ABI" error). */
+export function isNestedValueWordArray(t: JethType): boolean {
+  if (t.kind !== 'array') return false;
+  if (!(t.element.kind === 'array')) return false; // a flat value/static array is not nested
+  return isValueWordLeafArray(t);
+}
+
 /** Residual B (this pass) scope: a DYNAMIC array `E[]` whose element `E` is an aggregate or
  *  byte-sequence leaf that the pointer-headed nested-memory codec can lay out, but which
  *  isNestedValueArray excludes (the leaf is not a pure value):
@@ -612,6 +630,16 @@ export function isValueLeafArray(t: JethType): boolean {
   if (t.kind !== 'array') return false;
   if (isStaticValueType(t.element)) return true;
   return isValueLeafArray(t.element);
+}
+
+/** FIX (nested funcref): the funcref-admitting twin of isValueLeafArray. A memory array (any mix of
+ *  dynamic/fixed levels) whose ultimate leaf is a VALUE WORD (a static value type OR a funcref). The
+ *  base of isNestedValueWordArray's recursion; a strict superset of isValueLeafArray (a static-value
+ *  leaf is also a value word). Used ONLY at the INTERNAL codec sites (never an ABI path). */
+export function isValueWordLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array') return false;
+  if (isValueWord(t.element)) return true;
+  return isValueWordLeafArray(t.element);
 }
 
 /** Storage packing of a dynamic-array element. Solidity packs small value types

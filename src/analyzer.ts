@@ -31,6 +31,8 @@ import {
   isDynamicType,
   isBytesLike,
   isNestedValueArray,
+  isNestedValueWordArray,
+  isValueWordLeafArray,
   isAggregateLeafArray,
   isStaticStructFixedLeafArray,
   isDynBytesFixedLeafArray,
@@ -8455,7 +8457,11 @@ export class Analyzer {
     // N-word pointer table (registered as a memAggregate). Element/length access chains through the
     // codec; return / abi.encode go through abiEncFromMem. Must be initialized from a literal or a
     // new Array (other sources - alias/copy of a whole nested array - are a later step).
-    if (declared.kind === 'array' && isNestedValueArray(declared)) {
+    // FIX (nested funcref): isNestedValueWordArray also admits a funcref LEAF (Arr<Arr<(x)=>R,2>,2>,
+    // ((x)=>R)[][], ...); a funcref is one value word, so the memory layout is identical to the same
+    // shape with each funcref replaced by uint256 (INTERNAL only - abi.decode / return-encode still
+    // gate on isNestedValueArray, so a funcref nested array is a clean reject at every ABI boundary).
+    if (declared.kind === 'array' && isNestedValueWordArray(declared)) {
       if (this.inCurrentScope(decl.name.text)) {
         this.diags.error(decl, 'JETH068', `redeclaration of '${decl.name.text}' in the same scope`);
         return;
@@ -11921,7 +11927,13 @@ export class Analyzer {
   private isAbiNestedDynArray(t: JethType): boolean {
     if (t.kind !== 'array' || t.length !== undefined) return false;
     const e = t.element;
-    if (isStaticValueType(e) || isBytesLike(e)) return true;
+    // isValueWord: a value leaf OR a funcref leaf (FIX nested funcref: a funcref is one storage word, so a
+    // nested dynamic funcref array ((x)=>R)[][] / Arr<(x)=>R,N>[] has the SAME storage layout as its
+    // uint256-substituted analog - the storage place codec reads/writes/pushes it byte-identically). A
+    // funcref in an ABI position (an @external/@public signature, event, getter, abi.encode) is STILL
+    // rejected by the dedicated typeHasFuncref signature/encode gates, which fire independently of this
+    // shape gate, so widening it here does NOT leak a funcref into the ABI.
+    if (isValueWord(e) || isBytesLike(e)) return true;
     if (e.kind === 'struct' && (isStaticType(e) || this.isSupportedDynStructField(e))) return true; // Pt[][], D[][]
     if (e.kind === 'array' && e.length === undefined) return this.isAbiNestedDynArray(e);
     return false;
@@ -12687,12 +12699,15 @@ export class Analyzer {
       // memory via memArrayExpr with the constant outer length. (A flat fixed value-array Arr<u256,N>
       // stays a memElem, handled in checkExpr, not an ArrayExpr.)
       const at = this.memAggregateLocals.get(node.text);
-      if (at && at.kind === 'array' && isNestedValueArray(at)) {
+      if (at && at.kind === 'array' && isNestedValueWordArray(at)) {
         return {
           base: { kind: 'memArrayExpr', expr: { kind: 'memAggregate', type: at, local: node.text } },
           elem: at.element,
           memFixedLen: at.length,
-          memStaticElem: at.element.kind === 'array' ? isStaticType(at.element) : undefined,
+          // isValueWordAggregate: a fully-fixed value-word sub-array (Arr<u256,2>, and FIX: Arr<(x)=>R,2>)
+          // is laid out INLINE (memStaticElem = true), byte-identical to a static value sub-array; a
+          // dynamic sub-array (u256[], ((x)=>R)[]) is pointer-headed (false).
+          memStaticElem: at.element.kind === 'array' ? isValueWordAggregate(at.element) : undefined,
         };
       }
       // Batch A: a FIXED static-struct array MEMORY local registered as a memAggregate (Arr<P,N>,
@@ -12755,7 +12770,9 @@ export class Analyzer {
           base: { kind: 'memArrayExpr', expr: getInner },
           elem: inner.element,
           memFixedLen: inner.length,
-          memStaticElem: inner.element.kind === 'array' ? isStaticType(inner.element) : undefined,
+          // isValueWordAggregate: a fully-fixed value-word sub-array (incl. a funcref sub-array in a 3D+
+          // nested funcref array) is INLINE; a dynamic sub-array is pointer-headed.
+          memStaticElem: inner.element.kind === 'array' ? isValueWordAggregate(inner.element) : undefined,
         };
       }
     }
@@ -13046,7 +13063,9 @@ export class Analyzer {
       // Batch A: a static-struct-leaf array element (Arr<P,N> / P[]) is a REFERENCE type -> a single
       // absolute-pointer word (false), NOT an inline base. A static VALUE sub-array (Arr<u256,N>) is inline.
       if (isStaticStructAnyLeafArray(elem)) return false;
-      return isStaticType(elem); // static VALUE sub-array -> inline base
+      // isValueWordAggregate: a fully-fixed value-word sub-array (Arr<u256,N>, and FIX: Arr<(x)=>R,N>) is
+      // laid out INLINE (its N value words sit in the parent image); a dynamic sub-array is pointer-headed.
+      return isValueWordAggregate(elem); // static / funcref-value VALUE sub-array -> inline base
     }
     if (elem.kind === 'struct') return false; // a struct is a reference type -> absolute-pointer word
     if (isBytesLike(elem)) return false; // B2: bytes/string element -> pointer word
@@ -13121,7 +13140,8 @@ export class Analyzer {
     return (
       at !== undefined &&
       at.kind === 'array' &&
-      (isNestedValueArray(at) || isStaticStructFixedLeafArray(at) || isDynBytesFixedLeafArray(at))
+      // isNestedValueWordArray also admits a FIXED-outer nested funcref array (Arr<Arr<(x)=>R,2>,2>).
+      (isNestedValueWordArray(at) || isStaticStructFixedLeafArray(at) || isDynBytesFixedLeafArray(at))
     );
   }
 
@@ -15356,7 +15376,7 @@ export class Analyzer {
         isBytesLike(elem) ||
         isAggregateLeafArray(elem) || // B4: a nested-dynamic-leaf array element (bytes[][], ...); P[]/P[][]
         isStaticStructFixedLeafArray(elem); // Batch A: a fixed static-struct array element (Arr<P,N>[])
-      if (!isValueWord(elem) && !isValueLeafArray(elem) && !aggLeafElem) {
+      if (!isValueWord(elem) && !isValueWordLeafArray(elem) && !aggLeafElem) {
         this.diags.error(
           node.typeArguments[0]!,
           'JETH216',
@@ -15392,7 +15412,7 @@ export class Analyzer {
       // element, or any nested/string[]/S[] element of a non-value-leaf kind, stays rejected.
       const okElem =
         isValueWord(expected.element) || // a value type OR a funcref element (FIX 3: a funcref value word)
-        (expected.element.kind === 'array' && isValueLeafArray(expected.element)) ||
+        (expected.element.kind === 'array' && isValueWordLeafArray(expected.element)) || // nested value / funcref leaf
         (expected.element.kind === 'array' && isAggregateLeafArray(expected.element)) || // B4: bytes[][], ...
         (expected.element.kind === 'array' && isStaticStructFixedLeafArray(expected.element)) || // Batch A: Arr<P,N>[]
         (expected.element.kind === 'array' && isStaticStructAnyLeafArray(expected.element)) || // Batch A: P[][] etc. inner
@@ -15679,7 +15699,9 @@ export class Analyzer {
     if (ts.isElementAccessExpression(node) && node.argumentExpression && this.nestedMemArrayElemAccess(node)) {
       const baseArr = this.resolveArrayExpr(node.expression);
       if (baseArr && (baseArr.base.kind === 'memArrayExpr' || baseArr.base.kind === 'memArray')) {
-        if (isStaticValueType(baseArr.elem)) {
+        // isValueWord: a value leaf OR a funcref leaf (FIX nested funcref: m[i][j] reads the funcref id
+        // word, typed funcref so a following m[i][j](v) dispatches / a let f = m[i][j] binds it).
+        if (isValueWord(baseArr.elem)) {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
           const idx = this.coerce(index, U256, node.argumentExpression);

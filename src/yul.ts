@@ -26,8 +26,12 @@ import {
   isDynamicType,
   isStaticType,
   isStaticValueType,
+  isValueWord,
+  isValueWordAggregate,
   isNestedValueArray,
+  isNestedValueWordArray,
   isValueLeafArray,
+  isValueWordLeafArray,
   isAggregateLeafArray,
   isStaticStructLeafArray,
   isStaticStructFixedLeafArray,
@@ -73,6 +77,17 @@ function isPointerHeadedStaticElem(e: JethType): boolean {
   // (Arr<u256,N>) stays INLINE (byte-invariant): isStaticStructFixedLeafArray excludes value leaves.
   if (e.kind === 'array' && e.length !== undefined) return isStaticStructFixedLeafArray(e);
   return false;
+}
+
+/** A nested-array ELEMENT that is laid out INLINE (its value words sit in the parent image, no per-element
+ *  pointer): a static VALUE type/sub-array (Arr<u256,N>) OR a FUNCREF-value aggregate (Arr<(x)=>R,N>, a
+ *  value-word struct). The funcref-admitting widening of `isStaticType(e) && !isPointerHeadedStaticElem(e)`:
+ *  isValueWordAggregate is the strict superset of isStaticType that also counts a funcref word, and the
+ *  !isPointerHeadedStaticElem guard still routes a static STRUCT / static-struct-leaf array element to the
+ *  pointer-headed branch (a value/funcref struct is inline; a struct with a reference leaf is not). Used
+ *  ONLY at the nested memory codec's inline-vs-pointer element forks. */
+function isInlineValueWordElem(e: JethType): boolean {
+  return isValueWordAggregate(e) && !isPointerHeadedStaticElem(e);
 }
 
 // Phase 6 external-call scoped bindings (this.ok / this.data inside a success condition). These keys
@@ -1632,7 +1647,9 @@ ${indent(runtime, 6)}
           // struct-returning call copies the POINTER (matching Solidity memory references).
           if (
             s.type.kind === 'array' &&
-            ((isNestedValueArray(s.type) && isDynamicType(s.type)) ||
+            // isNestedValueWordArray also admits a nested FUNCREF-leaf array whose inner level is DYNAMIC
+            // (Arr<((x)=>R)[],N>): the funcref inner is pointer-headed exactly like a u256[] inner.
+            ((isNestedValueWordArray(s.type) && isDynamicType(s.type)) ||
               isStaticStructFixedLeafArray(s.type) ||
               isDynBytesFixedLeafArray(s.type))
           ) {
@@ -3391,7 +3408,11 @@ ${indent(runtime, 6)}
         // also a Residual-B aggregate-leaf array (P[] static struct, bytes[]/string[]): the codec lays
         // out an inline struct block per element, or an absolute blob pointer per bytes/string element.
         if (
-          (isNestedValueArray(e.type) && isDynamicType(e.type)) ||
+          // isNestedValueWordArray also admits a nested FUNCREF-leaf array bearing a DYNAMIC level
+          // (((x)=>R)[][], Arr<(x)=>R,2>[], Arr<((x)=>R)[],N>): the funcref leaf is one value word, so the
+          // codec lays it out exactly like the u256-substituted shape. A PURE-FIXED nested funcref array
+          // (Arr<Arr<(x)=>R,2>,2>) is fully inline and stays on the allocAggToMem path (isDynamicType false).
+          (isNestedValueWordArray(e.type) && isDynamicType(e.type)) ||
           isAggregateLeafArray(e.type) ||
           isStaticStructFixedLeafArray(e.type) || // Batch A: Arr<P,N>, Arr<Arr<P,N>,M>, Arr<P,N>[][]... fixed outer
           isDynBytesFixedLeafArray(e.type) || // Edge D: Arr<string,N>, Arr<bytes,N> fixed-outer bytes/string leaf
@@ -5026,11 +5047,12 @@ ${indent(runtime, 6)}
     out: string[],
   ): void {
     const innerT = target.type as JethType & { kind: 'array' };
-    // Keep the inline-copy branch ONLY for a STATIC VALUE-ARRAY inner (Arr<u256,N>, Arr<Arr<u256,2>,2>):
-    // it stays an inline sub-block in the outer image. Re-point (a reference assignment) for any other
-    // inner that is POINTER-HEADED in the outer image: a DYNAMIC inner (u256[], bytes[], P[]) OR a static
-    // array whose ultimate leaf is a struct (Cat B: Arr<P,N>, now pointer-headed).
-    const inlineValueArrayInner = isStaticType(innerT) && isValueLeafArray(innerT);
+    // Keep the inline-copy branch ONLY for a fully-fixed VALUE-WORD inner (Arr<u256,N>, Arr<Arr<u256,2>,2>,
+    // and FIX: Arr<(x)=>R,N>): it stays an inline sub-block in the outer image. Re-point (a reference
+    // assignment) for any other inner that is POINTER-HEADED in the outer image: a DYNAMIC inner (u256[],
+    // bytes[], P[], ((x)=>R)[]) OR a static array whose ultimate leaf is a struct (Cat B: Arr<P,N>, which
+    // isInlineValueWordElem excludes via !isPointerHeadedStaticElem).
+    const inlineValueArrayInner = isInlineValueWordElem(innerT);
     if (!inlineValueArrayInner) {
       // pointer-headed inner: materialize -> pointer, store at the element word (reference assignment).
       // Use aggArgToMemPtr so a memory-reference RHS (xs[i] = xs[j], or = a bytes[]/u256[]/P[] local)
@@ -5204,7 +5226,10 @@ ${indent(runtime, 6)}
     }
     // memory source (a memArray local, a nested array literal, or new Array<T>(n)).
     const memPtr = this.lowerExpr(value, ctx, out);
-    if (isStaticValueType(innerElem)) {
+    // isValueWord: a value leaf OR a funcref leaf (FIX nested funcref: a funcref inner element is one
+    // word - its id - stored exactly like a uint256 element; e.g. this.g.push([this.a, this.b]) where
+    // g: ((x)=>R)[][]). copyMemArrayIntoStorage packs/stores the word elements identically.
+    if (isValueWord(innerElem)) {
       this.copyMemArrayIntoStorage(innerElem, memPtr, dstLenSlot, out);
       return;
     }
@@ -5487,9 +5512,9 @@ ${indent(runtime, 6)}
     // Materialize each element FIRST (left-to-right), freezing its register, so any inner allocation
     // bumps the free pointer before we claim this level's header.
     const elemVals = lit.elements.map((el) => {
-      if (isStaticType(elem) && !isPointerHeadedStaticElem(elem)) {
-        // a static VALUE element (value word, or a static fixed VALUE sub-array): build its inline
-        // image and copy it into place below; here just capture its source.
+      if (isInlineValueWordElem(elem)) {
+        // a static/funcref VALUE element (value word, or a static/funcref fixed VALUE sub-array): build its
+        // inline image and copy it into place below; here just capture its source.
         return null; // handled inline in the static-element copy loop
       }
       // a dynamic element OR a Cat-B static-struct element (pointer-headed): build the per-element
@@ -5500,7 +5525,7 @@ ${indent(runtime, 6)}
     });
     if (t.length === undefined) {
       // DYNAMIC outer.
-      if (isStaticType(elem) && !isPointerHeadedStaticElem(elem)) {
+      if (isInlineValueWordElem(elem)) {
         // static element: [len] + inline element blocks (one abiHeadWords(elem) block each).
         const ew = abiHeadWords(elem);
         const ptr = this.fresh();
@@ -5530,7 +5555,9 @@ ${indent(runtime, 6)}
    *  aggregate literal (Arr<value,N> as an element of a dynamic outer) recurses via writeAggToMem. */
   private writeStaticElemBlock(elem: JethType, el: Expr, ptr: string, wordBase: number, ctx: LowerCtx, out: string[]): void {
     const at = wordBase === 0 ? ptr : `add(${ptr}, ${wordBase * 32})`;
-    if (isStaticValueType(elem)) {
+    // isValueWord: a value type OR a funcref (FIX nested funcref: a funcref LEAF element - e.g. of a
+    // ((x)=>R)[] inner - mstores its id word, exactly like a uint256 leaf).
+    if (isValueWord(elem)) {
       out.push(`mstore(${at}, ${this.lowerExpr(el, ctx, out)})`);
       return;
     }
@@ -5553,10 +5580,11 @@ ${indent(runtime, 6)}
       return mp;
     }
     if (el.kind === 'arrayLit') {
-      // a static VALUE sub-array (Arr<u256,N>) is built INLINE; a static-struct-leaf fixed array
-      // (Batch A: Arr<P,N> as an element of Arr<P,N>[] / Arr<Arr<P,N>,M>) is POINTER-HEADED, so build
-      // its image via the nested codec (N pointer words, no [len] header) exactly like a dynamic inner.
-      if (isStaticType(el.type) && !isPointerHeadedStaticElem(el.type)) return this.allocAggToMem(el, ctx, out);
+      // a static/funcref VALUE sub-array (Arr<u256,N>, and FIX: Arr<(x)=>R,N>) is built INLINE; a
+      // static-struct-leaf fixed array (Batch A: Arr<P,N> as an element of Arr<P,N>[] / Arr<Arr<P,N>,M>)
+      // is POINTER-HEADED, so build its image via the nested codec (N pointer words, no [len] header)
+      // exactly like a dynamic inner.
+      if (isInlineValueWordElem(el.type)) return this.allocAggToMem(el, ctx, out);
       return this.buildNestedMemArrayLit(el, ctx, out);
     }
     if (el.kind === 'newArray') return this.lowerExpr(el, ctx, out);
@@ -5589,8 +5617,9 @@ ${indent(runtime, 6)}
     const n = this.fresh();
     out.push(`let ${n} := ${nExpr}`);
     out.push(`if gt(${n}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
-    if (isStaticType(elem) && !isPointerHeadedStaticElem(elem)) {
-      // a static VALUE element (e.g. Arr<u256,2>): [len] + n inline zero blocks. calldatacopy zeros.
+    if (isInlineValueWordElem(elem)) {
+      // a static/funcref VALUE element (e.g. Arr<u256,2>, Arr<(x)=>R,2>): [len] + n inline zero blocks.
+      // calldatacopy zeros (a zero funcref id Panics 0x51 on call, matching solc's zero-init element).
       const ew = abiHeadWords(elem);
       const ptr = this.fresh();
       out.push(`let ${ptr} := mload(0x40)`);
