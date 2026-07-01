@@ -23,10 +23,30 @@ const codes = (src: string): string[] => {
 };
 
 describe('constructor / inheritance over-acceptances now reject like solc 0.8.35', () => {
-  it('BUG1: base constructor arguments given twice is rejected (JETH379)', () => {
+  it('BUG1: base constructor arguments given twice is rejected (JETH379), across every provision variant', () => {
+    // heritage extends A(1n) + modifier-style constructor() A(2n): the modifier form is parsed by TS as a
+    // phantom method A, so it was silently dropped (JETH used the heritage value). All variants now reject.
     expect(
       codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(1n) { constructor() A(2n) { } }'),
     ).toContain('JETH379');
+    // same value provided twice
+    expect(
+      codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(5n) { constructor() A(5n) { } }'),
+    ).toContain('JETH379');
+    // address argument provided twice
+    expect(
+      codes('@abstract class A { @state o: address; constructor(v: address){ this.o = v; } } @contract class C extends A(address(0x11n)) { constructor() A(address(0x22n)) { } }'),
+    ).toContain('JETH379');
+    // multi-hop grandbase: A's args given via B's heritage AND via C's modifier-style clause
+    expect(
+      codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @abstract class B extends A(1n) { } @contract class C extends B { constructor() A(3n) { } }'),
+    ).toContain('JETH379');
+    // grandbase with an intermediate parameterized ctor: A(1n) via B, B(7n) via C heritage, A(3n) via C ctor
+    expect(
+      codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @abstract class B extends A(1n) { @state b: u256; constructor(w: u256){ this.b = w; } } @contract class C extends B(7n) { constructor() A(3n) { } }'),
+    ).toContain('JETH379');
+    // control: a single heritage provider must STILL compile (no over-rejection)
+    expect(codes('@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(1n) { }')).toEqual([]);
   });
 
   it('BUG2: @override that overrides nothing is rejected (JETH374) - no base, and base lacking the fn', () => {
