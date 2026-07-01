@@ -91,8 +91,10 @@ const JA = `@contract class C {
   @external @pure divGuard(a: u256, b: u256): u256 { return b == 0n ? 0n : a / b; }
   // untaken branch OVERFLOWS (checked) -> must not fire when condition picks safe branch
   @external @pure ovGuard(c: bool, a: u256, b: u256): u256 { return c ? a : a * b; }
-  // untaken branch is INT_MIN negation -> Panic only if taken
-  @external @pure negGuard(c: bool, a: i256): i256 { return c ? 0n : -a; }
+  // untaken branch is INT_MIN negation -> Panic only if taken. The zero arm needs an explicit i256
+  // cast to match solc's int256(0): solc types each ternary branch by its OWN mobile type (a
+  // non-negative literal is unsigned), so a bare 0 vs the signed -a has no common type (JETH417).
+  @external @pure negGuard(c: bool, a: i256): i256 { return c ? i256(0n) : -a; }
   // nested value ternary with three side-effecting writes; only one path runs
   @external nestedSeq(c: bool, d: bool): u256 { this.seq = 0n; let r: u256 = c ? (this.seq = this.seq + 1n) : (d ? (this.seq = this.seq + 2n) : (this.seq = this.seq + 3n)); return this.seq * 10n + r; }
   // ternary result widened to wider type (implicit widen of both arms)

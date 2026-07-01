@@ -13750,6 +13750,56 @@ export class Analyzer {
       const then = this.checkExpr(node.whenTrue, expected);
       const els = this.checkExpr(node.whenFalse, expected);
       if (!cond || !then || !els) return undefined;
+      // INTEGER-LITERAL branch typing (solc parity). solc types each branch by its OWN mobile type
+      // (a non-negative literal -> smallest UNSIGNED type, a negative literal -> smallest SIGNED type;
+      // a non-literal keeps its own type), requires the two branches to share a common type, and then
+      // requires that common type to be implicitly convertible to the outer `expected`. It does NOT
+      // push `expected` into a branch - so `c ? 5 : x` with x:int256 is a hard error (uint8 vs int256),
+      // as is `c ? 5 : 10` returned as int8 (common uint8, not convertible to int8). JETH pushes
+      // `expected` into both branches (relaxing an integer literal), an OVER-ACCEPTANCE. Replicate
+      // solc's rule for the case that differs: at least one branch is a plain (non-enum, non-branded)
+      // integer literal and BOTH branches are plain integers. Two non-literals already unify identically.
+      {
+        const litT = this.asIntLiteral(node.whenTrue);
+        const litF = this.asIntLiteral(node.whenFalse);
+        const plainInt = (t: JethType): boolean => isInteger(t) && !isEnum(t) && (t as { brand?: string }).brand === undefined;
+        // The mobile type of an integer branch: a literal's smallest-fitting signed/unsigned type, else
+        // the checked expression's own (plain, non-branded, non-enum) integer type. undefined => this
+        // branch is not a plain integer (bool / string / array / enum / branded), leave it to the paths below.
+        const mobile = (lit: bigint | undefined, checked: Expr): JethType | undefined =>
+          lit !== undefined ? this.literalMobileType(lit) : plainInt(checked.type) ? checked.type : undefined;
+        const mT = mobile(litT, then);
+        const mF = mobile(litF, els);
+        if (mT && mF && (litT !== undefined || litF !== undefined)) {
+          // (i) the two branches' families differ -> no common type (solc: "True expression's type
+          // <a> does not match false expression's type <b>").
+          if (mT.kind !== mF.kind) {
+            this.diags.error(
+              node,
+              'JETH417',
+              `ternary branches have no common type: ${displayName(mT)} vs ${displayName(mF)} (a non-negative integer literal is unsigned, a negative one signed; solc does not push the expected type into a branch)`,
+            );
+            return undefined;
+          }
+          // (ii) same family: the branch common type must be implicitly convertible to `expected`
+          // (solc: "Return argument type <common> is not implicitly convertible to <expected>").
+          // e.g. two non-negative literals (common uintN) with a SIGNED return type.
+          const common = commonNumericType(mT, mF)!; // same family -> always defined
+          if (
+            expected !== undefined &&
+            plainInt(expected) &&
+            !typesEqual(common, expected) &&
+            !isImplicitWiden(common, expected)
+          ) {
+            this.diags.error(
+              node,
+              'JETH417',
+              `ternary common type ${displayName(common)} is not implicitly convertible to ${displayName(expected)} (each branch is typed by its own mobile type; solc does not push the expected type into a branch)`,
+            );
+            return undefined;
+          }
+        }
+      }
       // unify the branch types (literal retyping / widening to a common type).
       const unified = this.unifyOperands(then, els, node);
       if (!unified) {
@@ -17704,6 +17754,20 @@ export class Analyzer {
     if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
       const inner = this.asIntLiteral(node.operand);
       return inner === undefined ? undefined : -inner;
+    }
+    return undefined;
+  }
+
+  /** solc's mobile type for an integer literal in a ternary branch: the SMALLEST integer type
+   *  (width a multiple of 8, up to 256) that holds the value - UNSIGNED for a non-negative value,
+   *  SIGNED for a negative one. Mirrors Type::commonType's rational-constant lowering (5 -> uint8,
+   *  300 -> uint16, -1 -> int8, -200 -> int16). undefined only for a value outside int256/uint256
+   *  (already rejected upstream by the range check). */
+  private literalMobileType(value: bigint): JethType | undefined {
+    if (value >= 0n) {
+      for (let m = 8; m <= 256; m += 8) if (value <= (1n << BigInt(m)) - 1n) return { kind: 'uint', bits: m };
+    } else {
+      for (let m = 8; m <= 256; m += 8) if (value >= -(1n << BigInt(m - 1))) return { kind: 'int', bits: m };
     }
     return undefined;
   }
