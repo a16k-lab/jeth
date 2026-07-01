@@ -320,6 +320,13 @@ export class Analyzer {
    *  (compound-assign / ++ / -- with m[f()] etc). The returned name is checked against every visible
    *  local so a hoisted temp can never shadow a real one. */
   private hoistTmpCounter = 0;
+  /** When set (during a statement's expression checking), an EXPR-position compound-assign / ++/--
+   *  with a side-effecting lvalue index (`(xs[f()] += v)`) hoists its RHS + index temps here instead
+   *  of rejecting as JETH331. The checkStatement wrapper flushes this buffer into `out` immediately
+   *  BEFORE the consuming statement, so the side effects run in solc's order (RHS first, then the
+   *  index once) and the desugared read-modify-write references the pure temps. undefined = not in a
+   *  hoist-capable statement context (the reject stands, never a miscompile). */
+  private exprHoist: Stmt[] | undefined;
   private freshHoistName(): string {
     let name: string;
     do {
@@ -4982,7 +4989,48 @@ export class Analyzer {
 
   // ---- statements ----------------------------------------------------------
 
+  /** Wrapper around every statement check: opens a fresh EXPR-hoist buffer, checks the statement
+   *  into a local sink, then emits the hoisted RHS/index temps (from any `(xs[f()] += v)` inside
+   *  the statement's own expressions) BEFORE the statement itself. A nested control-flow branch
+   *  recurses through this same wrapper, so its condition/body hoists stay scoped to that branch,
+   *  matching solc's evaluation order. */
   private checkStatement(node: ts.Statement, returnType: JethType, out: Stmt[]): void {
+    const savedHoist = this.exprHoist;
+    const hoists: Stmt[] = [];
+    const body: Stmt[] = [];
+    this.exprHoist = hoists;
+    try {
+      this.checkStatementInner(node, returnType, body);
+    } finally {
+      this.exprHoist = savedHoist;
+    }
+    out.push(...hoists, ...body);
+  }
+
+  /** True iff `node` (an EXPR-position compound-assign) is the ENTIRE value of its statement - the
+   *  whole initializer of a `let`, the whole `return` value, or a whole expression statement (through
+   *  transparent parentheses only). Only then is hoisting its RHS + index temps to the statement
+   *  prelude sound: the statement evaluates the compound-assign UNCONDITIONALLY, EXACTLY ONCE, and as
+   *  its FIRST side effect, so the prelude runs in solc's order. Any deeper position - a ternary
+   *  branch, a `&&`/`||` RHS (conditional), a loop condition / incrementor (re-evaluated), a call
+   *  argument / binary operand (relative-order sensitive) - would move the side effect, so it stays a
+   *  sound JETH331 reject. */
+  private isUnconditionalStatementExpr(node: ts.Expression): boolean {
+    let cur: ts.Node = node;
+    let parent = cur.parent;
+    // climb out through transparent parentheses (they do not change evaluation).
+    while (parent && ts.isParenthesizedExpression(parent)) {
+      cur = parent;
+      parent = cur.parent;
+    }
+    if (!parent) return false;
+    if (ts.isVariableDeclaration(parent)) return parent.initializer === cur;
+    if (ts.isReturnStatement(parent)) return parent.expression === cur;
+    if (ts.isExpressionStatement(parent)) return parent.expression === cur;
+    return false;
+  }
+
+  private checkStatementInner(node: ts.Statement, returnType: JethType, out: Stmt[]): void {
     if (ts.isReturnStatement(node)) {
       // multi-value return: `return [a, b, ...]` matching the function's tuple return type.
       if (this.currentReturnTypes) {
@@ -5876,6 +5924,43 @@ export class Analyzer {
       ) {
         return node.arguments.every((a) => this.isPureReadExpr(a));
       }
+    }
+    return false;
+  }
+
+  /** True iff evaluating `node` produces NO observable state side effect (so its evaluation ORDER
+   *  relative to another side-effecting sub-expression is unobservable). Stricter than a value: a
+   *  struct/array constructor with all-side-effect-free arguments is itself side-effect-free; a call
+   *  to a user function, `.push`, or any external/message call is NOT. Used to gate the whole-aggregate
+   *  element-write index-hoist: `recs[idx()] = R(9n)` is safe to lift because the RHS `R(9n)` has no
+   *  side effect (order vs `idx()` is unobservable), whereas `recs[idx()] = R(mk())` (mk() mutates)
+   *  stays a sound JETH331 reject rather than risk emitting the RHS/index in the wrong order. */
+  private isSideEffectFreeExpr(node: ts.Expression): boolean {
+    if (this.isPureReadExpr(node)) return true;
+    if (ts.isParenthesizedExpression(node)) return this.isSideEffectFreeExpr(node.expression);
+    if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return true;
+    if (ts.isPrefixUnaryExpression(node) && node.operator !== ts.SyntaxKind.PlusPlusToken && node.operator !== ts.SyntaxKind.MinusMinusToken)
+      return this.isSideEffectFreeExpr(node.operand);
+    if (ts.isBinaryExpression(node) && !this.isAssignmentOperator(node.operatorToken.kind))
+      return this.isSideEffectFreeExpr(node.left) && this.isSideEffectFreeExpr(node.right);
+    if (ts.isConditionalExpression(node))
+      return (
+        this.isSideEffectFreeExpr(node.condition) &&
+        this.isSideEffectFreeExpr(node.whenTrue) &&
+        this.isSideEffectFreeExpr(node.whenFalse)
+      );
+    if (ts.isArrayLiteralExpression(node)) return node.elements.every((el) => this.isSideEffectFreeExpr(el));
+    // a struct / enum / cast constructor `Name(a, b, ...)` with all-side-effect-free args (a user
+    // FUNCTION call is not a struct name, so it correctly returns false here).
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      const callee = node.expression.text;
+      const isCtor =
+        this.structsByName.has(callee) ||
+        this.isEnumName(callee) ||
+        callee === 'address' ||
+        callee === 'payable' ||
+        resolvePrimitiveName(callee) !== undefined;
+      if (isCtor) return node.arguments.every((a) => this.isSideEffectFreeExpr(a));
     }
     return false;
   }
@@ -8218,7 +8303,7 @@ export class Analyzer {
       this.checkTupleAssign(e, out);
       return;
     }
-    const target = this.checkLValue(e.left);
+    let target = this.checkLValue(e.left);
     if (!target) return;
     // A whole aggregate that contains a mapping cannot be assigned/copied (matches solc:
     // "types containing a mapping cannot be assigned"). Assigning its non-mapping fields
@@ -8281,20 +8366,30 @@ export class Analyzer {
       // (the copy-vs-alias divergence it guarded no longer exists).
       // Eval-order: solc evaluates the RHS before the LHS location. The value-type and bytes/string
       // element paths reorder correctly in codegen, but the WHOLE-AGGREGATE element write path
-      // (recs[i] = P(...), dd[i] = [...]) does not, so a side-effecting index/key would run before the
-      // RHS aggregate's constructor args and miscompile. Reject it (bind the index to a const first).
-      // (The compound-assign and ++/-- STATEMENT forms hoist the index to a temp instead - see
-      // hoistImpureLValueKeys - but the whole-aggregate write has deep-copy-vs-alias subtleties that
-      // make a temp-RHS lowering risky, so this stays a sound reject.)
+      // (recs[i] = P(...), dd[i] = [...]) lowers the index (in the element-slot resolution) BEFORE the
+      // RHS aggregate's constructor args. So the index and the RHS may only be reordered when the RHS
+      // is SIDE-EFFECT-FREE (its evaluation order is then unobservable): `recs[idx()] = R(9n)` is
+      // lifted by hoisting the index to a temp evaluated exactly ONCE (byte-identical to solc - the
+      // optimizer collapses the temp), leaving a pure-index write. A SIDE-EFFECTING RHS
+      // (`recs[idx()] = R(mk())`) would require materializing the RHS before the index, which the
+      // whole-aggregate write path cannot express, so it stays a sound JETH331 reject.
       if (target.type.kind === 'struct' || target.type.kind === 'array') {
         const keyImpure = this.impureLValueKey(e.left);
         if (keyImpure) {
-          this.diags.error(
-            keyImpure,
-            'JETH331',
-            `assigning a whole ${displayName(target.type)} to an element with a side-effecting index/key would evaluate the index before the value (solc evaluates the value first); bind the index to a const first`,
-          );
-          return;
+          if (this.isSideEffectFreeExpr(e.right)) {
+            const rewritten = this.hoistImpureLValueKeys(e.left, out);
+            if (!rewritten) return;
+            const t2 = this.checkLValue(rewritten);
+            if (!t2) return;
+            target = t2;
+          } else {
+            this.diags.error(
+              keyImpure,
+              'JETH331',
+              `assigning a whole ${displayName(target.type)} to an element with a side-effecting index/key and a side-effecting value would evaluate the index before the value (solc evaluates the value first); bind the index to a const first`,
+            );
+            return;
+          }
         }
       }
       // SOUNDNESS: re-pointing a dyn-struct LEAF-array field (p.tags = <bytes[]/string[]/T[][]>, or
@@ -8398,6 +8493,31 @@ export class Analyzer {
     }
     const keyImpure = this.impureLValueKey(e.left);
     if (keyImpure) {
+      // EXPR-position compound-assign with a side-effecting lvalue index: `let y = (xs[f()] += v)`.
+      // solc evaluates the index EXACTLY ONCE and yields the assigned (new) value. Lift it
+      // byte-identical ONLY when it is the WHOLE value of its statement (isUnconditionalStatementExpr:
+      // a `let` init, a `return` value, or an expression statement) and a hoist buffer is available:
+      // emit the RHS temp then the index temp(s) into the statement's prelude (RHS-first order, index
+      // once), then build the assignExpr over the now-pure lvalue. In any deeper position (a ternary
+      // branch, a `&&`/`||` RHS, a loop condition, a call arg / binary operand) hoisting to the prelude
+      // would move the side effect - conditionally, per-iteration, or out of order - so it stays a
+      // sound JETH331 reject rather than risk a miscompile.
+      if (this.exprHoist && this.isUnconditionalStatementExpr(e)) {
+        const rhsChecked = this.checkExpr(e.right, target.type);
+        if (!rhsChecked) return undefined;
+        const rname = this.freshHoistName();
+        this.declareLocal(rname, rhsChecked.type);
+        this.exprHoist.push({ kind: 'localDecl', name: rname, type: rhsChecked.type, init: rhsChecked });
+        const rewritten = this.hoistImpureLValueKeys(e.left, this.exprHoist);
+        if (!rewritten) return undefined;
+        const t2 = this.checkLValue(rewritten);
+        if (!t2) return undefined;
+        const left2 = this.lvalueAsExpr(t2);
+        const rhsRef: Expr = { kind: 'localRead', type: rhsChecked.type, name: rname };
+        const combined2 = this.buildBinary(binOp, left2, rhsRef, e);
+        if (!combined2) return undefined;
+        return { kind: 'assignExpr', type: t2.type, target: t2, value: this.coerce(combined2, t2.type, e) };
+      }
       this.diags.error(
         keyImpure,
         'JETH331',

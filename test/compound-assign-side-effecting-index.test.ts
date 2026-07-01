@@ -4,7 +4,11 @@
 // hoisted to a temp evaluated EXACTLY ONCE, and the RHS is evaluated first - byte-identical to solc
 // (solc evaluates RHS first, then each lvalue index once). Verified: side-effect count, eval order,
 // all ten compound operators, nested keys, struct fields, RHS that mutates the lvalue, overflow.
-// The EXPR-position forms (y = (xs[f()] += 1)) and whole-aggregate element writes stay sound rejects.
+// The EXPR-position form `y = (xs[f()] += 1)` and the whole-aggregate element write `recs[idx()] =
+// R(9)` (PURE value) are now ALSO lifted (same hoist machinery, byte-identical). The ONE remaining
+// sound JETH331 reject is a whole-aggregate element write whose index AND value BOTH side-effect
+// (`recs[idx()] = R(mk())`): the whole-aggregate write cannot express solc's RHS-before-index order,
+// so it stays a clean reject rather than risk a wrong-order miscompile.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -142,7 +146,118 @@ describe('compound-assign / ++ with a side-effecting index vs Solidity', () => {
     }
   });
 
-  it('expr-position and whole-aggregate forms stay sound rejects (JETH331, no crash)', () => {
+  // The EXPR-position form `let y = (xs[f()] += v)` is now lifted: the index runs ONCE, the RHS is
+  // evaluated first, and the expression yields the assigned (new) value - byte-identical to solc.
+  it('expr-position (xs[f()] += 5) yields the new value, index once, byte-identical', async () => {
+    const J = `@contract class C {
+      @state xs: u256[]; @state c: u256;
+      f(): u256 { this.c++; return 0n; }
+      @external seed(): void { this.xs.push(60n); }
+      @external go(): u256 { let y: u256 = (this.xs[this.f()] += 5n); return y; }
+      @external @view rx(): u256 { return this.xs[0n]; }
+      @external @view rc(): u256 { return this.c; } }`;
+    const S = `// SPDX-License-Identifier: MIT
+      pragma solidity ^0.8.20;
+      contract C { uint256[] xs; uint256 c; function f() internal returns(uint256){ c++; return 0; }
+      function seed() external { xs.push(60); }
+      function go() external returns(uint256){ uint256 y = (xs[f()] += 5); return y; }
+      function rx() external view returns(uint256){ return xs[0]; }
+      function rc() external view returns(uint256){ return c; } }`;
+    const j = await Harness.create(), s = await Harness.create();
+    const ja = await j.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const sa = await s.deploy(compileSolidity(S, 'C').creation);
+    for (const sig of ['seed()', 'go()', 'rx()', 'rc()']) {
+      const jr = await j.call(ja, encodeCall(sel(sig), []));
+      const sr = await s.call(sa, encodeCall(sel(sig), []));
+      expect(jr.success, `${sig} success`).toBe(sr.success);
+      expect(jr.returnHex, `${sig} returndata`).toBe(sr.returnHex);
+    }
+  });
+
+  // A side-effecting RHS in expr position: solc evaluates the RHS BEFORE the index; the hoist emits
+  // the RHS temp first, then the index temp, so the observed side-effect order matches (2=rhs,1=idx).
+  it('expr-position (xs[idx()] += rhs()) preserves RHS-before-index order', async () => {
+    const J = `@contract class C {
+      @state xs: u256[]; @state ord: u256[];
+      idx(): u256 { this.ord.push(1n); return 0n; }
+      rhs(): u256 { this.ord.push(2n); return 5n; }
+      @external seed(): void { this.xs.push(60n); }
+      @external go(): u256 { let y: u256 = (this.xs[this.idx()] += this.rhs()); return y; }
+      @external @view ordN(): u256 { return this.ord.length; }
+      @external @view ordAt(i: u256): u256 { return this.ord[i]; }
+      @external @view rx(): u256 { return this.xs[0n]; } }`;
+    const S = `// SPDX-License-Identifier: MIT
+      pragma solidity ^0.8.20;
+      contract C { uint256[] xs; uint256[] ord;
+      function idx() internal returns(uint256){ ord.push(1); return 0; }
+      function rhs() internal returns(uint256){ ord.push(2); return 5; }
+      function seed() external { xs.push(60); }
+      function go() external returns(uint256){ uint256 y = (xs[idx()] += rhs()); return y; }
+      function ordN() external view returns(uint256){ return ord.length; }
+      function ordAt(uint256 i) external view returns(uint256){ return ord[i]; }
+      function rx() external view returns(uint256){ return xs[0]; } }`;
+    const j = await Harness.create(), s = await Harness.create();
+    const ja = await j.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const sa = await s.deploy(compileSolidity(S, 'C').creation);
+    await j.call(ja, encodeCall(sel('seed()'), []));
+    await s.call(sa, encodeCall(sel('seed()'), []));
+    const jg = await j.call(ja, encodeCall(sel('go()'), []));
+    const sg = await s.call(sa, encodeCall(sel('go()'), []));
+    expect(jg.returnHex, 'go y').toBe(sg.returnHex);
+    for (const sig of ['ordN()', 'rx()']) {
+      expect((await j.call(ja, encodeCall(sel(sig), []))).returnHex, sig).toBe(
+        (await s.call(sa, encodeCall(sel(sig), []))).returnHex,
+      );
+    }
+    for (let i = 0n; i < 2n; i++) {
+      const d = '0x' + sel('ordAt(uint256)') + i.toString(16).padStart(64, '0');
+      expect((await j.call(ja, d)).returnHex, `ordAt${i}`).toBe((await s.call(sa, d)).returnHex);
+    }
+  });
+
+  // The whole-aggregate element write `recs[idx()] = R(9)` with a PURE value is now lifted: the index
+  // runs ONCE, the element gets the struct, other elements are untouched - byte-identical to solc.
+  it('whole-aggregate write recs[idx()] = R(9): index once, element set, byte-identical', async () => {
+    const J = `@struct class R { a: u256; b: u256; }
+      @contract class C {
+      @state recs: R[]; @state c: u256;
+      idx(): u256 { this.c++; return 0n; }
+      @external seed(): void { this.recs.push(R(1n,2n)); this.recs.push(R(3n,4n)); }
+      @external go(): void { this.recs[this.idx()] = R(9n, 8n); }
+      @external @view ra(i: u256): u256 { return this.recs[i].a; }
+      @external @view rb(i: u256): u256 { return this.recs[i].b; }
+      @external @view rc(): u256 { return this.c; } }`;
+    const S = `// SPDX-License-Identifier: MIT
+      pragma solidity ^0.8.20;
+      contract C { struct R { uint256 a; uint256 b; } R[] recs; uint256 c;
+      function idx() internal returns(uint256){ c++; return 0; }
+      function seed() external { recs.push(R(1,2)); recs.push(R(3,4)); }
+      function go() external { recs[idx()] = R(9, 8); }
+      function ra(uint256 i) external view returns(uint256){ return recs[i].a; }
+      function rb(uint256 i) external view returns(uint256){ return recs[i].b; }
+      function rc() external view returns(uint256){ return c; } }`;
+    const j = await Harness.create(), s = await Harness.create();
+    const ja = await j.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const sa = await s.deploy(compileSolidity(S, 'C').creation);
+    await j.call(ja, encodeCall(sel('seed()'), []));
+    await s.call(sa, encodeCall(sel('seed()'), []));
+    await j.call(ja, encodeCall(sel('go()'), []));
+    await s.call(sa, encodeCall(sel('go()'), []));
+    expect((await j.call(ja, encodeCall(sel('rc()'), []))).returnHex, 'idx count').toBe(
+      (await s.call(sa, encodeCall(sel('rc()'), []))).returnHex,
+    );
+    for (const fn of ['ra(uint256)', 'rb(uint256)']) {
+      for (let i = 0n; i < 2n; i++) {
+        const d = '0x' + sel(fn) + i.toString(16).padStart(64, '0');
+        expect((await j.call(ja, d)).returnHex, `${fn}[${i}]`).toBe((await s.call(sa, d)).returnHex);
+      }
+    }
+  });
+
+  // The ONE remaining sound reject: a whole-aggregate element write whose index AND value BOTH
+  // side-effect. solc evaluates the value before the index; the whole-aggregate write path cannot
+  // express that order, so JETH keeps a clean JETH331 reject (never a wrong-order miscompile).
+  it('whole-aggregate write with a side-effecting index AND value stays a sound JETH331 reject', () => {
     const reject = (src: string) => {
       let codes: string[] = [];
       try {
@@ -153,10 +268,39 @@ describe('compound-assign / ++ with a side-effecting index vs Solidity', () => {
       return codes;
     };
     expect(
-      reject('@contract class C { @state xs: u256[]; f(): u256 { return 0n; } @external go(): u256 { this.xs.push(1n); let y: u256 = (this.xs[this.f()] += 5n); return y; } }'),
+      reject(
+        '@struct class R { a: u256; } @contract class C { @state recs: R[]; @state c: u256; idx(): u256 { this.c++; return 0n; } mk(): u256 { this.c++; return 9n; } @external go(): void { this.recs.push(R(1n)); this.recs[this.idx()] = R(this.mk()); } }',
+      ),
     ).toContain('JETH331');
-    expect(
-      reject('@struct class R { a: u256; } @contract class C { @state recs: R[]; idx(): u256 { return 0n; } @external go(): void { this.recs.push(R(1n)); this.recs[this.idx()] = R(9n); } }'),
-    ).toContain('JETH331');
+  });
+
+  // The EXPR-position compound-assign lift is scoped to the WHOLE value of a statement. Any deeper
+  // position where hoisting to the statement prelude would move the side effect - conditionally
+  // (ternary branch, `&&`/`||` RHS), per-iteration (loop condition / incrementor), or out of order
+  // (call argument, binary operand) - stays a sound JETH331 reject rather than a miscompile. solc
+  // accepts these (they are sound over-rejections: a clean reject always beats wrong bytes).
+  it('expr-position compound-assign in a conditional / reentrant / nested position stays a JETH331 reject', () => {
+    const reject = (src: string) => {
+      let codes: string[] = [];
+      try {
+        compile(src, { fileName: 'C.jeth' });
+      } catch (e: unknown) {
+        codes = ((e as { diagnostics?: { code: string }[] })?.diagnostics ?? []).map((d) => d.code);
+      }
+      return codes;
+    };
+    const H = '@contract class C { @state xs: u256[]; @state c: u256; f(): u256 { this.c++; return 0n; }';
+    // ternary branch (conditional): the index must not run when the branch is not taken
+    expect(reject(`${H} @external go(t: bool): u256 { let y: u256 = t ? 9n : (this.xs[this.f()] += 1n); return y; } }`)).toContain('JETH331');
+    // && RHS (short-circuit): the index must not run when the LHS is false
+    expect(reject(`${H} @external go(t: bool): bool { let y: bool = t && ((this.xs[this.f()] += 1n) > 0n); return y; } }`)).toContain('JETH331');
+    // while-condition (re-evaluated): the index must run per iteration, not once
+    expect(reject(`${H} @external go(): void { while ((this.xs[this.f()] += 1n) < 3n) {} } }`)).toContain('JETH331');
+    // for-incrementor (re-evaluated): same
+    expect(reject(`${H} @external go(): void { for (let i: u256 = 0n; i < 3n; i = i + (this.xs[this.f()] += 1n)) {} } }`)).toContain('JETH331');
+    // call argument (relative order): the index must run in argument order, not in a prelude
+    expect(reject(`${H} g(a: u256, b: u256): u256 { return a + b; } @external go(): u256 { return this.g(1n, (this.xs[this.f()] += 1n)); } }`)).toContain('JETH331');
+    // binary operand (relative order): same
+    expect(reject(`${H} @external go(): u256 { let y: u256 = 5n + (this.xs[this.f()] += 1n); return y; } }`)).toContain('JETH331');
   });
 });
