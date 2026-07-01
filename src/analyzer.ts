@@ -17047,7 +17047,11 @@ export class Analyzer {
    *  otherwise). `\uNNNN` / `\u{...}` is the UTF-8 of the code point; the simple escapes and line
    *  continuations follow their usual meaning; every other char is UTF-8 encoded. */
   private strLitBytes(node: ts.StringLiteralLike): Uint8Array {
-    return this.decodeStrEscapes(node.getText().slice(1, -1)); // strip the surrounding quote / backtick delimiters
+    const raw = node.getText();
+    // A no-substitution template (`...`) is delimited by backticks, where `` \` `` is a valid escape; a
+    // double/single-quoted string is not, where a backtick is a literal char and `` \` `` is INVALID (solc).
+    const backtickCtx = raw[0] === '`';
+    return this.decodeStrEscapes(raw.slice(1, -1), node, backtickCtx); // strip the surrounding quote / backtick delimiters
   }
 
   /** A template-literal part (head / middle / tail) decoded Solidity-style: strip the part's delimiters
@@ -17056,11 +17060,16 @@ export class Analyzer {
   private templatePartBytes(node: ts.TemplateLiteralLikeNode): Uint8Array {
     const raw = node.getText();
     const content = raw.endsWith('${') ? raw.slice(1, -2) : raw.slice(1, -1);
-    return this.decodeStrEscapes(content);
+    return this.decodeStrEscapes(content, node, /*backtickCtx*/ true); // a template part is backtick-delimited
   }
 
-  /** Decode a string-literal CONTENT (delimiters already stripped) to bytes with Solidity semantics. */
-  private decodeStrEscapes(s: string): Uint8Array {
+  /** Decode a string-literal CONTENT (delimiters already stripped) to bytes with Solidity semantics.
+   *  solc 0.8.35 accepts EXACTLY: `\\ \' \" \n \r \t`, `\xNN` (exactly 2 hex), `\uNNNN` (exactly 4 hex),
+   *  and a `\<newline>` line-continuation (LF / CR / CRLF). A backtick escape `` \` `` is additionally valid
+   *  inside a template literal (backtickCtx) but is an INVALID escape in a double/single-quoted string. Every
+   *  other escape (`\u{...}`, `\U...`, `\b \f \v \0`, octal `\1`..`\8`, and any unknown `\q`) is a ParserError
+   *  ("Invalid escape sequence") in solc, so we reject it with JETH420 rather than silently over-accept. */
+  private decodeStrEscapes(s: string, node: ts.Node, backtickCtx: boolean): Uint8Array {
     const out: number[] = [];
     const pushCp = (cp: number): void => {
       if (cp < 0x80) out.push(cp);
@@ -17068,6 +17077,8 @@ export class Analyzer {
       else if (cp < 0x10000) out.push(0xe0 | (cp >> 12), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
       else out.push(0xf0 | (cp >> 18), 0x80 | ((cp >> 12) & 0x3f), 0x80 | ((cp >> 6) & 0x3f), 0x80 | (cp & 0x3f));
     };
+    const isHex = (c: string | undefined): boolean => c !== undefined && /[0-9a-fA-F]/.test(c);
+    const invalidEscape = (): void => this.diags.error(node, 'JETH420', 'invalid escape sequence in a string literal');
     let i = 0;
     while (i < s.length) {
       if (s[i] !== '\\') {
@@ -17078,25 +17089,31 @@ export class Analyzer {
       }
       const e = s[i + 1];
       switch (e) {
-        case 'x': out.push(parseInt(s.slice(i + 2, i + 4), 16)); i += 4; break; // RAW byte (the fix)
-        case 'u':
-          if (s[i + 2] === '{') { const end = s.indexOf('}', i + 3); pushCp(parseInt(s.slice(i + 3, end), 16)); i = end + 1; }
-          else { pushCp(parseInt(s.slice(i + 2, i + 6), 16)); i += 6; }
+        case 'x': // exactly 2 hex digits -> a single RAW byte
+          if (isHex(s[i + 2]) && isHex(s[i + 3])) { out.push(parseInt(s.slice(i + 2, i + 4), 16)); i += 4; }
+          else { invalidEscape(); i += 2; }
+          break;
+        case 'u': // exactly 4 hex digits -> the code point's UTF-8 (NO `\u{...}` brace form; solc rejects it)
+          if (isHex(s[i + 2]) && isHex(s[i + 3]) && isHex(s[i + 4]) && isHex(s[i + 5])) {
+            pushCp(parseInt(s.slice(i + 2, i + 6), 16)); i += 6;
+          } else { invalidEscape(); i += 2; }
           break;
         case 'n': out.push(0x0a); i += 2; break;
         case 'r': out.push(0x0d); i += 2; break;
         case 't': out.push(0x09); i += 2; break;
-        case 'b': out.push(0x08); i += 2; break;
-        case 'f': out.push(0x0c); i += 2; break;
-        case 'v': out.push(0x0b); i += 2; break;
-        case '0': out.push(0x00); i += 2; break;
         case '\\': out.push(0x5c); i += 2; break;
         case "'": out.push(0x27); i += 2; break;
         case '"': out.push(0x22); i += 2; break;
-        case '`': out.push(0x60); i += 2; break;
+        case '`': // valid only inside a template literal; an invalid escape in a quoted string
+          if (backtickCtx) { out.push(0x60); i += 2; } else { invalidEscape(); i += 2; }
+          break;
         case '\r': i += s[i + 2] === '\n' ? 3 : 2; break; // line continuation (CR / CRLF)
         case '\n': i += 2; break; // line continuation
-        default: { const cp = s.codePointAt(i + 1)!; pushCp(cp); i += 1 + (cp > 0xffff ? 2 : 1); } // unknown escape: keep the char
+        default: { // \b \f \v \0 \U octal and every other unknown escape: solc ParserError
+          invalidEscape();
+          const cp = s.codePointAt(i + 1);
+          i += cp === undefined ? 1 : 1 + (cp > 0xffff ? 2 : 1);
+        }
       }
     }
     return Uint8Array.from(out);
