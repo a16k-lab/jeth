@@ -3705,6 +3705,18 @@ export class Analyzer {
       // Route to the namespace's raw list; planNamespacedStorage lays each ns out from slot 0 and
       // offsets by base(ns). Kept OUT of `out` (rawState) so @storage never shifts an @state slot.
       const list = this.namespacedStorage.get(namespace) ?? [];
+      // Two same-name fields in ONE namespace are two members of the same logical (ERC-7201) struct;
+      // solc rejects "Identifier already declared". Without this they would silently alias the same slot
+      // (an over-acceptance). A different namespace reusing the name is fine (a separate struct).
+      const fieldName = member.name.text;
+      if (list.some((f) => f.name === fieldName)) {
+        this.diags.error(
+          member,
+          'JETH416',
+          `duplicate @storage('${namespace}') field '${fieldName}' (a name is already declared in this namespace)`,
+        );
+        return;
+      }
       list.push({ name: member.name.text, type, initialValue });
       this.namespacedStorage.set(namespace, list);
       return;
