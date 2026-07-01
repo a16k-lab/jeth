@@ -330,4 +330,47 @@ contract C {
     expect(build.linkReferences).toBeUndefined();
     expect(/__\$/.test(build.creationBytecode)).toBe(false); // no link placeholder
   });
+
+  it('a NESTED external library (a library that delegatecalls another library) links + runs byte-identical to solc', async () => {
+    // High.step delegatecalls Low.base, so High's OWN creation bytecode carries a `__$..$__` placeholder
+    // for Low. The deployer must link+deploy Low FIRST, substitute its address into High, deploy High,
+    // then link High into the contract. Exercises the bottom-up topological deploy in Harness.deployLinked
+    // (and its solc mirror deploySolLinked). run(x) = (x + 10) * 2 + 100 = 2x + 120.
+    const jeth = `
+@library class Low {
+  @external @pure base(x: u256): u256 { return x + 10n; }
+}
+@library class High {
+  @external @pure step(x: u256): u256 { return Low.base(x) * 2n; }
+}
+@contract class C {
+  @external @pure run(x: u256): u256 { return High.step(x) + 100n; }
+}`;
+    const sol = `${SPDX}
+library Low {
+  function base(uint256 x) public pure returns (uint256) { return x + 10; }
+}
+library High {
+  function step(uint256 x) public pure returns (uint256) { return Low.base(x) * 2; }
+}
+contract C {
+  function run(uint256 x) external pure returns (uint256) { return High.step(x) + 100; }
+}`;
+    const ctx = await pairLinked(jeth, sol, ['Low', 'High']);
+    // sanity: High carries a link reference to Low in its OWN creation bytecode (the nested case), and the
+    // contract carries a link reference to High. Low references nothing.
+    const highLib = ctx.jb.libraries!.find((l) => l.name === 'High')!;
+    const lowLib = ctx.jb.libraries!.find((l) => l.name === 'Low')!;
+    expect(Object.keys(highLib.linkReferences?.[''] ?? {})).toEqual(['Low']);
+    expect(Object.keys(lowLib.linkReferences?.[''] ?? {})).toEqual([]);
+    expect(Object.keys(ctx.jb.linkReferences![''] ?? {})).toEqual(['High']);
+    for (const [x, expected] of [
+      [5n, 130n],
+      [0n, 120n],
+      [7n, 134n],
+    ] as const) {
+      const r = await expectSame(ctx, encodeCall(sel('run(uint256)'), [x]));
+      expect(BigInt(r.returnHex)).toBe(expected);
+    }
+  });
 });

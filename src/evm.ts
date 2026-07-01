@@ -13,6 +13,10 @@ function hx(s: string): `0x${string}` {
 
 const DEFAULT_CALLER = new Address(hexToBytes(hx('11'.repeat(20))));
 
+/** Link-reference map: { file: { libraryName: [{start, length}] } } - byte offsets of a library's
+ *  placeholder within some bytecode. Mirrors CompileResult.linkReferences / CompiledLibrary.linkReferences. */
+type LinkRefs = Record<string, Record<string, { start: number; length: number }[]>>;
+
 /** A Common with a custom chainId (drives the CHAINID opcode), cancun hardfork. */
 export function customCommon(chainId: number): Common {
   return createCustomCommon({ chainId }, Mainnet, { hardfork: 'cancun' });
@@ -93,31 +97,54 @@ export class Harness {
   async deployLinked(
     build: {
       creationBytecode: string;
-      libraries?: { name: string; creationBytecode: string }[];
-      linkReferences?: Record<string, Record<string, { start: number; length: number }[]>>;
+      libraries?: { name: string; creationBytecode: string; linkReferences?: LinkRefs }[];
+      linkReferences?: LinkRefs;
     },
     opts: { caller?: Address; value?: bigint } = {},
   ): Promise<{ address: Address; libraries: Map<string, Address> }> {
     const deployed = new Map<string, Address>();
-    for (const lib of build.libraries ?? []) {
-      deployed.set(lib.name, await this.deploy(lib.creationBytecode));
-    }
-    let hex = strip0x(build.creationBytecode);
-    // linkReferences: { file: { libName: [{start, length}] } }. start/length are BYTE offsets; the hex
-    // string has 2 chars per byte. Substitute each library's 20-byte address (40 hex) at every position.
-    for (const byLib of Object.values(build.linkReferences ?? {})) {
-      for (const [libName, positions] of Object.entries(byLib)) {
-        const addr = deployed.get(libName);
-        if (!addr) throw new Error(`deployLinked: no deployed library for link reference '${libName}'`);
-        const addrHex = strip0x(addr.toString()).padStart(40, '0');
-        for (const { start, length } of positions) {
-          if (length !== 20) throw new Error(`deployLinked: unexpected link reference length ${length} (expected 20)`);
-          const cstart = start * 2;
-          hex = hex.slice(0, cstart) + addrHex + hex.slice(cstart + 40);
+    // Substitute each already-deployed library's 20-byte address at every link position of `hex0`.
+    // linkReferences: { file: { libName: [{start, length}] } }; start/length are BYTE offsets, the hex
+    // string has 2 chars per byte, so an address is 40 hex chars.
+    const link = (hex0: string, refs?: LinkRefs): string => {
+      let hex = strip0x(hex0);
+      for (const byLib of Object.values(refs ?? {})) {
+        for (const [libName, positions] of Object.entries(byLib)) {
+          const addr = deployed.get(libName);
+          if (!addr) throw new Error(`deployLinked: no deployed library for link reference '${libName}'`);
+          const addrHex = strip0x(addr.toString()).padStart(40, '0');
+          for (const { start, length } of positions) {
+            if (length !== 20) throw new Error(`deployLinked: unexpected link reference length ${length} (expected 20)`);
+            const cstart = start * 2;
+            hex = hex.slice(0, cstart) + addrHex + hex.slice(cstart + 40);
+          }
         }
       }
+      return hex;
+    };
+    const depsOf = (refs?: LinkRefs): string[] => {
+      const s = new Set<string>();
+      for (const byLib of Object.values(refs ?? {})) for (const n of Object.keys(byLib)) s.add(n);
+      return [...s];
+    };
+    // Deploy libraries BOTTOM-UP: an @external library that calls another @external library carries the
+    // callee's placeholder in its own bytecode, so the callee must be deployed and substituted BEFORE the
+    // caller. Repeatedly deploy any library whose link dependencies are already deployed (a DAG of any depth).
+    const pending = [...(build.libraries ?? [])];
+    while (pending.length) {
+      const before = pending.length;
+      for (let i = 0; i < pending.length; i++) {
+        const lib = pending[i]!;
+        if (depsOf(lib.linkReferences).every((d) => deployed.has(d))) {
+          deployed.set(lib.name, await this.deploy(link(lib.creationBytecode, lib.linkReferences)));
+          pending.splice(i, 1);
+          i--;
+        }
+      }
+      if (pending.length === before)
+        throw new Error(`deployLinked: unresolved library link dependency (cycle or missing) among [${pending.map((l) => l.name).join(', ')}]`);
     }
-    const address = await this.deploy(hex, opts);
+    const address = await this.deploy(link(build.creationBytecode, build.linkReferences), opts);
     return { address, libraries: deployed };
   }
 

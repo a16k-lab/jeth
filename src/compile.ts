@@ -26,6 +26,11 @@ export interface CompiledLibrary {
   name: string;
   creationBytecode: string; // hex, no 0x
   runtimeBytecode: string; // hex, no 0x
+  // Positions inside THIS library's OWN creation bytecode where ANOTHER external library's address must
+  // be linked (an @external library that calls another @external library carries the callee's placeholder
+  // in its bytecode). Empty/absent when the library references no other library. Consumed by deployLinked
+  // to link + deploy libraries bottom-up (a callee library is deployed and substituted before its caller).
+  linkReferences?: LinkReferences;
 }
 
 export interface CompileResult {
@@ -166,7 +171,14 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
           },
         ]);
       }
-      return { name: lib.name, creationBytecode: libOut.creationBytecode, runtimeBytecode: libOut.runtimeBytecode };
+      // libOut.creationLinkReferences records where OTHER libraries' placeholders sit inside THIS
+      // library's creation bytecode (present when an @external library calls another @external library).
+      return {
+        name: lib.name,
+        creationBytecode: libOut.creationBytecode,
+        runtimeBytecode: libOut.runtimeBytecode,
+        linkReferences: libOut.creationLinkReferences,
+      };
     });
     linkReferences = out.creationLinkReferences;
   }

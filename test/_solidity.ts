@@ -47,7 +47,9 @@ export type SolLinkReferences = Record<string, Record<string, { start: number; l
 
 export interface SolLinkedBuild {
   contractCreation: string; // hex, no 0x (carries `__$..$__` placeholders)
-  libraries: { name: string; creation: string }[]; // each library's deployable creation bytecode
+  // each library's deployable creation bytecode + its OWN link references (a library that calls another
+  // library carries the callee's placeholder, so it must be linked before it can deploy).
+  libraries: { name: string; creation: string; linkReferences: SolLinkReferences }[];
   linkReferences: SolLinkReferences; // the contract's creation-bytecode placeholder positions
 }
 
@@ -71,7 +73,10 @@ export function compileSolidityLinked(source: string, contractName: string, libN
   const fatal = (out.errors ?? []).filter((e: any) => e.severity === 'error');
   if (fatal.length) throw new Error('solc(Solidity) failed:\n' + fatal.map((e: any) => e.formattedMessage).join('\n'));
   const c = out.contracts['C.sol'][contractName];
-  const libraries = libNames.map((name) => ({ name, creation: out.contracts['C.sol'][name].evm.bytecode.object }));
+  const libraries = libNames.map((name) => {
+    const lb = out.contracts['C.sol'][name].evm.bytecode;
+    return { name, creation: lb.object, linkReferences: (lb.linkReferences ?? {}) as SolLinkReferences };
+  });
   return {
     contractCreation: c.evm.bytecode.object,
     libraries,
@@ -84,18 +89,41 @@ export function compileSolidityLinked(source: string, contractName: string, libN
  *  contract address. */
 export async function deploySolLinked(h: Harness, build: SolLinkedBuild): Promise<Address> {
   const deployed = new Map<string, Address>();
-  for (const lib of build.libraries) deployed.set(lib.name, await h.deploy(lib.creation));
-  let hex = build.contractCreation.startsWith('0x') ? build.contractCreation.slice(2) : build.contractCreation;
-  for (const byLib of Object.values(build.linkReferences)) {
-    for (const [libName, positions] of Object.entries(byLib)) {
-      const addr = deployed.get(libName);
-      if (!addr) throw new Error(`deploySolLinked: no deployed library for '${libName}'`);
-      const addrHex = addr.toString().slice(2).padStart(40, '0');
-      for (const { start } of positions) {
-        const cstart = start * 2;
-        hex = hex.slice(0, cstart) + addrHex + hex.slice(cstart + 40);
+  const link = (hex0: string, refs: SolLinkReferences): string => {
+    let hex = hex0.startsWith('0x') ? hex0.slice(2) : hex0;
+    for (const byLib of Object.values(refs)) {
+      for (const [libName, positions] of Object.entries(byLib)) {
+        const addr = deployed.get(libName);
+        if (!addr) throw new Error(`deploySolLinked: no deployed library for '${libName}'`);
+        const addrHex = addr.toString().slice(2).padStart(40, '0');
+        for (const { start } of positions) {
+          const cstart = start * 2;
+          hex = hex.slice(0, cstart) + addrHex + hex.slice(cstart + 40);
+        }
       }
     }
+    return hex;
+  };
+  const depsOf = (refs: SolLinkReferences): string[] => {
+    const s = new Set<string>();
+    for (const byLib of Object.values(refs)) for (const n of Object.keys(byLib)) s.add(n);
+    return [...s];
+  };
+  // Deploy libraries bottom-up: a library that calls another library carries the callee's placeholder,
+  // so link + deploy the callee first, then the caller (mirrors Harness.deployLinked).
+  const pending = [...build.libraries];
+  while (pending.length) {
+    const before = pending.length;
+    for (let i = 0; i < pending.length; i++) {
+      const lib = pending[i]!;
+      if (depsOf(lib.linkReferences).every((d) => deployed.has(d))) {
+        deployed.set(lib.name, await h.deploy(link(lib.creation, lib.linkReferences)));
+        pending.splice(i, 1);
+        i--;
+      }
+    }
+    if (pending.length === before)
+      throw new Error(`deploySolLinked: unresolved library link dependency among [${pending.map((l) => l.name).join(', ')}]`);
   }
-  return h.deploy(hex);
+  return h.deploy(link(build.contractCreation, build.linkReferences));
 }
