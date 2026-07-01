@@ -189,4 +189,36 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
         `abstract contract A { uint256 av; constructor(uint256 p){ av=p; } } abstract contract B is A { uint256 bv; constructor(){ bv=2; } } abstract contract K is A { uint256 kv; constructor(){ kv=3; } } contract C is A(55), B, K { uint256 cv; constructor(){ cv=4; } }`,
         [], 4));
   });
+
+  // A function marked @override that does NOT override any base function is rejected (JETH374 - the same
+  // code JETH already uses for a base-most @override-with-nothing-to-override), matching solc 0.8.35's
+  // "Function has override specified but does not override anything." A genuine override of a @virtual
+  // base must still compile. (Previously JETH accepted the no-target cases: an over-acceptance.)
+  describe('@override that overrides nothing is rejected (JETH374, matching solc 0.8.35)', () => {
+    it('no base at all', () => {
+      expect(codes('@contract class C { @override @external f(): u256 { return 42n; } }')).toContain('JETH374');
+      expect(solcRejects('contract C { function f() external override returns(uint256){ return 42; } }')).toBe(true);
+    });
+    it('extends a base that does not declare the function', () => {
+      expect(
+        codes('@abstract class A { @state x: u256; } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
+      ).toContain('JETH374');
+      expect(
+        solcRejects('abstract contract A { uint256 x; } contract C is A { function f() external override returns(uint256){ return 1; } }'),
+      ).toBe(true);
+    });
+    it('base declares a DIFFERENT-named virtual function (still overrides nothing)', () => {
+      expect(
+        codes('@abstract class A { @virtual @external g(): u256 { return 0n; } } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
+      ).toContain('JETH374');
+    });
+    it('control: @override of a real @virtual base function still compiles on both (no over-rejection)', () => {
+      expect(
+        codes('@abstract class A { @virtual @external f(): u256 { return 0n; } } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
+      ).toEqual([]);
+      expect(
+        solcRejects('abstract contract A { function f() external virtual returns(uint256){ return 0; } } contract C is A { function f() external override returns(uint256){ return 1; } }'),
+      ).toBe(false);
+    });
+  });
 });
