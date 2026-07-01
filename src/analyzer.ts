@@ -160,6 +160,14 @@ interface RawModifier {
   name: string;
   node: ts.MethodDeclaration;
   params: { name: string; type: JethType }[];
+  // Inheritance metadata (solc modifier override rules mirror function override rules): the contract in
+  // the linearization that declared this modifier, plus @virtual/@override. A @virtual modifier may be
+  // replaced by an @override modifier of the same name in a more-derived contract (the derived body
+  // wins); the pairing is enforced exactly like functions (JETH374/JETH375/JETH369).
+  definingContract?: string;
+  isVirtual?: boolean;
+  isOverride?: boolean;
+  overrideList?: string[]; // the explicit base list of @override(A, B) (a diamond redefinition)
   preStmts: ts.Statement[]; // the statements before the placeholder (the pre-condition guard)
   postStmts: ts.Statement[]; // the statements after the placeholder (run after the wrapped body)
   // The 0-or-N-times shape: the SINGLE `_;` placeholder is nested inside an if/for/while, so the body
@@ -1232,6 +1240,11 @@ export class Analyzer {
     let receiveNode: { member: ts.MethodDeclaration; contract: string } | undefined;
     let fallbackNode: { member: ts.MethodDeclaration; contract: string } | undefined;
     const collectedFns: RawFunction[] = [];
+    // @modifier declarations are gathered here (with defining contract + virtual/override flags) and
+    // resolved AFTER the loop by resolveModifierOverrides: a @virtual base modifier replaced by an
+    // @override derived modifier of the same name is NOT a duplicate (the derived body wins), exactly
+    // like a function override. A genuine SAME-contract duplicate is still JETH046.
+    const collectedMods: RawModifier[] = [];
     for (const c of lin) {
       if (this.isInterfaceClass(c)) continue; // an interface node has no bodies/ctor to collect or chain
       const cn = c.name?.text ?? '<anon>';
@@ -1257,7 +1270,7 @@ export class Analyzer {
           }
           if (decs.includes('error')) this.collectErrorDecl(member);
           else if (decs.includes('event')) this.collectEvent(member);
-          else if (decs.includes('modifier')) this.collectModifier(member);
+          else if (decs.includes('modifier')) this.collectModifier(member, cn, collectedMods);
           else if (member.typeParameters && member.typeParameters.length > 0) {
             // F6: a generic function template - registered for monomorphization (not inherited-keyed;
             // generics are internal-only and not part of the override surface).
@@ -1279,6 +1292,11 @@ export class Analyzer {
       }
       this.ctorChain.push({ contract: cn, node: ctorNode, bases: heritageBases(c), cls: c });
     }
+
+    // Resolve @modifier inheritance: pick the most-derived declaration per name as the registered winner
+    // and enforce the solc virtual/override pairing (a @virtual base may be replaced by an @override
+    // derived; a genuine duplicate or a botched pairing is rejected).
+    this.resolveModifierOverrides(collectedMods, lin);
 
     // Resolve overrides: the winner per (name + param types) is the most-derived definition; it keeps
     // the bare ABI key/selector and is dispatched. Non-winning base versions are kept ONLY as `super`
@@ -4928,13 +4946,17 @@ export class Analyzer {
   /** Phase 5: collect a user-defined @modifier. Increment 1 supports a PRE-ONLY modifier: a single
    *  `_;` placeholder in TAIL position (the last statement). The pre-code is the guard that runs
    *  before the wrapped function body; post-placeholder code and a conditional placeholder are gated. */
-  private collectModifier(member: ts.MethodDeclaration): void {
+  private collectModifier(member: ts.MethodDeclaration, contract: string, out: RawModifier[]): void {
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(member, 'JETH049', 'modifier name must be a plain identifier');
       return;
     }
     const name = member.name.text;
-    if (this.modifiersByName.has(name)) {
+    // A duplicate @modifier of the same name declared in the SAME contract is a genuine redeclaration
+    // (solc: "Identifier already declared") - reject. A same-name declaration in a DIFFERENT contract
+    // of the inheritance chain is an OVERRIDE (@virtual base -> @override derived); it is resolved by
+    // resolveModifierOverrides after the whole chain is collected, so it must NOT error here.
+    if (out.some((m) => m.name === name && m.definingContract === contract)) {
       this.diags.error(member, 'JETH046', `duplicate @modifier '${name}'`);
       return;
     }
@@ -5023,14 +5045,150 @@ export class Analyzer {
     const useFlat = placeholders.length === 1 && topIdx >= 0 && !hasBareReturn;
     const preStmts = useFlat ? stmts.slice(0, topIdx) : [];
     const postStmts = useFlat ? stmts.slice(topIdx + 1) : [];
-    this.modifiersByName.set(name, {
+    const overrideCall = decoratorCall(member, 'override');
+    const overrideList =
+      overrideCall && overrideCall.arguments.length > 0
+        ? overrideCall.arguments.map((a) => (ts.isIdentifier(a) ? a.text : a.getText()))
+        : undefined;
+    out.push({
       name,
       node: member,
       params,
+      definingContract: contract,
+      isVirtual: decs.includes('virtual'),
+      isOverride: decs.includes('override'),
+      overrideList,
       preStmts,
       postStmts,
       bodyStmts: useFlat ? undefined : [...stmts],
     });
+  }
+
+  /** Resolve @modifier inheritance across the linearization (collectedMods is in most-derived-FIRST
+   *  contract order). For each modifier NAME, the FIRST (most-derived) declaration is the winner that
+   *  gets registered and inlined; more-base same-name declarations are the overridden versions. This
+   *  mirrors the FUNCTION override resolver (resolveOverrides) exactly - a @modifier participates in the
+   *  same virtual/override discipline solc applies to it, so the codes/logic are kept in lockstep:
+   *   - a derived redefinition (an ANCESTOR-contract base version exists) MUST carry @override (JETH374);
+   *   - the overridden base version MUST be @virtual (JETH375);
+   *   - an intermediate override that is itself overridden MUST be @virtual (JETH376);
+   *   - an @override with NO more-base version overrides nothing (JETH369);
+   *   - an override may not change the modifier's parameter signature (JETH377);
+   *   - a diamond redefinition (2+ maximal sibling bases) must name them all in @override(A, B) (JETH381),
+   *     and every name in the list must be exactly a directly-overridden branch head (JETH415).
+   *  A same-name modifier in a single contract was already rejected as a duplicate (JETH046) at collect
+   *  time, so each name has at most one declaration per contract here. The `baseBelow` selection uses the
+   *  ANCESTOR relation (not raw linearization order) so two UNRELATED sibling bases that each declare the
+   *  same @virtual modifier are NOT mistaken for an override pair. */
+  private resolveModifierOverrides(collectedMods: RawModifier[], lin: ts.ClassDeclaration[]): void {
+    const linOrder = lin.map((c) => c.name?.text ?? '<anon>');
+    const linIndex = new Map(linOrder.map((n, i) => [n, i]));
+    // Transitive bases of each contract (same computation the function resolver uses).
+    const byClassName = new Map(lin.map((c) => [c.name?.text ?? '<anon>', c]));
+    const basesOf = new Map<string, Set<string>>();
+    const computeBases = (cn: string): Set<string> => {
+      const cached = basesOf.get(cn);
+      if (cached) return cached;
+      const out = new Set<string>();
+      basesOf.set(cn, out); // set first to tolerate a (rejected-elsewhere) cycle
+      const cls = byClassName.get(cn);
+      if (cls)
+        for (const b of heritageBases(cls)) {
+          out.add(b.name);
+          for (const bb of computeBases(b.name)) out.add(bb);
+        }
+      return out;
+    };
+    for (const cn of linOrder) computeBases(cn);
+    const sigKey = (m: RawModifier): string => m.params.map((p) => canonicalName(p.type)).join(',');
+
+    const byName = new Map<string, RawModifier[]>();
+    for (const m of collectedMods) {
+      const g = byName.get(m.name);
+      if (g) g.push(m);
+      else byName.set(m.name, [m]);
+    }
+    for (const versions of byName.values()) {
+      // Stable-sort most-derived-first by the defining contract's linearization index (collection order
+      // already follows the C3 order, so this is a no-op that documents the invariant).
+      versions.sort((a, b) => (linIndex.get(a.definingContract!) ?? 0) - (linIndex.get(b.definingContract!) ?? 0));
+      const winner = versions[0]!;
+      for (let i = 0; i < versions.length; i++) {
+        const v = versions[i]!;
+        const isMostDerived = i === 0;
+        // v overrides only a base declared in an ANCESTOR contract of v - never a mere sibling.
+        const vBases = basesOf.get(v.definingContract!);
+        const baseBelow = versions.slice(i + 1).find((b) => vBases?.has(b.definingContract!));
+        if (baseBelow) {
+          if (!v.isOverride)
+            this.diags.error(
+              v.node,
+              'JETH374',
+              `@modifier '${v.name}' in '${v.definingContract}' overrides a base @modifier but is missing @override`,
+            );
+          if (!baseBelow.isVirtual)
+            this.diags.error(
+              v.node,
+              'JETH375',
+              `@modifier '${v.name}' overrides '${baseBelow.definingContract}.${baseBelow.name}', which is not @virtual`,
+            );
+          if (!isMostDerived && !v.isVirtual)
+            this.diags.error(
+              v.node,
+              'JETH376',
+              `@modifier '${v.name}' in '${v.definingContract}' is overridden by a more-derived contract but is not @virtual`,
+            );
+          // solc: "Override changes modifier signature" - the parameter types must match exactly.
+          if (sigKey(v) !== sigKey(baseBelow))
+            this.diags.error(
+              v.node,
+              'JETH377',
+              `override of @modifier '${v.name}' must keep the exact parameter signature of '${baseBelow.definingContract}.${baseBelow.name}'`,
+            );
+        } else if (v.isOverride) {
+          this.diags.error(
+            v.node,
+            'JETH369',
+            `@modifier '${v.name}' in '${v.definingContract}' has @override but overrides no base @modifier`,
+          );
+        }
+      }
+
+      // DIAMOND override-list completeness + membership (mirrors JETH381 / JETH415 for functions). The
+      // branch heads = for each DIRECT base of the winner's contract, the most-derived overridden contract
+      // reachable within that base's hierarchy. With 2+ heads the winner must name them all; every listed
+      // name must be exactly a head.
+      const overridden = [...new Set(versions.slice(1).map((v) => v.definingContract!))];
+      const winnerCls = this.classByName.get(winner.definingContract!);
+      const directBases = winnerCls ? heritageBases(winnerCls).map((h) => h.name) : [];
+      const definerWithin = (base: string): string | undefined => {
+        const cand = overridden.filter((x) => x === base || (basesOf.get(base)?.has(x) ?? false));
+        return cand.find((x) => !cand.some((y) => y !== x && basesOf.get(y)?.has(x)));
+      };
+      const heads = [...new Set(directBases.map(definerWithin).filter((x): x is string => x !== undefined))];
+      const list = winner.overrideList ?? [];
+      const headSet = new Set(heads);
+      const seen = new Set<string>();
+      const badName = list.find((n) => !headSet.has(n) || seen.has(n) || (seen.add(n), false));
+      if (badName !== undefined)
+        this.diags.error(
+          winner.node,
+          'JETH415',
+          `@modifier '${winner.name}' names '${badName}' in its @override list, which is not a directly-overridden base contract`,
+        );
+      if (heads.length >= 2) {
+        const missing = heads.filter((h) => !list.includes(h));
+        if (missing.length > 0)
+          this.diags.error(
+            winner.node,
+            'JETH381',
+            `@modifier '${winner.name}' overrides more than one base contract; it must specify @override(${heads.join(', ')})`,
+          );
+      }
+
+      // Register the most-derived declaration as the winner (the derived body wins - plain replacement).
+      this.modifiersByName.set(winner.name, winner);
+    }
   }
 
   private isPlaceholderStmt(s: ts.Statement): boolean {

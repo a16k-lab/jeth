@@ -527,4 +527,100 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
         ),
       ).toEqual([]));
   });
+
+  // A @virtual @modifier in a base contract may be replaced by an @override @modifier of the same name
+  // in a derived contract (plain replacement: the derived body wins). This mirrors solc's function
+  // override discipline applied to modifiers; the same virtual/override pairing is enforced.
+  describe('@override on a @modifier (virtual/override modifier discipline)', () => {
+    it('a @virtual base modifier is replaced by a derived @override modifier (derived body wins)', async () => {
+      // base require(false) would always revert; derived require(true) relaxes it, so f() succeeds.
+      const J = `@abstract class A { @virtual @modifier g() { require(false, "base"); _; } } @contract class C extends A { @override @modifier g() { require(true); _; } @state n: u256; @external @g f(): u256 { this.n = this.n + 1n; return this.n; } }`;
+      const S = `abstract contract A { modifier g() virtual { require(false,"base"); _; } } contract C is A { modifier g() override { require(true); _; } uint256 n; function f() external g returns (uint256) { n=n+1; return n; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      const rj = await j.h.call(j.a, '0x' + sel('f()'));
+      const rs = await s.h.call(s.a, '0x' + sel('f()'));
+      expect(rj.success).toBe(true);
+      expect(rj.success).toBe(rs.success);
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+    });
+
+    it('the derived override modifier can TIGHTEN the guard (base true -> derived false reverts f())', async () => {
+      const J = `@abstract class A { @virtual @modifier g() { require(true); _; } } @contract class C extends A { @override @modifier g() { require(false, "der"); _; } @state n: u256; @external @g f(): u256 { this.n = 1n; return this.n; } }`;
+      const S = `abstract contract A { modifier g() virtual { require(true); _; } } contract C is A { modifier g() override { require(false,"der"); _; } uint256 n; function f() external g returns (uint256) { n=1; return n; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      const rj = await j.h.call(j.a, '0x' + sel('f()'));
+      const rs = await s.h.call(s.a, '0x' + sel('f()'));
+      expect(rj.success).toBe(false);
+      expect(rj.success).toBe(rs.success);
+      expect(rj.returnHex).toBe(rs.returnHex);
+    });
+
+    it('a parameterised @virtual/@override modifier pair is byte-identical', async () => {
+      const J = `@abstract class A { @virtual @modifier g(x: u256) { require(x > 0n, "a"); _; } } @contract class C extends A { @override @modifier g(x: u256) { require(x > 5n, "c"); _; } @state n: u256; @external @g(3n) f(): u256 { this.n = this.n + 1n; return this.n; } }`;
+      const S = `abstract contract A { modifier g(uint256 x) virtual { require(x>0,"a"); _; } } contract C is A { modifier g(uint256 x) override { require(x>5,"c"); _; } uint256 n; function f() external g(3) returns (uint256) { n=n+1; return n; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      const rj = await j.h.call(j.a, '0x' + sel('f()'));
+      const rs = await s.h.call(s.a, '0x' + sel('f()'));
+      expect(rj.success).toBe(false); // derived requires x>5, called with 3
+      expect(rj.success).toBe(rs.success);
+      expect(rj.returnHex).toBe(rs.returnHex);
+    });
+
+    it('a valid diamond @override(A, B) modifier is accepted and byte-identical', async () => {
+      const J = `@abstract class A { @virtual @modifier g() { require(true); _; } } @abstract class B { @virtual @modifier g() { require(true); _; } } @contract class C extends A, B { @override(A, B) @modifier g() { require(false, "won"); _; } @state n: u256; @external @g f(): u256 { this.n = 1n; return this.n; } }`;
+      const S = `abstract contract A { modifier g() virtual { require(true); _; } } abstract contract B { modifier g() virtual { require(true); _; } } contract C is A, B { modifier g() override(A,B) { require(false,"won"); _; } uint256 n; function f() external g returns (uint256) { n=1; return n; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      const rj = await j.h.call(j.a, '0x' + sel('f()'));
+      const rs = await s.h.call(s.a, '0x' + sel('f()'));
+      expect(rj.success).toBe(false);
+      expect(rj.returnHex).toBe(rs.returnHex);
+    });
+
+    it('a genuine same-contract duplicate @modifier still rejects (JETH046, solc also rejects)', () => {
+      const J = `@contract class C { @modifier g() { require(true); _; } @modifier g() { require(false); _; } @state n: u256; @external @g f(): void { this.n = 1n; } }`;
+      const S = `contract C { modifier g(){ require(true); _; } modifier g(){ require(false); _; } uint256 n; function f() external g { n=1; } }`;
+      expect(codes(J)).toContain('JETH046');
+      expect(solcRejects(S)).toBe(true);
+    });
+
+    it('an @override modifier overriding a NON-@virtual base rejects (JETH375, solc also rejects)', () => {
+      const J = `@abstract class A { @modifier g() { require(true); _; } } @contract class C extends A { @override @modifier g() { require(true); _; } @state n: u256; @external @g f(): void { this.n = 1n; } }`;
+      const S = `abstract contract A { modifier g(){ require(true); _; } } contract C is A { modifier g() override { require(true); _; } uint256 n; function f() external g { n=1; } }`;
+      expect(codes(J)).toContain('JETH375');
+      expect(solcRejects(S)).toBe(true);
+    });
+
+    it('a derived modifier redefining a @virtual base WITHOUT @override rejects (JETH374, solc also rejects)', () => {
+      const J = `@abstract class A { @virtual @modifier g() { require(true); _; } } @contract class C extends A { @modifier g() { require(true); _; } @state n: u256; @external @g f(): void { this.n = 1n; } }`;
+      const S = `abstract contract A { modifier g() virtual { require(true); _; } } contract C is A { modifier g(){ require(true); _; } uint256 n; function f() external g { n=1; } }`;
+      expect(codes(J)).toContain('JETH374');
+      expect(solcRejects(S)).toBe(true);
+    });
+
+    it('an @override modifier with no base of that name rejects (JETH369, solc also rejects)', () => {
+      const J = `@contract class C { @override @modifier g() { require(true); _; } @state n: u256; @external @g f(): void { this.n = 1n; } }`;
+      const S = `contract C { modifier g() override { require(true); _; } uint256 n; function f() external g { n=1; } }`;
+      expect(codes(J)).toContain('JETH369');
+      expect(solcRejects(S)).toBe(true);
+    });
+
+    it('an override that changes the modifier parameter signature rejects (JETH377, solc also rejects)', () => {
+      const J = `@abstract class A { @virtual @modifier g(x: u256) { require(x > 0n); _; } } @contract class C extends A { @override @modifier g(x: address) { require(x != address(0n)); _; } @state n: u256; @external @g(address(0n)) f(): void { this.n = 1n; } }`;
+      const S = `abstract contract A { modifier g(uint256 x) virtual { require(x>0); _; } } contract C is A { modifier g(address x) override { require(x!=address(0)); _; } uint256 n; function f() external g(address(0)) { n=1; } }`;
+      expect(codes(J)).toContain('JETH377');
+      expect(solcRejects(S)).toBe(true);
+    });
+
+    it('a bare @override on a diamond modifier (2 base branches) requires the full list (JETH381, solc also rejects)', () => {
+      const J = `@abstract class A { @virtual @modifier g() { require(true); _; } } @abstract class B { @virtual @modifier g() { require(true); _; } } @contract class C extends A, B { @override @modifier g() { require(true); _; } @state n: u256; @external @g f(): void { this.n = 1n; } }`;
+      const S = `abstract contract A { modifier g() virtual { require(true); _; } } abstract contract B { modifier g() virtual { require(true); _; } } contract C is A, B { modifier g() override { require(true); _; } uint256 n; function f() external g { n=1; } }`;
+      expect(codes(J)).toContain('JETH381');
+      expect(solcRejects(S)).toBe(true);
+    });
+  });
 });
