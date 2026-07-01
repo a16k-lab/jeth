@@ -2677,7 +2677,15 @@ ${indent(runtime, 6)}
         // with NO length words and NO offset tables (a value leaf as its word; a bytes/string leaf as
         // its content padded to a 32-byte boundary; nested arrays concatenated). Built from the
         // materializeArrayArg ABI tail. Verified byte-identical to solc.
-        const { mp } = this.materializeArrayArg(arg, ctx, out);
+        // A DYNAMIC-outer array (bytes[]/string[]/u256[][]) and a CALLDATA-sourced FIXED-outer array
+        // ride materializeArrayArg's ABI tail. A MEMORY-sourced FIXED-outer array (a memAggregate local /
+        // literal Arr<bytes,N>/Arr<string,N>/Arr<u256[],N>) is intentionally NOT an abi.encode arg
+        // (Edge D), so materializeArrayArg would throw JETH900; build its N-word-offset-table ABI tail
+        // directly from the memory image instead. Both feed encodeArrayTopicBlob, whose fixed-outer
+        // branch (base = tail) walks exactly this offset table.
+        const { mp } = this.isMemFixedDynLeafArg(arg)
+          ? this.materializeFixedDynLeafTail(arg, ctx, out)
+          : this.materializeArrayArg(arg, ctx, out);
         const blob = this.encodeArrayTopicBlob(p.type as JethType & { kind: 'array' }, mp, out);
         const topic = this.fresh();
         out.push(`let ${topic} := keccak256(${blob.mp}, ${blob.size})`);
@@ -2711,7 +2719,15 @@ ${indent(runtime, 6)}
         // a non-indexed DYNAMIC struct: a head offset + its head/tail blob in the tail.
         dataSlot[i] = this.encodeDynStructToBlob(arg, ctx, out);
       } else if (p.type.kind === 'array') {
-        dataSlot[i] = this.materializeArrayArg(arg, ctx, out); // {mp, size}: ABI tail blob (G3)
+        // a MEMORY-sourced FIXED-outer dynamic-element data array (a memAggregate local / literal
+        // Arr<bytes,N>/Arr<string,N>/Arr<u256[],N>): its whole value is dynamic, emitted behind a head
+        // offset + its abi.encode tail. materializeArrayArg rejects this fixed-outer aggregate (Edge D) -
+        // JETH900 on input solc accepts - so build the tail (offset table + per-element tails, no length
+        // word) from the memory image. Byte-identical to solc's log data (verified). A DYNAMIC-outer array
+        // and a CALLDATA-sourced fixed-outer array keep the materializeArrayArg ABI tail.
+        dataSlot[i] = this.isMemFixedDynLeafArg(arg)
+          ? this.materializeFixedDynLeafTail(arg, ctx, out)
+          : this.materializeArrayArg(arg, ctx, out); // {mp, size}: ABI tail blob (G3)
       } else {
         // a static-value data word: bind to a temp so the value is captured at eval time.
         const t = this.fresh();
@@ -7171,6 +7187,40 @@ ${indent(runtime, 6)}
     const size = this.fresh();
     out.push(`let ${size} := ${sizeExpr}`);
     return { mp, size };
+  }
+
+  /** A MEMORY-sourced FIXED-outer dynamic-element array value (Arr<bytes,N>/Arr<string,N>/Arr<u256[],N>)
+   *  that materializeArrayArg throws JETH900 on: a fixed `Arr<T,N>` local is a `memAggregate`, or an
+   *  inline literal is an `arrayLit`. (A fixed-outer type never has a memArray/memArrayExpr base - those
+   *  are DYNAMIC-array locals - and never a newArray/call - those yield dynamic arrays.) A CALLDATA /
+   *  STORAGE source is NOT matched here: those ride materializeArrayArg's existing echoParam /
+   *  abiEncFromStorage tail, which is already byte-identical. Routes the @event topic/data arg to
+   *  materializeFixedDynLeafTail (nestedMemImagePtr + abiEncFromMem). */
+  private isMemFixedDynLeafArg(a: Expr): boolean {
+    if (a.type.kind !== 'array' || a.type.length === undefined || !isDynamicType(a.type)) return false;
+    return a.kind === 'memAggregate' || a.kind === 'arrayLit';
+  }
+
+  /** Build the ABI tail (an N-word offset table relative to `mp`, then per-element tails; NO length
+   *  word) for a FIXED-outer dynamic-element event array (Arr<bytes,N>, Arr<string,N>, Arr<u256[],N>,
+   *  ...). materializeArrayArg intentionally rejects these fixed-outer aggregates as an abi.encode /
+   *  pass-as-arg (Edge D), and it also threw JETH900 for them here (an @event data / indexed-topic arg
+   *  from a memAggregate/literal source), a CRASH on input solc accepts. Instead resolve the
+   *  pointer-headed memory image (nestedMemImagePtr: a memAggregate local, a literal, a memArray) and
+   *  re-encode it into a fresh tail via abiEncFromMem's fixed-outer-dynamic branch. `{mp, size}` is the
+   *  self-contained ABI tail of the fixed dynamic-element aggregate: as non-indexed @event DATA it is
+   *  copied verbatim behind a head offset (byte-identical to solc's log data); as an indexed TOPIC it is
+   *  the exact `tail` encodeArrayTopicBlob's fixed-outer branch walks (base = mp, offsets relative to
+   *  base), so keccak256 of the packed-padded preimage == solc's topic. Verified vs solc for bytes[2]/
+   *  [3], string[2] with a >31-byte leaf, and uint256[][2]. */
+  private materializeFixedDynLeafTail(arg: Expr, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
+    const img = this.nestedMemImagePtr(arg, ctx, out);
+    const dst = this.fresh();
+    out.push(`let ${dst} := mload(0x40)`);
+    const sz = this.fresh();
+    out.push(`let ${sz} := ${this.abiEncFromMem(arg.type, img, dst, ctx, out)}`);
+    out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+    return { mp: dst, size: sz };
   }
 
   /** Materialize a whole STATIC fixed-array / struct value to a fresh memory blob of ABI-encoded

@@ -131,6 +131,65 @@ describe('dynamic-aggregate event params (indexed topic + non-indexed data) vs S
     }
   });
 
+  it('a MEMORY-local FIXED-outer dynamic-leaf array (Arr<bytes,N>/Arr<string,N>/Arr<u256[],N>) as an indexed topic or non-indexed data matches solc', async () => {
+    // Previously JETH900-crashed: materializeArrayArg rejects a fixed-outer-dynamic aggregate (Edge D),
+    // but the analyzer accepts it as an @event param (solc does too). The topic is keccak256 of the
+    // packed-padded preimage (each leaf padded to a word, no length/offset); the non-indexed data is the
+    // fixed-outer abi.encode tail behind a head offset. Both are built from the memory image via
+    // abiEncFromMem. Byte-identical to solc across bytes[2]/[3], string[2] with a >31-byte leaf,
+    // uint256[][2], a nested bytes[2][2], an inline literal, and an anonymous event.
+    const LONG = 'this leaf is definitely longer than thirty-two bytes for the topic test';
+    const shapes: { name: string; jeth: string; sol: string }[] = [
+      {
+        name: 'idx Arr<bytes,2> local',
+        jeth: '@contract class C { @event E(@indexed d: Arr<bytes,2>); @external go(): void { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
+        sol: 'contract C { event E(bytes[2] indexed d); function go() external { bytes[2] memory a = [bytes("ab"), bytes("cd")]; emit E(a); } }',
+      },
+      {
+        name: 'idx Arr<string,2> long-leaf local',
+        jeth: `@contract class C { @event E(@indexed d: Arr<string,2>); @external go(): void { let a: Arr<string,2> = ["ab", "${LONG}"]; emit(E(a)); } }`,
+        sol: `contract C { event E(string[2] indexed d); function go() external { string[2] memory a = ["ab", "${LONG}"]; emit E(a); } }`,
+      },
+      {
+        name: 'idx Arr<u256[],2> local',
+        jeth: '@contract class C { @event E(@indexed d: Arr<u256[],2>); @external go(): void { let a: Arr<u256[],2> = [[1n,2n],[3n]]; emit(E(a)); } }',
+        sol: 'contract C { event E(uint256[][2] indexed d); function go() external { uint256[] memory x = new uint256[](2); x[0]=1; x[1]=2; uint256[] memory y = new uint256[](1); y[0]=3; uint256[][2] memory a = [x, y]; emit E(a); } }',
+      },
+      {
+        name: 'non-idx Arr<bytes,2> local',
+        jeth: '@contract class C { @event E(d: Arr<bytes,2>); @external go(): void { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
+        sol: 'contract C { event E(bytes[2] d); function go() external { bytes[2] memory a = [bytes("ab"), bytes("cd")]; emit E(a); } }',
+      },
+      {
+        name: 'idx inline Arr<bytes,2> literal',
+        jeth: '@contract class C { @event E(@indexed d: Arr<bytes,2>); @external go(): void { emit(E([bytes("ab"), bytes("cd")])); } }',
+        sol: 'contract C { event E(bytes[2] indexed d); function go() external { emit E([bytes("ab"), bytes("cd")]); } }',
+      },
+      {
+        name: 'idx nested Arr<Arr<bytes,2>,2> local',
+        jeth: '@contract class C { @event E(@indexed d: Arr<Arr<bytes,2>,2>); @external go(): void { let a: Arr<Arr<bytes,2>,2> = [[bytes("ab"),bytes("cd")],[bytes("ef"),bytes("gh")]]; emit(E(a)); } }',
+        sol: 'contract C { event E(bytes[2][2] indexed d); function go() external { bytes[2][2] memory a = [[bytes("ab"),bytes("cd")],[bytes("ef"),bytes("gh")]]; emit E(a); } }',
+      },
+      {
+        name: 'anonymous idx Arr<bytes,2> local',
+        jeth: '@contract class C { @event @anonymous E(@indexed d: Arr<bytes,2>); @external go(): void { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
+        sol: 'contract C { event E(bytes[2] indexed d) anonymous; function go() external { bytes[2] memory a = [bytes("ab"), bytes("cd")]; emit E(a); } }',
+      },
+    ];
+    for (const c of shapes) {
+      const hj = await Harness.create();
+      const hs = await Harness.create();
+      const aj: Address = await hj.deploy(compile(c.jeth, { fileName: 'C.jeth' }).creationBytecode);
+      const as: Address = await hs.deploy(compileSolidity(SPDX + c.sol, 'C').creation);
+      const rj = await hj.call(aj, sel('go()'));
+      const rs = await hs.call(as, sel('go()'));
+      expect(rj.success, `${c.name} success`).toBe(rs.success);
+      const lj = JSON.stringify(rj.logs?.map((l) => ({ t: l.topics, d: l.data })) ?? []);
+      const ls = JSON.stringify(rs.logs?.map((l) => ({ t: l.topics, d: l.data })) ?? []);
+      expect(lj, `${c.name} log`).toBe(ls);
+    }
+  });
+
   it('an indexed dynamic-struct-element array is now ACCEPTED (OR5, packed-padded struct topic)', () => {
     // Previously a sound reject; the topic codec now encodes each struct element's members
     // packed-padded (byte-identical to solc, verified in audit-over-rejections.test.ts). A struct
