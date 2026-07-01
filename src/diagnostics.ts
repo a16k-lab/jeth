@@ -38,12 +38,31 @@ export class DiagnosticBag {
     return { line: line + 1, column: character + 1, length: node.getWidth(this.sourceFile) };
   }
 
+  /** True if an identical diagnostic (same severity, code, message, and source span) is already recorded.
+   *  Speculative resolvers (e.g. resolveArrayExpr) may run for the same node several times in one analysis;
+   *  collapsing exact duplicates keeps the reported set clean without changing any accept/reject decision. */
+  private isDuplicate(
+    severity: Severity,
+    code: string,
+    message: string,
+    loc: Pick<Diagnostic, 'line' | 'column' | 'length'>,
+  ): boolean {
+    return this.items.some(
+      (d) =>
+        d.severity === severity && d.code === code && d.message === message && d.line === loc.line && d.column === loc.column,
+    );
+  }
+
   error(node: ts.Node, code: string, message: string): void {
-    this.items.push({ severity: 'error', code, message, file: this.fileName, ...this.at(node) });
+    const loc = this.at(node);
+    if (this.isDuplicate('error', code, message, loc)) return;
+    this.items.push({ severity: 'error', code, message, file: this.fileName, ...loc });
   }
 
   warn(node: ts.Node, code: string, message: string): void {
-    this.items.push({ severity: 'warning', code, message, file: this.fileName, ...this.at(node) });
+    const loc = this.at(node);
+    if (this.isDuplicate('warning', code, message, loc)) return;
+    this.items.push({ severity: 'warning', code, message, file: this.fileName, ...loc });
   }
 
   get hasErrors(): boolean {

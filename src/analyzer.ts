@@ -30,6 +30,7 @@ import {
   isNestedValueArray,
   isAggregateLeafArray,
   isStaticStructFixedLeafArray,
+  isDynBytesFixedLeafArray,
   isStaticStructAnyLeafArray,
   isDynStructLeaf,
   isDynStructLeafArrayField,
@@ -7775,6 +7776,7 @@ export class Analyzer {
       declared.kind === 'array' &&
       (isAggregateLeafArray(declared) ||
         isStaticStructFixedLeafArray(declared) ||
+        isDynBytesFixedLeafArray(declared) ||
         (isStaticStructAnyLeafArray(declared) && declared.length === undefined))
     ) {
       const fixedOuter = declared.length !== undefined;
@@ -10240,10 +10242,14 @@ export class Analyzer {
         }
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
+        const sIdx = this.coerce(index, U256, node.argumentExpression);
+        // a const-OOB index into a FIXED-outer memory array (Arr<string,N>/Arr<bytes,N>) is a solc compile
+        // error (JETH211); a dynamic-outer / runtime index is bounds-checked at runtime (Panic 0x32).
+        if (!this.checkArrExprBound(arr, sIdx, node.argumentExpression)) return undefined;
         // a STORAGE bytes[]/string[] element write touches state; a MEMORY one (bs[i] = <bytes>) is a
         // local re-point (reference assignment), so it stays @pure/@view-clean.
         if (!memSrc) this.currentWritesState = true;
-        return { kind: 'strArrayElem', type: arr.elem, arr, index: this.coerce(index, U256, node.argumentExpression) };
+        return { kind: 'strArrayElem', type: arr.elem, arr, index: sIdx };
       }
       // this.dd[i] = <array>: a whole inner-array element write. A DYNAMIC inner array
       // (`u256[]`) deep-copies into the element's length slot (codegen copyArrayValueIntoStorage);
@@ -11229,6 +11235,14 @@ export class Analyzer {
     return true;
   }
 
+  /** A const-index OOB check for a resolved ArrayExpr that carries a FIXED outer length (memFixedLen) -
+   *  the pointer-headed fixed memory arrays (Arr<u256[],N>, Arr<P,N>, Arr<string,N>, ...). solc rejects a
+   *  compile-time-constant index >= N at compile time (JETH211); a runtime/dynamic-outer index is checked
+   *  at runtime (Panic 0x32). Returns true (ok) when there is no fixed length or the index is in range. */
+  private checkArrExprBound(arr: ArrayExpr, idx: Expr, node: ts.Node): boolean {
+    return arr.memFixedLen === undefined || this.checkMemElemBound(idx, arr.memFixedLen, node);
+  }
+
   /** Resolve `this.arr` or an array param into an ArrayExpr (single-level). */
   private resolveArrayExpr(node: ts.Expression): ArrayExpr | undefined {
     node = stripParens(node); // (xs)[i] / ((this.a))[i] index a parenthesized array base
@@ -11371,6 +11385,18 @@ export class Analyzer {
           memStaticElem: this.memElemStatic(at.element),
         };
       }
+      // Edge D: a FIXED bytes/string-leaf array MEMORY local registered as a memAggregate (Arr<string,N>,
+      // Arr<bytes,N>): N POINTER words (no [len] header), each -> a [len][data] blob. xs[i] reads the i-th
+      // pointer word as the blob pointer (memStaticElem = false: a bytes/string element is a reference), with
+      // a runtime bounds check (i >= N -> Panic 0x32), exactly like a string[] element but header-less.
+      if (at && at.kind === 'array' && isDynBytesFixedLeafArray(at)) {
+        return {
+          base: { kind: 'memArrayExpr', expr: { kind: 'memAggregate', type: at, local: node.text } },
+          elem: at.element,
+          memFixedLen: at.length,
+          memStaticElem: this.memElemStatic(at.element),
+        };
+      }
       // a dynamic array param, OR a fixed array of a DYNAMIC element (Arr<dyn,N>),
       // both bound at codegen as a calldata array (the latter with a constant length).
       // Exclude a memory aggregate local (handled just above) so a fixed-of-dynamic memory local is
@@ -11399,6 +11425,8 @@ export class Analyzer {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
+        // a const-OOB OUTER index into a FIXED-outer nested array (Arr<Arr<..>,N>) is a solc compile error.
+        if (!this.checkArrExprBound(baseArr, idx, node.argumentExpression)) return undefined;
         const inner = baseArr.elem as JethType & { kind: 'array' }; // the inner array type
         const getInner: Expr = { kind: 'arrayGet', type: inner, arr: baseArr, index: idx };
         return {
@@ -11768,7 +11796,11 @@ export class Analyzer {
     // (Batch A: Arr<P,N>, Arr<Arr<P,N>,M>, Arr<P,N>[][]) - both reach the nested-element resolver, which
     // picks the value/struct/array branch by the element type.
     const at = this.memAggregateLocals.get(cur.text);
-    return at !== undefined && at.kind === 'array' && (isNestedValueArray(at) || isStaticStructFixedLeafArray(at));
+    return (
+      at !== undefined &&
+      at.kind === 'array' &&
+      (isNestedValueArray(at) || isStaticStructFixedLeafArray(at) || isDynBytesFixedLeafArray(at))
+    );
   }
 
   /** True iff `node` is an element access `<arr>[i]` whose array `<arr>` is ROOTED at `this.`
@@ -14146,22 +14178,16 @@ export class Analyzer {
         if (isBytesLike(baseArr.elem)) {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
-          return {
-            kind: 'strArrayElem',
-            type: baseArr.elem,
-            arr: baseArr,
-            index: this.coerce(index, U256, node.argumentExpression),
-          };
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          if (!this.checkArrExprBound(baseArr, idx, node.argumentExpression)) return undefined;
+          return { kind: 'strArrayElem', type: baseArr.elem, arr: baseArr, index: idx };
         }
         if (isStaticValueType(baseArr.elem)) {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
-          return {
-            kind: 'arrayGet',
-            type: baseArr.elem,
-            arr: baseArr,
-            index: this.coerce(index, U256, node.argumentExpression),
-          };
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          if (!this.checkArrExprBound(baseArr, idx, node.argumentExpression)) return undefined;
+          return { kind: 'arrayGet', type: baseArr.elem, arr: baseArr, index: idx };
         }
         if (baseArr.elem.kind === 'array') {
           // a still-deeper inner array (p.grid[i] where grid is u256[][]): yield the whole inner array
@@ -14183,12 +14209,9 @@ export class Analyzer {
         if (isStaticValueType(baseArr.elem)) {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
-          return {
-            kind: 'arrayGet',
-            type: baseArr.elem,
-            arr: baseArr,
-            index: this.coerce(index, U256, node.argumentExpression),
-          };
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          if (!this.checkArrExprBound(baseArr, idx, node.argumentExpression)) return undefined;
+          return { kind: 'arrayGet', type: baseArr.elem, arr: baseArr, index: idx };
         }
         // Residual B1: a STATIC STRUCT element (P[]). xs[i] -> arrayGet typed as the struct; the
         // memory codec returns the element's inline image BASE pointer, which aggToMemPtr / aggFieldRead
@@ -14196,12 +14219,9 @@ export class Analyzer {
         if (baseArr.elem.kind === 'struct') {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
-          return {
-            kind: 'arrayGet',
-            type: baseArr.elem,
-            arr: baseArr,
-            index: this.coerce(index, U256, node.argumentExpression),
-          };
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          if (!this.checkArrExprBound(baseArr, idx, node.argumentExpression)) return undefined;
+          return { kind: 'arrayGet', type: baseArr.elem, arr: baseArr, index: idx };
         }
         // Residual B2: a bytes/string element (bytes[]/string[]). bs[i] -> strArrayElem over the
         // memArray; the element word holds an absolute pointer to a [len][data] blob (a bytes value
@@ -14209,12 +14229,9 @@ export class Analyzer {
         if (isBytesLike(baseArr.elem)) {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
-          return {
-            kind: 'strArrayElem',
-            type: baseArr.elem,
-            arr: baseArr,
-            index: this.coerce(index, U256, node.argumentExpression),
-          };
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          if (!this.checkArrExprBound(baseArr, idx, node.argumentExpression)) return undefined;
+          return { kind: 'strArrayElem', type: baseArr.elem, arr: baseArr, index: idx };
         }
         if (baseArr.elem.kind === 'array') {
           const whole = this.resolveArrayExpr(node);

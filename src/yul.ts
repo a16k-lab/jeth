@@ -29,6 +29,7 @@ import {
   isStaticStructLeafArray,
   isStaticStructFixedLeafArray,
   isStaticStructAnyLeafArray,
+  isDynBytesFixedLeafArray,
   isDynStructLeafArrayField,
   isDynLeafTopicArray,
   isImplicitWiden,
@@ -1403,6 +1404,7 @@ ${indent(runtime, 6)}
             const codecSourced =
               (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) ||
               isAggregateLeafArray(s.value.type) ||
+              isDynBytesFixedLeafArray(s.value.type) ||
               (isStaticStructAnyLeafArray(s.value.type) && isDynamicType(s.value.type)); // Arr<P,N>[] dynamic outer
             if (codecSourced && memSourced) {
               const mp = this.nestedMemImagePtr(s.value, ctx, out);
@@ -1440,6 +1442,7 @@ ${indent(runtime, 6)}
             const codecSourced =
               (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) ||
               isAggregateLeafArray(s.value.type) ||
+              isDynBytesFixedLeafArray(s.value.type) ||
               (isStaticStructAnyLeafArray(s.value.type) && isDynamicType(s.value.type));
             const { ptr, size } = codecSourced
               ? this.encodeNestedMemReturn(s.value.type, p, ctx, out)
@@ -1503,6 +1506,7 @@ ${indent(runtime, 6)}
             const codecSourced =
               (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) ||
               isAggregateLeafArray(s.value.type) ||
+              isDynBytesFixedLeafArray(s.value.type) ||
               (isStaticStructAnyLeafArray(s.value.type) && isDynamicType(s.value.type));
             const { ptr, size } = codecSourced
               ? this.encodeNestedMemReturn(s.value.type, mp, ctx, out)
@@ -1597,7 +1601,9 @@ ${indent(runtime, 6)}
           // struct-returning call copies the POINTER (matching Solidity memory references).
           if (
             s.type.kind === 'array' &&
-            ((isNestedValueArray(s.type) && isDynamicType(s.type)) || isStaticStructFixedLeafArray(s.type))
+            ((isNestedValueArray(s.type) && isDynamicType(s.type)) ||
+              isStaticStructFixedLeafArray(s.type) ||
+              isDynBytesFixedLeafArray(s.type))
           ) {
             // a FIXED array whose element is POINTER-HEADED: a DYNAMIC value-array (Arr<u256[],N>), or a
             // static struct / static-struct-leaf array (Batch A: Arr<P,N>, Arr<P,N>[], Arr<Arr<P,N>,M>).
@@ -1889,8 +1895,13 @@ ${indent(runtime, 6)}
             if (ref.src !== 'memory') throw new UnsupportedError('memory bytes[]/string[] element write requires a memory array');
             const idx = this.fresh();
             out.push(`let ${idx} := ${this.lowerExpr(s.target.index, ctx, out)}`);
-            out.push(`if iszero(lt(${idx}, mload(${ref.ptr}))) { ${this.panic()}(0x32) }`);
-            out.push(`mstore(add(${ref.ptr}, add(0x20, mul(${idx}, 0x20))), ${mp})`);
+            // a DYNAMIC outer (string[]/bytes[]) has a [len] header (bound = mload(ptr), data at ptr+0x20);
+            // Edge D: a FIXED outer (Arr<string,N>/Arr<bytes,N>, ref.fixedLen) bounds against the constant N
+            // and has NO header (the N pointer words start at ptr). Mirror lowerArrayGet's fixedLen handling.
+            const bound = ref.fixedLen !== undefined ? String(ref.fixedLen) : `mload(${ref.ptr})`;
+            out.push(`if iszero(lt(${idx}, ${bound})) { ${this.panic()}(0x32) }`);
+            const dataBase = ref.fixedLen !== undefined ? `${ref.ptr}` : `add(${ref.ptr}, 0x20)`;
+            out.push(`mstore(add(${dataBase}, mul(${idx}, 0x20)), ${mp})`);
             break;
           }
           // this.ss[i] = <bytes/string>: materialize the RHS FIRST (solc evaluates the RHS before the
@@ -3245,6 +3256,7 @@ ${indent(runtime, 6)}
           (isNestedValueArray(e.type) && isDynamicType(e.type)) ||
           isAggregateLeafArray(e.type) ||
           isStaticStructFixedLeafArray(e.type) || // Batch A: Arr<P,N>, Arr<Arr<P,N>,M>, Arr<P,N>[][]... fixed outer
+          isDynBytesFixedLeafArray(e.type) || // Edge D: Arr<string,N>, Arr<bytes,N> fixed-outer bytes/string leaf
           (isStaticStructAnyLeafArray(e.type) && isDynamicType(e.type)) // Arr<P,N>[] dynamic outer
         ) {
           return this.buildNestedMemArrayLit(e, ctx, out);

@@ -114,13 +114,14 @@ describe('Residual B4/B3: nested-dynamic-leaf + dyn-struct arrays now ACCEPT (li
     // each P[] element is an absolute pointer to a pointer-headed dyn-struct image (empty sentinels on new).
     expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): P[] { let m: P[] = [P(1n,bytes("x"))]; return m; } }`)).toEqual([]);
   });
-  it('P[][] and FIXED-outer Arr<P,N> static-struct arrays now ACCEPT (pointer-headed); Arr<bytes,N> still rejects', () => {
+  it('P[][], FIXED-outer Arr<P,N> static-struct arrays, and Arr<bytes,N> (Edge D) now ACCEPT (pointer-headed)', () => {
     // P[][] (Cat B) and Arr<P,N> (Batch A) are now POINTER-HEADED like solc (byte-identity in
     // pointer-headed-static-struct-array.test.ts / fixed-static-struct-array.test.ts).
     expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): P[][] { let m: P[][] = [[P(1n,2n)]]; return m; } }`)).toEqual([]);
     expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`)).toEqual([]);
-    // a FIXED array of a DYNAMIC element (Arr<bytes,N>) stays deferred (clean over-rejection, not a miscompile).
-    expect(codes(`@contract class C { @external @pure f(): Arr<bytes,2> { let m: Arr<bytes,2> = [bytes("a"),bytes("b")]; return m; } }`).length).toBeGreaterThan(0);
+    // Edge D: a FIXED array of a bytes/string DYNAMIC element (Arr<bytes,N>) is now lifted byte-identical
+    // (build / element read+write / return), see fixed-dynamic-leaf-array.test.ts.
+    expect(codes(`@contract class C { @external @pure f(): Arr<bytes,2> { let m: Arr<bytes,2> = [bytes("a"),bytes("b")]; return m; } }`)).toEqual([]);
   });
   it('struct-array element WRITE xs[i] = P(...) and bytes[] element write bs[i] = bytes(..) now ACCEPT (lifted)', () => {
     // both are now byte-identical to solc (byte-identity covered in lift-over-rejections.test.ts):

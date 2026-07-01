@@ -464,6 +464,21 @@ export function isDynBytesLeafArray(t: JethType): boolean {
   return false;
 }
 
+/** Edge D: a FIXED-outer array whose ultimate leaf is a bytes/string byte-sequence: Arr<string,N>,
+ *  Arr<bytes,N>, and deeper (Arr<Arr<string,N>,M>, Arr<string[],N>). The fixed-outer mirror of
+ *  isDynBytesLeafArray. Its memory image is N absolute-pointer words (no [len] header), each pointing to a
+ *  [len][data] blob - the same pointer-headed image abiEncFromMem's fixed-outer-dynamic-element branch
+ *  already builds/reads (the value-leaf twin Arr<u256[],N> rides the identical path). Supports a memory
+ *  local: build-from-literal, element read xs[i], whole return, .length. (abi.encode / pass-as-arg stays a
+ *  clean reject, exactly like the Arr<u256[],N> value-leaf precedent.) */
+export function isDynBytesFixedLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length === undefined) return false; // FIXED outer only
+  const e = t.element;
+  if (isBytesLike(e)) return true;
+  if (e.kind === 'array') return isDynBytesFixedLeafArray(e) || isDynBytesLeafArray(e);
+  return false;
+}
+
 /** Cat C: a dynamic-field struct FIELD that is a NESTED-DYNAMIC-LEAF array - `bytes[]`, `string[]`,
  *  or a `T[][]` (nested VALUE array bearing a dynamic outer level: u256[][], u256[][][], ...). Its
  *  pointer-headed memory image is the SAME B4 image a standalone such array uses, so the dyn-struct
