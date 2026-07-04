@@ -2,7 +2,9 @@
 //  D: inner-element WRITE of a value-fixed-array nested array (Arr<T,N>[] m[i][j]=v) - the header-less
 //     fixed inner is now addressed at base+j*0x20 (was a phantom-length Panic / a 1-word skew).
 //  E: WRITES into a dyn-struct memory local's NESTED STATIC AGGREGATE field - p.inner.x=v, p.fa[j]=v
-//     (const/runtime/OOB), and whole-field re-point p.inner=In(..) / p.fa=other.
+//     (const/runtime/OOB) are value-leaf/element stores and stay byte-identical. A whole-field re-point
+//     (p.inner=In(..) / p.fa=other) into the INLINE static-aggregate field can only DEEP-COPY where solc
+//     RE-POINTS (P0-15), so it is a sound clean reject now (JETH429) - a copy-vs-re-point miscompile gone.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';
@@ -43,22 +45,40 @@ describe('D: value-fixed-array nested array inner-element write (Arr<T,N>[] m[i]
 });
 
 describe('E: dyn-struct nested static-aggregate field WRITES vs solc 0.8.35', () => {
-  it('p.inner.x=v (value leaf), p.fa[j]=v (const/runtime/OOB), p.inner=In()/p.fa=other re-point', async () => {
+  it('p.inner.x=v (value leaf), p.fa[j]=v (const/runtime/OOB) byte-identical', async () => {
     const J = `@struct class In { x: u256; y: u256; }
     @struct class S { a: u256; inner: In; fa: Arr<u256, 3>; b: bytes; }
     @contract class C {
       @external @pure vleaf(): bytes { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, In(3n, 4n), pp, bytes("z")); s.inner.x = 90n; return abi.encode(s, s.inner.x, s.inner.y); }
       @external @pure felem(): bytes { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, In(3n, 4n), pp, bytes("z")); s.fa[1n] = 99n; return abi.encode(s, s.fa[1n], s.fa[0n]); }
-      @external @pure fdyn(i: u256): u256 { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, In(3n, 4n), pp, bytes("z")); s.fa[i] = 77n; return s.fa[i]; }
-      @external @pure repoint(): bytes { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, In(3n, 4n), pp, bytes("z")); s.inner = In(5n, 6n); let q: Arr<u256, 3> = [10n, 11n, 12n]; s.fa = q; return abi.encode(s); } }`;
+      @external @pure fdyn(i: u256): u256 { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, In(3n, 4n), pp, bytes("z")); s.fa[i] = 77n; return s.fa[i]; } }`;
     const Sol = `struct In { uint256 x; uint256 y; }
     struct S { uint256 a; In inner; uint256[3] fa; bytes b; }
     contract C {
       function vleaf() external pure returns(bytes memory){ uint256[3] memory pp;pp[0]=7;pp[1]=8;pp[2]=9; S memory s=S(1,In(3,4),pp,bytes("z")); s.inner.x=90; return abi.encode(s, s.inner.x, s.inner.y); }
       function felem() external pure returns(bytes memory){ uint256[3] memory pp;pp[0]=7;pp[1]=8;pp[2]=9; S memory s=S(1,In(3,4),pp,bytes("z")); s.fa[1]=99; return abi.encode(s, s.fa[1], s.fa[0]); }
-      function fdyn(uint256 i) external pure returns(uint256){ uint256[3] memory pp;pp[0]=7;pp[1]=8;pp[2]=9; S memory s=S(1,In(3,4),pp,bytes("z")); s.fa[i]=77; return s.fa[i]; }
-      function repoint() external pure returns(bytes memory){ uint256[3] memory pp;pp[0]=7;pp[1]=8;pp[2]=9; S memory s=S(1,In(3,4),pp,bytes("z")); s.inner=In(5,6); uint256[3] memory q;q[0]=10;q[1]=11;q[2]=12; s.fa=q; return abi.encode(s); } }`;
-    await diff(J, Sol, [['vleaf()', ''], ['felem()', ''], ['fdyn(uint256)', pad32(2n)], ['fdyn(uint256)', pad32(9n)], ['repoint()', '']]);
+      function fdyn(uint256 i) external pure returns(uint256){ uint256[3] memory pp;pp[0]=7;pp[1]=8;pp[2]=9; S memory s=S(1,In(3,4),pp,bytes("z")); s.fa[i]=77; return s.fa[i]; } }`;
+    await diff(J, Sol, [['vleaf()', ''], ['felem()', ''], ['fdyn(uint256)', pad32(2n)], ['fdyn(uint256)', pad32(9n)]]);
+  });
+
+  it('whole-field re-point p.inner=In(..) / p.fa=other rejects cleanly (copy-vs-re-point, JETH429)', () => {
+    // A whole nested static-aggregate field of a dyn-struct memory local is laid out INLINE (tuple-head),
+    // so a whole-field WRITE can only DEEP-COPY the RHS image where solc RE-POINTS. A write-then-encode
+    // form coincides, but the write semantics diverge under aliasing (bind s.inner, mutate one). Sound reject.
+    const codes = (src: string): string[] => {
+      try {
+        compile(src, { fileName: 'C.jeth' });
+        return [];
+      } catch (e: any) {
+        return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
+      }
+    };
+    const HDR = `@struct class In { x: u256; y: u256; }
+    @struct class S { a: u256; inner: In; fa: Arr<u256, 3>; b: bytes; }`;
+    expect(codes(`${HDR}
+    @contract class C { @external @pure r(): bytes { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, In(3n, 4n), pp, bytes("z")); s.inner = In(5n, 6n); return abi.encode(s); } }`)).toContain('JETH429');
+    expect(codes(`${HDR}
+    @contract class C { @external @pure r(): bytes { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, In(3n, 4n), pp, bytes("z")); let q: Arr<u256, 3> = [10n, 11n, 12n]; s.fa = q; return abi.encode(s); } }`)).toContain('JETH429');
   });
 });
 

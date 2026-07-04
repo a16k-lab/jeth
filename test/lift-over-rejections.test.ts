@@ -171,35 +171,50 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
     }
   });
 
-  it('whole-aggregate field of a struct-array element: read xs[i].q / xs[i].pre + write xs[i].q=Q(..) [was JETH245/JETH067]', async () => {
+  it('whole-aggregate field of a struct-array element: value-leaf write + whole-field READ xs[i].q / xs[i].pre [was JETH245/JETH067]', async () => {
+    // value-LEAF writes (xs[i].q.m = v, xs[i].pre[j] = v) followed by a whole-field READ (abi.encode(xs[i].q))
+    // stay byte-identical. The whole-field WRITE (xs[i].q = Q(..), xs[i].pre = [..]) is a copy-vs-re-point
+    // miscompile on the INLINE static-struct-array element, so it is a sound clean reject now (asserted below).
     const J = `@struct class Q { m: u256; n: u256; }
     @struct class P { q: Q; pre: Arr<u256, 2>; tag: u256; }
     @contract class C {
       @external @pure rdq(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].q.m = 5n; xs[i].q.n = 6n; return abi.encode(xs[i].q); }
       @external @pure rdpre(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].pre[0n] = 7n; xs[i].pre[1n] = 8n; return abi.encode(xs[i].pre); }
-      @external @pure wrq(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].q = Q(11n, 22n); return abi.encode(xs[i].q.m, xs[i].q.n); }
-      @external @pure wrpre(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].pre = [33n, 44n]; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); }
     }`;
     const S = `struct Q { uint256 m; uint256 n; }
     struct P { Q q; uint256[2] pre; uint256 tag; }
     contract C {
       function rdq(uint256 i) external pure returns (bytes memory){ P[] memory xs=new P[](2); xs[i].q.m=5; xs[i].q.n=6; return abi.encode(xs[i].q); }
       function rdpre(uint256 i) external pure returns (bytes memory){ P[] memory xs=new P[](2); xs[i].pre[0]=7; xs[i].pre[1]=8; return abi.encode(xs[i].pre); }
-      function wrq(uint256 i) external pure returns (bytes memory){ P[] memory xs=new P[](2); xs[i].q=Q(11,22); return abi.encode(xs[i].q.m, xs[i].q.n); }
-      function wrpre(uint256 i) external pure returns (bytes memory){ P[] memory xs=new P[](2); uint256[2] memory pp; pp[0]=33; pp[1]=44; xs[i].pre=pp; return abi.encode(xs[i].pre[0], xs[i].pre[1]); }
     }`;
     const hj = await Harness.create();
     const hs = await Harness.create();
     const aj = await hj.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     const as = await hs.deploy(compileSolidity(SPDX + S, 'C').creation);
     const P = (await import('../src/evm.js')).pad32;
-    for (const fn of ['rdq', 'rdpre', 'wrq', 'wrpre']) {
+    for (const fn of ['rdq', 'rdpre']) {
       const data = '0x' + sel(fn + '(uint256)') + P(1n);
       const rj = await hj.call(aj, data);
       const rs = await hs.call(as, data);
       expect(rj.success, fn).toBe(rs.success);
       expect(rj.returnHex, fn).toBe(rs.returnHex);
     }
+
+    // whole-member WRITE into an inline static-struct-array element: copy-vs-re-point -> sound JETH429 reject.
+    const codes = (src: string): string[] => {
+      try {
+        compile(src, { fileName: 'C.jeth' });
+        return [];
+      } catch (e: any) {
+        return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
+      }
+    };
+    expect(codes(`@struct class Q { m: u256; n: u256; }
+    @struct class P { q: Q; pre: Arr<u256, 2>; tag: u256; }
+    @contract class C { @external @pure wrq(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].q = Q(11n, 22n); return abi.encode(xs[i].q.m, xs[i].q.n); } }`)).toContain('JETH429');
+    expect(codes(`@struct class Q { m: u256; n: u256; }
+    @struct class P { q: Q; pre: Arr<u256, 2>; tag: u256; }
+    @contract class C { @external @pure wrpre(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].pre = [33n, 44n]; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); } }`)).toContain('JETH429');
   });
 
   it('runtime array index into a struct-array-element field xs[i].pre[j] (read+write, 2D, OOB) [was JETH151]', async () => {

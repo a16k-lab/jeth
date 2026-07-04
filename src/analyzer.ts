@@ -8794,6 +8794,24 @@ export class Analyzer {
       const rhs = this.checkExpr(e.right, target.type);
       if (!rhs) return;
       const value = this.coerce(rhs, target.type, e.right);
+      // SOUNDNESS (JETH429): a whole-inner-element / whole-aggregate-member write into an INLINE
+      // (non-pointer-headed) memory aggregate would DEEP-COPY the sub-image where Solidity RE-POINTS.
+      // `xs[i] = a` on Arr<u256,2>[] / m[i] = row on Arr<Arr<u256,2>,2> (inline value-word element,
+      // memStaticElem = true), and `v.inner = In(..)` / `xs[i].q = Q(..)` / `o.items[i] = Q(..)` on an
+      // inline static-aggregate member (aggFieldStore of a whole struct / fixed array) all copy the RHS
+      // image inline, so a subsequent mutation of one alias is NOT visible through the other and a re-point
+      // leaves the other side on the copied image - a MISCOMPILE vs solc's reference re-point. Pointer-headed
+      // aggregates (P[] struct arrays, u256[][], bytes[][]) alias correctly and are unaffected; value-LEAF
+      // writes (xs[i][j] = v, v.inner.x = v, xs[i].q.m = v) and READ aliases stay sound. Reject the whole
+      // inline sub-aggregate WRITE with a clean diagnostic.
+      if (this.isInlineSubAggregateRepoint(target)) {
+        this.diags.error(
+          e.left,
+          'JETH429',
+          `assigning a whole inline sub-aggregate (${displayName(target.type)}) into a memory aggregate would copy where Solidity re-points (aliasing would diverge); assign its leaf fields/elements individually`,
+        );
+        return;
+      }
       // Constructing a whole STORAGE struct that has a dynamic-array field whose element is a
       // STRUCT (DynStruct[]) is a later step (writeStruct/copyArrayValueIntoStorage cannot deep-copy a
       // struct-element array into storage); assign those fields individually. A dynamic VALUE-element
@@ -11631,6 +11649,36 @@ export class Analyzer {
         arr.base.kind === 'memArray' ||
         arr.base.kind === 'memArrayExpr') // (c ? xs : ys)[i] = v
     );
+  }
+
+  /** JETH429: true iff `target` is a WHOLE inline sub-aggregate write into a memory aggregate that
+   *  would deep-COPY the sub-image where Solidity RE-POINTS (breaking aliasing) - a miscompile.
+   *  Two shapes:
+   *    (a) an `arrayElem` write into a MEMORY array whose element is an INLINE value-word aggregate
+   *        (memStaticElem === true): `xs[i] = a` on Arr<u256,2>[] / `m[i] = row` on Arr<Arr<u256,2>,2>.
+   *        Pointer-headed struct/leaf arrays (P[], u256[][], bytes[][]) have memStaticElem !== true and
+   *        alias correctly, so they are excluded.
+   *    (b) an `aggFieldStore` of a WHOLE static sub-aggregate member (a nested struct or fixed array),
+   *        laid out inline in a dyn-struct / static-struct memory image: `v.inner = In(..)`, `xs[i].q = Q(..)`,
+   *        `o.items[i] = Q(..)`, `v.fa = [..]`. A VALUE-leaf aggFieldStore (u256, funcref word) is NOT a
+   *        sub-aggregate (type is not struct/fixed-array), so leaf writes stay sound. */
+  private isInlineSubAggregateRepoint(target: LValue): boolean {
+    if (target.kind === 'arrayElem') {
+      const base = target.arr.base.kind;
+      const isMem = base === 'memArray' || base === 'memArrayExpr';
+      const elemIsAggregate =
+        target.type.kind === 'struct' || (target.type.kind === 'array' && target.type.length !== undefined);
+      // memStaticElem === true marks an INLINE sub-image element (word-copied on write); a pointer-headed
+      // element (struct / dynamic sub-array) has memStaticElem false/undefined and aliases like solc.
+      return isMem && target.arr.memStaticElem === true && elemIsAggregate;
+    }
+    if (target.kind === 'aggFieldStore') {
+      // a WHOLE nested struct or fixed (static) array member laid out INLINE; a value-word leaf is not.
+      return (
+        target.type.kind === 'struct' || (target.type.kind === 'array' && target.type.length !== undefined)
+      );
+    }
+    return false;
   }
 
   private lvalueAsExpr(lv: LValue): Expr {
