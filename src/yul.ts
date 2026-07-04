@@ -6197,9 +6197,10 @@ ${indent(runtime, 6)}
    *  - static elements (value packed/unpacked, static struct): copy the contiguous data
    *    slots verbatim (the source's zero-padded last packed slot clears any dest element
    *    that fell beyond the new length), then zero the dest's excess data slots.
-   *  - dynamic elements (bytes/string, dynamic struct): per element, storeDynamic /
-   *    copyStruct (overwrite-clearing each element's old tail); the freed tail elements
-   *    are deep-cleared (clearStr / clearStructDyn + zero inline slots) first. */
+   *  - dynamic elements (bytes/string, dynamic struct, nested dynamic array): per element,
+   *    storeDynamic / copyStruct / recursive copyArray-copyFixedArray (overwrite-clearing each
+   *    element's old tail); the freed tail elements are deep-cleared first (clearStr for bytes/string,
+   *    deleteStruct for a struct element, deleteAgg for a nested-array element). */
   private copyArray(elem: JethType, srcLenSlot: string, dstLenSlot: string, out: string[]): void {
     const srcLen = this.fresh();
     const dstLen = this.fresh();
@@ -6241,9 +6242,16 @@ ${indent(runtime, 6)}
     clearInner.push(`let ${ceb} := add(${dstData}, mul(${k}, ${sc}))`);
     if (isBytesLike(elem)) {
       clearInner.push(`${this.clearStr()}(${ceb})`);
+    } else if (elem.kind === 'array') {
+      // a dynamic-array / dynamic-leaf-fixed-array element (T[][], Arr<string,N>[]): recurse into the
+      // full delete machinery (frees each element's keccak data + zeroes its header footprint).
+      this.deleteAgg(elem, ceb, clearInner);
     } else {
-      this.clearStructDyn(elem as JethType & { kind: 'struct' }, ceb, clearInner);
-      for (let s = 0; s < sc; s++) clearInner.push(`sstore(${s === 0 ? ceb : `add(${ceb}, ${s})`}, 0)`);
+      // a dynamic struct element: full recursive delete (frees bytes/string keccak long-data AND each
+      // dynamic-array field's keccak data region, then zeroes value fields) - matches solc's element
+      // delete and prevents stale-tail data on shrink. deleteStruct clears the whole element footprint,
+      // so no separate inline-slot zero loop is needed.
+      this.deleteStruct(elem as JethType & { kind: 'struct' }, ceb, clearInner);
     }
     for (const l of clearInner) out.push('  ' + l);
     out.push('}');
@@ -6257,6 +6265,12 @@ ${indent(runtime, 6)}
     copyInner.push(`let ${deb} := add(${dstData}, mul(${m}, ${sc}))`);
     if (isBytesLike(elem)) {
       this.storeDynamic(deb, { src: 'storage', slot: seb }, copyInner);
+    } else if (elem.kind === 'array' && elem.length === undefined) {
+      // a dynamic-array element (T[][]): the element IS a length-headed dynamic array -> recurse.
+      this.copyArray(elem.element, seb, deb, copyInner);
+    } else if (elem.kind === 'array') {
+      // a dynamic-leaf fixed-array element (Arr<string,N>[]): per-element deep copy.
+      this.copyFixedArray(elem, seb, deb, copyInner);
     } else {
       this.copyStruct(elem as JethType & { kind: 'struct' }, seb, deb, copyInner);
     }
@@ -6302,6 +6316,8 @@ ${indent(runtime, 6)}
     const sc = storageSlotCount(elem);
     for (let i = 0; i < N; i++) {
       if (isBytesLike(elem)) this.storeDynamic(dAt(i * sc), { src: 'storage', slot: sAt(i * sc) }, out);
+      else if (elem.kind === 'array' && elem.length === undefined) this.copyArray(elem.element, sAt(i * sc), dAt(i * sc), out);
+      else if (elem.kind === 'array') this.copyFixedArray(elem, sAt(i * sc), dAt(i * sc), out);
       else this.copyStruct(elem as JethType & { kind: 'struct' }, sAt(i * sc), dAt(i * sc), out);
     }
   }
@@ -6438,6 +6454,17 @@ ${indent(runtime, 6)}
         this.copyStruct(f.type, sAt(f.slot), dAt(f.slot), out);
       } else if (isBytesLike(f.type)) {
         this.storeDynamic(dAt(f.slot), { src: 'storage', slot: sAt(f.slot) }, out);
+      } else if (f.type.kind === 'array' && f.type.length === undefined) {
+        // a DYNAMIC-array field (u256[], bytes[], u256[][], D[] ...): deep-copy the length word AND the
+        // keccak(slot) data region, clearing the dst's freed tail on shrink (byte-identical to solc's
+        // `this.field = arr`). A slot-for-slot copy would move only the length word (storageSlotCount is 1)
+        // and leave the dst's old keccak data stale - a silent storage miscompile.
+        this.copyArray(f.type.element, sAt(f.slot), dAt(f.slot), out);
+      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynamicType(f.type)) {
+        // a FIXED array with dynamic elements (Arr<string,N>, Arr<bytes,N>, Arr<T[],N>, Arr<D,N> with a
+        // dyn field): per-element deep copy (each element's keccak data + tail clear), not a slot-for-slot
+        // copy of the header footprint.
+        this.copyFixedArray(f.type, sAt(f.slot), dAt(f.slot), out);
       } else {
         const n = storageSlotCount(f.type);
         for (let k = 0; k < n; k++) {
@@ -6449,11 +6476,12 @@ ${indent(runtime, 6)}
     }
   }
 
-  /** pop a struct element: shrink length, then zero all of the element's slots. For
-   *  a DYNAMIC struct element, each bytes/string field is cleared with clearStr
-   *  (zeroes the header AND its keccak(headerSlot) long-data slots), then the inline
-   *  slots are zeroed too. Matches solc's full per-element delete (verified incl.
-   *  raw slots: a long string's data slots are zeroed on pop). */
+  /** pop a struct element: shrink length, then fully clear the element's slots. A DYNAMIC struct
+   *  element is cleared through the SAME recursive delete `delete this.vals[i]` uses (deleteStruct):
+   *  it frees each bytes/string field's keccak long-data, DEEP-clears each dynamic-array field
+   *  (length word + keccak data region), recurses into nested structs, and zeroes value fields -
+   *  so a later push() into the reused slot never resurrects stale data (byte-identical to solc's
+   *  full per-element delete incl. raw slots). A fully-static element just zeroes its slot footprint. */
   private lowerStructPop(arr: ArrayExpr, ctx: LowerCtx, out: string[]): void {
     const ref = this.lowerArrayRef(arr, ctx, out);
     if (ref.src !== 'storage') throw new UnsupportedError('pop on a non-storage array');
@@ -6469,29 +6497,12 @@ ${indent(runtime, 6)}
     out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${ref.lenSlot})`);
     const base = this.fresh();
     out.push(`let ${base} := add(${dataBase}, mul(${nl}, ${slots}))`);
-    // A dynamic struct element: free each bytes/string field's long-data slots first
-    // (clearStr), in declaration order, before zeroing the inline header slots.
     if (isDynamicType(struct)) {
-      this.clearStructDyn(struct, base, out);
-    }
-    for (let j = 0; j < slots; j++) out.push(`sstore(${j === 0 ? base : `add(${base}, ${j})`}, 0)`);
-  }
-
-  /** Recursively clear the long-data slots of every bytes/string field of a dynamic
-   *  struct rooted at storage slot expr `base` (a constant-numeric string or a
-   *  register). Only the keccak(headerSlot) data slots are freed here; the inline
-   *  header/static slots are zeroed by the caller's contiguous-slot loop. Nested
-   *  dynamic structs recurse at their field slot offset. */
-  private clearStructDyn(struct: JethType & { kind: 'struct' }, base: string, out: string[]): void {
-    const isConst = /^\d+$/.test(base);
-    const slotAt = (n: number): string =>
-      isConst ? String(BigInt(base) + BigInt(n)) : n === 0 ? base : `add(${base}, ${n})`;
-    for (const f of struct.fields) {
-      if (isBytesLike(f.type)) {
-        out.push(`${this.clearStr()}(${slotAt(f.slot)})`);
-      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
-        this.clearStructDyn(f.type, slotAt(f.slot), out);
-      }
+      // Recursive delete: frees keccak long-data of bytes/string fields AND the keccak data region
+      // of dynamic-array fields (a shallow clearStructDyn missed the latter -> data resurrection).
+      this.deleteStruct(struct, base, out);
+    } else {
+      for (let j = 0; j < slots; j++) out.push(`sstore(${j === 0 ? base : `add(${base}, ${j})`}, 0)`);
     }
   }
 
