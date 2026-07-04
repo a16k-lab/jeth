@@ -456,8 +456,17 @@ ${indent(runtime, 6)}
         const guard = this.validateInput(p.type, dec);
         if (guard) lines.push(guard);
         decoded.push(dec);
+      } else if (p.type.kind === 'array' && isStaticStructFixedLeafArray(p.type)) {
+        // Batch A: a STATIC fixed-outer static-struct array (Arr<P,N>, Arr<Arr<P,N>,M>) is STATIC but
+        // POINTER-HEADED in memory (N absolute-pointer words -> fresh per-element images). It MUST be routed
+        // through abiDecFromMemToImage, which self-manages 0x40 (claims the N-word table BEFORE the per-element
+        // images alloc) and returns the table pointer. The abiDecFromMem twin below would write the table into
+        // `ptr := mload(0x40)` and then the FIRST per-element image (also allocated from mload(0x40)) clobbers
+        // it, decoding garbage (raw creation-memory pointers) - the P0-11 miscompile. This mirrors
+        // lowerAbiDecode's static-component Batch-A reroute (the runtime abi.decode path already does this).
+        decoded.push(this.abiDecFromMemToImage(p.type, head, blobEnd, lines));
       } else if (!isDynamicType(p.type)) {
-        // a STATIC aggregate (struct / Arr<T,N> of static leaves): materialize the inline head words
+        // a STATIC aggregate (struct / Arr<T,N> of static VALUE leaves): materialize the inline head words
         // into a fresh memory image via the abi.decode-from-memory codec; pass the image pointer.
         const ptr = this.fresh();
         lines.push(`let ${ptr} := mload(0x40)`);
@@ -6064,6 +6073,24 @@ ${indent(runtime, 6)}
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), ${blobEnd}) { revert(0, 0) }`);
         const ip = this.fresh();
         out.push(`let ${ip} := ${this.abiDecFromMemToImage(f.type, se, blobEnd, out)}`);
+        out.push(`mstore(${at}, ${ip})`);
+        hw += 1;
+      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        // a NESTED DYNAMIC STRUCT field (its own dynamic member makes it pointer-headed): head word =
+        // offset (relative to the tuple start) to the field's sub-tuple. Bound it against blobEnd exactly
+        // like the sibling dynamic branches, then recurse to build the nested pointer-headed image (value
+        // fields inline + validated, its own dynamic fields head pointers) and store the sub-image's
+        // ABSOLUTE pointer in the head word - the layout memDynField / the encoders consume (the same shape
+        // buildDynStructFromStorage's nested-dyn-struct branch stores). tupleHeadWords counts it as 1.
+        // (The static-value else-branch below would feed the offset word to abiDecFromMem as inline data,
+        // which reverts - the P0-10 miscompile: JETH empty-reverts where solc returns the value.)
+        const so = this.fresh();
+        out.push(`let ${so} := mload(${headAt})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${base}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), ${blobEnd}) { revert(0, 0) }`);
+        const ip = this.buildDynStructFromMemBlob(f.type, se, blobEnd, out);
         out.push(`mstore(${at}, ${ip})`);
         hw += 1;
       } else {
