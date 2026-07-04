@@ -340,6 +340,63 @@ describe('uups-proxy (Phase 2c)', () => {
     expect(BigInt(r.returnHex)).toBe(IMPL_SLOT);
   });
 
+  // ---- (5-SEC) SECURITY: malformed upgradeToAndCall calldata must NOT upgrade. solc's external ABI
+  // decode runs in the dispatcher BEFORE the function body, so the (address, bytes) validation happens
+  // BEFORE authorizeUpgrade. A malformed bytes offset therefore (a) EMPTY-reverts a non-owner (NOT the
+  // Error("not authorized") the gate would raise) and (b) EMPTY-reverts an owner (no upgrade, no log).
+  // Before the fix the synthesized entry read the bytes offset UNVALIDATED and AFTER the gate, so an owner
+  // upgraded off garbage bytes + emitted Upgraded, and a non-owner got the wrong revert reason. The impl
+  // uses `bytes calldata data`, so an oversized length is an EMPTY revert (the calldata form), matching
+  // solc's abi_decode_available_length calldata bounds. ----
+  describe('(5-SEC) malformed upgradeToAndCall calldata never upgrades (== solc)', () => {
+    const cd = (v2: Address, tail: string) =>
+      '0x' + UPGRADE_TO_AND_CALL + W(BigInt(v2.toString())) + tail;
+    async function assertReject(caller: Address, build: (v2: Address) => string) {
+      const { hj, hs, v1j, v2j, v1s, v2s, pj, ps } = await setup(7n);
+      const rj = await hj.call(pj, build(v2j), { caller });
+      const rs = await hs.call(ps, build(v2s), { caller });
+      expect(rj.success).toBe(false);
+      expect(rs.success).toBe(false);
+      // byte-identical revert returndata (must be EMPTY here, NOT Error("not authorized"))
+      expect(rj.returnHex).toBe(rs.returnHex);
+      // no Upgraded log; impl slot unchanged (still V1)
+      expect(rj.logs.length).toBe(0);
+      expect(rs.logs.length).toBe(0);
+      expect(addrFromWord(await readSlot(hj, pj, IMPL_SLOT)).toString().toLowerCase()).toBe(
+        v1j.toString().toLowerCase(),
+      );
+      expect(await readSlot(hj, pj, IMPL_SLOT)).toBe(await readSlot(hs, ps, IMPL_SLOT));
+      expect(addrFromWord(await readSlot(hj, pj, IMPL_SLOT)).toString().toLowerCase()).not.toBe(
+        v2j.toString().toLowerCase(),
+      );
+    }
+    it('an OWNER upgradeToAndCall with an OOB bytes offset (0x1000) EMPTY-reverts, no upgrade/log', async () => {
+      await assertReject(OWNER, (v2) => cd(v2, W(0x1000n) + W(0n)));
+    });
+    it('a NON-owner upgradeToAndCall with an OOB offset EMPTY-reverts (NOT Error("not authorized"))', async () => {
+      // The critical ordering case: solc validates the ABI args before _authorizeUpgrade, so a malformed
+      // offset reverts EMPTY regardless of caller. A returndata starting with the Error(string) selector
+      // (0x08c379a0) would be the pre-fix bug.
+      const { hj, hs, v2j, v2s, pj, ps } = await setup(7n);
+      const rj = await hj.call(pj, cd(v2j, W(0x1000n) + W(0n)), { caller: STRANGER });
+      const rs = await hs.call(ps, cd(v2s, W(0x1000n) + W(0n)), { caller: STRANGER });
+      expect(rj.success).toBe(false);
+      expect(rs.success).toBe(false);
+      expect(rj.returnHex).toBe('0x'); // EMPTY, not Error("not authorized")
+      expect(rj.returnHex).toBe(rs.returnHex);
+      expect(rj.returnHex.startsWith('0x08c379a0')).toBe(false);
+    });
+    it('an OWNER upgradeToAndCall with a dirty address word reverts, no upgrade/log', async () => {
+      await assertReject(OWNER, (v2) => '0x' + UPGRADE_TO_AND_CALL + W((0xdeadn << 160n) | BigInt(v2.toString())) + W(0x40n) + W(0n));
+    });
+    it('an OWNER too-short upgradeToAndCall (only the address word, no offset) reverts, no upgrade/log', async () => {
+      await assertReject(OWNER, (v2) => cd(v2, ''));
+    });
+    it('an OWNER upgradeToAndCall with an oversized length (off=0x40 len=2^64-1) EMPTY-reverts (calldata form), no upgrade/log', async () => {
+      await assertReject(OWNER, (v2) => cd(v2, W(0x40n) + W(0xffffffffffffffffn)));
+    });
+  });
+
   it('(6) GATE: @uups WITHOUT authorizeUpgrade is rejected (JETH402)', () => {
     const src = `@uups @contract class L { @state v: u256 = 0n; @external f(): void { this.v = 1n; } }`;
     expect(jethCodes(src)).toContain('JETH402');

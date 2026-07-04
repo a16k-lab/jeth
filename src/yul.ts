@@ -10339,22 +10339,33 @@ ${indent(runtime, 6)}
   private emitTransparentAdminUpgrade(): string[] {
     const MASK = '0xffffffffffffffffffffffffffffffffffffffff';
     const out: string[] = [];
+    // SECURITY: the args (address newImpl, bytes data) MUST be ABI-validated exactly as solc's external
+    // decoder does BEFORE any state change - a malformed word must EMPTY-revert with the impl slot
+    // unchanged and NO Upgraded log, matching `abi.decode(msg.data[4:], (address, bytes))`. Solc requires
+    // (1) the full 2-word static head present (calldatasize >= 0x44); (2) the address arg's high 96 bits
+    // zero (a dirty word EMPTY-reverts); (3) the bytes offset word + its [len][data] tail fully within
+    // calldata (routed through the SAME jeth_calldata_dyn validator the standard @external (address,bytes)
+    // decoder uses, base = byte 4).
+    out.push('if lt(calldatasize(), 0x44) { revert(0, 0) }');
+    out.push('if shr(160, calldataload(4)) { revert(0, 0) }');
     // newImpl: the first arg word (at calldata offset 4), masked to 160 bits.
     out.push(`let _newImpl := and(calldataload(4), ${MASK})`);
     // The bytes arg: word at offset 0x24 is its offset relative to the args region (calldata start + 4).
-    // length is at calldata offset 4 + thatOffset; the data follows. Copy [len][data] into memory.
-    out.push('let _dataOff := add(4, calldataload(0x24))');
-    out.push('let _dataLen := calldataload(_dataOff)');
-    out.push('let _dataPtr := mload(0x40)');
-    out.push('calldatacopy(_dataPtr, add(_dataOff, 0x20), _dataLen)');
+    // solc's TransparentUpgradeableProxy decodes into `bytes memory` (abi.decode(msg.data[4:],
+    // (address,bytes))), so use the MEMORY-decoder validator: an oversized length is Panic(0x41), not an
+    // empty revert (matches solc's memory materialization). Returns (calldata dataPtr, len).
+    out.push('let _dataPtr, _dataLen := ' + this.calldataDynMem() + '(calldataload(0x24))');
     // require(isContract(newImpl)) -> a clean empty revert on a non-contract (degenerate failure path).
     out.push('if iszero(extcodesize(_newImpl)) { revert(0, 0) }');
     out.push(`sstore(${EIP1967_IMPL_SLOT}, _newImpl)`);
     // emit Upgraded(address indexed implementation): indexed-only event, log2 over no data.
     out.push(`log2(0, 0, ${UPGRADED_TOPIC}, _newImpl)`);
-    // if data.length>0: delegatecall(gas(), newImpl, data) and bubble the callee's revert verbatim.
+    // if data.length>0: copy the validated calldata slice ([_dataPtr, +_dataLen)) into memory, then
+    // delegatecall(gas(), newImpl, data) and bubble the callee's revert verbatim.
     out.push('if gt(_dataLen, 0) {');
-    out.push('  let _ok2 := delegatecall(gas(), _newImpl, _dataPtr, _dataLen, 0, 0)');
+    out.push('  let _mem := mload(0x40)');
+    out.push('  calldatacopy(_mem, _dataPtr, _dataLen)');
+    out.push('  let _ok2 := delegatecall(gas(), _newImpl, _mem, _dataLen, 0, 0)');
     out.push('  returndatacopy(0, 0, returndatasize())');
     out.push('  if iszero(_ok2) { revert(0, returndatasize()) }');
     out.push('}');
@@ -10380,11 +10391,18 @@ ${indent(runtime, 6)}
     }
     // upgradeToAndCall(address newImpl, bytes data): the args mirror the transparent admin upgrade decode
     // (newImpl at calldata 4; the bytes arg's offset word at 0x24 is relative to the args region at 4).
-    // solc requires the full 2-word static head to be present.
+    // SECURITY: solc's external ABI decode runs in the dispatcher BEFORE the function body, so ALL of
+    // (1) full 2-word static head present, (2) address dirty-high-bits, and (3) the bytes offset + [len]
+    // [data] tail bounds must be validated HERE, before authorizeUpgrade. Otherwise a malformed offset (a)
+    // slips past a non-owner as Error("not authorized") where solc EMPTY-reverts, and (b) lets an owner
+    // upgrade + emit Upgraded off garbage bytes where solc EMPTY-reverts. Route the bytes tail through the
+    // SAME jeth_calldata_dyn validator the standard @external (address,bytes) decoder uses (base = byte 4).
     out.push('if lt(calldatasize(), 0x44) { revert(0, 0) }');
-    out.push(`let _newImpl := and(calldataload(4), ${MASK})`);
     // require the address arg's high 96 bits are zero (a dirty word reverts empty, like solc's ABI decode).
     out.push(`if shr(160, calldataload(4)) { revert(0, 0) }`);
+    out.push(`let _newImpl := and(calldataload(4), ${MASK})`);
+    // validate + bind the bytes arg (dataPtr is a CALLDATA offset; len bounds-checked) BEFORE the gate.
+    out.push('let _dataPtr, _dataLen := ' + this.calldataDyn() + '(calldataload(0x24))');
     // (1) the user access gate authorizeUpgrade(newImpl). A bare internal void function: call its userfn_.
     out.push(`${this.userFnName(fn.authorizeKey!)}(_newImpl)`);
     // (2) anti-brick: STATICCALL newImpl.proxiableUUID() (selector 0x52d1902d). A failed staticcall (incl.
@@ -10414,14 +10432,12 @@ ${indent(runtime, 6)}
     out.push(`if iszero(extcodesize(_newImpl)) { revert(0, 0) }`);
     out.push(`sstore(${EIP1967_IMPL_SLOT}, _newImpl)`);
     out.push(`log2(0, 0, ${UPGRADED_TOPIC}, _newImpl)`);
-    // decode the bytes arg [len][data] into memory at the free ptr (offset word at calldata 0x24, relative
-    // to the args region at byte 4).
-    out.push('let _dataOff := add(4, calldataload(0x24))');
-    out.push('let _dataLen := calldataload(_dataOff)');
-    out.push('let _dataPtr := mload(0x40)');
-    out.push('calldatacopy(_dataPtr, add(_dataOff, 0x20), _dataLen)');
+    // if data.length>0: copy the pre-validated calldata slice ([_dataPtr, +_dataLen)) into memory, then
+    // delegatecall(gas(), newImpl, data) and bubble the callee's revert verbatim.
     out.push('if gt(_dataLen, 0) {');
-    out.push('  let _ok := delegatecall(gas(), _newImpl, _dataPtr, _dataLen, 0, 0)');
+    out.push('  let _mem := mload(0x40)');
+    out.push('  calldatacopy(_mem, _dataPtr, _dataLen)');
+    out.push('  let _ok := delegatecall(gas(), _newImpl, _mem, _dataLen, 0, 0)');
     out.push('  returndatacopy(0, 0, returndatasize())');
     out.push('  if iszero(_ok) { revert(0, returndatasize()) }');
     out.push('}');
@@ -10947,6 +10963,43 @@ ${indent(runtime, 6)}
   let lp := add(4, off)
   len := calldataload(lp)
   if gt(len, sub(sub(argsLen, off), 0x20)) { revert(0, 0) }
+  dataPtr := add(lp, 0x20)
+}`,
+      );
+    }
+    return name;
+  }
+
+  /** The MEMORY-decoder analogue of calldataDyn: decodes a top-level `bytes` argument EXACTLY as solc
+   *  0.8.35 does when it materializes `bytes memory` via `abi.decode(msg.data[4:], (address, bytes))`
+   *  (OZ's TransparentUpgradeableProxy). The args region base is byte 4; `off` is relative to it (so the
+   *  bytes tail lives at `add(4, off)`). This mirrors solc's abi_decode_t_bytes_memory_ptr +
+   *  abi_decode_available_length + array_allocation_size + finalize_allocation byte-for-byte:
+   *    (C) offset cap:            `if gt(off, 2^64-1) { revert }`
+   *    (D) length word readable:  `if iszero(slt(add(lp, 0x1f), calldatasize())) { revert }`  SIGNED
+   *    (E) allocation panic:      len > 2^64-1 -> Panic(0x41); then the finalize_allocation overflow guard
+   *        on `newFreePtr = mload(0x40) + roundUp32(roundUp32(len) + 0x20)` -> Panic(0x41). At the proxy
+   *        entry nothing is allocated yet so mload(0x40)==0x80, matching solc's fresh free pointer.
+   *    (F) payload fits:          `if gt(add(add(lp, 0x20), len), calldatasize()) { revert }`
+   *  The caller has already validated the 2-word head (calldatasize >= 0x44) and the address arg's clean
+   *  high bits (equivalent to solc's head-size + validator_revert_t_address_payable). Returns a CALLDATA
+   *  dataPtr; the caller copies to memory before the delegatecall. This differs from calldataDyn (the
+   *  `bytes calldata` form) ONLY in that an oversized length is a Panic(0x41), not an empty revert. */
+  private calldataDynMem(): string {
+    const name = 'jeth_calldata_dyn_mem';
+    if (!this.helpers.has(name)) {
+      this.helpers.set(
+        name,
+        `function ${name}(off) -> dataPtr, len {
+  if gt(off, 0xffffffffffffffff) { revert(0, 0) }
+  let lp := add(4, off)
+  if iszero(slt(add(lp, 0x1f), calldatasize())) { revert(0, 0) }
+  len := calldataload(lp)
+  if gt(len, 0xffffffffffffffff) { ${this.panic()}(0x41) }
+  let allocSize := add(and(add(len, 31), not(31)), 0x20)
+  let newFreePtr := add(mload(0x40), and(add(allocSize, 31), not(31)))
+  if or(gt(newFreePtr, 0xffffffffffffffff), lt(newFreePtr, mload(0x40))) { ${this.panic()}(0x41) }
+  if gt(add(add(lp, 0x20), len), calldatasize()) { revert(0, 0) }
   dataPtr := add(lp, 0x20)
 }`,
       );

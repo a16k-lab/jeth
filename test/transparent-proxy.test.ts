@@ -360,6 +360,75 @@ describe('transparent-proxy (Phase 2b)', () => {
     expect(await readSlot(hj, pj, IMPL_SLOT)).toBe(await readSlot(hs, ps, IMPL_SLOT));
   });
 
+  // ---- (6-SEC) SECURITY: malformed admin upgradeToAndCall calldata must NOT upgrade. The synthesized
+  // admin entry decodes (address newImpl, bytes data) EXACTLY like solc's `abi.decode(msg.data[4:],
+  // (address, bytes))` (a `bytes memory` decode) BEFORE any state change. A malformed calldata word
+  // (bad/OOB bytes offset, dirty address, too-short) must EMPTY-revert (or Panic(0x41) on an oversized
+  // length, matching solc's memory-allocation panic) with the impl slot unchanged and NO Upgraded log.
+  // Before the fix these reverting-in-solc shapes performed a real upgrade + emitted Upgraded (a critical
+  // proxy-hijack via garbage calldata). ----
+  describe('(6-SEC) malformed admin upgradeToAndCall calldata never upgrades (== solc)', () => {
+    const raw = (impl: Address, tail: string) =>
+      '0x' + UPGRADE_TO_AND_CALL + W(BigInt(impl.toString())) + tail;
+    async function assertNoUpgrade(build: (v2: Address) => string) {
+      const { hj, hs, v1j, v2j, v1s, v2s, pj, ps } = await setup(7n);
+      const rj = await hj.call(pj, build(v2j), { caller: ADMIN });
+      const rs = await hs.call(ps, build(v2s), { caller: ADMIN });
+      // both revert with byte-identical returndata (EMPTY or Panic 0x41)
+      expect(rj.success).toBe(false);
+      expect(rs.success).toBe(false);
+      expect(rj.returnHex).toBe(rs.returnHex);
+      // no Upgraded log on either
+      expect(rj.logs.length).toBe(0);
+      expect(rs.logs.length).toBe(0);
+      // impl slot UNCHANGED (still V1) on both - the upgrade did NOT run
+      expect(addrFromWord(await readSlot(hj, pj, IMPL_SLOT)).toString().toLowerCase()).toBe(
+        v1j.toString().toLowerCase(),
+      );
+      expect(addrFromWord(await readSlot(hs, ps, IMPL_SLOT)).toString().toLowerCase()).toBe(
+        v1s.toString().toLowerCase(),
+      );
+      // v2 was never installed anywhere
+      expect(addrFromWord(await readSlot(hj, pj, IMPL_SLOT)).toString().toLowerCase()).not.toBe(
+        v2j.toString().toLowerCase(),
+      );
+    }
+    it('an out-of-bounds bytes offset (0x1000, no tail) EMPTY-reverts, no upgrade/log', async () => {
+      await assertNoUpgrade((v2) => raw(v2, W(0x1000n)));
+    });
+    it('a dirty address word (high 96 bits set) reverts, no upgrade/log', async () => {
+      // dirty address with an otherwise well-formed empty-bytes tail:
+      await assertNoUpgrade(
+        (v2) => '0x' + UPGRADE_TO_AND_CALL + W((0xdeadn << 160n) | BigInt(v2.toString())) + W(0x40n) + W(0n),
+      );
+    });
+    it('a too-short calldata (only the address word, no offset word) reverts, no upgrade/log', async () => {
+      await assertNoUpgrade((v2) => raw(v2, ''));
+    });
+    it('a bytes offset that overlaps the head (0x20) reverts, no upgrade/log', async () => {
+      await assertNoUpgrade((v2) => raw(v2, W(0x20n) + W(0n)));
+    });
+    it('a declared length that runs past calldata (off=0x40 len=0x20 no data) EMPTY-reverts, no upgrade/log', async () => {
+      await assertNoUpgrade((v2) => raw(v2, W(0x40n) + W(0x20n)));
+    });
+    it('an oversized declared length (off=0x40 len=2^64-1) Panics(0x41) like solc, no upgrade/log', async () => {
+      await assertNoUpgrade((v2) => raw(v2, W(0x40n) + W(0xffffffffffffffffn)));
+    });
+    it('control: a WELL-FORMED empty-bytes admin upgradeToAndCall still upgrades + logs (== solc)', async () => {
+      const { hj, hs, v2j, v2s, pj, ps } = await setup(7n);
+      const cd = (v2: Address) => '0x' + UPGRADE_TO_AND_CALL + W(BigInt(v2.toString())) + W(0x40n) + W(0n);
+      const rj = await hj.call(pj, cd(v2j), { caller: ADMIN });
+      const rs = await hs.call(ps, cd(v2s), { caller: ADMIN });
+      expect(rj.success).toBe(true);
+      expect(rs.success).toBe(true);
+      expect(rj.logs.length).toBe(1);
+      expect(rs.logs.length).toBe(1);
+      expect(addrFromWord(await readSlot(hj, pj, IMPL_SLOT)).toString().toLowerCase()).toBe(
+        v2j.toString().toLowerCase(),
+      );
+    });
+  });
+
   it('(EIP-1967 slots) the proxy admin/impl slots match solc byte-for-byte', async () => {
     const { hj, hs, v1j, v1s, pj, ps } = await setup(7n);
     expect(await readSlot(hj, pj, IMPL_SLOT)).toBe(await readSlot(hs, ps, IMPL_SLOT));
