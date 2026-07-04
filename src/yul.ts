@@ -878,17 +878,30 @@ ${indent(runtime, 6)}
       argNames.push(an);
     }
     let retDecl = '';
+    // P0-3: an AGGREGATE / bytes / string return var holds a MEMORY POINTER, not a value. A Yul return
+    // var is 0-initialized, so on a SKIP / FALL-THROUGH path (the function runs off its end, or an early
+    // guarded branch is not taken) it would be a null pointer into scratch memory - JETH then re-encodes
+    // whatever garbage lives at memory 0 (keccak scratch / an attacker-influenceable mapping key or
+    // length). solc returns the type's ZERO VALUE there. Initialize each aggregate/bytes/string return
+    // var to a fresh zero image at entry (a value-type var correctly defaults to 0 and needs no init).
+    const needsZeroImage = (t: JethType): boolean => t.kind === 'struct' || t.kind === 'array' || isBytesLike(t);
+    const zeroInits: string[] = [];
     if (fn.returnTypes) {
       // a multi-value internal function: `-> r0, r1, ...`; `return [..]` sets each and leaves.
       const retVars = fn.returnTypes.map(() => this.fresh());
       ctx.fnMode = { retVar: null, retVars };
       retDecl = ` -> ${retVars.join(', ')}`;
+      fn.returnTypes.forEach((rt, i) => {
+        if (needsZeroImage(rt)) zeroInits.push(`${retVars[i]} := ${this.zeroImageFor(rt, ctx, zeroInits)}`);
+      });
     } else {
       const retVar = fn.returnType.kind === 'void' ? null : this.fresh();
       ctx.fnMode = { retVar };
       retDecl = retVar ? ` -> ${retVar}` : '';
+      if (retVar && needsZeroImage(fn.returnType))
+        zeroInits.push(`${retVar} := ${this.zeroImageFor(fn.returnType, ctx, zeroInits)}`);
     }
-    const body: string[] = [];
+    const body: string[] = [...zeroInits];
     for (const s of fn.body) for (const l of this.lowerStmt(s, ctx)) body.push(l);
     const sig = `function ${this.userFnName(fn.key)}(${argNames.join(', ')})${retDecl}`;
     return `${sig} {\n${body.map((l) => '  ' + l).join('\n')}${body.length ? '\n' : ''}}`;
@@ -1033,7 +1046,17 @@ ${indent(runtime, 6)}
         : fn.returnType.kind === 'void'
           ? []
           : [this.fresh()];
-      for (const r of retVars) bodyLines.push(`let ${r} := 0`); // zero-init: a 0-times path / early `return;` returns solc's zero value
+      // Zero-init each buffered return var so a 0-times / early-`return;` path returns solc's zero value.
+      // P0-4: an AGGREGATE / bytes / string var holds a MEMORY POINTER, so `let r := 0` (a null pointer)
+      // makes the shared return encoder re-encode scratch memory (an attacker-influenceable mapping key /
+      // length) - initialize it to a fresh zero IMAGE instead; a value var correctly gets `:= 0`.
+      const retTypes = fn.returnTypes ?? (fn.returnType.kind === 'void' ? [] : [fn.returnType]);
+      const needsZeroImage = (t: JethType): boolean => t.kind === 'struct' || t.kind === 'array' || isBytesLike(t);
+      retVars.forEach((r, i) => {
+        const rt = retTypes[i]!;
+        if (needsZeroImage(rt)) bodyLines.push(`let ${r} := ${this.zeroImageFor(rt, ctx, bodyLines)}`);
+        else bodyLines.push(`let ${r} := 0`);
+      });
       ctx.modifierDispatch = {
         userFn: this.userFnName(fn.key),
         args: this.lowerCallArgs(fn.modifierArgs ?? [], ctx, bodyLines),
@@ -1066,27 +1089,23 @@ ${indent(runtime, 6)}
       for (const l of this.lowerStmt(s, ctx)) bodyLines.push(l);
     }
     if (!terminates && fn.returnTypes) {
-      // fall-through default for a multi-value return: the zero tuple (value/bytes-string
-      // components; an empty bytes/string is [offset][0]).
-      const headWords = fn.returnTypes.length;
-      let cursor = headWords * 32;
-      for (let i = 0; i < fn.returnTypes.length; i++) {
-        if (isBytesLike(fn.returnTypes[i]!)) {
-          bodyLines.push(`mstore(${i * 32}, ${cursor})`, `mstore(${cursor}, 0)`);
-          cursor += 32;
-        } else bodyLines.push(`mstore(${i * 32}, 0)`);
-      }
-      bodyLines.push(`return(0, ${cursor})`);
+      // P0-12: fall-through default for a MULTI-VALUE return - solc returns the zero TUPLE. The old code
+      // used one head word per component (wrong for a STATIC aggregate, which occupies abiHeadWords words)
+      // and gave a plain `0` (not an offset word) to a dynamic ARRAY component. Encode the exact zero tuple
+      // via the shared structural encoder (static components inline; dynamic components offset + empty tail).
+      const { ptr, size } = this.encodeZeroReturnMulti(fn.returnTypes, bodyLines);
+      bodyLines.push(`return(${ptr}, ${size})`);
     } else if (!terminates) {
-      // void or fall-through: return the default-encoded value, matching Solidity
-      // (falling off the end returns the zero value of the return type).
+      // void or fall-through: return the default-encoded value, matching Solidity (falling off the end
+      // returns the ABI encoding of the return type's ZERO value).
       if (fn.returnType.kind === 'void') bodyLines.push('return(0, 0)');
-      else if (isBytesLike(fn.returnType) || fn.returnType.kind === 'array')
-        bodyLines.push('mstore(0, 0x20)', 'mstore(0x20, 0)', 'return(0, 0x40)');
-      else if (fn.returnType.kind === 'struct') {
-        const words = abiHeadWords(fn.returnType);
-        for (let j = 0; j < words; j++) bodyLines.push(`mstore(${j * 32}, 0)`);
-        bodyLines.push(`return(0, ${words * 32})`);
+      else if (fn.returnType.kind === 'struct' || fn.returnType.kind === 'array' || isBytesLike(fn.returnType)) {
+        // P0-12: use the shared structural zero encoder. A STATIC struct / static array is inline zero
+        // words (NOT the dynamic [0x20][0] blob the old array branch emitted); a DYNAMIC struct is the
+        // [0x20] wrapper + a zero tuple with dynamic-field tails (NOT flat inline words); a dynamic array /
+        // bytes / string keeps [0x20][0]; a fixed-of-dynamic array is [0x20] + an offset table + empty tails.
+        const { ptr, size } = this.encodeZeroReturnSingle(fn.returnType, bodyLines);
+        bodyLines.push(`return(${ptr}, ${size})`);
       } else bodyLines.push('mstore(0, 0)', 'return(0, 0x20)');
     }
 
@@ -6760,6 +6779,141 @@ ${indent(runtime, 6)}
     out.push(`let ${size} := ${this.abiEncFromMem(t, mp, `add(${ptr}, 0x20)`, ctx, out)}`);
     out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
     return { ptr, size: `add(0x20, ${size})` };
+  }
+
+  // ---- zero-value encoding (solc `zero_value_for_type`) --------------------
+  // Shared, structural encoders for the ZERO value of a return type, used on SKIP / FALL-THROUGH
+  // paths (an internal function that runs off its end, a modifier whose placeholder never fires, an
+  // external function whose only `return` is guarded). solc returns the ABI encoding of the type's
+  // zero value; JETH previously read uninitialized memory (keccak scratch / free-mem-ptr) or emitted
+  // a dynamic [0x20][0] blob for a STATIC aggregate, leaking attacker-influenceable mapping keys /
+  // lengths (P0-3 / P0-4 / P0-12). All zero-blob sizes are compile-time constants.
+
+  /** Write the ABI encoding of a zero value of `t` (as a TAIL, no top-level wrapper) at memory `dst`.
+   *  Returns the byte size (a compile-time constant). Actively zeroes every word (calldatacopy from
+   *  past calldatasize writes zeros - solc's zero-init idiom), so the result is all-zero over dirty
+   *  memory, then overwrites the offset words of any dynamic sub-parts. */
+  private zeroAbiInto(t: JethType, dst: string, out: string[]): number {
+    if (isStaticType(t)) {
+      const sz = abiHeadWords(t) * 32;
+      out.push(`calldatacopy(${dst}, calldatasize(), ${sz})`);
+      return sz;
+    }
+    if (isBytesLike(t) || (t.kind === 'array' && t.length === undefined)) {
+      out.push(`mstore(${dst}, 0)`); // [len=0]
+      return 32;
+    }
+    if (t.kind === 'struct') return this.zeroAbiTuple(t.fields.map((f) => f.type), dst, out);
+    if (t.kind === 'array' && t.length !== undefined)
+      return this.zeroAbiTuple(Array.from({ length: t.length }, () => t.element), dst, out); // fixed-of-dynamic
+    throw new UnsupportedError(`zero value for type '${t.kind}' is not supported`);
+  }
+
+  /** Write a zero ABI TUPLE (components `types`) at `dst`, returns the byte size. A static component
+   *  occupies its abiHeadWords inline zero words; a dynamic component occupies one head offset word
+   *  (pointing at its tail) then its zero tail after the head run. Reused for a multi-value return, a
+   *  dynamic struct's fields, and a fixed-of-dynamic array's N elements. */
+  private zeroAbiTuple(types: JethType[], dst: string, out: string[]): number {
+    const headWords = types.reduce((n, c) => n + (isDynamicType(c) ? 1 : abiHeadWords(c)), 0);
+    const headBytes = headWords * 32;
+    // Zero the whole head run first (static components stay zero; dynamic components get their offset
+    // word overwritten below).
+    out.push(`calldatacopy(${dst}, calldatasize(), ${headBytes})`);
+    let headOff = 0;
+    let cursor = headBytes;
+    for (const c of types) {
+      if (isDynamicType(c)) {
+        out.push(`mstore(add(${dst}, ${headOff}), ${cursor})`); // relative offset to this component's tail
+        cursor += this.zeroAbiInto(c, `add(${dst}, ${cursor})`, out);
+        headOff += 32;
+      } else {
+        headOff += abiHeadWords(c) * 32;
+      }
+    }
+    return cursor;
+  }
+
+  /** Build the full ABI zero-return blob for a SINGLE return value of type `t`, returning {ptr, size}.
+   *  A dynamic type gets the leading [0x20] top-level offset wrapper (a dynamic array / bytes / string
+   *  / dynamic struct is a dynamic top-level return); a static type is returned inline. */
+  private encodeZeroReturnSingle(t: JethType, out: string[]): { ptr: string; size: string } {
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    if (isDynamicType(t)) {
+      out.push(`mstore(${ptr}, 0x20)`);
+      const sz = this.zeroAbiInto(t, `add(${ptr}, 0x20)`, out);
+      const total = 0x20 + sz;
+      out.push(`mstore(0x40, add(${ptr}, ${total}))`);
+      return { ptr, size: String(total) };
+    }
+    const sz = this.zeroAbiInto(t, ptr, out);
+    out.push(`mstore(0x40, add(${ptr}, ${sz}))`);
+    return { ptr, size: String(sz) };
+  }
+
+  /** Build the full ABI zero-return blob for a MULTI-VALUE return (`types`), returning {ptr, size}. A
+   *  multi-value return is a bare tuple (NO leading top-level offset wrapper); dynamic components are
+   *  offset-encoded within the tuple. */
+  private encodeZeroReturnMulti(types: JethType[], out: string[]): { ptr: string; size: string } {
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    const sz = this.zeroAbiTuple(types, ptr, out);
+    out.push(`mstore(0x40, add(${ptr}, ${sz}))`);
+    return { ptr, size: String(sz) };
+  }
+
+  /** Build a fresh ZERO memory image (JETH's internal representation, what aggArgToMemPtr produces) for
+   *  an aggregate / bytes / string type `t`, returning its pointer. Used to initialize an internal
+   *  function's aggregate return var (P0-3) and to bind a modifier's buffered aggregate return var
+   *  (P0-4) on a 0-times / early-exit path, so the shared return encoder re-encodes solc's zero value
+   *  instead of reading uninitialized memory. Layout matches what the corresponding `return <value>`
+   *  path materializes (a static struct/array = flat inline zero words; a dynamic array / bytes / string
+   *  = [len=0]; a dynamic struct = pointer-headed head with dynamic-field pointers to empty sentinels;
+   *  a fixed-of-dynamic / pointer-headed static-struct array = N pointers to fresh zero element images). */
+  private zeroImageFor(t: JethType, ctx: LowerCtx, out: string[]): string {
+    // bytes / string: a fresh empty [len=0] blob.
+    if (isBytesLike(t)) {
+      const p = this.fresh();
+      out.push(`let ${p} := mload(0x40)`);
+      out.push(`mstore(${p}, 0)`);
+      out.push(`mstore(0x40, add(${p}, 0x20))`);
+      return p;
+    }
+    // a STATIC aggregate that is NOT pointer-headed (a flat static struct / static value array): the
+    // image IS its abiHeadWords inline zero words (the same flat blob allocAggToMem produces).
+    if (isStaticType(t) && !(t.kind === 'array' && isStaticStructFixedLeafArray(t))) {
+      const hw = abiHeadWords(t);
+      const p = this.fresh();
+      out.push(`let ${p} := mload(0x40)`);
+      out.push(`calldatacopy(${p}, calldatasize(), ${hw * 32})`);
+      out.push(`mstore(0x40, add(${p}, ${hw * 32}))`);
+      return p;
+    }
+    // a DYNAMIC-field struct: the pointer-headed zero image (value fields 0; each dynamic field's head
+    // word points at a fresh empty [len=0] sentinel).
+    if (t.kind === 'struct') return this.emptyDynStructImage(t, out);
+    // a DYNAMIC array T[] (len 0): a single [len=0] word (abiEncFromMem reads len=0 and emits no tail).
+    if (t.kind === 'array' && t.length === undefined) {
+      const p = this.fresh();
+      out.push(`let ${p} := mload(0x40)`);
+      out.push(`mstore(${p}, 0)`);
+      out.push(`mstore(0x40, add(${p}, 0x20))`);
+      return p;
+    }
+    // a FIXED-outer pointer-headed array (Arr<u256[],N> fixed-of-dynamic, Arr<P,N> static-struct-leaf,
+    // Arr<bytes,N>): N absolute-pointer words, each -> a fresh zero element image (recursive).
+    if (t.kind === 'array' && t.length !== undefined) {
+      const n = t.length;
+      const p = this.fresh();
+      out.push(`let ${p} := mload(0x40)`);
+      out.push(`mstore(0x40, add(${p}, ${n * 32}))`);
+      for (let k = 0; k < n; k++) {
+        const ip = this.zeroImageFor(t.element, ctx, out);
+        out.push(`mstore(add(${p}, ${k * 32}), ${ip})`);
+      }
+      return p;
+    }
+    throw new UnsupportedError(`zero image for type '${t.kind}' is not supported`);
   }
 
   /** Encode an arrayValue/arrayLit as ABI [0x20][len][elem words...] in memory. */
