@@ -12163,6 +12163,36 @@ export class Analyzer {
         return undefined;
       }
     }
+    // P0-35b: `xs[i][j] = <bytes1>` - byte-index j into a bytes element of a MEMORY bytes[]/string[]
+    // (or fixed Arr<bytes,N>) local. Mirrors the READ path (Residual B2, checkExpr's byteIndex): the
+    // base xs[i] resolves to a memory `bytes` value (strArrayElem over the memArray/memAggregate), so
+    // the write is an in-place bounds-checked mstore8 (memByteIndexStore), NOT a storage RMW. Must run
+    // BEFORE the storage byteIndexStore branch below, which would otherwise treat xs[i] as a state
+    // location (spurious @pure/@view write + strArrayElemSlot JETH900). `string` elements are not
+    // indexable (solc: JETH205). A whole-value element write xs[i] = <bytes> stays with strArrayElem.
+    if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression &&
+      ts.isElementAccessExpression(node.expression) &&
+      node.expression.argumentExpression &&
+      this.nestedMemArrayElemAccess(node.expression)
+    ) {
+      const baseArr = this.resolveArrayExpr(node.expression.expression);
+      if (baseArr && isBytesLike(baseArr.elem)) {
+        const base = this.checkExpr(node.expression);
+        if (!base) return undefined;
+        if (base.type.kind === 'string') {
+          this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+          return undefined;
+        }
+        if (base.type.kind === 'bytes') {
+          const idx = this.checkExpr(node.argumentExpression, U256);
+          if (!idx) return undefined;
+          // an in-place memory element store does NOT touch storage; stays @pure/@view-clean.
+          return { kind: 'memByteIndexStore', type: BYTES1, base, index: this.coerce(idx, U256, node.argumentExpression) };
+        }
+      }
+    }
     // this.b[i] = <bytes1>: byte assignment into a STORAGE `bytes` (RMW the containing slot/word).
     // The bytes may be a direct state var OR reached through a struct field / mapping value /
     // bytes[] or Arr<bytes,N> element. (string is not element-assignable in solc.) The bytes
@@ -12389,6 +12419,10 @@ export class Analyzer {
       if (!index) return undefined;
       const idx = this.coerce(index, U256, node.argumentExpression);
       if (!this.checkFixedBound(arr, idx, node.argumentExpression)) return undefined;
+      // P1-13: a const-OOB index into a FIXED-outer memory array carries its length in memFixedLen (a
+      // fixed-array ternary `(c ? xs : ys)[5n]`, or any pointer-headed fixed memory array); solc rejects
+      // a compile-time index >= N (JETH211). checkFixedBound only covers a `fixedArray` (storage) base.
+      if (!this.checkArrExprBound(arr, idx, node.argumentExpression)) return undefined;
       if (arr.base.kind !== 'memArray' && arr.base.kind !== 'memArrayExpr') this.currentWritesState = true; // a memory array write is not storage
       return { kind: 'arrayElem', type: arr.elem, arr, index: idx };
     }
@@ -13453,6 +13487,32 @@ export class Analyzer {
       if (e && e.kind === 'arrayValue' && e.arr.base.kind === 'memArrayExpr') return e.arr;
       if (e && e.type.kind === 'array' && e.type.length === undefined && isStaticValueType(e.type.element)) {
         return { base: { kind: 'memArrayExpr', expr: e }, elem: e.type.element };
+      }
+      // P1-13: a FIXED value-array ternary (c ? xs : ys of Arr<u256,N>, or a nested value sub-array
+      // Arr<Arr<u256,2>,N>). checkExpr returns a `ternary` Expr whose aggregate lowering materializes/
+      // aliases the TAKEN branch to a memory image POINTER (aggToMemPtr: a memAggregate branch aliases the
+      // original, so `(c?xs:ys)[i] = v` writes THROUGH to the selected array, byte-identical to solc's
+      // memory-array reference). Wrap it as a fixed-outer memArrayExpr (memFixedLen = N, no [len] header)
+      // so the READ (lowerArrayGet) and element WRITE (arrayElem, memory branch) consume it exactly like
+      // an Arr<T,N> memAggregate local. Element must be a VALUE word or a fully-inline value-word
+      // sub-array - exactly the aggregate-ternary shapes checkExpr materializes (kind 'ternary'). A
+      // struct-leaf / bytes-leaf / dynamic-leaf fixed-array ternary is ALREADY a clean JETH074 reject in
+      // checkExpr (e is not a 'ternary' Expr here, so this branch is skipped): no silent drop, no
+      // miscompile, and no risk of mis-reading a pointer-headed image through the inline element path.
+      if (
+        e &&
+        e.kind === 'ternary' &&
+        e.type.kind === 'array' &&
+        e.type.length !== undefined &&
+        (isStaticValueType(e.type.element) ||
+          (e.type.element.kind === 'array' && isValueWordAggregate(e.type.element)))
+      ) {
+        return {
+          base: { kind: 'memArrayExpr', expr: e },
+          elem: e.type.element,
+          memFixedLen: e.type.length,
+          memStaticElem: this.memElemStatic(e.type.element),
+        };
       }
       return undefined;
     }
@@ -17264,7 +17324,12 @@ export class Analyzer {
         if (ma && ma.base.kind === 'memArrayExpr' && isStaticValueType(ma.elem)) {
           const index = this.checkExpr(node.argumentExpression, U256);
           if (!index) return undefined;
-          return { kind: 'arrayGet', type: ma.elem, arr: ma, index: this.coerce(index, U256, node.argumentExpression) };
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          // P1-13: a FIXED-array ternary read `(c ? xs : ys)[5n]` carries memFixedLen; a compile-time
+          // index >= N is a solc "Out of bounds array access" (JETH211). A dynamic-outer ternary
+          // (memFixedLen undefined) is runtime-checked (Panic 0x32), so this is a no-op there.
+          if (!this.checkArrExprBound(ma, idx, node.argumentExpression)) return undefined;
+          return { kind: 'arrayGet', type: ma.elem, arr: ma, index: idx };
         }
       }
       // A WHOLE inner dynamic array reached by a multi-step chain used as a value
@@ -17426,6 +17491,10 @@ export class Analyzer {
         if (!index) return undefined;
         const idx = this.coerce(index, U256, node.argumentExpression);
         if (!this.checkFixedBound(arr, idx, node.argumentExpression)) return undefined;
+        // P1-13: a const-OOB index into a FIXED-outer memory array (memFixedLen: a fixed-array ternary
+        // `(c ? xs : ys)[5n]`, or any pointer-headed fixed memory array) is a solc compile error (JETH211).
+        // checkFixedBound above only covers a `fixedArray` (storage) base; this covers the memFixedLen case.
+        if (!this.checkArrExprBound(arr, idx, node.argumentExpression)) return undefined;
         if (arr.base.kind !== 'calldataArray' && arr.base.kind !== 'memArray' && arr.base.kind !== 'memArrayExpr')
           this.currentReadsState = true;
         return { kind: 'arrayGet', type: arr.elem, arr, index: idx };
