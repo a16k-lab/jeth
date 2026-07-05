@@ -67,7 +67,11 @@ export type Expr =
   // hexBytes: when the literal was written as a HEX number (0x...), the source byte width
   // (hex digits / 2). solc converts a hex literal to bytesN iff hexBytes === N. undefined for
   // decimal literals and for synthesized literals.
-  | { kind: 'literalInt'; type: JethType; value: bigint; hexBytes?: number }
+  // explicitCast: this literal is the folded result of an EXPLICIT integer cast (`u256(5n)`, `i8(x)`),
+  // so it is a CONCRETELY-typed value, not a free int_const. It must obey implicit-conversion rules when
+  // coerced to another type (u256(5) does NOT implicitly convert to u8), unlike a bare int_const literal
+  // which retypes freely to any target that holds it. Undefined for a bare/synthesized literal.
+  | { kind: 'literalInt'; type: JethType; value: bigint; hexBytes?: number; explicitCast?: true }
   | { kind: 'literalBool'; type: JethType; value: boolean }
   | { kind: 'rawReg'; type: JethType; reg: string } // a pre-computed Yul register (internal; used to feed a value into the assign lowering, e.g. tuple destructuring)
   | { kind: 'stateRead'; type: JethType; slot: bigint; offset: number; varName: string }

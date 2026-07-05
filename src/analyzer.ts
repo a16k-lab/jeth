@@ -48,6 +48,7 @@ import {
   abiHeadWords,
   intRange,
   numericLiteralWholeValue,
+  numericLiteralRational,
   StructField,
 } from './types.js';
 import {
@@ -15423,6 +15424,17 @@ export class Analyzer {
 
     // a primitive cast (u256(x), address(x), ...) or a branded-newtype wrap (TokenId(x)).
     const target = resolvePrimitiveName(callee) ?? this.structsByName.get(callee)!;
+    // an EXPLICIT bytesN(<string literal>) cast: solc allows it iff the literal's UTF-8 byte length <= N
+    // (left-aligned in the high N bytes), same rule as the implicit conversion; over-length rejects. Handle
+    // it directly (the folded bytesN literalInt already sits in final register form, so it must NOT flow
+    // through the int-literal-bytesN re-shift branch below). e.g. bytes4("abc") == 0x6162630000.
+    if (
+      target &&
+      target.kind === 'bytesN' &&
+      (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg))
+    ) {
+      return this.stringLiteralAsBytesN(this.strLitBytes(arg), target, node);
+    }
     // bytes(...) / string(...) of a STRING LITERAL: give the literal the target type as expected so it
     // is accepted (e.g. bytes("abc"), string("abc")) instead of failing the no-expected-type gate.
     const argExpected = target && (target.kind === 'bytes' || target.kind === 'string') ? target : undefined;
@@ -15456,6 +15468,10 @@ export class Analyzer {
       }
       // an EXPLICIT cast: an enum-member literal may be cast to an integer here (uint256(Color.Blue)).
       const r = this.retypeLiteral(inner, target, node, /* allowEnumToInt */ true);
+      // Mark the folded value as an EXPLICIT cast so coerce treats it as a concretely-typed value (u256(5)
+      // does NOT implicitly convert to u8), not a free int_const - closing the g(u256(5n))-for-g(u8)
+      // over-acceptance. Only for a plain integer target (an enum target keeps enum-conversion semantics).
+      if (r && r.kind === 'literalInt' && isInteger(target) && !isEnum(target)) return { ...r, explicitCast: true };
       if (r) return r;
       // An address-typed literal converts only to uint160 (retypeLiteral returned undefined without a
       // diagnostic); other integer widths are an explicit-conversion error (uint256(0x<addr>)).
@@ -15977,6 +15993,17 @@ export class Analyzer {
           return undefined;
         }
         return { kind: 'stringLiteral', type: expected, bytes: b };
+      }
+      // A string literal implicitly converts to a FIXED bytesN iff its UTF-8 byte length <= N: the bytes
+      // sit LEFT-aligned in the high N (zero-padded on the right), byte-identical to solc's fixed-bytes
+      // literal (`bytes32 x = "abc"` == 0x6162630..0). A literal LONGER than N is rejected ("Literal is
+      // larger than the type"). Byte length counts raw UTF-8 bytes, so a `\xNN`/unicode literal is fine
+      // for bytesN even when it is not valid UTF-8 (bytesN is not `string`).
+      if (expected && expected.kind === 'bytesN') {
+        const b = this.strLitBytes(node);
+        const lit = this.stringLiteralAsBytesN(b, expected, node);
+        if (lit) return lit;
+        return undefined;
       }
       this.diags.error(node, 'JETH074', 'a string literal is only valid where a string/bytes value is expected');
       return undefined;
@@ -18297,6 +18324,25 @@ export class Analyzer {
           return this.buildBinary(op, l, r, node);
         }
       }
+      // A STRING literal on the RIGHT of a comparison whose LEFT operand is a bytesN value (`b4 == "abcd"`,
+      // `b4 < "ab"`) is a fixed-bytes literal in solc iff its byte length <= N. Same ASYMMETRY as the hex
+      // case: solc types the literal by the LEFT operand's bytesN, so `"abcd" == b4` (literal LEFT) is
+      // rejected (falls through to unify). Feed the left's bytesN type to the literal, which folds it to a
+      // left-aligned bytesN literalInt (over-length -> JETH074, byte-identical to solc's reject).
+      if (
+        this.isComparison(op) &&
+        (ts.isStringLiteral(node.right) || ts.isNoSubstitutionTemplateLiteral(node.right)) &&
+        !ts.isStringLiteral(node.left) &&
+        !ts.isNoSubstitutionTemplateLiteral(node.left)
+      ) {
+        const l = this.checkExpr(node.left, undefined);
+        if (!l) return undefined;
+        if (l.type.kind === 'bytesN') {
+          const r = this.checkExpr(node.right, l.type);
+          if (!r) return undefined;
+          return this.buildBinary(op, l, r, node);
+        }
+      }
       // FIX 2: an address-take used DIRECTLY as a `==`/`!=` operand (`g == this.inc`, `this.inc == g`).
       // An address-take (`f` / `this.f`) has no type without an expected funcref, so if the OTHER operand
       // is a funcref, feed its type in so the name resolves to a pointer id (binding it to a local first
@@ -18389,6 +18435,23 @@ export class Analyzer {
   }
 
   private checkUnary(node: ts.PrefixUnaryExpression, expected?: JethType): Expr | undefined {
+    // A prefix `-` or `~` over a CONSTANT expression folds with UNBOUNDED precision, then the FINAL value
+    // is range-checked against `expected` - matching solc, which never range-checks the sub-expression.
+    // `int8 x = -(100 + 28)` folds to -128 (a valid i8 == INT_MIN); the old path range-checked the inner
+    // `128` against i8 first and over-rejected (JETH070). foldConstRational folds `-`/`~` over pure int
+    // literals (it deliberately does NOT resolve @constant refs / type(T).max / typed casts, so those keep
+    // their runtime/typed semantics and fall through to the operand path below). A `~` over a NON-integer
+    // rational (e.g. ~(10/4)) or a `-`/`~` over a non-constant operand returns undefined and falls through.
+    if (node.operator === ts.SyntaxKind.MinusToken || node.operator === ts.SyntaxKind.TildeToken) {
+      const folded = this.foldConstRational(node);
+      if (folded !== undefined) {
+        if ('err' in folded) {
+          this.diags.error(node, 'JETH079', folded.err);
+          return undefined;
+        }
+        return this.literalFromConst(folded, node, expected);
+      }
+    }
     const operand = this.checkExpr(node.operand, expected);
     if (!operand) return undefined;
     switch (node.operator) {
@@ -18675,7 +18738,13 @@ export class Analyzer {
   /** Coerce an expression to a target type (literal retyping or exact match). */
   private coerce(expr: Expr, target: JethType, node: ts.Node): Expr {
     if (typesEqual(expr.type, target)) return expr;
-    if (expr.kind === 'literalInt') {
+    // An EXPLICIT integer cast that folded to a literal (u256(5n)) is a CONCRETELY-typed value, NOT a free
+    // int_const: it obeys the same implicit-conversion rules as a runtime value, so `u256(5)` does NOT
+    // implicitly convert to u8 (solc: "invalid implicit conversion"). Skip the free literal-retype path
+    // and fall through to the implicit-widen check below (which requires same-signedness, non-narrowing).
+    // This closes an over-acceptance where g(u256(5n)) was accepted for a g(u8) parameter. A bytesN target
+    // still needs an explicit cast (retypeLiteral would only widen bytes for a hex literal, absent here).
+    if (expr.kind === 'literalInt' && !expr.explicitCast) {
       const r = this.retypeLiteral(expr, target, node);
       if (r) return r;
       // An ordinary int literal that fails to retype already had its diagnostic emitted by
@@ -18868,6 +18937,12 @@ export class Analyzer {
     // bytesN constant: `bytesN(<int literal>)` -> the value LEFT-aligned in the high N bytes (the
     // bytesN register form), matching solc's bytesN literal. The bare literal 0 also folds to zero.
     if (expected.kind === 'bytesN') {
+      // a STRING literal implicitly converts to bytesN iff its UTF-8 byte length <= N (left-aligned):
+      // `@constant B: bytes4 = "wxyz"` == 0x7778797a. Over-length is rejected by stringLiteralAsBytesN.
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+        const lit = this.stringLiteralAsBytesN(this.strLitBytes(node), expected, node);
+        return lit && lit.kind === 'literalInt' ? (lit.value as bigint) : undefined;
+      }
       // `~bytesN_const`: complement the value within the high N bytes (the bytesN register form),
       // leaving the low (32-N) bytes zero. solc: ~bytes1(0)=0xff..(byte 0), ~bytes4(0x12345678)=0xedcba987.
       if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.TildeToken) {
@@ -19090,6 +19165,12 @@ export class Analyzer {
         case '"': out.push(0x22); i += 2; break;
         case '`': // valid only inside a template literal; an invalid escape in a quoted string
           if (backtickCtx) { out.push(0x60); i += 2; } else { invalidEscape(); i += 2; }
+          break;
+        case '$': // `\$` escapes a literal `$` inside a template literal (so `\${` is a literal "${",
+          // not an interpolation). Backtick-context only; a `\$` in a quoted string is an INVALID escape
+          // in solc, so it stays rejected there. The decoded byte is a plain `$` (0x24), byte-identical
+          // to the same literal `$` written directly in a solc string.
+          if (backtickCtx) { out.push(0x24); i += 2; } else { invalidEscape(); i += 2; }
           break;
         case '\r': i += s[i + 2] === '\n' ? 3 : 2; break; // line continuation (CR / CRLF)
         case '\n': i += 2; break; // line continuation
@@ -19556,17 +19637,40 @@ export class Analyzer {
     return undefined;
   }
 
-  /** If `node` (modulo parentheses) is a bare HEX bigint literal (0x...) with an EVEN digit count,
-   *  its source byte width (digits / 2); else undefined. solc converts a hex literal to bytesN iff
-   *  this width equals N. (A decimal literal or an odd-digit hex literal never converts.) */
+  /** If `node` (modulo parentheses) is a HEX literal (0x...) with an EVEN digit count, its source byte
+   *  width (digits / 2); else undefined. solc converts a hex literal to bytesN iff this width equals N.
+   *  (A decimal literal or an odd-digit hex literal never converts.) Accepts BOTH the bigint spelling
+   *  `0x12345678n` and the bare NumericLiteral spelling `0x12345678` - solc draws no distinction, so a
+   *  `@constant b: bytes4 = 0x12345678` folds the same as its `...n` twin (was a JETH048 over-rejection). */
   private hexLiteralBytes(node: ts.Expression): number | undefined {
     let n: ts.Expression = node;
     while (ts.isParenthesizedExpression(n)) n = n.expression;
+    // a bare NumericLiteral hex (no `n` suffix): TS normalizes .text to decimal, so read the SOURCE text.
+    if (ts.isNumericLiteral(n)) return this.bareHexByteWidth(n);
     if (!ts.isBigIntLiteral(n)) return undefined;
     const raw = n.text.replace(/n$/, '');
     if (!/^0x/i.test(raw)) return undefined;
     const digits = raw.length - 2;
     return digits % 2 === 0 ? digits / 2 : undefined;
+  }
+
+  /** Convert a decoded string-literal byte array to a fixed `bytesN` literal (left-aligned in the high N
+   *  bytes, zero-padded on the right), byte-identical to solc. Rejects a literal whose byte length exceeds
+   *  N ("Literal is larger than the type" -> JETH074). Byte length counts raw UTF-8 bytes; validity is NOT
+   *  required (bytesN is not `string`). Returns the literalInt Expr, or undefined after emitting JETH074. */
+  private stringLiteralAsBytesN(b: Uint8Array, target: JethType & { kind: 'bytesN' }, node: ts.Node): Expr | undefined {
+    if (b.length > target.size) {
+      this.diags.error(
+        node,
+        'JETH074',
+        `string literal (${b.length} bytes) is larger than bytes${target.size}`,
+      );
+      return undefined;
+    }
+    // pack the (<= N) bytes into the high N bytes of a 256-bit word: byte i occupies bits [(31-i)*8..].
+    let value = 0n;
+    for (let i = 0; i < b.length; i++) value |= BigInt(b[i]!) << BigInt((31 - i) * 8);
+    return { kind: 'literalInt', type: target, value };
   }
 
   private evalConstInt(node: ts.Expression): bigint | undefined {
@@ -19688,6 +19792,14 @@ export class Analyzer {
     if (ts.isParenthesizedExpression(node)) return this.foldConstRational(node.expression);
     const lit = this.asIntLiteral(node);
     if (lit !== undefined) return { num: lit, den: 1n };
+    // A FRACTIONAL decimal literal (0.5, 1.5, 25e-1) is a solc `rational_const`: fold it to its exact
+    // reduced rational so a constant expression whose FINAL value is a whole number is accepted
+    // (`4 * 0.5` == 2, `1/2 + 1/2` == 1), while a non-integer final value is rejected at the conversion
+    // boundary (literalFromConst emits JETH079 for den != 1). A HEX literal is excluded (e/E are digits).
+    if (ts.isNumericLiteral(node) && !/^0[xX]/.test(node.getText())) {
+      const r = numericLiteralRational(node.getText());
+      if (r !== undefined) return r;
+    }
     // NOTE: deliberately does NOT fold @constant references / type(T).max here. In a function body,
     // solc keeps `type(u16).max + 1` as TYPED (uint16) arithmetic -> a runtime overflow, not a folded
     // constant. Constant folding of these belongs only to the @constant-initializer path (evalConstInt).
@@ -19899,13 +20011,16 @@ export class Analyzer {
    *  parentheses, return its signed value; otherwise undefined. */
   /** If `node` is a bare HEX numeric literal (no `n` suffix, e.g. 0x12345678 - which TS parses as a
    *  NumericLiteral whose .text is decimal), return its even-digit source byte width, else undefined.
-   *  Used to type a hex literal as a matching-width bytesN when compared to a bytesN operand. */
+   *  Digit-separator underscores (`0xdead_beef`) are stripped before counting, matching the bigint path
+   *  where TS pre-strips them from .text; a MALFORMED underscore placement is caught upstream by
+   *  rejectBadUnderscores. Used to type a hex literal as a matching-width bytesN (comparison operand or
+   *  a @constant bytesN fold). */
   private bareHexByteWidth(node: ts.Expression): number | undefined {
     if (ts.isParenthesizedExpression(node)) return this.bareHexByteWidth(node.expression);
     if (!ts.isNumericLiteral(node)) return undefined;
-    const m = /^0x([0-9a-fA-F]+)$/.exec(node.getText());
+    const m = /^0x([0-9a-fA-F_]+)$/.exec(node.getText());
     if (!m) return undefined;
-    const digits = m[1]!.length;
+    const digits = m[1]!.replace(/_/g, '').length;
     return digits % 2 === 0 ? digits / 2 : undefined;
   }
 

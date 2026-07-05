@@ -9,6 +9,45 @@ import ts from 'typescript';
 import type { DiagnosticBag } from './diagnostics.js';
 import { numericLiteralWholeValue } from './types.js';
 
+/** True if `node` (a fractional numeric literal) is a sub-term of a constant ARITHMETIC expression whose
+ *  enclosing expression the analyzer folds exactly (`4 * 0.5`, `(1.5 + 0.5)`, `-0.5 + 1`). Walk UP through
+ *  parentheses and unary +/-/~ to the nearest meaningful ancestor: a binary +,-,*,/,%,**,<<,>>,&,|,^ makes
+ *  it a foldable rational sub-term (the analyzer range-checks only the final value). Any other position
+ *  (a variable initializer, call argument, return value, index, comparison, etc.) is a bare fractional
+ *  literal that no fold can make whole, so the validator rejects it here (JETH003), matching solc. */
+function isConstArithmeticOperand(node: ts.Node): boolean {
+  let cur: ts.Node = node;
+  let parent = cur.parent;
+  while (
+    parent &&
+    (ts.isParenthesizedExpression(parent) ||
+      (ts.isPrefixUnaryExpression(parent) &&
+        (parent.operator === ts.SyntaxKind.MinusToken ||
+          parent.operator === ts.SyntaxKind.PlusToken ||
+          parent.operator === ts.SyntaxKind.TildeToken)))
+  ) {
+    cur = parent;
+    parent = cur.parent;
+  }
+  if (parent && ts.isBinaryExpression(parent)) {
+    switch (parent.operatorToken.kind) {
+      case ts.SyntaxKind.PlusToken:
+      case ts.SyntaxKind.MinusToken:
+      case ts.SyntaxKind.AsteriskToken:
+      case ts.SyntaxKind.SlashToken:
+      case ts.SyntaxKind.PercentToken:
+      case ts.SyntaxKind.AsteriskAsteriskToken:
+      case ts.SyntaxKind.LessThanLessThanToken:
+      case ts.SyntaxKind.GreaterThanGreaterThanToken:
+      case ts.SyntaxKind.AmpersandToken:
+      case ts.SyntaxKind.BarToken:
+      case ts.SyntaxKind.CaretToken:
+        return true;
+    }
+  }
+  return false;
+}
+
 export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag): void {
   const visit = (node: ts.Node): void => {
     // Solidity reserves `_` (the @modifier placeholder), so it cannot be a DECLARED identifier name
@@ -124,11 +163,19 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
     // whole number (1.5, 1e-1, 25e-1, 0.5). A whole-number decimal/scientific literal (1e18, 1.5e18, 10e-1,
     // 1.0) IS a valid integer to solc and is accepted (its value computed exactly downstream). A HEX literal
     // (0x..) is excluded here entirely: e/E are hex DIGITS, not an exponent, and it has no fractional form.
+    //
+    // A fractional literal that is an OPERAND of a constant arithmetic/paren/unary expression is a solc
+    // `rational_const` sub-term whose enclosing expression may fold to a whole number (`4 * 0.5` == 2); the
+    // ANALYZER folds those exactly and range-checks only the FINAL value (a non-integer final value ->
+    // JETH079). So the coarse validator only rejects a fractional literal in a NON-arithmetic position
+    // (`let x: u256 = 0.5`, `f(1.5)`), where no fold can make it whole. This mirrors solc, which accepts a
+    // fractional sub-term iff the whole constant expression reduces to an integer of the target type.
     if (
       ts.isNumericLiteral(node) &&
       !/^0[xX]/.test(node.getText()) &&
       /[.eE]/.test(node.getText()) &&
-      numericLiteralWholeValue(node.getText()) === undefined
+      numericLiteralWholeValue(node.getText()) === undefined &&
+      !isConstArithmeticOperand(node)
     ) {
       diags.error(
         node,

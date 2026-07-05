@@ -713,3 +713,30 @@ export function numericLiteralWholeValue(text: string): bigint | undefined {
   const div = 10n ** BigInt(-shift);
   return num % div === 0n ? num / div : undefined; // integral only if it divides evenly
 }
+
+/** Parse a DECIMAL/scientific numeric literal (1.5, 0.5, 25e-1, 1e18) to its EXACT reduced rational
+ *  num/den, matching solc's `rational_const`. This is the full-precision value solc carries through a
+ *  constant expression before the final result is required to be a whole number. Returns undefined for a
+ *  hex literal (0x.., where e/E are digits) or a malformed literal. The exponent is bounded to avoid a
+ *  pathological BigInt blow-up (solc also caps literal magnitude). Denominator is always a power of ten. */
+export function numericLiteralRational(text: string): { num: bigint; den: bigint } | undefined {
+  const m = /^([0-9][0-9_]*)(?:\.([0-9][0-9_]*))?(?:[eE]([+-]?[0-9][0-9_]*))?$/.exec(text);
+  if (!m) return undefined;
+  const fracD = (m[2] ?? '').replace(/_/g, '');
+  const exp = m[3] ? Number(m[3].replace(/_/g, '')) : 0;
+  const digits = m[1]!.replace(/_/g, '') + fracD;
+  const shift = exp - fracD.length;
+  if (Math.abs(shift) > 4096) return undefined;
+  let num = BigInt(digits);
+  let den = 1n;
+  if (shift >= 0) num *= 10n ** BigInt(shift);
+  else den = 10n ** BigInt(-shift);
+  // reduce num/den by gcd so downstream equality (den === 1n) sees the canonical form.
+  let a = num < 0n ? -num : num,
+    b = den;
+  while (b) {
+    [a, b] = [b, a % b];
+  }
+  const g = a === 0n ? 1n : a;
+  return { num: num / g, den: den / g };
+}
