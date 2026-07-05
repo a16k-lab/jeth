@@ -7750,6 +7750,37 @@ export class Analyzer {
     return node; // identifier / this / other pure leaf
   }
 
+  /** W8A (RHS-value-before-index): materialize a whole-AGGREGATE assignment RHS into a fresh memory temp
+   *  local BEFORE the caller hoists a side-effecting index/key. solc evaluates the RHS value completely
+   *  before the LHS location (its index/key), so a `this.ps[bump()] = P(this.ctr, ...)` reads `this.ctr`
+   *  at the PRE-bump value. The whole-aggregate element/member/mapping-value write path resolves the
+   *  index temp first, so without this hoist the RHS would read POST-mutation state (a slot-level
+   *  miscompile). Reusing checkLocalDecl (a) runs the RHS side effects in SOURCE order here, before the
+   *  index temps the caller emits next, and (b) registers the aggregate local (memAggregate / memArray /
+   *  dyn-struct image) so a read-back references its pointer: a constructor/literal builds a FRESH image,
+   *  a memory-reference source ALIASES its pointer - byte-identical to solc for BOTH the storage
+   *  deep-copy target (the temp is deep-copied in) and a memory re-point target (the temp's pointer is
+   *  the source's). Returns a synthesized identifier reading the temp, or undefined if checkLocalDecl
+   *  rejected the source (a clean reject stands, never a miscompile). */
+  private materializeAggregateRhsToTemp(right: ts.Expression, t: JethType, out: Stmt[]): ts.Expression | undefined {
+    const f = ts.factory;
+    const name = this.freshHoistName();
+    const decl = this.synth(
+      f.createVariableDeclaration(
+        this.synth(f.createIdentifier(name), right),
+        undefined,
+        this.jethTypeToTypeNode(t, right),
+        right,
+      ),
+      right,
+    );
+    const before = this.diags.items.filter((d) => d.severity === 'error').length;
+    this.checkLocalDecl(decl, out);
+    const after = this.diags.items.filter((d) => d.severity === 'error').length;
+    if (after !== before) return undefined; // source unsupported: a clean reject stands
+    return this.synth(f.createIdentifier(name), right);
+  }
+
   /** Desugar a non-inline DYNAMIC struct value `src` into an inline constructor that reads each of its
    *  fields: `StructName(src.f0, src.f1, ...)`. This reuses the verified inline struct encoder and is
    *  byte-identical to a field-by-field copy. `src` must be side-effect-free (checked by the caller). */
@@ -10305,40 +10336,6 @@ export class Analyzer {
         );
         return;
       }
-      // Cat B: a static-struct MEMORY array is now POINTER-HEADED (each element is an absolute pointer
-      // to a fresh per-element image), so a whole-element write xs[i] = <struct> RE-POINTS the slot at
-      // the RHS image (yul.ts ~1691): a constructor xs[i] = P(..) re-points to a fresh image; a memory
-      // reference xs[i] = xs[j] / = ref ALIASES by storing the source's image pointer - byte-identical
-      // to solc's reference semantics. The old "fresh RHS only" soundness gate is therefore removed
-      // (the copy-vs-alias divergence it guarded no longer exists).
-      // Eval-order: solc evaluates the RHS before the LHS location. The value-type and bytes/string
-      // element paths reorder correctly in codegen, but the WHOLE-AGGREGATE element write path
-      // (recs[i] = P(...), dd[i] = [...]) lowers the index (in the element-slot resolution) BEFORE the
-      // RHS aggregate's constructor args. So the index and the RHS may only be reordered when the RHS
-      // is SIDE-EFFECT-FREE (its evaluation order is then unobservable): `recs[idx()] = R(9n)` is
-      // lifted by hoisting the index to a temp evaluated exactly ONCE (byte-identical to solc - the
-      // optimizer collapses the temp), leaving a pure-index write. A SIDE-EFFECTING RHS
-      // (`recs[idx()] = R(mk())`) would require materializing the RHS before the index, which the
-      // whole-aggregate write path cannot express, so it stays a sound JETH331 reject.
-      if (target.type.kind === 'struct' || target.type.kind === 'array') {
-        const keyImpure = this.impureLValueKey(e.left);
-        if (keyImpure) {
-          if (this.isSideEffectFreeExpr(e.right)) {
-            const rewritten = this.hoistImpureLValueKeys(e.left, out);
-            if (!rewritten) return;
-            const t2 = this.checkLValue(rewritten);
-            if (!t2) return;
-            target = t2;
-          } else {
-            this.diags.error(
-              keyImpure,
-              'JETH331',
-              `assigning a whole ${displayName(target.type)} to an element with a side-effecting index/key and a side-effecting value would evaluate the index before the value (solc evaluates the value first); bind the index to a const first`,
-            );
-            return;
-          }
-        }
-      }
       // SOUNDNESS: re-pointing a dyn-struct LEAF-array field (p.tags = <bytes[]/string[]/T[][]>, or
       // xs[i].tags = ...) builds the field's B4 pointer-headed image from the RHS via aggArgToMemPtr, which
       // builds that image correctly from a MEMORY / LITERAL / call / ternary / abi.decode source but FLATTENS a
@@ -10369,6 +10366,43 @@ export class Analyzer {
           );
           return;
         }
+      }
+      // W8A (RHS-value-before-index): the whole-AGGREGATE element / member / mapping-value write paths
+      // (recs[i] = P(...), dd[i] = [...], xs[i].inner = P(...), m[k] = P(...)) resolve the target's
+      // index/key BEFORE materializing the RHS aggregate. solc evaluates the RHS value FIRST, then the
+      // location, so a SIDE-EFFECTING index/key that MUTATES state which the RHS then READS
+      // (`this.ps[bump()] = P(this.ctr, ...)`, bump increments ctr) would make the RHS read POST-mutation
+      // state - a slot-level MISCOMPILE. It also mis-orders a side-effecting RHS relative to the index.
+      // FIX: when the index/key is impure, materialize the RHS into a fresh memory temp local FIRST (in
+      // SOURCE order, so its side effects + state reads run before the index), THEN hoist the impure
+      // index to a once-evaluated temp, THEN re-derive the target + read the temp back. A constructor /
+      // literal builds a FRESH image (deep-copied into a storage target / re-pointed for a memory
+      // target); a memory-reference source ALIASES its pointer through the temp - byte-identical to solc
+      // for both. Reusing checkLocalDecl + a read-back also lifts the former JETH331 side-effecting-RHS
+      // reject (the RHS now runs first regardless). If checkLocalDecl cannot materialize the source (an
+      // unsupported whole-aggregate RHS), materializeAggregateRhsToTemp returns undefined and this stays
+      // a clean JETH331 reject - never a miscompile.
+      const w8aKeyImpure =
+        target.type.kind === 'struct' || target.type.kind === 'array' ? this.impureLValueKey(e.left) : undefined;
+      if (w8aKeyImpure) {
+        const keyImpure = w8aKeyImpure;
+        const tmpRead = this.materializeAggregateRhsToTemp(e.right, target.type, out);
+        if (!tmpRead) {
+          this.diags.error(
+            keyImpure,
+            'JETH331',
+            `assigning a whole ${displayName(target.type)} to an element with a side-effecting index/key requires materializing the value before the index (solc evaluates the value first), which this aggregate source does not support; bind the index to a const first`,
+          );
+          return;
+        }
+        const rewritten = this.hoistImpureLValueKeys(e.left, out);
+        if (!rewritten) return;
+        const t2 = this.checkLValue(rewritten);
+        if (!t2) return;
+        const rhs2 = this.checkExpr(tmpRead, t2.type);
+        if (!rhs2) return;
+        out.push({ kind: 'assign', target: t2, value: this.coerce(rhs2, t2.type, e.right) });
+        return;
       }
       // W5D-2: an assignment into a funcref-typed local merges the RHS's possible pointer targets into
       // the variable's flow-insensitive source union. A name with no pre-existing entry (a binding that

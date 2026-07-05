@@ -5,10 +5,13 @@
 // (solc evaluates RHS first, then each lvalue index once). Verified: side-effect count, eval order,
 // all ten compound operators, nested keys, struct fields, RHS that mutates the lvalue, overflow.
 // The EXPR-position form `y = (xs[f()] += 1)` and the whole-aggregate element write `recs[idx()] =
-// R(9)` (PURE value) are now ALSO lifted (same hoist machinery, byte-identical). The ONE remaining
-// sound JETH331 reject is a whole-aggregate element write whose index AND value BOTH side-effect
-// (`recs[idx()] = R(mk())`): the whole-aggregate write cannot express solc's RHS-before-index order,
-// so it stays a clean reject rather than risk a wrong-order miscompile.
+// R(9)` (PURE value) are now ALSO lifted (same hoist machinery, byte-identical). W8A lifts the last
+// whole-aggregate case: an element/member/mapping-value write whose index AND value BOTH side-effect
+// (`recs[idx()] = R(mk())`) - the RHS aggregate is materialized into a memory temp FIRST (source
+// order), then the impure index is hoisted once, then the temp is copied in, matching solc's
+// RHS-before-index order byte-identical. The remaining JETH331 rejects are the EXPR-position
+// compound-assign in a conditional / reentrant / nested position (below), where hoisting to the
+// statement prelude would move the side effect.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -254,24 +257,43 @@ describe('compound-assign / ++ with a side-effecting index vs Solidity', () => {
     }
   });
 
-  // The ONE remaining sound reject: a whole-aggregate element write whose index AND value BOTH
-  // side-effect. solc evaluates the value before the index; the whole-aggregate write path cannot
-  // express that order, so JETH keeps a clean JETH331 reject (never a wrong-order miscompile).
-  it('whole-aggregate write with a side-effecting index AND value stays a sound JETH331 reject', () => {
-    const reject = (src: string) => {
-      let codes: string[] = [];
-      try {
-        compile(src, { fileName: 'C.jeth' });
-      } catch (e: unknown) {
-        codes = ((e as { diagnostics?: { code: string }[] })?.diagnostics ?? []).map((d) => d.code);
-      }
-      return codes;
-    };
-    expect(
-      reject(
-        '@struct class R { a: u256; } @contract class C { @state recs: R[]; @state c: u256; idx(): u256 { this.c++; return 0n; } mk(): u256 { this.c++; return 9n; } @external go(): void { this.recs.push(R(1n)); this.recs[this.idx()] = R(this.mk()); } }',
-      ),
-    ).toContain('JETH331');
+  // W8A: a whole-aggregate element write whose index AND value BOTH side-effect
+  // (`recs[idx()] = R(mk())`) is now LIFTED byte-identical. solc evaluates the VALUE before the
+  // index; the fix materializes the RHS aggregate into a memory temp FIRST (its side effects run
+  // in source order), THEN hoists the impure index once, THEN copies the temp into the resolved
+  // slot - matching solc's RHS-before-index order (the former JETH331 over-rejection is gone).
+  it('whole-aggregate write with a side-effecting index AND value is byte-identical (W8A lift)', async () => {
+    const J = `@struct class R { a: u256; } @contract class C {
+      @state recs: R[]; @state c: u256;
+      idx(): u256 { this.c++; return 0n; }
+      mk(): u256 { this.c++; return 9n; }
+      @external go(): void { this.recs.push(R(1n)); this.recs[this.idx()] = R(this.mk()); }
+      @external @view ra(): u256 { return this.recs[0n].a; }
+      @external @view rc(): u256 { return this.c; } }`;
+    const S = `// SPDX-License-Identifier: MIT
+      pragma solidity ^0.8.20;
+      struct R { uint256 a; }
+      contract C { R[] recs; uint256 c;
+      function idx() internal returns(uint256){ c++; return 0; }
+      function mk() internal returns(uint256){ c++; return 9; }
+      function go() external { recs.push(R(1)); recs[idx()] = R(mk()); }
+      function ra() external view returns(uint256){ return recs[0].a; }
+      function rc() external view returns(uint256){ return c; } }`;
+    const j = await Harness.create(),
+      s = await Harness.create();
+    const ja = await j.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const sa = await s.deploy(compileSolidity(S, 'C').creation);
+    for (const sig of ['go()', 'ra()', 'rc()']) {
+      const jr = await j.call(ja, encodeCall(sel(sig), []));
+      const sr = await s.call(sa, encodeCall(sel(sig), []));
+      expect(jr.success, `${sig} success`).toBe(sr.success);
+      expect(jr.returnHex, `${sig} returndata`).toBe(sr.returnHex);
+    }
+    // Non-vacuity: solc writes recs[0].a = 9 (RHS mk()=9 evaluated before idx()=0), c ends at 2.
+    const ra = await s.call(sa, encodeCall(sel('ra()'), []));
+    expect(BigInt(ra.returnHex)).toBe(9n);
+    const rc = await s.call(sa, encodeCall(sel('rc()'), []));
+    expect(BigInt(rc.returnHex)).toBe(2n);
   });
 
   // The EXPR-position compound-assign lift is scoped to the WHOLE value of a statement. Any deeper

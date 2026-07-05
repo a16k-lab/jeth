@@ -1382,18 +1382,23 @@ describe('assignment evaluation order: RHS before LHS index/key (byte-identical 
     });
   }
 
-  it('aggregate-element assign with a side-effecting index is rejected (JETH331); pure/derived keys still accept', () => {
-    // a whole-aggregate element write with a side-effecting index cannot reorder in codegen -> safe reject.
-    expect(
-      jethRejects(
-        `@struct class P { x: u256; y: u256 } @contract class C { @state recs: P[]; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.recs.push(P(0n,0n)); this.recs[this.inc()] = P(this.inc(), 9n); } }`,
-      ),
-    ).toBe(true);
-    expect(
-      jethRejects(
-        `@contract class C { @state dd: Arr<Arr<u256,2>,2>; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.dd[this.inc()] = [this.inc(), 9n]; } }`,
-      ),
-    ).toBe(true);
+  it('W8A: aggregate-element assign with a side-effecting index AND value is byte-identical; pure/derived keys accept', async () => {
+    // W8A: a whole-aggregate element write whose index AND value BOTH side-effect is now byte-identical.
+    // inc() returns the PRE-increment value; solc evaluates the RHS `P(inc(), 9)` FIRST (inc()=0, i:0->1),
+    // then the index `inc()` (=1, i:1->2). recs has ONE element, so recs[1] is OOB -> BOTH revert (Panic
+    // 0x32) at the same point. The former JETH331 over-rejection is gone (materialize-RHS-then-index).
+    await rt(
+      `@struct class P { x: u256; y: u256 } @contract class C { @state recs: P[]; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.recs.push(P(0n,0n)); this.recs[this.inc()] = P(this.inc(), 9n); } @external @view gx(): u256 { return this.recs[0n].x; } @external @view gi(): u256 { return this.i; } }`,
+      `struct P { uint256 x; uint256 y; } contract C { P[] recs; uint256 i; function inc() internal returns(uint256){ uint256 v=i; i=i+1; return v; } function f() external { recs.push(P(0,0)); recs[inc()] = P(inc(), 9); } function gx() external view returns(uint256){ return recs[0].x; } function gi() external view returns(uint256){ return i; } }`,
+      [{ sig: 'f()' }, { sig: 'gx()' }, { sig: 'gi()' }],
+    );
+    // a FIXED outer array (Arr<Arr<u256,2>,2>): the index is in bounds (0/1). RHS `[inc(), 9]` first
+    // (inc()=0, i:0->1) then index inc() (=1, i:1->2) -> dd[1] = [0, 9]. Byte-identical, slots + i.
+    await rt(
+      `@contract class C { @state dd: Arr<Arr<u256,2>,2>; @state i: u256; inc(): u256 { let v: u256 = this.i; this.i=this.i+1n; return v; } @external f(): void { this.dd[this.inc()] = [this.inc(), 9n]; } @external @view g10(): u256 { return this.dd[1n][0n]; } @external @view g11(): u256 { return this.dd[1n][1n]; } @external @view gi(): u256 { return this.i; } }`,
+      `contract C { uint256[2][2] dd; uint256 i; function inc() internal returns(uint256){ uint256 v=i; i=i+1; return v; } function f() external { dd[inc()] = [inc(), uint256(9)]; } function g10() external view returns(uint256){ return dd[1][0]; } function g11() external view returns(uint256){ return dd[1][1]; } function gi() external view returns(uint256){ return i; } }`,
+      [{ sig: 'f()' }, { sig: 'g10()' }, { sig: 'g11()' }, { sig: 'gi()' }],
+    );
     // a PURE value-type cast key (address(lit), u8(x)) is NOT side-effecting: must stay accepted (this was
     // a regression-prone false positive in the side-effecting-key detector).
     expect(
