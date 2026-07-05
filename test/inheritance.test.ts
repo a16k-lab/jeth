@@ -468,7 +468,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   });
 
   // P1-5: super.f() inside a CTOR body (the derived contract does NOT itself override f), which resolves to
-  // the sole base definition. Previously an over-rejection (JETH381: no chain for a single-def signature).
+  // the sole base definition. Previously an over-rejection (JETH444: no chain for a single-def signature).
   describe('P1-5: super.f() in a constructor body (single base definition)', () => {
     it('super.f() in a ctor resolves to the base f, byte-identical', () =>
       same(
@@ -480,10 +480,10 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
         `@abstract class A { @state x: u256; @virtual f(): u256 { return 3n; } } @abstract class B extends A { @state bx: u256; constructor(){ this.bx = super.f(); } } @contract class C extends B { @state cx: u256; constructor(){ this.cx = super.f() + this.bx; } @external @view g(): u256 { return this.cx; } }`,
         `abstract contract A { uint256 x; function f() internal virtual returns(uint256){ return 3; } } abstract contract B is A { uint256 bx; constructor(){ bx = super.f(); } } contract C is B { uint256 cx; constructor(){ cx = super.f() + bx; } function g() external view returns(uint256){ return cx; } }`,
         [{ sig: 'g()' }], 3));
-    it('super.f() where the base declares no f still REJECTS (JETH381)', () =>
+    it('super.f() where the base declares no f still REJECTS (JETH444)', () =>
       expect(
         codes(`@abstract class A { @state x: u256; } @contract class C extends A { @state y: u256; constructor(){ this.y = super.f(); } }`),
-      ).toContain('JETH381'));
+      ).toContain('JETH444'));
   });
 
   // OVER-ACCEPTANCE closed: a HERITAGE base-arg (`extends A(this.mk())`) that calls a member function is

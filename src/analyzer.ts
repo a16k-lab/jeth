@@ -1187,7 +1187,7 @@ export class Analyzer {
         if (seen.has(hb.name)) {
           this.diags.error(
             hb.node,
-            'JETH389',
+            'JETH456',
             `base '${hb.name}' is listed more than once in the heritage clause of '${cls.name?.text ?? '<anon>'}' (a base may be named only once)`,
           );
           return undefined;
@@ -2608,7 +2608,7 @@ export class Analyzer {
             if (v.visibility !== ob.visibility) {
               this.diags.error(
                 v.node,
-                'JETH379',
+                'JETH443',
                 `override of '${v.name}' changes visibility (@${ob.visibility} -> @${v.visibility}); the override must keep the base visibility`,
               );
             }
@@ -3449,7 +3449,7 @@ export class Analyzer {
     this.memDynLocals.clear();
     this.memDynStructLocals.clear();
     for (const p of params) {
-      if (this.inCurrentScope(p.name)) this.diags.error(ctorNode, 'JETH056', `duplicate parameter name '${p.name}'`);
+      if (this.inCurrentScope(p.name)) this.diags.error(ctorNode, 'JETH442', `duplicate parameter name '${p.name}'`);
       this.declareLocal(p.name, p.type);
       // An aggregate/dynamic ctor param is decoded into MEMORY (from the appended creation args) and
       // behaves like an @internal function's memory-reference param, so register it in the same maps
@@ -3789,7 +3789,7 @@ export class Analyzer {
         continue;
       }
       if (params.some((q) => q.name === p.name!.getText()))
-        this.diags.error(p, 'JETH056', `duplicate parameter name '${p.name.text}'`);
+        this.diags.error(p, 'JETH442', `duplicate parameter name '${p.name.text}'`);
       params.push({ name: p.name.text, type: t });
     }
     return params;
@@ -4570,6 +4570,23 @@ export class Analyzer {
       this.diags.error(member, 'JETH052', `a field cannot combine @${kinds.join(' and @')}`);
       return;
     }
+    // VISIBILITY MODEL (mirror of the function-side reject, JETH440): @public/@internal/@private/@hidden
+    // are not JETH visibility decorators. On a @state / @storage field the ONLY exposing decorator is
+    // @external (which synthesizes solc's public-getter). Previously these were silently ignored - a solc
+    // user writing `public` got a private var with no getter and no diagnostic. Reject them exactly as the
+    // function side does. (@constant/@immutable have already returned via their own gates above/below and
+    // carry their own visibility rules, so this only fires for a state/storage field.)
+    if (decs.includes('state') || isStorage) {
+      const removedFieldVis = ['public', 'internal', 'private', 'hidden'].find((d) => decs.includes(d));
+      if (removedFieldVis) {
+        this.diags.error(
+          member,
+          'JETH440',
+          `@${removedFieldVis} is not a JETH visibility decorator: write @external @state to expose a state variable's getter; a plain @state variable is internal (no ABI getter)`,
+        );
+        return;
+      }
+    }
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(
         member,
@@ -4923,7 +4940,7 @@ export class Analyzer {
     if (removedVis) {
       this.diags.error(
         member,
-        'JETH054',
+        'JETH440',
         `@${removedVis} is not a JETH visibility decorator: write @external to expose a function; everything else is internal by default (the compiler infers private/internal)`,
       );
     }
@@ -5409,7 +5426,7 @@ export class Analyzer {
     }
     for (const p of rf.params) {
       if (this.inCurrentScope(p.name)) {
-        this.diags.error(rf.node, 'JETH056', `duplicate parameter name '${p.name}'`);
+        this.diags.error(rf.node, 'JETH442', `duplicate parameter name '${p.name}'`);
       }
       this.declareLocal(p.name, p.type);
       // G9: a STATIC struct param of an @internal/@private function is a MEMORY pointer
@@ -8199,18 +8216,18 @@ export class Analyzer {
     for (const p of obj.properties) {
       if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
         if (fields.has(p.name.text)) {
-          this.diags.error(p.name, 'JETH301', `duplicate field '${p.name.text}'`);
+          this.diags.error(p.name, 'JETH448', `duplicate field '${p.name.text}'`);
           return undefined;
         }
         fields.set(p.name.text, p.initializer);
       } else if (ts.isShorthandPropertyAssignment(p)) {
         if (fields.has(p.name.text)) {
-          this.diags.error(p.name, 'JETH301', `duplicate field '${p.name.text}'`);
+          this.diags.error(p.name, 'JETH448', `duplicate field '${p.name.text}'`);
           return undefined;
         }
         fields.set(p.name.text, p.name);
       } else {
-        this.diags.error(p, 'JETH301', `${method}(...) options must be plain 'field: value' members`);
+        this.diags.error(p, 'JETH448', `${method}(...) options must be plain 'field: value' members`);
         return undefined;
       }
     }
@@ -8224,7 +8241,7 @@ export class Analyzer {
       if (!allowed.has(k)) {
         // give a precise message for the structural rules.
         if (k === 'value' && op === 'staticcall')
-          this.diags.error(obj, 'JETH302', `staticcall cannot send value (remove 'value')`);
+          this.diags.error(obj, 'JETH449', `staticcall cannot send value (remove 'value')`);
         else if (k === 'success' && isTry)
           this.diags.error(
             obj,
@@ -8240,7 +8257,7 @@ export class Analyzer {
         else
           this.diags.error(
             obj,
-            'JETH301',
+            'JETH448',
             `${method}(...): unknown option '${k}' (allowed: ${[...allowed].join(', ')})`,
           );
         return undefined;
@@ -9073,7 +9090,7 @@ export class Analyzer {
   /** `revertWith(b)`: bubble raw bytes as the revert payload (revert(add(b,0x20), mload(b))). */
   private checkRevertWith(call: ts.CallExpression, out: Stmt[]): void {
     if (call.arguments.length !== 1) {
-      this.diags.error(call, 'JETH312', 'revertWith(...) takes exactly one bytes argument');
+      this.diags.error(call, 'JETH450', 'revertWith(...) takes exactly one bytes argument');
       return;
     }
     const v = this.checkExpr(call.arguments[0]!, BYTES);
@@ -9081,7 +9098,7 @@ export class Analyzer {
     if (v.type.kind !== 'bytes') {
       this.diags.error(
         call.arguments[0]!,
-        'JETH313',
+        'JETH451',
         `revertWith(...) requires a bytes argument, got ${displayName(v.type)}`,
       );
       return;
@@ -10572,7 +10589,7 @@ export class Analyzer {
       }
       this.diags.error(
         node,
-        'JETH381',
+        'JETH444',
         `super.${name}(...) has no implementation after '${here}' in the inheritance chain (the base method is abstract/unimplemented or does not exist)`,
       );
       return undefined;
@@ -10594,7 +10611,7 @@ export class Analyzer {
     }
     const chosen = viable.length === 1 ? viable[0]! : candidates.length === 1 ? candidates[0]! : undefined;
     if (!chosen) {
-      this.diags.error(node, 'JETH381', `super.${name}(...) does not match any base implementation's parameters`);
+      this.diags.error(node, 'JETH444', `super.${name}(...) does not match any base implementation's parameters`);
       return undefined;
     }
     if (chosen.chain[chosen.nextIdx]!.external) {
@@ -12833,7 +12850,7 @@ export class Analyzer {
     // this.stateVar
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
       if (this.constantsByName.has(node.name.text)) {
-        this.diags.error(node, 'JETH054', `cannot assign to '@constant ${node.name.text}'`);
+        this.diags.error(node, 'JETH441', `cannot assign to '@constant ${node.name.text}'`);
         return undefined;
       }
       // this.<immutable> = v: legal ONLY directly in the constructor body (matches solc, which also
@@ -15239,7 +15256,7 @@ export class Analyzer {
       // `\xNN` producing a lone high byte is rejected exactly as for a plain string literal (JETH281), which
       // the string.concat path in solc also rejects. (A non-ASCII SOURCE char is caught in decodeStrEscapes.)
       if (!this.isValidUtf8(bytes)) {
-        this.diags.error(partNode, 'JETH281', 'string literal contains an invalid UTF-8 sequence');
+        this.diags.error(partNode, 'JETH447', 'string literal contains an invalid UTF-8 sequence');
       }
       if (bytes.length > 0) parts.push({ kind: 'stringLiteral', type: STRING, bytes });
     };
@@ -15254,7 +15271,7 @@ export class Analyzer {
       if (e.type.kind !== 'string') {
         this.diags.error(
           span.expression,
-          'JETH384',
+          'JETH454',
           `a template interpolation must be a string, got ${displayName(e.type)} (Solidity string.concat only concatenates strings)`,
         );
         ok = false;
@@ -15332,7 +15349,7 @@ export class Analyzer {
       if (!good) {
         this.diags.error(
           an,
-          'JETH385',
+          'JETH455',
           isStr
             ? `string.concat(...) only accepts string arguments, got ${displayName(a.type)}`
             : `bytes.concat(...) only accepts bytes / bytesN arguments, got ${displayName(a.type)}`,
@@ -15416,7 +15433,7 @@ export class Analyzer {
     if (!isArr && !this.isCalldataBytes(base)) {
       this.diags.error(
         node,
-        'JETH382',
+        'JETH452',
         '.slice(...) is only valid on a calldata bytes/string value (a parameter, msg.data, a slice, or a calldata struct field / array element); a memory/storage value cannot be sliced',
       );
       return 'reject';
@@ -15435,7 +15452,7 @@ export class Analyzer {
       if (s.type.kind !== 'uint') {
         this.diags.error(
           node.arguments[0]!,
-          'JETH383',
+          'JETH453',
           `.slice(...) start must be an unsigned integer, got ${displayName(s.type)}`,
         );
         return 'reject';
@@ -15449,7 +15466,7 @@ export class Analyzer {
       if (e.type.kind !== 'uint') {
         this.diags.error(
           node.arguments[1]!,
-          'JETH383',
+          'JETH453',
           `.slice(...) end must be an unsigned integer, got ${displayName(e.type)}`,
         );
         return 'reject';
@@ -16635,7 +16652,7 @@ export class Analyzer {
         // a solc `string` literal must be valid UTF-8 (a `\xNN` byte sequence that is not, e.g. a lone
         // `\xe9`, is rejected for string but allowed for bytes). Matches solc's "invalid UTF-8" error.
         if (expected.kind === 'string' && !this.isValidUtf8(b)) {
-          this.diags.error(node, 'JETH281', 'string literal contains an invalid UTF-8 sequence');
+          this.diags.error(node, 'JETH447', 'string literal contains an invalid UTF-8 sequence');
           return undefined;
         }
         return { kind: 'stringLiteral', type: expected, bytes: b };

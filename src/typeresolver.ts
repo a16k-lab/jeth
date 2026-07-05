@@ -153,7 +153,7 @@ export function resolveType(
       if (exactLen <= 0n) {
         // solc rejects a zero-length fixed array in every position (it would consume
         // no storage and alias the following slot). Mirror that compile error.
-        diags.error(lenNode, 'JETH013', 'fixed array length must be greater than zero');
+        diags.error(lenNode, 'JETH445', 'fixed array length must be greater than zero');
         return undefined;
       }
       // JethType.array.length is a JS number; a length beyond Number.MAX_SAFE_INTEGER cannot be stored
@@ -163,7 +163,7 @@ export function resolveType(
       if (!Number.isSafeInteger(length) || BigInt(length) !== exactLen) {
         diags.error(
           lenNode,
-          'JETH013',
+          'JETH446',
           `fixed array length ${exactLen} is too large (exceeds ${Number.MAX_SAFE_INTEGER}); such an array is not representable`,
         );
         return undefined;

@@ -573,27 +573,27 @@ describe('decorator inference: rejection parity', () => {
       src: `@contract class C { @read @payable bad(): u256 { return 1n; } }`,
       code: 'JETH052',
     },
-    // removed visibility decorators -> JETH054 (the @external-only model: write @external to expose,
+    // removed visibility decorators -> JETH440 (the @external-only model: write @external to expose,
     // everything else is internal by default; @public/@internal/@private/@hidden no longer exist).
     {
-      name: '@public is removed -> JETH054',
+      name: '@public is removed -> JETH440',
       src: `@contract class C { @public bad(): u256 { return 1n; } }`,
-      code: 'JETH054',
+      code: 'JETH440',
     },
     {
-      name: '@internal is removed -> JETH054',
+      name: '@internal is removed -> JETH440',
       src: `@contract class C { @internal bad(): u256 { return 1n; } }`,
-      code: 'JETH054',
+      code: 'JETH440',
     },
     {
-      name: '@private is removed -> JETH054',
+      name: '@private is removed -> JETH440',
       src: `@contract class C { @private bad(): u256 { return 1n; } }`,
-      code: 'JETH054',
+      code: 'JETH440',
     },
     {
-      name: '@hidden is removed -> JETH054',
+      name: '@hidden is removed -> JETH440',
       src: `@contract class C { @hidden bad(): u256 { return 1n; } }`,
-      code: 'JETH054',
+      code: 'JETH440',
     },
   ];
 

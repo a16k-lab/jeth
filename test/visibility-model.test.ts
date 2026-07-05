@@ -1,6 +1,6 @@
 // The JETH visibility model: @external is the SOLE writable visibility decorator (an exposed ABI entry).
 // Everything without @external is INTERNAL (private-by-default: callable by name, never in the ABI).
-// @public/@internal/@private/@hidden are removed (JETH054). A state-var getter is triggered by
+// @public/@internal/@private/@hidden are removed (JETH440). A state-var getter is triggered by
 // @external @state. @payable/@nonReentrant require @external. This dissolves the dual external+internal
 // ("public") function, so an aggregate helper called internally just works (the old "R2" divergence).
 import { describe, it, expect } from 'vitest';
@@ -22,10 +22,10 @@ const abiNames = (src: string): string[] =>
     .map((a: any) => a.name as string);
 
 describe('visibility model: @external only, private-by-default', () => {
-  it('removed keywords @public/@internal/@private/@hidden -> JETH054', () => {
+  it('removed keywords @public/@internal/@private/@hidden -> JETH440', () => {
     for (const kw of ['public', 'internal', 'private', 'hidden']) {
       expect(codes(`@contract class C { @${kw} f(): u256 { return 1n; } @external g(): void {} }`), kw).toContain(
-        'JETH054',
+        'JETH440',
       );
     }
   });

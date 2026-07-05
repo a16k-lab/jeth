@@ -355,7 +355,7 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
        @contract class C extends I, I { @external f(): u256 { return 5n; } }`,
       `interface I { function f() external returns(uint256); }
        contract C is I, I { function f() external returns(uint256){ return 5; } }`,
-      'JETH389',
+      'JETH456',
     );
   });
 

@@ -1,7 +1,7 @@
 // Fixes for divergences found by the whole-surface adversarial sweep (all confirmed vs solc 0.8.35):
 //  - MISCOMPILE: a `\xNN` string-literal escape was decoded as a JS code unit (U+00NN -> UTF-8) instead of
 //    a RAW byte, so bytes("\xff") / keccak256 / concat produced wrong bytes (silent wrong hashes). Now
-//    decoded Solidity-style (raw byte). A `\xNN`-invalid-UTF-8 STRING literal is rejected (JETH281).
+//    decoded Solidity-style (raw byte). A `\xNN`-invalid-UTF-8 STRING literal is rejected (JETH447).
 //  - MISCOMPILE: abi.encode of a STORAGE struct whose field is a nested DYNAMIC struct (W{id; t: T{n; s}})
 //    corrupted the nested member (dropped n / bad offsets / spurious revert). The storage->memory copy now
 //    stores the nested dynamic struct as a head pointer to a recursively-built image.
@@ -59,8 +59,8 @@ describe('audit sweep fixes - byte-identical to solc 0.8.35', () => {
     );
   });
 
-  it('a \\xNN-invalid-UTF-8 string literal is rejected (JETH281); valid UTF-8 / ascii accepted', () => {
-    expect(codes('@contract class C { @external @pure f(): string { return "\\xe9"; } }')).toContain('JETH281');
+  it('a \\xNN-invalid-UTF-8 string literal is rejected (JETH447); valid UTF-8 / ascii accepted', () => {
+    expect(codes('@contract class C { @external @pure f(): string { return "\\xe9"; } }')).toContain('JETH447');
     expect(codes('@contract class C { @external @pure f(): string { return "\\xc3\\xa9"; } }')).toEqual([]);
     expect(codes('@contract class C { @external @pure f(): string { return "hello"; } }')).toEqual([]);
   });

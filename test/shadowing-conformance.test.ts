@@ -46,8 +46,8 @@ describe('variable shadowing accept/reject parity with solc (#11/#12)', () => {
     expect(
       codes('@contract class C { @external @pure f(x: u256): u256 { let a: u256 = 1n; let a: u256 = 2n; return a; } }'),
     ).toContain('JETH068');
-    // two parameters with the same name is a same-scope collision too (caught earlier as JETH056)
-    expect(codes('@contract class C { @external @pure f(a: u256, a: u256): u256 { return a; } }')).toContain('JETH056');
+    // two parameters with the same name is a same-scope collision too (caught earlier as JETH442)
+    expect(codes('@contract class C { @external @pure f(a: u256, a: u256): u256 { return a; } }')).toContain('JETH442');
   });
 
   describe('runtime byte-identical to solc', () => {

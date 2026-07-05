@@ -83,7 +83,7 @@ contract C {
   });
   it('compile-time behavior: assigning to a @constant rejects; reading works', () => {
     expect(codes('@contract class C { @constant K: u256 = 1n; @external f(): void { this.K = 2n; } }')).toContain(
-      'JETH054',
+      'JETH441',
     );
     expect(codes('@contract class C { @constant K: u256 = 1n; @external @pure f(): u256 { return this.K; } }')).toEqual(
       [],

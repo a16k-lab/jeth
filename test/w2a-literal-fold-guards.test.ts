@@ -161,13 +161,13 @@ describe('W2A: over-2^53 fixed-array length rejected (no silent double rounding)
   const st = (len: string) =>
     `@contract class C { @state a: Arr<u256, ${len}>;\n @state b: u256;\n @external @view g(): u256 { return this.b; } }`;
   it('rejects 2^53+1 (9007199254740993)', () => {
-    expect(rejectCodes(st('9007199254740993'))).toContain('JETH013');
+    expect(rejectCodes(st('9007199254740993'))).toContain('JETH446');
   });
   it('rejects 2^53 (9007199254740992)', () => {
-    expect(rejectCodes(st('9007199254740992'))).toContain('JETH013');
+    expect(rejectCodes(st('9007199254740992'))).toContain('JETH446');
   });
   it('rejects 2^54+1 (18014398509481985)', () => {
-    expect(rejectCodes(st('18014398509481985'))).toContain('JETH013');
+    expect(rejectCodes(st('18014398509481985'))).toContain('JETH446');
   });
   it('keeps normal small lengths byte-identical, incl. a for-of over Arr<u256,2>[]', async () => {
     await eqCalls(
