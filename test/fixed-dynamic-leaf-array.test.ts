@@ -8,8 +8,10 @@
 // dynamic [len] header (bound = mload(ptr), data at ptr+0x20); for a FIXED outer it now bounds against N
 // and writes at ptr (no header), mirroring lowerArrayGet's fixedLen handling.
 // Scope matches the Arr<u256[],N> value-leaf precedent: build-from-literal, element read/write, whole
-// return, .length, byte-index. abi.encode / param-bind / whole-array alias stay sound clean rejects (the
-// precedent rejects them identically). Verified byte-identical to solc 0.8.35.
+// return, .length, byte-index. abi.encode(x) is now ALSO lifted byte-identical (the pointer-headed
+// fixed-of-dynamic codec, P0-33). The @external param-bind and whole-array-alias shapes stay clean
+// over-rejections for now (a separate @external ABI-boundary / mem-aggregate-copy lift, tracked for a
+// later wave); a clean reject there is never a miscompile. Verified byte-identical to solc 0.8.35.
 import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -124,10 +126,17 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
     expect(codes('@contract class C { @external @pure go(): string { let xs: Arr<string,3> = ["a","b","c"]; return xs[2n]; } }')).toEqual([]);
   });
 
-  it('abi.encode / param-bind / whole-array alias stay sound clean rejects (consistent with Arr<u256[],N>)', () => {
-    // These reject identically for the value-leaf precedent Arr<u256[],N> and Arr<P,N> too - shared
-    // limitations, not Edge-D regressions. A clean reject, never a miscompile.
-    expect(codes('@contract class C { @external @pure go(): bytes { let xs: Arr<string,2> = ["a","b"]; return abi.encode(xs); } }').length).toBeGreaterThan(0);
+  it('abi.encode(Arr<string,N>) is lifted byte-identical to solc (P0-33 fixed-of-dynamic codec)', async () => {
+    // Previously a clean reject; the pointer-headed fixed-of-dynamic codec now encodes it byte-identically.
+    await eqCalls(
+      '@contract class C { @external @pure go(): bytes { let xs: Arr<string,2> = ["a","b"]; return abi.encode(xs); } }',
+      'contract C { function go() external pure returns(bytes memory){ string[2] memory xs = ["a","b"]; return abi.encode(xs); } }',
+      [['go()', '']],
+    );
+  });
+  it('@external param-bind / whole-array alias stay clean over-rejections (pending @external fixed-of-dynamic lift)', () => {
+    // solc accepts these; JETH still rejects (a clean reject, never a miscompile) at the @external ABI
+    // boundary (param decode / return encode) and the mem-aggregate whole-array copy. Tracked for a later wave.
     expect(codes('@contract class C { @external @pure go(p: Arr<string,2>): Arr<string,2> { let xs: Arr<string,2> = p; return xs; } }').length).toBeGreaterThan(0);
     expect(codes('@contract class C { @external @pure go(): Arr<string,2> { let xs: Arr<string,2> = ["a","b"]; let ys: Arr<string,2> = xs; return ys; } }').length).toBeGreaterThan(0);
   });
