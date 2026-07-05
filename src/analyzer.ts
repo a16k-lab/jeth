@@ -319,6 +319,28 @@ export class Analyzer {
   // over-rejection where a @view function is blamed for a same-signature mutating function it can never
   // reach. Deferred to the fixpoint because `addressTaken` is only complete after ALL bodies are checked.
   private currentPtrCallSigs = new Set<string>();
+  // W5D-2: PER-POINTER-VARIABLE effect discrimination. Two same-signature targets (one @view, one
+  // mutating) taken into DIFFERENT pointer variables must not blame each other's effects (solc pointer
+  // TYPES carry mutability; JETH's `(x)=>R` spelling does not, so the effect set is tracked per
+  // VARIABLE instead). For each funcref-typed `let` local, currentPtrVarSources accumulates the
+  // FLOW-INSENSITIVE union of every value ever bound to that name in the current function-like body:
+  // direct mints (`this.f`), copies of other pointer variables (resolved transitively at the end),
+  // and ternaries of those; ANY other source (param initial value, storage read, call result, array
+  // element, tuple component, ...) marks the variable UNKNOWN. A call through a variable whose closure
+  // is fully known contributes exactly those target KEYS to the purity fixpoint (currentPtrVarCalls,
+  // resolved after the body completes); an unknown/poisoned variable falls back to the per-SIGNATURE
+  // union (currentPtrCallSigs) - the sound conservative default. Names bound by any path OTHER than a
+  // plain `let` declaration (function/ctor params, modifier params, destructure components, ...) are
+  // POISONED via declareLocal so a same-named tracked entry can never masquerade for them (entries are
+  // name-keyed and shadowing MERGES, an over-approximation that is only sound if every binding of the
+  // name is a tracked `let`). This only narrows the MUTABILITY validation - dispatch codegen and
+  // emission reachability stay signature-based, so bytecode behavior is unchanged.
+  private currentPtrVarSources = new Map<string, { unknown: boolean; targets: Set<string>; vars: Set<string> }>();
+  private currentPtrVarPoisoned = new Set<string>();
+  private currentPtrVarCalls: { sigKey: string; src: { targets: Set<string>; vars: Set<string> } }[] = [];
+  // One-shot flag: set by checkLocalDecl's generic value path IMMEDIATELY before declareLocal for a
+  // funcref-typed `let`, telling declareLocal NOT to poison that binding (it is the tracked path).
+  private ptrTrackNextDecl = false;
   private internallyCalled = new Set<string>(); // KEYS of functions that are the target of an internal call
   // Internal function pointers: the KEYS of functions whose address was taken (`this.f` / bare `f` used as
   // a value). Each such function is assigned a stable small integer id (funcRefIds) so a call through a
@@ -366,6 +388,11 @@ export class Analyzer {
     return this.scopes[this.scopes.length - 1]!.has(name);
   }
   private declareLocal(name: string, t: JethType): void {
+    // W5D-2: any funcref-typed binding NOT introduced by checkLocalDecl's tracked `let` path (params,
+    // modifier params, destructure components, catch bindings, ...) POISONS the name: its initial value
+    // is untracked, so every pointer call through that name must use the per-signature effect union.
+    if (t.kind === 'funcref' && !this.ptrTrackNextDecl) this.currentPtrVarPoisoned.add(name);
+    this.ptrTrackNextDecl = false;
     this.scopes[this.scopes.length - 1]!.set(name, t);
   }
   /** Counter for synthetic temp locals introduced when hoisting a side-effecting lvalue index/key
@@ -1584,6 +1611,9 @@ export class Analyzer {
         readsEnv: boolean;
         callees: Set<string>;
         ptrCallSigs: Set<string>;
+        // W5D-2: EXACT pointer-call target keys (per-variable tracking resolved); treated like extra
+        // callees by the fixpoint, narrower than the per-signature union in ptrCallSigs.
+        ptrCallTargets: Set<string>;
         rf: RawFunction;
       }
     >();
@@ -1597,6 +1627,9 @@ export class Analyzer {
           reads: this.currentReadsState,
           readsEnv: this.currentReadsEnv,
           callees: this.currentCallees,
+          // NOTE: resolveCurrentPtrVarCalls() runs FIRST (field order) - it adds the per-signature
+          // fallbacks of unresolvable per-variable records into currentPtrCallSigs before it is read.
+          ptrCallTargets: this.resolveCurrentPtrVarCalls(),
           ptrCallSigs: this.currentPtrCallSigs,
           rf,
         });
@@ -1618,6 +1651,9 @@ export class Analyzer {
           reads: this.currentReadsState,
           readsEnv: this.currentReadsEnv,
           callees: this.currentCallees,
+          // NOTE: resolveCurrentPtrVarCalls() runs FIRST (field order) - it adds the per-signature
+          // fallbacks of unresolvable per-variable records into currentPtrCallSigs before it is read.
+          ptrCallTargets: this.resolveCurrentPtrVarCalls(),
           ptrCallSigs: this.currentPtrCallSigs,
           rf,
         });
@@ -1642,6 +1678,8 @@ export class Analyzer {
             reads: this.currentReadsState,
             readsEnv: this.currentReadsEnv,
             callees: this.currentCallees,
+            // resolveCurrentPtrVarCalls() runs FIRST (field order) - see the sibling sites above.
+            ptrCallTargets: this.resolveCurrentPtrVarCalls(),
             ptrCallSigs: this.currentPtrCallSigs,
             rf,
           });
@@ -1670,7 +1708,7 @@ export class Analyzer {
     while (changed) {
       changed = false;
       for (const e of effects.values()) {
-        const reachable: string[] = [...e.callees];
+        const reachable: string[] = [...e.callees, ...e.ptrCallTargets];
         for (const sk of e.ptrCallSigs) for (const t of addressTakenBySig.get(sk) ?? []) reachable.push(t);
         for (const callee of reachable) {
           const ce = effects.get(callee);
@@ -3442,6 +3480,9 @@ export class Analyzer {
     this.currentReturnTypes = undefined;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
+    this.currentPtrVarSources = new Map();
+    this.currentPtrVarPoisoned = new Set();
+    this.currentPtrVarCalls = [];
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -3471,9 +3512,9 @@ export class Analyzer {
     // Inline applied @modifiers around the constructor body (param scope active for arg
     // materialization; leftmost decorator outermost). A ctor modifier reading msg.value still flows
     // through the payable rule, and one calling an internal function is caught by the JETH303 gate.
-    let body = rawBody;
-    const ctorBodyHasReturn = ctorNode.body ? this.findReturns([...ctorNode.body.statements]).length > 0 : false;
-    for (const app of [...ctorMods].reverse()) body = this.inlineModifier(app, body, true, ctorBodyHasReturn);
+    // W5D-1: return-involving shapes are OUTLINED (buildCtorLevelStmts) so a body `return;` resumes at
+    // the modifier post-code and a modifier `return;` exits the wrap - byte-identical to solc.
+    const body = this.buildCtorLevelStmts(ctorMods, rawBody, ctorNode, params, false);
     this.currentInConstructor = false;
     this.popScope();
 
@@ -3675,6 +3716,9 @@ export class Analyzer {
     this.currentReturnTypes = undefined;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
+    this.currentPtrVarSources = new Map();
+    this.currentPtrVarPoisoned = new Set();
+    this.currentPtrVarCalls = [];
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -4109,6 +4153,9 @@ export class Analyzer {
     this.currentReturnTypes = undefined;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
+    this.currentPtrVarSources = new Map();
+    this.currentPtrVarPoisoned = new Set();
+    this.currentPtrVarCalls = [];
     this.currentInConstructor = true;
     // P0-23: base-ARG expressions (heritage / super) evaluate in the DEPLOYED contract's scope (a
     // heritage clause names a base, but the arguments live in the derived contract's specifier scope and
@@ -4311,9 +4358,10 @@ export class Analyzer {
           this.bodyOwnerContract = savedBodyOwner;
         }
         this.currentMutability = savedMut;
-        const levelCtorHasReturn = c.node.body ? this.findReturns([...c.node.body.statements]).length > 0 : false;
-        for (const app of [...cMods].reverse()) bstmts = this.inlineModifier(app, bstmts, true, levelCtorHasReturn);
-        out.push(...bstmts);
+        // W5D-1: plan this level's wrap + return-outlining. A BASE level (i > 0) is followed by the
+        // more-derived levels' bodies inside the merged jeth_constructor, so its body `return;` (and a
+        // modifier bare `return;`) must exit only THIS level - the outlined units guarantee that.
+        out.push(...this.buildCtorLevelStmts(cMods, bstmts, c.node, chainParams[i]!, i > 0));
       }
       return out;
     };
@@ -5395,6 +5443,9 @@ export class Analyzer {
     this.currentReturnTypes = rf.returnTypes;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
+    this.currentPtrVarSources = new Map();
+    this.currentPtrVarPoisoned = new Set();
+    this.currentPtrVarCalls = [];
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -5655,6 +5706,27 @@ export class Analyzer {
       );
       return { body: bodyIR };
     }
+    // W5D-1 SOUNDNESS FIX: solc scopes a bare `return;` in a modifier to THAT modifier LAYER - control
+    // resumes after the `_` in the ENCLOSING modifier (verified vs 0.8.35). The buffered lowering's
+    // emitModifierReturn exits the WHOLE function, which is equivalent ONLY when every enclosing layer
+    // has no code after its placeholder (a pre-only tail). A bare return in a NON-OUTERMOST modifier
+    // under a post-code/conditional/multi-placeholder outer layer therefore MISCOMPILED (outer post
+    // code skipped); keep it a clean reject until per-layer outlining exists for functions.
+    {
+      const metas = apps.map((a) => this.modifiersByName.get(a.name));
+      const preOnlyTail = (m: RawModifier | undefined): boolean =>
+        m !== undefined && m.postStmts.length === 0 && m.bodyStmts === undefined;
+      for (let mi = 1; mi < metas.length; mi++) {
+        if (metas[mi]?.hasBareReturn && metas.slice(0, mi).some((o) => !preOnlyTail(o))) {
+          this.diags.error(
+            rf.node,
+            'JETH323',
+            `a bare 'return;' in a nested (non-outermost) @modifier under an enclosing modifier with post-placeholder or conditional code is not supported yet (solc resumes after the enclosing '_', which the whole-function-exit lowering cannot express)`,
+          );
+          return { body: bodyIR };
+        }
+      }
+    }
     // JETH323 LIFTED for FUNCTION shapes: the synthesized body function userfn_<key> is a NORMAL
     // internal function, so it supports aggregate/dynamic PARAMS, a MULTI-VALUE return, and an aggregate
     // RETURN (struct / fixed / value-element dynamic array). The dispatch materializes each decoded param
@@ -5785,6 +5857,121 @@ export class Analyzer {
     return [{ kind: 'block', body: [...argDecls, ...pre, ...inner, ...post] }];
   }
 
+  // W5D-1: unique ids for outlined constructor units (ctorOutlineBind/ctorOutlineCall pairs).
+  private ctorOutlineCounter = 0;
+  // W5D-1 soundness: true while checking a ctor MODIFIER's OWN statements (pre/post/whole-body code,
+  // not the spliced ctor body). solc rejects an immutable WRITE there ("Cannot write to immutable
+  // here") while allowing reads; currentInConstructor alone cannot distinguish the two regions.
+  private currentInCtorModifierCode = false;
+
+  /** W5D-1: does the constructor BODY write one of its OWN (value) parameters? Source-level scan
+   *  (assignment / compound-assign / ++ / -- whose target is a bare identifier naming a param) -
+   *  conservative: a body-local shadowing the param name over-counts, which only over-gates. */
+  private ctorBodyWritesOwnParam(node: ts.ConstructorDeclaration, params: Param[]): boolean {
+    if (!node.body) return false;
+    const names = new Set(params.map((p) => p.name));
+    let writes = false;
+    const walk = (n: ts.Node): void => {
+      if (
+        ts.isBinaryExpression(n) &&
+        n.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+        n.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
+        ts.isIdentifier(n.left) &&
+        names.has(n.left.text)
+      )
+        writes = true;
+      if (
+        (ts.isPrefixUnaryExpression(n) || ts.isPostfixUnaryExpression(n)) &&
+        (n.operator === ts.SyntaxKind.PlusPlusToken || n.operator === ts.SyntaxKind.MinusMinusToken) &&
+        ts.isIdentifier(n.operand) &&
+        names.has(n.operand.text)
+      )
+        writes = true;
+      ts.forEachChild(n, walk);
+    };
+    walk(node.body);
+    return writes;
+  }
+
+  /** W5D-1 (P1-20): plan ONE constructor level's modifier wrapping + return-outlining. solc scopes a
+   *  `return;` to its LAYER: a body return resumes after the `_;` in the innermost modifier; a modifier
+   *  return leaves that modifier layer (resuming after the `_` in the enclosing one); a base ctor's
+   *  return never skips the derived ctor bodies. The merged jeth_constructor lowers `return;` as
+   *  `leave`, which exits the WHOLE merged ctor - correct ONLY for the deployed level's trailing
+   *  position. Everything else is fixed by OUTLINING:
+   *   - the level's own BODY is outlined (ctorOutlineBind + a ctorOutlineCall at each `_;`) when it
+   *     contains `return;` and either post/conditional/multi-placeholder modifier code follows a run
+   *     of it, or the level is a BASE (code of more-derived levels follows in the merged ctor);
+   *   - the whole LEVEL (modifier wrap + body call) is outlined when a modifier carries a bare
+   *     `return;` and the level is a BASE (the modifier return exits the level, not the merged ctor).
+   *  KEPT REJECTS (clean JETH323, matching the sacred bar):
+   *   - a bare `return;` in a NON-OUTERMOST modifier under an enclosing non-pre-only-tail layer
+   *     (solc resumes after the enclosing `_`; the level-exit lowering cannot express that);
+   *   - an outlined body that WRITES one of its own params AND can be re-run by a conditional/multi-
+   *     placeholder modifier (each outlined run passes a fresh copy; solc shares the ctor frame). */
+  private buildCtorLevelStmts(
+    mods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[],
+    bodyStmts: Stmt[],
+    ctorNode: ts.ConstructorDeclaration,
+    params: Param[],
+    isBase: boolean,
+  ): Stmt[] {
+    const hasReturn = ctorNode.body ? this.findReturns([...ctorNode.body.statements]).length > 0 : false;
+    const metas = mods.map((a) => this.modifiersByName.get(a.name));
+    const preOnlyTail = (m: RawModifier | undefined): boolean =>
+      m !== undefined && m.postStmts.length === 0 && m.bodyStmts === undefined;
+    const anyBodyRoute = metas.some((m) => m !== undefined && (m.postStmts.length > 0 || m.bodyStmts !== undefined));
+    const anyModRet = metas.some((m) => m?.hasBareReturn === true);
+    // Gate A (nested-layer return): mods[0] is OUTERMOST; a bare return in mods[i>0] resumes after the
+    // `_` of layer i-1 in solc, which equals the level exit ONLY when every enclosing layer is a
+    // pre-only tail. Otherwise fall through to the old inline path, whose hasBareReturn gate rejects.
+    let gateA = false;
+    metas.forEach((m, idx) => {
+      if (m?.hasBareReturn && idx > 0 && metas.slice(0, idx).some((o) => !preOnlyTail(o))) gateA = true;
+    });
+    // A modifier param sharing a name with a ctor param: the whole-body-inline route would let the
+    // modifier's value shadow the ctor param inside the inlined body (the old collision reject).
+    // Outlining the body gives them naturally separate scopes (the body reads its own formals; the
+    // call passes registers resolved at the un-shadowed bind), so the collision LIFTS via outlining.
+    const modParamCollision = metas.some(
+      (m) => m !== undefined && m.params.some((mp) => params.some((cp) => cp.name === mp.name)),
+    );
+    const needBodyOutline = !gateA && ((hasReturn && (isBase || anyBodyRoute)) || (anyBodyRoute && modParamCollision));
+    // Gate B (re-run param writes): an outlined body re-run by a conditional/multi-placeholder modifier
+    // receives fresh copies of its VALUE params per run, while solc shares the ctor frame across runs.
+    if (needBodyOutline && metas.some((m) => m?.bodyStmts !== undefined) && this.ctorBodyWritesOwnParam(ctorNode, params)) {
+      this.diags.error(
+        ctorNode,
+        'JETH323',
+        `a constructor whose body contains 'return;' AND writes one of its own parameters, re-run by a conditional/multi-placeholder @modifier, is not supported yet (each outlined body run would receive a fresh copy of the written parameter)`,
+      );
+      return bodyStmts;
+    }
+    let levelStmts: Stmt[];
+    if (needBodyOutline) {
+      const id = this.ctorOutlineCounter++;
+      let inner: Stmt[] = [{ kind: 'ctorOutlineCall', id }];
+      for (const app of [...mods].reverse())
+        inner = this.inlineModifier(app, inner, true, false, { allowModBareReturn: !gateA, bodyOutlined: true });
+      levelStmts = [{ kind: 'ctorOutlineBind', id, params, body: bodyStmts }, ...inner];
+    } else {
+      let inner = bodyStmts;
+      for (const app of [...mods].reverse())
+        inner = this.inlineModifier(app, inner, true, hasReturn, { allowModBareReturn: !gateA, bodyOutlined: false });
+      levelStmts = inner;
+    }
+    if (!gateA && anyModRet && isBase) {
+      // A BASE level with a modifier bare-return: outline the WHOLE level wrap so the modifier's
+      // `return;` (leave) exits only this level, and the more-derived ctor bodies still run.
+      const wid = this.ctorOutlineCounter++;
+      levelStmts = [
+        { kind: 'ctorOutlineBind', id: wid, params, body: levelStmts },
+        { kind: 'ctorOutlineCall', id: wid },
+      ];
+    }
+    return levelStmts;
+  }
+
   /** Inline one modifier application around `inner` (the wrapped body already lowered). The FUNCTION
    *  pre-only path reaches this with a pre-only modifier ([argDecls, pre-code, inner]). The CONSTRUCTOR
    *  path (isConstructor) also reaches it for POST-placeholder / multi-placeholder / conditional shapes:
@@ -5802,6 +5989,12 @@ export class Analyzer {
     inner: Stmt[],
     isConstructor = false,
     ctorBodyHasReturn = false,
+    // W5D-1: set by buildCtorLevelStmts. allowModBareReturn = a bare `return;` in THIS modifier's body
+    // is representable (the level exit point matches solc's layer exit - outermost position, or all
+    // enclosing layers pre-only-tail; a base level is wrap-outlined so the exit leaves only the level).
+    // bodyOutlined = `inner` is the ctorOutlineCall marker (not the inlined ctor body), so the
+    // modifier-param/ctor-param collision hazard does not exist.
+    opts?: { allowModBareReturn?: boolean; bodyOutlined?: boolean },
   ): Stmt[] {
     const mod = this.modifiersByName.get(app.name);
     if (!mod) {
@@ -5829,19 +6022,19 @@ export class Analyzer {
     // CTOR BODY (solc returns it to the modifier, continuing after `_;`; an inlined ctor-body return would
     // jump to the ctor end instead - a miscompile). Both keep the clean JETH323 over-rejection.
     if (mod.postStmts.length > 0 || mod.bodyStmts) {
-      if (!isConstructor || mod.hasBareReturn || ctorBodyHasReturn) {
+      if (!isConstructor || (mod.hasBareReturn && !opts?.allowModBareReturn) || ctorBodyHasReturn) {
         this.diags.error(
           app.site,
           'JETH323',
           mod.hasBareReturn
-            ? `a @modifier with a bare 'return;' applied to a constructor is not supported yet (the early-exit cannot be inlined into creation code)`
+            ? `a bare 'return;' in a nested (non-outermost) @modifier on a constructor under an enclosing modifier with post-placeholder or conditional code is not supported yet (solc resumes after the enclosing '_', which the level-exit lowering cannot express)`
             : ctorBodyHasReturn
               ? `a @modifier with post-placeholder or conditional-'_' code applied to a constructor whose body contains 'return;' is not supported yet (an inlined ctor-body return would mis-route)`
               : `a @modifier with post-placeholder or conditional-'_' code applied to a constructor is not supported yet (the buffered-return path requires a function body, not creation code)`,
         );
         return inner;
       }
-      return this.inlineModifierBodyIntoCtor(app, mod, inner);
+      return this.inlineModifierBodyIntoCtor(app, mod, inner, opts?.bodyOutlined === true);
     }
     // 1. Materialize each arg ONCE (solc evaluates a modifier arg exactly once) in the function param
     //    scope, bound to the modifier's parameter name. The localDecl init is evaluated before the
@@ -5863,7 +6056,10 @@ export class Analyzer {
     this.pushScope();
     for (const p of mod.params) this.declareLocal(p.name, p.type);
     const pre: Stmt[] = [];
+    const savedInModCode = this.currentInCtorModifierCode;
+    if (isConstructor) this.currentInCtorModifierCode = true;
     for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
+    this.currentInCtorModifierCode = savedInModCode;
     this.popScope();
     this.scopes = savedScopes;
     // 3. Wrap ONLY [argDecls, pre-code] in a block so the modifier's params/locals are scoped to the
@@ -5886,20 +6082,26 @@ export class Analyzer {
     app: { name: string; argNodes: ts.Expression[]; site: ts.Node },
     mod: RawModifier,
     inner: Stmt[],
+    bodyOutlined = false,
   ): Stmt[] {
     // SAFETY GATE: a modifier PARAM name that collides with a CTOR PARAM name would, once inlined, shadow
     // the ctor param in codegen's flat per-block name map, so the inlined ctor body (`inner`) would read
     // the modifier's value - a silent miscompile. (buildModifierWrap avoids this because `inner` is a
     // userfn CALL there, not the inlined body.) Reject the collision cleanly rather than risk it. Checked
     // against the CURRENT scope (the ctor params are live here, before the fresh modifier scope swap).
-    for (const p of mod.params) {
-      if (this.lookupLocal(p.name) !== undefined) {
-        this.diags.error(
-          app.site,
-          'JETH323',
-          `a @modifier parameter ('${p.name}') collides with a constructor parameter of the same name; this inlined ctor modifier shape is not supported yet (rename the modifier parameter)`,
-        );
-        return inner;
+    // W5D-1: when the ctor body is OUTLINED (`inner` is the ctorOutlineCall marker), the hazard does not
+    // exist: the body reads its own formals inside the outlined unit, and the call passes registers
+    // resolved at the (un-shadowed) ctorOutlineBind - so the collision gate is lifted for that shape.
+    if (!bodyOutlined) {
+      for (const p of mod.params) {
+        if (this.lookupLocal(p.name) !== undefined) {
+          this.diags.error(
+            app.site,
+            'JETH323',
+            `a @modifier parameter ('${p.name}') collides with a constructor parameter of the same name; this inlined ctor modifier shape is not supported yet (rename the modifier parameter)`,
+          );
+          return inner;
+        }
       }
     }
     // 1. Materialize each arg ONCE in the CURRENT (ctor param) scope, bound to the modifier param name.
@@ -5921,7 +6123,13 @@ export class Analyzer {
     const lowered: Stmt[] = [];
     const savedPlaceholder = this.placeholderInner;
     this.placeholderInner = inner;
+    // The modifier's OWN statements are checked with the ctor-modifier-code flag set (an immutable
+    // WRITE there is a solc reject); the `_;` placeholder splices the PRE-CHECKED ctor-body IR, so the
+    // body's own immutable writes are unaffected.
+    const savedInModCode = this.currentInCtorModifierCode;
+    this.currentInCtorModifierCode = true;
     for (const s of mod.node.body!.statements) this.checkStatement(s, VOID, lowered);
+    this.currentInCtorModifierCode = savedInModCode;
     this.placeholderInner = savedPlaceholder;
     this.popScope();
     this.scopes = savedScopes;
@@ -9754,7 +9962,17 @@ export class Analyzer {
       const e = this.checkExpr(decl.initializer, declared);
       if (e) init = this.coerce(e, declared, decl.initializer);
     }
-    this.declareLocal(decl.name.text, declared);
+    // W5D-2: a funcref-typed `let` is the TRACKED binding path - do not poison, and record the union
+    // of the initializer's possible targets (an uninitialized `let g: F;` starts exact-empty: its zero
+    // value can only Panic(0x51) at a call, contributing no effects, exactly like solc's view-typed
+    // uninitialized pointer). An untrackable initializer marks the variable unknown (sig-union).
+    if (declared.kind === 'funcref') {
+      this.ptrTrackNextDecl = true;
+      this.declareLocal(decl.name.text, declared);
+      this.mergePtrVarSources(decl.name.text, init ? this.funcrefValueSources(init) : { targets: new Set(), vars: new Set() });
+    } else {
+      this.declareLocal(decl.name.text, declared);
+    }
     if (declared.kind === 'array') this.memArrayLocals.add(decl.name.text);
     out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init });
   }
@@ -9906,6 +10124,13 @@ export class Analyzer {
           );
           return;
         }
+      }
+      // W5D-2: an assignment into a funcref-typed local merges the RHS's possible pointer targets into
+      // the variable's flow-insensitive source union. A name with no pre-existing entry (a binding that
+      // bypassed the tracked `let` path) is first marked UNKNOWN - its initial value is untracked.
+      if (target.kind === 'local' && target.type.kind === 'funcref') {
+        if (!this.currentPtrVarSources.has(target.varName)) this.mergePtrVarSources(target.varName, null);
+        this.mergePtrVarSources(target.varName, this.funcrefValueSources(value));
       }
       out.push({ kind: 'assign', target, value });
       return;
@@ -10386,8 +10611,85 @@ export class Analyzer {
     // P1-19: a call through the pointer reaches only the ADDRESS-TAKEN same-signature targets. Record the
     // signature; the transitive-purity fixpoint unions those targets' effects (deferred so `addressTaken`
     // is complete). This is the exact reachable set - NOT every function that merely shares the signature.
-    this.currentPtrCallSigs.add(this.funcrefSigKey(sig));
+    // W5D-2: when the pointer expression's possible targets are trackable (a direct mint, a read of a
+    // tracked pointer VARIABLE, or a ternary of those), defer a PER-VARIABLE record instead - resolved
+    // after the body completes (falling back to the signature union if any reached variable is unknown/
+    // poisoned). Any other pointer shape (storage read, call result, array element, param, ...) keeps
+    // the conservative per-signature union.
+    const src = this.funcrefValueSources(ptr);
+    if (src) this.currentPtrVarCalls.push({ sigKey: this.funcrefSigKey(sig), src });
+    else this.currentPtrCallSigs.add(this.funcrefSigKey(sig));
     return { kind: 'funcRefCall', type: sig.ret ?? VOID, ptr, args, sig };
+  }
+
+  /** W5D-2: the possible pointer TARGETS of a checked funcref-typed Expr, as {direct target keys,
+   *  referenced pointer-variable names}, or null when any part is untrackable (the caller then uses
+   *  the per-signature union). Trackable: a direct mint (`this.f` -> funcRef), a plain read of a
+   *  pointer VARIABLE (localRead; whether that variable is itself exact is decided at resolution
+   *  time), and a ternary whose both arms are trackable. Analyzed on the CHECKED IR, so any surface
+   *  syntax that lowers to another kind (storage read, call result, array element, tuple component,
+   *  abi.decode, ...) is automatically null - conservative by construction. */
+  private funcrefValueSources(e: Expr): { targets: Set<string>; vars: Set<string> } | null {
+    if (e.kind === 'funcRef') return { targets: new Set([e.fn]), vars: new Set() };
+    if (e.kind === 'localRead' && e.type.kind === 'funcref') return { targets: new Set(), vars: new Set([e.name]) };
+    if (e.kind === 'ternary') {
+      const a = this.funcrefValueSources(e.then);
+      const b = this.funcrefValueSources(e.else);
+      if (!a || !b) return null;
+      return {
+        targets: new Set([...a.targets, ...b.targets]),
+        vars: new Set([...a.vars, ...b.vars]),
+      };
+    }
+    return null;
+  }
+
+  /** W5D-2: merge a source record into a pointer variable's flow-insensitive union (creating the entry
+   *  on first sight). `src = null` marks the variable UNKNOWN - every call through it (and through any
+   *  variable that copies it) falls back to the per-signature effect union. */
+  private mergePtrVarSources(name: string, src: { targets: Set<string>; vars: Set<string> } | null): void {
+    let e = this.currentPtrVarSources.get(name);
+    if (!e) {
+      e = { unknown: false, targets: new Set(), vars: new Set() };
+      this.currentPtrVarSources.set(name, e);
+    }
+    if (!src) {
+      e.unknown = true;
+      return;
+    }
+    for (const t of src.targets) e.targets.add(t);
+    for (const v of src.vars) e.vars.add(v);
+  }
+
+  /** W5D-2: resolve the deferred per-variable pointer-call records of the just-checked body. Each
+   *  record whose transitive source closure is fully known contributes its exact target KEYS (returned
+   *  for the purity fixpoint); any record reaching an unknown/poisoned/undeclared variable falls back
+   *  to the per-signature union (added to currentPtrCallSigs). Cycles among copied variables resolve
+   *  to the union over the cycle (a visited set; a cycle member contributes its accumulated targets). */
+  private resolveCurrentPtrVarCalls(): Set<string> {
+    const exact = new Set<string>();
+    const resolveVars = (vars: Set<string>, acc: Set<string>, visited: Set<string>): boolean => {
+      for (const v of vars) {
+        if (visited.has(v)) continue;
+        visited.add(v);
+        if (this.currentPtrVarPoisoned.has(v)) return false;
+        const entry = this.currentPtrVarSources.get(v);
+        if (!entry || entry.unknown) return false;
+        for (const t of entry.targets) acc.add(t);
+        if (!resolveVars(entry.vars, acc, visited)) return false;
+      }
+      return true;
+    };
+    for (const call of this.currentPtrVarCalls) {
+      const acc = new Set<string>(call.src.targets);
+      if (resolveVars(call.src.vars, acc, new Set())) {
+        for (const t of acc) exact.add(t);
+      } else {
+        this.currentPtrCallSigs.add(call.sigKey);
+      }
+    }
+    this.currentPtrVarCalls = [];
+    return exact;
   }
 
   /** A call through a function pointer in VALUE position (`= f(v)`, `return f(v)`, ...): a void-returning
@@ -10502,8 +10804,14 @@ export class Analyzer {
       re = this.currentReadsEnv;
     const savedCallees = this.currentCallees;
     const savedPtrSigs = this.currentPtrCallSigs;
+    const savedPtrVarSources = this.currentPtrVarSources;
+    const savedPtrVarPoisoned = this.currentPtrVarPoisoned;
+    const savedPtrVarCalls = this.currentPtrVarCalls;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
+    this.currentPtrVarSources = new Map();
+    this.currentPtrVarPoisoned = new Set();
+    this.currentPtrVarCalls = [];
     let ok = true;
     const argNodes = this.resolveCallArgs(node, c, c.name);
     if (!argNodes) ok = false;
@@ -10523,6 +10831,9 @@ export class Analyzer {
     this.currentReadsEnv = re;
     this.currentCallees = savedCallees;
     this.currentPtrCallSigs = savedPtrSigs;
+    this.currentPtrVarSources = savedPtrVarSources;
+    this.currentPtrVarPoisoned = savedPtrVarPoisoned;
+    this.currentPtrVarCalls = savedPtrVarCalls;
     return ok;
   }
 
@@ -10782,8 +11093,14 @@ export class Analyzer {
       re = this.currentReadsEnv;
     const savedCallees = this.currentCallees;
     const savedPtrSigs = this.currentPtrCallSigs;
+    const savedPtrVarSources = this.currentPtrVarSources;
+    const savedPtrVarPoisoned = this.currentPtrVarPoisoned;
+    const savedPtrVarCalls = this.currentPtrVarCalls;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
+    this.currentPtrVarSources = new Map();
+    this.currentPtrVarPoisoned = new Set();
+    this.currentPtrVarCalls = [];
     const r = this.checkExpr(expr);
     this.diags.items.length = diagLen;
     this.currentReadsState = rs;
@@ -10791,6 +11108,9 @@ export class Analyzer {
     this.currentReadsEnv = re;
     this.currentCallees = savedCallees;
     this.currentPtrCallSigs = savedPtrSigs;
+    this.currentPtrVarSources = savedPtrVarSources;
+    this.currentPtrVarPoisoned = savedPtrVarPoisoned;
+    this.currentPtrVarCalls = savedPtrVarCalls;
     return r?.type;
   }
 
@@ -11107,8 +11427,14 @@ export class Analyzer {
       re = this.currentReadsEnv;
     const savedCallees = this.currentCallees;
     const savedPtrSigs = this.currentPtrCallSigs;
+    const savedPtrVarSources = this.currentPtrVarSources;
+    const savedPtrVarPoisoned = this.currentPtrVarPoisoned;
+    const savedPtrVarCalls = this.currentPtrVarCalls;
     this.currentCallees = new Set();
     this.currentPtrCallSigs = new Set();
+    this.currentPtrVarSources = new Map();
+    this.currentPtrVarPoisoned = new Set();
+    this.currentPtrVarCalls = [];
     let ok = true;
     for (let i = 0; i < c.params.length; i++) {
       const node = i < argExprs.length ? argExprs[i]! : (c.defaults![i] as ts.Expression);
@@ -11126,6 +11452,9 @@ export class Analyzer {
     this.currentReadsEnv = re;
     this.currentCallees = savedCallees;
     this.currentPtrCallSigs = savedPtrSigs;
+    this.currentPtrVarSources = savedPtrVarSources;
+    this.currentPtrVarPoisoned = savedPtrVarPoisoned;
+    this.currentPtrVarCalls = savedPtrVarCalls;
     return ok;
   }
 
@@ -11340,11 +11669,13 @@ export class Analyzer {
       );
       return 'handled';
     }
-    // Each tuple component must be a shape the destructure binding supports (value / bytes / value-array /
-    // static struct / funcref); a dynamic-struct component keeps its clean reject (same gate as the internal
-    // and interface tuple paths, so no over-acceptance).
+    // Each tuple component must be a shape the destructure binding supports. W5D-3: this path decodes
+    // through the SAME abiDecode-tuple source as the interface-call tuple form, so it admits the same
+    // decodeSupported set (which includes a DYNAMIC-field struct via buildDynStructFromMemBlob and the
+    // Residual B/C array images) on top of the base destructurable set. An unsupported shape (e.g. a
+    // struct with an unsupported field) keeps its clean JETH243 reject.
     for (const t of resolved.returnTypes) {
-      if (!this.destructurableComponent(t)) {
+      if (!this.destructurableComponent(t) && !this.decodeSupported(t)) {
         this.diags.error(node, 'JETH243', `tuple destructuring of a non-value return component (${displayName(t)}) is not supported yet`);
         return 'handled';
       }
@@ -12856,9 +13187,12 @@ export class Analyzer {
       }
       // this.<immutable> = v: legal ONLY directly in the constructor body (matches solc, which also
       // rejects an assignment in a function called from the ctor). It writes the staged shadow.
+      // W5D-1 soundness: solc ALSO rejects an immutable write inside a ctor MODIFIER's code ("Cannot
+      // write to immutable here" - only the ctor body may assign; reads are fine). currentInConstructor
+      // spans the modifier inlining (so staged READS work there), so a separate flag marks modifier code.
       if (this.immutablesByName.has(node.name.text)) {
         const im = this.immutablesByName.get(node.name.text)!;
-        if (!this.currentInConstructor) {
+        if (!this.currentInConstructor || this.currentInCtorModifierCode) {
           this.diags.error(
             node,
             'JETH313',

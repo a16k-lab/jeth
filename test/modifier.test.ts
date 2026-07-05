@@ -526,12 +526,13 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       const rs = await s.h.call(s.a, '0x' + sel('gn()'));
       expect(rj.returnHex).toBe(rs.returnHex);
     });
-    it('P1-20: a bare-return modifier on a constructor stays gated (JETH323, no early-exit inline)', () =>
+    it('W5D-1: a bare-return modifier on a constructor is now LIFTED (level-exit outlining)', () =>
+      // behavior verified byte-identical vs solc in test/ctor-modifier-return.test.ts
       expect(
         codes(
           `@contract class C { @state n: u256; @modifier m(c: bool) { if (c) { return; } _; } @m(false) constructor(){ this.n = 10n; } }`,
         ),
-      ).toContain('JETH323'));
+      ).toEqual([]));
     it('a value param + value return post-modifier is supported -> no diagnostics', () =>
       expect(
         codes(

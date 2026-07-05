@@ -204,6 +204,12 @@ export class YulEmitter {
   private nameCounter = 0; // per-function unique local-name counter
   private funcs = new Map<string, FunctionIR>(); // contract functions by name (internal-call targets)
   private contract?: ContractIR; // the contract being emitted (for the diamond storage base/slots)
+  // W5D-1: per-constructor-emission registry of OUTLINED ctor units. A ctorOutlineBind lowers its body
+  // as a creation-block Yul function (def collected in ctorOutlineDefs, hoisted next to
+  // jeth_constructor) and records the call shape here; each ctorOutlineCall reads it. Reset per
+  // emitConstructor; the nodes never appear outside a constructor body.
+  private ctorOutlines = new Map<number, { fnName: string; argRegs: string[]; immNames: string[] }>();
+  private ctorOutlineDefs: string[] = [];
 
   emit(contract: ContractIR): string {
     this.contract = contract;
@@ -342,6 +348,9 @@ ${indent(runtime, 6)}
   private emitConstructor(contract: ContractIR): { lines: string[]; helpers: string[]; staged: Map<string, string> } {
     const ctor = contract.ctor!;
     this.nameCounter = 0;
+    // W5D-1: fresh outlined-unit registry for THIS constructor emission.
+    this.ctorOutlines = new Map();
+    this.ctorOutlineDefs = [];
     const lines: string[] = [];
     // Non-payable constructor: reject any value sent at deploy (solc emits this guard).
     if (!ctor.payable) lines.push('if callvalue() { revert(0, 0) }');
@@ -524,7 +533,9 @@ ${indent(runtime, 6)}
         ? `let ${outerRets.join(', ')} := jeth_constructor(${decoded.join(', ')})`
         : `jeth_constructor(${decoded.join(', ')})`,
     );
-    return { lines, helpers: [ctorFn, ...ctorFnDefs, ...helperDefs], staged };
+    // W5D-1: the outlined ctor units (collected while lowering the body above) are creation-block
+    // functions, hoisted next to jeth_constructor (Yul function definitions are order-independent).
+    return { lines, helpers: [ctorFn, ...this.ctorOutlineDefs, ...ctorFnDefs, ...helperDefs], staged };
   }
 
   /** JETH303: collect the contract internal/private functions TRANSITIVELY reachable from the
@@ -2308,6 +2319,65 @@ ${indent(runtime, 6)}
         if (!md) throw new UnsupportedError('modifierBody marker lowered outside a modifier dispatch');
         const call = `${md.userFn}(${md.args.join(', ')})`;
         out.push(md.retVars.length === 0 ? call : `${md.retVars.join(', ')} := ${call}`);
+        break;
+      }
+      case 'ctorOutlineBind': {
+        // W5D-1: outline a return-involving ctor unit (the level's own body, or a whole base-level
+        // modifier wrap) into a creation-block Yul function, so a bare `return;` inside it lowers to
+        // `leave` and exits ONLY that unit (byte-identical to solc's per-constructor / per-modifier-
+        // layer return scoping). The bind sits where the level's params are un-shadowed: resolve each
+        // param's CURRENT register for the call sites (a later modifier argDecl of the same name
+        // shadows the ctx entry, so resolution must happen here). Params ride as single Yul words
+        // (a value, or a memory-image pointer for an aggregate) - the exact representation the
+        // enclosing jeth_constructor uses. Staged immutables thread in/out (pass-through when the
+        // unit never writes them), preserving last-write-wins across multiple placeholder runs.
+        if (!ctx.fnMode || ctx.specialEntry || ctx.modifierDispatch)
+          throw new UnsupportedError('ctorOutlineBind lowered outside a constructor body');
+        const argRegs = s.params.map((p) => this.ctxLookup(ctx, p.name));
+        const fnName = `jeth_ctor_ol_${s.id}`;
+        const sub: LowerCtx = {
+          scopes: [new Map()],
+          returnType: { kind: 'void' } as JethType,
+          dynParams: new Map(),
+          cdArrays: new Map(),
+          cdAggregates: new Map(),
+          cdDynStructs: new Map(),
+          cdParamHead: new Map(),
+          fnMode: { retVar: null }, // a bare `return;` in the unit -> leave (exit the unit only)
+        };
+        if (ctx.ctorImmShadow) sub.ctorImmShadow = ctx.ctorImmShadow;
+        const formals: string[] = [];
+        for (const p of s.params) {
+          const f = this.freshLocal(p.name);
+          this.ctxDeclare(sub, p.name, f);
+          formals.push(f);
+        }
+        const immNames = [...(ctx.immStaged?.keys() ?? [])];
+        const immIns: string[] = [];
+        const immOuts: string[] = [];
+        const subStaged = new Map<string, string>();
+        for (const nm of immNames) {
+          const iin = this.fresh();
+          const iout = this.fresh();
+          immIns.push(iin);
+          immOuts.push(iout);
+          subStaged.set(nm, iout);
+        }
+        if (immNames.length) sub.immStaged = subStaged;
+        const unitLines: string[] = [];
+        immNames.forEach((nm, k) => unitLines.push(`${immOuts[k]} := ${immIns[k]}`));
+        for (const st of s.body) for (const l of this.lowerStmt(st, sub)) unitLines.push(l);
+        const sig = `function ${fnName}(${[...formals, ...immIns].join(', ')})${immOuts.length ? ` -> ${immOuts.join(', ')}` : ''}`;
+        this.ctorOutlineDefs.push(`${sig} {\n${unitLines.map((l) => '  ' + l).join('\n')}${unitLines.length ? '\n' : ''}}`);
+        this.ctorOutlines.set(s.id, { fnName, argRegs, immNames });
+        break; // the bind emits no inline code (the defs are hoisted next to jeth_constructor)
+      }
+      case 'ctorOutlineCall': {
+        const rec = this.ctorOutlines.get(s.id);
+        if (!rec) throw new UnsupportedError('ctorOutlineCall lowered before its ctorOutlineBind');
+        const immVars = rec.immNames.map((nm) => ctx.immStaged!.get(nm)!);
+        const call = `${rec.fnName}(${[...rec.argRegs, ...immVars].join(', ')})`;
+        out.push(immVars.length ? `${immVars.join(', ')} := ${call}` : call);
         break;
       }
       case 'if': {

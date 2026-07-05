@@ -221,11 +221,12 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
     }
   });
 
-  it('P1-20: a bare-return modifier on a constructor stays gated (JETH323)', () => {
+  it('W5D-1: a bare-return modifier on a constructor is now LIFTED (level-exit outlining)', () => {
+    // behavior verified byte-identical vs solc in test/ctor-modifier-return.test.ts
     expect(
       codes(
         `@contract class C { @state n: u256; @modifier m(c: bool) { if (c) { return; } _; } @m(false) constructor(){ this.n = 10n; } }`,
       ),
-    ).toContain('JETH323');
+    ).toEqual([]);
   });
 });

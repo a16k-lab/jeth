@@ -298,10 +298,13 @@ describe('P1-11: tuple destructure of an @external (delegatecall) library call',
     );
   });
 
-  it('REJECT: wrong-arity / single-return / dynamic-struct component', () => {
+  it('REJECT: wrong-arity / single-return (dyn-struct component now LIFTED, W5D-3)', () => {
     expect(accepts(`@library class L { @external @pure mm(x: u256): [u256, u256] { return [x, x]; } } @contract class C { @external @pure go(x: u256): u256 { let [a, b, c] = L.mm(x); return a; } }`)).toBe(false);
     expect(accepts(`@library class L { @external @pure mm(x: u256): u256 { return x; } } @contract class C { @external @pure go(x: u256): u256 { let [a, b] = L.mm(x); return a; } }`)).toBe(false);
-    expect(accepts(`@struct class D { xs: u256[]; } @library class L { @external @pure mm(): [u256, D] { let xs: u256[] = [1n]; return [1n, D(xs)]; } } @contract class C { @external @pure go(): u256 { let [a, d] = L.mm(); return a; } }`)).toBe(false);
+    // W5D-3: a DYNAMIC-struct tuple component decodes through the same abiDecode source the interface
+    // tuple path uses (buildDynStructFromMemBlob), so this shape is now accepted (behavior verified
+    // byte-identical in library-tuple-dyn-struct.test.ts).
+    expect(accepts(`@struct class D { xs: u256[]; } @library class L { @external @pure mm(): [u256, D] { let xs: u256[] = [1n]; return [1n, D(xs)]; } } @contract class C { @external @pure go(): u256 { let [a, d] = L.mm(); return a; } }`)).toBe(true);
   });
 });
 

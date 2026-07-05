@@ -514,6 +514,16 @@ export type Stmt =
   // the decoded params, capturing the result into the dispatch's `ret` register(s). Never appears in
   // a normal body or a constructor.
   | { kind: 'modifierBody' }
+  // W5D-1 (P1-20): CONSTRUCTOR-body / constructor-LEVEL outlining for return-involving ctor shapes.
+  // The BIND node appears exactly ONCE, at a point where the level's ctor params are un-shadowed: the
+  // emitter resolves each param's current register, lowers `body` as a synthesized CREATION-block Yul
+  // function jeth_ctor_ol_<id>(<param words>, <staged immutables in>) -> <staged immutables out> (so a
+  // bare `return;` inside becomes `leave`, exiting only that unit), and records the call shape. Each
+  // CALL node invokes the unit, threading the caller's staged-immutable vars (pass-through when the
+  // unit never writes them). Multiple CALLs of one id (a multi-placeholder modifier) share one
+  // definition. These nodes only ever appear inside a constructor body.
+  | { kind: 'ctorOutlineBind'; id: number; params: Param[]; body: Stmt[] }
+  | { kind: 'ctorOutlineCall'; id: number }
   | { kind: 'returnTuple'; values: Expr[]; types: JethType[] } // return [a, b, ...] (multi-value)
   | { kind: 'localDecl'; name: string; type: JethType; init?: Expr }
   | { kind: 'assign'; target: LValue; value: Expr } // plain `=` (value already folds compound ops)
