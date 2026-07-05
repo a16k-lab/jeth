@@ -189,10 +189,42 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
     ).toThrow();
   });
 
-  it('a constructor with a post-code modifier still rejects (JETH323: no userfn body in creation code)', () => {
+  it('P1-20: a constructor with a post-code modifier is LIFTED, byte-identical (slot 0 == 11)', async () => {
+    const J = `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @m constructor(){ this.n = 10n; } }`;
+    const S = `contract C { uint256 n; modifier m() { _; n = n + 1; } constructor() m { n = 10; } }`;
+    const j = await depJ(J),
+      s = await depS(S);
+    expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+    expect(BigInt(await readSlot(j.h, j.a, 0n))).toBe(11n);
+  });
+
+  it('P1-20: a multi-placeholder (@twice) modifier on a constructor runs the body twice, byte-identical', async () => {
+    const J = `@contract class C { @state n: u256; @modifier twice() { _; _; } @twice constructor(){ this.n = this.n + 1n; } }`;
+    const S = `contract C { uint256 n; modifier twice() { _; _; } constructor() twice { n = n + 1; } }`;
+    const j = await depJ(J),
+      s = await depS(S);
+    expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+    expect(BigInt(await readSlot(j.h, j.a, 0n))).toBe(2n);
+  });
+
+  it('P1-20: a conditional-placeholder modifier on a constructor (0-or-N-times), byte-identical', async () => {
+    for (const [flag, expected] of [
+      ['true', 7n],
+      ['false', 0n],
+    ] as const) {
+      const J = `@contract class C { @state n: u256; @modifier m(c: bool) { if (c) { _; } } @m(${flag}) constructor(){ this.n = this.n + 7n; } }`;
+      const S = `contract C { uint256 n; modifier m(bool c) { if (c) { _; } } constructor() m(${flag}) { n = n + 7; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+      expect(BigInt(await readSlot(j.h, j.a, 0n))).toBe(expected);
+    }
+  });
+
+  it('P1-20: a bare-return modifier on a constructor stays gated (JETH323)', () => {
     expect(
       codes(
-        `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @m constructor(){ this.n = 10n; } }`,
+        `@contract class C { @state n: u256; @modifier m(c: bool) { if (c) { return; } _; } @m(false) constructor(){ this.n = 10n; } }`,
       ),
     ).toContain('JETH323');
   });

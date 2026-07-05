@@ -435,7 +435,81 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
           codes(`@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() Token(5n) {} }`),
         ).toContain('JETH379');
       });
+
+      // P1-6: super(args) scanned in ANY chain ctor (mid-level), passed THROUGH ctorless bases, and a
+      // bare super() treated as a no-op. Each is a lifted over-rejection, byte-identical to solc.
+      it('P1-6: MID-LEVEL super(args) - B(w) super(w+100), C(z) super(z) -> cap = z+100', () =>
+        same(
+          `@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @abstract class B extends A { constructor(w: u256){ super(w + 100n); } } @contract class C extends B { constructor(z: u256){ super(z); } @external @view g(): u256 { return this.cap; } }`,
+          `abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } abstract contract B is A { constructor(uint256 w) A(w+100){} } contract C is B { constructor(uint256 z) B(z){} function g() external view returns(uint256){ return cap; } }`,
+          [{ sig: 'g()' }], 1, pad32(5n)));
+      it('P1-6: super(args) PASSES THROUGH a ctorless base to a parameterized grandparent', () =>
+        same(
+          `@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @abstract class B extends A { @state z: u256; } @contract class C extends B { constructor(){ super(5n); } @external @view g(): u256 { return this.cap; } }`,
+          `abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } abstract contract B is A { uint256 z; } contract C is B { constructor() A(5){} function g() external view returns(uint256){ return cap; } }`,
+          [{ sig: 'g()' }], 1));
+      it('P1-6: bare super() is a NO-OP (base ctor runs, no args)', () =>
+        same(
+          `@abstract class A { @state cap: u256; constructor(){ this.cap = 42n; } } @contract class C extends A { @state y: u256; constructor(){ super(); this.y = 7n; } @external @view gc(): u256 { return this.cap; } @external @view gy(): u256 { return this.y; } }`,
+          `abstract contract A { uint256 cap; constructor(){ cap=42; } } contract C is A { uint256 y; constructor(){ y=7; } function gc() external view returns(uint256){ return cap; } function gy() external view returns(uint256){ return y; } }`,
+          [{ sig: 'gc()' }, { sig: 'gy()' }], 2));
+      it('P1-6: super(args) to a base with NO parameterized ancestor still REJECTS (JETH379)', () =>
+        expect(
+          codes(`@abstract class A { @state x: u256; } @contract class C extends A { constructor(){ super(7n); } }`),
+        ).toContain('JETH379'));
+
+      // super(this.mk()): the MODIFIER form DOES resolve a member function (solc accepts it), byte-identical.
+      it('super(this.mk()) - a member function call in the modifier form is accepted, byte-identical', () =>
+        same(
+          `@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends A { dbl(x: u256): u256 { return x * 2n; } constructor(p: u256){ super(this.dbl(p)); } @external @view g(): u256 { return this.cap; } }`,
+          `abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is A { function dbl(uint256 x) internal pure returns(uint256){return x*2;} constructor(uint256 p) A(dbl(p)){} function g() external view returns(uint256){ return cap; } }`,
+          [{ sig: 'g()' }], 1, pad32(7n)));
     });
+  });
+
+  // P1-5: super.f() inside a CTOR body (the derived contract does NOT itself override f), which resolves to
+  // the sole base definition. Previously an over-rejection (JETH381: no chain for a single-def signature).
+  describe('P1-5: super.f() in a constructor body (single base definition)', () => {
+    it('super.f() in a ctor resolves to the base f, byte-identical', () =>
+      same(
+        `@abstract class A { @state x: u256; @virtual f(): u256 { return 7n; } } @contract class C extends A { @state y: u256; constructor(){ this.y = super.f(); } @external @view gy(): u256 { return this.y; } }`,
+        `abstract contract A { uint256 x; function f() internal virtual returns(uint256){ return 7; } } contract C is A { uint256 y; constructor(){ y = super.f(); } function gy() external view returns(uint256){ return y; } }`,
+        [{ sig: 'gy()' }], 2));
+    it('super.f() where a MID base ctor also calls super.f() (both reach A.f)', () =>
+      same(
+        `@abstract class A { @state x: u256; @virtual f(): u256 { return 3n; } } @abstract class B extends A { @state bx: u256; constructor(){ this.bx = super.f(); } } @contract class C extends B { @state cx: u256; constructor(){ this.cx = super.f() + this.bx; } @external @view g(): u256 { return this.cx; } }`,
+        `abstract contract A { uint256 x; function f() internal virtual returns(uint256){ return 3; } } abstract contract B is A { uint256 bx; constructor(){ bx = super.f(); } } contract C is B { uint256 cx; constructor(){ cx = super.f() + bx; } function g() external view returns(uint256){ return cx; } }`,
+        [{ sig: 'g()' }], 3));
+    it('super.f() where the base declares no f still REJECTS (JETH381)', () =>
+      expect(
+        codes(`@abstract class A { @state x: u256; } @contract class C extends A { @state y: u256; constructor(){ this.y = super.f(); } }`),
+      ).toContain('JETH381'));
+  });
+
+  // OVER-ACCEPTANCE closed: a HERITAGE base-arg (`extends A(this.mk())`) that calls a member function is
+  // "Undeclared identifier" in solc (this is not in the inheritance-specifier scope); JETH now rejects it.
+  describe('heritage base-arg member access is rejected (over-acceptance closed)', () => {
+    it('extends A(this.mk()) - a member function call in a heritage arg -> both reject', () => {
+      expect(
+        codes(`@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends A(this.mk()) { mk(): u256 { return 5n; } }`),
+      ).toContain('JETH379');
+      expect(
+        solcRejects(`abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is A(mk()) { function mk() internal pure returns(uint256){return 5;} }`),
+      ).toBe(true);
+    });
+    it('extends A(this.state) - a member state read in a heritage arg -> both reject', () => {
+      expect(
+        codes(`@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends A(this.s) { @state s: u256; }`),
+      ).toContain('JETH379');
+      expect(
+        solcRejects(`abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is A(s) { uint256 s; }`),
+      ).toBe(true);
+    });
+    it('extends A(5n + 1n) - a constant heritage arg still ACCEPTS byte-identical', () =>
+      same(
+        `@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends A(5n + 1n) { @external @view g(): u256 { return this.cap; } }`,
+        `abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is A(5 + 1) { function g() external view returns(uint256){ return cap; } }`,
+        [{ sig: 'g()' }], 1));
   });
 
   // The two @override-specifier problems carry DISTINCT codes (as solc uses two distinct TypeErrors):

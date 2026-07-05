@@ -182,6 +182,11 @@ interface RawModifier {
   // ONLY for this shape (preStmts/postStmts stay empty); it always routes through the buffered userfn
   // path (like POST code) so a value-returning function's zero-value branch works.
   bodyStmts?: ts.Statement[];
+  // Whether the modifier body contains a bare `return;` (a value-return is rejected at collect time).
+  // A bare return early-exits the wrapped function; for a CONSTRUCTOR modifier it cannot be inlined
+  // (there is no synthesized body to early-exit from without jumping past the remaining wrap), so a
+  // ctor-applied modifier with a bare return stays gated (P1-20).
+  hasBareReturn?: boolean;
 }
 
 export class Analyzer {
@@ -1335,6 +1340,12 @@ export class Analyzer {
     // overridden base version (ignored); a second in the SAME contract is an error (JETH383).
     let receiveNode: { member: ts.MethodDeclaration; contract: string } | undefined;
     let fallbackNode: { member: ts.MethodDeclaration; contract: string } | undefined;
+    // P1-21: ALL @receive / @fallback declarations across the linearization (most-derived first), each
+    // with its defining contract and its @virtual/@override markers, so the special-entry override
+    // relationship can be validated the same way solc validates a function override (a redeclaration must
+    // carry @override; the base must be @virtual; @override with no base is "overrides nothing").
+    const receiveDecls: { member: ts.MethodDeclaration; contract: string; virtual: boolean; override: boolean }[] = [];
+    const fallbackDecls: { member: ts.MethodDeclaration; contract: string; virtual: boolean; override: boolean }[] = [];
     const collectedFns: RawFunction[] = [];
     // @modifier declarations are gathered here (with defining contract + virtual/override flags) and
     // resolved AFTER the loop by resolveModifierOverrides: a @virtual base modifier replaced by an
@@ -1355,6 +1366,7 @@ export class Analyzer {
               this.diags.error(member, 'JETH383', 'a contract may declare at most one @receive entry');
             sawReceiveHere = true;
             if (!receiveNode) receiveNode = { member, contract: cn };
+            receiveDecls.push({ member, contract: cn, virtual: decs.includes('virtual'), override: decs.includes('override') });
             continue;
           }
           if (decs.includes('fallback')) {
@@ -1362,6 +1374,7 @@ export class Analyzer {
               this.diags.error(member, 'JETH383', 'a contract may declare at most one @fallback entry');
             sawFallbackHere = true;
             if (!fallbackNode) fallbackNode = { member, contract: cn };
+            fallbackDecls.push({ member, contract: cn, virtual: decs.includes('virtual'), override: decs.includes('override') });
             continue;
           }
           if (decs.includes('error')) this.collectErrorDecl(member);
@@ -1740,6 +1753,12 @@ export class Analyzer {
     // like context). The most-derived definition won during collection above.
     const receive = receiveNode ? this.checkSpecialEntry(receiveNode.member, 'receive', receiveNode.contract) : undefined;
     const fallback = fallbackNode ? this.checkSpecialEntry(fallbackNode.member, 'fallback', fallbackNode.contract) : undefined;
+    // P1-21: validate the special-entry override relationship (a redeclaration across the chain must
+    // carry @override, the base must be @virtual, @override with no base is "overrides nothing"). `lin`
+    // is most-derived first, so a larger index = more-base.
+    const specialLinIdx = new Map(lin.map((c, i) => [c.name?.text ?? '<anon>', i]));
+    this.validateSpecialEntryOverride(receiveDecls, 'receive', specialLinIdx);
+    this.validateSpecialEntryOverride(fallbackDecls, 'fallback', specialLinIdx);
 
     // INTERNAL FUNCTION POINTERS: assign each address-taken function a stable, deterministic dispatch id
     // (>= 1; id 0 is reserved for the null/unassigned pointer, matching solc's zero-initialized function
@@ -3209,7 +3228,8 @@ export class Analyzer {
     // materialization; leftmost decorator outermost). A ctor modifier reading msg.value still flows
     // through the payable rule, and one calling an internal function is caught by the JETH303 gate.
     let body = rawBody;
-    for (const app of [...ctorMods].reverse()) body = this.inlineModifier(app, body);
+    const ctorBodyHasReturn = ctorNode.body ? this.findReturns([...ctorNode.body.statements]).length > 0 : false;
+    for (const app of [...ctorMods].reverse()) body = this.inlineModifier(app, body, true, ctorBodyHasReturn);
     this.currentInConstructor = false;
     this.popScope();
 
@@ -3220,6 +3240,65 @@ export class Analyzer {
     return { params, payable, body };
   }
 
+  /** P1-21: validate the @receive / @fallback override relationship across the linearization, matching
+   *  solc's function-override rules for special entries. `decls` is most-derived first (with virtual /
+   *  override markers); `linIdx` maps contract -> linearization position (larger = more-base). A
+   *  redeclaration must carry @override, the base it overrides must be @virtual, and an @override with no
+   *  more-base same-kind declaration "overrides nothing". Reuses the JETH374/JETH369/JETH415-style reject
+   *  meanings but keeps a single JETH386 code (special-entry override error) so no new code is needed. */
+  private validateSpecialEntryOverride(
+    decls: { member: ts.MethodDeclaration; contract: string; virtual: boolean; override: boolean }[],
+    kind: 'receive' | 'fallback',
+    linIdx: Map<string, number>,
+  ): void {
+    if (decls.length <= 1) {
+      // A lone special entry: an @override on it with no base declaration is "overrides nothing".
+      const only = decls[0];
+      if (only && only.override) {
+        this.diags.error(
+          only.member,
+          'JETH386',
+          `@${kind} has @override but no base contract declares a @${kind} entry to override`,
+        );
+      }
+      return;
+    }
+    // decls are collected most-derived first. For each declaration, its overridden target = the NEAREST
+    // more-base declaration of the same kind (the next entry in list order, since list order already
+    // follows the linearization most-derived first). Validate the pair.
+    for (let i = 0; i < decls.length; i++) {
+      const d = decls[i]!;
+      const base = decls[i + 1]; // the nearest more-base same-kind entry (undefined for the most-base one)
+      if (base === undefined) {
+        // the most-base declaration: an @override here overrides nothing.
+        if (d.override) {
+          this.diags.error(
+            d.member,
+            'JETH386',
+            `@${kind} in '${d.contract}' has @override but no base contract declares a @${kind} entry to override`,
+          );
+        }
+        continue;
+      }
+      // d redeclares over `base`: d must carry @override, and `base` must be @virtual.
+      if (!d.override) {
+        this.diags.error(
+          d.member,
+          'JETH386',
+          `@${kind} in '${d.contract}' overrides the @${kind} in '${base.contract}' but is missing @override`,
+        );
+      }
+      if (!base.virtual) {
+        this.diags.error(
+          d.member,
+          'JETH386',
+          `@${kind} in '${d.contract}' overrides the @${kind} in '${base.contract}', which is not @virtual (add @virtual to the base @${kind})`,
+        );
+      }
+      void linIdx;
+    }
+  }
+
   /** Phase 6: type-check a @receive / @fallback special entry's body into a SpecialEntryIR (a constructor-
    *  like, function-scoped context). @receive is ALWAYS payable (no params, no return, no redundant
    *  @payable). @fallback is non-payable by default (opt-in @payable); v1 rejects params and a return type
@@ -3227,6 +3306,12 @@ export class Analyzer {
   private checkSpecialEntry(member: ts.MethodDeclaration, kind: 'receive' | 'fallback', owner?: string): SpecialEntryIR | undefined {
     const decs = decoratorNames(member);
     let payable = kind === 'receive'; // @receive is always payable
+    // P1-21: @virtual / @override are ALLOWED on a @receive/@fallback (solc permits `receive() external
+    // payable virtual {}` and an `override` in a derived contract). They are structural markers only - the
+    // single special-entry dispatch is byte-identical regardless - so accept them here and let the normal
+    // override machinery (which does not collect special entries into signature groups) leave codegen
+    // unchanged. Everything else that changes the entry's meaning (a visibility/mutability decorator, a
+    // @modifier, @error/@event) stays rejected (JETH386): a special entry is payable or non-payable only.
     const BAD = [
       'view',
       'pure',
@@ -3237,14 +3322,16 @@ export class Analyzer {
       'public',
       'internal',
       'private',
-      'virtual',
-      'override',
       'modifier',
       'error',
       'event',
     ];
     for (const d of decs) {
       if (d === kind) continue;
+      // P1-21: @virtual / @override are structural override markers; solc allows them on a special entry
+      // (e.g. `receive() external payable virtual {}` / an overriding `receive`). Accept and ignore them
+      // (codegen for the single special-entry dispatch is unchanged).
+      if (d === 'virtual' || d === 'override') continue;
       if (d === 'payable') {
         if (kind === 'receive') {
           this.diags.error(member, 'JETH385', '@receive is always payable; drop the redundant @payable');
@@ -3478,6 +3565,27 @@ export class Analyzer {
     return undefined;
   }
 
+  /** Does the expression access a contract member via `this` (a `this.member` property/element access,
+   *  e.g. a member-function call `this.mk()` or a member read `this.x`)? Used to reject such an access in
+   *  a base-constructor argument, where solc has no `this` in scope. A bare `this` NOT used as a
+   *  property/element base (only `address(this)` is meaningful) does NOT count. */
+  private exprAccessesThisMember(node: ts.Node): boolean {
+    let found = false;
+    const visit = (n: ts.Node): void => {
+      if (found) return;
+      if (
+        (ts.isPropertyAccessExpression(n) || ts.isElementAccessExpression(n)) &&
+        n.expression.kind === ts.SyntaxKind.ThisKeyword
+      ) {
+        found = true;
+        return;
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(node);
+    return found;
+  }
+
   /** Build the single merged constructor across the inheritance chain (this.ctorChain is most-derived
    *  first). With no inheritance this is exactly the Phase 5 checkConstructor. With a base chain, each
    *  contract's ctor body runs most-BASE-first (solc's body order), each checked in a fresh scope so a
@@ -3539,37 +3647,67 @@ export class Analyzer {
       }
     }
 
-    // ---- super(args) in the DEPLOYED constructor body (the TS-native modifier form) ----
+    // Per chain-level leading `super(...)` call node consumed as base args (or a bare no-op super()).
+    // buildLevel skips lowering this statement for each such level (it is not a runtime statement; solc
+    // runs the base ctor from the modifier form). Populated by the scan below, keyed by chain index.
+    const superCalls = new Map<number, ts.CallExpression>();
+
+    // ---- super(args) in ANY chain constructor body (the TS-native modifier form) ----
     // solc lets a base-ctor arg depend on the derived ctor's parameters ONLY via the modifier form
     // `constructor(uint s) Base(s*2){}`; that syntax is not valid TS, so the TS equivalent is a
-    // `super(args)` call as the FIRST statement of the derived ctor body. It provides the args for the
-    // deployed contract's DIRECT parameterized base. TS forbids `this` before super, and solc runs base
-    // ctors before the derived body, so super must be the first statement. Unlike a heritage provider,
-    // super args evaluate in the ctor's own PARAM scope (params VISIBLE) - see `fromSuper` in buildLevel.
-    const superCall = deployed.node ? this.firstSuperCallStmt(deployed.node) : undefined;
-    if (superCall) {
-      // The direct bases of the deployed contract that have a parameterized ctor are the eligible
-      // targets. A single one is unambiguous (the main case). Zero -> the base takes no args ("wrong
-      // argument count"). 2+ -> ambiguous; require the heritage form for the others (clean reject).
-      const directBaseNames = new Set(deployed.bases.map((b) => b.name));
-      const paramBases: number[] = [];
-      for (let i = 1; i < chain.length; i++) {
-        if (directBaseNames.has(chain[i]!.contract) && chainParams[i]!.length > 0) paramBases.push(i);
+    // `super(args)` call as the FIRST statement of a ctor body. It provides the args for THAT contract's
+    // nearest parameterized base ctor. TS forbids `this` before super, and solc runs base ctors before
+    // the derived body, so super must be the first statement. Unlike a heritage provider, super args
+    // evaluate in the OWNING ctor's own PARAM scope (params VISIBLE) - see `fromSuper` in buildLevel.
+    //   P1-6: scan EVERY chain ctor (not just the deployed one), so a MID-LEVEL ctor's `super(w+100n)`
+    // supplies its own base's args; pass super args THROUGH a ctorless intermediate base to the nearest
+    // parameterized ancestor; and treat a bare `super()` (0 args) as a NO-OP consumed before all gates.
+    // `chainParams[i]` maps chain index -> that contract's ctor params. A `super(args)` in contract `i`
+    // targets the parameterized-ctor contract(s) reachable from `i`'s direct bases, walking THROUGH bases
+    // that are genuinely CTORLESS (no ctor node) but NOT through a base that has a (0-param) ctor of its
+    // own (such a base is the direct target and, given args, is a "wrong argument count" reject below).
+    const idxOfContract = (nm: string): number => chain.findIndex((c) => c.contract === nm);
+    const superTargetsFor = (i: number, seen = new Set<number>()): number[] => {
+      if (seen.has(i)) return [];
+      seen.add(i);
+      const out: number[] = [];
+      for (const b of chain[i]!.bases) {
+        const bi = idxOfContract(b.name);
+        if (bi < 0) continue; // not a chain contract (interface / unknown - reported elsewhere)
+        if (chainParams[bi]!.length > 0) out.push(bi); // a parameterized-ctor base: a direct target
+        else if (chain[bi]!.node === undefined) out.push(...superTargetsFor(bi, seen)); // ctorless: pass through
+        // else: a base with a 0-param ctor consumes super() (0 args) itself; do NOT pass through it
       }
+      return [...new Set(out)];
+    };
+    for (let si = 0; si < chain.length; si++) {
+      const ownerNode = chain[si]!.node;
+      if (!ownerNode) continue;
+      const superCall = this.firstSuperCallStmt(ownerNode);
+      if (!superCall) continue;
+      const ownerName = chain[si]!.contract;
+      // A bare `super()` (0 args) is a NO-OP: solc's implicit base-ctor call with nothing to pass. It is
+      // NOT a runtime statement and provides no base args; skip it entirely (buildLevel skips lowering
+      // the leading super stmt for this level - see the per-level superCalls map).
+      if (superCall.arguments.length === 0) {
+        superCalls.set(si, superCall);
+        continue;
+      }
+      const paramBases = superTargetsFor(si);
       if (paramBases.length === 0) {
-        // super() to a base with no parameterized ctor: solc "wrong argument count" (a no-arg base
-        // constructor takes no super arguments). Keep a clean reject; never guess/drop the args.
+        // super(args) but no reachable parameterized base ctor: solc "wrong argument count" (a no-arg
+        // base constructor takes no super arguments). Keep a clean reject; never guess/drop the args.
         this.diags.error(
           superCall,
           'JETH379',
-          `super(...) passes arguments but no direct base of '${deployed.contract}' has a constructor with parameters`,
+          `super(...) passes arguments but no base of '${ownerName}' reachable through its constructor-less bases has a constructor with parameters`,
         );
         baseArgsGate = true;
       } else if (paramBases.length > 1) {
         this.diags.error(
           superCall,
           'JETH379',
-          `super(...) is ambiguous: '${deployed.contract}' has more than one direct base with a parameterized constructor (${paramBases
+          `super(...) is ambiguous: '${ownerName}' reaches more than one base with a parameterized constructor (${paramBases
             .map((i) => chain[i]!.contract)
             .join(', ')}); specify each base's arguments via its heritage clause instead`,
         );
@@ -3577,7 +3715,7 @@ export class Analyzer {
       } else {
         const tgt = chain[paramBases[0]!]!.contract;
         if (baseArgProvider.has(tgt)) {
-          // super() + a heritage `extends Base(args)` for the SAME base: args given twice (solc).
+          // super() + a heritage `extends Base(args)` for the SAME base (or two supers): args given twice.
           this.diags.error(
             superCall,
             'JETH379',
@@ -3586,11 +3724,12 @@ export class Analyzer {
           baseArgsGate = true;
         } else {
           baseArgProvider.set(tgt, {
-            providerIdx: 0,
+            providerIdx: si,
             argNodes: [...superCall.arguments],
             site: superCall,
             fromSuper: true,
           });
+          superCalls.set(si, superCall);
         }
       }
     }
@@ -3777,6 +3916,25 @@ export class Analyzer {
         const bparams = chainParams[targetIdx]!;
         const n = Math.min(bparams.length, prov.argNodes.length);
         for (let k = 0; k < n; k++) {
+          // OVER-ACCEPTANCE fix (HERITAGE form ONLY): a HERITAGE base-arg expression (`extends A(args)`,
+          // NOT the super/modifier form) is evaluated in the inheritance-specifier scope, where `this` is
+          // NOT available - so a MEMBER access on `this` (a member-function call `this.mk()` OR a member
+          // read `this.x`) is an "Undeclared identifier" in solc. currentReadsState already catches
+          // `this.<state>`, but a call to a pure member function (`this.mk()`) reads no state, so it slipped
+          // through as an over-acceptance. Reject ANY `this.<member>` property/element access syntactically
+          // for a HERITAGE arg. `address(this)` (this as a bare argument, not a member access) stays allowed
+          // - a legal inheritance-specifier value.
+          //   The super/modifier form (fromSuper, `constructor() A(mk())`) is DIFFERENT: solc DOES resolve
+          // member functions there (a pure/view function is callable; even a state-reading view runs,
+          // reading the not-yet-initialized zero), so it must NOT be rejected here - it flows through the
+          // normal expression check below in the owning ctor's own scope.
+          if (!prov.fromSuper && this.exprAccessesThisMember(prov.argNodes[k]!)) {
+            this.diags.error(
+              prov.argNodes[k]!,
+              'JETH379',
+              `a base-constructor argument for '${baseName}' accesses a contract member via 'this', which is not available in the inheritance clause (only constants, msg.*/address(this) are in scope; use the super(...) modifier form to call a member)`,
+            );
+          }
           // solc: a HERITAGE base-arg expression is evaluated in the inheritance-specifier scope, which
           // sees constants / literals / msg.* / address(this) but NOT any constructor PARAMETER and NOT
           // any STATE variable (both: solc "Undeclared identifier" - state isn't initialized yet). So
@@ -3785,13 +3943,24 @@ export class Analyzer {
           // flips). msg.sender / @constant / address(this) are allowed (they don't read storage). The
           // localDecl init is still LOWERED in this provider's block at codegen (params in an enclosing
           // ctx scope), but a valid program never references a param/state here, so codegen never does.
-          //   A super(args) provider (fromSuper) is the MODIFIER form: its args evaluate in the deployed
-          // ctor's OWN param scope (params VISIBLE - that is the whole point, `super(s*2)`), so DON'T swap
-          // to the empty scope. State reads are STILL rejected (state is not yet initialized). The active
-          // scope stack here is exactly [deployed formals, this bind scope] for level 0, matching codegen.
+          //   A super(args) provider (fromSuper) is the MODIFIER form: its args evaluate in the PROVIDING
+          // ctor's OWN param scope (that ctor's params VISIBLE - the whole point, `super(s*2)`), and nothing
+          // else (a sibling base's param / another level's param is NOT in scope, matching solc). So swap
+          // to a fresh scope holding EXACTLY the provider level's own ctor params. P1-6: this makes a
+          // MID-LEVEL super's args (`super(w+100n)` in B's ctor) see B's own param `w`, not the deployed
+          // ctor's params. Locals lower by SOURCE NAME (varName), so at codegen time `w` resolves to the
+          // enclosing block's localDecl - the type-check scope swap does not perturb the emitted IR. State
+          // reads are STILL rejected (state is not yet initialized). A HERITAGE provider (not fromSuper)
+          // hides all params (the empty scope), so a param reference rejects (JETH072) at parity.
           const savedArgScopes = this.scopes;
           const savedReadsState = this.currentReadsState;
-          if (!prov.fromSuper) this.scopes = [new Map()];
+          if (prov.fromSuper) {
+            const superScope = new Map<string, JethType>();
+            for (const pp of chainParams[prov.providerIdx]!) superScope.set(pp.name, pp.type);
+            this.scopes = [superScope];
+          } else {
+            this.scopes = [new Map()];
+          }
           this.currentReadsState = false;
           const e = this.checkExpr(prov.argNodes[k]!, bparams[k]!.type);
           const init = e ? this.coerce(e, bparams[k]!.type, prov.argNodes[k]!) : undefined;
@@ -3874,13 +4043,14 @@ export class Analyzer {
           // P0-23: restrict the state/function namespace to this contract + bases for the ctor body
           // (a base ctor cannot see a derived-only @state var / function). Restored in the finally.
           const savedCtorNs = this.restrictNamespaceTo(c.contract);
+          const levelSuper = superCalls.get(i);
           try {
             for (const s of c.node.body.statements) {
-              // The deployed ctor's leading `super(args)` was already consumed as base-constructor args
-              // (bound as localDecls above); it is NOT a runtime statement, so skip lowering it here (solc
-              // runs the base ctor from the modifier form, not as a body call). Any statements AFTER it run
-              // after the base ctor, in the derived body, exactly as written.
-              if (i === 0 && superCall && ts.isExpressionStatement(s) && s.expression === superCall) continue;
+              // This level's leading `super(...)` was already consumed as base-constructor args (bound as
+              // localDecls above) or is a bare no-op super(); it is NOT a runtime statement, so skip
+              // lowering it here (solc runs the base ctor from the modifier form, not as a body call). Any
+              // statements AFTER it run after the base ctor, in this contract's body, exactly as written.
+              if (levelSuper && ts.isExpressionStatement(s) && s.expression === levelSuper) continue;
               this.checkStatement(s, VOID, bstmts);
             }
           } finally {
@@ -3892,7 +4062,8 @@ export class Analyzer {
           this.bodyOwnerContract = savedBodyOwner;
         }
         this.currentMutability = savedMut;
-        for (const app of [...cMods].reverse()) bstmts = this.inlineModifier(app, bstmts);
+        const levelCtorHasReturn = c.node.body ? this.findReturns([...c.node.body.statements]).length > 0 : false;
+        for (const app of [...cMods].reverse()) bstmts = this.inlineModifier(app, bstmts, true, levelCtorHasReturn);
         out.push(...bstmts);
       }
       return out;
@@ -5337,10 +5508,24 @@ export class Analyzer {
     return [{ kind: 'block', body: [...argDecls, ...pre, ...inner, ...post] }];
   }
 
-  /** Inline one PRE-ONLY modifier application around `inner`: materialize its args (in the function
-   *  param scope), then splice [argDecls, pre-code, inner] inside a block (for lexical scoping). The
-   *  modifier's pre-code is checked in a FRESH scope so it cannot see the function's params/locals. */
-  private inlineModifier(app: { name: string; argNodes: ts.Expression[]; site: ts.Node }, inner: Stmt[]): Stmt[] {
+  /** Inline one modifier application around `inner` (the wrapped body already lowered). The FUNCTION
+   *  pre-only path reaches this with a pre-only modifier ([argDecls, pre-code, inner]). The CONSTRUCTOR
+   *  path (isConstructor) also reaches it for POST-placeholder / multi-placeholder / conditional shapes:
+   *  since a constructor has NO return value to buffer, the modifier's WHOLE body can be inlined with each
+   *  `_;` replaced IN PLACE by `inner` (the ctor body). That is byte-identical to solc's semantics
+   *  (the body runs once per placeholder, 0-or-N under a conditional, with any pre/between/post code
+   *  around it) - PROVIDED there is no early `return;` that a plain inline would mis-route: a bare
+   *  `return;` in the MODIFIER (early-exits the wrap) or a `return;` in the CTOR BODY (in solc it returns
+   *  to the modifier, continuing after `_;`, whereas an inlined ctor-body return jumps to the ctor end).
+   *  Those two return shapes stay gated (P1-20 / JETH323). `ctorBodyHasReturn` is a source-level check the
+   *  caller does on the ctor node. The modifier's pre/post/body is checked in a FRESH scope (only its own
+   *  params + contract state), so it cannot see the ctor's/function's params/locals. */
+  private inlineModifier(
+    app: { name: string; argNodes: ts.Expression[]; site: ts.Node },
+    inner: Stmt[],
+    isConstructor = false,
+    ctorBodyHasReturn = false,
+  ): Stmt[] {
     const mod = this.modifiersByName.get(app.name);
     if (!mod) {
       this.diags.error(
@@ -5358,29 +5543,28 @@ export class Analyzer {
       );
       return inner;
     }
-    // A modifier with POST-placeholder code reaches this inliner ONLY on a CONSTRUCTOR (a function
-    // routes any-post through buildModifierWrap). The constructor body runs in creation code with no
-    // synthesized body function, so the buffered-return machinery is unavailable: gate it cleanly. (A
-    // ctor rarely early-returns, but inlining [pre, body, post] would drop the post on a `return;` -
-    // a miscompile - so we reject rather than risk it.)
-    if (mod.postStmts.length > 0) {
-      this.diags.error(
-        app.site,
-        'JETH323',
-        `a @modifier with post-placeholder code applied to a constructor is not supported yet (the buffered-return path requires a function body, not creation code)`,
-      );
-      return inner;
-    }
-    // A CONDITIONAL-placeholder modifier (the 0-or-N-times shape) likewise reaches this inliner ONLY
-    // on a CONSTRUCTOR. Inlining it would need the marker replaced inside the conditional, but the
-    // ctor body has no synthesized userfn to call - so gate it cleanly (solc accepts it).
-    if (mod.bodyStmts) {
-      this.diags.error(
-        app.site,
-        'JETH323',
-        `a @modifier with a conditional '_' placeholder applied to a constructor is not supported yet (the 0-or-N-times path requires a function body, not creation code)`,
-      );
-      return inner;
+    // A modifier with POST-placeholder code, or a whole-body (multi-placeholder / conditional) shape,
+    // reaches this inliner ONLY on a CONSTRUCTOR (a function routes any such shape through
+    // buildModifierWrap). A constructor has NO return value to buffer, so the modifier's whole body can be
+    // inlined with each `_;` replaced IN PLACE by `inner` (the ctor body) - byte-identical to solc. This
+    // lifts JETH323 for a ctor (P1-20). The two return shapes that a plain inline would mis-route stay
+    // gated: a bare `return;` in the MODIFIER (which early-exits the wrapped fn) and a `return;` in the
+    // CTOR BODY (solc returns it to the modifier, continuing after `_;`; an inlined ctor-body return would
+    // jump to the ctor end instead - a miscompile). Both keep the clean JETH323 over-rejection.
+    if (mod.postStmts.length > 0 || mod.bodyStmts) {
+      if (!isConstructor || mod.hasBareReturn || ctorBodyHasReturn) {
+        this.diags.error(
+          app.site,
+          'JETH323',
+          mod.hasBareReturn
+            ? `a @modifier with a bare 'return;' applied to a constructor is not supported yet (the early-exit cannot be inlined into creation code)`
+            : ctorBodyHasReturn
+              ? `a @modifier with post-placeholder or conditional-'_' code applied to a constructor whose body contains 'return;' is not supported yet (an inlined ctor-body return would mis-route)`
+              : `a @modifier with post-placeholder or conditional-'_' code applied to a constructor is not supported yet (the buffered-return path requires a function body, not creation code)`,
+        );
+        return inner;
+      }
+      return this.inlineModifierBodyIntoCtor(app, mod, inner);
     }
     // 1. Materialize each arg ONCE (solc evaluates a modifier arg exactly once) in the function param
     //    scope, bound to the modifier's parameter name. The localDecl init is evaluated before the
@@ -5411,6 +5595,60 @@ export class Analyzer {
     //    codegen's flat name map and the body would read the modifier's value (a silent miscompile).
     //    For pre-only modifiers there is no post-code, so the body simply follows the guard.
     return [{ kind: 'block', body: [...argDecls, ...pre] }, ...inner];
+  }
+
+  /** P1-20: inline a POST / multi-placeholder / conditional-placeholder @modifier around a CONSTRUCTOR
+   *  body. A ctor has no return value, so the modifier's WHOLE body is lowered with each `_;` replaced IN
+   *  PLACE by `inner` (the ctor body Stmt[]) via the placeholderInner hook - exactly the mechanism
+   *  buildModifierWrap uses for a function, but here `inner` is the real body (not a call marker). The
+   *  caller has already verified the safe subset (isConstructor, no modifier bare return, no ctor-body
+   *  return). Args are materialized ONCE in the enclosing (ctor param) scope, like inlineModifier; the
+   *  body is checked in a FRESH modifier scope (params + state only). Everything is wrapped in one block
+   *  so the modifier's params/locals are scoped to the whole wrap (matches buildModifierWrap). */
+  private inlineModifierBodyIntoCtor(
+    app: { name: string; argNodes: ts.Expression[]; site: ts.Node },
+    mod: RawModifier,
+    inner: Stmt[],
+  ): Stmt[] {
+    // SAFETY GATE: a modifier PARAM name that collides with a CTOR PARAM name would, once inlined, shadow
+    // the ctor param in codegen's flat per-block name map, so the inlined ctor body (`inner`) would read
+    // the modifier's value - a silent miscompile. (buildModifierWrap avoids this because `inner` is a
+    // userfn CALL there, not the inlined body.) Reject the collision cleanly rather than risk it. Checked
+    // against the CURRENT scope (the ctor params are live here, before the fresh modifier scope swap).
+    for (const p of mod.params) {
+      if (this.lookupLocal(p.name) !== undefined) {
+        this.diags.error(
+          app.site,
+          'JETH323',
+          `a @modifier parameter ('${p.name}') collides with a constructor parameter of the same name; this inlined ctor modifier shape is not supported yet (rename the modifier parameter)`,
+        );
+        return inner;
+      }
+    }
+    // 1. Materialize each arg ONCE in the CURRENT (ctor param) scope, bound to the modifier param name.
+    const argDecls: Stmt[] = [];
+    for (let i = 0; i < mod.params.length; i++) {
+      const a = this.checkExpr(app.argNodes[i]!, mod.params[i]!.type);
+      if (!a) continue;
+      const coerced = this.coerce(a, mod.params[i]!.type, app.argNodes[i]!);
+      argDecls.push({ kind: 'localDecl', name: mod.params[i]!.name, type: mod.params[i]!.type, init: coerced });
+      this.registerAggregateModifierParam(mod.params[i]!.name, mod.params[i]!.type);
+    }
+    // 2. Lower the modifier's FULL source body (the `_;` sits in place for every shape) in a fresh scope,
+    //    with placeholderInner = inner so each `_;` lowers to the ctor body. `mod.node.body` is always
+    //    present (a bodyless modifier is rejected at collect time).
+    const savedScopes = this.scopes;
+    this.scopes = [new Map()];
+    this.pushScope();
+    for (const p of mod.params) this.declareLocal(p.name, p.type);
+    const lowered: Stmt[] = [];
+    const savedPlaceholder = this.placeholderInner;
+    this.placeholderInner = inner;
+    for (const s of mod.node.body!.statements) this.checkStatement(s, VOID, lowered);
+    this.placeholderInner = savedPlaceholder;
+    this.popScope();
+    this.scopes = savedScopes;
+    return [{ kind: 'block', body: [...argDecls, ...lowered] }];
   }
 
   /** Phase 5: collect a user-defined @modifier. Increment 1 supports a PRE-ONLY modifier: a single
@@ -5531,6 +5769,7 @@ export class Analyzer {
       preStmts,
       postStmts,
       bodyStmts: useFlat ? undefined : [...stmts],
+      hasBareReturn,
     });
   }
 
@@ -9708,6 +9947,20 @@ export class Analyzer {
     return undefined;
   }
 
+  /** Like resolveOverload but emits NO diagnostics: returns the sole viable winner (by shape then types)
+   *  or undefined when there is none / it is ambiguous. Used by the P1-5 super-to-sole-base fallback so a
+   *  non-matching super target does not spuriously emit an overload diagnostic before the JETH381 reject. */
+  private resolveOverloadNoDiag(node: ts.CallExpression, name: string): RawFunction | undefined {
+    const candidates = this.candidatesByName.get(name);
+    if (!candidates || candidates.length === 0) return this.funcsByName.get(name);
+    if (candidates.length === 1) return candidates[0];
+    const applicable = candidates.filter((c) => this.overloadApplicable(node, c));
+    if (applicable.length === 1) return applicable[0];
+    if (applicable.length === 0) return undefined;
+    const viable = applicable.filter((c) => this.overloadArgsMatch(node, c));
+    return viable.length === 1 ? viable[0] : undefined;
+  }
+
   /** Is the call's argument SHAPE (arity / named form) callable on this candidate (F3 defaults aware)? */
   private overloadApplicable(node: ts.CallExpression, c: RawFunction): boolean {
     const params = c.params;
@@ -9796,6 +10049,30 @@ export class Analyzer {
       if (pos + 1 < chain.length) candidates.push({ chain, nextIdx: pos + 1 });
     }
     if (candidates.length === 0) {
+      // P1-5: no override CHAIN exists for `name` (the signature is defined in a SINGLE contract, so the
+      // chain-building loop short-circuited at `size <= 1`). If that sole definition lives in a contract
+      // strictly MORE-BASE than `here` (and the args fit), then `super.name` and a plain `this.name`
+      // resolve to the very SAME base function - solc accepts it (super just names the base version, which
+      // is the only one). This is exactly `super.f()` inside a derived body/ctor when the derived never
+      // overrides f. The winner is resolved through the normal overload machinery (the namespace is
+      // already restricted to `here` + bases), so it can only return a here-or-base function; require it to
+      // be a STRICT base so a self-referential `super.f()` (where `here` itself is the sole definer, no
+      // base version) still rejects as JETH381 (there is nothing after `here`).
+      const winner = this.resolveOverloadNoDiag(node, name);
+      if (winner && winner.definingContract !== undefined && !winner.bodyless) {
+        const wIdx = this.linOrder.indexOf(winner.definingContract);
+        if (wIdx > hereIdx && this.overloadApplicable(node, winner) && this.overloadArgsMatch(node, winner)) {
+          if (winner.visibility === 'external') {
+            this.diags.error(
+              node,
+              'JETH240',
+              `super.${name}(...) targets an @external base function, which is not callable via super (only internal/public/private functions participate in super dispatch)`,
+            );
+            return undefined;
+          }
+          return this.checkInternalCall(node, name, asStatement, winner);
+        }
+      }
       this.diags.error(
         node,
         'JETH381',

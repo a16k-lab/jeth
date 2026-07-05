@@ -514,10 +514,22 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
           `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @m helper(): u256 { return 5n; } @external go(): u256 { return this.helper(); } }`,
         ),
       ).toContain('JETH323'));
-    it('post-modifier on a constructor -> JETH323', () =>
+    it('P1-20: a post-code modifier on a constructor is LIFTED and byte-identical to solc', async () => {
+      // The ctor body runs (n=10), then the modifier post-code (n=n+1) -> 11. A ctor has no return
+      // value, so the whole modifier body is inlined with `_;` replaced by the ctor body.
+      const J = `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @m constructor(){ this.n = 10n; } @external @view gn(): u256 { return this.n; } }`;
+      const S = `contract C { uint256 n; modifier m() { _; n = n + 1; } constructor() m { n = 10; } function gn() external view returns(uint256){ return n; } }`;
+      const j = await depJ(J),
+        s = await depS(S);
+      expect(await readSlot(j.h, j.a, 0n)).toBe(await readSlot(s.h, s.a, 0n));
+      const rj = await j.h.call(j.a, '0x' + sel('gn()'));
+      const rs = await s.h.call(s.a, '0x' + sel('gn()'));
+      expect(rj.returnHex).toBe(rs.returnHex);
+    });
+    it('P1-20: a bare-return modifier on a constructor stays gated (JETH323, no early-exit inline)', () =>
       expect(
         codes(
-          `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @m constructor(){ this.n = 10n; } }`,
+          `@contract class C { @state n: u256; @modifier m(c: bool) { if (c) { return; } _; } @m(false) constructor(){ this.n = 10n; } }`,
         ),
       ).toContain('JETH323'));
     it('a value param + value return post-modifier is supported -> no diagnostics', () =>
