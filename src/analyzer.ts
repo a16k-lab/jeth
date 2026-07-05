@@ -195,6 +195,23 @@ export class Analyzer {
   // state symbols, available once layout is planned
   private stateByName = new Map<string, StateVar>();
   private publicStateNames = new Set<string>(); // @public @state vars that get an auto-generated getter
+  // P1-4: `@external @state` getter vars carrying `@override` (a getter that overrides/implements a base
+  // @virtual @external function or an interface method). Recorded during state collection (the member node
+  // + decorators are only available there); validated against the collected base functions before override
+  // resolution, so a valid getter-override suppresses the getter/function name clash (JETH133), the base
+  // "unimplemented @virtual" reject (JETH380), and the duplicate-signature reject (JETH044), while an
+  // invalid attempt (no matching base / loosened mutability / wrong return type) is cleanly rejected.
+  private getterOverrideVars = new Map<
+    string,
+    { node: ts.PropertyDeclaration; definingContract: string }
+  >();
+  // The declared type of each getter-override var (name -> type), captured in resolveGetterOverrides so
+  // the later interface-obligation check (which runs before stateByName is populated) can recompute the
+  // getter's signature shape.
+  private getterOverrideVarType = new Map<string, JethType>();
+  // The subset of getterOverrideVars that VALIDATED as a real getter override (used to suppress the
+  // JETH133/380/044 clashes for exactly those names). Populated in resolveGetterOverrides.
+  private validGetterOverrides = new Set<string>();
   // @constant fields: slot-free compile-time constants. The folded literal is inlined at every
   // read site (no SLOAD, no storage slot), so a @constant never shifts the slot of a @state var.
   private constantsByName = new Map<string, { value: bigint | boolean | Uint8Array; type: JethType }>();
@@ -1335,6 +1352,13 @@ export class Analyzer {
             stateOwner.set(nm, cn);
             this.stateOwnerByName.set(nm, cn); // P0-23: per-contract state visibility
           }
+          // P1-4: an `@external @state` getter var carrying `@override` (`uint256 public override x;`):
+          // record it so resolveGetterOverrides can validate it against the base @virtual function it
+          // implements. Only a getter (`@external`) can override a function; a non-@override same-name
+          // clash is left to the normal JETH133 path.
+          if (decs.includes('external') && (decs.includes('state') || decs.includes('storage')) && decs.includes('override')) {
+            this.getterOverrideVars.set(nm, { node: member, definingContract: cn });
+          }
           this.collectStateVar(member, rawState);
         }
       }
@@ -1422,6 +1446,16 @@ export class Analyzer {
     // derived; a genuine duplicate or a botched pairing is rejected).
     this.resolveModifierOverrides(collectedMods, lin);
 
+    // P1-4: validate getter vars carrying @override against the base @virtual function they implement,
+    // BEFORE override resolution (which would otherwise flag the base as an unimplemented @virtual). A
+    // valid getter override is recorded in validGetterOverrides, suppressing the JETH133/380/044 clashes;
+    // an invalid attempt is rejected here (JETH433). linOrder is needed to rank base contracts.
+    if (this.getterOverrideVars.size > 0) {
+      this.linOrder = lin.map((c) => c.name?.text ?? '<anon>');
+      const stateVarType = new Map<string, JethType>(rawState.map((v) => [v.name, v.type]));
+      this.resolveGetterOverrides(collectedFns, stateVarType);
+    }
+
     // Resolve overrides: the winner per (name + param types) is the most-derived definition; it keeps
     // the bare ABI key/selector and is dispatched. Non-winning base versions are kept ONLY as `super`
     // targets, re-keyed `<Contract>__<name>`. Enforces all virtual/override/list/return/mutability/
@@ -1507,6 +1541,13 @@ export class Analyzer {
     for (const nm of this.constantsByName.keys()) addId(nm, 'storage');
     for (const nm of this.immutableOrder) addId(nm, 'storage');
     for (const [nm, kinds] of idKinds) {
+      // P1-4: a validated getter var override (uint256 public override x;) legitimately reuses the name of
+      // the base @virtual function it implements (storage + function share `x`). solc treats the getter AS
+      // that function, so the storage/function name clash is expected - suppress JETH133 for exactly that
+      // name (the clash is only the getter-var storage vs the base function; any OTHER collision still fires).
+      if (nm && this.validGetterOverrides.has(nm) && kinds.size === 2 && kinds.has('storage') && kinds.has('function')) {
+        continue;
+      }
       if (kinds.size > 1) {
         this.diags.error(
           cls,
@@ -2438,7 +2479,10 @@ export class Analyzer {
             );
           }
         }
-        if (w.bodyless && !deployedAbstract) {
+        // P1-4: a bodyless @virtual whose signature is IMPLEMENTED by a validated getter var override
+        // (uint256 public override x;) is NOT unimplemented - the auto-generated getter is its concrete
+        // implementation. Suppress JETH380 for exactly that name (validated in resolveGetterOverrides).
+        if (w.bodyless && !deployedAbstract && !this.validGetterOverrides.has(w.name)) {
           this.diags.error(
             w.node,
             'JETH380',
@@ -2475,7 +2519,16 @@ export class Analyzer {
             }
           }
         }
-        winners.push(...versions);
+        // P1-4: a @virtual base function (bodyless OR concrete) whose signature a validated getter var
+        // override implements is NOT a dispatched winner - the auto-generated getter is the concrete entry
+        // with this selector. Drop the base so it neither dispatches (a selector clash with the getter) nor
+        // lingers as a callable version. A public state-var override is terminal in solc (implicitly
+        // non-virtual, not further overridable), so dropping the base entirely is correct. Only drop when
+        // the base's own signature matches the getter (params equal); a same-name OVERLOAD stays dispatched.
+        for (const v of versions) {
+          if (this.validGetterOverrides.has(v.name) && this.getterOverrideMatchesSig(v)) continue;
+          winners.push(v);
+        }
         continue;
       }
       const winner = versions[0]!;
@@ -2824,6 +2877,11 @@ export class Analyzer {
       const iface = this.interfacesByName.get(ifaceName);
       if (!iface) continue; // recorded only for real interfaces, but stay defensive
       for (const m of iface.methods.values()) {
+        // P1-4: an interface method implemented by a validated getter var override (uint256 public
+        // override x; implementing I.x()) is satisfied - the auto-generated getter is the implementation.
+        // resolveGetterOverrides already validated the getter's signature / return / mutability against the
+        // base (including the interface method), so the obligation + the JETH386/387/388 checks are met.
+        if (this.validGetterOverrides.has(m.name) && this.getterMatchesInterfaceMethod(m)) continue;
         const w = winnerBySig.get(m.signature);
         if (!w || w.bodyless) {
           // Unimplemented interface method. An @abstract deployed contract may leave it open (solc). A
@@ -2902,6 +2960,158 @@ export class Analyzer {
    *  array level a uint256 index param. A value/bytes/string leaf returns directly; a STRUCT leaf is
    *  flattened into a value/bytes/string-field tuple (omitting array+mapping members, recursively
    *  inlining all-static nested structs). Byte-identical to solc, incl. empty-revert on OOB. */
+  /** P1-4: the ABI SHAPE of a `@public` getter for a state var of type `t` (name + parameter TYPES +
+   *  return type), without needing a storage slot. Mirrors synthPublicGetter's param/return derivation:
+   *  each mapping level adds a key param, each array level adds a uint256 index param, and the leaf is the
+   *  return type (a struct leaf flattens to a value/bytes/string tuple). Returns undefined for a shape the
+   *  getter machinery does not synthesize (so a getter override of it is left rejected, never miscompiled). */
+  private getterSignatureShape(
+    name: string,
+    t: JethType,
+  ): { paramTypes: JethType[]; returnType: JethType; returnTypes?: JethType[] } | undefined {
+    const paramTypes: JethType[] = [];
+    while (t.kind === 'mapping') {
+      paramTypes.push(t.key);
+      t = t.value;
+    }
+    while (t.kind === 'array') {
+      paramTypes.push(U256);
+      t = t.element;
+      if (t.kind === 'mapping') return undefined;
+    }
+    if (t.kind === 'struct') {
+      // a struct getter flattens to a value/bytes/string tuple; a getter-override of a struct getter is a
+      // rarer shape - resolveGetterOverrides only matches single-value returns, so leave it here as a
+      // shape whose return arity would not match a single-return base virtual (handled by the caller).
+      return { paramTypes, returnType: VOID, returnTypes: [] };
+    }
+    if (!(isStaticValueType(t) || isBytesLike(t))) return undefined;
+    return { paramTypes, returnType: t };
+  }
+
+  /** P1-4: validate each `@external @state` getter var carrying `@override` against the base @virtual
+   *  function it implements, BEFORE override resolution. On a valid match, record it in
+   *  validGetterOverrides so the getter/function name clash (JETH133), the base "unimplemented @virtual"
+   *  reject (JETH380), and the duplicate-signature reject (JETH044) are all suppressed for that name; on an
+   *  invalid attempt (no matching base / not @virtual / loosened mutability / wrong return type / param
+   *  mismatch) emit a precise reject so no over-acceptance leaks. `collected` is the pre-override function
+   *  set (base virtuals live here); interface methods are matched separately (they are not in `collected`).
+   *  `stateVarType` maps a getter-var name to its declared type. */
+  private resolveGetterOverrides(collected: RawFunction[], stateVarType: Map<string, JethType>): void {
+    for (const [name, info] of this.getterOverrideVars) {
+      const t = stateVarType.get(name);
+      if (t === undefined) continue; // not a real @state var (collection already errored)
+      this.getterOverrideVarType.set(name, t);
+      const shape = this.getterSignatureShape(name, t);
+      // A getter is VIEW and takes exactly its mapping-key / array-index params, returns the leaf value.
+      // A struct-flattening getter (multi-return) is not matched here (a base virtual returns one value):
+      // leave it to the normal path (it will simply not validate, staying rejected).
+      if (!shape || shape.returnType.kind === 'void') {
+        this.diags.error(
+          info.node,
+          'JETH433',
+          `@override on getter '${name}' cannot be matched to a base function (its getter shape is unsupported for override)`,
+        );
+        continue;
+      }
+      // Find a base function of the SAME name whose signature (param types) equals the getter's, declared
+      // in a STRICT base of the getter's contract. solc requires the override target to be a base virtual.
+      const idxOf = new Map(this.linOrder.map((n, i) => [n, i]));
+      const myIdx = idxOf.get(info.definingContract) ?? 0;
+      const sameNameBases = collected.filter(
+        (rf) => rf.name === name && rf.definingContract !== undefined && (idxOf.get(rf.definingContract) ?? 0) > myIdx,
+      );
+      const ifaceHead = this.getterOverridesInterfaceMethod(name, shape.paramTypes, shape.returnType);
+      const sigMatch = sameNameBases.filter(
+        (rf) =>
+          rf.params.length === shape.paramTypes.length &&
+          rf.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)),
+      );
+      if (sigMatch.length === 0 && !ifaceHead) {
+        // @override but there is NO base function (contract or interface) with this getter's signature.
+        this.diags.error(
+          info.node,
+          'JETH433',
+          `getter '${name}' has @override but overrides no base function with a matching signature`,
+        );
+        continue;
+      }
+      let bad = false;
+      for (const base of sigMatch) {
+        // the base must be @virtual (solc: "Trying to override non-virtual function").
+        if (!base.isVirtual) {
+          this.diags.error(info.node, 'JETH433', `getter '${name}' overrides '${base.definingContract}.${name}', which is not @virtual`);
+          bad = true;
+        }
+        // exact return type match (solc: "return types differ").
+        if (!(base.returnTypes === undefined && typesEqual(base.returnType, shape.returnType))) {
+          this.diags.error(info.node, 'JETH433', `getter '${name}' return type ${displayName(shape.returnType)} must exactly match the base function's return type`);
+          bad = true;
+        }
+        // mutability: a getter is VIEW. solc accepts overriding a VIEW or NONPAYABLE base (view is equal or
+        // stricter), but REJECTS overriding a PURE base (view is looser than pure) or a PAYABLE base.
+        if (base.mutability === 'pure' || base.mutability === 'payable') {
+          this.diags.error(info.node, 'JETH433', `getter '${name}' (view) cannot override a @${base.mutability} base function (a getter changes state mutability)`);
+          bad = true;
+        }
+        // visibility: a getter is EXTERNAL; the base must be external too (JETH maps public->external).
+        if (base.visibility !== 'external') {
+          this.diags.error(info.node, 'JETH433', `getter '${name}' overrides '${base.definingContract}.${name}', whose visibility (@${base.visibility}) is not external`);
+          bad = true;
+        }
+      }
+      if (!bad) this.validGetterOverrides.add(name);
+    }
+  }
+
+  /** P1-4: does the getter var override for `rf.name` have exactly `rf`'s parameter signature (so `rf` is
+   *  the base function the getter replaces, not a same-name OVERLOAD that must stay dispatched)? */
+  private getterOverrideMatchesSig(rf: RawFunction): boolean {
+    const t = this.getterOverrideVarType.get(rf.name);
+    if (t === undefined) return false;
+    const shape = this.getterSignatureShape(rf.name, t);
+    if (!shape) return false;
+    return (
+      rf.params.length === shape.paramTypes.length &&
+      rf.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!))
+    );
+  }
+
+  /** P1-4: does the VALIDATED getter var override named `m.name` have exactly the shape of interface
+   *  method `m` (so it satisfies the interface obligation)? Recomputes the getter's signature shape from
+   *  the state var's declared type (available via getterOverrideVars + the state table). */
+  private getterMatchesInterfaceMethod(m: InterfaceMethod): boolean {
+    const t = this.getterOverrideVarType.get(m.name);
+    if (t === undefined) return false;
+    const shape = this.getterSignatureShape(m.name, t);
+    if (!shape || shape.returnType.kind === 'void') return false;
+    return (
+      m.params.length === shape.paramTypes.length &&
+      m.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)) &&
+      m.returnTypes === undefined &&
+      typesEqual(m.returnType, shape.returnType)
+    );
+  }
+
+  /** P1-4: does a getter of `name` with `(paramTypes) view returns (returnType)` implement a method of a
+   *  directly-extended @interface (an interface method IS a valid override target for a public getter)? */
+  private getterOverridesInterfaceMethod(name: string, paramTypes: JethType[], returnType: JethType): boolean {
+    for (const iface of this.interfacesByName.values()) {
+      const m = iface.methods.get(name);
+      if (!m) continue;
+      if (
+        m.params.length === paramTypes.length &&
+        m.params.every((p, i) => typesEqual(p.type, paramTypes[i]!)) &&
+        m.returnTypes === undefined &&
+        typesEqual(m.returnType, returnType) &&
+        (m.mutability === 'view' || m.mutability === 'nonpayable')
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private synthPublicGetter(v: StateVar): FunctionIR | null {
     const params: Param[] = [];
     const keys: Expr[] = []; // mapping keys, for the specialized mapGet/mapArray value encoders
@@ -8262,20 +8472,83 @@ export class Analyzer {
     if (pa.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
     const fnName = pa.name.text;
     if (!this.funcsByName.has(fnName)) return undefined; // not a contract function: not our shape
-    // Resolve the (possibly overloaded) callee from the source name + the call's arguments.
-    const callee = this.resolveOverload(node, fnName);
+
+    // P1-12: payable/gas self-call `this.f(args, { value?, gas? })`. solc's post-fix option syntax is
+    // `this.f{value:e}(args)`; JETH threads the options through a trailing object-literal argument (the
+    // same `{ value?, gas? }` surface the interface cast IFoo(t, { value }) uses). The options object is
+    // NOT a call argument, so it must be stripped BEFORE overload resolution / arg binding. Disambiguation
+    // must match solc: `this.f({value: e})` where `f` HAS a param named `value` is a NAMED-ARGUMENT call
+    // (verified: the value is bound to the param, msg.value stays 0), not options. So we only treat a
+    // trailing `{ value?, gas? }` object as options when the call does NOT already resolve WITH that object
+    // in place (i.e. it is not valid named-args / positional for any candidate).
+    let optNode: ts.ObjectLiteralExpression | undefined;
+    let effNode: ts.CallExpression = node;
+    {
+      const last = node.arguments.length > 0 ? node.arguments[node.arguments.length - 1] : undefined;
+      const cands = this.candidatesByName.get(fnName) ?? (this.funcsByName.has(fnName) ? [this.funcsByName.get(fnName)!] : []);
+      if (
+        last &&
+        ts.isObjectLiteralExpression(last) &&
+        last.properties.length > 0 &&
+        last.properties.every(
+          (p) =>
+            (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+            ts.isIdentifier(p.name) &&
+            (p.name.text === 'value' || p.name.text === 'gas'),
+        ) &&
+        // The object is only OPTIONS when it cannot itself be consumed as an argument: no candidate binds the
+        // FULL node (with the object in place, as named-args or a struct/positional arg). This matches solc,
+        // where `this.f({value: e})` binds `value` to a param NAMED value when one exists (a named-arg call)
+        // and only means call options otherwise.
+        !cands.some((c) => this.overloadApplicable(node, c) && this.overloadArgsMatch(node, c))
+      ) {
+        optNode = last as ts.ObjectLiteralExpression;
+        effNode = this.synth(
+          ts.factory.updateCallExpression(
+            node,
+            node.expression,
+            node.typeArguments,
+            ts.factory.createNodeArray(node.arguments.slice(0, node.arguments.length - 1)),
+          ),
+          node,
+        );
+      }
+    }
+
+    // Resolve the (possibly overloaded) callee from the source name + the call's arguments (options stripped).
+    const callee = this.resolveOverload(effNode, fnName);
     if (!callee) return 'handled'; // an arity/ambiguity diagnostic was already emitted
     // Only an @external function is reached through `this.f(...)` as a MESSAGE call. An internal/
     // private/public function keeps the existing in-frame internal-call semantics (let it fall
     // through to checkInternalCall). `this.f()` on a @public function is also an internal call in
     // JETH today (the existing path), matching JETH's @public dispatch model.
-    if (callee.visibility !== 'external') return undefined;
+    if (callee.visibility !== 'external') {
+      // An options object on a non-external target has no external message-call to attach to: solc rejects
+      // (`this.f{...}()` requires f to be external). Emit precisely rather than falling through to the
+      // internal-call path (which would silently ignore the options).
+      if (optNode) {
+        this.diags.error(
+          optNode,
+          'JETH432',
+          `call options { value, gas } are only valid on an @external self-call 'this.${fnName}(...)'`,
+        );
+        return 'handled';
+      }
+      return undefined;
+    }
 
-    // value/gas are NOT part of the bare `this.f()` form; the only way to attach them in TS would be
-    // a trailing options object, which we do not parse here. (Deferred: `this.f(args, {value,gas})`.)
+    // ---- call options: { value?, gas? } (value only on a @payable method) ----
+    let optValue: Expr | undefined;
+    let optGas: Expr | undefined;
+    if (optNode) {
+      const opts = this.parseCallOptions(optNode, callee.mutability === 'payable', `this.${fnName}`);
+      if (!opts) return 'handled';
+      optValue = opts.value;
+      optGas = opts.gas;
+    }
 
     // ---- arguments: resolve named/positional/defaults, then check + coerce to the callee's params ----
-    const argNodes = this.resolveCallArgs(node, callee, fnName);
+    const argNodes = this.resolveCallArgs(effNode, callee, fnName);
     if (!argNodes) return 'handled';
     const args: Expr[] = [];
     for (let i = 0; i < callee.params.length; i++) {
@@ -8327,13 +8600,77 @@ export class Analyzer {
       op,
       addr: { kind: 'global', type: ADDRESS, op: 'address' }, // address(this)
       data,
-      value: undefined,
-      gas: undefined,
+      value: optValue,
+      gas: optGas,
       checks: [],
       bubble: true,
       codeGuard: true,
     };
     return { call, returnType: callee.returnType, returnTypes: callee.returnTypes };
+  }
+
+  /** Parse a `{ value?, gas? }` call-options object literal (shared by the payable/gas self-call P1-12 path
+   *  and mirrors the interface-cast option rules): value is allowed only when `payableOk`, both must be
+   *  integers, duplicate/unknown keys reject. Returns the coerced U256 value/gas exprs, or undefined when a
+   *  diagnostic was emitted (caller returns 'handled'). */
+  private parseCallOptions(
+    optNode: ts.ObjectLiteralExpression,
+    payableOk: boolean,
+    who: string,
+  ): { value?: Expr; gas?: Expr } | undefined {
+    const fields = new Map<string, ts.Expression>();
+    for (const p of optNode.properties) {
+      if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name)) {
+        if (fields.has(p.name.text)) {
+          this.diags.error(p.name, 'JETH352', `duplicate option '${p.name.text}'`);
+          return undefined;
+        }
+        fields.set(p.name.text, p.initializer);
+      } else if (ts.isShorthandPropertyAssignment(p)) {
+        if (fields.has(p.name.text)) {
+          this.diags.error(p.name, 'JETH352', `duplicate option '${p.name.text}'`);
+          return undefined;
+        }
+        fields.set(p.name.text, p.name);
+      } else {
+        this.diags.error(p, 'JETH352', `${who}(...) options must be plain 'field: value' members`);
+        return undefined;
+      }
+    }
+    for (const k of fields.keys()) {
+      if (k !== 'value' && k !== 'gas') {
+        this.diags.error(optNode, 'JETH352', `${who}(...): unknown option '${k}' (allowed: value, gas)`);
+        return undefined;
+      }
+    }
+    let value: Expr | undefined;
+    let gas: Expr | undefined;
+    const vNode = fields.get('value');
+    if (vNode) {
+      // solc: "Cannot set option value on a non-payable function type".
+      if (!payableOk) {
+        this.diags.error(vNode, 'JETH353', `cannot set option 'value' on the non-payable call '${who}'`);
+        return undefined;
+      }
+      const v = this.checkExpr(vNode, U256);
+      if (!v) return undefined;
+      if (!isInteger(v.type)) {
+        this.diags.error(vNode, 'JETH306', `${who}(...) 'value' must be an integer, got ${displayName(v.type)}`);
+        return undefined;
+      }
+      value = this.coerce(v, U256, vNode);
+    }
+    const gNode = fields.get('gas');
+    if (gNode) {
+      const g = this.checkExpr(gNode, U256);
+      if (!g) return undefined;
+      if (!isInteger(g.type)) {
+        this.diags.error(gNode, 'JETH306', `${who}(...) 'gas' must be an integer, got ${displayName(g.type)}`);
+        return undefined;
+      }
+      gas = this.coerce(g, U256, gNode);
+    }
+    return { value, gas };
   }
 
   /** `[a, b] = this.f(args)` / `return this.f(args)` where `f` is an @external method with a
@@ -10885,6 +11222,17 @@ export class Analyzer {
    *  raw revert on failure, and abi.decodes the returndata into the declared return type. For a void
    *  return the bare extCall is the (statement) expression. Marks the library as externally referenced. */
   private buildLibraryExtCall(callee: RawFunction, args: Expr[], asStatement: boolean): Expr {
+    const call = this.buildLibraryExtCallRaw(callee, args);
+    const rt = callee.returnType;
+    if (rt.kind === 'void') return call; // a statement: run the delegatecall, discard the (empty) returndata
+    void asStatement;
+    return { kind: 'abiDecode', type: rt, data: call };
+  }
+
+  /** Build ONLY the delegatecall extCall for an @external library function (no return decode wrapping).
+   *  Shared by buildLibraryExtCall (single-value / void return -> abiDecode / bare call) and the P1-11
+   *  tuple-destructure path (the returndata is abiDecoded into N components by the caller). */
+  private buildLibraryExtCallRaw(callee: RawFunction, args: Expr[]): Expr & { kind: 'extCall' } {
     const lib = callee.libraryName!;
     this.referencedExternalLibraries.add(lib);
     const bareName = callee.name.slice(lib.length + 1); // strip the `L.` qualifier for the ABI signature
@@ -10920,10 +11268,71 @@ export class Analyzer {
       checks: [],
       bubble: true,
     };
-    const rt = callee.returnType;
-    if (rt.kind === 'void') return call; // a statement: run the delegatecall, discard the (empty) returndata
-    void asStatement;
-    return { kind: 'abiDecode', type: rt, data: call };
+    return call;
+  }
+
+  /** P1-11: resolve `let [a, b] = L.mm(args)` where L is a @library and mm is an @external (delegatecall)
+   *  library function with a >=2-component tuple return. Builds the delegatecall extCall (the SAME codec as
+   *  the single-value external-library call) whose ABI returndata is decoded into N components via the
+   *  abiDecode-tuple DestructureSource - exactly the interface-call tuple path. Returns {call, returnTypes}
+   *  when `node` is an @external library tuple call, 'handled' when it IS one but misused (a diagnostic was
+   *  emitted; stop), or undefined when `node` is not an @external library call (let other resolvers try). */
+  private resolveLibraryExtTupleSource(
+    node: ts.Expression,
+  ): { call: Expr & { kind: 'extCall' }; returnTypes: JethType[] } | 'handled' | undefined {
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+    const pa = node.expression;
+    if (!ts.isIdentifier(pa.expression) || !this.libraryByName.has(pa.expression.text) || this.isVisibleLocal(pa.expression.text)) {
+      return undefined;
+    }
+    const libName = pa.expression.text;
+    const fnName = pa.name.text;
+    const resolved = this.resolveLibraryOverload(node, this.libraryByName.get(libName)!, `${libName}.${fnName}`, fnName);
+    if (resolved === 'unknown') {
+      this.diags.error(node, 'JETH392', `@library '${libName}' has no function '${fnName}'`);
+      return 'handled';
+    }
+    if (!resolved) return 'handled';
+    if (!resolved.libraryExternal) return undefined; // an INTERNAL library tuple call: let resolveTupleCall handle it
+    // check + coerce the arguments to the callee's params (value params only, like every other lib call).
+    const argNodes = this.resolveCallArgs(node, resolved, `${libName}.${fnName}`);
+    if (!argNodes) return 'handled';
+    const args: Expr[] = [];
+    for (let i = 0; i < resolved.params.length; i++) {
+      const pt = resolved.params[i]!.type;
+      const a = this.checkExpr(argNodes[i]!, pt);
+      if (!a) return 'handled';
+      if (pt.kind === 'struct') {
+        if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
+          this.diags.error(argNodes[i]!, 'JETH085', `argument ${i + 1} of '${resolved.name}' expects ${displayName(pt)}, got ${displayName(a.type)}`);
+          return 'handled';
+        }
+        args.push(a);
+      } else {
+        args.push(this.coerce(a, pt, argNodes[i]!));
+      }
+    }
+    if (!resolved.returnTypes || resolved.returnTypes.length < 2) {
+      this.diags.error(
+        node,
+        'JETH356',
+        resolved.returnType.kind === 'void'
+          ? `'${libName}.${fnName}' returns void and cannot be destructured`
+          : `'${libName}.${fnName}' returns a single value; bind it with \`let x = ...\``,
+      );
+      return 'handled';
+    }
+    // Each tuple component must be a shape the destructure binding supports (value / bytes / value-array /
+    // static struct / funcref); a dynamic-struct component keeps its clean reject (same gate as the internal
+    // and interface tuple paths, so no over-acceptance).
+    for (const t of resolved.returnTypes) {
+      if (!this.destructurableComponent(t)) {
+        this.diags.error(node, 'JETH243', `tuple destructuring of a non-value return component (${displayName(t)}) is not supported yet`);
+        return 'handled';
+      }
+    }
+    const call = this.buildLibraryExtCallRaw(resolved, args);
+    return { call, returnTypes: resolved.returnTypes };
   }
 
   /** A return component that a tuple destructuring can bind to a fresh memory local: any value
@@ -11090,6 +11499,21 @@ export class Analyzer {
         this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: sc.call, types: rts }, out);
         return;
       }
+    }
+    // P1-11: `let [a, b] = L.mm(args)` where L is a @library and mm is an @external (delegatecall) library
+    // function with a >=2-component tuple return: decode the delegatecall's bytes returndata into N
+    // components (the SAME abi.decode-tuple path as an interface call). Recognized BEFORE the generic
+    // tuple-call resolver (which rejects a libraryExternal tuple as JETH243).
+    const libExtTuple = this.resolveLibraryExtTupleSource(decl.initializer);
+    if (libExtTuple === 'handled') return; // recognized @external library call, already diagnosed
+    if (libExtTuple) {
+      const rts = libExtTuple.returnTypes;
+      if (rts.length !== n) {
+        this.diags.error(decl.name, 'JETH356', `this @library method returns ${rts.length} value(s), expected ${n} name(s)`);
+        return;
+      }
+      this.bindDestructure(pat, n, rts, { kind: 'abiDecode', data: libExtTuple.call, types: rts }, out);
+      return;
     }
     // Phase 6: `let [a, b] = IFoo(addr).method(args)` where the method has a >=2-component tuple return:
     // decode the call's bytes returndata into N components (same abi.decode path as a tuple addr.call).
@@ -13572,6 +13996,14 @@ export class Analyzer {
       }
       return undefined;
     }
+    // P1-8: a calldata array SLICE `a.slice(...)` used as an index/`.length` base (a.slice(s)[i],
+    // a.slice(s).length). resolveCalldataSlice yields an arrayValue with a cdSlice base; use it directly
+    // so element/length access route through the calldata-array codec at the narrowed (offset, length).
+    if (ts.isCallExpression(node)) {
+      const sl = this.resolveCalldataSlice(node);
+      if (sl && sl !== 'reject' && sl.kind === 'arrayValue' && sl.arr.base.kind === 'cdSlice') return sl.arr;
+      if (sl === 'reject') return undefined;
+    }
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
       const v = this.stateByName.get(node.name.text);
       if (v && v.type.kind === 'array') {
@@ -14916,30 +15348,58 @@ export class Analyzer {
     );
   }
 
-  /** `<calldata bytes>.slice(start [, end])` -> a zero-copy calldata bytes slice (solc data[start:end]).
-   *  Returns the Expr, 'reject' (a diagnostic was emitted, stop), or undefined (not a bytes `.slice` -
-   *  let other handlers try). Peek-rollback first so a non-bytes `.slice` receiver does not get claimed. */
+  /** P1-8: a calldata ARRAY that JETH can slice byte-identically to solc `a[start:end]`. The zero-copy
+   *  slice narrows the element region (offset += start*stride, length := end-start), so it is only sound
+   *  for an array whose element read/`.length`/re-encode already routes through the calldata-array codec:
+   *  a whole calldata-array param (calldataArray base) or another slice (cdSlice base), with a VALUE-word
+   *  element or a STATIC struct element (contiguous, fixed stride). A dynamic-element array (bytes[],
+   *  u256[][]) is offset-table-located, not contiguous - a slice cannot just shift the base - so it is
+   *  NOT sliceable here (left rejected). Returns the element type when sliceable, else undefined. */
+  private calldataSliceableArrayElem(e: Expr): JethType | undefined {
+    if (e.kind !== 'arrayValue') return undefined;
+    if (e.type.kind !== 'array' || e.type.length !== undefined) return undefined; // dynamic outer only
+    const b = e.arr.base;
+    if (b.kind !== 'calldataArray' && b.kind !== 'cdSlice') return undefined;
+    const el = e.arr.elem;
+    // A VALUE-WORD element (u256/iN/address/bool/bytesN/enum) is one contiguous 32-byte ABI word, so the
+    // slice narrows the region by a fixed 32-byte stride and element read / .length / whole-copy all route
+    // through the proven calldata VALUE-array codec (masking dirty leaves) byte-identically. A STATIC-STRUCT
+    // element (P[]) is contiguous too but its element access returns a BASE pointer whose field-read uses a
+    // DIFFERENT calldata struct-array codec that this value-element slice path does not wire up (it would
+    // MISCOMPILE / mis-bound), so it is left REJECTED. A DYNAMIC-element array (bytes[]/u256[][]) is
+    // offset-table-located (not contiguous) and also left rejected.
+    if (isStaticValueType(el)) return el;
+    return undefined;
+  }
+
+  /** `<calldata bytes>.slice(start [, end])` -> a zero-copy calldata bytes slice (solc data[start:end]),
+   *  or `<calldata array>.slice(...)` -> a zero-copy calldata ARRAY sub-view (P1-8). Returns the Expr,
+   *  'reject' (a diagnostic was emitted, stop), or undefined (not a sliceable `.slice` - let other
+   *  handlers try). Peek-rollback first so a non-sliceable `.slice` receiver does not get claimed. */
   private resolveCalldataSlice(node: ts.CallExpression): Expr | 'reject' | undefined {
     if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'slice') return undefined;
     const recvNode = node.expression.expression;
-    // peek whether the receiver is a bytes value, restoring diagnostics AND the mutability flags so a
-    // non-slice fall-through leaves no trace (the real handler re-checks the receiver and sets flags).
+    // peek whether the receiver is a sliceable calldata value, restoring diagnostics AND the mutability
+    // flags so a non-slice fall-through leaves no trace (the real handler re-checks + sets flags).
     const savedEnv = this.currentReadsEnv;
     const savedReads = this.currentReadsState;
     const savedWrites = this.currentWritesState;
     const diagLen = this.diags.items.length;
     const peek = this.checkExpr(recvNode);
-    // bytes AND string calldata are sliceable (solc allows string calldata slices too).
-    const isSliceable = !!peek && (peek.type.kind === 'bytes' || peek.type.kind === 'string');
+    // bytes AND string calldata are sliceable (solc allows string calldata slices too); P1-8 adds
+    // value/static-struct-element calldata arrays.
+    const isBytesSlice = !!peek && (peek.type.kind === 'bytes' || peek.type.kind === 'string');
+    const arrElem = peek ? this.calldataSliceableArrayElem(peek) : undefined;
     this.diags.items.length = diagLen;
     this.currentReadsEnv = savedEnv;
     this.currentReadsState = savedReads;
     this.currentWritesState = savedWrites;
-    if (!isSliceable) return undefined;
+    if (!isBytesSlice && !arrElem) return undefined;
     // commit: re-check the receiver (keeping diagnostics + flags this time)
     const base = this.checkExpr(recvNode);
     if (!base) return 'reject';
-    if (!this.isCalldataBytes(base)) {
+    const isArr = !isBytesSlice;
+    if (!isArr && !this.isCalldataBytes(base)) {
       this.diags.error(
         node,
         'JETH382',
@@ -14981,6 +15441,15 @@ export class Analyzer {
         return 'reject';
       }
       end = this.coerce(e, U256, node.arguments[1]!);
+    }
+    if (isArr) {
+      // a calldata array slice: same dynamic array TYPE, a cdSlice base wrapping the base array reference.
+      const av = base as Expr & { kind: 'arrayValue' };
+      return {
+        kind: 'arrayValue',
+        type: base.type,
+        arr: { base: { kind: 'cdSlice', base: av.arr, start, end }, elem: av.arr.elem },
+      };
     }
     // the slice preserves the base location type (bytes -> bytes, string -> string).
     return { kind: 'calldataSlice', type: base.type, base, start, end };
@@ -16195,6 +16664,19 @@ export class Analyzer {
       if (lenArr) {
         if (lenArr.base.kind === 'fixedArray')
           return { kind: 'literalInt', type: U256, value: BigInt(lenArr.base.length) };
+        // P1-8: solc exposes NO members - not even `.length` - on an unbound calldata array SLICE
+        // expression (`a[1:].length` -> "Member length not found ... in uint256[] calldata slice"),
+        // exactly like a bytes/string calldata slice. Binding it to a local first (let b: u256[] =
+        // a.slice(...); b.length) reads back as a plain array, which solc DOES accept. Reject only the
+        // unbound slice EXPRESSION here (a cdSlice base), never the bound-local form (a memArray base).
+        if (lenArr.base.kind === 'cdSlice') {
+          this.diags.error(
+            node,
+            'JETH202',
+            `.length is not valid on a calldata array slice expression; bind it to a local first`,
+          );
+          return undefined;
+        }
         // storage-backed arrays (stateArray / mapArray) read state; calldata sources
         // (calldataArray / cdNestedElem) do not.
         if (lenArr.base.kind === 'stateArray' || lenArr.base.kind === 'mapArray') this.currentReadsState = true;
@@ -17122,6 +17604,24 @@ export class Analyzer {
 
     // indexing: array a[i] -> elem, bytes b[i] -> bytes1, or mapping this.m[k]
     if (ts.isElementAccessExpression(node)) {
+      // P1-8: `a.slice(start[, end])[i]` - index a CALLDATA ARRAY SLICE. The base is a `.slice(...)`
+      // call resolving to a cdSlice arrayValue; element access reads at the narrowed (offset, length)
+      // via the calldata-array codec (value leaf -> arrayGet; solc validates dirty elements on read).
+      // A static-struct element yields the element BASE pointer (arrayGet typed as the struct), which the
+      // field-read / whole-copy paths consume like any calldata array element. Placed first so the slice
+      // base is never mis-probed by the identifier/this-rooted resolvers below.
+      if (node.argumentExpression && ts.isCallExpression(node.expression)) {
+        const sliceArr = this.resolveArrayExpr(node.expression);
+        if (sliceArr && sliceArr.base.kind === 'cdSlice') {
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          const idx = this.coerce(index, U256, node.argumentExpression);
+          if (isStaticValueType(sliceArr.elem)) {
+            return { kind: 'arrayGet', type: sliceArr.elem, arr: sliceArr, index: idx };
+          }
+          return undefined; // a non-value element slice is not on this path (left rejected)
+        }
+      }
       // bytesN[i] -> bytes1: a byte extract from a fixed-bytes VALUE (solc allows indexing a fixed
       // bytes value). The result is byte i, left-aligned, with a runtime OOB Panic(0x32) and a
       // compile error on a constant out-of-range index. Probe the base type cheaply (a param/local

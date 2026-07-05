@@ -5020,6 +5020,31 @@ ${indent(runtime, 6)}
       });
       return { src: 'calldata', offset: base, length: count, elem: arr.elem };
     }
+    if (arr.base.kind === 'cdSlice') {
+      // P1-8: a calldata array slice a[start:end]. Resolve the base array's (offset, length), then narrow:
+      // offset' = offset + start*stride, length' = end - start (stride = the element's contiguous ABI
+      // width). Bounds: require(start <= end && end <= length) else EMPTY-revert, byte-identical to solc.
+      // Order matches solc left-to-right operand evaluation: base, then start, then end.
+      const inner = this.lowerArrayRef(arr.base.base, ctx, out);
+      if (inner.src !== 'calldata') throw new UnsupportedError('a calldata array slice base must be calldata');
+      const baseOff = this.fresh();
+      const baseLen = this.fresh();
+      out.push(`let ${baseOff} := ${inner.offset}`);
+      out.push(`let ${baseLen} := ${inner.length}`);
+      const start = this.fresh();
+      out.push(`let ${start} := ${this.lowerExpr(arr.base.start, ctx, out)}`);
+      const end = this.fresh();
+      if (arr.base.end) out.push(`let ${end} := ${this.lowerExpr(arr.base.end, ctx, out)}`);
+      else out.push(`let ${end} := ${baseLen}`);
+      out.push(`if gt(${start}, ${end}) { revert(0, 0) }`);
+      out.push(`if gt(${end}, ${baseLen}) { revert(0, 0) }`);
+      const stride = abiHeadWords(arr.elem) * 32;
+      const offset = this.fresh();
+      const length = this.fresh();
+      out.push(`let ${offset} := add(${baseOff}, mul(${start}, ${stride}))`);
+      out.push(`let ${length} := sub(${end}, ${start})`);
+      return { src: 'calldata', offset, length, elem: arr.elem };
+    }
     const b = ctx.cdArrays.get(arr.base.name);
     if (!b) throw new UnsupportedError(`unbound calldata array ${arr.base.name}`);
     return { src: 'calldata', offset: b.offset, length: b.length, elem: arr.elem };
@@ -7323,6 +7348,15 @@ ${indent(runtime, 6)}
       const b = a.arr.base;
       if (b.kind === 'memArray') return this.ctxLookup(ctx, b.varName); // memory local: ALIAS
       if (b.kind === 'memArrayExpr') return this.lowerExpr(b.expr, ctx, out);
+      // P1-8: a CALLDATA ARRAY SLICE bound to a memory local (`let b: u256[] = a.slice(...)`) or used as
+      // a whole value (return / arg): resolve the narrowed (offset, length) then DEEP-COPY into a fresh
+      // [len][elems] value-array image (masking dirty leaves, byte-identical to solc's calldata->memory
+      // slice copy). Only value-word / static-struct element slices reach here (analyzer gate).
+      if (b.kind === 'cdSlice') {
+        const ref = this.lowerArrayRef(a.arr, ctx, out);
+        if (ref.src !== 'calldata') throw new UnsupportedError('a calldata array slice must resolve to calldata');
+        return this.cdSliceToMem(a.arr.elem, ref.offset, ref.length, out);
+      }
       // a WHOLE dynamic-array FIELD of a calldata dyn-struct (param `s.tags` or array element
       // `xs[i].tags`) bound to a memory local: DEEP-COPY from the field's resolved calldata header
       // into a fresh memory image. Reuses the SAME cdFieldArrayHeader + abiDecFromCdToImage codec the
@@ -7408,6 +7442,45 @@ ${indent(runtime, 6)}
     }
     // a struct value (memAggregate alias / storage) or a call result (already a pointer).
     return this.lowerExpr(a, ctx, out);
+  }
+
+  /** P1-8: DEEP-COPY a CALLDATA ARRAY SLICE (a resolved runtime `offset`/`length` element region, element
+   *  type `elem`) into a fresh memory [len][elems] image; returns its absolute pointer. Mirrors solc's
+   *  calldata->memory copy of `T[] memory c = a[s:e]`: value/static-struct elements are copied inline with
+   *  dirty leaves MASKED (never reverted). The slice `length` already bounds the source region against
+   *  calldatasize (the offset region belongs to the enclosing param, validated at decode), so the copy has
+   *  no additional source-bounds revert. Only value-word / static-struct elements reach here (analyzer
+   *  gate: a dynamic-element slice is left rejected). */
+  private cdSliceToMem(elem: JethType, offset: string, length: string, out: string[]): string {
+    // Only a VALUE-WORD element reaches here (analyzer gate); stride is one 32-byte ABI word.
+    const ptr = this.fresh();
+    out.push(`let ${ptr} := mload(0x40)`);
+    // total = 0x20 (len word) + length*32, with an unsigned-overflow cap (Panic 0x41) matching solc's
+    // memory allocation guard on an oversized copy.
+    const nc = this.fresh();
+    out.push(`let ${nc} := add(add(${ptr}, 0x20), mul(${length}, 0x20))`);
+    out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${ptr})) { ${this.panic()}(0x41) }`);
+    out.push(`mstore(${ptr}, ${length})`);
+    out.push(`mstore(0x40, ${nc})`);
+    const dstHead = this.fresh();
+    out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+    const i = this.fresh();
+    out.push(`for { let ${i} := 0 } lt(${i}, ${length}) { ${i} := add(${i}, 1) } {`);
+    const inner: string[] = [];
+    const w = this.fresh();
+    inner.push(`let ${w} := calldataload(add(${offset}, mul(${i}, 0x20)))`);
+    // masked/cleaned like solc's calldata->memory copy (an enum element Panics 0x21 on an out-of-range
+    // value, matching a whole value-aggregate echo).
+    if ((elem as { enumMembers?: string[] }).enumMembers) {
+      inner.push(
+        `if iszero(lt(${w}, ${(elem as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`,
+      );
+      inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${w})`);
+    } else {
+      inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${this.cleanCalldataElem(elem, w)})`);
+    }
+    out.push(...inner, `}`);
+    return ptr;
   }
 
   /** Materialize a DYNAMIC-array argument (G3, for @error/@event head/tail) into a memory blob
