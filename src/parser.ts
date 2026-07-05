@@ -28,16 +28,24 @@ export function parse(text: string, fileName = 'contract.jeth'): ParsedSource {
   return { sourceFile, fileName, text: hoisted };
 }
 
-/** Move `enum Name { ... }` declarations that sit inside a class body (brace depth >= 1) out to
- *  top level. A char scanner tracks string/comment state and brace depth; each in-class enum is
- *  blanked where it sat (newlines kept, so offsets/line numbers are stable) and re-appended at the
- *  end of the source, where collectEnums (a position-agnostic recursive walk) registers it. */
+/** Move `enum Name { ... }` declarations that sit DIRECTLY inside a class body out to top level.
+ *  A char scanner tracks string/comment state and a brace stack (each entry records whether that
+ *  brace opened a `class` body). An enum is hoistable only when the brace directly enclosing it is a
+ *  class body: an enum nested inside a method body / block is left in place so it reaches the analyzer
+ *  as an illegal statement-position declaration (solc rejects `enum` outside file/contract scope).
+ *  Each hoisted enum is blanked where it sat (newlines kept, so offsets/line numbers are stable) and
+ *  re-appended at the end of the source, where collectEnums (a position-agnostic recursive walk)
+ *  registers it. No-op when no directly-in-class enum is present. */
 function hoistInClassEnums(text: string): string {
   const isWord = (ch: string) => /[A-Za-z0-9_$]/.test(ch);
   const spans: { start: number; end: number }[] = [];
   const n = text.length;
-  let depth = 0;
+  // Brace stack: true iff this `{` opened a class body. `pendingClass` is set when the `class`
+  // keyword has been seen and its opening `{` is still awaited (past the name / heritage clause).
+  const braceIsClass: boolean[] = [];
+  let pendingClass = false;
   let i = 0;
+  const inClassBody = () => braceIsClass.length > 0 && braceIsClass[braceIsClass.length - 1] === true;
   while (i < n) {
     const c = text[i]!;
     if (c === '"' || c === "'" || c === '`') {
@@ -67,18 +75,29 @@ function hoistInClassEnums(text: string): string {
       i += 2;
       continue;
     }
+    if (
+      c === 'c' &&
+      text.startsWith('class', i) &&
+      !isWord(text[i - 1] ?? '') &&
+      !isWord(text[i + 5] ?? '')
+    ) {
+      pendingClass = true;
+      i += 5;
+      continue;
+    }
     if (c === '{') {
-      depth++;
+      braceIsClass.push(pendingClass);
+      pendingClass = false;
       i++;
       continue;
     }
     if (c === '}') {
-      depth--;
+      braceIsClass.pop();
       i++;
       continue;
     }
     if (
-      depth >= 1 &&
+      inClassBody() &&
       c === 'e' &&
       text.startsWith('enum', i) &&
       !isWord(text[i - 1] ?? '') &&

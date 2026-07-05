@@ -13572,6 +13572,21 @@ export class Analyzer {
         );
         return undefined;
       }
+      // packed: an UNTYPED integer literal (solc type int_const / rational_const) has no fixed byte width,
+      // so solc rejects it outright ("Cannot perform packed encoding for a literal. Please convert it to
+      // an explicit type first."). The test is SYNTACTIC on the argument, not the folded type: `42`, `0x2a`,
+      // `1e18`, `-1`, `(42)`, `1 + 1` are untyped literal-constants (reject), but an EXPLICIT cast `u256(42)`
+      // / `bytes4(0x..)` / `address(0)` gives the value a concrete type (accept - it left the literal realm),
+      // a `true` is bool, and a string literal is bytes/string. Standard (non-packed) abi.encode implicitly
+      // types a literal, so this reject is packed-only. (isInteger(t) skips the already-typed address cast.)
+      if (packed && isInteger(t) && !isEnum(t) && this.isUntypedNumberLiteralArg(a)) {
+        this.diags.error(
+          a,
+          'JETH173',
+          `abi.${method} cannot perform packed encoding of an untyped literal; convert it to an explicit type first (e.g. u256(x))`,
+        );
+        return undefined;
+      }
       // packed: value + bytes/string only. standard (incl. encodeWith*) also accepts a STATIC
       // struct/fixed-array (encoded inline) and a DYNAMIC value-element array (offset + tail).
       // Nested-dynamic (string[], T[][]) / dynamic struct args stay a later step.
@@ -19031,6 +19046,18 @@ export class Analyzer {
       );
       return true;
     }
+    // solc has NO leading-zero (C-style octal) decimal syntax: `010` / `08` / `0777` / `00` / `0_1` are a
+    // parser error ("Octal numbers not allowed"). TypeScript's lexer folds `010` -> 10, so the leading
+    // zero is visible only via getText(). Matches on `0` followed by a decimal digit or `_`; this excludes
+    // a bare `0`, a hex `0x..`, and a scientific/decimal `0e5` / `0.5e1` (all valid).
+    if (/^0[0-9_]/.test(raw.replace(/n$/, ''))) {
+      this.diags.error(
+        n,
+        'JETH049',
+        `leading-zero (octal-style) decimal literals (${raw}) are not valid Solidity; remove the leading zero`,
+      );
+      return true;
+    }
     return false;
   }
 
@@ -19164,6 +19191,31 @@ export class Analyzer {
     return undefined;
   }
 
+  /** True iff `node` is an UNTYPED number-literal constant in solc's sense (type int_const /
+   *  rational_const): a number/bigint literal, possibly wrapped in parens or a unary +/-/~, or an
+   *  arithmetic/bitwise/shift expression EVERY leaf of which is itself such a literal (1 + 1, 2 ** 8).
+   *  An identifier, member access, or a CALL (an explicit cast like `u256(42)` / `bytes4(0x..)`) makes
+   *  the expression concretely typed and is NOT an untyped literal. Used to reject packed abi encoding of
+   *  a literal (solc: "Cannot perform packed encoding for a literal"), while accepting an explicit cast. */
+  private isUntypedNumberLiteralArg(node: ts.Expression): boolean {
+    if (ts.isParenthesizedExpression(node)) return this.isUntypedNumberLiteralArg(node.expression);
+    if (ts.isNumericLiteral(node) || ts.isBigIntLiteral(node)) return true;
+    if (
+      ts.isPrefixUnaryExpression(node) &&
+      (node.operator === ts.SyntaxKind.MinusToken ||
+        node.operator === ts.SyntaxKind.PlusToken ||
+        node.operator === ts.SyntaxKind.TildeToken)
+    ) {
+      return this.isUntypedNumberLiteralArg(node.operand);
+    }
+    if (ts.isBinaryExpression(node)) {
+      // a constant arithmetic / bitwise / shift operator keeps int_const-ness; a comparison / logical
+      // op yields a bool (not a number literal) so it never reaches this integer-typed reject anyway.
+      return this.isUntypedNumberLiteralArg(node.left) && this.isUntypedNumberLiteralArg(node.right);
+    }
+    return false;
+  }
+
   /** solc's mobile type for an integer literal in a ternary branch: the SMALLEST integer type
    *  (width a multiple of 8, up to 256) that holds the value - UNSIGNED for a non-negative value,
    *  SIGNED for a negative one. Mirrors Type::commonType's rational-constant lowering (5 -> uint8,
@@ -19198,6 +19250,10 @@ export class Analyzer {
   private widenLiteralOperand(left: Expr, right: Expr): [Expr, Expr] | null {
     const fit = (lit: Expr, other: Expr): { common: JethType } | null => {
       if (lit.kind !== 'literalInt' || lit.kind === other.kind || !isInteger(other.type)) return null;
+      // An enum is a branded uint8 but is NOT an integer for literal widening: solc forbids `enum OP int_const`
+      // for ANY literal (in-range or out-of-range). Bail so unifyOperands rejects it (JETH280), instead of
+      // silently widening the enum to uint16 for an out-of-range literal like `c == 300`.
+      if (isEnum(other.type)) return null;
       if (this.inRange(lit.value, other.type)) return null; // fits the variable -> normal path
       const vt = other.type as { kind: 'uint' | 'int'; bits: number };
       if (lit.value >= 0n) {

@@ -260,8 +260,8 @@ describe('calldata slicing - accept/reject parity with solc', () => {
   const cases: { label: string; j: string; s: string }[] = [
     {
       label: 'memory bytes is not sliceable',
-      j: `@contract class C { @external @pure f(): bytes { const m: bytes = abi.encodePacked(1n); return m.slice(0n); } }`,
-      s: `contract C { function f() external pure returns(bytes memory){ bytes memory m=abi.encodePacked(uint8(1)); return m[0:]; } }`,
+      j: `@contract class C { @external @pure f(): bytes { const x: u8 = 1n; const m: bytes = abi.encodePacked(x); return m.slice(0n); } }`,
+      s: `contract C { function f() external pure returns(bytes memory){ uint8 x=1; bytes memory m=abi.encodePacked(x); return m[0:]; } }`,
     },
     {
       label: 'storage bytes is not sliceable',

@@ -3,7 +3,39 @@
 // identifiers; mapping<K,V> and T[] / T[N] are structural.
 import ts from 'typescript';
 import type { JethType } from './types.js';
+import { numericLiteralWholeValue } from './types.js';
 import type { DiagnosticBag } from './diagnostics.js';
+
+/** BigInt(raw) but never throws: returns undefined for a malformed hex spelling. */
+function safeBigInt(raw: string): bigint | undefined {
+  try {
+    return BigInt(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The exact original source spelling of a numeric-literal node, or undefined when it cannot be read
+ *  faithfully. A node produced by ts.factory (e.g. the analyzer's for-of / switch desugaring) is either
+ *  span-less (getText throws / is empty) OR has had an UNRELATED anchor range stitched on via
+ *  ts.setTextRange, so getText() returns that anchor's text ("xs", not "2"). To stay robust in both
+ *  cases, accept the spelling only when it is itself a well-formed numeric literal; otherwise the caller
+ *  falls back to NumericLiteral.text (exact for any value that could have been synthesized). This is used
+ *  to read a fixed-array length exactly, since .text is a lossy JS-double for a source value above 2^53. */
+function sourceSpelling(node: ts.Node): string | undefined {
+  if (node.pos < 0 || node.end < 0) return undefined; // synthesized: no source span
+  let text: string;
+  try {
+    text = node.getText();
+  } catch {
+    return undefined;
+  }
+  const raw = text.replace(/_/g, '');
+  // a decimal / scientific / hex integer-literal spelling only (nothing else can be a length literal)
+  return /^0[xX][0-9a-fA-F]+$/.test(raw) || /^[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/.test(raw)
+    ? text
+    : undefined;
+}
 
 const UINT_RE =
   /^u(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)$/;
@@ -106,11 +138,34 @@ export function resolveType(
         diags.error(lenNode ?? node, 'JETH012', 'fixed array length must be a numeric literal');
         return undefined;
       }
-      const length = Number(lenNode.literal.text);
-      if (length <= 0) {
+      // Read the ORIGINAL source spelling (getText), NOT NumericLiteral.text: `.text` is a JS-double
+      // normalization that silently rounds a large integer (9007199254740993 -> 9007199254740992), which
+      // would mislay every subsequent storage slot. `numericLiteralWholeValue` computes the exact bigint
+      // for a decimal / scientific literal; a hex literal (0x..) is exact via BigInt. A SYNTHESIZED literal
+      // node (e.g. from for-of element-type desugaring) has no source span, so getText() throws / is empty;
+      // fall back to .text there (a synthesized length is always small and exact - no lossy rounding).
+      const rawLen = (sourceSpelling(lenNode.literal) ?? lenNode.literal.text).replace(/_/g, '');
+      const exactLen = /^0[xX]/.test(rawLen) ? safeBigInt(rawLen) : numericLiteralWholeValue(rawLen);
+      if (exactLen === undefined) {
+        diags.error(lenNode, 'JETH012', 'fixed array length must be a whole-number integer literal');
+        return undefined;
+      }
+      if (exactLen <= 0n) {
         // solc rejects a zero-length fixed array in every position (it would consume
         // no storage and alias the following slot). Mirror that compile error.
         diags.error(lenNode, 'JETH013', 'fixed array length must be greater than zero');
+        return undefined;
+      }
+      // JethType.array.length is a JS number; a length beyond Number.MAX_SAFE_INTEGER cannot be stored
+      // without a lossy double round (which would silently corrupt the storage layout of every following
+      // slot). Reject it as a sound fail-safe: such an array (>= 2^53 slots) is physically unusable anyway.
+      const length = Number(exactLen);
+      if (!Number.isSafeInteger(length) || BigInt(length) !== exactLen) {
+        diags.error(
+          lenNode,
+          'JETH013',
+          `fixed array length ${exactLen} is too large (exceeds ${Number.MAX_SAFE_INTEGER}); such an array is not representable`,
+        );
         return undefined;
       }
       return { kind: 'array', element, length };
