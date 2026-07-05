@@ -2823,6 +2823,10 @@ ${indent(runtime, 6)}
         // head/tail: a static value is one head word; a static struct / fixed-array occupies its
         // abiHeadWords leaf words INLINE in the head; a dynamic bytes/string/array writes a head
         // offset word + a tail blob. Tail offsets are relative to the args region (calldata byte 4).
+        // W7A TWO-PHASE: every argument evaluates LEFT-TO-RIGHT to a value/handle first
+        // (prepEncodeComponent - the same phase-1 taxonomy abi.encode and event data use), then the
+        // payload serializes through the handles LATE (sibling mutations visible, storage read
+        // post-sibling, validation Panics at serialize time - probes A4/P6).
         const headWordsOf = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
         const lines: string[] = [];
         type LA =
@@ -2830,43 +2834,15 @@ ${indent(runtime, 6)}
           | { dyn: 'agg'; mp: string; words: number }
           | { dyn: 'bytes'; mp: string; len: string }
           | { dyn: 'array'; mp: string; size: string };
-        const lowered: LA[] = r.args.map((a): LA => {
-          if (isBytesLike(a.type)) {
-            const { mp, len } = this.toMemory(this.lowerDynamic(a, ctx, lines), lines);
-            return { dyn: 'bytes', mp, len };
-          }
-          // a DYNAMIC array: a dynamic-outer value/nested array (length === undefined) OR - P0-34/P0-38 -
-          // a FIXED-outer array of a DYNAMIC element (Arr<string,N>, Arr<bytes,N>, Arr<u256[],N>). Both are
-          // DYNAMIC types (headWordsOf -> 1 offset word), NOT the static-agg inline path below. Each has a
-          // self-contained ABI tail (dynamic-outer: [len] + elements/offset-table+tails; fixed-outer: an
-          // N-word offset table + per-element tails, NO leading [len]) - exactly what materializeArrayArg
-          // produces (memory-local / literal -> materializeFixedDynLeafTail; calldata / storage -> echoParam /
-          // abiEncFromStorage's fixed-of-dynamic branch). Route both through the 'array' LA (offset word +
-          // verbatim tail mcopy), byte-identical to solc's error(...) encoding and the emit(E(m)) data path.
-          if (a.type.kind === 'array' && (a.type.length === undefined || isDynamicType(a.type))) {
-            const { mp, size } = this.materializeArrayArg(a, ctx, lines);
-            return { dyn: 'array', mp, size };
-          }
-          if (a.type.kind === 'struct' && isDynamicType(a.type)) {
-            // a DYNAMIC struct: a head OFFSET word + its self-contained head/tail blob in the tail.
-            // encodeDynStructToBlob returns {mp, size} of the fully ABI-encoded struct (its own
-            // head+tail), identical in shape to the array tail blob, so reuse the 'array' path
-            // (offset word + verbatim mcopy). Materialized NOW so it cannot alias the head buffer.
-            const { mp, size } = this.encodeDynStructToBlob(a, ctx, lines);
-            return { dyn: 'array', mp, size };
-          }
-          if (a.type.kind === 'struct' || (a.type.kind === 'array' && a.type.length !== undefined)) {
-            // a STATIC struct / fixed-array: materialize its ABI-unpacked image NOW (before the head
-            // buffer is captured, so it cannot alias), then mcopy its leaf words inline into the head.
-            // W6C: a fixed ENUM array image is range-checked before its words enter the revert data
-            // (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
-            const aggMp = this.aggToMemPtr(a, ctx, lines);
-            this.validateEnumMemArray(a.type, aggMp, lines);
-            return { dyn: 'agg', mp: aggMp, words: abiHeadWords(a.type) };
-          }
-          const t = this.fresh();
-          lines.push(`let ${t} := ${this.lowerExpr(a, ctx, lines)}`);
-          return { dyn: 'static', word: t };
+        const prevPatches = this.beginTwoPhase();
+        const preps = r.args.map((a) => this.prepEncodeComponent(a, ctx, lines));
+        this.flushTwoPhase(prevPatches, lines);
+        const lowered: LA[] = preps.map((finish): LA => {
+          const part = finish(lines);
+          if ('word' in part) return { dyn: 'static', word: part.word };
+          if ('inline' in part) return { dyn: 'agg', mp: part.mp, words: part.words };
+          if ('len' in part) return { dyn: 'bytes', mp: part.mp, len: part.len };
+          return { dyn: 'array', mp: part.mp, size: part.size };
         });
         const headSize = r.args.reduce((n, a) => n + headWordsOf(a.type), 0) * 32;
         const p = this.fresh();
@@ -2996,17 +2972,18 @@ ${indent(runtime, 6)}
 
   private lowerEmitInner(ev: EventIR, args: Expr[], ctx: LowerCtx, out: string[]): string[] {
     // partition into indexed topics (static) and the non-indexed data tuple.
-    type Part =
-      | { word: string }
-      | { mp: string; len: string }
-      | { mp: string; size: string }
-      | { inline: true; mp: string; words: number };
+    type Part = EncPart;
     // solc evaluates an event's INDEXED args FIRST in REVERSE source order, then its NON-INDEXED args
     // in forward source order (verified vs solc 0.8.35). The OUTPUT layout stays source order (topics[]
     // and the data tuple both follow source order), so materialize each param into a source-INDEXED
     // slot while VISITING in solc's eval order. (Visiting strictly source-order was a MISCOMPILE: a
     // mixed indexed/non-indexed event with side-effecting args produced different topic/data bytes.)
+    // W7A: a TOPIC hashes its payload EAGERLY at the arg's evaluation position (F3-verified vs solc),
+    // but the DATA tuple is TWO-PHASE: each non-indexed arg evaluates to a value/handle at its
+    // position (dataPrep, via prepEncodeComponent) and SERIALIZES after every arg has run - late
+    // reads through memory handles and storage slots, exactly like abi.encode (probes A9/P5).
     const topicSlot: (string | null)[] = ev.params.map(() => null);
+    const dataPrep: (((o: string[]) => EncPart) | null)[] = ev.params.map(() => null);
     const dataSlot: (Part | null)[] = ev.params.map(() => null);
     const materialize = (i: number): void => {
       const p = ev.params[i]!;
@@ -3068,47 +3045,27 @@ ${indent(runtime, 6)}
         const t = this.fresh();
         out.push(`let ${t} := ${this.lowerExpr(arg, ctx, out)}`);
         topicSlot[i] = t;
-      } else if (isBytesLike(p.type)) {
-        const ref = this.lowerDynamic(arg, ctx, out);
-        dataSlot[i] = this.toMemory(ref, out); // materialize before the buffer is allocated
-      } else if (isStaticType(p.type) && (p.type.kind === 'struct' || p.type.kind === 'array')) {
-        // a non-indexed STATIC struct / fixed-array: encoded INLINE in the data head (abiHeadWords leaf
-        // words, no offset/tail). A POINTER-HEADED memory Arr<P,N> (static-struct fixed array) must first
-        // be transcoded to its flat inline ABI body via abiEncFromMem (its image is N pointer words - a raw
-        // mcopy would leak the pointer words into the log data, the MISCOMPILE the redesign introduced);
-        // every other static aggregate keeps its already-flat aggToMemPtr image. Mirrors buildAbiEncodeStd.
-        const mp = this.isPointerHeadedStaticAggArg(arg)
-          ? this.flattenPointerHeadedStaticAgg(arg, ctx, out)
-          : this.aggToMemPtr(arg, ctx, out);
-        // W6C: a fixed ENUM array image is range-checked before it enters the log data
-        // (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
-        this.validateEnumMemArray(p.type, mp, out);
-        dataSlot[i] = { inline: true, mp, words: abiHeadWords(p.type) };
-      } else if (p.type.kind === 'struct') {
-        // a non-indexed DYNAMIC struct: a head offset + its head/tail blob in the tail.
-        dataSlot[i] = this.encodeDynStructToBlob(arg, ctx, out);
-      } else if (p.type.kind === 'array') {
-        // a MEMORY-sourced FIXED-outer dynamic-element data array (a memAggregate local / literal
-        // Arr<bytes,N>/Arr<string,N>/Arr<u256[],N>): its whole value is dynamic, emitted behind a head
-        // offset + its abi.encode tail. materializeArrayArg rejects this fixed-outer aggregate (Edge D) -
-        // JETH900 on input solc accepts - so build the tail (offset table + per-element tails, no length
-        // word) from the memory image. Byte-identical to solc's log data (verified). A DYNAMIC-outer array
-        // and a CALLDATA-sourced fixed-outer array keep the materializeArrayArg ABI tail.
-        dataSlot[i] = this.isMemFixedDynLeafArg(arg)
-          ? this.materializeFixedDynLeafTail(arg, ctx, out)
-          : this.materializeArrayArg(arg, ctx, out); // {mp, size}: ABI tail blob (G3)
       } else {
-        // a static-value data word: bind to a temp so the value is captured at eval time.
-        const t = this.fresh();
-        out.push(`let ${t} := ${this.lowerExpr(arg, ctx, out)}`);
-        dataSlot[i] = { word: t };
+        // W7A: a non-indexed DATA component - phase 1 only (value spill / handle capture at the
+        // arg's evaluation position); the serialization runs after every arg (prepEncodeComponent's
+        // finisher mirrors the pre-two-phase data taxonomy: bytes toMemory, static aggregates
+        // inline via flatten/aggToMemPtr/storage-late, dyn structs to a blob, arrays to an ABI
+        // tail, values as spilled words - byte-identical codecs, late reads).
+        dataPrep[i] = this.prepEncodeComponent(arg, ctx, out);
       }
     };
     const indexedRev: number[] = [];
     const plainFwd: number[] = [];
     ev.params.forEach((p, i) => (p.indexed ? indexedRev.push(i) : plainFwd.push(i)));
     indexedRev.reverse();
-    for (const i of [...indexedRev, ...plainFwd]) materialize(i);
+    const prevPatches = this.beginTwoPhase();
+    for (const i of indexedRev) this.withoutCapturePatches(() => materialize(i)); // topics hash eagerly
+    for (const i of plainFwd) materialize(i);
+    this.flushTwoPhase(prevPatches, out);
+    // ---- serialize phase: finish each DATA component in source order (late reads). ----
+    ev.params.forEach((_, i) => {
+      if (dataPrep[i]) dataSlot[i] = dataPrep[i]!(out);
+    });
     // assemble topics + data in SOURCE order from the per-param slots.
     const idxVals: string[] = [];
     const data: Part[] = [];
@@ -3260,10 +3217,12 @@ ${indent(runtime, 6)}
           const cc = this.lowerExpr(e.cond, ctx, out);
           const p = this.fresh();
           out.push(`let ${p} := 0`);
+          // W7A: branch code lands in switch-case BLOCKS - suspend capture-patch recording there
+          // (a patch's locals would be block-scoped and unreachable from the top-level flush).
           const tO: string[] = [];
-          const pT = matPtr(e.then, tO);
+          const pT = this.withoutCapturePatches(() => matPtr(e.then, tO));
           const eO: string[] = [];
-          const pE = matPtr(e.else, eO);
+          const pE = this.withoutCapturePatches(() => matPtr(e.else, eO));
           out.push(`switch ${cc}`);
           out.push('case 0 {');
           for (const l of eO) out.push('  ' + l);
@@ -3282,10 +3241,11 @@ ${indent(runtime, 6)}
           const cc = this.lowerExpr(e.cond, ctx, out);
           const p = this.fresh();
           out.push(`let ${p} := 0`);
+          // W7A: suspend capture-patch recording inside the switch-case branch blocks.
           const tO: string[] = [];
-          const pT = this.aggArgToMemPtr(e.then, ctx, tO);
+          const pT = this.withoutCapturePatches(() => this.aggArgToMemPtr(e.then, ctx, tO));
           const eO: string[] = [];
-          const pE = this.aggArgToMemPtr(e.else, ctx, eO);
+          const pE = this.withoutCapturePatches(() => this.aggArgToMemPtr(e.else, ctx, eO));
           out.push(`switch ${cc}`);
           out.push('case 0 {');
           for (const l of eO) out.push('  ' + l);
@@ -3906,51 +3866,89 @@ ${indent(runtime, 6)}
     ctx: LowerCtx,
     out: string[],
   ): { ptr: string; size: string } {
-    const refs: ({ mp: string; len: string } | null)[] = types.map((t, i) =>
-      isBytesLike(t) ? this.toMemory(this.lowerDynamic(values[i]!, ctx, out), out) : null,
-    );
-    // PRE-PASS: an INLINE dynamic value-array literal component ([7,8,9]) is materialized to a
-    // fresh [len][data] memory image BEFORE the blob ptr is captured below, so a later allocation
-    // cannot alias the blob (mirrors the bytes/string `refs` pre-pass above).
-    const litRefs: (string | null)[] = types.map((t, i) =>
-      t.kind === 'array' && t.length === undefined && isStaticValueType(t.element) && values[i]!.kind === 'arrayLit'
-        ? this.lowerExpr(values[i]!, ctx, out)
-        : null,
-    );
-    // PRE-PASS: an INLINE allocating value-array component whose source is a memArrayExpr
-    // (an array-valued ternary `c ? [10,20] : [30]` / `c ? this.a : this.b`, etc.) materializes
-    // its [len][data] image via mload(0x40); doing it BEFORE the head ptr is captured below stops
-    // that allocation from aliasing the head buffer (mirrors `litRefs` above). A plain memArray
-    // local needs no pre-pass (its ctxLookup pointer already aliases an existing image).
-    const memExprRefs: (string | null)[] = types.map((t, i) =>
-      t.kind === 'array' &&
-      values[i]!.kind === 'arrayValue' &&
-      (values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArrayExpr'
-        ? this.lowerExpr(
-            ((values[i] as Expr & { kind: 'arrayValue' }).arr.base as { kind: 'memArrayExpr'; expr: Expr }).expr,
-            ctx,
-            out,
-          )
-        : null,
-    );
-    // PRE-PASS: an INLINE-constructed DYNAMIC struct component (return [D("nm",[1,2,3]), 99]) is
-    // encoded to a fresh ABI [head/tail] blob BEFORE the tuple ptr is captured below, so the
-    // constructor's per-field allocations (string/array materialization) cannot alias the tuple
-    // buffer. The loop then mcopies the blob into the tail like the bytes/string `refs` pre-pass.
-    const dynStructRefs: ({ mp: string; size: string } | null)[] = types.map((t, i) =>
-      isDynamicType(t) && t.kind === 'struct' && values[i]!.kind === 'structNew'
-        ? this.encodeDynStructToBlob(values[i]!, ctx, out)
-        : null,
-    );
-    // PRE-PASS: a WHOLE dynamic-array FIELD of a calldata dyn-struct array element used as a tuple
-    // component (return [xs[i].grid, xs[i].a], grid: u256[][] -> cdFieldAggValue; or xs[i].grid[j] ->
-    // cdNestedFieldAggValue) is DEEP-COPIED from its resolved calldata header into a fresh pointer-headed
-    // memory image BEFORE the tuple ptr is captured below, so the copy's allocations cannot alias the
-    // tuple buffer. The loop then re-encodes the image into the tail via abiEncFromMem (offset word +
-    // recursive tail) - the SAME encoder the memArray component / single `return xs[i].grid` path uses.
-    const cdFieldRefs: (string | null)[] = values.map((v) =>
-      v.kind === 'cdFieldAggValue' || v.kind === 'cdNestedFieldAggValue' ? this.nestedMemImagePtr(v, ctx, out) : null,
-    );
+    // ---- W7A PHASE 1 (source order): evaluate every component to a value local or a reference
+    // handle. All user side effects run here, left-to-right - the former five PRE-PASSES each
+    // hoisted one component KIND ahead of every sibling (bytes/literal/ternary-array/dyn-struct-
+    // ctor/cd-field), and static values / storage reads ran late inside the write loop; both
+    // reorderings diverged from solc's two-phase model (probes P14-P21). Serialization happens
+    // below, reading through the handles LATE (memory aliases see sibling mutations; storage
+    // components re-read post-sibling storage - probes P3/P4/P19).
+    const refs: (DynRef | null)[] = types.map(() => null); // bytes/string reference (materialized in 2a)
+    const words: (string | null)[] = types.map(() => null); // spilled static-value locals
+    const memExprRefs: (string | null)[] = types.map(() => null); // memArrayExpr image pointers
+    const litRefs: (string | null)[] = types.map(() => null); // inline value-array literal images
+    const cdFieldHdr: (string | null)[] = types.map(() => null); // calldata dyn-field headers
+    const staticNewPtr: (string | null)[] = types.map(() => null); // static structNew flat images (+patches)
+    const dynNewSrc: (TupleSrc | null)[] = types.map(() => null); // dyn structNew pointer-headed handles
+    const dynStructRefs: ({ mp: string; size: string } | null)[] = types.map(() => null); // dyn structNew fallback blobs
+    const storSlot: (string | null)[] = types.map(() => null); // frozen storage base slots
+    const prevPatches = this.beginTwoPhase();
+    types.forEach((t, i) => {
+      const v = values[i]!;
+      if (isBytesLike(t)) {
+        refs[i] = this.lowerDynamic(v, ctx, out);
+      } else if (isStaticValueType(t)) {
+        const w = this.fresh();
+        out.push(`let ${w} := ${this.lowerExpr(v, ctx, out)}`);
+        words[i] = w;
+      } else if (
+        t.kind === 'array' &&
+        v.kind === 'arrayValue' &&
+        (v.arr.base.kind === 'memArray' || v.arr.base.kind === 'memArrayExpr')
+      ) {
+        if (v.arr.base.kind === 'memArrayExpr') {
+          const p = this.fresh();
+          out.push(`let ${p} := ${this.lowerExpr(v.arr.base.expr, ctx, out)}`);
+          memExprRefs[i] = p;
+        } // a memArray local resolves at write time (a pure register lookup, no code)
+      } else if (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element) && v.kind === 'arrayLit') {
+        // an inline value-array literal: element values evaluate at the component's position
+        // (value semantics); the fresh image is unreachable by siblings, so encode-late == now.
+        litRefs[i] = this.lowerExpr(v, ctx, out);
+      } else if (v.kind === 'cdFieldAggValue' || v.kind === 'cdNestedFieldAggValue') {
+        // the calldata header resolves at position (index side effects, Panic 0x32); the
+        // deep-copy + validation runs in phase 2a (immutable source, late validation flavors).
+        cdFieldHdr[i] =
+          v.kind === 'cdFieldAggValue'
+            ? this.cdFieldArrayHeader(v.place, ctx, out)
+            : this.cdNestedFieldArrayHeader(v.place, v.indices, ctx, out);
+      } else if (this.staticCdComponentName(v, t) || this.cdComponentName(v)) {
+        // whole calldata params: immutable, no position effects; the validating encode runs in
+        // the write loop (late), unchanged.
+      } else if (!isDynamicType(t) && v.kind === 'structNew') {
+        // a constructed STATIC struct: freeze its flat image at position (args evaluate now, in
+        // order; live memory-ref args record capture patches re-copied after phase 1).
+        staticNewPtr[i] = this.allocAggToMem(v, ctx, out);
+      } else if (!isDynamicType(t) && v.kind === 'memAggregate') {
+        // a static memory local: a pure register alias, resolved at write time (mcopy reads late).
+      } else if (isDynamicType(t) && t.kind === 'struct' && v.kind === 'structNew') {
+        if (this.dynStructMemSrcEncodable(t)) {
+          // build the native pointer-headed image at position (args in order, refs captured as
+          // pointers, static-agg fields patched); the write loop encodes from it LATE.
+          dynNewSrc[i] = { kind: 'mem', headPtr: this.buildDynStructLocal(t, v, ctx, out) };
+        } else {
+          // rare field shapes the mem-src encoder cannot serialize: keep the at-position blob
+          // (pre-two-phase behavior, now at the component's source position instead of a pre-pass).
+          dynStructRefs[i] = this.encodeDynStructToBlob(v, ctx, out);
+        }
+      } else if (isDynamicType(t) && t.kind === 'struct' && v.kind === 'memDynStructValue') {
+        // a dyn-struct memory local: resolved + encoded at write time through its image pointer.
+      } else {
+        // a storage-source component: freeze the base slot at position (mapping keys / indices /
+        // bounds checks run now); the storage->returndata encode runs at write time (LATE reads,
+        // matching solc - probes P3/P4/P19).
+        storSlot[i] = this.aggComponentSlot(v, ctx, out);
+      }
+    });
+    this.flushTwoPhase(prevPatches, out);
+    // ---- PHASE 2a: materialize the bytes/string references and calldata-field images (all
+    // allocation happens HERE, before the tuple pointer is captured, so nothing can alias the
+    // blob; all reads are post-side-effect). ----
+    const refMat: ({ mp: string; len: string } | null)[] = refs.map((r) => (r ? this.toMemory(r, out) : null));
+    const cdFieldRefs: (string | null)[] = values.map((v, i) => {
+      if (!cdFieldHdr[i]) return null;
+      return this.abiDecFromCdToImage(v.type, cdFieldHdr[i]!, out, `${this.panic()}(0x41)`);
+    });
     const headWordsOf = (t: JethType): number => (isDynamicType(t) ? 1 : abiHeadWords(t));
     const totalHead = types.reduce((n, t) => n + headWordsOf(t), 0);
     const ptr = this.fresh();
@@ -3974,15 +3972,15 @@ ${indent(runtime, 6)}
     types.forEach((t, i) => {
       const headPos = hw * 32;
       if (isBytesLike(t)) {
-        const { mp, len } = refs[i]!;
+        const { mp, len } = refMat[i]!;
         const padded = `and(add(${len}, 0x1f), not(0x1f))`;
         out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
         out.push(`mcopy(${cursor}, ${mp}, add(0x20, ${padded}))`); // [len][data] from mp
         out.push(`${cursor} := add(${cursor}, add(0x20, ${padded}))`);
         hw += 1;
       } else if (isStaticValueType(t)) {
-        reserve(); // the component expr may allocate (keccak256(abi.encode(...)), internal call, ...)
-        out.push(`mstore(add(${ptr}, ${headPos}), ${this.lowerExpr(values[i]!, ctx, out)})`);
+        // W7A: the value was spilled at its source position in phase 1; just store it.
+        out.push(`mstore(add(${ptr}, ${headPos}), ${words[i]!})`);
         hw += 1;
       } else if (
         t.kind === 'array' &&
@@ -4064,48 +4062,51 @@ ${indent(runtime, 6)}
         out.push(`${cursor} := add(${cursor}, ${sz})`);
         hw += 1;
       } else if (!isDynamicType(t) && values[i]!.kind === 'structNew') {
-        // a constructed STATIC struct component (return [x, P(1,2), y]): write its fields INLINE,
-        // directly into the tuple head. W6B: reserve() first - a field ARG may allocate (a hash
-        // expr, or writeAggToMem's aggToMemPtr materializing an aggregate-local field source), and
-        // an unreserved scratch alloc would alias the head words written so far.
-        reserve();
-        this.writeAggToMem(values[i]!, ptr, hw, ctx, out);
+        // a constructed STATIC struct component (return [x, P(1,2), y]): its flat image was frozen
+        // at the component's source position in phase 1 (capture patches re-copied any live memory
+        // ref after all sibling effects); mcopy it inline into the tuple head.
+        out.push(`mcopy(add(${ptr}, ${headPos}), ${staticNewPtr[i]!}, ${abiHeadWords(t) * 32})`);
         hw += abiHeadWords(t);
       } else if (!isDynamicType(t) && values[i]!.kind === 'memAggregate') {
-        // a STATIC memory struct/fixed-array local component: copy its image inline into the head.
+        // a STATIC memory struct/fixed-array local component: copy its image inline into the head
+        // (a pure register alias - the mcopy reads the live image LATE, matching solc; probe P20).
         const mp = this.lowerExpr(values[i]!, ctx, out);
         out.push(`mcopy(add(${ptr}, ${headPos}), ${mp}, ${abiHeadWords(t) * 32})`);
         hw += abiHeadWords(t);
       } else if (dynStructRefs[i]) {
-        // an INLINE-constructed DYNAMIC struct component: offset word + the pre-materialized ABI
-        // blob copied into the tail (the blob was built BEFORE the tuple ptr was captured, so its
-        // constructor allocations cannot alias the tuple buffer).
+        // an INLINE-constructed DYNAMIC struct component the mem-src encoder cannot serialize:
+        // offset word + the ABI blob materialized at the component's position in phase 1.
         const { mp, size } = dynStructRefs[i]!;
         out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
         out.push(`mcopy(${cursor}, ${mp}, ${size})`);
         out.push(`${cursor} := add(${cursor}, ${size})`);
         hw += 1;
-      } else if (isDynamicType(t) && t.kind === 'struct' && values[i]!.kind === 'memDynStructValue') {
-        // a DYNAMIC memory struct local component: offset word + bare tuple head/tail in the tail,
-        // encoded in-place at the cursor. A memory-source pre-pass (collectTupleDyn) allocates
-        // NOTHING (bytes/string and value-array fields are already memory pointers in the local's
-        // head), so it cannot alias the not-yet-reserved head buffer. Mirrors encodeDynStructToBlob.
+      } else if (
+        dynNewSrc[i] ||
+        (isDynamicType(t) && t.kind === 'struct' && values[i]!.kind === 'memDynStructValue')
+      ) {
+        // a DYNAMIC struct component from a pointer-headed memory image (a memory local, or an
+        // inline constructor whose native image was built at its position in phase 1): offset word
+        // + bare tuple head/tail encoded in-place at the cursor, reading through the image LATE
+        // (sibling mutations through captured references are visible - probes A3/P21). The
+        // collectTupleDyn pre-pass allocates NOTHING here (materializeFixedTails = false: the tuple
+        // pointer is already captured; field pointers resolve with bare mloads).
         out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
-        const src = this.tupleSrc(values[i]!, ctx, out);
+        const src = dynNewSrc[i] ?? this.tupleSrc(values[i]!, ctx, out);
         const queue: DynRef[] = [];
-        // materializeFixedTails = false: the tuple head buffer's pointer is ALREADY captured, so the
-        // pre-pass must not allocate; a fixed-outer field queues its bare image pointer instead.
-        this.collectTupleDyn(t, src, queue, ctx, out, false);
+        this.collectTupleDyn(t as JethType & { kind: 'struct' }, src, queue, ctx, out, false);
         let qi = 0;
-        const end = this.encodeTupleInto(t, src, cursor, ctx, out, () => queue[qi++]!);
+        const end = this.encodeTupleInto(t as JethType & { kind: 'struct' }, src, cursor, ctx, out, () => queue[qi++]!);
         out.push(`${cursor} := ${end}`);
         hw += 1;
       } else {
         // a struct / array component, storage-source: static -> inline head; dynamic ->
-        // offset word + tail (both via the recursive storage encoder). W6B: reserve() first -
-        // the slot computation may evaluate an allocating INDEX expression.
+        // offset word + tail (both via the recursive storage encoder). The base slot was frozen at
+        // the component's source position in phase 1; the sloads here read post-sibling storage
+        // (probes P3/P4/P19 - solc's late storage read). W6B: reserve() keeps any internal scratch
+        // above the written buffer.
         reserve();
-        const slot = this.aggComponentSlot(values[i]!, ctx, out);
+        const slot = storSlot[i]!;
         if (isDynamicType(t)) {
           out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
           const sz = this.abiEncFromStorage(t, slot, 0, cursor, out);
@@ -6414,12 +6415,15 @@ ${indent(runtime, 6)}
         // (the tuple-head layout solc uses). The single-word else below would write ONLY the first leaf
         // while hw advances by abiHeadWords, corrupting every later field of a multi-word aggregate.
         // W6A: the inline copy is only sound for a copy-by-value source or a transient consumer.
+        // W7A: inside a two-phase encode's phase 1 a live-memory source records a capture patch
+        // (a late re-copy through the same pointer, after every sibling component's side effects).
         this.assertInlineAggCaptureSound(value.args[i]!, `constructed struct field '${f.name}'`);
         const fsrc = this.aggArgToMemPtr(value.args[i]!, ctx, out);
         const fw = abiHeadWords(f.type);
         for (let k = 0; k < fw; k++) {
           out.push(`mstore(add(${ptr}, ${(hw + k) * 32}), mload(add(${fsrc}, ${k * 32})))`);
         }
+        this.recordCapturePatch(value.args[i]!, hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`, fsrc, fw * 32);
         hw += fw;
       } else {
         out.push(`mstore(${at}, ${this.lowerExpr(value.args[i]!, ctx, out)})`);
@@ -6785,15 +6789,68 @@ ${indent(runtime, 6)}
 
   /** Run `fn` with the inline-capture context FORCED back to PERSISTENT (used by internal-call
    *  argument materialization inside an otherwise-transient encode region: the callee receives the
-   *  image and can mutate it / expect writes through the captured source). */
+   *  image and can mutate it / expect writes through the captured source). W7A: capture-patch
+   *  recording is also suspended - a callee-arg image is the callee's own value, not a component
+   *  of the enclosing two-phase encode. */
   private inPersistentCapture<T>(fn: () => T): T {
     const prev = this.inlineCaptureTransient;
+    const prevPatches = this.twoPhasePatches;
     this.inlineCaptureTransient = false;
+    this.twoPhasePatches = null;
     try {
       return fn();
     } finally {
       this.inlineCaptureTransient = prev;
+      this.twoPhasePatches = prevPatches;
     }
+  }
+
+  // ---- W7A two-phase encode: capture patches --------------------------------
+  // solc's ABI-encoding consumers (abi.encode*/emit/revert/external tuple returns) evaluate every
+  // component LEFT-TO-RIGHT to a value or a REFERENCE handle first, and only then SERIALIZE,
+  // reading through the handles LATE (after every sibling's side effects). JETH's flat static
+  // images and pointer-headed dyn-struct images freeze a ref-captured memory aggregate at the
+  // argument's own position instead. While a two-phase consumer runs its phase 1, the inline-copy
+  // sites (writeAggToMem / allocDynStructToMem) record a PATCH for each such freeze; the consumer
+  // flushes them (one late re-copy per capture, reading through the captured live pointer) after
+  // phase 1 and before serialization, making the frozen image byte-identical to solc's late read.
+  private twoPhasePatches: { dst: string; src: string; bytes: number }[] | null = null;
+
+  /** Begin a two-phase consumer's phase 1 (start collecting capture patches). Returns the
+   *  enclosing consumer's list so nested consumers stay self-contained. */
+  private beginTwoPhase(): { dst: string; src: string; bytes: number }[] | null {
+    const prev = this.twoPhasePatches;
+    this.twoPhasePatches = [];
+    return prev;
+  }
+
+  /** End phase 1: emit the recorded late re-copies and restore the enclosing list. */
+  private flushTwoPhase(prev: { dst: string; src: string; bytes: number }[] | null, out: string[]): void {
+    for (const p of this.twoPhasePatches ?? []) out.push(`mcopy(${p.dst}, ${p.src}, ${p.bytes})`);
+    this.twoPhasePatches = prev;
+  }
+
+  /** Run `fn` with capture-patch recording suspended. Used around SWITCH-BRANCH materializations
+   *  (aggregate ternaries): a patch recorded inside a case block would reference block-scoped Yul
+   *  locals from the top-level flush site (out-of-scope). Those rare arms keep the frozen-copy
+   *  behavior. */
+  private withoutCapturePatches<T>(fn: () => T): T {
+    const prev = this.twoPhasePatches;
+    this.twoPhasePatches = null;
+    try {
+      return fn();
+    } finally {
+      this.twoPhasePatches = prev;
+    }
+  }
+
+  /** Record a late re-copy for a live memory aggregate `arg` frozen into `dst` from pointer `src`
+   *  (both Yul expressions over TOP-LEVEL locals). No-op outside a two-phase phase 1 or for
+   *  alias-safe (copy-by-value) sources - those are copies in solc too. */
+  private recordCapturePatch(arg: Expr, dst: string, src: string, bytes: number): void {
+    if (this.twoPhasePatches === null) return;
+    if (this.isAliasSafeAggCaptureSource(arg)) return;
+    this.twoPhasePatches.push({ dst, src, bytes });
   }
 
   /** True when copying `e` into an inline aggregate field/element position matches solc's OWN
@@ -6889,8 +6946,12 @@ ${indent(runtime, 6)}
           // past this parent), then mcopy it into the field's words. W6A: this flat copy is only
           // sound for a copy-by-value source (storage/calldata/decode) or a transient consumer;
           // an aliasable memory source in a persistent context REJECTS (solc stores a reference).
+          // W7A: inside a two-phase encode's phase 1 a live-memory source additionally records a
+          // capture patch (a late re-copy through the same pointer, after all sibling effects).
           this.assertInlineAggCaptureSound(arg, `constructed struct field '${f.name}'`);
-          out.push(`mcopy(${at(w)}, ${this.aggToMemPtr(arg, ctx, out)}, ${abiHeadWords(f.type) * 32})`);
+          const fldSrc = this.aggToMemPtr(arg, ctx, out);
+          out.push(`mcopy(${at(w)}, ${fldSrc}, ${abiHeadWords(f.type) * 32})`);
+          this.recordCapturePatch(arg, at(w), fldSrc, abiHeadWords(f.type) * 32);
         } else out.push(`mstore(${at(w)}, ${this.lowerExpr(arg, ctx, out)})`);
         w += abiHeadWords(f.type);
       });
@@ -6905,8 +6966,11 @@ ${indent(runtime, 6)}
         else if (aggElem) {
           // W6A: an aggregate ELEMENT of an inline fixed-array literal ([p, q] as a constructed
           // field / a nested literal) has the same flat-copy-vs-reference hazard as a field.
+          // W7A: record a capture patch inside a two-phase encode's phase 1 (late re-copy).
           this.assertInlineAggCaptureSound(el, 'a constructed fixed-array element');
-          out.push(`mcopy(${at(w)}, ${this.aggToMemPtr(el, ctx, out)}, ${ew * 32})`);
+          const elSrc = this.aggToMemPtr(el, ctx, out);
+          out.push(`mcopy(${at(w)}, ${elSrc}, ${ew * 32})`);
+          this.recordCapturePatch(el, at(w), elSrc, ew * 32);
         } else out.push(`mstore(${at(w)}, ${this.lowerExpr(el, ctx, out)})`);
       });
       return;
@@ -10288,49 +10352,19 @@ ${indent(runtime, 6)}
   /** Standard ABI encoding (head/tail, 32-byte aligned) as a bytes value. A value -> a padded word;
    *  a STATIC struct/fixed-array -> abiHeadWords leaf words INLINE (no offset); a bytes/string -> a
    *  head offset + [len][padded data] tail; a DYNAMIC value-array -> a head offset + [len][elems] tail.
-   *  The head uses a cumulative word offset (a static aggregate spans multiple inline head words). */
+   *  The head uses a cumulative word offset (a static aggregate spans multiple inline head words).
+   *
+   *  W7A TWO-PHASE: phase 1 evaluates every argument LEFT-TO-RIGHT to a value local or a reference
+   *  handle (a live memory pointer / a frozen storage slot / a resolved calldata base) - all user
+   *  side effects run here, in source order. After the capture-patch flush, phase 2 SERIALIZES each
+   *  component in order, reading through the handles LATE (memory mutations by later siblings are
+   *  visible; storage components read post-sibling storage; validation Panics fire at serialize
+   *  time) - exactly solc's evaluation model (pinned by the W7A probe battery). */
   private buildAbiEncodeStd(args: Expr[], ctx: LowerCtx, out: string[]): string {
-    type Part =
-      | { word: string }
-      | { inline: true; mp: string; words: number }
-      | { mp: string; len: string }
-      | { mp: string; size: string };
-    const parts: Part[] = args.map((a) => {
-      const t = a.type;
-      if (isBytesLike(t)) return this.toMemory(this.lowerDynamic(a, ctx, out), out);
-      // Batch A: a POINTER-HEADED memory Arr<P,N> (a memAggregate local, an array literal / new Array, an
-      // internal-call return, or a struct-array element m[i] of Arr<P,N>[]) is a STATIC type encoded INLINE,
-      // but its MEMORY image is N pointer words - transcode to the inline ABI body via abiEncFromMem, then
-      // place it inline (mcopy below). EXCLUDED: a static-aggregate FIELD (aggFieldRead, e.g. xs[i].pre) is
-      // ABI-FLATTENED INLINE in its struct image, and a STORAGE / calldata source flattens via
-      // allocAggFromStorage / allocAggFromCalldata - both keep the verbatim aggToMemPtr inline branch below.
-      const memFixedSrc =
-        a.kind === 'arrayLit' ||
-        a.kind === 'newArray' ||
-        a.kind === 'memAggregate' ||
-        a.kind === 'arrayGet' ||
-        a.kind === 'call' ||
-        (a.kind === 'arrayValue' && (a.arr.base.kind === 'memArray' || a.arr.base.kind === 'memArrayExpr'));
-      if (isStaticStructFixedLeafArray(t) && memFixedSrc) {
-        const mp = this.aggArgToMemPtr(a, ctx, out);
-        const blob = this.fresh();
-        out.push(`let ${blob} := mload(0x40)`);
-        const sz = this.fresh();
-        out.push(`let ${sz} := ${this.abiEncFromMem(t, mp, blob, ctx, out)}`);
-        out.push(`mstore(0x40, add(${blob}, ${sz}))`);
-        return { inline: true, mp: blob, words: abiHeadWords(t) };
-      }
-      if (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) {
-        const mp = this.aggToMemPtr(a, ctx, out);
-        // W6C: a fixed ENUM array image is range-checked before it is mcopy'd into the encode
-        // blob (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
-        this.validateEnumMemArray(t, mp, out);
-        return { inline: true, mp, words: abiHeadWords(t) };
-      }
-      if (t.kind === 'struct') return this.encodeDynStructToBlob(a, ctx, out); // dynamic struct -> offset + head/tail tail
-      if (t.kind === 'array') return this.materializeArrayArg(a, ctx, out); // dynamic array (value or nested) -> {mp, size} tail
-      return { word: this.lowerExpr(a, ctx, out) };
-    });
+    const prevPatches = this.beginTwoPhase();
+    const preps = args.map((a) => this.prepEncodeComponent(a, ctx, out));
+    this.flushTwoPhase(prevPatches, out);
+    const parts: EncPart[] = preps.map((finish) => finish(out));
     const headWords = parts.reduce((acc, p) => acc + ('inline' in p ? p.words : 1), 0);
     const headSize = 32 * headWords;
     const total = this.fresh();
@@ -10373,6 +10407,341 @@ ${indent(runtime, 6)}
     return ptr;
   }
 
+  /** W7A phase 1 of one ABI-encode component: evaluate the argument AT ITS SOURCE POSITION to a
+   *  value local or a reference handle, and return the phase-2 finisher that SERIALIZES through the
+   *  handle late. The branch taxonomy (and every codec it delegates to) mirrors the pre-two-phase
+   *  buildAbiEncodeStd byte-for-byte; only the TIMING of the serializing reads/validations moves. */
+  private prepEncodeComponent(a: Expr, ctx: LowerCtx, out: string[]): (o: string[]) => EncPart {
+    const t = a.type;
+    if (isBytesLike(t)) {
+      // position: resolve the reference (index side effects, literal/ternary/encode materialization);
+      // serialize: toMemory reads LATE (a memory ref is an alias; storage loadStr / calldatacopy run
+      // at serialize time - solc reads a storage bytes component post-sibling).
+      const ref = this.lowerDynamic(a, ctx, out);
+      return (o) => this.toMemory(ref, o);
+    }
+    // Batch A: a POINTER-HEADED memory Arr<P,N> (a memAggregate local, an array literal / new Array, an
+    // internal-call return, or a struct-array element m[i] of Arr<P,N>[]) is a STATIC type encoded INLINE,
+    // but its MEMORY image is N pointer words - capture the image pointer at position, transcode to the
+    // flat inline ABI body via abiEncFromMem at SERIALIZE time (late reads through the element pointers).
+    // EXCLUDED: a static-aggregate FIELD (aggFieldRead, e.g. xs[i].pre) is ABI-FLATTENED INLINE in its
+    // struct image, and a STORAGE / calldata source flattens via the branches below.
+    const memFixedSrc =
+      a.kind === 'arrayLit' ||
+      a.kind === 'newArray' ||
+      a.kind === 'memAggregate' ||
+      a.kind === 'arrayGet' ||
+      a.kind === 'call' ||
+      (a.kind === 'arrayValue' && (a.arr.base.kind === 'memArray' || a.arr.base.kind === 'memArrayExpr'));
+    if (isStaticStructFixedLeafArray(t) && memFixedSrc) {
+      const mp = this.aggArgToMemPtr(a, ctx, out);
+      return (o) => ({ inline: true, mp: this.abiEncFromMemBlob(t, mp, ctx, o).mp, words: abiHeadWords(t) });
+    }
+    if (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) {
+      // a STORAGE source: freeze the slot at position (index side effects / bounds checks run now),
+      // copy out of storage at SERIALIZE time (solc reads the slots post-sibling - W7A probes P2/P19).
+      const slot = this.staticAggStorageSlot(a, ctx, out);
+      if (slot !== undefined) {
+        return (o) => ({ inline: true, mp: this.allocAggFromStorage(t, slot, o), words: abiHeadWords(t) });
+      }
+      // a whole STATIC calldata param: immutable data, no position effects; decode + VALIDATE at
+      // serialize time (solc's validation Panics fire after sibling side effects - probe P11 model).
+      if (a.kind === 'cdAggregateValue') {
+        const param = a.param;
+        return (o) => ({ inline: true, mp: this.allocAggFromCalldata(param, t, ctx, o), words: abiHeadWords(t) });
+      }
+      // a STATIC struct element of a calldata D[]: the element base resolves at position (index side
+      // effects + Panic 0x32), the decode+validate copy runs at serialize time.
+      if (a.kind === 'cdStructArrayElem') {
+        const eb = this.cdArrayElemBase(a.arr, a.index, t, ctx, out);
+        return (o) => {
+          const ptr = this.fresh();
+          o.push(`let ${ptr} := mload(0x40)`);
+          const size = this.abiEncFromCd(t, eb, ptr, true, o, true);
+          o.push(`mstore(0x40, add(${ptr}, ${size}))`);
+          return { inline: true, mp: ptr, words: abiHeadWords(t) };
+        };
+      }
+      // memory sources alias (memAggregate / arrayGet / aggFieldRead / call / ternary select);
+      // a structNew/arrayLit freezes its flat image at position with capture PATCHES re-copying
+      // any live ref args after phase 1; abi.decode decodes at position (it is an expression).
+      // W6C: the fixed ENUM range check moves to SERIALIZE time (after the patch flush), solc's
+      // validator_assert position in the two-phase model (probe P11: a reverting later sibling
+      // wins over the Panic; P11b: state-writing siblings roll back identically).
+      const mp = this.aggToMemPtr(a, ctx, out);
+      return (o) => {
+        this.validateEnumMemArray(t, mp, o);
+        return { inline: true, mp, words: abiHeadWords(t) };
+      };
+    }
+    if (t.kind === 'struct') return this.prepDynStructComponent(a, ctx, out);
+    if (t.kind === 'array') return this.prepArrayComponent(a, ctx, out);
+    // a static VALUE component: SPILL at position (source-order evaluation; the pre-two-phase
+    // {word: expr} form deferred the expression - and its side effects - into the write loop).
+    const w = this.fresh();
+    out.push(`let ${w} := ${this.lowerExpr(a, ctx, out)}`);
+    return () => ({ word: w });
+  }
+
+  /** The frozen storage base slot of a STATIC storage aggregate component, or undefined for
+   *  non-storage sources. Index/key side effects and bounds checks run here (at the component's
+   *  source position); the copy out of storage happens at serialize time. */
+  private staticAggStorageSlot(e: Expr, ctx: LowerCtx, out: string[]): string | undefined {
+    if (e.kind === 'structValue') return String(e.baseSlot);
+    if (e.kind === 'mapStorageValue') return this.mappingSlot(e.baseSlot, e.keys, ctx, out);
+    if (e.kind === 'structArrayElem') return this.structArrayElemSlot(e.arr, e.index, ctx, out);
+    if (e.kind === 'placeRead') return this.lowerPlace(e.path, ctx, out).slot;
+    if (e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray') return String(e.arr.base.baseSlot);
+    return undefined;
+  }
+
+  /** W7A phase 1 for a DYNAMIC-STRUCT component: acquire a stable source handle at the component's
+   *  position (ctor args evaluate now - live memory refs are captured as pointers into the fresh
+   *  pointer-headed image; storage slots freeze; memory sources alias), returning the phase-2
+   *  finisher that encodes the head/tail blob LATE through the handle. */
+  private prepDynStructComponent(a: Expr, ctx: LowerCtx, out: string[]): (o: string[]) => EncPart {
+    const struct = a.type as JethType & { kind: 'struct' };
+    // a STORAGE struct: slot at position, encode at serialize time (Cat C direct-from-storage, or
+    // the buildDynStructFromStorage copy + mem-src encode - branch selection identical to the
+    // pre-two-phase encodeDynStructToBlob, just deferred so the sload's happen post-sibling).
+    if (
+      a.kind === 'structValue' ||
+      a.kind === 'mapStorageValue' ||
+      a.kind === 'structArrayElem' ||
+      a.kind === 'placeRead'
+    ) {
+      const slot = this.structSrcSlot(a, ctx, out);
+      return (o) => this.encodeDynStructBlobFromStorage(struct, slot, ctx, o);
+    }
+    // a whole calldata dyn-struct param: immutable, no position effects - materialize + validate late.
+    if (a.kind === 'cdDynStructValue') {
+      return (o) => this.encodeDynStructToBlob(a, ctx, o);
+    }
+    // an inline CONSTRUCTOR whose field set the mem-src encoder can serialize: build the native
+    // pointer-headed image at position (args evaluate left-to-right; memory-ref args are captured
+    // as POINTERS - Solidity reference semantics; static-agg fields freeze with capture patches),
+    // then encode from the image LATE - sibling mutations through the captured refs are visible.
+    if (a.kind === 'structNew' && this.dynStructMemSrcEncodable(struct)) {
+      const headPtr = this.buildDynStructLocal(struct, a, ctx, out);
+      return (o) => this.encodeDynStructBlobFromSrc(struct, { kind: 'mem', headPtr }, ctx, o);
+    }
+    // memory-image sources: freeze the image pointer / run index+call side effects at position,
+    // encode late through the pointer (tupleSrc yields a 'mem' handle for all of these).
+    if (
+      a.kind === 'memDynStructValue' ||
+      a.kind === 'arrayGet' ||
+      a.kind === 'call' ||
+      a.kind === 'ternary' ||
+      a.kind === 'memDynField' ||
+      a.kind === 'memDynNestedField'
+    ) {
+      const src = this.tupleSrc(a, ctx, out);
+      return (o) => this.encodeDynStructBlobFromSrc(struct, src, ctx, o);
+    }
+    // anything else (a cd struct-array element with index effects, an unanticipated kind): keep the
+    // pre-two-phase at-position encode - behavior unchanged for these rare shapes.
+    const blob = this.encodeDynStructToBlob(a, ctx, out);
+    return () => blob;
+  }
+
+  /** True when every field of `struct` (recursing through nested dyn-struct fields) is encodable
+   *  from a pointer-headed MEMORY image ('mem' TupleSrc). A dynamic array with STRUCT elements and
+   *  a fixed-outer dynamic array outside the isDynLeafFixedArray family still need the 'new'
+   *  source; those constructor components keep the at-position encode. */
+  private dynStructMemSrcEncodable(struct: JethType & { kind: 'struct' }): boolean {
+    return struct.fields.every((f) => {
+      if (f.type.kind === 'array' && f.type.length === undefined && f.type.element.kind === 'struct') return false;
+      if (f.type.kind === 'array' && f.type.length !== undefined && isDynamicType(f.type) && !isDynLeafFixedArray(f.type))
+        return false;
+      if (f.type.kind === 'struct' && isDynamicType(f.type)) return this.dynStructMemSrcEncodable(f.type);
+      return true;
+    });
+  }
+
+  /** Encode a dyn-struct head/tail blob from an already-resolved TupleSrc (the tail half of
+   *  encodeDynStructToBlob). All reads go through the src handle - safe to run at serialize time. */
+  private encodeDynStructBlobFromSrc(
+    struct: JethType & { kind: 'struct' },
+    src: TupleSrc,
+    ctx: LowerCtx,
+    out: string[],
+  ): { mp: string; size: string } {
+    const queue: DynRef[] = [];
+    this.collectTupleDyn(struct, src, queue, ctx, out);
+    let qi = 0;
+    const nextRef = (): DynRef => queue[qi++]!;
+    const mp = this.fresh();
+    out.push(`let ${mp} := mload(0x40)`);
+    const end = this.encodeTupleInto(struct, src, mp, ctx, out, nextRef);
+    out.push(`mstore(0x40, ${end})`);
+    return { mp, size: `sub(${end}, ${mp})` };
+  }
+
+  /** Encode a STORAGE dyn-struct component's blob from its frozen base slot: the Cat-C
+   *  direct-from-storage encoder for nested-dynamic-leaf array fields, else the storage->memory
+   *  copy + mem-src encode. Mirrors encodeDynStructToBlob's storage branches exactly. */
+  private encodeDynStructBlobFromStorage(
+    struct: JethType & { kind: 'struct' },
+    slot: string,
+    ctx: LowerCtx,
+    out: string[],
+  ): { mp: string; size: string } {
+    if (struct.fields.some((f) => isDynStructLeafArrayField(f.type))) {
+      const mp = this.fresh();
+      out.push(`let ${mp} := mload(0x40)`);
+      const size = this.fresh();
+      out.push(`let ${size} := ${this.abiEncFromStorage(struct, slot, 0, mp, out)}`);
+      out.push(`mstore(0x40, add(${mp}, ${size}))`);
+      return { mp, size };
+    }
+    const headPtr = this.buildDynStructFromStorage(struct, slot, ctx, out);
+    return this.encodeDynStructBlobFromSrc(struct, { kind: 'mem', headPtr }, ctx, out);
+  }
+
+  /** ABI-encode a memory image into a fresh tail blob via abiEncFromMem (pure reads through the
+   *  image pointers - safe at serialize time). Returns {mp, size}. */
+  private abiEncFromMemBlob(t: JethType, img: string, ctx: LowerCtx, out: string[]): { mp: string; size: string } {
+    const dst = this.fresh();
+    out.push(`let ${dst} := mload(0x40)`);
+    const sz = this.fresh();
+    out.push(`let ${sz} := ${this.abiEncFromMem(t, img, dst, ctx, out)}`);
+    out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+    return { mp: dst, size: sz };
+  }
+
+  /** Re-encode a resolved calldata header into a fresh ABI tail blob via abiEncFromCd (immutable
+   *  source; the validation reverts fire at serialize time, matching solc). Returns {mp, size}. */
+  private abiEncFromCdBlob(
+    t: JethType,
+    hdr: string,
+    validate: boolean,
+    out: string[],
+  ): { mp: string; size: string } {
+    const dst = this.fresh();
+    out.push(`let ${dst} := mload(0x40)`);
+    const sz = this.fresh();
+    out.push(`let ${sz} := ${this.abiEncFromCd(t, hdr, dst, validate, out, true)}`);
+    out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+    return { mp: dst, size: sz };
+  }
+
+  /** W7A phase 1 for a DYNAMIC-ARRAY component: freeze the source handle at position (memory
+   *  images alias; storage length-slots and calldata headers freeze - index side effects run
+   *  now), returning the phase-2 finisher that builds the {mp, size} ABI tail LATE. Branch
+   *  taxonomy mirrors materializeArrayArg; the serializing codecs are identical. */
+  private prepArrayComponent(a: Expr, ctx: LowerCtx, out: string[]): (o: string[]) => EncPart {
+    // a dyn-array field of a calldata dyn-struct array element: header at position (index effects,
+    // Panic 0x32), calldata re-encode late (EMPTY-revert decode flavors preserved).
+    if (a.kind === 'cdFieldAggValue' || a.kind === 'cdNestedFieldAggValue') {
+      const hdr =
+        a.kind === 'cdFieldAggValue'
+          ? this.cdFieldArrayHeader(a.place, ctx, out)
+          : this.cdNestedFieldArrayHeader(a.place, a.indices, ctx, out);
+      const validate = !isValueLeafArray(a.type);
+      return (o) => this.abiEncFromCdBlob(a.type, hdr, validate, o);
+    }
+    const memSourced =
+      a.kind === 'arrayLit' ||
+      a.kind === 'newArray' ||
+      (a.kind === 'arrayValue' && (a.arr.base.kind === 'memArray' || a.arr.base.kind === 'memArrayExpr'));
+    const codecSourced =
+      (isNestedValueArray(a.type) && isDynamicType(a.type)) ||
+      isAggregateLeafArray(a.type) ||
+      (isStaticStructAnyLeafArray(a.type) && isDynamicType(a.type));
+    // a memory-image nested/aggregate-leaf array: image pointer at position (a memArray local
+    // ALIASES; a literal builds its pointer-headed image now, element refs captured as pointers),
+    // abiEncFromMem transcode late (reads through the pointers post-sibling).
+    if ((codecSourced && memSourced) || this.isMemFixedDynLeafArg(a)) {
+      const img = this.nestedMemImagePtr(a, ctx, out);
+      return (o) => this.abiEncFromMemBlob(a.type, img, ctx, o);
+    }
+    if (
+      (a.kind === 'newArray' || a.kind === 'call') &&
+      a.type.kind === 'array' &&
+      a.type.length === undefined &&
+      isStaticValueType(a.type.element)
+    ) {
+      // a value-element dynamic array produced by `new Array<T>(n)` / an internal call: its
+      // [len][elems] image IS the ABI tail. Freeze the pointer at position (the call / length
+      // expression runs now); the size reads the length late (immutable in place).
+      const m = this.fresh();
+      out.push(`let ${m} := ${this.lowerExpr(a, ctx, out)}`);
+      return () => ({ mp: m, size: `mul(add(mload(${m}), 1), 0x20)` });
+    }
+    if (a.kind === 'arrayValue') {
+      const base = a.arr.base;
+      if (base.kind === 'cdDynArrayField') {
+        const hdr = this.cdFieldArrayHeader(base.place, ctx, out);
+        const validate = !isValueLeafArray(a.type);
+        return (o) => this.abiEncFromCdBlob(a.type, hdr, validate, o);
+      }
+      if (base.kind === 'cdDynFixedDynField') {
+        const hdr = this.cdFieldArrayHeader(base.place, ctx, out);
+        const validate = !isValueLeafArray(a.type);
+        const len = base.length;
+        return (o) => {
+          o.push(`if gt(add(${hdr}, ${len * 32}), calldatasize()) { revert(0, 0) }`);
+          return this.abiEncFromCdBlob(a.type, hdr, validate, o);
+        };
+      }
+      if (base.kind === 'memArray' || base.kind === 'memArrayExpr') {
+        // a memory value-array local / expression: ALIAS the [len][elems] image at position; the
+        // W6C enum range-check and the size read run at serialize time (post-sibling).
+        const mp = this.fresh();
+        const src = base.kind === 'memArray' ? this.ctxLookup(ctx, base.varName) : this.lowerExpr(base.expr, ctx, out);
+        out.push(`let ${mp} := ${src}`);
+        return (o) => {
+          this.validateEnumMemArray(a.type, mp, o);
+          const size = this.fresh();
+          o.push(`let ${size} := mul(add(mload(${mp}), 1), 0x20)`);
+          return { mp, size };
+        };
+      }
+      if (
+        base.kind === 'stateArray' ||
+        base.kind === 'mapArray' ||
+        base.kind === 'placeArray' ||
+        base.kind === 'fixedArray'
+      ) {
+        // a STORAGE array: freeze the length slot at position (mapping keys / place indices run
+        // now), copy out of storage at serialize time (solc reads post-sibling - probe P1).
+        let lenSlot: string;
+        if (base.kind === 'stateArray') lenSlot = String(base.slot);
+        else if (base.kind === 'mapArray') lenSlot = this.mappingSlot(base.baseSlot, base.keys, ctx, out);
+        else if (base.kind === 'placeArray') lenSlot = this.lowerPlace(base.path, ctx, out).slot;
+        else lenSlot = String((base as { baseSlot: bigint }).baseSlot);
+        return (o) => {
+          const sdst = this.fresh();
+          o.push(`let ${sdst} := mload(0x40)`);
+          const ssz = this.abiEncFromStorage(a.type, lenSlot, 0, sdst, o);
+          const sm = this.fresh();
+          o.push(`let ${sm} := ${ssz}`);
+          o.push(`mstore(0x40, add(${sdst}, ${sm}))`);
+          return { mp: sdst, size: sm };
+        };
+      }
+      if (base.kind === 'calldataArray') {
+        // a whole calldata array param: immutable, no position effects; the validating echo runs
+        // at serialize time (its reverts fire post-sibling, the solc model).
+        return (o) => {
+          const { ptr, size } = this.echoParam((base as { name: string }).name, a.type, ctx, o, true);
+          const mp = this.fresh();
+          o.push(`let ${mp} := add(${ptr}, 0x20)`);
+          const sz = this.fresh();
+          o.push(`let ${sz} := sub(${size}, 0x20)`);
+          return { mp, size: sz };
+        };
+      }
+      // cdSlice and any other base: keep the pre-two-phase at-position materialization.
+      const r = this.materializeArrayArg(a, ctx, out);
+      return () => r;
+    }
+    // any other kind: preserve the pre-two-phase behavior (at-position materialization / the
+    // JETH900 reject for genuinely unsupported shapes).
+    const r = this.materializeArrayArg(a, ctx, out);
+    return () => r;
+  }
+
   /** Packed encoding (abi.encodePacked) as a bytes value: each value contributes its byte-width
    *  (no padding/length), each bytes/string its raw content. The final partial word is zeroed so the
    *  bytes value's tail padding is clean (a slack word is allocated to keep that write in-bounds).
@@ -10397,26 +10766,56 @@ ${indent(runtime, 6)}
       out.push(`mstore(add(${desc}, ${i * 0x40 + 0x20}), ${len})`);
       out.push(`${total} := add(${total}, ${len})`);
     };
+    // W7A TWO-PHASE: each part evaluates LEFT-TO-RIGHT at its source position; anything whose
+    // CONTENT solc reads at serialize time is deferred to a finish pass after every part's side
+    // effects (storage/calldata bytes copies, storage array copies, enum range checks - probe P7:
+    // a storage array part reads post-sibling storage). Parts that are already late-reading stay
+    // fully at-position and keep NO live Yul locals across the encode: a VALUE part is frozen into
+    // its scratch word at its position (value semantics - identical before/after), and a MEMORY
+    // bytes part's descriptor holds a live data pointer whose content the FINAL copy loop reads
+    // late anyway. (Spilling those to locals re-created the StackTooDeep the descriptor-array
+    // design exists to prevent: a 10-interpolation template = 10+ live locals.)
+    const prevPatches = this.beginTwoPhase();
+    const preps: ((o: string[]) => void)[] = [];
     args.forEach((a, i) => {
       const t = a.type;
       if (isBytesLike(t)) {
-        // bytes/string: its raw content (data after the [len] word).
-        const { mp, len } = this.toMemory(this.lowerDynamic(a, ctx, out), out);
-        writeDesc(i, `add(${mp}, 0x20)`, len);
-      } else if (t.kind === 'array') {
-        // a value-element array: each element padded to 32 bytes (its ABI element words), no length.
-        if (t.length !== undefined) {
-          const pm = this.aggToMemPtr(a, ctx, out);
-          // W6C: a fixed ENUM array is range-checked before its words enter the packed blob
-          // (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
-          this.validateEnumMemArray(t, pm, out);
-          writeDesc(i, pm, String(t.length * 32));
+        const ref = this.lowerDynamic(a, ctx, out);
+        if (ref.src === 'memory') {
+          // descriptor -> the live [len][data] pointer; the final copy loop reads content LATE.
+          writeDesc(i, `add(${ref.ptr}, 0x20)`, `mload(${ref.ptr})`);
         } else {
-          const m = this.materializeArrayArg(a, ctx, out); // {mp,size} = [len][elems]
-          writeDesc(i, `add(${m.mp}, 0x20)`, `sub(${m.size}, 0x20)`);
+          // storage/calldata: the copy out of the source runs at serialize time (late reads).
+          preps.push((o) => {
+            const { mp, len } = this.toMemory(ref, o);
+            writeDesc(i, `add(${mp}, 0x20)`, len);
+          });
         }
+      } else if (t.kind === 'array' && t.length !== undefined && !isDynamicType(t)) {
+        // a static fixed array: freeze the handle at position (storage slot / memory alias / ctor
+        // image with capture patches); copy out of storage + range-check enums at serialize time.
+        const slot = this.staticAggStorageSlot(a, ctx, out);
+        if (slot !== undefined) {
+          preps.push((o) => writeDesc(i, this.allocAggFromStorage(t, slot, o), String((t.length as number) * 32)));
+        } else {
+          const pm = this.aggToMemPtr(a, ctx, out);
+          preps.push((o) => {
+            // W6C: a fixed ENUM array is range-checked before its words enter the packed blob
+            // (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
+            this.validateEnumMemArray(t, pm, o);
+            writeDesc(i, pm, String((t.length as number) * 32));
+          });
+        }
+      } else if (t.kind === 'array') {
+        // a dynamic array: handle at position, ABI tail built late.
+        const finish = this.prepArrayComponent(a, ctx, out);
+        preps.push((o) => {
+          const m = finish(o) as { mp: string; size: string };
+          writeDesc(i, `add(${m.mp}, 0x20)`, `sub(${m.size}, 0x20)`);
+        });
       } else {
-        // a value: stage its left-aligned `width` content bytes in a scratch word, descriptor -> that word.
+        // a value: stage its left-aligned `width` content bytes in a scratch word AT ITS POSITION
+        // (frozen value semantics; no local survives the part), descriptor -> that word.
         const width = storageByteSize(t);
         const val = this.lowerExpr(a, ctx, out);
         const aligned = t.kind === 'bytesN' || width === 32 ? val : `shl(${(32 - width) * 8}, ${val})`;
@@ -10426,6 +10825,8 @@ ${indent(runtime, 6)}
         writeDesc(i, w, String(width));
       }
     });
+    this.flushTwoPhase(prevPatches, out);
+    preps.forEach((f) => f(out));
     // allocate the result LAST (length word + rounded data + a slack word for the trailing zero).
     const ptr = this.fresh();
     out.push(`let ${ptr} := ${this.alloc()}(add(0x40, and(add(${total}, 0x1f), not(0x1f))))`);
@@ -10603,10 +11004,15 @@ ${indent(runtime, 6)}
         const c = this.lowerExpr(e.cond, ctx, out);
         const ptr = this.fresh();
         out.push(`let ${ptr} := 0`);
+        // W7A: suspend capture-patch recording inside the switch-case branch blocks.
         const thenOut: string[] = [];
-        const { mp: mpT } = this.toMemory(this.lowerDynamic(e.then, ctx, thenOut), thenOut);
+        const { mp: mpT } = this.withoutCapturePatches(() =>
+          this.toMemory(this.lowerDynamic(e.then, ctx, thenOut), thenOut),
+        );
         const elseOut: string[] = [];
-        const { mp: mpE } = this.toMemory(this.lowerDynamic(e.else, ctx, elseOut), elseOut);
+        const { mp: mpE } = this.withoutCapturePatches(() =>
+          this.toMemory(this.lowerDynamic(e.else, ctx, elseOut), elseOut),
+        );
         out.push(`switch ${c}`);
         out.push('case 0 {');
         for (const l of elseOut) out.push('  ' + l);
@@ -13418,6 +13824,16 @@ type TupleSrc =
   | { kind: 'new'; fields: StructField[]; args: Expr[] }
   | { kind: 'cd'; base: string }
   | { kind: 'mem'; headPtr: string }; // a memory dynamic-struct local (one word per field: value inline, bytes/string a pointer)
+
+// W7A: one prepared component of a two-phase ABI-encode consumer (abi.encode* / event data /
+// custom-error payload). `word` = a value spilled at its source position; `inline` = a static
+// aggregate's flat image pointer (mcopy'd into the head at serialize time); `{mp,len}` = a
+// bytes/string [len][data] pointer; `{mp,size}` = a self-contained ABI tail blob.
+type EncPart =
+  | { word: string }
+  | { inline: true; mp: string; words: number }
+  | { mp: string; len: string }
+  | { mp: string; size: string };
 
 // A lowered dynamic bytes/string value, by source location.
 type DynRef =
