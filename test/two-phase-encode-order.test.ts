@@ -218,6 +218,29 @@ describe('W7A: two-phase external tuple-literal returns (the five pre-passes are
     // NON-VACUITY: f() returns the POST-push array [5, 9] (length 2), not the pre-push [5].
     expect(f!.slice(2 + 64 * 2, 2 + 64 * 3)).toBe(pad32(2n));
   });
+
+  it('STORAGE bytes/string FIELD tuple components read POST-sibling (refs pre-pass, both orderings)', async () => {
+    // A storage bytes/string FIELD as a tuple component alongside a mutating sibling: the value must be
+    // snapshotted at serialize time (after the sibling), exactly like the dyn-array/struct components above.
+    // Covers both orderings and a >31-byte (multi-slot) string regrow. bf is slot 0, s is slot 1.
+    const [f, g] = await diff(
+      `@contract class C { @state bf: bytes; @state s: string;
+        mutB(): u256 { this.bf = bytes("changed"); return 7n; }
+        mutS(): u256 { this.s = "a-much-longer-string-than-before!!"; return 8n; }
+        @external f(): [bytes, u256] { this.bf = bytes("aa"); return [this.bf, this.mutB()]; }
+        @external g(): [u256, string] { this.s = "hi"; return [this.mutS(), this.s]; } }`,
+      `contract C { bytes bf; string s;
+        function mutB() internal returns (uint256) { bf = "changed"; return 7; }
+        function mutS() internal returns (uint256) { s = "a-much-longer-string-than-before!!"; return 8; }
+        function f() external returns (bytes memory, uint256) { bf = "aa"; return (bf, mutB()); }
+        function g() external returns (uint256, string memory) { s = "hi"; return (mutS(), s); } }`,
+      [['f()'], ['g()']],
+    );
+    // NON-VACUITY: f()'s bytes component is the POST-mutation "changed" (len 7), not the frozen "aa" (len 2).
+    expect(f!.slice(2 + 64 * 2, 2 + 64 * 3)).toBe(pad32(7n));
+    // g()'s string component (after the u256) is the POST-mutation 34-byte value, not "hi" (len 2).
+    expect(g!.slice(2 + 64 * 2, 2 + 64 * 3)).toBe(pad32(34n));
+  });
 });
 
 describe('W7A: two-phase emit data / revert custom-error payloads', () => {
