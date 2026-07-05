@@ -282,7 +282,20 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
     );
   });
 
-  it('KEPT rejects: tuple-assign form, unsupported struct shape, internal-call tuple, mapping field', () => {
+  it('W5C lift: a struct with a FIXED-outer dynamic-element field (Arr<string,N>) destructures byte-identically', async () => {
+    // Previously a clean JETH243 reject; the W5C dyn-struct fixed-outer-field codec lifts it.
+    await eqLinked(
+      `@struct class S { a: u256; ss: Arr<string, 2>; }
+       @library class L { @external @pure mm(x: u256): [u256, S] { let v: S = S(x, ["a-string-well-beyond-thirty-one-bytes-long!","b"]); return [x, v]; } }
+       @contract class C { @external go(x: u256): [u256, string, string, u256] { let [a, s] = L.mm(x); return [a + s.a, s.ss[0n], s.ss[1n], s.ss.length]; } }`,
+      `struct S { uint256 a; string[2] ss; }
+       library L { function mm(uint256 x) external pure returns (uint256, S memory) { S memory v = S(x, ["a-string-well-beyond-thirty-one-bytes-long!","b"]); return (x, v); } }
+       contract C { function go(uint256 x) external returns (uint256, string memory, string memory, uint256) { (uint256 a, S memory s) = L.mm(x); return (a + s.a, s.ss[0], s.ss[1], s.ss.length); } }`,
+      [['go(uint256)', W(9n)]],
+    );
+  });
+
+  it('KEPT rejects: tuple-assign form, internal-call tuple, mapping field', () => {
     // tuple ASSIGN to a pre-declared struct local still rejects (needs a deep copy the path does not wire).
     expect(
       codes(
@@ -291,14 +304,6 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
          @contract class C { @external go(x: u256): u256 { let s: S = S(0n, ""); let a: u256 = 0n; [a, s] = L.mm(x); return a + s.a; } }`,
       ),
     ).toContain('JETH066');
-    // a struct with a gated field family (Arr<string,N>) keeps the clean JETH243 reject.
-    expect(
-      codes(
-        `@struct class S { a: u256; ss: Arr<string, 2>; }
-         @library class L { @external @pure mm(x: u256): [u256, S] { let v: S = S(x, ["a","b"]); return [x, v]; } }
-         @contract class C { @external go(x: u256): u256 { let [a, s] = L.mm(x); return a + s.a; } }`,
-      ),
-    ).toContain('JETH243');
     // an INTERNAL-call tuple with a dyn-struct component stays gated (separate 'call'-source path).
     expect(
       codes(

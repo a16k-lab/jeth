@@ -1536,6 +1536,24 @@ ${indent(runtime, 6)}
             out.push(`return(${ptr}, ${size})`);
             break;
           }
+          // W5C: `return s.xs` - a whole FIXED-outer dynamic-element FIELD of a calldata dyn-struct
+          // param (xs: Arr<string,N>). Re-encode directly from the field's calldata tail (the N-word
+          // offset table) via abiEncFromCd's fixed-of-dynamic branch, with the [0x20] top-level
+          // wrapper (the type is dynamic). Mirrors echoCdFieldArray's whole-decode semantics.
+          if (s.value.kind === 'arrayValue' && s.value.arr.base.kind === 'cdDynFixedDynField') {
+            const b = s.value.arr.base;
+            const hdr = this.cdFieldArrayHeader(b.place, ctx, out);
+            out.push(`if gt(add(${hdr}, ${b.length * 32}), calldatasize()) { revert(0, 0) }`);
+            const validate = !isValueLeafArray(s.value.type);
+            const ptr = this.fresh();
+            out.push(`let ${ptr} := mload(0x40)`);
+            out.push(`mstore(${ptr}, 0x20)`);
+            const size = this.fresh();
+            out.push(`let ${size} := ${this.abiEncFromCd(s.value.type, hdr, `add(${ptr}, 0x20)`, validate, out, false)}`);
+            out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
+            out.push(`return(${ptr}, add(0x20, ${size}))`);
+            break;
+          }
           // a whole STORAGE array whose element is DYNAMIC (string[], D[]) -> the
           // storage-source recursive encoder (unbounded nesting).
           if (s.value.kind === 'arrayValue' && s.value.arr.base.kind === 'stateArray' && isDynamicType(s.value.type)) {
@@ -1706,13 +1724,17 @@ ${indent(runtime, 6)}
             // W5B shape 1: a CALLDATA fixed-of-dynamic PARAM source (let ys: Arr<string,N> = p) DEEP-COPIES
             // via the same aggArgToMemPtr route (abiDecFromCdToImage's fixed-of-dynamic branch at the
             // param's offset-table base), byte-identical to solc's `string[N] memory ys = p` copy.
+            // W5C: a FIXED-outer dynamic-element FIELD of a calldata dyn-struct (let t: Arr<string,2>
+            // = p.xs) DEEP-COPIES via the same aggArgToMemPtr route (cdFieldArrayHeader + table-fits +
+            // abiDecFromCdToImage's fixed-of-dynamic branch, Panic 0x41 alloc cap).
             else if (
               (s.init.kind === 'arrayValue' &&
                 (s.init.arr.base.kind === 'fixedArray' ||
                   s.init.arr.base.kind === 'stateArray' ||
                   s.init.arr.base.kind === 'mapArray' ||
                   s.init.arr.base.kind === 'placeArray' ||
-                  s.init.arr.base.kind === 'calldataArray')) ||
+                  s.init.arr.base.kind === 'calldataArray' ||
+                  s.init.arr.base.kind === 'cdDynFixedDynField')) ||
               s.init.kind === 'mapStorageValue'
             )
               out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
@@ -3946,7 +3968,9 @@ ${indent(runtime, 6)}
         out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
         const src = this.tupleSrc(values[i]!, ctx, out);
         const queue: DynRef[] = [];
-        this.collectTupleDyn(t, src, queue, ctx, out);
+        // materializeFixedTails = false: the tuple head buffer's pointer is ALREADY captured, so the
+        // pre-pass must not allocate; a fixed-outer field queues its bare image pointer instead.
+        this.collectTupleDyn(t, src, queue, ctx, out, false);
         let qi = 0;
         const end = this.encodeTupleInto(t, src, cursor, ctx, out, () => queue[qi++]!);
         out.push(`${cursor} := ${end}`);
@@ -4163,6 +4187,16 @@ ${indent(runtime, 6)}
       }
       return nc;
     }
+    // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>/Arr<u256[],N>). The pre-pass queued its
+    // self-contained ABI tail (N-word offset table + element tails); walk it packed-padded with the
+    // SAME packTopicArray a top-level indexed fixed-outer array uses (base = the table, count = N).
+    if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+      const ref = nextRef();
+      if (ref.src !== 'memory' || !ref.tailBytes)
+        throw new UnsupportedError('a fixed-outer dynamic-element struct field must be pre-materialized');
+      this.packTopicArray(f.type, ref.ptr, String(f.type.length), cursor, out);
+      return cursor;
+    }
     if (f.type.kind === 'struct') {
       const nestedSrc = this.nestedTupleSrc(f, src, fieldIdx, headWord, ctx, out);
       return this.topicEncodeStruct(f.type, nestedSrc, cursor, ctx, out, nextRef);
@@ -4281,6 +4315,14 @@ ${indent(runtime, 6)}
         out.push(`let ${len} := mload(${off})`);
         this.packTopicArray(f.type, `add(${off}, 0x20)`, len, cursor, out);
         hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynamicType(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element array field (Arr<string,N>/Arr<u256[],N>): behind a head
+        // OFFSET too, but the tail has NO length word - it IS the N-word per-element offset table
+        // (offsets relative to the table start). Walk it with packTopicArray at count = N.
+        const off = this.fresh();
+        out.push(`let ${off} := add(${ptr}, mload(${at}))`);
+        this.packTopicArray(f.type, off, String(f.type.length), cursor, out);
+        hw += 1;
       } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
         // Edge C: a NESTED DYNAMIC struct field (inner: Q): behind a head OFFSET (relative to ptr). Recurse
         // from the nested struct's own start - its members lay out packed-padded by the same rules.
@@ -4305,6 +4347,15 @@ ${indent(runtime, 6)}
     queue: DynRef[],
     ctx: LowerCtx,
     out: string[],
+    // W5C: whether a FIXED-outer dynamic-element field may be pre-materialized to a fresh ABI-tail blob
+    // (an ALLOCATION) here in the pre-pass. TRUE in the callers that capture their output pointer AFTER
+    // this pre-pass (encodeDynStructReturn / encodeDynStructToBlob / encodeTopicBlob). FALSE in the
+    // alloc-forbidden contexts whose output pointer is already captured (encodeReturnTuple's
+    // memDynStructValue component, abiEncDynStructFromMem at a caller-provided dst): there the 'mem'
+    // source queues the BARE image pointer (a single mload, no allocation) and encodeDynFieldInto
+    // transcodes it in place at the cursor. The topic encoder REQUIRES the materialized tail, and is
+    // only reachable from encodeTopicBlob (materializeFixedTails = true).
+    materializeFixedTails = true,
   ): void {
     let hw = 0;
     struct.fields.forEach((f, i) => {
@@ -4324,9 +4375,27 @@ ${indent(runtime, 6)}
           // already a pointer; a constructor arg is materialized via aggArgToMemPtr, allocating here
           // in the pre-pass, below the eventual tuple blob).
           queue.push(this.arrayFieldRef(f, src, i, hw, ctx, out));
+        } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+          // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>).
+          // Materialize its SELF-CONTAINED ABI tail (the N-word offset table, offsets relative to the
+          // TABLE start, + element tails - a position-independent blob) here in the PRE-PASS (allocs
+          // stay below the eventual output blob), carrying tailBytes so both consumers reuse proven
+          // codecs verbatim: encodeDynFieldInto's tail-blob copy branch mcopy's it into the tuple;
+          // topicEncodeDynField walks it packed-padded via packTopicArray (count = N). In an
+          // alloc-forbidden context (materializeFixedTails = false, output pointer already captured)
+          // a 'mem' source instead queues the BARE image pointer (one mload, NO allocation);
+          // encodeDynFieldInto then transcodes it at the cursor via abiEncFromMem.
+          if (!materializeFixedTails && src.kind === 'mem') {
+            const at = hw === 0 ? src.headPtr : `add(${src.headPtr}, ${hw * 32})`;
+            const img = this.fresh();
+            out.push(`let ${img} := mload(${at})`);
+            queue.push({ src: 'memory', ptr: img });
+          } else {
+            queue.push(this.fixedDynFieldTailRef(f.type, src, i, hw, ctx, out));
+          }
         } else if (f.type.kind === 'struct') {
           const nestedSrc = this.nestedTupleSrc(f, src, i, hw, ctx, out);
-          this.collectTupleDyn(f.type, nestedSrc, queue, ctx, out);
+          this.collectTupleDyn(f.type, nestedSrc, queue, ctx, out, materializeFixedTails);
         } else {
           throw new UnsupportedError(`unsupported dynamic struct field kind '${f.type.kind}'`);
         }
@@ -4379,6 +4448,15 @@ ${indent(runtime, 6)}
       // a DYNAMIC-struct ternary: lower it to a pointer-headed memory image (short-circuit
       // select of buildDynStructLocal per branch), then encode from that mem source.
       return { kind: 'mem', headPtr: this.lowerExpr(value, ctx, out) };
+    }
+    // W5C (family-wide): a DYNAMIC-struct-returning internal call used directly (`return this.mk(c)` /
+    // abi.encode(this.mk(c))): the call yields the pointer-headed image pointer (the same ALIAS
+    // buildDynStructLocal's `call` case binds); FREEZE it (the encoder reads it multiple times, and an
+    // inline userfn call expression would otherwise be re-invoked per use). Previously threw JETH900.
+    if (value.kind === 'call') {
+      const p = this.fresh();
+      out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
+      return { kind: 'mem', headPtr: p };
     }
     // a whole STORAGE dynamic struct (this.d / this.m[k] / this.recs[i] / placeRead): copy it
     // into a fresh memory image (value fields inline, bytes/string + dyn value-array fields a
@@ -4545,6 +4623,28 @@ ${indent(runtime, 6)}
       }
       return nc;
     }
+    // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>). The pre-pass
+    // queued either its SELF-CONTAINED ABI tail (tailBytes set: N-word offset table relative to the
+    // table start + element tails, position-independent - copy it verbatim at the cursor), or, in an
+    // alloc-forbidden context, the BARE pointer-headed image (no tailBytes) - transcode it at the
+    // cursor via abiEncFromMem's fixed-outer branch (identical bytes; writes only at/past the cursor).
+    if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+      const ref = nextRef();
+      if (ref.src !== 'memory')
+        throw new UnsupportedError('a fixed-outer dynamic-element struct field must be memory-resolved');
+      if (!ref.tailBytes) {
+        const sz = this.fresh();
+        out.push(`let ${sz} := ${this.abiEncFromMem(f.type, ref.ptr, cursor, ctx, out)}`);
+        const nc = this.fresh();
+        out.push(`let ${nc} := add(${cursor}, ${sz})`);
+        return nc;
+      }
+      const nc = this.fresh();
+      out.push(`let ${nc} := add(${cursor}, ${ref.tailBytes})`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${cursor})) { ${this.panic()}(0x41) }`);
+      out.push(`mcopy(${cursor}, ${ref.ptr}, ${ref.tailBytes})`);
+      return nc;
+    }
     if (f.type.kind === 'struct') {
       // nested dynamic struct: encode it as its own tuple starting at cursor.
       const nestedSrc = this.nestedTupleSrc(f, src, fieldIdx, headWord, ctx, out);
@@ -4616,6 +4716,63 @@ ${indent(runtime, 6)}
       return { src: 'memory', ptr };
     }
     throw new UnsupportedError('returning a calldata struct param with an array field is not supported yet');
+  }
+
+  /** W5C: resolve a FIXED-outer DYNAMIC-element array field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>)
+   *  of a dyn-struct tuple to its SELF-CONTAINED ABI tail {ptr, tailBytes}: the N-word offset table
+   *  (offsets relative to the TABLE start) + element tails, a position-independent blob. Runs in the
+   *  collectTupleDyn PRE-PASS (all allocation happens below the eventual output blob). Consumers:
+   *  encodeDynFieldInto mcopy's it verbatim behind the field's head offset; topicEncodeDynField walks it
+   *  packed-padded via packTopicArray (count = N).
+   *   - 'new' (an inline constructor arg): materialize the pointer-headed image (aggArgToMemPtr handles a
+   *     literal via buildNestedMemArrayLit, a memory local/param alias, a storage/calldata copy), then
+   *     transcode via abiEncFromMem's fixed-outer branch - the materializeFixedDynLeafTail pattern.
+   *   - 'mem' (a memory dyn-struct image): the field head word holds the image pointer; transcode it.
+   *   - 'cd' (a calldata dyn-struct tuple): the field head word is an offset to the calldata tail;
+   *     re-encode it via abiEncFromCd (validating, Panic 0x41 alloc cap - solc's calldata deep-copy). */
+  private fixedDynFieldTailRef(
+    ft: JethType & { kind: 'array' },
+    src: TupleSrc,
+    fieldIdx: number,
+    headWord: number,
+    ctx: LowerCtx,
+    out: string[],
+  ): DynRef {
+    if (src.kind === 'new' || src.kind === 'mem') {
+      let img: string;
+      if (src.kind === 'new') {
+        img = this.aggArgToMemPtr(src.args[fieldIdx]!, ctx, out);
+      } else {
+        const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
+        img = this.fresh();
+        out.push(`let ${img} := mload(${at})`);
+      }
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const sz = this.fresh();
+      out.push(`let ${sz} := ${this.abiEncFromMem(ft, img, dst, ctx, out)}`);
+      out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+      return { src: 'memory', ptr: dst, tailBytes: sz };
+    }
+    // calldata: field head word = offset (relative to the tuple start) to the N-word offset table.
+    // A 'cd' source only reaches collectTupleDyn from the abi.encode / event-data / indexed-topic /
+    // custom-error materialization (a whole-cd RETURN rides echoParam / echoCdDynField instead), so the
+    // oversized-length cap is the DECODE/re-encode flavor: EMPTY revert (capEmptyRevert = true),
+    // probe-verified vs solc 0.8.35 (abi.encode/emit of a cd struct with a huge inner string length
+    // reverts EMPTY; only the return-echo path Panics 0x41).
+    const offPtr = headWord === 0 ? src.base : `add(${src.base}, ${headWord * 32})`;
+    const so = this.fresh();
+    out.push(`let ${so} := calldataload(${offPtr})`);
+    out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+    const se = this.fresh();
+    out.push(`let ${se} := add(${src.base}, ${so})`);
+    out.push(`if gt(add(${se}, ${ft.length! * 32}), calldatasize()) { revert(0, 0) }`);
+    const dst = this.fresh();
+    out.push(`let ${dst} := mload(0x40)`);
+    const sz = this.fresh();
+    out.push(`let ${sz} := ${this.abiEncFromCd(ft, se, dst, true, out, true)}`);
+    out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+    return { src: 'memory', ptr: dst, tailBytes: sz };
   }
 
   /** Build the value source for a nested (sub)struct field. */
@@ -5048,6 +5205,25 @@ ${indent(runtime, 6)}
       const last = place.steps[place.steps.length - 1]!;
       const offset = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
       return { src: 'calldata', offset, length: String(arr.base.length), elem: arr.elem };
+    }
+    if (arr.base.kind === 'cdDynFixedDynField') {
+      // W5C: a FIXED-outer DYNAMIC-element field (s.xs where xs: Arr<string,N>/Arr<bytes,N>): the field
+      // is dynamic, so its head slot holds an offset (relative to the containing tuple start) to the
+      // tail = the N-word per-element offset table (NO length word). LAZY member access mirrors solc's
+      // access_calldata_tail_t_array$_..._$N EXACTLY (probe-verified vs 0.8.35): a SIGNED bound
+      // `slt(rel, calldatasize() - base - (N*32 - 1))` (so a huge "negative" offset like 2^256-1
+      // PASSES here and faults, if at all, at the ELEMENT access - byte-identical), then
+      // tableStart = base + rel with NO unsigned 2^64 cap (that cap belongs to the DECODE paths only).
+      const place = arr.base.place;
+      const base = this.lowerCdDynBase(place, ctx, out);
+      const last = place.steps[place.steps.length - 1]!;
+      const offPtr = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
+      const so = this.fresh();
+      out.push(`let ${so} := calldataload(${offPtr})`);
+      out.push(`if iszero(slt(${so}, sub(sub(calldatasize(), ${base}), ${arr.base.length * 32 - 1}))) { revert(0, 0) }`);
+      const tbl = this.fresh();
+      out.push(`let ${tbl} := add(${base}, ${so})`);
+      return { src: 'calldata', offset: tbl, length: String(arr.base.length), elem: arr.elem };
     }
     if (arr.base.kind === 'memArray') {
       // a memory array local: the register holds a pointer to [len][elem0]... (dynamic outer).
@@ -5615,6 +5791,14 @@ ${indent(runtime, 6)}
         // data. copyArrayValueIntoStorage dispatches the value-element vs pointer-headed (B4) image
         // deep-copy by element kind; byte-identical to solc (the same path as `this.field = arr`).
         this.copyArrayValueIntoStorage(f.type.element, arg, slotAt(f.slot), ctx, out);
+      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>) written to storage from a
+        // constructor: materialize the arg's N-pointer memory image (a literal via
+        // buildNestedMemArrayLit inside aggArgToMemPtr; a memory local aliases; a storage/calldata
+        // source deep-copies), then transcode it into the field's N consecutive base slots with
+        // per-element overwrite-clear (the NF-1 helper, the same codec `this.fixedArr = v` uses).
+        // The writeArrayLit branch below cannot lay out a bytes/string-leaf literal element.
+        this.storeDynLeafFixedArrayFromMem(f.type, this.aggArgToMemPtr(arg, ctx, out), slotAt(f.slot), out);
       } else if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
         // a fixed-array field constructed from a (possibly nested) literal.
         this.writeArrayLit(arg, slotAt(f.slot), ctx, out);
@@ -5821,6 +6005,13 @@ ${indent(runtime, 6)}
       if (el.kind === 'structNew') return this.allocAggToMem(el as Expr & { kind: 'structNew' }, ctx, out);
       return this.aggToMemPtr(el, ctx, out);
     }
+    // W5C (family-wide): a DYNAMIC-field struct VALUE element of a P[] literal ([a, b] where a/b are
+    // P memory locals / storage / calldata structs): a memory source ALIASES its pointer-headed image
+    // (reference semantics, same as xs[i] = a); a storage/calldata source COPIES into a fresh image.
+    // Previously fell to lowerExpr and threw JETH900 ('memDynStructValue in a non-reference context').
+    if (el.type.kind === 'struct' && isDynamicType(el.type)) {
+      return this.buildDynStructLocal(el.type, el, ctx, out);
+    }
     // a memory-array expression (alias / element of another nested array): its register IS the pointer.
     return this.lowerExpr(el, ctx, out);
   }
@@ -5891,6 +6082,26 @@ ${indent(runtime, 6)}
     return p;
   }
 
+  /** W5C: build a fresh ZERO image for a FIXED-outer dynamic-element array (Arr<string,N>/Arr<bytes,N>/
+   *  Arr<u256[],N>, and nested Arr<Arr<string,M>,N>): N absolute-pointer words (no [len] header), each
+   *  pointing to a fresh empty element image ([len=0] for a bytes/string/dynamic-array element; a
+   *  recursive M-pointer image for a fixed dyn-leaf sub-array). ctx-free twin of zeroImageFor's
+   *  fixed-outer branch, usable from emptyDynStructImage. */
+  private emptyFixedDynImage(t: JethType & { kind: 'array' }, out: string[]): string {
+    const p = this.fresh();
+    out.push(`let ${p} := mload(0x40)`);
+    out.push(`mstore(0x40, add(${p}, ${t.length! * 32}))`);
+    for (let k = 0; k < t.length!; k++) {
+      const el = t.element;
+      const ip =
+        el.kind === 'array' && el.length !== undefined
+          ? this.emptyFixedDynImage(el, out)
+          : this.emptyInnerImage(el, out);
+      out.push(`mstore(add(${p}, ${k * 32}), ${ip})`);
+    }
+    return p;
+  }
+
   /** Build a fresh zero-value dyn-struct image (Residual B3 element of `new Array<P>(n)`): one head
    *  word per field (value fields = 0; bytes/string + dynamic value-array fields a pointer to a fresh
    *  empty [len=0] sentinel blob). Byte-identical to solc's zero element image. */
@@ -5902,7 +6113,13 @@ ${indent(runtime, 6)}
     let hw = 0;
     for (const f of struct.fields) {
       const at = hw === 0 ? ptr : `add(${ptr}, ${hw * 32})`;
-      if (isDynamicType(f.type)) {
+      if (f.type.kind === 'array' && f.type.length !== undefined && isDynamicType(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>): the zero value is a full N-pointer
+        // fixed image, each pointer -> a fresh empty element image (NOT a [len=0] sentinel - the fixed
+        // image has no length header, and element reads deref the N pointer words).
+        out.push(`mstore(${at}, ${this.emptyFixedDynImage(f.type, out)})`);
+        hw += 1;
+      } else if (isDynamicType(f.type)) {
         // a bytes/string or dynamic value-array field: head word -> a fresh empty [len=0] sentinel.
         const blob = this.fresh();
         out.push(`let ${blob} := mload(0x40)`);
@@ -5980,6 +6197,14 @@ ${indent(runtime, 6)}
         // image of the arg (an array literal / new Array<E>(n) / a memory aggregate-array source), store
         // its absolute pointer in the head word - the same image abiEncFromMem/read/decode consume.
         out.push(`mstore(${at}, ${this.nestedMemImagePtr(value.args[i]!, ctx, out)})`);
+        hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>): ONE head
+        // word holding an absolute pointer to the N-pointer-word fixed image (no [len] header).
+        // aggArgToMemPtr materializes the arg (a literal via buildNestedMemArrayLit; a memory
+        // local/param ALIASES; a storage/calldata source deep-copies via abiDec*ToImage) - the same
+        // image the read/encode/store paths consume. tupleHeadWords counts the field as 1 (dynamic).
+        out.push(`mstore(${at}, ${this.aggArgToMemPtr(value.args[i]!, ctx, out)})`);
         hw += 1;
       } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
         // a NESTED DYNAMIC struct field: its head word is a POINTER to the nested struct's own
@@ -6083,6 +6308,15 @@ ${indent(runtime, 6)}
         // produces for a dynamic-element array), then store that absolute pointer in the head word - the
         // same image shape a dynamic value-array field stores. The dyn-struct ABI encoders read it back
         // as a pointer-headed leaf-array field; byte-identical to solc (verified on the harness).
+        const dst = this.fresh();
+        out.push(`let ${dst} := ${this.abiDecFromStorageToImage(f.type, slotAt(f.slot), ctx, out)}`);
+        out.push(`mstore(${at}, ${dst})`);
+        hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynamicType(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>): build its N-pointer fixed image
+        // directly from the field's N consecutive storage slots (abiDecFromStorageToImage's fixed-array
+        // branch), then store the image's absolute pointer in the ONE head word. The static-aggregate
+        // branch below would inline-flatten it (wrong: this field is pointer-headed, 1 head word).
         const dst = this.fresh();
         out.push(`let ${dst} := ${this.abiDecFromStorageToImage(f.type, slotAt(f.slot), ctx, out)}`);
         out.push(`mstore(${at}, ${dst})`);
@@ -6203,6 +6437,26 @@ ${indent(runtime, 6)}
         out.push(`let ${ip} := ${this.abiDecFromCdToImage(f.type, se, out)}`);
         out.push(`mstore(${at}, ${ip})`);
         hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynamicType(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>): head word = offset (relative to
+        // the tuple start) to the field's N-word offset table; decode the tail into a fresh N-pointer
+        // fixed image via abiDecFromCdToImage's fixed-of-dynamic branch and store ITS absolute pointer.
+        // Mirrors the Edge-F leaf-array branch above (OOB offset / truncated table -> EMPTY revert),
+        // with the Panic-0x41 cap for an oversized inner LENGTH: this is a calldata->MEMORY deep copy,
+        // and solc's allocation guard Panics there (probe-verified vs 0.8.35 for a huge string length
+        // and a huge inner u256[] count under a fixed-outer field).
+        if (src.kind !== 'cd')
+          throw new UnsupportedError('calldata fixed-outer-array struct field decode needs a calldata source');
+        const so = this.fresh();
+        out.push(`let ${so} := calldataload(${hw === 0 ? src.base : `add(${src.base}, ${hw * 32})`})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${src.base}, ${so})`);
+        out.push(`if gt(add(${se}, ${f.type.length * 32}), calldatasize()) { revert(0, 0) }`);
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(f.type, se, out, `${this.panic()}(0x41)`)}`);
+        out.push(`mstore(${at}, ${ip})`);
+        hw += 1;
       } else {
         this.encodeStaticInline(f.type, src, i, hw, at, ctx, out);
         hw += abiHeadWords(f.type);
@@ -6261,6 +6515,21 @@ ${indent(runtime, 6)}
         const se = this.fresh();
         out.push(`let ${se} := add(${base}, ${so})`);
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), ${blobEnd}) { revert(0, 0) }`);
+        const ip = this.fresh();
+        out.push(`let ${ip} := ${this.abiDecFromMemToImage(f.type, se, blobEnd, out)}`);
+        out.push(`mstore(${at}, ${ip})`);
+        hw += 1;
+      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynamicType(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>): head word = offset (relative to the
+        // tuple start) to the field's N-word offset table; decode it into a fresh N-pointer fixed image
+        // via abiDecFromMemToImage's fixed-of-dynamic branch, store ITS absolute pointer. Mirrors the
+        // Cat-C branch above (the N-word table is bounded against the blob end, like solc).
+        const so = this.fresh();
+        out.push(`let ${so} := mload(${headAt})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${base}, ${so})`);
+        out.push(`if gt(add(${se}, ${f.type.length * 32}), ${blobEnd}) { revert(0, 0) }`);
         const ip = this.fresh();
         out.push(`let ${ip} := ${this.abiDecFromMemToImage(f.type, se, blobEnd, out)}`);
         out.push(`mstore(${at}, ${ip})`);
@@ -6669,6 +6938,22 @@ ${indent(runtime, 6)}
         out.push(`let ${p} := mload(${at})`);
         if (isStaticValueType(f.type.element)) this.copyMemArrayIntoStorage(f.type.element, p, fslotAt(f.slot), out);
         else this.copyMemAggArrayIntoStorage(f.type.element, p, fslotAt(f.slot), out);
+      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>): the head word holds the N-pointer
+        // fixed-image pointer; write it into the field's N consecutive storage slots via the NF-1
+        // helper (per-element storeDynamic / array deep-copy, each OVERWRITE-CLEARING its old tail -
+        // the same codec a whole `this.fixedArr = mem` assign uses, byte-identical to solc).
+        const p = this.fresh();
+        out.push(`let ${p} := mload(${at})`);
+        this.storeDynLeafFixedArrayFromMem(f.type, p, fslotAt(f.slot), out);
+      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        // W5C (family-wide): a NESTED DYNAMIC-STRUCT field: the head word holds the nested image's
+        // absolute pointer; RECURSE into the nested struct's own field-by-field storage write at the
+        // field's slot offset (each dynamic member overwrite-clears its old tail, exactly like solc's
+        // member-wise struct assignment). Previously threw JETH900 for any nested-dyn-struct store.
+        const p = this.fresh();
+        out.push(`let ${p} := mload(${at})`);
+        this.writeDynStructFromMem(f.type, p, fslotAt(f.slot), out);
       } else {
         throw new UnsupportedError(
           `storing a struct with a '${f.type.kind}' field from a memory/calldata source is not supported yet`,
@@ -7566,6 +7851,15 @@ ${indent(runtime, 6)}
         const hdr = this.cdFieldArrayHeader(b.place, ctx, out);
         return this.abiDecFromCdToImage(a.type, hdr, out, `${this.panic()}(0x41)`);
       }
+      // W5C: a whole FIXED-outer dynamic-element FIELD of a calldata dyn-struct (let ys: Arr<string,N>
+      // = s.xs / an internal-call arg): the field tail IS the N-word offset table (no [len] word);
+      // require it readable, then DEEP-COPY into a fresh N-pointer memory image via the fixed-outer
+      // branch of abiDecFromCdToImage (Panic 0x41 alloc cap, solc's calldata->memory deep copy).
+      if (b.kind === 'cdDynFixedDynField') {
+        const hdr = this.cdFieldArrayHeader(b.place, ctx, out);
+        out.push(`if gt(add(${hdr}, ${b.length * 32}), calldatasize()) { revert(0, 0) }`);
+        return this.abiDecFromCdToImage(a.type, hdr, out, `${this.panic()}(0x41)`);
+      }
       if (b.kind === 'calldataArray') {
         // cd-to-mem-copy: a whole REFERENCE-element calldata array (bytes[]/string[]/u256[][]/P[]...) deep-
         // copies into a fresh POINTER-HEADED memory image via abiDecFromCdToImage (the calldata twin of
@@ -7805,6 +8099,21 @@ ${indent(runtime, 6)}
       // length/offset is an ABI-decode failure -> EMPTY revert (capEmptyRevert), byte-identical to
       // solc's abi.encode. (Previously fell to the storage-source else and threw JETH900.)
       const hdr = this.cdFieldArrayHeader(base.place, ctx, out);
+      const validate = !isValueLeafArray(arg.type);
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const sz = this.fresh();
+      out.push(`let ${sz} := ${this.abiEncFromCd(arg.type, hdr, dst, validate, out, true)}`);
+      out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+      return { mp: dst, size: sz };
+    }
+    if (base.kind === 'cdDynFixedDynField') {
+      // W5C: a calldata dyn-struct's FIXED-outer dynamic-element field (abi.encode(p.xs) / an event
+      // arg, xs: Arr<string,N>): re-encode DIRECTLY from its calldata tail (the N-word offset table at
+      // the field offset - cdFieldArrayHeader resolves it) into a fresh self-contained ABI tail blob.
+      // The table itself must lie within calldata (empty revert, like the sibling tail decodes).
+      const hdr = this.cdFieldArrayHeader(base.place, ctx, out);
+      out.push(`if gt(add(${hdr}, ${base.length * 32}), calldatasize()) { revert(0, 0) }`);
       const validate = !isValueLeafArray(arg.type);
       const dst = this.fresh();
       out.push(`let ${dst} := mload(0x40)`);
@@ -8366,9 +8675,12 @@ ${indent(runtime, 6)}
   ): string {
     const src: TupleSrc = { kind: 'mem', headPtr: memPtr };
     // PRE-PASS: materialize each dynamic field's source DynRef from the image (mirrors the whole-struct
-    // encoders), so the dyn-field queue feeds encodeTupleInto in field order.
+    // encoders), so the dyn-field queue feeds encodeTupleInto in field order. materializeFixedTails =
+    // false: `dst` is a caller-provided cursor (its enclosing blob pointer is already captured), so the
+    // pre-pass MUST NOT allocate; a fixed-outer field queues its bare image pointer and is transcoded
+    // in place at the cursor (a memory source's pre-pass allocates nothing - the load-bearing invariant).
     const queue: DynRef[] = [];
-    this.collectTupleDyn(struct, src, queue, ctx, out);
+    this.collectTupleDyn(struct, src, queue, ctx, out, false);
     let qi = 0;
     const nextRef = (): DynRef => queue[qi++]!;
     const end = this.encodeTupleInto(struct, src, dst, ctx, out, nextRef);

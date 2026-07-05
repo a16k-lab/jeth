@@ -422,6 +422,12 @@ export interface ArrayExpr {
     // root array comes from a CdDynPlace field rather than a named param.
     | { kind: 'cdDynFieldNested'; place: CdDynPlace; indices: Expr[] }
     | { kind: 'cdDynFixedField'; place: CdDynPlace; length: number } // an inline fixed-array-of-value field of a calldata dynamic-struct param (s.xs where xs: Arr<T,N>): N element words inline at the field's head offset
+    // W5C: a FIXED-outer DYNAMIC-element array field of a calldata dyn-struct param (s.xs where
+    // xs: Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>). The field is dynamic, so its head word is an
+    // OFFSET (relative to the containing tuple start) to the tail = an N-word per-element offset
+    // table (stride 0x20, offsets relative to the TABLE start; NO length word). length = the
+    // compile-time N; elements resolve via cdArrayElemBase's dynamic branch, like cdDynArrayField.
+    | { kind: 'cdDynFixedDynField'; place: CdDynPlace; length: number }
     // P1-8: a CALLDATA ARRAY SLICE `a[start:end]` (JETH `a.slice(start[, end])`) over a value/static-
     // struct-element calldata array (u256[]/address[]/P[]/...). `base` is the sliced array reference;
     // the slice narrows it to offset := base.offset + start*stride, length := end - start (stride =

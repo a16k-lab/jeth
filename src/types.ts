@@ -410,6 +410,10 @@ export function isTopicEncodableDynStruct(t: JethType): boolean {
       isStaticType(f.type) ||
       isBytesLike(f.type) ||
       (f.type.kind === 'array' && f.type.length === undefined && isTopicEncodableArray(f.type)) ||
+      // W5C: a FIXED-outer DYNAMIC-element array field (Arr<string,N>/Arr<u256[],N>): behind a head
+      // OFFSET in the ABI layout; its tail is an N-word offset table packTopicArray walks (count = N).
+      // Gated to isDynLeafFixedArray so only the codec-supported fixed-outer family is admitted.
+      (isDynLeafFixedArray(f.type) && isTopicEncodableArray(f.type)) ||
       (f.type.kind === 'struct' && isDynamicType(f.type) && isTopicEncodableDynStruct(f.type)),
   );
 }
@@ -604,13 +608,15 @@ export function isDynStructLeaf(t: JethType): boolean {
       isBytesLike(f.type) ||
       (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
       isDynStructLeafArrayField(f.type) ||
+      // W5C: a FIXED-outer DYNAMIC-element array field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N> and
+      // nested mixes): ONE head word holding an absolute pointer to the N-pointer-word fixed image (the
+      // isDynLeafFixedArray layout the P1-7/Edge-D codecs build/read). Keep byte-parallel with
+      // Analyzer.isSupportedDynStructLocal.
+      isDynLeafFixedArray(f.type) ||
       // B(1) mirror of Analyzer.isSupportedDynStructLocal: a NESTED STATIC AGGREGATE field (nested static
       // struct / static fixed array Arr<T,N>) stored INLINE as flattened head words. Keep byte-parallel.
       (f.type.kind === 'struct' && isStaticType(f.type)) ||
       (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
-    // NOTE: kept byte-parallel with Analyzer.isSupportedDynStructLocal - a DYNAMIC FIXED-outer array field
-    // (Arr<P,N> dynamic, Arr<bytes,N>) is NOT admitted (the mem-dyn-struct read/re-encode path does not yet
-    // consume it; see W3-Y2c P1-9c note there).
   );
 }
 
@@ -642,6 +648,10 @@ export function isStorageCopyableRef(t: JethType): boolean {
         isBytesLike(f.type) ||
         (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
         isDynStructLeafArrayField(f.type) || // bytes[] / string[] / T[][] (the new lift)
+        // W5C: a FIXED-outer dynamic-element array field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>):
+        // buildDynStructFromStorage builds its pointer-headed image via abiDecFromStorageToImage's
+        // fixed-array branch, so a storage->memory struct copy carrying it is supported.
+        isDynLeafFixedArray(f.type) ||
         (f.type.kind === 'struct' && isStaticType(f.type)) ||
         (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
     );

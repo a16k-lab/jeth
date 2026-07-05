@@ -7367,6 +7367,35 @@ export class Analyzer {
       }
       return a;
     }
+    // W5C: a FIXED-outer DYNAMIC-element array field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>). Accepts
+    // an array LITERAL of exactly N elements (["a","b"] is a string[2] in solc, constructible inline) OR
+    // a true fixed-array value of the same type (a memory local / @internal param, whose pointer-headed
+    // image is re-pointed/copied by codegen). Mirrors the isValueWordAggregate fixed-array branch above,
+    // minus the inline-image restriction (this family is pointer-headed; nestedMemImagePtr builds it).
+    if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+      const a = this.checkExpr(argNode, f.type);
+      if (!a) return undefined;
+      if (a.kind === 'arrayLit') {
+        if (a.elements.length !== f.type.length) {
+          this.diags.error(
+            argNode,
+            'JETH226',
+            `struct field '${f.name}' (${displayName(f.type)}) must be an array literal of ${f.type.length} elements`,
+          );
+          return undefined;
+        }
+        return a;
+      }
+      if (!typesEqual(a.type, f.type)) {
+        this.diags.error(
+          argNode,
+          'JETH226',
+          `struct field '${f.name}' expects ${displayName(f.type)}, got ${displayName(a.type)}`,
+        );
+        return undefined;
+      }
+      return a;
+    }
     if (
       f.type.kind === 'array' &&
       f.type.length === undefined &&
@@ -9841,7 +9870,12 @@ export class Analyzer {
       // local-decl lowering (aggArgToMemPtr handles the cdDynArrayField base), the same field-header
       // codec the cdFieldAggValue (array/struct field) path uses. (A NESTED-array / dyn-struct element
       // field never reaches here: it is rejected upstream or routed via cdFieldAggValue.)
-      const fromCdField = e.kind === 'arrayValue' && e.arr.base.kind === 'cdDynArrayField';
+      const fromCdField =
+        e.kind === 'arrayValue' &&
+        // W5C: a WHOLE FIXED-outer dynamic-element FIELD of a calldata dyn-struct (let t: Arr<string,2>
+        // = p.xs) deep-copies via the same field-header codec (aggArgToMemPtr's cdDynFixedDynField
+        // branch: cdFieldArrayHeader + table-fits + abiDecFromCdToImage, Panic 0x41 alloc cap).
+        (e.arr.base.kind === 'cdDynArrayField' || e.arr.base.kind === 'cdDynFixedDynField');
       // storage-to-mem-copy: a WHOLE storage reference-element array (this.blobs: bytes[]/string[]/P[]/...)
       // DEEP-COPIES into a fresh pointer-headed memory image via abiDecFromStorageToImage (the storage twin;
       // storage is canonical, so no malformed-input revert - byte-identical to solc's storage->memory copy).
@@ -12597,6 +12631,21 @@ export class Analyzer {
       const load: Expr = { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord, deref: true };
       return { kind: 'arrayValue', type: f.type, arr: { base: { kind: 'memArrayExpr', expr: load }, elem: f.type.element } };
     }
+    // W5C: a FIXED-outer dynamic-element field (xs[i].xs, Arr<string,N>): deref the head word to the
+    // N-pointer fixed image; memFixedLen = N (constant .length, JETH211 const bound, Panic 0x32 runtime).
+    if (f.type.kind === 'array' && isDynLeafFixedArray(f.type)) {
+      const load: Expr = { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord, deref: true };
+      return {
+        kind: 'arrayValue',
+        type: f.type,
+        arr: {
+          base: { kind: 'memArrayExpr', expr: load },
+          elem: f.type.element,
+          memFixedLen: f.type.length,
+          memStaticElem: this.memElemStatic(f.type.element),
+        },
+      };
+    }
     this.diags.error(node, 'JETH245', `reading a ${displayName(f.type)} field of a dynamic-struct-array element is not supported yet`);
     return undefined;
   }
@@ -12713,6 +12762,14 @@ export class Analyzer {
         isBytesLike(f.type) ||
         (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
         isDynStructLeafArrayField(f.type) ||
+        // W5C: a FIXED-outer DYNAMIC-element array field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N> and
+        // nested mixes, isDynLeafFixedArray): ONE head word holding an absolute pointer to the
+        // N-pointer-word fixed image (no [len] header) - the SAME image the P1-7/Edge-D codecs
+        // (buildNestedMemArrayLit / abiEncFromMem fixed-outer / abiDec*ToImage fixed branches /
+        // storeDynLeafFixedArrayFromMem) already build and consume. A struct-element fixed array
+        // (Arr<P,N>) stays gated (isDynLeafFixedArray excludes struct leaves). Kept byte-parallel with
+        // types.isDynStructLeaf.
+        isDynLeafFixedArray(f.type) ||
         // B(1): a NESTED STATIC AGGREGATE field (a nested static struct, or a static fixed array Arr<T,N>)
         // is stored INLINE as abiHeadWords ABI-flattened head words (the tuple-head layout), exactly like
         // solc; the static-leaf codec (encodeStaticInline / abiDecFromMem / buildDynStructFromStorage) and
@@ -12722,11 +12779,6 @@ export class Analyzer {
         // a NESTED DYNAMIC STRUCT field (its own head word is a pointer to the nested struct's image),
         // itself a supported dyn-struct shape: the recursive dyn-struct codec already encodes/decodes it.
         (f.type.kind === 'struct' && isDynamicType(f.type) && this.isSupportedDynStructLocal(f.type)),
-      // NOTE: a DYNAMIC FIXED-outer array FIELD (Arr<P,N> P dynamic, Arr<bytes,N>) is deliberately NOT
-      // admitted: buildDynStructFromStorage can lay out its pointer-headed image, but the mem-dyn-struct
-      // READ path (m.ps[i].n) and the whole-struct re-encode (return m / abi.encode) do not yet consume a
-      // dynamic-fixed-array field, so admitting it would half-accept the copy then JETH900/JETH074 on any
-      // use. Kept a clean JETH200 reject (no over-acceptance, no half-supported crash). See W3-Y2c P1-9c.
     );
   }
 
@@ -12847,7 +12899,12 @@ export class Analyzer {
       // an absolute pointer, so the write materializes the RHS and stores ITS pointer (a reference
       // re-point, like solc) - a value-array field (u256[] -> [len][elems]) or a leaf-array field
       // (bytes[]/T[][] -> the B4 image). Element writes (p.xs[i] = v) are gated separately.
-      if (mf.field.type.kind === 'array' && mf.field.type.length === undefined) {
+      // W5C: a FIXED-outer dynamic-element field (Arr<string,N>, isDynLeafFixedArray) is pointer-headed
+      // too - the RHS materializes to its N-pointer image (aggArgToMemPtr) and the head word re-points.
+      if (
+        mf.field.type.kind === 'array' &&
+        (mf.field.type.length === undefined || isDynLeafFixedArray(mf.field.type))
+      ) {
         return { kind: 'memDynField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
       }
       // E: re-point a whole NESTED STATIC AGGREGATE field (p.inner = In(..) / p.fa = [..]). It is stored
@@ -12876,7 +12933,13 @@ export class Analyzer {
       const nf = this.memDynNestedField(node);
       if (nf) {
         const ft = nf.field.type;
-        if (isStaticValueType(ft) || isBytesLike(ft) || (ft.kind === 'array' && ft.length === undefined)) {
+        // W5C: a FIXED-outer dynamic-element field (Arr<string,N>) re-points like any dynamic-array field
+        // (deref: the RHS materializes to its N-pointer image and the deref'd head word re-points).
+        if (
+          isStaticValueType(ft) ||
+          isBytesLike(ft) ||
+          (ft.kind === 'array' && (ft.length === undefined || isDynLeafFixedArray(ft)))
+        ) {
           return {
             kind: 'memDynNestedFieldStore',
             type: ft,
@@ -13964,6 +14027,25 @@ export class Analyzer {
         },
       };
     }
+    // W5C: a FIXED-outer DYNAMIC-element array field (s.xs where xs: Arr<string,N>/Arr<bytes,N>/
+    // Arr<u256[],N>): the field is dynamic, so its head word is an OFFSET to the tail = an N-word
+    // per-element offset table (NO length word). Index it (s.xs[i] via the table, Panic 0x32 at
+    // runtime / JETH211 on a constant OOB) and read .length as the compile-time constant N.
+    // memFixedLen marks the constant bound for the shared const-index check (checkArrExprBound).
+    if (t.kind === 'array' && t.length !== undefined && isDynLeafFixedArray(t)) {
+      return {
+        committed: true,
+        result: {
+          kind: 'arrayValue',
+          type: t,
+          arr: {
+            base: { kind: 'cdDynFixedDynField', place, length: t.length },
+            elem: t.element,
+            memFixedLen: t.length,
+          },
+        },
+      };
+    }
     // a dynamic array field whose ELEMENT is itself dynamic (string[]/bytes[], a nested
     // T[][], or a dynamic-struct D[]): the field's tail decodes to (tableStart, len) - one
     // offset word per element - exactly like cdDynArrayField with a 0x20 stride. Index it
@@ -14491,6 +14573,18 @@ export class Analyzer {
         const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
         return { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element };
       }
+      // W5C: p.xs where xs is a FIXED-outer dynamic-element field (Arr<string,N>): the head word holds
+      // the N-pointer fixed-image pointer; memFixedLen = N drives the constant .length, the JETH211
+      // const-index bound (checkArrExprBound) and the runtime Panic-0x32 bound, like an Arr<string,N> local.
+      if (mf && mf.field.type.kind === 'array' && isDynLeafFixedArray(mf.field.type)) {
+        const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
+        return {
+          base: { kind: 'memArrayExpr', expr: load },
+          elem: mf.field.type.element,
+          memFixedLen: mf.field.type.length,
+          memStaticElem: this.memElemStatic(mf.field.type.element),
+        };
+      }
       return undefined;
     }
     // P0-35a: m.i.xs - a dynamic value-array field of a NESTED dynamic struct reached through >=1 deref hop
@@ -14506,6 +14600,17 @@ export class Analyzer {
       if (nf && nf.field.type.kind === 'array' && nf.field.type.length === undefined) {
         const load: Expr = { kind: 'memDynNestedField', type: U256, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord, deref: true };
         return { base: { kind: 'memArrayExpr', expr: load }, elem: nf.field.type.element };
+      }
+      // W5C: m.i.xs where xs is a FIXED-outer dynamic-element field of a NESTED dyn-struct: identical
+      // deref chain; the final head word holds the N-pointer fixed-image pointer (memFixedLen = N).
+      if (nf && nf.field.type.kind === 'array' && isDynLeafFixedArray(nf.field.type)) {
+        const load: Expr = { kind: 'memDynNestedField', type: U256, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord, deref: true };
+        return {
+          base: { kind: 'memArrayExpr', expr: load },
+          elem: nf.field.type.element,
+          memFixedLen: nf.field.type.length,
+          memStaticElem: this.memElemStatic(nf.field.type.element),
+        };
       }
     }
     // Residual B3: xs[i].arr - a dynamic value-array field of a memory P[] dyn-struct element. The field
@@ -14999,21 +15104,35 @@ export class Analyzer {
   }
 
   /** Whether `node` is `p.field` (field of a dyn-struct memory local) or `xs[i].field` (field of a
-   *  dyn-struct memory-array element) where `field` is a NESTED-DYNAMIC-LEAF array (Cat C). Used to gate
-   *  the dyn-struct-leaf-array element-access branch without re-triggering the storage/nested-local paths. */
+   *  dyn-struct memory-array element) where `field` is a NESTED-DYNAMIC-LEAF array (Cat C) or a
+   *  FIXED-outer dynamic-element array (W5C), OR an ELEMENT-ACCESS step deeper into such a chain
+   *  (p.tags[j][k], m.g[i][j] - each [i] descends one array level via resolveArrayExpr's recursive
+   *  memory-element branch). Used to gate the dyn-struct-leaf-array element-access branch without
+   *  re-triggering the storage/nested-local paths. */
   private isMemDynStructLeafArrayFieldChain(node: ts.Expression): boolean {
+    // W5C: a deeper index step into the same field chain: m.g[i][j] gates on m.g[i], which gates on m.g.
+    if (ts.isElementAccessExpression(node) && node.argumentExpression)
+      return this.isMemDynStructLeafArrayFieldChain(node.expression);
     if (!ts.isPropertyAccessExpression(node)) return false;
     // p.field on a dyn-struct memory local
     if (ts.isIdentifier(node.expression) && this.memDynStructLocals.has(node.expression.text)) {
       const mf = this.memDynStructField(node);
-      return !!mf && isDynStructLeafArrayField(mf.field.type);
+      // W5C: a FIXED-outer dynamic-element field (Arr<string,N>) is a pointer-headed image too, so its
+      // element access (p.xs[j], p.xs[j][k]) routes through the same memArrayExpr element codec.
+      return !!mf && (isDynStructLeafArrayField(mf.field.type) || isDynLeafFixedArray(mf.field.type));
     }
     // xs[i].field on a dyn-struct memory-array element
     if (ts.isElementAccessExpression(node.expression) && this.memArrayDynStructElemAccess(node.expression)) {
       const arr = this.resolveArrayExpr(node.expression.expression);
       if (!arr || arr.elem.kind !== 'struct') return false;
       const f = arr.elem.fields.find((ff) => ff.name === node.name.text);
-      return !!f && isDynStructLeafArrayField(f.type);
+      return !!f && (isDynStructLeafArrayField(f.type) || isDynLeafFixedArray(f.type));
+    }
+    // W5C: v.t.xs - a leaf-array / fixed-outer field of a NESTED dyn-struct reference (>=1 deref hop).
+    // memDynNestedField resolves the chain; resolveArrayExpr's nested branch supplies the ArrayExpr.
+    if (ts.isPropertyAccessExpression(node.expression)) {
+      const nf = this.memDynNestedField(node);
+      return !!nf && (isDynStructLeafArrayField(nf.field.type) || isDynLeafFixedArray(nf.field.type));
     }
     return false;
   }
@@ -17164,6 +17283,11 @@ export class Analyzer {
         if (dyn && dyn.result && dyn.result.kind === 'arrayValue' && dyn.result.arr.base.kind === 'cdDynFixedField') {
           return { kind: 'literalInt', type: U256, value: BigInt(dyn.result.arr.base.length) };
         }
+        // W5C: a FIXED-outer dynamic-element field (s.xs where xs: Arr<string,N>): .length is the
+        // compile-time constant N too (solc folds it; no tail decode).
+        if (dyn && dyn.result && dyn.result.kind === 'arrayValue' && dyn.result.arr.base.kind === 'cdDynFixedDynField') {
+          return { kind: 'literalInt', type: U256, value: BigInt(dyn.result.arr.base.length) };
+        }
         if (dyn && !dyn.result) return undefined; // committed but errored (diagnostic already emitted)
       }
       // Residual B3: xs[i].s.length / xs[i].arr.length on a MEMORY P[] dyn-struct element. Resolve the
@@ -17462,6 +17586,22 @@ export class Analyzer {
           arr: { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element },
         };
       }
+      // W5C: a FIXED-outer dynamic-element field (Arr<string,N>): the head word holds a pointer to the
+      // N-pointer-word fixed image (NO [len] header). Wrap the head-word LOAD in a memArrayExpr with the
+      // compile-time length (memFixedLen = N; index consumers bounds-check against it, .length folds it).
+      if (mf.field.type.kind === 'array' && isDynLeafFixedArray(mf.field.type)) {
+        const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
+        return {
+          kind: 'arrayValue',
+          type: mf.field.type,
+          arr: {
+            base: { kind: 'memArrayExpr', expr: load },
+            elem: mf.field.type.element,
+            memFixedLen: mf.field.type.length,
+            memStaticElem: this.memElemStatic(mf.field.type.element),
+          },
+        };
+      }
       // B4: a WHOLE nested STATIC AGGREGATE field (a nested static struct, or a static fixed array
       // Arr<T,N>). It is stored INLINE in the dyn-struct image at the field's head word (abiHeadWords
       // ABI-flattened, the tuple-head layout); the read yields the sub-image pointer (aggFieldRead over
@@ -17494,6 +17634,21 @@ export class Analyzer {
         if (ft.kind === 'array' && ft.length === undefined) {
           const load: Expr = { kind: 'memDynNestedField', type: U256, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord };
           return { kind: 'arrayValue', type: ft, arr: { base: { kind: 'memArrayExpr', expr: load }, elem: ft.element } };
+        }
+        // W5C: a FIXED-outer dynamic-element leaf (Arr<string,N>): the deref'd head word holds the
+        // N-pointer fixed-image pointer; wrap in memArrayExpr with the compile-time length.
+        if (ft.kind === 'array' && isDynLeafFixedArray(ft)) {
+          const load: Expr = { kind: 'memDynNestedField', type: U256, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord };
+          return {
+            kind: 'arrayValue',
+            type: ft,
+            arr: {
+              base: { kind: 'memArrayExpr', expr: load },
+              elem: ft.element,
+              memFixedLen: ft.length,
+              memStaticElem: this.memElemStatic(ft.element),
+            },
+          };
         }
         if (isBytesLike(ft) || (ft.kind === 'struct' && isDynamicType(ft)))
           return { kind: 'memDynNestedField', type: ft, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord, deref: true };
@@ -18627,6 +18782,21 @@ export class Analyzer {
             const index = this.checkExpr(node.argumentExpression, U256);
             if (!index) return undefined;
             const idx = this.coerce(index, U256, node.argumentExpression);
+            // W5C: a FIXED-outer field (s.xs[i], Arr<string,N>) rejects a compile-time-constant OOB
+            // index (JETH211, like solc); a runtime index Panics 0x32 in the element resolver.
+            if (!this.checkArrExprBound(base.arr, idx, node.argumentExpression)) return undefined;
+            // W5C residual: DIRECT indexing of an Arr<u256[],N> calldata FIELD's inner array
+            // (s.vs[i] / s.vs[i][j] unbound) has no lazy calldata sub-array codec yet; keep the
+            // clean reject (bind the struct or the whole field to a local first). bytes elements
+            // ride the proven cdDynArrayElem path below.
+            if (base.arr.base.kind === 'cdDynFixedDynField' && base.arr.elem.kind === 'array') {
+              this.diags.error(
+                node,
+                'JETH230',
+                `indexing an inner array of a fixed-outer calldata struct field is not supported yet (bind the struct to a local first)`,
+              );
+              return undefined;
+            }
             // a string[]/bytes[] field element (s.tags[i]): the per-element offset table
             // resolves the i-th dynamic value, re-encoded as a standalone top-level value.
             if (isBytesLike(base.arr.elem)) {
