@@ -1903,10 +1903,13 @@ ${indent(runtime, 6)}
         }
         if (s.target.kind === 'mapping' && s.target.type.kind === 'struct') {
           // this.m[k] = <struct>: write the constructed/copied struct into the runtime
-          // keccak(key.base) mapping slot (writeStruct/copyStruct clear dynamic-field
-          // tails per field, byte-identical to solc).
+          // keccak(key.base) mapping slot (the prepared store / copyStruct clear dynamic-field
+          // tails per field, byte-identical to solc). W7B (RHS-first): solc evaluates the RHS
+          // completely BEFORE the mapping key (P4/P29 - a key reading state mutated by a ctor
+          // arg sees the post-arg value), so prepare the value, then resolve the key.
+          const prep = this.prepareStructStore(s.target.type, s.value, ctx, out);
           const dst = this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out);
-          this.storeStructTo(s.target.type, s.value, dst, ctx, out);
+          this.emitPreparedStructStore(s.target.type, prep, dst, out);
           break;
         }
         // whole DYNAMIC-array assignment into storage: this.a = this.b (storage source) or
@@ -1985,10 +1988,12 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.target.kind === 'place' && s.target.type.kind === 'struct') {
-          // this.o.inner = <struct> (whole nested-struct field): fold the path to the
-          // field slot, then writeStruct (literal) / copyStruct (storage copy).
+          // this.o.inner = <struct> (whole nested-struct field). W7B (RHS-first): solc evaluates
+          // the RHS completely BEFORE resolving the path (its index bounds checks / key reads),
+          // so prepare the value, then fold the path to the field slot, then store.
+          const prep = this.prepareStructStore(s.target.type, s.value, ctx, out);
           const p = this.lowerPlace(s.target.path, ctx, out);
-          this.storeStructTo(s.target.type, s.value, p.slot, ctx, out);
+          this.emitPreparedStructStore(s.target.type, prep, p.slot, out);
           break;
         }
         if (s.target.kind === 'place') {
@@ -2224,10 +2229,14 @@ ${indent(runtime, 6)}
             break;
           }
           // this.recs[i] = <struct>: write the constructed/copied struct into the
-          // bounds-checked storage element slot (writeStruct/copyStruct clear dynamic-field
-          // tails per field, byte-identical to solc).
+          // bounds-checked storage element slot (the prepared store / copyStruct clear
+          // dynamic-field tails per field, byte-identical to solc). W7B (RHS-first): solc
+          // evaluates the RHS completely BEFORE the index + bounds check (P6/P30 - an index
+          // reading state mutated by a ctor arg sees the post-arg value), so prepare the
+          // value, then resolve the element slot.
+          const prep = this.prepareStructStore(s.target.type, s.value, ctx, out);
           const elemSlot = this.structArrayElemSlot(s.target.arr, s.target.index, ctx, out);
-          this.storeStructTo(s.target.type, s.value, elemSlot, ctx, out);
+          this.emitPreparedStructStore(s.target.type, prep, elemSlot, out);
           break;
         }
         if (s.target.kind === 'arrayElem') {
@@ -2614,8 +2623,9 @@ ${indent(runtime, 6)}
           // grow the outer, then deep-copy the value into the freshly grown inner slot.
           this.lowerArrayPush(s.arr, s.value, ctx, out);
         } else {
-          const value = s.value ? this.lowerExpr(s.value, ctx, out) : '0';
-          this.lowerPush(s.arr, value, ctx, out);
+          // W7B: the value expression is lowered INSIDE lowerPush, after the base ref (solc's
+          // left-to-right order) and frozen before the grow (arg-first).
+          this.lowerPush(s.arr, s.value, ctx, out);
         }
         break;
       }
@@ -5644,15 +5654,25 @@ ${indent(runtime, 6)}
     out.push(`sstore(${slot}, or(${cleared}, shl(${bit}, and(${fieldData}, ${mask}))))`);
   }
 
-  private lowerPush(arr: ArrayExpr, value: string, ctx: LowerCtx, out: string[]): void {
+  private lowerPush(arr: ArrayExpr, value: Expr | undefined, ctx: LowerCtx, out: string[]): void {
     const ref = this.lowerArrayRef(arr, ctx, out);
     if (ref.src !== 'storage') throw new UnsupportedError('push on a non-storage array');
+    // W7B (arg-first): FREEZE the pushed value BEFORE the grow - a lazy value expression (an
+    // sload like sa.push(sa.length), or an internal call sa.push(this.rd())) must read the OLD
+    // length, exactly like solc's argument-before-push evaluation. The base ref (mapping keys)
+    // was already resolved above, preserving solc's left-to-right base-then-argument order.
+    let v = '0';
+    if (value) {
+      const reg = this.fresh();
+      out.push(`let ${reg} := ${this.lowerExpr(value, ctx, out)}`);
+      v = reg;
+    }
     const len = this.fresh();
     out.push(`let ${len} := sload(${ref.lenSlot})`);
     out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
     out.push(`sstore(${ref.lenSlot}, add(${len}, 1))`);
     const data = this.arrayDataSlot(ref.lenSlot, out);
-    this.arrayElemStore(ref.elem, data, len, value, out);
+    this.arrayElemStore(ref.elem, data, len, v, out);
   }
 
   /** push a whole inner array onto a nested storage array (this.dd.push(xs) on a T[][]):
@@ -5663,11 +5683,15 @@ ${indent(runtime, 6)}
     const ref = this.lowerArrayRef(arr, ctx, out);
     if (ref.src !== 'storage') throw new UnsupportedError('push on a non-storage array');
     const elem = arr.elem as JethType & { kind: 'array' };
-    // W5A (arg-first): solc evaluates the push ARGUMENT before the push operation itself, so a
-    // MEMORY-source value (an array literal with side-effecting elements - e.g. one that reads
-    // this.g3.length - or a memory/calldata aggregate) is materialized BEFORE the length grow.
-    // Storage sources are references (no side effects) and stay resolved after the grow.
+    // W5A/W7B (arg-first): solc evaluates the push ARGUMENT before the push operation itself, so
+    // EVERY source handle is resolved BEFORE the length grow - a memory source (an array literal
+    // with side-effecting elements, or a memory/calldata aggregate) is materialized first, and a
+    // STORAGE source's location (including any element bounds check: dd.push(dd[0]) on an empty
+    // array panics like solc - P12/P33) is resolved first. The copy itself runs after the grow,
+    // reading the already-resolved handle (the grown region never overlaps a valid source).
     let memSrc: string | undefined;
+    let litPrep: PreparedLitElem[] | undefined;
+    let fixedSrcBase: string | undefined;
     if (value && elem.length !== undefined) {
       // W6A: the pushed element image is deep-copied into storage right below - a TRANSIENT
       // capture context, so an aliasable memory element source inside a literal stays accepted.
@@ -5682,6 +5706,26 @@ ${indent(runtime, 6)}
           return this.aggToMemPtr(value, ctx, out);
         return undefined;
       });
+      if (memSrc === undefined) {
+        if (value.kind === 'arrayLit') litPrep = this.prepareLitElems(value, ctx, out);
+        else fixedSrcBase = this.fixedArraySrcBase(value, ctx, out);
+      }
+    }
+    let dynPrep: { k: 'stor'; srcLenSlot: string } | { k: 'mem'; ptr: string } | { k: 'cd' } | undefined;
+    if (value && elem.length === undefined) {
+      const storageSrc =
+        value.kind === 'mapStorageValue' ||
+        (value.kind === 'arrayValue' &&
+          (value.arr.base.kind === 'stateArray' ||
+            value.arr.base.kind === 'mapArray' ||
+            value.arr.base.kind === 'placeArray'));
+      if (storageSrc) dynPrep = { k: 'stor', srcLenSlot: this.arraySrcLenSlot(value, ctx, out) };
+      else if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray') dynPrep = { k: 'cd' };
+      else {
+        const p = this.fresh();
+        out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
+        dynPrep = { k: 'mem', ptr: p };
+      }
     }
     const stride = storageSlotCount(arr.elem); // a dynamic-array inner element occupies 1 slot
     const len = this.fresh();
@@ -5704,13 +5748,28 @@ ${indent(runtime, 6)}
         if (memSrc !== undefined) {
           if (isDynLeafFixedArray(elem)) this.storeDynLeafFixedArrayFromMem(elem, memSrc, innerSlot, out);
           else this.storeStaticAggFromMem(elem, memSrc, innerSlot, out);
-        } else if (value.kind === 'arrayLit') this.writeArrayLit(value, innerSlot, ctx, out);
-        else this.copyFixedArray(elem, this.fixedArraySrcBase(value, ctx, out), innerSlot, out);
+        } else if (litPrep !== undefined) {
+          this.emitPreparedLitStore(value as Expr & { kind: 'arrayLit' }, litPrep, innerSlot, out);
+        } else if (fixedSrcBase !== undefined) {
+          this.copyFixedArray(elem, fixedSrcBase, innerSlot, out);
+        }
       }
       return;
     }
     // a DYNAMIC inner array element (T[][]): innerSlot is the inner array's length slot.
-    if (value) this.copyArrayValueIntoStorage(elem.element, value, innerSlot, ctx, out);
+    if (value && dynPrep) {
+      if (dynPrep.k === 'stor') this.copyArray(elem.element, dynPrep.srcLenSlot, innerSlot, out);
+      else if (dynPrep.k === 'mem') {
+        if (isValueWord(elem.element)) this.copyMemArrayIntoStorage(elem.element, dynPrep.ptr, innerSlot, out);
+        else if (isBytesLike(elem.element) || elem.element.kind === 'array')
+          this.copyMemAggArrayIntoStorage(elem.element, dynPrep.ptr, innerSlot, out);
+        else throw new UnsupportedError('a memory array of non-value elements is not supported');
+      } else {
+        // a CALLDATA value-array source: immutable input; the validated decode+store loop runs
+        // here (any validation panic rolls the grow back, revert data identical to solc's).
+        this.copyArrayValueIntoStorage(elem.element, value, innerSlot, ctx, out);
+      }
+    }
   }
 
   /** Deep-copy an ARRAY VALUE (memory `memArray`/`arrayLit` of value elements, or a
@@ -5909,6 +5968,15 @@ ${indent(runtime, 6)}
     if (ref.src !== 'storage') throw new UnsupportedError('push on a non-storage array');
     const struct = arr.elem as JethType & { kind: 'struct' };
     const slots = storageSlotCount(struct);
+    // W7B (arg-first): solc evaluates the push ARGUMENT completely BEFORE the grow - a ctor arg
+    // reading ps.length sees the OLD length (A8), and ps.push(ps[0]) on an empty array panics on
+    // the source bounds check (P10) instead of aliasing the freshly-grown element. The prepared
+    // value dispatches every source kind - a constructor (prepared ctor args), a static struct
+    // local/param (storeStaticAggFromMem), a dynamic-field struct from a memory local / calldata
+    // param / nested-dyn-struct field (writeDynStructFromMem), or a storage struct (copyStruct).
+    // (Previously only a structNew was written and every other source silently stored a zero
+    // element - a miscompile.)
+    const prep = value ? this.prepareStructStore(struct, value, ctx, out) : undefined;
     const len = this.fresh();
     out.push(`let ${len} := sload(${ref.lenSlot})`);
     out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
@@ -5917,13 +5985,8 @@ ${indent(runtime, 6)}
     out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${ref.lenSlot})`);
     const base = this.fresh();
     out.push(`let ${base} := add(${dataBase}, mul(${len}, ${slots}))`);
-    if (value) {
-      // arr.push(v): write the pushed struct VALUE into the freshly-grown element slot. storeStructTo
-      // dispatches every source kind correctly - a constructor (writeStruct), a static struct
-      // local/param (storeStaticAggFromMem), a dynamic-field struct from a memory local / calldata param /
-      // nested-dyn-struct field (writeDynStructFromMem), or a storage struct (copyStruct). (Previously only
-      // a structNew was written and every other source silently stored a zero element - a miscompile.)
-      this.storeStructTo(struct, value, base, ctx, out);
+    if (prep) {
+      this.emitPreparedStructStore(struct, prep, base, out);
     } else {
       // arr.push() with no argument: append a default (all-zero) element.
       for (let j = 0; j < slots; j++) out.push(`sstore(${j === 0 ? base : `add(${base}, ${j})`}, 0)`);
@@ -5936,62 +5999,226 @@ ${indent(runtime, 6)}
    *  value fields go through storeState (handles packing / whole-slot); a
    *  bytes/string dynamic field at slotAt(f.slot) goes through storeDynamic (a
    *  normal storage bytes/string, overwrite-clearing the old tail, byte-identical
-   *  to solc). */
+   *  to solc).
+   *  W7B (TWO-PHASE): solc materializes the constructed value in MEMORY first (every ctor
+   *  argument evaluated in source order) and only then copies it into storage - a later
+   *  argument that reads the destination sees the OLD data, and the overwrite-clear of an
+   *  old dynamic tail also happens after all arguments ran. prepareCtorArgs captures each
+   *  argument at its position (values frozen to registers, storage/calldata reference
+   *  sources snapshotted to memory - solc's conversion-at-construction - memory reference
+   *  sources aliased for the late read); emitPreparedCtorStore then performs every storage
+   *  write. Previously the two were interleaved field-by-field, a confirmed miscompile. */
   private writeStruct(fields: StructField[], args: Expr[], baseSlot: string, ctx: LowerCtx, out: string[]): void {
     // W6A: every writeStruct caller writes the constructed value straight into STORAGE (state /
     // mapping / place / push), a deep copy in solc too - a TRANSIENT capture context, so an
     // aliasable memory field source stays accepted (internal-call args re-force persistent).
-    this.inTransientCapture(() => this.writeStructInner(fields, args, baseSlot, ctx, out));
+    const items = this.inTransientCapture(() => this.prepareCtorArgs(fields, args, ctx, out));
+    this.emitPreparedCtorStore(fields, items, baseSlot, out);
   }
 
-  private writeStructInner(fields: StructField[], args: Expr[], baseSlot: string, ctx: LowerCtx, out: string[]): void {
+  /** W7B phase 1: evaluate every ctor argument in source order, capturing a store-ready handle
+   *  per field (NO destination slot is touched). Mirrors the old field dispatch branch-for-branch;
+   *  each captured handle feeds the matching store codec in emitPreparedCtorStore. */
+  private prepareCtorArgs(fields: StructField[], args: Expr[], ctx: LowerCtx, out: string[]): PreparedFieldArg[] {
+    return fields.map((f, i) => {
+      const arg = args[i]!;
+      if (f.type.kind === 'struct' && arg.kind === 'structNew') {
+        // a nested constructor evaluates its own args at ITS position (recursively two-phase).
+        return { k: 'ctor' as const, fields: arg.fields, items: this.prepareCtorArgs(arg.fields, arg.args, ctx, out) };
+      }
+      if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        // W6A: a DYNAMIC struct field from a NON-INLINE source: materialize the source's
+        // pointer-headed image (buildDynStructLocal ALIASES a memory source - the phase-2 write
+        // reads it LATE, Solidity memory-reference semantics; copies storage/calldata at this
+        // position - solc's conversion-at-construction).
+        return { k: 'dynStruct' as const, ptr: this.buildDynStructLocal(f.type, arg, ctx, out) };
+      }
+      if (f.type.kind === 'array' && f.type.length === undefined) {
+        return this.prepareDynArrayFieldArg(f.type, arg, ctx, out);
+      }
+      if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>): materialize the arg's N-pointer
+        // memory image (a literal via buildNestedMemArrayLit inside aggArgToMemPtr; a memory local
+        // ALIASES - late read; a storage/calldata source deep-copies here).
+        return { k: 'dynLeafFixed' as const, ptr: this.aggArgToMemPtr(arg, ctx, out) };
+      }
+      if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
+        // a fixed-array field constructed from a (possibly nested) literal: evaluate every element
+        // at this position; the stores run in phase 2.
+        return { k: 'lit' as const, lit: arg, items: this.prepareLitElems(arg, ctx, out) };
+      }
+      if ((f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) && isStaticType(f.type)) {
+        // a non-inline STATIC aggregate field source: aggToMemPtr aliases a memory source (late
+        // read) and copies a storage/calldata source here (solc's conversion-at-construction).
+        return { k: 'staticAgg' as const, ptr: this.aggToMemPtr(arg, ctx, out) };
+      }
+      if (isBytesLike(f.type)) {
+        // solc converts a STORAGE / CALLDATA bytes source to memory at the ARG position (P8: a
+        // sibling that mutates the storage source afterwards must not change the stored value);
+        // a memory ref (incl. a literal blob) is captured as-is and read late.
+        let ref = this.lowerDynamic(arg, ctx, out);
+        if (ref.src !== 'memory') ref = { src: 'memory', ptr: this.toMemory(ref, out).mp };
+        return { k: 'bytes' as const, ref };
+      }
+      // a VALUE field: freeze the arg NOW (a lazy sload/internal-call expr must read at its own
+      // source position, not at store time - P20).
+      const reg = this.fresh();
+      out.push(`let ${reg} := ${this.lowerExpr(arg, ctx, out)}`);
+      return { k: 'value' as const, reg };
+    });
+  }
+
+  /** W7B phase 1 for a DYNAMIC-array ctor field: capture the source per solc's construction
+   *  semantics - a MEMORY source is captured BY POINTER (the phase-2 copy reads it late, P9b);
+   *  a STORAGE source is snapshotted to a fresh memory image at this position (P27/P35); a
+   *  CALLDATA value-array is decoded + validated into a fresh image here. */
+  private prepareDynArrayFieldArg(
+    t: JethType & { kind: 'array' },
+    value: Expr,
+    ctx: LowerCtx,
+    out: string[],
+  ): PreparedFieldArg {
+    const innerElem = t.element;
+    const storageSrc =
+      value.kind === 'mapStorageValue' ||
+      (value.kind === 'arrayValue' &&
+        (value.arr.base.kind === 'stateArray' ||
+          value.arr.base.kind === 'mapArray' ||
+          value.arr.base.kind === 'placeArray'));
+    if (storageSrc) {
+      const lenSlot = this.arraySrcLenSlot(value, ctx, out);
+      if (isValueWord(innerElem)) {
+        // snapshot the storage array to a [len][elems] memory image (storage is canonical).
+        const dst = this.fresh();
+        out.push(`let ${dst} := mload(0x40)`);
+        const size = this.abiEncFromStorage(t, lenSlot, 0, dst, out);
+        out.push(`mstore(0x40, add(${dst}, ${size}))`);
+        return { k: 'dynArr', elem: innerElem, ptr: dst, agg: false };
+      }
+      // a nested-dynamic-leaf array (bytes[]/string[]/T[][]): snapshot to the B4 pointer-headed image.
+      const ip = this.fresh();
+      out.push(`let ${ip} := ${this.abiDecFromStorageToImage(t, lenSlot, ctx, out)}`);
+      return { k: 'dynArr', elem: innerElem, ptr: ip, agg: true };
+    }
+    if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray') {
+      if (!isStaticValueType(innerElem))
+        throw new UnsupportedError('a calldata array of non-value elements is not supported');
+      const b = ctx.cdArrays.get(value.arr.base.name);
+      if (!b) throw new UnsupportedError(`unbound calldata array ${value.arr.base.name}`);
+      // solc's calldata->memory conversion at the arg position: decode + VALIDATE each element
+      // into a fresh [len][elems] image (the same per-element validation the direct store used).
+      const mp = this.fresh();
+      out.push(`let ${mp} := mload(0x40)`);
+      out.push(`mstore(${mp}, ${b.length})`);
+      out.push(`mstore(0x40, add(${mp}, add(0x20, mul(${b.length}, 0x20))))`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${b.length}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const w = this.fresh();
+      inner.push(`let ${w} := calldataload(add(${b.offset}, mul(${i}, 32)))`);
+      const guard = this.validateInput(innerElem, w);
+      if (guard) inner.push(guard);
+      inner.push(`mstore(add(${mp}, add(0x20, mul(${i}, 0x20))), ${w})`);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+      return { k: 'dynArr', elem: innerElem, ptr: mp, agg: false };
+    }
+    // memory source (a memArray local, new Array<T>(n), a nested image, ...): capture the pointer.
+    if (isValueWord(innerElem) || isBytesLike(innerElem) || innerElem.kind === 'array') {
+      const p = this.fresh();
+      out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
+      return { k: 'dynArr', elem: innerElem, ptr: p, agg: !isValueWord(innerElem) };
+    }
+    throw new UnsupportedError('a memory array of non-value elements is not supported');
+  }
+
+  /** W7B phase 2: perform every storage write of a prepared ctor at `baseSlot`. Pure store
+   *  codecs only - all argument evaluation already happened in prepareCtorArgs. */
+  private emitPreparedCtorStore(fields: StructField[], items: PreparedFieldArg[], baseSlot: string, out: string[]): void {
     const isConst = /^\d+$/.test(baseSlot);
     const slotAt = (n: number): string =>
       isConst ? String(BigInt(baseSlot) + BigInt(n)) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
     fields.forEach((f, i) => {
-      const arg = args[i]!;
-      if (f.type.kind === 'struct' && arg.kind === 'structNew') {
-        this.writeStruct(arg.fields, arg.args, slotAt(f.slot), ctx, out);
-      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
-        // W6A: a DYNAMIC struct field from a NON-INLINE source in a STORAGE write (this.st =
-        // S(..., t) / push / mapping store): materialize the source's pointer-headed image
-        // (buildDynStructLocal ALIASES a memory source, copies storage/calldata), then deep-copy
-        // it into the field's slots - the same value solc writes (it deep-copies the referenced
-        // memory struct on the memory->storage assignment).
-        this.writeDynStructFromMem(f.type, this.buildDynStructLocal(f.type, arg, ctx, out), slotAt(f.slot), out);
-      } else if (f.type.kind === 'array' && f.type.length === undefined) {
-        // a DYNAMIC-array field: a value-element array (u256[], address[], ...) OR a nested-dynamic-leaf
-        // array (bytes[]/string[]/T[][], isDynStructLeafArrayField). Both deep-copy the array VALUE (the
-        // analyzer guarantees a true dynamic-array source, not a literal) into the field's storage
-        // dynamic array (length at slotAt(f.slot), data at keccak(slot)), overwrite-clearing the old
-        // data. copyArrayValueIntoStorage dispatches the value-element vs pointer-headed (B4) image
-        // deep-copy by element kind; byte-identical to solc (the same path as `this.field = arr`).
-        this.copyArrayValueIntoStorage(f.type.element, arg, slotAt(f.slot), ctx, out);
-      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
-        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>) written to storage from a
-        // constructor: materialize the arg's N-pointer memory image (a literal via
-        // buildNestedMemArrayLit inside aggArgToMemPtr; a memory local aliases; a storage/calldata
-        // source deep-copies), then transcode it into the field's N consecutive base slots with
-        // per-element overwrite-clear (the NF-1 helper, the same codec `this.fixedArr = v` uses).
-        // The writeArrayLit branch below cannot lay out a bytes/string-leaf literal element.
-        this.storeDynLeafFixedArrayFromMem(f.type, this.aggArgToMemPtr(arg, ctx, out), slotAt(f.slot), out);
-      } else if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
-        // a fixed-array field constructed from a (possibly nested) literal.
-        this.writeArrayLit(arg, slotAt(f.slot), ctx, out);
-      } else if (
-        (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) &&
-        isStaticType(f.type)
-      ) {
-        // a non-inline STATIC aggregate field source (a local / param / storage value): materialize its
-        // ABI-unpacked image, then transcode it into the field's packed storage slots.
-        this.storeStaticAggFromMem(f.type, this.aggToMemPtr(arg, ctx, out), slotAt(f.slot), out);
-      } else if (isBytesLike(f.type)) {
-        const ref = this.lowerDynamic(arg, ctx, out);
-        this.storeDynamic(slotAt(f.slot), ref, out);
-      } else {
-        const v = this.lowerExpr(arg, ctx, out);
-        for (const l of this.storeState(f.type, slotAt(f.slot), f.offset, v)) out.push(l);
+      const it = items[i]!;
+      switch (it.k) {
+        case 'ctor':
+          this.emitPreparedCtorStore(it.fields, it.items, slotAt(f.slot), out);
+          break;
+        case 'dynStruct':
+          this.writeDynStructFromMem(f.type as JethType & { kind: 'struct' }, it.ptr, slotAt(f.slot), out);
+          break;
+        case 'dynArr':
+          if (it.agg) this.copyMemAggArrayIntoStorage(it.elem, it.ptr, slotAt(f.slot), out);
+          else this.copyMemArrayIntoStorage(it.elem, it.ptr, slotAt(f.slot), out);
+          break;
+        case 'dynLeafFixed':
+          this.storeDynLeafFixedArrayFromMem(f.type as JethType & { kind: 'array' }, it.ptr, slotAt(f.slot), out);
+          break;
+        case 'lit':
+          this.emitPreparedLitStore(it.lit, it.items, slotAt(f.slot), out);
+          break;
+        case 'staticAgg':
+          this.storeStaticAggFromMem(f.type, it.ptr, slotAt(f.slot), out);
+          break;
+        case 'bytes':
+          this.storeDynamic(slotAt(f.slot), it.ref, out);
+          break;
+        case 'value':
+          for (const l of this.storeState(f.type, slotAt(f.slot), f.offset, it.reg)) out.push(l);
+          break;
       }
+    });
+  }
+
+  /** W7B phase 1 for a (possibly nested) fixed-array LITERAL written to storage: evaluate every
+   *  element at its source position (value elements frozen to registers; struct / nested-literal
+   *  elements recurse into the same two-phase prepare). */
+  private prepareLitElems(lit: Expr & { kind: 'arrayLit' }, ctx: LowerCtx, out: string[]): PreparedLitElem[] {
+    const elem = lit.elem;
+    if (isStaticValueType(elem)) {
+      return lit.elements.map((el) => {
+        const reg = this.fresh();
+        out.push(`let ${reg} := ${this.lowerExpr(el, ctx, out)}`);
+        return { k: 'value' as const, reg };
+      });
+    }
+    return lit.elements.map((el) => {
+      if (el.kind === 'arrayLit') return { k: 'lit' as const, lit: el, items: this.prepareLitElems(el, ctx, out) };
+      if (el.kind === 'structNew')
+        return {
+          k: 'ctor' as const,
+          fields: el.fields,
+          items: this.inTransientCapture(() => this.prepareCtorArgs(el.fields, el.args, ctx, out)),
+        };
+      throw new UnsupportedError(`array-literal element '${el.kind}' is not constructible`);
+    });
+  }
+
+  /** W7B phase 2 for a prepared fixed-array literal: value elements via arrayElemStore (handles
+   *  packing); nested literal / struct elements recurse at baseSlot + k*slotCount(element). */
+  private emitPreparedLitStore(
+    lit: Expr & { kind: 'arrayLit' },
+    items: PreparedLitElem[],
+    baseSlot: string,
+    out: string[],
+  ): void {
+    const elem = lit.elem;
+    if (isStaticValueType(elem)) {
+      items.forEach((it, k) => {
+        if (it.k !== 'value') throw new UnsupportedError('prepared literal element kind mismatch');
+        this.arrayElemStore(elem, baseSlot, String(k), it.reg, out);
+      });
+      return;
+    }
+    const sc = storageSlotCount(elem);
+    const isConst = /^\d+$/.test(baseSlot);
+    const slotAt = (n: number): string =>
+      isConst ? String(BigInt(baseSlot) + BigInt(n)) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
+    items.forEach((it, k) => {
+      const es = slotAt(k * sc);
+      if (it.k === 'lit') this.emitPreparedLitStore(it.lit, it.items, es, out);
+      else if (it.k === 'ctor') this.emitPreparedCtorStore(it.fields, it.items, es, out);
+      else throw new UnsupportedError('prepared literal element kind mismatch');
     });
   }
 
@@ -6980,25 +7207,12 @@ ${indent(runtime, 6)}
 
   /** Write a (possibly NESTED) static fixed-array literal into storage at `baseSlot`.
    *  Value elements use arrayElemStore (handles packing); nested array / struct elements
-   *  recurse at baseSlot + k*slotCount(element). */
+   *  recurse at baseSlot + k*slotCount(element). W7B: two-phase - every element expression
+   *  (including each struct element's ctor args) is evaluated FIRST in source order, then all
+   *  the storage writes run (solc builds the literal in memory before the storage copy). */
   private writeArrayLit(lit: Expr & { kind: 'arrayLit' }, baseSlot: string, ctx: LowerCtx, out: string[]): void {
-    const elem = lit.elem;
-    if (isStaticValueType(elem)) {
-      lit.elements.forEach((el, k) =>
-        this.arrayElemStore(elem, baseSlot, String(k), this.lowerExpr(el, ctx, out), out),
-      );
-      return;
-    }
-    const sc = storageSlotCount(elem);
-    const isConst = /^\d+$/.test(baseSlot);
-    const slotAt = (n: number): string =>
-      isConst ? String(BigInt(baseSlot) + BigInt(n)) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
-    lit.elements.forEach((el, k) => {
-      const es = slotAt(k * sc);
-      if (el.kind === 'arrayLit') this.writeArrayLit(el, es, ctx, out);
-      else if (el.kind === 'structNew') this.writeStruct(el.fields, el.args, es, ctx, out);
-      else throw new UnsupportedError(`array-literal element '${el.kind}' is not constructible`);
-    });
+    const items = this.prepareLitElems(lit, ctx, out);
+    this.emitPreparedLitStore(lit, items, baseSlot, out);
   }
 
   /** Bounds-checked storage slot of a whole STRUCT array element this.recs[i] (a
@@ -7229,26 +7443,45 @@ ${indent(runtime, 6)}
     ctx: LowerCtx,
     out: string[],
   ): void {
+    // W7B: two-phase (evaluate the RHS completely, then store) so a self-reading ctor arg sees
+    // the destination's OLD data. `dst` must already be resolved side-effect-free here; callers
+    // whose destination resolution can read/mutate state (mapping key, array index, place path)
+    // call prepareStructStore FIRST, then resolve dst, then emitPreparedStructStore (RHS-first,
+    // the pinned solc order - P4/P29/P30).
+    const prep = this.prepareStructStore(type, value, ctx, out);
+    this.emitPreparedStructStore(type, prep, dst, out);
+  }
+
+  /** W7B phase 1 for a whole-struct RHS: evaluate the value completely per solc's semantics -
+   *  a constructor evaluates its args in source order (prepareCtorArgs); a memory/calldata
+   *  source materializes/aliases its image; a storage source resolves its base slot (including
+   *  any element bounds check, at the ARG position - ps.push(ps[0]) on empty panics like solc). */
+  private prepareStructStore(
+    type: JethType & { kind: 'struct' },
+    value: Expr,
+    ctx: LowerCtx,
+    out: string[],
+  ): PreparedStructStore {
     if (value.kind === 'structNew') {
-      this.writeStruct(value.fields, value.args, dst, ctx, out);
-      return;
+      // W6A: the constructed value goes straight into storage (a deep copy in solc too) - a
+      // TRANSIENT capture context, so an aliasable memory field source stays accepted.
+      return {
+        k: 'ctor',
+        fields: value.fields,
+        items: this.inTransientCapture(() => this.prepareCtorArgs(value.fields, value.args, ctx, out)),
+      };
     }
     if (value.kind === 'memAggregate' || value.kind === 'cdAggregateValue') {
-      // a STATIC struct from a memory/calldata source: transcode its ABI-unpacked image to packed storage.
-      this.storeStaticAggFromMem(type, this.aggToMemPtr(value, ctx, out), dst, out);
-      return;
+      // a STATIC struct from a memory/calldata source: its ABI-unpacked image (memory aliases).
+      return { k: 'memStatic', ptr: this.aggToMemPtr(value, ctx, out) };
     }
     if (value.kind === 'arrayGet') {
-      // W3-Y2c CRASH fix: a MEMORY struct-ARRAY ELEMENT source (this.p0 = ps[i], ps: Arr<P,N> / P[]).
-      // ps[i] (arrayGet) lowers to the element's pointer-headed image; aggToMemPtr freezes that pointer.
-      // A STATIC struct element transcodes its ABI-unpacked image to packed storage (storeStaticAggFromMem);
-      // a DYNAMIC-field struct element (P with a bytes/string/dyn-array field) writes value fields packed +
-      // dynamic fields with overwrite-clear (writeDynStructFromMem, the same path a memDynStructValue uses).
-      // This copies the element struct INTO storage (a value copy), byte-identical to solc's `s = arr[i]`.
+      // W3-Y2c: a MEMORY struct-ARRAY ELEMENT source (this.p0 = ps[i], ps: Arr<P,N> / P[]).
+      // ps[i] (arrayGet) lowers to the element's pointer-headed image; aggToMemPtr freezes that
+      // pointer. A STATIC struct element transcodes its ABI-unpacked image to packed storage; a
+      // DYNAMIC-field element writes value fields packed + dynamic fields with overwrite-clear.
       const mp = this.aggToMemPtr(value, ctx, out);
-      if (isDynamicType(type)) this.writeDynStructFromMem(type, mp, dst, out);
-      else this.storeStaticAggFromMem(type, mp, dst, out);
-      return;
+      return isDynamicType(type) ? { k: 'memDyn', ptr: mp } : { k: 'memStatic', ptr: mp };
     }
     if (
       value.kind === 'memDynStructValue' ||
@@ -7256,14 +7489,25 @@ ${indent(runtime, 6)}
       value.kind === 'memDynField' ||
       value.kind === 'memDynNestedField'
     ) {
-      // a DYNAMIC-field struct from a memory local, calldata param, or a whole nested-dyn-struct field of a
-      // dyn-struct local (this.d = v.t / this.m[k] = v.t): materialize the pointer-headed image (handling
-      // the source uniformly - buildDynStructLocal aliases the field's image pointer), then write value
-      // fields packed and bytes/string fields with overwrite-clear into storage.
-      this.writeDynStructFromMem(type, this.buildDynStructLocal(type, value, ctx, out), dst, out);
-      return;
+      // a DYNAMIC-field struct from a memory local, calldata param, or a whole nested-dyn-struct
+      // field of a dyn-struct local (this.d = v.t / this.m[k] = v.t): materialize the
+      // pointer-headed image (buildDynStructLocal aliases a memory source's image pointer).
+      return { k: 'memDyn', ptr: this.buildDynStructLocal(type, value, ctx, out) };
     }
-    this.copyStruct(type, this.structSrcSlot(value, ctx, out), dst, out);
+    return { k: 'storageCopy', srcSlot: this.structSrcSlot(value, ctx, out) };
+  }
+
+  /** W7B phase 2 for a whole-struct RHS: the pure store at `dst` (no argument evaluation left). */
+  private emitPreparedStructStore(
+    type: JethType & { kind: 'struct' },
+    prep: PreparedStructStore,
+    dst: string,
+    out: string[],
+  ): void {
+    if (prep.k === 'ctor') this.emitPreparedCtorStore(prep.fields, prep.items, dst, out);
+    else if (prep.k === 'memStatic') this.storeStaticAggFromMem(type, prep.ptr, dst, out);
+    else if (prep.k === 'memDyn') this.writeDynStructFromMem(type, prep.ptr, dst, out);
+    else this.copyStruct(type, prep.srcSlot, dst, out);
   }
 
   /** Write a DYNAMIC-field struct's pointer-headed memory image (from buildDynStructLocal) into
@@ -7578,6 +7822,11 @@ ${indent(runtime, 6)}
   private lowerStrPush(arr: ArrayExpr, value: Expr | undefined, ctx: LowerCtx, out: string[]): void {
     const ref = this.lowerArrayRef(arr, ctx, out);
     if (ref.src !== 'storage') throw new UnsupportedError('push on a non-storage array');
+    // W7B (arg-first): resolve the pushed VALUE's reference BEFORE the grow - solc evaluates the
+    // argument first, so strs.push(strs[0]) on an empty array panics on the source bounds check
+    // (P11) instead of aliasing the freshly-grown empty element. The copy itself reads the source
+    // after the grow, matching solc (the grown region never overlaps a valid source).
+    const vref = value ? this.lowerDynamic(value, ctx, out) : undefined;
     const len = this.fresh();
     out.push(`let ${len} := sload(${ref.lenSlot})`);
     out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
@@ -7585,8 +7834,7 @@ ${indent(runtime, 6)}
     const dataBase = this.arrayDataSlot(ref.lenSlot, out);
     const hdr = this.fresh();
     out.push(`let ${hdr} := add(${dataBase}, ${len})`);
-    if (value) {
-      const vref = this.lowerDynamic(value, ctx, out);
+    if (vref) {
       this.storeDynamic(hdr, vref, out); // header slot was zero (grown fresh), no old tail to clear
     }
     // push() with no value: the element is the storage default (empty), already 0.
@@ -13840,6 +14088,34 @@ type DynRef =
   | { src: 'storage'; slot: string }
   | { src: 'calldata'; dataPtr: string; len: string }
   | { src: 'memory'; ptr: string; tailBytes?: string }; // ptr -> [len][data...]; tailBytes = full image byte size for a struct-element array
+
+// ---- W7B: two-phase storage struct/array-literal writes ------------------------------------
+// Phase 1 (prepare*) evaluates every RHS argument at its source position and captures a
+// store-ready handle; phase 2 (emitPrepared*) performs all the storage writes. solc materializes
+// the constructed value BEFORE touching storage, so a self-reading argument sees the OLD data.
+/** A prepared ctor field argument: the handle feeds the matching store codec in phase 2. */
+type PreparedFieldArg =
+  | { k: 'ctor'; fields: StructField[]; items: PreparedFieldArg[] } // nested constructor
+  | { k: 'dynStruct'; ptr: string } // pointer-headed dyn-struct image -> writeDynStructFromMem
+  | { k: 'dynArr'; elem: JethType; ptr: string; agg: boolean } // memory array image -> copyMem(Agg)ArrayIntoStorage
+  | { k: 'dynLeafFixed'; ptr: string } // N-pointer fixed image -> storeDynLeafFixedArrayFromMem
+  | { k: 'lit'; lit: Expr & { kind: 'arrayLit' }; items: PreparedLitElem[] } // fixed-array literal
+  | { k: 'staticAgg'; ptr: string } // flat ABI image -> storeStaticAggFromMem
+  | { k: 'bytes'; ref: DynRef } // memory bytes ref -> storeDynamic
+  | { k: 'value'; reg: string }; // frozen value word -> storeState
+
+/** A prepared fixed-array-literal element (value / nested literal / struct ctor). */
+type PreparedLitElem =
+  | { k: 'value'; reg: string }
+  | { k: 'ctor'; fields: StructField[]; items: PreparedFieldArg[] }
+  | { k: 'lit'; lit: Expr & { kind: 'arrayLit' }; items: PreparedLitElem[] };
+
+/** A prepared whole-struct RHS (the storeStructTo family). */
+type PreparedStructStore =
+  | { k: 'ctor'; fields: StructField[]; items: PreparedFieldArg[] }
+  | { k: 'memStatic'; ptr: string }
+  | { k: 'memDyn'; ptr: string }
+  | { k: 'storageCopy'; srcSlot: string };
 
 const TOP_BYTE = '0xff00000000000000000000000000000000000000000000000000000000000000';
 
