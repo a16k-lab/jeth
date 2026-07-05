@@ -292,6 +292,14 @@ export class Analyzer {
   private funcsByName = new Map<string, RawFunction>();
   private candidatesByName = new Map<string, RawFunction[]>(); // source name -> all overloads (decl order)
   private currentCallees = new Set<string>(); // internal callee KEYS of the function being checked
+  // The canonical funcref-signature keys the function being checked CALLS THROUGH a pointer. A call
+  // through a pointer of signature S can only reach a function that was ADDRESS-TAKEN with that exact
+  // signature (a funcref is minted only by taking a function's address), so the transitive-purity
+  // fixpoint unions the effects of the ADDRESS-TAKEN same-signature targets - NOT of every function
+  // that merely shares the signature. This is EXACTLY sound (the reachable set) and avoids the spurious
+  // over-rejection where a @view function is blamed for a same-signature mutating function it can never
+  // reach. Deferred to the fixpoint because `addressTaken` is only complete after ALL bodies are checked.
+  private currentPtrCallSigs = new Set<string>();
   private internallyCalled = new Set<string>(); // KEYS of functions that are the target of an internal call
   // Internal function pointers: the KEYS of functions whose address was taken (`this.f` / bare `f` used as
   // a value). Each such function is assigned a stable small integer id (funcRefIds) so a call through a
@@ -1527,7 +1535,14 @@ export class Analyzer {
     const functions: FunctionIR[] = [];
     const effects = new Map<
       string,
-      { writes: boolean; reads: boolean; readsEnv: boolean; callees: Set<string>; rf: RawFunction }
+      {
+        writes: boolean;
+        reads: boolean;
+        readsEnv: boolean;
+        callees: Set<string>;
+        ptrCallSigs: Set<string>;
+        rf: RawFunction;
+      }
     >();
     for (const rf of rawFns) {
       const f = this.checkFunction(rf);
@@ -1539,6 +1554,7 @@ export class Analyzer {
           reads: this.currentReadsState,
           readsEnv: this.currentReadsEnv,
           callees: this.currentCallees,
+          ptrCallSigs: this.currentPtrCallSigs,
           rf,
         });
       }
@@ -1559,6 +1575,7 @@ export class Analyzer {
           reads: this.currentReadsState,
           readsEnv: this.currentReadsEnv,
           callees: this.currentCallees,
+          ptrCallSigs: this.currentPtrCallSigs,
           rf,
         });
       }
@@ -1582,21 +1599,37 @@ export class Analyzer {
             reads: this.currentReadsState,
             readsEnv: this.currentReadsEnv,
             callees: this.currentCallees,
+            ptrCallSigs: this.currentPtrCallSigs,
             rf,
           });
         }
       });
     }
 
-    // Transitive purity: a function inherits the state/env effects of everything it calls.
-    // Fixpoint over the call graph (handles recursion / mutual recursion), then validate
-    // each declared mutability against the TRANSITIVE effects (matches solc, which rejects
-    // e.g. a @view function that calls a state-writing helper).
+    // Internal function pointers: a call THROUGH a pointer of signature S can only reach a function
+    // that was address-taken with signature S (a funcref is minted solely by taking a function's
+    // address). Group the ADDRESS-TAKEN functions by signature key now that `addressTaken` is complete,
+    // so the fixpoint below can union the reachable targets' effects into every pointer-call site -
+    // WITHOUT blaming a @view function for a same-signature mutating function it can never reach.
+    const addressTakenBySig = new Map<string, string[]>();
+    for (const key of this.addressTaken) {
+      const ce = effects.get(key);
+      if (!ce || ce.rf.returnTypes) continue;
+      const sk = this.funcrefSigKey(this.funcRefTypeOf(ce.rf) as JethType & { kind: 'funcref' });
+      (addressTakenBySig.get(sk) ?? addressTakenBySig.set(sk, []).get(sk)!).push(key);
+    }
+    // Transitive purity: a function inherits the state/env effects of everything it calls - both direct
+    // internal callees AND every address-taken same-signature target it may dispatch through a pointer.
+    // Fixpoint over the call graph (handles recursion / mutual recursion), then validate each declared
+    // mutability against the TRANSITIVE effects (matches solc, which rejects e.g. a @view function that
+    // calls a state-writing helper).
     let changed = true;
     while (changed) {
       changed = false;
       for (const e of effects.values()) {
-        for (const callee of e.callees) {
+        const reachable: string[] = [...e.callees];
+        for (const sk of e.ptrCallSigs) for (const t of addressTakenBySig.get(sk) ?? []) reachable.push(t);
+        for (const callee of reachable) {
           const ce = effects.get(callee);
           if (!ce) continue;
           if (ce.writes && !e.writes) {
@@ -3198,6 +3231,7 @@ export class Analyzer {
     this.currentReadsEnv = false;
     this.currentReturnTypes = undefined;
     this.currentCallees = new Set();
+    this.currentPtrCallSigs = new Set();
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -3430,6 +3464,7 @@ export class Analyzer {
     this.currentReadsEnv = false;
     this.currentReturnTypes = undefined;
     this.currentCallees = new Set();
+    this.currentPtrCallSigs = new Set();
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -3863,6 +3898,7 @@ export class Analyzer {
     this.currentReadsEnv = false;
     this.currentReturnTypes = undefined;
     this.currentCallees = new Set();
+    this.currentPtrCallSigs = new Set();
     this.currentInConstructor = true;
     // P0-23: base-ARG expressions (heritage / super) evaluate in the DEPLOYED contract's scope (a
     // heritage clause names a base, but the arguments live in the derived contract's specifier scope and
@@ -5128,6 +5164,7 @@ export class Analyzer {
     this.currentReadsEnv = false;
     this.currentReturnTypes = rf.returnTypes;
     this.currentCallees = new Set();
+    this.currentPtrCallSigs = new Set();
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -9714,6 +9751,13 @@ export class Analyzer {
     return { kind: 'funcref', params: rf.params.map((p) => p.type), ret: rf.returnType.kind === 'void' ? undefined : rf.returnType };
   }
 
+  /** A stable canonical key for a funcref signature (params + return), used to group a pointer-call
+   *  site with the ADDRESS-TAKEN functions it could dispatch to (same-signature). Matches the yul
+   *  dispatcher's signature key so the effect-fixpoint grouping and the runtime dispatch agree. */
+  private funcrefSigKey(sig: JethType & { kind: 'funcref' }): string {
+    return `${sig.params.map(canonicalName).join(',')}->${sig.ret ? canonicalName(sig.ret) : 'void'}`;
+  }
+
   /** ADDRESS-TAKING: interpret `node` as an internal function-pointer VALUE `expected` (a funcref type).
    *  `node` is either a bare identifier `f` naming an internal function, or `this.f`. Resolves the target
    *  among that name's overloads by MATCHING the expected funcref signature (params + return), records it
@@ -9765,6 +9809,61 @@ export class Analyzer {
 
   private tryAddressTake(node: ts.Expression, expected: JethType): Expr | undefined | 'reject' {
     if (expected.kind !== 'funcref') return undefined;
+    // P1-22: `L.f` where L names a @library and f is an INTERNAL library function - address-taking a
+    // library function as an internal pointer (solc: `function(...) = L.f`). The library function was
+    // re-keyed `L.f` and flattened into the function set, so it dispatches through the ordinary pointer
+    // machinery. Only INTERNAL library functions qualify: an @external (delegatecall) library fn is out
+    // of scope exactly like an @external contract function (JETH422).
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      ts.isIdentifier(node.name) &&
+      this.libraryByName.has(node.expression.text) &&
+      !this.isVisibleLocal(node.expression.text)
+    ) {
+      const libName = node.expression.text;
+      const fnName = node.name.text;
+      const libFns = this.libraryByName.get(libName)!.filter((c) => c.name === `${libName}.${fnName}`);
+      if (libFns.length === 0) return undefined; // not a library function - normal handling
+      if (libFns.length > 1) {
+        // solc does not resolve an overloaded target by the pointer type (same rule as a contract fn).
+        this.diags.error(
+          node,
+          'JETH421',
+          `cannot take the address of overloaded library function '${libName}.${fnName}' (Solidity does not resolve an overloaded function by the target function-pointer type)`,
+        );
+        return 'reject';
+      }
+      const lf = libFns[0]!;
+      if (lf.libraryExternal || lf.visibility === 'external') {
+        this.diags.error(
+          node,
+          'JETH422',
+          `cannot take the address of @external library function '${libName}.${fnName}' as an internal function pointer (external function types are out of scope)`,
+        );
+        return 'reject';
+      }
+      if (lf.returnTypes) {
+        this.diags.error(
+          node,
+          'JETH423',
+          `cannot take the address of multi-value-return library function '${libName}.${fnName}' as an internal function pointer`,
+        );
+        return 'reject';
+      }
+      if (!typesEqual(this.funcRefTypeOf(lf), expected)) {
+        this.diags.error(
+          node,
+          'JETH428',
+          `'${libName}.${fnName}' does not match the function-pointer type ${displayName(expected)} (its signature is ${displayName(this.funcRefTypeOf(lf))})`,
+        );
+        return 'reject';
+      }
+      const lkey = this.fkey(lf);
+      this.addressTaken.add(lkey);
+      this.internallyCalled.add(lkey);
+      return { kind: 'funcRef', type: this.funcRefTypeOf(lf), fn: lkey };
+    }
     let name: string | undefined;
     if (ts.isIdentifier(node) && !this.isVisibleLocal(node.text)) name = node.text;
     else if (
@@ -9819,10 +9918,11 @@ export class Analyzer {
     const key = this.fkey(rf);
     this.addressTaken.add(key);
     this.internallyCalled.add(key);
-    // Propagate the target's effects: taking a pointer that will be called flows the callee's transitive
-    // state/env effects into the current function via the callee-set fixpoint (checkFunction records the
-    // callee keys). This makes the enclosing @pure/@view validation account for the target it may invoke.
-    this.currentCallees.add(key);
+    // P1-19: TAKING a function's address does NOT itself invoke it, so it must NOT flow the target's
+    // state/env effects into the current function (solc treats `f` and `&f` as effect-free - a @view
+    // may freely take the address of a mutating function; only CALLING through the pointer counts).
+    // The effect is attributed at each pointer-CALL site (buildFuncRefCall records the signature, and
+    // the fixpoint unions the address-taken same-signature targets), which is exactly the reachable set.
     return { kind: 'funcRef', type: this.funcRefTypeOf(rf), fn: key };
   }
 
@@ -9833,6 +9933,28 @@ export class Analyzer {
    *  so the transitive-purity fixpoint accounts for them. Produces a `funcRefCall` IR the codegen lowers
    *  to a runtime id-dispatch over the candidate targets. Only static value / aggregate-by-ref parameter
    *  and return types are supported (the same set an ordinary internal call allows). */
+  /** Whether a type is passed BY MEMORY REFERENCE through an internal function pointer - i.e. the same
+   *  aggregate set an ordinary @internal/@private call accepts (a static or funcref-value struct, a
+   *  static/funcref fixed array, a dynamic value-word array incl. ((x)=>R)[], a static-struct dynamic
+   *  array, bytes/string, an aggregate-element dynamic array, or a supported dynamic-struct local). The
+   *  pointer target is ALWAYS a userfn_ (memory calling convention), so this exactly mirrors the
+   *  internal-call param/return acceptance - the dispatcher forwards the memptr word unchanged. */
+  private isPointerCallAggByRef(t: JethType): boolean {
+    const memByRef =
+      (t.kind === 'struct' && (isStaticType(t) || isFuncrefValueAggregate(t))) ||
+      (t.kind === 'array' && t.length !== undefined && (isStaticType(t) || isFuncrefValueAggregate(t))) ||
+      (t.kind === 'array' && t.length === undefined && isValueWord(t.element)) ||
+      (t.kind === 'array' && t.length === undefined && t.element.kind === 'struct' && isStaticType(t.element)) ||
+      isBytesLike(t);
+    const aggArrayByRef =
+      t.kind === 'array' &&
+      t.length === undefined &&
+      (t.element.kind === 'struct' ||
+        isBytesLike(t.element) ||
+        (t.element.kind === 'array' && t.element.length === undefined));
+    return memByRef || aggArrayByRef || this.isSupportedDynStructLocal(t);
+  }
+
   private buildFuncRefCall(
     node: ts.CallExpression,
     sig: JethType & { kind: 'funcref' },
@@ -9843,15 +9965,17 @@ export class Analyzer {
       this.diags.error(node.expression, 'JETH424', `this value is not callable as ${displayName(sig)}`);
       return undefined;
     }
-    // Only the value-typed / nested-funcref parameter & return shapes are supported through a pointer
-    // (the dispatcher hands the id and the same-ABI argument words to a userfn_). Aggregate-by-reference
-    // pointer params are deferred (a clean reject, never a miscompile).
-    const supported = (t: JethType): boolean => isStaticValueType(t) || t.kind === 'funcref';
+    // A value-typed / nested-funcref parameter & return rides through by value; an AGGREGATE param/return
+    // (struct / value array / bytes / string / dyn-struct) rides through BY MEMORY REFERENCE, exactly like
+    // an ordinary @internal/@private call - the dispatcher forwards the memptr word to the target userfn_.
+    // Anything outside that set (e.g. a calldata-only shape) stays a clean reject, never a miscompile.
+    const supported = (t: JethType): boolean =>
+      isStaticValueType(t) || t.kind === 'funcref' || this.isPointerCallAggByRef(t);
     if (!sig.params.every(supported) || (sig.ret !== undefined && !supported(sig.ret))) {
       this.diags.error(
         node,
         'JETH425',
-        `calling through a function pointer with an aggregate parameter/return type is not supported yet (only value-typed signatures)`,
+        `calling through a function pointer with this parameter/return type is not supported yet`,
       );
       return undefined;
     }
@@ -9861,20 +9985,29 @@ export class Analyzer {
     }
     const args: Expr[] = [];
     for (let i = 0; i < sig.params.length; i++) {
-      const a = this.checkExpr(node.arguments[i]!, sig.params[i]!);
+      const pt = sig.params[i]!;
+      const a = this.checkExpr(node.arguments[i]!, pt);
       if (!a) return undefined;
-      args.push(this.coerce(a, sig.params[i]!, node.arguments[i]!));
-    }
-    // A call through the pointer runs one of the candidate targets, so the current function inherits the
-    // union of their effects. Add EVERY function whose signature matches `sig` to the callee set; the
-    // fixpoint later folds in each one's transitive state/env effects. (This is a superset of what any
-    // single assigned target does, keeping @pure/@view validation sound.)
-    for (const list of this.candidatesByName.values()) {
-      for (const c of list) {
-        if (c.visibility === 'external' || c.returnTypes) continue;
-        if (typesEqual(this.funcRefTypeOf(c), sig)) this.currentCallees.add(this.fkey(c));
+      if (pt.kind === 'struct') {
+        // a memory-struct argument (passed by reference): the argument must be the same struct (mirrors
+        // the ordinary internal-call JETH085 check - a coerce would silently accept a mismatched image).
+        if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
+          this.diags.error(
+            node.arguments[i]!,
+            'JETH085',
+            `function pointer argument ${i + 1} expects ${displayName(pt)}, got ${displayName(a.type)}`,
+          );
+          return undefined;
+        }
+        args.push(a);
+      } else {
+        args.push(this.coerce(a, pt, node.arguments[i]!));
       }
     }
+    // P1-19: a call through the pointer reaches only the ADDRESS-TAKEN same-signature targets. Record the
+    // signature; the transitive-purity fixpoint unions those targets' effects (deferred so `addressTaken`
+    // is complete). This is the exact reachable set - NOT every function that merely shares the signature.
+    this.currentPtrCallSigs.add(this.funcrefSigKey(sig));
     return { kind: 'funcRefCall', type: sig.ret ?? VOID, ptr, args, sig };
   }
 
@@ -9989,7 +10122,9 @@ export class Analyzer {
       ws = this.currentWritesState,
       re = this.currentReadsEnv;
     const savedCallees = this.currentCallees;
+    const savedPtrSigs = this.currentPtrCallSigs;
     this.currentCallees = new Set();
+    this.currentPtrCallSigs = new Set();
     let ok = true;
     const argNodes = this.resolveCallArgs(node, c, c.name);
     if (!argNodes) ok = false;
@@ -10008,6 +10143,7 @@ export class Analyzer {
     this.currentWritesState = ws;
     this.currentReadsEnv = re;
     this.currentCallees = savedCallees;
+    this.currentPtrCallSigs = savedPtrSigs;
     return ok;
   }
 
@@ -10184,14 +10320,15 @@ export class Analyzer {
       (t.element.kind === 'struct' ||
         isBytesLike(t.element) ||
         (t.element.kind === 'array' && t.element.length === undefined));
-    // An INTERNAL FUNCTION-POINTER param/return is a value type (a one-word dispatch id) with a value
-    // signature: passed and returned by value on an internal call, byte-identical to any other word.
-    // Only value-typed signatures are supported through a pointer (the funcRefCall gate enforces this);
-    // gate the pointer type itself here so an aggregate-signature funcref param is a clean reject.
+    // An INTERNAL FUNCTION-POINTER param/return is a value type (a one-word dispatch id) passed by value.
+    // Its SIGNATURE may in turn use value types, nested funcrefs, OR memory-by-reference aggregates (the
+    // same set a call through the pointer supports) - so an aggregate-signature funcref like
+    // `(u256[])=>u256` is accepted here and dispatched via a memptr. A signature outside that set stays a
+    // clean reject at the funcref-call gate (buildFuncRefCall), never a miscompile.
     const funcRefOK = (t: JethType): boolean =>
       t.kind === 'funcref' &&
-      t.params.every((p) => isStaticValueType(p) || funcRefOK(p)) &&
-      (t.ret === undefined || isStaticValueType(t.ret) || funcRefOK(t.ret));
+      t.params.every((p) => isStaticValueType(p) || funcRefOK(p) || this.isPointerCallAggByRef(p)) &&
+      (t.ret === undefined || isStaticValueType(t.ret) || funcRefOK(t.ret) || this.isPointerCallAggByRef(t.ret));
     const paramSupported = (t: JethType): boolean =>
       isStaticValueType(t) || funcRefOK(t) || (aggOK && (isMemByRef(t) || aggArrayByRef(t) || this.isSupportedDynStructLocal(t)));
     for (const p of callee.params) {
@@ -10264,13 +10401,16 @@ export class Analyzer {
       ws = this.currentWritesState,
       re = this.currentReadsEnv;
     const savedCallees = this.currentCallees;
+    const savedPtrSigs = this.currentPtrCallSigs;
     this.currentCallees = new Set();
+    this.currentPtrCallSigs = new Set();
     const r = this.checkExpr(expr);
     this.diags.items.length = diagLen;
     this.currentReadsState = rs;
     this.currentWritesState = ws;
     this.currentReadsEnv = re;
     this.currentCallees = savedCallees;
+    this.currentPtrCallSigs = savedPtrSigs;
     return r?.type;
   }
 
@@ -10586,7 +10726,9 @@ export class Analyzer {
       ws = this.currentWritesState,
       re = this.currentReadsEnv;
     const savedCallees = this.currentCallees;
+    const savedPtrSigs = this.currentPtrCallSigs;
     this.currentCallees = new Set();
+    this.currentPtrCallSigs = new Set();
     let ok = true;
     for (let i = 0; i < c.params.length; i++) {
       const node = i < argExprs.length ? argExprs[i]! : (c.defaults![i] as ts.Expression);
@@ -10603,6 +10745,7 @@ export class Analyzer {
     this.currentWritesState = ws;
     this.currentReadsEnv = re;
     this.currentCallees = savedCallees;
+    this.currentPtrCallSigs = savedPtrSigs;
     return ok;
   }
 
@@ -10767,6 +10910,10 @@ export class Analyzer {
     if (isBytesLike(t)) return true;
     if (t.kind === 'array' && t.length === undefined && isStaticValueType(t.element)) return true;
     if (t.kind === 'struct' && isStaticType(t)) return true;
+    // P1-22: an internal function pointer is a one-word VALUE (its dispatch id), so a funcref tuple
+    // component binds to a fresh local exactly like a uint256 - `let [a, g] = this.mk()` where `g` is
+    // a funcref. The bound local is later called through the ordinary funcref-call dispatch.
+    if (t.kind === 'funcref') return true;
     return false;
   }
 

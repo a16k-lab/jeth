@@ -230,6 +230,13 @@ export function storageByteSize(t: JethType): number {
       return storageSlotCount(t) * 32;
     case 'array':
       return t.length === undefined ? 32 : storageSlotCount(t) * 32;
+    case 'funcref':
+      // An INTERNAL function pointer is solc's `function internal` type: a stable 8-byte value
+      // (solc stores the target's code offset there; JETH stores its own dispatch id). Solidity
+      // PACKS it as an 8-byte field, so it shares a slot with neighbors and packs 4-per-slot in
+      // arrays - byte-identical NEIGHBOR/layout placement to solc (only the id BYTE differs, which
+      // is unmatchable by construction). A zero (never-assigned) id still Panics 0x51 on dispatch.
+      return 8;
     default:
       // mappings, dynamic types occupy whole slots.
       return 32;
@@ -642,16 +649,20 @@ export function isValueWordLeafArray(t: JethType): boolean {
   return isValueWordLeafArray(t.element);
 }
 
-/** Storage packing of a dynamic-array element. Solidity packs small value types
+/** Storage packing of a dynamic/fixed-array element. Solidity packs small value types
  *  (bool, uintN<256, intN<256, bytesN<32) several per slot, but NOT address (it
- *  is whole-slot in arrays despite being 20 bytes) nor full-word types. Verified. */
+ *  is whole-slot in arrays despite being 20 bytes) nor full-word types. An internal
+ *  function pointer (funcref) is an 8-byte value type, so solc packs it 4-per-slot in
+ *  arrays exactly like a uint64; its stored value is a small dispatch id that fits in
+ *  8 bytes, and a zero (never-assigned) element still Panics 0x51 on dispatch. Verified. */
 export function arrayElemPacks(t: JethType): { perSlot: number; size: number; packed: boolean } {
   const size = storageByteSize(t);
   const packable =
     t.kind === 'bool' ||
     (t.kind === 'uint' && t.bits < 256) ||
     (t.kind === 'int' && t.bits < 256) ||
-    (t.kind === 'bytesN' && t.size < 32);
+    (t.kind === 'bytesN' && t.size < 32) ||
+    t.kind === 'funcref';
   return packable ? { perSlot: Math.floor(32 / size), size, packed: true } : { perSlot: 1, size: 32, packed: false };
 }
 
