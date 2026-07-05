@@ -17449,6 +17449,25 @@ export class Analyzer {
       // which types the operand as `address` (-> JETH082) or emits the checksum error (-> JETH049).
       const addrLike =
         this.classifyAddressHexLiteral(node.left) !== 'plain' || this.classifyAddressHexLiteral(node.right) !== 'plain';
+      // Constant division/modulo by zero (solc parity): solc rejects `left / right` (or `%`) at compile
+      // time as "Division by zero" when the WHOLE expression is a pure int_const - i.e. BOTH operands
+      // fold to an int_const (a literal, or a reference to an integer @constant, resolved recursively
+      // through computed initializers) and the divisor is zero. foldConstRational deliberately does NOT
+      // resolve @constant references (it keeps typed refs as runtime arithmetic), so it misses e.g.
+      // `1n / this.Z` with `@constant Z = 0n`; check it here with evalConstInt, which DOES resolve int
+      // @constant refs but returns undefined for a typed cast (uN(x)) or a runtime local. That keeps
+      // `uint256(1) / Z` and `a / Z` as accepted runtime arithmetic (a Panic 0x12), exactly as solc.
+      if (!addrLike && (op === '/' || op === '%')) {
+        const rv = this.evalConstInt(node.right);
+        if (rv === 0n && this.evalConstInt(node.left) !== undefined) {
+          this.diags.error(
+            node,
+            'JETH079',
+            op === '/' ? 'division by zero in a constant expression' : 'modulo by zero in a constant expression',
+          );
+          return undefined;
+        }
+      }
       if (!addrLike && ['+', '-', '*', '/', '%', '**', '<<', '>>', '&', '|', '^'].includes(op)) {
         const folded = this.foldConstRational(node);
         if (folded !== undefined) {
@@ -18661,6 +18680,11 @@ export class Analyzer {
       // shift: result type = LHS type. A typed LHS truncates to its width; an int_const LHS stays unbounded.
       if (op === '<<' || op === '>>') {
         if (b.value < 0n) return { err: 'negative shift amount' };
+        // A left shift whose pre-truncation value would exceed 4096 bits cannot be folded (solc would
+        // do it as a runtime typed shift; a slot-free @constant fold can't reproduce that, and the raw
+        // JS BigInt shift would throw "Maximum BigInt size exceeded"). Treat as a clean rejection, the
+        // same safe over-rejection this path already applies to a typed overflow (e.g. u256(2)**256).
+        if (op === '<<' && this.shiftExceedsConstLimit(a.value, b.value)) return { revert: true };
         const shifted = op === '<<' ? a.value << b.value : a.value >> b.value;
         if (a.type === 'const') return { value: shifted, type: 'const' };
         return { value: this.wrapToType(shifted, a.type as { kind: 'uint' | 'int'; bits: number }), type: a.type };
@@ -18687,6 +18711,11 @@ export class Analyzer {
           break;
         case '**':
           if (B < 0n) return { err: 'negative exponent in a constant expression' };
+          // A power whose result would exceed 4096 bits cannot be folded (solc does it as runtime typed
+          // exponentiation; a slot-free @constant fold can't reproduce that, and the raw JS BigInt `**`
+          // would throw "Maximum BigInt size exceeded"). Clean rejection, the same safe over-rejection
+          // this path already applies to a typed overflow like u256(2)**256.
+          if (this.powExceedsConstLimit(A, B)) return { revert: true };
           v = A ** B;
           break;
         case '/':
@@ -18772,9 +18801,12 @@ export class Analyzer {
         case '*':
           return a * b;
         case '**':
-          return b < 0n ? undefined : a ** b;
+          // A negative exponent OR an over-4096-bit result is NOT a valid int_const here: return
+          // undefined so the caller re-folds via foldConstRational, which emits the clean reject.
+          // Also prevents a raw "Maximum BigInt size exceeded" throw on e.g. 2**(2**100).
+          return b < 0n || this.powExceedsConstLimit(a, b) ? undefined : a ** b;
         case '<<':
-          return b < 0n ? undefined : a << b;
+          return b < 0n || this.shiftExceedsConstLimit(a, b) ? undefined : a << b;
         case '>>':
           return b < 0n ? undefined : a >> b;
         case '&':
@@ -18792,6 +18824,41 @@ export class Analyzer {
       }
     }
     return undefined;
+  }
+
+  /** Bit length of |n| (0 for n==0), i.e. floor(log2(|n|))+1 for |n|>=1. */
+  private bitLength(n: bigint): bigint {
+    let a = n < 0n ? -n : n;
+    let bits = 0n;
+    while (a > 0n) {
+      a >>= 1n;
+      bits++;
+    }
+    return bits;
+  }
+
+  /** solc evaluates a constant integer expression as an int_const limited to 4096 bits
+   *  (RationalNumberType). `base ** exp` is rejected at compile time when its result would exceed that
+   *  limit: with |base|>=2 that is bitLength(|base|) * exp > 4096 (base 0/1/-1 fold to 0/1/±1, no
+   *  limit). This mirrors solc's `fitsPrecisionBase2` gate on `**` and ALSO guards the JS BigInt fold
+   *  from a raw "Maximum BigInt size exceeded" throw on astronomically large powers (e.g. 2**(2**100)).
+   *  A negative exponent is handled/rejected by the callers before this is consulted. */
+  private powExceedsConstLimit(base: bigint, exp: bigint): boolean {
+    const a = base < 0n ? -base : base;
+    if (a <= 1n) return false;
+    if (exp < 0n) return false;
+    return this.bitLength(a) * exp > 4096n;
+  }
+
+  /** solc rejects `value << shift` at compile time when the shifted int_const would exceed the
+   *  4096-bit limit: with value != 0 that is bitLength(|value|) + shift > 4096 (0 << anything is 0, no
+   *  limit). Mirrors solc's left-shift `fitsPrecisionBase2` gate and guards the JS BigInt fold from a
+   *  raw "Maximum BigInt size exceeded" throw (e.g. 1 << (2**100)). Right shift only shrinks the value,
+   *  so it has no such limit. A negative shift is rejected by the callers before this is consulted. */
+  private shiftExceedsConstLimit(value: bigint, shift: bigint): boolean {
+    if (value === 0n) return false;
+    if (shift < 0n) return false;
+    return this.bitLength(value) + shift > 4096n;
   }
 
   /** Exact-RATIONAL constant folding for the general expression path, matching solc: a constant
@@ -18857,6 +18924,10 @@ export class Analyzer {
         case '**':
           if (b.den !== 1n) return { err: 'a constant exponent must be an integer' };
           if (b.num < 0n) return { err: 'negative exponent in a constant expression' };
+          // solc caps a constant `**` at a 4096-bit int_const (rejecting e.g. 2**2049); this also
+          // guards the JS BigInt fold from a raw "Maximum BigInt size exceeded" throw (2**(2**100)).
+          if (this.powExceedsConstLimit(a.num, b.num) || this.powExceedsConstLimit(a.den, b.num))
+            return { err: `constant ** result exceeds the 4096-bit limit` };
           return reduce(a.num ** b.num, a.den ** b.num);
       }
       // The remaining operators require integer operands (solc rejects them on a non-integer rational).
@@ -18867,7 +18938,11 @@ export class Analyzer {
         case '%':
           return B === 0n ? { err: 'modulo by zero in a constant expression' } : { num: A % B, den: 1n };
         case '<<':
-          return B < 0n ? { err: 'negative shift amount' } : { num: A << B, den: 1n };
+          if (B < 0n) return { err: 'negative shift amount' };
+          // solc caps a constant `<<` at a 4096-bit int_const (rejecting e.g. 1<<4096); also guards
+          // the JS BigInt fold from a raw "Maximum BigInt size exceeded" throw (1 << (2**100)).
+          if (this.shiftExceedsConstLimit(A, B)) return { err: `constant << result exceeds the 4096-bit limit` };
+          return { num: A << B, den: 1n };
         case '>>':
           return B < 0n ? { err: 'negative shift amount' } : { num: A >> B, den: 1n };
         case '&':
