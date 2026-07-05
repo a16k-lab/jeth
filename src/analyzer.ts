@@ -11868,17 +11868,22 @@ export class Analyzer {
     return { local: node.expression.text, headWord, field: st.fields[idx]! };
   }
 
-  // Resolve an expression that denotes a NESTED DYNAMIC struct reference rooted at a dyn-struct memory
-  // local, reached ONLY through nested dynamic-struct fields (each such field's head word is a POINTER to
-  // the nested image, so it is a deref hop). `v` -> {root:v, derefWords:[]}; `v.t` (t a dynamic struct)
-  // -> {root:v, derefWords:[headWordOf(t)]}; `v.t.u` -> append headWordOf(u). Returns undefined for a
-  // non-dynamic-struct hop (a static aggregate field is INLINE, handled by the static-agg chain resolver).
+  // Resolve an expression that denotes a NESTED aggregate reference rooted at a dyn-struct memory local,
+  // reached through nested-struct fields where AT LEAST ONE hop is a DYNAMIC struct field. A dynamic-struct
+  // field's head word is a POINTER to the nested image (a deref hop); a STATIC-struct field is stored INLINE
+  // in the current image (a word-offset hop, no deref). `v` -> {root:v, derefWords:[], inlineOffset:0};
+  // `v.t` (t a dynamic struct) -> {derefWords:[headWordOf(t)], inlineOffset:0}; `v.t.inner` (inner a static
+  // struct after a dynamic hop) -> {derefWords:[headWordOf(t)], inlineOffset:wordOffsetOf(inner)}. The
+  // running inlineOffset accumulates static hops since the last deref; a following dynamic hop derefs at
+  // (inlineOffset + headWord) and resets inlineOffset to 0 (fresh image). A pure-static prefix from a
+  // bare-identifier root (no dynamic hop yet) is owned by the static-agg chain resolver, so a static hop is
+  // only folded here once >=1 dynamic hop has been crossed (P1-23: static-hop-under-dynamic-hop).
   private resolveMemDynNestedStructRef(
     expr: ts.Expression,
-  ): { rootLocal: string; derefWords: number[]; structType: JethType } | undefined {
+  ): { rootLocal: string; derefWords: number[]; inlineOffset: number; structType: JethType } | undefined {
     if (ts.isIdentifier(expr)) {
       const st = this.memDynStructLocals.get(expr.text);
-      if (st && st.kind === 'struct' && isDynamicType(st)) return { rootLocal: expr.text, derefWords: [], structType: st };
+      if (st && st.kind === 'struct' && isDynamicType(st)) return { rootLocal: expr.text, derefWords: [], inlineOffset: 0, structType: st };
       return undefined;
     }
     if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.name)) {
@@ -11888,17 +11893,38 @@ export class Analyzer {
       const idx = st.fields.findIndex((f) => f.name === expr.name.text);
       if (idx < 0) return undefined;
       const f = st.fields[idx]!;
-      // only a NESTED DYNAMIC STRUCT field is a derefable hop (head word holds a pointer to the image).
-      if (!(f.type.kind === 'struct' && isDynamicType(f.type))) return undefined;
       const headWord = st.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
-      return { rootLocal: inner.rootLocal, derefWords: [...inner.derefWords, headWord], structType: f.type };
+      // a NESTED DYNAMIC STRUCT field is a derefable hop: its head word (at the accumulated inline offset)
+      // holds a pointer to the next image; push the deref word and start a fresh inline accumulator.
+      if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        return {
+          rootLocal: inner.rootLocal,
+          derefWords: [...inner.derefWords, inner.inlineOffset + headWord],
+          inlineOffset: 0,
+          structType: f.type,
+        };
+      }
+      // a NESTED STATIC STRUCT field is stored INLINE in the current image (tuple-head layout): fold its
+      // head-word offset into the running inline accumulator, keeping the same image (no deref). Only
+      // reachable once >=1 dynamic hop has been crossed; a pure-static prefix is owned by the static-agg
+      // chain resolver, which never routes here. P1-23 static-hop-under-dyn-hop.
+      if (f.type.kind === 'struct' && isStaticType(f.type) && inner.derefWords.length > 0) {
+        return {
+          rootLocal: inner.rootLocal,
+          derefWords: inner.derefWords,
+          inlineOffset: inner.inlineOffset + headWord,
+          structType: f.type,
+        };
+      }
+      return undefined;
     }
     return undefined;
   }
 
-  // Resolve `base.field` where `base` is a NESTED dynamic-struct reference reached through >=1 deref hop
-  // (v.t.n). The single-level case (a bare-identifier base, v.t) is handled by memDynStructField, so this
-  // requires derefWords.length >= 1. Returns the deref chain + the final field's head word.
+  // Resolve `base.field` where `base` is a NESTED aggregate reference reached through >=1 DYNAMIC deref hop
+  // (v.t.n, v.t.inner.x). The single-level case (a bare-identifier base, v.t) is handled by memDynStructField,
+  // so this requires derefWords.length >= 1. Returns the deref chain + the final field's word offset (the
+  // field's head word plus any accumulated inline offset from intervening static-struct hops).
   private memDynNestedField(
     node: ts.PropertyAccessExpression,
   ): { rootLocal: string; derefWords: number[]; finalWord: number; field: StructField } | undefined {
@@ -11910,8 +11936,8 @@ export class Analyzer {
       this.diags.error(node, 'JETH210', `struct '${st.name}' has no field '${node.name.text}'`);
       return undefined;
     }
-    const finalWord = st.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
-    return { rootLocal: ref.rootLocal, derefWords: ref.derefWords, finalWord, field: st.fields[idx]! };
+    const headWord = st.fields.slice(0, idx).reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+    return { rootLocal: ref.rootLocal, derefWords: ref.derefWords, finalWord: ref.inlineOffset + headWord, field: st.fields[idx]! };
   }
 
   // ---- lvalues -------------------------------------------------------------
@@ -12891,8 +12917,14 @@ export class Analyzer {
         rawFields.push(cur);
         cur = cur.expression;
       } else if (ts.isIdentifier(cur)) {
+        // P1-23: a MEMORY dynamic-struct local (an @internal/@private param, or a `let v: S = ...` local
+        // in memDynStructLocals) is NOT a calldata param - its image is memory-pointer-headed, resolved by
+        // the memDynStructField / memDynNestedField / static-agg-chain resolvers. Skipping it here keeps
+        // this calldata resolver from wrongly claiming a memory-local chain and emitting the misleading
+        // "calldata parameter is read-only" (JETH214) / a calldata-source codegen (JETH900) on it; a
+        // genuinely-unsupported memory-local chain then falls to a clean reject downstream.
         const t = this.lookupLocal(cur.text);
-        if (t && t.kind === 'struct' && isDynamicType(t)) {
+        if (t && t.kind === 'struct' && isDynamicType(t) && !this.memDynStructLocals.has(cur.text)) {
           rootName = cur.text;
           rootType = t;
         }
@@ -13445,6 +13477,21 @@ export class Analyzer {
         return { base: { kind: 'memArrayExpr', expr: load }, elem: mf.field.type.element };
       }
       return undefined;
+    }
+    // P0-35a: m.i.xs - a dynamic value-array field of a NESTED dynamic struct reached through >=1 deref hop
+    // (base is `m.i`, itself a nested dyn-struct field). memDynNestedField derefs the chain to the inner
+    // image; the final head word holds the [len][elems] pointer. Load it (memDynNestedField deref) and wrap
+    // in memArrayExpr so a following [k] / .length / element write consume it like any memory value-array.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword
+    ) {
+      const nf = this.memDynNestedField(node);
+      if (nf && nf.field.type.kind === 'array' && nf.field.type.length === undefined) {
+        const load: Expr = { kind: 'memDynNestedField', type: U256, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord, deref: true };
+        return { base: { kind: 'memArrayExpr', expr: load }, elem: nf.field.type.element };
+      }
     }
     // Residual B3: xs[i].arr - a dynamic value-array field of a memory P[] dyn-struct element. The field
     // resolver yields the deref'd head word (the [len][elems] image) wrapped in a memArrayExpr, so a

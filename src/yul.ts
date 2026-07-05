@@ -3135,10 +3135,12 @@ ${indent(runtime, 6)}
         return e.wordOffset === 0 ? `mload(${ptr})` : `mload(add(${ptr}, ${e.wordOffset * 32}))`;
       }
       case 'memDynNestedField': {
-        // read a leaf of a nested DYNAMIC struct (v.t.n): deref the chain to the inner image, then read the
-        // final word. A value leaf -> mload IS the value. A deref leaf (bytes/string/dyn-array/dyn-struct)
-        // is a reference value, not a 256-bit word - it is consumed via lowerDynamic, never here.
-        if (e.deref) throw new UnsupportedError(`reference value 'memDynNestedField' used in a non-reference context`);
+        // read a leaf of a nested DYNAMIC struct (v.t.n, m.i.xs): deref the chain to the inner image, then
+        // mload the final head word. A VALUE leaf (deref=false) -> the mload IS the value. A DEREF leaf
+        // (deref=true: a dyn value-array field consumed via a memArrayExpr, P0-35a m.i.xs[k]) -> the mload
+        // yields the head word's POINTER (to the [len][elems] image), a reference value. Both are the same
+        // single mload of the head word; the deref flag only marks that the loaded word is a pointer, not a
+        // scalar. A bytes/string / nested-dyn-struct deref leaf is instead consumed via lowerDynamic.
         const inner = this.nestedInnerPtr(e.local, e.derefWords, ctx, out);
         return e.finalWord === 0 ? `mload(${inner})` : `mload(add(${inner}, ${e.finalWord * 32}))`;
       }
