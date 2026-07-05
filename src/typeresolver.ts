@@ -86,8 +86,9 @@ export function resolveType(
   if (ts.isFunctionTypeNode(node)) {
     const params: JethType[] = [];
     for (const p of node.parameters) {
-      // a rest/optional parameter, or a missing annotation, is not a valid function-pointer signature.
-      if (p.dotDotDotToken || p.questionToken || !p.type) {
+      // a rest/optional/defaulted parameter, or a missing annotation, is not a valid function-pointer
+      // signature (a Solidity `function(T) returns(R)` type carries neither optionality nor a default).
+      if (p.dotDotDotToken || p.questionToken || p.initializer || !p.type) {
         diags.error(node, 'JETH014', 'a function-pointer type parameter must have a plain type annotation');
         return undefined;
       }
@@ -179,11 +180,19 @@ export function resolveType(
     }
 
     const prim = resolvePrimitiveName(name);
-    if (prim) return prim;
-
-    // @struct type reference, or a registered branded newtype alias (both live in `structs`).
-    const st = structs?.get(name);
-    if (st) return st;
+    const st = prim ? undefined : structs?.get(name); // @struct / branded-newtype alias, both in `structs`
+    const resolved = prim ?? st;
+    if (resolved) {
+      // A NON-generic type reference (primitive, @struct, enum, branded alias) carries no type parameters;
+      // the generic forms (mapping<K,V>, Arr<T,N>, Brand<Base>) were handled above. TS parses a stray
+      // `u256<u8>` / `MyStruct<T>` into a type reference with typeArguments; solc has no such syntax and
+      // errors on it, so reject rather than silently ignore the extra arguments.
+      if (node.typeArguments && node.typeArguments.length > 0) {
+        diags.error(node, 'JETH460', `type arguments not allowed on '${name}'`);
+        return undefined;
+      }
+      return resolved;
+    }
 
     diags.error(node, 'JETH013', `unknown JETH type '${name}'`);
     return undefined;

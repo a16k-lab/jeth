@@ -2532,7 +2532,6 @@ export class Analyzer {
         continue;
       }
       const winner = versions[0]!;
-      const isSingle = versions.length === 1;
 
       // virtual/override correctness across the chain. Order in `versions` is most-derived -> base.
       for (let i = 0; i < versions.length; i++) {
@@ -2825,7 +2824,6 @@ export class Analyzer {
         }
       }
       this.overrideChains.set(sk, chain);
-      void isSingle;
     }
     return winners;
   }
@@ -4257,13 +4255,16 @@ export class Analyzer {
       // deployed's params are scope 0 (declared above); a base's params were bound by an ancestor's
       // wrap block, which still encloses this body at codegen time (providerIdx < i always).
       if (c.node) {
-        const cMods = i === 0 ? deployedMods : this.ctorDecorators(c.node).ctorMods;
+        // A base ctor's decorators (@payable + modifiers) are read once and reused; the deployed ctor
+        // (i === 0) uses its already-computed deployedMods/payable instead.
+        const baseCtorDecos = i === 0 ? undefined : this.ctorDecorators(c.node);
+        const cMods = i === 0 ? deployedMods : baseCtorDecos!.ctorMods;
         // Each contract's OWN ctor body is checked under ITS OWN @payable, not the deployed ctor's:
         // solc's "msg.value can only be used in payable constructors" (JETH162) is per-constructor. A
         // NON-payable base ctor reading msg.value is rejected even when the DEPLOYED ctor is @payable.
         // (The deployed ctor's payability, set at ~line 3035, is restored after this body.)
         const savedMut = this.currentMutability;
-        this.currentMutability = (i === 0 ? payable : this.ctorDecorators(c.node).payable) ? 'payable' : 'nonpayable';
+        this.currentMutability = (i === 0 ? payable : baseCtorDecos!.payable) ? 'payable' : 'nonpayable';
         let bstmts: Stmt[] = [];
         if (c.node.body) {
           // P0-22: a ctor BODY sees ONLY its OWN contract's ctor params, never an enclosing level's.
