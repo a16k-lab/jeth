@@ -8,7 +8,7 @@
 //
 // This also removes a spurious overload ambiguity: for { pick(Color), pick(u256) } called with an enum
 // literal pick(Color.Blue), the enum literal no longer coerces to u256, so only pick(Color) is viable
-// and resolution succeeds (solc resolves it the same way) instead of JETH reporting JETH901.
+// and resolution succeeds (solc resolves it the same way) instead of JETH reporting JETH434.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';

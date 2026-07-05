@@ -1,6 +1,6 @@
 // #47: FUNCTION OVERLOADING for internal/private calls. solc allows two @internal/functions
 // to share a name when they differ by arity or parameter types; JETH used to misresolve (funcsByName
-// was first-wins -> JETH148/JETH901). Now each function has a unique call-graph key (the bare name when
+// was first-wins -> JETH148/JETH434). Now each function has a unique call-graph key (the bare name when
 // unique, else `name__ovN`), and a call resolves the right overload by arity then by which candidate's
 // parameter types all the arguments fit. Byte-identical to solc 0.8.35; ambiguous / no-match reject.
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -103,7 +103,7 @@ contract C {
       codes(
         '@contract class C { g(a: u256): u256 { return a; } g(a: u256): u256 { return 2n; } @external @pure f(): u256 { return this.g(1n); } }',
       ),
-    ).toContain('JETH901');
+    ).toContain('JETH434');
     // no overload accepts 3 arguments
     expect(
       codes(

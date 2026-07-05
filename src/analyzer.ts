@@ -9152,7 +9152,7 @@ export class Analyzer {
       else {
         this.diags.error(
           inner,
-          viable.length === 0 ? 'JETH148' : 'JETH901',
+          viable.length === 0 ? 'JETH148' : 'JETH434',
           viable.length === 0
             ? `no overload of event '${inner.expression.text}' matches the argument types`
             : `emit of '${inner.expression.text}' is ambiguous (matches ${viable.length} overloads)`,
@@ -10437,7 +10437,7 @@ export class Analyzer {
   /** Resolve a (possibly overloaded) internal call `name(...)` to a single callee. One candidate ->
    *  that one. Several (overloading by arity or parameter types, like solc) -> filter by callable
    *  arity (accounting for F3 defaults / named-arg form), then by which candidate's parameter types
-   *  ALL the arguments fit. Emits JETH148 (no match) / JETH901 (ambiguous). */
+   *  ALL the arguments fit. Emits JETH148 (no match) / JETH434 (ambiguous). */
   private resolveOverload(node: ts.CallExpression, name: string): RawFunction | undefined {
     const candidates = this.candidatesByName.get(name);
     if (!candidates || candidates.length === 0) return this.funcsByName.get(name); // generic mangled name / none
@@ -10454,7 +10454,7 @@ export class Analyzer {
       this.diags.error(node, 'JETH148', `no overload of '${name}' matches the argument types`);
       return undefined;
     }
-    this.diags.error(node, 'JETH901', `call to '${name}' is ambiguous (matches ${viable.length} overloads)`);
+    this.diags.error(node, 'JETH434', `call to '${name}' is ambiguous (matches ${viable.length} overloads)`);
     return undefined;
   }
 
@@ -10603,10 +10603,10 @@ export class Analyzer {
     // ("Member \"f\" not unique after argument-dependent lookup"). Previously the resolver silently
     // picked viable[0], both over-accepting a genuinely-ambiguous super.f(<untyped literal>) AND (once
     // an escalating cast still fit two targets via literal-narrowing) miscompiling to the wrong overload.
-    // Emit the same JETH901 ambiguity the plain-call overload path emits. A SINGLE candidate is never
+    // Emit the same JETH434 ambiguity the plain-call overload path emits. A SINGLE candidate is never
     // ambiguous (the sole chain), so this only fires with 2+ overloaded super chains.
     if (candidates.length >= 2 && viable.length >= 2) {
-      this.diags.error(node, 'JETH901', `call to 'super.${name}' is ambiguous (matches ${viable.length} base overloads)`);
+      this.diags.error(node, 'JETH434', `call to 'super.${name}' is ambiguous (matches ${viable.length} base overloads)`);
       return undefined;
     }
     const chosen = viable.length === 1 ? viable[0]! : candidates.length === 1 ? candidates[0]! : undefined;
@@ -11081,7 +11081,7 @@ export class Analyzer {
       this.diags.error(node, 'JETH148', `no overload of '${qualified}' matches the argument types`);
       return undefined;
     }
-    this.diags.error(node, 'JETH901', `call to '${qualified}' is ambiguous (matches ${viable.length} overloads)`);
+    this.diags.error(node, 'JETH434', `call to '${qualified}' is ambiguous (matches ${viable.length} overloads)`);
     return undefined;
   }
 
