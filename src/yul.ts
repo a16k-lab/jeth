@@ -3881,6 +3881,19 @@ ${indent(runtime, 6)}
     out.push(`let ${ptr} := mload(0x40)`);
     const cursor = this.fresh();
     out.push(`let ${cursor} := add(${ptr}, ${totalHead * 32})`);
+    // W6B (tuple-return-alloc-clobber): reserve the buffer built so far ([ptr, cursor)) BEFORE
+    // evaluating a component expression inside the loop. An ALLOCATING later component
+    // (keccak256(abi.encode(x)), an internal call, a ternary hash, a struct-field aggToMemPtr)
+    // grabs mload(0x40) - which still pointed at `ptr` - and its scratch blob clobbered the
+    // EARLIER head words already written (word0 became the blob's length word, 0x20). Bumping
+    // 0x40 to the tail frontier makes the scratch land ABOVE everything written; a subsequent
+    // tail write may overwrite that dead scratch, which is harmless (the component's value is
+    // already in a register). The epilogue mstore(0x40, cursor) re-tightens the frontier, and
+    // evaluation ORDER is unchanged (a pre-pass would reorder side effects vs the storage-
+    // encoded components).
+    const reserve = (): void => {
+      out.push(`mstore(0x40, ${cursor})`);
+    };
     let hw = 0;
     types.forEach((t, i) => {
       const headPos = hw * 32;
@@ -3892,6 +3905,7 @@ ${indent(runtime, 6)}
         out.push(`${cursor} := add(${cursor}, add(0x20, ${padded}))`);
         hw += 1;
       } else if (isStaticValueType(t)) {
+        reserve(); // the component expr may allocate (keccak256(abi.encode(...)), internal call, ...)
         out.push(`mstore(add(${ptr}, ${headPos}), ${this.lowerExpr(values[i]!, ctx, out)})`);
         hw += 1;
       } else if (
@@ -3973,8 +3987,10 @@ ${indent(runtime, 6)}
         hw += 1;
       } else if (!isDynamicType(t) && values[i]!.kind === 'structNew') {
         // a constructed STATIC struct component (return [x, P(1,2), y]): write its fields INLINE,
-        // directly into the tuple head (no fresh allocation - the head buffer's free pointer is not
-        // reserved until the end of the loop, so a scratch alloc here would alias the head).
+        // directly into the tuple head. W6B: reserve() first - a field ARG may allocate (a hash
+        // expr, or writeAggToMem's aggToMemPtr materializing an aggregate-local field source), and
+        // an unreserved scratch alloc would alias the head words written so far.
+        reserve();
         this.writeAggToMem(values[i]!, ptr, hw, ctx, out);
         hw += abiHeadWords(t);
       } else if (!isDynamicType(t) && values[i]!.kind === 'memAggregate') {
@@ -4008,7 +4024,9 @@ ${indent(runtime, 6)}
         hw += 1;
       } else {
         // a struct / array component, storage-source: static -> inline head; dynamic ->
-        // offset word + tail (both via the recursive storage encoder).
+        // offset word + tail (both via the recursive storage encoder). W6B: reserve() first -
+        // the slot computation may evaluate an allocating INDEX expression.
+        reserve();
         const slot = this.aggComponentSlot(values[i]!, ctx, out);
         if (isDynamicType(t)) {
           out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
