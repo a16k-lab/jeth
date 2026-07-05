@@ -1535,6 +1535,23 @@ export class Analyzer {
         );
       }
     }
+    // W7C: a @constant name must not collide with a @state (or @storage('ns')) variable either
+    // (solc: DeclarationError "Identifier already declared"). This covers same-contract collisions
+    // in either declaration order AND cross-inheritance ones in either direction (base state x
+    // derived constant, base constant x derived state, and the diamond where two bases contribute
+    // the two declarations), because both tables are merged over the full C3 linearization. Without
+    // this, the constant silently shadowed every `this.x` read and the state slot was orphaned.
+    // (constant x constant is JETH046 in collectConstant; immutable x either is the loop above;
+    // state x state is JETH373; cross-KIND collisions - function/event/error/modifier - are JETH133.)
+    for (const name of this.constantsByName.keys()) {
+      if (this.stateByName.has(name)) {
+        this.diags.error(
+          cls,
+          'JETH046',
+          `field name '${name}' is declared more than once (a @constant conflicts with a @state/@storage variable of the same name; solc rejects this as "Identifier already declared")`,
+        );
+      }
+    }
 
     // Register functions by name BEFORE checking bodies so an internal call can
     // forward-reference a callee declared later (matches Solidity). funcsByName keeps the FIRST
