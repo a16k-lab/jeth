@@ -7,6 +7,7 @@ import { compile } from '../src/compile.js';
 import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
+import solc from 'solc';
 
 const sel = (s: string) => functionSelector(s);
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
@@ -240,4 +241,92 @@ describe('internal function pointers: reject parity', () => {
       expect(() => compile(src, { fileName: 'C.jeth' })).toThrow();
     });
   }
+});
+
+// --- KNOWN DEVIATION (documented + verified, see docs/distinctive-features.md section 6) -------------
+// Two DISTINCT internal function pointers whose bodies are byte-identical (f and g both `return x + 1n`)
+// compare UNEQUAL in JETH. That matches solc with the optimizer OFF and solc viaIR (both `false`), but NOT
+// the legacy-optimizer-ON config the differential harness uses: its assembly block deduplicator merges the
+// identical bodies onto one jump tag, so the pointers collide and compare EQUAL (`true`). It is an optimizer
+// artifact, not language semantics, and JETH never returns wrong bytes; CALLS through such pointers dispatch
+// byte-identically in every config. So we do NOT diff the equality VALUE against the harness's optimizer-on
+// solc; we assert JETH's returndata directly and mirror it against solc compiled with the optimizer OFF.
+const JETH_EQ = `@contract class C {
+  @pure f(x: u256): u256 { return x + 1n; }
+  @pure g(x: u256): u256 { return x + 1n; }
+  @external @pure eq(): bool { return this.f == this.g; }
+  @external @pure eqVar(): bool { let a: (x: u256) => u256 = this.f; let b: (x: u256) => u256 = this.g; return a == b; }
+  @external @pure neq(): bool { return this.f != this.g; }
+  @external @pure callBoth(x: u256): u256 { let a: (x: u256) => u256 = this.f; let b: (x: u256) => u256 = this.g; return a(x) + b(x); }
+}`;
+const SOL_EQ = `${SPDX}contract C {
+  function f(uint256 x) internal pure returns(uint256){ return x+1; }
+  function g(uint256 x) internal pure returns(uint256){ return x+1; }
+  function eq() external pure returns(bool){ return f == g; }
+  function eqVar() external pure returns(bool){ function(uint256) pure returns(uint256) a = f; function(uint256) pure returns(uint256) b = g; return a == b; }
+  function neq() external pure returns(bool){ return f != g; }
+  function callBoth(uint256 x) external pure returns(uint256){ function(uint256) pure returns(uint256) a = f; function(uint256) pure returns(uint256) b = g; return a(x) + b(x); }
+}`;
+
+// The shared compileSolidity() hardcodes optimizer ON; here we need to pick the setting per build.
+function compileSolOptimizer(source: string, name: string, optimizerEnabled: boolean): string {
+  const input = {
+    language: 'Solidity',
+    sources: { 'C.sol': { content: source } },
+    settings: {
+      optimizer: optimizerEnabled ? { enabled: true, runs: 200 } : { enabled: false },
+      evmVersion: 'cancun',
+      outputSelection: { '*': { '*': ['evm.bytecode.object'] } },
+    },
+  };
+  const out = JSON.parse(solc.compile(JSON.stringify(input)));
+  const fatal = (out.errors ?? []).filter((e: { severity: string }) => e.severity === 'error');
+  if (fatal.length) throw new Error('solc failed:\n' + fatal.map((e: { formattedMessage: string }) => e.formattedMessage).join('\n'));
+  return out.contracts['C.sol'][name].evm.bytecode.object;
+}
+
+const FALSE = '0x' + '0'.repeat(64);
+const TRUE = '0x' + '0'.repeat(63) + '1';
+
+describe('internal function pointers: identical-body equality (documented deviation)', () => {
+  let jeth: Harness, solOn: Harness, solOff: Harness;
+  let aj: Address, aOn: Address, aOff: Address;
+  beforeAll(async () => {
+    jeth = await Harness.create();
+    solOn = await Harness.create();
+    solOff = await Harness.create();
+    aj = await jeth.deploy(compile(JETH_EQ, { fileName: 'C.jeth' }).creationBytecode);
+    aOn = await solOn.deploy(compileSolOptimizer(SOL_EQ, 'C', true));
+    aOff = await solOff.deploy(compileSolOptimizer(SOL_EQ, 'C', false));
+  });
+
+  it('JETH: identical-body pointers compare UNEQUAL (eq/eqVar false, neq true)', async () => {
+    expect((await jeth.call(aj, encodeCall(sel('eq()'), []))).returnHex).toBe(FALSE);
+    expect((await jeth.call(aj, encodeCall(sel('eqVar()'), []))).returnHex).toBe(FALSE);
+    expect((await jeth.call(aj, encodeCall(sel('neq()'), []))).returnHex).toBe(TRUE);
+  });
+
+  it('matches solc with the optimizer OFF (the pointer semantics JETH implements)', async () => {
+    expect((await solOff.call(aOff, encodeCall(sel('eq()'), []))).returnHex).toBe(FALSE);
+    expect((await solOff.call(aOff, encodeCall(sel('eqVar()'), []))).returnHex).toBe(FALSE);
+    expect((await solOff.call(aOff, encodeCall(sel('neq()'), []))).returnHex).toBe(TRUE);
+  });
+
+  it('documents the artifact: legacy-optimizer-ON solc dedups the bodies and returns EQUAL', async () => {
+    // The one configuration that disagrees with JETH, and the reason we must not diff the equality value
+    // against the harness's optimizer-on solc. If a future solc stops merging here, this flips and the
+    // deviation should be revisited.
+    expect((await solOn.call(aOn, encodeCall(sel('eq()'), []))).returnHex).toBe(TRUE);
+    expect((await solOn.call(aOn, encodeCall(sel('neq()'), []))).returnHex).toBe(FALSE);
+  });
+
+  it('CALLS through both identical-body pointers dispatch byte-identically (even vs optimizer-on solc)', async () => {
+    // Dispatch is byte-identical regardless of optimizer config; only the raw == value diverges.
+    const data = encodeCall(sel('callBoth(uint256)'), [5n]);
+    const jr = await jeth.call(aj, data);
+    const sr = await solOn.call(aOn, data);
+    expect(jr.success).toBe(sr.success);
+    expect(jr.returnHex).toBe(sr.returnHex);
+    expect(jr.returnHex).toBe('0x' + (12n).toString(16).padStart(64, '0')); // f(5)+g(5) = 6+6 = 12
+  });
 });

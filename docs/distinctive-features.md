@@ -331,3 +331,47 @@ Everything not listed above is intended to be **observably indistinguishable fro
 JETH's value proposition is a TypeScript surface syntax with exact Solidity/EVM semantics, plus
 the ergonomics in section 1 and the always-on IR codegen in section 2. When in doubt about a
 behavior, the rule is: it should match solc byte-for-byte, and a divergence is a bug.
+
+## 6. Known deviations from solc (verified, genuinely unmatchable)
+
+The "a divergence is a bug" rule has a small, closed set of documented exceptions: behaviors that
+cannot be made byte-identical to *any single* solc configuration. None of these is a miscompile;
+JETH never returns wrong bytes. Each is pinned by a test.
+
+### Internal function-pointer equality on identical bodies
+
+Comparing two **distinct** internal function pointers whose bodies are byte-identical returns
+`false` in JETH:
+
+```ts
+@pure f(x: u256): u256 { return x + 1n; }
+@pure g(x: u256): u256 { return x + 1n; }   // same body as f
+@external @pure eq(): bool { return this.f == this.g; }   // JETH: false
+```
+
+This is an optimizer artifact in solc, not a language semantic:
+
+| solc configuration                        | `f == g` |
+| ----------------------------------------- | -------- |
+| legacy pipeline, optimizer ON (runs=200)  | `true`   |
+| legacy pipeline, optimizer OFF            | `false`  |
+| viaIR, optimizer ON                       | `false`  |
+
+Under the legacy assembly optimizer, the block deduplicator merges the two identical function
+bodies onto one jump tag, so the pointer values collide and compare equal. With the optimizer off,
+or under the viaIR pipeline (a distinct pointer model), solc returns `false`, agreeing with JETH's
+stable dispatch-id model. Only the raw `==` / `!=` value on an identical-body pair diverges, and
+only against the legacy-optimizer-on configuration: near-identical bodies (`x + 7` vs `x + 8`)
+compare byte-identically, and **calls** dispatched through such pointers run byte-identically in
+every configuration. The differential harness happens to use the legacy-optimizer-on config, so it
+is the one configuration that disagrees. Pinned by `test/internal-fn-pointers.test.ts`.
+
+### Other genuinely-unmatchable boundaries
+
+- `gasleft()`, and `address(this).code` / `.codehash` of **self**: JETH's bytecode is never equal to
+  solc's, so a value derived from remaining gas or the contract's own code size cannot match.
+- Non-TypeScript literals (`hex"..."`, `1e18` without the `n` suffix): rejected by design, since
+  JETH's literal grammar is the TypeScript subset; not a runtime divergence.
+- Signed / out-of-bounds calldata offsets in the lazy `abi.encode(<calldata ref>)` path: solc reads
+  the wrapped/OOB calldata via signed tail access and succeeds, JETH validates the offset and reverts
+  (safe direction). Pinned by `test/_boundary-calldata-signed-offset.test.ts`.
