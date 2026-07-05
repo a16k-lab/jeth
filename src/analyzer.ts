@@ -9869,6 +9869,18 @@ export class Analyzer {
       // aggregate alias (P[], string[] via a memArray) rides a different lowering, so it stays a clean reject
       // here (string[]/bytes[] already accept via the flat memArray path elsewhere; P[] stays rejecting).
       const fromMemAggAlias = e.kind === 'memAggregate' && fixedOuter;
+      // W5B: a STATIC-STRUCT calldata SLICE bound to a memory local (let s: P[] = ps.slice(a, b)):
+      // DEEP-COPY the narrowed (offset, length) window into a fresh POINTER-HEADED P[] image
+      // (cdSliceToMem's struct branch: [len] + a pointer table + per-element validated flat images),
+      // byte-identical to solc's `P[] memory s = ps[a:b]` calldata->memory copy. Value-element slices
+      // ride the flat value-array local path (unchanged); dynamic-element slices cannot reach here
+      // (solc itself rejects slicing them, and resolveCalldataSlice never yields one).
+      const fromCdSlice =
+        e.kind === 'arrayValue' &&
+        e.arr.base.kind === 'cdSlice' &&
+        declared.length === undefined &&
+        declared.element.kind === 'struct' &&
+        isStaticType(declared.element);
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -9878,7 +9890,8 @@ export class Analyzer {
         !fromCdArray &&
         !fromCdField &&
         !fromStorageArray &&
-        !fromMemAggAlias
+        !fromMemAggAlias &&
+        !fromCdSlice
       ) {
         this.diags.error(
           decl.initializer,
@@ -14338,11 +14351,16 @@ export class Analyzer {
     // cd-deep-reads (A): a cdSubElem inner array (the xs[i] of an Arr<P,N>[] composite,
     // a contiguous fixed array of static structs) lowers to the same calldata array ref
     // shape, so xs[i][j].field reads the leaf word identically.
+    // W5B: a STATIC-STRUCT calldata SLICE (ps.slice(s)[i].field) lowers through the same
+    // calldata array ref - lowerArrayRef's cdSlice branch narrows (offset, length) by the
+    // element stride, so cdArrayField's `offset + i*stride + headWords` leaf read is
+    // automatically rebased and bounds against the slice window (Panic 0x32).
     if (
       !arr ||
       (arr.base.kind !== 'calldataArray' &&
         arr.base.kind !== 'cdDynArrayField' &&
-        arr.base.kind !== 'cdSubElem')
+        arr.base.kind !== 'cdSubElem' &&
+        !(arr.base.kind === 'cdSlice' && arr.elem.kind === 'struct' && isStaticType(arr.elem)))
     ) {
       this.diags.error(node, 'JETH217', 'this dynamic-array-of-struct access is a later step');
       return undefined;
@@ -15812,12 +15830,16 @@ export class Analyzer {
     const el = e.arr.elem;
     // A VALUE-WORD element (u256/iN/address/bool/bytesN/enum) is one contiguous 32-byte ABI word, so the
     // slice narrows the region by a fixed 32-byte stride and element read / .length / whole-copy all route
-    // through the proven calldata VALUE-array codec (masking dirty leaves) byte-identically. A STATIC-STRUCT
-    // element (P[]) is contiguous too but its element access returns a BASE pointer whose field-read uses a
-    // DIFFERENT calldata struct-array codec that this value-element slice path does not wire up (it would
-    // MISCOMPILE / mis-bound), so it is left REJECTED. A DYNAMIC-element array (bytes[]/u256[][]) is
-    // offset-table-located (not contiguous) and also left rejected.
+    // through the proven calldata VALUE-array codec (masking dirty leaves) byte-identically. W5B: a
+    // STATIC-STRUCT element (P[]) is contiguous too (stride = abiHeadWords(P)*32); lowerArrayRef's cdSlice
+    // branch already narrows by that stride, and every struct-element consumer (cdArrayField field read,
+    // cdStructArrayElem whole-element, cdSliceToMem bind-copy, materializeArrayArg re-encode) resolves the
+    // element base through lowerArrayRef, so the rebase is uniform. A DYNAMIC-element array
+    // (bytes[]/u256[][]) is offset-table-located (not contiguous); solc 0.8.35 itself REJECTS slicing it
+    // ("Index range access is not supported for arrays with dynamically encoded base types"), so it stays
+    // rejected - parity, not an over-rejection.
     if (isStaticValueType(el)) return el;
+    if (el.kind === 'struct' && isStaticType(el)) return el;
     return undefined;
   }
 
@@ -17775,6 +17797,26 @@ export class Analyzer {
         if (!cd.result) return undefined; // committed but errored
         return { kind: 'cdPlaceRead', type: cd.result.finalType, place: cd.result.place };
       }
+      // W5B: a STATIC-STRUCT calldata SLICE element field - one-deep `ps.slice(s)[i].f` or a deeper
+      // static chain `ps.slice(s)[i].inn.v`. Peel the property accesses down to the element access;
+      // when its base is a `.slice(...)` CALL resolving to a cdSlice arrayValue with a static-struct
+      // element, resolveCdArrayField reads the leaf word through the SAME rebased calldata array ref
+      // (lowerArrayRef narrows the window; bounds i against the slice length, Panic 0x32).
+      if (ts.isPropertyAccessExpression(node)) {
+        let sliceInner: ts.Expression = node.expression;
+        while (ts.isPropertyAccessExpression(sliceInner)) sliceInner = sliceInner.expression;
+        if (ts.isElementAccessExpression(sliceInner) && ts.isCallExpression(sliceInner.expression)) {
+          const sliceArr = this.resolveArrayExpr(sliceInner.expression);
+          if (
+            sliceArr &&
+            sliceArr.base.kind === 'cdSlice' &&
+            sliceArr.elem.kind === 'struct' &&
+            isStaticType(sliceArr.elem)
+          ) {
+            return this.resolveCdArrayField(node, sliceArr.elem);
+          }
+        }
+      }
       // dynamic-array-of-struct calldata param element field: ps[i].field
       if (ts.isPropertyAccessExpression(node) && ts.isElementAccessExpression(node.expression)) {
         const bt = this.baseDynType(node.expression.expression);
@@ -18067,6 +18109,15 @@ export class Analyzer {
           const idx = this.coerce(index, U256, node.argumentExpression);
           if (isStaticValueType(sliceArr.elem)) {
             return { kind: 'arrayGet', type: sliceArr.elem, arr: sliceArr, index: idx };
+          }
+          // W5B: a whole STATIC-STRUCT element of a slice (ps.slice(s)[i] used as a value / bound to a
+          // local / returned): the same cdStructArrayElem codec a whole calldata-array element uses -
+          // cdArrayElemBase resolves the element base through lowerArrayRef (which narrows the cdSlice
+          // window and bounds i against the slice length, Panic 0x32), then the existing consumers copy /
+          // re-encode from that base. (A field read ps.slice(s)[i].f never reaches here - it is a
+          // PropertyAccess dispatched to resolveCdArrayField.)
+          if (sliceArr.elem.kind === 'struct' && isStaticType(sliceArr.elem)) {
+            return { kind: 'cdStructArrayElem', type: sliceArr.elem, arr: sliceArr, index: idx };
           }
           return undefined; // a non-value element slice is not on this path (left rejected)
         }

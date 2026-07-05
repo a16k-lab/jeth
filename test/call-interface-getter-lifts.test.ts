@@ -243,11 +243,15 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
     // solc: "Member length not found ... in uint256[] calldata slice" -> reject the unbound-slice .length
     expect(accepts(`@contract class C { @external @view f(a: u256[]): u256 { return a.slice(1n).length; } }`)).toBe(false);
     expect(solcAccepts(`contract C { function f(uint256[] calldata a) external pure returns (uint256) { return a[1:].length; } }`)).toBe(false);
-    // static-struct element slice: left rejected (element field-read codec not wired) - no miscompile
-    expect(accepts(`@struct class P { x: u256; y: u256; } @contract class C { @external @view f(a: P[], i: u256): u256 { return a.slice(1n)[i].y; } }`)).toBe(false);
-    // dynamic-element slices left rejected
+    // static-struct element slice: LIFTED (W5B) - element field-read via the rebased calldata array
+    // ref (behavioral coverage in test/calldata-slice-struct-deepcopy.test.ts)
+    expect(accepts(`@struct class P { x: u256; y: u256; } @contract class C { @external @view f(a: P[], i: u256): u256 { return a.slice(1n)[i].y; } }`)).toBe(true);
+    // dynamic-element slices left rejected - PARITY: solc 0.8.35 itself rejects index range access
+    // on arrays with dynamically encoded base types (verified BOTH-REJECT)
     expect(accepts(`@contract class C { @external @view f(a: bytes[]): bytes { return a.slice(1n)[0n]; } }`)).toBe(false);
+    expect(solcAccepts(`contract C { function f(bytes[] calldata a) external pure returns (bytes memory) { return a[1:][0]; } }`)).toBe(false);
     expect(accepts(`@contract class C { @external @view f(a: u256[][]): u256 { return a.slice(1n)[0n][0n]; } }`)).toBe(false);
+    expect(solcAccepts(`contract C { function f(uint256[][] calldata a) external pure returns (uint256) { return a[1:][0][0]; } }`)).toBe(false);
   });
 });
 

@@ -210,8 +210,9 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
     // a DYNAMIC-outer nested-value alias (u256[][]) stays a clean reject (a distinct memArray lowering, not
     // wired here); a clean reject is never a miscompile.
     expect(codes('@contract class C { @external @pure go(): u256[][] { let xs: u256[][] = [[1n,2n],[3n]]; let ys: u256[][] = xs; return ys[0n][0n]; } }').length).toBeGreaterThan(0);
-    // a whole calldata fixed-of-dynamic PARAM copied into a memory local (let ys = p) stays a clean reject
-    // (a calldata->memory deep copy, a separate path from the mem-to-mem alias lifted here).
-    expect(codes('@contract class C { @external @pure go(p: Arr<string,2>): Arr<string,2> { let ys: Arr<string,2> = p; return ys; } }').length).toBeGreaterThan(0);
+    // a whole calldata fixed-of-dynamic PARAM copied into a memory local (let ys = p) is LIFTED (W5B):
+    // a calldata->memory DEEP COPY via abiDecFromCdToImage's fixed-of-dynamic branch, byte-identical to
+    // solc's `string[2] memory ys = p` (behavioral coverage in test/calldata-fixed-dyn-deepcopy.test.ts).
+    expect(codes('@contract class C { @external @pure go(p: Arr<string,2>): Arr<string,2> { let ys: Arr<string,2> = p; return ys; } }').length).toBe(0);
   });
 });

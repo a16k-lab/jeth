@@ -1703,12 +1703,16 @@ ${indent(runtime, 6)}
             // fresh pointer-headed image via aggArgToMemPtr (which routes the fixedArray / mapStorageValue
             // base through abiDecFromStorageToImage's fixed-array branch). A memory alias / call result still
             // lowers to the existing table pointer below.
+            // W5B shape 1: a CALLDATA fixed-of-dynamic PARAM source (let ys: Arr<string,N> = p) DEEP-COPIES
+            // via the same aggArgToMemPtr route (abiDecFromCdToImage's fixed-of-dynamic branch at the
+            // param's offset-table base), byte-identical to solc's `string[N] memory ys = p` copy.
             else if (
               (s.init.kind === 'arrayValue' &&
                 (s.init.arr.base.kind === 'fixedArray' ||
                   s.init.arr.base.kind === 'stateArray' ||
                   s.init.arr.base.kind === 'mapArray' ||
-                  s.init.arr.base.kind === 'placeArray')) ||
+                  s.init.arr.base.kind === 'placeArray' ||
+                  s.init.arr.base.kind === 'calldataArray')) ||
               s.init.kind === 'mapStorageValue'
             )
               out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
@@ -7575,6 +7579,15 @@ ${indent(runtime, 6)}
           if (!cd) throw new UnsupportedError(`calldata array '${b.name}' is not registered`);
           // solc's calldata->memory deep copy hits the MEMORY allocation guard (Panic 0x41) on an
           // oversized inner length / alloc overflow, NOT the calldata-decode empty revert; pass it.
+          // W5B: a FIXED-outer array of a DYNAMIC element (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>)
+          // has NO [len] word - cdArrays.offset IS the N-word per-element offset-table base (= the
+          // tuple start the relative offsets resolve against), exactly what abiDecFromCdToImage's
+          // fixed-of-dynamic branch consumes. Subtracting 0x20 here (the dynamic-outer [len] header
+          // rebase) read the table one word early - a MISCOMPILE for `let ys: Arr<string,N> = p` and
+          // for forwarding p as an internal-call arg (wrong element bytes / spurious revert).
+          if (a.type.length !== undefined) {
+            return this.abiDecFromCdToImage(a.type, cd.offset, out, `${this.panic()}(0x41)`);
+          }
           return this.abiDecFromCdToImage(a.type, `sub(${cd.offset}, 0x20)`, out, `${this.panic()}(0x41)`);
         }
         const { ptr } = this.echoParam(b.name, a.type, ctx, out, false); // COPY, masking dirty elements
@@ -7647,6 +7660,37 @@ ${indent(runtime, 6)}
    *  no additional source-bounds revert. Only value-word / static-struct elements reach here (analyzer
    *  gate: a dynamic-element slice is left rejected). */
   private cdSliceToMem(elem: JethType, offset: string, length: string, out: string[]): string {
+    // W5B: a STATIC-STRUCT element slice (let s: P[] = ps.slice(a, b) / an internal-call arg): the
+    // in-memory P[] image is POINTER-HEADED ([len] + a len-word absolute-pointer table, each -> a fresh
+    // flat element image), NOT the flat [len][elems] value layout. Claim the table first (element images
+    // alloc PAST it), then per element decode the contiguous calldata block at offset + i*stride through
+    // abiDecFromCdToImage's static branch (per-leaf VALIDATION - dirty narrow fields revert empty,
+    // exactly like solc's `P[] memory s = ps[a:b]` copy). The slice window is already bounded inside the
+    // validated base region, so no extra source-bounds check is needed; the alloc-overflow cap (Panic
+    // 0x41) mirrors the whole-P[]-param copy.
+    if (elem.kind === 'struct') {
+      const es = abiHeadWords(elem) * 32;
+      const ptr = this.fresh();
+      out.push(`let ${ptr} := mload(0x40)`);
+      const tableEnd = this.fresh();
+      out.push(`let ${tableEnd} := add(add(${ptr}, 0x20), mul(${length}, 0x20))`);
+      out.push(`if or(gt(${tableEnd}, 0xffffffffffffffff), lt(${tableEnd}, ${ptr})) { ${this.panic()}(0x41) }`);
+      out.push(`mstore(${ptr}, ${length})`);
+      out.push(`mstore(0x40, ${tableEnd})`); // claim the table; per-element images alloc PAST it
+      const dstHead = this.fresh();
+      out.push(`let ${dstHead} := add(${ptr}, 0x20)`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${length}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const esrc = this.fresh();
+      inner.push(`let ${esrc} := add(${offset}, mul(${i}, ${es}))`);
+      const ip = this.fresh();
+      inner.push(`let ${ip} := ${this.abiDecFromCdToImage(elem, esrc, inner, `${this.panic()}(0x41)`)}`);
+      inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
+      return ptr;
+    }
     // Only a VALUE-WORD element reaches here (analyzer gate); stride is one 32-byte ABI word.
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
@@ -7767,6 +7811,35 @@ ${indent(runtime, 6)}
       const sz = this.fresh();
       out.push(`let ${sz} := ${this.abiEncFromCd(arg.type, hdr, dst, validate, out, true)}`);
       out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+      return { mp: dst, size: sz };
+    }
+    if (base.kind === 'cdSlice') {
+      // W5B shape 3: abi.encode(a.slice(...)) / keccak256(abi.encode(...)) / a mixed abi.encode arg:
+      // re-encode the narrowed (offset, length) element region DIRECTLY from calldata into a fresh ABI
+      // tail blob [len][elements...]. solc VALIDATES each element INSIDE the slice window (empty revert
+      // on a dirty uintN/int N/bool/address/bytesN and an out-of-range enum), exactly like a whole
+      // calldata-array arg - and does NOT validate elements outside the window (verified empirically vs
+      // solc 0.8.35: dirty-in-slice reverts empty, dirty-outside-slice encodes fine). A STATIC-STRUCT
+      // element re-encodes per-leaf through the same validated abiEncFromCd copy at the element stride.
+      const ref = this.lowerArrayRef(arg.arr, ctx, out);
+      if (ref.src !== 'calldata') throw new UnsupportedError('a calldata array slice must resolve to calldata');
+      const stride = abiHeadWords(arg.arr.elem) * 32;
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const sz = this.fresh();
+      out.push(`let ${sz} := add(0x20, mul(${ref.length}, ${stride}))`);
+      out.push(`mstore(${dst}, ${ref.length})`);
+      out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+      const i = this.fresh();
+      out.push(`for { let ${i} := 0 } lt(${i}, ${ref.length}) { ${i} := add(${i}, 1) } {`);
+      const inner: string[] = [];
+      const esrc = this.fresh();
+      inner.push(`let ${esrc} := add(${ref.offset}, mul(${i}, ${stride}))`);
+      const edst = this.fresh();
+      inner.push(`let ${edst} := add(add(${dst}, 0x20), mul(${i}, ${stride}))`);
+      this.abiEncFromCd(arg.arr.elem, esrc, edst, true, inner, true);
+      for (const l of inner) out.push('  ' + l);
+      out.push('}');
       return { mp: dst, size: sz };
     }
     let mpExpr: string;
