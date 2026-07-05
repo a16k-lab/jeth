@@ -103,7 +103,7 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
       throw new CompileError([
         {
           severity: 'error',
-          code: 'JETH900',
+          code: e.code,
           message: e.message,
           file: fileName,
           line: 1,
@@ -152,7 +152,19 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   let linkReferences: LinkReferences | undefined;
   if (ir.libraries && ir.libraries.length > 0) {
     libraries = ir.libraries.map((lib) => {
-      const libYul = emitLibraryYul(lib);
+      let libYul: string;
+      try {
+        libYul = emitLibraryYul(lib);
+      } catch (e) {
+        // Surface a lowering rejection inside a library body as the same clean diagnostic the
+        // contract path produces (previously an UnsupportedError here escaped as a raw throw).
+        if (e instanceof UnsupportedError) {
+          throw new CompileError([
+            { severity: 'error', code: e.code, message: e.message, file: fileName, line: 1, column: 1, length: 1 },
+          ]);
+        }
+        throw e;
+      }
       let libOut;
       try {
         libOut = compileYul(libYul, lib.name, opts.evmVersion);

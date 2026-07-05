@@ -57,9 +57,14 @@ import type {
 } from './ir.js';
 
 export class UnsupportedError extends Error {
-  constructor(message: string) {
+  /** Diagnostic code the compile driver surfaces (defaults to the generic JETH900). A lowering
+   *  rejection with a first-class code (e.g. the W6A JETH465 aliasing-capture reject) sets it so
+   *  the CompileError carries a specific, greppable code instead of the catch-all. */
+  readonly code: string;
+  constructor(message: string, code = 'JETH900') {
     super(message);
     this.name = 'UnsupportedError';
+    this.code = code;
   }
 }
 
@@ -1673,7 +1678,9 @@ ${indent(runtime, 6)}
           if (s.value.kind === 'structNew' && this.aggHasNonInlineField(s.value)) {
             // a constructed struct with a non-inline aggregate field: build the ABI image in FRESH
             // memory (the source materialization would clobber the memory-0 scratch), then return it.
-            const ptr = this.allocAggToMem(s.value, ctx, out);
+            // W6A: the image is returned (ABI-copied out) immediately - a TRANSIENT capture context,
+            // so an aliasable memory field source stays accepted (the copy is unobservable).
+            const ptr = this.inTransientCapture(() => this.allocAggToMem(s.value as Expr & { kind: 'structNew' }, ctx, out));
             out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
             break;
           }
@@ -1877,16 +1884,19 @@ ${indent(runtime, 6)}
           // path below (its memory form is pointer-headed, not a flat transcode source); a storage source
           // is a reference (no side effects), so target-first is unobservable for both.
           const tt = s.target.type;
-          const memSrc: string | undefined =
+          // W6A: the materialized RHS image is immediately deep-copied into storage (a TRANSIENT
+          // capture context) - an aliasable memory element source inside a literal stays accepted.
+          const memSrc: string | undefined = this.inTransientCapture(() =>
             s.value.kind === 'arrayLit'
               ? isDynLeafFixedArray(tt)
-                ? this.buildNestedMemArrayLit(s.value, ctx, out)
+                ? this.buildNestedMemArrayLit(s.value as Expr & { kind: 'arrayLit' }, ctx, out)
                 : isStaticType(tt) && isInlineValueWordElem(tt.element)
-                  ? this.allocAggToMem(s.value, ctx, out)
+                  ? this.allocAggToMem(s.value as Expr & { kind: 'arrayLit' }, ctx, out)
                   : undefined
               : s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue'
                 ? this.aggToMemPtr(s.value, ctx, out)
-                : undefined;
+                : undefined,
+          );
           const dstBase =
             s.target.kind === 'state'
               ? String(s.target.slot)
@@ -2698,6 +2708,11 @@ ${indent(runtime, 6)}
    *  `out`; returns the lines that perform the actual revert (placed at the
    *  revert point: inline for `revert`, inside the guard for `require`). */
   private lowerRevertReason(r: RevertReason, ctx: LowerCtx, out: string[]): string[] {
+    // W6A: the revert payload is ABI-encoded and thrown immediately - a TRANSIENT capture context.
+    return this.inTransientCapture(() => this.lowerRevertReasonInner(r, ctx, out));
+  }
+
+  private lowerRevertReasonInner(r: RevertReason, ctx: LowerCtx, out: string[]): string[] {
     switch (r.kind) {
       case 'empty':
         return ['revert(0, 0)'];
@@ -2911,6 +2926,11 @@ ${indent(runtime, 6)}
   // ---- events / logs -------------------------------------------------------
 
   private lowerEmit(ev: EventIR, args: Expr[], ctx: LowerCtx, out: string[]): string[] {
+    // W6A: topics + data are materialized and logged immediately - a TRANSIENT capture context.
+    return this.inTransientCapture(() => this.lowerEmitInner(ev, args, ctx, out));
+  }
+
+  private lowerEmitInner(ev: EventIR, args: Expr[], ctx: LowerCtx, out: string[]): string[] {
     // partition into indexed topics (static) and the non-indexed data tuple.
     type Part =
       | { word: string }
@@ -3794,6 +3814,17 @@ ${indent(runtime, 6)}
    *  the recursive storage encoder). bytes/string sources are materialized BEFORE the blob
    *  pointer is captured so a later allocation cannot alias the blob. */
   private encodeReturnTuple(
+    values: Expr[],
+    types: JethType[],
+    ctx: LowerCtx,
+    out: string[],
+  ): { ptr: string; size: string } {
+    // W6A: an EXTERNAL multi-return is ABI-encoded to returndata immediately - a TRANSIENT capture
+    // context (internal returnTuple takes the fnMode path and never reaches here).
+    return this.inTransientCapture(() => this.encodeReturnTupleInner(values, types, ctx, out));
+  }
+
+  private encodeReturnTupleInner(
     values: Expr[],
     types: JethType[],
     ctx: LowerCtx,
@@ -4787,7 +4818,15 @@ ${indent(runtime, 6)}
     const nested = f.type as JethType & { kind: 'struct' };
     if (src.kind === 'new') {
       const arg = src.args[fieldIdx]!;
-      if (arg.kind !== 'structNew') throw new UnsupportedError('nested struct field must be constructed inline');
+      if (arg.kind !== 'structNew') {
+        // W6A: a nested DYNAMIC struct field captured from a NON-INLINE source (a memory dyn-struct
+        // local / param / nested field / element / call - the analyzer now passes references
+        // through). Materialize the source's pointer-headed image (buildDynStructLocal ALIASES a
+        // memory source, copies storage/calldata) and encode from the 'mem' branch - the encoder
+        // reads the same words solc's reference would.
+        const headPtr = this.buildDynStructLocal(nested, arg, ctx, out);
+        return { kind: 'mem', headPtr };
+      }
       return { kind: 'new', fields: arg.fields, args: arg.args };
     }
     if (src.kind === 'mem') {
@@ -5517,14 +5556,19 @@ ${indent(runtime, 6)}
     // Storage sources are references (no side effects) and stay resolved after the grow.
     let memSrc: string | undefined;
     if (value && elem.length !== undefined) {
-      if (value.kind === 'arrayLit')
-        memSrc = isDynLeafFixedArray(elem)
-          ? this.buildNestedMemArrayLit(value, ctx, out)
-          : isStaticType(elem) && isInlineValueWordElem(elem.element)
-            ? this.allocAggToMem(value, ctx, out)
-            : undefined;
-      else if (value.kind === 'memAggregate' || value.kind === 'cdAggregateValue')
-        memSrc = this.aggToMemPtr(value, ctx, out);
+      // W6A: the pushed element image is deep-copied into storage right below - a TRANSIENT
+      // capture context, so an aliasable memory element source inside a literal stays accepted.
+      memSrc = this.inTransientCapture(() => {
+        if (value.kind === 'arrayLit')
+          return isDynLeafFixedArray(elem)
+            ? this.buildNestedMemArrayLit(value, ctx, out)
+            : isStaticType(elem) && isInlineValueWordElem(elem.element)
+              ? this.allocAggToMem(value, ctx, out)
+              : undefined;
+        if (value.kind === 'memAggregate' || value.kind === 'cdAggregateValue')
+          return this.aggToMemPtr(value, ctx, out);
+        return undefined;
+      });
     }
     const stride = storageSlotCount(arr.elem); // a dynamic-array inner element occupies 1 slot
     const len = this.fresh();
@@ -5776,6 +5820,13 @@ ${indent(runtime, 6)}
    *  normal storage bytes/string, overwrite-clearing the old tail, byte-identical
    *  to solc). */
   private writeStruct(fields: StructField[], args: Expr[], baseSlot: string, ctx: LowerCtx, out: string[]): void {
+    // W6A: every writeStruct caller writes the constructed value straight into STORAGE (state /
+    // mapping / place / push), a deep copy in solc too - a TRANSIENT capture context, so an
+    // aliasable memory field source stays accepted (internal-call args re-force persistent).
+    this.inTransientCapture(() => this.writeStructInner(fields, args, baseSlot, ctx, out));
+  }
+
+  private writeStructInner(fields: StructField[], args: Expr[], baseSlot: string, ctx: LowerCtx, out: string[]): void {
     const isConst = /^\d+$/.test(baseSlot);
     const slotAt = (n: number): string =>
       isConst ? String(BigInt(baseSlot) + BigInt(n)) : n === 0 ? baseSlot : `add(${baseSlot}, ${n})`;
@@ -5783,6 +5834,13 @@ ${indent(runtime, 6)}
       const arg = args[i]!;
       if (f.type.kind === 'struct' && arg.kind === 'structNew') {
         this.writeStruct(arg.fields, arg.args, slotAt(f.slot), ctx, out);
+      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        // W6A: a DYNAMIC struct field from a NON-INLINE source in a STORAGE write (this.st =
+        // S(..., t) / push / mapping store): materialize the source's pointer-headed image
+        // (buildDynStructLocal ALIASES a memory source, copies storage/calldata), then deep-copy
+        // it into the field's slots - the same value solc writes (it deep-copies the referenced
+        // memory struct on the memory->storage assignment).
+        this.writeDynStructFromMem(f.type, this.buildDynStructLocal(f.type, arg, ctx, out), slotAt(f.slot), out);
       } else if (f.type.kind === 'array' && f.type.length === undefined) {
         // a DYNAMIC-array field: a value-element array (u256[], address[], ...) OR a nested-dynamic-leaf
         // array (bytes[]/string[]/T[][], isDynStructLeafArrayField). Both deep-copy the array VALUE (the
@@ -6208,19 +6266,24 @@ ${indent(runtime, 6)}
         hw += 1;
       } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
         // a NESTED DYNAMIC struct field: its head word is a POINTER to the nested struct's own
-        // pointer-headed image (1 head word, matching tupleHeadWords/memDynStructField). Build that image
-        // recursively from the inline constructor arg and store the pointer. The dyn-struct encoders read
-        // it back via nestedTupleSrc (the `mem` branch follows this pointer).
+        // pointer-headed image (1 head word, matching tupleHeadWords/memDynStructField). W6A: route
+        // EVERY source through buildDynStructLocal - an inline constructor builds a fresh image
+        // (allocDynStructToMem, as before); a MEMORY source (local / param / nested field / element /
+        // call / ternary) stores its existing image POINTER (Solidity memory-reference semantics -
+        // previously the analyzer desugared this into a field-read COPY, a confirmed miscompile);
+        // a STORAGE / CALLDATA source deep-copies into a fresh image (solc's conversion is a copy).
+        // The dyn-struct encoders read it back via nestedTupleSrc (the `mem` branch follows this
+        // pointer).
         const narg = value.args[i]!;
-        if (narg.kind !== 'structNew')
-          throw new UnsupportedError('a nested dynamic struct field must be constructed inline');
-        out.push(`mstore(${at}, ${this.allocDynStructToMem(narg as Expr & { kind: 'structNew' }, ctx, out)})`);
+        out.push(`mstore(${at}, ${this.buildDynStructLocal(f.type, narg, ctx, out)})`);
         hw += 1;
       } else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
         // B(1): a NESTED STATIC AGGREGATE field (nested static struct / fixed array Arr<T,N>). Materialize
         // the arg to its flat static image, then copy its abiHeadWords leaf words INLINE at word offset hw
         // (the tuple-head layout solc uses). The single-word else below would write ONLY the first leaf
         // while hw advances by abiHeadWords, corrupting every later field of a multi-word aggregate.
+        // W6A: the inline copy is only sound for a copy-by-value source or a transient consumer.
+        this.assertInlineAggCaptureSound(value.args[i]!, `constructed struct field '${f.name}'`);
         const fsrc = this.aggArgToMemPtr(value.args[i]!, ctx, out);
         const fw = abiHeadWords(f.type);
         for (let k = 0; k < fw; k++) {
@@ -6563,6 +6626,103 @@ ${indent(runtime, 6)}
 
   /** Write a constructed static aggregate (structNew / arrayLit, possibly nested) into the
    *  memory image at `ptr`, starting at word `wordBase`. Value leaves are one word each. */
+  // ---- W6A: inline-aggregate capture soundness ------------------------------------------------
+  // JETH's STATIC struct / fixed-array memory image is FLAT (one word per ABI leaf), so a
+  // struct/fixed-array FIELD of a constructed aggregate is stored INLINE by copying the source's
+  // words. Solidity memory-to-memory assignment is BY REFERENCE: solc stores the source's POINTER,
+  // so later mutations of the source (or of the field) are visible through BOTH names. Copying an
+  // ALIASABLE memory source into an inline field therefore MISCOMPILES whenever the constructed
+  // value outlives the expression (a local binding, an internal-call argument, a memory element
+  // store, an internal return). When the image is provably TRANSIENT - consumed immediately and
+  // atomically by an ABI encoder (external return / abi.encode / event / error) or a storage deep
+  // copy, with no user code between materialization and consumption - the copy is unobservable and
+  // stays accepted. `inlineCaptureTransient` marks those lowering regions; internal-call argument
+  // materialization RESETS it (a callee can mutate an argument image even inside an encode).
+  private inlineCaptureTransient = false;
+
+  /** Run `fn` with the inline-capture context marked TRANSIENT (the materialized image is consumed
+   *  immediately and atomically; an aliasing copy is unobservable). Restores the previous mark. */
+  private inTransientCapture<T>(fn: () => T): T {
+    const prev = this.inlineCaptureTransient;
+    this.inlineCaptureTransient = true;
+    try {
+      return fn();
+    } finally {
+      this.inlineCaptureTransient = prev;
+    }
+  }
+
+  /** Run `fn` with the inline-capture context FORCED back to PERSISTENT (used by internal-call
+   *  argument materialization inside an otherwise-transient encode region: the callee receives the
+   *  image and can mutate it / expect writes through the captured source). */
+  private inPersistentCapture<T>(fn: () => T): T {
+    const prev = this.inlineCaptureTransient;
+    this.inlineCaptureTransient = false;
+    try {
+      return fn();
+    } finally {
+      this.inlineCaptureTransient = prev;
+    }
+  }
+
+  /** True when copying `e` into an inline aggregate field/element position matches solc's OWN
+   *  semantics (solc also deep-copies these sources into memory): a STORAGE struct/array value, a
+   *  CALLDATA aggregate, or a freshly-decoded blob. Everything else (a memory local / param /
+   *  element / field, an internal-call result, a mixed ternary, or an unknown kind) is - or may
+   *  be - a live memory REFERENCE that solc would alias, so a flat copy is unsound. */
+  private isAliasSafeAggCaptureSource(e: Expr): boolean {
+    switch (e.kind) {
+      case 'structNew':
+      case 'arrayLit':
+        // inline constructions are fresh by definition; their OWN args are checked recursively
+        // where they are written.
+        return true;
+      case 'structValue':
+      case 'mapStorageValue':
+      case 'structArrayElem':
+      case 'placeRead':
+      case 'cdAggregateValue':
+      case 'cdStructArrayElem':
+      case 'cdAggArrayElem':
+      case 'cdFieldAggValue':
+      case 'cdNestedFieldAggValue':
+      case 'abiDecode':
+        return true;
+      case 'arrayValue': {
+        const b = e.arr.base.kind;
+        return (
+          b === 'fixedArray' ||
+          b === 'stateArray' ||
+          b === 'mapArray' ||
+          b === 'placeArray' ||
+          b === 'calldataArray' ||
+          b === 'cdDynFixedDynField'
+        );
+      }
+      case 'ternary':
+        return this.isAliasSafeAggCaptureSource(e.then) && this.isAliasSafeAggCaptureSource(e.else);
+      default:
+        return false;
+    }
+  }
+
+  /** W6A soundness gate at the inline-copy sites: reject (JETH465) capturing an aliasable memory
+   *  aggregate into an inline field/element of a constructed aggregate in a PERSISTENT context.
+   *  solc stores a reference there; JETH's flat static image cannot, so a clean reject beats the
+   *  silent copy the old code emitted (a confirmed miscompile family: mutations through either
+   *  name diverged). Transient (immediate-encode / storage-store) contexts keep the copy. */
+  private assertInlineAggCaptureSound(arg: Expr, what: string): void {
+    if (this.inlineCaptureTransient) return;
+    if (this.isAliasSafeAggCaptureSource(arg)) return;
+    throw new UnsupportedError(
+      `cannot capture a memory aggregate value ('${arg.kind}') into ${what}: Solidity stores a live ` +
+        `reference here while JETH's inline (flat) image would freeze a copy, so aliasing mutations ` +
+        `would diverge from solc. Construct the field/element inline, copy the data into a fresh ` +
+        `constructor argument, or use a dynamic (pointer-headed) struct field instead`,
+      'JETH465',
+    );
+  }
+
   /** True if a constructed aggregate (structNew / arrayLit) has, at any depth, an aggregate field /
    *  element supplied from a NON-INLINE source (not an inline structNew / arrayLit). Such a value must
    *  be built in FRESH memory (allocAggToMem) rather than the memory-0 return scratch, since
@@ -6594,8 +6754,11 @@ ${indent(runtime, 6)}
         const arg = value.args[j]!;
         if (arg.kind === 'arrayLit' || arg.kind === 'structNew') this.writeAggToMem(arg, ptr, w, ctx, out);
         else if (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) {
-          // a non-inline aggregate field source (a local / param / storage value): materialize its
-          // ABI-unpacked image (fresh memory, past this parent), then mcopy it into the field's words.
+          // a non-inline aggregate field source: materialize its ABI-unpacked image (fresh memory,
+          // past this parent), then mcopy it into the field's words. W6A: this flat copy is only
+          // sound for a copy-by-value source (storage/calldata/decode) or a transient consumer;
+          // an aliasable memory source in a persistent context REJECTS (solc stores a reference).
+          this.assertInlineAggCaptureSound(arg, `constructed struct field '${f.name}'`);
           out.push(`mcopy(${at(w)}, ${this.aggToMemPtr(arg, ctx, out)}, ${abiHeadWords(f.type) * 32})`);
         } else out.push(`mstore(${at(w)}, ${this.lowerExpr(arg, ctx, out)})`);
         w += abiHeadWords(f.type);
@@ -6608,8 +6771,12 @@ ${indent(runtime, 6)}
       value.elements.forEach((el, k) => {
         const w = wordBase + k * ew;
         if (el.kind === 'arrayLit' || el.kind === 'structNew') this.writeAggToMem(el, ptr, w, ctx, out);
-        else if (aggElem) out.push(`mcopy(${at(w)}, ${this.aggToMemPtr(el, ctx, out)}, ${ew * 32})`);
-        else out.push(`mstore(${at(w)}, ${this.lowerExpr(el, ctx, out)})`);
+        else if (aggElem) {
+          // W6A: an aggregate ELEMENT of an inline fixed-array literal ([p, q] as a constructed
+          // field / a nested literal) has the same flat-copy-vs-reference hazard as a field.
+          this.assertInlineAggCaptureSound(el, 'a constructed fixed-array element');
+          out.push(`mcopy(${at(w)}, ${this.aggToMemPtr(el, ctx, out)}, ${ew * 32})`);
+        } else out.push(`mstore(${at(w)}, ${this.lowerExpr(el, ctx, out)})`);
       });
       return;
     }
@@ -6954,6 +7121,18 @@ ${indent(runtime, 6)}
         const p = this.fresh();
         out.push(`let ${p} := mload(${at})`);
         this.writeDynStructFromMem(f.type, p, fslotAt(f.slot), out);
+      } else if (
+        (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) &&
+        isStaticType(f.type)
+      ) {
+        // W6A: a nested STATIC aggregate field (static struct / fixed value-array): its abiHeadWords
+        // leaf words sit INLINE in the image at hw (the allocDynStructToMem tuple-head layout);
+        // transcode them into the field's packed storage slots (the same codec writeStruct's
+        // non-inline static-aggregate branch uses). Reachable since W6A passes memory dyn-struct
+        // sources through to storage writes instead of desugaring them field-by-field.
+        const p = this.fresh();
+        out.push(`let ${p} := ${at}`);
+        this.storeStaticAggFromMem(f.type, p, fslotAt(f.slot), out);
       } else {
         throw new UnsupportedError(
           `storing a struct with a '${f.type.kind}' field from a memory/calldata source is not supported yet`,
@@ -9870,6 +10049,20 @@ ${indent(runtime, 6)}
     selector?: Expr,
     sig?: Expr,
   ): string {
+    // W6A: abi.encode* flattens every argument into a fresh bytes blob at evaluation time - a
+    // TRANSIENT capture context (solc reads the same words through its references at this instant;
+    // internal-call args inside an argument re-force persistent).
+    return this.inTransientCapture(() => this.buildAbiEncodeInner(args, packed, ctx, out, selector, sig));
+  }
+
+  private buildAbiEncodeInner(
+    args: Expr[],
+    packed: boolean,
+    ctx: LowerCtx,
+    out: string[],
+    selector?: Expr,
+    sig?: Expr,
+  ): string {
     if (selector || sig) {
       let pfx: string;
       if (selector) {
@@ -12258,7 +12451,12 @@ ${indent(runtime, 6)}
       // REFERENCE (alias for a memory source, fresh copy for storage/calldata/literal); a value arg
       // is a plain register.
       const isAgg = a.type.kind === 'struct' || a.type.kind === 'array' || isBytesLike(a.type);
-      const reg = isAgg ? this.aggArgToMemPtr(a, ctx, out) : this.lowerExpr(a, ctx, out);
+      // W6A: an internal callee receives the argument image and can mutate it (or expect writes to
+      // show through a captured source), so a constructed arg is a PERSISTENT capture even inside
+      // an enclosing transient encode/store region - force the flag back.
+      const reg = isAgg
+        ? this.inPersistentCapture(() => this.aggArgToMemPtr(a, ctx, out))
+        : this.lowerExpr(a, ctx, out);
       const t = this.fresh();
       out.push(`let ${t} := ${reg}`);
       return t;

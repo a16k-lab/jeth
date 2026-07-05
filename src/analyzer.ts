@@ -7294,7 +7294,99 @@ export class Analyzer {
       if (!a) return undefined;
       args.push(a);
     }
+    // W6A ORDER-SOUNDNESS: solc reads a CAPTURED memory struct/fixed-array reference at ENCODE time
+    // (after every constructor argument has been evaluated), while JETH's lowering reads/copies it at
+    // the field's own position (writeAggToMem in-order; the dyn-tuple encoders' pre-pass/writer). A
+    // SIDE-EFFECTING sibling argument that runs between those two points (e.g. an internal call that
+    // mutates or re-points the captured struct) would therefore encode different bytes than solc.
+    // Reject the combination cleanly; binding the constructed value or the sibling result to locals
+    // first restores a single well-defined order.
+    if (args.some((a, i) => this.isAggregateRefCaptureArg(st.fields[i]!.type, a))) {
+      for (const argNode of node.arguments) {
+        if (!this.isOrderInsensitiveCtorArg(argNode)) {
+          this.diags.error(
+            argNode,
+            'JETH465',
+            `a struct constructor that captures a memory struct/array reference cannot also take a ` +
+              `side-effecting argument (solc evaluates all arguments before encoding the captured ` +
+              `reference); evaluate this argument into a local first`,
+          );
+          return undefined;
+        }
+      }
+    }
     return { kind: 'structNew', type: st, fields: st.fields, args };
+  }
+
+  /** W6A: a constructor argument whose evaluation ORDER relative to a captured memory reference is
+   *  unobservable (no state/memory side effect). isSideEffectFreeExpr plus the pure literal forms it
+   *  does not classify (string / substitution-free template literals, template expressions with
+   *  order-insensitive substitutions, and `new Array<T>(n)` - a pure allocation). Kept local to the
+   *  W6A guard so the JETH331 hoist gate's acceptance surface is unchanged. */
+  private isOrderInsensitiveCtorArg(node: ts.Expression): boolean {
+    if (this.isSideEffectFreeExpr(node)) return true;
+    if (ts.isParenthesizedExpression(node)) return this.isOrderInsensitiveCtorArg(node.expression);
+    if (ts.isStringLiteralLike(node)) return true; // string literal / no-substitution template
+    if (ts.isTemplateExpression(node))
+      return node.templateSpans.every((sp) => this.isOrderInsensitiveCtorArg(sp.expression));
+    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'Array')
+      return (node.arguments ?? []).every((a) => this.isOrderInsensitiveCtorArg(a));
+    if (ts.isArrayLiteralExpression(node)) return node.elements.every((el) => this.isOrderInsensitiveCtorArg(el));
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      // a nested struct/enum/cast constructor (or the bytes("..") cast): order-insensitive when all
+      // of ITS arguments are (mirrors isSideEffectFreeExpr's ctor case, with this extended pure set).
+      const callee = node.expression.text;
+      const isCtor =
+        this.structsByName.has(callee) ||
+        this.isEnumName(callee) ||
+        callee === 'address' ||
+        callee === 'payable' ||
+        callee === 'bytes' ||
+        resolvePrimitiveName(callee) !== undefined;
+      if (isCtor) return node.arguments.every((a) => this.isOrderInsensitiveCtorArg(a));
+    }
+    return false;
+  }
+
+  /** W6A: true when constructor field arg `a` (for a struct / FIXED-array field, at any literal
+   *  nesting depth) is a live MEMORY reference that solc would read at encode time rather than copy
+   *  at argument-evaluation time. Storage / calldata / freshly-decoded sources are copies in solc
+   *  too and never order-hazardous; dynamic value-ARRAY fields are pointer-captured identically by
+   *  both compilers and are excluded. */
+  private isAggregateRefCaptureArg(t: JethType, a: Expr): boolean {
+    if (t.kind !== 'struct' && !(t.kind === 'array' && t.length !== undefined)) return false;
+    if (a.kind === 'structNew') return a.args.some((x, i) => this.isAggregateRefCaptureArg(a.fields[i]!.type, x));
+    if (a.kind === 'arrayLit') return a.elements.some((x) => this.isAggregateRefCaptureArg(a.elem, x));
+    if (a.kind === 'ternary') return this.isAggregateRefCaptureArg(t, a.then) || this.isAggregateRefCaptureArg(t, a.else);
+    if (a.kind === 'arrayValue') {
+      const b = a.arr.base.kind;
+      return !(
+        b === 'fixedArray' ||
+        b === 'stateArray' ||
+        b === 'mapArray' ||
+        b === 'placeArray' ||
+        b === 'calldataArray' ||
+        b === 'cdDynFixedDynField'
+      );
+    }
+    switch (a.kind) {
+      case 'structValue':
+      case 'mapStorageValue':
+      case 'structArrayElem':
+      case 'placeRead':
+      case 'cdAggregateValue':
+      case 'cdStructArrayElem':
+      case 'cdAggArrayElem':
+      case 'cdFieldAggValue':
+      case 'cdNestedFieldAggValue':
+      case 'abiDecode':
+      case 'literalInt':
+      case 'literalBool':
+      case 'stringLiteral':
+        return false;
+      default:
+        return true; // memAggregate / memDynStructValue / memDynField / memDynNestedField / arrayGet / aggFieldRead / call / unknown
+    }
   }
 
   /** Build + validate ONE struct-construction field argument from its AST node, matching solc's
@@ -7308,12 +7400,36 @@ export class Analyzer {
       if (!a) return undefined;
       const sameStruct = a.type.kind === 'struct' && a.type.name === f.type.name;
       if (a.kind === 'structNew') return a; // an inline constructor
-      // a non-inline value of the same struct type. A STATIC field is copied leaf-by-leaf by codegen
-      // (R1). A DYNAMIC field from a SIDE-EFFECT-FREE source is desugared into an inline constructor
-      // that reads each of the source's fields - StructName(src.f0, src.f1, ...) - which reuses the
-      // verified inline encoder and is byte-identical to solc's field-by-field copy.
+      // a non-inline value of the same struct type.
+      // A STATIC field passes through; codegen either copies it (a storage/calldata source - solc
+      // copies those too) or REJECTS an aliasable memory source in a persistent context (W6A
+      // JETH465: solc would store a live reference where JETH's flat image can only freeze a copy).
       if (sameStruct && isStaticType(f.type)) return a;
-      if (sameStruct && this.isPureReadExpr(argNode)) return this.desugarStructCopy(f.type, argNode);
+      if (sameStruct) {
+        // W6A: a DYNAMIC struct field is POINTER-HEADED in the constructed image, so a MEMORY
+        // source is captured BY REFERENCE (codegen stores the source's image pointer - Solidity
+        // memory-to-memory semantics). Previously these desugared into a field-read COPY, a
+        // confirmed miscompile (mutations through either name diverged from solc). Scoped to the
+        // double-resolution-STABLE reference kinds (a local/param register, a nested field chain -
+        // re-derefable because whole-struct-field re-pointing is rejected): the tuple encoders
+        // resolve a constructor field twice (pre-pass + writer), so an unstable source (a memory
+        // array element that a sibling argument could re-point, a call, a ternary) is REJECTED
+        // rather than risk inconsistent resolutions.
+        if (a.kind === 'memDynStructValue' || a.kind === 'memDynField' || a.kind === 'memDynNestedField') return a;
+        if (a.kind === 'arrayGet' || a.kind === 'call' || a.kind === 'ternary') {
+          this.diags.error(
+            argNode,
+            'JETH465',
+            `cannot capture this memory struct value into dynamic struct field '${f.name}': Solidity ` +
+              `stores a live reference here; bind the value to a local first (let v: ${f.type.name} = ...) ` +
+              `and pass the local, or construct the field inline`,
+          );
+          return undefined;
+        }
+        // a STORAGE / CALLDATA source: desugar into an inline constructor that reads each field -
+        // a fresh COPY, byte-identical to solc (its storage/calldata -> memory conversion copies).
+        if (this.isPureReadExpr(argNode)) return this.desugarStructCopy(f.type, argNode);
+      }
       this.diags.error(
         argNode,
         'JETH226',

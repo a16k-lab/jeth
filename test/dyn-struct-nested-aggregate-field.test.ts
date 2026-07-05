@@ -46,9 +46,9 @@ describe('Batch B: dyn-struct with a nested static-aggregate field - byte-identi
   it('static fixed-array field: construct / read p.fa[j] (const + runtime + OOB Panic 0x32) / encode', async () => {
     const J = `@struct class S { a: u256; fa: Arr<u256, 3>; b: bytes; }
     @contract class C {
-      @external @pure enc(): bytes { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, pp, bytes("z")); return abi.encode(s); }
-      @external @pure rd(): u256 { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, pp, bytes("z")); return s.fa[0n] + s.fa[2n]; }
-      @external @pure dyn(i: u256): u256 { let pp: Arr<u256, 3> = [7n, 8n, 9n]; let s: S = S(1n, pp, bytes("z")); return s.fa[i]; } }`;
+      @external @pure enc(): bytes { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return abi.encode(s); }
+      @external @pure rd(): u256 { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return s.fa[0n] + s.fa[2n]; }
+      @external @pure dyn(i: u256): u256 { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return s.fa[i]; } }`;
     const Sol = `struct S { uint256 a; uint256[3] fa; bytes b; }
     contract C {
       function enc() external pure returns(bytes memory){ uint256[3] memory pp;pp[0]=7;pp[1]=8;pp[2]=9; S memory s=S(1,pp,bytes("z")); return abi.encode(s); }
@@ -62,8 +62,8 @@ describe('Batch B: dyn-struct with a nested static-aggregate field - byte-identi
     @struct class Mid { q: u256; inner: In; }
     @struct class S { fa: Arr<u256, 2>; a: u256; outer: Mid; b: bytes; }
     @contract class C {
-      @external @pure read(): u256 { let pp: Arr<u256, 2> = [10n, 20n]; let s: S = S(pp, 1n, Mid(5n, In(3n, 4n)), bytes("z")); return s.fa[1n] + s.a + s.outer.q + s.outer.inner.x + s.outer.inner.y; }
-      @external @pure enc(): bytes { let pp: Arr<u256, 2> = [10n, 20n]; let s: S = S(pp, 1n, Mid(5n, In(3n, 4n)), bytes("z")); return abi.encode(s); } }`;
+      @external @pure read(): u256 { let s: S = S([10n, 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return s.fa[1n] + s.a + s.outer.q + s.outer.inner.x + s.outer.inner.y; }
+      @external @pure enc(): bytes { let s: S = S([10n, 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return abi.encode(s); } }`;
     const Sol = `struct In { uint256 x; uint256 y; }
     struct Mid { uint256 q; In inner; }
     struct S { uint256[2] fa; uint256 a; Mid outer; bytes b; }
