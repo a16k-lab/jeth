@@ -10387,22 +10387,38 @@ export class Analyzer {
       // field would then misread (wrong bytes). Reject ONLY those calldata/storage array sources - a clean
       // over-rejection consistent with `let row: bytes[] = <calldata leaf array>`, until that copy is wired.
       // (A VALUE-array field, u256[], is unaffected: its [len][elems] image is built correctly from any source.)
-      if (
+      // NF-2: the STRUCT-ARRAY-ELEMENT / MAPPING-VALUE / NESTED-STRUCT field re-point (this.ps[i].names = s)
+      // routes a `place` target through copyArrayValueIntoStorage instead of aggArgToMemPtr: a MEMORY source
+      // deep-copies via copyMemAggArrayIntoStorage (byte-identical); a STORAGE source via copyArray
+      // (byte-identical, solc accepts storage->storage); but a CALLDATA non-value source cannot be decoded
+      // (copyArrayValueIntoStorage throws), and solc likewise rejects a nested calldata->storage array copy,
+      // so it stays a clean reject here (never a codegen crash). A storage-source place is admitted (below,
+      // outside this reject) so only the calldata source is intercepted for the `place` target.
+      const dynLeafPlaceTarget =
+        target.kind === 'place' &&
+        target.type.kind === 'array' &&
+        target.type.length === undefined &&
+        !isStaticValueType(target.type.element);
+      const dynLeafImageTarget =
         (target.kind === 'memDynField' || target.kind === 'aggDynFieldStore') &&
         target.type.kind === 'array' &&
         target.type.length === undefined &&
-        !isStaticValueType(target.type.element)
-      ) {
-        // aggArgToMemPtr builds the B4 image correctly from a MEMORY / LITERAL / call / ternary / abi.decode
-        // source, but FLATTENS a CALLDATA or STORAGE array source to a plain ABI blob (echoParam /
-        // abiEncFromStorage), which the leaf-array field would then misread. Reject only those array sources.
-        const unsafeCdOrStorage =
+        !isStaticValueType(target.type.element);
+      if (dynLeafImageTarget || dynLeafPlaceTarget) {
+        // aggArgToMemPtr (image target) builds the B4 image correctly from a MEMORY / LITERAL / call / ternary /
+        // abi.decode source but FLATTENS a CALLDATA or STORAGE array source to a plain ABI blob; the `place`
+        // target's copyArrayValueIntoStorage deep-copies a MEMORY or STORAGE source correctly but cannot decode
+        // a CALLDATA non-value source. So both targets reject a CALLDATA leaf-array source; the IMAGE target
+        // additionally rejects a STORAGE source (it has no storage->image copier), while the PLACE target
+        // ACCEPTS a storage source (copyArray handles storage->storage).
+        const cdSrc = value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray';
+        const storageSrc =
           value.kind === 'arrayValue' &&
-          (value.arr.base.kind === 'calldataArray' ||
-            value.arr.base.kind === 'stateArray' ||
+          (value.arr.base.kind === 'stateArray' ||
             value.arr.base.kind === 'mapArray' ||
             value.arr.base.kind === 'placeArray');
-        if (unsafeCdOrStorage) {
+        const unsafe = cdSrc || (dynLeafImageTarget && storageSrc);
+        if (unsafe) {
           this.diags.error(
             e.right,
             'JETH200',
@@ -13440,16 +13456,23 @@ export class Analyzer {
     // the field to a placeArray at the inner array's length slot (its reads / element-writes / push all
     // work); the whole-array store just needs the SAME `place` the bare `this.d.xs = arr` path produces, so
     // copyArrayValueIntoStorage(place-slot) deep-copies the array value in (resize + element copy + tail
-    // clear). Gated to a dynamic VALUE-element array, exactly like the bare-struct field path (a bytes[] /
-    // nested-leaf / struct-element array field stays a clean reject - and solc itself rejects copying nested
-    // calldata dynamic arrays to storage, so those stay BOTH-REJECT). resolveAccess declines an array leaf
-    // (deferring to resolveArrayExpr), which is why the indexed/mapping case otherwise falls to JETH067.
+    // clear). NF-2: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][], isDynStructLeafArrayField)
+    // rides the SAME `place` path - copyArrayValueIntoStorage dispatches a bytes[]/string[]/T[][] MEMORY
+    // source to copyMemAggArrayIntoStorage (the pointer-headed B4 image deep-copy, overwrite-clearing the
+    // freed element slots + keccak tails on re-point), byte-identical to solc; a storage source rides
+    // copyArray (per-element deep copy). A CALLDATA leaf-array source is rejected below (the SOUNDNESS block:
+    // copyArrayValueIntoStorage cannot decode a calldata non-value source; solc also rejects that copy). The
+    // resulting `place` type must be the FIELD's own array type: arr.elem is the array's ELEMENT, so
+    // (arr.elem)[] reconstructs the field (u256[] for the value case, string[]/u256[][] for the leaf case).
+    // resolveAccess declines an array leaf (deferring to resolveArrayExpr), which is why the indexed/mapping
+    // case otherwise falls to JETH067.
     if (ts.isPropertyAccessExpression(node)) {
       const arr = this.resolveArrayExpr(node);
       if (
         arr &&
         arr.base.kind === 'placeArray' &&
-        isStaticValueType(arr.elem)
+        (isStaticValueType(arr.elem) ||
+          isDynStructLeafArrayField({ kind: 'array', element: arr.elem, length: undefined }))
       ) {
         this.currentWritesState = true;
         return {
