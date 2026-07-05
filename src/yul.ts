@@ -6383,6 +6383,18 @@ ${indent(runtime, 6)}
       this.storeStaticAggFromMem(type, this.aggToMemPtr(value, ctx, out), dst, out);
       return;
     }
+    if (value.kind === 'arrayGet') {
+      // W3-Y2c CRASH fix: a MEMORY struct-ARRAY ELEMENT source (this.p0 = ps[i], ps: Arr<P,N> / P[]).
+      // ps[i] (arrayGet) lowers to the element's pointer-headed image; aggToMemPtr freezes that pointer.
+      // A STATIC struct element transcodes its ABI-unpacked image to packed storage (storeStaticAggFromMem);
+      // a DYNAMIC-field struct element (P with a bytes/string/dyn-array field) writes value fields packed +
+      // dynamic fields with overwrite-clear (writeDynStructFromMem, the same path a memDynStructValue uses).
+      // This copies the element struct INTO storage (a value copy), byte-identical to solc's `s = arr[i]`.
+      const mp = this.aggToMemPtr(value, ctx, out);
+      if (isDynamicType(type)) this.writeDynStructFromMem(type, mp, dst, out);
+      else this.storeStaticAggFromMem(type, mp, dst, out);
+      return;
+    }
     if (
       value.kind === 'memDynStructValue' ||
       value.kind === 'cdDynStructValue' ||

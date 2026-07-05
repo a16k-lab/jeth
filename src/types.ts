@@ -608,6 +608,9 @@ export function isDynStructLeaf(t: JethType): boolean {
       // struct / static fixed array Arr<T,N>) stored INLINE as flattened head words. Keep byte-parallel.
       (f.type.kind === 'struct' && isStaticType(f.type)) ||
       (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
+    // NOTE: kept byte-parallel with Analyzer.isSupportedDynStructLocal - a DYNAMIC FIXED-outer array field
+    // (Arr<P,N> dynamic, Arr<bytes,N>) is NOT admitted (the mem-dyn-struct read/re-encode path does not yet
+    // consume it; see W3-Y2c P1-9c note there).
   );
 }
 

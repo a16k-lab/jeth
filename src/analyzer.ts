@@ -8969,25 +8969,12 @@ export class Analyzer {
             );
             return;
           }
-          // Cat C: a struct with a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]) is supported
-          // from a constructor / abi.decode / another memory local (the B4 image is built directly), but
-          // a STORAGE / CALLDATA-ARRAY-ELEMENT source would need a storage/calldata -> B4 pointer-headed
-          // transcode that is not implemented; keep those SOURCES a clean reject (no miscompile).
-          if (
-            (e.kind === 'structValue' ||
-              e.kind === 'mapStorageValue' ||
-              e.kind === 'structArrayElem' ||
-              e.kind === 'cdStructArrayElem' ||
-              (e.kind === 'placeRead' && e.type.kind === 'struct')) &&
-            (declared as JethType & { kind: 'struct' }).fields.some((f) => isDynStructLeafArrayField(f.type))
-          ) {
-            this.diags.error(
-              decl.initializer,
-              'JETH200',
-              `building a memory struct with a nested-dynamic-leaf array field (bytes[]/string[]/T[][]) from a storage or calldata-array source is not supported yet (use a constructor, abi.decode, or another struct local)`,
-            );
-            return;
-          }
+          // W3-Y2c P1-9b: a struct with a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]) is NOW
+          // buildable from a STORAGE source (structValue / mapStorageValue / structArrayElem / placeRead)
+          // and a CALLDATA-ARRAY-ELEMENT source (cdStructArrayElem) too: buildDynStructFromStorage builds
+          // the field's B4 pointer-headed image via abiDecFromStorageToImage, and buildDynStructFromCalldata
+          // (Edge F) via abiDecFromCdToImage. isSupportedDynStructLocal still restricts the overall field set
+          // (any field kind neither loader can lay out keeps the shape a clean JETH200 reject upstream).
           this.declareLocal(decl.name.text, declared);
           this.memDynStructLocals.set(decl.name.text, declared);
           out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });
@@ -9227,6 +9214,11 @@ export class Analyzer {
         isStaticStructFixedLeafArray(declared) ||
         isDynBytesFixedLeafArray(declared) ||
         (isStaticStructAnyLeafArray(declared) && declared.length === undefined))
+      // NOTE: a FIXED-outer array whose leaf is a DYNAMIC struct (Arr<P,N>, P dynamic) is deliberately NOT
+      // admitted (W3-Y2c P1-25). buildDynStructFromStorage / abiEncFromMem can build+encode the image, but
+      // the element-read resolver (resolveMemDynStructArrayField) and arrayGet lowering assume a
+      // dynamic-outer [len]-headed image for a dyn-struct-leaf array; a fixed-outer memAggregate has no
+      // [len] header, so admitting it here would misindex m[i]. Kept a clean JETH200 reject.
     ) {
       const fixedOuter = declared.length !== undefined;
       if (this.inCurrentScope(decl.name.text)) {
@@ -11846,6 +11838,11 @@ export class Analyzer {
         // a NESTED DYNAMIC STRUCT field (its own head word is a pointer to the nested struct's image),
         // itself a supported dyn-struct shape: the recursive dyn-struct codec already encodes/decodes it.
         (f.type.kind === 'struct' && isDynamicType(f.type) && this.isSupportedDynStructLocal(f.type)),
+      // NOTE: a DYNAMIC FIXED-outer array FIELD (Arr<P,N> P dynamic, Arr<bytes,N>) is deliberately NOT
+      // admitted: buildDynStructFromStorage can lay out its pointer-headed image, but the mem-dyn-struct
+      // READ path (m.ps[i].n) and the whole-struct re-encode (return m / abi.encode) do not yet consume a
+      // dynamic-fixed-array field, so admitting it would half-accept the copy then JETH900/JETH074 on any
+      // use. Kept a clean JETH200 reject (no over-acceptance, no half-supported crash). See W3-Y2c P1-9c.
     );
   }
 
@@ -12210,14 +12207,53 @@ export class Analyzer {
         return { kind: 'byteIndexStore', type: BYTES1, loc, index: this.coerce(idx, U256, node.argumentExpression) };
       }
     }
+    // W3-Y2c P1-10: a WHOLE DYNAMIC VALUE-array field assigned through a STORAGE struct-array element or
+    // mapping value: this.vals[i].xs = b, this.m[k].xs = b (xs: u256[]). resolveArrayExpr already resolves
+    // the field to a placeArray at the inner array's length slot (its reads / element-writes / push all
+    // work); the whole-array store just needs the SAME `place` the bare `this.d.xs = arr` path produces, so
+    // copyArrayValueIntoStorage(place-slot) deep-copies the array value in (resize + element copy + tail
+    // clear). Gated to a dynamic VALUE-element array, exactly like the bare-struct field path (a bytes[] /
+    // nested-leaf / struct-element array field stays a clean reject - and solc itself rejects copying nested
+    // calldata dynamic arrays to storage, so those stay BOTH-REJECT). resolveAccess declines an array leaf
+    // (deferring to resolveArrayExpr), which is why the indexed/mapping case otherwise falls to JETH067.
+    if (ts.isPropertyAccessExpression(node)) {
+      const arr = this.resolveArrayExpr(node);
+      if (
+        arr &&
+        arr.base.kind === 'placeArray' &&
+        isStaticValueType(arr.elem)
+      ) {
+        this.currentWritesState = true;
+        return {
+          kind: 'place',
+          type: { kind: 'array', element: arr.elem, length: undefined },
+          path: arr.base.path,
+        };
+      }
+    }
     // nested storage place: this.s.f, this.pts[i].x, this.m[k].f, this.m[r][c]
     if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
       const acc = this.resolveAccess(node);
       if (acc) {
         if (!acc.result) return undefined;
-        // Assigning a whole FIXED-array leaf at depth (this.g3[i][j] = arr) is a later
-        // step (no fixed-array value source to copy from); reading it works.
+        // W3-Y2c P1-10 (fixed sibling): assigning a whole STATIC FIXED-array FIELD of a storage struct
+        // reached at depth through a struct-array element / mapping value / nested struct (this.vals[i].fa = a,
+        // this.m[k].fa = a, this.o.inner.fa = a) - the last access step is a FIELD landing on a static fixed
+        // array. Produce a storage `place`; the whole-FIXED-array store codegen (copyFixedArray at the field
+        // base slot) already handles it, exactly like the bare `this.d.fa = a` field path. A whole fixed-array
+        // reached by an INDEX last step (this.g3[i][j] = arr, this.g3[i] = a - a fixed-array element of a
+        // nested array) stays JETH226: that element-at-depth write path is not implemented (it JETH900s).
         if (acc.result.finalType.kind === 'array') {
+          const lastStep = acc.result.path.steps[acc.result.path.steps.length - 1];
+          if (
+            acc.result.finalType.length !== undefined &&
+            isStaticType(acc.result.finalType) &&
+            lastStep &&
+            lastStep.kind === 'field'
+          ) {
+            this.currentWritesState = true;
+            return { kind: 'place', type: acc.result.finalType, path: acc.result.path };
+          }
           this.diags.error(
             node,
             'JETH226',

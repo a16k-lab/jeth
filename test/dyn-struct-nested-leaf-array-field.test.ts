@@ -144,12 +144,38 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
     await diff(J, S, ['setup()', 'enc()', 'ret()']);
   });
 
-  it('clean rejects (sound, no miscompile): deferred storage/calldata local-binding sources', () => {
-    // building a memory LOCAL from a storage / calldata struct source with a nested-leaf field is a
-    // deferred CLEAN reject (the storage/calldata -> B4-image transcode is not implemented); note that
-    // abi.encode(this.s) / return this.s of such a STORAGE struct DO work (asserted above).
+  it('W3-Y2c P1-9b: build a memory LOCAL from a STORAGE struct source with a nested-leaf field', async () => {
+    // let p: P = this.s / this.recs[i] / this.m[k] (P has a bytes[]/string[]/T[][] field) now COPIES the
+    // storage struct into a fresh pointer-headed image (buildDynStructFromStorage builds the field's B4
+    // image via abiDecFromStorageToImage). Byte-identical to solc's storage->memory copy.
+    const J = `@struct class P { a: u256; tags: bytes[]; }
+    @contract class C { @state s: P; @state recs: P[]; @state m: mapping<address, P>;
+      @external setup() { this.s.a = 7n; this.s.tags.push(bytes("aa")); this.s.tags.push(bytes("a-leaf-well-past-the-32-byte-boundary-for-sure!!"));
+        this.recs.push(); this.recs[0n].a = 9n; this.recs[0n].tags.push(bytes("rr")); }
+      @external cA(): u256 { let p: P = this.s; return p.a; }
+      @external cL(): u256 { let p: P = this.s; return p.tags.length; }
+      @external cT(i: u256): bytes { let p: P = this.s; return p.tags[i]; }
+      @external cW(): bytes { let p: P = this.s; return abi.encode(p); }
+      @external rA(): u256 { let p: P = this.recs[0n]; return p.a + p.tags.length; }
+      @external rT(): bytes { let p: P = this.recs[0n]; return p.tags[0n]; } }`;
+    const S = `struct P { uint256 a; bytes[] tags; }
+    contract C { P s; P[] recs; mapping(address => P) m;
+      function setup() external { s.a = 7; s.tags.push(bytes("aa")); s.tags.push(bytes("a-leaf-well-past-the-32-byte-boundary-for-sure!!"));
+        recs.push(); recs[0].a = 9; recs[0].tags.push(bytes("rr")); }
+      function cA() external view returns(uint256){ P memory p = s; return p.a; }
+      function cL() external view returns(uint256){ P memory p = s; return p.tags.length; }
+      function cT(uint256 i) external view returns(bytes memory){ P memory p = s; return p.tags[i]; }
+      function cW() external view returns(bytes memory){ P memory p = s; return abi.encode(p); }
+      function rA() external view returns(uint256){ P memory p = recs[0]; return p.a + p.tags.length; }
+      function rT() external view returns(bytes memory){ P memory p = recs[0]; return p.tags[0]; } }`;
+    await diff(J, S, ['setup()', 'cA()', 'cL()', 'cT(uint256)', 'cW()', 'rA()', 'rT()']);
+  });
+
+  it('clean rejects (sound, no miscompile): deferred calldata whole-param local-binding + literal ctor', () => {
+    // building a memory LOCAL from a whole CALLDATA struct PARAM with a nested-leaf field stays a deferred
+    // CLEAN reject (that calldata-tuple -> B4-image whole-param transcode gate is unchanged); a STORAGE
+    // source is now lifted (asserted above).
     const T = '@struct class P { a: u256; tags: bytes[]; }\n';
-    expect(codes(T + '@contract class C { @state s: P; @external f(): u256 { let p: P = this.s; return p.a; } }')).toContain('JETH200');
     expect(codes(T + '@contract class C { @external f(q: P): u256 { let p: P = q; return p.a; } }')).toContain('JETH200');
     // an array LITERAL as the constructor arg rejects (JETH226), exactly as solc rejects it.
     expect(codes(T + '@contract class C { @external @pure f(): u256 { let p: P = P(1n, [bytes("x")]); return p.a; } }')).toContain('JETH226');
