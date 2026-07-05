@@ -159,8 +159,8 @@ describe('W6B: allocating later tuple component no longer clobbers earlier compo
     const jc = await jeth.deploy(compile(jCaller, { fileName: 'C.jeth' }).creationBytecode);
     const sd = await sol.deploy(compileSolidity(SPDX + sCallee, 'D').creation);
     const sc = await sol.deploy(compileSolidity(SPDX + sCaller, 'C').creation);
-    const jr = await jeth.call(jc, sel('go(address,uint256)') + pad32(BigInt(jd)) + W(5));
-    const sr = await sol.call(sc, sel('go(address,uint256)') + pad32(BigInt(sd)) + W(5));
+    const jr = await jeth.call(jc, sel('go(address,uint256)') + pad32(BigInt(jd.toString())) + W(5));
+    const sr = await sol.call(sc, sel('go(address,uint256)') + pad32(BigInt(sd.toString())) + W(5));
     expect(jr.success).toBe(sr.success);
     expect(jr.returnHex).toBe(sr.returnHex);
     expect(jr.returnHex).toBe('0x' + W(5)); // non-vacuous: the bug decoded a=0x20
