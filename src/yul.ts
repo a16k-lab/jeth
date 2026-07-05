@@ -1248,6 +1248,59 @@ ${indent(runtime, 6)}
     }
   }
 
+  /** Member count when `t` is an enum-branded uint8, else undefined. */
+  private enumCount(t: JethType): number | undefined {
+    const em = (t as { enumMembers?: string[] }).enumMembers;
+    return t.kind === 'uint' && em !== undefined ? em.length : undefined;
+  }
+
+  /** The ultimate leaf of a (possibly nested FIXED) array type; identity for non-arrays. */
+  private arrayLeaf(t: JethType): JethType {
+    return t.kind === 'array' ? this.arrayLeaf(t.element) : t;
+  }
+
+  /** W6C: Panic(0x21) on any out-of-range ENUM word inside a VALUE-LEAF memory array image whose
+   *  data words are INLINE (a flat [len][words] dynamic image, or a fixed inline block - NOT a
+   *  pointer-headed image). No-op unless the leaf is an enum. This is solc's validator_assert
+   *  flavor: encoding/copying an enum array OUT of memory (return / abi.encode / emit / error /
+   *  mem->storage) range-checks every element and Panics 0x21 on the first dirty one. The memory
+   *  image can hold raw dirty words because the calldata->memory BIND copy is raw (calldatacopy
+   *  semantics, matching solc - lazy validation). Valid images make this a pure no-op. */
+  private validateEnumMemArray(t: JethType, memPtr: string, out: string[]): void {
+    // a STATIC STRUCT image (flat ABI-unpacked words): range-check each ENUM leaf word. A struct
+    // image can inherit a RAW dirty word when a raw-bound fixed enum array is a constructor arg
+    // (Q(b, i)); solc Panics 0x21 when encoding it out of memory. No-op without enum leaves.
+    if (t.kind === 'struct' && isStaticType(t)) {
+      for (const lf of abiLeaves(t)) {
+        const n = this.enumCount(lf.type);
+        if (n === undefined) continue;
+        const at = lf.wordOffset === 0 ? memPtr : `add(${memPtr}, ${lf.wordOffset * 32})`;
+        out.push(`if iszero(lt(mload(${at}), ${n})) { ${this.panic()}(0x21) }`);
+      }
+      return;
+    }
+    if (t.kind !== 'array' || !isValueLeafArray(t)) return;
+    const n = this.enumCount(this.arrayLeaf(t));
+    if (n === undefined) return;
+    const i = this.fresh();
+    if (t.length === undefined) {
+      // dynamic outer with a STATIC inline element ([len] + len*ew inline words). A pointer-headed
+      // (dynamic-element) image never reaches here: those binds validate eagerly at the copy.
+      if (!(isStaticType(t.element) && isStaticValueType(this.arrayLeaf(t.element)))) return;
+      const ew = t.element.kind === 'array' ? abiHeadWords(t.element) * 32 : 32;
+      const total = this.fresh();
+      out.push(`let ${total} := mul(mload(${memPtr}), ${ew})`);
+      out.push(`for { let ${i} := 0 } lt(${i}, ${total}) { ${i} := add(${i}, 0x20) } {`);
+      out.push(`  if iszero(lt(mload(add(add(${memPtr}, 0x20), ${i})), ${n})) { ${this.panic()}(0x21) }`);
+      out.push(`}`);
+      return;
+    }
+    if (!isStaticValueType(this.arrayLeaf(t))) return; // pointer-headed fixed image: not inline words
+    out.push(`for { let ${i} := 0 } lt(${i}, ${abiHeadWords(t) * 32}) { ${i} := add(${i}, 0x20) } {`);
+    out.push(`  if iszero(lt(mload(add(${memPtr}, ${i})), ${n})) { ${this.panic()}(0x21) }`);
+    out.push(`}`);
+  }
+
   // ---- statements ----------------------------------------------------------
 
   private lowerStmt(s: Stmt, ctx: LowerCtx): string[] {
@@ -1370,7 +1423,11 @@ ${indent(runtime, 6)}
         ) {
           // a STATIC memory-aggregate image (struct / fixed array): the image IS the flat return blob.
           // (A DYNAMIC-array call/ternary falls through to encodeMemArrayReturn below.)
-          const ptr = this.lowerExpr(s.value, ctx, out);
+          const ptr = this.fresh();
+          out.push(`let ${ptr} := ${this.lowerExpr(s.value, ctx, out)}`);
+          // W6C: a fixed ENUM array image (`const b: Arr<Color,3> = a; return b;`) is range-checked
+          // on the way out (Panic 0x21) - the image may hold RAW dirty words from the bind copy.
+          this.validateEnumMemArray(s.value.type, ptr, out);
           out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
           break;
         }
@@ -1525,7 +1582,7 @@ ${indent(runtime, 6)}
               (isStaticStructAnyLeafArray(s.value.type) && isDynamicType(s.value.type));
             const { ptr, size } = codecSourced
               ? this.encodeNestedMemReturn(s.value.type, p, ctx, out)
-              : this.encodeMemArrayReturn(p, out);
+              : this.encodeMemArrayReturn(p, out, s.value.type);
             out.push(`return(${ptr}, ${size})`);
             break;
           }
@@ -1619,7 +1676,7 @@ ${indent(runtime, 6)}
               (isStaticStructAnyLeafArray(s.value.type) && isDynamicType(s.value.type));
             const { ptr, size } = codecSourced
               ? this.encodeNestedMemReturn(s.value.type, mp, ctx, out)
-              : this.encodeMemArrayReturn(mp, out);
+              : this.encodeMemArrayReturn(mp, out, s.value.type);
             out.push(`return(${ptr}, ${size})`);
             break;
           }
@@ -1681,6 +1738,9 @@ ${indent(runtime, 6)}
             // W6A: the image is returned (ABI-copied out) immediately - a TRANSIENT capture context,
             // so an aliasable memory field source stays accepted (the copy is unobservable).
             const ptr = this.inTransientCapture(() => this.allocAggToMem(s.value as Expr & { kind: 'structNew' }, ctx, out));
+            // W6C: a fixed ENUM-array field inherited from a raw-bound memory arg (Q(b, i)) is
+            // range-checked on the way out (Panic 0x21, solc's encode validation).
+            this.validateEnumMemArray(s.value.type, ptr, out);
             out.push(`return(${ptr}, ${abiHeadWords(s.value.type) * 32})`);
             break;
           }
@@ -1763,7 +1823,7 @@ ${indent(runtime, 6)}
               `let ${name} := ${this.allocAggFromStorage(s.init.type, this.structArrayElemSlot(s.init.arr, s.init.index, ctx, out), out)}`,
             );
           } else if (s.init.kind === 'cdAggregateValue') {
-            out.push(`let ${name} := ${this.allocAggFromCalldata(s.init.param, s.init.type, ctx, out)}`);
+            out.push(`let ${name} := ${this.allocAggFromCalldata(s.init.param, s.init.type, ctx, out, true)}`);
           } else if (s.init.kind === 'cdStructArrayElem') {
             // a STATIC struct element of a calldata struct array (let p: P = ps[i]): copy the
             // element's contiguous calldata head into a fresh static-aggregate memory image (the
@@ -2798,7 +2858,11 @@ ${indent(runtime, 6)}
           if (a.type.kind === 'struct' || (a.type.kind === 'array' && a.type.length !== undefined)) {
             // a STATIC struct / fixed-array: materialize its ABI-unpacked image NOW (before the head
             // buffer is captured, so it cannot alias), then mcopy its leaf words inline into the head.
-            return { dyn: 'agg', mp: this.aggToMemPtr(a, ctx, lines), words: abiHeadWords(a.type) };
+            // W6C: a fixed ENUM array image is range-checked before its words enter the revert data
+            // (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
+            const aggMp = this.aggToMemPtr(a, ctx, lines);
+            this.validateEnumMemArray(a.type, aggMp, lines);
+            return { dyn: 'agg', mp: aggMp, words: abiHeadWords(a.type) };
           }
           const t = this.fresh();
           lines.push(`let ${t} := ${this.lowerExpr(a, ctx, lines)}`);
@@ -3016,6 +3080,9 @@ ${indent(runtime, 6)}
         const mp = this.isPointerHeadedStaticAggArg(arg)
           ? this.flattenPointerHeadedStaticAgg(arg, ctx, out)
           : this.aggToMemPtr(arg, ctx, out);
+        // W6C: a fixed ENUM array image is range-checked before it enters the log data
+        // (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
+        this.validateEnumMemArray(p.type, mp, out);
         dataSlot[i] = { inline: true, mp, words: abiHeadWords(p.type) };
       } else if (p.type.kind === 'struct') {
         // a non-indexed DYNAMIC struct: a head offset + its head/tail blob in the tail.
@@ -3334,6 +3401,15 @@ ${indent(runtime, 6)}
         const i = this.fresh();
         out.push(`let ${i} := ${this.lowerExpr(e.index, ctx, out)}`);
         out.push(`if iszero(lt(${i}, ${e.length})) { ${this.panic()}(0x32) }`);
+        // W6C: an ENUM element read from a fixed memory array is range-checked (Panic 0x21,
+        // solc's read_from_memory) - the image may hold RAW words from the calldata bind copy.
+        const enFix = this.enumCount(e.type);
+        if (enFix !== undefined) {
+          const w = this.fresh();
+          out.push(`let ${w} := mload(add(${base}, mul(${i}, 0x20)))`);
+          out.push(`if iszero(lt(${w}, ${enFix})) { ${this.panic()}(0x21) }`);
+          return w;
+        }
         return `mload(add(${base}, mul(${i}, 0x20)))`;
       }
       case 'memAggregate': {
@@ -3920,7 +3996,9 @@ ${indent(runtime, 6)}
         out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
         if (t.length === undefined && isStaticValueType(t.element)) {
           // a FLAT value array (u256[], address[], ...): the memory [len][data] IS the ABI layout
-          // (one word per element), so copy it verbatim.
+          // (one word per element), so copy it verbatim. W6C: an ENUM component is range-checked
+          // first (Panic 0x21) - the image may hold RAW dirty words from a calldata bind copy.
+          this.validateEnumMemArray(t, mp, out);
           const total = `mul(add(mload(${mp}), 1), 0x20)`;
           out.push(`mcopy(${cursor}, ${mp}, ${total})`);
           out.push(`${cursor} := add(${cursor}, ${total})`);
@@ -4222,6 +4300,9 @@ ${indent(runtime, 6)}
         throw new UnsupportedError('indexed-topic encoding of a struct-element array field is not supported yet');
       // dynamic value-array: its element words, NO length word (each element is one 32-byte word).
       const ref = nextRef();
+      // W6C: an ENUM array field is range-checked on the way out of memory (Panic 0x21) - the
+      // image may hold RAW dirty words from a calldata bind copy.
+      if (ref.src === 'memory') this.validateEnumMemArray(f.type, ref.ptr, out);
       const len = this.fresh();
       out.push(`let ${len} := ${this.dynLen(ref)}`);
       out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
@@ -4655,6 +4736,9 @@ ${indent(runtime, 6)}
       }
       // dynamic value-array field tail: [len][word-elements], NO byte-padding (each element is a full
       // 32-byte word). The source is a memory [len][elems] pointer (the materialized array image).
+      // W6C: an ENUM array field is range-checked on the way out of memory (Panic 0x21, solc's
+      // validator_assert) - the image may hold RAW dirty words from a calldata bind copy.
+      if (ref.src === 'memory') this.validateEnumMemArray(f.type, ref.ptr, out);
       const len = this.fresh();
       out.push(`let ${len} := ${this.dynLen(ref)}`);
       out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
@@ -5446,6 +5530,16 @@ ${indent(runtime, 6)}
         return `mload(add(${dataBase}, mul(${i}, 0x20)))`;
       }
       // a value element: one word per element at dataBase + i*32.
+      // W6C: an ENUM element read from memory is range-checked (Panic 0x21, solc's
+      // read_from_memory validator_assert): the image may hold RAW dirty words from the
+      // calldata bind/slice copy (which, like solc, does NOT validate enums during the copy).
+      const en = this.enumCount(ref.elem);
+      if (en !== undefined) {
+        const w = this.fresh();
+        out.push(`let ${w} := mload(add(${dataBase}, mul(${i}, 0x20)))`);
+        out.push(`if iszero(lt(${w}, ${en})) { ${this.panic()}(0x21) }`);
+        return w;
+      }
       return `mload(add(${dataBase}, mul(${i}, 0x20)))`;
     }
     out.push(`if iszero(lt(${i}, ${ref.length})) { ${oob} }`);
@@ -5764,6 +5858,11 @@ ${indent(runtime, 6)}
     const inner: string[] = [];
     const me = this.fresh();
     inner.push(`let ${me} := mload(add(${memPtr}, add(0x20, mul(${i}, 0x20))))`);
+    // W6C: a memory->storage ENUM element copy range-checks each word (Panic 0x21, solc's
+    // read-from-memory validation) - the image may hold RAW dirty words from a calldata bind.
+    // Without this the packed store would MASK a dirty word into a bogus valid member.
+    const en = this.enumCount(innerElem);
+    if (en !== undefined) inner.push(`if iszero(lt(${me}, ${en})) { ${this.panic()}(0x21) }`);
     this.arrayElemStore(innerElem, dstData, i, me, inner);
     for (const l of inner) out.push('  ' + l);
     out.push('}');
@@ -6226,21 +6325,35 @@ ${indent(runtime, 6)}
   /** Allocate a fresh memory image for a static aggregate and COPY it from a CALLDATA param
    *  (G9: `let q: P = calldataStructParam`). The param data is inline at its head word;
    *  abiEncFromCd decodes it (validating dirty narrow fields like solc) into the image. */
-  private allocAggFromCalldata(param: string, type: JethType, ctx: LowerCtx, out: string[]): string {
+  private allocAggFromCalldata(
+    param: string,
+    type: JethType,
+    ctx: LowerCtx,
+    out: string[],
+    bindContext = false,
+  ): string {
     const ph = ctx.cdParamHead.get(param);
     if (!ph) throw new UnsupportedError(`unbound struct-copy param ${param}`);
-    return this.allocAggFromCalldataBase(type, String(ph.head), out);
+    return this.allocAggFromCalldataBase(type, String(ph.head), out, bindContext);
   }
 
   /** Allocate a fresh memory image for a static aggregate and COPY it from a precomputed CALLDATA
    *  base (G9: `let p: P = ps[i]`, a calldata struct-array element). The same abiEncFromCd transcode
    *  the whole-param copy uses (validating dirty narrow fields like solc), applied at the element's
    *  contiguous calldata head. */
-  private allocAggFromCalldataBase(type: JethType, base: string, out: string[]): string {
+  private allocAggFromCalldataBase(type: JethType, base: string, out: string[], bindContext = false): string {
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(0x40, add(${ptr}, ${abiHeadWords(type) * 32}))`);
-    this.abiEncFromCd(type, base, ptr, true, out);
+    // W6C: in the BIND context (`const b: Arr<u8,3> = a` / an internal-call arg) a BARE VALUE-LEAF
+    // fixed array is a raw calldatacopy in solc: non-enum leaves are MASKED (never revert - the
+    // memory read masks again), enum words copy RAW and Panic 0x21 lazily at the element read.
+    // In the ENCODE context (abi.encode(a) / event data via aggToMemPtr) solc reads the elements
+    // from CALLDATA and VALIDATES each (EMPTY revert - verified vs 0.8.35), so keep validate=true.
+    // A STRUCT (even one holding a fixed enum-array field) always keeps the eager per-leaf
+    // VALIDATION (EMPTY revert), solc's struct convert-to-memory flavor.
+    const rawCopy = bindContext && isValueLeafArray(type);
+    this.abiEncFromCd(type, base, ptr, !rawCopy, out, false, rawCopy);
     return ptr;
   }
 
@@ -7165,6 +7278,9 @@ ${indent(runtime, 6)}
    *  The inverse of abiEncFromStorage's static branch; storeState read-modify-writes each packed
    *  leaf, so leaves sharing a slot compose correctly and slot padding stays zero. */
   private storeStaticAggFromMem(t: JethType, memPtr: string, slot: string, out: string[]): void {
+    // W6C: a fixed ENUM array image is range-checked before the packed store (Panic 0x21, solc's
+    // memory->storage copy) - a bound memory local may hold RAW dirty words from the bind copy.
+    this.validateEnumMemArray(t, memPtr, out);
     const sConst = /^\d+$/.test(slot);
     for (const leaf of structStorageLeaves(t)) {
       const ls =
@@ -7474,7 +7590,10 @@ ${indent(runtime, 6)}
   }
 
   /** ABI-encode a MEMORY value-array at pointer `mp` (=[len][data]) as [0x20][len][data]. */
-  private encodeMemArrayReturn(mp: string, out: string[]): { ptr: string; size: string } {
+  private encodeMemArrayReturn(mp: string, out: string[], t?: JethType): { ptr: string; size: string } {
+    // W6C: encoding a memory ENUM array to returndata range-checks every element (Panic 0x21,
+    // solc's validator_assert) - the image may hold RAW dirty words from a calldata bind copy.
+    if (t !== undefined) this.validateEnumMemArray(t, mp, out);
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     out.push(`mstore(${ptr}, 0x20)`);
@@ -7697,19 +7816,19 @@ ${indent(runtime, 6)}
       // new Array<T>(n) lowers to a [len][data] memory pointer; encode it as a dynamic memory array.
       const p = this.fresh();
       out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
-      return this.encodeMemArrayReturn(p, out);
+      return this.encodeMemArrayReturn(p, out, value.type);
     }
     if (value.kind !== 'arrayValue') throw new UnsupportedError(`cannot encode array from ${value.kind}`);
     // a MEMORY T[] (value elements) at ptr=[len][data]: ABI return = [0x20][len][data].
     if (value.arr.base.kind === 'memArray') {
-      return this.encodeMemArrayReturn(this.ctxLookup(ctx, value.arr.base.varName), out);
+      return this.encodeMemArrayReturn(this.ctxLookup(ctx, value.arr.base.varName), out, value.type);
     }
     // a memory T[] produced by an expression (a dynamic-array ternary `c ? this.a : this.b`):
     // lower to the [len][elems] pointer (freeze first), then encode.
     if (value.arr.base.kind === 'memArrayExpr') {
       const p = this.fresh();
       out.push(`let ${p} := ${this.lowerExpr(value.arr.base.expr, ctx, out)}`);
-      return this.encodeMemArrayReturn(p, out);
+      return this.encodeMemArrayReturn(p, out, value.type);
     }
     const ref = this.lowerArrayRef(value.arr, ctx, out);
     if (ref.src === 'fixed') throw new UnsupportedError('returning a whole fixed array is not supported yet');
@@ -7793,6 +7912,12 @@ ${indent(runtime, 6)}
         if (elemIsStruct) {
           const guard = this.validateInput(leaf.type, w);
           if (guard) inner.push(guard);
+          inner.push(`mstore(add(${e}, ${at}), ${w})`);
+        } else if (this.enumCount(leaf.type) !== undefined) {
+          // W6C: an ENUM leaf in a calldata-source array RETURN re-encode (`return a.slice(s)`,
+          // `return d.tags`) is range-checked with Panic(0x21) - solc's abi_encode validator_assert
+          // - NOT masked (masking silently returned dirty words: a wrong-bytes miscompile).
+          inner.push(`if iszero(lt(${w}, ${this.enumCount(leaf.type)})) { ${this.panic()}(0x21) }`);
           inner.push(`mstore(add(${e}, ${at}), ${w})`);
         } else {
           inner.push(`mstore(add(${e}, ${at}), ${this.cleanCalldataElem(leaf.type, w)})`);
@@ -7931,6 +8056,10 @@ ${indent(runtime, 6)}
     ctx: LowerCtx,
     out: string[],
     forceValidate = false,
+    // W6C: the calldata->memory BIND copy context (`const b: Color[] = a` / internal-call arg):
+    // enum words copy RAW (no eager Panic 0x21) - solc's convert-to-memory is a raw calldatacopy
+    // and validates lazily at the element read. The RETURN echo keeps the eager Panic.
+    enumRaw = false,
   ): { ptr: string; size: string } {
     const ph = ctx.cdParamHead.get(name);
     if (!ph) throw new UnsupportedError(`unbound echo param ${name}`);
@@ -7949,7 +8078,7 @@ ${indent(runtime, 6)}
     // forceValidate marks the DECODE/re-encode context (abi.encode/encodeWith*/emit/error via
     // materializeArrayArg): an oversized inner length/offset is an ABI-decode failure -> revert(0,0),
     // matching solc. The return-echo path (forceValidate=false) keeps Panic 0x41.
-    const size = this.abiEncFromCd(t, cdPtr, `add(${ptr}, 0x20)`, !topClean, out, forceValidate);
+    const size = this.abiEncFromCd(t, cdPtr, `add(${ptr}, 0x20)`, !topClean, out, forceValidate, enumRaw);
     out.push(`mstore(0x40, add(add(${ptr}, 0x20), ${size}))`);
     return { ptr, size: `add(0x20, ${size})` };
   }
@@ -8081,7 +8210,9 @@ ${indent(runtime, 6)}
           }
           return this.abiDecFromCdToImage(a.type, `sub(${cd.offset}, 0x20)`, out, `${this.panic()}(0x41)`);
         }
-        const { ptr } = this.echoParam(b.name, a.type, ctx, out, false); // COPY, masking dirty elements
+        // COPY: masking dirty non-enum elements, RAW for enum words (W6C: solc's convert-to-memory
+        // does NOT validate enums during the copy; the element read Panics 0x21 lazily).
+        const { ptr } = this.echoParam(b.name, a.type, ctx, out, false, true);
         const mp = this.fresh();
         out.push(`let ${mp} := add(${ptr}, 0x20)`); // skip the [0x20] offset wrapper -> [len][elems]
         return mp;
@@ -8115,7 +8246,7 @@ ${indent(runtime, 6)}
       return mp;
     }
     // a calldata struct / fixed-array param forwarded as an arg: COPY its ABI-unpacked image to memory.
-    if (a.kind === 'cdAggregateValue') return this.allocAggFromCalldata(a.param, a.type, ctx, out);
+    if (a.kind === 'cdAggregateValue') return this.allocAggFromCalldata(a.param, a.type, ctx, out, true);
     // a DYNAMIC-field struct arg: pointer-headed image (memory source ALIASES; storage/calldata/
     // constructor source is COPIED to fresh memory) - the same builder a dynamic-struct local uses.
     if (a.type.kind === 'struct' && isDynamicType(a.type)) return this.buildDynStructLocal(a.type, a, ctx, out);
@@ -8199,12 +8330,10 @@ ${indent(runtime, 6)}
     const inner: string[] = [];
     const w = this.fresh();
     inner.push(`let ${w} := calldataload(add(${offset}, mul(${i}, 0x20)))`);
-    // masked/cleaned like solc's calldata->memory copy (an enum element Panics 0x21 on an out-of-range
-    // value, matching a whole value-aggregate echo).
+    // masked/cleaned like solc's calldata->memory copy. W6C: an ENUM element copies RAW (solc's
+    // slice-to-memory copy does NOT validate enums; reading the element from memory Panics 0x21
+    // lazily - verified vs 0.8.35: a clean-element read beside a dirty one succeeds).
     if ((elem as { enumMembers?: string[] }).enumMembers) {
-      inner.push(
-        `if iszero(lt(${w}, ${(elem as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`,
-      );
       inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${w})`);
     } else {
       inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${this.cleanCalldataElem(elem, w)})`);
@@ -8391,6 +8520,12 @@ ${indent(runtime, 6)}
     }
     const mp = this.fresh();
     out.push(`let ${mp} := ${mpExpr}`);
+    // W6C: a MEMORY-sourced ENUM array (a bound local, possibly holding RAW dirty words from the
+    // calldata bind copy) is range-checked here - solc's abi.encode/emit/revert/packed encoders
+    // Panic(0x21) on an out-of-range enum read from memory. No-op for valid images / non-enums.
+    if (base.kind === 'memArray' || base.kind === 'memArrayExpr') {
+      this.validateEnumMemArray(arg.type, mp, out);
+    }
     const size = this.fresh();
     out.push(`let ${size} := ${sizeExpr}`);
     return { mp, size };
@@ -8488,7 +8623,11 @@ ${indent(runtime, 6)}
       }
       // a constructed / memory / mapping-value / struct-array-element source: aggToMemPtr builds the
       // ABI-unpacked image (one word per leaf), so keccak256(mp, abiHeadWords*32) == keccak256(abi.encode(v)).
-      return { mp: this.aggToMemPtr(arg, ctx, out), size: String(abiHeadWords(arg.type) * 32) };
+      // W6C: a fixed ENUM array image is range-checked before it is hashed into the topic
+      // (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
+      const aggMp = this.aggToMemPtr(arg, ctx, out);
+      this.validateEnumMemArray(arg.type, aggMp, out);
+      return { mp: aggMp, size: String(abiHeadWords(arg.type) * 32) };
     }
     const dst = this.fresh();
     out.push(`let ${dst} := mload(0x40)`);
@@ -8536,6 +8675,12 @@ ${indent(runtime, 6)}
     validate: boolean,
     out: string[],
     capEmptyRevert = false,
+    // W6C: the calldata->MEMORY BIND copy of a value-leaf enum array (`const b: Color[] = a`,
+    // Arr<Color,N>, Arr<Color,2>[]) copies enum words RAW (calldatacopy semantics, matching solc's
+    // convert-to-memory: NO validation during the copy; the element READ / re-encode validates
+    // lazily with Panic 0x21). Only honored when !validate. The RETURN echo (`return a`) keeps the
+    // eager Panic-0x21 (solc's abi_encode validator_assert), i.e. enumRaw=false.
+    enumRaw = false,
   ): string {
     // In a DECODE/re-encode context (abi.encode/encodeWith*/emit/error materialization, reached via
     // echoParam's forceValidate), an oversized length or memory-overflow cap is an ABI-DECODE FAILURE ->
@@ -8552,13 +8697,15 @@ ${indent(runtime, 6)}
         if (g) out.push(g);
         out.push(`mstore(${dst}, ${w})`);
       } else if ((t as { enumMembers?: string[] }).enumMembers) {
-        // An enum element copied whole to memory is range-checked like an explicit conversion:
-        // solc reverts Panic(0x21) on an out-of-range element during the copy. (The empty-revert
-        // sites are the ABI-decode boundary, lazy element access, and event/error materialization;
-        // a whole-aggregate echo to a memory return Panics instead.)
-        out.push(
-          `if iszero(lt(${w}, ${(t as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`,
-        );
+        // An enum element copied whole in a RETURN echo is range-checked like an explicit
+        // conversion: solc reverts Panic(0x21) on an out-of-range element during the encode.
+        // W6C: a BIND copy to memory (enumRaw) stores the word RAW instead (calldatacopy
+        // semantics, matching solc's convert-to-memory; the read validates lazily).
+        if (!enumRaw) {
+          out.push(
+            `if iszero(lt(${w}, ${(t as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`,
+          );
+        }
         out.push(`mstore(${dst}, ${w})`);
       } else {
         out.push(`mstore(${dst}, ${this.cleanCalldataElem(t, w)})`);
@@ -8578,10 +8725,12 @@ ${indent(runtime, 6)}
           out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${w})`);
         } else if ((leaf.type as { enumMembers?: string[] }).enumMembers) {
           // enum leaf in a whole-aggregate echo: Panic(0x21) on out-of-range (see the value-leaf
-          // case above), not a silent mask.
-          out.push(
-            `if iszero(lt(${w}, ${(leaf.type as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`,
-          );
+          // case above), not a silent mask. W6C: a BIND copy (enumRaw) stores RAW instead.
+          if (!enumRaw) {
+            out.push(
+              `if iszero(lt(${w}, ${(leaf.type as { enumMembers: string[] }).enumMembers.length})) { ${this.panic()}(0x21) }`,
+            );
+          }
           out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${w})`);
         } else {
           out.push(`mstore(add(${dst}, ${leaf.wordOffset * 32}), ${this.cleanCalldataElem(leaf.type, w)})`);
@@ -8634,7 +8783,7 @@ ${indent(runtime, 6)}
         inner.push(`let ${ecd} := add(${elemRegion}, mul(${i}, ${es}))`);
         const edst = this.fresh();
         inner.push(`let ${edst} := add(${dstHead}, mul(${i}, ${es}))`);
-        this.abiEncFromCd(t.element, ecd, edst, elemValidate, inner, capEmptyRevert);
+        this.abiEncFromCd(t.element, ecd, edst, elemValidate, inner, capEmptyRevert, enumRaw);
         for (const l of inner) out.push('  ' + l);
         out.push('}');
         return `add(0x20, mul(${len}, ${es}))`;
@@ -8764,7 +8913,11 @@ ${indent(runtime, 6)}
     if (isStaticType(t) && !isStaticStructFixedLeafArray(t)) {
       const hw = abiHeadWords(t);
       const i = this.fresh();
+      // W6C: an ENUM leaf encodes out of memory with a range check (Panic 0x21, solc's
+      // validator_assert) - the image may hold RAW dirty words from a calldata bind copy.
+      const en = t.kind === 'array' ? this.enumCount(this.arrayLeaf(t)) : undefined;
       out.push(`for { let ${i} := 0 } lt(${i}, ${hw * 32}) { ${i} := add(${i}, 0x20) } {`);
+      if (en !== undefined) out.push(`  if iszero(lt(mload(add(${memPtr}, ${i})), ${en})) { ${this.panic()}(0x21) }`);
       out.push(`  mstore(add(${dst}, ${i}), mload(add(${memPtr}, ${i})))`);
       out.push('}');
       return String(hw * 32);
@@ -8784,7 +8937,10 @@ ${indent(runtime, 6)}
         // inline; copy abiHeadWords(element) words per element straight across.
         const es = abiHeadWords(t.element) * 32;
         const i = this.fresh();
+        // W6C: ENUM elements range-check on the way out of memory (Panic 0x21, see above).
+        const en = this.enumCount(this.arrayLeaf(t.element));
         out.push(`for { let ${i} := 0 } lt(${i}, mul(${len}, ${es})) { ${i} := add(${i}, 0x20) } {`);
+        if (en !== undefined) out.push(`  if iszero(lt(mload(add(${srcHead}, ${i})), ${en})) { ${this.panic()}(0x21) }`);
         out.push(`  mstore(add(${dstHead}, ${i}), mload(add(${srcHead}, ${i})))`);
         out.push('}');
         return `add(0x20, mul(${len}, ${es}))`;
@@ -9270,7 +9426,19 @@ ${indent(runtime, 6)}
    *     the MEMORY allocation guard on an oversized inner length / alloc overflow exactly like abi.decode /
    *     the mem twin (empirically verified vs solc 0.8.35: inner len 2^64-1 -> Panic 0x41). Truncated /
    *     OOB source ALWAYS empty-reverts (revert(0, 0)) regardless of cap, like solc. */
-  private abiDecFromCdToImage(t: JethType, cdPtr: string, out: string[], cap = `revert(0, 0)`): string {
+  private abiDecFromCdToImage(
+    t: JethType,
+    cdPtr: string,
+    out: string[],
+    cap = `revert(0, 0)`,
+    // W6C: TRUE when this (sub-)copy was reached through an OFFSET TABLE (a dynamic element /
+    // fixed-outer-of-dynamic level): solc's calldata->memory copy of such levels is abi_decode
+    // flavored and VALIDATES every value leaf (EMPTY revert on a dirty uintN/bool/... AND on an
+    // out-of-range enum) - verified vs 0.8.35 (u8[][]/Color[][] binds revert empty eagerly).
+    // FALSE (default) for the outer CONTIGUOUS level: raw calldatacopy semantics (non-enum leaves
+    // masked, enum words copied RAW and validated lazily at the read - Panic 0x21).
+    forceValidate = false,
+  ): string {
     // a bytes/string leaf: alloc a [len][data] blob, return its absolute pointer.
     if (isBytesLike(t)) {
       const len = this.fresh();
@@ -9302,7 +9470,7 @@ ${indent(runtime, 6)}
       // a calldata->memory copy MASKS value leaves (a fixed value array Arr<u256,N> / Arr<address,N>),
       // matching solc's copy semantics (dirty narrow leaves are cleaned, not reverted); a static struct
       // still validates its fields (validate stays true).
-      this.abiEncFromCd(t, cdPtr, ptr, !isValueLeafArray(t), out);
+      this.abiEncFromCd(t, cdPtr, ptr, forceValidate || !isValueLeafArray(t), out, false, !forceValidate);
       return ptr;
     }
     // a dynamic array T[]: alloc [len] + an len-word table; each element word holds either an inline
@@ -9337,7 +9505,7 @@ ${indent(runtime, 6)}
         // a STATIC VALUE element of a calldata->memory copy MASKS its value leaves (u256[][] inner
         // u256[], Arr<u256,N>[] inner Arr<u256,N>), matching solc's copy semantics; a static struct
         // element still validates (validate stays true).
-        this.abiEncFromCd(t.element, ecd, edst, !isValueLeafArray(t), inner);
+        this.abiEncFromCd(t.element, ecd, edst, forceValidate || !isValueLeafArray(t), inner, false, !forceValidate);
         for (const l of inner) out.push('  ' + l);
         out.push('}');
         return ptr;
@@ -9365,7 +9533,7 @@ ${indent(runtime, 6)}
         const esrc = this.fresh();
         inner.push(`let ${esrc} := add(${elemRegion}, mul(${i}, ${es}))`);
         const ip = this.fresh();
-        inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, inner, cap)}`);
+        inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, inner, cap, forceValidate)}`);
         inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
         for (const l of inner) out.push('  ' + l);
         out.push('}');
@@ -9392,7 +9560,7 @@ ${indent(runtime, 6)}
       inner.push(`let ${se} := add(${elemRegion}, ${so})`);
       inner.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), calldatasize()) { revert(0, 0) }`);
       const ip = this.fresh();
-      inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, inner, cap)}`);
+      inner.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, inner, cap, true)}`);
       inner.push(`mstore(add(${dstHead}, mul(${i}, 0x20)), ${ip})`);
       for (const l of inner) out.push('  ' + l);
       out.push('}');
@@ -9411,7 +9579,7 @@ ${indent(runtime, 6)}
       for (let k = 0; k < t.length; k++) {
         const esrc = k === 0 ? cdPtr : `add(${cdPtr}, ${k * es})`;
         const ip = this.fresh();
-        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, out, cap)}`);
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, esrc, out, cap, forceValidate)}`);
         out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
       }
       return ptr;
@@ -9429,7 +9597,7 @@ ${indent(runtime, 6)}
         out.push(`let ${se} := add(${cdPtr}, ${so})`);
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(t.element)}), calldatasize()) { revert(0, 0) }`);
         const ip = this.fresh();
-        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, out, cap)}`);
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(t.element, se, out, cap, true)}`);
         out.push(`mstore(add(${ptr}, ${k * 32}), ${ip})`);
       }
       return ptr;
@@ -10152,8 +10320,13 @@ ${indent(runtime, 6)}
         out.push(`mstore(0x40, add(${blob}, ${sz}))`);
         return { inline: true, mp: blob, words: abiHeadWords(t) };
       }
-      if (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array'))
-        return { inline: true, mp: this.aggToMemPtr(a, ctx, out), words: abiHeadWords(t) };
+      if (isStaticType(t) && (t.kind === 'struct' || t.kind === 'array')) {
+        const mp = this.aggToMemPtr(a, ctx, out);
+        // W6C: a fixed ENUM array image is range-checked before it is mcopy'd into the encode
+        // blob (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
+        this.validateEnumMemArray(t, mp, out);
+        return { inline: true, mp, words: abiHeadWords(t) };
+      }
       if (t.kind === 'struct') return this.encodeDynStructToBlob(a, ctx, out); // dynamic struct -> offset + head/tail tail
       if (t.kind === 'array') return this.materializeArrayArg(a, ctx, out); // dynamic array (value or nested) -> {mp, size} tail
       return { word: this.lowerExpr(a, ctx, out) };
@@ -10233,7 +10406,11 @@ ${indent(runtime, 6)}
       } else if (t.kind === 'array') {
         // a value-element array: each element padded to 32 bytes (its ABI element words), no length.
         if (t.length !== undefined) {
-          writeDesc(i, this.aggToMemPtr(a, ctx, out), String(t.length * 32));
+          const pm = this.aggToMemPtr(a, ctx, out);
+          // W6C: a fixed ENUM array is range-checked before its words enter the packed blob
+          // (Panic 0x21) - a bound memory local may hold RAW dirty words from the bind copy.
+          this.validateEnumMemArray(t, pm, out);
+          writeDesc(i, pm, String(t.length * 32));
         } else {
           const m = this.materializeArrayArg(a, ctx, out); // {mp,size} = [len][elems]
           writeDesc(i, `add(${m.mp}, 0x20)`, `sub(${m.size}, 0x20)`);
