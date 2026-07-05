@@ -215,6 +215,7 @@ export class Analyzer {
   // @constant fields: slot-free compile-time constants. The folded literal is inlined at every
   // read site (no SLOAD, no storage slot), so a @constant never shifts the slot of a @state var.
   private constantsByName = new Map<string, { value: bigint | boolean | Uint8Array; type: JethType }>();
+  private publicConstantNames = new Set<string>(); // @external @constant fields that get an auto-generated getter
   // @immutable fields (Phase 5): value-type, assigned once in the constructor, baked into runtime
   // code via setimmutable (NO storage slot - never enters rawState/planLayout). immutableOrder keeps
   // declaration order for deterministic setimmutable emission. currentInConstructor distinguishes a
@@ -1802,6 +1803,18 @@ export class Analyzer {
       functions.push(this.synthImmutableGetter(this.immutablesByName.get(name)!));
     }
 
+    // Auto-generate a getter for each `@external @constant` (solc's `public constant` auto-getter).
+    // `name() view returns (T)` returns the FOLDED literal directly - a compile-time constant has no
+    // storage slot and no code read, exactly like solc's generated constant getter. Inserted BEFORE
+    // the selector-clash check so a getter colliding with a same-named function is a clean JETH044
+    // (solc: "Identifier already declared"). Iteration follows constantsByName insertion order
+    // (base-first collection), covering inherited @external @constant fields (solc inherits public
+    // constant getters into the derived dispatcher).
+    for (const [name, c] of this.constantsByName) {
+      if (!this.publicConstantNames.has(name)) continue;
+      functions.push(this.synthConstantGetter(name, c));
+    }
+
     // Phase 2c (UUPS): `@uups @contract` synthesizes upgradeToAndCall(address,bytes) + proxiableUUID()
     // BEFORE the selector-clash check, so a user-declared upgradeToAndCall/proxiableUUID clashes via the
     // normal JETH044 path. Validates the user `authorizeUpgrade(address)` gate exists and marks it
@@ -3259,6 +3272,35 @@ export class Analyzer {
       selector: functionSelector(sig),
       returnType: im.type,
       body: [{ kind: 'return', value: { kind: 'immutableRead', type: im.type, name: im.name } }],
+    };
+  }
+
+  /** Synthesize the getter for an `@external @constant` field (solc's `public constant` auto-getter):
+   *  `name() view returns (T)`, whose body returns the FOLDED compile-time literal (a constant has no
+   *  storage slot and no code read; solc's generated constant getter likewise just returns the
+   *  literal). Byte-identical to solc: selector = keccak(name+"()")[:4]; returndata = the constant
+   *  ABI-encoded (a string constant flows through the normal string-return codec: offset/len/data).
+   *  The Expr mirrors the read-site substitution exactly (literalInt / literalBool / stringLiteral),
+   *  so the getter's encoding parity follows from the already-verified constant-read path. VIEW to
+   *  mirror solc's ABI classification of every auto-getter (runtime-identical to pure: non-payable). */
+  private synthConstantGetter(name: string, c: { value: bigint | boolean | Uint8Array; type: JethType }): FunctionIR {
+    const sig = functionSignature(name, []);
+    const value: Expr =
+      c.value instanceof Uint8Array
+        ? { kind: 'stringLiteral', type: c.type, bytes: c.value }
+        : typeof c.value === 'boolean'
+          ? { kind: 'literalBool', type: c.type, value: c.value }
+          : { kind: 'literalInt', type: c.type, value: c.value };
+    return {
+      name,
+      key: `constGetter$${name}`,
+      visibility: 'external',
+      mutability: 'view',
+      params: [],
+      signature: sig,
+      selector: functionSelector(sig),
+      returnType: c.type,
+      body: [{ kind: 'return', value }],
     };
   }
 
@@ -4806,11 +4848,32 @@ export class Analyzer {
   }
 
   // A `@constant` is a slot-free compile-time constant (solc's `type constant NAME = value`): the
-  // folded literal is substituted at each read site, it consumes NO storage slot, and it is absent
-  // from the ABI (solc generates no getter for a constant). Scoped to value-type constants
-  // (uintN/intN/bool/address/bytesN); a bytes/string/aggregate constant stays a clean over-rejection.
+  // folded literal is substituted at each read site, it consumes NO storage slot, and a PLAIN
+  // @constant is absent from the ABI (solc generates no getter for a non-public constant). An
+  // `@external @constant` mirrors solc's `public constant`: a getter returning the folded literal
+  // is auto-generated (see publicConstantNames / synthConstantGetter). Scoped to value-type
+  // constants (uintN/intN/bool/address/bytesN) plus string literals; a bytes/aggregate constant
+  // stays a clean over-rejection.
   private collectConstant(member: ts.PropertyDeclaration): void {
     const name = (member.name as ts.Identifier).text;
+    const decs = decoratorNames(member);
+    // Only @external may combine with @constant (synthesizing solc's public-constant getter). The
+    // OTHER visibility/mutability decorators are nonsensical on a constant (no storage, always
+    // readable internally), and @override/@virtual on a constant would otherwise be SILENTLY
+    // swallowed (solc rejects `constant override` with no matching base, and forbids virtual state
+    // variables outright) - all stay gated instead of ignored.
+    const extraDec = ['public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'override', 'virtual'].find(
+      (d) => decs.includes(d),
+    );
+    if (extraDec) {
+      this.diags.error(
+        member,
+        'JETH465',
+        `@constant '${name}' cannot also be @${extraDec} (only @external is allowed, synthesizing solc's public-constant getter; for any other exposure declare an explicit @view function)`,
+      );
+      return;
+    }
+    const isPublic = decs.includes('external'); // @external @constant -> auto-generated getter
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
     // Folding supports integer + bool + address + bytesN + string constants. A bytes/aggregate
@@ -4852,6 +4915,7 @@ export class Analyzer {
         return;
       }
       this.constantsByName.set(name, { value: cbytes, type });
+      if (isPublic) this.publicConstantNames.add(name);
       return;
     }
     // An ENUM @constant (an enum is a branded uintN) must be initialized from an enum MEMBER
@@ -4873,6 +4937,7 @@ export class Analyzer {
       return;
     }
     this.constantsByName.set(name, { value: folded, type });
+    if (isPublic) this.publicConstantNames.add(name);
   }
 
   // An `@immutable` is a value-type field assigned once in the constructor and baked into the
