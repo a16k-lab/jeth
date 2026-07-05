@@ -248,9 +248,10 @@ describe('W3-Y2c storage<->memory struct-copy + whole-field-assign - byte-identi
     expect(
       codes('@struct class Q { n: u256; } @struct class D { id: u256; ps: Q[]; } @contract class C { @state vals: D[]; @external w(b: Q[]) { this.vals[0n].ps = b; } }'),
     ).not.toEqual([]);
-    // a whole fixed-array ELEMENT of a nested array at depth (index last step) stays rejected (not lifted).
+    // a whole fixed-array ELEMENT of a nested array at depth (index last step) was LIFTED by W5A
+    // (byte-identical to solc, see store-at-depth-nested-chain.test.ts): it now compiles cleanly.
     expect(
       codes('@contract class C { @state g3: Arr<u256,2>[]; @external w(i: u256, a: Arr<u256,2>) { this.g3[i][0n] = a[0n]; this.g3[i] = a; } }'),
-    ).not.toEqual([]);
+    ).toEqual([]);
   });
 });

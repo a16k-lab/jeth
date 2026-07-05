@@ -1842,40 +1842,47 @@ ${indent(runtime, 6)}
           s.target.type.kind === 'array' &&
           s.target.type.length !== undefined
         ) {
+          // W5A (RHS-first): solc materializes a MEMORY-source RHS (an array literal / a memory or
+          // calldata aggregate) BEFORE resolving the target location (a place path's index bounds-check,
+          // a mapping key), so a side-effecting or reverting literal element runs FIRST - revert data and
+          // interleaved state reads match solc. A pure-value static literal builds its flat image via
+          // allocAggToMem and transcodes through storeStaticAggFromMem (same final slots as the direct
+          // writeArrayLit, packed elements included). A STRUCT-element literal stays on the writeArrayLit
+          // path below (its memory form is pointer-headed, not a flat transcode source); a storage source
+          // is a reference (no side effects), so target-first is unobservable for both.
+          const tt = s.target.type;
+          const memSrc: string | undefined =
+            s.value.kind === 'arrayLit'
+              ? isDynLeafFixedArray(tt)
+                ? this.buildNestedMemArrayLit(s.value, ctx, out)
+                : isStaticType(tt) && isInlineValueWordElem(tt.element)
+                  ? this.allocAggToMem(s.value, ctx, out)
+                  : undefined
+              : s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue'
+                ? this.aggToMemPtr(s.value, ctx, out)
+                : undefined;
           const dstBase =
             s.target.kind === 'state'
               ? String(s.target.slot)
               : s.target.kind === 'mapping'
                 ? this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out)
                 : this.lowerPlace(s.target.path, ctx, out).slot;
-          if (isDynLeafFixedArray(s.target.type)) {
-            // NF-1: a whole store into a @state FIXED-outer array whose leaf is dynamic - Arr<string,N> /
-            // Arr<bytes,N> (bytes/string leaf, and nested Arr<Arr<string,N>,M>, Arr<string[],N>), and
-            // Arr<u256[],N> / Arr<address[],N> (a VALUE leaf behind a dynamic level). solc lays all of these
-            // out as N CONSECUTIVE base slots, each a normal storage dynamic (string/bytes header or a
-            // dynamic-array length slot). The memory source (a `memAggregate` local or an `arrayLit`) is
-            // JETH's pointer-headed image: N absolute-pointer words each -> a [len][data] / [len][elems]
-            // blob. Transcode element-by-element through the SAME codec the corresponding single-element
-            // store uses (storeDynamic / copyMemArrayIntoStorage / copyMemAggArrayIntoStorage), each of which
-            // overwrite-clears the dst element's old tail on shrink - byte-identical to solc. A fully-STATIC
-            // nested array (Arr<Arr<u256,N>,M>) is byte-invariant/inline and is NOT matched here (isDynamicType
-            // false), so it stays on the storeStaticAggFromMem path below. A storage->storage source stays on
-            // the existing copyFixedArray path (also per-element overwrite-clear).
-            if (s.value.kind === 'arrayLit') {
-              // an array-literal source builds the pointer-headed image via buildNestedMemArrayLit (the same
-              // builder a `let xs: Arr<string,N> = [..]` local uses); allocAggToMem is the wrong (static) path.
-              this.storeDynLeafFixedArrayFromMem(s.target.type, this.buildNestedMemArrayLit(s.value, ctx, out), dstBase, out);
-            } else if (s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue') {
-              this.storeDynLeafFixedArrayFromMem(s.target.type, this.aggToMemPtr(s.value, ctx, out), dstBase, out);
-            } else {
-              this.copyFixedArray(s.target.type, this.fixedArraySrcBase(s.value, ctx, out), dstBase, out);
-            }
-          } else if (s.value.kind === 'arrayLit') {
+          if (memSrc !== undefined) {
+            if (isDynLeafFixedArray(tt)) this.storeDynLeafFixedArrayFromMem(tt, memSrc, dstBase, out);
+            else this.storeStaticAggFromMem(tt, memSrc, dstBase, out);
+            break;
+          }
+          // NF-1 (memSrc above): a whole store into a FIXED-outer array whose leaf is dynamic
+          // (Arr<string,N> / Arr<bytes,N> / nested Arr<Arr<string,N>,M> / Arr<u256[],N>) transcodes the
+          // pointer-headed memory image element-by-element into the N consecutive base slots through the
+          // SAME codec the corresponding single-element store uses (storeDynamic / copyMemArrayIntoStorage /
+          // copyMemAggArrayIntoStorage), each of which overwrite-clears the dst element's old tail on
+          // shrink - byte-identical to solc. A pure-value static source transcodes its flat ABI-unpacked
+          // image into packed storage (storeStaticAggFromMem), exactly like a whole memory struct assign.
+          // Remaining here: a STRUCT-element literal (writeArrayLit constructs in place) and a
+          // storage->storage source (copyFixedArray, per-element overwrite-clear).
+          if (s.value.kind === 'arrayLit') {
             this.writeArrayLit(s.value, dstBase, ctx, out);
-          } else if (s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue') {
-            // a whole MEMORY fixed-array local / CALLDATA fixed-array param: transcode its ABI-unpacked
-            // image (one word per leaf) into packed storage, exactly like a whole memory struct assign.
-            this.storeStaticAggFromMem(s.target.type, this.aggToMemPtr(s.value, ctx, out), dstBase, out);
           } else {
             this.copyFixedArray(s.target.type, this.fixedArraySrcBase(s.value, ctx, out), dstBase, out);
           }
@@ -2044,10 +2051,31 @@ ${indent(runtime, 6)}
             break;
           }
           if (s.target.type.length !== undefined) {
-            // this.dd[i] = <array> (a whole FIXED inner-array element): copy the static aggregate
-            // into the element BASE slot (base + i*storageSlotCount), like the whole-array assign.
+            // this.dd[i] = <array> (a whole FIXED inner-array element): copy the aggregate into the
+            // element BASE slot (base + i*storageSlotCount), like the whole-array assign.
+            // W5A: a MEMORY / CALLDATA source and a dyn-leaf element type route through the SAME codecs
+            // the whole-array assign uses (storeDynLeafFixedArrayFromMem transcodes the pointer-headed
+            // image with per-element overwrite-clear; storeStaticAggFromMem transcodes a flat static
+            // image), byte-identical to solc's `g3[i] = a`. RHS-first: the memory source (incl. a
+            // side-effecting/reverting literal element) is materialized BEFORE the element slot's index
+            // bounds-check, matching solc's evaluation order (revert data included). A STRUCT-element
+            // literal stays on writeArrayLit; a storage source stays on copyFixedArray.
+            const et = s.target.type;
+            const memSrc: string | undefined =
+              s.value.kind === 'arrayLit'
+                ? isDynLeafFixedArray(et)
+                  ? this.buildNestedMemArrayLit(s.value, ctx, out)
+                  : isStaticType(et) && isInlineValueWordElem(et.element)
+                    ? this.allocAggToMem(s.value, ctx, out)
+                    : undefined
+                : s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue'
+                  ? this.aggToMemPtr(s.value, ctx, out)
+                  : undefined;
             const elemBase = this.structArrayElemSlot(s.target.arr, s.target.index, ctx, out);
-            if (s.value.kind === 'arrayLit') this.writeArrayLit(s.value, elemBase, ctx, out);
+            if (memSrc !== undefined) {
+              if (isDynLeafFixedArray(et)) this.storeDynLeafFixedArrayFromMem(et, memSrc, elemBase, out);
+              else this.storeStaticAggFromMem(et, memSrc, elemBase, out);
+            } else if (s.value.kind === 'arrayLit') this.writeArrayLit(s.value, elemBase, ctx, out);
             else this.copyFixedArray(s.target.type, this.fixedArraySrcBase(s.value, ctx, out), elemBase, out);
             break;
           }
@@ -5302,6 +5330,22 @@ ${indent(runtime, 6)}
   private lowerArrayPush(arr: ArrayExpr, value: Expr | undefined, ctx: LowerCtx, out: string[]): void {
     const ref = this.lowerArrayRef(arr, ctx, out);
     if (ref.src !== 'storage') throw new UnsupportedError('push on a non-storage array');
+    const elem = arr.elem as JethType & { kind: 'array' };
+    // W5A (arg-first): solc evaluates the push ARGUMENT before the push operation itself, so a
+    // MEMORY-source value (an array literal with side-effecting elements - e.g. one that reads
+    // this.g3.length - or a memory/calldata aggregate) is materialized BEFORE the length grow.
+    // Storage sources are references (no side effects) and stay resolved after the grow.
+    let memSrc: string | undefined;
+    if (value && elem.length !== undefined) {
+      if (value.kind === 'arrayLit')
+        memSrc = isDynLeafFixedArray(elem)
+          ? this.buildNestedMemArrayLit(value, ctx, out)
+          : isStaticType(elem) && isInlineValueWordElem(elem.element)
+            ? this.allocAggToMem(value, ctx, out)
+            : undefined;
+      else if (value.kind === 'memAggregate' || value.kind === 'cdAggregateValue')
+        memSrc = this.aggToMemPtr(value, ctx, out);
+    }
     const stride = storageSlotCount(arr.elem); // a dynamic-array inner element occupies 1 slot
     const len = this.fresh();
     out.push(`let ${len} := sload(${ref.lenSlot})`);
@@ -5311,13 +5355,19 @@ ${indent(runtime, 6)}
     out.push(`let ${dataBase} := ${this.arrayDataSlotHelper()}(${ref.lenSlot})`);
     const innerSlot = this.fresh();
     out.push(`let ${innerSlot} := add(${dataBase}, mul(${len}, ${stride}))`);
-    const elem = arr.elem as JethType & { kind: 'array' };
     if (elem.length !== undefined) {
       // a FIXED inner array element (Arr<T,N>[]): the element is N inline words at innerSlot, NOT a
       // dynamic array with its own length slot. Write the literal / copy the source fixed array
       // inline. (A no-arg push() grows with a zero element; the fresh slots are already 0.)
+      // W5A: a MEMORY / CALLDATA source (memSrc above) routes through the same codecs the whole-array
+      // assign uses (storeDynLeafFixedArrayFromMem for a dyn-leaf element, storeStaticAggFromMem for a
+      // flat static one), byte-identical to solc's `g3.push(a)`. The fresh element's slots are zero, so
+      // the codecs' overwrite-clear is a no-op there.
       if (value) {
-        if (value.kind === 'arrayLit') this.writeArrayLit(value, innerSlot, ctx, out);
+        if (memSrc !== undefined) {
+          if (isDynLeafFixedArray(elem)) this.storeDynLeafFixedArrayFromMem(elem, memSrc, innerSlot, out);
+          else this.storeStaticAggFromMem(elem, memSrc, innerSlot, out);
+        } else if (value.kind === 'arrayLit') this.writeArrayLit(value, innerSlot, ctx, out);
         else this.copyFixedArray(elem, this.fixedArraySrcBase(value, ctx, out), innerSlot, out);
       }
       return;
@@ -5618,6 +5668,14 @@ ${indent(runtime, 6)}
       const r = this.fresh();
       out.push(`let ${r} := ${this.aggFieldPtr(e.base, e.wordOffset, e.runSteps, ctx, out)}`);
       return r;
+    }
+    if (e.kind === 'memDynNestedField' && e.deref && e.type.kind === 'struct' && isDynamicType(e.type)) {
+      // W5A: the deref-chain BASE of a static-aggregate chain rooted at a NESTED dyn-struct reference
+      // (v.t.inner / v.t.fa[j]): deref the chain, then the final head word holds the owning image's
+      // absolute pointer. lowerDynamic freezes it into a fresh let (aggFieldPtr adds the inline offset).
+      const ref = this.lowerDynamic(e, ctx, out);
+      if (ref.src !== 'memory') throw new UnsupportedError('expected a memory nested dyn-struct image reference');
+      return ref.ptr;
     }
     if (e.kind === 'cdStructArrayElem' && isStaticType(e.type)) {
       // abi.encode(xs[i].items[j]) where D is a STATIC struct: the element is contiguous in calldata

@@ -12296,11 +12296,13 @@ export class Analyzer {
   private resolveMemDynStructStaticAggChain(
     node: ts.Expression,
   ): { base: Expr; wordOffset: number; type: JethType; runSteps: ArrIndexStep[] } | undefined {
-    // collect access steps leaf -> root, stopping at `p.field` where p is a memDynStructLocal.
+    // collect access steps leaf -> root, stopping at `p.field` where p is a memDynStructLocal, or at
+    // a NESTED dyn-struct reference (v.t, v.t.inner - W5A: a chain rooted BELOW >=1 deref hop).
     const steps: ({ field: string } | { index: ts.Expression; node: ts.Node })[] = [];
     let cur: ts.Expression = node;
     let local: string | undefined;
     let firstField: string | undefined;
+    let nestedRef: ReturnType<typeof this.resolveMemDynNestedStructRef> | undefined;
     for (;;) {
       if (
         ts.isPropertyAccessExpression(cur) &&
@@ -12312,6 +12314,15 @@ export class Analyzer {
         break;
       }
       if (ts.isPropertyAccessExpression(cur)) {
+        // W5A: a NESTED dyn-struct reference root (v.t / v.t.u / v.t.inner - >=1 deref hop crossed,
+        // possibly with a trailing static-hop fold). The remaining collected steps descend INLINE from
+        // its image (deref chain resolved by the base Expr below). A pure-static-prefix chain (no deref)
+        // returns undefined here and stays with the bare-local root path.
+        const r = this.resolveMemDynNestedStructRef(cur);
+        if (r && r.derefWords.length >= 1 && r.structType.kind === 'struct') {
+          nestedRef = r;
+          break;
+        }
         steps.push({ field: cur.name.text });
         cur = cur.expression;
       } else if (ts.isElementAccessExpression(cur) && cur.argumentExpression) {
@@ -12321,33 +12332,100 @@ export class Analyzer {
         return undefined;
       }
     }
-    if (local === undefined || firstField === undefined) return undefined;
-    // the first hop must be a NESTED STATIC AGGREGATE field (a nested static struct, or a static fixed
-    // array); a value / bytes-string / dynamic-array first field is owned by the other resolvers.
-    const st = this.memDynStructLocals.get(local)!;
-    if (st.kind !== 'struct') return undefined;
-    const fidx = st.fields.findIndex((f) => f.name === firstField);
-    if (fidx < 0) return undefined;
-    const fld = st.fields[fidx]!;
-    const isStaticAgg =
-      (fld.type.kind === 'struct' && isStaticType(fld.type)) ||
-      (fld.type.kind === 'array' && fld.type.length !== undefined && isStaticType(fld.type));
-    if (!isStaticAgg) return undefined;
-    // the field's head-word offset in the dyn-struct image (value/static fields take abiHeadWords words,
-    // dynamic fields take 1 pointer word) - identical math to memDynStructField.
-    const headWord = st.fields
-      .slice(0, fidx)
-      .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
-    const base: Expr = { kind: 'memDynStructValue', type: st, local };
+    let base: Expr;
+    let curType: JethType;
+    let wordOffset: number;
+    if (nestedRef !== undefined) {
+      // W5A: root at the deref'd image. The base loads the LAST deref pointer (the image the running
+      // inlineOffset indexes into); derefWords.length >= 1 guarantees slice/last are well-formed.
+      const dws = nestedRef.derefWords;
+      base = {
+        kind: 'memDynNestedField',
+        type: nestedRef.imageStruct,
+        local: nestedRef.rootLocal,
+        derefWords: dws.slice(0, -1),
+        finalWord: dws[dws.length - 1]!,
+        deref: true,
+      };
+      curType = nestedRef.structType;
+      wordOffset = nestedRef.inlineOffset;
+      if (steps.length === 0 && !(curType.kind === 'struct' && isStaticType(curType))) {
+        // a whole DYNAMIC nested struct (v.t / v.t.u) is Edge B's (pointer-headed alias), not an
+        // inline static-aggregate chain.
+        return undefined;
+      }
+    } else {
+      if (local === undefined || firstField === undefined) return undefined;
+      // the first hop must be a NESTED STATIC AGGREGATE field (a nested static struct, or a static fixed
+      // array); a value / bytes-string / dynamic-array first field is owned by the other resolvers.
+      const st = this.memDynStructLocals.get(local)!;
+      if (st.kind !== 'struct') return undefined;
+      const fidx = st.fields.findIndex((f) => f.name === firstField);
+      if (fidx < 0) return undefined;
+      const fld = st.fields[fidx]!;
+      const isStaticAgg =
+        (fld.type.kind === 'struct' && isStaticType(fld.type)) ||
+        (fld.type.kind === 'array' && fld.type.length !== undefined && isStaticType(fld.type));
+      if (!isStaticAgg) {
+        // W5A: a DYNAMIC-struct first hop (v.t.fa[j], fa a static agg directly inside the dyn field t):
+        // re-root the chain at the nested reference v.t (one deref hop); the steps collected so far
+        // descend from ITS image. Any other non-static-agg first field stays with the other resolvers.
+        if (fld.type.kind === 'struct' && isDynamicType(fld.type)) {
+          const r = this.resolveMemDynNestedStructRef(cur);
+          if (r && r.derefWords.length >= 1) {
+            const dws = r.derefWords;
+            base = {
+              kind: 'memDynNestedField',
+              type: r.imageStruct,
+              local: r.rootLocal,
+              derefWords: dws.slice(0, -1),
+              finalWord: dws[dws.length - 1]!,
+              deref: true,
+            };
+            curType = r.structType;
+            wordOffset = r.inlineOffset;
+            if (steps.length === 0) return undefined; // bare v.t is Edge B's (pointer-headed alias)
+          } else return undefined;
+        } else return undefined;
+      } else {
+        // the field's head-word offset in the dyn-struct image (value/static fields take abiHeadWords words,
+        // dynamic fields take 1 pointer word) - identical math to memDynStructField.
+        const headWord = st.fields
+          .slice(0, fidx)
+          .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+        base = { kind: 'memDynStructValue', type: st, local };
+        curType = fld.type;
+        wordOffset = headWord;
+      }
+    }
     steps.reverse(); // root -> leaf
-    let curType: JethType = fld.type;
-    let wordOffset = headWord;
     const runSteps: ArrIndexStep[] = [];
     for (const s of steps) {
       if ('field' in s) {
         if (curType.kind !== 'struct') {
           this.diags.error(node, 'JETH210', `cannot read field '${s.field}' of ${displayName(curType)}`);
           return undefined;
+        }
+        // W5A: a field hop while the running image type is still the DYNAMIC root struct (v.t.fa[j]:
+        // curType = t's type). Its inline layout gives 1 POINTER word to each dynamic field, so the
+        // static-image memFieldOffset math below would be wrong; use the dyn-aware head-word math and
+        // require the field to be a STATIC AGGREGATE (any other field kind is owned by other resolvers).
+        if (isDynamicType(curType)) {
+          const didx = curType.fields.findIndex((f) => f.name === s.field);
+          if (didx < 0) {
+            this.diags.error(node, 'JETH210', `struct '${curType.name}' has no field '${s.field}'`);
+            return undefined;
+          }
+          const dfld = curType.fields[didx]!;
+          const dStaticAgg =
+            (dfld.type.kind === 'struct' && isStaticType(dfld.type)) ||
+            (dfld.type.kind === 'array' && dfld.type.length !== undefined && isStaticType(dfld.type));
+          if (!dStaticAgg) return undefined;
+          wordOffset += curType.fields
+            .slice(0, didx)
+            .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+          curType = dfld.type;
+          continue;
         }
         const fo = this.memFieldOffset(curType, s.field);
         if (!fo) {
@@ -12670,10 +12748,13 @@ export class Analyzer {
   // only folded here once >=1 dynamic hop has been crossed (P1-23: static-hop-under-dynamic-hop).
   private resolveMemDynNestedStructRef(
     expr: ts.Expression,
-  ): { rootLocal: string; derefWords: number[]; inlineOffset: number; structType: JethType } | undefined {
+  ): { rootLocal: string; derefWords: number[]; inlineOffset: number; structType: JethType; imageStruct: JethType } | undefined {
+    // imageStruct: the DYNAMIC struct whose image the accumulated inlineOffset indexes into (the struct
+    // reached by the LAST deref hop, or the root local itself). W5A uses it to type the deref-chain base
+    // Expr when a static-aggregate chain roots at a nested dyn-struct reference.
     if (ts.isIdentifier(expr)) {
       const st = this.memDynStructLocals.get(expr.text);
-      if (st && st.kind === 'struct' && isDynamicType(st)) return { rootLocal: expr.text, derefWords: [], inlineOffset: 0, structType: st };
+      if (st && st.kind === 'struct' && isDynamicType(st)) return { rootLocal: expr.text, derefWords: [], inlineOffset: 0, structType: st, imageStruct: st };
       return undefined;
     }
     if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.name)) {
@@ -12692,6 +12773,7 @@ export class Analyzer {
           derefWords: [...inner.derefWords, inner.inlineOffset + headWord],
           inlineOffset: 0,
           structType: f.type,
+          imageStruct: f.type,
         };
       }
       // a NESTED STATIC STRUCT field is stored INLINE in the current image (tuple-head layout): fold its
@@ -12704,6 +12786,7 @@ export class Analyzer {
           derefWords: inner.derefWords,
           inlineOffset: inner.inlineOffset + headWord,
           structType: f.type,
+          imageStruct: inner.imageStruct,
         };
       }
       return undefined;
