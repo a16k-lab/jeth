@@ -480,4 +480,51 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       ).toBe(false);
     });
   });
+
+  // W2D: per-contract UPWARD name visibility. A body owned by a BASE contract may reference only names
+  // declared in that contract or a transitive base; a name declared solely in a MORE-DERIVED contract is
+  // "Undeclared identifier" in solc. JETH previously resolved these against a FLAT linearized namespace
+  // (a scope leak, an over-acceptance) - now gated. Legal DOWNWARD virtual dispatch (a base calling a
+  // @virtual name overridden more-derived) is unaffected: the name is base-declared, the vtable picks the
+  // override at runtime. Each leak flips to BOTH-REJECT; each control still BOTH-ACCEPTS byte-identical.
+  describe('W2D scope-leak: base body cannot see derived-only declarations', () => {
+    it('P0-23 state var: a base fn reading a derived-only @state var rejects (both)', () => {
+      const J = '@abstract class A { @external @view gy(): u256 { return this.y; } } @contract class C extends A { @state y: u256; constructor(){ this.y = 7n; } }';
+      const S = 'abstract contract A { function gy() external view returns (uint256) { return y; } } contract C is A { uint256 public y; constructor(){ y = 7; } }';
+      expect(codes(J)).toContain('JETH065');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('P0-23 internal fn: a base fn calling a derived-only function rejects (both)', () => {
+      const J = '@abstract class A { @external @view cd(): u256 { return this.helper(); } } @contract class C extends A { @view helper(): u256 { return 99n; } }';
+      const S = 'abstract contract A { function cd() external view returns (uint256) { return helper(); } } contract C is A { function helper() internal view returns (uint256) { return 99; } }';
+      expect(codes(J)).toContain('JETH074');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('P0-23 3-level grandbase: a top base reading a derived-only @state var rejects (both)', () => {
+      const J = '@abstract class A { @external @view f(): u256 { return this.z; } } @abstract class B extends A {} @contract class C extends B { @state z: u256; constructor(){ this.z=1n; } }';
+      const S = 'abstract contract A { function f() external view returns(uint256){ return z; } } abstract contract B is A {} contract C is B { uint256 z; constructor(){ z=1; } }';
+      expect(codes(J)).toContain('JETH065');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('P0-23 sibling base under multiple inheritance: B reading K-only @state var rejects (both)', () => {
+      const J = '@abstract class B { @external @view fb(): u256 { return this.k; } } @abstract class K { @state k: u256; constructor(){ this.k=2n; } } @contract class C extends B, K {}';
+      const S = 'abstract contract B { function fb() external view returns(uint256){ return k; } } abstract contract K { uint256 k; constructor(){ k=2; } } contract C is B, K {}';
+      expect(codes(J)).toContain('JETH065');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('control: downward @virtual dispatch (base calls this.val(), overridden more-derived) still works', () =>
+      same(
+        '@abstract class A { @external @view run(): u256 { return this.val(); } @virtual @view val(): u256 { return 1n; } } @contract class C extends A { @override @view val(): u256 { return 2n; } }',
+        'abstract contract A { function run() external view returns (uint256) { return val(); } function val() internal view virtual returns (uint256) { return 1; } } contract C is A { function val() internal view virtual override returns (uint256) { return 2; } }',
+        [{ sig: 'run()' }],
+        1,
+      ));
+    it('control: a base reading a var declared in ITS OWN base (upward) still both-accepts', () =>
+      same(
+        '@abstract class A { @state av: u256; constructor(){ this.av=1n; } } @abstract class B extends A { @external @view fb(): u256 { return this.av; } } @contract class C extends B {}',
+        'abstract contract A { uint256 av; constructor(){ av=1; } } abstract contract B is A { function fb() external view returns(uint256){ return av; } } contract C is B {}',
+        [{ sig: 'fb()' }],
+        1,
+      ));
+  });
 });

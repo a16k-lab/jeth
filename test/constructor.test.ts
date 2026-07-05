@@ -266,4 +266,47 @@ describe('Phase 5 constructors vs solc 0.8.35', () => {
       ).toContain('JETH162');
     });
   });
+
+  // W2D: a base constructor BODY sees only its OWN ctor parameters, never an enclosing (more-derived)
+  // constructor's - solc "Undeclared identifier". Previously JETH kept the whole recursion's bind scopes
+  // live for every level (a scope leak / over-acceptance): a base ctor body could read a derived-only
+  // ctor param and deploy. Also: heritage arguments given to a base that has NO constructor (or a
+  // 0-param one) are "Wrong argument count" in solc; JETH previously dropped them silently. Both gated.
+  describe('W2D ctor scope-leak + ctorless-base heritage args', () => {
+    const solcRejects = (src: string): boolean => {
+      try { compileSolidity(SPDX + src, 'C'); return false; } catch { return true; }
+    };
+    it('P0-22 bare-extends: a base ctor body reading a derived-only ctor param rejects (both)', () => {
+      const J = '@abstract class A { @state x: u256; constructor(){ this.x = p; } } @contract class C extends A { @state y: u256; constructor(p: u256){ this.y = p; } }';
+      const S = 'abstract contract A { uint256 x; constructor(){ x = p; } } contract C is A { uint256 y; constructor(uint256 p){ y = p; } }';
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('P0-22 heritage-form: a base ctor body reading a derived-only ctor param rejects (both)', () => {
+      const J = '@abstract class A { @state x: u256; constructor(a: u256){ this.x = p; } } @contract class C extends A(1n) { constructor(p: u256){ } }';
+      const S = 'abstract contract A { uint256 x; constructor(uint256 a){ x = p; } } contract C is A(1) { constructor(uint256 p){ } }';
+      expect(codes(J).length).toBeGreaterThan(0);
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('P0-24 heritage args to a base with NO constructor reject (both, wrong arg count)', () => {
+      const J = '@abstract class B { @external @view ping(): u256 { return 1n; } } @contract class C extends B(5n) { constructor(){ } }';
+      const S = 'abstract contract B { function ping() external view returns (uint256) { return 1; } } contract C is B(5) { constructor(){ } }';
+      expect(codes(J)).toContain('JETH379');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('P0-24 mid-chain ctorless base given heritage args rejects (both, wrong arg count)', () => {
+      const J = '@abstract class A { @external @view pa(): u256 { return 1n; } } @abstract class B extends A(3n) { @external @view pb(): u256 { return 2n; } } @contract class C extends B { constructor(){} }';
+      const S = 'abstract contract A { function pa() external view returns (uint256) { return 1; } } abstract contract B is A(3) { function pb() external view returns (uint256) { return 2; } } contract C is B { constructor(){} }';
+      expect(codes(J)).toContain('JETH379');
+      expect(solcRejects(S)).toBe(true);
+    });
+    it('control: a base ctor reading its OWN param via heritage args still deploys byte-identical', () =>
+      sameSlots(
+        '@abstract class A { @state x: u256; constructor(a: u256){ this.x = a; } } @contract class C extends A(22n) {}',
+        'abstract contract A { uint256 x; constructor(uint256 a){ x = a; } } contract C is A(22) {}',
+        '',
+        0n,
+        1,
+      ));
+  });
 });

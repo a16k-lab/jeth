@@ -355,6 +355,76 @@ export class Analyzer {
     return name;
   }
 
+  // ---- P0-23: per-contract UPWARD name visibility ---------------------------
+  // When a body owned by contract X is being checked, a declaration (state var / function) is visible
+  // to it only if it was declared in X or a transitive BASE of X. A name declared solely in a MORE-
+  // DERIVED contract is invisible (solc "Undeclared identifier"). Downward @virtual dispatch is NOT
+  // affected: the call is resolved by the NAME (declared in a base, so upward-visible), and the vtable
+  // selects the derived override at runtime. The gate is a no-op when there is no inheritance
+  // (visibleContractsByName empty), no body owner is set, or the owner has no known visibility set.
+  /** Is a function SOURCE NAME visible to the current body owner? Visible iff some contract that DECLARES
+   *  a function of that name (any version, pre-override) is upward-visible from the owner. Uses the name
+   *  (not the override winner) so a @virtual base name called on `this` inside a base stays visible while
+   *  its more-derived override is still the dispatched winner. Names with no declaring-contract record
+   *  (generic mangled keys, library/builtin shims) are always visible. */
+  private fnNameVisible(name: string): boolean {
+    const owner = this.bodyOwnerContract;
+    if (owner === undefined) return true;
+    const vis = this.visibleContractsByName.get(owner);
+    if (!vis) return true;
+    const declaredIn = this.fnDeclContractsByName.get(name);
+    if (!declaredIn) return true; // not a plain source name (generic / mangled / library) -> unrestricted
+    for (const c of declaredIn) if (vis.has(c)) return true;
+    return false;
+  }
+
+  // P0-23: SCOPED per-contract namespace restriction. The dozens of `stateByName`/`candidatesByName`/
+  // `funcsByName` read sites in the checker all assume a FLAT (whole-linearization) namespace. Rather
+  // than gate each site (invasive on the hot path), we HIDE the entries not upward-visible from the body
+  // owner X for the duration of that body, then re-add them afterwards. Net effect: every read site
+  // transparently sees exactly X + its transitive bases, so a derived-only state/function name is
+  // "unknown" (the existing undeclared-identifier reject fires), byte-identical to solc. A NO-OP when
+  // there is no inheritance (visibleContractsByName empty) or no owner is given.
+  //   IMPORTANT: entries are DELETED-IN-PLACE from the live maps (not swapped for filtered copies), so any
+  // mutation during the body - e.g. a generic call registering a fresh `funcsByName[mangled]` - PERSISTS
+  // after restore. restoreNamespace only puts back the exact hidden entries it removed.
+  //   Downward @virtual dispatch is preserved by keeping a function NAME whenever the NAME is declared by
+  // a visible contract (fnNameVisible), even though the retained override winner may be MORE-DERIVED:
+  // a base body calling `this.f()` resolves the name (declared in the base) and the winner is dispatched
+  // at runtime exactly as solc does. State vars use their unique declaring contract (no override notion).
+  private restrictNamespaceTo(owner: string | undefined): {
+    state: [string, StateVar][];
+    cands: [string, RawFunction[]][];
+    funcs: [string, RawFunction][];
+  } | undefined {
+    if (owner === undefined) return undefined;
+    const vis = this.visibleContractsByName.get(owner);
+    if (!vis || vis.size === 0) return undefined; // no inheritance graph -> flat namespace, no restriction
+    const hidden = { state: [] as [string, StateVar][], cands: [] as [string, RawFunction[]][], funcs: [] as [string, RawFunction][] };
+    // State vars: hide those whose (unique) declaring contract is NOT upward-visible. A var with no owner
+    // record (defensive) stays visible.
+    for (const [nm, sv] of this.stateByName) {
+      const declaredIn = this.stateOwnerByName.get(nm);
+      if (declaredIn !== undefined && !vis.has(declaredIn)) hidden.state.push([nm, sv]);
+    }
+    // Candidate overloads + funcsByName: hide an entry when its SOURCE NAME is NOT declared by any visible
+    // contract (fnNameVisible false). This keeps the (possibly more-derived) override winner for a base-
+    // visible virtual name so downward dispatch works; it hides a derived-ONLY name entirely. A mangled/
+    // super/generic key (not a tracked source name) is always kept.
+    for (const [nm] of this.candidatesByName) if (!this.fnNameVisible(nm)) hidden.cands.push([nm, this.candidatesByName.get(nm)!]);
+    for (const [nm, rf] of this.funcsByName) if (this.fnDeclContractsByName.has(nm) && !this.fnNameVisible(nm)) hidden.funcs.push([nm, rf]);
+    for (const [nm] of hidden.state) this.stateByName.delete(nm);
+    for (const [nm] of hidden.cands) this.candidatesByName.delete(nm);
+    for (const [nm] of hidden.funcs) this.funcsByName.delete(nm);
+    return hidden;
+  }
+  private restoreNamespace(hidden: ReturnType<typeof this.restrictNamespaceTo>): void {
+    if (!hidden) return;
+    for (const [nm, sv] of hidden.state) this.stateByName.set(nm, sv);
+    for (const [nm, list] of hidden.cands) this.candidatesByName.set(nm, list);
+    for (const [nm, rf] of hidden.funcs) this.funcsByName.set(nm, rf);
+  }
+
   analyze(): ContractIR | undefined {
     this.rejectEmptyHexLiterals(); // lexer-level: `0x`/`0X` with no hex digits is a parse error in any context
     this.collectTypeAliases(); // branded newtypes, before structs (a struct field may use one)
@@ -1248,6 +1318,7 @@ export class Analyzer {
               );
             }
             stateOwner.set(nm, cn);
+            this.stateOwnerByName.set(nm, cn); // P0-23: per-contract state visibility
           }
           this.collectStateVar(member, rawState);
         }
@@ -1305,6 +1376,11 @@ export class Analyzer {
             if (fn) {
               fn.definingContract = cn;
               collectedFns.push(fn);
+              // P0-23: record that contract `cn` declares a function named `fn.name` (every version,
+              // before override resolution) so a base body can resolve a virtual name it declares.
+              const s = this.fnDeclContractsByName.get(fn.name) ?? new Set<string>();
+              s.add(cn);
+              this.fnDeclContractsByName.set(fn.name, s);
             }
           }
         } else if (ts.isConstructorDeclaration(member)) {
@@ -1662,8 +1738,8 @@ export class Analyzer {
 
     // Phase 6: type-check the @receive / @fallback bodies now that the symbol tables exist (a constructor-
     // like context). The most-derived definition won during collection above.
-    const receive = receiveNode ? this.checkSpecialEntry(receiveNode.member, 'receive') : undefined;
-    const fallback = fallbackNode ? this.checkSpecialEntry(fallbackNode.member, 'fallback') : undefined;
+    const receive = receiveNode ? this.checkSpecialEntry(receiveNode.member, 'receive', receiveNode.contract) : undefined;
+    const fallback = fallbackNode ? this.checkSpecialEntry(fallbackNode.member, 'fallback', fallbackNode.contract) : undefined;
 
     // INTERNAL FUNCTION POINTERS: assign each address-taken function a stable, deterministic dispatch id
     // (>= 1; id 0 is reserved for the null/unassigned pointer, matching solc's zero-initialized function
@@ -2127,6 +2203,29 @@ export class Analyzer {
 
   // The C3 linearization (most-derived first), set in resolveOverrides for super resolution.
   private linOrder: string[] = [];
+  // P0-23: per-contract UPWARD visibility. For each contract in the linearization, the set of contracts
+  // whose declarations (state / @constant / @immutable / functions / modifiers / events / errors) it may
+  // see = the contract itself plus its TRANSITIVE bases. A body owned by contract X resolves a bare/`this`
+  // name only against declarations from a contract in visibleContractsFrom(X); a name declared solely in a
+  // MORE-DERIVED contract is invisible (solc "Undeclared identifier"). Built in resolveOverrides once the
+  // linearization + heritage graph are known. Downward @virtual dispatch is unaffected: the function is
+  // resolved by the SAME base-declared signature (visible upward), and the vtable picks the override at
+  // runtime. When undefined (no inheritance / not yet built), the gate is a no-op (flat resolution).
+  private visibleContractsByName = new Map<string, Set<string>>();
+  // The contract currently having its body checked (set by checkFunction / the ctor-body merge). undefined
+  // means "no per-contract restriction" (e.g. a @library function, a generic specialization, top-level).
+  private bodyOwnerContract: string | undefined;
+  // P0-23: declaring contract of each @state variable (from the linearization collection pass). @constant
+  // and @immutable are contract-level and inherited the same way; solc's undeclared-identifier scoping
+  // applies to plain @state (the shape the leak affected). Populated during member collection.
+  private stateOwnerByName = new Map<string, string>();
+  // P0-23: for each function SOURCE NAME, the set of contracts that DECLARE a function of that name
+  // (every version, PRE-override-resolution). A function name is visible to a body owned by X if some
+  // contract in visibleContractsFrom(X) declares it. This is deliberately based on the NAME, not the
+  // override winner: a @virtual base function called on `this` inside a base resolves by name (the name
+  // IS declared in the base, so upward-visible) and the winner - possibly a MORE-DERIVED override - is
+  // still dispatched at runtime, so legal downward virtual dispatch is preserved byte-identically.
+  private fnDeclContractsByName = new Map<string, Set<string>>();
   // Non-winning base function versions kept ONLY as `super` targets, keyed `<Contract>__<sig>`.
   // Checked separately and emitted as forced-internal userfn_<key>. Keyed by the same per-contract
   // super key set in resolveOverrides.
@@ -2234,6 +2333,15 @@ export class Analyzer {
       return out;
     };
     for (const cn of this.linOrder) computeBases(cn);
+
+    // P0-23: publish each contract's UPWARD visibility set (itself + its transitive bases) for
+    // per-contract name resolution during body checking. This is the ONLY consumer that must survive
+    // past resolveOverrides, so snapshot it onto the instance.
+    this.visibleContractsByName = new Map();
+    for (const cn of this.linOrder) {
+      const set = new Set<string>([cn, ...computeBases(cn)]);
+      this.visibleContractsByName.set(cn, set);
+    }
 
     for (const [sk, versions] of groups) {
       // If every version of this signature is declared in the SAME contract, this is NOT an override
@@ -3116,7 +3224,7 @@ export class Analyzer {
    *  like, function-scoped context). @receive is ALWAYS payable (no params, no return, no redundant
    *  @payable). @fallback is non-payable by default (opt-in @payable); v1 rejects params and a return type
    *  (the raw-bytes fallback is gated, JETH384). Both reject @view/@pure/@external/etc. */
-  private checkSpecialEntry(member: ts.MethodDeclaration, kind: 'receive' | 'fallback'): SpecialEntryIR | undefined {
+  private checkSpecialEntry(member: ts.MethodDeclaration, kind: 'receive' | 'fallback', owner?: string): SpecialEntryIR | undefined {
     const decs = decoratorNames(member);
     let payable = kind === 'receive'; // @receive is always payable
     const BAD = [
@@ -3244,11 +3352,23 @@ export class Analyzer {
     // checkExpr's `dynParamRead` path resolves it (registered as a calldata dyn param at lowering).
     const bodyReturn = returnsBytes ? BYTES : VOID;
     if (bytesParam) this.declareLocal(bytesParam, BYTES);
+    // P0-23: a @receive/@fallback body sees only its DEFINING contract + bases (upward), like any
+    // function. Set the owner + restrict the namespace for the body, restore after. (Without this the
+    // path would inherit whatever bodyOwnerContract the last checkFunction left set.)
+    const savedBodyOwner = this.bodyOwnerContract;
+    this.bodyOwnerContract = owner;
+    this.currentDefiningContract = owner;
+    const savedNs = this.restrictNamespaceTo(owner);
     const body: Stmt[] = [];
-    if (member.body) {
-      this.pushScope();
-      for (const s of member.body.statements) this.checkStatement(s, bodyReturn, body);
-      this.popScope();
+    try {
+      if (member.body) {
+        this.pushScope();
+        for (const s of member.body.statements) this.checkStatement(s, bodyReturn, body);
+        this.popScope();
+      }
+    } finally {
+      this.restoreNamespace(savedNs);
+      this.bodyOwnerContract = savedBodyOwner;
     }
     this.popScope();
     if (this.currentCallees.size > 0) {
@@ -3605,6 +3725,12 @@ export class Analyzer {
     this.currentReturnTypes = undefined;
     this.currentCallees = new Set();
     this.currentInConstructor = true;
+    // P0-23: base-ARG expressions (heritage / super) evaluate in the DEPLOYED contract's scope (a
+    // heritage clause names a base, but the arguments live in the derived contract's specifier scope and
+    // may reference the derived's own params). The deployed contract sees itself + all its bases, so its
+    // visibility set is the widest in the chain - a safe owner for the arg-checking phase. Each ctor
+    // BODY overrides this to its own contract inside buildLevel.
+    this.bodyOwnerContract = deployed.contract;
     this.memArrayLocals.clear();
     this.memAggregateLocals.clear();
     this.memDynLocals.clear();
@@ -3723,16 +3849,47 @@ export class Analyzer {
         this.currentMutability = (i === 0 ? payable : this.ctorDecorators(c.node).payable) ? 'payable' : 'nonpayable';
         let bstmts: Stmt[] = [];
         if (c.node.body) {
+          // P0-22: a ctor BODY sees ONLY its OWN contract's ctor params, never an enclosing level's.
+          // The recursion keeps scope 0 (the deployed formals) and every ancestor bind scope LIVE on
+          // this.scopes so base-ARG expressions can reference the right things, but solc scopes a ctor
+          // BODY to that constructor's own parameters alone: an identifier declared solely on a MORE-
+          // DERIVED constructor is "Undeclared identifier" inside a base body. So temporarily swap
+          // this.scopes for a fresh stack whose base scope holds ONLY level i's own ctor params, then a
+          // fresh body scope on top. (Codegen is unaffected: at emit time the base's params are still
+          // bound by the enclosing wrap block, so referencing an OWN param resolves to that localDecl;
+          // an enclosing-level param is never referenced by a valid program, so codegen never sees it.)
+          // Restored after the body. currentDefiningContract also drives P0-23's per-contract state/fn
+          // visibility for the same body.
+          const savedScopes = this.scopes;
+          const savedDefiningContract = this.currentDefiningContract;
+          const savedBodyOwner = this.bodyOwnerContract;
+          this.currentDefiningContract = c.contract;
+          this.bodyOwnerContract = c.contract; // P0-23: a ctor body sees only this contract + its bases
+          this.scopes = [new Map()];
+          for (const p of chainParams[i]!) {
+            this.declareLocal(p.name, p.type);
+            this.registerAggregateCtorParam(p.name, p.type);
+          }
           this.pushScope();
-          for (const s of c.node.body.statements) {
-            // The deployed ctor's leading `super(args)` was already consumed as base-constructor args
-            // (bound as localDecls above); it is NOT a runtime statement, so skip lowering it here (solc
-            // runs the base ctor from the modifier form, not as a body call). Any statements AFTER it run
-            // after the base ctor, in the derived body, exactly as written.
-            if (i === 0 && superCall && ts.isExpressionStatement(s) && s.expression === superCall) continue;
-            this.checkStatement(s, VOID, bstmts);
+          // P0-23: restrict the state/function namespace to this contract + bases for the ctor body
+          // (a base ctor cannot see a derived-only @state var / function). Restored in the finally.
+          const savedCtorNs = this.restrictNamespaceTo(c.contract);
+          try {
+            for (const s of c.node.body.statements) {
+              // The deployed ctor's leading `super(args)` was already consumed as base-constructor args
+              // (bound as localDecls above); it is NOT a runtime statement, so skip lowering it here (solc
+              // runs the base ctor from the modifier form, not as a body call). Any statements AFTER it run
+              // after the base ctor, in the derived body, exactly as written.
+              if (i === 0 && superCall && ts.isExpressionStatement(s) && s.expression === superCall) continue;
+              this.checkStatement(s, VOID, bstmts);
+            }
+          } finally {
+            this.restoreNamespace(savedCtorNs);
           }
           this.popScope();
+          this.scopes = savedScopes;
+          this.currentDefiningContract = savedDefiningContract;
+          this.bodyOwnerContract = savedBodyOwner;
         }
         this.currentMutability = savedMut;
         for (const app of [...cMods].reverse()) bstmts = this.inlineModifier(app, bstmts);
@@ -3745,6 +3902,7 @@ export class Analyzer {
     if (!baseArgsGate) body.push(...buildLevel(0));
     this.popScope();
     this.currentInConstructor = false;
+    this.bodyOwnerContract = undefined; // P0-23: leave no per-contract restriction set after the ctor
 
     // A ctor (or a base ctor in the chain) calling an internal/private function: emitConstructor
     // duplicates the transitively-reachable callees into the creation object. JETH303 is lifted.
@@ -4786,6 +4944,9 @@ export class Analyzer {
     this.scopes = [];
     this.loopDepth = 0;
     this.currentDefiningContract = rf.definingContract; // inheritance: scope super.f() to this contract
+    // P0-23: a @library function has no contract owner (it must resolve library-flat). A contract
+    // function's body sees only its defining contract + bases (upward). No owner -> gate is a no-op.
+    this.bodyOwnerContract = rf.libraryName ? undefined : rf.definingContract;
     this.pushScope(); // function/parameter scope
     this.currentMutability = rf.mutability;
     // only @external is externally reachable; an unmarked (internal) function is not. Gates the
@@ -4909,30 +5070,39 @@ export class Analyzer {
       this.currentReadsEnv = re;
     }
 
+    // P0-23: install this contract's UPWARD namespace view for the whole body + modifier wrapping, so a
+    // reference to a state var / function declared only in a MORE-DERIVED contract fails to resolve
+    // (solc "Undeclared identifier"). No-op without inheritance. Restored in the finally below.
+    const savedNs = this.restrictNamespaceTo(this.bodyOwnerContract);
     const body: Stmt[] = [];
-    if (rf.node.body) {
-      // The function BODY is a child of the parameter scope, so a body local may shadow a parameter
-      // (solc allows this with only a warning). A same-scope redeclaration is still rejected, and the
-      // shadow resolves innermost-first (the codegen gives each declaration a unique Yul name).
-      this.pushScope();
-      for (const s of rf.node.body.statements) {
-        this.checkStatement(s, rf.returnType, body);
+    let wrap: { body: Stmt[]; modifierWrap?: Stmt[]; modifierArgs?: Expr[] };
+    try {
+      if (rf.node.body) {
+        // The function BODY is a child of the parameter scope, so a body local may shadow a parameter
+        // (solc allows this with only a warning). A same-scope redeclaration is still rejected, and the
+        // shadow resolves innermost-first (the codegen gives each declaration a unique Yul name).
+        this.pushScope();
+        for (const s of rf.node.body.statements) {
+          this.checkStatement(s, rf.returnType, body);
+        }
+        this.popScope();
       }
-      this.popScope();
-    }
 
-    // Phase 5: inline applied @modifiers around the body. Done while the function PARAMETER scope is
-    // still active so a modifier ARGUMENT can reference the function's parameters (its effects also
-    // accumulate into this function's effect flags, feeding the purity fixpoint). The modifier BODY
-    // is checked in a fresh scope (it sees only its own params + state, not the function's locals).
-    // When NO applied modifier has post-code, `wrap.body` is the inlined [pre, body] (pre-only path,
-    // modifierWrap undefined); when at least one has post-code, `wrap.body` stays the RAW wrapped body
-    // Z (emitted as userfn_<key>) and `wrap.modifierWrap` is the nested pre/post structure the dispatch
-    // lowers (see FunctionIR.modifierWrap).
-    const wrap =
-      rf.modifiers && rf.modifiers.length
-        ? this.wrapModifiers(rf, body)
-        : { body, modifierWrap: undefined, modifierArgs: undefined };
+      // Phase 5: inline applied @modifiers around the body. Done while the function PARAMETER scope is
+      // still active so a modifier ARGUMENT can reference the function's parameters (its effects also
+      // accumulate into this function's effect flags, feeding the purity fixpoint). The modifier BODY
+      // is checked in a fresh scope (it sees only its own params + state, not the function's locals).
+      // When NO applied modifier has post-code, `wrap.body` is the inlined [pre, body] (pre-only path,
+      // modifierWrap undefined); when at least one has post-code, `wrap.body` stays the RAW wrapped body
+      // Z (emitted as userfn_<key>) and `wrap.modifierWrap` is the nested pre/post structure the dispatch
+      // lowers (see FunctionIR.modifierWrap).
+      wrap =
+        rf.modifiers && rf.modifiers.length
+          ? this.wrapModifiers(rf, body)
+          : { body, modifierWrap: undefined, modifierArgs: undefined };
+    } finally {
+      this.restoreNamespace(savedNs);
+    }
     this.popScope();
 
     // Mutability enforcement (directive §2.7 STATICCALL view semantics) is performed AFTER
