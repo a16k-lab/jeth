@@ -9127,13 +9127,22 @@ export class Analyzer {
       // cdNestedFieldArrayHeader). aggArgToMemPtr in the local-decl lowering already routes
       // cdFieldAggValue / cdNestedFieldAggValue here.
       const fromCdField = e.kind === 'cdFieldAggValue' || e.kind === 'cdNestedFieldAggValue';
+      // W3-Y2d: mem-to-mem ALIAS of a whole FIXED-outer nested-value array (let ys: Arr<u256[],N> = xs).
+      // solc memory arrays are reference types: a local-to-local assignment is a POINTER copy (ys aliases
+      // xs's image; mutating one shows in the other). The source resolves to a memAggregate (a fixed-outer
+      // nested array registers as a memAggregate below). The yul localDecl `else` path lowers a memAggregate
+      // init via lowerExpr, which returns the source pointer verbatim - a pointer alias, byte-identical to
+      // solc. Gated to a FIXED outer only: a dynamic-outer nested-value alias (u256[][]) rides a different
+      // (memArray) lowering not yet wired here, so it stays a clean JETH200 reject.
+      const fromMemAggAlias = e.kind === 'memAggregate' && declared.length !== undefined;
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
         e.kind !== 'abiDecode' &&
         !fromCdArray &&
         !fromStorageArray &&
-        !fromCdField
+        !fromCdField &&
+        !fromMemAggAlias
       ) {
         this.diags.error(
           decl.initializer,
@@ -9287,6 +9296,16 @@ export class Analyzer {
             e.arr.base.kind === 'fixedArray')) ||
           (e.kind === 'mapStorageValue' && e.type.kind === 'array')) &&
         isStorageCopyableRef(declared);
+      // W3-Y2d: mem-to-mem ALIAS of a whole FIXED-outer aggregate-leaf array (let ys: Arr<string,N> = xs,
+      // Arr<bytes,N>, Arr<P,N>). solc memory arrays are reference types: a local-to-local assignment is a
+      // POINTER copy (ys aliases xs's image; mutating one shows in the other). The source resolves to a
+      // memAggregate (a fixed outer registers as a memAggregate below). A fixed-outer local in THIS block is
+      // isStaticStructFixedLeafArray or isDynBytesFixedLeafArray - both are handled by the yul localDecl
+      // pointer-headed branch, whose `else` path lowers a memAggregate init via lowerExpr (returns the source
+      // pointer verbatim = a pointer alias, byte-identical to solc). Gated to a FIXED outer: a dynamic-outer
+      // aggregate alias (P[], string[] via a memArray) rides a different lowering, so it stays a clean reject
+      // here (string[]/bytes[] already accept via the flat memArray path elsewhere; P[] stays rejecting).
+      const fromMemAggAlias = e.kind === 'memAggregate' && fixedOuter;
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -9295,7 +9314,8 @@ export class Analyzer {
         !fromCall &&
         !fromCdArray &&
         !fromCdField &&
-        !fromStorageArray
+        !fromStorageArray &&
+        !fromMemAggAlias
       ) {
         this.diags.error(
           decl.initializer,
