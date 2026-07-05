@@ -37,6 +37,7 @@ import {
   isStaticStructFixedLeafArray,
   isStaticStructAnyLeafArray,
   isDynBytesFixedLeafArray,
+  isDynLeafFixedArray,
   isDynStructLeafArrayField,
   isDynLeafTopicArray,
   isImplicitWiden,
@@ -1836,7 +1837,29 @@ ${indent(runtime, 6)}
               : s.target.kind === 'mapping'
                 ? this.mappingSlot(s.target.baseSlot, s.target.keys, ctx, out)
                 : this.lowerPlace(s.target.path, ctx, out).slot;
-          if (s.value.kind === 'arrayLit') {
+          if (isDynLeafFixedArray(s.target.type)) {
+            // NF-1: a whole store into a @state FIXED-outer array whose leaf is dynamic - Arr<string,N> /
+            // Arr<bytes,N> (bytes/string leaf, and nested Arr<Arr<string,N>,M>, Arr<string[],N>), and
+            // Arr<u256[],N> / Arr<address[],N> (a VALUE leaf behind a dynamic level). solc lays all of these
+            // out as N CONSECUTIVE base slots, each a normal storage dynamic (string/bytes header or a
+            // dynamic-array length slot). The memory source (a `memAggregate` local or an `arrayLit`) is
+            // JETH's pointer-headed image: N absolute-pointer words each -> a [len][data] / [len][elems]
+            // blob. Transcode element-by-element through the SAME codec the corresponding single-element
+            // store uses (storeDynamic / copyMemArrayIntoStorage / copyMemAggArrayIntoStorage), each of which
+            // overwrite-clears the dst element's old tail on shrink - byte-identical to solc. A fully-STATIC
+            // nested array (Arr<Arr<u256,N>,M>) is byte-invariant/inline and is NOT matched here (isDynamicType
+            // false), so it stays on the storeStaticAggFromMem path below. A storage->storage source stays on
+            // the existing copyFixedArray path (also per-element overwrite-clear).
+            if (s.value.kind === 'arrayLit') {
+              // an array-literal source builds the pointer-headed image via buildNestedMemArrayLit (the same
+              // builder a `let xs: Arr<string,N> = [..]` local uses); allocAggToMem is the wrong (static) path.
+              this.storeDynLeafFixedArrayFromMem(s.target.type, this.buildNestedMemArrayLit(s.value, ctx, out), dstBase, out);
+            } else if (s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue') {
+              this.storeDynLeafFixedArrayFromMem(s.target.type, this.aggToMemPtr(s.value, ctx, out), dstBase, out);
+            } else {
+              this.copyFixedArray(s.target.type, this.fixedArraySrcBase(s.value, ctx, out), dstBase, out);
+            }
+          } else if (s.value.kind === 'arrayLit') {
             this.writeArrayLit(s.value, dstBase, ctx, out);
           } else if (s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue') {
             // a whole MEMORY fixed-array local / CALLDATA fixed-array param: transcode its ABI-unpacked
@@ -6381,6 +6404,50 @@ ${indent(runtime, 6)}
       else if (elem.kind === 'array' && elem.length === undefined) this.copyArray(elem.element, sAt(i * sc), dAt(i * sc), out);
       else if (elem.kind === 'array') this.copyFixedArray(elem, sAt(i * sc), dAt(i * sc), out);
       else this.copyStruct(elem as JethType & { kind: 'struct' }, sAt(i * sc), dAt(i * sc), out);
+    }
+  }
+
+  /** NF-1: write a whole @state Arr<string,N> / Arr<bytes,N> (and nested Arr<Arr<string,N>,M>,
+   *  Arr<string[],N>) from a MEMORY pointer-headed image into its N CONSECUTIVE base slots. The image
+   *  is N absolute-pointer words (NO [len] header, isDynBytesFixedLeafArray's layout), each word at
+   *  `memPtr + i*32` pointing to the i-th element's own image: a [len][data] blob for a bytes/string
+   *  leaf, or a sub-image for a nested array element. Each element storage-writes through the SAME
+   *  codec the corresponding single-element store uses, so each element OVERWRITE-CLEARS its old tail
+   *  (long->short frees the freed keccak data slots) - byte-identical to solc's `stringArr = memArr`. */
+  private storeDynLeafFixedArrayFromMem(
+    arrType: JethType & { kind: 'array' },
+    memPtr: string,
+    dstBase: string,
+    out: string[],
+  ): void {
+    const elem = arrType.element;
+    const N = arrType.length!;
+    const sc = storageSlotCount(elem); // slots per element: 1 for string/bytes/string[]; M for Arr<string,M>
+    const dConst = /^\d+$/.test(dstBase);
+    const dAt = (n: number): string =>
+      dConst ? String(BigInt(dstBase) + BigInt(n)) : n === 0 ? dstBase : `add(${dstBase}, ${n})`;
+    for (let i = 0; i < N; i++) {
+      const ep = this.fresh();
+      out.push(`let ${ep} := mload(add(${memPtr}, ${i * 32}))`); // the i-th element's image pointer
+      const deb = dAt(i * sc);
+      if (isBytesLike(elem)) {
+        // a bytes/string element: ep -> a [len][data] blob. storeDynamic overwrite-clears the dst
+        // element's old tail (the single-string storage-write codec, byte-identical to solc).
+        this.storeDynamic(deb, { src: 'memory', ptr: ep }, out);
+      } else if (elem.kind === 'array' && elem.length !== undefined) {
+        // a nested FIXED dyn-leaf array element (Arr<string,M>): recurse (ep is that sub-image's base).
+        this.storeDynLeafFixedArrayFromMem(elem, ep, deb, out);
+      } else if (elem.kind === 'array' && elem.length === undefined) {
+        // a nested DYNAMIC array element (string[]/bytes[]/T[][]): ep -> a [len][...] image; deep-copy
+        // into the dst dynamic array (length at deb, data at keccak(deb)) via the existing mem->storage
+        // array codecs (resize + per-element deep-write + tail clear), byte-identical to solc.
+        if (isStaticValueType(elem.element)) this.copyMemArrayIntoStorage(elem.element, ep, deb, out);
+        else this.copyMemAggArrayIntoStorage(elem.element, ep, deb, out);
+      } else {
+        throw new UnsupportedError(
+          `storing a fixed dynamic-leaf array element '${elem.kind}' from a memory source is not supported yet`,
+        );
+      }
     }
   }
 

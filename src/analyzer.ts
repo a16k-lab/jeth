@@ -12690,10 +12690,16 @@ export class Analyzer {
         if (acc.result.finalType.kind === 'array') {
           const lastStep = acc.result.path.steps[acc.result.path.steps.length - 1];
           if (
-            acc.result.finalType.length !== undefined &&
-            isStaticType(acc.result.finalType) &&
             lastStep &&
-            lastStep.kind === 'field'
+            lastStep.kind === 'field' &&
+            acc.result.finalType.length !== undefined &&
+            // a whole STATIC fixed-array field (Arr<u256,N>, Arr<P,N> P static): copyFixedArray copies the
+            // slot footprint verbatim. A DYNAMIC-leaf fixed-array field (Arr<string,N>, Arr<bytes,N>,
+            // Arr<u256[],N>, nested Arr<Arr<string,N>,M>): NF-1's storeDynLeafFixedArrayFromMem transcodes the
+            // pointer-headed memory image element-by-element into the field's N consecutive base slots
+            // (overwrite-clearing each element's tail), byte-identical to solc. Both land on the storage
+            // `place` at the field's base slot, handled by the whole-fixed-array store codegen.
+            (isStaticType(acc.result.finalType) || isDynLeafFixedArray(acc.result.finalType))
           ) {
             this.currentWritesState = true;
             return { kind: 'place', type: acc.result.finalType, path: acc.result.path };
@@ -12772,9 +12778,17 @@ export class Analyzer {
             },
           };
         }
-        // this.e.arr = <fixed array>: a whole FIXED-array field copy (a storage place; copyFixedArray
-        // handles value/static elements). A dynamic-array or fixed-array-of-dynamic field stays gated.
-        if (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)) {
+        // this.e.arr = <fixed array>: a whole FIXED-array field copy (a storage place). A STATIC fixed-array
+        // field (Arr<u256,N>, Arr<P,N> P static) copies its slot footprint verbatim (copyFixedArray). NF-1:
+        // a DYNAMIC-leaf fixed-array field (Arr<string,N>, Arr<bytes,N>, Arr<u256[],N>, nested
+        // Arr<Arr<string,N>,M>) transcodes its pointer-headed memory image element-by-element into the
+        // field's N consecutive base slots (storeDynLeafFixedArrayFromMem, overwrite-clearing each element's
+        // tail), byte-identical to solc. Both land on the same storage `place` at the field's base slot.
+        if (
+          f.type.kind === 'array' &&
+          f.type.length !== undefined &&
+          (isStaticType(f.type) || isDynLeafFixedArray(f.type))
+        ) {
           this.currentWritesState = true;
           return {
             kind: 'place',
