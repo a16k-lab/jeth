@@ -1521,7 +1521,35 @@ export class Analyzer {
       initialValue: v.initialValue,
     }));
     // Part B: lay out each @storage('ns') namespace and append its fields at base(ns)+relativeSlot.
-    stateVars.push(...this.planNamespacedStorage());
+    const nsVars = this.planNamespacedStorage();
+    // W8B: a @storage('ns') field name shares the SAME `this.<name>` binding namespace as a plain @state
+    // var (and every other contract-level name). If a namespaced field reuses a plain @state name, both
+    // land in stateVars and the SECOND stateByName.set silently orphans the first - the binding is
+    // provably ambiguous (first-declared wins `this.x`, the other slot is stranded). solc rejects two
+    // contract-scope variables of the same name as "Identifier already declared". And two @storage fields
+    // in DIFFERENT namespaces sharing a name (@storage('a') x + @storage('b') x) BOTH collapse onto one
+    // `this.x` binding - equally ambiguous, and a JETH-only surface with no per-namespace qualified access
+    // path, so a clean reject is the safe direction. (Same-namespace duplicate is JETH416; @storage vs
+    // @constant is the JETH046 loop below; @storage vs @modifier is the cross-kind JETH133 map above.)
+    const plainStateNames = new Set(stateVars.map((v) => v.name));
+    const seenNsNames = new Set<string>();
+    for (const v of nsVars) {
+      if (plainStateNames.has(v.name)) {
+        this.diags.error(
+          cls,
+          'JETH046',
+          `field name '${v.name}' is declared more than once (a @storage('ns') field conflicts with a @state variable of the same name; solc rejects two contract-scope variables sharing a name as "Identifier already declared", and the this.${v.name} binding would be ambiguous)`,
+        );
+      } else if (seenNsNames.has(v.name)) {
+        this.diags.error(
+          cls,
+          'JETH046',
+          `field name '${v.name}' is declared more than once (two @storage('ns') fields in different namespaces share the name; both would collapse onto one ambiguous this.${v.name} binding)`,
+        );
+      }
+      seenNsNames.add(v.name);
+    }
+    stateVars.push(...nsVars);
     for (const v of stateVars) this.stateByName.set(v.name, v);
 
     // An @immutable name must not collide with a @state var or @constant (solc: duplicate
@@ -1585,12 +1613,28 @@ export class Analyzer {
     for (const v of stateVars) addId(v.name, 'storage');
     for (const nm of this.constantsByName.keys()) addId(nm, 'storage');
     for (const nm of this.immutableOrder) addId(nm, 'storage');
+    // W8B: a @modifier shares the CONTRACT-level identifier namespace with @state/@constant/@immutable
+    // (storage), @function, @event and @error - solc rejects a modifier reusing any of those names as
+    // "Identifier already declared" (same contract) or a cross-inheritance clash (a base modifier vs a
+    // derived state/event/error/function, or vice-versa). modifiersByName is the C3-merged winner set
+    // (resolveModifierOverrides ran above), so this covers same-contract, inherited, and diamond shapes.
+    // A modifier-vs-modifier duplicate is JETH046 (collectModifier) and stays there. Modifiers do NOT
+    // collide with a TYPE (a JETH @struct/enum/@interface is FILE-scoped, like a solc file-level type, so
+    // a file-level type never clashes with a contract modifier - solc accepts it); the modifier-vs-type
+    // pair is excluded below so this fix does not widen the pre-existing type-vs-member over-rejection.
+    for (const nm of this.modifiersByName.keys()) addId(nm, 'modifier');
     for (const [nm, kinds] of idKinds) {
       // P1-4: a validated getter var override (uint256 public override x;) legitimately reuses the name of
       // the base @virtual function it implements (storage + function share `x`). solc treats the getter AS
       // that function, so the storage/function name clash is expected - suppress JETH133 for exactly that
       // name (the clash is only the getter-var storage vs the base function; any OTHER collision still fires).
       if (nm && this.validGetterOverrides.has(nm) && kinds.size === 2 && kinds.has('storage') && kinds.has('function')) {
+        continue;
+      }
+      // W8B: a `{modifier, type}`-ONLY pair does not clash (the type is FILE-scoped in JETH, and solc
+      // does not collide a file-level type with a contract modifier). Any OTHER kind alongside `modifier`
+      // (storage/function/event/error) IS a real contract-scope clash and still fires below.
+      if (kinds.size === 2 && kinds.has('modifier') && kinds.has('type')) {
         continue;
       }
       if (kinds.size > 1) {
