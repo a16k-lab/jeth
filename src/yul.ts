@@ -2613,7 +2613,15 @@ ${indent(runtime, 6)}
             const { mp, len } = this.toMemory(this.lowerDynamic(a, ctx, lines), lines);
             return { dyn: 'bytes', mp, len };
           }
-          if (a.type.kind === 'array' && a.type.length === undefined) {
+          // a DYNAMIC array: a dynamic-outer value/nested array (length === undefined) OR - P0-34/P0-38 -
+          // a FIXED-outer array of a DYNAMIC element (Arr<string,N>, Arr<bytes,N>, Arr<u256[],N>). Both are
+          // DYNAMIC types (headWordsOf -> 1 offset word), NOT the static-agg inline path below. Each has a
+          // self-contained ABI tail (dynamic-outer: [len] + elements/offset-table+tails; fixed-outer: an
+          // N-word offset table + per-element tails, NO leading [len]) - exactly what materializeArrayArg
+          // produces (memory-local / literal -> materializeFixedDynLeafTail; calldata / storage -> echoParam /
+          // abiEncFromStorage's fixed-of-dynamic branch). Route both through the 'array' LA (offset word +
+          // verbatim tail mcopy), byte-identical to solc's error(...) encoding and the emit(E(m)) data path.
+          if (a.type.kind === 'array' && (a.type.length === undefined || isDynamicType(a.type))) {
             const { mp, size } = this.materializeArrayArg(a, ctx, lines);
             return { dyn: 'array', mp, size };
           }
@@ -7269,7 +7277,11 @@ ${indent(runtime, 6)}
       // a fresh element image), NOT the flat static image - build it via the nested-array literal builder
       // (the same image the local-decl / return paths use). allocAggToMem would emit a flat blob whose
       // leading words are then misread as element pointers (zeros), a silent miscompile.
-      if (isStaticStructFixedLeafArray(a.type)) return this.buildNestedMemArrayLit(a, ctx, out);
+      // P1-7: a FIXED-outer DYNAMIC-element array literal (Arr<string,N>, Arr<bytes,N>, Arr<u256[],N>) is
+      // ALSO pointer-headed (N absolute-pointer words, each -> a [len][data] / [len][elems] blob), built by
+      // the SAME nested-array literal builder (mirrors nestedMemImagePtr's arrayLit branch). allocAggToMem
+      // would flatten it wrong. Reached only when such a literal is passed as an internal-fn / error arg.
+      if (isStaticStructFixedLeafArray(a.type) || isDynamicType(a.type)) return this.buildNestedMemArrayLit(a, ctx, out);
       return this.allocAggToMem(a, ctx, out);
     }
     // a DYNAMIC-field struct (constructor / memory / storage / calldata source) uses the
@@ -7434,6 +7446,16 @@ ${indent(runtime, 6)}
       out.push(`let ${sz} := ${this.abiEncFromMem(arg.type, mp, dst, ctx, out)}`);
       out.push(`mstore(0x40, add(${dst}, ${sz}))`);
       return { mp: dst, size: sz };
+    }
+    // P0-33: a MEMORY-sourced FIXED-outer dynamic-element array (Arr<string,N>, Arr<bytes,N>,
+    // Arr<u256[],N>) used as an abi.encode/encodePacked arg. Its type is dynamic (a dynamic leaf) but
+    // t.length !== undefined, so it is placed in the tail with a head OFFSET (the {mp,size} caller
+    // branch), NOT inline. Its memory image is N pointer words (a memAggregate local / an inline
+    // arrayLit); nestedMemImagePtr resolves it and abiEncFromMem's fixed-outer-dynamic branch produces
+    // the self-contained ABI tail (N-word offset table relative to mp, then per-element dynamic tails,
+    // NO leading length word). Mirrors the emit(E(m)) event-data path (materializeFixedDynLeafTail).
+    if (this.isMemFixedDynLeafArg(arg)) {
+      return this.materializeFixedDynLeafTail(arg, ctx, out);
     }
     if (
       (arg.kind === 'newArray' || arg.kind === 'call') &&

@@ -557,6 +557,23 @@ export function isDynBytesFixedLeafArray(t: JethType): boolean {
   return false;
 }
 
+/** P0-33/P1-7: the FULL pointer-headed FIXED-outer array-of-DYNAMIC-elements family the recursive memory
+ *  codec (buildNestedMemArrayLit / abiEncFromMem / abiDecFromMemToImage) lays out uniformly as N
+ *  absolute-pointer words (NO [len] header), each pointing to a [len][data] byte-sequence blob or a
+ *  [len][elems] value-array blob. Two disjoint sub-families, both fixed-outer + dynamic:
+ *    - a bytes/string LEAF (isDynBytesFixedLeafArray): Arr<string,N>, Arr<bytes,N>, Arr<Arr<string,N>,M>.
+ *    - a VALUE LEAF behind a dynamic level (isNestedValueArray, fixed outer): Arr<u256[],N>, Arr<address[],N>.
+ *  A static fixed array (Arr<u256,N> - inline, byte-invariant) and a static-struct-leaf fixed array
+ *  (Arr<P,N> - owned by isStaticStructFixedLeafArray) are NOT matched here. A dynamic-field-STRUCT element
+ *  (Arr<D,N>, D has a dynamic field) is likewise excluded - it rides a different (storage-only) codec. Used
+ *  to widen the internal-call param/return gate and decodeSupported in tandem with the yul codec sites that
+ *  already handle this image (the abi.encode arg gate accepts it via the pre-existing `t.kind === 'array'`
+ *  clause; the DYN-STRUCT-FIELD use of such a type stays gated - that needs the dyn-struct field codec). */
+export function isDynLeafFixedArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length === undefined || !isDynamicType(t)) return false;
+  return isDynBytesFixedLeafArray(t) || isNestedValueArray(t);
+}
+
 /** Cat C: a dynamic-field struct FIELD that is a NESTED-DYNAMIC-LEAF array - `bytes[]`, `string[]`,
  *  or a `T[][]` (nested VALUE array bearing a dynamic outer level: u256[][], u256[][][], ...). Its
  *  pointer-headed memory image is the SAME B4 image a standalone such array uses, so the dyn-struct

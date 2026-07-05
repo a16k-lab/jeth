@@ -36,6 +36,7 @@ import {
   isAggregateLeafArray,
   isStaticStructFixedLeafArray,
   isDynBytesFixedLeafArray,
+  isDynLeafFixedArray,
   isStaticStructAnyLeafArray,
   isDynStructLeaf,
   isDynStructLeafArrayField,
@@ -5248,6 +5249,16 @@ export class Analyzer {
       ) {
         this.memAggregateLocals.set(p.name, p.type);
       }
+      // P1-7: a FIXED-outer DYNAMIC-element array param (Arr<string,N>, Arr<bytes,N>, Arr<u256[],N>) of an
+      // @internal/@private function is a pointer-headed MEMORY image (N absolute-pointer words, no [len]
+      // header); register it as a memAggregate so the body's p[i] / p.length / return p / abi.encode(p)
+      // resolve through the same fixed-outer-dynamic codec a memory local uses. The caller passes the image
+      // pointer (aggArgToMemPtr's memAggregate/arrayLit-via-buildNestedMemArrayLit path) and the callee binds
+      // it to a plain Yul arg, both representation-agnostic. Still NOT isStaticType, so ABI-signature paths
+      // (@external param, @public getter) keep rejecting it, byte-identical to solc's calldata-only rule.
+      if (internalOnly && isDynLeafFixedArray(p.type)) {
+        this.memAggregateLocals.set(p.name, p.type);
+      }
       if (internalOnly && isBytesLike(p.type)) {
         this.memDynLocals.add(p.name);
       }
@@ -10304,6 +10315,7 @@ export class Analyzer {
     const isMemByRef = (t: JethType): boolean =>
       (t.kind === 'struct' && (isStaticType(t) || isFuncrefValueAggregate(t))) ||
       (t.kind === 'array' && t.length !== undefined && (isStaticType(t) || isFuncrefValueAggregate(t))) || // a static (or funcref-value) fixed array Arr<T,N>
+      isDynLeafFixedArray(t) || // P1-7: a FIXED-outer dynamic-element array (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>) - pointer-headed image
       (t.kind === 'array' && t.length === undefined && isValueWord(t.element)) || // dynamic value-word array (incl. ((x)=>R)[])
       // Cat B: a STATIC-STRUCT dynamic array (P[]) is a pointer-headed memory image (a single pointer),
       // so it passes BY MEMORY REFERENCE exactly like a value-element array - a memory source aliases,
@@ -14490,7 +14502,10 @@ export class Analyzer {
       // N-word absolute-pointer table (abiDecFromMemToImage's fixed-array branch). Batch A: a fixed-outer
       // STATIC-STRUCT array (Arr<P,N>, Arr<Arr<P,N>,M>) decodes into B's N-word pointer table too.
       if (isStaticType(t)) return this.isStaticLeafArray(t) || isStaticStructFixedLeafArray(t);
-      return isNestedValueArray(t) || isStaticStructAnyLeafArray(t);
+      // P1-7: a bytes/string-leaf fixed-outer array (Arr<string,N>, Arr<bytes,N>) decodes into B's N-word
+      // absolute-pointer table too (abiDecFromMemToImage's fixed-outer branch recurses on each element's
+      // bytes/string blob), the exact twin of the Arr<u256[],N> value-leaf case already admitted below.
+      return isNestedValueArray(t) || isStaticStructAnyLeafArray(t) || isDynBytesFixedLeafArray(t);
     }
     // a struct target: a STATIC struct (value-only fields) decodes via abiDecFromMem's static-aggregate
     // branch; a DYNAMIC-field struct via buildDynStructFromMemBlob (the pointer-headed image a JETH struct
