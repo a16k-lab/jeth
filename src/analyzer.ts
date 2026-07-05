@@ -2328,7 +2328,13 @@ export class Analyzer {
         // only a derived contract that extends both overrides them (with @override(A,B)). Picking the
         // next-in-order entry wrongly flagged the second sibling as "missing @override" (OR7).
         const vBases = basesOf.get(v.definingContract!);
-        const baseBelow = versions.slice(i + 1).find((b) => vBases?.has(b.definingContract!));
+        // ALL base versions `v` overrides = the ancestor-of-v declarations below it (NOT a mere sibling,
+        // and NOT just the first). solc validates the override against EVERY overridden base, so each of
+        // the virtual/return/mutability/visibility/implemented checks below must run per overridden base -
+        // a find-first collapse over-accepted a diamond where the FIRST base happened to be compatible but
+        // a SECONDARY overridden base was not (e.g. K overrides A(non-virtual) and B(virtual)).
+        const overriddenBases = versions.slice(i + 1).filter((b) => vBases?.has(b.definingContract!));
+        const baseBelow = overriddenBases[0];
         const isMostDerived = i === 0;
 
         // @override is REQUIRED on every redefinition (including the first concrete impl of a bodyless
@@ -2341,14 +2347,6 @@ export class Analyzer {
               `function '${v.name}' in '${v.definingContract}' overrides a base function but is missing @override`,
             );
           }
-          // the overridden base version must be @virtual (a non-virtual base cannot be overridden).
-          if (!baseBelow.isVirtual) {
-            this.diags.error(
-              v.node,
-              'JETH375',
-              `function '${v.name}' overrides '${baseBelow.definingContract}.${baseBelow.name}', which is not @virtual`,
-            );
-          }
           // an INTERMEDIATE override that is itself further overridden must ALSO be @virtual (a
           // 3-level chain with a non-virtual middle is rejected by solc).
           if (!isMostDerived && !v.isVirtual) {
@@ -2358,34 +2356,62 @@ export class Analyzer {
               `function '${v.name}' in '${v.definingContract}' is overridden by a more-derived contract but is not @virtual`,
             );
           }
-          // return type must be identical across the override pair.
-          if (!this.overrideReturnsEqual(v, baseBelow)) {
-            this.diags.error(
-              v.node,
-              'JETH377',
-              `override of '${v.name}' must keep the exact return type of '${baseBelow.definingContract}.${baseBelow.name}'`,
-            );
+          // Per-overridden-base checks: EVERY base `v` overrides must be @virtual and pair-compatible in
+          // return type / mutability / visibility. (Reported against each offending base; solc emits one
+          // error per incompatibility.)
+          for (const ob of overriddenBases) {
+            // the overridden base version must be @virtual (a non-virtual base cannot be overridden).
+            if (!ob.isVirtual) {
+              this.diags.error(
+                v.node,
+                'JETH375',
+                `function '${v.name}' overrides '${ob.definingContract}.${ob.name}', which is not @virtual`,
+              );
+            }
+            // return type must be identical across the override pair.
+            if (!this.overrideReturnsEqual(v, ob)) {
+              this.diags.error(
+                v.node,
+                'JETH377',
+                `override of '${v.name}' must keep the exact return type of '${ob.definingContract}.${ob.name}'`,
+              );
+            }
+            // mutability one-way ladder (payable > nonpayable > view > pure): the override may only be
+            // EQUAL or MORE restrictive; payable may be overridden only by payable.
+            const dr = mutRank[v.mutability];
+            const br = mutRank[ob.mutability];
+            const crossesPayable = (v.mutability === 'payable') !== (ob.mutability === 'payable');
+            if (dr > br || crossesPayable) {
+              this.diags.error(
+                v.node,
+                'JETH378',
+                `override of '${v.name}' cannot loosen mutability (@${ob.mutability} -> @${v.mutability}); an override may only keep or tighten it, and payable crosses are forbidden`,
+              );
+            }
+            // visibility: external may be overridden by external (or, in solc, by public); JETH maps
+            // public->external. An external/internal mismatch across the pair is rejected.
+            if (v.visibility !== ob.visibility) {
+              this.diags.error(
+                v.node,
+                'JETH379',
+                `override of '${v.name}' changes visibility (@${ob.visibility} -> @${v.visibility}); the override must keep the base visibility`,
+              );
+            }
           }
-          // mutability one-way ladder (payable > nonpayable > view > pure): the override may only be
-          // EQUAL or MORE restrictive; payable may be overridden only by payable.
-          const dr = mutRank[v.mutability];
-          const br = mutRank[baseBelow.mutability];
-          const crossesPayable = (v.mutability === 'payable') !== (baseBelow.mutability === 'payable');
-          if (dr > br || crossesPayable) {
-            this.diags.error(
-              v.node,
-              'JETH378',
-              `override of '${v.name}' cannot loosen mutability (@${baseBelow.mutability} -> @${v.mutability}); an override may only keep or tighten it, and payable crosses are forbidden`,
-            );
-          }
-          // visibility: external may be overridden by external (or, in solc, by public); JETH maps
-          // public->external. An external/internal mismatch across the pair is rejected.
-          if (v.visibility !== baseBelow.visibility) {
-            this.diags.error(
-              v.node,
-              'JETH379',
-              `override of '${v.name}' changes visibility (@${baseBelow.visibility} -> @${v.visibility}); the override must keep the base visibility`,
-            );
+          // P0-20: a BODYLESS (unimplemented @virtual) override of an IMPLEMENTED base function is rejected
+          // (solc: "Overriding an implemented function with an unimplemented function is not allowed."). An
+          // override may only ADD an implementation (bodyless -> implemented) or keep it, never DROP one
+          // (implemented -> bodyless). In a diamond `v` may override several bases: it is illegal if ANY
+          // overridden base is implemented. Bodyless-over-bodyless stays legal (a still-abstract chain).
+          if (v.bodyless) {
+            const implementedBase = overriddenBases.find((b) => !b.bodyless);
+            if (implementedBase) {
+              this.diags.error(
+                v.node,
+                'JETH431',
+                `function '${v.name}' in '${v.definingContract}' is a bodyless (unimplemented) override of the implemented base function '${implementedBase.definingContract}.${implementedBase.name}' (an override may not drop an implementation)`,
+              );
+            }
           }
         } else {
           // a base-most definition carrying @override with nothing to override is an error (JETH369 -
@@ -2401,57 +2427,144 @@ export class Analyzer {
       }
 
       // DIAMOND override-list completeness (solc: "Function needs to specify overridden contracts B
-      // and C"). The branch heads = overridden contracts that are NOT a base of another overridden
-      // contract (the maximal sibling versions). With 2+ heads, the winner must name them all in
-      // @override(B, K); a bare @override or an incomplete list is rejected.
-      const overridden = [...new Set(versions.slice(1).map((v) => v.definingContract!))];
-      // The branch heads = for each DIRECT base of the contract that DECLARES the winning override, the
-      // MOST-DERIVED contract that (re)declares this signature within that base's own hierarchy. A base
-      // whose version reaches the winner UN-overridden along some path is a head that must be listed in
-      // @override(...) - including a shared root A reachable via a sibling K that does NOT override it.
-      // (The old "maximal among ALL overridden" filter wrongly dropped such an A because A is also a base
-      // of another overrider on a DIFFERENT path, causing both an over-acceptance - a bare/incomplete list
-      // accepted - and, once membership was enforced, an over-rejection of the valid @override(A, ...).)
-      const winnerCls = this.classByName.get(winner.definingContract!);
-      const directBases = winnerCls ? heritageBases(winnerCls).map((h) => h.name) : [];
-      const definerWithin = (base: string): string | undefined => {
-        const cand = overridden.filter((x) => x === base || (basesOf.get(base)?.has(x) ?? false));
-        return cand.find((x) => !cand.some((y) => y !== x && basesOf.get(y)?.has(x)));
-      };
-      // Contract-side heads (versions in `overridden` reachable un-overridden via a direct base) PLUS the
-      // interface-side heads (a DIRECT-base @interface declaring this winner's signature is its own head -
-      // interface methods live in a separate registry and are never in `overridden`, so solc still counts
-      // the interface as an overridden contract that must be named in @override(...)).
-      const contractHeads = directBases.map(definerWithin).filter((x): x is string => x !== undefined);
-      const heads = [...new Set([...contractHeads, ...this.interfaceOverrideHeads(winner)])];
+      // and C") + MEMBERSHIP (solc: "Invalid contract specified in override list"). P0-19: these are
+      // validated for EVERY redefining version in the group, not only the winner - an INTERMEDIATE
+      // override with an incomplete/bogus @override list is rejected by solc even when a more-derived
+      // contract re-overrides it, so validating winner-only over-accepted the broken intermediate. Each
+      // version's list is checked against the branch heads reachable from ITS OWN definingContract.
+      const validateOverrideList = (v: RawFunction, i: number) => {
+        // The versions BELOW v that v actually overrides = the ancestor-of-v definitions (a mere sibling
+        // in the group is NOT overridden by v). This is v's own "overridden set".
+        const vBases = basesOf.get(v.definingContract!);
+        const overridden = [
+          ...new Set(
+            versions
+              .slice(i + 1)
+              .filter((b) => vBases?.has(b.definingContract!))
+              .map((b) => b.definingContract!),
+          ),
+        ];
+        // The branch heads = for each DIRECT base of v's own contract, the MOST-DERIVED contract that
+        // (re)declares this signature within that base's hierarchy. A base reaching v UN-overridden along
+        // some path is a head that must be named in @override(...) - including a shared root A reachable
+        // via a sibling that does NOT override it.
+        const vCls = this.classByName.get(v.definingContract!);
+        const directBases = vCls ? heritageBases(vCls).map((h) => h.name) : [];
+        const definerWithin = (base: string): string | undefined => {
+          const cand = overridden.filter((x) => x === base || (basesOf.get(base)?.has(x) ?? false));
+          return cand.find((x) => !cand.some((y) => y !== x && basesOf.get(y)?.has(x)));
+        };
+        // Contract-side heads PLUS interface-side heads (a DIRECT-base @interface of v's contract that
+        // declares this signature is its own head; interface methods live in a separate registry).
+        const contractHeads = directBases.map(definerWithin).filter((x): x is string => x !== undefined);
+        const heads = [...new Set([...contractHeads, ...this.interfaceOverrideHeads(v)])];
 
-      // OVERRIDE-LIST MEMBERSHIP (solc: "Invalid contract specified in override list" / "Identifier not
-      // found or not unique" for an undeclared name; "Duplicate contract found in override list"). Every
-      // name written in @override(...) must be exactly a branch HEAD - a maximal sibling that this winner
-      // directly overrides. A name that is NOT a head is invalid whether it is a non-inherited/undeclared
-      // contract, the deployed contract itself, or a NON-maximal base (a shared root, or a transitive base
-      // that another named base already derives from - solc only accepts the immediate maximal siblings).
-      // This runs unconditionally (even for a single head, where @override(A) is valid but @override(B) is
-      // not), and also rejects a duplicated name. It complements JETH381 (completeness: all heads present).
-      const list = winner.overrideList ?? [];
-      const headSet = new Set(heads);
-      const seen = new Set<string>();
-      const badName = list.find((n) => !headSet.has(n) || seen.has(n) || (seen.add(n), false));
-      if (badName !== undefined) {
-        this.diags.error(
-          winner.node,
-          'JETH415',
-          `function '${winner.name}' names '${badName}' in its @override list, which is not a directly-overridden base contract`,
-        );
-      }
-
-      if (heads.length >= 2) {
-        const missing = heads.filter((h) => !list.includes(h));
-        if (missing.length > 0) {
+        // MEMBERSHIP: every name in this version's @override(...) must be exactly a branch head (a maximal
+        // sibling v directly overrides). A non-head - undeclared, the contract itself, or a NON-maximal
+        // base another named base derives from - is invalid, as is a duplicate. Runs unconditionally.
+        const list = v.overrideList ?? [];
+        const headSet = new Set(heads);
+        const seen = new Set<string>();
+        const badName = list.find((n) => !headSet.has(n) || seen.has(n) || (seen.add(n), false));
+        if (badName !== undefined) {
           this.diags.error(
-            winner.node,
-            'JETH381',
-            `function '${winner.name}' overrides more than one base contract; it must specify @override(${heads.join(', ')})`,
+            v.node,
+            'JETH415',
+            `function '${v.name}' in '${v.definingContract}' names '${badName}' in its @override list, which is not a directly-overridden base contract`,
+          );
+        }
+        // COMPLETENESS: 2+ heads require @override naming all of them.
+        if (heads.length >= 2) {
+          const missing = heads.filter((h) => !list.includes(h));
+          if (missing.length > 0) {
+            this.diags.error(
+              v.node,
+              'JETH381',
+              `function '${v.name}' in '${v.definingContract}' overrides more than one base contract; it must specify @override(${heads.join(', ')})`,
+            );
+          }
+        }
+      };
+      for (let i = 0; i < versions.length; i++) validateOverrideList(versions[i]!, i);
+
+      // P0-17: MISSING "Derived contract must override" (solc: "Derived contract must override function
+      // \"f\". Two or more base classes define function with same name and parameter types."). When a
+      // contract in the linearization does NOT itself (re)declare this signature yet inherits 2+ DISTINCT
+      // definitions delivered along different direct-base paths (a diamond that no single most-derived
+      // definition unifies), solc REQUIRES that contract to override the function. This fires at the
+      // FIRST such contract - ABSTRACT or concrete - regardless of whether a more-derived contract later
+      // overrides it (solc reports the ambiguity at the un-unifying contract itself). It must NOT fire
+      // when all direct-base paths deliver the SAME definition (a chain, or one branch inheriting the
+      // other's), nor when the contract redefines the signature (then the override-list rules above apply).
+      // The delivered definer along a direct base `b` = the most-derived contract (or a direct-base
+      // @interface) within b's hierarchy that declares this signature; a diamond is un-unified iff those
+      // deliveries span 2+ distinct definers.
+      const definerContracts = new Set(versions.map((v) => v.definingContract!));
+      // Whether a definer's version is BODYLESS (an abstract declaration, no implementation). solc treats
+      // an IMPLEMENTED base function that is ALSO listed as a direct base (alongside its overrider) as a
+      // competing definition (must override), but an UNIMPLEMENTED (bodyless) base declaration is a mere
+      // obligation the overrider satisfies (no conflict).
+      const definerBodyless = new Map(versions.map((v) => [v.definingContract!, !!v.bodyless]));
+      // The single definition DELIVERED to `cn` through one of its direct bases `b` = the MOST-DERIVED
+      // declarer of this signature WITHIN b's own hierarchy (b and its transitive bases). A within-subtree
+      // override subsumes the base it overrides (they lie on the SAME path), so a linear chain delivers one
+      // definition; but two SIBLING branches that each carry a distinct un-unified definition deliver two.
+      const deliveredVia = (cn: string): string | undefined => {
+        const cls = byName.get(cn);
+        if (!cls) return undefined;
+        // this contract itself declares the signature (as a function) -> it IS the delivered definer
+        // (it is the most-derived declarer within its own subtree; any base version is subsumed).
+        if (definerContracts.has(cn)) return cn;
+        // a direct-base @interface of cn declaring the exact signature is its own delivered definer.
+        for (const hb of heritageBases(cls)) {
+          const im = this.interfacesByName.get(hb.name)?.methods.get(winner.name);
+          if (im && im.signature === sk) return hb.name;
+        }
+        // otherwise recurse through cn's direct bases and keep only the MAXIMAL deliveries within this
+        // subtree (drop a definer that another delivery - reachable in the same subtree - derives from).
+        const sub = [
+          ...new Set(heritageBases(cls).map((h) => deliveredVia(h.name)).filter((x): x is string => x !== undefined)),
+        ];
+        const maximal = sub.filter((x) => !sub.some((y) => y !== x && basesOf.get(y)?.has(x)));
+        // 0 -> no delivery on this branch; 1 -> a single delivered definition; 2+ -> this subtree ITSELF
+        // is un-unified (reported when we reach that contract in the outer loop), but from the PARENT's
+        // view it still delivers an ambiguous result, so mark it so the parent counts it as un-unifiable.
+        return maximal.length === 1 ? maximal[0] : maximal.length === 0 ? undefined : '<ambiguous>';
+      };
+      for (const cn of this.linOrder) {
+        if (definerContracts.has(cn)) continue; // this contract redefines f -> covered by the override-list rules
+        const cls = byName.get(cn);
+        if (!cls || this.isInterfaceClass(cls)) continue; // interfaces impose no override obligation here
+        // Each direct base delivers one definition (its within-subtree most-derived declarer). Pair each
+        // delivery with the BASE it arrived through so cross-base subsumption is path-aware.
+        const perBase = heritageBases(cls)
+          .map((h) => ({ base: h.name, def: deliveredVia(h.name) }))
+          .filter((d): d is { base: string; def: string } => d.def !== undefined);
+        // Cross-base subsumption: a delivery X (via base bx, definer dx) is subsumed by another delivery Y
+        // (definer dy) iff Y OVERRIDES X (dy derives from dx), Y's own path passes THROUGH bx (bx is an
+        // ancestor-or-self of dy), AND X's declaration is BODYLESS. Only then does Y satisfy the mere
+        // obligation X represents. A SIBLING dy overriding dx on a DIFFERENT path (bx not on dy's path) does
+        // NOT subsume it (single-branch diamond); and an IMPLEMENTED X delivered directly stays live even
+        // when a derived base overrides it (solc: two implementations reach cn -> must override).
+        const live = perBase.filter(
+          (x) =>
+            x.def === '<ambiguous>' ||
+            !perBase.some(
+              (y) =>
+                y !== x &&
+                y.def !== '<ambiguous>' &&
+                basesOf.get(y.def)?.has(x.def) &&
+                (y.def === x.base || basesOf.get(y.def)?.has(x.base)) &&
+                definerBodyless.get(x.def) === true,
+            ),
+        );
+        const liveDefs = [...new Set(live.map((d) => d.def))];
+        if (liveDefs.length >= 2) {
+          const named = liveDefs.filter((x) => x !== '<ambiguous>');
+          this.diags.error(
+            cls,
+            'JETH430',
+            `contract '${cn}' must override function '${winner.name}': two or more base classes (${named.join(', ')}) define it with the same name and parameter types`,
           );
         }
       }
@@ -5303,9 +5416,12 @@ export class Analyzer {
       for (let i = 0; i < versions.length; i++) {
         const v = versions[i]!;
         const isMostDerived = i === 0;
-        // v overrides only a base declared in an ANCESTOR contract of v - never a mere sibling.
+        // v overrides only bases declared in ANCESTOR contracts of v - never a mere sibling, and NOT just
+        // the first. Each overridden base must be @virtual + signature-compatible (find-first collapse fix,
+        // mirroring the function resolver).
         const vBases = basesOf.get(v.definingContract!);
-        const baseBelow = versions.slice(i + 1).find((b) => vBases?.has(b.definingContract!));
+        const overriddenBases = versions.slice(i + 1).filter((b) => vBases?.has(b.definingContract!));
+        const baseBelow = overriddenBases[0];
         if (baseBelow) {
           if (!v.isOverride)
             this.diags.error(
@@ -5313,25 +5429,27 @@ export class Analyzer {
               'JETH374',
               `@modifier '${v.name}' in '${v.definingContract}' overrides a base @modifier but is missing @override`,
             );
-          if (!baseBelow.isVirtual)
-            this.diags.error(
-              v.node,
-              'JETH375',
-              `@modifier '${v.name}' overrides '${baseBelow.definingContract}.${baseBelow.name}', which is not @virtual`,
-            );
           if (!isMostDerived && !v.isVirtual)
             this.diags.error(
               v.node,
               'JETH376',
               `@modifier '${v.name}' in '${v.definingContract}' is overridden by a more-derived contract but is not @virtual`,
             );
-          // solc: "Override changes modifier signature" - the parameter types must match exactly.
-          if (sigKey(v) !== sigKey(baseBelow))
-            this.diags.error(
-              v.node,
-              'JETH377',
-              `override of @modifier '${v.name}' must keep the exact parameter signature of '${baseBelow.definingContract}.${baseBelow.name}'`,
-            );
+          for (const ob of overriddenBases) {
+            if (!ob.isVirtual)
+              this.diags.error(
+                v.node,
+                'JETH375',
+                `@modifier '${v.name}' overrides '${ob.definingContract}.${ob.name}', which is not @virtual`,
+              );
+            // solc: "Override changes modifier signature" - the parameter types must match exactly.
+            if (sigKey(v) !== sigKey(ob))
+              this.diags.error(
+                v.node,
+                'JETH377',
+                `override of @modifier '${v.name}' must keep the exact parameter signature of '${ob.definingContract}.${ob.name}'`,
+              );
+          }
         } else if (v.isOverride) {
           this.diags.error(
             v.node,
@@ -5341,36 +5459,87 @@ export class Analyzer {
         }
       }
 
-      // DIAMOND override-list completeness + membership (mirrors JETH381 / JETH415 for functions). The
-      // branch heads = for each DIRECT base of the winner's contract, the most-derived overridden contract
-      // reachable within that base's hierarchy. With 2+ heads the winner must name them all; every listed
-      // name must be exactly a head.
-      const overridden = [...new Set(versions.slice(1).map((v) => v.definingContract!))];
-      const winnerCls = this.classByName.get(winner.definingContract!);
-      const directBases = winnerCls ? heritageBases(winnerCls).map((h) => h.name) : [];
-      const definerWithin = (base: string): string | undefined => {
-        const cand = overridden.filter((x) => x === base || (basesOf.get(base)?.has(x) ?? false));
-        return cand.find((x) => !cand.some((y) => y !== x && basesOf.get(y)?.has(x)));
-      };
-      const heads = [...new Set(directBases.map(definerWithin).filter((x): x is string => x !== undefined))];
-      const list = winner.overrideList ?? [];
-      const headSet = new Set(heads);
-      const seen = new Set<string>();
-      const badName = list.find((n) => !headSet.has(n) || seen.has(n) || (seen.add(n), false));
-      if (badName !== undefined)
-        this.diags.error(
-          winner.node,
-          'JETH415',
-          `@modifier '${winner.name}' names '${badName}' in its @override list, which is not a directly-overridden base contract`,
-        );
-      if (heads.length >= 2) {
-        const missing = heads.filter((h) => !list.includes(h));
-        if (missing.length > 0)
+      // DIAMOND override-list completeness + membership (mirrors JETH381 / JETH415 for functions). P0-19:
+      // validated for EVERY redefining version (not just the winner) - an INTERMEDIATE @modifier with an
+      // incomplete/bogus @override list is rejected by solc even when re-overridden. Each version's list is
+      // checked against the branch heads reachable from ITS OWN definingContract.
+      const validateModList = (v: RawModifier, i: number) => {
+        const vBases = basesOf.get(v.definingContract!);
+        const overridden = [
+          ...new Set(
+            versions
+              .slice(i + 1)
+              .filter((b) => vBases?.has(b.definingContract!))
+              .map((b) => b.definingContract!),
+          ),
+        ];
+        const vCls = this.classByName.get(v.definingContract!);
+        const directBases = vCls ? heritageBases(vCls).map((h) => h.name) : [];
+        const definerWithin = (base: string): string | undefined => {
+          const cand = overridden.filter((x) => x === base || (basesOf.get(base)?.has(x) ?? false));
+          return cand.find((x) => !cand.some((y) => y !== x && basesOf.get(y)?.has(x)));
+        };
+        const heads = [...new Set(directBases.map(definerWithin).filter((x): x is string => x !== undefined))];
+        const list = v.overrideList ?? [];
+        const headSet = new Set(heads);
+        const seen = new Set<string>();
+        const badName = list.find((n) => !headSet.has(n) || seen.has(n) || (seen.add(n), false));
+        if (badName !== undefined)
           this.diags.error(
-            winner.node,
-            'JETH381',
-            `@modifier '${winner.name}' overrides more than one base contract; it must specify @override(${heads.join(', ')})`,
+            v.node,
+            'JETH415',
+            `@modifier '${v.name}' in '${v.definingContract}' names '${badName}' in its @override list, which is not a directly-overridden base contract`,
           );
+        if (heads.length >= 2) {
+          const missing = heads.filter((h) => !list.includes(h));
+          if (missing.length > 0)
+            this.diags.error(
+              v.node,
+              'JETH381',
+              `@modifier '${v.name}' in '${v.definingContract}' overrides more than one base contract; it must specify @override(${heads.join(', ')})`,
+            );
+        }
+      };
+      for (let i = 0; i < versions.length; i++) validateModList(versions[i]!, i);
+
+      // P0-17: MISSING "Derived contract must override" for a @modifier (solc: "Derived contract must
+      // override modifier \"m\". Two or more base classes define modifier with same name."). Mirrors the
+      // function-side rule: a contract that does NOT itself redeclare `m` yet inherits 2+ DISTINCT
+      // definitions along different direct-base paths must override it - reported at the FIRST such
+      // contract, abstract or concrete. A single delivered definition (a chain, or one branch inheriting
+      // the other's) is fine. Modifiers are keyed by name (no interface declares modifiers).
+      const definerContracts = new Set(versions.map((v) => v.definingContract!));
+      const deliveredVia = (cn: string): string | undefined => {
+        const cls = byClassName.get(cn);
+        if (!cls) return undefined;
+        if (definerContracts.has(cn)) return cn;
+        const sub = [
+          ...new Set(heritageBases(cls).map((h) => deliveredVia(h.name)).filter((x): x is string => x !== undefined)),
+        ];
+        const maximal = sub.filter((x) => !sub.some((y) => y !== x && basesOf.get(y)?.has(x)));
+        return maximal.length === 1 ? maximal[0] : maximal.length === 0 ? undefined : '<ambiguous>';
+      };
+      for (const cn of linOrder) {
+        if (definerContracts.has(cn)) continue;
+        const cls = byClassName.get(cn);
+        if (!cls || this.isInterfaceClass(cls)) continue;
+        // A @modifier is ALWAYS implemented (no bodyless form), so - unlike the function resolver - a base
+        // modifier that is ALSO a direct base alongside its overrider is NOT subsumed: two definitions reach
+        // cn and solc requires an override. Cross-base subsumption therefore never applies here; the linear
+        // chain is already collapsed within `deliveredVia`. Count the DISTINCT per-base deliveries directly.
+        const deliveries = [
+          ...new Set(
+            heritageBases(cls).map((h) => deliveredVia(h.name)).filter((x): x is string => x !== undefined),
+          ),
+        ];
+        if (deliveries.length >= 2) {
+          const named = deliveries.filter((x) => x !== '<ambiguous>');
+          this.diags.error(
+            cls,
+            'JETH430',
+            `contract '${cn}' must override @modifier '${winner.name}': two or more base classes (${named.join(', ')}) define it with the same name`,
+          );
+        }
       }
 
       // Register the most-derived declaration as the winner (the derived body wins - plain replacement).
@@ -9469,7 +9638,17 @@ export class Analyzer {
       (c) =>
         this.overloadApplicable(node, c.chain[c.nextIdx]!.rf) && this.overloadArgsMatch(node, c.chain[c.nextIdx]!.rf),
     );
-    const chosen = viable.length === 1 ? viable[0]! : candidates.length === 1 ? candidates[0]! : viable[0];
+    // P0-18: when the args fit 2+ overloaded super targets, the call is AMBIGUOUS - solc rejects
+    // ("Member \"f\" not unique after argument-dependent lookup"). Previously the resolver silently
+    // picked viable[0], both over-accepting a genuinely-ambiguous super.f(<untyped literal>) AND (once
+    // an escalating cast still fit two targets via literal-narrowing) miscompiling to the wrong overload.
+    // Emit the same JETH901 ambiguity the plain-call overload path emits. A SINGLE candidate is never
+    // ambiguous (the sole chain), so this only fires with 2+ overloaded super chains.
+    if (candidates.length >= 2 && viable.length >= 2) {
+      this.diags.error(node, 'JETH901', `call to 'super.${name}' is ambiguous (matches ${viable.length} base overloads)`);
+      return undefined;
+    }
+    const chosen = viable.length === 1 ? viable[0]! : candidates.length === 1 ? candidates[0]! : undefined;
     if (!chosen) {
       this.diags.error(node, 'JETH381', `super.${name}(...) does not match any base implementation's parameters`);
       return undefined;
