@@ -4868,7 +4868,7 @@ export class Analyzer {
     if (extraDec) {
       this.diags.error(
         member,
-        'JETH465',
+        'JETH466',
         `@constant '${name}' cannot also be @${extraDec} (only @external is allowed, synthesizing solc's public-constant getter; for any other exposure declare an explicit @view function)`,
       );
       return;

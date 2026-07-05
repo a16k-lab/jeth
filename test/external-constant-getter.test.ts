@@ -9,7 +9,7 @@
 //  - inherited base `@external @constant` enters the derived dispatcher (solc inherits the getter);
 //  - the getter is non-payable (msg.value reverts) exactly like solc's;
 //  - name collisions / redeclarations reject cleanly (solc: "Identifier already declared");
-//  - every OTHER exposure/mutability decorator on @constant is a clean JETH465 reject (never a
+//  - every OTHER exposure/mutability decorator on @constant is a clean JETH466 reject (never a
 //    silently-ignored decorator), including @override/@virtual which solc also rejects standalone.
 import { describe, it, expect } from 'vitest';
 import { Address } from '@ethereumjs/util';
@@ -162,10 +162,10 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
     expect(solcRejects(s3)).toBe(true);
   });
 
-  it('JETH465: every non-@external exposure/mutability decorator on @constant is a clean reject (never silently ignored)', () => {
+  it('JETH466: every non-@external exposure/mutability decorator on @constant is a clean reject (never silently ignored)', () => {
     for (const dec of ['public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'override', 'virtual']) {
       expect(codes(`@contract class C { @${dec} @constant K: u256 = 7n; @external @pure f(): u256 { return 1n; } }`), `@${dec}`).toContain(
-        'JETH465',
+        'JETH466',
       );
     }
     // and solc rejects the two standalone analogues that parse at all
