@@ -9844,29 +9844,16 @@ export class Analyzer {
             );
             return;
           }
-          // a struct built FROM a calldata struct param whose dynamic-array field has NON-value
-          // elements (T[][], string[], DynStruct[]) would need a recursive calldata-tail decode -
-          // a later step. A dynamic VALUE-element array field (u256[], ...) decodes via abiEncFromCd
-          // (per-element validation, byte-identical to solc's calldata->memory copy).
-          if (
-            e.kind === 'cdDynStructValue' &&
-            (declared as JethType & { kind: 'struct' }).fields.some(
-              (f) => f.type.kind === 'array' && f.type.length === undefined && !isStaticValueType(f.type.element),
-            )
-          ) {
-            this.diags.error(
-              decl.initializer,
-              'JETH200',
-              `constructing a memory struct with a dynamic-array field of non-value elements from a calldata struct parameter is not supported yet (use a constructor, a storage struct, or another struct local)`,
-            );
-            return;
-          }
           // W3-Y2c P1-9b: a struct with a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]) is NOW
-          // buildable from a STORAGE source (structValue / mapStorageValue / structArrayElem / placeRead)
-          // and a CALLDATA-ARRAY-ELEMENT source (cdStructArrayElem) too: buildDynStructFromStorage builds
-          // the field's B4 pointer-headed image via abiDecFromStorageToImage, and buildDynStructFromCalldata
-          // (Edge F) via abiDecFromCdToImage. isSupportedDynStructLocal still restricts the overall field set
-          // (any field kind neither loader can lay out keeps the shape a clean JETH200 reject upstream).
+          // buildable from a STORAGE source (structValue / mapStorageValue / structArrayElem / placeRead),
+          // a CALLDATA-ARRAY-ELEMENT source (cdStructArrayElem), AND the WHOLE-CALLDATA-PARAM bind
+          // (cdDynStructValue, `let m: S = p`): buildDynStructFromStorage builds the field's B4
+          // pointer-headed image via abiDecFromStorageToImage, and buildDynStructFromCalldata (the Edge-F
+          // leaf-array branch in buildDynStructFromCalldataBase) via abiDecFromCdToImage - a calldata->MEMORY
+          // DEEP COPY, byte-identical to solc, with the BIND-context oversized-length cap (Panic 0x41).
+          // isSupportedDynStructLocal still restricts the overall field set (any field kind neither loader
+          // can lay out - e.g. a DynStruct[] struct-element array - keeps the shape a clean JETH200 reject
+          // upstream at that gate, never reaching here).
           this.declareLocal(decl.name.text, declared);
           this.memDynStructLocals.set(decl.name.text, declared);
           out.push({ kind: 'localDecl', name: decl.name.text, type: declared, init: e });

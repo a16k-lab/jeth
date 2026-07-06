@@ -4,7 +4,8 @@
 // Byte-identical to solc 0.8.35. Construction from a constructor (typed array arg) and a struct-
 // returning call; reads p.f / p.f[j] / p.f.length; abi.encode / return; abi.decode round-trip
 // (well-formed + malformed revert); P[] of such a struct; element writes; storage-struct encode/return.
-// Deferred (clean reject, no miscompile): building a memory LOCAL from a storage/calldata struct source.
+// Building a memory LOCAL from a storage OR a whole calldata struct source is now lifted byte-identically
+// (see test/calldata-leaf-array-struct-bind.test.ts for the calldata-source coverage).
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';
@@ -171,13 +172,15 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
     await diff(J, S, ['setup()', 'cA()', 'cL()', 'cT(uint256)', 'cW()', 'rA()', 'rT()']);
   });
 
-  it('clean rejects (sound, no miscompile): deferred calldata whole-param local-binding + literal ctor', () => {
-    // building a memory LOCAL from a whole CALLDATA struct PARAM with a nested-leaf field stays a deferred
-    // CLEAN reject (that calldata-tuple -> B4-image whole-param transcode gate is unchanged); a STORAGE
-    // source is now lifted (asserted above).
+  it('lifted: calldata whole-param local-binding now compiles; literal-ctor stays a clean reject', () => {
+    // building a memory LOCAL from a whole CALLDATA struct PARAM with a nested-leaf field is NOW lifted
+    // (byte-identical calldata->memory deep copy via buildDynStructFromCalldataBase's Edge-F branch, the
+    // same builder the direct p.tags[i] reads use). Full byte-identical coverage (reads / OOB / malformed
+    // flavor / bytes[]/u256[][] leaves / mixed fields / storage + memory sources) lives in
+    // test/calldata-leaf-array-struct-bind.test.ts. Here we only assert it no longer clean-rejects.
     const T = '@struct class P { a: u256; tags: bytes[]; }\n';
-    expect(codes(T + '@contract class C { @external f(q: P): u256 { let p: P = q; return p.a; } }')).toContain('JETH200');
-    // an array LITERAL as the constructor arg rejects (JETH226), exactly as solc rejects it.
+    expect(codes(T + '@contract class C { @external f(q: P): u256 { let p: P = q; return p.a; } }')).toEqual([]);
+    // an array LITERAL as the constructor arg STILL rejects (JETH226), exactly as solc rejects it.
     expect(codes(T + '@contract class C { @external @pure f(): u256 { let p: P = P(1n, [bytes("x")]); return p.a; } }')).toContain('JETH226');
   });
 });
