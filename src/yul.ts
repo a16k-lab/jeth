@@ -1645,6 +1645,30 @@ ${indent(runtime, 6)}
             out.push(`return(${ptr}, ${size})`);
             break;
           }
+          // S5-B: `return o.xs` - a whole DYNAMIC-outer dyn-struct-ARRAY FIELD of a calldata dyn-struct
+          // param (xs: St[], St a codec-supported dyn-struct-leaf). The DIRECT return mirrors the already-
+          // matching two-step form `let ys: St[] = o.xs; return ys`: DEEP-COPY the field from its resolved
+          // calldata header into a fresh pointer-headed memory image (aggArgToMemPtr's cdDynArrayField
+          // branch -> cdFieldArrayHeader + abiDecFromCdToImage, Panic 0x41 cd->mem alloc cap), then ABI-
+          // encode that image with the SAME encoder the memArray-local return uses (encodeNestedMemReturn:
+          // [0x20] wrapper + abiEncFromMem). GATED to isAggregateLeafArray (the EXACT element-shape
+          // predicate the let-bound localDecl gate uses): admits St with value / bytes/string / dynamic
+          // value-array / static-struct-or-fixed-array fields, and REJECTS a NESTED-DYNAMIC-STRUCT-leaf
+          // (St{inner:In}) or a struct-element-array field (St{ps:P[]}) - exactly the shapes
+          // abiDecFromCdToImage cannot build and where the let-bound path itself rejects (JETH200/JETH072).
+          // An unsupported element falls through to a clean JETH900 reject (byte-parallel to the let form),
+          // never truncated/dangling bytes. Does NOT touch abi.encode(o.xs) (a separate path, already MATCHes).
+          if (
+            s.value.kind === 'arrayValue' &&
+            s.value.arr.base.kind === 'cdDynArrayField' &&
+            isDynamicType(s.value.type) &&
+            isAggregateLeafArray(s.value.type)
+          ) {
+            const mp = this.aggArgToMemPtr(s.value, ctx, out);
+            const { ptr, size } = this.encodeNestedMemReturn(s.value.type, mp, ctx, out);
+            out.push(`return(${ptr}, ${size})`);
+            break;
+          }
           // W5C: `return s.xs` - a whole FIXED-outer dynamic-element FIELD of a calldata dyn-struct
           // param (xs: Arr<string,N>). Re-encode directly from the field's calldata tail (the N-word
           // offset table) via abiEncFromCd's fixed-of-dynamic branch, with the [0x20] top-level
