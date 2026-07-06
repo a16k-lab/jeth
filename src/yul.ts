@@ -4569,7 +4569,11 @@ ${indent(runtime, 6)}
           return isStaticValueType(el) || isBytesLike(el) || el.kind === 'array';
         })
       ) {
-        const headPtr = this.buildDynStructFromCalldata(cdStruct, value, ctx, out);
+        // tupleSrc is the ENCODE-side value source (abi.encode / emit / error / topic; a RETURN of a
+        // whole cd param rides echoParam, and `return ds[i]` rides returnCdArrayElem - neither reaches
+        // here), so materialize with the RE-ENCODE cap flavor: an oversized inner length EMPTY-reverts
+        // (emptyCap = true), byte-identical to solc re-encoding a malformed calldata aggregate.
+        const headPtr = this.buildDynStructFromCalldata(cdStruct, value, ctx, out, true);
         return { kind: 'mem', headPtr };
       }
       const bound = ctx.cdDynStructs.get(value.param);
@@ -4622,7 +4626,10 @@ ${indent(runtime, 6)}
     // never a dynamic STRUCT (its element is an array), so only cdStructArrayElem reaches here.
     if (value.kind === 'cdStructArrayElem') {
       const struct = value.type as JethType & { kind: 'struct' };
-      const headPtr = this.buildDynStructFromCalldata(struct, value, ctx, out);
+      // ENCODE side (abi.encode(ds[i]) / emit / error / topic; a RETURN rides returnCdArrayElem):
+      // materialize with the RE-ENCODE cap flavor - an oversized inner length EMPTY-reverts
+      // (emptyCap = true), matching solc's abi.encode calldata->memory decode of a malformed element.
+      const headPtr = this.buildDynStructFromCalldata(struct, value, ctx, out, true);
       return { kind: 'mem', headPtr };
     }
     // a whole NESTED DYNAMIC struct FIELD of a dyn-struct memory local (v.t single-level, v.t.u multi-level):
@@ -4697,15 +4704,20 @@ ${indent(runtime, 6)}
       const ref = nextRef();
       const len = this.fresh();
       out.push(`let ${len} := ${this.dynLen(ref)}`);
-      // DECODE-TO-MEMORY ECHO alloc bound (rule 3): cap the byte length at 2^64-1 first
-      // (Panic 0x41, so roundup32 cannot wrap), then check the new free pointer crossing
-      // 2^64-1 (or wrapping) -> Panic(0x41); a calldata source THEN validates the payload
-      // lies within calldatasize (else EMPTY). All precede the store/copy.
-      out.push(`if gt(${len}, 0xffffffffffffffff) { ${this.panic()}(0x41) }`);
+      // OVERSIZED-LENGTH cap flavor is CONTEXT-split by the source (probe-verified vs solc 0.8.35):
+      //   - a CALLDATA source is the abi.encode / emit / error / topic RE-ENCODE of a malformed
+      //     calldata bytes/string FIELD -> EMPTY revert (a whole-cd-param RETURN rides echoParam, so a
+      //     calldata source here is ALWAYS a re-encode context, never a return-echo).
+      //   - a MEMORY source is an in-memory dyn-struct image being encoded -> solc's alloc guard
+      //     Panics 0x41 (an oversized memory-resident length; unchanged).
+      // Then the new free pointer crossing 2^64-1 (or wrapping) uses the SAME flavor, and a calldata
+      // source ALSO validates the payload lies within calldatasize (else EMPTY - a truncated source).
+      const bytesCap = ref.src === 'calldata' ? `revert(0, 0)` : `${this.panic()}(0x41)`;
+      out.push(`if gt(${len}, 0xffffffffffffffff) { ${bytesCap} }`);
       const padded = `and(add(${len}, 0x1f), not(0x1f))`;
       const nc = this.fresh();
       out.push(`let ${nc} := add(${cursor}, add(0x20, ${padded}))`);
-      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${cursor})) { ${this.panic()}(0x41) }`);
+      out.push(`if or(gt(${nc}, 0xffffffffffffffff), lt(${nc}, ${cursor})) { ${bytesCap} }`);
       if (ref.src === 'calldata') {
         out.push(`if gt(add(${ref.dataPtr}, ${len}), calldatasize()) { revert(0, 0) }`);
         out.push(`mstore(${cursor}, ${len})`);
@@ -6779,6 +6791,17 @@ ${indent(runtime, 6)}
     init: Expr,
     ctx: LowerCtx,
     out: string[],
+    // CONTEXT SPLIT (probe-verified vs solc 0.8.35): the oversized-inner-LENGTH cap of a dynamic field
+    // (string/bytes length, dynamic value-array count, leaf-array outer/inner count) is FLAVOR-selected
+    // by the consumer of this materialized image:
+    //   - the BIND context (`let m: R = p` / `let d: D = ds[i]`, a calldata->MEMORY DEEP COPY) hits
+    //     solc's memory ALLOCATION guard -> Panic 0x41 (emptyCap = FALSE, the default).
+    //   - the abi.encode / emit / error RE-ENCODE context (tupleSrc materializes an array-field struct
+    //     into this image, then re-encodes it) is an ABI-decode-failure flavor -> EMPTY revert
+    //     (emptyCap = TRUE), byte-identical to solc re-encoding a malformed calldata aggregate.
+    // A TRUNCATED / OOB source (offset or payload past calldatasize) ALWAYS empty-reverts in BOTH
+    // flavors (the payload-fits guards keep revert(0, 0)), matching solc.
+    emptyCap = false,
   ): string {
     // Resolve the calldata tuple-start DIRECTLY (do NOT route through tupleSrc: tupleSrc now materializes
     // an array-field calldata struct to memory by calling THIS function, which would recurse). A whole
@@ -6794,6 +6817,25 @@ ${indent(runtime, 6)}
     } else {
       throw new UnsupportedError(`buildDynStructFromCalldata: unsupported calldata source '${init.kind}'`);
     }
+    return this.buildDynStructFromCalldataBase(struct, cdBase, emptyCap, ctx, out);
+  }
+
+  /** Decode a DYNAMIC-field struct from a CALLDATA tuple whose tuple-start is `cdBase` into the
+   *  POINTER-HEADED image a memDynStruct local consumes. Split out of buildDynStructFromCalldata (the
+   *  ctx-aware encodeStaticInline field loop) so a NESTED-DYNAMIC-STRUCT field can recurse on its
+   *  resolved sub-tuple base (the calldata twin of buildDynStructFromMemBlob's nested-dyn-struct
+   *  branch). Distinct from the ctx-free buildDynStructFromCdBase (the abiDecFromCdToImage twin, which
+   *  validates leaves inline): this one preserves buildDynStructFromCalldata's exact well-formed bytes.
+   *  `emptyCap` is the context-split cap flavor (BIND -> Panic 0x41, RE-ENCODE -> EMPTY revert); it
+   *  propagates unchanged into the recursion. */
+  private buildDynStructFromCalldataBase(
+    struct: JethType & { kind: 'struct' },
+    cdBase: string,
+    emptyCap: boolean,
+    ctx: LowerCtx,
+    out: string[],
+  ): string {
+    const lenCap = emptyCap ? `revert(0, 0)` : `${this.panic()}(0x41)`;
     const src: TupleSrc = { kind: 'cd', base: cdBase };
     const headWords = tupleHeadWords(struct);
     const ptr = this.fresh();
@@ -6805,11 +6847,14 @@ ${indent(runtime, 6)}
       if (isBytesLike(f.type)) {
         const fref = this.dynFieldRef(f, src, i, hw, ctx, out);
         // a calldata string/bytes field materialized into a fresh image (store/local, NOT the echo
-        // path): the echo decoder defers the length-cap + payload-fits checks, so add them here. solc
-        // EMPTY-reverts when a field's declared length runs past calldatasize; without this JETH would
-        // calldatacopy past the end (silently zero-padding) and store a garbage-length string.
+        // path): the echo decoder defers the length-cap + payload-fits checks, so add them here. The
+        // oversized-LENGTH cap (lenCap) is context-split: the BIND context (`let m: R = p`, a
+        // calldata->MEMORY deep copy) hits solc's memory ALLOCATION guard -> Panic 0x41; the
+        // abi.encode / emit / error RE-ENCODE context -> EMPTY revert (probe-verified vs 0.8.35). The
+        // payload-fits check ALWAYS stays an EMPTY revert (a TRUNCATED / OOB source runs past
+        // calldatasize; solc empty-reverts there regardless of the alloc-cap flavor).
         if (fref.src === 'calldata') {
-          out.push(`if gt(${fref.len}, 0xffffffffffffffff) { revert(0, 0) }`);
+          out.push(`if gt(${fref.len}, 0xffffffffffffffff) { ${lenCap} }`);
           out.push(`if gt(add(${fref.dataPtr}, ${fref.len}), calldatasize()) { revert(0, 0) }`);
         }
         const { mp } = this.toMemory(fref, out);
@@ -6828,18 +6873,22 @@ ${indent(runtime, 6)}
         const se = this.fresh();
         out.push(`let ${se} := add(${src.base}, ${so})`);
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), calldatasize()) { revert(0, 0) }`);
-        // cap the declared element count and require the whole [len][elems] payload to lie within
-        // calldata BEFORE allocating, so an absurd length EMPTY-reverts (like solc) rather than
-        // Panic(0x41) on an oversized memory allocation inside abiEncFromCd.
+        // cap the declared element count at 2^64-1 with the context-split flavor (lenCap): the BIND
+        // context (calldata->MEMORY deep copy) hits solc's memory allocation guard -> Panic 0x41
+        // (probe-verified vs 0.8.35 - a huge inner u256[] count under a bound dyn-struct param Panics
+        // 0x41, NOT empty), the abi.encode / emit / error RE-ENCODE context -> EMPTY revert. THEN
+        // require the whole [len][elems] payload to lie within calldata (ALWAYS an EMPTY revert for a
+        // TRUNCATED / OOB source, like solc). The RE-ENCODE consumer also passes capEmptyRevert into
+        // abiEncFromCd below so its own internal caps match.
         const alen = this.fresh();
         out.push(`let ${alen} := calldataload(${se})`);
-        out.push(`if gt(${alen}, 0xffffffffffffffff) { revert(0, 0) }`);
+        out.push(`if gt(${alen}, 0xffffffffffffffff) { ${lenCap} }`);
         out.push(
           `if gt(add(add(${se}, 0x20), mul(${alen}, ${abiHeadWords(f.type.element) * 32})), calldatasize()) { revert(0, 0) }`,
         );
         const dst = this.fresh();
         out.push(`let ${dst} := mload(0x40)`);
-        const size = this.abiEncFromCd(f.type, se, dst, true, out);
+        const size = this.abiEncFromCd(f.type, se, dst, true, out, emptyCap);
         out.push(`mstore(0x40, add(${dst}, ${size}))`);
         out.push(`mstore(${at}, ${dst})`);
         hw += 1;
@@ -6848,8 +6897,13 @@ ${indent(runtime, 6)}
         // caught above). Head word = offset (relative to the tuple start) to the field tail; decode the
         // tail into a fresh B4 pointer-headed image via abiDecFromCdToImage and store ITS absolute pointer
         // (not a relative-offset ABI block) in the head word - the layout the read/encode paths consume.
-        // Mirrors buildDynStructFromMemBlob's Cat-C leaf-array branch but from a CALLDATA source; same
-        // OOB/cap revert semantics as solc's calldata tuple-member decode.
+        // Mirrors buildDynStructFromMemBlob's Cat-C leaf-array branch but from a CALLDATA source. The
+        // oversized-LENGTH cap (lenCap) is context-split: the BIND context (calldata->MEMORY deep copy)
+        // hits solc's memory allocation guard -> Panic 0x41 (probe-verified vs 0.8.35 - a huge OUTER
+        // array count OR a huge inner element length under a bound dyn-struct param Panics 0x41, NOT
+        // empty), the abi.encode / emit / error RE-ENCODE context -> EMPTY revert. A TRUNCATED / OOB
+        // offset ALWAYS empty-reverts (the payload-fits checks keep revert(0, 0) inside
+        // abiDecFromCdToImage regardless of the cap flavor).
         if (src.kind !== 'cd')
           throw new UnsupportedError('calldata leaf-array struct field decode needs a calldata source');
         const so = this.fresh();
@@ -6859,7 +6913,7 @@ ${indent(runtime, 6)}
         out.push(`let ${se} := add(${src.base}, ${so})`);
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), calldatasize()) { revert(0, 0) }`);
         const ip = this.fresh();
-        out.push(`let ${ip} := ${this.abiDecFromCdToImage(f.type, se, out)}`);
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(f.type, se, out, lenCap)}`);
         out.push(`mstore(${at}, ${ip})`);
         hw += 1;
       } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynamicType(f.type)) {
@@ -6867,9 +6921,10 @@ ${indent(runtime, 6)}
         // the tuple start) to the field's N-word offset table; decode the tail into a fresh N-pointer
         // fixed image via abiDecFromCdToImage's fixed-of-dynamic branch and store ITS absolute pointer.
         // Mirrors the Edge-F leaf-array branch above (OOB offset / truncated table -> EMPTY revert),
-        // with the Panic-0x41 cap for an oversized inner LENGTH: this is a calldata->MEMORY deep copy,
-        // and solc's allocation guard Panics there (probe-verified vs 0.8.35 for a huge string length
-        // and a huge inner u256[] count under a fixed-outer field).
+        // with the context-split cap (lenCap) for an oversized inner LENGTH: the BIND context is a
+        // calldata->MEMORY deep copy and solc's allocation guard Panics 0x41 there (probe-verified vs
+        // 0.8.35 for a huge string length and a huge inner u256[] count under a fixed-outer field); the
+        // abi.encode / emit / error RE-ENCODE context reverts EMPTY.
         if (src.kind !== 'cd')
           throw new UnsupportedError('calldata fixed-outer-array struct field decode needs a calldata source');
         const so = this.fresh();
@@ -6879,7 +6934,28 @@ ${indent(runtime, 6)}
         out.push(`let ${se} := add(${src.base}, ${so})`);
         out.push(`if gt(add(${se}, ${f.type.length * 32}), calldatasize()) { revert(0, 0) }`);
         const ip = this.fresh();
-        out.push(`let ${ip} := ${this.abiDecFromCdToImage(f.type, se, out, `${this.panic()}(0x41)`)}`);
+        out.push(`let ${ip} := ${this.abiDecFromCdToImage(f.type, se, out, lenCap)}`);
+        out.push(`mstore(${at}, ${ip})`);
+        hw += 1;
+      } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {
+        // a NESTED DYNAMIC STRUCT field (its own dynamic member makes it pointer-headed): head word =
+        // offset (relative to the tuple start) to the field's sub-tuple. Bound it against calldatasize
+        // exactly like the sibling dynamic branches (unsigned offset cap + head-fits check), then recurse
+        // to build the nested pointer-headed image and store its ABSOLUTE pointer in the head word - the
+        // layout memDynField / the encoders consume (the calldata twin of buildDynStructFromMemBlob's
+        // nested-dyn-struct branch). Without this branch the static-value else-branch below would feed the
+        // offset word to encodeStaticInline, which either miscompiles or throws JETH900. tupleHeadWords
+        // counts it as 1. `emptyCap` propagates unchanged (a huge inner length inside the nested struct
+        // Panics 0x41 in the BIND context / EMPTY-reverts in the RE-ENCODE context, like a top-level one).
+        if (src.kind !== 'cd')
+          throw new UnsupportedError('calldata nested-dyn-struct field decode needs a calldata source');
+        const so = this.fresh();
+        out.push(`let ${so} := calldataload(${hw === 0 ? src.base : `add(${src.base}, ${hw * 32})`})`);
+        out.push(`if gt(${so}, 0xffffffffffffffff) { revert(0, 0) }`);
+        const se = this.fresh();
+        out.push(`let ${se} := add(${src.base}, ${so})`);
+        out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), calldatasize()) { revert(0, 0) }`);
+        const ip = this.buildDynStructFromCalldataBase(f.type, se, emptyCap, ctx, out);
         out.push(`mstore(${at}, ${ip})`);
         hw += 1;
       } else {
