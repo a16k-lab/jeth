@@ -96,6 +96,29 @@ function isInlineValueWordElem(e: JethType): boolean {
   return isValueWordAggregate(e) && !isPointerHeadedStaticElem(e);
 }
 
+/** R3: does a struct's field tree contain a dynamic ARRAY member, either directly or reachable THROUGH a
+ *  nested struct field (at any depth)? A direct calldata-source encode of such a shape has no calldata
+ *  array encoder (arrayFieldRef / encodeDynFieldInto throw on a 'cd' source when a nested struct field's
+ *  own member is an array), so the caller must MATERIALIZE the whole calldata struct to a pointer-headed
+ *  memory image first (buildDynStructFromCalldata, the SAME path a `let m: S = p` bind uses) and re-encode
+ *  from a 'mem' source. Excludes a struct that only carries scalar / bytes / string leaves or nested
+ *  structs of the same (those keep the direct calldata fast path). Only dynamic (length-undefined) arrays
+ *  count: a FIXED value array Arr<u256,N> is a static inline leaf on the calldata path. A fixed-outer
+ *  dynamic-element array (Arr<string,N>) is caught here (its outer length is fixed but it is a dynamic
+ *  member the direct cd path also cannot encode). */
+function structTreeHasArrayMember(struct: JethType & { kind: 'struct' }): boolean {
+  return struct.fields.some((f) => {
+    const t = f.type;
+    if (t.kind === 'array') {
+      // a dynamic array (length undefined) OR a fixed-outer array whose element is itself dynamic
+      // (Arr<string,N>) is a member the direct calldata encode path cannot handle.
+      return t.length === undefined || isDynamicType(t);
+    }
+    if (t.kind === 'struct') return structTreeHasArrayMember(t);
+    return false;
+  });
+}
+
 // Phase 6 external-call scoped bindings (this.ok / this.data inside a success condition). These keys
 // are bound in the LowerCtx scope while a check is lowered; the leading '#' cannot collide with a
 // user identifier. callOk resolves to the success-bool register; callData to the returndata pointer.
@@ -4562,13 +4585,23 @@ ${indent(runtime, 6)}
       // byte-identical, reusing the proven mem-source path. A struct with only value/bytes/string fields
       // keeps the direct calldata fast path below (arrFields.length === 0).
       const arrFields = cdStruct.fields.filter((f) => f.type.kind === 'array' && f.type.length === undefined);
-      if (
+      const topLevelArrayAdmitted =
         arrFields.length > 0 &&
         arrFields.every((f) => {
           const el = (f.type as JethType & { kind: 'array' }).element;
           return isStaticValueType(el) || isBytesLike(el) || el.kind === 'array';
-        })
-      ) {
+        });
+      // R3: a NESTED struct field whose own subtree carries an array member (S{a; t:T{u256[]; n}}) also
+      // has no direct calldata array encoder - the nested struct field recurses into encodeTupleInto with
+      // a 'cd' source, and T's array member then hits arrayFieldRef's `cd` branch (a JETH900 ICE). Route
+      // it through the SAME materialize-then-encode path: buildDynStructFromCalldata builds the whole
+      // pointer-headed image (its nested-dyn-struct branch recurses and decodes the inner array member),
+      // then we encode from a 'mem' source (the proven BIND codec). Detected via structTreeHasArrayMember;
+      // topLevelArrayAdmitted already covers the top-level value/leaf/nested-array-field cases.
+      const nestedArrayMember = cdStruct.fields.some(
+        (f) => f.type.kind === 'struct' && structTreeHasArrayMember(f.type),
+      );
+      if (topLevelArrayAdmitted || nestedArrayMember) {
         // tupleSrc is the ENCODE-side value source (abi.encode / emit / error / topic; a RETURN of a
         // whole cd param rides echoParam, and `return ds[i]` rides returnCdArrayElem - neither reaches
         // here), so materialize with the RE-ENCODE cap flavor: an oversized inner length EMPTY-reverts
