@@ -598,6 +598,29 @@ export function isDynStructFixedLeafArray(t: JethType): boolean {
   return false;
 }
 
+/** Lift #S: a DYNAMIC-outer struct-ELEMENT array field of a memory dyn-struct local (`Poly{id; pts:Pt[]}`,
+ *  `Order{id; lines:Line[]}`). Its ONE head word holds an absolute pointer to the array image
+ *  [len][per-element block]: a STATIC-struct element is stored inline (abiHeadWords words/element, NO
+ *  offset table); a DYNAMIC-struct element is pointer-headed (one absolute-pointer word/element, each -> a
+ *  per-element dyn-struct image). This is the DYNAMIC-outer sibling of isDynStructFixedLeafArray (fixed
+ *  Arr<In,N>): the array image carries a [len] header instead of a fixed N-pointer block. The SAME image a
+ *  BARE `Pt[]` / `Line[]` memory local already builds (buildNestedMemArrayLit) and reads/encodes
+ *  (resolveMemDynStructArrayField / abiEncFromMem's dynamic-array branch); the gap this lifts is PURELY the
+ *  outer dyn-struct admitting such a field. TWO SEPARABLE disjuncts (either can be gated off without the
+ *  other): (A) a STATIC-struct element (always flat-layoutable inline) OR (B) a DYNAMIC-struct element that
+ *  is itself isDynStructLeaf (recurse). A VALUE-element dyn array (u256[]) is the 3rd clause elsewhere, a
+ *  bytes/string leaf array (bytes[]/string[]) is isDynStructLeafArrayField, a FIXED outer (Arr<Pt,N>) is
+ *  isDynStructFixedLeafArray - none is matched here. Kept byte-parallel with Analyzer.isSupportedDynStructLocal. */
+export function isDynStructElemArrayField(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length !== undefined) return false; // DYNAMIC outer only
+  const e = t.element;
+  if (e.kind !== 'struct') return false;
+  // (A) static-struct element: always flat-layoutable (each element is abiHeadWords inline ABI words).
+  if (isStaticType(e)) return true;
+  // (B) dynamic-struct element: pointer-headed per element, each -> a supported dyn-struct-leaf image.
+  return isDynStructLeaf(e);
+}
+
 /** Cat C: a dynamic-field struct FIELD that is a NESTED-DYNAMIC-LEAF array - `bytes[]`, `string[]`,
  *  or a `T[][]` (nested VALUE array bearing a dynamic outer level: u256[][], u256[][][], ...). Its
  *  pointer-headed memory image is the SAME B4 image a standalone such array uses, so the dyn-struct

@@ -39,6 +39,7 @@ import {
   isDynBytesFixedLeafArray,
   isDynLeafFixedArray,
   isDynStructFixedLeafArray,
+  isDynStructElemArrayField,
   isStaticStructAnyLeafArray,
   isDynStructLeaf,
   isDynStructLeafArrayField,
@@ -13252,6 +13253,18 @@ export class Analyzer {
         // aggArgToMemPtr / memArrayExpr(memFixedLen) machinery as the isDynLeafFixedArray sibling. Kept
         // byte-parallel with types.isDynStructLeaf.
         isDynStructFixedLeafArray(f.type) ||
+        // Lift #S: a DYNAMIC-outer struct-ELEMENT array field (Pt[]/Line[], isDynStructElemArrayField): ONE
+        // head word holding an absolute pointer to the array image [len][per-element block] - the SAME
+        // [len]-headed image a BARE Pt[]/Line[] memory local already builds (buildNestedMemArrayLit, via
+        // allocDynStructToMem's dynamic-array catch-all -> nestedMemImagePtr) and reads
+        // (resolveMemDynStructArrayField). TWO SEPARABLE disjuncts inside the predicate: (A) a STATIC-struct
+        // element (flat inline per element) OR (B) a DYNAMIC-struct element (isDynStructLeaf, pointer-headed
+        // per element). The whole-struct encode routes through abiEncFromMem (arrayFieldRef's mem branch
+        // materializes the field image's self-contained ABI tail); the whole-field encode/return
+        // (abi.encode(o.lines) / return o.lines) resolves o.lines to a memArrayExpr and rides the standalone
+        // array encoder. Kept byte-parallel with types.isDynStructElemArrayField. A dynamic VALUE-element
+        // array (u256[]) is the 3rd clause above; a bytes[]/string[] leaf is isDynStructLeafArrayField.
+        isDynStructElemArrayField(f.type) ||
         // B(1): a NESTED STATIC AGGREGATE field (a nested static struct, or a static fixed array Arr<T,N>)
         // is stored INLINE as abiHeadWords ABI-flattened head words (the tuple-head layout), exactly like
         // solc; the static-leaf codec (encodeStaticInline / abiDecFromMem / buildDynStructFromStorage) and

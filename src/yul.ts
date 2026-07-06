@@ -39,6 +39,7 @@ import {
   isDynBytesFixedLeafArray,
   isDynLeafFixedArray,
   isDynStructFixedLeafArray,
+  isDynStructElemArrayField,
   isDynStructLeafArrayField,
   isDynLeafTopicArray,
   isImplicitWiden,
@@ -4801,23 +4802,26 @@ ${indent(runtime, 6)}
     }
     if (f.type.kind === 'array' && f.type.length === undefined) {
       const ref = nextRef();
-      // Cat C: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]). The materialized memory image
-      // is the B4 pointer-headed image (NOT a self-contained ABI blob), so transcode it to the canonical
-      // ABI tail (relative offsets) at the cursor via abiEncFromMem - the SAME encoder a standalone such
-      // array uses. A verbatim mcopy would copy absolute pointers and corrupt the encoding. NOTE: this is
-      // ONLY the nested-leaf case (isDynStructLeafArrayField); a struct-element array field (Q[]) keeps the
-      // verbatim-copy path below, whose materialized image IS already a self-contained ABI tail blob.
-      if (ref.src === 'memory' && isDynStructLeafArrayField(f.type)) {
+      // Cat C: a NESTED-DYNAMIC-LEAF array field (bytes[]/string[]/T[][]), OR Lift #S: a DYNAMIC-outer
+      // struct-ELEMENT array field (Pt[]/Line[]) resolved from a MEMORY dyn-struct image (no tailBytes -
+      // arrayFieldRef's mem branch queues the BARE image pointer). The materialized memory image is the
+      // B4 / [len]-headed pointer-headed image (NOT a self-contained ABI blob), so transcode it to the
+      // canonical ABI tail (relative offsets) at the cursor via abiEncFromMem - the SAME encoder a
+      // standalone such array uses (its dynamic-array branch emits [len] + inline static-struct blocks, or
+      // an offset table + dynamic-struct tails). A verbatim mcopy would copy absolute element pointers and
+      // corrupt the encoding. The `new`-source struct-element path below (which pre-materializes a
+      // self-contained ABI tail blob via materializeArrayArg, tailBytes set) still rides the verbatim copy.
+      if (ref.src === 'memory' && !ref.tailBytes && (isDynStructLeafArrayField(f.type) || isDynStructElemArrayField(f.type))) {
         const sz = this.fresh();
         out.push(`let ${sz} := ${this.abiEncFromMem(f.type, ref.ptr, cursor, ctx, out)}`);
         const nc = this.fresh();
         out.push(`let ${nc} := add(${cursor}, ${sz})`);
         return nc;
       }
-      // A STRUCT-element array field: the materialized memory image IS the full ABI tail blob
-      // [len][offset-table?][element payloads], a self-contained, position-independent encoding.
-      // Copy it verbatim at the cursor (relative offsets stay valid after the move); the new cursor
-      // advances by the full image byte size.
+      // A STRUCT-element array field (from a `new`/constructor source): the materialized memory image IS
+      // the full ABI tail blob [len][offset-table?][element payloads], a self-contained, position-
+      // independent encoding. Copy it verbatim at the cursor (relative offsets stay valid after the
+      // move); the new cursor advances by the full image byte size.
       if (ref.src === 'memory' && ref.tailBytes) {
         const nc = this.fresh();
         out.push(`let ${nc} := add(${cursor}, ${ref.tailBytes})`);
@@ -4930,10 +4934,13 @@ ${indent(runtime, 6)}
       return { src: 'memory', ptr: this.aggArgToMemPtr(src.args[fieldIdx]!, ctx, out) };
     }
     if (src.kind === 'mem') {
-      if (elemIsStruct)
-        throw new UnsupportedError(
-          'encoding a struct-element array field from a memory dynamic struct is not supported yet',
-        );
+      // Lift #S: a DYNAMIC-outer struct-ELEMENT array field (Pt[]/Line[]) of a memory dyn-struct: the head
+      // word holds the array image pointer ([len][per-element block]). Queue the BARE image pointer (a
+      // single mload, NO allocation - safe in an alloc-forbidden pre-pass context too); encodeDynFieldInto
+      // transcodes it IN PLACE at the cursor via abiEncFromMem (its dynamic-array branch emits [len] +
+      // inline static-struct blocks or an offset table + dynamic-struct tails), the SAME encoder a
+      // standalone Pt[]/Line[] uses - byte-identical, NO tailBytes (an in-place transcode, not a verbatim
+      // tail copy). A verbatim mcopy would copy absolute element-image pointers and corrupt the encoding.
       const at = headWord === 0 ? src.headPtr : `add(${src.headPtr}, ${headWord * 32})`;
       const ptr = this.fresh();
       out.push(`let ${ptr} := mload(${at})`);
