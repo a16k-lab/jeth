@@ -11034,10 +11034,15 @@ ${indent(runtime, 6)}
     const codecSourced =
       (isNestedValueArray(a.type) && isDynamicType(a.type)) ||
       isAggregateLeafArray(a.type) ||
+      isDynBytesFixedLeafArray(a.type) || // Arr<string,N>/Arr<bytes,N> field read: a memArrayExpr base wrapping the head-word LOAD of the pointer-headed field image (memFixedLen=N)
       (isStaticStructAnyLeafArray(a.type) && isDynamicType(a.type));
     // a memory-image nested/aggregate-leaf array: image pointer at position (a memArray local
     // ALIASES; a literal builds its pointer-headed image now, element refs captured as pointers),
-    // abiEncFromMem transcode late (reads through the pointers post-sibling).
+    // abiEncFromMem transcode late (reads through the pointers post-sibling). A fixed-outer
+    // bytes/string-leaf field read (isDynBytesFixedLeafArray) rides the SAME nestedMemImagePtr +
+    // abiEncFromMem encoder the return path and the aliased-local form already use byte-identically -
+    // its memArrayExpr base is the field's N-pointer image, NOT a [len][elems] value array (routing it
+    // through the value-array memArrayExpr branch below double-derefs the pointer -> the 0x1840 blob).
     if ((codecSourced && memSourced) || this.isMemFixedDynLeafArg(a)) {
       const img = this.nestedMemImagePtr(a, ctx, out);
       return (o) => this.abiEncFromMemBlob(a.type, img, ctx, o);
