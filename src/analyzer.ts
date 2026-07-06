@@ -10014,6 +10014,18 @@ export class Analyzer {
       // solc. Gated to a FIXED outer only: a dynamic-outer nested-value alias (u256[][]) rides a different
       // (memArray) lowering not yet wired here, so it stays a clean JETH200 reject.
       const fromMemAggAlias = e.kind === 'memAggregate' && declared.length !== undefined;
+      // W5C-mem (value-leaf twin): mem-to-mem ALIAS of a whole FIXED-outer nested-value FIELD of a MEMORY
+      // dyn-struct (let ys: Arr<u256[],N> = d.g, d a memory-built local / internal memory param / nested
+      // sub-struct field v.t.g / P[]-element field xs[i].g). The field read resolves to an arrayValue with a
+      // memArrayExpr base wrapping the head-word LOAD of the field image pointer; the yul localDecl branch
+      // for a FIXED-outer nested-value memAggregate (isNestedValueWordArray && isDynamicType) ALIASES it via
+      // aggArgToMemPtr (returns the pointer verbatim), so ys points at d.g's image - a memory reference,
+      // byte-identical to solc's `uint256[][N] memory ys = d.g` (mutations show both ways). This is the same
+      // field image pointer the working direct-read d.g[i][j] / whole-return `return d.g` paths use. Gated to
+      // a FIXED outer: a dynamic-outer field alias (u256[][]) rides a memArray lowering not wired here, so it
+      // stays a clean JETH200 reject (mirrors the fromMemAggAlias fixed-outer gate).
+      const fromMemFieldRead =
+        e.kind === 'arrayValue' && e.arr.base.kind === 'memArrayExpr' && declared.length !== undefined;
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -10021,7 +10033,8 @@ export class Analyzer {
         !fromCdArray &&
         !fromStorageArray &&
         !fromCdField &&
-        !fromMemAggAlias
+        !fromMemAggAlias &&
+        !fromMemFieldRead
       ) {
         this.diags.error(
           decl.initializer,

@@ -1817,6 +1817,14 @@ ${indent(runtime, 6)}
             // W5C: a FIXED-outer dynamic-element FIELD of a calldata dyn-struct (let t: Arr<string,2>
             // = p.xs) DEEP-COPIES via the same aggArgToMemPtr route (cdFieldArrayHeader + table-fits +
             // abiDecFromCdToImage's fixed-of-dynamic branch, Panic 0x41 alloc cap).
+            // W5C-mem: a FIXED-outer dynamic-element FIELD of a MEMORY dyn-struct (let ys: Arr<string,N>
+            // = d.tags, d a memory-built local / internal memory param / nested sub-struct field
+            // v.t.tags / P[]-element field xs[i].tags) resolves to an arrayValue with a memArrayExpr
+            // base wrapping the head-word LOAD of the field image pointer. aggArgToMemPtr ALIASES it
+            // (returns lowerExpr(base.expr) = that pointer verbatim), so ys points at d.tags's image -
+            // a memory-to-memory reference, byte-identical to solc's `string[N] memory ys = d.tags`
+            // (mutating ys[i] writes through to d.tags[i] and vice versa). This is the SAME field
+            // image pointer the working `return d.tags` / `abi.encode(d.tags)` / internal-arg paths use.
             else if (
               (s.init.kind === 'arrayValue' &&
                 (s.init.arr.base.kind === 'fixedArray' ||
@@ -1824,7 +1832,8 @@ ${indent(runtime, 6)}
                   s.init.arr.base.kind === 'mapArray' ||
                   s.init.arr.base.kind === 'placeArray' ||
                   s.init.arr.base.kind === 'calldataArray' ||
-                  s.init.arr.base.kind === 'cdDynFixedDynField')) ||
+                  s.init.arr.base.kind === 'cdDynFixedDynField' ||
+                  s.init.arr.base.kind === 'memArrayExpr')) ||
               s.init.kind === 'mapStorageValue'
             )
               out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
