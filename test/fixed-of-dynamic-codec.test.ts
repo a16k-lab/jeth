@@ -265,11 +265,15 @@ describe('adjacency: shapes solc rejects (or JETH cannot lift safely) still reje
       ),
     ).toBe(true);
   });
-  it('a dynamic-field-STRUCT fixed array (Arr<D,2>) is still rejected (unsupported dyn-struct-element codec)', () => {
+  it('a dynamic-field-STRUCT fixed array (Arr<D,2>) is now ACCEPTED (Lift #4: dyn-struct-element codec)', () => {
+    // Lift #4 admits a fixed-outer array of a dynamic-field struct as a memory local; building it from an
+    // array literal of memory-local D VALUES aliases each element image, and abi.encode(x) re-encodes the
+    // N-pointer image through abiEncFromMem's fixed-of-dynamic branch (byte-identical to solc - the full
+    // read/write/return/storage matrix lives in fixed-dyn-struct-array-local.test.ts).
     expect(
       rejects(
         `@struct class D { a: u256; s: string; } @contract class C { @external @pure f(): bytes { let d: D = D(1n, "x"); let x: Arr<D,2> = [d,d]; return abi.encode(x); } }`,
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 });

@@ -38,6 +38,7 @@ import {
   isStaticStructAnyLeafArray,
   isDynBytesFixedLeafArray,
   isDynLeafFixedArray,
+  isDynStructFixedLeafArray,
   isDynStructLeafArrayField,
   isDynLeafTopicArray,
   isImplicitWiden,
@@ -1564,6 +1565,9 @@ ${indent(runtime, 6)}
               (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) ||
               isAggregateLeafArray(s.value.type) ||
               isDynBytesFixedLeafArray(s.value.type) ||
+              // Lift #4: a FIXED-outer DYNAMIC-STRUCT array (Arr<In,N>) is dynamic top-level: the [0x20]
+              // wrapper + abiEncFromMem's fixed-of-dynamic branch (per element -> abiEncDynStructFromMem).
+              isDynStructFixedLeafArray(s.value.type) ||
               (isStaticStructAnyLeafArray(s.value.type) && isDynamicType(s.value.type)); // Arr<P,N>[] dynamic outer
             if (codecSourced && memSourced) {
               const mp = this.nestedMemImagePtr(s.value, ctx, out);
@@ -1602,6 +1606,7 @@ ${indent(runtime, 6)}
               (isNestedValueArray(s.value.type) && isDynamicType(s.value.type)) ||
               isAggregateLeafArray(s.value.type) ||
               isDynBytesFixedLeafArray(s.value.type) ||
+              isDynStructFixedLeafArray(s.value.type) || // Lift #4: Arr<In,N> via a ternary / internal call
               (isStaticStructAnyLeafArray(s.value.type) && isDynamicType(s.value.type));
             const { ptr, size } = codecSourced
               ? this.encodeNestedMemReturn(s.value.type, p, ctx, out)
@@ -1799,7 +1804,12 @@ ${indent(runtime, 6)}
             // (Arr<((x)=>R)[],N>): the funcref inner is pointer-headed exactly like a u256[] inner.
             ((isNestedValueWordArray(s.type) && isDynamicType(s.type)) ||
               isStaticStructFixedLeafArray(s.type) ||
-              isDynBytesFixedLeafArray(s.type))
+              isDynBytesFixedLeafArray(s.type) ||
+              // Lift #4: a FIXED-outer DYNAMIC-STRUCT array local (Arr<In,N>): the same N-word
+              // absolute-pointer table (no [len] header), each -> a per-element dyn-struct image.
+              // An array literal builds it via buildNestedMemArrayLit (structNew element ->
+              // allocDynStructToMem; a dyn-struct VALUE element -> buildDynStructLocal, aliasing).
+              isDynStructFixedLeafArray(s.type))
           ) {
             // a FIXED array whose element is POINTER-HEADED: a DYNAMIC value-array (Arr<u256[],N>), or a
             // static struct / static-struct-leaf array (Batch A: Arr<P,N>, Arr<P,N>[], Arr<Arr<P,N>,M>).
@@ -4548,16 +4558,21 @@ ${indent(runtime, 6)}
           // already a pointer; a constructor arg is materialized via aggArgToMemPtr, allocating here
           // in the pre-pass, below the eventual tuple blob).
           queue.push(this.arrayFieldRef(f, src, i, hw, ctx, out));
-        } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
-          // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>).
-          // Materialize its SELF-CONTAINED ABI tail (the N-word offset table, offsets relative to the
-          // TABLE start, + element tails - a position-independent blob) here in the PRE-PASS (allocs
-          // stay below the eventual output blob), carrying tailBytes so both consumers reuse proven
-          // codecs verbatim: encodeDynFieldInto's tail-blob copy branch mcopy's it into the tuple;
-          // topicEncodeDynField walks it packed-padded via packTopicArray (count = N). In an
-          // alloc-forbidden context (materializeFixedTails = false, output pointer already captured)
+        } else if (
+          f.type.kind === 'array' &&
+          f.type.length !== undefined &&
+          (isDynLeafFixedArray(f.type) || isDynStructFixedLeafArray(f.type))
+        ) {
+          // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>), and Lift
+          // #4: a FIXED-outer DYNAMIC-STRUCT field (Arr<In,N>). Materialize its SELF-CONTAINED ABI tail
+          // (the N-word offset table, offsets relative to the TABLE start, + element tails - a
+          // position-independent blob) here in the PRE-PASS (allocs stay below the eventual output blob),
+          // carrying tailBytes so both consumers reuse proven codecs verbatim: encodeDynFieldInto's
+          // tail-blob copy branch mcopy's it into the tuple; topicEncodeDynField walks it packed-padded.
+          // In an alloc-forbidden context (materializeFixedTails = false, output pointer already captured)
           // a 'mem' source instead queues the BARE image pointer (one mload, NO allocation);
-          // encodeDynFieldInto then transcodes it at the cursor via abiEncFromMem.
+          // encodeDynFieldInto then transcodes it at the cursor via abiEncFromMem (whose fixed-of-dynamic
+          // branch recurses into abiEncDynStructFromMem for a struct element).
           if (!materializeFixedTails && src.kind === 'mem') {
             const at = hw === 0 ? src.headPtr : `add(${src.headPtr}, ${hw * 32})`;
             const img = this.fresh();
@@ -4826,7 +4841,7 @@ ${indent(runtime, 6)}
     // table start + element tails, position-independent - copy it verbatim at the cursor), or, in an
     // alloc-forbidden context, the BARE pointer-headed image (no tailBytes) - transcode it at the
     // cursor via abiEncFromMem's fixed-outer branch (identical bytes; writes only at/past the cursor).
-    if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+    if (f.type.kind === 'array' && f.type.length !== undefined && (isDynLeafFixedArray(f.type) || isDynStructFixedLeafArray(f.type))) {
       const ref = nextRef();
       if (ref.src !== 'memory')
         throw new UnsupportedError('a fixed-outer dynamic-element struct field must be memory-resolved');
@@ -6669,12 +6684,19 @@ ${indent(runtime, 6)}
         // its absolute pointer in the head word - the same image abiEncFromMem/read/decode consume.
         out.push(`mstore(${at}, ${this.nestedMemImagePtr(value.args[i]!, ctx, out)})`);
         hw += 1;
-      } else if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
-        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>): ONE head
-        // word holding an absolute pointer to the N-pointer-word fixed image (no [len] header).
-        // aggArgToMemPtr materializes the arg (a literal via buildNestedMemArrayLit; a memory
-        // local/param ALIASES; a storage/calldata source deep-copies via abiDec*ToImage) - the same
-        // image the read/encode/store paths consume. tupleHeadWords counts the field as 1 (dynamic).
+      } else if (
+        f.type.kind === 'array' &&
+        f.type.length !== undefined &&
+        (isDynLeafFixedArray(f.type) || isDynStructFixedLeafArray(f.type))
+      ) {
+        // W5C: a FIXED-outer DYNAMIC-element field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N>), and Lift #4:
+        // a FIXED-outer DYNAMIC-STRUCT field (Arr<In,N>): ONE head word holding an absolute pointer to the
+        // N-pointer-word fixed image (no [len] header). aggArgToMemPtr materializes the arg (a literal via
+        // buildNestedMemArrayLit -> per-element allocDynStructToMem; a memory local/param ALIASES; a
+        // storage/calldata source deep-copies via abiDec*ToImage) - the same image the read/encode/store
+        // paths consume. tupleHeadWords counts the field as 1 (dynamic). NOTE: this MUST precede the
+        // static-aggregate inline branch below, which would otherwise inline abiHeadWords(Arr<In,N>)=N*hw
+        // words (a MISCOMPILE: the field is 1 pointer word in the tuple head, not N inline).
         out.push(`mstore(${at}, ${this.aggArgToMemPtr(value.args[i]!, ctx, out)})`);
         hw += 1;
       } else if (f.type.kind === 'struct' && isDynamicType(f.type)) {

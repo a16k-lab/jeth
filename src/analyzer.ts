@@ -37,6 +37,7 @@ import {
   isStaticStructFixedLeafArray,
   isDynBytesFixedLeafArray,
   isDynLeafFixedArray,
+  isDynStructFixedLeafArray,
   isStaticStructAnyLeafArray,
   isDynStructLeaf,
   isDynStructLeafArrayField,
@@ -7641,7 +7642,14 @@ export class Analyzer {
     // a true fixed-array value of the same type (a memory local / @internal param, whose pointer-headed
     // image is re-pointed/copied by codegen). Mirrors the isValueWordAggregate fixed-array branch above,
     // minus the inline-image restriction (this family is pointer-headed; nestedMemImagePtr builds it).
-    if (f.type.kind === 'array' && f.type.length !== undefined && isDynLeafFixedArray(f.type)) {
+    // Lift #4: a FIXED-outer DYNAMIC-STRUCT array field (Arr<In,N>) is admitted on the SAME terms as the
+    // isDynLeafFixedArray bytes/value-array family: an array literal of exactly N elements (built inline via
+    // buildNestedMemArrayLit -> allocDynStructToMem per element) OR a true fixed-array value (aliased/copied).
+    if (
+      f.type.kind === 'array' &&
+      f.type.length !== undefined &&
+      (isDynLeafFixedArray(f.type) || isDynStructFixedLeafArray(f.type))
+    ) {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
       if (a.kind === 'arrayLit') {
@@ -10114,12 +10122,15 @@ export class Analyzer {
       (isAggregateLeafArray(declared) ||
         isStaticStructFixedLeafArray(declared) ||
         isDynBytesFixedLeafArray(declared) ||
+        isDynStructFixedLeafArray(declared) ||
         (isStaticStructAnyLeafArray(declared) && declared.length === undefined))
-      // NOTE: a FIXED-outer array whose leaf is a DYNAMIC struct (Arr<P,N>, P dynamic) is deliberately NOT
-      // admitted (W3-Y2c P1-25). buildDynStructFromStorage / abiEncFromMem can build+encode the image, but
-      // the element-read resolver (resolveMemDynStructArrayField) and arrayGet lowering assume a
-      // dynamic-outer [len]-headed image for a dyn-struct-leaf array; a fixed-outer memAggregate has no
-      // [len] header, so admitting it here would misindex m[i]. Kept a clean JETH200 reject.
+      // Lift #4: a FIXED-outer array whose leaf is a DYNAMIC struct (Arr<In,N>, In dynamic,
+      // isDynStructFixedLeafArray) IS now admitted. Its memAggregate image is N absolute-pointer words
+      // (no [len] header), each -> a per-element dyn-struct image; the element-read resolver
+      // (resolveMemDynStructArrayField) and arrayGet's memory branch key off memFixedLen (the constant N)
+      // + memStaticElem=false (pointer-headed element), NOT a [len] header, so m[i] indexes correctly -
+      // the same fixed-outer pointer-headed machinery the Arr<u256[],N> / Arr<string,N> families already
+      // ride. (The old W3-Y2c reject predated the memFixedLen path.)
     ) {
       const fixedOuter = declared.length !== undefined;
       if (this.inCurrentScope(decl.name.text)) {
@@ -10368,6 +10379,38 @@ export class Analyzer {
           e.left,
           'JETH429',
           `assigning a whole inline sub-aggregate (${displayName(target.type)}) into a memory aggregate would copy where Solidity re-points (aliasing would diverge); assign its leaf fields/elements individually`,
+        );
+        return;
+      }
+      // Lift #4 SOUNDNESS (JETH467): copying a whole FIXED-outer DYNAMIC-STRUCT array (Arr<In,N>) from a
+      // MEMORY source into STORAGE (this.fa = a) is UNIMPLEMENTED in solc's legacy pipeline
+      // (UnimplementedFeatureError: "Copying of type struct ...[N] memory to storage is not supported in
+      // legacy"), so JETH must REJECT it too - accepting it is an over-acceptance AND the generic
+      // fixed-array store would flatten the N-pointer image into N slots (a MISCOMPILE). Restricted to a
+      // MEMORY-SOURCED RHS: a STORAGE-to-STORAGE copy (this.dst = this.src) is fully supported by solc's
+      // legacy pipeline and by JETH's copyFixedArray (element-wise, tail-clearing), so it must NOT be
+      // rejected. (Reading a storage Arr<In,N> into a memory local - bind-from-storage - is the OTHER
+      // direction and stays supported; the fixed element/field storage writes this.fa[i].s = ... are
+      // storage-native and unaffected.)
+      const storageTarget =
+        target.kind === 'state' ||
+        target.kind === 'place' ||
+        target.kind === 'mapping' ||
+        (target.kind === 'arrayElem' &&
+          target.arr.base.kind !== 'memArray' &&
+          target.arr.base.kind !== 'memArrayExpr');
+      const memorySourcedRhs =
+        value.kind === 'arrayLit' ||
+        value.kind === 'newArray' ||
+        value.kind === 'memAggregate' ||
+        value.kind === 'abiDecode' ||
+        (value.kind === 'arrayValue' &&
+          (value.arr.base.kind === 'memArray' || value.arr.base.kind === 'memArrayExpr'));
+      if (storageTarget && memorySourcedRhs && isDynStructFixedLeafArray(target.type)) {
+        this.diags.error(
+          e.left,
+          'JETH467',
+          `copying a whole ${displayName(target.type)} (a fixed array of dynamic structs) from memory into storage is not supported (solc's legacy pipeline rejects this too); assign its elements/fields individually`,
         );
         return;
       }
@@ -13089,6 +13132,15 @@ export class Analyzer {
         // (Arr<P,N>) stays gated (isDynLeafFixedArray excludes struct leaves). Kept byte-parallel with
         // types.isDynStructLeaf.
         isDynLeafFixedArray(f.type) ||
+        // Lift #4: a FIXED-outer DYNAMIC-STRUCT array field (Arr<In,N>, isDynStructFixedLeafArray): ONE
+        // head word holding an absolute pointer to the N-pointer-word fixed image (each -> a per-element
+        // dyn-struct image). The SAME pointer-headed image the memory-local family builds; the dyn-struct
+        // builder (allocDynStructToMem / buildDynStructLocal / emptyDynStructImage), the storage codec
+        // (buildDynStructFromStorage / abiDecFromStorageToImage fixed branch), the whole-struct encoder
+        // (abiEncFromMem's fixed-of-dynamic branch), and the field read resolver route it via the same
+        // aggArgToMemPtr / memArrayExpr(memFixedLen) machinery as the isDynLeafFixedArray sibling. Kept
+        // byte-parallel with types.isDynStructLeaf.
+        isDynStructFixedLeafArray(f.type) ||
         // B(1): a NESTED STATIC AGGREGATE field (a nested static struct, or a static fixed array Arr<T,N>)
         // is stored INLINE as abiHeadWords ABI-flattened head words (the tuple-head layout), exactly like
         // solc; the static-leaf codec (encodeStaticInline / abiDecFromMem / buildDynStructFromStorage) and
@@ -14902,7 +14954,9 @@ export class Analyzer {
       // W5C: p.xs where xs is a FIXED-outer dynamic-element field (Arr<string,N>): the head word holds
       // the N-pointer fixed-image pointer; memFixedLen = N drives the constant .length, the JETH211
       // const-index bound (checkArrExprBound) and the runtime Panic-0x32 bound, like an Arr<string,N> local.
-      if (mf && mf.field.type.kind === 'array' && isDynLeafFixedArray(mf.field.type)) {
+      // Lift #4: ... OR a FIXED-outer DYNAMIC-STRUCT field (Arr<In,N>, isDynStructFixedLeafArray): the
+      // same N-pointer fixed image; d.items[j].s then routes through resolveMemDynStructArrayField.
+      if (mf && mf.field.type.kind === 'array' && (isDynLeafFixedArray(mf.field.type) || isDynStructFixedLeafArray(mf.field.type))) {
         const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
         return {
           base: { kind: 'memArrayExpr', expr: load },
@@ -14929,7 +14983,7 @@ export class Analyzer {
       }
       // W5C: m.i.xs where xs is a FIXED-outer dynamic-element field of a NESTED dyn-struct: identical
       // deref chain; the final head word holds the N-pointer fixed-image pointer (memFixedLen = N).
-      if (nf && nf.field.type.kind === 'array' && isDynLeafFixedArray(nf.field.type)) {
+      if (nf && nf.field.type.kind === 'array' && (isDynLeafFixedArray(nf.field.type) || isDynStructFixedLeafArray(nf.field.type))) {
         const load: Expr = { kind: 'memDynNestedField', type: U256, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord, deref: true };
         return {
           base: { kind: 'memArrayExpr', expr: load },
@@ -15054,6 +15108,20 @@ export class Analyzer {
       // pointer word as the blob pointer (memStaticElem = false: a bytes/string element is a reference), with
       // a runtime bounds check (i >= N -> Panic 0x32), exactly like a string[] element but header-less.
       if (at && at.kind === 'array' && isDynBytesFixedLeafArray(at)) {
+        return {
+          base: { kind: 'memArrayExpr', expr: { kind: 'memAggregate', type: at, local: node.text } },
+          elem: at.element,
+          memFixedLen: at.length,
+          memStaticElem: this.memElemStatic(at.element),
+        };
+      }
+      // Lift #4: a FIXED-outer DYNAMIC-STRUCT array MEMORY local registered as a memAggregate (Arr<In,N>,
+      // In an isDynStructLeaf dynamic struct): N POINTER words (no [len] header), each -> a per-element
+      // dyn-struct image. a[i] reads the i-th pointer word as the element image pointer (memStaticElem =
+      // false: a struct element is a reference), bounds i against the constant N (Panic 0x32 runtime /
+      // JETH211 const), then a[i].field is resolved by resolveMemDynStructArrayField. Same header-less
+      // pointer-headed layout as the Arr<string,N> / Arr<P,N> siblings above.
+      if (at && at.kind === 'array' && isDynStructFixedLeafArray(at)) {
         return {
           base: { kind: 'memArrayExpr', expr: { kind: 'memAggregate', type: at, local: node.text } },
           elem: at.element,
@@ -15482,7 +15550,13 @@ export class Analyzer {
       at !== undefined &&
       at.kind === 'array' &&
       // isNestedValueWordArray also admits a FIXED-outer nested funcref array (Arr<Arr<(x)=>R,2>,2>).
-      (isNestedValueWordArray(at) || isStaticStructFixedLeafArray(at) || isDynBytesFixedLeafArray(at))
+      // Lift #4: a FIXED-outer DYNAMIC-STRUCT array (Arr<In,N>) too - a[i] yields the whole dyn-struct
+      // element (the struct branch at the nested-element resolver returns an arrayGet typed In, whose
+      // memory read is the element pointer), enabling `let e: In = a[i]` and for-of (const e of a).
+      (isNestedValueWordArray(at) ||
+        isStaticStructFixedLeafArray(at) ||
+        isDynBytesFixedLeafArray(at) ||
+        isDynStructFixedLeafArray(at))
     );
   }
 
@@ -17915,7 +17989,8 @@ export class Analyzer {
       // W5C: a FIXED-outer dynamic-element field (Arr<string,N>): the head word holds a pointer to the
       // N-pointer-word fixed image (NO [len] header). Wrap the head-word LOAD in a memArrayExpr with the
       // compile-time length (memFixedLen = N; index consumers bounds-check against it, .length folds it).
-      if (mf.field.type.kind === 'array' && isDynLeafFixedArray(mf.field.type)) {
+      // Lift #4: ... OR a FIXED-outer DYNAMIC-STRUCT field (Arr<In,N>): same N-pointer fixed image.
+      if (mf.field.type.kind === 'array' && (isDynLeafFixedArray(mf.field.type) || isDynStructFixedLeafArray(mf.field.type))) {
         const load: Expr = { kind: 'memField', type: U256, local: mf.local, wordOffset: mf.headWord };
         return {
           kind: 'arrayValue',

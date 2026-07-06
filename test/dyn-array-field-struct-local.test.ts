@@ -241,8 +241,11 @@ contract C {
     const corrupt = blob.slice(0, 128) + pad32(BigInt('0xffffffffffffffffffff')) + blob.slice(192);
     await cmp('0x' + sel('dec(bytes)') + bytesParam(corrupt), 'dec corrupt-offset');
   });
-  it('R[][] (static-struct nested array) now ACCEPTS (pointer-headed); FIXED outer Arr<P,N> still rejects', () => {
+  it('R[][] (static-struct nested array) ACCEPTS; FIXED outer Arr<P,N> of a DYNAMIC struct now ACCEPTS too (Lift #4)', () => {
     expect(codes(`@struct class R{a:u256;b:u256;} @contract class C { @external @pure f(): R[][] { let m: R[][] = [[R(1n,2n)]]; return m; } }`)).toEqual([]);
-    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,bytes("x")),P(2n,bytes("y"))]; return m; } }`).length).toBeGreaterThan(0);
+    // Lift #4: a fixed-outer array of a DYNAMIC-field struct (Arr<P,2>, P has a bytes field) is now a
+    // supported pointer-headed memory local (build + whole return, byte-identical to solc - the read/
+    // encode paths are exercised in fixed-dyn-struct-array-local.test.ts).
+    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,bytes("x")),P(2n,bytes("y"))]; return m; } }`)).toEqual([]);
   });
 });

@@ -578,6 +578,26 @@ export function isDynLeafFixedArray(t: JethType): boolean {
   return isDynBytesFixedLeafArray(t) || isNestedValueArray(t);
 }
 
+/** Lift #4: a FIXED-outer array whose ultimate leaf is a DYNAMIC-field struct that the pointer-headed
+ *  memory codec can build/read: Arr<In,N> (In an isDynStructLeaf dynamic struct), and deeper mixes
+ *  Arr<Arr<In,N>,M> / Arr<In,N>[]... no - the outer here is FIXED. Its memory image is N absolute-pointer
+ *  words (NO [len] header), each pointing to a per-element dyn-struct image (value fields inline,
+ *  bytes/string/dyn-array/fixed-of-dynamic fields a head pointer) - the SAME image In[] (the dyn-struct
+ *  ARRAY codec) and the @external In[N] calldata->image builder already lay out. It is the STRUCT-leaf
+ *  sibling of isDynBytesFixedLeafArray (bytes/string leaf) and isNestedValueArray (value-array leaf); those
+ *  three exhaust the fixed-outer-pointer-headed families. Deliberately kept SEPARATE from
+ *  isDynLeafFixedArray (which several sites use to EXCLUDE a struct leaf): a site opts in only where the
+ *  dyn-struct-element codec is confirmed byte-identical. The inner element must itself be
+ *  isDynStructLeaf (a dyn struct) or, through a fixed sub-array level, recurse to one. */
+export function isDynStructFixedLeafArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length === undefined || !isDynamicType(t)) return false; // FIXED outer, dynamic
+  const e = t.element;
+  if (e.kind === 'struct') return isDynStructLeaf(e);
+  // a nested FIXED sub-array whose leaf is a dyn struct (Arr<Arr<In,N>,M>): recurse (both levels fixed).
+  if (e.kind === 'array' && e.length !== undefined) return isDynStructFixedLeafArray(e);
+  return false;
+}
+
 /** Cat C: a dynamic-field struct FIELD that is a NESTED-DYNAMIC-LEAF array - `bytes[]`, `string[]`,
  *  or a `T[][]` (nested VALUE array bearing a dynamic outer level: u256[][], u256[][][], ...). Its
  *  pointer-headed memory image is the SAME B4 image a standalone such array uses, so the dyn-struct
@@ -613,6 +633,9 @@ export function isDynStructLeaf(t: JethType): boolean {
       // isDynLeafFixedArray layout the P1-7/Edge-D codecs build/read). Keep byte-parallel with
       // Analyzer.isSupportedDynStructLocal.
       isDynLeafFixedArray(f.type) ||
+      // Lift #4 mirror of Analyzer.isSupportedDynStructLocal: a FIXED-outer DYNAMIC-STRUCT array field
+      // (Arr<In,N>) - one head word -> the N-pointer fixed image (each -> a per-element dyn-struct image).
+      isDynStructFixedLeafArray(f.type) ||
       // B(1) mirror of Analyzer.isSupportedDynStructLocal: a NESTED STATIC AGGREGATE field (nested static
       // struct / static fixed array Arr<T,N>) stored INLINE as flattened head words. Keep byte-parallel.
       (f.type.kind === 'struct' && isStaticType(f.type)) ||
