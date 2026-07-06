@@ -12968,6 +12968,9 @@ export class Analyzer {
     const index = this.checkExpr(elemAccess.argumentExpression, U256);
     if (!index) return undefined;
     const idx = this.coerce(index, U256, elemAccess.argumentExpression);
+    // const-index OOB (JETH211) against the fixed outer length, exactly like the sibling Arr<string,N> /
+    // Arr<u256[],N> element paths - solc rejects a compile-time out-of-bounds index (a[5].f on Arr<In,2>).
+    if (!this.checkArrExprBound(arr, idx, elemAccess.argumentExpression)) return undefined;
     const fidx = struct.fields.findIndex((f) => f.name === node.name.text);
     if (fidx < 0) {
       this.diags.error(node, 'JETH210', `struct '${struct.name}' has no field '${node.name.text}'`);
