@@ -389,14 +389,53 @@ contract C {
     expect(r[0]!.returnHex).toBe('0x' + w(7)); // non-vacuity: p.a == 7
   });
 
-  it('REGRESSION: a DynStruct[] struct-element-array field still a clean JETH200 reject (not lifted)', () => {
-    // isSupportedDynStructLocal excludes a struct-element array field, so the whole-struct bind stays rejected.
-    const Jbad = `
+  it('LIFTED: a DynStruct[] struct-element-array field calldata->memory bind is byte-identical to solc', async () => {
+    // Wave 2 (isDynStructElemArrayField) admits a struct-ELEMENT array field into isSupportedDynStructLocal,
+    // so `let m: S = p` for S{ a; qs: Q[] } (Q dynamic) now DEEP-COPIES the calldata struct into memory
+    // byte-identical to solc's `S memory m = p;`, instead of the old JETH200 reject.
+    const Jg = `
 @struct class Q { x: u256; s: string }
 @struct class S { a: u256; qs: Q[] }
 @contract class C {
-  @external @pure f(p: S): u256 { let m: S = p; return m.a; }
+  @external @pure fa(p: S): u256 { let m: S = p; return m.a; }
+  @external @pure fl(p: S): u256 { let m: S = p; return m.qs.length; }
+  @external @pure fn(p: S): u256 { let m: S = p; return m.qs[1].x; }
+  @external @pure fq(p: S): string { let m: S = p; return m.qs[1].s; }
+  @external @pure fe(p: S): bytes { let m: S = p; return abi.encode(m); }
 }`;
-    expect(codes(Jbad)).toContain('JETH200');
+    const Sg = `
+struct Q { uint256 x; string s; }
+struct S { uint256 a; Q[] qs; }
+contract C {
+  function fa(S calldata p) external pure returns (uint256) { S memory m = p; return m.a; }
+  function fl(S calldata p) external pure returns (uint256) { S memory m = p; return m.qs.length; }
+  function fn(S calldata p) external pure returns (uint256) { S memory m = p; return m.qs[1].x; }
+  function fq(S calldata p) external pure returns (string memory) { S memory m = p; return m.qs[1].s; }
+  function fe(S calldata p) external pure returns (bytes memory) { S memory m = p; return abi.encode(m); }
+}`;
+    expect(codes(Jg)).toEqual([]); // Wave 2 lifted it: compiles clean
+    // hand-encode one S{ a:7, qs:[Q{1,"hi"}, Q{2,"world!!"}] } as the sole (dynamic) calldata param.
+    const PQ = '(uint256,(uint256,string)[])';
+    const encQ = (x: number, s: string) => w(x) + w(0x40) + encStr(s); // Q = (uint256, string) dynamic
+    const encQArr = (items: [number, string][]) => {
+      const n = items.length;
+      const eh = items.map(([x, s]) => encQ(x, s));
+      const offs: number[] = [];
+      let base = n * 32;
+      for (let i = 0; i < n; i++) {
+        offs.push(base);
+        base += eh[i]!.length / 2;
+      }
+      return w(n) + offs.map((o) => w(o)).join('') + eh.join('');
+    };
+    const argS = (a: number, qs: [number, string][]) => w(0x20) + w(a) + w(0x40) + encQArr(qs);
+    const args = argS(7, [[1, 'hi'], [2, 'world!!']]);
+    const r = await eqCalls(Jg, Sg, [
+      [`fa(${PQ})`, args], [`fl(${PQ})`, args], [`fn(${PQ})`, args], [`fq(${PQ})`, args], [`fe(${PQ})`, args],
+    ]);
+    // non-vacuity anchors (a selector miss or malformed calldata would revert-empty and fail these):
+    expect(r[0]!.returnHex).toBe('0x' + w(7)); // m.a == 7
+    expect(r[1]!.returnHex).toBe('0x' + w(2)); // m.qs.length == 2
+    expect(r[2]!.returnHex).toBe('0x' + w(2)); // m.qs[1].x == 2
   });
 });
