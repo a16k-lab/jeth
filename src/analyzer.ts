@@ -17237,6 +17237,15 @@ export class Analyzer {
         }
         return { kind: 'literalInt', type: target, value: v << BigInt((32 - target.size) * 8) };
       }
+      // bytesN(bytesM(...)) const fold: the operand already folded to a LEFT-ALIGNED bytesM literal; solc
+      // allows a bytesN<->bytesM reinterpret in BOTH directions (widen = zero-pad on the right = no change
+      // to the left-aligned value; narrow = keep the high N bytes). The RUNTIME path (bytesN(param)) already
+      // accepts this; the const path was missing it, wrongly rejecting bytes4(bytes4(0x..)) as JETH170.
+      if (argCast && argCast.kind === 'bytesN') {
+        const keepBits = BigInt(target.size * 8);
+        const mask = keepBits >= 256n ? (1n << 256n) - 1n : (((1n << 256n) - 1n) << (256n - keepBits)) & ((1n << 256n) - 1n);
+        return { kind: 'literalInt', type: target, value: v & mask };
+      }
       // a BARE int literal -> bytesN: solc accepts ONLY the literal 0 (any spelling), or a HEX literal
       // whose source byte width == N. A decimal or wrong-width hex literal is an explicit-conversion error.
       if (v !== 0n && inner.hexBytes !== target.size) {
