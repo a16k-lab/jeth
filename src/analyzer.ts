@@ -204,7 +204,7 @@ export class Analyzer {
   // invalid attempt (no matching base / loosened mutability / wrong return type) is cleanly rejected.
   private getterOverrideVars = new Map<
     string,
-    { node: ts.PropertyDeclaration; definingContract: string }
+    { node: ts.PropertyDeclaration; definingContract: string; overrideList?: string[] }
   >();
   // The declared type of each getter-override var (name -> type), captured in resolveGetterOverrides so
   // the later interface-obligation check (which runs before stateByName is populated) can recompute the
@@ -1386,7 +1386,14 @@ export class Analyzer {
           // implements. Only a getter (`@external`) can override a function; a non-@override same-name
           // clash is left to the normal JETH133 path.
           if (decs.includes('external') && (decs.includes('state') || decs.includes('storage')) && decs.includes('override')) {
-            this.getterOverrideVars.set(nm, { node: member, definingContract: cn });
+            // Capture the explicit @override(I1, I2) base list (the diamond/multi-interface completeness
+            // list) so resolveGetterOverrides can enforce solc's per-interface membership + completeness.
+            const overrideCall = decoratorCall(member, 'override');
+            const overrideList =
+              overrideCall && overrideCall.arguments.length > 0
+                ? overrideCall.arguments.map((a) => (ts.isIdentifier(a) ? a.text : a.getText()))
+                : undefined;
+            this.getterOverrideVars.set(nm, { node: member, definingContract: cn, overrideList });
           }
           this.collectStateVar(member, rawState);
         }
@@ -3148,6 +3155,59 @@ export class Analyzer {
         continue;
       }
       let bad = false;
+      // Interface OVERRIDE HEADS: every @interface (reachable from the contract's heritage) that DIRECTLY
+      // declares a method of this getter's exact signature. solc treats each such interface - alongside each
+      // base CONTRACT declaring the signature - as an overridden base that must be named in @override(...).
+      // With >=2 heads (any mix of interfaces + base contracts) a bare/incomplete list is rejected
+      // ("needs to specify overridden contracts"), and every name in the list must be exactly a head
+      // ("Invalid contract specified in override list"). A view getter also cannot override a @pure/@payable
+      // interface method (a mutability change). This mirrors the regular-function override path (JETH381/
+      // JETH415), which the getter path previously skipped by short-circuiting on the first matching iface.
+      const ifaceHeads = this.getterInterfaceOverrideHeads(
+        info.definingContract,
+        name,
+        shape.paramTypes,
+        shape.returnType,
+      );
+      // A view getter overriding a @pure or @payable interface method loosens/changes mutability -> reject
+      // (solc: "Overriding public state variable changes state mutability ..."). Fires per interface head,
+      // independent of the override list (a fully-listed @override(I1, I2) with a pure I2 is still rejected).
+      for (const h of ifaceHeads) {
+        if (h.mutability === 'pure' || h.mutability === 'payable') {
+          this.diags.error(
+            info.node,
+            'JETH433',
+            `getter '${name}' (view) cannot override the @${h.mutability} method declared in interface '${h.name}' (a getter changes state mutability)`,
+          );
+          bad = true;
+        }
+      }
+      // The full override-head set = distinct base CONTRACTS declaring the signature + interface heads. solc
+      // counts each as one overridden base for list completeness / membership.
+      const contractHeadNames = [...new Set(sigMatch.map((rf) => rf.definingContract!))];
+      const allHeadNames = [...new Set([...contractHeadNames, ...ifaceHeads.map((h) => h.name)])];
+      const headSet = new Set(allHeadNames);
+      const list = info.overrideList ?? [];
+      // MEMBERSHIP: every name in @override(...) must be exactly an override head (a directly-declaring
+      // interface or base contract); a non-head name or a duplicate is rejected.
+      const seen = new Set<string>();
+      const badName = list.find((n) => !headSet.has(n) || seen.has(n) || (seen.add(n), false));
+      if (badName !== undefined) {
+        this.diags.error(
+          info.node,
+          'JETH433',
+          `getter '${name}' names '${badName}' in its @override list, which is not a directly-overridden base (or is duplicated)`,
+        );
+        bad = true;
+      } else if (allHeadNames.length >= 2 && allHeadNames.some((h) => !list.includes(h))) {
+        // COMPLETENESS: overriding 2+ bases requires @override(...) naming them all.
+        this.diags.error(
+          info.node,
+          'JETH433',
+          `getter '${name}' overrides more than one base; it must specify @override(${allHeadNames.join(', ')})`,
+        );
+        bad = true;
+      }
       for (const base of sigMatch) {
         // the base must be @virtual (solc: "Trying to override non-virtual function").
         if (!base.isVirtual) {
@@ -3205,7 +3265,9 @@ export class Analyzer {
   }
 
   /** P1-4: does a getter of `name` with `(paramTypes) view returns (returnType)` implement a method of a
-   *  directly-extended @interface (an interface method IS a valid override target for a public getter)? */
+   *  directly-extended @interface (an interface method IS a valid override target for a public getter)?
+   *  A `nonpayable`/`view` interface method is satisfiable by a `view` getter; a `pure`/`payable` one is
+   *  NOT (that mutability mismatch is enforced separately, per interface, in resolveGetterOverrides). */
   private getterOverridesInterfaceMethod(name: string, paramTypes: JethType[], returnType: JethType): boolean {
     for (const iface of this.interfacesByName.values()) {
       const m = iface.methods.get(name);
@@ -3221,6 +3283,51 @@ export class Analyzer {
       }
     }
     return false;
+  }
+
+  /** P1-4: the @interface OVERRIDE HEADS for a getter var of `name` declared in contract `definingContract`
+   *  with signature `(paramTypes) returns (returnType)`. A head is an interface, reachable transitively from
+   *  the contract's heritage, that DIRECTLY declares a method of this exact signature (name + params + single
+   *  return). solc treats each such interface as an overridden contract that must be named in the
+   *  @override(...) list (completeness) and only such interfaces are valid list members (membership). A
+   *  merely-inherited method (the interface does not itself declare it) is NOT a head (solc: "Invalid
+   *  contract specified in override list"). Each head carries its method's mutability so the caller can
+   *  reject a getter (view) overriding a @pure / @payable interface method. */
+  private getterInterfaceOverrideHeads(
+    definingContract: string,
+    name: string,
+    paramTypes: JethType[],
+    returnType: JethType,
+  ): { name: string; mutability: Mutability }[] {
+    // Transitive interface bases reachable from the contract's heritage (a getter can override an interface
+    // method whether the interface is a direct base or reached through another interface/contract base).
+    const reachableIfaces = new Set<string>();
+    const visited = new Set<string>();
+    const visit = (cn: string): void => {
+      if (visited.has(cn)) return; // tolerate a (rejected-elsewhere) heritage cycle / diamond node
+      visited.add(cn);
+      const cls = this.classByName.get(cn) ?? this.interfaceClassByName.get(cn);
+      if (!cls) return;
+      for (const hb of heritageBases(cls)) {
+        if (this.interfacesByName.has(hb.name)) reachableIfaces.add(hb.name);
+        visit(hb.name); // recurse through both contract and interface bases
+      }
+    };
+    visit(definingContract);
+    const heads: { name: string; mutability: Mutability }[] = [];
+    for (const ifaceName of reachableIfaces) {
+      const m = this.interfacesByName.get(ifaceName)?.methods.get(name);
+      if (
+        m &&
+        m.params.length === paramTypes.length &&
+        m.params.every((p, i) => typesEqual(p.type, paramTypes[i]!)) &&
+        m.returnTypes === undefined &&
+        typesEqual(m.returnType, returnType)
+      ) {
+        heads.push({ name: ifaceName, mutability: m.mutability });
+      }
+    }
+    return heads;
   }
 
   private synthPublicGetter(v: StateVar): FunctionIR | null {

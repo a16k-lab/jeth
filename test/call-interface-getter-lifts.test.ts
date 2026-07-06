@@ -393,4 +393,132 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
     // mapping key-type mismatch
     expect(accepts(`@abstract class A { @virtual @external m(k: u256): u256; } @contract class C extends A { @override @external @state m: mapping<address,u256>; }`)).toBe(false);
   });
+
+  // B-getter-override-multi-interface: a getter var implementing a method declared by 2+ directly/
+  // transitively-extended interfaces must name them ALL in @override(list) (like the regular-function
+  // path), validate each listed interface actually declares a matching method (membership), and reject a
+  // view getter over a @pure interface method. The multi-base list-completeness/membership/mutability
+  // enforcement used to be SKIPPED (getterOverridesInterfaceMethod short-circuited on the first match).
+  it('multi-interface getter: complete @override(list) accepted, byte-identical read-back', async () => {
+    // two interfaces, complete list -> accepted; seed and read back (non-vacuous)
+    await eqCalls(
+      `@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; }
+       @contract class C extends I1, I2 { @override(I1, I2) @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); }
+       contract C is I1, I2 { uint256 public override(I1, I2) x; function set(uint256 v) external { x = v; } }`,
+      [['set(uint256)', W(0xc0ffee)], ['x()', '']],
+    );
+    // three interfaces, complete list
+    await eqCalls(
+      `@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; } @interface class I3 { @external x(): u256; }
+       @contract class C extends I1, I2, I3 { @override(I1, I2, I3) @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); } interface I3 { function x() external view returns (uint256); }
+       contract C is I1, I2, I3 { uint256 public override(I1, I2, I3) x; function set(uint256 v) external { x = v; } }`,
+      [['set(uint256)', W(0xbeef)], ['x()', '']],
+    );
+    // mapping getter, complete list
+    const kw = W(7);
+    await eqCalls(
+      `@interface class I1 { @external m(k: u256): u256; } @interface class I2 { @external m(k: u256): u256; }
+       @contract class C extends I1, I2 { @override(I1, I2) @external @state m: mapping<u256,u256>; @external sm(k: u256, v: u256): void { this.m[k] = v; } }`,
+      `interface I1 { function m(uint256) external view returns (uint256); } interface I2 { function m(uint256) external view returns (uint256); }
+       contract C is I1, I2 { mapping(uint256=>uint256) public override(I1, I2) m; function sm(uint256 k, uint256 v) external { m[k] = v; } }`,
+      [['sm(uint256,uint256)', kw + W(0xdead)], ['m(uint256)', kw]],
+    );
+    // array getter, complete list
+    await eqCalls(
+      `@interface class I1 { @external a(i: u256): u256; } @interface class I2 { @external a(i: u256): u256; }
+       @contract class C extends I1, I2 { @override(I1, I2) @external @state a: u256[]; @external pa(v: u256): void { this.a.push(v); } }`,
+      `interface I1 { function a(uint256) external view returns (uint256); } interface I2 { function a(uint256) external view returns (uint256); }
+       contract C is I1, I2 { uint256[] public override(I1, I2) a; function pa(uint256 v) external { a.push(v); } }`,
+      [['pa(uint256)', W(0x1111)], ['pa(uint256)', W(0x2222)], ['a(uint256)', W(1)]],
+    );
+    // mixed base virtual + interface, complete @override(B, I1)
+    await eqCalls(
+      `@abstract class B { @virtual @external x(): u256 { return 1n; } } @interface class I1 { @external x(): u256; }
+       @contract class C extends B, I1 { @override(B, I1) @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `abstract contract B { function x() external view virtual returns (uint256) { return 1; } } interface I1 { function x() external view returns (uint256); }
+       contract C is B, I1 { uint256 public override(B, I1) x; function set(uint256 v) external { x = v; } }`,
+      [['set(uint256)', W(0x42)], ['x()', '']],
+    );
+    // diamond: I2, I3 (empty) both extend I1(x); bare @override / @override(I1) accepted (single head I1)
+    await eqCalls(
+      `@interface class I1 { @external x(): u256; } @interface class I2 extends I1 {} @interface class I3 extends I1 {}
+       @contract class C extends I2, I3 { @override @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `interface I1 { function x() external view returns (uint256); } interface I2 is I1 {} interface I3 is I1 {}
+       contract C is I2, I3 { uint256 public override x; function set(uint256 v) external { x = v; } }`,
+      [['set(uint256)', W(0x77)], ['x()', '']],
+    );
+  });
+
+  it('multi-interface getter REJECT (no over-acceptance): bare/incomplete list, bogus/duplicate member, @pure iface', () => {
+    // Each JETH-rejected case must be a case solc ALSO rejects (parity, no over-rejection).
+    const REJ: [string, string][] = [
+      // bare @override over two interfaces -> needs override(I1, I2)
+      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; }
+        @contract class C extends I1, I2 { @override @external @state x: u256; }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); }
+        contract C is I1, I2 { uint256 public override x; }`],
+      // override(I1) names only one of two heads
+      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; }
+        @contract class C extends I1, I2 { @override(I1) @external @state x: u256; }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); }
+        contract C is I1, I2 { uint256 public override(I1) x; }`],
+      // three interfaces, override(I1, I2) missing I3
+      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; } @interface class I3 { @external x(): u256; }
+        @contract class C extends I1, I2, I3 { @override(I1, I2) @external @state x: u256; }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); } interface I3 { function x() external view returns (uint256); }
+        contract C is I1, I2, I3 { uint256 public override(I1, I2) x; }`],
+      // duplicate in list
+      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; }
+        @contract class C extends I1, I2 { @override(I1, I1) @external @state x: u256; }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); }
+        contract C is I1, I2 { uint256 public override(I1, I1) x; }`],
+      // I2 declares a DIFFERENT method y (not x): I2 is not a valid member of x's override list
+      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external y(): u256; }
+        @contract class C extends I1, I2 { @override(I1, I2) @external @state x: u256; @override @external y(): u256 { return 0n; } }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 { function y() external view returns (uint256); }
+        contract C is I1, I2 { uint256 public override(I1, I2) x; function y() external view override returns (uint256) { return 0; } }`],
+      // I2 declares x with a DIFFERENT signature (x(uint256)): not a member
+      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(a: u256): u256; }
+        @abstract @contract class C extends I1, I2 { @override(I1, I2) @external @state x: u256; }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 { function x(uint256) external view returns (uint256); }
+        abstract contract C is I1, I2 { uint256 public override(I1, I2) x; }`],
+      // view getter cannot override a @pure interface method (I2 pure), fully listed
+      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external @pure x(): u256; }
+        @contract class C extends I1, I2 { @override(I1, I2) @external @state x: u256; }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external pure returns (uint256); }
+        contract C is I1, I2 { uint256 public override(I1, I2) x; }`],
+      // view getter cannot override a @pure interface method, bare form
+      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external @pure x(): u256; }
+        @contract class C extends I1, I2 { @override @external @state x: u256; }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external pure returns (uint256); }
+        contract C is I1, I2 { uint256 public override x; }`],
+      // mapping getter, bare over two interfaces
+      [`@interface class I1 { @external m(k: u256): u256; } @interface class I2 { @external m(k: u256): u256; }
+        @contract class C extends I1, I2 { @override @external @state m: mapping<u256,u256>; }`,
+       `interface I1 { function m(uint256) external view returns (uint256); } interface I2 { function m(uint256) external view returns (uint256); }
+        contract C is I1, I2 { mapping(uint256=>uint256) public override m; }`],
+      // array getter, bare over two interfaces
+      [`@interface class I1 { @external a(i: u256): u256; } @interface class I2 { @external a(i: u256): u256; }
+        @contract class C extends I1, I2 { @override @external @state a: u256[]; }`,
+       `interface I1 { function a(uint256) external view returns (uint256); } interface I2 { function a(uint256) external view returns (uint256); }
+        contract C is I1, I2 { uint256[] public override a; }`],
+      // diamond: naming the (non-declaring) direct bases I2, I3 is an invalid override list
+      [`@interface class I1 { @external x(): u256; } @interface class I2 extends I1 {} @interface class I3 extends I1 {}
+        @contract class C extends I2, I3 { @override(I2, I3) @external @state x: u256; }`,
+       `interface I1 { function x() external view returns (uint256); } interface I2 is I1 {} interface I3 is I1 {}
+        contract C is I2, I3 { uint256 public override(I2, I3) x; }`],
+      // mixed base virtual + interface, bare over both -> needs override(B, I1)
+      [`@abstract class B { @virtual @external x(): u256 { return 1n; } } @interface class I1 { @external x(): u256; }
+        @contract class C extends B, I1 { @override @external @state x: u256; }`,
+       `abstract contract B { function x() external view virtual returns (uint256) { return 1; } } interface I1 { function x() external view returns (uint256); }
+        contract C is B, I1 { uint256 public override x; }`],
+    ];
+    for (const [j, s] of REJ) {
+      // JETH must reject exactly when solc rejects: all of these solc rejects, so JETH must reject too.
+      expect(solcAccepts(s), `solc should reject: ${s.slice(0, 60)}`).toBe(false);
+      expect(accepts(j), `JETH should reject: ${j.slice(0, 60)}`).toBe(false);
+    }
+  });
 });
