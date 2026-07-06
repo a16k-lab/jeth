@@ -56,9 +56,9 @@ describe('nested dyn-struct field -> dyn-array leaf read from abi.decode (was JE
       [['len(bytes)', A3], ['el(bytes)', A3], ['sc(bytes)', A3]],
     );
     // non-vacuous absolute checks: length=3, arr[1]=20, a+n=7+99=106
-    expect(out[0].returnHex).toBe('0x' + W(3));
-    expect(out[1].returnHex).toBe('0x' + W(20));
-    expect(out[2].returnHex).toBe('0x' + W(106));
+    expect(out[0]!.returnHex).toBe('0x' + W(3));
+    expect(out[1]!.returnHex).toBe('0x' + W(20));
+    expect(out[2]!.returnHex).toBe('0x' + W(106));
   });
 
   it('empty array, 5-element access, and OOB -> Panic 0x32 match solc', async () => {
