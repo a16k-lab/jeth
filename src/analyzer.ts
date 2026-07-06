@@ -20815,6 +20815,14 @@ export class Analyzer {
         // zero-pad on the right when N>M, truncate when N<M). The runtime checkCast applies these same
         // rules - the const folder must too, else it over-rejects (the value already folds at runtime).
         const bnArg = stripParens(node.arguments[0]!);
+        // bytesN("literal") explicit cast of a STRING literal CONSTANT: folds to the UTF-8 bytes packed
+        // LEFT-aligned into the high N bytes (solc: `bytes4("abcd")` == 0x61626364..0), the SAME value the
+        // non-const path already computes via stringLiteralAsBytesN. An OVER-LENGTH literal (byteLen > N)
+        // is rejected there (JETH074), byte-for-byte matching solc's "Literal is larger than the type".
+        if (ts.isStringLiteral(bnArg) || ts.isNoSubstitutionTemplateLiteral(bnArg)) {
+          const lit = this.stringLiteralAsBytesN(this.strLitBytes(bnArg), expected, node);
+          return lit && lit.kind === 'literalInt' ? (lit.value as bigint) : undefined;
+        }
         const bnCast =
           ts.isCallExpression(bnArg) && ts.isIdentifier(bnArg.expression)
             ? resolvePrimitiveName(bnArg.expression.text)

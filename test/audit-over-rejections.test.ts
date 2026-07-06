@@ -56,6 +56,118 @@ describe('audit over-rejections lifted byte-identical', () => {
     );
   });
 
+  it('OR8: @constant bytesN(stringLiteral) folds to the left-aligned UTF-8 bytes (solc parity)', async () => {
+    // Every width bytes1..bytes32, short / exact-width / empty string, via the explicit getter and the
+    // auto-generated @external @constant getter. The folded value is the UTF-8 bytes LEFT-aligned in the
+    // high N bytes, byte-identical to solc's `bytesN("...")` literal conversion.
+    for (const [n, s] of [
+      [1, 'x'],
+      [2, 'a'],
+      [4, 'abcd'],
+      [4, 'ab'],
+      [4, ''],
+      [8, 'abcdefgh'],
+      [32, 'hello'],
+      [32, 'abcdefghijklmnopqrstuvwxyzABCDEF'],
+    ] as [number, string][]) {
+      await eqValue(
+        `@contract class C { @constant K: bytes${n} = bytes${n}("${s}"); @external @pure get(): bytes${n} { return this.K; } }`,
+        `contract C { bytes${n} constant K = bytes${n}("${s}"); function get() external pure returns (bytes${n}) { return K; } }`,
+        'get()',
+      );
+    }
+    // auto-getter form (@external @constant synthesizes solc's public-constant getter)
+    await eqValue(
+      '@contract class C { @external @constant K: bytes4 = bytes4("abcd"); }',
+      'contract C { bytes4 public constant K = bytes4("abcd"); }',
+      'K()',
+    );
+    // NON-VACUOUS concrete decode: bytes4("abcd") == 0x61626364.. (the UTF-8 bytes of "abcd", left-aligned)
+    const hj = await Harness.create();
+    const aj: Address = await hj.deploy(
+      compile('@contract class C { @external @constant K: bytes4 = bytes4("abcd"); }', { fileName: 'C.jeth' })
+        .creationBytecode,
+    );
+    const rk = await hj.call(aj, sel('K()'));
+    expect(rk.success).toBe(true);
+    expect(rk.returnHex).toBe('0x6162636400000000000000000000000000000000000000000000000000000000');
+  });
+
+  it('OR8: still rejects an OVER-LENGTH bytesN(stringLiteral) @constant (no over-acceptance)', () => {
+    const rej = (s: string) => {
+      try {
+        compile(s, { fileName: 'C.jeth' });
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    // solc rejects "Explicit type conversion not allowed ... Literal is larger than the type"; JETH keeps
+    // its clean reject (byteLen > N).
+    expect(rej('@contract class C { @constant K: bytes2 = bytes2("abcd"); @external @pure get(): bytes2 { return this.K; } }')).toBe(true);
+    expect(rej('@contract class C { @constant K: bytes1 = bytes1("ab"); @external @pure get(): bytes1 { return this.K; } }')).toBe(true);
+    expect(rej('@contract class C { @constant K: bytes4 = bytes4("abcde"); @external @pure get(): bytes4 { return this.K; } }')).toBe(true);
+  });
+
+  it('OR-b lock: @constant bytesN(bytesM(const)) same/narrower/wider folds to solc values', async () => {
+    // Same-width identity, narrowing (keep high bytes), and WIDENING (zero-pad on the right) all fold
+    // byte-identically to solc. This is already handled by the OR0 bytesN(bytesM) const-cast path; the
+    // test locks it against regression alongside the OR8 string-literal fold.
+    await eqValue(
+      '@contract class C { @constant K: bytes4 = bytes4(bytes4(0xababababn)); @external @pure get(): bytes4 { return this.K; } }',
+      'contract C { bytes4 constant K = bytes4(bytes4(0xabababab)); function get() external pure returns (bytes4) { return K; } }',
+      'get()',
+    );
+    await eqValue(
+      '@contract class C { @constant K: bytes4 = bytes4(bytes8(0x1122334455667788n)); @external @pure get(): bytes4 { return this.K; } }',
+      'contract C { bytes4 constant K = bytes4(bytes8(0x1122334455667788)); function get() external pure returns (bytes4) { return K; } }',
+      'get()',
+    );
+    // widening bytes4 -> bytes8 (solc ACCEPTS, zero-pads on the right)
+    await eqValue(
+      '@contract class C { @constant K: bytes8 = bytes8(bytes4(0x12345678n)); @external @pure get(): bytes8 { return this.K; } }',
+      'contract C { bytes8 constant K = bytes8(bytes4(0x12345678)); function get() external pure returns (bytes8) { return K; } }',
+      'get()',
+    );
+    // NON-VACUOUS decode: bytes8(bytes4(0x12345678)) == 0x1234567800000000 (zero-padded right)
+    const hj = await Harness.create();
+    const aj: Address = await hj.deploy(
+      compile(
+        '@contract class C { @constant K: bytes8 = bytes8(bytes4(0x12345678n)); @external @pure get(): bytes8 { return this.K; } }',
+        { fileName: 'C.jeth' },
+      ).creationBytecode,
+    );
+    const rk = await hj.call(aj, sel('get()'));
+    expect(rk.returnHex).toBe('0x1234567800000000000000000000000000000000000000000000000000000000');
+  });
+
+  it('OR-c anti-lift: an inline array literal as a dynamic-array struct field stays a clean reject', () => {
+    // solc REJECTS `P(7, ["x","y"])` ("Invalid implicit conversion from string[2] memory to string[]
+    // memory"): a fixed-array literal does NOT implicitly convert to a dynamic-array constructor field.
+    // JETH must keep rejecting - accepting it would be an OVER-ACCEPTANCE (a bar violation).
+    const rej = (s: string) => {
+      try {
+        compile(s, { fileName: 'C.jeth' });
+        return false;
+      } catch {
+        return true;
+      }
+    };
+    expect(
+      rej('@struct class P { id: u256; tags: string[]; } @contract class C { @external @pure f(): P { let p: P = P(7n, ["x","y"]); return p; } }'),
+    ).toBe(true);
+    expect(
+      rej('@struct class P { id: u256; nums: u256[]; } @contract class C { @external @pure f(): P { let p: P = P(7n, [1n,2n]); return p; } }'),
+    ).toBe(true);
+    expect(
+      rej('@struct class P { id: u256; tags: string[]; } @contract class C { @external @pure f(): P { let p: P = P(7n, []); return p; } }'),
+    ).toBe(true);
+    // the WORKING form (a true dynamic-array value) is still accepted - not regressed.
+    expect(
+      rej('@struct class P { id: u256; nums: u256[]; } @contract class C { @external @pure f(): P { let a: u256[] = new Array<u256>(2n); a[0n]=1n; a[1n]=2n; let p: P = P(7n, a); return p; } }'),
+    ).toBe(false);
+  });
+
   it('OR2: @constant address<->uint160 casts fold to solc values', async () => {
     await eqValue(
       '@contract class C { @constant K: u160 = u160(address(0x1234n)); @external @pure get(): u160 { return this.K; } }',
