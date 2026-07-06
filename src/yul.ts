@@ -4633,6 +4633,12 @@ ${indent(runtime, 6)}
         const headPtr = this.buildDynStructFromCalldata(cdStruct, value, ctx, out, true);
         return { kind: 'mem', headPtr };
       }
+      // V2 fix (fast path, struct with only value/bytes/string fields): a whole NESTED dynamic-struct
+      // FIELD read off a calldata parent (o.inner where Inner has no array field) carries a `place` -
+      // encode from the FIELD's own tuple-start, not the PARENT param's (which spliced the sibling head).
+      if (value.place) {
+        return { kind: 'cd', base: this.cdDynStructFieldTupleStart(value.place, cdStruct, ctx, out) };
+      }
       const bound = ctx.cdDynStructs.get(value.param);
       if (!bound) throw new UnsupportedError(`dynamic struct param '${value.param}' is not bound`);
       return { kind: 'cd', base: bound.tupleStart };
@@ -6875,9 +6881,17 @@ ${indent(runtime, 6)}
     if (init.kind === 'cdStructArrayElem') {
       cdBase = this.cdArrayElemBase(init.arr, init.index, init.type, ctx, out);
     } else if (init.kind === 'cdDynStructValue') {
-      const bound = ctx.cdDynStructs.get(init.param);
-      if (!bound) throw new UnsupportedError(`dynamic struct param '${init.param}' is not bound`);
-      cdBase = bound.tupleStart;
+      // V2 fix: a whole NESTED dynamic-struct FIELD read off a calldata parent (o.inner, `let m: Inner
+      // = o.inner`, abi.encode(o.inner)) carries a `place`. Resolve the FIELD's own tuple-start (descend
+      // + follow its offset word) - the same base the `return o.inner` echo uses - instead of the PARENT
+      // param's tuple start, which decoded the sibling head (splicing the adjacent field into the copy).
+      if (init.place) {
+        cdBase = this.cdDynStructFieldTupleStart(init.place, struct, ctx, out);
+      } else {
+        const bound = ctx.cdDynStructs.get(init.param);
+        if (!bound) throw new UnsupportedError(`dynamic struct param '${init.param}' is not bound`);
+        cdBase = bound.tupleStart;
+      }
     } else {
       throw new UnsupportedError(`buildDynStructFromCalldata: unsupported calldata source '${init.kind}'`);
     }
@@ -10468,19 +10482,32 @@ ${indent(runtime, 6)}
    *  offset word (base resets to base+offset, calldataTupleAt) while a STATIC one is inline
    *  at the field offset. The whole inner struct is re-encoded from that tuple base by the
    *  same recursive calldata->memory codec (abiEncFromCd) the whole-param echo uses. */
-  private echoCdDynField(place: CdDynPlace, t: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
-    const struct = t as JethType & { kind: 'struct' };
+  /** Resolve the CALLDATA tuple-start of a whole nested dynamic-struct FIELD `place` (o.inner):
+   *  descend the parent tuple to the final step's field offset, then - because the field's value is
+   *  itself a dynamic struct - follow its offset word to the sub-tuple base (crossDynamic), validating
+   *  the sub-tuple's whole head is in range. Shared by the `return o.inner` echo (echoCdDynField) and
+   *  the calldata-field -> memory copy / re-encode path (buildDynStructFromCalldata), so both read the
+   *  SAME field tuple-start instead of the parent's (the V2 miscompile spliced in the sibling field). */
+  private cdDynStructFieldTupleStart(
+    place: CdDynPlace,
+    struct: JethType & { kind: 'struct' },
+    ctx: LowerCtx,
+    out: string[],
+  ): string {
     const base = this.lowerCdDynBase(place, ctx, out);
     const last = place.steps[place.steps.length - 1]!;
     const fieldOff = last.headWords === 0 ? base : `add(${base}, ${last.headWords * 32})`;
-    let tupleStart: string;
     if (last.crossDynamic) {
       const nb = this.fresh();
       out.push(`let ${nb} := ${this.calldataTupleAt()}(${base}, ${fieldOff}, ${tupleHeadWords(struct) * 32})`);
-      tupleStart = nb;
-    } else {
-      tupleStart = fieldOff;
+      return nb;
     }
+    return fieldOff;
+  }
+
+  private echoCdDynField(place: CdDynPlace, t: JethType, ctx: LowerCtx, out: string[]): { ptr: string; size: string } {
+    const struct = t as JethType & { kind: 'struct' };
+    const tupleStart = this.cdDynStructFieldTupleStart(place, struct, ctx, out);
     const ptr = this.fresh();
     out.push(`let ${ptr} := mload(0x40)`);
     if (isDynamicType(t)) {
@@ -11057,6 +11084,7 @@ ${indent(runtime, 6)}
       (isNestedValueArray(a.type) && isDynamicType(a.type)) ||
       isAggregateLeafArray(a.type) ||
       isDynBytesFixedLeafArray(a.type) || // Arr<string,N>/Arr<bytes,N> field read: a memArrayExpr base wrapping the head-word LOAD of the pointer-headed field image (memFixedLen=N)
+      isDynStructFixedLeafArray(a.type) || // Arr<In,N> DYNAMIC-struct-element field read: SAME N-pointer field image, SAME encoder as the alias-out / return path (its memArrayExpr base loads the field-image pointer; abiEncFromMem flattens each dyn-struct element - no double-deref, matching whole()/aliasout()/ret())
       (isStaticStructAnyLeafArray(a.type) && isDynamicType(a.type));
     // a memory-image nested/aggregate-leaf array: image pointer at position (a memArray local
     // ALIASES; a literal builds its pointer-headed image now, element refs captured as pointers),
