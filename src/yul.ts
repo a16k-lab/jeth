@@ -4546,8 +4546,13 @@ ${indent(runtime, 6)}
         if (isBytesLike(f.type)) {
           const ref = this.dynFieldRef(f, src, i, hw, ctx, out);
           // materialize a memory source now (alloc happens here, below the blob);
-          // calldata sources are passed through unchanged (calldatacopy is safe).
-          if (ref.src === 'memory') {
+          // ALSO materialize a STORAGE source (Pair(k, this.name)): toMemory copies the
+          // storage [len][data] to fresh memory via loadStr - the SAME reader abi.encode
+          // uses - so encodeDynFieldInto's memory arm then handles it byte-identically and
+          // the storage else-throw is never reached. The read runs here in the pre-pass so
+          // all field reads precede the output-blob layout (matching solc field ordering).
+          // Calldata sources are passed through unchanged (calldatacopy is safe).
+          if (ref.src === 'memory' || ref.src === 'storage') {
             const { mp } = this.toMemory(ref, out);
             queue.push({ src: 'memory', ptr: mp });
           } else {
