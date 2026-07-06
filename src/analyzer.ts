@@ -5810,6 +5810,20 @@ export class Analyzer {
     bodyIR: Stmt[],
   ): { body: Stmt[]; modifierWrap?: Stmt[]; modifierArgs?: Expr[] } {
     const apps = rf.modifiers!;
+    // solc resolves a @modifier application in the function's PARAMETER scope, so a parameter whose
+    // name equals the modifier name SHADOWS the modifier: `@m` then references the parameter (not a
+    // modifier) and solc errors "Referenced declaration is neither modifier nor base class". A BODY
+    // local does NOT shadow (it lives in an inner scope), so only parameters count. Match the reject.
+    for (const app of apps) {
+      if (rf.params.some((p) => p.name === app.name)) {
+        this.diags.error(
+          app.site,
+          'JETH329',
+          `@${app.name} does not name a modifier here: the function parameter '${app.name}' shadows the '@${app.name}' modifier`,
+        );
+        return { body: bodyIR };
+      }
+    }
     // The buffered userfn path is required when a modifier has POST-placeholder code OR a whole-body
     // (conditional / multi-placeholder / return;) shape: both need the body lowered as a synthesized
     // userfn so a value-returning function's `ret` register can zero-init (the skip-body branch).
@@ -6042,6 +6056,19 @@ export class Analyzer {
     params: Param[],
     isBase: boolean,
   ): Stmt[] {
+    // Same shadowing rule as wrapModifiers: a constructor parameter whose name equals an applied
+    // @modifier name shadows the modifier, so `@m` no longer references a modifier (solc errors
+    // "Referenced declaration is neither modifier nor base class"). Match the reject.
+    for (const app of mods) {
+      if (params.some((p) => p.name === app.name)) {
+        this.diags.error(
+          app.site,
+          'JETH329',
+          `@${app.name} does not name a modifier here: the constructor parameter '${app.name}' shadows the '@${app.name}' modifier`,
+        );
+        return bodyStmts;
+      }
+    }
     const hasReturn = ctorNode.body ? this.findReturns([...ctorNode.body.statements]).length > 0 : false;
     const metas = mods.map((a) => this.modifiersByName.get(a.name));
     const preOnlyTail = (m: RawModifier | undefined): boolean =>
