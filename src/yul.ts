@@ -8811,8 +8811,27 @@ ${indent(runtime, 6)}
       const { mp } = this.toMemory(this.lowerDynamic(a, ctx, out), out); // alias (memory) or copy (cd/storage)
       return mp;
     }
-    // a calldata struct / fixed-array param forwarded as an arg: COPY its ABI-unpacked image to memory.
-    if (a.kind === 'cdAggregateValue') return this.allocAggFromCalldata(a.param, a.type, ctx, out, true);
+    // a calldata struct / fixed-array param forwarded as an INTERNAL-CALL arg: COPY its ABI-unpacked
+    // image to memory. The callee binds the param as a MEMORY reference and reads it with the memory-
+    // local layout, so the copy MUST match that layout exactly.
+    if (a.kind === 'cdAggregateValue') {
+      // A whole calldata static-STRUCT-fixed-array (Arr<In,N>, Arr<Arr<In,N>,M>, Arr<In,N>[]...) is
+      // STATIC but POINTER-HEADED in memory: the callee's memAggregate/Batch-A resolver reads a[i] as
+      // the i-th ABSOLUTE-pointer word (memStaticElem=false). allocAggFromCalldata produces the FLAT
+      // ABI image (N inline es-word blocks) - correct for the `return a` / `abi.encode(a)` echo paths
+      // (which re-encode flat) but a MISCOMPILE here (the callee reads the flat leading words as element
+      // pointers -> all-zero). Route it through the SAME pointer-headed calldata->memory codec the memory-
+      // local bind / dyn-struct-array-element paths use (abiDecFromCdToImage's fixed-outer static-struct
+      // branch: N absolute-pointer words, each -> a fresh validated per-element image), byte-identical to
+      // the memory-local image the callee expects. A whole static STRUCT (flat) and a value fixed array
+      // Arr<u256,N> (flat inline, memStaticElem undefined) keep the correct allocAggFromCalldata flat copy.
+      if (a.type.kind === 'array' && isStaticStructFixedLeafArray(a.type)) {
+        const ph = ctx.cdParamHead.get(a.param);
+        if (!ph) throw new UnsupportedError(`unbound struct-copy param ${a.param}`);
+        return this.abiDecFromCdToImage(a.type, String(ph.head), out);
+      }
+      return this.allocAggFromCalldata(a.param, a.type, ctx, out, true);
+    }
     // a DYNAMIC-field struct arg: pointer-headed image (memory source ALIASES; storage/calldata/
     // constructor source is COPIED to fresh memory) - the same builder a dynamic-struct local uses.
     if (a.type.kind === 'struct' && isDynamicType(a.type)) return this.buildDynStructLocal(a.type, a, ctx, out);
