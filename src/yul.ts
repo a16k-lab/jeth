@@ -4178,10 +4178,23 @@ ${indent(runtime, 6)}
         out.push(`mcopy(add(${ptr}, ${headPos}), ${staticNewPtr[i]!}, ${abiHeadWords(t) * 32})`);
         hw += abiHeadWords(t);
       } else if (!isDynamicType(t) && values[i]!.kind === 'memAggregate') {
-        // a STATIC memory struct/fixed-array local component: copy its image inline into the head
-        // (a pure register alias - the mcopy reads the live image LATE, matching solc; probe P20).
+        // a STATIC memory struct/fixed-array local component: encoded INLINE in the head (no offset
+        // word) - it is ABI-static (isDynamicType === false), so abiHeadWords(t) head words, matching
+        // the solo-return / abi.encode inline layout and solc's `return (x, agg)` decode-to-memory.
         const mp = this.lowerExpr(values[i]!, ctx, out);
-        out.push(`mcopy(add(${ptr}, ${headPos}), ${mp}, ${abiHeadWords(t) * 32})`);
+        if (isStaticStructFixedLeafArray(t)) {
+          // Batch A: a fixed-array-of-STATIC-struct local (Arr<In,N>, Arr<Arr<In,N>,M>) is ABI-static
+          // but POINTER-HEADED in memory (N absolute-pointer words -> per-element struct images). A
+          // verbatim mcopy would emit the pointer words (0x80, 0xc0, ...) then drop the struct payload
+          // (7,8,9,10) - the pre-existing tuple-return MISCOMPILE. Flatten each element's image inline
+          // via the recursive memory codec (the SAME abiEncFromMem the solo-return path uses); it lays
+          // the struct words contiguously with no offsets/length, returning abiHeadWords(t)*32 bytes.
+          this.abiEncFromMem(t, mp, `add(${ptr}, ${headPos})`, ctx, out);
+        } else {
+          // a static memory STRUCT or a fixed VALUE array (Arr<u256,N>): the image IS the ABI head
+          // layout (flat words), so a pure register-alias mcopy reads the live image LATE (probe P20).
+          out.push(`mcopy(add(${ptr}, ${headPos}), ${mp}, ${abiHeadWords(t) * 32})`);
+        }
         hw += abiHeadWords(t);
       } else if (dynStructRefs[i]) {
         // an INLINE-constructed DYNAMIC struct component the mem-src encoder cannot serialize:
