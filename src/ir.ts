@@ -292,6 +292,16 @@ export type Expr =
   | { kind: 'dynPlaceRead'; type: JethType; path: AccessPath }
   // --- Phase 4d: aggregate calldata params (struct / fixed-array field+index reads) ---
   | { kind: 'cdPlaceRead'; type: JethType; place: CalldataPlace }
+  // S4: a WHOLE STATIC-AGGREGATE LEAF (a nested static struct, or a static fixed array)
+  // reached by navigating a fully-static outer struct / fixed-array calldata param
+  // (abi.encode(n.inner) / return n.inner). The codegen folds the place to the leaf's
+  // calldata byte offset, then COPIES it into a fresh memory image THROUGH per-word
+  // validation (validateInput on each constituent static word - a dirty bool/address
+  // word EMPTY-reverts, matching solc's lazy validate-on-access). The produced pointer is
+  // byte-identical to a memory-local static-aggregate image, so it rides the SAME memory
+  // codec the mem-local / storage abi.encode + return paths use (aggToMemPtr). Kept distinct
+  // from cdPlaceRead so the single-word value-leaf path (cdPlaceRead) stays untouched.
+  | { kind: 'cdPlaceReadAgg'; type: JethType; place: CalldataPlace }
   // --- Phase 4e-1: dynamic array of static struct (calldata param) field read ---
   | {
       kind: 'cdArrayField';

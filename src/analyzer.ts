@@ -14818,7 +14818,13 @@ export class Analyzer {
         t = t.element;
       }
     }
-    if (!isStaticValueType(t)) {
+    // S4: a WHOLE STATIC-AGGREGATE LEAF (a nested static struct, or a static fixed array) is now
+    // admitted: the read dispatch emits cdPlaceReadAgg (a validated calldata->memory copy), byte-
+    // identical to a memory-local static-aggregate leaf. isStaticType is TRUE only for a fully-static
+    // aggregate and is FALSE for a funcref-containing aggregate (guard: a funcref aggregate still
+    // rejects) and for any dynamic-field leaf (bytes/string/dynamic-array field). A remaining
+    // non-value, non-static leaf (a dynamic sub-aggregate) keeps the JETH230 reject.
+    if (!isStaticValueType(t) && !isStaticType(t)) {
       this.diags.error(
         node,
         'JETH230',
@@ -18492,6 +18498,12 @@ export class Analyzer {
       const cd = this.resolveCalldataPlace(node);
       if (cd) {
         if (!cd.result) return undefined; // committed but errored
+        // S4: a WHOLE STATIC-AGGREGATE LEAF (a nested static struct / a static fixed array) reads as
+        // cdPlaceReadAgg (a validated calldata->memory copy consumed by the memory codec); a single
+        // value-word leaf keeps the untouched cdPlaceRead (one calldataload + validateInput).
+        if (!isStaticValueType(cd.result.finalType)) {
+          return { kind: 'cdPlaceReadAgg', type: cd.result.finalType, place: cd.result.place };
+        }
         return { kind: 'cdPlaceRead', type: cd.result.finalType, place: cd.result.place };
       }
       // W5B: a STATIC-STRUCT calldata SLICE element field - one-deep `ps.slice(s)[i].f` or a deeper

@@ -1522,6 +1522,24 @@ ${indent(runtime, 6)}
           break;
         }
         if (s.value.type.kind === 'array') {
+          // S4: `return n.arr` - a whole STATIC fixed-array LEAF (Arr<u256,2>, Arr<Arr<u256,2>,2>, a
+          // static-struct-leaf Arr<P,N>, ...) of a FULLY-STATIC outer calldata param. Re-encode it INLINE
+          // (no [0x20] wrapper) directly from the leaf's calldata offset via the recursive codec, the SAME
+          // encoder + validate rule the whole-param echo (echoStaticParam) uses: a VALUE-leaf fixed array
+          // (bool[3], uint8[4], uint256[2][2]) MASKS dirty leaf words (solc's decode-to-memory cleans, no
+          // revert), while a static-STRUCT-leaf fixed array (Arr<P,N>) VALIDATES each struct-field word.
+          if (s.value.kind === 'cdPlaceReadAgg') {
+            const off = this.lowerCdPlace(s.value.place, ctx, out);
+            const leaf = (ty: JethType): JethType =>
+              ty.kind === 'array' && ty.length !== undefined ? leaf(ty.element) : ty;
+            const validate = !(s.value.type.kind === 'array' && isStaticValueType(leaf(s.value.type)));
+            const ptr = this.fresh();
+            out.push(`let ${ptr} := mload(0x40)`);
+            const size = this.abiEncFromCd(s.value.type, off, ptr, validate, out);
+            out.push(`mstore(0x40, add(${ptr}, ${size}))`);
+            out.push(`return(${ptr}, ${size})`);
+            break;
+          }
           // a MEMORY-sourced NESTED value array bearing a DYNAMIC level (u256[][], Arr<u256[],N>,
           // u256[][][], ...), or a Residual-B aggregate-leaf array (P[] static struct / bytes[] /
           // string[]): resolve its memory image pointer, then ABI-encode it (relative offsets) via
@@ -1749,6 +1767,20 @@ ${indent(runtime, 6)}
           // resolved calldata tuple-start via the recursive calldata->memory codec.
           if (s.value.kind === 'cdDynStructValue' && s.value.place) {
             const { ptr, size } = this.echoCdDynField(s.value.place, s.value.type, ctx, out);
+            out.push(`return(${ptr}, ${size})`);
+            break;
+          }
+          // S4: `return n.inner` - a whole STATIC nested-struct LEAF of a FULLY-STATIC outer calldata
+          // param. Re-encode it INLINE (no [0x20] wrapper) directly from the leaf's calldata offset via
+          // the recursive calldata->memory codec, the SAME encoder the whole-param echo (echoStaticParam)
+          // uses. A whole STRUCT leaf ALWAYS validates (dirty narrow struct-field words EMPTY-revert,
+          // matching solc's convert-to-memory) - so validate=true here.
+          if (s.value.kind === 'cdPlaceReadAgg') {
+            const off = this.lowerCdPlace(s.value.place, ctx, out);
+            const ptr = this.fresh();
+            out.push(`let ${ptr} := mload(0x40)`);
+            const size = this.abiEncFromCd(s.value.type, off, ptr, true, out);
+            out.push(`mstore(0x40, add(${ptr}, ${size}))`);
             out.push(`return(${ptr}, ${size})`);
             break;
           }
@@ -3785,6 +3817,7 @@ ${indent(runtime, 6)}
       case 'cdAggArrayElem':
       case 'cdFieldAggValue': // whole dyn-array field of a cd struct-array element: return path / aggArgToMemPtr
       case 'cdNestedFieldAggValue': // whole inner array of such a nested field: return path / aggArgToMemPtr
+      case 'cdPlaceReadAgg': // S4: whole static-aggregate leaf of a static calldata param: aggToMemPtr / return / abi.encode
       case 'mapStorageValue':
       case 'mapDynValue':
       case 'abiEncode':
@@ -6327,6 +6360,16 @@ ${indent(runtime, 6)}
     if (e.kind === 'arrayValue' && e.arr.base.kind === 'fixedArray')
       return this.allocAggFromStorage(e.type, String(e.arr.base.baseSlot), out);
     if (e.kind === 'cdAggregateValue') return this.allocAggFromCalldata(e.param, e.type, ctx, out);
+    if (e.kind === 'cdPlaceReadAgg') {
+      // S4: a WHOLE STATIC-AGGREGATE LEAF of a fully-static outer calldata param (n.inner, n.arr,
+      // n.inner.d). Fold the place to the leaf's calldata byte offset, then COPY it into a fresh
+      // memory image via the SAME validating codec the whole-param / struct-array-element copies use
+      // (allocAggFromCalldataBase -> abiEncFromCd with validate=true): each constituent static word is
+      // loaded THROUGH validateInput (a dirty bool/address word EMPTY-reverts, matching solc's lazy
+      // validate-on-access). The pointer is byte-identical to a memory-local static-aggregate image.
+      const off = this.lowerCdPlace(e.place, ctx, out);
+      return this.allocAggFromCalldataBase(e.type, off, out);
+    }
     if (e.kind === 'arrayGet') {
       // Cat B: a STATIC STRUCT element of a memory P[] (xs[i]). lowerArrayGet returns the element's
       // ABSOLUTE image pointer (the pointer-headed slot), which IS a struct image - so aggFieldRead
