@@ -6880,14 +6880,24 @@ ${indent(runtime, 6)}
       if (isBytesLike(f.type)) {
         const fref = this.dynFieldRef(f, src, i, hw, ctx, out);
         // a calldata string/bytes field materialized into a fresh image (store/local, NOT the echo
-        // path): the echo decoder defers the length-cap + payload-fits checks, so add them here. The
-        // oversized-LENGTH cap (lenCap) is context-split: the BIND context (`let m: R = p`, a
-        // calldata->MEMORY deep copy) hits solc's memory ALLOCATION guard -> Panic 0x41; the
-        // abi.encode / emit / error RE-ENCODE context -> EMPTY revert (probe-verified vs 0.8.35). The
-        // payload-fits check ALWAYS stays an EMPTY revert (a TRUNCATED / OOB source runs past
-        // calldatasize; solc empty-reverts there regardless of the alloc-cap flavor).
+        // path): the echo decoder defers the length-cap + payload-fits checks, so add them here. solc
+        // allocs the [len][data] blob via array_allocation_size = add(0x20, round_up(len)) then
+        // finalize_allocation, which Panics 0x41 on allocation-SIZE overflow (freePtr + 0x20 +
+        // round_up(len) > 0xffffffffffffffff, or the round-up itself wraps). Mirror that SIZE guard here
+        // against JETH's ACTUAL free pointer (mload(0x40), == solc's free pointer), with the context-split
+        // flavor (lenCap): the BIND context (`let m: R = p`, a calldata->MEMORY deep copy) Panics 0x41 (solc
+        // flips at length = 2^64 - 255 for a bytes leaf under this layout, NOT at 2^64); the abi.encode /
+        // emit / error RE-ENCODE context -> EMPTY revert (probe-verified vs 0.8.35). The SIZE guard MUST
+        // precede the payload-fits check (solc allocs before touching calldata). The 2^64 length cap stays
+        // too (subsumed, harmless). The payload-fits check ALWAYS stays an EMPTY revert (a TRUNCATED / OOB
+        // source runs past calldatasize; solc empty-reverts there regardless of the alloc-cap flavor).
         if (fref.src === 'calldata') {
           out.push(`if gt(${fref.len}, 0xffffffffffffffff) { ${lenCap} }`);
+          const fp = this.fresh();
+          out.push(`let ${fp} := mload(0x40)`);
+          const blobEnd = this.fresh();
+          out.push(`let ${blobEnd} := add(add(${fp}, 0x20), and(add(${fref.len}, 0x1f), not(0x1f)))`);
+          out.push(`if or(gt(${blobEnd}, 0xffffffffffffffff), lt(${blobEnd}, ${fp})) { ${lenCap} }`);
           out.push(`if gt(add(${fref.dataPtr}, ${fref.len}), calldatasize()) { revert(0, 0) }`);
         }
         const { mp } = this.toMemory(fref, out);
@@ -6906,21 +6916,32 @@ ${indent(runtime, 6)}
         const se = this.fresh();
         out.push(`let ${se} := add(${src.base}, ${so})`);
         out.push(`if gt(add(${se}, ${cdElemHeadBytes(f.type)}), calldatasize()) { revert(0, 0) }`);
-        // cap the declared element count at 2^64-1 with the context-split flavor (lenCap): the BIND
-        // context (calldata->MEMORY deep copy) hits solc's memory allocation guard -> Panic 0x41
-        // (probe-verified vs 0.8.35 - a huge inner u256[] count under a bound dyn-struct param Panics
-        // 0x41, NOT empty), the abi.encode / emit / error RE-ENCODE context -> EMPTY revert. THEN
+        // solc allocates the [len][elems] image via array_allocation_size = add(0x20, mul(len, stride))
+        // then finalize_allocation, which Panics 0x41 on allocation-SIZE overflow: when the resulting free
+        // pointer add(freePtr, add(0x20, mul(len, stride))) exceeds 0xffffffffffffffff (or the mul itself
+        // overflows). Mirror that guard here using JETH's ACTUAL free pointer at the alloc point (mload(0x40),
+        // == solc's free pointer for this layout), with the context-split flavor (lenCap): the BIND context
+        // (calldata->MEMORY deep copy) hits solc's allocation guard -> Panic 0x41 (probe-verified vs 0.8.35 -
+        // solc flips to Panic 0x41 at a length ~2^59 for a u256[] field, NOT at 2^64), the abi.encode / emit /
+        // error RE-ENCODE context -> EMPTY revert. The SIZE guard MUST precede the payload-fits check below,
+        // exactly like solc allocates before touching calldata (a payload-fits empty-revert must not preempt
+        // the alloc Panic). The 2^64 length cap stays too (subsumed by the size cap, but harmless). THEN
         // require the whole [len][elems] payload to lie within calldata (ALWAYS an EMPTY revert for a
         // TRUNCATED / OOB source, like solc). The RE-ENCODE consumer also passes capEmptyRevert into
         // abiEncFromCd below so its own internal caps match.
         const alen = this.fresh();
         out.push(`let ${alen} := calldataload(${se})`);
         out.push(`if gt(${alen}, 0xffffffffffffffff) { ${lenCap} }`);
+        const dst = this.fresh();
+        out.push(`let ${dst} := mload(0x40)`);
+        const encEnd = this.fresh();
+        out.push(
+          `let ${encEnd} := add(add(${dst}, 0x20), mul(${alen}, ${abiHeadWords(f.type.element) * 32}))`,
+        );
+        out.push(`if or(gt(${encEnd}, 0xffffffffffffffff), lt(${encEnd}, ${dst})) { ${lenCap} }`);
         out.push(
           `if gt(add(add(${se}, 0x20), mul(${alen}, ${abiHeadWords(f.type.element) * 32})), calldatasize()) { revert(0, 0) }`,
         );
-        const dst = this.fresh();
-        out.push(`let ${dst} := mload(0x40)`);
         const size = this.abiEncFromCd(f.type, se, dst, true, out, emptyCap);
         out.push(`mstore(0x40, add(${dst}, ${size}))`);
         out.push(`mstore(${at}, ${dst})`);

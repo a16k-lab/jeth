@@ -83,6 +83,54 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
     ]);
   });
 
+  // --- DIVERGENCE 1 (completion): the SIZE-based BIND allocation cap, at solc's EXACT flip length ---
+  // solc's abi_decode allocates each dynamic field via array_allocation_size = add(0x20, mul(len, stride))
+  // (value array) or add(0x20, round_up(len)) (bytes/string) then finalize_allocation, which Panics 0x41 the
+  // moment the resulting free pointer add(freePtr, allocSize) exceeds 0xffffffffffffffff - NOT at len = 2^64.
+  // For R{first; n} the memory struct head is 2 words, so freePtr at the field alloc = 0xc0 (== JETH's). The
+  // EXACT flip is therefore MUCH earlier than 2^64 for a wide element (probe-verified vs solc 0.8.35). These
+  // pins assert JETH Panics 0x41 at solc's exact flip and empty-reverts just below (where solc does too).
+  it('D1(size): u256[] bind Panics 0x41 at solc EXACT flip; empty just below; well-formed anchor', async () => {
+    const J = `@struct class R { xs: u256[]; n: u256; }
+      @contract class C { @external @pure f(p: R): bytes { let m: R = p; return abi.encode(m); } }`;
+    const S = `struct R { uint256[] xs; uint256 n; }
+      contract C { function f(R calldata p) external pure returns(bytes memory){ R memory m = p; return abi.encode(m); } }`;
+    const sig = 'f((uint256[],uint256))';
+    // stride 0x20, freePtr 0xc0: Panic when 0xc0 + 0x20 + len*0x20 > 2^64-1  <=>  len >= 576460752303423481.
+    const FLIP = 576460752303423481n;
+    await diff(J, S, [
+      [sig, W(0x20n) + W(0x40n) + W(99n) + W(3n) + W(11n) + W(22n) + W(33n)], // well-formed (non-vacuity)
+      [sig, W(0x20n) + W(0x40n) + W(99n) + W(FLIP)], // AT solc's exact flip -> Panic 0x41
+      [sig, W(0x20n) + W(0x40n) + W(99n) + W(FLIP - 1n)], // just below -> EMPTY (solc allocs fine, then OOB)
+    ]);
+    // context-split preservation: the SAME flip length in the RE-ENCODE context (abi.encode(p), no bind)
+    // must stay EMPTY, not Panic (divergence-2). freePtr differs but the encode context caps empty either way.
+    const Je = `@struct class R { xs: u256[]; n: u256; }
+      @contract class C { @external @pure f(p: R): bytes { return abi.encode(p); } }`;
+    const Se = `struct R { uint256[] xs; uint256 n; }
+      contract C { function f(R calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`;
+    await diff(Je, Se, [
+      [sig, W(0x20n) + W(0x40n) + W(99n) + W(3n) + W(11n) + W(22n) + W(33n)], // well-formed
+      [sig, W(0x20n) + W(0x40n) + W(99n) + W(FLIP)], // RE-ENCODE at flip -> EMPTY (not Panic)
+    ]);
+  });
+
+  it('D1(size): string bind Panics 0x41 at solc EXACT flip; empty just below; well-formed anchor', async () => {
+    const J = `@struct class R { s: string; n: u256; }
+      @contract class C { @external @pure f(p: R): bytes { let m: R = p; return abi.encode(m); } }`;
+    const S = `struct R { string s; uint256 n; }
+      contract C { function f(R calldata p) external pure returns(bytes memory){ R memory m = p; return abi.encode(m); } }`;
+    const sig = 'f((string,uint256))';
+    // bytes/string: alloc = 0x20 + round_up(len); freePtr 0xc0: Panic when 0xc0 + 0x20 + round_up(len) > 2^64-1
+    // <=> round_up(len) >= 2^64 - 224, i.e. len >= 2^64 - 255 = 18446744073709551361.
+    const FLIP = 18446744073709551361n;
+    await diff(J, S, [
+      [sig, W(0x20n) + W(0x40n) + W(99n) + encBytes('616263')], // well-formed (non-vacuity)
+      [sig, W(0x20n) + W(0x40n) + W(99n) + W(FLIP)], // AT solc's exact flip -> Panic 0x41
+      [sig, W(0x20n) + W(0x40n) + W(99n) + W(FLIP - 1n)], // just below -> EMPTY
+    ]);
+  });
+
   // --- DIVERGENCE 2: abi.encode / emit / error huge inner length -> EMPTY ---
   it('D2: abi.encode of string/bytes field empty-reverts on huge len; well-formed round-trips', async () => {
     const Js = `@struct class R { s: string; n: u256; }
