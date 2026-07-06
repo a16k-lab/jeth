@@ -702,6 +702,20 @@ export function isValueWordLeafArray(t: JethType): boolean {
   return isValueWordLeafArray(t.element);
 }
 
+/** S3 (whole-fixed-value-array-field read): a FIXED-size array whose leaves are ALL static value words,
+ *  allowing nested fixed value-word arrays (Arr<u256,3>, Arr<address,3>, Arr<bool,4>, Arr<Arr<u256,2>,2>)
+ *  but NEVER a struct element and NEVER a dynamic (length===undefined) level anywhere in the chain. Such
+ *  an aggregate has a flat INLINE image (one word per leaf, N contiguous words), byte-identical to the
+ *  same-shape static struct the memAggregate value-word codec already copies. Distinct from isStaticType
+ *  (which also admits a static-STRUCT element, the exact shape that MISCOMPILED to all-zero words) and
+ *  from isValueWordAggregate / isValueWordLeafArray (which admit funcrefs, structs, or dynamic levels).
+ *  Used ONLY at the G9 whole-field resolver to route the field read to a memAggregate at its word offset;
+ *  a struct-element or dynamic-element fixed array stays a clean JETH245 over-rejection (correct + safe). */
+export function isFixedValueWordArray(t: JethType): boolean {
+  if (t.kind !== 'array' || t.length === undefined) return false;
+  return isStaticValueType(t.element) || isFixedValueWordArray(t.element);
+}
+
 /** Storage packing of a dynamic/fixed-array element. Solidity packs small value types
  *  (bool, uintN<256, intN<256, bytesN<32) several per slot, but NOT address (it
  *  is whole-slot in arrays despite being 20 bytes) nor full-word types. An internal

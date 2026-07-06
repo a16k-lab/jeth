@@ -33,6 +33,7 @@ import {
   isNestedValueArray,
   isNestedValueWordArray,
   isValueWordLeafArray,
+  isFixedValueWordArray,
   isAggregateLeafArray,
   isStaticStructFixedLeafArray,
   isDynBytesFixedLeafArray,
@@ -18301,6 +18302,14 @@ export class Analyzer {
       if (isValueWord(r.type))
         return { kind: 'memField', type: r.type, local: r.local, wordOffset: r.wordOffset };
       if (r.type.kind === 'struct')
+        return { kind: 'memAggregate', type: r.type, local: r.local, wordOffset: r.wordOffset };
+      // S3: a WHOLE fixed-value-word-array field (Arr<u256,3>, Arr<address,3>, Arr<Arr<u256,2>,2>, ...) has
+      // the SAME flat inline N-word image as a static struct, so it rides the identical memAggregate at its
+      // accumulated word offset (a sub-pointer aliasing the parent image). isFixedValueWordArray is TIGHT: a
+      // struct element (Arr<In,N>, In static) or ANY dynamic level (Arr<string,N>, T[]) is EXCLUDED and stays
+      // a clean JETH245 over-rejection - admitting the struct-element form is the exact miscompile (all-zero
+      // words) that must never ship.
+      if (isFixedValueWordArray(r.type))
         return { kind: 'memAggregate', type: r.type, local: r.local, wordOffset: r.wordOffset };
       this.diags.error(
         node,
