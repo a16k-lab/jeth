@@ -8203,7 +8203,26 @@ export class Analyzer {
     }
     const v = this.checkExpr(argExpr, arr.elem);
     if (!v) return;
-    out.push({ kind: 'push', arr, value: this.coerce(v, arr.elem, call.arguments[0]!) });
+    const value = this.coerce(v, arr.elem, call.arguments[0]!);
+    // SOUNDNESS (JETH467/JETH470): pushing a MEMORY or CALLDATA aggregate element into a STORAGE dynamic array
+    // is exactly the mem/cd -> storage copy solc's LEGACY pipeline cannot lower when the element (Box{Arr<In,N>})
+    // or a nested member is a FIXED array whose DIRECT element is a struct - a DIRECT static-struct fixed array
+    // (Arr<In,N>[]) rejects even a CALLDATA source, and a DIRECT dynamic-struct fixed array (Arr<DIn,N>[]) is
+    // rejected from a MEMORY source (JETH467; the calldata form is caught by JETH900 codegen). this.bs.push(
+    // Box([In(1n,2n),In(3n,4n)])) previously COMPILED in JETH (an OVER-ACCEPTANCE; the pushed element's N-pointer
+    // image would be flattened into the slots, a MISCOMPILE) while solc raises UnimplementedFeatureError. The
+    // push destination is always a STORAGE dynamic array here (a calldataArray/fixedArray receiver was already
+    // rejected above), so gate through the SAME helper the assignment path uses (copiedType = arr.elem, the
+    // pushed element type). A push of a value struct / value fixed array / nested array-of-array-of-struct from
+    // calldata / a whole single struct stays ACCEPTED (the helper returns undefined); a STORAGE-sourced element
+    // (this.bs.push(this.src), this.b.push(this.a[i])) stays ACCEPTED (isStorageAggSource). A no-arg push() and
+    // the bytes push are handled above and never reach here.
+    const reject = this.memCdAggToStorageReject(arr.elem, value);
+    if (reject) {
+      this.diags.error(argExpr, reject.code, reject.msg);
+      return;
+    }
+    out.push({ kind: 'push', arr, value });
   }
 
   /** Whether an array literal's element type is deducible FROM THE LITERAL ITSELF
@@ -10470,6 +10489,111 @@ export class Analyzer {
     return false;
   }
 
+  /** Whether a checked RHS `value` reads a whole aggregate FROM CALLDATA (a calldata struct value or a
+   *  calldata array/element). Used by the JETH470 gate: legacy COPIES a whole calldata struct into storage
+   *  fine, so a struct target rejects only a memory source; a DIRECT array-of-struct target rejects BOTH. */
+  private isCalldataAggSource(value: Expr): boolean {
+    return (
+      value.kind === 'cdAggregateValue' ||
+      value.kind === 'cdDynStructValue' ||
+      (value.kind === 'arrayValue' &&
+        (value.arr.base.kind === 'calldataArray' ||
+          value.arr.base.kind === 'cdNestedElem' ||
+          value.arr.base.kind === 'cdDynArrayField' ||
+          value.arr.base.kind === 'cdDynFixedField' ||
+          value.arr.base.kind === 'cdDynFixedDynField' ||
+          value.arr.base.kind === 'cdDynFieldNested' ||
+          value.arr.base.kind === 'cdSlice' ||
+          value.arr.base.kind === 'cdSubElem'))
+    );
+  }
+
+  /** Whether a checked RHS `value` reads a whole aggregate FROM STORAGE (this.dst = this.src, this.arr[i], a
+   *  nested storage path). Legacy + JETH's element-wise storage->storage copy both support these, so the
+   *  JETH470 gate must NOT reject them. Storage struct reads are 'structValue' (a @state struct, carries a
+   *  storage baseSlot; memory structs are memAggregate, calldata are cd*), a nested storage path is
+   *  'stateRead'/'placeRead', and a storage array/element is 'arrayValue'/'structArrayElem' over a storage
+   *  base. Only a MEMORY or CALLDATA aggregate source is NOT storage-sourced. */
+  private isStorageAggSource(value: Expr): boolean {
+    const isStorageArrBase = (b: string): boolean =>
+      b === 'stateArray' || b === 'fixedArray' || b === 'mapArray' || b === 'placeArray';
+    return (
+      value.kind === 'stateRead' ||
+      value.kind === 'placeRead' ||
+      value.kind === 'structValue' ||
+      ((value.kind === 'arrayValue' || value.kind === 'structArrayElem') && isStorageArrBase(value.arr.base.kind))
+    );
+  }
+
+  /** Whether a checked RHS `value` is a MEMORY-sourced aggregate (an array literal, a new-array, a whole
+   *  memory aggregate / abi.decode result, or a memory array/element). Used by the JETH467 clause, which
+   *  rejects a whole FIXED-outer DYNAMIC-STRUCT array (Arr<DIn,N>) copied from MEMORY into storage (the
+   *  calldata form is independently rejected by JETH900 codegen, so JETH467 stays memory-only). */
+  private isMemorySourcedAgg(value: Expr): boolean {
+    return (
+      value.kind === 'arrayLit' ||
+      value.kind === 'newArray' ||
+      value.kind === 'memAggregate' ||
+      value.kind === 'abiDecode' ||
+      (value.kind === 'arrayValue' &&
+        (value.arr.base.kind === 'memArray' || value.arr.base.kind === 'memArrayExpr'))
+    );
+  }
+
+  /** JETH467/JETH470 shared gate. `copiedType` is the aggregate being copied into storage (the whole
+   *  assignment target's type, or a push's element type). `value` is the checked RHS. Returns a diagnostic
+   *  {code,msg} when solc's LEGACY pipeline cannot copy this mem/cd aggregate into storage (so JETH must
+   *  REJECT to match), else undefined. The caller only invokes this once it knows the destination is STORAGE.
+   *  Reject shapes:
+   *   (467) copiedType is a FIXED-outer array of DYNAMIC structs (Arr<DIn,N>) copied from a MEMORY source -
+   *         UNIMPLEMENTED in legacy; the calldata form is rejected independently by JETH900 codegen.
+   *   (470a) copiedType (or a nested member) is a FIXED array whose DIRECT element is a static struct
+   *         (Arr<In,N>) AND the source is memory OR calldata for a DIRECT array-of-struct copiedType, or memory
+   *         only for a struct/other copiedType that merely CONTAINS such a field (legacy copies a whole calldata
+   *         STRUCT fine, but rejects a whole calldata ARRAY-of-struct);
+   *   (470b) copiedType is a NESTED array-of-array whose ultimate leaf is a static struct (Arr<Arr<In,N>,M>),
+   *         copied from a MEMORY source - JETH cannot yet reproduce solc's byte layout, so a SAFE over-rejection
+   *         (the calldata form IS byte-identical and stays accepted).
+   *  Storage->storage is never rejected (isStorageAggSource). */
+  private memCdAggToStorageReject(
+    copiedType: JethType,
+    value: Expr,
+  ): { code: string; msg: string } | undefined {
+    if (this.isStorageAggSource(value)) return undefined;
+    // JETH467: a whole FIXED-outer DYNAMIC-STRUCT array (Arr<DIn,N>) from a MEMORY source. Scoped to the
+    // memory source; the calldata form is caught by JETH900 in codegen.
+    if (this.isMemorySourcedAgg(value) && isDynStructFixedLeafArray(copiedType)) {
+      return {
+        code: 'JETH467',
+        msg: `copying a whole ${displayName(copiedType)} (a fixed array of dynamic structs) from memory into storage is not supported (solc's legacy pipeline rejects this too); assign its elements/fields individually`,
+      };
+    }
+    const calldataSource = this.isCalldataAggSource(value);
+    if (
+      this.solcCannotCopyMemAggToStorage(copiedType) &&
+      (copiedType.kind === 'array' || !calldataSource)
+    ) {
+      return {
+        code: 'JETH470',
+        msg: `copying a whole ${displayName(copiedType)} that contains a fixed array of structs from ${
+          calldataSource ? 'calldata' : 'memory'
+        } into storage is not supported (solc's legacy pipeline rejects this too); assign its elements/fields individually`,
+      };
+    }
+    if (
+      !calldataSource &&
+      copiedType.kind === 'array' &&
+      copiedType.element.kind === 'array' &&
+      isStaticStructFixedLeafArray(copiedType)
+    ) {
+      return {
+        code: 'JETH470',
+        msg: `copying a whole ${displayName(copiedType)} (a nested array whose leaf is a struct) from memory into storage is not supported (JETH cannot yet reproduce solc's byte layout); assign its elements individually`,
+      };
+    }
+    return undefined;
+  }
+
   private checkAssignment(e: ts.BinaryExpression, out: Stmt[]): void {
     // `[a, , c] = <multi-call | tuple>` (tuple destructuring assignment to existing lvalues).
     if (ts.isArrayLiteralExpression(e.left)) {
@@ -10556,85 +10680,23 @@ export class Analyzer {
       // supported in legacy"). JETH previously ACCEPTED it (an OVER-ACCEPTANCE) and the constructor form
       // this.s = a MISCOMPILED: the generic fixed-array store flattened the N-pointer memory image into the
       // first slots (writing raw memory pointer words + only element 0's payload, DROPPING later elements)
-      // instead of the real values. Match legacy = REJECT. solcCannotCopyMemAggToStorage encodes the EXACT
-      // legacy reject shape (an array whose DIRECT element is a struct triggers it; a nested array-of-array
-      // level `In[N][M]` does NOT - solc accepts that; a value-array field does NOT). A struct target rejects
-      // ONLY a MEMORY source: legacy ACCEPTS a whole calldata-struct->storage copy (calldataStructSource), so
-      // that stays accepted; a DIRECT array target rejects BOTH memory and calldata (legacy rejects both).
-      // Storage->storage (this.dst = this.src, a fixedArray/stateArray/placeArray/mapArray source) is fully
-      // supported by legacy and by JETH's element-wise copy, so it is NOT rejected. Dynamic-struct shapes
-      // (Arr<dyn,N> / In[] with a dynamic struct) keep their existing JETH467 / JETH900 rejects (this gate is
-      // scoped to STATIC-struct leaves via isStaticType). Element/field/scalar writes are unaffected (their
-      // target type is a single struct / value, never an array-of-struct).
-      const calldataStructSource =
-        value.kind === 'cdAggregateValue' ||
-        value.kind === 'cdDynStructValue' ||
-        (value.kind === 'arrayValue' &&
-          (value.arr.base.kind === 'calldataArray' ||
-            value.arr.base.kind === 'cdNestedElem' ||
-            value.arr.base.kind === 'cdDynArrayField' ||
-            value.arr.base.kind === 'cdDynFixedField' ||
-            value.arr.base.kind === 'cdDynFixedDynField' ||
-            value.arr.base.kind === 'cdDynFieldNested' ||
-            value.arr.base.kind === 'cdSlice' ||
-            value.arr.base.kind === 'cdSubElem'));
-      // A STORAGE-sourced RHS (this.dst = this.src, this.arr[i], a nested storage path) is a whole-struct or
-      // whole-array read from storage: legacy + JETH's element-wise storage->storage copy both support it, so it
-      // must NOT be rejected. Storage reads are 'state'/'stateRead' (a @state var) or 'place'/'placeRead' (a
-      // nested storage path / storage array element); an arrayValue with a storage base is the storage-array case.
-      // (Memory sources are memAggregate/memLocal; calldata sources are cd*/calldataArray - neither matches here.)
-      // A STORAGE-sourced RHS reads a whole struct/array/element FROM storage; legacy + JETH's element-wise
-      // storage->storage copy both support it, so it must NOT be rejected. Storage struct reads are 'structValue'
-      // (a @state struct, carries a storage baseSlot; memory structs are memAggregate, calldata are cd*), a nested
-      // storage path is 'stateRead'/'placeRead', and a storage array/element is 'arrayValue'/'structArrayElem'
-      // over a storage base. Only a MEMORY or CALLDATA aggregate source reaches the reject below.
-      const isStorageArrBase = (b: string): boolean =>
-        b === 'stateArray' || b === 'fixedArray' || b === 'mapArray' || b === 'placeArray';
-      const storageSource =
-        value.kind === 'stateRead' ||
-        value.kind === 'placeRead' ||
-        value.kind === 'structValue' ||
-        ((value.kind === 'arrayValue' || value.kind === 'structArrayElem') && isStorageArrBase(value.arr.base.kind));
-      if (
-        storageTarget &&
-        !storageSource &&
-        this.solcCannotCopyMemAggToStorage(target.type) &&
-        // a DIRECT array-of-struct target rejects a memory OR calldata source; a struct (or other) target that
-        // merely CONTAINS such a field rejects only a MEMORY source (legacy copies a whole calldata struct fine).
-        (target.type.kind === 'array' || !calldataStructSource)
-      ) {
-        this.diags.error(
-          e.left,
-          'JETH470',
-          `copying a whole ${displayName(target.type)} that contains a fixed array of structs from ${
-            calldataStructSource ? 'calldata' : 'memory'
-          } into storage is not supported (solc's legacy pipeline rejects this too); assign its elements/fields individually`,
-        );
-        return;
-      }
-      // SOUNDNESS (JETH470, second clause): a whole NESTED-array-of-array whose ultimate leaf is a STATIC struct
-      // (Arr<Arr<In,N>,M>, Arr<Arr<Arr<In,N>,M>,K>, ...) copied from a MEMORY source into storage MISCOMPILES in
-      // JETH today (the nested memory image is not lowered into the storage slots - the read-back is all zeros)
-      // while solc's LEGACY pipeline ACCEPTS and compiles it correctly. JETH cannot yet reproduce those bytes,
-      // so match the ABSOLUTE BAR (a clean reject always beats wrong bytes) with a SAFE over-rejection restricted
-      // to the MEMORY source. The CALLDATA form is byte-identical (verified at every depth) and stays ACCEPTED;
-      // the direct-element case (Arr<In,N>) is already handled above; a value-leaf nested array (Arr<Arr<u256,N>,M>)
-      // is byte-identical and NOT matched (isStaticStructFixedLeafArray excludes value leaves). Storage->storage
-      // is excluded (!storageSource). This closes a pre-existing miscompile in the same assignment gate.
-      if (
-        storageTarget &&
-        !storageSource &&
-        !calldataStructSource &&
-        target.type.kind === 'array' &&
-        target.type.element.kind === 'array' &&
-        isStaticStructFixedLeafArray(target.type)
-      ) {
-        this.diags.error(
-          e.left,
-          'JETH470',
-          `copying a whole ${displayName(target.type)} (a nested array whose leaf is a struct) from memory into storage is not supported (JETH cannot yet reproduce solc's byte layout); assign its elements individually`,
-        );
-        return;
+      // instead of the real values. Match legacy = REJECT. The shared helper memCdAggToStorageReject encodes
+      // the EXACT legacy reject shape: solcCannotCopyMemAggToStorage (an array whose DIRECT element is a struct
+      // triggers it; a nested array-of-array level `In[N][M]` does NOT - solc accepts that; a value-array field
+      // does NOT); a struct target rejects ONLY a MEMORY source (legacy ACCEPTS a whole calldata-struct->storage
+      // copy), a DIRECT array target rejects BOTH memory and calldata; a second clause SAFE-rejects a nested
+      // array-of-array whose leaf is a struct copied from MEMORY (a pre-existing JETH miscompile). Storage->storage
+      // (this.dst = this.src) is fully supported by legacy and by JETH's element-wise copy, so it is NOT rejected.
+      // Dynamic-struct shapes (Arr<dyn,N> / In[] with a dynamic struct) keep their existing JETH467 / JETH900
+      // rejects (this gate is scoped to STATIC-struct leaves). Element/field/scalar writes are unaffected (their
+      // target type is a single struct / value, never an array-of-struct). The SAME helper gates the push
+      // entry point (checkArrayMutator) so both mutation paths reject the identical family.
+      if (storageTarget) {
+        const reject = this.memCdAggToStorageReject(target.type, value);
+        if (reject) {
+          this.diags.error(e.left, reject.code, reject.msg);
+          return;
+        }
       }
       // Constructing a whole STORAGE struct that has a dynamic-array field whose element is a
       // STRUCT (DynStruct[]) is a later step (writeStruct/copyArrayValueIntoStorage cannot deep-copy a
