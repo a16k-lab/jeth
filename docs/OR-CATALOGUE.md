@@ -1,47 +1,80 @@
 # Over-rejection catalogue
 
-**Status: live-audited at f0e3761; Tier-1 lifts verified at `1b330fb`; Tier-2 lifts verified at
-`d42e6de` (2026-07-07).** The f0e3761 audit re-probed all 61 historical candidates (run+decode vs
-solc 0.8.35 legacy): 25 stale, 1 false, 32 remaining in 16 families. Tier-1 lifted 12 shapes
-(4 families); Tier-2 lifted 10 more groups incl. the mapping-rooted JETH152 family and bonus lifts,
-verified CLEAN by a 3-slice adversarial workflow (~404 cases, dual-commit bytecode-equality proof of
-zero codegen drift, zero miscompiles / over-acceptances / regressions), catalogued 3 new pre-existing
-residuals, and reclassified the memory-struct ctor to deliberate. **Current remaining: 16 shapes in
-9 families** (4 shapes / 1 family deliberate, 12 shapes / 8 families liftable). Codes current at
-`d42e6de`.
+**Status: live-audited at f0e3761; Tier-1 verified at `1b330fb`; Tier-2 at `d42e6de`; Tier-3 at
+`cef1148` + the soundness fix `8174afc` (2026-07-08).** The Tier-3 round lifted the final 12 shapes
+of the f0e3761 list (L9, three L2 residuals, L10a/b, L11a/b, L13, L14, L15; L6 reclassified
+deliberate) and was verified by a 4-slice adversarial workflow (381 cases: lift-consumer matrix,
+funcref ABI-leak + semantic hunt, dual-commit drift vs the pre-Tier-3 parent, catalogue re-probe;
+every claimed violation adversarially re-verified). The workflow caught ONE real regression, fixed
+at `8174afc`: funcref-bearing structs leaked through the @event (both arms) and @error parameter
+gates (the gates delegated to isSupportedStructReturn, which L11a widened); a dedicated
+typeHasFuncref screen (JETH229) now fires at both gates, and the other 34 probed ABI boundaries
+were already rejecting. Dual-commit drift check: CLEAN (44 identical-source comparisons, zero
+class or bytecode drift on unchanged paths).
 
-## Deliberate rejects (aliasing-sound, must stay)
+Two audit corrections from the same round:
+- The old deliberate rows **B-7 and B-24 were wrong when written** (an f0e3761 reconstruction
+  error, proven by compile bisect back to 2589e16): the struct-typed, u256[] and dyn-struct
+  spellings of `c ? <mem> : <storage>` COMPILE and are byte-identical to solc INCLUDING aliasing,
+  snapshot and single-evaluation witnesses. Their true residual scope is the fixed STRUCT-array
+  spelling only (see deliberate table).
+- Tier-3 also widened DYN-outer ref-element array literals (`let m: u256[][] = [a, b]`), verified
+  byte-identical against solc's equivalent new+assign mirror (cd deep-copy, storage deep-copy,
+  memory alias witnesses); its cd+storage element mix is a NEW over-rejection (solc's dyn-outer
+  equivalent runs, unlike the fixed-outer mix which is a parity both-reject).
 
-One family: shapes where solc holds a LIVE REFERENCE that JETH's flat memory image can only copy -
-lifting would trade a clean reject for a mutation-visibility miscompile. Do not lift without a
-pointer-preserving lowering proof.
+**Current remaining: ~27 shapes** = 8 deliberate (5 rows) + 19 liftable (7 families). Codes
+current at `8174afc`.
+
+## Deliberate rejects (must stay)
+
+Shapes where lifting is proven unsound (solc holds a LIVE REFERENCE a flat copy cannot mirror, or
+solc's literal typing cannot be reproduced) - a lift would trade a clean reject for a miscompile.
 
 | ID | Shape | Code | Why it must stay |
 |----|-------|------|------------------|
-| B-7 | `c ? this.produce() : this.sx` (ext-call result vs storage ternary) | JETH074 | Branches live in different location classes; copying either diverges from solc aliasing |
 | B-21 | memory-parent `xs[1n].pre` AND memory-struct `s.f` through the POINTER channels (internal-arg / element-write / internal-return / 2-hop) | JETH900 | A flat copy would detach from the live memory parent (R3); the FLAT consumers of the same expressions are lifted (L7b) |
-| B-24 | `c ? loc : this.sx` (memory local vs storage), let-bind and for-of | JETH074 (one per occurrence) | Mixed location classes; flatten rejected on aliasing grounds |
-| L7(a) | memory-struct ctor with a BOUND fixed-array var `S1(a, 5n)` | JETH465 | solc stores a live reference to `a` in the struct field; JETH's flat inline field can only copy. The fully-inline literal ctor `S1([In..,In..], 5n)` IS accepted and byte-identical |
+| TERN-STRUCT-ARR | `c ? <mem> : <storage>` ternary where both branches are a fixed STRUCT array `Arr<In,N>` (bind + for-of) or a dyn struct array `In[]` (bind). The B-7/B-24 residual scope: value, u256[], bytes and dyn-struct spellings are LIFTED and aliasing-verified | JETH074 | Pointer-headed struct-array branches; no aliasing-witness study has cleared a copy lowering yet (lift candidate only with one) |
+| L6 | `o[0n] = <storage/whole-agg>` writing into an inline value-word element of a nested memory array | JETH429 | The prior-alias witness (solc re-points, an earlier alias keeps OLD values) proves NO RHS source is liftable; a flat layout can only copy |
+| L7(a) | memory-struct ctor with a BOUND fixed-array var `S1(a, 5n)` | JETH465 | solc stores a live reference to `a`; the inline literal ctor `S1([In..,In..], 5n)` IS accepted and byte-identical |
+| L2-MOBILE | both-literal ternary encode with BARE int/bool elements `abi.encode(c ? [1n,2n] : [3n,4n])` | JETH213 | solc's mobile type is uint8[2]/bool[2]; JETH's u256 typing would encode differently (parity gate, not a feature gap) |
 
-## Liftable over-rejections (8 families, 12 shapes)
+Parity footnotes (both-reject, never ORs): FIXED-outer cd|storage array-literal element mixes and
+cd|storage ternary mixes (solc TypeErrors); oversize state-init literals (JETH065+JETH211).
+Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JETH066+JETH072; TS
+parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
+lifted and byte-identical).
 
-Every row is a CLEAN reject with a verified solc-runs-fine mirror.
+## Liftable over-rejections (7 families, 19 shapes)
+
+Every row re-probed at `cef1148`/`8174afc` with a verified solc-runs-fine mirror.
 
 | Family | Shape (witnesses) | Code(s) | Workaround |
 |--------|-------------------|---------|------------|
-| L2 residuals (ternary consumption) | both-literal-branch encode `abi.encode(c ? [In(1n,2n)] : [In(3n,4n)])` (struct + value spellings); ternary-chain LVALUE `(c ? this.A : this.B2)[i].y = v` (the desugar guard correctly refuses writes); bytes-typed member `(c ? a : b).t` on memory structs (value-field spellings are LIFTED) | JETH213 x2; JETH067; JETH074 | Bind a branch to a local first / if-else per branch |
-| L6 value-array elem write | `o[0n] = this.psv[0n].vals` storage-sourced `Arr<u256,2>` into a memory nested array (B-20) | JETH429 | Scalar copy per element |
-| L9 ref-element array literal | `let m: Arr<u256[],2> = [a, b]` from calldata/memory u256[] params (F2-4) | JETH900 | `new Array` the outer, assign elements |
-| L10 funcref non-word returns | `(x: u256) => string` funcref local (F4-1); tuple-return funcref, destructured call (F4-2) | JETH900; JETH014/066/072 | Dispatch via if/else over named internal fns |
-| L11 funcref as struct field | funcref + dyn-string fields, positional ctor `Fd(this.inc, "hi")` (F3-2); ternary over funcref-field struct locals (F4-3) | JETH200/074; JETH074 | Store a tag field, dispatch via if/else |
-| L13 nested bytes byte write | `p.tags[0n][1n] = 0x21n` into a memory struct's bytes[] element (F6-1). Scope refined: a plain LOCAL bytes byte-write is ACCEPTED; the OR is specific to struct-FIELD bytes elements | JETH055 (drifted from JETH151) | Rebuild the bytes value instead of in-place byte write |
-| L14 struct getter as interface impl | `@external @state g: S6` implementing `g(): [u256,u256]` from an @interface (F6-2) | JETH385; +JETH433 with @override | Write an explicit @external method returning the tuple |
-| L15 generic @modifier | `@modifier lim<T>(v: T)` (C-12). Feature gap vs JETH's own generic fns; solc has no generic modifiers | JETH327 (+JETH013/JETH329 cascades) | Monomorphize: one modifier per concrete type |
+| F-CALLEE funcref expression callees | calling a funcref-valued EXPRESSION: `(c ? this.inc : this.dec)(v)` direct; `(c ? a : b).f(10n)` struct-ternary member; `this.mk().f(4n)` call-result member; `this.pick(c)(v)` chained | JETH074 | let-bind the funcref/struct first (all bound forms lifted) |
+| F-TYPES funcref type gaps | struct-returning funcref annotation `let g: (a: u256) => In = this.mk`; dyn-ARRAY-returning funcref `(x) => u256[]` (string/bytes returns are lifted); nested funcref-bearing struct `Outer { fd: Fd }` | JETH900+074; JETH151; JETH229 (+228/074 cascades) | Named internal fns / flatten the struct |
+| F-CONSUMERS funcref-struct consumers | internal fn RETURNING `Fd` or `[Fd, u256]`; `Fd[]` memory array literal | JETH243/074; JETH427/074 | Return a tag, rebuild the struct; individual locals |
+| F-MULTIRET multi-return call positions | statement-position discard `g(a, b);`; direct `return g(a, b)` as the external tuple (destructure-then-return works) | JETH244; JETH060 | Destructure to named locals |
+| T-LVALUE ternary-chain lvalues | whole-element write `(c ? this.A : this.B2)[i] = In(9n,8n)`; compound `(c ? this.A : this.B2)[i].y += v`; nested chain `(c ? this.A : (d ? this.B2 : this.A))[i].y = v` (single-level `.y = v` is lifted) | JETH151; JETH067; JETH067 | if-else per branch |
+| A-LIT array-literal crosses | ternary over ref-element literals `abi.encode(c ? [a,b] : [b,a])` / bind spelling; tuple-return `[Arr<u256[],2>, u256]` from a ref-element literal; DYN-outer cd+storage mix `let m: u256[][] = [a, this.s1]` (solc's new+assign runs); cast-typed literal self-typing `abi.encode([u256(1n), u256(2n)])` + its ternary (solc: uint256[2]) | JETH900 / 200+151; JETH243/151; JETH074+151; JETH213 | Bind branches/elements first; new+assign |
+| M-BYTES memory-struct byte access | direct plain-bytes-field byte WRITE `q.b[2n] = 0x2an`; 2-hop `q.inner.b[1n] = v`; byte READ rvalue `p.tags[1n][0n]` (the bytes[]-element WRITE `p.tags[0n][1n] = v` is lifted, L13) | JETH151 x3 | let-bind the bytes value first (byte-identical) |
+| MOD-GEN generic modifier at aggregates | `@ne(bytes("ab"))` with `@modifier ne<T>(v: T)` (value-type instantiations are lifted, L15; the non-generic bytes modifier MATCHes) | JETH291 | Monomorphize per concrete type |
 
-Parity footnotes (both-reject, never ORs): cd|storage ternary mixes (solc TypeError); an OVERSIZE
-state-init literal (now JETH065+JETH211; solc TypeErrors too).
+(A-LIT counts 4 shapes, M-BYTES 3, F-TYPES 3, F-CONSUMERS 2, F-MULTIRET 2, T-LVALUE 3, F-CALLEE 1
+family of 4 spellings, MOD-GEN 1: 19 shapes.)
 
 ## Lifted history
+
+**Tier-3 round at `661cd1c` + `cef1148` (+ soundness fix `8174afc`)** (12 shapes, 381-case CLEAN
+verification): L9 ref-element array literals (cd/storage deep-copy, memory alias, the cd+storage
+parity gate; bonus dyn-outer widening); L2 residuals (both-struct-literal ternary encode, bytes
+member on struct ternaries, ternary-chain lvalue `.y = v` with solc eval order); L10a
+dynamic-return funcref calls; L10b multi-return funcref calls (destructured); L11a funcref-typed
+struct fields as internal values (ALL ABI boundaries reject, incl the event/error gates fixed at
+8174afc); L11b ternaries over funcref-field structs; L13 byte-writes into bytes[] field elements
+(in-place mstore8, alias-visible, OOB Panic); L14 statement-position internal calls with
+bytes/string args; L15 generic modifier instantiation at value types. L6 reclassified deliberate
+(prior-alias witness).
 
 **Tier-2 round at `d42e6de`** (10 groups + bonus, ~404-case CLEAN verification incl. dual-commit
 bytecode equality): L12 fixed-array STATE INITIALIZERS (full + short partial-fill, packed u8
@@ -63,9 +96,13 @@ multi-hop); B-19 s2s mapping-RHS copies; L5 storage struct-field array element o
 
 **f0e3761 audit** (25 stale entries): Family-1 aggregate-through-struct-field (6), Family-2 partial,
 Family-5 cast-constants, tuple-slot components, and 13 of 15 old SUPPORTED.md gates. Removed as a
-false entry: `P(1n, [])` (solc also rejects).
+false entry: `P(1n, [])` (solc also rejects). Post-Tier-3 correction: the audit's B-7/B-24 rows were
+reconstruction errors (see status).
 
 Audit method: differential deploy+call+decode via the scratchpad diff.mjs harness, identical calldata
 both sides, distinct non-zero seeds checked arithmetically; OOB/revert branches exercised; log
 surfaces compared entry-wise where events are involved; dual-commit (HEAD vs parent) compilation for
-class-change and bytecode-drift detection.
+class-change and bytecode-drift detection; per-finding adversarial re-verification (default stance:
+the finder made a probe mistake). Probe pitfalls that produced false alarms: contract not named `C`;
+`bytes("aabbcc")` (6 ASCII chars) mirrored as `hex"aabbcc"` (3 bytes); missing `n` literal suffixes;
+JETH event/revert spellings are `emit(E(x))` / `revert(Bad(x))` (an `emit E(x)` probe is vacuous).
