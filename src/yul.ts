@@ -18,6 +18,7 @@ import {
   JethType,
   StructField,
   canonicalName,
+  displayName,
   typesEqual,
   intRange,
   storageByteSize,
@@ -8716,6 +8717,23 @@ ${indent(runtime, 6)}
     if (a.kind === 'cdNestedFieldAggValue') {
       const hdr = this.cdNestedFieldArrayHeader(a.place, a.indices, ctx, out);
       return this.abiDecFromCdToImage(a.type, hdr, out, `${this.panic()}(0x41)`);
+    }
+    // Round-3 MC-cert-1: a whole Arr<In,N> FIELD of a struct-array element (xs[i].pre, kind
+    // aggFieldRead) is an INLINE-FLAT sub-pointer into the parent's element image, NOT the
+    // pointer-headed canonical representation this materializer promises. The FLAT consumers
+    // (external return / abi.encode / event data / topics) correctly treat it flat and stay
+    // byte-identical; but the channels routed HERE (an internal-call arg via lowerCallArgs, an
+    // internal return, a pointer-headed element-write RHS o[i] = xs[j].pre) would store/pass the
+    // flat pointer where element pointers are expected - a payload-corrupting miscompile (4
+    // witnesses). Transcoding is NOT semantics-preserving (solc passes a LIVE REFERENCE into the
+    // parent image - callee/alias mutations write through; a fresh copy would trade this for a
+    // mutation-visibility miscompile), so REJECT loudly: bind a fresh literal from its values
+    // instead. A struct-typed aggFieldRead (xs[i].q) stays accepted - a static struct's canonical
+    // image IS flat, so the tail's lowerExpr sub-pointer is correct for it.
+    if (a.kind === 'aggFieldRead' && isStaticStructFixedLeafArray(a.type)) {
+      throw new UnsupportedError(
+        `a whole ${displayName(a.type)} field of a struct-array element cannot be used as an internal-call argument, internal return value, or element-write source yet (bind its element values to a fresh array instead)`,
+      );
     }
     // Round-2 RC-2: a TERNARY over Arr<In,N> (a static-struct fixed-leaf array). The ternary lowering
     // materializes each (flat-source: storage / literal / calldata) branch via aggToMemPtr and selects
