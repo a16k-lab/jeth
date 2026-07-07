@@ -17768,6 +17768,47 @@ export class Analyzer {
         );
         return undefined;
       }
+      // solc's ternary DATA-LOCATION rule is uniform across reference types: a CALLDATA-sourced
+      // branch cannot unify with a STORAGE-sourced branch ("True expression's type ... calldata does
+      // not match false expression's type ... storage pointer"). JETH accepted and materialized the
+      // mix for static aggregates / bytes / dynamic structs (Round-2 OA-1, an over-acceptance across
+      // every reference family) - reject it here, before the per-family blocks. cd|cd and cd|memory
+      // stay accepted (solc accepts both); the dynamic value-array block below keeps its OWN stricter
+      // gate (it additionally rejects cd|cd, which its materialize-to-memory cannot replicate).
+      if (!isStaticValueType(unified[0].type) && unified[0].type.kind !== 'funcref') {
+        const CD_KINDS = new Set([
+          'cdAggregateValue', 'cdDynStructValue', 'dynParamRead', 'cdStructArrayElem', 'cdAggArrayElem',
+          'cdDynArrayElem', 'cdPlaceRead', 'cdPlaceReadAgg', 'cdFieldAggValue', 'cdNestedFieldAggValue',
+          'cdDynStructField', 'cdArrayField', 'cdDynStructLeaf',
+        ]);
+        const ST_KINDS = new Set([
+          'structValue', 'mapStorageValue', 'structArrayElem', 'placeRead', 'dynStateRead', 'dynPlaceRead',
+        ]);
+        const CD_BASES = new Set([
+          'calldataArray', 'cdNestedElem', 'cdSubElem', 'cdSlice', 'cdDynArrayField', 'cdDynFieldNested', 'cdDynFixedField',
+        ]);
+        const ST_BASES = new Set(['stateArray', 'mapArray', 'placeArray', 'fixedArray']);
+        const brLoc = (e: Expr): 'cd' | 'storage' | 'mem' => {
+          if (e.kind === 'arrayValue') {
+            if (CD_BASES.has(e.arr.base.kind)) return 'cd';
+            if (ST_BASES.has(e.arr.base.kind)) return 'storage';
+            return 'mem';
+          }
+          if (CD_KINDS.has(e.kind)) return 'cd';
+          if (ST_KINDS.has(e.kind)) return 'storage';
+          return 'mem';
+        };
+        const l0 = brLoc(unified[0]);
+        const l1 = brLoc(unified[1]);
+        if ((l0 === 'cd' && l1 === 'storage') || (l0 === 'storage' && l1 === 'cd')) {
+          this.diags.error(
+            node,
+            'JETH074',
+            `ternary branches mix calldata and storage data locations (solc rejects this); copy one branch to a memory value first`,
+          );
+          return undefined;
+        }
+      }
       // A DYNAMIC value-element array ternary (c ? a : b, incl. storage `this.a`/`this.b`): materialize
       // the TAKEN branch to a memory [len][elems] pointer (codegen, via aggArgToMemPtr - storage/
       // calldata copy, memory alias) and select it; wrap as a memArrayExpr so return / index /
@@ -17869,6 +17910,14 @@ export class Analyzer {
           e.kind === 'memAggregate' ||
           e.kind === 'arrayGet' ||
           e.kind === 'call' ||
+          // Round-2 RC-1: an abi.decode-sourced branch (a literal abi.decode(b,T) or an external
+          // self-call result, lowered as abiDecode(extCall,T)) ALSO materializes the pointer-headed
+          // image (lowerAbiDecode / abiDecFromMemToImage), which the flat ternary consumers would
+          // mis-read - the MC-2..MC-6 miscompile family (pointer words leaked into abi.encode /
+          // return / topics / event data / error payloads). Same clean reject as the other
+          // pointer-headed kinds. THIRD mirror of this list (yul isPointerHeadedStaticAggArg,
+          // prepEncodeComponent memFixedSrc) - keep all three in sync when widening.
+          e.kind === 'abiDecode' ||
           (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'));
         if (ptrHeaded(unified[0]) || ptrHeaded(unified[1])) {
           this.diags.error(

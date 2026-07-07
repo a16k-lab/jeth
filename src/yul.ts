@@ -8717,6 +8717,21 @@ ${indent(runtime, 6)}
       const hdr = this.cdNestedFieldArrayHeader(a.place, a.indices, ctx, out);
       return this.abiDecFromCdToImage(a.type, hdr, out, `${this.panic()}(0x41)`);
     }
+    // Round-2 RC-2: a TERNARY over Arr<In,N> (a static-struct fixed-leaf array). The ternary lowering
+    // materializes each (flat-source: storage / literal / calldata) branch via aggToMemPtr and selects
+    // a FLAT inline image - correct for the verbatim solo-return path, but THIS materializer's contract
+    // is the type's CANONICAL memory representation (what an internal callee binds / a memory local
+    // holds), which for Arr<In,N> is POINTER-HEADED. Passing the flat image dropped the payload (the
+    // callee misread the element words as pointers - MC-1a/MC-1b). Transcode flat -> pointer-headed via
+    // abiDecFromMemToImage (a static aggregate's flat image IS its ABI body). The fresh copy matches
+    // solc's storage/literal-branch conversion-to-memory semantics; the ternary result is a single-use
+    // temporary (binding it to a local is a clean reject), so no aliasing is observable.
+    if (a.kind === 'ternary' && isStaticStructFixedLeafArray(a.type)) {
+      const flat = this.lowerExpr(a, ctx, out);
+      const end = this.fresh();
+      out.push(`let ${end} := add(${flat}, ${abiHeadWords(a.type) * 32})`);
+      return this.abiDecFromMemToImage(a.type, flat, end, out);
+    }
     // a whole VALUE-leaf sub-aggregate ELEMENT of a calldata array-of-array (let row: u256[] = xs[i],
     // for u256[][] / address[][] / Arr<u256,N>[]) bound to a memory local: resolve the element's calldata
     // base (bounds-checked, Panic 0x32 on OOB), then DEEP-COPY it into a fresh memory image via the
