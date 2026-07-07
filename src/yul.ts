@@ -6669,8 +6669,12 @@ ${indent(runtime, 6)}
     if (el.type.kind === 'struct' && isDynamicType(el.type)) {
       return this.buildDynStructLocal(el.type, el, ctx, out);
     }
-    // a memory-array expression (alias / element of another nested array): its register IS the pointer.
-    return this.lowerExpr(el, ctx, out);
+    // Tier-3 L9: the canonical materializer for every remaining element source. A MEMORY-array
+    // expression ALIASES (aggArgToMemPtr returns the register pointer verbatim for memArray /
+    // memArrayExpr bases - identical to the old lowerExpr tail); a CALLDATA param element
+    // ([a, b] with a,b: u256[] cd params - previously a lowerExpr throw) and a STORAGE element
+    // DEEP-COPY into fresh [len][elems] images, matching solc's array-literal element conversion.
+    return this.aggArgToMemPtr(el, ctx, out);
   }
 
   /** Zero-initialize a nested-value-array memory image for `new Array<E>(n)` where E is itself an

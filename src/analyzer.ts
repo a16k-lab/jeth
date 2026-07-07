@@ -10713,6 +10713,66 @@ export class Analyzer {
       this.checkTupleAssign(e, out);
       return;
     }
+    // Tier-3 L2 residual (ternary-chain LVALUE): (c ? this.A : this.B2)[i].y = v. solc evaluates
+    // the RHS, then the ternary condition, then the index ONCE on the selected target. Desugar:
+    // tmp = v; if (c) { <A-chain> = tmp } else { <B-chain> = tmp } - the same v, c, index-once
+    // order, reusing the full assignment machinery per branch. Fires ONLY for a plain `=` whose
+    // target chain bottoms at a ternary, when the direct lvalue REJECTS (a pure lift), and both
+    // rebased targets quiet-check to the SAME static value type.
+    if (
+      e.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      (ts.isPropertyAccessExpression(e.left) || ts.isElementAccessExpression(e.left))
+    ) {
+      let lvBottom: ts.Expression = e.left;
+      while (ts.isPropertyAccessExpression(lvBottom) || ts.isElementAccessExpression(lvBottom))
+        lvBottom = stripParens(lvBottom.expression);
+      if (ts.isConditionalExpression(lvBottom)) {
+        const bot = lvBottom;
+        const direct = this.checkLValueQuiet(e.left);
+        if (!direct) {
+          const rebase = (n: ts.Expression, nb: ts.Expression): ts.Expression => {
+            const s = stripParens(n);
+            if (s === bot) return nb;
+            if (ts.isPropertyAccessExpression(s)) {
+              return ts.setTextRange(ts.factory.createPropertyAccessExpression(rebase(s.expression, nb), s.name), s);
+            }
+            const ea = s as ts.ElementAccessExpression;
+            return ts.setTextRange(
+              ts.factory.createElementAccessExpression(rebase(ea.expression, nb), ea.argumentExpression!),
+              ea,
+            );
+          };
+          const thenNode = rebase(e.left, bot.whenTrue);
+          const elsNode = rebase(e.left, bot.whenFalse);
+          const qT = this.checkLValueQuiet(thenNode);
+          const qE = this.checkLValueQuiet(elsNode);
+          if (qT && qE && typesEqual(qT.type, qE.type) && isStaticValueType(qT.type)) {
+            const tmpId = this.materializeAggregateRhsToTemp(e.right, qT.type, out);
+            if (!tmpId) return;
+            const cond = this.checkCondition(bot.condition);
+            if (!cond) return;
+            const thenStmts: Stmt[] = [];
+            const elsStmts: Stmt[] = [];
+            this.checkAssignment(
+              ts.setTextRange(
+                ts.factory.createBinaryExpression(thenNode, ts.SyntaxKind.EqualsToken, tmpId),
+                e,
+              ) as ts.BinaryExpression,
+              thenStmts,
+            );
+            this.checkAssignment(
+              ts.setTextRange(
+                ts.factory.createBinaryExpression(elsNode, ts.SyntaxKind.EqualsToken, tmpId),
+                e,
+              ) as ts.BinaryExpression,
+              elsStmts,
+            );
+            out.push({ kind: 'if', cond, then: thenStmts, else: elsStmts });
+            return;
+          }
+        }
+      }
+    }
     let target = this.checkLValue(e.left);
     if (!target) return;
     // A whole aggregate that contains a mapping cannot be assigned/copied (matches solc:
@@ -17636,6 +17696,18 @@ export class Analyzer {
     return 'mem';
   }
 
+  /** The lvalue twin of checkExprQuiet: probe checkLValue, discarding any diagnostics (the caller
+   *  re-checks for real). Used by the Tier-3 ternary-chain LVALUE desugar. */
+  private checkLValueQuiet(node: ts.Expression): LValue | undefined {
+    const mark = this.diags.items.length;
+    const r = this.checkLValue(node);
+    if (this.diags.items.length > mark) {
+      this.diags.items.length = mark;
+      return undefined;
+    }
+    return r;
+  }
+
   /** A type-probe checkExpr that DISCARDS any diagnostics it emits (the caller re-checks the same
    *  node for real, re-emitting them). Used by the ternary literal-branch inference (Tier-2 B-10). */
   private checkExprQuiet(node: ts.Expression): Expr | undefined {
@@ -17874,7 +17946,7 @@ export class Analyzer {
             const locMix = (locT === 'cd' && locE === 'storage') || (locT === 'storage' && locE === 'cd');
             const thenA = this.checkExprQuiet(rebase(node, bot.whenTrue));
             const elsA = this.checkExprQuiet(rebase(node, bot.whenFalse));
-            if (!locMix && thenA && elsA && typesEqual(thenA.type, elsA.type) && isStaticValueType(thenA.type)) {
+            if (!locMix && thenA && elsA && typesEqual(thenA.type, elsA.type) && (isStaticValueType(thenA.type) || isBytesLike(thenA.type))) {
               const cond = this.checkCondition(bot.condition);
               if (!cond) return undefined;
               // re-check for REAL so state flags / diags from the branch accesses are applied.
@@ -17905,6 +17977,39 @@ export class Analyzer {
         const nonLit = ts.isArrayLiteralExpression(node.whenTrue) ? node.whenFalse : node.whenTrue;
         const probe = this.checkExprQuiet(nonLit);
         if (probe && (probe.type.kind === 'array' || probe.type.kind === 'struct')) branchExpected = probe.type;
+      } else if (
+        !expected &&
+        ts.isArrayLiteralExpression(node.whenTrue) &&
+        ts.isArrayLiteralExpression(node.whenFalse)
+      ) {
+        // Tier-3 L2 residual (lit|lit): BOTH branches are array literals (abi.encode(c ? [In(1n,2n)] :
+        // [In(3n,4n)])). solc unifies via each literal's own type; JETH self-types from the ELEMENTS
+        // when they carry INTRINSIC types (struct ctors, typed vars, casts) - a bare integer/bool
+        // literal element is REFUSED (solc's mobile type for ints is the smallest fitting type, not
+        // u256; self-typing those would diverge). Lengths must match (solc: In[2] vs In[1] has no
+        // common type - the existing reject stands).
+        const litT = node.whenTrue;
+        const litE = node.whenFalse;
+        if (litT.elements.length === litE.elements.length && litT.elements.length > 0) {
+          let elemT: JethType | undefined;
+          let selfOk = true;
+          for (const lit of [litT, litE]) {
+            for (const el of lit.elements) {
+              const p = this.checkExprQuiet(el);
+              if (!p || p.kind === 'literalInt' || p.kind === 'literalBool') {
+                selfOk = false;
+                break;
+              }
+              if (!elemT) elemT = p.type;
+              else if (!typesEqual(elemT, p.type)) {
+                selfOk = false;
+                break;
+              }
+            }
+            if (!selfOk) break;
+          }
+          if (selfOk && elemT) branchExpected = { kind: 'array', element: elemT, length: litT.elements.length };
+        }
       }
       const then = this.checkExpr(node.whenTrue, branchExpected);
       const els = this.checkExpr(node.whenFalse, branchExpected);
@@ -18538,6 +18643,26 @@ export class Analyzer {
         const e = this.checkExpr(el, expected.element);
         if (!e) return undefined;
         elements.push(this.coerce(e, expected.element, el));
+      }
+      // Tier-3 L9 parity gate: solc's array-literal element unification follows the SAME data-location
+      // rule as ternaries - a CALLDATA-sourced element cannot unify with a STORAGE-sourced one
+      // ("Unable to deduce common type for array elements"); every other mix (cd|mem, mem|storage,
+      // st|st, cd|cd) unifies and converts to memory. Probed at 0.8.35. Without this gate the lifted
+      // element materializer (aggArgToMemPtr) would happily copy both - an over-acceptance.
+      if (
+        expected.element.kind === 'array' ||
+        expected.element.kind === 'struct' ||
+        isBytesLike(expected.element)
+      ) {
+        const locs = new Set(elements.map((e) => this.ternaryBranchLoc(e)));
+        if (locs.has('cd') && locs.has('storage')) {
+          this.diags.error(
+            node,
+            'JETH074',
+            'array-literal elements mix calldata and storage data locations (solc rejects this); copy one to memory first',
+          );
+          return undefined;
+        }
       }
       return { kind: 'arrayLit', type: expected, elem: expected.element, elements };
     }
