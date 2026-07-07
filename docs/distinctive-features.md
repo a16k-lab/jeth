@@ -62,6 +62,16 @@ internal-vs-private itself (codegen-identical until inheritance lands). Calling 
 internally is rejected (`JETH240`): expose an `@external` entry and have any internal caller go through
 a shared internal helper instead.
 
+**vs solc mutability (a deliberate leniency, not a miscompile).** Because `this.f()` on an internal `f`
+is an ordinary internal call (not a message call), a `@pure` function may call `this.internalPureMethod()`
+where solc - which treats **every** `this.f()` as an external message call - would require `@view` (and in
+fact rejects `this.f()` altogether for an internal `f`, since solc 0.8 has no internal-via-`this` syntax).
+JETH accepts it; solc rejects it. This is benign: the only cases that would diverge *behaviourally* - an
+internal method reading `msg.sender` / the environment, reached via `this.` - are already rejected by
+JETH's own `@pure`/`@view` mutability check, so no wrong bytes are ever produced. An `@external` self-call
+`this.f()` **is** a real `STATICCALL`/`CALL` in both, and JETH already requires the caller to be `@view`
+(`JETH055`), matching solc.
+
 ### Mixing manual + inferred
 
 All of these compose. A function may infer **both** mutability and visibility:
