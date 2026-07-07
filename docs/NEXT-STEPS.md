@@ -1,57 +1,53 @@
 # NEXT STEPS (quick reference)
 
-Full detail + harness source: [`docs/HANDOFF-pointer-headed-coverage.md`](./HANDOFF-pointer-headed-coverage.md).
+## Status: the pointer-headed coverage campaign is COMPLETE (2026-07-07)
 
-## Where you are
+The handoff below was executed to convergence. **FULLY-COVERED-CLEAN at HEAD `1a3c4c3`**
+(suite 396 files / 3612 tests green, `tsc` clean, all pushed). Full history in
+[`docs/HANDOFF-pointer-headed-coverage.md`](./HANDOFF-pointer-headed-coverage.md) (now historical).
 
-- `main` @ `18d6ae6` (+ handoff docs on top), suite **393 files / 3599 tests** green, `tsc` clean.
-- The pointer-headed `Arr<In,N>` (fixed array of a *static* struct) consumer surface is enumerated and proven
-  complete-by-construction; **8 consumers fixed**; **1 remains** (the 9th), then loop to clean.
-- ABSOLUTE BAR: **zero miscompiles, zero over-acceptances** (a clean reject / Panic beats wrong bytes). Judge
-  ONLY via the differential harness (behavioral byte-identity vs solc 0.8.35 **legacy** pipeline).
-- **Do NOT flatten `Arr<In,N>`** - solc's `In[N] memory` is itself pointer-headed with reference aliasing; a
-  flat layout would miscompile it. Fix each bad consumer to be pointer-aware, byte-identical.
+What was proven, at HEAD `1a3c4c3` vs solc 0.8.35 legacy: the pointer-headed `Arr<In,N>` family
+(fixed arrays of static structs - ABI-static, pointer-headed in memory) is fully covered. Every
+analyzer-accepted (expression-kind x consumer-channel) cross - kinds re-derived exhaustively from
+`src/ir.ts`, channels from every consumption site in `src/yul.ts` - either routes through the
+pointer-headed transcode byte-identically or terminates in a loud clean diagnostic. The four
+pointer-headedness mirror lists (analyzer ternary gate, `isPointerHeadedStaticAggArg`,
+`memFixedSrc`, `aggArgToMemPtr`) are drift-free, structurally and behaviorally.
 
-## Step 1 - fix the 9th consumer (a real miscompile on `18d6ae6`)
+### The five fix rounds (each committed + suite-green + pushed individually)
 
-- **Shape:** a multi-value tuple return whose component is a fixed-array ELEMENT `m[i]` of type `Arr<In,N>`
-  (source `Arr<Arr<In,N>,M>` or `Arr<In,N>[]`).
-- **Repro:** `return [42n, m[1n]]` -> solc `[42,15,16,17,18]`; JETH `[42, 0xa0, 0,0,0, 15,16,17,18]` (a bogus
-  dynamic offset for an ABI-static array). Full repro in the handoff doc.
-- **Root cause:** `src/yul.ts` multi-return tuple encoder, the `arrayValue` / `memArray`-base branch, missing
-  the `isDynamicType(t)` / `t.length===undefined` guard, so it offset-encodes a static fixed array as dynamic.
-- **Fix (mirror commit `e33d131` - `git show e33d131` first):** inline the static fixed array via
-  `abiEncFromMem` instead of offset-encoding it. Keep MATCHing: `abi.encode(m[i])` single-arg, and
-  `return [42, plainLocalArr]` (the `e33d131` branch).
+| Round | Finding | Fix | Commit |
+|-------|---------|-----|--------|
+| Step 1 | tuple-return of a fixed-array ELEMENT `m[i]: Arr<In,N>` offset-encoded as dynamic | inline via `abiEncFromMem` (mirror of `e33d131`); also fixed value-array elements | `b2ca7ca` |
+| R1 | indexed-event TOPIC of an abiDecode-sourced `Arr<In,N>` keccak'd pointer words | `abiDecode` added to `isPointerHeadedStaticAggArg` | `2589e16` |
+| R2 | the TERNARY channel: abiDecode branches (5 MC witnesses), flat internal-arg (2), cd\|storage location mix over-accepted family-wide | analyzer gate + `aggArgToMemPtr` ternary transcode + a general data-location gate | `5576656` |
+| R3 | memory-parent `aggFieldRead` (`xs[i].pre`) through internal-arg / internal-return / element-write (4 witnesses) | REJECT (solc live-references; a copy loses mutations) | `034bd6f` |
+| R4 | storage MULTI-HOP `placeRead`-of-array (`this.ps[i].pre` / `this.pa[i].pre` / `this.w.p.pre`) through the same channels (7 witnesses) + the memory-parent ternary aliasing edge | LIFT via `abiDecFromStorageToImage` (solc copies storage->memory, so the transcode is exact) + ternary gate | `1a3c4c3` |
 
-## Step 2 - loop the coverage proof to convergence
+Fix philosophy that crystallized: **memory parents -> reject** (solc passes live references; a
+copy cannot preserve aliasing), **storage/calldata parents -> lift** (solc copies; the
+pointer-headed transcode is semantics-preserving).
 
-Re-run enumerate -> exhaustively differential-test -> prove. Fix each finding (byte-identical pointer-aware
-consumer, OR a clean reject matching solc-legacy). Commit + full suite + push each. Repeat until
-**FULLY-COVERED-CLEAN** (0 violations, no uncovered sites). Cover the CONSUMER axis (that is where leaks hide):
-every source {literal, `new Array<In>(n)`, calldata param, storage, memory local, internal-call result,
-external-call result, `abi.decode`, struct field} x every consumer {return, `abi.encode*`, event, revert/error,
-internal/external call arg, tuple return incl element source, struct-field, storage assign/push, mapping,
-getter, ternary, for-of, delete, element/field read+write, `.length`, nested `Arr<Arr<In,N>,M>`}.
+### Final certificate (Round 5, zero findings)
 
-## Execution recipe
+106-case storage-parent residual hunt (mapping / mapping-of-array / 3-hop nested / dyn-in-dyn /
+post-delete / post-pop roots x 4 pointer-headed channels + 5 flat consumers + In3/N=3/In2 shape
+variants) + 80-case full kind-x-channel enumeration and 4-way mirror audit. Zero miscompiles,
+zero over-acceptances, nothing reachable falls through, exact-value non-vacuity anchors and
+entry-wise log comparison throughout.
 
-1. `export PATH="$HOME/.nvm/versions/node/v22.22.2/bin:$PATH"`; run via `npx tsx` / `npx vitest`.
-2. Differential harness = the `diff.mjs` in the handoff doc Appendix (recreate; fix the 4 import paths). `diff()`
-   returns a `class` in `MATCH|BOTH-REJECT|OVER-REJECTION|OVER-ACCEPTANCE|DIVERGE`. solc contract named `C`.
-   RUN + DECODE with DISTINCT non-zero values (a zero / raw-pointer tail must not masquerade as a match).
-3. `graphify query "<q>"` before reading source; `graphify update .` after editing.
-4. Fix -> `npx tsc --noEmit` clean -> add a non-vacuous run+decode test -> `npx vitest run
-   --hookTimeout=120000 --testTimeout=120000` -> **gate `git push` on a green suite in a SEPARATE step**.
-5. Prefer worktree-isolated fix + independent adversarial-verify (the verifier repeatedly catches mistakes);
-   cherry-pick clean onto `main`; full suite; push.
+### Residual surface (all SAFE catalogued over-rejections, never wrong bytes)
 
-## Traps
+- memory-parent `aggFieldRead` through pointer channels (the deliberate R3 aliasing reject).
+- bound-memory-local / aggFieldRead ternary branches (JETH074, aliasing).
+- `let m: Arr<In,2> = this.ps[i].pre` local bind (JETH200; direct consumption works, so no workaround needed).
+- cdPlaceReadAgg `q.pre` + calldata element binds through pointer channels (JETH900/200; flat consumers match).
+- storage->storage assign/push of a multi-hop field (JETH900, JETH470-family sibling).
+- ternary as a tuple-return component (JETH900); `o[i] = this.psv[i].vals` value-array element write (JETH429, liftable later).
 
-- "both compile" != byte-identical -> run + decode.
-- Expanded-tuple-selector vacuity: a struct/array-of-struct param dispatches on `f((uint256,(uint256,uint256)[2]))`,
-  not `f(S)`; build values inside the function + anchor a decoded scalar.
-- solc legacy `UnimplementedFeatureError` (e.g. mem/cd struct-array -> storage) = the reference's hard wall (no
-  viaIR) -> JETH must REJECT (`JETH470`), never accept-and-guess. Next free diag code: `JETH471`.
-- Every JETH int literal needs the `n` suffix.
-- Documented deviation (do NOT "fix"): `@pure` may call `this.internalMethod()` - see `docs/distinctive-features.md`.
+## What's next (nothing pending from this campaign)
+
+- Optional lifts from the residual list above (each is a documented safe reject today).
+- The broader roadmap: remaining language over-rejection long tail (SUPPORTED.md), tooling
+  (CLI polish, source maps, ABI tuple JSON shape), and the AI-layer milestone
+  (proposer + verifier loop over the byte-identical oracle).

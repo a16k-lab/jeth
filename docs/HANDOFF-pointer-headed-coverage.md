@@ -1,5 +1,9 @@
 # HANDOFF: finish the pointer-headed `Arr<In,N>` coverage proof
 
+> **STATUS (2026-07-07): COMPLETE - FULLY-COVERED-CLEAN at HEAD `1a3c4c3`.** Both steps below were
+> executed to convergence (5 fix rounds + a two-probe final certificate; see `docs/NEXT-STEPS.md`
+> for the round table and the residual catalogue). This document is retained as history.
+
 **Goal:** guarantee no consumer of the pointer-headed `Arr<In,N>` (fixed array of a *static* struct)
 memory image mis-handles it (a flat-copy of the pointer words = a payload-dropping miscompile). We proved
 coverage is complete-by-construction (finite enumerated consumer sites, each exercised by a run+decode
