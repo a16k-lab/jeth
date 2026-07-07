@@ -6868,7 +6868,11 @@ export class Analyzer {
             const cdParamOk =
               (cv.kind === 'arrayValue' && cv.arr.base.kind === 'calldataArray') ||
               cv.kind === 'cdDynStructValue' ||
-              cv.kind === 'cdAggregateValue';
+              cv.kind === 'cdAggregateValue' ||
+              // Tier-1 L1 (B-12): an ELEMENT of a calldata array-of-array (return [206n, a[i]]):
+              // deep-copied at position to its canonical memory image (aggArgToMemPtr's
+              // cdAggArrayElem branch) and encoded by the tuple writer's producer path.
+              cv.kind === 'cdAggArrayElem';
             if (this.isCalldataAggregate(cv) && !cdParamOk) {
               this.diags.error(
                 node.expression.elements[i]!,
@@ -10354,6 +10358,18 @@ export class Analyzer {
         declared.length === undefined &&
         declared.element.kind === 'struct' &&
         isStaticType(declared.element);
+      // Tier-1 L3 (B-11): a WHOLE STATIC calldata aggregate param (let m: Arr<In,2> = a) DEEP-COPIES
+      // into a fresh pointer-headed image (aggArgToMemPtr's cdAggregateValue branch: abiDecFromCdToImage
+      // at the param head, per-leaf validated) - solc's `In[2] memory m = a` calldata->memory copy.
+      const fromCdParam = e.kind === 'cdAggregateValue';
+      // Tier-1 L3 (OR-R5-2 bind spelling): a whole static-aggregate LEAF of a static calldata param
+      // (let m: Arr<In,2> = q.pre) - the same deep-copy at the folded leaf offset.
+      const fromCdPlaceAgg = e.kind === 'cdPlaceReadAgg';
+      // Tier-1 L3 (B-14): a whole array FIELD reached through a MULTI-HOP storage chain
+      // (let m: Arr<In,2> = this.ps[i].pre / this.w.p.pre, kind placeRead of array type): solc copies
+      // storage->memory, and aggArgToMemPtr's placeRead-of-array branch (R4) already materializes the
+      // pointer-headed image from the resolved place slot. Same copyability gate as fromStorageArray.
+      const fromStoragePlace = e.kind === 'placeRead' && isStorageCopyableRef(declared);
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -10364,7 +10380,10 @@ export class Analyzer {
         !fromCdField &&
         !fromStorageArray &&
         !fromMemAggAlias &&
-        !fromCdSlice
+        !fromCdSlice &&
+        !fromCdParam &&
+        !fromCdPlaceAgg &&
+        !fromStoragePlace
       ) {
         this.diags.error(
           decl.initializer,
@@ -10521,6 +10540,10 @@ export class Analyzer {
       value.kind === 'stateRead' ||
       value.kind === 'placeRead' ||
       value.kind === 'structValue' ||
+      // a whole MAPPING VALUE read (this.mp[k], mapping<K, Arr<In,N> / S>): a storage source (the
+      // resolved mapping slot) exactly like a stateRead - legacy supports the s2s copy and
+      // fixedArraySrcBase/structSrcSlot already resolve it (Tier-1 B-19: JETH470 over-fired here).
+      value.kind === 'mapStorageValue' ||
       ((value.kind === 'arrayValue' || value.kind === 'structArrayElem') && isStorageArrBase(value.arr.base.kind))
     );
   }
@@ -16081,7 +16104,16 @@ export class Analyzer {
       // leaves (a whole nested-struct field, a whole array) stay unsupported here.
       const lastStep = steps[steps.length - 1];
       if (t.kind === 'struct' && lastStep && (lastStep.kind === 'index' || lastStep.kind === 'dynIndex')) {
-        return undefined;
+        // Tier-1 L5 (B-16/B-17): decline ONLY the shapes the dedicated structArrayElem handler
+        // actually owns - a pure-mapping-rooted chain (this.md[k][i], every prior step a mapKey)
+        // or any dynamic-index leaf. A whole STRUCT element of a FIXED array reached through a
+        // struct FIELD or another INDEX (this.st.f[i], this.gx[i][j]) had NO owner (it fell
+        // through to resolveMapAccess's JETH151/152 rejects): claim it here - the read encodes a
+        // placeRead at the element slot (the storage encoder), the write lands storeStructTo at
+        // the place, exactly like a whole-struct FIELD leaf (the 'field' lastStep case below).
+        const priorAllMapKeys = steps.slice(0, -1).every((st) => st.kind === 'mapKey');
+        if (lastStep.kind === 'dynIndex' || priorAllMapKeys) return undefined;
+        return { committed: true, result: { path: { baseSlot, steps }, finalType: t } };
       }
       // A whole STRUCT field reached by a field last step (this.recs[i].inner,
       // this.o.inner.deeper): produce the place; the read encodes it (placeRead -> the
@@ -18127,6 +18159,25 @@ export class Analyzer {
       if (operand.type.kind === 'string') {
         this.diags.error(node, 'JETH202', "'string' has no .length in Solidity; only 'bytes' does");
         return undefined;
+      }
+      // Tier-1 L5 (B-18): .length of a FIXED array reached as a storage place (this.st.f.length,
+      // this.st.f[0n].inner.length) is the compile-time constant N (solc folds it) - the same rule
+      // as bytesN above. Scoped to a PANIC/SIDE-EFFECT-FREE chain (field steps and literal, compile-
+      // bounds-checked index steps only), so dropping the operand read cannot skip a runtime Panic
+      // or a side-effecting index solc would evaluate.
+      if (operand.type.kind === 'array' && operand.type.length !== undefined) {
+        // a single-hop struct field (this.st.f) resolves as an arrayValue at a STATIC fixedArray
+        // base (a compile-time slot, no runtime step) - always foldable.
+        if (operand.kind === 'arrayValue' && operand.arr.base.kind === 'fixedArray') {
+          return { kind: 'literalInt', type: U256, value: BigInt(operand.type.length) };
+        }
+        // a deeper place chain (this.w.p.pre.length): foldable when every step is panic/effect-free.
+        if (operand.kind === 'placeRead') {
+          const pureSteps = operand.path.steps.every(
+            (st) => st.kind === 'field' || (st.kind === 'index' && st.index.kind === 'literalInt'),
+          );
+          if (pureSteps) return { kind: 'literalInt', type: U256, value: BigInt(operand.type.length) };
+        }
       }
       if (operand.type.kind !== 'bytes') {
         this.diags.error(node, 'JETH202', `.length is not valid on ${displayName(operand.type)}`);

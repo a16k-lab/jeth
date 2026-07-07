@@ -1902,7 +1902,14 @@ ${indent(runtime, 6)}
                   s.init.arr.base.kind === 'calldataArray' ||
                   s.init.arr.base.kind === 'cdDynFixedDynField' ||
                   s.init.arr.base.kind === 'memArrayExpr')) ||
-              s.init.kind === 'mapStorageValue'
+              s.init.kind === 'mapStorageValue' ||
+              // Tier-1 L3: a whole static calldata param (cdAggregateValue), a whole static leaf of a
+              // static calldata param (cdPlaceReadAgg), and a multi-hop storage place (placeRead) all
+              // DEEP-COPY into a fresh pointer-headed image via their aggArgToMemPtr branches
+              // (abiDecFromCdToImage / abiDecFromStorageToImage) - solc's to-memory copy semantics.
+              s.init.kind === 'cdAggregateValue' ||
+              s.init.kind === 'cdPlaceReadAgg' ||
+              s.init.kind === 'placeRead'
             )
               out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
             else out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
@@ -3990,6 +3997,7 @@ ${indent(runtime, 6)}
     const litRefs: (string | null)[] = types.map(() => null); // inline value-array literal images
     const cdFieldHdr: (string | null)[] = types.map(() => null); // calldata dyn-field headers
     const staticNewPtr: (string | null)[] = types.map(() => null); // static structNew flat images (+patches)
+    const prodPtr: (string | null)[] = types.map(() => null); // Tier-1 L1: direct array-producer canonical images
     const dynNewSrc: (TupleSrc | null)[] = types.map(() => null); // dyn structNew pointer-headed handles
     const dynStructRefs: ({ mp: string; size: string } | null)[] = types.map(() => null); // dyn structNew fallback blobs
     const storSlot: (string | null)[] = types.map(() => null); // frozen storage base slots
@@ -4032,6 +4040,29 @@ ${indent(runtime, 6)}
         staticNewPtr[i] = this.allocAggToMem(v, ctx, out);
       } else if (!isDynamicType(t) && v.kind === 'memAggregate') {
         // a static memory local: a pure register alias, resolved at write time (mcopy reads late).
+      } else if (
+        t.kind === 'array' &&
+        (v.kind === 'call' ||
+          v.kind === 'arrayLit' ||
+          v.kind === 'abiDecode' ||
+          v.kind === 'ternary' ||
+          v.kind === 'cdAggArrayElem' ||
+          // an element of a FIXED-outer static calldata param (a[i] on Arr<Arr<In,2>,2>) resolves as
+          // a static-place LEAF (cdPlaceReadAgg with an index step), not a cdAggArrayElem - same
+          // deep-copy materialization (aggArgToMemPtr's cdPlaceReadAgg branch).
+          v.kind === 'cdPlaceReadAgg')
+      ) {
+        // Tier-1 L1: a direct array PRODUCER component (an internal-call result, an inline
+        // aggregate-array literal, abi.decode, an accepted aggregate ternary, or a calldata
+        // array-of-array element) - previously fell to the storage fallback and threw (the
+        // catalogued JETH900 tuple-slot over-rejections). Materialize the producer AT POSITION
+        // (side effects in source order) to its CANONICAL memory image via aggArgToMemPtr
+        // (pointer-headed for Arr<In,N>/P[], flat for value arrays); the write loop encodes it
+        // via abiEncFromMem exactly like the solo-return path. (A dynamic VALUE-array literal was
+        // already claimed by the litRefs branch above; kinds here do not overlap it.)
+        const p = this.fresh();
+        out.push(`let ${p} := ${this.aggArgToMemPtr(v, ctx, out)}`);
+        prodPtr[i] = p;
       } else if (isDynamicType(t) && t.kind === 'struct' && v.kind === 'structNew') {
         if (this.dynStructMemSrcEncodable(t)) {
           // build the native pointer-headed image at position (args in order, refs captured as
@@ -4132,6 +4163,23 @@ ${indent(runtime, 6)}
           const sz = this.abiEncFromMem(t, mp, cursor, ctx, out);
           out.push(`${cursor} := add(${cursor}, ${sz})`);
         }
+        hw += 1;
+      } else if (prodPtr[i]) {
+        // Tier-1 L1: a direct array-producer component materialized at position in phase 1 (an
+        // internal-call result, an aggregate-array literal, abi.decode, an accepted ternary, or a
+        // calldata array-of-array element). Encode its canonical image exactly like the solo-return
+        // path: an ABI-STATIC array (Arr<In,N> pointer-headed / Arr<u256,N> flat) is INLINED at the
+        // head (totalHead reserved abiHeadWords(t) words; abiEncFromMem dereferences or copies);
+        // a DYNAMIC array (u256[], P[]) gets its offset word + reconstructed tail.
+        const mp = prodPtr[i]!;
+        if (!isDynamicType(t)) {
+          this.abiEncFromMem(t, mp, `add(${ptr}, ${headPos})`, ctx, out);
+          hw += abiHeadWords(t);
+          return;
+        }
+        out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
+        const sz = this.abiEncFromMem(t, mp, cursor, ctx, out);
+        out.push(`${cursor} := add(${cursor}, ${sz})`);
         hw += 1;
       } else if (litRefs[i]) {
         // an INLINE dynamic value-array literal component (return [x, [7,8,9]]): the literal was
@@ -8910,6 +8958,20 @@ ${indent(runtime, 6)}
         return this.abiDecFromCdToImage(a.type, String(ph.head), out);
       }
       return this.allocAggFromCalldata(a.param, a.type, ctx, out, true);
+    }
+    // Tier-1 L3 (B-13): a WHOLE STATIC-AGGREGATE LEAF of a static calldata param (q.pre / q.inner)
+    // as an internal-call arg / memory-local bind. Fold the place to the leaf's calldata offset, then
+    // DEEP-COPY: a pointer-headed Arr<In,N> leaf rides abiDecFromCdToImage (the same fixed-outer
+    // static-struct branch the whole-param copy uses - N pointer words, per-element validated images);
+    // a static STRUCT / value fixed-array leaf is canonically FLAT, so it keeps the validating flat
+    // copy (allocAggFromCalldataBase), exactly like aggToMemPtr's S4 branch. Previously this kind fell
+    // to the lowerExpr tail and threw (the catalogued JETH900 over-rejection).
+    if (a.kind === 'cdPlaceReadAgg') {
+      const off = this.lowerCdPlace(a.place, ctx, out);
+      if (a.type.kind === 'array' && isStaticStructFixedLeafArray(a.type)) {
+        return this.abiDecFromCdToImage(a.type, off, out);
+      }
+      return this.allocAggFromCalldataBase(a.type, off, out);
     }
     // a DYNAMIC-field struct arg: pointer-headed image (memory source ALIASES; storage/calldata/
     // constructor source is COPIED to fresh memory) - the same builder a dynamic-struct local uses.
