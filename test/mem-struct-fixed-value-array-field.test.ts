@@ -177,23 +177,19 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
 
   // ---- CONTROL: the static-struct-element fixed array must STAY a clean JETH245 reject (never all-zero
   // bytes). This is the exact shape that MISCOMPILED in the first attempt; the tight predicate excludes it.
-  it('CONTROL: Arr<In,N> of a STATIC STRUCT stays a clean JETH245 over-rejection (no all-zero accept)', () => {
+  it('Tier-2 L7(b) LIFTED: Arr<In,N> of a STATIC STRUCT field now ACCEPTS via aggFieldRead (byte-identity pinned in lift-tier2-or-catalogue.test.ts; the flat sub-image route makes the old all-zero miscompile impossible)', () => {
     const returnSrc =
       '@struct class In { a: u256; b: u256 } @struct class Q { arr: Arr<In,2> } @contract class C { @external @pure f(): Arr<In,2> { let q: Q = Q([In(1n,2n),In(3n,4n)]); return q.arr; } }';
     const encodeSrc =
       '@struct class In { a: u256; b: u256 } @struct class Q { arr: Arr<In,2> } @contract class C { @external @pure f(): bytes { let q: Q = Q([In(1n,2n),In(3n,4n)]); return abi.encode(q.arr); } }';
-    expect(jethCodes(returnSrc)).toContain('JETH245');
-    expect(jethCodes(encodeSrc)).toContain('JETH245');
-    // and it must NOT compile (a clean reject, never wrong bytes)
-    expect(jethCodes(returnSrc)).not.toContain('OK');
-    expect(jethCodes(encodeSrc)).not.toContain('OK');
+    expect(jethCodes(returnSrc)).toEqual(['OK']);
+    expect(jethCodes(encodeSrc)).toEqual(['OK']);
   });
 
   // deeper struct nesting inside the array is ALSO excluded (any struct anywhere in the chain)
-  it('CONTROL: Arr<Arr<In,2>,2> (struct leaf under nested arrays) stays a clean JETH245 reject', () => {
+  it('Tier-2 L7(b) LIFTED: Arr<Arr<In,2>,2> (struct leaf under nested arrays) field now ACCEPTS (byte-identity pinned in lift-tier2-or-catalogue.test.ts)', () => {
     const src =
       '@struct class In { a: u256 } @struct class Q { arr: Arr<Arr<In,2>,2> } @contract class C { @external @pure f(): bytes { let q: Q = Q([[In(1n),In(2n)],[In(3n),In(4n)]]); return abi.encode(q.arr); } }';
-    expect(jethCodes(src)).toContain('JETH245');
-    expect(jethCodes(src)).not.toContain('OK');
+    expect(jethCodes(src)).toEqual(['OK']);
   });
 });

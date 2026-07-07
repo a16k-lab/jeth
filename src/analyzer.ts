@@ -47,6 +47,7 @@ import {
   isStorageCopyableRef,
   isValueLeafArray,
   storageByteSize,
+  arrayElemPacks,
   storageSlotCount,
   abiHeadWords,
   intRange,
@@ -127,6 +128,19 @@ import { planLayout, RawStateVar } from './layout.js';
 import { functionSignature, functionSelector, eventTopic0, keccak, toHex } from './selectors.js';
 
 /** Unwrap redundant parentheses: `(xs)` / `((this.a))` -> the inner expression. */
+const TERN_CD_KINDS = new Set([
+  'cdAggregateValue', 'cdDynStructValue', 'dynParamRead', 'cdStructArrayElem', 'cdAggArrayElem',
+  'cdDynArrayElem', 'cdPlaceRead', 'cdPlaceReadAgg', 'cdFieldAggValue', 'cdNestedFieldAggValue',
+  'cdDynStructField', 'cdArrayField', 'cdDynStructLeaf',
+]);
+const TERN_ST_KINDS = new Set([
+  'structValue', 'mapStorageValue', 'structArrayElem', 'placeRead', 'dynStateRead', 'dynPlaceRead',
+]);
+const TERN_CD_BASES = new Set([
+  'calldataArray', 'cdNestedElem', 'cdSubElem', 'cdSlice', 'cdDynArrayField', 'cdDynFieldNested', 'cdDynFixedField',
+]);
+const TERN_ST_BASES = new Set(['stateArray', 'mapArray', 'placeArray', 'fixedArray']);
+
 function stripParens(node: ts.Expression): ts.Expression {
   while (ts.isParenthesizedExpression(node)) node = node.expression;
   return node;
@@ -283,6 +297,7 @@ export class Analyzer {
   private currentUnchecked = false; // inside an unchecked { } block (arithmetic wraps)
   private currentReturnTypes: JethType[] | undefined; // multi-value return components, if any
   private memArrayLocals = new Set<string>(); // let-locals that are MEMORY arrays (vs calldata-array params)
+  private ternDesugarBusy = new Set<ts.Node>(); // Tier-2 B-9/C-7 desugar re-entry guard
   private memAggregateLocals = new Map<string, JethType>(); // STATIC struct / fixed-array MEMORY locals (G9): name -> type
   private memDynLocals = new Set<string>(); // bytes/string MEMORY locals (G9): register holds a [len][data] pointer
   private memDynStructLocals = new Map<string, JethType>(); // DYNAMIC-field struct MEMORY locals: name -> struct type (head = one word per field, value inline / bytes-string a pointer)
@@ -1529,6 +1544,7 @@ export class Analyzer {
       slot: BigInt(v.slot),
       offset: v.offset,
       initialValue: v.initialValue,
+      initialSlotWords: v.initialSlotWords,
     }));
     // Part B: lay out each @storage('ns') namespace and append its fields at base(ns)+relativeSlot.
     const nsVars = this.planNamespacedStorage();
@@ -4902,16 +4918,68 @@ export class Analyzer {
     }
 
     let initialValue: bigint | boolean | undefined;
+    let initialSlotWords: { slotOffset: number; word: bigint }[] | undefined;
     if (member.initializer) {
-      const folded = this.foldConstant(member.initializer, type);
-      if (folded === undefined) {
-        this.diags.error(
-          member.initializer,
-          'JETH048',
-          'state initializer must be a constant expression (non-constant init requires a constructor, Phase 5)',
-        );
-      } else if (folded !== 0n && folded !== false) {
-        initialValue = folded; // zero/false is the storage default; no SSTORE needed
+      // Tier-2 L12 (F3-3): a FIXED-array state initializer with constant VALUE-WORD elements
+      // (@state a: Arr<u256,3> = [11n, 22n]). solc accepts it, PARTIAL-FILLING a short literal
+      // (the tail keeps the zero default) and rejecting a longer one. Elements fold to constants,
+      // so the packed slot words are computed HERE (the same low-lane-first packing arrayElemPacks /
+      // packedStore use, bytesN right-aligned within its lane like the scalar path below) and the
+      // creation prologue emits one sstore per non-zero word - no new codegen. bytesN/funcref-free
+      // struct elements and nested arrays stay on the existing JETH048 reject.
+      if (
+        type.kind === 'array' &&
+        type.length !== undefined &&
+        ts.isArrayLiteralExpression(member.initializer) &&
+        isStaticValueType(type.element) &&
+        type.element.kind !== 'funcref'
+      ) {
+        if (member.initializer.elements.length > type.length) {
+          this.diags.error(
+            member.initializer,
+            'JETH211',
+            `array literal has ${member.initializer.elements.length} elements but ${displayName(type)} holds ${type.length}`,
+          );
+          return;
+        }
+        const packs = arrayElemPacks(type.element);
+        const words = new Map<number, bigint>();
+        let ok = true;
+        member.initializer.elements.forEach((el, i) => {
+          const f = this.foldConstant(el, (type as JethType & { kind: 'array' }).element);
+          if (f === undefined) {
+            ok = false;
+            return;
+          }
+          let raw = typeof f === 'boolean' ? (f ? 1n : 0n) : f;
+          const et = (type as JethType & { kind: 'array' }).element;
+          if (et.kind === 'bytesN') raw = raw >> BigInt((32 - et.size) * 8);
+          raw &= (1n << BigInt(packs.size * 8)) - 1n;
+          const slotOffset = Math.floor(i / packs.perSlot);
+          const lane = BigInt((i % packs.perSlot) * packs.size * 8);
+          words.set(slotOffset, (words.get(slotOffset) ?? 0n) | (raw << lane));
+        });
+        if (!ok) {
+          this.diags.error(
+            member.initializer,
+            'JETH048',
+            'state initializer must be a constant expression (non-constant init requires a constructor, Phase 5)',
+          );
+        } else {
+          const nz = [...words.entries()].filter(([, w]) => w !== 0n).map(([slotOffset, word]) => ({ slotOffset, word }));
+          if (nz.length > 0) initialSlotWords = nz;
+        }
+      } else {
+        const folded = this.foldConstant(member.initializer, type);
+        if (folded === undefined) {
+          this.diags.error(
+            member.initializer,
+            'JETH048',
+            'state initializer must be a constant expression (non-constant init requires a constructor, Phase 5)',
+          );
+        } else if (folded !== 0n && folded !== false) {
+          initialValue = folded; // zero/false is the storage default; no SSTORE needed
+        }
       }
     }
     if (decs.includes('external')) this.publicStateNames.add(member.name.text); // @external @state/@storage -> auto-generated getter
@@ -4931,11 +4999,11 @@ export class Analyzer {
         );
         return;
       }
-      list.push({ name: member.name.text, type, initialValue });
+      list.push({ name: member.name.text, type, initialValue, initialSlotWords });
       this.namespacedStorage.set(namespace, list);
       return;
     }
-    out.push({ name: member.name.text, type, initialValue });
+    out.push({ name: member.name.text, type, initialValue, initialSlotWords });
   }
 
   /** Validate a `@storage('ns')` decorator's argument: a non-empty string-literal namespace, with an
@@ -5012,6 +5080,7 @@ export class Analyzer {
           slot: base + BigInt(v.slot),
           offset: v.offset,
           initialValue: v.initialValue,
+          initialSlotWords: v.initialSlotWords,
         });
       }
     }
@@ -10145,7 +10214,15 @@ export class Analyzer {
       // overflow, plus the per-dimension field-header bounds checks in cdFieldArrayHeader /
       // cdNestedFieldArrayHeader). aggArgToMemPtr in the local-decl lowering already routes
       // cdFieldAggValue / cdNestedFieldAggValue here.
-      const fromCdField = e.kind === 'cdFieldAggValue' || e.kind === 'cdNestedFieldAggValue';
+      const fromCdField =
+        e.kind === 'cdFieldAggValue' ||
+        e.kind === 'cdNestedFieldAggValue' ||
+        // Tier-2 L8 (F2-3): a whole NESTED-array FIELD of a BARE calldata dyn-struct param
+        // (let ys: u256[][] = m.g) resolves to an arrayValue with a cdDynArrayField /
+        // cdDynFieldNested base - the same field-header deep-copy codec (aggArgToMemPtr routes
+        // both through cdFieldArrayHeader + abiDecFromCdToImage; solc's calldata->memory copy).
+        (e.kind === 'arrayValue' &&
+          (e.arr.base.kind === 'cdDynArrayField' || e.arr.base.kind === 'cdDynFieldNested'));
       // W3-Y2d: mem-to-mem ALIAS of a whole FIXED-outer nested-value array (let ys: Arr<u256[],N> = xs).
       // solc memory arrays are reference types: a local-to-local assignment is a POINTER copy (ys aliases
       // xs's image; mutating one shows in the other). The source resolves to a memAggregate (a fixed-outer
@@ -10164,8 +10241,11 @@ export class Analyzer {
       // field image pointer the working direct-read d.g[i][j] / whole-return `return d.g` paths use. Gated to
       // a FIXED outer: a dynamic-outer field alias (u256[][]) rides a memArray lowering not wired here, so it
       // stays a clean JETH200 reject (mirrors the fromMemAggAlias fixed-outer gate).
-      const fromMemFieldRead =
-        e.kind === 'arrayValue' && e.arr.base.kind === 'memArrayExpr' && declared.length !== undefined;
+      // Tier-2 L8 (F2-3): the DYNAMIC-outer field alias (let ys: u256[][] = m.g) is now wired too -
+      // a dynamic-outer local registers as a memArray whose init lowers through the dynamic-array
+      // localDecl tail (aggArgToMemPtr), which ALIASES a memArrayExpr source (returns the field image
+      // pointer verbatim), exactly like the fixed-outer path: solc reference semantics both ways.
+      const fromMemFieldRead = e.kind === 'arrayValue' && e.arr.base.kind === 'memArrayExpr';
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -10370,6 +10450,11 @@ export class Analyzer {
       // storage->memory, and aggArgToMemPtr's placeRead-of-array branch (R4) already materializes the
       // pointer-headed image from the resolved place slot. Same copyability gate as fromStorageArray.
       const fromStoragePlace = e.kind === 'placeRead' && isStorageCopyableRef(declared);
+      // Tier-2 B-8: an ACCEPTED aggregate ternary (all flat sources - the ternary gate already
+      // rejects pointer-headed / aliasing-unsound / location-mixed branches) binds as a FRESH
+      // pointer-headed copy via aggArgToMemPtr's ternary transcode (RC-2) - solc's storage/literal
+      // branch conversion-to-memory semantics.
+      const fromTernary = e.kind === 'ternary';
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -10383,7 +10468,8 @@ export class Analyzer {
         !fromCdSlice &&
         !fromCdParam &&
         !fromCdPlaceAgg &&
-        !fromStoragePlace
+        !fromStoragePlace &&
+        !fromTernary
       ) {
         this.diags.error(
           decl.initializer,
@@ -16104,15 +16190,16 @@ export class Analyzer {
       // leaves (a whole nested-struct field, a whole array) stay unsupported here.
       const lastStep = steps[steps.length - 1];
       if (t.kind === 'struct' && lastStep && (lastStep.kind === 'index' || lastStep.kind === 'dynIndex')) {
-        // Tier-1 L5 (B-16/B-17): decline ONLY the shapes the dedicated structArrayElem handler
-        // actually owns - a pure-mapping-rooted chain (this.md[k][i], every prior step a mapKey)
-        // or any dynamic-index leaf. A whole STRUCT element of a FIXED array reached through a
-        // struct FIELD or another INDEX (this.st.f[i], this.gx[i][j]) had NO owner (it fell
-        // through to resolveMapAccess's JETH151/152 rejects): claim it here - the read encodes a
-        // placeRead at the element slot (the storage encoder), the write lands storeStructTo at
-        // the place, exactly like a whole-struct FIELD leaf (the 'field' lastStep case below).
-        const priorAllMapKeys = steps.slice(0, -1).every((st) => st.kind === 'mapKey');
-        if (lastStep.kind === 'dynIndex' || priorAllMapKeys) return undefined;
+        // Tier-1 L5 (B-16/B-17) + Tier-2 NEW-JETH152: decline ONLY the shapes the dedicated
+        // structArrayElem handler actually owns - a DYNAMIC-index leaf (incl. the pure-mapping-rooted
+        // this.md[k][i], mapping<K, In[]>, owned via its mapArray base and verified byte-identical).
+        // Every FIXED-index struct leaf is claimed: field/index-prefixed chains (this.st.f[i],
+        // this.gx[i][j], Tier-1) AND pure-mapping-rooted FIXED arrays (this.mp[k][i],
+        // mapping<K, Arr<In,N>>, Tier-2 - mapArray is dynamic-only, so these had NO owner and fell
+        // to resolveMapAccess's JETH152). The read encodes a placeRead at the element slot (the
+        // storage encoder); the write lands storeStructTo at the place, exactly like a whole-struct
+        // FIELD leaf (the 'field' lastStep case below).
+        if (lastStep.kind === 'dynIndex') return undefined;
         return { committed: true, result: { path: { baseSlot, steps }, finalType: t } };
       }
       // A whole STRUCT field reached by a field last step (this.recs[i].inner,
@@ -17535,6 +17622,32 @@ export class Analyzer {
 
   // ---- expressions ---------------------------------------------------------
 
+  /** The DATA LOCATION class of a ternary branch Expr (solc's ternary location-unification rule:
+   *  a cd|storage mix is a TypeError). Used by the RC-3 ternary gate AND the Tier-2 access-chain
+   *  desugar (which must not branch-push its way past the solc-parity reject). */
+  private ternaryBranchLoc(e: Expr): 'cd' | 'storage' | 'mem' {
+    if (e.kind === 'arrayValue') {
+      if (TERN_CD_BASES.has(e.arr.base.kind)) return 'cd';
+      if (TERN_ST_BASES.has(e.arr.base.kind)) return 'storage';
+      return 'mem';
+    }
+    if (TERN_CD_KINDS.has(e.kind)) return 'cd';
+    if (TERN_ST_KINDS.has(e.kind)) return 'storage';
+    return 'mem';
+  }
+
+  /** A type-probe checkExpr that DISCARDS any diagnostics it emits (the caller re-checks the same
+   *  node for real, re-emitting them). Used by the ternary literal-branch inference (Tier-2 B-10). */
+  private checkExprQuiet(node: ts.Expression): Expr | undefined {
+    const mark = this.diags.items.length;
+    const r = this.checkExpr(node);
+    if (this.diags.items.length > mark) {
+      this.diags.items.length = mark;
+      return undefined;
+    }
+    return r;
+  }
+
   private checkExpr(node: ts.Expression, expected?: JethType): Expr | undefined {
     // parenthesized
     if (ts.isParenthesizedExpression(node)) return this.checkExpr(node.expression, expected);
@@ -17724,11 +17837,77 @@ export class Analyzer {
       return { kind: 'literalInt', type: et, value: BigInt(idx) };
     }
 
+    // Tier-2 B-9/C-7: an ACCESS CHAIN bottoming at a ternary - (c ? this.s1 : this.s2).a,
+    // (c ? A : B)[0n].x, (c ? A : B).length. solc selects the branch then applies the access;
+    // pushing the access INTO the branches (c ? this.s1.a : this.s2.a) is evaluation-order
+    // identical (the condition once, then the access chain exactly once on the selected branch,
+    // any index expressions once). Fires ONLY when the existing machinery REJECTS the original
+    // node (a pure lift: working ternary-consumers keep their verified codegen), both rebased
+    // branches type-check quietly to the SAME static value type, and the chain is Prop/Elem-only.
+    if (
+      (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) &&
+      !this.ternDesugarBusy.has(node)
+    ) {
+      let bottom: ts.Expression = node;
+      while (ts.isPropertyAccessExpression(bottom) || ts.isElementAccessExpression(bottom)) bottom = stripParens(bottom.expression);
+      if (ts.isConditionalExpression(bottom)) {
+        this.ternDesugarBusy.add(node);
+        try {
+          const direct = this.checkExprQuiet(node);
+          if (!direct) {
+            const bot = bottom;
+            const rebase = (n: ts.Expression, nb: ts.Expression): ts.Expression => {
+              const s = stripParens(n);
+              if (s === bot) return nb;
+              if (ts.isPropertyAccessExpression(s)) {
+                return ts.setTextRange(ts.factory.createPropertyAccessExpression(rebase(s.expression, nb), s.name), s);
+              }
+              const ea = s as ts.ElementAccessExpression;
+              return ts.setTextRange(ts.factory.createElementAccessExpression(rebase(ea.expression, nb), ea.argumentExpression!), ea);
+            };
+            // solc-parity guard: the ternary's own data-location rule (cd|storage mix = TypeError)
+            // applies to the TERNARY, not its consumption - branch-pushing must not bypass it.
+            const bareT = this.checkExprQuiet(bot.whenTrue);
+            const bareE = this.checkExprQuiet(bot.whenFalse);
+            const locT = bareT ? this.ternaryBranchLoc(bareT) : 'mem';
+            const locE = bareE ? this.ternaryBranchLoc(bareE) : 'mem';
+            const locMix = (locT === 'cd' && locE === 'storage') || (locT === 'storage' && locE === 'cd');
+            const thenA = this.checkExprQuiet(rebase(node, bot.whenTrue));
+            const elsA = this.checkExprQuiet(rebase(node, bot.whenFalse));
+            if (!locMix && thenA && elsA && typesEqual(thenA.type, elsA.type) && isStaticValueType(thenA.type)) {
+              const cond = this.checkCondition(bot.condition);
+              if (!cond) return undefined;
+              // re-check for REAL so state flags / diags from the branch accesses are applied.
+              const thenR = this.checkExpr(rebase(node, bot.whenTrue));
+              const elsR = this.checkExpr(rebase(node, bot.whenFalse));
+              if (thenR && elsR) return { kind: 'ternary', type: thenR.type, cond, then: thenR, else: elsR };
+              return undefined;
+            }
+          }
+        } finally {
+          this.ternDesugarBusy.delete(node);
+        }
+      }
+    }
+
     // ternary c ? a : b -> the common type of the two branches (short-circuit at codegen).
+    // (checkExprQuiet: a type-probe that DISCARDS any diagnostics it emits - the real check of the
+    // same node re-emits them - used only for the Tier-2 B-10 literal-branch inference below.)
     if (ts.isConditionalExpression(node)) {
       const cond = this.checkCondition(node.condition);
-      const then = this.checkExpr(node.whenTrue, expected);
-      const els = this.checkExpr(node.whenFalse, expected);
+      // Tier-2 B-10: with NO outer expected type (abi.encode(c ? [In(..),In(..)] : this.sx)), an
+      // ARRAY-LITERAL branch cannot self-type (JETH213) while the other branch can - infer the
+      // literal's expected type from the NON-literal branch first, exactly solc's branch
+      // unification. Only fires when expected is absent and exactly one branch is an array
+      // literal; the two-literal / expected-present paths are unchanged.
+      let branchExpected = expected;
+      if (!expected && ts.isArrayLiteralExpression(node.whenTrue) !== ts.isArrayLiteralExpression(node.whenFalse)) {
+        const nonLit = ts.isArrayLiteralExpression(node.whenTrue) ? node.whenFalse : node.whenTrue;
+        const probe = this.checkExprQuiet(nonLit);
+        if (probe && (probe.type.kind === 'array' || probe.type.kind === 'struct')) branchExpected = probe.type;
+      }
+      const then = this.checkExpr(node.whenTrue, branchExpected);
+      const els = this.checkExpr(node.whenFalse, branchExpected);
       if (!cond || !then || !els) return undefined;
       // INTEGER-LITERAL branch typing (solc parity). solc types each branch by its OWN mobile type
       // (a non-negative literal -> smallest UNSIGNED type, a negative literal -> smallest SIGNED type;
@@ -17808,30 +17987,8 @@ export class Analyzer {
       // stay accepted (solc accepts both); the dynamic value-array block below keeps its OWN stricter
       // gate (it additionally rejects cd|cd, which its materialize-to-memory cannot replicate).
       if (!isStaticValueType(unified[0].type) && unified[0].type.kind !== 'funcref') {
-        const CD_KINDS = new Set([
-          'cdAggregateValue', 'cdDynStructValue', 'dynParamRead', 'cdStructArrayElem', 'cdAggArrayElem',
-          'cdDynArrayElem', 'cdPlaceRead', 'cdPlaceReadAgg', 'cdFieldAggValue', 'cdNestedFieldAggValue',
-          'cdDynStructField', 'cdArrayField', 'cdDynStructLeaf',
-        ]);
-        const ST_KINDS = new Set([
-          'structValue', 'mapStorageValue', 'structArrayElem', 'placeRead', 'dynStateRead', 'dynPlaceRead',
-        ]);
-        const CD_BASES = new Set([
-          'calldataArray', 'cdNestedElem', 'cdSubElem', 'cdSlice', 'cdDynArrayField', 'cdDynFieldNested', 'cdDynFixedField',
-        ]);
-        const ST_BASES = new Set(['stateArray', 'mapArray', 'placeArray', 'fixedArray']);
-        const brLoc = (e: Expr): 'cd' | 'storage' | 'mem' => {
-          if (e.kind === 'arrayValue') {
-            if (CD_BASES.has(e.arr.base.kind)) return 'cd';
-            if (ST_BASES.has(e.arr.base.kind)) return 'storage';
-            return 'mem';
-          }
-          if (CD_KINDS.has(e.kind)) return 'cd';
-          if (ST_KINDS.has(e.kind)) return 'storage';
-          return 'mem';
-        };
-        const l0 = brLoc(unified[0]);
-        const l1 = brLoc(unified[1]);
+        const l0 = this.ternaryBranchLoc(unified[0]);
+        const l1 = this.ternaryBranchLoc(unified[1]);
         if ((l0 === 'cd' && l1 === 'storage') || (l0 === 'storage' && l1 === 'cd')) {
           this.diags.error(
             node,
@@ -18612,6 +18769,24 @@ export class Analyzer {
       // words) that must never ship.
       if (isFixedValueWordArray(r.type))
         return { kind: 'memAggregate', type: r.type, local: r.local, wordOffset: r.wordOffset };
+      // Tier-2 L7(b): a whole STATIC-STRUCT fixed-array field (s.f: Arr<In,N>) reads as an
+      // aggFieldRead - NOT a memAggregate. The sub-image is INLINE-FLAT in the parent, and
+      // aggFieldRead is exactly the kind whose FLAT consumers (return / abi.encode / event data /
+      // topics / error args) treat it flat byte-identically (R3/R5-verified for xs[i].pre) while the
+      // pointer-headed channels (internal-arg / internal-return / element-write) LOUDLY REJECT via
+      // the aggArgToMemPtr guard - a memAggregate here would be the all-zero-words miscompile the
+      // comment above bans (its consumers deref the flat words as element pointers).
+      if (isStaticStructFixedLeafArray(r.type)) {
+        const rootT = this.memAggregateLocals.get(r.local);
+        if (rootT) {
+          return {
+            kind: 'aggFieldRead',
+            type: r.type,
+            base: { kind: 'memAggregate', type: rootT, local: r.local },
+            wordOffset: r.wordOffset,
+          };
+        }
+      }
       this.diags.error(
         node,
         'JETH245',

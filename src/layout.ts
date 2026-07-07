@@ -14,6 +14,7 @@ export interface RawStateVar {
   name: string;
   type: JethType;
   initialValue?: bigint | boolean;
+  initialSlotWords?: { slotOffset: number; word: bigint }[]; // Tier-2 L12: fixed-array init slot words
 }
 
 /** A planned storage var. `slot` is the SEQUENTIAL slot index within the contiguous space the
@@ -27,6 +28,7 @@ export interface PlannedVar {
   slot: number;
   offset: number;
   initialValue?: bigint | boolean;
+  initialSlotWords?: { slotOffset: number; word: bigint }[]; // Tier-2 L12: fixed-array init slot words
 }
 
 export interface LayoutResult {

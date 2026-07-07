@@ -643,6 +643,10 @@ export interface StateVar {
   offset: number; // byte offset within the slot for packing
   // constant-folded initializer value, if any and non-zero (emitted in constructor)
   initialValue?: bigint | boolean;
+  // Tier-2 L12: a FIXED-array state initializer (@state a: Arr<u256,3> = [11n, 22n]) folded to
+  // packed slot words at analyze time (elements are constants; solc partial-fills a short literal,
+  // the tail keeping the zero default). One sstore per non-zero word at slot + slotOffset.
+  initialSlotWords?: { slotOffset: number; word: bigint }[];
 }
 
 export interface Param {

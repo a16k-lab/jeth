@@ -90,11 +90,14 @@ contract C {
         '@contract class C { @state s: u256[]; @external @view f(c: bool, x: u256[]): u256[] { return c ? this.s : x; } }',
       ),
     ).toContain('JETH074');
-    // calldata|calldata indexed: solc keeps a calldata ref (validates dirty on index); we gate it
+    // Tier-2 LIFTED: calldata|calldata indexed. The access-chain desugar pushes the index into the
+    // branches ((c ? x : y)[i] -> c ? x[i] : y[i]), and a per-branch calldata indexed read VALIDATES
+    // dirty elements exactly like solc's calldata ref (verified byte-identical incl. a dirty u8
+    // element in lift-tier2-or-catalogue.test.ts). The old materialize-to-memory gate is bypassed.
     expect(
       codes(
         '@contract class C { @external @pure f(c: bool, x: u256[], y: u256[], i: u256): u256 { return (c ? x : y)[i]; } }',
       ),
-    ).toContain('JETH074');
+    ).toEqual([]);
   });
 });

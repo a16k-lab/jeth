@@ -341,6 +341,15 @@ ${indent(runtime, 6)}
       const shifted = raw << BigInt(v.offset * 8);
       slotWords.set(v.slot, (slotWords.get(v.slot) ?? 0n) | shifted);
     }
+    // Tier-2 L12: fixed-array state initializers, already folded to packed slot words by the
+    // analyzer (an array owns its slots outright, so these never share a slot with a scalar).
+    for (const v of contract.stateVars) {
+      if (!v.initialSlotWords) continue;
+      for (const { slotOffset, word } of v.initialSlotWords) {
+        const slot = v.slot + BigInt(slotOffset);
+        slotWords.set(slot, (slotWords.get(slot) ?? 0n) | word);
+      }
+    }
     for (const [slot, word] of [...slotWords.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))) {
       lines.push(`sstore(${slot}, ${toWord(word)})`);
     }
@@ -1909,7 +1918,10 @@ ${indent(runtime, 6)}
               // (abiDecFromCdToImage / abiDecFromStorageToImage) - solc's to-memory copy semantics.
               s.init.kind === 'cdAggregateValue' ||
               s.init.kind === 'cdPlaceReadAgg' ||
-              s.init.kind === 'placeRead'
+              s.init.kind === 'placeRead' ||
+              // Tier-2 B-8: an accepted aggregate ternary binds as a fresh pointer-headed copy
+              // (aggArgToMemPtr's RC-2 flat -> pointer-headed transcode).
+              s.init.kind === 'ternary'
             )
               out.push(`let ${name} := ${this.aggArgToMemPtr(s.init, ctx, out)}`);
             else out.push(`let ${name} := ${this.lowerExpr(s.init, ctx, out)}`);
@@ -3998,6 +4010,7 @@ ${indent(runtime, 6)}
     const cdFieldHdr: (string | null)[] = types.map(() => null); // calldata dyn-field headers
     const staticNewPtr: (string | null)[] = types.map(() => null); // static structNew flat images (+patches)
     const prodPtr: (string | null)[] = types.map(() => null); // Tier-1 L1: direct array-producer canonical images
+    const aggFieldPtrs: (string | null)[] = types.map(() => null); // Tier-2 L7(b): flat field sub-image pointers
     const dynNewSrc: (TupleSrc | null)[] = types.map(() => null); // dyn structNew pointer-headed handles
     const dynStructRefs: ({ mp: string; size: string } | null)[] = types.map(() => null); // dyn structNew fallback blobs
     const storSlot: (string | null)[] = types.map(() => null); // frozen storage base slots
@@ -4040,6 +4053,14 @@ ${indent(runtime, 6)}
         staticNewPtr[i] = this.allocAggToMem(v, ctx, out);
       } else if (!isDynamicType(t) && v.kind === 'memAggregate') {
         // a static memory local: a pure register alias, resolved at write time (mcopy reads late).
+      } else if (!isDynamicType(t) && v.kind === 'aggFieldRead') {
+        // Tier-2 L7(b): a whole static-aggregate FIELD sub-image (s.f / xs[i].pre, kind
+        // aggFieldRead) as a tuple component: the sub-image is INLINE-FLAT, so freeze its pointer
+        // at position (index side effects run in order) and mcopy it verbatim in the write loop -
+        // NOT abiEncFromMem (which would deref the flat words as element pointers). Mirrors the
+        // memAggregate flat path; reads happen LATE through the frozen pointer (sibling mutations
+        // visible, the P20 discipline).
+        aggFieldPtrs[i] = this.aggToMemPtr(v, ctx, out);
       } else if (
         t.kind === 'array' &&
         (v.kind === 'call' ||
@@ -4164,6 +4185,11 @@ ${indent(runtime, 6)}
           out.push(`${cursor} := add(${cursor}, ${sz})`);
         }
         hw += 1;
+      } else if (aggFieldPtrs[i]) {
+        // Tier-2 L7(b): verbatim inline mcopy of the FLAT field sub-image (no offset word;
+        // totalHead reserved abiHeadWords(t) words).
+        out.push(`mcopy(add(${ptr}, ${headPos}), ${aggFieldPtrs[i]!}, ${abiHeadWords(t) * 32})`);
+        hw += abiHeadWords(t);
       } else if (prodPtr[i]) {
         // Tier-1 L1: a direct array-producer component materialized at position in phase 1 (an
         // internal-call result, an aggregate-array literal, abi.decode, an accepted ternary, or a
@@ -7703,6 +7729,11 @@ ${indent(runtime, 6)}
     // mapping value (this.m[k], mapping(K=>Arr<T,N>)): resolve its (runtime) base slot.
     if (value.kind === 'structArrayElem') return this.structArrayElemSlot(value.arr, value.index, ctx, out);
     if (value.kind === 'mapStorageValue') return this.mappingSlot(value.baseSlot, value.keys, ctx, out);
+    // Tier-2 B-15: a whole fixed-array FIELD reached through a multi-hop storage chain
+    // (this.tgt = this.ps[i].pre / this.stk.push(this.w.p.pre), kind placeRead of array type):
+    // resolve the place to its base slot - the s2s copy (copyFixedArray) reads the element slots
+    // from there exactly like the structArrayElem / mapStorageValue sources above.
+    if (value.kind === 'placeRead') return this.lowerPlace(value.path, ctx, out).slot;
     throw new UnsupportedError(`cannot copy a fixed array from '${value.kind}'`);
   }
 
