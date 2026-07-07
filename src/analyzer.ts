@@ -17918,6 +17918,13 @@ export class Analyzer {
           // pointer-headed kinds. THIRD mirror of this list (yul isPointerHeadedStaticAggArg,
           // prepEncodeComponent memFixedSrc) - keep all three in sync when widening.
           e.kind === 'abiDecode' ||
+          // Round-4 FIX-2: a whole Arr<In,N> FIELD of a MEMORY struct-array element (xs[i].pre, kind
+          // aggFieldRead) as a ternary branch: the RC-2 ternary transcode substitutes a FRESH
+          // pointer-headed copy where solc passes a LIVE REFERENCE into the parent image, so callee /
+          // alias mutations through the ternary result would be silently dropped - the same
+          // copy-cannot-preserve-aliasing reasoning as the R3 aggFieldRead channel reject. Clean
+          // JETH074; the flat consumers of the same ternary become catalogued over-rejections.
+          e.kind === 'aggFieldRead' ||
           (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'));
         if (ptrHeaded(unified[0]) || ptrHeaded(unified[1])) {
           this.diags.error(

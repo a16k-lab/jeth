@@ -8934,6 +8934,27 @@ ${indent(runtime, 6)}
       out.push(`mstore(0x40, add(${dst}, ${size}))`);
       return dst;
     }
+    // Round-4 FIX-1: a whole ARRAY field reached through a MULTI-HOP storage chain (this.ps[i].pre,
+    // this.pa[i].pre, this.w.p.pre - kind placeRead of array type; a SINGLE-hop this.one.pre resolves
+    // to an arrayValue with a static fixedArray base and takes the storage branch above). solc's
+    // storage->memory conversion COPIES, so materialize a fresh image from the resolved place slot:
+    // the pointer-headed storage twin for a reference-element / static-struct-leaf array (the callee /
+    // element-write consumer binds pointer-headed - falling to the lowerExpr tail here returned a raw
+    // storage word, the Round-4 zero-payload / 0x80-leak / runtime-revert MISCOMPILE family), and the
+    // byte-invariant flat abiEncFromStorage copy for a value-element array. Mirrors the arrayValue
+    // stateArray/fixedArray/placeArray branch exactly (the place's slot is the [len] slot for a dynamic
+    // outer, the element-0 base slot for a fixed outer - what abiDecFromStorageToImage consumes).
+    if (a.kind === 'placeRead' && a.type.kind === 'array') {
+      const slot = this.lowerPlace(a.path, ctx, out).slot;
+      if (!isStaticValueType(a.type.element)) {
+        return this.abiDecFromStorageToImage(a.type, slot, ctx, out);
+      }
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const size = this.abiEncFromStorage(a.type, slot, 0, dst, out);
+      out.push(`mstore(0x40, add(${dst}, ${size}))`);
+      return dst;
+    }
     // a struct value (memAggregate alias / storage) or a call result (already a pointer).
     return this.lowerExpr(a, ctx, out);
   }
