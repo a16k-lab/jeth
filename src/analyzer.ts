@@ -4748,6 +4748,16 @@ export class Analyzer {
       }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
+      // solc bans an internal type as an error parameter type; funcref-bearing types stay
+      // internal-only (the same screen the event gate applies, ahead of the shape gate).
+      if (this.typeHasFuncref(t)) {
+        this.diags.error(
+          p,
+          'JETH229',
+          `@error parameter '${p.name.text}' has type ${displayName(t)} containing an internal function pointer; an internal type is not allowed as an error parameter type`,
+        );
+        continue;
+      }
       // @error args: static value types, dynamic bytes/string, a DYNAMIC array (G3, head/tail), a
       // STATIC struct / fixed-array (encoded inline in the head, like a non-indexed event param), or
       // a DYNAMIC struct (a head offset + its head/tail blob, like a non-indexed dynamic-struct event
@@ -4812,6 +4822,17 @@ export class Analyzer {
       }
       const t = resolveType(p.type, this.diags, this.structsByName);
       if (!t) continue;
+      // L11a keeps funcref-bearing types INTERNAL-only: solc bans an internal type as an event
+      // parameter type (indexed or not), so both arms screen here before the shape gates
+      // (isSupportedStructReturn admits funcref fields for internal returns and must not decide this).
+      if (this.typeHasFuncref(t)) {
+        this.diags.error(
+          p,
+          'JETH229',
+          `event parameter '${p.name.text}' has type ${displayName(t)} containing an internal function pointer; an internal type is not allowed as an event parameter type`,
+        );
+        continue;
+      }
       const indexed = decoratorNames(p).includes('indexed');
       if (!isStaticValueType(t)) {
         if (indexed) {

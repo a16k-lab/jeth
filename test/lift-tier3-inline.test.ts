@@ -59,6 +59,14 @@ describe('Tier-3 inline lifts (L10a, L11b, L13) byte-identical to solc 0.8.35', 
       }
     };
     expect(rejects(`@struct class FSt { f: (x: u256) => u256; tag: u256 } @contract class C { inc(x:u256):u256{return x;} @external @pure f(): bytes { let a: FSt = FSt(this.inc, 2n); return abi.encode(a); } }`)).toBe(true);
+    // The event/error boundaries too (the Tier-3 verification workflow caught these leaking: the
+    // gates delegated to isSupportedStructReturn, which L11a widened; solc bans internal types as
+    // event/error parameter types, so a dedicated typeHasFuncref screen now fires at both gates).
+    const FD = `@struct class Fd { f: (x: u256) => u256; s: string }`;
+    expect(rejects(`${FD} @contract class C { @event E(d: Fd); inc(x:u256):u256{return x;} @external f(): u256 { let d: Fd = Fd(this.inc, "hi"); emit(E(d)); return 1n; } }`)).toBe(true);
+    expect(rejects(`${FD} @contract class C { @event E(@indexed d: Fd); inc(x:u256):u256{return x;} @external f(): u256 { let d: Fd = Fd(this.inc, "hi"); emit(E(d)); return 1n; } }`)).toBe(true);
+    expect(rejects(`${FD} @contract class C { @error Bad(d: Fd); inc(x:u256):u256{return x;} @external f(): u256 { let d: Fd = Fd(this.inc, "hi"); revert(Bad(d)); } }`)).toBe(true);
+    expect(rejects(`@contract class C { @event E(g: (x: u256) => u256); inc(x:u256):u256{return x;} @external f(): u256 { emit(E(this.inc)); return 1n; } }`)).toBe(true);
   });
 
   it('L13: byte-write into a bytes[] field element (write, OOB Panic, alias-through, storage control)', async () => {
