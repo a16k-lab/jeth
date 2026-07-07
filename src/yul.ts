@@ -6818,7 +6818,7 @@ ${indent(runtime, 6)}
         // W6A: the inline copy is only sound for a copy-by-value source or a transient consumer.
         // W7A: inside a two-phase encode's phase 1 a live-memory source records a capture patch
         // (a late re-copy through the same pointer, after every sibling component's side effects).
-        this.assertInlineAggCaptureSound(value.args[i]!, `constructed struct field '${f.name}'`);
+        this.assertInlineAggCaptureSound(value.args[i]!, `constructed struct field '${f.name}'`, f.type);
         const fsrc = this.aggArgToMemPtr(value.args[i]!, ctx, out);
         const fw = abiHeadWords(f.type);
         for (let k = 0; k < fw; k++) {
@@ -7393,7 +7393,28 @@ ${indent(runtime, 6)}
    *  solc stores a reference there; JETH's flat static image cannot, so a clean reject beats the
    *  silent copy the old code emitted (a confirmed miscompile family: mutations through either
    *  name diverged). Transient (immediate-encode / storage-store) contexts keep the copy. */
-  private assertInlineAggCaptureSound(arg: Expr, what: string): void {
+  private assertInlineAggCaptureSound(arg: Expr, what: string, fieldType?: JethType): void {
+    // A POINTER-HEADED static-struct fixed array field/element (Arr<In,N>, In a static struct, and
+    // nested Arr<Arr<In,N>,M>) is laid out in memory as N absolute-pointer words (one per element,
+    // NO inline length header), but its tuple-head/return image is the elements INLINE. The flat
+    // mcopy at the caller copies abiHeadWords(fieldType)*32 bytes STRAIGHT from the memory image, so
+    // it would emit the element POINTERS (plus trailing garbage) instead of the inline element words
+    // - a payload-dropping MISCOMPILE. An INLINE arrayLit source never reaches here (it recurses
+    // element-by-element); only a NON-INLINE source (a memory local/field/element, a call, ...) does,
+    // and no flat copy reproduces solc's inline layout. Reject with JETH465, the SAME code the
+    // var-bound form (`let s: S = S(9n, a); return s`) already emits, so the inline-constructor form
+    // is consistent. This fires even in a TRANSIENT (immediate-encode / return) context: unlike the
+    // aliasing hazard below, the layout mismatch corrupts regardless of transience.
+    if (fieldType !== undefined && fieldType.kind === 'array' && isStaticStructFixedLeafArray(fieldType)) {
+      throw new UnsupportedError(
+        `cannot inline a pointer-headed static-struct fixed-array value ('${arg.kind}') into ${what}: ` +
+          `Solidity lays the elements out inline in the aggregate's tuple head while JETH's memory image ` +
+          `is one absolute-pointer word per element, so a flat copy would emit the element pointers ` +
+          `instead of the element data (dropping the payload). Construct the field inline, or return / ` +
+          `abi.encode the array on its own`,
+        'JETH465',
+      );
+    }
     if (this.inlineCaptureTransient) return;
     if (this.isAliasSafeAggCaptureSource(arg)) return;
     throw new UnsupportedError(
@@ -7442,7 +7463,7 @@ ${indent(runtime, 6)}
           // an aliasable memory source in a persistent context REJECTS (solc stores a reference).
           // W7A: inside a two-phase encode's phase 1 a live-memory source additionally records a
           // capture patch (a late re-copy through the same pointer, after all sibling effects).
-          this.assertInlineAggCaptureSound(arg, `constructed struct field '${f.name}'`);
+          this.assertInlineAggCaptureSound(arg, `constructed struct field '${f.name}'`, f.type);
           const fldSrc = this.aggToMemPtr(arg, ctx, out);
           out.push(`mcopy(${at(w)}, ${fldSrc}, ${abiHeadWords(f.type) * 32})`);
           this.recordCapturePatch(arg, at(w), fldSrc, abiHeadWords(f.type) * 32);
@@ -7461,7 +7482,7 @@ ${indent(runtime, 6)}
           // W6A: an aggregate ELEMENT of an inline fixed-array literal ([p, q] as a constructed
           // field / a nested literal) has the same flat-copy-vs-reference hazard as a field.
           // W7A: record a capture patch inside a two-phase encode's phase 1 (late re-copy).
-          this.assertInlineAggCaptureSound(el, 'a constructed fixed-array element');
+          this.assertInlineAggCaptureSound(el, 'a constructed fixed-array element', value.elem);
           const elSrc = this.aggToMemPtr(el, ctx, out);
           out.push(`mcopy(${at(w)}, ${elSrc}, ${ew * 32})`);
           this.recordCapturePatch(el, at(w), elSrc, ew * 32);
