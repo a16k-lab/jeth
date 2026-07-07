@@ -4098,9 +4098,21 @@ ${indent(runtime, 6)}
         ((values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArray' ||
           (values[i] as Expr & { kind: 'arrayValue' }).arr.base.kind === 'memArrayExpr')
       ) {
-        // a MEMORY array component (return [xs, n]): a dynamic component encoded into the tail.
+        // a MEMORY array component (return [xs, n]).
         const av = values[i] as Expr & { kind: 'arrayValue' };
         const mp = av.arr.base.kind === 'memArray' ? this.ctxLookup(ctx, av.arr.base.varName) : memExprRefs[i]!;
+        if (!isDynamicType(t)) {
+          // an ABI-STATIC fixed-array ELEMENT component (return [x, m[i]] where m[i]: Arr<In,N> /
+          // Arr<u256,N>, reached as an arrayValue over a memArrayExpr): ABI-static, so it is encoded
+          // INLINE in the head (abiHeadWords(t) words, NO offset word) - totalHead already reserves
+          // them (headWordsOf). The sibling of the e33d131 plain-local fix: writing an offset word
+          // here mislocated the tail and left zero head words (the 9th pointer-headed consumer
+          // miscompile). abiEncFromMem dereferences a pointer-headed Arr<In,N> element image (Batch A)
+          // and copies a flat value-array image verbatim, matching the solo-return / abi.encode paths.
+          this.abiEncFromMem(t, mp, `add(${ptr}, ${headPos})`, ctx, out);
+          hw += abiHeadWords(t);
+          return;
+        }
         out.push(`mstore(add(${ptr}, ${headPos}), sub(${cursor}, ${ptr}))`);
         if (t.length === undefined && isStaticValueType(t.element)) {
           // a FLAT value array (u256[], address[], ...): the memory [len][data] IS the ABI layout
