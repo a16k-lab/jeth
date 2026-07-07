@@ -498,6 +498,10 @@ export interface SuccessCheck {
 // The right-hand side of a tuple destructuring: a multi-value internal call, or a tuple of expressions.
 export type DestructureSource =
   | { kind: 'call'; fn: string; args: Expr[] } // `[a, b] = this.f()` (f has N value return components)
+  // L10b: `[p, q] = g(a, b)` through a MULTI-RETURN internal function pointer: the embedded funcRefCall
+  // Expr carries the pointer, args and the funcref signature (sig.rets = the component types); the
+  // lowering invokes the per-signature dispatcher, which forwards the target userfn_'s N returns.
+  | { kind: 'funcRefCall'; call: Expr & { kind: 'funcRefCall' } }
   | { kind: 'tuple'; values: Expr[] } // `[a, b] = [x, y]` (parallel assign / swap)
   // `let [ok, ret] = addr.tryCall/tryStaticcall({...})`: the raw escape hatch (no success checks).
   // Yields two components: ok (bool) and ret (bytes returndata, always captured even on failure).

@@ -644,12 +644,18 @@ ${indent(runtime, 6)}
       if (o.kind === 'funcRefCall' && o.sig && typeof o.sig === 'object') {
         const sig = o.sig as JethType;
         for (const [key, fn] of this.funcs) {
-          if (fn.returnTypes) continue;
-          const fsig: JethType = {
-            kind: 'funcref',
-            params: fn.params.map((p) => p.type),
-            ret: fn.returnType.kind === 'void' ? undefined : fn.returnType,
-          };
+          // L10b: a MULTI-RETURN target matches a rets-carrying pointer signature (same fsig
+          // derivation as ensureFuncRefDispatcher, so the ctor-reachability closure stays in lockstep).
+          const fsig: JethType =
+            fn.returnTypes && fn.returnTypes.length >= 2
+              ? { kind: 'funcref', params: fn.params.map((p) => p.type), ret: undefined, rets: fn.returnTypes }
+              : fn.returnTypes
+                ? { kind: 'funcref', params: fn.params.map((p) => p.type), ret: fn.returnTypes[0] }
+                : {
+                    kind: 'funcref',
+                    params: fn.params.map((p) => p.type),
+                    ret: fn.returnType.kind === 'void' ? undefined : fn.returnType,
+                  };
           if ((this.contract?.funcRefIds?.has(key) ?? false) && typesEqual(fsig, sig)) keys.push(key);
         }
       }
@@ -3030,7 +3036,10 @@ ${indent(runtime, 6)}
   /** A stable Yul name for the per-signature function-pointer dispatcher. Derived from the funcref
    *  signature's canonical name so every call through the same pointer type shares one dispatcher. */
   private funcRefDispatcherName(sig: JethType & { kind: 'funcref' }): string {
-    const key = `${sig.params.map(canonicalName).join(',')}->${sig.ret ? canonicalName(sig.ret) : 'void'}`;
+    // L10b: a multi-return signature keys on its full return tuple. MUST stay in lockstep with the
+    // analyzer's funcrefSigKey so the effect-fixpoint grouping and the runtime dispatch agree.
+    const ret = sig.rets ? `(${sig.rets.map(canonicalName).join(',')})` : sig.ret ? canonicalName(sig.ret) : 'void';
+    const key = `${sig.params.map(canonicalName).join(',')}->${ret}`;
     return `funcref_dispatch_${toHex(keccak(key)).slice(0, 16)}`;
   }
 
@@ -3043,24 +3052,32 @@ ${indent(runtime, 6)}
     const name = this.funcRefDispatcherName(sig);
     if (this.helpers.has(name)) return;
     const argNames = sig.params.map((_, i) => `a${i}`);
-    const retDecl = sig.ret ? ' -> ret' : '';
+    // L10b: a MULTI-RETURN pointer signature dispatches through a MULTI-RETURN Yul function
+    // (`-> r0, r1, ...`), each case forwarding the target userfn_'s N returns unchanged.
+    const retNames = sig.rets ? sig.rets.map((_, i) => `r${i}`) : sig.ret ? ['ret'] : [];
+    const retDecl = retNames.length ? ` -> ${retNames.join(', ')}` : '';
     const cases: string[] = [];
     // Collect the matching targets (by exact signature) with their ids, ordered by id for stable output.
     const targets: { id: number; key: string }[] = [];
     for (const [key, id] of this.contract?.funcRefIds ?? []) {
       const fn = this.funcs.get(key);
-      if (!fn || fn.returnTypes) continue;
-      const fsig: JethType = {
-        kind: 'funcref',
-        params: fn.params.map((p) => p.type),
-        ret: fn.returnType.kind === 'void' ? undefined : fn.returnType,
-      };
+      if (!fn) continue;
+      const fsig: JethType =
+        fn.returnTypes && fn.returnTypes.length >= 2
+          ? { kind: 'funcref', params: fn.params.map((p) => p.type), ret: undefined, rets: fn.returnTypes }
+          : fn.returnTypes
+            ? { kind: 'funcref', params: fn.params.map((p) => p.type), ret: fn.returnTypes[0] }
+            : {
+                kind: 'funcref',
+                params: fn.params.map((p) => p.type),
+                ret: fn.returnType.kind === 'void' ? undefined : fn.returnType,
+              };
       if (typesEqual(fsig, sig)) targets.push({ id, key });
     }
     targets.sort((x, y) => x.id - y.id);
     for (const t of targets) {
       const callExpr = `${this.userFnName(t.key)}(${argNames.join(', ')})`;
-      cases.push(`  case ${t.id} { ${sig.ret ? `ret := ${callExpr}` : callExpr} }`);
+      cases.push(`  case ${t.id} { ${retNames.length ? `${retNames.join(', ')} := ${callExpr}` : callExpr} }`);
     }
     // The default arm handles the NULL / unassigned pointer (id 0) and any unknown id: solc reverts a
     // call through a zero-initialized internal function pointer with Panic(0x51), so emit that exact
@@ -11750,6 +11767,14 @@ ${indent(runtime, 6)}
         out.push(`let ${p} := ${this.lowerExpr(e, ctx, out)}`);
         return { src: 'memory', ptr: p };
       }
+      case 'funcRefCall': {
+        // Tier-3 L10a: a call THROUGH an internal function POINTER returning bytes/string: the
+        // per-signature dispatcher forwards the callee's [len][data] memory pointer word - exactly
+        // an ordinary internal call's dynamic return (was: 'not a dynamic value: funcRefCall').
+        const p = this.fresh();
+        out.push(`let ${p} := ${this.lowerExpr(e, ctx, out)}`);
+        return { src: 'memory', ptr: p };
+      }
       case 'ternary': {
         // a bytes/string ternary `c ? a : b`: short-circuit (only the taken branch is
         // materialized), then select the [len][data] pointer. Matches Solidity (the untaken
@@ -13826,6 +13851,22 @@ ${indent(runtime, 6)}
       const n = this.funcs.get(source.fn)?.returnTypes?.length ?? 0;
       const regs = Array.from({ length: n }, () => this.fresh());
       out.push(`let ${regs.join(', ')} := ${this.userFnName(source.fn)}(${args.join(', ')})`);
+      return regs;
+    }
+    if (source.kind === 'funcRefCall') {
+      // L10b: `let [p, q] = g(a, b)` through a MULTI-RETURN function pointer: evaluate the id, then the
+      // arguments (left-to-right, each frozen into a temp, exactly like the single-return funcRefCall
+      // lowering), then invoke the per-signature multi-return dispatcher and bind its N returns.
+      const e = source.call;
+      const sig = e.sig as JethType & { kind: 'funcref' };
+      this.ensureFuncRefDispatcher(sig);
+      const idReg = this.lowerExpr(e.ptr, ctx, out);
+      const idTmp = this.fresh();
+      out.push(`let ${idTmp} := ${idReg}`);
+      const args = this.lowerCallArgs(e.args, ctx, out);
+      const n = sig.rets?.length ?? 0;
+      const regs = Array.from({ length: n }, () => this.fresh());
+      out.push(`let ${regs.join(', ')} := ${this.funcRefDispatcherName(sig)}(${[idTmp, ...args].join(', ')})`);
       return regs;
     }
     if (source.kind === 'extCall') {

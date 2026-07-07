@@ -157,7 +157,7 @@ interface RawFunction {
   returnTypes?: JethType[]; // multi-value return `[T1, T2, ...]`
   inferRead?: boolean; // @read -> resolve to @pure (touches no state/env) or @view (reads, never writes)
   nonReentrant?: boolean; // F4: @nonReentrant -> transient-storage reentrancy mutex on the external entry
-  modifiers?: { name: string; argNodes: ts.Expression[]; site: ts.Node }[]; // Phase 5: applied @modifier decorators, in source order (leftmost = outermost)
+  modifiers?: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[]; // Phase 5: applied @modifier decorators, in source order (leftmost = outermost); typeArgs = explicit generic-modifier type arguments (L15)
   key?: string; // unique identity for the call graph: the bare name when unique, `name__ovN` when
   // overloaded (a generic specialization sets name=key=mangled). Unset => `name` (see fkey()).
   // ---- inheritance metadata (set by collectFunction) ----
@@ -258,6 +258,16 @@ export class Analyzer {
   // Phase 5: user-defined @modifier declarations (name -> RawModifier). A modifier is never a
   // standalone function (not callable, not in the ABI); it is inlined around each function it decorates.
   private modifiersByName = new Map<string, RawModifier>();
+  // L15: generic @modifier TEMPLATES `lim<T>(v: T)`, monomorphized per use site (mangled name$types,
+  // registered into modifiersByName like a concrete modifier). `buffered` is the template's
+  // type-independent shape (post-placeholder / whole-body), consulted by usesBufferedModifierPath
+  // before any instantiation exists. Keys of instantiated specializations live in modifierInstanceKeys
+  // (so a user-declared modifier whose name happens to equal a mangled key is caught, not clobbered).
+  private genericModifiersByName = new Map<
+    string,
+    { node: ts.MethodDeclaration; typeParams: string[]; definingContract: string; buffered: boolean }
+  >();
+  private modifierInstanceKeys = new Set<string>();
   // @struct declarations (name -> resolved struct type), collected before contracts
   private structsByName = new Map<string, JethType>();
   // contract-level custom error and event tables (collected before function bodies)
@@ -943,6 +953,10 @@ export class Analyzer {
    *  bytes/string, a value-element array (fixed or dynamic), or a struct. Mirrors checkAbiEncode's
    *  accepted arg shapes so a call never silently miscompiles. */
   private interfaceAbiTypeSupported(t: JethType): boolean {
+    // L11a guard: an internal function pointer (or an aggregate CONTAINING one) is NOT an ABI type -
+    // solc rejects it in any external/interface signature. Without this, a funcref-bearing struct
+    // (now a valid MEMORY local) would slip into an interface method signature and mis-encode.
+    if (this.typeHasFuncref(t)) return false;
     if (isStaticValueType(t) || isBytesLike(t)) return true;
     if (t.kind === 'array') return true; // standard abi.encode supports value/dyn arrays + fixed arrays
     if (t.kind === 'struct') return true; // static (inline) or dynamic (offset+tail) struct
@@ -1503,9 +1517,9 @@ export class Analyzer {
     // BEFORE override resolution (which would otherwise flag the base as an unimplemented @virtual). A
     // valid getter override is recorded in validGetterOverrides, suppressing the JETH133/380/044 clashes;
     // an invalid attempt is rejected here (JETH433). linOrder is needed to rank base contracts.
+    const stateVarType = new Map<string, JethType>(rawState.map((v) => [v.name, v.type]));
     if (this.getterOverrideVars.size > 0) {
       this.linOrder = lin.map((c) => c.name?.text ?? '<anon>');
-      const stateVarType = new Map<string, JethType>(rawState.map((v) => [v.name, v.type]));
       this.resolveGetterOverrides(collectedFns, stateVarType);
     }
 
@@ -1521,7 +1535,7 @@ export class Analyzer {
     // function in the deployed contract - unless the deployed contract is @abstract (solc: an abstract
     // contract may leave interface functions unimplemented; a concrete one is rejected). Runs on the
     // override WINNERS (the most-derived, dispatched definitions) so it sees exactly the deployed ABI.
-    this.enforceInterfaceImplementation(lin, winnerFns);
+    this.enforceInterfaceImplementation(lin, winnerFns, stateVarType);
 
     // Phase A: register every @library's functions as ordinary internal functions of THIS compile.
     // They were collected with a qualified source name `L.f` (namespaced away from contract names),
@@ -1649,6 +1663,8 @@ export class Analyzer {
     // a file-level type never clashes with a contract modifier - solc accepts it); the modifier-vs-type
     // pair is excluded below so this fix does not widen the pre-existing type-vs-member over-rejection.
     for (const nm of this.modifiersByName.keys()) addId(nm, 'modifier');
+    // L15: a generic @modifier TEMPLATE shares the same contract-level identifier namespace.
+    for (const nm of this.genericModifiersByName.keys()) addId(nm, 'modifier');
     for (const [nm, kinds] of idKinds) {
       // P1-4: a validated getter var override (uint256 public override x;) legitimately reuses the name of
       // the base @virtual function it implements (storage + function share `x`). solc treats the getter AS
@@ -2985,7 +3001,11 @@ export class Analyzer {
    *  mutability read here is the DECLARED/provisional value at override-resolution time (an @read impl
    *  is provisionally 'view'), identical to how the sibling JETH378 override check reads it - so an
    *  impl inferred stricter than the interface never spuriously fails, and a loosening is still caught. */
-  private enforceInterfaceImplementation(lin: ts.ClassDeclaration[], winners: RawFunction[]): void {
+  private enforceInterfaceImplementation(
+    lin: ts.ClassDeclaration[],
+    winners: RawFunction[],
+    stateVarType: Map<string, JethType>,
+  ): void {
     // The implementation obligations are exactly the @interface NODES present in the linearization (an
     // interface reached via a base contract obliges the deployed contract just as a direct `extends I`
     // does). C3 already placed each interface once.
@@ -3018,6 +3038,28 @@ export class Analyzer {
         // resolveGetterOverrides already validated the getter's signature / return / mutability against the
         // base (including the interface method), so the obligation + the JETH386/387/388 checks are met.
         if (this.validGetterOverrides.has(m.name) && this.getterMatchesInterfaceMethod(m)) continue;
+        // L14: an @external @state var WITHOUT @override whose auto-getter shape (name + params +
+        // single-or-flattened returns) equals the interface method ALSO implements it - solc >= 0.8.8
+        // needs no override specifier for an interface-only override, incl. a public state variable
+        // (a struct var's getter satisfies a tuple-returning method). The getter is VIEW, so only a
+        // view/nonpayable method is satisfiable (a pure/payable one falls through to the reject).
+        // GUARD (probe-verified vs 0.8.35): with TWO OR MORE interface heads declaring this exact
+        // signature, solc still demands the explicit list ("Public state variable needs to specify
+        // overridden contracts") - so the no-override path admits exactly ONE head; the multi-head
+        // case must go through @override(I1, I2) (validated by resolveGetterOverrides).
+        {
+          const t = stateVarType.get(m.name);
+          if (
+            t !== undefined &&
+            this.publicStateNames.has(m.name) &&
+            (m.mutability === 'view' || m.mutability === 'nonpayable') &&
+            this.getterShapeMatchesIfaceMethod(m, t)
+          ) {
+            const shape = this.getterSignatureShape(m.name, t)!;
+            const heads = this.getterInterfaceOverrideHeads(deployedName, m.name, shape);
+            if (heads.length <= 1) continue;
+          }
+        }
         const w = winnerBySig.get(m.signature);
         if (!w || w.bodyless) {
           // Unimplemented interface method. An @abstract deployed contract may leave it open (solc). A
@@ -3116,13 +3158,64 @@ export class Analyzer {
       if (t.kind === 'mapping') return undefined;
     }
     if (t.kind === 'struct') {
-      // a struct getter flattens to a value/bytes/string tuple; a getter-override of a struct getter is a
-      // rarer shape - resolveGetterOverrides only matches single-value returns, so leave it here as a
-      // shape whose return arity would not match a single-return base virtual (handled by the caller).
-      return { paramTypes, returnType: VOID, returnTypes: [] };
+      // L14: a struct getter flattens to a value/bytes/string tuple (returnTypes), the EXACT type list
+      // synthPublicGetter emits (flattenGetterStructTypes mirrors flattenGetterStruct's null conditions
+      // type-for-type, so a shape here is a shape the getter machinery really synthesizes - never an
+      // accepted obligation with no getter behind it). An un-flattenable struct leaf stays undefined.
+      const flat = this.flattenGetterStructTypes(t, true);
+      if (!flat) return undefined;
+      return { paramTypes, returnType: VOID, returnTypes: flat };
     }
     if (!(isStaticValueType(t) || isBytesLike(t))) return undefined;
     return { paramTypes, returnType: t };
+  }
+
+  /** L14: the TYPE list of a flattened struct-getter return tuple - the types-only mirror of
+   *  flattenGetterStruct (same field walk, same null conditions), usable before storage layout. */
+  private flattenGetterStructTypes(st: Extract<JethType, { kind: 'struct' }>, top: boolean): JethType[] | null {
+    const types: JethType[] = [];
+    for (const f of st.fields) {
+      if (f.type.kind === 'mapping') continue; // solc omits mappings at any level
+      if (top && f.type.kind === 'array') continue; // the top struct omits arrays (fixed AND dynamic)
+      if (!top && f.type.kind === 'array' && f.type.length === undefined) return null;
+      const r = this.flattenGetterLeafTypes(f.type);
+      if (!r) return null;
+      types.push(...r);
+    }
+    return types.length ? types : null;
+  }
+
+  /** L14: the types-only mirror of flattenGetterLeaf (same acceptance/null conditions). */
+  private flattenGetterLeafTypes(type: JethType): JethType[] | null {
+    if (isStaticValueType(type) || isBytesLike(type)) return [type];
+    if (type.kind === 'struct') {
+      if (isStaticType(type)) return this.flattenGetterStructTypes(type, false);
+      // a DYNAMIC nested struct is ONE whole sub-tuple component (see flattenGetterLeaf).
+      return [type];
+    }
+    if (type.kind === 'array' && type.length !== undefined) {
+      const el = type.element;
+      if (!(isStaticValueType(el) || (el.kind === 'struct' && isStaticType(el)))) return null;
+      const types: JethType[] = [];
+      for (let j = 0; j < type.length; j++) {
+        const r = this.flattenGetterLeafTypes(el);
+        if (!r) return null;
+        types.push(...r);
+      }
+      return types.length ? types : null;
+    }
+    return null;
+  }
+
+  /** L14: does an interface method's return shape equal a getter's EFFECTIVE return shape (single value
+   *  or flattened multi-return)? Normalizes both sides to a type list, mirroring interfaceReturnsEqual. */
+  private ifaceReturnsMatchGetterShape(
+    m: InterfaceMethod,
+    shape: { returnType: JethType; returnTypes?: JethType[] },
+  ): boolean {
+    const mr = m.returnTypes ?? (m.returnType.kind === 'void' ? [] : [m.returnType]);
+    const sr = shape.returnTypes ?? (shape.returnType.kind === 'void' ? [] : [shape.returnType]);
+    return mr.length === sr.length && mr.every((t, i) => typesEqual(t, sr[i]!));
   }
 
   /** P1-4: validate each `@external @state` getter var carrying `@override` against the base @virtual
@@ -3140,9 +3233,10 @@ export class Analyzer {
       this.getterOverrideVarType.set(name, t);
       const shape = this.getterSignatureShape(name, t);
       // A getter is VIEW and takes exactly its mapping-key / array-index params, returns the leaf value.
-      // A struct-flattening getter (multi-return) is not matched here (a base virtual returns one value):
-      // leave it to the normal path (it will simply not validate, staying rejected).
-      if (!shape || shape.returnType.kind === 'void') {
+      // L14: a struct-flattening getter carries its flattened tuple in shape.returnTypes and is matched
+      // against a multi-return base/interface method below; only a shape the getter machinery cannot
+      // synthesize at all stays rejected here.
+      if (!shape || (shape.returnType.kind === 'void' && !shape.returnTypes?.length)) {
         this.diags.error(
           info.node,
           'JETH433',
@@ -3157,7 +3251,7 @@ export class Analyzer {
       const sameNameBases = collected.filter(
         (rf) => rf.name === name && rf.definingContract !== undefined && (idxOf.get(rf.definingContract) ?? 0) > myIdx,
       );
-      const ifaceHead = this.getterOverridesInterfaceMethod(name, shape.paramTypes, shape.returnType);
+      const ifaceHead = this.getterOverridesInterfaceMethod(name, shape);
       const sigMatch = sameNameBases.filter(
         (rf) =>
           rf.params.length === shape.paramTypes.length &&
@@ -3181,12 +3275,7 @@ export class Analyzer {
       // ("Invalid contract specified in override list"). A view getter also cannot override a @pure/@payable
       // interface method (a mutability change). This mirrors the regular-function override path (JETH381/
       // JETH415), which the getter path previously skipped by short-circuiting on the first matching iface.
-      const ifaceHeads = this.getterInterfaceOverrideHeads(
-        info.definingContract,
-        name,
-        shape.paramTypes,
-        shape.returnType,
-      );
+      const ifaceHeads = this.getterInterfaceOverrideHeads(info.definingContract, name, shape);
       // A view getter overriding a @pure or @payable interface method loosens/changes mutability -> reject
       // (solc: "Overriding public state variable changes state mutability ..."). Fires per interface head,
       // independent of the override list (a fully-listed @override(I1, I2) with a pure I2 is still rejected).
@@ -3232,9 +3321,12 @@ export class Analyzer {
           this.diags.error(info.node, 'JETH433', `getter '${name}' overrides '${base.definingContract}.${name}', which is not @virtual`);
           bad = true;
         }
-        // exact return type match (solc: "return types differ").
-        if (!(base.returnTypes === undefined && typesEqual(base.returnType, shape.returnType))) {
-          this.diags.error(info.node, 'JETH433', `getter '${name}' return type ${displayName(shape.returnType)} must exactly match the base function's return type`);
+        // exact return type match (solc: "return types differ"). L14: normalized to a type list on both
+        // sides so a struct-flattening getter (multi-return shape) matches a multi-value base exactly.
+        const baseRets = base.returnTypes ?? (base.returnType.kind === 'void' ? [] : [base.returnType]);
+        const shapeRets = shape.returnTypes ?? (shape.returnType.kind === 'void' ? [] : [shape.returnType]);
+        if (!(baseRets.length === shapeRets.length && baseRets.every((t, i) => typesEqual(t, shapeRets[i]!)))) {
+          this.diags.error(info.node, 'JETH433', `getter '${name}' return type must exactly match the base function's return type`);
           bad = true;
         }
         // mutability: a getter is VIEW. solc accepts overriding a VIEW or NONPAYABLE base (view is equal or
@@ -3272,13 +3364,20 @@ export class Analyzer {
   private getterMatchesInterfaceMethod(m: InterfaceMethod): boolean {
     const t = this.getterOverrideVarType.get(m.name);
     if (t === undefined) return false;
+    return this.getterShapeMatchesIfaceMethod(m, t);
+  }
+
+  /** L14: does the auto-getter of an @external state var of type `t` named `m.name` have exactly the
+   *  interface method's shape (params + single-or-flattened returns)? Shared by the @override path
+   *  (getterMatchesInterfaceMethod) and the no-@override implementation path (solc >= 0.8.8 requires no
+   *  override for an interface-only override, incl. a public state variable). */
+  private getterShapeMatchesIfaceMethod(m: InterfaceMethod, t: JethType): boolean {
     const shape = this.getterSignatureShape(m.name, t);
-    if (!shape || shape.returnType.kind === 'void') return false;
+    if (!shape || (shape.returnType.kind === 'void' && !shape.returnTypes?.length)) return false;
     return (
       m.params.length === shape.paramTypes.length &&
       m.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)) &&
-      m.returnTypes === undefined &&
-      typesEqual(m.returnType, shape.returnType)
+      this.ifaceReturnsMatchGetterShape(m, shape)
     );
   }
 
@@ -3286,15 +3385,17 @@ export class Analyzer {
    *  directly-extended @interface (an interface method IS a valid override target for a public getter)?
    *  A `nonpayable`/`view` interface method is satisfiable by a `view` getter; a `pure`/`payable` one is
    *  NOT (that mutability mismatch is enforced separately, per interface, in resolveGetterOverrides). */
-  private getterOverridesInterfaceMethod(name: string, paramTypes: JethType[], returnType: JethType): boolean {
+  private getterOverridesInterfaceMethod(
+    name: string,
+    shape: { paramTypes: JethType[]; returnType: JethType; returnTypes?: JethType[] },
+  ): boolean {
     for (const iface of this.interfacesByName.values()) {
       const m = iface.methods.get(name);
       if (!m) continue;
       if (
-        m.params.length === paramTypes.length &&
-        m.params.every((p, i) => typesEqual(p.type, paramTypes[i]!)) &&
-        m.returnTypes === undefined &&
-        typesEqual(m.returnType, returnType) &&
+        m.params.length === shape.paramTypes.length &&
+        m.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)) &&
+        this.ifaceReturnsMatchGetterShape(m, shape) &&
         (m.mutability === 'view' || m.mutability === 'nonpayable')
       ) {
         return true;
@@ -3314,8 +3415,7 @@ export class Analyzer {
   private getterInterfaceOverrideHeads(
     definingContract: string,
     name: string,
-    paramTypes: JethType[],
-    returnType: JethType,
+    shape: { paramTypes: JethType[]; returnType: JethType; returnTypes?: JethType[] },
   ): { name: string; mutability: Mutability }[] {
     // Transitive interface bases reachable from the contract's heritage (a getter can override an interface
     // method whether the interface is a direct base or reached through another interface/contract base).
@@ -3337,10 +3437,9 @@ export class Analyzer {
       const m = this.interfacesByName.get(ifaceName)?.methods.get(name);
       if (
         m &&
-        m.params.length === paramTypes.length &&
-        m.params.every((p, i) => typesEqual(p.type, paramTypes[i]!)) &&
-        m.returnTypes === undefined &&
-        typesEqual(m.returnType, returnType)
+        m.params.length === shape.paramTypes.length &&
+        m.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)) &&
+        this.ifaceReturnsMatchGetterShape(m, shape)
       ) {
         heads.push({ name: ifaceName, mutability: m.mutability });
       }
@@ -3629,7 +3728,7 @@ export class Analyzer {
     // `constructor() onlyValid {}`); it is inlined around the body like a function modifier. ctors
     // report ts.canHaveDecorators === false, so read the decorators via ts.getDecorators directly.
     let payable = false;
-    const ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
+    const ctorMods: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[] = [];
     const CTOR_BAD_DECORATORS = new Set([
       'view',
       'pure',
@@ -3645,10 +3744,12 @@ export class Analyzer {
       const e = dec.expression;
       let nm: string | undefined;
       let args: ts.Expression[] = [];
+      let tArgs: readonly ts.TypeNode[] | undefined;
       if (ts.isIdentifier(e)) nm = e.text;
       else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
         nm = e.expression.text;
         args = [...e.arguments];
+        tArgs = e.typeArguments; // L15: explicit generic-modifier type arguments
       }
       if (!nm) continue;
       if (nm === 'payable') payable = true;
@@ -3658,7 +3759,7 @@ export class Analyzer {
           'JETH301',
           `a constructor cannot be @${nm} (a constructor is payable or non-payable only)`,
         );
-      else ctorMods.push({ name: nm, argNodes: args, site: dec }); // a @modifier application, inlined below
+      else ctorMods.push({ name: nm, argNodes: args, typeArgs: tArgs, site: dec }); // a @modifier application, inlined below
     }
     if (ctorNode.type) this.diags.error(ctorNode.type, 'JETH301', 'a constructor cannot declare a return type');
     if (ctorNode.typeParameters && ctorNode.typeParameters.length > 0) {
@@ -3989,10 +4090,10 @@ export class Analyzer {
   /** @payable + applied-@modifier decorators on a constructor (shared by mergeConstructors). */
   private ctorDecorators(ctorNode: ts.ConstructorDeclaration): {
     payable: boolean;
-    ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[];
+    ctorMods: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[];
   } {
     let payable = false;
-    const ctorMods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
+    const ctorMods: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[] = [];
     const BAD = new Set([
       'view',
       'pure',
@@ -4008,10 +4109,12 @@ export class Analyzer {
       const e = dec.expression;
       let nm: string | undefined;
       let args: ts.Expression[] = [];
+      let tArgs: readonly ts.TypeNode[] | undefined;
       if (ts.isIdentifier(e)) nm = e.text;
       else if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) {
         nm = e.expression.text;
         args = [...e.arguments];
+        tArgs = e.typeArguments; // L15: explicit generic-modifier type arguments
       }
       if (!nm) continue;
       if (nm === 'payable') payable = true;
@@ -4021,7 +4124,7 @@ export class Analyzer {
           'JETH301',
           `a constructor cannot be @${nm} (a constructor is payable or non-payable only)`,
         );
-      else ctorMods.push({ name: nm, argNodes: args, site: dec });
+      else ctorMods.push({ name: nm, argNodes: args, typeArgs: tArgs, site: dec });
     }
     if (ctorNode.type) this.diags.error(ctorNode.type, 'JETH301', 'a constructor cannot declare a return type');
     return { payable, ctorMods };
@@ -5255,7 +5358,7 @@ export class Analyzer {
       'receive',
       'fallback',
     ]);
-    const appliedModifiers: { name: string; argNodes: ts.Expression[]; site: ts.Node }[] = [];
+    const appliedModifiers: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[] = [];
     for (const d of ts.getDecorators(member) ?? []) {
       const e = d.expression;
       if (ts.isIdentifier(e) && !BUILTIN_FN_DECORATORS.has(e.text)) {
@@ -5265,7 +5368,8 @@ export class Analyzer {
         ts.isIdentifier(e.expression) &&
         !BUILTIN_FN_DECORATORS.has(e.expression.text)
       ) {
-        appliedModifiers.push({ name: e.expression.text, argNodes: [...e.arguments], site: d });
+        // L15: `@lim<u256>(3n)` carries explicit generic-modifier type arguments on the call form.
+        appliedModifiers.push({ name: e.expression.text, argNodes: [...e.arguments], typeArgs: e.typeArguments, site: d });
       }
     }
 
@@ -5964,7 +6068,10 @@ export class Analyzer {
     if (!rf.modifiers || !rf.modifiers.length) return false;
     return rf.modifiers.some((app) => {
       const m = this.modifiersByName.get(app.name);
-      return m !== undefined && (m.postStmts.length > 0 || m.bodyStmts !== undefined);
+      if (m !== undefined) return m.postStmts.length > 0 || m.bodyStmts !== undefined;
+      // L15: a GENERIC modifier application not yet instantiated (wrapModifiers instantiates it later):
+      // the template's placeholder SHAPE is type-independent, so consult the pre-computed flag.
+      return this.genericModifiersByName.get(app.name)?.buffered === true;
     });
   }
 
@@ -6002,6 +6109,16 @@ export class Analyzer {
         );
         return { body: bodyIR };
       }
+    }
+    // L15: instantiate each GENERIC modifier application (`@lim<u256>(3n)` explicit / `@lim(3n)`
+    // inferred) into its concrete monomorph and rewrite the application to the mangled name; every
+    // downstream consumer (usesBufferedModifierPath, inlineModifier, buildModifierWrap, the W5D-1
+    // metas check) then resolves it through modifiersByName like a hand-written modifier.
+    for (const app of apps) {
+      if (this.modifiersByName.has(app.name) || !this.genericModifiersByName.has(app.name)) continue;
+      const inst = this.instantiateGenericModifier(app);
+      if (!inst) return { body: bodyIR }; // diagnostic emitted (JETH327/291/294 - an uninstantiable use)
+      app.name = inst;
     }
     // The buffered userfn path is required when a modifier has POST-placeholder code OR a whole-body
     // (conditional / multi-placeholder / return;) shape: both need the body lowered as a synthesized
@@ -6229,7 +6346,7 @@ export class Analyzer {
    *   - an outlined body that WRITES one of its own params AND can be re-run by a conditional/multi-
    *     placeholder modifier (each outlined run passes a fresh copy; solc shares the ctor frame). */
   private buildCtorLevelStmts(
-    mods: { name: string; argNodes: ts.Expression[]; site: ts.Node }[],
+    mods: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[],
     bodyStmts: Stmt[],
     ctorNode: ts.ConstructorDeclaration,
     params: Param[],
@@ -6247,6 +6364,14 @@ export class Analyzer {
         );
         return bodyStmts;
       }
+    }
+    // L15: instantiate GENERIC modifier applications on a constructor exactly like wrapModifiers does
+    // for functions (rewrite each to its concrete monomorph's mangled name before the metas are read).
+    for (const app of mods) {
+      if (this.modifiersByName.has(app.name) || !this.genericModifiersByName.has(app.name)) continue;
+      const inst = this.instantiateGenericModifier(app);
+      if (!inst) return bodyStmts; // diagnostic emitted (an uninstantiable use)
+      app.name = inst;
     }
     const hasReturn = ctorNode.body ? this.findReturns([...ctorNode.body.statements]).length > 0 : false;
     const metas = mods.map((a) => this.modifiersByName.get(a.name));
@@ -6471,7 +6596,7 @@ export class Analyzer {
   /** Phase 5: collect a user-defined @modifier. Increment 1 supports a PRE-ONLY modifier: a single
    *  `_;` placeholder in TAIL position (the last statement). The pre-code is the guard that runs
    *  before the wrapped function body; post-placeholder code and a conditional placeholder are gated. */
-  private collectModifier(member: ts.MethodDeclaration, contract: string, out: RawModifier[]): void {
+  private collectModifier(member: ts.MethodDeclaration, contract: string, out: RawModifier[], instanceKey?: string): void {
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(member, 'JETH049', 'modifier name must be a plain identifier');
       return;
@@ -6481,7 +6606,12 @@ export class Analyzer {
     // (solc: "Identifier already declared") - reject. A same-name declaration in a DIFFERENT contract
     // of the inheritance chain is an OVERRIDE (@virtual base -> @override derived); it is resolved by
     // resolveModifierOverrides after the whole chain is collected, so it must NOT error here.
-    if (out.some((m) => m.name === name && m.definingContract === contract)) {
+    if (
+      out.some((m) => m.name === name && m.definingContract === contract) ||
+      // L15: a same-contract generic TEMPLATE of this name is a redeclaration too - but NOT when we are
+      // collecting one of the template's own instantiations (instanceKey set).
+      (instanceKey === undefined && this.genericModifiersByName.get(name)?.definingContract === contract)
+    ) {
       this.diags.error(member, 'JETH046', `duplicate @modifier '${name}'`);
       return;
     }
@@ -6505,8 +6635,62 @@ export class Analyzer {
         `a @modifier cannot also be @${bad} (a modifier has no visibility or mutability)`,
       );
     if (member.type) this.diags.error(member.type, 'JETH330', 'a @modifier cannot declare a return type');
-    if (member.typeParameters && member.typeParameters.length > 0)
-      this.diags.error(member, 'JETH327', 'a generic @modifier is not supported yet');
+    // L15: a GENERIC @modifier `lim<T>(v: T)` is a TEMPLATE, monomorphized at each `@lim<u256>(...)` /
+    // `@lim(...)` use site through the same binding machinery generic FUNCTIONS use (one concrete
+    // modifier per distinct type tuple, mangled `name$canonicalTypes`, cached). Register the template
+    // here (its params reference T and cannot resolve yet); only UNINSTANTIABLE uses reject (JETH327).
+    // When `instanceKey` is set we ARE collecting one concrete instantiation (T bound via
+    // withTypeBinding), so fall through to the normal full collection below.
+    if (member.typeParameters && member.typeParameters.length > 0 && instanceKey === undefined) {
+      if (decs.includes('virtual') || decs.includes('override')) {
+        this.diags.error(
+          member,
+          'JETH327',
+          `a generic @modifier cannot be @virtual/@override (monomorphized templates do not participate in modifier overriding)`,
+        );
+        return;
+      }
+      const typeParams: string[] = [];
+      for (const tp of member.typeParameters) {
+        if (tp.constraint || tp.default) {
+          this.diags.error(
+            tp,
+            'JETH294',
+            `type parameter '${tp.name.text}' must be a plain identifier (constraints / defaults are not supported)`,
+          );
+        }
+        const pn = tp.name.text;
+        if (resolvePrimitiveName(pn) || this.structsByName.has(pn)) {
+          this.diags.error(tp, 'JETH294', `type parameter name '${pn}' conflicts with an existing type`);
+        }
+        if (typeParams.includes(pn)) {
+          this.diags.error(tp, 'JETH294', `duplicate type parameter '${pn}' in generic @modifier '${name}'`);
+        }
+        typeParams.push(pn);
+      }
+      if (!member.body) {
+        this.diags.error(member, 'JETH328', `a @modifier must have a body containing the placeholder '_'`);
+        return;
+      }
+      const tplPlaceholders = this.findPlaceholders(member.body);
+      if (tplPlaceholders.length === 0) {
+        this.diags.error(member, 'JETH328', `a @modifier body must contain the placeholder '_' exactly once`);
+        return;
+      }
+      // The template's SHAPE (buffered whole-body/post vs flat pre-only) is TYPE-INDEPENDENT: compute it
+      // once so usesBufferedModifierPath can pick the wrap path before any instantiation exists.
+      const tplStmts = member.body.statements;
+      const tplHasBareReturn = this.findReturns([...tplStmts]).some((r) => !r.expression);
+      const tplTopIdx = tplStmts.findIndex((s) => this.isPlaceholderStmt(s));
+      const tplUseFlat = tplPlaceholders.length === 1 && tplTopIdx >= 0 && !tplHasBareReturn;
+      const buffered = !tplUseFlat || tplStmts.slice(tplTopIdx + 1).length > 0;
+      // C3 most-derived-first: keep the first-seen template per name (a base same-name template is
+      // shadowed by the derived one, mirroring the concrete-modifier winner rule).
+      if (!this.genericModifiersByName.has(name)) {
+        this.genericModifiersByName.set(name, { node: member, typeParams, definingContract: contract, buffered });
+      }
+      return;
+    }
 
     const params: { name: string; type: JethType }[] = [];
     for (const p of member.parameters) {
@@ -6588,6 +6772,105 @@ export class Analyzer {
       bodyStmts: useFlat ? undefined : [...stmts],
       hasBareReturn,
     });
+  }
+
+  /** L15: instantiate one GENERIC-modifier application into its concrete monomorph: resolve the type
+   *  binding (explicit `@lim<u256>(...)` type args, else inferred from the checked argument types), mangle
+   *  the specialization key (one monomorph per distinct type tuple, cached), collect the template's AST
+   *  with T bound (withTypeBinding - the same machinery generic functions use), and register the concrete
+   *  RawModifier in modifiersByName under the mangled key. Returns that key, or undefined after emitting
+   *  a JETH327/291/294 diagnostic (only UNINSTANTIABLE uses reject). */
+  private instantiateGenericModifier(app: {
+    name: string;
+    argNodes: ts.Expression[];
+    typeArgs?: readonly ts.TypeNode[];
+    site: ts.Node;
+  }): string | undefined {
+    const gen = this.genericModifiersByName.get(app.name)!;
+    const binding = this.resolveModifierGenericArgs(app, gen);
+    if (!binding) return undefined;
+    const args = gen.typeParams.map((tp) => binding.get(tp)!);
+    const key = this.mangleSpecialization(app.name, args);
+    if (this.modifierInstanceKeys.has(key)) return key; // cached: dedup per distinct type tuple
+    // `$` is a legal TS identifier char, so a user could (pathologically) declare a modifier whose name
+    // equals the mangled key; reject with a clear diagnostic rather than clobbering either definition.
+    if (this.modifiersByName.has(key) || this.genericModifiersByName.has(key)) {
+      this.diags.error(
+        app.site,
+        'JETH296',
+        `specialization name '${key}' for generic @modifier '${app.name}' collides with an existing modifier; rename that modifier`,
+      );
+      return undefined;
+    }
+    const scratch: RawModifier[] = [];
+    this.withTypeBinding(binding, () => this.collectModifier(gen.node, gen.definingContract, scratch, key));
+    const rm = scratch[0];
+    if (!rm) return undefined; // collectModifier emitted the precise diagnostic for this instantiation
+    rm.name = key;
+    this.modifiersByName.set(key, rm);
+    this.modifierInstanceKeys.add(key);
+    return key;
+  }
+
+  /** L15: resolve the concrete type binding for a generic-modifier application. Mirrors
+   *  resolveGenericTypeArgs (generic FUNCTIONS): explicit type args from the decorator call form, else
+   *  inference from each parameter annotated with a bare type-parameter identifier against the checked
+   *  argument's concrete type (unified across params; conflicts reject). Every bound type must be a
+   *  value type (gateGenericTypeArg, JETH291). */
+  private resolveModifierGenericArgs(
+    app: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node },
+    gen: { node: ts.MethodDeclaration; typeParams: string[] },
+  ): Map<string, JethType> | undefined {
+    const binding = new Map<string, JethType>();
+    const params = gen.node.parameters;
+    if (app.typeArgs && app.typeArgs.length > 0) {
+      if (app.typeArgs.length !== gen.typeParams.length) {
+        this.diags.error(
+          app.site,
+          'JETH327',
+          `generic @modifier '${app.name}' expects ${gen.typeParams.length} type argument(s), got ${app.typeArgs.length}`,
+        );
+        return undefined;
+      }
+      for (let i = 0; i < gen.typeParams.length; i++) {
+        const t = resolveType(app.typeArgs[i]!, this.diags, this.structsByName);
+        if (!t) return undefined;
+        if (!this.gateGenericTypeArg(t, app.typeArgs[i]!, gen.typeParams[i]!)) return undefined;
+        binding.set(gen.typeParams[i]!, t);
+      }
+      return binding;
+    }
+    for (let i = 0; i < params.length && i < app.argNodes.length; i++) {
+      const ann = params[i]!.type;
+      if (!ann || !ts.isTypeReferenceNode(ann) || !ts.isIdentifier(ann.typeName)) continue;
+      const tpName = ann.typeName.text;
+      if (!gen.typeParams.includes(tpName)) continue;
+      const a = this.checkExpr(app.argNodes[i]!);
+      if (!a) return undefined;
+      const inferred = a.type;
+      const prev = binding.get(tpName);
+      if (prev && !typesEqual(prev, inferred)) {
+        this.diags.error(
+          app.argNodes[i]!,
+          'JETH327',
+          `conflicting type arguments inferred for '${tpName}' in generic @modifier '${app.name}': ${displayName(prev)} vs ${displayName(inferred)} (specify it explicitly, e.g. @${app.name}<${displayName(prev)}>(...))`,
+        );
+        return undefined;
+      }
+      if (!prev) binding.set(tpName, inferred);
+    }
+    for (const tp of gen.typeParams) {
+      if (!binding.has(tp)) {
+        this.diags.error(
+          app.site,
+          'JETH327',
+          `cannot infer type argument ${tp} for generic @modifier '${app.name}'; specify it explicitly, e.g. @${app.name}<u256>(...)`,
+        );
+        return undefined;
+      }
+      if (!this.gateGenericTypeArg(binding.get(tp)!, app.site, tp)) return undefined;
+    }
+    return binding;
   }
 
   /** Resolve @modifier inheritance across the linearization (collectedMods is in most-derived-FIRST
@@ -11214,6 +11497,10 @@ export class Analyzer {
    *  undefined), from the resolved signature. Used to type an address-taken function value and to match
    *  it against a funcref param type. */
   private funcRefTypeOf(rf: RawFunction): JethType {
+    // L10b: a MULTI-VALUE-return function's pointer type carries `rets` (ret stays undefined).
+    if (rf.returnTypes && rf.returnTypes.length >= 2) {
+      return { kind: 'funcref', params: rf.params.map((p) => p.type), ret: undefined, rets: rf.returnTypes };
+    }
     return { kind: 'funcref', params: rf.params.map((p) => p.type), ret: rf.returnType.kind === 'void' ? undefined : rf.returnType };
   }
 
@@ -11221,7 +11508,10 @@ export class Analyzer {
    *  site with the ADDRESS-TAKEN functions it could dispatch to (same-signature). Matches the yul
    *  dispatcher's signature key so the effect-fixpoint grouping and the runtime dispatch agree. */
   private funcrefSigKey(sig: JethType & { kind: 'funcref' }): string {
-    return `${sig.params.map(canonicalName).join(',')}->${sig.ret ? canonicalName(sig.ret) : 'void'}`;
+    // L10b: a multi-return signature keys on its full return tuple. MUST stay in lockstep with the
+    // yul dispatcher name derivation (funcRefDispatcherName) so effect grouping == runtime dispatch.
+    const ret = sig.rets ? `(${sig.rets.map(canonicalName).join(',')})` : sig.ret ? canonicalName(sig.ret) : 'void';
+    return `${sig.params.map(canonicalName).join(',')}->${ret}`;
   }
 
   /** ADDRESS-TAKING: interpret `node` as an internal function-pointer VALUE `expected` (a funcref type).
@@ -11309,11 +11599,14 @@ export class Analyzer {
         );
         return 'reject';
       }
-      if (lf.returnTypes) {
+      // L10b: a multi-value-return library function IS address-takeable when the expected pointer type
+      // declares the matching tuple return (`(a) => [T1, T2]`, rets). Only an expected type WITHOUT
+      // rets stays rejected here (the typesEqual check below would also fail, but keep the precise message).
+      if (lf.returnTypes && !(expected.kind === 'funcref' && expected.rets)) {
         this.diags.error(
           node,
           'JETH423',
-          `cannot take the address of multi-value-return library function '${libName}.${fnName}' as an internal function pointer`,
+          `cannot take the address of multi-value-return library function '${libName}.${fnName}' as an internal function pointer without a tuple-return pointer type ((...) => [T1, T2])`,
         );
         return 'reject';
       }
@@ -11373,11 +11666,14 @@ export class Analyzer {
       );
       return 'reject';
     }
-    if (rf.returnTypes) {
+    // L10b: a multi-value-return function IS address-takeable when the expected pointer type declares
+    // the matching tuple return (rets) - typesEqual above already validated the exact tuple. Only an
+    // expected type WITHOUT rets is unreachable here (typesEqual rejected it), so no gate remains.
+    if (rf.returnTypes && !(want.kind === 'funcref' && want.rets)) {
       this.diags.error(
         node,
         'JETH423',
-        `cannot take the address of multi-value-return function '${name}' as an internal function pointer`,
+        `cannot take the address of multi-value-return function '${name}' as an internal function pointer without a tuple-return pointer type ((...) => [T1, T2])`,
       );
       return 'reject';
     }
@@ -11424,11 +11720,23 @@ export class Analyzer {
   private buildFuncRefCall(
     node: ts.CallExpression,
     sig: JethType & { kind: 'funcref' },
+    forDestructure = false,
   ): (Expr & { kind: 'funcRefCall' }) | undefined {
     const ptr = this.checkExpr(node.expression);
     if (!ptr) return undefined;
     if (ptr.type.kind !== 'funcref' || !typesEqual(ptr.type, sig)) {
       this.diags.error(node.expression, 'JETH424', `this value is not callable as ${displayName(sig)}`);
+      return undefined;
+    }
+    // L10b: a MULTI-RETURN pointer call yields N components - only the tuple-destructure form consumes
+    // it (`let [a, b] = g(...)` / `[a, b] = g(...)`); a value/statement position stays a clean reject
+    // (a discarded multi-return dispatcher call is not even valid Yul).
+    if (sig.rets && !forDestructure) {
+      this.diags.error(
+        node,
+        'JETH244',
+        `a call through a multi-return function pointer must be destructured: let [a, b] = ptr(...)`,
+      );
       return undefined;
     }
     // A value-typed / nested-funcref parameter & return rides through by value; an AGGREGATE param/return
@@ -11442,6 +11750,16 @@ export class Analyzer {
         node,
         'JETH425',
         `calling through a function pointer with this parameter/return type is not supported yet`,
+      );
+      return undefined;
+    }
+    // L10b: each multi-return component must be a shape the destructure binder supports (the same set an
+    // internal multi-value call destructure admits) - the dispatcher forwards each return word unchanged.
+    if (sig.rets && !sig.rets.every((t) => this.destructurableComponent(t))) {
+      this.diags.error(
+        node,
+        'JETH425',
+        `destructuring a function-pointer call with this return component type is not supported yet`,
       );
       return undefined;
     }
@@ -12858,14 +13176,45 @@ export class Analyzer {
       }
       source = { kind: 'tuple', values };
     } else {
-      this.diags.error(
-        decl.initializer,
-        'JETH066',
-        'tuple destructuring requires a multi-value call or a tuple literal on the right',
-      );
-      return;
+      // L10b: `let [p, q] = g(a, b)` where `g` evaluates to a MULTI-RETURN function pointer
+      // ((a, b) => [T1, T2]): dispatch through the per-signature multi-return dispatcher.
+      const fr = this.resolveFuncRefTupleCall(decl.initializer, n);
+      if (fr === 'no') {
+        this.diags.error(
+          decl.initializer,
+          'JETH066',
+          'tuple destructuring requires a multi-value call or a tuple literal on the right',
+        );
+        return;
+      }
+      if (!fr) return; // diagnostic emitted
+      types = fr.types;
+      source = fr.source;
     }
     this.bindDestructure(pat, n, types, source, out);
+  }
+
+  /** L10b: resolve `[p, q] = g(a, b)` / `let [p, q] = g(a, b)` where the callee evaluates to a
+   *  MULTI-RETURN function pointer. Returns 'no' when the initializer is not such a call (the caller
+   *  emits its generic diagnostic), undefined after emitting a precise one, else the types + source. */
+  private resolveFuncRefTupleCall(
+    init: ts.Expression,
+    n: number,
+  ): { types: JethType[]; source: DestructureSource } | undefined | 'no' {
+    if (!ts.isCallExpression(init)) return 'no';
+    const sig = this.funcrefCalleeSig(init.expression);
+    if (!sig || !sig.rets) return 'no';
+    if (sig.rets.length !== n) {
+      this.diags.error(
+        init,
+        'JETH066',
+        `destructuring expects ${n} value(s) but the function pointer returns ${sig.rets.length}`,
+      );
+      return undefined;
+    }
+    const call = this.buildFuncRefCall(init, sig, true);
+    if (!call) return undefined;
+    return { types: sig.rets, source: { kind: 'funcRefCall', call } };
   }
 
   /** Declare a fresh local per non-skipped binding element of a tuple destructuring and emit the
@@ -13018,12 +13367,20 @@ export class Analyzer {
       }
       source = { kind: 'tuple', values };
     } else {
-      this.diags.error(
-        e.right,
-        'JETH066',
-        'tuple assignment requires a multi-value call or a tuple literal on the right',
-      );
-      return;
+      // L10b: `[p, q] = g(a, b)` through a MULTI-RETURN function pointer (the assignment twin of the
+      // declaration form; the LHS targets were already checked value-compatible via checkTupleTypes).
+      const fr = this.resolveFuncRefTupleCall(e.right, n);
+      if (fr === 'no') {
+        this.diags.error(
+          e.right,
+          'JETH066',
+          'tuple assignment requires a multi-value call or a tuple literal on the right',
+        );
+        return;
+      }
+      if (!fr) return; // diagnostic emitted
+      if (!checkTupleTypes(fr.types)) return;
+      source = fr.source;
     }
     out.push({ kind: 'tupleAssign', targets, source });
   }
@@ -13531,6 +13888,10 @@ export class Analyzer {
    *  creation args (abiDecFromMem) and the body reads it from memory, byte-identical to solc. A type
    *  containing a mapping (JETH247) and a defaulted param (JETH304) are rejected before this. */
   private ctorParamSupported(t: JethType): boolean {
+    // L11a: a constructor param is ABI-decoded from the appended creation args, so a funcref-bearing
+    // dynamic struct (admitted by isSupportedDynStructLocal for MEMORY LOCALS) must stay rejected here,
+    // exactly like solc's "internal type is not allowed" on a constructor parameter.
+    if (this.typeHasFuncref(t)) return false;
     return isStaticValueType(t) || this.isMemByRefAggregate(t) || this.isSupportedDynStructLocal(t);
   }
 
@@ -13577,6 +13938,12 @@ export class Analyzer {
     return t.fields.every(
       (f) =>
         isStaticValueType(f.type) ||
+        // L11a: a FUNCREF field is ONE inline head word (its dispatch id) - the identical inline layout
+        // a uint256 field has - so a funcref-bearing dynamic struct builds/aliases/reads through the
+        // same pointer-headed image machinery. Every ABI boundary still rejects the WHOLE struct (the
+        // dedicated typeHasFuncref gates: JETH426 external signatures, JETH173 abi.encode*, JETH229
+        // event/error params, the ctor-param gate), byte-identical to solc's "internal type in ABI".
+        f.type.kind === 'funcref' ||
         isBytesLike(f.type) ||
         (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
         isDynStructLeafArrayField(f.type) ||
@@ -13962,11 +14329,19 @@ export class Analyzer {
       ts.isElementAccessExpression(node) &&
       node.argumentExpression &&
       ts.isElementAccessExpression(node.expression) &&
-      node.expression.argumentExpression &&
-      this.nestedMemArrayElemAccess(node.expression)
+      node.expression.argumentExpression
     ) {
+      // Tier-3 L13: the base may be a memory bytes[] LOCAL (the original P0-35b shape, whose
+      // nestedMemArrayElemAccess gate this subsumes - a memArray base) OR a bytes[] FIELD of a
+      // memory dyn-struct (p.tags[0n][1n] = 0x21n, a memArrayExpr base over the field's image
+      // pointer - the READ path already resolves it). Storage/calldata bases fall through to the
+      // storage byteIndexStore / read-only rejects below, unchanged.
       const baseArr = this.resolveArrayExpr(node.expression.expression);
-      if (baseArr && isBytesLike(baseArr.elem)) {
+      if (
+        baseArr &&
+        isBytesLike(baseArr.elem) &&
+        (baseArr.base.kind === 'memArray' || baseArr.base.kind === 'memArrayExpr')
+      ) {
         const base = this.checkExpr(node.expression);
         if (!base) return undefined;
         if (base.type.kind === 'string') {
@@ -14518,7 +14893,10 @@ export class Analyzer {
     // A dynamic struct return uses the general tuple encoder, which handles any
     // mix of static (value / nested static struct / static fixed-array) fields and
     // supported dynamic fields (bytes/string, or a nested supported struct).
-    return t.fields.every((f) => isStaticType(f.type) || this.isSupportedDynStructField(f.type));
+    // L11a: a FUNCREF field (one inline id word) is returnable from an INTERNAL function (the return
+    // is the pointer-headed image pointer, fields untouched); an @external return of any funcref-
+    // bearing type is still rejected by the dedicated JETH426 signature gate in checkFunction.
+    return t.fields.every((f) => isStaticType(f.type) || f.type.kind === 'funcref' || this.isSupportedDynStructField(f.type));
   }
 
   private containsDynElemArray(t: JethType): boolean {
@@ -14602,7 +14980,11 @@ export class Analyzer {
     // keccak(lenSlot)+i*stride for a dynamic array, or baseSlot+i*stride for a fixed one).
     if (t.kind === 'array') return this.isStorageDynStruct(t.element);
     if (t.kind !== 'struct' || !isDynamicType(t)) return false;
-    return t.fields.every((f) => isStaticType(f.type) || this.isSupportedDynStructField(f.type));
+    // L11a: a FUNCREF field packs into storage as one full word (its dispatch id; storageByteSize 32),
+    // read/written by the plain value-field codec - so a funcref-bearing dynamic struct is storable.
+    // (The raw slot CONTENT of any funcref differs from solc by construction - a JETH id vs solc's code
+    // offset - exactly like a bare @state funcref var; it is never observable through the ABI.)
+    return t.fields.every((f) => isStaticType(f.type) || f.type.kind === 'funcref' || this.isSupportedDynStructField(f.type));
   }
 
   /** Type-only walk: true iff `node` is a property/index chain rooted at a
@@ -16548,6 +16930,10 @@ export class Analyzer {
    *  string/dynamic-value-array fields. Nested-dynamic arrays (string[]/T[][]), arrays/structs whose
    *  elements are themselves dynamic structs, and nested-struct fields stay a CLEAN rejection. */
   private decodeSupported(t: JethType): boolean {
+    // L11a guard: an internal function pointer (or an aggregate CONTAINING one) is NOT ABI-decodable -
+    // solc rejects abi.decode / interface returns of such a type outright. Without this, a funcref-
+    // bearing struct (now a valid MEMORY local) would slip through the struct clause below.
+    if (this.typeHasFuncref(t)) return false;
     if (isStaticValueType(t) || isBytesLike(t)) return true;
     if (t.kind === 'array') {
       if (t.length === undefined) {
@@ -18167,7 +18553,11 @@ export class Analyzer {
         e.type.kind === 'funcref' ||
         isBytesLike(e.type) ||
         // a STATIC struct / fixed array: materialized to a memory image, selected by pointer.
-        (isStaticType(e.type) &&
+        // Tier-3 L11b: isValueWordAggregate widens this to a FUNCREF-bearing but otherwise-static
+        // struct (FSt{f: (x)=>u256; tag}): its memory image is the same flat value-word layout (a
+        // funcref field is one id word), so materialize-and-select works identically; every ABI
+        // boundary still rejects it (those gate on isStaticType, which stays false) - solc parity.
+        (isValueWordAggregate(e.type) &&
           (e.type.kind === 'struct' || (e.type.kind === 'array' && e.type.length !== undefined))) ||
         // a DYNAMIC-field struct: materialized to a pointer-headed memory image (buildDynStructLocal)
         // and selected by pointer; the ternary result re-encodes via the mem TupleSrc. Branch sources
@@ -18677,7 +19067,10 @@ export class Analyzer {
     ) {
       const mf = this.memDynStructField(node);
       if (!mf) return undefined;
-      if (isStaticValueType(mf.field.type))
+      // L11a: a FUNCREF field is ONE inline value word (its dispatch id) - read it exactly like a
+      // static value field (a plain mload at the head word, typed funcref); `d.f(5n)` then routes the
+      // loaded id through the ordinary funcref-call dispatch (buildFuncRefCall over this memField).
+      if (isStaticValueType(mf.field.type) || mf.field.type.kind === 'funcref')
         return { kind: 'memField', type: mf.field.type, local: mf.local, wordOffset: mf.headWord };
       // a dynamic value-array field: the head word holds a pointer to [len][elems]. Wrap a head-word
       // LOAD (memField) in memArrayExpr so index / .length / return consume it as a memory array.

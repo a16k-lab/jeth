@@ -23,7 +23,10 @@ export type JethType =
   // function (NOT solc's raw code offset - the id is JETH-internal). `params`/`ret` give the signature;
   // `ret` undefined = a void-returning function type. Not ABI-encodable (rejected in ABI positions,
   // exactly like solc's internal function types), and the raw id is never observable as an integer.
-  | { kind: 'funcref'; params: JethType[]; ret: JethType | undefined; brand?: string }
+  // `rets` (L10b): a MULTI-VALUE-return pointer type `(a, b) => [T1, T2]` (Solidity
+  // `function(...) returns (T1, T2)`); when set, `ret` is undefined. A single-return tuple
+  // annotation `[T]` normalizes to `ret: T` so the 1-return form has one canonical spelling.
+  | { kind: 'funcref'; params: JethType[]; ret: JethType | undefined; rets?: JethType[]; brand?: string }
   | { kind: 'void' };
 
 /** A struct field with its resolved storage location relative to the struct base. */
@@ -66,7 +69,9 @@ export function canonicalName(t: JethType): string {
       return `(${t.fields.map((f) => canonicalName(f.type)).join(',')})`;
     case 'funcref':
       // internal function pointers are NOT ABI types; this is for diagnostics only.
-      return `function(${t.params.map(canonicalName).join(',')})${t.ret ? ` returns(${canonicalName(t.ret)})` : ''}`;
+      return `function(${t.params.map(canonicalName).join(',')})${
+        t.rets ? ` returns(${t.rets.map(canonicalName).join(',')})` : t.ret ? ` returns(${canonicalName(t.ret)})` : ''
+      }`;
     case 'void':
       return 'void';
   }
@@ -90,7 +95,9 @@ export function displayName(t: JethType): string {
     case 'struct':
       return t.name;
     case 'funcref':
-      return `(${t.params.map(displayName).join(', ')}) => ${t.ret ? displayName(t.ret) : 'void'}`;
+      return `(${t.params.map(displayName).join(', ')}) => ${
+        t.rets ? `[${t.rets.map(displayName).join(', ')}]` : t.ret ? displayName(t.ret) : 'void'
+      }`;
     default:
       return canonicalName(t);
   }
@@ -269,11 +276,14 @@ export function typesEqual(a: JethType, b: JethType): boolean {
       // structs are nominal in Solidity: equal iff same name.
       return a.name === (b as typeof a).name;
     case 'funcref': {
-      // two function pointer types are equal iff same arity, same param types, and same return type
-      // (a void-returning type has ret === undefined). Mutability is not part of JETH's surface type.
+      // two function pointer types are equal iff same arity, same param types, and same return type(s)
+      // (a void-returning type has ret === undefined; a multi-return type carries `rets`). Mutability is
+      // not part of JETH's surface type.
       const bb = b as typeof a;
       if (a.params.length !== bb.params.length) return false;
       if (!a.params.every((p, i) => typesEqual(p, bb.params[i]!))) return false;
+      if ((a.rets === undefined) !== (bb.rets === undefined)) return false;
+      if (a.rets) return a.rets.length === bb.rets!.length && a.rets.every((r, i) => typesEqual(r, bb.rets![i]!));
       if ((a.ret === undefined) !== (bb.ret === undefined)) return false;
       return a.ret === undefined || typesEqual(a.ret, bb.ret!);
     }

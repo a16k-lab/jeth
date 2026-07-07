@@ -96,6 +96,29 @@ export function resolveType(
       if (!pt) return undefined;
       params.push(pt);
     }
+    // L10b: a TUPLE return annotation `(a, b) => [T1, T2]` is a MULTI-VALUE-return pointer type
+    // (Solidity `function(...) returns (T1, T2)`). A 1-tuple `[T]` normalizes to the single-return
+    // form; an empty tuple `[]` has no Solidity spelling (`returns ()` is invalid) and rejects.
+    if (ts.isTupleTypeNode(node.type)) {
+      const rets: JethType[] = [];
+      for (const el of node.type.elements) {
+        // a named tuple member `[x: T]` carries its type on .type; a plain member IS the type node.
+        const tn = ts.isNamedTupleMember(el) ? el.type : el;
+        const rt = resolveType(tn, diags, structs);
+        if (!rt) return undefined;
+        if (rt.kind === 'void') {
+          diags.error(el, 'JETH014', 'void is not a valid tuple-return component in a function-pointer type');
+          return undefined;
+        }
+        rets.push(rt);
+      }
+      if (rets.length === 0) {
+        diags.error(node.type, 'JETH014', 'a function-pointer type cannot return an empty tuple');
+        return undefined;
+      }
+      if (rets.length === 1) return { kind: 'funcref', params, ret: rets[0] };
+      return { kind: 'funcref', params, ret: undefined, rets };
+    }
     const ret = resolveType(node.type, diags, structs);
     if (!ret) return undefined;
     return { kind: 'funcref', params, ret: ret.kind === 'void' ? undefined : ret };
