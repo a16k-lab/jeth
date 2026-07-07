@@ -9216,6 +9216,13 @@ ${indent(runtime, 6)}
       a.kind === 'memAggregate' ||
       a.kind === 'arrayGet' ||
       a.kind === 'call' ||
+      // an abi.decode-sourced Arr<In,N> (a literal abi.decode(b,T) or an external self-call result,
+      // lowered as abiDecode(extCall,T)): lowerAbiDecode materializes the SAME pointer-headed image
+      // (Batch-A abiDecFromMemToImage) a bind-first local holds, so it MUST transcode too. Mirrors the
+      // memFixedSrc list in prepEncodeComponent (which already has it). Without this the indexed-event
+      // TOPIC path fell through to aggToMemPtr and keccak'd the N absolute element-pointer words as a
+      // supposedly-flat body - a wrong-topic MISCOMPILE (data logs were fine; only topic1 differed).
+      a.kind === 'abiDecode' ||
       (a.kind === 'arrayValue' && (a.arr.base.kind === 'memArray' || a.arr.base.kind === 'memArrayExpr'))
     );
   }
