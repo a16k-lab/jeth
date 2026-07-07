@@ -10994,12 +10994,21 @@ ${indent(runtime, 6)}
     // flat inline ABI body via abiEncFromMem at SERIALIZE time (late reads through the element pointers).
     // EXCLUDED: a static-aggregate FIELD (aggFieldRead, e.g. xs[i].pre) is ABI-FLATTENED INLINE in its
     // struct image, and a STORAGE / calldata source flattens via the branches below.
+    //   abiDecode: an EXTERNAL self-/interface-call result (this.produce() / IFace(a).produce(), analyzed
+    //   as abiDecode(extCall, T)) or a literal abi.decode(b, Arr<P,N>). lowerAbiDecode materializes the
+    //   SAME pointer-headed image (Batch-A abiDecFromMemToImage) that the bind-first local holds, so it
+    //   MUST ride this transcode branch too. Without it the abiDecode fell through to the plain static-
+    //   aggregate branch below (aggToMemPtr), which returned the pointer-headed image as a supposedly-flat
+    //   inline body - a MISCOMPILE that leaked the N leading absolute element pointers into the ABI head
+    //   (abi.encode(this.produce()) / this.consume(this.produce())). The bind-first / direct-return /
+    //   internal-call paths already MATCH and are untouched.
     const memFixedSrc =
       a.kind === 'arrayLit' ||
       a.kind === 'newArray' ||
       a.kind === 'memAggregate' ||
       a.kind === 'arrayGet' ||
       a.kind === 'call' ||
+      a.kind === 'abiDecode' ||
       (a.kind === 'arrayValue' && (a.arr.base.kind === 'memArray' || a.arr.base.kind === 'memArrayExpr'));
     if (isStaticStructFixedLeafArray(t) && memFixedSrc) {
       const mp = this.aggArgToMemPtr(a, ctx, out);
