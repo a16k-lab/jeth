@@ -1,5 +1,27 @@
 # Flat memory representation for `Arr<In,N>` (In a static struct)
 
+## CONCLUSION (2026-07-07): DO NOT FLATTEN - the pointer-headed representation is correct
+
+This flatten was **investigated and rejected**. solc's memory model for `In[N] memory` (a fixed array of a
+static struct) is itself **pointer-headed with per-element re-point aliasing**: a memory-to-memory element
+assignment `m[i] = m[j]` creates a **reference**, so `m[1] = m[0]; m[0].a = 7` makes `m[1].a` read `7`
+(shared), and `abi.encode(m)` after such aliasing reflects the shared payload. A FLAT (inline, value-copy)
+representation provably cannot reproduce this - it would return the stale value, a **miscompile**. JETH's
+**current pointer-headed** `Arr<In,N>` representation already reproduces solc's memory model byte-for-byte,
+**including the aliasing** (verified: `m[1]=m[0]; m[0].a=7; return m[1].a` is `MATCH` = 7 on both). So the
+flat flip has **no correctness upside and a definite aliasing-miscompile downside**.
+
+The 7 verbatim-copy consumer miscompiles that motivated this doc were never a sign the *representation* was
+wrong - they were individual consumers that flat-copied a pointer-headed image incorrectly; each is fixed
+byte-identically by making that consumer **pointer-aware** (the right fix, all landed). The flat-representation
+premise below ("flat matches solc byte-for-byte") holds only for the ABI *encoding* (which the pointer-headed
+encoder already produces via per-element deref), NOT for the memory mutation/aliasing model. `test/flat-static-
+struct-array-stage0-matrix.test.ts` pins the pointer-headed correctness (incl. the `reptTri`/`reptEnc`
+re-point rows) so any future flip fails loudly. **Keep pointer-headed.** The design below is retained only as
+the record of what was analyzed and why it does not apply.
+
+---
+
 ## Motivation
 
 `Arr<In,N>` where `In` is a **static** struct (all static fields) is ABI-static (fixed size) but JETH
