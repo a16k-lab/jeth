@@ -6,7 +6,30 @@ on top of `fbd357a`; long-tail batch B (A-LIT array-literal crosses, 4 shapes + 
 lifted on top of batch A; long-tail batch C (the funcref expression surface: F-CALLEE, F-TYPES,
 F-CONSUMERS, F-MULTIRET, 11 shapes + bonus lifts) lifted on top of batch B (2026-07-08);
 long-tail batch D (MOD-GEN generic modifiers at aggregate types + the F-RESID `Arr<Fd,N>`
-stretch, 2 shapes) lifted on top of batch C (2026-07-08).** The Tier-3 round lifted the final 12 shapes
+stretch, 2 shapes) lifted on top of batch C (2026-07-08).**
+
+**LIFT-ALL-13 FINAL CAMPAIGN (HEAD `3621b27`, suite 415 files / 3712 tests):** an attempt to lift
+every remaining OR. Witness-verified solc semantics first, then lifted the 8 that can be
+byte-identical (OR clusters 1/3/4): TERN-LV-MIX + TERN-STRUCT-ARR (ternary mem|storage
+copy-or-alias, `55000f0`), the two funcref-element-value shapes + calldata struct-array byte
+access + `xs[i].tags[j][k]` (`69afb58`), A-LIT-RESID mixed-bytesN widen + L2-MOBILE bare-literal
+mobile-type (`9110ce3`). KEPT as SOUND REJECTS (5): **LT5** (stored funcref raw storage diverges,
+mathematically impossible), **B-21 / L7a / L6** (JETH's inline vs solc's pointer-headed memory
+layout for value/struct fixed-array fields; the compiler code at yul.ts:8944 documents this with 4
+prior miscompile witnesses - a naive lift corrupts the payload or loses live-reference
+mutation-visibility; a real lift needs a ~400-site layout rework), **FUNCREF-PURE** (needs
+mutability added to the funcref type). The 3 verification sweeps over these lifts found + fixed 2
+more PRE-EXISTING silent miscompiles (byte-identical bytecode at the pre-lift parent, not
+introduced by the lifts): BYTE-CD-1 (calldata struct-array element byte read - already fixed
+earlier) and MC-ARRLIT-STOR-SCRATCH (`3621b27`: a static array/struct literal encoded to the
+0x00-based ABI buffer whose elements read a keccak-addressed storage location - dynamic array /
+mapping - zeroed an earlier slot because the keccak scratch at 0x00-0x40 overlapped the buffer;
+fixed by hoisting all element values to temps before the buffer writes, in encodeArrayLitHead +
+encodeStructReturn). The whole scratch-clobber class re-swept CLEAN (event/error/tuple/nested).
+Net: 21 of the 26 remaining ORs lifted across all long-tail rounds; the 5 residuals are
+architecturally/mathematically unliftable without introducing a miscompile.
+
+The Tier-3 round lifted the final 12 shapes
 of the f0e3761 list (L9, three L2 residuals, L10a/b, L11a/b, L13, L14, L15; L6 reclassified
 deliberate) and was verified by a 4-slice adversarial workflow (381 cases: lift-consumer matrix,
 funcref ABI-leak + semantic hunt, dual-commit drift vs the pre-Tier-3 parent, catalogue re-probe;
