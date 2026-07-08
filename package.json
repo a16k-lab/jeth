@@ -7,6 +7,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:changed": "vitest run --changed",
     "jethc": "tsx src/cli.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

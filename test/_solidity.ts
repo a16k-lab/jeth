@@ -2,6 +2,9 @@
 // uses, for differential testing (directive §7).
 import solc from 'solc';
 import { setLengthLeft, hexToBytes, bytesToHex, type Address } from '@ethereumjs/util';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Harness } from '../src/evm.js';
 
 export interface SolBuild {
@@ -9,7 +12,64 @@ export interface SolBuild {
   storageLayout: { label: string; slot: string; offset: number; type: string }[];
 }
 
-export function compileSolidity(source: string, contractName: string): SolBuild {
+// ---- solc compilation cache (test-only speed, side-effect-free) -------------
+// compileSolidity is a PURE function of (source, contractName) plus the FIXED input settings below
+// and the exact solc-js version. Memoizing it is transparent: the key covers every input, a cache
+// miss always recompiles, and ANY cache read/write error falls back to a fresh compile - so a
+// corrupt/unwritable cache can never change a result, only the speed. SUCCESSES only are cached
+// (a solc error recompiles each time). The persistent layer (node_modules/.cache, already
+// gitignored) survives across runs: the solc mirrors do not change when the JETH compiler is
+// edited, so a re-run reuses them. Bump SOLC_CACHE_VERSION if the input settings change.
+const SOLC_CACHE_VERSION = '1';
+const SOLC_CACHE_DIR = join(process.cwd(), 'node_modules', '.cache', 'jeth-solc');
+const solcVersion = (() => {
+  try {
+    return typeof solc.version === 'function' ? solc.version() : 'unknown';
+  } catch {
+    return 'unknown';
+  }
+})();
+const solcMemCache = new Map<string, SolBuild>();
+let solcCacheDirReady = false;
+
+function solcCacheKey(source: string, contractName: string): string {
+  return createHash('sha256')
+    .update(SOLC_CACHE_VERSION)
+    .update('\x00')
+    .update(solcVersion)
+    .update('\x00')
+    .update(contractName)
+    .update('\x00')
+    .update(source)
+    .digest('hex');
+}
+
+function readSolcCache(key: string): SolBuild | undefined {
+  try {
+    const f = join(SOLC_CACHE_DIR, key + '.json');
+    if (!existsSync(f)) return undefined;
+    return JSON.parse(readFileSync(f, 'utf8')) as SolBuild;
+  } catch {
+    return undefined; // corrupt / torn read -> recompile
+  }
+}
+
+function writeSolcCache(key: string, build: SolBuild): void {
+  try {
+    if (!solcCacheDirReady) {
+      mkdirSync(SOLC_CACHE_DIR, { recursive: true });
+      solcCacheDirReady = true;
+    }
+    // atomic: write a temp file then rename, so a concurrent vitest worker never reads a torn file.
+    const tmp = join(SOLC_CACHE_DIR, `${key}.${process.pid}.tmp`);
+    writeFileSync(tmp, JSON.stringify(build));
+    renameSync(tmp, join(SOLC_CACHE_DIR, key + '.json'));
+  } catch {
+    /* cache write is best-effort; a failure leaves correctness untouched (recompiles next time) */
+  }
+}
+
+function compileSolidityUncached(source: string, contractName: string): SolBuild {
   const input = {
     language: 'Solidity',
     sources: { 'C.sol': { content: source } },
@@ -32,6 +92,21 @@ export function compileSolidity(source: string, contractName: string): SolBuild 
       type: s.type,
     })),
   };
+}
+
+export function compileSolidity(source: string, contractName: string): SolBuild {
+  const key = solcCacheKey(source, contractName);
+  const mem = solcMemCache.get(key);
+  if (mem) return mem;
+  const disk = readSolcCache(key);
+  if (disk) {
+    solcMemCache.set(key, disk);
+    return disk;
+  }
+  const build = compileSolidityUncached(source, contractName); // throws on solc error (not cached)
+  solcMemCache.set(key, build);
+  writeSolcCache(key, build);
+  return build;
 }
 
 /** Read a raw 32-byte storage slot as a 0x-prefixed hex string. */
@@ -123,7 +198,9 @@ export async function deploySolLinked(h: Harness, build: SolLinkedBuild): Promis
       }
     }
     if (pending.length === before)
-      throw new Error(`deploySolLinked: unresolved library link dependency among [${pending.map((l) => l.name).join(', ')}]`);
+      throw new Error(
+        `deploySolLinked: unresolved library link dependency among [${pending.map((l) => l.name).join(', ')}]`,
+      );
   }
   return h.deploy(link(build.contractCreation, build.linkReferences));
 }
