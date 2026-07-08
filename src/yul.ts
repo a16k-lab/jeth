@@ -4000,12 +4000,18 @@ ${indent(runtime, 6)}
     }
     if (value.kind === 'structNew') {
       // ABI head, one word per leaf: value fields write one word; a fixed-array-literal
-      // field writes its N elements at consecutive head words.
+      // field writes its N elements at consecutive head words. SOUNDNESS (same scratch-clobber as
+      // encodeArrayLitHead): this buffer is written at ABSOLUTE 0x00 offsets, but a field arg that
+      // reads a KECCAK-addressed storage location (this.A[i] dynamic array / this.m[k] mapping)
+      // writes scratch at 0x00-0x40, overlapping the buffer. So HOIST every field value to a temp
+      // FIRST (all keccak scratch runs), THEN flush the buffer mstores - no scratch write between
+      // two buffer writes (return P(this.A[1], this.A[0]) returned [0, 5] not [6, 5]).
+      const stores: { off: number; val: string }[] = [];
       let w = 0;
       value.fields.forEach((f, j) => {
         const arg = value.args[j]!;
         if (f.type.kind === 'array' && arg.kind === 'arrayLit') {
-          this.encodeArrayLitHead(arg, w, ctx, out);
+          this.collectArrayLitHeadStores(arg, w, ctx, out, stores);
           w += abiHeadWords(f.type);
         } else if (
           (f.type.kind === 'struct' || (f.type.kind === 'array' && f.type.length !== undefined)) &&
@@ -4013,13 +4019,20 @@ ${indent(runtime, 6)}
         ) {
           // a nested inline static struct field (Outer(id, Inner(...))): flatten its leaf words
           // inline at consecutive head words, recursing into deeper nested structs.
-          this.staticNewLeaves(f.type, arg, ctx, out).forEach((lw, k) => out.push(`mstore(${(w + k) * 32}, ${lw})`));
+          this.staticNewLeaves(f.type, arg, ctx, out).forEach((lw, k) => {
+            const t = this.fresh();
+            out.push(`let ${t} := ${lw}`);
+            stores.push({ off: w + k, val: t });
+          });
           w += abiHeadWords(f.type);
         } else {
-          out.push(`mstore(${w * 32}, ${this.lowerExpr(arg, ctx, out)})`);
+          const t = this.fresh();
+          out.push(`let ${t} := ${this.lowerExpr(arg, ctx, out)}`);
+          stores.push({ off: w, val: t });
           w += abiHeadWords(f.type);
         }
       });
+      for (const s of stores) out.push(`mstore(${s.off * 32}, ${s.val})`);
       return w * 32;
     }
     if (value.kind === 'abiDecode') {
@@ -4040,11 +4053,30 @@ ${indent(runtime, 6)}
    *  word `wordBase` (memory offset wordBase*32). Value elements write one word; nested
    *  array / struct-literal elements recurse at wordBase + k*abiHeadWords(element). */
   private encodeArrayLitHead(lit: Expr & { kind: 'arrayLit' }, wordBase: number, ctx: LowerCtx, out: string[]): void {
+    // SOUNDNESS (MC storage-read scratch clobber): this buffer is written at ABSOLUTE offsets from
+    // 0x00, but lowering an element that reads a KECCAK-addressed storage location (a dynamic array
+    // this.A[i] or a mapping this.m[k]) writes the keccak scratch at 0x00-0x40, which OVERLAPS the
+    // buffer. Interleaving write-then-lower let a later element's scratch zero an earlier written word
+    // (return [this.A[0], this.A[1]] returned [0, 6] not [5, 6]). So HOIST every element value to a
+    // temp FIRST (all element lowering / keccak scratch runs), THEN flush the buffer mstores - no
+    // scratch write happens between two buffer writes. Left-to-right element order is preserved.
+    const stores: { off: number; val: string }[] = [];
+    this.collectArrayLitHeadStores(lit, wordBase, ctx, out, stores);
+    for (const s of stores) out.push(`mstore(${s.off * 32}, ${s.val})`);
+  }
+
+  private collectArrayLitHeadStores(
+    lit: Expr & { kind: 'arrayLit' },
+    wordBase: number,
+    ctx: LowerCtx,
+    out: string[],
+    stores: { off: number; val: string }[],
+  ): void {
     const elem = lit.elem;
     const ew = abiHeadWords(elem);
     lit.elements.forEach((el, k) => {
       const wb = wordBase + k * ew;
-      if (el.kind === 'arrayLit') this.encodeArrayLitHead(el, wb, ctx, out);
+      if (el.kind === 'arrayLit') this.collectArrayLitHeadStores(el, wb, ctx, out, stores);
       else if (el.kind === 'structNew') {
         // a struct-literal element: write each field as head word(s). A fixed-array subfield recurses;
         // a nested inline static struct subfield is flattened to its leaf words; a value subfield is one word.
@@ -4052,22 +4084,30 @@ ${indent(runtime, 6)}
         el.fields.forEach((sf, sj) => {
           const sarg = el.args[sj]!;
           if (sf.type.kind === 'array' && sarg.kind === 'arrayLit') {
-            this.encodeArrayLitHead(sarg, fw, ctx, out);
+            this.collectArrayLitHeadStores(sarg, fw, ctx, out, stores);
             fw += abiHeadWords(sf.type);
           } else if (
             (sf.type.kind === 'struct' || (sf.type.kind === 'array' && sf.type.length !== undefined)) &&
             sarg.kind === 'structNew'
           ) {
-            this.staticNewLeaves(sf.type, sarg, ctx, out).forEach((lw, k) =>
-              out.push(`mstore(${(fw + k) * 32}, ${lw})`),
-            );
+            this.staticNewLeaves(sf.type, sarg, ctx, out).forEach((lw, kk) => {
+              const t = this.fresh();
+              out.push(`let ${t} := ${lw}`);
+              stores.push({ off: fw + kk, val: t });
+            });
             fw += abiHeadWords(sf.type);
           } else {
-            out.push(`mstore(${fw * 32}, ${this.lowerExpr(sarg, ctx, out)})`);
+            const t = this.fresh();
+            out.push(`let ${t} := ${this.lowerExpr(sarg, ctx, out)}`);
+            stores.push({ off: fw, val: t });
             fw += abiHeadWords(sf.type);
           }
         });
-      } else out.push(`mstore(${wb * 32}, ${this.lowerExpr(el, ctx, out)})`);
+      } else {
+        const t = this.fresh();
+        out.push(`let ${t} := ${this.lowerExpr(el, ctx, out)}`);
+        stores.push({ off: wb, val: t });
+      }
     });
   }
 
