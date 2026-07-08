@@ -129,6 +129,17 @@ workaround; none are miscompiles or over-acceptances):
   directly (`a[i].f(v)`, lifted) instead of materializing it as an intermediate value.
 - `xs[i].tags[j][k]` bytes[]-field byte access on a memory struct-array element (JETH226).
 
+A follow-up byte-access miscompile hunt (407 differential cases) confirmed the ENTIRE byte-access
+surface byte-identical (170+ read + 229 write shapes: local / storage / calldata / memory bases,
+struct fields at every position, bytes[] elements, struct-array element fields, mapping values,
+OOB Panic parity, alias + neighbor integrity) EXCEPT one more pre-existing silent MISCOMPILE, now
+fixed (`f0f3ee0`): the non-JETH calldata colon-slice `x[s:e][j]` is not valid TypeScript; TS
+error-recovered it into a truncated `x[s]`, which JETH silently compiled to the slice-start byte
+with no bounds check. Root fix: JETH now rejects any source it would SILENTLY ACCEPT despite a
+(non-1011) TS parse diagnostic - a general malformed-input robustness win. The `abi.decode(b, T[])`
+array-type-in-value-position feature (TS code 1011) and the analyzer's semantic rejects are
+preserved. The byte-identical form is `x.slice(s, e)[j]`.
+
 Earlier live re-audit at `5627d90` CORRECTED two stale entries: array-typed event params
 (`@event E(a: u256[])`) MATCH byte-identically, and a calldata struct-array element aggregate field
 bound to a memory local (`let p: In = s[i].pre`) is a BOTH-REJECT (parity), not an OR.
