@@ -36,7 +36,12 @@ It confirmed THREE bar violations, all now fixed and pinned in test/fix-longtail
 - DRIFT-MC-1 (silent miscompile, pre-existing): `(c ? this.a : this.b)[i] = v` on storage
   value-arrays wrote a discarded memory copy; the ternary-chain branch-push desugar now fires for
   ANY ternary-bottomed write (a JETH ternary is a value, never a reference), landing the write in
-  storage. A storage|memory mix stays a clean reject (TERN-LV-MIX).
+  storage. A storage|memory mix stays a clean reject (TERN-LV-MIX). A FOLLOW-UP verification found
+  the first fix closed only the FLAT case; NESTED chains `(c ? a : (e ? b : d))[i] = v` still
+  dropped the store (ternLValueQuiet tried the direct value-copy lvalue before the recursive probe,
+  so an inner branch reported loc=mem and broke the outer storage unification). Closed at `9ab81a1`
+  by trying the recursive probe first. An exhaustive 78-case confirmation pass (depths 1-4, all
+  ops/locations/target kinds, eval-order traces) then came back CLEAN.
 - MATRIX-OA-1 (over-acceptance, root pre-existing): `(c ? this.A : this.B)[i] = P(9n)` (wrong
   struct) was accepted; the static-struct local-decl nominal name check is now blanket over every
   initializer kind, closing both the desugar path and the underlying `let a: In = P(...)` hole.
