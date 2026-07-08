@@ -100,25 +100,38 @@ The 19-shape tier list plus the F-RESID family are all lifted (batches A-D) or r
 final verification found that `@state o: Outer` (a storage funcref-bearing struct) is already fully
 implemented and byte-identical, so the last "liftable" row is retired.
 
-A THIN LONG-TAIL of clean rejects remains (all verified sound; solc runs them, JETH rejects loudly
-with a documented workaround; none are miscompiles or over-acceptances):
-- single-field static funcref struct `Fd{f}` variants: chained call `this.mk().f(v)` (JETH225),
-  fixed-array element dispatch `a[i].f(v)` on `Arr<Fd{f},N>` (JETH427). The TWO-field dynamic
-  `Fd{f; s}` forms these mirror ARE lifted; workaround: add a second field or bind a local.
-- memory struct-array element byte access: read `xs[i].b[j]` and write `xs[i].b[j] = v` on a
-  `bytes` field (JETH217), and `xs[i].tags[j][k]` bytes[]-field access (JETH226). Workaround: bind
-  the field to a `bytes` local first.
-- storage push of a funcref-field struct `xs.push(Fd(this.inc))` (JETH217/210). Workaround: seed a
-  tag field and dispatch, or store the pointer via a supported path.
-These are candidates for a future micro-round, not a correctness gap.
+FINAL-5 MICRO-ROUND (commits `bfd31cd` + `3ece104`, suite 410/3692): the 5-shape thin long-tail
+was worked to ground. LIFTED byte-identical (4): LT1 single-field funcref static struct internal
+return `mk(): Fd` + chained `this.mk().f(v)` (isSupportedStructReturn admits a funcref value-word
+field; ABI-leak matrix all 17 boundaries reject); LT2 `Arr<Fd,N>` element dispatch `a[i].f(v)`
+(pointer-headed per-element image, a store-layout miscompile caught + fixed mid-implementation);
+LT3 memory struct-array element byte READ `xs[i].b[j]`; LT4 the byte WRITE twin (in-place mstore8,
+alias-visible, neighbor-safe, both bytes-field positions). KEPT REJECT (1, sound): LT5 storage push
+of a funcref-field struct - a stored funcref DIVERGES from solc on RAW STORAGE (JETH dispatch
+ordinal vs solc code offset), and the bar includes raw storage, so no stored funcref in a struct or
+array can be byte-identical. This is a documented internal-representation modeling difference (types.ts),
+in the same "genuinely unmatchable" class as gasleft; the dispatch RESULT is byte-identical and every
+ABI boundary is sealed. The final-5 adversarial workflow (230 cases) also found + fixed a PRE-EXISTING
+calldata miscompile (BYTE-CD-1: calldata struct-array element byte read `xs[i].b[j]` silently returned
+0x00; now rejects JETH217, bind-a-local workaround byte-identical) and a compiler CRASH on an
+uninitialized funcref-bearing static struct (`let d: Fd;` now defaults the funcref to id 0, Panic 0x51
+on call, byte-identical). Nested calldata field byte access `d.inner.b[j]` and plain `d.b[j]` remain
+byte-identical.
 
-Live re-audit at `5627d90` (probes probe_ORAUDIT*.mjs) CORRECTED two entries that were NOT
-over-rejections: array-typed event params (`@event E(a: u256[])`, `In[]`) MATCH byte-identically
-(they were lifted earlier, the residual note was stale), and a calldata struct-array element
-aggregate field bound to a memory local (`let p: In = s[i].pre`) is a BOTH-REJECT (solc rejects the
-copy too) - a parity reject, not an OR. Confirmed live-verified OR total: 8 deliberate rows + 5
-thin long-tail shapes (2 single-field-funcref-struct, 2 memory-struct-array byte read/write, 1
-funcref-field-struct storage push) = 13 over-rejections, every one a sound clean reject.
+REMAINING over-rejections (all sound clean rejects; solc runs them, JETH rejects loudly with a
+workaround; none are miscompiles or over-acceptances):
+- LT5 storage push of a funcref-field struct `xs.push(Fd(this.inc))` (JETH217/210) - raw-storage
+  divergence, effectively unmatchable (see above).
+- calldata struct-array element bytes-field byte access `xs[i].b[j]` (read + write, JETH217) - bind
+  the field to a `bytes` local first (byte-identical). The MEMORY twin (LT3/LT4) is lifted.
+- whole funcref-struct array element bound to a local then called (`let e: Fd = a[i]; e.f(v)`,
+  JETH230/074) and the ternary-of-elements `(c ? a[0] : a[1]).f(v)` (JETH074) - dispatch the element
+  directly (`a[i].f(v)`, lifted) instead of materializing it as an intermediate value.
+- `xs[i].tags[j][k]` bytes[]-field byte access on a memory struct-array element (JETH226).
+
+Earlier live re-audit at `5627d90` CORRECTED two stale entries: array-typed event params
+(`@event E(a: u256[])`) MATCH byte-identically, and a calldata struct-array element aggregate field
+bound to a memory local (`let p: In = s[i].pre`) is a BOTH-REJECT (parity), not an OR.
 
 Parity footnote confirmed during the batch C close-out: `.length` on a STRING value (local or
 struct field) rejects in BOTH compilers (JETH202; solc strings have no .length, a bytes cast is
