@@ -123,6 +123,31 @@ describe('long-tail final-verification bar-violation fixes (byte-identical to so
     expect(
       rejects(`@contract class C { @state a: u256[]; @external @pure w(c: bool, v: u256): u256 { let m: u256[] = [0n]; (c ? this.a : m)[0n] = v; return m[0n]; } }`),
     ).toBe(true);
+    // NESTED ternary chains on value arrays must ALSO land in storage (the tail of DRIFT-MC-1 that
+    // the first fix missed: ternLValueQuiet tried the direct value-copy lvalue before the recursive
+    // probe, so an inner ternary branch reported loc='mem' and broke the outer unification).
+    await run(
+      `@contract class C { @state a: u256[]; @state b: u256[]; @state d: u256[];
+        @external seed(): void { this.a.push(0n); this.b.push(0n); this.d.push(0n); }
+        @external w(c: bool, e: bool, v: u256): void { (c ? this.a : (e ? this.b : this.d))[0n] = v; }
+        @external cw(c: bool, e: bool, v: u256): void { (c ? this.a : (e ? this.b : this.d))[0n] += v; }
+        @external @view ra(): u256 { return this.a[0n]; }
+        @external @view rb(): u256 { return this.b[0n]; }
+        @external @view rd(): u256 { return this.d[0n]; } }`,
+      `contract C { uint256[] a; uint256[] b; uint256[] d;
+        function seed() external { a.push(0); b.push(0); d.push(0); }
+        function w(bool c, bool e, uint256 v) external { (c ? a : (e ? b : d))[0] = v; }
+        function cw(bool c, bool e, uint256 v) external { (c ? a : (e ? b : d))[0] += v; }
+        function ra() external view returns (uint256){return a[0];}
+        function rb() external view returns (uint256){return b[0];}
+        function rd() external view returns (uint256){return d[0];} }`,
+      [
+        ['seed()', ''],
+        ['w(bool,bool,uint256)', W(0) + W(1) + W(0xbeef)], ['rb()', ''],
+        ['w(bool,bool,uint256)', W(1) + W(0) + W(0xaa)], ['ra()', ''],
+        ['cw(bool,bool,uint256)', W(0) + W(0) + W(7)], ['rd()', ''],
+      ] as const,
+    );
   });
 
   it('MATRIX-OA-1: a wrong-struct RHS through a ternary-lvalue / let-bind rejects (nominal typing)', async () => {

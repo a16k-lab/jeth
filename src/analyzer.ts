@@ -18563,10 +18563,17 @@ export class Analyzer {
    *  plain chain -> its checkLValueQuiet lvalue; a ternary-bottomed chain -> the recursive probe
    *  (the emission side desugars it recursively via checkAssignment). */
   private ternLValueQuiet(node: ts.Expression): { type: JethType; loc: 'storage' | 'mem' } | undefined {
-    const direct = this.checkLValueQuiet(node);
-    if (direct) return { type: direct.type, loc: this.lvalueLoc(direct) };
+    // Try the recursive branch-push probe FIRST. For a NESTED ternary chain, a rebased branch is
+    // ITSELF a ternary-bottomed chain (e.g. the else-node (e ? this.b : this.d)[i]); its direct
+    // checkLValueQuiet "succeeds" as a value COPY with loc='mem', which mis-reports the location and
+    // breaks the OUTER probe's storage-vs-storage unification, so the write silently drops (the
+    // nested-ternary tail of DRIFT-MC-1). ternChainLValueProbe recovers the branch's TRUE location
+    // by recursing to the leaf storage/memory lvalue, and returns undefined for a non-ternary chain,
+    // so a plain target still falls through to the direct lvalue below (unchanged).
     const probe = this.ternChainLValueProbe(node);
-    return probe ? { type: probe.type, loc: probe.loc } : undefined;
+    if (probe) return { type: probe.type, loc: probe.loc };
+    const direct = this.checkLValueQuiet(node);
+    return direct ? { type: direct.type, loc: this.lvalueLoc(direct) } : undefined;
   }
 
   /** Probe a ternary-bottomed assignment-target chain for the branch-push desugar. Returns the
