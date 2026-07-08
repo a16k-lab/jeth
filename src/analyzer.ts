@@ -8619,6 +8619,25 @@ export class Analyzer {
    *  an unchecked block. The pre/post distinction only matters when the value is used,
    *  which is not the statement form. */
   private checkIncDec(operand: ts.Expression, isInc: boolean, node: ts.Node, out: Stmt[]): void {
+    // Long-tail T2 (++/-- through a ternary-chain lvalue): (c ? this.A : this.B2)[i].y++ as a
+    // STATEMENT. solc evaluates the condition, then the index/read/write once on the selected
+    // branch (probed trace [cond, idx]). Same branch-push as the ternary-chain assignment
+    // desugar: if (c) { <A-chain>++ } else { <B-chain>++ } (nested ternaries recurse); the
+    // probe's type-unify + location-parity guards keep solc's rejects (mismatched branch types,
+    // storage|memory mixes whose write solc lands in a memory copy).
+    if (ts.isPropertyAccessExpression(operand) || ts.isElementAccessExpression(operand)) {
+      const probe = this.ternChainLValueProbe(operand);
+      if (probe && isInteger(probe.type)) {
+        const cond = this.checkCondition(probe.cond);
+        if (!cond) return;
+        const thenStmts: Stmt[] = [];
+        const elsStmts: Stmt[] = [];
+        this.checkIncDec(probe.thenNode, isInc, node, thenStmts);
+        this.checkIncDec(probe.elsNode, isInc, node, elsStmts);
+        out.push({ kind: 'if', cond, then: thenStmts, else: elsStmts });
+        return;
+      }
+    }
     const target = this.checkLValue(operand);
     if (!target) return;
     if (!isInteger(target.type)) {
@@ -8653,6 +8672,22 @@ export class Analyzer {
   /** x++ / x-- / ++x / --x in value position: yields a value (old for postfix, new for
    *  prefix) and side-effects the lvalue (x = x +/- 1, checked unless in an unchecked block). */
   private checkIncDecExpr(operand: ts.Expression, isInc: boolean, prefix: boolean, node: ts.Node): Expr | undefined {
+    // Long-tail T2 (++/-- through a ternary-chain lvalue) in VALUE position: z = (c ? this.A :
+    // this.B2)[i].y++. Desugar to a ternary over per-branch incDec exprs: the condition once,
+    // then the selected branch's index/read/write once, yielding old (postfix) / new (prefix) -
+    // exactly solc's probed order (ternary codegen short-circuits, so only the taken branch's
+    // side effect runs). Guarded by the same probe as the statement form.
+    if (ts.isPropertyAccessExpression(operand) || ts.isElementAccessExpression(operand)) {
+      const probe = this.ternChainLValueProbe(operand);
+      if (probe && isInteger(probe.type)) {
+        const cond = this.checkCondition(probe.cond);
+        if (!cond) return undefined;
+        const thenE = this.checkIncDecExpr(probe.thenNode, isInc, prefix, node);
+        const elsE = this.checkIncDecExpr(probe.elsNode, isInc, prefix, node);
+        if (!thenE || !elsE) return undefined;
+        return { kind: 'ternary', type: thenE.type, cond, then: thenE, else: elsE };
+      }
+    }
     const target = this.checkLValue(operand);
     if (!target) return undefined;
     if (!isInteger(target.type)) {
@@ -11017,64 +11052,59 @@ export class Analyzer {
       this.checkTupleAssign(e, out);
       return;
     }
-    // Tier-3 L2 residual (ternary-chain LVALUE): (c ? this.A : this.B2)[i].y = v. solc evaluates
-    // the RHS, then the ternary condition, then the index ONCE on the selected target. Desugar:
-    // tmp = v; if (c) { <A-chain> = tmp } else { <B-chain> = tmp } - the same v, c, index-once
-    // order, reusing the full assignment machinery per branch. Fires ONLY for a plain `=` whose
-    // target chain bottoms at a ternary, when the direct lvalue REJECTS (a pure lift), and both
-    // rebased targets quiet-check to the SAME static value type.
+    // Tier-3 L2 residual + long-tail T1/T2/T3 (ternary-chain LVALUE): a value-leaf write
+    // (c ? this.A : this.B2)[i].y = v, a whole-ELEMENT / whole-aggregate-member write
+    // (c ? this.A : this.B2)[i] = In(9n, 8n), a COMPOUND op (c ? this.A : this.B2)[i].y += v,
+    // and NESTED ternary chains (c ? this.A : (d ? this.B2 : this.A))[i].y = v. solc evaluates
+    // the RHS, then the ternary condition(s) outside-in, then the index ONCE on the selected
+    // target (probed side-effect traces: [RHS, cond, idx] for both `=` and `op=`; nested
+    // [RHS, outer-cond, inner-cond, idx]). Desugar: tmp = v; if (c) { <A-chain> (op)= tmp }
+    // else { <B-chain> (op)= tmp } - the same order, reusing the full assignment machinery per
+    // branch (every soundness gate re-runs per branch; a nested-ternary branch re-enters this
+    // desugar recursively). ternChainLValueProbe fires ONLY when the direct lvalue REJECTS (a
+    // pure lift), the bare branch types UNIFY (solc types the ternary itself first - Arr<In,2>
+    // vs Arr<In,3> is a TypeError the rebased chains would not catch), and both rebased targets
+    // quiet-check to the SAME type in the SAME data location (solc unifies a storage|memory
+    // ternary to a MEMORY COPY, so a location mix must stay a clean reject - branch-pushing the
+    // write would hit storage the copy semantics never touch). A compound op is restricted to
+    // static value targets (solc has no aggregate compound ops).
     if (
-      e.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      (e.operatorToken.kind === ts.SyntaxKind.EqualsToken || this.compoundToBinOp(e.operatorToken.kind) !== undefined) &&
       (ts.isPropertyAccessExpression(e.left) || ts.isElementAccessExpression(e.left))
     ) {
-      let lvBottom: ts.Expression = e.left;
-      while (ts.isPropertyAccessExpression(lvBottom) || ts.isElementAccessExpression(lvBottom))
-        lvBottom = stripParens(lvBottom.expression);
-      if (ts.isConditionalExpression(lvBottom)) {
-        const bot = lvBottom;
-        const direct = this.checkLValueQuiet(e.left);
-        if (!direct) {
-          const rebase = (n: ts.Expression, nb: ts.Expression): ts.Expression => {
-            const s = stripParens(n);
-            if (s === bot) return nb;
-            if (ts.isPropertyAccessExpression(s)) {
-              return ts.setTextRange(ts.factory.createPropertyAccessExpression(rebase(s.expression, nb), s.name), s);
-            }
-            const ea = s as ts.ElementAccessExpression;
-            return ts.setTextRange(
-              ts.factory.createElementAccessExpression(rebase(ea.expression, nb), ea.argumentExpression!),
-              ea,
-            );
-          };
-          const thenNode = rebase(e.left, bot.whenTrue);
-          const elsNode = rebase(e.left, bot.whenFalse);
-          const qT = this.checkLValueQuiet(thenNode);
-          const qE = this.checkLValueQuiet(elsNode);
-          if (qT && qE && typesEqual(qT.type, qE.type) && isStaticValueType(qT.type)) {
-            const tmpId = this.materializeAggregateRhsToTemp(e.right, qT.type, out);
-            if (!tmpId) return;
-            const cond = this.checkCondition(bot.condition);
-            if (!cond) return;
-            const thenStmts: Stmt[] = [];
-            const elsStmts: Stmt[] = [];
-            this.checkAssignment(
-              ts.setTextRange(
-                ts.factory.createBinaryExpression(thenNode, ts.SyntaxKind.EqualsToken, tmpId),
-                e,
-              ) as ts.BinaryExpression,
-              thenStmts,
-            );
-            this.checkAssignment(
-              ts.setTextRange(
-                ts.factory.createBinaryExpression(elsNode, ts.SyntaxKind.EqualsToken, tmpId),
-                e,
-              ) as ts.BinaryExpression,
-              elsStmts,
-            );
-            out.push({ kind: 'if', cond, then: thenStmts, else: elsStmts });
-            return;
-          }
-        }
+      const probe = this.ternChainLValueProbe(e.left);
+      const isEq = e.operatorToken.kind === ts.SyntaxKind.EqualsToken;
+      if (
+        probe &&
+        (isEq
+          ? isStaticValueType(probe.type) ||
+            isBytesLike(probe.type) ||
+            probe.type.kind === 'struct' ||
+            probe.type.kind === 'array'
+          : isStaticValueType(probe.type))
+      ) {
+        const tmpId = this.materializeAggregateRhsToTemp(e.right, probe.type, out);
+        if (!tmpId) return;
+        const cond = this.checkCondition(probe.cond);
+        if (!cond) return;
+        const thenStmts: Stmt[] = [];
+        const elsStmts: Stmt[] = [];
+        this.checkAssignment(
+          ts.setTextRange(
+            ts.factory.createBinaryExpression(probe.thenNode, e.operatorToken.kind, tmpId),
+            e,
+          ) as ts.BinaryExpression,
+          thenStmts,
+        );
+        this.checkAssignment(
+          ts.setTextRange(
+            ts.factory.createBinaryExpression(probe.elsNode, e.operatorToken.kind, tmpId),
+            e,
+          ) as ts.BinaryExpression,
+          elsStmts,
+        );
+        out.push({ kind: 'if', cond, then: thenStmts, else: elsStmts });
+        return;
       }
     }
     let target = this.checkLValue(e.left);
@@ -14105,6 +14135,24 @@ export class Analyzer {
     return { rootLocal: ref.rootLocal, derefWords: ref.derefWords, finalWord: ref.inlineOffset + headWord, field: st.fields[idx]! };
   }
 
+  /** Quiet probe (long-tail M1/M2): the declared type of `pa.name` when `pa` is a field access on
+   *  a MEMORY dyn-struct reference - a one-hop base (q.b, q in memDynStructLocals) or a nested
+   *  deref chain (r.inner.b). No diagnostics; undefined when the chain does not root at a memory
+   *  dyn-struct local/param (a storage chain roots at ThisKeyword; a calldata dyn-struct param is
+   *  never in memDynStructLocals), so storage/calldata bases keep their own paths. */
+  private memDynStructFieldType(pa: ts.PropertyAccessExpression): JethType | undefined {
+    if (ts.isIdentifier(pa.expression)) {
+      const st = this.memDynStructLocals.get(pa.expression.text);
+      return st && st.kind === 'struct' ? st.fields.find((f) => f.name === pa.name.text)?.type : undefined;
+    }
+    if (ts.isPropertyAccessExpression(pa.expression)) {
+      const ref = this.resolveMemDynNestedStructRef(pa.expression);
+      if (ref && ref.structType.kind === 'struct')
+        return ref.structType.fields.find((f) => f.name === pa.name.text)?.type;
+    }
+    return undefined;
+  }
+
   // ---- lvalues -------------------------------------------------------------
 
   private checkLValue(node: ts.Expression): LValue | undefined {
@@ -14375,6 +14423,35 @@ export class Analyzer {
           // an in-place memory element store does NOT touch storage; stays @pure/@view-clean.
           return { kind: 'memByteIndexStore', type: BYTES1, base, index: this.coerce(idx, U256, node.argumentExpression) };
         }
+      }
+    }
+    // Long-tail M1/M2 (memory-struct byte access): <mem-dyn-struct-chain>.b[i] = <bytes1> - a byte
+    // write into a plain `bytes` FIELD of a memory dyn-struct local/param (q.b[2n] = 0x2an), or one
+    // reached through nested dynamic-struct hops (r.inner.b[1n] = 0x5an). The base is the SAME
+    // memory bytes value the read path resolves (memDynField / memDynNestedField, src=memory), so
+    // the write is the in-place bounds-checked mstore8 the bytes-local / bytes[]-element (L13)
+    // paths use - visible through every alias of the field, exactly like solc. Gated on the FIELD
+    // type resolving through memDynStructFieldType, which only roots at MEMORY dyn-struct locals:
+    // a storage chain roots at ThisKeyword (falls to the byteIndexStore RMW below); a calldata
+    // dyn-struct param is not in memDynStructLocals (read-only - solc rejects the write too). A
+    // string field is not indexable (solc parity: JETH205); any non-bytes field falls through.
+    if (
+      ts.isElementAccessExpression(node) &&
+      node.argumentExpression &&
+      ts.isPropertyAccessExpression(node.expression)
+    ) {
+      const ft = this.memDynStructFieldType(node.expression);
+      if (ft && isBytesLike(ft)) {
+        if (ft.kind === 'string') {
+          this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+          return undefined;
+        }
+        const base = this.checkExpr(node.expression);
+        if (!base) return undefined;
+        const idx = this.checkExpr(node.argumentExpression, U256);
+        if (!idx) return undefined;
+        // an in-place memory element store does NOT touch storage; stays @pure/@view-clean.
+        return { kind: 'memByteIndexStore', type: BYTES1, base, index: this.coerce(idx, U256, node.argumentExpression) };
       }
     }
     // this.b[i] = <bytes1>: byte assignment into a STORAGE `bytes` (RMW the containing slot/word).
@@ -18115,6 +18192,109 @@ export class Analyzer {
     return r;
   }
 
+  /** The DATA LOCATION class of a quiet-checked LVALUE (the ternary-chain lvalue desugar guard).
+   *  solc unifies a storage|memory ternary to a MEMORY COPY - the storage branch's write lands in
+   *  the (discarded) copy - so branch-pushing a write may only fire when both branches live in the
+   *  SAME location class (storage|storage keeps the storage pointer; memory|memory the selected
+   *  pointer; both are exactly what the per-branch write produces). */
+  private lvalueLoc(lv: LValue): 'storage' | 'mem' {
+    switch (lv.kind) {
+      case 'state':
+      case 'byteIndexStore':
+      case 'mapping':
+      case 'dynState':
+      case 'mapDynState':
+      case 'dynPlace':
+      case 'place':
+      case 'immutableStaged':
+        return 'storage';
+      case 'arrayElem':
+      case 'strArrayElem':
+        return lv.arr.base.kind === 'memArray' || lv.arr.base.kind === 'memArrayExpr' ? 'mem' : 'storage';
+      default:
+        return 'mem';
+    }
+  }
+
+  /** The declared TYPE of a ternary BRANCH expression used as an access-chain base, probed quietly:
+   *  `this.<state>` -> the state var's declared type (no whole-value READ support needed, so a
+   *  mapping-containing struct still types); a local identifier -> its declared type; a nested
+   *  ternary -> the recursive unify of its branches; anything else -> the checkExprQuiet type.
+   *  solc types the TERNARY ITSELF before any access is applied, so the branch-pushing desugars
+   *  must reject when the branch types do not unify (Arr<In,2> vs Arr<In,3>, fixed vs dynamic) -
+   *  a solc TypeError the rebased chains alone would NOT catch (both index to the same leaf type). */
+  private ternBranchTypeQuiet(node: ts.Expression): JethType | undefined {
+    const s = stripParens(node);
+    if (ts.isConditionalExpression(s)) {
+      const a = this.ternBranchTypeQuiet(s.whenTrue);
+      const b = this.ternBranchTypeQuiet(s.whenFalse);
+      return a && b && typesEqual(a, b) ? a : undefined;
+    }
+    if (ts.isPropertyAccessExpression(s) && s.expression.kind === ts.SyntaxKind.ThisKeyword) {
+      const sv = this.stateByName.get(s.name.text);
+      if (sv) return sv.type;
+    }
+    if (ts.isIdentifier(s)) {
+      const lt = this.lookupLocal(s.text);
+      if (lt) return lt;
+    }
+    return this.checkExprQuiet(s)?.type;
+  }
+
+  /** Rebase an access chain `node` (Prop/Elem steps only) onto `nb`, replacing its bottom `bot`
+   *  (a ternary the chain roots at) with synthetic ts.factory nodes text-ranged onto the originals.
+   *  Shared by the ternary-chain lvalue desugar (checkAssignment / ++ / --). */
+  private rebaseTernChain(node: ts.Expression, bot: ts.Expression, nb: ts.Expression): ts.Expression {
+    const s = stripParens(node);
+    if (s === bot) return nb;
+    if (ts.isPropertyAccessExpression(s)) {
+      return ts.setTextRange(ts.factory.createPropertyAccessExpression(this.rebaseTernChain(s.expression, bot, nb), s.name), s);
+    }
+    const ea = s as ts.ElementAccessExpression;
+    return ts.setTextRange(
+      ts.factory.createElementAccessExpression(this.rebaseTernChain(ea.expression, bot, nb), ea.argumentExpression!),
+      ea,
+    );
+  }
+
+  /** The quiet {type, loc} of an assignment target that may ITSELF bottom at a (nested) ternary: a
+   *  plain chain -> its checkLValueQuiet lvalue; a ternary-bottomed chain -> the recursive probe
+   *  (the emission side desugars it recursively via checkAssignment). */
+  private ternLValueQuiet(node: ts.Expression): { type: JethType; loc: 'storage' | 'mem' } | undefined {
+    const direct = this.checkLValueQuiet(node);
+    if (direct) return { type: direct.type, loc: this.lvalueLoc(direct) };
+    const probe = this.ternChainLValueProbe(node);
+    return probe ? { type: probe.type, loc: probe.loc } : undefined;
+  }
+
+  /** Probe a ternary-bottomed assignment-target chain for the branch-push desugar. Returns the
+   *  rebased then/else target nodes + the unified target {type, loc} + the condition, or undefined
+   *  when the shape is NOT a liftable ternary-chain lvalue: the chain does not bottom at a ternary,
+   *  the DIRECT lvalue already works (not a lift), the bare branch types do not unify (solc
+   *  TypeError), or the rebased targets disagree on type or data location (solc's storage|memory
+   *  ternary is a MEMORY-COPY semantic the branch-push cannot reproduce - keep the clean reject).
+   *  Shared by the =/op= desugar and the ++/-- statement/expression desugars. */
+  private ternChainLValueProbe(
+    left: ts.Expression,
+  ): { cond: ts.Expression; thenNode: ts.Expression; elsNode: ts.Expression; type: JethType; loc: 'storage' | 'mem' } | undefined {
+    if (!ts.isPropertyAccessExpression(left) && !ts.isElementAccessExpression(left)) return undefined;
+    let bottom: ts.Expression = left;
+    while (ts.isPropertyAccessExpression(bottom) || ts.isElementAccessExpression(bottom))
+      bottom = stripParens(bottom.expression);
+    if (!ts.isConditionalExpression(bottom)) return undefined;
+    if (this.checkLValueQuiet(left)) return undefined; // the direct lvalue works: not a lift
+    const bot = bottom;
+    const bT = this.ternBranchTypeQuiet(bot.whenTrue);
+    const bE = this.ternBranchTypeQuiet(bot.whenFalse);
+    if (!bT || !bE || !typesEqual(bT, bE)) return undefined;
+    const thenNode = this.rebaseTernChain(left, bot, bot.whenTrue);
+    const elsNode = this.rebaseTernChain(left, bot, bot.whenFalse);
+    const qT = this.ternLValueQuiet(thenNode);
+    const qE = this.ternLValueQuiet(elsNode);
+    if (!qT || !qE || !typesEqual(qT.type, qE.type) || qT.loc !== qE.loc) return undefined;
+    return { cond: bot.condition, thenNode, elsNode, type: qT.type, loc: qT.loc };
+  }
+
   /** A type-probe checkExpr that DISCARDS any diagnostics it emits (the caller re-checks the same
    *  node for real, re-emitting them). Used by the ternary literal-branch inference (Tier-2 B-10). */
   private checkExprQuiet(node: ts.Expression): Expr | undefined {
@@ -18351,9 +18531,17 @@ export class Analyzer {
             const locT = bareT ? this.ternaryBranchLoc(bareT) : 'mem';
             const locE = bareE ? this.ternaryBranchLoc(bareE) : 'mem';
             const locMix = (locT === 'cd' && locE === 'storage') || (locT === 'storage' && locE === 'cd');
+            // solc-parity guard 2 (long-tail batch A): the branch BASE types must UNIFY - solc types
+            // the ternary itself first, so (c ? this.A : this.C3)[0n].y with Arr<In,2> vs Arr<In,3>
+            // is a TypeError even though both rebased chains read the same u256 leaf. Only enforced
+            // when both branches type quietly (ternBranchTypeQuiet also types a `this.<state>` /
+            // local name whose WHOLE-value read is unsupported, so named refs always compare).
+            const btT = this.ternBranchTypeQuiet(bot.whenTrue);
+            const btE = this.ternBranchTypeQuiet(bot.whenFalse);
+            const typeMix = btT !== undefined && btE !== undefined && !typesEqual(btT, btE);
             const thenA = this.checkExprQuiet(rebase(node, bot.whenTrue));
             const elsA = this.checkExprQuiet(rebase(node, bot.whenFalse));
-            if (!locMix && thenA && elsA && typesEqual(thenA.type, elsA.type) && (isStaticValueType(thenA.type) || isBytesLike(thenA.type))) {
+            if (!locMix && !typeMix && thenA && elsA && typesEqual(thenA.type, elsA.type) && (isStaticValueType(thenA.type) || isBytesLike(thenA.type))) {
               const cond = this.checkCondition(bot.condition);
               if (!cond) return undefined;
               // re-check for REAL so state flags / diags from the branch accesses are applied.
@@ -19909,13 +20097,19 @@ export class Analyzer {
         // The base bs[i] is an element-access that resolves to a bytes value (strArrayElem over the
         // memArray); produce a byteIndex on it. (string[] gives a string element, not indexable - solc
         // parity: JETH205.) Must run BEFORE the mapping/nested-array resolvers claim the base.
-        if (
-          ts.isElementAccessExpression(node.expression) &&
-          node.expression.argumentExpression &&
-          this.nestedMemArrayElemAccess(node.expression)
-        ) {
+        // Long-tail M3: mirror the L13 WRITE gate - the base may also be a bytes[] FIELD of a memory
+        // dyn-struct (p.tags[1n][0n] read as a VALUE: a memArrayExpr base over the field's image
+        // pointer) or any other memory-based resolveArrayExpr base. Storage/calldata bases
+        // (stateArray/mapArray/calldataArray) fall through to their own byteIndex branch unchanged.
+        if (ts.isElementAccessExpression(node.expression) && node.expression.argumentExpression) {
           const baseArr = this.resolveArrayExpr(node.expression.expression);
-          if (baseArr && isBytesLike(baseArr.elem)) {
+          if (
+            baseArr &&
+            isBytesLike(baseArr.elem) &&
+            (this.nestedMemArrayElemAccess(node.expression) ||
+              baseArr.base.kind === 'memArray' ||
+              baseArr.base.kind === 'memArrayExpr')
+          ) {
             const base = this.checkExpr(node.expression);
             if (!base) return undefined;
             if (base.type.kind === 'string') {
@@ -20277,11 +20471,19 @@ export class Analyzer {
       // d.b[i] where d.b is a bytes field of a DYNAMIC-field struct MEMORY local: the base
       // resolves to a memDynField (bytes); byte-index it (Panic 0x32). Must precede the
       // calldata dynamic-struct resolver below, which would mis-bind the memory local.
+      // Long-tail M2: also a NESTED chain r.inner.b[i] (the base resolves to a memDynNestedField
+      // bytes read) - claimed ONLY when the field's declared type is bytes/string, so array-field
+      // element reads (v.t.xs[i]) keep their resolveArrayExpr paths.
       if (
         ts.isPropertyAccessExpression(node.expression) &&
-        ts.isIdentifier(node.expression.expression) &&
-        this.memDynStructLocals.has(node.expression.expression.text) &&
-        node.argumentExpression
+        node.argumentExpression &&
+        ((ts.isIdentifier(node.expression.expression) &&
+          this.memDynStructLocals.has(node.expression.expression.text)) ||
+          (ts.isPropertyAccessExpression(node.expression.expression) &&
+            (() => {
+              const ft = this.memDynStructFieldType(node.expression);
+              return ft !== undefined && isBytesLike(ft);
+            })()))
       ) {
         const base = this.checkExpr(node.expression);
         if (!base) return undefined;

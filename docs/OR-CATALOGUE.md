@@ -1,7 +1,8 @@
 # Over-rejection catalogue
 
 **Status: live-audited at f0e3761; Tier-1 verified at `1b330fb`; Tier-2 at `d42e6de`; Tier-3 at
-`cef1148` + the soundness fix `8174afc` (2026-07-08).** The Tier-3 round lifted the final 12 shapes
+`cef1148` + the soundness fix `8174afc`; long-tail batch A (M-BYTES + T-LVALUE, 6 shapes) lifted
+on top of `fbd357a` (2026-07-08).** The Tier-3 round lifted the final 12 shapes
 of the f0e3761 list (L9, three L2 residuals, L10a/b, L11a/b, L13, L14, L15; L6 reclassified
 deliberate) and was verified by a 4-slice adversarial workflow (381 cases: lift-consumer matrix,
 funcref ABI-leak + semantic hunt, dual-commit drift vs the pre-Tier-3 parent, catalogue re-probe;
@@ -23,8 +24,14 @@ Two audit corrections from the same round:
   memory alias witnesses); its cd+storage element mix is a NEW over-rejection (solc's dyn-outer
   equivalent runs, unlike the fixed-outer mix which is a parity both-reject).
 
-**Current remaining: ~27 shapes** = 8 deliberate (5 rows) + 19 liftable (7 families). Codes
-current at `8174afc`.
+**Current remaining: ~22 shapes** = 9 deliberate (6 rows) + 13 liftable (5 families). Codes
+current at the long-tail batch A commit. Batch A lifted all 6 M-BYTES/T-LVALUE shapes AND fixed
+three pre-existing bar violations its probes uncovered in the ternary-chain desugars: two
+OVER-ACCEPTANCES (branch base types that do not unify - `(c ? Arr<In,2> : Arr<In,3>)[0n].y` -
+were branch-pushed past solc's TypeError on BOTH the read and the write desugar) and one
+MISCOMPILE (`(c ? this.A : m)[0n].y = v`, storage|memory: solc writes into a MEMORY COPY of the
+storage branch, JETH's branch-push wrote storage directly). The mismatches are now both-rejects;
+the location mix is the new deliberate row TERN-LV-MIX below.
 
 ## Deliberate rejects (must stay)
 
@@ -35,6 +42,7 @@ solc's literal typing cannot be reproduced) - a lift would trade a clean reject 
 |----|-------|------|------------------|
 | B-21 | memory-parent `xs[1n].pre` AND memory-struct `s.f` through the POINTER channels (internal-arg / element-write / internal-return / 2-hop) | JETH900 | A flat copy would detach from the live memory parent (R3); the FLAT consumers of the same expressions are lifted (L7b) |
 | TERN-STRUCT-ARR | `c ? <mem> : <storage>` ternary where both branches are a fixed STRUCT array `Arr<In,N>` (bind + for-of) or a dyn struct array `In[]` (bind). The B-7/B-24 residual scope: value, u256[], bytes and dyn-struct spellings are LIFTED and aliasing-verified | JETH074 | Pointer-headed struct-array branches; no aliasing-witness study has cleared a copy lowering yet (lift candidate only with one) |
+| TERN-LV-MIX | ternary-chain LVALUE with mixed-location branches: `(c ? this.A : m)[0n].y = v` / `+= v` / `++` (storage|memory; the calldata-branch spellings reject on the read-only branch). solc runs: it unifies the ternary to a MEMORY COPY, so the storage branch's write lands in the DISCARDED copy (probed: solc's A stays 0) | JETH067/JETH074 | Branch-pushing the write would hit storage the copy semantics never touch (this was a live miscompile before batch A); same-location branches (st|st, mem|mem) ARE lifted. Lift candidate only via real copy-materializing codegen |
 | L6 | `o[0n] = <storage/whole-agg>` writing into an inline value-word element of a nested memory array | JETH429 | The prior-alias witness (solc re-points, an earlier alias keeps OLD values) proves NO RHS source is liftable; a flat layout can only copy |
 | L7(a) | memory-struct ctor with a BOUND fixed-array var `S1(a, 5n)` | JETH465 | solc stores a live reference to `a`; the inline literal ctor `S1([In..,In..], 5n)` IS accepted and byte-identical |
 | L2-MOBILE | both-literal ternary encode with BARE int/bool elements `abi.encode(c ? [1n,2n] : [3n,4n])` | JETH213 | solc's mobile type is uint8[2]/bool[2]; JETH's u256 typing would encode differently (parity gate, not a feature gap) |
@@ -45,9 +53,10 @@ Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JE
 parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
 lifted and byte-identical).
 
-## Liftable over-rejections (7 families, 19 shapes)
+## Liftable over-rejections (5 families, 13 shapes)
 
-Every row re-probed at `cef1148`/`8174afc` with a verified solc-runs-fine mirror.
+Every row re-probed at `cef1148`/`8174afc` with a verified solc-runs-fine mirror. (The former
+M-BYTES and T-LVALUE rows were lifted by long-tail batch A - see Lifted history.)
 
 | Family | Shape (witnesses) | Code(s) | Workaround |
 |--------|-------------------|---------|------------|
@@ -55,15 +64,29 @@ Every row re-probed at `cef1148`/`8174afc` with a verified solc-runs-fine mirror
 | F-TYPES funcref type gaps | struct-returning funcref annotation `let g: (a: u256) => In = this.mk`; dyn-ARRAY-returning funcref `(x) => u256[]` (string/bytes returns are lifted); nested funcref-bearing struct `Outer { fd: Fd }` | JETH900+074; JETH151; JETH229 (+228/074 cascades) | Named internal fns / flatten the struct |
 | F-CONSUMERS funcref-struct consumers | internal fn RETURNING `Fd` or `[Fd, u256]`; `Fd[]` memory array literal | JETH243/074; JETH427/074 | Return a tag, rebuild the struct; individual locals |
 | F-MULTIRET multi-return call positions | statement-position discard `g(a, b);`; direct `return g(a, b)` as the external tuple (destructure-then-return works) | JETH244; JETH060 | Destructure to named locals |
-| T-LVALUE ternary-chain lvalues | whole-element write `(c ? this.A : this.B2)[i] = In(9n,8n)`; compound `(c ? this.A : this.B2)[i].y += v`; nested chain `(c ? this.A : (d ? this.B2 : this.A))[i].y = v` (single-level `.y = v` is lifted) | JETH151; JETH067; JETH067 | if-else per branch |
 | A-LIT array-literal crosses | ternary over ref-element literals `abi.encode(c ? [a,b] : [b,a])` / bind spelling; tuple-return `[Arr<u256[],2>, u256]` from a ref-element literal; DYN-outer cd+storage mix `let m: u256[][] = [a, this.s1]` (solc's new+assign runs); cast-typed literal self-typing `abi.encode([u256(1n), u256(2n)])` + its ternary (solc: uint256[2]) | JETH900 / 200+151; JETH243/151; JETH074+151; JETH213 | Bind branches/elements first; new+assign |
-| M-BYTES memory-struct byte access | direct plain-bytes-field byte WRITE `q.b[2n] = 0x2an`; 2-hop `q.inner.b[1n] = v`; byte READ rvalue `p.tags[1n][0n]` (the bytes[]-element WRITE `p.tags[0n][1n] = v` is lifted, L13) | JETH151 x3 | let-bind the bytes value first (byte-identical) |
 | MOD-GEN generic modifier at aggregates | `@ne(bytes("ab"))` with `@modifier ne<T>(v: T)` (value-type instantiations are lifted, L15; the non-generic bytes modifier MATCHes) | JETH291 | Monomorphize per concrete type |
 
-(A-LIT counts 4 shapes, M-BYTES 3, F-TYPES 3, F-CONSUMERS 2, F-MULTIRET 2, T-LVALUE 3, F-CALLEE 1
-family of 4 spellings, MOD-GEN 1: 19 shapes.)
+(A-LIT counts 4 shapes, F-TYPES 3, F-CONSUMERS 2, F-MULTIRET 2, F-CALLEE 1 family of 4 spellings,
+MOD-GEN 1: 13 shapes.)
 
 ## Lifted history
+
+**Long-tail batch A on top of `fbd357a`** (6 shapes + 2 bonus, ~60-case CLEAN closure): M1/M2
+plain + nested memory-struct bytes-field byte WRITES (`q.b[2n] = 0x2an`, `r.inner.b[1n] = v`, a
+new checkLValue branch keyed on memDynStructFieldType emitting the in-place mstore8; alias-visible,
+OOB Panic 0x32, runtime idx, internal-param bases; storage byteIndexStore + calldata rejects
+unchanged; string fields stay JETH205); M2-read (the nested-chain byte READ, the one-hop branch
+widened) and M3 (byte READ rvalue through a bytes[] field chain, the Residual-B2 gate now mirrors
+the L13 write gate); T1 ternary-chain whole-ELEMENT writes (storage AND memory branches, the
+desugar's final-type gate widened to bytes-like/struct/array; RHS-cond-idx order counter-verified);
+T2 compound ops (all ten, div-by-zero/underflow Panics, order [RHS, cond, idx] = solc's probed
+trace) + BONUS ++/-- in statement AND value position (cond-idx order, prefix + postfix); T3 nested
+ternary chains (recursive probe + emission; 3-level, ternary-in-cond, nested whole-element, nested
+compound; nested order [RHS, outer-cond, inner-cond, idx] = solc). Also fixed 3 pre-existing bar
+violations (2 branch-type-mismatch OVER-ACCEPTANCES on the read+write desugars, 1 storage|memory
+lvalue-desugar MISCOMPILE -> the TERN-LV-MIX deliberate row). Regression file:
+test/lift-longtail-batchA.test.ts.
 
 **Tier-3 round at `661cd1c` + `cef1148` (+ soundness fix `8174afc`)** (12 shapes, 381-case CLEAN
 verification): L9 ref-element array literals (cd/storage deep-copy, memory alias, the cd+storage
