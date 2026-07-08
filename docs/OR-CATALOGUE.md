@@ -108,10 +108,17 @@ with a documented workaround; none are miscompiles or over-acceptances):
 - memory struct-array element byte access: read `xs[i].b[j]` and write `xs[i].b[j] = v` on a
   `bytes` field (JETH217), and `xs[i].tags[j][k]` bytes[]-field access (JETH226). Workaround: bind
   the field to a `bytes` local first.
-- storage push of a funcref-field struct `xs.push({f: this.inc})` (JETH217/210); array-typed event
-  params `u256[]`/`In[]` (JETH147 family); a calldata struct-array element aggregate field bound to
-  a memory local (JETH900). Each has a bind-first / restructure workaround.
+- storage push of a funcref-field struct `xs.push(Fd(this.inc))` (JETH217/210). Workaround: seed a
+  tag field and dispatch, or store the pointer via a supported path.
 These are candidates for a future micro-round, not a correctness gap.
+
+Live re-audit at `5627d90` (probes probe_ORAUDIT*.mjs) CORRECTED two entries that were NOT
+over-rejections: array-typed event params (`@event E(a: u256[])`, `In[]`) MATCH byte-identically
+(they were lifted earlier, the residual note was stale), and a calldata struct-array element
+aggregate field bound to a memory local (`let p: In = s[i].pre`) is a BOTH-REJECT (solc rejects the
+copy too) - a parity reject, not an OR. Confirmed live-verified OR total: 8 deliberate rows + 5
+thin long-tail shapes (2 single-field-funcref-struct, 2 memory-struct-array byte read/write, 1
+funcref-field-struct storage push) = 13 over-rejections, every one a sound clean reject.
 
 Parity footnote confirmed during the batch C close-out: `.length` on a STRING value (local or
 struct field) rejects in BOTH compilers (JETH202; solc strings have no .length, a bytes cast is
