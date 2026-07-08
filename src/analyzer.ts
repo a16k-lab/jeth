@@ -8473,6 +8473,13 @@ export class Analyzer {
   private defaultStaticValue(t: JethType): Expr {
     if (t.kind === 'bool') return { kind: 'literalBool', type: t, value: false };
     if (isStaticValueType(t)) return { kind: 'literalInt', type: t, value: 0n };
+    // A funcref field defaults to the zero id (an UNINITIALIZED internal function pointer). It is one
+    // value word like a uint256 but funcref is deliberately NOT isStaticValueType (so ABI paths reject),
+    // so it needs its own default here - without it `let d: Fd;` on a funcref-bearing static struct fell
+    // to the fixed-array branch below and dereferenced a funcref's absent .element (compiler crash,
+    // FUNCREF-NOTE-1). Calling the zero funcref reverts Panic 0x51, byte-identical to solc's
+    // uninitialized `function(...)` pointer.
+    if (t.kind === 'funcref') return { kind: 'literalInt', type: t, value: 0n };
     if (t.kind === 'struct') {
       const args = t.fields.map((f) => this.defaultStaticValue(f.type));
       return { kind: 'structNew', type: t, fields: t.fields, args };
@@ -21136,6 +21143,21 @@ export class Analyzer {
         if (bt && bt.kind === 'array' && bt.element.kind === 'struct') {
           const struct = bt.element;
           if (isDynamicType(struct)) {
+            // BYTE-CD-1 (soundness): a BYTES/STRING field of a dynamic calldata struct-ARRAY element
+            // (xs[i].b[j]) is NOT a value-array. resolveCdDynArrayField mis-resolves it to a base the
+            // byteIndex reads as a uniform 0x00 with NO bounds check (a silent wrong-bytes / no-OOB-Panic
+            // MISCOMPILE). Reject; a plain calldata dyn-struct PARAM field (d.b[j]) resolves correctly via
+            // resolveCdDynStruct above and is unaffected. Workaround: bind the field to a `bytes` local
+            // first (let al = xs[i].b; al[j]), byte-identical to solc.
+            const bfld = struct.fields.find((ff) => ff.name === fieldNode.name.text);
+            if (bfld && isBytesLike(bfld.type)) {
+              this.diags.error(
+                node,
+                'JETH217',
+                'byte-indexing a `bytes` field of a calldata struct-array element is not supported yet (bind the field to a `bytes` local first)',
+              );
+              return undefined;
+            }
             // dynamic-struct array element: ps[i].xs resolves to a value-array; index it.
             const arrBase = this.resolveCdDynArrayField(fieldNode, struct);
             if (arrBase && arrBase.kind === 'arrayValue' && arrBase.type.kind === 'array') {
