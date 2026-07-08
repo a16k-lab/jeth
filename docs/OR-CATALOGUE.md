@@ -28,8 +28,26 @@ Two audit corrections from the same round:
   memory alias witnesses); its cd+storage element mix was a NEW over-rejection (solc's dyn-outer
   equivalent runs, unlike the fixed-outer mix which is a parity both-reject) - lifted by batch B.
 
-**Current remaining: ~14 shapes** = 13 deliberate (8 rows) + 1 liftable (1 family). Codes
-current at the long-tail batch D commit. Batch C lifted the whole funcref expression surface
+**FINAL VERIFICATION (429-case adversarial workflow over batches A-D, every finding re-verified).**
+It confirmed THREE bar violations, all now fixed and pinned in test/fix-longtail-verification.test.ts:
+- MC-MEMARR-BYTES-WRITE (silent miscompile, campaign-exposed): `xs[i].b[j] = v` (byte write into a
+  `bytes` field of a MEMORY struct-ARRAY element) dropped the store; now rejects JETH217 like the
+  read side (resolveMemDynStructArrayField bytes-field guard).
+- DRIFT-MC-1 (silent miscompile, pre-existing): `(c ? this.a : this.b)[i] = v` on storage
+  value-arrays wrote a discarded memory copy; the ternary-chain branch-push desugar now fires for
+  ANY ternary-bottomed write (a JETH ternary is a value, never a reference), landing the write in
+  storage. A storage|memory mix stays a clean reject (TERN-LV-MIX).
+- MATRIX-OA-1 (over-acceptance, root pre-existing): `(c ? this.A : this.B)[i] = P(9n)` (wrong
+  struct) was accepted; the static-struct local-decl nominal name check is now blanket over every
+  initializer kind, closing both the desugar path and the underlying `let a: In = P(...)` hole.
+The workflow also corrected two stale catalogue claims: F-RESID `@state o: Outer` (storage
+funcref-bearing struct) is FULLY IMPLEMENTED and byte-identical (every ABI boundary still sealed),
+so the last "liftable" family is empty; and it re-probed all deliberate rows (soundness witnesses
+intact). Dual-commit drift vs the pre-campaign parent: CLEAN (53 programs).
+
+**Current remaining: ~13 shapes** = 13 deliberate (8 rows) + 0 liftable planned (a thin long-tail
+of single-field-funcref-struct and memory-struct-array byte-access residuals remains, all clean
+rejects; see below). Codes current at the final-verification-fix commit. Batch C lifted the whole funcref expression surface
 (all four F-rows, 11 shapes) plus bonus lifts its closure produced: the whole nested
 funcref-field WRITE `o.fd = mkFd()` (solc re-point alias semantics witness-verified), plain
 dyn-struct tuple components from INTERNAL calls (`let [a, s] = this.mk(x)`, the old JETH243
@@ -71,17 +89,24 @@ Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JE
 parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
 lifted and byte-identical).
 
-## Liftable over-rejections (1 family, 1 shape)
+## Liftable over-rejections: none planned
 
-Every row re-probed live with a verified solc-runs-fine mirror. (The former M-BYTES and T-LVALUE
-rows were lifted by long-tail batch A, the A-LIT row by batch B, all four F-rows by batch C, the
-MOD-GEN row and the `Arr<Fd,N>` half of F-RESID by batch D - see Lifted history.)
+The 19-shape tier list plus the F-RESID family are all lifted (batches A-D) or reclassified. The
+final verification found that `@state o: Outer` (a storage funcref-bearing struct) is already fully
+implemented and byte-identical, so the last "liftable" row is retired.
 
-| Family | Shape (witnesses) | Code(s) | Workaround |
-|--------|-------------------|---------|------------|
-| F-RESID funcref containers beyond batch C/D | `@state o: Outer` funcref-bearing struct in STORAGE (solc stores fn pointers; JETH has no storage funcref layout). The `Arr<Fd,N>` memory-local half was lifted by batch D | JETH229 family | Memory locals + a tag field in storage |
-
-(F-RESID 1: 1 shape.)
+A THIN LONG-TAIL of clean rejects remains (all verified sound; solc runs them, JETH rejects loudly
+with a documented workaround; none are miscompiles or over-acceptances):
+- single-field static funcref struct `Fd{f}` variants: chained call `this.mk().f(v)` (JETH225),
+  fixed-array element dispatch `a[i].f(v)` on `Arr<Fd{f},N>` (JETH427). The TWO-field dynamic
+  `Fd{f; s}` forms these mirror ARE lifted; workaround: add a second field or bind a local.
+- memory struct-array element byte access: read `xs[i].b[j]` and write `xs[i].b[j] = v` on a
+  `bytes` field (JETH217), and `xs[i].tags[j][k]` bytes[]-field access (JETH226). Workaround: bind
+  the field to a `bytes` local first.
+- storage push of a funcref-field struct `xs.push({f: this.inc})` (JETH217/210); array-typed event
+  params `u256[]`/`In[]` (JETH147 family); a calldata struct-array element aggregate field bound to
+  a memory local (JETH900). Each has a bind-first / restructure workaround.
+These are candidates for a future micro-round, not a correctness gap.
 
 Parity footnote confirmed during the batch C close-out: `.length` on a STRING value (local or
 struct field) rejects in BOTH compilers (JETH202; solc strings have no .length, a bytes cast is

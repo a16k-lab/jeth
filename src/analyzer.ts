@@ -10579,17 +10579,18 @@ export class Analyzer {
         );
         return;
       }
+      // NOMINAL check (soundness, MATRIX-OA-1 + MATRIX-NOTE-1): the initializer's struct type name
+      // must equal the declared struct name. This must fire for EVERY okInit kind, not a subset:
+      // a constructor `structNew` / `memAggregate` (the pre-existing hole) whose fields merely FIT
+      // (`let a: In = P(9n)`, P a 1-field struct) would otherwise bind P's image into an In local,
+      // and through the ternary-lvalue desugar (`materializeAggregateRhsToTemp` synthesizes exactly
+      // this let-bind) accept `(c ? this.A : this.B)[i] = P(9n)` where solc rejects the type
+      // mismatch. JETH uses nominal struct typing (names unique per compilation), so a blanket
+      // name check matches solc's "not implicitly convertible" and the JETH085 checks at every
+      // other bind site (internal-call param, return, storage-element assign).
       if (
-        (e.kind === 'structValue' ||
-          e.kind === 'cdAggregateValue' ||
-          e.kind === 'mapStorageValue' ||
-          e.kind === 'structArrayElem' ||
-          e.kind === 'cdStructArrayElem' ||
-          e.kind === 'arrayGet' ||
-          e.kind === 'funcRefCall' ||
-          e.kind === 'aggFieldRead') &&
-        (e.type.kind !== 'struct' ||
-          (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)
+        e.type.kind !== 'struct' ||
+        (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name
       ) {
         this.diags.error(
           decl.initializer,
@@ -14587,6 +14588,26 @@ export class Analyzer {
         if (!index) return undefined;
         return { kind: 'arrayElem', type: fv.arr.elem, arr: fv.arr, index: this.coerce(index, U256, node.argumentExpression) };
       }
+      // MC-MEMARR-BYTES-WRITE (soundness): xs[i].b[j] = <bytes1> - a byte-index write into a plain
+      // `bytes` (or `string`) FIELD of a memory dyn-struct-ARRAY element. resolveMemDynStructArrayField
+      // returns a clean bytes read here (aggFieldRead, src=memory), but the in-place mstore8 machinery
+      // does not yet root at an element-based dyn-struct-array field, so without this guard control fell
+      // to the storage byteIndexStore path where bytesLocation mis-resolved the memory blob as a storage
+      // slot and the write landed NOWHERE (a silent store drop, both compilers otherwise succeed). The
+      // READ side xs[i].b[j] already rejects (JETH217); reject the write symmetrically. `string` is not
+      // indexable in solc either (JETH205), so both are sound rejects.
+      if (fv && isBytesLike(fv.type)) {
+        if (fv.type.kind === 'string') {
+          this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+        } else {
+          this.diags.error(
+            node,
+            'JETH217',
+            'byte-writing an element of a `bytes` field of a memory struct-array element is not supported yet (bind the field to a `bytes` local first)',
+          );
+        }
+        return undefined;
+      }
       if (fv && !isStaticValueType(fv.type) && fv.kind !== 'arrayValue') return undefined; // errored
     }
     // xs[i].a = v (and deeper: xs[i].q.m, xs[i].pre[0]) - a VALUE leaf of a memory-array static-struct
@@ -18563,7 +18584,13 @@ export class Analyzer {
     while (ts.isPropertyAccessExpression(bottom) || ts.isElementAccessExpression(bottom))
       bottom = stripParens(bottom.expression);
     if (!ts.isConditionalExpression(bottom)) return undefined;
-    if (this.checkLValueQuiet(left)) return undefined; // the direct lvalue works: not a lift
+    // NOTE: we do NOT bail when the direct lvalue "works". A JETH ternary is a VALUE, never a
+    // reference lvalue, so a chain that bottoms at a ternary lowers through the direct path as a
+    // value COPY - an element/leaf write into it lands in a discarded memory copy and is silently
+    // dropped (DRIFT-MC-1, a latent miscompile on storage value-arrays). The branch-push desugar
+    // is the ONLY sound lowering for a ternary-bottomed write, so it takes precedence whenever the
+    // branches unify and share a data location; a mix / non-unifying pair returns undefined below
+    // and the caller rejects rather than falling to the miscompiling direct path.
     const bot = bottom;
     const bT = this.ternBranchTypeQuiet(bot.whenTrue);
     const bE = this.ternBranchTypeQuiet(bot.whenFalse);
