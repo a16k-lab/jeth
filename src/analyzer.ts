@@ -21188,6 +21188,37 @@ export class Analyzer {
         if (!index) return undefined;
         return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
       }
+      // xs[i].tags[j][k] - a byte-index into an ELEMENT of a `bytes[]` field of a CALLDATA dynamic-struct-
+      // ARRAY element. The whole element xs[i].tags[j] already resolves to a calldata bytes value (the
+      // field tail decodes to the per-element offset table, then [j] reads the j-th bytes element); this
+      // byte-indexes it exactly like the accepted bind-a-local form `let bb = xs[i].tags[j]; bb[k]`,
+      // byte-identical to solc. resolveCdDynElemFieldPlace is calldata-specific (its base must be a
+      // calldataArray / cdDynArrayField), so the memory twin (already lifted) is untouched. `string[]`
+      // elements are not indexable (JETH205). Placed with the other calldata dyn-struct byte-index
+      // branches, before the mapping fall-through that otherwise mis-reports JETH151.
+      if (
+        ts.isElementAccessExpression(node.expression) &&
+        ts.isPropertyAccessExpression(node.expression.expression) &&
+        ts.isElementAccessExpression(node.expression.expression.expression) &&
+        node.argumentExpression
+      ) {
+        const fp = this.resolveCdDynElemFieldPlace(node.expression.expression);
+        if (fp && fp.type.kind === 'array' && fp.type.length === undefined && isBytesLike(fp.type.element)) {
+          if (fp.type.element.kind === 'string') {
+            this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+            return undefined;
+          }
+          const base = this.checkExpr(node.expression);
+          if (!base) return undefined;
+          if (base.type.kind !== 'bytes') {
+            this.diags.error(node, 'JETH212', `cannot index ${displayName(base.type)}`);
+            return undefined;
+          }
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+        }
+      }
       // d.s[i] where d.s is a bytes field of a dynamic-struct param: byte index.
       // s.xs[i] where s.xs is a dynamic VALUE-array field: array element (calldata).
       if (ts.isPropertyAccessExpression(node.expression)) {
