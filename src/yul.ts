@@ -42,6 +42,7 @@ import {
   isDynStructFixedLeafArray,
   isDynStructElemArrayField,
   isDynStructLeafArrayField,
+  isFuncrefDynStructFixedLeafArray,
   isFuncrefDynStructLeaf,
   isDynLeafTopicArray,
   isImplicitWiden,
@@ -1883,7 +1884,11 @@ ${indent(runtime, 6)}
               // absolute-pointer table (no [len] header), each -> a per-element dyn-struct image.
               // An array literal builds it via buildNestedMemArrayLit (structNew element ->
               // allocDynStructToMem; a dyn-struct VALUE element -> buildDynStructLocal, aliasing).
-              isDynStructFixedLeafArray(s.type))
+              isDynStructFixedLeafArray(s.type) ||
+              // Batch D (F-RESID stretch): the funcref twin Arr<Fd,N> - the identical N-pointer
+              // table; each element image is the funcref-bearing dyn-struct image Fd[] builds
+              // (allocDynStructToMem lays a funcref field as one inline id word).
+              isFuncrefDynStructFixedLeafArray(s.type))
           ) {
             // a FIXED array whose element is POINTER-HEADED: a DYNAMIC value-array (Arr<u256[],N>), or a
             // static struct / static-struct-leaf array (Batch A: Arr<P,N>, Arr<P,N>[], Arr<Arr<P,N>,M>).

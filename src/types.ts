@@ -697,6 +697,18 @@ export function isFuncrefDynStructLeaf(t: JethType): boolean {
   return t.fields.every((f) => f.type.kind === 'funcref' || isDynStructLeafFieldOk(f.type));
 }
 
+/** Batch D (F-RESID stretch): the funcref TWIN of isDynStructFixedLeafArray, kept deliberately
+ *  NARROW - a SINGLE fixed outer whose DIRECT element is a funcref-bearing dyn-struct leaf
+ *  (Arr<Fd,N>). The image is the same N-word absolute-pointer table (no [len] header) the
+ *  Arr<In,N> family builds, each word -> a per-element dyn-struct image (a funcref field is one
+ *  inline id word). Deeper nestings (Arr<Arr<Fd,N>,M>, Arr<Fd,N>[]) stay rejected (JETH427).
+ *  SEPARATE from isDynStructFixedLeafArray for the same reason isFuncrefDynStructLeaf is separate
+ *  from isDynStructLeaf: every ABI codec / storage-copy route keyed on the non-funcref predicate
+ *  keeps rejecting funcref-bearing shapes; only the internal memory-local sites opt in. */
+export function isFuncrefDynStructFixedLeafArray(t: JethType): boolean {
+  return t.kind === 'array' && t.length !== undefined && isFuncrefDynStructLeaf(t.element);
+}
+
 /** storage-to-mem-copy scope: a REFERENCE type (`let row: bytes[] = this.blobs`) whose deep copy
  *  from STORAGE into a fresh pointer-headed memory image is PROVABLY byte-identical to solc - i.e.
  *  every leaf abiDecFromStorageToImage / buildDynStructFromStorage can lay out. Conservatively scoped

@@ -43,6 +43,7 @@ import {
   isStaticStructAnyLeafArray,
   isDynStructLeaf,
   isDynStructLeafFieldOk,
+  isFuncrefDynStructFixedLeafArray,
   isFuncrefDynStructLeaf,
   isDynStructLeafArrayField,
   isDynLeafTopicArray,
@@ -5720,12 +5721,42 @@ export class Analyzer {
    *  DISTINCT nominal type from its base), so `f<Wei>` and `f<u256>` are separate specializations
    *  even though their runtime codegen is byte-identical. */
   private mangleSpecialization(name: string, args: JethType[]): string {
+    // MOD-GEN: a generic-@modifier instantiation type may be aggregate/dynamic/funcref, and the tag
+    // must stay ONE-TO-ONE with the type there too. canonicalName is unusable for that: it is
+    // structural for structs ((uint256,uint256)) while JETH structs are NOMINAL (typesEqual compares
+    // names), and a lossy `[^A-Za-z0-9] -> _` replace can alias two distinct shapes. So a NON-value
+    // type serializes recursively (struct by NAME) into an unambiguous parenthesized form, then each
+    // non-alnum char escapes to `_<charcode>` (2-digit codes: uniquely decodable, `$`-free so the
+    // outer `name$t1$t2` join stays injective). Value types keep the original flat tag byte-for-byte.
+    const ser = (t: JethType): string => {
+      const br = (t as { brand?: string }).brand;
+      const wrap = (s: string): string => (br ? `B(${br},${s})` : s);
+      switch (t.kind) {
+        case 'struct':
+          return `S(${t.name})`; // nominal; struct names are unique per compilation
+        case 'array':
+          return `A(${t.length ?? ''},${ser(t.element)})`;
+        case 'funcref':
+          return wrap(
+            `F(${t.params.map(ser).join(',')};${t.rets ? t.rets.map(ser).join(',') : t.ret ? ser(t.ret) : ''})`,
+          );
+        case 'mapping':
+          return `M(${ser(t.key)},${ser(t.value)})`; // unreachable via the type-arg gates; kept total
+        default:
+          return wrap(canonicalName(t));
+      }
+    };
     const tag = (t: JethType): string => {
       const br = (t as { brand?: string }).brand;
-      // a brand name is a user identifier (already [A-Za-z0-9_], no primitive collisions); prefix
-      // with `b_` so a brand can never alias a base canonical tag (e.g. a brand named `uint256`).
-      const base = canonicalName(t).replace(/[^A-Za-z0-9]/g, '_');
-      return br ? `b_${br}_${base}` : base;
+      if (isStaticValueType(t)) {
+        // a brand name is a user identifier (already [A-Za-z0-9_], no primitive collisions); prefix
+        // with `b_` so a brand can never alias a base canonical tag (e.g. a brand named `uint256`).
+        const base = canonicalName(t).replace(/[^A-Za-z0-9]/g, '_');
+        return br ? `b_${br}_${base}` : base;
+      }
+      // `g` cannot alias a value tag (value canonicals are lowercase alnum not starting with g_-escapes;
+      // brands are `b_`-prefixed), and the escaped body decodes uniquely back to the serialized form.
+      return 'g' + ser(t).replace(/[^A-Za-z0-9]/g, (c) => `_${c.charCodeAt(0)}`);
     };
     return `${name}$${args.map(tag).join('$')}`;
   }
@@ -5802,15 +5833,33 @@ export class Analyzer {
     return binding;
   }
 
-  /** A concrete type argument must be a VALUE type (uintN/intN/bool/address/bytesN/enum/branded).
-   *  A reference type (struct/array/mapping/bytes/string) is rejected (JETH291). (Internal struct
-   *  params exist but generic struct type-arguments are a future extension.) */
+  /** A concrete type argument for a generic FUNCTION must be a VALUE type (uintN/intN/bool/address/
+   *  bytesN/enum/branded). A reference type (struct/array/mapping/bytes/string) is rejected (JETH291).
+   *  (Internal struct params exist but generic-function struct type-arguments are a future extension;
+   *  generic @modifier type arguments admit aggregates - see gateModifierGenericTypeArg.) */
   private gateGenericTypeArg(t: JethType, node: ts.Node, tp: string): boolean {
     if (isStaticValueType(t)) return true; // covers uintN/intN/bool/address/bytesN, incl. enums + branded (a branded value type is one of these with a brand)
     this.diags.error(
       node,
       'JETH291',
       `type argument for '${tp}' must be a value type (uintN/intN/bool/address/bytesN/enum/branded newtype), got ${displayName(t)}`,
+    );
+    return false;
+  }
+
+  /** MOD-GEN: a generic-@modifier type argument may be ANY type a concrete @modifier parameter may
+   *  be - a value type, bytes/string, an array, a struct, or an (internal) funcref. The monomorph is
+   *  collected through the normal concrete-modifier pipeline (collectModifier + the per-shape
+   *  materialization gates), so every shape accepts or re-rejects EXACTLY where a hand-written
+   *  modifier with that parameter type would (parity by construction). Only the never-passable types
+   *  reject at the gate itself: void and anything mapping-bearing (storage-only; the same reject a
+   *  concrete modifier parameter gets via JETH247). */
+  private gateModifierGenericTypeArg(t: JethType, node: ts.Node, tp: string): boolean {
+    if (t.kind !== 'void' && !this.typeHasMapping(t)) return true;
+    this.diags.error(
+      node,
+      'JETH291',
+      `type argument for '${tp}' must be a passable type (a value type, bytes/string, an array, a struct, or an internal function reference), got ${displayName(t)}`,
     );
     return false;
   }
@@ -6847,8 +6896,9 @@ export class Analyzer {
   /** L15: resolve the concrete type binding for a generic-modifier application. Mirrors
    *  resolveGenericTypeArgs (generic FUNCTIONS): explicit type args from the decorator call form, else
    *  inference from each parameter annotated with a bare type-parameter identifier against the checked
-   *  argument's concrete type (unified across params; conflicts reject). Every bound type must be a
-   *  value type (gateGenericTypeArg, JETH291). */
+   *  argument's concrete type (unified across params; conflicts reject). MOD-GEN: every bound type must
+   *  be a PASSABLE type - value, bytes/string, array, struct, or funcref (gateModifierGenericTypeArg;
+   *  void / mapping-bearing reject with JETH291). */
   private resolveModifierGenericArgs(
     app: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node },
     gen: { node: ts.MethodDeclaration; typeParams: string[] },
@@ -6867,7 +6917,7 @@ export class Analyzer {
       for (let i = 0; i < gen.typeParams.length; i++) {
         const t = resolveType(app.typeArgs[i]!, this.diags, this.structsByName);
         if (!t) return undefined;
-        if (!this.gateGenericTypeArg(t, app.typeArgs[i]!, gen.typeParams[i]!)) return undefined;
+        if (!this.gateModifierGenericTypeArg(t, app.typeArgs[i]!, gen.typeParams[i]!)) return undefined;
         binding.set(gen.typeParams[i]!, t);
       }
       return binding;
@@ -6900,7 +6950,7 @@ export class Analyzer {
         );
         return undefined;
       }
-      if (!this.gateGenericTypeArg(binding.get(tp)!, app.site, tp)) return undefined;
+      if (!this.gateModifierGenericTypeArg(binding.get(tp)!, app.site, tp)) return undefined;
     }
     return binding;
   }
@@ -10755,9 +10805,13 @@ export class Analyzer {
         // (Fd[]): the same pointer-headed [len][per-element pointer] image a P[] local uses (each
         // element -> a per-element dyn-struct image; a funcref field is one inline id word, laid out
         // like uint256). MEMORY LOCALS only - every ABI consumer of Fd[] (encode / return / event /
-        // error / storage push) independently rejects via the typeHasFuncref gates. A FIXED outer
-        // (Arr<Fd,N>) stays a clean JETH427 reject below (its fixed codec is unverified).
-        (declared.length === undefined && this.isFuncrefDynStructLeaf(declared.element)))
+        // error / storage push) independently rejects via the typeHasFuncref gates.
+        (declared.length === undefined && this.isFuncrefDynStructLeaf(declared.element)) ||
+        // Batch D (F-RESID stretch): the FIXED-outer twin (Arr<Fd,N>) - the same N-pointer-word
+        // memAggregate image the Arr<In,N> family uses (Lift #4); registered fixedOuter below.
+        // MEMORY LOCALS only, single fixed outer (deeper nestings keep the JETH427 reject); every
+        // ABI consumer independently rejects via the typeHasFuncref gates.
+        isFuncrefDynStructFixedLeafArray(declared))
       // Lift #4: a FIXED-outer array whose leaf is a DYNAMIC struct (Arr<In,N>, In dynamic,
       // isDynStructFixedLeafArray) IS now admitted. Its memAggregate image is N absolute-pointer words
       // (no [len] header), each -> a per-element dyn-struct image; the element-read resolver
@@ -11096,8 +11150,9 @@ export class Analyzer {
   ): { code: string; msg: string } | undefined {
     if (this.isStorageAggSource(value)) return undefined;
     // JETH467: a whole FIXED-outer DYNAMIC-STRUCT array (Arr<DIn,N>) from a MEMORY source. Scoped to the
-    // memory source; the calldata form is caught by JETH900 in codegen.
-    if (this.isMemorySourcedAgg(value) && isDynStructFixedLeafArray(copiedType)) {
+    // memory source; the calldata form is caught by JETH900 in codegen. Batch D: the funcref twin
+    // (Arr<Fd,N>) rejects here too (solc legacy: the same UnimplementedFeatureError).
+    if (this.isMemorySourcedAgg(value) && (isDynStructFixedLeafArray(copiedType) || isFuncrefDynStructFixedLeafArray(copiedType))) {
       return {
         code: 'JETH467',
         msg: `copying a whole ${displayName(copiedType)} (a fixed array of dynamic structs) from memory into storage is not supported (solc's legacy pipeline rejects this too); assign its elements/fields individually`,
@@ -11255,7 +11310,12 @@ export class Analyzer {
         value.kind === 'abiDecode' ||
         (value.kind === 'arrayValue' &&
           (value.arr.base.kind === 'memArray' || value.arr.base.kind === 'memArrayExpr'));
-      if (storageTarget && memorySourcedRhs && isDynStructFixedLeafArray(target.type)) {
+      if (
+        storageTarget &&
+        memorySourcedRhs &&
+        // Batch D: the funcref twin (Arr<Fd,N>) rejects exactly like Arr<DIn,N> (same legacy error).
+        (isDynStructFixedLeafArray(target.type) || isFuncrefDynStructFixedLeafArray(target.type))
+      ) {
         this.diags.error(
           e.left,
           'JETH467',
@@ -16289,7 +16349,10 @@ export class Analyzer {
       // false: a struct element is a reference), bounds i against the constant N (Panic 0x32 runtime /
       // JETH211 const), then a[i].field is resolved by resolveMemDynStructArrayField. Same header-less
       // pointer-headed layout as the Arr<string,N> / Arr<P,N> siblings above.
-      if (at && at.kind === 'array' && isDynStructFixedLeafArray(at)) {
+      // Batch D (F-RESID stretch): the funcref twin Arr<Fd,N> rides the identical header-less
+      // pointer-headed resolution (a[i] -> the i-th pointer word = the element image pointer;
+      // a[i].field / a[i].f(v) resolve through the SAME funcref-aware element machinery Fd[] uses).
+      if (at && at.kind === 'array' && (isDynStructFixedLeafArray(at) || isFuncrefDynStructFixedLeafArray(at))) {
         return {
           base: { kind: 'memArrayExpr', expr: { kind: 'memAggregate', type: at, local: node.text } },
           elem: at.element,
@@ -16725,7 +16788,10 @@ export class Analyzer {
       (isNestedValueWordArray(at) ||
         isStaticStructFixedLeafArray(at) ||
         isDynBytesFixedLeafArray(at) ||
-        isDynStructFixedLeafArray(at))
+        isDynStructFixedLeafArray(at) ||
+        // Batch D (F-RESID stretch): the funcref twin Arr<Fd,N> - a[i] yields the whole
+        // funcref-bearing dyn-struct element exactly like the Arr<In,N> case above.
+        isFuncrefDynStructFixedLeafArray(at))
     );
   }
 

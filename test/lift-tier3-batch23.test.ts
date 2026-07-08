@@ -405,16 +405,19 @@ describe('L15: generic @modifier monomorphization (explicit + inferred)', () => 
     expect(BigInt(rs[1]!.returnHex)).toBe(101n); // + post-placeholder 100
   });
 
-  it('KEPT REJECTS: only UNINSTANTIABLE uses fail (JETH327); non-value type args fail (JETH291)', () => {
+  it('KEPT REJECTS: only UNINSTANTIABLE uses fail (JETH327); an ill-typed body at that T fails there', () => {
     const uninstantiable = `@contract class C {
       @modifier lim<T>(v: T) { require(v > 0n, "z"); _; }
       @lim @external f(x: u256): u256 { return x + 1n; }
     }`;
     expect(codes(uninstantiable)).toContain('JETH327');
-    const refTypeArg = `@contract class C {
+    // Batch D (MOD-GEN) lifted aggregate/dynamic type arguments: `@lim<string>` now instantiates and
+    // fails in the BODY (string > int comparison, JETH084) - the solc monomorphized mirror rejects the
+    // same body. Mapping-bearing type args keep the JETH291 gate (see lift-longtail-batchD.test.ts).
+    const stringBodyError = `@contract class C {
       @modifier lim<T>(v: T) { require(v > 0n, "z"); _; }
       @lim<string>("a") @external f(x: u256): u256 { return x + 1n; }
     }`;
-    expect(codes(refTypeArg)).toContain('JETH291');
+    expect(codes(stringBodyError)).toContain('JETH084');
   });
 });

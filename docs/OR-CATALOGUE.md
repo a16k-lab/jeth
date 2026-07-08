@@ -4,7 +4,9 @@
 `cef1148` + the soundness fix `8174afc`; long-tail batch A (M-BYTES + T-LVALUE, 6 shapes) lifted
 on top of `fbd357a`; long-tail batch B (A-LIT array-literal crosses, 4 shapes + closure lifts)
 lifted on top of batch A; long-tail batch C (the funcref expression surface: F-CALLEE, F-TYPES,
-F-CONSUMERS, F-MULTIRET, 11 shapes + bonus lifts) lifted on top of batch B (2026-07-08).** The Tier-3 round lifted the final 12 shapes
+F-CONSUMERS, F-MULTIRET, 11 shapes + bonus lifts) lifted on top of batch B (2026-07-08);
+long-tail batch D (MOD-GEN generic modifiers at aggregate types + the F-RESID `Arr<Fd,N>`
+stretch, 2 shapes) lifted on top of batch C (2026-07-08).** The Tier-3 round lifted the final 12 shapes
 of the f0e3761 list (L9, three L2 residuals, L10a/b, L11a/b, L13, L14, L15; L6 reclassified
 deliberate) and was verified by a 4-slice adversarial workflow (381 cases: lift-consumer matrix,
 funcref ABI-leak + semantic hunt, dual-commit drift vs the pre-Tier-3 parent, catalogue re-probe;
@@ -26,8 +28,8 @@ Two audit corrections from the same round:
   memory alias witnesses); its cd+storage element mix was a NEW over-rejection (solc's dyn-outer
   equivalent runs, unlike the fixed-outer mix which is a parity both-reject) - lifted by batch B.
 
-**Current remaining: ~16 shapes** = 13 deliberate (8 rows) + 3 liftable (2 families). Codes
-current at the long-tail batch C commit. Batch C lifted the whole funcref expression surface
+**Current remaining: ~14 shapes** = 13 deliberate (8 rows) + 1 liftable (1 family). Codes
+current at the long-tail batch D commit. Batch C lifted the whole funcref expression surface
 (all four F-rows, 11 shapes) plus bonus lifts its closure produced: the whole nested
 funcref-field WRITE `o.fd = mkFd()` (solc re-point alias semantics witness-verified), plain
 dyn-struct tuple components from INTERNAL calls (`let [a, s] = this.mk(x)`, the old JETH243
@@ -69,18 +71,17 @@ Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JE
 parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
 lifted and byte-identical).
 
-## Liftable over-rejections (2 families, 3 shapes)
+## Liftable over-rejections (1 family, 1 shape)
 
 Every row re-probed live with a verified solc-runs-fine mirror. (The former M-BYTES and T-LVALUE
-rows were lifted by long-tail batch A, the A-LIT row by batch B, all four F-rows by batch C -
-see Lifted history.)
+rows were lifted by long-tail batch A, the A-LIT row by batch B, all four F-rows by batch C, the
+MOD-GEN row and the `Arr<Fd,N>` half of F-RESID by batch D - see Lifted history.)
 
 | Family | Shape (witnesses) | Code(s) | Workaround |
 |--------|-------------------|---------|------------|
-| MOD-GEN generic modifier at aggregates | `@ne(bytes("ab"))` with `@modifier ne<T>(v: T)` (value-type instantiations are lifted, L15; the non-generic bytes modifier MATCHes) | JETH291 | Monomorphize per concrete type |
-| F-RESID funcref containers beyond batch C | `Arr<Fd,N>` FIXED array of funcref structs (the dyn `Fd[]` is lifted); `@state o: Outer` funcref-bearing struct in STORAGE (solc stores fn pointers; JETH has no storage funcref layout) | JETH427/074; JETH229 family | Dyn array / memory locals + a tag field in storage |
+| F-RESID funcref containers beyond batch C/D | `@state o: Outer` funcref-bearing struct in STORAGE (solc stores fn pointers; JETH has no storage funcref layout). The `Arr<Fd,N>` memory-local half was lifted by batch D | JETH229 family | Memory locals + a tag field in storage |
 
-(MOD-GEN 1, F-RESID 2: 3 shapes.)
+(F-RESID 1: 1 shape.)
 
 Parity footnote confirmed during the batch C close-out: `.length` on a STRING value (local or
 struct field) rejects in BOTH compilers (JETH202; solc strings have no .length, a bytes cast is
@@ -92,6 +93,38 @@ nested-array ELEMENT or a ternary source to a storage stack (`this.st.push(m[1n]
 element/branch image pointer (was a JETH900 lowering throw; solc runs).
 
 ## Lifted history
+
+**Long-tail batch D on top of batch C** (MOD-GEN + the F-RESID `Arr<Fd,N>` stretch, 2 shapes;
+~35-case closure): MOD-GEN generic @modifier instantiation at AGGREGATE/DYNAMIC/FUNCREF types
+(`@ne(bytes("ab"))`, string, u256[], Arr<u256,2>, static + dynamic structs, funcrefs): the L15
+monomorphization previously routed every type argument through the generic-FUNCTION value gate
+(JETH291); a modifier-specific gate (gateModifierGenericTypeArg) now admits ANY type a concrete
+@modifier parameter admits - the monomorph is collected through the normal concrete-modifier
+pipeline, so each shape accepts or re-rejects exactly where a hand-written modifier would (the
+funcref-array instantiation matches the non-generic JETH900 class; mapping/void keep JETH291).
+The specialization mangle gained an INJECTIVE tag for non-value types (structs by NAME - JETH
+structs are nominal; recursive serialization, charcode-escaped, `$`-free) so distinct types can
+never collapse to one cache key; value-type tags unchanged byte-for-byte. Verified: multi-
+instantiation dispatch (bytes+u256+u256[] of ONE modifier + a reverting witness), post-placeholder
+bodies, stacked-modifier arg eval order (side-effect counters = solc), storage-read / calldata-
+param / literal arg sources, ctor applications, T-used-twice, nested generics, same-layout
+distinct structs (nominal split), dedup, mismatch both-rejects. Deliberate residuals: INFERENCE
+from a bare literal / bare method reference rejects (JETH213/065/074) exactly like every other
+no-context position in the language (explicit type args or typed sources lift); generic FUNCTIONS
+stay value-only (a separate row, JETH291). F-RESID stretch: `Arr<Fd,2>` (FIXED array of
+funcref-bearing dyn structs) as a MEMORY LOCAL - pure routing via the new
+types.isFuncrefDynStructFixedLeafArray (the fixed-outer twin of batch C's isFuncrefDynStructLeaf,
+kept separate so ABI codecs keep rejecting) OR'd at the localDecl gate, resolveArrayExpr's fixed
+memAggregate branch, nestedMemArrayElemAccess, and yul's fixed pointer-headed localDecl route.
+Literal / element read / `o[i].f(v)` dispatch / whole-element write / element-to-local / for-of /
+alias write-through / OOB Panic 0x32 all byte-identical; const-OOB both-rejects. GUARD added with
+the lift: the JETH467 mem->storage copy gates gained the funcref twin - the newly-reachable
+`this.g = o` would have been an OVER-ACCEPTANCE (solc legacy rejects with
+UnimplementedFeatureError). Deeper nestings (Arr<Arr<Fd,2>,2>, Arr<Fd,2>[]) keep JETH427; the
+funcref-FIELD write through an element chain (`o[i].f = g`) keeps the family JETH200 reject (the
+dyn-outer `Fd[]` rejects identically); the storage-source bind matches the dyn-outer JETH200
+class; the full ABI-leak matrix (return/encode/event/error/getter/external param) still rejects.
+Regression file: test/lift-longtail-batchD.test.ts.
 
 **Long-tail batch C on top of batch B** (the funcref expression surface: 11 shapes + bonus lifts;
 ~70-case closure incl. the 33-boundary ABI-leak matrix, all BOTH-REJECT): F-CALLEE all four

@@ -448,8 +448,11 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
     expect(
       rejects(`${FD}\n@interface class I { @external f(d: Fd): u256; }\n@contract class C { @external go(): u256 { return 1n; } }`),
     ).toBe(true);
-    // catalogued residuals stay clean rejects (solc runs these; lifting is a later step)
-    expect(rejects(C(`  @external @pure go(v: u256): u256 { let a: Arr<Fd, 2> = [this.mkFd(), this.mkFd()]; return a[0n].f(v); }`))).toBe(true); // Arr<Fd,N>
+    // Arr<Fd,2> element dispatch was LIFTED by long-tail batch D (memory-local fixed array of
+    // funcref structs, byte-identical incl. OOB Panic; every ABI boundary still rejects it - see
+    // lift-longtail-batchD.test.ts). The old "catalogued residual" pin flips to a compile assert.
+    expect(rejects(C(`  @external @pure go(v: u256): u256 { let a: Arr<Fd, 2> = [this.mkFd(), this.mkFd()]; return a[0n].f(v); }`))).toBe(false); // Arr<Fd,N> lifted (batch D)
+    // @state Outer (funcref-bearing struct in STORAGE) stays a clean reject: JETH has no storage funcref layout.
     expect(rejects(`${PRE}@contract class C {\n  inc(x: u256): u256 { return x + 1n; }\n  @state o: Outer;\n  @external @view go(v: u256): u256 { let m: Outer = this.o; return m.fd.f(v); }\n}`)).toBe(true); // @state Outer
   });
 
