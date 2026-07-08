@@ -2083,7 +2083,20 @@ ${indent(runtime, 6)}
                   : undefined
               : s.value.kind === 'memAggregate' || s.value.kind === 'cdAggregateValue'
                 ? this.aggToMemPtr(s.value, ctx, out)
-                : undefined,
+                : // Batch B (B1 closure): a TERNARY RHS (this.sA = c ? [a, b] : [b, a]). A
+                  // dynamic-leaf fixed target (Arr<u256[],N>/Arr<string,N>) materializes the taken
+                  // branch to its CANONICAL pointer-headed image (aggArgToMemPtr - literal fresh,
+                  // memory alias, storage deep-copy), then transcodes into storage through the same
+                  // NF-1 codec a literal/local source uses; a static value target selects the flat
+                  // image (lowerExpr's P1-13 aggregate-ternary lowering) for storeStaticAggFromMem.
+                  // RHS-first ordering is preserved (memSrc runs before dstBase, like every source).
+                  s.value.kind === 'ternary'
+                  ? isDynLeafFixedArray(tt)
+                    ? this.aggArgToMemPtr(s.value, ctx, out)
+                    : isStaticType(tt) && isInlineValueWordElem(tt.element)
+                      ? this.lowerExpr(s.value, ctx, out)
+                      : undefined
+                  : undefined,
           );
           const dstBase =
             s.target.kind === 'state'
@@ -3355,11 +3368,21 @@ ${indent(runtime, 6)}
         if (e.type.kind === 'struct' || (e.type.kind === 'array' && e.type.length !== undefined)) {
           // a DYNAMIC-field struct uses the pointer-headed image builder (buildDynStructLocal);
           // a static aggregate uses the flat ABI-image materializer (aggToMemPtr).
+          // Batch B (B1): a POINTER-HEADED FIXED-outer nested-value array (Arr<u256[],N>:
+          // c ? [a, b] : [b, a], c ? m1 : m2, c ? this.sA : [a, b]) materializes each branch via
+          // aggArgToMemPtr - the CANONICAL image (a literal builds fresh via buildNestedMemArrayLit,
+          // a memory local ALIASES its pointer, a storage source deep-copies via
+          // abiDecFromStorageToImage, a nested ternary recurses back here). aggToMemPtr's flat
+          // static image would be misread (element words consumed as pointers).
           const dynStruct = e.type.kind === 'struct' && isDynamicType(e.type);
+          const ptrHeadedNested =
+            e.type.kind === 'array' && isNestedValueWordArray(e.type) && isDynamicType(e.type);
           const matPtr = (br: Expr, o: string[]): string =>
             dynStruct
               ? this.buildDynStructLocal(e.type as JethType & { kind: 'struct' }, br, ctx, o)
-              : this.aggToMemPtr(br, ctx, o);
+              : ptrHeadedNested
+                ? this.aggArgToMemPtr(br, ctx, o)
+                : this.aggToMemPtr(br, ctx, o);
           const cc = this.lowerExpr(e.cond, ctx, out);
           const p = this.fresh();
           out.push(`let ${p} := 0`);
@@ -4088,7 +4111,14 @@ ${indent(runtime, 6)}
           // an element of a FIXED-outer static calldata param (a[i] on Arr<Arr<In,2>,2>) resolves as
           // a static-place LEAF (cdPlaceReadAgg with an index step), not a cdAggArrayElem - same
           // deep-copy materialization (aggArgToMemPtr's cdPlaceReadAgg branch).
-          v.kind === 'cdPlaceReadAgg')
+          v.kind === 'cdPlaceReadAgg' ||
+          // Batch B (B2): a DYNAMIC-type array memAggregate local - a FIXED-outer pointer-headed
+          // component (Arr<u256[],N>) forwarded by the `return this.g()` tuple desugar through a
+          // __jeth_tret_ local. aggArgToMemPtr is the pure register ALIAS (no copy, no side
+          // effects), frozen at position; the write loop encodes it via abiEncFromMem LATE,
+          // exactly like the memArray handle path. (A STATIC memAggregate - Arr<u256,N> - was
+          // already claimed by the flat mcopy branch above; kinds do not overlap.)
+          v.kind === 'memAggregate')
       ) {
         // Tier-1 L1: a direct array PRODUCER component (an internal-call result, an inline
         // aggregate-array literal, abi.decode, an accepted aggregate ternary, or a calldata
@@ -5984,7 +6014,17 @@ ${indent(runtime, 6)}
       else if (value.kind === 'arrayValue' && value.arr.base.kind === 'calldataArray') dynPrep = { k: 'cd' };
       else {
         const p = this.fresh();
-        out.push(`let ${p} := ${this.lowerExpr(value, ctx, out)}`);
+        // Batch B closure: a memory-array ELEMENT / ternary source (this.st.push(m[1n]) with
+        // m: Arr<u256[],N>, this.st.push(c ? a : b)) resolves to an arrayValue with a memArrayExpr
+        // base; lower the base expression to its [len][elems] image POINTER (the i-th pointer word
+        // / the selected branch image - exactly what the mem copy below consumes). Every other
+        // memory source keeps the lowerExpr tail (a genuinely unsupported source still throws
+        // its clean JETH900 there).
+        const src =
+          value.kind === 'arrayValue' && value.arr.base.kind === 'memArrayExpr'
+            ? this.lowerExpr(value.arr.base.expr, ctx, out)
+            : this.lowerExpr(value, ctx, out);
+        out.push(`let ${p} := ${src}`);
         dynPrep = { k: 'mem', ptr: p };
       }
     }
@@ -8850,6 +8890,11 @@ ${indent(runtime, 6)}
       out.push(`let ${end} := add(${flat}, ${abiHeadWords(a.type) * 32})`);
       return this.abiDecFromMemToImage(a.type, flat, end, out);
     }
+    // Batch B (B1): a TERNARY over a POINTER-HEADED FIXED-outer nested-value array (Arr<u256[],N>)
+    // needs the CANONICAL pointer-headed image - lowerExpr's fixed-array ternary case now routes
+    // each branch back through THIS materializer (see the ptrHeadedNested matPtr there), so the
+    // plain lowerExpr fall-through below selects the right per-branch image. No case here: the
+    // ternary deliberately falls to the lowerExpr tail.
     // a whole VALUE-leaf sub-aggregate ELEMENT of a calldata array-of-array (let row: u256[] = xs[i],
     // for u256[][] / address[][] / Arr<u256,N>[]) bound to a memory local: resolve the element's calldata
     // base (bounds-checked, Panic 0x32 on OOB), then DEEP-COPY it into a fresh memory image via the
@@ -9185,6 +9230,21 @@ ${indent(runtime, 6)}
     }
     if (codecSourced && memSourced) {
       const mp = this.nestedMemImagePtr(arg, ctx, out);
+      const dst = this.fresh();
+      out.push(`let ${dst} := mload(0x40)`);
+      const sz = this.fresh();
+      out.push(`let ${sz} := ${this.abiEncFromMem(arg.type, mp, dst, ctx, out)}`);
+      out.push(`mstore(0x40, add(${dst}, ${sz}))`);
+      return { mp: dst, size: sz };
+    }
+    // Batch B (B1): a TERNARY over a codec-encodable aggregate array (abi.encode(c ? [a, b] : [b, a]),
+    // emit(E(c ? [a, b] : [b, a])) - Arr<u256[],N> / u256[][] / bytes[] ...). Materialize the TAKEN
+    // branch to its canonical memory image (aggArgToMemPtr: a literal builds fresh, a memory source
+    // aliases, a storage/calldata source deep-copies; the analyzer's ternary gates already screened
+    // the branch kinds and the cd|storage location mix), then ABI-encode the selected image into a
+    // fresh self-contained tail blob via abiEncFromMem - the same encode the memory-local arg uses.
+    if (arg.kind === 'ternary' && codecSourced) {
+      const mp = this.aggArgToMemPtr(arg, ctx, out);
       const dst = this.fresh();
       out.push(`let ${dst} := mload(0x40)`);
       const sz = this.fresh();

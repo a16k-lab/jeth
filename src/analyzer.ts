@@ -7185,9 +7185,15 @@ export class Analyzer {
             const nm = this.freshSynthName('__jeth_tret_');
             this.declareLocal(nm, r.types[i]!);
             const ct = r.types[i]!;
+            // Batch B (B2): register EVERY array component in its kind's side-table, mirroring
+            // bindDestructure - a dynamic outer (value OR nested element) is a memArray local, a
+            // FIXED outer (Arr<u256,N> / Arr<u256[],N>) a memAggregate local - so the forwarded
+            // read below resolves through the right codec. (Previously only a value-element
+            // dynamic array was registered; other array kinds could not reach here - the
+            // resolveTupleCall gate rejected them.)
             if (isBytesLike(ct)) this.memDynLocals.add(nm);
-            else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element))
-              this.memArrayLocals.add(nm);
+            else if (ct.kind === 'array' && ct.length === undefined) this.memArrayLocals.add(nm);
+            else if (ct.kind === 'array') this.memAggregateLocals.set(nm, ct);
             else if (ct.kind === 'struct') this.memAggregateLocals.set(nm, ct);
             names.push(nm);
           }
@@ -7196,12 +7202,15 @@ export class Analyzer {
             const ct = r!.types[i]!;
             let read: Expr;
             if (isBytesLike(ct)) read = { kind: 'dynLocalRead', type: ct, name: nm };
-            else if (ct.kind === 'array' && ct.length === undefined && isStaticValueType(ct.element))
+            else if (ct.kind === 'array' && ct.length === undefined)
               read = {
                 kind: 'arrayValue',
                 type: ct,
                 arr: { base: { kind: 'memArray', varName: nm }, elem: ct.element },
               };
+            // Batch B (B2): a FIXED-outer array component forwards as the memAggregate local's
+            // image pointer (the same read a `let m: Arr<u256[],N> = ...` local yields).
+            else if (ct.kind === 'array') read = { kind: 'memAggregate', type: ct, local: nm };
             else if (ct.kind === 'struct') read = { kind: 'memAggregate', type: ct, local: nm };
             else read = { kind: 'localRead', type: ct, name: nm };
             return this.coerce(read, rts[i]!, node.expression!);
@@ -10585,6 +10594,13 @@ export class Analyzer {
       // localDecl tail (aggArgToMemPtr), which ALIASES a memArrayExpr source (returns the field image
       // pointer verbatim), exactly like the fixed-outer path: solc reference semantics both ways.
       const fromMemFieldRead = e.kind === 'arrayValue' && e.arr.base.kind === 'memArrayExpr';
+      // Batch B (B1): a TERNARY init (let m: Arr<u256[],2> = c ? [a, b] : [b, a]). The ternary
+      // checker already screened the branch kinds (arrayLit / memory sources - the `lowerable`
+      // gate) and locations (cd|storage mix both-reject); the lowering materializes the TAKEN
+      // branch to its canonical image via aggArgToMemPtr (a literal builds fresh, a memory source
+      // ALIASES the selected pointer, exactly solc's `c ? x : y` reference selection) and binds
+      // the selected pointer - short-circuit, byte-identical to solc.
+      const fromTernary = e.kind === 'ternary';
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -10593,7 +10609,8 @@ export class Analyzer {
         !fromStorageArray &&
         !fromCdField &&
         !fromMemAggAlias &&
-        !fromMemFieldRead
+        !fromMemFieldRead &&
+        !fromTernary
       ) {
         this.diags.error(
           decl.initializer,
@@ -12988,7 +13005,18 @@ export class Analyzer {
       return undefined;
     }
     for (const t of callee.returnTypes) {
-      if (!this.destructurableComponent(t)) {
+      // Batch B (B2): an INTERNAL tuple call additionally admits a NESTED value-word array
+      // component (Arr<u256[],N>, u256[][], Arr<Arr<u256,2>,M>, ...) and a flat FIXED value array
+      // (Arr<u256,N>): the callee's returnTuple materializes the component to its canonical memory
+      // image (aggArgToMemPtr - an arrayLit builds fresh via the nested codec) and the destructure
+      // binds/ALIASES the returned pointer (bindDestructure registers memArrayLocals for a dynamic
+      // outer, memAggregateLocals for a fixed outer - the same side-tables a `let m: T = ...`
+      // local uses). Internal-only: the ABI-boundary tuple sources (external self-call, interface,
+      // @external library) keep gating on destructurableComponent/decodeSupported.
+      const arrOk =
+        t.kind === 'array' &&
+        (isNestedValueWordArray(t) || (t.length !== undefined && isValueWord(t.element)));
+      if (!this.destructurableComponent(t) && !arrOk) {
         this.diags.error(
           node,
           'JETH243',
@@ -15866,7 +15894,14 @@ export class Analyzer {
         e.type.kind === 'array' &&
         e.type.length !== undefined &&
         (isStaticValueType(e.type.element) ||
-          (e.type.element.kind === 'array' && isValueWordAggregate(e.type.element)))
+          (e.type.element.kind === 'array' && isValueWordAggregate(e.type.element)) ||
+          // Batch B (B1 closure): a POINTER-HEADED nested-value ternary indexed directly -
+          // (c ? [a, b] : [b, a])[i][j] of Arr<u256[],N>. The ternary lowering materializes the
+          // CANONICAL pointer-headed image per branch (lowerExpr's ptrHeadedNested matPtr ->
+          // aggArgToMemPtr: literal fresh / memory alias / storage copy), so the element read is
+          // the i-th absolute-pointer word - exactly an Arr<u256[],N> local's read; memStaticElem
+          // (false, from memElemStatic) keys the pointer-headed element dispatch below.
+          (isNestedValueWordArray(e.type) && isDynamicType(e.type)))
       ) {
         return {
           base: { kind: 'memArrayExpr', expr: e },
@@ -18307,6 +18342,74 @@ export class Analyzer {
     return r;
   }
 
+  /** Batch B (B4): the INTRINSIC type of an array-literal element for self-typing (no outer
+   *  expected type) - the type solc gives the element on its own. undefined REFUSES self-typing:
+   *  a BARE integer literal is mobile-typed by solc (the smallest fitting type - uint8 for 1),
+   *  which JETH deliberately does not mirror (the L2-MOBILE gate), and an element that does not
+   *  type quietly has no type to offer. An EXPLICITLY CAST integer constant (u8(1n) folds to a
+   *  literalInt carrying `explicitCast`) and a bytesN cast / hex-width literal (bytes4(0x11223344n)
+   *  folds to a bytesN-typed literalInt) carry their concrete cast type; a bool literal is
+   *  unambiguously bool (no mobile-width hazard); every non-literal element (a typed var, a struct
+   *  ctor, a runtime cast, a ref-typed value) carries its checked type. */
+  private litElemIntrinsicType(el: ts.Expression): JethType | undefined {
+    const p = this.checkExprQuiet(el);
+    if (!p) return undefined;
+    if (p.kind === 'literalBool') return BOOL;
+    if (p.kind === 'literalInt') {
+      if ((p as { explicitCast?: boolean }).explicitCast) return p.type;
+      if (p.type.kind === 'bytesN') return p.type;
+      // an address-typed literal (an EIP-55 hex literal, or a folded address(0x..) cast - the
+      // address cast does not mark explicitCast) is concretely typed: solc's mobile type for it
+      // is address too, so self-typing matches.
+      if (p.type.kind === 'address') return p.type;
+      return undefined;
+    }
+    return p.type;
+  }
+
+  /** Batch B (B4): fold the COMMON element type over intrinsically-typed literal elements: exact
+   *  type equality, or solc's common type of two same-family numerics / bytesN (the WIDEST width:
+   *  [u8(1n), u256(x)] -> uint256[2], [i8(-1n), i256(x)] -> int256[2] - probed at 0.8.35). A
+   *  cross-family int mix (u8|i16) has NO solc common type ("Unable to deduce common type",
+   *  probed) - undefined keeps the reject. Enums/brands: commonNumericType's brand guard already
+   *  refuses cross-brand; identical enum/brand types pass the typesEqual arm. */
+  private unifyLitElemTypes(types: JethType[]): JethType | undefined {
+    let acc: JethType = types[0]!;
+    for (const t of types) {
+      if (typesEqual(acc, t)) continue;
+      // Mixed bytesN widths ([bytes4(..), bytes8(..)]) are NOT unified: solc widens bytes4 ->
+      // bytes8 (right-pad), but JETH's literal coerce rejects the re-type (JETH084) - the clean
+      // reject stands (a deliberate Batch-B residual; spell both elements at one width).
+      const numeric = isInteger(acc) && isInteger(t) && !isEnum(acc) && !isEnum(t);
+      const c = numeric ? commonNumericType(acc, t) : undefined;
+      if (!c) return undefined;
+      acc = c;
+    }
+    return acc;
+  }
+
+  /** Batch B (B4/B1): SELF-TYPE an array literal that has NO outer expected type from its elements'
+   *  intrinsic types, mirroring solc's array-literal typing over explicitly-typed elements
+   *  (abi.encode([u256(1n), u256(2n)]) -> uint256[2], c ? [a, b] : [b, a] with a,b: u256[] ->
+   *  uint256[][2]). undefined when any element is mobile-typed (bare int literal - the L2-MOBILE
+   *  deliberate gate), does not type quietly, or the element types have no probed common type.
+   *  The result is the FIXED array type T[n] solc gives a literal. */
+  private selfTypeArrayLit(lit: ts.ArrayLiteralExpression): (JethType & { kind: 'array' }) | undefined {
+    if (lit.elements.length === 0) return undefined;
+    const ets: JethType[] = [];
+    for (const el of lit.elements) {
+      const t = this.litElemIntrinsicType(el);
+      // ENUM elements ([ca, cb] with Color locals, Color.Red members) stay refused: solc accepts
+      // Color[2], but JETH's enum fixed-array literal has no verified encode path yet - a clean
+      // JETH213 (deliberate Batch-B residual; cast to uintN or bind a typed local first).
+      if (!t || t.kind === 'void' || t.kind === 'mapping' || t.kind === 'funcref' || isEnum(t)) return undefined;
+      ets.push(t);
+    }
+    const u = this.unifyLitElemTypes(ets);
+    if (!u) return undefined;
+    return { kind: 'array', element: u, length: lit.elements.length };
+  }
+
   private checkExpr(node: ts.Expression, expected?: JethType): Expr | undefined {
     // parenthesized
     if (ts.isParenthesizedExpression(node)) return this.checkExpr(node.expression, expected);
@@ -18577,34 +18680,17 @@ export class Analyzer {
         ts.isArrayLiteralExpression(node.whenTrue) &&
         ts.isArrayLiteralExpression(node.whenFalse)
       ) {
-        // Tier-3 L2 residual (lit|lit): BOTH branches are array literals (abi.encode(c ? [In(1n,2n)] :
-        // [In(3n,4n)])). solc unifies via each literal's own type; JETH self-types from the ELEMENTS
-        // when they carry INTRINSIC types (struct ctors, typed vars, casts) - a bare integer/bool
-        // literal element is REFUSED (solc's mobile type for ints is the smallest fitting type, not
-        // u256; self-typing those would diverge). Lengths must match (solc: In[2] vs In[1] has no
-        // common type - the existing reject stands).
-        const litT = node.whenTrue;
-        const litE = node.whenFalse;
-        if (litT.elements.length === litE.elements.length && litT.elements.length > 0) {
-          let elemT: JethType | undefined;
-          let selfOk = true;
-          for (const lit of [litT, litE]) {
-            for (const el of lit.elements) {
-              const p = this.checkExprQuiet(el);
-              if (!p || p.kind === 'literalInt' || p.kind === 'literalBool') {
-                selfOk = false;
-                break;
-              }
-              if (!elemT) elemT = p.type;
-              else if (!typesEqual(elemT, p.type)) {
-                selfOk = false;
-                break;
-              }
-            }
-            if (!selfOk) break;
-          }
-          if (selfOk && elemT) branchExpected = { kind: 'array', element: elemT, length: litT.elements.length };
-        }
+        // Tier-3 L2 residual (lit|lit), widened by Batch B (B1/B4): BOTH branches are array literals
+        // (abi.encode(c ? [In(1n,2n)] : [In(3n,4n)]), c ? [a, b] : [b, a] with a,b: u256[],
+        // c ? [u8(1n), u8(x)] : [u8(3n), u8(0n)]). Self-type EACH branch via the general literal
+        // self-typing (casts / typed vars / struct ctors / bool literals; a bare int-literal element
+        // still refuses - L2-MOBILE), then share the expectation only when the two branch types
+        // AGREE - solc types each literal on its own and rejects a branch-type mismatch
+        // (uint8[2] vs uint256[2], or 2 vs 1 elements: "True expression's type ... does not match",
+        // probed at 0.8.35; the per-branch check + unifyOperands keeps that reject).
+        const tT = this.selfTypeArrayLit(node.whenTrue);
+        const tE = this.selfTypeArrayLit(node.whenFalse);
+        if (tT && tE && typesEqual(tT, tE)) branchExpected = tT;
       }
       const then = this.checkExpr(node.whenTrue, branchExpected);
       const els = this.checkExpr(node.whenFalse, branchExpected);
@@ -18783,7 +18869,27 @@ export class Analyzer {
             e.kind === 'placeRead')) ||
         (e.type.kind === 'array' &&
           (e.kind === 'arrayLit' ||
-            (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'))));
+            (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr')))) ||
+        // Batch B (B1 closure): a NESTED-value array ternary additionally admits a memAggregate
+        // local branch (a fixed-outer Arr<u256[],N> local: aggArgToMemPtr returns its pointer
+        // VERBATIM, so solc's reference selection is preserved - unlike the Arr<P,N> RC-2
+        // transcode below, which copies and therefore keeps rejecting pointer-headed branches),
+        // a nested TERNARY branch (recurses through the same per-branch materializer), and a
+        // STORAGE branch (this.sA / a storage place: deep-copied to a fresh pointer-headed
+        // memory image via abiDecFromStorageToImage, exactly solc's storage->memory conversion
+        // of the unified memory ternary). A CALLDATA branch stays rejected (solc's cd-ref
+        // validation semantics are not replicated by the copy; the cd|storage mix is already a
+        // both-reject at the location gate above).
+        (e.type.kind === 'array' &&
+          isNestedValueWordArray(e.type) &&
+          isDynamicType(e.type) &&
+          (e.kind === 'memAggregate' ||
+            e.kind === 'ternary' ||
+            (e.kind === 'arrayValue' &&
+              (e.arr.base.kind === 'fixedArray' ||
+                e.arr.base.kind === 'stateArray' ||
+                e.arr.base.kind === 'mapArray' ||
+                e.arr.base.kind === 'placeArray'))));
       if (!lowerable(unified[0]) || !lowerable(unified[1])) {
         this.diags.error(
           node,
@@ -19202,8 +19308,18 @@ export class Analyzer {
     // array literal [a, b, c] -> memory T[] (only where an array type is expected)
     if (ts.isArrayLiteralExpression(node)) {
       if (!expected || expected.kind !== 'array') {
-        this.diags.error(node, 'JETH213', 'cannot infer array-literal type here (expected an array type)');
-        return undefined;
+        // Batch B (B4): with NO expected type at all (abi.encode([u256(1n), u256(2n)]), a ternary
+        // branch, an internal-call arg position typed downstream), SELF-TYPE the literal from
+        // intrinsically typed elements (explicit casts, typed vars, struct ctors, bool literals) -
+        // solc's fixed-array literal typing. BARE int-literal elements keep rejecting (L2-MOBILE:
+        // solc's smallest-fitting mobile type is deliberately not mirrored), as does a non-array
+        // expected type (unchanged).
+        const selfT = !expected ? this.selfTypeArrayLit(node) : undefined;
+        if (!selfT) {
+          this.diags.error(node, 'JETH213', 'cannot infer array-literal type here (expected an array type)');
+          return undefined;
+        }
+        expected = selfT;
       }
       // A dynamic array literal of VALUE elements is supported, as is a NESTED value-leaf array
       // literal (u256[][], Arr<u256[],2>, ...): each inner element is checked recursively against the
@@ -19248,10 +19364,17 @@ export class Analyzer {
       // ("Unable to deduce common type for array elements"); every other mix (cd|mem, mem|storage,
       // st|st, cd|cd) unifies and converts to memory. Probed at 0.8.35. Without this gate the lifted
       // element materializer (aggArgToMemPtr) would happily copy both - an over-acceptance.
+      // Batch B (B3): the gate applies to the FIXED-outer literal ONLY (Arr<u256[],2> = [a, this.s1] -
+      // the direct solc-literal equivalent, which TypeErrors on the mix). A DYNAMIC-outer literal
+      // (let m: u256[][] = [a, this.s1]) is JETH sugar with NO solc literal spelling; its verified
+      // solc EQUIVALENT is new+assign (m[0] = a; m[1] = s1), where each element DEEP-COPIES to
+      // memory independently - solc accepts the cd+storage mix there, so the dyn-outer literal must
+      // too (each element is materialized by its own source-location codec in buildNestedMemArrayValue).
       if (
-        expected.element.kind === 'array' ||
-        expected.element.kind === 'struct' ||
-        isBytesLike(expected.element)
+        expected.length !== undefined &&
+        (expected.element.kind === 'array' ||
+          expected.element.kind === 'struct' ||
+          isBytesLike(expected.element))
       ) {
         const locs = new Set(elements.map((e) => this.ternaryBranchLoc(e)));
         if (locs.has('cd') && locs.has('storage')) {
