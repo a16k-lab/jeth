@@ -304,12 +304,14 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
          @contract class C { @external go(x: u256): u256 { let s: S = S(0n, ""); let a: u256 = 0n; [a, s] = L.mm(x); return a + s.a; } }`,
       ),
     ).toContain('JETH066');
-    // an INTERNAL-call tuple with a dyn-struct component stays gated (separate 'call'-source path).
+    // the INTERNAL-call tuple with a dyn-struct component was LIFTED by long-tail batch C
+    // (resolveTupleCall admits supported dyn-struct components; verified byte-identical vs solc
+    // incl. a string-field read-through). The old JETH243 pin flips to a compile assert.
     expect(
       codes(
         `@struct class S { a: u256; s: string; }
          @contract class C { mk(x: u256): [u256, S] { return [x, S(x, "y")]; } @external go(x: u256): u256 { let [a, s] = this.mk(x); return a + s.a; } }`,
       ),
-    ).toContain('JETH243');
+    ).toEqual([]);
   });
 });

@@ -3,7 +3,8 @@
 **Status: live-audited at f0e3761; Tier-1 verified at `1b330fb`; Tier-2 at `d42e6de`; Tier-3 at
 `cef1148` + the soundness fix `8174afc`; long-tail batch A (M-BYTES + T-LVALUE, 6 shapes) lifted
 on top of `fbd357a`; long-tail batch B (A-LIT array-literal crosses, 4 shapes + closure lifts)
-lifted on top of batch A (2026-07-08).** The Tier-3 round lifted the final 12 shapes
+lifted on top of batch A; long-tail batch C (the funcref expression surface: F-CALLEE, F-TYPES,
+F-CONSUMERS, F-MULTIRET, 11 shapes + bonus lifts) lifted on top of batch B (2026-07-08).** The Tier-3 round lifted the final 12 shapes
 of the f0e3761 list (L9, three L2 residuals, L10a/b, L11a/b, L13, L14, L15; L6 reclassified
 deliberate) and was verified by a 4-slice adversarial workflow (381 cases: lift-consumer matrix,
 funcref ABI-leak + semantic hunt, dual-commit drift vs the pre-Tier-3 parent, catalogue re-probe;
@@ -25,8 +26,15 @@ Two audit corrections from the same round:
   memory alias witnesses); its cd+storage element mix was a NEW over-rejection (solc's dyn-outer
   equivalent runs, unlike the fixed-outer mix which is a parity both-reject) - lifted by batch B.
 
-**Current remaining: ~21 shapes** = 12 deliberate (7 rows) + 9 liftable (5 families). Codes
-current at the long-tail batch B commit. Batch B lifted the whole A-LIT row (4 shapes) plus the
+**Current remaining: ~16 shapes** = 13 deliberate (8 rows) + 3 liftable (2 families). Codes
+current at the long-tail batch C commit. Batch C lifted the whole funcref expression surface
+(all four F-rows, 11 shapes) plus bonus lifts its closure produced: the whole nested
+funcref-field WRITE `o.fd = mkFd()` (solc re-point alias semantics witness-verified), plain
+dyn-struct tuple components from INTERNAL calls (`let [a, s] = this.mk(x)`, the old JETH243
+pin), and `new Array<Fd>(n)`. It also fixed a LATENT pre-existing miscompile: solc's legacy
+pipeline evaluates a call's ARGUMENTS before its FUNCTION EXPRESSION, and all three funcRefCall
+lowerings (value/statement/destructure) now match (`arr[idx()](a1(), a2())` logged 512 vs solc's
+125 before). New deliberate row FUNCREF-PURE below (funcref types carry no mutability). Batch B lifted the whole A-LIT row (4 shapes) plus the
 closure lifts riding the same machinery (storage/memAggregate/nested-ternary branches of the
 pointer-headed nested-value ternary, direct index + write-through, tuple forward, dyn-outer and
 flat-fixed tuple components, address/bool/string/typed-var literal self-typing); its literal
@@ -52,6 +60,7 @@ solc's literal typing cannot be reproduced) - a lift would trade a clean reject 
 | L6 | `o[0n] = <storage/whole-agg>` writing into an inline value-word element of a nested memory array | JETH429 | The prior-alias witness (solc re-points, an earlier alias keeps OLD values) proves NO RHS source is liftable; a flat layout can only copy |
 | L7(a) | memory-struct ctor with a BOUND fixed-array var `S1(a, 5n)` | JETH465 | solc stores a live reference to `a`; the inline literal ctor `S1([In..,In..], 5n)` IS accepted and byte-identical |
 | L2-MOBILE | array literals with BARE int elements, alone or ternary (`abi.encode([1n, 2n])`, `abi.encode(c ? [1n,2n] : [3n,4n])`), AND the cast+bare mix `abi.encode([u256(1n), 2n])` (batch B) | JETH213 | solc's mobile type is the smallest fitting width (uint8[2] for [1,2]; the mix folds the bare value into the common type, [u8(1),300] -> uint16[2]); JETH's typing cannot mirror it - a lift would encode different lanes. Bool literals ARE lifted ([true,false] -> bool[2], no width hazard); cast-typed elements are lifted (B4) |
+| FUNCREF-PURE | a @pure function calling through a funcref whose SIGNATURE has a state-writing address-taken target elsewhere in the contract (dispatcher-set poisoning): `@pure b()` using `Fd.f` of sig `(u256)=>u256` rejects when `ord()` address-takes state-writing `linc/ldec` of the same sig | JETH055 | JETH funcref types carry NO mutability (solc's `function(...) pure returns(...)` pointer types do), so the purity checker soundly assumes the sig-key dispatcher set; a lift needs mutability in the funcref type grammar. Workaround: drop @pure, or avoid impure address-takes of the same signature |
 | A-LIT-RESID | batch B literal residuals: mixed bytesN widths `[bytes4(..), bytes8(..)]` (solc widens right-padded; JETH's literal coerce rejects the re-type); ENUM elements `[Color.Green, cb]` (no verified enum fixed-array encode path); a whole calldata-param branch in a pointer-headed nested ternary `c ? p : [a, b]` (p: Arr<u256[],N> cd param; the copy does not replicate solc's cd-ref validation) | JETH213 / JETH074 | Spell bytesN at one width; cast enums to uintN; bind the cd param to a memory local first |
 
 Parity footnotes (both-reject, never ORs): FIXED-outer cd|storage array-literal element mixes and
@@ -60,22 +69,22 @@ Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JE
 parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
 lifted and byte-identical).
 
-## Liftable over-rejections (5 families, 9 shapes)
+## Liftable over-rejections (2 families, 3 shapes)
 
-Every row re-probed at `cef1148`/`8174afc` with a verified solc-runs-fine mirror. (The former
-M-BYTES and T-LVALUE rows were lifted by long-tail batch A, the A-LIT row by batch B - see
-Lifted history.)
+Every row re-probed live with a verified solc-runs-fine mirror. (The former M-BYTES and T-LVALUE
+rows were lifted by long-tail batch A, the A-LIT row by batch B, all four F-rows by batch C -
+see Lifted history.)
 
 | Family | Shape (witnesses) | Code(s) | Workaround |
 |--------|-------------------|---------|------------|
-| F-CALLEE funcref expression callees | calling a funcref-valued EXPRESSION: `(c ? this.inc : this.dec)(v)` direct; `(c ? a : b).f(10n)` struct-ternary member; `this.mk().f(4n)` call-result member; `this.pick(c)(v)` chained | JETH074 | let-bind the funcref/struct first (all bound forms lifted) |
-| F-TYPES funcref type gaps | struct-returning funcref annotation `let g: (a: u256) => In = this.mk`; dyn-ARRAY-returning funcref `(x) => u256[]` (string/bytes returns are lifted); nested funcref-bearing struct `Outer { fd: Fd }` | JETH900+074; JETH151; JETH229 (+228/074 cascades) | Named internal fns / flatten the struct |
-| F-CONSUMERS funcref-struct consumers | internal fn RETURNING `Fd` or `[Fd, u256]`; `Fd[]` memory array literal | JETH243/074; JETH427/074 | Return a tag, rebuild the struct; individual locals |
-| F-MULTIRET multi-return call positions | statement-position discard `g(a, b);`; direct `return g(a, b)` as the external tuple (destructure-then-return works) | JETH244; JETH060 | Destructure to named locals |
 | MOD-GEN generic modifier at aggregates | `@ne(bytes("ab"))` with `@modifier ne<T>(v: T)` (value-type instantiations are lifted, L15; the non-generic bytes modifier MATCHes) | JETH291 | Monomorphize per concrete type |
+| F-RESID funcref containers beyond batch C | `Arr<Fd,N>` FIXED array of funcref structs (the dyn `Fd[]` is lifted); `@state o: Outer` funcref-bearing struct in STORAGE (solc stores fn pointers; JETH has no storage funcref layout) | JETH427/074; JETH229 family | Dyn array / memory locals + a tag field in storage |
 
-(F-TYPES counts 3 shapes, F-CONSUMERS 2, F-MULTIRET 2, F-CALLEE 1 family of 4 spellings,
-MOD-GEN 1: 9 shapes.)
+(MOD-GEN 1, F-RESID 2: 3 shapes.)
+
+Parity footnote confirmed during the batch C close-out: `.length` on a STRING value (local or
+struct field) rejects in BOTH compilers (JETH202; solc strings have no .length, a bytes cast is
+required) - a both-reject, never an OR. bytes fields (`s.b.length`) work.
 
 A pre-existing adjacency found during the batch B closure was lifted with it: pushing a
 nested-array ELEMENT or a ternary source to a storage stack (`this.st.push(m[1n])`,
@@ -83,6 +92,28 @@ nested-array ELEMENT or a ternary source to a storage stack (`this.st.push(m[1n]
 element/branch image pointer (was a JETH900 lowering throw; solc runs).
 
 ## Lifted history
+
+**Long-tail batch C on top of batch B** (the funcref expression surface: 11 shapes + bonus lifts;
+~70-case closure incl. the 33-boundary ABI-leak matrix, all BOTH-REJECT): F-CALLEE all four
+expression-callee spellings (funcrefCalleeSigDeep derives the callee signature - ternary branches
+must agree - and buildFuncRefCall checks with it, so branch address-takes resolve like let-bound
+forms) + the ORDER FIX (solc legacy evaluates call ARGUMENTS before the FUNCTION EXPRESSION; all
+three funcRefCall lowerings now lower args first - this also fixed a LATENT pre-existing
+miscompile on the already-lifted element/field callee paths). F-TYPES struct-returning funcrefs
+(dispatcher forwards the image pointer), In[]-returning funcrefs, nested funcref-bearing structs
+`Outer { fd: Fd }` (decl gate + isSupportedStructReturn admit via isSupportedDynStructLocal;
+o.fd.f rides memDynNestedField). F-CONSUMERS internal returns of `Fd`/`[Fd, u256]` (resolveTupleCall
+admits supported dyn-struct components - also lifting plain `[Q, u256]`, the old JETH243 pin in
+library-tuple-dyn-struct.test.ts, flipped) and `Fd[]` memory literals via isFuncrefDynStructLeaf
+(the funcref TWIN of isDynStructLeaf, kept separate so every ABI codec keyed on isDynStructLeaf
+keeps rejecting). F-MULTIRET statement discards (`g(a,b);`, `this.two(x);`) and direct
+`return g(a, b)` tuple returns (desugared to destructure-then-return). BONUS: whole nested
+funcref-field WRITE `o.fd = mkFd()` byte-identical incl. re-point alias witnesses;
+`new Array<Fd>(n)`. SOUNDNESS: the full 33-entry ABI-leak matrix (funcref, Fd, Outer, Fd[],
+[Fd,u256] x encode/encodePacked/decode/encodeWith*/external+public params+returns/events both
+arms/errors/getters/mapping-getter/ctor params/interface types) all reject, pinned in
+test/lift-longtail-batchC.test.ts. New deliberate row FUNCREF-PURE (dispatcher-set purity
+poisoning; JETH funcref types carry no mutability).
 
 **Long-tail batch B on top of batch A** (the A-LIT row: 4 shapes + closure lifts, ~45-case CLEAN
 closure incl. aliasing/deep-copy witnesses and an OA hunt): B1 ternary over ref-element array

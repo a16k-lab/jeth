@@ -42,6 +42,7 @@ import {
   isDynStructFixedLeafArray,
   isDynStructElemArrayField,
   isDynStructLeafArrayField,
+  isFuncrefDynStructLeaf,
   isDynLeafTopicArray,
   isImplicitWiden,
   arrayElemPacks,
@@ -2522,14 +2523,25 @@ ${indent(runtime, 6)}
         }
         // A VOID-returning call through a function pointer as a statement: the dispatcher returns no
         // value, so emit the call bare (a `pop(...)` on a 0-value call is a Yul type error).
+        // Batch C (F-MULTIRET m1): a MULTI-RETURN pointer call as a statement binds the N return
+        // values to unused temps (`let r0, r1 := disp(...)`) - the call runs for its side effects
+        // and the components are discarded, exactly solc's discarded tuple call.
         if (s.expr.kind === 'funcRefCall' && s.expr.sig.kind === 'funcref' && s.expr.sig.ret === undefined) {
           const sig = s.expr.sig as JethType & { kind: 'funcref' };
           this.ensureFuncRefDispatcher(sig);
+          // Batch C order fix: ARGS first, then the callee id (solc's legacy argument-before-
+          // function-expression order; see the lowerExpr funcRefCall case).
+          const args = this.lowerCallArgs(s.expr.args, ctx, out);
           const idReg = this.lowerExpr(s.expr.ptr, ctx, out);
           const idTmp = this.fresh();
           out.push(`let ${idTmp} := ${idReg}`);
-          const args = this.lowerCallArgs(s.expr.args, ctx, out);
-          out.push(`${this.funcRefDispatcherName(sig)}(${[idTmp, ...args].join(', ')})`);
+          const callStr = `${this.funcRefDispatcherName(sig)}(${[idTmp, ...args].join(', ')})`;
+          if (sig.rets) {
+            const regs = sig.rets.map(() => this.fresh());
+            out.push(`let ${regs.join(', ')} := ${callStr}`);
+          } else {
+            out.push(callStr);
+          }
           break;
         }
         const v = this.lowerExpr(s.expr, ctx, out);
@@ -2538,8 +2550,17 @@ ${indent(runtime, 6)}
       }
       case 'callStmt': {
         // an internal call as a statement: the result (if any) is discarded.
+        // Batch C (F-MULTIRET m1b): a MULTI-VALUE-return callee binds its N return values to unused
+        // temps (`let r0, r1 := userfn(...)`) - a bare call / pop() of a multi-return Yul function
+        // is a type error; the components are simply dropped, exactly solc's discarded tuple call.
         const args = this.lowerCallArgs(s.args, ctx, out);
         const call = `${this.userFnName(s.fn)}(${args.join(', ')})`;
+        const rts = this.funcs.get(s.fn)?.returnTypes;
+        if (rts && rts.length >= 2) {
+          const regs = rts.map(() => this.fresh());
+          out.push(`let ${regs.join(', ')} := ${call}`);
+          break;
+        }
         const isVoid = this.funcs.get(s.fn)?.returnType.kind === 'void';
         out.push(isVoid ? call : `pop(${call})`);
         break;
@@ -3481,15 +3502,20 @@ ${indent(runtime, 6)}
         return String(id);
       }
       case 'funcRefCall': {
-        // A CALL THROUGH a function pointer: evaluate the id, then the arguments (left-to-right, each
-        // frozen into a temp, matching an ordinary internal call), then invoke the per-signature
-        // dispatcher which switches on the id and calls the matching userfn_.
+        // A CALL THROUGH a function pointer: evaluate the ARGUMENTS first (left-to-right, each frozen
+        // into a temp), THEN the callee expression (the id), then invoke the per-signature dispatcher
+        // which switches on the id and calls the matching userfn_. Batch C order fix: solc's legacy
+        // pipeline evaluates a call's arguments BEFORE its function expression - empirically pinned at
+        // 0.8.35 for a ternary callee ((cond(c) ? inc : dec)(arg(v)) logs arg,cond), a chained callee
+        // (pick(c)(arg(v)) logs arg,pick), an ELEMENT callee (arr[idx()](a1(),a2()) logs a1,a2,idx),
+        // and a field-chain callee ((cnd() ? a : b).f(a1()) logs a1,cnd). The old id-first order was a
+        // latent side-effect-order miscompile whenever the callee expression had observable effects.
         const sig = e.sig as JethType & { kind: 'funcref' };
         this.ensureFuncRefDispatcher(sig);
+        const args = this.lowerCallArgs(e.args, ctx, out);
         const idReg = this.lowerExpr(e.ptr, ctx, out);
         const idTmp = this.fresh();
         out.push(`let ${idTmp} := ${idReg}`);
-        const args = this.lowerCallArgs(e.args, ctx, out);
         return `${this.funcRefDispatcherName(sig)}(${[idTmp, ...args].join(', ')})`;
       }
       case 'memField': {
@@ -3826,7 +3852,12 @@ ${indent(runtime, 6)}
           isAggregateLeafArray(e.type) ||
           isStaticStructFixedLeafArray(e.type) || // Batch A: Arr<P,N>, Arr<Arr<P,N>,M>, Arr<P,N>[][]... fixed outer
           isDynBytesFixedLeafArray(e.type) || // Edge D: Arr<string,N>, Arr<bytes,N> fixed-outer bytes/string leaf
-          (isStaticStructAnyLeafArray(e.type) && isDynamicType(e.type)) // Arr<P,N>[] dynamic outer
+          (isStaticStructAnyLeafArray(e.type) && isDynamicType(e.type)) || // Arr<P,N>[] dynamic outer
+          // Batch C (c2): a DYNAMIC-outer array of a FUNCREF-BEARING dyn-struct element (Fd[]): the
+          // same pointer-headed [len][per-element pointer] image as a P[] literal (each structNew
+          // element -> allocDynStructToMem; a funcref field is one inline id word). Analyzer-gated
+          // to memory locals; every ABI consumer independently rejects via typeHasFuncref.
+          (e.type.kind === 'array' && e.type.length === undefined && isFuncrefDynStructLeaf(e.type.element))
         ) {
           return this.buildNestedMemArrayLit(e, ctx, out);
         }
@@ -6559,7 +6590,10 @@ ${indent(runtime, 6)}
       out.push(`let ${p} := ${this.lowerArrayGet(e, ctx, out)}`);
       return p;
     }
-    if (e.kind === 'call') {
+    if (e.kind === 'call' || e.kind === 'funcRefCall') {
+      // Batch C: a struct-returning call THROUGH a function pointer (g(0n).f / let r: In = g(v))
+      // forwards the callee's image pointer through the dispatcher - freeze it exactly like an
+      // ordinary internal-call result.
       const p = this.fresh();
       out.push(`let ${p} := ${this.lowerExpr(e, ctx, out)}`);
       return p;
@@ -6990,6 +7024,7 @@ ${indent(runtime, 6)}
     if (init.kind === 'structNew') return this.allocDynStructToMem(init, ctx, out);
     if (init.kind === 'memDynStructValue') return this.ctxLookup(ctx, init.local); // alias
     if (init.kind === 'call') return this.lowerExpr(init, ctx, out); // a struct-returning internal call yields the pointer-headed image pointer (ALIAS, like solc memory references)
+    if (init.kind === 'funcRefCall') return this.lowerExpr(init, ctx, out); // Batch C (t1): a struct-returning POINTER call - the dispatcher forwards the callee's image pointer (ALIAS, same as 'call')
     if (init.kind === 'ternary') return this.lowerExpr(init, ctx, out); // selects an already-built branch image pointer
     if (init.kind === 'cdDynStructValue') return this.buildDynStructFromCalldata(struct, init, ctx, out);
     // a DYNAMIC-field struct ELEMENT of a calldata struct array (let d: D = ds[i]): copy the
@@ -13920,10 +13955,12 @@ ${indent(runtime, 6)}
       const e = source.call;
       const sig = e.sig as JethType & { kind: 'funcref' };
       this.ensureFuncRefDispatcher(sig);
+      // Batch C order fix: ARGS first, then the callee id (solc's legacy argument-before-
+      // function-expression order; see the lowerExpr funcRefCall case).
+      const args = this.lowerCallArgs(e.args, ctx, out);
       const idReg = this.lowerExpr(e.ptr, ctx, out);
       const idTmp = this.fresh();
       out.push(`let ${idTmp} := ${idReg}`);
-      const args = this.lowerCallArgs(e.args, ctx, out);
       const n = sig.rets?.length ?? 0;
       const regs = Array.from({ length: n }, () => this.fresh());
       out.push(`let ${regs.join(', ')} := ${this.funcRefDispatcherName(sig)}(${[idTmp, ...args].join(', ')})`);

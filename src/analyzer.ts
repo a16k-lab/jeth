@@ -42,6 +42,8 @@ import {
   isDynStructElemArrayField,
   isStaticStructAnyLeafArray,
   isDynStructLeaf,
+  isDynStructLeafFieldOk,
+  isFuncrefDynStructLeaf,
   isDynStructLeafArrayField,
   isDynLeafTopicArray,
   isStorageCopyableRef,
@@ -757,7 +759,16 @@ export class Analyzer {
       // bytes/string and a nested struct (which may itself be dynamic). A dynamic
       // ARRAY field (T[], string[], T[][]) inside a struct is still deferred (the
       // tuple codec would need an array-in-tuple tail walk we have not verified).
-      if (!isStaticType(t) && !this.isSupportedDynStructField(t)) {
+      // Batch C (F-TYPES t3): a NESTED funcref-bearing DYNAMIC struct field (Outer { fd: Fd }, Fd
+      // itself a supported funcref-bearing dyn-struct memory shape) is ONE head word holding a pointer
+      // to the nested image - exactly the nested-dyn-struct field layout isSupportedDynStructLocal
+      // already admits (its recursion accepts funcref fields, L11a). Admit it at the DECL gate too;
+      // typeHasFuncref recurses through nested structs, so EVERY ABI boundary (external sigs JETH426,
+      // abi.encode* JETH173, events/errors, getters, ctor params) still auto-rejects the whole struct,
+      // byte-identical to solc's "internal type in ABI" reject. Gated on typeHasFuncref so no
+      // non-funcref shape is newly admitted here.
+      const funcrefNestedOk = t.kind === 'struct' && this.typeHasFuncref(t) && this.isSupportedDynStructLocal(t);
+      if (!isStaticType(t) && !this.isSupportedDynStructField(t) && !funcrefNestedOk) {
         this.diags.error(
           member,
           'JETH229',
@@ -7163,6 +7174,17 @@ export class Analyzer {
           if (sc === 'handled') return;
           if (sc) r = sc;
         }
+        // Batch C (F-MULTIRET m2): `return g(a, b)` where the callee evaluates to a MULTI-RETURN
+        // function pointer ((a, b) => [T1, T2]): desugar to the exact destructure-then-return the
+        // tuple-call forward uses (bind temps via the funcRefCall destructure source, forward them),
+        // preserving evaluation order (callee id first, then args left-to-right). Placed BEFORE the
+        // internal-call forward: a funcref-typed callee never matches an internal function name
+        // (resolveFuncRefTupleCall returns 'no' for anything that does not type to a funcref).
+        if (!r && node.expression && ts.isCallExpression(node.expression)) {
+          const fr = this.resolveFuncRefTupleCall(node.expression, rts.length);
+          if (fr === undefined) return; // precise diagnostic already emitted
+          if (fr !== 'no') r = fr;
+        }
         const tcName = !r && node.expression ? this.tupleCallName(node.expression) : undefined;
         if (tcName) {
           const tc = this.resolveTupleCall(node.expression as ts.CallExpression, tcName, rts.length);
@@ -7194,6 +7216,10 @@ export class Analyzer {
             if (isBytesLike(ct)) this.memDynLocals.add(nm);
             else if (ct.kind === 'array' && ct.length === undefined) this.memArrayLocals.add(nm);
             else if (ct.kind === 'array') this.memAggregateLocals.set(nm, ct);
+            // Batch C: a DYNAMIC-field struct component (pointer-headed image) registers as a
+            // memDynStructLocal, exactly like bindDestructure - the forwarded read below then
+            // resolves as a memDynStructValue (the image pointer), not a flat memAggregate.
+            else if (ct.kind === 'struct' && isDynamicType(ct)) this.memDynStructLocals.set(nm, ct);
             else if (ct.kind === 'struct') this.memAggregateLocals.set(nm, ct);
             names.push(nm);
           }
@@ -7211,6 +7237,9 @@ export class Analyzer {
             // Batch B (B2): a FIXED-outer array component forwards as the memAggregate local's
             // image pointer (the same read a `let m: Arr<u256[],N> = ...` local yields).
             else if (ct.kind === 'array') read = { kind: 'memAggregate', type: ct, local: nm };
+            // Batch C: a DYNAMIC-field struct component forwards as its pointer-headed image
+            // (memDynStructValue), the same read a memDynStructLocal yields.
+            else if (ct.kind === 'struct' && isDynamicType(ct)) read = { kind: 'memDynStructValue', type: ct, local: nm };
             else if (ct.kind === 'struct') read = { kind: 'memAggregate', type: ct, local: nm };
             else read = { kind: 'localRead', type: ct, name: nm };
             return this.coerce(read, rts[i]!, node.expression!);
@@ -7453,6 +7482,21 @@ export class Analyzer {
         const fsig = this.funcrefStateCallSig(e);
         if (fsig) {
           const c = this.checkFuncRefCallStmt(e, fsig);
+          if (c) out.push(c);
+          return;
+        }
+      }
+      // Batch C (F-CALLEE / F-MULTIRET m1): a statement call whose CALLEE EXPRESSION types to a
+      // funcref - a parenthesized ternary ((c ? this.a : this.b)(v);), a chained call
+      // (this.pick(c)(v);), a struct-field chain ((c ? a : b).f(v);), an element (arr[i](v);).
+      // Single/void results are discarded; a MULTI-RETURN pointer call in statement position is
+      // evaluated for side effects and its components dropped (solc parity). A `this.f(...)`
+      // internal/external call never types to a funcref here (the deep resolver's trial fails for
+      // a function name without an expected funcref), so those keep their branches below.
+      if (ts.isCallExpression(e)) {
+        const csig = this.funcrefCalleeSigDeep(e.expression);
+        if (csig) {
+          const c = this.checkFuncRefCallStmt(e, csig);
           if (c) out.push(c);
           return;
         }
@@ -10376,6 +10420,10 @@ export class Analyzer {
             e.kind === 'arrayGet' ||
             e.kind === 'ternary' ||
             (e.kind === 'call' && e.type.kind === 'struct') ||
+            // Batch C (F-TYPES t1): a call THROUGH a struct-returning function pointer (let d: D =
+            // g(v)): the dispatcher forwards the callee's pointer-headed image pointer, exactly an
+            // ordinary internal call's struct return (ALIAS semantics identical to the 'call' case).
+            (e.kind === 'funcRefCall' && e.type.kind === 'struct') ||
             (e.kind === 'placeRead' && e.type.kind === 'struct') ||
             // a whole NESTED DYNAMIC struct FIELD of a dyn-struct memory local (let t: T = v.t / v.t.u):
             // the field head word holds an absolute pointer to the nested image, so binding ALIASES it
@@ -10447,6 +10495,9 @@ export class Analyzer {
         e.kind === 'structNew' ||
         e.kind === 'memAggregate' ||
         (e.kind === 'call' && e.type.kind === 'struct') ||
+        // Batch C (F-TYPES t1): a call through a STRUCT-returning function pointer (let r: In =
+        // g(v)) binds the dispatcher-forwarded image pointer, exactly like an internal call result.
+        (e.kind === 'funcRefCall' && e.type.kind === 'struct') ||
         // Phase B / interface: a struct-returning external call (delegatecall library / interface call),
         // decoded from returndata into a memory image (the ABI struct decode yields a memAggregate-shaped
         // local). The struct type is validated by the checkExpr expected-type above.
@@ -10485,6 +10536,7 @@ export class Analyzer {
           e.kind === 'structArrayElem' ||
           e.kind === 'cdStructArrayElem' ||
           e.kind === 'arrayGet' ||
+          e.kind === 'funcRefCall' ||
           e.kind === 'aggFieldRead') &&
         (e.type.kind !== 'struct' ||
           (e.type as JethType & { kind: 'struct' }).name !== (declared as JethType & { kind: 'struct' }).name)
@@ -10601,6 +10653,9 @@ export class Analyzer {
       // ALIASES the selected pointer, exactly solc's `c ? x : y` reference selection) and binds
       // the selected pointer - short-circuit, byte-identical to solc.
       const fromTernary = e.kind === 'ternary';
+      // Batch C (F-TYPES t2): a nested-value-array-returning function pointer call (let m: u256[][]
+      // = g(v)) binds the dispatcher-forwarded image pointer (alias, like an internal call result).
+      const fromFuncRefCall = e.kind === 'funcRefCall';
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -10610,7 +10665,8 @@ export class Analyzer {
         !fromCdField &&
         !fromMemAggAlias &&
         !fromMemFieldRead &&
-        !fromTernary
+        !fromTernary &&
+        !fromFuncRefCall
       ) {
         this.diags.error(
           decl.initializer,
@@ -10660,6 +10716,9 @@ export class Analyzer {
         e.kind === 'ternary' ||
         e.kind === 'abiDecode' ||
         (e.kind === 'call' && e.type.kind === 'array') ||
+        // Batch C (F-TYPES t2): a fixed-array-returning function pointer call (let a: Arr<u256,3> =
+        // g(v)) binds the dispatcher-forwarded image pointer, like an internal call result.
+        (e.kind === 'funcRefCall' && e.type.kind === 'array') ||
         fromStorage;
       if (!okInit) {
         this.diags.error(
@@ -10691,7 +10750,14 @@ export class Analyzer {
         isStaticStructFixedLeafArray(declared) ||
         isDynBytesFixedLeafArray(declared) ||
         isDynStructFixedLeafArray(declared) ||
-        (isStaticStructAnyLeafArray(declared) && declared.length === undefined))
+        (isStaticStructAnyLeafArray(declared) && declared.length === undefined) ||
+        // Batch C (F-CONSUMERS c2): a DYNAMIC-outer array of a FUNCREF-BEARING dyn-struct element
+        // (Fd[]): the same pointer-headed [len][per-element pointer] image a P[] local uses (each
+        // element -> a per-element dyn-struct image; a funcref field is one inline id word, laid out
+        // like uint256). MEMORY LOCALS only - every ABI consumer of Fd[] (encode / return / event /
+        // error / storage push) independently rejects via the typeHasFuncref gates. A FIXED outer
+        // (Arr<Fd,N>) stays a clean JETH427 reject below (its fixed codec is unverified).
+        (declared.length === undefined && this.isFuncrefDynStructLeaf(declared.element)))
       // Lift #4: a FIXED-outer array whose leaf is a DYNAMIC struct (Arr<In,N>, In dynamic,
       // isDynStructFixedLeafArray) IS now admitted. Its memAggregate image is N absolute-pointer words
       // (no [len] header), each -> a per-element dyn-struct image; the element-read resolver
@@ -10811,6 +10877,9 @@ export class Analyzer {
       // pointer-headed copy via aggArgToMemPtr's ternary transcode (RC-2) - solc's storage/literal
       // branch conversion-to-memory semantics.
       const fromTernary = e.kind === 'ternary';
+      // Batch C (F-TYPES t2): an aggregate-array-returning function pointer call (let r: In[] =
+      // g(v)) binds the dispatcher-forwarded image pointer (alias), like an internal call result.
+      const fromFuncRefCall = e.kind === 'funcRefCall';
       if (
         e.kind !== 'arrayLit' &&
         e.kind !== 'newArray' &&
@@ -10825,7 +10894,8 @@ export class Analyzer {
         !fromCdParam &&
         !fromCdPlaceAgg &&
         !fromStoragePlace &&
-        !fromTernary
+        !fromTernary &&
+        !fromFuncRefCall
       ) {
         this.diags.error(
           decl.initializer,
@@ -11789,17 +11859,24 @@ export class Analyzer {
     node: ts.CallExpression,
     sig: JethType & { kind: 'funcref' },
     forDestructure = false,
+    asStatement = false,
   ): (Expr & { kind: 'funcRefCall' }) | undefined {
-    const ptr = this.checkExpr(node.expression);
+    // Batch C (F-CALLEE): check the callee WITH the derived signature as the expected type, so a
+    // callee EXPRESSION containing address-take forms resolves them (a parenthesized ternary
+    // `(c ? this.inc : this.dec)(v)` types each branch against the expected funcref, exactly like
+    // the `let g: F = c ? this.inc : this.dec` binding). A local/field/element callee ignores the
+    // hint and resolves as before; the typesEqual guard below still validates whatever came back.
+    const ptr = this.checkExpr(node.expression, sig);
     if (!ptr) return undefined;
     if (ptr.type.kind !== 'funcref' || !typesEqual(ptr.type, sig)) {
       this.diags.error(node.expression, 'JETH424', `this value is not callable as ${displayName(sig)}`);
       return undefined;
     }
-    // L10b: a MULTI-RETURN pointer call yields N components - only the tuple-destructure form consumes
-    // it (`let [a, b] = g(...)` / `[a, b] = g(...)`); a value/statement position stays a clean reject
-    // (a discarded multi-return dispatcher call is not even valid Yul).
-    if (sig.rets && !forDestructure) {
+    // L10b: a MULTI-RETURN pointer call yields N components - the tuple-destructure form consumes
+    // them, and (Batch C, m1) a STATEMENT position evaluates the call and discards them (the
+    // lowering binds the components to unused temps, solc parity). A VALUE position stays a clean
+    // reject (the components have no single-value reading).
+    if (sig.rets && !forDestructure && !asStatement) {
       this.diags.error(
         node,
         'JETH244',
@@ -11823,7 +11900,10 @@ export class Analyzer {
     }
     // L10b: each multi-return component must be a shape the destructure binder supports (the same set an
     // internal multi-value call destructure admits) - the dispatcher forwards each return word unchanged.
-    if (sig.rets && !sig.rets.every((t) => this.destructurableComponent(t))) {
+    // Batch C: a SUPPORTED dyn-struct component (incl. funcref-bearing Fd) is admitted exactly like the
+    // internal tuple-call lift (c1) - the dispatcher forwards the component's image pointer word and
+    // bindDestructure registers the memDynStructLocal; ABI boundaries reject independently (JETH426).
+    if (sig.rets && !sig.rets.every((t) => this.destructurableComponent(t) || (t.kind === 'struct' && this.isSupportedDynStructLocal(t)))) {
       this.diags.error(
         node,
         'JETH425',
@@ -11953,9 +12033,10 @@ export class Analyzer {
   }
 
   /** A call through a function pointer in STATEMENT position (`f(v);`): the result (if any) is discarded.
+   *  Batch C (m1): a MULTI-RETURN pointer call is allowed here - evaluated, components dropped.
    *  Returns the wrapping exprStmt. */
   private checkFuncRefCallStmt(node: ts.CallExpression, sig: JethType & { kind: 'funcref' }): Stmt | undefined {
-    const c = this.buildFuncRefCall(node, sig);
+    const c = this.buildFuncRefCall(node, sig, false, true);
     if (!c) return undefined;
     return { kind: 'exprStmt', expr: c };
   }
@@ -11968,6 +12049,56 @@ export class Analyzer {
   private funcrefCalleeSig(callee: ts.Expression): (JethType & { kind: 'funcref' }) | undefined {
     const t = this.trialExprType(callee);
     return t && t.kind === 'funcref' ? (t as JethType & { kind: 'funcref' }) : undefined;
+  }
+
+  /** Batch C (F-CALLEE): the funcref signature of a GENERAL callee expression - a parenthesized
+   *  ternary of address-takes / funcref values ((c ? this.inc : this.dec)), a chained call
+   *  (this.pick(c)), a struct-field / element chain, or any expression that trial-types to a
+   *  funcref. A TERNARY derives each branch's signature (an address-take form via its unique
+   *  target's funcRefTypeOf - multi-return targets included - else recursively / via a trial) and
+   *  requires the two to agree (solc's branch unification; a mismatch falls through to the generic
+   *  reject). A bare address-take FORM at the top level (`(this.inc)(v)`) deliberately returns
+   *  undefined: that is a direct call, owned by the ordinary internal-call resolvers. */
+  private funcrefCalleeSigDeep(callee: ts.Expression): (JethType & { kind: 'funcref' }) | undefined {
+    let node: ts.Expression = callee;
+    while (ts.isParenthesizedExpression(node)) node = node.expression;
+    if (this.isAddressTakeForm(node)) return undefined; // a direct call `(this.f)(v)` stays a direct-call concern
+    if (ts.isConditionalExpression(node)) {
+      const branchSig = (b: ts.Expression): (JethType & { kind: 'funcref' }) | undefined => {
+        let e: ts.Expression = b;
+        while (ts.isParenthesizedExpression(e)) e = e.expression;
+        if (this.isAddressTakeForm(e)) return this.addressTakeFuncrefTypeAny(e);
+        if (ts.isConditionalExpression(e)) return this.funcrefCalleeSigDeep(e);
+        return this.funcrefCalleeSig(e);
+      };
+      const a = branchSig(node.whenTrue);
+      const bsig = branchSig(node.whenFalse);
+      if (a && bsig && typesEqual(a, bsig)) return a;
+      return undefined;
+    }
+    return this.funcrefCalleeSig(node);
+  }
+
+  /** The funcref TYPE of an address-take form (`f` / `this.f`) for a UNIQUELY-named internal
+   *  function, INCLUDING a multi-value-return target (rets carried, unlike addressTakeFuncrefType,
+   *  whose == / comparison consumers have no multi-return reading). Used to type a ternary BRANCH
+   *  of a funcref callee expression, where a multi-return signature is meaningful (statement
+   *  discard / destructure / return-forward). */
+  private addressTakeFuncrefTypeAny(node: ts.Expression): (JethType & { kind: 'funcref' }) | undefined {
+    let name: string | undefined;
+    if (ts.isIdentifier(node) && !this.isVisibleLocal(node.text)) name = node.text;
+    else if (
+      ts.isPropertyAccessExpression(node) &&
+      node.expression.kind === ts.SyntaxKind.ThisKeyword &&
+      ts.isIdentifier(node.name)
+    )
+      name = node.name.text;
+    if (name === undefined || this.stateByName.has(name)) return undefined;
+    const candidates = this.candidatesByName.get(name);
+    if (!candidates || candidates.length !== 1) return undefined;
+    const rf = candidates[0]!;
+    if (rf.visibility === 'external') return undefined;
+    return this.funcRefTypeOf(rf) as JethType & { kind: 'funcref' };
   }
 
   /** The funcref signature of a callee expression whose VALUE is a function pointer, when the callee is
@@ -12217,7 +12348,12 @@ export class Analyzer {
       );
       return undefined;
     }
-    if (callee.returnTypes) {
+    // Batch C (F-MULTIRET m1b): a multi-value-return internal call in STATEMENT position
+    // (`this.two(x);`) is evaluated for its side effects and the components are discarded, exactly
+    // like solc. The callStmt lowering binds the N return values to unused temps (`let r0, r1 :=
+    // userfn(...)`). A VALUE-position multi-return call keeps the clean JETH241 reject (it must be
+    // destructured / forwarded via the tuple machinery).
+    if (callee.returnTypes && !asStatement) {
       this.diags.error(
         node,
         'JETH241',
@@ -12283,6 +12419,9 @@ export class Analyzer {
     }
     const rt = callee.returnType;
     const returnSupported =
+      // Batch C (m1b): a statement-position multi-return call discards every component, so the
+      // single-return support check does not apply (returnType is not the call's value here).
+      (asStatement && !!callee.returnTypes) ||
       rt.kind === 'void' ||
       isStaticValueType(rt) ||
       funcRefOK(rt) ||
@@ -13016,7 +13155,16 @@ export class Analyzer {
       const arrOk =
         t.kind === 'array' &&
         (isNestedValueWordArray(t) || (t.length !== undefined && isValueWord(t.element)));
-      if (!this.destructurableComponent(t) && !arrOk) {
+      // Batch C (F-CONSUMERS c1): an INTERNAL tuple call additionally admits a SUPPORTED
+      // DYNAMIC-field struct component (incl. a funcref-bearing Fd, L11a): the callee's returnTuple
+      // materializes the component to its canonical pointer-headed image (aggArgToMemPtr's
+      // dyn-struct branch -> buildDynStructLocal) and the destructure binds/ALIASES the returned
+      // pointer (bindDestructure registers memDynStructLocals). Internal-only: the ABI-boundary
+      // tuple sources (external self-call, interface, @external library) keep gating on
+      // destructurableComponent/decodeSupported, and an @external signature bearing such a type is
+      // independently rejected (JETH426 typeHasFuncref / the ABI shape gates).
+      const dynStructOk = t.kind === 'struct' && this.isSupportedDynStructLocal(t);
+      if (!this.destructurableComponent(t) && !arrOk && !dynStructOk) {
         this.diags.error(
           node,
           'JETH243',
@@ -13281,7 +13429,9 @@ export class Analyzer {
     n: number,
   ): { types: JethType[]; source: DestructureSource } | undefined | 'no' {
     if (!ts.isCallExpression(init)) return 'no';
-    const sig = this.funcrefCalleeSig(init.expression);
+    // Batch C: the DEEP resolver also derives a parenthesized-ternary / chained-call callee's
+    // signature (let [a, b] = (c ? this.two : this.three)(x)), exactly like the call routing.
+    const sig = this.funcrefCalleeSigDeep(init.expression);
     if (!sig || !sig.rets) return 'no';
     if (sig.rets.length !== n) {
       this.diags.error(
@@ -13850,7 +14000,9 @@ export class Analyzer {
       !arr ||
       (arr.base.kind !== 'memArray' && arr.base.kind !== 'memArrayExpr') ||
       arr.elem.kind !== 'struct' ||
-      !isDynStructLeaf(arr.elem)
+      // Batch C (c2): a FUNCREF-BEARING dyn-struct element (Fd[]) rides the same pointer-headed
+      // element image; its funcref field reads as one inline id word (the branch below).
+      !(isDynStructLeaf(arr.elem) || this.isFuncrefDynStructLeaf(arr.elem))
     )
       return undefined;
     const struct = arr.elem as JethType & { kind: 'struct' };
@@ -13871,7 +14023,11 @@ export class Analyzer {
       .slice(0, fidx)
       .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
     const base: Expr = { kind: 'arrayGet', type: struct, arr, index: idx };
-    if (isStaticValueType(f.type)) return { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord };
+    // Batch C (c2): a FUNCREF field of an Fd[] element (arr[i].f) is ONE inline id word - mload it
+    // exactly like a static value field (the aggFieldRead funcref-leaf lowering); a following
+    // arr[i].f(v) dispatches through the loaded id.
+    if (isStaticValueType(f.type) || f.type.kind === 'funcref')
+      return { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord };
     if (isBytesLike(f.type)) return { kind: 'aggFieldRead', type: f.type, base, wordOffset: headWord, deref: true };
     if (
       f.type.kind === 'array' &&
@@ -14003,6 +14159,17 @@ export class Analyzer {
   private registerAggregateModifierParam(name: string, t: JethType): void {
     if (isStaticValueType(t)) return;
     this.registerAggregateCtorParam(name, t);
+  }
+
+  /** Batch C (F-CONSUMERS c2): the funcref TWIN of types.isDynStructLeaf - a funcref-BEARING
+   *  dynamic-field struct whose every field is either a funcref (ONE inline id word, laid out like
+   *  a uint256 head word) or an isDynStructLeaf-admissible field. Marks exactly the Fd-shaped
+   *  ELEMENT structs a memory Fd[] literal / element read supports; deliberately SEPARATE from
+   *  isDynStructLeaf so the ABI codec routes keyed on that predicate keep rejecting funcref-bearing
+   *  arrays (every ABI boundary independently re-rejects via typeHasFuncref). Delegates to the
+   *  types.ts twin so the yul arrayLit gate stays byte-parallel. */
+  private isFuncrefDynStructLeaf(t: JethType): boolean {
+    return isFuncrefDynStructLeaf(t);
   }
 
   /** A dynamic-field struct is supported as a MEMORY local only when every field is a value
@@ -14238,8 +14405,11 @@ export class Analyzer {
         const ft = nf.field.type;
         // W5C: a FIXED-outer dynamic-element field (Arr<string,N>) re-points like any dynamic-array field
         // (deref: the RHS materializes to its N-pointer image and the deref'd head word re-points).
+        // Batch C (t3): a FUNCREF leaf (o.fd.f = this.dec) is ONE inline id word - a plain mstore of
+        // the RHS address-take's id at the deref'd field word (deref=false, exactly a value leaf).
         if (
           isStaticValueType(ft) ||
+          ft.kind === 'funcref' ||
           isBytesLike(ft) ||
           (ft.kind === 'array' && (ft.length === undefined || isDynLeafFixedArray(ft)))
         ) {
@@ -14249,7 +14419,7 @@ export class Analyzer {
             local: nf.rootLocal,
             derefWords: nf.derefWords,
             finalWord: nf.finalWord,
-            deref: !isStaticValueType(ft),
+            deref: !isStaticValueType(ft) && ft.kind !== 'funcref',
           };
         }
         // a nested static-aggregate field write / whole nested-dyn-struct re-point is rare; left a clean reject.
@@ -15022,7 +15192,16 @@ export class Analyzer {
     // L11a: a FUNCREF field (one inline id word) is returnable from an INTERNAL function (the return
     // is the pointer-headed image pointer, fields untouched); an @external return of any funcref-
     // bearing type is still rejected by the dedicated JETH426 signature gate in checkFunction.
-    return t.fields.every((f) => isStaticType(f.type) || f.type.kind === 'funcref' || this.isSupportedDynStructField(f.type));
+    // Batch C (t3): a NESTED funcref-bearing dyn-struct field (Outer { fd: Fd }) is one pointer
+    // head word into the same image machinery, so Outer is internally returnable too; the external
+    // boundary stays independently guarded (JETH426 typeHasFuncref).
+    return t.fields.every(
+      (f) =>
+        isStaticType(f.type) ||
+        f.type.kind === 'funcref' ||
+        this.isSupportedDynStructField(f.type) ||
+        (f.type.kind === 'struct' && this.typeHasFuncref(f.type) && this.isSupportedDynStructLocal(f.type)),
+    );
   }
 
   private containsDynElemArray(t: JethType): boolean {
@@ -16466,7 +16645,8 @@ export class Analyzer {
       !!arr &&
       (arr.base.kind === 'memArray' || arr.base.kind === 'memArrayExpr') &&
       arr.elem.kind === 'struct' &&
-      isDynStructLeaf(arr.elem)
+      // Batch C (c2): a FUNCREF-BEARING dyn-struct element (Fd[]) rides the same pointer-headed route.
+      (isDynStructLeaf(arr.elem) || this.isFuncrefDynStructLeaf(arr.elem))
     );
   }
 
@@ -18438,13 +18618,20 @@ export class Analyzer {
     // callee expression evaluates to a funcref (a funcref-array element, or a funcref struct field). The
     // element/field is read (its id word), then dispatched, exactly like a funcref local. Recognized here
     // for an ElementAccess / (non-this) PropertyAccess callee; `this.p(v)` (state field) is FIX 1 above.
+    // Batch C (F-CALLEE): ALSO a PARENTHESIZED callee ((c ? this.inc : this.dec)(v) - the deep resolver
+    // derives the ternary's signature from its branches) and a CHAINED-CALL callee (this.pick(c)(v) -
+    // an internal call returning a funcref). The deep resolver refuses a bare address-take form
+    // ((this.f)(v) stays a direct call) and anything that does not type to a funcref, so the ordinary
+    // internal/builtin call resolvers below keep everything else.
     if (
       ts.isCallExpression(node) &&
       (ts.isElementAccessExpression(node.expression) ||
+        ts.isParenthesizedExpression(node.expression) ||
+        ts.isCallExpression(node.expression) ||
         (ts.isPropertyAccessExpression(node.expression) &&
           node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword))
     ) {
-      const csig = this.funcrefCalleeSig(node.expression);
+      const csig = this.funcrefCalleeSigDeep(node.expression);
       if (csig) return this.checkFuncRefCall(node, csig);
     }
 
@@ -19278,7 +19465,10 @@ export class Analyzer {
       // a nested-dynamic-leaf array (Residual B4: new Array<bytes[]>(n) -> bytes[][]; each element
       // zero-inits to a fresh empty inner array [0]). solc zero-inits each outer element accordingly.
       const aggLeafElem =
-        (elem.kind === 'struct' && (isStaticType(elem) || isDynStructLeaf(elem))) ||
+        // Batch C (c2): a FUNCREF-BEARING dyn-struct element (new Array<Fd>(n)) zero-inits each
+        // element like the B3 dyn-struct case (a funcref field zero-inits to id 0, the null pointer
+        // whose call Panics 0x51 - exactly solc's zero-initialized internal function pointer).
+        (elem.kind === 'struct' && (isStaticType(elem) || isDynStructLeaf(elem) || this.isFuncrefDynStructLeaf(elem))) ||
         isBytesLike(elem) ||
         isAggregateLeafArray(elem) || // B4: a nested-dynamic-leaf array element (bytes[][], ...); P[]/P[][]
         isStaticStructFixedLeafArray(elem); // Batch A: a fixed static-struct array element (Arr<P,N>[])
@@ -19334,6 +19524,9 @@ export class Analyzer {
         (expected.element.kind === 'array' && isStaticStructAnyLeafArray(expected.element)) || // Batch A: P[][] etc. inner
         (expected.element.kind === 'struct' && isStaticType(expected.element)) || // B1
         (expected.element.kind === 'struct' && isDynStructLeaf(expected.element)) || // B3 dynamic-field struct
+        // Batch C (c2): a FUNCREF-BEARING dyn-struct element (Fd[] literal) - the same pointer-headed
+        // per-element image as B3 (a funcref field is one inline id word). Memory-local scope only.
+        (expected.element.kind === 'struct' && this.isFuncrefDynStructLeaf(expected.element)) ||
         isBytesLike(expected.element); // B2
       if (expected.length === undefined && !okElem) {
         this.diags.error(
@@ -19458,7 +19651,10 @@ export class Analyzer {
       const nf = this.memDynNestedField(node);
       if (nf) {
         const ft = nf.field.type;
-        if (isStaticValueType(ft))
+        // Batch C (F-TYPES t3): a FUNCREF leaf of a nested funcref-bearing struct (o.fd.f) is ONE
+        // inline id word at the deref'd head word - read it exactly like a static value leaf, typed
+        // funcref so a following o.fd.f(v) dispatches through the loaded id.
+        if (isStaticValueType(ft) || ft.kind === 'funcref')
           return { kind: 'memDynNestedField', type: ft, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord };
         if (ft.kind === 'array' && ft.length === undefined) {
           const load: Expr = { kind: 'memDynNestedField', type: U256, local: nf.rootLocal, derefWords: nf.derefWords, finalWord: nf.finalWord };
@@ -19541,6 +19737,39 @@ export class Analyzer {
             return undefined;
           }
           return { kind: 'aggFieldRead', type: fo.type, base, wordOffset: fo.wordOffset };
+        }
+      }
+    }
+    // Batch C (F-CALLEE b/c): a FUNCREF FIELD read on a struct-valued EXPRESSION base - a
+    // parenthesized ternary of struct values ((c ? a : b).f) or a struct-returning call result
+    // (this.mk().f, mk returning a funcref-bearing struct: dynamic Fd or a funcref-value static
+    // shape, both excluded from the static-call block above by isStaticType). The funcref field is
+    // ONE inline id word at the struct's head-word offset (dyn layout: a dynamic field takes 1
+    // pointer word, a value/static field abiHeadWords - the same reduce memDynStructField uses), so
+    // read it via aggFieldRead over the materialized base (aggToMemPtr handles 'ternary' and 'call'
+    // bases: the ternary selects the taken branch's image pointer, the call forwards the callee's
+    // image pointer). Scoped to FUNCREF final fields on funcref-bearing supported struct shapes;
+    // every other field kind keeps its existing path/reject.
+    if (ts.isPropertyAccessExpression(node)) {
+      let fb: ts.Expression = node.expression;
+      while (ts.isParenthesizedExpression(fb)) fb = fb.expression;
+      if (ts.isConditionalExpression(fb) || ts.isCallExpression(fb)) {
+        const bt = this.trialExprType(node.expression);
+        if (
+          bt &&
+          bt.kind === 'struct' &&
+          this.typeHasFuncref(bt) &&
+          (isFuncrefValueAggregate(bt) || this.isSupportedDynStructLocal(bt))
+        ) {
+          const fidx = bt.fields.findIndex((ff) => ff.name === node.name.text);
+          if (fidx >= 0 && bt.fields[fidx]!.type.kind === 'funcref') {
+            const base = this.checkExpr(node.expression);
+            if (!base) return undefined;
+            const headWord = bt.fields
+              .slice(0, fidx)
+              .reduce((n, ff) => n + (isDynamicType(ff.type) ? 1 : abiHeadWords(ff.type)), 0);
+            return { kind: 'aggFieldRead', type: bt.fields[fidx]!.type, base, wordOffset: headWord };
+          }
         }
       }
     }

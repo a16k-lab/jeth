@@ -655,25 +655,46 @@ export function isDynStructLeafArrayField(t: JethType): boolean {
  *  Analyzer instance). Static-array / nested-struct / struct-element-array fields stay gated. */
 export function isDynStructLeaf(t: JethType): boolean {
   if (t.kind !== 'struct' || !isDynamicType(t)) return false;
-  return t.fields.every(
-    (f) =>
-      isStaticValueType(f.type) ||
-      isBytesLike(f.type) ||
-      (f.type.kind === 'array' && f.type.length === undefined && isStaticValueType(f.type.element)) ||
-      isDynStructLeafArrayField(f.type) ||
-      // W5C: a FIXED-outer DYNAMIC-element array field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N> and
-      // nested mixes): ONE head word holding an absolute pointer to the N-pointer-word fixed image (the
-      // isDynLeafFixedArray layout the P1-7/Edge-D codecs build/read). Keep byte-parallel with
-      // Analyzer.isSupportedDynStructLocal.
-      isDynLeafFixedArray(f.type) ||
-      // Lift #4 mirror of Analyzer.isSupportedDynStructLocal: a FIXED-outer DYNAMIC-STRUCT array field
-      // (Arr<In,N>) - one head word -> the N-pointer fixed image (each -> a per-element dyn-struct image).
-      isDynStructFixedLeafArray(f.type) ||
-      // B(1) mirror of Analyzer.isSupportedDynStructLocal: a NESTED STATIC AGGREGATE field (nested static
-      // struct / static fixed array Arr<T,N>) stored INLINE as flattened head words. Keep byte-parallel.
-      (f.type.kind === 'struct' && isStaticType(f.type)) ||
-      (f.type.kind === 'array' && f.type.length !== undefined && isStaticType(f.type)),
+  return t.fields.every((f) => isDynStructLeafFieldOk(f.type));
+}
+
+/** The per-FIELD predicate of isDynStructLeaf, factored so the funcref twin
+ *  (Analyzer.isFuncrefDynStructLeaf: the same field set plus a funcref id-word field) stays
+ *  byte-parallel without widening isDynStructLeaf itself (whose users include ABI codec routes
+ *  that must keep rejecting funcref-bearing shapes). Semantics of isDynStructLeaf are unchanged. */
+export function isDynStructLeafFieldOk(ft: JethType): boolean {
+  return (
+    isStaticValueType(ft) ||
+    isBytesLike(ft) ||
+    (ft.kind === 'array' && ft.length === undefined && isStaticValueType(ft.element)) ||
+    isDynStructLeafArrayField(ft) ||
+    // W5C: a FIXED-outer DYNAMIC-element array field (Arr<string,N>/Arr<bytes,N>/Arr<u256[],N> and
+    // nested mixes): ONE head word holding an absolute pointer to the N-pointer-word fixed image (the
+    // isDynLeafFixedArray layout the P1-7/Edge-D codecs build/read). Keep byte-parallel with
+    // Analyzer.isSupportedDynStructLocal.
+    isDynLeafFixedArray(ft) ||
+    // Lift #4 mirror of Analyzer.isSupportedDynStructLocal: a FIXED-outer DYNAMIC-STRUCT array field
+    // (Arr<In,N>) - one head word -> the N-pointer fixed image (each -> a per-element dyn-struct image).
+    isDynStructFixedLeafArray(ft) ||
+    // B(1) mirror of Analyzer.isSupportedDynStructLocal: a NESTED STATIC AGGREGATE field (nested static
+    // struct / static fixed array Arr<T,N>) stored INLINE as flattened head words. Keep byte-parallel.
+    (ft.kind === 'struct' && isStaticType(ft)) ||
+    (ft.kind === 'array' && ft.length !== undefined && isStaticType(ft))
   );
+}
+
+/** Batch C (F-CONSUMERS c2): the funcref TWIN of isDynStructLeaf - a funcref-BEARING dynamic-field
+ *  struct whose every field is either a funcref (ONE inline id word, laid out like a uint256 head
+ *  word) or an isDynStructLeaf-admissible field. Note the funcref-presence test is a direct-field
+ *  `some`: no funcref can hide DEEPER inside an isDynStructLeafFieldOk-passing field (every nested
+ *  aggregate there requires isStaticType / value leaves, both false for funcref-bearing shapes), so
+ *  this is exactly "typeHasFuncref AND otherwise isDynStructLeaf". Kept SEPARATE from
+ *  isDynStructLeaf so every ABI codec route keyed on that predicate keeps rejecting funcref-bearing
+ *  arrays; the internal memory-local sites opt in explicitly. */
+export function isFuncrefDynStructLeaf(t: JethType): boolean {
+  if (t.kind !== 'struct' || !isDynamicType(t)) return false;
+  if (!t.fields.some((f) => f.type.kind === 'funcref')) return false;
+  return t.fields.every((f) => f.type.kind === 'funcref' || isDynStructLeafFieldOk(f.type));
 }
 
 /** storage-to-mem-copy scope: a REFERENCE type (`let row: bytes[] = this.blobs`) whose deep copy
