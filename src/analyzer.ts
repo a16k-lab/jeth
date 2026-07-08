@@ -517,6 +517,27 @@ export class Analyzer {
     for (const [nm, rf] of hidden.funcs) this.funcsByName.set(nm, rf);
   }
 
+  /** JETH is a strict TS subset, so a TS SYNTACTIC parse error means the source is malformed. But JETH
+   *  DELIBERATELY relies on TS error-recovery in two ways: (a) `abi.decode(b, T[])` uses a bare array
+   *  TYPE in value position (TS code 1011, "element access should take an argument") - a VALID feature
+   *  the analyzer handles; (b) malformed shapes the analyzer REJECTS semantically with a specific code
+   *  (e.g. `constructor() A(2n)` -> JETH379). We must not disturb either. The danger case (BYTE-SLICE-MC)
+   *  is a malformed source the analyzer SILENTLY ACCEPTS: the non-JETH colon-slice `x[s:e][j]` is not
+   *  valid TS - the parser recovers it into a truncated `x[s]` (dropping `:e][j]`), compiled to the
+   *  wrong byte with no bounds check. So: fire ONLY when the analyzer produced NO errors of its own and
+   *  a NON-1011 parse diagnostic exists (a silently-accepted malformed program). Called at the end of
+   *  analyze() so the analyzer's own semantic rejects take precedence. */
+  private rejectSilentlyAcceptedSyntaxErrors(): void {
+    if (this.diags.hasErrors) return; // the analyzer already rejected: let its specific code stand
+    const pd = (this.sourceFile as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics;
+    if (!pd) return;
+    for (const d of pd) {
+      if (d.code === 1011) continue; // JETH's intentional `T[]` array-type-in-value-position syntax
+      const msg = typeof d.messageText === 'string' ? d.messageText : d.messageText.messageText;
+      this.diags.errorAtPos(d.start ?? 0, d.length ?? 1, 'JETH003', `syntax error: ${msg}`);
+    }
+  }
+
   analyze(): ContractIR | undefined {
     this.rejectEmptyHexLiterals(); // lexer-level: `0x`/`0X` with no hex digits is a parse error in any context
     this.collectTypeAliases(); // branded newtypes, before structs (a struct field may use one)
@@ -538,7 +559,11 @@ export class Analyzer {
     this.registerContractClasses();
     const lin = this.linearize(classes[0]!);
     if (!lin) return undefined; // a C3-impossible base order was reported
-    return this.analyzeContract(classes[0]!, lin);
+    const ir = this.analyzeContract(classes[0]!, lin);
+    // LAST: if the analyzer accepted the source but TS saw a (non-1011) syntax error, the AST was
+    // silently error-recovered into something else (BYTE-SLICE-MC) - reject instead of miscompiling.
+    this.rejectSilentlyAcceptedSyntaxErrors();
+    return ir;
   }
 
   /** Collect `type X = Brand<BaseValueType>` branded-newtype aliases. A branded type is a

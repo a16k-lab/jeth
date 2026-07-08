@@ -59,6 +59,15 @@ export class DiagnosticBag {
     this.items.push({ severity: 'error', code, message, file: this.fileName, ...loc });
   }
 
+  /** Emit an error at a RAW source position (start offset + length) rather than a node. Used for
+   *  TS parse (syntactic) diagnostics, which carry a position but no analyzer AST node. */
+  errorAtPos(start: number, length: number, code: string, message: string): void {
+    const { line, character } = this.sourceFile.getLineAndCharacterOfPosition(start);
+    const loc = { line: line + 1, column: character + 1, length: Math.max(1, length) };
+    if (this.isDuplicate('error', code, message, loc)) return;
+    this.items.push({ severity: 'error', code, message, file: this.fileName, ...loc });
+  }
+
   warn(node: ts.Node, code: string, message: string): void {
     const loc = this.at(node);
     if (this.isDuplicate('warning', code, message, loc)) return;
