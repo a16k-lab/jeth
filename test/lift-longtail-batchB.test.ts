@@ -548,14 +548,19 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
       ['bnd(bool,uint256)', W(0) + W(9)],
       ['pck()', ''],
     ] as const);
-    // gates: BARE literals keep rejecting (L2-MOBILE), the cast+bare mix stays a deliberate
-    // reject, cross-family casts both-reject, mixed bytesN widths and enum elements stay rejects.
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([1n, 2n]); } }`)).toBe(true);
+    // OR cluster 4 lifted both bare-literal and mixed-bytesN self-typing. BARE integer-literal arrays
+    // now self-type to solc's mobile common type (all-nonneg -> u256, all-neg -> i256): abi.encode and
+    // encodePacked pad every element to a 32-byte word regardless of width, so the encoding is
+    // width-independent and byte-identical to solc's uint8[2]/etc. Mixed bytesN widths widen (A-LIT-RESID).
+    // Still rejected: the cast+BARE MIX (a cast fixes one width, a bare literal is mobile - no common
+    // type), CROSS-FAMILY casts (u8|i16, no common type), MIXED-SIGN bare literals, and enum elements.
+    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([1n, 2n]); } }`)).toBe(false);
     expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([u256(1n), 2n]); } }`)).toBe(true);
     expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([u8(1n), i16(2n)]); } }`)).toBe(true);
+    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([1n, -1n]); } }`)).toBe(true);
     expect(
       rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([bytes4(0x11223344n), bytes8(0x1122334455667788n)]); } }`),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       rejects(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(): bytes { return abi.encode([Color.Green, Color.Blue]); } }`),
     ).toBe(true);

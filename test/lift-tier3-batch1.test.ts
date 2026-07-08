@@ -117,8 +117,11 @@ contract C {
       ['lv(bool,uint256,uint256)', W(1) + W(9) + W(1)], // OOB parity
       ['lvEff(bool)', W(1)], ['g()', ''],
     ] as const);
-    // bare-int-literal elements must NOT self-type (solc's mobile type is uint8, not u256).
-    expect(rejects(`@contract class C { @external @pure f(c: bool): bytes { return abi.encode(c ? [1n,2n] : [3n,4n]); } }`)).toBe(true);
+    // bare-int-literal elements now self-type to the mobile common type (L2-MOBILE lifted, OR cluster 4):
+    // all-nonneg -> u256, byte-identical to solc's uint8[2] (abi.encode pads every element to a 32-byte
+    // word regardless of width, so the encoding is width-independent). The ternary of two bare-literal
+    // arrays likewise compiles and is byte-identical (verified per branch).
+    expect(rejects(`@contract class C { @external @pure f(c: bool): bytes { return abi.encode(c ? [1n,2n] : [3n,4n]); } }`)).toBe(false);
   });
 
   it('L6 stays a deliberate reject: the prior-alias witness makes any lift a miscompile', () => {

@@ -302,13 +302,17 @@ contract C {
   @ne<void>(0n) @external f(x: u256): u256 { return x + 1n; }
 }`),
     ).toContain('JETH291');
-    // inference from a BARE literal / method reference rejects like every no-context position
+    // A BARE integer-literal array now self-types to its mobile common type (L2-MOBILE, OR cluster 4):
+    // @ne([2n, 3n]) instantiates the generic modifier at u256[2] and compiles, byte-identical to solc's
+    // monomorphized uint8[2] mirror (the body reads only v.length, which is width-independent - verified
+    // MATCH vs both uint8[2] and uint256[2]). A METHOD reference in the same no-context position (below)
+    // still rejects.
     expect(
       codes(`@contract class C {
   @modifier ne<T>(v: T) { require(v.length > 0n, "e"); _; }
   @ne([2n, 3n]) @external f(x: u256): u256 { return x + 1n; }
 }`),
-    ).toContain('JETH213');
+    ).toEqual([]);
     expect(
       codes(`@contract class C {
   inc(x: u256): u256 { return x + 1n; }

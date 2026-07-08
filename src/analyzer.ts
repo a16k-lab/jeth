@@ -18765,6 +18765,18 @@ export class Analyzer {
    *  folds to a bytesN-typed literalInt) carry their concrete cast type; a bool literal is
    *  unambiguously bool (no mobile-width hazard); every non-literal element (a typed var, a struct
    *  ctor, a runtime cast, a ref-typed value) carries its checked type. */
+  /** L2-MOBILE: the value of a BARE integer literal element (a plain `1n` / `-1n`, NOT an explicit
+   *  cast, bytesN, address, enum, or bool), else undefined. Used to self-type an all-bare-literal
+   *  array to solc's mobile common type (see selfTypeArrayLit). An explicitly-cast literal
+   *  (u8(1n) -> explicitCast, bytes4(..) -> bytesN) carries its own type and is NOT a bare literal. */
+  private bareIntLiteralValue(el: ts.Expression): bigint | undefined {
+    const p = this.checkExprQuiet(el);
+    if (!p || p.kind !== 'literalInt') return undefined;
+    if ((p as { explicitCast?: boolean }).explicitCast) return undefined;
+    if (p.type.kind === 'bytesN' || p.type.kind === 'address' || isEnum(p.type)) return undefined;
+    return p.value;
+  }
+
   private litElemIntrinsicType(el: ts.Expression): JethType | undefined {
     const p = this.checkExprQuiet(el);
     if (!p) return undefined;
@@ -18791,9 +18803,15 @@ export class Analyzer {
     let acc: JethType = types[0]!;
     for (const t of types) {
       if (typesEqual(acc, t)) continue;
-      // Mixed bytesN widths ([bytes4(..), bytes8(..)]) are NOT unified: solc widens bytes4 ->
-      // bytes8 (right-pad), but JETH's literal coerce rejects the re-type (JETH084) - the clean
-      // reject stands (a deliberate Batch-B residual; spell both elements at one width).
+      // A-LIT-RESID: mixed bytesN widths ([bytes4(..), bytes8(..)]) unify to the WIDEST bytesN, which
+      // is exactly what solc does (it widens the narrower, right-padding). A bytesN value is
+      // LEFT-aligned in its 32-byte word and the padding bytes are zero, so a bytesN->wider-bytesN
+      // widening is a NO-OP on the word representation - byte-identical to solc (verified: the same
+      // encoded words for both orders and 3-way mixes). Brands stay nominal (no cross-brand unify).
+      if (acc.kind === 'bytesN' && t.kind === 'bytesN' && !acc.brand && !t.brand) {
+        acc = acc.size >= t.size ? acc : t;
+        continue;
+      }
       const numeric = isInteger(acc) && isInteger(t) && !isEnum(acc) && !isEnum(t);
       const c = numeric ? commonNumericType(acc, t) : undefined;
       if (!c) return undefined;
@@ -18810,6 +18828,21 @@ export class Analyzer {
    *  The result is the FIXED array type T[n] solc gives a literal. */
   private selfTypeArrayLit(lit: ts.ArrayLiteralExpression): (JethType & { kind: 'array' }) | undefined {
     if (lit.elements.length === 0) return undefined;
+    // L2-MOBILE: an ALL-bare-integer-literal array self-types to solc's mobile common type. abi.encode
+    // and abi.encodePacked BOTH pad every array element to a full 32-byte word regardless of the
+    // element width (verified: encode/encodePacked of [1,300] equal uint256[2] AND uint16[2]), so the
+    // ENCODED bytes are width-independent - u256 (all non-negative) / i256 (all negative) is
+    // byte-identical to solc's smallest-fitting mobile type. Mixed sign has NO solc common type (solc
+    // rejects [1,-1], [0,-1], [200,-1] - verified), so we return undefined (reject) too. An
+    // out-of-range value is caught by the element range check when the array is coerced to this type.
+    const bareVals = lit.elements.map((el) => this.bareIntLiteralValue(el));
+    if (bareVals.length > 0 && bareVals.every((v) => v !== undefined)) {
+      const vs = bareVals as bigint[];
+      const anyNeg = vs.some((v) => v < 0n);
+      const anyNonNeg = vs.some((v) => v >= 0n);
+      if (anyNeg && anyNonNeg) return undefined; // mixed sign: no solc common type
+      return { kind: 'array', element: anyNeg ? I256 : U256, length: lit.elements.length };
+    }
     const ets: JethType[] = [];
     for (const el of lit.elements) {
       const t = this.litElemIntrinsicType(el);
@@ -22461,6 +22494,12 @@ export class Analyzer {
       if (target.kind === 'bytesN') {
         // the literal 0 always converts (all-zero left-aligned word).
         if (lit.value === 0n) return { ...lit, type: target };
+        // A-LIT-RESID: an ALREADY-bytesN-typed literal (from an explicit bytesN(...) cast, whose value
+        // is stored LEFT-aligned in the word) WIDENS to a wider bytesN by pure re-type - the extra low
+        // bytes are already zero, so the 32-byte word is unchanged. Byte-identical to solc's bytesN
+        // widening (verified: same encoded words for mixed-width array literals). Narrowing never
+        // reaches here (unifyLitElemTypes picks the widest, and equal widths pass typesEqual earlier).
+        if (lit.type.kind === 'bytesN' && lit.type.size <= target.size) return { ...lit, type: target };
         // a HEX literal whose source byte width == N converts (left-aligned in the high N bytes); a
         // decimal literal or a wrong-width hex literal needs an explicit bytesN(...) cast.
         if (lit.hexBytes === target.size)
