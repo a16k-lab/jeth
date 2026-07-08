@@ -553,7 +553,8 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
     // encodePacked pad every element to a 32-byte word regardless of width, so the encoding is
     // width-independent and byte-identical to solc's uint8[2]/etc. Mixed bytesN widths widen (A-LIT-RESID).
     // Still rejected: the cast+BARE MIX (a cast fixes one width, a bare literal is mobile - no common
-    // type), CROSS-FAMILY casts (u8|i16, no common type), MIXED-SIGN bare literals, and enum elements.
+    // type), CROSS-FAMILY casts (u8|i16, no common type), and MIXED-SIGN bare literals. Enum elements
+    // now self-type to the enum's fixed array (see the enum gate below) - byte-identical to solc.
     expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([1n, 2n]); } }`)).toBe(false);
     expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([u256(1n), 2n]); } }`)).toBe(true);
     expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([u8(1n), i16(2n)]); } }`)).toBe(true);
@@ -561,8 +562,14 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
     expect(
       rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([bytes4(0x11223344n), bytes8(0x1122334455667788n)]); } }`),
     ).toBe(false);
+    // A-LIT-RESID(enum) LIFTED: a same-enum literal self-types to the enum's fixed array (Color[N]) and
+    // encodes byte-identical to solc (an enum is a value word); two DIFFERENT enums have no common type
+    // so JETH keeps rejecting (parity). Full byte-identity is pinned in lift-enum-array-literal.test.ts.
     expect(
       rejects(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(): bytes { return abi.encode([Color.Green, Color.Blue]); } }`),
+    ).toBe(false);
+    expect(
+      rejects(`enum Color { Red, Green, Blue } enum St { Off, On } @contract class C { @external @pure f(): bytes { return abi.encode([Color.Green, St.On]); } }`),
     ).toBe(true);
   });
 });

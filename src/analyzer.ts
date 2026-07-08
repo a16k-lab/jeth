@@ -18788,6 +18788,10 @@ export class Analyzer {
       // address cast does not mark explicitCast) is concretely typed: solc's mobile type for it
       // is address too, so self-typing matches.
       if (p.type.kind === 'address') return p.type;
+      // an ENUM member (Color.Green) folds to a literalInt carrying its enum type; solc's type for
+      // it IS the enum, so it self-types like any concretely-typed element (with a runtime enum
+      // local `cb`, [Color.Green, cb] -> Color[2]). unifyLitElemTypes keeps enums nominal.
+      if (isEnum(p.type)) return p.type;
       return undefined;
     }
     return p.type;
@@ -18846,10 +18850,14 @@ export class Analyzer {
     const ets: JethType[] = [];
     for (const el of lit.elements) {
       const t = this.litElemIntrinsicType(el);
-      // ENUM elements ([ca, cb] with Color locals, Color.Red members) stay refused: solc accepts
-      // Color[2], but JETH's enum fixed-array literal has no verified encode path yet - a clean
-      // JETH213 (deliberate Batch-B residual; cast to uintN or bind a typed local first).
-      if (!t || t.kind === 'void' || t.kind === 'mapping' || t.kind === 'funcref' || isEnum(t)) return undefined;
+      // ENUM elements ([ca, cb] with Color locals, Color.Red members) self-type to the enum's fixed
+      // array (Color[2]), exactly like solc. The enum fixed-array encode path is the value-word
+      // fixed-array codec (an enum is a value word), already verified byte-identical for an
+      // explicitly-typed `let a: Arr<Color,N>`; unifyLitElemTypes keeps enums NOMINAL (same enum
+      // passes typesEqual; two different enums / an enum-plus-int have no common type -> undefined,
+      // matching solc's reject). Enum params are range-validated at ABI-decode entry, so an element
+      // reaching the encoder is always in range (Panic 0x21 parity is at the boundary, not here).
+      if (!t || t.kind === 'void' || t.kind === 'mapping' || t.kind === 'funcref') return undefined;
       ets.push(t);
     }
     const u = this.unifyLitElemTypes(ets);
