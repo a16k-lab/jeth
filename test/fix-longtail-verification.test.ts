@@ -57,16 +57,23 @@ const rejects = (src: string): boolean => {
 };
 
 describe('long-tail final-verification bar-violation fixes (byte-identical to solc 0.8.35)', () => {
-  it('MC-MEMARR-BYTES-WRITE: byte write into a bytes field of a memory struct-array element rejects (was a silent drop)', async () => {
-    // fixed Arr<Q2,N> and dynamic Q2[] memory element byte-writes both reject (matching the read side).
-    expect(
-      rejects(`@struct class Q2 { b: bytes; n: u256 }
-@contract class C { @external @pure f(): bytes { let xs: Arr<Q2, 2> = [Q2(bytes("aabb"), 1n), Q2(bytes("ccdd"), 2n)]; xs[1n].b[0n] = 0x5an; return xs[1n].b; } }`),
-    ).toBe(true);
-    expect(
-      rejects(`@struct class Q2 { b: bytes; n: u256 }
-@contract class C { @external @pure f(): bytes { let xs: Q2[] = [Q2(bytes("aabb"), 1n)]; xs[0n].b[0n] = 0x5an; return xs[0n].b; } }`),
-    ).toBe(true);
+  it('MC-MEMARR-BYTES-WRITE / LT4: byte write into a bytes field of a memory struct-array element is byte-identical (was rejected as a safe clean reject; now lifted)', async () => {
+    // LT4 lift: the memory-element byte write (Arr<Q2,N> and Q2[]) now routes through the in-place
+    // mstore8 (memByteIndexStore) into the SAME blob the LT3 read resolves - byte-identical to solc, no
+    // longer a store-drop nor a clean reject. (The silent-drop MISCOMPILE the old reject fenced off was
+    // the storage-byteIndexStore mis-route; the LT3 read resolver now lands the base in memory.)
+    await run(
+      `@struct class Q2 { b: bytes; n: u256 }
+@contract class C { @external @pure f(): bytes { let xs: Arr<Q2, 2> = [Q2(bytes("aabb"), 1n), Q2(bytes("ccdd"), 2n)]; xs[1n].b[0n] = 0x5an; return xs[1n].b; } }`,
+      `contract C { struct Q2 { bytes b; uint256 n; } function f() external pure returns (bytes memory) { Q2[2] memory xs = [Q2(bytes("aabb"), 1), Q2(bytes("ccdd"), 2)]; xs[1].b[0] = 0x5a; return xs[1].b; } }`,
+      [['f()', '']] as const,
+    );
+    await run(
+      `@struct class Q2 { b: bytes; n: u256 }
+@contract class C { @external @pure f(): bytes { let xs: Q2[] = [Q2(bytes("aabb"), 1n)]; xs[0n].b[0n] = 0x5an; return xs[0n].b; } }`,
+      `contract C { struct Q2 { bytes b; uint256 n; } function f() external pure returns (bytes memory) { Q2[] memory xs = new Q2[](1); xs[0] = Q2(bytes("aabb"), 1); xs[0].b[0] = 0x5a; return xs[0].b; } }`,
+      [['f()', '']] as const,
+    );
     // string field is not indexable either (JETH205, solc parity).
     expect(
       rejects(`@struct class Q2 { s: string; n: u256 }

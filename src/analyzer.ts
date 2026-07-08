@@ -44,6 +44,7 @@ import {
   isDynStructLeaf,
   isDynStructLeafFieldOk,
   isFuncrefDynStructFixedLeafArray,
+  isFuncrefStaticStructFixedLeafArray,
   isFuncrefDynStructLeaf,
   isDynStructLeafArrayField,
   isDynLeafTopicArray,
@@ -10812,7 +10813,14 @@ export class Analyzer {
         // memAggregate image the Arr<In,N> family uses (Lift #4); registered fixedOuter below.
         // MEMORY LOCALS only, single fixed outer (deeper nestings keep the JETH427 reject); every
         // ABI consumer independently rejects via the typeHasFuncref gates.
-        isFuncrefDynStructFixedLeafArray(declared))
+        isFuncrefDynStructFixedLeafArray(declared) ||
+        // LT2: the STATIC funcref-struct FIXED-outer twin (Arr<Fd,N>, Fd = single-field/all-value+funcref
+        // static struct). A struct element is a reference type, so the array is POINTER-HEADED (the same
+        // N-pointer table Arr<In,N> uses via isStaticStructFixedLeafArray) - registered fixedOuter
+        // (memAggregate) below. The element read a[i].f goes through resolveMemArrayElemFieldChain (widened
+        // to admit the funcref-value element): arrayGet derefs the element image, aggFieldRead reads the
+        // funcref id. MEMORY LOCALS only; every ABI consumer independently rejects via typeHasFuncref.
+        isFuncrefStaticStructFixedLeafArray(declared))
       // Lift #4: a FIXED-outer array whose leaf is a DYNAMIC struct (Arr<In,N>, In dynamic,
       // isDynStructFixedLeafArray) IS now admitted. Its memAggregate image is N absolute-pointer words
       // (no [len] header), each -> a per-element dyn-struct image; the element-read resolver
@@ -13714,8 +13722,13 @@ export class Analyzer {
           baseArr &&
           (baseArr.base.kind === 'memArray' || baseArr.base.kind === 'memArrayExpr') &&
           baseArr.elem.kind === 'struct' &&
-          isStaticType(baseArr.elem) // B1: a STATIC struct element has an inline image with static word offsets;
+          // B1: a STATIC struct element has an inline image with static word offsets;
           // a B3 DYNAMIC-field struct element is pointer-headed (resolveMemDynStructArrayField owns it).
+          // LT2: a funcref-value-aggregate struct element (Fd{f}) is ALSO inline (one funcref id word per
+          // field, exactly a uint256-substituted image), so its field offsets are the same static word
+          // offsets - a[i].f dispatches through the loaded id word. isFuncrefValueAggregate is the
+          // funcref twin of isStaticType at this internal-only read site (every ABI route still rejects).
+          (isStaticType(baseArr.elem) || isFuncrefValueAggregate(baseArr.elem))
         ) {
           rootArr = baseArr;
           rootIndex = cur.argumentExpression;
@@ -14588,25 +14601,31 @@ export class Analyzer {
         if (!index) return undefined;
         return { kind: 'arrayElem', type: fv.arr.elem, arr: fv.arr, index: this.coerce(index, U256, node.argumentExpression) };
       }
-      // MC-MEMARR-BYTES-WRITE (soundness): xs[i].b[j] = <bytes1> - a byte-index write into a plain
-      // `bytes` (or `string`) FIELD of a memory dyn-struct-ARRAY element. resolveMemDynStructArrayField
-      // returns a clean bytes read here (aggFieldRead, src=memory), but the in-place mstore8 machinery
-      // does not yet root at an element-based dyn-struct-array field, so without this guard control fell
-      // to the storage byteIndexStore path where bytesLocation mis-resolved the memory blob as a storage
-      // slot and the write landed NOWHERE (a silent store drop, both compilers otherwise succeed). The
-      // READ side xs[i].b[j] already rejects (JETH217); reject the write symmetrically. `string` is not
-      // indexable in solc either (JETH205), so both are sound rejects.
+      // LT4: xs[i].b[j] = <bytes1> - a byte-index write into a plain `bytes` FIELD of a memory dyn-struct-
+      // ARRAY element. resolveMemDynStructArrayField resolves xs[i].b to the SAME memory bytes value the
+      // READ path (LT3, checkExpr's byteIndex) resolves: an aggFieldRead deref = the head-word pointer to
+      // the field's [len][data] blob. The write is the in-place bounds-checked mstore8 (memByteIndexStore)
+      // the bytes-local / bytes[]-element (L13) / mem-dyn-struct-field (M1/M2) paths use, landing in that
+      // blob in place - visible through every alias `let al = xs[i].b`, not touching xs[i].n or neighbors
+      // (they are OTHER words of the element image; the blob is a heap allocation the head word points at).
+      // `string` is not indexable in solc (JETH205). Was a silent store-drop MISCOMPILE before the LT3
+      // read resolver existed (the write fell to the storage byteIndexStore RMW, which mis-resolved the
+      // memory blob as a storage slot); now the base resolves to memory, so the mstore8 is in-place sound.
       if (fv && isBytesLike(fv.type)) {
         if (fv.type.kind === 'string') {
           this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
-        } else {
-          this.diags.error(
-            node,
-            'JETH217',
-            'byte-writing an element of a `bytes` field of a memory struct-array element is not supported yet (bind the field to a `bytes` local first)',
-          );
+          return undefined;
         }
-        return undefined;
+        const base = this.checkExpr(node.expression);
+        if (!base) return undefined;
+        if (base.type.kind !== 'bytes') {
+          this.diags.error(node, 'JETH212', `cannot index ${displayName(base.type)}`);
+          return undefined;
+        }
+        const idx = this.checkExpr(node.argumentExpression, U256);
+        if (!idx) return undefined;
+        // an in-place memory element store does NOT touch storage; stays @pure/@view-clean.
+        return { kind: 'memByteIndexStore', type: BYTES1, base, index: this.coerce(idx, U256, node.argumentExpression) };
       }
       if (fv && !isStaticValueType(fv.type) && fv.kind !== 'arrayValue') return undefined; // errored
     }
@@ -15266,7 +15285,13 @@ export class Analyzer {
     // A fully-static struct return is encoded from storage by the recursive encoder
     // (structStorageLeaves flattens nested static structs and fixed-array fields), so
     // any static field shape is supported.
-    if (!isDynamicType(t)) return t.fields.every((f) => isStaticType(f.type));
+    // LT1: a struct whose only non-static fields are FUNCREFs (Fd{f}, or Fd{f; g}) is layout-static
+    // (isValueWordAggregate: one inline id word per funcref, exactly a uint256-substituted image), so
+    // an INTERNAL return forwards that flat image byte-identically. Admit it here. Every ABI boundary
+    // still rejects independently BEFORE consulting this predicate: the @external/@public signature gate
+    // (JETH426 typeHasFuncref), abi.encode* (JETH173), @event/@error params (JETH229, screened upstream),
+    // the getter/interface/ctor-param gates - so this never leaks a funcref through the ABI.
+    if (!isDynamicType(t)) return t.fields.every((f) => isStaticType(f.type) || f.type.kind === 'funcref');
     // A dynamic struct return uses the general tuple encoder, which handles any
     // mix of static (value / nested static struct / static fixed-array) fields and
     // supported dynamic fields (bytes/string, or a nested supported struct).
@@ -16373,7 +16398,18 @@ export class Analyzer {
       // Batch D (F-RESID stretch): the funcref twin Arr<Fd,N> rides the identical header-less
       // pointer-headed resolution (a[i] -> the i-th pointer word = the element image pointer;
       // a[i].field / a[i].f(v) resolve through the SAME funcref-aware element machinery Fd[] uses).
-      if (at && at.kind === 'array' && (isDynStructFixedLeafArray(at) || isFuncrefDynStructFixedLeafArray(at))) {
+      // LT2: the STATIC funcref-struct twin Arr<Fd,N> (Fd = value-word-aggregate struct) is ALSO
+      // pointer-headed (memElemStatic(struct) = false, a struct element is always a reference word),
+      // so it rides the identical resolution; a[i].f then resolves via resolveMemArrayElemFieldChain
+      // (widened to admit the funcref-value element), whose arrayGet derefs the element image pointer
+      // and aggFieldRead reads the funcref id at its word offset.
+      if (
+        at &&
+        at.kind === 'array' &&
+        (isDynStructFixedLeafArray(at) ||
+          isFuncrefDynStructFixedLeafArray(at) ||
+          isFuncrefStaticStructFixedLeafArray(at))
+      ) {
         return {
           base: { kind: 'memArrayExpr', expr: { kind: 'memAggregate', type: at, local: node.text } },
           elem: at.element,
@@ -19893,7 +19929,11 @@ export class Analyzer {
       if (chain) {
         // a VALUE leaf -> mload; a whole STATIC AGGREGATE leaf (xs[i].pre, xs[i].q) -> the sub-image
         // pointer (aggFieldRead returns it for aggregate types, consumed by abi.encode / return).
-        if (isStaticType(chain.type)) {
+        // LT2: a FUNCREF leaf (a[i].f on Arr<Fd,N>) is a value word (isValueWord, not isStaticType) - one
+        // mload of the id at the computed offset, identical to a uint256 leaf; the aggFieldRead keeps the
+        // funcref type so a following a[i].f(v) dispatches through the id (the sibling static-chain path
+        // below already does this for h.fs[i]).
+        if (isStaticType(chain.type) || isValueWord(chain.type)) {
           return { kind: 'aggFieldRead', type: chain.type, base: chain.base, wordOffset: chain.wordOffset, runSteps: chain.runSteps };
         }
         this.diags.error(
@@ -20919,6 +20959,38 @@ export class Analyzer {
         const index = this.checkExpr(node.argumentExpression, U256);
         if (!base || !index) return undefined;
         return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+      }
+      // LT3: xs[i].b[j] where xs[i].b is a plain `bytes` FIELD of a memory dyn-struct-ARRAY element.
+      // resolveMemDynStructArrayField resolves xs[i].b to a memory bytes value (aggFieldRead deref, the
+      // head-word pointer to the field's [len][data] blob); byte-index it (mload+shift, Panic 0x32),
+      // exactly like the memory-local bytes-field read below. A READ cannot corrupt storage: the base is
+      // an in-memory blob pointer. Only committed when xs[i] is a memory dyn-struct-array element
+      // (memArrayDynStructElemAccess) and the field's declared type is bytes/string. `string` is not
+      // indexable in solc (JETH205). Must precede the calldata/storage dyn-struct resolvers below.
+      if (
+        ts.isPropertyAccessExpression(node.expression) &&
+        ts.isElementAccessExpression(node.expression.expression) &&
+        node.argumentExpression &&
+        this.memArrayDynStructElemAccess(node.expression.expression)
+      ) {
+        const arr0 = this.resolveArrayExpr(node.expression.expression.expression);
+        const st0 = arr0 && arr0.elem.kind === 'struct' ? arr0.elem : undefined;
+        const fld0 = st0?.fields.find((ff) => ff.name === (node.expression as ts.PropertyAccessExpression).name.text);
+        if (fld0 && isBytesLike(fld0.type)) {
+          if (fld0.type.kind === 'string') {
+            this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+            return undefined;
+          }
+          const base = this.checkExpr(node.expression);
+          if (!base) return undefined;
+          if (base.type.kind !== 'bytes') {
+            this.diags.error(node, 'JETH212', `cannot index ${displayName(base.type)}`);
+            return undefined;
+          }
+          const index = this.checkExpr(node.argumentExpression, U256);
+          if (!index) return undefined;
+          return { kind: 'byteIndex', type: BYTES1, base, index: this.coerce(index, U256, node.argumentExpression) };
+        }
       }
       // d.b[i] where d.b is a bytes field of a DYNAMIC-field struct MEMORY local: the base
       // resolves to a memDynField (bytes); byte-index it (Panic 0x32). Must precede the

@@ -709,6 +709,25 @@ export function isFuncrefDynStructFixedLeafArray(t: JethType): boolean {
   return t.kind === 'array' && t.length !== undefined && isFuncrefDynStructLeaf(t.element);
 }
 
+/** LT2: a SINGLE fixed outer whose DIRECT element is a funcref-bearing STATIC (value-word-aggregate)
+ *  struct (Arr<Fd,N>, Fd = { f: (x)=>R } or { f; g } all-funcref/value fields). A struct element is ALWAYS
+ *  a reference type in solc's memory model, so the array is POINTER-HEADED (an N-word absolute-pointer table,
+ *  no [len] header, each word -> a fresh per-element image whose funcref field is one inline id word) -
+ *  the SAME layout the Arr<In,N> static-struct family uses (isStaticStructFixedLeafArray). a[i] reads the
+ *  i-th pointer word (memElemStatic(struct) = false), then a[i].f resolves via resolveMemArrayElemFieldChain
+ *  (arrayGet derefs the element image, aggFieldRead reads the funcref id at its word offset). Deeper nestings
+ *  (Arr<Arr<Fd,N>,M>, Arr<Fd,N>[]) stay rejected (JETH427). SEPARATE from the non-funcref static-struct
+ *  predicates so every ABI codec route keyed on isStaticType keeps rejecting funcref-bearing shapes; only the
+ *  internal memory-local read/dispatch sites opt in. Kept byte-parallel with isFuncrefDynStructFixedLeafArray. */
+export function isFuncrefStaticStructFixedLeafArray(t: JethType): boolean {
+  return (
+    t.kind === 'array' &&
+    t.length !== undefined &&
+    t.element.kind === 'struct' &&
+    isFuncrefValueAggregate(t.element)
+  );
+}
+
 /** storage-to-mem-copy scope: a REFERENCE type (`let row: bytes[] = this.blobs`) whose deep copy
  *  from STORAGE into a fresh pointer-headed memory image is PROVABLY byte-identical to solc - i.e.
  *  every leaf abiDecFromStorageToImage / buildDynStructFromStorage can lay out. Conservatively scoped

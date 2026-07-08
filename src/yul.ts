@@ -29,6 +29,7 @@ import {
   isStaticValueType,
   isValueWord,
   isValueWordAggregate,
+  isFuncrefValueAggregate,
   isNestedValueArray,
   isNestedValueWordArray,
   isValueLeafArray,
@@ -43,6 +44,7 @@ import {
   isDynStructElemArrayField,
   isDynStructLeafArrayField,
   isFuncrefDynStructFixedLeafArray,
+  isFuncrefStaticStructFixedLeafArray,
   isFuncrefDynStructLeaf,
   isDynLeafTopicArray,
   isImplicitWiden,
@@ -81,7 +83,13 @@ export class UnsupportedError extends Error {
  *  A DYNAMIC-FIELD struct (B3, isStaticType=false) is NOT matched here: it stays on the existing
  *  dynamic/else branch (already pointer-headed), so this predicate requires a STATIC struct. */
 function isPointerHeadedStaticElem(e: JethType): boolean {
-  if (e.kind === 'struct') return isStaticType(e);
+  // A STRUCT element is ALWAYS a reference type in solc's memory model (one absolute-pointer word per
+  // element -> a fresh per-element image), whether its fields are static values or funcrefs. LT2: a
+  // funcref-value struct element (Fd{f}, isFuncrefValueAggregate) is therefore pointer-headed EXACTLY like
+  // a static struct - NOT inline. (A BARE funcref element ((x)=>R)[] is still a value word and stays inline;
+  // only a funcref wrapped in a STRUCT is pointer-headed.) Widening isStaticType with the funcref-value
+  // case here is what keeps isInlineValueWordElem routing Fd elements to the pointer-headed builder.
+  if (e.kind === 'struct') return isStaticType(e) || isFuncrefValueAggregate(e);
   // Batch A: a STATIC fixed array whose leaf is a static struct (Arr<P,N>) is a REFERENCE type too, so
   // as the element of a containing array (Arr<P,N>[], Arr<Arr<P,N>,M>) it is one absolute-pointer word
   // per element -> a fresh per-element Arr<P,N> image. A static fixed array whose leaf is a VALUE type
@@ -1888,7 +1896,12 @@ ${indent(runtime, 6)}
               // Batch D (F-RESID stretch): the funcref twin Arr<Fd,N> - the identical N-pointer
               // table; each element image is the funcref-bearing dyn-struct image Fd[] builds
               // (allocDynStructToMem lays a funcref field as one inline id word).
-              isFuncrefDynStructFixedLeafArray(s.type))
+              isFuncrefDynStructFixedLeafArray(s.type) ||
+              // LT2: the STATIC funcref-struct twin Arr<Fd,N> (Fd a value-word-aggregate struct) - the
+              // identical N-pointer table (a struct element is always a reference word); each element image
+              // is a flat funcref-value struct block (buildNestedMemArrayValue -> allocAggToMem). Routes
+              // through buildNestedMemArrayLit exactly like the Arr<In,N> static-struct sibling.
+              isFuncrefStaticStructFixedLeafArray(s.type))
           ) {
             // a FIXED array whose element is POINTER-HEADED: a DYNAMIC value-array (Arr<u256[],N>), or a
             // static struct / static-struct-leaf array (Batch A: Arr<P,N>, Arr<P,N>[], Arr<Arr<P,N>,M>).
@@ -6755,6 +6768,15 @@ ${indent(runtime, 6)}
     // pointer, a storage/calldata source COPIES into a fresh image) - reference semantics matching
     // solc's array literal of struct references.
     if (el.type.kind === 'struct' && isStaticType(el.type)) {
+      if (el.kind === 'structNew') return this.allocAggToMem(el as Expr & { kind: 'structNew' }, ctx, out);
+      return this.aggToMemPtr(el, ctx, out);
+    }
+    // LT2: a FUNCREF-value struct element (Fd{f}) of an Arr<Fd,N> literal is layout-static (one inline
+    // funcref id word per field, the SAME flat image a value struct has), so a constructor Fd(this.g)
+    // allocates a fresh per-element image via allocAggToMem (which mstores the funcref id at field offset
+    // 0), and a reference source (another element / a Fd local) aliases its image pointer - identical to
+    // the isStaticType struct-element branch above, just admitting the funcref-value struct.
+    if (el.type.kind === 'struct' && isFuncrefValueAggregate(el.type)) {
       if (el.kind === 'structNew') return this.allocAggToMem(el as Expr & { kind: 'structNew' }, ctx, out);
       return this.aggToMemPtr(el, ctx, out);
     }
