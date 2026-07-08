@@ -3416,10 +3416,19 @@ ${indent(runtime, 6)}
           const dynStruct = e.type.kind === 'struct' && isDynamicType(e.type);
           const ptrHeadedNested =
             e.type.kind === 'array' && isNestedValueWordArray(e.type) && isDynamicType(e.type);
+          // OR cluster 1 (TERN-STRUCT-ARR): an Arr<In,N> static-struct fixed-leaf array is POINTER-HEADED in
+          // memory, BUT the FLAT ABI-boundary consumers (abi.encode / return / event / topics) read the
+          // ternary result as a FLAT static image (aggToMemPtr's flat blob). The POINTER-HEADED representation
+          // (needed for the aliasing let-bind / index / element-write consumers) is requested via the
+          // `ptrHeaded` flag, set only by the memArrayExpr consumer path in resolveArrayExpr: each branch
+          // then materializes via aggArgToMemPtr (a memory branch ALIASES its pointer, a storage branch
+          // DEEP-COPIES via abiDecFromStorageToImage). A bare `ternary` value keeps the flat materializer.
+          const ptrHeadedStruct =
+            e.ptrHeaded === true && e.type.kind === 'array' && isStaticStructFixedLeafArray(e.type);
           const matPtr = (br: Expr, o: string[]): string =>
             dynStruct
               ? this.buildDynStructLocal(e.type as JethType & { kind: 'struct' }, br, ctx, o)
-              : ptrHeadedNested
+              : ptrHeadedNested || ptrHeadedStruct
                 ? this.aggArgToMemPtr(br, ctx, o)
                 : this.aggToMemPtr(br, ctx, o);
           const cc = this.lowerExpr(e.cond, ctx, out);
@@ -8937,16 +8946,12 @@ ${indent(runtime, 6)}
         `a whole ${displayName(a.type)} field of a struct-array element cannot be used as an internal-call argument, internal return value, or element-write source yet (bind its element values to a fresh array instead)`,
       );
     }
-    // Round-2 RC-2: a TERNARY over Arr<In,N> (a static-struct fixed-leaf array). The ternary lowering
-    // materializes each (flat-source: storage / literal / calldata) branch via aggToMemPtr and selects
-    // a FLAT inline image - correct for the verbatim solo-return path, but THIS materializer's contract
-    // is the type's CANONICAL memory representation (what an internal callee binds / a memory local
-    // holds), which for Arr<In,N> is POINTER-HEADED. Passing the flat image dropped the payload (the
-    // callee misread the element words as pointers - MC-1a/MC-1b). Transcode flat -> pointer-headed via
-    // abiDecFromMemToImage (a static aggregate's flat image IS its ABI body). The fresh copy matches
-    // solc's storage/literal-branch conversion-to-memory semantics; the ternary result is a single-use
-    // temporary (binding it to a local is a clean reject), so no aliasing is observable.
+    // Round-2 RC-2 / OR cluster 1: a TERNARY over Arr<In,N> (a static-struct fixed-leaf array) requested as
+    // a CANONICAL pointer-headed image (an internal-call arg / return). A ptrHeaded ternary already selects
+    // the canonical per-branch image in lowerExpr (matPtr -> aggArgToMemPtr), so a plain lowerExpr suffices;
+    // a bare (flat) ternary needs the flat -> pointer-headed transcode (its lowerExpr yields the flat blob).
     if (a.kind === 'ternary' && isStaticStructFixedLeafArray(a.type)) {
+      if (a.ptrHeaded) return this.lowerExpr(a, ctx, out);
       const flat = this.lowerExpr(a, ctx, out);
       const end = this.fresh();
       out.push(`let ${end} := add(${flat}, ${abiHeadWords(a.type) * 32})`);

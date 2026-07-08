@@ -10874,7 +10874,16 @@ export class Analyzer {
         );
         return;
       }
-      const e = this.checkExpr(decl.initializer, declared);
+      // OR cluster 1 (TERN-STRUCT-ARR): a static-struct fixed-leaf array ternary init (let p: Arr<In,N> =
+      // c ? A : m). The bare checkExpr rejects a memory/storage branch (the flat ABI consumers would
+      // mis-read a pointer-headed image), so build the POINTER-HEADED (ptrHeaded) ternary here - binding p
+      // to that selected pointer ALIASES a memory branch and holds a fresh copy of a storage branch,
+      // byte-identical to solc's `In[N] memory p = c ? A : m` memory reference. (fromTernary below accepts it;
+      // the yul localDecl lowers a ptrHeaded ternary via a plain lowerExpr = select the canonical pointer.)
+      const e =
+        ts.isConditionalExpression(decl.initializer)
+          ? (this.checkPtrHeadedStructArrayTernary(decl.initializer) ?? this.checkExpr(decl.initializer, declared))
+          : this.checkExpr(decl.initializer, declared);
       if (!e) return;
       if (!typesEqual(e.type, declared)) {
         this.diags.error(
@@ -16188,6 +16197,20 @@ export class Analyzer {
     node = stripParens(node); // (xs)[i] / ((this.a))[i] index a parenthesized array base
     // (c ? xs : ys)[i]: a memory array produced by a ternary; the expr lowers to a pointer.
     if (ts.isConditionalExpression(node)) {
+      // OR cluster 1 (TERN-STRUCT-ARR / TERN-LV-MIX struct): a static-struct fixed-leaf array ternary
+      // (Arr<In,N>) indexed / element-written / bound as a memory local. The bare checkExpr below REJECTS
+      // a memory/storage branch (the flat ABI consumers would mis-read a pointer-headed image), so build the
+      // POINTER-HEADED (ptrHeaded) ternary here instead - the aliasing memArrayExpr representation, where a
+      // memory branch aliases and a storage branch deep-copies (both byte-identical to solc's memory ref).
+      const ph = this.checkPtrHeadedStructArrayTernary(node);
+      if (ph) {
+        return {
+          base: { kind: 'memArrayExpr', expr: ph },
+          elem: (ph.type as JethType & { kind: 'array' }).element,
+          memFixedLen: (ph.type as JethType & { kind: 'array' }).length,
+          memStaticElem: this.memElemStatic((ph.type as JethType & { kind: 'array' }).element),
+        };
+      }
       const e = this.checkExpr(node);
       // a dynamic-array ternary already resolves to arrayValue{memArrayExpr{ternary}} - use it directly.
       if (e && e.kind === 'arrayValue' && e.arr.base.kind === 'memArrayExpr') return e.arr;
@@ -18644,6 +18667,43 @@ export class Analyzer {
     return direct ? { type: direct.type, loc: this.lvalueLoc(direct) } : undefined;
   }
 
+  /** OR cluster 1 (TERN-STRUCT-ARR / TERN-LV-MIX struct case): build a POINTER-HEADED ternary Expr for a
+   *  static-struct fixed-leaf array (Arr<In,N>) consumed by the ALIASING memArrayExpr path (a let-bind
+   *  `let p = c ? A : m`, an index `(c ? A : m)[i]`, or an element write `(c ? A : m)[i].x = v`). solc
+   *  unifies the ternary to a MEMORY reference: a memory-local branch is ALIASED (a mutation writes
+   *  through), a storage branch is DEEP-COPIED to a fresh memory image (a mutation lands in the copy and
+   *  is discarded), a literal builds fresh. The `ptrHeaded` flag routes each branch through aggArgToMemPtr
+   *  in yul (the canonical pointer-headed image with exactly that aliasing). Only the aliasable branch
+   *  kinds are admitted (a memory local `memAggregate`, a storage source, an array literal); an arrayGet /
+   *  call / abiDecode / aggFieldRead branch stays a clean reject (its live reference cannot be
+   *  alias-preserved by the per-branch materializer). Returns undefined to fall through to the bare
+   *  checkExpr (which handles the value-array / already-supported ternaries and their rejects). */
+  private checkPtrHeadedStructArrayTernary(node: ts.ConditionalExpression): (Expr & { kind: 'ternary' }) | undefined {
+    const cond = this.checkCondition(node.condition);
+    if (!cond) return undefined;
+    const then = this.checkExprQuiet(node.whenTrue);
+    const els = this.checkExprQuiet(node.whenFalse);
+    if (!then || !els) return undefined;
+    const unified = this.unifyOperands(then, els, node);
+    if (!unified) return undefined;
+    const t = unified[0].type;
+    if (!(t.kind === 'array' && isStaticStructFixedLeafArray(t))) return undefined;
+    // only the ALIASABLE branch kinds (a memory-local Arr<In,N> = memAggregate, a storage source, or an
+    // array literal): each has an aggArgToMemPtr materialization that ALIASES memory / DEEP-COPIES storage,
+    // exactly solc's memory-reference selection. A live/fresh reference kind cannot be alias-preserved here.
+    const aliasable = (x: Expr): boolean =>
+      x.kind === 'memAggregate' ||
+      x.kind === 'arrayLit' ||
+      (x.kind === 'arrayValue' &&
+        (x.arr.base.kind === 'fixedArray' ||
+          x.arr.base.kind === 'stateArray' ||
+          x.arr.base.kind === 'mapArray' ||
+          x.arr.base.kind === 'placeArray')) ||
+      x.kind === 'structArrayElem';
+    if (!aliasable(unified[0]) || !aliasable(unified[1])) return undefined;
+    return { kind: 'ternary', type: t, cond, then: unified[0], else: unified[1], ptrHeaded: true };
+  }
+
   /** Probe a ternary-bottomed assignment-target chain for the branch-push desugar. Returns the
    *  rebased then/else target nodes + the unified target {type, loc} + the condition, or undefined
    *  when the shape is NOT a liftable ternary-chain lvalue: the chain does not bottom at a ternary,
@@ -19253,12 +19313,15 @@ export class Analyzer {
         );
         return undefined;
       }
-      // Batch A: an Arr<P,N> ternary materializes each branch via aggToMemPtr. A storage / array-literal
-      // branch yields an INLINE image (the representation the ternary result is consumed as); but a
-      // POINTER-HEADED memory source (a memAggregate Arr<P,N> local, a struct-array element m[i], or an
-      // internal-call return) yields a pointer-headed image the inline consumers would mis-read. Those
-      // mixed-representation branches are a CLEAN reject (select the value before the ternary), never a
-      // miscompile. The common storage-branch ternary (c ? this.sx : this.sy) stays accepted (inline).
+      // Batch A: a BARE Arr<P,N> ternary VALUE (abi.encode / return / event / topics) materializes each
+      // branch via aggToMemPtr and is consumed as a FLAT inline image - correct for a storage/literal
+      // branch (an inline copy). A POINTER-HEADED MEMORY source (a memAggregate Arr<P,N> local, a struct-
+      // array element m[i], an internal-call return, an abi.decode) yields a pointer-headed image the flat
+      // consumers would mis-read (pointer words leak into the ABI payload) - a CLEAN reject here. (The
+      // aliasing let-bind / index / element-write consumers accept a MEMORY / STORAGE branch via the
+      // SEPARATE pointer-headed memArrayExpr path in resolveArrayExpr - OR cluster 1 TERN-STRUCT-ARR /
+      // TERN-LV-MIX; those never reach this bare-value reject.) The common storage-branch ternary
+      // (c ? this.sx : this.sy) stays accepted (inline, flat).
       if (isStaticStructFixedLeafArray(unified[0].type)) {
         const ptrHeaded = (e: Expr): boolean =>
           e.kind === 'memAggregate' ||
@@ -19278,8 +19341,7 @@ export class Analyzer {
           // alias mutations through the ternary result would be silently dropped - the same
           // copy-cannot-preserve-aliasing reasoning as the R3 aggFieldRead channel reject. Clean
           // JETH074; the flat consumers of the same ternary become catalogued over-rejections.
-          e.kind === 'aggFieldRead' ||
-          (e.kind === 'arrayValue' && (e.arr.base.kind === 'memArray' || e.arr.base.kind === 'memArrayExpr'));
+          e.kind === 'aggFieldRead';
         if (ptrHeaded(unified[0]) || ptrHeaded(unified[1])) {
           this.diags.error(
             node,

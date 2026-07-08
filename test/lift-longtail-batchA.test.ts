@@ -253,14 +253,27 @@ describe('long-tail batch A: ternary-chain lvalues (T1-T3) byte-identical to sol
     expect(
       rejects(`${IN2} @contract class C { @state A: Arr<In, 2>; @state D: In[]; @external w(c: bool): u256 { (c ? this.A : this.D)[0n].y = 9n; return 1n; } }`),
     ).toBe(true);
-    // storage|memory mix: solc unifies to a MEMORY COPY (the storage branch's write is lost in the
-    // discarded copy) - branch-pushing would write storage directly (a miscompile fixed by this
-    // batch), so the mix stays a clean deliberate reject. Same for the compound and ++ forms.
-    const MIX = (stmt: string) =>
-      `${IN2} @contract class C { @state A: Arr<In, 2>; @external w(c: bool): u256 { let m: Arr<In, 2> = [In(1n, 2n), In(3n, 4n)]; ${stmt} return this.A[0n].y; } }`;
-    expect(rejects(MIX('(c ? this.A : m)[0n].y = 9n;'))).toBe(true);
-    expect(rejects(MIX('(c ? this.A : m)[0n].y += 3n;'))).toBe(true);
-    expect(rejects(MIX('(c ? this.A : m)[0n].y++;'))).toBe(true);
+    // storage|memory mix: solc unifies the ternary to a MEMORY COPY - the storage branch's write is
+    // lost in the discarded copy, the memory branch's write persists. OR cluster 1 (TERN-LV-MIX struct)
+    // now LIFTS this byte-identical via the pointer-headed memArrayExpr path (a memory branch aliases, a
+    // storage branch deep-copies), replacing the old deliberate reject (which existed only because the
+    // former branch-push lowering would have written storage directly - a miscompile). Verify all three
+    // forms (=, +=, ++) byte-identical incl the storage-write-discard witness.
+    for (const [jstmt, sstmt] of [
+      ['(c ? this.A : m)[0n].y = 9n;', '(c ? A : m)[0].y = 9;'],
+      ['(c ? this.A : m)[0n].y += 3n;', '(c ? A : m)[0].y += 3;'],
+      ['(c ? this.A : m)[0n].y++;', '(c ? A : m)[0].y++;'],
+    ] as const) {
+      await run(
+        `${IN2} @contract class C { @state A: Arr<In, 2>;
+  @external seed(): void { this.A[0n] = In(100n, 200n); this.A[1n] = In(300n, 400n); }
+  @external w(c: bool): Arr<u256, 2> { let m: Arr<In, 2> = [In(1n, 2n), In(3n, 4n)]; ${jstmt} return [m[0n].y, this.A[0n].y]; } }`,
+        `contract C { struct In { uint256 x; uint256 y; } In[2] A;
+  function seed() external { A[0] = In(100, 200); A[1] = In(300, 400); }
+  function w(bool c) external returns (uint256[2] memory) { In[2] memory m = [In(1, 2), In(3, 4)]; ${sstmt} return [m[0].y, A[0].y]; } }`,
+        [['seed()', ''], ['w(bool)', W(1)], ['w(bool)', W(0)]] as const,
+      );
+    }
     // calldata|storage mix stays a both-reject (solc TypeError).
     expect(
       rejects(`${IN2} @contract class C { @state A: Arr<In, 2>; @external w(c: bool, p: Arr<In, 2>): u256 { (c ? this.A : p)[0n].y = 9n; return 1n; } }`),

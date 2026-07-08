@@ -81,7 +81,12 @@ export type Expr =
   | { kind: 'immutableStagedRead'; type: JethType; name: string }
   | { kind: 'localRead'; type: JethType; name: string }
   | { kind: 'binary'; type: JethType; op: BinOp; left: Expr; right: Expr; unchecked: boolean }
-  | { kind: 'ternary'; type: JethType; cond: Expr; then: Expr; else: Expr } // c ? a : b (short-circuit)
+  // c ? a : b (short-circuit). `ptrHeaded` (OR cluster 1 TERN-STRUCT-ARR): for a static-struct fixed-leaf
+  // array (Arr<In,N>), materialize each branch as the CANONICAL POINTER-HEADED image (aggArgToMemPtr: a
+  // memory branch ALIASES, a storage branch DEEP-COPIES) instead of the FLAT aggToMemPtr blob. Set ONLY by
+  // the aliasing memArrayExpr consumer path (let-bind / index / element-write); a bare ternary VALUE
+  // (abi.encode / return / event) keeps it unset (flat), so the ABI consumers never mis-read pointer words.
+  | { kind: 'ternary'; type: JethType; cond: Expr; then: Expr; else: Expr; ptrHeaded?: boolean }
   | {
       kind: 'incDec';
       type: JethType;
