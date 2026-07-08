@@ -16903,7 +16903,13 @@ export class Analyzer {
         isDynStructFixedLeafArray(at) ||
         // Batch D (F-RESID stretch): the funcref twin Arr<Fd,N> - a[i] yields the whole
         // funcref-bearing dyn-struct element exactly like the Arr<In,N> case above.
-        isFuncrefDynStructFixedLeafArray(at))
+        isFuncrefDynStructFixedLeafArray(at) ||
+        // OR cluster 3 (FUNCREF-BIND): the STATIC funcref-struct twin Arr<Fd,N> (Fd a value-word
+        // aggregate holding a funcref field). a[i] yields the whole funcref-struct element as an
+        // arrayGet (the struct branch at the nested-element resolver), so `let e: Fd = a[i]; e.f(v)`
+        // binds the element image and dispatches identically to the already-lifted direct a[i].f(v).
+        // Every ABI boundary still rejects a funcref-bearing type via the typeHasFuncref gates.
+        isFuncrefStaticStructFixedLeafArray(at))
     );
   }
 
@@ -21230,20 +21236,28 @@ export class Analyzer {
         if (bt && bt.kind === 'array' && bt.element.kind === 'struct') {
           const struct = bt.element;
           if (isDynamicType(struct)) {
-            // BYTE-CD-1 (soundness): a BYTES/STRING field of a dynamic calldata struct-ARRAY element
-            // (xs[i].b[j]) is NOT a value-array. resolveCdDynArrayField mis-resolves it to a base the
-            // byteIndex reads as a uniform 0x00 with NO bounds check (a silent wrong-bytes / no-OOB-Panic
-            // MISCOMPILE). Reject; a plain calldata dyn-struct PARAM field (d.b[j]) resolves correctly via
-            // resolveCdDynStruct above and is unaffected. Workaround: bind the field to a `bytes` local
-            // first (let al = xs[i].b; al[j]), byte-identical to solc.
+            // OR cluster 3 (CD-STRUCTARR-BYTE): a BYTE index into a BYTES field of a dynamic calldata
+            // struct-ARRAY element (xs[i].b[j]). Resolve the WHOLE bytes field (xs[i].b -> the same
+            // cdDynStructField value the bind-a-local workaround uses), then byteIndex it: lowerByteIndex
+            // -> lowerDynamic yields a CALLDATA ref (dataPtr, len), reads byte j with the len bounds check
+            // (Panic 0x32 on OOB), byte-identical to solc's `bytes memory al = xs[i].b; al[j]`. (The earlier
+            // JETH217 reject predated this: resolveCdDynArrayField mis-resolved the bytes field to a zero
+            // base; routing through the field's own cdDynStructField resolution reads the real bytes.)
             const bfld = struct.fields.find((ff) => ff.name === fieldNode.name.text);
             if (bfld && isBytesLike(bfld.type)) {
-              this.diags.error(
-                node,
-                'JETH217',
-                'byte-indexing a `bytes` field of a calldata struct-array element is not supported yet (bind the field to a `bytes` local first)',
-              );
-              return undefined;
+              if (bfld.type.kind === 'string') {
+                this.diags.error(node, 'JETH205', "'string' is not indexable; only 'bytes' supports b[i]");
+                return undefined;
+              }
+              const base = this.checkExpr(fieldNode); // xs[i].b -> cdDynStructField (bytes value)
+              const index = this.checkExpr(node.argumentExpression, U256);
+              if (!base || !index) return undefined;
+              return {
+                kind: 'byteIndex',
+                type: BYTES1,
+                base,
+                index: this.coerce(index, U256, node.argumentExpression),
+              };
             }
             // dynamic-struct array element: ps[i].xs resolves to a value-array; index it.
             const arrBase = this.resolveCdDynArrayField(fieldNode, struct);

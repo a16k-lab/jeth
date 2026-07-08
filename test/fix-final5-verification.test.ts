@@ -46,17 +46,17 @@ const rejects = (src: string): boolean => {
 };
 
 describe('final-5 verification fixes (byte-identical to solc 0.8.35)', () => {
-  it('BYTE-CD-1: calldata struct-array element byte read rejects (was a silent 0x00 miscompile); controls MATCH', async () => {
-    // the miscompiling shape now rejects, both field orders, fixed + dynamic outer.
-    expect(
-      rejects(`@struct class Q{b:bytes;n:u256}
-@contract class C{ @external @pure rd(xs:Q[],i:u256,j:u256):u256{ return u256(u8(xs[i].b[j])); } }`),
-    ).toBe(true);
-    expect(
-      rejects(`@struct class P{n:u256;b:bytes}
-@contract class C{ @external @pure rd(xs:Arr<P,2>,i:u256,j:u256):u256{ return u256(u8(xs[i].b[j])); } }`),
-    ).toBe(true);
-    // the bind-a-local workaround is byte-identical.
+  it('BYTE-CD-1: calldata struct-array element byte read is now byte-identical (OR cluster 3); controls MATCH', async () => {
+    // OR cluster 3 (CD-STRUCTARR-BYTE): the direct xs[i].b[j] read now resolves the bytes field to its
+    // calldata base and byte-indexes it (Panic 0x32 on OOB), byte-identical to the bind-a-local workaround
+    // and to solc. Verify the direct form (dynamic outer Q[], the b-first field order) matches solc.
+    await run(
+      `@struct class Q{b:bytes;n:u256}
+@contract class C{ @external @pure rd(xs:Q[],i:u256,j:u256):u256{ return u256(u8(xs[i].b[j])); } }`,
+      `contract C{ struct Q{bytes b;uint256 n;} function rd(Q[] calldata xs,uint256 i,uint256 j) external pure returns(uint256){ return uint256(uint8(xs[i].b[j])); } }`,
+      [['rd((bytes,uint256)[],uint256,uint256)', W(0x60) + W(0) + W(0) + W(1) + W(0x20) + W(0x40) + W(7) + W(4) + '5758596000000000000000000000000000000000000000000000000000000000']] as const,
+    );
+    // the bind-a-local workaround stays byte-identical.
     await run(
       `@struct class Q{b:bytes;n:u256}
 @contract class C{ @external @pure rd(xs:Q[],i:u256,j:u256):u256{ let al:bytes=xs[i].b; return u256(u8(al[j])); } }`,
