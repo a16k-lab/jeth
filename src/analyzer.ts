@@ -7230,6 +7230,27 @@ export class Analyzer {
     return false;
   }
 
+  /** True iff `node` is the FIRST argument of an `abi.encode` / `abi.encodePacked` call that is itself
+   *  the ENTIRE statement value. Those builtins only READ their args (serialize), so hoisting the arg
+   *  to the statement prelude is a READ-ONLY consumer with no aliasing hazard; and being arg 0 of a
+   *  whole-statement-value call, its evaluation is the statement's FIRST side effect, so the prelude
+   *  preserves solc's left-to-right order (any following args run after, as they would in-place). Used
+   *  to widen the TERN-STRUCT-ARR value-consumer bind-hoist from `return <ternary>` to
+   *  `abi.encode(<ternary>)`. Deeper / non-first-arg positions stay rejected (eval-order sensitive). */
+  private isReadOnlyEncodeArgContext(node: ts.Expression): boolean {
+    let cur: ts.Node = node;
+    while (cur.parent && ts.isParenthesizedExpression(cur.parent)) cur = cur.parent;
+    const call = cur.parent;
+    if (!call || !ts.isCallExpression(call) || call.arguments.length === 0 || call.arguments[0] !== cur) return false;
+    const callee = call.expression;
+    if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression) || callee.expression.text !== 'abi')
+      return false;
+    // abi.encode only: abi.encodePacked does not support struct arrays in solc either (a both-reject),
+    // so hoisting it would only swap the reject code, not lift anything.
+    if (callee.name.text !== 'encode') return false;
+    return this.isUnconditionalStatementExpr(call);
+  }
+
   private checkStatementInner(node: ts.Statement, returnType: JethType, out: Stmt[]): void {
     if (ts.isReturnStatement(node)) {
       // multi-value return: `return [a, b, ...]` matching the function's tuple return type.
@@ -19434,7 +19455,7 @@ export class Analyzer {
             bindSupported(unified[0]) &&
             bindSupported(unified[1]) &&
             this.exprHoist &&
-            this.isUnconditionalStatementExpr(node)
+            (this.isUnconditionalStatementExpr(node) || this.isReadOnlyEncodeArgContext(node))
           ) {
             const tf = ts.factory;
             const tmp = this.freshHoistName();

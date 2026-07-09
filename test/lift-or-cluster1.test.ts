@@ -4,8 +4,9 @@
 // (a mutation lands in the copy and is discarded). Two shapes lifted byte-identical:
 //   TERN-STRUCT-ARR:  let p: Arr<In,2> = c ? this.A : m
 //   TERN-LV-MIX (struct): (c ? this.A : m)[0].x = v   (storage write discarded, memory write persists)
-// The bare ternary VALUE (abi.encode / return / event) keeps its FLAT representation and stays a clean
-// reject for a memory branch (a pointer-headed image would leak into the ABI payload) - verified below.
+// The bare ternary VALUE in a WHOLE-STATEMENT read-only consumer (return / abi.encode arg 0) now
+// bind-hoists to a synth const first (byte-identical, no pointer-word leak - verified below); event
+// data / internal-call arg / deeper positions stay clean rejects pending the parameter-effect analysis.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';
@@ -112,13 +113,25 @@ describe('OR cluster 1: ternary mem|storage static-struct array copy-or-alias', 
     );
   });
 
-  it('SOUNDNESS: a bare memory-branch struct-array ternary VALUE (abi.encode) stays a clean reject', () => {
-    // a pointer-headed image would leak into the ABI payload - keep the flat-consumer reject.
-    expect(
-      rejects(`@struct class In{x:u256}
+  it('SOUNDNESS: a bare memory-branch struct-array ternary VALUE (abi.encode / return) now lifts byte-identical (bind-hoist, no pointer-word leak)', async () => {
+    // Previously a clean JETH074 reject: a flat consumer of a pointer-headed memory branch would leak the
+    // N element-pointer words into the ABI payload (MC-2..6). The value-consumer bind-hoist materializes
+    // the ternary to a synth const FIRST, so the ABI encoding carries the element bytes, not the pointer
+    // words. Verified byte-identical to solc here - this is the live MC-family regression guard.
+    await run(
+      `@struct class In{x:u256}
 @contract class C{ @state A:Arr<In,2>;
-  @external @view f(c:bool):bytes{ let m:Arr<In,2>=[In(10n),In(20n)]; return abi.encode(c?this.A:m); } }`),
-    ).toBe(true);
+  @external seed():void{ this.A[0n].x=11n; this.A[1n].x=22n; }
+  @external @view enc(c:bool):bytes{ let m:Arr<In,2>=[In(10n),In(20n)]; return abi.encode(c?this.A:m); }
+  @external @view ret(c:bool):Arr<In,2>{ let m:Arr<In,2>=[In(10n),In(20n)]; return c?this.A:m; } }`,
+      `contract C{ struct In{uint256 x;} In[2] A;
+  function seed() external { A[0].x=11; A[1].x=22; }
+  function enc(bool c) external view returns(bytes memory){ In[2] memory m=[In(10),In(20)]; return abi.encode(c?A:m); }
+  function ret(bool c) external view returns(In[2] memory){ In[2] memory m=[In(10),In(20)]; return c?A:m; } }`,
+      [['seed()', ''], ['enc(bool)', W(1)], ['enc(bool)', W(0)], ['ret(bool)', W(1)], ['ret(bool)', W(0)]] as const,
+    );
+    // A funcref-bearing struct-array ternary is NOT covered by this lift (not isStaticStructFixedLeafArray)
+    // and still rejects at the ABI boundary (see the funcref test below).
   });
 
   it('funcref static-struct fixed-array ternary let-bind + call byte-identical; ABI boundary rejects', async () => {

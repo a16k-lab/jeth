@@ -47,13 +47,16 @@ describe('TERN-STRUCT-ARR return lift - byte-identical to solc 0.8.35', () => {
     }
   });
 
-  it('boundaries stay sound rejects: abi.encode / internal-arg / abiDecode-branch of the ternary', () => {
+  it('read-only consumers lift (return + arg-0 abi.encode); mutation-sensitive / non-first-arg / abiDecode-branch stay sound rejects', () => {
     const base = `${IN} @contract class C { @state fa: Arr<In,2>; g(p: Arr<In,2>): u256 { return p[0n].a; }`;
     // whole return lifts:
     expect(rejects(`${base} @external @view r(c: bool): Arr<In,2> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return c ? m : this.fa; } }`)).toBe(false);
-    // abi.encode(ternary): the ternary is a call arg, not the whole statement value -> still rejects
-    expect(rejects(`${base} @external @view r(c: bool): bytes { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(c ? m : this.fa); } }`)).toBe(true);
-    // internal-call arg: mutation-sensitive -> still rejects (pending effect analysis)
+    // abi.encode(ternary) as arg 0 of a whole-statement encode LIFTS (read-only, byte-identical; verified
+    // in lift-or-cluster1.test.ts):
+    expect(rejects(`${base} @external @view r(c: bool): bytes { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(c ? m : this.fa); } }`)).toBe(false);
+    // a NON-first-arg encode ternary stays a reject (eval-order: only arg 0 is the statement's first side effect):
+    expect(rejects(`${base} @external @view r(c: bool): bytes { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(7n, c ? m : this.fa); } }`)).toBe(true);
+    // internal-call arg: mutation-sensitive -> still rejects (pending the parameter-effect analysis)
     expect(rejects(`${base} @external @view r(c: bool): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return this.g(c ? m : this.fa); } }`)).toBe(true);
     // an arrayGet-branch ternary (c ? xs[0] : m over Arr<Arr<In,2>,2>) is a separate reject, not hoisted
     expect(rejects(`${IN} @contract class C { @external @pure r(c: bool): Arr<In,2> { let xs: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; let m: Arr<In,2> = [In(9n,9n),In(9n,9n)]; return c ? xs[0n] : m; } }`)).toBe(true);
