@@ -1804,7 +1804,19 @@ export class Analyzer {
         }
         if (ts.isMethodDeclaration(member)) {
           const decs = decoratorNames(member);
-          if (decs.includes('receive')) {
+          // Native (item): a method NAMED `receive` / `fallback` IS the special entry (both are reserved in
+          // Solidity), so no @receive/@fallback decorator is needed. It routes through the same
+          // checkSpecialEntry, so it is byte-identical to the decorated form (and rejects a wrong shape the
+          // same way). This also closes a footgun: a bare `receive()` was previously a silently-dropped
+          // uncalled internal method, so the contract did NOT accept ether. Native mode only.
+          const nm = ts.isIdentifier(member.name) ? member.name.text : undefined;
+          // A native `static receive/fallback` is nonsensical (a special entry is not a class-static member);
+          // reject the modifier rather than silently ignore it (the decorated form already rejects it).
+          if (this.nativeMode && (nm === 'receive' || nm === 'fallback') && !decs.includes('receive') && !decs.includes('fallback') && (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword)) {
+            this.diags.error(member, 'JETH386', `a \`${nm}\` special entry cannot be \`static\``);
+            continue;
+          }
+          if (decs.includes('receive') || (this.nativeMode && nm === 'receive')) {
             if (sawReceiveHere)
               this.diags.error(member, 'JETH383', 'a contract may declare at most one @receive entry');
             sawReceiveHere = true;
@@ -1812,7 +1824,7 @@ export class Analyzer {
             receiveDecls.push({ member, contract: cn, virtual: decs.includes('virtual'), override: decs.includes('override') });
             continue;
           }
-          if (decs.includes('fallback')) {
+          if (decs.includes('fallback') || (this.nativeMode && nm === 'fallback')) {
             if (sawFallbackHere)
               this.diags.error(member, 'JETH383', 'a contract may declare at most one @fallback entry');
             sawFallbackHere = true;
