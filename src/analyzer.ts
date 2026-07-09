@@ -22420,6 +22420,24 @@ export class Analyzer {
         }
         return { kind: 'binary', type: BOOL, op, left: unified[0], right: unified[1], unchecked: false };
       }
+      // String/bytes EQUALITY: `a == b` / `a != b` on `string`|`string` or `bytes`|`bytes` is not a native
+      // EVM operation (solc rejects it too), but the idiomatic form is
+      // `keccak256(bytes(a)) == keccak256(bytes(b))`. Desugar to exactly that - byte-identical to what a
+      // solc user writes - reusing the keccak + bytes()-cast + bytes32-compare paths. unifyOperands above
+      // guaranteed both sides share the SAME dynamic type (a string-vs-bytes mix failed to unify, matching
+      // solc's reject); `bytes(<bytes>)` is a redundant no-op cast. ORDERED comparisons (< > <= >=) on
+      // string/bytes are NOT desugared and stay a clean JETH088 reject (no native/idiomatic ordering).
+      if ((op === '==' || op === '!=') && isBytesLike(unified[0].type) && ts.isBinaryExpression(node)) {
+        const f = ts.factory;
+        const Sn = <T extends ts.Node>(n: T): T => this.synth(n, node);
+        const kc = (operand: ts.Expression): ts.Expression =>
+          Sn(
+            f.createCallExpression(Sn(f.createIdentifier('keccak256')), undefined, [
+              Sn(f.createCallExpression(Sn(f.createIdentifier('bytes')), undefined, [operand])),
+            ]),
+          );
+        return this.checkExpr(Sn(f.createBinaryExpression(kc(node.left), node.operatorToken, kc(node.right))));
+      }
       // == / != / ordered comparisons are valid ONLY on value types. solc rejects them on structs,
       // arrays (fixed/dynamic), bytes/string and mappings ("Built-in binary operator == cannot be
       // applied to types ..."), so we must too (closing a soundness over-acceptance: JETH emitted
