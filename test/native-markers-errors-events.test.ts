@@ -185,7 +185,12 @@ describe('marker + raise hardening (verification sweep)', () => {
     expect(codes(`class C { E: error<{ a: u256 }>; E: error<{ a: u256 }>; f(): External<void> { } }`)).toEqual(['JETH128']);
   });
 
-  it('a visibility marker on a @library method rejects at the declaration (use @external)', () => {
-    expect(codes(`@library class L { f(a: u256): External<u256> { return a + 1n; } } class C { g(a: u256): External<u256> { return L.f(a); } }`)).toContain('JETH390');
+  it('External<T> on a library method = @external (a delegatecall library fn); Payable<T> rejects', () => {
+    // originally rejected as a half-state; now properly wired: the marker makes the library deployable +
+    // linked, exactly like the @external decorator (and solc's library-with-an-external-fn).
+    const M = `@library class L { f(a: u256): External<u256> { return a + 1n; } } class C { x: u256; s(a: u256): External<void> { this.x = L.f(a); } }`;
+    const D = `@library class L { @external f(a: u256): u256 { return a + 1n; } } class C { x: u256; s(a: u256): External<void> { this.x = L.f(a); } }`;
+    expect(compile(M, { fileName: 'C.jeth' }).creationBytecode).toBe(compile(D, { fileName: 'C.jeth' }).creationBytecode);
+    expect(codes(`@library class L { f(): Payable<void> { } } class C { g(): External<u256> { this.x = 1n; return 1n; } x: u256; }`)).toContain('JETH390');
   });
 });

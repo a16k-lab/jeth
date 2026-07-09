@@ -56,4 +56,20 @@ describe('static class = @library (native libraries)', () => {
   it('decorator mode is unchanged (a static class there keeps its old meaning)', () => {
     expect(codes(`// use @decorators\nstatic class L { f(): u256 { return 1n; } } @contract class C { @external @view g(): u256 { return 1n; } }`)).toEqual([]);
   });
+
+  it('DEPLOYABLE library: External<T> on a static-class method = a delegatecall fn (like solc)', () => {
+    // solc model: deployability falls out of the function visibilities - all-internal = inlined (never
+    // deployed); any external fn = deployed + linked, delegatecalled. One static class can MIX both.
+    const M = `static class L { sq(a: u256): External<u256> { return a * a; } } class C { x: u256; store(a: u256): External<void> { this.x = L.sq(a); } }`;
+    const D = `static class L { @external sq(a: u256): u256 { return a * a; } } class C { x: u256; store(a: u256): External<void> { this.x = L.sq(a); } }`;
+    expect(compile(M, { fileName: 'C.jeth' }).creationBytecode).toBe(compile(D, { fileName: 'C.jeth' }).creationBytecode);
+    // linked when external, not linked when all-internal.
+    expect(Object.keys(compile(M, { fileName: 'C.jeth' }).linkReferences ?? {}).length).toBeGreaterThan(0);
+    expect(Object.keys(compile(`static class L { half(a: u256): u256 { return a / 2n; } } class C { get g(a: u256): External<u256> { return L.half(a); } }`, { fileName: 'C.jeth' }).linkReferences ?? {}).length).toBe(0);
+    // a mixed library (internal + external fns) compiles.
+    expect(codes(`static class L { half(a: u256): u256 { return a / 2n; } sq(a: u256): External<u256> { return a * a; } } class C { x: u256; store(a: u256): External<void> { this.x = L.sq(L.half(a)); } }`)).toEqual([]);
+    // # private library fns work (intra-lib call), and privacy holds across contracts.
+    expect(codes(`static class L { #sq(a: u256): u256 { return a * a; } quad(a: u256): u256 { return L.#sq(L.#sq(a)); } } class C { get f(a: u256): External<u256> { return L.quad(a); } }`)).toEqual([]);
+    expect(codes(`static class L { #sq(a: u256): u256 { return a * a; } } class C { get f(a: u256): External<u256> { return L.#sq(a); } }`).length).toBeGreaterThan(0);
+  });
 });

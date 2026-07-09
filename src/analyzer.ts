@@ -1440,11 +1440,14 @@ export class Analyzer {
         );
         continue;
       }
-      const isExternal = decs.includes('external');
-      // The native External<T>/Payable<T> return markers are CONTRACT-method visibility sugar; a library's
-      // external (delegatecall) surface is keyed on the @external decorator throughout the library call
-      // resolution, so a marker here would produce a half-state (declaration accepted, every call site
-      // rejected). Reject it loudly at the declaration instead.
+      let isExternal = decs.includes('external');
+      // Native marker on a library method: `f(args): External<T>` = @external - a DELEGATECALL library
+      // function, making the library deployable + linked, exactly solc's `library` with an external fn
+      // (in solc, deployability falls out of the function visibilities, not the declaration). The marker
+      // is unwrapped HERE, before collectFunction, so the fn resolves like a plain method and collectLibrary
+      // promotes it below (libraryExternal + visibility), the same final state as the @external decorator.
+      // Payable<T> stays rejected: a library delegatecall cannot carry value (solc: "Library functions
+      // cannot be payable").
       if (
         this.nativeMode &&
         member.type &&
@@ -1452,12 +1455,22 @@ export class Analyzer {
         ts.isIdentifier(member.type.typeName) &&
         (member.type.typeName.text === 'External' || member.type.typeName.text === 'Payable')
       ) {
-        this.diags.error(
-          member.type,
-          'JETH390',
-          `@library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot use a ${member.type.typeName.text}<T> visibility marker; use @external for a delegatecall library function`,
-        );
-        continue;
+        const mk = member.type.typeName.text;
+        const args = member.type.typeArguments;
+        if (mk === 'Payable') {
+          this.diags.error(
+            member.type,
+            'JETH390',
+            `library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot be Payable<T> (a library delegatecall cannot carry value)`,
+          );
+          continue;
+        }
+        if (!args || args.length !== 1) {
+          this.diags.error(member.type, 'JETH352', `External<T> takes exactly one return type (e.g. External<u256>, or External<void> for none)`);
+          continue;
+        }
+        isExternal = true;
+        (member as unknown as { type?: ts.TypeNode }).type = args[0];
       }
       // @modifier / @event / @error inside a library are not supported in Phase A (solc allows none
       // of these as a library's callable surface in the way JETH needs); keep the surface to plain
