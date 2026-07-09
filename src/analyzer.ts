@@ -19415,6 +19415,40 @@ export class Analyzer {
           // JETH074; the flat consumers of the same ternary become catalogued over-rejections.
           e.kind === 'aggFieldRead';
         if (ptrHeaded(unified[0]) || ptrHeaded(unified[1])) {
+          // TERN-STRUCT-ARR read-only value-consumer lift: when this ternary is the ENTIRE statement
+          // value (a whole `return` / expression-statement - NOT a call arg, element-write RHS, or any
+          // conditional/nested position; isUnconditionalStatementExpr climbs through parens), it is a
+          // READ-ONLY consumer with no aliasing hazard. Materialize it ONCE to a synth const in the
+          // expr-hoist buffer (checkStatement emits the hoist BEFORE the statement), then consume the
+          // bound standalone local via the normal path - byte-identical to the manual
+          // `let p = c ? a : b; return p` (the copy-or-alias bind lift). Mutation-sensitive positions
+          // (internal-call arg / element-write RHS) keep the JETH074 reject pending the parameter-effect
+          // analysis, so the MC-2..MC-6 pointer-word-leak family stays prevented.
+          // Restrict the hoist to the branch kinds the cluster-1 copy-or-alias BIND actually supports:
+          // a memAggregate (memory Arr<In,N> local) or a non-pointer-headed branch (storage / literal).
+          // abiDecode / call / arrayGet / aggFieldRead branches are SEPARATE deliberate rejects (RC-1/RC-2
+          // / B-21) whose bind is unsupported - hoisting them would throw, not cleanly reject; leave them
+          // on the JETH074 path.
+          const bindSupported = (e: Expr): boolean => !ptrHeaded(e) || e.kind === 'memAggregate';
+          if (
+            bindSupported(unified[0]) &&
+            bindSupported(unified[1]) &&
+            this.exprHoist &&
+            this.isUnconditionalStatementExpr(node)
+          ) {
+            const tf = ts.factory;
+            const tmp = this.freshHoistName();
+            const decl = this.synth(
+              tf.createVariableDeclaration(tmp, undefined, this.jethTypeToTypeNode(unified[0].type, node), node),
+              node,
+            );
+            (decl as { parent?: ts.Node }).parent = this.synth(
+              tf.createVariableDeclarationList([decl], ts.NodeFlags.Const),
+              node,
+            );
+            this.checkLocalDecl(decl, this.exprHoist);
+            return this.checkExpr(this.synth(tf.createIdentifier(tmp), node), expected);
+          }
           this.diags.error(
             node,
             'JETH074',
