@@ -5979,6 +5979,16 @@ export class Analyzer {
         );
         return undefined;
       }
+      // A `#`-private method with an External/Payable marker is a CONTRADICTION - it would silently
+      // expose the MANGLED name ($p$C$f) as an externally callable (even payable!) ABI entry.
+      if (member.name.text.startsWith('$p$')) {
+        this.diags.error(
+          member.type,
+          'JETH352',
+          `a #-private method cannot be ${markerName}<T> (private and external contradict; it would expose the mangled name in the ABI); drop the # or the marker`,
+        );
+        return undefined;
+      }
       markerExternal = true;
       markerPayable = markerName === 'Payable';
       (member as unknown as { type?: ts.TypeNode }).type = args[0];

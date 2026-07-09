@@ -99,6 +99,16 @@ describe('Part A: two orthogonal axes - `get` = read-only (any visibility); Exte
     expect(codes(`class C { @view f(): Payable<u256> { return 1n; } }`)).toContain('JETH052');
     expect(codes(`// use @decorators\n@contract class C { f(): External<u256> { return 1n; } }`)).toContain('JETH013');
   });
+
+  it('a #-private method cannot carry External/Payable (it would expose the mangled name in the ABI)', () => {
+    // matrix-audit finding: #f(): External<void> / Payable<void> silently exposed `$p$C$f` as an
+    // externally callable (even payable) ABI entry - private and external contradict.
+    expect(codes(`class C { x: u256; #f(v: u256): External<void> { this.x = v; } g(v: u256): External<void> { this.#f(v); } }`)).toContain('JETH352');
+    expect(codes(`class C { x: u256; #f(): Payable<void> { this.x = msg.value; } }`)).toContain('JETH352');
+    expect(codes(`class C { static #f(a: u256): External<u256> { return a; } get g(): External<u256> { return C.#f(1n); } }`)).toContain('JETH352');
+    // a static Payable (a payable class-level fn: reads msg.value, no instance state) is coherent - accepted.
+    expect(codes(`class C { static f(): Payable<u256> { return msg.value; } }`)).toEqual([]);
+  });
 });
 
 describe('Part B: error<{...}> / event<{...}> / indexed<T> field declarations', () => {
