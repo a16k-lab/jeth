@@ -252,12 +252,13 @@ const twins: Twin[] = [
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
-      function pubTarget() external returns (uint256){ return pubTargetI(); }
-      function caller() external returns (uint256){ return pubTargetI() + 1; }
-      function extOnly() external returns (uint256){ return 42; }
-      function pubTargetI() internal returns (uint256){ return 7; }
+      function pubTarget() external pure returns (uint256){ return pubTargetI(); }
+      function caller() external pure returns (uint256){ return pubTargetI() + 1; }
+      function extOnly() external pure returns (uint256){ return 42; }
+      function pubTargetI() internal pure returns (uint256){ return 7; }
     }`,
-    expectedFnMap: { pubTarget: 'nonpayable', caller: 'nonpayable', extOnly: 'nonpayable' },
+    // item #8: no-decorator functions that touch no state infer PURE (was nonpayable under the old default).
+    expectedFnMap: { pubTarget: 'pure', caller: 'pure', extOnly: 'pure' },
     calls: [{ sig: 'pubTarget()' }, { sig: 'caller()' }, { sig: 'extOnly()' }],
   },
 
@@ -283,13 +284,14 @@ const twins: Twin[] = [
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
     contract C {
-      function viaThis(uint256 a) external returns (uint256){ return helperI(a); }
-      function helper(uint256 a) external returns (uint256){ return helperI(a); }
-      function countdown(uint256 k) external returns (uint256){ return countdownI(k); }
-      function helperI(uint256 a) internal returns (uint256){ return a + 100; }
-      function countdownI(uint256 k) internal returns (uint256){ if (k == 0) return 0; return countdownI(k - 1) + 1; }
+      function viaThis(uint256 a) external pure returns (uint256){ return helperI(a); }
+      function helper(uint256 a) external pure returns (uint256){ return helperI(a); }
+      function countdown(uint256 k) external pure returns (uint256){ return countdownI(k); }
+      function helperI(uint256 a) internal pure returns (uint256){ return a + 100; }
+      function countdownI(uint256 k) internal pure returns (uint256){ if (k == 0) return 0; return countdownI(k - 1) + 1; }
     }`,
-    expectedFnMap: { viaThis: 'nonpayable', helper: 'nonpayable', countdown: 'nonpayable' },
+    // item #8: these touch no state, so they infer PURE (was nonpayable under the old default).
+    expectedFnMap: { viaThis: 'pure', helper: 'pure', countdown: 'pure' },
     calls: [
       { sig: 'viaThis(uint256)', words: [1n] },
       { sig: 'helper(uint256)', words: [1n] },

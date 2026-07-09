@@ -1,8 +1,10 @@
-// Mutability inference under the @external-only model. The compiler resolves @read -> pure/view
-// from the body, and an @external entry with no @view/@pure -> nonpayable, BEFORE ABI emission.
-// A function with no @external is INTERNAL (excluded from the ABI, callable by name). Verified:
-// the inferred-mutability ABI is identical to the explicit-mutability ABI, and the inferred
-// contract is byte-identical to solc at runtime.
+// Mutability inference. In NATIVE mode (item #8) the compiler infers a function's mutability from its
+// body for ANY function with no explicit @view/@pure/@payable (writes -> nonpayable, reads-only -> view,
+// neither -> pure); @read is the same inference restricted to read-only. A function with no @external is
+// INTERNAL (excluded from the ABI, callable by name). Inference is codegen-neutral (view/pure/nonpayable
+// are byte-identical), so it only sets the ABI stateMutability - to match an idiomatic solc contract that
+// DECLARES the tightest mutability. Verified: the inferred-mutability ABI equals the explicit-mutability
+// ABI, and the inferred contract is byte-identical to solc at runtime.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Address } from '@ethereumjs/util';
 import { compile } from '../src/compile.js';
@@ -36,9 +38,9 @@ const EXPLICIT = `@contract class C {
   @external @view who(): address { return msg.sender; }
   @external @view viaHelper(): u256 { return this.sum(); }
   sum(): u256 { return this.x + this.y; }
-  @external extOnly(): u256 { return 42n; }
-  @external pubTarget(): u256 { return this.pubImpl(); }
-  @external caller(): u256 { return this.pubImpl() + 1n; }
+  @external @pure extOnly(): u256 { return 42n; }
+  @external @pure pubTarget(): u256 { return this.pubImpl(); }
+  @external @pure caller(): u256 { return this.pubImpl() + 1n; }
   pubImpl(): u256 { return 7n; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
@@ -51,9 +53,9 @@ contract C {
   function who() external view returns (address){ return msg.sender; }
   function viaHelper() external view returns (uint256){ return sum(); }
   function sum() internal view returns (uint256){ return x + y; }
-  function extOnly() external returns (uint256){ return 42; }
-  function pubTarget() public returns (uint256){ return 7; }
-  function caller() external returns (uint256){ return pubTarget() + 1; }
+  function extOnly() external pure returns (uint256){ return 42; }
+  function pubTarget() public pure returns (uint256){ return 7; }
+  function caller() external pure returns (uint256){ return pubTarget() + 1; }
 }`;
 
 const fnMap = (abi: { type: string; name?: string; stateMutability?: string }[]) =>
@@ -72,9 +74,9 @@ describe('@read / inferred-visibility / inference', () => {
       getX: 'view',
       who: 'view',
       viaHelper: 'view',
-      extOnly: 'nonpayable',
-      pubTarget: 'nonpayable',
-      caller: 'nonpayable',
+      extOnly: 'pure',
+      pubTarget: 'pure',
+      caller: 'pure',
     });
     expect(inf.some((e) => (e as { name?: string }).name === 'sum')).toBe(false); // -> not in ABI
   });

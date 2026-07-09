@@ -160,6 +160,7 @@ interface RawFunction {
   returnType: JethType;
   returnTypes?: JethType[]; // multi-value return `[T1, T2, ...]`
   inferRead?: boolean; // @read -> resolve to @pure (touches no state/env) or @view (reads, never writes)
+  isGetter?: boolean; // item #8: a native `get foo()` accessor - an argless external read-only fn; must not write
   nonReentrant?: boolean; // F4: @nonReentrant -> transient-storage reentrancy mutex on the external entry
   modifiers?: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[]; // Phase 5: applied @modifier decorators, in source order (leftmost = outermost); typeArgs = explicit generic-modifier type arguments (L15)
   key?: string; // unique identity for the call graph: the bare name when unique, `name__ovN` when
@@ -390,6 +391,16 @@ export class Analyzer {
   private genericsByName = new Map<string, { node: ts.MethodDeclaration; typeParams: string[] }>();
   private specializedNames = new Map<string, string>(); // specialization KEY -> mangled function name
   private specializationQueue: { mangled: string; node: ts.MethodDeclaration; binding: Map<string, JethType> }[] = []; // not-yet-checked specializations
+  // Item #8: override (v overrides ob) mutability-ladder pairs, checked AFTER the inference fixpoint so a
+  // native inferred base/derived carries its resolved view/pure - a pre-inference check sees only the
+  // provisional nonpayable default and both MISSES a loosening (view base -> nonpayable override) and
+  // SPURIOUSLY rejects a tightening (view base -> inferred-view override).
+  private overrideMutPairs: { v: RawFunction; ob: RawFunction }[] = [];
+  // Item #8 (mirror of overrideMutPairs): @interface-implementation mutability pairs, checked AFTER the
+  // inference fixpoint so a native no-keyword impl of a @view/@pure interface method carries its RESOLVED
+  // mutability (a pre-inference check saw only the provisional nonpayable default and spuriously rejected a
+  // legitimate read-only impl as a loosening).
+  private ifaceImplMutPairs: { w: RawFunction; ifaceMut: Mutability; ifaceName: string; methodName: string }[] = [];
 
   constructor(
     private readonly sourceFile: ts.SourceFile,
@@ -550,6 +561,7 @@ export class Analyzer {
     this.collectStructs();
     this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
     if (this.nativeMode) this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
+    this.rejectImplementsClauses(); // a silently-ignored `implements` clause skipped interface obligations
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
     const classes = this.findContractClasses();
     if (classes.length === 0) {
@@ -892,6 +904,29 @@ export class Analyzer {
   private collectInterfaces(): void {
     const visit = (n: ts.Node): void => {
       if (ts.isClassDeclaration(n) && decoratorNames(n).includes('interface')) this.collectInterface(n);
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  /** A TS `implements` heritage clause was SILENTLY IGNORED - it never entered the C3 linearization, so an
+   *  interface listed there imposed no must-implement obligation and NO mutability check, letting a contract
+   *  ship an incompatible (e.g. state-writing) implementation of an @interface's @view/@pure method (solc
+   *  rejects the equivalent `contract C is I`). JETH inherits/implements via `extends` (mapped to solc's
+   *  `is`), so reject `implements` loudly rather than drop it. */
+  private rejectImplementsClauses(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n)) {
+        for (const h of n.heritageClauses ?? []) {
+          if (h.token === ts.SyntaxKind.ImplementsKeyword) {
+            this.diags.error(
+              h,
+              'JETH391',
+              `'implements' is not supported; use 'extends' to inherit a base or implement an @interface (JETH maps 'extends' to solc's 'is')`,
+            );
+          }
+        }
+      }
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
@@ -1807,8 +1842,31 @@ export class Analyzer {
         } else if (ts.isConstructorDeclaration(member)) {
           if (ctorNode) this.diags.error(member, 'JETH300', 'a contract may declare at most one constructor');
           else ctorNode = member;
-        } else if (ts.isGetAccessor(member) || ts.isSetAccessor(member)) {
-          this.diags.error(member, 'JETH043', 'getters/setters are not supported');
+        } else if (ts.isGetAccessor(member)) {
+          if (this.nativeMode) {
+            // Item #8: `get foo(): T { ... }` is an argless external READ-ONLY accessor. Route it through
+            // the ordinary function pipeline as a synthesized `@external foo(): T { ... }` (mutability is
+            // then inferred like any native fn); flag it a getter so a writing getter is rejected below.
+            const g = member;
+            const ext = this.synth(ts.factory.createDecorator(ts.factory.createIdentifier('external')), g);
+            const synthMethod = this.synth(
+              ts.factory.createMethodDeclaration([ext], undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
+              g,
+            );
+            const fn = this.collectFunction(synthMethod);
+            if (fn) {
+              fn.isGetter = true;
+              fn.definingContract = cn;
+              collectedFns.push(fn);
+              const s = this.fnDeclContractsByName.get(fn.name) ?? new Set<string>();
+              s.add(cn);
+              this.fnDeclContractsByName.set(fn.name, s);
+            }
+          } else {
+            this.diags.error(member, 'JETH043', 'getters/setters are not supported');
+          }
+        } else if (ts.isSetAccessor(member)) {
+          this.diags.error(member, 'JETH043', 'setters are not supported (a state variable is written by a normal method)');
         }
         // a PropertyDeclaration was already handled in the state pass above.
       }
@@ -2050,7 +2108,12 @@ export class Analyzer {
         functions.push(f);
         effects.set(this.fkey(rf), {
           writes: this.currentWritesState,
-          reads: this.currentReadsState,
+          // An EXPLICIT @view function is at-least-view by DECLARATION: even if its own body reads
+          // nothing, a caller that calls it is at-least-view (solc: calling a view function is a state
+          // read). Seed its `reads` effect so the transitive fixpoint propagates that view floor -
+          // otherwise inference would over-claim the caller as pure. (@read is INFERRED, not a floor; a
+          // default 'nonpayable' is not a floor either - it is inferred in native / defaulted in decorator.)
+          reads: this.currentReadsState || (rf.mutability === 'view' && !rf.inferRead),
           readsEnv: this.currentReadsEnv,
           callees: this.currentCallees,
           // NOTE: resolveCurrentPtrVarCalls() runs FIRST (field order) - it adds the per-signature
@@ -2074,7 +2137,8 @@ export class Analyzer {
         functions.push(f);
         effects.set(this.fkey(rf), {
           writes: this.currentWritesState,
-          reads: this.currentReadsState,
+          // see the sibling capture above: an explicit @view carries a view floor for its callers.
+          reads: this.currentReadsState || (rf.mutability === 'view' && !rf.inferRead),
           readsEnv: this.currentReadsEnv,
           callees: this.currentCallees,
           // NOTE: resolveCurrentPtrVarCalls() runs FIRST (field order) - it adds the per-signature
@@ -2194,8 +2258,48 @@ export class Analyzer {
         const m: Mutability = e.reads || e.readsEnv ? 'view' : 'pure';
         f.mutability = m;
         e.rf.mutability = m;
+      } else if (this.nativeMode && e && f.mutability === 'nonpayable') {
+        // Item #8: in native mode a function with NO explicit mutability decorator has its mutability
+        // INFERRED from its transitive effects - writes (SSTORE / emit / a state-changing call) ->
+        // nonpayable, reads-only (storage or env / STATICCALL) -> view, neither -> pure. `nonpayable` is
+        // the sole spelling with no decorator (there is no @nonpayable), so this fires exactly when the
+        // author wrote no @view/@pure/@payable/@read. It is codegen-neutral (view/pure/nonpayable emit
+        // identical bytecode; only @payable differs) - it just sets the ABI stateMutability to match an
+        // idiomatic solc contract that DECLARES view/pure. @payable / @view / @pure / @read are untouched.
+        const m: Mutability = e.writes ? 'nonpayable' : e.reads || e.readsEnv ? 'view' : 'pure';
+        f.mutability = m;
+        e.rf.mutability = m;
+        // Item #8: a `get` accessor promises read-only; a getter that (transitively) writes is a hard error.
+        if (e.rf.isGetter && e.writes)
+          this.diags.error(e.rf.node, 'JETH043', `a 'get' accessor '${e.rf.name}' may not modify state (write to storage or emit an event); a getter is read-only`);
       }
       if (this.internallyCalled.has(f.key)) f.internallyCalled = true;
+    }
+    // Item #8: the override mutability ladder, now that every side's mutability is RESOLVED (inference ran).
+    // payable(3) > nonpayable(2) > view(1) > pure(0); an override may only keep or TIGHTEN, never loosen,
+    // and payable may cross only with payable.
+    {
+      const mr: Record<Mutability, number> = { payable: 3, nonpayable: 2, view: 1, pure: 0 };
+      for (const { v, ob } of this.overrideMutPairs) {
+        const crossesPayable = (v.mutability === 'payable') !== (ob.mutability === 'payable');
+        if (mr[v.mutability] > mr[ob.mutability] || crossesPayable)
+          this.diags.error(
+            v.node,
+            'JETH378',
+            `override of '${v.name}' cannot loosen mutability (@${ob.mutability} -> @${v.mutability}); an override may only keep or tighten it, and payable crosses are forbidden`,
+          );
+      }
+      // Same one-way ladder for an @interface implementation, likewise deferred until the impl's mutability
+      // is resolved so a native no-keyword read-only impl of a @view method is not spuriously rejected.
+      for (const { w, ifaceMut, ifaceName, methodName } of this.ifaceImplMutPairs) {
+        const crossesPayable = (w.mutability === 'payable') !== (ifaceMut === 'payable');
+        if (mr[w.mutability] > mr[ifaceMut] || crossesPayable)
+          this.diags.error(
+            w.node,
+            'JETH387',
+            `implementation of '${ifaceName}.${methodName}' cannot loosen mutability (@${ifaceMut} -> @${w.mutability}); it may only keep or tighten it, and payable crosses are forbidden`,
+          );
+      }
     }
 
     // Auto-generate getters for @public state variables (solc parity). A value-type or bytes/string
@@ -2883,7 +2987,6 @@ export class Analyzer {
     }
 
     const winners: RawFunction[] = [];
-    const mutRank: Record<Mutability, number> = { payable: 3, nonpayable: 2, view: 1, pure: 0 };
 
     // Transitive bases of each contract in the linearization (for the diamond override-list check):
     // a function that overrides versions from 2+ SIBLING base contracts (neither a base of the other)
@@ -3067,17 +3170,10 @@ export class Analyzer {
               );
             }
             // mutability one-way ladder (payable > nonpayable > view > pure): the override may only be
-            // EQUAL or MORE restrictive; payable may be overridden only by payable.
-            const dr = mutRank[v.mutability];
-            const br = mutRank[ob.mutability];
-            const crossesPayable = (v.mutability === 'payable') !== (ob.mutability === 'payable');
-            if (dr > br || crossesPayable) {
-              this.diags.error(
-                v.node,
-                'JETH378',
-                `override of '${v.name}' cannot loosen mutability (@${ob.mutability} -> @${v.mutability}); an override may only keep or tighten it, and payable crosses are forbidden`,
-              );
-            }
+            // EQUAL or MORE restrictive; payable may be overridden only by payable. DEFERRED to after the
+            // inference fixpoint (item #8) so a native inferred base/derived carries its resolved
+            // mutability - checked in checkMutabilityLadders(). Record the pair now.
+            this.overrideMutPairs.push({ v, ob });
             // visibility: external may be overridden by external (or, in solc, by public); JETH maps
             // public->external. An external/internal mismatch across the pair is rejected.
             if (v.visibility !== ob.visibility) {
@@ -3340,7 +3436,6 @@ export class Analyzer {
 
     const deployedName = lin[0]!.name?.text ?? '<anon>';
     const deployedAbstract = this.isAbstractClass(lin[0]!);
-    const mutRank: Record<Mutability, number> = { payable: 3, nonpayable: 2, view: 1, pure: 0 };
 
     // Index the winners (deployed, dispatched definitions) by canonical signature key. A winner is
     // bodyless only when the deployed contract is @abstract (otherwise JETH380 already fired); a
@@ -3404,16 +3499,9 @@ export class Analyzer {
           );
         }
         // MUTABILITY: equal or more restrictive, no payable cross (same one-way ladder as an override).
-        const dr = mutRank[w.mutability];
-        const br = mutRank[m.mutability];
-        const crossesPayable = (w.mutability === 'payable') !== (m.mutability === 'payable');
-        if (dr > br || crossesPayable) {
-          this.diags.error(
-            w.node,
-            'JETH387',
-            `implementation of '${ifaceName}.${m.name}' cannot loosen mutability (@${m.mutability} -> @${w.mutability}); it may only keep or tighten it, and payable crosses are forbidden`,
-          );
-        }
+        // DEFERRED to after the inference fixpoint (item #8) so a native no-keyword impl carries its
+        // resolved view/pure - checked in the post-inference ladder pass. Record the pair.
+        this.ifaceImplMutPairs.push({ w, ifaceMut: m.mutability, ifaceName, methodName: m.name });
         // VISIBILITY: an interface method is external; the impl must be external (JETH maps public->external).
         if (w.visibility !== 'external') {
           this.diags.error(

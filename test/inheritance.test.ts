@@ -118,7 +118,10 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     it('a non-@abstract contract with an unimplemented @virtual -> both reject', () =>
       par(`@abstract class A { @virtual @external f(): u256; } @contract class C extends A {}`, `abstract contract A { function f() external virtual returns(uint256); } contract C is A {}`));
     it('an override loosening mutability (view -> nonpayable) -> both reject', () =>
-      par(`@abstract class A { @virtual @view @external f(): u256 { return 1n; } } @contract class C extends A { @override @external f(): u256 { return 2n; } }`, `abstract contract A { function f() external view virtual returns(uint256){return 1;} } contract C is A { function f() external override returns(uint256){return 2;} }`));
+      // the derived genuinely WRITES state, so it is nonpayable and loosens the @view base (item #8 infers
+      // the override's mutability from its body: a no-keyword override that merely returned a constant would
+      // infer pure and legitimately TIGHTEN, so a real write is needed to exercise the loosening reject).
+      par(`@abstract class A { @state x: u256; @virtual @view @external f(): u256 { return this.x; } } @contract class C extends A { @override @external f(): u256 { this.x = this.x + 2n; return this.x; } }`, `abstract contract A { uint256 x; function f() external view virtual returns(uint256){return x;} } contract C is A { function f() external override returns(uint256){x=x+2; return x;} }`));
     it('a C3-impossible base order (C is B, A where B is A) -> both reject', () =>
       par(`@abstract class A {} @abstract class B extends A {} @contract class C extends B, A {}`, `abstract contract A {} abstract contract B is A {} contract C is B, A {}`));
     it('a diamond override WITH @override(B,K) -> both accept', () => {

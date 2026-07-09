@@ -128,7 +128,7 @@ describe('native-mode hardening (verification sweep)', () => {
   });
 
   it('F7: `class C extends Base` (both bare/concrete) is the leaf contract - identical to an abstract base', () => {
-    const base = (kw: string) => `${kw} class Base { @state x: u256; @virtual @external foo():u256{ return 1n; } @external @view getX():u256{ return this.x; } }`;
+    const base = (kw: string) => `${kw} class Base { @state x: u256; @virtual @external foo():u256{ return this.x; } @external @view getX():u256{ return this.x; } }`;
     const der = `class C extends Base { constructor(){ this.x=7n; } @override @external foo():u256{ return this.x+2n; } }`;
     // a bare concrete base is inlined into its leaf, byte-identical to spelling the base `abstract`.
     expect(bc(`${base('')} ${der}`)).toBe(bc(`${base('abstract')} ${der}`));
