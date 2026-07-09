@@ -26,38 +26,59 @@ const codes = (src: string): string[] => {
   try { compile(src, { fileName: 'C.jeth' }); return []; } catch (e: any) { return e?.diagnostics?.map((d: any) => d.code) ?? ['THROW']; }
 };
 
-describe('Part A: External<T> / Payable<T> visibility markers on contract methods', () => {
-  it('External<T> == @external and Payable<T> == @external @payable, byte-identically', () => {
-    expect(bc(`class C { x: u256; balanceOf(o: address): External<u256> { return this.x; } set(v: u256): External<void> { this.x = v; } }`))
-      .toBe(bc(`class C { x: u256; @external balanceOf(o: address): u256 { return this.x; } @external set(v: u256): void { this.x = v; } }`));
+describe('Part A: get = read-only, External<T> = writers, Payable<T> = payable', () => {
+  it('a PARAMETERIZED `get` == @external @view; External<T> writer == @external; Payable == @external @payable', () => {
+    expect(bc(`class C { balances: mapping<address, u256>; get balanceOf(o: address): u256 { return this.balances[o]; } deposit(a: u256): External<void> { this.balances[msg.sender] = a; } }`))
+      .toBe(bc(`class C { balances: mapping<address, u256>; @external @view balanceOf(o: address): u256 { return this.balances[o]; } @external deposit(a: u256): void { this.balances[msg.sender] = a; } }`));
     expect(bc(`class C { x: u256; deposit(): Payable<void> { this.x = msg.value; } }`))
       .toBe(bc(`class C { x: u256; @external @payable deposit(): void { this.x = msg.value; } }`));
   });
 
-  it('mutability is inferred through the marker; bare methods stay internal', () => {
-    const abi = compile(`class C { x: u256; reads(): External<u256> { return this.x; } calc(a: u256): External<u256> { return a + 1n; } writes(v: u256): External<void> { this.x = v; } pays(): Payable<void> { this.x = msg.value; } helper(): u256 { return this.x; } }`, { fileName: 'C.jeth' }).abi as any[];
+  it('mutability is inferred (get -> view/pure by body; External writers nonpayable); bare stays internal', () => {
+    const abi = compile(`class C { x: u256; get reads(): u256 { return this.x; } get calc(a: u256): u256 { return a + 1n; } writes(v: u256): External<void> { this.x = v; } pays(): Payable<void> { this.x = msg.value; } helper(): u256 { return this.x; } }`, { fileName: 'C.jeth' }).abi as any[];
     const m = Object.fromEntries(abi.filter((f) => f.type === 'function').map((f) => [f.name, f.stateMutability]));
     expect(m).toEqual({ reads: 'view', calc: 'pure', writes: 'nonpayable', pays: 'payable' }); // no `helper`
   });
 
-  it('a fully-native contract (markers + inference) runs byte-identical to solc', async () => {
+  it('a fully-native contract (get + markers + inference) runs byte-identical to solc', async () => {
     const J = `class C { x: u256;
       set(v: u256): External<void> { this.x = v; }
-      get2(): External<u256> { return this.x; }
+      get value(): u256 { return this.x; }
       pay(): Payable<u256> { this.x = this.x + msg.value; return this.x; } }`;
     const S = `contract C { uint256 x;
       function set(uint256 v) external { x = v; }
-      function get2() external view returns(uint256){ return x; }
+      function value() external view returns(uint256){ return x; }
       function pay() external payable returns(uint256){ x = x + msg.value; return x; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
-    for (const [sg, args, value] of [['set(uint256)', W(5), 0n], ['get2()', '', 0n], ['pay()', '', 30n], ['get2()', '', 0n]] as [string, string, bigint][]) {
+    for (const [sg, args, value] of [['set(uint256)', W(5), 0n], ['value()', '', 0n], ['pay()', '', 30n], ['value()', '', 0n]] as [string, string, bigint][]) {
       const rj = await h.call(aj, sel(sg) + args, { value });
       const rs = await h.call(as, sel(sg) + args, { value });
       expect(rj.success, sg).toBe(rs.success);
       expect(rj.returnHex, sg).toBe(rs.returnHex);
     }
+  });
+
+  it('GET IS A MUST: a read-only value-returning External<T> rejects; void assert-style stays External<void>', () => {
+    // a read-only external returning a value must be spelled `get` (explicit or inferred read-only).
+    expect(codes(`class C { x: u256; balanceOf(): External<u256> { return this.x; } }`)).toContain('JETH352');
+    expect(codes(`class C { calc(a: u256): External<u256> { return a + 1n; } }`)).toContain('JETH352');
+    expect(codes(`class C { x: u256; @view f(): External<u256> { return this.x; } }`)).toContain('JETH352');
+    // a VOID read-only external (assert-style: the body only checks/reverts) is exempt.
+    expect(codes(`class C { x: u256; check(a: u256): External<void> { require(a > this.x, "too small"); } }`)).toEqual([]);
+    // a writing getter still rejects (a get is read-only).
+    expect(codes(`class C { x: u256; get bad(v: u256): u256 { this.x = v; return v; } }`)).toContain('JETH043');
+  });
+
+  it('virtual idioms: a @virtual get chain works; override HEADROOM is a bodyless @virtual External<T>', () => {
+    // a virtual READER chain: @virtual get + @override get (byte-identical to the decorated form).
+    expect(bc(`abstract class B { x: u256; @virtual get v(): u256 { return this.x; } } class C extends B { @override get v(): u256 { return this.x + 1n; } }`))
+      .toBe(bc(`@abstract class B { @state x: u256; @virtual @external @view v(): u256 { return this.x; } } @contract class C extends B { @override @external @view v(): u256 { return this.x + 1n; } }`));
+    // headroom: a BODYLESS @virtual External<T> stays nonpayable, so a writing override is legal (solc's
+    // abstract-virtual idiom); a BODIED @virtual External reader rejects (spell it get, or make it bodyless).
+    expect(codes(`abstract class B { x: u256; @virtual f(): External<u256>; } class C extends B { @override f(): External<u256> { this.x = this.x + 1n; return this.x; } }`)).toEqual([]);
+    expect(codes(`abstract class B { x: u256; @virtual f(): External<u256> { return this.x; } } class C extends B { @override f(): External<u256> { this.x = this.x + 1n; return this.x; } }`)).toContain('JETH352');
   });
 
   it('marker misuse rejects: bad arity, on a getter, with a conflicting mutability, in decorator mode', () => {

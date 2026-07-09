@@ -160,7 +160,10 @@ interface RawFunction {
   returnType: JethType;
   returnTypes?: JethType[]; // multi-value return `[T1, T2, ...]`
   inferRead?: boolean; // @read -> resolve to @pure (touches no state/env) or @view (reads, never writes)
-  isGetter?: boolean; // item #8: a native `get foo()` accessor - an argless external read-only fn; must not write
+  isGetter?: boolean; // item #8: a native `get foo(...)` accessor - an external read-only fn; must not write
+  fromExternalMarker?: boolean; // item #10: visibility came from an External<T> return marker - WRITERS only
+  // (a read-only external is spelled `get`); enforced post-inference (a @virtual base is exempt: it may
+  // stay nonpayable for override headroom, like solc's virtual-reader idiom).
   nonReentrant?: boolean; // F4: @nonReentrant -> transient-storage reentrancy mutex on the external entry
   modifiers?: { name: string; argNodes: ts.Expression[]; typeArgs?: readonly ts.TypeNode[]; site: ts.Node }[]; // Phase 5: applied @modifier decorators, in source order (leftmost = outermost); typeArgs = explicit generic-modifier type arguments (L15)
   key?: string; // unique identity for the call graph: the bare name when unique, `name__ovN` when
@@ -1888,8 +1891,10 @@ export class Analyzer {
               continue;
             }
             const ext = this.synth(ts.factory.createDecorator(ts.factory.createIdentifier('external')), g);
+            // carry the accessor's OWN decorators (@virtual / @override on a `get` participate in the
+            // normal override machinery) alongside the synthesized @external.
             const synthMethod = this.synth(
-              ts.factory.createMethodDeclaration([ext], undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
+              ts.factory.createMethodDeclaration([...(ts.getDecorators(g) ?? []), ext], undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
               g,
             );
             const fn = this.collectFunction(synthMethod);
@@ -2311,6 +2316,20 @@ export class Analyzer {
         // Item #8: a `get` accessor promises read-only; a getter that (transitively) writes is a hard error.
         if (e.rf.isGetter && e.writes)
           this.diags.error(e.rf.node, 'JETH043', `a 'get' accessor '${e.rf.name}' may not modify state (write to storage or emit an event); a getter is read-only`);
+        // Item #10: External<T> is the WRITER form - a READ-ONLY external function is spelled `get`
+        // (known only after the fixpoint, since mutability is inferred). A virtual reader chain is
+        // `@virtual get f()`; override HEADROOM (a base whose override may write) is a BODYLESS
+        // `@virtual f(): External<T>;` - a bodyless declaration skips inference and stays nonpayable,
+        // exactly solc's abstract-virtual idiom. Note bodyless declarations never enter this loop.
+        // A VOID read-only external (assert-style: the body only checks/reverts) is exempt - a value-less
+        // `get` is not a getter; solc likewise allows an external pure assert function.
+        const returnsValue = e.rf.returnType.kind !== 'void' || (e.rf.returnTypes?.length ?? 0) > 0;
+        if (e.rf.fromExternalMarker && !e.rf.isGetter && !e.writes && returnsValue)
+          this.diags.error(
+            e.rf.node,
+            'JETH352',
+            `'${e.rf.name}' is read-only; a read-only external function is spelled with \`get\` (e.g. \`get ${e.rf.name}(...): T\`) - External<T> is for state-mutating functions`,
+          );
       }
       if (this.internallyCalled.has(f.key)) f.internallyCalled = true;
     }
@@ -6015,6 +6034,8 @@ export class Analyzer {
       isOverride: decs.includes('override'),
       overrideList,
       bodyless: member.body === undefined,
+      // item #10: External<T> is the WRITER form (read-only external = `get`); enforced post-inference.
+      fromExternalMarker: markerExternal && !markerPayable,
     };
 
     // VISIBILITY MODEL: the ONLY writable visibility decorator is @external (an exposed ABI entry).
@@ -6056,6 +6077,19 @@ export class Analyzer {
     } else if (decs.includes('payable')) mutability = 'payable';
     else if (decs.includes('view')) mutability = 'view';
     else if (decs.includes('pure')) mutability = 'pure';
+    // External<T> is the WRITER form: a read-only external function RETURNING A VALUE is spelled `get`.
+    // (A VOID read-only external - an assert-style function whose body only checks/reverts - stays
+    // External<void>: a value-less `get` is not a getter.) An explicit read-only mutability combined
+    // with a value-returning marker is a contradiction up front; the inferred-read-only case is
+    // enforced after the effects fixpoint.
+    const markerInnerVoid = markerExternal && (!member.type || member.type.kind === ts.SyntaxKind.VoidKeyword);
+    if (markerExternal && !markerPayable && !markerInnerVoid && (read || decs.includes('view') || decs.includes('pure'))) {
+      this.diags.error(
+        member,
+        'JETH352',
+        `a read-only external function is spelled with \`get\` (e.g. \`get ${member.name.getText(this.sourceFile)}(...): T\`); External<T> is for state-mutating functions`,
+      );
+    }
     // A Payable<T> return marker fixes the mutability to payable (never re-inferred); it conflicts with a
     // read-only marker/decorator exactly like @payable does.
     if (markerPayable) {
