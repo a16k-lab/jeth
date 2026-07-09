@@ -73,8 +73,9 @@ describe('bare field = @state (item #9)', () => {
     expect(bc(`${base('abstract')} ${der}`)).toBe(bc(`@abstract class Base { @state owner: address; @external @view getOwner(): address { return this.owner; } } @contract class C extends Base { @state n: u256; @external setN(v: u256): void { this.n = v; } }`));
   });
 
-  it('rejects: static field (item #7), a field visibility decorator, and a bare field in decorator mode', () => {
-    expect(codes(`class C { static K: u256 = 5n; @external @view f(): u256 { return 1n; } }`)).toContain('JETH045');
+  it('rejects a field visibility decorator + a bare field in decorator mode; a static field is a constant (item #7)', () => {
+    // item #7: `static K = ...` is a compile-time constant (no storage slot), not a JETH045 reject.
+    expect(codes(`class C { static K: u256 = 5n; @external @view f(): u256 { return this.K; } }`)).toEqual([]);
     expect(codes(`class C { @public x: u256; @external @view f(): u256 { return 1n; } }`)).toContain('JETH440');
     expect(codes(`// use @decorators\n@contract class C { x: u256; @external @view f(): u256 { return this.x; } }`)).toContain('JETH045');
   });

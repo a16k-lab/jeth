@@ -5378,18 +5378,37 @@ export class Analyzer {
       namespace = nsArg.ns;
       if (nsArg.raw) this.rawNamespaces.add(nsArg.ns);
     }
-    // Item #9 (native mode): a BARE (undecorated) NON-static contract field is an implicit @state storage
-    // variable - no @state decorator needed, byte-identical to spelling `@state`. A `static` field is item
-    // #7 (constant/immutable) and stays rejected here; @constant/@immutable/@storage keep their own kind.
+    // Item #7 (native mode): a `static` field is the native spelling of a compile-time @constant (when it
+    // carries an initializer) or a constructor-set @immutable (when it does not). It routes through the exact
+    // same collectors, so it is byte-identical to the decorated form. (A non-static field falls through to
+    // @state below; @constant/@immutable/@storage decorators keep their own kind via their branches.)
     const hasStatic = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+    if (this.nativeMode && hasStatic && !decs.includes('state') && !isConstant && !isImmutable && !isStorage) {
+      if (!ts.isIdentifier(member.name)) {
+        this.diags.error(member, 'JETH046', 'a constant / immutable name must be a plain identifier');
+        return;
+      }
+      if (!member.type) {
+        this.diags.error(
+          member,
+          'JETH045',
+          `a native static ${member.initializer ? 'constant' : 'immutable'} '${member.name.text}' needs an explicit type annotation (e.g. \`static ${member.name.text}: u256${member.initializer ? ' = ...' : ''}\`)`,
+        );
+        return;
+      }
+      // `static K = <init>` = a compile-time @constant; `static M;` (no initializer, set in the ctor) = an
+      // @immutable. Routed through the exact same collectors, so byte-identical to the decorated form.
+      if (member.initializer) this.collectConstant(member);
+      else this.collectImmutable(member);
+      return;
+    }
+    // Item #9 (native mode): a BARE (undecorated) non-static field is an implicit @state storage variable.
     const isState = this.isStateField(member, decs);
     if (!isState && !isConstant && !isImmutable && !isStorage) {
       this.diags.error(
         member,
         'JETH045',
-        this.nativeMode && hasStatic
-          ? "a `static` field is not supported yet (static = constant/immutable is a future item); use @state for a storage variable"
-          : "contract fields must be marked @state (or @constant / @immutable / @storage('ns'))",
+        "contract fields must be marked @state (or @constant / @immutable / @storage('ns'))",
       );
       return;
     }

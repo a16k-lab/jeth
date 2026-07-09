@@ -118,6 +118,66 @@ function isDecoratorModeSource(source: string): boolean {
   return false;
 }
 
+/**
+ * Item #7: a `static` contract field is a compile-time constant / a ctor-set immutable. In idiomatic TS a
+ * static member is read as `ClassName.K` (a `this.K` on a static member is a TS type error), but JETH's
+ * const/immutable resolution is keyed on `this.K`. Bridge the two by rewriting every `ClassName.K` access
+ * (where `ClassName` names a class in this file and `K` is one of its `static` fields) to `this.K`, so the
+ * user writes idiomatic, IDE-clean `C.K` while the existing this.<constant> resolver does the work. Both
+ * spellings end up valid. Only STATIC-field accesses are touched; `Foo(addr).m()` (a call, not a bare
+ * identifier receiver) and any non-static member are left alone.
+ */
+function rewriteStaticFieldAccess(sf: ts.SourceFile): void {
+  // A class's kind decorators (a bare / abstract class carries none; a @struct/@interface/@library class is
+  // NOT a contract and its `static` field is not a contract constant, so it must not feed the rewrite map).
+  const classDecs = (cls: ts.ClassDeclaration): string[] =>
+    (ts.getDecorators(cls) ?? [])
+      .map((d) => (ts.isIdentifier(d.expression) ? d.expression.text : ts.isCallExpression(d.expression) && ts.isIdentifier(d.expression.expression) ? d.expression.expression.text : ''))
+      .filter(Boolean);
+  // Harvest, ONLY from contract-shaped classes: the set of their NAMES, and the UNION of all their static
+  // field names. All contract-shaped classes in a file are the deployed contract + its abstract bases (one
+  // contract per file), whose statics all flatten into the deployed contract, reachable via `this.K`. So a
+  // union lets `C.BK` reach an INHERITED base static too, while a @struct/@interface/@library class (not a
+  // contract) contributes nothing and thus never hijacks a `TypeName.member`.
+  const contractClassNames = new Set<string>();
+  const staticNames = new Set<string>();
+  const scan = (n: ts.Node): void => {
+    if (ts.isClassDeclaration(n) && n.name && !classDecs(n).some((d) => d === 'struct' || d === 'interface' || d === 'library')) {
+      contractClassNames.add(n.name.text);
+      for (const m of n.members) {
+        if (!ts.isPropertyDeclaration(m) || !ts.isIdentifier(m.name)) continue;
+        if ((ts.getModifiers(m) ?? []).some((x) => x.kind === ts.SyntaxKind.StaticKeyword)) staticNames.add(m.name.text);
+      }
+    }
+    ts.forEachChild(n, scan);
+  };
+  ts.forEachChild(sf, scan);
+  if (staticNames.size === 0) return;
+  // Every locally-bound name (parameter / let / const / var / destructuring binding). A syntactic pre-pass
+  // has no scope analysis, so if a class name is ALSO used as a local/param anywhere, a `C.K` there may bind
+  // to the shadowing local (solc: local scope wins) - do NOT rewrite accesses on that name; the ordinary
+  // resolver reads the local's field (or rejects), matching solc. Conservative but sound.
+  const bound = new Set<string>();
+  const collectBound = (n: ts.Node): void => {
+    if ((ts.isParameter(n) || ts.isVariableDeclaration(n) || ts.isBindingElement(n)) && ts.isIdentifier(n.name))
+      bound.add(n.name.text);
+    ts.forEachChild(n, collectBound);
+  };
+  ts.forEachChild(sf, collectBound);
+  const rewrite = (n: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && ts.isIdentifier(n.name)) {
+      if (contractClassNames.has(n.expression.text) && staticNames.has(n.name.text) && !bound.has(n.expression.text)) {
+        const thisExpr = ts.factory.createThis();
+        ts.setTextRange(thisExpr, n.expression);
+        (thisExpr as unknown as { parent: ts.Node }).parent = n;
+        (n as { expression: ts.Expression }).expression = thisExpr;
+      }
+    }
+    ts.forEachChild(n, rewrite);
+  };
+  ts.forEachChild(sf, rewrite);
+}
+
 export function compile(source: string, opts: CompileOptions = {}): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
@@ -144,14 +204,20 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   // Item #2: rewrite JS `#` private members to contract-scoped internal names BEFORE validation /
   // analysis, so `#f()` / `this.#x` lower like internal members and derived access rejects.
   manglePrivateMembers(parsed.sourceFile);
+  // `nativeMode` selects the native-declaration syntax (bare class = contract, type = struct, abstract
+  // class = abstract base, static field = const/immutable) as an additive superset.
+  const nativeMode = !isDecoratorModeSource(source);
+  // Item #7: a `static` field is a constant/immutable; TS accesses it idiomatically as `ClassName.K`.
+  // Rewrite `ClassName.K` -> `this.K` so the ordinary this.<constant> resolution handles it. Native mode
+  // only (a static field is JETH045 in decorator mode). Runs after the `#` mangle so a private static name
+  // is already in its final form.
+  if (nativeMode) rewriteStaticFieldAccess(parsed.sourceFile);
   const diags = new DiagnosticBag(parsed.sourceFile, fileName);
 
   // Phase 0: subset validation (collects, does not throw yet).
   validateSubset(parsed.sourceFile, diags);
 
-  // Phase 1: semantic analysis + type checking. `nativeMode` selects the native-declaration syntax
-  // (bare class = contract, type = struct, abstract class = abstract base) as an additive superset.
-  const nativeMode = !isDecoratorModeSource(source);
+  // Phase 1: semantic analysis + type checking.
   const ir = analyze(
     parsed.sourceFile,
     diags,
