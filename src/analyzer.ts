@@ -397,6 +397,11 @@ export class Analyzer {
     // Phase 3: set when this compilation unit's deployed contract is a synthesized @diamond (the source
     // was expanded from `@diamond('array')`); marks the ContractIR so emitRuntime adds the router.
     private readonly diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
+    // Dual-syntax mode (items 3-10): true = NATIVE mode (default) - a bare `class` is the contract, a
+    // `type P = {..}` is a struct, a TS `abstract class` is an abstract base, all as an ADDITIVE
+    // superset over the legacy structural decorators (which still work during migration). false =
+    // DECORATOR mode (a `// use @decorators` file) - today's exact behavior; the native forms are off.
+    private readonly nativeMode = true,
   ) {}
 
   // ---- lexical scope stack -------------------------------------------------
@@ -590,7 +595,11 @@ export class Analyzer {
 
   private collectTypeAliases(): void {
     const visit = (n: ts.Node): void => {
-      if (ts.isTypeAliasDeclaration(n)) this.collectTypeAlias(n);
+      // A native object-type alias (`type P = { a: T }`, item #5) is a STRUCT, not a branded newtype; it
+      // is collected in the struct pass (collectStructs, after enums + @structs) so its fields may
+      // reference enums, @structs and earlier structs exactly like a @struct class. Skip it here.
+      if (ts.isTypeAliasDeclaration(n) && !(this.nativeMode && ts.isTypeLiteralNode(n.type)))
+        this.collectTypeAlias(n);
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
@@ -735,9 +744,50 @@ export class Analyzer {
   private collectStructs(): void {
     const visit = (n: ts.Node): void => {
       if (ts.isClassDeclaration(n) && decoratorNames(n).includes('struct')) this.collectStruct(n);
+      // Item #5 (native mode): a `type P = { ... }` object-type alias is a struct, collected here (in the
+      // same source-ordered walk as @struct classes) so a type-struct field may reference any enum,
+      // @struct, or EARLIER struct/type-struct - identical to the @struct "reference earlier types" rule.
+      else if (this.nativeMode && ts.isTypeAliasDeclaration(n) && ts.isTypeLiteralNode(n.type))
+        this.collectNativeTypeStruct(n);
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
+  }
+
+  /** Item #5: build a struct from a native `type P = { a: T; b: T }` object-type alias. Reuses the exact
+   *  @struct field builder, so the struct IR is IDENTICAL to `@struct class P`. A struct type carries
+   *  data only: any non-field member (method / index / call / get-set signature) or a `?`-optional,
+   *  `readonly`, or untyped field is REJECTED, not silently dropped - solc has no such struct members, so
+   *  dropping them would over-accept. */
+  private collectNativeTypeStruct(decl: ts.TypeAliasDeclaration): void {
+    const name = decl.name.text;
+    const lit = decl.type as ts.TypeLiteralNode;
+    if (this.structsByName.has(name) || resolvePrimitiveName(name)) {
+      this.diags.error(decl, 'JETH015', `type name '${name}' conflicts with an existing type`);
+      return;
+    }
+    for (const m of lit.members) {
+      if (
+        !ts.isPropertySignature(m) ||
+        !m.type ||
+        m.questionToken !== undefined ||
+        (ts.getModifiers(m)?.length ?? 0) > 0
+      ) {
+        this.diags.error(
+          m,
+          'JETH015',
+          `a struct type '${name}' may only contain plain \`name: Type\` fields (no method / index / call signatures, and no optional '?', readonly, or untyped fields)`,
+        );
+        return;
+      }
+    }
+    const members = lit.members.map((m) => {
+      const p = m as ts.PropertySignature;
+      return { name: p.name, type: p.type, node: p as ts.Node };
+    });
+    const fields = this.buildStructFields(decl, name, 'struct type', members);
+    if (!fields) return;
+    this.structsByName.set(name, { kind: 'struct', name, fields });
   }
 
   private collectStruct(cls: ts.ClassDeclaration): void {
@@ -746,15 +796,33 @@ export class Analyzer {
       this.diags.error(cls, 'JETH220', `@struct '${name}' redeclared`);
       return;
     }
+    const members = cls.members
+      .filter(ts.isPropertyDeclaration)
+      .map((m) => ({ name: m.name, type: m.type, node: m as ts.Node }));
+    const fields = this.buildStructFields(cls, name, '@struct', members);
+    if (!fields) return;
+    this.structsByName.set(name, { kind: 'struct', name, fields });
+  }
+
+  /** Build a struct's packed StructField[] from its typed members. Shared by @struct classes and native
+   *  `type P = { ... }` object-type aliases (item #5), so both produce IDENTICAL struct IR (and identical
+   *  field-level rejects). Reports each field error and the empty-struct error against `anchor` /
+   *  `kindLabel`; returns null if any field failed or the struct has no fields. */
+  private buildStructFields(
+    anchor: ts.Node,
+    name: string,
+    kindLabel: string,
+    members: readonly { name: ts.PropertyName; type: ts.TypeNode | undefined; node: ts.Node }[],
+  ): StructField[] | null {
     const raw: RawStateVar[] = [];
-    for (const member of cls.members) {
-      if (!ts.isPropertyDeclaration(member)) continue;
+    for (const member of members) {
       if (!ts.isIdentifier(member.name)) {
-        this.diags.error(member, 'JETH221', 'struct field name must be a plain identifier');
+        this.diags.error(member.node, 'JETH221', 'struct field name must be a plain identifier');
         continue;
       }
-      if (raw.some((r) => r.name === (member.name as ts.Identifier).text)) {
-        this.diags.error(member, 'JETH221', `duplicate struct field name '${member.name.text}'`);
+      const fname = member.name.text;
+      if (raw.some((r) => r.name === fname)) {
+        this.diags.error(member.node, 'JETH221', `duplicate struct field name '${fname}'`);
         continue;
       }
       const t = resolveType(member.type, this.diags, this.structsByName);
@@ -764,8 +832,8 @@ export class Analyzer {
       // matching Solidity). It occupies its own slot (planLayout); inner[k] resolves to
       // keccak(key . (structBase + fieldSlot)).
       if (t.kind === 'mapping') {
-        if (!this.validateMappingKeys(t, member.type ?? member)) continue;
-        raw.push({ name: member.name.text, type: t });
+        if (!this.validateMappingKeys(t, member.type ?? member.node)) continue;
+        raw.push({ name: fname, type: t });
         continue;
       }
       // FIX 4: an INTERNAL FUNCTION POINTER field is a one-word VALUE (its stable id), laid out in
@@ -777,7 +845,7 @@ export class Analyzer {
       // every ABI/getter/event/return path (gating on isStaticType / isSupportedDynStructField) keeps
       // rejecting it, byte-identical to solc's "internal type in ABI" reject.
       if (isFuncrefValueAggregate(t)) {
-        raw.push({ name: member.name.text, type: t });
+        raw.push({ name: fname, type: t });
         continue;
       }
       // Fields may be static (value, nested struct, or fixed array). A struct with
@@ -797,29 +865,23 @@ export class Analyzer {
       const funcrefNestedOk = t.kind === 'struct' && this.typeHasFuncref(t) && this.isSupportedDynStructLocal(t);
       if (!isStaticType(t) && !this.isSupportedDynStructField(t) && !funcrefNestedOk) {
         this.diags.error(
-          member,
+          member.node,
           'JETH229',
           this.typeHasFuncref(t)
-            ? `struct field '${member.name.text}' of type ${displayName(t)} is not supported yet (an internal function pointer as a struct field is not supported; use a single function-pointer variable)`
-            : `struct field '${member.name.text}' of type ${displayName(t)} is not supported yet (supported dynamic field kinds: bytes/string and a nested struct)`,
+            ? `struct field '${fname}' of type ${displayName(t)} is not supported yet (an internal function pointer as a struct field is not supported; use a single function-pointer variable)`
+            : `struct field '${fname}' of type ${displayName(t)} is not supported yet (supported dynamic field kinds: bytes/string and a nested struct)`,
         );
         continue;
       }
-      raw.push({ name: member.name.text, type: t });
+      raw.push({ name: fname, type: t });
     }
     if (raw.length === 0) {
-      this.diags.error(cls, 'JETH223', `@struct '${name}' must have at least one field`);
-      return;
+      this.diags.error(anchor, 'JETH223', `${kindLabel} '${name}' must have at least one field`);
+      return null;
     }
     // struct-internal field layout reuses the state-var packing planner.
     const layout = planLayout(raw);
-    const fields: StructField[] = layout.vars.map((v) => ({
-      name: v.name,
-      type: v.type,
-      slot: v.slot,
-      offset: v.offset,
-    }));
-    this.structsByName.set(name, { kind: 'struct', name, fields });
+    return layout.vars.map((v) => ({ name: v.name, type: v.type, slot: v.slot, offset: v.offset }));
   }
 
   /** Collect @interface class declarations: a named type + a per-method {selector, mutability, params,
@@ -1053,7 +1115,62 @@ export class Analyzer {
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
+    // Item #4 (native mode): a bare `class C { ... }` is the deployed contract - no @contract needed.
+    // This is a pure FALLBACK: it activates ONLY when the file declares no decorated deployable contract,
+    // so an existing decorated file (which may carry unrelated bare helper classes) is never re-read. The
+    // deployed contract is a bare class (no class-KIND decorator, no TS `abstract` keyword) that is NOT
+    // extended by another class: an extended base is inlined into its most-derived leaf (like solc's
+    // `contract C is Base` where Base is itself concrete), so only the LEAF bare class deploys. Two
+    // unrelated bare classes are still two contracts -> JETH041.
+    if (this.nativeMode && out.length === 0) {
+      const extended = this.extendedClassNames();
+      const visitNative = (n: ts.Node): void => {
+        if (ts.isClassDeclaration(n) && this.isNativeContractClass(n) && !(n.name && extended.has(n.name.text)))
+          out.push(n);
+        ts.forEachChild(n, visitNative);
+      };
+      ts.forEachChild(this.sourceFile, visitNative);
+    }
     return out;
+  }
+
+  /** The class-KIND decorators - they name what a class IS (contract / struct / interface / abstract /
+   *  library / a proxy-family deployable). A native bare declaration carries none of them. */
+  private static readonly CLASS_KIND_DECORATORS = [
+    'contract', 'struct', 'interface', 'abstract', 'library', 'proxy', 'beacon', 'facet', 'diamond',
+  ];
+
+  /** True if `cls` carries the TS `abstract` modifier keyword (`abstract class B {}`) - the native
+   *  spelling of an @abstract base (item #6). */
+  private hasAbstractKeyword(cls: ts.ClassDeclaration): boolean {
+    return (ts.getModifiers(cls) ?? []).some((m) => m.kind === ts.SyntaxKind.AbstractKeyword);
+  }
+
+  /** Native mode: a concrete deployed contract spelled without decorators - a `class C {}` that carries
+   *  no class-kind decorator and is not TS-`abstract`. (An `abstract class` is a base; a `type` is a
+   *  struct; a @library/@struct/... class keeps its decorator meaning.) */
+  private isNativeContractClass(cls: ts.ClassDeclaration): boolean {
+    if (this.hasAbstractKeyword(cls)) return false;
+    const decs = decoratorNames(cls);
+    return !Analyzer.CLASS_KIND_DECORATORS.some((d) => decs.includes(d));
+  }
+
+  /** Every class name that appears in some `extends` clause (a base). Used so a native bare base is
+   *  inlined into its leaf rather than counted as a second deployed contract (item #4). */
+  private extendedClassNames(): Set<string> {
+    const names = new Set<string>();
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n)) {
+        for (const h of n.heritageClauses ?? []) {
+          if (h.token === ts.SyntaxKind.ExtendsKeyword) {
+            for (const b of h.types) if (ts.isIdentifier(b.expression)) names.add(b.expression.text);
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+    return names;
   }
 
   // ---- Phase A: internal (inlined) libraries --------------------------------
@@ -1252,7 +1369,12 @@ export class Analyzer {
     const visit = (n: ts.Node): void => {
       if (ts.isClassDeclaration(n) && n.name) {
         const decs = decoratorNames(n);
-        if (decs.includes('contract') || decs.includes('abstract') || decs.includes('facet')) {
+        // Item #4/#6 (native mode): a bare `class` (concrete contract) and an `abstract class` (base) are
+        // both registered for `extends` resolution, alongside the decorated @contract/@abstract/@facet.
+        if (
+          decs.includes('contract') || decs.includes('abstract') || decs.includes('facet') ||
+          (this.nativeMode && (this.hasAbstractKeyword(n) || this.isNativeContractClass(n)))
+        ) {
           this.classByName.set(n.name.text, n);
         }
       }
@@ -1262,7 +1384,8 @@ export class Analyzer {
   }
 
   private isAbstractClass(cls: ts.ClassDeclaration): boolean {
-    return decoratorNames(cls).includes('abstract');
+    // Item #6 (native mode): a TS `abstract class` is an abstract base, the native spelling of @abstract.
+    return decoratorNames(cls).includes('abstract') || (this.nativeMode && this.hasAbstractKeyword(cls));
   }
 
   /** Is this linearization node an @interface (not a @contract/@abstract contract)? An interface is a
@@ -24203,6 +24326,7 @@ export function analyze(
   sourceFile: ts.SourceFile,
   diags: DiagnosticBag,
   diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
+  nativeMode = true,
 ): ContractIR | undefined {
-  return new Analyzer(sourceFile, diags, diamond).analyze();
+  return new Analyzer(sourceFile, diags, diamond, nativeMode).analyze();
 }

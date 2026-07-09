@@ -88,6 +88,36 @@ function manglePrivateMembers(sf: ts.SourceFile): void {
   ts.forEachChild(sf, (n) => rewrite(n, undefined));
 }
 
+/**
+ * Dual-syntax mode (items 3-10): JETH is moving from STRUCTURAL decorators (@contract/@struct/
+ * @abstract/...) to native TS constructs (a bare `class` is the contract, `type P = {..}` a struct,
+ * `abstract class` an abstract base). Mode is PER-FILE: a file whose leading comment block contains
+ * the exact line `// use @decorators` is DECORATOR mode (today's syntax, unchanged); any other file
+ * is NATIVE mode (the default). During this migration phase native mode is a PERMISSIVE SUPERSET - it
+ * ADDS the native declaration forms while still accepting every legacy decorator, so existing files
+ * keep compiling byte-identically; the strict "structural decorators are banned in native mode" pass
+ * lands post-migration (once items 7-10 make native mode fully writable). Returns true for DECORATOR
+ * mode. Scans the leading run of blank + line-comment lines and stops at the first code line, so a
+ * `// SPDX-...` header above the pragma is fine; a block comment or code before it is not.
+ */
+function isDecoratorModeSource(source: string): boolean {
+  // Split on \r\n, lone \r (classic-Mac), and \n so the pragma is found regardless of line-ending style.
+  for (const raw of source.split(/\r\n|\r|\n/)) {
+    const line = raw.trim();
+    if (line === '') continue; // blank line: keep scanning
+    if (line.startsWith('//')) {
+      // Tolerate benign spacing/slash variants of the directive - `//use @decorators`, `//  use  @decorators`,
+      // `/// use @decorators`, trailing spaces - by stripping the leading slashes and collapsing whitespace.
+      // Still case-sensitive and exact on the words, so unrelated `//`-comments (an SPDX header) keep scanning.
+      const body = line.replace(/^\/+/, '').replace(/\s+/g, ' ').trim();
+      if (body === 'use @decorators') return true;
+      continue; // another leading line-comment (e.g. an SPDX header): keep scanning
+    }
+    break; // first code / block-comment line: the pragma window is closed
+  }
+  return false;
+}
+
 export function compile(source: string, opts: CompileOptions = {}): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
@@ -119,11 +149,14 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   // Phase 0: subset validation (collects, does not throw yet).
   validateSubset(parsed.sourceFile, diags);
 
-  // Phase 1: semantic analysis + type checking.
+  // Phase 1: semantic analysis + type checking. `nativeMode` selects the native-declaration syntax
+  // (bare class = contract, type = struct, abstract class = abstract base) as an additive superset.
+  const nativeMode = !isDecoratorModeSource(source);
   const ir = analyze(
     parsed.sourceFile,
     diags,
     dia.expanded && dia.name ? { name: dia.name, variant: dia.variant ?? 'array' } : undefined,
+    nativeMode,
   );
 
   // Surface all front-end diagnostics together.
