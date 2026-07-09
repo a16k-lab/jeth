@@ -106,8 +106,11 @@ describe('Part A: two orthogonal axes - `get` = read-only (any visibility); Exte
     expect(codes(`class C { x: u256; #f(v: u256): External<void> { this.x = v; } g(v: u256): External<void> { this.#f(v); } }`)).toContain('JETH352');
     expect(codes(`class C { x: u256; #f(): Payable<void> { this.x = msg.value; } }`)).toContain('JETH352');
     expect(codes(`class C { static #f(a: u256): External<u256> { return a; } get g(): External<u256> { return C.#f(1n); } }`)).toContain('JETH352');
-    // a static Payable (a payable class-level fn: reads msg.value, no instance state) is coherent - accepted.
-    expect(codes(`class C { static f(): Payable<u256> { return msg.value; } }`)).toEqual([]);
+    // a static Payable is rejected (user ruling): a payable fn RECEIVES ether, and a static has no `this`
+    // to account for it - received money with nowhere to record it, and no solc counterpart to anchor it.
+    expect(codes(`class C { static f(): Payable<u256> { return msg.value; } }`)).toContain('JETH352');
+    // a static External writer/assert stays fine; the payable entry belongs on an instance method.
+    expect(codes(`class C { total: u256; deposit(): Payable<void> { this.total = this.total + msg.value; } static check(a: u256): External<void> { require(a > 0n, "x"); } }`)).toEqual([]);
   });
 });
 

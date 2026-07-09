@@ -5989,6 +5989,20 @@ export class Analyzer {
         );
         return undefined;
       }
+      // A STATIC method cannot be Payable<T>: a payable function exists to RECEIVE ether, and a static
+      // has no `this` - it cannot store or account for the value it accepts (received money with nowhere
+      // to record it). Solidity has no comparable concept either; use an instance method.
+      if (
+        markerName === 'Payable' &&
+        (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword)
+      ) {
+        this.diags.error(
+          member.type,
+          'JETH352',
+          `a static method cannot be Payable<T> (a payable function receives ether, but a static has no instance state to account for it); use an instance method`,
+        );
+        return undefined;
+      }
       markerExternal = true;
       markerPayable = markerName === 'Payable';
       (member as unknown as { type?: ts.TypeNode }).type = args[0];
