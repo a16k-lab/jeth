@@ -9024,24 +9024,49 @@ export class Analyzer {
       this.diags.error(decl.type, 'JETH116', 'for-of binding has an inferred element type; drop the annotation');
       return;
     }
-    const iterable = node.expression;
-    if (this.exprHasCall(iterable)) {
+    const srcNode = node.expression;
+    if (this.exprHasCall(srcNode)) {
       this.diags.error(
-        iterable,
+        srcNode,
         'JETH117',
         'for-of iterable must be a plain array reference (bind a computed value to a const first)',
       );
       return;
     }
-    const probe = this.checkExpr(iterable);
+    const f = ts.factory;
+    const S = <T extends ts.Node>(n: T): T => this.synth(n, srcNode);
+    // TERN-STRUCT-ARR for-of lift: a CONDITIONAL iterable `c ? a : b` cannot self-type as a bare
+    // expression (a pointer-headed struct-array ternary needs an expected type, else JETH074), and
+    // re-embedding it in the desugar's `.length` / `[i]` positions would also re-evaluate it per
+    // iteration. So bind it ONCE to a synth const whose type is inferred from a branch (the same
+    // expected-typed bind the manual `let p: T = c ? a : b` workaround uses), then iterate that const.
+    // A for-of over the loop variable is read-only, so no aliasing witness fires - byte-identical to
+    // the manual `let p = c ? a : b; for (const e of p)`. Non-conditional iterables keep the direct desugar.
+    let iterExpr: ts.Expression = srcNode;
+    const bare = stripParens(srcNode);
+    if (ts.isConditionalExpression(bare)) {
+      const branchT = this.checkExprQuiet(bare.whenTrue) ?? this.checkExprQuiet(bare.whenFalse);
+      if (branchT && branchT.type.kind === 'array') {
+        const iterName = this.freshSynthName('__jeth_iter_');
+        // bind the paren-STRIPPED conditional: the ternary-struct-array bind lift keys on a top-level
+        // ConditionalExpression, so a parenthesized `(c ? a : b)` initializer would fall to JETH074.
+        const bindDecl = S(
+          f.createVariableDeclaration(iterName, undefined, this.jethTypeToTypeNode(branchT.type, srcNode), bare),
+        );
+        const bindStmt = S(
+          f.createVariableStatement(undefined, S(f.createVariableDeclarationList([bindDecl], ts.NodeFlags.Const))),
+        );
+        this.checkStatement(bindStmt, returnType, out);
+        iterExpr = S(f.createIdentifier(iterName));
+      }
+    }
+    const probe = this.checkExpr(iterExpr);
     if (!probe) return;
     if (probe.type.kind !== 'array') {
-      this.diags.error(iterable, 'JETH118', `for-of requires an array, got ${displayName(probe.type)}`);
+      this.diags.error(srcNode, 'JETH118', `for-of requires an array, got ${displayName(probe.type)}`);
       return;
     }
     const elemType = probe.type.element;
-    const f = ts.factory;
-    const S = <T extends ts.Node>(n: T): T => this.synth(n, iterable);
     const idxName = this.freshSynthName('__jeth_of_');
     const idx = (): ts.Identifier => S(f.createIdentifier(idxName));
     const initDecl = S(
@@ -9057,7 +9082,7 @@ export class Analyzer {
       f.createBinaryExpression(
         idx(),
         ts.SyntaxKind.LessThanToken,
-        S(f.createPropertyAccessExpression(iterable, 'length')),
+        S(f.createPropertyAccessExpression(iterExpr, 'length')),
       ),
     );
     const incr = S(
@@ -9071,8 +9096,8 @@ export class Analyzer {
       f.createVariableDeclaration(
         decl.name,
         undefined,
-        this.jethTypeToTypeNode(elemType, iterable),
-        S(f.createElementAccessExpression(iterable, idx())),
+        this.jethTypeToTypeNode(elemType, srcNode),
+        S(f.createElementAccessExpression(iterExpr, idx())),
       ),
     );
     const elemFlags = initList.flags & ts.NodeFlags.Const ? ts.NodeFlags.Const : ts.NodeFlags.Let;
