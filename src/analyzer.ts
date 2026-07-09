@@ -1727,9 +1727,9 @@ export class Analyzer {
         if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
           const nm = member.name.text;
           const decs = decoratorNames(member);
-          // only a plain @state takes a slot and can collide across the chain; @constant/@immutable
-          // collisions are caught by the existing JETH046 path after collection.
-          if (decs.includes('state') && !decs.includes('constant') && !decs.includes('immutable')) {
+          // only a plain @state (or a native BARE field, item #9) takes a slot and can collide across the
+          // chain; @constant/@immutable collisions are caught by the existing JETH046 path after collection.
+          if (this.isStateField(member, decs)) {
             const prior = stateOwner.get(nm);
             if (prior) {
               this.diags.error(
@@ -5346,6 +5346,17 @@ export class Analyzer {
     this.events.push(ev);
   }
 
+  /** Item #9: is this contract PropertyDeclaration a plain @state storage field - either explicitly @state,
+   *  or a NATIVE bare (undecorated, non-static) field with no @constant/@immutable/@storage kind? Used at
+   *  BOTH the cross-chain duplicate collision check (JETH373) and collectStateVar so a bare field collides
+   *  and lays out byte-identically to @state. (@storage / @constant / @immutable keep their own kind.) */
+  private isStateField(member: ts.PropertyDeclaration, decs: string[]): boolean {
+    if (decs.includes('constant') || decs.includes('immutable') || decs.includes('storage')) return false;
+    if (decs.includes('state')) return true;
+    const hasStatic = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+    return this.nativeMode && !hasStatic;
+  }
+
   private collectStateVar(member: ts.PropertyDeclaration, out: RawStateVar[]): void {
     const decs = decoratorNames(member);
     const isConstant = decs.includes('constant');
@@ -5367,11 +5378,18 @@ export class Analyzer {
       namespace = nsArg.ns;
       if (nsArg.raw) this.rawNamespaces.add(nsArg.ns);
     }
-    if (!decs.includes('state') && !isConstant && !isImmutable && !isStorage) {
+    // Item #9 (native mode): a BARE (undecorated) NON-static contract field is an implicit @state storage
+    // variable - no @state decorator needed, byte-identical to spelling `@state`. A `static` field is item
+    // #7 (constant/immutable) and stays rejected here; @constant/@immutable/@storage keep their own kind.
+    const hasStatic = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+    const isState = this.isStateField(member, decs);
+    if (!isState && !isConstant && !isImmutable && !isStorage) {
       this.diags.error(
         member,
         'JETH045',
-        "contract fields must be marked @state (or @constant / @immutable / @storage('ns'))",
+        this.nativeMode && hasStatic
+          ? "a `static` field is not supported yet (static = constant/immutable is a future item); use @state for a storage variable"
+          : "contract fields must be marked @state (or @constant / @immutable / @storage('ns'))",
       );
       return;
     }
@@ -5388,7 +5406,7 @@ export class Analyzer {
     // user writing `public` got a private var with no getter and no diagnostic. Reject them exactly as the
     // function side does. (@constant/@immutable have already returned via their own gates above/below and
     // carry their own visibility rules, so this only fires for a state/storage field.)
-    if (decs.includes('state') || isStorage) {
+    if (isState || isStorage) {
       const removedFieldVis = ['public', 'internal', 'private', 'hidden'].find((d) => decs.includes(d));
       if (removedFieldVis) {
         this.diags.error(

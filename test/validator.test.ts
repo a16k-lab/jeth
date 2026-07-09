@@ -72,8 +72,11 @@ describe('subset validator', () => {
     expect(codesFor(wrap('this.x = 25e-1;'))).toContain('JETH003');
   });
 
-  it('rejects an unmarked contract field', () => {
-    expect(codesFor(`@contract\nclass T { y: u256 = 0n; }`)).toContain('JETH045');
+  it('rejects an unmarked contract field in decorator mode; native mode treats it as @state (item #9)', () => {
+    // decorator mode: a contract field must carry an explicit @state (JETH045).
+    expect(codesFor(`// use @decorators\n@contract\nclass T { y: u256 = 0n; }`)).toContain('JETH045');
+    // native mode (default): a bare non-static field IS a @state storage variable - accepted.
+    expect(codesFor(`@contract\nclass T { y: u256 = 0n; @external @view g(): u256 { return this.y; } }`)).not.toContain('JETH045');
   });
 
   it('rejects @view functions that write storage', () => {
