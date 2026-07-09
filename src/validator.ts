@@ -95,6 +95,19 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
       case ts.SyntaxKind.FunctionDeclaration:
         diags.error(node, 'JETH024', 'closures / free functions are not supported; use contract methods');
         break;
+      // Imports were previously SILENTLY IGNORED (parsed, resolved to nothing): the imported name then
+      // failed downstream with a misleading unknown-identifier error while the import looked legitimate.
+      // JETH compiles a SINGLE file (one compilation unit); reject loudly until a real multi-file import
+      // system lands. The `export` MODIFIER on declarations stays allowed (harmless; forward-compatible
+      // with export-means-importable once imports exist).
+      case ts.SyntaxKind.ImportDeclaration:
+      case ts.SyntaxKind.ImportEqualsDeclaration:
+        diags.error(node, 'JETH035', 'imports are not supported yet: JETH compiles a single file; declarations must live in this file');
+        break;
+      case ts.SyntaxKind.ExportDeclaration: // `export { x }` / `export * from "..."` (re-export forms)
+      case ts.SyntaxKind.ExportAssignment: // `export = x` / `export default <expr>`
+        diags.error(node, 'JETH035', 'export statements are not supported (JETH compiles a single file); the `export` modifier on a declaration is allowed');
+        break;
       case ts.SyntaxKind.ThrowStatement: {
         // Native raise sugar: `throw this.X({...})` (a this-property CALL) is the ONE permitted throw
         // shape - the analyzer validates that X is a declared custom error and lowers it to the same
