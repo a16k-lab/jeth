@@ -95,9 +95,20 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
       case ts.SyntaxKind.FunctionDeclaration:
         diags.error(node, 'JETH024', 'closures / free functions are not supported; use contract methods');
         break;
-      case ts.SyntaxKind.ThrowStatement:
-        diags.error(node, 'JETH025', 'throw is not supported; use revert(...) / require(...)');
+      case ts.SyntaxKind.ThrowStatement: {
+        // Native raise sugar: `throw this.X({...})` (a this-property CALL) is the ONE permitted throw
+        // shape - the analyzer validates that X is a declared custom error and lowers it to the same
+        // revert. Every other throw (a string, `new Error()`, a bare value) stays rejected here.
+        const ex = (node as ts.ThrowStatement).expression;
+        const isThisCall =
+          ts.isCallExpression(ex) &&
+          ts.isPropertyAccessExpression(ex.expression) &&
+          ex.expression.expression.kind === ts.SyntaxKind.ThisKeyword;
+        if (!isThisCall) {
+          diags.error(node, 'JETH025', 'throw is not supported; use `throw this.<error>({...})` for a declared custom error, or revert(...) / require(...)');
+        }
         break;
+      }
       // try/catch is supported around a high-level interface call (Feature 2): the analyzer validates
       // the controlling-call shape, the catch binding, and the scoped this.reason/this.panic helpers.
       // The validator still recurses into both bodies, so any unsupported construct inside them is

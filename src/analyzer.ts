@@ -1416,6 +1416,24 @@ export class Analyzer {
         continue;
       }
       const isExternal = decs.includes('external');
+      // The native External<T>/Payable<T> return markers are CONTRACT-method visibility sugar; a library's
+      // external (delegatecall) surface is keyed on the @external decorator throughout the library call
+      // resolution, so a marker here would produce a half-state (declaration accepted, every call site
+      // rejected). Reject it loudly at the declaration instead.
+      if (
+        this.nativeMode &&
+        member.type &&
+        ts.isTypeReferenceNode(member.type) &&
+        ts.isIdentifier(member.type.typeName) &&
+        (member.type.typeName.text === 'External' || member.type.typeName.text === 'Payable')
+      ) {
+        this.diags.error(
+          member.type,
+          'JETH390',
+          `@library '${name}' method '${ts.isIdentifier(member.name) ? member.name.text : '<anon>'}' cannot use a ${member.type.typeName.text}<T> visibility marker; use @external for a delegatecall library function`,
+        );
+        continue;
+      }
       // @modifier / @event / @error inside a library are not supported in Phase A (solc allows none
       // of these as a library's callable surface in the way JETH needs); keep the surface to plain
       // internal functions. Generic library functions are likewise deferred.
@@ -1860,6 +1878,15 @@ export class Analyzer {
             // the ordinary function pipeline as a synthesized `@external foo(): T { ... }` (mutability is
             // then inferred like any native fn); flag it a getter so a writing getter is rejected below.
             const g = member;
+            // A get accessor is ALREADY external + read-only; a visibility marker on its return is at best
+            // redundant (External) and at worst nonsensical (Payable, which would change the bytecode).
+            if (
+              g.type && ts.isTypeReferenceNode(g.type) && ts.isIdentifier(g.type.typeName) &&
+              (g.type.typeName.text === 'External' || g.type.typeName.text === 'Payable')
+            ) {
+              this.diags.error(g.type, 'JETH352', `a 'get' accessor cannot take a ${g.type.typeName.text}<T> marker (a getter is already external and read-only)`);
+              continue;
+            }
             const ext = this.synth(ts.factory.createDecorator(ts.factory.createIdentifier('external')), g);
             const synthMethod = this.synth(
               ts.factory.createMethodDeclaration([ext], undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
@@ -5358,18 +5385,110 @@ export class Analyzer {
     this.events.push(ev);
   }
 
+  /** Native error/event field declarations. Returns true when the field IS an `error<{...}>` /
+   *  `event<{...}>` declaration (handled here, valid or not); false = not one, continue normal routing.
+   *  The object-type fields become the declaration's ordered parameters; an `indexed<T>` field type
+   *  unwraps to an @indexed parameter of T. A synthesized decorated bodyless method is routed through
+   *  collectErrorDecl/collectEvent so every gate + the selector/topic0 are identical to the decorator form. */
+  private collectNativeErrorOrEventField(member: ts.PropertyDeclaration): boolean {
+    const t = member.type;
+    if (!t || !ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName)) return false;
+    const kind = t.typeName.text;
+    if (kind !== 'error' && kind !== 'event') return false;
+    const args = t.typeArguments;
+    if (!args || args.length !== 1 || !ts.isTypeLiteralNode(args[0]!)) {
+      this.diags.error(t, 'JETH353', `${kind}<...> takes exactly one object type listing the parameters, e.g. \`X: ${kind}<{ a: u256; b: address }>\` (or \`${kind}<{}>\` for none)`);
+      return true;
+    }
+    if (!ts.isIdentifier(member.name)) {
+      this.diags.error(member, 'JETH049', `${kind} name must be a plain identifier`);
+      return true;
+    }
+    if (member.name.text.startsWith('$p$')) {
+      this.diags.error(member, 'JETH353', `an ${kind} declaration cannot be #-private (an ${kind} has no visibility)`);
+      return true;
+    }
+    if (member.initializer) {
+      this.diags.error(member.initializer, 'JETH353', `an ${kind} declaration cannot have an initializer`);
+      return true;
+    }
+    if ((ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword)) {
+      this.diags.error(member, 'JETH353', `an ${kind} declaration cannot be \`static\``);
+      return true;
+    }
+    const decs = decoratorNames(member);
+    const strayDecs = decs.filter((d) => !(kind === 'event' && d === 'anonymous'));
+    if (strayDecs.length) {
+      this.diags.error(member, 'JETH353', `an ${kind} field declaration cannot carry decorator(s): ${strayDecs.map((d) => '@' + d).join(', ')}${kind === 'event' ? ' (only @anonymous is allowed)' : ''}`);
+      return true;
+    }
+    const f = ts.factory;
+    const params: ts.ParameterDeclaration[] = [];
+    for (const m of args[0]!.members) {
+      if (!ts.isPropertySignature(m) || !m.name || !ts.isIdentifier(m.name) || !m.type || m.questionToken || (ts.getModifiers(m)?.length ?? 0) > 0) {
+        this.diags.error(m, 'JETH353', `an ${kind} parameter must be a plain \`name: Type\` field (no methods, optional '?', or readonly)`);
+        return true;
+      }
+      // an event field typed `indexed<T>` unwraps to an @indexed parameter of T.
+      let pType: ts.TypeNode = m.type;
+      const paramDecs: ts.Decorator[] = [];
+      if (ts.isTypeReferenceNode(pType) && ts.isIdentifier(pType.typeName) && pType.typeName.text === 'indexed') {
+        const inner = pType.typeArguments;
+        if (!inner || inner.length !== 1) {
+          this.diags.error(pType, 'JETH353', `indexed<T> takes exactly one type (e.g. indexed<address>)`);
+          return true;
+        }
+        if (kind === 'error') {
+          this.diags.error(pType, 'JETH129', `error parameter '${m.name.text}' cannot be indexed (only event parameters are indexed)`);
+          return true;
+        }
+        paramDecs.push(this.synth(f.createDecorator(this.synth(f.createIdentifier('indexed'), m)), m));
+        pType = inner[0]!;
+      }
+      params.push(this.synth(f.createParameterDeclaration(paramDecs.length ? paramDecs : undefined, undefined, m.name, undefined, pType, undefined), m));
+    }
+    const kindDec = this.synth(f.createDecorator(this.synth(f.createIdentifier(kind), member)), member);
+    const anonDec = decs.includes('anonymous') ? [this.synth(f.createDecorator(this.synth(f.createIdentifier('anonymous'), member)), member)] : [];
+    const synthDecl = this.synth(
+      f.createMethodDeclaration([kindDec, ...anonDec], undefined, member.name, undefined, undefined, params, undefined, undefined),
+      member,
+    );
+    if (kind === 'error') this.collectErrorDecl(synthDecl);
+    else this.collectEvent(synthDecl);
+    return true;
+  }
+
   /** Item #9: is this contract PropertyDeclaration a plain @state storage field - either explicitly @state,
    *  or a NATIVE bare (undecorated, non-static) field with no @constant/@immutable/@storage kind? Used at
    *  BOTH the cross-chain duplicate collision check (JETH373) and collectStateVar so a bare field collides
    *  and lays out byte-identically to @state. (@storage / @constant / @immutable keep their own kind.) */
   private isStateField(member: ts.PropertyDeclaration, decs: string[]): boolean {
     if (decs.includes('constant') || decs.includes('immutable') || decs.includes('storage')) return false;
+    // a native error<{...}> / event<{...}> FIELD is a declaration, not storage - it must not enter the
+    // state-owner collision pre-pass (a duplicate error would otherwise ALSO report a spurious JETH373).
+    if (
+      this.nativeMode &&
+      member.type &&
+      ts.isTypeReferenceNode(member.type) &&
+      ts.isIdentifier(member.type.typeName) &&
+      (member.type.typeName.text === 'error' || member.type.typeName.text === 'event')
+    ) {
+      return false;
+    }
     if (decs.includes('state')) return true;
     const hasStatic = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
     return this.nativeMode && !hasStatic;
   }
 
   private collectStateVar(member: ts.PropertyDeclaration, out: RawStateVar[]): void {
+    // Native error/event FIELD declarations: `Insufficient: error<{ need: u256; have: u256 }>` /
+    // `Transfer: event<{ from: indexed<address>; amount: u256 }>` are the native spellings of
+    // `@error Insufficient(need, have);` / `@event Transfer(@indexed from, amount);`. Recognized FIRST
+    // (before the static/const and bare-field=state routing, which would swallow the field as an
+    // unknown-type state var), then a decorated bodyless method is SYNTHESIZED and routed through the
+    // SAME collectErrorDecl/collectEvent - every validation gate and the selector/topic0 encoding are
+    // reused verbatim, so the field form is byte-identical to the decorator form.
+    if (this.nativeMode && this.collectNativeErrorOrEventField(member)) return;
     const decs = decoratorNames(member);
     const isConstant = decs.includes('constant');
     const isImmutable = decs.includes('immutable');
@@ -5813,6 +5932,35 @@ export class Analyzer {
     }
     const decs = decoratorNames(member);
 
+    // Item #10 (native mode): a marker RETURN type declares visibility - `f(): External<T>` = @external
+    // (mutability inferred as usual), `f(): Payable<T>` = @external @payable (payable IMPLIES external; an
+    // internal payable does not exist). The marker is stripped BEFORE the return type resolves (mirroring
+    // the interface View/Pure/Payable unwrap) and never enters the signature/selector; a bare return stays
+    // internal. Native mode only - in decorator mode the marker is an unknown type (JETH013), as before.
+    let markerExternal = false;
+    let markerPayable = false;
+    if (
+      this.nativeMode &&
+      member.type &&
+      ts.isTypeReferenceNode(member.type) &&
+      ts.isIdentifier(member.type.typeName) &&
+      (member.type.typeName.text === 'External' || member.type.typeName.text === 'Payable')
+    ) {
+      const markerName = member.type.typeName.text;
+      const args = member.type.typeArguments;
+      if (!args || args.length !== 1) {
+        this.diags.error(
+          member.type,
+          'JETH352',
+          `${markerName}<T> takes exactly one return type (e.g. ${markerName}<u256>, or ${markerName}<void> for none)`,
+        );
+        return undefined;
+      }
+      markerExternal = true;
+      markerPayable = markerName === 'Payable';
+      (member as unknown as { type?: ts.TypeNode }).type = args[0];
+    }
+
     // Phase 5: capture APPLIED @modifier decorators (e.g. @onlyOwner / @minVal(amount)) in source
     // order (leftmost = outermost). A decorator whose name is not a built-in function decorator is a
     // candidate modifier application; it is resolved against modifiersByName in checkFunction (an
@@ -5882,7 +6030,7 @@ export class Analyzer {
         `@${removedVis} is not a JETH visibility decorator: write @external to expose a function; everything else is internal by default (the compiler infers private/internal)`,
       );
     }
-    const visibility: Visibility = decs.includes('external') ? 'external' : 'internal';
+    const visibility: Visibility = decs.includes('external') || markerExternal ? 'external' : 'internal';
 
     // MUTABILITY INFERENCE: `@read` is a read-only function whose @pure/@view is computed from
     // its TRANSITIVE effects after the fixpoint. Provisionally @view so the body is validated as
@@ -5908,9 +6056,21 @@ export class Analyzer {
     } else if (decs.includes('payable')) mutability = 'payable';
     else if (decs.includes('view')) mutability = 'view';
     else if (decs.includes('pure')) mutability = 'pure';
+    // A Payable<T> return marker fixes the mutability to payable (never re-inferred); it conflicts with a
+    // read-only marker/decorator exactly like @payable does.
+    if (markerPayable) {
+      if (read || decs.includes('view') || decs.includes('pure')) {
+        this.diags.error(
+          member,
+          'JETH052',
+          `conflicting mutability: a Payable<T> return marker with @${read ? 'read' : decs.includes('view') ? 'view' : 'pure'}`,
+        );
+      }
+      mutability = 'payable';
+    }
     // solc: internal/private functions can never be payable (no message context of their own).
     // @hidden is an explicitly-internal function, so it is rejected with @payable too.
-    if (decs.includes('payable') && !decs.includes('external')) {
+    if (decs.includes('payable') && !decs.includes('external') && !markerExternal) {
       this.diags.error(
         member,
         'JETH131',
@@ -5930,7 +6090,7 @@ export class Analyzer {
           '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)',
         );
       }
-      if (!decs.includes('external')) {
+      if (!decs.includes('external') && !markerExternal) {
         this.diags.error(
           member,
           'JETH261',
@@ -6101,12 +6261,21 @@ export class Analyzer {
     const name = member.name.text;
     const decs = decoratorNames(member);
     // A generic is callable ONLY internally (its specializations are internal functions and never
-    // reach the ABI), so an explicit @external/@public is an error - the ABI cannot be generic.
-    if (decs.includes('external') || decs.includes('public')) {
+    // reach the ABI), so an explicit @external/@public is an error - the ABI cannot be generic. The
+    // native External<T>/Payable<T> return marker is the same claim spelled natively: a generic routes
+    // here (never through collectFunction's marker unwrap), so gate it here too rather than silently
+    // ignoring the marker.
+    const genericMarker =
+      this.nativeMode &&
+      member.type &&
+      ts.isTypeReferenceNode(member.type) &&
+      ts.isIdentifier(member.type.typeName) &&
+      (member.type.typeName.text === 'External' || member.type.typeName.text === 'Payable');
+    if (decs.includes('external') || decs.includes('public') || genericMarker) {
       this.diags.error(
         member,
         'JETH290',
-        `generic function '${name}' cannot be @external/@public (its type is not expressible in the ABI); make it internal (@internal/@private/@hidden, or no visibility decorator)`,
+        `generic function '${name}' cannot be external (its type is not expressible in the ABI); make it internal (no visibility decorator or marker)`,
       );
     }
     if (decs.includes('nonReentrant')) {
@@ -8134,6 +8303,22 @@ export class Analyzer {
       return;
     }
 
+    // Native raise sugar: `throw this.X({...})` (or positional) where X is a declared custom error is the
+    // ONE supported throw - it lowers to the SAME revert as `revert(this.X({...}))`, byte-identical. The
+    // validator already rejects every other throw shape (JETH025); this rejects a this-call whose target
+    // is not a declared error.
+    if (ts.isThrowStatement(node)) {
+      const desugared = this.desugarThisRaise(node.expression, 'error');
+      if (desugared === null) return; // a this-raise with bad named args - already diagnosed
+      if (desugared) {
+        const reason = this.checkErrorConstructor(desugared);
+        if (reason) out.push({ kind: 'revert', reason });
+        return;
+      }
+      this.diags.error(node, 'JETH025', 'throw is only supported as `throw this.<error>({...})` for a declared custom error; use revert(...) / require(...) otherwise');
+      return;
+    }
+
     this.diags.error(node, 'JETH061', `unsupported statement: ${ts.SyntaxKind[node.kind]}`);
   }
 
@@ -9804,10 +9989,88 @@ export class Analyzer {
     if (reason) out.push({ kind: 'revert', reason });
   }
 
+  /** Native raise/emit sugar: `this.X({ name: v, ... })` (or positional `this.X(a, b)`) where X is a
+   *  declared custom error / event (typically a field declaration). Desugars to the bare-name constructor
+   *  call the existing checkers consume; NAMED arguments are reordered to the DECLARED parameter order
+   *  (missing / extra / duplicate keys reject), so the encoding is byte-identical to the positional form.
+   *  Returns: a synthesized bare-name call (handle it), null (it was a this-raise but invalid - a
+   *  diagnostic was emitted), or undefined (not a this-raise - fall through to normal handling). */
+  private desugarThisRaise(node: ts.Expression, kind: 'error' | 'event'): ts.CallExpression | null | undefined {
+    if (!this.nativeMode) return undefined;
+    if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
+    if (node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
+    if (!ts.isIdentifier(node.expression.name)) return undefined;
+    const name = node.expression.name.text;
+    let paramNameSets: string[][];
+    if (kind === 'error') {
+      const d = this.errorsByName.get(name);
+      if (!d) return undefined;
+      paramNameSets = [d.params.map((p) => p.name)];
+    } else {
+      const evs = this.eventsByName.get(name);
+      if (!evs || evs.length === 0) return undefined;
+      paramNameSets = evs.map((e) => e.params.map((p) => p.name));
+    }
+    const f = ts.factory;
+    const Sn = <T extends ts.Node>(n: T): T => this.synth(n, node);
+    let args: readonly ts.Expression[] = node.arguments;
+    if (node.arguments.length === 1 && ts.isObjectLiteralExpression(node.arguments[0]!)) {
+      const obj = node.arguments[0]!;
+      // NAMED args reorder to a declaration's param order - which requires knowing WHICH declaration.
+      // With an OVERLOADED event the key-set alone cannot soundly pick one (two overloads may share the
+      // same names in different orders/types, and the downstream type-based overload resolution could
+      // then pick a DIFFERENT overload than the one used for the reorder - a silent wrong-data emit).
+      // Reject: an overloaded event must be raised positionally, where the existing arity+type overload
+      // resolution is sound.
+      if (paramNameSets.length > 1) {
+        this.diags.error(
+          obj,
+          'JETH434',
+          `event '${name}' is overloaded; named arguments cannot pick an overload - use the positional form emit(this.${name}(...))`,
+        );
+        return null;
+      }
+      const entries = new Map<string, ts.Expression>();
+      for (const prop of obj.properties) {
+        if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
+          if (entries.has(prop.name.text)) {
+            this.diags.error(prop, 'JETH130', `duplicate ${kind} argument '${prop.name.text}'`);
+            return null;
+          }
+          entries.set(prop.name.text, prop.initializer);
+        } else if (ts.isShorthandPropertyAssignment(prop)) {
+          if (entries.has(prop.name.text)) {
+            this.diags.error(prop, 'JETH130', `duplicate ${kind} argument '${prop.name.text}'`);
+            return null;
+          }
+          entries.set(prop.name.text, prop.name);
+        } else {
+          this.diags.error(prop, 'JETH130', `a named ${kind} argument must be a plain \`name: value\` (no spreads or computed keys)`);
+          return null;
+        }
+      }
+      const match = paramNameSets.find((ps) => ps.length === entries.size && ps.every((n2) => entries.has(n2)));
+      if (!match) {
+        this.diags.error(
+          obj,
+          'JETH130',
+          `named arguments { ${[...entries.keys()].join(', ')} } do not match ${kind} '${name}' (declared: ${paramNameSets.map((ps) => `(${ps.join(', ')})`).join(' | ')})`,
+        );
+        return null;
+      }
+      args = match.map((n2) => entries.get(n2)!);
+    }
+    return Sn(f.createCallExpression(Sn(f.createIdentifier(name)), undefined, [...args]));
+  }
+
   private checkRevertReason(node: ts.Expression): RevertReason | undefined {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       return { kind: 'errorString', message: this.strLitBytes(node) };
     }
+    // native raise sugar: revert(this.X({ ... })) / revert(this.X(a, b)) - desugar to the bare-name call.
+    const thisErr = this.desugarThisRaise(node, 'error');
+    if (thisErr === null) return undefined;
+    if (thisErr) return this.checkErrorConstructor(thisErr);
     // a custom-error constructor: a call whose callee is a DECLARED error name. A call to any other
     // identifier (e.g. the type-conversion `string(b)`) is NOT an error call - it falls through to the
     // runtime-string path below, matching solc which lowers a string-typed reason to Error(string).
@@ -10797,7 +11060,11 @@ export class Analyzer {
       this.diags.error(call, 'JETH145', 'emit(...) takes exactly one event-constructor argument');
       return;
     }
-    const inner = call.arguments[0]!;
+    let inner = call.arguments[0]!;
+    // native emit sugar: emit(this.Transfer({ ... })) / emit(this.Transfer(a, b)) - desugar to bare-name.
+    const thisEvt = this.desugarThisRaise(inner, 'event');
+    if (thisEvt === null) return;
+    if (thisEvt) inner = thisEvt;
     if (!ts.isCallExpression(inner) || !ts.isIdentifier(inner.expression)) {
       this.diags.error(inner, 'JETH146', 'emit(...) argument must be an event constructor, e.g. emit(Transfer(a, b))');
       return;
