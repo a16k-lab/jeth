@@ -10,6 +10,7 @@ import { analyze } from './analyzer.js';
 import { emitYul, emitLibraryYul, UnsupportedError } from './yul.js';
 import { compileYul, LinkReferences } from './solc.js';
 import { emitAbi, AbiItem } from './abi.js';
+import { bundleImports, isDecoratorModeSource, remapDiagnostics, BundleSegment } from './imports.js';
 import type { ContractIR } from './ir.js';
 import { displayName } from './types.js';
 
@@ -54,6 +55,11 @@ export interface CompileResult {
 export interface CompileOptions {
   fileName?: string;
   evmVersion?: string;
+  /** Multi-file compilation: path -> source text for every importable file. When provided, the entry
+   *  source's `import { A } from "./file.jeth"` statements resolve against this map (relative to the
+   *  importing file), and diagnostics point into the original files. Without it, JETH compiles a single
+   *  file and an import statement is a clear reject (JETH035). */
+  sources?: Record<string, string>;
 }
 
 /**
@@ -88,35 +94,10 @@ function manglePrivateMembers(sf: ts.SourceFile): void {
   ts.forEachChild(sf, (n) => rewrite(n, undefined));
 }
 
-/**
- * Dual-syntax mode (items 3-10): JETH is moving from STRUCTURAL decorators (@contract/@struct/
- * @abstract/...) to native TS constructs (a bare `class` is the contract, `type P = {..}` a struct,
- * `abstract class` an abstract base). Mode is PER-FILE: a file whose leading comment block contains
- * the exact line `// use @decorators` is DECORATOR mode (today's syntax, unchanged); any other file
- * is NATIVE mode (the default). During this migration phase native mode is a PERMISSIVE SUPERSET - it
- * ADDS the native declaration forms while still accepting every legacy decorator, so existing files
- * keep compiling byte-identically; the strict "structural decorators are banned in native mode" pass
- * lands post-migration (once items 7-10 make native mode fully writable). Returns true for DECORATOR
- * mode. Scans the leading run of blank + line-comment lines and stops at the first code line, so a
- * `// SPDX-...` header above the pragma is fine; a block comment or code before it is not.
- */
-function isDecoratorModeSource(source: string): boolean {
-  // Split on \r\n, lone \r (classic-Mac), and \n so the pragma is found regardless of line-ending style.
-  for (const raw of source.split(/\r\n|\r|\n/)) {
-    const line = raw.trim();
-    if (line === '') continue; // blank line: keep scanning
-    if (line.startsWith('//')) {
-      // Tolerate benign spacing/slash variants of the directive - `//use @decorators`, `//  use  @decorators`,
-      // `/// use @decorators`, trailing spaces - by stripping the leading slashes and collapsing whitespace.
-      // Still case-sensitive and exact on the words, so unrelated `//`-comments (an SPDX header) keep scanning.
-      const body = line.replace(/^\/+/, '').replace(/\s+/g, ' ').trim();
-      if (body === 'use @decorators') return true;
-      continue; // another leading line-comment (e.g. an SPDX header): keep scanning
-    }
-    break; // first code / block-comment line: the pragma window is closed
-  }
-  return false;
-}
+// Dual-syntax mode (items 3-10): mode is PER-FILE - a file whose leading comment block contains the exact
+// line `// use @decorators` is DECORATOR mode (legacy syntax); any other file is NATIVE mode (the default,
+// a PERMISSIVE SUPERSET during migration). The scanner lives in imports.ts (isDecoratorModeSource), shared
+// with the multi-file bundler which enforces one mode per compilation.
 
 /**
  * Item #7: a `static` contract field is a compile-time constant / a ctor-set immutable. In idiomatic TS a
@@ -240,7 +221,19 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   }
   const effectiveSource = dia.expanded ? dia.source : source;
 
-  const parsed = parse(effectiveSource, fileName);
+  // Multi-file compilation: resolve the entry's imports against opts.sources into ONE bundled unit
+  // (deps first, entry last; imports blanked line-preservingly), keeping a per-file line map so every
+  // diagnostic points into its ORIGINAL file. Without opts.sources JETH stays single-file (an import
+  // statement is a clear JETH035 reject in the validator).
+  let unitSource = effectiveSource;
+  let bundleSegments: BundleSegment[] | undefined;
+  if (opts.sources && Object.keys(opts.sources).length > 0) {
+    const bundle = bundleImports(effectiveSource, fileName, opts.sources);
+    unitSource = bundle.text;
+    bundleSegments = bundle.segments;
+  }
+
+  const parsed = parse(unitSource, fileName);
   // Item #2: rewrite JS `#` private members to contract-scoped internal names BEFORE validation /
   // analysis, so `#f()` / `this.#x` lower like internal members and derived access rejects.
   manglePrivateMembers(parsed.sourceFile);
@@ -270,6 +263,8 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   );
 
   // Surface all front-end diagnostics together.
+  // Multi-file: map bundle-relative diagnostic positions back to their original files before surfacing.
+  if (bundleSegments) remapDiagnostics(diags.items, bundleSegments);
   diags.throwIfErrors();
   if (!ir) throw new CompileError(diags.items);
 
