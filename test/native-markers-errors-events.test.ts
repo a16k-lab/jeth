@@ -87,6 +87,13 @@ describe('Part A: get = read-only, External<T> = writers, Payable<T> = payable',
     expect(codes(`class C { @view f(): Payable<u256> { return 1n; } }`)).toContain('JETH052');
     expect(codes(`// use @decorators\n@contract class C { f(): External<u256> { return 1n; } }`)).toContain('JETH013');
   });
+
+  it('a `get` cannot be #-private (it would leak the mangled name into the ABI); private readers are #-methods', () => {
+    // `get #v()` previously exposed `$p$C$v` as an externally callable ABI function - a silent privacy leak.
+    expect(codes(`class C { x: u256; get #v(): u256 { return this.x; } @external setX(v: u256): void { this.x = v; } }`)).toContain('JETH352');
+    // the correct private-reader pattern: a bare #-method (read-only inferred), optionally exposed via a get.
+    expect(codes(`class C { x: u256; #balOf(): u256 { return this.x; } get balance(): u256 { return this.#balOf(); } }`)).toEqual([]);
+  });
 });
 
 describe('Part B: error<{...}> / event<{...}> / indexed<T> field declarations', () => {

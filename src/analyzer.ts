@@ -1881,6 +1881,13 @@ export class Analyzer {
             // the ordinary function pipeline as a synthesized `@external foo(): T { ... }` (mutability is
             // then inferred like any native fn); flag it a getter so a writing getter is rejected below.
             const g = member;
+            // A `get` is the EXTERNAL read-only form - a `#`-private get is a contradiction (it would
+            // silently expose the mangled name in the ABI). A private reader is a bare `#method(...)`;
+            // its view/pure is inferred like any internal function.
+            if (ts.isIdentifier(g.name) && g.name.text.startsWith('$p$')) {
+              this.diags.error(g, 'JETH352', `a 'get' accessor is the external read-only form and cannot be #-private; a private reader is a plain #-method (read-only is inferred)`);
+              continue;
+            }
             // A get accessor is ALREADY external + read-only; a visibility marker on its return is at best
             // redundant (External) and at worst nonsensical (Payable, which would change the bytecode).
             if (
