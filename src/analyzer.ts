@@ -1498,6 +1498,19 @@ export class Analyzer {
       let sawReceiveHere = false;
       let sawFallbackHere = false;
       for (const member of c.members) {
+        // Consistency ban: the TS `private` access modifier has NO JETH meaning and was silently ignored
+        // (a function / state variable is internal by default). Reject it loudly - like getters/setters -
+        // so it is never a silent no-op. (Private visibility is intended to be expressed by a JS
+        // `#`-prefixed member name, which is hard-private in TS; the bare `private` keyword is not it.)
+        const mods = ts.canHaveModifiers(member) ? ts.getModifiers(member) : undefined;
+        if (mods?.some((m) => m.kind === ts.SyntaxKind.PrivateKeyword)) {
+          this.diags.error(
+            member,
+            'JETH445',
+            'the `private` access modifier is not supported; a function or state variable is internal by default',
+          );
+          continue;
+        }
         if (ts.isMethodDeclaration(member)) {
           const decs = decoratorNames(member);
           if (decs.includes('receive')) {
