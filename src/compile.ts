@@ -142,7 +142,11 @@ function rewriteStaticFieldAccess(sf: ts.SourceFile): void {
   const contractClassNames = new Set<string>();
   const staticNames = new Set<string>();
   const scan = (n: ts.Node): void => {
-    if (ts.isClassDeclaration(n) && n.name && !classDecs(n).some((d) => d === 'struct' || d === 'interface' || d === 'library')) {
+    // Skip non-contract classes: @struct/@interface/@library decorated, AND a native `static class`
+    // (= a library) - its `L.f(a)` calls resolve via the library qualified-name machinery; rewriting them
+    // to `this.f(a)` would hijack the call into the contract's own namespace.
+    const isStaticClass = ts.isClassDeclaration(n) && (ts.getModifiers(n) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+    if (ts.isClassDeclaration(n) && n.name && !isStaticClass && !classDecs(n).some((d) => d === 'struct' || d === 'interface' || d === 'library')) {
       contractClassNames.add(n.name.text);
       for (const m of n.members) {
         // static FIELDS (constant/immutable) AND static METHODS / `get` accessors (class-level functions)

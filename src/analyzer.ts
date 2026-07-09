@@ -1317,11 +1317,20 @@ export class Analyzer {
     return (ts.getModifiers(cls) ?? []).some((m) => m.kind === ts.SyntaxKind.AbstractKeyword);
   }
 
+  /** True for a native `static class L { ... }` - the native spelling of @library (a class-level bag of
+   *  functions: no state, no instances, never deployed as the contract). `static` is not a legal TS
+   *  class-declaration modifier, but the parser retains it with NO parse diagnostic (the restriction is a
+   *  checker rule), exactly like parameterized `get` accessors. */
+  private hasStaticClassModifier(cls: ts.ClassDeclaration): boolean {
+    return (ts.getModifiers(cls) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+  }
+
   /** Native mode: a concrete deployed contract spelled without decorators - a `class C {}` that carries
    *  no class-kind decorator and is not TS-`abstract`. (An `abstract class` is a base; a `type` is a
    *  struct; a @library/@struct/... class keeps its decorator meaning.) */
   private isNativeContractClass(cls: ts.ClassDeclaration): boolean {
     if (this.hasAbstractKeyword(cls)) return false;
+    if (this.hasStaticClassModifier(cls)) return false; // a `static class` is a LIBRARY, never the contract
     const decs = decoratorNames(cls);
     return !Analyzer.CLASS_KIND_DECORATORS.some((d) => decs.includes(d));
   }
@@ -1356,7 +1365,20 @@ export class Analyzer {
    *  constructor, an @external/@payable method, @receive/@fallback/@modifier, and inheritance. */
   private collectLibraries(): void {
     const visit = (n: ts.Node): void => {
-      if (ts.isClassDeclaration(n) && decoratorNames(n).includes('library')) this.collectLibrary(n);
+      if (ts.isClassDeclaration(n)) {
+        if (decoratorNames(n).includes('library')) this.collectLibrary(n);
+        // Native: a `static class L { ... }` is the native spelling of @library - routed through the SAME
+        // collector, so its functions/gates/qualified-name (L.f) call resolution are identical. A
+        // `static abstract class` is a contradiction (a library is already non-deployable and cannot be
+        // a base); reject rather than silently registering it as an abstract base.
+        else if (this.nativeMode && this.hasStaticClassModifier(n)) {
+          if (this.hasAbstractKeyword(n)) {
+            this.diags.error(n, 'JETH390', `a static class is already a non-deployable library; drop the \`abstract\` (a library cannot be inherited)`);
+          } else {
+            this.collectLibrary(n);
+          }
+        }
+      }
       ts.forEachChild(n, visit);
     };
     ts.forEachChild(this.sourceFile, visit);
