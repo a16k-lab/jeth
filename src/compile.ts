@@ -145,7 +145,9 @@ function rewriteStaticFieldAccess(sf: ts.SourceFile): void {
     if (ts.isClassDeclaration(n) && n.name && !classDecs(n).some((d) => d === 'struct' || d === 'interface' || d === 'library')) {
       contractClassNames.add(n.name.text);
       for (const m of n.members) {
-        if (!ts.isPropertyDeclaration(m) || !ts.isIdentifier(m.name)) continue;
+        // static FIELDS (constant/immutable) AND static METHODS / `get` accessors (class-level functions)
+        // are all read/called as `ClassName.x` - harvest every static member name.
+        if (!(ts.isPropertyDeclaration(m) || ts.isMethodDeclaration(m) || ts.isGetAccessor(m)) || !ts.isIdentifier(m.name)) continue;
         if ((ts.getModifiers(m) ?? []).some((x) => x.kind === ts.SyntaxKind.StaticKeyword)) staticNames.add(m.name.text);
       }
     }
@@ -178,6 +180,40 @@ function rewriteStaticFieldAccess(sf: ts.SourceFile): void {
   ts.forEachChild(sf, rewrite);
 }
 
+/**
+ * A `static` class member is class-level: its body (or initializer) must not touch `this` (TS semantics;
+ * previously this was SILENTLY accepted and read instance state). Another static is read as `ClassName.x`
+ * (the rewrite below resolves it). Scans every static method / get accessor / field initializer.
+ */
+function rejectThisInStaticMembers(sf: ts.SourceFile, diags: DiagnosticBag): void {
+  const scanBody = (root: ts.Node, memberName: string): void => {
+    const visit = (n: ts.Node): void => {
+      if (n.kind === ts.SyntaxKind.ThisKeyword) {
+        diags.error(
+          n,
+          'JETH354',
+          `a static member ('${memberName}') cannot use \`this\` (a static belongs to the class, not the instance); read another static as ClassName.<name>`,
+        );
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(root); // check the root itself too (a bare `= this` initializer has no children to recurse into)
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isClassDeclaration(n)) {
+      for (const m of n.members) {
+        const isStatic = ts.canHaveModifiers(m) && (ts.getModifiers(m) ?? []).some((x) => x.kind === ts.SyntaxKind.StaticKeyword);
+        if (!isStatic) continue;
+        const nm = m.name && ts.isIdentifier(m.name) ? m.name.text : '<member>';
+        if ((ts.isMethodDeclaration(m) || ts.isGetAccessor(m)) && m.body) scanBody(m.body, nm);
+        else if (ts.isPropertyDeclaration(m) && m.initializer) scanBody(m.initializer, nm);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(sf, visit);
+}
+
 export function compile(source: string, opts: CompileOptions = {}): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
@@ -205,14 +241,18 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   // analysis, so `#f()` / `this.#x` lower like internal members and derived access rejects.
   manglePrivateMembers(parsed.sourceFile);
   // `nativeMode` selects the native-declaration syntax (bare class = contract, type = struct, abstract
-  // class = abstract base, static field = const/immutable) as an additive superset.
+  // class = abstract base, static member = class-level const/immutable/function) as an additive superset.
   const nativeMode = !isDecoratorModeSource(source);
-  // Item #7: a `static` field is a constant/immutable; TS accesses it idiomatically as `ClassName.K`.
-  // Rewrite `ClassName.K` -> `this.K` so the ordinary this.<constant> resolution handles it. Native mode
-  // only (a static field is JETH045 in decorator mode). Runs after the `#` mangle so a private static name
-  // is already in its final form.
-  if (nativeMode) rewriteStaticFieldAccess(parsed.sourceFile);
   const diags = new DiagnosticBag(parsed.sourceFile, fileName);
+  // A `static` member belongs to the CLASS, not the instance: `this` inside a static body is invalid TS
+  // semantics and would silently read instance state. Enforced BEFORE the ClassName.x rewrite below, which
+  // legitimately INTRODUCES synthesized `this` nodes for `C.K`/`C.f(...)` accesses.
+  if (nativeMode) rejectThisInStaticMembers(parsed.sourceFile, diags);
+  // Item #7 + static methods: a `static` field is a constant/immutable and a `static` method / `get` is a
+  // class-level function; TS accesses both idiomatically as `ClassName.x`. Rewrite `ClassName.x` ->
+  // `this.x` so the ordinary resolution handles them. Native mode only (a static member is not a JETH
+  // concept in decorator mode). Runs after the `#` mangle so a private static name is in its final form.
+  if (nativeMode) rewriteStaticFieldAccess(parsed.sourceFile);
 
   // Phase 0: subset validation (collects, does not throw yet).
   validateSubset(parsed.sourceFile, diags);

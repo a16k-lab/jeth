@@ -89,3 +89,44 @@ describe('static = constant / immutable (item #7)', () => {
     expect(codes(`@struct class S { static count: u256; x: u256; } class C { @state count: u256; @external @view foo(): u256 { return S.count; } }`)).toContain('JETH074');
   });
 });
+
+// Static METHODS: a `static` method / `get` is a CLASS-level function - no `this` (enforced), called as
+// `ClassName.f(args)`, composing with the get/#/External axes like any method. Mutability is inferred as
+// usual (no `this` -> typically pure; an env read still makes it view - static is no-instance, not
+// blanket-pure). Byte-identical to the equivalent internal/external function + solc.
+describe('static methods (class-level functions)', () => {
+  it('the full matrix: static method / static get / static #method / static get External<T>', () => {
+    // internal class fn, called C.f(...)
+    expect(codes(`class C { static dbl(a: u256): u256 { return a * 2n; } get d(): External<u256> { return C.dbl(21n); } }`)).toEqual([]);
+    // internal read-only class fn (static get)
+    expect(codes(`class C { static get two(): u256 { return 2n; } get d(): External<u256> { return C.two(); } }`)).toEqual([]);
+    // PRIVATE class fn (static #f)
+    expect(codes(`class C { static #half(a: u256): u256 { return a / 2n; } get d(): External<u256> { return C.#half(84n); } }`)).toEqual([]);
+    // EXTERNAL pure accessor (static get f(): External<T>) - in the ABI
+    const abi = compile(`class C { static get two(): External<u256> { return 2n; } }`, { fileName: 'C.jeth' }).abi as any[];
+    expect(abi.filter((f) => f.type === 'function').map((f) => f.name + ':' + f.stateMutability)).toEqual(['two:pure']);
+  });
+
+  it('no `this` in a static body (JETH354); statics chain via ClassName.x; env reads infer view', () => {
+    expect(codes(`class C { x: u256; static bad(): u256 { return this.x; } get d(): External<u256> { return C.bad(); } }`)).toContain('JETH354');
+    // a static may call another static and read a static const via ClassName.x
+    expect(codes(`class C { static K: u256 = 10n; static f(a: u256): u256 { return C.g(a) + C.K; } static g(a: u256): u256 { return a * 2n; } get d(): External<u256> { return C.f(5n); } }`)).toEqual([]);
+    // static = no-instance, NOT blanket-pure: an env read makes it view.
+    const abi = compile(`class C { static who(): address { return msg.sender; } get w(): External<address> { return C.who(); } }`, { fileName: 'C.jeth' }).abi as any[];
+    expect(abi.filter((f) => f.type === 'function').map((f) => f.stateMutability)).toEqual(['view']);
+    // the immutable ctor-staging `this.M = ...` is a CONSTRUCTOR (not static) - unaffected.
+    expect(codes(`class C { static M: u256; constructor(){ this.M = 7n; } get m(): External<u256> { return C.M; } }`)).toEqual([]);
+  });
+
+  it('a static helper contract runs byte-identical to solc (constant + internal pure fn)', async () => {
+    const J = `class C { static FEE: u256 = 100n; static feeOn(amt: u256): u256 { return amt * C.FEE / 10000n; } get quote(a: u256): External<u256> { return C.feeOn(a); } }`;
+    const S = `contract C { uint256 constant FEE = 100; function feeOn(uint256 amt) internal pure returns(uint256){ return amt * FEE / 10000; } function quote(uint256 a) external pure returns(uint256){ return feeOn(a); } }`;
+    const h = await Harness.create();
+    const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
+    const rj = await h.call(aj, sel('quote(uint256)') + pad32(50000n));
+    const rs = await h.call(as, sel('quote(uint256)') + pad32(50000n));
+    expect(rj.success).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex);
+  });
+});
