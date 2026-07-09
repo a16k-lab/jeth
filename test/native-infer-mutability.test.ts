@@ -72,16 +72,19 @@ describe('native mutability inference (item #8)', () => {
   });
 });
 
-describe('`get` accessors (item #8)', () => {
-  it('a `get` is an external read-only accessor, byte-identical to @external @view', () => {
-    expect(bc(`@contract class C { @state x: u256; get val(): u256 { return this.x; } }`))
+describe('`get` accessors (item #8; `get` = read-only at ANY visibility, External<T> = the ABI form)', () => {
+  it('an EXTERNAL `get` (get f(): External<T>) is byte-identical to @external @view; a bare get is internal', () => {
+    expect(bc(`@contract class C { @state x: u256; get val(): External<u256> { return this.x; } }`))
       .toBe(bc(`@contract class C { @state x: u256; @external @view val(): u256 { return this.x; } }`));
-    expect(mut(`@contract class C { @state x: u256; get val(): u256 { return this.x; } @external set(v: u256): void { this.x = v; } }`))
+    expect(mut(`@contract class C { @state x: u256; get val(): External<u256> { return this.x; } @external set(v: u256): void { this.x = v; } }`))
       .toEqual({ val: 'view', set: 'nonpayable' });
+    // a BARE get is an INTERNAL read-only helper: not in the ABI, callable as this.f().
+    expect(mut(`@contract class C { @state x: u256; get bal(): u256 { return this.x; } get pub(): External<u256> { return this.bal(); } }`))
+      .toEqual({ pub: 'view' });
   });
 
   it('a `get` over a `#`-private field runs byte-identical to solc', async () => {
-    const J = `@contract class C { @state #s: u256; @external stash(v: u256): void { this.#s = v; } get secret(): u256 { return this.#s; } }`;
+    const J = `@contract class C { @state #s: u256; @external stash(v: u256): void { this.#s = v; } get secret(): External<u256> { return this.#s; } }`;
     const S = `contract C { uint256 private s; function stash(uint256 v) external { s = v; } function secret() external view returns(uint256){ return s; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -106,7 +109,7 @@ describe('mutability compatibility (item #8 sweep fixes)', () => {
   it('cluster 3: a caller of a @view helper infers view (not pure); @pure calling @view rejects', () => {
     // an explicit @view helper is at-least-view by declaration, so its callers are at-least-view.
     expect(mut(`@contract class C { @view h(a: u256): u256 { return a + 1n; } @external f(a: u256): u256 { return this.h(a); } }`)).toEqual({ f: 'view' });
-    expect(mut(`@contract class C { @view h(a: u256): u256 { return a + 1n; } get x(): u256 { return this.h(1n); } }`)).toEqual({ x: 'view' });
+    expect(mut(`@contract class C { @view h(a: u256): u256 { return a + 1n; } get x(): External<u256> { return this.h(1n); } }`)).toEqual({ x: 'view' });
     expect(codes(`@contract class C { @view h(a: u256): u256 { return a + 1n; } @external @pure p(a: u256): u256 { return this.h(a); } }`)).toContain('JETH055');
   });
 

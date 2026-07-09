@@ -26,16 +26,27 @@ const codes = (src: string): string[] => {
   try { compile(src, { fileName: 'C.jeth' }); return []; } catch (e: any) { return e?.diagnostics?.map((d: any) => d.code) ?? ['THROW']; }
 };
 
-describe('Part A: get = read-only, External<T> = writers, Payable<T> = payable', () => {
-  it('a PARAMETERIZED `get` == @external @view; External<T> writer == @external; Payable == @external @payable', () => {
-    expect(bc(`class C { balances: mapping<address, u256>; get balanceOf(o: address): u256 { return this.balances[o]; } deposit(a: u256): External<void> { this.balances[msg.sender] = a; } }`))
+describe('Part A: two orthogonal axes - `get` = read-only (any visibility); External/Payable = the ABI', () => {
+  it('an EXTERNAL `get` (parameterized) == @external @view; External<T> writer == @external; Payable == @external @payable', () => {
+    expect(bc(`class C { balances: mapping<address, u256>; get balanceOf(o: address): External<u256> { return this.balances[o]; } deposit(a: u256): External<void> { this.balances[msg.sender] = a; } }`))
       .toBe(bc(`class C { balances: mapping<address, u256>; @external @view balanceOf(o: address): u256 { return this.balances[o]; } @external deposit(a: u256): void { this.balances[msg.sender] = a; } }`));
     expect(bc(`class C { x: u256; deposit(): Payable<void> { this.x = msg.value; } }`))
       .toBe(bc(`class C { x: u256; @external @payable deposit(): void { this.x = msg.value; } }`));
   });
 
+  it('`get` works at ALL THREE visibilities: internal (bare), private (#), external (External<T>)', () => {
+    // internal + private gets are NOT in the ABI and are callable in-contract; only the External get is.
+    const abi = compile(`class C { x: u256;
+      get #raw(): u256 { return this.x; }
+      get bal(): u256 { return this.#raw(); }
+      get balance(): External<u256> { return this.bal(); } }`, { fileName: 'C.jeth' }).abi as any[];
+    expect(abi.filter((f) => f.type === 'function').map((f) => f.name)).toEqual(['balance']);
+    // a derived contract cannot reach a base's #-private get (private stays private).
+    expect(codes(`abstract class B { x: u256; get #raw(): u256 { return this.x; } } class C extends B { get p(): External<u256> { return this.#raw(); } }`).length).toBeGreaterThan(0);
+  });
+
   it('mutability is inferred (get -> view/pure by body; External writers nonpayable); bare stays internal', () => {
-    const abi = compile(`class C { x: u256; get reads(): u256 { return this.x; } get calc(a: u256): u256 { return a + 1n; } writes(v: u256): External<void> { this.x = v; } pays(): Payable<void> { this.x = msg.value; } helper(): u256 { return this.x; } }`, { fileName: 'C.jeth' }).abi as any[];
+    const abi = compile(`class C { x: u256; get reads(): External<u256> { return this.x; } get calc(a: u256): External<u256> { return a + 1n; } writes(v: u256): External<void> { this.x = v; } pays(): Payable<void> { this.x = msg.value; } helper(): u256 { return this.x; } }`, { fileName: 'C.jeth' }).abi as any[];
     const m = Object.fromEntries(abi.filter((f) => f.type === 'function').map((f) => [f.name, f.stateMutability]));
     expect(m).toEqual({ reads: 'view', calc: 'pure', writes: 'nonpayable', pays: 'payable' }); // no `helper`
   });
@@ -43,7 +54,7 @@ describe('Part A: get = read-only, External<T> = writers, Payable<T> = payable',
   it('a fully-native contract (get + markers + inference) runs byte-identical to solc', async () => {
     const J = `class C { x: u256;
       set(v: u256): External<void> { this.x = v; }
-      get value(): u256 { return this.x; }
+      get value(): External<u256> { return this.x; }
       pay(): Payable<u256> { this.x = this.x + msg.value; return this.x; } }`;
     const S = `contract C { uint256 x;
       function set(uint256 v) external { x = v; }
@@ -60,20 +71,21 @@ describe('Part A: get = read-only, External<T> = writers, Payable<T> = payable',
     }
   });
 
-  it('GET IS A MUST: a read-only value-returning External<T> rejects; void assert-style stays External<void>', () => {
-    // a read-only external returning a value must be spelled `get` (explicit or inferred read-only).
+  it('GET IS A MUST: a read-only value-returning External<T> method rejects; void assert-style stays External<void>', () => {
+    // a read-only external returning a value must be spelled `get f(): External<T>`.
     expect(codes(`class C { x: u256; balanceOf(): External<u256> { return this.x; } }`)).toContain('JETH352');
     expect(codes(`class C { calc(a: u256): External<u256> { return a + 1n; } }`)).toContain('JETH352');
     expect(codes(`class C { x: u256; @view f(): External<u256> { return this.x; } }`)).toContain('JETH352');
     // a VOID read-only external (assert-style: the body only checks/reverts) is exempt.
     expect(codes(`class C { x: u256; check(a: u256): External<void> { require(a > this.x, "too small"); } }`)).toEqual([]);
-    // a writing getter still rejects (a get is read-only).
+    // a writing getter rejects at EVERY visibility (a get is read-only).
     expect(codes(`class C { x: u256; get bad(v: u256): u256 { this.x = v; return v; } }`)).toContain('JETH043');
+    expect(codes(`class C { x: u256; get bad(): External<u256> { this.x = 1n; return this.x; } }`)).toContain('JETH043');
   });
 
   it('virtual idioms: a @virtual get chain works; override HEADROOM is a bodyless @virtual External<T>', () => {
-    // a virtual READER chain: @virtual get + @override get (byte-identical to the decorated form).
-    expect(bc(`abstract class B { x: u256; @virtual get v(): u256 { return this.x; } } class C extends B { @override get v(): u256 { return this.x + 1n; } }`))
+    // a virtual EXTERNAL reader chain: @virtual get + @override get (byte-identical to the decorated form).
+    expect(bc(`abstract class B { x: u256; @virtual get v(): External<u256> { return this.x; } } class C extends B { @override get v(): External<u256> { return this.x + 1n; } }`))
       .toBe(bc(`@abstract class B { @state x: u256; @virtual @external @view v(): u256 { return this.x; } } @contract class C extends B { @override @external @view v(): u256 { return this.x + 1n; } }`));
     // headroom: a BODYLESS @virtual External<T> stays nonpayable, so a writing override is legal (solc's
     // abstract-virtual idiom); a BODIED @virtual External reader rejects (spell it get, or make it bodyless).
@@ -81,18 +93,11 @@ describe('Part A: get = read-only, External<T> = writers, Payable<T> = payable',
     expect(codes(`abstract class B { x: u256; @virtual f(): External<u256> { return this.x; } } class C extends B { @override f(): External<u256> { this.x = this.x + 1n; return this.x; } }`)).toContain('JETH352');
   });
 
-  it('marker misuse rejects: bad arity, on a getter, with a conflicting mutability, in decorator mode', () => {
+  it('marker misuse rejects: bad arity, a Payable get, a conflicting mutability, decorator mode', () => {
     expect(codes(`class C { f(): External { return 1n; } }`)).toContain('JETH352');
-    expect(codes(`class C { x: u256; get v(): External<u256> { return this.x; } }`)).toContain('JETH352');
+    expect(codes(`class C { get f(): Payable<u256> { return 1n; } }`)).toContain('JETH352'); // a get is read-only; payable is a writer property
     expect(codes(`class C { @view f(): Payable<u256> { return 1n; } }`)).toContain('JETH052');
     expect(codes(`// use @decorators\n@contract class C { f(): External<u256> { return 1n; } }`)).toContain('JETH013');
-  });
-
-  it('a `get` cannot be #-private (it would leak the mangled name into the ABI); private readers are #-methods', () => {
-    // `get #v()` previously exposed `$p$C$v` as an externally callable ABI function - a silent privacy leak.
-    expect(codes(`class C { x: u256; get #v(): u256 { return this.x; } @external setX(v: u256): void { this.x = v; } }`)).toContain('JETH352');
-    // the correct private-reader pattern: a bare #-method (read-only inferred), optionally exposed via a get.
-    expect(codes(`class C { x: u256; #balOf(): u256 { return this.x; } get balance(): u256 { return this.#balOf(); } }`)).toEqual([]);
   });
 });
 

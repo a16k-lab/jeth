@@ -1881,27 +1881,24 @@ export class Analyzer {
             // the ordinary function pipeline as a synthesized `@external foo(): T { ... }` (mutability is
             // then inferred like any native fn); flag it a getter so a writing getter is rejected below.
             const g = member;
-            // A `get` is the EXTERNAL read-only form - a `#`-private get is a contradiction (it would
-            // silently expose the mangled name in the ABI). A private reader is a bare `#method(...)`;
-            // its view/pure is inferred like any internal function.
-            if (ts.isIdentifier(g.name) && g.name.text.startsWith('$p$')) {
-              this.diags.error(g, 'JETH352', `a 'get' accessor is the external read-only form and cannot be #-private; a private reader is a plain #-method (read-only is inferred)`);
-              continue;
-            }
-            // A get accessor is ALREADY external + read-only; a visibility marker on its return is at best
-            // redundant (External) and at worst nonsensical (Payable, which would change the bytecode).
+            // `get` is the READ-ONLY axis, at ANY visibility (the visibility axis is orthogonal):
+            //   get f(args): T             = INTERNAL read-only        (callable as this.f(...))
+            //   get #f(args): T            = PRIVATE read-only         (this contract only)
+            //   get f(args): External<T>   = EXTERNAL read-only        (the ABI accessor)
+            // The synthesis adds NO visibility of its own - the accessor's return-type marker (unwrapped
+            // by collectFunction) or its `#` name decides; a Payable<T> get is a contradiction (payable
+            // is a writer property; a get is read-only).
             if (
               g.type && ts.isTypeReferenceNode(g.type) && ts.isIdentifier(g.type.typeName) &&
-              (g.type.typeName.text === 'External' || g.type.typeName.text === 'Payable')
+              g.type.typeName.text === 'Payable'
             ) {
-              this.diags.error(g.type, 'JETH352', `a 'get' accessor cannot take a ${g.type.typeName.text}<T> marker (a getter is already external and read-only)`);
+              this.diags.error(g.type, 'JETH352', `a 'get' accessor is read-only and cannot be Payable<T> (payable is a writer property); an external read-only accessor is \`get ${ts.isIdentifier(g.name) ? g.name.text : '<name>'}(...): External<T>\``);
               continue;
             }
-            const ext = this.synth(ts.factory.createDecorator(ts.factory.createIdentifier('external')), g);
             // carry the accessor's OWN decorators (@virtual / @override on a `get` participate in the
-            // normal override machinery) alongside the synthesized @external.
+            // normal override machinery).
             const synthMethod = this.synth(
-              ts.factory.createMethodDeclaration([...(ts.getDecorators(g) ?? []), ext], undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
+              ts.factory.createMethodDeclaration(ts.getDecorators(g) ? [...ts.getDecorators(g)!] : undefined, undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
               g,
             );
             const fn = this.collectFunction(synthMethod);
@@ -2335,7 +2332,7 @@ export class Analyzer {
           this.diags.error(
             e.rf.node,
             'JETH352',
-            `'${e.rf.name}' is read-only; a read-only external function is spelled with \`get\` (e.g. \`get ${e.rf.name}(...): T\`) - External<T> is for state-mutating functions`,
+            `'${e.rf.name}' is read-only; a read-only external function is spelled with \`get\` (e.g. \`get ${e.rf.name}(...): External<T>\`) - a plain External<T> method is for state-mutating functions`,
           );
       }
       if (this.internallyCalled.has(f.key)) f.internallyCalled = true;
@@ -6094,7 +6091,7 @@ export class Analyzer {
       this.diags.error(
         member,
         'JETH352',
-        `a read-only external function is spelled with \`get\` (e.g. \`get ${member.name.getText(this.sourceFile)}(...): T\`); External<T> is for state-mutating functions`,
+        `a read-only external function is spelled with \`get\` (e.g. \`get ${member.name.getText(this.sourceFile)}(...): External<T>\`); a plain External<T> method is for state-mutating functions`,
       );
     }
     // A Payable<T> return marker fixes the mutability to payable (never re-inferred); it conflicts with a
