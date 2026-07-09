@@ -549,6 +549,7 @@ export class Analyzer {
     this.collectEnums(); // enums (branded uint8), before structs (a struct field / param may use one)
     this.collectStructs();
     this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
+    if (this.nativeMode) this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
     const classes = this.findContractClasses();
     if (classes.length === 0) {
@@ -1036,6 +1037,138 @@ export class Analyzer {
             'JETH348',
             `@interface method '${ifaceName}.${mname}' return type ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`,
           );
+        } else {
+          returnType = t;
+        }
+      }
+    }
+    const signature = functionSignature(
+      mname,
+      params.map((p) => p.type),
+    );
+    const selector = functionSelector(signature);
+    return { name: mname, params, returnType, returnTypes, mutability, signature, selector };
+  }
+
+  // ---- Item #6b: native TS `interface` declarations -------------------------
+  // A native `interface IERC20 { balanceOf(o: address): View<u256>; transfer(...): bool; }` is the native
+  // spelling of `@interface class IERC20`. `@external`/`@virtual` vanish (every interface method is both);
+  // per-method MUTABILITY rides on a MARKER RETURN TYPE - `View<T>`/`Pure<T>`/`Payable<T>` wrap the real
+  // return, a bare return type is `nonpayable` (the default). It builds the SAME InterfaceDecl IR as the
+  // decorator form, so external calls, selectors and the STATICCALL-vs-CALL choice are byte-identical.
+  // v1 SCOPE: a native interface is a CALL TARGET (`IERC20(addr).m()`); it is registered in interfacesByName
+  // only, NOT as an extendable base (that needs the C3/obligation machinery to accept a non-class node).
+  private collectNativeInterfaces(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isInterfaceDeclaration(n)) this.collectNativeInterface(n);
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  private collectNativeInterface(iface: ts.InterfaceDeclaration): void {
+    const name = iface.name.text;
+    if (this.interfacesByName.has(name) || this.structsByName.has(name)) {
+      this.diags.error(iface, 'JETH340', `interface '${name}' redeclared (the name is already a type)`);
+      return;
+    }
+    if (iface.heritageClauses?.length) {
+      // `interface I2 extends I1` would need method-inheritance merging we do not model yet; reject cleanly
+      // rather than silently dropping the inherited methods (a call to one would then mis-resolve).
+      this.diags.error(iface, 'JETH349', `interface '${name}' cannot extend another interface yet (declare its methods directly)`);
+      return;
+    }
+    const methods = new Map<string, InterfaceMethod>();
+    for (const member of iface.members) {
+      if (!ts.isMethodSignature(member)) {
+        this.diags.error(member, 'JETH341', `interface '${name}' may only declare methods (no fields, index/call signatures, or accessors)`);
+        continue;
+      }
+      const m = this.collectNativeInterfaceMethod(member, name);
+      if (!m) continue;
+      if (methods.has(m.name)) {
+        this.diags.error(member, 'JETH342', `interface '${name}' method '${m.name}' is overloaded; method overloading inside an interface is not supported yet`);
+        continue;
+      }
+      methods.set(m.name, m);
+    }
+    this.interfacesByName.set(name, { name, methods });
+  }
+
+  private collectNativeInterfaceMethod(member: ts.MethodSignature, ifaceName: string): InterfaceMethod | undefined {
+    if (!member.name || !ts.isIdentifier(member.name)) {
+      this.diags.error(member, 'JETH049', 'interface method name must be a plain identifier');
+      return undefined;
+    }
+    const mname = member.name.text;
+    if (mname === 'constructor') {
+      // solc: `function constructor(...)` in an interface is a ParserError ("named constructor but is not
+      // the constructor"); a bare method named `constructor` is not a real ABI method.
+      this.diags.error(member, 'JETH341', `interface '${ifaceName}' cannot declare a method named 'constructor'`);
+      return undefined;
+    }
+    if (member.questionToken) {
+      this.diags.error(member, 'JETH341', `interface '${ifaceName}' method '${mname}' cannot be optional`);
+      return undefined;
+    }
+    const params: Param[] = [];
+    for (const p of member.parameters) {
+      if (!ts.isIdentifier(p.name)) {
+        this.diags.error(p, 'JETH053', 'parameter name must be a plain identifier');
+        continue;
+      }
+      if (p.initializer) {
+        this.diags.error(p, 'JETH346', `interface method '${ifaceName}.${mname}' parameter '${p.name.text}' cannot have a default value`);
+      }
+      const t = resolveType(p.type, this.diags, this.structsByName);
+      if (!t) continue;
+      if (this.typeHasMapping(t)) {
+        this.diags.error(p, 'JETH247', `parameter '${p.name.text}' of type ${displayName(t)} contains a mapping and cannot be passed (mappings are storage-only)`);
+        continue;
+      }
+      if (!this.interfaceAbiTypeSupported(t)) {
+        this.diags.error(p, 'JETH347', `interface method '${ifaceName}.${mname}' parameter '${p.name.text}' has type ${displayName(t)}, which is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
+        continue;
+      }
+      params.push({ name: p.name.text, type: t });
+    }
+    // MUTABILITY marker: `View<T>`/`Pure<T>`/`Payable<T>` wrap the real return; a bare return is nonpayable.
+    // The marker is stripped BEFORE the return type is resolved and NEVER enters the signature/selector.
+    let mutability: Mutability = 'nonpayable';
+    let retNode: ts.TypeNode | undefined = member.type;
+    if (member.type && ts.isTypeReferenceNode(member.type) && ts.isIdentifier(member.type.typeName)) {
+      const marker = ({ View: 'view', Pure: 'pure', Payable: 'payable' } as Record<string, Mutability>)[member.type.typeName.text];
+      if (marker) {
+        const args = member.type.typeArguments;
+        if (!args || args.length !== 1) {
+          this.diags.error(member.type, 'JETH350', `interface method '${ifaceName}.${mname}' mutability marker ${member.type.typeName.text}<T> takes exactly one return type (e.g. ${member.type.typeName.text}<u256>, or ${member.type.typeName.text}<void> for none)`);
+          return undefined;
+        }
+        mutability = marker;
+        retNode = args[0];
+      }
+    }
+    // return: void, a single type, or a >=2-element tuple - each component decode-supported (as @interface).
+    let returnType: JethType = VOID;
+    let returnTypes: JethType[] | undefined;
+    if (retNode && ts.isTupleTypeNode(retNode)) {
+      const rts: JethType[] = [];
+      for (const el of retNode.elements) {
+        const t = resolveType(el, this.diags, this.structsByName);
+        if (!t) continue;
+        if (!this.decodeSupported(t)) {
+          this.diags.error(el, 'JETH348', `interface method '${ifaceName}.${mname}' return component ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
+          continue;
+        }
+        rts.push(t);
+      }
+      if (rts.length >= 2) returnTypes = rts;
+      else if (rts.length === 1) returnType = rts[0]!;
+    } else if (retNode) {
+      const t = resolveType(retNode, this.diags, this.structsByName);
+      if (t && t.kind !== 'void') {
+        if (!this.decodeSupported(t)) {
+          this.diags.error(retNode, 'JETH348', `interface method '${ifaceName}.${mname}' return type ${displayName(t)} is not supported yet (supported: value types, bytes/string, value arrays, and structs of those)`);
         } else {
           returnType = t;
         }
@@ -1793,6 +1926,21 @@ export class Analyzer {
           `field name '${name}' is declared more than once (a @constant conflicts with a @state/@storage variable of the same name; solc rejects this as "Identifier already declared")`,
         );
       }
+    }
+
+    // A file-level TYPE (struct / enum / @interface / native `interface`) may not share the deployed
+    // contract's OWN name: solc treats both as file-level declarations and rejects "Identifier already
+    // declared". The contract's name is absent from the cross-kind idKinds map below (which holds only
+    // contract-scoped members + file types), so an `interface C {} class C {}` (and the decorator
+    // `@interface class C` + `@contract class C`) slipped through - this catches the contract-vs-type case
+    // both interface spellings otherwise miss.
+    const contractName = cls.name?.text;
+    if (contractName && (this.structsByName.has(contractName) || this.interfacesByName.has(contractName))) {
+      this.diags.error(
+        cls,
+        'JETH272',
+        `contract '${contractName}' name conflicts with a same-named type (a struct, enum, or interface); solc rejects this as "Identifier already declared"`,
+      );
     }
 
     // Register functions by name BEFORE checking bodies so an internal call can
