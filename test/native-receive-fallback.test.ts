@@ -68,6 +68,18 @@ describe('native receive / fallback (a method named receive/fallback = the speci
     expect(codes(`class C { fallback(): void {} @fallback f2(): void {} }`)).toContain('JETH383'); // at most one fallback
   });
 
+  it('a payable fallback is spelled with the marker: fallback(): Payable<void> == @payable fallback', () => {
+    expect(bc(`class C { total: u256; fallback(): Payable<void> { this.total = this.total + msg.value; } get t(): External<u256> { return this.total; } }`))
+      .toBe(bc(`class C { total: u256; @payable fallback(): void { this.total = this.total + msg.value; } get t(): External<u256> { return this.total; } }`));
+    // the data-passing payable form too.
+    expect(bc(`class C { fallback(input: bytes): Payable<bytes> { return input; } }`))
+      .toBe(bc(`class C { @payable fallback(input: bytes): bytes { return input; } }`));
+    // a receive is ALWAYS payable - Payable<T> there is redundant (mirrors the @payable JETH385 rule);
+    // External<T> is meaningless on a special entry (not an ABI function).
+    expect(codes(`class C { total: u256; receive(): Payable<void> { this.total = msg.value; } }`)).toContain('JETH385');
+    expect(codes(`class C { fallback(): External<void> { } }`)).toContain('JETH386');
+  });
+
   it('decorator mode is unchanged: a method named receive/fallback is an ordinary method there', () => {
     // in decorator mode a bare `receive()` is NOT the special entry (it is a normal, uncalled internal method).
     expect(bc(`// use @decorators\n@contract class C { @state x: u256; receive(): void { this.x = 1n; } @external @view g(): u256 { return this.x; } }`))

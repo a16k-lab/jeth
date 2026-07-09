@@ -4393,6 +4393,34 @@ export class Analyzer {
   private checkSpecialEntry(member: ts.MethodDeclaration, kind: 'receive' | 'fallback', owner?: string): SpecialEntryIR | undefined {
     const decs = decoratorNames(member);
     let payable = kind === 'receive'; // @receive is always payable
+    // Native marker on a special entry: `fallback(): Payable<void>` (or `Payable<bytes>` for the
+    // data-passing form) = a payable fallback, consistent with the method-marker language. A receive is
+    // ALWAYS payable, so Payable<T> there is redundant (mirrors the @payable JETH385 rule); External<T>
+    // is meaningless on a special entry (it is not an ABI function).
+    if (
+      this.nativeMode &&
+      member.type &&
+      ts.isTypeReferenceNode(member.type) &&
+      ts.isIdentifier(member.type.typeName) &&
+      (member.type.typeName.text === 'Payable' || member.type.typeName.text === 'External')
+    ) {
+      const mk = member.type.typeName.text;
+      const args = member.type.typeArguments;
+      if (mk === 'External') {
+        this.diags.error(member.type, 'JETH386', `a @${kind} entry is not an ABI function; External<T> has no meaning here (a ${kind} is reached by the EVM dispatch, not a selector)`);
+        return undefined;
+      }
+      if (kind === 'receive') {
+        this.diags.error(member.type, 'JETH385', '@receive is always payable; drop the redundant Payable<T>');
+        return undefined;
+      }
+      if (!args || args.length !== 1) {
+        this.diags.error(member.type, 'JETH352', `Payable<T> takes exactly one return type (Payable<void>, or Payable<bytes> for the data-passing fallback)`);
+        return undefined;
+      }
+      payable = true;
+      (member as unknown as { type?: ts.TypeNode }).type = args[0];
+    }
     // P1-21: @virtual / @override are ALLOWED on a @receive/@fallback (solc permits `receive() external
     // payable virtual {}` and an `override` in a derived contract). They are structural markers only - the
     // single special-entry dispatch is byte-identical regardless - so accept them here and let the normal
