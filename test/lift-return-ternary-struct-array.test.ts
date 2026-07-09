@@ -54,11 +54,42 @@ describe('TERN-STRUCT-ARR return lift - byte-identical to solc 0.8.35', () => {
     // abi.encode(ternary) as arg 0 of a whole-statement encode LIFTS (read-only, byte-identical; verified
     // in lift-or-cluster1.test.ts):
     expect(rejects(`${base} @external @view r(c: bool): bytes { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(c ? m : this.fa); } }`)).toBe(false);
-    // a NON-first-arg encode ternary stays a reject (eval-order: only arg 0 is the statement's first side effect):
+    // internal-call arg 0 now LIFTS (JETH passes a standalone Arr<In,N> to an internal fn by reference,
+    // byte-identical incl. W1/W2/W3; see the differential below):
+    expect(rejects(`${base} @external @view r(c: bool): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return this.g(c ? m : this.fa); } }`)).toBe(false);
+    // a NON-first-arg call/encode ternary stays a reject (eval-order: only arg 0 is the statement's first side effect):
     expect(rejects(`${base} @external @view r(c: bool): bytes { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(7n, c ? m : this.fa); } }`)).toBe(true);
-    // internal-call arg: mutation-sensitive -> still rejects (pending the parameter-effect analysis)
-    expect(rejects(`${base} @external @view r(c: bool): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return this.g(c ? m : this.fa); } }`)).toBe(true);
+    // element-write RHS is mutation-sensitive (not arg 0 of a call, not a whole-statement value) -> still rejects:
+    expect(rejects(`${IN} @contract class C { @external @pure r(c: bool): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let n: Arr<In,2> = [In(5n,6n),In(7n,8n)]; let o: Arr<Arr<In,2>,2> = [[In(0n,0n),In(0n,0n)],[In(0n,0n),In(0n,0n)]]; o[0n] = c ? m : n; return o[0n][0n].a; } }`)).toBe(true);
     // an arrayGet-branch ternary (c ? xs[0] : m over Arr<Arr<In,2>,2>) is a separate reject, not hoisted
     expect(rejects(`${IN} @contract class C { @external @pure r(c: bool): Arr<In,2> { let xs: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; let m: Arr<In,2> = [In(9n,9n),In(9n,9n)]; return c ? xs[0n] : m; } }`)).toBe(true);
+  });
+
+  it('internal-call arg 0 of a ternary struct array - byte-identical incl. W1 field-write / W2 re-point / W3 cross-alias', async () => {
+    const J = `${IN}
+      @contract class C {
+        mut(p: Arr<In,2>): void { p[0n].a = 77n; }
+        rep(p: Arr<In,2>): void { p[1n] = p[0n]; p[0n].a = 7n; }
+        g3(p: Arr<In,2>, q: Arr<In,2>): u256 { p[0n].a = 99n; return q[0n].a; }
+        @external @pure w1(c: bool): u256 { let m: Arr<In,2>=[In(1n,2n),In(3n,4n)]; let n: Arr<In,2>=[In(5n,6n),In(7n,8n)]; this.mut(c ? m : n); return m[0n].a*1000n + n[0n].a; }
+        @external @pure w2(c: bool): u256 { let m: Arr<In,2>=[In(1n,2n),In(3n,4n)]; let n: Arr<In,2>=[In(5n,6n),In(7n,8n)]; this.rep(c ? m : n); return m[1n].a*1000n + n[1n].a; }
+        @external @pure w3(c: bool): u256 { let m: Arr<In,2>=[In(1n,2n),In(3n,4n)]; let n: Arr<In,2>=[In(5n,6n),In(7n,8n)]; return this.g3(c ? m : n, m); } }`;
+    const S = `struct In { uint256 a; uint256 b; }
+      contract C {
+        function mut(In[2] memory p) internal pure { p[0].a=77; }
+        function rep(In[2] memory p) internal pure { p[1]=p[0]; p[0].a=7; }
+        function g3(In[2] memory p, In[2] memory q) internal pure returns(uint256){ p[0].a=99; return q[0].a; }
+        function w1(bool c) external pure returns(uint256){ In[2] memory m=[In(1,2),In(3,4)]; In[2] memory n=[In(5,6),In(7,8)]; mut(c?m:n); return m[0].a*1000+n[0].a; }
+        function w2(bool c) external pure returns(uint256){ In[2] memory m=[In(1,2),In(3,4)]; In[2] memory n=[In(5,6),In(7,8)]; rep(c?m:n); return m[1].a*1000+n[1].a; }
+        function w3(bool c) external pure returns(uint256){ In[2] memory m=[In(1,2),In(3,4)]; In[2] memory n=[In(5,6),In(7,8)]; return g3(c?m:n, m); } }`;
+    const h = await Harness.create();
+    const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
+    for (const [sg, args] of [['w1(bool)', W(1)], ['w1(bool)', W(0)], ['w2(bool)', W(1)], ['w2(bool)', W(0)], ['w3(bool)', W(1)], ['w3(bool)', W(0)]] as [string, string][]) {
+      const rj = await h.call(aj, sel(sg) + args);
+      const rs = await h.call(as, sel(sg) + args);
+      expect(rj.success, sg + ' ' + args).toBe(rs.success);
+      expect(rj.returnHex, sg + ' ' + args).toBe(rs.returnHex);
+    }
   });
 });
