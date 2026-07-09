@@ -24,6 +24,14 @@ export class CompileError extends Error {
 }
 
 /** Accumulates diagnostics during a compile and can format them for a terminal. */
+/** Item #2: `#` private members are lowered to contract-scoped internal names `$p$<Contract>$<name>`
+ *  (src/compile.ts). Any diagnostic that echoes such a name back to the user should show the original
+ *  `#<name>` spelling, not the internal mangle. This is presentation-only; it never changes a code,
+ *  span, or accept/reject decision. */
+export function demanglePrivateName(message: string): string {
+  return message.replace(/\$p\$[A-Za-z0-9_]+\$([A-Za-z0-9_]+)/g, '#$1');
+}
+
 export class DiagnosticBag {
   readonly items: Diagnostic[] = [];
 
@@ -54,6 +62,7 @@ export class DiagnosticBag {
   }
 
   error(node: ts.Node, code: string, message: string): void {
+    message = demanglePrivateName(message);
     const loc = this.at(node);
     if (this.isDuplicate('error', code, message, loc)) return;
     this.items.push({ severity: 'error', code, message, file: this.fileName, ...loc });
@@ -62,6 +71,7 @@ export class DiagnosticBag {
   /** Emit an error at a RAW source position (start offset + length) rather than a node. Used for
    *  TS parse (syntactic) diagnostics, which carry a position but no analyzer AST node. */
   errorAtPos(start: number, length: number, code: string, message: string): void {
+    message = demanglePrivateName(message);
     const { line, character } = this.sourceFile.getLineAndCharacterOfPosition(start);
     const loc = { line: line + 1, column: character + 1, length: Math.max(1, length) };
     if (this.isDuplicate('error', code, message, loc)) return;
@@ -69,6 +79,7 @@ export class DiagnosticBag {
   }
 
   warn(node: ts.Node, code: string, message: string): void {
+    message = demanglePrivateName(message);
     const loc = this.at(node);
     if (this.isDuplicate('warning', code, message, loc)) return;
     this.items.push({ severity: 'warning', code, message, file: this.fileName, ...loc });

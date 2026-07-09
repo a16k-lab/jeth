@@ -1,6 +1,7 @@
 // Top-level pipeline orchestrator (directive §5): source -> tokens/AST -> subset
 // validation -> semantic analysis + type check -> storage layout -> Yul -> solc
 // -> bytecode + ABI.
+import ts from 'typescript';
 import { parse } from './parser.js';
 import { expandDiamond } from './diamond.js';
 import { DiagnosticBag, CompileError, Diagnostic } from './diagnostics.js';
@@ -55,6 +56,38 @@ export interface CompileOptions {
   evmVersion?: string;
 }
 
+/**
+ * Item #2 (private members): a JS `#`-prefixed member name (`#f()` / `#y`) is JETH's spelling of
+ * Solidity `private`. Because private is byte-identical to internal (visibility is a compile-time
+ * concept, not a bytecode one), we lower a `#` member exactly like an internal one - by rewriting
+ * each PrivateIdentifier (both the `#f`/`#y` DECLARATION and every `this.#x` ACCESS) to a plain,
+ * Yul-safe identifier keyed by the CONTAINING contract: `#x` in contract `C` -> `$p$C$x`.
+ *
+ * Per-contract keying does the visibility enforcement for free: a DERIVED contract's `this.#x`
+ * mangles to `$p$D$x`, which `D` never declared, so downstream name resolution finds nothing and
+ * rejects - exactly solc's "private is not visible in a derived contract" (JETH runs its own
+ * checker; TS's `#` privacy is not otherwise enforced here). It also keeps `#x` distinct from a
+ * plain `x`, and one contract's `#x` distinct from another's. No downstream site ever sees a `#`,
+ * so the rest of the pipeline is untouched and the emitted bytecode equals solc's `private`.
+ */
+function manglePrivateMembers(sf: ts.SourceFile): void {
+  const f = ts.factory;
+  const rewrite = (node: ts.Node, contract: string | undefined): void => {
+    const cur = ts.isClassDeclaration(node) && node.name ? node.name.text : contract;
+    const named = node as ts.Node & { name?: ts.Node };
+    const nm = named.name;
+    if (nm && ts.isPrivateIdentifier(nm) && cur) {
+      const bare = nm.text.replace(/^#/, '');
+      const mangled = f.createIdentifier(`$p$${cur}$${bare}`);
+      ts.setTextRange(mangled, nm);
+      (mangled as unknown as { parent: ts.Node }).parent = nm.parent ?? node;
+      named.name = mangled;
+    }
+    ts.forEachChild(node, (c) => rewrite(c, cur));
+  };
+  ts.forEachChild(sf, (n) => rewrite(n, undefined));
+}
+
 export function compile(source: string, opts: CompileOptions = {}): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
@@ -78,6 +111,9 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   const effectiveSource = dia.expanded ? dia.source : source;
 
   const parsed = parse(effectiveSource, fileName);
+  // Item #2: rewrite JS `#` private members to contract-scoped internal names BEFORE validation /
+  // analysis, so `#f()` / `this.#x` lower like internal members and derived access rejects.
+  manglePrivateMembers(parsed.sourceFile);
   const diags = new DiagnosticBag(parsed.sourceFile, fileName);
 
   // Phase 0: subset validation (collects, does not throw yet).
