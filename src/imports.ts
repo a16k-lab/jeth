@@ -13,9 +13,13 @@
 //  - Every file must share the entry's syntax mode (native vs `// use @decorators`) - the bundle is one
 //    unit with one mode; a cross-mode import is a clear error (migrate the file or the entry).
 //  - Import cycles reject with the cycle path; diamond imports (A->B, A->C, B&C->D) dedupe (D once).
-// v1 looseness (documented): bundling puts EVERY top-level declaration of an imported file in scope, not
-// just the named ones - the named list is validated (typo + export enforcement), but unnamed siblings are
-// reachable too (the TS IDE flags them; strict per-name scoping is a v2 item).
+//  - v2 PER-NAME SCOPING: after bundling, every file's references are checked - using a name declared in
+//    ANOTHER file requires an import edge for that name (JETH039 "not imported; add `import {X}`"), and an
+//    unexported declaration is unreachable from outside its file (JETH039 "not exported"). The check is
+//    purely ADDITIVE (it runs before analysis and only turns programs into rejects), conservative about
+//    shadowing (a local/param/type-param with the same name suppresses the check for that name), and
+//    identifier-based - one KNOWN gap: a `self`-convention ATTACHED call (`a.min(b)`) names no library
+//    identifier, so a transitively-bundled library's self-functions can attach without an import edge.
 import ts from 'typescript';
 import { CompileError, Diagnostic } from './diagnostics.js';
 
@@ -166,6 +170,110 @@ function countLines(s: string): number {
   return s.split(/\r\n|\r|\n/).length;
 }
 
+// ---- v2 per-name import scoping ------------------------------------------------------------------
+
+/** Every declaration name in the file that could be referenced cross-file: class (any kind), type alias,
+ *  interface, enum. RECURSIVE (a nested declaration still occupies the unit's namespace once bundled), so
+ *  an own nested name never false-positives as a cross-file reference. */
+function declaredNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (n: ts.Node): void => {
+    if (
+      (ts.isClassDeclaration(n) || ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n) || ts.isEnumDeclaration(n)) &&
+      n.name
+    ) {
+      names.add(n.name.text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return names;
+}
+
+/** Conservative shadow set: every locally-bound value/type name in the file (params, locals, binding
+ *  elements, type parameters). A cross-file-looking reference that shares a name with ANY local binding is
+ *  skipped - the analyzer's normal resolution decides it; this check must never false-positive. */
+function shadowNames(sf: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  const visit = (n: ts.Node): void => {
+    if ((ts.isParameter(n) || ts.isVariableDeclaration(n) || ts.isBindingElement(n)) && ts.isIdentifier(n.name)) {
+      names.add(n.name.text);
+    }
+    if (ts.isTypeParameterDeclaration(n)) names.add(n.name.text);
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return names;
+}
+
+/** Is this identifier a REFERENCE (a use of a name), as opposed to a member-name / key / a declaration's
+ *  own name? The property side of `x.f` / `A.B`, an object key, and any node's own `name` are not
+ *  references; a shorthand property (`{ MathLib }`) IS one. */
+function isReferenceIdentifier(n: ts.Identifier): boolean {
+  const p = n.parent as ts.Node | undefined;
+  if (!p) return false;
+  if (ts.isPropertyAccessExpression(p) && p.name === n) return false;
+  if (ts.isQualifiedName(p) && p.right === n) return false;
+  if (ts.isShorthandPropertyAssignment(p)) return true; // `{ X }` is a value reference to X
+  if ((p as { name?: ts.Node }).name === n) return false; // its own declaration / key name
+  return true;
+}
+
+interface FileInfo {
+  display: string;
+  blanked: string;
+  imported: Set<string>;
+}
+
+/** v2 scoping: a reference to a name declared in ANOTHER file requires an import edge for that name; an
+ *  unexported declaration is unreachable from outside its file. Reports EVERY offending name (deduped per
+ *  file+name, first occurrence) in one CompileError, each positioned in its own file. */
+function checkCrossFileReferences(files: FileInfo[]): void {
+  if (files.length < 2) return;
+  const parsed = files.map((f) => ({ ...f, sf: ts.createSourceFile(f.display, f.blanked, ts.ScriptTarget.Latest, true) }));
+  // name -> its declaring file (+ exported?). Duplicate declarations across files are the analyzer's
+  // JETH037 concern; the first declarer is attribution enough here.
+  const declaredBy = new Map<string, { file: string; exported: boolean }>();
+  for (const f of parsed) {
+    const exp = exportedNames(f.sf);
+    for (const nm of declaredNames(f.sf)) {
+      if (!declaredBy.has(nm)) declaredBy.set(nm, { file: f.display, exported: exp.has(nm) });
+    }
+  }
+  const errors: Diagnostic[] = [];
+  for (const f of parsed) {
+    const own = declaredNames(f.sf);
+    const shadows = shadowNames(f.sf);
+    const reported = new Set<string>();
+    const visit = (n: ts.Node): void => {
+      if (ts.isIdentifier(n) && isReferenceIdentifier(n)) {
+        const nm = n.text;
+        if (!own.has(nm) && !f.imported.has(nm) && !shadows.has(nm) && !reported.has(nm)) {
+          const d = declaredBy.get(nm);
+          if (d && d.file !== f.display) {
+            reported.add(nm);
+            const { line, character } = f.sf.getLineAndCharacterOfPosition(n.getStart(f.sf));
+            errors.push({
+              severity: 'error',
+              code: 'JETH039',
+              message: d.exported
+                ? `'${nm}' is declared in '${d.file}' but not imported here; add \`import { ${nm} } from "./${d.file}"\` (adjust the relative path)`
+                : `'${nm}' is declared in '${d.file}' but not exported; mark it \`export\` there and import it here`,
+              file: f.display,
+              line: line + 1,
+              column: character + 1,
+              length: nm.length,
+            });
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(f.sf, visit);
+  }
+  if (errors.length > 0) throw new CompileError(errors);
+}
+
 /**
  * Resolve the entry file's imports (recursively) against `sources` (path -> source text) and produce ONE
  * bundled compilation unit: imported files first (dependency post-order, deduped), the entry last, each
@@ -194,6 +302,7 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
   const entryKey = normalizePath(entryFile);
 
   const order: { file: string; text: string }[] = [];
+  const fileInfos: FileInfo[] = [];
   const visited = new Set<string>();
   const inStack: string[] = [];
 
@@ -225,6 +334,7 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
     if (!isEntry) rejectDepContracts(displayName, sf, !entryMode);
 
     let blanked = text;
+    const importedHere = new Set<string>();
     for (const s of sf.statements) {
       if (ts.isImportEqualsDeclaration(s)) fail(displayName, sf, s, `'import =' is not supported; use \`import { A, B } from "./file.jeth"\``);
       if (!ts.isImportDeclaration(s)) continue;
@@ -253,6 +363,7 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
           const avail = [...exported].sort().join(', ') || '<nothing exported>';
           fail(displayName, sf, el, `'${el.name.text}' is not an exported declaration of '${targetKey}' (exported: ${avail}); mark it \`export\` there`);
         }
+        importedHere.add(el.name.text);
       }
       blanked = blankSpan(blanked, s.getStart(sf), s.getEnd());
     }
@@ -260,9 +371,13 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
     inStack.pop();
     visited.add(fileKey);
     order.push({ file: displayName, text: blanked });
+    fileInfos.push({ display: displayName, blanked, imported: importedHere });
   };
 
   visit(entryKey, entryFile, normalizeEol(entryText), true);
+
+  // v2 per-name scoping: cross-file references need an import edge; unexported declarations stay private.
+  checkCrossFileReferences(fileInfos);
 
   const segments: BundleSegment[] = [];
   let line = 1;

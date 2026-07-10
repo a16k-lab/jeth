@@ -131,6 +131,36 @@ describe('multi-file hardening (verification sweep)', () => {
       .toEqual(['JETH036@dep.jeth:2']);
   });
 
+  it('v2 scoping: a cross-file reference requires an import edge; unexported declarations stay private', () => {
+    const LIB = `export static class MathLib { min(a: u256, b: u256): u256 { return a < b ? a : b; } }\nexport static class Extra { calc(a: u256): u256 { return a + 1n; } }\nstatic class Hidden { leak(a: u256): u256 { return a * 2n; } }`;
+    // the two v1 leaks, closed: an unimported exported sibling, and an unexported declaration.
+    expect(diag(`import { MathLib } from "./libs.jeth";\nclass V { get f(a: u256): External<u256> { return Extra.calc(a); } }`, { 'libs.jeth': LIB }))
+      .toEqual(['JETH039@vault.jeth:2']);
+    expect(diag(`import { MathLib } from "./libs.jeth";\nclass V { get f(a: u256): External<u256> { return Hidden.leak(a); } }`, { 'libs.jeth': LIB }))
+      .toEqual(['JETH039@vault.jeth:2']);
+    // TYPE-position references, `extends`, @using(...) arguments, and DEP-to-DEP references are edges too.
+    expect(diag(`import { MathLib } from "./libs.jeth";\nclass V { get f(p: P): External<u256> { return p.a; } }`, { 'libs.jeth': LIB + `\nexport type P = { a: u256 };` }))
+      .toEqual(['JETH039@vault.jeth:2']);
+    expect(diag(`import { MathLib } from "./libs.jeth";\nclass V extends Base { get f(): External<u256> { return 1n; } }`, { 'libs.jeth': LIB + `\nexport abstract class Base { }` }))
+      .toEqual(['JETH039@vault.jeth:2']);
+    expect(diag(`import { A } from "./a.jeth";\nclass V { get f(x: u256): External<u256> { return A.fa(x); } }`,
+      { 'a.jeth': `import { B } from "./b.jeth";\nexport static class A { fa(x: u256): u256 { return B.fb(x) + Cfn.g(x); } }`, 'b.jeth': `export static class B { fb(x: u256): u256 { return x + 1n; } }\nexport static class Cfn { g(x: u256): u256 { return x; } }` }))
+      .toEqual(['JETH039@a.jeth:2']); // Cfn used inside a.jeth without an import edge
+  });
+
+  it('v2 scoping has no false positives: shadowing locals, member names, and enum access all pass', () => {
+    const LIB = `export static class Extra { calc(a: u256): u256 { return a + 1n; } }\nexport enum Color { Red, Blue }\nexport static class MathLib { min(a: u256, b: u256): u256 { return a < b ? a : b; } }`;
+    // a LOCAL named like a cross-file declaration suppresses the check (conservative shadow set).
+    expect(diag(`import { MathLib } from "./libs.jeth";\ntype P = { calc: u256 };\nclass V { get f(a: u256): External<u256> { let Extra: P = P(a); return Extra.calc; } }`, { 'libs.jeth': LIB }))
+      .toEqual([]);
+    // a STRUCT FIELD / property name matching a cross-file declaration is a member name, not a reference.
+    expect(diag(`import { MathLib } from "./libs.jeth";\ntype Q = { Extra: u256 };\nclass V { get f(a: u256): External<u256> { let q: Q = Q(a); return q.Extra; } }`, { 'libs.jeth': LIB }))
+      .toEqual([]);
+    // an imported ENUM's members are reached through the imported name - fine.
+    expect(diag(`import { Color } from "./libs.jeth";\nclass V { c: Color; get f(): External<bool> { return this.c == Color.Red; } }`, { 'libs.jeth': LIB }))
+      .toEqual([]);
+  });
+
   it('a lone-CR file ending does not shift later diagnostic mapping; ambiguous sources keys reject', () => {
     expect(diag(`import { A } from "./a.jeth";\nimport { B } from "./b.jeth";\nclass C { get f(): External<u256> { return A.fa() + B.fb(); } }`,
       { 'a.jeth': "export static class A { fa(): u256 { return 1n; } }\r", 'b.jeth': `export static class B {\n  fb(): u256 { return this.x; }\n}` })
