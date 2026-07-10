@@ -15,7 +15,7 @@ import { functionSelector } from '../src/selectors.js';
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => '0x' + functionSelector(s);
 const W = (n: number | bigint) => pad32(BigInt(n));
-const A = (h: string) => pad32(BigInt(h));
+const A = (h: string | { toString(): string }) => pad32(BigInt(h.toString()));
 const bc = (src: string) => compile(src, { fileName: 'C.jeth' }).creationBytecode;
 const codes = (src: string): string[] => {
   try { compile(src, { fileName: 'C.jeth' }); return []; } catch (e: any) { return e?.diagnostics?.map((d: any) => d.code) ?? ['THROW']; }
