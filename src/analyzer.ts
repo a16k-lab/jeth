@@ -1620,6 +1620,26 @@ export class Analyzer {
         }
       }
     }
+    // Native `self` convention: a library function whose FIRST parameter is literally named `self` is
+    // attachable with NO @using - the library AUTHOR opts in at the declaration (the spirit of solc's
+    // `using {L.f} for T global`). Registered through the SAME map, so the builtins-win ordering and the
+    // ambiguous-attachment rejection apply unchanged. A library already named in @using(L) is skipped
+    // (all its functions are registered above; re-adding its self-fns would self-collide as a spurious
+    // ambiguity). Purely ADDITIVE: it only fires where the call would otherwise reject.
+    if (this.nativeMode) {
+      for (const [libName, fns] of this.libraryByName) {
+        if (seen.has(libName)) continue;
+        for (const fn of fns) {
+          if (fn.params.length === 0 || fn.params[0]!.name !== 'self') continue;
+          const t = fn.params[0]!.type;
+          const bare = fn.name.slice(libName.length + 1);
+          const key = `${canonicalName(t)}#${bare}`;
+          const list = this.libraryAttachments.get(key);
+          if (list) list.push(fn);
+          else this.libraryAttachments.set(key, [fn]);
+        }
+      }
+    }
   }
 
   // ---- inheritance: contract registry + C3 linearization --------------------
