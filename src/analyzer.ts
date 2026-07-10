@@ -302,12 +302,27 @@ export class Analyzer {
   // internal-call path and are byte-identical to solc's internal library functions for free. The
   // registry holds each library's RawFunctions (decl order) for overload resolution at the call site.
   private libraryByName = new Map<string, RawFunction[]>();
-  // `@using(L)` attachment: when a @contract carries @using(L) decorators, each L function whose FIRST
-  // param type is T attaches as a method on T, so `x.f(args)` desugars to `L.f(x, ...args)`. Built per
-  // deployed contract from its @using list; keyed by `${canonicalName(T)}#${methodName}` -> the matching
-  // RawFunctions (more than one => ambiguous attachment, rejected). A built-in method on T wins (the
-  // attachment is consulted only AFTER the built-in method resolvers in the call dispatch).
-  private libraryAttachments = new Map<string, RawFunction[]>();
+  // `@using(L)` attachment: when a class carries @using(L) decorators, each L function whose FIRST
+  // param type is T attaches as a method on T, so `x.f(args)` desugars to `L.f(x, ...args)`. Keyed by
+  // `${canonicalName(T)}#${methodName}` -> the matching RawFunctions (more than one => ambiguous
+  // attachment, rejected). A built-in method on T wins (the attachment is consulted only AFTER the
+  // built-in method resolvers in the call dispatch).
+  //   solc's `using L for T` is LEXICAL: the directive is in scope ONLY inside the contract body that
+  // declares it - it is NOT inherited by a child and NOT projected from the deployed contract into
+  // base/library bodies (solc 0.7.0+). So the attachments live in ONE MAP PER CLASS (the deployed
+  // @contract AND every @abstract base in the linearization), keyed by the class name, and a lookup is
+  // served exclusively from the map of the class that DECLARED the body being checked
+  // (bodyOwnerContract) - see attachedFnsFor. A @modifier body resolves in its DECLARING class (set
+  // around the modifier's own statements in inlineModifier / buildModifierWrap /
+  // inlineModifierBodyIntoCtor), matching solc.
+  private usingAttachmentsByClass = new Map<string, Map<string, RawFunction[]>>();
+  // Native `self` convention: a library function whose FIRST parameter is literally named `self` is
+  // attachable with NO @using - the library AUTHOR opts in at the declaration (the spirit of solc's
+  // `using {L.f} for T global`, which IS file-wide). By design it applies to EVERY body in the file -
+  // any contract/base body and library bodies alike - so it lives in its own map, NOT subject to the
+  // per-class lexical scoping above. attachedFnsFor merges it with the body owner's @using map
+  // (deduplicated by identity), preserving the ambiguous-attachment rejection across the two sources.
+  private selfAttachments = new Map<string, RawFunction[]>();
   // Phase B: names of @library declarations that an external (delegatecall) call site referenced (so
   // compile.ts knows which library objects to emit + link). Populated when a `L.f`/attached `x.f`
   // resolves to an @external library function.
@@ -397,7 +412,13 @@ export class Analyzer {
   // JethTypes in structsByName, and synthesize a mangled non-generic specialization that flows
   // through the EXISTING collect/check/emit internal-function pipeline. Specializations are
   // discovered lazily while checking bodies, so a worklist is drained until no new ones appear.
-  private genericsByName = new Map<string, { node: ts.MethodDeclaration; typeParams: string[] }>();
+  // definingContract: the class that DECLARED the generic template - each specialization's body is
+  // checked under that owner (lexical @using attachment scope + P0-23 upward visibility), exactly like
+  // a non-generic function declared there.
+  private genericsByName = new Map<
+    string,
+    { node: ts.MethodDeclaration; typeParams: string[]; definingContract?: string }
+  >();
   private specializedNames = new Map<string, string>(); // specialization KEY -> mangled function name
   private specializationQueue: { mangled: string; node: ts.MethodDeclaration; binding: Map<string, JethType> }[] = []; // not-yet-checked specializations
   // Item #8: override (v overrides ob) mutability-ladder pairs, checked AFTER the inference fixpoint so a
@@ -1636,14 +1657,13 @@ export class Analyzer {
     return this.libraryByName.has(name);
   }
 
-  /** Build the `@using(L)` attachment map for the deployed contract: for each L in its @using
-   *  decorators, attach every L function whose FIRST parameter type is T as a method on T, keyed by
+  /** Scan `cls`'s `@using(...)` decorators into `into`: for each named library L, attach every L
+   *  function whose FIRST parameter type is T as a method on T, keyed by
    *  `${canonicalName(T)}#${methodName}` (the BARE method name, not the qualified `L.f`). More than
    *  one matching function for a (T, name) => ambiguous attachment (rejected at the call site). A
    *  function with zero parameters cannot attach (there is no receiver). An @using naming a
    *  non-library is rejected here. */
-  private buildLibraryAttachments(cls: ts.ClassDeclaration): void {
-    this.libraryAttachments.clear();
+  private collectUsingDecorators(cls: ts.ClassDeclaration, into: Map<string, RawFunction[]>): void {
     const seen = new Set<string>();
     for (const d of ts.getDecorators(cls) ?? []) {
       const e = d.expression;
@@ -1665,32 +1685,82 @@ export class Analyzer {
           const t = fn.params[0]!.type;
           const bare = fn.name.slice(libName.length + 1); // strip the `L.` prefix
           const key = `${canonicalName(t)}#${bare}`;
-          const list = this.libraryAttachments.get(key);
+          const list = into.get(key);
           if (list) list.push(fn);
-          else this.libraryAttachments.set(key, [fn]);
+          else into.set(key, [fn]);
         }
       }
     }
-    // Native `self` convention: a library function whose FIRST parameter is literally named `self` is
-    // attachable with NO @using - the library AUTHOR opts in at the declaration (the spirit of solc's
-    // `using {L.f} for T global`). Registered through the SAME map, so the builtins-win ordering and the
-    // ambiguous-attachment rejection apply unchanged. A library already named in @using(L) is skipped
-    // (all its functions are registered above; re-adding its self-fns would self-collide as a spurious
-    // ambiguity). Purely ADDITIVE: it only fires where the call would otherwise reject.
+  }
+
+  /** Build the `@using(L)` attachment maps: one SCOPED map per class in the linearization (the
+   *  deployed @contract and every @abstract base) that carries its own @using decorators - solc's
+   *  `using L for T` serves ONLY the declaring contract's own bodies (lexical, not inherited) - plus
+   *  the file-wide native `self`-convention map. Each class's map is consulted only while a body
+   *  DECLARED in that class is checked (attachedFnsFor). Both decorator orders (@using before or
+   *  after @abstract/@contract) land here: ts.getDecorators is order-blind. Also validates each
+   *  @using names a real library (JETH391), on the bases exactly like on the deployed contract. */
+  private buildLibraryAttachments(cls: ts.ClassDeclaration, lin: ts.ClassDeclaration[]): void {
+    this.usingAttachmentsByClass.clear();
+    this.selfAttachments.clear();
+    const classes = lin.includes(cls) ? lin : [cls, ...lin];
+    for (const c of classes) {
+      // an @interface carries no bodies, so a @using on it can serve nothing (its shape rejects
+      // elsewhere); a nameless class cannot be a body owner.
+      if (this.isInterfaceClass(c) || !c.name) continue;
+      const m = new Map<string, RawFunction[]>();
+      this.collectUsingDecorators(c, m);
+      if (m.size > 0) this.usingAttachmentsByClass.set(c.name.text, m);
+    }
+    // Native `self` convention: FILE-WIDE by design (see the field comment). Registered for every
+    // library regardless of any @using naming it; attachedFnsFor deduplicates by identity, so a
+    // self-named fn also reachable through the owner's @using cannot self-collide as a spurious
+    // ambiguity. Purely ADDITIVE: it only fires where the call would otherwise reject.
     if (this.nativeMode) {
       for (const [libName, fns] of this.libraryByName) {
-        if (seen.has(libName)) continue;
         for (const fn of fns) {
           if (fn.params.length === 0 || fn.params[0]!.name !== 'self') continue;
           const t = fn.params[0]!.type;
           const bare = fn.name.slice(libName.length + 1);
           const key = `${canonicalName(t)}#${bare}`;
-          const list = this.libraryAttachments.get(key);
+          const list = this.selfAttachments.get(key);
           if (list) list.push(fn);
-          else this.libraryAttachments.set(key, [fn]);
+          else this.selfAttachments.set(key, [fn]);
         }
       }
     }
+  }
+
+  /** The @using attachment map of the class that DECLARED the body currently being checked. A body
+   *  with no class owner (a @library function body - solc scopes a contract's using directives away
+   *  from library bodies too) has no @using map; only the file-wide self convention applies there. */
+  private ownerUsingAttachments(): Map<string, RawFunction[]> | undefined {
+    return this.bodyOwnerContract !== undefined
+      ? this.usingAttachmentsByClass.get(this.bodyOwnerContract)
+      : undefined;
+  }
+
+  /** Fast gate: does ANY attachment source apply to the body being checked? True when the body
+   *  owner's own @using map has entries or the file-wide self-convention map does. */
+  private hasAttachments(): boolean {
+    if (this.selfAttachments.size > 0) return true;
+    const own = this.ownerUsingAttachments();
+    return own !== undefined && own.size > 0;
+  }
+
+  /** The attachment candidates for `key` as seen from the CURRENT body: the body-owner class's OWN
+   *  @using entries (lexical - NEVER another class's, and in particular never the deployed
+   *  contract's map for a base/library body) merged with the file-wide `self`-convention entries,
+   *  deduplicated by identity. An ambiguity across the two sources (two distinct fns for one key)
+   *  surfaces at the call site exactly like two @using libraries colliding. */
+  private attachedFnsFor(key: string): RawFunction[] | undefined {
+    const own = this.ownerUsingAttachments()?.get(key);
+    const self = this.selfAttachments.get(key);
+    if (!own || own.length === 0) return self;
+    if (!self || self.length === 0) return own;
+    const merged = [...own];
+    for (const fn of self) if (!merged.includes(fn)) merged.push(fn);
+    return merged;
   }
 
   // ---- inheritance: contract registry + C3 linearization --------------------
@@ -2006,8 +2076,10 @@ export class Analyzer {
           else if (decs.includes('modifier')) this.collectModifier(member, cn, collectedMods);
           else if (member.typeParameters && member.typeParameters.length > 0) {
             // F6: a generic function template - registered for monomorphization (not inherited-keyed;
-            // generics are internal-only and not part of the override surface).
-            this.collectGeneric(member);
+            // generics are internal-only and not part of the override surface). The declaring class is
+            // recorded so each specialization's body checks under the template's LEXICAL owner (its own
+            // @using attachment scope), like any function declared there.
+            this.collectGeneric(member, cn);
           } else {
             const fn = this.collectFunction(member);
             if (fn) {
@@ -2104,9 +2176,11 @@ export class Analyzer {
     // / FunctionIR-emission pipeline as a contract internal function and emit as `userfn_`s - making
     // `L.f(args)` and an attached `x.f(args)` byte-identical to solc's internal library functions.
     for (const fns of this.libraryByName.values()) rawFns.push(...fns);
-    // Build the `@using(L)` attachment map for the deployed contract (so `x.f(args)` can desugar to
-    // `L.f(x, ...args)`); also validates each @using names a real library.
-    this.buildLibraryAttachments(cls);
+    // Build the `@using(L)` attachment maps (so `x.f(args)` can desugar to `L.f(x, ...args)`): one
+    // per class in the linearization, each served ONLY to bodies declared in that class (solc's
+    // lexical using-directive scoping), plus the file-wide native `self`-convention map; also
+    // validates each @using names a real library.
+    this.buildLibraryAttachments(cls, lin);
 
     // Plan storage layout, then build the symbol table. The planner lays @state out from slot 0
     // sequentially (small number slots); widen each to a `bigint` StateVar.slot here so every
@@ -6600,7 +6674,7 @@ export class Analyzer {
    *  checked here (internal-only, plain-identifier type params with no constraints); the body
    *  and signature are NOT collected now - each concrete instantiation is synthesized lazily at
    *  its call site and flows through the normal collect/check/emit internal-function pipeline. */
-  private collectGeneric(member: ts.MethodDeclaration): void {
+  private collectGeneric(member: ts.MethodDeclaration, definingContract?: string): void {
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(member, 'JETH049', 'method name must be a plain identifier');
       return;
@@ -6654,7 +6728,7 @@ export class Analyzer {
       this.diags.error(member, 'JETH295', `function '${name}' redeclared`);
       return;
     }
-    this.genericsByName.set(name, { node: member, typeParams });
+    this.genericsByName.set(name, { node: member, typeParams, definingContract });
   }
 
   /** Register each type-parameter -> concrete-type binding in structsByName for the duration of
@@ -6865,9 +6939,12 @@ export class Analyzer {
         return undefined;
       }
       // Force a concrete internal visibility (a specialization is never in the ABI) and a stable
-      // mangled name; drop any visibility inference (a generic is internal by construction).
+      // mangled name; drop any visibility inference (a generic is internal by construction). The
+      // specialization inherits the TEMPLATE's declaring class so its body checks under the same
+      // lexical owner (@using attachment scope / upward visibility) as a non-generic sibling.
       rf.name = key;
       rf.visibility = 'internal';
+      rf.definingContract = gen.definingContract;
       this.funcsByName.set(key, rf);
       this.specializationQueue.push({ mangled: key, node: gen.node, binding });
     }
@@ -7306,6 +7383,10 @@ export class Analyzer {
     //    nested in a conditional/loop - so the wrapped body runs 0-or-N times; a 0-times path leaves the
     //    buffered `ret` at its zero-init = solc's zero value. The result is wrapped in a block so the
     //    modifier's params/locals are scoped to the whole body.
+    //    solc resolves a @modifier BODY in its DECLARING contract's lexical scope - its own `using`
+    //    directives and upward name visibility - not the applying function's. Route the modifier's OWN
+    //    statements through the declaring class (the APPLICATION ARGS above stay in the caller's scope;
+    //    the spliced `inner` is pre-built IR, never re-checked here).
     if (mod.bodyStmts) {
       const savedScopesC = this.scopes;
       this.scopes = [new Map()];
@@ -7314,22 +7395,28 @@ export class Analyzer {
       const lowered: Stmt[] = [];
       const savedPlaceholder = this.placeholderInner;
       this.placeholderInner = inner;
+      const savedModOwnerC = this.bodyOwnerContract;
+      if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
       for (const s of mod.bodyStmts) this.checkStatement(s, VOID, lowered);
+      this.bodyOwnerContract = savedModOwnerC;
       this.placeholderInner = savedPlaceholder;
       this.popScope();
       this.scopes = savedScopesC;
       return [{ kind: 'block', body: [...argDecls, ...lowered] }];
     }
     // 2. (top-level placeholder) Check pre AND post in the SAME fresh scope (only the modifier's params
-    //    + contract state).
+    //    + contract state), under the modifier's DECLARING class (see above).
     const savedScopes = this.scopes;
     this.scopes = [new Map()];
     this.pushScope();
     for (const p of mod.params) this.declareLocal(p.name, p.type);
+    const savedModOwner = this.bodyOwnerContract;
+    if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
     const pre: Stmt[] = [];
     for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
     const post: Stmt[] = [];
     for (const s of mod.postStmts) this.checkStatement(s, VOID, post);
+    this.bodyOwnerContract = savedModOwner;
     this.popScope();
     this.scopes = savedScopes;
     // 3. Wrap [argDecls, pre, inner, post] in a block so the modifier's params are scoped to the whole
@@ -7552,6 +7639,9 @@ export class Analyzer {
       this.registerAggregateModifierParam(mod.params[i]!.name, mod.params[i]!.type);
     }
     // 2. Check the modifier pre-code in a FRESH scope (only its own params + contract state visible).
+    //    solc resolves a @modifier BODY in its DECLARING contract's lexical scope - its own `using`
+    //    directives and upward name visibility - not the applying function's. Route the modifier's OWN
+    //    statements through the declaring class (the APPLICATION ARGS above stay in the caller's scope).
     const savedScopes = this.scopes;
     this.scopes = [new Map()];
     this.pushScope();
@@ -7559,7 +7649,10 @@ export class Analyzer {
     const pre: Stmt[] = [];
     const savedInModCode = this.currentInCtorModifierCode;
     if (isConstructor) this.currentInCtorModifierCode = true;
+    const savedModOwner = this.bodyOwnerContract;
+    if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
     for (const s of mod.preStmts) this.checkStatement(s, VOID, pre);
+    this.bodyOwnerContract = savedModOwner;
     this.currentInCtorModifierCode = savedInModCode;
     this.popScope();
     this.scopes = savedScopes;
@@ -7626,10 +7719,14 @@ export class Analyzer {
     this.placeholderInner = inner;
     // The modifier's OWN statements are checked with the ctor-modifier-code flag set (an immutable
     // WRITE there is a solc reject); the `_;` placeholder splices the PRE-CHECKED ctor-body IR, so the
-    // body's own immutable writes are unaffected.
+    // body's own immutable writes are unaffected. Like every other modifier-body site, the statements
+    // resolve in the modifier's DECLARING class (its own `using` directives / upward visibility).
     const savedInModCode = this.currentInCtorModifierCode;
     this.currentInCtorModifierCode = true;
+    const savedModOwner = this.bodyOwnerContract;
+    if (mod.definingContract !== undefined) this.bodyOwnerContract = mod.definingContract;
     for (const s of mod.node.body!.statements) this.checkStatement(s, VOID, lowered);
+    this.bodyOwnerContract = savedModOwner;
     this.currentInCtorModifierCode = savedInModCode;
     this.placeholderInner = savedPlaceholder;
     this.popScope();
@@ -8591,7 +8688,7 @@ export class Analyzer {
       if (
         ts.isCallExpression(e) &&
         ts.isPropertyAccessExpression(e.expression) &&
-        this.libraryAttachments.size > 0 &&
+        this.hasAttachments() &&
         !(e.expression.expression.kind === ts.SyntaxKind.ThisKeyword) &&
         !(e.expression.expression.kind === ts.SyntaxKind.SuperKeyword)
       ) {
@@ -8624,7 +8721,7 @@ export class Analyzer {
       if (
         ts.isCallExpression(e) &&
         ts.isPropertyAccessExpression(e.expression) &&
-        this.libraryAttachments.size > 0 &&
+        this.hasAttachments() &&
         !(e.expression.expression.kind === ts.SyntaxKind.ThisKeyword) &&
         !(e.expression.expression.kind === ts.SyntaxKind.SuperKeyword)
       ) {
@@ -13901,7 +13998,7 @@ export class Analyzer {
     fnName: string,
   ): boolean {
     if (!this.builtinMemberOfReceiver(recvType, fnName)) return false;
-    const raw = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
+    const raw = this.attachedFnsFor(`${canonicalName(recvType)}#${fnName}`);
     // multi-file: a library not visible to this file cannot collide here (the built-in simply wins).
     const list = raw ? this.visibleAttachments(node, raw) : raw;
     if (!list || list.length === 0) return false;
@@ -13924,7 +14021,7 @@ export class Analyzer {
     fnName: string,
     asStatement: boolean,
   ): Expr | undefined | 'no-match' {
-    const raw = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
+    const raw = this.attachedFnsFor(`${canonicalName(recvType)}#${fnName}`);
     if (!raw || raw.length === 0) return 'no-match';
     // Multi-file: an attached call is scoped to the call-site FILE's import edges - a `self`-convention
     // attachment names no library identifier, so the bundler's identifier-based reference check cannot see
@@ -20029,7 +20126,7 @@ export class Analyzer {
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      this.libraryAttachments.size > 0 &&
+      this.hasAttachments() &&
       !(node.expression.expression.kind === ts.SyntaxKind.ThisKeyword) &&
       !(node.expression.expression.kind === ts.SyntaxKind.SuperKeyword)
     ) {
@@ -23107,7 +23204,7 @@ export class Analyzer {
     if (
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
-      this.libraryAttachments.size > 0 &&
+      this.hasAttachments() &&
       !(node.expression.expression.kind === ts.SyntaxKind.ThisKeyword) &&
       !(node.expression.expression.kind === ts.SyntaxKind.SuperKeyword)
     ) {
