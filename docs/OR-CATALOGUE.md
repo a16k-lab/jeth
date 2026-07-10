@@ -73,9 +73,12 @@ funcref-bearing struct) is FULLY IMPLEMENTED and byte-identical (every ABI bound
 so the last "liftable" family is empty; and it re-probed all deliberate rows (soundness witnesses
 intact). Dual-commit drift vs the pre-campaign parent: CLEAN (53 programs).
 
-**Current remaining: ~13 shapes** = 13 deliberate (8 rows) + 0 liftable planned (a thin long-tail
-of single-field-funcref-struct and memory-struct-array byte-access residuals remains, all clean
-rejects; see below). Codes current at the final-verification-fix commit. Batch C lifted the whole funcref expression surface
+**Current remaining (live-audited 2026-07-10 at `3206f08`, 12-row adversarial re-probe, zero
+regressions/ICE-drift): 7 deliberate table rows + LT5 + the trailing-hole singleton + 2 small
+liftable ORs (ICE-LIB-SIG, USING-ON-ABSTRACT).** The audit found the table had gone stale against
+the LIFT-ALL-13 narrative: TERN-LV-MIX retired (fully lifted), TERN-STRUCT-ARR / L2-MOBILE /
+A-LIT-RESID / B-21 narrowed to their true residual scopes (each formerly-listed spelling that now
+accepts was runtime-verified identical to solc before trimming). Codes current at the final-verification-fix commit. Batch C lifted the whole funcref expression surface
 (all four F-rows, 11 shapes) plus bonus lifts its closure produced: the whole nested
 funcref-field WRITE `o.fd = mkFd()` (solc re-point alias semantics witness-verified), plain
 dyn-struct tuple components from INTERNAL calls (`let [a, s] = this.mk(x)`, the old JETH243
@@ -102,14 +105,20 @@ solc's literal typing cannot be reproduced) - a lift would trade a clean reject 
 
 | ID | Shape | Code | Why it must stay |
 |----|-------|------|------------------|
-| B-21 | memory-parent `xs[1n].pre` AND memory-struct `s.f` through the POINTER channels (internal-arg / element-write / internal-return / 2-hop) | JETH900 | A flat copy would detach from the live memory parent (R3); the FLAT consumers of the same expressions are lifted (L7b) |
-| TERN-STRUCT-ARR | `c ? <mem> : <storage>` ternary where both branches are a fixed STRUCT array `Arr<In,N>` (bind + for-of) or a dyn struct array `In[]` (bind). The B-7/B-24 residual scope: value, u256[], bytes and dyn-struct spellings are LIFTED and aliasing-verified | JETH074 | Pointer-headed struct-array branches; no aliasing-witness study has cleared a copy lowering yet (lift candidate only with one) |
-| TERN-LV-MIX | ternary-chain LVALUE with mixed-location branches: `(c ? this.A : m)[0n].y = v` / `+= v` / `++` (storage|memory; the calldata-branch spellings reject on the read-only branch). solc runs: it unifies the ternary to a MEMORY COPY, so the storage branch's write lands in the DISCARDED copy (probed: solc's A stays 0) | JETH067/JETH074 | Branch-pushing the write would hit storage the copy semantics never touch (this was a live miscompile before batch A); same-location branches (st|st, mem|mem) ARE lifted. Lift candidate only via real copy-materializing codegen |
+| B-21 | a fixed STRUCT-array field (`Arr<In,N>`) of a memory struct / struct-array element (`xs[1n].pre`, `s.pre`) through the POINTER channels (internal-arg / element-write / internal-return / 2-hop). VALUE-array field spellings (`Arr<u256,N>`) are LIFTED through internal-arg / internal-return / 2-hop (live-pointer aliasing runtime-verified vs solc, 2026-07-10 audit); their element-WRITE spelling rejects under L6/JETH429, not here | JETH900 | A flat copy would detach from the live memory parent (R3); the FLAT consumers of the same expressions are lifted (L7b) |
+| TERN-STRUCT-ARR | `c ? <mem> : <storage>` ternary where both branches are a DYN struct array `In[]` (let-bind AND return position). The fixed `Arr<In,N>` spellings (bind + for-of) were LIFTED at `55000f0` (test/lift-forof-ternary.test.ts, test/lift-return-ternary-struct-array.test.ts; copy-vs-alias semantics runtime-verified identical to solc, 2026-07-10 audit) | JETH074 | Pointer-headed dyn struct-array branches; no aliasing-witness study has cleared a copy lowering yet (lift candidate only with one) |
 | L6 | `o[0n] = <storage/whole-agg>` writing into an inline value-word element of a nested memory array | JETH429 | The prior-alias witness (solc re-points, an earlier alias keeps OLD values) proves NO RHS source is liftable; a flat layout can only copy |
 | L7(a) | memory-struct ctor with a BOUND fixed-array var `S1(a, 5n)` | JETH465 | solc stores a live reference to `a`; the inline literal ctor `S1([In..,In..], 5n)` IS accepted and byte-identical |
-| L2-MOBILE | array literals with BARE int elements, alone or ternary (`abi.encode([1n, 2n])`, `abi.encode(c ? [1n,2n] : [3n,4n])`), AND the cast+bare mix `abi.encode([u256(1n), 2n])` (batch B) | JETH213 | solc's mobile type is the smallest fitting width (uint8[2] for [1,2]; the mix folds the bare value into the common type, [u8(1),300] -> uint16[2]); JETH's typing cannot mirror it - a lift would encode different lanes. Bool literals ARE lifted ([true,false] -> bool[2], no width hazard); cast-typed elements are lifted (B4) |
+| L2-MOBILE | the CAST+BARE int mix in an array literal: `abi.encode([u256(1n), 2n])`, `[u8(1n), 300n]`. The pure-bare spellings (`abi.encode([1n, 2n])`, the bare ternary) were LIFTED at `9110ce3` (encode pads elements to 32 bytes, width-independent; test/lift-or-cluster4.test.ts; runtime-verified identical, 2026-07-10 audit) | JETH213 | solc folds the bare value into the cast's common type ([u8(1),300] -> uint16[2]); JETH keeps no-common-type. Bool literals and fully cast-typed elements are lifted. Workaround: cast every element |
 | FUNCREF-PURE | a @pure function calling through a funcref whose SIGNATURE has a state-writing address-taken target elsewhere in the contract (dispatcher-set poisoning): `@pure b()` using `Fd.f` of sig `(u256)=>u256` rejects when `ord()` address-takes state-writing `linc/ldec` of the same sig | JETH055 | JETH funcref types carry NO mutability (solc's `function(...) pure returns(...)` pointer types do), so the purity checker soundly assumes the sig-key dispatcher set; a lift needs mutability in the funcref type grammar. Workaround: drop @pure, or avoid impure address-takes of the same signature |
-| A-LIT-RESID | batch B literal residuals: mixed bytesN widths `[bytes4(..), bytes8(..)]` (solc widens right-padded; JETH's literal coerce rejects the re-type); ENUM elements `[Color.Green, cb]` (no verified enum fixed-array encode path); a whole calldata-param branch in a pointer-headed nested ternary `c ? p : [a, b]` (p: Arr<u256[],N> cd param; the copy does not replicate solc's cd-ref validation) | JETH213 / JETH074 | Spell bytesN at one width; cast enums to uintN; bind the cd param to a memory local first |
+| A-LIT-RESID | a whole calldata-param branch in a pointer-headed nested ternary `c ? p : [a, b]` (p: `Arr<u256[],N>` cd param; the copy does not replicate solc's cd-ref validation). The mixed-bytesN and ENUM-element spellings were LIFTED (`9110ce3` + test/lift-enum-array-literal.test.ts; runtime-verified identical incl. OOB-enum Panic parity, 2026-07-10 audit) | JETH074 | Bind the cd param to a memory local first |
+
+Retired from this table by the 2026-07-10 live audit (12-row adversarial re-probe at HEAD, zero
+regressions): **TERN-LV-MIX** - the mixed-location ternary-chain lvalue `(c ? this.A : m)[0n].y = v`
+/ `+=` / `++` was fully LIFTED at `55000f0` (test/lift-or-cluster1.test.ts) with solc's
+discarded-memory-copy write semantics runtime-verified identical; the row's "must stay" rationale
+was superseded by the copy-materializing lowering the LIFT-ALL-13 campaign shipped. The table rows
+above are now consistent with the campaign narrative in the header (they had never been trimmed).
 
 Parity footnotes (both-reject, never ORs): FIXED-outer cd|storage array-literal element mixes and
 cd|storage ternary mixes (solc TypeErrors); oversize state-init literals (JETH065+JETH211).
@@ -133,9 +142,11 @@ per-file declaration-scoping adversarial sweep (1047 cases, 0 MC / 0 OA / 0 cras
   until then a loud (if ugly) reject, not a bar violation.
 - **USING-ON-ABSTRACT (cryptic JETH074)**: `@using(L)` on an `@abstract` class is not consumed and
   falls through as `unsupported expression: CallExpression` at the class line. solc allows `using L
-  for T;` inside an abstract contract. Lift = consume @using on abstract bases (attaching for the
-  deployed linearization) or at minimum emit a targeted "attachments live on @contract/@library"
-  diagnostic.
+  for T;` inside an abstract contract. PRECISION (2026-07-10 audit): the OR is exactly the
+  attached-call-used-WITHIN-the-abstract-class shape (an inherited helper); the spelling where the
+  CHILD writes the attached call directly is a parity both-reject (solc does not inherit
+  contract-level `using` directives). Lift = consume @using on abstract bases for the base's own
+  bodies only, or at minimum emit a targeted "attachments live on @contract/@library" diagnostic.
 
 The 19-shape tier list plus the F-RESID family are all lifted (batches A-D) or reclassified. The
 final verification found that `@state o: Outer` (a storage funcref-bearing struct) is already fully
