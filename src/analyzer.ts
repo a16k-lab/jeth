@@ -7,7 +7,7 @@
 //  - type-check each function body into typed IR (checked-by-default arithmetic),
 //    enforcing integer widths, BigInt-literal rule, and view/pure mutability.
 import ts from 'typescript';
-import { DiagnosticBag } from './diagnostics.js';
+import { DiagnosticBag, demangleModuleName } from './diagnostics.js';
 import { decoratorNames, ctorDecoratorNames, decoratorCall, heritageBases, HeritageBase } from './parser.js';
 import { resolveType, resolvePrimitiveName } from './typeresolver.js';
 import {
@@ -2730,6 +2730,23 @@ export class Analyzer {
     const callGraph = new Map<string, Set<string>>();
     for (const [k, e] of effects) callGraph.set(k, e.callees);
     const libraries = this.partitionExternalLibraries(functions, callGraph);
+    // v3 module scoping: an EXTERNAL library's link symbol / artifact name is its demangled SOURCE name
+    // (solc parity for a dep-declared library). Two external libraries whose source names collide would
+    // be indistinguishable at link time - reject loudly (internal libraries never link, so they may share
+    // a source name freely across files).
+    const extBySourceName = new Map<string, string>();
+    for (const lib of libraries) {
+      const srcName = demangleModuleName(lib.name);
+      const prior = extBySourceName.get(srcName);
+      if (prior !== undefined && prior !== lib.name) {
+        // an external library always declares at least one function (that is what made it external), so
+        // a positioned node exists; the contract node is a total fallback - this must never silently pass.
+        const node = this.libraryByName.get(lib.name)?.[0]?.node ?? this.libraryByName.get(prior)?.[0]?.node ?? cls;
+        this.diags.error(node, 'JETH037', `two external libraries are both named '${srcName}' (in different files); external library link symbols use the source name - rename one`);
+      } else {
+        extBySourceName.set(srcName, lib.name);
+      }
+    }
     // Any library declaring an @external function changes the contract function set: such a function is
     // a delegatecall entry (NOT a contract dispatcher entry), and any library function reachable only
     // from one of them belongs to the library object, never the contract. This holds even for an
@@ -5365,9 +5382,13 @@ export class Analyzer {
       return;
     }
     const name = member.name.text;
+    // v3 module scoping: a dep-declared error keeps its SCOPED name in the registries (references are
+    // renamed to match) but its SIGNATURE - the keccak selector the chain sees - is built from the
+    // demangled SOURCE name, so a file-level error in a dep reverts byte-identically to solc.
+    const abiName = demangleModuleName(name);
     // solc reserves the built-in error names Error and Panic: an @error may not redefine them
     // (a same-named @event or function IS allowed, so this guard is specific to @error).
-    if (name === 'Error' || name === 'Panic') {
+    if (abiName === 'Error' || abiName === 'Panic') {
       this.diags.error(
         member,
         'JETH132',
@@ -5435,7 +5456,7 @@ export class Analyzer {
       return;
     }
     const signature = functionSignature(
-      name,
+      abiName,
       params.map((p) => p.type),
     );
     const selector = functionSelector(signature);
@@ -5568,9 +5589,10 @@ export class Analyzer {
       );
     }
     // solc allows event overloading by signature (name + parameter types); only an EXACT duplicate
-    // signature is an error.
+    // signature is an error. v3: the signature - the keccak topic0 the chain sees - is built from the
+    // demangled SOURCE name (a dep-declared event's registry name may carry the `$mN$` scope mangle).
     const signature = functionSignature(
-      name,
+      demangleModuleName(name),
       params.map((p) => p.type),
     );
     const overloads = this.eventsByName.get(name) ?? [];

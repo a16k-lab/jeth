@@ -3,6 +3,7 @@
 // source of truth for signatures.
 import type { ContractIR, FunctionIR, ErrorDecl, EventIR } from './ir.js';
 import { canonicalName, JethType } from './types.js';
+import { demangleModuleName } from './diagnostics.js';
 
 export interface AbiParameter {
   name: string;
@@ -57,14 +58,16 @@ function fnAbi(fn: FunctionIR): AbiFunction {
   };
 }
 
+// v3 module scoping: a dep-declared error/event keeps its scoped `$mN$` name in the IR registries, but
+// the ABI (like its signature/selector) speaks the demangled SOURCE name.
 function errorAbi(e: ErrorDecl): AbiError {
-  return { type: 'error', name: e.name, inputs: e.params.map((p) => param(p.name, p.type)) };
+  return { type: 'error', name: demangleModuleName(e.name), inputs: e.params.map((p) => param(p.name, p.type)) };
 }
 
 function eventAbi(ev: EventIR): AbiEvent {
   return {
     type: 'event',
-    name: ev.name,
+    name: demangleModuleName(ev.name),
     inputs: ev.params.map((p) => ({ ...param(p.name, p.type), indexed: p.indexed })),
     anonymous: false,
   };

@@ -108,10 +108,13 @@ describe('multi-file imports', () => {
     expect(diag(`import { SafeMathLibrary as Tmp } from "./l.jeth";\nclass V { get f(a: u256): External<u256> { let Tmp: u256 = a; return Tmp; } }`, L2)).toEqual(['JETH036@vault.jeth:1']);
     expect(diag(`import { SafeMathLibrary as u256 } from "./l.jeth";\nclass V { get f(): External<u256> { return 1n; } }`, L2)).toEqual(['JETH036@vault.jeth:1']);
     expect(diag(`import { SafeMathLibrary as msg } from "./l.jeth";\nclass V { get f(): External<u256> { return 1n; } }`, L2)).toEqual(['JETH036@vault.jeth:1']);
-    // aliases do NOT enable two same-named exports (one bundle namespace): still JETH037 - the v3 item.
-    expect(diag(`import { Utils as A } from "./a.jeth";\nimport { Utils as B } from "./b.jeth";\nclass V { get f(): External<u256> { return A.one() + B.two(); } }`,
-      { 'a.jeth': `export static class Utils { one(): u256 { return 1n; } }`, 'b.jeth': `export static class Utils { two(): u256 { return 2n; } }` })
-      .some((x) => x.startsWith('JETH037'))).toBe(true);
+    // v3 per-file scoping: aliases DISAMBIGUATE two same-named exports - each binds its own file's
+    // declaration, byte-identical to the same program with hand-uniquified names.
+    const two = compile(`import { Utils as A } from "./a.jeth";\nimport { Utils as B } from "./b.jeth";\nclass V { get f(): External<u256> { return A.one() * 10n + B.two(); } }`,
+      { fileName: 'vault.jeth', sources: { 'a.jeth': `export static class Utils { one(): u256 { return 1n; } }`, 'b.jeth': `export static class Utils { two(): u256 { return 2n; } }` } });
+    const uniq = compile(`static class UtilsA { one(): u256 { return 1n; } }\nstatic class UtilsB { two(): u256 { return 2n; } }\nclass V { get f(): External<u256> { return UtilsA.one() * 10n + UtilsB.two(); } }`,
+      { fileName: 'vault.jeth' });
+    expect(two.creationBytecode).toBe(uniq.creationBytecode);
   });
 
   it('a semantic error INSIDE an imported file reports the dep file + its own line', () => {
@@ -124,11 +127,14 @@ describe('multi-file imports', () => {
 // Hardening from the adversarial sweep (368 cases, 7 confirmed bar-violations, all closed). Three were
 // PRE-EXISTING single-file holes that bundling amplified into silent cross-file wrong-binding.
 describe('multi-file hardening (verification sweep)', () => {
-  it('duplicate contract/abstract/library class names reject (JETH037) - the last-wins hole is closed', () => {
-    // cross-file: a named import must never silently bind to a DIFFERENT file's same-named declaration.
-    expect(diag(`import { Base } from "./a.jeth";\nimport { Other } from "./b.jeth";\nclass C extends Base { get f(): External<u256> { return this.v(); } }`,
-      { 'a.jeth': `export abstract class Base { v(): u256 { return 1n; } }`, 'b.jeth': `export abstract class Base { v(): u256 { return 2n; } }\nexport abstract class Other { }` }))
-      .toEqual(['JETH037@b.jeth:1']);
+  it('duplicate class names: SAME-file still JETH037; cross-file scopes per file and binds the IMPORT', () => {
+    // v3 per-file scoping: a named import binds ITS target file's declaration even when another file
+    // declares the same name - byte-identical to the program with only the imported declaration present.
+    const mixed = compile(`import { Base } from "./a.jeth";\nimport { Other } from "./b.jeth";\nclass C extends Base { get f(): External<u256> { return this.v(); } }`,
+      { fileName: 'c.jeth', sources: { 'a.jeth': `export abstract class Base { v(): u256 { return 1n; } }`, 'b.jeth': `export abstract class Base { v(): u256 { return 2n; } }\nexport abstract class Other { }` } });
+    const clean = compile(`import { Base } from "./a.jeth";\nimport { Other } from "./b.jeth";\nclass C extends Base { get f(): External<u256> { return this.v(); } }`,
+      { fileName: 'c.jeth', sources: { 'a.jeth': `export abstract class Base { v(): u256 { return 1n; } }`, 'b.jeth': `export abstract class Unrelated { v(): u256 { return 2n; } }\nexport abstract class Other { }` } });
+    expect(mixed.creationBytecode).toBe(clean.creationBytecode);
     // the pre-existing single-file pairs (last silently won before): abstract+abstract, static+contract,
     // abstract+contract, static+abstract - all now "Identifier already declared" like solc.
     const codes = (src: string) => { try { compile(src, { fileName: 'C.jeth' }); return []; } catch (e: any) { return e.diagnostics.map((d: any) => d.code); } };
@@ -200,5 +206,114 @@ describe('multi-file hardening (verification sweep)', () => {
     expect(diag(`import { T } from "./a.jeth";\nclass C { get f(p: T): External<u256> { return p.a; } }`,
       { 'a.jeth': `export type T = { a: u256 };`, './a.jeth': `export type T = { a: bool };` })
       .some((x) => x.startsWith('JETH036'))).toBe(true);
+  });
+});
+
+// v3 PER-FILE DECLARATION SCOPING: each dep's top-level declarations are alpha-renamed to `$mN$` scoped
+// names and every file's references rewrite per its own scope, so two files may declare the SAME name
+// (aliases disambiguate) while hash-sensitive spellings (error/event selectors/topics, external-library
+// link symbols, ABI names) demangle back to the SOURCE name. The entry file is never renamed.
+describe('v3 per-file declaration scoping', () => {
+  it('same-named UNEXPORTED helpers in two deps: each file binds its OWN, byte-identical to uniquified', async () => {
+    const srcs = {
+      'a.jeth': `static class Help { h(): u256 { return 1n; } }\nexport static class A { fa(): u256 { return Help.h(); } }`,
+      'b.jeth': `static class Help { h(): u256 { return 20n; } }\nexport static class B { fb(): u256 { return Help.h(); } }`,
+    };
+    const r = compile(`import { A } from "./a.jeth";\nimport { B } from "./b.jeth";\nclass V { get f(): External<u256> { return A.fa() + B.fb(); } }`,
+      { fileName: 'v.jeth', sources: srcs });
+    const h = await Harness.create();
+    const addr = await h.deploy(r.creationBytecode);
+    const c = await h.call(addr, sel('f()'));
+    expect(c.success).toBe(true);
+    expect(BigInt(c.returnHex)).toBe(21n); // 1 + 20: each dep used ITS Help
+  });
+
+  it('a dep declaration and an entry declaration may share a name; the entry file is never renamed', async () => {
+    const r = compile(`import { A } from "./a.jeth";\ntype P = { x: u256 };\nclass V { get f(): External<u256> { let p: P = P(5n); return p.x + A.fa(); } }`,
+      { fileName: 'v.jeth', sources: { 'a.jeth': `export type P = { y: u256; z: u256 };\nexport static class A { fa(): u256 { let q: P = P(1n, 2n); return q.y + q.z; } }` } });
+    const h = await Harness.create();
+    const addr = await h.deploy(r.creationBytecode);
+    const c = await h.call(addr, sel('f()'));
+    expect(BigInt(c.returnHex)).toBe(8n); // entry P (1 field) and dep P (2 fields) coexist
+  });
+
+  it('HASH BOUNDARY: a dep-declared file-level error/event keeps its SOURCE selector/topic (== solc)', async () => {
+    const mf = compile(
+      `import { Insufficient, Moved } from "./defs.jeth";\nclass V {\n  x: u256;\n  f(a: u256): External<void> {\n    if (a == 0n) { revert(Insufficient(1n, a)); }\n    emit(Moved(msg.sender, a));\n    this.x = a;\n  }\n}`,
+      { fileName: 'v.jeth', sources: { 'defs.jeth': `export type Insufficient = error<{ need: u256; have: u256 }>;\nexport type Moved = event<{ who: indexed<address>; amount: u256 }>;` } });
+    const sc = compileSolidity(SPDX + `error Insufficient(uint256 need, uint256 have);\nevent Moved(address indexed who, uint256 amount);\ncontract V {\n  uint256 x;\n  function f(uint256 a) external {\n    if (a == 0) { revert Insufficient(1, a); }\n    emit Moved(msg.sender, a);\n    x = a;\n  }\n}`, 'V');
+    const h = await Harness.create();
+    const aj = await h.deploy(mf.creationBytecode);
+    const as = await h.deploy(sc.creation);
+    const [rj0, rs0] = [await h.call(aj, sel('f(uint256)') + W(0)), await h.call(as, sel('f(uint256)') + W(0))];
+    expect(rj0.success).toBe(false);
+    expect(rj0.returnHex).toBe(rs0.returnHex); // demangled selector in the revert data
+    const [rj1, rs1] = [await h.call(aj, sel('f(uint256)') + W(7)), await h.call(as, sel('f(uint256)') + W(7))];
+    expect(rj1.success).toBe(true);
+    expect(JSON.stringify(rj1.logs ?? [])).toBe(JSON.stringify(rs1.logs ?? [])); // demangled topic0
+    // ABI speaks source names too
+    const abiNames = mf.abi.filter((x: any) => x.type === 'error' || x.type === 'event').map((x: any) => x.name);
+    expect(abiNames.sort()).toEqual(['Insufficient', 'Moved']);
+    // and the Error/Panic reserve sees THROUGH the mangle
+    expect(diag(`import { Error as E } from "./d.jeth";\nclass C { f(): External<void> { revert(E()); } }`, { 'd.jeth': `export type Error = error<{}>;` })
+      .some((x) => x.startsWith('JETH132'))).toBe(true);
+  });
+
+  it('HASH BOUNDARY: a dep-declared EXTERNAL library links by its SOURCE name; source-name clashes reject', () => {
+    const dep = compile(`import { ExtLib } from "./l.jeth";\nclass C { f(a: u256): External<u256> { return ExtLib.double(a); } }`,
+      { fileName: 'c.jeth', sources: { 'l.jeth': `export static class ExtLib { double(a: u256): External<u256> { return a + a; } }` } });
+    const flat = compile(`static class ExtLib { double(a: u256): External<u256> { return a + a; } }\nclass C { f(a: u256): External<u256> { return ExtLib.double(a); } }`,
+      { fileName: 'c.jeth' });
+    expect((dep.libraries ?? []).map((l) => l.name)).toEqual(['ExtLib']); // demangled artifact name
+    expect(dep.creationBytecode).toBe(flat.creationBytecode); // identical link placeholder
+    expect(dep.libraries?.[0]?.creationBytecode).toBe(flat.libraries?.[0]?.creationBytecode);
+    // two EXTERNAL libraries sharing a source name -> link symbols would collide -> JETH037
+    expect(diag(`import { ExtLib as L1 } from "./a.jeth";\nimport { ExtLib as L2 } from "./b.jeth";\nclass C { f(a: u256): External<u256> { return L1.double(a) + L2.triple(a); } }`,
+      { 'a.jeth': `export static class ExtLib { double(a: u256): External<u256> { return a + a; } }`,
+        'b.jeth': `export static class ExtLib { triple(a: u256): External<u256> { return a + a + a; } }` })
+      .some((x) => x.startsWith('JETH037'))).toBe(true);
+    // two INTERNAL libraries sharing a source name are fine (nothing links)
+    expect(diag(`import { M as M1 } from "./a.jeth";\nimport { M as M2 } from "./b.jeth";\nclass C { get f(a: u256): External<u256> { return M1.d(a) + M2.t(a); } }`,
+      { 'a.jeth': `export static class M { d(a: u256): u256 { return a + a; } }`,
+        'b.jeth': `export static class M { t(a: u256): u256 { return a + a + a; } }` })).toEqual([]);
+  });
+
+  it('rename hazards reject LOUDLY: import-vs-local, import-vs-decl, dual import, dep builtin, dep self-shadow, $mN$', () => {
+    const M = `export static class M { min(self: u256, b: u256): u256 { return self < b ? self : b; } }`;
+    expect(diag(`import { M } from "./m.jeth";\nclass V { get f(a: u256): External<u256> { let M: u256 = a; return M; } }`, { 'm.jeth': M })
+      .some((x) => x.startsWith('JETH036'))).toBe(true); // a local may not shadow a (renamed) import
+    expect(diag(`import { P } from "./p.jeth";\ntype P = { a: u256 };\nclass V { get f(): External<u256> { return 1n; } }`, { 'p.jeth': `export type P = { b: u256 };` })
+      .some((x) => x.startsWith('JETH036'))).toBe(true); // importing a name you also declare
+    expect(diag(`import { P } from "./a.jeth";\nimport { P } from "./b.jeth";\nclass V { get f(): External<u256> { return 1n; } }`,
+      { 'a.jeth': `export type P = { a: u256 };`, 'b.jeth': `export type P = { b: u256 };` })
+      .some((x) => x.startsWith('JETH036'))).toBe(true); // same local name from two files: alias one
+    expect(diag(`import { T } from "./d.jeth";\nclass V { get f(): External<u256> { return 1n; } }`,
+      { 'd.jeth': `export type T = { a: u256 };\nexport static class msg { s(): u256 { return 1n; } }` }))
+      .toContain('JETH038@d.jeth:2'); // a dep top-level shadowing a builtin (the bundler-side JETH038)
+    expect(diag(`import { A } from "./a.jeth";\nclass V { get f(): External<u256> { return A.fa(1n); } }`,
+      { 'a.jeth': `export type T = { a: u256 };\nexport static class A { fa(T: u256): u256 { return T; } }` })
+      .some((x) => x.startsWith('JETH036'))).toBe(true); // a dep local shadowing its own top-level
+    expect(diag(`import { A } from "./a.jeth";\nclass V { get f(): External<u256> { return A.fa(); } }`,
+      { 'a.jeth': `export static class A { fa(): u256 { return $m0$x(); } }` })
+      .some((x) => x.startsWith('JETH036@a.jeth:1'))).toBe(true); // `$mN$` identifiers are reserved in a bundle
+  });
+
+  it('renamed-name machinery keeps working: attachments, static consts, # privates - and diagnostics demangle', async () => {
+    const M = (v: string) => `export static class M { min(self: u256, b: u256): u256 { return self < b ? self : ${v}; } }`;
+    // self-convention attachment on a renamed dep lib; TWO same-named self-libs -> the ambiguity reject
+    expect(diag(`import { M } from "./m.jeth";\nclass V { get f(x: u256, y: u256): External<u256> { return x.min(y); } }`, { 'm.jeth': M('b') })).toEqual([]);
+    expect(diag(`import { M as M1 } from "./a.jeth";\nimport { M as M2 } from "./b.jeth";\nclass V { get f(x: u256, y: u256): External<u256> { return x.min(y); } }`,
+      { 'a.jeth': M('b'), 'b.jeth': M('0n') }).some((x) => x.startsWith('JETH393'))).toBe(true);
+    // static const on a renamed dep base via the ClassName.K rewrite; # private inside a renamed base
+    const r = compile(`import { Base } from "./b.jeth";\nclass C extends Base { get f(): External<u256> { return Base.K + this.pub(); } }`,
+      { fileName: 'c.jeth', sources: { 'b.jeth': `export abstract class Base { static K: u256 = 40n; #inner(): u256 { return 2n; } pub(): u256 { return this.#inner(); } }` } });
+    const h = await Harness.create();
+    const addr = await h.deploy(r.creationBytecode);
+    expect(BigInt((await h.call(addr, sel('f()'))).returnHex)).toBe(42n);
+    // diagnostics never leak `$m` (module mangle) or `$p$` (private mangle) spellings
+    const msgs = diag(`import { L } from "./dep.jeth";\nclass C { get f(): External<u256> { return L.bad(9n); } }`,
+      { 'dep.jeth': `export static class L {\n  bad(a: u256): u256 { return this.x; }\n}` });
+    expect(msgs.length).toBeGreaterThan(0);
+    expect(msgs.some((x) => x.includes('$m') || x.includes('$p$'))).toBe(false);
   });
 });

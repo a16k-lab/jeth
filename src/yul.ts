@@ -13,6 +13,7 @@
 // reverts with Panic(0x11) on overflow / Panic(0x12) on division by zero,
 // matching Solidity >=0.8.
 import { ContractIR, FunctionIR, LibraryIR, SpecialEntryIR, Stmt, Expr, BinOp, RevertReason, EventIR, ArrIndexStep } from './ir.js';
+import { demangleModuleName } from './diagnostics.js';
 import { keccak, toHex } from './selectors.js';
 import {
   JethType,
@@ -295,21 +296,25 @@ ${indent(runtime, 6)}
       immutables: [],
     };
     const runtime = this.emitRuntime(synthetic);
+    // v3 module scoping: a dep-declared library's IR name may carry the `$mN$` scope mangle; its Yul
+    // OBJECT is named by the demangled SOURCE name so the artifact matches the same library written in
+    // the entry file (compile.ts looks the object up under the same demangled name).
+    const libObj = demangleModuleName(lib.name);
     // Creation: a library deploy takes no value (non-payable) and no args; copy the runtime out + return.
     const creationLines = [
       'if callvalue() { revert(0, 0) }',
-      `datacopy(0, dataoffset("${lib.name}_runtime"), datasize("${lib.name}_runtime"))`,
-      `return(0, datasize("${lib.name}_runtime"))`,
+      `datacopy(0, dataoffset("${libObj}_runtime"), datasize("${libObj}_runtime"))`,
+      `return(0, datasize("${libObj}_runtime"))`,
     ];
     const creation = creationLines.join('\n');
     this.funcs = savedFuncs;
     this.helpers = savedHelpers;
     this.tmp = savedTmp;
-    return `object "${lib.name}" {
+    return `object "${libObj}" {
   code {
 ${indent(creation, 4)}
   }
-  object "${lib.name}_runtime" {
+  object "${libObj}_runtime" {
     code {
 ${indent(runtime, 6)}
     }
@@ -13171,7 +13176,9 @@ ${indent(runtime, 6)}
     // Evaluate operands left-to-right: target, then value (call only), then gas, then the data blob.
     const addr = this.fresh();
     if (isDelegate) {
-      out.push(`let ${addr} := linkersymbol("${e.lib}")`);
+      // v3: the LINK SYMBOL is the library's demangled SOURCE name (two external libraries sharing one
+      // source name are rejected at analysis), so linkReferences keys match CompiledLibrary.name.
+      out.push(`let ${addr} := linkersymbol("${demangleModuleName(e.lib!)}")`);
     } else {
       out.push(`let ${addr} := ${this.lowerExpr(e.addr!, ctx, out)}`);
     }

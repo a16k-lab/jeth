@@ -4,7 +4,7 @@
 import ts from 'typescript';
 import { parse } from './parser.js';
 import { expandDiamond } from './diamond.js';
-import { DiagnosticBag, CompileError, Diagnostic } from './diagnostics.js';
+import { DiagnosticBag, CompileError, Diagnostic, demangleModuleName } from './diagnostics.js';
 import { validateSubset } from './validator.js';
 import { analyze } from './analyzer.js';
 import { emitYul, emitLibraryYul, UnsupportedError } from './yul.js';
@@ -200,19 +200,22 @@ function rejectThisInStaticMembers(sf: ts.SourceFile, diags: DiagnosticBag): voi
 }
 
 /**
- * Import aliases: `import { A as B } from "./f.jeth"` binds the target's exported A under the LOCAL name
- * B. The bundler validated that B is a FREE name in the importing file (no declaration / other import /
- * local binding / reserved name to hijack); here every reference-position identifier `B` inside that
- * file's bundle segment is renamed IN PLACE to `A` (mutating escapedText keeps the node and its source
- * positions, so diagnostics stay exact), after which the whole pipeline sees only original names -
- * attachments, static-member rewrites, and name resolution all work unchanged.
+ * v3 module scoping: the bundler assigned each DEP file's top-level declarations module-scoped internal
+ * names (`Utils` -> `$mN$Utils`) and resolved every import binding - plain or `A as B` aliased - to its
+ * target's scoped name. Here each file's DECLARATION-NAME and reference-position identifiers are renamed
+ * IN PLACE per that file's map (mutating escapedText keeps the node and its source positions, so
+ * diagnostics stay exact). Member names (`x.f`, `this.X`, object keys) are never renamed - members are
+ * class-scoped, not module-scoped. The bundler rejected every hazardous shadow up front, so the rewrite
+ * cannot hijack an unrelated binding; hash-sensitive spellings (error/event signatures, external-library
+ * link symbols and object names) demangle `$mN$` back at their boundaries (demangleModuleName), and the
+ * ENTRY file's own declarations are never renamed, so single-file behavior is invariant by construction.
  */
-function rewriteImportAliases(
+function rewriteModuleScopes(
   sf: ts.SourceFile,
   segments: BundleSegment[],
-  aliasesByFile: Map<string, Map<string, string>>,
+  renamesByFile: Map<string, Map<string, string>>,
 ): void {
-  if (aliasesByFile.size === 0) return;
+  if (renamesByFile.size === 0) return;
   const fileOf = (node: ts.Node): string | undefined => {
     const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
     const l = line + 1;
@@ -221,17 +224,43 @@ function rewriteImportAliases(
     }
     return undefined;
   };
+  // a dep's TOP-LEVEL class/type/interface/enum name is the declaration side of its rename (in the
+  // bundle, every file's statements sit at the one SourceFile's top level).
+  const isTopLevelDeclName = (n: ts.Identifier): boolean => {
+    const p = n.parent;
+    return (
+      (ts.isClassDeclaration(p) || ts.isTypeAliasDeclaration(p) || ts.isInterfaceDeclaration(p) || ts.isEnumDeclaration(p)) &&
+      p.name === n &&
+      p.parent === sf
+    );
+  };
   const rewrite = (n: ts.Node): void => {
-    if (ts.isIdentifier(n) && isReferenceIdentifier(n)) {
+    if (ts.isIdentifier(n) && (isReferenceIdentifier(n) || isTopLevelDeclName(n))) {
       const file = fileOf(n);
-      const orig = file ? aliasesByFile.get(file)?.get(n.text) : undefined;
-      if (orig) {
-        (n as unknown as { escapedText: ts.__String }).escapedText = ts.escapeLeadingUnderscores(orig);
+      const to = file ? renamesByFile.get(file)?.get(n.text) : undefined;
+      if (to) {
+        (n as unknown as { escapedText: ts.__String }).escapedText = ts.escapeLeadingUnderscores(to);
       }
     }
     ts.forEachChild(n, rewrite);
   };
   ts.forEachChild(sf, rewrite);
+}
+
+/** `$m<N>$` identifiers are reserved for the v3 module-scoping rename (src/imports.ts): a user-written
+ *  one would collide with the rename space, and demangleModuleName would silently rewrite it at every
+ *  hash boundary (an error named `$m1$X` would get selector keccak('X(...)') - a name not in the source).
+ *  Checked on the PRE-RENAME AST so it sees only user-written spellings. */
+function rejectReservedModuleIdentifiers(sf: ts.SourceFile, diags: DiagnosticBag): void {
+  const visit = (n: ts.Node): void => {
+    if (ts.isIdentifier(n) && /^\$m\d+\$/.test(n.text)) {
+      // the raw spelling is NOT quoted in the message: the message demangler would strip its `$m<N>$`
+      // prefix and misquote it; the diagnostic's source span already points at the identifier.
+      diags.error(n, 'JETH036', `this identifier uses the reserved '$m<N>$' module-scoping prefix; rename it`);
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(sf, visit);
 }
 
 export function compile(source: string, opts: CompileOptions = {}): CompileResult {
@@ -263,26 +292,32 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   let unitSource = effectiveSource;
   let bundleSegments: BundleSegment[] | undefined;
   let bundleVisibility: Map<string, Set<string>> | undefined;
-  let bundleAliases: Map<string, Map<string, string>> | undefined;
+  let bundleRenames: Map<string, Map<string, string>> | undefined;
   if (opts.sources && Object.keys(opts.sources).length > 0) {
     const bundle = bundleImports(effectiveSource, fileName, opts.sources);
     unitSource = bundle.text;
     bundleSegments = bundle.segments;
     bundleVisibility = bundle.visibleByFile;
-    bundleAliases = bundle.aliasesByFile;
+    bundleRenames = bundle.renamesByFile;
   }
 
   const parsed = parse(unitSource, fileName);
-  // Import aliases FIRST: rename each file's `import { A as B }` references back to A, so every later
-  // pass (the # mangle, the static-member rewrite, all name resolution) sees only original names.
-  if (bundleSegments && bundleAliases) rewriteImportAliases(parsed.sourceFile, bundleSegments, bundleAliases);
+  const diags = new DiagnosticBag(parsed.sourceFile, fileName);
+  // `$m<N>$` is the v3 module-scoping mangle: a SOURCE identifier spelled that way would collide with the
+  // rename space, and the demangle at hash boundaries (error/event selectors, link symbols, ABI names)
+  // would silently rewrite it to a name that appears nowhere in the source. Reserved EVERYWHERE - checked
+  // pre-rename so it sees only user-written spellings (single-file and bundles alike).
+  rejectReservedModuleIdentifiers(parsed.sourceFile, diags);
+  // v3 module scoping FIRST: rename each dep's top-level declarations (and every file's import bindings)
+  // to their `$mN$` scoped names, so every later pass (the # mangle, the static-member rewrite, all name
+  // resolution) sees one consistent namespace with per-file scoping already applied.
+  if (bundleSegments && bundleRenames) rewriteModuleScopes(parsed.sourceFile, bundleSegments, bundleRenames);
   // Item #2: rewrite JS `#` private members to contract-scoped internal names BEFORE validation /
   // analysis, so `#f()` / `this.#x` lower like internal members and derived access rejects.
   manglePrivateMembers(parsed.sourceFile);
   // `nativeMode` selects the native-declaration syntax (bare class = contract, type = struct, abstract
   // class = abstract base, static member = class-level const/immutable/function) as an additive superset.
   const nativeMode = !isDecoratorModeSource(source);
-  const diags = new DiagnosticBag(parsed.sourceFile, fileName);
   // A `static` member belongs to the CLASS, not the instance: `this` inside a static body is invalid TS
   // semantics and would silently read instance state. Enforced BEFORE the ClassName.x rewrite below, which
   // legitimately INTRODUCES synthesized `this` nodes for `C.K`/`C.f(...)` accesses.
@@ -371,6 +406,11 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   let linkReferences: LinkReferences | undefined;
   if (ir.libraries && ir.libraries.length > 0) {
     libraries = ir.libraries.map((lib) => {
+      // v3 module scoping: a dep-declared library's IR name may carry the `$mN$` scope mangle; the
+      // artifact boundary (its Yul object name, the compileYul lookup, the published CompiledLibrary
+      // name, and the linkersymbol in the contract) all speak the demangled SOURCE name - the analyzer
+      // rejects two external libraries sharing one source name, so the demangle cannot collide.
+      const libName = demangleModuleName(lib.name);
       let libYul: string;
       try {
         libYul = emitLibraryYul(lib);
@@ -386,13 +426,13 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
       }
       let libOut;
       try {
-        libOut = compileYul(libYul, lib.name, opts.evmVersion);
+        libOut = compileYul(libYul, libName, opts.evmVersion);
       } catch (e) {
         throw new CompileError([
           {
             severity: 'error',
             code: 'JETH901',
-            message: `internal compiler error: the backend rejected generated library Yul for '${lib.name}': ${
+            message: `internal compiler error: the backend rejected generated library Yul for '${libName}': ${
               e instanceof Error ? e.message : String(e)
             }`,
             file: fileName,
@@ -405,7 +445,7 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
       // libOut.creationLinkReferences records where OTHER libraries' placeholders sit inside THIS
       // library's creation bytecode (present when an @external library calls another @external library).
       return {
-        name: lib.name,
+        name: libName,
         creationBytecode: libOut.creationBytecode,
         runtimeBytecode: libOut.runtimeBytecode,
         linkReferences: libOut.creationLinkReferences,

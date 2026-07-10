@@ -6,10 +6,16 @@
 // Semantics (v1):
 //  - `import { A, B } from "./file.jeth"` - NAMED imports only; relative paths only. Default (`import X`),
 //    namespace (`* as X`), and side-effect (`import "./x"`) forms are rejected.
-//  - CONVENIENCE aliases work: `import { A as B }` renames A to B locally (compile() rewrites B -> A in
-//    the importing file post-parse, position-preserving; the alias must be a FREE name there). Aliases do
-//    NOT enable two same-named exports in one program - the bundle is one namespace, so that still rejects
-//    (JETH037); per-file declaration scoping is the v3 module system.
+//  - v3 PER-FILE DECLARATION SCOPING: every DEP file's top-level declarations (classes / type aliases /
+//    interfaces / enums) are alpha-renamed to module-scoped internal names (`Utils` in dep N ->
+//    `$mN$Utils`), and every file's references rewrite per ITS scope (own declarations + import bindings,
+//    including aliases: `import { Utils as MathUtils }` binds MathUtils -> the target's scoped name). Two
+//    files may therefore declare the SAME name - even unexported "private" helpers - and disambiguating
+//    aliases work. The ENTRY file is never renamed (the contract name, single-file behavior, and its
+//    hash-sensitive declarations are invariant by construction). HASH-SENSITIVE names keep their SOURCE
+//    spelling where it reaches the chain: error/event signatures (keccak selectors/topics) and external
+//    library link symbols demangle `$mN$` (see demangleModuleName); two EXTERNAL libraries with the same
+//    source name are rejected (their link symbols would collide). Diagnostics demangle too.
 //  - Only `export`-marked top-level declarations are importable (TS-strict; `export` finally MEANS
 //    something). A named import that is not an exported declaration of the target file rejects.
 //  - An imported file may declare libraries (static class / @library), types, interfaces, abstract bases,
@@ -37,14 +43,17 @@ export interface BundleSegment {
 export interface BundleResult {
   text: string;
   segments: BundleSegment[];
-  /** Per file: the names VISIBLE to it (its own declarations, recursively, plus its named imports - by
-   *  ORIGINAL name, so `import { A as B }` contributes A). Used by the analyzer to scope `self`-convention
-   *  ATTACHED calls (which name no library identifier, so the identifier-based reference check cannot see
-   *  them) to each file's import edges. */
+  /** Per file: the names VISIBLE to it, POST-RENAME (its own declarations - dep top-levels under their
+   *  scoped `$mN$` names - plus its import bindings resolved to the target's scoped names). Used by the
+   *  analyzer to scope `self`-convention ATTACHED calls (which name no library identifier, so the
+   *  identifier-based reference check cannot see them) to each file's import edges. */
   visibleByFile: Map<string, Set<string>>;
-  /** Per file: alias -> original for `import { A as B }` bindings. compile() rewrites each B reference in
-   *  that file back to A after parse (position-preserving), so everything downstream sees original names. */
-  aliasesByFile: Map<string, Map<string, string>>;
+  /** v3 per-file declaration scoping: per file, source/local name -> module-scoped internal name. Holds
+   *  each DEP file's own top-level declarations (`Utils` -> `$mN$Utils`) and every file's import bindings
+   *  (`import { A as B }` binds B -> the target's scoped A; a plain `import { A }` binds A likewise).
+   *  compile() renames declaration-name and reference-position identifiers in place after parse
+   *  (position-preserving), so two files may declare the same name and aliases disambiguate. */
+  renamesByFile: Map<string, Map<string, string>>;
 }
 
 /** Per-file syntax mode: a file whose leading comment run contains the exact line `// use @decorators` is
@@ -97,12 +106,12 @@ function normalizePath(p: string): string {
   return out.join('/');
 }
 
-function fail(file: string, sf: ts.SourceFile, node: ts.Node, message: string): never {
+function fail(file: string, sf: ts.SourceFile, node: ts.Node, message: string, code = 'JETH036'): never {
   const { line, character } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
   throw new CompileError([
     {
       severity: 'error',
-      code: 'JETH036',
+      code,
       message,
       file,
       line: line + 1,
@@ -131,7 +140,7 @@ function exportedNames(sf: ts.SourceFile): Set<string> {
 /** Names an import ALIAS may not take: the rewrite renames every reference-position use of the alias, so
  *  an alias shadowing a marker/global would hijack unrelated syntax (primitives are checked separately via
  *  resolvePrimitiveName - `import { A as u256 }` would rewrite every u256 type annotation in the file). */
-const RESERVED_ALIAS_NAMES = new Set(['External', 'Payable', 'View', 'Pure', 'error', 'event', 'indexed', 'msg', 'abi', 'block', 'tx', 'self', 'Brand', 'Arr', 'mapping']);
+const RESERVED_ALIAS_NAMES = new Set(['External', 'Payable', 'View', 'Pure', 'error', 'event', 'indexed', 'msg', 'abi', 'block', 'tx', 'self', 'Brand', 'Arr', 'mapping', 'Array']);
 
 const DEPLOYABLE_DECORATORS = new Set(['contract', 'proxy', 'beacon', 'facet', 'diamond']);
 const NON_CONTRACT_KIND_DECORATORS = new Set(['struct', 'interface', 'library', 'abstract']);
@@ -241,9 +250,11 @@ export function isReferenceIdentifier(n: ts.Identifier): boolean {
 interface FileInfo {
   display: string;
   blanked: string;
+  isEntry: boolean;
   imported: Set<string>; // LOCAL names (an alias counts as its local name for the reference check)
-  importedOriginals: Set<string>; // ORIGINAL names (attachment visibility keys on the real library name)
-  aliases: Map<string, string>; // alias -> original
+  /** local name -> its import edge (the target file + the ORIGINAL exported name). Resolved to the
+   *  target's scoped name when the rename maps are assembled. */
+  bindings: Map<string, { targetKey: string; original: string }>;
 }
 
 /** v2 scoping: a reference to a name declared in ANOTHER file requires an import edge for that name; an
@@ -326,6 +337,7 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
   const fileInfos: FileInfo[] = [];
   const visited = new Set<string>();
   const inStack: string[] = [];
+  const depIndex = new Map<string, number>(); // dep display name -> its module-scope index N (`$mN$`)
 
   const visit = (fileKey: string, displayName: string, text: string, isEntry: boolean): void => {
     if (inStack.includes(fileKey)) {
@@ -356,8 +368,8 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
 
     let blanked = text;
     const importedHere = new Set<string>();
-    const importedOriginals = new Set<string>();
-    const aliasesHere = new Map<string, string>();
+    const bindingsHere = new Map<string, { targetKey: string; original: string }>();
+    const aliasedLocals = new Set<string>();
     for (const s of sf.statements) {
       if (ts.isImportEqualsDeclaration(s)) fail(displayName, sf, s, `'import =' is not supported; use \`import { A, B } from "./file.jeth"\``);
       if (!ts.isImportDeclaration(s)) continue;
@@ -394,48 +406,109 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
           if (resolvePrimitiveName(local) || RESERVED_ALIAS_NAMES.has(local)) {
             fail(displayName, sf, el.name, `import alias '${local}' shadows a builtin type, global, or native marker; pick another name`);
           }
-          if (importedHere.has(local)) {
-            fail(displayName, sf, el.name, `import alias '${local}' collides with another import in this file`);
-          }
-          aliasesHere.set(local, original);
-        } else if (aliasesHere.has(local)) {
-          fail(displayName, sf, el.name, `'${local}' collides with an import alias in this file`);
+          aliasedLocals.add(local);
         }
+        // one local name, one edge: two imports may bind the same local ONLY if they resolve to the very
+        // same declaration (a harmless re-import); anything else is exactly what aliases disambiguate.
+        const prior = bindingsHere.get(local);
+        if (prior && (prior.targetKey !== targetKey || prior.original !== original)) {
+          const msg = aliasedLocals.has(local)
+            ? `import alias '${local}' collides with another import in this file`
+            : `'${local}' is imported from both '${prior.targetKey}' and '${targetKey}'; alias one of them (\`import { ${original} as Other }\`)`;
+          fail(displayName, sf, el.name, msg);
+        }
+        bindingsHere.set(local, { targetKey, original });
         importedHere.add(local);
-        importedOriginals.add(original);
       }
       blanked = blankSpan(blanked, s.getStart(sf), s.getEnd());
     }
-    // The alias rewrite renames every reference-position `alias` in THIS file - so the alias may not also
-    // be a declared name or a local binding here (the rewrite would hijack them). Conservative and loud,
-    // exactly the ClassName.x rewrite's shadow discipline.
-    if (aliasesHere.size > 0) {
-      const declared = declaredNames(sf);
-      const shadows = shadowNames(sf);
-      for (const [alias] of aliasesHere) {
-        if (declared.has(alias)) fail(displayName, sf, sf, `import alias '${alias}' collides with a declaration in this file; pick another name`);
-        if (shadows.has(alias)) fail(displayName, sf, sf, `import alias '${alias}' collides with a local binding (a parameter or variable) in this file; pick another name`);
+    // v3 rename hazards, all LOUD rejects (the ClassName.x rewrite's shadow discipline): the module-scope
+    // rewrite renames identifiers scope-blind, so no renamed name may share its spelling with a binding
+    // the rewrite could hijack (an own declaration or a local), and no unrenamed NESTED declaration may
+    // share a renamed spelling (its references would be captured by the renamed name).
+    const declaredHere = declaredNames(sf);
+    const shadowsHere = shadowNames(sf);
+    for (const [local] of bindingsHere) {
+      if (declaredHere.has(local)) {
+        const msg = aliasedLocals.has(local)
+          ? `import alias '${local}' collides with a declaration in this file; pick another name`
+          : `'${local}' is imported but this file also declares '${local}'; drop one or alias the import (\`import { ${local} as Other }\`)`;
+        fail(displayName, sf, sf, msg);
       }
+      if (shadowsHere.has(local)) {
+        const msg = aliasedLocals.has(local)
+          ? `import alias '${local}' collides with a local binding (a parameter or variable) in this file; pick another name`
+          : `import '${local}' collides with a local binding (a parameter or variable) in this file; alias the import (\`import { ${local} as Other }\`) or rename the local`;
+        fail(displayName, sf, sf, msg);
+      }
+    }
+    if (!isEntry) {
+      const topLevelHere = new Set<string>();
+      for (const s of sf.statements) {
+        if ((ts.isClassDeclaration(s) || ts.isTypeAliasDeclaration(s) || ts.isInterfaceDeclaration(s) || ts.isEnumDeclaration(s)) && s.name) {
+          const nm = s.name.text;
+          topLevelHere.add(nm);
+          if (resolvePrimitiveName(nm) || RESERVED_ALIAS_NAMES.has(nm)) {
+            // same offense (and code) as the analyzer's builtin-shadow gate - which cannot see a renamed
+            // dep declaration, so the reject moves here for deps (the entry keeps the analyzer's gate).
+            fail(displayName, sf, s.name, `class '${nm}' shadows a builtin type, global, or native marker; rename it`, 'JETH038');
+          }
+          if (shadowsHere.has(nm)) {
+            fail(displayName, sf, s.name, `a parameter or local variable in this file is also named '${nm}'; the per-file scoping rename cannot distinguish them - rename one`);
+          }
+        }
+      }
+      // a NESTED declaration is not renamed; if it shares a top-level name, references to it would be
+      // captured by the renamed top-level. (A nested name colliding with an IMPORT is already rejected
+      // above: declaredNames is recursive, so the bindings loop sees it.)
+      const visitNested = (n: ts.Node): void => {
+        if (
+          (ts.isClassDeclaration(n) || ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n) || ts.isEnumDeclaration(n)) &&
+          n.name && n.parent !== sf && topLevelHere.has(n.name.text)
+        ) {
+          fail(displayName, sf, n.name, `a nested declaration named '${n.name.text}' shares its name with a top-level declaration of this file; the per-file scoping rename cannot distinguish them - rename one`);
+        }
+        ts.forEachChild(n, visitNested);
+      };
+      ts.forEachChild(sf, visitNested);
     }
 
     inStack.pop();
     visited.add(fileKey);
+    if (!isEntry) depIndex.set(displayName, depIndex.size); // post-order position = the file's scope index
     order.push({ file: displayName, text: blanked });
-    fileInfos.push({ display: displayName, blanked, imported: importedHere, importedOriginals, aliases: aliasesHere });
+    fileInfos.push({ display: displayName, blanked, isEntry, imported: importedHere, bindings: bindingsHere });
   };
 
   visit(entryKey, entryFile, normalizeEol(entryText), true);
 
   // v2 per-name scoping: cross-file references need an import edge; unexported declarations stay private.
+  // Runs BEFORE the rename maps are assembled, on SOURCE names, so its diagnostics read naturally.
   checkCrossFileReferences(fileInfos);
 
+  // v3 rename maps: each dep's top-level declarations scope to `$mN$<name>`; every import binding (plain
+  // or aliased) resolves to its target's scoped name. Import targets are always deps (importing the entry
+  // is a cycle), so every binding target has an index.
+  const renamesByFile = new Map<string, Map<string, string>>();
   const visibleByFile = new Map<string, Set<string>>();
-  const aliasesByFile = new Map<string, Map<string, string>>();
   for (const f of fileInfos) {
     const sf = ts.createSourceFile(f.display, f.blanked, ts.ScriptTarget.Latest, true);
-    // attachment visibility keys on ORIGINAL names (an aliased import still makes the real library visible).
-    visibleByFile.set(f.display, new Set([...declaredNames(sf), ...f.importedOriginals]));
-    if (f.aliases.size > 0) aliasesByFile.set(f.display, f.aliases);
+    const m = new Map<string, string>();
+    const n = depIndex.get(f.display);
+    if (n !== undefined) {
+      for (const s of sf.statements) {
+        if ((ts.isClassDeclaration(s) || ts.isTypeAliasDeclaration(s) || ts.isInterfaceDeclaration(s) || ts.isEnumDeclaration(s)) && s.name) {
+          m.set(s.name.text, `$m${n}$${s.name.text}`);
+        }
+      }
+    }
+    for (const [local, b] of f.bindings) m.set(local, `$m${depIndex.get(b.targetKey)!}$${b.original}`);
+    if (m.size > 0) renamesByFile.set(f.display, m);
+    // attachment visibility keys on POST-RENAME names (the analyzer sees the renamed AST).
+    const visible = new Set<string>();
+    for (const d of declaredNames(sf)) visible.add(m.get(d) ?? d);
+    for (const [local] of f.bindings) visible.add(m.get(local)!);
+    visibleByFile.set(f.display, visible);
   }
 
   const segments: BundleSegment[] = [];
@@ -447,5 +520,5 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
     parts.push(text);
     line += lines;
   }
-  return { text: parts.join('\n'), segments, visibleByFile, aliasesByFile };
+  return { text: parts.join('\n'), segments, visibleByFile, renamesByFile };
 }

@@ -32,6 +32,20 @@ export function demanglePrivateName(message: string): string {
   return message.replace(/\$p\$[A-Za-z0-9_]+\$([A-Za-z0-9_]+)/g, '#$1');
 }
 
+/** v3 module scoping: a DEP file's top-level declarations are alpha-renamed to `$m<N>$<name>`
+ *  (src/imports.ts). Strip the scope mangle wherever a name reaches the user or the CHAIN: diagnostic
+ *  messages, error/event signatures (keccak selectors/topics), and external-library link symbols / object
+ *  names - the chain and the user see source spellings, only the compiler internals see scoped names.
+ *  Must run BEFORE demanglePrivateName on messages: a `#`-private inside a renamed class mangles to
+ *  `$p$$m<N>$C$x`, and stripping `$m<N>$` first restores the `$p$C$x` shape that demangle recognizes. */
+export function demangleModuleName(name: string): string {
+  return name.replace(/\$m\d+\$/g, '');
+}
+
+function demangleMessage(message: string): string {
+  return demanglePrivateName(demangleModuleName(message));
+}
+
 export class DiagnosticBag {
   readonly items: Diagnostic[] = [];
 
@@ -62,7 +76,7 @@ export class DiagnosticBag {
   }
 
   error(node: ts.Node, code: string, message: string): void {
-    message = demanglePrivateName(message);
+    message = demangleMessage(message);
     const loc = this.at(node);
     if (this.isDuplicate('error', code, message, loc)) return;
     this.items.push({ severity: 'error', code, message, file: this.fileName, ...loc });
@@ -71,7 +85,7 @@ export class DiagnosticBag {
   /** Emit an error at a RAW source position (start offset + length) rather than a node. Used for
    *  TS parse (syntactic) diagnostics, which carry a position but no analyzer AST node. */
   errorAtPos(start: number, length: number, code: string, message: string): void {
-    message = demanglePrivateName(message);
+    message = demangleMessage(message);
     const { line, character } = this.sourceFile.getLineAndCharacterOfPosition(start);
     const loc = { line: line + 1, column: character + 1, length: Math.max(1, length) };
     if (this.isDuplicate('error', code, message, loc)) return;
@@ -79,7 +93,7 @@ export class DiagnosticBag {
   }
 
   warn(node: ts.Node, code: string, message: string): void {
-    message = demanglePrivateName(message);
+    message = demangleMessage(message);
     const loc = this.at(node);
     if (this.isDuplicate('warning', code, message, loc)) return;
     this.items.push({ severity: 'warning', code, message, file: this.fileName, ...loc });
