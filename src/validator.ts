@@ -71,6 +71,40 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
       );
     }
 
+    // JETH478: solc's lexer accepts only ASCII identifiers ([a-zA-Z0-9_$]); TS accepts full Unicode, so a
+    // non-ASCII identifier (`café`, `函数`) used to sail through to codegen and ICE as JETH901 ("backend
+    // rejected generated Yul: Illegal token"). Rejecting EVERY identifier occurrence (declaration or
+    // reference) mirrors solc, which rejects at the lexer before name resolution. STRING content is
+    // untouched (a raw unicode string literal is byte-identical); ASCII `$`/`_` stay legal (the reserved
+    // `$m<N>$` prefix has its own gate).
+    if ((ts.isIdentifier(node) || ts.isPrivateIdentifier(node)) && /[^\x00-\x7F]/.test(node.text)) {
+      diags.error(
+        node,
+        'JETH478',
+        `identifier '${node.text}' contains non-ASCII characters; identifiers are ASCII-only (letters, digits, '_', '$'), matching Solidity`,
+      );
+    }
+
+    // JETH479: TS cannot decorate a VariableStatement (canHaveDecorators=false, getDecorators()=[]), but
+    // the parser still stores the `@dec(...)` in node.modifiers with only a GRAMMAR-phase error (TS1206,
+    // not a parse diagnostic) - so `@only(this.boom()) let x = 7n;` used to compile SILENTLY, dropping the
+    // decorator AND its argument's side effects (a lost state write). `declare` is TS ambient syntax with
+    // no on-chain meaning; it was silently treated as a plain `let`. Both reject loudly here (invalid in
+    // Solidity too - nothing to mirror). Legal member/class decorators are untouched (different nodes).
+    if (ts.isVariableStatement(node)) {
+      for (const m of node.modifiers ?? []) {
+        if (m.kind === ts.SyntaxKind.Decorator) {
+          diags.error(
+            m,
+            'JETH479',
+            'a decorator on a variable declaration statement is not supported (decorators go on class members); remove it',
+          );
+        } else if (m.kind === ts.SyntaxKind.DeclareKeyword) {
+          diags.error(m, 'JETH479', "'declare' (a TS ambient declaration) has no on-chain meaning; remove it");
+        }
+      }
+    }
+
     switch (node.kind) {
       case ts.SyntaxKind.AwaitExpression:
         diags.error(node, 'JETH020', 'async/await has no on-chain meaning (the EVM is synchronous)');

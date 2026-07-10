@@ -183,6 +183,34 @@ function rejectDepContracts(file: string, sf: ts.SourceFile, nativeMode: boolean
   ts.forEachChild(sf, visit);
 }
 
+/** JETH476: a TS PARSE error in ANY original file of a multi-file compilation rejects LOUDLY here. The
+ *  bundler whitespace-blanks every ImportDeclaration before the bundle parse, so a malformed import line
+ *  (`import { A B }` - missing comma, recovered as TWO specifiers; a missing `from`; trailing garbage)
+ *  never reaches the analyzer's silently-accepted-syntax-error guard - the RECOVERED program compiled and
+ *  ran silently. Mirrors that guard's one exemption: TS code 1011 is JETH's intentional
+ *  `abi.decode(b, T[])` array-type-in-value-position syntax. Positions are file-local (this parses the
+ *  ORIGINAL file's text), so the diagnostic names the offending file + span. */
+function rejectParseErrors(file: string, sf: ts.SourceFile): void {
+  const pd = (sf as ts.SourceFile & { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics;
+  if (!pd || pd.length === 0) return;
+  const errors: Diagnostic[] = [];
+  for (const d of pd) {
+    if (d.code === 1011) continue; // JETH's intentional `T[]` array-type-in-value-position syntax
+    const msg = typeof d.messageText === 'string' ? d.messageText : d.messageText.messageText;
+    const { line, character } = sf.getLineAndCharacterOfPosition(d.start ?? 0);
+    errors.push({
+      severity: 'error',
+      code: 'JETH476',
+      message: `syntax error: ${msg}`,
+      file,
+      line: line + 1,
+      column: character + 1,
+      length: Math.max(1, d.length ?? 1),
+    });
+  }
+  if (errors.length > 0) throw new CompileError(errors);
+}
+
 /** Blank a [start,end) span in `text`, preserving newlines so every line keeps its number and layout. */
 function blankSpan(text: string, start: number, end: number): string {
   let mid = '';
@@ -350,6 +378,10 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
     inStack.push(fileKey);
 
     const sf = ts.createSourceFile(displayName, text, ts.ScriptTarget.Latest, true);
+    // Malformed syntax in ANY original file (entry or dep) is a loud reject BEFORE the import walk: TS
+    // error-recovery would otherwise hand the bundler a plausible-but-wrong AST (and blanking the import
+    // lines hides the malformation from every later parse).
+    rejectParseErrors(displayName, sf);
     const fileMode = isDecoratorModeSource(text);
     if (fileMode !== entryMode) {
       throw new CompileError([

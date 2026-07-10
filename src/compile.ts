@@ -302,7 +302,35 @@ function rejectReservedModuleIdentifiers(sf: ts.SourceFile, diags: DiagnosticBag
   ts.forEachChild(sf, visit);
 }
 
+/** JETH477: a pathologically deep source (a 2000-term `1n + 1n + ...` chain) overflows the JS call stack
+ *  in whichever recursive AST visitor runs first, escaping as a raw RangeError with no diagnostics. solc
+ *  compiles such chains (so this is a documented SAFE over-rejection, not parity), but a raw crash is a
+ *  bar violation - convert ANY RangeError from ANY phase into a clean CompileError instead of rewriting
+ *  every visitor iteratively. The catch runs AFTER the stack has unwound, so building the diagnostic is
+ *  safe. A CompileError passes through untouched (it is not a RangeError). */
 export function compile(source: string, opts: CompileOptions = {}): CompileResult {
+  try {
+    return compileUnit(source, opts);
+  } catch (e) {
+    if (e instanceof RangeError) {
+      throw new CompileError([
+        {
+          severity: 'error',
+          code: 'JETH477',
+          message:
+            'source too deeply nested for the compiler; simplify the expression/statement nesting (e.g. split a very long operator chain into intermediate locals)',
+          file: opts.fileName ?? 'contract.jeth',
+          line: 1,
+          column: 1,
+          length: 1,
+        },
+      ]);
+    }
+    throw e;
+  }
+}
+
+function compileUnit(source: string, opts: CompileOptions): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
   // Phase 3 (DIAMOND): expand a `@diamond('array')` class into the synthesized `@contract` BEFORE parse
