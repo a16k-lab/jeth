@@ -227,10 +227,12 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   // statement is a clear JETH035 reject in the validator).
   let unitSource = effectiveSource;
   let bundleSegments: BundleSegment[] | undefined;
+  let bundleVisibility: Map<string, Set<string>> | undefined;
   if (opts.sources && Object.keys(opts.sources).length > 0) {
     const bundle = bundleImports(effectiveSource, fileName, opts.sources);
     unitSource = bundle.text;
     bundleSegments = bundle.segments;
+    bundleVisibility = bundle.visibleByFile;
   }
 
   const parsed = parse(unitSource, fileName);
@@ -254,12 +256,15 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   // Phase 0: subset validation (collects, does not throw yet).
   validateSubset(parsed.sourceFile, diags);
 
-  // Phase 1: semantic analysis + type checking.
+  // Phase 1: semantic analysis + type checking. importScope (multi-file only) lets the analyzer scope
+  // `self`-convention ATTACHED calls to each file's import edges (they name no library identifier, so the
+  // bundler's identifier-based reference check cannot see them).
   const ir = analyze(
     parsed.sourceFile,
     diags,
     dia.expanded && dia.name ? { name: dia.name, variant: dia.variant ?? 'array' } : undefined,
     nativeMode,
+    bundleSegments && bundleVisibility ? { segments: bundleSegments, visibleByFile: bundleVisibility } : undefined,
   );
 
   // Surface all front-end diagnostics together.

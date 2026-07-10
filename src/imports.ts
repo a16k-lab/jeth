@@ -32,6 +32,10 @@ export interface BundleSegment {
 export interface BundleResult {
   text: string;
   segments: BundleSegment[];
+  /** Per file: the names VISIBLE to it (its own declarations, recursively, plus its named imports). Used
+   *  by the analyzer to scope `self`-convention ATTACHED calls (which name no library identifier, so the
+   *  identifier-based reference check cannot see them) to each file's import edges. */
+  visibleByFile: Map<string, Set<string>>;
 }
 
 /** Per-file syntax mode: a file whose leading comment run contains the exact line `// use @decorators` is
@@ -379,6 +383,12 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
   // v2 per-name scoping: cross-file references need an import edge; unexported declarations stay private.
   checkCrossFileReferences(fileInfos);
 
+  const visibleByFile = new Map<string, Set<string>>();
+  for (const f of fileInfos) {
+    const sf = ts.createSourceFile(f.display, f.blanked, ts.ScriptTarget.Latest, true);
+    visibleByFile.set(f.display, new Set([...declaredNames(sf), ...f.imported]));
+  }
+
   const segments: BundleSegment[] = [];
   let line = 1;
   const parts: string[] = [];
@@ -388,5 +398,5 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
     parts.push(text);
     line += lines;
   }
-  return { text: parts.join('\n'), segments };
+  return { text: parts.join('\n'), segments, visibleByFile };
 }

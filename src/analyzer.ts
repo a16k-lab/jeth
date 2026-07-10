@@ -150,6 +150,12 @@ function stripParens(node: ts.Expression): ts.Expression {
   return node;
 }
 
+/** Multi-file: per-file name visibility + the bundle segment map (see src/imports.ts BundleResult). */
+export interface ImportScope {
+  segments: { file: string; startLine: number; lineCount: number }[];
+  visibleByFile: Map<string, Set<string>>;
+}
+
 interface RawFunction {
   node: ts.MethodDeclaration;
   name: string;
@@ -416,7 +422,33 @@ export class Analyzer {
     // superset over the legacy structural decorators (which still work during migration). false =
     // DECORATOR mode (a `// use @decorators` file) - today's exact behavior; the native forms are off.
     private readonly nativeMode = true,
+    // Multi-file only: per-file name visibility (own declarations + named imports) keyed by original file,
+    // with the bundle's segment map for node -> file attribution. Used to scope `self`-convention ATTACHED
+    // calls (which name no library identifier) to each file's import edges.
+    private readonly importScope?: ImportScope,
   ) {}
+
+  /** Multi-file: the ORIGINAL file containing `node` (via the bundle segment map), or undefined when
+   *  compiling a single file. */
+  private fileOfNode(node: ts.Node): string | undefined {
+    if (!this.importScope) return undefined;
+    const { line } = this.sourceFile.getLineAndCharacterOfPosition(node.getStart(this.sourceFile));
+    const l = line + 1;
+    for (const seg of this.importScope.segments) {
+      if (l >= seg.startLine && l < seg.startLine + seg.lineCount) return seg.file;
+    }
+    return undefined;
+  }
+
+  /** Multi-file: keep only the attachments whose library is VISIBLE (declared or imported) to the file
+   *  containing the call site. Single-file: the list is returned unchanged. */
+  private visibleAttachments(node: ts.Node, list: RawFunction[]): RawFunction[] {
+    if (!this.importScope) return list;
+    const file = this.fileOfNode(node);
+    const vis = file ? this.importScope.visibleByFile.get(file) : undefined;
+    if (!vis) return list;
+    return list.filter((c) => !c.libraryName || vis.has(c.libraryName));
+  }
 
   // ---- lexical scope stack -------------------------------------------------
 
@@ -1323,6 +1355,19 @@ export class Analyzer {
   private checkClassNamespaceCollisions(): void {
     const seen = new Map<string, string>();
     const BUILTIN_GLOBALS = new Set(['msg', 'abi', 'block', 'tx']);
+    // The native MARKER names are syntax, not types: a user declaration named like one (a struct named
+    // `External`, a class named `View`) would shadow the marker in return positions and fail there with a
+    // MISLEADING arity error ("External<T> takes exactly one return type"). Reserve them loudly instead.
+    const RESERVED_MARKERS = new Set(['External', 'Payable', 'View', 'Pure', 'error', 'event', 'indexed']);
+    const checkReserved = (nameNode: ts.Identifier): void => {
+      if (this.nativeMode && RESERVED_MARKERS.has(nameNode.text)) {
+        this.diags.error(
+          nameNode,
+          'JETH038',
+          `'${nameNode.text}' is a reserved native marker name (External/Payable/View/Pure are visibility-mutability markers; error/event/indexed declare errors and events) and cannot name a declaration`,
+        );
+      }
+    };
     const kindOf = (cls: ts.ClassDeclaration): string | undefined => {
       const decs = decoratorNames(cls);
       if (decs.includes('struct') || decs.includes('interface')) return undefined; // typed namespaces, own checks
@@ -1334,6 +1379,7 @@ export class Analyzer {
     };
     const visit = (n: ts.Node): void => {
       if (ts.isClassDeclaration(n) && n.name) {
+        checkReserved(n.name);
         const kind = kindOf(n);
         if (kind) {
           const name = n.name.text;
@@ -1347,6 +1393,8 @@ export class Analyzer {
             seen.set(name, kind);
           }
         }
+      } else if ((ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n) || ts.isEnumDeclaration(n)) && ts.isIdentifier(n.name)) {
+        checkReserved(n.name);
       }
       ts.forEachChild(n, visit);
     };
@@ -5638,6 +5686,16 @@ export class Analyzer {
     // reused verbatim, so the field form is byte-identical to the decorator form.
     if (this.nativeMode && this.collectNativeErrorOrEventField(member)) return;
     const decs = decoratorNames(member);
+    // @external on a `#`-private FIELD is the same mangled-ABI leak as on a method: the auto-generated
+    // getter would expose $p$C$x as an externally callable entry. A private field has no public getter.
+    if (ts.isIdentifier(member.name) && member.name.text.startsWith('$p$') && decs.includes('external')) {
+      this.diags.error(
+        member,
+        'JETH352',
+        `a #-private field cannot be @external (private and a public getter contradict; it would expose the mangled name in the ABI); drop the # or the @external`,
+      );
+      return;
+    }
     const isConstant = decs.includes('constant');
     const isImmutable = decs.includes('immutable');
     const isStorage = decs.includes('storage');
@@ -6203,6 +6261,17 @@ export class Analyzer {
         'JETH440',
         `@${removedVis} is not a JETH visibility decorator: write @external to expose a function; everything else is internal by default (the compiler infers private/internal)`,
       );
+    }
+    // The @external DECORATOR on a `#`-private method is the same contradiction as the External<T> marker
+    // (already rejected above): it silently exposed the MANGLED name ($p$C$f) as an externally callable
+    // ABI entry - a "private" method that was public under an obfuscated selector.
+    if (member.name.text.startsWith('$p$') && decs.includes('external')) {
+      this.diags.error(
+        member,
+        'JETH352',
+        `a #-private method cannot be @external (private and external contradict; it would expose the mangled name in the ABI); drop the # or the @external`,
+      );
+      return undefined;
     }
     const visibility: Visibility = decs.includes('external') || markerExternal ? 'external' : 'internal';
 
@@ -13728,7 +13797,9 @@ export class Analyzer {
     fnName: string,
   ): boolean {
     if (!this.builtinMemberOfReceiver(recvType, fnName)) return false;
-    const list = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
+    const raw = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
+    // multi-file: a library not visible to this file cannot collide here (the built-in simply wins).
+    const list = raw ? this.visibleAttachments(node, raw) : raw;
     if (!list || list.length === 0) return false;
     // a PROPERTY member access (`a.length`, `addr.balance`) has only the receiver as its argument; a
     // CALL (`a.length()`) appends its args. solc rejects BOTH forms when the name collides.
@@ -13749,8 +13820,21 @@ export class Analyzer {
     fnName: string,
     asStatement: boolean,
   ): Expr | undefined | 'no-match' {
-    const list = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
-    if (!list || list.length === 0) return 'no-match';
+    const raw = this.libraryAttachments.get(`${canonicalName(recvType)}#${fnName}`);
+    if (!raw || raw.length === 0) return 'no-match';
+    // Multi-file: an attached call is scoped to the call-site FILE's import edges - a `self`-convention
+    // attachment names no library identifier, so the bundler's identifier-based reference check cannot see
+    // it; enforce the same "cross-file use needs an import" rule here.
+    const list = this.visibleAttachments(node, raw);
+    if (list.length === 0) {
+      const libs = [...new Set(raw.map((c) => c.libraryName).filter(Boolean))].sort().join(', ');
+      this.diags.error(
+        node,
+        'JETH039',
+        `attached '.${fnName}(...)' resolves to library ${libs}, which is not imported in this file; add \`import { ${libs} } from ...\``,
+      );
+      return undefined; // handled: a targeted reject, not a fall-through to an unrelated unknown-member error
+    }
     // Disambiguate by the FULL synthetic arg list (receiver ++ node.arguments) - an overloaded
     // attached `f` for the same receiver type T resolves by the remaining args' arity/types.
     const argExprs = [receiver, ...node.arguments];
@@ -25066,6 +25150,7 @@ export function analyze(
   diags: DiagnosticBag,
   diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
   nativeMode = true,
+  importScope?: ImportScope,
 ): ContractIR | undefined {
-  return new Analyzer(sourceFile, diags, diamond, nativeMode).analyze();
+  return new Analyzer(sourceFile, diags, diamond, nativeMode, importScope).analyze();
 }

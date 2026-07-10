@@ -93,6 +93,20 @@ describe('Part A: two orthogonal axes - `get` = read-only (any visibility); Exte
     expect(codes(`abstract class B { x: u256; @virtual f(): External<u256> { return this.x; } } class C extends B { @override f(): External<u256> { this.x = this.x + 1n; return this.x; } }`)).toContain('JETH352');
   });
 
+  it('a #-private member cannot be @external (the mangled-ABI leak, both methods and fields)', () => {
+    // @external #f previously EXPOSED $p$C$f as an externally callable ABI entry - a "private" method that
+    // was public under an obfuscated selector; the field form leaked the same way via the auto-getter.
+    expect(codes(`class C { @external #f(): u256 { return 42n; } @external g(): u256 { return 1n; } }`)).toContain('JETH352');
+    expect(codes(`class C { @external @state #x: u256; @external g(): u256 { return 1n; } }`)).toContain('JETH352');
+  });
+
+  it('the marker names are reserved: a declaration named External/Payable/View/Pure/error/event/indexed rejects', () => {
+    // a user struct named `External` shadowed the marker in return positions with a MISLEADING arity error.
+    expect(codes(`type External = { a: u256 }; class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH038');
+    expect(codes(`static class View { f(): u256 { return 1n; } } class C { get g(): External<u256> { return View.f(); } }`)).toContain('JETH038');
+    expect(codes(`type error = { a: u256 }; class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH038');
+  });
+
   it('marker misuse rejects: bad arity, a Payable get, a conflicting mutability, decorator mode', () => {
     expect(codes(`class C { f(): External { return 1n; } }`)).toContain('JETH352');
     expect(codes(`class C { get f(): Payable<u256> { return 1n; } }`)).toContain('JETH352'); // a get is read-only; payable is a writer property

@@ -148,6 +148,19 @@ describe('multi-file hardening (verification sweep)', () => {
       .toEqual(['JETH039@a.jeth:2']); // Cfn used inside a.jeth without an import edge
   });
 
+  it('v2 scoping covers self-convention ATTACHED calls: attaching needs an import edge for the library', () => {
+    const M = `export static class M { min(self: u256, b: u256): u256 { return self < b ? self : b; } }`;
+    // a transitively-bundled library's self-fns must NOT attach in a file that never imported it.
+    expect(diag(`import { A } from "./a.jeth";\nclass V { get f(x: u256, y: u256): External<u256> { return x.min(y); } }`,
+      { 'a.jeth': `import { M } from "./m.jeth";\nexport static class A { fa(x: u256): u256 { return M.min(x, 1n); } }`, 'm.jeth': M }))
+      .toEqual(['JETH039@vault.jeth:2']);
+    // with the import edge (or in the library's own file, or in a DEP that imported it) attachment works.
+    expect(diag(`import { M } from "./m.jeth";\nclass V { get f(x: u256, y: u256): External<u256> { return x.min(y); } }`, { 'm.jeth': M })).toEqual([]);
+    expect(diag(`import { A } from "./a.jeth";\nclass V { get f(x: u256): External<u256> { return A.fa(x); } }`,
+      { 'a.jeth': `import { M } from "./m.jeth";\nexport static class A { fa(x: u256): u256 { return x.min(9n); } }`, 'm.jeth': M }))
+      .toEqual([]);
+  });
+
   it('v2 scoping has no false positives: shadowing locals, member names, and enum access all pass', () => {
     const LIB = `export static class Extra { calc(a: u256): u256 { return a + 1n; } }\nexport enum Color { Red, Blue }\nexport static class MathLib { min(a: u256, b: u256): u256 { return a < b ? a : b; } }`;
     // a LOCAL named like a cross-file declaration suppresses the check (conservative shadow set).
