@@ -117,7 +117,25 @@ Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JE
 parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
 lifted and byte-identical).
 
-## Liftable over-rejections: none planned
+## Liftable over-rejections: two small ones from the v3 scoping sweep (2026-07-10)
+
+Both PRE-EXISTING (single-file, identical multi-file), both LOUD rejects, found in passing by the v3
+per-file declaration-scoping adversarial sweep (1047 cases, 0 MC / 0 OA / 0 crash for v3 itself):
+
+- **ICE-LIB-SIG (JETH901 internal-compiler-error surface)**: an EXTERNAL library whose own external
+  fn shares a signature with an external-library fn it CALLS in another external library dies in the
+  Yul backend with `DeclarationError: Duplicate case "0x6e9410b6"` - the callee's delegatecall
+  wrapper is emitted as a second dispatcher case colliding with the caller's own external fn of the
+  same selector. solc accepts the equivalent (`library High { function m(uint256 x) public ... {
+  return Low.m(x) * 2; } }`). Trigger is exactly caller-lib-own-external-sig ==
+  called-external-lib-fn-sig; distinct names, same-sig-but-uncalled, and a contract calling two
+  same-sig libs are all fine. Lift = scope/suffix the callee wrapper out of the dispatcher switch;
+  until then a loud (if ugly) reject, not a bar violation.
+- **USING-ON-ABSTRACT (cryptic JETH074)**: `@using(L)` on an `@abstract` class is not consumed and
+  falls through as `unsupported expression: CallExpression` at the class line. solc allows `using L
+  for T;` inside an abstract contract. Lift = consume @using on abstract bases (attaching for the
+  deployed linearization) or at minimum emit a targeted "attachments live on @contract/@library"
+  diagnostic.
 
 The 19-shape tier list plus the F-RESID family are all lifted (batches A-D) or reclassified. The
 final verification found that `@state o: Outer` (a storage funcref-bearing struct) is already fully
