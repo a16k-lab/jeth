@@ -130,3 +130,32 @@ describe('static methods (class-level functions)', () => {
     expect(rj.returnHex).toBe(rs.returnHex);
   });
 });
+
+// The ClassName.K rewrite is SITE-AWARE: `C.K` rewrites to `this.K` only when C is the access site's own
+// class or one of its transitive extends ancestors AND K is a static of C's chain. Previously the rewrite
+// unioned every contract-shaped class file-wide, so `B.K` on an UNRELATED class silently bound the site
+// chain's same-named K (wrong value, 1 instead of a reject); solc rejects the twin ('Member "K" not found
+// or not visible ... in type(contract B)'). Surfaced by the v3 multi-file sweep, but single-file too.
+describe('static qualifier chain-scoping (the B.K wrong-binding fix)', () => {
+  const codes2 = (src: string): string[] => {
+    try { compile(src, { fileName: 'C.jeth' }); return []; } catch (e: any) { return e.diagnostics.map((d: any) => d.code); }
+  };
+  it('an out-of-chain qualifier rejects instead of binding the chain K (solc parity)', () => {
+    expect(codes2(`abstract class A { static K: u256 = 1n; }\nabstract class B { static K: u256 = 2n; }\nclass V extends A { get f(): External<u256> { return B.K; } }`).length).toBeGreaterThan(0);
+    // the v3 shape that surfaced it: two same-named dep bases, the non-extended one's K must not leak.
+    const d = (src: string, sources: Record<string, string>) => {
+      try { compile(src, { fileName: 'v.jeth', sources }); return []; } catch (e: any) { return e.diagnostics.map((x: any) => x.code); }
+    };
+    expect(d(`import { Base as B1 } from "./a.jeth";\nimport { Base as B2 } from "./b.jeth";\nclass V extends B1 { get f(): External<u256> { return B2.K; } }`,
+      { 'a.jeth': `export abstract class Base { static K: u256 = 1n; }`, 'b.jeth': `export abstract class Base { static K: u256 = 2n; }` }).length).toBeGreaterThan(0);
+  });
+  it('every in-chain spelling keeps working: own, ancestor, inherited-through-derived, static init', async () => {
+    const r = compiled(`abstract class Base { static K: u256 = 40n; static two(): u256 { return 2n; } }\nclass C extends Base { static OWN: u256 = 100n; get f(): External<u256> { return Base.K + C.OWN + C.K + Base.two(); } }`);
+    const h = await Harness.create();
+    const a = await h.deploy(r.creationBytecode);
+    expect(BigInt((await h.call(a, sel('f()'))).returnHex)).toBe(182n);
+    const r2 = compiled(`class C { static A: u256 = 5n; static B: u256 = C.A + 1n; get f(): External<u256> { return C.B; } }`);
+    const a2 = await h.deploy(r2.creationBytecode);
+    expect(BigInt((await h.call(a2, sel('f()'))).returnHex)).toBe(6n);
+  });
+});

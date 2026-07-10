@@ -115,31 +115,62 @@ function rewriteStaticFieldAccess(sf: ts.SourceFile): void {
     (ts.getDecorators(cls) ?? [])
       .map((d) => (ts.isIdentifier(d.expression) ? d.expression.text : ts.isCallExpression(d.expression) && ts.isIdentifier(d.expression.expression) ? d.expression.expression.text : ''))
       .filter(Boolean);
-  // Harvest, ONLY from contract-shaped classes: the set of their NAMES, and the UNION of all their static
-  // field names. All contract-shaped classes in a file are the deployed contract + its abstract bases (one
-  // contract per file), whose statics all flatten into the deployed contract, reachable via `this.K`. So a
-  // union lets `C.BK` reach an INHERITED base static too, while a @struct/@interface/@library class (not a
-  // contract) contributes nothing and thus never hijacks a `TypeName.member`.
-  const contractClassNames = new Set<string>();
-  const staticNames = new Set<string>();
+  // Harvest, ONLY from contract-shaped classes, PER CLASS: its static member names and its direct
+  // `extends` names. The rewrite is SITE-AWARE: `C.K` at a site inside class E rewrites only when C is E
+  // itself or one of E's transitive extends ancestors AND K is a static of C's own chain - exactly the
+  // qualified spellings solc's member lookup accepts. An UNRELATED contract-shaped class (not in the
+  // site's chain) is never a valid qualifier: rewriting `B.K` there used to silently bind the site
+  // chain's same-named K (wrong value); now it is left alone and the analyzer rejects it, like solc.
+  const classes = new Map<string, { statics: Set<string>; parents: string[] }>();
+  let anyStatics = false;
   const scan = (n: ts.Node): void => {
     // Skip non-contract classes: @struct/@interface/@library decorated, AND a native `static class`
     // (= a library) - its `L.f(a)` calls resolve via the library qualified-name machinery; rewriting them
     // to `this.f(a)` would hijack the call into the contract's own namespace.
     const isStaticClass = ts.isClassDeclaration(n) && (ts.getModifiers(n) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
     if (ts.isClassDeclaration(n) && n.name && !isStaticClass && !classDecs(n).some((d) => d === 'struct' || d === 'interface' || d === 'library')) {
-      contractClassNames.add(n.name.text);
+      const statics = new Set<string>();
       for (const m of n.members) {
         // static FIELDS (constant/immutable) AND static METHODS / `get` accessors (class-level functions)
         // are all read/called as `ClassName.x` - harvest every static member name.
         if (!(ts.isPropertyDeclaration(m) || ts.isMethodDeclaration(m) || ts.isGetAccessor(m)) || !ts.isIdentifier(m.name)) continue;
-        if ((ts.getModifiers(m) ?? []).some((x) => x.kind === ts.SyntaxKind.StaticKeyword)) staticNames.add(m.name.text);
+        if ((ts.getModifiers(m) ?? []).some((x) => x.kind === ts.SyntaxKind.StaticKeyword)) statics.add(m.name.text);
       }
+      const parents: string[] = [];
+      for (const h of n.heritageClauses ?? []) {
+        if (h.token !== ts.SyntaxKind.ExtendsKeyword) continue;
+        for (const t of h.types) if (ts.isIdentifier(t.expression)) parents.push(t.expression.text);
+      }
+      classes.set(n.name.text, { statics, parents });
+      if (statics.size > 0) anyStatics = true;
     }
     ts.forEachChild(n, scan);
   };
   ts.forEachChild(sf, scan);
-  if (staticNames.size === 0) return;
+  if (!anyStatics) return;
+  // name -> the class + its transitive extends ancestors (cycle-safe; an extends cycle is the analyzer's
+  // reject, the walk just must not loop). Memoized: chains are tiny but the walk runs per access site.
+  const chainMemo = new Map<string, Set<string>>();
+  const chainOf = (name: string): Set<string> => {
+    const memo = chainMemo.get(name);
+    if (memo) return memo;
+    const out = new Set<string>();
+    const stack = [name];
+    while (stack.length > 0) {
+      const c = stack.pop()!;
+      if (out.has(c)) continue;
+      const info = classes.get(c);
+      if (!info) continue;
+      out.add(c);
+      stack.push(...info.parents);
+    }
+    chainMemo.set(name, out);
+    return out;
+  };
+  const chainHasStatic = (qualifier: string, member: string): boolean => {
+    for (const c of chainOf(qualifier)) if (classes.get(c)!.statics.has(member)) return true;
+    return false;
+  };
   // Every locally-bound name (parameter / let / const / var / destructuring binding). A syntactic pre-pass
   // has no scope analysis, so if a class name is ALSO used as a local/param anywhere, a `C.K` there may bind
   // to the shadowing local (solc: local scope wins) - do NOT rewrite accesses on that name; the ordinary
@@ -151,18 +182,26 @@ function rewriteStaticFieldAccess(sf: ts.SourceFile): void {
     ts.forEachChild(n, collectBound);
   };
   ts.forEachChild(sf, collectBound);
-  const rewrite = (n: ts.Node): void => {
+  const rewrite = (n: ts.Node, encl: string | undefined): void => {
+    // track the innermost enclosing CONTRACT-SHAPED class: its chain defines the valid qualifiers here.
+    if (ts.isClassDeclaration(n) && n.name && classes.has(n.name.text)) encl = n.name.text;
     if (ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && ts.isIdentifier(n.name)) {
-      if (contractClassNames.has(n.expression.text) && staticNames.has(n.name.text) && !bound.has(n.expression.text)) {
+      const qual = n.expression.text;
+      if (
+        encl !== undefined &&
+        chainOf(encl).has(qual) &&
+        chainHasStatic(qual, n.name.text) &&
+        !bound.has(qual)
+      ) {
         const thisExpr = ts.factory.createThis();
         ts.setTextRange(thisExpr, n.expression);
         (thisExpr as unknown as { parent: ts.Node }).parent = n;
         (n as { expression: ts.Expression }).expression = thisExpr;
       }
     }
-    ts.forEachChild(n, rewrite);
+    ts.forEachChild(n, (c) => rewrite(c, encl));
   };
-  ts.forEachChild(sf, rewrite);
+  ts.forEachChild(sf, (n) => rewrite(n, undefined));
 }
 
 /**
