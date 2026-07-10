@@ -750,3 +750,159 @@ contract C is Base {
     expect((await b.j.h.call(b.j.a, '0x' + sel('getAcc()'))).returnHex).toBe('0x' + pad32(2007n));
   });
 });
+
+describe('AXIS 4: constructor paths own their attachments (fast path + base-ctor ARGS)', () => {
+  it('NO-INHERITANCE ctor body (the chain<=1 fast path) uses the deployed @using map (g()=4)', async () => {
+    // Regression cell: the chain<=1 fast path reaches checkConstructor directly (no buildLevel), which
+    // never set bodyOwnerContract - the owner-only lookup saw undefined and rejected JETH074.
+    const { j } = await same(JL + `
+@using(L) @contract
+class C {
+  @state acc: u256;
+  constructor() { this.acc = (8n).half(); }
+  @external @view g(): u256 { return this.acc; }
+}
+`, SL + `
+contract C { using L for uint256; uint256 acc; constructor() { acc = uint256(8).half(); } function g() external view returns (uint256) { return acc; } }
+`, [{ sig: 'g()' }], 1);
+    expect((await j.h.call(j.a, '0x' + sel('g()'))).returnHex).toBe('0x' + pad32(4n));
+  });
+
+  it('inline @immutable initializers use the deployed map: no-ctor AND with-ctor flavors', async () => {
+    // no ctor at all: the chain<=1 no-node branch synthesizes the body from immutableInitStmts()
+    const a = await same(JL + `
+@using(L) @contract
+class C {
+  @immutable k: u256 = (8n).half();
+  @external @view g(): u256 { return this.k; }
+}
+`, SL + `
+contract C { using L for uint256; uint256 immutable k = uint256(8).half(); function g() external view returns (uint256) { return k; } }
+`, [{ sig: 'g()' }]);
+    expect((await a.j.h.call(a.j.a, '0x' + sel('g()'))).returnHex).toBe('0x' + pad32(4n));
+    // ctor present: immutableInitStmts() runs inside checkConstructor, before the body statements
+    const b = await same(JL + `
+@using(L) @contract
+class C {
+  @immutable k: u256 = (18n).half();
+  @state acc: u256;
+  constructor() { this.acc = (100n).half(); }
+  @external @view g(): u256 { return this.k + this.acc; }
+}
+`, SL + `
+contract C { using L for uint256; uint256 immutable k = uint256(18).half(); uint256 acc; constructor() { acc = uint256(100).half(); } function g() external view returns (uint256) { return k + acc; } }
+`, [{ sig: 'g()' }], 1);
+    expect((await b.j.h.call(b.j.a, '0x' + sel('g()'))).returnHex).toBe('0x' + pad32(59n)); // 9 + 50
+    // NOTE: the @state-init flavor (`@state s: u256 = (44n).half()`) does NOT exist as a path: JETH
+    // requires a constant @state initializer (pre-existing JETH048 gate), independent of @using -
+    // the plain qualified spelling L.half(44n) rejects identically, so it is not an ownership defect.
+    expect(codes(JL + `
+@using(L) @contract
+class C { @state s: u256 = (44n).half(); @external @view g(): u256 { return this.s; } }
+`)).toContain('JETH048');
+    expect(codes(JL + `
+@contract
+class C { @state s: u256 = L.half(44n); @external @view g(): u256 { return this.s; } }
+`)).toContain('JETH048');
+  });
+
+  it('MID-LEVEL super(arg) resolves via the PROVIDING class map under shadowing (2007, not 1007)', async () => {
+    // The miscompile cell: bindBaseArgs swapped the LOCAL scope to Mid's params but left the
+    // attachment owner at the deployed contract, so seed.tag() picked C's L1 (+1000) over Mid's L2.
+    const { j } = await same(JT + `
+@abstract
+class Base { @state acc: u256; constructor(x: u256) { this.acc = x; } }
+@using(L2) @abstract
+class Mid extends Base { constructor(seed: u256) { super(seed.tag()); } }
+@using(L1) @contract
+class C extends Mid {
+  constructor() { super(7n); }
+  @external @view getAcc(): u256 { return this.acc; }
+}
+`, ST + `
+abstract contract Base { uint256 acc; constructor(uint256 x) { acc = x; } }
+abstract contract Mid is Base { using L2 for uint256; constructor(uint256 seed) Base(seed.tag()) {} }
+contract C is Mid { using L1 for uint256; constructor() Mid(7) {} function getAcc() external view returns (uint256) { return acc; } }
+`, [{ sig: 'getAcc()' }], 1);
+    expect((await j.h.call(j.a, '0x' + sel('getAcc()'))).returnHex).toBe('0x' + pad32(2007n));
+  });
+
+  it('sibling over-rejection: NO @using on the deployed contract still accepts (2004)', async () => {
+    // Same shape, no deployed @using at all: the owner-swapped lookup finds Mid's L2; the pre-fix
+    // deployed-map lookup found nothing and rejected JETH074 while solc accepts.
+    const { j } = await same(JT + `
+@abstract
+class Base { @state acc: u256; constructor(x: u256) { this.acc = x; } }
+@using(L2) @abstract
+class Mid extends Base { constructor(seed: u256) { super(seed.tag()); } }
+@contract
+class C extends Mid {
+  constructor() { super(4n); }
+  @external @view getAcc(): u256 { return this.acc; }
+}
+`, ST + `
+abstract contract Base { uint256 acc; constructor(uint256 x) { acc = x; } }
+abstract contract Mid is Base { using L2 for uint256; constructor(uint256 seed) Base(seed.tag()) {} }
+contract C is Mid { constructor() Mid(4) {} function getAcc() external view returns (uint256) { return acc; } }
+`, [{ sig: 'getAcc()' }], 1);
+    expect((await j.h.call(j.a, '0x' + sel('getAcc()'))).returnHex).toBe('0x' + pad32(2004n));
+  });
+
+  it('control: a DEPLOYED-level super(arg) still resolves via the deployed map (1005)', async () => {
+    const { j } = await same(JT + `
+@abstract
+class Base { @state acc: u256; constructor(x: u256) { this.acc = x; } }
+@using(L1) @contract
+class C extends Base {
+  constructor() { super((5n).tag()); }
+  @external @view getAcc(): u256 { return this.acc; }
+}
+`, ST + `
+abstract contract Base { uint256 acc; constructor(uint256 x) { acc = x; } }
+contract C is Base { using L1 for uint256; constructor() Base(uint256(5).tag()) {} function getAcc() external view returns (uint256) { return acc; } }
+`, [{ sig: 'getAcc()' }], 1);
+    expect((await j.h.call(j.a, '0x' + sel('getAcc()'))).returnHex).toBe('0x' + pad32(1005n));
+  });
+
+  it('control: a post-super STATEMENT in the MID body resolves via Mid (2007, the 9c14905 fix)', async () => {
+    const { j } = await same(JT + `
+@abstract
+class Base { @state acc: u256; constructor(x: u256) { this.acc = x; } }
+@using(L2) @abstract
+class Mid extends Base { @state m: u256; constructor(seed: u256) { super(seed); this.m = (7n).tag(); } }
+@using(L1) @contract
+class C extends Mid {
+  constructor() { super(1n); }
+  @external @view getM(): u256 { return this.m; }
+}
+`, ST + `
+abstract contract Base { uint256 acc; constructor(uint256 x) { acc = x; } }
+abstract contract Mid is Base { using L2 for uint256; uint256 m; constructor(uint256 seed) Base(seed) { m = uint256(7).tag(); } }
+contract C is Mid { using L1 for uint256; constructor() Mid(1) {} function getM() external view returns (uint256) { return m; } }
+`, [{ sig: 'getM()' }], 2);
+    expect((await j.h.call(j.a, '0x' + sel('getM()'))).returnHex).toBe('0x' + pad32(2007n));
+  });
+
+  it('chain parity: the SAME ctor source decodes identically chain<=1 vs chain>1 (13 both ways)', async () => {
+    // The fast path (checkConstructor) and the merge path (buildLevel) must give one ctor body the
+    // same attachment owner: adding an empty base flips the path taken, nothing else.
+    const ctorBody = `
+  @state acc: u256;
+  constructor() { this.acc = (26n).half(); }
+  @external @view g(): u256 { return this.acc; }
+`;
+    const solTail = ` uint256 acc; constructor() { acc = uint256(26).half(); } function g() external view returns (uint256) { return acc; } }`;
+    const a = await same(
+      JL + `\n@using(L) @contract\nclass C {${ctorBody}}\n`,
+      SL + `contract C { using L for uint256;${solTail}`,
+      [{ sig: 'g()' }], 1);
+    const b = await same(
+      JL + `\n@abstract\nclass Empty { }\n@using(L) @contract\nclass C extends Empty {${ctorBody}}\n`,
+      SL + `abstract contract Empty { }\ncontract C is Empty { using L for uint256;${solTail}`,
+      [{ sig: 'g()' }], 1);
+    const ra = await a.j.h.call(a.j.a, '0x' + sel('g()'));
+    const rb = await b.j.h.call(b.j.a, '0x' + sel('g()'));
+    expect(ra.returnHex).toBe('0x' + pad32(13n));
+    expect(rb.returnHex).toBe(ra.returnHex);
+  });
+});

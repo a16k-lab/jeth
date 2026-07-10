@@ -4554,6 +4554,15 @@ export class Analyzer {
     // the body AND any constructor-modifier inlining (so a ctor modifier reading an immutable also
     // sees the staged value).
     this.currentInConstructor = true;
+    // Lexical @using: the ctor body (and the inline @immutable initializers it stages) is DECLARED by
+    // the deployed contract, so the owner-only attachment lookup (attachedFnsFor) must see that class's
+    // own @using map. mergeConstructors' chain>1 path sets this globally (deployed.contract) before
+    // buildLevel; this chain<=1 fast path reaches checkConstructor directly, so set/restore it here -
+    // otherwise owner=undefined and a no-inheritance `@using(L) @contract` ctor-body attachment
+    // over-rejects (JETH074). The window spans immutableInitStmts + the body loop + the ctor-modifier
+    // inlining, matching the ambient owner the chain>1 path gives the same three phases.
+    const savedCtorBodyOwner = this.bodyOwnerContract;
+    this.bodyOwnerContract = this.ctorChain[0]?.contract;
     // @immutable inline initializers run first, before the explicit constructor body (solc parity).
     const rawBody: Stmt[] = this.immutableInitStmts();
     if (ctorNode.body) {
@@ -4569,6 +4578,7 @@ export class Analyzer {
     // W5D-1: return-involving shapes are OUTLINED (buildCtorLevelStmts) so a body `return;` resumes at
     // the modifier post-code and a modifier `return;` exits the wrap - byte-identical to solc.
     const body = this.buildCtorLevelStmts(ctorMods, rawBody, ctorNode, params, false);
+    this.bodyOwnerContract = savedCtorBodyOwner;
     this.currentInConstructor = false;
     this.popScope();
 
@@ -4974,7 +4984,15 @@ export class Analyzer {
     // @immutable initializers, synthesize a body that stages them (they run in creation code).
     if (chain.length <= 1) {
       if (chain[0]?.node) return this.checkConstructor(chain[0].node);
-      return hasInlineImmInit ? { params: [], payable: false, body: this.immutableInitStmts() } : undefined;
+      if (!hasInlineImmInit) return undefined;
+      // No ctor, only inline @immutable initializers: those initializer expressions are still declared
+      // by the deployed class, so an attachment used there needs the owner set (same fix as
+      // checkConstructor; without it `@immutable k = (8n).half()` under @using(L) rejects JETH074).
+      const savedBodyOwner = this.bodyOwnerContract;
+      this.bodyOwnerContract = chain[0]?.contract;
+      const immBody = this.immutableInitStmts();
+      this.bodyOwnerContract = savedBodyOwner;
+      return { params: [], payable: false, body: immBody };
     }
     // no constructor anywhere AND no inline immutable init -> no creation-time work beyond defaults.
     if (!chain.some((c) => c.node) && !hasInlineImmInit) return undefined;
@@ -5339,8 +5357,18 @@ export class Analyzer {
             this.scopes = [new Map()];
           }
           this.currentReadsState = false;
+          // Lexical @using for base-ctor ARGUMENT expressions: solc resolves a `Base(args)` modifier-form
+          // arg (our fromSuper `super(args)`) in the PROVIDING contract's lexical scope, and a HERITAGE
+          // `extends B(args)` arg in the scope of the class whose heritage clause names it - both are the
+          // provider level. The scope swap above only moved the LOCALS; without also moving the attachment
+          // owner, a mid-level `super(seed.tag())` resolved via the DEPLOYED contract's @using map (a
+          // MISCOMPILE when the deployed shadows the provider's library, an over-rejection when the
+          // deployed has no @using at all). Own the arg check by chain[providerIdx].contract.
+          const savedArgBodyOwner = this.bodyOwnerContract;
+          this.bodyOwnerContract = chain[prov.providerIdx]!.contract;
           const e = this.checkExpr(prov.argNodes[k]!, bparams[k]!.type);
           const init = e ? this.coerce(e, bparams[k]!.type, prov.argNodes[k]!) : undefined;
+          this.bodyOwnerContract = savedArgBodyOwner;
           if (this.currentReadsState) {
             this.diags.error(
               prov.argNodes[k]!,
