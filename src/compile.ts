@@ -10,7 +10,7 @@ import { analyze } from './analyzer.js';
 import { emitYul, emitLibraryYul, UnsupportedError } from './yul.js';
 import { compileYul, LinkReferences } from './solc.js';
 import { emitAbi, AbiItem } from './abi.js';
-import { bundleImports, isDecoratorModeSource, remapDiagnostics, BundleSegment } from './imports.js';
+import { bundleImports, isDecoratorModeSource, isReferenceIdentifier, remapDiagnostics, BundleSegment } from './imports.js';
 import type { ContractIR } from './ir.js';
 import { displayName } from './types.js';
 
@@ -199,6 +199,41 @@ function rejectThisInStaticMembers(sf: ts.SourceFile, diags: DiagnosticBag): voi
   ts.forEachChild(sf, visit);
 }
 
+/**
+ * Import aliases: `import { A as B } from "./f.jeth"` binds the target's exported A under the LOCAL name
+ * B. The bundler validated that B is a FREE name in the importing file (no declaration / other import /
+ * local binding / reserved name to hijack); here every reference-position identifier `B` inside that
+ * file's bundle segment is renamed IN PLACE to `A` (mutating escapedText keeps the node and its source
+ * positions, so diagnostics stay exact), after which the whole pipeline sees only original names -
+ * attachments, static-member rewrites, and name resolution all work unchanged.
+ */
+function rewriteImportAliases(
+  sf: ts.SourceFile,
+  segments: BundleSegment[],
+  aliasesByFile: Map<string, Map<string, string>>,
+): void {
+  if (aliasesByFile.size === 0) return;
+  const fileOf = (node: ts.Node): string | undefined => {
+    const { line } = sf.getLineAndCharacterOfPosition(node.getStart(sf));
+    const l = line + 1;
+    for (const seg of segments) {
+      if (l >= seg.startLine && l < seg.startLine + seg.lineCount) return seg.file;
+    }
+    return undefined;
+  };
+  const rewrite = (n: ts.Node): void => {
+    if (ts.isIdentifier(n) && isReferenceIdentifier(n)) {
+      const file = fileOf(n);
+      const orig = file ? aliasesByFile.get(file)?.get(n.text) : undefined;
+      if (orig) {
+        (n as unknown as { escapedText: ts.__String }).escapedText = ts.escapeLeadingUnderscores(orig);
+      }
+    }
+    ts.forEachChild(n, rewrite);
+  };
+  ts.forEachChild(sf, rewrite);
+}
+
 export function compile(source: string, opts: CompileOptions = {}): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
@@ -228,14 +263,19 @@ export function compile(source: string, opts: CompileOptions = {}): CompileResul
   let unitSource = effectiveSource;
   let bundleSegments: BundleSegment[] | undefined;
   let bundleVisibility: Map<string, Set<string>> | undefined;
+  let bundleAliases: Map<string, Map<string, string>> | undefined;
   if (opts.sources && Object.keys(opts.sources).length > 0) {
     const bundle = bundleImports(effectiveSource, fileName, opts.sources);
     unitSource = bundle.text;
     bundleSegments = bundle.segments;
     bundleVisibility = bundle.visibleByFile;
+    bundleAliases = bundle.aliasesByFile;
   }
 
   const parsed = parse(unitSource, fileName);
+  // Import aliases FIRST: rename each file's `import { A as B }` references back to A, so every later
+  // pass (the # mangle, the static-member rewrite, all name resolution) sees only original names.
+  if (bundleSegments && bundleAliases) rewriteImportAliases(parsed.sourceFile, bundleSegments, bundleAliases);
   // Item #2: rewrite JS `#` private members to contract-scoped internal names BEFORE validation /
   // analysis, so `#f()` / `this.#x` lower like internal members and derived access rejects.
   manglePrivateMembers(parsed.sourceFile);

@@ -78,7 +78,7 @@ describe('multi-file imports', () => {
     )).toEqual([]);
   });
 
-  it('rejects: unexported name, unknown path, cycle, contract-in-dep, mode mismatch, alias - each at the right file:line', () => {
+  it('rejects: unexported name, unknown path, cycle, contract-in-dep, mode mismatch - each at the right file:line', () => {
     expect(diag(`import { Hidden } from "./l.jeth";\nclass C { get f(): External<u256> { return 1n; } }`, { 'l.jeth': `static class Hidden { f(): u256 { return 1n; } }` }))
       .toEqual(['JETH036@vault.jeth:1']); // not exported
     expect(diag(`import { X } from "./nope.jeth";\nclass C { get f(): External<u256> { return 1n; } }`, { 'l.jeth': `export type T = { a: u256 };` }))
@@ -91,8 +91,27 @@ describe('multi-file imports', () => {
       .toEqual(['JETH036@d.jeth:2']); // concrete contract in a dep
     expect(diag(`import { T } from "./d.jeth";\nclass C { get f(): External<u256> { return 1n; } }`, { 'd.jeth': `// use @decorators\nexport type T = Brand<u256>;` }))
       .toEqual(['JETH036@d.jeth:1']); // cross-mode import
-    expect(diag(`import { A as B } from "./a.jeth";\nclass C { get f(): External<u256> { return 1n; } }`, { 'a.jeth': `export static class A { f(): u256 { return 1n; } }` }))
-      .toEqual(['JETH036@vault.jeth:1']); // alias (v1)
+  });
+
+  it('convenience import aliases: `import { A as B }` binds A under the local name B, byte-identically', () => {
+    const LIB = `export static class SafeMathLibrary { min(a: u256, b: u256): u256 { return a < b ? a : b; } }`;
+    // the aliased program compiles byte-identical to the unaliased one (the alias is renamed away post-parse).
+    expect(compile(`import { SafeMathLibrary as Math } from "./l.jeth";\nclass V { get f(a: u256, b: u256): External<u256> { return Math.min(a, b); } }`, { fileName: 'vault.jeth', sources: { 'l.jeth': LIB } }).creationBytecode)
+      .toBe(compile(`import { SafeMathLibrary } from "./l.jeth";\nclass V { get f(a: u256, b: u256): External<u256> { return SafeMathLibrary.min(a, b); } }`, { fileName: 'vault.jeth', sources: { 'l.jeth': LIB } }).creationBytecode);
+    // an aliased library's `self`-convention attachments still work (visibility keys on the ORIGINAL name).
+    expect(diag(`import { M as Math } from "./m.jeth";\nclass V { get f(x: u256, y: u256): External<u256> { return x.min(y); } }`,
+      { 'm.jeth': `export static class M { min(self: u256, b: u256): u256 { return self < b ? self : b; } }` })).toEqual([]);
+    // the alias must be a FREE name: colliding with an own declaration / a local binding / a primitive /
+    // a builtin global all reject (the rewrite would hijack them).
+    const L2 = { 'l.jeth': LIB };
+    expect(diag(`import { SafeMathLibrary as V } from "./l.jeth";\nclass V { get f(): External<u256> { return 1n; } }`, L2)).toEqual(['JETH036@vault.jeth:1']);
+    expect(diag(`import { SafeMathLibrary as Tmp } from "./l.jeth";\nclass V { get f(a: u256): External<u256> { let Tmp: u256 = a; return Tmp; } }`, L2)).toEqual(['JETH036@vault.jeth:1']);
+    expect(diag(`import { SafeMathLibrary as u256 } from "./l.jeth";\nclass V { get f(): External<u256> { return 1n; } }`, L2)).toEqual(['JETH036@vault.jeth:1']);
+    expect(diag(`import { SafeMathLibrary as msg } from "./l.jeth";\nclass V { get f(): External<u256> { return 1n; } }`, L2)).toEqual(['JETH036@vault.jeth:1']);
+    // aliases do NOT enable two same-named exports (one bundle namespace): still JETH037 - the v3 item.
+    expect(diag(`import { Utils as A } from "./a.jeth";\nimport { Utils as B } from "./b.jeth";\nclass V { get f(): External<u256> { return A.one() + B.two(); } }`,
+      { 'a.jeth': `export static class Utils { one(): u256 { return 1n; } }`, 'b.jeth': `export static class Utils { two(): u256 { return 2n; } }` })
+      .some((x) => x.startsWith('JETH037'))).toBe(true);
   });
 
   it('a semantic error INSIDE an imported file reports the dep file + its own line', () => {

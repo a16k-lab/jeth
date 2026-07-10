@@ -5,7 +5,11 @@
 //
 // Semantics (v1):
 //  - `import { A, B } from "./file.jeth"` - NAMED imports only; relative paths only. Default (`import X`),
-//    namespace (`* as X`), side-effect (`import "./x"`), and alias (`A as B`) forms are rejected.
+//    namespace (`* as X`), and side-effect (`import "./x"`) forms are rejected.
+//  - CONVENIENCE aliases work: `import { A as B }` renames A to B locally (compile() rewrites B -> A in
+//    the importing file post-parse, position-preserving; the alias must be a FREE name there). Aliases do
+//    NOT enable two same-named exports in one program - the bundle is one namespace, so that still rejects
+//    (JETH037); per-file declaration scoping is the v3 module system.
 //  - Only `export`-marked top-level declarations are importable (TS-strict; `export` finally MEANS
 //    something). A named import that is not an exported declaration of the target file rejects.
 //  - An imported file may declare libraries (static class / @library), types, interfaces, abstract bases,
@@ -22,6 +26,7 @@
 //    identifier, so a transitively-bundled library's self-functions can attach without an import edge.
 import ts from 'typescript';
 import { CompileError, Diagnostic } from './diagnostics.js';
+import { resolvePrimitiveName } from './typeresolver.js';
 
 export interface BundleSegment {
   file: string;
@@ -32,10 +37,14 @@ export interface BundleSegment {
 export interface BundleResult {
   text: string;
   segments: BundleSegment[];
-  /** Per file: the names VISIBLE to it (its own declarations, recursively, plus its named imports). Used
-   *  by the analyzer to scope `self`-convention ATTACHED calls (which name no library identifier, so the
-   *  identifier-based reference check cannot see them) to each file's import edges. */
+  /** Per file: the names VISIBLE to it (its own declarations, recursively, plus its named imports - by
+   *  ORIGINAL name, so `import { A as B }` contributes A). Used by the analyzer to scope `self`-convention
+   *  ATTACHED calls (which name no library identifier, so the identifier-based reference check cannot see
+   *  them) to each file's import edges. */
   visibleByFile: Map<string, Set<string>>;
+  /** Per file: alias -> original for `import { A as B }` bindings. compile() rewrites each B reference in
+   *  that file back to A after parse (position-preserving), so everything downstream sees original names. */
+  aliasesByFile: Map<string, Map<string, string>>;
 }
 
 /** Per-file syntax mode: a file whose leading comment run contains the exact line `// use @decorators` is
@@ -118,6 +127,11 @@ function exportedNames(sf: ts.SourceFile): Set<string> {
   }
   return names;
 }
+
+/** Names an import ALIAS may not take: the rewrite renames every reference-position use of the alias, so
+ *  an alias shadowing a marker/global would hijack unrelated syntax (primitives are checked separately via
+ *  resolvePrimitiveName - `import { A as u256 }` would rewrite every u256 type annotation in the file). */
+const RESERVED_ALIAS_NAMES = new Set(['External', 'Payable', 'View', 'Pure', 'error', 'event', 'indexed', 'msg', 'abi', 'block', 'tx', 'self', 'Brand', 'Arr', 'mapping']);
 
 const DEPLOYABLE_DECORATORS = new Set(['contract', 'proxy', 'beacon', 'facet', 'diamond']);
 const NON_CONTRACT_KIND_DECORATORS = new Set(['struct', 'interface', 'library', 'abstract']);
@@ -212,8 +226,9 @@ function shadowNames(sf: ts.SourceFile): Set<string> {
 
 /** Is this identifier a REFERENCE (a use of a name), as opposed to a member-name / key / a declaration's
  *  own name? The property side of `x.f` / `A.B`, an object key, and any node's own `name` are not
- *  references; a shorthand property (`{ MathLib }`) IS one. */
-function isReferenceIdentifier(n: ts.Identifier): boolean {
+ *  references; a shorthand property (`{ MathLib }`) IS one. (Exported: the alias rewrite in compile.ts
+ *  renames exactly these positions.) */
+export function isReferenceIdentifier(n: ts.Identifier): boolean {
   const p = n.parent as ts.Node | undefined;
   if (!p) return false;
   if (ts.isPropertyAccessExpression(p) && p.name === n) return false;
@@ -226,7 +241,9 @@ function isReferenceIdentifier(n: ts.Identifier): boolean {
 interface FileInfo {
   display: string;
   blanked: string;
-  imported: Set<string>;
+  imported: Set<string>; // LOCAL names (an alias counts as its local name for the reference check)
+  importedOriginals: Set<string>; // ORIGINAL names (attachment visibility keys on the real library name)
+  aliases: Map<string, string>; // alias -> original
 }
 
 /** v2 scoping: a reference to a name declared in ANOTHER file requires an import edge for that name; an
@@ -339,6 +356,8 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
 
     let blanked = text;
     const importedHere = new Set<string>();
+    const importedOriginals = new Set<string>();
+    const aliasesHere = new Map<string, string>();
     for (const s of sf.statements) {
       if (ts.isImportEqualsDeclaration(s)) fail(displayName, sf, s, `'import =' is not supported; use \`import { A, B } from "./file.jeth"\``);
       if (!ts.isImportDeclaration(s)) continue;
@@ -362,20 +381,47 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
       const targetSf = ts.createSourceFile(targetKey, targetText, ts.ScriptTarget.Latest, true);
       const exported = exportedNames(targetSf);
       for (const el of bindings.elements) {
-        if (el.propertyName) fail(displayName, sf, el, `import aliases ('${el.propertyName.text} as ${el.name.text}') are not supported yet`);
-        if (!exported.has(el.name.text)) {
+        // `import { A as B }`: A (propertyName) is the ORIGINAL exported declaration; B (name) is the
+        // LOCAL alias. compile() rewrites B -> A in this file after parse, so the alias must be a FREE
+        // name here - it may not collide with anything the rewrite could hijack.
+        const original = el.propertyName?.text ?? el.name.text;
+        const local = el.name.text;
+        if (!exported.has(original)) {
           const avail = [...exported].sort().join(', ') || '<nothing exported>';
-          fail(displayName, sf, el, `'${el.name.text}' is not an exported declaration of '${targetKey}' (exported: ${avail}); mark it \`export\` there`);
+          fail(displayName, sf, el, `'${original}' is not an exported declaration of '${targetKey}' (exported: ${avail}); mark it \`export\` there`);
         }
-        importedHere.add(el.name.text);
+        if (el.propertyName) {
+          if (resolvePrimitiveName(local) || RESERVED_ALIAS_NAMES.has(local)) {
+            fail(displayName, sf, el.name, `import alias '${local}' shadows a builtin type, global, or native marker; pick another name`);
+          }
+          if (importedHere.has(local)) {
+            fail(displayName, sf, el.name, `import alias '${local}' collides with another import in this file`);
+          }
+          aliasesHere.set(local, original);
+        } else if (aliasesHere.has(local)) {
+          fail(displayName, sf, el.name, `'${local}' collides with an import alias in this file`);
+        }
+        importedHere.add(local);
+        importedOriginals.add(original);
       }
       blanked = blankSpan(blanked, s.getStart(sf), s.getEnd());
+    }
+    // The alias rewrite renames every reference-position `alias` in THIS file - so the alias may not also
+    // be a declared name or a local binding here (the rewrite would hijack them). Conservative and loud,
+    // exactly the ClassName.x rewrite's shadow discipline.
+    if (aliasesHere.size > 0) {
+      const declared = declaredNames(sf);
+      const shadows = shadowNames(sf);
+      for (const [alias] of aliasesHere) {
+        if (declared.has(alias)) fail(displayName, sf, sf, `import alias '${alias}' collides with a declaration in this file; pick another name`);
+        if (shadows.has(alias)) fail(displayName, sf, sf, `import alias '${alias}' collides with a local binding (a parameter or variable) in this file; pick another name`);
+      }
     }
 
     inStack.pop();
     visited.add(fileKey);
     order.push({ file: displayName, text: blanked });
-    fileInfos.push({ display: displayName, blanked, imported: importedHere });
+    fileInfos.push({ display: displayName, blanked, imported: importedHere, importedOriginals, aliases: aliasesHere });
   };
 
   visit(entryKey, entryFile, normalizeEol(entryText), true);
@@ -384,9 +430,12 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
   checkCrossFileReferences(fileInfos);
 
   const visibleByFile = new Map<string, Set<string>>();
+  const aliasesByFile = new Map<string, Map<string, string>>();
   for (const f of fileInfos) {
     const sf = ts.createSourceFile(f.display, f.blanked, ts.ScriptTarget.Latest, true);
-    visibleByFile.set(f.display, new Set([...declaredNames(sf), ...f.imported]));
+    // attachment visibility keys on ORIGINAL names (an aliased import still makes the real library visible).
+    visibleByFile.set(f.display, new Set([...declaredNames(sf), ...f.importedOriginals]));
+    if (f.aliases.size > 0) aliasesByFile.set(f.display, f.aliases);
   }
 
   const segments: BundleSegment[] = [];
@@ -398,5 +447,5 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
     parts.push(text);
     line += lines;
   }
-  return { text: parts.join('\n'), segments, visibleByFile };
+  return { text: parts.join('\n'), segments, visibleByFile, aliasesByFile };
 }
