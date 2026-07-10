@@ -181,6 +181,53 @@ describe('Part B: error<{...}> / event<{...}> / indexed<T> field declarations', 
   });
 });
 
+// FILE-LEVEL error/event declarations: `type X = error<{...}>` / `type X = event<{...}>` at the top level
+// are the native spellings of solc's file-level `error X(...)` (0.8.4+) and `event X(...)` (0.8.22+).
+// They route through the SAME synthesis as the member-field form (identical selector/topic0), are raised
+// BARE and positionally (`revert(X(...))` / `emit(X(...))` - exactly solc's spelling; named-args stay
+// exclusive to the member `this.X({...})` form since bare object-literals already mean struct literals),
+// and export/import like any type alias.
+describe('file-level error/event declarations (type X = error<{...}>)', () => {
+  const J = `type Insufficient = error<{ need: u256; have: u256 }>;
+type Moved = event<{ who: indexed<address>; amount: u256 }>;
+class C { f(a: u256): External<void> { if (a == 0n) { revert(Insufficient(1n, a)); } emit(Moved(msg.sender, a)); } }`;
+
+  it('revert data + event logs are byte-identical to solc file-level error/event', async () => {
+    const S = `error Insufficient(uint256 need, uint256 have);
+event Moved(address indexed who, uint256 amount);
+contract C { function f(uint256 a) external { if (a == 0) revert Insufficient(1, a); emit Moved(msg.sender, a); } }`;
+    const h = await Harness.create();
+    const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
+    const rj = await h.call(aj, sel('f(uint256)') + W(0));
+    const rs = await h.call(as, sel('f(uint256)') + W(0));
+    expect(rj.success).toBe(false);
+    expect(rj.success).toBe(rs.success);
+    expect(rj.returnHex).toBe(rs.returnHex); // the custom-error selector + args
+    const ej = await h.call(aj, sel('f(uint256)') + W(5));
+    const es = await h.call(as, sel('f(uint256)') + W(5));
+    expect(JSON.stringify(ej.logs)).toBe(JSON.stringify(es.logs)); // topic0 + indexed topics + data
+  });
+
+  it('a file-level declaration is byte-identical to the member-field form', () => {
+    expect(bc(J)).toBe(bc(`class C { Insufficient: error<{ need: u256; have: u256 }>; Moved: event<{ who: indexed<address>; amount: u256 }>; f(a: u256): External<void> { if (a == 0n) { revert(this.Insufficient({ need: 1n, have: a })); } emit(this.Moved({ who: msg.sender, amount: a })); } }`));
+  });
+
+  it('exports/imports like any type alias; the v2 import edge is enforced; guards hold', () => {
+    const diag = (src: string, sources: Record<string, string>): string[] => {
+      try { compile(src, { fileName: 'vault.jeth', sources }); return []; } catch (e: any) { return e.diagnostics.map((d: any) => `${d.code}@${d.file}:${d.line}`); }
+    };
+    const DEP = `export type Insufficient = error<{ need: u256; have: u256 }>;\nexport type Whoops = error<{ code: u256 }>;`;
+    expect(diag(`import { Insufficient } from "./errs.jeth";\nclass V { x: u256; f(a: u256): External<void> { if (a == 0n) { revert(Insufficient(1n, a)); } this.x = a; } }`, { 'errs.jeth': DEP })).toEqual([]);
+    expect(diag(`import { Insufficient } from "./errs.jeth";\nclass V { x: u256; f(a: u256): External<void> { if (a == 0n) { revert(Whoops(1n)); } this.x = a; } }`, { 'errs.jeth': DEP })).toEqual(['JETH039@vault.jeth:2']);
+    // this.X is the MEMBER spelling - a file-level declaration is raised bare.
+    expect(codes(`type E = error<{ a: u256 }>;\nclass C { f(): External<void> { throw this.E({ a: 1n }); } }`)).toContain('JETH353');
+    // duplicate (file-level + member) hits the normal duplicate check; decorator mode is unchanged.
+    expect(codes(`type E = error<{ a: u256 }>;\nclass C { E: error<{ a: u256 }>; f(): External<void> { revert(E(1n)); } }`)).toContain('JETH128');
+    expect(codes(`// use @decorators\ntype E = error<{ a: u256 }>;\n@contract class C { @external f(): void { } }`)).toContain('JETH015');
+  });
+});
+
 // Hardening from the adversarial sweep (784 cases): the 4 bar-violations it confirmed, now closed.
 describe('marker + raise hardening (verification sweep)', () => {
   it('a generic function cannot take an External<T>/Payable<T> marker (JETH290, like @external)', () => {

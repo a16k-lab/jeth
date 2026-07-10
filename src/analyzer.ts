@@ -595,6 +595,7 @@ export class Analyzer {
     this.collectEnums(); // enums (branded uint8), before structs (a struct field / param may use one)
     this.collectStructs();
     this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
+    if (this.nativeMode) this.collectFileLevelErrorEvents(); // `type X = error<{...}>` / `event<{...}>` (file-level, solc 0.8.4/0.8.22 parity)
     if (this.nativeMode) this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
     this.rejectImplementsClauses(); // a silently-ignored `implements` clause skipped interface obligations
     this.checkClassNamespaceCollisions(); // duplicate contract/abstract/library names + builtin-global shadows
@@ -646,8 +647,10 @@ export class Analyzer {
     const visit = (n: ts.Node): void => {
       // A native object-type alias (`type P = { a: T }`, item #5) is a STRUCT, not a branded newtype; it
       // is collected in the struct pass (collectStructs, after enums + @structs) so its fields may
-      // reference enums, @structs and earlier structs exactly like a @struct class. Skip it here.
-      if (ts.isTypeAliasDeclaration(n) && !(this.nativeMode && ts.isTypeLiteralNode(n.type)))
+      // reference enums, @structs and earlier structs exactly like a @struct class. A FILE-LEVEL
+      // `type X = error<{...}>` / `event<{...}>` declaration is likewise collected later
+      // (collectFileLevelErrorEvents, after structs). Skip both here.
+      if (ts.isTypeAliasDeclaration(n) && !(this.nativeMode && (ts.isTypeLiteralNode(n.type) || this.isErrorEventAliasRHS(n.type))))
         this.collectTypeAlias(n);
       ts.forEachChild(n, visit);
     };
@@ -5618,12 +5621,28 @@ export class Analyzer {
       this.diags.error(member, 'JETH353', `an ${kind} field declaration cannot carry decorator(s): ${strayDecs.map((d) => '@' + d).join(', ')}${kind === 'event' ? ' (only @anonymous is allowed)' : ''}`);
       return true;
     }
+    this.synthesizeErrorEventDecl(kind, member.name, args[0] as ts.TypeLiteralNode, member, decs.includes('anonymous'));
+    return true;
+  }
+
+  /** Shared core of the two native error/event declaration forms (a contract FIELD `X: error<{...}>` and
+   *  a FILE-LEVEL `type X = error<{...}>`): turn the object type's fields into ordered parameters
+   *  (`indexed<T>` unwraps to an @indexed param), synthesize the decorated bodyless method, and route it
+   *  through the SAME collectErrorDecl/collectEvent - every gate and the selector/topic0 encoding are the
+   *  decorator form's, byte-identical. */
+  private synthesizeErrorEventDecl(
+    kind: 'error' | 'event',
+    nameNode: ts.PropertyName,
+    lit: ts.TypeLiteralNode,
+    anchor: ts.Node,
+    anonymous: boolean,
+  ): void {
     const f = ts.factory;
     const params: ts.ParameterDeclaration[] = [];
-    for (const m of args[0]!.members) {
+    for (const m of lit.members) {
       if (!ts.isPropertySignature(m) || !m.name || !ts.isIdentifier(m.name) || !m.type || m.questionToken || (ts.getModifiers(m)?.length ?? 0) > 0) {
         this.diags.error(m, 'JETH353', `an ${kind} parameter must be a plain \`name: Type\` field (no methods, optional '?', or readonly)`);
-        return true;
+        return;
       }
       // an event field typed `indexed<T>` unwraps to an @indexed parameter of T.
       let pType: ts.TypeNode = m.type;
@@ -5632,26 +5651,63 @@ export class Analyzer {
         const inner = pType.typeArguments;
         if (!inner || inner.length !== 1) {
           this.diags.error(pType, 'JETH353', `indexed<T> takes exactly one type (e.g. indexed<address>)`);
-          return true;
+          return;
         }
         if (kind === 'error') {
           this.diags.error(pType, 'JETH129', `error parameter '${m.name.text}' cannot be indexed (only event parameters are indexed)`);
-          return true;
+          return;
         }
         paramDecs.push(this.synth(f.createDecorator(this.synth(f.createIdentifier('indexed'), m)), m));
         pType = inner[0]!;
       }
       params.push(this.synth(f.createParameterDeclaration(paramDecs.length ? paramDecs : undefined, undefined, m.name, undefined, pType, undefined), m));
     }
-    const kindDec = this.synth(f.createDecorator(this.synth(f.createIdentifier(kind), member)), member);
-    const anonDec = decs.includes('anonymous') ? [this.synth(f.createDecorator(this.synth(f.createIdentifier('anonymous'), member)), member)] : [];
+    const kindDec = this.synth(f.createDecorator(this.synth(f.createIdentifier(kind), anchor)), anchor);
+    const anonDec = anonymous ? [this.synth(f.createDecorator(this.synth(f.createIdentifier('anonymous'), anchor)), anchor)] : [];
     const synthDecl = this.synth(
-      f.createMethodDeclaration([kindDec, ...anonDec], undefined, member.name, undefined, undefined, params, undefined, undefined),
-      member,
+      f.createMethodDeclaration([kindDec, ...anonDec], undefined, nameNode, undefined, undefined, params, undefined, undefined),
+      anchor,
     );
     if (kind === 'error') this.collectErrorDecl(synthDecl);
     else this.collectEvent(synthDecl);
-    return true;
+  }
+
+  /** File-level error/event names declared via `type X = error<{...}>` / `type X = event<{...}>` - raised
+   *  BARE and positionally (`revert(X(...))` / `emit(X(...))`, exactly solc's file-level forms); the
+   *  member `this.X({...})` spelling is rejected for these (they are not contract members). */
+  private fileLevelErrorEvents = new Set<string>();
+
+  /** Is this type alias's RHS a native error/event marker (`error<...>` / `event<...>`)? Shared by the
+   *  branded-alias skip (collectTypeAliases) and the file-level collector below. */
+  private isErrorEventAliasRHS(t: ts.TypeNode): 'error' | 'event' | undefined {
+    if (ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && (t.typeName.text === 'error' || t.typeName.text === 'event')) {
+      return t.typeName.text as 'error' | 'event';
+    }
+    return undefined;
+  }
+
+  /** FILE-LEVEL error/event declarations (native mode): `type Insufficient = error<{ need: u256 }>;` at
+   *  the top level is the native spelling of solc's file-level `error Insufficient(uint256 need);`
+   *  (solc 0.8.4+) and `event ...` (solc 0.8.22+). Collected AFTER structs so parameter types may
+   *  reference any struct/enum regardless of declaration order. In a multi-file build they are exported /
+   *  imported like any type alias. */
+  private collectFileLevelErrorEvents(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isTypeAliasDeclaration(n)) {
+        const kind = this.isErrorEventAliasRHS(n.type);
+        if (kind) {
+          const args = (n.type as ts.TypeReferenceNode).typeArguments;
+          if (!args || args.length !== 1 || !ts.isTypeLiteralNode(args[0]!)) {
+            this.diags.error(n.type, 'JETH353', `${kind}<...> takes exactly one object type listing the parameters, e.g. \`type X = ${kind}<{ a: u256 }>\` (or \`${kind}<{}>\` for none)`);
+          } else {
+            this.synthesizeErrorEventDecl(kind, n.name, args[0] as ts.TypeLiteralNode, n, false);
+            this.fileLevelErrorEvents.add(n.name.text);
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
   }
 
   /** Item #9: is this contract PropertyDeclaration a plain @state storage field - either explicitly @state,
@@ -10257,6 +10313,15 @@ export class Analyzer {
     if (node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
     if (!ts.isIdentifier(node.expression.name)) return undefined;
     const name = node.expression.name.text;
+    // a FILE-LEVEL error/event is not a contract member: `this.X` is the member spelling; raise it bare.
+    if (this.fileLevelErrorEvents.has(name)) {
+      this.diags.error(
+        node.expression,
+        'JETH353',
+        `'${name}' is a file-level ${kind}; raise it bare and positionally: ${kind === 'error' ? `revert(${name}(...))` : `emit(${name}(...))`}`,
+      );
+      return null;
+    }
     let paramNameSets: string[][];
     if (kind === 'error') {
       const d = this.errorsByName.get(name);
