@@ -371,3 +371,84 @@ class-change and bytecode-drift detection; per-finding adversarial re-verificati
 the finder made a probe mistake). Probe pitfalls that produced false alarms: contract not named `C`;
 `bytes("aabbcc")` (6 ASCII chars) mirrored as `hex"aabbcc"` (3 bytes); missing `n` literal suffixes;
 JETH event/revert spellings are `emit(E(x))` / `revert(Bad(x))` (an `emit E(x)` probe is vacuous).
+
+## 2026-07-10 WHOLE-LANGUAGE AUDIT (native-mode emphasis): 1602 cases / 12 surfaces at 23a1515
+
+**8 bar violations found + FIXED (commits `cfad297` + `278020e` + `e779196`, each adversarially
+verified):** the attached-call evaluation-order MISCOMPILE (receiver was read before the args; solc
+legacy evaluates args first L-to-R, then the whole receiver - external delegatecall libraries are the
+exception, receiver first; both @using and self-convention channels now byte-identical);
+msg.data-in-receive OA (JETH471); bodyless native receive/fallback declarations materializing
+implemented entries OA (JETH472; the legal abstract bodyless-@virtual idiom is preserved);
+@nonReentrant-on-get OA (JETH473 - the legacy @view spelling already rejected JETH260; the non-get
+inferred lane is FLOORED to nonpayable ABI instead of rejected, verified byte-identical vs the solc
+transient-mutex twin); import-line silent parse-recovery (JETH476 - bundleImports now inspects every
+file's parseDiagnostics, 1011 exemption preserved); deep-expression stack-overflow crash -> clean
+JETH477 reject; unicode-identifier JETH901 ICE -> clean JETH478 parity reject (raw unicode STRING
+content stays accepted + byte-identical); decorator-on-VariableStatement silent side-effect drop ->
+JETH479 (declare-statements too).
+
+**New SAFE over-rejection rows (clean rejects, solc accepts; catalogue candidates from the audit -
+each has a verified workaround):**
+- **STR-EQ-LIT** (JETH074, the biggest usability item): string/bytes `==`/`!=` with a BARE literal
+  operand (`s == "hi"`) rejects in every position/mode; typed-vs-typed and the `string("hi")`/
+  `bytes("hi")` cast spellings work byte-identically (48-cell matrix). Lift = give the literal a type
+  from the sibling operand in the desugar.
+- **JETH477-DEPTH**: expression/statement nesting beyond the compiler's recursion budget (~2000-term
+  binary chains cold) is a clean reject; solc compiles. Deliberate robustness boundary.
+- **ABSTRACT-METHOD-DECL** (JETH375/374): TS `abstract f(): External<void>;` is not consumed as the
+  virtual bodyless declaration; spell it `@virtual f(): ...;` (byte-identical). Aligns with the
+  deferred implicit-virtual item.
+- **NATIVE-IFACE-EXTENDS** (JETH370): `interface I` is a call target, not an extendable base (v1
+  scope boundary); use `@interface class I` for extends.
+- **MANGLE-INJECT** (JETH373/434/044/065/374/375): a user identifier spelled like a `#` mangle
+  product (`$p$C$x`) fails CLOSED in all four spellings (never merges storage/dispatch).
+- **CONST-FWD-REF** (JETH048/065): constant initializers are declaration-order-dependent; solc's are
+  order-independent. Declare in dependency order.
+- **LIB-CONST / LIB-MEMBER-EVENT / LIB-MEMBER-ERROR** (JETH388/390 family): a library may not declare
+  constants or member events/errors (solc allows all three). Workarounds: hoist the constant;
+  file-level `type X = event<{...}>`/`error<{...}>` raised from lib fns is byte-identical incl logs +
+  revert data.
+- **BYTES-CONST** (JETH050): a `bytes`-typed constant rejects; string/bytesN constants are lifted.
+- **IMM-INIT-SHADOW** (JETH074, native only): an immutable initializer whose RHS reads a member of a
+  ctor local/param named exactly like the contract class; rename or stage through a temp. Fails
+  closed on the wrong-bind trap.
+- **PAREN-CALLEE** (JETH074): `(C.dbl)(4n)` / `(this.dbl)(4n)`; drop the parens.
+- **DEFAULT-ARG-CONST** (JETH250): `b: u256 = C.K` default param (JETH-only feature; C.K is foldable,
+  a plausible lift).
+- **NAMED-RAISE-EXCLUSIVITY** (JETH227/148): named-arg raise only via the member `this.X({...})`
+  form; file-level named `revert(Bad({...}))`/`emit(T({...}))` reject (bare object literals mean
+  struct literals - deliberate). Positional file-level raise is byte-identical.
+- **JETH434-DISAMBIGUABLE**: named-arg emit of an overloaded event rejects even when the key SET
+  uniquely selects an overload; the blanket is sound but narrowable.
+- **MEMBER-SHADOWS-FILE-EVENT** (JETH353): same-name different-signature member vs file-level event;
+  solc shadows with a warning. Sound anti-shadowing reject.
+- **MOD-SPECIAL-ENTRY** (JETH386): a @modifier on receive/fallback; solc accepts. Inline the guard.
+- **REDUNDANT-MARKER** (JETH385/386, test-pinned): `receive(): Payable<void>` / `fallback():
+  External<void>` markers are redundant and reject by design.
+- **WIDEN-RCVR** (JETH074): an attached call on a receiver narrower than the lib fn's first param
+  (u8 receiver on a u256 self).
+- **STR-ESC-ASTRAL** (JETH420/447): TS `\u{1F600}` code-point and surrogate-pair escapes reject; the
+  RAW character is accepted + byte-identical vs solc `unicode"..."` (lone surrogates stay sound
+  rejects - no valid-UTF-8 mirror exists).
+- **GET-EXTLIB-VIEW** (JETH043): a `get` accessor calling an External<T> (delegatecall) library fn -
+  JETH classifies any delegatecall as state-modifying; solc keeps `pure`. Drop `get` (byte-identical).
+- **NATIVE-GET-MUT-HEADROOM** (JETH378/352): a @virtual get inferring PURE cannot be overridden by a
+  view get (headroom inexpressible in the native get spelling); the legacy @view spelling works.
+- **STRUCT-FIELD-LENGTH** (JETH202): a struct field literally named `length` cannot be read (the
+  .length builtin check fires first); solc allows it.
+- **SPECIAL-NAME-METHOD** (JETH386/384/084): an ordinary external method NAMED receive/fallback is
+  rejected by the special-entry gates (solc: plain function + warning). Deliberate-protective.
+- **COMMA-FORUPDATE** (JETH073): a comma expression in a for-update clause (no solc comma operator;
+  parity-debatable).
+
+**OPEN - needs triage (pre-existing OA seen in passing, NOT fixed this round):** a NON-@abstract base
+class carrying a bodyless @virtual member (plain method or special entry) plus an implemented
+@override in the deployed entry compiles in JETH, while solc rejects the file ('Contract "B" should
+be marked as abstract'). Systemic to JETH's entry-contract model (non-entry bases are never
+deployed). Decide: require @abstract on any base with a bodyless @virtual member (parity reject), or
+document as a deliberate dialect boundary.
+
+Also confirmed in passing (safe, pre-existing): the JETH387 receive/fallback internal-call gate and
+the batch-C funcRefCall ordering are unregressed; solc-legacy stack-too-deep at 40 params is a
+LEGACY-WALL where JETH is strictly more capable (documented in distinctive-features section 4).
