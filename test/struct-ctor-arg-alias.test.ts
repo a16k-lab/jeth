@@ -259,3 +259,33 @@ describe('W6A: transient static captures stay accepted byte-identical (no regres
     }
   });
 });
+
+// The NOMINAL check on inline-constructor field args: `Outer(A(9n), 6n)` with a B-typed field used to
+// slip past the name check (the structNew early-return preceded it), accepting a struct-A image in a
+// struct-B slot - a field read past the passed struct's size read adjacent memory. solc rejects the twin
+// as not implicitly convertible. Surfaced by the v3 scoping sweep (easy to hit with cross-file same-named
+// structs), but single-file too.
+describe('wrong-struct inline constructor arg (nominal check)', () => {
+  const codes = (src: string): string[] => {
+    try { compile(src, { fileName: 'v.jeth' }); return []; } catch (e: any) { return e.diagnostics.map((d: any) => d.code); }
+  };
+  it('a wrong-named inline ctor arg rejects (JETH226), incl. the wider-field adjacent-read shape', () => {
+    expect(codes(`type A = { z: u256 };\ntype B = { q: u256 };\ntype Outer = { i: B; y: u256 };\nclass V { get f(): External<u256> { let o: Outer = Outer(A(9n), 6n); return o.y; } }`)).toContain('JETH226');
+    expect(codes(`type Small = { z: u256 };\ntype Wide = { a: u256; w: u256 };\ntype Outer = { i: Wide; y: u256 };\nclass V { get f(): External<u256> { let o: Outer = Outer(Small(9n), 6n); return o.i.w; } }`)).toContain('JETH226');
+    // the v3 cross-file shape: the entry's own same-named struct into a dep's field type
+    const d = (src: string, sources: Record<string, string>) => {
+      try { compile(src, { fileName: 'v.jeth', sources }); return []; } catch (e: any) { return e.diagnostics.map((x: any) => x.code); }
+    };
+    expect(d(`import { Outer } from "./d.jeth";\ntype Inner = { z: u256 };\nclass V { get f(): External<u256> { let o: Outer = Outer(Inner(9n), 6n); return o.y; } }`,
+      { 'd.jeth': `export type Inner = { a: u256; b: u256 };\nexport type Outer = { i: Inner; y: u256 };` })).toContain('JETH226');
+  });
+  it('same-struct inline ctors (flat + nested) and contextual object literals keep working', async () => {
+    const h = await Harness.create();
+    const r = compile(`type In = { a: u256 };\ntype Mid = { i: In; m: u256 };\ntype Out = { md: Mid; o: u256 };\nclass V { get f(): External<u256> { let v: Out = Out(Mid(In(1n), 2n), 3n); return v.md.i.a + v.md.m + v.o; } }`, { fileName: 'v.jeth' });
+    const a = await h.deploy(r.creationBytecode);
+    expect(BigInt((await h.call(a, sel('f()'))).returnHex)).toBe(6n);
+    const r2 = compile(`type B = { q: u256 };\ntype Outer = { i: B; y: u256 };\nclass V { get f(): External<u256> { let o: Outer = Outer({ q: 4n }, 6n); return o.i.q + o.y; } }`, { fileName: 'v.jeth' });
+    const a2 = await h.deploy(r2.creationBytecode);
+    expect(BigInt((await h.call(a2, sel('f()'))).returnHex)).toBe(10n);
+  });
+});

@@ -9124,7 +9124,11 @@ export class Analyzer {
       const a = this.checkExpr(argNode, f.type);
       if (!a) return undefined;
       const sameStruct = a.type.kind === 'struct' && a.type.name === f.type.name;
-      if (a.kind === 'structNew') return a; // an inline constructor
+      // an inline constructor - of the SAME struct only. This early return used to skip the nominal
+      // check entirely, so `Outer(A(9n), 6n)` with a B-typed field accepted a struct-A image (and a
+      // field read past the passed struct's size read adjacent memory); solc rejects the twin as not
+      // implicitly convertible. A wrong-named constructor now falls through to the JETH226 mismatch.
+      if (a.kind === 'structNew' && sameStruct) return a;
       // a non-inline value of the same struct type.
       // A STATIC field passes through; codegen either copies it (a storage/calldata source - solc
       // copies those too) or REJECTS an aliasable memory source in a persistent context (W6A
