@@ -368,6 +368,10 @@ export class Analyzer {
   // internal/private function may read it at any non-pure mutability (solc parity). Default strict
   // (true) so constructors / field initializers keep requiring @payable.
   private currentExternallyReachable = true;
+  // The special-entry KIND whose body is being checked (set/cleared by checkSpecialEntry only). A
+  // receive body must not touch msg.data (solc: '"msg.data" cannot be used inside of "receive"
+  // function' - a plain ether transfer carries no calldata); a fallback body keeps msg.data.
+  private currentSpecialEntry: 'receive' | 'fallback' | undefined;
   // internal-call support (G8): the function registry (built before bodies so calls can
   // forward-reference), plus per-function direct-effect / callee tracking for the
   // transitive-purity fixpoint and the set of names actually called internally.
@@ -2541,12 +2545,33 @@ export class Analyzer {
         // author wrote no @view/@pure/@payable/@read. It is codegen-neutral (view/pure/nonpayable emit
         // identical bytecode; only @payable differs) - it just sets the ABI stateMutability to match an
         // idiomatic solc contract that DECLARES view/pure. @payable / @view / @pure / @read are untouched.
-        const m: Mutability = e.writes ? 'nonpayable' : e.reads || e.readsEnv ? 'view' : 'pure';
+        // JETH260 family, native inference: the @nonReentrant mutex TSTOREs, so a guarded function IS
+        // state-mutating regardless of its body - it must never resolve to view/pure (the ABI would
+        // claim read-only while every staticcall/eth_call of the entry REVERTS on the mutex write).
+        // A guarded non-`get` method therefore floors at nonpayable, exactly the ABI of its explicit
+        // solc twin (a tstore modifier on an undeclared-mutability function); byte-identical on every
+        // call kind (a staticcall reverts on the tstore in BOTH compilers). The explicit-decorator
+        // spellings are already rejected at collection (JETH260); the `get` accessor - read-only BY
+        // CONTRACT, so re-flooring would silently break its promise - rejects loudly below (JETH473).
+        const m: Mutability = e.writes || f.nonReentrant ? 'nonpayable' : e.reads || e.readsEnv ? 'view' : 'pure';
         f.mutability = m;
         e.rf.mutability = m;
         // Item #8: a `get` accessor promises read-only; a getter that (transitively) writes is a hard error.
         if (e.rf.isGetter && e.writes)
           this.diags.error(e.rf.node, 'JETH043', `a 'get' accessor '${e.rf.name}' may not modify state (write to storage or emit an event); a getter is read-only`);
+        // JETH260 family, native path: @nonReentrant on a `get` accessor. A `get` promises READ-ONLY
+        // (its ABI mutability is view/pure), but the guard performs a TSTORE, so every staticcall
+        // (eth_call) of the accessor would REVERT on the mutex write while the ABI claims view -
+        // wrong-bytes territory (solc likewise rejects a state-modifying modifier on a view function).
+        // The explicit-decorator spellings are already rejected at collection (JETH260); this closes
+        // the native accessor bypass. A writing @nonReentrant method stays accepted, and a guarded
+        // non-`get` method floors at nonpayable above.
+        if (f.nonReentrant && e.rf.isGetter)
+          this.diags.error(
+            e.rf.node,
+            'JETH473',
+            `@nonReentrant on 'get' accessor '${e.rf.name}': a get is read-only (its ABI claims view/pure) but a reentrancy guard writes transient storage, so every staticcall of it would revert; remove @nonReentrant or make it a state-mutating method`,
+          );
         // Item #10: External<T> is the WRITER form - a READ-ONLY external function is spelled `get`
         // (known only after the fixpoint, since mutability is inferred). A virtual reader chain is
         // `@virtual get f()`; override HEADROOM (a base whose override may write) is a BODYLESS
@@ -4671,6 +4696,20 @@ export class Analyzer {
    *  (the raw-bytes fallback is gated, JETH384). Both reject @view/@pure/@external/etc. */
   private checkSpecialEntry(member: ts.MethodDeclaration, kind: 'receive' | 'fallback', owner?: string): SpecialEntryIR | undefined {
     const decs = decoratorNames(member);
+    // A BODYLESS special entry reaching here is the override WINNER (most-derived declaration in the
+    // linearization), so the deployed contract would materialize an IMPLEMENTED empty receive/fallback
+    // out of a mere declaration - solc instead rejects the contract as abstract ('Contract "C" should
+    // be marked as abstract.'). Reject loudly. The legal solc abstract idiom (a bodyless @virtual
+    // entry in an @abstract base OVERRIDDEN by an implemented one in the deployed contract) never
+    // reaches this path: the implemented override is the winner and is the member checked here.
+    if (!member.body) {
+      this.diags.error(
+        member,
+        'JETH472',
+        `a ${kind} entry requires a body: a bodyless declaration would leave the contract abstract (solc: 'Contract should be marked as abstract'); implement the ${kind} in the deployed contract`,
+      );
+      return undefined;
+    }
     let payable = kind === 'receive'; // @receive is always payable
     // Native marker on a special entry: `fallback(): Payable<void>` (or `Payable<bytes>` for the
     // data-passing form) = a payable fallback, consistent with the method-marker language. A receive is
@@ -4845,6 +4884,7 @@ export class Analyzer {
     this.currentDefiningContract = owner;
     const savedNs = this.restrictNamespaceTo(owner);
     const body: Stmt[] = [];
+    this.currentSpecialEntry = kind;
     try {
       if (member.body) {
         this.pushScope();
@@ -4852,6 +4892,7 @@ export class Analyzer {
         this.popScope();
       }
     } finally {
+      this.currentSpecialEntry = undefined;
       this.restoreNamespace(savedNs);
       this.bodyOwnerContract = savedBodyOwner;
     }
@@ -18462,6 +18503,21 @@ export class Analyzer {
     // msg.data: the complete calldata as `bytes` (selector included). Like msg.sig it is calldata,
     // so it is allowed even in @pure (no env/state read). Modeled as a calldata bytes view.
     if (obj === 'msg' && field === 'data') {
+      // solc parity: '"msg.data" cannot be used inside of "receive" function.' - a receive runs only
+      // on an EMPTY-calldata ether transfer, so msg.data is meaningless there. This single gate covers
+      // every msg.data form (.length, [i], .slice, keccak256(msg.data), ...) because the msgData expr
+      // is only ever minted here. msg.sig / msg.value / msg.sender stay allowed (solc accepts them),
+      // and a fallback keeps msg.data.
+      if (this.currentSpecialEntry === 'receive') {
+        // record the error but still return the expr: peek-rollback consumers (e.g. the .slice
+        // resolver) re-check the receiver on commit, so the reject stays a single clean JETH471
+        // instead of cascading into a generic handler-miss code.
+        this.diags.error(
+          node,
+          'JETH471',
+          `'msg.data' cannot be used inside a receive entry (a plain ether transfer has no calldata); use a fallback to inspect calldata`,
+        );
+      }
       return { kind: 'msgData', type: { kind: 'bytes' } };
     }
     const entry = GLOBALS[obj]?.[field];
