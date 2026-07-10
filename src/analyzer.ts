@@ -8818,7 +8818,11 @@ export class Analyzer {
           if (r !== 'no-match') {
             if (r)
               out.push(
-                r.kind === 'call' ? { kind: 'callStmt', fn: r.fn, args: r.args } : { kind: 'exprStmt', expr: r },
+                r.kind === 'call'
+                  ? // carry the attached-receiver marker: statement position keeps the same
+                    // args-before-receiver evaluation order (solc legacy, pinned R15).
+                    { kind: 'callStmt', fn: r.fn, args: r.args, ...(r.attachedRecv ? { attachedRecv: true as const } : {}) }
+                  : { kind: 'exprStmt', expr: r },
               );
             return;
           }
@@ -14130,7 +14134,7 @@ export class Analyzer {
     if (applicable.length === 0) {
       // Receiver type matched but no overload accepts these args. If there is a SINGLE attached fn,
       // surface its arity/type mismatch (matches an internal-call diagnostic); otherwise fall through.
-      if (list.length === 1) return this.buildLibraryCall(node, list[0]!, argExprs, asStatement);
+      if (list.length === 1) return this.buildLibraryCall(node, list[0]!, argExprs, asStatement, true);
       return 'no-match';
     }
     let callee = applicable[0]!;
@@ -14147,7 +14151,7 @@ export class Analyzer {
         return undefined;
       }
     }
-    return this.buildLibraryCall(node, callee, argExprs, asStatement);
+    return this.buildLibraryCall(node, callee, argExprs, asStatement, true);
   }
 
   /** Resolve an overload of a library function `name` from `candidates` against `node.arguments`
@@ -14252,6 +14256,7 @@ export class Analyzer {
     callee: RawFunction,
     argExprs: ts.Expression[],
     asStatement: boolean,
+    attached = false,
   ): Expr | undefined {
     // A library function is never @payable/@nonReentrant (gated at collection). An @external library
     // function is a DELEGATECALL (Phase B); a bare one is inlined (Phase A). Both share the same param/
@@ -14345,7 +14350,13 @@ export class Analyzer {
     const key = this.fkey(callee);
     this.currentCallees.add(key);
     this.internallyCalled.add(key);
-    return { kind: 'call', type: rt, fn: key, args };
+    // An ATTACHED internal library call (`recv.fn(rest...)`) evaluates its explicit ARGUMENTS first,
+    // THEN the receiver (args[0]) - solc's legacy argument-before-bound-expression order, empirically
+    // pinned at 0.8.35 across storage/mapping/call-result/indexed/struct/bytes receivers (value AND
+    // statement position; nested attachments compose recursively). A QUALIFIED call L.fn(a, b) keeps
+    // plain left-to-right. An @external (delegatecall) attached call is NOT marked: solc evaluates
+    // ITS receiver FIRST (the external function-expression order), which is already the encode order.
+    return attached ? { kind: 'call', type: rt, fn: key, args, attachedRecv: true } : { kind: 'call', type: rt, fn: key, args };
   }
 
   /** Phase B: build the delegatecall expression for an @external library function. `args` are the

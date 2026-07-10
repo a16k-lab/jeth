@@ -2576,7 +2576,9 @@ ${indent(runtime, 6)}
         // Batch C (F-MULTIRET m1b): a MULTI-VALUE-return callee binds its N return values to unused
         // temps (`let r0, r1 := userfn(...)`) - a bare call / pop() of a multi-return Yul function
         // is a type error; the components are simply dropped, exactly solc's discarded tuple call.
-        const args = this.lowerCallArgs(s.args, ctx, out);
+        // An ATTACHED library call statement evaluates its receiver (args[0]) LAST (solc legacy
+        // order, pinned in statement position too; lowerCallArgs).
+        const args = this.lowerCallArgs(s.args, ctx, out, s.attachedRecv === true);
         const call = `${this.userFnName(s.fn)}(${args.join(', ')})`;
         const rts = this.funcs.get(s.fn)?.returnTypes;
         if (rts && rts.length >= 2) {
@@ -3523,8 +3525,9 @@ ${indent(runtime, 6)}
       }
       case 'call': {
         // internal/private function call yielding a value: evaluate args (left-to-right,
-        // each frozen into a temp), then the Yul function call IS the value.
-        const args = this.lowerCallArgs(e.args, ctx, out);
+        // each frozen into a temp), then the Yul function call IS the value. An ATTACHED
+        // library call evaluates its receiver (args[0]) LAST (solc legacy order; lowerCallArgs).
+        const args = this.lowerCallArgs(e.args, ctx, out, e.attachedRecv === true);
         return `${this.userFnName(e.fn)}(${args.join(', ')})`;
       }
       case 'funcRef': {
@@ -13997,9 +14000,15 @@ ${indent(runtime, 6)}
   /** Evaluate internal-call arguments LEFT-to-RIGHT (solc order), freezing each into a fresh
    *  temp so a later arg's side effect cannot disturb an earlier arg's already-computed value.
    *  A STATIC struct argument is passed by reference (its memory pointer); a freshly constructed
-   *  one (structNew) is allocated to memory first. */
-  private lowerCallArgs(args: Expr[], ctx: LowerCtx, out: string[]): string[] {
-    return args.map((a) => {
+   *  one (structNew) is allocated to memory first.
+   *  recvLast: an ATTACHED library call (`recv.fn(rest...)`, args[0] = the receiver) evaluates the
+   *  EXPLICIT args first (left-to-right), THEN the whole receiver expression - solc's legacy
+   *  argument-before-bound-expression order (the same rule the funcRefCall Batch C fix pinned for a
+   *  call's function expression), empirically pinned at 0.8.35 across storage / mapping / call-result
+   *  / side-effecting-index / struct / bytes receivers. The RETURNED temp order is unchanged (the
+   *  receiver stays parameter 0); only the emitted evaluation order moves. */
+  private lowerCallArgs(args: Expr[], ctx: LowerCtx, out: string[], recvLast = false): string[] {
+    const lowerOne = (a: Expr): string => {
       // an aggregate arg (struct / dynamic value array / bytes / string) is passed BY MEMORY
       // REFERENCE (alias for a memory source, fresh copy for storage/calldata/literal); a value arg
       // is a plain register.
@@ -14013,7 +14022,12 @@ ${indent(runtime, 6)}
       const t = this.fresh();
       out.push(`let ${t} := ${reg}`);
       return t;
-    });
+    };
+    if (recvLast && args.length > 1) {
+      const rest = args.slice(1).map(lowerOne);
+      return [lowerOne(args[0]!), ...rest];
+    }
+    return args.map(lowerOne);
   }
 
   /** Evaluate a tuple destructuring source into one value register per component (left-to-right).

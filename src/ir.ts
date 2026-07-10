@@ -97,7 +97,11 @@ export type Expr =
       unchecked: boolean;
     } // x++ / ++x in value position
   | { kind: 'assignExpr'; type: JethType; target: LValue; value: Expr } // (x = v)/(x += v) in value position: stores value, yields it
-  | { kind: 'call'; type: JethType; fn: string; args: Expr[] } // internal/private function call f(args) yielding a value
+  // internal/private function call f(args) yielding a value. attachedRecv marks an ATTACHED library
+  // call (`recv.fn(rest...)`, @using or the native self convention) whose args[0] is the receiver:
+  // solc's legacy pipeline evaluates the explicit ARGUMENTS first (left-to-right), THEN the receiver
+  // expression, so codegen must lower args[1..] before args[0] (parameter order is unchanged).
+  | { kind: 'call'; type: JethType; fn: string; args: Expr[]; attachedRecv?: true }
   // An INTERNAL FUNCTION-POINTER VALUE: taking the address of an internal function (`this.inc` / bare
   // `inc`). `fn` is the callee's fkey; codegen lowers it to the function's stable small integer id.
   // The `type` is the funcref signature type.
@@ -553,7 +557,9 @@ export type Stmt =
   | { kind: 'localDecl'; name: string; type: JethType; init?: Expr }
   | { kind: 'assign'; target: LValue; value: Expr } // plain `=` (value already folds compound ops)
   | { kind: 'exprStmt'; expr: Expr }
-  | { kind: 'callStmt'; fn: string; args: Expr[] } // internal call as a statement (void or discarded value)
+  // internal call as a statement (void or discarded value). attachedRecv: see the 'call' Expr - an
+  // attached library call's receiver (args[0]) evaluates AFTER the explicit args (solc legacy order).
+  | { kind: 'callStmt'; fn: string; args: Expr[]; attachedRecv?: true }
   | { kind: 'deleteStmt'; target: LValue } // `delete x`: reset a storage bytes/string/struct/array (whole mapping = no-op) to its zero value
   | { kind: 'tupleDecl'; names: (string | null)[]; types: JethType[]; source: DestructureSource } // `let [a, , c] = src` (new locals; null = skipped)
   | { kind: 'tupleAssign'; targets: (LValue | null)[]; source: DestructureSource } // `[a, , c] = src` (existing lvalues; null = skipped)
