@@ -126,27 +126,49 @@ Likely-deliberate singleton: trailing-hole destructure `let [p, ] = g(a, b)` (JE
 parses `[p,]` as 1 element, so JETH sees an arity mismatch; the leading-hole form `let [, q]` is
 lifted and byte-identical).
 
-## Liftable over-rejections: two small ones from the v3 scoping sweep (2026-07-10)
+## RETIRED 2026-07-10: the two v3-sweep liftables are LIFTED (both byte-identical, adversarially verified)
 
-Both PRE-EXISTING (single-file, identical multi-file), both LOUD rejects, found in passing by the v3
-per-file declaration-scoping adversarial sweep (1047 cases, 0 MC / 0 OA / 0 crash for v3 itself):
+- **ICE-LIB-SIG - LIFTED** (`7b144e9`): the cross-library delegatecall entry is no longer pulled
+  into the caller library's object, so a caller-lib external fn sharing a signature with a called
+  external-lib fn compiles and dispatches its OWN body. Verified over a 40+-cell deploy+link
+  differential (canonical chain, 3-level, same-sig diamond, fan-out, overloads, revert-data parity,
+  native `static class` spelling, own-uncalled-same-sig anti-miscompile cell); dual-commit drift
+  showed only the removed stray dispatcher case. Regression net: `test/library-cross-sig.test.ts`.
+  Noted in passing (pre-existing, unchanged): an INTRA-library external->external call compiles to a
+  SELF linkersymbol that the standard bottom-up deploy flow refuses loudly (solc emits an internal
+  jump) - a safe, undeployable-not-wrong-bytes corner.
+- **USING-ON-ABSTRACT - LIFTED, and the whole `@using` ownership model made LEXICAL at solc parity**
+  (3-commit stack `d1a9854` + `68245e5` + `3a74e99`, landed as one range): per-class @using maps
+  (deployed + every abstract base), owner-only `attachedFnsFor` (no deployed-map fall-through), the
+  native `self`-convention kept file-wide by design in its own map. The lift itself: `@using(L)` on
+  `@abstract` consumed for the base's OWN bodies (both decorator orders), incl. base ctors, generics
+  declared in the base, and JETH391 arg validation. The lexical redesign also CLOSED, in the same
+  stack, bar violations that were live at base `2a48186`:
+  - over-acceptances R1/R2/R5 + MIN-R4 family (bodies of other classes reaching the DEPLOYED
+    contract's @using map; solc: Member not found) - now clean both-rejects;
+  - MISCOMPILE MOD1: a base-declared `@modifier` body resolved via the deployed map (1007 vs solc
+    2007) - modifier bodies now owned by their DECLARING class (MOD2 over-rejection lifted, 2009);
+  - MISCOMPILE base-ctor ARGS: a mid-level `super(seed.tag())` arg resolved via the deployed map
+    (1007 vs solc 2007) - provider-class ownership (heritage form included), sibling over-rejection
+    lifted (2004);
+  - MISCOMPILE inline `@immutable` initializers: a base-declared initializer resolved via the
+    deployed map (1009 vs solc 2009; 3-level pins the DECLARING class, 3013) - per-field
+    declaring-class owner windows in `immutableInitStmts`.
+  Final adversarial verify: zero MC / zero OA across the family; leak hunt over every remaining body
+  context (event/error raises, ctor-invoked base methods, 3-class chains, generics, accessors,
+  triple-window composition) all MATCH; receive/fallback proven unreachable (gated by JETH387).
+  Boundary kept (parity both-reject): the CHILD writing an inherited attachment directly (solc does
+  not inherit `using`). Regression net: `test/using-on-abstract.test.ts` (40 cells).
 
-- **ICE-LIB-SIG (JETH901 internal-compiler-error surface)**: an EXTERNAL library whose own external
-  fn shares a signature with an external-library fn it CALLS in another external library dies in the
-  Yul backend with `DeclarationError: Duplicate case "0x6e9410b6"` - the callee's delegatecall
-  wrapper is emitted as a second dispatcher case colliding with the caller's own external fn of the
-  same selector. solc accepts the equivalent (`library High { function m(uint256 x) public ... {
-  return Low.m(x) * 2; } }`). Trigger is exactly caller-lib-own-external-sig ==
-  called-external-lib-fn-sig; distinct names, same-sig-but-uncalled, and a contract calling two
-  same-sig libs are all fine. Lift = scope/suffix the callee wrapper out of the dispatcher switch;
-  until then a loud (if ugly) reject, not a bar violation.
-- **USING-ON-ABSTRACT (cryptic JETH074)**: `@using(L)` on an `@abstract` class is not consumed and
-  falls through as `unsupported expression: CallExpression` at the class line. solc allows `using L
-  for T;` inside an abstract contract. PRECISION (2026-07-10 audit): the OR is exactly the
-  attached-call-used-WITHIN-the-abstract-class shape (an inherited helper); the spelling where the
-  CHILD writes the attached call directly is a parity both-reject (solc does not inherit
-  contract-level `using` directives). Lift = consume @using on abstract bases for the base's own
-  bodies only, or at minimum emit a targeted "attachments live on @contract/@library" diagnostic.
+Safe over-rejections seen in passing during these lifts (pre-existing, clean, uncatalogued before):
+
+- **USING-ON-LIBRARY (JETH074)**: `@using(M)` on a `@library` is not consumed (solc accepts `using`
+  inside a library body). In-file, a library body's only attachment source is the self-convention.
+- **JETH387 receive/fallback internal-call gate**: a `@receive`/`@fallback` body may not call ANY
+  internal fn (attachment calls included); solc accepts. Placement-independent, fully gates that
+  surface.
+- **JETH065 accessor property-read**: reading an internal `get` accessor with property syntax
+  (`this.x` instead of `this.x()`) rejects even same-class with no @using; call syntax works.
 
 The 19-shape tier list plus the F-RESID family are all lifted (batches A-D) or reclassified. The
 final verification found that `@state o: Outer` (a storage funcref-bearing struct) is already fully
