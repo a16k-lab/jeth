@@ -3026,18 +3026,31 @@ export class Analyzer {
     for (const [lib, fns] of this.libraryByName) {
       for (const rf of fns) libOf.set(this.fkey(rf), lib);
     }
+    // EVERY @external library fn key (any library). A call to one is ALWAYS a delegatecall executed in
+    // the callee library's OWN object (buildLibraryExtCallRaw), so the call-graph edge to it is a purity
+    // edge, not an internal-call edge: never pull the callee (or anything behind it) into THIS object.
+    // Including it used to emit the callee as a second dispatcher case in the CALLER library's runtime,
+    // which is a duplicate Yul `case` (backend DeclarationError -> JETH901) whenever the caller has an
+    // own external fn of the SAME signature (High.m delegatecalls Low.m), and a stray extra selector
+    // (absent from solc's library) when the signatures differ.
+    const delegateEntryKeys = new Set<string>();
+    for (const fns of this.libraryByName.values()) {
+      for (const rf of fns) if (rf.libraryExternal) delegateEntryKeys.add(this.fkey(rf));
+    }
     const out: LibraryIR[] = [];
     for (const lib of [...this.referencedExternalLibraries].sort()) {
       const externalKeys = (this.libraryByName.get(lib) ?? [])
         .filter((rf) => rf.libraryExternal)
         .map((rf) => this.fkey(rf));
       // BFS over internal-call edges from the external entries; collect the reachable LIBRARY functions.
+      // A delegatecall entry is NOT an internal-call edge (see delegateEntryKeys above): skip it and do
+      // not traverse through it (its callees run in the callee library's object, behind the delegatecall).
       const reachable = new Set<string>();
       const stack = [...externalKeys];
       while (stack.length) {
         const k = stack.pop()!;
         for (const c of callGraph.get(k) ?? []) {
-          if (reachable.has(c)) continue;
+          if (reachable.has(c) || delegateEntryKeys.has(c)) continue;
           reachable.add(c);
           stack.push(c);
         }
