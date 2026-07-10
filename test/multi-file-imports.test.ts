@@ -101,3 +101,42 @@ describe('multi-file imports', () => {
     expect(d.some((x) => x.endsWith('@dep.jeth:2'))).toBe(true); // `this` in a library fn, at dep.jeth line 2
   });
 });
+
+// Hardening from the adversarial sweep (368 cases, 7 confirmed bar-violations, all closed). Three were
+// PRE-EXISTING single-file holes that bundling amplified into silent cross-file wrong-binding.
+describe('multi-file hardening (verification sweep)', () => {
+  it('duplicate contract/abstract/library class names reject (JETH037) - the last-wins hole is closed', () => {
+    // cross-file: a named import must never silently bind to a DIFFERENT file's same-named declaration.
+    expect(diag(`import { Base } from "./a.jeth";\nimport { Other } from "./b.jeth";\nclass C extends Base { get f(): External<u256> { return this.v(); } }`,
+      { 'a.jeth': `export abstract class Base { v(): u256 { return 1n; } }`, 'b.jeth': `export abstract class Base { v(): u256 { return 2n; } }\nexport abstract class Other { }` }))
+      .toEqual(['JETH037@b.jeth:1']);
+    // the pre-existing single-file pairs (last silently won before): abstract+abstract, static+contract,
+    // abstract+contract, static+abstract - all now "Identifier already declared" like solc.
+    const codes = (src: string) => { try { compile(src, { fileName: 'C.jeth' }); return []; } catch (e: any) { return e.diagnostics.map((d: any) => d.code); } };
+    expect(codes(`abstract class B { v(): u256 { return 1n; } } abstract class B { v(): u256 { return 2n; } } class C extends B { get f(): External<u256> { return this.v(); } }`)).toContain('JETH037');
+    expect(codes(`static class V { k(): u256 { return 1n; } } class V { get f(): External<u256> { return 1n; } }`)).toContain('JETH037');
+    expect(codes(`abstract class V { } class V { get f(): External<u256> { return 1n; } }`)).toContain('JETH037');
+  });
+
+  it('a class shadowing a builtin global (msg/abi/block/tx) rejects (JETH038) - no split-brain binding', () => {
+    const codes = (src: string) => { try { compile(src, { fileName: 'C.jeth' }); return []; } catch (e: any) { return e.diagnostics.map((d: any) => d.code); } };
+    expect(codes(`static class abi { encode(x: u256): u256 { return x; } } class C { get f(): External<u256> { return abi.encode(1n); } }`)).toContain('JETH038');
+    expect(diag(`import { msg } from "./d.jeth";\nclass C { get f(): External<u256> { return 1n; } }`, { 'd.jeth': `export static class msg { sender(): u256 { return 7n; } }` }))
+      .toContain('JETH038@d.jeth:1');
+  });
+
+  it('a block-wrapped contract in a dep is caught (recursive scan) - no silent artifact replacement', () => {
+    expect(diag(`import { T } from "./dep.jeth";\nclass Vault { x: u256; get getX(): External<u256> { return this.x; } }`,
+      { 'dep.jeth': `export type T = { a: u256 };\n{ @contract class Rogue { @external @view g(): u256 { return 99n; } } }` }))
+      .toEqual(['JETH036@dep.jeth:2']);
+  });
+
+  it('a lone-CR file ending does not shift later diagnostic mapping; ambiguous sources keys reject', () => {
+    expect(diag(`import { A } from "./a.jeth";\nimport { B } from "./b.jeth";\nclass C { get f(): External<u256> { return A.fa() + B.fb(); } }`,
+      { 'a.jeth': "export static class A { fa(): u256 { return 1n; } }\r", 'b.jeth': `export static class B {\n  fb(): u256 { return this.x; }\n}` })
+      .some((x) => x.endsWith('@b.jeth:2'))).toBe(true);
+    expect(diag(`import { T } from "./a.jeth";\nclass C { get f(p: T): External<u256> { return p.a; } }`,
+      { 'a.jeth': `export type T = { a: u256 };`, './a.jeth': `export type T = { a: bool };` })
+      .some((x) => x.startsWith('JETH036'))).toBe(true);
+  });
+});

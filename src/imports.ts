@@ -131,20 +131,25 @@ function classDecoratorNames(cls: ts.ClassDeclaration): string[] {
  *  a second deployable (JETH041 confusion). Libraries / types / interfaces / abstract bases are the
  *  importable kinds. */
 function rejectDepContracts(file: string, sf: ts.SourceFile, nativeMode: boolean): void {
-  for (const s of sf.statements) {
-    if (!ts.isClassDeclaration(s)) continue;
-    const decs = classDecoratorNames(s);
-    if (decs.some((d) => DEPLOYABLE_DECORATORS.has(d))) {
-      fail(file, sf, s, `an imported file cannot declare a deployed contract ('${s.name?.text ?? '<anon>'}'); only libraries, types, interfaces, and abstract bases are importable - the contract lives in the entry file`);
+  // RECURSIVE walk: the analyzer's contract discovery is recursive too, so a class hidden inside a nested
+  // block (`{ @contract class Rogue {} }`) would otherwise smuggle a deployed contract past a top-level-only
+  // scan - and a decorated dep contract would then silently REPLACE the entry's contract as the artifact.
+  const visit = (s: ts.Node): void => {
+    if (ts.isClassDeclaration(s)) {
+      const decs = classDecoratorNames(s);
+      if (decs.some((d) => DEPLOYABLE_DECORATORS.has(d))) {
+        fail(file, sf, s, `an imported file cannot declare a deployed contract ('${s.name?.text ?? '<anon>'}'); only libraries, types, interfaces, and abstract bases are importable - the contract lives in the entry file`);
+      }
+      const mods = ts.getModifiers(s) ?? [];
+      const isAbstract = mods.some((m) => m.kind === ts.SyntaxKind.AbstractKeyword);
+      const isStatic = mods.some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+      if (nativeMode && !isAbstract && !isStatic && !decs.some((d) => NON_CONTRACT_KIND_DECORATORS.has(d))) {
+        fail(file, sf, s, `an imported file cannot declare a concrete contract class ('${s.name?.text ?? '<anon>'}'); make it \`abstract\` (a base), \`static\` (a library), or move it to the entry file`);
+      }
     }
-    if (!nativeMode) continue; // decorator mode: bare classes were always inert
-    const mods = ts.getModifiers(s) ?? [];
-    const isAbstract = mods.some((m) => m.kind === ts.SyntaxKind.AbstractKeyword);
-    const isStatic = mods.some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
-    if (!isAbstract && !isStatic && !decs.some((d) => NON_CONTRACT_KIND_DECORATORS.has(d))) {
-      fail(file, sf, s, `an imported file cannot declare a concrete contract class ('${s.name?.text ?? '<anon>'}'); make it \`abstract\` (a base), \`static\` (a library), or move it to the entry file`);
-    }
-  }
+    ts.forEachChild(s, visit);
+  };
+  ts.forEachChild(sf, visit);
 }
 
 /** Blank a [start,end) span in `text`, preserving newlines so every line keeps its number and layout. */
@@ -170,8 +175,22 @@ function countLines(s: string): number {
  */
 export function bundleImports(entryText: string, entryFile: string, sources: Record<string, string>): BundleResult {
   const entryMode = isDecoratorModeSource(entryText);
+  // Normalize line endings up front (\r\n and lone \r -> \n): line/column numbering is unchanged, but the
+  // bundle join becomes safe - a file ENDING in a lone \r would otherwise merge with the join's \n into ONE
+  // \r\n terminator while the segment math counted two lines, shifting every later file's diagnostics.
+  const normalizeEol = (s: string): string => s.replace(/\r\n?/g, '\n');
   const byPath = new Map<string, string>();
-  for (const [k, v] of Object.entries(sources)) byPath.set(normalizePath(k), v);
+  for (const [k, v] of Object.entries(sources)) {
+    const nk = normalizePath(k);
+    const nv = normalizeEol(v);
+    const prior = byPath.get(nk);
+    if (prior !== undefined && prior !== nv) {
+      throw new CompileError([
+        { severity: 'error', code: 'JETH036', message: `ambiguous sources: two keys normalize to '${nk}' with different contents (e.g. 'x.jeth' and './x.jeth'); provide one`, file: k, line: 1, column: 1, length: 1 },
+      ]);
+    }
+    byPath.set(nk, nv);
+  }
   const entryKey = normalizePath(entryFile);
 
   const order: { file: string; text: string }[] = [];
@@ -243,7 +262,7 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
     order.push({ file: displayName, text: blanked });
   };
 
-  visit(entryKey, entryFile, entryText, true);
+  visit(entryKey, entryFile, normalizeEol(entryText), true);
 
   const segments: BundleSegment[] = [];
   let line = 1;

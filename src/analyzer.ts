@@ -565,6 +565,7 @@ export class Analyzer {
     this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
     if (this.nativeMode) this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
     this.rejectImplementsClauses(); // a silently-ignored `implements` clause skipped interface obligations
+    this.checkClassNamespaceCollisions(); // duplicate contract/abstract/library names + builtin-global shadows
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
     const classes = this.findContractClasses();
     if (classes.length === 0) {
@@ -1310,6 +1311,47 @@ export class Analyzer {
   private static readonly CLASS_KIND_DECORATORS = [
     'contract', 'struct', 'interface', 'abstract', 'library', 'proxy', 'beacon', 'facet', 'diamond',
   ];
+
+  /** All top-level-namespace CLASS declarations - the deployed contract (bare / @contract-family),
+   *  abstract bases (keyword or @abstract), and libraries (static class / @library) - share ONE identifier
+   *  namespace (solc: "Identifier already declared"). Previously a duplicate silently LAST-WON (the
+   *  registries overwrote), so `abstract class B` declared twice bound every `extends B` to the later one -
+   *  and with multi-file imports, a NAMED IMPORT could silently bind to a DIFFERENT file's declaration.
+   *  @struct/@interface classes are TYPE declarations with their own namespaces + duplicate checks. Also
+   *  rejects a class named like a builtin GLOBAL (msg/abi/block/tx): `static class msg` would split-brain -
+   *  `msg.sender()` calling the library while `msg.sender` still reads the builtin. */
+  private checkClassNamespaceCollisions(): void {
+    const seen = new Map<string, string>();
+    const BUILTIN_GLOBALS = new Set(['msg', 'abi', 'block', 'tx']);
+    const kindOf = (cls: ts.ClassDeclaration): string | undefined => {
+      const decs = decoratorNames(cls);
+      if (decs.includes('struct') || decs.includes('interface')) return undefined; // typed namespaces, own checks
+      if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet')) return 'contract';
+      if (decs.includes('library') || (this.nativeMode && this.hasStaticClassModifier(cls))) return 'library';
+      if (decs.includes('abstract') || (this.nativeMode && this.hasAbstractKeyword(cls))) return 'abstract contract';
+      // a bare class is a contract candidate in native mode; in decorator mode it was always inert.
+      return this.nativeMode ? 'contract' : undefined;
+    };
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && n.name) {
+        const kind = kindOf(n);
+        if (kind) {
+          const name = n.name.text;
+          if (BUILTIN_GLOBALS.has(name)) {
+            this.diags.error(n.name, 'JETH038', `class name '${name}' shadows the builtin global '${name}' (msg / abi / block / tx cannot be redeclared)`);
+          }
+          const prior = seen.get(name);
+          if (prior) {
+            this.diags.error(n.name, 'JETH037', `identifier '${name}' is already declared (a ${prior} and a ${kind} share one namespace; solc rejects this as "Identifier already declared")`);
+          } else {
+            seen.set(name, kind);
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
 
   /** True if `cls` carries the TS `abstract` modifier keyword (`abstract class B {}`) - the native
    *  spelling of an @abstract base (item #6). */
