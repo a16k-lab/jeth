@@ -250,8 +250,13 @@ export class Analyzer {
   // @immutable fields (Phase 5): value-type, assigned once in the constructor, baked into runtime
   // code via setimmutable (NO storage slot - never enters rawState/planLayout). immutableOrder keeps
   // declaration order for deterministic setimmutable emission. currentInConstructor distinguishes a
-  // staged ctor-body read (the value assigned so far) from a runtime loadimmutable read.
-  private immutablesByName = new Map<string, { name: string; type: JethType; init?: ts.Expression }>();
+  // staged ctor-body read (the value assigned so far) from a runtime loadimmutable read. declaredIn
+  // records the class that DECLARES the field: solc checks an inline field initializer in the
+  // DECLARING class's scope, so immutableInitStmts sets the @using body owner per field from it.
+  private immutablesByName = new Map<
+    string,
+    { name: string; type: JethType; init?: ts.Expression; declaredIn?: string }
+  >();
   private immutableOrder: string[] = [];
   private publicImmutableNames = new Set<string>(); // @external @immutable fields that get an auto-generated view getter
   private currentInConstructor = false;
@@ -1994,7 +1999,7 @@ export class Analyzer {
                 : undefined;
             this.getterOverrideVars.set(nm, { node: member, definingContract: cn, overrideList });
           }
-          this.collectStateVar(member, rawState);
+          this.collectStateVar(member, rawState, cn);
         }
       }
     }
@@ -4431,14 +4436,23 @@ export class Analyzer {
     this.currentInConstructor = true;
     this.currentMutability = 'nonpayable'; // a field initializer has no payable context (msg.value -> JETH162)
     this.currentExternallyReachable = true; // strict: a field initializer cannot read msg.value (nonpayable)
+    // Lexical @using: solc checks an inline field initializer in the scope of the class that DECLARES
+    // the field, NOT the deployed contract - a BASE-declared `@immutable k = (9n).tag()` resolves its
+    // attachment via the base's own @using map (and a base with @using but no @using on the deployed
+    // class still attaches). The callers set an ambient owner (the deployed contract) that is correct
+    // for the ctor BODY; here each staged initializer gets its OWN declaring-class owner window. A
+    // field with no recorded declarer keeps the ambient owner as a fallback.
+    const savedFieldOwner = this.bodyOwnerContract;
     for (const name of this.immutableOrder) {
       const im = this.immutablesByName.get(name)!;
       if (!im.init) continue;
+      this.bodyOwnerContract = im.declaredIn ?? savedFieldOwner;
       const v = this.checkExpr(im.init, im.type);
       if (!v) continue;
       const coerced = this.coerce(v, im.type, im.init);
       stmts.push({ kind: 'assign', target: { kind: 'immutableStaged', type: im.type, name }, value: coerced });
     }
+    this.bodyOwnerContract = savedFieldOwner;
     this.popScope();
     this.scopes = savedScopes;
     this.currentInConstructor = savedInCtor;
@@ -4554,13 +4568,16 @@ export class Analyzer {
     // the body AND any constructor-modifier inlining (so a ctor modifier reading an immutable also
     // sees the staged value).
     this.currentInConstructor = true;
-    // Lexical @using: the ctor body (and the inline @immutable initializers it stages) is DECLARED by
-    // the deployed contract, so the owner-only attachment lookup (attachedFnsFor) must see that class's
-    // own @using map. mergeConstructors' chain>1 path sets this globally (deployed.contract) before
-    // buildLevel; this chain<=1 fast path reaches checkConstructor directly, so set/restore it here -
-    // otherwise owner=undefined and a no-inheritance `@using(L) @contract` ctor-body attachment
-    // over-rejects (JETH074). The window spans immutableInitStmts + the body loop + the ctor-modifier
-    // inlining, matching the ambient owner the chain>1 path gives the same three phases.
+    // Lexical @using: the ctor BODY is DECLARED by the deployed contract, so the owner-only attachment
+    // lookup (attachedFnsFor) must see that class's own @using map. mergeConstructors' chain>1 path sets
+    // this globally (deployed.contract) before buildLevel; this chain<=1 fast path reaches
+    // checkConstructor directly, so set/restore it here - otherwise owner=undefined and a
+    // no-inheritance `@using(L) @contract` ctor-body attachment over-rejects (JETH074). The inline
+    // @immutable initializers immutableInitStmts stages are NOT all declared by the deployed contract
+    // (a base declares its own fields), so that helper overrides this ambient owner PER FIELD with the
+    // field's declaring class (solc checks a field initializer in the DECLARING class's scope); the
+    // ambient owner set here covers the body loop + the ctor-modifier inlining and is the fallback for
+    // a field with no recorded declarer.
     const savedCtorBodyOwner = this.bodyOwnerContract;
     this.bodyOwnerContract = this.ctorChain[0]?.contract;
     // @immutable inline initializers run first, before the explicit constructor body (solc parity).
@@ -4985,9 +5002,10 @@ export class Analyzer {
     if (chain.length <= 1) {
       if (chain[0]?.node) return this.checkConstructor(chain[0].node);
       if (!hasInlineImmInit) return undefined;
-      // No ctor, only inline @immutable initializers: those initializer expressions are still declared
-      // by the deployed class, so an attachment used there needs the owner set (same fix as
-      // checkConstructor; without it `@immutable k = (8n).half()` under @using(L) rejects JETH074).
+      // No ctor, only inline @immutable initializers: with chain<=1 every field is declared by the
+      // deployed class itself, so set that ambient owner (same fix as checkConstructor; without it
+      // `@immutable k = (8n).half()` under @using(L) rejects JETH074). immutableInitStmts still
+      // re-pins the owner per field from the field's declaring class, which is a no-op here.
       const savedBodyOwner = this.bodyOwnerContract;
       this.bodyOwnerContract = chain[0]?.contract;
       const immBody = this.immutableInitStmts();
@@ -5869,7 +5887,7 @@ export class Analyzer {
     return this.nativeMode && !hasStatic;
   }
 
-  private collectStateVar(member: ts.PropertyDeclaration, out: RawStateVar[]): void {
+  private collectStateVar(member: ts.PropertyDeclaration, out: RawStateVar[], declaredIn?: string): void {
     // Native error/event FIELD declarations: `Insufficient: error<{ need: u256; have: u256 }>` /
     // `Transfer: event<{ from: indexed<address>; amount: u256 }>` are the native spellings of
     // `@error Insufficient(need, have);` / `@event Transfer(@indexed from, amount);`. Recognized FIRST
@@ -5929,7 +5947,7 @@ export class Analyzer {
       // `static K = <init>` = a compile-time @constant; `static M;` (no initializer, set in the ctor) = an
       // @immutable. Routed through the exact same collectors, so byte-identical to the decorated form.
       if (member.initializer) this.collectConstant(member);
-      else this.collectImmutable(member);
+      else this.collectImmutable(member, declaredIn);
       return;
     }
     // Item #9 (native mode): a BARE (undecorated) non-static field is an implicit @state storage variable.
@@ -5979,7 +5997,7 @@ export class Analyzer {
       return;
     }
     if (isImmutable) {
-      this.collectImmutable(member);
+      this.collectImmutable(member, declaredIn);
       return;
     }
     const type = resolveType(member.type, this.diags, this.structsByName);
@@ -6285,7 +6303,7 @@ export class Analyzer {
   // runtime code via setimmutable (read via loadimmutable). It consumes NO storage slot (it never
   // enters rawState, so the planner numbers @state vars exactly as solc does). Scoped to value types
   // (uintN/intN/bool/address/bytesN/enum/branded) - solc itself rejects a non-value-type immutable.
-  private collectImmutable(member: ts.PropertyDeclaration): void {
+  private collectImmutable(member: ts.PropertyDeclaration, declaredIn?: string): void {
     const name = (member.name as ts.Identifier).text;
     const decs = decoratorNames(member);
     // An `@external @immutable` mirrors solc's `public immutable`: a view getter is auto-generated
@@ -6320,7 +6338,7 @@ export class Analyzer {
       this.diags.error(member, 'JETH046', `duplicate field name '${name}'`);
       return;
     }
-    this.immutablesByName.set(name, { name, type, init: member.initializer });
+    this.immutablesByName.set(name, { name, type, init: member.initializer, declaredIn });
     this.immutableOrder.push(name);
   }
 
