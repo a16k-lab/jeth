@@ -20,12 +20,12 @@ import { compileSolidity, readSlot } from './_solidity.js';
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => v.toString(16).padStart(64, '0');
 
-const JETH = `@contract class V {
-  @state x: u256;
-  @nonReentrant @external bump(): void { this.x = this.x + 1n; }
-  @nonReentrant @external bumpBy(n: u256): u256 { this.x = this.x + n; return this.x; }
-  @nonReentrant @external bumpThenRevert(): void { this.x = this.x + 1n; revert("boom"); }
-  @external @view get(): u256 { return this.x; }
+const JETH = `class V {
+  x: u256;
+  @nonReentrant bump(): External<void> { this.x = this.x + 1n; }
+  @nonReentrant bumpBy(n: u256): External<u256> { this.x = this.x + n; return this.x; }
+  @nonReentrant bumpThenRevert(): External<void> { this.x = this.x + 1n; revert("boom"); }
+  get get(): External<u256> { return this.x; }
 }`;
 
 // Twin vault: identical bodies guarded by a transient-storage ReentrancyGuard, plus a Solidity

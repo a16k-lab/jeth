@@ -10,11 +10,11 @@ import { compileSolidity } from './_solidity.js';
 
 const K = BigInt('0x' + 'ab'.repeat(20));
 
-const JETH = `@struct class Acct { hist: Arr<u32, 4>; }
-@contract class Packed {
-  @state accts: mapping<address, Acct>;
-  @external setHist(k: address, i: u256, v: u32): void { this.accts[k].hist[i] = v; }
-  @external @view getHist(k: address, i: u256): u32 { return this.accts[k].hist[i]; }
+const JETH = `type Acct = { hist: Arr<u32, 4>; };
+class Packed {
+  accts: mapping<address, Acct>;
+  setHist(k: address, i: u256, v: u32): External<void> { this.accts[k].hist[i] = v; }
+  get getHist(k: address, i: u256): External<u32> { return this.accts[k].hist[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -22,23 +22,22 @@ import { functionSelector } from '../src/selectors.js';
 import { compileSolidity, readSlot } from './_solidity.js';
 
 const JETH = `// three-level nesting with a leading sentinel
-@struct class C { p: u128; q: u128; }
-@struct class B { m: u64; c: C; n: u64; }
-@struct class A { x: u64; b: B; y: u64; }
+type C = { p: u128; q: u128; };
+type B = { m: u64; c: C; n: u64; };
+type A = { x: u64; b: B; y: u64; };
 
-@contract
 class Deep {
-  @state sentinel: u256;   // slot 0
-  @state a: A;             // slots 1-5
+  sentinel: u256;   // slot 0
+  a: A;             // slots 1-5
 
-  @external setP(v: u128): void { this.a.b.c.p = v; }
-  @external setQ(v: u128): void { this.a.b.c.q = v; }
-  @external setM(v: u64): void  { this.a.b.m = v; }
-  @external setX(v: u64): void  { this.a.x = v; }
-  @external @view getP(): u128 { return this.a.b.c.p; }
-  @external @view getQ(): u128 { return this.a.b.c.q; }
-  @external @view getM(): u64  { return this.a.b.m; }
-  @external @view getX(): u64  { return this.a.x; }
+  setP(v: u128): External<void> { this.a.b.c.p = v; }
+  setQ(v: u128): External<void> { this.a.b.c.q = v; }
+  setM(v: u64): External<void>  { this.a.b.m = v; }
+  setX(v: u64): External<void>  { this.a.x = v; }
+  get getP(): External<u128> { return this.a.b.c.p; }
+  get getQ(): External<u128> { return this.a.b.c.q; }
+  get getM(): External<u64>  { return this.a.b.m; }
+  get getX(): External<u64>  { return this.a.x; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

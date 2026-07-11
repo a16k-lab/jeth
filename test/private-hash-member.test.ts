@@ -26,11 +26,11 @@ const bc = (src: string) => compile(src, { fileName: 'C.jeth' }).creationBytecod
 
 describe('# private members (item #2) - byte-identical to solc `private`', () => {
   it('T1: private method + private state runs byte-identical to solc private', async () => {
-    const J = `@contract class C {
-      @state #bal: u256;
+    const J = `class C {
+      #bal: u256;
       #tax(x: u256): u256 { return x / 10n; }
-      @external deposit(a: u256): void { this.#bal = this.#bal + a - this.#tax(a); }
-      @external @view balance(): u256 { return this.#bal; } }`;
+      deposit(a: u256): External<void> { this.#bal = this.#bal + a - this.#tax(a); }
+      get balance(): External<u256> { return this.#bal; } }`;
     const S = `contract C {
       uint256 private bal;
       function tax(uint256 x) private pure returns(uint256){ return x/10; }
@@ -48,8 +48,8 @@ describe('# private members (item #2) - byte-identical to solc `private`', () =>
   });
 
   it("T2: a base's private is usable through its own inherited methods, byte-identical to solc", async () => {
-    const J = `@abstract class Base { @state #secret: u256; @external @view reveal():u256{ return this.#secret; } @external stash(v:u256):void{ this.#secret=v; } }
-      @contract class C extends Base { @state pub: u256; @external setPub(v:u256):void{ this.pub=v; } @external @view getPub():u256{ return this.pub; } }`;
+    const J = `abstract class Base { #secret: u256; get reveal():External<u256>{ return this.#secret; } stash(v:u256):External<void>{ this.#secret=v; } }
+      class C extends Base { pub: u256; setPub(v:u256):External<void>{ this.pub=v; } get getPub():External<u256>{ return this.pub; } }`;
     const S = `abstract contract Base { uint256 private secret; function reveal() external view returns(uint256){ return secret; } function stash(uint256 v) external { secret=v; } }
       contract C is Base { uint256 pub; function setPub(uint256 v) external { pub=v; } function getPub() external view returns(uint256){ return pub; } }`;
     const h = await Harness.create();
@@ -64,8 +64,8 @@ describe('# private members (item #2) - byte-identical to solc `private`', () =>
   });
 
   it('T3: same-name private in base AND derived are two distinct slots, byte-identical to solc', async () => {
-    const J = `@abstract class Base { @state #s: u256; @external @view baseGet():u256{ return this.#s; } @external baseSet(v:u256):void{ this.#s=v; } }
-      @contract class C extends Base { @state #s: u256; @external @view derGet():u256{ return this.#s; } @external derSet(v:u256):void{ this.#s=v; } }`;
+    const J = `abstract class Base { #s: u256; get baseGet():External<u256>{ return this.#s; } baseSet(v:u256):External<void>{ this.#s=v; } }
+      class C extends Base { #s: u256; get derGet():External<u256>{ return this.#s; } derSet(v:u256):External<void>{ this.#s=v; } }`;
     const S = `abstract contract Base { uint256 private s; function baseGet() external view returns(uint256){ return s; } function baseSet(uint256 v) external { s=v; } }
       contract C is Base { uint256 private s; function derGet() external view returns(uint256){ return s; } function derSet(uint256 v) external { s=v; } }`;
     const h = await Harness.create();
@@ -80,7 +80,7 @@ describe('# private members (item #2) - byte-identical to solc `private`', () =>
   });
 
   it('T4: `#x` and a plain `x` coexist as distinct slots, byte-identical to solc', async () => {
-    const J = `@contract class C { @state #v: u256; @state v: u256; @external seed():void{ this.#v=1n; this.v=2n; } @external @view sum():u256{ return this.#v*10n + this.v; } }`;
+    const J = `class C { #v: u256; v: u256; seed():External<void>{ this.#v=1n; this.v=2n; } get sum():External<u256>{ return this.#v*10n + this.v; } }`;
     const S = `contract C { uint256 private _v; uint256 v; function seed() external { _v=1; v=2; } function sum() external view returns(uint256){ return _v*10 + v; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -96,18 +96,18 @@ describe('# private members (item #2) - byte-identical to solc `private`', () =>
   it('T5: `#` lowers IDENTICALLY to internal (same JETH creation bytecode)', () => {
     // A `#` member differs from an internal member only in visibility (a compile-time concept), so
     // the emitted bytecode is identical - the strongest proof there is no codegen divergence.
-    expect(bc(`@contract class C { #f(): u256 { return 42n; } @external @pure g(): u256 { return this.#f(); } }`))
-      .toBe(bc(`@contract class C { f(): u256 { return 42n; } @external @pure g(): u256 { return this.f(); } }`));
-    expect(bc(`@contract class C { @state #y: u256; @external s():void{ this.#y=9n; } @external @view r():u256{ return this.#y; } }`))
-      .toBe(bc(`@contract class C { @state y: u256; @external s():void{ this.y=9n; } @external @view r():u256{ return this.y; } }`));
+    expect(bc(`class C { #f(): u256 { return 42n; } get g(): External<u256> { return this.#f(); } }`))
+      .toBe(bc(`class C { f(): u256 { return 42n; } get g(): External<u256> { return this.f(); } }`));
+    expect(bc(`class C { #y: u256; s():External<void>{ this.#y=9n; } get r():External<u256>{ return this.#y; } }`))
+      .toBe(bc(`class C { y: u256; s():External<void>{ this.y=9n; } get r():External<u256>{ return this.y; } }`));
   });
 
   it('T6: derived contract directly naming a base private rejects - parity with solc', () => {
-    const Jstate = `@abstract class Base { @state #secret: u256; } @contract class C extends Base { @external @view leak():u256{ return this.#secret; } }`;
+    const Jstate = `abstract class Base { #secret: u256; } class C extends Base { get leak():External<u256>{ return this.#secret; } }`;
     const Sstate = `abstract contract Base { uint256 private secret; } contract C is Base { function leak() external view returns(uint256){ return secret; } }`;
     expect(jrej(Jstate)).toBe(true);
     expect(srej(Sstate)).toBe(true);
-    const Jmethod = `@abstract class Base { #hidden():u256{ return 1n; } } @contract class C extends Base { @external @view leak():u256{ return this.#hidden(); } }`;
+    const Jmethod = `abstract class Base { #hidden():u256{ return 1n; } } class C extends Base { get leak():External<u256>{ return this.#hidden(); } }`;
     const Smethod = `abstract contract Base { function hidden() private pure returns(uint256){ return 1; } } contract C is Base { function leak() external view returns(uint256){ return hidden(); } }`;
     expect(jrej(Jmethod)).toBe(true);
     expect(srej(Smethod)).toBe(true);

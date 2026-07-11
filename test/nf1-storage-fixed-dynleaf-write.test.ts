@@ -62,13 +62,13 @@ describe('NF-1: @state Arr<string,N> whole-array store', () => {
   const slots = [0n, 1n, kecSlot(0n), kecSlot(0n) + 1n, kecSlot(0n) + 2n, kecSlot(1n), kecSlot(1n) + 1n, kecSlot(1n) + 2n];
   beforeAll(async () => {
     p = await build(
-      `@contract class C {
-        @state fa: Arr<string,2>;
-        @external fromMem(): void { let xs: Arr<string,2> = ["${LONG}","short"]; this.fa = xs; }
-        @external fromLit(): void { this.fa = ["aa","bbbb"]; }
-        @external shrink(): void { let xs: Arr<string,2> = ["a","b"]; this.fa = xs; }
-        @external @view g(i: u256): string { return this.fa[i]; }
-        @external @view whole(): Arr<string,2> { return this.fa; }
+      `class C {
+        fa: Arr<string,2>;
+        fromMem(): External<void> { let xs: Arr<string,2> = ["${LONG}","short"]; this.fa = xs; }
+        fromLit(): External<void> { this.fa = ["aa","bbbb"]; }
+        shrink(): External<void> { let xs: Arr<string,2> = ["a","b"]; this.fa = xs; }
+        get g(i: u256): External<string> { return this.fa[i]; }
+        get whole(): External<Arr<string,2>> { return this.fa; }
       }`,
       `contract C {
         string[2] fa;
@@ -111,11 +111,11 @@ describe('NF-1: @state Arr<bytes,N> whole-array store', () => {
   const slots = [0n, 1n, kecSlot(0n), kecSlot(0n) + 1n, kecSlot(0n) + 2n, kecSlot(1n)];
   beforeAll(async () => {
     p = await build(
-      `@contract class C {
-        @state fa: Arr<bytes,2>;
-        @external fromMem(): void { let xs: Arr<bytes,2> = [bytes("${LONG}"),bytes("hi")]; this.fa = xs; }
-        @external fromLit(): void { this.fa = [bytes("aa"),bytes("bbbb")]; }
-        @external @view g(i: u256): bytes { return this.fa[i]; }
+      `class C {
+        fa: Arr<bytes,2>;
+        fromMem(): External<void> { let xs: Arr<bytes,2> = [bytes("${LONG}"),bytes("hi")]; this.fa = xs; }
+        fromLit(): External<void> { this.fa = [bytes("aa"),bytes("bbbb")]; }
+        get g(i: u256): External<bytes> { return this.fa[i]; }
       }`,
       `contract C {
         bytes[2] fa;
@@ -137,10 +137,10 @@ describe('NF-1: @state Arr<bytes,N> whole-array store', () => {
 describe('NF-1: nested + value-leaf fixed dynamic-leaf arrays', () => {
   it('Arr<Arr<string,2>,2>', async () => {
     const p = await build(
-      `@contract class C {
-        @state fa: Arr<Arr<string,2>,2>;
-        @external s(): void { let xs: Arr<Arr<string,2>,2> = [["aa","${LONG}"],["cc","dd"]]; this.fa = xs; }
-        @external @view g(i: u256, j: u256): string { return this.fa[i][j]; }
+      `class C {
+        fa: Arr<Arr<string,2>,2>;
+        s(): External<void> { let xs: Arr<Arr<string,2>,2> = [["aa","${LONG}"],["cc","dd"]]; this.fa = xs; }
+        get g(i: u256, j: u256): External<string> { return this.fa[i][j]; }
       }`,
       `contract C {
         string[2][2] fa;
@@ -156,12 +156,12 @@ describe('NF-1: nested + value-leaf fixed dynamic-leaf arrays', () => {
 
   it('Arr<u256[],2> (value leaf behind a dynamic level)', async () => {
     const p = await build(
-      `@contract class C {
-        @state fa: Arr<u256[],2>;
-        @external s(): void { let xs: Arr<u256[],2> = [[1n,2n,3n],[9n]]; this.fa = xs; }
-        @external shrink(): void { let xs: Arr<u256[],2> = [[7n],[8n]]; this.fa = xs; }
-        @external @view g(i: u256, j: u256): u256 { return this.fa[i][j]; }
-        @external @view len(i: u256): u256 { return this.fa[i].length; }
+      `class C {
+        fa: Arr<u256[],2>;
+        s(): External<void> { let xs: Arr<u256[],2> = [[1n,2n,3n],[9n]]; this.fa = xs; }
+        shrink(): External<void> { let xs: Arr<u256[],2> = [[7n],[8n]]; this.fa = xs; }
+        get g(i: u256, j: u256): External<u256> { return this.fa[i][j]; }
+        get len(i: u256): External<u256> { return this.fa[i].length; }
       }`,
       `contract C {
         uint256[][2] fa;
@@ -183,10 +183,10 @@ describe('NF-1: nested + value-leaf fixed dynamic-leaf arrays', () => {
 
   it('Arr<string[],2> (bytes leaf behind a dynamic level)', async () => {
     const p = await build(
-      `@contract class C {
-        @state fa: Arr<string[],2>;
-        @external s(): void { let xs: Arr<string[],2> = [["a","${LONG}"],["z"]]; this.fa = xs; }
-        @external @view g(i: u256, j: u256): string { return this.fa[i][j]; }
+      `class C {
+        fa: Arr<string[],2>;
+        s(): External<void> { let xs: Arr<string[],2> = [["a","${LONG}"],["z"]]; this.fa = xs; }
+        get g(i: u256, j: u256): External<string> { return this.fa[i][j]; }
       }`,
       `contract C {
         string[][2] fa;
@@ -204,11 +204,11 @@ describe('NF-1: nested + value-leaf fixed dynamic-leaf arrays', () => {
 describe('NF-1: struct-field + mapping-value targets', () => {
   it('struct field this.st.xs = xs', async () => {
     const p = await build(
-      `@struct class S { a: u256; xs: Arr<string,2>; }
-      @contract class C {
-        @state st: S;
-        @external s(): void { let xs: Arr<string,2> = ["${LONG}","short"]; this.st.xs = xs; }
-        @external @view g(i: u256): string { return this.st.xs[i]; }
+      `type S = { a: u256; xs: Arr<string,2>; };
+      class C {
+        st: S;
+        s(): External<void> { let xs: Arr<string,2> = ["${LONG}","short"]; this.st.xs = xs; }
+        get g(i: u256): External<string> { return this.st.xs[i]; }
       }`,
       `contract C {
         struct S { uint256 a; string[2] xs; }
@@ -226,10 +226,10 @@ describe('NF-1: struct-field + mapping-value targets', () => {
 
   it('mapping value this.m[k] = xs', async () => {
     const p = await build(
-      `@contract class C {
-        @state m: mapping<u256, Arr<string,2>>;
-        @external s(k: u256): void { let xs: Arr<string,2> = ["${LONG2}","short"]; this.m[k] = xs; }
-        @external @view g(k: u256, i: u256): string { return this.m[k][i]; }
+      `class C {
+        m: mapping<u256, Arr<string,2>>;
+        s(k: u256): External<void> { let xs: Arr<string,2> = ["${LONG2}","short"]; this.m[k] = xs; }
+        get g(k: u256, i: u256): External<string> { return this.m[k][i]; }
       }`,
       `contract C {
         mapping(uint256 => string[2]) m;

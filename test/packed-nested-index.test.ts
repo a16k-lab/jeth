@@ -10,17 +10,17 @@ import { compileSolidity } from './_solidity.js';
 
 const M = 1n << 256n;
 
-const JETH = `@struct class Q { tag: u256; pts: Arr<i64, 3>; us: Arr<u64, 4>; }
-@contract class PN {
-  @state q: Q;
-  @external setPt(i: u256, v: i64): void { this.q.pts[i] = v; }
-  @external setUs(i: u256, v: u64): void { this.q.us[i] = v; }
-  @external setPt1(v: i64): void { this.q.pts[1n] = v; }
-  @external @view getPt(i: u256): i64 { return this.q.pts[i]; }
-  @external @view getUs(i: u256): u64 { return this.q.us[i]; }
-  @external @view getPt2(): i64 { return this.q.pts[2n]; }
-  @external @view tag(): u256 { return this.q.tag; }
-  @external setTag(v: u256): void { this.q.tag = v; }
+const JETH = `type Q = { tag: u256; pts: Arr<i64, 3>; us: Arr<u64, 4>; };
+class PN {
+  q: Q;
+  setPt(i: u256, v: i64): External<void> { this.q.pts[i] = v; }
+  setUs(i: u256, v: u64): External<void> { this.q.us[i] = v; }
+  setPt1(v: i64): External<void> { this.q.pts[1n] = v; }
+  get getPt(i: u256): External<i64> { return this.q.pts[i]; }
+  get getUs(i: u256): External<u64> { return this.q.us[i]; }
+  get getPt2(): External<i64> { return this.q.pts[2n]; }
+  get tag(): External<u256> { return this.q.tag; }
+  setTag(v: u256): External<void> { this.q.tag = v; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

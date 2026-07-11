@@ -49,12 +49,12 @@ async function rt(jeth: string, sol: string, cases: { sig: string; args?: string
 
 describe('new Array<T>(n): byte-identical vs solc', () => {
   it('zero-init, writes, .length, OOB, huge-n (u256[])', async () => {
-    const J = `@contract class C {
-      @external @pure mk(n: u256): bytes { let a: u256[] = new Array<u256>(n); return abi.encode(a); }
-      @external @pure mkw(n: u256): bytes { let a: u256[] = new Array<u256>(n); a[0n] = 7n; a[2n] = 9n; return abi.encode(a); }
-      @external @pure len(n: u256): u256 { let a: u256[] = new Array<u256>(n); return a.length; }
-      @external @pure oob(n: u256): u256 { let a: u256[] = new Array<u256>(n); return a[n]; }
-      @external @pure huge(n: u256): u256 { let a: u256[] = new Array<u256>(n); return a.length; }
+    const J = `class C {
+      get mk(n: u256): External<bytes> { let a: u256[] = new Array<u256>(n); return abi.encode(a); }
+      get mkw(n: u256): External<bytes> { let a: u256[] = new Array<u256>(n); a[0n] = 7n; a[2n] = 9n; return abi.encode(a); }
+      get len(n: u256): External<u256> { let a: u256[] = new Array<u256>(n); return a.length; }
+      get oob(n: u256): External<u256> { let a: u256[] = new Array<u256>(n); return a[n]; }
+      get huge(n: u256): External<u256> { let a: u256[] = new Array<u256>(n); return a.length; }
     }`;
     const S = `contract C {
       function mk(uint256 n) external pure returns (bytes memory){ uint256[] memory a = new uint256[](n); return abi.encode(a); }
@@ -80,14 +80,14 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
   it('value element types (u8/bool/address/bytes32/i128/enum/brand), full-word + write-cleanup', async () => {
     const J = `type Tok = Brand<u256>;
     enum Color { Red, Green, Blue }
-    @contract class C {
-      @external @pure u8a(n: u256, v: u256): bytes { let a: u8[] = new Array<u8>(n); a[0n] = u8(v); return abi.encode(a); }
-      @external @pure boola(n: u256): bytes { let a: bool[] = new Array<bool>(n); a[1n] = true; return abi.encode(a); }
-      @external @pure addra(n: u256): bytes { let a: address[] = new Array<address>(n); return abi.encode(a); }
-      @external @pure b32a(n: u256): bytes { let a: bytes32[] = new Array<bytes32>(n); return abi.encode(a); }
-      @external @pure i128a(n: u256, v: u256): bytes { let a: i128[] = new Array<i128>(n); a[0n] = i128(i256(v)); return abi.encode(a); }
-      @external @pure enuma(n: u256): bytes { let a: Color[] = new Array<Color>(n); return abi.encode(a); }
-      @external @pure toka(n: u256): bytes { let a: Tok[] = new Array<Tok>(n); return abi.encode(a); }
+    class C {
+      get u8a(n: u256, v: u256): External<bytes> { let a: u8[] = new Array<u8>(n); a[0n] = u8(v); return abi.encode(a); }
+      get boola(n: u256): External<bytes> { let a: bool[] = new Array<bool>(n); a[1n] = true; return abi.encode(a); }
+      get addra(n: u256): External<bytes> { let a: address[] = new Array<address>(n); return abi.encode(a); }
+      get b32a(n: u256): External<bytes> { let a: bytes32[] = new Array<bytes32>(n); return abi.encode(a); }
+      get i128a(n: u256, v: u256): External<bytes> { let a: i128[] = new Array<i128>(n); a[0n] = i128(i256(v)); return abi.encode(a); }
+      get enuma(n: u256): External<bytes> { let a: Color[] = new Array<Color>(n); return abi.encode(a); }
+      get toka(n: u256): External<bytes> { let a: Tok[] = new Array<Tok>(n); return abi.encode(a); }
     }`;
     const S = `contract C {
       enum Color { Red, Green, Blue }
@@ -111,11 +111,11 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
   });
 
   it('direct return + abi.encode(direct) + abi.encode(multi) + encodePacked(direct) [regression: was JETH900]', async () => {
-    const J = `@contract class C {
-      @external @pure ret(n: u256): u256[] { return new Array<u256>(n); }
-      @external @pure enc(n: u256): bytes { return abi.encode(new Array<u256>(n)); }
-      @external @pure multi(n: u256): bytes { return abi.encode(7n, new Array<u256>(n), 9n); }
-      @external @pure packed(n: u256): bytes { return abi.encodePacked(new Array<u256>(n)); }
+    const J = `class C {
+      get ret(n: u256): External<u256[]> { return new Array<u256>(n); }
+      get enc(n: u256): External<bytes> { return abi.encode(new Array<u256>(n)); }
+      get multi(n: u256): External<bytes> { return abi.encode(7n, new Array<u256>(n), 9n); }
+      get packed(n: u256): External<bytes> { return abi.encodePacked(new Array<u256>(n)); }
     }`;
     const S = `contract C {
       function ret(uint256 n) external pure returns (uint256[] memory){ return new uint256[](n); }
@@ -132,9 +132,9 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
   });
 
   it('ternary branch is a new Array [regression: was JETH074 over-rejection]', async () => {
-    const J = `@contract class C {
-      @external @pure tvl(c: bool, n: u256): bytes { let b: u256[] = new Array<u256>(5n); b[0n] = 99n; let r: u256[] = c ? new Array<u256>(n) : b; return abi.encode(r); }
-      @external @pure tvn(c: bool, n: u256, m: u256): bytes { let r: u256[] = c ? new Array<u256>(n) : new Array<u256>(m); return abi.encode(r); }
+    const J = `class C {
+      get tvl(c: bool, n: u256): External<bytes> { let b: u256[] = new Array<u256>(5n); b[0n] = 99n; let r: u256[] = c ? new Array<u256>(n) : b; return abi.encode(r); }
+      get tvn(c: bool, n: u256, m: u256): External<bytes> { let r: u256[] = c ? new Array<u256>(n) : new Array<u256>(m); return abi.encode(r); }
     }`;
     const S = `contract C {
       function tvl(bool c, uint256 n) external pure returns (bytes memory){ uint256[] memory b = new uint256[](5); b[0]=99; uint256[] memory r = c ? new uint256[](n) : b; return abi.encode(r); }
@@ -149,8 +149,8 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
   });
 
   it('zero-init is active (all-zero even after prior memory use)', async () => {
-    const J = `@contract class C {
-      @external @pure dirty(n: u256): bytes { let scratch: u256[] = new Array<u256>(8n); scratch[0n] = 0xdeadn; scratch[7n] = 0xbeefn; let a: u256[] = new Array<u256>(n); return abi.encode(a); }
+    const J = `class C {
+      get dirty(n: u256): External<bytes> { let scratch: u256[] = new Array<u256>(8n); scratch[0n] = 0xdeadn; scratch[7n] = 0xbeefn; let a: u256[] = new Array<u256>(n); return abi.encode(a); }
     }`;
     const S = `contract C {
       function dirty(uint256 n) external pure returns (bytes memory){ uint256[] memory scratch = new uint256[](8); scratch[0]=0xdead; scratch[7]=0xbeef; uint256[] memory a = new uint256[](n); return abi.encode(a); }
@@ -172,7 +172,7 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
     expect(jethAccepts(ok('let a: bytes[] = new Array<bytes>(n); return abi.encode(a);'))).toBe(true);
     expect(jethAccepts(ok('let a: string[] = new Array<string>(n); return abi.encode(a);'))).toBe(true);
     expect(
-      jethAccepts(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(n: u256): bytes { let a: P[] = new Array<P>(n); return abi.encode(a); } }`),
+      jethAccepts(`type P = {a:u256;b:u256;}; class C { get f(n: u256): External<bytes> { let a: P[] = new Array<P>(n); return abi.encode(a); } }`),
     ).toBe(true);
   });
 
@@ -181,7 +181,7 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
     // signed-int length -> rejected (matches solc: no implicit int->uint256), no crash
     expect(
       jethCodes(
-        `@contract class C { @external @pure f(s: i128): bytes { let a: u256[] = new Array<u256>(s); return abi.encode(a); } }`,
+        `class C { get f(s: i128): External<bytes> { let a: u256[] = new Array<u256>(s); return abi.encode(a); } }`,
       ).length > 0,
     ).toBe(true);
     // B4: a nested-dynamic-leaf array (string[][]) is now ACCEPTED (byte-identical, see
@@ -189,18 +189,18 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
     // field) is also ACCEPTED (dyn-array-field-struct-local.test.ts).
     expect(jethCodes(f('let a: string[][] = new Array<string[]>(n); return abi.encode(a);'))).toEqual([]);
     expect(
-      jethCodes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(n: u256): bytes { let a: P[] = new Array<P>(n); return abi.encode(a); } }`),
+      jethCodes(`type P = {a:u256;s:bytes;}; class C { get f(n: u256): External<bytes> { let a: P[] = new Array<P>(n); return abi.encode(a); } }`),
     ).toEqual([]);
     // a STATIC-struct-leaf nested array (Q[][]) now ACCEPTS (pointer-headed, byte-identical - see
     // pointer-headed-static-struct-array.test.ts).
-    expect(jethCodes(`@struct class Q{a:u256;b:u256;} @contract class C { @external @pure f(n: u256): bytes { let a: Q[][] = new Array<Q[]>(n); return abi.encode(a); } }`)).toEqual([]);
+    expect(jethCodes(`type Q = {a:u256;b:u256;}; class C { get f(n: u256): External<bytes> { let a: Q[][] = new Array<Q[]>(n); return abi.encode(a); } }`)).toEqual([]);
     expect(jethCodes(f('let a: u256[][] = new Array<u256[]>(n); return abi.encode(a);'))).not.toContain('JETH900');
     // wrong arity -> JETH363, no crash
     expect(jethCodes(f('let a: u256[] = new Array<u256>(); return abi.encode(a);'))).toContain('JETH363');
     expect(jethCodes(f('let a: u256[] = new Array<u256>(n, n); return abi.encode(a);'))).toContain('JETH363');
     // non-Array new -> JETH023, no crash
     expect(
-      jethCodes(`@contract class C { @external @pure f(n: u256): u256 { let x = new Foo(n); return 1n; } }`),
+      jethCodes(`class C { get f(n: u256): External<u256> { let x = new Foo(n); return 1n; } }`),
     ).toContain('JETH023');
     // none of the above is an internal crash
     for (const src of [

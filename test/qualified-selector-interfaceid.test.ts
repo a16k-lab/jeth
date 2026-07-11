@@ -56,10 +56,10 @@ function bothReject(jeth: string, sol: string): void {
 describe('type-qualified .selector and type(I).interfaceId: byte-identical vs solc', () => {
   it('positive: I.g.selector for interface methods', async () => {
     await matchPositive(
-      `@interface class IFoo { @external g(x: u256): u256; @external @view h(a: address): bool; }
-       @contract class C {
-         @external f(): bytes4 { return IFoo.g.selector; }
-         @external f2(): bytes4 { return IFoo.h.selector; }
+      `interface IFoo { g(x: u256): u256; h(a: address): View<bool>; }
+       class C {
+         get f(): External<bytes4> { return IFoo.g.selector; }
+         get f2(): External<bytes4> { return IFoo.h.selector; }
        }`,
       `interface IFoo { function g(uint256 x) external returns(uint256); function h(address a) external view returns(bool); }
        contract C {
@@ -90,9 +90,9 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
 
   it('positive: selector with struct/array/bytes params uses the canonical tuple form', async () => {
     await matchPositive(
-      `@struct class Pt { x: u256; y: address; }
-       @interface class IFoo { @external g(p: Pt, arr: u256[], b: bytes): u256; }
-       @contract class C { @external f(): bytes4 { return IFoo.g.selector; } }`,
+      `type Pt = { x: u256; y: address; };
+       interface IFoo { g(p: Pt, arr: u256[], b: bytes): u256; }
+       class C { get f(): External<bytes4> { return IFoo.g.selector; } }`,
       `struct Pt { uint256 x; address y; }
        interface IFoo { function g(Pt calldata p, uint256[] calldata arr, bytes calldata b) external returns(uint256); }
        contract C { function f() external pure returns(bytes4){ return IFoo.g.selector; } }`,
@@ -102,13 +102,13 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
 
   it('positive: type(I).interfaceId single, multi, and the ERC165 value', async () => {
     await matchPositive(
-      `@interface class ISingle { @external g(x: u256): u256; }
-       @interface class IMulti { @external g(x: u256): u256; @external @view h(a: address): bool; @external setX(x: u256): void; }
-       @interface class IERC165 { @external @view supportsInterface(id: bytes4): bool; }
-       @contract class C {
-         @external f(): bytes4 { return type(ISingle).interfaceId; }
-         @external f2(): bytes4 { return type(IMulti).interfaceId; }
-         @external f3(): bytes4 { return type(IERC165).interfaceId; }
+      `interface ISingle { g(x: u256): u256; }
+       interface IMulti { g(x: u256): u256; h(a: address): View<bool>; setX(x: u256): void; }
+       interface IERC165 { supportsInterface(id: bytes4): View<bool>; }
+       class C {
+         get f(): External<bytes4> { return type(ISingle).interfaceId; }
+         get f2(): External<bytes4> { return type(IMulti).interfaceId; }
+         get f3(): External<bytes4> { return type(IERC165).interfaceId; }
        }`,
       `interface ISingle { function g(uint256 x) external returns(uint256); }
        interface IMulti { function g(uint256 x) external returns(uint256); function h(address a) external view returns(bool); function setX(uint256 x) external; }
@@ -124,13 +124,13 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
 
   it('positive: the EIP-165 supportsInterface pattern (interfaceId compared to a bytes4 arg)', async () => {
     await matchPositive(
-      `@interface class IERC165 { @external @view supportsInterface(id: bytes4): bool; }
-       @interface class IFoo { @external doit(x: u256): u256; }
-       @contract class C {
-         @external @view supportsInterface(id: bytes4): bool {
+      `interface IERC165 { supportsInterface(id: bytes4): View<bool>; }
+       interface IFoo { doit(x: u256): u256; }
+       class C {
+         get supportsInterface(id: bytes4): External<bool> {
            return id == type(IERC165).interfaceId || id == type(IFoo).interfaceId;
          }
-         @external f165(): bytes4 { return type(IERC165).interfaceId; }
+         get f165(): External<bytes4> { return type(IERC165).interfaceId; }
        }`,
       `interface IERC165 { function supportsInterface(bytes4 interfaceId) external view returns (bool); }
        interface IFoo { function doit(uint256 x) external returns(uint256); }
@@ -171,27 +171,27 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
   // ---------------- NEGATIVE (both reject) ----------------
   it('negative: type(C).interfaceId on a contract/abstract type', () => {
     bothReject(
-      `@contract class C { @external f(): bytes4 { return type(C).interfaceId; } }`,
+      `class C { get f(): External<bytes4> { return type(C).interfaceId; } }`,
       `contract C { function f() external pure returns(bytes4){ return type(C).interfaceId; } }`,
     );
   });
 
   it('negative: type(uint/enum).interfaceId', () => {
     bothReject(
-      `@contract class C { @external f(): bytes4 { return type(u256).interfaceId; } }`,
+      `class C { get f(): External<bytes4> { return type(u256).interfaceId; } }`,
       `contract C { function f() external pure returns(bytes4){ return type(uint256).interfaceId; } }`,
     );
     bothReject(
       `enum Color { Red, Green }
-       @contract class C { @external f(): bytes4 { return type(Color).interfaceId; } }`,
+       class C { get f(): External<bytes4> { return type(Color).interfaceId; } }`,
       `contract C { enum Color { Red, Green } function f() external pure returns(bytes4){ return type(Color).interfaceId; } }`,
     );
   });
 
   it('negative: I.missing.selector (unknown member)', () => {
     bothReject(
-      `@interface class IFoo { @external g(x: u256): u256; }
-       @contract class C { @external f(): bytes4 { return IFoo.nope.selector; } }`,
+      `interface IFoo { g(x: u256): u256; }
+       class C { get f(): External<bytes4> { return IFoo.nope.selector; } }`,
       `interface IFoo { function g(uint256 x) external returns(uint256); }
        contract C { function f() external pure returns(bytes4){ return IFoo.nope.selector; } }`,
     );
@@ -199,15 +199,15 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
 
   it('negative: C.internal.selector (an internal method has no ABI selector)', () => {
     bothReject(
-      `@contract class C { g(x: u256): u256 { return x; } @external f(): bytes4 { return C.g.selector; } }`,
+      `class C { g(x: u256): u256 { return x; } get f(): External<bytes4> { return C.g.selector; } }`,
       `contract C { function g(uint256 x) internal pure returns(uint256){ return x; } function f() external pure returns(bytes4){ return C.g.selector; } }`,
     );
   });
 
   it('negative: Derived.inheritedFn.selector (qualified selector resolves DIRECT members only)', () => {
     bothReject(
-      `@abstract class A { @external g(x: u256): u256 { return x; } }
-       @contract class C extends A { @external f(): bytes4 { return C.g.selector; } }`,
+      `abstract class A { get g(x: u256): External<u256> { return x; } }
+       class C extends A { get f(): External<bytes4> { return C.g.selector; } }`,
       `abstract contract A { function g(uint256 x) external virtual pure returns(uint256){ return x; } }
        contract C is A { function f() external pure returns(bytes4){ return C.g.selector; } }`,
     );
@@ -234,10 +234,10 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
 
   it('negative: overloaded qualified selector is ambiguous', () => {
     bothReject(
-      `@contract class C {
-         @external g(x: u256): u256 { return x; }
-         @external g(x: address): u256 { return 0n; }
-         @external f(): bytes4 { return C.g.selector; }
+      `class C {
+         get g(x: u256): External<u256> { return x; }
+         get g(x: address): External<u256> { return 0n; }
+         get f(): External<bytes4> { return C.g.selector; }
        }`,
       `contract C {
          function g(uint256 x) external pure returns(uint256){ return x; }

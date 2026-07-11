@@ -24,29 +24,29 @@ function strSet(sel: string, head: bigint[], s: string): string {
   return h;
 }
 
-const JETH = `@struct class P { x: u128; y: u128; }
-@struct class D { a: u256; s: string; }
-@struct class O { p: u256; inner: D; q: u256; }
-@struct class S { p: u256; pt: P; q: u256; }
-@contract class NF {
-  @state o: O;
-  @state s2: S;
-  @state d2: D;
-  @state recs: O[];
-  @external setO(p: u256, a: u256, str: string, q: u256): void { this.o.p = p; this.o.inner = D(a, str); this.o.q = q; }
-  @external setInner(a: u256, str: string): void { this.o.inner = D(a, str); }
-  @external setS(p: u256, x: u128, y: u128, q: u256): void { this.s2.p = p; this.s2.pt = P(x, y); this.s2.q = q; }
-  @external setD2(a: u256, str: string): void { this.d2 = D(a, str); }
-  @external copyInnerFromD2(): void { this.o.inner = this.d2; }
-  @external copyD2FromInner(): void { this.d2 = this.o.inner; }
-  @external pushO(p: u256, a: u256, str: string, q: u256): void { this.recs.push(O(p, D(a, str), q)); }
-  @external setRecInner(i: u256, a: u256, str: string): void { this.recs[i].inner = D(a, str); }
-  @external @view getInner(): D { return this.o.inner; }
-  @external @view getPt(): P { return this.s2.pt; }
-  @external @view getO(): O { return this.o; }
-  @external @view getRecInner(i: u256): D { return this.recs[i].inner; }
-  @external @view getOp(): u256 { return this.o.p; }
-  @external @view getOq(): u256 { return this.o.q; }
+const JETH = `type P = { x: u128; y: u128; };
+type D = { a: u256; s: string; };
+type O = { p: u256; inner: D; q: u256; };
+type S = { p: u256; pt: P; q: u256; };
+class NF {
+  o: O;
+  s2: S;
+  d2: D;
+  recs: O[];
+  setO(p: u256, a: u256, str: string, q: u256): External<void> { this.o.p = p; this.o.inner = D(a, str); this.o.q = q; }
+  setInner(a: u256, str: string): External<void> { this.o.inner = D(a, str); }
+  setS(p: u256, x: u128, y: u128, q: u256): External<void> { this.s2.p = p; this.s2.pt = P(x, y); this.s2.q = q; }
+  setD2(a: u256, str: string): External<void> { this.d2 = D(a, str); }
+  copyInnerFromD2(): External<void> { this.o.inner = this.d2; }
+  copyD2FromInner(): External<void> { this.d2 = this.o.inner; }
+  pushO(p: u256, a: u256, str: string, q: u256): External<void> { this.recs.push(O(p, D(a, str), q)); }
+  setRecInner(i: u256, a: u256, str: string): External<void> { this.recs[i].inner = D(a, str); }
+  get getInner(): External<D> { return this.o.inner; }
+  get getPt(): External<P> { return this.s2.pt; }
+  get getO(): External<O> { return this.o; }
+  get getRecInner(i: u256): External<D> { return this.recs[i].inner; }
+  get getOp(): External<u256> { return this.o.p; }
+  get getOq(): External<u256> { return this.o.q; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

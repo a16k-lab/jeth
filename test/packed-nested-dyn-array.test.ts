@@ -17,18 +17,18 @@ const sel = (s: string) => functionSelector(s);
 describe('packed element of a nested dynamic array (JETH217) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   // u64[] (4 per slot) as a struct field AND as a mapping-of-struct value; plus a u16[] (16/slot) field.
-  const J = `@struct class S { tag: u256; ps: u64[]; ws: u16[]; }
-@contract class C {
-  @state s: S;
-  @state m: mapping<u256, S>;
-  @external pushP(v: u64): void { this.s.ps.push(v); }
-  @external pushW(v: u16): void { this.s.ws.push(v); }
-  @external setP(i: u256, v: u64): void { this.s.ps[i] = v; }
-  @external @view getP(i: u256): u64 { return this.s.ps[i]; }
-  @external @view getW(i: u256): u16 { return this.s.ws[i]; }
-  @external mPush(k: u256, v: u64): void { this.m[k].ps.push(v); }
-  @external mSet(k: u256, i: u256, v: u64): void { this.m[k].ps[i] = v; }
-  @external @view mGet(k: u256, i: u256): u64 { return this.m[k].ps[i]; } }`;
+  const J = `type S = { tag: u256; ps: u64[]; ws: u16[]; };
+class C {
+  s: S;
+  m: mapping<u256, S>;
+  pushP(v: u64): External<void> { this.s.ps.push(v); }
+  pushW(v: u16): External<void> { this.s.ws.push(v); }
+  setP(i: u256, v: u64): External<void> { this.s.ps[i] = v; }
+  get getP(i: u256): External<u64> { return this.s.ps[i]; }
+  get getW(i: u256): External<u16> { return this.s.ws[i]; }
+  mPush(k: u256, v: u64): External<void> { this.m[k].ps.push(v); }
+  mSet(k: u256, i: u256, v: u64): External<void> { this.m[k].ps[i] = v; }
+  get mGet(k: u256, i: u256): External<u64> { return this.m[k].ps[i]; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {

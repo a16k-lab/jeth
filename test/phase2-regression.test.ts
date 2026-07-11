@@ -32,11 +32,10 @@ async function differential(jethSrc: string, solSrc: string, name: string, cases
 }
 
 describe('Phase 2 regression: param/local name collision (Bug A)', () => {
-  const JETH = `@contract
-class NameClash {
-  @external @pure f(x_0: u256): u256 { let x: u256 = 5n; return x_0 + x; }
-  @external @pure g(s_0: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < s_0; i += 1n) { s += i; } return s; }
-  @external @pure h(i_1: u256, n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { s += i_1; } return s; }
+  const JETH = `class NameClash {
+  get f(x_0: u256): External<u256> { let x: u256 = 5n; return x_0 + x; }
+  get g(s_0: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < s_0; i += 1n) { s += i; } return s; }
+  get h(i_1: u256, n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { s += i_1; } return s; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -102,7 +101,7 @@ contract NegLit {
   it('still rejects an out-of-range negative literal', () => {
     let codes: string[] = [];
     try {
-      compile(`@contract\nclass T { @external @pure f(): i8 { return -129n; } }`, { fileName: 't.jeth' });
+      compile(`class T { get f(): External<i8> { return -129n; } }`, { fileName: 't.jeth' });
     } catch (e: any) {
       codes = e.diagnostics?.map((d: any) => d.code) ?? [];
     }

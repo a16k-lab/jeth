@@ -39,25 +39,25 @@ async function pair(jethSrc: string, solSrc: string) {
 // ===========================================================================
 describe('(A) uninitialized mapping local -> JETH340 (solc rejects)', () => {
   it('a bare mapping local rejects', () => {
-    const src = `@contract class C { @external f(): u256 { let m: mapping<u256,u256>; return 0n; } }`;
+    const src = `class C { get f(): External<u256> { let m: mapping<u256,u256>; return 0n; } }`;
     expect(codes(src)).toContain('JETH340');
   });
   it('a mapping-valued mapping local rejects', () => {
-    const src = `@contract class C { @external f(): u256 { let m: mapping<u256, mapping<u256,u256>>; return 0n; } }`;
+    const src = `class C { get f(): External<u256> { let m: mapping<u256, mapping<u256,u256>>; return 0n; } }`;
     expect(codes(src)).toContain('JETH340');
   });
   it('a struct local CONTAINING a mapping rejects', () => {
-    const src = `@struct class S { m: mapping<u256,u256>; x: u256; }
-@contract class C { @external f(): u256 { let s: S; return 0n; } }`;
+    const src = `type S = { m: mapping<u256,u256>; x: u256; };
+class C { get f(): External<u256> { let s: S; return 0n; } }`;
     expect(codes(src)).toContain('JETH340');
   });
   it('a value-type local still ACCEPTS (no over-rejection)', () => {
-    const src = `@contract class C { @external @pure f(): u256 { let x: u256 = 5n; return x; } }`;
+    const src = `class C { get f(): External<u256> { let x: u256 = 5n; return x; } }`;
     expect(codes(src)).toEqual([]);
   });
   it('a struct local WITHOUT a mapping still ACCEPTS', () => {
-    const src = `@struct class P { a: u256; b: u256; }
-@contract class C { @external @pure f(): u256 { let p: P; p.a = 7n; return p.a; } }`;
+    const src = `type P = { a: u256; b: u256; };
+class C { get f(): External<u256> { let p: P; p.a = 7n; return p.a; } }`;
     expect(codes(src)).toEqual([]);
   });
 });
@@ -70,49 +70,49 @@ describe('(A) uninitialized mapping local -> JETH340 (solc rejects)', () => {
 // ===========================================================================
 describe('(B) @using fn vs built-in member collision -> JETH341 (solc rejects)', () => {
   it('length on a dynamic array vs built-in .length rejects', () => {
-    const src = `@library class Bad { length(a: u256[]): u256 { return 7n; } }
-@contract @using(Bad) class C { @external @pure f(): u256 { let a: u256[] = [1n,2n,3n]; return a.length(); } }`;
+    const src = `static class Bad { length(a: u256[]): u256 { return 7n; } }
+@using(Bad) class C { get f(): External<u256> { let a: u256[] = [1n,2n,3n]; return a.length(); } }`;
     expect(codes(src)).toContain('JETH341');
   });
   it('push on a storage dynamic array vs built-in push rejects', () => {
-    const src = `@library class Bad { push(a: u256[]): u256 { return 7n; } }
-@contract @using(Bad) class C { @state xs: u256[]; @external f(): u256 { return this.xs.push(); } }`;
+    const src = `static class Bad { push(a: u256[]): u256 { return 7n; } }
+@using(Bad) class C { xs: u256[]; get f(): External<u256> { return this.xs.push(); } }`;
     expect(codes(src)).toContain('JETH341');
   });
   it('balance on address vs built-in .balance rejects', () => {
-    const src = `@library class Bad { balance(a: address): u256 { return 7n; } }
-@contract @using(Bad) class C { @external @view f(x: address): u256 { return x.balance(); } }`;
+    const src = `static class Bad { balance(a: address): u256 { return 7n; } }
+@using(Bad) class C { get f(x: address): External<u256> { return x.balance(); } }`;
     expect(codes(src)).toContain('JETH341');
   });
   it('code on address vs built-in .code rejects', () => {
-    const src = `@library class Bad { code(a: address): u256 { return 7n; } }
-@contract @using(Bad) class C { @external @view f(x: address): u256 { return x.code(); } }`;
+    const src = `static class Bad { code(a: address): u256 { return 7n; } }
+@using(Bad) class C { get f(x: address): External<u256> { return x.code(); } }`;
     expect(codes(src)).toContain('JETH341');
   });
   it('a NON-colliding attached fn name still ACCEPTS (no over-rejection)', () => {
-    const src = `@library class Good { sum(a: u256[]): u256 { return 7n; } }
-@contract @using(Good) class C { @external @pure f(): u256 { let a: u256[] = [1n,2n,3n]; return a.sum(); } }`;
+    const src = `static class Good { sum(a: u256[]): u256 { return 7n; } }
+@using(Good) class C { get f(): External<u256> { let a: u256[] = [1n,2n,3n]; return a.sum(); } }`;
     expect(codes(src)).toEqual([]);
   });
   it('a collision on a DIFFERENT type than the receiver still ACCEPTS', () => {
     // `length` attached to address (not the u256[] receiver) is not a collision for a.length().
-    const src = `@library class L { length(a: address): u256 { return 7n; } }
-@contract @using(L) class C { @external @pure f(): u256 { let a: u256[] = [1n,2n,3n]; return a.length; } }`;
+    const src = `static class L { length(a: address): u256 { return 7n; } }
+@using(L) class C { get f(): External<u256> { let a: u256[] = [1n,2n,3n]; return a.length; } }`;
     expect(codes(src)).toEqual([]);
   });
   // The PROPERTY form (a.length, addr.balance) is ambiguous in solc just like the call form a.length();
   // independent verification caught that the call-only gate missed it. These pin the property path.
   it('PROPERTY form a.length (not just a.length()) rejects the collision', () => {
-    const src = `@library class Bad { length(a: u256[]): u256 { return 7n; } }
-@contract @using(Bad) class C { @external @pure f(a: u256[]): u256 { return a.length; } }`;
+    const src = `static class Bad { length(a: u256[]): u256 { return 7n; } }
+@using(Bad) class C { get f(a: u256[]): External<u256> { return a.length; } }`;
     expect(codes(src)).toContain('JETH341');
   });
   it('PROPERTY form addr.balance and addr.code reject the collision', () => {
-    const bal = `@library class Bad { balance(a: address): u256 { return 7n; } }
-@contract @using(Bad) class C { @external @view f(x: address): u256 { return x.balance; } }`;
+    const bal = `static class Bad { balance(a: address): u256 { return 7n; } }
+@using(Bad) class C { get f(x: address): External<u256> { return x.balance; } }`;
     expect(codes(bal)).toContain('JETH341');
-    const cod = `@library class Bad { code(a: address): bytes { return bytes(""); } }
-@contract @using(Bad) class C { @external @view f(x: address): bytes { return x.code; } }`;
+    const cod = `static class Bad { code(a: address): bytes { return bytes(""); } }
+@using(Bad) class C { get f(x: address): External<bytes> { return x.code; } }`;
     expect(codes(cod)).toContain('JETH341');
   });
 });
@@ -123,11 +123,11 @@ describe('(B) @using fn vs built-in member collision -> JETH341 (solc rejects)',
 // ===========================================================================
 describe('(C) default-init struct memory local (byte-identical to solc)', () => {
   it('let p: P; field write/read matches solc (returndata + raw storage)', async () => {
-    const JETH = `@struct class P { a: u256; b: bool; c: address; }
-@contract class C {
-  @state sa: u256;
-  @state sb: bool;
-  @external f(): u256 {
+    const JETH = `type P = { a: u256; b: bool; c: address; };
+class C {
+  sa: u256;
+  sb: bool;
+  f(): External<u256> {
     let p: P;
     let z: u256 = p.a;
     p.a = 42n;
@@ -160,10 +160,10 @@ contract C {
   });
 
   it('a struct with a nested static struct + fixed array zero-inits identically', async () => {
-    const JETH = `@struct class Inner { u: u256; v: bool; }
-@struct class P { a: u256; inner: Inner; xs: Arr<u256,3>; }
-@contract class C {
-  @external @pure f(): u256 {
+    const JETH = `type Inner = { u: u256; v: bool; };
+type P = { a: u256; inner: Inner; xs: Arr<u256,3>; };
+class C {
+  get f(): External<u256> {
     let p: P;
     return p.a + p.inner.u + (p.inner.v ? 1n : 0n) + p.xs[0n] + p.xs[2n];
   }
@@ -191,10 +191,10 @@ contract C {
 // ===========================================================================
 describe('(D) member access on a struct-returning call (byte-identical to solc)', () => {
   it('this.mk(a).x / .y matches solc', async () => {
-    const JETH = `@struct class P { x: u256; y: u256; }
-@contract class C {
+    const JETH = `type P = { x: u256; y: u256; };
+class C {
   mk(a: u256): P { return P(a, a + 1n); }
-  @external @pure f(a: u256): u256 { return this.mk(a).x + this.mk(a).y; }
+  get f(a: u256): External<u256> { return this.mk(a).x + this.mk(a).y; }
 }`;
     const SOL = `${SPDX}
 contract C {
@@ -212,10 +212,10 @@ contract C {
   });
 
   it('a narrow value field (bool / u8) reads identically', async () => {
-    const JETH = `@struct class P { f: bool; n: u8; }
-@contract class C {
+    const JETH = `type P = { f: bool; n: u8; };
+class C {
   mk(b: bool): P { return P(b, 200n); }
-  @external @pure g(b: bool): u256 { return (this.mk(b).f ? 1n : 0n) + u256(this.mk(b).n); }
+  get g(b: bool): External<u256> { return (this.mk(b).f ? 1n : 0n) + u256(this.mk(b).n); }
 }`;
     const SOL = `${SPDX}
 contract C {
@@ -239,9 +239,9 @@ contract C {
 // ===========================================================================
 describe('(E) function .selector (byte-identical to solc)', () => {
   it('this.g.selector returns the 4-byte selector, matching solc', async () => {
-    const JETH = `@contract class C {
-  @external @pure g(x: u256): u256 { return x; }
-  @external @pure sel(): bytes4 { return this.g.selector; }
+    const JETH = `class C {
+  get g(x: u256): External<u256> { return x; }
+  get sel(): External<bytes4> { return this.g.selector; }
 }`;
     const SOL = `${SPDX}
 contract C {
@@ -259,9 +259,9 @@ contract C {
   });
 
   it('a bare function-name .selector (public) also works and matches solc', async () => {
-    const JETH = `@contract class C {
-  @external @pure h(a: u256, b: u256): u256 { return a + b; }
-  @external @pure s(): bytes4 { return h.selector; }
+    const JETH = `class C {
+  get h(a: u256, b: u256): External<u256> { return a + b; }
+  get s(): External<bytes4> { return h.selector; }
 }`;
     const SOL = `${SPDX}
 contract C {
@@ -278,9 +278,9 @@ contract C {
   });
 
   it('.selector on an internal function is rejected (no ABI selector)', () => {
-    const src = `@contract class C {
-  @internal @pure p(x: u256): u256 { return x; }
-  @external @pure s(): bytes4 { return this.p.selector; }
+    const src = `class C {
+  @internal p(x: u256): u256 { return x; }
+  get s(): External<bytes4> { return this.p.selector; }
 }`;
     expect(codes(src)).toContain('JETH074');
   });

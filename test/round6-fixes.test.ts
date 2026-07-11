@@ -7,14 +7,14 @@ import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const JETH = `@contract class R6 {
-  @state a: u256[];
-  @state g3: Arr<Arr<Arr<u256, 2>, 3>, 2>;
-  @external pushA(v: u256): void { this.a.push(v); }
-  @external assignMem(x: u256, y: u256, z: u256): void { let xs: u256[] = [x, y, z]; this.a = xs; }
-  @external @view getA(): u256[] { return this.a; }
-  @external setG3(i: u256, j: u256, k: u256, v: u256): void { this.g3[i][j][k] = v; }
-  @external @view row(i: u256, j: u256): Arr<u256, 2> { return this.g3[i][j]; }
+const JETH = `class R6 {
+  a: u256[];
+  g3: Arr<Arr<Arr<u256, 2>, 3>, 2>;
+  pushA(v: u256): External<void> { this.a.push(v); }
+  assignMem(x: u256, y: u256, z: u256): External<void> { let xs: u256[] = [x, y, z]; this.a = xs; }
+  get getA(): External<u256[]> { return this.a; }
+  setG3(i: u256, j: u256, k: u256, v: u256): External<void> { this.g3[i][j][k] = v; }
+  get row(i: u256, j: u256): External<Arr<u256, 2>> { return this.g3[i][j]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

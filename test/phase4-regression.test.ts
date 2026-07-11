@@ -24,13 +24,12 @@ function codesFor(source: string): string[] {
   }
 }
 
-const JETH = `@contract
-class E {
-  @external @pure echoU8(x: u8[]): u8[] { return x; }
-  @external @pure echoI8(x: i8[]): i8[] { return x; }
-  @external @pure echoBool(x: bool[]): bool[] { return x; }
-  @external @pure echoB4(x: bytes4[]): bytes4[] { return x; }
-  @external @pure echoI16(x: i16[]): i16[] { return x; }
+const JETH = `class E {
+  get echoU8(x: u8[]): External<u8[]> { return x; }
+  get echoI8(x: i8[]): External<i8[]> { return x; }
+  get echoBool(x: bool[]): External<bool[]> { return x; }
+  get echoB4(x: bytes4[]): External<bytes4[]> { return x; }
+  get echoI16(x: i16[]): External<i16[]> { return x; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -79,12 +78,12 @@ describe('Phase 4 regression: struct field/return gating (Bug B)', () => {
     // byte-identical to solc, verified in fixed-array-return.test.ts).
     expect(
       codesFor(
-        `@struct class S { a: u256; arr: Arr<u256,2>; b: u256; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`,
+        `type S = { a: u256; arr: Arr<u256,2>; b: u256; };\nclass T { s: S; f(): S { return this.s; } }`,
       ),
     ).toEqual([]);
     expect(
       codesFor(
-        `@struct class Inner { x: u256; }\n@struct class S { a: u256; inner: Inner; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`,
+        `type Inner = { x: u256; };\ntype S = { a: u256; inner: Inner; };\nclass T { s: S; f(): S { return this.s; } }`,
       ),
     ).toEqual([]);
     // a dynamic (string) struct is now SUPPORTED in storage as a bare @state var
@@ -92,20 +91,20 @@ describe('Phase 4 regression: struct field/return gating (Bug B)', () => {
     // the bare declaration compiles cleanly.
     expect(
       codesFor(
-        `@struct class S { a: u256; b: string; }\n@contract class T { @state s: S; @external set(v: string): void { this.s.b = v; } }`,
+        `type S = { a: u256; b: string; };\nclass T { s: S; set(v: string): External<void> { this.s.b = v; } }`,
       ),
     ).toEqual([]);
     // returning a WHOLE storage dynamic struct is now SUPPORTED (storage-source
     // recursive head/tail encoder; byte-identical to solc).
     expect(
       codesFor(
-        `@struct class S { a: u256; b: string; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`,
+        `type S = { a: u256; b: string; };\nclass T { s: S; f(): S { return this.s; } }`,
       ),
     ).toEqual([]);
     // a flat value-only struct return still compiles
     expect(
       codesFor(
-        `@struct class S { a: u128; b: bool; }\n@contract class T { @state s: S; @view f(): S { return this.s; } }`,
+        `type S = { a: u128; b: bool; };\nclass T { s: S; f(): S { return this.s; } }`,
       ),
     ).toEqual([]);
   });

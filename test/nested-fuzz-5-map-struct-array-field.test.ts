@@ -26,17 +26,16 @@ function mapSlot(keyWord: bigint, baseSlot: bigint): bigint {
 // Within Acct: bal (u128) occupies offset 0 of the base slot; hist[0] is u256
 // and needs a whole slot, so hist starts at +1: hist[i] at base+1+i.
 const JETH = `// s5: mapping<address, Acct{ bal:u128; hist: Arr<u256,3> }>
-@struct class Acct { bal: u128; hist: Arr<u256, 3>; }
+type Acct = { bal: u128; hist: Arr<u256, 3>; };
 
-@contract
 class M {
-  @state accts: mapping<address, Acct>; // slot 0
+  accts: mapping<address, Acct>; // slot 0
 
-  @external setBal(k: address, v: u128): void { this.accts[k].bal = v; }
-  @external @view getBal(k: address): u128 { return this.accts[k].bal; }
+  setBal(k: address, v: u128): External<void> { this.accts[k].bal = v; }
+  get getBal(k: address): External<u128> { return this.accts[k].bal; }
 
-  @external setHist(k: address, i: u256, v: u256): void { this.accts[k].hist[i] = v; }
-  @external @view getHist(k: address, i: u256): u256 { return this.accts[k].hist[i]; }
+  setHist(k: address, i: u256, v: u256): External<void> { this.accts[k].hist[i] = v; }
+  get getHist(k: address, i: u256): External<u256> { return this.accts[k].hist[i]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

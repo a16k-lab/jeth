@@ -142,3 +142,10 @@ test/modifier.test.ts:201  trial mismatch: orig=rej[JETH330] post=ok
 test/multi-file-imports.test.ts:155  import/export-bearing source: a standalone trial cannot see the bundle
 test/namespaced-storage.test.ts:102  trial mismatch: orig=rej[JETH065,JETH409] post=ok
 test/nested-bytesn-cast-constfold.test.ts:28  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH170,JETH352])
+test/new-array.test.ts:165  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/new-array.test.ts:180  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/phase2-regression.test.ts:61  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/qualified-selector-interfaceid.test.ts:75  trial mismatch: orig=ok post=rej[JETH074,JETH074]
+test/qualified-selector-interfaceid.test.ts:149  @interface class IFoo extends ...: a native interface cannot extend (JETH349) - stays legacy | @interface class IEmpty extends ...: a native interface cannot extend (JETH349) - stays legacy
+test/qualified-selector-interfaceid.test.ts:218  @interface class IFoo extends ...: a native interface cannot extend (JETH349) - stays legacy
+test/receive-fallback.test.ts:138  trial mismatch: orig=rej[JETH386] post=ok

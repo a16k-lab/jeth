@@ -7,17 +7,17 @@ import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const JETH = `@contract class PA {
-  @state dd: u256[][];
-  @state src: u256[];
-  @external pushMem(a: u256, b: u256, c: u256): void { let xs: u256[] = [a, b, c]; this.dd.push(xs); }
-  @external pushLit(): void { this.dd.push([7n, 8n]); }
-  @external pushEmpty(): void { this.dd.push(); }
-  @external fillSrc(v: u256): void { this.src.push(v); }
-  @external pushSrc(): void { this.dd.push(this.src); }
-  @external @view getAll(): u256[][] { return this.dd; }
-  @external @view at(i: u256, j: u256): u256 { return this.dd[i][j]; }
-  @external @view innerLen(i: u256): u256 { return this.dd[i].length; }
+const JETH = `class PA {
+  dd: u256[][];
+  src: u256[];
+  pushMem(a: u256, b: u256, c: u256): External<void> { let xs: u256[] = [a, b, c]; this.dd.push(xs); }
+  pushLit(): External<void> { this.dd.push([7n, 8n]); }
+  pushEmpty(): External<void> { this.dd.push(); }
+  fillSrc(v: u256): External<void> { this.src.push(v); }
+  pushSrc(): External<void> { this.dd.push(this.src); }
+  get getAll(): External<u256[][]> { return this.dd; }
+  get at(i: u256, j: u256): External<u256> { return this.dd[i][j]; }
+  get innerLen(i: u256): External<u256> { return this.dd[i].length; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

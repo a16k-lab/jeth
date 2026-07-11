@@ -32,15 +32,15 @@ async function diff(J: string, S: string, sigs: string[]) {
 
 describe('Cat B: pointer-headed static-struct memory arrays - byte-identical to solc 0.8.35', () => {
   it('construct / read / encode / return / OOB / zero-init / fixed-array field', async () => {
-    const J = `@struct class P { a: u256; b: u256; }
-    @struct class N { a: u256; pre: Arr<u256, 2>; }
-    @contract class C {
-      @external @pure lit(): bytes { let xs: P[] = [P(1n, 2n), P(3n, 4n), P(5n, 6n)]; return abi.encode(xs); }
-      @external @pure read(): u256 { let xs: P[] = [P(1n, 2n), P(3n, 4n)]; return xs[1n].a + xs[0n].b + xs.length; }
-      @external @pure ret(): P[] { let xs: P[] = [P(7n, 8n), P(9n, 10n)]; return xs; }
-      @external @pure zero(): bytes { let xs: P[] = new Array<P>(3n); xs[1n] = P(7n, 8n); return abi.encode(xs); }
-      @external @pure oob(): u256 { let xs: P[] = [P(1n, 2n)]; return xs[5n].a; }
-      @external @pure fafield(): bytes { let xs: N[] = new Array<N>(2n); xs[0n] = N(5n, [6n, 7n]); return abi.encode(xs, xs[0n].pre[1n]); } }`;
+    const J = `type P = { a: u256; b: u256; };
+    type N = { a: u256; pre: Arr<u256, 2>; };
+    class C {
+      get lit(): External<bytes> { let xs: P[] = [P(1n, 2n), P(3n, 4n), P(5n, 6n)]; return abi.encode(xs); }
+      get read(): External<u256> { let xs: P[] = [P(1n, 2n), P(3n, 4n)]; return xs[1n].a + xs[0n].b + xs.length; }
+      get ret(): External<P[]> { let xs: P[] = [P(7n, 8n), P(9n, 10n)]; return xs; }
+      get zero(): External<bytes> { let xs: P[] = new Array<P>(3n); xs[1n] = P(7n, 8n); return abi.encode(xs); }
+      get oob(): External<u256> { let xs: P[] = [P(1n, 2n)]; return xs[5n].a; }
+      get fafield(): External<bytes> { let xs: N[] = new Array<N>(2n); xs[0n] = N(5n, [6n, 7n]); return abi.encode(xs, xs[0n].pre[1n]); } }`;
     const S = `struct P { uint256 a; uint256 b; }
     struct N { uint256 a; uint256[2] pre; }
     contract C {
@@ -54,14 +54,14 @@ describe('Cat B: pointer-headed static-struct memory arrays - byte-identical to 
   });
 
   it('element ALIASING: xs[i]=xs[j] / let p=xs[i] / for-of (write-through, re-point independence)', async () => {
-    const J = `@struct class P { a: u256; b: u256; }
-    @contract class C {
-      @external @pure e2e(): u256 { let xs: P[] = [P(1n, 2n), P(8n, 9n)]; xs[1n] = xs[0n]; xs[0n].a = 7n; return xs[1n].a; }
-      @external @pure repoint(): u256 { let xs: P[] = [P(1n, 2n), P(8n, 9n)]; xs[1n] = xs[0n]; xs[0n] = P(5n, 5n); return xs[1n].a; }
-      @external @pure letp(): u256 { let xs: P[] = [P(1n, 2n)]; let p: P = xs[0n]; p.a = 9n; return xs[0n].a; }
-      @external @pure letpkeep(): u256 { let xs: P[] = [P(1n, 2n)]; let p: P = xs[0n]; xs[0n] = P(9n, 9n); return p.a; }
-      @external @pure forof(): u256 { let xs: P[] = [P(1n, 2n), P(3n, 4n)]; let n: u256 = 0n; for (const p of xs) { n = n + p.a + p.b; } return n; }
-      @external @pure encalias(): bytes { let xs: P[] = [P(1n, 2n), P(8n, 9n)]; xs[1n] = xs[0n]; xs[0n].a = 7n; return abi.encode(xs); } }`;
+    const J = `type P = { a: u256; b: u256; };
+    class C {
+      get e2e(): External<u256> { let xs: P[] = [P(1n, 2n), P(8n, 9n)]; xs[1n] = xs[0n]; xs[0n].a = 7n; return xs[1n].a; }
+      get repoint(): External<u256> { let xs: P[] = [P(1n, 2n), P(8n, 9n)]; xs[1n] = xs[0n]; xs[0n] = P(5n, 5n); return xs[1n].a; }
+      get letp(): External<u256> { let xs: P[] = [P(1n, 2n)]; let p: P = xs[0n]; p.a = 9n; return xs[0n].a; }
+      get letpkeep(): External<u256> { let xs: P[] = [P(1n, 2n)]; let p: P = xs[0n]; xs[0n] = P(9n, 9n); return p.a; }
+      get forof(): External<u256> { let xs: P[] = [P(1n, 2n), P(3n, 4n)]; let n: u256 = 0n; for (const p of xs) { n = n + p.a + p.b; } return n; }
+      get encalias(): External<bytes> { let xs: P[] = [P(1n, 2n), P(8n, 9n)]; xs[1n] = xs[0n]; xs[0n].a = 7n; return abi.encode(xs); } }`;
     const S = `struct P { uint256 a; uint256 b; }
     contract C {
       function e2e() external pure returns(uint256){ P[] memory xs=new P[](2); xs[0]=P(1,2);xs[1]=P(8,9); xs[1]=xs[0]; xs[0].a=7; return xs[1].a; }
@@ -74,11 +74,11 @@ describe('Cat B: pointer-headed static-struct memory arrays - byte-identical to 
   });
 
   it('nested P[][] build / read / encode / inner alias', async () => {
-    const J = `@struct class P { a: u256; b: u256; }
-    @contract class C {
-      @external @pure enc(): bytes { let m: P[][] = [[P(1n, 2n)], [P(3n, 4n), P(5n, 6n)]]; return abi.encode(m, m[1n][1n].a); }
-      @external @pure newz(): bytes { let m: P[][] = new Array<P[]>(2n); m[0n] = [P(1n, 2n)]; return abi.encode(m); }
-      @external @pure inalias(): u256 { let m: P[][] = [[P(1n, 2n)], [P(9n, 9n)]]; m[1n] = m[0n]; m[0n][0n].a = 7n; return m[1n][0n].a; } }`;
+    const J = `type P = { a: u256; b: u256; };
+    class C {
+      get enc(): External<bytes> { let m: P[][] = [[P(1n, 2n)], [P(3n, 4n), P(5n, 6n)]]; return abi.encode(m, m[1n][1n].a); }
+      get newz(): External<bytes> { let m: P[][] = new Array<P[]>(2n); m[0n] = [P(1n, 2n)]; return abi.encode(m); }
+      get inalias(): External<u256> { let m: P[][] = [[P(1n, 2n)], [P(9n, 9n)]]; m[1n] = m[0n]; m[0n][0n].a = 7n; return m[1n][0n].a; } }`;
     const S = `struct P { uint256 a; uint256 b; }
     contract C {
       function enc() external pure returns(bytes memory){ P[][] memory m=new P[][](2); m[0]=new P[](1);m[0][0]=P(1,2); m[1]=new P[](2);m[1][0]=P(3,4);m[1][1]=P(5,6); return abi.encode(m, m[1][1].a); }
@@ -88,12 +88,12 @@ describe('Cat B: pointer-headed static-struct memory arrays - byte-identical to 
   });
 
   it('abi.decode(b, P[]) and abi.decode(b, P[][]) round-trip + malformed reverts byte-identical', async () => {
-    const J = `@struct class P { a: u256; b: u256; }
-    @contract class C {
-      @external dec1(d: bytes): bytes { let xs: P[] = abi.decode(d, P[]); return abi.encode(xs); }
-      @external dec2(d: bytes): bytes { let m: P[][] = abi.decode(d, P[][]); return abi.encode(m); }
-      @external @pure mk1(): bytes { let xs: P[] = [P(11n, 22n), P(33n, 44n)]; return abi.encode(xs); }
-      @external @pure mk2(): bytes { let m: P[][] = [[P(1n, 2n)], [P(3n, 4n)]]; return abi.encode(m); } }`;
+    const J = `type P = { a: u256; b: u256; };
+    class C {
+      get dec1(d: bytes): External<bytes> { let xs: P[] = abi.decode(d, P[]); return abi.encode(xs); }
+      get dec2(d: bytes): External<bytes> { let m: P[][] = abi.decode(d, P[][]); return abi.encode(m); }
+      get mk1(): External<bytes> { let xs: P[] = [P(11n, 22n), P(33n, 44n)]; return abi.encode(xs); }
+      get mk2(): External<bytes> { let m: P[][] = [[P(1n, 2n)], [P(3n, 4n)]]; return abi.encode(m); } }`;
     const S = `struct P { uint256 a; uint256 b; }
     contract C {
       function dec1(bytes calldata d) external pure returns(bytes memory){ P[] memory xs=abi.decode(d,(P[])); return abi.encode(xs); }
@@ -124,9 +124,9 @@ describe('Cat B: pointer-headed static-struct memory arrays - byte-identical to 
 
   it('FIXED-outer / FIXED-element static-struct arrays now ACCEPT (Batch A, byte-identical)', () => {
     // Arr<P,N> / Arr<P,N>[] are pointer-headed like solc (byte-identity in fixed-static-struct-array.test.ts).
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`)).toEqual([]);
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): u256 { let m: Arr<P,2>[] = [[P(1n,2n),P(3n,4n)]]; return m[0n][0n].a; } }`)).toEqual([]);
+    expect(codes(`type P = {a:u256;b:u256;}; class C { get f(): External<Arr<P,2>> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`)).toEqual([]);
+    expect(codes(`type P = {a:u256;b:u256;}; class C { get f(): External<u256> { let m: Arr<P,2>[] = [[P(1n,2n),P(3n,4n)]]; return m[0n][0n].a; } }`)).toEqual([]);
     // value arrays stay inline (unchanged) and accept:
-    expect(codes(`@contract class C { @external @pure f(): u256 { let a: u256[] = [1n,2n]; return a[1n]; } }`)).toEqual([]);
+    expect(codes(`class C { get f(): External<u256> { let a: u256[] = [1n,2n]; return a[1n]; } }`)).toEqual([]);
   });
 });

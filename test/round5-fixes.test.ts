@@ -7,18 +7,18 @@ import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const JETH = `@struct class S { a: u256; xs: u256[]; }
-@contract class R5 {
-  @state s: S;
-  @state g: Arr<Arr<u256, 2>, 2>;
-  @state dd: u256[][];
-  @external pushX(v: u256): void { this.s.xs.push(v); }
-  @external @view getXs(): u256[] { return this.s.xs; }
-  @external setG(i: u256, j: u256, v: u256): void { this.g[i][j] = v; }
-  @external @view getRow(i: u256): Arr<u256, 2> { return this.g[i]; }
-  @external ddPush(): void { this.dd.push(); }
-  @external assignInner(i: u256, a: u256, b: u256, c: u256): void { let xs: u256[] = [a, b, c]; this.dd[i] = xs; }
-  @external @view getInner(i: u256): u256[] { return this.dd[i]; }
+const JETH = `type S = { a: u256; xs: u256[]; };
+class R5 {
+  s: S;
+  g: Arr<Arr<u256, 2>, 2>;
+  dd: u256[][];
+  pushX(v: u256): External<void> { this.s.xs.push(v); }
+  get getXs(): External<u256[]> { return this.s.xs; }
+  setG(i: u256, j: u256, v: u256): External<void> { this.g[i][j] = v; }
+  get getRow(i: u256): External<Arr<u256, 2>> { return this.g[i]; }
+  ddPush(): External<void> { this.dd.push(); }
+  assignInner(i: u256, a: u256, b: u256, c: u256): External<void> { let xs: u256[] = [a, b, c]; this.dd[i] = xs; }
+  get getInner(i: u256): External<u256[]> { return this.dd[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

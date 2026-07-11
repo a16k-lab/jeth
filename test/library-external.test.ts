@@ -294,7 +294,7 @@ contract C {
   }
 
   it('GATE: a @payable external library fn -> JETH390 (solc also rejects: library functions cannot be payable)', () => {
-    const jeth = `static class L { @payable f(a: u256): External<u256> { return a; } }
+    const jeth = `static class L { f(a: u256): Payable<External<u256>> { return a; } }
 class C { get g(a: u256): External<u256> { return L.f(a); } }`;
     expect(jethRejectsWith(jeth, 'JETH390')).toBe(true);
   });

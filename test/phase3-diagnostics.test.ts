@@ -13,10 +13,9 @@ function codesFor(source: string): string[] {
   }
 }
 // contract with a mapping `m`, a u256 `total`, plus one method body `body`.
-const C = (body: string, mut = '@external', ret = 'void') => `@contract
-class T {
-  @state m: mapping<address, u256>;
-  @state total: u256 = 0n;
+const C = (body: string, mut = '@external', ret = 'void') => `class T {
+  m: mapping<address, u256>;
+  total: u256 = 0n;
   ${mut}
   f(): ${ret} {
     ${body}

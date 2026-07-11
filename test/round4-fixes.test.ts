@@ -10,17 +10,17 @@ import { compileSolidity } from './_solidity.js';
 
 const K = 0xabcn;
 
-const JETH = `@contract class R4 {
-  @state m: mapping<u256, u256[][]>;
-  @state dd: u256[][];
-  @external pushOuter(k: u256): void { this.m[k].push(); }
-  @external pushInner(k: u256, i: u256, v: u256): void { this.m[k][i].push(v); }
-  @external @view innerLen(k: u256, i: u256): u256 { return this.m[k][i].length; }
-  @external @view at(k: u256, i: u256, j: u256): u256 { return this.m[k][i][j]; }
-  @external ddPush(): void { this.dd.push(); }
-  @external ddPushInner(i: u256, v: u256): void { this.dd[i].push(v); }
-  @external @view getInner(i: u256): u256[] { return this.dd[i]; }
-  @external @pure ternWrite(c: bool, i: u256, v: u256): u256 {
+const JETH = `class R4 {
+  m: mapping<u256, u256[][]>;
+  dd: u256[][];
+  pushOuter(k: u256): External<void> { this.m[k].push(); }
+  pushInner(k: u256, i: u256, v: u256): External<void> { this.m[k][i].push(v); }
+  get innerLen(k: u256, i: u256): External<u256> { return this.m[k][i].length; }
+  get at(k: u256, i: u256, j: u256): External<u256> { return this.m[k][i][j]; }
+  ddPush(): External<void> { this.dd.push(); }
+  ddPushInner(i: u256, v: u256): External<void> { this.dd[i].push(v); }
+  get getInner(i: u256): External<u256[]> { return this.dd[i]; }
+  get ternWrite(c: bool, i: u256, v: u256): External<u256> {
     let xs: u256[] = [1n, 2n]; let ys: u256[] = [3n, 4n];
     (c ? xs : ys)[i] = v;
     return xs[0n] + xs[1n] + ys[0n] + ys[1n];

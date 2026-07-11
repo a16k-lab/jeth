@@ -31,16 +31,15 @@ function mapSlot(keyWord: bigint, baseSlot: bigint): bigint {
 
 // JETH source. book is the only state var -> base slot 0.
 const JETH = `// s9: mapping<u256, Arr<Slot,2>> where Slot{lo:u128; hi:u128}
-@struct class Slot { lo: u128; hi: u128; }
+type Slot = { lo: u128; hi: u128; };
 
-@contract
 class M {
-  @state book: mapping<u256, Arr<Slot, 2>>; // slot 0
+  book: mapping<u256, Arr<Slot, 2>>; // slot 0
 
-  @external setLo(k: u256, i: u256, v: u128): void { this.book[k][i].lo = v; }
-  @external setHi(k: u256, i: u256, v: u128): void { this.book[k][i].hi = v; }
-  @external @view getLo(k: u256, i: u256): u128 { return this.book[k][i].lo; }
-  @external @view getHi(k: u256, i: u256): u128 { return this.book[k][i].hi; }
+  setLo(k: u256, i: u256, v: u128): External<void> { this.book[k][i].lo = v; }
+  setHi(k: u256, i: u256, v: u128): External<void> { this.book[k][i].hi = v; }
+  get getLo(k: u256, i: u256): External<u128> { return this.book[k][i].lo; }
+  get getHi(k: u256, i: u256): External<u128> { return this.book[k][i].hi; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

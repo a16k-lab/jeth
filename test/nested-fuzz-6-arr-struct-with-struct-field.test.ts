@@ -10,20 +10,19 @@ import { functionSelector } from '../src/selectors.js';
 import { compileSolidity, readSlot } from './_solidity.js';
 
 const JETH = `
-@struct class Pt { x: u128; y: u128; }
-@struct class Item { id: u64; pt: Pt; }
+type Pt = { x: u128; y: u128; };
+type Item = { id: u64; pt: Pt; };
 
-@contract
 class S6 {
-  @state items: Arr<Item, 3>;   // slots 0-5 (each Item: id-slot + pt-slot)
-  @state sentinel: u256;        // slot 6
+  items: Arr<Item, 3>;   // slots 0-5 (each Item: id-slot + pt-slot)
+  sentinel: u256;        // slot 6
 
-  @external setId(i: u256, v: u64): void { this.items[i].id = v; }
-  @external setX(i: u256, v: u128): void { this.items[i].pt.x = v; }
-  @external setY(i: u256, v: u128): void { this.items[i].pt.y = v; }
-  @external @view getId(i: u256): u64 { return this.items[i].id; }
-  @external @view getX(i: u256): u128 { return this.items[i].pt.x; }
-  @external @view getY(i: u256): u128 { return this.items[i].pt.y; }
+  setId(i: u256, v: u64): External<void> { this.items[i].id = v; }
+  setX(i: u256, v: u128): External<void> { this.items[i].pt.x = v; }
+  setY(i: u256, v: u128): External<void> { this.items[i].pt.y = v; }
+  get getId(i: u256): External<u64> { return this.items[i].id; }
+  get getX(i: u256): External<u128> { return this.items[i].pt.x; }
+  get getY(i: u256): External<u128> { return this.items[i].pt.y; }
 }
 `;
 

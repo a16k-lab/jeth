@@ -28,12 +28,12 @@ async function diff(J: string, S: string, calls: [string, string][]) {
 
 describe('D: value-fixed-array nested array inner-element write (Arr<T,N>[] m[i][j]=v) vs solc 0.8.35', () => {
   it('literal + new Array construction, inner write (element-0 zero and non-zero), runtime OOB', async () => {
-    const J = `@contract class C {
-      @external @pure lit(): u256 { let m: Arr<u256, 2>[] = [[1n, 2n], [3n, 4n]]; m[0n][1n] = 99n; return m[0n][1n] + m[1n][0n] + m[0n][0n]; }
-      @external @pure zeroELem(): u256 { let m: Arr<u256, 2>[] = [[0n, 0n], [0n, 0n]]; m[0n][0n] = 5n; return m[0n][0n]; }
-      @external @pure nw(): u256 { let m: Arr<u256, 2>[] = new Array<Arr<u256, 2>>(2n); m[0n][1n] = 99n; m[1n][0n] = 7n; return m[0n][1n] + m[1n][0n]; }
-      @external @pure enc(): bytes { let m: Arr<u256, 3>[] = new Array<Arr<u256, 3>>(2n); m[0n][0n] = 11n; m[0n][2n] = 33n; m[1n][1n] = 50n; return abi.encode(m); }
-      @external @pure oob(i: u256): u256 { let m: Arr<u256, 3>[] = new Array<Arr<u256, 3>>(2n); m[0n][i] = 42n; return m[0n][i]; } }`;
+    const J = `class C {
+      get lit(): External<u256> { let m: Arr<u256, 2>[] = [[1n, 2n], [3n, 4n]]; m[0n][1n] = 99n; return m[0n][1n] + m[1n][0n] + m[0n][0n]; }
+      get zeroELem(): External<u256> { let m: Arr<u256, 2>[] = [[0n, 0n], [0n, 0n]]; m[0n][0n] = 5n; return m[0n][0n]; }
+      get nw(): External<u256> { let m: Arr<u256, 2>[] = new Array<Arr<u256, 2>>(2n); m[0n][1n] = 99n; m[1n][0n] = 7n; return m[0n][1n] + m[1n][0n]; }
+      get enc(): External<bytes> { let m: Arr<u256, 3>[] = new Array<Arr<u256, 3>>(2n); m[0n][0n] = 11n; m[0n][2n] = 33n; m[1n][1n] = 50n; return abi.encode(m); }
+      get oob(i: u256): External<u256> { let m: Arr<u256, 3>[] = new Array<Arr<u256, 3>>(2n); m[0n][i] = 42n; return m[0n][i]; } }`;
     const S = `contract C {
       function lit() external pure returns(uint256){ uint256[2][] memory m=new uint256[2][](2); m[0][0]=1;m[0][1]=2;m[1][0]=3;m[1][1]=4; m[0][1]=99; return m[0][1]+m[1][0]+m[0][0]; }
       function zeroELem() external pure returns(uint256){ uint256[2][] memory m=new uint256[2][](2); m[0][0]=5; return m[0][0]; }
@@ -46,12 +46,12 @@ describe('D: value-fixed-array nested array inner-element write (Arr<T,N>[] m[i]
 
 describe('E: dyn-struct nested static-aggregate field WRITES vs solc 0.8.35', () => {
   it('p.inner.x=v (value leaf), p.fa[j]=v (const/runtime/OOB) byte-identical', async () => {
-    const J = `@struct class In { x: u256; y: u256; }
-    @struct class S { a: u256; inner: In; fa: Arr<u256, 3>; b: bytes; }
-    @contract class C {
-      @external @pure vleaf(): bytes { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.inner.x = 90n; return abi.encode(s, s.inner.x, s.inner.y); }
-      @external @pure felem(): bytes { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.fa[1n] = 99n; return abi.encode(s, s.fa[1n], s.fa[0n]); }
-      @external @pure fdyn(i: u256): u256 { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.fa[i] = 77n; return s.fa[i]; } }`;
+    const J = `type In = { x: u256; y: u256; };
+    type S = { a: u256; inner: In; fa: Arr<u256, 3>; b: bytes; };
+    class C {
+      get vleaf(): External<bytes> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.inner.x = 90n; return abi.encode(s, s.inner.x, s.inner.y); }
+      get felem(): External<bytes> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.fa[1n] = 99n; return abi.encode(s, s.fa[1n], s.fa[0n]); }
+      get fdyn(i: u256): External<u256> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.fa[i] = 77n; return s.fa[i]; } }`;
     const Sol = `struct In { uint256 x; uint256 y; }
     struct S { uint256 a; In inner; uint256[3] fa; bytes b; }
     contract C {
@@ -73,12 +73,12 @@ describe('E: dyn-struct nested static-aggregate field WRITES vs solc 0.8.35', ()
         return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
       }
     };
-    const HDR = `@struct class In { x: u256; y: u256; }
-    @struct class S { a: u256; inner: In; fa: Arr<u256, 3>; b: bytes; }`;
+    const HDR = `type In = { x: u256; y: u256; };
+    type S = { a: u256; inner: In; fa: Arr<u256, 3>; b: bytes; };`;
     expect(codes(`${HDR}
-    @contract class C { @external @pure r(): bytes { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.inner = In(5n, 6n); return abi.encode(s); } }`)).toContain('JETH429');
+    class C { get r(): External<bytes> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); s.inner = In(5n, 6n); return abi.encode(s); } }`)).toContain('JETH429');
     expect(codes(`${HDR}
-    @contract class C { @external @pure r(): bytes { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); let q: Arr<u256, 3> = [10n, 11n, 12n]; s.fa = q; return abi.encode(s); } }`)).toContain('JETH429');
+    class C { get r(): External<bytes> { let s: S = S(1n, In(3n, 4n), [7n, 8n, 9n], bytes("z")); let q: Arr<u256, 3> = [10n, 11n, 12n]; s.fa = q; return abi.encode(s); } }`)).toContain('JETH429');
   });
 });
 
@@ -97,16 +97,16 @@ describe('SOUNDNESS: dyn-struct leaf-array field re-point from a calldata/storag
     // miscompile; now a clean reject. A memory/literal leaf-array source, and a VALUE-array field from
     // any source, are unaffected and accept byte-identical.
     expect(
-      codes(`@struct class P{a:u256;tags:bytes[];} @contract class C { @external @pure f(cd: bytes[]): bytes { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); p.tags=cd; return abi.encode(p); } }`),
+      codes(`type P = {a:u256;tags:bytes[];}; class C { get f(cd: bytes[]): External<bytes> { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); p.tags=cd; return abi.encode(p); } }`),
     ).toContain('JETH200');
     expect(
-      codes(`@struct class P{a:u256;tags:bytes[];} @contract class C { @state st: bytes[]; @external f(): bytes { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); p.tags=this.st; return abi.encode(p); } }`),
+      codes(`type P = {a:u256;tags:bytes[];}; class C { st: bytes[]; get f(): External<bytes> { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); p.tags=this.st; return abi.encode(p); } }`),
     ).toContain('JETH200');
     expect(
-      codes(`@struct class P{a:u256;tags:bytes[];} @contract class C { @external @pure f(): bytes { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); let n:bytes[]=[bytes("aa")]; p.tags=n; return abi.encode(p); } }`),
+      codes(`type P = {a:u256;tags:bytes[];}; class C { get f(): External<bytes> { let t:bytes[]=[bytes("q")]; let p:P=P(1n,t); let n:bytes[]=[bytes("aa")]; p.tags=n; return abi.encode(p); } }`),
     ).toEqual([]);
     expect(
-      codes(`@struct class P{a:u256;xs:u256[];} @contract class C { @external @pure f(cd: u256[]): bytes { let t:u256[]=[9n]; let p:P=P(1n,t); p.xs=cd; return abi.encode(p); } }`),
+      codes(`type P = {a:u256;xs:u256[];}; class C { get f(cd: u256[]): External<bytes> { let t:u256[]=[9n]; let p:P=P(1n,t); p.xs=cd; return abi.encode(p); } }`),
     ).toEqual([]);
   });
 });

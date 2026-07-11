@@ -27,12 +27,11 @@ describe('s8-gate-aggregate-struct-return (GATE: no EVM run)', () => {
   // The struct itself is well-formed (Arr<u256,2> is a static field, so JETH229
   // must NOT fire here); only the whole-struct *return* is gated -> JETH225.
   const SRC_RETURN_FIXED_ARRAY = `
-@struct class S { a: u256; arr: Arr<u256, 2>; }
+type S = { a: u256; arr: Arr<u256, 2>; };
 
-@contract
 class GateReturn {
-  @state s: S;
-  @view getS(): S { return this.s; }
+  s: S;
+  getS(): S { return this.s; }
 }
 `;
 
@@ -40,24 +39,22 @@ class GateReturn {
   // valid (a dynamic struct, Phase 4e-6), but a STORAGE @state of it is gated
   // -> JETH231 (storage dynamic struct is not supported; only calldata/return).
   const SRC_STRING_FIELD = `
-@struct class T { a: u256; name: string; }
+type T = { a: u256; name: string; };
 
-@contract
 class GateStringField {
-  @state t: T;
-  @view getA(): u256 { return this.t.a; }
+  t: T;
+  getA(): u256 { return this.t.a; }
 }
 `;
 
   // Sanity control: an all-value-type struct returned from a @view compiles
   // cleanly. Guards against a false pass where the gate fires on *everything*.
   const SRC_VALUE_STRUCT_OK = `
-@struct class V { a: u256; b: u128; c: bool; }
+type V = { a: u256; b: u128; c: bool; };
 
-@contract
 class ControlOk {
-  @state v: V;
-  @view getV(): V { return this.v; }
+  v: V;
+  getV(): V { return this.v; }
 }
 `;
 
@@ -87,7 +84,7 @@ class ControlOk {
     // A whole-struct RETURN of a storage dynamic struct is now SUPPORTED (the
     // storage-source recursive head/tail encoder; byte-identical to solc).
     const whole = codesFor(
-      `@struct class T { a: u256; name: string; }\n@contract class C { @state t: T; @view f(): T { return this.t; } }`,
+      `type T = { a: u256; name: string; };\nclass C { t: T; f(): T { return this.t; } }`,
       'WholeRet.jeth',
     );
     expect(whole, 'returning a whole storage dynamic struct now compiles; got: ' + JSON.stringify(whole)).toBeNull();

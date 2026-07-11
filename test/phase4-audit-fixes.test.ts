@@ -16,7 +16,7 @@ const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 describe('Phase 4 audit fix B1: T[][] echo validates dirty inner elements', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = functionSelector('echo8(uint8[][])');
-  const JETH = `@contract class Aud { @external @pure echo8(m: u8[][]): u8[][] { return m; } }`;
+  const JETH = `class Aud { get echo8(m: u8[][]): External<u8[][]> { return m; } }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract Aud { function echo8(uint8[][] calldata m) external pure returns (uint8[][] memory){ return m; } }`;
@@ -60,8 +60,8 @@ contract Aud { function echo8(uint8[][] calldata m) external pure returns (uint8
 describe('Phase 4 audit fix B5: .length of a fixed-array field of a calldata struct param', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   const sel = functionSelector('dlen((uint64,uint256[3]))');
-  const JETH = `@struct class S { id: u64; data: Arr<u256,3>; }
-@contract class A { @external @pure dlen(s: S): u256 { return s.data.length; } }`;
+  const JETH = `type S = { id: u64; data: Arr<u256,3>; };
+class A { get dlen(s: S): External<u256> { return s.data.length; } }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract A { struct S { uint64 id; uint256[3] data; } function dlen(S calldata s) external pure returns(uint256){ return s.data.length; } }`;

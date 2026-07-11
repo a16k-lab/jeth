@@ -70,7 +70,7 @@ function abi3(b: number[], e: number[], m: number[]): string {
 }
 
 describe('modexp (0x05)', () => {
-  const J = `@contract class C { @external @view m(b: bytes, e: bytes, md: bytes): bytes { return modexp(b, e, md); } }`;
+  const J = `class C { get m(b: bytes, e: bytes, md: bytes): External<bytes> { return modexp(b, e, md); } }`;
   const S = `contract C { function m(bytes calldata b, bytes calldata e, bytes calldata md) external view returns(bytes memory){ bytes memory input=abi.encodePacked(b.length,e.length,md.length,b,e,md); bytes memory o=new bytes(md.length); uint256 ml=md.length; assembly { if iszero(staticcall(gas(),0x05,add(input,32),mload(input),add(o,32),ml)) { revert(0,0) } } return o; } }`;
   const msel = sel('m(bytes,bytes,bytes)');
   it('3^2 mod 5 = 4', async () => {
@@ -85,9 +85,9 @@ describe('modexp (0x05)', () => {
 });
 
 describe('bn256 (0x06 / 0x07 / 0x08)', () => {
-  const G = '@struct class G1Point { x: u256; y: u256; }';
+  const G = 'type G1Point = { x: u256; y: u256; };';
   describe('bn256Add', () => {
-    const J = `${G}\n@contract class C { @external @view ad(ax: u256, ay: u256, bx: u256, by: u256): G1Point { const p: G1Point = { x: ax, y: ay }; const q: G1Point = { x: bx, y: by }; return bn256Add(p, q); } }`;
+    const J = `${G}\nclass C { get ad(ax: u256, ay: u256, bx: u256, by: u256): External<G1Point> { const p: G1Point = { x: ax, y: ay }; const q: G1Point = { x: bx, y: by }; return bn256Add(p, q); } }`;
     const S = `contract C { function ad(uint256 ax,uint256 ay,uint256 bx,uint256 by) external view returns(uint256,uint256){ uint256[4] memory inp=[ax,ay,bx,by]; uint256[2] memory o; assembly { if iszero(staticcall(gas(),0x06,inp,0x80,o,0x40)) { revert(0,0) } } return (o[0],o[1]); } }`;
     const s = sel('ad(uint256,uint256,uint256,uint256)');
     it('G + G (generator doubling)', async () => {
@@ -99,7 +99,7 @@ describe('bn256 (0x06 / 0x07 / 0x08)', () => {
     });
   });
   describe('bn256Mul', () => {
-    const J = `${G}\n@contract class C { @external @view ml(x: u256, y: u256, s: u256): G1Point { const p: G1Point = { x: x, y: y }; return bn256Mul(p, s); } }`;
+    const J = `${G}\nclass C { get ml(x: u256, y: u256, s: u256): External<G1Point> { const p: G1Point = { x: x, y: y }; return bn256Mul(p, s); } }`;
     const S = `contract C { function ml(uint256 x,uint256 y,uint256 s) external view returns(uint256,uint256){ uint256[3] memory inp=[x,y,s]; uint256[2] memory o; assembly { if iszero(staticcall(gas(),0x07,inp,0x60,o,0x40)) { revert(0,0) } } return (o[0],o[1]); } }`;
     const s = sel('ml(uint256,uint256,uint256)');
     it('G * 7', async () => {
@@ -110,7 +110,7 @@ describe('bn256 (0x06 / 0x07 / 0x08)', () => {
     });
   });
   describe('bn256Pairing', () => {
-    const J = `@contract class C { @external @view pr(input: bytes): bool { return bn256Pairing(input); } }`;
+    const J = `class C { get pr(input: bytes): External<bool> { return bn256Pairing(input); } }`;
     const S = `contract C { function pr(bytes calldata input) external view returns(bool){ bytes memory b=input; uint256[1] memory o; assembly { if iszero(staticcall(gas(),0x08,add(b,32),mload(b),o,0x20)) { revert(0,0) } } return o[0]==1; } }`;
     const s = sel('pr(bytes)');
     it('empty input -> true', async () => {
@@ -128,7 +128,7 @@ describe('blake2f (0x09)', () => {
   const mHex =
     '6162638000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000';
   const tHex = '03000000000000000000000000000000';
-  const J = `@contract class C { @external @view b(h: bytes, m: bytes, t: bytes16, f: bool): bytes { return blake2f(12n, h, m, t, f); } }`;
+  const J = `class C { get b(h: bytes, m: bytes, t: bytes16, f: bool): External<bytes> { return blake2f(12n, h, m, t, f); } }`;
   const S = `contract C { function b(bytes calldata h, bytes calldata m, bytes16 t, bool f) external view returns(bytes memory){ bytes memory inp=abi.encodePacked(uint32(12), h, m, t, f); bytes memory o=new bytes(64); assembly { if iszero(staticcall(gas(),9,add(inp,32),213,add(o,32),64)) { revert(0,0) } } return o; } }`;
   const bsel = sel('b(bytes,bytes,bytes16,bool)');
   const offH = W(0x80n);
@@ -153,7 +153,7 @@ describe('pointEvaluation / KZG (0x0a)', () => {
   // output words [fe, modulus]; the solc reference does the same staticcall(0x0a) and returns them, so a
   // success or a revert is diffed byte-for-byte. The valid case uses the zero-polynomial / infinity
   // vector (a real KZG proof, verified by the library the precompile uses).
-  const J = `@contract class C { @external @view pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): [u256, u256] { const [fe, modu] = pointEvaluation(vh, z, y, c, p); return [fe, modu]; } }`;
+  const J = `class C { get pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): External<[u256, u256]> { const [fe, modu] = pointEvaluation(vh, z, y, c, p); return [fe, modu]; } }`;
   const S = `contract C { function pe(bytes32 vh, bytes32 z, bytes32 y, bytes calldata c, bytes calldata p) external view returns(uint256,uint256){ bytes memory input=abi.encodePacked(vh,z,y,c,p); uint256[2] memory o; assembly { if iszero(staticcall(gas(),0x0a,add(input,32),192,o,0x40)) { revert(0,0) } } return (o[0],o[1]); } }`;
   const psel = sel('pe(bytes32,bytes32,bytes32,bytes,bytes)');
   const ZERO32 = W(0n);
@@ -226,12 +226,12 @@ describe('pointEvaluation / KZG (0x0a)', () => {
   it('accepts the destructure form, rejects a scalar (non-destructured) use', () => {
     expect(
       jethAccepts(
-        `@contract class C { @external @view pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): u256 { const [fe, modu] = pointEvaluation(vh, z, y, c, p); return fe + modu; } }`,
+        `class C { get pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): External<u256> { const [fe, modu] = pointEvaluation(vh, z, y, c, p); return fe + modu; } }`,
       ),
     ).toBe(true);
     expect(
       jethAccepts(
-        `@contract class C { @external @view pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): u256 { return pointEvaluation(vh, z, y, c, p); } }`,
+        `class C { get pe(vh: bytes32, z: bytes32, y: bytes32, c: bytes, p: bytes): External<u256> { return pointEvaluation(vh, z, y, c, p); } }`,
       ),
     ).toBe(false);
   });

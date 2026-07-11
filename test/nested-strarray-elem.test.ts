@@ -30,7 +30,7 @@ async function diff(jeth: string, sol: string, calls: { sig: string; args?: stri
 describe('string[]/bytes[] element via a placeArray base vs Solidity', () => {
   it('struct string[] field: push, element read, element write', async () => {
     await diff(
-      `@struct class D { xs: string[]; } @contract class C { @state d: D; @external add(s: string): void { this.d.xs.push(s); } @external set(i: u256, s: string): void { this.d.xs[i] = s; } @external @view get(i: u256): string { return this.d.xs[i]; } @external @view len(): u256 { return this.d.xs.length; } }`,
+      `type D = { xs: string[]; }; class C { d: D; add(s: string): External<void> { this.d.xs.push(s); } set(i: u256, s: string): External<void> { this.d.xs[i] = s; } get get(i: u256): External<string> { return this.d.xs[i]; } get len(): External<u256> { return this.d.xs.length; } }`,
       `struct D { string[] xs; } contract C { D d; function add(string calldata s) external { d.xs.push(s); } function set(uint256 i, string calldata s) external { d.xs[i] = s; } function get(uint256 i) external view returns (string memory){ return d.xs[i]; } function len() external view returns (uint256){ return d.xs.length; } }`,
       [
         { sig: 'add(string)', args: W(0x20n) + W(3n) + '616263'.padEnd(64, '0') },
@@ -46,7 +46,7 @@ describe('string[]/bytes[] element via a placeArray base vs Solidity', () => {
 
   it('bytes[] struct field element read, and a deeper nested struct field', async () => {
     await diff(
-      `@struct class D { bs: bytes[]; } @contract class C { @state d: D; @external add(b: bytes): void { this.d.bs.push(b); } @external @view get(i: u256): bytes { return this.d.bs[i]; } }`,
+      `type D = { bs: bytes[]; }; class C { d: D; add(b: bytes): External<void> { this.d.bs.push(b); } get get(i: u256): External<bytes> { return this.d.bs[i]; } }`,
       `struct D { bytes[] bs; } contract C { D d; function add(bytes calldata b) external { d.bs.push(b); } function get(uint256 i) external view returns (bytes memory){ return d.bs[i]; } }`,
       [
         { sig: 'add(bytes)', args: W(0x20n) + W(3n) + 'aabbcc'.padEnd(64, '0') },
@@ -54,7 +54,7 @@ describe('string[]/bytes[] element via a placeArray base vs Solidity', () => {
       ],
     );
     await diff(
-      `@struct class I { xs: string[]; } @struct class O { inner: I; n: u256; } @contract class C { @state o: O; @external add(s: string): void { this.o.inner.xs.push(s); } @external @view get(i: u256): string { return this.o.inner.xs[i]; } }`,
+      `type I = { xs: string[]; }; type O = { inner: I; n: u256; }; class C { o: O; add(s: string): External<void> { this.o.inner.xs.push(s); } get get(i: u256): External<string> { return this.o.inner.xs[i]; } }`,
       `struct I { string[] xs; } struct O { I inner; uint256 n; } contract C { O o; function add(string calldata s) external { o.inner.xs.push(s); } function get(uint256 i) external view returns (string memory){ return o.inner.xs[i]; } }`,
       [
         { sig: 'add(string)', args: W(0x20n) + W(3n) + '616263'.padEnd(64, '0') },
@@ -67,7 +67,7 @@ describe('string[]/bytes[] element via a placeArray base vs Solidity', () => {
     // populate via a pushed empty row + inner pushes (pushing a whole calldata string[] to
     // string[][] is unimplemented in solc's old codegen too, so that route is parity-rejected).
     await diff(
-      `@contract class C { @state dd: string[][]; @external newrow(): void { this.dd.push(); } @external add(i: u256, s: string): void { this.dd[i].push(s); } @external set(i: u256, j: u256, s: string): void { this.dd[i][j] = s; } @external @view get(i: u256, j: u256): string { return this.dd[i][j]; } }`,
+      `class C { dd: string[][]; newrow(): External<void> { this.dd.push(); } add(i: u256, s: string): External<void> { this.dd[i].push(s); } set(i: u256, j: u256, s: string): External<void> { this.dd[i][j] = s; } get get(i: u256, j: u256): External<string> { return this.dd[i][j]; } }`,
       `contract C { string[][] dd; function newrow() external { dd.push(); } function add(uint256 i, string calldata s) external { dd[i].push(s); } function set(uint256 i, uint256 j, string calldata s) external { dd[i][j] = s; } function get(uint256 i, uint256 j) external view returns (string memory){ return dd[i][j]; } }`,
       [
         { sig: 'newrow()' },
