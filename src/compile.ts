@@ -306,11 +306,16 @@ function rejectReservedModuleIdentifiers(sf: ts.SourceFile, diags: DiagnosticBag
 
 // ---------------------------------------------------------------------------------------------
 // STAGE 2 - LEGACY DECORATOR BAN (JETH481). Native syntax is now the ONLY syntax, so every structural
-// decorator that has a native spelling is rejected LOUDLY with a pointer to that spelling. compileUnit runs
-// this FIRST (before every other diagnostic) so the pointer is the first error a legacy file sees. The KEEP
-// set stays legal and is NOT listed here: @virtual / @override / @modifier (and every user-named MODIFIER
-// APPLICATION - those name none of the banned spellings) / @nonReentrant / @using / @diamond / @storage /
-// @anonymous, plus @payable ON A CONSTRUCTOR (there is no native constructor-payable spelling).
+// decorator that has a native spelling is rejected LOUDLY with a pointer to that spelling. compileUnit scans
+// the ORIGINAL USER SOURCE (never the diamond-expanded text - expandDiamond synthesizes @contract/@external/
+// ... internally, and scanning that would ban the compiler's OWN decorators) and surfaces the pointer before
+// every other front-end diagnostic (a diamond's pre-parse gate errors, JETH41x, still precede it). Legacy
+// visibility decorators @public/@internal/@private are banned here too (native visibility is a return marker
+// / bare-default / leading `#`). The KEEP set stays legal and is NOT listed here: @virtual / @override /
+// @modifier (and every user-named MODIFIER APPLICATION - those name none of the banned spellings) /
+// @nonReentrant / @using / @diamond / @storage / @anonymous, the deployable-kind decorators @proxy / @beacon
+// / @facet (no native spelling, same rationale as @diamond), plus @payable ON A CONSTRUCTOR (there is no
+// native constructor-payable spelling).
 // ---------------------------------------------------------------------------------------------
 const BANNED_DECORATOR_POINTERS: Record<string, string> = {
   contract: 'a bare `class C { ... }` is the deployed contract; drop @contract',
@@ -319,6 +324,9 @@ const BANNED_DECORATOR_POINTERS: Record<string, string> = {
   interface: 'an interface is native `interface I { m(args): View<T> }`; drop @interface',
   library: 'a library is a `static class L { ... }`; drop @library',
   external: 'a method is exposed with `f(args): External<T>` (Payable<T> if payable); a field with `x: Visible<T>`',
+  public: 'a method is exposed with `f(): External<T>` (Payable<T> if payable); a field with `x: Visible<T>`',
+  internal: 'internal is the default: drop @internal (a bare method/field is internal)',
+  private: 'a private member is spelled with a leading `#` (e.g. `#x`, `#f()`)',
   view: 'mutability is inferred from the body - a read-only method needs no marker (use `f(args): View<T>` only inside an interface)',
   pure: 'mutability is inferred from the body - a pure method needs no marker (use `f(args): Pure<T>` only inside an interface)',
   read: 'mutability is inferred from the body - a read-only method needs no marker',
@@ -528,11 +536,30 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
 
   const parsed = parse(unitSource, fileName);
   const diags = new DiagnosticBag(parsed.sourceFile, fileName);
-  // Stage 2: reject every RETIRED structural decorator FIRST (before any other diagnostic), each with a
-  // pointer to its native form. Positions are bundle-relative; remap them for a multi-file compilation.
-  const bannedDecorators = collectBannedDecorators(parsed.sourceFile, fileName);
+  // Stage 2: reject every RETIRED structural decorator (each with a pointer to its native form) BEFORE any
+  // other front-end diagnostic. The scan runs on the ORIGINAL USER SOURCE, never the diamond-expanded text:
+  // expandDiamond rewrites a @diamond class into synthesized @contract/@external/@state/@event/... source,
+  // so scanning `parsed.sourceFile` (built from `effectiveSource`) would ban the compiler's OWN synthesized
+  // decorators (a fully-native @diamond file would collect ~26x JETH481 and fail to compile). When the entry
+  // was NOT diamond-expanded, `parsed.sourceFile` already IS the original user source (single-file) or the
+  // bundle of original user files (multi-file - deps are never diamond-expanded), so it is reused unchanged.
+  // When it WAS expanded, re-derive the scan target from `source`: parse the entry directly (single-file),
+  // or re-bundle the ORIGINAL entry so imported dep decorators keep their file/position mapping (multi-file).
+  let banSf = parsed.sourceFile;
+  let banSegments = bundleSegments;
+  if (dia.expanded) {
+    if (opts.sources && Object.keys(opts.sources).length > 0) {
+      const banBundle = bundleImports(source, fileName, opts.sources);
+      banSf = parse(banBundle.text, fileName).sourceFile;
+      banSegments = banBundle.segments;
+    } else {
+      banSf = parse(source, fileName).sourceFile;
+      banSegments = undefined;
+    }
+  }
+  const bannedDecorators = collectBannedDecorators(banSf, fileName);
   if (bannedDecorators.length > 0) {
-    if (bundleSegments) remapDiagnostics(bannedDecorators, bundleSegments);
+    if (banSegments) remapDiagnostics(bannedDecorators, banSegments);
     throw new CompileError(bannedDecorators);
   }
   // `$m<N>$` is the v3 module-scoping mangle: a SOURCE identifier spelled that way would collide with the
