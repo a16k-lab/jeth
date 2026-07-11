@@ -4,8 +4,8 @@
 // and a bare return type is `nonpayable` (the default). The marker is stripped before the return type is
 // resolved and never enters the signature, so selectors are byte-identical. A native interface builds the
 // SAME InterfaceDecl IR as `@interface class`, so the caller's bytecode (selectors + STATICCALL-vs-CALL)
-// is byte-identical to the decorator form - and to solc. v1 scope: a native interface is a CALL TARGET
-// (`IFoo(addr).m()`); it is not yet an extendable base.
+// is byte-identical to the decorator form - and to solc. A native interface is also an EXTENDABLE base
+// (`class C extends I`, P0a) - see native-interface-extends.test.ts for that surface.
 import { describe, it, expect } from 'vitest';
 import { compile } from '../src/compile.js';
 import { Harness, pad32 } from '../src/evm.js';

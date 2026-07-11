@@ -1160,8 +1160,10 @@ export class Analyzer {
   // per-method MUTABILITY rides on a MARKER RETURN TYPE - `View<T>`/`Pure<T>`/`Payable<T>` wrap the real
   // return, a bare return type is `nonpayable` (the default). It builds the SAME InterfaceDecl IR as the
   // decorator form, so external calls, selectors and the STATICCALL-vs-CALL choice are byte-identical.
-  // v1 SCOPE: a native interface is a CALL TARGET (`IERC20(addr).m()`); it is registered in interfacesByName
-  // only, NOT as an extendable base (that needs the C3/obligation machinery to accept a non-class node).
+  // A native interface is BOTH a call target (`IERC20(addr).m()`) AND an extendable base (P0a:
+  // `class C extends IERC20`, solc `contract C is IERC20`): registration in interfaceClassByName routes
+  // the heritage path through the SAME C3-ordering + must-implement-obligation + return/mutability/
+  // visibility machinery as an `@interface class` base, so both spellings are byte-identical.
   private collectNativeInterfaces(): void {
     const visit = (n: ts.Node): void => {
       if (ts.isInterfaceDeclaration(n)) this.collectNativeInterface(n);
@@ -1197,6 +1199,14 @@ export class Analyzer {
       methods.set(m.name, m);
     }
     this.interfacesByName.set(name, { name, methods });
+    // P0a: register the interface as an EXTENDABLE base, exactly like collectInterface does for an
+    // `@interface class`. The linearizer's node list is typed ts.ClassDeclaration, but an interface node
+    // is an ORDERING + OBLIGATION marker only: every member-touching consumer skips it via
+    // isInterfaceClass (which recognizes a ts.InterfaceDeclaration), heritageBases reads only
+    // `.heritageClauses` (shared by both node kinds; empty here - a heritage-bearing interface was
+    // rejected above), and all method/mutability/obligation data flows BY NAME through
+    // interfacesByName - so the cast can never leak a TypeElement into a ClassElement consumer.
+    this.interfaceClassByName.set(name, iface as unknown as ts.ClassDeclaration);
   }
 
   private collectNativeInterfaceMethod(member: ts.MethodSignature, ifaceName: string): InterfaceMethod | undefined {
@@ -1805,8 +1815,12 @@ export class Analyzer {
   }
 
   /** Is this linearization node an @interface (not a @contract/@abstract contract)? An interface is a
-   *  C3 ORDERING node only: it contributes no storage/constructor/functions, so flattening skips it. */
+   *  C3 ORDERING node only: it contributes no storage/constructor/functions, so flattening skips it.
+   *  P0a: a NATIVE `interface I` base rides the same linearization slots (its ts.InterfaceDeclaration
+   *  node is registered cast to the list's element type), so recognize it FIRST - decoratorNames would
+   *  return [] for it and mis-classify it as a contract node whose members get flattened. */
   private isInterfaceClass(cls: ts.ClassDeclaration): boolean {
+    if (ts.isInterfaceDeclaration(cls as ts.Node)) return true;
     return decoratorNames(cls).includes('interface');
   }
 
