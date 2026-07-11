@@ -70,7 +70,7 @@ describe('OR cluster 4: literal typing (A-LIT-RESID + L2-MOBILE) byte-identical 
       ['[255n, 256n]', '[uint16(255), 256]'],
     ] as const) {
       await run(
-        `@contract class C { @external @pure f(): bytes { return abi.encode(${j}); } }`,
+        `class C { get f(): External<bytes> { return abi.encode(${j}); } }`,
         `contract C { function f() external pure returns (bytes memory) { return abi.encode(${s}); } }`,
         [['f()', '']] as const,
       );

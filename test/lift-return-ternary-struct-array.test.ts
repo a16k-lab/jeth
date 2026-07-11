@@ -50,15 +50,15 @@ describe('TERN-STRUCT-ARR return lift - byte-identical to solc 0.8.35', () => {
   it('read-only consumers lift (return + arg-0 abi.encode); mutation-sensitive / non-first-arg / abiDecode-branch stay sound rejects', () => {
     const base = `${IN} class C { fa: Arr<In,2>; g(p: Arr<In,2>): u256 { return p[0n].a; }`;
     // whole return lifts:
-    expect(rejects(`${base} @external @view r(c: bool): Arr<In,2> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return c ? m : this.fa; } }`)).toBe(false);
+    expect(rejects(`${base} get r(c: bool): External<Arr<In,2>> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return c ? m : this.fa; } }`)).toBe(false);
     // abi.encode(ternary) as arg 0 of a whole-statement encode LIFTS (read-only, byte-identical; verified
     // in lift-or-cluster1.test.ts):
-    expect(rejects(`${base} @external @view r(c: bool): bytes { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(c ? m : this.fa); } }`)).toBe(false);
+    expect(rejects(`${base} get r(c: bool): External<bytes> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(c ? m : this.fa); } }`)).toBe(false);
     // internal-call arg 0 now LIFTS (JETH passes a standalone Arr<In,N> to an internal fn by reference,
     // byte-identical incl. W1/W2/W3; see the differential below):
-    expect(rejects(`${base} @external @view r(c: bool): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return this.g(c ? m : this.fa); } }`)).toBe(false);
+    expect(rejects(`${base} get r(c: bool): External<u256> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return this.g(c ? m : this.fa); } }`)).toBe(false);
     // a NON-first-arg call/encode ternary stays a reject (eval-order: only arg 0 is the statement's first side effect):
-    expect(rejects(`${base} @external @view r(c: bool): bytes { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(7n, c ? m : this.fa); } }`)).toBe(true);
+    expect(rejects(`${base} get r(c: bool): External<bytes> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return abi.encode(7n, c ? m : this.fa); } }`)).toBe(true);
     // element-write RHS is mutation-sensitive (not arg 0 of a call, not a whole-statement value) -> still rejects:
     expect(rejects(`${IN} class C { get r(c: bool): External<u256> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let n: Arr<In,2> = [In(5n,6n),In(7n,8n)]; let o: Arr<Arr<In,2>,2> = [[In(0n,0n),In(0n,0n)],[In(0n,0n),In(0n,0n)]]; o[0n] = c ? m : n; return o[0n][0n].a; } }`)).toBe(true);
     // an arrayGet-branch ternary (c ? xs[0] : m over Arr<Arr<In,2>,2>) is a separate reject, not hoisted

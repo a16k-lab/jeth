@@ -265,9 +265,9 @@ describe('long-tail batch A: ternary-chain lvalues (T1-T3) byte-identical to sol
       ['(c ? this.A : m)[0n].y++;', '(c ? A : m)[0].y++;'],
     ] as const) {
       await run(
-        `${IN2} @contract class C { @state A: Arr<In, 2>;
-  @external seed(): void { this.A[0n] = In(100n, 200n); this.A[1n] = In(300n, 400n); }
-  @external w(c: bool): Arr<u256, 2> { let m: Arr<In, 2> = [In(1n, 2n), In(3n, 4n)]; ${jstmt} return [m[0n].y, this.A[0n].y]; } }`,
+        `${IN2} class C { A: Arr<In, 2>;
+  seed(): External<void> { this.A[0n] = In(100n, 200n); this.A[1n] = In(300n, 400n); }
+  w(c: bool): External<Arr<u256, 2>> { let m: Arr<In, 2> = [In(1n, 2n), In(3n, 4n)]; ${jstmt} return [m[0n].y, this.A[0n].y]; } }`,
         `contract C { struct In { uint256 x; uint256 y; } In[2] A;
   function seed() external { A[0] = In(100, 200); A[1] = In(300, 400); }
   function w(bool c) external returns (uint256[2] memory) { In[2] memory m = [In(1, 2), In(3, 4)]; ${sstmt} return [m[0].y, A[0].y]; } }`,

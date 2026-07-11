@@ -261,16 +261,16 @@ describe('L11a: funcref field in a dynamic struct (byte-identical)', () => {
 
   it('KEPT REJECTS: every ABI boundary of a funcref-bearing struct still rejects (solc parity)', () => {
     const C = (body: string) => `${FD}\nclass C { inc(x: u256): u256 { return x + 1n; } ${body} }`;
-    // @external return / param (JETH426 signature gate)
-    expect(codes(C(`@external run(): Fd { return Fd(this.inc, "hi"); }`))).toContain('JETH426');
-    expect(codes(C(`@external run(d: Fd): u256 { return 1n; }`))).toContain('JETH426');
+    // external return / param (JETH426 signature gate)
+    expect(codes(C(`get run(): External<Fd> { return Fd(this.inc, "hi"); }`))).toContain('JETH426');
+    expect(codes(C(`run(d: Fd): External<u256> { return 1n; }`))).toContain('JETH426');
     // abi.encode / encodePacked (JETH173)
-    expect(codes(C(`@external run(): bytes { let d: Fd = Fd(this.inc, "hi"); return abi.encode(d); }`))).toContain('JETH173');
-    expect(codes(C(`@external run(): bytes { let d: Fd = Fd(this.inc, "hi"); return abi.encodePacked(d); }`))).toContain('JETH173');
+    expect(codes(C(`get run(): External<bytes> { let d: Fd = Fd(this.inc, "hi"); return abi.encode(d); }`))).toContain('JETH173');
+    expect(codes(C(`get run(): External<bytes> { let d: Fd = Fd(this.inc, "hi"); return abi.encodePacked(d); }`))).toContain('JETH173');
     // constructor param (JETH302), public getter (JETH057), abi.decode target (JETH322)
     expect(codes(`${FD}\nclass C { x: u256; constructor(d: Fd) { this.x = 1n; } }`)).toContain('JETH302');
     expect(codes(`${FD}\nclass C { d: Visible<Fd>; inc(x: u256): u256 { return x + 1n; } constructor() { this.d = Fd(this.inc, "a"); } }`)).toContain('JETH057');
-    expect(codes(C(`@external run(b: bytes): u256 { let d: Fd = abi.decode(b, Fd); return 1n; }`))).toContain('JETH322');
+    expect(codes(C(`get run(b: bytes): External<u256> { let d: Fd = abi.decode(b, Fd); return 1n; }`))).toContain('JETH322');
     // @interface param + return (JETH347 / JETH348)
     expect(
       codes(`${FD}\ninterface IX { g(d: Fd): u256; }\nclass C { z(x: u256): u256 { return x; } get run(t: address): External<u256> { let d: Fd = Fd(this.z, "a"); return IX(t).g(d); } }`),
@@ -309,7 +309,7 @@ describe('L14: @external @state struct var implements a tuple-returning @interfa
     }`;
 
   it('WITHOUT @override (solc >= 0.8.8 needs none), incl. the interface-typed external call', async () => {
-    const rs = await diff(JETH('@external @state g: S6;'), SOL('S6 public g;'), [
+    const rs = await diff(JETH('g: Visible<S6>;'), SOL('S6 public g;'), [
       '0x' + sel('g()'),
       '0x' + sel('viaIface()'),
     ]);
@@ -318,7 +318,7 @@ describe('L14: @external @state struct var implements a tuple-returning @interfa
   });
 
   it('WITH @override on both sides', async () => {
-    const rs = await diff(JETH('@external @state @override g: S6;'), SOL('S6 public override g;'), [
+    const rs = await diff(JETH('@override g: Visible<S6>;'), SOL('S6 public override g;'), [
       '0x' + sel('g()'),
     ]);
     expect(rs[0]!.returnHex).toBe('0x' + W(7) + W(8));

@@ -127,7 +127,7 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
         return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
       }
     };
-    const C = (body: string) => `@struct class P { a: u256; b: u256; }\n@contract class C { @external @pure f(i: u256, j: u256): u256 { let xs: P[] = new Array<P>(2n); ${body} return xs[0n].a; } }`;
+    const C = (body: string) => `type P = { a: u256; b: u256; };\nclass C { get f(i: u256, j: u256): External<u256> { let xs: P[] = new Array<P>(2n); ${body} return xs[0n].a; } }`;
     expect(codes(C('xs[i] = P(1n, 2n);'))).toEqual([]); // fresh -> accept
     expect(codes(C('xs[0n] = xs[1n];'))).toEqual([]); // element ref -> aliases
     expect(codes(C('let s: P = P(1n, 2n); xs[0n] = s;'))).toEqual([]); // local ref -> aliases

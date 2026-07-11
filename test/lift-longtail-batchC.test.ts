@@ -408,52 +408,52 @@ class C {
   it('rejects(): the full ABI-leak matrix for every newly-admitted funcref-bearing type', () => {
     const PRE = `${FD}\ntype Outer = { fd: Fd; n: u256 };\n`;
     const HELP = `  inc(x: u256): u256 { return x + 1n; }\n  mkFd(): Fd { return Fd(this.inc, "z"); }\n  mkOuter(): Outer { return Outer(Fd(this.inc, "z"), 1n); }\n`;
-    const C = (body: string) => `${PRE}@contract class C {\n${HELP}${body}\n}`;
+    const C = (body: string) => `${PRE}class C {\n${HELP}${body}\n}`;
     // abi.encode / encodePacked / decode / encodeWith* (solc: all reject, diff-verified BOTH-REJECT)
-    expect(rejects(C(`  @external @pure go(): bytes { return abi.encode(this.mkFd()); }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): bytes { return abi.encodePacked(this.mkFd()); }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): bytes { return abi.encode(this.mkOuter()); }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): bytes { let a: Fd[] = [this.mkFd()]; return abi.encode(a); }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(b: bytes): u256 { let d: Fd = abi.decode(b, Fd); return d.f(1n); }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(b: bytes): u256 { let o: Outer = abi.decode(b, Outer); return o.n; }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(b: bytes): u256 { let a: Fd[] = abi.decode(b, Fd[]); return a.length; }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): bytes { return abi.encodeWithSelector(0x12345678, this.mkFd()); }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): bytes { return abi.encodeWithSignature("f(uint256)", this.mkOuter()); }`))).toBe(true);
-    // @external / @public params and returns (incl. the tuple)
-    expect(rejects(C(`  @external go(d: Fd): u256 { return 1n; }`))).toBe(true);
-    expect(rejects(C(`  @external go(o: Outer): u256 { return 1n; }`))).toBe(true);
-    expect(rejects(C(`  @external go(a: Fd[]): u256 { return 1n; }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): Fd { return this.mkFd(); }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): Outer { return this.mkOuter(); }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): Fd[] { let a: Fd[] = [this.mkFd()]; return a; }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): [Fd, u256] { return [this.mkFd(), 1n]; }`))).toBe(true);
-    expect(rejects(C(`  @external @pure go(): (x: u256) => u256 { return this.inc; }`))).toBe(true);
-    expect(rejects(C(`  @public go(d: Fd): u256 { return 1n; }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<bytes> { return abi.encode(this.mkFd()); }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<bytes> { return abi.encodePacked(this.mkFd()); }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<bytes> { return abi.encode(this.mkOuter()); }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<bytes> { let a: Fd[] = [this.mkFd()]; return abi.encode(a); }`))).toBe(true);
+    expect(rejects(C(`  get go(b: bytes): External<u256> { let d: Fd = abi.decode(b, Fd); return d.f(1n); }`))).toBe(true);
+    expect(rejects(C(`  get go(b: bytes): External<u256> { let o: Outer = abi.decode(b, Outer); return o.n; }`))).toBe(true);
+    expect(rejects(C(`  get go(b: bytes): External<u256> { let a: Fd[] = abi.decode(b, Fd[]); return a.length; }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<bytes> { return abi.encodeWithSelector(0x12345678, this.mkFd()); }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<bytes> { return abi.encodeWithSignature("f(uint256)", this.mkOuter()); }`))).toBe(true);
+    // external / public params and returns (incl. the tuple)
+    expect(rejects(C(`  go(d: Fd): External<u256> { return 1n; }`))).toBe(true);
+    expect(rejects(C(`  go(o: Outer): External<u256> { return 1n; }`))).toBe(true);
+    expect(rejects(C(`  go(a: Fd[]): External<u256> { return 1n; }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<Fd> { return this.mkFd(); }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<Outer> { return this.mkOuter(); }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<Fd[]> { let a: Fd[] = [this.mkFd()]; return a; }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<[Fd, u256]> { return [this.mkFd(), 1n]; }`))).toBe(true);
+    expect(rejects(C(`  get go(): External<(x: u256) => u256> { return this.inc; }`))).toBe(true);
+    expect(rejects(C(`  go(d: Fd): External<u256> { return 1n; }`))).toBe(true);
     // events (both arms) / errors
-    expect(rejects(C(`  @event E(d: Fd);\n  @external go(): u256 { emit(E(this.mkFd())); return 1n; }`))).toBe(true);
-    expect(rejects(C(`  @event E(@indexed d: Fd);\n  @external go(): u256 { emit(E(this.mkFd())); return 1n; }`))).toBe(true);
-    expect(rejects(C(`  @event E(o: Outer);\n  @external go(): u256 { emit(E(this.mkOuter())); return 1n; }`))).toBe(true);
-    expect(rejects(C(`  @event E(a: Fd[]);\n  @external go(): u256 { let a: Fd[] = [this.mkFd()]; emit(E(a)); return 1n; }`))).toBe(true);
-    expect(rejects(C(`  @error Bad(d: Fd);\n  @external go(): u256 { revert(Bad(this.mkFd())); }`))).toBe(true);
-    expect(rejects(C(`  @error Bad(o: Outer);\n  @external go(): u256 { revert(Bad(this.mkOuter())); }`))).toBe(true);
+    expect(rejects(C(`  E: event<{ d: Fd }>;\n  go(): External<u256> { emit(E(this.mkFd())); return 1n; }`))).toBe(true);
+    expect(rejects(C(`  E: event<{ d: indexed<Fd> }>;\n  go(): External<u256> { emit(E(this.mkFd())); return 1n; }`))).toBe(true);
+    expect(rejects(C(`  E: event<{ o: Outer }>;\n  go(): External<u256> { emit(E(this.mkOuter())); return 1n; }`))).toBe(true);
+    expect(rejects(C(`  E: event<{ a: Fd[] }>;\n  go(): External<u256> { let a: Fd[] = [this.mkFd()]; emit(E(a)); return 1n; }`))).toBe(true);
+    expect(rejects(C(`  Bad: error<{ d: Fd }>;\n  go(): External<u256> { revert(Bad(this.mkFd())); }`))).toBe(true);
+    expect(rejects(C(`  Bad: error<{ o: Outer }>;\n  go(): External<u256> { revert(Bad(this.mkOuter())); }`))).toBe(true);
     // getters (state + mapping value) / constructor params
-    expect(rejects(C(`  @public d: Fd;`))).toBe(true);
-    expect(rejects(C(`  @public o: Outer;`))).toBe(true);
-    expect(rejects(C(`  @public m: mapping<u256, (x: u256) => u256>;`))).toBe(true);
-    expect(rejects(C(`  @public g: (x: u256) => u256;`))).toBe(true);
+    expect(rejects(C(`  d: Visible<Fd>;`))).toBe(true);
+    expect(rejects(C(`  o: Visible<Outer>;`))).toBe(true);
+    expect(rejects(C(`  m: Visible<mapping<u256, (x: u256) => u256>>;`))).toBe(true);
+    expect(rejects(C(`  g: Visible<(x: u256) => u256>;`))).toBe(true);
     expect(rejects(C(`  constructor(d: Fd) {}`))).toBe(true);
     expect(rejects(C(`  constructor(o: Outer) {}`))).toBe(true);
     expect(rejects(C(`  constructor(g: (x: u256) => u256) {}`))).toBe(true);
-    // @interface method types
+    // interface method types
     expect(
       rejects(`${FD}\ninterface I { f(d: Fd): u256; }\nclass C { get go(): External<u256> { return 1n; } }`),
     ).toBe(true);
     // Arr<Fd,2> element dispatch was LIFTED by long-tail batch D (memory-local fixed array of
     // funcref structs, byte-identical incl. OOB Panic; every ABI boundary still rejects it - see
     // lift-longtail-batchD.test.ts). The old "catalogued residual" pin flips to a compile assert.
-    expect(rejects(C(`  @external @pure go(v: u256): u256 { let a: Arr<Fd, 2> = [this.mkFd(), this.mkFd()]; return a[0n].f(v); }`))).toBe(false); // Arr<Fd,N> lifted (batch D)
-    // @state Outer (funcref-bearing struct in STORAGE) stays a clean reject: JETH has no storage funcref layout.
-    expect(rejects(`${PRE}@contract class C {\n  inc(x: u256): u256 { return x + 1n; }\n  @state o: Outer;\n  @external @view go(v: u256): u256 { let m: Outer = this.o; return m.fd.f(v); }\n}`)).toBe(true); // @state Outer
+    expect(rejects(C(`  get go(v: u256): External<u256> { let a: Arr<Fd, 2> = [this.mkFd(), this.mkFd()]; return a[0n].f(v); }`))).toBe(false); // Arr<Fd,N> lifted (batch D)
+    // storage Outer (funcref-bearing struct in STORAGE) stays a clean reject: JETH has no storage funcref layout.
+    expect(rejects(`${PRE}class C {\n  inc(x: u256): u256 { return x + 1n; }\n  o: Outer;\n  get go(v: u256): External<u256> { let m: Outer = this.o; return m.fd.f(v); }\n}`)).toBe(true); // storage Outer
   });
 
   it('bonus lift: whole nested funcref-field WRITE o.fd = mkFd() with solc re-point alias semantics', async () => {
@@ -462,14 +462,14 @@ class C {
     // `old: Fd = o.fd` keeps the OLD funcref after the write (solc re-points, never copies),
     // and a whole-struct alias `al: Outer = o` sees the NEW one through al.fd.
     const PRE = `${FD}\ntype Outer = { fd: Fd; n: u256 };\n`;
-    const J = `${PRE}@contract class C {
+    const J = `${PRE}class C {
   inc(x: u256): u256 { return x + 1n; }
   dec(x: u256): u256 { return x - 1n; }
   mkFd(): Fd { return Fd(this.dec, "w"); }
   mkOuter(): Outer { return Outer(Fd(this.inc, "z"), 7n); }
-  @external @pure go(v: u256): u256 { let o: Outer = this.mkOuter(); o.fd = this.mkFd(); return o.fd.f(v); }
-  @external @pure ali(v: u256): u256 { let o: Outer = this.mkOuter(); let old: Fd = o.fd; o.fd = this.mkFd(); return old.f(v) * 1000n + o.fd.f(v); }
-  @external @pure ali2(v: u256): u256 { let o: Outer = this.mkOuter(); let al: Outer = o; o.fd = this.mkFd(); return al.fd.f(v); }
+  get go(v: u256): External<u256> { let o: Outer = this.mkOuter(); o.fd = this.mkFd(); return o.fd.f(v); }
+  get ali(v: u256): External<u256> { let o: Outer = this.mkOuter(); let old: Fd = o.fd; o.fd = this.mkFd(); return old.f(v) * 1000n + o.fd.f(v); }
+  get ali2(v: u256): External<u256> { let o: Outer = this.mkOuter(); let al: Outer = o; o.fd = this.mkFd(); return al.fd.f(v); }
 }`;
     const S = `struct Fd { function(uint256) pure returns (uint256) f; string s; }
 struct Outer { Fd fd; uint256 n; }
