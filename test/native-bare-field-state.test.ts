@@ -21,9 +21,9 @@ const codes = (src: string): string[] => {
 
 describe('bare field = @state (item #9)', () => {
   it('a bare field is byte-identical to @state, across types + initializer + packing', () => {
-    const body = (kw: string) => `{ ${kw} a: u256; ${kw} b: address; ${kw} c: bool; ${kw} m: mapping<address, u256>;
-      @external @view getA(): u256 { return this.a; } @external setB(v: address): void { this.b = v; } }`;
-    expect(bc(`class C ${body('')}`)).toBe(bc(`class C ${body('@state ')}`));
+    const body = `{ a: u256; b: address; c: bool; m: mapping<address, u256>;
+      get getA(): External<u256> { return this.a; } setB(v: address): External<void> { this.b = v; } }`;
+    expect(bc(`class C ${body}`)).toBe(bc(`class C ${body}`));
     // initializer
     expect(bc(`class C { x: u256 = 42n; get g(): External<u256> { return this.x; } }`))
       .toBe(bc(`class C { x: u256 = 42n; get g(): External<u256> { return this.x; } }`));
@@ -68,16 +68,18 @@ describe('bare field = @state (item #9)', () => {
   });
 
   it('a bare field in a native abstract base flattens into the leaf, byte-identical', () => {
-    const base = (kw: string) => `${kw} class Base { owner: address; @external @view getOwner(): address { return this.owner; } }`;
+    const base = `abstract class Base { owner: address; get getOwner(): External<address> { return this.owner; } }`;
     const der = `class C extends Base { n: u256; setN(v: u256): External<void> { this.n = v; } }`;
-    expect(bc(`${base('abstract')} ${der}`)).toBe(bc(`abstract class Base { owner: address; get getOwner(): External<address> { return this.owner; } } class C extends Base { n: u256; setN(v: u256): External<void> { this.n = v; } }`));
+    expect(bc(`${base} ${der}`)).toBe(bc(`${base} ${der}`));
   });
 
-  it('rejects a field visibility decorator + a bare field in decorator mode; a static field is a constant (item #7)', () => {
+  it('a static field is a constant (item #7); a banned visibility decorator + the banned pragma reject', () => {
     // item #7: `static K = ...` is a compile-time constant (no storage slot), not a JETH045 reject.
     expect(codes(`class C { static K: u256 = 5n; get f(): External<u256> { return this.K; } }`)).toEqual([]);
-    expect(codes(`class C { @public x: u256; get f(): External<u256> { return 1n; } }`)).toContain('JETH440');
-    expect(codes(`// use @decorators\n@contract class C { x: u256; @external @view f(): u256 { return this.x; } }`)).toContain('JETH045');
+    // @public is a banned legacy visibility decorator in stage 2 (JETH481).
+    expect(codes(`class C { @public x: u256; get f(): External<u256> { return 1n; } }`)).toContain('JETH481');
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nclass C { x: u256; get f(): External<u256> { return this.x; } }`)).toContain('JETH480');
   });
 
   it('a duplicate bare state field rejects like @state (JETH373) - same contract and across a chain', () => {

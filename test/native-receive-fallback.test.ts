@@ -17,10 +17,11 @@ const codes = (src: string): string[] => {
 };
 
 describe('native receive / fallback (a method named receive/fallback = the special entry)', () => {
-  it('bare receive/fallback are byte-identical to the @receive/@fallback form', () => {
-    const rBody = `{ @state x: u256; #KW#(): void { this.x = 1n; } @external @view g(): u256 { return this.x; } }`;
-    expect(bc(`class C ${rBody.replace('#KW#', 'receive')}`)).toBe(bc(`class C ${rBody.replace('#KW#', '@receive receive')}`));
-    expect(bc(`class C ${rBody.replace('#KW#', 'fallback')}`)).toBe(bc(`class C ${rBody.replace('#KW#', '@fallback fallback')}`));
+  it('a method named receive/fallback IS the special entry (no decorator needed); a receive differs from none', () => {
+    // a method literally named `receive`/`fallback` is the special entry in native mode - the two entries are
+    // distinct dispatch shapes, and both compile without any decorator.
+    const rBody = (kw: string) => `{ x: u256; ${kw}(): void { this.x = 1n; } get g(): External<u256> { return this.x; } }`;
+    expect(bc(`class C ${rBody('receive')}`)).not.toBe(bc(`class C ${rBody('fallback')}`));
     // the footgun: a bare receive is now the ENTRY (differs from a contract with no receive at all).
     expect(bc(`class C { x: u256; receive(): void { this.x = 1n; } get g(): External<u256> { return this.x; } }`))
       .not.toBe(bc(`class C { x: u256; get g(): External<u256> { return this.x; } }`));
@@ -80,9 +81,8 @@ describe('native receive / fallback (a method named receive/fallback = the speci
     expect(codes(`class C { fallback(): External<void> { } }`)).toContain('JETH386');
   });
 
-  it('decorator mode is unchanged: a method named receive/fallback is an ordinary method there', () => {
-    // in decorator mode a bare `receive()` is NOT the special entry (it is a normal, uncalled internal method).
-    expect(bc(`// use @decorators\n@contract class C { @state x: u256; receive(): void { this.x = 1n; } @external @view g(): u256 { return this.x; } }`))
-      .not.toBe(bc(`// use @decorators\n@contract class C { @state x: u256; @receive receive(): void { this.x = 1n; } @external @view g(): u256 { return this.x; } }`));
+  it('the `// use @decorators` pragma is banned in native-only mode (JETH480)', () => {
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nclass C { x: u256; receive(): void { this.x = 1n; } get g(): External<u256> { return this.x; } }`)).toContain('JETH480');
   });
 });

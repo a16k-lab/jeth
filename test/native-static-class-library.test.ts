@@ -53,8 +53,9 @@ describe('static class = @library (native libraries)', () => {
     expect(codes(`static abstract class L { f(): u256 { return 1n; } } class C { get g(): External<u256> { return 1n; } }`)).toContain('JETH390');
   });
 
-  it('decorator mode is unchanged (a static class there keeps its old meaning)', () => {
-    expect(codes(`// use @decorators\nstatic class L { f(): u256 { return 1n; } } @contract class C { @external @view g(): u256 { return 1n; } }`)).toEqual([]);
+  it('the `// use @decorators` pragma is banned in native-only mode (JETH480)', () => {
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nstatic class L { f(): u256 { return 1n; } } class C { get g(): External<u256> { return 1n; } }`)).toContain('JETH480');
   });
 
   it('DEPLOYABLE library: External<T> on a static-class method = a delegatecall fn (like solc)', () => {

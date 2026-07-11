@@ -83,16 +83,16 @@ describe('native TS interfaces (item #6b)', () => {
   });
 
   it('marker + shape errors reject cleanly', () => {
-    const call = (iface: string) => `${iface} class C { @external @view f(a: address): u256 { return I(a).m(); } }`;
-    expect(codes(call(`interface I { m(): View; }`))).toContain('JETH481');            // marker needs one type arg
-    expect(codes(`interface I { x: u256; m(): View<u256>; } ${''}class C { @external @view f(a:address):u256{ return I(a).m(); } }`)).toContain('JETH341'); // no fields
+    const call = (iface: string) => `${iface} class C { get f(a: address): External<u256> { return I(a).m(); } }`;
+    expect(codes(call(`interface I { m(): View; }`))).toContain('JETH350');            // marker needs one type arg
+    expect(codes(`interface I { x: u256; m(): View<u256>; } ${''}class C { get f(a:address):External<u256>{ return I(a).m(); } }`)).toContain('JETH341'); // no fields
     expect(codes(`interface I { m?(): View<u256>; } class C { get f(a:address):External<u256>{ return I(a).m(); } }`)).toContain('JETH341'); // no optional
     expect(codes(`interface A { m(): View<u256>; } interface B extends A { n(): View<u256>; } class C { get f(a:address):External<u256>{ return B(a).n(); } }`)).toContain('JETH349'); // no interface inheritance yet
   });
 
-  it('native interfaces are DECORATOR-mode-off (a `// use @decorators` file ignores them)', () => {
-    // in decorator mode, a TS `interface` is not a JETH interface, so the external call does not resolve.
-    expect(codes(`// use @decorators\ninterface I { m(): View<u256>; } @contract class C { @external @view f(a: address): u256 { return I(a).m(); } }`).length).toBeGreaterThan(0);
+  it('the `// use @decorators` pragma is banned in native-only mode (JETH480)', () => {
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\ninterface I { m(): View<u256>; } class C { get f(a: address): External<u256> { return I(a).m(); } }`)).toContain('JETH480');
   });
 
   it('a type sharing the contract name is rejected (solc parity), both interface spellings', () => {

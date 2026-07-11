@@ -118,18 +118,19 @@ describe('native interface as an extendable base (P0a): twin-bytecode equality',
       class C extends I { relay(t: address): External<u256> { this.s = IT(t).get(); return this.s; } s: u256; }`));
   });
 
-  it('multi-file: the interface lives in a dep, imported + extended == twin', () => {
-    const nat = bc(
+  it('multi-file: the interface lives in a dep, imported + extended == the inlined single-file form', () => {
+    // an imported interface routes through the SAME InterfaceDecl machinery as an inlined one, so the
+    // multi-file heritage compiles byte-identical to the single-file spelling.
+    const multi = bc(
       `import { I } from "./dep.jeth";
        class C extends I { s: u256; f(x: u256): External<u256> { this.s = x; return x + 1n; } get g(): External<u256> { return this.s; } }`,
       { 'dep.jeth': `export interface I { f(x: u256): u256; g(): View<u256>; }\n` },
     );
-    const twin = bc(
-      `import { I } from "./dep.jeth";
-       @contract class C extends I { @state s: u256; @external f(x: u256): u256 { this.s = x; return x + 1n; } @external @view g(): u256 { return this.s; } }`,
-      { 'dep.jeth': `export @interface class I { @external f(x: u256): u256; @external @view g(): u256; }\n` },
+    const inline = bc(
+      `interface I { f(x: u256): u256; g(): View<u256>; }
+       class C extends I { s: u256; f(x: u256): External<u256> { this.s = x; return x + 1n; } get g(): External<u256> { return this.s; } }`,
     );
-    expect(nat).toBe(twin);
+    expect(multi).toBe(inline);
   });
 
   it('C3 ordering parity: `extends B, I` where B already implements I rejects (JETH371) both spellings; `extends I, B` accepts twin-equal', () => {
@@ -342,7 +343,7 @@ describe('native interface extends: reject parity (same code, both spellings)', 
     );
   });
 
-  it('pre-existing gates unchanged: JETH370 for a non-interface base, JETH391 for implements, JETH349 for interface-extends-interface, legacy mode untouched', () => {
+  it('pre-existing gates unchanged: JETH370 for a non-interface base, JETH391 for implements, JETH349 for interface-extends-interface, the decorator pragma banned', () => {
     // extending a struct type alias is still JETH370
     expect(codes(`type P = { a: u256 };
       class C extends P { f(): External<u256> { this.x = 1n; return 1n; } x: u256; }`)).toContain('JETH370');
@@ -353,9 +354,9 @@ describe('native interface extends: reject parity (same code, both spellings)', 
     expect(codes(`interface I0 { f(): u256; }
       interface I extends I0 { g(): u256; }
       class C extends I { f(): External<u256> { this.s = 1n; return this.s; } g(): External<u256> { this.s = 2n; return this.s; } s: u256; }`)).toContain('JETH349');
-    // LEGACY mode: a TS `interface` is not collected, so extending it is still JETH370
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
     expect(codes(`// use @decorators
 interface I { f(x: u256): u256; }
-@contract class C extends I { @external f(x: u256): u256 { return x; } }`)).toContain('JETH370');
+class C extends I { get f(x: u256): External<u256> { return x; } }`)).toContain('JETH480');
   });
 });

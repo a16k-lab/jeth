@@ -49,9 +49,10 @@ describe('the self convention (native attached calls)', () => {
     expect(codes(`type P = { min: u256 }; static class M { min(self: P, b: u256): u256 { return b; } } class C { get f(b: u256): External<u256> { let p: P = P(5n); return p.min; } }`)).toEqual([]);
   });
 
-  it('composes with multi-file imports; decorator mode still requires @using', () => {
+  it('composes with multi-file imports; the decorator pragma is banned (JETH480)', () => {
     expect(codes(`import { M } from "./m.jeth";\nclass C { get f(a: u256, b: u256): External<u256> { return a.min(b); } }`,
       { 'm.jeth': `export static class M { min(self: u256, b: u256): u256 { return self < b ? self : b; } }` })).toEqual([]);
-    expect(codes(`// use @decorators\n@library class M { min(self: u256, b: u256): u256 { return self < b ? self : b; } } @contract class C { @external @pure f(a: u256, b: u256): u256 { return a.min(b); } }`)).toContain('JETH074');
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nstatic class M { min(self: u256, b: u256): u256 { return self < b ? self : b; } } class C { get f(a: u256, b: u256): External<u256> { return a.min(b); } }`)).toContain('JETH480');
   });
 });

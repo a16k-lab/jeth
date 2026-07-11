@@ -69,10 +69,10 @@ describe('static = constant / immutable (item #7)', () => {
     expect(compiled(`class C { static K: Visible<u256> = 5n; }`).abi.filter((f: any) => f.type === 'function').map((f: any) => f.name)).toEqual(['K']);
   });
 
-  it('rejects: a static field with no type annotation, and a static field in decorator mode', () => {
+  it('rejects: a static field with no type annotation; the decorator pragma is banned', () => {
     expect(codes(`class C { static K = 5n; get f(): External<u256> { return C.K; } }`)).toContain('JETH045'); // needs a type
-    // decorator mode: a static field is not a JETH concept -> the field must be @state/@constant/@immutable.
-    expect(codes(`// use @decorators\n@contract class C { static K: u256 = 5n; @external @view f(): u256 { return 1n; } }`)).toContain('JETH045');
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nclass C { static K: u256 = 5n; get f(): External<u256> { return 1n; } }`)).toContain('JETH480');
   });
 
   it('the C.K rewrite is scope-safe: a local/param shadowing the contract reads the LOCAL field, not the constant', async () => {
@@ -84,9 +84,11 @@ describe('static = constant / immutable (item #7)', () => {
     expect(BigInt(r.returnHex)).toBe(7n); // the param's field, NOT the constant 999
   });
 
-  it('a `static` field on a @struct/@interface/@library class does not hijack a same-named contract member', () => {
-    // sweep finding: harvesting static names from non-contract classes poisoned the rewrite map.
-    expect(codes(`@struct class S { static count: u256; x: u256; } class C { @state count: u256; @external @view foo(): u256 { return S.count; } }`)).toContain('JETH074');
+  it('a member access on a non-contract `type` does not hijack a same-named contract member', () => {
+    // sweep finding: harvesting static names from non-contract classes poisoned the rewrite map. Natively a
+    // `type` struct has no statics to harvest, so `S.count` cannot bind the contract's own `count` field -
+    // it rejects (JETH074) instead of silently reading the contract's slot.
+    expect(codes(`type S = { count: u256; x: u256 }; class C { count: u256; get foo(): External<u256> { return S.count; } }`)).toContain('JETH074');
   });
 });
 

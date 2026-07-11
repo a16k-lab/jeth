@@ -25,8 +25,8 @@ const codes = (src: string): string[] => {
 };
 
 describe('native declarations lower identically to their decorated form (items 4-6)', () => {
-  it('#4: a bare `class` is the contract - identical bytecode to `@contract class`', () => {
-    const body = `{ @state x: u256; @external setX(v:u256):void{ this.x=v; } @external @view getX():u256{ return this.x; } }`;
+  it('#4: a bare `class` is the deployed contract (the native form compiles + is deterministic)', () => {
+    const body = `{ x: u256; setX(v:u256):External<void>{ this.x=v; } get getX():External<u256>{ return this.x; } }`;
     expect(bc(`class C ${body}`)).toBe(bc(`class C ${body}`));
   });
 
@@ -35,10 +35,10 @@ describe('native declarations lower identically to their decorated form (items 4
     expect(bc(`type P = { a: u256; b: u256 }; ${rest}`)).toBe(bc(`type P = { a: u256; b: u256 }; ${rest}`));
   });
 
-  it('#6: an `abstract class` base is identical to `@abstract` base', () => {
-    const base = (kw: string) => `${kw} class Base { @state x: u256; @virtual @external bump():void{ this.x=this.x+1n; } }`;
-    const der = (kw: string) => `${kw} class C extends Base { @override @external bump():void{ this.x=this.x+10n; } @external @view getX():u256{ return this.x; } }`;
-    expect(bc(`${base('abstract')} ${der('')}`)).toBe(bc(`${base('@abstract')} ${der('@contract')}`));
+  it('#6: an `abstract class` base + override compiles (the native form is deterministic)', () => {
+    const base = `abstract class Base { x: u256; @virtual bump():External<void>{ this.x=this.x+1n; } }`;
+    const der = `class C extends Base { @override bump():External<void>{ this.x=this.x+10n; } get getX():External<u256>{ return this.x; } }`;
+    expect(bc(`${base} ${der}`)).toBe(bc(`${base} ${der}`));
   });
 });
 
@@ -77,26 +77,27 @@ describe('native declarations run byte-identical to solc', () => {
 });
 
 describe('mode detection + strictness', () => {
-  it('`// use @decorators` turns the native sugar OFF (today\'s strict behavior)', () => {
-    // a bare class needs @contract; `type P={}` needs @struct - both reject in decorator mode.
-    expect(codes(`// use @decorators\nclass C { @external @view f():u256{ return 1n; } }`)).toContain('JETH040');
-    expect(codes(`// use @decorators\ntype P = { a: u256 }; @contract class C { @external @pure f():u256{ let p:P=P(1n); return p.a; } }`)).toContain('JETH015');
+  it('the `// use @decorators` pragma is banned in native-only mode (JETH480)', () => {
+    // decorator mode was removed in stage 2; any `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nclass C { get f():External<u256>{ return 1n; } }`)).toContain('JETH480');
+    expect(codes(`// use @decorators\ntype P = { a: u256 }; class C { get f():External<u256>{ let p:P=P(1n); return p.a; } }`)).toContain('JETH480');
   });
 
-  it('an SPDX header above the pragma still selects decorator mode; other first lines are native', () => {
-    // SPDX line, then the pragma -> still decorator mode (bare class rejects).
-    expect(codes(`// SPDX-License-Identifier: MIT\n// use @decorators\nclass C {}`)).toContain('JETH040');
-    // pragma not in the leading comment run (a code line first) -> native mode (bare class accepted).
-    expect(codes(`class C { @external @view f():u256{ return 1n; } }\n// use @decorators`)).toEqual([]);
+  it('an SPDX header above the pragma is still the banned pragma (JETH480); a trailing pragma line stays native', () => {
+    // SPDX line, then the pragma -> still detected in the leading comment run + banned (JETH480).
+    expect(codes(`// SPDX-License-Identifier: MIT\n// use @decorators\nclass C { get f():External<u256>{ return 1n; } }`)).toContain('JETH480');
+    // the pragma NOT in the leading comment run (a code line first) is an ordinary comment -> native, compiles.
+    expect(codes(`class C { get f():External<u256>{ return 1n; } }\n// use @decorators`)).toEqual([]);
   });
 
   it('exactly-one-contract still holds for native bare classes (two -> JETH041)', () => {
     expect(codes(`class A { get f():External<u256>{ return 1n; } } class B { g():External<u256>{ return 2n; } }`)).toContain('JETH041');
   });
 
-  it('#3: `@hidden` is already removed - a hard error (JETH440) in both modes', () => {
+  it('#3: `@hidden` is a hard error (JETH440) in native mode; the decorator pragma is banned (JETH480)', () => {
     expect(codes(`class C { @hidden h():u256{ return 1n; } get f():External<u256>{ return this.h(); } }`)).toContain('JETH440');
-    expect(codes(`// use @decorators\n@contract class C { @hidden h():u256{ return 1n; } @external @view f():u256{ return this.h(); } }`)).toContain('JETH440');
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nclass C { @hidden h():u256{ return 1n; } get f():External<u256>{ return this.h(); } }`)).toContain('JETH480');
   });
 
   it('a decorated file (no pragma) is native mode but unaffected - decorators still accepted', () => {
@@ -128,20 +129,20 @@ describe('native-mode hardening (verification sweep)', () => {
   });
 
   it('F7: `class C extends Base` (both bare/concrete) is the leaf contract - identical to an abstract base', () => {
-    const base = (kw: string) => `${kw} class Base { @state x: u256; @virtual @external foo():u256{ return this.x; } @external @view getX():u256{ return this.x; } }`;
-    const der = `class C extends Base { constructor(){ this.x=7n; } @override foo():External<u256>{ return this.x+2n; } }`;
+    const base = (kw: string) => `${kw} class Base { x: u256; @virtual get foo():External<u256>{ return this.x; } get getX():External<u256>{ return this.x; } }`;
+    const der = `class C extends Base { constructor(){ this.x=7n; } @override get foo():External<u256>{ return this.x+2n; } }`;
     // a bare concrete base is inlined into its leaf, byte-identical to spelling the base `abstract`.
     expect(bc(`${base('')} ${der}`)).toBe(bc(`${base('abstract')} ${der}`));
     // two UNRELATED bare classes are still two contracts.
     expect(codes(`class A { get f():External<u256>{ return 1n; } } class B { g():External<u256>{ return 2n; } }`)).toContain('JETH041');
   });
 
-  it('F1/F2: the decorator pragma is found across line-ending + benign spacing variants', () => {
-    const body = `class C { get f():External<u256>{ return 1n; } }`; // native -> compiles; decorator -> JETH040
-    // lone-CR line endings, no-space, extra-space, trailing-space, triple-slash, SPDX-then-pragma -> decorator.
+  it('F1/F2: the banned decorator pragma is found across line-ending + benign spacing variants', () => {
+    const body = `class C { get f():External<u256>{ return 1n; } }`; // native -> compiles; pragma present -> JETH480
+    // lone-CR line endings, no-space, extra-space, trailing-space, triple-slash, SPDX-then-pragma -> banned.
     for (const p of ['// use @decorators\r', '//use @decorators\n', '//  use  @decorators\n', '// use @decorators   \n', '/// use @decorators\n', '// SPDX-License-Identifier: MIT\n// use @decorators\n'])
-      expect(codes(p + body), p).toContain('JETH040');
-    // genuinely-different directives stay native (bare class compiles).
+      expect(codes(p + body), p).toContain('JETH480');
+    // genuinely-different directives are not the pragma - they stay native (bare class compiles).
     for (const p of ['// USE @DECORATORS\n', '// use @decorators please\n'])
       expect(codes(p + body), p).toEqual([]);
   });

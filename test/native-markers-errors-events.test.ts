@@ -107,11 +107,13 @@ describe('Part A: two orthogonal axes - `get` = read-only (any visibility); Exte
     expect(codes(`type error = { a: u256 }; class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH038');
   });
 
-  it('marker misuse rejects: bad arity, a Payable get, a conflicting mutability, decorator mode', () => {
+  it('marker misuse rejects: bad arity, a Payable get, a banned decorator, the banned pragma', () => {
     expect(codes(`class C { f(): External { return 1n; } }`)).toContain('JETH352');
     expect(codes(`class C { get f(): Payable<u256> { return 1n; } }`)).toContain('JETH352'); // a get is read-only; payable is a writer property
-    expect(codes(`class C { @view f(): Payable<u256> { return 1n; } }`)).toContain('JETH052');
-    expect(codes(`// use @decorators\n@contract class C { f(): External<u256> { return 1n; } }`)).toContain('JETH013');
+    // a legacy mutability decorator alongside a marker is a banned decorator in stage 2 (JETH481).
+    expect(codes(`class C { @view f(): Payable<u256> { return 1n; } }`)).toContain('JETH481');
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nclass C { f(): External<u256> { return 1n; } }`)).toContain('JETH480');
   });
 
   it('a #-private method cannot carry External/Payable (it would expose the mangled name in the ABI)', () => {
@@ -177,7 +179,7 @@ describe('Part B: error<{...}> / event<{...}> / indexed<T> field declarations', 
     expect(codes(`class C { E: error<{ a: u256 }> = 1n; f(): External<void> { } }`)).toContain('JETH353');                 // initializer
     expect(codes(`class C { #E: error<{ a: u256 }>; f(): External<void> { } }`)).toContain('JETH353');                     // #-private
     expect(codes(`class C { static E: error<{ a: u256 }>; f(): External<void> { } }`)).toContain('JETH353');               // static
-    expect(codes(`// use @decorators\n@contract class C { E: error<{ a: u256 }>; @external f(): void { } }`)).toContain('JETH045'); // decorator mode
+    expect(codes(`// use @decorators\nclass C { E: error<{ a: u256 }>; f(): External<void> { } }`)).toContain('JETH480'); // pragma banned
   });
 });
 
@@ -224,7 +226,7 @@ contract C { function f(uint256 a) external { if (a == 0) revert Insufficient(1,
     expect(codes(`type E = error<{ a: u256 }>;\nclass C { f(): External<void> { throw this.E({ a: 1n }); } }`)).toContain('JETH353');
     // duplicate (file-level + member) hits the normal duplicate check; decorator mode is unchanged.
     expect(codes(`type E = error<{ a: u256 }>;\nclass C { E: error<{ a: u256 }>; f(): External<void> { revert(E(1n)); } }`)).toContain('JETH128');
-    expect(codes(`// use @decorators\ntype E = error<{ a: u256 }>;\n@contract class C { @external f(): void { } }`)).toContain('JETH015');
+    expect(codes(`// use @decorators\ntype E = error<{ a: u256 }>;\nclass C { f(): External<void> { } }`)).toContain('JETH480'); // pragma banned
   });
 });
 

@@ -66,9 +66,9 @@ describe('native mutability inference (item #8)', () => {
     }
   });
 
-  it('decorator mode is unchanged: a no-decorator function stays nonpayable', () => {
-    expect(mut(`// use @decorators\n@contract class C { @state x: u256; @external readsX(): u256 { return this.x; } }`))
-      .toEqual({ readsX: 'nonpayable' });
+  it('the `// use @decorators` pragma is banned in native-only mode (JETH480)', () => {
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nclass C { x: u256; get readsX(): External<u256> { return this.x; } }`)).toContain('JETH480');
   });
 });
 
@@ -97,36 +97,40 @@ describe('`get` accessors (item #8; `get` = read-only at ANY visibility, Externa
     expect(rj.returnHex).toBe('0x' + W(88));
   });
 
-  it('rejects a writing `get`, a setter, and `get` in decorator mode', () => {
+  it('rejects a writing `get` and a setter (JETH043); the decorator pragma is banned', () => {
     expect(codes(`class C { x: u256; get bad(): u256 { this.x = 1n; return this.x; } }`)).toContain('JETH043');
     expect(codes(`class C { x: u256; set val(v: u256) { this.x = v; } }`)).toContain('JETH043');
-    expect(codes(`// use @decorators\n@contract class C { @state x: u256; get val(): u256 { return this.x; } }`)).toContain('JETH043');
+    // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
+    expect(codes(`// use @decorators\nclass C { x: u256; get val(): External<u256> { return this.x; } }`)).toContain('JETH480');
   });
 });
 
 // Mutability-compatibility fixes surfaced by the #8 adversarial sweep (3 clusters of over-acceptances).
 describe('mutability compatibility (item #8 sweep fixes)', () => {
-  it('cluster 3: a caller of a @view helper infers view (not pure); @pure calling @view rejects', () => {
-    // an explicit @view helper is at-least-view by declaration, so its callers are at-least-view.
-    expect(mut(`class C { h(a: u256): u256 { return a + 1n; } get f(a: u256): External<u256> { return this.h(a); } }`)).toEqual({ f: 'view' });
-    expect(mut(`class C { h(a: u256): u256 { return a + 1n; } get x(): External<u256> { return this.h(1n); } }`)).toEqual({ x: 'view' });
-    expect(codes(`@contract class C { @view h(a: u256): u256 { return a + 1n; } @external @pure p(a: u256): u256 { return this.h(a); } }`)).toContain('JETH055');
+  it('cluster 3: a caller of a state-reading (view) helper infers view (not pure); banned mutability decorators reject', () => {
+    // a helper that reads state is view, so its callers infer at-least-view (inference propagates through
+    // an internal call). Natively there is no explicit @view - the mutability rides on the body.
+    expect(mut(`class C { s: u256; h(a: u256): u256 { return a + this.s; } get f(a: u256): External<u256> { return this.h(a); } }`)).toEqual({ f: 'view' });
+    expect(mut(`class C { s: u256; h(a: u256): u256 { return a + this.s; } get x(): External<u256> { return this.h(1n); } }`)).toEqual({ x: 'view' });
+    // explicit @view/@pure mutability decorators were removed in stage 2 - they are banned (JETH481).
+    expect(codes(`class C { @view h(a: u256): u256 { return a + 1n; } @pure p(a: u256): External<u256> { return this.h(a); } }`)).toContain('JETH481');
   });
 
   it('cluster 1: the override mutability ladder is checked with the RESOLVED (inferred) mutability', () => {
-    const base = (m: string) => `@abstract class A { @state x: u256; @virtual @external ${m} f(): u256 { return this.x; } }`;
-    // view base + WRITING override (inferred nonpayable) -> loosen -> reject
-    expect(codes(`${base('@view')} class C extends A { @override f(): External<u256> { this.x = 1n; return this.x; } }`)).toContain('JETH378');
-    // view base (inferred) + writing override -> reject
+    const base = `abstract class A { x: u256; @virtual get f(): External<u256> { return this.x; } }`;
+    // inferred-view base + WRITING override (inferred nonpayable) -> loosen -> reject
+    expect(codes(`${base} class C extends A { @override f(): External<u256> { this.x = 1n; return this.x; } }`)).toContain('JETH378');
+    // inferred-view base (spelled inline) + writing override -> reject
     expect(codes(`abstract class A { x: u256; @virtual get f(): External<u256> { return this.x; } } class C extends A { @override f(): External<u256> { this.x = 1n; return this.x; } }`)).toContain('JETH378');
-    // explicit view base + native read-only override (inferred view) -> ACCEPT (was spuriously rejected pre-fix)
-    expect(codes(`${base('@view')} class C extends A { @override f(): External<u256> { return this.x + 1n; } }`)).toEqual([]);
+    // inferred-view base + native read-only override (inferred view) -> ACCEPT (was spuriously rejected pre-fix)
+    expect(codes(`${base} class C extends A { @override get f(): External<u256> { return this.x + 1n; } }`)).toEqual([]);
   });
 
   it('cluster 2: an `implements` clause is rejected (JETH391); interfaces are implemented via `extends`', () => {
     expect(codes(`interface I { f(): Pure<u256>; } class C implements I { get f(): External<u256> { return 0n; } }`)).toContain('JETH391');
     expect(codes(`interface I { m(): View<u256>; } class C implements I { x: u256; m(): External<u256> { this.x = 1n; return this.x; } }`)).toContain('JETH391');
-    // extends still enforces the interface mutability ladder (JETH387) for a loosening impl.
-    expect(codes(`@interface class I { @external @pure f(): u256; } @contract class C extends I { @external @view f(): u256 { return 0n; } }`)).toContain('JETH387');
+    // extends still enforces the interface mutability ladder (JETH387) for a loosening impl: a Pure interface
+    // method with a state-reading (view) implementation loosens the mutability.
+    expect(codes(`interface I { f(): Pure<u256>; } class C extends I { x: u256; get f(): External<u256> { return this.x; } }`)).toContain('JETH387');
   });
 });
