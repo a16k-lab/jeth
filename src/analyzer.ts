@@ -457,11 +457,6 @@ export class Analyzer {
     // Phase 3: set when this compilation unit's deployed contract is a synthesized @diamond (the source
     // was expanded from `@diamond('array')`); marks the ContractIR so emitRuntime adds the router.
     private readonly diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
-    // Dual-syntax mode (items 3-10): true = NATIVE mode (default) - a bare `class` is the contract, a
-    // `type P = {..}` is a struct, a TS `abstract class` is an abstract base, all as an ADDITIVE
-    // superset over the legacy structural decorators (which still work during migration). false =
-    // DECORATOR mode (a `// use @decorators` file) - today's exact behavior; the native forms are off.
-    private readonly nativeMode = true,
     // Multi-file only: per-file name visibility (own declarations + named imports) keyed by original file,
     // with the bundle's segment map for node -> file attribution. Used to scope `self`-convention ATTACHED
     // calls (which name no library identifier) to each file's import edges.
@@ -635,8 +630,8 @@ export class Analyzer {
     this.collectEnums(); // enums (branded uint8), before structs (a struct field / param may use one)
     this.collectStructs();
     this.collectInterfaces(); // @interface declarations: a named type + per-method ABI/selector registry
-    if (this.nativeMode) this.collectFileLevelErrorEvents(); // `type X = error<{...}>` / `event<{...}>` (file-level, solc 0.8.4/0.8.22 parity)
-    if (this.nativeMode) this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
+    this.collectFileLevelErrorEvents(); // `type X = error<{...}>` / `event<{...}>` (file-level, solc 0.8.4/0.8.22 parity)
+    this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
     this.rejectImplementsClauses(); // a silently-ignored `implements` clause skipped interface obligations
     this.checkClassNamespaceCollisions(); // duplicate contract/abstract/library names + builtin-global shadows
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
@@ -690,7 +685,7 @@ export class Analyzer {
       // reference enums, @structs and earlier structs exactly like a @struct class. A FILE-LEVEL
       // `type X = error<{...}>` / `event<{...}>` declaration is likewise collected later
       // (collectFileLevelErrorEvents, after structs). Skip both here.
-      if (ts.isTypeAliasDeclaration(n) && !(this.nativeMode && (ts.isTypeLiteralNode(n.type) || this.isErrorEventAliasRHS(n.type))))
+      if (ts.isTypeAliasDeclaration(n) && !(ts.isTypeLiteralNode(n.type) || this.isErrorEventAliasRHS(n.type)))
         this.collectTypeAlias(n);
       ts.forEachChild(n, visit);
     };
@@ -839,7 +834,7 @@ export class Analyzer {
       // Item #5 (native mode): a `type P = { ... }` object-type alias is a struct, collected here (in the
       // same source-ordered walk as @struct classes) so a type-struct field may reference any enum,
       // @struct, or EARLIER struct/type-struct - identical to the @struct "reference earlier types" rule.
-      else if (this.nativeMode && ts.isTypeAliasDeclaration(n) && ts.isTypeLiteralNode(n.type))
+      else if (ts.isTypeAliasDeclaration(n) && ts.isTypeLiteralNode(n.type))
         this.collectNativeTypeStruct(n);
       ts.forEachChild(n, visit);
     };
@@ -1379,7 +1374,7 @@ export class Analyzer {
     // extended by another class: an extended base is inlined into its most-derived leaf (like solc's
     // `contract C is Base` where Base is itself concrete), so only the LEAF bare class deploys. Two
     // unrelated bare classes are still two contracts -> JETH041.
-    if (this.nativeMode && out.length === 0) {
+    if (out.length === 0) {
       const extended = this.extendedClassNames();
       const visitNative = (n: ts.Node): void => {
         if (ts.isClassDeclaration(n) && this.isNativeContractClass(n) && !(n.name && extended.has(n.name.text)))
@@ -1413,7 +1408,7 @@ export class Analyzer {
     // MISLEADING arity error ("External<T> takes exactly one return type"). Reserve them loudly instead.
     const RESERVED_MARKERS = new Set(['External', 'Payable', 'View', 'Pure', 'Visible', 'error', 'event', 'indexed']);
     const checkReserved = (nameNode: ts.Identifier): void => {
-      if (this.nativeMode && RESERVED_MARKERS.has(nameNode.text)) {
+      if (RESERVED_MARKERS.has(nameNode.text)) {
         this.diags.error(
           nameNode,
           'JETH038',
@@ -1425,10 +1420,10 @@ export class Analyzer {
       const decs = decoratorNames(cls);
       if (decs.includes('struct') || decs.includes('interface')) return undefined; // typed namespaces, own checks
       if (decs.includes('contract') || decs.includes('proxy') || decs.includes('beacon') || decs.includes('facet')) return 'contract';
-      if (decs.includes('library') || (this.nativeMode && this.hasStaticClassModifier(cls))) return 'library';
-      if (decs.includes('abstract') || (this.nativeMode && this.hasAbstractKeyword(cls))) return 'abstract contract';
-      // a bare class is a contract candidate in native mode; in decorator mode it was always inert.
-      return this.nativeMode ? 'contract' : undefined;
+      if (decs.includes('library') || this.hasStaticClassModifier(cls)) return 'library';
+      if (decs.includes('abstract') || this.hasAbstractKeyword(cls)) return 'abstract contract';
+      // a bare class is the deployed contract candidate.
+      return 'contract';
     };
     const visit = (n: ts.Node): void => {
       if (ts.isClassDeclaration(n) && n.name) {
@@ -1514,7 +1509,7 @@ export class Analyzer {
         // collector, so its functions/gates/qualified-name (L.f) call resolution are identical. A
         // `static abstract class` is a contradiction (a library is already non-deployable and cannot be
         // a base); reject rather than silently registering it as an abstract base.
-        else if (this.nativeMode && this.hasStaticClassModifier(n)) {
+        else if (this.hasStaticClassModifier(n)) {
           if (this.hasAbstractKeyword(n)) {
             this.diags.error(n, 'JETH390', `a static class is already a non-deployable library; drop the \`abstract\` (a library cannot be inherited)`);
           } else {
@@ -1592,7 +1587,6 @@ export class Analyzer {
       // Payable<T> stays rejected: a library delegatecall cannot carry value (solc: "Library functions
       // cannot be payable").
       if (
-        this.nativeMode &&
         member.type &&
         ts.isTypeReferenceNode(member.type) &&
         ts.isIdentifier(member.type.typeName) &&
@@ -1745,17 +1739,15 @@ export class Analyzer {
     // library regardless of any @using naming it; attachedFnsFor deduplicates by identity, so a
     // self-named fn also reachable through the owner's @using cannot self-collide as a spurious
     // ambiguity. Purely ADDITIVE: it only fires where the call would otherwise reject.
-    if (this.nativeMode) {
-      for (const [libName, fns] of this.libraryByName) {
-        for (const fn of fns) {
-          if (fn.params.length === 0 || fn.params[0]!.name !== 'self') continue;
-          const t = fn.params[0]!.type;
-          const bare = fn.name.slice(libName.length + 1);
-          const key = `${canonicalName(t)}#${bare}`;
-          const list = this.selfAttachments.get(key);
-          if (list) list.push(fn);
-          else this.selfAttachments.set(key, [fn]);
-        }
+    for (const [libName, fns] of this.libraryByName) {
+      for (const fn of fns) {
+        if (fn.params.length === 0 || fn.params[0]!.name !== 'self') continue;
+        const t = fn.params[0]!.type;
+        const bare = fn.name.slice(libName.length + 1);
+        const key = `${canonicalName(t)}#${bare}`;
+        const list = this.selfAttachments.get(key);
+        if (list) list.push(fn);
+        else this.selfAttachments.set(key, [fn]);
       }
     }
   }
@@ -1809,7 +1801,7 @@ export class Analyzer {
         // both registered for `extends` resolution, alongside the decorated @contract/@abstract/@facet.
         if (
           decs.includes('contract') || decs.includes('abstract') || decs.includes('facet') ||
-          (this.nativeMode && (this.hasAbstractKeyword(n) || this.isNativeContractClass(n)))
+          this.hasAbstractKeyword(n) || this.isNativeContractClass(n)
         ) {
           this.classByName.set(n.name.text, n);
         }
@@ -1821,7 +1813,7 @@ export class Analyzer {
 
   private isAbstractClass(cls: ts.ClassDeclaration): boolean {
     // Item #6 (native mode): a TS `abstract class` is an abstract base, the native spelling of @abstract.
-    return decoratorNames(cls).includes('abstract') || (this.nativeMode && this.hasAbstractKeyword(cls));
+    return decoratorNames(cls).includes('abstract') || this.hasAbstractKeyword(cls);
   }
 
   /** Is this linearization node an @interface (not a @contract/@abstract contract)? An interface is a
@@ -2095,11 +2087,11 @@ export class Analyzer {
           const nm = ts.isIdentifier(member.name) ? member.name.text : undefined;
           // A native `static receive/fallback` is nonsensical (a special entry is not a class-static member);
           // reject the modifier rather than silently ignore it (the decorated form already rejects it).
-          if (this.nativeMode && (nm === 'receive' || nm === 'fallback') && !decs.includes('receive') && !decs.includes('fallback') && (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword)) {
+          if ((nm === 'receive' || nm === 'fallback') && !decs.includes('receive') && !decs.includes('fallback') && (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword)) {
             this.diags.error(member, 'JETH386', `a \`${nm}\` special entry cannot be \`static\``);
             continue;
           }
-          if (decs.includes('receive') || (this.nativeMode && nm === 'receive')) {
+          if (decs.includes('receive') || nm === 'receive') {
             if (sawReceiveHere)
               this.diags.error(member, 'JETH383', 'a contract may declare at most one @receive entry');
             sawReceiveHere = true;
@@ -2107,7 +2099,7 @@ export class Analyzer {
             receiveDecls.push({ member, contract: cn, virtual: decs.includes('virtual'), override: decs.includes('override') });
             continue;
           }
-          if (decs.includes('fallback') || (this.nativeMode && nm === 'fallback')) {
+          if (decs.includes('fallback') || nm === 'fallback') {
             if (sawFallbackHere)
               this.diags.error(member, 'JETH383', 'a contract may declare at most one @fallback entry');
             sawFallbackHere = true;
@@ -2140,7 +2132,7 @@ export class Analyzer {
           if (ctorNode) this.diags.error(member, 'JETH300', 'a contract may declare at most one constructor');
           else ctorNode = member;
         } else if (ts.isGetAccessor(member)) {
-          if (this.nativeMode) {
+          {
             // Item #8: `get foo(): T { ... }` is an argless external READ-ONLY accessor. Route it through
             // the ordinary function pipeline as a synthesized `@external foo(): T { ... }` (mutability is
             // then inferred like any native fn); flag it a getter so a writing getter is rejected below.
@@ -2174,8 +2166,6 @@ export class Analyzer {
               s.add(cn);
               this.fnDeclContractsByName.set(fn.name, s);
             }
-          } else {
-            this.diags.error(member, 'JETH043', 'getters/setters are not supported');
           }
         } else if (ts.isSetAccessor(member)) {
           this.diags.error(member, 'JETH043', 'setters are not supported (a state variable is written by a normal method)');
@@ -2572,7 +2562,7 @@ export class Analyzer {
         const m: Mutability = e.reads || e.readsEnv ? 'view' : 'pure';
         f.mutability = m;
         e.rf.mutability = m;
-      } else if (this.nativeMode && e && f.mutability === 'nonpayable') {
+      } else if (e && f.mutability === 'nonpayable') {
         // Item #8: in native mode a function with NO explicit mutability decorator has its mutability
         // INFERRED from its transitive effects - writes (SSTORE / emit / a state-changing call) ->
         // nonpayable, reads-only (storage or env / STATICCALL) -> view, neither -> pure. `nonpayable` is
@@ -4751,7 +4741,6 @@ export class Analyzer {
     // ALWAYS payable, so Payable<T> there is redundant (mirrors the @payable JETH385 rule); External<T>
     // is meaningless on a special entry (it is not an ABI function).
     if (
-      this.nativeMode &&
       member.type &&
       ts.isTypeReferenceNode(member.type) &&
       ts.isIdentifier(member.type.typeName) &&
@@ -5955,7 +5944,7 @@ export class Analyzer {
    *  contract-field-only: a struct field / local / param spelled Visible<T> keeps rejecting (JETH013
    *  unknown type), and in decorator mode the marker stays an unknown type as before. */
   private unwrapVisibleFieldMarker(member: ts.PropertyDeclaration): void {
-    if (!this.nativeMode || !member.type) return;
+    if (!member.type) return;
     if (!ts.isTypeReferenceNode(member.type) || !ts.isIdentifier(member.type.typeName)) return;
     const head = member.type.typeName.text;
     if (head === 'External') {
@@ -6017,7 +6006,6 @@ export class Analyzer {
     // a native error<{...}> / event<{...}> FIELD is a declaration, not storage - it must not enter the
     // state-owner collision pre-pass (a duplicate error would otherwise ALSO report a spurious JETH373).
     if (
-      this.nativeMode &&
       member.type &&
       ts.isTypeReferenceNode(member.type) &&
       ts.isIdentifier(member.type.typeName) &&
@@ -6027,7 +6015,7 @@ export class Analyzer {
     }
     if (decs.includes('state')) return true;
     const hasStatic = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
-    return this.nativeMode && !hasStatic;
+    return !hasStatic;
   }
 
   private collectStateVar(member: ts.PropertyDeclaration, out: RawStateVar[], declaredIn?: string): void {
@@ -6038,7 +6026,7 @@ export class Analyzer {
     // unknown-type state var), then a decorated bodyless method is SYNTHESIZED and routed through the
     // SAME collectErrorDecl/collectEvent - every validation gate and the selector/topic0 encoding are
     // reused verbatim, so the field form is byte-identical to the decorator form.
-    if (this.nativeMode && this.collectNativeErrorOrEventField(member)) return;
+    if (this.collectNativeErrorOrEventField(member)) return;
     const decs = decoratorNames(member);
     // P0b: the Visible<T> field marker (already unwrapped) is the native @external twin everywhere below.
     const visibleMarker = this.visibleFieldMarkers.has(member);
@@ -6076,7 +6064,7 @@ export class Analyzer {
     // same collectors, so it is byte-identical to the decorated form. (A non-static field falls through to
     // @state below; @constant/@immutable/@storage decorators keep their own kind via their branches.)
     const hasStatic = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
-    if (this.nativeMode && hasStatic && !decs.includes('state') && !isConstant && !isImmutable && !isStorage) {
+    if (hasStatic && !decs.includes('state') && !isConstant && !isImmutable && !isStorage) {
       if (!ts.isIdentifier(member.name)) {
         this.diags.error(member, 'JETH046', 'a constant / immutable name must be a plain identifier');
         return;
@@ -6503,7 +6491,6 @@ export class Analyzer {
     // (Visible<T> = the auto-getter), methods are EXTERNAL. Reject with a pointer - the generic JETH013
     // "unknown type" would be misleading right next to the accepted External<T>/Payable<T>.
     if (
-      this.nativeMode &&
       member.type &&
       ts.isTypeReferenceNode(member.type) &&
       ts.isIdentifier(member.type.typeName) &&
@@ -6519,7 +6506,6 @@ export class Analyzer {
     let markerExternal = false;
     let markerPayable = false;
     if (
-      this.nativeMode &&
       member.type &&
       ts.isTypeReferenceNode(member.type) &&
       ts.isIdentifier(member.type.typeName) &&
@@ -6895,8 +6881,7 @@ export class Analyzer {
     // here (never through collectFunction's marker unwrap), so gate it here too rather than silently
     // ignoring the marker.
     const genericMarker =
-      this.nativeMode &&
-      member.type &&
+      member.type !== undefined &&
       ts.isTypeReferenceNode(member.type) &&
       ts.isIdentifier(member.type.typeName) &&
       (member.type.typeName.text === 'External' || member.type.typeName.text === 'Payable');
@@ -10656,7 +10641,6 @@ export class Analyzer {
    *  Returns: a synthesized bare-name call (handle it), null (it was a this-raise but invalid - a
    *  diagnostic was emitted), or undefined (not a this-raise - fall through to normal handling). */
   private desugarThisRaise(node: ts.Expression, kind: 'error' | 'event'): ts.CallExpression | null | undefined {
-    if (!this.nativeMode) return undefined;
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
     if (node.expression.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
     if (!ts.isIdentifier(node.expression.name)) return undefined;
@@ -25584,8 +25568,7 @@ export function analyze(
   sourceFile: ts.SourceFile,
   diags: DiagnosticBag,
   diamond?: { name: string; variant: 'array' | 'packed' | 'solidstate' },
-  nativeMode = true,
   importScope?: ImportScope,
 ): ContractIR | undefined {
-  return new Analyzer(sourceFile, diags, diamond, nativeMode, importScope).analyze();
+  return new Analyzer(sourceFile, diags, diamond, importScope).analyze();
 }

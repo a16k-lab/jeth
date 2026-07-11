@@ -12,7 +12,7 @@ import { analyze } from './analyzer.js';
 import { emitYul, emitLibraryYul, UnsupportedError } from './yul.js';
 import { compileYul, LinkReferences } from './solc.js';
 import { emitAbi, AbiItem } from './abi.js';
-import { bundleImports, isDecoratorModeSource, isReferenceIdentifier, remapDiagnostics, BundleSegment } from './imports.js';
+import { bundleImports, detectLegacyPragma, isReferenceIdentifier, remapDiagnostics, BundleSegment } from './imports.js';
 import type { ContractIR } from './ir.js';
 import { displayName } from './types.js';
 
@@ -96,10 +96,10 @@ function manglePrivateMembers(sf: ts.SourceFile): void {
   ts.forEachChild(sf, (n) => rewrite(n, undefined));
 }
 
-// Dual-syntax mode (items 3-10): mode is PER-FILE - a file whose leading comment block contains the exact
-// line `// use @decorators` is DECORATOR mode (legacy syntax); any other file is NATIVE mode (the default,
-// a PERMISSIVE SUPERSET during migration). The scanner lives in imports.ts (isDecoratorModeSource), shared
-// with the multi-file bundler which enforces one mode per compilation.
+// Stage 2: the dual-syntax system was removed - native syntax is the ONLY syntax. A source still carrying
+// the retired `// use @decorators` pragma is a hard error (JETH480, detectLegacyPragma in imports.ts), and
+// the legacy structural decorators (@contract/@external/@view/...) are rejected by collectBannedDecorators
+// below with a pointer to their native form.
 
 /**
  * Item #7: a `static` contract field is a compile-time constant / a ctor-set immutable. In idiomatic TS a
@@ -305,6 +305,80 @@ function rejectReservedModuleIdentifiers(sf: ts.SourceFile, diags: DiagnosticBag
 }
 
 // ---------------------------------------------------------------------------------------------
+// STAGE 2 - LEGACY DECORATOR BAN (JETH481). Native syntax is now the ONLY syntax, so every structural
+// decorator that has a native spelling is rejected LOUDLY with a pointer to that spelling. compileUnit runs
+// this FIRST (before every other diagnostic) so the pointer is the first error a legacy file sees. The KEEP
+// set stays legal and is NOT listed here: @virtual / @override / @modifier (and every user-named MODIFIER
+// APPLICATION - those name none of the banned spellings) / @nonReentrant / @using / @diamond / @storage /
+// @anonymous, plus @payable ON A CONSTRUCTOR (there is no native constructor-payable spelling).
+// ---------------------------------------------------------------------------------------------
+const BANNED_DECORATOR_POINTERS: Record<string, string> = {
+  contract: 'a bare `class C { ... }` is the deployed contract; drop @contract',
+  abstract: 'an `abstract class C { ... }` is an abstract base; drop @abstract',
+  struct: 'a struct is a `type P = { a: T; ... }` object-type alias; drop @struct',
+  interface: 'an interface is native `interface I { m(args): View<T> }`; drop @interface',
+  library: 'a library is a `static class L { ... }`; drop @library',
+  external: 'a method is exposed with `f(args): External<T>` (Payable<T> if payable); a field with `x: Visible<T>`',
+  view: 'mutability is inferred from the body - a read-only method needs no marker (use `f(args): View<T>` only inside an interface)',
+  pure: 'mutability is inferred from the body - a pure method needs no marker (use `f(args): Pure<T>` only inside an interface)',
+  read: 'mutability is inferred from the body - a read-only method needs no marker',
+  payable: 'a payable method returns `Payable<T>`; @payable is legal only on a constructor',
+  state: 'a bare field `x: T` is contract state; drop @state',
+  constant: 'a compile-time constant is a `static K: T = ...` field; drop @constant',
+  immutable: 'a ctor-set immutable is a `static K: T;` field (no initializer); drop @immutable',
+  event: 'an event is `E: event<{ ... }>` (a field) or file-level `type E = event<{ ... }>`; drop @event',
+  error: 'an error is `E: error<{ ... }>` (a field) or file-level `type E = error<{ ... }>`; drop @error',
+  indexed: 'an indexed event parameter is `x: indexed<T>` inside the event<{ ... }> shape; drop @indexed',
+  receive: 'the ether-receive entry is a method named `receive()`; drop @receive',
+  fallback: 'the fallback entry is a method named `fallback()`; drop @fallback',
+};
+
+/** Stage 2: collect a JETH481 diagnostic for every RETIRED structural decorator (positions are
+ *  bundle-relative; the caller remaps for a multi-file compilation). @payable is exempt on a constructor
+ *  (its sole kept placement). A user-named modifier application names none of the banned spellings, so it
+ *  is never caught here. */
+function collectBannedDecorators(sf: ts.SourceFile, fileName: string): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  const nameOf = (d: ts.Decorator): string | undefined => {
+    const e = d.expression;
+    if (ts.isIdentifier(e)) return e.text;
+    if (ts.isCallExpression(e) && ts.isIdentifier(e.expression)) return e.expression.text;
+    return undefined;
+  };
+  const report = (d: ts.Decorator, name: string): void => {
+    const start = d.getStart(sf);
+    const { line, character } = sf.getLineAndCharacterOfPosition(start);
+    out.push({
+      severity: 'error',
+      code: 'JETH481',
+      message: `@${name} was removed (JETH is native-syntax only): ${BANNED_DECORATOR_POINTERS[name]}`,
+      file: fileName,
+      line: line + 1,
+      column: character + 1,
+      length: Math.max(1, d.getEnd() - start),
+    });
+  };
+  const visit = (n: ts.Node): void => {
+    if (ts.isConstructorDeclaration(n)) {
+      // A ctor's decorators are not reachable via ts.canHaveDecorators (decorating a ctor is not legal TS),
+      // but the parser records them; @payable there is the ONE kept ctor spelling, so exempt it.
+      for (const d of ts.getDecorators(n as unknown as ts.HasDecorators) ?? []) {
+        const name = nameOf(d);
+        if (name && name !== 'payable' && Object.prototype.hasOwnProperty.call(BANNED_DECORATOR_POINTERS, name)) report(d, name);
+      }
+    } else if (ts.canHaveDecorators(n)) {
+      for (const d of ts.getDecorators(n) ?? []) {
+        const name = nameOf(d);
+        if (name && Object.prototype.hasOwnProperty.call(BANNED_DECORATOR_POINTERS, name)) report(d, name);
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(sf, visit);
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------
 // MIGRATION CAPTURE (dev-only, P0c): when JETH_MIGRATE_CAPTURE=<dir> is set, every compile() call
 // is recorded - success (creationBytecode) or CompileError (sorted diagnostic codes) - and then the
 // result/error passes through UNCHANGED. The records feed scripts/migrate/verify.mjs, which proves
@@ -399,6 +473,24 @@ function compileGuarded(source: string, opts: CompileOptions = {}): CompileResul
 function compileUnit(source: string, opts: CompileOptions): CompileResult {
   const fileName = opts.fileName ?? 'contract.jeth';
 
+  // Stage 2: the legacy `// use @decorators` mode was removed - JETH is native-syntax only. A source still
+  // carrying the retired pragma is a hard error (JETH480), reported at the directive line BEFORE any other
+  // pass (parse, diamond expansion, bundling) so the pointer is the first thing a legacy file sees.
+  const legacyPragma = detectLegacyPragma(source);
+  if (legacyPragma) {
+    throw new CompileError([
+      {
+        severity: 'error',
+        code: 'JETH480',
+        message: `the legacy decorator mode was removed; JETH is native-syntax only - drop the '// use @decorators' pragma and use native syntax (see docs/SUPPORTED.md)`,
+        file: fileName,
+        line: legacyPragma.line,
+        column: 1,
+        length: 1,
+      },
+    ]);
+  }
+
   // Phase 3 (DIAMOND): expand a `@diamond('array')` class into the synthesized `@contract` BEFORE parse
   // (a source-text transform, like the parser's enum hoist). Gate diagnostics (positions in the ORIGINAL
   // source) are surfaced first; on a gate error we throw without parsing the (now invalid) expansion.
@@ -436,6 +528,13 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
 
   const parsed = parse(unitSource, fileName);
   const diags = new DiagnosticBag(parsed.sourceFile, fileName);
+  // Stage 2: reject every RETIRED structural decorator FIRST (before any other diagnostic), each with a
+  // pointer to its native form. Positions are bundle-relative; remap them for a multi-file compilation.
+  const bannedDecorators = collectBannedDecorators(parsed.sourceFile, fileName);
+  if (bannedDecorators.length > 0) {
+    if (bundleSegments) remapDiagnostics(bannedDecorators, bundleSegments);
+    throw new CompileError(bannedDecorators);
+  }
   // `$m<N>$` is the v3 module-scoping mangle: a SOURCE identifier spelled that way would collide with the
   // rename space, and the demangle at hash boundaries (error/event selectors, link symbols, ABI names)
   // would silently rewrite it to a name that appears nowhere in the source. Reserved EVERYWHERE - checked
@@ -448,18 +547,18 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
   // Item #2: rewrite JS `#` private members to contract-scoped internal names BEFORE validation /
   // analysis, so `#f()` / `this.#x` lower like internal members and derived access rejects.
   manglePrivateMembers(parsed.sourceFile);
-  // `nativeMode` selects the native-declaration syntax (bare class = contract, type = struct, abstract
-  // class = abstract base, static member = class-level const/immutable/function) as an additive superset.
-  const nativeMode = !isDecoratorModeSource(source);
+  // Native syntax (bare class = contract, type = struct, abstract class = abstract base, static member =
+  // class-level const/immutable/function) is now the ONLY syntax, so these two pre-passes run
+  // unconditionally.
   // A `static` member belongs to the CLASS, not the instance: `this` inside a static body is invalid TS
   // semantics and would silently read instance state. Enforced BEFORE the ClassName.x rewrite below, which
   // legitimately INTRODUCES synthesized `this` nodes for `C.K`/`C.f(...)` accesses.
-  if (nativeMode) rejectThisInStaticMembers(parsed.sourceFile, diags);
+  rejectThisInStaticMembers(parsed.sourceFile, diags);
   // Item #7 + static methods: a `static` field is a constant/immutable and a `static` method / `get` is a
   // class-level function; TS accesses both idiomatically as `ClassName.x`. Rewrite `ClassName.x` ->
-  // `this.x` so the ordinary resolution handles them. Native mode only (a static member is not a JETH
-  // concept in decorator mode). Runs after the `#` mangle so a private static name is in its final form.
-  if (nativeMode) rewriteStaticFieldAccess(parsed.sourceFile);
+  // `this.x` so the ordinary resolution handles them. Runs after the `#` mangle so a private static name is
+  // in its final form.
+  rewriteStaticFieldAccess(parsed.sourceFile);
 
   // Phase 0: subset validation (collects, does not throw yet).
   validateSubset(parsed.sourceFile, diags);
@@ -471,7 +570,6 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
     parsed.sourceFile,
     diags,
     dia.expanded && dia.name ? { name: dia.name, variant: dia.variant ?? 'array' } : undefined,
-    nativeMode,
     bundleSegments && bundleVisibility ? { segments: bundleSegments, visibleByFile: bundleVisibility } : undefined,
   );
 

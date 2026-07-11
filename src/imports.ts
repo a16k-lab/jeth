@@ -56,22 +56,24 @@ export interface BundleResult {
   renamesByFile: Map<string, Map<string, string>>;
 }
 
-/** Per-file syntax mode: a file whose leading comment run contains the exact line `// use @decorators` is
- *  DECORATOR mode; any other file is NATIVE mode. Tolerates \r\n / lone-\r line endings and benign
- *  spacing/slash variants of the directive; an SPDX-style leading comment keeps scanning; the first code
- *  or block-comment line closes the pragma window. */
-export function isDecoratorModeSource(source: string): boolean {
-  for (const raw of source.split(/\r\n|\r|\n/)) {
-    const line = raw.trim();
+/** Detect the RETIRED `// use @decorators` legacy-mode pragma. Stage 2 removed the dual-syntax system:
+ *  JETH is native-syntax only, so a source still carrying this directive is a hard error (JETH480).
+ *  Returns the 1-based line of the directive (for the diagnostic pointer) or null. Same tolerant scan the
+ *  old mode detector used (\r\n / lone-\r endings, benign spacing/slash variants; an SPDX-style leading
+ *  comment keeps scanning; the first code or block-comment line closes the pragma window). */
+export function detectLegacyPragma(source: string): { line: number } | null {
+  const lines = source.split(/\r\n|\r|\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.trim();
     if (line === '') continue; // blank line: keep scanning
     if (line.startsWith('//')) {
       const body = line.replace(/^\/+/, '').replace(/\s+/g, ' ').trim();
-      if (body === 'use @decorators') return true;
+      if (body === 'use @decorators') return { line: i + 1 };
       continue; // another leading line-comment (e.g. an SPDX header): keep scanning
     }
     break; // first code / block-comment line: the pragma window is closed
   }
-  return false;
+  return null;
 }
 
 /** Remap bundle-relative diagnostics back to their ORIGINAL file + line via the segment map. Column and
@@ -157,11 +159,10 @@ function classDecoratorNames(cls: ts.ClassDeclaration): string[] {
     .filter(Boolean);
 }
 
-/** An imported (non-entry) file may not declare a deployed contract: reject @contract/@proxy/... in any
- *  mode, and (native mode) a BARE concrete class - which the contract fallback would otherwise pick up as
- *  a second deployable (JETH041 confusion). Libraries / types / interfaces / abstract bases are the
- *  importable kinds. */
-function rejectDepContracts(file: string, sf: ts.SourceFile, nativeMode: boolean): void {
+/** An imported (non-entry) file may not declare a deployed contract: reject @proxy/... and a BARE concrete
+ *  class - which the contract fallback would otherwise pick up as a second deployable (JETH041 confusion).
+ *  Libraries / types / interfaces / abstract bases are the importable kinds. */
+function rejectDepContracts(file: string, sf: ts.SourceFile): void {
   // RECURSIVE walk: the analyzer's contract discovery is recursive too, so a class hidden inside a nested
   // block (`{ @contract class Rogue {} }`) would otherwise smuggle a deployed contract past a top-level-only
   // scan - and a decorated dep contract would then silently REPLACE the entry's contract as the artifact.
@@ -174,7 +175,7 @@ function rejectDepContracts(file: string, sf: ts.SourceFile, nativeMode: boolean
       const mods = ts.getModifiers(s) ?? [];
       const isAbstract = mods.some((m) => m.kind === ts.SyntaxKind.AbstractKeyword);
       const isStatic = mods.some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
-      if (nativeMode && !isAbstract && !isStatic && !decs.some((d) => NON_CONTRACT_KIND_DECORATORS.has(d))) {
+      if (!isAbstract && !isStatic && !decs.some((d) => NON_CONTRACT_KIND_DECORATORS.has(d))) {
         fail(file, sf, s, `an imported file cannot declare a concrete contract class ('${s.name?.text ?? '<anon>'}'); make it \`abstract\` (a base), \`static\` (a library), or move it to the entry file`);
       }
     }
@@ -337,12 +338,11 @@ function checkCrossFileReferences(files: FileInfo[]): void {
 /**
  * Resolve the entry file's imports (recursively) against `sources` (path -> source text) and produce ONE
  * bundled compilation unit: imported files first (dependency post-order, deduped), the entry last, each
- * file's import statements blanked in place. Throws CompileError (JETH036, positioned in the ORIGINAL
- * file) on: an unsupported import form, an unresolvable path, a name that is not an exported declaration,
- * an import cycle, a cross-mode import, or a deployed contract in an imported file.
+ * file's import statements blanked in place. Throws CompileError (positioned in the ORIGINAL file) on: an
+ * unsupported import form, an unresolvable path, a name that is not an exported declaration, an import
+ * cycle, a retired `// use @decorators` pragma (JETH480), or a deployed contract in an imported file.
  */
 export function bundleImports(entryText: string, entryFile: string, sources: Record<string, string>): BundleResult {
-  const entryMode = isDecoratorModeSource(entryText);
   // Normalize line endings up front (\r\n and lone \r -> \n): line/column numbering is unchanged, but the
   // bundle join becomes safe - a file ENDING in a lone \r would otherwise merge with the join's \n into ONE
   // \r\n terminator while the segment math counted two lines, shifting every later file's diagnostics.
@@ -382,21 +382,23 @@ export function bundleImports(entryText: string, entryFile: string, sources: Rec
     // error-recovery would otherwise hand the bundler a plausible-but-wrong AST (and blanking the import
     // lines hides the malformation from every later parse).
     rejectParseErrors(displayName, sf);
-    const fileMode = isDecoratorModeSource(text);
-    if (fileMode !== entryMode) {
+    // Stage 2: the legacy `// use @decorators` mode was removed - every file of a bundle (entry or dep)
+    // that still carries the retired pragma is a hard error (JETH480), pointing at the directive line.
+    const legacy = detectLegacyPragma(text);
+    if (legacy) {
       throw new CompileError([
         {
           severity: 'error',
-          code: 'JETH036',
-          message: `'${displayName}' is ${fileMode ? 'decorator' : 'native'}-mode but the entry file is ${entryMode ? 'decorator' : 'native'}-mode; all files of one compilation share the entry's syntax mode`,
+          code: 'JETH480',
+          message: `the legacy decorator mode was removed; JETH is native-syntax only - drop the '// use @decorators' pragma and rewrite '${displayName}' in native syntax (see docs/SUPPORTED.md)`,
           file: displayName,
-          line: 1,
+          line: legacy.line,
           column: 1,
           length: 1,
         },
       ]);
     }
-    if (!isEntry) rejectDepContracts(displayName, sf, !entryMode);
+    if (!isEntry) rejectDepContracts(displayName, sf);
 
     let blanked = text;
     const importedHere = new Set<string>();
