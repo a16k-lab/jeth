@@ -54,7 +54,7 @@ async function expectSame(a: { aj: Address; as: Address }, sig: string, cd = '')
   return { j, s };
 }
 
-const IN = `@struct class In { a: u256; b: u256 }`;
+const IN = `type In = { a: u256; b: u256 };`;
 const SIN = `struct In { uint256 a; uint256 b; }`;
 
 describe('external-call result of a static-struct fixed array consumed directly (the live miscompile)', () => {
@@ -95,9 +95,9 @@ describe('external-call result of a static-struct fixed array consumed directly 
   it('Arr<In,3>: an INTERNAL-call result direct-encode stays byte-identical (control)', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @pure iproduce(): Arr<In,3> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
-         @external @pure encInternal(): bytes { return abi.encode(this.iproduce()); } }`,
+       class C {
+         iproduce(): Arr<In,3> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
+         get encInternal(): External<bytes> { return abi.encode(this.iproduce()); } }`,
       `${SIN}
        contract C {
          function iproduce() internal pure returns (In[3] memory) { return [In(11,12),In(21,22),In(31,32)]; }
@@ -180,9 +180,9 @@ describe('external-call result of a static-struct fixed array consumed directly 
   it('a real abi.decode(b, Arr<In,3>) direct-encode is byte-identical (the abiDecode node from a decode)', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @external @pure encFromDecode(b: bytes): bytes { return abi.encode(abi.decode(b, Arr<In,3>)); }
-         @external @pure roundtrip(b: bytes): bytes { let d: Arr<In,3> = abi.decode(b, Arr<In,3>); return abi.encode(d); } }`,
+       class C {
+         get encFromDecode(b: bytes): External<bytes> { return abi.encode(abi.decode(b, Arr<In,3>)); }
+         get roundtrip(b: bytes): External<bytes> { let d: Arr<In,3> = abi.decode(b, Arr<In,3>); return abi.encode(d); } }`,
       `${SIN}
        contract C {
          function encFromDecode(bytes calldata b) external pure returns (bytes memory) { return abi.encode(abi.decode(b, (In[3]))); }

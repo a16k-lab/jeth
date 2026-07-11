@@ -17,22 +17,22 @@ const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
 
 describe('indexed static fixed-array / struct event param (JETH207) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@struct class P { x: u256; y: u256; }
-@contract class C {
-  @event EF(@indexed a: Arr<u256,2>, v: u256);
-  @event EN(@indexed a: Arr<u8,3>, v: u256);
-  @event EP(@indexed p: P, v: u256);
-  @state fa: Arr<u256,2>;
-  @state na: Arr<u8,3>;
-  @state ps: P;
-  @external setFa(a: u256, b: u256): void { this.fa[0n] = a; this.fa[1n] = b; }
-  @external setNa(a: u8, b: u8, c: u8): void { this.na[0n] = a; this.na[1n] = b; this.na[2n] = c; }
-  @external setPs(x: u256, y: u256): void { this.ps.x = x; this.ps.y = y; }
-  @external emitFaState(v: u256): void { emit(EF(this.fa, v)); }
-  @external emitFaCd(a: Arr<u256,2>, v: u256): void { emit(EF(a, v)); }
-  @external emitNaState(v: u256): void { emit(EN(this.na, v)); }
-  @external emitNaCd(a: Arr<u8,3>, v: u256): void { emit(EN(a, v)); }
-  @external emitPsState(v: u256): void { emit(EP(this.ps, v)); } }`;
+  const J = `type P = { x: u256; y: u256; };
+class C {
+  EF: event<{ a: indexed<Arr<u256,2>>; v: u256 }>;
+  EN: event<{ a: indexed<Arr<u8,3>>; v: u256 }>;
+  EP: event<{ p: indexed<P>; v: u256 }>;
+  fa: Arr<u256,2>;
+  na: Arr<u8,3>;
+  ps: P;
+  setFa(a: u256, b: u256): External<void> { this.fa[0n] = a; this.fa[1n] = b; }
+  setNa(a: u8, b: u8, c: u8): External<void> { this.na[0n] = a; this.na[1n] = b; this.na[2n] = c; }
+  setPs(x: u256, y: u256): External<void> { this.ps.x = x; this.ps.y = y; }
+  emitFaState(v: u256): External<void> { emit(EF(this.fa, v)); }
+  emitFaCd(a: Arr<u256,2>, v: u256): External<void> { emit(EF(a, v)); }
+  emitNaState(v: u256): External<void> { emit(EN(this.na, v)); }
+  emitNaCd(a: Arr<u8,3>, v: u256): External<void> { emit(EN(a, v)); }
+  emitPsState(v: u256): External<void> { emit(EP(this.ps, v)); } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {

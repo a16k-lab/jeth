@@ -52,32 +52,32 @@ const callData = (sig: string, comps: Comp[]) => {
 const A = (tail: string): Comp => ({ dyn: true, tail });
 const V = (v: bigint): Comp => ({ dyn: false, word: pad(v) });
 
-const JETH = `@contract class C {
-  @error E1(a: u256[]);
-  @error E2(tag: u256, a: u256[]);
-  @error E3(a: u256[], s: string);
-  @error EAddr(a: address[]);
-  @error ESigned(a: i64[]);
-  @error ENest(a: u256[][]);
-  @event Ev1(a: u256[]);
-  @event Ev2(@indexed tag: u256, a: u256[]);
-  @event Ev3(a: u256[], s: string);
-  @event EvAddr(a: address[]);
+const JETH = `class C {
+  E1: error<{ a: u256[] }>;
+  E2: error<{ tag: u256; a: u256[] }>;
+  E3: error<{ a: u256[]; s: string }>;
+  EAddr: error<{ a: address[] }>;
+  ESigned: error<{ a: i64[] }>;
+  ENest: error<{ a: u256[][] }>;
+  Ev1: event<{ a: u256[] }>;
+  Ev2: event<{ tag: indexed<u256>; a: u256[] }>;
+  Ev3: event<{ a: u256[]; s: string }>;
+  EvAddr: event<{ a: address[] }>;
   // errors (calldata array source)
-  @external @pure r1(a: u256[]): void { revert(E1(a)); }
-  @external @pure r2(t: u256, a: u256[]): void { revert(E2(t, a)); }
-  @external @pure r3(a: u256[], s: string): void { revert(E3(a, s)); }
-  @external @pure rAddr(a: address[]): void { revert(EAddr(a)); }
-  @external @pure rSigned(a: i64[]): void { revert(ESigned(a)); }
-  @external @pure rNest(a: u256[][]): void { revert(ENest(a)); }
+  r1(a: u256[]): External<void> { revert(E1(a)); }
+  r2(t: u256, a: u256[]): External<void> { revert(E2(t, a)); }
+  r3(a: u256[], s: string): External<void> { revert(E3(a, s)); }
+  rAddr(a: address[]): External<void> { revert(EAddr(a)); }
+  rSigned(a: i64[]): External<void> { revert(ESigned(a)); }
+  rNest(a: u256[][]): External<void> { revert(ENest(a)); }
   // error with a MEMORY array source
-  @external @pure rMem(x: u256, y: u256, z: u256): void { let xs: u256[] = [x, y, z]; revert(E1(xs)); }
+  rMem(x: u256, y: u256, z: u256): External<void> { let xs: u256[] = [x, y, z]; revert(E1(xs)); }
   // events
-  @external e1(a: u256[]): void { emit(Ev1(a)); }
-  @external e2(t: u256, a: u256[]): void { emit(Ev2(t, a)); }
-  @external e3(a: u256[], s: string): void { emit(Ev3(a, s)); }
-  @external eAddr(a: address[]): void { emit(EvAddr(a)); }
-  @external eMem(x: u256, y: u256): void { let xs: u256[] = [x, y]; emit(Ev1(xs)); }
+  e1(a: u256[]): External<void> { emit(Ev1(a)); }
+  e2(t: u256, a: u256[]): External<void> { emit(Ev2(t, a)); }
+  e3(a: u256[], s: string): External<void> { emit(Ev3(a, s)); }
+  eAddr(a: address[]): External<void> { emit(EvAddr(a)); }
+  eMem(x: u256, y: u256): External<void> { let xs: u256[] = [x, y]; emit(Ev1(xs)); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

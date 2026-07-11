@@ -24,17 +24,16 @@ const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
 // JETH surface: Outer[] echo + element value-field reads + length.
 const JETH = `
-@struct class Inner { a: u128; b: u128; }
-@struct class Outer { p: u64; inner: Inner; q: u64; }
+type Inner = { a: u128; b: u128; };
+type Outer = { p: u64; inner: Inner; q: u64; };
 
-@contract
 class NestedStructElem {
-  @external @pure echoOuters(ps: Outer[]): Outer[] { return ps; }
-  @external @pure outerP(ps: Outer[], i: u256): u64 { return ps[i].p; }
-  @external @pure outerQ(ps: Outer[], i: u256): u64 { return ps[i].q; }
-  @external @pure len(ps: Outer[]): u256 { return ps.length; }
-  @external @pure innerA(ps: Outer[], i: u256): u128 { return ps[i].inner.a; }
-  @external @pure innerB(ps: Outer[], i: u256): u128 { return ps[i].inner.b; }
+  get echoOuters(ps: Outer[]): External<Outer[]> { return ps; }
+  get outerP(ps: Outer[], i: u256): External<u64> { return ps[i].p; }
+  get outerQ(ps: Outer[], i: u256): External<u64> { return ps[i].q; }
+  get len(ps: Outer[]): External<u256> { return ps.length; }
+  get innerA(ps: Outer[], i: u256): External<u128> { return ps[i].inner.a; }
+  get innerB(ps: Outer[], i: u256): External<u128> { return ps[i].inner.b; }
 }`;
 
 // Faithful Solidity mirror (the oracle).

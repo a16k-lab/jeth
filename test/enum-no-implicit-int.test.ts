@@ -28,7 +28,7 @@ function codes(src: string): string[] {
   }
 }
 const PRE = 'enum Color { Red, Green, Blue }\n';
-const J = (body: string) => `${PRE}@contract class C { ${body} }`;
+const J = (body: string) => `${PRE}class C { ${body} }`;
 const S = (body: string) =>
   `// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\ncontract C { enum Color { Red, Green, Blue }\n${body} }`;
 const solRejects = (src: string) => {
@@ -67,7 +67,7 @@ describe('enum member literal is not implicitly convertible to an integer (vs so
   // (4) cross-enum implicit conversion is also rejected (the literal only converts to its OWN enum).
   it('rejects an enum-literal of one enum used where another enum is expected (both reject)', () => {
     const j =
-      'enum Color { Red, Green, Blue }\nenum Status { Off, On }\n@contract class C { @external @pure f(): Status { return Color.Red; } }';
+      'enum Color { Red, Green, Blue }\nenum Status { Off, On }\nclass C { get f(): External<Status> { return Color.Red; } }';
     expect(codes(j)).toContain('JETH085');
     const s = 'enum Status { Off, On } function f() external pure returns (Status) { return Color.Red; }';
     expect(solRejects(S(s))).toBe(true);

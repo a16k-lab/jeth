@@ -33,10 +33,10 @@ function jethRejects(src: string): boolean {
 
 // A shared target: echo doubles, boom reverts a string, pay returns the received value, big returns a
 // 64-byte payload. Identical behaviour in JETH and solc, so a successful call's returndata matches.
-const TARGET_JETH = `@contract class T {
-  @external @view echo(x: u256): u256 { return x * 2n; }
-  @external @pure boom(): u256 { revert("kaboom"); }
-  @external @payable pay(): u256 { return msg.value; }
+const TARGET_JETH = `class T {
+  get echo(x: u256): External<u256> { return x * 2n; }
+  get boom(): External<u256> { revert("kaboom"); }
+  pay(): Payable<u256> { return msg.value; }
 }`;
 const TARGET_SOL = `contract T {
   function echo(uint256 x) external view returns(uint256){ return x * 2; }
@@ -103,18 +103,18 @@ async function rtSameTarget(
 describe('external low-level calls: byte-identical vs solc', () => {
   it('step 1: tryCall -> [bool, bytes] (raw, no checks), ok+returndata identical', async () => {
     await rtCall(
-      `@contract class C {
-        @external tok(t: address): bool {
+      `class C {
+        tok(t: address): External<bool> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", 5n);
           let [ok, ret]: [bool, bytes] = t.tryCall({ data: d });
           return ok;
         }
-        @external tfail(t: address): bool {
+        tfail(t: address): External<bool> {
           let d: bytes = abi.encodeWithSignature("boom()");
           let [ok, ret]: [bool, bytes] = t.tryCall({ data: d });
           return ok;
         }
-        @external tret(t: address): bytes {
+        tret(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", 5n);
           let [ok, ret]: [bool, bytes] = t.tryCall({ data: d });
           return ret;
@@ -143,12 +143,12 @@ describe('external low-level calls: byte-identical vs solc', () => {
 
   it('step 2: call with a string-literal success revert (success path + Error(string) failure)', async () => {
     await rtCall(
-      `@contract class C {
-        @external ok(t: address): bytes {
+      `class C {
+        ok(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", 7n);
           return t.call({ data: d, success: { condition: this.ok, revert: "callfail" } });
         }
-        @external fail(t: address): bytes {
+        fail(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("boom()");
           return t.call({ data: d, success: { condition: this.ok, revert: "callfail" } });
         }
@@ -173,9 +173,9 @@ describe('external low-level calls: byte-identical vs solc', () => {
 
   it('step 3a: custom-error success revert', async () => {
     await rtCall(
-      `@contract class C {
-        @error Failed(code: u256);
-        @external f(t: address): bytes {
+      `class C {
+        Failed: error<{ code: u256 }>;
+        f(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("boom()");
           return t.call({ data: d, success: { condition: this.ok, revert: Failed(99n) } });
         }
@@ -195,22 +195,22 @@ describe('external low-level calls: byte-identical vs solc', () => {
 
   it('step 3b: array of ordered checks - first failing check wins (this.ok + this.data.length)', async () => {
     await rtCall(
-      `@contract class C {
-        @external okfirst(t: address): bytes {
+      `class C {
+        okfirst(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", 3n);
           return t.call({ data: d, success: [
             { condition: this.ok, revert: "first" },
             { condition: this.data.length > 100n, revert: "second" }
           ] });
         }
-        @external failfirst(t: address): bytes {
+        failfirst(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", 3n);
           return t.call({ data: d, success: [
             { condition: this.data.length > 100n, revert: "early" },
             { condition: this.ok, revert: "late" }
           ] });
         }
-        @external allpass(t: address): bytes {
+        allpass(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", 3n);
           return t.call({ data: d, success: [
             { condition: this.ok, revert: "a" },
@@ -247,12 +247,12 @@ describe('external low-level calls: byte-identical vs solc', () => {
 
   it('step 4: value + gas options', async () => {
     await rtCall(
-      `@contract class C {
-        @external @payable cv(t: address): bytes {
+      `class C {
+        cv(t: address): Payable<bytes> {
           let d: bytes = abi.encodeWithSignature("pay()");
           return t.call({ data: d, value: msg.value, success: { condition: this.ok, revert: "vfail" } });
         }
-        @external cg(t: address): bytes {
+        cg(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", 11n);
           return t.call({ data: d, gas: 100000n, success: { condition: this.ok, revert: "gfail" } });
         }
@@ -277,17 +277,17 @@ describe('external low-level calls: byte-identical vs solc', () => {
 
   it('step 5: staticcall + tryStaticcall (STATICCALL, no value)', async () => {
     await rtCall(
-      `@contract class C {
-        @external @view sok(t: address, x: u256): bytes {
+      `class C {
+        get sok(t: address, x: u256): External<bytes> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", x);
           return t.staticcall({ data: d, success: { condition: this.ok, revert: "sfail" } });
         }
-        @external @view stok(t: address): bool {
+        get stok(t: address): External<bool> {
           let d: bytes = abi.encodeWithSignature("echo(uint256)", 4n);
           let [ok, ret]: [bool, bytes] = t.tryStaticcall({ data: d });
           return ok;
         }
-        @external @view stfail(t: address): bool {
+        get stfail(t: address): External<bool> {
           let d: bytes = abi.encodeWithSignature("boom()");
           let [ok, ret]: [bool, bytes] = t.tryStaticcall({ data: d });
           return ok;
@@ -318,9 +318,9 @@ describe('external low-level calls: byte-identical vs solc', () => {
   it('step 6a: addr.code / addr.codehash (same deployed target on both sides)', async () => {
     await rtSameTarget(
       `contract T { uint256 public x; function set(uint256 v) external { x = v; } }`,
-      `@contract class C {
-        @external @view cc(t: address): bytes { return t.code; }
-        @external @view ch(t: address): bytes32 { return t.codehash; }
+      `class C {
+        get cc(t: address): External<bytes> { return t.code; }
+        get ch(t: address): External<bytes32> { return t.codehash; }
       }`,
       `contract C {
         function cc(address t) external view returns(bytes memory){ return t.code; }
@@ -332,8 +332,8 @@ describe('external low-level calls: byte-identical vs solc', () => {
 
   it('step 6b: revertWith(bytes) bubbles the callee raw reason (= assembly revert(add(b,0x20),mload(b)))', async () => {
     await rtCall(
-      `@contract class C {
-        @external bub(t: address): bytes {
+      `class C {
+        bub(t: address): External<bytes> {
           let d: bytes = abi.encodeWithSignature("boom()");
           let [ok, ret]: [bool, bytes] = t.tryCall({ data: d });
           if (!ok) { revertWith(ret); }
@@ -357,26 +357,26 @@ describe('external low-level calls: accept / reject parity', () => {
   it('accepts the supported forms', () => {
     expect(
       jethAccepts(
-        `@contract class C { @external f(t: address, d: bytes): bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: d }); return r; } }`,
+        `class C { f(t: address, d: bytes): External<bytes> { let [ok, r]: [bool, bytes] = t.tryCall({ data: d }); return r; } }`,
       ),
     ).toBe(true);
     expect(
       jethAccepts(
-        `@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
+        `class C { f(t: address, d: bytes): External<bytes> { return t.call({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
       ),
     ).toBe(true);
     expect(
       jethAccepts(
-        `@contract class C { @external @view f(t: address, d: bytes): bytes { return t.staticcall({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
+        `class C { get f(t: address, d: bytes): External<bytes> { return t.staticcall({ data: d, success: { condition: this.ok, revert: "x" } }); } }`,
       ),
     ).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @view f(t: address): bytes { return t.code; } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @view f(t: address): bytes32 { return t.codehash; } }`)).toBe(
+    expect(jethAccepts(`class C { get f(t: address): External<bytes> { return t.code; } }`)).toBe(true);
+    expect(jethAccepts(`class C { get f(t: address): External<bytes32> { return t.codehash; } }`)).toBe(
       true,
     );
     expect(
       jethAccepts(
-        `@contract class C { @external f(t: address, d: bytes): void { let [ok, r]: [bool, bytes] = t.tryCall({ data: d }); if (!ok) { revertWith(r); } } }`,
+        `class C { f(t: address, d: bytes): External<void> { let [ok, r]: [bool, bytes] = t.tryCall({ data: d }); if (!ok) { revertWith(r); } } }`,
       ),
     ).toBe(true);
   });
@@ -385,29 +385,29 @@ describe('external low-level calls: accept / reject parity', () => {
     // staticcall cannot send value
     expect(
       jethRejects(
-        `@contract class C { @external @view f(t: address, d: bytes): bytes { return t.staticcall({ data: d, value: 1n, success: { condition: this.ok, revert: "x" } }); } }`,
+        `class C { get f(t: address, d: bytes): External<bytes> { return t.staticcall({ data: d, value: 1n, success: { condition: this.ok, revert: "x" } }); } }`,
       ),
     ).toBe(true);
     // call requires a mandatory success field
     expect(
-      jethRejects(`@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d }); } }`),
+      jethRejects(`class C { get f(t: address, d: bytes): External<bytes> { return t.call({ data: d }); } }`),
     ).toBe(true);
     // tryCall takes no success field
     expect(
       jethRejects(
-        `@contract class C { @external f(t: address, d: bytes): bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: d, success: { condition: this.ok, revert: "x" } }); return r; } }`,
+        `class C { get f(t: address, d: bytes): External<bytes> { let [ok, r]: [bool, bytes] = t.tryCall({ data: d, success: { condition: this.ok, revert: "x" } }); return r; } }`,
       ),
     ).toBe(true);
     // data is required
     expect(
       jethRejects(
-        `@contract class C { @external f(t: address): bytes { return t.call({ success: { condition: this.ok, revert: "x" } }); } }`,
+        `class C { get f(t: address): External<bytes> { return t.call({ success: { condition: this.ok, revert: "x" } }); } }`,
       ),
     ).toBe(true);
     // unknown option
     expect(
       jethRejects(
-        `@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, bogus: 1n, success: { condition: this.ok, revert: "x" } }); } }`,
+        `class C { get f(t: address, d: bytes): External<bytes> { return t.call({ data: d, bogus: 1n, success: { condition: this.ok, revert: "x" } }); } }`,
       ),
     ).toBe(true);
     // a state-mutating call cannot be @view
@@ -431,20 +431,20 @@ describe('external low-level calls: accept / reject parity', () => {
     // tryCall in value position (must be destructured)
     expect(
       jethRejects(
-        `@contract class C { @external f(t: address, d: bytes): bool { let x: bool = t.tryCall({ data: d }); return x; } }`,
+        `class C { get f(t: address, d: bytes): External<bool> { let x: bool = t.tryCall({ data: d }); return x; } }`,
       ),
     ).toBe(true);
     // this.ok / this.data leak outside a success condition
-    expect(jethRejects(`@contract class C { @external f(): bool { return this.ok; } }`)).toBe(true);
-    expect(jethRejects(`@contract class C { @external f(): bytes { return this.data; } }`)).toBe(true);
+    expect(jethRejects(`class C { get f(): External<bool> { return this.ok; } }`)).toBe(true);
+    expect(jethRejects(`class C { get f(): External<bytes> { return this.data; } }`)).toBe(true);
     // success condition must be bool
     expect(
       jethRejects(
-        `@contract class C { @external f(t: address, d: bytes): bytes { return t.call({ data: d, success: { condition: this.data.length, revert: "x" } }); } }`,
+        `class C { get f(t: address, d: bytes): External<bytes> { return t.call({ data: d, success: { condition: this.data.length, revert: "x" } }); } }`,
       ),
     ).toBe(true);
     // revertWith requires bytes
-    expect(jethRejects(`@contract class C { @external f(): void { revertWith(5n); } }`)).toBe(true);
+    expect(jethRejects(`class C { f(): External<void> { revertWith(5n); } }`)).toBe(true);
     // .code / .codehash read the environment -> not @pure
     expect(jethRejects(`@contract class C { @external @pure f(t: address): bytes { return t.code; } }`)).toBe(true);
     expect(jethRejects(`@contract class C { @external @pure f(t: address): bytes32 { return t.codehash; } }`)).toBe(

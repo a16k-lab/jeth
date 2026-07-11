@@ -98,7 +98,7 @@ describe('EIP-55 address-literal acceptance matches solc', () => {
     }
     // a 40-hex address literal in a u256 constant is rejected by both (address not convertible).
     expect(
-      jethOk(`@contract class C { @constant K: u256 = 0x${lower}n; @external @view f(): u256 { return this.K; } }`),
+      jethOk(`class C { static K: u256 = 0x${lower}n; get f(): External<u256> { return this.K; } }`),
     ).toBe(
       solcOk(
         `contract C { uint256 constant K = 0x${lower}; function f() external view returns(uint256){ return K; } }`,
@@ -118,7 +118,7 @@ describe('EIP-55 address literals: runtime byte-identity vs solc', () => {
 
   it('bare @constant address (no address(...) cast), read + compare', async () => {
     await diff(
-      `@contract class C { @constant K: address = 0x${valid}n; @external @view getK(): address { return this.K; } @external @view isK(x: address): bool { return x == this.K; } }`,
+      `class C { static K: address = 0x${valid}n; get getK(): External<address> { return this.K; } get isK(x: address): External<bool> { return x == this.K; } }`,
       `contract C { address constant K = 0x${valid}; function getK() external view returns(address){ return K; } function isK(address x) external view returns(bool){ return x == K; } }`,
       [
         { sig: 'getK()' },
@@ -161,13 +161,13 @@ describe('EIP-55 address literals: over-acceptances rejected (match solc)', () =
   ];
   for (const [label, jb, sb] of rejects) {
     it(`${label}: rejected by both`, () => {
-      expect(jethOk(`@contract class C { ${jb} }`), 'JETH should reject').toBe(false);
+      expect(jethOk(`class C { ${jb} }`), 'JETH should reject').toBe(false);
       expect(solcOk(`contract C { ${sb} }`), 'solc should reject').toBe(false);
     });
   }
 
   it('address literal comparison (==) is still accepted (both)', () => {
-    expect(jethOk(`@contract class C { @external @pure f(a: address): bool { return a == 0x${valid}n; } }`)).toBe(true);
+    expect(jethOk(`class C { get f(a: address): External<bool> { return a == 0x${valid}n; } }`)).toBe(true);
     expect(solcOk(`contract C { function f(address a) external pure returns(bool){ return a == 0x${valid}; } }`)).toBe(
       true,
     );

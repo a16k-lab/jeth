@@ -24,7 +24,7 @@ const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 // One element getter per leaf so each access is isolated/lazy; plus whole-array echo
 // and length. Field order: a(u8) b(i16) c(bool) d(address) e(bytes4) f(u64) g(u256) h(i128).
 const JETH = `
-@struct class Big {
+type Big = {
   a: u8;
   b: i16;
   c: bool;
@@ -33,20 +33,19 @@ const JETH = `
   f: u64;
   g: u256;
   h: i128;
-}
+};
 
-@contract
 class AllFieldTypes {
-  @external @pure echo(bs: Big[]): Big[] { return bs; }
-  @external @pure len(bs: Big[]): u256 { return bs.length; }
-  @external @pure getA(bs: Big[], i: u256): u8      { return bs[i].a; }
-  @external @pure getB(bs: Big[], i: u256): i16     { return bs[i].b; }
-  @external @pure getC(bs: Big[], i: u256): bool    { return bs[i].c; }
-  @external @pure getD(bs: Big[], i: u256): address { return bs[i].d; }
-  @external @pure getE(bs: Big[], i: u256): bytes4  { return bs[i].e; }
-  @external @pure getF(bs: Big[], i: u256): u64     { return bs[i].f; }
-  @external @pure getG(bs: Big[], i: u256): u256    { return bs[i].g; }
-  @external @pure getH(bs: Big[], i: u256): i128    { return bs[i].h; }
+  get echo(bs: Big[]): External<Big[]> { return bs; }
+  get len(bs: Big[]): External<u256> { return bs.length; }
+  get getA(bs: Big[], i: u256): External<u8>      { return bs[i].a; }
+  get getB(bs: Big[], i: u256): External<i16>     { return bs[i].b; }
+  get getC(bs: Big[], i: u256): External<bool>    { return bs[i].c; }
+  get getD(bs: Big[], i: u256): External<address> { return bs[i].d; }
+  get getE(bs: Big[], i: u256): External<bytes4>  { return bs[i].e; }
+  get getF(bs: Big[], i: u256): External<u64>     { return bs[i].f; }
+  get getG(bs: Big[], i: u256): External<u256>    { return bs[i].g; }
+  get getH(bs: Big[], i: u256): External<i128>    { return bs[i].h; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

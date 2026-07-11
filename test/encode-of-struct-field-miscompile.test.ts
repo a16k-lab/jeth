@@ -36,16 +36,16 @@ async function pair(jeth: string, sol: string): Promise<{ h: Harness; aj: Addres
 
 // V1: abi.encode(Arr<In,2>) field of a memory struct, In = {string s; uint256 n}.
 const V1_J = `
-@struct class In { s: string; n: u256 }
-@struct class D { items: Arr<In, 2>; tag: u256 }
-@contract class C {
-  @event Ev(items: Arr<In, 2>);
-  @external @pure f(): bytes { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); return abi.encode(d.items); }
-  @external @pure whole(): bytes { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); return abi.encode(d); }
-  @external @pure aliasout(): bytes { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); let t: Arr<In, 2> = d.items; return abi.encode(t); }
-  @external @pure kk(): bytes32 { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); return keccak256(abi.encode(d.items)); }
-  @external @pure sig(): bytes { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); return abi.encodeWithSignature("g(uint256)", d.items); }
-  @external ev(): void { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); emit(Ev(d.items)); }
+type In = { s: string; n: u256 };
+type D = { items: Arr<In, 2>; tag: u256 };
+class C {
+  Ev: event<{ items: Arr<In, 2> }>;
+  get f(): External<bytes> { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); return abi.encode(d.items); }
+  get whole(): External<bytes> { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); return abi.encode(d); }
+  get aliasout(): External<bytes> { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); let t: Arr<In, 2> = d.items; return abi.encode(t); }
+  get kk(): External<bytes32> { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); return keccak256(abi.encode(d.items)); }
+  get sig(): External<bytes> { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); return abi.encodeWithSignature("g(uint256)", d.items); }
+  ev(): External<void> { let a: In = In("hello", 7n); let b: In = In("world!", 9n); let d: D = D([a, b], 42n); emit(Ev(d.items)); }
 }
 `;
 const V1_S = `
@@ -103,18 +103,18 @@ describe('V1: abi.encode of a Arr<In,N> (fixed array of dynamic structs) field o
 
 // V2: abi.encode(o.inner) - a whole nested dynamic struct field off a CALLDATA parent.
 const V2_J = `
-@struct class Inner { xs: u256[]; label: string }
-@struct class Outer { name: string; inner: Inner; k: u256 }
-@contract class C {
-  @error Er(inner: Inner);
-  @event Ev(inner: Inner);
-  @external @pure f(o: Outer): bytes { return abi.encode(o.inner); }
-  @external @pure ret(o: Outer): Inner { return o.inner; }
-  @external @pure copyenc(o: Outer): bytes { let m: Inner = o.inner; return abi.encode(m); }
-  @external @pure kk(o: Outer): bytes32 { return keccak256(abi.encode(o.inner)); }
-  @external @pure sig(o: Outer): bytes { return abi.encodeWithSignature("g(uint256)", o.inner); }
-  @external rv(o: Outer): void { revert(Er(o.inner)); }
-  @external ev(o: Outer): void { emit(Ev(o.inner)); }
+type Inner = { xs: u256[]; label: string };
+type Outer = { name: string; inner: Inner; k: u256 };
+class C {
+  Er: error<{ inner: Inner }>;
+  Ev: event<{ inner: Inner }>;
+  get f(o: Outer): External<bytes> { return abi.encode(o.inner); }
+  get ret(o: Outer): External<Inner> { return o.inner; }
+  get copyenc(o: Outer): External<bytes> { let m: Inner = o.inner; return abi.encode(m); }
+  get kk(o: Outer): External<bytes32> { return keccak256(abi.encode(o.inner)); }
+  get sig(o: Outer): External<bytes> { return abi.encodeWithSignature("g(uint256)", o.inner); }
+  rv(o: Outer): External<void> { revert(Er(o.inner)); }
+  ev(o: Outer): External<void> { emit(Ev(o.inner)); }
 }
 `;
 const V2_S = `

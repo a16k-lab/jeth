@@ -10,15 +10,15 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class EU {
-  @external @pure powU(b: u256, e: u256): u256 { return b ** e; }
-  @external @pure powU8(b: u8, e: u256): u8 { return b ** e; }
-  @external @pure powI(b: i256, e: u256): i256 { return b ** e; }
-  @external @pure uncheckedAdd(a: u8, b: u8): u8 { unchecked: { let r: u8 = a + b; return r; } }
-  @external @pure uncheckedMul(a: u256, b: u256): u256 { unchecked: { let r: u256 = a * b; return r; } }
-  @external @pure uncheckedPow(b: u8, e: u256): u8 { unchecked: { let r: u8 = b ** e; return r; } }
-  @external @pure uncheckedNeg(a: i256): i256 { unchecked: { let r: i256 = -a; return r; } }
-  @external @pure checkedAddReverts(a: u8, b: u8): u8 { return a + b; }
+const JETH = `class EU {
+  get powU(b: u256, e: u256): External<u256> { return b ** e; }
+  get powU8(b: u8, e: u256): External<u8> { return b ** e; }
+  get powI(b: i256, e: u256): External<i256> { return b ** e; }
+  get uncheckedAdd(a: u8, b: u8): External<u8> { unchecked: { let r: u8 = a + b; return r; } }
+  get uncheckedMul(a: u256, b: u256): External<u256> { unchecked: { let r: u256 = a * b; return r; } }
+  get uncheckedPow(b: u8, e: u256): External<u8> { unchecked: { let r: u8 = b ** e; return r; } }
+  get uncheckedNeg(a: i256): External<i256> { unchecked: { let r: i256 = -a; return r; } }
+  get checkedAddReverts(a: u8, b: u8): External<u8> { return a + b; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

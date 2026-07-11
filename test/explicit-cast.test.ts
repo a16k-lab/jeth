@@ -10,18 +10,18 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class CC {
-  @external @pure narrowU(a: u256): u8 { return u8(a); }
-  @external @pure narrowU32(a: u256): u32 { return u32(a); }
-  @external @pure u2i(a: u8): i8 { return i8(a); }
-  @external @pure i2u(a: i8): u8 { return u8(a); }
-  @external @pure narrowI(a: i256): i8 { return i8(a); }
-  @external @pure ubytes(a: u256): bytes32 { return bytes32(a); }
-  @external @pure bytesu(a: bytes32): u256 { return u256(a); }
-  @external @pure u32b4(a: u32): bytes4 { return bytes4(a); }
-  @external @pure b4u32(a: bytes4): u32 { return u32(a); }
-  @external @pure narrowBytes(a: bytes32): bytes4 { return bytes4(a); }
-  @external @pure chain(a: i256): u8 { return u8(u256(a)); }
+const JETH = `class CC {
+  get narrowU(a: u256): External<u8> { return u8(a); }
+  get narrowU32(a: u256): External<u32> { return u32(a); }
+  get u2i(a: u8): External<i8> { return i8(a); }
+  get i2u(a: i8): External<u8> { return u8(a); }
+  get narrowI(a: i256): External<i8> { return i8(a); }
+  get ubytes(a: u256): External<bytes32> { return bytes32(a); }
+  get bytesu(a: bytes32): External<u256> { return u256(a); }
+  get u32b4(a: u32): External<bytes4> { return bytes4(a); }
+  get b4u32(a: bytes4): External<u32> { return u32(a); }
+  get narrowBytes(a: bytes32): External<bytes4> { return bytes4(a); }
+  get chain(a: i256): External<u8> { return u8(u256(a)); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

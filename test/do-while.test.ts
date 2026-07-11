@@ -9,25 +9,25 @@ import { compileSolidity } from './_solidity.js';
 
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@contract class C {
+const JETH = `class C {
   // runs body once even when cond is false on entry
-  @external @pure runsOnce(n: u256): u256 { let c: u256 = 0n; do { c = c + 1n; } while (c < n); return c; }
+  get runsOnce(n: u256): External<u256> { let c: u256 = 0n; do { c = c + 1n; } while (c < n); return c; }
   // sum 1..n via do-while
-  @external @pure sumTo(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; s = s + i; } while (i < n); return s; }
+  get sumTo(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; s = s + i; } while (i < n); return s; }
   // continue must jump to the condition check (skip rest of body, still re-test)
-  @external @pure skipEvens(n: u256): u256 {
+  get skipEvens(n: u256): External<u256> {
     let s: u256 = 0n; let i: u256 = 0n;
     do { i = i + 1n; if (i % 2n == 0n) { continue; } s = s + i; } while (i < n);
     return s;
   }
   // break exits immediately
-  @external @pure breakAt(n: u256, lim: u256): u256 {
+  get breakAt(n: u256, lim: u256): External<u256> {
     let i: u256 = 0n;
     do { i = i + 1n; if (i == lim) { break; } } while (i < n);
     return i;
   }
   // nested do-while with break/continue in inner loop
-  @external @pure grid(a: u256, b: u256): u256 {
+  get grid(a: u256, b: u256): External<u256> {
     let total: u256 = 0n; let i: u256 = 0n;
     do {
       i = i + 1n; let j: u256 = 0n;
@@ -36,9 +36,9 @@ const JETH = `@contract class C {
     return total;
   }
   // a do-while that mutates state (condition reads state too)
-  @state acc: u256;
-  @external pump(steps: u256): void { let k: u256 = 0n; do { this.acc = this.acc + k; k = k + 1n; } while (k < steps); }
-  @external @view getAcc(): u256 { return this.acc; }
+  acc: u256;
+  pump(steps: u256): External<void> { let k: u256 = 0n; do { this.acc = this.acc + k; k = k + 1n; } while (k < steps); }
+  get getAcc(): External<u256> { return this.acc; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -24,13 +24,12 @@ const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
 // JETH source (inline). Element struct has a fixed-array field: stride = 3 words.
-const JETH = `@struct class WithArr { id: u64; data: Arr<u256, 2>; }
-@contract
+const JETH = `type WithArr = { id: u64; data: Arr<u256, 2>; };
 class StructWithFixedArrayField {
-  @external @pure echoArr(ps: WithArr[]): WithArr[] { return ps; }
-  @external @pure idAt(ps: WithArr[], i: u256): u64 { return ps[i].id; }
-  @external @pure lenOf(ps: WithArr[]): u256 { return ps.length; }
-  @external @pure dataAt(ps: WithArr[], i: u256, j: u256): u256 { return ps[i].data[j]; }
+  get echoArr(ps: WithArr[]): External<WithArr[]> { return ps; }
+  get idAt(ps: WithArr[], i: u256): External<u64> { return ps[i].id; }
+  get lenOf(ps: WithArr[]): External<u256> { return ps.length; }
+  get dataAt(ps: WithArr[], i: u256, j: u256): External<u256> { return ps[i].data[j]; }
 }`;
 
 // Faithful Solidity mirror. Selector expands the struct to a tuple:

@@ -38,21 +38,20 @@ const PANIC32 = '0x4e487b7100000000000000000000000000000000000000000000000000000
 
 // --- JETH source (mirror of the Solidity below) ---------------------------
 const JETH = `// scenario mixed-head-cursor
-@struct class Pt { x: u128; y: u128; }
+type Pt = { x: u128; y: u128; };
 
-@contract
 class MixedHead {
   // (1) array first, then index
-  @external @pure f(ps: Pt[], i: u256): u128 { return ps[i].x; }
+  get f(ps: Pt[], i: u256): External<u128> { return ps[i].x; }
   // (2) static value first, then array, then index. g reads the array tail (proves
   // the tail offset is computed after the static word); gx reads the static word.
-  @external @pure g(x: u256, ps: Pt[], i: u256): u128 { return ps[i].y; }
-  @external @pure gx(x: u256, ps: Pt[], i: u256): u256 { return x; }
+  get g(x: u256, ps: Pt[], i: u256): External<u128> { return ps[i].y; }
+  get gx(x: u256, ps: Pt[], i: u256): External<u256> { return x; }
   // (3) two dynamic struct arrays then index; sum two same-width reads.
-  @external @pure h(a: Pt[], b: Pt[], i: u256): u128 { return a[i].x + b[i].y; }
+  get h(a: Pt[], b: Pt[], i: u256): External<u128> { return a[i].x + b[i].y; }
   // echoes to confirm head/tail round-trip with surrounding params
-  @external @pure echoF(ps: Pt[], i: u256): Pt[] { return ps; }
-  @external @pure echoG(x: u256, ps: Pt[]): Pt[] { return ps; }
+  get echoF(ps: Pt[], i: u256): External<Pt[]> { return ps; }
+  get echoG(x: u256, ps: Pt[]): External<Pt[]> { return ps; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

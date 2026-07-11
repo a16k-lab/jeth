@@ -37,14 +37,14 @@ async function diff(J: string, S: string, sigs: string[]) {
 
 describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identical to solc 0.8.35', () => {
   it('bytes[] field: construct / read / encode / return / call-source / empty / long', async () => {
-    const J = `@struct class P { a: u256; tags: bytes[]; }
-    @contract class C {
-      @external @pure enc(): bytes { let t: bytes[] = [bytes("x"), bytes("yy")]; let p: P = P(1n, t); return abi.encode(p); }
-      @external @pure read(): u256 { let t: bytes[] = [bytes("x"), bytes("yy")]; let p: P = P(1n, t); return p.a + p.tags.length + p.tags[1n].length; }
-      @external @pure long(): bytes { let t: bytes[] = [bytes("a-much-longer-leaf-past-32-bytes-boundary!!"), bytes("")]; let p: P = P(5n, t); return abi.encode(p); }
-      @external @pure empty(): bytes { let t: bytes[] = []; let p: P = P(4n, t); return abi.encode(p); }
+    const J = `type P = { a: u256; tags: bytes[]; };
+    class C {
+      get enc(): External<bytes> { let t: bytes[] = [bytes("x"), bytes("yy")]; let p: P = P(1n, t); return abi.encode(p); }
+      get read(): External<u256> { let t: bytes[] = [bytes("x"), bytes("yy")]; let p: P = P(1n, t); return p.a + p.tags.length + p.tags[1n].length; }
+      get long(): External<bytes> { let t: bytes[] = [bytes("a-much-longer-leaf-past-32-bytes-boundary!!"), bytes("")]; let p: P = P(5n, t); return abi.encode(p); }
+      get empty(): External<bytes> { let t: bytes[] = []; let p: P = P(4n, t); return abi.encode(p); }
       mk(): P { let t: bytes[] = [bytes("z")]; return P(8n, t); }
-      @external @pure fromcall(): u256 { let p: P = this.mk(); return p.a + p.tags[0n].length; } }`;
+      get fromcall(): External<u256> { let p: P = this.mk(); return p.a + p.tags[0n].length; } }`;
     const S = `struct P { uint256 a; bytes[] tags; }
     contract C {
       function enc() external pure returns(bytes memory){ bytes[] memory t=new bytes[](2); t[0]=bytes("x"); t[1]=bytes("yy"); P memory p=P(1,t); return abi.encode(p); }
@@ -57,16 +57,16 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
   });
 
   it('string[] / u256[][] field + mixed multi-dynamic-field struct + field ordering', async () => {
-    const J = `@struct class P { tags: bytes[]; a: u256; names: string[]; }
-    @struct class G { a: u256; grid: u256[][]; }
-    @struct class M { a: u256; t1: bytes[]; s: bytes; nums: u256[]; t2: string[]; }
-    @contract class C {
-      @external @pure leadenc(): bytes { let t: bytes[] = [bytes("p")]; let n: string[] = ["hi", "yo"]; let p: P = P(t, 3n, n); return abi.encode(p); }
-      @external @pure leadread(): u256 { let t: bytes[] = [bytes("p")]; let n: string[] = ["hi", "yo"]; let p: P = P(t, 3n, n); return p.a + p.tags.length + p.names.length + p.tags[0n].length; }
-      @external @pure grid(): bytes { let g: u256[][] = [[1n, 2n], [3n]]; let p: G = G(5n, g); return abi.encode(p); }
-      @external @pure gridread(): u256 { let g: u256[][] = [[1n, 2n], [3n]]; let p: G = G(5n, g); return p.grid[0n][1n] + p.grid[1n][0n]; }
-      @external @pure allkinds(): bytes { let x: bytes[] = [bytes("a"), bytes("bb")]; let nm: u256[] = [5n, 6n, 7n]; let y: string[] = ["q"]; let m: M = M(1n, x, bytes("scalar"), nm, y); return abi.encode(m); }
-      @external @pure strelem(): bytes { let z: bytes[] = [bytes("z")]; let n: string[] = ["alpha", "beta-longer-than-32-bytes-for-sure-yes!"]; let p: P = P(z, 2n, n); return abi.encode(p.names[1n]); } }`;
+    const J = `type P = { tags: bytes[]; a: u256; names: string[]; };
+    type G = { a: u256; grid: u256[][]; };
+    type M = { a: u256; t1: bytes[]; s: bytes; nums: u256[]; t2: string[]; };
+    class C {
+      get leadenc(): External<bytes> { let t: bytes[] = [bytes("p")]; let n: string[] = ["hi", "yo"]; let p: P = P(t, 3n, n); return abi.encode(p); }
+      get leadread(): External<u256> { let t: bytes[] = [bytes("p")]; let n: string[] = ["hi", "yo"]; let p: P = P(t, 3n, n); return p.a + p.tags.length + p.names.length + p.tags[0n].length; }
+      get grid(): External<bytes> { let g: u256[][] = [[1n, 2n], [3n]]; let p: G = G(5n, g); return abi.encode(p); }
+      get gridread(): External<u256> { let g: u256[][] = [[1n, 2n], [3n]]; let p: G = G(5n, g); return p.grid[0n][1n] + p.grid[1n][0n]; }
+      get allkinds(): External<bytes> { let x: bytes[] = [bytes("a"), bytes("bb")]; let nm: u256[] = [5n, 6n, 7n]; let y: string[] = ["q"]; let m: M = M(1n, x, bytes("scalar"), nm, y); return abi.encode(m); }
+      get strelem(): External<bytes> { let z: bytes[] = [bytes("z")]; let n: string[] = ["alpha", "beta-longer-than-32-bytes-for-sure-yes!"]; let p: P = P(z, 2n, n); return abi.encode(p.names[1n]); } }`;
     const S = `struct P { bytes[] tags; uint256 a; string[] names; }
     struct G { uint256 a; uint256[][] grid; }
     struct M { uint256 a; bytes[] t1; bytes s; uint256[] nums; string[] t2; }
@@ -81,14 +81,14 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
   });
 
   it('P[] of a nested-leaf-field struct: build / element read / encode / new zero-init / element write', async () => {
-    const J = `@struct class P { a: u256; tags: bytes[]; }
-    @contract class C {
-      @external @pure enc(): bytes { let t0: bytes[] = [bytes("x")]; let xs: P[] = new Array<P>(2n); xs[0n] = P(1n, t0); let t1: bytes[] = [bytes("aa"), bytes("bbb")]; xs[1n] = P(2n, t1); return abi.encode(xs); }
-      @external @pure read(): u256 { let t1: bytes[] = [bytes("aa"), bytes("bbb")]; let xs: P[] = new Array<P>(2n); xs[1n] = P(2n, t1); return xs[1n].tags[1n].length + xs[1n].a; }
-      @external @pure zero(): bytes { let xs: P[] = new Array<P>(2n); return abi.encode(xs); }
-      @external @pure zeroread(): u256 { let xs: P[] = new Array<P>(2n); return xs[0n].tags.length; }
-      @external @pure ewrite(): bytes { let t: bytes[] = [bytes("x"), bytes("yy")]; let xs: P[] = new Array<P>(1n); xs[0n] = P(1n, t); xs[0n].tags[0n] = bytes("ZZZ"); return abi.encode(xs[0n].tags[0n]); }
-      @external @pure repoint(): bytes { let t: bytes[] = [bytes("x")]; let xs: P[] = new Array<P>(1n); xs[0n] = P(1n, t); let t2: bytes[] = [bytes("Q"), bytes("RR")]; xs[0n] = P(2n, t2); return abi.encode(xs); } }`;
+    const J = `type P = { a: u256; tags: bytes[]; };
+    class C {
+      get enc(): External<bytes> { let t0: bytes[] = [bytes("x")]; let xs: P[] = new Array<P>(2n); xs[0n] = P(1n, t0); let t1: bytes[] = [bytes("aa"), bytes("bbb")]; xs[1n] = P(2n, t1); return abi.encode(xs); }
+      get read(): External<u256> { let t1: bytes[] = [bytes("aa"), bytes("bbb")]; let xs: P[] = new Array<P>(2n); xs[1n] = P(2n, t1); return xs[1n].tags[1n].length + xs[1n].a; }
+      get zero(): External<bytes> { let xs: P[] = new Array<P>(2n); return abi.encode(xs); }
+      get zeroread(): External<u256> { let xs: P[] = new Array<P>(2n); return xs[0n].tags.length; }
+      get ewrite(): External<bytes> { let t: bytes[] = [bytes("x"), bytes("yy")]; let xs: P[] = new Array<P>(1n); xs[0n] = P(1n, t); xs[0n].tags[0n] = bytes("ZZZ"); return abi.encode(xs[0n].tags[0n]); }
+      get repoint(): External<bytes> { let t: bytes[] = [bytes("x")]; let xs: P[] = new Array<P>(1n); xs[0n] = P(1n, t); let t2: bytes[] = [bytes("Q"), bytes("RR")]; xs[0n] = P(2n, t2); return abi.encode(xs); } }`;
     const S = `struct P { uint256 a; bytes[] tags; }
     contract C {
       function enc() external pure returns(bytes memory){ bytes[] memory t0=new bytes[](1); t0[0]=bytes("x"); P[] memory xs=new P[](2); xs[0]=P(1,t0); bytes[] memory t1=new bytes[](2); t1[0]=bytes("aa"); t1[1]=bytes("bbb"); xs[1]=P(2,t1); return abi.encode(xs); }
@@ -101,10 +101,10 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
   });
 
   it('abi.decode(b, P) round-trip + malformed reverts byte-identical', async () => {
-    const J = `@struct class P { a: u256; tags: bytes[]; }
-    @contract class C {
-      @external dec(d: bytes): bytes { let p: P = abi.decode(d, P); return abi.encode(p); }
-      @external @pure mk(): bytes { let t: bytes[] = [bytes("aa"), bytes("bbbb")]; let p: P = P(9n, t); return abi.encode(p); } }`;
+    const J = `type P = { a: u256; tags: bytes[]; };
+    class C {
+      get dec(d: bytes): External<bytes> { let p: P = abi.decode(d, P); return abi.encode(p); }
+      get mk(): External<bytes> { let t: bytes[] = [bytes("aa"), bytes("bbbb")]; let p: P = P(9n, t); return abi.encode(p); } }`;
     const S = `struct P { uint256 a; bytes[] tags; }
     contract C {
       function dec(bytes calldata d) external pure returns(bytes memory){ P memory p=abi.decode(d,(P)); return abi.encode(p); }
@@ -132,11 +132,11 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
   });
 
   it('storage struct with a bytes[]/u256[][] field: abi.encode(this.s) + return this.s', async () => {
-    const J = `@struct class P { a: u256; tags: bytes[]; }
-    @contract class C { @state s: P;
-      @external setup() { this.s.a = 7n; this.s.tags.push(bytes("aa")); this.s.tags.push(bytes("bbbb")); }
-      @external enc(): bytes { return abi.encode(this.s); }
-      @external ret(): P { return this.s; } }`;
+    const J = `type P = { a: u256; tags: bytes[]; };
+    class C { s: P;
+      setup(): External<void> { this.s.a = 7n; this.s.tags.push(bytes("aa")); this.s.tags.push(bytes("bbbb")); }
+      get enc(): External<bytes> { return abi.encode(this.s); }
+      get ret(): External<P> { return this.s; } }`;
     const S = `struct P { uint256 a; bytes[] tags; }
     contract C { P s;
       function setup() external { s.a=7; s.tags.push(bytes("aa")); s.tags.push(bytes("bbbb")); }
@@ -149,16 +149,16 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
     // let p: P = this.s / this.recs[i] / this.m[k] (P has a bytes[]/string[]/T[][] field) now COPIES the
     // storage struct into a fresh pointer-headed image (buildDynStructFromStorage builds the field's B4
     // image via abiDecFromStorageToImage). Byte-identical to solc's storage->memory copy.
-    const J = `@struct class P { a: u256; tags: bytes[]; }
-    @contract class C { @state s: P; @state recs: P[]; @state m: mapping<address, P>;
-      @external setup() { this.s.a = 7n; this.s.tags.push(bytes("aa")); this.s.tags.push(bytes("a-leaf-well-past-the-32-byte-boundary-for-sure!!"));
+    const J = `type P = { a: u256; tags: bytes[]; };
+    class C { s: P; recs: P[]; m: mapping<address, P>;
+      setup(): External<void> { this.s.a = 7n; this.s.tags.push(bytes("aa")); this.s.tags.push(bytes("a-leaf-well-past-the-32-byte-boundary-for-sure!!"));
         this.recs.push(); this.recs[0n].a = 9n; this.recs[0n].tags.push(bytes("rr")); }
-      @external cA(): u256 { let p: P = this.s; return p.a; }
-      @external cL(): u256 { let p: P = this.s; return p.tags.length; }
-      @external cT(i: u256): bytes { let p: P = this.s; return p.tags[i]; }
-      @external cW(): bytes { let p: P = this.s; return abi.encode(p); }
-      @external rA(): u256 { let p: P = this.recs[0n]; return p.a + p.tags.length; }
-      @external rT(): bytes { let p: P = this.recs[0n]; return p.tags[0n]; } }`;
+      get cA(): External<u256> { let p: P = this.s; return p.a; }
+      get cL(): External<u256> { let p: P = this.s; return p.tags.length; }
+      get cT(i: u256): External<bytes> { let p: P = this.s; return p.tags[i]; }
+      get cW(): External<bytes> { let p: P = this.s; return abi.encode(p); }
+      get rA(): External<u256> { let p: P = this.recs[0n]; return p.a + p.tags.length; }
+      get rT(): External<bytes> { let p: P = this.recs[0n]; return p.tags[0n]; } }`;
     const S = `struct P { uint256 a; bytes[] tags; }
     contract C { P s; P[] recs; mapping(address => P) m;
       function setup() external { s.a = 7; s.tags.push(bytes("aa")); s.tags.push(bytes("a-leaf-well-past-the-32-byte-boundary-for-sure!!"));
@@ -178,9 +178,9 @@ describe('Cat C: dyn-struct with a nested-dynamic-leaf-array field - byte-identi
     // same builder the direct p.tags[i] reads use). Full byte-identical coverage (reads / OOB / malformed
     // flavor / bytes[]/u256[][] leaves / mixed fields / storage + memory sources) lives in
     // test/calldata-leaf-array-struct-bind.test.ts. Here we only assert it no longer clean-rejects.
-    const T = '@struct class P { a: u256; tags: bytes[]; }\n';
-    expect(codes(T + '@contract class C { @external f(q: P): u256 { let p: P = q; return p.a; } }')).toEqual([]);
+    const T = 'type P = { a: u256; tags: bytes[]; };\n';
+    expect(codes(T + 'class C { get f(q: P): External<u256> { let p: P = q; return p.a; } }')).toEqual([]);
     // an array LITERAL as the constructor arg STILL rejects (JETH226), exactly as solc rejects it.
-    expect(codes(T + '@contract class C { @external @pure f(): u256 { let p: P = P(1n, [bytes("x")]); return p.a; } }')).toContain('JETH226');
+    expect(codes(T + 'class C { get f(): External<u256> { let p: P = P(1n, [bytes("x")]); return p.a; } }')).toContain('JETH226');
   });
 });

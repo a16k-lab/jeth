@@ -41,7 +41,7 @@ const encCut = (c: [bigint, number, string[]][]) => {
 const cutSig = sel('diamondCut((address,uint8,bytes4[])[],address,bytes)');
 const ret = (r: any) => (r.returnHex.startsWith('0x') ? r.returnHex.slice(2) : r.returnHex);
 
-const CF = `@facet class CF { @storage('z') v: u256; @external inc(): void { this.v += 1n; } @external @view get(): u256 { return this.v; } }`;
+const CF = `@facet class CF { @storage('z') v: u256; inc(): External<void> { this.v += 1n; } get get(): External<u256> { return this.v; } }`;
 const ARR = `@diamond('array') class D { constructor(o: address) { diamondInit(o); } }`;
 const PK = `@diamond('packed') class D { constructor(o: address) { diamondInit(o); } }`;
 const SS = `@diamond('solidstate') class D { constructor(o: address) { diamondInitSolidstate(o); } }`;

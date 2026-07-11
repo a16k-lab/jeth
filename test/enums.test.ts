@@ -19,39 +19,39 @@ const pad = (v: bigint) => pad32(v);
 
 // ---- the JETH contract under test, and a byte-for-byte Solidity twin -------------------------
 const J = `enum Color { Red, Green, Blue }
-@struct class Item { c: Color; qty: u32; flag: bool; }
-@contract class C {
-  @state c: Color;          // slot 0, byte 0
-  @state small: u8;         // slot 0, byte 1 (packed beside the enum)
-  @state owner: u16;        // slot 0, bytes 2-3
-  @state it: Item;          // slot 1: c@byte0, qty@bytes1-4, flag@byte5
-  @state seen: mapping<Color, bool>;
-  @state pref: mapping<address, Color>;
-  @external setC(x: Color): void { this.c = x; }
-  @external @view getC(): Color { return this.c; }
-  @external setSmall(s: u8, o: u16): void { this.small = s; this.owner = o; }
-  @external setItem(c: Color, q: u32, f: bool): void { this.it = Item(c, q, f); }
-  @external @view itemColor(): Color { return this.it.c; }
-  @external mark(c: Color): void { this.seen[c] = true; }
-  @external @view isSeen(c: Color): bool { return this.seen[c]; }
-  @external setPref(a: address, c: Color): void { this.pref[a] = c; }
-  @external @view prefOf(a: address): Color { return this.pref[a]; }
-  @external @pure mk(x: u8): Color { return Color(x); }          // range-checked -> Panic 0x21
-  @external @pure toU8(c: Color): u8 { return u8(c); }            // reinterpret, no check
-  @external @pure toU256(c: Color): u256 { return u256(c); }
-  @external @pure red(): Color { return Color.Red; }
-  @external @pure green(): Color { return Color.Green; }
-  @external @pure blue(): Color { return Color.Blue; }
-  @external @pure isBlue(c: Color): bool { return c == Color.Blue; }
-  @external @pure notRed(c: Color): bool { return c != Color.Red; }
-  @external @pure ltGreen(c: Color): bool { return c < Color.Green; }
-  @external @pure geGreen(c: Color): bool { return c >= Color.Green; }
-  @external @pure classify(c: Color): u8 {
+type Item = { c: Color; qty: u32; flag: bool; };
+class C {
+  c: Color;          // slot 0, byte 0
+  small: u8;         // slot 0, byte 1 (packed beside the enum)
+  owner: u16;        // slot 0, bytes 2-3
+  it: Item;          // slot 1: c@byte0, qty@bytes1-4, flag@byte5
+  seen: mapping<Color, bool>;
+  pref: mapping<address, Color>;
+  setC(x: Color): External<void> { this.c = x; }
+  get getC(): External<Color> { return this.c; }
+  setSmall(s: u8, o: u16): External<void> { this.small = s; this.owner = o; }
+  setItem(c: Color, q: u32, f: bool): External<void> { this.it = Item(c, q, f); }
+  get itemColor(): External<Color> { return this.it.c; }
+  mark(c: Color): External<void> { this.seen[c] = true; }
+  get isSeen(c: Color): External<bool> { return this.seen[c]; }
+  setPref(a: address, c: Color): External<void> { this.pref[a] = c; }
+  get prefOf(a: address): External<Color> { return this.pref[a]; }
+  get mk(x: u8): External<Color> { return Color(x); }          // range-checked -> Panic 0x21
+  get toU8(c: Color): External<u8> { return u8(c); }            // reinterpret, no check
+  get toU256(c: Color): External<u256> { return u256(c); }
+  get red(): External<Color> { return Color.Red; }
+  get green(): External<Color> { return Color.Green; }
+  get blue(): External<Color> { return Color.Blue; }
+  get isBlue(c: Color): External<bool> { return c == Color.Blue; }
+  get notRed(c: Color): External<bool> { return c != Color.Red; }
+  get ltGreen(c: Color): External<bool> { return c < Color.Green; }
+  get geGreen(c: Color): External<bool> { return c >= Color.Green; }
+  get classify(c: Color): External<u8> {
     if (c == Color.Red) { return 100n; }
     if (c < Color.Blue) { return 50n; }
     return 9n;
   }
-  @external @pure roundtrip(x: u8): u8 { return u8(Color(x)); }   // decode-cast-extract
+  get roundtrip(x: u8): External<u8> { return u8(Color(x)); }   // decode-cast-extract
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -226,7 +226,7 @@ function errCodes(src: string): string[] {
   }
 }
 const E = 'enum Color { Red, Green, Blue }\n';
-const wrap = (body: string) => `${E}@contract class C { ${body} }`;
+const wrap = (body: string) => `${E}class C { ${body} }`;
 
 describe('enum compile-time rules (solc parity)', () => {
   it('rejects arithmetic on an enum (JETH279)', () => {
@@ -242,7 +242,7 @@ describe('enum compile-time rules (solc parity)', () => {
   });
 
   it('rejects mixing two different enums in a comparison (JETH083)', () => {
-    const src = `enum A { X, Y }\nenum B { P, Q }\n@contract class C { @external @pure f(a: A, b: B): bool { return a == b; } }`;
+    const src = `enum A { X, Y }\nenum B { P, Q }\nclass C { get f(a: A, b: B): External<bool> { return a == b; } }`;
     expect(errCodes(src)).toContain('JETH083');
   });
 
@@ -253,12 +253,12 @@ describe('enum compile-time rules (solc parity)', () => {
   });
 
   it('rejects an enum member with an explicit value (JETH270)', () => {
-    const src = `enum Color { Red = 5, Green, Blue }\n@contract class C { @external @pure f(): u8 { return 0n; } }`;
+    const src = `enum Color { Red = 5, Green, Blue }\nclass C { get f(): External<u8> { return 0n; } }`;
     expect(errCodes(src)).toContain('JETH270');
   });
 
   it('rejects an empty enum (JETH275)', () => {
-    const src = `enum E {}\n@contract class C { @external @pure f(): u8 { return 0n; } }`;
+    const src = `enum E {}\nclass C { get f(): External<u8> { return 0n; } }`;
     expect(errCodes(src)).toContain('JETH275');
   });
 
@@ -275,11 +275,11 @@ describe('enum compile-time rules (solc parity)', () => {
   });
 
   it('rejects an enum name colliding with a primitive (JETH272) / a duplicate member (JETH274)', () => {
-    expect(errCodes(`enum u8 { A, B }\n@contract class C { @external @pure f(): u8 { return 0n; } }`)).toContain(
+    expect(errCodes(`enum u8 { A, B }\nclass C { get f(): External<u8> { return 0n; } }`)).toContain(
       'JETH272',
     );
     expect(
-      errCodes(`enum Color { Red, Green, Red }\n@contract class C { @external @pure f(): u8 { return 0n; } }`),
+      errCodes(`enum Color { Red, Green, Red }\nclass C { get f(): External<u8> { return 0n; } }`),
     ).toContain('JETH274');
   });
 

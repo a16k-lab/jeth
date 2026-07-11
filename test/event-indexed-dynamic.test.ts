@@ -35,17 +35,17 @@ const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
   a.length === b.length &&
   a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
-const JETH = `@contract class C {
-  @event Es(@indexed s: string, v: u256);
-  @event Eb(@indexed b: bytes, v: u256);
-  @event Emix(@indexed k: u256, @indexed s: string, v: u256);
-  @event Etwo(@indexed s1: string, @indexed s2: string);
-  @event Eonly(@indexed s: string);
-  @external es(s: string, v: u256): void { emit(Es(s, v)); }
-  @external eb(b: bytes, v: u256): void { emit(Eb(b, v)); }
-  @external emix(k: u256, s: string, v: u256): void { emit(Emix(k, s, v)); }
-  @external etwo(s1: string, s2: string): void { emit(Etwo(s1, s2)); }
-  @external eonly(s: string): void { emit(Eonly(s)); }
+const JETH = `class C {
+  Es: event<{ s: indexed<string>; v: u256 }>;
+  Eb: event<{ b: indexed<bytes>; v: u256 }>;
+  Emix: event<{ k: indexed<u256>; s: indexed<string>; v: u256 }>;
+  Etwo: event<{ s1: indexed<string>; s2: indexed<string> }>;
+  Eonly: event<{ s: indexed<string> }>;
+  es(s: string, v: u256): External<void> { emit(Es(s, v)); }
+  eb(b: bytes, v: u256): External<void> { emit(Eb(b, v)); }
+  emix(k: u256, s: string, v: u256): External<void> { emit(Emix(k, s, v)); }
+  etwo(s1: string, s2: string): External<void> { emit(Etwo(s1, s2)); }
+  eonly(s: string): External<void> { emit(Eonly(s)); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

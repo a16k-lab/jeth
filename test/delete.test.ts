@@ -15,23 +15,23 @@ const kecSlot = (n: bigint) => BigInt('0x' + toHex(keccak(b32(n))));
 const mapSlot = (key: bigint, base: bigint) => BigInt('0x' + toHex(keccak(Buffer.concat([b32(key), b32(base)]))));
 const A = 0xa11ce0000000000000000000000000000000n; // a sample address key
 
-const JETH = `@struct class P { a: u256; b: u8; c: address; }
-@struct class D { n: u256; s: string; }
-@contract class C {
-  @state pa: u8; @state pb: u8; @state pc: u8;
-  @state count: u256;
-  @state addr: address;
-  @state p: P;
-  @state d: D;
-  @state fa: Arr<u256,3>;
-  @state xs: u256[];
-  @state ss: string[];
-  @state s: string;
-  @state bal: mapping<address, u256>;
-  @state mp: mapping<address, P>;
-  @state mb: mapping<address, string>;
+const JETH = `type P = { a: u256; b: u8; c: address; };
+type D = { n: u256; s: string; };
+class C {
+  pa: u8; pb: u8; pc: u8;
+  count: u256;
+  addr: address;
+  p: P;
+  d: D;
+  fa: Arr<u256,3>;
+  xs: u256[];
+  ss: string[];
+  s: string;
+  bal: mapping<address, u256>;
+  mp: mapping<address, P>;
+  mb: mapping<address, string>;
 
-  @external seed(str: string): void {
+  seed(str: string): External<void> {
     this.pa = 11n; this.pb = 22n; this.pc = 33n;
     this.count = 999n; this.addr = address(0x1234n);
     this.p = P(7n, 8n, address(0x9n));
@@ -44,22 +44,22 @@ const JETH = `@struct class P { a: u256; b: u8; c: address; }
     this.mp[address(0xa11ce0000000000000000000000000000000n)] = P(1n, 2n, address(0x3n));
     this.mb[address(0xa11ce0000000000000000000000000000000n)] = str;
   }
-  @external delPacked(): void { delete this.pb; }
-  @external delCount(): void { delete this.count; }
-  @external delAddr(): void { delete this.addr; }
-  @external delStruct(): void { delete this.p; }
-  @external delDynStruct(): void { delete this.d; }
-  @external delFixed(): void { delete this.fa; }
-  @external delDynArr(): void { delete this.xs; }
-  @external delStrArr(): void { delete this.ss; }
-  @external delStr(): void { delete this.s; }
-  @external delMapVal(): void { delete this.bal[address(0xa11ce0000000000000000000000000000000n)]; }
-  @external delMapStruct(): void { delete this.mp[address(0xa11ce0000000000000000000000000000000n)]; }
-  @external delMapStructField(): void { delete this.mp[address(0xa11ce0000000000000000000000000000000n)].a; }
-  @external delMapBytes(): void { delete this.mb[address(0xa11ce0000000000000000000000000000000n)]; }
-  @external delStructField(): void { delete this.p.c; }
-  @external delFixedElem(): void { delete this.fa[1n]; }
-  @external @pure delLocal(x: u256): u256 { let y: u256 = x; delete y; return y; }
+  delPacked(): External<void> { delete this.pb; }
+  delCount(): External<void> { delete this.count; }
+  delAddr(): External<void> { delete this.addr; }
+  delStruct(): External<void> { delete this.p; }
+  delDynStruct(): External<void> { delete this.d; }
+  delFixed(): External<void> { delete this.fa; }
+  delDynArr(): External<void> { delete this.xs; }
+  delStrArr(): External<void> { delete this.ss; }
+  delStr(): External<void> { delete this.s; }
+  delMapVal(): External<void> { delete this.bal[address(0xa11ce0000000000000000000000000000000n)]; }
+  delMapStruct(): External<void> { delete this.mp[address(0xa11ce0000000000000000000000000000000n)]; }
+  delMapStructField(): External<void> { delete this.mp[address(0xa11ce0000000000000000000000000000000n)].a; }
+  delMapBytes(): External<void> { delete this.mb[address(0xa11ce0000000000000000000000000000000n)]; }
+  delStructField(): External<void> { delete this.p.c; }
+  delFixedElem(): External<void> { delete this.fa[1n]; }
+  get delLocal(x: u256): External<u256> { let y: u256 = x; delete y; return y; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -194,7 +194,7 @@ describe('delete x vs Solidity', () => {
   }
 
   it('rejects delete of a whole mapping (parity: solc also rejects)', () => {
-    const src = `@contract class C { @state bal: mapping<address, u256>; @external f(): void { delete this.bal; } }`;
+    const src = `class C { bal: mapping<address, u256>; f(): External<void> { delete this.bal; } }`;
     expect(() => compile(src, { fileName: 'C.jeth' })).toThrow();
   });
 

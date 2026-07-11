@@ -16,16 +16,16 @@ const cdArr = (xs: readonly bigint[]) => pad32(BigInt(xs.length)) + xs.map(pad32
 
 describe('ternary over a dynamic value-array (JETH074) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@contract class C {
-    @state a: u256[];
-    @state b: u256[];
-    @external pushA(v: u256): void { this.a.push(v); }
-    @external pushB(v: u256): void { this.b.push(v); }
-    @external @view ret(c: bool): u256[] { return c ? this.a : this.b; }
-    @external @view idx(c: bool, i: u256): u256 { return (c ? this.a : this.b)[i]; }
-    @external @view len(c: bool): u256 { return (c ? this.a : this.b).length; }
-    @external @pure memMix(c: bool, x: u256[]): u256[] { let m: u256[] = [1n, 2n]; return c ? m : x; }
-    @external @pure litTern(c: bool): u256[] { let m: u256[] = [100n]; return c ? [3n, 4n, 5n] : m; } }`;
+  const J = `class C {
+    a: u256[];
+    b: u256[];
+    pushA(v: u256): External<void> { this.a.push(v); }
+    pushB(v: u256): External<void> { this.b.push(v); }
+    get ret(c: bool): External<u256[]> { return c ? this.a : this.b; }
+    get idx(c: bool, i: u256): External<u256> { return (c ? this.a : this.b)[i]; }
+    get len(c: bool): External<u256> { return (c ? this.a : this.b).length; }
+    get memMix(c: bool, x: u256[]): External<u256[]> { let m: u256[] = [1n, 2n]; return c ? m : x; }
+    get litTern(c: bool): External<u256[]> { let m: u256[] = [100n]; return c ? [3n, 4n, 5n] : m; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {
@@ -87,7 +87,7 @@ contract C {
     // solc rejects a storage<->calldata data-location mismatch in a ternary
     expect(
       codes(
-        '@contract class C { @state s: u256[]; @external @view f(c: bool, x: u256[]): u256[] { return c ? this.s : x; } }',
+        'class C { s: u256[]; get f(c: bool, x: u256[]): External<u256[]> { return c ? this.s : x; } }',
       ),
     ).toContain('JETH074');
     // Tier-2 LIFTED: calldata|calldata indexed. The access-chain desugar pushes the index into the
@@ -96,7 +96,7 @@ contract C {
     // element in lift-tier2-or-catalogue.test.ts). The old materialize-to-memory gate is bypassed.
     expect(
       codes(
-        '@contract class C { @external @pure f(c: bool, x: u256[], y: u256[], i: u256): u256 { return (c ? x : y)[i]; } }',
+        'class C { get f(c: bool, x: u256[], y: u256[], i: u256): External<u256> { return (c ? x : y)[i]; } }',
       ),
     ).toEqual([]);
   });

@@ -84,20 +84,20 @@ const DIAMOND_JETH = `@diamond('array') class MyDiamond {
 // Uses the @facet decorator (the spec surface): an ordinary deployable contract, tagged, cut in separately.
 const FACET_A_JETH = `@facet class FacetA {
   @storage('app.a') x: u256;
-  @external setX(v: u256): void { this.x = v; }
-  @external @view getX(): u256 { return this.x; }
+  setX(v: u256): External<void> { this.x = v; }
+  get getX(): External<u256> { return this.x; }
 }`;
 const FACET_B_JETH = `@facet class FacetB {
   @storage('app.b') y: u256;
-  @external setY(v: u256): void { this.y = v; }
-  @external @view getY(): u256 { return this.y; }
-  @external @view getXviaB(): u256 { return 42n; }
+  setY(v: u256): External<void> { this.y = v; }
+  get getY(): External<u256> { return this.y; }
+  get getXviaB(): External<u256> { return 42n; }
 }`;
 // An initializer facet for the _init delegatecall: writes a namespaced flag.
-const INIT_JETH = `@contract class DInit {
+const INIT_JETH = `class DInit {
   @storage('app.init') flag: u256;
-  @external init(v: u256): void { this.flag = v; }
-  @external @view flag_(): u256 { return this.flag; }
+  init(v: u256): External<void> { this.flag = v; }
+  get flag_(): External<u256> { return this.flag; }
 }`;
 
 // ---- the solc diamond-3 mirror (IN-DIAMOND dispatch, identical layout) -------
@@ -644,8 +644,8 @@ describe('diamond-array: gates + facet surface (clean diagnostics)', () => {
     );
   });
   it('rejects diamondInit / the reserved builtins outside a @diamond (JETH414)', () => {
-    expect(codes(`@contract class C { @external f(): void { diamondInit(address(0n)); } }`)).toContain('JETH414');
-    expect(codes(`@contract class C { @external @view f(): u256 { return __diamondFacets().length; } }`)).toContain(
+    expect(codes(`class C { f(): External<void> { diamondInit(address(0n)); } }`)).toContain('JETH414');
+    expect(codes(`class C { get f(): External<u256> { return __diamondFacets().length; } }`)).toContain(
       'JETH414',
     );
   });
@@ -655,7 +655,7 @@ describe('diamond-array: gates + facet surface (clean diagnostics)', () => {
     expect(() => accepts(`@diamond class D { constructor(o: address){ diamondInit(o); } }`)).not.toThrow();
     expect(() =>
       accepts(
-        `@facet class F { @storage('app') x: u256; @external set(v: u256): void { this.x = v; } @external @view get(): u256 { return this.x; } }`,
+        `@facet class F { @storage('app') x: u256; set(v: u256): External<void> { this.x = v; } get get(): External<u256> { return this.x; } }`,
       ),
     ).not.toThrow();
   });

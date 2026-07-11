@@ -26,19 +26,19 @@ function codes(src: string): string[] {
 
 describe('dynamic-array-field struct memory local (JETH200) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@struct class S { a: u256; xs: u256[]; b: u256; }
-@contract class C {
-  @external @pure mk(ys: u256[], a: u256, b: u256): S { let p: S = S(a, ys, b); return p; }
-  @external @pure rd(ys: u256[], i: u256): u256 { let p: S = S(7n, ys, 9n); return p.xs[i]; }
-  @external @pure rlen(ys: u256[]): u256 { let p: S = S(7n, ys, 9n); return p.xs.length; }
-  @external @pure rab(ys: u256[]): u256 { let p: S = S(7n, ys, 9n); return p.a + p.b; }
-  @external @pure sumLocal(ys: u256[]): u256 { let p: S = S(1n, ys, 2n); let t: u256 = 0n; for (const v of p.xs) { t = t + v; } return t; }
-  @state s: S;
-  @external setSa(v: u256): void { this.s.a = v; }
-  @external setSb(v: u256): void { this.s.b = v; }
-  @external pushSx(v: u256): void { this.s.xs.push(v); }
-  @external @view cpRet(): S { let p: S = this.s; return p; }
-  @external @view cpIdx(i: u256): u256 { let p: S = this.s; return p.xs[i]; } }`;
+  const J = `type S = { a: u256; xs: u256[]; b: u256; };
+class C {
+  get mk(ys: u256[], a: u256, b: u256): External<S> { let p: S = S(a, ys, b); return p; }
+  get rd(ys: u256[], i: u256): External<u256> { let p: S = S(7n, ys, 9n); return p.xs[i]; }
+  get rlen(ys: u256[]): External<u256> { let p: S = S(7n, ys, 9n); return p.xs.length; }
+  get rab(ys: u256[]): External<u256> { let p: S = S(7n, ys, 9n); return p.a + p.b; }
+  get sumLocal(ys: u256[]): External<u256> { let p: S = S(1n, ys, 2n); let t: u256 = 0n; for (const v of p.xs) { t = t + v; } return t; }
+  s: S;
+  setSa(v: u256): External<void> { this.s.a = v; }
+  setSb(v: u256): External<void> { this.s.b = v; }
+  pushSx(v: u256): External<void> { this.s.xs.push(v); }
+  get cpRet(): External<S> { let p: S = this.s; return p; }
+  get cpIdx(i: u256): External<u256> { let p: S = this.s; return p.xs[i]; } }`;
   const So = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {
@@ -102,28 +102,28 @@ contract C {
     for (const i of [0n, 1n, 2n]) await cmp('0x' + sel('cpIdx(uint256)') + pad32(i), `cpIdx[${i}]`);
   });
   it('clean gates: cd-construct, storage construct; array-field re-point now ACCEPTS', () => {
-    const Sd = '@struct class S { a: u256; xs: u256[]; b: u256; }\n';
+    const Sd = 'type S = { a: u256; xs: u256[]; b: u256; };\n';
     // re-pointing a dynamic-array field of a memory struct (p.xs = ys) is now SUPPORTED (Batch B,
     // byte-identical to solc - see dyn-struct-nested-aggregate-field.test.ts). A calldata source is
     // copied to memory, exactly like solc's calldata->memory assignment.
     expect(
       codes(
         Sd +
-          '@contract class C { @external @pure f(ys: u256[]): u256 { let p: S = S(1n, ys, 2n); p.xs = ys; return p.a; } }',
+          'class C { get f(ys: u256[]): External<u256> { let p: S = S(1n, ys, 2n); p.xs = ys; return p.a; } }',
       ),
     ).toEqual([]);
     // A string[] / bytes[] struct FIELD is now SUPPORTED (Cat C, byte-identical to solc - see
     // dyn-struct-nested-leaf-array-field.test.ts). The constructor takes a typed array value.
     expect(
       codes(
-        '@struct class T { a: u256; ts: string[]; }\n@contract class C { @external @pure f(): u256 { let t: string[] = ["x"]; let p: T = T(1n, t); return p.a; } }',
+        'type T = { a: u256; ts: string[]; };\nclass C { get f(): External<u256> { let t: string[] = ["x"]; let p: T = T(1n, t); return p.a; } }',
       ),
     ).toEqual([]);
     // An array LITERAL as a struct-constructor arg still rejects (JETH226), exactly as solc rejects it
     // (solc requires a typed `new string[](0)`, not a `[]` literal, for a struct array field arg).
     expect(
       codes(
-        '@struct class T { a: u256; ts: string[]; }\n@contract class C { @external @pure f(): u256 { let p: T = T(1n, []); return p.a; } }',
+        'type T = { a: u256; ts: string[]; };\nclass C { get f(): External<u256> { let p: T = T(1n, []); return p.a; } }',
       ),
     ).toContain('JETH226');
   });
@@ -137,27 +137,27 @@ contract C {
 // abi.decode. Byte-identical to solc 0.8.35; OOB -> Panic 0x32, new n>=2^64 -> Panic 0x41.
 describe('B3: dynamic-field struct ARRAY memory local (P[]) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@struct class P { a: u256; s: bytes; }
-@struct class Q { a: u256; arr: u256[]; }
-@contract class C {
-  @external @pure mk(n: u256): P[] { let xs: P[] = new Array<P>(n); return xs; }
-  @external @pure mkLen(n: u256): u256 { let xs: P[] = new Array<P>(n); return xs.length; }
-  @external @pure zeroSLen(): u256 { let xs: P[] = new Array<P>(2n); return xs[1n].s.length; }
-  @external @pure lit(a1: u256, s1: bytes, a2: u256, s2: bytes): P[] { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs; }
-  @external @pure getA(a1: u256, s1: bytes, a2: u256, s2: bytes): u256 { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[1n].a; }
-  @external @pure getS(a1: u256, s1: bytes, a2: u256, s2: bytes): bytes { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[0n].s; }
-  @external @pure getElem(a1: u256, s1: bytes, a2: u256, s2: bytes): P { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[0n]; }
-  @external @pure oob(a1: u256, s1: bytes): u256 { let xs: P[] = [P(a1,s1)]; return xs[5n].a; }
-  @external @pure huge(): P[] { let xs: P[] = new Array<P>(18446744073709551616n); return xs; }
-  @external @pure enc(a1: u256, s1: bytes, a2: u256, s2: bytes): bytes { let xs: P[] = [P(a1,s1), P(a2,s2)]; return abi.encode(xs); }
-  @external @pure setA(v: u256): P[] { let xs: P[] = new Array<P>(2n); xs[0n].a = v; xs[1n].a = v + 1n; return xs; }
-  @external @pure setS(b: bytes): P[] { let xs: P[] = new Array<P>(2n); xs[0n].s = b; return xs; }
-  @external @pure setElem(a1: u256, s1: bytes): P[] { let xs: P[] = new Array<P>(2n); xs[0n] = P(a1, s1); return xs; }
-  @external @pure setArr(arr: u256[]): Q[] { let xs: Q[] = new Array<Q>(2n); xs[1n].arr = arr; xs[1n].a = 7n; return xs; }
-  @external @pure setArrElem(): Q[] { let xs: Q[] = new Array<Q>(1n); xs[0n].arr = [1n,2n,3n]; xs[0n].arr[1n] = 99n; return xs; }
-  @external @pure readBack(arr: u256[]): u256 { let xs: Q[] = new Array<Q>(2n); xs[1n].arr = arr; return xs[1n].arr[0n] + xs[1n].arr.length; }
-  @external @pure oobW(v: u256): u256 { let xs: P[] = new Array<P>(1n); xs[5n].a = v; return xs[0n].a; }
-  @external dec(data: bytes): bytes { let xs: P[] = abi.decode(data, P[]); return abi.encode(xs); } }`;
+  const J = `type P = { a: u256; s: bytes; };
+type Q = { a: u256; arr: u256[]; };
+class C {
+  get mk(n: u256): External<P[]> { let xs: P[] = new Array<P>(n); return xs; }
+  get mkLen(n: u256): External<u256> { let xs: P[] = new Array<P>(n); return xs.length; }
+  get zeroSLen(): External<u256> { let xs: P[] = new Array<P>(2n); return xs[1n].s.length; }
+  get lit(a1: u256, s1: bytes, a2: u256, s2: bytes): External<P[]> { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs; }
+  get getA(a1: u256, s1: bytes, a2: u256, s2: bytes): External<u256> { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[1n].a; }
+  get getS(a1: u256, s1: bytes, a2: u256, s2: bytes): External<bytes> { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[0n].s; }
+  get getElem(a1: u256, s1: bytes, a2: u256, s2: bytes): External<P> { let xs: P[] = [P(a1,s1), P(a2,s2)]; return xs[0n]; }
+  get oob(a1: u256, s1: bytes): External<u256> { let xs: P[] = [P(a1,s1)]; return xs[5n].a; }
+  get huge(): External<P[]> { let xs: P[] = new Array<P>(18446744073709551616n); return xs; }
+  get enc(a1: u256, s1: bytes, a2: u256, s2: bytes): External<bytes> { let xs: P[] = [P(a1,s1), P(a2,s2)]; return abi.encode(xs); }
+  get setA(v: u256): External<P[]> { let xs: P[] = new Array<P>(2n); xs[0n].a = v; xs[1n].a = v + 1n; return xs; }
+  get setS(b: bytes): External<P[]> { let xs: P[] = new Array<P>(2n); xs[0n].s = b; return xs; }
+  get setElem(a1: u256, s1: bytes): External<P[]> { let xs: P[] = new Array<P>(2n); xs[0n] = P(a1, s1); return xs; }
+  get setArr(arr: u256[]): External<Q[]> { let xs: Q[] = new Array<Q>(2n); xs[1n].arr = arr; xs[1n].a = 7n; return xs; }
+  get setArrElem(): External<Q[]> { let xs: Q[] = new Array<Q>(1n); xs[0n].arr = [1n,2n,3n]; xs[0n].arr[1n] = 99n; return xs; }
+  get readBack(arr: u256[]): External<u256> { let xs: Q[] = new Array<Q>(2n); xs[1n].arr = arr; return xs[1n].arr[0n] + xs[1n].arr.length; }
+  get oobW(v: u256): External<u256> { let xs: P[] = new Array<P>(1n); xs[5n].a = v; return xs[0n].a; }
+  get dec(data: bytes): External<bytes> { let xs: P[] = abi.decode(data, P[]); return abi.encode(xs); } }`;
   const So = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {
@@ -242,10 +242,10 @@ contract C {
     await cmp('0x' + sel('dec(bytes)') + bytesParam(corrupt), 'dec corrupt-offset');
   });
   it('R[][] (static-struct nested array) ACCEPTS; FIXED outer Arr<P,N> of a DYNAMIC struct now ACCEPTS too (Lift #4)', () => {
-    expect(codes(`@struct class R{a:u256;b:u256;} @contract class C { @external @pure f(): R[][] { let m: R[][] = [[R(1n,2n)]]; return m; } }`)).toEqual([]);
+    expect(codes(`type R = {a:u256;b:u256;}; class C { get f(): External<R[][]> { let m: R[][] = [[R(1n,2n)]]; return m; } }`)).toEqual([]);
     // Lift #4: a fixed-outer array of a DYNAMIC-field struct (Arr<P,2>, P has a bytes field) is now a
     // supported pointer-headed memory local (build + whole return, byte-identical to solc - the read/
     // encode paths are exercised in fixed-dyn-struct-array-local.test.ts).
-    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,bytes("x")),P(2n,bytes("y"))]; return m; } }`)).toEqual([]);
+    expect(codes(`type P = {a:u256;s:bytes;}; class C { get f(): External<Arr<P,2>> { let m: Arr<P,2> = [P(1n,bytes("x")),P(2n,bytes("y"))]; return m; } }`)).toEqual([]);
   });
 });

@@ -67,7 +67,7 @@ const OZ_REC_BYTES = `function recb(bytes32 h, bytes calldata sig) internal pure
 const OZ_TRY = `function tryr(bytes32 h, bytes calldata sig) internal pure returns(bool,address){ if(sig.length!=65) return (false,address(0)); bytes32 rr; bytes32 ss; uint8 vv; assembly { rr:=calldataload(sig.offset) ss:=calldataload(add(sig.offset,0x20)) vv:=byte(0,calldataload(add(sig.offset,0x40))) } if(uint256(ss) > ${OZ_HALF}) return (false,address(0)); address a=ecrecover(h,vv,rr,ss); if(a==address(0)) return (false,address(0)); return (true,a); }`;
 
 describe('ecrecover (raw builtin)', () => {
-  const J = `@contract class C { @external @pure ec(h: bytes32, v: u8, r: bytes32, s: bytes32): address { return ecrecover(h,v,r,s); } }`;
+  const J = `class C { get ec(h: bytes32, v: u8, r: bytes32, s: bytes32): External<address> { return ecrecover(h,v,r,s); } }`;
   const S = `contract C { function ec(bytes32 h, uint8 v, bytes32 r, bytes32 s) external pure returns(address){ return ecrecover(h,v,r,s); } }`;
   const esel = sel('ec(bytes32,uint8,bytes32,bytes32)');
 
@@ -88,7 +88,7 @@ describe('recover (safe OZ ECDSA)', () => {
   const SLIB = `contract C { ${OZ_ERRORS} ${OZ_REC_SPLIT} ${OZ_REC_BYTES} function rc(bytes32 h, uint8 v, bytes32 r, bytes32 s) external pure returns(address){ return rec(h,v,r,s); } function rb(bytes32 h, bytes calldata sig) external pure returns(address){ return recb(h,sig); } }`;
 
   describe('split form recover(hash, v, r, s)', () => {
-    const J = `@contract class C { @external @pure rc(h: bytes32, v: u8, r: bytes32, s: bytes32): address { return recover(h,v,r,s); } }`;
+    const J = `class C { get rc(h: bytes32, v: u8, r: bytes32, s: bytes32): External<address> { return recover(h,v,r,s); } }`;
     const rsel = sel('rc(bytes32,uint8,bytes32,bytes32)');
     it('valid -> signer', async () => {
       await diff(J, SLIB, rsel + hh + W(BigInt(v)) + r + s);
@@ -102,7 +102,7 @@ describe('recover (safe OZ ECDSA)', () => {
   });
 
   describe('bytes form recover(hash, sig)', () => {
-    const J = `@contract class C { @external @pure rb(h: bytes32, sig: bytes): address { return recover(h, sig); } }`;
+    const J = `class C { get rb(h: bytes32, sig: bytes): External<address> { return recover(h, sig); } }`;
     const rbsel = sel('rb(bytes32,bytes)');
     const OFF = W(0x40n);
     const sig65 = r + s + v.toString(16).padStart(2, '0') + '00'.repeat(31);
@@ -120,7 +120,7 @@ describe('recover (safe OZ ECDSA)', () => {
 });
 
 describe('tryRecover (never reverts)', () => {
-  const J = `@contract class C { @external @pure tr(h: bytes32, sig: bytes): [bool, address] { const [ok, a] = tryRecover(h, sig); return [ok, a]; } }`;
+  const J = `class C { get tr(h: bytes32, sig: bytes): External<[bool, address]> { const [ok, a] = tryRecover(h, sig); return [ok, a]; } }`;
   const S = `contract C { ${OZ_TRY} function tr(bytes32 h, bytes calldata sig) external pure returns(bool,address){ return tryr(h,sig); } }`;
   const trsel = sel('tr(bytes32,bytes)');
   const OFF = W(0x40n);

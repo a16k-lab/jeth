@@ -55,22 +55,22 @@ const codes = (src: string): string[] => {
   }
 };
 
-const JP = '@struct class P { xs: Arr<string,2>; n: u256 }';
+const JP = 'type P = { xs: Arr<string,2>; n: u256 };';
 const SP = 'struct P { string[2] xs; uint256 n; }';
 const LONG = 'a-long-string-that-certainly-exceeds-31-bytes-for-storage-tail-tests';
 
 describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-identical to solc 0.8.35', () => {
   it('construction + element read/write + whole return + abi.encode + internal pass', async () => {
     await eqCalls(
-      `${JP} @contract class C {
-        @external @pure go(): string { let m: P = P(["aa","bb"], 5n); m.xs[1n] = "zz"; return m.xs[1n]; }
-        @external @pure re(): P { let m: P = P(["aa","${LONG}"], 5n); return m; }
-        @external @pure ge(): bytes { let m: P = P(["a","${LONG}"], 7n); return abi.encode(m); }
+      `${JP} class C {
+        get go(): External<string> { let m: P = P(["aa","bb"], 5n); m.xs[1n] = "zz"; return m.xs[1n]; }
+        get re(): External<P> { let m: P = P(["aa","${LONG}"], 5n); return m; }
+        get ge(): External<bytes> { let m: P = P(["a","${LONG}"], 7n); return abi.encode(m); }
         bump(p: P): P { p.n = p.n + 1n; p.xs[0n] = "B"; return p; }
-        @external @pure gi(): P { let m: P = P(["x","y"], 9n); return this.bump(m); }
-        @external @pure alias(): string { let m: P = P(["a","b"], 1n); this.bump(m); return m.xs[0n]; }
-        @external @pure ln(): u256 { let m: P = P(["a","b"], 9n); return m.xs.length; }
-        @external @pure rp(): string { let m: P = P(["a","b"], 1n); let t: Arr<string,2> = ["e","fff"]; m.xs = t; t[0n] = "MUT"; return m.xs[0n]; } }`,
+        get gi(): External<P> { let m: P = P(["x","y"], 9n); return this.bump(m); }
+        get alias(): External<string> { let m: P = P(["a","b"], 1n); this.bump(m); return m.xs[0n]; }
+        get ln(): External<u256> { let m: P = P(["a","b"], 9n); return m.xs.length; }
+        get rp(): External<string> { let m: P = P(["a","b"], 1n); let t: Arr<string,2> = ["e","fff"]; m.xs = t; t[0n] = "MUT"; return m.xs[0n]; } }`,
       `${SP} contract C {
         function go() external pure returns(string memory){ P memory m = P(["aa","bb"], 5); m.xs[1] = "zz"; return m.xs[1]; }
         function re() external pure returns(P memory){ P memory m = P(["aa","${LONG}"], 5); return m; }
@@ -86,14 +86,14 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
 
   it('storage round-trip + long->short overwrite + delete + whole-field assign (slot-level)', async () => {
     await eqCalls(
-      `${JP} @contract class C { @state g: P;
-        @external setLong(): void { this.g = P(["${LONG}","${LONG}2"], 1n); }
-        @external setShort(): void { this.g = P(["s","t"], 2n); }
-        @external fld(): void { this.g.xs = ["${LONG}", "w"]; this.g.n = 3n; }
-        @external del(): void { delete this.g; }
-        @external rt(): u256 { let m: P = this.g; m.xs[0n] = "changed"; this.g = m; return this.g.n; }
-        @external @view rd(): P { return this.g; }
-        @external @view rx(): string { return this.g.xs[0n]; } }`,
+      `${JP} class C { g: P;
+        setLong(): External<void> { this.g = P(["${LONG}","${LONG}2"], 1n); }
+        setShort(): External<void> { this.g = P(["s","t"], 2n); }
+        fld(): External<void> { this.g.xs = ["${LONG}", "w"]; this.g.n = 3n; }
+        del(): External<void> { delete this.g; }
+        rt(): External<u256> { let m: P = this.g; m.xs[0n] = "changed"; this.g = m; return this.g.n; }
+        get rd(): External<P> { return this.g; }
+        get rx(): External<string> { return this.g.xs[0n]; } }`,
       `${SP} contract C { P g;
         function setLong() external { g = P(["${LONG}","${LONG}2"], 1); }
         function setShort() external { g = P(["s","t"], 2); }
@@ -114,15 +114,15 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
     const tail = W(0x40) + W(0x80) + strData('abc') + strData('de');
     const args = W(0x20) + W(0x40) + W(11) + tail;
     await eqCalls(
-      `${JP} @contract class C {
-        @external @pure fn(p: P): u256 { return p.n; }
-        @external @pure fx(p: P): string { return p.xs[1n]; }
-        @external @pure ln(p: P): u256 { return p.xs.length; }
-        @external @pure fd(p: P): u256 { let m: P = p; return m.n; }
-        @external @pure fe(p: P): P { return p; }
-        @external @pure ff(p: P): Arr<string,2> { return p.xs; }
-        @external @pure fb(p: P): string { let t: Arr<string,2> = p.xs; return t[0n]; }
-        @external @pure fw(p: P): bytes { return abi.encode(p); } }`,
+      `${JP} class C {
+        get fn(p: P): External<u256> { return p.n; }
+        get fx(p: P): External<string> { return p.xs[1n]; }
+        get ln(p: P): External<u256> { return p.xs.length; }
+        get fd(p: P): External<u256> { let m: P = p; return m.n; }
+        get fe(p: P): External<P> { return p; }
+        get ff(p: P): External<Arr<string,2>> { return p.xs; }
+        get fb(p: P): External<string> { let t: Arr<string,2> = p.xs; return t[0n]; }
+        get fw(p: P): External<bytes> { return abi.encode(p); } }`,
       `${SP} contract C {
         function fn(P calldata p) external pure returns(uint256){ return p.n; }
         function fx(P calldata p) external pure returns(string memory){ return p.xs[1]; }
@@ -143,7 +143,7 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
   it('malformed calldata: huge/negative field offset (solc signed tail access), truncation, oversized lengths', async () => {
     const MAX = 'f'.repeat(64);
     const mk = (xsOff: string) => W(0x20) + xsOff + W(11) + W(0x40) + W(0x80) + strData('abc') + strData('de');
-    const J = `${JP} @contract class C { @external @pure fx(p: P): string { return p.xs[1n]; } @external @pure fe(p: P): P { return p; } }`;
+    const J = `${JP} class C { get fx(p: P): External<string> { return p.xs[1n]; } get fe(p: P): External<P> { return p; } }`;
     const S = `${SP} contract C { function fx(P calldata p) external pure returns(string memory){ return p.xs[1]; } function fe(P calldata p) external pure returns(P memory){ return p; } }`;
     const calls: [string, string][] = [];
     for (const off of [W(0x40), MAX, '8' + '0'.repeat(63), W(2n ** 64n), W(0x10000), W(0)]) {
@@ -161,7 +161,7 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
     const good = W(0x20) + W(0x40) + W(77) + tail;
     const wrap = (blob: string) => W(0x20) + W(blob.length / 2) + blob;
     await eqCalls(
-      `${JP} @contract class C { @external @pure go(b: bytes): P { let m: P = abi.decode(b, P); return m; } }`,
+      `${JP} class C { get go(b: bytes): External<P> { let m: P = abi.decode(b, P); return m; } }`,
       `${SP} contract C { function go(bytes calldata b) external pure returns(P memory){ P memory m = abi.decode(b, (P)); return m; } }`,
       [
         ['go(bytes)', wrap(good)],
@@ -173,15 +173,15 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
 
   it('events: data event + indexed packed-padded topic + P[]-element topic; custom errors', async () => {
     await eqCalls(
-      `${JP} @contract class C {
-        @event DataEv(p: P, tag: u256);
-        @event TopEv(@indexed p: P, tag: u256);
-        @event ArrEv(@indexed ps: P[]);
-        @error Bad(p: P, code: u256);
-        @external e1(): void { let m: P = P(["aa","${LONG}"], 5n); emit(DataEv(m, 1n)); }
-        @external e2(): void { let m: P = P(["aa","${LONG}"], 5n); emit(TopEv(m, 2n)); }
-        @external e3(): void { let a: P = P(["u","v"], 1n); let b: P = P(["w","${LONG}"], 2n); let ps: P[] = [a, b]; emit(ArrEv(ps)); }
-        @external bo(): void { let m: P = P(["x","y"], 1n); revert(Bad(m, 2n)); } }`,
+      `${JP} class C {
+        DataEv: event<{ p: P; tag: u256 }>;
+        TopEv: event<{ p: indexed<P>; tag: u256 }>;
+        ArrEv: event<{ ps: indexed<P[]> }>;
+        Bad: error<{ p: P; code: u256 }>;
+        e1(): External<void> { let m: P = P(["aa","${LONG}"], 5n); emit(DataEv(m, 1n)); }
+        e2(): External<void> { let m: P = P(["aa","${LONG}"], 5n); emit(TopEv(m, 2n)); }
+        e3(): External<void> { let a: P = P(["u","v"], 1n); let b: P = P(["w","${LONG}"], 2n); let ps: P[] = [a, b]; emit(ArrEv(ps)); }
+        bo(): External<void> { let m: P = P(["x","y"], 1n); revert(Bad(m, 2n)); } }`,
       `${SP} contract C {
         event DataEv(P p, uint256 tag);
         event TopEv(P indexed p, uint256 tag);
@@ -197,14 +197,14 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
 
   it('P[] of such structs: literal (value aliasing), element field ops, push/pop/delete, new Array zero-init', async () => {
     await eqCalls(
-      `${JP} @contract class C { @state arr: P[];
-        @external @pure lit(): string { let a: P = P(["a","b"], 1n); let b: P = P(["c","d"], 2n); let xs: P[] = [a, b]; xs[0n].xs[1n] = "W"; return xs[0n].xs[1n]; }
-        @external ps(): void { this.arr.push(P(["p0","${LONG}"], 7n)); }
-        @external pz(): void { this.arr.push(); }
-        @external pp(): void { this.arr.pop(); }
-        @external dl(): void { delete this.arr; }
-        @external @view rd(i: u256): P { return this.arr[i]; }
-        @external @pure na(): P { let xs: P[] = new Array<P>(2n); return xs[1n]; } }`,
+      `${JP} class C { arr: P[];
+        get lit(): External<string> { let a: P = P(["a","b"], 1n); let b: P = P(["c","d"], 2n); let xs: P[] = [a, b]; xs[0n].xs[1n] = "W"; return xs[0n].xs[1n]; }
+        ps(): External<void> { this.arr.push(P(["p0","${LONG}"], 7n)); }
+        pz(): External<void> { this.arr.push(); }
+        pp(): External<void> { this.arr.pop(); }
+        dl(): External<void> { delete this.arr; }
+        get rd(i: u256): External<P> { return this.arr[i]; }
+        get na(): External<P> { let xs: P[] = new Array<P>(2n); return xs[1n]; } }`,
       `${SP} contract C { P[] arr;
         function lit() external pure returns(string memory){ P memory a = P(["a","b"], 1); P memory b = P(["c","d"], 2); P[] memory xs = new P[](2); xs[0]=a; xs[1]=b; xs[0].xs[1] = "W"; return xs[0].xs[1]; }
         function ps() external { arr.push(P(["p0","${LONG}"], 7)); }
@@ -222,16 +222,16 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
   });
 
   it('nested dyn-struct carrying the family: deep reads/writes, whole re-encode, storage write (recursion lift)', async () => {
-    const JN = '@struct class T { xs: Arr<string,2>; k: u256 } @struct class S { a: u256; t: T }';
+    const JN = 'type T = { xs: Arr<string,2>; k: u256 }; type S = { a: u256; t: T };';
     const SN = 'struct T { string[2] xs; uint256 k; } struct S { uint256 a; T t; }';
     await eqCalls(
-      `${JN} @contract class C { @state g: S;
-        @external @pure rd(): string { let v: S = S(1n, T(["aa","bb"], 7n)); return v.t.xs[1n]; }
-        @external @pure wr(): string { let v: S = S(1n, T(["aa","bb"], 7n)); v.t.xs[0n] = "zz"; return v.t.xs[0n]; }
-        @external @pure re(): T { let v: S = S(1n, T(["cc","dd"], 8n)); return v.t; }
-        @external set(): void { let v: S = S(2n, T(["${LONG}","w"], 3n)); this.g = v; }
-        @external @view rs(): S { return this.g; }
-        @external cp(): u256 { let v: S = this.g; return v.t.k; } }`,
+      `${JN} class C { g: S;
+        get rd(): External<string> { let v: S = S(1n, T(["aa","bb"], 7n)); return v.t.xs[1n]; }
+        get wr(): External<string> { let v: S = S(1n, T(["aa","bb"], 7n)); v.t.xs[0n] = "zz"; return v.t.xs[0n]; }
+        get re(): External<T> { let v: S = S(1n, T(["cc","dd"], 8n)); return v.t; }
+        set(): External<void> { let v: S = S(2n, T(["${LONG}","w"], 3n)); this.g = v; }
+        get rs(): External<S> { return this.g; }
+        get cp(): External<u256> { let v: S = this.g; return v.t.k; } }`,
       `${SN} contract C { S g;
         function rd() external pure returns(string memory){ S memory v = S(1, T(["aa","bb"], 7)); return v.t.xs[1]; }
         function wr() external pure returns(string memory){ S memory v = S(1, T(["aa","bb"], 7)); v.t.xs[0] = "zz"; return v.t.xs[0]; }
@@ -246,14 +246,14 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
 
   it('deeper nesting: Arr<Arr<string,2>,2> and Arr<string[],2> fields incl double-index reads', async () => {
     await eqCalls(
-      `@struct class D { g: Arr<Arr<string,2>,2>; n: u256 } @struct class E2 { g: Arr<string[],2>; n: u256 }
-       @contract class C { @state d: D;
-        @external set(): void { let m: D = D([["a","${LONG}"],["c","d"]], 5n); this.d = m; }
-        @external @view rd(): D { return this.d; }
-        @external @view rx(): string { return this.d.g[0n][1n]; }
-        @external @pure mrd(): string { let m: D = D([["a","b"],["c","dd"]], 5n); return m.g[1n][1n]; }
-        @external @pure mk(): E2 { let a: string[] = ["p","qq"]; let b: string[] = []; let m: E2 = E2([a,b], 4n); return m; }
-        @external @pure el(): string { let a: string[] = ["p","qq"]; let b: string[] = ["r"]; let m: E2 = E2([a,b], 4n); return m.g[0n][1n]; } }`,
+      `type D = { g: Arr<Arr<string,2>,2>; n: u256 }; type E2 = { g: Arr<string[],2>; n: u256 };
+       class C { d: D;
+        set(): External<void> { let m: D = D([["a","${LONG}"],["c","d"]], 5n); this.d = m; }
+        get rd(): External<D> { return this.d; }
+        get rx(): External<string> { return this.d.g[0n][1n]; }
+        get mrd(): External<string> { let m: D = D([["a","b"],["c","dd"]], 5n); return m.g[1n][1n]; }
+        get mk(): External<E2> { let a: string[] = ["p","qq"]; let b: string[] = []; let m: E2 = E2([a,b], 4n); return m; }
+        get el(): External<string> { let a: string[] = ["p","qq"]; let b: string[] = ["r"]; let m: E2 = E2([a,b], 4n); return m.g[0n][1n]; } }`,
       `struct D { string[2][2] g; uint256 n; } struct E2 { string[][2] g; uint256 n; }
        contract C { D d;
         function set() external { D memory m = D([["a","${LONG}"],["c","d"]], 5); d = m; }
@@ -269,14 +269,14 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
 
   it('value-leaf Arr<u256[],N> field + mapping values + ternary + zero return via internal call', async () => {
     await eqCalls(
-      `@struct class V { vs: Arr<u256[],2>; n: u256 } ${JP}
-       @contract class C { @state m: mapping<u256, P>;
-        @external @pure vv(): u256 { let a: u256[] = [1n,2n]; let b: u256[] = [3n]; let m: V = V([a,b], 9n); m.vs[1n][0n] = 42n; return m.vs[0n][1n] + m.vs[1n][0n]; }
-        @external set(k: u256): void { this.m[k] = P(["mk","${LONG}"], k); }
-        @external @view rd(k: u256): P { return this.m[k]; }
-        @external @pure tn(c: bool): string { let a: P = P(["t0","t1"], 1n); let b: P = P(["f0","f1"], 2n); let m: P = c ? a : b; return m.xs[0n]; }
+      `type V = { vs: Arr<u256[],2>; n: u256 }; ${JP}
+       class C { m: mapping<u256, P>;
+        get vv(): External<u256> { let a: u256[] = [1n,2n]; let b: u256[] = [3n]; let m: V = V([a,b], 9n); m.vs[1n][0n] = 42n; return m.vs[0n][1n] + m.vs[1n][0n]; }
+        set(k: u256): External<void> { this.m[k] = P(["mk","${LONG}"], k); }
+        get rd(k: u256): External<P> { return this.m[k]; }
+        get tn(c: bool): External<string> { let a: P = P(["t0","t1"], 1n); let b: P = P(["f0","f1"], 2n); let m: P = c ? a : b; return m.xs[0n]; }
         mk(c: bool): P { if (c) { return P(["y","z"], 3n); } return P(["",""], 0n); }
-        @external @pure zr(c: bool): P { return this.mk(c); } }`,
+        get zr(c: bool): External<P> { return this.mk(c); } }`,
       `struct V { uint256[][2] vs; uint256 n; } ${SP}
        contract C { mapping(uint256 => P) m;
         function vv() external pure returns(uint256){ uint256[] memory a = new uint256[](2); a[0]=1;a[1]=2; uint256[] memory b = new uint256[](1); b[0]=3; V memory m = V([a,b], 9); m.vs[1][0] = 42; return m.vs[0][1] + m.vs[1][0]; }
@@ -295,7 +295,7 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
 
   it('@external @state struct getter (array members omitted, like solc)', async () => {
     await eqCalls(
-      `${JP} @contract class C { @external @state g: P; @external set(): void { this.g = P(["a","b"], 7n); } }`,
+      `${JP} class C { g: Visible<P>; set(): External<void> { this.g = P(["a","b"], 7n); } }`,
       `${SP} contract C { P public g; function set() external { g = P(["a","b"], 7); } }`,
       [['set()', ''], ['g()', '']],
     );
@@ -303,14 +303,14 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
 
   it('KEPT rejects: const-OOB element index (JETH211), wrong-arity literal, dynamic-array mismatch (both reject)', () => {
     expect(
-      codes(`${JP} @contract class C { @external @pure go(): string { let m: P = P(["a","b"], 1n); return m.xs[2n]; } }`),
+      codes(`${JP} class C { get go(): External<string> { let m: P = P(["a","b"], 1n); return m.xs[2n]; } }`),
     ).toContain('JETH211');
     expect(
-      codes(`${JP} @contract class C { @external @pure go(): u256 { let m: P = P(["a","b","c"], 1n); return m.n; } }`),
+      codes(`${JP} class C { get go(): External<u256> { let m: P = P(["a","b","c"], 1n); return m.n; } }`),
     ).toContain('JETH226');
     expect(
       codes(
-        `${JP} @contract class C { @external @pure go(): u256 { let t: string[] = ["a","b"]; let m: P = P(t, 1n); return m.n; } }`,
+        `${JP} class C { get go(): External<u256> { let t: string[] = ["a","b"]; let m: P = P(t, 1n); return m.n; } }`,
       ),
     ).toContain('JETH226');
     // RESIDUAL over-rejection (solc accepts; documented): direct LAZY access to an inner array of an
@@ -319,12 +319,12 @@ describe('W5C: dyn-struct with a fixed-outer dynamic-element array field - byte-
     // dispatch; the double-index form falls to the generic resolver (JETH151). Both clean rejects.
     expect(
       codes(
-        `@struct class V { vs: Arr<u256[],2>; n: u256 } @contract class C { @external @pure go(p: V): u256[] { return p.vs[0n]; } }`,
+        `type V = { vs: Arr<u256[],2>; n: u256 }; class C { get go(p: V): External<u256[]> { return p.vs[0n]; } }`,
       ),
     ).toContain('JETH230');
     expect(
       codes(
-        `@struct class V { vs: Arr<u256[],2>; n: u256 } @contract class C { @external @pure go(p: V): u256 { return p.vs[0n][0n]; } }`,
+        `type V = { vs: Arr<u256[],2>; n: u256 }; class C { get go(p: V): External<u256> { return p.vs[0n][0n]; } }`,
       ),
     ).toContain('JETH151');
   });

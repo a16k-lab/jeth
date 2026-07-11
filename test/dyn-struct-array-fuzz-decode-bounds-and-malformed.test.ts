@@ -18,13 +18,12 @@ const sel = (s: string) => functionSelector(s);
 
 // JETH source: reuse the Phase 4e-1 surface (Pt[] dynamic array of static struct).
 const JETH = `// scenario decode-bounds-and-malformed
-@struct class Pt { x: u128; y: u128; }
+type Pt = { x: u128; y: u128; };
 
-@contract
 class DBM {
-  @external @pure echoPts(ps: Pt[]): Pt[] { return ps; }
-  @external @pure ptX(ps: Pt[], i: u256): u128 { return ps[i].x; }
-  @external @pure len(ps: Pt[]): u256 { return ps.length; }
+  get echoPts(ps: Pt[]): External<Pt[]> { return ps; }
+  get ptX(ps: Pt[], i: u256): External<u128> { return ps[i].x; }
+  get len(ps: Pt[]): External<u256> { return ps.length; }
 }`;
 
 // Faithful Solidity mirror (the oracle).

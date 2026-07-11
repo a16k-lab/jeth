@@ -51,29 +51,29 @@ describe('final-5 verification fixes (byte-identical to solc 0.8.35)', () => {
     // calldata base and byte-indexes it (Panic 0x32 on OOB), byte-identical to the bind-a-local workaround
     // and to solc. Verify the direct form (dynamic outer Q[], the b-first field order) matches solc.
     await run(
-      `@struct class Q{b:bytes;n:u256}
-@contract class C{ @external @pure rd(xs:Q[],i:u256,j:u256):u256{ return u256(u8(xs[i].b[j])); } }`,
+      `type Q = {b:bytes;n:u256};
+class C{ get rd(xs:Q[],i:u256,j:u256):External<u256>{ return u256(u8(xs[i].b[j])); } }`,
       `contract C{ struct Q{bytes b;uint256 n;} function rd(Q[] calldata xs,uint256 i,uint256 j) external pure returns(uint256){ return uint256(uint8(xs[i].b[j])); } }`,
       [['rd((bytes,uint256)[],uint256,uint256)', W(0x60) + W(0) + W(0) + W(1) + W(0x20) + W(0x40) + W(7) + W(4) + '5758596000000000000000000000000000000000000000000000000000000000']] as const,
     );
     // the bind-a-local workaround stays byte-identical.
     await run(
-      `@struct class Q{b:bytes;n:u256}
-@contract class C{ @external @pure rd(xs:Q[],i:u256,j:u256):u256{ let al:bytes=xs[i].b; return u256(u8(al[j])); } }`,
+      `type Q = {b:bytes;n:u256};
+class C{ get rd(xs:Q[],i:u256,j:u256):External<u256>{ let al:bytes=xs[i].b; return u256(u8(al[j])); } }`,
       `contract C{ struct Q{bytes b;uint256 n;} function rd(Q[] calldata xs,uint256 i,uint256 j) external pure returns(uint256){ bytes memory al=xs[i].b; return uint256(uint8(al[j])); } }`,
       [['rd((bytes,uint256)[],uint256,uint256)', W(0x60) + W(0) + W(0) + W(1) + W(0x20) + W(0x40) + W(7) + W(4) + '5758596000000000000000000000000000000000000000000000000000000000']] as const,
     );
     // a plain calldata dyn-struct PARAM field byte read still works (object is an Identifier).
     await run(
-      `@struct class Q{b:bytes;n:u256}
-@contract class C{ @external @pure rd(d:Q,j:u256):u256{ return u256(u8(d.b[j])); } }`,
+      `type Q = {b:bytes;n:u256};
+class C{ get rd(d:Q,j:u256):External<u256>{ return u256(u8(d.b[j])); } }`,
       `contract C{ struct Q{bytes b;uint256 n;} function rd(Q calldata d,uint256 j) external pure returns(uint256){ return uint256(uint8(d.b[j])); } }`,
       [['rd((bytes,uint256),uint256)', W(0x40) + W(0) + W(0x40) + W(4) + '5758596000000000000000000000000000000000000000000000000000000000']] as const,
     );
     // a calldata value-array field element (different resolver branch) still works.
     await run(
-      `@struct class S{xs:u256[];n:u256}
-@contract class C{ @external @pure rd(s:S,i:u256):u256{ return s.xs[i]; } }`,
+      `type S = {xs:u256[];n:u256};
+class C{ get rd(s:S,i:u256):External<u256>{ return s.xs[i]; } }`,
       `contract C{ struct S{uint256[] xs;uint256 n;} function rd(S calldata s,uint256 i) external pure returns(uint256){ return s.xs[i]; } }`,
       [['rd((uint256[],uint256),uint256)', W(0x40) + W(0) + W(0x40) + W(2) + W(11) + W(12)]] as const,
     );
@@ -82,15 +82,15 @@ describe('final-5 verification fixes (byte-identical to solc 0.8.35)', () => {
   it('FUNCREF-NOTE-1: uninitialized funcref-bearing static struct local no longer crashes, byte-identical', async () => {
     // declaration-only compiles (no crash).
     expect(
-      rejects(`@struct class Fd{f:(x:u256)=>u256}
-@contract class C{ @external @pure g():u256{ let d:Fd; return 1n; } }`),
+      rejects(`type Fd = {f:(x:u256)=>u256};
+class C{ get g():External<u256>{ let d:Fd; return 1n; } }`),
     ).toBe(false);
     // reassign then call is byte-identical; calling the UNINITIALIZED field reverts Panic 0x51 like solc.
     await run(
-      `@struct class Fd{f:(x:u256)=>u256}
-@contract class C{ inc(x:u256):u256{return x+1n;}
-  @external @pure ok(v:u256):u256{ let d:Fd; d=Fd(this.inc); return d.f(v); }
-  @external @pure panic(v:u256):u256{ let d:Fd; return d.f(v); } }`,
+      `type Fd = {f:(x:u256)=>u256};
+class C{ inc(x:u256):u256{return x+1n;}
+  get ok(v:u256):External<u256>{ let d:Fd; d=Fd(this.inc); return d.f(v); }
+  get panic(v:u256):External<u256>{ let d:Fd; return d.f(v); } }`,
       `contract C{ struct Fd{function(uint256) pure returns(uint256) f;} function inc(uint256 x) internal pure returns(uint256){return x+1;}
   function ok(uint256 v) external pure returns(uint256){ Fd memory d; d=Fd(inc); return d.f(v); }
   function panic(uint256 v) external pure returns(uint256){ Fd memory d; return d.f(v); } }`,

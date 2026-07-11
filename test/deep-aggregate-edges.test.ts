@@ -34,7 +34,7 @@ async function eqCalls(jeth: string, sol: string, calls: [string, string][]) {
 describe('value Arr<u256,N>[] inner-element write - byte-identical to solc 0.8.35', () => {
   it('storage uint256[3][] runtime-index inner write + OOB Panic 0x32', async () => {
     await eqCalls(
-      '@contract class C { @state xs: Arr<u256,3>[]; @external seed(): void { this.xs.push([1n,2n,3n]); this.xs.push([4n,5n,6n]); } @external setit(i: u256, j: u256, v: u256): void { this.xs[i][j] = v; } @external @view r(i: u256, j: u256): u256 { return this.xs[i][j]; } }',
+      'class C { xs: Arr<u256,3>[]; seed(): External<void> { this.xs.push([1n,2n,3n]); this.xs.push([4n,5n,6n]); } setit(i: u256, j: u256, v: u256): External<void> { this.xs[i][j] = v; } get r(i: u256, j: u256): External<u256> { return this.xs[i][j]; } }',
       'contract C { uint256[3][] xs; function seed() external { xs.push([uint256(1),2,3]); xs.push([uint256(4),5,6]); } function setit(uint256 i,uint256 j,uint256 v) external { xs[i][j]=v; } function r(uint256 i,uint256 j) external view returns(uint256){ return xs[i][j]; } }',
       [
         ['seed()', ''],
@@ -48,7 +48,7 @@ describe('value Arr<u256,N>[] inner-element write - byte-identical to solc 0.8.3
 
   it('storage packed uint128[2][] inner write + compound assign', async () => {
     await eqCalls(
-      '@contract class C { @state xs: Arr<u128,2>[]; @external seed(): void { this.xs.push([10n,20n]); } @external setit(): void { this.xs[0n][0n] = 111n; this.xs[0n][1n] += 5n; } @external @view r(j: u256): u128 { return this.xs[0n][j]; } }',
+      'class C { xs: Arr<u128,2>[]; seed(): External<void> { this.xs.push([10n,20n]); } setit(): External<void> { this.xs[0n][0n] = 111n; this.xs[0n][1n] += 5n; } get r(j: u256): External<u128> { return this.xs[0n][j]; } }',
       'contract C { uint128[2][] xs; function seed() external { xs.push([uint128(10),20]); } function setit() external { xs[0][0]=111; xs[0][1]+=5; } function r(uint256 j) external view returns(uint128){ return xs[0][j]; } }',
       [['seed()', ''], ['setit()', ''], ['r(uint256)', W(0)], ['r(uint256)', W(1)]],
     );
@@ -56,12 +56,12 @@ describe('value Arr<u256,N>[] inner-element write - byte-identical to solc 0.8.3
 
   it('memory uint256[2][] runtime inner write + OOB, and deep uint256[2][2][] write', async () => {
     await eqCalls(
-      '@contract class C { @external @pure go(i: u256): u256 { let xs: Arr<u256,2>[] = [[1n,2n],[3n,4n]]; xs[i][0n] = 50n; return xs[i][0n]; } }',
+      'class C { get go(i: u256): External<u256> { let xs: Arr<u256,2>[] = [[1n,2n],[3n,4n]]; xs[i][0n] = 50n; return xs[i][0n]; } }',
       'contract C { function go(uint256 i) external pure returns(uint256){ uint256[2][] memory xs=new uint256[2][](2); xs[0]=[uint256(1),2]; xs[1]=[uint256(3),4]; xs[i][0]=50; return xs[i][0]; } }',
       [['go(uint256)', W(0)], ['go(uint256)', W(1)], ['go(uint256)', W(2)]],
     );
     await eqCalls(
-      '@contract class C { @state xs: Arr<Arr<u256,2>,2>[]; @external seed(): void { this.xs.push([[1n,2n],[3n,4n]]); } @external setit(): void { this.xs[0n][1n][0n] = 88n; } @external @view r(a: u256, b: u256): u256 { return this.xs[0n][a][b]; } }',
+      'class C { xs: Arr<Arr<u256,2>,2>[]; seed(): External<void> { this.xs.push([[1n,2n],[3n,4n]]); } setit(): External<void> { this.xs[0n][1n][0n] = 88n; } get r(a: u256, b: u256): External<u256> { return this.xs[0n][a][b]; } }',
       'contract C { uint256[2][2][] xs; function seed() external { xs.push([[uint256(1),2],[uint256(3),4]]); } function setit() external { xs[0][1][0]=88; } function r(uint256 a,uint256 b) external view returns(uint256){ return xs[0][a][b]; } }',
       [['seed()', ''], ['setit()', ''], ['r(uint256,uint256)', W(1) + W(0)], ['r(uint256,uint256)', W(0) + W(0)]],
     );
@@ -70,7 +70,7 @@ describe('value Arr<u256,N>[] inner-element write - byte-identical to solc 0.8.3
 
 describe('abi.encode / encodePacked / return of a calldata-struct leaf-array field - byte-identical to solc 0.8.35', () => {
   it('abi.encode(s.tags) u256[], keccak, encodePacked, empty, and mixed abi.encode(s.a, s.tags)', async () => {
-    const J = '@struct class S{a:u256;tags:u256[]} @contract class C { @external @pure enc(s: S): bytes { return abi.encode(s.tags); } @external @pure kk(s: S): bytes32 { return keccak256(abi.encode(s.tags)); } @external @pure pk(s: S): bytes { return abi.encodePacked(s.tags); } @external @pure mx(s: S): bytes { return abi.encode(s.a, s.tags); } @external @pure ret(s: S): u256[] { return s.tags; } }';
+    const J = 'type S = {a:u256;tags:u256[]}; class C { get enc(s: S): External<bytes> { return abi.encode(s.tags); } get kk(s: S): External<bytes32> { return keccak256(abi.encode(s.tags)); } get pk(s: S): External<bytes> { return abi.encodePacked(s.tags); } get mx(s: S): External<bytes> { return abi.encode(s.a, s.tags); } get ret(s: S): External<u256[]> { return s.tags; } }';
     const S = 'contract C { struct S{uint256 a;uint256[] tags;} function enc(S calldata s) external pure returns(bytes memory){ return abi.encode(s.tags); } function kk(S calldata s) external pure returns(bytes32){ return keccak256(abi.encode(s.tags)); } function pk(S calldata s) external pure returns(bytes memory){ return abi.encodePacked(s.tags); } function mx(S calldata s) external pure returns(bytes memory){ return abi.encode(s.a, s.tags); } function ret(S calldata s) external pure returns(uint256[] memory){ return s.tags; } }';
     const full = W(0x20) + W(7) + W(0x40) + W(3) + W(1) + W(2) + W(3);
     const empty = W(0x20) + W(7) + W(0x40) + W(0);
@@ -83,17 +83,17 @@ describe('abi.encode / encodePacked / return of a calldata-struct leaf-array fie
 
   it('abi.encode of string[] / u256[][] / bytes / string leaf fields', async () => {
     await eqCalls(
-      '@struct class S{a:u256;names:string[]} @contract class C { @external @pure go(s: S): bytes { return abi.encode(s.names); } }',
+      'type S = {a:u256;names:string[]}; class C { get go(s: S): External<bytes> { return abi.encode(s.names); } }',
       'contract C { struct S{uint256 a;string[] names;} function go(S calldata s) external pure returns(bytes memory){ return abi.encode(s.names); } }',
       [['go((uint256,string[]))', W(0x20) + W(7) + W(0x40) + W(2) + W(0x40) + W(0x80) + W(2) + '6161'.padEnd(64, '0') + W(2) + '6262'.padEnd(64, '0')]],
     );
     await eqCalls(
-      '@struct class S{a:u256;grid:u256[][]} @contract class C { @external @pure go(s: S): bytes { return abi.encode(s.grid); } }',
+      'type S = {a:u256;grid:u256[][]}; class C { get go(s: S): External<bytes> { return abi.encode(s.grid); } }',
       'contract C { struct S{uint256 a;uint256[][] grid;} function go(S calldata s) external pure returns(bytes memory){ return abi.encode(s.grid); } }',
       [['go((uint256,uint256[][]))', W(0x20) + W(5) + W(0x40) + W(2) + W(0x40) + W(0xa0) + W(2) + W(1) + W(2) + W(1) + W(3)]],
     );
     await eqCalls(
-      '@struct class S{a:u256;blob:bytes;name:string} @contract class C { @external @pure gb(s: S): bytes { return abi.encode(s.blob); } @external @pure gn(s: S): bytes { return abi.encode(s.name); } }',
+      'type S = {a:u256;blob:bytes;name:string}; class C { get gb(s: S): External<bytes> { return abi.encode(s.blob); } get gn(s: S): External<bytes> { return abi.encode(s.name); } }',
       'contract C { struct S{uint256 a;bytes blob;string name;} function gb(S calldata s) external pure returns(bytes memory){ return abi.encode(s.blob); } function gn(S calldata s) external pure returns(bytes memory){ return abi.encode(s.name); } }',
       [
         ['gb((uint256,bytes,string))', W(0x20) + W(7) + W(0x60) + W(0xa0) + W(3) + '616263'.padEnd(64, '0') + W(2) + '7878'.padEnd(64, '0')],

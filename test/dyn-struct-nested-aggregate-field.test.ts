@@ -26,13 +26,13 @@ async function diff(J: string, S: string, calls: [string, string][]) {
 
 describe('Batch B: dyn-struct with a nested static-aggregate field - byte-identical to solc 0.8.35', () => {
   it('nested static struct field: construct / read p.inner.x / whole p.inner / encode / return', async () => {
-    const J = `@struct class In { x: u256; y: u256; }
-    @struct class S { a: u256; inner: In; b: bytes; }
-    @contract class C {
-      @external @pure enc(): bytes { let s: S = S(1n, In(3n, 4n), bytes("z")); return abi.encode(s); }
-      @external @pure read(): u256 { let s: S = S(1n, In(3n, 4n), bytes("zz")); return s.a + s.inner.x + s.inner.y + s.b.length; }
-      @external @pure whole(): bytes { let s: S = S(1n, In(3n, 4n), bytes("z")); return abi.encode(s.inner); }
-      @external @pure ret(): S { let s: S = S(5n, In(6n, 7n), bytes("hi")); return s; } }`;
+    const J = `type In = { x: u256; y: u256; };
+    type S = { a: u256; inner: In; b: bytes; };
+    class C {
+      get enc(): External<bytes> { let s: S = S(1n, In(3n, 4n), bytes("z")); return abi.encode(s); }
+      get read(): External<u256> { let s: S = S(1n, In(3n, 4n), bytes("zz")); return s.a + s.inner.x + s.inner.y + s.b.length; }
+      get whole(): External<bytes> { let s: S = S(1n, In(3n, 4n), bytes("z")); return abi.encode(s.inner); }
+      get ret(): External<S> { let s: S = S(5n, In(6n, 7n), bytes("hi")); return s; } }`;
     const Sol = `struct In { uint256 x; uint256 y; }
     struct S { uint256 a; In inner; bytes b; }
     contract C {
@@ -44,11 +44,11 @@ describe('Batch B: dyn-struct with a nested static-aggregate field - byte-identi
   });
 
   it('static fixed-array field: construct / read p.fa[j] (const + runtime + OOB Panic 0x32) / encode', async () => {
-    const J = `@struct class S { a: u256; fa: Arr<u256, 3>; b: bytes; }
-    @contract class C {
-      @external @pure enc(): bytes { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return abi.encode(s); }
-      @external @pure rd(): u256 { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return s.fa[0n] + s.fa[2n]; }
-      @external @pure dyn(i: u256): u256 { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return s.fa[i]; } }`;
+    const J = `type S = { a: u256; fa: Arr<u256, 3>; b: bytes; };
+    class C {
+      get enc(): External<bytes> { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return abi.encode(s); }
+      get rd(): External<u256> { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return s.fa[0n] + s.fa[2n]; }
+      get dyn(i: u256): External<u256> { let s: S = S(1n, [7n, 8n, 9n], bytes("z")); return s.fa[i]; } }`;
     const Sol = `struct S { uint256 a; uint256[3] fa; bytes b; }
     contract C {
       function enc() external pure returns(bytes memory){ uint256[3] memory pp;pp[0]=7;pp[1]=8;pp[2]=9; S memory s=S(1,pp,bytes("z")); return abi.encode(s); }
@@ -58,12 +58,12 @@ describe('Batch B: dyn-struct with a nested static-aggregate field - byte-identi
   });
 
   it('deep nesting (p.outer.inner.x) + nested-agg field ordering', async () => {
-    const J = `@struct class In { x: u256; y: u256; }
-    @struct class Mid { q: u256; inner: In; }
-    @struct class S { fa: Arr<u256, 2>; a: u256; outer: Mid; b: bytes; }
-    @contract class C {
-      @external @pure read(): u256 { let s: S = S([10n, 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return s.fa[1n] + s.a + s.outer.q + s.outer.inner.x + s.outer.inner.y; }
-      @external @pure enc(): bytes { let s: S = S([10n, 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return abi.encode(s); } }`;
+    const J = `type In = { x: u256; y: u256; };
+    type Mid = { q: u256; inner: In; };
+    type S = { fa: Arr<u256, 2>; a: u256; outer: Mid; b: bytes; };
+    class C {
+      get read(): External<u256> { let s: S = S([10n, 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return s.fa[1n] + s.a + s.outer.q + s.outer.inner.x + s.outer.inner.y; }
+      get enc(): External<bytes> { let s: S = S([10n, 20n], 1n, Mid(5n, In(3n, 4n)), bytes("z")); return abi.encode(s); } }`;
     const Sol = `struct In { uint256 x; uint256 y; }
     struct Mid { uint256 q; In inner; }
     struct S { uint256[2] fa; uint256 a; Mid outer; bytes b; }
@@ -74,11 +74,11 @@ describe('Batch B: dyn-struct with a nested static-aggregate field - byte-identi
   });
 
   it('re-point a dynamic-array field p.xs = arr (value-array) / p.tags = bytes[] (leaf-array)', async () => {
-    const J = `@struct class S { a: u256; xs: u256[]; }
-    @struct class T { a: u256; tags: bytes[]; }
-    @contract class C {
-      @external @pure vf(): u256 { let ini: u256[] = [9n]; let s: S = S(1n, ini); let arr: u256[] = [5n, 6n]; s.xs = arr; return s.xs[0n] + s.xs[1n] + s.xs.length; }
-      @external @pure lf(): bytes { let ini: bytes[] = [bytes("q")]; let t: T = T(1n, ini); let n: bytes[] = [bytes("aa"), bytes("bbb")]; t.tags = n; return abi.encode(t); } }`;
+    const J = `type S = { a: u256; xs: u256[]; };
+    type T = { a: u256; tags: bytes[]; };
+    class C {
+      get vf(): External<u256> { let ini: u256[] = [9n]; let s: S = S(1n, ini); let arr: u256[] = [5n, 6n]; s.xs = arr; return s.xs[0n] + s.xs[1n] + s.xs.length; }
+      get lf(): External<bytes> { let ini: bytes[] = [bytes("q")]; let t: T = T(1n, ini); let n: bytes[] = [bytes("aa"), bytes("bbb")]; t.tags = n; return abi.encode(t); } }`;
     const Sol = `struct S { uint256 a; uint256[] xs; }
     struct T { uint256 a; bytes[] tags; }
     contract C {

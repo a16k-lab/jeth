@@ -45,61 +45,61 @@ describe('dynamic-outer struct-element array field of a memory dyn-struct local 
   // KIND A: static-struct element Pt[]. KIND B: dynamic-struct element Line[] (string field).
   // S5-A: O{xs:St[]; k}. Deep: element carries a u256[]. Nested: TWO fields. NestedDyn: field behind a
   // nested dyn struct. Field arrays are built via a local (solc rejects the Pt[2]->Pt[] literal conversion).
-  const J = `@struct class Pt { x: u256; y: u256 }
-@struct class Poly { id: u256; pts: Pt[] }
-@struct class Line { note: string; qty: u256 }
-@struct class Order { id: u256; lines: Line[] }
-@struct class St { s: string; v: u256 }
-@struct class O { xs: St[]; k: u256 }
-@struct class Item { tags: u256[]; qty: u256 }
-@struct class Bag { id: u256; items: Item[] }
-@struct class Both { pts: Pt[]; lines: Line[] }
-@struct class Inner { name: string; lines: Line[] }
-@struct class Outer { tag: u256; inner: Inner }
-@contract class C {
-  @external @pure aReadY(i: u256): u256 { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.pts[i].y; }
-  @external @pure aReadX0(): u256 { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.pts[0n].x; }
-  @external @pure aId(): u256 { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.id; }
-  @external @pure aLen(): u256 { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.pts.length; }
-  @external @pure aEnc(): bytes { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return abi.encode(p); }
-  @external @pure aWhole(): Poly { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p; }
-  @external @pure aEmptyLen(): u256 { let a: Pt[] = []; let p: Poly = Poly(9n, a); return p.pts.length; }
-  @external @pure aEmptyEnc(): bytes { let a: Pt[] = []; let p: Poly = Poly(9n, a); return abi.encode(p); }
-  @external @pure aSingle(): u256 { let a: Pt[] = [Pt(7n,8n)]; let p: Poly = Poly(9n, a); return p.pts[0n].y; }
-  @external @pure aOOB(): u256 { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.pts[5n].y; }
+  const J = `type Pt = { x: u256; y: u256 };
+type Poly = { id: u256; pts: Pt[] };
+type Line = { note: string; qty: u256 };
+type Order = { id: u256; lines: Line[] };
+type St = { s: string; v: u256 };
+type O = { xs: St[]; k: u256 };
+type Item = { tags: u256[]; qty: u256 };
+type Bag = { id: u256; items: Item[] };
+type Both = { pts: Pt[]; lines: Line[] };
+type Inner = { name: string; lines: Line[] };
+type Outer = { tag: u256; inner: Inner };
+class C {
+  get aReadY(i: u256): External<u256> { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.pts[i].y; }
+  get aReadX0(): External<u256> { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.pts[0n].x; }
+  get aId(): External<u256> { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.id; }
+  get aLen(): External<u256> { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.pts.length; }
+  get aEnc(): External<bytes> { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return abi.encode(p); }
+  get aWhole(): External<Poly> { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p; }
+  get aEmptyLen(): External<u256> { let a: Pt[] = []; let p: Poly = Poly(9n, a); return p.pts.length; }
+  get aEmptyEnc(): External<bytes> { let a: Pt[] = []; let p: Poly = Poly(9n, a); return abi.encode(p); }
+  get aSingle(): External<u256> { let a: Pt[] = [Pt(7n,8n)]; let p: Poly = Poly(9n, a); return p.pts[0n].y; }
+  get aOOB(): External<u256> { let a: Pt[] = [Pt(3n,4n),Pt(5n,6n)]; let p: Poly = Poly(9n, a); return p.pts[5n].y; }
 
-  @external @pure bNote(i: u256): string { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.lines[i].note; }
-  @external @pure bQty(i: u256): u256 { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.lines[i].qty; }
-  @external @pure bId(): u256 { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.id; }
-  @external @pure bLen(): u256 { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.lines.length; }
-  @external @pure bEncO(): bytes { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return abi.encode(o); }
-  @external @pure bRetO(): Order { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o; }
-  @external @pure bEncLines(): bytes { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return abi.encode(o.lines); }
-  @external @pure bRetLines(): Line[] { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.lines; }
-  @external @pure bBig(): bytes { let a: Line[] = [Line("this-is-a-note-longer-than-thirty-two-bytes-for-sure",1n),Line("y",2n)]; let o: Order = Order(3n, a); return abi.encode(o); }
-  @external @pure bThree(): bytes { let a: Line[] = [Line("aa",1n),Line("bb",2n),Line("cc",3n)]; let o: Order = Order(3n, a); return abi.encode(o); }
-  @external @pure bEmptyEnc(): bytes { let a: Line[] = []; let o: Order = Order(3n, a); return abi.encode(o); }
-  @external @pure bEmptyLines(): Line[] { let a: Line[] = []; let o: Order = Order(3n, a); return o.lines; }
-  @external @pure bOOB(): u256 { let a: Line[] = [Line("hi",1n),Line("yo",2n)]; let o: Order = Order(3n, a); return o.lines[5n].qty; }
+  get bNote(i: u256): External<string> { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.lines[i].note; }
+  get bQty(i: u256): External<u256> { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.lines[i].qty; }
+  get bId(): External<u256> { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.id; }
+  get bLen(): External<u256> { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.lines.length; }
+  get bEncO(): External<bytes> { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return abi.encode(o); }
+  get bRetO(): External<Order> { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o; }
+  get bEncLines(): External<bytes> { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return abi.encode(o.lines); }
+  get bRetLines(): External<Line[]> { let a: Line[] = [Line("hello",42n),Line("world",7n)]; let o: Order = Order(3n, a); return o.lines; }
+  get bBig(): External<bytes> { let a: Line[] = [Line("this-is-a-note-longer-than-thirty-two-bytes-for-sure",1n),Line("y",2n)]; let o: Order = Order(3n, a); return abi.encode(o); }
+  get bThree(): External<bytes> { let a: Line[] = [Line("aa",1n),Line("bb",2n),Line("cc",3n)]; let o: Order = Order(3n, a); return abi.encode(o); }
+  get bEmptyEnc(): External<bytes> { let a: Line[] = []; let o: Order = Order(3n, a); return abi.encode(o); }
+  get bEmptyLines(): External<Line[]> { let a: Line[] = []; let o: Order = Order(3n, a); return o.lines; }
+  get bOOB(): External<u256> { let a: Line[] = [Line("hi",1n),Line("yo",2n)]; let o: Order = Order(3n, a); return o.lines[5n].qty; }
 
-  @external @pure s5RetXs(): St[] { let a: St[] = [St("p",1n),St("q",2n)]; let o: O = O(a, 99n); return o.xs; }
-  @external @pure s5EncXs(): bytes { let a: St[] = [St("p",1n),St("q",2n)]; let o: O = O(a, 99n); return abi.encode(o.xs); }
-  @external @pure s5EncO(): bytes { let a: St[] = [St("p",1n),St("q",2n)]; let o: O = O(a, 99n); return abi.encode(o); }
-  @external @pure s5K(): u256 { let a: St[] = [St("p",1n),St("q",2n)]; let o: O = O(a, 99n); return o.k; }
+  get s5RetXs(): External<St[]> { let a: St[] = [St("p",1n),St("q",2n)]; let o: O = O(a, 99n); return o.xs; }
+  get s5EncXs(): External<bytes> { let a: St[] = [St("p",1n),St("q",2n)]; let o: O = O(a, 99n); return abi.encode(o.xs); }
+  get s5EncO(): External<bytes> { let a: St[] = [St("p",1n),St("q",2n)]; let o: O = O(a, 99n); return abi.encode(o); }
+  get s5K(): External<u256> { let a: St[] = [St("p",1n),St("q",2n)]; let o: O = O(a, 99n); return o.k; }
 
-  @external @pure dpEnc(): bytes { let t0: u256[] = [1n,2n]; let t1: u256[] = [9n]; let a: Item[] = [Item(t0,5n),Item(t1,6n)]; let b: Bag = Bag(7n, a); return abi.encode(b); }
-  @external @pure dpTag(): u256 { let t0: u256[] = [1n,2n]; let t1: u256[] = [9n]; let a: Item[] = [Item(t0,5n),Item(t1,6n)]; let b: Bag = Bag(7n, a); return b.items[0n].tags[1n]; }
+  get dpEnc(): External<bytes> { let t0: u256[] = [1n,2n]; let t1: u256[] = [9n]; let a: Item[] = [Item(t0,5n),Item(t1,6n)]; let b: Bag = Bag(7n, a); return abi.encode(b); }
+  get dpTag(): External<u256> { let t0: u256[] = [1n,2n]; let t1: u256[] = [9n]; let a: Item[] = [Item(t0,5n),Item(t1,6n)]; let b: Bag = Bag(7n, a); return b.items[0n].tags[1n]; }
 
-  @external @pure ntEnc(): bytes { let ap: Pt[] = [Pt(1n,2n),Pt(3n,4n)]; let al: Line[] = [Line("x",5n)]; let b: Both = Both(ap, al); return abi.encode(b); }
-  @external @pure ntPt(): u256 { let ap: Pt[] = [Pt(1n,2n),Pt(3n,4n)]; let al: Line[] = [Line("x",5n)]; let b: Both = Both(ap, al); return b.pts[1n].y; }
-  @external @pure ntLn(): string { let ap: Pt[] = [Pt(1n,2n),Pt(3n,4n)]; let al: Line[] = [Line("x",5n)]; let b: Both = Both(ap, al); return b.lines[0n].note; }
+  get ntEnc(): External<bytes> { let ap: Pt[] = [Pt(1n,2n),Pt(3n,4n)]; let al: Line[] = [Line("x",5n)]; let b: Both = Both(ap, al); return abi.encode(b); }
+  get ntPt(): External<u256> { let ap: Pt[] = [Pt(1n,2n),Pt(3n,4n)]; let al: Line[] = [Line("x",5n)]; let b: Both = Both(ap, al); return b.pts[1n].y; }
+  get ntLn(): External<string> { let ap: Pt[] = [Pt(1n,2n),Pt(3n,4n)]; let al: Line[] = [Line("x",5n)]; let b: Both = Both(ap, al); return b.lines[0n].note; }
 
-  @external @pure ndEnc(): bytes { let al: Line[] = [Line("a",1n),Line("b",2n)]; let inr: Inner = Inner("nm", al); let o: Outer = Outer(7n, inr); return abi.encode(o); }
-  @external @pure ndNote(): string { let al: Line[] = [Line("a",1n),Line("b",2n)]; let inr: Inner = Inner("nm", al); let o: Outer = Outer(7n, inr); return o.inner.lines[1n].note; }
+  get ndEnc(): External<bytes> { let al: Line[] = [Line("a",1n),Line("b",2n)]; let inr: Inner = Inner("nm", al); let o: Outer = Outer(7n, inr); return abi.encode(o); }
+  get ndNote(): External<string> { let al: Line[] = [Line("a",1n),Line("b",2n)]; let inr: Inner = Inner("nm", al); let o: Outer = Outer(7n, inr); return o.inner.lines[1n].note; }
 
-  @external @pure vElem(): u256 { let a: u256[] = [10n,20n,30n]; let o2: Order2 = Order2(9n, a); return o2.ns[1n]; }
+  get vElem(): External<u256> { let a: u256[] = [10n,20n,30n]; let o2: Order2 = Order2(9n, a); return o2.ns[1n]; }
 }
-@struct class Order2 { id: u256; ns: u256[] }`;
+type Order2 = { id: u256; ns: u256[] };`;
   const So = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {
@@ -267,9 +267,9 @@ contract C {
     expect(decodeU256(r.returnHex)).toBe(20n);
   });
   it('CONTROL: literal-direct-to-field Poly(9,[Pt,Pt]) is a clean JETH226 reject (solc rejects Pt[2]->Pt[])', () => {
-    const src = `@struct class Pt { x: u256; y: u256 }
-@struct class Poly { id: u256; pts: Pt[] }
-@contract class C { @external @pure f(): u256 { let p: Poly = Poly(9n, [Pt(3n,4n),Pt(5n,6n)]); return p.pts[1n].y; } }`;
+    const src = `type Pt = { x: u256; y: u256 };
+type Poly = { id: u256; pts: Pt[] };
+class C { get f(): External<u256> { let p: Poly = Poly(9n, [Pt(3n,4n),Pt(5n,6n)]); return p.pts[1n].y; } }`;
     expect(codes(src)).toContain('JETH226');
   });
 });

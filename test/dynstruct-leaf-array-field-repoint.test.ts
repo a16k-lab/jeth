@@ -55,18 +55,18 @@ async function eqSlots(
 
 describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-identical to solc 0.8.35', () => {
   it('struct-array element field: this.ps[i].names = <memory string[]> (PRIMARY, JETH067)', async () => {
-    const J = `@struct class P { a: u256; names: string[] }
-@contract class C { @state ps: P[];
-  @external run(): void {
+    const J = `type P = { a: u256; names: string[] };
+class C { ps: P[];
+  run(): External<void> {
     let e0: string[] = new Array<string>(0n);
     this.ps.push(P(11n, e0)); this.ps.push(P(22n, e0));
     let s: string[] = new Array<string>(2n); s[0n] = "hello"; s[1n] = "worldy";
     this.ps[0n].names = s;
     this.ps[0n].a = 7n;
   }
-  @external @view a(i: u256): u256 { return this.ps[i].a; }
-  @external @view n(i: u256, j: u256): string { return this.ps[i].names[j]; }
-  @external @view len(i: u256): u256 { return this.ps[i].names.length; } }`;
+  get a(i: u256): External<u256> { return this.ps[i].a; }
+  get n(i: u256, j: u256): External<string> { return this.ps[i].names[j]; }
+  get len(i: u256): External<u256> { return this.ps[i].names.length; } }`;
     const S = `contract C { struct P { uint256 a; string[] names; } P[] ps;
   function run() external {
     string[] memory e0 = new string[](0);
@@ -105,9 +105,9 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
     const long0 = 'LONG string zero exceeding thirty two bytes absolutely for sure ok yes';
     const long1 = 'LONG string one also exceeding the thirty-two byte inline boundary ok!!';
     const long2 = 'LONG string two exceeding thirty-two bytes as well definitely yes okok!';
-    const J = `@struct class P { a: u256; names: string[] }
-@contract class C { @state ps: P[];
-  @external run(): void {
+    const J = `type P = { a: u256; names: string[] };
+class C { ps: P[];
+  run(): External<void> {
     let e0: string[] = new Array<string>(0n);
     this.ps.push(P(77n, e0)); this.ps.push(P(88n, e0));
     let big: string[] = new Array<string>(3n);
@@ -116,8 +116,8 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
     let small: string[] = new Array<string>(1n); small[0n] = "z";
     this.ps[0n].names = small;
   }
-  @external @view len(i: u256): u256 { return this.ps[i].names.length; }
-  @external @view n(i: u256, j: u256): string { return this.ps[i].names[j]; } }`;
+  get len(i: u256): External<u256> { return this.ps[i].names.length; }
+  get n(i: u256, j: u256): External<string> { return this.ps[i].names[j]; } }`;
     const S = `contract C { struct P { uint256 a; string[] names; } P[] ps;
   function run() external {
     string[] memory e0 = new string[](0);
@@ -152,14 +152,14 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
   });
 
   it('mapping value struct field: this.m[k].names = <memory string[]> (JETH067)', async () => {
-    const J = `@struct class P { a: u256; names: string[] }
-@contract class C { @state m: mapping<u256, P>;
-  @external run(): void {
+    const J = `type P = { a: u256; names: string[] };
+class C { m: mapping<u256, P>;
+  run(): External<void> {
     let s: string[] = new Array<string>(2n); s[0n] = "alpha"; s[1n] = "beta";
     this.m[7n].names = s; this.m[7n].a = 99n;
   }
-  @external @view a(): u256 { return this.m[7n].a; }
-  @external @view n(j: u256): string { return this.m[7n].names[j]; } }`;
+  get a(): External<u256> { return this.m[7n].a; }
+  get n(j: u256): External<string> { return this.m[7n].names[j]; } }`;
     const S = `contract C { struct P { uint256 a; string[] names; } mapping(uint256 => P) m;
   function run() external {
     string[] memory s = new string[](2); s[0] = "alpha"; s[1] = "beta";
@@ -172,15 +172,15 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
   });
 
   it('nested struct field: this.o.inner.names = <memory string[]> (JETH067)', async () => {
-    const J = `@struct class Inner { a: u256; names: string[] }
-@struct class Outer { z: u256; inner: Inner }
-@contract class C { @state o: Outer;
-  @external run(): void {
+    const J = `type Inner = { a: u256; names: string[] };
+type Outer = { z: u256; inner: Inner };
+class C { o: Outer;
+  run(): External<void> {
     let s: string[] = new Array<string>(1n); s[0n] = "deep-and-fairly-long-value-over-thirty-two-bytes-yes";
     this.o.inner.names = s; this.o.z = 42n;
   }
-  @external @view z(): u256 { return this.o.z; }
-  @external @view n(j: u256): string { return this.o.inner.names[j]; } }`;
+  get z(): External<u256> { return this.o.z; }
+  get n(j: u256): External<string> { return this.o.inner.names[j]; } }`;
     const S = `contract C { struct Inner { uint256 a; string[] names; } struct Outer { uint256 z; Inner inner; } Outer o;
   function run() external {
     string[] memory s = new string[](1); s[0] = "deep-and-fairly-long-value-over-thirty-two-bytes-yes";
@@ -200,14 +200,14 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
   });
 
   it('bare storage struct field: this.p.names = <memory string[]> (was JETH226)', async () => {
-    const J = `@struct class P { a: u256; names: string[] }
-@contract class C { @state p: P;
-  @external run(): void {
+    const J = `type P = { a: u256; names: string[] };
+class C { p: P;
+  run(): External<void> {
     let s: string[] = new Array<string>(2n); s[0n] = "one"; s[1n] = "two";
     this.p.names = s; this.p.a = 5n;
   }
-  @external @view a(): u256 { return this.p.a; }
-  @external @view n(j: u256): string { return this.p.names[j]; } }`;
+  get a(): External<u256> { return this.p.a; }
+  get n(j: u256): External<string> { return this.p.names[j]; } }`;
     const S = `contract C { struct P { uint256 a; string[] names; } P p;
   function run() external {
     string[] memory s = new string[](2); s[0] = "one"; s[1] = "two";
@@ -225,15 +225,15 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
   });
 
   it('bytes[] leaf field: this.ps[i].blobs = <memory bytes[]>', async () => {
-    const J = `@struct class P { a: u256; blobs: bytes[] }
-@contract class C { @state ps: P[];
-  @external run(): void {
+    const J = `type P = { a: u256; blobs: bytes[] };
+class C { ps: P[];
+  run(): External<void> {
     let e0: bytes[] = new Array<bytes>(0n);
     this.ps.push(P(0n, e0));
     let s: bytes[] = new Array<bytes>(2n); s[0n] = bytes("hi"); s[1n] = bytes("world-and-a-long-tail-over-thirty-two-bytes!!");
     this.ps[0n].blobs = s;
   }
-  @external @view b(i: u256, j: u256): bytes { return this.ps[i].blobs[j]; } }`;
+  get b(i: u256, j: u256): External<bytes> { return this.ps[i].blobs[j]; } }`;
     const S = `contract C { struct P { uint256 a; bytes[] blobs; } P[] ps;
   function run() external {
     bytes[] memory e0 = new bytes[](0);
@@ -247,9 +247,9 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
   });
 
   it('u256[][] leaf field: this.ps[i].grid = <memory u256[][]>', async () => {
-    const J = `@struct class P { a: u256; grid: u256[][] }
-@contract class C { @state ps: P[];
-  @external run(): void {
+    const J = `type P = { a: u256; grid: u256[][] };
+class C { ps: P[];
+  run(): External<void> {
     let e0: u256[][] = new Array<u256[]>(0n);
     this.ps.push(P(0n, e0));
     let r0: u256[] = new Array<u256>(2n); r0[0n]=1n; r0[1n]=2n;
@@ -257,8 +257,8 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
     let s: u256[][] = new Array<u256[]>(2n); s[0n]=r0; s[1n]=r1;
     this.ps[0n].grid = s;
   }
-  @external @view g(i: u256, j: u256, k: u256): u256 { return this.ps[i].grid[j][k]; }
-  @external @view rl(i: u256, j: u256): u256 { return this.ps[i].grid[j].length; } }`;
+  get g(i: u256, j: u256, k: u256): External<u256> { return this.ps[i].grid[j][k]; }
+  get rl(i: u256, j: u256): External<u256> { return this.ps[i].grid[j].length; } }`;
     const S = `contract C { struct P { uint256 a; uint256[][] grid; } P[] ps;
   function run() external {
     uint256[][] memory e0 = new uint256[][](0);
@@ -282,14 +282,14 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
   });
 
   it('array-literal source: this.ps[i].names = ["aa","bb","cc"]', async () => {
-    const J = `@struct class P { a: u256; names: string[] }
-@contract class C { @state ps: P[];
-  @external run(): void {
+    const J = `type P = { a: u256; names: string[] };
+class C { ps: P[];
+  run(): External<void> {
     let e0: string[] = new Array<string>(0n);
     this.ps.push(P(0n, e0));
     this.ps[0n].names = ["aa", "bb", "cc"];
   }
-  @external @view n(j: u256): string { return this.ps[0n].names[j]; } }`;
+  get n(j: u256): External<string> { return this.ps[0n].names[j]; } }`;
     const S = `contract C { struct P { uint256 a; string[] names; } P[] ps;
   function run() external {
     string[] memory e0 = new string[](0);
@@ -303,15 +303,15 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
   });
 
   it('storage source is admitted: this.ps[i].names = this.src (state string[])', async () => {
-    const J = `@struct class P { a: u256; names: string[] }
-@contract class C { @state ps: P[]; @state src: string[];
-  @external run(): void {
+    const J = `type P = { a: u256; names: string[] };
+class C { ps: P[]; src: string[];
+  run(): External<void> {
     let e0: string[] = new Array<string>(0n);
     this.ps.push(P(0n, e0));
     this.src.push("aa"); this.src.push("bbbb-and-longer-than-thirty-two-bytes-for-real-yes");
     this.ps[0n].names = this.src;
   }
-  @external @view n(j: u256): string { return this.ps[0n].names[j]; } }`;
+  get n(j: u256): External<string> { return this.ps[0n].names[j]; } }`;
     const S = `contract C { struct P { uint256 a; string[] names; } P[] ps; string[] src;
   function run() external {
     string[] memory e0 = new string[](0);
@@ -325,9 +325,9 @@ describe('dyn-struct leaf-array field re-point (string[]/bytes[]/T[][]) - byte-i
   });
 
   it('calldata leaf-array source stays a clean reject (JETH200; solc also rejects that copy)', () => {
-    const J = `@struct class P { a: u256; names: string[] }
-@contract class C { @state ps: P[];
-  @external run(s: string[]): void {
+    const J = `type P = { a: u256; names: string[] };
+class C { ps: P[];
+  run(s: string[]): External<void> {
     let e0: string[] = new Array<string>(0n);
     this.ps.push(P(0n, e0));
     this.ps[0n].names = s;

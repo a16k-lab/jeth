@@ -31,7 +31,7 @@ async function diff(jeth: string, sol: string, calls: { sig: string; args?: stri
 describe('dynamic-field struct -> storage assignment vs Solidity', () => {
   it('memory local (u256 + string) -> storage (raw slots)', async () => {
     await diff(
-      `@struct class D { a: u256; s: string; } @contract class C { @state d: D; @external set(a: u256, s: string): void { let m: D = D(a, s); this.d = m; } @external @view geta(): u256 { return this.d.a; } @external @view gets(): string { return this.d.s; } }`,
+      `type D = { a: u256; s: string; }; class C { d: D; set(a: u256, s: string): External<void> { let m: D = D(a, s); this.d = m; } get geta(): External<u256> { return this.d.a; } get gets(): External<string> { return this.d.s; } }`,
       `struct D { uint256 a; string s; } contract C { D d; function set(uint256 a, string calldata s) external { D memory m = D(a,s); d = m; } function geta() external view returns (uint256){ return d.a; } function gets() external view returns (string memory){ return d.s; } }`,
       [
         { sig: 'set(uint256,string)', args: W(42n) + W(0x40n) + W(5n) + '68656c6c6f'.padEnd(64, '0') },
@@ -44,7 +44,7 @@ describe('dynamic-field struct -> storage assignment vs Solidity', () => {
 
   it('calldata struct param -> storage', async () => {
     await diff(
-      `@struct class D { a: u256; s: string; } @contract class C { @state d: D; @external set(p: D): void { this.d = p; } @external @view geta(): u256 { return this.d.a; } @external @view gets(): string { return this.d.s; } }`,
+      `type D = { a: u256; s: string; }; class C { d: D; set(p: D): External<void> { this.d = p; } get geta(): External<u256> { return this.d.a; } get gets(): External<string> { return this.d.s; } }`,
       `struct D { uint256 a; string s; } contract C { D d; function set(D calldata p) external { d = p; } function geta() external view returns (uint256){ return d.a; } function gets() external view returns (string memory){ return d.s; } }`,
       [
         { sig: 'set((uint256,string))', args: W(0x20n) + W(99n) + W(0x40n) + W(4n) + '61626364'.padEnd(64, '0') },
@@ -57,7 +57,7 @@ describe('dynamic-field struct -> storage assignment vs Solidity', () => {
 
   it('overwrite long->short string (old tail cleared) + packed value fields', async () => {
     await diff(
-      `@struct class D { a: u8; b: u16; bs: bytes; } @contract class C { @state d: D; @external set(a: u8, b: u16, bs: bytes): void { let m: D = D(a, b, bs); this.d = m; } @external @view geta(): u8 { return this.d.a; } @external @view getbs(): bytes { return this.d.bs; } }`,
+      `type D = { a: u8; b: u16; bs: bytes; }; class C { d: D; set(a: u8, b: u16, bs: bytes): External<void> { let m: D = D(a, b, bs); this.d = m; } get geta(): External<u8> { return this.d.a; } get getbs(): External<bytes> { return this.d.bs; } }`,
       `struct D { uint8 a; uint16 b; bytes bs; } contract C { D d; function set(uint8 a, uint16 b, bytes calldata bs) external { D memory m = D(a,b,bs); d = m; } function geta() external view returns (uint8){ return d.a; } function getbs() external view returns (bytes memory){ return d.bs; } }`,
       [
         {
@@ -74,7 +74,7 @@ describe('dynamic-field struct -> storage assignment vs Solidity', () => {
 
   it('a struct with a dynamic value-array field, from a memory source (overwrite + mixed fields)', async () => {
     await diff(
-      `@struct class D { a: u8; s: string; xs: u256[]; } @contract class C { @state d: D; @external set(a: u8, s: string, p: u256[]): void { let m: D = D(a, s, p); this.d = m; } @external @view geta(): u8 { return this.d.a; } @external @view gets(): string { return this.d.s; } @external @view len(): u256 { return this.d.xs.length; } @external @view get(i: u256): u256 { return this.d.xs[i]; } }`,
+      `type D = { a: u8; s: string; xs: u256[]; }; class C { d: D; set(a: u8, s: string, p: u256[]): External<void> { let m: D = D(a, s, p); this.d = m; } get geta(): External<u8> { return this.d.a; } get gets(): External<string> { return this.d.s; } get len(): External<u256> { return this.d.xs.length; } get get(i: u256): External<u256> { return this.d.xs[i]; } }`,
       `struct D { uint8 a; string s; uint256[] xs; } contract C { D d; function set(uint8 a, string calldata s, uint256[] calldata p) external { D memory m = D(a, s, p); d = m; } function geta() external view returns (uint8){ return d.a; } function gets() external view returns (string memory){ return d.s; } function len() external view returns (uint256){ return d.xs.length; } function get(uint256 i) external view returns (uint256){ return d.xs[i]; } }`,
       [
         {

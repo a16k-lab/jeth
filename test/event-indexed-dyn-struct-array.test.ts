@@ -43,7 +43,7 @@ const codes = (src: string): string[] => {
 
 describe('Edge C: indexed dyn-struct-element array with a dyn-array / nested-struct field - byte-identical to solc 0.8.35', () => {
   it('P[] where P has a u256[] field (multi-element, varying inner length, empty outer)', async () => {
-    const J = '@struct class P{a:u256;tags:u256[]} @contract class C { @event E(@indexed ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }';
+    const J = 'type P = {a:u256;tags:u256[]}; class C { E: event<{ ps: indexed<P[]> }>; go(ps: P[]): External<void> { emit(E(ps)); } }';
     const S = 'contract C { struct P{uint256 a;uint256[] tags;} event E(P[] indexed ps); function go(P[] calldata ps) external { emit E(ps); } }';
     await logEq(J, S, 'go((uint256,uint256[])[])', W(0x20) + W(2) + W(0x40) + W(0x100) + W(7) + W(0x40) + W(2) + W(1) + W(2) + W(9) + W(0x40) + W(1) + W(3));
     await logEq(J, S, 'go((uint256,uint256[])[])', W(0x20) + W(0)); // empty outer
@@ -51,7 +51,7 @@ describe('Edge C: indexed dyn-struct-element array with a dyn-array / nested-str
 
   it('P[] where P has a string[] field', async () => {
     await logEq(
-      '@struct class P{a:u256;names:string[]} @contract class C { @event E(@indexed ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }',
+      'type P = {a:u256;names:string[]}; class C { E: event<{ ps: indexed<P[]> }>; go(ps: P[]): External<void> { emit(E(ps)); } }',
       'contract C { struct P{uint256 a;string[] names;} event E(P[] indexed ps); function go(P[] calldata ps) external { emit E(ps); } }',
       'go((uint256,string[])[])',
       W(0x20) + W(1) + W(0x20) + W(7) + W(0x40) + W(2) + W(0x40) + W(0x80) + W(2) + '6161'.padEnd(64, '0') + W(2) + '6262'.padEnd(64, '0'),
@@ -60,13 +60,13 @@ describe('Edge C: indexed dyn-struct-element array with a dyn-array / nested-str
 
   it('P[] where P has a nested dynamic struct field Q{s:string} and Q{n:u256;b:bytes}', async () => {
     await logEq(
-      '@struct class Q{s:string} @struct class P{a:u256;inner:Q} @contract class C { @event E(@indexed ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }',
+      'type Q = {s:string}; type P = {a:u256;inner:Q}; class C { E: event<{ ps: indexed<P[]> }>; go(ps: P[]): External<void> { emit(E(ps)); } }',
       'contract C { struct Q{string s;} struct P{uint256 a;Q inner;} event E(P[] indexed ps); function go(P[] calldata ps) external { emit E(ps); } }',
       'go((uint256,(string))[])',
       W(0x20) + W(1) + W(0x20) + W(5) + W(0x40) + W(0x20) + W(3) + '616263'.padEnd(64, '0'),
     );
     await logEq(
-      '@struct class Q{n:u256;b:bytes} @struct class P{a:u256;inner:Q} @contract class C { @event E(@indexed ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }',
+      'type Q = {n:u256;b:bytes}; type P = {a:u256;inner:Q}; class C { E: event<{ ps: indexed<P[]> }>; go(ps: P[]): External<void> { emit(E(ps)); } }',
       'contract C { struct Q{uint256 n;bytes b;} struct P{uint256 a;Q inner;} event E(P[] indexed ps); function go(P[] calldata ps) external { emit E(ps); } }',
       'go((uint256,(uint256,bytes))[])',
       W(0x20) + W(1) + W(0x20) + W(5) + W(0x40) + W(9) + W(0x40) + W(4) + '61626364'.padEnd(64, '0'),
@@ -75,7 +75,7 @@ describe('Edge C: indexed dyn-struct-element array with a dyn-array / nested-str
 
   it('combined value + bytes + dyn-array fields, multi-element', async () => {
     await logEq(
-      '@struct class P{a:u256;s:string;tags:u256[]} @contract class C { @event E(@indexed ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }',
+      'type P = {a:u256;s:string;tags:u256[]}; class C { E: event<{ ps: indexed<P[]> }>; go(ps: P[]): External<void> { emit(E(ps)); } }',
       'contract C { struct P{uint256 a;string s;uint256[] tags;} event E(P[] indexed ps); function go(P[] calldata ps) external { emit E(ps); } }',
       'go((uint256,string,uint256[])[])',
       W(0x20) + W(2) + W(0x40) + W(0x140) +
@@ -86,13 +86,13 @@ describe('Edge C: indexed dyn-struct-element array with a dyn-array / nested-str
 
   it('deeper: a struct-element-array field (P{a; qs: Q[]}) and a nested value-array field (u256[][])', async () => {
     await logEq(
-      '@struct class Q{m:u256;s:string} @struct class P{a:u256;qs:Q[]} @contract class C { @event E(@indexed ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }',
+      'type Q = {m:u256;s:string}; type P = {a:u256;qs:Q[]}; class C { E: event<{ ps: indexed<P[]> }>; go(ps: P[]): External<void> { emit(E(ps)); } }',
       'contract C { struct Q{uint256 m;string s;} struct P{uint256 a;Q[] qs;} event E(P[] indexed ps); function go(P[] calldata ps) external { emit E(ps); } }',
       'go((uint256,(uint256,string)[])[])',
       W(0x20) + W(1) + W(0x20) + W(5) + W(0x40) + W(1) + W(0x20) + W(7) + W(0x40) + W(3) + '787978'.padEnd(64, '0'),
     );
     await logEq(
-      '@struct class P{a:u256;grid:u256[][]} @contract class C { @event E(@indexed ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }',
+      'type P = {a:u256;grid:u256[][]}; class C { E: event<{ ps: indexed<P[]> }>; go(ps: P[]): External<void> { emit(E(ps)); } }',
       'contract C { struct P{uint256 a;uint256[][] grid;} event E(P[] indexed ps); function go(P[] calldata ps) external { emit E(ps); } }',
       'go((uint256,uint256[][])[])',
       W(0x20) + W(1) + W(0x20) + W(5) + W(0x40) + W(2) + W(0x40) + W(0xa0) + W(2) + W(1) + W(2) + W(1) + W(3),
@@ -101,13 +101,13 @@ describe('Edge C: indexed dyn-struct-element array with a dyn-array / nested-str
 
   it('a single indexed struct with the same fields stays byte-identical (shared gate), plus a mixed event', async () => {
     await logEq(
-      '@struct class P{a:u256;tags:u256[]} @contract class C { @event E(@indexed p: P); @external go(p: P): void { emit(E(p)); } }',
+      'type P = {a:u256;tags:u256[]}; class C { E: event<{ p: indexed<P> }>; go(p: P): External<void> { emit(E(p)); } }',
       'contract C { struct P{uint256 a;uint256[] tags;} event E(P indexed p); function go(P calldata p) external { emit E(p); } }',
       'go((uint256,uint256[]))',
       W(0x20) + W(7) + W(0x40) + W(3) + W(1) + W(2) + W(3),
     );
     await logEq(
-      '@struct class P{a:u256;tags:u256[]} @contract class C { @event E(@indexed n: u256, @indexed ps: P[], m: u256); @external go(n: u256, ps: P[], m: u256): void { emit(E(n, ps, m)); } }',
+      'type P = {a:u256;tags:u256[]}; class C { E: event<{ n: indexed<u256>; ps: indexed<P[]>; m: u256 }>; go(n: u256, ps: P[], m: u256): External<void> { emit(E(n, ps, m)); } }',
       'contract C { struct P{uint256 a;uint256[] tags;} event E(uint256 indexed n, P[] indexed ps, uint256 m); function go(uint256 n, P[] calldata ps, uint256 m) external { emit E(n, ps, m); } }',
       'go(uint256,(uint256,uint256[])[],uint256)',
       W(99) + W(0x80) + W(7) + W(0x20) + W(1) + W(0x20) + W(5) + W(0x40) + W(1) + W(8),
@@ -116,7 +116,7 @@ describe('Edge C: indexed dyn-struct-element array with a dyn-array / nested-str
 
   it('the non-indexed (data) form of the same event is unaffected', async () => {
     await logEq(
-      '@struct class P{a:u256;tags:u256[]} @contract class C { @event E(ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }',
+      'type P = {a:u256;tags:u256[]}; class C { E: event<{ ps: P[] }>; go(ps: P[]): External<void> { emit(E(ps)); } }',
       'contract C { struct P{uint256 a;uint256[] tags;} event E(P[] ps); function go(P[] calldata ps) external { emit E(ps); } }',
       'go((uint256,uint256[])[])',
       W(0x20) + W(1) + W(0x20) + W(7) + W(0x40) + W(1) + W(42),
@@ -124,6 +124,6 @@ describe('Edge C: indexed dyn-struct-element array with a dyn-array / nested-str
   });
 
   it('the previously-accepted shapes (string field, static-element arrays) still compile', () => {
-    expect(codes('@struct class P{a:u256;s:string} @contract class C { @event E(@indexed ps: P[]); @external go(ps: P[]): void { emit(E(ps)); } }')).toEqual([]);
+    expect(codes('type P = {a:u256;s:string}; class C { E: event<{ ps: indexed<P[]> }>; go(ps: P[]): External<void> { emit(E(ps)); } }')).toEqual([]);
   });
 });

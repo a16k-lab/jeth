@@ -65,3 +65,40 @@ test/decode-in-call.test.ts:66  interpolated template: an edit inside an unresol
 test/decode-in-call.test.ts:67  interpolated template: an edit inside an unresolved ${...} hole (at 51)
 test/decode-in-call.test.ts:203  interpolated template: an edit inside an unresolved ${...} hole (at 45)
 test/decode-in-call.test.ts:242  interpolated template: an edit inside an unresolved ${...} hole (at 45)
+test/diamond-array.test.ts:624  @diamond class D: routed to manual (pre-parse expansion)
+test/diamond-array.test.ts:627  @diamond class D: routed to manual (pre-parse expansion)
+test/diamond-array.test.ts:630  @diamond class D: routed to manual (pre-parse expansion)
+test/diamond-array.test.ts:633  @diamond class D: routed to manual (pre-parse expansion)
+test/diamond-packed.test.ts:678  @diamond class D: routed to manual (pre-parse expansion)
+test/diamond-packed.test.ts:679  @diamond class D: routed to manual (pre-parse expansion)
+test/eip55-address-literals.test.ts:78  interpolated template: an edit inside an unresolved ${...} hole (at 41)
+test/eip55-address-literals.test.ts:87  interpolated template: an edit inside an unresolved ${...} hole (at 77)
+test/eip55-address-literals.test.ts:113  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH071,JETH072,JETH170,JETH170,JETH170,JETH352,JETH352,JETH352,JETH352])
+test/event-indexed-abidecode-static-struct-array.test.ts:24  trial mismatch: orig=ok post=ok
+test/ext-call-result-static-struct-array-direct-encode.test.ts:63  interpolated template: assembly trial mismatch orig=ok post=ok
+test/ext-call-result-static-struct-array-direct-encode.test.ts:112  interpolated template: assembly trial mismatch orig=ok post=ok
+test/ext-call-result-static-struct-array-direct-encode.test.ts:140  trial mismatch: orig=ok post=ok
+test/ext-call-result-static-struct-array-direct-encode.test.ts:159  interpolated template: assembly trial mismatch orig=ok post=ok
+test/ext-call-result-static-struct-array-storage-events.test.ts:69  interpolated template: assembly trial mismatch orig=ok post=ok
+test/ext-call-result-static-struct-array-storage-events.test.ts:91  interpolated template: assembly trial mismatch orig=ok post=ok
+test/ext-call-result-static-struct-array-storage-events.test.ts:108  interpolated template: assembly trial mismatch orig=ok post=ok
+test/external-calls.test.ts:416  trial mismatch: orig=rej[JETH054] post=ok
+test/external-calls.test.ts:422  trial mismatch: orig=rej[JETH055] post=ok
+test/external-calls.test.ts:428  trial mismatch: orig=rej[JETH164] post=ok
+test/external-calls.test.ts:449  trial mismatch: orig=rej[JETH164] post=ok
+test/external-calls.test.ts:450  trial mismatch: orig=rej[JETH164] post=ok
+test/external-self-call.test.ts:84  trial mismatch: orig=ok post=ok
+test/external-self-call.test.ts:166  trial mismatch: orig=ok post=ok
+test/external-self-call.test.ts:228  trial mismatch: orig=ok post=ok
+test/external-self-call.test.ts:242  trial mismatch: orig=ok post=ok
+test/external-self-call.test.ts:257  trial mismatch: orig=rej[JETH055] post=ok
+test/fix-all-divergences.test.ts:73  trial mismatch: orig=rej[JETH131] post=ok
+test/fix-all-divergences.test.ts:81  @event E: extra decorator @view
+test/fix-all-divergences.test.ts:85  trial mismatch: orig=rej[JETH129] post=rej[JETH129,JETH129]
+test/fix-all-divergences.test.ts:256  trial mismatch: orig=ok post=rej[JETH048,JETH065]
+test/fix-all-divergences.test.ts:261  trial mismatch: orig=ok post=rej[JETH354]
+test/fix-all-divergences.test.ts:304  trial mismatch: orig=rej[JETH131] post=ok
+test/fix-all-divergences.test.ts:306  trial mismatch: orig=rej[JETH131] post=ok
+test/fix-all-divergences.test.ts:307  trial mismatch: orig=rej[JETH131] post=ok
+test/fix-all-divergences.test.ts:825  trial mismatch: orig=rej[JETH164] post=ok
+test/fix-longtail-verification.test.ts:131  trial mismatch: orig=rej[JETH055] post=ok

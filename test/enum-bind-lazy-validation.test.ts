@@ -32,32 +32,32 @@ const PANIC21 = '0x4e487b71' + pad(0x21n);
 const PRAGMA = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 
 const J = `enum Color { Red, Green, Blue }
-@struct class D { tags: Color[]; n: u256; }
-@contract class C {
-  @event Ev(a: Color[]);
-  @error Bad(a: Arr<Color,3>);
-  @state st: Color[];
-  @external @pure fixErr(a: Arr<Color,3>): void { const b: Arr<Color,3> = a; revert(Bad(b)); }
+type D = { tags: Color[]; n: u256; };
+class C {
+  Ev: event<{ a: Color[] }>;
+  Bad: error<{ a: Arr<Color,3> }>;
+  st: Color[];
+  fixErr(a: Arr<Color,3>): External<void> { const b: Arr<Color,3> = a; revert(Bad(b)); }
   g(xs: Color[], i: u256): Color { return xs[i]; }
-  @external @pure bindRead(a: Color[], i: u256): Color { const b: Color[] = a; return b[i]; }
-  @external @pure sliceRead(a: Color[], s: u256, i: u256): Color { const b: Color[] = a.slice(s); return b[i]; }
-  @external @pure bindLen(a: Color[]): u256 { const b: Color[] = a; return b.length; }
-  @external @pure bindForOf(a: Color[]): u256 { const b: Color[] = a; let n: u256 = 0n; for (const c of b) { n = n + u256(c); } return n; }
-  @external @pure bindReturn(a: Color[]): Color[] { const b: Color[] = a; return b; }
-  @external @pure sliceReturn(a: Color[], s: u256): Color[] { return a.slice(s); }
-  @external @pure bindEncode(a: Color[]): bytes { const b: Color[] = a; return abi.encode(b); }
-  @external @pure viaInternal(a: Color[], i: u256): Color { return this.g(a, i); }
-  @external emitBind(a: Color[]): void { const b: Color[] = a; emit(Ev(b)); }
-  @external bindStore(a: Color[], i: u256): Color { const b: Color[] = a; this.st = b; return this.st[i]; }
-  @external @pure fixBindRead(a: Arr<Color,3>, i: u256): Color { const b: Arr<Color,3> = a; return b[i]; }
-  @external @pure fixBindReturn(a: Arr<Color,3>): Arr<Color,3> { const b: Arr<Color,3> = a; return b; }
-  @external @pure u8FixBindRead(a: Arr<u8,3>, i: u256): u8 { const b: Arr<u8,3> = a; return b[i]; }
-  @external @pure nestBindRead(a: Arr<Color,2>[], i: u256, j: u256): Color { const b: Arr<Color,2>[] = a; return b[i][j]; }
-  @external @pure dynDynBind(a: Color[][], i: u256): Color { const b: Color[][] = a; return b[0n][i]; }
-  @external @pure fieldBind(d: D, i: u256): Color { const t: Color[] = d.tags; return t[i]; }
-  @external @pure fieldReturn(d: D): Color[] { return d.tags; }
-  @external @pure tupleRet(a: Color[], i: u256): [Color[], u256] { const b: Color[] = a; return [b, i]; }
-  @external @pure structRet(a: Color[], i: u256): D { const b: Color[] = a; return D(b, i); }
+  get bindRead(a: Color[], i: u256): External<Color> { const b: Color[] = a; return b[i]; }
+  get sliceRead(a: Color[], s: u256, i: u256): External<Color> { const b: Color[] = a.slice(s); return b[i]; }
+  get bindLen(a: Color[]): External<u256> { const b: Color[] = a; return b.length; }
+  get bindForOf(a: Color[]): External<u256> { const b: Color[] = a; let n: u256 = 0n; for (const c of b) { n = n + u256(c); } return n; }
+  get bindReturn(a: Color[]): External<Color[]> { const b: Color[] = a; return b; }
+  get sliceReturn(a: Color[], s: u256): External<Color[]> { return a.slice(s); }
+  get bindEncode(a: Color[]): External<bytes> { const b: Color[] = a; return abi.encode(b); }
+  get viaInternal(a: Color[], i: u256): External<Color> { return this.g(a, i); }
+  emitBind(a: Color[]): External<void> { const b: Color[] = a; emit(Ev(b)); }
+  bindStore(a: Color[], i: u256): External<Color> { const b: Color[] = a; this.st = b; return this.st[i]; }
+  get fixBindRead(a: Arr<Color,3>, i: u256): External<Color> { const b: Arr<Color,3> = a; return b[i]; }
+  get fixBindReturn(a: Arr<Color,3>): External<Arr<Color,3>> { const b: Arr<Color,3> = a; return b; }
+  get u8FixBindRead(a: Arr<u8,3>, i: u256): External<u8> { const b: Arr<u8,3> = a; return b[i]; }
+  get nestBindRead(a: Arr<Color,2>[], i: u256, j: u256): External<Color> { const b: Arr<Color,2>[] = a; return b[i][j]; }
+  get dynDynBind(a: Color[][], i: u256): External<Color> { const b: Color[][] = a; return b[0n][i]; }
+  get fieldBind(d: D, i: u256): External<Color> { const t: Color[] = d.tags; return t[i]; }
+  get fieldReturn(d: D): External<Color[]> { return d.tags; }
+  get tupleRet(a: Color[], i: u256): External<[Color[], u256]> { const b: Color[] = a; return [b, i]; }
+  get structRet(a: Color[], i: u256): External<D> { const b: Color[] = a; return D(b, i); }
 }`;
 
 const SOL = `${PRAGMA}contract C {

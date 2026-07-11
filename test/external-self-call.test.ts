@@ -49,11 +49,11 @@ async function diff(jeth: string, sol: string, calls: { sig: string; args?: stri
 describe('external self-call this.f(): byte-identical vs solc', () => {
   it('state mutation through this.f() then a getter', async () => {
     await diff(
-      `@contract class C {
-        @state x: u256 = 0n;
-        @external setX(v: u256) { this.x = v; }
-        @external bump() { this.setX(this.x + 1n); }
-        @external getX(): u256 { return this.x; }
+      `class C {
+        x: u256 = 0n;
+        setX(v: u256): External<void> { this.x = v; }
+        bump(): External<void> { this.setX(this.x + 1n); }
+        get getX(): External<u256> { return this.x; }
       }`,
       `contract C {
         uint256 public x;
@@ -67,9 +67,9 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('value return (CALL) used in an expression', async () => {
     await diff(
-      `@contract class C {
-        @external dbl(v: u256): u256 { return v * 2n; }
-        @external go(v: u256): u256 { return this.dbl(v) + 1n; }
+      `class C {
+        get dbl(v: u256): External<u256> { return v * 2n; }
+        go(v: u256): External<u256> { return this.dbl(v) + 1n; }
       }`,
       `contract C {
         function dbl(uint256 v) external pure returns (uint256) { return v * 2; }
@@ -97,9 +97,9 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('let-binding of a value self-call result', async () => {
     await diff(
-      `@contract class C {
-        @external triple(v: u256): u256 { return v * 3n; }
-        @external go(v: u256): u256 { let r: u256 = this.triple(v); return r + r; }
+      `class C {
+        get triple(v: u256): External<u256> { return v * 3n; }
+        go(v: u256): External<u256> { let r: u256 = this.triple(v); return r + r; }
       }`,
       `contract C {
         function triple(uint256 v) external pure returns (uint256) { return v * 3; }
@@ -111,11 +111,11 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('void self-call as a statement', async () => {
     await diff(
-      `@contract class C {
-        @state n: u256 = 0n;
-        @external inc() { this.n = this.n + 1n; }
-        @external run2() { this.inc(); this.inc(); }
-        @external get(): u256 { return this.n; }
+      `class C {
+        n: u256 = 0n;
+        inc(): External<void> { this.n = this.n + 1n; }
+        run2(): External<void> { this.inc(); this.inc(); }
+        get get(): External<u256> { return this.n; }
       }`,
       `contract C {
         uint256 public n;
@@ -129,12 +129,12 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('inheritance / virtual dispatch: the most-derived override runs', async () => {
     await diff(
-      `@abstract class Base {
-        @external @virtual name(): u256 { return 1n; }
-        @external who(): u256 { return this.name(); }
+      `abstract class Base {
+        @virtual get name(): External<u256> { return 1n; }
+        who(): External<u256> { return this.name(); }
       }
-      @contract class C extends Base {
-        @external @override name(): u256 { return 2n; }
+      class C extends Base {
+        @override get name(): External<u256> { return 2n; }
       }`,
       `contract Base {
         function name() external virtual returns (uint256) { return 1; }
@@ -149,9 +149,9 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('string-revert bubbling through this.f()', async () => {
     await diff(
-      `@contract class C {
-        @external boom(v: u256): u256 { require(v > 10n, "too small"); return v; }
-        @external go(v: u256): u256 { return this.boom(v); }
+      `class C {
+        get boom(v: u256): External<u256> { require(v > 10n, "too small"); return v; }
+        go(v: u256): External<u256> { return this.boom(v); }
       }`,
       `contract C {
         function boom(uint256 v) external pure returns (uint256) { require(v > 10, "too small"); return v; }
@@ -179,9 +179,9 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('Panic (division by zero) bubbling through this.f()', async () => {
     await diff(
-      `@contract class C {
-        @external dv(a: u256, b: u256): u256 { return a / b; }
-        @external go(b: u256): u256 { return this.dv(10n, b); }
+      `class C {
+        get dv(a: u256, b: u256): External<u256> { return a / b; }
+        go(b: u256): External<u256> { return this.dv(10n, b); }
       }`,
       `contract C {
         function dv(uint256 a, uint256 b) external pure returns (uint256) { return a / b; }
@@ -193,10 +193,10 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('struct arg + struct return through a self-call', async () => {
     await diff(
-      `@struct class P { a: u256; b: u256; }
-      @contract class C {
-        @external swap(p: P): P { return P(p.b, p.a); }
-        @external go(): u256 { let q: P = this.swap(P(3n, 9n)); return q.a * 100n + q.b; }
+      `type P = { a: u256; b: u256; };
+      class C {
+        get swap(p: P): External<P> { return P(p.b, p.a); }
+        go(): External<u256> { let q: P = this.swap(P(3n, 9n)); return q.a * 100n + q.b; }
       }`,
       `contract C {
         struct P { uint256 a; uint256 b; }
@@ -209,10 +209,10 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('overloaded external self-call resolves by arity', async () => {
     await diff(
-      `@contract class C {
-        @external f(a: u256): u256 { return a + 1n; }
-        @external f(a: u256, b: u256): u256 { return a + b; }
-        @external go(): u256 { return this.f(10n) * 1000n + this.f(2n, 3n); }
+      `class C {
+        get f(a: u256): External<u256> { return a + 1n; }
+        get f(a: u256, b: u256): External<u256> { return a + b; }
+        go(): External<u256> { return this.f(10n) * 1000n + this.f(2n, 3n); }
       }`,
       `contract C {
         function f(uint256 a) external pure returns (uint256) { return a + 1; }
@@ -264,9 +264,9 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
   it('an @internal this.f() is still an in-frame internal call (not changed by this lift)', () => {
     // No JETH240: a non-@external this.f() keeps the existing internal-call path.
     expect(
-      jethRejects(`@contract class C {
+      jethRejects(`class C {
         f(a: u256): u256 { return a + 1n; }
-        @external go(): u256 { return this.f(5n); }
+        get go(): External<u256> { return this.f(5n); }
       }`),
     ).toBe(false);
   });

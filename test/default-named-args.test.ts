@@ -12,23 +12,23 @@ const sel = (s: string) => functionSelector(s);
 
 // JETH uses defaults + named args at the call sites; Solidity (no such feature) spells every
 // argument out. If F3 desugars correctly, the two contracts are observationally identical.
-const J = `@contract class C {
+const J = `class C {
   fee(amount: u256, bps: u256 = 30n, floor: u256 = 1n): u256 {
     let f: u256 = (amount * bps) / 10000n;
     if (f < floor) { f = floor; }
     return f;
   }
-  @external @view feeDefault(a: u256): u256 { return this.fee(a); }                 // bps=30, floor=1
-  @external @view feeBps(a: u256, b: u256): u256 { return this.fee(a, b); }         // floor=1
-  @external @view feeAll(a: u256, b: u256, fl: u256): u256 { return this.fee(a, b, fl); }
-  @external @view feeNamed(a: u256): u256 { return this.fee({ amount: a, bps: 50n }); } // named, floor default
-  @external @view feeNamedReorder(a: u256, b: u256): u256 { return this.fee({ bps: b, amount: a }); }
+  get feeDefault(a: u256): External<u256> { return this.fee(a); }                 // bps=30, floor=1
+  get feeBps(a: u256, b: u256): External<u256> { return this.fee(a, b); }         // floor=1
+  get feeAll(a: u256, b: u256, fl: u256): External<u256> { return this.fee(a, b, fl); }
+  get feeNamed(a: u256): External<u256> { return this.fee({ amount: a, bps: 50n }); } // named, floor default
+  get feeNamedReorder(a: u256, b: u256): External<u256> { return this.fee({ bps: b, amount: a }); }
   capped(x: u256, cap: u256 = type(u256).max): u256 { return x < cap ? x : cap; }
-  @external @pure capDefault(x: u256): u256 { return this.capped(x); }
-  @external @pure capNamed(x: u256, c: u256): u256 { return this.capped({ cap: c, x: x }); }
+  get capDefault(x: u256): External<u256> { return this.capped(x); }
+  get capNamed(x: u256, c: u256): External<u256> { return this.capped({ cap: c, x: x }); }
   flag(on: bool = true): u256 { return on ? 1n : 0n; }
-  @external @pure flagDefault(): u256 { return this.flag(); }
-  @external @pure flagSet(): u256 { return this.flag(false); }
+  get flagDefault(): External<u256> { return this.flag(); }
+  get flagSet(): External<u256> { return this.flag(false); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

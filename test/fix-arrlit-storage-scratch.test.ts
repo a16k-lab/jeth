@@ -35,11 +35,11 @@ const run = async (J: string, S: string, calls: ReadonlyArray<readonly [string, 
 describe('MC-ARRLIT-STOR-SCRATCH: static array/struct literal from keccak-storage reads (byte-identical)', () => {
   it('array literal returns/encodes from dynamic-array and mapping reads', async () => {
     await run(
-      `@contract class C { @state A: u256[]; @external seed(): void { this.A.push(5n); this.A.push(6n); this.A.push(7n); this.A.push(8n); }
-        @external @view r2(): Arr<u256,2> { return [this.A[0n], this.A[1n]]; }
-        @external @view rLitFirst(): Arr<u256,2> { return [99n, this.A[1n]]; }
-        @external @view r4(): Arr<u256,4> { return [this.A[0n], this.A[1n], this.A[2n], this.A[3n]]; }
-        @external @view enc(): bytes { return abi.encode([this.A[0n], this.A[1n]]); } }`,
+      `class C { A: u256[]; seed(): External<void> { this.A.push(5n); this.A.push(6n); this.A.push(7n); this.A.push(8n); }
+        get r2(): External<Arr<u256,2>> { return [this.A[0n], this.A[1n]]; }
+        get rLitFirst(): External<Arr<u256,2>> { return [99n, this.A[1n]]; }
+        get r4(): External<Arr<u256,4>> { return [this.A[0n], this.A[1n], this.A[2n], this.A[3n]]; }
+        get enc(): External<bytes> { return abi.encode([this.A[0n], this.A[1n]]); } }`,
       `contract C { uint256[] A; function seed() public { A.push(5); A.push(6); A.push(7); A.push(8); }
         function r2() external view returns (uint256[2] memory) { return [A[0], A[1]]; }
         function rLitFirst() external view returns (uint256[2] memory) { return [uint256(99), A[1]]; }
@@ -48,8 +48,8 @@ describe('MC-ARRLIT-STOR-SCRATCH: static array/struct literal from keccak-storag
       [['seed()', ''], ['r2()', ''], ['rLitFirst()', ''], ['r4()', ''], ['enc()', '']] as const,
     );
     await run(
-      `@contract class C { @state m: mapping<u256,u256>; @external seed(): void { this.m[0n]=5n; this.m[1n]=6n; }
-        @external @view g(): Arr<u256,2> { return [this.m[0n], this.m[1n]]; } }`,
+      `class C { m: mapping<u256,u256>; seed(): External<void> { this.m[0n]=5n; this.m[1n]=6n; }
+        get g(): External<Arr<u256,2>> { return [this.m[0n], this.m[1n]]; } }`,
       `contract C { mapping(uint256=>uint256) m; function seed() public { m[0]=5; m[1]=6; }
         function g() external view returns (uint256[2] memory) { return [m[0], m[1]]; } }`,
       [['seed()', ''], ['g()', '']] as const,
@@ -58,10 +58,10 @@ describe('MC-ARRLIT-STOR-SCRATCH: static array/struct literal from keccak-storag
 
   it('struct literal returns from keccak-storage reads (both field orders)', async () => {
     await run(
-      `@struct class P { a: u256; b: u256 }
-@contract class C { @state A: u256[]; @external seed(): void { this.A.push(5n); this.A.push(6n); }
-        @external @view swapped(): P { return P(this.A[1n], this.A[0n]); }
-        @external @view same(): P { return P(this.A[0n], this.A[1n]); } }`,
+      `type P = { a: u256; b: u256 };
+class C { A: u256[]; seed(): External<void> { this.A.push(5n); this.A.push(6n); }
+        get swapped(): External<P> { return P(this.A[1n], this.A[0n]); }
+        get same(): External<P> { return P(this.A[0n], this.A[1n]); } }`,
       `contract C { struct P { uint256 a; uint256 b; } uint256[] A; function seed() public { A.push(5); A.push(6); }
         function swapped() external view returns (P memory) { return P(A[1], A[0]); }
         function same() external view returns (P memory) { return P(A[0], A[1]); } }`,
@@ -69,9 +69,9 @@ describe('MC-ARRLIT-STOR-SCRATCH: static array/struct literal from keccak-storag
     );
     // array of structs from mapping reads (each element is itself a keccak read).
     await run(
-      `@struct class In { x: u256; y: u256 }
-@contract class C { @state m: mapping<u256,In>; @external seed(): void { this.m[0n]=In(5n,6n); this.m[1n]=In(7n,8n); }
-        @external @view g(): Arr<In,2> { return [this.m[0n], this.m[1n]]; } }`,
+      `type In = { x: u256; y: u256 };
+class C { m: mapping<u256,In>; seed(): External<void> { this.m[0n]=In(5n,6n); this.m[1n]=In(7n,8n); }
+        get g(): External<Arr<In,2>> { return [this.m[0n], this.m[1n]]; } }`,
       `contract C { struct In { uint256 x; uint256 y; } mapping(uint256=>In) m; function seed() public { m[0]=In(5,6); m[1]=In(7,8); }
         function g() external view returns (In[2] memory) { return [m[0], m[1]]; } }`,
       [['seed()', ''], ['g()', '']] as const,

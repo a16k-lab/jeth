@@ -102,25 +102,25 @@ const DIAMOND_JETH = `@diamond('packed') class MyDiamond {
 // Each writes/reads a distinct namespaced storage word so routing into the diamond is verifiable.
 const FACET_BIG_JETH = `@facet class FacetBig {
   @storage('app.big') v: u256;
-  @external f1(x: u256): void { this.v = x; }
-  @external @view f2(): u256 { return this.v; }
-  @external f3(x: u256): void { this.v = x + 1n; }
-  @external @view f4(): u256 { return this.v + 2n; }
-  @external f5(x: u256): void { this.v = x + 3n; }
-  @external @view f6(): u256 { return this.v + 4n; }
-  @external f7(x: u256): void { this.v = x + 5n; }
-  @external @view f8(): u256 { return this.v + 6n; }
-  @external @view f9(): u256 { return this.v + 7n; }
+  f1(x: u256): External<void> { this.v = x; }
+  get f2(): External<u256> { return this.v; }
+  f3(x: u256): External<void> { this.v = x + 1n; }
+  get f4(): External<u256> { return this.v + 2n; }
+  f5(x: u256): External<void> { this.v = x + 3n; }
+  get f6(): External<u256> { return this.v + 4n; }
+  f7(x: u256): External<void> { this.v = x + 5n; }
+  get f8(): External<u256> { return this.v + 6n; }
+  get f9(): External<u256> { return this.v + 7n; }
 }`;
 const FACET_SMALL_JETH = `@facet class FacetSmall {
   @storage('app.small') s: u256;
-  @external g1(x: u256): void { this.s = x; }
-  @external @view g2(): u256 { return this.s; }
-  @external @view g3(): u256 { return 99n; }
+  g1(x: u256): External<void> { this.s = x; }
+  get g2(): External<u256> { return this.s; }
+  get g3(): External<u256> { return 99n; }
 }`;
-const INIT_JETH = `@contract class DInit {
+const INIT_JETH = `class DInit {
   @storage('app.init') flag: u256;
-  @external init(v: u256): void { this.flag = v; }
+  init(v: u256): External<void> { this.flag = v; }
 }`;
 
 // ---- the solc diamond-2 mirror (IN-DIAMOND dispatch, exact mudgen LibDiamond layout) -------

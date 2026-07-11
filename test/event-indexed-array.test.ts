@@ -18,15 +18,15 @@ const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
   a.length === b.length &&
   a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
-const JETH = `@contract class C {
-  @event Eu(@indexed a: u256[], v: u256);
-  @event E8(@indexed a: u8[]);
-  @event Ead(@indexed a: address[]);
-  @event Emix(@indexed k: u256, @indexed a: u256[], v: u256);
-  @external eu(a: u256[]): void { emit(Eu(a, 9n)); }
-  @external e8(a: u8[]): void { emit(E8(a)); }
-  @external ead(a: address[]): void { emit(Ead(a)); }
-  @external emix(k: u256, a: u256[], v: u256): void { emit(Emix(k, a, v)); }
+const JETH = `class C {
+  Eu: event<{ a: indexed<u256[]>; v: u256 }>;
+  E8: event<{ a: indexed<u8[]> }>;
+  Ead: event<{ a: indexed<address[]> }>;
+  Emix: event<{ k: indexed<u256>; a: indexed<u256[]>; v: u256 }>;
+  eu(a: u256[]): External<void> { emit(Eu(a, 9n)); }
+  e8(a: u8[]): External<void> { emit(E8(a)); }
+  ead(a: address[]): External<void> { emit(Ead(a)); }
+  emix(k: u256, a: u256[], v: u256): External<void> { emit(Emix(k, a, v)); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

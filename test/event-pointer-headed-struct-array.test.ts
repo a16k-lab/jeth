@@ -31,7 +31,7 @@ async function logDiff(J: string, S: string, sig: string, args = '') {
 describe('emit of a pointer-headed memory Arr<P,N> (static-struct fixed array) - byte-identical to solc 0.8.35', () => {
   it('non-indexed Arr<P,2> log data is the inline element words, not the pointer table', async () => {
     const r = await logDiff(
-      `@struct class P { x: u256; y: u256; } @contract class C { @event E(a: Arr<P,2>); @external f(): void { let a: Arr<P,2> = [P(1n,2n), P(3n,4n)]; emit(E(a)); } }`,
+      `type P = { x: u256; y: u256; }; class C { E: event<{ a: Arr<P,2> }>; f(): External<void> { let a: Arr<P,2> = [P(1n,2n), P(3n,4n)]; emit(E(a)); } }`,
       `contract C { struct P { uint256 x; uint256 y; } event E(P[2] a); function f() external { P[2] memory a=[P(1,2),P(3,4)]; emit E(a); } }`,
       'f()',
     );
@@ -40,7 +40,7 @@ describe('emit of a pointer-headed memory Arr<P,N> (static-struct fixed array) -
 
   it('indexed Arr<P,2> topic is keccak over the inline encoding, not the pointer header', async () => {
     const r = await logDiff(
-      `@struct class P { x: u256; y: u256; } @contract class C { @event E(@indexed a: Arr<P,2>); @external f(): void { let a: Arr<P,2>=[P(1n,2n),P(3n,4n)]; emit(E(a)); } }`,
+      `type P = { x: u256; y: u256; }; class C { E: event<{ a: indexed<Arr<P,2>> }>; f(): External<void> { let a: Arr<P,2>=[P(1n,2n),P(3n,4n)]; emit(E(a)); } }`,
       `contract C { struct P { uint256 x; uint256 y; } event E(P[2] indexed a); function f() external { P[2] memory a=[P(1,2),P(3,4)]; emit E(a); } }`,
       'f()',
     );
@@ -49,13 +49,13 @@ describe('emit of a pointer-headed memory Arr<P,N> (static-struct fixed array) -
 
   it('packed (u8) fields, N=3, plus a trailing scalar - indexed and non-indexed', async () => {
     const nonIdx = await logDiff(
-      `@struct class P { x: u256; y: u8; } @contract class C { @event E(a: Arr<P,3>, n: u256); @external f(): void { let a: Arr<P,3> = [P(1n,2n),P(3n,4n),P(5n,6n)]; emit(E(a, 9n)); } }`,
+      `type P = { x: u256; y: u8; }; class C { E: event<{ a: Arr<P,3>; n: u256 }>; f(): External<void> { let a: Arr<P,3> = [P(1n,2n),P(3n,4n),P(5n,6n)]; emit(E(a, 9n)); } }`,
       `contract C { struct P { uint256 x; uint8 y; } event E(P[3] a, uint256 n); function f() external { P[3] memory a=[P(1,2),P(3,4),P(5,6)]; emit E(a,9); } }`,
       'f()',
     );
     expect(nonIdx.jeth).toBe(nonIdx.solc);
     const idx = await logDiff(
-      `@struct class P { x: u256; y: u8; } @contract class C { @event E(@indexed a: Arr<P,3>); @external f(): void { let a: Arr<P,3> = [P(1n,2n),P(3n,4n),P(5n,6n)]; emit(E(a)); } }`,
+      `type P = { x: u256; y: u8; }; class C { E: event<{ a: indexed<Arr<P,3>> }>; f(): External<void> { let a: Arr<P,3> = [P(1n,2n),P(3n,4n),P(5n,6n)]; emit(E(a)); } }`,
       `contract C { struct P { uint256 x; uint8 y; } event E(P[3] indexed a); function f() external { P[3] memory a=[P(1,2),P(3,4),P(5,6)]; emit E(a); } }`,
       'f()',
     );
@@ -64,7 +64,7 @@ describe('emit of a pointer-headed memory Arr<P,N> (static-struct fixed array) -
 
   it('nested Arr<Arr<P,2>,2> (pointer-headed element is itself pointer-headed)', async () => {
     const r = await logDiff(
-      `@struct class P { x: u256; y: u256; } @contract class C { @event E(a: Arr<Arr<P,2>,2>); @external f(): void { let a: Arr<Arr<P,2>,2> = [[P(1n,2n),P(3n,4n)],[P(5n,6n),P(7n,8n)]]; emit(E(a)); } }`,
+      `type P = { x: u256; y: u256; }; class C { E: event<{ a: Arr<Arr<P,2>,2> }>; f(): External<void> { let a: Arr<Arr<P,2>,2> = [[P(1n,2n),P(3n,4n)],[P(5n,6n),P(7n,8n)]]; emit(E(a)); } }`,
       `contract C { struct P { uint256 x; uint256 y; } event E(P[2][2] a); function f() external { P[2][2] memory a=[[P(1,2),P(3,4)],[P(5,6),P(7,8)]]; emit E(a); } }`,
       'f()',
     );
@@ -73,13 +73,13 @@ describe('emit of a pointer-headed memory Arr<P,N> (static-struct fixed array) -
 
   it('control: a standalone static struct WITH an Arr<P,N> field stays flat (not transcoded) - indexed + non-indexed', async () => {
     const nonIdx = await logDiff(
-      `@struct class P { x: u256; y: u256; } @struct class S { a: u256; ps: Arr<P,2>; } @contract class C { @event E(s: S); @external f(): void { let s: S = S(9n, [P(1n,2n),P(3n,4n)]); emit(E(s)); } }`,
+      `type P = { x: u256; y: u256; }; type S = { a: u256; ps: Arr<P,2>; }; class C { E: event<{ s: S }>; f(): External<void> { let s: S = S(9n, [P(1n,2n),P(3n,4n)]); emit(E(s)); } }`,
       `contract C { struct P { uint256 x; uint256 y; } struct S { uint256 a; P[2] ps; } event E(S s); function f() external { S memory s=S(9,[P(1,2),P(3,4)]); emit E(s); } }`,
       'f()',
     );
     expect(nonIdx.jeth).toBe(nonIdx.solc);
     const idx = await logDiff(
-      `@struct class P { x: u256; y: u256; } @struct class S { a: u256; ps: Arr<P,2>; } @contract class C { @event E(@indexed s: S); @external f(): void { let s: S = S(9n, [P(1n,2n),P(3n,4n)]); emit(E(s)); } }`,
+      `type P = { x: u256; y: u256; }; type S = { a: u256; ps: Arr<P,2>; }; class C { E: event<{ s: indexed<S> }>; f(): External<void> { let s: S = S(9n, [P(1n,2n),P(3n,4n)]); emit(E(s)); } }`,
       `contract C { struct P { uint256 x; uint256 y; } struct S { uint256 a; P[2] ps; } event E(S indexed s); function f() external { S memory s=S(9,[P(1,2),P(3,4)]); emit E(s); } }`,
       'f()',
     );
@@ -88,7 +88,7 @@ describe('emit of a pointer-headed memory Arr<P,N> (static-struct fixed array) -
 
   it('control: a value fixed array Arr<u256,3> stays inline (unaffected)', async () => {
     const r = await logDiff(
-      `@contract class C { @event E(a: Arr<u256,3>); @external f(): void { let a: Arr<u256,3> = [7n,8n,9n]; emit(E(a)); } }`,
+      `class C { E: event<{ a: Arr<u256,3> }>; f(): External<void> { let a: Arr<u256,3> = [7n,8n,9n]; emit(E(a)); } }`,
       `contract C { event E(uint256[3] a); function f() external { uint256[3] memory a=[uint256(7),8,9]; emit E(a); } }`,
       'f()',
     );
@@ -111,13 +111,13 @@ describe('OR9: indexed static-element dynamic array event topic - byte-identical
   };
   it('indexed P[] (packed + all-u256) and Arr<P,2>[] topics match solc', async () => {
     const a = await logDiff(
-      `@struct class P { x: u256; y: u8; } @contract class C { @event E(@indexed ps: P[], n: u256); @external f(): void { let ps: P[] = [P(1n,2n), P(3n,4n)]; emit(E(ps, 9n)); } }`,
+      `type P = { x: u256; y: u8; }; class C { E: event<{ ps: indexed<P[]>; n: u256 }>; f(): External<void> { let ps: P[] = [P(1n,2n), P(3n,4n)]; emit(E(ps, 9n)); } }`,
       `contract C { struct P { uint256 x; uint8 y; } event E(P[] indexed ps, uint256 n); function f() external { P[] memory ps = new P[](2); ps[0]=P(1,2); ps[1]=P(3,4); emit E(ps, 9); } }`,
       'f()',
     );
     expect(a.jeth).toBe(a.solc);
     const b = await logDiff(
-      `@struct class P { x: u256; y: u256; } @contract class C { @event E(@indexed ps: Arr<P,2>[]); @external f(): void { let ps: Arr<P,2>[] = [[P(1n,2n),P(3n,4n)],[P(5n,6n),P(7n,8n)]]; emit(E(ps)); } }`,
+      `type P = { x: u256; y: u256; }; class C { E: event<{ ps: indexed<Arr<P,2>[]> }>; f(): External<void> { let ps: Arr<P,2>[] = [[P(1n,2n),P(3n,4n)],[P(5n,6n),P(7n,8n)]]; emit(E(ps)); } }`,
       `contract C { struct P { uint256 x; uint256 y; } event E(P[2][] indexed ps); function f() external { P[2][] memory ps = new P[2][](2); ps[0]=[P(1,2),P(3,4)]; ps[1]=[P(5,6),P(7,8)]; emit E(ps); } }`,
       'f()',
     );
@@ -126,14 +126,14 @@ describe('OR9: indexed static-element dynamic array event topic - byte-identical
   it('indexed dynamic-element arrays (bytes[]/u256[][]) are now ACCEPTED (lifted, packed-padded topic)', () => {
     // These were previously sound rejects (JETH207); the packed-padded topic codec lifts them
     // byte-identical to solc (verified on the harness in event-dynamic-aggregate-params.test.ts).
-    expect(codes(`@contract class C { @event E(@indexed a: bytes[]); @external f(): void { let a: bytes[]=[bytes("x")]; emit(E(a)); } }`)).toEqual([]);
-    expect(codes(`@contract class C { @event E(@indexed a: u256[][]); @external f(): void { let a: u256[][]=[[1n]]; emit(E(a)); } }`)).toEqual([]);
+    expect(codes(`class C { E: event<{ a: indexed<bytes[]> }>; f(): External<void> { let a: bytes[]=[bytes("x")]; emit(E(a)); } }`)).toEqual([]);
+    expect(codes(`class C { E: event<{ a: indexed<u256[][]> }>; f(): External<void> { let a: u256[][]=[[1n]]; emit(E(a)); } }`)).toEqual([]);
   });
   it('an indexed DYNAMIC-STRUCT-element array (dyn-field P[]) is ACCEPTED (OR5 + Edge C)', () => {
     // The packed-padded topic codec encodes each struct element's members (value / bytes-string /
     // static-aggregate fields - OR5), and now also a dyn-array field / nested-dyn-struct field (Edge C),
     // byte-identical to solc - see event-indexed-dyn-struct-array.test.ts.
-    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @event E(@indexed ps: P[]); @external f(): void { let ps: P[]=[P(1n,bytes("x"))]; emit(E(ps)); } }`)).toEqual([]);
-    expect(codes(`@struct class P{a:u256;tags:u256[];} @contract class C { @event E(@indexed ps: P[]); @external f(): void {} }`)).toEqual([]);
+    expect(codes(`type P = {a:u256;s:bytes;}; class C { E: event<{ ps: indexed<P[]> }>; f(): External<void> { let ps: P[]=[P(1n,bytes("x"))]; emit(E(ps)); } }`)).toEqual([]);
+    expect(codes(`type P = {a:u256;tags:u256[];}; class C { E: event<{ ps: indexed<P[]> }>; f(): External<void> {} }`)).toEqual([]);
   });
 });

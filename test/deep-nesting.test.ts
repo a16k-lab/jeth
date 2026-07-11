@@ -12,13 +12,13 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class Deep {
-  @external @pure echo3(m: u256[][][]): u256[][][] { return m; }
-  @external @pure at3(m: u256[][][], i: u256, j: u256, k: u256): u256 { return m[i][j][k]; }
-  @external @pure echo4(m: u256[][][][]): u256[][][][] { return m; }
-  @external @pure echoS(a: string[][]): string[][] { return a; }
-  @external @pure atS(a: string[][], i: u256, j: u256): string { return a[i][j]; }
-  @external @pure echo5(m: u256[][][][][]): u256[][][][][] { return m; }
+const JETH = `class Deep {
+  get echo3(m: u256[][][]): External<u256[][][]> { return m; }
+  get at3(m: u256[][][], i: u256, j: u256, k: u256): External<u256> { return m[i][j][k]; }
+  get echo4(m: u256[][][][]): External<u256[][][][]> { return m; }
+  get echoS(a: string[][]): External<string[][]> { return a; }
+  get atS(a: string[][], i: u256, j: u256): External<string> { return a[i][j]; }
+  get echo5(m: u256[][][][][]): External<u256[][][][][]> { return m; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

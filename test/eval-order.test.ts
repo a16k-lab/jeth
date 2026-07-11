@@ -10,23 +10,23 @@ import { compileSolidity } from './_solidity.js';
 
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@contract class C {
-  @event Ev(x: u256, y: u256, z: u256);
-  @error Er(x: u256, y: u256);
+const JETH = `class C {
+  Ev: event<{ x: u256; y: u256; z: u256 }>;
+  Er: error<{ x: u256; y: u256 }>;
   // binary operands: RIGHT before LEFT
-  @external @pure incBin(): u256 { let x: u256 = 5n; let y: u256 = (++x) * 100n + (++x); return x * 100000n + y; }
-  @external @pure compBin(a: u256): u256 { let x: u256 = a; x += 5n; let y: u256 = (x *= 2n) - (x -= 3n); return x * 1000n + y; }
-  @external @pure leftMutRightRead(v: u256): u256 { let x: u256 = 0n; let r: u256 = (x = v) + x; return r; }
-  @external @pure rightMutLeftRead(v: u256): u256 { let x: u256 = 0n; let r: u256 = x + (x = v); return r; }
-  @external @pure nested(): u256 { let x: u256 = 0n; let r: u256 = (x = 1n) + (x = 2n) * 10n; return x * 1000n + r; }
-  @external @pure postSub(): u256 { let x: u256 = 9n; unchecked: { let y: u256 = (x--) - (x--); return x * 100n + y; } }
+  get incBin(): External<u256> { let x: u256 = 5n; let y: u256 = (++x) * 100n + (++x); return x * 100000n + y; }
+  get compBin(a: u256): External<u256> { let x: u256 = a; x += 5n; let y: u256 = (x *= 2n) - (x -= 3n); return x * 1000n + y; }
+  get leftMutRightRead(v: u256): External<u256> { let x: u256 = 0n; let r: u256 = (x = v) + x; return r; }
+  get rightMutLeftRead(v: u256): External<u256> { let x: u256 = 0n; let r: u256 = x + (x = v); return r; }
+  get nested(): External<u256> { let x: u256 = 0n; let r: u256 = (x = 1n) + (x = 2n) * 10n; return x * 1000n + r; }
+  get postSub(): External<u256> { let x: u256 = 9n; unchecked: { let y: u256 = (x--) - (x--); return x * 100n + y; } }
   // argument lists: LEFT to RIGHT
-  @external @pure arrLit(): u256 { let s: u256 = 0n; let xs: u256[] = [(s = s * 10n + 1n), (s = s * 10n + 2n)]; return s * 100n + xs[0n] * 10n + xs[1n]; }
-  @external @pure retTuple(): [u256, u256, u256] { let s: u256 = 0n; return [(s = s * 10n + 1n), (s = s * 10n + 2n), s]; }
-  @state seq: u256;
-  @external emitOrd(): void { this.seq = 0n; emit(Ev((this.seq = this.seq * 10n + 1n), (this.seq = this.seq * 10n + 2n), (this.seq = this.seq * 10n + 3n))); }
-  @external @view getSeq(): u256 { return this.seq; }
-  @external @pure revertOrd(): void { let s: u256 = 0n; revert(Er((s = s * 10n + 1n), (s = s * 10n + 2n))); }
+  get arrLit(): External<u256> { let s: u256 = 0n; let xs: u256[] = [(s = s * 10n + 1n), (s = s * 10n + 2n)]; return s * 100n + xs[0n] * 10n + xs[1n]; }
+  get retTuple(): External<[u256, u256, u256]> { let s: u256 = 0n; return [(s = s * 10n + 1n), (s = s * 10n + 2n), s]; }
+  seq: u256;
+  emitOrd(): External<void> { this.seq = 0n; emit(Ev((this.seq = this.seq * 10n + 1n), (this.seq = this.seq * 10n + 2n), (this.seq = this.seq * 10n + 3n))); }
+  get getSeq(): External<u256> { return this.seq; }
+  revertOrd(): External<void> { let s: u256 = 0n; revert(Er((s = s * 10n + 1n), (s = s * 10n + 2n))); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

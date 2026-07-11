@@ -11,11 +11,11 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@struct class D { a: u256; s: string; }
-@contract class DA {
-  @external @pure echoD(ds: D[]): D[] { return ds; }
-  @external @pure dA(ds: D[], i: u256): u256 { return ds[i].a; }
-  @external @pure dS(ds: D[], i: u256): string { return ds[i].s; }
+const JETH = `type D = { a: u256; s: string; };
+class DA {
+  get echoD(ds: D[]): External<D[]> { return ds; }
+  get dA(ds: D[], i: u256): External<u256> { return ds[i].a; }
+  get dS(ds: D[], i: u256): External<string> { return ds[i].s; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

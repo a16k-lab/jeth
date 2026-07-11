@@ -59,7 +59,7 @@ async function expectSame(a: { aj: Address; as: Address }, sig: string, cd = '')
   return { j, s };
 }
 
-const IN = `@struct class In { a: u256; b: u256 }`;
+const IN = `type In = { a: u256; b: u256 };`;
 const SIN = `struct In { uint256 a; uint256 b; }`;
 const SEED = W(11) + W(12) + W(21) + W(22) + W(31) + W(32); // distinct non-zero element data
 
@@ -130,11 +130,11 @@ describe('external-call-result Arr<In,N> through storage / events / errors / get
   it('@external @view getter of a stored Arr<In,3>: whole + per-element + solc public auto-getter parity', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @state s: Arr<In,3>;
+       class C {
+         s: Arr<In,3>;
          constructor() { this.s[0n].a = 11n; this.s[0n].b = 12n; this.s[1n].a = 21n; this.s[1n].b = 22n; this.s[2n].a = 31n; this.s[2n].b = 32n; }
-         @external @view getArr(): Arr<In,3> { return this.s; }
-         @external @view getS(i: u256): In { return this.s[i]; } }`,
+         get getArr(): External<Arr<In,3>> { return this.s; }
+         get getS(i: u256): External<In> { return this.s[i]; } }`,
       `${SIN}
        contract C {
          In[3] public s;
@@ -156,11 +156,11 @@ describe('external-call-result Arr<In,N> through storage / events / errors / get
   it('mapping<u256, Arr<In,3>> value read: whole + per-element are byte-identical', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @state m: mapping<u256, Arr<In,3>>;
+       class C {
+         m: mapping<u256, Arr<In,3>>;
          constructor() { this.m[5n][0n].a = 11n; this.m[5n][0n].b = 12n; this.m[5n][1n].a = 21n; this.m[5n][1n].b = 22n; this.m[5n][2n].a = 31n; this.m[5n][2n].b = 32n; }
-         @external @view readMap(k: u256): Arr<In,3> { return this.m[k]; }
-         @external @view readElem(k: u256, i: u256): u256 { return this.m[k][i].b; } }`,
+         get readMap(k: u256): External<Arr<In,3>> { return this.m[k]; }
+         get readElem(k: u256, i: u256): External<u256> { return this.m[k][i].b; } }`,
       `${SIN}
        contract C {
          mapping(uint256 => In[3]) m;
@@ -176,10 +176,10 @@ describe('external-call-result Arr<In,N> through storage / events / errors / get
 
   it('whole-aggregate mem->storage store (this.s = this.produce()) is a BOTH-REJECT (JETH470 / solc legacy Unimplemented)', () => {
     const J = `${IN}
-       @contract class C {
-         @state s: Arr<In,3>;
-         @external @pure produce(): Arr<In,3> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
-         @external setAll(): void { this.s = this.produce(); } }`;
+       class C {
+         s: Arr<In,3>;
+         get produce(): External<Arr<In,3>> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
+         setAll(): External<void> { this.s = this.produce(); } }`;
     const S = `${SIN}
        contract C {
          In[3] s;
@@ -194,10 +194,10 @@ describe('external-call-result Arr<In,N> through storage / events / errors / get
 
   it('whole struct-array push (arr.push(this.produce())) is a BOTH-REJECT (JETH470 / solc legacy Unimplemented)', () => {
     const J = `${IN}
-       @contract class C {
-         @state arr: Arr<In,3>[];
-         @external @pure produce(): Arr<In,3> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
-         @external pushIt(): void { this.arr.push(this.produce()); } }`;
+       class C {
+         arr: Arr<In,3>[];
+         get produce(): External<Arr<In,3>> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
+         pushIt(): External<void> { this.arr.push(this.produce()); } }`;
     const S = `${SIN}
        contract C {
          In[3][] arr;

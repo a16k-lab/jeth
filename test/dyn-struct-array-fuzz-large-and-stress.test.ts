@@ -16,17 +16,16 @@ const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
 // JETH source for the stress contract.
 const JETH = `// stress: dynamic array of static struct
-@struct class Pt { x: u128; y: u128; }
-@struct class S { v: u256; }
+type Pt = { x: u128; y: u128; };
+type S = { v: u256; };
 
-@contract
 class Stress {
-  @external @pure echoPts(ps: Pt[]): Pt[] { return ps; }
-  @external @pure ptX(ps: Pt[], i: u256): u128 { return ps[i].x; }
-  @external @pure ptY(ps: Pt[], i: u256): u128 { return ps[i].y; }
-  @external @pure len(ps: Pt[]): u256 { return ps.length; }
-  @external @pure echoS(a: S[]): S[] { return a; }
-  @external @pure sV(a: S[], i: u256): u256 { return a[i].v; }
+  get echoPts(ps: Pt[]): External<Pt[]> { return ps; }
+  get ptX(ps: Pt[], i: u256): External<u128> { return ps[i].x; }
+  get ptY(ps: Pt[], i: u256): External<u128> { return ps[i].y; }
+  get len(ps: Pt[]): External<u256> { return ps.length; }
+  get echoS(a: S[]): External<S[]> { return a; }
+  get sV(a: S[], i: u256): External<u256> { return a[i].v; }
 }`;
 
 // Faithful Solidity mirror (struct expands to tuple in the selector).
