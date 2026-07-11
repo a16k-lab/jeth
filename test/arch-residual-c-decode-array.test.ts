@@ -106,18 +106,18 @@ const blob_tup = (() => {
   return head + psTail;
 })();
 
-const J = `@struct class P { a: u256; b: u256; }
-@contract class C {
-  @external @pure duu(b: bytes): u256 { let m: u256[][] = abi.decode(b, u256[][]); return m[0n][0n] + m[0n][2n] + m[1n][0n]; }
-  @external @pure dfu(b: bytes): u256 { let m: Arr<u256[],2> = abi.decode(b, Arr<u256[],2>); return m[0n][1n] + m[1n][0n]; }
-  @external @pure duuu(b: bytes): u256 { let m: u256[][][] = abi.decode(b, u256[][][]); return m[0n][0n][0n] * 1000n + m[1n][1n][1n] * 100n + m[1n][0n][0n] * 10n + m.length; }
-  @external @pure dempty(b: bytes): u256 { let m: u256[][] = abi.decode(b, u256[][]); return m.length; }
-  @external @pure dps(b: bytes): u256 { let ps: P[] = abi.decode(b, P[]); return ps[0n].a + ps[1n].b + ps[2n].a + ps.length; }
-  @external @pure dbs(b: bytes): u256 { let bs: bytes[] = abi.decode(b, bytes[]); return bs[0n].length * 100n + bs[1n].length * 10n + bs.length; }
-  @external @pure dbsk(b: bytes): bytes32 { let bs: bytes[] = abi.decode(b, bytes[]); return keccak256(bs[1n]); }
-  @external @pure dss(b: bytes): u256 { let ss: string[] = abi.decode(b, string[]); return bytes(ss[0n]).length * 100n + bytes(ss[1n]).length * 10n + ss.length; }
-  @external @pure dssk(b: bytes): bytes32 { let ss: string[] = abi.decode(b, string[]); return keccak256(bytes(ss[0n])); }
-  @external @pure dtup(b: bytes): u256 { let [n, ps]: [u256, P[]] = abi.decode(b, [u256, P[]]); return n + ps[0n].a + ps[1n].b + ps.length; } }`;
+const J = `type P = { a: u256; b: u256; };
+class C {
+  get duu(b: bytes): External<u256> { let m: u256[][] = abi.decode(b, u256[][]); return m[0n][0n] + m[0n][2n] + m[1n][0n]; }
+  get dfu(b: bytes): External<u256> { let m: Arr<u256[],2> = abi.decode(b, Arr<u256[],2>); return m[0n][1n] + m[1n][0n]; }
+  get duuu(b: bytes): External<u256> { let m: u256[][][] = abi.decode(b, u256[][][]); return m[0n][0n][0n] * 1000n + m[1n][1n][1n] * 100n + m[1n][0n][0n] * 10n + m.length; }
+  get dempty(b: bytes): External<u256> { let m: u256[][] = abi.decode(b, u256[][]); return m.length; }
+  get dps(b: bytes): External<u256> { let ps: P[] = abi.decode(b, P[]); return ps[0n].a + ps[1n].b + ps[2n].a + ps.length; }
+  get dbs(b: bytes): External<u256> { let bs: bytes[] = abi.decode(b, bytes[]); return bs[0n].length * 100n + bs[1n].length * 10n + bs.length; }
+  get dbsk(b: bytes): External<bytes32> { let bs: bytes[] = abi.decode(b, bytes[]); return keccak256(bs[1n]); }
+  get dss(b: bytes): External<u256> { let ss: string[] = abi.decode(b, string[]); return bytes(ss[0n]).length * 100n + bytes(ss[1n]).length * 10n + ss.length; }
+  get dssk(b: bytes): External<bytes32> { let ss: string[] = abi.decode(b, string[]); return keccak256(bytes(ss[0n])); }
+  get dtup(b: bytes): External<u256> { let [n, ps]: [u256, P[]] = abi.decode(b, [u256, P[]]); return n + ps[0n].a + ps[1n].b + ps.length; } }`;
 
 const S = `struct P { uint a; uint b; }
 contract C {
@@ -201,15 +201,15 @@ describe('Residual C: abi.decode into array targets (u256[][], P[], bytes[], str
     };
     // B3: a DYNAMIC-field struct array D[] (D has a bytes field) is now ACCEPTED (byte-identical decode,
     // see dyn-array-field-struct-local.test.ts).
-    const preD = `@struct class D { a: u256; tags: bytes; } @contract class C { @external @pure f(b: bytes): u256 {`;
+    const preD = `type D = { a: u256; tags: bytes; }; class C { get f(b: bytes): External<u256> {`;
     expect(codes(`${preD} let ds: D[] = abi.decode(b, D[]); return ds.length; } }`)).toEqual([]);
     // B4: a nested-dynamic-leaf array bytes[][] is now ACCEPTED (byte-identical decode, see
     // nested-dynamic-leaf-array.test.ts).
-    const preC = `@contract class C { @external @pure f(b: bytes): u256 {`;
+    const preC = `class C { get f(b: bytes): External<u256> {`;
     expect(codes(`${preC} let m: bytes[][] = abi.decode(b, bytes[][]); return m.length; } }`)).toEqual([]);
     // A STATIC-struct array P[] / nested P[][] are now ACCEPTED (pointer-headed; byte-identical decode
     // covered in pointer-headed-static-struct-array.test.ts).
-    const preP = `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(b: bytes): u256 {`;
+    const preP = `type P = { a: u256; b: u256; }; class C { get f(b: bytes): External<u256> {`;
     expect(codes(`${preP} let m: P[] = abi.decode(b, P[]); return m.length; } }`)).toEqual([]);
     expect(codes(`${preP} let m: P[][] = abi.decode(b, P[][]); return m.length; } }`)).toEqual([]);
   });

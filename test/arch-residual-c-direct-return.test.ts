@@ -24,12 +24,12 @@ const wrapBytes = (blob: string) => {
   return '0x' + W(0x20n) + W(BigInt(len)) + pad;
 };
 
-const J = `@struct class P { a: u256; b: u256; } @contract class C {
-  @external @pure d_mm(b: bytes): u256[][] { return abi.decode(b, u256[][]); }
-  @external @pure d_ps(b: bytes): P[] { return abi.decode(b, P[]); }
-  @external @pure d_bs(b: bytes): bytes[] { return abi.decode(b, bytes[]); }
-  @external @pure d_ss(b: bytes): string[] { return abi.decode(b, string[]); }
-  @external @pure d_vv(b: bytes): u256[] { return abi.decode(b, u256[]); } }`;
+const J = `type P = { a: u256; b: u256; }; class C {
+  get d_mm(b: bytes): External<u256[][]> { return abi.decode(b, u256[][]); }
+  get d_ps(b: bytes): External<P[]> { return abi.decode(b, P[]); }
+  get d_bs(b: bytes): External<bytes[]> { return abi.decode(b, bytes[]); }
+  get d_ss(b: bytes): External<string[]> { return abi.decode(b, string[]); }
+  get d_vv(b: bytes): External<u256[]> { return abi.decode(b, u256[]); } }`;
 
 const S = `struct P { uint a; uint b; }
 contract C {

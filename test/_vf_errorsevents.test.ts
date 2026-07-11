@@ -35,100 +35,100 @@ function strTail(s: string): string {
   return pad(BigInt(bytes.length)) + dataWords;
 }
 
-const JETH = `@contract class C {
-  @error Insufficient(available: u256, required: u256);
-  @error Unauthorized(who: address);
-  @error Flag(ok: bool);
-  @error Three(a: u256, b: address, c: bool);
-  @error Narrow(a: u8, b: i8);
-  @error NoArgs();
-  @error WideMix(a: i256, b: bytes32, c: u128, d: i16);
-  @error WithStr(code: u256, note: string, flag: bool);
-  @error TwoStr(a: string, b: string);
-  @error JustBytes(b: bytes);
-  @error StrThenStatic(s: string, x: u256);
-  @error BytesAddr(b: bytes, w: address);
+const JETH = `class C {
+  Insufficient: error<{ available: u256; required: u256 }>;
+  Unauthorized: error<{ who: address }>;
+  Flag: error<{ ok: bool }>;
+  Three: error<{ a: u256; b: address; c: bool }>;
+  Narrow: error<{ a: u8; b: i8 }>;
+  NoArgs: error<{}>;
+  WideMix: error<{ a: i256; b: bytes32; c: u128; d: i16 }>;
+  WithStr: error<{ code: u256; note: string; flag: bool }>;
+  TwoStr: error<{ a: string; b: string }>;
+  JustBytes: error<{ b: bytes }>;
+  StrThenStatic: error<{ s: string; x: u256 }>;
+  BytesAddr: error<{ b: bytes; w: address }>;
 
   // ---- require / revert (Error(string) + empty + Panic) ----
-  @external @pure reqTrue(a: u256): u256 { require(a > 0n); return a; }
-  @external @pure reqTrueMsg(a: u256): u256 { require(a > 0n, "must be positive"); return a; }
-  @external @pure reqFalseShort(): void { require(false, "hello"); }
-  @external @pure reqFalseExact32(): void { require(false, "abcdefghijklmnopqrstuvwxyz012345"); }
-  @external @pure reqFalseExact33(): void { require(false, "abcdefghijklmnopqrstuvwxyz0123456"); }
-  @external @pure reqFalseLong(): void { require(false, "this string is definitely longer than thirty-two bytes for testing"); }
-  @external @pure reqFalseUtf8(): void { require(false, "héllo 世界"); }
-  @external @pure revertShort(): void { revert("hello"); }
-  @external @pure revertEmptyStr(): void { revert(""); }
-  @external @pure revertBare(): void { revert(); }
-  @external @pure reqCond(a: u256, b: u256): u256 { require(a >= b, "underflow guard"); return a - b; }
+  get reqTrue(a: u256): External<u256> { require(a > 0n); return a; }
+  get reqTrueMsg(a: u256): External<u256> { require(a > 0n, "must be positive"); return a; }
+  reqFalseShort(): External<void> { require(false, "hello"); }
+  reqFalseExact32(): External<void> { require(false, "abcdefghijklmnopqrstuvwxyz012345"); }
+  reqFalseExact33(): External<void> { require(false, "abcdefghijklmnopqrstuvwxyz0123456"); }
+  reqFalseLong(): External<void> { require(false, "this string is definitely longer than thirty-two bytes for testing"); }
+  reqFalseUtf8(): External<void> { require(false, "héllo 世界"); }
+  revertShort(): External<void> { revert("hello"); }
+  revertEmptyStr(): External<void> { revert(""); }
+  revertBare(): External<void> { revert(); }
+  get reqCond(a: u256, b: u256): External<u256> { require(a >= b, "underflow guard"); return a - b; }
 
   // ---- Panic codes ----
-  @external @pure panicOverflowAdd(a: u256, b: u256): u256 { return a + b; }
-  @external @pure panicOverflowMul(a: u256, b: u256): u256 { return a * b; }
-  @external @pure panicDivZero(a: u256, b: u256): u256 { return a / b; }
-  @external @pure panicModZero(a: u256, b: u256): u256 { return a % b; }
-  @external @pure panicSub(a: u256, b: u256): u256 { return a - b; }
-  @external @pure panicExp(a: u256, b: u256): u256 { return a ** b; }
-  @external @pure panicNegI(a: i256, b: i256): i256 { return a / b; }
+  get panicOverflowAdd(a: u256, b: u256): External<u256> { return a + b; }
+  get panicOverflowMul(a: u256, b: u256): External<u256> { return a * b; }
+  get panicDivZero(a: u256, b: u256): External<u256> { return a / b; }
+  get panicModZero(a: u256, b: u256): External<u256> { return a % b; }
+  get panicSub(a: u256, b: u256): External<u256> { return a - b; }
+  get panicExp(a: u256, b: u256): External<u256> { return a ** b; }
+  get panicNegI(a: i256, b: i256): External<i256> { return a / b; }
 
   // ---- custom errors: static args ----
-  @external @pure r1(a: u256, b: u256): void { revert(Insufficient(a, b)); }
-  @external @pure r2(w: address): void { revert(Unauthorized(w)); }
-  @external @pure r3(ok: bool): void { revert(Flag(ok)); }
-  @external @pure r4(a: u256, b: address, c: bool): void { revert(Three(a, b, c)); }
-  @external @pure r5(a: u8, b: i8): void { revert(Narrow(a, b)); }
-  @external @pure r6(a: i256, b: bytes32, c: u128, d: i16): void { revert(WideMix(a, b, c, d)); }
-  @external @pure r7(): void { revert(NoArgs()); }
-  @external @pure rq(a: u256, b: u256): u256 { require(a > b, Insufficient(a, b)); return a; }
-  @external @pure rqEager(a: u256, b: u256): u256 { require(true, Insufficient(a, 10n / b)); return a; }
-  @external @pure reqThenAdd(a: u256): u256 { require(a > 0n, "nz"); return a + 1n; }
+  r1(a: u256, b: u256): External<void> { revert(Insufficient(a, b)); }
+  r2(w: address): External<void> { revert(Unauthorized(w)); }
+  r3(ok: bool): External<void> { revert(Flag(ok)); }
+  r4(a: u256, b: address, c: bool): External<void> { revert(Three(a, b, c)); }
+  r5(a: u8, b: i8): External<void> { revert(Narrow(a, b)); }
+  r6(a: i256, b: bytes32, c: u128, d: i16): External<void> { revert(WideMix(a, b, c, d)); }
+  r7(): External<void> { revert(NoArgs()); }
+  get rq(a: u256, b: u256): External<u256> { require(a > b, Insufficient(a, b)); return a; }
+  get rqEager(a: u256, b: u256): External<u256> { require(true, Insufficient(a, 10n / b)); return a; }
+  get reqThenAdd(a: u256): External<u256> { require(a > 0n, "nz"); return a + 1n; }
 
   // ---- custom errors: dynamic args ----
-  @external @pure eWithStr(code: u256, s: string, f: bool): void { revert(WithStr(code, s, f)); }
-  @external @pure eTwoStr(a: string, b: string): void { revert(TwoStr(a, b)); }
-  @external @pure eJustBytes(b: bytes): void { revert(JustBytes(b)); }
-  @external @pure eStrThenStatic(s: string, x: u256): void { revert(StrThenStatic(s, x)); }
-  @external @pure eBytesAddr(b: bytes, w: address): void { revert(BytesAddr(b, w)); }
-  @external @pure eStrLit(): void { revert(WithStr(7n, "literal note here", true)); }
+  eWithStr(code: u256, s: string, f: bool): External<void> { revert(WithStr(code, s, f)); }
+  eTwoStr(a: string, b: string): External<void> { revert(TwoStr(a, b)); }
+  eJustBytes(b: bytes): External<void> { revert(JustBytes(b)); }
+  eStrThenStatic(s: string, x: u256): External<void> { revert(StrThenStatic(s, x)); }
+  eBytesAddr(b: bytes, w: address): External<void> { revert(BytesAddr(b, w)); }
+  eStrLit(): External<void> { revert(WithStr(7n, "literal note here", true)); }
 
   // ---- events: indexed counts 0..3 ----
-  @event NoIdx(value: u256);
-  @event OneIdx(@indexed key: u256, value: u256);
-  @event Transfer(@indexed from: address, @indexed to: address, value: u256);
-  @event ThreeIdx(@indexed a: u256, @indexed b: u256, @indexed c: u256, d: u256);
-  @event Bare();
-  @event OneIdxNoData(@indexed who: address);
-  @event Mixed(@indexed flag: u8, @indexed s: i16, @indexed ok: bool, who: address, sig: bytes4);
-  @event Order(a: u256, @indexed b: u256, c: u256, @indexed d: u256, e: u256);
-  @event IdxInt(@indexed s: i256, value: u256);
-  @event IdxBytes(@indexed b: bytes32, value: u256);
-  @event DataStr(@indexed key: u256, note: string);
-  @event DataBytes(value: u256, b: bytes);
-  @event StrAndBytes(s: string, b: bytes);
-  @event MultiData(a: u256, b: bytes, c: u256, d: string);
-  @event IdxAndStr(@indexed who: address, @indexed code: u256, note: string);
-  @event AllStatic(@indexed a: u8, @indexed b: i8, c: u256, d: bytes32, e: bool);
+  NoIdx: event<{ value: u256 }>;
+  OneIdx: event<{ key: indexed<u256>; value: u256 }>;
+  Transfer: event<{ from: indexed<address>; to: indexed<address>; value: u256 }>;
+  ThreeIdx: event<{ a: indexed<u256>; b: indexed<u256>; c: indexed<u256>; d: u256 }>;
+  Bare: event<{}>;
+  OneIdxNoData: event<{ who: indexed<address> }>;
+  Mixed: event<{ flag: indexed<u8>; s: indexed<i16>; ok: indexed<bool>; who: address; sig: bytes4 }>;
+  Order: event<{ a: u256; b: indexed<u256>; c: u256; d: indexed<u256>; e: u256 }>;
+  IdxInt: event<{ s: indexed<i256>; value: u256 }>;
+  IdxBytes: event<{ b: indexed<bytes32>; value: u256 }>;
+  DataStr: event<{ key: indexed<u256>; note: string }>;
+  DataBytes: event<{ value: u256; b: bytes }>;
+  StrAndBytes: event<{ s: string; b: bytes }>;
+  MultiData: event<{ a: u256; b: bytes; c: u256; d: string }>;
+  IdxAndStr: event<{ who: indexed<address>; code: indexed<u256>; note: string }>;
+  AllStatic: event<{ a: indexed<u8>; b: indexed<i8>; c: u256; d: bytes32; e: bool }>;
 
-  @external evNoIdx(v: u256): void { emit(NoIdx(v)); }
-  @external evOneIdx(k: u256, v: u256): void { emit(OneIdx(k, v)); }
-  @external evTransfer(f: address, t: address, v: u256): void { emit(Transfer(f, t, v)); }
-  @external evThreeIdx(a: u256, b: u256, c: u256, d: u256): void { emit(ThreeIdx(a, b, c, d)); }
-  @external evBare(): void { emit(Bare()); }
-  @external evOneIdxNoData(w: address): void { emit(OneIdxNoData(w)); }
-  @external evMixed(fl: u8, s: i16, ok: bool, w: address, sig: bytes4): void { emit(Mixed(fl, s, ok, w, sig)); }
-  @external evOrder(a: u256, b: u256, c: u256, d: u256, e: u256): void { emit(Order(a, b, c, d, e)); }
-  @external evIdxInt(s: i256, v: u256): void { emit(IdxInt(s, v)); }
-  @external evIdxBytes(b: bytes32, v: u256): void { emit(IdxBytes(b, v)); }
-  @external evDataStr(k: u256, s: string): void { emit(DataStr(k, s)); }
-  @external evDataBytes(v: u256, b: bytes): void { emit(DataBytes(v, b)); }
-  @external evStrAndBytes(s: string, b: bytes): void { emit(StrAndBytes(s, b)); }
-  @external evMultiData(a: u256, b: bytes, c: u256, d: string): void { emit(MultiData(a, b, c, d)); }
-  @external evIdxAndStr(w: address, code: u256, s: string): void { emit(IdxAndStr(w, code, s)); }
-  @external evAllStatic(a: u8, b: i8, c: u256, d: bytes32, e: bool): void { emit(AllStatic(a, b, c, d, e)); }
-  @external evTwice(v: u256): void { emit(NoIdx(v)); emit(NoIdx(v)); }
-  @external evMulti(a: u256, w: address, t: address): void { emit(NoIdx(a)); emit(Transfer(w, t, a)); emit(Bare()); }
-  @external evThenRevert(v: u256): void { emit(NoIdx(v)); revert("after emit"); }
-  @external evCond(v: u256): void { if (v > 10n) { emit(NoIdx(v)); } else { emit(Bare()); } }
+  evNoIdx(v: u256): External<void> { emit(NoIdx(v)); }
+  evOneIdx(k: u256, v: u256): External<void> { emit(OneIdx(k, v)); }
+  evTransfer(f: address, t: address, v: u256): External<void> { emit(Transfer(f, t, v)); }
+  evThreeIdx(a: u256, b: u256, c: u256, d: u256): External<void> { emit(ThreeIdx(a, b, c, d)); }
+  evBare(): External<void> { emit(Bare()); }
+  evOneIdxNoData(w: address): External<void> { emit(OneIdxNoData(w)); }
+  evMixed(fl: u8, s: i16, ok: bool, w: address, sig: bytes4): External<void> { emit(Mixed(fl, s, ok, w, sig)); }
+  evOrder(a: u256, b: u256, c: u256, d: u256, e: u256): External<void> { emit(Order(a, b, c, d, e)); }
+  evIdxInt(s: i256, v: u256): External<void> { emit(IdxInt(s, v)); }
+  evIdxBytes(b: bytes32, v: u256): External<void> { emit(IdxBytes(b, v)); }
+  evDataStr(k: u256, s: string): External<void> { emit(DataStr(k, s)); }
+  evDataBytes(v: u256, b: bytes): External<void> { emit(DataBytes(v, b)); }
+  evStrAndBytes(s: string, b: bytes): External<void> { emit(StrAndBytes(s, b)); }
+  evMultiData(a: u256, b: bytes, c: u256, d: string): External<void> { emit(MultiData(a, b, c, d)); }
+  evIdxAndStr(w: address, code: u256, s: string): External<void> { emit(IdxAndStr(w, code, s)); }
+  evAllStatic(a: u8, b: i8, c: u256, d: bytes32, e: bool): External<void> { emit(AllStatic(a, b, c, d, e)); }
+  evTwice(v: u256): External<void> { emit(NoIdx(v)); emit(NoIdx(v)); }
+  evMulti(a: u256, w: address, t: address): External<void> { emit(NoIdx(a)); emit(Transfer(w, t, a)); emit(Bare()); }
+  evThenRevert(v: u256): External<void> { emit(NoIdx(v)); revert("after emit"); }
+  evCond(v: u256): External<void> { if (v > 10n) { emit(NoIdx(v)); } else { emit(Bare()); } }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

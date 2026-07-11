@@ -28,70 +28,69 @@ const RANDAO = hexToBytes(('0x' + 'ab'.repeat(32)) as `0x${string}`);
 const CHAIN_ID = 1337;
 
 const JETH = `
-@contract
 class C {
-  @state owner: address;
-  @state hits: mapping<address, u256>;
+  owner: address;
+  hits: mapping<address, u256>;
 
   // --- raw env reads ---
-  @external @view sender(): address { return msg.sender; }
-  @external @view origin(): address { return tx.origin; }
-  @external @view self(): address { return address(this); }
-  @external @view coinbase(): address { return block.coinbase; }
-  @external @view ts(): u256 { return block.timestamp; }
-  @external @view num(): u256 { return block.number; }
-  @external @view cid(): u256 { return block.chainid; }
-  @external @view fee(): u256 { return block.basefee; }
-  @external @view glimit(): u256 { return block.gaslimit; }
-  @external @view rand(): u256 { return block.prevrandao; }
-  @external @pure sig(): bytes4 { return msg.sig; }
-  @external @payable val(): u256 { return msg.value; }
+  get sender(): External<address> { return msg.sender; }
+  get origin(): External<address> { return tx.origin; }
+  get self(): External<address> { return address(this); }
+  get coinbase(): External<address> { return block.coinbase; }
+  get ts(): External<u256> { return block.timestamp; }
+  get num(): External<u256> { return block.number; }
+  get cid(): External<u256> { return block.chainid; }
+  get fee(): External<u256> { return block.basefee; }
+  get glimit(): External<u256> { return block.gaslimit; }
+  get rand(): External<u256> { return block.prevrandao; }
+  get sig(): External<bytes4> { return msg.sig; }
+  val(): Payable<u256> { return msg.value; }
 
   // --- casts over env reads ---
-  @external @view senderU160(): u160 { return u160(msg.sender); }
-  @external @view senderBytes20(): bytes20 { return bytes20(msg.sender); }
-  @external @view selfU160(): u160 { return u160(address(this)); }
-  @external @view selfBytes20(): bytes20 { return bytes20(address(this)); }
-  @external @view originPayable(): address { return address(payable(tx.origin)); }
-  @external @view senderRoundTrip(): address { return address(u160(msg.sender)); }
-  @external @view senderB20RT(): address { return address(bytes20(msg.sender)); }
-  @external @pure sigAsU32(): u32 { return u32(msg.sig); }
-  @external @pure sigAsBytes4(): bytes4 { return bytes4(u32(msg.sig)); }
+  get senderU160(): External<u160> { return u160(msg.sender); }
+  get senderBytes20(): External<bytes20> { return bytes20(msg.sender); }
+  get selfU160(): External<u160> { return u160(address(this)); }
+  get selfBytes20(): External<bytes20> { return bytes20(address(this)); }
+  get originPayable(): External<address> { return address(payable(tx.origin)); }
+  get senderRoundTrip(): External<address> { return address(u160(msg.sender)); }
+  get senderB20RT(): External<address> { return address(bytes20(msg.sender)); }
+  get sigAsU32(): External<u32> { return u32(msg.sig); }
+  get sigAsBytes4(): External<bytes4> { return bytes4(u32(msg.sig)); }
 
   // --- arithmetic / comparisons over env (uses block.* which are u256) ---
-  @external @view tsPlusNum(): u256 { return block.timestamp + block.number; }
-  @external @view feeTimesGas(): u256 { return block.basefee * block.gaslimit; }
-  @external @view numMinusOne(): u256 { return block.number - 1n; }
-  @external @view randXorTs(): u256 { return block.prevrandao ^ block.timestamp; }
-  @external @view randShr(): u256 { return block.prevrandao >> 8n; }
-  @external @payable valPlus(): u256 { return msg.value + 1000n; }
-  @external @payable valDoubled(): u256 { return msg.value * 2n; }
-  @external @view senderEqOrigin(): bool { return msg.sender == tx.origin; }
-  @external @view senderNeSelf(): bool { return msg.sender != address(this); }
-  @external @view selfIsZero(): bool { return address(this) == address(0n); }
-  @external @view cidEq(): bool { return block.chainid == 1337n; }
+  get tsPlusNum(): External<u256> { return block.timestamp + block.number; }
+  get feeTimesGas(): External<u256> { return block.basefee * block.gaslimit; }
+  get numMinusOne(): External<u256> { return block.number - 1n; }
+  get randXorTs(): External<u256> { return block.prevrandao ^ block.timestamp; }
+  get randShr(): External<u256> { return block.prevrandao >> 8n; }
+  valPlus(): Payable<u256> { return msg.value + 1000n; }
+  valDoubled(): Payable<u256> { return msg.value * 2n; }
+  get senderEqOrigin(): External<bool> { return msg.sender == tx.origin; }
+  get senderNeSelf(): External<bool> { return msg.sender != address(this); }
+  get selfIsZero(): External<bool> { return address(this) == address(0n); }
+  get cidEq(): External<bool> { return block.chainid == 1337n; }
 
   // --- value-conditioned control flow (require on msg.value) ---
-  @external @payable needsValue(): u256 { require(msg.value > 0n); return msg.value; }
-  @external @payable exactWei(): u256 { require(msg.value == 1n); return 42n; }
+  needsValue(): Payable<u256> { require(msg.value > 0n); return msg.value; }
+  exactWei(): Payable<u256> { require(msg.value == 1n); return 42n; }
 
   // --- env as mapping key / writes (state-changing) ---
-  @external bump(): u256 { this.hits[msg.sender] = this.hits[msg.sender] + 1n; return this.hits[msg.sender]; }
-  @external @view hitOf(a: address): u256 { return this.hits[a]; }
-  @external setOwner(): void { this.owner = msg.sender; }
-  @external @view getOwner(): address { return this.owner; }
-  @external @view isOwner(): bool { return msg.sender == this.owner; }
+  bump(): External<u256> { this.hits[msg.sender] = this.hits[msg.sender] + 1n; return this.hits[msg.sender]; }
+  get hitOf(a: address): External<u256> { return this.hits[a]; }
+  setOwner(): External<void> { this.owner = msg.sender; }
+  get getOwner(): External<address> { return this.owner; }
+  get isOwner(): External<bool> { return msg.sender == this.owner; }
 
   // --- bytes4 sig comparisons / returns of casts ---
-  @external @pure sigEqSelf(): bool { return msg.sig == msg.sig; }
+  get sigEqSelf(): External<bool> { return msg.sig == msg.sig; }
   // sigIsSig() selector is 0xf7d6b9f1; compare msg.sig against that literal
-  @external @pure sigIsSig(): bool { return msg.sig == bytes4(u32(0xf7d6b9f1n)); }
-  @external @pure sigHi(): u256 { return u256(bytes32(msg.sig)); }
+  get sigIsSig(): External<bool> { return msg.sig == bytes4(u32(0xf7d6b9f1n)); }
+  get sigHi(): External<u256> { return u256(bytes32(msg.sig)); }
   // chained address casts: address -> u160 -> bytes20 -> address round trip
-  @external @view selfChain(): address { return address(bytes20(u160(address(this)))); }
-  @external @view senderToB32(): bytes32 { return bytes32(u256(u160(msg.sender))); }
+  get selfChain(): External<address> { return address(bytes20(u160(address(this)))); }
+  get senderToB32(): External<bytes32> { return bytes32(u256(u160(msg.sender))); }
   // mix env into a require comparison that can pass or fail by value
-  @external @payable gateValGtNum(): u256 { require(msg.value > block.number); return msg.value; }
+  gateValGtNum(): Payable<u256> { require(msg.value > block.number); return msg.value; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

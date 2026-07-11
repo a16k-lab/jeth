@@ -15,29 +15,28 @@ import { compileSolidity } from './_solidity.js';
 
 // ---- JETH source (inline, self-contained) ----
 const JETH = `// deep-nested-aggregates
-@struct class Pt { x: u128; y: u128; }
-@struct class Big { id: u64; xs: Arr<u128, 3>; }
-@struct class S { h: u64; pts: Arr<Pt, 2>; }
-@struct class C { v: u128; }
-@struct class B { c: C; }
-@struct class A { b: B; }
+type Pt = { x: u128; y: u128; };
+type Big = { id: u64; xs: Arr<u128, 3>; };
+type S = { h: u64; pts: Arr<Pt, 2>; };
+type C = { v: u128; };
+type B = { c: C; };
+type A = { b: B; };
 
-@contract
 class DeepNested {
   // (1) array-of-struct-with-array-field
-  @external @pure bigId(arr: Arr<Big, 2>, i: u256): u64 { return arr[i].id; }
-  @external @pure bigXs(arr: Arr<Big, 2>, i: u256, j: u256): u128 { return arr[i].xs[j]; }
+  get bigId(arr: Arr<Big, 2>, i: u256): External<u64> { return arr[i].id; }
+  get bigXs(arr: Arr<Big, 2>, i: u256, j: u256): External<u128> { return arr[i].xs[j]; }
   // constant-index variants (compile-time addressing)
-  @external @pure bigId0(arr: Arr<Big, 2>): u64 { return arr[0n].id; }
-  @external @pure bigXs1_2(arr: Arr<Big, 2>): u128 { return arr[1n].xs[2n]; }
+  get bigId0(arr: Arr<Big, 2>): External<u64> { return arr[0n].id; }
+  get bigXs1_2(arr: Arr<Big, 2>): External<u128> { return arr[1n].xs[2n]; }
 
   // (2) struct-with-array-of-struct
-  @external @pure sPtsY(s: S, i: u256): u128 { return s.pts[i].y; }
-  @external @pure sH(s: S): u64 { return s.h; }
-  @external @pure sPtsX0(s: S): u128 { return s.pts[0n].x; }
+  get sPtsY(s: S, i: u256): External<u128> { return s.pts[i].y; }
+  get sH(s: S): External<u64> { return s.h; }
+  get sPtsX0(s: S): External<u128> { return s.pts[0n].x; }
 
   // (3) three-level struct
-  @external @pure abcV(a: A): u128 { return a.b.c.v; }
+  get abcV(a: A): External<u128> { return a.b.c.v; }
 }`;
 
 // ---- Solidity mirror ----

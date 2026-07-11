@@ -13,7 +13,7 @@ import { compileSolidity } from './_solidity.js';
 
 // --- JETH source: one getter per leaf so each access is isolated/lazy. ---
 const JETH = `
-@struct class Mix {
+type Mix = {
   a: bool;
   b: u8;
   c: i16;
@@ -22,18 +22,17 @@ const JETH = `
   f: u64;
   g: bytes32;
   h: i128;
-}
+};
 
-@contract
 class PackedLeaves {
-  @external @pure mixA(m: Mix): bool    { return m.a; }
-  @external @pure mixB(m: Mix): u8      { return m.b; }
-  @external @pure mixC(m: Mix): i16     { return m.c; }
-  @external @pure mixD(m: Mix): address { return m.d; }
-  @external @pure mixE(m: Mix): bytes4  { return m.e; }
-  @external @pure mixF(m: Mix): u64     { return m.f; }
-  @external @pure mixG(m: Mix): bytes32 { return m.g; }
-  @external @pure mixH(m: Mix): i128    { return m.h; }
+  get mixA(m: Mix): External<bool>    { return m.a; }
+  get mixB(m: Mix): External<u8>      { return m.b; }
+  get mixC(m: Mix): External<i16>     { return m.c; }
+  get mixD(m: Mix): External<address> { return m.d; }
+  get mixE(m: Mix): External<bytes4>  { return m.e; }
+  get mixF(m: Mix): External<u64>     { return m.f; }
+  get mixG(m: Mix): External<bytes32> { return m.g; }
+  get mixH(m: Mix): External<i128>    { return m.h; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

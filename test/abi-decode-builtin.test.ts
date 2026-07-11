@@ -61,13 +61,13 @@ async function rtDecode(jeth: string, sol: string, cases: { sig: string; payload
 
 describe('abi.decode: byte-identical vs solc', () => {
   it('step 1: single value types (uintN/intN/bool/address/bytesN), incl dirty-bit validation', async () => {
-    const J = `@contract class D {
-      @external @pure dU(b: bytes): u256 { return abi.decode(b, u256); }
-      @external @pure dU8(b: bytes): u8 { return abi.decode(b, u8); }
-      @external @pure dI(b: bytes): i128 { return abi.decode(b, i128); }
-      @external @pure dA(b: bytes): address { return abi.decode(b, address); }
-      @external @pure dBool(b: bytes): bool { return abi.decode(b, bool); }
-      @external @pure dB4(b: bytes): bytes4 { return abi.decode(b, bytes4); }
+    const J = `class D {
+      get dU(b: bytes): External<u256> { return abi.decode(b, u256); }
+      get dU8(b: bytes): External<u8> { return abi.decode(b, u8); }
+      get dI(b: bytes): External<i128> { return abi.decode(b, i128); }
+      get dA(b: bytes): External<address> { return abi.decode(b, address); }
+      get dBool(b: bytes): External<bool> { return abi.decode(b, bool); }
+      get dB4(b: bytes): External<bytes4> { return abi.decode(b, bytes4); }
     }`;
     const S = `contract D {
       function dU(bytes calldata b) external pure returns (uint256){ return abi.decode(b,(uint256)); }
@@ -93,9 +93,9 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('step 2: dynamic single string / bytes (well-formed + truncated Panic41 + oob offset)', async () => {
-    const J = `@contract class D {
-      @external @pure dS(b: bytes): string { return abi.decode(b, string); }
-      @external @pure dB(b: bytes): bytes { return abi.decode(b, bytes); }
+    const J = `class D {
+      get dS(b: bytes): External<string> { return abi.decode(b, string); }
+      get dB(b: bytes): External<bytes> { return abi.decode(b, bytes); }
     }`;
     const S = `contract D {
       function dS(bytes calldata b) external pure returns (string memory){ return abi.decode(b,(string)); }
@@ -120,11 +120,11 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('step 3: tuple form (static / mixed / dynamic-first / 3-element) via destructuring', async () => {
-    const J = `@contract class D {
-      @external @pure t2(b: bytes): bytes { let [a, c]: [u256, address] = abi.decode(b, [u256, address]); return abi.encode(a, c); }
-      @external @pure tm(b: bytes): bytes { let [n, s]: [u256, string] = abi.decode(b, [u256, string]); return abi.encode(n, s); }
-      @external @pure tsn(b: bytes): bytes { let [s, n]: [string, u256] = abi.decode(b, [string, u256]); return abi.encode(s, n); }
-      @external @pure t3(b: bytes): bytes { let [a, s, c]: [u256, string, bool] = abi.decode(b, [u256, string, bool]); return abi.encode(a, s, c); }
+    const J = `class D {
+      get t2(b: bytes): External<bytes> { let [a, c]: [u256, address] = abi.decode(b, [u256, address]); return abi.encode(a, c); }
+      get tm(b: bytes): External<bytes> { let [n, s]: [u256, string] = abi.decode(b, [u256, string]); return abi.encode(n, s); }
+      get tsn(b: bytes): External<bytes> { let [s, n]: [string, u256] = abi.decode(b, [string, u256]); return abi.encode(s, n); }
+      get t3(b: bytes): External<bytes> { let [a, s, c]: [u256, string, bool] = abi.decode(b, [u256, string, bool]); return abi.encode(a, s, c); }
     }`;
     const S = `contract D {
       function t2(bytes calldata b) external pure returns (bytes memory){ (uint256 a, address c)=abi.decode(b,(uint256,address)); return abi.encode(a,c); }
@@ -153,10 +153,10 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('step 4: <bytes>.decode(T) / <bytes>.decode([...]) sugar equals abi.decode', async () => {
-    const J = `@contract class D {
-      @external @pure m1(b: bytes): string { return b.decode(string); }
-      @external @pure m2(b: bytes): u256 { return b.decode(u256); }
-      @external @pure mt(b: bytes): bytes { let [a, s]: [u256, string] = b.decode([u256, string]); return abi.encode(a, s); }
+    const J = `class D {
+      get m1(b: bytes): External<string> { return b.decode(string); }
+      get m2(b: bytes): External<u256> { return b.decode(u256); }
+      get mt(b: bytes): External<bytes> { let [a, s]: [u256, string] = b.decode([u256, string]); return abi.encode(a, s); }
     }`;
     const S = `contract D {
       function m1(bytes calldata b) external pure returns (string memory){ return abi.decode(b,(string)); }
@@ -172,19 +172,19 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('step 4b: HEADLINE addr.staticcall({...}).decode(T) cross-contract', async () => {
-    const TJ = `@contract class T {
-      @external @view getStr(): string { return "hello from target"; }
-      @external @view getU(): u256 { return 0xcafen; }
+    const TJ = `class T {
+      get getStr(): External<string> { return "hello from target"; }
+      get getU(): External<u256> { return 0xcafen; }
     }`;
     const TS = `contract T {
       function getStr() external pure returns (string memory){ return "hello from target"; }
       function getU() external pure returns (uint256){ return 0xcafe; }
     }`;
-    const CJ = `@contract class C {
-      @external @view callStr(t: address): string {
+    const CJ = `class C {
+      get callStr(t: address): External<string> {
         return t.staticcall({ data: abi.encodeWithSignature("getStr()"), success: { condition: this.ok, revert: "f" } }).decode(string);
       }
-      @external @view callU(t: address): u256 {
+      get callU(t: address): External<u256> {
         return t.staticcall({ data: abi.encodeWithSignature("getU()"), success: { condition: this.ok, revert: "f" } }).decode(u256);
       }
     }`;
@@ -213,11 +213,11 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('step 5: dynamic value-array T[] and static Arr<T,N> (well-formed + bounds)', async () => {
-    const J = `@contract class D {
-      @external @pure dArr(b: bytes): bytes { let xs: u256[] = abi.decode(b, u256[]); return abi.encode(xs); }
-      @external @pure dArr8(b: bytes): bytes { let xs: u8[] = abi.decode(b, u8[]); return abi.encode(xs); }
-      @external @pure dFix(b: bytes): bytes { let xs: Arr<u256, 3> = abi.decode(b, Arr<u256, 3>); return abi.encode(xs); }
-      @external @pure tFix(b: bytes): bytes { let [a, n]: [Arr<u256, 2>, u256] = abi.decode(b, [Arr<u256, 2>, u256]); return abi.encode(a, n); }
+    const J = `class D {
+      get dArr(b: bytes): External<bytes> { let xs: u256[] = abi.decode(b, u256[]); return abi.encode(xs); }
+      get dArr8(b: bytes): External<bytes> { let xs: u8[] = abi.decode(b, u8[]); return abi.encode(xs); }
+      get dFix(b: bytes): External<bytes> { let xs: Arr<u256, 3> = abi.decode(b, Arr<u256, 3>); return abi.encode(xs); }
+      get tFix(b: bytes): External<bytes> { let [a, n]: [Arr<u256, 2>, u256] = abi.decode(b, [Arr<u256, 2>, u256]); return abi.encode(a, n); }
     }`;
     const S = `contract D {
       function dArr(bytes calldata b) external pure returns (bytes memory){ uint256[] memory xs=abi.decode(b,(uint256[])); return abi.encode(xs); }
@@ -242,9 +242,9 @@ describe('abi.decode: byte-identical vs solc', () => {
   it('step 5b: enum and branded-newtype targets (incl out-of-range enum -> empty revert)', async () => {
     const J = `type Tok = Brand<u256>;
     enum Color { Red, Green, Blue }
-    @contract class D {
-      @external @pure dTok(b: bytes): u256 { let t: Tok = abi.decode(b, Tok); return u256(t); }
-      @external @pure dEnum(b: bytes): u8 { let c: Color = abi.decode(b, Color); return u8(c); }
+    class D {
+      get dTok(b: bytes): External<u256> { let t: Tok = abi.decode(b, Tok); return u256(t); }
+      get dEnum(b: bytes): External<u8> { let c: Color = abi.decode(b, Color); return u8(c); }
     }`;
     const jb = compile(J, { fileName: 'D.jeth' });
     // solc mirror: a plain uint256 decode for the brand, and a Color enum decode in a second contract.
@@ -268,9 +268,9 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('round-trips a well-formed mixed-dynamic tuple (u256[], string) byte-identically', async () => {
-    const J = `@contract class D {
-      @external @pure mk(): bytes { let xs: u256[] = [11n, 22n, 33n]; return abi.encode(xs, "round trip!"); }
-      @external @pure rt(b: bytes): bytes { let [xs, s]: [u256[], string] = abi.decode(b, [u256[], string]); return abi.encode(xs, s); }
+    const J = `class D {
+      get mk(): External<bytes> { let xs: u256[] = [11n, 22n, 33n]; return abi.encode(xs, "round trip!"); }
+      get rt(b: bytes): External<bytes> { let [xs, s]: [u256[], string] = abi.decode(b, [u256[], string]); return abi.encode(xs, s); }
     }`;
     const S = `contract D {
       function mk() external pure returns (bytes memory){ uint256[] memory xs = new uint256[](3); xs[0]=11; xs[1]=22; xs[2]=33; return abi.encode(xs, "round trip!"); }
@@ -297,26 +297,26 @@ describe('abi.decode: byte-identical vs solc', () => {
   });
 
   it('accepts the supported decode targets', () => {
-    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, u256); } }`)).toBe(
+    expect(jethAccepts(`class C { get f(b: bytes): External<u256> { return abi.decode(b, u256); } }`)).toBe(
       true,
     );
     expect(
-      jethAccepts(`@contract class C { @external @pure f(b: bytes): string { return abi.decode(b, string); } }`),
+      jethAccepts(`class C { get f(b: bytes): External<string> { return abi.decode(b, string); } }`),
     ).toBe(true);
     expect(
-      jethAccepts(`@contract class C { @external @pure f(b: bytes): bytes { return abi.decode(b, bytes); } }`),
+      jethAccepts(`class C { get f(b: bytes): External<bytes> { return abi.decode(b, bytes); } }`),
     ).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @pure f(b: bytes): u256 { return b.decode(u256); } }`)).toBe(
+    expect(jethAccepts(`class C { get f(b: bytes): External<u256> { return b.decode(u256); } }`)).toBe(
       true,
     );
     expect(
       jethAccepts(
-        `@contract class C { @external @pure f(b: bytes): bytes { let xs: u256[] = abi.decode(b, u256[]); return abi.encode(xs); } }`,
+        `class C { get f(b: bytes): External<bytes> { let xs: u256[] = abi.decode(b, u256[]); return abi.encode(xs); } }`,
       ),
     ).toBe(true);
     expect(
       jethAccepts(
-        `@contract class C { @external @pure f(b: bytes): bytes { let xs: Arr<u256,3> = abi.decode(b, Arr<u256,3>); return abi.encode(xs); } }`,
+        `class C { get f(b: bytes): External<bytes> { let xs: Arr<u256,3> = abi.decode(b, Arr<u256,3>); return abi.encode(xs); } }`,
       ),
     ).toBe(true);
   });
@@ -326,7 +326,7 @@ describe('abi.decode: byte-identical vs solc', () => {
     // decode blob (the decoder the constructor aggregate-param path uses); see arch-abi-decode-aggregate.test.ts
     expect(
       jethAccepts(
-        `@struct class P { a: u256; s: string; } @contract class C { @external @pure f(b: bytes): u256 { let p: P = abi.decode(b, P); return p.a; } }`,
+        `type P = { a: u256; s: string; }; class C { get f(b: bytes): External<u256> { let p: P = abi.decode(b, P); return p.a; } }`,
       ),
     ).toBe(true);
     // Residual C lifted a bytes/string-element array (string[]/bytes[]) as a decode target + Residual B
@@ -334,22 +334,22 @@ describe('abi.decode: byte-identical vs solc', () => {
     // verified in arch-residual-c-decode-array.test.ts).
     expect(
       jethAccepts(
-        `@contract class C { @external @pure f(b: bytes): bytes { let xs: string[] = abi.decode(b, string[]); return abi.encode(xs); } }`,
+        `class C { get f(b: bytes): External<bytes> { let xs: string[] = abi.decode(b, string[]); return abi.encode(xs); } }`,
       ),
     ).toBe(true);
     // a non-bytes source
-    expect(jethRejects(`@contract class C { @external @pure f(n: u256): u256 { return abi.decode(n, u256); } }`)).toBe(
+    expect(jethRejects(`class C { get f(n: u256): External<u256> { return abi.decode(n, u256); } }`)).toBe(
       true,
     );
     // wrong arity
-    expect(jethRejects(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b); } }`)).toBe(true);
+    expect(jethRejects(`class C { get f(b: bytes): External<u256> { return abi.decode(b); } }`)).toBe(true);
     // a tuple form used in value position (must be a destructuring)
     expect(
-      jethRejects(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, [u256, address]); } }`),
+      jethRejects(`class C { get f(b: bytes): External<u256> { return abi.decode(b, [u256, address]); } }`),
     ).toBe(true);
     // an unknown type name
     expect(
-      jethRejects(`@contract class C { @external @pure f(b: bytes): u256 { return abi.decode(b, NotAType); } }`),
+      jethRejects(`class C { get f(b: bytes): External<u256> { return abi.decode(b, NotAType); } }`),
     ).toBe(true);
   });
 });

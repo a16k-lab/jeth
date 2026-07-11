@@ -53,25 +53,25 @@ describe('calldata struct-array element bound to a memory struct local (arch #1)
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
 
   // J = JETH source; S = the solc 0.8.35 mirror, semantically identical.
-  const J = `@struct class P { a: u256; b: u256; }
-@struct class D { a: u256; b: bytes; }
-@struct class E { a: u256; xs: u256[]; }
-@contract class C {
+  const J = `type P = { a: u256; b: u256; };
+type D = { a: u256; b: bytes; };
+type E = { a: u256; xs: u256[]; };
+class C {
   // STATIC struct element -> memory local, read both fields
-  @external @pure stat(ps: P[]): u256 { let p: P = ps[0n]; return p.a + p.b; }
-  @external @pure statAt(ps: P[], i: u256): u256 { let p: P = ps[i]; return p.a * 1000n + p.b; }
+  get stat(ps: P[]): External<u256> { let p: P = ps[0n]; return p.a + p.b; }
+  get statAt(ps: P[], i: u256): External<u256> { let p: P = ps[i]; return p.a * 1000n + p.b; }
   // for-of over a calldata struct array (same materialization)
-  @external @pure sumA(ps: P[]): u256 { let t: u256 = 0n; for (const p of ps) { t = t + p.a; } return t; }
-  @external @pure sumAB(ps: P[]): u256 { let t: u256 = 0n; for (const p of ps) { t = t + p.a + p.b; } return t; }
+  get sumA(ps: P[]): External<u256> { let t: u256 = 0n; for (const p of ps) { t = t + p.a; } return t; }
+  get sumAB(ps: P[]): External<u256> { let t: u256 = 0n; for (const p of ps) { t = t + p.a + p.b; } return t; }
   // COPY-not-alias: mutate the local's field, return the mutated local AND the untouched ps[0].a
-  @external @pure copyNoAlias(ps: P[]): u256 { let p: P = ps[0n]; p.a = p.a + 1000n; return p.a * 1000000n + ps[0n].a; }
+  get copyNoAlias(ps: P[]): External<u256> { let p: P = ps[0n]; p.a = p.a + 1000n; return p.a * 1000000n + ps[0n].a; }
   // DYNAMIC-field struct element (bytes field) -> memory local, read the value field + the bytes via .length and a byte
-  @external @pure dynA(ds: D[], i: u256): u256 { let d: D = ds[i]; return d.a; }
-  @external @pure dynBLen(ds: D[], i: u256): u256 { let d: D = ds[i]; return d.b.length; }
-  @external @pure dynByte(ds: D[], i: u256): u256 { let d: D = ds[i]; return u256(u8(d.b[i])); }
+  get dynA(ds: D[], i: u256): External<u256> { let d: D = ds[i]; return d.a; }
+  get dynBLen(ds: D[], i: u256): External<u256> { let d: D = ds[i]; return d.b.length; }
+  get dynByte(ds: D[], i: u256): External<u256> { let d: D = ds[i]; return u256(u8(d.b[i])); }
   // DYNAMIC value-array field (u256[]) -> memory local, read its length and an element-derived sum
-  @external @pure dynArrLen(es: E[], i: u256): u256 { let e: E = es[i]; return e.xs.length; }
-  @external @pure dynArrSum(es: E[], i: u256): u256 { let e: E = es[i]; let t: u256 = 0n; for (const v of e.xs) { t = t + v; } return e.a + t; }
+  get dynArrLen(es: E[], i: u256): External<u256> { let e: E = es[i]; return e.xs.length; }
+  get dynArrSum(es: E[], i: u256): External<u256> { let e: E = es[i]; let t: u256 = 0n; for (const v of e.xs) { t = t + v; } return e.a + t; }
 }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;

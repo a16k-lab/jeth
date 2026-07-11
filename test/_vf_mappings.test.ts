@@ -48,84 +48,84 @@ function dynCall(sig: string, head: bigint[], s: string): string {
   return h;
 }
 
-const JETH = `@struct class P { x: u128; y: u128; }
-@struct class Q { a: u64; b: i64; c: bool; d: address; }
-@struct class D { n: u256; s: string; }
-@contract class C {
-  @state allow: mapping<address, mapping<u256, u256>>;
-  @state deep: mapping<u256, mapping<i256, mapping<bool, u256>>>;
-  @state mp: mapping<address, P>;
-  @state mq: mapping<u256, Q>;
-  @state md: mapping<bytes4, D>;
-  @state nums: mapping<address, u256[]>;
-  @state mbytes: mapping<address, bytes>;
-  @state mstr: mapping<u256, string>;
-  @state ku8: mapping<u8, u256>;
-  @state ki8: mapping<i8, u256>;
-  @state ki32: mapping<i32, u256>;
-  @state ku16: mapping<u16, u256>;
-  @state kb1: mapping<bytes1, u256>;
-  @state kbool: mapping<bool, u256>;
-  @state vu8: mapping<u256, u8>;
-  @state vi16: mapping<u256, i16>;
-  @state vb4: mapping<u256, bytes4>;
-  @state adj0: mapping<u256, u256>;
-  @state adj1: mapping<u256, u256>;
+const JETH = `type P = { x: u128; y: u128; };
+type Q = { a: u64; b: i64; c: bool; d: address; };
+type D = { n: u256; s: string; };
+class C {
+  allow: mapping<address, mapping<u256, u256>>;
+  deep: mapping<u256, mapping<i256, mapping<bool, u256>>>;
+  mp: mapping<address, P>;
+  mq: mapping<u256, Q>;
+  md: mapping<bytes4, D>;
+  nums: mapping<address, u256[]>;
+  mbytes: mapping<address, bytes>;
+  mstr: mapping<u256, string>;
+  ku8: mapping<u8, u256>;
+  ki8: mapping<i8, u256>;
+  ki32: mapping<i32, u256>;
+  ku16: mapping<u16, u256>;
+  kb1: mapping<bytes1, u256>;
+  kbool: mapping<bool, u256>;
+  vu8: mapping<u256, u8>;
+  vi16: mapping<u256, i16>;
+  vb4: mapping<u256, bytes4>;
+  adj0: mapping<u256, u256>;
+  adj1: mapping<u256, u256>;
 
-  @external setAllow(o: address, k: u256, v: u256): void { this.allow[o][k] = v; }
-  @external incAllow(o: address, k: u256, d: u256): void { this.allow[o][k] += d; }
-  @external @view getAllow(o: address, k: u256): u256 { return this.allow[o][k]; }
-  @external setDeep(a: u256, b: i256, c: bool, v: u256): void { this.deep[a][b][c] = v; }
-  @external @view getDeep(a: u256, b: i256, c: bool): u256 { return this.deep[a][b][c]; }
+  setAllow(o: address, k: u256, v: u256): External<void> { this.allow[o][k] = v; }
+  incAllow(o: address, k: u256, d: u256): External<void> { this.allow[o][k] += d; }
+  get getAllow(o: address, k: u256): External<u256> { return this.allow[o][k]; }
+  setDeep(a: u256, b: i256, c: bool, v: u256): External<void> { this.deep[a][b][c] = v; }
+  get getDeep(a: u256, b: i256, c: bool): External<u256> { return this.deep[a][b][c]; }
 
-  @external setP(k: address, x: u128, y: u128): void { this.mp[k] = P(x, y); }
-  @external setPx(k: address, x: u128): void { this.mp[k].x = x; }
-  @external @view getPx(k: address): u128 { return this.mp[k].x; }
-  @external @view getPy(k: address): u128 { return this.mp[k].y; }
-  @external @view getP(k: address): P { return this.mp[k]; }
-  @external setQ(k: u256, a: u64, b: i64, c: bool, d: address): void { this.mq[k] = Q(a, b, c, d); }
-  @external setQb(k: u256, b: i64): void { this.mq[k].b = b; }
-  @external @view getQ(k: u256): Q { return this.mq[k]; }
-  @external @view getQb(k: u256): i64 { return this.mq[k].b; }
-  @external setD(k: bytes4, n: u256, s: string): void { this.md[k] = D(n, s); }
-  @external @view getDn(k: bytes4): u256 { return this.md[k].n; }
-  @external @view getDs(k: bytes4): string { return this.md[k].s; }
+  setP(k: address, x: u128, y: u128): External<void> { this.mp[k] = P(x, y); }
+  setPx(k: address, x: u128): External<void> { this.mp[k].x = x; }
+  get getPx(k: address): External<u128> { return this.mp[k].x; }
+  get getPy(k: address): External<u128> { return this.mp[k].y; }
+  get getP(k: address): External<P> { return this.mp[k]; }
+  setQ(k: u256, a: u64, b: i64, c: bool, d: address): External<void> { this.mq[k] = Q(a, b, c, d); }
+  setQb(k: u256, b: i64): External<void> { this.mq[k].b = b; }
+  get getQ(k: u256): External<Q> { return this.mq[k]; }
+  get getQb(k: u256): External<i64> { return this.mq[k].b; }
+  setD(k: bytes4, n: u256, s: string): External<void> { this.md[k] = D(n, s); }
+  get getDn(k: bytes4): External<u256> { return this.md[k].n; }
+  get getDs(k: bytes4): External<string> { return this.md[k].s; }
 
-  @external push(k: address, v: u256): void { this.nums[k].push(v); }
-  @external pop(k: address): void { this.nums[k].pop(); }
-  @external setNum(k: address, i: u256, v: u256): void { this.nums[k][i] = v; }
-  @external @view numLen(k: address): u256 { return this.nums[k].length; }
-  @external @view numAt(k: address, i: u256): u256 { return this.nums[k][i]; }
+  push(k: address, v: u256): External<void> { this.nums[k].push(v); }
+  pop(k: address): External<void> { this.nums[k].pop(); }
+  setNum(k: address, i: u256, v: u256): External<void> { this.nums[k][i] = v; }
+  get numLen(k: address): External<u256> { return this.nums[k].length; }
+  get numAt(k: address, i: u256): External<u256> { return this.nums[k][i]; }
 
-  @external setBytes(k: address, v: bytes): void { this.mbytes[k] = v; }
-  @external @view getBytes(k: address): bytes { return this.mbytes[k]; }
-  @external @view lenBytes(k: address): u256 { return this.mbytes[k].length; }
-  @external setStr(k: u256, v: string): void { this.mstr[k] = v; }
-  @external @view getStr(k: u256): string { return this.mstr[k]; }
+  setBytes(k: address, v: bytes): External<void> { this.mbytes[k] = v; }
+  get getBytes(k: address): External<bytes> { return this.mbytes[k]; }
+  get lenBytes(k: address): External<u256> { return this.mbytes[k].length; }
+  setStr(k: u256, v: string): External<void> { this.mstr[k] = v; }
+  get getStr(k: u256): External<string> { return this.mstr[k]; }
 
-  @external setKu8(k: u8, v: u256): void { this.ku8[k] = v; }
-  @external @view getKu8(k: u8): u256 { return this.ku8[k]; }
-  @external setKi8(k: i8, v: u256): void { this.ki8[k] = v; }
-  @external @view getKi8(k: i8): u256 { return this.ki8[k]; }
-  @external setKi32(k: i32, v: u256): void { this.ki32[k] = v; }
-  @external @view getKi32(k: i32): u256 { return this.ki32[k]; }
-  @external setKu16(k: u16, v: u256): void { this.ku16[k] = v; }
-  @external @view getKu16(k: u16): u256 { return this.ku16[k]; }
-  @external setKb1(k: bytes1, v: u256): void { this.kb1[k] = v; }
-  @external @view getKb1(k: bytes1): u256 { return this.kb1[k]; }
-  @external setKbool(k: bool, v: u256): void { this.kbool[k] = v; }
-  @external @view getKbool(k: bool): u256 { return this.kbool[k]; }
+  setKu8(k: u8, v: u256): External<void> { this.ku8[k] = v; }
+  get getKu8(k: u8): External<u256> { return this.ku8[k]; }
+  setKi8(k: i8, v: u256): External<void> { this.ki8[k] = v; }
+  get getKi8(k: i8): External<u256> { return this.ki8[k]; }
+  setKi32(k: i32, v: u256): External<void> { this.ki32[k] = v; }
+  get getKi32(k: i32): External<u256> { return this.ki32[k]; }
+  setKu16(k: u16, v: u256): External<void> { this.ku16[k] = v; }
+  get getKu16(k: u16): External<u256> { return this.ku16[k]; }
+  setKb1(k: bytes1, v: u256): External<void> { this.kb1[k] = v; }
+  get getKb1(k: bytes1): External<u256> { return this.kb1[k]; }
+  setKbool(k: bool, v: u256): External<void> { this.kbool[k] = v; }
+  get getKbool(k: bool): External<u256> { return this.kbool[k]; }
 
-  @external setVu8(k: u256, v: u8): void { this.vu8[k] = v; }
-  @external @view getVu8(k: u256): u8 { return this.vu8[k]; }
-  @external setVi16(k: u256, v: i16): void { this.vi16[k] = v; }
-  @external @view getVi16(k: u256): i16 { return this.vi16[k]; }
-  @external setVb4(k: u256, v: bytes4): void { this.vb4[k] = v; }
-  @external @view getVb4(k: u256): bytes4 { return this.vb4[k]; }
+  setVu8(k: u256, v: u8): External<void> { this.vu8[k] = v; }
+  get getVu8(k: u256): External<u8> { return this.vu8[k]; }
+  setVi16(k: u256, v: i16): External<void> { this.vi16[k] = v; }
+  get getVi16(k: u256): External<i16> { return this.vi16[k]; }
+  setVb4(k: u256, v: bytes4): External<void> { this.vb4[k] = v; }
+  get getVb4(k: u256): External<bytes4> { return this.vb4[k]; }
 
-  @external setAdj(v0: u256, v1: u256): void { this.adj0[0n] = v0; this.adj1[0n] = v1; }
-  @external @view getAdj0(): u256 { return this.adj0[0n]; }
-  @external @view getAdj1(): u256 { return this.adj1[0n]; }
+  setAdj(v0: u256, v1: u256): External<void> { this.adj0[0n] = v0; this.adj1[0n] = v1; }
+  get getAdj0(): External<u256> { return this.adj0[0n]; }
+  get getAdj1(): External<u256> { return this.adj1[0n]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

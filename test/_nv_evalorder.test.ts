@@ -10,99 +10,99 @@ const sel = (s: string) => functionSelector(s);
 // AREA: evalorder. solc evaluates BINARY operands RIGHT-to-LEFT and argument lists
 // LEFT-to-RIGHT. We pack distinct-digit accumulators (s = s*10 + k) so any order
 // divergence surfaces in the returndata.
-const JETH = `@struct class P { a: u128; b: u128; }
-@contract class C {
-  @state seq: u256;
-  @state si: i256;
-  @state arr: u256[];
-  @state p: P;
-  @event Ev3(x: u256, y: u256, z: u256);
-  @event Ev4(a: u256, b: u256, c: u256, d: u256);
-  @error Er2(x: u256, y: u256);
-  @error Er3(x: u256, y: u256, z: u256);
+const JETH = `type P = { a: u128; b: u128; };
+class C {
+  seq: u256;
+  si: i256;
+  arr: u256[];
+  p: P;
+  Ev3: event<{ x: u256; y: u256; z: u256 }>;
+  Ev4: event<{ a: u256; b: u256; c: u256; d: u256 }>;
+  Er2: error<{ x: u256; y: u256 }>;
+  Er3: error<{ x: u256; y: u256; z: u256 }>;
 
   // ---- binary operand order: RIGHT before LEFT ----
   // subtraction: distinct accumulator, left side mutated by right
-  @external @pure subOrder(): u256 { let s: u256 = 0n; let r: u256 = (s = s * 10n + 1n) - (s = s * 10n + 2n) + 100n; return s * 1000n + r; }
-  @external @pure subOrder2(): u256 { unchecked: { let s: u256 = 0n; let r: u256 = (s = s * 10n + 3n) - (s = s * 10n + 7n); return s * 1000n + r; } }
-  @external @pure divOrder(): u256 { let s: u256 = 0n; let r: u256 = (s = s * 10n + 8n) / (s = s * 10n + 2n); return s * 1000n + r; }
-  @external @pure modOrder(): u256 { let s: u256 = 0n; let r: u256 = (s = s * 10n + 9n) % (s = s * 10n + 4n); return s * 1000n + r; }
-  @external @pure mulOrder(): u256 { let s: u256 = 0n; let r: u256 = (s = s * 10n + 3n) * (s = s * 10n + 5n); return s * 1000n + r; }
+  get subOrder(): External<u256> { let s: u256 = 0n; let r: u256 = (s = s * 10n + 1n) - (s = s * 10n + 2n) + 100n; return s * 1000n + r; }
+  get subOrder2(): External<u256> { unchecked: { let s: u256 = 0n; let r: u256 = (s = s * 10n + 3n) - (s = s * 10n + 7n); return s * 1000n + r; } }
+  get divOrder(): External<u256> { let s: u256 = 0n; let r: u256 = (s = s * 10n + 8n) / (s = s * 10n + 2n); return s * 1000n + r; }
+  get modOrder(): External<u256> { let s: u256 = 0n; let r: u256 = (s = s * 10n + 9n) % (s = s * 10n + 4n); return s * 1000n + r; }
+  get mulOrder(): External<u256> { let s: u256 = 0n; let r: u256 = (s = s * 10n + 3n) * (s = s * 10n + 5n); return s * 1000n + r; }
   // ++ prefix vs postfix mixed in operands
-  @external @pure incBin(): u256 { let x: u256 = 5n; let y: u256 = (++x) * 100n + (++x); return x * 100000n + y; }
-  @external @pure postBin(): u256 { let x: u256 = 5n; let y: u256 = (x++) * 100n + (x++); return x * 100000n + y; }
-  @external @pure mixBin(): u256 { let x: u256 = 5n; let y: u256 = (x++) * 100n + (++x); return x * 100000n + y; }
-  @external @pure postSub(): u256 { unchecked: { let x: u256 = 9n; let y: u256 = (x--) - (x--); return x * 100n + y; } }
+  get incBin(): External<u256> { let x: u256 = 5n; let y: u256 = (++x) * 100n + (++x); return x * 100000n + y; }
+  get postBin(): External<u256> { let x: u256 = 5n; let y: u256 = (x++) * 100n + (x++); return x * 100000n + y; }
+  get mixBin(): External<u256> { let x: u256 = 5n; let y: u256 = (x++) * 100n + (++x); return x * 100000n + y; }
+  get postSub(): External<u256> { unchecked: { let x: u256 = 9n; let y: u256 = (x--) - (x--); return x * 100n + y; } }
   // compound-assign yields in operands
-  @external @pure compBin(a: u256): u256 { let x: u256 = a; x += 5n; let y: u256 = (x *= 2n) - (x -= 3n); return x * 1000n + y; }
-  @external @pure leftMutRightRead(v: u256): u256 { let x: u256 = 0n; let r: u256 = (x = v) + x; return r; }
-  @external @pure rightMutLeftRead(v: u256): u256 { let x: u256 = 0n; let r: u256 = x + (x = v); return r; }
+  get compBin(a: u256): External<u256> { let x: u256 = a; x += 5n; let y: u256 = (x *= 2n) - (x -= 3n); return x * 1000n + y; }
+  get leftMutRightRead(v: u256): External<u256> { let x: u256 = 0n; let r: u256 = (x = v) + x; return r; }
+  get rightMutLeftRead(v: u256): External<u256> { let x: u256 = 0n; let r: u256 = x + (x = v); return r; }
 
   // ---- nested binary trees: 3 distinct digits, mutating accumulator ----
-  @external @pure tree3(): u256 { let x: u256 = 0n; let r: u256 = (++x) * 100n + (++x) * 10n + (++x); return x * 100000n + r; }
-  @external @pure tree3post(): u256 { let x: u256 = 0n; let r: u256 = (x++) * 100n + (x++) * 10n + (x++); return x * 100000n + r; }
-  @external @pure treeSub(): u256 { unchecked: { let x: u256 = 100n; let r: u256 = (x--) - (x--) - (x--); return x * 100000n + r; } }
-  @external @pure treeMixed(): u256 { let x: u256 = 0n; let r: u256 = ((++x) + (++x)) * ((++x) + (++x)); return x * 100000n + r; }
-  @external @pure treeDeep(): u256 { let s: u256 = 0n; let r: u256 = (((s = s * 10n + 1n) + (s = s * 10n + 2n)) - (s = s * 10n + 3n)) + ((s = s * 10n + 4n) - (s = s * 10n + 5n)); return s * 1000000n + r; }
+  get tree3(): External<u256> { let x: u256 = 0n; let r: u256 = (++x) * 100n + (++x) * 10n + (++x); return x * 100000n + r; }
+  get tree3post(): External<u256> { let x: u256 = 0n; let r: u256 = (x++) * 100n + (x++) * 10n + (x++); return x * 100000n + r; }
+  get treeSub(): External<u256> { unchecked: { let x: u256 = 100n; let r: u256 = (x--) - (x--) - (x--); return x * 100000n + r; } }
+  get treeMixed(): External<u256> { let x: u256 = 0n; let r: u256 = ((++x) + (++x)) * ((++x) + (++x)); return x * 100000n + r; }
+  get treeDeep(): External<u256> { let s: u256 = 0n; let r: u256 = (((s = s * 10n + 1n) + (s = s * 10n + 2n)) - (s = s * 10n + 3n)) + ((s = s * 10n + 4n) - (s = s * 10n + 5n)); return s * 1000000n + r; }
 
   // ---- comparison operand order ----
-  @external @pure cmpOrder(v: u256): u256 { let s: u256 = 0n; let b: bool = (s = s * 10n + 1n) < (s = s * 10n + 2n); return s * 10n + (b ? 1n : 0n); }
-  @external @pure cmpEq(v: u256): u256 { let s: u256 = 0n; let b: bool = (s = s * 10n + 4n) == (s = s * 10n + 4n); return s * 10n + (b ? 1n : 0n); }
+  get cmpOrder(v: u256): External<u256> { let s: u256 = 0n; let b: bool = (s = s * 10n + 1n) < (s = s * 10n + 2n); return s * 10n + (b ? 1n : 0n); }
+  get cmpEq(v: u256): External<u256> { let s: u256 = 0n; let b: bool = (s = s * 10n + 4n) == (s = s * 10n + 4n); return s * 10n + (b ? 1n : 0n); }
 
   // ---- argument lists: LEFT to RIGHT ----
-  @external @pure arrLit(): u256 { let s: u256 = 0n; let xs: u256[] = [(s = s * 10n + 1n), (s = s * 10n + 2n), (s = s * 10n + 3n)]; return s * 1000n + xs[0n] * 100n + xs[1n] * 10n + xs[2n]; }
-  @external @pure retTuple(): [u256, u256, u256] { let s: u256 = 0n; return [(s = s * 10n + 1n), (s = s * 10n + 2n), s]; }
-  @external @pure internalArgs(): u256 { let s: u256 = 0n; return this.sub3((s = s * 10n + 1n), (s = s * 10n + 2n), (s = s * 10n + 3n)) * 10000n + s; }
-  @pure sub3(a: u256, b: u256, c: u256): u256 { return a * 100n + b * 10n + c; }
-  @external @pure incArgs(): u256 { let x: u256 = 0n; return this.sub3((++x), (++x), (++x)) * 10n + x; }
-  @external @pure postArgs(): u256 { let x: u256 = 0n; return this.sub3((x++), (x++), (x++)) * 10n + x; }
-  @external @pure nestedCallArgs(): u256 { let s: u256 = 0n; return this.sub3(this.sub3((s = s*10n+1n),(s = s*10n+2n),(s = s*10n+3n)), (s = s*10n+4n), (s = s*10n+5n)) % 1000000n; }
+  get arrLit(): External<u256> { let s: u256 = 0n; let xs: u256[] = [(s = s * 10n + 1n), (s = s * 10n + 2n), (s = s * 10n + 3n)]; return s * 1000n + xs[0n] * 100n + xs[1n] * 10n + xs[2n]; }
+  get retTuple(): External<[u256, u256, u256]> { let s: u256 = 0n; return [(s = s * 10n + 1n), (s = s * 10n + 2n), s]; }
+  get internalArgs(): External<u256> { let s: u256 = 0n; return this.sub3((s = s * 10n + 1n), (s = s * 10n + 2n), (s = s * 10n + 3n)) * 10000n + s; }
+  sub3(a: u256, b: u256, c: u256): u256 { return a * 100n + b * 10n + c; }
+  get incArgs(): External<u256> { let x: u256 = 0n; return this.sub3((++x), (++x), (++x)) * 10n + x; }
+  get postArgs(): External<u256> { let x: u256 = 0n; return this.sub3((x++), (x++), (x++)) * 10n + x; }
+  get nestedCallArgs(): External<u256> { let s: u256 = 0n; return this.sub3(this.sub3((s = s*10n+1n),(s = s*10n+2n),(s = s*10n+3n)), (s = s*10n+4n), (s = s*10n+5n)) % 1000000n; }
 
   // ---- ternary branches with side effects (only chosen branch runs) ----
-  @external @pure ternTrue(): u256 { let s: u256 = 0n; let cond: bool = true; let r: u256 = cond ? (s = s * 10n + 1n) : (s = s * 10n + 2n); return s * 10n + r; }
-  @external @pure ternFalse(): u256 { let s: u256 = 0n; let cond: bool = false; let r: u256 = cond ? (s = s * 10n + 1n) : (s = s * 10n + 2n); return s * 10n + r; }
-  @external @pure ternCondSide(v: u256): u256 { let s: u256 = 0n; let r: u256 = ((s = s * 10n + 9n) > 0n) ? (s = s * 10n + 1n) : (s = s * 10n + 2n); return s * 10n + r; }
-  @external @pure ternNested(c: bool): u256 { let x: u256 = 0n; let r: u256 = c ? ((++x) * 10n + (++x)) : ((x += 5n) * 10n + (x += 5n)); return x * 1000n + r; }
+  get ternTrue(): External<u256> { let s: u256 = 0n; let cond: bool = true; let r: u256 = cond ? (s = s * 10n + 1n) : (s = s * 10n + 2n); return s * 10n + r; }
+  get ternFalse(): External<u256> { let s: u256 = 0n; let cond: bool = false; let r: u256 = cond ? (s = s * 10n + 1n) : (s = s * 10n + 2n); return s * 10n + r; }
+  get ternCondSide(v: u256): External<u256> { let s: u256 = 0n; let r: u256 = ((s = s * 10n + 9n) > 0n) ? (s = s * 10n + 1n) : (s = s * 10n + 2n); return s * 10n + r; }
+  get ternNested(c: bool): External<u256> { let x: u256 = 0n; let r: u256 = c ? ((++x) * 10n + (++x)) : ((x += 5n) * 10n + (x += 5n)); return x * 1000n + r; }
 
   // ---- assignment-expression LHS = state var ----
-  @external setSeqOrd(): u256 { this.seq = 0n; let r: u256 = (this.seq = this.seq * 10n + 1n) - (this.seq = this.seq * 10n + 2n) + 1000n; return this.seq * 10000n + r; }
-  @external setSeqArgs(): u256 { this.seq = 0n; emit(Ev3((this.seq = this.seq * 10n + 1n), (this.seq = this.seq * 10n + 2n), (this.seq = this.seq * 10n + 3n))); return this.seq; }
-  @external setSeqBinRtoL(): u256 { this.seq = 0n; let r: u256 = (this.seq = this.seq * 10n + 1n) + (this.seq = this.seq * 10n + 2n) * 100n; return this.seq * 100000n + r; }
+  setSeqOrd(): External<u256> { this.seq = 0n; let r: u256 = (this.seq = this.seq * 10n + 1n) - (this.seq = this.seq * 10n + 2n) + 1000n; return this.seq * 10000n + r; }
+  setSeqArgs(): External<u256> { this.seq = 0n; emit(Ev3((this.seq = this.seq * 10n + 1n), (this.seq = this.seq * 10n + 2n), (this.seq = this.seq * 10n + 3n))); return this.seq; }
+  setSeqBinRtoL(): External<u256> { this.seq = 0n; let r: u256 = (this.seq = this.seq * 10n + 1n) + (this.seq = this.seq * 10n + 2n) * 100n; return this.seq * 100000n + r; }
 
   // ---- assignment-expression LHS = array element ----
-  @external arrElemOrd(): u256 { this.arr = [0n, 0n]; let r: u256 = (this.arr[0n] = 3n) - (this.arr[1n] = 7n) + 1000n; return this.arr[0n] * 10000n + this.arr[1n] * 100n + r; }
-  @external arrElemSide(): u256 { this.arr = [0n, 0n, 0n]; let s: u256 = 0n; this.arr[0n] = (s = s * 10n + 1n); this.arr[1n] = (s = s * 10n + 2n); let r: u256 = (this.arr[(s = s * 10n + 0n) % 3n]); return s * 10n + r; }
+  arrElemOrd(): External<u256> { this.arr = [0n, 0n]; let r: u256 = (this.arr[0n] = 3n) - (this.arr[1n] = 7n) + 1000n; return this.arr[0n] * 10000n + this.arr[1n] * 100n + r; }
+  arrElemSide(): External<u256> { this.arr = [0n, 0n, 0n]; let s: u256 = 0n; this.arr[0n] = (s = s * 10n + 1n); this.arr[1n] = (s = s * 10n + 2n); let r: u256 = (this.arr[(s = s * 10n + 0n) % 3n]); return s * 10n + r; }
 
   // ---- assignment-expression LHS = packed struct field ----
-  @external packFieldOrd(): u256 { this.p = P(0n, 0n); let r: u256 = (this.p.a = 3n) + (this.p.b = 7n) * 100n; return r; }
-  @external packFieldBin(): u256 { this.p = P(0n, 0n); unchecked: { let r: u256 = u256((this.p.a = 9n)) - u256((this.p.b = 4n)); return r; } }
+  packFieldOrd(): External<u256> { this.p = P(0n, 0n); let r: u256 = (this.p.a = 3n) + (this.p.b = 7n) * 100n; return r; }
+  packFieldBin(): External<u256> { this.p = P(0n, 0n); unchecked: { let r: u256 = u256((this.p.a = 9n)) - u256((this.p.b = 4n)); return r; } }
 
   // ---- chained assignment x = y = a ----
-  @external @pure chainOrd(a: u256): u256 { let x: u256 = 0n; let y: u256 = 0n; let z: u256 = 0n; x = y = z = a; return x * 1000000n + y * 1000n + z; }
-  @external @pure chainSide(): u256 { let x: u256 = 0n; let s: u256 = 0n; x = (s = s * 10n + 1n); let y: u256 = x + (s = s * 10n + 2n); return s * 1000n + y; }
+  get chainOrd(a: u256): External<u256> { let x: u256 = 0n; let y: u256 = 0n; let z: u256 = 0n; x = y = z = a; return x * 1000000n + y * 1000n + z; }
+  get chainSide(): External<u256> { let x: u256 = 0n; let s: u256 = 0n; x = (s = s * 10n + 1n); let y: u256 = x + (s = s * 10n + 2n); return s * 1000n + y; }
 
   // ---- signed / narrow-type yields in operands ----
-  @external @pure signedSub(a: i64, b: i64): i256 { let x: i64 = 0n; let r: i256 = i256(x = a) - i256(x = b); return r; }
-  @external @pure narrowOrd(a: u8, b: u8): u256 { let x: u8 = 0n; let r: u256 = u256(x = a) * 1000n + u256(x = b); return u256(x) * 1000000n + r; }
-  @external @pure signedDiv(a: i64, b: i64): i256 { let x: i64 = 0n; let r: i256 = i256(x = a) / i256(x = b); return r; }
+  get signedSub(a: i64, b: i64): External<i256> { let x: i64 = 0n; let r: i256 = i256(x = a) - i256(x = b); return r; }
+  get narrowOrd(a: u8, b: u8): External<u256> { let x: u8 = 0n; let r: u256 = u256(x = a) * 1000n + u256(x = b); return u256(x) * 1000000n + r; }
+  get signedDiv(a: i64, b: i64): External<i256> { let x: i64 = 0n; let r: i256 = i256(x = a) / i256(x = b); return r; }
 
   // ---- require / revert / error arg eager left-to-right eval ----
-  @external @pure reqArgsOrd(cond: bool): u256 { let s: u256 = 0n; require(cond, Er2((s = s * 10n + 1n), (s = s * 10n + 2n))); return s; }
-  @external @pure revertArgsOrd(): u256 { let s: u256 = 0n; revert(Er3((s = s * 10n + 1n), (s = s * 10n + 2n), (s = s * 10n + 3n))); }
-  @external emitOrd4(): u256 { let s: u256 = 0n; emit(Ev4((s=s*10n+1n),(s=s*10n+2n),(s=s*10n+3n),(s=s*10n+4n))); return s; }
+  get reqArgsOrd(cond: bool): External<u256> { let s: u256 = 0n; require(cond, Er2((s = s * 10n + 1n), (s = s * 10n + 2n))); return s; }
+  get revertArgsOrd(): External<u256> { let s: u256 = 0n; revert(Er3((s = s * 10n + 1n), (s = s * 10n + 2n), (s = s * 10n + 3n))); }
+  emitOrd4(): External<u256> { let s: u256 = 0n; emit(Ev4((s=s*10n+1n),(s=s*10n+2n),(s=s*10n+3n),(s=s*10n+4n))); return s; }
 
   // ---- side effect in array index expression ----
-  @external @pure idxSide(): u256 { let s: u256 = 0n; let xs: u256[] = [10n, 20n, 30n]; let r: u256 = xs[(s = s * 10n + 1n) % 3n] + xs[(s = s * 10n + 2n) % 3n]; return s * 1000n + r; }
+  get idxSide(): External<u256> { let s: u256 = 0n; let xs: u256[] = [10n, 20n, 30n]; let r: u256 = xs[(s = s * 10n + 1n) % 3n] + xs[(s = s * 10n + 2n) % 3n]; return s * 1000n + r; }
 
   // ---- assignment value used by subsequent operand (read-after-write within expr) ----
-  @external @pure raw(v: u256): u256 { let x: u256 = 0n; let r: u256 = (x = v) * 100n + x * 10n + (x = x + 1n); return r; }
-  @external @pure rawRight(v: u256): u256 { let x: u256 = 0n; let r: u256 = (x = x + 1n) + x * 10n + (x = v) * 100n; return r; }
+  get raw(v: u256): External<u256> { let x: u256 = 0n; let r: u256 = (x = v) * 100n + x * 10n + (x = x + 1n); return r; }
+  get rawRight(v: u256): External<u256> { let x: u256 = 0n; let r: u256 = (x = x + 1n) + x * 10n + (x = v) * 100n; return r; }
 
   // helper for reading state
-  @external @view getSeq(): u256 { return this.seq; }
-  @external @view getArr(i: u256): u256 { return this.arr[i]; }
-  @external @view getPA(): u128 { return this.p.a; }
-  @external @view getPB(): u128 { return this.p.b; }
+  get getSeq(): External<u256> { return this.seq; }
+  get getArr(i: u256): External<u256> { return this.arr[i]; }
+  get getPA(): External<u128> { return this.p.a; }
+  get getPB(): External<u128> { return this.p.b; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

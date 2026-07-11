@@ -11,40 +11,40 @@ const I256_MAX = (1n << 255n) - 1n;
 const sel = (s: string) => functionSelector(s);
 const asWord = (v: bigint) => ((v % M) + M) % M;
 
-const JETH = `@contract class C {
-  @state acc: u256;
-  @state sacc: i256;
-  @state hits: u256;
+const JETH = `class C {
+  acc: u256;
+  sacc: i256;
+  hits: u256;
 
   // --- body runs once even when cond is false on entry ---
-  @external @pure runsOnce(n: u256): u256 { let c: u256 = 0n; do { c = c + 1n; } while (c < n); return c; }
-  @external @pure runsOnceFalse(): u256 { let c: u256 = 0n; do { c = c + 7n; } while (false); return c; }
-  @external @pure bodyOnceCondVar(flag: bool): u256 { let c: u256 = 0n; do { c = c + 1n; } while (flag); return c; }
+  get runsOnce(n: u256): External<u256> { let c: u256 = 0n; do { c = c + 1n; } while (c < n); return c; }
+  get runsOnceFalse(): External<u256> { let c: u256 = 0n; do { c = c + 7n; } while (false); return c; }
+  get bodyOnceCondVar(flag: bool): External<u256> { let c: u256 = 0n; do { c = c + 1n; } while (flag); return c; }
 
   // --- basic accumulation ---
-  @external @pure sumTo(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; s = s + i; } while (i < n); return s; }
-  @external @pure countDown(n: u256): u256 { let c: u256 = n; let steps: u256 = 0n; do { if (c > 0n) { c = c - 1n; } steps = steps + 1n; } while (c > 0n); return steps; }
+  get sumTo(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; s = s + i; } while (i < n); return s; }
+  get countDown(n: u256): External<u256> { let c: u256 = n; let steps: u256 = 0n; do { if (c > 0n) { c = c - 1n; } steps = steps + 1n; } while (c > 0n); return steps; }
 
   // --- continue must RE-EVALUATE the condition (not skip it) ---
-  @external @pure skipEvens(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; if (i % 2n == 0n) { continue; } s = s + i; } while (i < n); return s; }
-  @external @pure contManyTimes(n: u256): u256 { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; i = i + 1n; if (i < n) { continue; } } while (i < n); return body * 1000000n + i; }
+  get skipEvens(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; if (i % 2n == 0n) { continue; } s = s + i; } while (i < n); return s; }
+  get contManyTimes(n: u256): External<u256> { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; i = i + 1n; if (i < n) { continue; } } while (i < n); return body * 1000000n + i; }
   // continue where the post-continue work would otherwise change the loop variable
-  @external @pure contNoInc(n: u256): u256 { let i: u256 = 0n; let guard: u256 = 0n; do { i = i + 1n; if (i >= n) { continue; } guard = guard + 1n; } while (i < n); return guard * 1000000n + i; }
+  get contNoInc(n: u256): External<u256> { let i: u256 = 0n; let guard: u256 = 0n; do { i = i + 1n; if (i >= n) { continue; } guard = guard + 1n; } while (i < n); return guard * 1000000n + i; }
 
   // --- break exits immediately ---
-  @external @pure breakAt(n: u256, lim: u256): u256 { let i: u256 = 0n; do { i = i + 1n; if (i == lim) { break; } } while (i < n); return i; }
-  @external @pure breakFirst(n: u256): u256 { let i: u256 = 0n; do { i = i + 1n; break; } while (i < n); return i; }
-  @external @pure breakInElse(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; if (i % 2n == 0n) { s = s + i; } else { if (i > n) { break; } } } while (i < 100n); return s * 1000n + i; }
+  get breakAt(n: u256, lim: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; if (i == lim) { break; } } while (i < n); return i; }
+  get breakFirst(n: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; break; } while (i < n); return i; }
+  get breakInElse(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; if (i % 2n == 0n) { s = s + i; } else { if (i > n) { break; } } } while (i < 100n); return s * 1000n + i; }
 
   // --- deeply nested do-while with break/continue at each level ---
-  @external @pure grid(a: u256, b: u256): u256 {
+  get grid(a: u256, b: u256): External<u256> {
     let total: u256 = 0n; let i: u256 = 0n;
     do { i = i + 1n; let j: u256 = 0n;
       do { j = j + 1n; if (j == 3n) { continue; } total = total + i * j; } while (j < b);
     } while (i < a);
     return total;
   }
-  @external @pure triple(a: u256, b: u256, c: u256): u256 {
+  get triple(a: u256, b: u256, c: u256): External<u256> {
     let t: u256 = 0n; let i: u256 = 0n;
     do { i = i + 1n; let j: u256 = 0n;
       do { j = j + 1n; let k: u256 = 0n;
@@ -55,7 +55,7 @@ const JETH = `@contract class C {
     } while (i < a);
     return t;
   }
-  @external @pure innerBreakOuterContinue(a: u256, b: u256): u256 {
+  get innerBreakOuterContinue(a: u256, b: u256): External<u256> {
     let t: u256 = 0n; let i: u256 = 0n;
     do { i = i + 1n; if (i % 2n == 0n) { continue; } let j: u256 = 0n;
       do { j = j + 1n; if (j == b) { break; } t = t + 1n; } while (j < 50n);
@@ -64,79 +64,79 @@ const JETH = `@contract class C {
   }
 
   // --- do-while that MUTATES state and whose CONDITION reads state ---
-  @external pumpState(steps: u256): void { let k: u256 = 0n; do { this.acc = this.acc + k; k = k + 1n; } while (k < steps); }
-  @external drainWhileState(): void { do { this.acc = this.acc - 1n; } while (this.acc > 0n); }
-  @external condReadsState(target: u256): void { do { this.acc = this.acc + 1n; } while (this.acc < target); }
-  @external @view getAcc(): u256 { return this.acc; }
-  @external setAcc(v: u256): void { this.acc = v; }
+  pumpState(steps: u256): External<void> { let k: u256 = 0n; do { this.acc = this.acc + k; k = k + 1n; } while (k < steps); }
+  drainWhileState(): External<void> { do { this.acc = this.acc - 1n; } while (this.acc > 0n); }
+  condReadsState(target: u256): External<void> { do { this.acc = this.acc + 1n; } while (this.acc < target); }
+  get getAcc(): External<u256> { return this.acc; }
+  setAcc(v: u256): External<void> { this.acc = v; }
 
   // --- do-while with a SIDE-EFFECTING condition ---
-  @external sideCond(n: u256): void { let i: u256 = 0n; do { i = i + 1n; } while ((this.hits = this.hits + 1n) < n); }
-  @external @view getHits(): u256 { return this.hits; }
-  @external resetHits(): void { this.hits = 0n; }
+  sideCond(n: u256): External<void> { let i: u256 = 0n; do { i = i + 1n; } while ((this.hits = this.hits + 1n) < n); }
+  get getHits(): External<u256> { return this.hits; }
+  resetHits(): External<void> { this.hits = 0n; }
   // condition that increments the loop var as a side effect
-  @external @pure sideIncCond(n: u256): u256 { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; } while ((i = i + 1n) < n); return body * 1000n + i; }
-  @external @pure sideCondPostfix(n: u256): u256 { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; } while (i++ < n); return body * 1000n + i; }
-  @external @pure sideCondPrefix(n: u256): u256 { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; } while (++i < n); return body * 1000n + i; }
+  get sideIncCond(n: u256): External<u256> { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; } while ((i = i + 1n) < n); return body * 1000n + i; }
+  get sideCondPostfix(n: u256): External<u256> { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; } while (i++ < n); return body * 1000n + i; }
+  get sideCondPrefix(n: u256): External<u256> { let i: u256 = 0n; let body: u256 = 0n; do { body = body + 1n; } while (++i < n); return body * 1000n + i; }
 
   // --- large iteration counts ---
-  @external @pure bigLoop(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; s = s + 1n; } while (i < n); return s; }
-  @external @pure bigLoopMul(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; s = s + i * 2n - 1n; } while (i < n); return s; }
+  get bigLoop(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; s = s + 1n; } while (i < n); return s; }
+  get bigLoopMul(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; s = s + i * 2n - 1n; } while (i < n); return s; }
 
   // --- do-while INSIDE for/while and vice versa ---
-  @external @pure dwInFor(n: u256, m: u256): u256 { let t: u256 = 0n; for (let i: u256 = 0n; i < n; i = i + 1n) { let j: u256 = 0n; do { j = j + 1n; t = t + 1n; } while (j < m); } return t; }
-  @external @pure dwInWhile(n: u256, m: u256): u256 { let t: u256 = 0n; let i: u256 = 0n; while (i < n) { i = i + 1n; let j: u256 = 0n; do { j = j + 1n; t = t + 1n; } while (j < m); } return t; }
-  @external @pure forInDw(n: u256, m: u256): u256 { let t: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; for (let j: u256 = 0n; j < m; j = j + 1n) { t = t + 1n; } } while (i < n); return t; }
-  @external @pure whileInDw(n: u256, m: u256): u256 { let t: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; let j: u256 = 0n; while (j < m) { j = j + 1n; t = t + 1n; } } while (i < n); return t; }
-  @external @pure dwInForWithBreak(n: u256, m: u256): u256 { let t: u256 = 0n; for (let i: u256 = 0n; i < n; i = i + 1n) { let j: u256 = 0n; do { j = j + 1n; if (j == 3n) { break; } t = t + 1n; } while (j < m); if (i == 5n) { break; } } return t; }
+  get dwInFor(n: u256, m: u256): External<u256> { let t: u256 = 0n; for (let i: u256 = 0n; i < n; i = i + 1n) { let j: u256 = 0n; do { j = j + 1n; t = t + 1n; } while (j < m); } return t; }
+  get dwInWhile(n: u256, m: u256): External<u256> { let t: u256 = 0n; let i: u256 = 0n; while (i < n) { i = i + 1n; let j: u256 = 0n; do { j = j + 1n; t = t + 1n; } while (j < m); } return t; }
+  get forInDw(n: u256, m: u256): External<u256> { let t: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; for (let j: u256 = 0n; j < m; j = j + 1n) { t = t + 1n; } } while (i < n); return t; }
+  get whileInDw(n: u256, m: u256): External<u256> { let t: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; let j: u256 = 0n; while (j < m) { j = j + 1n; t = t + 1n; } } while (i < n); return t; }
+  get dwInForWithBreak(n: u256, m: u256): External<u256> { let t: u256 = 0n; for (let i: u256 = 0n; i < n; i = i + 1n) { let j: u256 = 0n; do { j = j + 1n; if (j == 3n) { break; } t = t + 1n; } while (j < m); if (i == 5n) { break; } } return t; }
 
   // --- EARLY RETURN from inside a do-while ---
-  @external @pure earlyReturn(n: u256, k: u256): u256 { let i: u256 = 0n; do { i = i + 1n; if (i == k) { return i * 100n; } } while (i < n); return 999n; }
-  @external @pure returnFromNestedDw(a: u256, b: u256): u256 { let i: u256 = 0n; do { i = i + 1n; let j: u256 = 0n; do { j = j + 1n; if (i * j > 6n) { return i * 10n + j; } } while (j < b); } while (i < a); return 0n; }
-  @external @pure returnInCondPath(n: u256): u256 { let i: u256 = 0n; do { i = i + 1n; } while (i < n ? true : returnHelper()); return i; }
-  @pure returnHelper(): bool { return false; }
+  get earlyReturn(n: u256, k: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; if (i == k) { return i * 100n; } } while (i < n); return 999n; }
+  get returnFromNestedDw(a: u256, b: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; let j: u256 = 0n; do { j = j + 1n; if (i * j > 6n) { return i * 10n + j; } } while (j < b); } while (i < a); return 0n; }
+  get returnInCondPath(n: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; } while (i < n ? true : returnHelper()); return i; }
+  returnHelper(): bool { return false; }
 
   // --- UNCHECKED arithmetic inside the body ---
-  @external @pure uncheckedSum(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; unchecked: { do { i = i + 1n; s = s + i; } while (i < n); } return s; }
-  @external @pure uncheckedWrapBody(start: u256, n: u256): u256 { let x: u256 = start; let i: u256 = 0n; do { i = i + 1n; unchecked: { x = x - 1n; } } while (i < n); return x; }
-  @external @pure uncheckedCountUp(start: u256, n: u256): u256 { let x: u256 = start; let i: u256 = 0n; do { unchecked: { x = x + 1n; } i = i + 1n; } while (i < n); return x; }
+  get uncheckedSum(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; unchecked: { do { i = i + 1n; s = s + i; } while (i < n); } return s; }
+  get uncheckedWrapBody(start: u256, n: u256): External<u256> { let x: u256 = start; let i: u256 = 0n; do { i = i + 1n; unchecked: { x = x - 1n; } } while (i < n); return x; }
+  get uncheckedCountUp(start: u256, n: u256): External<u256> { let x: u256 = start; let i: u256 = 0n; do { unchecked: { x = x + 1n; } i = i + 1n; } while (i < n); return x; }
 
   // --- counter UNDERFLOW / OVERFLOW boundaries (checked => revert) ---
-  @external @pure checkedUnderflow(start: u256, n: u256): u256 { let x: u256 = start; let i: u256 = 0n; do { x = x - 1n; i = i + 1n; } while (i < n); return x; }
-  @external @pure checkedOverflow(start: u256, n: u256): u256 { let x: u256 = start; let i: u256 = 0n; do { x = x + 1n; i = i + 1n; } while (i < n); return x; }
+  get checkedUnderflow(start: u256, n: u256): External<u256> { let x: u256 = start; let i: u256 = 0n; do { x = x - 1n; i = i + 1n; } while (i < n); return x; }
+  get checkedOverflow(start: u256, n: u256): External<u256> { let x: u256 = start; let i: u256 = 0n; do { x = x + 1n; i = i + 1n; } while (i < n); return x; }
   // signed body
-  @external @pure signedDown(start: i256, n: u256): i256 { let x: i256 = start; let i: u256 = 0n; do { x = x - 1n; i = i + 1n; } while (i < n); return x; }
-  @external @pure signedUp(start: i256, n: u256): i256 { let x: i256 = start; let i: u256 = 0n; do { x = x + 1n; i = i + 1n; } while (i < n); return x; }
+  get signedDown(start: i256, n: u256): External<i256> { let x: i256 = start; let i: u256 = 0n; do { x = x - 1n; i = i + 1n; } while (i < n); return x; }
+  get signedUp(start: i256, n: u256): External<i256> { let x: i256 = start; let i: u256 = 0n; do { x = x + 1n; i = i + 1n; } while (i < n); return x; }
 
   // --- condition with complex / dirty boolean expressions ---
-  @external @pure condAnd(n: u256, m: u256): u256 { let i: u256 = 0n; do { i = i + 1n; } while (i < n && i < m); return i; }
-  @external @pure condOr(n: u256, m: u256): u256 { let i: u256 = 0n; do { i = i + 1n; } while (i < n || i < m); return i; }
-  @external @pure condNot(n: u256): u256 { let i: u256 = 0n; do { i = i + 1n; } while (!(i >= n)); return i; }
-  @external @pure condShortCircuitRevert(n: u256): u256 { let i: u256 = 0n; do { i = i + 1n; } while (i < n && (100n / (n - i + 1n)) > 0n); return i; }
+  get condAnd(n: u256, m: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; } while (i < n && i < m); return i; }
+  get condOr(n: u256, m: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; } while (i < n || i < m); return i; }
+  get condNot(n: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; } while (!(i >= n)); return i; }
+  get condShortCircuitRevert(n: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; } while (i < n && (100n / (n - i + 1n)) > 0n); return i; }
 
   // --- nested do-while where inner uses outer loop var ---
-  @external @pure triangleDw(n: u256): u256 { let t: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; let j: u256 = 0n; do { j = j + 1n; t = t + 1n; } while (j < i); } while (i < n); return t; }
+  get triangleDw(n: u256): External<u256> { let t: u256 = 0n; let i: u256 = 0n; do { i = i + 1n; let j: u256 = 0n; do { j = j + 1n; t = t + 1n; } while (j < i); } while (i < n); return t; }
 
   // --- prefix/postfix in the body, value-position effects ---
-  @external @pure postfixBody(n: u256): u256 { let i: u256 = 0n; let s: u256 = 0n; do { s = s + i++; } while (i < n); return s * 1000n + i; }
-  @external @pure prefixBody(n: u256): u256 { let i: u256 = 0n; let s: u256 = 0n; do { s = s + ++i; } while (i < n); return s * 1000n + i; }
+  get postfixBody(n: u256): External<u256> { let i: u256 = 0n; let s: u256 = 0n; do { s = s + i++; } while (i < n); return s * 1000n + i; }
+  get prefixBody(n: u256): External<u256> { let i: u256 = 0n; let s: u256 = 0n; do { s = s + ++i; } while (i < n); return s * 1000n + i; }
 
   // --- do-while with no observable variable, just side effects to multiple state slots ---
-  @external multiState(n: u256): void { let i: u256 = 0n; do { this.acc = this.acc + 1n; this.hits = this.hits + this.acc; i = i + 1n; } while (i < n); }
+  multiState(n: u256): External<void> { let i: u256 = 0n; do { this.acc = this.acc + 1n; this.hits = this.hits + this.acc; i = i + 1n; } while (i < n); }
 
   // === WAVE 2: revert-timing & exotic conditions ===
   // condition itself divides by a value that hits zero exactly at the boundary -> revert in condition
-  @external @pure condDivZero(n: u256): u256 { let i: u256 = 0n; do { i = i + 1n; } while ((100n / (n - i)) >= 0n); return i; }
+  get condDivZero(n: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; } while ((100n / (n - i)) >= 0n); return i; }
   // body reverts (checked) at a precise iteration; verify same iteration as solc
-  @external @pure bodyRevertAt(start: u256, step: u256): u256 { let x: u256 = start; let i: u256 = 0n; do { x = x - step; i = i + 1n; } while (true); return x; }
+  get bodyRevertAt(start: u256, step: u256): External<u256> { let x: u256 = start; let i: u256 = 0n; do { x = x - step; i = i + 1n; } while (true); return x; }
   // do-while with require inside body
-  @external @pure requireInBody(n: u256, fail: u256): u256 { let i: u256 = 0n; do { i = i + 1n; require(i != fail, "boom"); } while (i < n); return i; }
+  get requireInBody(n: u256, fail: u256): External<u256> { let i: u256 = 0n; do { i = i + 1n; require(i != fail, "boom"); } while (i < n); return i; }
   // condition reads a postfix that wraps in unchecked
-  @external @pure uncheckedCondWrap(start: u256): u256 { let i: u256 = start; let body: u256 = 0n; unchecked: { do { body = body + 1n; } while (i++ != 0n ? false : (i < 3n)); } return body * 1000n + i; }
+  get uncheckedCondWrap(start: u256): External<u256> { let i: u256 = start; let body: u256 = 0n; unchecked: { do { body = body + 1n; } while (i++ != 0n ? false : (i < 3n)); } return body * 1000n + i; }
   // nested do-while, inner condition has side effect that the outer condition reads
-  @external @pure sharedSideEffect(n: u256): u256 { let i: u256 = 0n; let t: u256 = 0n; do { let j: u256 = 0n; do { j = j + 1n; t = t + 1n; } while ((i = i + 1n) < n && j < 2n); } while (i < n); return t * 1000n + i; }
+  get sharedSideEffect(n: u256): External<u256> { let i: u256 = 0n; let t: u256 = 0n; do { let j: u256 = 0n; do { j = j + 1n; t = t + 1n; } while ((i = i + 1n) < n && j < 2n); } while (i < n); return t * 1000n + i; }
   // do-while inside a for whose body early-returns from deep inside
-  @external @pure deepEarlyReturn(n: u256, m: u256, target: u256): u256 {
+  get deepEarlyReturn(n: u256, m: u256, target: u256): External<u256> {
     for (let i: u256 = 0n; i < n; i = i + 1n) {
       let j: u256 = 0n;
       do { j = j + 1n; let k: u256 = 0n;
@@ -146,9 +146,9 @@ const JETH = `@contract class C {
     return 999999n;
   }
   // empty body do-while (only condition has effect)
-  @external @pure emptyBody(n: u256): u256 { let i: u256 = 0n; do { } while ((i = i + 1n) < n); return i; }
+  get emptyBody(n: u256): External<u256> { let i: u256 = 0n; do { } while ((i = i + 1n) < n); return i; }
   // do-while where the only break is reached via the condition being a comma-like chained assign
-  @external @pure chainedAssignCond(n: u256): u256 { let a: u256 = 0n; let b: u256 = 0n; do { b = b + 1n; } while ((a = b) < n); return a * 1000n + b; }
+  get chainedAssignCond(n: u256): External<u256> { let a: u256 = 0n; let b: u256 = 0n; do { b = b + 1n; } while ((a = b) < n); return a * 1000n + b; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

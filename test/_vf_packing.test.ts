@@ -101,31 +101,31 @@ describe('vf_packing', () => {
   beforeAll(async () => {
     // ---- P1: classic mixed-width state vars (not a struct) ------------------
     const J1 = `
-@contract class C {
-  @state a: u8;
-  @state b: i16;
-  @state c: bytes3;
-  @state d: bool;
-  @state e: u32;
-  @state f: address;
-  @state g: i40;
-  @state h: bytes7;
-  @external setA(v: u8) { this.a = v; }
-  @external setB(v: i16) { this.b = v; }
-  @external setC(v: bytes3) { this.c = v; }
-  @external setD(v: bool) { this.d = v; }
-  @external setE(v: u32) { this.e = v; }
-  @external setF(v: address) { this.f = v; }
-  @external setG(v: i40) { this.g = v; }
-  @external setH(v: bytes7) { this.h = v; }
-  @external @view getA(): u8 { return this.a; }
-  @external @view getB(): i16 { return this.b; }
-  @external @view getC(): bytes3 { return this.c; }
-  @external @view getD(): bool { return this.d; }
-  @external @view getE(): u32 { return this.e; }
-  @external @view getF(): address { return this.f; }
-  @external @view getG(): i40 { return this.g; }
-  @external @view getH(): bytes7 { return this.h; }
+class C {
+  a: u8;
+  b: i16;
+  c: bytes3;
+  d: bool;
+  e: u32;
+  f: address;
+  g: i40;
+  h: bytes7;
+  setA(v: u8): External<void> { this.a = v; }
+  setB(v: i16): External<void> { this.b = v; }
+  setC(v: bytes3): External<void> { this.c = v; }
+  setD(v: bool): External<void> { this.d = v; }
+  setE(v: u32): External<void> { this.e = v; }
+  setF(v: address): External<void> { this.f = v; }
+  setG(v: i40): External<void> { this.g = v; }
+  setH(v: bytes7): External<void> { this.h = v; }
+  get getA(): External<u8> { return this.a; }
+  get getB(): External<i16> { return this.b; }
+  get getC(): External<bytes3> { return this.c; }
+  get getD(): External<bool> { return this.d; }
+  get getE(): External<u32> { return this.e; }
+  get getF(): External<address> { return this.f; }
+  get getG(): External<i40> { return this.g; }
+  get getH(): External<bytes7> { return this.h; }
 }`;
     const S1 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -153,27 +153,27 @@ contract C {
     // a(u128=16) b(u64=8) c(bool=1) d(bytes4=4) => 29 bytes; e(u64=8) won't fit -> slot1
     // f(bytes32) -> slot2. Whole-struct return + per-field getters + raw slots.
     const J2 = `
-@struct class S { a: u128; b: u64; c: bool; d: bytes4; e: u64; f: bytes32; }
-@contract class C {
-  @state s: S;
-  @state sentinel: u256;
-  @external setAll(a: u128, b: u64, c: bool, d: bytes4, e: u64, f: bytes32) {
+type S = { a: u128; b: u64; c: bool; d: bytes4; e: u64; f: bytes32; };
+class C {
+  s: S;
+  sentinel: u256;
+  setAll(a: u128, b: u64, c: bool, d: bytes4, e: u64, f: bytes32): External<void> {
     this.s = S(a, b, c, d, e, f); this.sentinel = 0xdeadn;
   }
-  @external setA(v: u128) { this.s.a = v; }
-  @external setB(v: u64) { this.s.b = v; }
-  @external setC(v: bool) { this.s.c = v; }
-  @external setD(v: bytes4) { this.s.d = v; }
-  @external setE(v: u64) { this.s.e = v; }
-  @external setF(v: bytes32) { this.s.f = v; }
-  @external @view getA(): u128 { return this.s.a; }
-  @external @view getB(): u64 { return this.s.b; }
-  @external @view getC(): bool { return this.s.c; }
-  @external @view getD(): bytes4 { return this.s.d; }
-  @external @view getE(): u64 { return this.s.e; }
-  @external @view getF(): bytes32 { return this.s.f; }
-  @external @view getAll(): S { return this.s; }
-  @external @view getSentinel(): u256 { return this.sentinel; }
+  setA(v: u128): External<void> { this.s.a = v; }
+  setB(v: u64): External<void> { this.s.b = v; }
+  setC(v: bool): External<void> { this.s.c = v; }
+  setD(v: bytes4): External<void> { this.s.d = v; }
+  setE(v: u64): External<void> { this.s.e = v; }
+  setF(v: bytes32): External<void> { this.s.f = v; }
+  get getA(): External<u128> { return this.s.a; }
+  get getB(): External<u64> { return this.s.b; }
+  get getC(): External<bool> { return this.s.c; }
+  get getD(): External<bytes4> { return this.s.d; }
+  get getE(): External<u64> { return this.s.e; }
+  get getF(): External<bytes32> { return this.s.f; }
+  get getAll(): External<S> { return this.s; }
+  get getSentinel(): External<u256> { return this.sentinel; }
 }`;
     const S2 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -202,21 +202,21 @@ contract C {
     // ---- P3: ALL-SIGNED narrow struct, sign-bit packing & RMW ---------------
     // i8 i16 i24 i32 i40 i48 i56 = 1+2+3+4+5+6+7 = 28 bytes -> single slot.
     const J3 = `
-@struct class S { a: i8; b: i16; c: i24; d: i32; e: i40; f: i48; g: i56; }
-@contract class C {
-  @state s: S;
-  @external setAll(a: i8, b: i16, c: i24, d: i32, e: i40, f: i48, g: i56) { this.s = S(a,b,c,d,e,f,g); }
-  @external setA(v: i8) { this.s.a = v; }
-  @external setC(v: i24) { this.s.c = v; }
-  @external setG(v: i56) { this.s.g = v; }
-  @external @view getA(): i8 { return this.s.a; }
-  @external @view getB(): i16 { return this.s.b; }
-  @external @view getC(): i24 { return this.s.c; }
-  @external @view getD(): i32 { return this.s.d; }
-  @external @view getE(): i40 { return this.s.e; }
-  @external @view getF(): i48 { return this.s.f; }
-  @external @view getG(): i56 { return this.s.g; }
-  @external @view getAll(): S { return this.s; }
+type S = { a: i8; b: i16; c: i24; d: i32; e: i40; f: i48; g: i56; };
+class C {
+  s: S;
+  setAll(a: i8, b: i16, c: i24, d: i32, e: i40, f: i48, g: i56): External<void> { this.s = S(a,b,c,d,e,f,g); }
+  setA(v: i8): External<void> { this.s.a = v; }
+  setC(v: i24): External<void> { this.s.c = v; }
+  setG(v: i56): External<void> { this.s.g = v; }
+  get getA(): External<i8> { return this.s.a; }
+  get getB(): External<i16> { return this.s.b; }
+  get getC(): External<i24> { return this.s.c; }
+  get getD(): External<i32> { return this.s.d; }
+  get getE(): External<i40> { return this.s.e; }
+  get getF(): External<i48> { return this.s.f; }
+  get getG(): External<i56> { return this.s.g; }
+  get getAll(): External<S> { return this.s; }
 }`;
     const S3 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -239,18 +239,18 @@ contract C {
 
     // ---- P4: bool + address packing (bool then address fits in 1 slot: 1+20=21) -
     const J4 = `
-@struct class S { flag1: bool; owner: address; flag2: bool; small: u8; }
-@contract class C {
-  @state s: S;
-  @external setAll(f1: bool, o: address, f2: bool, sm: u8) { this.s = S(f1, o, f2, sm); }
-  @external setOwner(v: address) { this.s.owner = v; }
-  @external setF1(v: bool) { this.s.flag1 = v; }
-  @external setF2(v: bool) { this.s.flag2 = v; }
-  @external @view getF1(): bool { return this.s.flag1; }
-  @external @view getOwner(): address { return this.s.owner; }
-  @external @view getF2(): bool { return this.s.flag2; }
-  @external @view getSmall(): u8 { return this.s.small; }
-  @external @view getAll(): S { return this.s; }
+type S = { flag1: bool; owner: address; flag2: bool; small: u8; };
+class C {
+  s: S;
+  setAll(f1: bool, o: address, f2: bool, sm: u8): External<void> { this.s = S(f1, o, f2, sm); }
+  setOwner(v: address): External<void> { this.s.owner = v; }
+  setF1(v: bool): External<void> { this.s.flag1 = v; }
+  setF2(v: bool): External<void> { this.s.flag2 = v; }
+  get getF1(): External<bool> { return this.s.flag1; }
+  get getOwner(): External<address> { return this.s.owner; }
+  get getF2(): External<bool> { return this.s.flag2; }
+  get getSmall(): External<u8> { return this.s.small; }
+  get getAll(): External<S> { return this.s; }
 }`;
     const S4 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -270,17 +270,17 @@ contract C {
 
     // ---- P5: array of packed struct (Rec packs into 1 slot), stride + RMW ----
     const J5 = `
-@struct class Rec { a: u128; b: u64; c: bool; d: bytes4; }
-@contract class C {
-  @state arr: Arr<Rec, 4>;
-  @external setRec(i: u256, a: u128, b: u64, c: bool, d: bytes4) { this.arr[i] = Rec(a,b,c,d); }
-  @external setA(i: u256, v: u128) { this.arr[i].a = v; }
-  @external setC(i: u256, v: bool) { this.arr[i].c = v; }
-  @external @view getA(i: u256): u128 { return this.arr[i].a; }
-  @external @view getB(i: u256): u64 { return this.arr[i].b; }
-  @external @view getC(i: u256): bool { return this.arr[i].c; }
-  @external @view getD(i: u256): bytes4 { return this.arr[i].d; }
-  @external @view getRec(i: u256): Rec { return this.arr[i]; }
+type Rec = { a: u128; b: u64; c: bool; d: bytes4; };
+class C {
+  arr: Arr<Rec, 4>;
+  setRec(i: u256, a: u128, b: u64, c: bool, d: bytes4): External<void> { this.arr[i] = Rec(a,b,c,d); }
+  setA(i: u256, v: u128): External<void> { this.arr[i].a = v; }
+  setC(i: u256, v: bool): External<void> { this.arr[i].c = v; }
+  get getA(i: u256): External<u128> { return this.arr[i].a; }
+  get getB(i: u256): External<u64> { return this.arr[i].b; }
+  get getC(i: u256): External<bool> { return this.arr[i].c; }
+  get getD(i: u256): External<bytes4> { return this.arr[i].d; }
+  get getRec(i: u256): External<Rec> { return this.arr[i]; }
 }`;
     const S5 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -299,17 +299,17 @@ contract C {
 
     // ---- P6: dynamic array of packed struct, push/pop slot reuse ------------
     const J6 = `
-@struct class Rec { a: u128; b: u64; c: bool; d: bytes4; }
-@contract class C {
-  @state recs: Rec[];
-  @external pushV(a: u128, b: u64, c: bool, d: bytes4) { this.recs.push(Rec(a,b,c,d)); }
-  @external pop() { this.recs.pop(); }
-  @external setA(i: u256, v: u128) { this.recs[i].a = v; }
-  @external setC(i: u256, v: bool) { this.recs[i].c = v; }
-  @external @view getA(i: u256): u128 { return this.recs[i].a; }
-  @external @view getC(i: u256): bool { return this.recs[i].c; }
-  @external @view getRec(i: u256): Rec { return this.recs[i]; }
-  @external @view len(): u256 { return this.recs.length; }
+type Rec = { a: u128; b: u64; c: bool; d: bytes4; };
+class C {
+  recs: Rec[];
+  pushV(a: u128, b: u64, c: bool, d: bytes4): External<void> { this.recs.push(Rec(a,b,c,d)); }
+  pop(): External<void> { this.recs.pop(); }
+  setA(i: u256, v: u128): External<void> { this.recs[i].a = v; }
+  setC(i: u256, v: bool): External<void> { this.recs[i].c = v; }
+  get getA(i: u256): External<u128> { return this.recs[i].a; }
+  get getC(i: u256): External<bool> { return this.recs[i].c; }
+  get getRec(i: u256): External<Rec> { return this.recs[i]; }
+  get len(): External<u256> { return this.recs.length; }
 }`;
     const S6 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -328,16 +328,16 @@ contract C {
 
     // ---- P7: packed value arrays (Arr<uN,K>) various widths, straddle -------
     const J7 = `
-@contract class C {
-  @state a: Arr<u40, 7>;
-  @state b: Arr<u80, 5>;
-  @state c: Arr<bytes5, 7>;
-  @external setA(i: u256, v: u40) { this.a[i] = v; }
-  @external setB(i: u256, v: u80) { this.b[i] = v; }
-  @external setC(i: u256, v: bytes5) { this.c[i] = v; }
-  @external @view getA(i: u256): u40 { return this.a[i]; }
-  @external @view getB(i: u256): u80 { return this.b[i]; }
-  @external @view getC(i: u256): bytes5 { return this.c[i]; }
+class C {
+  a: Arr<u40, 7>;
+  b: Arr<u80, 5>;
+  c: Arr<bytes5, 7>;
+  setA(i: u256, v: u40): External<void> { this.a[i] = v; }
+  setB(i: u256, v: u80): External<void> { this.b[i] = v; }
+  setC(i: u256, v: bytes5): External<void> { this.c[i] = v; }
+  get getA(i: u256): External<u40> { return this.a[i]; }
+  get getB(i: u256): External<u80> { return this.b[i]; }
+  get getC(i: u256): External<bytes5> { return this.c[i]; }
 }`;
     const S7 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -353,14 +353,14 @@ contract C {
 
     // ---- P8: signed packed value array (dirty/negative) ---------------------
     const J8 = `
-@contract class C {
-  @state a: Arr<i40, 7>;
-  @state b: i48[];
-  @external setA(i: u256, v: i40) { this.a[i] = v; }
-  @external pushB(v: i48) { this.b.push(v); }
-  @external popB() { this.b.pop(); }
-  @external @view getA(i: u256): i40 { return this.a[i]; }
-  @external @view getB(i: u256): i48 { return this.b[i]; }
+class C {
+  a: Arr<i40, 7>;
+  b: i48[];
+  setA(i: u256, v: i40): External<void> { this.a[i] = v; }
+  pushB(v: i48): External<void> { this.b.push(v); }
+  popB(): External<void> { this.b.pop(); }
+  get getA(i: u256): External<i40> { return this.a[i]; }
+  get getB(i: u256): External<i48> { return this.b[i]; }
 }`;
     const S8 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -375,17 +375,17 @@ contract C {
 
     // ---- P9: mapping value = packed struct, RMW per field -------------------
     const J9 = `
-@struct class S { a: u64; b: i64; flag: bool; addr: address; }
-@contract class C {
-  @state m: mapping<u256, S>;
-  @external setAll(k: u256, a: u64, b: i64, flag: bool, addr: address) { this.m[k] = S(a,b,flag,addr); }
-  @external setA(k: u256, v: u64) { this.m[k].a = v; }
-  @external setFlag(k: u256, v: bool) { this.m[k].flag = v; }
-  @external @view getA(k: u256): u64 { return this.m[k].a; }
-  @external @view getB(k: u256): i64 { return this.m[k].b; }
-  @external @view getFlag(k: u256): bool { return this.m[k].flag; }
-  @external @view getAddr(k: u256): address { return this.m[k].addr; }
-  @external @view getAll(k: u256): S { return this.m[k]; }
+type S = { a: u64; b: i64; flag: bool; addr: address; };
+class C {
+  m: mapping<u256, S>;
+  setAll(k: u256, a: u64, b: i64, flag: bool, addr: address): External<void> { this.m[k] = S(a,b,flag,addr); }
+  setA(k: u256, v: u64): External<void> { this.m[k].a = v; }
+  setFlag(k: u256, v: bool): External<void> { this.m[k].flag = v; }
+  get getA(k: u256): External<u64> { return this.m[k].a; }
+  get getB(k: u256): External<i64> { return this.m[k].b; }
+  get getFlag(k: u256): External<bool> { return this.m[k].flag; }
+  get getAddr(k: u256): External<address> { return this.m[k].addr; }
+  get getAll(k: u256): External<S> { return this.m[k]; }
 }`;
     const S9 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -406,17 +406,17 @@ contract C {
     // tag(u8) alone (slot0), data(u128[3] -> but u128 packs 2 per slot? NO: array
     // elements pack. u128[3] => slots1,2 (2 per slot, 3 elems => 2 slots). flag(u8) slot3.
     const J10 = `
-@struct class T { tag: u8; data: Arr<u128, 3>; flag: u8; mid: bytes4; }
-@contract class C {
-  @state t: T;
-  @external setTag(v: u8) { this.t.tag = v; }
-  @external setData(i: u256, v: u128) { this.t.data[i] = v; }
-  @external setFlag(v: u8) { this.t.flag = v; }
-  @external setMid(v: bytes4) { this.t.mid = v; }
-  @external @view getTag(): u8 { return this.t.tag; }
-  @external @view getData(i: u256): u128 { return this.t.data[i]; }
-  @external @view getFlag(): u8 { return this.t.flag; }
-  @external @view getMid(): bytes4 { return this.t.mid; }
+type T = { tag: u8; data: Arr<u128, 3>; flag: u8; mid: bytes4; };
+class C {
+  t: T;
+  setTag(v: u8): External<void> { this.t.tag = v; }
+  setData(i: u256, v: u128): External<void> { this.t.data[i] = v; }
+  setFlag(v: u8): External<void> { this.t.flag = v; }
+  setMid(v: bytes4): External<void> { this.t.mid = v; }
+  get getTag(): External<u8> { return this.t.tag; }
+  get getData(i: u256): External<u128> { return this.t.data[i]; }
+  get getFlag(): External<u8> { return this.t.flag; }
+  get getMid(): External<bytes4> { return this.t.mid; }
 }`;
     const S10 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -435,22 +435,22 @@ contract C {
 
     // ---- P11: nested struct field, packed inner straddling outer fields ------
     const J11 = `
-@struct class Inner { x: u64; y: u64; z: bool; }
-@struct class Outer { lead: u8; inner: Inner; trail: bytes20; }
-@contract class C {
-  @state o: Outer;
-  @external setLead(v: u8) { this.o.lead = v; }
-  @external setX(v: u64) { this.o.inner.x = v; }
-  @external setY(v: u64) { this.o.inner.y = v; }
-  @external setZ(v: bool) { this.o.inner.z = v; }
-  @external setTrail(v: bytes20) { this.o.trail = v; }
-  @external setInner(x: u64, y: u64, z: bool) { this.o.inner = Inner(x,y,z); }
-  @external @view getLead(): u8 { return this.o.lead; }
-  @external @view getX(): u64 { return this.o.inner.x; }
-  @external @view getY(): u64 { return this.o.inner.y; }
-  @external @view getZ(): bool { return this.o.inner.z; }
-  @external @view getTrail(): bytes20 { return this.o.trail; }
-  @external @view getInner(): Inner { return this.o.inner; }
+type Inner = { x: u64; y: u64; z: bool; };
+type Outer = { lead: u8; inner: Inner; trail: bytes20; };
+class C {
+  o: Outer;
+  setLead(v: u8): External<void> { this.o.lead = v; }
+  setX(v: u64): External<void> { this.o.inner.x = v; }
+  setY(v: u64): External<void> { this.o.inner.y = v; }
+  setZ(v: bool): External<void> { this.o.inner.z = v; }
+  setTrail(v: bytes20): External<void> { this.o.trail = v; }
+  setInner(x: u64, y: u64, z: bool): External<void> { this.o.inner = Inner(x,y,z); }
+  get getLead(): External<u8> { return this.o.lead; }
+  get getX(): External<u64> { return this.o.inner.x; }
+  get getY(): External<u64> { return this.o.inner.y; }
+  get getZ(): External<bool> { return this.o.inner.z; }
+  get getTrail(): External<bytes20> { return this.o.trail; }
+  get getInner(): External<Inner> { return this.o.inner; }
 }`;
     const S11 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -476,20 +476,20 @@ contract C {
     // a(u128)+b(u128)=32 bytes exactly -> slot0 full. c(u8) -> slot1. A trailing
     // state var (after) must take its own slot (no packing across aggregate boundary).
     const J12 = `
-@struct class S { a: u128; b: u128; c: u8; }
-@contract class C {
-  @state s: S;
-  @state after_: u8;
-  @external setAll(a: u128, b: u128, c: u8) { this.s = S(a,b,c); }
-  @external setAfter(v: u8) { this.after_ = v; }
-  @external setA(v: u128) { this.s.a = v; }
-  @external setB(v: u128) { this.s.b = v; }
-  @external setC(v: u8) { this.s.c = v; }
-  @external @view getA(): u128 { return this.s.a; }
-  @external @view getB(): u128 { return this.s.b; }
-  @external @view getC(): u8 { return this.s.c; }
-  @external @view getAfter(): u8 { return this.after_; }
-  @external @view getAll(): S { return this.s; }
+type S = { a: u128; b: u128; c: u8; };
+class C {
+  s: S;
+  after_: u8;
+  setAll(a: u128, b: u128, c: u8): External<void> { this.s = S(a,b,c); }
+  setAfter(v: u8): External<void> { this.after_ = v; }
+  setA(v: u128): External<void> { this.s.a = v; }
+  setB(v: u128): External<void> { this.s.b = v; }
+  setC(v: u8): External<void> { this.s.c = v; }
+  get getA(): External<u128> { return this.s.a; }
+  get getB(): External<u128> { return this.s.b; }
+  get getC(): External<u8> { return this.s.c; }
+  get getAfter(): External<u8> { return this.after_; }
+  get getAll(): External<S> { return this.s; }
 }`;
     const S12 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -513,15 +513,15 @@ contract C {
     // Copy m[src] -> m[dst]; the copy must zero the dst's full slot region (no leak
     // of dst's prior packed neighbors), byte-identical to solc's struct copy.
     const J13 = `
-@struct class S { a: u64; b: u64; c: bool; }
-@contract class C {
-  @state m: mapping<u256, S>;
-  @external setAll(k: u256, a: u64, b: u64, c: bool) { this.m[k] = S(a,b,c); }
-  @external copy(dst: u256, src: u256) { this.m[dst] = this.m[src]; }
-  @external @view getA(k: u256): u64 { return this.m[k].a; }
-  @external @view getB(k: u256): u64 { return this.m[k].b; }
-  @external @view getC(k: u256): bool { return this.m[k].c; }
-  @external @view getAll(k: u256): S { return this.m[k]; }
+type S = { a: u64; b: u64; c: bool; };
+class C {
+  m: mapping<u256, S>;
+  setAll(k: u256, a: u64, b: u64, c: bool): External<void> { this.m[k] = S(a,b,c); }
+  copy(dst: u256, src: u256): External<void> { this.m[dst] = this.m[src]; }
+  get getA(k: u256): External<u64> { return this.m[k].a; }
+  get getB(k: u256): External<u64> { return this.m[k].b; }
+  get getC(k: u256): External<bool> { return this.m[k].c; }
+  get getAll(k: u256): External<S> { return this.m[k]; }
 }`;
     const S13 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -541,20 +541,20 @@ contract C {
     // Plus an "almost fits" straddle: e(bytes30)+f(bytes4) -> e fills 30 of slot3,
     // f(4) does not fit (only 2 left) -> slot4.
     const J14 = `
-@struct class S { a: bytes16; b: bytes16; c: bytes1; d: bytes32; e: bytes30; f: bytes4; }
-@contract class C {
-  @state s: S;
-  @external setA(v: bytes16) { this.s.a = v; }
-  @external setB(v: bytes16) { this.s.b = v; }
-  @external setC(v: bytes1) { this.s.c = v; }
-  @external setD(v: bytes32) { this.s.d = v; }
-  @external setE(v: bytes30) { this.s.e = v; }
-  @external setF(v: bytes4) { this.s.f = v; }
-  @external @view getA(): bytes16 { return this.s.a; }
-  @external @view getC(): bytes1 { return this.s.c; }
-  @external @view getE(): bytes30 { return this.s.e; }
-  @external @view getF(): bytes4 { return this.s.f; }
-  @external @view getAll(): S { return this.s; }
+type S = { a: bytes16; b: bytes16; c: bytes1; d: bytes32; e: bytes30; f: bytes4; };
+class C {
+  s: S;
+  setA(v: bytes16): External<void> { this.s.a = v; }
+  setB(v: bytes16): External<void> { this.s.b = v; }
+  setC(v: bytes1): External<void> { this.s.c = v; }
+  setD(v: bytes32): External<void> { this.s.d = v; }
+  setE(v: bytes30): External<void> { this.s.e = v; }
+  setF(v: bytes4): External<void> { this.s.f = v; }
+  get getA(): External<bytes16> { return this.s.a; }
+  get getC(): External<bytes1> { return this.s.c; }
+  get getE(): External<bytes30> { return this.s.e; }
+  get getF(): External<bytes4> { return this.s.f; }
+  get getAll(): External<S> { return this.s; }
 }`;
     const S14 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -579,17 +579,17 @@ contract C {
     // RMW of individual high fields must not leave stale bytes. Also setSome only
     // writes a subset; the rest must persist. i120 sign extremes included.
     const J15 = `
-@struct class S { a: u16; b: i120; c: bool; d: u8; }
-@contract class C {
-  @state s: S;
-  @external setAll(a: u16, b: i120, c: bool, d: u8) { this.s = S(a,b,c,d); }
-  @external setB(v: i120) { this.s.b = v; }
-  @external setD(v: u8) { this.s.d = v; }
-  @external @view getA(): u16 { return this.s.a; }
-  @external @view getB(): i120 { return this.s.b; }
-  @external @view getC(): bool { return this.s.c; }
-  @external @view getD(): u8 { return this.s.d; }
-  @external @view getAll(): S { return this.s; }
+type S = { a: u16; b: i120; c: bool; d: u8; };
+class C {
+  s: S;
+  setAll(a: u16, b: i120, c: bool, d: u8): External<void> { this.s = S(a,b,c,d); }
+  setB(v: i120): External<void> { this.s.b = v; }
+  setD(v: u8): External<void> { this.s.d = v; }
+  get getA(): External<u16> { return this.s.a; }
+  get getB(): External<i120> { return this.s.b; }
+  get getC(): External<bool> { return this.s.c; }
+  get getD(): External<u8> { return this.s.d; }
+  get getAll(): External<S> { return this.s; }
 }`;
     const S15 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

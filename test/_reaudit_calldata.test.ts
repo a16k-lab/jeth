@@ -72,40 +72,39 @@ function fixedU256ArrRegion(rows: bigint[][]): string {
 const blen = (hex: string) => hex.length / 2;
 
 const JETH = `
-@struct class WithArr { id: u64; data: Arr<u256,3>; tag: u64; }
-@struct class WithDyn { a: u64; xs: u256[]; b: u64; }
-@contract
+type WithArr = { id: u64; data: Arr<u256,3>; tag: u64; };
+type WithDyn = { a: u64; xs: u256[]; b: u64; };
 class C {
   // Arr<dyn,N>: fixed array of DYNAMIC element (the area under audit)
-  @external @pure fb2At(a: Arr<bytes,2>, i: u256): bytes { return a[i]; }
-  @external @pure fb2Len(a: Arr<bytes,2>, i: u256): u256 { return a[i].length; }
-  @external @pure fb2Echo(a: Arr<bytes,2>): Arr<bytes,2> { return a; }
-  @external @pure fs2At(a: Arr<string,2>, i: u256): string { return a[i]; }
-  @external @pure fs2Echo(a: Arr<string,2>): Arr<string,2> { return a; }
-  @external @pure fb3At(a: Arr<bytes,3>, i: u256): bytes { return a[i]; }
-  @external @pure fb3Echo(a: Arr<bytes,3>): Arr<bytes,3> { return a; }
-  @external @pure fs3At(a: Arr<string,3>, i: u256): string { return a[i]; }
-  @external @pure fodAt(a: Arr<u256[],2>, i: u256, j: u256): u256 { return a[i][j]; }
-  @external @pure fodLen(a: Arr<u256[],2>, i: u256): u256 { return a[i].length; }
-  @external @pure fodEcho(a: Arr<u256[],2>): Arr<u256[],2> { return a; }
-  @external @pure fod3Len(a: Arr<u256[],3>, i: u256): u256 { return a[i].length; }
+  get fb2At(a: Arr<bytes,2>, i: u256): External<bytes> { return a[i]; }
+  get fb2Len(a: Arr<bytes,2>, i: u256): External<u256> { return a[i].length; }
+  get fb2Echo(a: Arr<bytes,2>): External<Arr<bytes,2>> { return a; }
+  get fs2At(a: Arr<string,2>, i: u256): External<string> { return a[i]; }
+  get fs2Echo(a: Arr<string,2>): External<Arr<string,2>> { return a; }
+  get fb3At(a: Arr<bytes,3>, i: u256): External<bytes> { return a[i]; }
+  get fb3Echo(a: Arr<bytes,3>): External<Arr<bytes,3>> { return a; }
+  get fs3At(a: Arr<string,3>, i: u256): External<string> { return a[i]; }
+  get fodAt(a: Arr<u256[],2>, i: u256, j: u256): External<u256> { return a[i][j]; }
+  get fodLen(a: Arr<u256[],2>, i: u256): External<u256> { return a[i].length; }
+  get fodEcho(a: Arr<u256[],2>): External<Arr<u256[],2>> { return a; }
+  get fod3Len(a: Arr<u256[],3>, i: u256): External<u256> { return a[i].length; }
 
   // a SECOND param after the Arr<dyn,N> exercises the head cursor past the offset word
-  @external @pure fb2Tail(a: Arr<bytes,2>, k: u256): u256 { return k; }
+  get fb2Tail(a: Arr<bytes,2>, k: u256): External<u256> { return k; }
 
   // narrow-leaf inner arrays reached via Arr<dyn,N>: a[i][j] dirty validation
-  @external @pure fu8At(a: Arr<u8[],2>, i: u256, j: u256): u8 { return a[i][j]; }
-  @external @pure fi8At(a: Arr<i8[],2>, i: u256, j: u256): i8 { return a[i][j]; }
-  @external @pure faddrAt(a: Arr<address[],2>, i: u256, j: u256): address { return a[i][j]; }
-  @external @pure fb4At(a: Arr<bytes4[],2>, i: u256, j: u256): bytes4 { return a[i][j]; }
+  get fu8At(a: Arr<u8[],2>, i: u256, j: u256): External<u8> { return a[i][j]; }
+  get fi8At(a: Arr<i8[],2>, i: u256, j: u256): External<i8> { return a[i][j]; }
+  get faddrAt(a: Arr<address[],2>, i: u256, j: u256): External<address> { return a[i][j]; }
+  get fb4At(a: Arr<bytes4[],2>, i: u256, j: u256): External<bytes4> { return a[i][j]; }
 
   // adjacent regression shapes
-  @external @pure vAt(a: u256[], i: u256): u256 { return a[i]; }
-  @external @pure m2At(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
-  @external @pure m3At(m: u256[][][], i: u256, j: u256, k: u256): u256 { return m[i][j][k]; }
-  @external @pure dofAt(a: Arr<u256,2>[], i: u256, j: u256): u256 { return a[i][j]; }
-  @external @pure waData(t: WithArr, j: u256): u256 { return t.data[j]; }
-  @external @pure wdEcho(t: WithDyn): WithDyn { return t; }
+  get vAt(a: u256[], i: u256): External<u256> { return a[i]; }
+  get m2At(m: u256[][], i: u256, j: u256): External<u256> { return m[i][j]; }
+  get m3At(m: u256[][][], i: u256, j: u256, k: u256): External<u256> { return m[i][j][k]; }
+  get dofAt(a: Arr<u256,2>[], i: u256, j: u256): External<u256> { return a[i][j]; }
+  get waData(t: WithArr, j: u256): External<u256> { return t.data[j]; }
+  get wdEcho(t: WithDyn): External<WithDyn> { return t; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

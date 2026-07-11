@@ -15,45 +15,45 @@ const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@struct class Pk { a: u64; rows: Arr<Arr<u8, 4>, 3>; b: u64; }
-@struct class Cell { lo: u128; hi: i128; }
-@struct class Deep { head: u256; inner: Arr<Pk, 2>; foot: u256; }
-@contract class C {
-  @state d5: Arr<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>, 2>;
-  @state s8: Arr<Arr<i8, 3>, 2>;
-  @state s128: Arr<Arr<i128, 2>, 2>;
-  @state s256: Arr<Arr<i256, 2>, 2>;
-  @state b32: Arr<Arr<bytes32, 2>, 2>;
-  @state cells: Arr<Arr<Cell, 2>, 2>;
-  @state pkgrid: Arr<Pk, 2>;
-  @state deep: Deep;
-  @state part: Arr<Arr<u256, 3>, 3>;
-  @state sentinel: u256;
+const JETH = `type Pk = { a: u64; rows: Arr<Arr<u8, 4>, 3>; b: u64; };
+type Cell = { lo: u128; hi: i128; };
+type Deep = { head: u256; inner: Arr<Pk, 2>; foot: u256; };
+class C {
+  d5: Arr<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>, 2>;
+  s8: Arr<Arr<i8, 3>, 2>;
+  s128: Arr<Arr<i128, 2>, 2>;
+  s256: Arr<Arr<i256, 2>, 2>;
+  b32: Arr<Arr<bytes32, 2>, 2>;
+  cells: Arr<Arr<Cell, 2>, 2>;
+  pkgrid: Arr<Pk, 2>;
+  deep: Deep;
+  part: Arr<Arr<u256, 3>, 3>;
+  sentinel: u256;
 
-  @external setSentinel(v: u256): void { this.sentinel = v; }
-  @external setD5(i: u256, j: u256, k: u256, l: u256, m: u256, v: u256): void { this.d5[i][j][k][l][m] = v; }
-  @external setS8(i: u256, j: u256, v: i8): void { this.s8[i][j] = v; }
-  @external setS128(i: u256, j: u256, v: i128): void { this.s128[i][j] = v; }
-  @external setS256(i: u256, j: u256, v: i256): void { this.s256[i][j] = v; }
-  @external setB32(i: u256, j: u256, v: bytes32): void { this.b32[i][j] = v; }
-  @external setCell(i: u256, j: u256, lo: u128, hi: i128): void { this.cells[i][j].lo = lo; this.cells[i][j].hi = hi; }
-  @external setPkgrid(idx: u256, a: u64, b: u64, i: u256, j: u256, v: u8): void { this.pkgrid[idx].a = a; this.pkgrid[idx].b = b; this.pkgrid[idx].rows[i][j] = v; }
-  @external setDeep(head: u256, foot: u256, idx: u256, a: u64, b: u64, i: u256, j: u256, v: u8): void { this.deep.head = head; this.deep.foot = foot; this.deep.inner[idx].a = a; this.deep.inner[idx].b = b; this.deep.inner[idx].rows[i][j] = v; }
-  @external setPart(i: u256, j: u256, v: u256): void { this.part[i][j] = v; }
+  setSentinel(v: u256): External<void> { this.sentinel = v; }
+  setD5(i: u256, j: u256, k: u256, l: u256, m: u256, v: u256): External<void> { this.d5[i][j][k][l][m] = v; }
+  setS8(i: u256, j: u256, v: i8): External<void> { this.s8[i][j] = v; }
+  setS128(i: u256, j: u256, v: i128): External<void> { this.s128[i][j] = v; }
+  setS256(i: u256, j: u256, v: i256): External<void> { this.s256[i][j] = v; }
+  setB32(i: u256, j: u256, v: bytes32): External<void> { this.b32[i][j] = v; }
+  setCell(i: u256, j: u256, lo: u128, hi: i128): External<void> { this.cells[i][j].lo = lo; this.cells[i][j].hi = hi; }
+  setPkgrid(idx: u256, a: u64, b: u64, i: u256, j: u256, v: u8): External<void> { this.pkgrid[idx].a = a; this.pkgrid[idx].b = b; this.pkgrid[idx].rows[i][j] = v; }
+  setDeep(head: u256, foot: u256, idx: u256, a: u64, b: u64, i: u256, j: u256, v: u8): External<void> { this.deep.head = head; this.deep.foot = foot; this.deep.inner[idx].a = a; this.deep.inner[idx].b = b; this.deep.inner[idx].rows[i][j] = v; }
+  setPart(i: u256, j: u256, v: u256): External<void> { this.part[i][j] = v; }
 
-  @external @view getD5(): Arr<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>, 2> { return this.d5; }
-  @external @view elemD5(i: u256, j: u256, k: u256, l: u256, m: u256): u256 { return this.d5[i][j][k][l][m]; }
-  @external @view getS8(): Arr<Arr<i8, 3>, 2> { return this.s8; }
-  @external @view rowS8(i: u256): Arr<i8, 3> { return this.s8[i]; }
-  @external @view getS128(): Arr<Arr<i128, 2>, 2> { return this.s128; }
-  @external @view getS256(): Arr<Arr<i256, 2>, 2> { return this.s256; }
-  @external @view getB32(): Arr<Arr<bytes32, 2>, 2> { return this.b32; }
-  @external @view getCells(): Arr<Arr<Cell, 2>, 2> { return this.cells; }
-  @external @view rowCells(i: u256): Arr<Cell, 2> { return this.cells[i]; }
-  @external @view getPkgrid(): Arr<Pk, 2> { return this.pkgrid; }
-  @external @view elemPkgrid(idx: u256): Pk { return this.pkgrid[idx]; }
-  @external @view getDeep(): Deep { return this.deep; }
-  @external @view getPart(): Arr<Arr<u256, 3>, 3> { return this.part; }
+  get getD5(): External<Arr<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>, 2>> { return this.d5; }
+  get elemD5(i: u256, j: u256, k: u256, l: u256, m: u256): External<u256> { return this.d5[i][j][k][l][m]; }
+  get getS8(): External<Arr<Arr<i8, 3>, 2>> { return this.s8; }
+  get rowS8(i: u256): External<Arr<i8, 3>> { return this.s8[i]; }
+  get getS128(): External<Arr<Arr<i128, 2>, 2>> { return this.s128; }
+  get getS256(): External<Arr<Arr<i256, 2>, 2>> { return this.s256; }
+  get getB32(): External<Arr<Arr<bytes32, 2>, 2>> { return this.b32; }
+  get getCells(): External<Arr<Arr<Cell, 2>, 2>> { return this.cells; }
+  get rowCells(i: u256): External<Arr<Cell, 2>> { return this.cells[i]; }
+  get getPkgrid(): External<Arr<Pk, 2>> { return this.pkgrid; }
+  get elemPkgrid(idx: u256): External<Pk> { return this.pkgrid[idx]; }
+  get getDeep(): External<Deep> { return this.deep; }
+  get getPart(): External<Arr<Arr<u256, 3>, 3>> { return this.part; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

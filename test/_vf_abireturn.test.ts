@@ -48,78 +48,78 @@ function encodeArrayRegion(strs: Uint8Array[]): string {
 }
 
 const JETH = `
-@struct class FD { a: u256; s: string; }                 // fixed then dynamic
-@struct class DF { s: string; a: u256; }                 // dynamic then fixed
-@struct class Mix { p: u64; q: u64; s: string; b: bytes; z: u256; } // packed p,q + 2 dyn + tail value
-@struct class TwoDyn { s: string; t: string; }           // two dynamic fields
-@struct class Nest { x: u256; inner: FD; y: u256; }       // dynamic struct field
-@struct class StatPack { a: u128; b: u128; c: bool; }     // fully static (packs)
-@contract class C {
-  @state recs: FD[];
-  @state mixes: Mix[];
-  @state stats: StatPack[];
-  @state names: string[];
-  @state blobs: bytes[];
-  @state grid: u256[][];
-  @state vals: u256[];
-  @state empties: string[];
-  @state fd1: FD;
-  @state fd2: FD;
+type FD = { a: u256; s: string; };                 // fixed then dynamic
+type DF = { s: string; a: u256; };                 // dynamic then fixed
+type Mix = { p: u64; q: u64; s: string; b: bytes; z: u256; }; // packed p,q + 2 dyn + tail value
+type TwoDyn = { s: string; t: string; };           // two dynamic fields
+type Nest = { x: u256; inner: FD; y: u256; };       // dynamic struct field
+type StatPack = { a: u128; b: u128; c: bool; };     // fully static (packs)
+class C {
+  recs: FD[];
+  mixes: Mix[];
+  stats: StatPack[];
+  names: string[];
+  blobs: bytes[];
+  grid: u256[][];
+  vals: u256[];
+  empties: string[];
+  fd1: FD;
+  fd2: FD;
 
-  @external pushVal(v: u256): void { this.vals.push(v); }
-  @external setFd1(a: u256, s: string): void { this.fd1 = FD(a, s); }
-  @external setFd2(a: u256, s: string): void { this.fd2 = FD(a, s); }
+  pushVal(v: u256): External<void> { this.vals.push(v); }
+  setFd1(a: u256, s: string): External<void> { this.fd1 = FD(a, s); }
+  setFd2(a: u256, s: string): External<void> { this.fd2 = FD(a, s); }
 
   // --- struct with fixed + dynamic, built from args ---
-  @external @pure mkFD(a: u256, s: string): FD { return FD(a, s); }
-  @external @pure mkDF(s: string, a: u256): DF { return DF(s, a); }
-  @external @pure mkMix(p: u64, q: u64, s: string, b: bytes, z: u256): Mix { return Mix(p, q, s, b, z); }
-  @external @pure mkTwoDyn(s: string, t: string): TwoDyn { return TwoDyn(s, t); }
-  @external @pure mkNest(x: u256, a: u256, s: string, y: u256): Nest { return Nest(x, FD(a, s), y); }
-  @external @pure echoFD(d: FD): FD { return d; }
-  @external @pure echoMix(m: Mix): Mix { return m; }
-  @external @pure echoVals(a: u256, b: address, c: bool, d: u8, e: i8, f: bytes4): [u256, address, bool, u8, i8, bytes4] { return [a, b, c, d, e, f]; }
+  get mkFD(a: u256, s: string): External<FD> { return FD(a, s); }
+  get mkDF(s: string, a: u256): External<DF> { return DF(s, a); }
+  get mkMix(p: u64, q: u64, s: string, b: bytes, z: u256): External<Mix> { return Mix(p, q, s, b, z); }
+  get mkTwoDyn(s: string, t: string): External<TwoDyn> { return TwoDyn(s, t); }
+  get mkNest(x: u256, a: u256, s: string, y: u256): External<Nest> { return Nest(x, FD(a, s), y); }
+  get echoFD(d: FD): External<FD> { return d; }
+  get echoMix(m: Mix): External<Mix> { return m; }
+  get echoVals(a: u256, b: address, c: bool, d: u8, e: i8, f: bytes4): External<[u256, address, bool, u8, i8, bytes4]> { return [a, b, c, d, e, f]; }
 
   // --- struct array (each element carries dynamic field), from storage ---
-  @external pushFD(a: u256, s: string): void { this.recs.push(FD(a, s)); }
-  @external @view allFD(): FD[] { return this.recs; }
-  @external pushMix(p: u64, q: u64, s: string, b: bytes, z: u256): void { this.mixes.push(Mix(p, q, s, b, z)); }
-  @external @view allMix(): Mix[] { return this.mixes; }
-  @external pushStat(a: u128, b: u128, c: bool): void { this.stats.push(StatPack(a, b, c)); }
-  @external @view allStat(): StatPack[] { return this.stats; }
+  pushFD(a: u256, s: string): External<void> { this.recs.push(FD(a, s)); }
+  get allFD(): External<FD[]> { return this.recs; }
+  pushMix(p: u64, q: u64, s: string, b: bytes, z: u256): External<void> { this.mixes.push(Mix(p, q, s, b, z)); }
+  get allMix(): External<Mix[]> { return this.mixes; }
+  pushStat(a: u128, b: u128, c: bool): External<void> { this.stats.push(StatPack(a, b, c)); }
+  get allStat(): External<StatPack[]> { return this.stats; }
 
   // --- nested dynamic returns from storage ---
-  @external pushName(s: string): void { this.names.push(s); }
-  @external @view allNames(): string[] { return this.names; }
-  @external pushBlob(b: bytes): void { this.blobs.push(b); }
-  @external @view allBlobs(): bytes[] { return this.blobs; }
-  @external gridPush(): void { this.grid.push(); }
-  @external gridPushInner(i: u256, v: u256): void { this.grid[i].push(v); }
-  @external @view allGrid(): u256[][] { return this.grid; }
+  pushName(s: string): External<void> { this.names.push(s); }
+  get allNames(): External<string[]> { return this.names; }
+  pushBlob(b: bytes): External<void> { this.blobs.push(b); }
+  get allBlobs(): External<bytes[]> { return this.blobs; }
+  gridPush(): External<void> { this.grid.push(); }
+  gridPushInner(i: u256, v: u256): External<void> { this.grid[i].push(v); }
+  get allGrid(): External<u256[][]> { return this.grid; }
 
   // --- nested dynamic returns echoed (pure, from calldata) ---
-  @external @pure echoNames(a: string[]): string[] { return a; }
-  @external @pure echoBlobs(a: bytes[]): bytes[] { return a; }
-  @external @pure echoGrid(a: u256[][]): u256[][] { return a; }
+  get echoNames(a: string[]): External<string[]> { return a; }
+  get echoBlobs(a: bytes[]): External<bytes[]> { return a; }
+  get echoGrid(a: u256[][]): External<u256[][]> { return a; }
 
   // --- multi-value returns mixing components ---
-  @external @pure mvValStr(n: u256, s: string): [u256, string] { return [n, s]; }
-  @external @pure mvStrVal(s: string, n: u256): [string, u256] { return [s, n]; }
-  @external @pure mvTwoStr(a: string, b: string): [string, string] { return [a, b]; }
-  @external @pure mvValBytesVal(n: u256, b: bytes, m: u256): [u256, bytes, u256] { return [n, b, m]; }
-  @external @view mvStructVal(n: u256): [FD, u256] { return [this.fd1, n]; }
-  @external @view mvValStruct(n: u256): [u256, FD] { return [n, this.fd1]; }
-  @external @view mvStructStruct(): [FD, FD] { return [this.fd1, this.fd2]; }
-  @external @pure mvAllStatic(a: u256, b: address, c: bool): [u256, address, bool] { return [a, b, c]; }
-  @external @view mvArrVal(n: u256): [u256[], u256] { return [this.vals, n]; }
-  @external @view mvStrArr(n: u256): [string[], u256] { return [this.names, n]; }
+  get mvValStr(n: u256, s: string): External<[u256, string]> { return [n, s]; }
+  get mvStrVal(s: string, n: u256): External<[string, u256]> { return [s, n]; }
+  get mvTwoStr(a: string, b: string): External<[string, string]> { return [a, b]; }
+  get mvValBytesVal(n: u256, b: bytes, m: u256): External<[u256, bytes, u256]> { return [n, b, m]; }
+  get mvStructVal(n: u256): External<[FD, u256]> { return [this.fd1, n]; }
+  get mvValStruct(n: u256): External<[u256, FD]> { return [n, this.fd1]; }
+  get mvStructStruct(): External<[FD, FD]> { return [this.fd1, this.fd2]; }
+  get mvAllStatic(a: u256, b: address, c: bool): External<[u256, address, bool]> { return [a, b, c]; }
+  get mvArrVal(n: u256): External<[u256[], u256]> { return [this.vals, n]; }
+  get mvStrArr(n: u256): External<[string[], u256]> { return [this.names, n]; }
 
   // --- empty dynamic returns (storage-backed empties + literals) ---
-  @external @pure emptyStr(): string { return ""; }
-  @external @view emptyArr(): u256[] { return this.vals; }
-  @external @view emptyStrArr(): string[] { return this.empties; }
-  @external @pure emptyStructWithEmptyStr(): FD { return FD(0n, ""); }
-  @external @pure passBytes(b: bytes): bytes { return b; }
+  get emptyStr(): External<string> { return ""; }
+  get emptyArr(): External<u256[]> { return this.vals; }
+  get emptyStrArr(): External<string[]> { return this.empties; }
+  get emptyStructWithEmptyStr(): External<FD> { return FD(0n, ""); }
+  get passBytes(b: bytes): External<bytes> { return b; }
 }`;
 
 const JETH2 = JETH;

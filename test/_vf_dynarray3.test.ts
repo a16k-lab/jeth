@@ -25,54 +25,54 @@ function encIStr(sig: string, i: bigint, s: string): string {
   return '0x' + sel(sig) + pad(i) + pad(0x40n) + pad(BigInt(b.length)) + data;
 }
 
-const JETH = `@struct class S { xs: u256[]; n: u256; }
-@contract class C {
-  @state a: u256[];
-  @state si: i256[];
-  @state si8: i128[];
-  @state w16: u16[];
-  @state b32: bytes32[];
-  @state mm: mapping<u256, u256[][]>;
-  @state s: S;
-  @state fs: Arr<string, 3>;
-  @state fb: Arr<bytes, 2>;
+const JETH = `type S = { xs: u256[]; n: u256; };
+class C {
+  a: u256[];
+  si: i256[];
+  si8: i128[];
+  w16: u16[];
+  b32: bytes32[];
+  mm: mapping<u256, u256[][]>;
+  s: S;
+  fs: Arr<string, 3>;
+  fb: Arr<bytes, 2>;
 
-  @external push(v: u256): void { this.a.push(v); }
-  @external self(): void { this.a = this.a; }                 // aliasing self-copy (no-op)
-  @external @view all(): u256[] { return this.a; }
+  push(v: u256): External<void> { this.a.push(v); }
+  self(): External<void> { this.a = this.a; }                 // aliasing self-copy (no-op)
+  get all(): External<u256[]> { return this.a; }
 
-  @external pushI(v: i256): void { this.si.push(v); }
-  @external popI(): void { this.si.pop(); }
-  @external @view getI(i: u256): i256 { return this.si[i]; }
-  @external @view allI(): i256[] { return this.si; }
+  pushI(v: i256): External<void> { this.si.push(v); }
+  popI(): External<void> { this.si.pop(); }
+  get getI(i: u256): External<i256> { return this.si[i]; }
+  get allI(): External<i256[]> { return this.si; }
 
-  @external pushI8(v: i128): void { this.si8.push(v); }
-  @external popI8(): void { this.si8.pop(); }
-  @external @view getI8(i: u256): i128 { return this.si8[i]; }
-  @external @view allI8(): i128[] { return this.si8; }
+  pushI8(v: i128): External<void> { this.si8.push(v); }
+  popI8(): External<void> { this.si8.pop(); }
+  get getI8(i: u256): External<i128> { return this.si8[i]; }
+  get allI8(): External<i128[]> { return this.si8; }
 
-  @external pushW(v: u16): void { this.w16.push(v); }
-  @external popW(): void { this.w16.pop(); }
-  @external @view getW(i: u256): u16 { return this.w16[i]; }
-  @external @view allW(): u16[] { return this.w16; }
+  pushW(v: u16): External<void> { this.w16.push(v); }
+  popW(): External<void> { this.w16.pop(); }
+  get getW(i: u256): External<u16> { return this.w16[i]; }
+  get allW(): External<u16[]> { return this.w16; }
 
-  @external pushB32(v: bytes32): void { this.b32.push(v); }
-  @external @view allB32(): bytes32[] { return this.b32; }
+  pushB32(v: bytes32): External<void> { this.b32.push(v); }
+  get allB32(): External<bytes32[]> { return this.b32; }
 
-  @external mmPushOuter(k: u256): void { this.mm[k].push(); }
-  @external mmPushInner(k: u256, i: u256, v: u256): void { this.mm[k][i].push(v); }
-  @external @view mmAll(k: u256): u256[][] { return this.mm[k]; }
+  mmPushOuter(k: u256): External<void> { this.mm[k].push(); }
+  mmPushInner(k: u256, i: u256, v: u256): External<void> { this.mm[k][i].push(v); }
+  get mmAll(k: u256): External<u256[][]> { return this.mm[k]; }
 
-  @external sPush(v: u256): void { this.s.xs.push(v); }
-  @external sSetN(n: u256): void { this.s.n = n; }
-  @external @view sAll(): S { return this.s; }
+  sPush(v: u256): External<void> { this.s.xs.push(v); }
+  sSetN(n: u256): External<void> { this.s.n = n; }
+  get sAll(): External<S> { return this.s; }
 
-  @external fsSet(i: u256, v: string): void { this.fs[i] = v; }
-  @external @view fsAll(): Arr<string, 3> { return this.fs; }
-  @external @view fsGet(i: u256): string { return this.fs[i]; }
+  fsSet(i: u256, v: string): External<void> { this.fs[i] = v; }
+  get fsAll(): External<Arr<string, 3>> { return this.fs; }
+  get fsGet(i: u256): External<string> { return this.fs[i]; }
 
-  @external fbSet(i: u256, v: bytes): void { this.fb[i] = v; }
-  @external @view fbAll(): Arr<bytes, 2> { return this.fb; }
+  fbSet(i: u256, v: bytes): External<void> { this.fb[i] = v; }
+  get fbAll(): External<Arr<bytes, 2>> { return this.fb; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -249,7 +249,7 @@ describe('_vf_dynarray3 probe', () => {
   it('Arr<u256[],N> (uint256[][N]) storage access now compiles (G6)', () => {
     expect(() =>
       compile(
-        `@contract class C { @state a: Arr<u256[], 2>; @external p(i: u256, v: u256): void { this.a[i].push(v); } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`,
+        `class C { a: Arr<u256[], 2>; p(i: u256, v: u256): External<void> { this.a[i].push(v); } g(i: u256, j: u256): u256 { return this.a[i][j]; } }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
@@ -257,7 +257,7 @@ describe('_vf_dynarray3 probe', () => {
     // (JETH210/151, byte-identical incl. malformed-offset parity in test/calldata-composite-index).
     expect(() =>
       compile(
-        `@contract class C { @external @pure f(a: Arr<u256[], 2>, i: u256, j: u256): u256 { return a[i][j]; } }`,
+        `class C { get f(a: Arr<u256[], 2>, i: u256, j: u256): External<u256> { return a[i][j]; } }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
@@ -266,19 +266,19 @@ describe('_vf_dynarray3 probe', () => {
   it('Arr<u256,2>[] (uint256[2][]) storage access now compiles (G6)', () => {
     expect(() =>
       compile(
-        `@contract class C { @state a: Arr<u256,2>[]; @external p(): void { this.a.push(); } @external s(i: u256, j: u256, v: u256): void { this.a[i][j] = v; } @view g(i: u256, j: u256): u256 { return this.a[i][j]; } }`,
+        `class C { a: Arr<u256,2>[]; p(): External<void> { this.a.push(); } s(i: u256, j: u256, v: u256): External<void> { this.a[i][j] = v; } g(i: u256, j: u256): u256 { return this.a[i][j]; } }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
     // whole-array RETURN and calldata-param ECHO of this shape now compile too (G6, byte-identical
     // in test/array-composition-abi.test.ts).
     expect(() =>
-      compile(`@contract class C { @state a: Arr<u256,2>[]; @view all(): Arr<u256,2>[] { return this.a; } }`, {
+      compile(`class C { a: Arr<u256,2>[]; all(): Arr<u256,2>[] { return this.a; } }`, {
         fileName: 'C.jeth',
       }),
     ).not.toThrow();
     expect(() =>
-      compile(`@contract class C { @external @pure e(x: Arr<u256,2>[]): Arr<u256,2>[] { return x; } }`, {
+      compile(`class C { get e(x: Arr<u256,2>[]): External<Arr<u256,2>[]> { return x; } }`, {
         fileName: 'C.jeth',
       }),
     ).not.toThrow();

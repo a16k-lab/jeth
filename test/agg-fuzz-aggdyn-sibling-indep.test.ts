@@ -236,11 +236,9 @@ describe('aggregate + dynamic sibling vs Solidity (independent)', () => {
     // Formerly a JETH-only JETH230 rejection; solc always accepted these, and G5 now does too
     // (byte-identical echo, verified in test/calldata-agg-return.test.ts).
     for (const src of [
-      `@struct class Pt { x: u128; y: u128; }
-@contract
-class G { @external @pure retP(p: Pt): Pt { return p; } }`,
-      `@contract
-class G { @external @pure retA(a: Arr<u256,3>): Arr<u256,3> { return a; } }`,
+      `type Pt = { x: u128; y: u128; };
+class G { get retP(p: Pt): External<Pt> { return p; } }`,
+      `class G { get retA(a: Arr<u256,3>): External<Arr<u256,3>> { return a; } }`,
     ]) {
       let codes: string[] | null = null;
       try {
@@ -253,8 +251,7 @@ class G { @external @pure retA(a: Arr<u256,3>): Arr<u256,3> { return a; } }`,
   });
 
   it('GATE: constant OOB index a[3n] on Arr<u256,3> is a COMPILE error (mirrors solc)', () => {
-    const src = `@contract
-class G { @external @pure oob(a: Arr<u256,3>, b: u256[]): u256 { return a[3n]; } }`;
+    const src = `class G { get oob(a: Arr<u256,3>, b: u256[]): External<u256> { return a[3n]; } }`;
     let threw = false;
     try {
       compile(src, { fileName: 'Gate.jeth' });

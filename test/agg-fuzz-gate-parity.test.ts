@@ -63,9 +63,9 @@ function solcErrors(source: string): string[] | null {
 
 // ---- shared @struct preamble for JETH gate sources -------------------------
 const JETH_STRUCTS = `
-@struct class Pt { x: u128; y: u128; }
-@struct class Inner { a: u128; b: u128; }
-@struct class Outer { p: u64; inner: Inner; q: u64; }
+type Pt = { x: u128; y: u128; };
+type Inner = { a: u128; b: u128; };
+type Outer = { p: u64; inner: Inner; q: u64; };
 `;
 
 // ---- shared struct preamble for Solidity gate sources ----------------------
@@ -86,9 +86,8 @@ describe('gate-parity: compile-time gate parity for aggregate calldata params', 
     const J_ARR_OOB =
       JETH_STRUCTS +
       `
-@contract
 class G {
-  @external @pure f(a: Arr<u256, 3>): u256 { return a[3n]; }
+  get f(a: Arr<u256, 3>): External<u256> { return a[3n]; }
 }
 `;
     const S_ARR_OOB =
@@ -101,9 +100,8 @@ class G {
     const J_STRUCTARR_OOB =
       JETH_STRUCTS +
       `
-@contract
 class G {
-  @external @pure f(ps: Arr<Pt, 2>): u128 { return ps[2n].x; }
+  get f(ps: Arr<Pt, 2>): External<u128> { return ps[2n].x; }
 }
 `;
     const S_STRUCTARR_OOB =
@@ -148,9 +146,8 @@ class G {
       const jOk =
         JETH_STRUCTS +
         `
-@contract
 class G {
-  @external @pure f(a: Arr<u256, 3>): u256 { return a[2n]; }
+  get f(a: Arr<u256, 3>): External<u256> { return a[2n]; }
 }
 `;
       const sOk =
@@ -173,9 +170,8 @@ class G {
       const src =
         JETH_STRUCTS +
         `
-@contract
 class G {
-  @external @pure f(p: Pt): Pt { return p; }
+  get f(p: Pt): External<Pt> { return p; }
 }
 `;
       expect(jethCodes(src, 'G.jeth'), 'returning a whole struct param is supported (G5)').toBeNull();
@@ -185,9 +181,8 @@ class G {
       const src =
         JETH_STRUCTS +
         `
-@contract
 class G {
-  @external @pure f(a: Arr<u256, 3>): Arr<u256, 3> { return a; }
+  get f(a: Arr<u256, 3>): External<Arr<u256, 3>> { return a; }
 }
 `;
       expect(jethCodes(src, 'G.jeth'), 'returning a whole fixed-array param is supported (G5)').toBeNull();
@@ -197,9 +192,8 @@ class G {
       const src =
         JETH_STRUCTS +
         `
-@contract
 class G {
-  @external @pure f(p: Pt): u128 { let q: Pt = p; return q.x; }
+  get f(p: Pt): External<u128> { let q: Pt = p; return q.x; }
 }
 `;
       expect(jethCodes(src, 'G.jeth'), 'calldata struct param -> memory local copy is supported (G9)').toBeNull();
@@ -215,9 +209,8 @@ class G {
       const src =
         JETH_STRUCTS +
         `
-@contract
 class G {
-  @external @pure f(p: Pt): u128 { p.x = 1n; return p.x; }
+  get f(p: Pt): External<u128> { p.x = 1n; return p.x; }
 }
 `;
       const codes = jethCodes(src, 'G.jeth');
@@ -237,9 +230,8 @@ class G {
       const src =
         JETH_STRUCTS +
         `
-@contract
 class G {
-  @external @pure f(a: Arr<u256, 3>): u256 { a[0n] = 1n; return a[0n]; }
+  get f(a: Arr<u256, 3>): External<u256> { a[0n] = 1n; return a[0n]; }
 }
 `;
       const codes = jethCodes(src, 'G.jeth');
@@ -267,14 +259,13 @@ class G {
     const J_RUN =
       JETH_STRUCTS +
       `
-@contract
 class G {
   // fixed-array constant indices a[0n], a[1n], a[2n]
-  @external @pure first(a: Arr<u256, 3>): u256 { return a[0n]; }
-  @external @pure mid(a: Arr<u256, 3>): u256 { return a[1n]; }
-  @external @pure last(a: Arr<u256, 3>): u256 { return a[2n]; }
+  get first(a: Arr<u256, 3>): External<u256> { return a[0n]; }
+  get mid(a: Arr<u256, 3>): External<u256> { return a[1n]; }
+  get last(a: Arr<u256, 3>): External<u256> { return a[2n]; }
   // struct-array constant index ps[1n].y (last element, second field)
-  @external @pure psLastY(ps: Arr<Pt, 2>): u128 { return ps[1n].y; }
+  get psLastY(ps: Arr<Pt, 2>): External<u128> { return ps[1n].y; }
 }
 `;
     const S_RUN =

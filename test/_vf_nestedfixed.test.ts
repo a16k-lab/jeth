@@ -16,90 +16,90 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
 // JETH and SOL mirror each other exactly.
-const JETH = `@struct class G2 { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
-@struct class Pk { a: u64; rows: Arr<Arr<u8, 4>, 3>; b: u64; }
-@struct class Sg { lead: i32; s: Arr<Arr<i64, 2>, 3>; tail: i32; }
-@struct class Bz { h: bytes8; m: Arr<Arr<bytes4, 2>, 2>; }
-@struct class Bl { p: bool; flags: Arr<Arr<bool, 5>, 2>; q: bool; }
-@struct class Inner { x: u32; y: u32; }
-@struct class StructGrid { lead: u256; cells: Arr<Arr<Inner, 2>, 2>; trail: u256; }
-@contract class C {
-  @state u2: Arr<Arr<u256, 3>, 2>;
-  @state u3: Arr<Arr<Arr<u256, 2>, 2>, 2>;
-  @state u4: Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>;
-  @state p2: Arr<Arr<u8, 4>, 3>;
-  @state p3: Arr<Arr<Arr<u8, 5>, 3>, 2>;
-  @state s2: Arr<Arr<i64, 2>, 3>;
-  @state b2: Arr<Arr<bytes4, 2>, 2>;
-  @state bl2: Arr<Arr<bool, 5>, 2>;
-  @state g2: G2;
-  @state pk: Pk;
-  @state sg: Sg;
-  @state bz: Bz;
-  @state bl: Bl;
-  @state sgr: StructGrid;
-  @state g2arr: G2[];
-  @state pkarr: Pk[];
-  @state sentBefore: u256;
-  @state sentAfter: u256;
+const JETH = `type G2 = { tag: u256; grid: Arr<Arr<u256, 2>, 2>; };
+type Pk = { a: u64; rows: Arr<Arr<u8, 4>, 3>; b: u64; };
+type Sg = { lead: i32; s: Arr<Arr<i64, 2>, 3>; tail: i32; };
+type Bz = { h: bytes8; m: Arr<Arr<bytes4, 2>, 2>; };
+type Bl = { p: bool; flags: Arr<Arr<bool, 5>, 2>; q: bool; };
+type Inner = { x: u32; y: u32; };
+type StructGrid = { lead: u256; cells: Arr<Arr<Inner, 2>, 2>; trail: u256; };
+class C {
+  u2: Arr<Arr<u256, 3>, 2>;
+  u3: Arr<Arr<Arr<u256, 2>, 2>, 2>;
+  u4: Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>;
+  p2: Arr<Arr<u8, 4>, 3>;
+  p3: Arr<Arr<Arr<u8, 5>, 3>, 2>;
+  s2: Arr<Arr<i64, 2>, 3>;
+  b2: Arr<Arr<bytes4, 2>, 2>;
+  bl2: Arr<Arr<bool, 5>, 2>;
+  g2: G2;
+  pk: Pk;
+  sg: Sg;
+  bz: Bz;
+  bl: Bl;
+  sgr: StructGrid;
+  g2arr: G2[];
+  pkarr: Pk[];
+  sentBefore: u256;
+  sentAfter: u256;
 
-  @external setSent(b4: u256, aft: u256): void { this.sentBefore = b4; this.sentAfter = aft; }
-  @external setU2(i: u256, j: u256, v: u256): void { this.u2[i][j] = v; }
-  @external setU3(i: u256, j: u256, k: u256, v: u256): void { this.u3[i][j][k] = v; }
-  @external setU4(i: u256, j: u256, k: u256, l: u256, v: u256): void { this.u4[i][j][k][l] = v; }
-  @external setP2(i: u256, j: u256, v: u8): void { this.p2[i][j] = v; }
-  @external setP3(i: u256, j: u256, k: u256, v: u8): void { this.p3[i][j][k] = v; }
-  @external setS2(i: u256, j: u256, v: i64): void { this.s2[i][j] = v; }
-  @external setB2(i: u256, j: u256, v: bytes4): void { this.b2[i][j] = v; }
-  @external setBl2(i: u256, j: u256, v: bool): void { this.bl2[i][j] = v; }
-  @external setG2(t: u256, i: u256, j: u256, v: u256): void { this.g2.tag = t; this.g2.grid[i][j] = v; }
-  @external setPk(a: u64, b: u64, i: u256, j: u256, v: u8): void { this.pk.a = a; this.pk.b = b; this.pk.rows[i][j] = v; }
-  @external setSg(lead: i32, tail: i32, i: u256, j: u256, v: i64): void { this.sg.lead = lead; this.sg.tail = tail; this.sg.s[i][j] = v; }
-  @external setBz(h: bytes8, i: u256, j: u256, v: bytes4): void { this.bz.h = h; this.bz.m[i][j] = v; }
-  @external setBl(p: bool, q: bool, i: u256, j: u256, v: bool): void { this.bl.p = p; this.bl.q = q; this.bl.flags[i][j] = v; }
-  @external setSgr(lead: u256, trail: u256, i: u256, j: u256, x: u32, y: u32): void { this.sgr.lead = lead; this.sgr.trail = trail; this.sgr.cells[i][j].x = x; this.sgr.cells[i][j].y = y; }
-  @external pushG2(): void { this.g2arr.push(); }
-  @external setG2arr(idx: u256, t: u256, i: u256, j: u256, v: u256): void { this.g2arr[idx].tag = t; this.g2arr[idx].grid[i][j] = v; }
-  @external pushPk(): void { this.pkarr.push(); }
-  @external setPkarr(idx: u256, a: u64, b: u64, i: u256, j: u256, v: u8): void { this.pkarr[idx].a = a; this.pkarr[idx].b = b; this.pkarr[idx].rows[i][j] = v; }
+  setSent(b4: u256, aft: u256): External<void> { this.sentBefore = b4; this.sentAfter = aft; }
+  setU2(i: u256, j: u256, v: u256): External<void> { this.u2[i][j] = v; }
+  setU3(i: u256, j: u256, k: u256, v: u256): External<void> { this.u3[i][j][k] = v; }
+  setU4(i: u256, j: u256, k: u256, l: u256, v: u256): External<void> { this.u4[i][j][k][l] = v; }
+  setP2(i: u256, j: u256, v: u8): External<void> { this.p2[i][j] = v; }
+  setP3(i: u256, j: u256, k: u256, v: u8): External<void> { this.p3[i][j][k] = v; }
+  setS2(i: u256, j: u256, v: i64): External<void> { this.s2[i][j] = v; }
+  setB2(i: u256, j: u256, v: bytes4): External<void> { this.b2[i][j] = v; }
+  setBl2(i: u256, j: u256, v: bool): External<void> { this.bl2[i][j] = v; }
+  setG2(t: u256, i: u256, j: u256, v: u256): External<void> { this.g2.tag = t; this.g2.grid[i][j] = v; }
+  setPk(a: u64, b: u64, i: u256, j: u256, v: u8): External<void> { this.pk.a = a; this.pk.b = b; this.pk.rows[i][j] = v; }
+  setSg(lead: i32, tail: i32, i: u256, j: u256, v: i64): External<void> { this.sg.lead = lead; this.sg.tail = tail; this.sg.s[i][j] = v; }
+  setBz(h: bytes8, i: u256, j: u256, v: bytes4): External<void> { this.bz.h = h; this.bz.m[i][j] = v; }
+  setBl(p: bool, q: bool, i: u256, j: u256, v: bool): External<void> { this.bl.p = p; this.bl.q = q; this.bl.flags[i][j] = v; }
+  setSgr(lead: u256, trail: u256, i: u256, j: u256, x: u32, y: u32): External<void> { this.sgr.lead = lead; this.sgr.trail = trail; this.sgr.cells[i][j].x = x; this.sgr.cells[i][j].y = y; }
+  pushG2(): External<void> { this.g2arr.push(); }
+  setG2arr(idx: u256, t: u256, i: u256, j: u256, v: u256): External<void> { this.g2arr[idx].tag = t; this.g2arr[idx].grid[i][j] = v; }
+  pushPk(): External<void> { this.pkarr.push(); }
+  setPkarr(idx: u256, a: u64, b: u64, i: u256, j: u256, v: u8): External<void> { this.pkarr[idx].a = a; this.pkarr[idx].b = b; this.pkarr[idx].rows[i][j] = v; }
 
-  @external @view getU2(): Arr<Arr<u256, 3>, 2> { return this.u2; }
-  @external @view rowU2(i: u256): Arr<u256, 3> { return this.u2[i]; }
-  @external @view elemU2(i: u256, j: u256): u256 { return this.u2[i][j]; }
-  @external @view getU3(): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.u3; }
-  @external @view planeU3(i: u256): Arr<Arr<u256, 2>, 2> { return this.u3[i]; }
-  @external @view rowU3(i: u256, j: u256): Arr<u256, 2> { return this.u3[i][j]; }
-  @external @view elemU3(i: u256, j: u256, k: u256): u256 { return this.u3[i][j][k]; }
-  @external @view getU4(): Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2> { return this.u4; }
-  @external @view cubeU4(i: u256): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.u4[i]; }
-  @external @view elemU4(i: u256, j: u256, k: u256, l: u256): u256 { return this.u4[i][j][k][l]; }
-  @external @view getP2(): Arr<Arr<u8, 4>, 3> { return this.p2; }
-  @external @view rowP2(i: u256): Arr<u8, 4> { return this.p2[i]; }
-  @external @view elemP2(i: u256, j: u256): u8 { return this.p2[i][j]; }
-  @external @view getP3(): Arr<Arr<Arr<u8, 5>, 3>, 2> { return this.p3; }
-  @external @view planeP3(i: u256): Arr<Arr<u8, 5>, 3> { return this.p3[i]; }
-  @external @view elemP3(i: u256, j: u256, k: u256): u8 { return this.p3[i][j][k]; }
-  @external @view getS2(): Arr<Arr<i64, 2>, 3> { return this.s2; }
-  @external @view rowS2(i: u256): Arr<i64, 2> { return this.s2[i]; }
-  @external @view elemS2(i: u256, j: u256): i64 { return this.s2[i][j]; }
-  @external @view getB2(): Arr<Arr<bytes4, 2>, 2> { return this.b2; }
-  @external @view rowB2(i: u256): Arr<bytes4, 2> { return this.b2[i]; }
-  @external @view elemB2(i: u256, j: u256): bytes4 { return this.b2[i][j]; }
-  @external @view getBl2(): Arr<Arr<bool, 5>, 2> { return this.bl2; }
-  @external @view rowBl2(i: u256): Arr<bool, 5> { return this.bl2[i]; }
-  @external @view elemBl2(i: u256, j: u256): bool { return this.bl2[i][j]; }
-  @external @view getG2(): G2 { return this.g2; }
-  @external @view getPk(): Pk { return this.pk; }
-  @external @view getSg(): Sg { return this.sg; }
-  @external @view getBz(): Bz { return this.bz; }
-  @external @view getBl(): Bl { return this.bl; }
-  @external @view getSgr(): StructGrid { return this.sgr; }
-  @external @view getG2arr(): G2[] { return this.g2arr; }
-  @external @view getG2arrI(i: u256): G2 { return this.g2arr[i]; }
-  @external @view getPkarr(): Pk[] { return this.pkarr; }
-  @external @view getPkarrI(i: u256): Pk { return this.pkarr[i]; }
-  @external @view getSentBefore(): u256 { return this.sentBefore; }
-  @external @view getSentAfter(): u256 { return this.sentAfter; }
+  get getU2(): External<Arr<Arr<u256, 3>, 2>> { return this.u2; }
+  get rowU2(i: u256): External<Arr<u256, 3>> { return this.u2[i]; }
+  get elemU2(i: u256, j: u256): External<u256> { return this.u2[i][j]; }
+  get getU3(): External<Arr<Arr<Arr<u256, 2>, 2>, 2>> { return this.u3; }
+  get planeU3(i: u256): External<Arr<Arr<u256, 2>, 2>> { return this.u3[i]; }
+  get rowU3(i: u256, j: u256): External<Arr<u256, 2>> { return this.u3[i][j]; }
+  get elemU3(i: u256, j: u256, k: u256): External<u256> { return this.u3[i][j][k]; }
+  get getU4(): External<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>> { return this.u4; }
+  get cubeU4(i: u256): External<Arr<Arr<Arr<u256, 2>, 2>, 2>> { return this.u4[i]; }
+  get elemU4(i: u256, j: u256, k: u256, l: u256): External<u256> { return this.u4[i][j][k][l]; }
+  get getP2(): External<Arr<Arr<u8, 4>, 3>> { return this.p2; }
+  get rowP2(i: u256): External<Arr<u8, 4>> { return this.p2[i]; }
+  get elemP2(i: u256, j: u256): External<u8> { return this.p2[i][j]; }
+  get getP3(): External<Arr<Arr<Arr<u8, 5>, 3>, 2>> { return this.p3; }
+  get planeP3(i: u256): External<Arr<Arr<u8, 5>, 3>> { return this.p3[i]; }
+  get elemP3(i: u256, j: u256, k: u256): External<u8> { return this.p3[i][j][k]; }
+  get getS2(): External<Arr<Arr<i64, 2>, 3>> { return this.s2; }
+  get rowS2(i: u256): External<Arr<i64, 2>> { return this.s2[i]; }
+  get elemS2(i: u256, j: u256): External<i64> { return this.s2[i][j]; }
+  get getB2(): External<Arr<Arr<bytes4, 2>, 2>> { return this.b2; }
+  get rowB2(i: u256): External<Arr<bytes4, 2>> { return this.b2[i]; }
+  get elemB2(i: u256, j: u256): External<bytes4> { return this.b2[i][j]; }
+  get getBl2(): External<Arr<Arr<bool, 5>, 2>> { return this.bl2; }
+  get rowBl2(i: u256): External<Arr<bool, 5>> { return this.bl2[i]; }
+  get elemBl2(i: u256, j: u256): External<bool> { return this.bl2[i][j]; }
+  get getG2(): External<G2> { return this.g2; }
+  get getPk(): External<Pk> { return this.pk; }
+  get getSg(): External<Sg> { return this.sg; }
+  get getBz(): External<Bz> { return this.bz; }
+  get getBl(): External<Bl> { return this.bl; }
+  get getSgr(): External<StructGrid> { return this.sgr; }
+  get getG2arr(): External<G2[]> { return this.g2arr; }
+  get getG2arrI(i: u256): External<G2> { return this.g2arr[i]; }
+  get getPkarr(): External<Pk[]> { return this.pkarr; }
+  get getPkarrI(i: u256): External<Pk> { return this.pkarr[i]; }
+  get getSentBefore(): External<u256> { return this.sentBefore; }
+  get getSentAfter(): External<u256> { return this.sentAfter; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

@@ -29,10 +29,9 @@ describe('push-empty-literal over-acceptance', () => {
   // ---- The 3 REJECT cases (solc rejects, JETH must now reject too) ----
   it('rejects this.a.push([]) on u256[][]', () => {
     const jeth = `
-@contract
 class C {
-  @state a: u256[][];
-  @external f(): void { this.a.push([]); }
+  a: u256[][];
+  f(): External<void> { this.a.push([]); }
 }`;
     const sol = `
 contract C {
@@ -47,10 +46,9 @@ contract C {
 
   it('rejects this.a.push([]) on string[][]', () => {
     const jeth = `
-@contract
 class C {
-  @state a: string[][];
-  @external f(): void { this.a.push([]); }
+  a: string[][];
+  f(): External<void> { this.a.push([]); }
 }`;
     const sol = `
 contract C {
@@ -63,10 +61,9 @@ contract C {
 
   it('rejects this.a.push([[]]) on u256[][][]', () => {
     const jeth = `
-@contract
 class C {
-  @state a: u256[][][];
-  @external f(): void { this.a.push([[]]); }
+  a: u256[][][];
+  f(): External<void> { this.a.push([[]]); }
 }`;
     const sol = `
 contract C {
@@ -80,39 +77,35 @@ contract C {
   // ---- The 5 ACCEPT cases (both accept; JETH must still compile) ----
   it('accepts this.a.push([5n]) on u256[][]', () => {
     const jeth = `
-@contract
 class C {
-  @state a: u256[][];
-  @external f(): void { this.a.push([5n]); }
+  a: u256[][];
+  f(): External<void> { this.a.push([5n]); }
 }`;
     expect(jethRejects(jeth), 'JETH must accept').toBeNull();
   });
 
   it('accepts this.a.push([[5n]]) on u256[][][]', () => {
     const jeth = `
-@contract
 class C {
-  @state a: u256[][][];
-  @external f(): void { this.a.push([[5n]]); }
+  a: u256[][][];
+  f(): External<void> { this.a.push([[5n]]); }
 }`;
     expect(jethRejects(jeth)).toBeNull();
   });
 
   it('accepts this.a.push(["x"]) on string[][]', () => {
     const jeth = `
-@contract
 class C {
-  @state a: string[][];
-  @external f(): void { this.a.push(["x"]); }
+  a: string[][];
+  f(): External<void> { this.a.push(["x"]); }
 }`;
     expect(jethRejects(jeth)).toBeNull();
   });
 
   it('accepts empty literal in declaration/assignment (let x: u256[][] = [[]] and let x: u256[] = [])', () => {
     const jeth = `
-@contract
 class C {
-  @external f(): void {
+  f(): External<void> {
     let x: u256[][] = [[]];
     let y: u256[] = [];
     x;
@@ -124,10 +117,9 @@ class C {
 
   it('accepts no-arg this.a.push() on u256[][]', () => {
     const jeth = `
-@contract
 class C {
-  @state a: u256[][];
-  @external f(): void { this.a.push(); }
+  a: u256[][];
+  f(): External<void> { this.a.push(); }
 }`;
     expect(jethRejects(jeth)).toBeNull();
   });
@@ -136,10 +128,9 @@ class C {
   //      a partially-empty deep literal stays rejected (matches solc per-element deduce) ----
   it('rejects this.a.push([[], [5n]]) on u256[][] (one empty sub-literal)', () => {
     const jeth = `
-@contract
 class C {
-  @state a: u256[][][];
-  @external f(): void { this.a.push([[], [5n]]); }
+  a: u256[][][];
+  f(): External<void> { this.a.push([[], [5n]]); }
 }`;
     const sol = `
 contract C {

@@ -13,153 +13,153 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@contract class C {
+const JETH = `class C {
   // ---- checked add/sub/mul at many widths (overflow -> Panic 0x11) ----
-  @external @pure addU16(a: u16, b: u16): u16 { return a + b; }
-  @external @pure subU16(a: u16, b: u16): u16 { return a - b; }
-  @external @pure mulU16(a: u16, b: u16): u16 { return a * b; }
-  @external @pure addU32(a: u32, b: u32): u32 { return a + b; }
-  @external @pure subU32(a: u32, b: u32): u32 { return a - b; }
-  @external @pure mulU32(a: u32, b: u32): u32 { return a * b; }
-  @external @pure addU64(a: u64, b: u64): u64 { return a + b; }
-  @external @pure mulU64(a: u64, b: u64): u64 { return a * b; }
-  @external @pure addU128(a: u128, b: u128): u128 { return a + b; }
-  @external @pure mulU128(a: u128, b: u128): u128 { return a * b; }
-  @external @pure addU256(a: u256, b: u256): u256 { return a + b; }
-  @external @pure subU256(a: u256, b: u256): u256 { return a - b; }
-  @external @pure mulU256(a: u256, b: u256): u256 { return a * b; }
-  @external @pure addI16(a: i16, b: i16): i16 { return a + b; }
-  @external @pure subI16(a: i16, b: i16): i16 { return a - b; }
-  @external @pure mulI16(a: i16, b: i16): i16 { return a * b; }
-  @external @pure addI32(a: i32, b: i32): i32 { return a + b; }
-  @external @pure mulI32(a: i32, b: i32): i32 { return a * b; }
-  @external @pure addI128(a: i128, b: i128): i128 { return a + b; }
-  @external @pure mulI128(a: i128, b: i128): i128 { return a * b; }
-  @external @pure addI256(a: i256, b: i256): i256 { return a + b; }
-  @external @pure subI256(a: i256, b: i256): i256 { return a - b; }
-  @external @pure mulI256(a: i256, b: i256): i256 { return a * b; }
+  get addU16(a: u16, b: u16): External<u16> { return a + b; }
+  get subU16(a: u16, b: u16): External<u16> { return a - b; }
+  get mulU16(a: u16, b: u16): External<u16> { return a * b; }
+  get addU32(a: u32, b: u32): External<u32> { return a + b; }
+  get subU32(a: u32, b: u32): External<u32> { return a - b; }
+  get mulU32(a: u32, b: u32): External<u32> { return a * b; }
+  get addU64(a: u64, b: u64): External<u64> { return a + b; }
+  get mulU64(a: u64, b: u64): External<u64> { return a * b; }
+  get addU128(a: u128, b: u128): External<u128> { return a + b; }
+  get mulU128(a: u128, b: u128): External<u128> { return a * b; }
+  get addU256(a: u256, b: u256): External<u256> { return a + b; }
+  get subU256(a: u256, b: u256): External<u256> { return a - b; }
+  get mulU256(a: u256, b: u256): External<u256> { return a * b; }
+  get addI16(a: i16, b: i16): External<i16> { return a + b; }
+  get subI16(a: i16, b: i16): External<i16> { return a - b; }
+  get mulI16(a: i16, b: i16): External<i16> { return a * b; }
+  get addI32(a: i32, b: i32): External<i32> { return a + b; }
+  get mulI32(a: i32, b: i32): External<i32> { return a * b; }
+  get addI128(a: i128, b: i128): External<i128> { return a + b; }
+  get mulI128(a: i128, b: i128): External<i128> { return a * b; }
+  get addI256(a: i256, b: i256): External<i256> { return a + b; }
+  get subI256(a: i256, b: i256): External<i256> { return a - b; }
+  get mulI256(a: i256, b: i256): External<i256> { return a * b; }
 
   // ---- signed div/mod: INT_MIN/-1 (Panic 0x11), x/0 (Panic 0x12) ----
-  @external @pure divI16(a: i16, b: i16): i16 { return a / b; }
-  @external @pure modI16(a: i16, b: i16): i16 { return a % b; }
-  @external @pure divI32(a: i32, b: i32): i32 { return a / b; }
-  @external @pure modI32(a: i32, b: i32): i32 { return a % b; }
-  @external @pure divI128(a: i128, b: i128): i128 { return a / b; }
-  @external @pure modI128(a: i128, b: i128): i128 { return a % b; }
-  @external @pure divI256(a: i256, b: i256): i256 { return a / b; }
-  @external @pure modI256(a: i256, b: i256): i256 { return a % b; }
-  @external @pure divU256(a: u256, b: u256): u256 { return a / b; }
-  @external @pure modU256(a: u256, b: u256): u256 { return a % b; }
-  @external @pure divU8(a: u8, b: u8): u8 { return a / b; }
-  @external @pure modU8(a: u8, b: u8): u8 { return a % b; }
+  get divI16(a: i16, b: i16): External<i16> { return a / b; }
+  get modI16(a: i16, b: i16): External<i16> { return a % b; }
+  get divI32(a: i32, b: i32): External<i32> { return a / b; }
+  get modI32(a: i32, b: i32): External<i32> { return a % b; }
+  get divI128(a: i128, b: i128): External<i128> { return a / b; }
+  get modI128(a: i128, b: i128): External<i128> { return a % b; }
+  get divI256(a: i256, b: i256): External<i256> { return a / b; }
+  get modI256(a: i256, b: i256): External<i256> { return a % b; }
+  get divU256(a: u256, b: u256): External<u256> { return a / b; }
+  get modU256(a: u256, b: u256): External<u256> { return a % b; }
+  get divU8(a: u8, b: u8): External<u8> { return a / b; }
+  get modU8(a: u8, b: u8): External<u8> { return a % b; }
 
   // ---- negation of INT_MIN (Panic 0x11) at many widths ----
-  @external @pure negI16(a: i16): i16 { return -a; }
-  @external @pure negI32(a: i32): i32 { return -a; }
-  @external @pure negI64(a: i64): i64 { return -a; }
-  @external @pure negI128(a: i128): i128 { return -a; }
-  @external @pure negI256b(a: i256): i256 { return -a; }
+  get negI16(a: i16): External<i16> { return -a; }
+  get negI32(a: i32): External<i32> { return -a; }
+  get negI64(a: i64): External<i64> { return -a; }
+  get negI128(a: i128): External<i128> { return -a; }
+  get negI256b(a: i256): External<i256> { return -a; }
 
   // ---- unchecked wraparound ----
-  @external @pure uAddU16(a: u16, b: u16): u16 { unchecked: { return a + b; } }
-  @external @pure uSubU16(a: u16, b: u16): u16 { unchecked: { return a - b; } }
-  @external @pure uMulU16(a: u16, b: u16): u16 { unchecked: { return a * b; } }
-  @external @pure uNegI16(a: i16): i16 { unchecked: { return -a; } }
-  @external @pure uNegI256(a: i256): i256 { unchecked: { return -a; } }
-  @external @pure uAddI16(a: i16, b: i16): i16 { unchecked: { return a + b; } }
-  @external @pure uSubI16(a: i16, b: i16): i16 { unchecked: { return a - b; } }
-  @external @pure uMulI16(a: i16, b: i16): i16 { unchecked: { return a * b; } }
-  @external @pure uSubU256(a: u256, b: u256): u256 { unchecked: { return a - b; } }
-  @external @pure uMulU256(a: u256, b: u256): u256 { unchecked: { return a * b; } }
+  get uAddU16(a: u16, b: u16): External<u16> { unchecked: { return a + b; } }
+  get uSubU16(a: u16, b: u16): External<u16> { unchecked: { return a - b; } }
+  get uMulU16(a: u16, b: u16): External<u16> { unchecked: { return a * b; } }
+  get uNegI16(a: i16): External<i16> { unchecked: { return -a; } }
+  get uNegI256(a: i256): External<i256> { unchecked: { return -a; } }
+  get uAddI16(a: i16, b: i16): External<i16> { unchecked: { return a + b; } }
+  get uSubI16(a: i16, b: i16): External<i16> { unchecked: { return a - b; } }
+  get uMulI16(a: i16, b: i16): External<i16> { unchecked: { return a * b; } }
+  get uSubU256(a: u256, b: u256): External<u256> { unchecked: { return a - b; } }
+  get uMulU256(a: u256, b: u256): External<u256> { unchecked: { return a * b; } }
 
   // ---- exponent edges: checked (Panic 0x11) + unchecked wrap ----
-  @external @pure powU16(a: u16, b: u16): u16 { return a ** b; }
-  @external @pure powU32(a: u32, b: u32): u32 { return a ** b; }
-  @external @pure powU64(a: u64, b: u64): u64 { return a ** b; }
-  @external @pure powU128(a: u128, b: u128): u128 { return a ** b; }
-  @external @pure powI16(a: i16, b: u16): i16 { return a ** b; }
-  @external @pure powI32(a: i32, b: u32): i32 { return a ** b; }
-  @external @pure powI256b(a: i256, b: u256): i256 { return a ** b; }
-  @external @pure uPowU16(a: u16, b: u16): u16 { unchecked: { return a ** b; } }
-  @external @pure uPowU256(a: u256, b: u256): u256 { unchecked: { return a ** b; } }
-  @external @pure uPowI16(a: i16, b: u16): i16 { unchecked: { return a ** b; } }
+  get powU16(a: u16, b: u16): External<u16> { return a ** b; }
+  get powU32(a: u32, b: u32): External<u32> { return a ** b; }
+  get powU64(a: u64, b: u64): External<u64> { return a ** b; }
+  get powU128(a: u128, b: u128): External<u128> { return a ** b; }
+  get powI16(a: i16, b: u16): External<i16> { return a ** b; }
+  get powI32(a: i32, b: u32): External<i32> { return a ** b; }
+  get powI256b(a: i256, b: u256): External<i256> { return a ** b; }
+  get uPowU16(a: u16, b: u16): External<u16> { unchecked: { return a ** b; } }
+  get uPowU256(a: u256, b: u256): External<u256> { unchecked: { return a ** b; } }
+  get uPowI16(a: i16, b: u16): External<i16> { unchecked: { return a ** b; } }
 
   // ---- shifts: amount >= bit width, dirty amount, signed >> ----
-  @external @pure shlU16(a: u16, s: u256): u16 { return a << s; }
-  @external @pure shrU16(a: u16, s: u256): u16 { return a >> s; }
-  @external @pure shlU32(a: u32, s: u256): u32 { return a << s; }
-  @external @pure shrU32(a: u32, s: u256): u32 { return a >> s; }
-  @external @pure shlI16(a: i16, s: u256): i16 { return a << s; }
-  @external @pure shrI16(a: i16, s: u256): i16 { return a >> s; }
-  @external @pure shlI256(a: i256, s: u256): i256 { return a << s; }
-  @external @pure shrI256b(a: i256, s: u256): i256 { return a >> s; }
-  @external @pure shlU256(a: u256, s: u256): u256 { return a << s; }
-  @external @pure shrU256(a: u256, s: u256): u256 { return a >> s; }
-  @external @pure shlU8b(a: u8, s: u8): u8 { return a << s; }
+  get shlU16(a: u16, s: u256): External<u16> { return a << s; }
+  get shrU16(a: u16, s: u256): External<u16> { return a >> s; }
+  get shlU32(a: u32, s: u256): External<u32> { return a << s; }
+  get shrU32(a: u32, s: u256): External<u32> { return a >> s; }
+  get shlI16(a: i16, s: u256): External<i16> { return a << s; }
+  get shrI16(a: i16, s: u256): External<i16> { return a >> s; }
+  get shlI256(a: i256, s: u256): External<i256> { return a << s; }
+  get shrI256b(a: i256, s: u256): External<i256> { return a >> s; }
+  get shlU256(a: u256, s: u256): External<u256> { return a << s; }
+  get shrU256(a: u256, s: u256): External<u256> { return a >> s; }
+  get shlU8b(a: u8, s: u8): External<u8> { return a << s; }
 
   // ---- mixed-width arithmetic (implicit widening) ----
-  @external @pure mixAddDiff(a: u8, b: u32, c: u16): u64 { return a + b + c; }
-  @external @pure mixSubI(a: i8, b: i64): i64 { return b - a; }
-  @external @pure mixMulI(a: i16, b: i128): i128 { return a * b; }
-  @external @pure mixDivU(a: u8, b: u64): u64 { return b / a; }
-  @external @pure mixModU(a: u16, b: u128): u128 { return b % a; }
-  @external @pure mixCmpAdd(a: u32, b: u8): u32 { let x: u32 = a; x += b; return x; }
+  get mixAddDiff(a: u8, b: u32, c: u16): External<u64> { return a + b + c; }
+  get mixSubI(a: i8, b: i64): External<i64> { return b - a; }
+  get mixMulI(a: i16, b: i128): External<i128> { return a * b; }
+  get mixDivU(a: u8, b: u64): External<u64> { return b / a; }
+  get mixModU(a: u16, b: u128): External<u128> { return b % a; }
+  get mixCmpAdd(a: u32, b: u8): External<u32> { let x: u32 = a; x += b; return x; }
 
   // ---- compound assignment with checked overflow ----
-  @external @pure cAddU8(a: u8, b: u8): u8 { let x: u8 = a; x += b; return x; }
-  @external @pure cSubU8(a: u8, b: u8): u8 { let x: u8 = a; x -= b; return x; }
-  @external @pure cMulU8(a: u8, b: u8): u8 { let x: u8 = a; x *= b; return x; }
-  @external @pure cMulI8(a: i8, b: i8): i8 { let x: i8 = a; x *= b; return x; }
-  @external @pure cDivU8(a: u8, b: u8): u8 { let x: u8 = a; x /= b; return x; }
-  @external @pure cModI8(a: i8, b: i8): i8 { let x: i8 = a; x %= b; return x; }
-  @external @pure cShlU16(a: u16, s: u256): u16 { let x: u16 = a; x <<= s; return x; }
-  @external @pure cShrI16(a: i16, s: u256): i16 { let x: i16 = a; x >>= s; return x; }
-  @external @pure cAndU16(a: u16, b: u16): u16 { let x: u16 = a; x &= b; return x; }
-  @external @pure cXorU16(a: u16, b: u16): u16 { let x: u16 = a; x ^= b; return x; }
-  @external @pure cOrU16(a: u16, b: u16): u16 { let x: u16 = a; x |= b; return x; }
+  get cAddU8(a: u8, b: u8): External<u8> { let x: u8 = a; x += b; return x; }
+  get cSubU8(a: u8, b: u8): External<u8> { let x: u8 = a; x -= b; return x; }
+  get cMulU8(a: u8, b: u8): External<u8> { let x: u8 = a; x *= b; return x; }
+  get cMulI8(a: i8, b: i8): External<i8> { let x: i8 = a; x *= b; return x; }
+  get cDivU8(a: u8, b: u8): External<u8> { let x: u8 = a; x /= b; return x; }
+  get cModI8(a: i8, b: i8): External<i8> { let x: i8 = a; x %= b; return x; }
+  get cShlU16(a: u16, s: u256): External<u16> { let x: u16 = a; x <<= s; return x; }
+  get cShrI16(a: i16, s: u256): External<i16> { let x: i16 = a; x >>= s; return x; }
+  get cAndU16(a: u16, b: u16): External<u16> { let x: u16 = a; x &= b; return x; }
+  get cXorU16(a: u16, b: u16): External<u16> { let x: u16 = a; x ^= b; return x; }
+  get cOrU16(a: u16, b: u16): External<u16> { let x: u16 = a; x |= b; return x; }
 
   // ---- type(T).max/min used in arithmetic ----
-  @external @pure maxAddU8(a: u8): u8 { return type(u8).max - a; }
-  @external @pure minSubI8(a: i8): i256 { return i256(type(i8).min) - i256(a); }
-  @external @pure maxPlusOneU16(): u16 { return type(u16).max + 1n; }
-  @external @pure minNegI16(): i16 { return -type(i16).min; }
+  get maxAddU8(a: u8): External<u8> { return type(u8).max - a; }
+  get minSubI8(a: i8): External<i256> { return i256(type(i8).min) - i256(a); }
+  get maxPlusOneU16(): External<u16> { return type(u16).max + 1n; }
+  get minNegI16(): External<i16> { return -type(i16).min; }
 
   // ---- casts: bytesN <-> uintN <-> bytesM, odd widths ----
-  @external @pure b3ToU24(a: bytes3): u24 { return u24(a); }
-  @external @pure u24ToB3(a: u24): bytes3 { return bytes3(a); }
-  @external @pure b7ToU56(a: bytes7): u56 { return u56(a); }
-  @external @pure b32ToB7(a: bytes32): bytes7 { return bytes7(a); }
-  @external @pure b7ToB32(a: bytes7): bytes32 { return bytes32(a); }
-  @external @pure b1ToB32(a: bytes1): bytes32 { return bytes32(a); }
-  @external @pure b32ToB1(a: bytes32): bytes1 { return bytes1(a); }
-  @external @pure u24ToB3ToU24(a: u24): u24 { return u24(bytes3(a)); }
-  @external @pure b5ToU40ToB5(a: bytes5): bytes5 { return bytes5(u40(a)); }
-  @external @pure widenU24ToU256(a: u24): u256 { return u256(a); }
-  @external @pure narrowU256ToU24(a: u256): u24 { return u24(a); }
-  @external @pure i40ToI256(a: i40): i256 { return i256(a); }
-  @external @pure i256ToI40(a: i256): i40 { return i40(a); }
-  @external @pure i24ToU24(a: i24): u24 { return u24(a); }
-  @external @pure u24ToI24(a: u24): i24 { return i24(a); }
+  get b3ToU24(a: bytes3): External<u24> { return u24(a); }
+  get u24ToB3(a: u24): External<bytes3> { return bytes3(a); }
+  get b7ToU56(a: bytes7): External<u56> { return u56(a); }
+  get b32ToB7(a: bytes32): External<bytes7> { return bytes7(a); }
+  get b7ToB32(a: bytes7): External<bytes32> { return bytes32(a); }
+  get b1ToB32(a: bytes1): External<bytes32> { return bytes32(a); }
+  get b32ToB1(a: bytes32): External<bytes1> { return bytes1(a); }
+  get u24ToB3ToU24(a: u24): External<u24> { return u24(bytes3(a)); }
+  get b5ToU40ToB5(a: bytes5): External<bytes5> { return bytes5(u40(a)); }
+  get widenU24ToU256(a: u24): External<u256> { return u256(a); }
+  get narrowU256ToU24(a: u256): External<u24> { return u24(a); }
+  get i40ToI256(a: i40): External<i256> { return i256(a); }
+  get i256ToI40(a: i256): External<i40> { return i40(a); }
+  get i24ToU24(a: i24): External<u24> { return u24(a); }
+  get u24ToI24(a: u24): External<i24> { return i24(a); }
 
   // ---- address <-> u160 <-> bytes20 round-trips ----
-  @external @pure addrToU160(a: address): u160 { return u160(a); }
-  @external @pure u160ToAddr(a: u160): address { return address(a); }
-  @external @pure addrToB20(a: address): bytes20 { return bytes20(a); }
-  @external @pure b20ToAddr(a: bytes20): address { return address(a); }
-  @external @pure addrRound(a: address): address { return address(u160(a)); }
-  @external @pure addrRoundB(a: address): address { return address(bytes20(a)); }
-  @external @pure u160ToB20(a: u160): bytes20 { return bytes20(address(a)); }
+  get addrToU160(a: address): External<u160> { return u160(a); }
+  get u160ToAddr(a: u160): External<address> { return address(a); }
+  get addrToB20(a: address): External<bytes20> { return bytes20(a); }
+  get b20ToAddr(a: bytes20): External<address> { return address(a); }
+  get addrRound(a: address): External<address> { return address(u160(a)); }
+  get addrRoundB(a: address): External<address> { return address(bytes20(a)); }
+  get u160ToB20(a: u160): External<bytes20> { return bytes20(address(a)); }
 
   // ---- not / and / or / xor at narrow widths (cleaned result) ----
-  @external @pure notU16(a: u16): u16 { return ~a; }
-  @external @pure notI16(a: i16): i16 { return ~a; }
-  @external @pure xorU16(a: u16, b: u16): u16 { return a ^ b; }
-  @external @pure orU16(a: u16, b: u16): u16 { return a | b; }
-  @external @pure notU24(a: u24): u24 { return ~a; }
+  get notU16(a: u16): External<u16> { return ~a; }
+  get notI16(a: i16): External<i16> { return ~a; }
+  get xorU16(a: u16, b: u16): External<u16> { return a ^ b; }
+  get orU16(a: u16, b: u16): External<u16> { return a | b; }
+  get notU24(a: u24): External<u24> { return ~a; }
 
   // ---- comparison across signedness widths (returns bool as uint) ----
-  @external @pure ltI16(a: i16, b: i16): bool { return a < b; }
-  @external @pure gtMixed(a: u8, b: u32): bool { return a > b; }
+  get ltI16(a: i16, b: i16): External<bool> { return a < b; }
+  get gtMixed(a: u8, b: u32): External<bool> { return a > b; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

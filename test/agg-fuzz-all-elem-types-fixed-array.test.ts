@@ -22,40 +22,39 @@ function pad(v: bigint): string {
 
 // JETH source (one T[5] and one T[3] getter per element type).
 const JETH = `// generated
-@contract
 class AllElemTypesFixedArray {
-  @external @pure u8_5(a: Arr<u8, 5>, i: u256): u8 { return a[i]; }
-  @external @pure u8_3(a: Arr<u8, 3>, i: u256): u8 { return a[i]; }
-  @external @pure u16_5(a: Arr<u16, 5>, i: u256): u16 { return a[i]; }
-  @external @pure u16_3(a: Arr<u16, 3>, i: u256): u16 { return a[i]; }
-  @external @pure u32_5(a: Arr<u32, 5>, i: u256): u32 { return a[i]; }
-  @external @pure u32_3(a: Arr<u32, 3>, i: u256): u32 { return a[i]; }
-  @external @pure u64_5(a: Arr<u64, 5>, i: u256): u64 { return a[i]; }
-  @external @pure u64_3(a: Arr<u64, 3>, i: u256): u64 { return a[i]; }
-  @external @pure u128_5(a: Arr<u128, 5>, i: u256): u128 { return a[i]; }
-  @external @pure u128_3(a: Arr<u128, 3>, i: u256): u128 { return a[i]; }
-  @external @pure i8_5(a: Arr<i8, 5>, i: u256): i8 { return a[i]; }
-  @external @pure i8_3(a: Arr<i8, 3>, i: u256): i8 { return a[i]; }
-  @external @pure i16_5(a: Arr<i16, 5>, i: u256): i16 { return a[i]; }
-  @external @pure i16_3(a: Arr<i16, 3>, i: u256): i16 { return a[i]; }
-  @external @pure i64_5(a: Arr<i64, 5>, i: u256): i64 { return a[i]; }
-  @external @pure i64_3(a: Arr<i64, 3>, i: u256): i64 { return a[i]; }
-  @external @pure i128_5(a: Arr<i128, 5>, i: u256): i128 { return a[i]; }
-  @external @pure i128_3(a: Arr<i128, 3>, i: u256): i128 { return a[i]; }
-  @external @pure i256_5(a: Arr<i256, 5>, i: u256): i256 { return a[i]; }
-  @external @pure i256_3(a: Arr<i256, 3>, i: u256): i256 { return a[i]; }
-  @external @pure bool_5(a: Arr<bool, 5>, i: u256): bool { return a[i]; }
-  @external @pure bool_3(a: Arr<bool, 3>, i: u256): bool { return a[i]; }
-  @external @pure addr_5(a: Arr<address, 5>, i: u256): address { return a[i]; }
-  @external @pure addr_3(a: Arr<address, 3>, i: u256): address { return a[i]; }
-  @external @pure b1_5(a: Arr<bytes1, 5>, i: u256): bytes1 { return a[i]; }
-  @external @pure b1_3(a: Arr<bytes1, 3>, i: u256): bytes1 { return a[i]; }
-  @external @pure b4_5(a: Arr<bytes4, 5>, i: u256): bytes4 { return a[i]; }
-  @external @pure b4_3(a: Arr<bytes4, 3>, i: u256): bytes4 { return a[i]; }
-  @external @pure b20_5(a: Arr<bytes20, 5>, i: u256): bytes20 { return a[i]; }
-  @external @pure b20_3(a: Arr<bytes20, 3>, i: u256): bytes20 { return a[i]; }
-  @external @pure b32_5(a: Arr<bytes32, 5>, i: u256): bytes32 { return a[i]; }
-  @external @pure b32_3(a: Arr<bytes32, 3>, i: u256): bytes32 { return a[i]; }
+  get u8_5(a: Arr<u8, 5>, i: u256): External<u8> { return a[i]; }
+  get u8_3(a: Arr<u8, 3>, i: u256): External<u8> { return a[i]; }
+  get u16_5(a: Arr<u16, 5>, i: u256): External<u16> { return a[i]; }
+  get u16_3(a: Arr<u16, 3>, i: u256): External<u16> { return a[i]; }
+  get u32_5(a: Arr<u32, 5>, i: u256): External<u32> { return a[i]; }
+  get u32_3(a: Arr<u32, 3>, i: u256): External<u32> { return a[i]; }
+  get u64_5(a: Arr<u64, 5>, i: u256): External<u64> { return a[i]; }
+  get u64_3(a: Arr<u64, 3>, i: u256): External<u64> { return a[i]; }
+  get u128_5(a: Arr<u128, 5>, i: u256): External<u128> { return a[i]; }
+  get u128_3(a: Arr<u128, 3>, i: u256): External<u128> { return a[i]; }
+  get i8_5(a: Arr<i8, 5>, i: u256): External<i8> { return a[i]; }
+  get i8_3(a: Arr<i8, 3>, i: u256): External<i8> { return a[i]; }
+  get i16_5(a: Arr<i16, 5>, i: u256): External<i16> { return a[i]; }
+  get i16_3(a: Arr<i16, 3>, i: u256): External<i16> { return a[i]; }
+  get i64_5(a: Arr<i64, 5>, i: u256): External<i64> { return a[i]; }
+  get i64_3(a: Arr<i64, 3>, i: u256): External<i64> { return a[i]; }
+  get i128_5(a: Arr<i128, 5>, i: u256): External<i128> { return a[i]; }
+  get i128_3(a: Arr<i128, 3>, i: u256): External<i128> { return a[i]; }
+  get i256_5(a: Arr<i256, 5>, i: u256): External<i256> { return a[i]; }
+  get i256_3(a: Arr<i256, 3>, i: u256): External<i256> { return a[i]; }
+  get bool_5(a: Arr<bool, 5>, i: u256): External<bool> { return a[i]; }
+  get bool_3(a: Arr<bool, 3>, i: u256): External<bool> { return a[i]; }
+  get addr_5(a: Arr<address, 5>, i: u256): External<address> { return a[i]; }
+  get addr_3(a: Arr<address, 3>, i: u256): External<address> { return a[i]; }
+  get b1_5(a: Arr<bytes1, 5>, i: u256): External<bytes1> { return a[i]; }
+  get b1_3(a: Arr<bytes1, 3>, i: u256): External<bytes1> { return a[i]; }
+  get b4_5(a: Arr<bytes4, 5>, i: u256): External<bytes4> { return a[i]; }
+  get b4_3(a: Arr<bytes4, 3>, i: u256): External<bytes4> { return a[i]; }
+  get b20_5(a: Arr<bytes20, 5>, i: u256): External<bytes20> { return a[i]; }
+  get b20_3(a: Arr<bytes20, 3>, i: u256): External<bytes20> { return a[i]; }
+  get b32_5(a: Arr<bytes32, 5>, i: u256): External<bytes32> { return a[i]; }
+  get b32_3(a: Arr<bytes32, 3>, i: u256): External<bytes32> { return a[i]; }
 }`;
 
 function solFn(jethBase: string, sol: string, n: number): string {

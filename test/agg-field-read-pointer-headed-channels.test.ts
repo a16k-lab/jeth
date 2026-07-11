@@ -28,8 +28,8 @@ const rejects = (src: string): boolean => {
   }
 };
 
-const D = `@struct class In { x: u256; y: u256 }
-@struct class P { pre: Arr<In,2>; n: u256 }`;
+const D = `type In = { x: u256; y: u256 };
+type P = { pre: Arr<In,2>; n: u256 };`;
 const SD = `struct In { uint256 x; uint256 y; } struct P { In[2] pre; uint256 n; }`;
 const take = `take(m: Arr<In,2>): u256 { return m[0n].x * 1000000n + m[0n].y * 10000n + m[1n].x * 100n + m[1n].y; }`;
 const mk = `const xs: P[] = [P([In(31n,32n),In(33n,34n)],5n), P([In(41n,42n),In(43n,44n)],6n)];`;
@@ -38,22 +38,22 @@ const smk = `P[] memory xs = new P[](2); xs[0]=P([In(31,32),In(33,34)],5); xs[1]
 describe('aggFieldRead of Arr<In,N> through the pointer-headed channels (MC-cert-1)', () => {
   it('the four miscompile channels now cleanly reject (never wrong bytes)', () => {
     // 1a: internal-call arg, dynamic-outer parent.
-    expect(rejects(`${D} @contract class C { ${take} @external @pure a(): u256 { ${mk} return this.take(xs[1n].pre); } }`)).toBe(true);
+    expect(rejects(`${D} class C { ${take} get a(): External<u256> { ${mk} return this.take(xs[1n].pre); } }`)).toBe(true);
     // 1b: internal-call arg, fixed-outer parent.
-    expect(rejects(`${D} @contract class C { ${take} @external @pure b(): u256 { const m: Arr<P,2> = [P([In(31n,32n),In(33n,34n)],5n), P([In(41n,42n),In(43n,44n)],6n)]; return this.take(m[1n].pre); } }`)).toBe(true);
+    expect(rejects(`${D} class C { ${take} get b(): External<u256> { const m: Arr<P,2> = [P([In(31n,32n),In(33n,34n)],5n), P([In(41n,42n),In(43n,44n)],6n)]; return this.take(m[1n].pre); } }`)).toBe(true);
     // 1c: internal return of the field.
-    expect(rejects(`${D} @contract class C { ${take} pickF(): Arr<In,2> { ${mk} return xs[1n].pre; } @external @pure c(): u256 { return this.take(this.pickF()); } }`)).toBe(true);
+    expect(rejects(`${D} class C { ${take} pickF(): Arr<In,2> { ${mk} return xs[1n].pre; } get c(): External<u256> { return this.take(this.pickF()); } }`)).toBe(true);
     // 1d: pointer-headed element-write RHS.
-    expect(rejects(`${D} @contract class C { @external @pure d(): u256 { ${mk} const o: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; o[0n] = xs[1n].pre; return o[0n][0n].x; } }`)).toBe(true);
+    expect(rejects(`${D} class C { get d(): External<u256> { ${mk} const o: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; o[0n] = xs[1n].pre; return o[0n][0n].x; } }`)).toBe(true);
   });
 
   it('the FLAT consumers of the same source stay byte-identical to solc', async () => {
-    const J = `${D} @contract class C {
+    const J = `${D} class C {
   q(s: P): u256 { return s.pre[0n].x + s.n; }
-  @external @pure ctl(): Arr<In,2> { ${mk} return xs[1n].pre; }
-  @external @pure ctlE(): bytes { ${mk} return abi.encode(xs[1n].pre); }
-  @external @pure ctlS(): u256 { ${mk} return this.q(xs[1n]); }
-  @external @pure ctlV(): u256 { ${mk} return xs[1n].pre[0n].x + xs[1n].pre[1n].y; } }`;
+  get ctl(): External<Arr<In,2>> { ${mk} return xs[1n].pre; }
+  get ctlE(): External<bytes> { ${mk} return abi.encode(xs[1n].pre); }
+  get ctlS(): External<u256> { ${mk} return this.q(xs[1n]); }
+  get ctlV(): External<u256> { ${mk} return xs[1n].pre[0n].x + xs[1n].pre[1n].y; } }`;
     const S = `${SD} contract C {
   function q(P memory s) internal pure returns(uint256){ return s.pre[0].x + s.n; }
   function ctl() external pure returns(In[2] memory){ ${smk} return xs[1].pre; }

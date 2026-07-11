@@ -10,15 +10,15 @@ import { compileSolidity } from './_solidity.js';
 
 const sel = (s: string) => functionSelector(s);
 
-const J = `@struct class P { x: u256; y: u256; }
-@contract class C {
-  @external @pure lit3(a: u256): Arr<u256,3> { return [a, a + 1n, a + 2n]; }
-  @external @pure signed2(a: i128): Arr<i128,2> { return [a, -a]; }
-  @external @pure nested(a: u256): Arr<Arr<u256,2>,2> { return [[a, a + 1n], [a + 2n, a + 3n]]; }
-  @external @pure structs(a: u256): Arr<P,2> { return [P(a, a + 1n), P(a + 2n, a + 3n)]; }
-  @external @pure bytesN2(a: bytes32): Arr<bytes32,2> { return [a, a]; }
-  @external @pure dynLit(a: u256): u256[] { return [a, a + 1n]; }
-  @external @pure echo(a: Arr<u256,3>): Arr<u256,3> { return a; }
+const J = `type P = { x: u256; y: u256; };
+class C {
+  get lit3(a: u256): External<Arr<u256,3>> { return [a, a + 1n, a + 2n]; }
+  get signed2(a: i128): External<Arr<i128,2>> { return [a, -a]; }
+  get nested(a: u256): External<Arr<Arr<u256,2>,2>> { return [[a, a + 1n], [a + 2n, a + 3n]]; }
+  get structs(a: u256): External<Arr<P,2>> { return [P(a, a + 1n), P(a + 2n, a + 3n)]; }
+  get bytesN2(a: bytes32): External<Arr<bytes32,2>> { return [a, a]; }
+  get dynLit(a: u256): External<u256[]> { return [a, a + 1n]; }
+  get echo(a: Arr<u256,3>): External<Arr<u256,3>> { return a; }
 }`;
 const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;

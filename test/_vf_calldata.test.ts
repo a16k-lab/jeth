@@ -63,80 +63,79 @@ function nestedRegion(rows: bigint[][]): string {
 const dynValRegion = (xs: bigint[]) => pad(BigInt(xs.length)) + xs.map(pad).join('');
 
 const JETH = `
-@struct class Pt { x: u128; y: u128; }
-@struct class Acct { bal: u128; nonce: u64; active: bool; }
-@struct class Inner { a: u128; b: u128; }
-@struct class Outer { p: u64; inner: Inner; q: u64; }
-@struct class WithArr { id: u64; data: Arr<u256, 2>; }
-@struct class Dyn { a: u64; s: string; b: bytes; z: u64; }
-@struct class NestDyn { x: u64; d: Dyn; y: u64; }
+type Pt = { x: u128; y: u128; };
+type Acct = { bal: u128; nonce: u64; active: bool; };
+type Inner = { a: u128; b: u128; };
+type Outer = { p: u64; inner: Inner; q: u64; };
+type WithArr = { id: u64; data: Arr<u256, 2>; };
+type Dyn = { a: u64; s: string; b: bytes; z: u64; };
+type NestDyn = { x: u64; d: Dyn; y: u64; };
 
-@contract
 class C {
   // --- scalar value params with narrow types (dirty-bit territory) ---
-  @external @pure echoU8(x: u8): u8 { return x; }
-  @external @pure echoI8(x: i8): i8 { return x; }
-  @external @pure echoBool(x: bool): bool { return x; }
-  @external @pure echoAddr(x: address): address { return x; }
-  @external @pure echoB4(x: bytes4): bytes4 { return x; }
-  @external @pure addU8(a: u8, b: u8): u8 { unchecked: { return u8(a + b); } }
+  get echoU8(x: u8): External<u8> { return x; }
+  get echoI8(x: i8): External<i8> { return x; }
+  get echoBool(x: bool): External<bool> { return x; }
+  get echoAddr(x: address): External<address> { return x; }
+  get echoB4(x: bytes4): External<bytes4> { return x; }
+  get addU8(a: u8, b: u8): External<u8> { unchecked: { return u8(a + b); } }
 
   // --- bytes / string scalar params ---
-  @external @pure echoBytes(b: bytes): bytes { return b; }
-  @external @pure echoStr(s: string): string { return s; }
-  @external @pure bytesLen(b: bytes): u256 { return b.length; }
-  @external @pure byteAt(b: bytes, i: u256): bytes1 { return b[i]; }
+  get echoBytes(b: bytes): External<bytes> { return b; }
+  get echoStr(s: string): External<string> { return s; }
+  get bytesLen(b: bytes): External<u256> { return b.length; }
+  get byteAt(b: bytes, i: u256): External<bytes1> { return b[i]; }
 
   // --- fixed-array params ---
-  @external @pure sumTriple(a: Arr<u256, 3>): u256 { return a[0n] + a[1n] + a[2n]; }
-  @external @pure pickU8(a: Arr<u8, 4>, i: u256): u8 { return a[i]; }
+  get sumTriple(a: Arr<u256, 3>): External<u256> { return a[0n] + a[1n] + a[2n]; }
+  get pickU8(a: Arr<u8, 4>, i: u256): External<u8> { return a[i]; }
 
   // --- dynamic value-array param ---
-  @external @pure dynLen(a: u256[]): u256 { return a.length; }
-  @external @pure dynAt(a: u256[], i: u256): u256 { return a[i]; }
-  @external @pure dynAtU8(a: u8[], i: u256): u8 { return a[i]; }
+  get dynLen(a: u256[]): External<u256> { return a.length; }
+  get dynAt(a: u256[], i: u256): External<u256> { return a[i]; }
+  get dynAtU8(a: u8[], i: u256): External<u8> { return a[i]; }
 
   // --- nested dynamic arrays ---
-  @external @pure mLen(m: u256[][]): u256 { return m.length; }
-  @external @pure mInnerLen(m: u256[][], i: u256): u256 { return m[i].length; }
-  @external @pure mAt(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
-  @external @pure echoM(m: u256[][]): u256[][] { return m; }
-  @external @pure mAtU8(m: u8[][], i: u256, j: u256): u8 { return m[i][j]; }
+  get mLen(m: u256[][]): External<u256> { return m.length; }
+  get mInnerLen(m: u256[][], i: u256): External<u256> { return m[i].length; }
+  get mAt(m: u256[][], i: u256, j: u256): External<u256> { return m[i][j]; }
+  get echoM(m: u256[][]): External<u256[][]> { return m; }
+  get mAtU8(m: u8[][], i: u256, j: u256): External<u8> { return m[i][j]; }
 
   // --- string[] / bytes[] ---
-  @external @pure saLen(a: string[]): u256 { return a.length; }
-  @external @pure saAt(a: string[], i: u256): string { return a[i]; }
-  @external @pure echoSA(a: string[]): string[] { return a; }
-  @external @pure baAt(a: bytes[], i: u256): bytes { return a[i]; }
+  get saLen(a: string[]): External<u256> { return a.length; }
+  get saAt(a: string[], i: u256): External<string> { return a[i]; }
+  get echoSA(a: string[]): External<string[]> { return a; }
+  get baAt(a: bytes[], i: u256): External<bytes> { return a[i]; }
 
   // --- static struct params ---
-  @external @pure ptX(p: Pt): u128 { return p.x; }
-  @external @pure ptY(p: Pt): u128 { return p.y; }
-  @external @pure acctNonce(a: Acct): u64 { return a.nonce; }
-  @external @pure acctActive(a: Acct): bool { return a.active; }
-  @external @pure outerB(o: Outer): u128 { return o.inner.b; }
-  @external @pure outerQ(o: Outer): u64 { return o.q; }
-  @external @pure waId(t: WithArr): u64 { return t.id; }
-  @external @pure waData(t: WithArr, j: u256): u256 { return t.data[j]; }
+  get ptX(p: Pt): External<u128> { return p.x; }
+  get ptY(p: Pt): External<u128> { return p.y; }
+  get acctNonce(a: Acct): External<u64> { return a.nonce; }
+  get acctActive(a: Acct): External<bool> { return a.active; }
+  get outerB(o: Outer): External<u128> { return o.inner.b; }
+  get outerQ(o: Outer): External<u64> { return o.q; }
+  get waId(t: WithArr): External<u64> { return t.id; }
+  get waData(t: WithArr, j: u256): External<u256> { return t.data[j]; }
 
   // --- dynamic array of static struct ---
-  @external @pure ptsLen(ps: Pt[]): u256 { return ps.length; }
-  @external @pure ptsX(ps: Pt[], i: u256): u128 { return ps[i].x; }
-  @external @pure echoPts(ps: Pt[]): Pt[] { return ps; }
+  get ptsLen(ps: Pt[]): External<u256> { return ps.length; }
+  get ptsX(ps: Pt[], i: u256): External<u128> { return ps[i].x; }
+  get echoPts(ps: Pt[]): External<Pt[]> { return ps; }
 
   // --- dynamic struct param (string + bytes fields) ---
-  @external @pure dynA(d: Dyn): u64 { return d.a; }
-  @external @pure dynZ(d: Dyn): u64 { return d.z; }
-  @external @pure dynS(d: Dyn): string { return d.s; }
-  @external @pure dynB(d: Dyn): bytes { return d.b; }
-  @external @pure echoDyn(d: Dyn): Dyn { return d; }
-  @external @pure ndY(n: NestDyn): u64 { return n.y; }
-  @external @pure ndInnerA(n: NestDyn): u64 { return n.d.a; }
+  get dynA(d: Dyn): External<u64> { return d.a; }
+  get dynZ(d: Dyn): External<u64> { return d.z; }
+  get dynS(d: Dyn): External<string> { return d.s; }
+  get dynB(d: Dyn): External<bytes> { return d.b; }
+  get echoDyn(d: Dyn): External<Dyn> { return d; }
+  get ndY(n: NestDyn): External<u64> { return n.y; }
+  get ndInnerA(n: NestDyn): External<u64> { return n.d.a; }
 
   // --- mixed static + dynamic args (head-cursor advance) ---
-  @external @pure mix1(x: u256, a: u256[], y: u256): u256 { return x + y + a.length; }
-  @external @pure mix2(a: u256[], s: string, b: u256[]): u256 { unchecked: { return a.length + b.length; } }
-  @external @pure mix3(p: Pt, a: u256[], q: u64): u256 { unchecked: { return p.x + a.length + q; } }
+  get mix1(x: u256, a: u256[], y: u256): External<u256> { return x + y + a.length; }
+  get mix2(a: u256[], s: string, b: u256[]): External<u256> { unchecked: { return a.length + b.length; } }
+  get mix3(p: Pt, a: u256[], q: u64): External<u256> { unchecked: { return p.x + a.length + q; } }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

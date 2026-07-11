@@ -20,10 +20,10 @@ async function deployPair(JETH: string, jName: string, SOL: string, sName: strin
 
 describe('SANITY: comparator catches a wrong Solidity contract', () => {
   it('flags a returndata mismatch when SOL returns the wrong thing', async () => {
-    const JETH = `@contract class S {
-      @state x: u256;
-      @external setx(v: u256): void { this.x = v; }
-      @external @view getx(): u256 { return this.x; }
+    const JETH = `class S {
+      x: u256;
+      setx(v: u256): External<void> { this.x = v; }
+      get getx(): External<u256> { return this.x; }
     }`;
     const SOL = `pragma solidity ^0.8.20;
     contract S {
@@ -43,22 +43,22 @@ describe('SANITY: comparator catches a wrong Solidity contract', () => {
 // ----- 2D / 3D / 4D fixed VALUE arrays (u256) -----
 describe('multi-dim fixed u256 arrays whole + row returns', () => {
   let H: Awaited<ReturnType<typeof deployPair>>;
-  const JETH = `@contract class M {
-    @state a2: Arr<Arr<u256, 2>, 3>;
-    @state a3: Arr<Arr<Arr<u256, 2>, 3>, 2>;
-    @state a4: Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>;
-    @external s2(i: u256, j: u256, v: u256): void { this.a2[i][j] = v; }
-    @external s3(i: u256, j: u256, k: u256, v: u256): void { this.a3[i][j][k] = v; }
-    @external s4(i: u256, j: u256, k: u256, l: u256, v: u256): void { this.a4[i][j][k][l] = v; }
-    @external @view w2(): Arr<Arr<u256, 2>, 3> { return this.a2; }
-    @external @view r2(i: u256): Arr<u256, 2> { return this.a2[i]; }
-    @external @view w3(): Arr<Arr<Arr<u256, 2>, 3>, 2> { return this.a3; }
-    @external @view p3(i: u256): Arr<Arr<u256, 2>, 3> { return this.a3[i]; }
-    @external @view r3(i: u256, j: u256): Arr<u256, 2> { return this.a3[i][j]; }
-    @external @view w4(): Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2> { return this.a4; }
-    @external @view c4(i: u256): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.a4[i]; }
-    @external @view p4(i: u256, j: u256): Arr<Arr<u256, 2>, 2> { return this.a4[i][j]; }
-    @external @view r4(i: u256, j: u256, k: u256): Arr<u256, 2> { return this.a4[i][j][k]; }
+  const JETH = `class M {
+    a2: Arr<Arr<u256, 2>, 3>;
+    a3: Arr<Arr<Arr<u256, 2>, 3>, 2>;
+    a4: Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>;
+    s2(i: u256, j: u256, v: u256): External<void> { this.a2[i][j] = v; }
+    s3(i: u256, j: u256, k: u256, v: u256): External<void> { this.a3[i][j][k] = v; }
+    s4(i: u256, j: u256, k: u256, l: u256, v: u256): External<void> { this.a4[i][j][k][l] = v; }
+    get w2(): External<Arr<Arr<u256, 2>, 3>> { return this.a2; }
+    get r2(i: u256): External<Arr<u256, 2>> { return this.a2[i]; }
+    get w3(): External<Arr<Arr<Arr<u256, 2>, 3>, 2>> { return this.a3; }
+    get p3(i: u256): External<Arr<Arr<u256, 2>, 3>> { return this.a3[i]; }
+    get r3(i: u256, j: u256): External<Arr<u256, 2>> { return this.a3[i][j]; }
+    get w4(): External<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>> { return this.a4; }
+    get c4(i: u256): External<Arr<Arr<Arr<u256, 2>, 2>, 2>> { return this.a4[i]; }
+    get p4(i: u256, j: u256): External<Arr<Arr<u256, 2>, 2>> { return this.a4[i][j]; }
+    get r4(i: u256, j: u256, k: u256): External<Arr<u256, 2>> { return this.a4[i][j][k]; }
   }`;
   const SOL = `pragma solidity ^0.8.20;
   contract M {

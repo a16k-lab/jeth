@@ -30,14 +30,19 @@
 //
 // LITERAL FORMS: plain template/string literals are transformed on the cooked text and every edit
 // span is mapped back onto the raw text (escapes elsewhere in the literal stay byte-identical).
-// INTERPOLATED templates: a `${IDENT}` hole naming a once-declared const with a plain-literal
+// INTERPOLATED templates AND string CONCATENATION chains (`CONST + \`...\``) are COMPOSITES: a
+// `${IDENT}` hole / non-literal `+` operand naming a once-declared const with a plain-literal
 // initializer is RESOLVED to that literal; any other hole becomes an inert `__JMIGk__` placeholder.
-// The transform runs over the assembled original instantiation; edits inside resolved holes are
-// dropped (the const's own migration realizes them at its declaration site) and the trial compiles
-// the EXACT post assembly the migrated file will produce (edited chunks + migrated const texts +
-// placeholders), with the same JETH352 get-retry. A hole in decorator-name position (`@${dec}`),
-// an edit crossing a hole, or a trial mismatch routes the literal to manual; placeholder-carrying
-// trials are a strong but not perfect check - the capture-diff stays the final arbiter.
+// Literal `+` operands are chunks (edited in place, excluded from standalone pass-1), and a nested
+// interpolated-template operand contributes its own chunks and holes. The transform runs over the
+// assembled original instantiation; edits inside resolved holes are dropped (the const's own
+// migration realizes them at its declaration site) and the trial compiles the EXACT post assembly
+// the migrated file will produce (edited chunks + migrated const texts + placeholders), with the
+// same JETH352 get-retry. A hole in decorator-name position (`@${dec}`), an edit crossing a hole,
+// or a trial mismatch routes the composite to manual; placeholder-carrying trials are a strong but
+// not perfect check - the capture-diff stays the final arbiter. (The chain support exists because a
+// fragment-blind standalone trial of a concatenated chunk can PASS on equal reject codes while the
+// full assembly FLIPS - the batch-2 G5 accept->reject flip; assembly-level trials close that hole.)
 //
 // SELF-CHECK (trial compile): every rewritten source that is a self-contained unit is compiled
 // before and after; accepting sources must be BYTECODE-EQUAL, rejecting sources CODE-LIST-EQUAL.
@@ -639,64 +644,115 @@ for (const file of files) {
     st.logEntry = { line: line(node), action: r.action, changes: r.changes };
   };
 
-  // Interpolated template. Each `${...}` hole is either RESOLVED to a file-level const literal
-  // (identifier declared exactly once, literal initializer) or replaced by an inert `__JMIGk__`
-  // placeholder identifier (identical on both sides). The transform runs over the assembled
-  // ORIGINAL instantiation; edits inside resolved holes are DROPPED (the const literal's own pass-1
-  // migration realizes them at its declaration site), edits inside placeholders or crossing region
-  // boundaries route to manual. The trial then compiles the EXACT post assembly the migrated test
-  // file will produce at runtime (edited chunks + the consts' pass-1 migrated texts + placeholders),
-  // with the same JETH352 get-retry as plain literals. Placeholder-carrying assemblies are trialed
-  // too - equality on the skeleton is a strong (not perfect) check, and the capture-diff remains
-  // the final arbiter per the migration procedure.
+  // Composite sources: interpolated templates AND string CONCATENATION chains (`A + \`...\``).
+  // Both are the same problem - an embedded JETH source assembled at runtime from literal CHUNKS
+  // and expression HOLES - and both get the same treatment: a hole naming a once-declared const
+  // with a plain-literal initializer is RESOLVED to that literal; any other hole becomes an inert
+  // `__JMIGk__` placeholder identifier (identical on both sides). A concatenation's literal
+  // operands are chunks, and a nested interpolated-template operand contributes its own chunks and
+  // holes. The transform runs over the assembled ORIGINAL instantiation; edits inside resolved
+  // holes are DROPPED (the const literal's own pass-1 migration realizes them at its declaration
+  // site), edits inside placeholders or crossing region boundaries route to manual. The trial then
+  // compiles the EXACT post assembly the migrated test file will produce at runtime (edited chunks
+  // + the consts' pass-1 migrated texts + placeholders), with the same JETH352 get-retry as plain
+  // literals. Placeholder-carrying assemblies are trialed too - equality on the skeleton is a
+  // strong (not perfect) check, and the capture-diff remains the final arbiter per the migration
+  // procedure.
+  //
+  // A part is { type:'chunk', lit, litKind, quote, rawFrom, rawTo } | { type:'hole', expr }.
+  const flattenTemplate = (n) => {
+    const chunkOf = (c) => ({
+      type: 'chunk',
+      lit: c,
+      litKind: 'template',
+      quote: '`',
+      // raw chunk spans: head is `...${, middles are }...${, the tail is }...`
+      rawFrom: c.getStart(sf) + 1,
+      rawTo: c.end - (c.kind === ts.SyntaxKind.TemplateTail ? 1 : 2),
+    });
+    const parts = [chunkOf(n.head)];
+    for (const s of n.templateSpans) {
+      parts.push({ type: 'hole', expr: s.expression });
+      parts.push(chunkOf(s.literal));
+    }
+    return parts;
+  };
+
+  const ownedExprs = new Set(); // nested `+`/paren/template nodes consumed by an enclosing chain
+  const flattenConcat = (n) => {
+    const parts = [];
+    const rec = (e) => {
+      if (ts.isBinaryExpression(e) && e.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+        ownedExprs.add(e);
+        rec(e.left);
+        rec(e.right);
+      } else if (ts.isParenthesizedExpression(e)) {
+        ownedExprs.add(e);
+        rec(e.expression);
+      } else if (ts.isStringLiteral(e)) {
+        parts.push({ type: 'chunk', lit: e, litKind: 'string', quote: original[e.getStart(sf)], rawFrom: e.getStart(sf) + 1, rawTo: e.end - 1 });
+      } else if (ts.isNoSubstitutionTemplateLiteral(e)) {
+        parts.push({ type: 'chunk', lit: e, litKind: 'template', quote: '`', rawFrom: e.getStart(sf) + 1, rawTo: e.end - 1 });
+      } else if (ts.isTemplateExpression(e)) {
+        ownedExprs.add(e);
+        parts.push(...flattenTemplate(e));
+      } else {
+        parts.push({ type: 'hole', expr: e });
+      }
+    };
+    rec(n);
+    return parts;
+  };
+
   // Returns true when it re-migrated a const literal with new get-keys (the caller then restarts
-  // the whole template pass: earlier templates may reference the re-migrated const too).
-  const handleTemplateExpression = (n) => {
+  // the whole composite pass: earlier composites may reference the re-migrated const too).
+  const handleComposite = (n, parts, label) => {
     const st = { edits: [], logEntry: null };
     tplState.set(n, st);
-    const literals = [n.head, ...n.templateSpans.map((s) => s.literal)];
-    const cookedChunks = literals.map((c) => c.text);
-    if (!cookedChunks.some((c) => BANNED.test(c))) return false;
+    const chunkParts = parts.filter((p) => p.type === 'chunk');
+    if (!chunkParts.some((p) => BANNED.test(p.lit.text))) return false;
     const fail = (reason) => {
       st.logEntry = { line: line(n), action: 'manual', reason };
       return false;
     };
-    if (cookedChunks.some((c) => c.includes('__JMIG'))) return fail('interpolated template: chunk contains the placeholder marker');
-    for (let k = 0; k + 1 < cookedChunks.length; k++) {
-      if (cookedChunks[k].endsWith('@')) return fail('interpolated template: a hole in decorator-name position (@${...})');
+    if (chunkParts.some((p) => p.lit.text.includes('__JMIG'))) return fail(`${label}: chunk contains the placeholder marker`);
+    for (let k = 0; k + 1 < parts.length; k++) {
+      if (parts[k].type === 'chunk' && parts[k + 1].type === 'hole' && parts[k].lit.text.endsWith('@'))
+        return fail(`${label}: a hole in decorator-name position (@\${...})`);
     }
-    // raw chunk spans: head is `...${, middles are }...${, the tail is }...`
-    const chunkInfo = literals.map((c) => {
-      const rawFrom = c.getStart(sf) + 1;
-      const rawTo = c.end - (c.kind === ts.SyntaxKind.TemplateTail ? 1 : 2);
-      const raw = original.slice(rawFrom, rawTo);
-      return { rawFrom, raw };
-    });
-    const chunkStarts = chunkInfo.map((ci, k) => cookedToRawStarts(ci.raw, cookedChunks[k]));
-    if (chunkStarts.some((s) => !s)) return fail('interpolated template: unmappable escapes in a chunk');
+    const chunkInfo = new Map(); // chunk part -> cooked->raw offset map
+    for (const p of chunkParts) {
+      const starts = cookedToRawStarts(original.slice(p.rawFrom, p.rawTo), p.lit.text);
+      if (!starts) return fail(`${label}: unmappable escapes in a chunk`);
+      chunkInfo.set(p, starts);
+    }
 
-    const holes = n.templateSpans.map((s, k) => {
-      const e = s.expression;
+    let phCount = 0;
+    const holes = new Map(); // hole part -> { orig, lit, resolved }
+    for (const p of parts) {
+      if (p.type !== 'hole') continue;
+      const e = p.expr;
       if (ts.isIdentifier(e) && constLits.has(e.text) && declCounts.get(e.text) === 1) {
         const lit = constLits.get(e.text);
-        return { orig: lit.text, lit, resolved: true };
-      }
-      const ph = `__JMIG${k}__`;
-      return { orig: ph, lit: null, resolved: false };
-    });
+        holes.set(p, { orig: lit.text, lit, resolved: true });
+      } else holes.set(p, { orig: `__JMIG${phCount++}__`, lit: null, resolved: false });
+    }
     const postHole = (h) => (h.resolved ? decisionOf(h.lit) : h.orig);
 
     // assemble the ORIGINAL instantiation + its region table
     let origAsm = '';
-    const regions = []; // { type: 'chunk'|'hole', k, resolved?, start, end } over origAsm
-    cookedChunks.forEach((c, k) => {
-      regions.push({ type: 'chunk', k, start: origAsm.length, end: origAsm.length + c.length });
-      origAsm += c;
-      if (k < holes.length) {
-        regions.push({ type: 'hole', k, resolved: holes[k].resolved, start: origAsm.length, end: origAsm.length + holes[k].orig.length });
-        origAsm += holes[k].orig;
-      }
-    });
+    const regions = []; // { part, type: 'chunk'|'hole', resolved?, start, end } over origAsm
+    for (const p of parts) {
+      const piece = p.type === 'chunk' ? p.lit.text : holes.get(p).orig;
+      regions.push({
+        part: p,
+        type: p.type,
+        resolved: p.type === 'hole' ? holes.get(p).resolved : undefined,
+        start: origAsm.length,
+        end: origAsm.length + piece.length,
+      });
+      origAsm += piece;
+    }
     if (DEC_PRAGMA.test(origAsm)) {
       st.logEntry = { line: line(n), action: 'skipped-stage2', reason: '// use @decorators pragma (stage-2 rewrites these)' };
       return false;
@@ -710,7 +766,7 @@ for (const file of files) {
       const postRegions = [];
       for (const g of regions) {
         const from = out.length;
-        if (g.type === 'hole') out += postHole(holes[g.k]);
+        if (g.type === 'hole') out += postHole(holes.get(g.part));
         else {
           let c = origAsm.slice(g.start, g.end);
           // local edits arrive already in applied (descending-start, stable) order
@@ -733,9 +789,9 @@ for (const file of files) {
     let changes = null;
     let action = 'rewritten-interp';
     for (let iter = 0; ; iter++) {
-      if (iter >= 12) return fail('interpolated template: JETH352 get-retry did not converge') || changedConst;
+      if (iter >= 12) return fail(`${label}: JETH352 get-retry did not converge`) || changedConst;
       const res = transformJethSource(origAsm, { forceGet: force });
-      if (res.manual.length > 0) return fail(`interpolated template: ${res.manual.join(' | ')}`) || changedConst;
+      if (res.manual.length > 0) return fail(`${label}: ${res.manual.join(' | ')}`) || changedConst;
       const edits = [];
       let bad = null;
       for (const e of res.edits) {
@@ -745,7 +801,7 @@ for (const file of files) {
         else if (!g.resolved) { bad = `an edit inside an unresolved \${...} hole (at ${e.start})`; break; }
         // resolved-hole edits: dropped - realized by the const literal's own migration.
       }
-      if (bad) return fail(`interpolated template: ${bad}`) || changedConst;
+      if (bad) return fail(`${label}: ${bad}`) || changedConst;
       const { text: postAsm, postRegions } = buildPost(edits);
       if (postAsm === origAsm) {
         st.logEntry = { line: line(n), action: 'unchanged', changes: res.changes };
@@ -780,61 +836,77 @@ for (const file of files) {
           if (g.type === 'chunk') {
             if (!force.has(hit.key)) { force.add(hit.key); progressed = true; }
           } else if (g.resolved) {
-            const constState = litState.get(holes[g.k].lit);
+            const hole = holes.get(g.part);
+            const constState = litState.get(hole.lit);
             if (constState && !constState.force.has(hit.key)) {
               constState.force.add(hit.key);
-              migrateLiteral(holes[g.k].lit, ts.isStringLiteral(holes[g.k].lit) ? 'string' : 'template');
+              migrateLiteral(hole.lit, ts.isStringLiteral(hole.lit) ? 'string' : 'template');
               changedConst = true;
               progressed = true;
             } else if (!constState) unroutable = 'a JETH352 inside an untracked const literal';
           } else unroutable = 'a JETH352 inside an unresolved ${...} hole';
         }
         if (progressed) continue;
-        if (unroutable) return fail(`interpolated template: ${unroutable} (trial orig=${orig.kind} post=rej[${post.codes}])`) || changedConst;
+        if (unroutable) return fail(`${label}: ${unroutable} (trial orig=${orig.kind} post=rej[${post.codes}])`) || changedConst;
       }
       return (
         fail(
-          `interpolated template: assembly trial mismatch orig=${orig.kind}${orig.kind === 'rej' ? '[' + orig.codes + ']' : ''} post=${post.kind}${post.kind === 'rej' ? '[' + post.codes + ']' : ''}`,
+          `${label}: assembly trial mismatch orig=${orig.kind}${orig.kind === 'rej' ? '[' + orig.codes + ']' : ''} post=${post.kind}${post.kind === 'rej' ? '[' + post.codes + ']' : ''}`,
         ) || changedConst
       );
     }
 
     for (const e of chunkEdits) {
       const g = regions.find((g) => g.type === 'chunk' && g.start <= e.start && e.end <= g.end);
+      const p = g.part;
+      const starts = chunkInfo.get(p);
       st.edits.push({
-        start: chunkInfo[g.k].rawFrom + chunkStarts[g.k][e.start - g.start],
-        end: chunkInfo[g.k].rawFrom + chunkStarts[g.k][e.end - g.start],
-        insert: escapeForLiteral(e.insert, 'template', '`'),
+        start: p.rawFrom + starts[e.start - g.start],
+        end: p.rawFrom + starts[e.end - g.start],
+        insert: escapeForLiteral(e.insert, p.litKind, p.quote),
       });
     }
     st.logEntry = { line: line(n), action, changes };
     return changedConst;
   };
 
-  // pass 1: plain literals (their migrated texts feed const-hole resolution); pass 2: interpolated
-  // templates, RESTARTED whenever an assembly re-migrates a const literal (earlier templates may
-  // reference it): force sets grow monotonically, so the fixpoint terminates.
-  const templateExprs = [];
+  // pass 1: plain literals (their migrated texts feed const-hole resolution) - EXCLUDING literals
+  // owned as chunks by a banned concatenation chain (the chain's composite handling edits them);
+  // pass 2: composites (interpolated templates + banned concatenation chains), RESTARTED whenever
+  // an assembly re-migrates a const literal (earlier composites may reference it): force sets grow
+  // monotonically, so the fixpoint terminates.
+  const composites = []; // { node, parts, label }
   const plainLits = [];
+  const ownedLits = new Set(); // literal nodes that are chunks of a banned concatenation chain
   const visit = (n) => {
+    if (ts.isBinaryExpression(n) && n.operatorToken.kind === ts.SyntaxKind.PlusToken && !ownedExprs.has(n)) {
+      const parts = flattenConcat(n);
+      if (parts.some((p) => p.type === 'chunk' && BANNED.test(p.lit.text))) {
+        composites.push({ node: n, parts, label: 'concatenation' });
+        for (const p of parts) if (p.type === 'chunk') ownedLits.add(p.lit);
+      }
+      // descend regardless: literals nested inside unresolved hole expressions (e.g. helper-call
+      // arguments) keep their pass-1 standalone treatment; owned chunks are excluded below.
+    } else if (ts.isTemplateExpression(n) && !ownedExprs.has(n)) {
+      composites.push({ node: n, parts: flattenTemplate(n), label: 'interpolated template' });
+    }
     if (ts.isNoSubstitutionTemplateLiteral(n)) plainLits.push([n, 'template']);
     else if (ts.isStringLiteral(n)) plainLits.push([n, 'string']);
-    else if (ts.isTemplateExpression(n)) templateExprs.push(n);
     ts.forEachChild(n, visit);
   };
   ts.forEachChild(sf, visit);
-  for (const [node, kind] of plainLits) migrateLiteral(node, kind);
+  for (const [node, kind] of plainLits) if (!ownedLits.has(node)) migrateLiteral(node, kind);
   for (let pass = 0; ; pass++) {
     if (pass >= 25) {
-      console.error(`ERROR ${file}: template fixpoint did not settle in 25 passes - file left untouched`);
-      manualEntries.push(`${path.relative(process.cwd(), abs)}  WHOLE FILE: template fixpoint did not settle`);
+      console.error(`ERROR ${file}: composite fixpoint did not settle in 25 passes - file left untouched`);
+      manualEntries.push(`${path.relative(process.cwd(), abs)}  WHOLE FILE: composite fixpoint did not settle`);
       litState.clear();
       tplState.clear();
       break;
     }
     let restart = false;
-    for (const t of templateExprs) {
-      if (handleTemplateExpression(t)) restart = true;
+    for (const c of composites) {
+      if (handleComposite(c.node, c.parts, c.label)) restart = true;
     }
     if (!restart) break;
   }

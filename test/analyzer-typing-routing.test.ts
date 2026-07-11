@@ -30,13 +30,13 @@ describe('fix1: memory `bytes` element write (d[i] = bytes1(v))', () => {
   let ctx: Awaited<ReturnType<typeof pair>>;
   beforeAll(async () => {
     ctx = await pair(
-      `@contract class C {
-         @external @pure foo(i: u256, v: u8): bytes {
+      `class C {
+         get foo(i: u256, v: u8): External<bytes> {
            let d: bytes = bytes("abcdef");
            d[i] = bytes1(v);
            return d;
          }
-         @external @pure aliasWrite(i: u256, v: u8): bytes {
+         get aliasWrite(i: u256, v: u8): External<bytes> {
            let d: bytes = bytes("abcdef");
            let e: bytes = d;
            e[i] = bytes1(v);
@@ -84,12 +84,12 @@ describe('fix2: exact-width hex literal as bytesN', () => {
   let ctx: Awaited<ReturnType<typeof pair>>;
   beforeAll(async () => {
     ctx = await pair(
-      `@contract class C {
-         @external @pure sigEq(x: bytes4): bool { return x == 0x12345678; }
-         @external @pure letRet(): bytes4 { let v: bytes4 = 0x12345678; return v; }
-         @external @pure ret(): bytes4 { return 0x12345678; }
-         @external @pure b1(x: bytes1): bool { return x == 0xab; }
-         @external @pure b32(x: bytes32): bool {
+      `class C {
+         get sigEq(x: bytes4): External<bool> { return x == 0x12345678; }
+         get letRet(): External<bytes4> { let v: bytes4 = 0x12345678; return v; }
+         get ret(): External<bytes4> { return 0x12345678; }
+         get b1(x: bytes1): External<bool> { return x == 0xab; }
+         get b32(x: bytes32): External<bool> {
            return x == 0x0000000000000000000000000000000000000000000000000000000000000001;
          }
        }`,
@@ -125,7 +125,7 @@ describe('fix2: exact-width hex literal as bytesN', () => {
   it('literal-on-the-LEFT comparison stays rejected (solc parity)', () => {
     let codes: string[] = [];
     try {
-      compile(`@contract class C { @external @pure f(x: bytes4): bool { return 0x12345678 == x; } }`);
+      compile(`class C { get f(x: bytes4): External<bool> { return 0x12345678 == x; } }`);
     } catch (e: any) {
       codes = (e.diagnostics ?? []).map((d: any) => d.code);
     }
@@ -135,7 +135,7 @@ describe('fix2: exact-width hex literal as bytesN', () => {
   it('wrong-width hex literal for a bytesN stays rejected (solc parity)', () => {
     let codes: string[] = [];
     try {
-      compile(`@contract class C { @external @pure f(x: bytes4): bool { return x == 0x1234; } }`);
+      compile(`class C { get f(x: bytes4): External<bool> { return x == 0x1234; } }`);
     } catch (e: any) {
       codes = (e.diagnostics ?? []).map((d: any) => d.code);
     }
@@ -158,8 +158,8 @@ describe('fix2: exact-width hex literal as bytesN', () => {
 describe('fix2: msg.sig == 0xSELECTOR dispatch idiom', () => {
   it('matches solc for the matching and non-matching selector', async () => {
     const ctx = await pair(
-      `@contract class C {
-         @external isFoo(): bool { return msg.sig == 0x9f8a13d7; }
+      `class C {
+         get isFoo(): External<bool> { return msg.sig == 0x9f8a13d7; }
        }`,
       `contract C {
          function isFoo() external pure returns (bool) { return msg.sig == 0x9f8a13d7; }
@@ -175,13 +175,13 @@ describe('fix2: msg.sig == 0xSELECTOR dispatch idiom', () => {
 describe('fix3: memory-array alias (reference semantics)', () => {
   it('let c = a aliases; mutating c affects a; byte-identical', async () => {
     const ctx = await pair(
-      `@contract class C {
-         @external @pure aliasRead(): u256 {
+      `class C {
+         get aliasRead(): External<u256> {
            let a: u256[] = [1n, 2n];
            let c: u256[] = a;
            return c[0n] + c[1n];
          }
-         @external @pure aliasMutate(): u256 {
+         get aliasMutate(): External<u256> {
            let a: u256[] = [1n, 2n];
            let c: u256[] = a;
            c[0n] = 9n;
@@ -214,7 +214,7 @@ describe('fix4: struct mapping key rejected cleanly (no internal-error leak)', (
   it('rejects with JETH154, not JETH900', () => {
     let codes: string[] = [];
     try {
-      compile(`@struct class K { id: u256; } @contract class C { @state m: mapping<K, u256>; @external @view g(): u256 { return 1n; } }`);
+      compile(`type K = { id: u256; }; class C { m: mapping<K, u256>; get g(): External<u256> { return 1n; } }`);
     } catch (e: any) {
       codes = (e.diagnostics ?? []).map((d: any) => d.code);
     }
@@ -225,7 +225,7 @@ describe('fix4: struct mapping key rejected cleanly (no internal-error leak)', (
   it('still accepts every elementary key type', () => {
     expect(() =>
       compile(
-        `@contract class C { @state a: mapping<u256, u256>; @state b: mapping<address, bool>; @state c: mapping<bytes32, u256>; @state d: mapping<bytes, u256>; @state e: mapping<string, u256>; }`,
+        `class C { a: mapping<u256, u256>; b: mapping<address, bool>; c: mapping<bytes32, u256>; d: mapping<bytes, u256>; e: mapping<string, u256>; }`,
       ),
     ).not.toThrow();
   });

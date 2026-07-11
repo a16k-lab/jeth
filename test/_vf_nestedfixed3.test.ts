@@ -14,18 +14,18 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class C {
-  @external idx2(a: Arr<Arr<u256, 2>, 2>, i: u256, j: u256): u256 { return a[i][j]; }
-  @external idx3(a: Arr<Arr<Arr<u256, 2>, 2>, 2>, i: u256, j: u256, k: u256): u256 { return a[i][j][k]; }
-  @external idxP(a: Arr<Arr<u8, 3>, 2>, i: u256, j: u256): u8 { return a[i][j]; }
-  @external idxS(a: Arr<Arr<i64, 2>, 2>, i: u256, j: u256): i64 { return a[i][j]; }
-  @external idxB(a: Arr<Arr<bytes4, 2>, 2>, i: u256, j: u256): bytes4 { return a[i][j]; }
-  @external sum2(a: Arr<Arr<u256, 2>, 2>): u256 {
+const JETH = `class C {
+  get idx2(a: Arr<Arr<u256, 2>, 2>, i: u256, j: u256): External<u256> { return a[i][j]; }
+  get idx3(a: Arr<Arr<Arr<u256, 2>, 2>, 2>, i: u256, j: u256, k: u256): External<u256> { return a[i][j][k]; }
+  get idxP(a: Arr<Arr<u8, 3>, 2>, i: u256, j: u256): External<u8> { return a[i][j]; }
+  get idxS(a: Arr<Arr<i64, 2>, 2>, i: u256, j: u256): External<i64> { return a[i][j]; }
+  get idxB(a: Arr<Arr<bytes4, 2>, 2>, i: u256, j: u256): External<bytes4> { return a[i][j]; }
+  get sum2(a: Arr<Arr<u256, 2>, 2>): External<u256> {
     let s: u256 = 0n;
     for (let i: u256 = 0n; i < 2n; i = i + 1n) { for (let j: u256 = 0n; j < 2n; j = j + 1n) { s = s + a[i][j]; } }
     return s;
   }
-  @external sumP(a: Arr<Arr<u8, 3>, 2>): u256 {
+  get sumP(a: Arr<Arr<u8, 3>, 2>): External<u256> {
     let s: u256 = 0n;
     for (let i: u256 = 0n; i < 2n; i = i + 1n) { for (let j: u256 = 0n; j < 3n; j = j + 1n) { s = s + u256(a[i][j]); } }
     return s;

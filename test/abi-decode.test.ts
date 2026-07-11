@@ -5,12 +5,11 @@ import { compile } from '../src/compile.js';
 import { Harness } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 
-const SRC = `@contract
-class Decode {
-  @external @pure u8id(a: u8): u8 { return a; }
-  @external @pure i8id(a: i8): i8 { return a; }
-  @external @pure boolid(a: bool): bool { return a; }
-  @external @pure addrid(a: address): address { return a; }
+const SRC = `class Decode {
+  get u8id(a: u8): External<u8> { return a; }
+  get i8id(a: i8): External<i8> { return a; }
+  get boolid(a: bool): External<bool> { return a; }
+  get addrid(a: address): External<address> { return a; }
 }`;
 
 function call32(h: Harness, addr: any, sig: string, word: string) {

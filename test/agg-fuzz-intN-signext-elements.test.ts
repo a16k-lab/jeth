@@ -26,20 +26,19 @@ function pad(v: bigint): string {
 
 // JETH source: signed fixed-array getters + a signed-struct getter set.
 const JETH = `// generated: signed element validation in array & struct params
-@struct class Tri { a: i8; b: i128; c: i256; }
-@contract
+type Tri = { a: i8; b: i128; c: i256; };
 class SignExt {
   // signed fixed-array params, returned with a runtime index
-  @external @pure i8at(a: Arr<i8, 4>, i: u256): i8 { return a[i]; }
-  @external @pure i16at(a: Arr<i16, 3>, i: u256): i16 { return a[i]; }
-  @external @pure i64at(a: Arr<i64, 2>, i: u256): i64 { return a[i]; }
-  @external @pure i128at(a: Arr<i128, 2>, i: u256): i128 { return a[i]; }
-  @external @pure i256at(a: Arr<i256, 2>, i: u256): i256 { return a[i]; }
+  get i8at(a: Arr<i8, 4>, i: u256): External<i8> { return a[i]; }
+  get i16at(a: Arr<i16, 3>, i: u256): External<i16> { return a[i]; }
+  get i64at(a: Arr<i64, 2>, i: u256): External<i64> { return a[i]; }
+  get i128at(a: Arr<i128, 2>, i: u256): External<i128> { return a[i]; }
+  get i256at(a: Arr<i256, 2>, i: u256): External<i256> { return a[i]; }
 
   // signed struct fields {int8 a; int128 b; int256 c}
-  @external @pure triA(t: Tri): i8 { return t.a; }
-  @external @pure triB(t: Tri): i128 { return t.b; }
-  @external @pure triC(t: Tri): i256 { return t.c; }
+  get triA(t: Tri): External<i8> { return t.a; }
+  get triB(t: Tri): External<i128> { return t.b; }
+  get triC(t: Tri): External<i256> { return t.c; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

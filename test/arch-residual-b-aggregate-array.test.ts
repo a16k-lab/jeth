@@ -17,17 +17,17 @@ const me = new Address(Buffer.from('11'.repeat(20), 'hex'));
 const sel = (s: string) => '0x' + functionSelector(s);
 
 // ---- B1: P[] (static struct element) -------------------------------------------------------------
-const J1 = `@struct class P { a: u256; b: u256; }
-@contract class C {
-  @external @pure lit(): P[] { let xs: P[] = [P(1n,2n), P(3n,4n), P(5n,6n)]; return xs; }
-  @external @pure empty(): P[] { let xs: P[] = []; return xs; }
-  @external @pure zeroed(): P[] { let xs: P[] = new Array<P>(3n); return xs; }
-  @external @pure fieldA(): u256 { let xs: P[] = [P(1n,2n), P(3n,4n)]; return xs[1n].a; }
-  @external @pure fieldB(): u256 { let xs: P[] = [P(1n,2n), P(3n,4n)]; return xs[1n].b; }
-  @external @pure len(): u256 { let xs: P[] = [P(1n,2n), P(3n,4n)]; return xs.length; }
-  @external @pure elem(): P { let xs: P[] = [P(7n,8n), P(9n,10n)]; return xs[0n]; }
-  @external @pure enc(): bytes { let xs: P[] = [P(1n,2n), P(3n,4n)]; return abi.encode(xs); }
-  @external @pure oob(): u256 { let xs: P[] = [P(1n,2n)]; return xs[5n].a; } }`;
+const J1 = `type P = { a: u256; b: u256; };
+class C {
+  get lit(): External<P[]> { let xs: P[] = [P(1n,2n), P(3n,4n), P(5n,6n)]; return xs; }
+  get empty(): External<P[]> { let xs: P[] = []; return xs; }
+  get zeroed(): External<P[]> { let xs: P[] = new Array<P>(3n); return xs; }
+  get fieldA(): External<u256> { let xs: P[] = [P(1n,2n), P(3n,4n)]; return xs[1n].a; }
+  get fieldB(): External<u256> { let xs: P[] = [P(1n,2n), P(3n,4n)]; return xs[1n].b; }
+  get len(): External<u256> { let xs: P[] = [P(1n,2n), P(3n,4n)]; return xs.length; }
+  get elem(): External<P> { let xs: P[] = [P(7n,8n), P(9n,10n)]; return xs[0n]; }
+  get enc(): External<bytes> { let xs: P[] = [P(1n,2n), P(3n,4n)]; return abi.encode(xs); }
+  get oob(): External<u256> { let xs: P[] = [P(1n,2n)]; return xs[5n].a; } }`;
 
 const S1 = `contract C {
   struct P { uint a; uint b; }
@@ -42,17 +42,17 @@ const S1 = `contract C {
   function oob() external pure returns (uint) { P[] memory xs = new P[](1); xs[0]=P(1,2); return xs[5].a; } }`;
 
 // ---- B2: bytes[] / string[] (dynamic byte-sequence element) --------------------------------------
-const J2 = `@contract class C {
-  @external @pure lit(): bytes[] { let bs: bytes[] = [bytes("hello"), bytes("world!!"), bytes("")]; return bs; }
-  @external @pure slit(): string[] { let ss: string[] = ["alpha", "a-much-longer-string-past-32-bytes-boundary-yes"]; return ss; }
-  @external @pure empty(): bytes[] { let bs: bytes[] = []; return bs; }
-  @external @pure zeroed(): bytes[] { let bs: bytes[] = new Array<bytes>(3n); return bs; }
-  @external @pure elen(): u256 { let bs: bytes[] = [bytes("abc"), bytes("de")]; return bs[0n].length; }
-  @external @pure byteAt(): bytes1 { let bs: bytes[] = [bytes("xyz"), bytes("qrs")]; return bs[1n][2n]; }
-  @external @pure elem(): bytes { let bs: bytes[] = [bytes("first"), bytes("second")]; return bs[1n]; }
-  @external @pure len(): u256 { let bs: bytes[] = [bytes("a"), bytes("b"), bytes("c")]; return bs.length; }
-  @external @pure enc(): bytes { let bs: bytes[] = [bytes("aa"), bytes("bbbb")]; return abi.encode(bs); }
-  @external @pure oob(): u256 { let bs: bytes[] = [bytes("a")]; return bs[5n].length; } }`;
+const J2 = `class C {
+  get lit(): External<bytes[]> { let bs: bytes[] = [bytes("hello"), bytes("world!!"), bytes("")]; return bs; }
+  get slit(): External<string[]> { let ss: string[] = ["alpha", "a-much-longer-string-past-32-bytes-boundary-yes"]; return ss; }
+  get empty(): External<bytes[]> { let bs: bytes[] = []; return bs; }
+  get zeroed(): External<bytes[]> { let bs: bytes[] = new Array<bytes>(3n); return bs; }
+  get elen(): External<u256> { let bs: bytes[] = [bytes("abc"), bytes("de")]; return bs[0n].length; }
+  get byteAt(): External<bytes1> { let bs: bytes[] = [bytes("xyz"), bytes("qrs")]; return bs[1n][2n]; }
+  get elem(): External<bytes> { let bs: bytes[] = [bytes("first"), bytes("second")]; return bs[1n]; }
+  get len(): External<u256> { let bs: bytes[] = [bytes("a"), bytes("b"), bytes("c")]; return bs.length; }
+  get enc(): External<bytes> { let bs: bytes[] = [bytes("aa"), bytes("bbbb")]; return abi.encode(bs); }
+  get oob(): External<u256> { let bs: bytes[] = [bytes("a")]; return bs[5n].length; } }`;
 
 const S2 = `contract C {
   function lit() external pure returns (bytes[] memory) { bytes[] memory bs = new bytes[](3); bs[0]=bytes("hello"); bs[1]=bytes("world!!"); bs[2]=bytes(""); return bs; }
@@ -108,29 +108,29 @@ describe('Residual B2: bytes[] / string[] memory local - byte-identical to solc 
 describe('Residual B4/B3: nested-dynamic-leaf + dyn-struct arrays now ACCEPT (lifted, byte-identical)', () => {
   it('B4: nested-dynamic-leaf arrays (bytes[][]) now ACCEPT (byte-identity in nested-dynamic-leaf-array.test.ts)', () => {
     // bytes[][] / string[][] are the B4 lift: pointer-headed [len][ptr..] outer, each ptr -> inner bytes[].
-    expect(codes(`@contract class C { @external @pure f(): bytes[][] { let m: bytes[][] = [[bytes("a")]]; return m; } }`)).toEqual([]);
+    expect(codes(`class C { get f(): External<bytes[][]> { let m: bytes[][] = [[bytes("a")]]; return m; } }`)).toEqual([]);
   });
   it('B3: a DYNAMIC struct element array (P with a bytes field) now ACCEPTS (byte-identity in dyn-array-field-struct-local.test.ts)', () => {
     // each P[] element is an absolute pointer to a pointer-headed dyn-struct image (empty sentinels on new).
-    expect(codes(`@struct class P{a:u256;s:bytes;} @contract class C { @external @pure f(): P[] { let m: P[] = [P(1n,bytes("x"))]; return m; } }`)).toEqual([]);
+    expect(codes(`type P = {a:u256;s:bytes;}; class C { get f(): External<P[]> { let m: P[] = [P(1n,bytes("x"))]; return m; } }`)).toEqual([]);
   });
   it('P[][], FIXED-outer Arr<P,N> static-struct arrays, and Arr<bytes,N> (Edge D) now ACCEPT (pointer-headed)', () => {
     // P[][] (Cat B) and Arr<P,N> (Batch A) are now POINTER-HEADED like solc (byte-identity in
     // pointer-headed-static-struct-array.test.ts / fixed-static-struct-array.test.ts).
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): P[][] { let m: P[][] = [[P(1n,2n)]]; return m; } }`)).toEqual([]);
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): Arr<P,2> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`)).toEqual([]);
+    expect(codes(`type P = {a:u256;b:u256;}; class C { get f(): External<P[][]> { let m: P[][] = [[P(1n,2n)]]; return m; } }`)).toEqual([]);
+    expect(codes(`type P = {a:u256;b:u256;}; class C { get f(): External<Arr<P,2>> { let m: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return m; } }`)).toEqual([]);
     // Edge D: a FIXED array of a bytes/string DYNAMIC element (Arr<bytes,N>) is now lifted byte-identical
     // (build / element read+write / return), see fixed-dynamic-leaf-array.test.ts.
-    expect(codes(`@contract class C { @external @pure f(): Arr<bytes,2> { let m: Arr<bytes,2> = [bytes("a"),bytes("b")]; return m; } }`)).toEqual([]);
+    expect(codes(`class C { get f(): External<Arr<bytes,2>> { let m: Arr<bytes,2> = [bytes("a"),bytes("b")]; return m; } }`)).toEqual([]);
   });
   it('struct-array element WRITE xs[i] = P(...) and bytes[] element write bs[i] = bytes(..) now ACCEPT (lifted)', () => {
     // both are now byte-identical to solc (byte-identity covered in lift-over-rejections.test.ts):
     // xs[i] = P(...) is a whole-element image copy; bs[i] = <bytes> re-points the element pointer.
     expect(
-      codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): u256 { let xs: P[] = [P(1n,2n)]; xs[0n] = P(9n,9n); return xs[0n].a; } }`),
+      codes(`type P = {a:u256;b:u256;}; class C { get f(): External<u256> { let xs: P[] = [P(1n,2n)]; xs[0n] = P(9n,9n); return xs[0n].a; } }`),
     ).toEqual([]);
     expect(
-      codes(`@contract class C { @external @pure f(): u256 { let bs: bytes[] = [bytes("a")]; bs[0n] = bytes("zz"); return bs[0n].length; } }`),
+      codes(`class C { get f(): External<u256> { let bs: bytes[] = [bytes("a")]; bs[0n] = bytes("zz"); return bs[0n].length; } }`),
     ).toEqual([]);
   });
 });

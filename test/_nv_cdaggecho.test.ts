@@ -12,30 +12,30 @@ const call = (sig: string, words: bigint[], extra = '') => '0x' + sel(sig) + wor
 // left-aligned bytesN word from a bigint of the low bytes (n bytes)
 const bytesNword = (loBytes: bigint, n: number) => ((loBytes % (1n << BigInt(8 * n))) << BigInt(8 * (32 - n))) % M;
 
-const JETH = `@struct class P { a: u256; b: u8; c: address; }
-@struct class Mixed { a: u128; b: u64; c: bool; d: address; e: bytes8; f: i40; }
-@struct class WithArr { id: u64; data: Arr<u256, 3>; tag: bytes4; }
-@contract class C {
+const JETH = `type P = { a: u256; b: u8; c: address; };
+type Mixed = { a: u128; b: u64; c: bool; d: address; e: bytes8; f: i40; };
+type WithArr = { id: u64; data: Arr<u256, 3>; tag: bytes4; };
+class C {
   // nested value fixed-arrays (leaves clean/maskable by solc)
-  @external @pure echo2(a: Arr<Arr<u256, 2>, 2>): Arr<Arr<u256, 2>, 2> { return a; }
-  @external @pure echo3(a: Arr<Arr<Arr<u256, 2>, 2>, 2>): Arr<Arr<Arr<u256, 2>, 2>, 2> { return a; }
-  @external @pure echo4(a: Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>): Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2> { return a; }
+  get echo2(a: Arr<Arr<u256, 2>, 2>): External<Arr<Arr<u256, 2>, 2>> { return a; }
+  get echo3(a: Arr<Arr<Arr<u256, 2>, 2>, 2>): External<Arr<Arr<Arr<u256, 2>, 2>, 2>> { return a; }
+  get echo4(a: Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>): External<Arr<Arr<Arr<Arr<u256, 2>, 2>, 2>, 2>> { return a; }
   // packed narrow value arrays (solc CLEANS dirty high bits -> succeeds)
-  @external @pure echoU8(a: Arr<Arr<u8, 4>, 3>): Arr<Arr<u8, 4>, 3> { return a; }
-  @external @pure echoI64(a: Arr<i64, 5>): Arr<i64, 5> { return a; }
-  @external @pure echoB4(a: Arr<bytes4, 3>): Arr<bytes4, 3> { return a; }
-  @external @pure echoBool(a: Arr<bool, 8>): Arr<bool, 8> { return a; }
-  @external @pure echoU16(a: Arr<u16, 4>): Arr<u16, 4> { return a; }
-  @external @pure echoAddr(a: Arr<address, 3>): Arr<address, 3> { return a; }
-  @external @pure echoI8(a: Arr<i8, 4>): Arr<i8, 4> { return a; }
+  get echoU8(a: Arr<Arr<u8, 4>, 3>): External<Arr<Arr<u8, 4>, 3>> { return a; }
+  get echoI64(a: Arr<i64, 5>): External<Arr<i64, 5>> { return a; }
+  get echoB4(a: Arr<bytes4, 3>): External<Arr<bytes4, 3>> { return a; }
+  get echoBool(a: Arr<bool, 8>): External<Arr<bool, 8>> { return a; }
+  get echoU16(a: Arr<u16, 4>): External<Arr<u16, 4>> { return a; }
+  get echoAddr(a: Arr<address, 3>): External<Arr<address, 3>> { return a; }
+  get echoI8(a: Arr<i8, 4>): External<Arr<i8, 4>> { return a; }
   // structs (solc VALIDATES narrow fields -> dirty reverts)
-  @external @pure echoStruct(p: P): P { return p; }
-  @external @pure echoMixed(p: Mixed): Mixed { return p; }
-  @external @pure echoStructArr(a: Arr<P, 2>): Arr<P, 2> { return a; }
-  @external @pure echoMixedArr(a: Arr<Mixed, 2>): Arr<Mixed, 2> { return a; }
+  get echoStruct(p: P): External<P> { return p; }
+  get echoMixed(p: Mixed): External<Mixed> { return p; }
+  get echoStructArr(a: Arr<P, 2>): External<Arr<P, 2>> { return a; }
+  get echoMixedArr(a: Arr<Mixed, 2>): External<Arr<Mixed, 2>> { return a; }
   // struct with a fixed-array field
-  @external @pure echoWithArr(p: WithArr): WithArr { return p; }
-  @external @pure echoWithArrArr(a: Arr<WithArr, 2>): Arr<WithArr, 2> { return a; }
+  get echoWithArr(p: WithArr): External<WithArr> { return p; }
+  get echoWithArrArr(a: Arr<WithArr, 2>): External<Arr<WithArr, 2>> { return a; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

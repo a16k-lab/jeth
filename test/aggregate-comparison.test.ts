@@ -23,7 +23,7 @@ const fn = (body: string, extra = '') => `${extra}@contract class C { @external 
 
 describe('aggregate comparison gate (JETH088, solc parity)', () => {
   it('rejects == / != on a struct (solc rejects struct equality)', () => {
-    const P = '@struct class P { a: u256; b: u256; } ';
+    const P = 'type P = { a: u256; b: u256; }; ';
     expect(codes(fn('let p: P = P(1n,2n); let q: P = P(1n,2n); return p == q;', P))).toContain('JETH088');
     expect(codes(fn('let p: P = P(1n,2n); let q: P = P(1n,2n); return p != q;', P))).toContain('JETH088');
   });

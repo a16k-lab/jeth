@@ -32,7 +32,7 @@ async function diff(jeth: string, sol: string, calls: { sig: string; args?: stri
 describe('abi.encode / abi.encodePacked vs Solidity', () => {
   it('abi.encode value types (hash + return)', async () => {
     await diff(
-      `@contract class C { @external @pure h(a: u256, b: u256): bytes32 { return keccak256(abi.encode(a, b)); } @external @pure r(a: u8, b: address, c: bool): bytes { return abi.encode(a, b, c); } }`,
+      `class C { get h(a: u256, b: u256): External<bytes32> { return keccak256(abi.encode(a, b)); } get r(a: u8, b: address, c: bool): External<bytes> { return abi.encode(a, b, c); } }`,
       `contract C { function h(uint256 a, uint256 b) external pure returns (bytes32){ return keccak256(abi.encode(a,b)); } function r(uint8 a, address b, bool c) external pure returns (bytes memory){ return abi.encode(a,b,c); } }`,
       [
         { sig: 'h(uint256,uint256)', args: W(7n) + W(8n) },
@@ -43,7 +43,7 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
 
   it('abi.encode with dynamic (bytes/string) args', async () => {
     await diff(
-      `@contract class C { @external @pure r(a: u256, b: bytes): bytes { return abi.encode(a, b); } @external @pure h(s: string): bytes32 { return keccak256(abi.encode(s)); } }`,
+      `class C { get r(a: u256, b: bytes): External<bytes> { return abi.encode(a, b); } get h(s: string): External<bytes32> { return keccak256(abi.encode(s)); } }`,
       `contract C { function r(uint256 a, bytes calldata b) external pure returns (bytes memory){ return abi.encode(a,b); } function h(string calldata s) external pure returns (bytes32){ return keccak256(abi.encode(s)); } }`,
       [
         { sig: 'r(uint256,bytes)', args: W(0x40n) + W(99n) + W(3n) + 'aabbcc'.padEnd(64, '0') },
@@ -54,12 +54,12 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
 
   it('abi.encodePacked (mixed widths, dynamic, negative, empty)', async () => {
     await diff(
-      `@contract class C {
-        @external @pure h(a: u8, b: u16, c: u256): bytes32 { return keccak256(abi.encodePacked(a, b, c)); }
-        @external @pure r(a: address, b: bool, c: bytes4): bytes { return abi.encodePacked(a, b, c); }
-        @external @pure sd(s: string, x: u8): bytes { return abi.encodePacked(s, x); }
-        @external @pure ng(a: i8, b: i16): bytes { return abi.encodePacked(a, b); }
-        @external @pure em(): bytes { return abi.encodePacked(); }
+      `class C {
+        get h(a: u8, b: u16, c: u256): External<bytes32> { return keccak256(abi.encodePacked(a, b, c)); }
+        get r(a: address, b: bool, c: bytes4): External<bytes> { return abi.encodePacked(a, b, c); }
+        get sd(s: string, x: u8): External<bytes> { return abi.encodePacked(s, x); }
+        get ng(a: i8, b: i16): External<bytes> { return abi.encodePacked(a, b); }
+        get em(): External<bytes> { return abi.encodePacked(); }
       }`,
       `contract C {
         function h(uint8 a, uint16 b, uint256 c) external pure returns (bytes32){ return keccak256(abi.encodePacked(a,b,c)); }
@@ -80,13 +80,13 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
 
   it('abi.encode of a static struct / fixed-array / dynamic value array', async () => {
     await diff(
-      `@struct class P { a: u256; b: u8; } @contract class C {
-        @external @pure st(a: u256, b: u8): bytes { return abi.encode(P(a, b)); }
-        @external @pure mix(n: u256, a: u256, b: u8): bytes { return abi.encode(n, P(a, b)); }
-        @external @pure fa(a: u256, b: u256, c: u256): bytes { let x: Arr<u256,3> = [a, b, c]; return abi.encode(x); }
-        @external @pure dyn(xs: u256[]): bytes { return abi.encode(xs); }
-        @external @pure both(a: u256, b: u8, xs: u256[]): bytes { return abi.encode(P(a, b), xs); }
-        @external @pure h(a: u256, b: u8): bytes32 { return keccak256(abi.encode(P(a, b))); }
+      `type P = { a: u256; b: u8; }; class C {
+        get st(a: u256, b: u8): External<bytes> { return abi.encode(P(a, b)); }
+        get mix(n: u256, a: u256, b: u8): External<bytes> { return abi.encode(n, P(a, b)); }
+        get fa(a: u256, b: u256, c: u256): External<bytes> { let x: Arr<u256,3> = [a, b, c]; return abi.encode(x); }
+        get dyn(xs: u256[]): External<bytes> { return abi.encode(xs); }
+        get both(a: u256, b: u8, xs: u256[]): External<bytes> { return abi.encode(P(a, b), xs); }
+        get h(a: u256, b: u8): External<bytes32> { return keccak256(abi.encode(P(a, b))); }
       }`,
       `struct P { uint256 a; uint8 b; } contract C {
         function st(uint256 a, uint8 b) external pure returns (bytes memory){ return abi.encode(P(a,b)); }
@@ -109,11 +109,11 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
 
   it('abi.encodePacked of value arrays (elements padded to 32, no length)', async () => {
     await diff(
-      `@contract class C {
-        @external @pure d(x: u256[]): bytes { return abi.encodePacked(x); }
-        @external @pure n8(x: u8[]): bytes { return abi.encodePacked(x); }
-        @external @pure pre(n: u8, x: u256[]): bytes { return abi.encodePacked(n, x); }
-        @external @pure fx(a: u256, b: u256, c: u256): bytes { let x: Arr<u256,3> = [a, b, c]; return abi.encodePacked(x); }
+      `class C {
+        get d(x: u256[]): External<bytes> { return abi.encodePacked(x); }
+        get n8(x: u8[]): External<bytes> { return abi.encodePacked(x); }
+        get pre(n: u8, x: u256[]): External<bytes> { return abi.encodePacked(n, x); }
+        get fx(a: u256, b: u256, c: u256): External<bytes> { let x: Arr<u256,3> = [a, b, c]; return abi.encodePacked(x); }
       }`,
       `contract C {
         function d(uint256[] calldata x) external pure returns (bytes memory){ return abi.encodePacked(x); }
@@ -133,11 +133,11 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
 
   it('abi.encode of a dynamic struct and nested dynamic arrays', async () => {
     await diff(
-      `@struct class D { a: u256; s: string; } @contract class C {
-        @external @pure st(a: u256, s: string): bytes { return abi.encode(D(a, s)); }
-        @external @pure mix(n: u256, a: u256, s: string): bytes { return abi.encode(n, D(a, s)); }
-        @external @pure sa(x: string[]): bytes { return abi.encode(x); }
-        @external @pure nn(m: u256[][]): bytes { return abi.encode(m); }
+      `type D = { a: u256; s: string; }; class C {
+        get st(a: u256, s: string): External<bytes> { return abi.encode(D(a, s)); }
+        get mix(n: u256, a: u256, s: string): External<bytes> { return abi.encode(n, D(a, s)); }
+        get sa(x: string[]): External<bytes> { return abi.encode(x); }
+        get nn(m: u256[][]): External<bytes> { return abi.encode(m); }
       }`,
       `struct D { uint256 a; string s; } contract C {
         function st(uint256 a, string calldata s) external pure returns (bytes memory){ return abi.encode(D(a,s)); }
@@ -163,12 +163,12 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
 
   it('abi.encodeWithSelector / abi.encodeWithSignature', async () => {
     await diff(
-      `@contract class C {
-        @external @pure ws(s: bytes4, a: u256, b: address): bytes { return abi.encodeWithSelector(s, a, b); }
-        @external @pure wsd(s: bytes4, a: u256, d: bytes): bytes { return abi.encodeWithSelector(s, a, d); }
-        @external @pure sig(a: u256, b: address): bytes { return abi.encodeWithSignature("transfer(address,uint256)", b, a); }
-        @external @pure sigh(x: u256): bytes32 { return keccak256(abi.encodeWithSignature("foo(uint256)", x)); }
-        @external @pure rt(s: string, x: u256): bytes { return abi.encodeWithSignature(s, x); }
+      `class C {
+        get ws(s: bytes4, a: u256, b: address): External<bytes> { return abi.encodeWithSelector(s, a, b); }
+        get wsd(s: bytes4, a: u256, d: bytes): External<bytes> { return abi.encodeWithSelector(s, a, d); }
+        get sig(a: u256, b: address): External<bytes> { return abi.encodeWithSignature("transfer(address,uint256)", b, a); }
+        get sigh(x: u256): External<bytes32> { return keccak256(abi.encodeWithSignature("foo(uint256)", x)); }
+        get rt(s: string, x: u256): External<bytes> { return abi.encodeWithSignature(s, x); }
       }`,
       `contract C {
         function ws(bytes4 s, uint256 a, address b) external pure returns (bytes memory){ return abi.encodeWithSelector(s, a, b); }
@@ -199,7 +199,7 @@ describe('abi.encode / abi.encodePacked vs Solidity', () => {
 
   it('nested abi.encode(abi.encodePacked(...)) + store result to storage bytes', async () => {
     await diff(
-      `@contract class C { @state b: bytes; @external @pure n(a: u256, c: address): bytes32 { return keccak256(abi.encode(abi.encodePacked(a, c))); } @external set(a: u256, c: u8): void { this.b = abi.encodePacked(a, c); } @external @view get(): bytes { return this.b; } }`,
+      `class C { b: bytes; get n(a: u256, c: address): External<bytes32> { return keccak256(abi.encode(abi.encodePacked(a, c))); } set(a: u256, c: u8): External<void> { this.b = abi.encodePacked(a, c); } get get(): External<bytes> { return this.b; } }`,
       `contract C { bytes b; function n(uint256 a, address c) external pure returns (bytes32){ return keccak256(abi.encode(abi.encodePacked(a,c))); } function set(uint256 a, uint8 c) external { b = abi.encodePacked(a,c); } function get() external view returns (bytes memory){ return b; } }`,
       [
         { sig: 'n(uint256,address)', args: W(42n) + W(0x1234n) },

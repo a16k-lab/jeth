@@ -24,16 +24,16 @@ const wrapBytes = (blob: string) => {
 };
 
 const MK = `[P(1n,Q(2n,3n),[4n,5n],[6n,7n,8n]),P(11n,Q(12n,13n),[14n,15n],[16n,17n,18n])]`;
-const J = `@struct class Q { m: u256; n: u256; } @struct class P { a: u256; q: Q; pre: Arr<u256,2>; t: Arr<u8,3>; }
-@contract class C {
-  @external @pure a(): u256 { let xs: P[] = ${MK}; return xs[1n].a; }
-  @external @pure qm(): u256 { let xs: P[] = ${MK}; return xs[0n].q.m; }
-  @external @pure qn(): u256 { let xs: P[] = ${MK}; return xs[1n].q.n; }
-  @external @pure p0(): u256 { let xs: P[] = ${MK}; return xs[0n].pre[0n]; }
-  @external @pure p1(): u256 { let xs: P[] = ${MK}; return xs[1n].pre[1n]; }
-  @external @pure t2(): u256 { let xs: P[] = ${MK}; return xs[0n].t[2n]; }
-  @external @pure dq(b: bytes): u256 { let xs: P[] = abi.decode(b, P[]); return xs[1n].q.n; }
-  @external @pure dp(b: bytes): u256 { let xs: P[] = abi.decode(b, P[]); return xs[0n].pre[1n]; } }`;
+const J = `type Q = { m: u256; n: u256; }; type P = { a: u256; q: Q; pre: Arr<u256,2>; t: Arr<u8,3>; };
+class C {
+  get a(): External<u256> { let xs: P[] = ${MK}; return xs[1n].a; }
+  get qm(): External<u256> { let xs: P[] = ${MK}; return xs[0n].q.m; }
+  get qn(): External<u256> { let xs: P[] = ${MK}; return xs[1n].q.n; }
+  get p0(): External<u256> { let xs: P[] = ${MK}; return xs[0n].pre[0n]; }
+  get p1(): External<u256> { let xs: P[] = ${MK}; return xs[1n].pre[1n]; }
+  get t2(): External<u256> { let xs: P[] = ${MK}; return xs[0n].t[2n]; }
+  get dq(b: bytes): External<u256> { let xs: P[] = abi.decode(b, P[]); return xs[1n].q.n; }
+  get dp(b: bytes): External<u256> { let xs: P[] = abi.decode(b, P[]); return xs[0n].pre[1n]; } }`;
 const S = `struct Q { uint m; uint n; } struct P { uint a; Q q; uint[2] pre; uint8[3] t; }
 contract C {
   function mk() internal pure returns (P[] memory) { P[] memory xs=new P[](2); xs[0]=P(1,Q(2,3),[uint(4),5],[uint8(6),7,8]); xs[1]=P(11,Q(12,13),[uint(14),15],[uint8(16),17,18]); return xs; }
@@ -82,7 +82,7 @@ describe('Residual D: deep sub-field read on a memory-array struct element (lite
       }
     };
     expect(
-      codes(`@struct class P { a: u256; pre: Arr<u256,2>; } @contract class C { @external @pure f(j: u256): u256 { let xs: P[] = [P(1n,[2n,3n])]; return xs[0n].pre[j]; } }`),
+      codes(`type P = { a: u256; pre: Arr<u256,2>; }; class C { get f(j: u256): External<u256> { let xs: P[] = [P(1n,[2n,3n])]; return xs[0n].pre[j]; } }`),
     ).toEqual([]);
   });
 });

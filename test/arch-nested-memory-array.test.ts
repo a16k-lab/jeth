@@ -21,29 +21,29 @@ describe('nested / multi-dim memory-array locals (arch #2) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
 
   // J = JETH source; S = the solc 0.8.35 mirror, semantically identical.
-  const J = `@contract class C {
+  const J = `class C {
     // --- u256[][] dynamic-of-dynamic ---
-    @external @pure dynDyn(): u256[][] { let m: u256[][] = [[1n,2n],[3n]]; return m; }
-    @external @pure readIJ(): u256 { let m: u256[][] = [[1n,2n],[3n]]; return m[0n][1n]; }
-    @external @pure lens(): u256 { let m: u256[][] = [[1n,2n,5n],[3n]]; return m.length * 100n + m[0n].length; }
-    @external @pure mutate(): u256[][] { let m: u256[][] = [[1n,2n],[3n]]; m[0n][1n] = 99n; m[1n][0n] = 77n; return m; }
-    @external @pure encKec(): bytes32 { let m: u256[][] = [[1n,2n],[3n]]; return keccak256(abi.encode(m)); }
-    @external @pure empties(): u256[][] { let m: u256[][] = [[],[5n]]; return m; }
-    @external @pure emptyOuter(): u256[][] { let m: u256[][] = []; return m; }
+    get dynDyn(): External<u256[][]> { let m: u256[][] = [[1n,2n],[3n]]; return m; }
+    get readIJ(): External<u256> { let m: u256[][] = [[1n,2n],[3n]]; return m[0n][1n]; }
+    get lens(): External<u256> { let m: u256[][] = [[1n,2n,5n],[3n]]; return m.length * 100n + m[0n].length; }
+    get mutate(): External<u256[][]> { let m: u256[][] = [[1n,2n],[3n]]; m[0n][1n] = 99n; m[1n][0n] = 77n; return m; }
+    get encKec(): External<bytes32> { let m: u256[][] = [[1n,2n],[3n]]; return keccak256(abi.encode(m)); }
+    get empties(): External<u256[][]> { let m: u256[][] = [[],[5n]]; return m; }
+    get emptyOuter(): External<u256[][]> { let m: u256[][] = []; return m; }
     // --- Arr<Arr<u256,2>,2> fixed-of-fixed (pure static, inline image) ---
-    @external @pure fixFix(): Arr<Arr<u256,2>,2> { let f: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return f; }
-    @external @pure fixFixRead(): u256 { let f: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return f[1n][0n] * 10n + f[0n][1n]; }
+    get fixFix(): External<Arr<Arr<u256,2>,2>> { let f: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return f; }
+    get fixFixRead(): External<u256> { let f: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return f[1n][0n] * 10n + f[0n][1n]; }
     // --- Arr<u256[],2> fixed-of-dynamic (pointer table) ---
-    @external @pure fixDyn(): Arr<u256[],2> { let g: Arr<u256[],2> = [[1n],[2n,3n]]; return g; }
-    @external @pure fixDynRW(): u256 { let g: Arr<u256[],2> = [[1n],[2n,3n]]; g[1n][0n] = 9n; return g[0n][0n]*100n + g[1n][0n]*10n + g[1n][1n] + g.length; }
+    get fixDyn(): External<Arr<u256[],2>> { let g: Arr<u256[],2> = [[1n],[2n,3n]]; return g; }
+    get fixDynRW(): External<u256> { let g: Arr<u256[],2> = [[1n],[2n,3n]]; g[1n][0n] = 9n; return g[0n][0n]*100n + g[1n][0n]*10n + g[1n][1n] + g.length; }
     // --- new Array zero-init (u256[][][]) ---
-    @external @pure newZero(): u256[][][] { let h: u256[][][] = new Array<u256[][]>(2n); return h; }
+    get newZero(): External<u256[][][]> { let h: u256[][][] = new Array<u256[][]>(2n); return h; }
     // --- u256[][][] deep literal ---
-    @external @pure deep3(): u256[][][] { let h: u256[][][] = [[[1n,2n],[3n]],[[4n]]]; return h; }
+    get deep3(): External<u256[][][]> { let h: u256[][][] = [[[1n,2n],[3n]],[[4n]]]; return h; }
     // --- address leaves ---
-    @external @pure addrs(): address[][] { let m: address[][] = [[address(0x11n)],[address(0x22n),address(0x33n)]]; return m; }
+    get addrs(): External<address[][]> { let m: address[][] = [[address(0x11n)],[address(0x22n),address(0x33n)]]; return m; }
     // --- alias an inner array into a flat local (reference semantics) ---
-    @external @pure aliasMut(): u256[][] { let m: u256[][] = [[1n,2n],[3n]]; let r: u256[] = m[0n]; r[0n] = 99n; return m; }
+    get aliasMut(): External<u256[][]> { let m: u256[][] = [[1n,2n],[3n]]; let r: u256[] = m[0n]; r[0n] = 99n; return m; }
   }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
@@ -168,14 +168,14 @@ contract C {
     // a STATIC-STRUCT-leaf nested array (P[][]) is now POINTER-HEADED like solc, so the deep field read
     // m[i][j].f is byte-identical (covered in pointer-headed-static-struct-array.test.ts).
     expect(() =>
-      compile(`@struct class P { a: u256; } @contract class C { @external @pure f(): u256 { let m: P[][] = [[P(1n)]]; return m[0n][0n].a; } }`, {
+      compile(`type P = { a: u256; }; class C { get f(): External<u256> { let m: P[][] = [[P(1n)]]; return m[0n][0n].a; } }`, {
         fileName: 'C.jeth',
       }),
     ).not.toThrow();
   });
   it('B4: a BYTES-leaf nested array (bytes[][]) now ACCEPTS (lifted, byte-identical - see nested-dynamic-leaf-array.test.ts)', () => {
     expect(() =>
-      compile(`@contract class C { @external @pure f(): u256 { let m: bytes[][] = [[]]; return 0n; } }`, {
+      compile(`class C { get f(): External<u256> { let m: bytes[][] = [[]]; return 0n; } }`, {
         fileName: 'C.jeth',
       }),
     ).not.toThrow();

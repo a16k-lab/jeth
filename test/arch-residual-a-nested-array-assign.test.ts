@@ -23,11 +23,11 @@ const sel = (s: string) => '0x' + functionSelector(s);
 
 // DYNAMIC-inner (pointer-headed) nested memory arrays: a whole-inner-array element write RE-POINTS the
 // element's pointer word, exactly like solc, so these stay byte-identical (incl. OOB Panic + aliasing).
-const J = `@contract class C {
-  @external @pure dyn(): u256[][] { let m: u256[][] = [[1n,2n],[3n]]; m[0n] = [9n,8n,7n]; return m; }
-  @external @pure fd(): Arr<u256[],2> { let m: Arr<u256[],2> = [[1n,2n],[3n]]; m[0n] = [9n,8n,7n]; return m; }
-  @external @pure oob(): u256 { let m: u256[][] = [[1n,2n],[3n]]; m[5n] = [9n]; return m[0n][0n]; }
-  @external @pure refsem(): u256[][] { let inner: u256[] = [7n,7n]; let m: u256[][] = [[1n,2n],[3n]]; m[0n] = inner; inner[0n] = 99n; return m; } }`;
+const J = `class C {
+  get dyn(): External<u256[][]> { let m: u256[][] = [[1n,2n],[3n]]; m[0n] = [9n,8n,7n]; return m; }
+  get fd(): External<Arr<u256[],2>> { let m: Arr<u256[],2> = [[1n,2n],[3n]]; m[0n] = [9n,8n,7n]; return m; }
+  get oob(): External<u256> { let m: u256[][] = [[1n,2n],[3n]]; m[5n] = [9n]; return m[0n][0n]; }
+  get refsem(): External<u256[][]> { let inner: u256[] = [7n,7n]; let m: u256[][] = [[1n,2n],[3n]]; m[0n] = inner; inner[0n] = 99n; return m; } }`;
 
 const S = `contract C {
   function dyn() external pure returns (uint[][] memory) { uint[][] memory m = new uint[][](2); m[0]=new uint[](2); m[0][0]=1; m[0][1]=2; m[1]=new uint[](1); m[1][0]=3; uint[] memory r=new uint[](3); r[0]=9;r[1]=8;r[2]=7; m[0]=r; return m; }
@@ -61,8 +61,8 @@ describe('Residual A: whole-inner-array assignment m[i] = [...] on a nested memo
     // Arr<Arr<u256,2>,2> (P0-14) and Arr<u256,2>[] (P0-13): the inner element is INLINE, so a whole-element
     // write deep-copies where solc re-points. Sound clean reject (a return-immediately form would coincide,
     // but the write semantics diverge under aliasing).
-    expect(codes(`@contract class C { @external @pure ff(): Arr<Arr<u256,2>,2> { let m: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; m[0n] = [9n,8n]; return m; } }`)).toContain('JETH429');
-    expect(codes(`@contract class C { @external @pure df(): Arr<u256,2>[] { let m: Arr<u256,2>[] = [[1n,2n],[3n,4n],[5n,6n]]; m[1n] = [9n,8n]; return m; } }`)).toContain('JETH429');
+    expect(codes(`class C { get ff(): External<Arr<Arr<u256,2>,2>> { let m: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; m[0n] = [9n,8n]; return m; } }`)).toContain('JETH429');
+    expect(codes(`class C { get df(): External<Arr<u256,2>[]> { let m: Arr<u256,2>[] = [[1n,2n],[3n,4n],[5n,6n]]; m[1n] = [9n,8n]; return m; } }`)).toContain('JETH429');
   });
 
   it('still rejects a write to a calldata aggregate parameter (read-only)', () => {
@@ -75,7 +75,7 @@ describe('Residual A: whole-inner-array assignment m[i] = [...] on a nested memo
       }
     };
     // a calldata fixed-of-fixed param and a calldata static struct param remain read-only.
-    expect(codes(`@contract class C { @external @pure f(p: Arr<Arr<u256,2>,2>): u256 { p[0n] = [9n,8n]; return p[0n][0n]; } }`).length).toBeGreaterThan(0);
-    expect(codes(`@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(p: P): u256 { p.a = 9n; return p.a; } }`).length).toBeGreaterThan(0);
+    expect(codes(`class C { get f(p: Arr<Arr<u256,2>,2>): External<u256> { p[0n] = [9n,8n]; return p[0n][0n]; } }`).length).toBeGreaterThan(0);
+    expect(codes(`type P = {a:u256;b:u256;}; class C { get f(p: P): External<u256> { p.a = 9n; return p.a; } }`).length).toBeGreaterThan(0);
   });
 });

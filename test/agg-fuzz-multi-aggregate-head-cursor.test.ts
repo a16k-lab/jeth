@@ -14,27 +14,26 @@ import { compileSolidity } from './_solidity.js';
 // (2) g: Pt a, Pt b                                  -> head words: ax ay | bx by              (4 words)
 // (3) h: uint256 x, uint256[3] a, uint256 y          -> head words: x | a0 a1 a2 | y            (5 words)
 const JETH = `// scenario multi-aggregate-head-cursor
-@struct class Pt { x: u128; y: u128; }
+type Pt = { x: u128; y: u128; };
 
-@contract
 class MultiAgg {
   // (1) f(uint256[2] a, Pt b, uint8[3] c, uint256 x) reading each leaf at its offset
-  @external @pure fA(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256, i: u256): u256 { return a[i]; }
-  @external @pure fBx(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256): u128 { return b.x; }
-  @external @pure fBy(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256): u128 { return b.y; }
-  @external @pure fC(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256, i: u256): u8 { return c[i]; }
-  @external @pure fX(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256): u256 { return x; }
+  get fA(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256, i: u256): External<u256> { return a[i]; }
+  get fBx(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256): External<u128> { return b.x; }
+  get fBy(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256): External<u128> { return b.y; }
+  get fC(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256, i: u256): External<u8> { return c[i]; }
+  get fX(a: Arr<u256, 2>, b: Pt, c: Arr<u8, 3>, x: u256): External<u256> { return x; }
 
   // (2) g(Pt a, Pt b) reading a.y and b.x
-  @external @pure gAy(a: Pt, b: Pt): u128 { return a.y; }
-  @external @pure gBx(a: Pt, b: Pt): u128 { return b.x; }
-  @external @pure gAx(a: Pt, b: Pt): u128 { return a.x; }
-  @external @pure gBy(a: Pt, b: Pt): u128 { return b.y; }
+  get gAy(a: Pt, b: Pt): External<u128> { return a.y; }
+  get gBx(a: Pt, b: Pt): External<u128> { return b.x; }
+  get gAx(a: Pt, b: Pt): External<u128> { return a.x; }
+  get gBy(a: Pt, b: Pt): External<u128> { return b.y; }
 
   // (3) h(uint256 x, uint256[3] a, uint256 y) value-aggregate-value
-  @external @pure hX(x: u256, a: Arr<u256, 3>, y: u256): u256 { return x; }
-  @external @pure hA(x: u256, a: Arr<u256, 3>, y: u256, i: u256): u256 { return a[i]; }
-  @external @pure hY(x: u256, a: Arr<u256, 3>, y: u256): u256 { return y; }
+  get hX(x: u256, a: Arr<u256, 3>, y: u256): External<u256> { return x; }
+  get hA(x: u256, a: Arr<u256, 3>, y: u256, i: u256): External<u256> { return a[i]; }
+  get hY(x: u256, a: Arr<u256, 3>, y: u256): External<u256> { return y; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

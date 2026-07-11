@@ -22,11 +22,11 @@ const sel = (s: string) => '0x' + functionSelector(s);
 const ret = (r: any) => (r.returnHex.startsWith('0x') ? r.returnHex.slice(2) : r.returnHex);
 const wrap = (blob: string) => W(0x20n) + W(BigInt(blob.length / 2)) + blob;
 
-const J = `@struct class P { a: u256; b: u256; } @struct class Q { a: u256; tags: bytes; }
-@contract class C {
-  @external @pure ds(b: bytes): u256 { let p: P = abi.decode(b, P); return p.a + p.b; }
-  @external @pure dq(b: bytes): u256 { let q: Q = abi.decode(b, Q); return q.a + q.tags.length; }
-  @external @pure dt(b: bytes): u256 { let [n, p]: [u256, P] = abi.decode(b, [u256, P]); return n + p.a + p.b; } }`;
+const J = `type P = { a: u256; b: u256; }; type Q = { a: u256; tags: bytes; };
+class C {
+  get ds(b: bytes): External<u256> { let p: P = abi.decode(b, P); return p.a + p.b; }
+  get dq(b: bytes): External<u256> { let q: Q = abi.decode(b, Q); return q.a + q.tags.length; }
+  get dt(b: bytes): External<u256> { let [n, p]: [u256, P] = abi.decode(b, [u256, P]); return n + p.a + p.b; } }`;
 const S = `struct P { uint a; uint b; } struct Q { uint a; bytes tags; }
 contract C {
   function ds(bytes calldata b) external pure returns(uint){ P memory p = abi.decode(b,(P)); return p.a+p.b; }
@@ -61,7 +61,7 @@ describe('abi.decode into a struct / tuple-with-struct target (JETH322 core lift
     // Residual C lifted P[] (static struct), bytes[]/string[], and u256[][] (nested value arrays) as
     // abi.decode targets (byte-identical decode verified in arch-residual-c-decode-array.test.ts). Here we
     // assert they now COMPILE (no longer JETH322/200). Genuinely-deferred targets stay rejecting below.
-    const pre = `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(b: bytes): u256 {`;
+    const pre = `type P = { a: u256; b: u256; }; class C { get f(b: bytes): External<u256> {`;
     expect(() => compile(`${pre} let ps: P[] = abi.decode(b, P[]); return ps[0n].a; } }`, { fileName: 'C.jeth' })).not.toThrow();
     expect(() => compile(`${pre} let bs: bytes[] = abi.decode(b, bytes[]); return bs.length; } }`, { fileName: 'C.jeth' })).not.toThrow();
     expect(() => compile(`${pre} let m: u256[][] = abi.decode(b, u256[][]); return m[0n][0n]; } }`, { fileName: 'C.jeth' })).not.toThrow();
@@ -77,14 +77,14 @@ describe('abi.decode into a struct / tuple-with-struct target (JETH322 core lift
       }
     };
     // B3: a DYNAMIC-field struct array (D has a bytes field) is now ACCEPTED (byte-identical decode).
-    const preD = `@struct class D { a: u256; tags: bytes; } @contract class C { @external @pure f(b: bytes): u256 {`;
+    const preD = `type D = { a: u256; tags: bytes; }; class C { get f(b: bytes): External<u256> {`;
     expect(codes(`${preD} let ds: D[] = abi.decode(b, D[]); return ds.length; } }`)).toEqual([]);
     // B4: a nested-dynamic-leaf array (bytes[][]) is now ACCEPTED (byte-identical decode).
-    const preC = `@contract class C { @external @pure f(b: bytes): u256 {`;
+    const preC = `class C { get f(b: bytes): External<u256> {`;
     expect(codes(`${preC} let m: bytes[][] = abi.decode(b, bytes[][]); return m.length; } }`)).toEqual([]);
     // A STATIC-struct array P[] / nested P[][] are now ACCEPTED (pointer-headed; byte-identical decode
     // covered in pointer-headed-static-struct-array.test.ts).
-    const preP = `@struct class P { a: u256; b: u256; } @contract class C { @external @pure f(b: bytes): u256 {`;
+    const preP = `type P = { a: u256; b: u256; }; class C { get f(b: bytes): External<u256> {`;
     expect(codes(`${preP} let m: P[] = abi.decode(b, P[]); return m.length; } }`)).toEqual([]);
     expect(codes(`${preP} let m: P[][] = abi.decode(b, P[][]); return m.length; } }`)).toEqual([]);
   });

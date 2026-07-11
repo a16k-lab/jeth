@@ -20,77 +20,77 @@ const sel = (s: string) => functionSelector(s);
 //   Mix(scalar, grid)              struct with both a scalar field and a 2D grid field
 // All compared whole-struct / whole-array byte-for-byte against solc.
 
-const JETH = `@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
-@struct class Row { x: u256; y: u256; }
-@struct class M { tag: u256; rows: Arr<Row, 2>; }
-@struct class M3 { tag: u256; rows: Arr<Row, 3>; }
-@struct class D3 { tag: u256; cube: Arr<Arr<Arr<u256, 2>, 2>, 2>; }
-@struct class Pk { tag: u64; rows: Arr<Arr<u8, 4>, 2>; tail: u64; }
-@struct class Sg { tag: i256; grid: Arr<Arr<i64, 2>, 2>; }
-@struct class Sg8 { grid: Arr<Arr<i8, 2>, 2>; }
-@struct class Sg128 { grid: Arr<Arr<i128, 2>, 2>; }
-@struct class Bg { tag: u256; grid: Arr<Arr<bytes4, 2>, 2>; }
-@struct class Bg32 { grid: Arr<Arr<bytes32, 2>, 2>; }
-@struct class Mix { scalar: u256; grid: Arr<Arr<u256, 2>, 2>; extra: u256; }
-@struct class Pt { a: u8; b: u8; }
-@struct class MP { tag: u256; pts: Arr<Pt, 2>; }
-@struct class WideRow { x: i128; y: i128; }
-@struct class MW { tag: u256; rows: Arr<WideRow, 2>; }
+const JETH = `type W = { tag: u256; grid: Arr<Arr<u256, 2>, 2>; };
+type Row = { x: u256; y: u256; };
+type M = { tag: u256; rows: Arr<Row, 2>; };
+type M3 = { tag: u256; rows: Arr<Row, 3>; };
+type D3 = { tag: u256; cube: Arr<Arr<Arr<u256, 2>, 2>, 2>; };
+type Pk = { tag: u64; rows: Arr<Arr<u8, 4>, 2>; tail: u64; };
+type Sg = { tag: i256; grid: Arr<Arr<i64, 2>, 2>; };
+type Sg8 = { grid: Arr<Arr<i8, 2>, 2>; };
+type Sg128 = { grid: Arr<Arr<i128, 2>, 2>; };
+type Bg = { tag: u256; grid: Arr<Arr<bytes4, 2>, 2>; };
+type Bg32 = { grid: Arr<Arr<bytes32, 2>, 2>; };
+type Mix = { scalar: u256; grid: Arr<Arr<u256, 2>, 2>; extra: u256; };
+type Pt = { a: u8; b: u8; };
+type MP = { tag: u256; pts: Arr<Pt, 2>; };
+type WideRow = { x: i128; y: i128; };
+type MW = { tag: u256; rows: Arr<WideRow, 2>; };
 
-@contract class SC {
-  @state w: W;
-  @state d3: D3;
-  @state pk: Pk;
-  @state sg: Sg;
-  @state mix: Mix;
-  @state bg: Bg;
+class SC {
+  w: W;
+  d3: D3;
+  pk: Pk;
+  sg: Sg;
+  mix: Mix;
+  bg: Bg;
 
   // ----- W: store then whole-return, and pure return -----
-  @external setW(t: u256, a: u256, b: u256, c: u256, d: u256): void { this.w = W(t, [[a, b], [c, d]]); }
-  @external @view getW(): W { return this.w; }
-  @external @view mkW(t: u256, a: u256, b: u256, c: u256, d: u256): W { return W(t, [[a, b], [c, d]]); }
+  setW(t: u256, a: u256, b: u256, c: u256, d: u256): External<void> { this.w = W(t, [[a, b], [c, d]]); }
+  get getW(): External<W> { return this.w; }
+  get mkW(t: u256, a: u256, b: u256, c: u256, d: u256): External<W> { return W(t, [[a, b], [c, d]]); }
 
   // ----- M: struct-array literal, PURE return only -----
-  @external @view mkM(t: u256, x0: u256, y0: u256, x1: u256, y1: u256): M { return M(t, [Row(x0, y0), Row(x1, y1)]); }
-  @external @view mkM3(t: u256, x0: u256, y0: u256, x1: u256, y1: u256, x2: u256, y2: u256): M3 { return M3(t, [Row(x0, y0), Row(x1, y1), Row(x2, y2)]); }
-  @external @view mkMW(t: u256, x0: i128, y0: i128, x1: i128, y1: i128): MW { return MW(t, [WideRow(x0, y0), WideRow(x1, y1)]); }
-  @external @view mkMP(t: u256, a0: u8, b0: u8, a1: u8, b1: u8): MP { return MP(t, [Pt(a0, b0), Pt(a1, b1)]); }
+  get mkM(t: u256, x0: u256, y0: u256, x1: u256, y1: u256): External<M> { return M(t, [Row(x0, y0), Row(x1, y1)]); }
+  get mkM3(t: u256, x0: u256, y0: u256, x1: u256, y1: u256, x2: u256, y2: u256): External<M3> { return M3(t, [Row(x0, y0), Row(x1, y1), Row(x2, y2)]); }
+  get mkMW(t: u256, x0: i128, y0: i128, x1: i128, y1: i128): External<MW> { return MW(t, [WideRow(x0, y0), WideRow(x1, y1)]); }
+  get mkMP(t: u256, a0: u8, b0: u8, a1: u8, b1: u8): External<MP> { return MP(t, [Pt(a0, b0), Pt(a1, b1)]); }
 
   // ----- D3: deeper nest, store + pure (cube values via fixed-array param to dodge stack-too-deep) -----
-  @external setD3(t: u256, v: Arr<u256, 8>): void {
+  setD3(t: u256, v: Arr<u256, 8>): External<void> {
     this.d3 = D3(t, [[[v[0n], v[1n]], [v[2n], v[3n]]], [[v[4n], v[5n]], [v[6n], v[7n]]]]);
   }
-  @external @view getD3(): D3 { return this.d3; }
-  @external @view mkD3(t: u256, v: Arr<u256, 8>): D3 {
+  get getD3(): External<D3> { return this.d3; }
+  get mkD3(t: u256, v: Arr<u256, 8>): External<D3> {
     return D3(t, [[[v[0n], v[1n]], [v[2n], v[3n]]], [[v[4n], v[5n]], [v[6n], v[7n]]]]);
   }
 
   // ----- Pk: packed u8 grid with scalar neighbours, store + pure -----
-  @external setPk(t: u64, tail: u64, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8): void {
+  setPk(t: u64, tail: u64, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8): External<void> {
     this.pk = Pk(t, [[a, b, c, d], [e, f, g, h]], tail);
   }
-  @external @view getPk(): Pk { return this.pk; }
-  @external @view mkPk(t: u64, tail: u64, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8): Pk {
+  get getPk(): External<Pk> { return this.pk; }
+  get mkPk(t: u64, tail: u64, a: u8, b: u8, c: u8, d: u8, e: u8, f: u8, g: u8, h: u8): External<Pk> {
     return Pk(t, [[a, b, c, d], [e, f, g, h]], tail);
   }
 
   // ----- Sg: signed grid, store + pure -----
-  @external setSg(t: i256, a: i64, b: i64, c: i64, d: i64): void { this.sg = Sg(t, [[a, b], [c, d]]); }
-  @external @view getSg(): Sg { return this.sg; }
-  @external @view mkSg(t: i256, a: i64, b: i64, c: i64, d: i64): Sg { return Sg(t, [[a, b], [c, d]]); }
-  @external @view mkSg8(a: i8, b: i8, c: i8, d: i8): Sg8 { return Sg8([[a, b], [c, d]]); }
-  @external @view mkSg128(a: i128, b: i128, c: i128, d: i128): Sg128 { return Sg128([[a, b], [c, d]]); }
+  setSg(t: i256, a: i64, b: i64, c: i64, d: i64): External<void> { this.sg = Sg(t, [[a, b], [c, d]]); }
+  get getSg(): External<Sg> { return this.sg; }
+  get mkSg(t: i256, a: i64, b: i64, c: i64, d: i64): External<Sg> { return Sg(t, [[a, b], [c, d]]); }
+  get mkSg8(a: i8, b: i8, c: i8, d: i8): External<Sg8> { return Sg8([[a, b], [c, d]]); }
+  get mkSg128(a: i128, b: i128, c: i128, d: i128): External<Sg128> { return Sg128([[a, b], [c, d]]); }
 
   // ----- Bg: bytesN grid, store + pure -----
-  @external setBg(t: u256, a: bytes4, b: bytes4, c: bytes4, d: bytes4): void { this.bg = Bg(t, [[a, b], [c, d]]); }
-  @external @view getBg(): Bg { return this.bg; }
-  @external @view mkBg(t: u256, a: bytes4, b: bytes4, c: bytes4, d: bytes4): Bg { return Bg(t, [[a, b], [c, d]]); }
-  @external @view mkBg32(a: bytes32, b: bytes32, c: bytes32, d: bytes32): Bg32 { return Bg32([[a, b], [c, d]]); }
+  setBg(t: u256, a: bytes4, b: bytes4, c: bytes4, d: bytes4): External<void> { this.bg = Bg(t, [[a, b], [c, d]]); }
+  get getBg(): External<Bg> { return this.bg; }
+  get mkBg(t: u256, a: bytes4, b: bytes4, c: bytes4, d: bytes4): External<Bg> { return Bg(t, [[a, b], [c, d]]); }
+  get mkBg32(a: bytes32, b: bytes32, c: bytes32, d: bytes32): External<Bg32> { return Bg32([[a, b], [c, d]]); }
 
   // ----- Mix: scalar + 2D grid + trailing scalar, store + pure -----
-  @external setMix(s: u256, e: u256, a: u256, b: u256, c: u256, d: u256): void { this.mix = Mix(s, [[a, b], [c, d]], e); }
-  @external @view getMix(): Mix { return this.mix; }
-  @external @view mkMix(s: u256, e: u256, a: u256, b: u256, c: u256, d: u256): Mix { return Mix(s, [[a, b], [c, d]], e); }
+  setMix(s: u256, e: u256, a: u256, b: u256, c: u256, d: u256): External<void> { this.mix = Mix(s, [[a, b], [c, d]], e); }
+  get getMix(): External<Mix> { return this.mix; }
+  get mkMix(s: u256, e: u256, a: u256, b: u256, c: u256, d: u256): External<Mix> { return Mix(s, [[a, b], [c, d]], e); }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -458,51 +458,51 @@ describe('probe', () => {
 // elements that contain fixed-array fields, ternary/cast subexpressions inside
 // grid literals, struct with two grid fields + a nested struct field.
 // ===========================================================================
-const JETH2 = `@struct class Ag { tag: u256; grid: Arr<Arr<address, 2>, 2>; }
-@struct class As { tag: u256; grid: Arr<Arr<u256, 3>, 2>; }
-@struct class On { tag: u256; grid: Arr<Arr<u256, 1>, 1>; }
-@struct class RA { id: u64; data: Arr<u256, 2>; }
-@struct class MM { tag: u256; rows: Arr<RA, 2>; }
-@struct class P2 { a: u128; b: u128; }
-@struct class Two { g1: Arr<Arr<u256, 2>, 2>; pt: P2; g2: Arr<Arr<u8, 2>, 2>; }
-@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
+const JETH2 = `type Ag = { tag: u256; grid: Arr<Arr<address, 2>, 2>; };
+type As = { tag: u256; grid: Arr<Arr<u256, 3>, 2>; };
+type On = { tag: u256; grid: Arr<Arr<u256, 1>, 1>; };
+type RA = { id: u64; data: Arr<u256, 2>; };
+type MM = { tag: u256; rows: Arr<RA, 2>; };
+type P2 = { a: u128; b: u128; };
+type Two = { g1: Arr<Arr<u256, 2>, 2>; pt: P2; g2: Arr<Arr<u8, 2>, 2>; };
+type W = { tag: u256; grid: Arr<Arr<u256, 2>, 2>; };
 
-@contract class D {
-  @state ag: Ag;
-  @state asym: As;
-  @state two: Two;
+class D {
+  ag: Ag;
+  asym: As;
+  two: Two;
 
   // address grid: 20-byte right-aligned masking
-  @external setAg(t: u256, a: address, b: address, c: address, d: address): void { this.ag = Ag(t, [[a, b], [c, d]]); }
-  @external @view getAg(): Ag { return this.ag; }
-  @external @view mkAg(t: u256, a: address, b: address, c: address, d: address): Ag { return Ag(t, [[a, b], [c, d]]); }
+  setAg(t: u256, a: address, b: address, c: address, d: address): External<void> { this.ag = Ag(t, [[a, b], [c, d]]); }
+  get getAg(): External<Ag> { return this.ag; }
+  get mkAg(t: u256, a: address, b: address, c: address, d: address): External<Ag> { return Ag(t, [[a, b], [c, d]]); }
 
   // asymmetric 3x2 grid
-  @external setAsym(t: u256, a: u256, b: u256, c: u256, d: u256, e: u256, f: u256): void { this.asym = As(t, [[a, b, c], [d, e, f]]); }
-  @external @view getAsym(): As { return this.asym; }
-  @external @view mkAsym(t: u256, a: u256, b: u256, c: u256, d: u256, e: u256, f: u256): As { return As(t, [[a, b, c], [d, e, f]]); }
+  setAsym(t: u256, a: u256, b: u256, c: u256, d: u256, e: u256, f: u256): External<void> { this.asym = As(t, [[a, b, c], [d, e, f]]); }
+  get getAsym(): External<As> { return this.asym; }
+  get mkAsym(t: u256, a: u256, b: u256, c: u256, d: u256, e: u256, f: u256): External<As> { return As(t, [[a, b, c], [d, e, f]]); }
 
   // 1x1 grid (degenerate)
-  @external @view mkOne(t: u256, a: u256): On { return On(t, [[a]]); }
+  get mkOne(t: u256, a: u256): External<On> { return On(t, [[a]]); }
 
   // struct-array literal where each element struct has a fixed-array field (pure return)
-  @external @view mkMM(t: u256, i0: u64, a0: u256, b0: u256, i1: u64, a1: u256, b1: u256): MM {
+  get mkMM(t: u256, i0: u64, a0: u256, b0: u256, i1: u64, a1: u256, b1: u256): External<MM> {
     return MM(t, [RA(i0, [a0, b0]), RA(i1, [a1, b1])]);
   }
 
   // ternary + cast subexpressions inside the grid literal
-  @external @view mkWtern(t: u256, f: bool, a: u256, b: u256): W { return W(t, [[f ? a : b, b], [a, f ? b : a]]); }
-  @external @view mkWcast(t: u256, a: u8, b: u16): W { return W(t, [[u256(a), u256(b)], [u256(a) + u256(b), u256(a) * 2n]]); }
+  get mkWtern(t: u256, f: bool, a: u256, b: u256): External<W> { return W(t, [[f ? a : b, b], [a, f ? b : a]]); }
+  get mkWcast(t: u256, a: u8, b: u16): External<W> { return W(t, [[u256(a), u256(b)], [u256(a) + u256(b), u256(a) * 2n]]); }
 
   // struct with two grid fields and a nested packed struct field between them.
   // NOTE: the construct-and-RETURN path (mkTwo) hits JETH900 -- the encodeStructReturn
   // lowering cannot encode a nested-struct-literal field that sits alongside an
   // array-literal field. The STORE path (writeStruct) handles it, so we exercise
   // store + whole-read here (byte-identical to solc at runtime).
-  @external setTwo(a: u256, b: u256, c: u256, d: u256, px: u128, py: u128, e: u8, f: u8, g: u8, h: u8): void {
+  setTwo(a: u256, b: u256, c: u256, d: u256, px: u128, py: u128, e: u8, f: u8, g: u8, h: u8): External<void> {
     this.two = Two([[a, b], [c, d]], P2(px, py), [[e, f], [g, h]]);
   }
-  @external @view getTwo(): Two { return this.two; }
+  get getTwo(): External<Two> { return this.two; }
 }`;
 
 const SOL2 = `// SPDX-License-Identifier: MIT
@@ -709,9 +709,9 @@ describe('nested struct-literal field in RETURN position vs solc (byte-identical
 
   it('nested struct field returned: M(Pt(x,y), z)', () =>
     sameReturn(
-      `@struct class Pt { x: u256; y: u256; }
-@struct class M { p: Pt; z: u256; }
-@contract class D { @external @view f(x: u256, y: u256, z: u256): M { return M(Pt(x, y), z); } }`,
+      `type Pt = { x: u256; y: u256; };
+type M = { p: Pt; z: u256; };
+class D { get f(x: u256, y: u256, z: u256): External<M> { return M(Pt(x, y), z); } }`,
       `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract D { struct Pt { uint256 x; uint256 y; } struct M { Pt p; uint256 z; }
@@ -722,9 +722,9 @@ contract D { struct Pt { uint256 x; uint256 y; } struct M { Pt p; uint256 z; }
 
   it('struct field + array-literal sibling returned: T2(P2(px,py), [[..]])', () =>
     sameReturn(
-      `@struct class P2 { a: u128; b: u128; }
-@struct class T2 { pt: P2; g: Arr<Arr<u256, 2>, 2>; }
-@contract class D { @external @view f(px: u128, py: u128, a: u256, b: u256, c: u256, d: u256): T2 { return T2(P2(px, py), [[a, b], [c, d]]); } }`,
+      `type P2 = { a: u128; b: u128; };
+type T2 = { pt: P2; g: Arr<Arr<u256, 2>, 2>; };
+class D { get f(px: u128, py: u128, a: u256, b: u256, c: u256, d: u256): External<T2> { return T2(P2(px, py), [[a, b], [c, d]]); } }`,
       `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract D { struct P2 { uint128 a; uint128 b; } struct T2 { P2 pt; uint256[2][2] g; }
@@ -735,10 +735,10 @@ contract D { struct P2 { uint128 a; uint128 b; } struct T2 { P2 pt; uint256[2][2
 
   it('struct-array literal element with nested struct subfield returned: M(t,[Row(Pt(..),z),..])', () =>
     sameReturn(
-      `@struct class Pt { x: u8; y: u8; }
-@struct class Row { p: Pt; z: u256; }
-@struct class M { tag: u256; rows: Arr<Row, 2>; }
-@contract class D { @external @view f(t: u256, x0: u8, y0: u8, z0: u256, x1: u8, y1: u8, z1: u256): M {
+      `type Pt = { x: u8; y: u8; };
+type Row = { p: Pt; z: u256; };
+type M = { tag: u256; rows: Arr<Row, 2>; };
+class D { get f(t: u256, x0: u8, y0: u8, z0: u256, x1: u8, y1: u8, z1: u256): External<M> {
   return M(t, [Row(Pt(x0, y0), z0), Row(Pt(x1, y1), z1)]); } }`,
       `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -751,11 +751,11 @@ contract D { struct Pt { uint8 x; uint8 y; } struct Row { Pt p; uint256 z; } str
 
   it('CONTROL: the identical struct stored to state IS byte-identical at runtime', async () => {
     // construct-and-store compiles; verify runtime parity for M(Pt(x,y), z) via the STORE path.
-    const J = `@struct class Pt { x: u256; y: u256; }
-@struct class M { p: Pt; z: u256; }
-@contract class D { @state m: M;
-  @external set(x: u256, y: u256, z: u256): void { this.m = M(Pt(x, y), z); }
-  @external @view get(): M { return this.m; } }`;
+    const J = `type Pt = { x: u256; y: u256; };
+type M = { p: Pt; z: u256; };
+class D { m: M;
+  set(x: u256, y: u256, z: u256): External<void> { this.m = M(Pt(x, y), z); }
+  get get(): External<M> { return this.m; } }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract D { struct Pt { uint256 x; uint256 y; } struct M { Pt p; uint256 z; } M m;

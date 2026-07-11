@@ -15,12 +15,12 @@ const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const cdComposite = (sig: string, rows: bigint[][]) =>
   '0x' + sel(sig) + pad(0x20n) + pad(BigInt(rows.length)) + rows.flat().map(pad).join('');
 
-const JETH = `@contract class C {
-  @state b: Arr<u256, 2>[];
-  @external push(): void { this.b.push(); }
-  @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
-  @external @view all(): Arr<u256, 2>[] { return this.b; }
-  @external @pure echo(x: Arr<u256, 2>[]): Arr<u256, 2>[] { return x; }
+const JETH = `class C {
+  b: Arr<u256, 2>[];
+  push(): External<void> { this.b.push(); }
+  setB(i: u256, j: u256, v: u256): External<void> { this.b[i][j] = v; }
+  get all(): External<Arr<u256, 2>[]> { return this.b; }
+  get echo(x: Arr<u256, 2>[]): External<Arr<u256, 2>[]> { return x; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

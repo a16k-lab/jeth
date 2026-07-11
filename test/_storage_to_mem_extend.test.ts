@@ -29,13 +29,13 @@ type Case = { name: string; jeth: string; sol: string; calls: [string, string][]
 const cases: Case[] = [
   {
     name: '#2 mapping value u256[]: len + el + return + encode',
-    jeth: `@contract class C {
-  @state m: mapping<u256, u256[]>;
-  @external seed(k: u256, a: u256, b: u256): void { this.m[k].push(a); this.m[k].push(b); }
-  @external len(k: u256): u256 { let row: u256[] = this.m[k]; return u256(row.length); }
-  @external el(k: u256, i: u256): u256 { let row: u256[] = this.m[k]; return row[i]; }
-  @external ret(k: u256): u256[] { let row: u256[] = this.m[k]; return row; }
-  @external enc(k: u256): bytes { let row: u256[] = this.m[k]; return abi.encode(row); }
+    jeth: `class C {
+  m: mapping<u256, u256[]>;
+  seed(k: u256, a: u256, b: u256): External<void> { this.m[k].push(a); this.m[k].push(b); }
+  get len(k: u256): External<u256> { let row: u256[] = this.m[k]; return u256(row.length); }
+  get el(k: u256, i: u256): External<u256> { let row: u256[] = this.m[k]; return row[i]; }
+  get ret(k: u256): External<u256[]> { let row: u256[] = this.m[k]; return row; }
+  get enc(k: u256): External<bytes> { let row: u256[] = this.m[k]; return abi.encode(row); }
 }`,
     sol: `contract C {
   mapping(uint256 => uint256[]) m;
@@ -57,13 +57,13 @@ const cases: Case[] = [
   },
   {
     name: '#2 mapping value bytes[]: len + elemLen + return + encode',
-    jeth: `@contract class C {
-  @state m: mapping<u256, bytes[]>;
-  @external seed(k: u256, a: bytes): void { this.m[k].push(a); }
-  @external len(k: u256): u256 { let row: bytes[] = this.m[k]; return u256(row.length); }
-  @external el(k: u256, i: u256): u256 { let row: bytes[] = this.m[k]; return u256(row[i].length); }
-  @external ret(k: u256): bytes[] { let row: bytes[] = this.m[k]; return row; }
-  @external enc(k: u256): bytes { let row: bytes[] = this.m[k]; return abi.encode(row); }
+    jeth: `class C {
+  m: mapping<u256, bytes[]>;
+  seed(k: u256, a: bytes): External<void> { this.m[k].push(a); }
+  get len(k: u256): External<u256> { let row: bytes[] = this.m[k]; return u256(row.length); }
+  get el(k: u256, i: u256): External<u256> { let row: bytes[] = this.m[k]; return u256(row[i].length); }
+  get ret(k: u256): External<bytes[]> { let row: bytes[] = this.m[k]; return row; }
+  get enc(k: u256): External<bytes> { let row: bytes[] = this.m[k]; return abi.encode(row); }
 }`,
     sol: `contract C {
   mapping(uint256 => bytes[]) m;
@@ -85,13 +85,13 @@ const cases: Case[] = [
   },
   {
     name: '#2 mapping value u256[][]: len + el + return + encode',
-    jeth: `@contract class C {
-  @state m: mapping<u256, u256[][]>;
-  @external seed(k: u256): void { let inner: u256[] = [1n, 2n, 3n]; this.m[k].push(inner); let inner2: u256[] = [9n]; this.m[k].push(inner2); }
-  @external len(k: u256): u256 { let row: u256[][] = this.m[k]; return u256(row.length); }
-  @external el(k: u256, i: u256, j: u256): u256 { let row: u256[][] = this.m[k]; return row[i][j]; }
-  @external ret(k: u256): u256[][] { let row: u256[][] = this.m[k]; return row; }
-  @external enc(k: u256): bytes { let row: u256[][] = this.m[k]; return abi.encode(row); }
+    jeth: `class C {
+  m: mapping<u256, u256[][]>;
+  seed(k: u256): External<void> { let inner: u256[] = [1n, 2n, 3n]; this.m[k].push(inner); let inner2: u256[] = [9n]; this.m[k].push(inner2); }
+  get len(k: u256): External<u256> { let row: u256[][] = this.m[k]; return u256(row.length); }
+  get el(k: u256, i: u256, j: u256): External<u256> { let row: u256[][] = this.m[k]; return row[i][j]; }
+  get ret(k: u256): External<u256[][]> { let row: u256[][] = this.m[k]; return row; }
+  get enc(k: u256): External<bytes> { let row: u256[][] = this.m[k]; return abi.encode(row); }
 }`,
     sol: `contract C {
   mapping(uint256 => uint256[][]) m;
@@ -112,11 +112,11 @@ const cases: Case[] = [
   },
   {
     name: '#2 mapping value bytes[][]: return + encode',
-    jeth: `@contract class C {
-  @state m: mapping<u256, bytes[][]>;
-  @external seed(k: u256): void { let i0: bytes[] = [bytes("a"), bytes("bb")]; this.m[k].push(i0); }
-  @external ret(k: u256): bytes[][] { let row: bytes[][] = this.m[k]; return row; }
-  @external enc(k: u256): bytes { let row: bytes[][] = this.m[k]; return abi.encode(row); }
+    jeth: `class C {
+  m: mapping<u256, bytes[][]>;
+  seed(k: u256): External<void> { let i0: bytes[] = [bytes("a"), bytes("bb")]; this.m[k].push(i0); }
+  get ret(k: u256): External<bytes[][]> { let row: bytes[][] = this.m[k]; return row; }
+  get enc(k: u256): External<bytes> { let row: bytes[][] = this.m[k]; return abi.encode(row); }
 }`,
     sol: `contract C {
   mapping(uint256 => bytes[][]) m;
@@ -128,13 +128,13 @@ const cases: Case[] = [
   },
   {
     name: '#2 mapping value P[] (static struct): el + return + encode',
-    jeth: `@struct class P { a: u256; b: u256; }
-@contract class C {
-  @state m: mapping<u256, P[]>;
-  @external seed(k: u256): void { this.m[k].push(P(1n,2n)); this.m[k].push(P(3n,4n)); }
-  @external el(k: u256, i: u256): u256 { let row: P[] = this.m[k]; return row[i].b; }
-  @external ret(k: u256): P[] { let row: P[] = this.m[k]; return row; }
-  @external enc(k: u256): bytes { let row: P[] = this.m[k]; return abi.encode(row); }
+    jeth: `type P = { a: u256; b: u256; };
+class C {
+  m: mapping<u256, P[]>;
+  seed(k: u256): External<void> { this.m[k].push(P(1n,2n)); this.m[k].push(P(3n,4n)); }
+  get el(k: u256, i: u256): External<u256> { let row: P[] = this.m[k]; return row[i].b; }
+  get ret(k: u256): External<P[]> { let row: P[] = this.m[k]; return row; }
+  get enc(k: u256): External<bytes> { let row: P[] = this.m[k]; return abi.encode(row); }
 }`,
     sol: `contract C {
   struct P { uint256 a; uint256 b; }
@@ -154,10 +154,10 @@ const cases: Case[] = [
   },
   {
     name: '#2 mapping value u256[]: deep-copy non-aliasing (mutate copy leaves storage)',
-    jeth: `@contract class C {
-  @state m: mapping<u256, u256[]>;
-  @external seed(k: u256): void { this.m[k].push(5n); this.m[k].push(6n); }
-  @external mutNoStore(k: u256): u256 { let row: u256[] = this.m[k]; row[0n] = 999n; return this.m[k][0n]; }
+    jeth: `class C {
+  m: mapping<u256, u256[]>;
+  seed(k: u256): External<void> { this.m[k].push(5n); this.m[k].push(6n); }
+  get mutNoStore(k: u256): External<u256> { let row: u256[] = this.m[k]; row[0n] = 999n; return this.m[k][0n]; }
 }`,
     sol: `contract C {
   mapping(uint256 => uint256[]) m;
@@ -168,14 +168,14 @@ const cases: Case[] = [
   },
   {
     name: '#4 fixed-outer Arr<P,2> storage source: el + encode + deep-copy non-aliasing',
-    jeth: `@struct class P { a: u256; b: u256; }
-@contract class C {
-  @state fa: Arr<P, 2>;
-  @external seed(a0: u256, b0: u256, a1: u256, b1: u256): void { this.fa[0n] = P(a0, b0); this.fa[1n] = P(a1, b1); }
-  @external el(i: u256): u256 { let row: Arr<P, 2> = this.fa; return row[i].a; }
-  @external el2(i: u256): u256 { let row: Arr<P, 2> = this.fa; return row[i].b; }
-  @external enc(): bytes { let row: Arr<P, 2> = this.fa; return abi.encode(row); }
-  @external mutNoStore(): u256 { let row: Arr<P, 2> = this.fa; row[0n].a = 999n; return this.fa[0n].a; }
+    jeth: `type P = { a: u256; b: u256; };
+class C {
+  fa: Arr<P, 2>;
+  seed(a0: u256, b0: u256, a1: u256, b1: u256): External<void> { this.fa[0n] = P(a0, b0); this.fa[1n] = P(a1, b1); }
+  get el(i: u256): External<u256> { let row: Arr<P, 2> = this.fa; return row[i].a; }
+  get el2(i: u256): External<u256> { let row: Arr<P, 2> = this.fa; return row[i].b; }
+  get enc(): External<bytes> { let row: Arr<P, 2> = this.fa; return abi.encode(row); }
+  get mutNoStore(): External<u256> { let row: Arr<P, 2> = this.fa; row[0n].a = 999n; return this.fa[0n].a; }
 }`,
     sol: `contract C {
   struct P { uint256 a; uint256 b; }
@@ -197,11 +197,11 @@ const cases: Case[] = [
   },
   {
     name: 'NR: mapping value u256[3] (value fixed) stays correct',
-    jeth: `@contract class C {
-  @state fa: Arr<u256, 3>;
-  @external seed(a: u256, b: u256, c: u256): void { this.fa[0n]=a; this.fa[1n]=b; this.fa[2n]=c; }
-  @external el(i: u256): u256 { let row: Arr<u256, 3> = this.fa; return row[i]; }
-  @external enc(): bytes { let row: Arr<u256, 3> = this.fa; return abi.encode(row); }
+    jeth: `class C {
+  fa: Arr<u256, 3>;
+  seed(a: u256, b: u256, c: u256): External<void> { this.fa[0n]=a; this.fa[1n]=b; this.fa[2n]=c; }
+  get el(i: u256): External<u256> { let row: Arr<u256, 3> = this.fa; return row[i]; }
+  get enc(): External<bytes> { let row: Arr<u256, 3> = this.fa; return abi.encode(row); }
 }`,
     sol: `contract C {
   uint256[3] fa;
@@ -245,10 +245,10 @@ describe('storage-to-mem-extend: #5 dyn-struct-leaf-array-field element stays a 
     // The storage dyn-struct-array copy with a nested-dynamic-leaf field was deferred ONLY because the
     // storage codec was broken; it is now fixed (commits 19aa9a1 + 908936b) and this whole-array copy is
     // byte-identical to solc (covered in storage-dynstruct-array-cluster.test.ts). It now compiles clean.
-    const src = `@struct class D { id: u256; tags: bytes[]; }
-@contract class C {
-  @state vals: D[];
-  @external f(): u256 { let row: D[] = this.vals; return row.length; }
+    const src = `type D = { id: u256; tags: bytes[]; };
+class C {
+  vals: D[];
+  get f(): External<u256> { let row: D[] = this.vals; return row.length; }
 }`;
     expect(() => compile(src, { fileName: 'C.jeth' })).not.toThrow();
   });

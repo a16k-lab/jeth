@@ -20,107 +20,107 @@ const sel = (s: string) => functionSelector(s);
 // Bit pattern of an int as a 256-bit word (two's complement) for calldata.
 const asWord = (v: bigint) => ((v % M) + M) % M;
 
-const JETH = `@contract class C {
+const JETH = `class C {
   // ---- loops ----
-  @external @pure sumTo(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { s += i; } return s; }
-  @external @pure whileSum(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { s += i; i += 1n; } return s; }
-  @external @pure emptyBodyFor(n: u256): u256 { let i: u256 = 0n; for (let k: u256 = 0n; k < n; k += 1n) { i += 1n; } return i; }
-  @external @pure noInitFor(n: u256): u256 { let i: u256 = 0n; let s: u256 = 0n; for (; i < n; i += 1n) { s += i; } return s; }
-  @external @pure noPostFor(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n;) { s += i; i += 1n; } return s; }
-  @external @pure noCondFor(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; ; i += 1n) { if (i >= n) { break; } s += i; } return s; }
+  get sumTo(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { s += i; } return s; }
+  get whileSum(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { s += i; i += 1n; } return s; }
+  get emptyBodyFor(n: u256): External<u256> { let i: u256 = 0n; for (let k: u256 = 0n; k < n; k += 1n) { i += 1n; } return i; }
+  get noInitFor(n: u256): External<u256> { let i: u256 = 0n; let s: u256 = 0n; for (; i < n; i += 1n) { s += i; } return s; }
+  get noPostFor(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n;) { s += i; i += 1n; } return s; }
+  get noCondFor(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; ; i += 1n) { if (i >= n) { break; } s += i; } return s; }
 
   // ---- break / continue, nested ----
-  @external @pure breakAt(n: u256, k: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { if (i == k) { break; } s += i; } return s; }
-  @external @pure skipMul3(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { if (i % 3n == 0n) { continue; } s += i; } return s; }
-  @external @pure whileBreak(n: u256): u256 { let i: u256 = 0n; while (true) { if (i >= n) { break; } i += 1n; } return i; }
-  @external @pure whileContinue(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { i += 1n; if (i % 2n == 1n) { continue; } s += i; } return s; }
-  @external @pure nestedBreak(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < n; j += 1n) { if (j == i) { break; } s += 1n; } } return s; }
-  @external @pure nestedContinue(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < n; j += 1n) { if (j % 2n == 0n) { continue; } s += j; } } return s; }
-  @external @pure innerBreakOnlyInner(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < 5n; j += 1n) { if (j == 2n) { break; } s += 1n; } s += 100n; } return s; }
-  @external @pure tripleNest(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < n; j += 1n) { for (let k: u256 = 0n; k < n; k += 1n) { if (k == j) { break; } if (i == 0n) { continue; } s += 1n; } } } return s; }
-  @external @pure continueThenBreak(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { if (i % 2n == 0n) { continue; } if (i > 7n) { break; } s += i; } return s; }
-  @external @pure whileNestedBC(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { i += 1n; let j: u256 = 0n; while (j < n) { j += 1n; if (j == i) { continue; } if (j > 4n) { break; } s += 1n; } } return s; }
+  get breakAt(n: u256, k: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { if (i == k) { break; } s += i; } return s; }
+  get skipMul3(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { if (i % 3n == 0n) { continue; } s += i; } return s; }
+  get whileBreak(n: u256): External<u256> { let i: u256 = 0n; while (true) { if (i >= n) { break; } i += 1n; } return i; }
+  get whileContinue(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { i += 1n; if (i % 2n == 1n) { continue; } s += i; } return s; }
+  get nestedBreak(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < n; j += 1n) { if (j == i) { break; } s += 1n; } } return s; }
+  get nestedContinue(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < n; j += 1n) { if (j % 2n == 0n) { continue; } s += j; } } return s; }
+  get innerBreakOnlyInner(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < 5n; j += 1n) { if (j == 2n) { break; } s += 1n; } s += 100n; } return s; }
+  get tripleNest(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < n; j += 1n) { for (let k: u256 = 0n; k < n; k += 1n) { if (k == j) { break; } if (i == 0n) { continue; } s += 1n; } } } return s; }
+  get continueThenBreak(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { if (i % 2n == 0n) { continue; } if (i > 7n) { break; } s += i; } return s; }
+  get whileNestedBC(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { i += 1n; let j: u256 = 0n; while (j < n) { j += 1n; if (j == i) { continue; } if (j > 4n) { break; } s += 1n; } } return s; }
 
   // ---- early return ----
-  @external @pure earlyReturn(n: u256, k: u256): u256 { for (let i: u256 = 0n; i < n; i += 1n) { if (i == k) { return i; } } return 999n; }
-  @external @pure returnFromNested(n: u256): u256 { for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < n; j += 1n) { if (i * j > 6n) { return i * 10n + j; } } } return 0n; }
-  @external @pure classify(x: u256): u256 { if (x < 10n) { return 1n; } else if (x < 20n) { return 2n; } else if (x < 30n) { return 3n; } else { return 4n; } }
-  @external @pure fallThrough(x: u256): u256 { if (x > 100n) { return 7n; } }
-  @external @pure fallThroughLoop(n: u256): u256 { for (let i: u256 = 0n; i < n; i += 1n) { if (i == 50n) { return 5n; } } }
+  get earlyReturn(n: u256, k: u256): External<u256> { for (let i: u256 = 0n; i < n; i += 1n) { if (i == k) { return i; } } return 999n; }
+  get returnFromNested(n: u256): External<u256> { for (let i: u256 = 0n; i < n; i += 1n) { for (let j: u256 = 0n; j < n; j += 1n) { if (i * j > 6n) { return i * 10n + j; } } } return 0n; }
+  get classify(x: u256): External<u256> { if (x < 10n) { return 1n; } else if (x < 20n) { return 2n; } else if (x < 30n) { return 3n; } else { return 4n; } }
+  get fallThrough(x: u256): External<u256> { if (x > 100n) { return 7n; } }
+  get fallThroughLoop(n: u256): External<u256> { for (let i: u256 = 0n; i < n; i += 1n) { if (i == 50n) { return 5n; } } }
 
   // ---- short-circuit (RHS reverts => non-evaluation proof) ----
-  @external @pure andDivGuard(a: u256): bool { return (a != 0n) && ((10n / a) > 0n); }
-  @external @pure orDivGuard(a: u256): bool { return (a == 0n) || ((10n / a) > 0n); }
-  @external @pure andOverflow(c: bool, a: u256): bool { return c && ((a + 1n) > a); }
-  @external @pure orOverflow(c: bool, a: u256): bool { return c || ((a + 1n) > a); }
-  @external @pure chainAnd(a: u256, b: u256): bool { return (a != 0n) && (b != 0n) && ((100n / (a * b)) > 0n); }
-  @external @pure chainOr(a: u256, b: u256): bool { return (a == 0n) || (b == 0n) || ((100n / (a * b)) > 0n); }
-  @external @pure mixAndOr(a: u256, b: u256): bool { return (a != 0n) || ((b != 0n) && ((10n / b) > 0n)); }
-  @external @pure negShort(c: bool, a: u256): bool { return !c && ((a + 1n) > a); }
+  get andDivGuard(a: u256): External<bool> { return (a != 0n) && ((10n / a) > 0n); }
+  get orDivGuard(a: u256): External<bool> { return (a == 0n) || ((10n / a) > 0n); }
+  get andOverflow(c: bool, a: u256): External<bool> { return c && ((a + 1n) > a); }
+  get orOverflow(c: bool, a: u256): External<bool> { return c || ((a + 1n) > a); }
+  get chainAnd(a: u256, b: u256): External<bool> { return (a != 0n) && (b != 0n) && ((100n / (a * b)) > 0n); }
+  get chainOr(a: u256, b: u256): External<bool> { return (a == 0n) || (b == 0n) || ((100n / (a * b)) > 0n); }
+  get mixAndOr(a: u256, b: u256): External<bool> { return (a != 0n) || ((b != 0n) && ((10n / b) > 0n)); }
+  get negShort(c: bool, a: u256): External<bool> { return !c && ((a + 1n) > a); }
 
   // ---- ternary (nested, mixed-width, value position) ----
-  @external @pure ternMax(a: u256, b: u256): u256 { return a > b ? a : b; }
-  @external @pure ternNested(x: u256): u256 { return x < 10n ? 1n : (x < 20n ? 2n : (x < 30n ? 3n : 4n)); }
-  @external @pure ternArith(a: u256, b: u256): u256 { return (a > b ? a - b : b - a) + 1n; }
-  @external @pure ternMixedWidth(c: bool, a: u8, b: u256): u256 { return c ? a : b; }
-  @external @pure ternShortRevert(c: bool, a: u256): u256 { return c ? a + 1n : a; }
-  @external @pure ternDivGuard(a: u256): u256 { return a == 0n ? 0n : 100n / a; }
-  @external @pure ternInCond(a: u256, b: u256): u256 { if ((a > b ? a : b) > 50n) { return 1n; } return 0n; }
-  @external @pure ternDeep(x: u256): u256 { return x < 2n ? (x < 1n ? 10n : 20n) : (x < 4n ? (x < 3n ? 30n : 40n) : 50n); }
+  get ternMax(a: u256, b: u256): External<u256> { return a > b ? a : b; }
+  get ternNested(x: u256): External<u256> { return x < 10n ? 1n : (x < 20n ? 2n : (x < 30n ? 3n : 4n)); }
+  get ternArith(a: u256, b: u256): External<u256> { return (a > b ? a - b : b - a) + 1n; }
+  get ternMixedWidth(c: bool, a: u8, b: u256): External<u256> { return c ? a : b; }
+  get ternShortRevert(c: bool, a: u256): External<u256> { return c ? a + 1n : a; }
+  get ternDivGuard(a: u256): External<u256> { return a == 0n ? 0n : 100n / a; }
+  get ternInCond(a: u256, b: u256): External<u256> { if ((a > b ? a : b) > 50n) { return 1n; } return 0n; }
+  get ternDeep(x: u256): External<u256> { return x < 2n ? (x < 1n ? 10n : 20n) : (x < 4n ? (x < 3n ? 30n : 40n) : 50n); }
 
   // ---- prefix/postfix ++ / -- as statements and in loops ----
-  @external @pure localIncDec(a: u256): u256 { let x: u256 = a; x++; x++; x--; ++x; --x; return x; }
-  @external @pure preVsPost(a: u256): u256 { let x: u256 = a; let y: u256 = 0n; x++; y += x; ++x; y += x; x--; y += x; --x; y += x; return y; }
-  @external @pure forPostInc(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i++) { s += i; } return s; }
-  @external @pure forPreInc(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; ++i) { s += i; } return s; }
-  @external @pure forDec(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = n; i > 0n; i--) { s += i; } return s; }
-  @external @pure incOverflow(a: u256): u256 { let x: u256 = a; x++; return x; }
-  @external @pure decUnderflow(a: u256): u256 { let x: u256 = a; x--; return x; }
-  @external @pure incSigned(a: i256): i256 { let x: i256 = a; x++; return x; }
-  @external @pure decSigned(a: i256): i256 { let x: i256 = a; x--; return x; }
+  get localIncDec(a: u256): External<u256> { let x: u256 = a; x++; x++; x--; ++x; --x; return x; }
+  get preVsPost(a: u256): External<u256> { let x: u256 = a; let y: u256 = 0n; x++; y += x; ++x; y += x; x--; y += x; --x; y += x; return y; }
+  get forPostInc(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i++) { s += i; } return s; }
+  get forPreInc(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; ++i) { s += i; } return s; }
+  get forDec(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = n; i > 0n; i--) { s += i; } return s; }
+  get incOverflow(a: u256): External<u256> { let x: u256 = a; x++; return x; }
+  get decUnderflow(a: u256): External<u256> { let x: u256 = a; x--; return x; }
+  get incSigned(a: i256): External<i256> { let x: i256 = a; x++; return x; }
+  get decSigned(a: i256): External<i256> { let x: i256 = a; x--; return x; }
 
   // ---- compound assignment, every operator ----
-  @external @pure cAdd(a: u256, b: u256): u256 { let x: u256 = a; x += b; return x; }
-  @external @pure cSub(a: u256, b: u256): u256 { let x: u256 = a; x -= b; return x; }
-  @external @pure cMul(a: u256, b: u256): u256 { let x: u256 = a; x *= b; return x; }
-  @external @pure cDiv(a: u256, b: u256): u256 { let x: u256 = a; x /= b; return x; }
-  @external @pure cMod(a: u256, b: u256): u256 { let x: u256 = a; x %= b; return x; }
-  @external @pure cAnd(a: u256, b: u256): u256 { let x: u256 = a; x &= b; return x; }
-  @external @pure cOr(a: u256, b: u256): u256 { let x: u256 = a; x |= b; return x; }
-  @external @pure cXor(a: u256, b: u256): u256 { let x: u256 = a; x ^= b; return x; }
-  @external @pure cShl(a: u256, b: u256): u256 { let x: u256 = a; x <<= b; return x; }
-  @external @pure cShr(a: u256, b: u256): u256 { let x: u256 = a; x >>= b; return x; }
-  @external @pure cAddSigned(a: i256, b: i256): i256 { let x: i256 = a; x += b; return x; }
-  @external @pure cSubSigned(a: i256, b: i256): i256 { let x: i256 = a; x -= b; return x; }
-  @external @pure cMulSigned(a: i256, b: i256): i256 { let x: i256 = a; x *= b; return x; }
-  @external @pure cDivSigned(a: i256, b: i256): i256 { let x: i256 = a; x /= b; return x; }
-  @external @pure cModSigned(a: i256, b: i256): i256 { let x: i256 = a; x %= b; return x; }
-  @external @pure cShrSigned(a: i256, b: u256): i256 { let x: i256 = a; x >>= b; return x; }
-  @external @pure cChain(a: u256): u256 { let x: u256 = a; x += 5n; x *= 2n; x -= 3n; x /= 2n; x %= 7n; return x; }
+  get cAdd(a: u256, b: u256): External<u256> { let x: u256 = a; x += b; return x; }
+  get cSub(a: u256, b: u256): External<u256> { let x: u256 = a; x -= b; return x; }
+  get cMul(a: u256, b: u256): External<u256> { let x: u256 = a; x *= b; return x; }
+  get cDiv(a: u256, b: u256): External<u256> { let x: u256 = a; x /= b; return x; }
+  get cMod(a: u256, b: u256): External<u256> { let x: u256 = a; x %= b; return x; }
+  get cAnd(a: u256, b: u256): External<u256> { let x: u256 = a; x &= b; return x; }
+  get cOr(a: u256, b: u256): External<u256> { let x: u256 = a; x |= b; return x; }
+  get cXor(a: u256, b: u256): External<u256> { let x: u256 = a; x ^= b; return x; }
+  get cShl(a: u256, b: u256): External<u256> { let x: u256 = a; x <<= b; return x; }
+  get cShr(a: u256, b: u256): External<u256> { let x: u256 = a; x >>= b; return x; }
+  get cAddSigned(a: i256, b: i256): External<i256> { let x: i256 = a; x += b; return x; }
+  get cSubSigned(a: i256, b: i256): External<i256> { let x: i256 = a; x -= b; return x; }
+  get cMulSigned(a: i256, b: i256): External<i256> { let x: i256 = a; x *= b; return x; }
+  get cDivSigned(a: i256, b: i256): External<i256> { let x: i256 = a; x /= b; return x; }
+  get cModSigned(a: i256, b: i256): External<i256> { let x: i256 = a; x %= b; return x; }
+  get cShrSigned(a: i256, b: u256): External<i256> { let x: i256 = a; x >>= b; return x; }
+  get cChain(a: u256): External<u256> { let x: u256 = a; x += 5n; x *= 2n; x -= 3n; x /= 2n; x %= 7n; return x; }
 
   // ---- boolean negation ----
-  @external @pure notNot(c: bool): bool { return !!c; }
-  @external @pure notTriple(c: bool): bool { return !!!c; }
-  @external @pure negCond(x: u256): u256 { if (!(x > 5n)) { return 1n; } return 2n; }
-  @external @pure deMorgan(a: u256, b: u256): bool { return !((a > 0n) && (b > 0n)); }
+  get notNot(c: bool): External<bool> { return !!c; }
+  get notTriple(c: bool): External<bool> { return !!!c; }
+  get negCond(x: u256): External<u256> { if (!(x > 5n)) { return 1n; } return 2n; }
+  get deMorgan(a: u256, b: u256): External<bool> { return !((a > 0n) && (b > 0n)); }
 
   // ---- unchecked wrapping in loops/expressions ----
-  @external @pure uncheckedSum(n: u256): u256 { let s: u256 = 0n; unchecked: { for (let i: u256 = 0n; i < n; i += 1n) { s += i; } } return s; }
-  @external @pure uncheckedWrap(a: u256): u256 { let x: u256 = a; unchecked: { x += 1n; } return x; }
-  @external @pure uncheckedIncStmt(a: u256): u256 { let x: u256 = a; unchecked: { x++; } return x; }
+  get uncheckedSum(n: u256): External<u256> { let s: u256 = 0n; unchecked: { for (let i: u256 = 0n; i < n; i += 1n) { s += i; } } return s; }
+  get uncheckedWrap(a: u256): External<u256> { let x: u256 = a; unchecked: { x += 1n; } return x; }
+  get uncheckedIncStmt(a: u256): External<u256> { let x: u256 = a; unchecked: { x++; } return x; }
 
   // ---- ++ / -- in EXPRESSION position (value = old for post, new for pre) ----
-  @external @pure postInExpr(a: u256): u256 { let x: u256 = a; let y: u256 = x++ + 5n; return x * 1000n + y; }
-  @external @pure preInExpr(a: u256): u256 { let x: u256 = a; let y: u256 = ++x + 5n; return x * 1000n + y; }
-  @external @pure postDecExpr(a: u256): u256 { let x: u256 = a; let y: u256 = x-- + 5n; return x * 1000n + y; }
-  @external @pure preDecExpr(a: u256): u256 { let x: u256 = a; let y: u256 = --x + 5n; return x * 1000n + y; }
-  @external @pure postTimes(a: u256): u256 { let x: u256 = a; let y: u256 = x++ * 2n; return x * 1000n + y; }
-  @external @pure ternWithInc(c: bool, a: u256): u256 { let x: u256 = a; let y: u256 = c ? x++ : x--; return x * 1000n + y; }
-  @external @pure andIncChain(a: u256): u256 { let x: u256 = a; let r: bool = (x++ > 0n) && (x++ > 100n) && (x++ > 200n); return x * 10n + (r ? 1n : 0n); }
+  get postInExpr(a: u256): External<u256> { let x: u256 = a; let y: u256 = x++ + 5n; return x * 1000n + y; }
+  get preInExpr(a: u256): External<u256> { let x: u256 = a; let y: u256 = ++x + 5n; return x * 1000n + y; }
+  get postDecExpr(a: u256): External<u256> { let x: u256 = a; let y: u256 = x-- + 5n; return x * 1000n + y; }
+  get preDecExpr(a: u256): External<u256> { let x: u256 = a; let y: u256 = --x + 5n; return x * 1000n + y; }
+  get postTimes(a: u256): External<u256> { let x: u256 = a; let y: u256 = x++ * 2n; return x * 1000n + y; }
+  get ternWithInc(c: bool, a: u256): External<u256> { let x: u256 = a; let y: u256 = c ? x++ : x--; return x * 1000n + y; }
+  get andIncChain(a: u256): External<u256> { let x: u256 = a; let r: bool = (x++ > 0n) && (x++ > 100n) && (x++ > 200n); return x * 10n + (r ? 1n : 0n); }
 
   // ---- mixed: loop with compound + ternary + break ----
-  @external @pure collatzSteps(n: u256): u256 { let x: u256 = n; let steps: u256 = 0n; for (let i: u256 = 0n; i < 1000n; i += 1n) { if (x <= 1n) { break; } x = (x % 2n == 0n) ? x / 2n : 3n * x + 1n; steps += 1n; } return steps; }
-  @external @pure gcd(a: u256, b: u256): u256 { let x: u256 = a; let y: u256 = b; while (y != 0n) { let t: u256 = y; y = x % y; x = t; } return x; }
+  get collatzSteps(n: u256): External<u256> { let x: u256 = n; let steps: u256 = 0n; for (let i: u256 = 0n; i < 1000n; i += 1n) { if (x <= 1n) { break; } x = (x % 2n == 0n) ? x / 2n : 3n * x + 1n; steps += 1n; } return steps; }
+  get gcd(a: u256, b: u256): External<u256> { let x: u256 = a; let y: u256 = b; while (y != 0n) { let t: u256 = y; y = x % y; x = t; } return x; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

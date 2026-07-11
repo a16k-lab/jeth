@@ -39,3 +39,6 @@ test/_adv_inference.test.ts:688  trial mismatch: orig=rej[JETH055] post=ok
 test/_adv_switch.test.ts:473  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
 test/_lift_cd-to-mem-copy.test.ts:76  interpolated template: an edit inside an unresolved ${...} hole (at 52)
 test/_mv2_memnew.test.ts:48  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH072,JETH072,JETH072,JETH072,JETH072,JETH151,JETH151,JETH352,JETH352,JETH352,JETH352])
+test/aggregate-array-element-aliasing-assign.test.ts:70  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/aggregate-comparison.test.ts:22  interpolated template: assembly trial mismatch orig=rej[JETH072] post=rej[JETH040]
+test/arch-residual-b-tuple-return.test.ts:23  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=ok post=rej[JETH352,JETH352,JETH352])
