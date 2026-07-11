@@ -1,6 +1,8 @@
 // Top-level pipeline orchestrator (directive §5): source -> tokens/AST -> subset
 // validation -> semantic analysis + type check -> storage layout -> Yul -> solc
 // -> bytecode + ABI.
+import fs from 'node:fs';
+import path from 'node:path';
 import ts from 'typescript';
 import { parse } from './parser.js';
 import { expandDiamond } from './diamond.js';
@@ -302,13 +304,77 @@ function rejectReservedModuleIdentifiers(sf: ts.SourceFile, diags: DiagnosticBag
   ts.forEachChild(sf, visit);
 }
 
+// ---------------------------------------------------------------------------------------------
+// MIGRATION CAPTURE (dev-only, P0c): when JETH_MIGRATE_CAPTURE=<dir> is set, every compile() call
+// is recorded - success (creationBytecode) or CompileError (sorted diagnostic codes) - and then the
+// result/error passes through UNCHANGED. The records feed scripts/migrate/verify.mjs, which proves
+// a codemodded test file behaves IDENTICALLY (bytecode-equal accepts, code-list-equal rejects).
+// One JSONL file per worker PID (the suite runs isolate:false parallel), append-only, so parallel
+// workers never interleave writes. With the env unset this is a single falsy check - zero behavior
+// change (the full suite runs the exact pre-existing path).
+// ---------------------------------------------------------------------------------------------
+type CaptureOutcome = { ok: true; creationBytecode: string } | { ok: false; codes: string[] };
+
+/** Per-testFile compile ordinal (module-level: one counter space per worker process). The pairing key
+ *  for the verifier is (testFile, ordinal): a test file executes its compile calls in a deterministic
+ *  order, so the Nth compile of a file pairs with the Nth compile of the same file in the other run. */
+const captureOrdinals = new Map<string, number>();
+
+function recordMigrateCapture(dir: string, source: string, opts: CompileOptions, outcome: CaptureOutcome): void {
+  try {
+    // the first stack frame inside a test file names the test that issued this compile; helper
+    // modules (test/_solidity.ts etc.) do not match the `.test.ts` suffix.
+    const stack = new Error().stack ?? '';
+    const m = stack.match(/\/test\/[^):\s]+\.test\.ts/);
+    const testFile = m ? m[0] : '<unknown>';
+    const ordinal = captureOrdinals.get(testFile) ?? 0;
+    captureOrdinals.set(testFile, ordinal + 1);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(
+      path.join(dir, `capture-${process.pid}.jsonl`),
+      JSON.stringify({
+        testFile,
+        ordinal,
+        fileName: opts.fileName ?? null,
+        source,
+        sources: opts.sources ?? null,
+        outcome,
+      }) + '\n',
+    );
+  } catch {
+    // capture must NEVER change compile behavior - swallow any recording failure.
+  }
+}
+
+export function compile(source: string, opts: CompileOptions = {}): CompileResult {
+  const captureDir = process.env.JETH_MIGRATE_CAPTURE;
+  if (!captureDir) return compileGuarded(source, opts);
+  try {
+    const result = compileGuarded(source, opts);
+    recordMigrateCapture(captureDir, source, opts, { ok: true, creationBytecode: result.creationBytecode });
+    return result;
+  } catch (e) {
+    recordMigrateCapture(
+      captureDir,
+      source,
+      opts,
+      e instanceof CompileError
+        ? { ok: false, codes: e.diagnostics.map((d) => d.code).sort() }
+        : // a non-CompileError throw is recorded too so the two runs' per-file counts stay aligned;
+          // the verifier surfaces any asymmetry as a mismatch.
+          { ok: false, codes: [`UNCAUGHT:${e instanceof Error ? e.constructor.name : typeof e}`] },
+    );
+    throw e;
+  }
+}
+
 /** JETH477: a pathologically deep source (a 2000-term `1n + 1n + ...` chain) overflows the JS call stack
  *  in whichever recursive AST visitor runs first, escaping as a raw RangeError with no diagnostics. solc
  *  compiles such chains (so this is a documented SAFE over-rejection, not parity), but a raw crash is a
  *  bar violation - convert ANY RangeError from ANY phase into a clean CompileError instead of rewriting
  *  every visitor iteratively. The catch runs AFTER the stack has unwound, so building the diagnostic is
  *  safe. A CompileError passes through untouched (it is not a RangeError). */
-export function compile(source: string, opts: CompileOptions = {}): CompileResult {
+function compileGuarded(source: string, opts: CompileOptions = {}): CompileResult {
   try {
     return compileUnit(source, opts);
   } catch (e) {
