@@ -1,0 +1,12 @@
+test/external-constant-getter.test.ts:167  interpolated template: a hole in decorator-name position (@${...})
+test/inheritance.test.ts:209  @interface class J extends ...: a native interface cannot extend (JETH349) - stays legacy
+test/inheritance.test.ts:214  @interface class J extends ...: a native interface cannot extend (JETH349) - stays legacy
+test/interface-calls.test.ts:308  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH351,JETH352])
+test/interface-calls.test.ts:402  @interface class IFoo: non-bodyless-method member
+test/interface-calls.test.ts:409  @interface class IFoo: non-bodyless-method member
+test/interface-calls.test.ts:415  trial mismatch: orig=rej[JETH344] post=ok
+test/interface-calls.test.ts:428  @interface class IFoo: non-bodyless-method member
+test/interface-impl.test.ts:255  @interface class J extends ...: a native interface cannot extend (JETH349) - stays legacy
+test/interface-impl.test.ts:364  @interface class J extends ...: a native interface cannot extend (JETH349) - stays legacy
+test/internal-fn-pointers.test.ts:232  trial mismatch: orig=rej[JETH055,JETH055] post=ok
+test/phase2-diagnostics.test.ts:74  @error T: not a bodyless method

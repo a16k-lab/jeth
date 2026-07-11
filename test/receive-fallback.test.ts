@@ -16,11 +16,11 @@ import { compileSolidity } from './_solidity.js';
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const GET = functionSelector('get()');
 
-const JETH = `@contract class C {
-  @state count: u256;
-  @receive recv() { this.count = 11n; }
-  @fallback fb() { this.count = 22n; }
-  @external @view get(): u256 { return this.count; }
+const JETH = `class C {
+  count: u256;
+  receive() { this.count = 11n; }
+  fallback() { this.count = 22n; }
+  get get(): External<u256> { return this.count; }
 }`;
 const SOL = `contract C {
   uint256 stored;
@@ -96,7 +96,7 @@ describe('P1-21: @virtual / @override on @receive / @fallback', () => {
   };
 
   it('@override @receive over a @virtual base receive runs the derived body, byte-identical', async () => {
-    const J = `@abstract class A { @virtual @receive r(): void {} } @contract class C extends A { @state count: u256; @override @receive r(): void { this.count = 42n; } @external @view get(): u256 { return this.count; } }`;
+    const J = `abstract class A { @virtual receive(): void {} } class C extends A { count: u256; @override receive(): void { this.count = 42n; } get get(): External<u256> { return this.count; } }`;
     const S = `abstract contract A { receive() external payable virtual {} } contract C is A { uint256 count; receive() external payable override { count = 42; } function get() external view returns(uint256){ return count; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -110,17 +110,17 @@ describe('P1-21: @virtual / @override on @receive / @fallback', () => {
   });
 
   it('@virtual @fallback compiles (structural marker only)', () => {
-    expect(codes(`@contract class C { @virtual @fallback fb(): void {} }`)).toEqual([]);
+    expect(codes(`class C { @virtual fallback(): void {} }`)).toEqual([]);
   });
 
   // Accept/reject parity with solc for the special-entry override matrix.
   it('@override with no base receive -> both reject (overrides nothing)', () => {
-    expect(codes(`@contract class C { @override @receive r(): void {} }`)).toContain('JETH386');
+    expect(codes(`class C { @override receive(): void {} }`)).toContain('JETH386');
     expect(solcRejects(`contract C { receive() external payable override {} }`)).toBe(true);
   });
   it('@override receive over a NON-virtual base -> both reject', () => {
     expect(
-      codes(`@abstract class A { @receive r(): void {} } @contract class C extends A { @override @receive r(): void {} }`),
+      codes(`abstract class A { receive(): void {} } class C extends A { @override receive(): void {} }`),
     ).toContain('JETH386');
     expect(
       solcRejects(`abstract contract A { receive() external payable {} } contract C is A { receive() external payable override {} }`),
@@ -128,13 +128,13 @@ describe('P1-21: @virtual / @override on @receive / @fallback', () => {
   });
   it('redeclaring a @virtual base receive WITHOUT @override -> both reject', () => {
     expect(
-      codes(`@abstract class A { @virtual @receive r(): void {} } @contract class C extends A { @receive r(): void {} }`),
+      codes(`abstract class A { @virtual receive(): void {} } class C extends A { receive(): void {} }`),
     ).toContain('JETH386');
     expect(
       solcRejects(`abstract contract A { receive() external payable virtual {} } contract C is A { receive() external payable {} }`),
     ).toBe(true);
   });
   it('a @view / @modifier-carrying special entry still rejects (JETH386)', () => {
-    expect(codes(`@contract class C { @read @receive r(): void {} }`)).toContain('JETH386');
+    expect(codes(`class C { @read receive(): void {} }`)).toContain('JETH386');
   });
 });

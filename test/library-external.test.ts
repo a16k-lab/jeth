@@ -52,13 +52,13 @@ async function expectSame(ctx: Awaited<ReturnType<typeof pairLinked>>, data: str
 describe('Phase B: external (delegatecall) libraries', () => {
   it('a pure-math external library, qualified L.f(...) and attached x.f(...), is byte-identical to solc', async () => {
     const jeth = `
-@library class Math {
-  @external @pure add(a: u256, b: u256): u256 { return a + b + 1n; }
-  @external @pure dbl(self: u256): u256 { return self * 2n; }
+static class Math {
+  add(a: u256, b: u256): External<u256> { return a + b + 1n; }
+  dbl(self: u256): External<u256> { return self * 2n; }
 }
-@contract @using(Math) class C {
-  @external @pure g(a: u256, b: u256): u256 { return Math.add(a, b); }
-  @external @pure d(x: u256): u256 { return x.dbl(); }
+@using(Math) class C {
+  g(a: u256, b: u256): External<u256> { return Math.add(a, b); }
+  d(x: u256): External<u256> { return x.dbl(); }
 }`;
     const sol = `${SPDX}
 library Math {
@@ -82,13 +82,13 @@ contract C {
 
   it('an external library fn returning string / bytes is byte-identical to solc', async () => {
     const jeth = `
-@library class Str {
-  @external @pure echo(s: string): string { return s; }
-  @external @pure raw(b: bytes): bytes { return b; }
+static class Str {
+  echo(s: string): External<string> { return s; }
+  raw(b: bytes): External<bytes> { return b; }
 }
-@contract class C {
-  @external @pure es(s: string): string { return Str.echo(s); }
-  @external @pure eb(b: bytes): bytes { return Str.raw(b); }
+class C {
+  es(s: string): External<string> { return Str.echo(s); }
+  eb(b: bytes): External<bytes> { return Str.raw(b); }
 }`;
     const sol = `${SPDX}
 library Str {
@@ -107,14 +107,14 @@ contract C {
 
   it('an external library fn taking + returning a struct / an array is byte-identical to solc', async () => {
     const jeth = `
-@struct class P { x: u256; y: u256; }
-@library class G {
-  @external @pure scale(p: P, k: u256): P { return P(p.x * k, p.y * k); }
-  @external @pure sum(a: u256[]): u256 { let s: u256 = 0n; let i: u256 = 0n; while (i < a.length) { s = s + a[i]; i = i + 1n; } return s; }
+type P = { x: u256; y: u256; };
+static class G {
+  scale(p: P, k: u256): External<P> { return P(p.x * k, p.y * k); }
+  sum(a: u256[]): External<u256> { let s: u256 = 0n; let i: u256 = 0n; while (i < a.length) { s = s + a[i]; i = i + 1n; } return s; }
 }
-@contract class C {
-  @external @pure doScale(x: u256, y: u256, k: u256): u256 { let r: P = G.scale(P(x, y), k); return r.x + r.y; }
-  @external @pure doSum(a: u256[]): u256 { return G.sum(a); }
+class C {
+  doScale(x: u256, y: u256, k: u256): External<u256> { let r: P = G.scale(P(x, y), k); return r.x + r.y; }
+  doSum(a: u256[]): External<u256> { return G.sum(a); }
 }`;
     const sol = `${SPDX}
 struct P { uint256 x; uint256 y; }
@@ -135,11 +135,11 @@ contract C {
 
   it("a string revert in an external library fn BUBBLES byte-identically (revert data + success=false)", async () => {
     const jeth = `
-@library class Guard {
-  @external @pure mustBig(x: u256): u256 { require(x >= 10n, "too small"); return x; }
+static class Guard {
+  mustBig(x: u256): External<u256> { require(x >= 10n, "too small"); return x; }
 }
-@contract class C {
-  @external @pure run(x: u256): u256 { return Guard.mustBig(x); }
+class C {
+  run(x: u256): External<u256> { return Guard.mustBig(x); }
 }`;
     const sol = `${SPDX}
 library Guard {
@@ -157,12 +157,12 @@ contract C {
 
   it('a CUSTOM-ERROR revert in an external library fn bubbles byte-identically', async () => {
     const jeth = `
-@library class Guard {
-  @external @pure mustBig(x: u256): u256 { require(x >= 10n, TooSmall(10n, x)); return x; }
+static class Guard {
+  mustBig(x: u256): External<u256> { require(x >= 10n, TooSmall(10n, x)); return x; }
 }
-@contract class C {
-  @error TooSmall(min: u256, got: u256);
-  @external @pure run(x: u256): u256 { return Guard.mustBig(x); }
+class C {
+  TooSmall: error<{ min: u256; got: u256 }>;
+  run(x: u256): External<u256> { return Guard.mustBig(x); }
 }`;
     const sol = `${SPDX}
 error TooSmall(uint256 min, uint256 got);
@@ -181,10 +181,10 @@ contract C {
 
   it('a contract using TWO external libraries (two placeholders / two links) is byte-identical to solc', async () => {
     const jeth = `
-@library class A { @external @pure addOne(x: u256): u256 { return x + 1n; } }
-@library class B { @external @pure mul2(x: u256): u256 { return x * 2n; } }
-@contract class C {
-  @external @pure combo(x: u256): u256 { return B.mul2(A.addOne(x)); }
+static class A { addOne(x: u256): External<u256> { return x + 1n; } }
+static class B { mul2(x: u256): External<u256> { return x * 2n; } }
+class C {
+  combo(x: u256): External<u256> { return B.mul2(A.addOne(x)); }
 }`;
     const sol = `${SPDX}
 library A { function addOne(uint256 x) public pure returns (uint256) { return x + 1; } }
@@ -201,15 +201,15 @@ contract C { function combo(uint256 x) external pure returns (uint256) { return 
     // `inc` is an INTERNAL library fn: inlined into the contract (Phase A) AND into the library object
     // (called by the external `addOne`). `addOne`/`triple` are EXTERNAL (delegatecall, in the lib object).
     const jeth = `
-@library class L {
+static class L {
   inc(x: u256): u256 { return x + 1n; }
-  @external @pure addOne(x: u256): u256 { return L.inc(x); }
-  @external @pure triple(x: u256): u256 { return L.inc(L.inc(x)) + x; }
+  addOne(x: u256): External<u256> { return L.inc(x); }
+  triple(x: u256): External<u256> { return L.inc(L.inc(x)) + x; }
 }
-@contract class C {
-  @external @pure viaExternal(x: u256): u256 { return L.addOne(x); }
-  @external @pure viaInternal(x: u256): u256 { return L.inc(x) + L.inc(x); }
-  @external @pure viaTriple(x: u256): u256 { return L.triple(x); }
+class C {
+  viaExternal(x: u256): External<u256> { return L.addOne(x); }
+  get viaInternal(x: u256): External<u256> { return L.inc(x) + L.inc(x); }
+  viaTriple(x: u256): External<u256> { return L.triple(x); }
 }`;
     const sol = `${SPDX}
 library L {
@@ -234,13 +234,13 @@ contract C {
 
   it('@using attachment over an EXTERNAL library fn (x.f() -> delegatecall L.f(x)) is byte-identical', async () => {
     const jeth = `
-@library class U {
-  @external @pure squared(self: u256): u256 { return self * self; }
-  @external @pure plus(self: u256, b: u256): u256 { return self + b; }
+static class U {
+  squared(self: u256): External<u256> { return self * self; }
+  plus(self: u256, b: u256): External<u256> { return self + b; }
 }
-@contract @using(U) class C {
-  @external @pure sq(x: u256): u256 { return x.squared(); }
-  @external @pure pl(x: u256, y: u256): u256 { return x.plus(y); }
+@using(U) class C {
+  sq(x: u256): External<u256> { return x.squared(); }
+  pl(x: u256, y: u256): External<u256> { return x.plus(y); }
 }`;
     const sol = `${SPDX}
 library U {
@@ -263,11 +263,11 @@ contract C {
     // The contract method that consumes the library result WRITES storage; verify the stored value and
     // the runtime are byte-identical to solc (the library fn is pure; the write is the contract's).
     const jeth = `
-@library class Math { @external @pure add(a: u256, b: u256): u256 { return a + b; } }
-@contract class C {
-  @state total: u256;
-  @external accumulate(a: u256, b: u256): void { this.total = this.total + Math.add(a, b); }
-  @external @view getTotal(): u256 { return this.total; }
+static class Math { add(a: u256, b: u256): External<u256> { return a + b; } }
+class C {
+  total: u256;
+  accumulate(a: u256, b: u256): External<void> { this.total = this.total + Math.add(a, b); }
+  get getTotal(): External<u256> { return this.total; }
 }`;
     const sol = `${SPDX}
 library Math { function add(uint256 a, uint256 b) public pure returns (uint256) { return a + b; } }
@@ -294,8 +294,8 @@ contract C {
   }
 
   it('GATE: a @payable external library fn -> JETH390 (solc also rejects: library functions cannot be payable)', () => {
-    const jeth = `@library class L { @external @payable f(a: u256): u256 { return a; } }
-@contract class C { @external @pure g(a: u256): u256 { return L.f(a); } }`;
+    const jeth = `static class L { @payable f(a: u256): External<u256> { return a; } }
+class C { get g(a: u256): External<u256> { return L.f(a); } }`;
     expect(jethRejectsWith(jeth, 'JETH390')).toBe(true);
   });
 
@@ -305,9 +305,9 @@ contract C {
     // always value/memory/calldata - there is no `storage` parameter syntax - so this pattern simply
     // cannot be written. A struct param is always a memory copy (no caller-storage mutation), so a
     // mapping-bearing struct param is rejected (no by-value copy possible), matching the deferral.
-    const jeth = `@struct class S { items: u256[]; flag: bool; }
-@library class Set { @external add(s: S, x: u256): void { } }
-@contract class C { @external f(): void { } }`;
+    const jeth = `type S = { items: u256[]; flag: bool; };
+static class Set { add(s: S, x: u256): External<void> { } }
+class C { f(): External<void> { } }`;
     // The library compiles (S is a memory-copy param), but it cannot mutate caller storage - there is no
     // storage-ref surface. This documents the deferral; a memory-struct param is a copy, never aliased.
     expect(() => compile(jeth, { fileName: 'C.jeth' })).not.toThrow();
@@ -316,8 +316,8 @@ contract C {
   it('an UNREFERENCED external library fn does NOT become a contract dispatcher entry (no selector leak)', () => {
     // A library declaring @external f, but with no L.f call site, must not add f to the contract's ABI /
     // dispatcher (it lives only in its own object, which is not even emitted when unreferenced).
-    const jeth = `@library class L { @external @pure f(a: u256): u256 { return a; } }
-@contract class C { @external @pure g(a: u256): u256 { return a; } }`;
+    const jeth = `static class L { f(a: u256): External<u256> { return a; } }
+class C { get g(a: u256): External<u256> { return a; } }`;
     const build = compile(jeth, { fileName: 'C.jeth' });
     expect(build.libraries).toBeUndefined(); // not referenced -> no library object emitted
     expect(build.abi.some((i: any) => i.name === 'f')).toBe(false); // f is not a contract entry
@@ -325,7 +325,7 @@ contract C {
   });
 
   it('an ordinary single-contract compile keeps the legacy result shape (no library fields)', () => {
-    const build = compile(`@contract class C { @external @pure id(a: u256): u256 { return a; } }`, { fileName: 'C.jeth' });
+    const build = compile(`class C { get id(a: u256): External<u256> { return a; } }`, { fileName: 'C.jeth' });
     expect(build.libraries).toBeUndefined();
     expect(build.linkReferences).toBeUndefined();
     expect(/__\$/.test(build.creationBytecode)).toBe(false); // no link placeholder
@@ -337,14 +337,14 @@ contract C {
     // then link High into the contract. Exercises the bottom-up topological deploy in Harness.deployLinked
     // (and its solc mirror deploySolLinked). run(x) = (x + 10) * 2 + 100 = 2x + 120.
     const jeth = `
-@library class Low {
-  @external @pure base(x: u256): u256 { return x + 10n; }
+static class Low {
+  base(x: u256): External<u256> { return x + 10n; }
 }
-@library class High {
-  @external @pure step(x: u256): u256 { return Low.base(x) * 2n; }
+static class High {
+  step(x: u256): External<u256> { return Low.base(x) * 2n; }
 }
-@contract class C {
-  @external @pure run(x: u256): u256 { return High.step(x) + 100n; }
+class C {
+  run(x: u256): External<u256> { return High.step(x) + 100n; }
 }`;
     const sol = `${SPDX}
 library Low {

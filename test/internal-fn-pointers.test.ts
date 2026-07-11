@@ -13,29 +13,29 @@ const sel = (s: string) => functionSelector(s);
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 
 // --- the headline + the full behavioral surface (single-pointer forms) ---
-const JETH = `@contract class C {
-  @pure inc(x: u256): u256 { return x + 1n; }
-  @pure dec(x: u256): u256 { return x - 1n; }
-  @pure add(x: u256, y: u256): u256 { return x + y; }
-  @pure ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
+const JETH = `class C {
+  inc(x: u256): u256 { return x + 1n; }
+  dec(x: u256): u256 { return x - 1n; }
+  add(x: u256, y: u256): u256 { return x + y; }
+  ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
   // headline
-  @external @pure runInc(): u256 { return this.ap(this.inc, 5n); }
-  @external @pure runDec(): u256 { return this.ap(this.dec, 5n); }
+  get runInc(): External<u256> { return this.ap(this.inc, 5n); }
+  get runDec(): External<u256> { return this.ap(this.dec, 5n); }
   // passed through several functions
-  @pure ap2(f: (x: u256) => u256, v: u256): u256 { return this.ap(f, v); }
-  @external @pure passThrough(): u256 { return this.ap2(this.inc, 41n); }
+  ap2(f: (x: u256) => u256, v: u256): u256 { return this.ap(f, v); }
+  get passThrough(): External<u256> { return this.ap2(this.inc, 41n); }
   // conditional pointer
-  @external @pure cond(c: bool, v: u256): u256 { let g: (x: u256) => u256 = c ? this.inc : this.dec; return g(v); }
+  get cond(c: bool, v: u256): External<u256> { let g: (x: u256) => u256 = c ? this.inc : this.dec; return g(v); }
   // two-arg pointer
-  @pure ap2a(g: (x: u256, y: u256) => u256, a: u256, b: u256): u256 { return g(a, b); }
-  @external @pure twoArg(): u256 { return this.ap2a(this.add, 20n, 22n); }
+  ap2a(g: (x: u256, y: u256) => u256, a: u256, b: u256): u256 { return g(a, b); }
+  get twoArg(): External<u256> { return this.ap2a(this.add, 20n, 22n); }
   // pointer returned from an internal fn then called
-  @pure sel(c: bool): (x: u256) => u256 { return c ? this.inc : this.dec; }
-  @external @pure returned(c: bool, v: u256): u256 { let g: (x: u256) => u256 = this.sel(c); return g(v); }
+  sel(c: bool): (x: u256) => u256 { return c ? this.inc : this.dec; }
+  get returned(c: bool, v: u256): External<u256> { let g: (x: u256) => u256 = this.sel(c); return g(v); }
   // f == g / f != g
-  @external @pure eqSame(): bool { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = this.inc; return a == b; }
-  @external @pure eqDiff(): bool { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = this.dec; return a == b; }
-  @external @pure neDiff(): bool { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = this.dec; return a != b; }
+  get eqSame(): External<bool> { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = this.inc; return a == b; }
+  get eqDiff(): External<bool> { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = this.dec; return a == b; }
+  get neDiff(): External<bool> { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = this.dec; return a != b; }
 }`;
 const SOL = `${SPDX}contract C {
   function inc(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -61,15 +61,15 @@ const SOL = `${SPDX}contract C {
 // inherits the effects of EVERY same-signature target. This contract therefore keeps ALL its
 // same-signature targets mutating (setS), so the enclosing functions are correctly nonpayable - matching
 // solc. (A separate contract below tests a @view pointer whose only target is view.)
-const JETH_STATE = `@contract class C {
-  @state s: u256;
+const JETH_STATE = `class C {
+  s: u256;
   setS(x: u256): u256 { this.s = x * 3n; return this.s; }
-  @state h: (x: u256) => u256;
+  h: (x: u256) => u256;
   constructor() { this.s = 100n; }
-  @external setMut() { this.h = this.setS; }
-  @external runMut(v: u256): u256 { let g: (x: u256) => u256 = this.h; return g(v); }
-  @external @view getS(): u256 { return this.s; }
-  @external nullCall(v: u256): u256 { let g: (x: u256) => u256 = this.h; return g(v); }
+  setMut(): External<void> { this.h = this.setS; }
+  runMut(v: u256): External<u256> { let g: (x: u256) => u256 = this.h; return g(v); }
+  get getS(): External<u256> { return this.s; }
+  nullCall(v: u256): External<u256> { let g: (x: u256) => u256 = this.h; return g(v); }
 }`;
 const SOL_STATE = `${SPDX}contract C {
   uint256 s;
@@ -84,12 +84,12 @@ const SOL_STATE = `${SPDX}contract C {
 
 // A CONSTRUCTOR that calls THROUGH a function pointer: the target userfn_ and the dispatcher must be
 // duplicated into the creation object (regression for the ctor-reachability closure).
-const JETH_CTOR = `@contract class C {
-  @state s: u256;
-  @pure dbl(x: u256): u256 { return x * 2n; }
+const JETH_CTOR = `class C {
+  s: u256;
+  dbl(x: u256): u256 { return x * 2n; }
   ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
   constructor() { this.s = this.ap(this.dbl, 21n); }
-  @external @view get(): u256 { return this.s; }
+  get get(): External<u256> { return this.s; }
 }`;
 const SOL_CTOR = `${SPDX}contract C {
   uint256 s;
@@ -100,11 +100,11 @@ const SOL_CTOR = `${SPDX}contract C {
 }`;
 
 // A @view pointer whose ONLY same-signature target is view: the enclosing @view function is accepted.
-const JETH_VIEW = `@contract class C {
-  @state s: u256;
+const JETH_VIEW = `class C {
+  s: u256;
   constructor() { this.s = 100n; }
-  @view rd(x: u256): u256 { return x + this.s; }
-  @external @view viewPtr(v: u256): u256 { let g: (x: u256) => u256 = this.rd; return g(v); }
+  rd(x: u256): u256 { return x + this.s; }
+  get viewPtr(v: u256): External<u256> { let g: (x: u256) => u256 = this.rd; return g(v); }
 }`;
 const SOL_VIEW = `${SPDX}contract C {
   uint256 s;
@@ -191,43 +191,43 @@ describe('internal function pointers vs Solidity', () => {
 // --- accept/reject parity: must-reject shapes stay rejected (soundness) ---
 describe('internal function pointers: reject parity', () => {
   const rejects: Record<string, string> = {
-    'cast pointer to uint': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure ap(f: (x: u256) => u256): u256 { return u256(f); }
-      @external @pure run(): u256 { return this.ap(this.inc); }
+    'cast pointer to uint': `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      ap(f: (x: u256) => u256): u256 { return u256(f); }
+      get run(): External<u256> { return this.ap(this.inc); }
     }`,
-    'return pointer as uint': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure ap(f: (x: u256) => u256): u256 { return f; }
-      @external @pure run(): u256 { return this.ap(this.inc); }
+    'return pointer as uint': `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      ap(f: (x: u256) => u256): u256 { return f; }
+      get run(): External<u256> { return this.ap(this.inc); }
     }`,
-    'abi.encode a pointer': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure ap(f: (x: u256) => u256): bytes { return abi.encode(f); }
-      @external @pure run(): bytes { return this.ap(this.inc); }
+    'abi.encode a pointer': `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      ap(f: (x: u256) => u256): bytes { return abi.encode(f); }
+      get run(): External<bytes> { return this.ap(this.inc); }
     }`,
-    'funcref param on @external': `@contract class C {
-      @external run(f: (x: u256) => u256, v: u256): u256 { return f(v); }
+    'funcref param on @external': `class C {
+      run(f: (x: u256) => u256, v: u256): External<u256> { return f(v); }
     }`,
-    'address of @external fn': `@contract class C {
-      @external ext(x: u256): u256 { return x + 1n; }
-      @pure ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
-      @external run(): u256 { return this.ap(this.ext, 5n); }
+    'address of @external fn': `class C {
+      get ext(x: u256): External<u256> { return x + 1n; }
+      ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
+      get run(): External<u256> { return this.ap(this.ext, 5n); }
     }`,
-    'address of overloaded fn': `@contract class C {
-      @pure f(x: u256): u256 { return x + 1n; }
-      @pure f(x: u256, y: u256): u256 { return x + y; }
-      @pure ap(g: (x: u256) => u256, v: u256): u256 { return g(v); }
-      @external @pure run(): u256 { return this.ap(this.f, 7n); }
+    'address of overloaded fn': `class C {
+      f(x: u256): u256 { return x + 1n; }
+      f(x: u256, y: u256): u256 { return x + y; }
+      ap(g: (x: u256) => u256, v: u256): u256 { return g(v); }
+      get run(): External<u256> { return this.ap(this.f, 7n); }
     }`,
-    'signature mismatch': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure ap(f: (x: u64) => u64): u64 { return f(1n); }
-      @external @pure run(): u64 { return this.ap(this.inc); }
+    'signature mismatch': `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      ap(f: (x: u64) => u64): u64 { return f(1n); }
+      get run(): External<u64> { return this.ap(this.inc); }
     }`,
-    'arithmetic on a pointer': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external @pure run(): u256 { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = a + a; return b(1n); }
+    'arithmetic on a pointer': `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      get run(): External<u256> { let a: (x: u256) => u256 = this.inc; let b: (x: u256) => u256 = a + a; return b(1n); }
     }`,
     'pure ptr type holding a state-writing target': `@contract class C {
       @state s: u256;
@@ -251,13 +251,13 @@ describe('internal function pointers: reject parity', () => {
 // artifact, not language semantics, and JETH never returns wrong bytes; CALLS through such pointers dispatch
 // byte-identically in every config. So we do NOT diff the equality VALUE against the harness's optimizer-on
 // solc; we assert JETH's returndata directly and mirror it against solc compiled with the optimizer OFF.
-const JETH_EQ = `@contract class C {
-  @pure f(x: u256): u256 { return x + 1n; }
-  @pure g(x: u256): u256 { return x + 1n; }
-  @external @pure eq(): bool { return this.f == this.g; }
-  @external @pure eqVar(): bool { let a: (x: u256) => u256 = this.f; let b: (x: u256) => u256 = this.g; return a == b; }
-  @external @pure neq(): bool { return this.f != this.g; }
-  @external @pure callBoth(x: u256): u256 { let a: (x: u256) => u256 = this.f; let b: (x: u256) => u256 = this.g; return a(x) + b(x); }
+const JETH_EQ = `class C {
+  f(x: u256): u256 { return x + 1n; }
+  g(x: u256): u256 { return x + 1n; }
+  get eq(): External<bool> { return this.f == this.g; }
+  get eqVar(): External<bool> { let a: (x: u256) => u256 = this.f; let b: (x: u256) => u256 = this.g; return a == b; }
+  get neq(): External<bool> { return this.f != this.g; }
+  get callBoth(x: u256): External<u256> { let a: (x: u256) => u256 = this.f; let b: (x: u256) => u256 = this.g; return a(x) + b(x); }
 }`;
 const SOL_EQ = `${SPDX}contract C {
   function f(uint256 x) internal pure returns(uint256){ return x+1; }

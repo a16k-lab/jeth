@@ -57,12 +57,12 @@ async function eqCalls(jeth: string, sol: string, calls: [string, string][], opt
 describe('@external @constant auto-getter (solc public constant), byte-identical', () => {
   it('u256 / bool / address getters return the folded literal (the original miscompile repro)', async () => {
     await eqCalls(
-      `@contract class C { @external @constant K: u256 = 7n; @external @pure other(): u256 { return 1n; } }`,
+      `class C { static K: Visible<u256> = 7n; get other(): External<u256> { return 1n; } }`,
       `contract C { uint256 public constant K = 7; function other() external pure returns (uint256) { return 1; } }`,
       [['K()', ''], ['other()', '']],
     );
     await eqCalls(
-      `@contract class C { @external @constant B: bool = true; @external @constant A: address = address(0n); }`,
+      `class C { static B: Visible<bool> = true; static A: Visible<address> = address(0n); }`,
       `contract C { bool public constant B = true; address public constant A = address(0); }`,
       [['B()', ''], ['A()', '']],
     );
@@ -71,13 +71,13 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
   it('narrow ints, negatives, bytesN, and enum getters encode like solc', async () => {
     await eqCalls(
       `enum Color { Red, Green, Blue }
-       @contract class C {
-         @external @constant U8: u8 = 255n;
-         @external @constant I8: i8 = -5n;
-         @external @constant I256: i256 = -1n;
-         @external @constant B4: bytes4 = bytes4(0xdeadbeefn);
-         @external @constant B32: bytes32 = bytes32(0xdeadbeef00000000000000000000000000000000000000000000000000000001n);
-         @external @constant E: Color = Color.Blue; }`,
+       class C {
+         static U8: Visible<u8> = 255n;
+         static I8: Visible<i8> = -5n;
+         static I256: Visible<i256> = -1n;
+         static B4: Visible<bytes4> = bytes4(0xdeadbeefn);
+         static B32: Visible<bytes32> = bytes32(0xdeadbeef00000000000000000000000000000000000000000000000000000001n);
+         static E: Visible<Color> = Color.Blue; }`,
       `contract C {
          enum Color { Red, Green, Blue }
          uint8 public constant U8 = 255;
@@ -92,13 +92,13 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
 
   it('string constant getters ABI-encode offset/len/data like solc (empty, 31B, 32B, long, unicode)', async () => {
     await eqCalls(
-      `@contract class C {
-         @external @constant S0: string = "";
-         @external @constant S1: string = "hi";
-         @external @constant S31: string = "0123456789012345678901234567890";
-         @external @constant S32: string = "01234567890123456789012345678901";
-         @external @constant SL: string = "the quick brown fox jumps over the lazy dog and then some extra!";
-         @external @constant SU: string = "héllo ✓"; }`,
+      `class C {
+         static S0: Visible<string> = "";
+         static S1: Visible<string> = "hi";
+         static S31: Visible<string> = "0123456789012345678901234567890";
+         static S32: Visible<string> = "01234567890123456789012345678901";
+         static SL: Visible<string> = "the quick brown fox jumps over the lazy dog and then some extra!";
+         static SU: Visible<string> = "héllo ✓"; }`,
       `contract C {
          string public constant S0 = "";
          string public constant S1 = "hi";
@@ -112,7 +112,7 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
 
   it('a PLAIN @constant still gets NO getter (both revert on the selector) and coexists with getters', async () => {
     await eqCalls(
-      `@contract class C { @external @constant A: u256 = 1n; @constant Hidden: u256 = 2n; @external @pure viaFn(): u256 { return this.Hidden; } }`,
+      `class C { static A: Visible<u256> = 1n; static Hidden: u256 = 2n; get viaFn(): External<u256> { return this.Hidden; } }`,
       `contract C { uint256 public constant A = 1; uint256 constant Hidden = 2; function viaFn() external pure returns (uint256) { return Hidden; } }`,
       [['A()', ''], ['Hidden()', ''], ['viaFn()', '']],
     );
@@ -120,8 +120,8 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
 
   it('an inherited base @external @constant enters the derived dispatcher (solc inherits the getter)', async () => {
     await eqCalls(
-      `@abstract class B { @external @constant K: u256 = 7n; @constant P: u256 = 3n; }
-       @contract class C extends B { @external @pure other(): u256 { return 1n; } }`,
+      `abstract class B { static K: Visible<u256> = 7n; static P: u256 = 3n; }
+       class C extends B { get other(): External<u256> { return 1n; } }`,
       `contract B { uint256 public constant K = 7; uint256 constant P = 3; }
        contract C is B { function other() external pure returns (uint256) { return 1; } }`,
       [['K()', ''], ['P()', ''], ['other()', '']],
@@ -130,7 +130,7 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
 
   it('the constant getter is non-payable: msg.value reverts exactly like solc', async () => {
     await eqCalls(
-      `@contract class C { @external @constant K: u256 = 7n; }`,
+      `class C { static K: Visible<u256> = 7n; }`,
       `contract C { uint256 public constant K = 7; }`,
       [['K()', '']],
       { value: 1n },
@@ -139,24 +139,24 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
 
   it('constant getters coexist with @external @state and @external @immutable getters (unregressed)', async () => {
     await eqCalls(
-      `@contract class C { @external @constant A: u256 = 1n; @external @state s: u256 = 9n; @external @immutable m: u256; constructor() { this.m = 5n; } }`,
+      `class C { static A: Visible<u256> = 1n; s: Visible<u256> = 9n; static m: Visible<u256>; constructor() { this.m = 5n; } }`,
       `contract C { uint256 public constant A = 1; uint256 public s = 9; uint256 public immutable m; constructor() { m = 5; } }`,
       [['A()', ''], ['s()', ''], ['m()', '']],
     );
   });
 
   it('rejects a getter/function name collision cleanly (solc: Identifier already declared)', () => {
-    const j1 = `@contract class C { @external @constant K: u256 = 7n; @external @pure K(): u256 { return 1n; } }`;
+    const j1 = `class C { static K: Visible<u256> = 7n; get K(): External<u256> { return 1n; } }`;
     const s1 = `contract C { uint256 public constant K = 7; function K() external pure returns (uint256) { return 1; } }`;
     expect(codes(j1)).toContain('JETH133');
     expect(solcRejects(s1)).toBe(true);
     // overload-style same-name function: still a name clash on both sides
-    const j2 = `@contract class C { @external @constant K: u256 = 7n; @external @pure K(x: u256): u256 { return x; } }`;
+    const j2 = `class C { static K: Visible<u256> = 7n; get K(x: u256): External<u256> { return x; } }`;
     const s2 = `contract C { uint256 public constant K = 7; function K(uint256 x) external pure returns (uint256) { return x; } }`;
     expect(codes(j2)).toContain('JETH133');
     expect(solcRejects(s2)).toBe(true);
     // derived redeclaring a base @external @constant: duplicate on both sides
-    const j3 = `@abstract class B { @external @constant K: u256 = 7n; } @contract class C extends B { @external @constant K: u256 = 9n; }`;
+    const j3 = `abstract class B { static K: Visible<u256> = 7n; } class C extends B { static K: Visible<u256> = 9n; }`;
     const s3 = `contract B { uint256 public constant K = 7; } contract C is B { uint256 public constant K = 9; }`;
     expect(codes(j3).length).toBeGreaterThan(0);
     expect(solcRejects(s3)).toBe(true);

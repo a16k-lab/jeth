@@ -71,11 +71,11 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
   // ---------------- POSITIVE ----------------
   it('positive: single interface, value + view methods, WITHOUT @override', async () => {
     await matchPositive(
-      `@interface class I { @external f(x: u256): u256; @external @view g(): u256; }
-       @contract class C extends I {
-         @state s: u256;
-         @external f(x: u256): u256 { this.s = x; return x + 1n; }
-         @external @view g(): u256 { return this.s; }
+      `interface I { f(x: u256): u256; g(): View<u256>; }
+       class C extends I {
+         s: u256;
+         f(x: u256): External<u256> { this.s = x; return x + 1n; }
+         get g(): External<u256> { return this.s; }
        }`,
       `interface I { function f(uint256 x) external returns(uint256); function g() external view returns(uint256); }
        contract C is I {
@@ -92,11 +92,11 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: single interface WITH @override (optional under solc >= 0.8.8)', async () => {
     await matchPositive(
-      `@interface class I { @external f(x: u256): u256; @external @view g(): u256; }
-       @contract class C extends I {
-         @state s: u256;
-         @override @external f(x: u256): u256 { this.s = x; return x + 1n; }
-         @override @external @view g(): u256 { return this.s; }
+      `interface I { f(x: u256): u256; g(): View<u256>; }
+       class C extends I {
+         s: u256;
+         @override f(x: u256): External<u256> { this.s = x; return x + 1n; }
+         @override get g(): External<u256> { return this.s; }
        }`,
       `interface I { function f(uint256 x) external returns(uint256); function g() external view returns(uint256); }
        contract C is I {
@@ -113,10 +113,10 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: a @payable and a @view method', async () => {
     await matchPositive(
-      `@interface class I { @external @payable p(): u256; @external @view v(x: u256): u256; }
-       @contract class C extends I {
-         @external @payable p(): u256 { return msg.value; }
-         @external @view v(x: u256): u256 { return x * 3n; }
+      `interface I { p(): Payable<u256>; v(x: u256): View<u256>; }
+       class C extends I {
+         p(): Payable<u256> { return msg.value; }
+         get v(x: u256): External<u256> { return x * 3n; }
        }`,
       `interface I { function p() external payable returns(uint256); function v(uint256 x) external view returns(uint256); }
        contract C is I {
@@ -133,18 +133,18 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: bytes / array / struct params + returns', async () => {
     await matchPositive(
-      `@struct class P { a: u256; b: bool }
-       @interface class I {
-         @external @view sret(): string;
-         @external @view aret(): u256[];
-         @external @view stret(): P;
-         @external bin(b: bytes): u256;
+      `type P = { a: u256; b: bool };
+       interface I {
+         sret(): View<string>;
+         aret(): View<u256[]>;
+         stret(): View<P>;
+         bin(b: bytes): u256;
        }
-       @contract class C extends I {
-         @external @view sret(): string { return "hello world value here"; }
-         @external @view aret(): u256[] { const a: u256[] = [1n, 2n, 3n]; return a; }
-         @external @view stret(): P { const p: P = P(9n, true); return p; }
-         @external bin(b: bytes): u256 { return b.length; }
+       class C extends I {
+         get sret(): External<string> { return "hello world value here"; }
+         get aret(): External<u256[]> { const a: u256[] = [1n, 2n, 3n]; return a; }
+         get stret(): External<P> { const p: P = P(9n, true); return p; }
+         get bin(b: bytes): External<u256> { return b.length; }
        }`,
       `struct P { uint256 a; bool b; }
        interface I {
@@ -170,11 +170,11 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: implements MULTIPLE interfaces', async () => {
     await matchPositive(
-      `@interface class I { @external f(): u256; }
-       @interface class J { @external @view g(): u256; }
-       @contract class C extends I, J {
-         @external f(): u256 { return 11n; }
-         @external @view g(): u256 { return 22n; }
+      `interface I { f(): u256; }
+       interface J { g(): View<u256>; }
+       class C extends I, J {
+         get f(): External<u256> { return 11n; }
+         get g(): External<u256> { return 22n; }
        }`,
       `interface I { function f() external returns(uint256); }
        interface J { function g() external view returns(uint256); }
@@ -191,10 +191,10 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: extends a base CONTRACT and an interface together', async () => {
     await matchPositive(
-      `@interface class I { @external f(): u256; }
-       @abstract class Base { @state s: u256; @external @view b(): u256 { return this.s + 5n; } }
-       @contract class C extends Base, I {
-         @external f(): u256 { this.s = 3n; return 99n; }
+      `interface I { f(): u256; }
+       abstract class Base { s: u256; get b(): External<u256> { return this.s + 5n; } }
+       class C extends Base, I {
+         f(): External<u256> { this.s = 3n; return 99n; }
        }`,
       `interface I { function f() external returns(uint256); }
        abstract contract Base { uint256 s; function b() external view returns(uint256){ return s + 5; } }
@@ -210,9 +210,9 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: @abstract leaves an interface method open; a concrete contract completes it', async () => {
     await matchPositive(
-      `@interface class I { @external f(): u256; @external @view g(): u256; }
-       @abstract class A extends I { @external @view g(): u256 { return 7n; } }
-       @contract class C extends A { @external f(): u256 { return 8n; } }`,
+      `interface I { f(): u256; g(): View<u256>; }
+       abstract class A extends I { get g(): External<u256> { return 7n; } }
+       class C extends A { get f(): External<u256> { return 8n; } }`,
       `interface I { function f() external returns(uint256); function g() external view returns(uint256); }
        abstract contract A is I { function g() external view returns(uint256){ return 7; } }
        contract C is A { function f() external returns(uint256){ return 8; } }`,
@@ -225,9 +225,9 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: interface method inherited-implemented by a base contract', async () => {
     await matchPositive(
-      `@interface class I { @external f(): u256; }
-       @abstract class Base extends I { @external f(): u256 { return 42n; } }
-       @contract class C extends Base { @external @view extra(): u256 { return 7n; } }`,
+      `interface I { f(): u256; }
+       abstract class Base extends I { get f(): External<u256> { return 42n; } }
+       class C extends Base { get extra(): External<u256> { return 7n; } }`,
       `interface I { function f() external returns(uint256); }
        abstract contract Base is I { function f() external returns(uint256){ return 42; } }
        contract C is Base { function extra() external view returns(uint256){ return 7; } }`,
@@ -240,9 +240,9 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: an interface method also @virtual in a base then overridden in C', async () => {
     await matchPositive(
-      `@interface class I { @external f(): u256; }
-       @abstract class Base extends I { @virtual @external f(): u256 { return 1n; } }
-       @contract class C extends Base { @override @external f(): u256 { return 2n; } }`,
+      `interface I { f(): u256; }
+       abstract class Base extends I { @virtual get f(): External<u256> { return 1n; } }
+       class C extends Base { @override get f(): External<u256> { return 2n; } }`,
       `interface I { function f() external returns(uint256); }
        abstract contract Base is I { function f() external virtual returns(uint256){ return 1; } }
        contract C is Base { function f() external override returns(uint256){ return 2; } }`,
@@ -270,8 +270,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('positive: impl may TIGHTEN mutability (interface nonpayable, impl view)', async () => {
     await matchPositive(
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I { @external @view f(): u256 { return 5n; } }`,
+      `interface I { f(): u256; }
+       class C extends I { get f(): External<u256> { return 5n; } }`,
       `interface I { function f() external returns(uint256); }
        contract C is I { function f() external view returns(uint256){ return 5; } }`,
       [['f()', '']],
@@ -281,8 +281,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
   // ---------------- NEGATIVE (BOTH-REJECT) ----------------
   it('negative: a concrete contract leaves an interface method UNIMPLEMENTED', () => {
     bothReject(
-      `@interface class I { @external f(): u256; @external @view g(): u256; }
-       @contract class C extends I { @external f(): u256 { return 1n; } }`,
+      `interface I { f(): u256; g(): View<u256>; }
+       class C extends I { get f(): External<u256> { return 1n; } }`,
       `interface I { function f() external returns(uint256); function g() external view returns(uint256); }
        contract C is I { function f() external returns(uint256){ return 1; } }`,
       'JETH385',
@@ -291,8 +291,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('negative: impl with the WRONG parameter type', () => {
     bothReject(
-      `@interface class I { @external f(x: u256): u256; }
-       @contract class C extends I { @external f(x: bool): u256 { return 1n; } }`,
+      `interface I { f(x: u256): u256; }
+       class C extends I { get f(x: bool): External<u256> { return 1n; } }`,
       `interface I { function f(uint256 x) external returns(uint256); }
        contract C is I { function f(bool x) external returns(uint256){ return 1; } }`,
       'JETH385',
@@ -301,8 +301,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('negative: impl with the WRONG return type', () => {
     bothReject(
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I { @external f(): bool { return true; } }`,
+      `interface I { f(): u256; }
+       class C extends I { get f(): External<bool> { return true; } }`,
       `interface I { function f() external returns(uint256); }
        contract C is I { function f() external returns(bool){ return true; } }`,
       'JETH386',
@@ -311,8 +311,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('negative: impl LOOSENS mutability (interface @view, impl writes state)', () => {
     bothReject(
-      `@interface class I { @external @view f(): u256; }
-       @contract class C extends I { @state s: u256; @external f(): u256 { this.s = 1n; return 2n; } }`,
+      `interface I { f(): View<u256>; }
+       class C extends I { s: u256; f(): External<u256> { this.s = 1n; return 2n; } }`,
       `interface I { function f() external view returns(uint256); }
        contract C is I { uint256 s; function f() external returns(uint256){ s = 1; return 2; } }`,
       'JETH387',
@@ -321,8 +321,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('negative: impl CROSSES payable (interface nonpayable, impl payable)', () => {
     bothReject(
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I { @external @payable f(): u256 { return msg.value; } }`,
+      `interface I { f(): u256; }
+       class C extends I { f(): Payable<u256> { return msg.value; } }`,
       `interface I { function f() external returns(uint256); }
        contract C is I { function f() external payable returns(uint256){ return msg.value; } }`,
       'JETH387',
@@ -331,8 +331,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('negative: an INTERNAL (non-@external) impl of an interface method', () => {
     bothReject(
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I { f(): u256 { return 5n; } @external @view g(): u256 { return this.f(); } }`,
+      `interface I { f(): u256; }
+       class C extends I { f(): u256 { return 5n; } get g(): External<u256> { return this.f(); } }`,
       `interface I { function f() external returns(uint256); }
        contract C is I { function f() internal returns(uint256){ return 5; } function g() external returns(uint256){ return f(); } }`,
       'JETH388',
@@ -341,8 +341,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('negative: giving an interface CONSTRUCTOR ARGUMENTS (`extends I(5)`)', () => {
     bothReject(
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I(5) { @external f(): u256 { return 1n; } }`,
+      `interface I { f(): u256; }
+       class C extends I(5) { get f(): External<u256> { return 1n; } }`,
       `interface I { function f() external returns(uint256); }
        contract C is I(5) { function f() external returns(uint256){ return 1; } }`,
       'JETH384',
@@ -351,8 +351,8 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('negative: the SAME interface listed twice in one heritage clause', () => {
     bothReject(
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I, I { @external f(): u256 { return 5n; } }`,
+      `interface I { f(): u256; }
+       class C extends I, I { f(): External<u256> { return 5n; } }`,
       `interface I { function f() external returns(uint256); }
        contract C is I, I { function f() external returns(uint256){ return 5; } }`,
       'JETH456',
@@ -374,9 +374,9 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
   // ---------------- C3-OF-INTERFACES ORDERING (must match solc's linearization exactly) ----------------
   it('ordering: `is B, I` where B already implements I is a linearization error (JETH371), like solc', () => {
     bothReject(
-      `@interface class I { @external f(): u256; }
-       @abstract class B extends I { @external f(): u256 { return 2n; } }
-       @contract class C extends B, I {}`,
+      `interface I { f(): u256; }
+       abstract class B extends I { f(): External<u256> { return 2n; } }
+       class C extends B, I {}`,
       `interface I { function f() external returns(uint256); }
        abstract contract B is I { function f() external virtual returns(uint256){ return 2; } }
        contract C is B, I {}`,
@@ -386,9 +386,9 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
 
   it('ordering: `is I, B` where B implements I is ACCEPTED (byte-identical to solc)', async () => {
     await matchPositive(
-      `@interface class I { @external f(): u256; }
-       @abstract class B extends I { @virtual @external f(): u256 { return 2n; } }
-       @contract class C extends I, B {}`,
+      `interface I { f(): u256; }
+       abstract class B extends I { @virtual get f(): External<u256> { return 2n; } }
+       class C extends I, B {}`,
       `interface I { function f() external returns(uint256); }
        abstract contract B is I { function f() external virtual returns(uint256){ return 2; } }
        contract C is I, B {}`,

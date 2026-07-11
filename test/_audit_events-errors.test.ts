@@ -41,93 +41,93 @@ const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
 // ----------------------------------------------------------------------------
 // One JETH contract and the parallel Solidity contract exercising every shape.
 // ----------------------------------------------------------------------------
-const JETH = `@contract class C {
+const JETH = `class C {
   // ---- errors with value-array args (calldata source) ----
-  @error EU(a: u256[]);
-  @error E8(a: u8[]);
-  @error E16(a: u16[]);
-  @error EBool(a: bool[]);
-  @error EAddr(a: address[]);
-  @error EB4(a: bytes4[]);
-  @error EI8(a: i8[]);
-  @error EI128(a: i128[]);
-  @error ETag(tag: u256, a: u256[]);
-  @error EArrStr(a: u256[], s: string);
-  @error EStr(s: string);
-  @error EBytes(b: bytes);
-  @error ETwoArr(a: u8[], b: address[]);
+  EU: error<{ a: u256[] }>;
+  E8: error<{ a: u8[] }>;
+  E16: error<{ a: u16[] }>;
+  EBool: error<{ a: bool[] }>;
+  EAddr: error<{ a: address[] }>;
+  EB4: error<{ a: bytes4[] }>;
+  EI8: error<{ a: i8[] }>;
+  EI128: error<{ a: i128[] }>;
+  ETag: error<{ tag: u256; a: u256[] }>;
+  EArrStr: error<{ a: u256[]; s: string }>;
+  EStr: error<{ s: string }>;
+  EBytes: error<{ b: bytes }>;
+  ETwoArr: error<{ a: u8[]; b: address[] }>;
   // ---- events: value-array args ----
-  @event VEU(a: u256[]);
-  @event VE8(a: u8[]);
-  @event VEBool(a: bool[]);
-  @event VEAddr(a: address[]);
-  @event VEB4(a: bytes4[]);
-  @event VEI8(a: i8[]);
-  @event VETag(@indexed tag: u256, a: u256[]);
-  @event VEArrStr(a: u256[], s: string);
+  VEU: event<{ a: u256[] }>;
+  VE8: event<{ a: u8[] }>;
+  VEBool: event<{ a: bool[] }>;
+  VEAddr: event<{ a: address[] }>;
+  VEB4: event<{ a: bytes4[] }>;
+  VEI8: event<{ a: i8[] }>;
+  VETag: event<{ tag: indexed<u256>; a: u256[] }>;
+  VEArrStr: event<{ a: u256[]; s: string }>;
   // ---- events: indexed value-array topics (keccak of element words) ----
-  @event IU(@indexed a: u256[]);
-  @event I8(@indexed a: u8[]);
-  @event IBool(@indexed a: bool[]);
-  @event IAddr(@indexed a: address[]);
-  @event IB4(@indexed a: bytes4[]);
-  @event II8(@indexed a: i8[]);
-  @event IFirst(@indexed a: u256[], v: u256);
-  @event ILast(k: u256, @indexed a: u256[]);
-  @event IThree(@indexed k: u256, @indexed a: u256[], @indexed b: address[]);
-  @event IMixData(@indexed a: u256[], s: string, v: u256);
-  @event IMulti(@indexed a: u256[], @indexed b: u8[]);
+  IU: event<{ a: indexed<u256[]> }>;
+  I8: event<{ a: indexed<u8[]> }>;
+  IBool: event<{ a: indexed<bool[]> }>;
+  IAddr: event<{ a: indexed<address[]> }>;
+  IB4: event<{ a: indexed<bytes4[]> }>;
+  II8: event<{ a: indexed<i8[]> }>;
+  IFirst: event<{ a: indexed<u256[]>; v: u256 }>;
+  ILast: event<{ k: u256; a: indexed<u256[]> }>;
+  IThree: event<{ k: indexed<u256>; a: indexed<u256[]>; b: indexed<address[]> }>;
+  IMixData: event<{ a: indexed<u256[]>; s: string; v: u256 }>;
+  IMulti: event<{ a: indexed<u256[]>; b: indexed<u8[]> }>;
   // ---- events: indexed bytes/string topics (keccak of content) ----
-  @event IS(@indexed s: string, v: u256);
-  @event IBy(@indexed b: bytes, v: u256);
-  @event ITwoStr(@indexed s1: string, @indexed s2: string);
+  IS: event<{ s: indexed<string>; v: u256 }>;
+  IBy: event<{ b: indexed<bytes>; v: u256 }>;
+  ITwoStr: event<{ s1: indexed<string>; s2: indexed<string> }>;
   // ---- events: scalar indexed/non-indexed (dirty-bit decode parity) ----
-  @event Mixed(@indexed flag: u8, @indexed s: i16, @indexed ok: bool, who: address, sig: bytes4);
-  @event Scalars(@indexed a: u8, b: i16, @indexed c: bool, d: bytes4, e: address);
+  Mixed: event<{ flag: indexed<u8>; s: indexed<i16>; ok: indexed<bool>; who: address; sig: bytes4 }>;
+  Scalars: event<{ a: indexed<u8>; b: i16; c: indexed<bool>; d: bytes4; e: address }>;
 
   // ===== error functions =====
-  @external @pure rEU(a: u256[]): void { revert(EU(a)); }
-  @external @pure rE8(a: u8[]): void { revert(E8(a)); }
-  @external @pure rE16(a: u16[]): void { revert(E16(a)); }
-  @external @pure rEBool(a: bool[]): void { revert(EBool(a)); }
-  @external @pure rEAddr(a: address[]): void { revert(EAddr(a)); }
-  @external @pure rEB4(a: bytes4[]): void { revert(EB4(a)); }
-  @external @pure rEI8(a: i8[]): void { revert(EI8(a)); }
-  @external @pure rEI128(a: i128[]): void { revert(EI128(a)); }
-  @external @pure rETag(t: u256, a: u256[]): void { revert(ETag(t, a)); }
-  @external @pure rEArrStr(a: u256[], s: string): void { revert(EArrStr(a, s)); }
-  @external @pure rEStr(s: string): void { revert(EStr(s)); }
-  @external @pure rEBytes(b: bytes): void { revert(EBytes(b)); }
-  @external @pure rETwoArr(a: u8[], b: address[]): void { revert(ETwoArr(a, b)); }
+  rEU(a: u256[]): External<void> { revert(EU(a)); }
+  rE8(a: u8[]): External<void> { revert(E8(a)); }
+  rE16(a: u16[]): External<void> { revert(E16(a)); }
+  rEBool(a: bool[]): External<void> { revert(EBool(a)); }
+  rEAddr(a: address[]): External<void> { revert(EAddr(a)); }
+  rEB4(a: bytes4[]): External<void> { revert(EB4(a)); }
+  rEI8(a: i8[]): External<void> { revert(EI8(a)); }
+  rEI128(a: i128[]): External<void> { revert(EI128(a)); }
+  rETag(t: u256, a: u256[]): External<void> { revert(ETag(t, a)); }
+  rEArrStr(a: u256[], s: string): External<void> { revert(EArrStr(a, s)); }
+  rEStr(s: string): External<void> { revert(EStr(s)); }
+  rEBytes(b: bytes): External<void> { revert(EBytes(b)); }
+  rETwoArr(a: u8[], b: address[]): External<void> { revert(ETwoArr(a, b)); }
 
   // ===== event functions =====
-  @external veu(a: u256[]): void { emit(VEU(a)); }
-  @external ve8(a: u8[]): void { emit(VE8(a)); }
-  @external veBool(a: bool[]): void { emit(VEBool(a)); }
-  @external veAddr(a: address[]): void { emit(VEAddr(a)); }
-  @external veB4(a: bytes4[]): void { emit(VEB4(a)); }
-  @external veI8(a: i8[]): void { emit(VEI8(a)); }
-  @external veTag(t: u256, a: u256[]): void { emit(VETag(t, a)); }
-  @external veArrStr(a: u256[], s: string): void { emit(VEArrStr(a, s)); }
+  veu(a: u256[]): External<void> { emit(VEU(a)); }
+  ve8(a: u8[]): External<void> { emit(VE8(a)); }
+  veBool(a: bool[]): External<void> { emit(VEBool(a)); }
+  veAddr(a: address[]): External<void> { emit(VEAddr(a)); }
+  veB4(a: bytes4[]): External<void> { emit(VEB4(a)); }
+  veI8(a: i8[]): External<void> { emit(VEI8(a)); }
+  veTag(t: u256, a: u256[]): External<void> { emit(VETag(t, a)); }
+  veArrStr(a: u256[], s: string): External<void> { emit(VEArrStr(a, s)); }
 
-  @external iu(a: u256[]): void { emit(IU(a)); }
-  @external i8(a: u8[]): void { emit(I8(a)); }
-  @external iBool(a: bool[]): void { emit(IBool(a)); }
-  @external iAddr(a: address[]): void { emit(IAddr(a)); }
-  @external iB4(a: bytes4[]): void { emit(IB4(a)); }
-  @external iI8(a: i8[]): void { emit(II8(a)); }
-  @external iFirst(a: u256[], v: u256): void { emit(IFirst(a, v)); }
-  @external iLast(k: u256, a: u256[]): void { emit(ILast(k, a)); }
-  @external iThree(k: u256, a: u256[], b: address[]): void { emit(IThree(k, a, b)); }
-  @external iMixData(a: u256[], s: string, v: u256): void { emit(IMixData(a, s, v)); }
-  @external iMulti(a: u256[], b: u8[]): void { emit(IMulti(a, b)); }
+  iu(a: u256[]): External<void> { emit(IU(a)); }
+  i8(a: u8[]): External<void> { emit(I8(a)); }
+  iBool(a: bool[]): External<void> { emit(IBool(a)); }
+  iAddr(a: address[]): External<void> { emit(IAddr(a)); }
+  iB4(a: bytes4[]): External<void> { emit(IB4(a)); }
+  iI8(a: i8[]): External<void> { emit(II8(a)); }
+  iFirst(a: u256[], v: u256): External<void> { emit(IFirst(a, v)); }
+  iLast(k: u256, a: u256[]): External<void> { emit(ILast(k, a)); }
+  iThree(k: u256, a: u256[], b: address[]): External<void> { emit(IThree(k, a, b)); }
+  iMixData(a: u256[], s: string, v: u256): External<void> { emit(IMixData(a, s, v)); }
+  iMulti(a: u256[], b: u8[]): External<void> { emit(IMulti(a, b)); }
 
-  @external is_(s: string, v: u256): void { emit(IS(s, v)); }
-  @external iby(b: bytes, v: u256): void { emit(IBy(b, v)); }
-  @external itwoStr(s1: string, s2: string): void { emit(ITwoStr(s1, s2)); }
+  is_(s: string, v: u256): External<void> { emit(IS(s, v)); }
+  iby(b: bytes, v: u256): External<void> { emit(IBy(b, v)); }
+  itwoStr(s1: string, s2: string): External<void> { emit(ITwoStr(s1, s2)); }
 
-  @external eMixed(fl: u8, s: i16, ok: bool, w: address, sig: bytes4): void { emit(Mixed(fl, s, ok, w, sig)); }
-  @external eScalars(a: u8, b: i16, c: bool, d: bytes4, e: address): void { emit(Scalars(a, b, c, d, e)); }
+  eMixed(fl: u8, s: i16, ok: bool, w: address, sig: bytes4): External<void> { emit(Mixed(fl, s, ok, w, sig)); }
+  eScalars(a: u8, b: i16, c: bool, d: bytes4, e: address): External<void> { emit(Scalars(a, b, c, d, e)); }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -589,7 +589,7 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     let threw = false;
     try {
       compile(
-        `@contract class C { @event E(@indexed a: u256, @indexed b: u256, @indexed c: u256, @indexed d: u256); @external f(): void {} }`,
+        `class C { E: event<{ a: indexed<u256>; b: indexed<u256>; c: indexed<u256>; d: indexed<u256> }>; f(): External<void> {} }`,
         { fileName: 'C.jeth' },
       );
     } catch (e: any) {
@@ -600,7 +600,7 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
   });
   it('indexed fixed-array event param now compiles (keccak topic, JETH207 lifted)', () => {
     expect(() =>
-      compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, {
+      compile(`class C { E: event<{ a: indexed<Arr<u256, 3>> }>; f(): External<void> {} }`, {
         fileName: 'C.jeth',
       }),
     ).not.toThrow();
@@ -608,8 +608,8 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
   it('indexed static-struct, dynamic struct, AND nested-dynamic-struct-field event params all compile (keccak topic)', () => {
     expect(() =>
       compile(
-        `@struct class S { x: u256; }
-@contract class C { @event E(@indexed s: S); @external f(): void {} }`,
+        `type S = { x: u256; };
+class C { E: event<{ s: indexed<S> }>; f(): External<void> {} }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
@@ -617,8 +617,8 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // flattened payload; verified byte-identical in fix-all-divergences.test.ts).
     expect(() =>
       compile(
-        `@struct class D { s: string; }
-@contract class C { @event E(@indexed d: D); @external f(): void {} }`,
+        `type D = { s: string; };
+class C { E: event<{ d: indexed<D> }>; f(): External<void> {} }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
@@ -626,9 +626,9 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // the recursively flattened payload; byte-identical to solc, verified in fix-all-divergences.test.ts).
     expect(() =>
       compile(
-        `@struct class Inner { p: u256; s: string; }
-@struct class D2 { x: u256; inner: Inner; }
-@contract class C { @event E(@indexed d: D2); @external f(): void {} }`,
+        `type Inner = { p: u256; s: string; };
+type D2 = { x: u256; inner: Inner; };
+class C { E: event<{ d: indexed<D2> }>; f(): External<void> {} }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
@@ -638,7 +638,7 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // keccak of the packed-padded preimage - see event-dynamic-aggregate-params.test.ts).
     let threw = false;
     try {
-      compile(`@contract class C { @event E(@indexed a: u256[][]); @external f(): void {} }`, { fileName: 'C.jeth' });
+      compile(`class C { E: event<{ a: indexed<u256[][]> }>; f(): External<void> {} }`, { fileName: 'C.jeth' });
     } catch {
       threw = true;
     }
@@ -648,7 +648,7 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).
     expect(() =>
       compile(
-        `@contract class C { @event E(a: Arr<u256, 3>); @external f(a: u256, b: u256, c: u256): void { emit(E([a, b, c])); } }`,
+        `class C { E: event<{ a: Arr<u256, 3> }>; f(a: u256, b: u256, c: u256): External<void> { emit(E([a, b, c])); } }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
@@ -658,8 +658,8 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // fix-all-divergences.test.ts).
     expect(() =>
       compile(
-        `@struct class S { a: u256; b: bool; }
-@contract class C { @error E(s: S); @external @pure f(s: S): void { revert(E(s)); } }`,
+        `type S = { a: u256; b: bool; };
+class C { E: error<{ s: S }>; f(s: S): External<void> { revert(E(s)); } }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
@@ -667,8 +667,8 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // byte-identical to solc, verified in fix-all-divergences.test.ts).
     expect(() =>
       compile(
-        `@struct class D { a: u256; s: string; }
-@contract class C { @error E(d: D); @external f(): void { revert(E(D(1n, "x"))); } }`,
+        `type D = { a: u256; s: string; };
+class C { E: error<{ d: D }>; f(): External<void> { revert(E(D(1n, "x"))); } }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();
@@ -677,8 +677,8 @@ describe('ADVERSARIAL events+errors vs Solidity', () => {
     // previously over-rejected with JETH142; now supported (byte-identical to solc, see event-struct.test.ts).
     expect(() =>
       compile(
-        `@struct class S { a: u256; b: bool; }
-@contract class C { @event E(s: S); @external f(s: S): void { emit(E(s)); } }`,
+        `type S = { a: u256; b: bool; };
+class C { E: event<{ s: S }>; f(s: S): External<void> { emit(E(s)); } }`,
         { fileName: 'C.jeth' },
       ),
     ).not.toThrow();

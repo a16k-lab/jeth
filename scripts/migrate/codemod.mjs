@@ -28,6 +28,17 @@
 //   @diamond sources are routed to the manual bucket (the diamond pre-parse expansion rewrites the
 //   class textually; a mechanical member rewrite could break its assumptions).
 //
+// LITERAL FORMS: plain template/string literals are transformed on the cooked text and every edit
+// span is mapped back onto the raw text (escapes elsewhere in the literal stay byte-identical).
+// INTERPOLATED templates: a `${IDENT}` hole naming a once-declared const with a plain-literal
+// initializer is RESOLVED to that literal; any other hole becomes an inert `__JMIGk__` placeholder.
+// The transform runs over the assembled original instantiation; edits inside resolved holes are
+// dropped (the const's own migration realizes them at its declaration site) and the trial compiles
+// the EXACT post assembly the migrated file will produce (edited chunks + migrated const texts +
+// placeholders), with the same JETH352 get-retry. A hole in decorator-name position (`@${dec}`),
+// an edit crossing a hole, or a trial mismatch routes the literal to manual; placeholder-carrying
+// trials are a strong but not perfect check - the capture-diff stays the final arbiter.
+//
 // SELF-CHECK (trial compile): every rewritten source that is a self-contained unit is compiled
 // before and after; accepting sources must be BYTECODE-EQUAL, rejecting sources CODE-LIST-EQUAL.
 // The one statically-undecidable case - a bodied `@external f(): T` whose read-only-ness only the
@@ -87,8 +98,8 @@ function decSet(node) {
   return new Set(decsOf(node).map(decName));
 }
 
-/** Transform ONE embedded JETH source. Returns { text, changes, manual } - `manual` non-empty means
- *  the source must be left unchanged (the caller never applies a partial/guessed transform). */
+/** Transform ONE embedded JETH source. Returns { text, edits, changes, manual } - `manual` non-empty
+ *  means the source must be left unchanged (the caller never applies a partial/guessed transform). */
 function transformJethSource(text, { forceGet = new Set() } = {}) {
   const sf = ts.createSourceFile('embedded.jeth', text, ts.ScriptTarget.ES2022, true);
   const edits = []; // { start, end, insert }
@@ -107,7 +118,13 @@ function transformJethSource(text, { forceGet = new Set() } = {}) {
 
   const wrapReturnType = (member, marker, label) => {
     if (!member.type) {
-      manual.push(`${label}: method has no return type annotation to wrap with ${marker}<>`);
+      // no annotation = implicit void: spell the marker explicitly (`f(): External<void>`).
+      const close = member.getChildren(sf).find((c) => c.kind === ts.SyntaxKind.CloseParenToken);
+      if (!close) {
+        manual.push(`${label}: no return type and no close-paren token to anchor ${marker}<void>`);
+        return;
+      }
+      insertAt(close.end, `: ${marker}<void>`);
       return;
     }
     replaceNode(member.type, `${marker}<${typeText(member.type)}>`);
@@ -144,6 +161,10 @@ function transformJethSource(text, { forceGet = new Set() } = {}) {
   // ---- @interface class I { @external m(): T; } -> interface I { m(): View<T>|...; } ----------
   const rewriteInterface = (cls, _dec) => {
     if (!cls.name) return manual.push('@interface class without a name');
+    if ((cls.heritageClauses ?? []).length > 0)
+      return manual.push(
+        `@interface class ${cls.name.text} extends ...: a native interface cannot extend (JETH349) - stays legacy`,
+      );
     for (const d of decsOf(cls)) {
       if (decName(d) !== 'interface') return manual.push(`@interface class ${cls.name.text}: extra class decorator @${decName(d)}`);
       rmDec(d);
@@ -354,17 +375,21 @@ function transformJethSource(text, { forceGet = new Set() } = {}) {
   };
   ts.forEachChild(sf, visit);
 
-  if (manual.length > 0) return { text, changes: [], manual };
-  if (edits.length === 0) return { text, changes, manual };
+  if (manual.length > 0) return { text, edits: [], changes: [], manual };
+  if (edits.length === 0) return { text, edits: [], changes, manual };
 
   // apply BACK-TO-FRONT; overlapping spans mean a transform bug - never guess, go manual.
   edits.sort((a, b) => b.start - a.start || b.end - a.end);
   for (let i = 1; i < edits.length; i++) {
-    if (edits[i].end > edits[i - 1].start) return { text, changes: [], manual: [`overlapping edit spans at ${edits[i].start}`] };
+    if (edits[i].end > edits[i - 1].start)
+      return { text, edits: [], changes: [], manual: [`overlapping edit spans at ${edits[i].start}`] };
   }
   let out = text;
   for (const e of edits) out = out.slice(0, e.start) + e.insert + out.slice(e.end);
-  return { text: out, changes, manual };
+  // `edits` is returned in its applied (descending-start, stable) order so a caller re-applying the
+  // spans - e.g. mapped onto the RAW literal text - reproduces the same result, including the
+  // relative order of same-position insertions.
+  return { text: out, edits, changes, manual };
 }
 
 // ------------------------------------------------------------ trial compile ------
@@ -395,35 +420,47 @@ function methodKeyAt(text, line, column) {
   const visit = (n, cls) => {
     if (ts.isClassDeclaration(n)) cls = n.name?.text ?? cls;
     if (ts.isMethodDeclaration(n) && n.getStart(sf) <= pos && pos < n.end && ts.isIdentifier(n.name))
-      found = `${cls}.${n.name.text}`; // innermost wins (methods do not nest, classes may)
+      found = {
+        key: `${cls}.${n.name.text}`,
+        pos,
+        bodyStart: n.body ? n.body.getStart(sf) : n.end,
+        bodyEnd: n.body ? n.body.end : n.end,
+      }; // innermost wins (methods do not nest, classes may)
     ts.forEachChild(n, (c) => visit(c, cls));
   };
   ts.forEachChild(sf, (n) => visit(n, '<anon>'));
   return found;
 }
 
-/** Rewrite + trial-verify one embedded source; returns { text, action, changes, manual }. */
-function migrateSource(cooked) {
-  let force = new Set();
+/** Rewrite + trial-verify one embedded source; returns { text, edits, action, changes, manual }.
+ *  `forceGet` seeds the get-spelling key set: a const literal that is a FRAGMENT (e.g. an @abstract
+ *  class alone, standalone outcome JETH040 in every spelling) may need keys discovered by a
+ *  TEMPLATE ASSEMBLY that instantiates it in full context - the caller passes them in here. */
+function migrateSource(cooked, { forceGet } = {}) {
+  let force = new Set(forceGet ?? []);
   let res = transformJethSource(cooked, { forceGet: force });
-  if (res.manual.length > 0) return { text: cooked, action: 'manual', changes: [], manual: res.manual };
-  if (res.text === cooked) return { text: cooked, action: 'unchanged', changes: res.changes, manual: [] };
-  if (!compileFn) return { text: res.text, action: 'rewritten-untrialed', changes: res.changes, manual: [] };
+  if (res.manual.length > 0) return { text: cooked, edits: [], action: 'manual', changes: [], manual: res.manual };
+  if (res.text === cooked) return { text: cooked, edits: [], action: 'unchanged', changes: res.changes, manual: [] };
+  if (!compileFn) return { text: res.text, edits: res.edits, action: 'rewritten-untrialed', changes: res.changes, manual: [] };
 
   const orig = outcomeOf(cooked);
   for (let iter = 0; iter < 10; iter++) {
     const post = outcomeOf(res.text);
-    if (outcomesEqual(orig, post)) return { text: res.text, action: 'rewritten', changes: res.changes, manual: [] };
+    if (outcomesEqual(orig, post)) return { text: res.text, edits: res.edits, action: 'rewritten', changes: res.changes, manual: [] };
     // the statically-undecidable JETH352 case: flip EXACTLY the diagnosed read-only externals (located
     // by diagnostic position -> enclosing Class.method in the transformed text) to `get` and retry.
     if (post.kind === 'rej' && post.diags) {
       const keys = new Set();
       for (const d of post.diags) {
         if (d.code !== 'JETH352' || !/is read-only/.test(d.message)) continue;
-        const key = methodKeyAt(res.text, d.line, d.column);
-        if (key && !force.has(key)) keys.add(key);
+        const hit = methodKeyAt(res.text, d.line, d.column);
+        if (hit && !force.has(hit.key)) keys.add(hit.key);
       }
-      if (keys.size > 0 && !(orig.kind === 'rej' && orig.codes.includes('JETH352'))) {
+      // JETH352 is shared by several messages (option-object errors etc.), so eligibility is decided
+      // by the /is read-only/ message filter above, not by whether the baseline also had a JETH352:
+      // a source can legitimately carry a baseline JETH352 AND need the get flip (key dedup + the
+      // iteration cap keep this terminating).
+      if (keys.size > 0) {
         for (const k of keys) force.add(k);
         res = transformJethSource(cooked, { forceGet: force });
         if (res.manual.length > 0) break;
@@ -442,6 +479,77 @@ function migrateSource(cooked) {
   return { text: cooked, action: 'manual', changes: [], manual: ['JETH352 get-retry did not converge'] };
 }
 
+// ------------------------------------------------- cooked<->raw literal mapping ------
+/** Decode a template/string literal BODY (the text between the delimiters) and build the
+ *  cooked->raw offset map: starts[j] = raw offset where cooked char j begins, and
+ *  starts[cooked.length] = raw.length. Returns null unless the decode reproduces `cooked`
+ *  EXACTLY (unknown escapes, legacy octal, malformed hex -> null; the caller goes manual).
+ *  With this map an edit span computed on the cooked text lands on the exact raw span whose
+ *  cooked value it covers, so escapes elsewhere in the literal are never disturbed. */
+function cookedToRawStarts(raw, cooked) {
+  const starts = [];
+  let out = '';
+  let i = 0;
+  while (i < raw.length) {
+    const from = i;
+    let piece;
+    const c = raw[i];
+    if (c === '\\') {
+      const n = raw[i + 1];
+      if (n === undefined) return null;
+      if (n === 'n') { piece = '\n'; i += 2; }
+      else if (n === 't') { piece = '\t'; i += 2; }
+      else if (n === 'r') { piece = '\r'; i += 2; }
+      else if (n === 'b') { piece = '\b'; i += 2; }
+      else if (n === 'f') { piece = '\f'; i += 2; }
+      else if (n === 'v') { piece = '\v'; i += 2; }
+      else if (n === '0' && !/[0-9]/.test(raw[i + 2] ?? '')) { piece = '\0'; i += 2; }
+      else if (n === 'x') {
+        const h = raw.slice(i + 2, i + 4);
+        if (!/^[0-9a-fA-F]{2}$/.test(h)) return null;
+        piece = String.fromCharCode(parseInt(h, 16));
+        i += 4;
+      } else if (n === 'u') {
+        if (raw[i + 2] === '{') {
+          const close = raw.indexOf('}', i + 3);
+          const h = close < 0 ? '' : raw.slice(i + 3, close);
+          if (!/^[0-9a-fA-F]+$/.test(h) || parseInt(h, 16) > 0x10ffff) return null;
+          piece = String.fromCodePoint(parseInt(h, 16));
+          i = close + 1;
+        } else {
+          const h = raw.slice(i + 2, i + 6);
+          if (!/^[0-9a-fA-F]{4}$/.test(h)) return null;
+          piece = String.fromCharCode(parseInt(h, 16));
+          i += 6;
+        }
+      } else if (n === '\n') { piece = ''; i += 2; } // line continuation
+      else if (n === '\r') { piece = ''; i += raw[i + 2] === '\n' ? 3 : 2; }
+      else if (n === '\u2028' || n === '\u2029') { piece = ''; i += 2; }
+      else if (/[0-9]/.test(n)) return null; // legacy octal / \8 \9 - not modelled
+      else { piece = n; i += 2; } // \\ \` \$ \' \" and any other identity escape
+    } else if (c === '\r') {
+      piece = '\n'; // CRLF and lone CR both cook to \n
+      i += raw[i + 1] === '\n' ? 2 : 1;
+    } else {
+      piece = c;
+      i += 1;
+    }
+    for (let k = 0; k < piece.length; k++) starts[out.length + k] = from;
+    out += piece;
+  }
+  if (out !== cooked) return null;
+  starts[out.length] = raw.length;
+  return starts;
+}
+
+/** Escape `s` (cooked text) for embedding in a literal of the given kind so that the embedded
+ *  raw text cooks back to exactly `s`. */
+function escapeForLiteral(s, kind, quote) {
+  const e = s.replace(/\\/g, '\\\\');
+  if (kind === 'template') return e.replace(/`/g, '\\`').replace(/\$\{/g, '\\${');
+  return e.replaceAll(quote, '\\' + quote).replace(/\n/g, '\\n').replace(/\r/g, '\\r');
+}
+
 // ------------------------------------------------------------- per test file ------
 const manualBucketPath = path.join(path.dirname(url.fileURLToPath(import.meta.url)), 'manual-bucket.txt');
 const manualEntries = [];
@@ -450,69 +558,296 @@ for (const file of files) {
   const abs = path.resolve(file);
   const original = fs.readFileSync(abs, 'utf8');
   const sf = ts.createSourceFile(abs, original, ts.ScriptTarget.ES2022, true);
-  const rewrites = []; // { start, end, insert } spans over the TEST file
-  const log = [];
-  let fileManual = false;
-
   const line = (node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
 
-  const handleLiteral = (node, kind) => {
+  // ---- const-literal index (for resolving `${IDENT}` template holes) --------------------------
+  // A hole whose expression is an identifier declared EXACTLY ONCE in the file as a variable
+  // initialized with a plain template/string literal resolves to that literal: the interpolated
+  // template is then trialed as the EXACT instantiation the migrated test file will produce
+  // (migrated const text + edited chunks). Any other hole becomes an inert placeholder.
+  const constLits = new Map(); // name -> the initializer literal node
+  const declCounts = new Map(); // name -> number of declarations (any kind) - shadowing guard
+  const bumpDecl = (name) => declCounts.set(name, (declCounts.get(name) ?? 0) + 1);
+  const collectDecls = (n) => {
+    if (
+      (ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n)) &&
+      n.name &&
+      ts.isIdentifier(n.name)
+    ) {
+      bumpDecl(n.name.text);
+      if (
+        ts.isVariableDeclaration(n) &&
+        n.initializer &&
+        (ts.isNoSubstitutionTemplateLiteral(n.initializer) || ts.isStringLiteral(n.initializer))
+      )
+        constLits.set(n.name.text, n.initializer);
+    }
+    ts.forEachChild(n, collectDecls);
+  };
+  ts.forEachChild(sf, collectDecls);
+
+  // Per-literal state. A const literal that is a context-blind FRAGMENT (standalone outcome
+  // identical in every spelling) may be re-migrated with get-keys DISCOVERED BY A TEMPLATE ASSEMBLY
+  // that instantiates it in full context, so a literal's migration must be re-runnable: its raw
+  // edits and log entry live here (replaced on re-run) and the final file rewrite is assembled at
+  // the end. `decision` = the literal's final cooked text (the original when unchanged/manual).
+  const litState = new Map(); // literal node -> { decision, edits, logEntry, force }
+  const tplState = new Map(); // template-expression node -> { edits, logEntry }
+  const decisionOf = (node) => litState.get(node)?.decision ?? node.text;
+
+  const migrateLiteral = (node, kind) => {
     const cooked = node.text;
+    const prev = litState.get(node);
+    const st = { decision: cooked, edits: [], logEntry: null, force: prev?.force ?? new Set() };
+    litState.set(node, st);
     if (!BANNED.test(cooked)) return;
     const rawStart = node.getStart(sf) + 1;
     const rawEnd = node.end - 1;
     const raw = original.slice(rawStart, rawEnd);
-    if (raw !== cooked) {
-      // escapes inside the literal: spans over the cooked text do not map onto the raw text.
-      fileManual = true;
-      log.push({ line: line(node), action: 'manual', reason: `raw!==cooked ${kind} literal carrying banned decorators` });
+    const quote = kind === 'string' ? original[node.getStart(sf)] : '`';
+    // cooked->raw offset map: identity when the literal has no escapes, decoded otherwise. Each
+    // transform edit span (computed on the cooked text) lands on the exact raw span it covers, and
+    // every inserted text is re-escaped for the literal kind - untouched escapes stay byte-identical.
+    const starts = cookedToRawStarts(raw, cooked);
+    if (!starts) {
+      st.logEntry = { line: line(node), action: 'manual', reason: `unmappable escapes in ${kind} literal carrying banned decorators` };
       return;
     }
     if (DEC_PRAGMA.test(cooked)) {
-      log.push({ line: line(node), action: 'skipped-stage2', reason: '// use @decorators pragma (stage-2 rewrites these)' });
+      st.logEntry = { line: line(node), action: 'skipped-stage2', reason: '// use @decorators pragma (stage-2 rewrites these)' };
       return;
     }
-    const r = migrateSource(cooked);
+    const r = migrateSource(cooked, { forceGet: st.force });
     if (r.action === 'manual') {
-      log.push({ line: line(node), action: 'manual', reason: r.manual.join(' | ') });
-      manualEntries.push(`${path.relative(process.cwd(), abs)}:${line(node)}  ${r.manual.join(' | ')}`);
+      st.logEntry = { line: line(node), action: 'manual', reason: r.manual.join(' | ') };
       return;
     }
     if (r.text === cooked) {
-      log.push({ line: line(node), action: r.action, changes: r.changes });
+      st.logEntry = { line: line(node), action: r.action, changes: r.changes };
       return;
     }
-    // safety: the replacement must be embeddable in the same literal kind without re-escaping.
-    const badTpl = kind === 'template' && (r.text.includes('`') || r.text.includes('${'));
-    const badStr = kind === 'string' && (r.text.includes(original[node.getStart(sf)]) || r.text.includes('\n') || r.text.includes('\\'));
-    if (badTpl || badStr) {
-      log.push({ line: line(node), action: 'manual', reason: 'rewritten text not embeddable in the original literal kind' });
-      manualEntries.push(`${path.relative(process.cwd(), abs)}:${line(node)}  rewritten text not embeddable`);
-      return;
+    // r.edits is in applied (descending-start) order; pushing in that order keeps same-position
+    // insertions in the same relative order under the stable descending sort applied at the end.
+    for (const e of r.edits) {
+      st.edits.push({
+        start: rawStart + starts[e.start],
+        end: rawStart + starts[e.end],
+        insert: escapeForLiteral(e.insert, kind, quote),
+      });
     }
-    rewrites.push({ start: rawStart, end: rawEnd, insert: r.text });
-    log.push({ line: line(node), action: r.action, changes: r.changes });
+    st.decision = r.text;
+    st.logEntry = { line: line(node), action: r.action, changes: r.changes };
   };
 
-  const visit = (n) => {
-    if (ts.isNoSubstitutionTemplateLiteral(n)) handleLiteral(n, 'template');
-    else if (ts.isStringLiteral(n)) handleLiteral(n, 'string');
-    else if (ts.isTemplateExpression(n)) {
-      const chunks = [n.head.text, ...n.templateSpans.map((s) => s.literal.text)];
-      if (chunks.some((c) => BANNED.test(c))) {
-        log.push({ line: line(n), action: 'manual', reason: 'interpolated template literal carrying banned decorators' });
-        manualEntries.push(`${path.relative(process.cwd(), abs)}:${line(n)}  interpolated template with banned decorators`);
-      }
+  // Interpolated template. Each `${...}` hole is either RESOLVED to a file-level const literal
+  // (identifier declared exactly once, literal initializer) or replaced by an inert `__JMIGk__`
+  // placeholder identifier (identical on both sides). The transform runs over the assembled
+  // ORIGINAL instantiation; edits inside resolved holes are DROPPED (the const literal's own pass-1
+  // migration realizes them at its declaration site), edits inside placeholders or crossing region
+  // boundaries route to manual. The trial then compiles the EXACT post assembly the migrated test
+  // file will produce at runtime (edited chunks + the consts' pass-1 migrated texts + placeholders),
+  // with the same JETH352 get-retry as plain literals. Placeholder-carrying assemblies are trialed
+  // too - equality on the skeleton is a strong (not perfect) check, and the capture-diff remains
+  // the final arbiter per the migration procedure.
+  // Returns true when it re-migrated a const literal with new get-keys (the caller then restarts
+  // the whole template pass: earlier templates may reference the re-migrated const too).
+  const handleTemplateExpression = (n) => {
+    const st = { edits: [], logEntry: null };
+    tplState.set(n, st);
+    const literals = [n.head, ...n.templateSpans.map((s) => s.literal)];
+    const cookedChunks = literals.map((c) => c.text);
+    if (!cookedChunks.some((c) => BANNED.test(c))) return false;
+    const fail = (reason) => {
+      st.logEntry = { line: line(n), action: 'manual', reason };
+      return false;
+    };
+    if (cookedChunks.some((c) => c.includes('__JMIG'))) return fail('interpolated template: chunk contains the placeholder marker');
+    for (let k = 0; k + 1 < cookedChunks.length; k++) {
+      if (cookedChunks[k].endsWith('@')) return fail('interpolated template: a hole in decorator-name position (@${...})');
     }
+    // raw chunk spans: head is `...${, middles are }...${, the tail is }...`
+    const chunkInfo = literals.map((c) => {
+      const rawFrom = c.getStart(sf) + 1;
+      const rawTo = c.end - (c.kind === ts.SyntaxKind.TemplateTail ? 1 : 2);
+      const raw = original.slice(rawFrom, rawTo);
+      return { rawFrom, raw };
+    });
+    const chunkStarts = chunkInfo.map((ci, k) => cookedToRawStarts(ci.raw, cookedChunks[k]));
+    if (chunkStarts.some((s) => !s)) return fail('interpolated template: unmappable escapes in a chunk');
+
+    const holes = n.templateSpans.map((s, k) => {
+      const e = s.expression;
+      if (ts.isIdentifier(e) && constLits.has(e.text) && declCounts.get(e.text) === 1) {
+        const lit = constLits.get(e.text);
+        return { orig: lit.text, lit, resolved: true };
+      }
+      const ph = `__JMIG${k}__`;
+      return { orig: ph, lit: null, resolved: false };
+    });
+    const postHole = (h) => (h.resolved ? decisionOf(h.lit) : h.orig);
+
+    // assemble the ORIGINAL instantiation + its region table
+    let origAsm = '';
+    const regions = []; // { type: 'chunk'|'hole', k, resolved?, start, end } over origAsm
+    cookedChunks.forEach((c, k) => {
+      regions.push({ type: 'chunk', k, start: origAsm.length, end: origAsm.length + c.length });
+      origAsm += c;
+      if (k < holes.length) {
+        regions.push({ type: 'hole', k, resolved: holes[k].resolved, start: origAsm.length, end: origAsm.length + holes[k].orig.length });
+        origAsm += holes[k].orig;
+      }
+    });
+    if (DEC_PRAGMA.test(origAsm)) {
+      st.logEntry = { line: line(n), action: 'skipped-stage2', reason: '// use @decorators pragma (stage-2 rewrites these)' };
+      return false;
+    }
+
+    // Build the EXACT post assembly the migrated test file will instantiate at runtime (edited
+    // chunks + each const's current migrated text + placeholders), with post-space regions so a
+    // trial diagnostic can be routed to the region that must change.
+    const buildPost = (chunkEdits) => {
+      let out = '';
+      const postRegions = [];
+      for (const g of regions) {
+        const from = out.length;
+        if (g.type === 'hole') out += postHole(holes[g.k]);
+        else {
+          let c = origAsm.slice(g.start, g.end);
+          // local edits arrive already in applied (descending-start, stable) order
+          for (const e of chunkEdits) {
+            if (e.start < g.start || e.end > g.end) continue;
+            const s = e.start - g.start;
+            const t = e.end - g.start;
+            c = c.slice(0, s) + e.insert + c.slice(t);
+          }
+          out += c;
+        }
+        postRegions.push({ ...g, postStart: from, postEnd: out.length });
+      }
+      return { text: out, postRegions };
+    };
+
+    const force = new Set();
+    let changedConst = false;
+    let chunkEdits = null;
+    let changes = null;
+    let action = 'rewritten-interp';
+    for (let iter = 0; ; iter++) {
+      if (iter >= 12) return fail('interpolated template: JETH352 get-retry did not converge') || changedConst;
+      const res = transformJethSource(origAsm, { forceGet: force });
+      if (res.manual.length > 0) return fail(`interpolated template: ${res.manual.join(' | ')}`) || changedConst;
+      const edits = [];
+      let bad = null;
+      for (const e of res.edits) {
+        const g = regions.find((g) => g.start <= e.start && e.end <= g.end);
+        if (!g) { bad = `an edit crosses a region boundary (at ${e.start})`; break; }
+        if (g.type === 'chunk') edits.push(e);
+        else if (!g.resolved) { bad = `an edit inside an unresolved \${...} hole (at ${e.start})`; break; }
+        // resolved-hole edits: dropped - realized by the const literal's own migration.
+      }
+      if (bad) return fail(`interpolated template: ${bad}`) || changedConst;
+      const { text: postAsm, postRegions } = buildPost(edits);
+      if (postAsm === origAsm) {
+        st.logEntry = { line: line(n), action: 'unchanged', changes: res.changes };
+        return changedConst;
+      }
+      if (!compileFn) { chunkEdits = edits; changes = res.changes; action = 'rewritten-interp-untrialed'; break; }
+      const orig = outcomeOf(origAsm);
+      const post = outcomeOf(postAsm);
+      if (outcomesEqual(orig, post)) { chunkEdits = edits; changes = res.changes; break; }
+      if (post.kind === 'rej' && post.diags) {
+        // classify each get-rule diagnostic by the POST region it falls in: a chunk method joins
+        // this template's own force set; a method inside a RESOLVED const hole re-migrates that
+        // const with the key (its fragment-blind standalone trial could not see the full context).
+        // A method whose BODY contains an unresolved placeholder is never flipped: the placeholder
+        // may be exactly what determines its effects (e.g. `IFoo(t).${sig}()` - the erroring
+        // skeleton body reads as read-only while the real method name is a writer), so a
+        // trial-equal get spelling could still flip the real instantiation. Manual instead.
+        // (A placeholder in decorator position - `@override${l}` - is allowed: an override list
+        // never contributes effects.)
+        let progressed = false;
+        let unroutable = null;
+        for (const d of post.diags) {
+          if (d.code !== 'JETH352' || !/is read-only/.test(d.message)) continue;
+          const hit = methodKeyAt(postAsm, d.line, d.column);
+          if (!hit) { unroutable = 'a JETH352 outside any method'; continue; }
+          const g = postRegions.find((g) => g.postStart <= hit.pos && hit.pos < g.postEnd);
+          if (!g) { unroutable = 'a JETH352 outside any region'; continue; }
+          const holey = postRegions.some(
+            (h) => h.type === 'hole' && !h.resolved && h.postStart < hit.bodyEnd && hit.bodyStart < h.postEnd,
+          );
+          if (holey) { unroutable = `the get-flip candidate method's body contains an unresolved \${...} hole`; continue; }
+          if (g.type === 'chunk') {
+            if (!force.has(hit.key)) { force.add(hit.key); progressed = true; }
+          } else if (g.resolved) {
+            const constState = litState.get(holes[g.k].lit);
+            if (constState && !constState.force.has(hit.key)) {
+              constState.force.add(hit.key);
+              migrateLiteral(holes[g.k].lit, ts.isStringLiteral(holes[g.k].lit) ? 'string' : 'template');
+              changedConst = true;
+              progressed = true;
+            } else if (!constState) unroutable = 'a JETH352 inside an untracked const literal';
+          } else unroutable = 'a JETH352 inside an unresolved ${...} hole';
+        }
+        if (progressed) continue;
+        if (unroutable) return fail(`interpolated template: ${unroutable} (trial orig=${orig.kind} post=rej[${post.codes}])`) || changedConst;
+      }
+      return (
+        fail(
+          `interpolated template: assembly trial mismatch orig=${orig.kind}${orig.kind === 'rej' ? '[' + orig.codes + ']' : ''} post=${post.kind}${post.kind === 'rej' ? '[' + post.codes + ']' : ''}`,
+        ) || changedConst
+      );
+    }
+
+    for (const e of chunkEdits) {
+      const g = regions.find((g) => g.type === 'chunk' && g.start <= e.start && e.end <= g.end);
+      st.edits.push({
+        start: chunkInfo[g.k].rawFrom + chunkStarts[g.k][e.start - g.start],
+        end: chunkInfo[g.k].rawFrom + chunkStarts[g.k][e.end - g.start],
+        insert: escapeForLiteral(e.insert, 'template', '`'),
+      });
+    }
+    st.logEntry = { line: line(n), action, changes };
+    return changedConst;
+  };
+
+  // pass 1: plain literals (their migrated texts feed const-hole resolution); pass 2: interpolated
+  // templates, RESTARTED whenever an assembly re-migrates a const literal (earlier templates may
+  // reference it): force sets grow monotonically, so the fixpoint terminates.
+  const templateExprs = [];
+  const plainLits = [];
+  const visit = (n) => {
+    if (ts.isNoSubstitutionTemplateLiteral(n)) plainLits.push([n, 'template']);
+    else if (ts.isStringLiteral(n)) plainLits.push([n, 'string']);
+    else if (ts.isTemplateExpression(n)) templateExprs.push(n);
     ts.forEachChild(n, visit);
   };
   ts.forEachChild(sf, visit);
+  for (const [node, kind] of plainLits) migrateLiteral(node, kind);
+  for (let pass = 0; ; pass++) {
+    if (pass >= 25) {
+      console.error(`ERROR ${file}: template fixpoint did not settle in 25 passes - file left untouched`);
+      manualEntries.push(`${path.relative(process.cwd(), abs)}  WHOLE FILE: template fixpoint did not settle`);
+      litState.clear();
+      tplState.clear();
+      break;
+    }
+    let restart = false;
+    for (const t of templateExprs) {
+      if (handleTemplateExpression(t)) restart = true;
+    }
+    if (!restart) break;
+  }
 
-  if (fileManual) {
-    manualEntries.push(`${path.relative(process.cwd(), abs)}  WHOLE FILE: raw!==cooked literal with banned decorators`);
-    console.log(`MANUAL  ${file} (raw!==cooked literal - file untouched)`);
-    for (const l of log) console.log(`  L${l.line} ${l.action}: ${l.reason ?? ''}`);
-    continue;
+  const rewrites = [];
+  const log = [];
+  for (const st of [...litState.values(), ...tplState.values()]) {
+    rewrites.push(...st.edits);
+    if (st.logEntry) log.push(st.logEntry);
+  }
+  log.sort((a, b) => a.line - b.line);
+  for (const l of log) {
+    if (l.action === 'manual') manualEntries.push(`${path.relative(process.cwd(), abs)}:${l.line}  ${l.reason}`);
   }
 
   rewrites.sort((a, b) => b.start - a.start);

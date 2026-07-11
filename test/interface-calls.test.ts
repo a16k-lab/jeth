@@ -26,20 +26,20 @@ function jethRejects(src: string): boolean {
 }
 
 // The interface, identical shape in JETH and solc.
-const IFACE_JETH = `@interface class IFoo {
-  @external echo(x: u256): u256;
-  @external @view view2(x: u256): u256;
-  @external boom(): u256;
-  @external custom(): u256;
-  @external panicDiv(x: u256): u256;
-  @external panicAssert(): u256;
-  @external reqFalse(): u256;
-  @external @payable pay(): u256;
-  @external setX(x: u256): void;
-  @external @view pair(): [u256, string];
-  @external @view str(): string;
-  @external @view shortRet(): u256;
-  @external @view extraRet(): u256;
+const IFACE_JETH = `interface IFoo {
+  echo(x: u256): u256;
+  view2(x: u256): View<u256>;
+  boom(): u256;
+  custom(): u256;
+  panicDiv(x: u256): u256;
+  panicAssert(): u256;
+  reqFalse(): u256;
+  pay(): Payable<u256>;
+  setX(x: u256): void;
+  pair(): View<[u256, string]>;
+  str(): View<string>;
+  shortRet(): View<u256>;
+  extraRet(): View<u256>;
 }`;
 
 // The behaviour target. SAME solc source deployed in both harnesses (byte-identical bytecode), so any
@@ -103,8 +103,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('success: a value-returning CALL', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { return IFoo(t).echo(21n); }
+      class C {
+        f(t: address): External<u256> { return IFoo(t).echo(21n); }
       }`,
       `interface IFoo { function echo(uint256) external returns(uint256); }
       contract C { function f(address t) external returns(uint256){ return IFoo(t).echo(21); } }`,
@@ -115,8 +115,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('success: a @view method lowers to STATICCALL', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external @view f(t: address): u256 { return IFoo(t).view2(9n); }
+      class C {
+        get f(t: address): External<u256> { return IFoo(t).view2(9n); }
       }`,
       `interface IFoo { function view2(uint256) external view returns(uint256); }
       contract C { function f(address t) external view returns(uint256){ return IFoo(t).view2(9); } }`,
@@ -127,8 +127,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('revert bubble: Error(string) verbatim', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { return IFoo(t).boom(); }
+      class C {
+        f(t: address): External<u256> { return IFoo(t).boom(); }
       }`,
       `interface IFoo { function boom() external returns(uint256); }
       contract C { function f(address t) external returns(uint256){ return IFoo(t).boom(); } }`,
@@ -139,8 +139,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('revert bubble: a custom error verbatim', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { return IFoo(t).custom(); }
+      class C {
+        f(t: address): External<u256> { return IFoo(t).custom(); }
       }`,
       `interface IFoo { function custom() external returns(uint256); }
       contract C { function f(address t) external returns(uint256){ return IFoo(t).custom(); } }`,
@@ -151,8 +151,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('revert bubble: Panic(0x12) divide-by-zero verbatim', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { return IFoo(t).panicDiv(0n); }
+      class C {
+        f(t: address): External<u256> { return IFoo(t).panicDiv(0n); }
       }`,
       `interface IFoo { function panicDiv(uint256) external returns(uint256); }
       contract C { function f(address t) external returns(uint256){ return IFoo(t).panicDiv(0); } }`,
@@ -163,8 +163,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('revert bubble: Panic(0x01) assert verbatim', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { return IFoo(t).panicAssert(); }
+      class C {
+        f(t: address): External<u256> { return IFoo(t).panicAssert(); }
       }`,
       `interface IFoo { function panicAssert() external returns(uint256); }
       contract C { function f(address t) external returns(uint256){ return IFoo(t).panicAssert(); } }`,
@@ -175,8 +175,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('revert bubble: require(false) empty revert verbatim', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { return IFoo(t).reqFalse(); }
+      class C {
+        f(t: address): External<u256> { return IFoo(t).reqFalse(); }
       }`,
       `interface IFoo { function reqFalse() external returns(uint256); }
       contract C { function f(address t) external returns(uint256){ return IFoo(t).reqFalse(); } }`,
@@ -187,8 +187,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('extcodesize guard: a call to a non-contract (EOA) reverts empty', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { return IFoo(t).echo(21n); }
+      class C {
+        f(t: address): External<u256> { return IFoo(t).echo(21n); }
       }`,
       `interface IFoo { function echo(uint256) external returns(uint256); }
       contract C { function f(address t) external returns(uint256){ return IFoo(t).echo(21); } }`,
@@ -199,8 +199,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('extcodesize guard: a VOID call to a non-contract reverts empty (no value sent)', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): void { IFoo(t).setX(5n); }
+      class C {
+        f(t: address): External<void> { IFoo(t).setX(5n); }
       }`,
       `interface IFoo { function setX(uint256) external; }
       contract C { function f(address t) external { IFoo(t).setX(5); } }`,
@@ -211,8 +211,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('value: {value} on a @payable method (forwarded)', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external @payable f(t: address): u256 { return IFoo(t, { value: 3n }).pay(); }
+      class C {
+        f(t: address): Payable<u256> { return IFoo(t, { value: 3n }).pay(); }
       }`,
       `interface IFoo { function pay() external payable returns(uint256); }
       contract C { function f(address t) external payable returns(uint256){ return IFoo(t).pay{value: 3}(); } }`,
@@ -223,8 +223,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('gas: {gas} option on a method', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { return IFoo(t, { gas: 50000n }).echo(11n); }
+      class C {
+        f(t: address): External<u256> { return IFoo(t, { gas: 50000n }).echo(11n); }
       }`,
       `interface IFoo { function echo(uint256) external returns(uint256); }
       contract C { function f(address t) external returns(uint256){ return IFoo(t).echo{gas: 50000}(11); } }`,
@@ -235,8 +235,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('void: a void method called as a statement', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external f(t: address): u256 { IFoo(t).setX(99n); return 1n; }
+      class C {
+        f(t: address): External<u256> { IFoo(t).setX(99n); return 1n; }
       }`,
       `interface IFoo { function setX(uint256) external; }
       contract C { function f(address t) external returns(uint256){ IFoo(t).setX(99); return 1; } }`,
@@ -247,12 +247,12 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('tuple return: (uint256, string) via destructuring', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external @view f(t: address): u256 {
+      class C {
+        get f(t: address): External<u256> {
           let [n, s]: [u256, string] = IFoo(t).pair();
           return n;
         }
-        @external @view g(t: address): string {
+        get g(t: address): External<string> {
           let [n, s]: [u256, string] = IFoo(t).pair();
           return s;
         }
@@ -269,8 +269,8 @@ describe('typed interface calls: byte-identical vs solc', () => {
   it('string return: a single dynamic return', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external @view f(t: address): string { return IFoo(t).str(); }
+      class C {
+        get f(t: address): External<string> { return IFoo(t).str(); }
       }`,
       `interface IFoo { function str() external view returns(string memory); }
       contract C { function f(address t) external view returns(string memory){ return IFoo(t).str(); } }`,
@@ -282,10 +282,10 @@ describe('typed interface calls: byte-identical vs solc', () => {
     // setX is non-view; calling it from a @view caller lowers to STATICCALL, which reverts on SSTORE.
     await rt(
       `${IFACE_JETH}
-      @contract class C {
-        @external @view f(t: address): u256 { return IFoo2(t).setX(5n); }
+      class C {
+        get f(t: address): External<u256> { return IFoo2(t).setX(5n); }
       }
-      @interface class IFoo2 { @external @view setX(x: u256): u256; }`,
+      interface IFoo2 { setX(x: u256): View<u256>; }`,
       `interface IFoo2 { function setX(uint256) external view returns(uint256); }
       contract C { function f(address t) external view returns(uint256){ return IFoo2(t).setX(5); } }`,
       [{ sig: 'f(address)' }],
@@ -342,57 +342,57 @@ describe('typed interface calls: returndatasize bounds (byte-identical vs solc)'
 });
 
 describe('typed interface calls: clean rejections (no crash)', () => {
-  const IF = `@interface class IFoo {
-    @external bar(x: u256): u256;
-    @external @view baz(): bool;
-    @external @payable deposit(): u256;
+  const IF = `interface IFoo {
+    bar(x: u256): u256;
+    baz(): View<bool>;
+    deposit(): Payable<u256>;
   }`;
   it('rejects {value} on a non-payable method', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t, { value: 1n }).bar(5n); } }`,
+        `${IF}\nclass C { get f(t: address): External<u256> { return IFoo(t, { value: 1n }).bar(5n); } }`,
       ),
     ).toBe(true);
   });
   it('rejects an unknown method', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).nope(5n); } }`)).toBe(
+    expect(jethRejects(`${IF}\nclass C { get f(t: address): External<u256> { return IFoo(t).nope(5n); } }`)).toBe(
       true,
     );
   });
   it('rejects wrong arity', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).bar(); } }`)).toBe(
+    expect(jethRejects(`${IF}\nclass C { get f(t: address): External<u256> { return IFoo(t).bar(); } }`)).toBe(
       true,
     );
   });
   it('rejects an argument type mismatch', () => {
     expect(
-      jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t).bar(true); } }`),
+      jethRejects(`${IF}\nclass C { f(t: address): External<u256> { return IFoo(t).bar(true); } }`),
     ).toBe(true);
   });
   it('rejects a non-address receiver', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(): u256 { return IFoo(5n).bar(7n); } }`)).toBe(true);
+    expect(jethRejects(`${IF}\nclass C { get f(): External<u256> { return IFoo(5n).bar(7n); } }`)).toBe(true);
   });
   it('rejects an unknown wrapper option', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t, { gax: 1n }).bar(5n); } }`,
+        `${IF}\nclass C { get f(t: address): External<u256> { return IFoo(t, { gax: 1n }).bar(5n); } }`,
       ),
     ).toBe(true);
   });
   it('rejects a bare interface handle as a value', () => {
-    expect(jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { return IFoo(t); } }`)).toBe(true);
+    expect(jethRejects(`${IF}\nclass C { get f(t: address): External<u256> { return IFoo(t); } }`)).toBe(true);
   });
   it('rejects a tuple return bound to a single name', () => {
     expect(
       jethRejects(
-        `@interface class IFoo { @external pair(): [u256, string]; }\n@contract class C { @external f(t: address): u256 { let x: u256 = IFoo(t).pair(); return x; } }`,
+        `interface IFoo { pair(): [u256, string]; }\nclass C { f(t: address): External<u256> { let x: u256 = IFoo(t).pair(); return x; } }`,
       ),
     ).toBe(true);
   });
   it('rejects a void method used as a value', () => {
     expect(
       jethRejects(
-        `@interface class IFoo { @external nada(): void; }\n@contract class C { @external f(t: address): u256 { let x: u256 = IFoo(t).nada(); return x; } }`,
+        `interface IFoo { nada(): void; }\nclass C { f(t: address): External<u256> { let x: u256 = IFoo(t).nada(); return x; } }`,
       ),
     ).toBe(true);
   });
@@ -418,7 +418,7 @@ describe('typed interface calls: clean rejections (no crash)', () => {
   it('rejects method overloading in an interface', () => {
     expect(
       jethRejects(
-        `@interface class IFoo { @external bar(x: u256): u256; @external bar(x: bool): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`,
+        `interface IFoo { bar(x: u256): u256; bar(x: bool): u256; }\nclass C { get f(): External<u256> { return 0n; } }`,
       ),
     ).toBe(true);
   });
@@ -432,7 +432,7 @@ describe('typed interface calls: clean rejections (no crash)', () => {
   it('rejects an interface name colliding with a struct', () => {
     expect(
       jethRejects(
-        `@struct class IFoo { x: u256; }\n@interface class IFoo { @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`,
+        `type IFoo = { x: u256; };\ninterface IFoo { bar(): u256; }\nclass C { get f(): External<u256> { return 0n; } }`,
       ),
     ).toBe(true);
   });

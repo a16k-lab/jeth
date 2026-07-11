@@ -21,49 +21,49 @@ const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const cases: { name: string; jeth: string; sol: string; sig: string; args: string }[] = [
   {
     name: 'idx string[]',
-    jeth: '@contract class C { @event E(@indexed a: string[]); @external go(xs: string[]): void { emit(E(xs)); } }',
+    jeth: 'class C { E: event<{ a: indexed<string[]> }>; go(xs: string[]): External<void> { emit(E(xs)); } }',
     sol: 'contract C { event E(string[] indexed a); function go(string[] calldata xs) external { emit E(xs); } }',
     sig: 'go(string[])',
     args: W(0x20) + W(2) + W(0x40) + W(0x80) + W(2) + '6161'.padEnd(64, '0') + W(2) + '6262'.padEnd(64, '0'),
   },
   {
     name: 'idx bytes[]',
-    jeth: '@contract class C { @event E(@indexed a: bytes[]); @external go(xs: bytes[]): void { emit(E(xs)); } }',
+    jeth: 'class C { E: event<{ a: indexed<bytes[]> }>; go(xs: bytes[]): External<void> { emit(E(xs)); } }',
     sol: 'contract C { event E(bytes[] indexed a); function go(bytes[] calldata xs) external { emit E(xs); } }',
     sig: 'go(bytes[])',
     args: W(0x20) + W(2) + W(0x40) + W(0x80) + W(2) + '6161'.padEnd(64, '0') + W(4) + '62626262'.padEnd(64, '0'),
   },
   {
     name: 'idx u256[][]',
-    jeth: '@contract class C { @event E(@indexed a: u256[][]); @external go(xs: u256[][]): void { emit(E(xs)); } }',
+    jeth: 'class C { E: event<{ a: indexed<u256[][]> }>; go(xs: u256[][]): External<void> { emit(E(xs)); } }',
     sol: 'contract C { event E(uint256[][] indexed a); function go(uint256[][] calldata xs) external { emit E(xs); } }',
     sig: 'go(uint256[][])',
     args: W(0x20) + W(2) + W(0x40) + W(0xa0) + W(2) + W(1) + W(2) + W(1) + W(3),
   },
   {
     name: 'idx Arr<string,2>',
-    jeth: '@contract class C { @event E(@indexed a: Arr<string,2>); @external go(xs: Arr<string,2>): void { emit(E(xs)); } }',
+    jeth: 'class C { E: event<{ a: indexed<Arr<string,2>> }>; go(xs: Arr<string,2>): External<void> { emit(E(xs)); } }',
     sol: 'contract C { event E(string[2] indexed a); function go(string[2] calldata xs) external { emit E(xs); } }',
     sig: 'go(string[2])',
     args: W(0x20) + W(0x40) + W(0x80) + W(3) + '666f6f'.padEnd(64, '0') + W(3) + '626172'.padEnd(64, '0'),
   },
   {
     name: 'non-idx Arr<string,2>',
-    jeth: '@contract class C { @event E(a: Arr<string,2>); @external go(xs: Arr<string,2>): void { emit(E(xs)); } }',
+    jeth: 'class C { E: event<{ a: Arr<string,2> }>; go(xs: Arr<string,2>): External<void> { emit(E(xs)); } }',
     sol: 'contract C { event E(string[2] a); function go(string[2] calldata xs) external { emit E(xs); } }',
     sig: 'go(string[2])',
     args: W(0x20) + W(0x40) + W(0x80) + W(3) + '666f6f'.padEnd(64, '0') + W(3) + '626172'.padEnd(64, '0'),
   },
   {
     name: 'non-idx string[]',
-    jeth: '@contract class C { @event E(a: string[]); @external go(xs: string[]): void { emit(E(xs)); } }',
+    jeth: 'class C { E: event<{ a: string[] }>; go(xs: string[]): External<void> { emit(E(xs)); } }',
     sol: 'contract C { event E(string[] a); function go(string[] calldata xs) external { emit E(xs); } }',
     sig: 'go(string[])',
     args: W(0x20) + W(2) + W(0x40) + W(0x80) + W(2) + '6161'.padEnd(64, '0') + W(2) + '6262'.padEnd(64, '0'),
   },
   {
     name: 'idx string[][] (nested)',
-    jeth: '@contract class C { @event E(@indexed a: string[][]); @external go(xs: string[][]): void { emit(E(xs)); } }',
+    jeth: 'class C { E: event<{ a: indexed<string[][]> }>; go(xs: string[][]): External<void> { emit(E(xs)); } }',
     sol: 'contract C { event E(string[][] indexed a); function go(string[][] calldata xs) external { emit E(xs); } }',
     sig: 'go(string[][])',
     args:
@@ -73,14 +73,14 @@ const cases: { name: string; jeth: string; sol: string; sig: string; args: strin
   },
   {
     name: 'idx string[] empty',
-    jeth: '@contract class C { @event E(@indexed a: string[]); @external go(xs: string[]): void { emit(E(xs)); } }',
+    jeth: 'class C { E: event<{ a: indexed<string[]> }>; go(xs: string[]): External<void> { emit(E(xs)); } }',
     sol: 'contract C { event E(string[] indexed a); function go(string[] calldata xs) external { emit E(xs); } }',
     sig: 'go(string[])',
     args: W(0x20) + W(0),
   },
   {
     name: 'mixed idx(u256)+idx(string[])+data',
-    jeth: '@contract class C { @event E(@indexed n: u256, @indexed a: string[], m: u256); @external go(n: u256, xs: string[], m: u256): void { emit(E(n, xs, m)); } }',
+    jeth: 'class C { E: event<{ n: indexed<u256>; a: indexed<string[]>; m: u256 }>; go(n: u256, xs: string[], m: u256): External<void> { emit(E(n, xs, m)); } }',
     sol: 'contract C { event E(uint256 indexed n, string[] indexed a, uint256 m); function go(uint256 n, string[] calldata xs, uint256 m) external { emit E(n, xs, m); } }',
     sig: 'go(uint256,string[],uint256)',
     args: W(7) + W(0x80) + W(99) + W(2) + W(0x40) + W(0x80) + W(2) + '6161'.padEnd(64, '0') + W(2) + '6262'.padEnd(64, '0'),
@@ -104,12 +104,12 @@ describe('dynamic-aggregate event params (indexed topic + non-indexed data) vs S
   });
 
   it('indexed string[] from a memory local and from storage match solc', async () => {
-    const jeth = `@contract class C {
-      @state xs: string[];
-      @event E(@indexed a: string[]);
-      @external fromMem(): void { let m: string[] = ["aa","bbbb"]; emit(E(m)); }
-      @external seed(): void { this.xs.push("aa"); this.xs.push("bb"); }
-      @external fromStore(): void { emit(E(this.xs)); }
+    const jeth = `class C {
+      xs: string[];
+      E: event<{ a: indexed<string[]> }>;
+      fromMem(): External<void> { let m: string[] = ["aa","bbbb"]; emit(E(m)); }
+      seed(): External<void> { this.xs.push("aa"); this.xs.push("bb"); }
+      fromStore(): External<void> { emit(E(this.xs)); }
     }`;
     const sol = `contract C {
       string[] xs;
@@ -142,37 +142,37 @@ describe('dynamic-aggregate event params (indexed topic + non-indexed data) vs S
     const shapes: { name: string; jeth: string; sol: string }[] = [
       {
         name: 'idx Arr<bytes,2> local',
-        jeth: '@contract class C { @event E(@indexed d: Arr<bytes,2>); @external go(): void { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
+        jeth: 'class C { E: event<{ d: indexed<Arr<bytes,2>> }>; go(): External<void> { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
         sol: 'contract C { event E(bytes[2] indexed d); function go() external { bytes[2] memory a = [bytes("ab"), bytes("cd")]; emit E(a); } }',
       },
       {
         name: 'idx Arr<string,2> long-leaf local',
-        jeth: `@contract class C { @event E(@indexed d: Arr<string,2>); @external go(): void { let a: Arr<string,2> = ["ab", "${LONG}"]; emit(E(a)); } }`,
+        jeth: `class C { E: event<{ d: indexed<Arr<string,2>> }>; go(): External<void> { let a: Arr<string,2> = ["ab", "${LONG}"]; emit(E(a)); } }`,
         sol: `contract C { event E(string[2] indexed d); function go() external { string[2] memory a = ["ab", "${LONG}"]; emit E(a); } }`,
       },
       {
         name: 'idx Arr<u256[],2> local',
-        jeth: '@contract class C { @event E(@indexed d: Arr<u256[],2>); @external go(): void { let a: Arr<u256[],2> = [[1n,2n],[3n]]; emit(E(a)); } }',
+        jeth: 'class C { E: event<{ d: indexed<Arr<u256[],2>> }>; go(): External<void> { let a: Arr<u256[],2> = [[1n,2n],[3n]]; emit(E(a)); } }',
         sol: 'contract C { event E(uint256[][2] indexed d); function go() external { uint256[] memory x = new uint256[](2); x[0]=1; x[1]=2; uint256[] memory y = new uint256[](1); y[0]=3; uint256[][2] memory a = [x, y]; emit E(a); } }',
       },
       {
         name: 'non-idx Arr<bytes,2> local',
-        jeth: '@contract class C { @event E(d: Arr<bytes,2>); @external go(): void { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
+        jeth: 'class C { E: event<{ d: Arr<bytes,2> }>; go(): External<void> { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
         sol: 'contract C { event E(bytes[2] d); function go() external { bytes[2] memory a = [bytes("ab"), bytes("cd")]; emit E(a); } }',
       },
       {
         name: 'idx inline Arr<bytes,2> literal',
-        jeth: '@contract class C { @event E(@indexed d: Arr<bytes,2>); @external go(): void { emit(E([bytes("ab"), bytes("cd")])); } }',
+        jeth: 'class C { E: event<{ d: indexed<Arr<bytes,2>> }>; go(): External<void> { emit(E([bytes("ab"), bytes("cd")])); } }',
         sol: 'contract C { event E(bytes[2] indexed d); function go() external { emit E([bytes("ab"), bytes("cd")]); } }',
       },
       {
         name: 'idx nested Arr<Arr<bytes,2>,2> local',
-        jeth: '@contract class C { @event E(@indexed d: Arr<Arr<bytes,2>,2>); @external go(): void { let a: Arr<Arr<bytes,2>,2> = [[bytes("ab"),bytes("cd")],[bytes("ef"),bytes("gh")]]; emit(E(a)); } }',
+        jeth: 'class C { E: event<{ d: indexed<Arr<Arr<bytes,2>,2>> }>; go(): External<void> { let a: Arr<Arr<bytes,2>,2> = [[bytes("ab"),bytes("cd")],[bytes("ef"),bytes("gh")]]; emit(E(a)); } }',
         sol: 'contract C { event E(bytes[2][2] indexed d); function go() external { bytes[2][2] memory a = [[bytes("ab"),bytes("cd")],[bytes("ef"),bytes("gh")]]; emit E(a); } }',
       },
       {
         name: 'anonymous idx Arr<bytes,2> local',
-        jeth: '@contract class C { @event @anonymous E(@indexed d: Arr<bytes,2>); @external go(): void { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
+        jeth: 'class C { @anonymous E: event<{ d: indexed<Arr<bytes,2>> }>; go(): External<void> { let a: Arr<bytes,2> = [bytes("ab"), bytes("cd")]; emit(E(a)); } }',
         sol: 'contract C { event E(bytes[2] indexed d) anonymous; function go() external { bytes[2] memory a = [bytes("ab"), bytes("cd")]; emit E(a); } }',
       },
     ];
@@ -203,12 +203,12 @@ describe('dynamic-aggregate event params (indexed topic + non-indexed data) vs S
       }
     };
     expect(
-      codes('@struct class P { a: u256; s: string } @contract class C { @event E(@indexed a: P[]); @external go(xs: P[]): void { emit(E(xs)); } }'),
+      codes('type P = { a: u256; s: string }; class C { E: event<{ a: indexed<P[]> }>; go(xs: P[]): External<void> { emit(E(xs)); } }'),
     ).toEqual([]);
     // Edge C: a struct element with a deeper dynamic field (dyn array / nested dyn struct) is now ACCEPTED
     // too (packTopicStructFromAbi recurses; byte-identical to solc - see event-indexed-dyn-struct-array).
     expect(
-      codes('@struct class P { a: u256; tags: u256[] } @contract class C { @event E(@indexed a: P[]); @external go(xs: P[]): void { emit(E(xs)); } }'),
+      codes('type P = { a: u256; tags: u256[] }; class C { E: event<{ a: indexed<P[]> }>; go(xs: P[]): External<void> { emit(E(xs)); } }'),
     ).toEqual([]);
   });
 });

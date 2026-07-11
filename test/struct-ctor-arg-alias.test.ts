@@ -46,18 +46,18 @@ const codes = (src: string): string[] => {
   }
 };
 
-const JT = `@struct class T { n: u256; s: string }\n`;
+const JT = `type T = { n: u256; s: string };\n`;
 const ST = `struct T { uint256 n; string s; }\n`;
 
 describe('W6A: dyn-struct ctor field captures a memory reference (pointer, not copy) vs solc 0.8.35', () => {
   it('bidirectional aliasing through the captured pointer + double capture', async () => {
-    const J = `${JT}@struct class S { a: u256; t: T }
-    @struct class S2 { x: T; y: T }
-    @contract class C {
-      @external @pure fwd(): u256 { let t: T = T(5n, "x"); let s: S = S(1n, t); t.n = 9n; return s.t.n; }
-      @external @pure rev(): u256 { let t: T = T(5n, "x"); let s: S = S(1n, t); s.t.n = 9n; return t.n; }
-      @external @pure str(): string { let t: T = T(5n, "aa"); let s: S = S(1n, t); t.s = "bb-longer-than-32-bytes-payload-word!"; return s.t.s; }
-      @external @pure dbl(): u256 { let t: T = T(5n, "x"); let s: S2 = S2(t, t); s.x.n = 7n; return s.y.n * 100n + t.n; } }`;
+    const J = `${JT}type S = { a: u256; t: T };
+    type S2 = { x: T; y: T };
+    class C {
+      get fwd(): External<u256> { let t: T = T(5n, "x"); let s: S = S(1n, t); t.n = 9n; return s.t.n; }
+      get rev(): External<u256> { let t: T = T(5n, "x"); let s: S = S(1n, t); s.t.n = 9n; return t.n; }
+      get str(): External<string> { let t: T = T(5n, "aa"); let s: S = S(1n, t); t.s = "bb-longer-than-32-bytes-payload-word!"; return s.t.s; }
+      get dbl(): External<u256> { let t: T = T(5n, "x"); let s: S2 = S2(t, t); s.x.n = 7n; return s.y.n * 100n + t.n; } }`;
     const S = `${ST}struct S { uint256 a; T t; }
     struct S2 { T x; T y; }
     contract C {
@@ -73,9 +73,9 @@ describe('W6A: dyn-struct ctor field captures a memory reference (pointer, not c
   });
 
   it('dyn-array-bearing T{xs,n}: value field aliases too (whole-image pointer)', async () => {
-    const J = `@struct class T { xs: u256[]; n: u256 }
-    @struct class S { a: u256; t: T }
-    @contract class C { @external @pure f(): u256 {
+    const J = `type T = { xs: u256[]; n: u256 };
+    type S = { a: u256; t: T };
+    class C { get f(): External<u256> {
       let xs: u256[] = new Array<u256>(2n); xs[0n] = 3n;
       let t: T = T(xs, 5n); let s: S = S(1n, t); t.n = 9n; xs[1n] = 4n;
       return s.t.n * 100n + s.t.xs[1n]; } }`;
@@ -89,14 +89,14 @@ describe('W6A: dyn-struct ctor field captures a memory reference (pointer, not c
   });
 
   it('every consumer of the captured pointer: encode / direct return / storage / push / mapping', async () => {
-    const J = `${JT}@struct class S { a: u256; t: T }
-    @contract class C {
-      @state sd: S; @state arr: S[]; @state m: mapping<u256, S>;
-      @external @pure enc(): bytes { let t: T = T(5n, "x"); let s: S = S(1n, t); t.n = 9n; return abi.encode(s); }
-      @external @pure ret(): S { let t: T = T(5n, "hello-there-long-string-payload!!"); return S(1n, t); }
-      @external stor(): u256 { let t: T = T(5n, "x"); let s: S = S(1n, t); t.n = 9n; this.sd = s; return this.sd.t.n; }
-      @external psh(): u256 { let t: T = T(5n, "x"); t.n = 9n; this.arr.push(S(1n, t)); return this.arr[0n].t.n; }
-      @external mp(): u256 { let t: T = T(5n, "x"); t.n = 9n; this.m[1n] = S(1n, t); return this.m[1n].t.n; } }`;
+    const J = `${JT}type S = { a: u256; t: T };
+    class C {
+      sd: S; arr: S[]; m: mapping<u256, S>;
+      get enc(): External<bytes> { let t: T = T(5n, "x"); let s: S = S(1n, t); t.n = 9n; return abi.encode(s); }
+      get ret(): External<S> { let t: T = T(5n, "hello-there-long-string-payload!!"); return S(1n, t); }
+      stor(): External<u256> { let t: T = T(5n, "x"); let s: S = S(1n, t); t.n = 9n; this.sd = s; return this.sd.t.n; }
+      psh(): External<u256> { let t: T = T(5n, "x"); t.n = 9n; this.arr.push(S(1n, t)); return this.arr[0n].t.n; }
+      mp(): External<u256> { let t: T = T(5n, "x"); t.n = 9n; this.m[1n] = S(1n, t); return this.m[1n].t.n; } }`;
     const S = `${ST}struct S { uint256 a; T t; }
     contract C {
       S sd; S[] arr; mapping(uint256 => S) m;
@@ -109,12 +109,12 @@ describe('W6A: dyn-struct ctor field captures a memory reference (pointer, not c
   });
 
   it('internal calls: ctor as arg (callee mutates through), internal return wrapping a param', async () => {
-    const J = `${JT}@struct class S { a: u256; t: T }
-    @contract class C {
+    const J = `${JT}type S = { a: u256; t: T };
+    class C {
       mut(s: S): u256 { s.t.n = 9n; return s.a; }
       mk(x: T): S { return S(1n, x); }
-      @external @pure viaArg(): u256 { let t: T = T(5n, "x"); this.mut(S(1n, t)); return t.n; }
-      @external @pure viaRet(): u256 { let t: T = T(5n, "x"); let s: S = this.mk(t); t.n = 9n; return s.t.n; } }`;
+      get viaArg(): External<u256> { let t: T = T(5n, "x"); this.mut(S(1n, t)); return t.n; }
+      get viaRet(): External<u256> { let t: T = T(5n, "x"); let s: S = this.mk(t); t.n = 9n; return s.t.n; } }`;
     const S = `${ST}struct S { uint256 a; T t; }
     contract C {
       function mut(S memory s) internal pure returns (uint256) { s.t.n = 9; return s.a; }
@@ -125,15 +125,15 @@ describe('W6A: dyn-struct ctor field captures a memory reference (pointer, not c
   });
 
   it('2-level chain + nested-field-ref capture + storage/calldata sources stay copies', async () => {
-    const J = `${JT}@struct class S { a: u256; t: T }
-    @struct class U { s: S }
-    @struct class S2 { b: u256; s: S }
-    @contract class C {
-      @state st: T;
-      @external @pure chain(): u256 { let t: T = T(5n, "x"); let u: U = U(S(1n, t)); t.n = 9n; let a: u256 = u.s.t.n; u.s.t.n += 100n; return a * 1000n + t.n; }
-      @external @pure nref(): u256 { let u: U = U(S(1n, T(5n, "x"))); let w: S2 = S2(2n, u.s); u.s.a = 7n; return w.s.a; }
-      @external storSrc(): u256 { this.st = T(5n, "x"); let s: S = S(1n, this.st); this.st.n = 9n; return s.t.n; }
-      @external @pure cdSrc(t: T): u256 { let s: S = S(1n, t); s.t.n = 9n; return s.t.n + t.n; } }`;
+    const J = `${JT}type S = { a: u256; t: T };
+    type U = { s: S };
+    type S2 = { b: u256; s: S };
+    class C {
+      st: T;
+      get chain(): External<u256> { let t: T = T(5n, "x"); let u: U = U(S(1n, t)); t.n = 9n; let a: u256 = u.s.t.n; u.s.t.n += 100n; return a * 1000n + t.n; }
+      get nref(): External<u256> { let u: U = U(S(1n, T(5n, "x"))); let w: S2 = S2(2n, u.s); u.s.a = 7n; return w.s.a; }
+      storSrc(): External<u256> { this.st = T(5n, "x"); let s: S = S(1n, this.st); this.st.n = 9n; return s.t.n; }
+      get cdSrc(t: T): External<u256> { let s: S = S(1n, t); s.t.n = 9n; return s.t.n + t.n; } }`;
     const S = `${ST}struct S { uint256 a; T t; }
     struct U { S s; }
     struct S2 { uint256 b; S s; }
@@ -149,71 +149,71 @@ describe('W6A: dyn-struct ctor field captures a memory reference (pointer, not c
 });
 
 describe('W6A: static-inline captures REJECT cleanly (JETH465) instead of the old silent copy', () => {
-  const HDR = `@struct class T { n: u256 }
-  @struct class S { a: u256; t: T }\n`;
+  const HDR = `type T = { n: u256 };
+  type S = { a: u256; t: T };\n`;
   it('primary family: local bind / 2-level / double / abi.encode-of-local / storage round-trip', () => {
-    expect(codes(`${HDR}@contract class C { @external @pure f(): u256 { let t: T = T(5n); let s: S = S(1n, t); t.n = 9n; return s.t.n; } }`)).toContain('JETH465');
-    expect(codes(`@struct class I { n: u256 }
-    @struct class T2 { i: I }
-    @struct class S { t: T2 }
-    @contract class C { @external @pure f(): u256 { let i: I = I(5n); let s: S = S(T2(i)); i.n = 9n; return s.t.i.n; } }`)).toContain('JETH465');
-    expect(codes(`@struct class T { n: u256 }
-    @struct class S2 { x: T; y: T }
-    @contract class C { @external @pure f(): u256 { let t: T = T(5n); let s: S2 = S2(t, t); s.x.n = 7n; return s.y.n; } }`)).toContain('JETH465');
-    expect(codes(`${HDR}@contract class C { @external @pure f(): bytes { let t: T = T(5n); let s: S = S(1n, t); t.n = 9n; return abi.encode(s); } }`)).toContain('JETH465');
-    expect(codes(`${HDR}@contract class C { @state st: S; @external f(): u256 { let t: T = T(5n); let s: S = S(1n, t); t.n = 9n; this.st = s; return this.st.t.n; } }`)).toContain('JETH465');
+    expect(codes(`${HDR}class C { get f(): External<u256> { let t: T = T(5n); let s: S = S(1n, t); t.n = 9n; return s.t.n; } }`)).toContain('JETH465');
+    expect(codes(`type I = { n: u256 };
+    type T2 = { i: I };
+    type S = { t: T2 };
+    class C { get f(): External<u256> { let i: I = I(5n); let s: S = S(T2(i)); i.n = 9n; return s.t.i.n; } }`)).toContain('JETH465');
+    expect(codes(`type T = { n: u256 };
+    type S2 = { x: T; y: T };
+    class C { get f(): External<u256> { let t: T = T(5n); let s: S2 = S2(t, t); s.x.n = 7n; return s.y.n; } }`)).toContain('JETH465');
+    expect(codes(`${HDR}class C { get f(): External<bytes> { let t: T = T(5n); let s: S = S(1n, t); t.n = 9n; return abi.encode(s); } }`)).toContain('JETH465');
+    expect(codes(`${HDR}class C { st: S; f(): External<u256> { let t: T = T(5n); let s: S = S(1n, t); t.n = 9n; this.st = s; return this.st.t.n; } }`)).toContain('JETH465');
   });
   it('fixed-array captures: Arr<P,2> from [p,q] elements, Arr<u256,2> from a local', () => {
-    expect(codes(`@struct class P { a: u256 }
-    @struct class S { ps: Arr<P, 2>; z: u256 }
-    @contract class C { @external @pure f(): u256 { let p: P = P(5n); let q: P = P(6n); let s: S = S([p, q], 1n); p.a = 9n; return s.ps[0n].a; } }`)).toContain('JETH465');
-    expect(codes(`@struct class S { a: u256; xs: Arr<u256, 2> }
-    @contract class C { @external @pure f(): u256 { let xs: Arr<u256, 2> = [1n, 2n]; let s: S = S(1n, xs); xs[0n] = 9n; return s.xs[0n]; } }`)).toContain('JETH465');
+    expect(codes(`type P = { a: u256 };
+    type S = { ps: Arr<P, 2>; z: u256 };
+    class C { get f(): External<u256> { let p: P = P(5n); let q: P = P(6n); let s: S = S([p, q], 1n); p.a = 9n; return s.ps[0n].a; } }`)).toContain('JETH465');
+    expect(codes(`type S = { a: u256; xs: Arr<u256, 2> };
+    class C { get f(): External<u256> { let xs: Arr<u256, 2> = [1n, 2n]; let s: S = S(1n, xs); xs[0n] = 9n; return s.xs[0n]; } }`)).toContain('JETH465');
   });
   it('call-result source, ctor-as-internal-arg, capture inside a transient encode arg', () => {
-    expect(codes(`${HDR}@contract class C {
+    expect(codes(`${HDR}class C {
       id(x: T): T { return x; }
-      @external @pure f(): u256 { let t: T = T(5n); let s: S = S(1n, this.id(t)); t.n = 9n; return s.t.n; } }`)).toContain('JETH465');
-    expect(codes(`${HDR}@contract class C {
+      get f(): External<u256> { let t: T = T(5n); let s: S = S(1n, this.id(t)); t.n = 9n; return s.t.n; } }`)).toContain('JETH465');
+    expect(codes(`${HDR}class C {
       mut(s: S): u256 { s.t.n = 9n; return s.a; }
-      @external @pure f(): u256 { let t: T = T(5n); this.mut(S(1n, t)); return t.n; } }`)).toContain('JETH465');
-    expect(codes(`${HDR}@contract class C {
+      get f(): External<u256> { let t: T = T(5n); this.mut(S(1n, t)); return t.n; } }`)).toContain('JETH465');
+    expect(codes(`${HDR}class C {
       mut(s: S): u256 { s.t.n = 9n; return s.a; }
-      @external @pure f(): bytes { let t: T = T(5n); return abi.encode(this.mut(S(1n, t))); } }`)).toContain('JETH465');
+      get f(): External<bytes> { let t: T = T(5n); return abi.encode(this.mut(S(1n, t))); } }`)).toContain('JETH465');
   });
   it('ref capture + side-effecting sibling arg rejects (order hazard); unstable dyn sources reject', () => {
-    expect(codes(`@struct class T { n: u256; s: string }
-    @struct class S2 { t: T; x: u256 }
-    @contract class C {
+    expect(codes(`type T = { n: u256; s: string };
+    type S2 = { t: T; x: u256 };
+    class C {
       bump(t: T): u256 { t.n = 77n; return 3n; }
-      @external @pure f(): S2 { let t: T = T(5n, "x"); return S2(t, this.bump(t)); } }`)).toContain('JETH465');
-    expect(codes(`@struct class T { n: u256; s: string }
-    @struct class S { a: u256; t: T }
-    @contract class C { @external @pure f(): u256 {
+      get f(): External<S2> { let t: T = T(5n, "x"); return S2(t, this.bump(t)); } }`)).toContain('JETH465');
+    expect(codes(`type T = { n: u256; s: string };
+    type S = { a: u256; t: T };
+    class C { get f(): External<u256> {
       let xs: T[] = [T(5n, "x")]; let s: S = S(1n, xs[0n]); return s.t.n; } }`)).toContain('JETH465');
-    expect(codes(`@struct class T { n: u256; s: string }
-    @struct class S { a: u256; t: T }
-    @contract class C {
+    expect(codes(`type T = { n: u256; s: string };
+    type S = { a: u256; t: T };
+    class C {
       mk(): T { return T(5n, "x"); }
-      @external @pure f(): u256 { let s: S = S(1n, this.mk()); return s.t.n; } }`)).toContain('JETH465');
+      get f(): External<u256> { let s: S = S(1n, this.mk()); return s.t.n; } }`)).toContain('JETH465');
   });
 });
 
 describe('W6A: transient static captures stay accepted byte-identical (no regression)', () => {
   it('immediate return / abi.encode / direct storage write / emit / error / tuple / push', async () => {
-    const J = `@struct class T { n: u256 }
-    @struct class S { a: u256; t: T }
-    @contract class C {
-      @state st: S; @state arr: S[];
-      @event E(s: S);
-      @error MyErr(s: S);
-      @external @pure ret(): S { let t: T = T(5n); return S(1n, t); }
-      @external @pure enc(): bytes { let t: T = T(5n); return abi.encode(S(1n, t)); }
-      @external stor(): u256 { let t: T = T(5n); this.st = S(1n, t); t.n = 9n; return this.st.t.n; }
-      @external emitE(): u256 { let t: T = T(5n); emit(E(S(1n, t))); return 1n; }
-      @external @pure err(): u256 { let t: T = T(5n); revert(MyErr(S(1n, t))); }
-      @external @pure tup(): [S, u256] { let t: T = T(5n); return [S(1n, t), 7n]; }
-      @external psh(): u256 { let t: T = T(5n); t.n = 9n; this.arr.push(S(1n, t)); return this.arr[0n].t.n; } }`;
+    const J = `type T = { n: u256 };
+    type S = { a: u256; t: T };
+    class C {
+      st: S; arr: S[];
+      E: event<{ s: S }>;
+      MyErr: error<{ s: S }>;
+      get ret(): External<S> { let t: T = T(5n); return S(1n, t); }
+      get enc(): External<bytes> { let t: T = T(5n); return abi.encode(S(1n, t)); }
+      stor(): External<u256> { let t: T = T(5n); this.st = S(1n, t); t.n = 9n; return this.st.t.n; }
+      emitE(): External<u256> { let t: T = T(5n); emit(E(S(1n, t))); return 1n; }
+      get err(): External<u256> { let t: T = T(5n); revert(MyErr(S(1n, t))); }
+      get tup(): External<[S, u256]> { let t: T = T(5n); return [S(1n, t), 7n]; }
+      psh(): External<u256> { let t: T = T(5n); t.n = 9n; this.arr.push(S(1n, t)); return this.arr[0n].t.n; } }`;
     const S = `struct T { uint256 n; }
     struct S { uint256 a; T t; }
     contract C {
@@ -231,14 +231,14 @@ describe('W6A: transient static captures stay accepted byte-identical (no regres
   });
 
   it('adjacent aliasing shapes unregressed: alias local, element store, array literal, z = m.i', async () => {
-    const J = `@struct class T { n: u256 }
-    @struct class I { xs: u256[] }
-    @struct class M { i: I }
-    @contract class C {
-      @external @pure alias(): u256 { let t: T = T(5n); let u: T = t; t.n = 9n; return u.n; }
-      @external @pure elem(): u256 { let t: T = T(5n); let xs: T[] = new Array<T>(1n); xs[0n] = t; t.n = 9n; return xs[0n].n; }
-      @external @pure lit(): u256 { let t: T = T(5n); let xs: T[] = [t]; t.n = 9n; return xs[0n].n; }
-      @external @pure fld(): u256 { let m: M = M(I(new Array<u256>(1n))); let z: I = m.i; z.xs[0n] = 7n; return m.i.xs[0n]; } }`;
+    const J = `type T = { n: u256 };
+    type I = { xs: u256[] };
+    type M = { i: I };
+    class C {
+      get alias(): External<u256> { let t: T = T(5n); let u: T = t; t.n = 9n; return u.n; }
+      get elem(): External<u256> { let t: T = T(5n); let xs: T[] = new Array<T>(1n); xs[0n] = t; t.n = 9n; return xs[0n].n; }
+      get lit(): External<u256> { let t: T = T(5n); let xs: T[] = [t]; t.n = 9n; return xs[0n].n; }
+      get fld(): External<u256> { let m: M = M(I(new Array<u256>(1n))); let z: I = m.i; z.xs[0n] = 7n; return m.i.xs[0n]; } }`;
     const S = `struct T { uint256 n; }
     struct I { uint256[] xs; }
     struct M { I i; }

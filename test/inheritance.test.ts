@@ -59,42 +59,42 @@ async function bothDeployRevert(J: string, S: string, argsHex = '') {
 describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   it('single inheritance: merged state + inherited fn + override winner + base ctor', () =>
     same(
-      `@abstract class A { @state x: u256; @external getX(): u256 { return this.x; } @virtual @external bump(): void { this.x = this.x + 1n; } constructor(){ this.x = 100n; } } @contract class C extends A { @state y: u256; @override @external bump(): void { this.x = this.x + 10n; } @external setY(v: u256): void { this.y = v; } }`,
+      `abstract class A { x: u256; get getX(): External<u256> { return this.x; } @virtual bump(): External<void> { this.x = this.x + 1n; } constructor(){ this.x = 100n; } } class C extends A { y: u256; @override bump(): External<void> { this.x = this.x + 10n; } setY(v: u256): External<void> { this.y = v; } }`,
       `abstract contract A { uint256 x; function getX() external returns(uint256){ return x; } function bump() external virtual { x=x+1; } constructor(){ x=100; } } contract C is A { uint256 y; function bump() external override { x=x+10; } function setY(uint256 v) external { y=v; } }`,
       [{ sig: 'getX()' }, { sig: 'bump()' }, { sig: 'getX()' }, { sig: 'setY(uint256)', arg: pad32(7n) }], 2));
 
   it('super walks a 3-level chain inner-to-outer (-> 321)', () =>
     same(
-      `@abstract class A { @state log: u256; @virtual f(): void { this.log = this.log * 10n + 1n; } } @abstract class B extends A { @virtual @override f(): void { this.log = this.log * 10n + 2n; super.f(); } } @contract class C extends B { @override f(): void { this.log = this.log * 10n + 3n; super.f(); } @external run(): void { this.f(); } }`,
+      `abstract class A { log: u256; @virtual f(): void { this.log = this.log * 10n + 1n; } } abstract class B extends A { @virtual @override f(): void { this.log = this.log * 10n + 2n; super.f(); } } class C extends B { @override f(): void { this.log = this.log * 10n + 3n; super.f(); } run(): External<void> { this.f(); } }`,
       `abstract contract A { uint256 log; function f() internal virtual { log=log*10+1; } } abstract contract B is A { function f() internal virtual override { log=log*10+2; super.f(); } } contract C is B { function f() internal override { log=log*10+3; super.f(); } function run() external { f(); } }`,
       [{ sig: 'run()' }], 1));
 
   it('diamond: C extends B, K resolves super to K (C3 [C,K,B,A] -> 3)', () =>
     same(
-      `@abstract class A { @state n: u256; @virtual f(): u256 { return 1n; } } @abstract class B extends A { @virtual @override f(): u256 { return 2n; } } @abstract class K extends A { @virtual @override f(): u256 { return 3n; } } @contract class C extends B, K { @override(B, K) f(): u256 { return super.f(); } @external get(): u256 { return this.f(); } }`,
+      `abstract class A { n: u256; @virtual f(): u256 { return 1n; } } abstract class B extends A { @virtual @override f(): u256 { return 2n; } } abstract class K extends A { @virtual @override f(): u256 { return 3n; } } class C extends B, K { @override(B, K) f(): u256 { return super.f(); } get get(): External<u256> { return this.f(); } }`,
       `abstract contract A { uint256 n; function f() internal virtual returns(uint256){ return 1; } } abstract contract B is A { function f() internal virtual override returns(uint256){ return 2; } } abstract contract K is A { function f() internal virtual override returns(uint256){ return 3; } } contract C is B, K { function f() internal override(B,K) returns(uint256){ return super.f(); } function get() external returns(uint256){ return f(); } }`,
       [{ sig: 'get()' }], 1));
 
   it('diamond: C extends K, B resolves super to B (C3 [C,B,K,A] -> 2)', () =>
     same(
-      `@abstract class A { @state n: u256; @virtual f(): u256 { return 1n; } } @abstract class B extends A { @virtual @override f(): u256 { return 2n; } } @abstract class K extends A { @virtual @override f(): u256 { return 3n; } } @contract class C extends K, B { @override(K, B) f(): u256 { return super.f(); } @external get(): u256 { return this.f(); } }`,
+      `abstract class A { n: u256; @virtual f(): u256 { return 1n; } } abstract class B extends A { @virtual @override f(): u256 { return 2n; } } abstract class K extends A { @virtual @override f(): u256 { return 3n; } } class C extends K, B { @override(K, B) f(): u256 { return super.f(); } get get(): External<u256> { return this.f(); } }`,
       `abstract contract A { uint256 n; function f() internal virtual returns(uint256){ return 1; } } abstract contract B is A { function f() internal virtual override returns(uint256){ return 2; } } abstract contract K is A { function f() internal virtual override returns(uint256){ return 3; } } contract C is K, B { function f() internal override(K,B) returns(uint256){ return super.f(); } function get() external returns(uint256){ return f(); } }`,
       [{ sig: 'get()' }], 1));
 
   it('diamond storage layout is most-base-first [C,K,B,A] with packing across the boundary', () =>
     same(
-      `@abstract class A { @state a1: u128; } @abstract class B extends A { @state b1: u128; @state b2: u256; } @abstract class K extends A { @state k1: u256; } @contract class C extends B, K { @state d1: u256; @external setall(p: u256): void { this.a1 = u128(p); this.b1 = u128(p + 1n); this.b2 = p + 2n; this.k1 = p + 3n; this.d1 = p + 4n; } }`,
+      `abstract class A { a1: u128; } abstract class B extends A { b1: u128; b2: u256; } abstract class K extends A { k1: u256; } class C extends B, K { d1: u256; setall(p: u256): External<void> { this.a1 = u128(p); this.b1 = u128(p + 1n); this.b2 = p + 2n; this.k1 = p + 3n; this.d1 = p + 4n; } }`,
       `abstract contract A { uint128 a1; } abstract contract B is A { uint128 b1; uint256 b2; } abstract contract K is A { uint256 k1; } contract C is B, K { uint256 d1; function setall(uint256 p) external { a1=uint128(p); b1=uint128(p+1); b2=p+2; k1=p+3; d1=p+4; } }`,
       [{ sig: 'setall(uint256)', arg: pad32(50n) }], 5));
 
   it('no-arg base constructor chain runs most-base-first (Ownable pattern)', () =>
     same(
-      `@abstract class Own { @state owner: address; constructor(){ this.owner = msg.sender; } @external @view getOwner(): address { return this.owner; } } @contract class C extends Own { @state n: u256; constructor(){ this.n = 42n; } }`,
+      `abstract class Own { owner: address; constructor(){ this.owner = msg.sender; } get getOwner(): External<address> { return this.owner; } } class C extends Own { n: u256; constructor(){ this.n = 42n; } }`,
       `abstract contract Own { address owner; constructor(){ owner = msg.sender; } function getOwner() external view returns(address){ return owner; } } contract C is Own { uint256 n; constructor(){ n=42; } }`,
       [{ sig: 'getOwner()' }], 2));
 
   it('an inherited @modifier guards a derived function', async () => {
-    const J = `@abstract class Own { @state owner: address; constructor(){ this.owner = msg.sender; } @modifier onlyOwner() { require(msg.sender == this.owner, "no"); _; } } @contract class C extends Own { @state n: u256; @external @onlyOwner setN(v: u256): void { this.n = v; } }`;
+    const J = `abstract class Own { owner: address; constructor(){ this.owner = msg.sender; } @modifier onlyOwner() { require(msg.sender == this.owner, "no"); _; } } class C extends Own { n: u256; @onlyOwner setN(v: u256): External<void> { this.n = v; } }`;
     const S = `abstract contract Own { address owner; constructor(){ owner=msg.sender; } modifier onlyOwner(){ require(msg.sender==owner,"no"); _; } } contract C is Own { uint256 n; function setN(uint256 v) external onlyOwner { n=v; } }`;
     await same(J, S, [{ sig: 'setN(uint256)', arg: pad32(5n) }], 2); // owner caller succeeds
     const j = await dJ(J), s = await dS(S);
@@ -108,41 +108,41 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   describe('accept/reject parity with solc', () => {
     const par = (J: string, S: string) => { expect(codes(J).length > 0).toBe(true); expect(solcRejects(S)).toBe(true); };
     it('override of a non-@virtual base -> both reject', () =>
-      par(`@abstract class A { @external f(): void {} } @contract class C extends A { @override @external f(): void {} }`, `abstract contract A { function f() external {} } contract C is A { function f() external override {} }`));
+      par(`abstract class A { f(): External<void> {} } class C extends A { @override f(): External<void> {} }`, `abstract contract A { function f() external {} } contract C is A { function f() external override {} }`));
     it('a redefinition missing @override -> both reject', () =>
-      par(`@abstract class A { @virtual @external f(): void {} } @contract class C extends A { @external f(): void {} }`, `abstract contract A { function f() external virtual {} } contract C is A { function f() external {} }`));
+      par(`abstract class A { @virtual f(): External<void> {} } class C extends A { f(): External<void> {} }`, `abstract contract A { function f() external virtual {} } contract C is A { function f() external {} }`));
     it('a same-name @state across the chain -> both reject', () =>
-      par(`@abstract class A { @state x: u256; } @contract class C extends A { @state x: u256; }`, `abstract contract A { uint256 x; } contract C is A { uint256 x; }`));
+      par(`abstract class A { x: u256; } class C extends A { x: u256; }`, `abstract contract A { uint256 x; } contract C is A { uint256 x; }`));
     it('a diamond override missing the @override(B,K) list -> both reject', () =>
-      par(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @abstract class B extends A { @virtual @override @external f(): u256 { return 2n; } } @abstract class K extends A { @virtual @override @external f(): u256 { return 3n; } } @contract class C extends B, K { @override @external f(): u256 { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract B is A { function f() external virtual override returns(uint256){return 2;} } abstract contract K is A { function f() external virtual override returns(uint256){return 3;} } contract C is B, K { function f() external override returns(uint256){return 9;} }`));
+      par(`abstract class A { @virtual get f(): External<u256> { return 1n; } } abstract class B extends A { @virtual @override get f(): External<u256> { return 2n; } } abstract class K extends A { @virtual @override get f(): External<u256> { return 3n; } } class C extends B, K { @override get f(): External<u256> { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract B is A { function f() external virtual override returns(uint256){return 2;} } abstract contract K is A { function f() external virtual override returns(uint256){return 3;} } contract C is B, K { function f() external override returns(uint256){return 9;} }`));
     it('a non-@abstract contract with an unimplemented @virtual -> both reject', () =>
-      par(`@abstract class A { @virtual @external f(): u256; } @contract class C extends A {}`, `abstract contract A { function f() external virtual returns(uint256); } contract C is A {}`));
+      par(`abstract class A { @virtual get f(): External<u256>; } class C extends A {}`, `abstract contract A { function f() external virtual returns(uint256); } contract C is A {}`));
     it('an override loosening mutability (view -> nonpayable) -> both reject', () =>
       // the derived genuinely WRITES state, so it is nonpayable and loosens the @view base (item #8 infers
       // the override's mutability from its body: a no-keyword override that merely returned a constant would
       // infer pure and legitimately TIGHTEN, so a real write is needed to exercise the loosening reject).
-      par(`@abstract class A { @state x: u256; @virtual @view @external f(): u256 { return this.x; } } @contract class C extends A { @override @external f(): u256 { this.x = this.x + 2n; return this.x; } }`, `abstract contract A { uint256 x; function f() external view virtual returns(uint256){return x;} } contract C is A { function f() external override returns(uint256){x=x+2; return x;} }`));
+      par(`abstract class A { x: u256; @virtual get f(): External<u256> { return this.x; } } class C extends A { @override f(): External<u256> { this.x = this.x + 2n; return this.x; } }`, `abstract contract A { uint256 x; function f() external view virtual returns(uint256){return x;} } contract C is A { function f() external override returns(uint256){x=x+2; return x;} }`));
     it('a C3-impossible base order (C is B, A where B is A) -> both reject', () =>
-      par(`@abstract class A {} @abstract class B extends A {} @contract class C extends B, A {}`, `abstract contract A {} abstract contract B is A {} contract C is B, A {}`));
+      par(`abstract class A {} abstract class B extends A {} class C extends B, A {}`, `abstract contract A {} abstract contract B is A {} contract C is B, A {}`));
     it('a diamond override WITH @override(B,K) -> both accept', () => {
-      expect(codes(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @abstract class B extends A { @virtual @override @external f(): u256 { return 2n; } } @abstract class K extends A { @virtual @override @external f(): u256 { return 3n; } } @contract class C extends B, K { @override(B, K) @external f(): u256 { return 9n; } }`)).toEqual([]);
+      expect(codes(`abstract class A { @virtual get f(): External<u256> { return 1n; } } abstract class B extends A { @virtual @override get f(): External<u256> { return 2n; } } abstract class K extends A { @virtual @override get f(): External<u256> { return 3n; } } class C extends B, K { @override(B, K) get f(): External<u256> { return 9n; } }`)).toEqual([]);
     });
     // JETH415 - @override LIST MEMBERSHIP: every name in @override(...) must be exactly a branch head (a
     // maximal sibling this winner directly overrides). solc: a non-head name -> "Invalid contract specified
     // in override list"; an undeclared name -> "Identifier not found or not unique"; a repeat -> "Duplicate
     // contract found in override list". JETH previously never validated the CONTENTS of the list.
     it('JETH415: @override(B) where B is not an overridden base -> both reject', () =>
-      par(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @abstract class B { @virtual @external g(): u256 { return 2n; } } @contract class C extends A { @override(B) @external f(): u256 { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract B { function g() external virtual returns(uint256){return 2;} } contract C is A { function f() external override(B) returns(uint256){return 9;} }`));
+      par(`abstract class A { @virtual get f(): External<u256> { return 1n; } } abstract class B { @virtual g(): External<u256> { return 2n; } } class C extends A { @override(B) get f(): External<u256> { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract B { function g() external virtual returns(uint256){return 2;} } contract C is A { function f() external override(B) returns(uint256){return 9;} }`));
     it('JETH415: @override(Z) with Z undeclared -> both reject', () =>
-      par(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @contract class C extends A { @override(Z) @external f(): u256 { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } contract C is A { function f() external override(Z) returns(uint256){return 9;} }`));
+      par(`abstract class A { @virtual get f(): External<u256> { return 1n; } } class C extends A { @override(Z) get f(): External<u256> { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } contract C is A { function f() external override(Z) returns(uint256){return 9;} }`));
     it('JETH415: @override(A, X) with a stray extra X on a real single base A -> both reject', () =>
-      par(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @abstract class X { @virtual @external h(): u256 { return 4n; } } @contract class C extends A { @override(A, X) @external f(): u256 { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract X { function h() external virtual returns(uint256){return 4;} } contract C is A { function f() external override(A,X) returns(uint256){return 9;} }`));
+      par(`abstract class A { @virtual get f(): External<u256> { return 1n; } } abstract class X { @virtual h(): External<u256> { return 4n; } } class C extends A { @override(A, X) get f(): External<u256> { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract X { function h() external virtual returns(uint256){return 4;} } contract C is A { function f() external override(A,X) returns(uint256){return 9;} }`));
     it('JETH415: @override(A) naming a NON-maximal shared root in a diamond -> both reject', () =>
-      par(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @abstract class B extends A { @virtual @override @external f(): u256 { return 2n; } } @abstract class K extends A { @virtual @override @external f(): u256 { return 3n; } } @contract class C extends B, K { @override(A) @external f(): u256 { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract B is A { function f() external virtual override returns(uint256){return 2;} } abstract contract K is A { function f() external virtual override returns(uint256){return 3;} } contract C is B, K { function f() external override(A) returns(uint256){return 9;} }`));
+      par(`abstract class A { @virtual get f(): External<u256> { return 1n; } } abstract class B extends A { @virtual @override get f(): External<u256> { return 2n; } } abstract class K extends A { @virtual @override get f(): External<u256> { return 3n; } } class C extends B, K { @override(A) get f(): External<u256> { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract B is A { function f() external virtual override returns(uint256){return 2;} } abstract contract K is A { function f() external virtual override returns(uint256){return 3;} } contract C is B, K { function f() external override(A) returns(uint256){return 9;} }`));
     it('JETH415: @override(B, B, K) with a duplicate name -> both reject', () =>
-      par(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @abstract class B extends A { @virtual @override @external f(): u256 { return 2n; } } @abstract class K extends A { @virtual @override @external f(): u256 { return 3n; } } @contract class C extends B, K { @override(B, B, K) @external f(): u256 { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract B is A { function f() external virtual override returns(uint256){return 2;} } abstract contract K is A { function f() external virtual override returns(uint256){return 3;} } contract C is B, K { function f() external override(B,B,K) returns(uint256){return 9;} }`));
+      par(`abstract class A { @virtual get f(): External<u256> { return 1n; } } abstract class B extends A { @virtual @override get f(): External<u256> { return 2n; } } abstract class K extends A { @virtual @override get f(): External<u256> { return 3n; } } class C extends B, K { @override(B, B, K) get f(): External<u256> { return 9n; } }`, `abstract contract A { function f() external virtual returns(uint256){return 1;} } abstract contract B is A { function f() external virtual override returns(uint256){return 2;} } abstract contract K is A { function f() external virtual override returns(uint256){return 3;} } contract C is B, K { function f() external override(B,B,K) returns(uint256){return 9;} }`));
     it('JETH415 control: @override(A) naming the single valid base -> both accept', () => {
-      expect(codes(`@abstract class A { @virtual @external f(): u256 { return 1n; } } @contract class C extends A { @override(A) @external f(): u256 { return 9n; } }`)).toEqual([]);
+      expect(codes(`abstract class A { @virtual get f(): External<u256> { return 1n; } } class C extends A { @override(A) get f(): External<u256> { return 9n; } }`)).toEqual([]);
       expect(solcRejects(`abstract contract A { function f() external virtual returns(uint256){return 1;} } contract C is A { function f() external override(A) returns(uint256){return 9;} }`)).toBe(false);
     });
     // Completeness across an UN-overridden sibling path (the heads fix). A defines virtual f, B extends A
@@ -151,13 +151,13 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     // overridden" heads filter dropped A (hidden behind K on the other path) -> an incomplete list was
     // over-accepted, and once JETH415 membership was enforced the valid @override(A, K) was over-rejected.
     it('diamond completeness via an un-overridden sibling: incomplete rejects, @override(A,K) accepts', () => {
-      const A = `@abstract class A { @virtual @external f(): u256 { return 1n; } }`;
-      const B = `@abstract class B extends A { @external gg(): u256 { return 0n; } }`;
-      const K = `@abstract class K extends A { @virtual @override @external f(): u256 { return 3n; } }`;
+      const A = `abstract class A { @virtual get f(): External<u256> { return 1n; } }`;
+      const B = `abstract class B extends A { get gg(): External<u256> { return 0n; } }`;
+      const K = `abstract class K extends A { @virtual @override get f(): External<u256> { return 3n; } }`;
       const sA = `abstract contract A { function f() external virtual returns(uint256){return 1;} }`;
       const sB = `abstract contract B is A { function gg() external returns(uint256){return 0;} }`;
       const sK = `abstract contract K is A { function f() external virtual override returns(uint256){return 3;} }`;
-      const C = (l: string) => `${A} ${B} ${K} @contract class C extends B, K { @override${l} @external f(): u256 { return 9n; } }`;
+      const C = (l: string) => `${A} ${B} ${K} class C extends B, K { @override${l} get f(): External<u256> { return 9n; } }`;
       const sC = (l: string) => `${sA} ${sB} ${sK} contract C is B, K { function f() external override${l} returns(uint256){return 9;} }`;
       par(C('(K)'), sC('(K)')); // needs A too
       par(C(''), sC('')); // bare, needs A and K
@@ -172,7 +172,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     // omitting I was over-accepted, and the valid @override(B, I) was over-rejected (JETH415).
     it('interface + base-contract override heads: incomplete/bare reject, @override(B,I) accepts', () => {
       const j = (l: string) =>
-        `@interface class I { @external g(): u256; } @abstract class B { @virtual @external g(): u256 { return 1n; } @virtual @external f(): u256 { return 2n; } } @contract class C extends B, I { @override${l} @external g(): u256 { return 30n; } @override @external f(): u256 { return 20n; } }`;
+        `interface I { g(): u256; } abstract class B { @virtual get g(): External<u256> { return 1n; } @virtual get f(): External<u256> { return 2n; } } class C extends B, I { @override${l} get g(): External<u256> { return 30n; } @override get f(): External<u256> { return 20n; } }`;
       const s = (l: string) =>
         `interface I { function g() external returns(uint256); } abstract contract B { function g() external virtual returns(uint256){ return 1; } function f() external virtual returns(uint256){ return 2; } } contract C is B, I { function g() external override${l} returns(uint256){ return 30; } function f() external override returns(uint256){ return 20; } }`;
       par(j('(B)'), s('(B)')); // omits I
@@ -184,7 +184,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     });
     it('interface + base-contract override(B,I): g()=30 / f()=20 byte-identical to solc', async () => {
       await same(
-        `@interface class I { @external g(): u256; } @abstract class B { @virtual @external g(): u256 { return 1n; } @virtual @external f(): u256 { return 2n; } } @contract class C extends B, I { @override(B, I) @external g(): u256 { return 30n; } @override @external f(): u256 { return 20n; } }`,
+        `interface I { g(): u256; } abstract class B { @virtual get g(): External<u256> { return 1n; } @virtual get f(): External<u256> { return 2n; } } class C extends B, I { @override(B, I) get g(): External<u256> { return 30n; } @override get f(): External<u256> { return 20n; } }`,
         `interface I { function g() external returns(uint256); } abstract contract B { function g() external virtual returns(uint256){ return 1; } function f() external virtual returns(uint256){ return 2; } } contract C is B, I { function g() external override(B,I) returns(uint256){ return 30; } function f() external override returns(uint256){ return 20; } }`,
         [{ sig: 'g()' }, { sig: 'f()' }],
         1,
@@ -196,7 +196,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     // named in the list is "Invalid contract specified".
     it('two-interface override heads (no base contract): @override(I,J) required, single head not', () => {
       const j2 = (l: string) =>
-        `@interface class I { @external g(): u256; } @interface class J { @external g(): u256; } @contract class C extends I, J { @override${l} @external g(): u256 { return 7n; } }`;
+        `interface I { g(): u256; } interface J { g(): u256; } class C extends I, J { @override${l} get g(): External<u256> { return 7n; } }`;
       const s2 = (l: string) =>
         `interface I { function g() external returns(uint256); } interface J { function g() external returns(uint256); } contract C is I, J { function g() external override${l} returns(uint256){ return 7; } }`;
       par(j2(''), s2('')); // bare, needs I and J
@@ -217,29 +217,29 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     });
     // ---- base-constructor-argument accept/reject parity ----
     it('a heritage base-arg referencing a ctor parameter -> both reject (state/params not in scope)', () =>
-      par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(p + 1n) { constructor(p: u256){} }`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(p+1) { constructor(uint256 p){} }`));
+      par(`abstract class A { x: u256; constructor(v: u256){ this.x = v; } } class C extends A(p + 1n) { constructor(p: u256){} }`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(p+1) { constructor(uint256 p){} }`));
     it('a heritage base-arg reading contract state -> both reject (state not yet initialized)', () =>
-      par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(this.x) { constructor(){} }`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(x) { constructor(){} }`));
+      par(`abstract class A { x: u256; constructor(v: u256){ this.x = v; } } class C extends A(this.x) { constructor(){} }`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(x) { constructor(){} }`));
     it('a missing required base-ctor arg on a concrete derived -> both reject', () =>
-      par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A {}`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A {}`));
+      par(`abstract class A { x: u256; constructor(v: u256){ this.x = v; } } class C extends A {}`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A {}`));
     it('args given to a no-parameter base ctor -> both reject', () =>
-      par(`@abstract class A { @state x: u256; constructor(){ this.x = 1n; } } @contract class C extends A(7n) {}`, `abstract contract A { uint256 x; constructor(){ x=1; } } contract C is A(7) {}`));
+      par(`abstract class A { x: u256; constructor(){ this.x = 1n; } } class C extends A(7n) {}`, `abstract contract A { uint256 x; constructor(){ x=1; } } contract C is A(7) {}`));
     it('a base-ctor arg count mismatch -> both reject', () =>
-      par(`@abstract class A { @state x: u256; constructor(a: u256, b: u256){ this.x = a + b; } } @contract class C extends A(7n) {}`, `abstract contract A { uint256 x; constructor(uint256 a, uint256 b){ x=a+b; } } contract C is A(7) {}`));
+      par(`abstract class A { x: u256; constructor(a: u256, b: u256){ this.x = a + b; } } class C extends A(7n) {}`, `abstract contract A { uint256 x; constructor(uint256 a, uint256 b){ x=a+b; } } contract C is A(7) {}`));
     it('a diamond shared base given args by BOTH branches -> both reject (given twice)', () =>
-      par(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @abstract class B extends A(1n) {} @abstract class K extends A(2n) {} @contract class C extends B, K {}`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } abstract contract B is A(1) {} abstract contract K is A(2) {} contract C is B, K {}`));
+      par(`abstract class A { x: u256; constructor(v: u256){ this.x = v; } } abstract class B extends A(1n) {} abstract class K extends A(2n) {} class C extends B, K {}`, `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } abstract contract B is A(1) {} abstract contract K is A(2) {} contract C is B, K {}`));
     it('a valid heritage base-arg (constant) -> both accept', () => {
-      expect(codes(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A(7n) {}`)).toEqual([]);
+      expect(codes(`abstract class A { x: u256; constructor(v: u256){ this.x = v; } } class C extends A(7n) {}`)).toEqual([]);
       expect(solcRejects(`abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A(7) {}`)).toBe(false);
     });
     it('modifier-style base args (`constructor() A(7)`) stay gated (JETH379; clean over-rejection)', () => {
       // solc accepts modifier-style base init; JETH gates it (ambiguous with a real @modifier application).
-      expect(codes(`@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } } @contract class C extends A { @A(7n) constructor(){} }`)).toContain('JETH379');
+      expect(codes(`abstract class A { x: u256; constructor(v: u256){ this.x = v; } } class C extends A { @A(7n) constructor(){} }`)).toContain('JETH379');
       expect(solcRejects(`abstract contract A { uint256 x; constructor(uint256 v){ x=v; } } contract C is A { constructor() A(7) {} }`)).toBe(false);
     });
     it('a diamond where one provider gives two bases the SAME ctor-param name stays gated (JETH379)', () => {
       // both bases bound in the same provider block -> a flat-name-map collision; gated (never a miscompile).
-      expect(codes(`@abstract class A {} @abstract class B extends A { @state bv: u256; constructor(x: u256){ this.bv = x; } } @abstract class K extends A { @state kv: u256; constructor(x: u256){ this.kv = x; } } @contract class C extends B(1n), K(2n) {}`)).toContain('JETH379');
+      expect(codes(`abstract class A {} abstract class B extends A { bv: u256; constructor(x: u256){ this.bv = x; } } abstract class K extends A { kv: u256; constructor(x: u256){ this.kv = x; } } class C extends B(1n), K(2n) {}`)).toContain('JETH379');
       expect(solcRejects(`abstract contract A {} abstract contract B is A { uint256 bv; constructor(uint256 x){ bv=x; } } abstract contract K is A { uint256 kv; constructor(uint256 x){ kv=x; } } contract C is B(1), K(2) {}`)).toBe(false);
     });
   });
@@ -248,49 +248,49 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   describe('base-constructor arguments (heritage call-form)', () => {
     it('single chain `extends A(7)`: A ctor sets state from its arg', () =>
       same(
-        `@abstract class A { @state x: u256; constructor(v: u256){ this.x = v; } @external @view gx(): u256 { return this.x; } } @contract class C extends A(7n) { @state y: u256; constructor(){ this.y = 3n; } }`,
+        `abstract class A { x: u256; constructor(v: u256){ this.x = v; } get gx(): External<u256> { return this.x; } } class C extends A(7n) { y: u256; constructor(){ this.y = 3n; } }`,
         `abstract contract A { uint256 x; constructor(uint256 v){ x=v; } function gx() external view returns(uint256){return x;} } contract C is A(7) { uint256 y; constructor(){ y=3; } }`,
         [{ sig: 'gx()' }], 2));
 
     it('deep chain with a constant base arg at each level + a deployed deploy-arg', () =>
       same(
-        `@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @abstract class B extends A(11n) { @state b: u256; constructor(w: u256){ this.b = w; } } @contract class C extends B(22n) { @state c: u256; constructor(p: u256){ this.c = p; } }`,
+        `abstract class A { a: u256; constructor(v: u256){ this.a = v; } } abstract class B extends A(11n) { b: u256; constructor(w: u256){ this.b = w; } } class C extends B(22n) { c: u256; constructor(p: u256){ this.c = p; } }`,
         `abstract contract A { uint256 a; constructor(uint256 v){ a=v; } } abstract contract B is A(11) { uint256 b; constructor(uint256 w){ b=w; } } contract C is B(22) { uint256 c; constructor(uint256 p){ c=p; } }`,
         [], 3, pad32(99n)));
 
     it('SIDE-EFFECT ORDER: ctor bodies run most-base-first (accumulator A,B,C => 123)', () =>
       same(
-        `@abstract class A { @state log: u256; constructor(v: u256){ this.log = this.log * 10n + 1n; } } @abstract class B extends A(0n) { constructor(w: u256){ this.log = this.log * 10n + 2n; } } @contract class C extends B(0n) { constructor(){ this.log = this.log * 10n + 3n; } }`,
+        `abstract class A { log: u256; constructor(v: u256){ this.log = this.log * 10n + 1n; } } abstract class B extends A(0n) { constructor(w: u256){ this.log = this.log * 10n + 2n; } } class C extends B(0n) { constructor(){ this.log = this.log * 10n + 3n; } }`,
         `abstract contract A { uint256 log; constructor(uint256 v){ log=log*10+1; } } abstract contract B is A(0) { constructor(uint256 w){ log=log*10+2; } } contract C is B(0) { constructor(){ log=log*10+3; } }`,
         [], 1));
 
     it('arg VALUES route to the correct base param at each level', () =>
       same(
-        `@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @abstract class B extends A(5n) { @state b: u256; constructor(w: u256){ this.b = w; } } @contract class C extends B(6n) { @state c: u256; constructor(){ this.c = 7n; } }`,
+        `abstract class A { a: u256; constructor(v: u256){ this.a = v; } } abstract class B extends A(5n) { b: u256; constructor(w: u256){ this.b = w; } } class C extends B(6n) { c: u256; constructor(){ this.c = 7n; } }`,
         `abstract contract A { uint256 a; constructor(uint256 v){ a=v; } } abstract contract B is A(5) { uint256 b; constructor(uint256 w){ b=w; } } contract C is B(6) { uint256 c; constructor(){ c=7; } }`,
         [], 3));
 
     it('Ownable(msg.sender, 999) base + a base @immutable set from a base ctor arg', () =>
       same(
-        `@abstract class Owned { @state owner: address; @immutable cap: u256; constructor(o: address, m: u256){ this.owner = o; this.cap = m; } @external @view getOwner(): address { return this.owner; } @external @view getCap(): u256 { return this.cap; } } @contract class C extends Owned(msg.sender, 999n) { @state n: u256; constructor(){ this.n = 1n; } }`,
+        `abstract class Owned { owner: address; static cap: u256; constructor(o: address, m: u256){ this.owner = o; this.cap = m; } get getOwner(): External<address> { return this.owner; } get getCap(): External<u256> { return this.cap; } } class C extends Owned(msg.sender, 999n) { n: u256; constructor(){ this.n = 1n; } }`,
         `abstract contract Owned { address owner; uint256 immutable cap; constructor(address o, uint256 m){ owner=o; cap=m; } function getOwner() external view returns(address){return owner;} function getCap() external view returns(uint256){return cap;} } contract C is Owned(msg.sender, 999) { uint256 n; constructor(){ n=1; } }`,
         [{ sig: 'getOwner()' }, { sig: 'getCap()' }], 1));
 
     it('a deployed ctor param used in the body, base initialized via a heritage constant', () =>
       same(
-        `@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @contract class C extends A(100n) { @state c: u256; constructor(p: u256){ this.c = p + 1n; } }`,
+        `abstract class A { a: u256; constructor(v: u256){ this.a = v; } } class C extends A(100n) { c: u256; constructor(p: u256){ this.c = p + 1n; } }`,
         `abstract contract A { uint256 a; constructor(uint256 v){ a=v; } } contract C is A(100) { uint256 c; constructor(uint256 p){ c=p+1; } }`,
         [], 2, pad32(41n)));
 
     it('diamond: only one branch gives the shared base args, the other is bare', () =>
       same(
-        `@abstract class A { @state av: u256; constructor(p: u256){ this.av = p; } } @abstract class B extends A(1n) { @state bv: u256; constructor(q: u256){ this.bv = q; } } @abstract class K extends A { @state kv: u256; constructor(r: u256){ this.kv = r; } } @contract class C extends B(7n), K(8n) { @state cv: u256; constructor(){ this.cv = 9n; } }`,
+        `abstract class A { av: u256; constructor(p: u256){ this.av = p; } } abstract class B extends A(1n) { bv: u256; constructor(q: u256){ this.bv = q; } } abstract class K extends A { kv: u256; constructor(r: u256){ this.kv = r; } } class C extends B(7n), K(8n) { cv: u256; constructor(){ this.cv = 9n; } }`,
         `abstract contract A { uint256 av; constructor(uint256 p){ av=p; } } abstract contract B is A(1) { uint256 bv; constructor(uint256 q){ bv=q; } } abstract contract K is A { uint256 kv; constructor(uint256 r){ kv=r; } } contract C is B(7), K(8) { uint256 cv; constructor(){ cv=9; } }`,
         [], 4));
 
     it('diamond: the shared base args supplied by the deployed (listed first)', () =>
       same(
-        `@abstract class A { @state av: u256; constructor(p: u256){ this.av = p; } } @abstract class B extends A { @state bv: u256; constructor(){ this.bv = 2n; } } @abstract class K extends A { @state kv: u256; constructor(){ this.kv = 3n; } } @contract class C extends A(55n), B, K { @state cv: u256; constructor(){ this.cv = 4n; } }`,
+        `abstract class A { av: u256; constructor(p: u256){ this.av = p; } } abstract class B extends A { bv: u256; constructor(){ this.bv = 2n; } } abstract class K extends A { kv: u256; constructor(){ this.kv = 3n; } } class C extends A(55n), B, K { cv: u256; constructor(){ this.cv = 4n; } }`,
         `abstract contract A { uint256 av; constructor(uint256 p){ av=p; } } abstract contract B is A { uint256 bv; constructor(){ bv=2; } } abstract contract K is A { uint256 kv; constructor(){ kv=3; } } contract C is A(55), B, K { uint256 cv; constructor(){ cv=4; } }`,
         [], 4));
   });
@@ -307,23 +307,23 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   describe('super(args) parameter-dependent base-constructor arguments (modifier form)', () => {
     it('TARGET super(s*2): getCap() == 2*s, byte-identical to solc modifier form', () =>
       same(
-        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor(s: u256) { super(s * 2n); } @external @view getCap(): u256 { return this.cap; } }`,
+        `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { constructor(s: u256) { super(s * 2n); } get getCap(): External<u256> { return this.cap; } }`,
         `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor(uint256 s) Token(s*2){} function getCap() external view returns(uint256){ return cap; } }`,
         [{ sig: 'getCap()' }], 1, pad32(21n)));
 
     it('super(5n) constant == the heritage extends Token(5n) form', () =>
       same(
-        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() { super(5n); } @external @view g(): u256 { return this.cap; } }`,
+        `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { constructor() { super(5n); } get g(): External<u256> { return this.cap; } }`,
         `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor() Token(5){} function g() external view returns(uint256){ return cap; } }`,
         [{ sig: 'g()' }], 1));
 
     it('super(5n) produces byte-identical creation bytecode to `extends Token(5n)`', () => {
       const bySuper = compile(
-        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() { super(5n); } @external @view g(): u256 { return this.cap; } }`,
+        `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { constructor() { super(5n); } get g(): External<u256> { return this.cap; } }`,
         { fileName: 'C.jeth' },
       ).creationBytecode;
       const byHeritage = compile(
-        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token(5n) { @external @view g(): u256 { return this.cap; } }`,
+        `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token(5n) { get g(): External<u256> { return this.cap; } }`,
         { fileName: 'C.jeth' },
       ).creationBytecode;
       expect(bySuper).toBe(byHeritage);
@@ -331,42 +331,42 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
 
     it('super(a+b) references multiple ctor params', () =>
       same(
-        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor(a: u256, b: u256) { super(a + b); } @external @view g(): u256 { return this.cap; } }`,
+        `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { constructor(a: u256, b: u256) { super(a + b); } get g(): External<u256> { return this.cap; } }`,
         `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor(uint256 a, uint256 b) Token(a+b){} function g() external view returns(uint256){ return cap; } }`,
         [{ sig: 'g()' }], 1, pad32(10n) + pad32(7n)));
 
     it('super(msg.sender) address argument', () =>
       same(
-        `@abstract class Own { @state o: address; constructor(x: address){ this.o = x; } } @contract class C extends Own { constructor() { super(msg.sender); } @external @view getO(): address { return this.o; } }`,
+        `abstract class Own { o: address; constructor(x: address){ this.o = x; } } class C extends Own { constructor() { super(msg.sender); } get getO(): External<address> { return this.o; } }`,
         `abstract contract Own { address o; constructor(address x){ o=x; } } contract C is Own { constructor() Own(msg.sender){} function getO() external view returns(address){ return o; } }`,
         [{ sig: 'getO()' }], 1));
 
     it('super(msg.sender, m): two base params, one a ctor param', () =>
       same(
-        `@abstract class Owned { @state owner: address; @state cap: u256; constructor(o: address, m: u256){ this.owner = o; this.cap = m; } } @contract class C extends Owned { constructor(m: u256) { super(msg.sender, m); } @external @view go(): address { return this.owner; } @external @view gc(): u256 { return this.cap; } }`,
+        `abstract class Owned { owner: address; cap: u256; constructor(o: address, m: u256){ this.owner = o; this.cap = m; } } class C extends Owned { constructor(m: u256) { super(msg.sender, m); } get go(): External<address> { return this.owner; } get gc(): External<u256> { return this.cap; } }`,
         `abstract contract Owned { address owner; uint256 cap; constructor(address o, uint256 m){ owner=o; cap=m; } } contract C is Owned { constructor(uint256 m) Owned(msg.sender, m){} function go() external view returns(address){ return owner; } function gc() external view returns(uint256){ return cap; } }`,
         [{ sig: 'go()' }, { sig: 'gc()' }], 2, pad32(999n)));
 
     it('super then derived-body statements run AFTER the base ctor (this.n = s)', () =>
       same(
-        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { @state n: u256; constructor(s: u256) { super(s * 2n); this.n = s; } @external @view gc(): u256 { return this.cap; } @external @view gn(): u256 { return this.n; } }`,
+        `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { n: u256; constructor(s: u256) { super(s * 2n); this.n = s; } get gc(): External<u256> { return this.cap; } get gn(): External<u256> { return this.n; } }`,
         `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { uint256 n; constructor(uint256 s) Token(s*2){ n = s; } function gc() external view returns(uint256){ return cap; } function gn() external view returns(uint256){ return n; } }`,
         [{ sig: 'gc()' }, { sig: 'gn()' }], 2, pad32(5n)));
 
     it('3-level chain: C super() to B, B initialized A via heritage', () =>
       same(
-        `@abstract class A { @state a: u256; constructor(v: u256){ this.a = v; } } @abstract class B extends A(11n) { @state b: u256; constructor(w: u256){ this.b = w; } } @contract class C extends B { constructor(p: u256) { super(p + 1n); } @external @view ga(): u256 { return this.a; } @external @view gb(): u256 { return this.b; } }`,
+        `abstract class A { a: u256; constructor(v: u256){ this.a = v; } } abstract class B extends A(11n) { b: u256; constructor(w: u256){ this.b = w; } } class C extends B { constructor(p: u256) { super(p + 1n); } get ga(): External<u256> { return this.a; } get gb(): External<u256> { return this.b; } }`,
         `abstract contract A { uint256 a; constructor(uint256 v){ a=v; } } abstract contract B is A(11) { uint256 b; constructor(uint256 w){ b=w; } } contract C is B { constructor(uint256 p) B(p+1){} function ga() external view returns(uint256){ return a; } function gb() external view returns(uint256){ return b; } }`,
         [{ sig: 'ga()' }, { sig: 'gb()' }], 2, pad32(40n)));
 
     it('super arg OVERFLOW (s*2 wraps u256) deploy-reverts on both', () =>
       bothDeployRevert(
-        `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor(s: u256) { super(s * 2n); } }`,
+        `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { constructor(s: u256) { super(s * 2n); } }`,
         `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor(uint256 s) Token(s*2){} }`,
         pad32(1n << 255n)));
 
     it('super(msg.value) in a @payable ctor routes the deploy value', async () => {
-      const J = `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { @payable constructor() { super(msg.value); } @external @view g(): u256 { return this.cap; } }`;
+      const J = `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { @payable constructor() { super(msg.value); } get g(): External<u256> { return this.cap; } }`;
       const S = `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor() payable Token(msg.value){} function g() external view returns(uint256){ return cap; } }`;
       const hj = await Harness.create();
       await hj.fund(me, 10n ** 20n);
@@ -388,33 +388,33 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       };
       it('super args given to a NO-param base -> both reject (wrong argument count)', () =>
         par(
-          `@abstract class Token { @state cap: u256; constructor(){ this.cap = 1n; } } @contract class C extends Token { constructor() { super(5n); } }`,
+          `abstract class Token { cap: u256; constructor(){ this.cap = 1n; } } class C extends Token { constructor() { super(5n); } }`,
           `abstract contract Token { uint256 cap; constructor(){ cap=1; } } contract C is Token { constructor() Token(5){} }`,
         ));
       it('super() AND heritage extends Token(1n) for the SAME base -> both reject (given twice)', () =>
         par(
-          `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token(1n) { constructor(s: u256) { super(s * 2n); } }`,
+          `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token(1n) { constructor(s: u256) { super(s * 2n); } }`,
           `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token(1) { constructor(uint256 s) Token(s*2){} }`,
         ));
       it('super arity mismatch (too few / too many) -> both reject', () => {
         par(
-          `@abstract class T { @state a: u256; @state b: u256; constructor(x: u256, y: u256){ this.a = x; this.b = y; } } @contract class C extends T { constructor(s: u256) { super(s); } }`,
+          `abstract class T { a: u256; b: u256; constructor(x: u256, y: u256){ this.a = x; this.b = y; } } class C extends T { constructor(s: u256) { super(s); } }`,
           `abstract contract T { uint256 a; uint256 b; constructor(uint256 x, uint256 y){ a=x; b=y; } } contract C is T { constructor(uint256 s) T(s){} }`,
         );
         par(
-          `@abstract class T { @state a: u256; constructor(x: u256){ this.a = x; } } @contract class C extends T { constructor(s: u256) { super(s, s); } }`,
+          `abstract class T { a: u256; constructor(x: u256){ this.a = x; } } class C extends T { constructor(s: u256) { super(s, s); } }`,
           `abstract contract T { uint256 a; constructor(uint256 x){ a=x; } } contract C is T { constructor(uint256 s) T(s, s){} }`,
         );
       });
       it('super(msg.value) in a NON-payable ctor -> both reject (JETH162 / payability)', () =>
         par(
-          `@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() { super(msg.value); } }`,
+          `abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { constructor() { super(msg.value); } }`,
           `abstract contract Token { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is Token { constructor() Token(msg.value){} }`,
         ));
       it('super() ambiguous: two direct bases with parameterized ctors -> JETH rejects (heritage form required)', () => {
         expect(
           codes(
-            `@abstract class A { @state a: u256; constructor(x: u256){ this.a = x; } } @abstract class B { @state b: u256; constructor(y: u256){ this.b = y; } } @contract class C extends A, B { constructor() { super(1n); } }`,
+            `abstract class A { a: u256; constructor(x: u256){ this.a = x; } } abstract class B { b: u256; constructor(y: u256){ this.b = y; } } class C extends A, B { constructor() { super(1n); } }`,
           ),
         ).toContain('JETH379');
       });
@@ -424,7 +424,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
         // a clean reject always beats risking wrong bytes on this degenerate case). Documented boundary.
         expect(
           codes(
-            `@abstract class Token { @state cap: u256; @state s: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() { super(this.s); } }`,
+            `abstract class Token { cap: u256; s: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { constructor() { super(this.s); } }`,
           ),
         ).toContain('JETH379');
         expect(
@@ -435,7 +435,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       });
       it('the phantom modifier form `constructor() Token(5n)` STILL cleanly rejects (JETH379, not parsed as super)', () => {
         expect(
-          codes(`@abstract class Token { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends Token { constructor() Token(5n) {} }`),
+          codes(`abstract class Token { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends Token { constructor() Token(5n) {} }`),
         ).toContain('JETH379');
       });
 
@@ -443,28 +443,28 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       // bare super() treated as a no-op. Each is a lifted over-rejection, byte-identical to solc.
       it('P1-6: MID-LEVEL super(args) - B(w) super(w+100), C(z) super(z) -> cap = z+100', () =>
         same(
-          `@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @abstract class B extends A { constructor(w: u256){ super(w + 100n); } } @contract class C extends B { constructor(z: u256){ super(z); } @external @view g(): u256 { return this.cap; } }`,
+          `abstract class A { cap: u256; constructor(c: u256){ this.cap = c; } } abstract class B extends A { constructor(w: u256){ super(w + 100n); } } class C extends B { constructor(z: u256){ super(z); } get g(): External<u256> { return this.cap; } }`,
           `abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } abstract contract B is A { constructor(uint256 w) A(w+100){} } contract C is B { constructor(uint256 z) B(z){} function g() external view returns(uint256){ return cap; } }`,
           [{ sig: 'g()' }], 1, pad32(5n)));
       it('P1-6: super(args) PASSES THROUGH a ctorless base to a parameterized grandparent', () =>
         same(
-          `@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @abstract class B extends A { @state z: u256; } @contract class C extends B { constructor(){ super(5n); } @external @view g(): u256 { return this.cap; } }`,
+          `abstract class A { cap: u256; constructor(c: u256){ this.cap = c; } } abstract class B extends A { z: u256; } class C extends B { constructor(){ super(5n); } get g(): External<u256> { return this.cap; } }`,
           `abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } abstract contract B is A { uint256 z; } contract C is B { constructor() A(5){} function g() external view returns(uint256){ return cap; } }`,
           [{ sig: 'g()' }], 1));
       it('P1-6: bare super() is a NO-OP (base ctor runs, no args)', () =>
         same(
-          `@abstract class A { @state cap: u256; constructor(){ this.cap = 42n; } } @contract class C extends A { @state y: u256; constructor(){ super(); this.y = 7n; } @external @view gc(): u256 { return this.cap; } @external @view gy(): u256 { return this.y; } }`,
+          `abstract class A { cap: u256; constructor(){ this.cap = 42n; } } class C extends A { y: u256; constructor(){ super(); this.y = 7n; } get gc(): External<u256> { return this.cap; } get gy(): External<u256> { return this.y; } }`,
           `abstract contract A { uint256 cap; constructor(){ cap=42; } } contract C is A { uint256 y; constructor(){ y=7; } function gc() external view returns(uint256){ return cap; } function gy() external view returns(uint256){ return y; } }`,
           [{ sig: 'gc()' }, { sig: 'gy()' }], 2));
       it('P1-6: super(args) to a base with NO parameterized ancestor still REJECTS (JETH379)', () =>
         expect(
-          codes(`@abstract class A { @state x: u256; } @contract class C extends A { constructor(){ super(7n); } }`),
+          codes(`abstract class A { x: u256; } class C extends A { constructor(){ super(7n); } }`),
         ).toContain('JETH379'));
 
       // super(this.mk()): the MODIFIER form DOES resolve a member function (solc accepts it), byte-identical.
       it('super(this.mk()) - a member function call in the modifier form is accepted, byte-identical', () =>
         same(
-          `@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends A { dbl(x: u256): u256 { return x * 2n; } constructor(p: u256){ super(this.dbl(p)); } @external @view g(): u256 { return this.cap; } }`,
+          `abstract class A { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends A { dbl(x: u256): u256 { return x * 2n; } constructor(p: u256){ super(this.dbl(p)); } get g(): External<u256> { return this.cap; } }`,
           `abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is A { function dbl(uint256 x) internal pure returns(uint256){return x*2;} constructor(uint256 p) A(dbl(p)){} function g() external view returns(uint256){ return cap; } }`,
           [{ sig: 'g()' }], 1, pad32(7n)));
     });
@@ -475,17 +475,17 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   describe('P1-5: super.f() in a constructor body (single base definition)', () => {
     it('super.f() in a ctor resolves to the base f, byte-identical', () =>
       same(
-        `@abstract class A { @state x: u256; @virtual f(): u256 { return 7n; } } @contract class C extends A { @state y: u256; constructor(){ this.y = super.f(); } @external @view gy(): u256 { return this.y; } }`,
+        `abstract class A { x: u256; @virtual f(): u256 { return 7n; } } class C extends A { y: u256; constructor(){ this.y = super.f(); } get gy(): External<u256> { return this.y; } }`,
         `abstract contract A { uint256 x; function f() internal virtual returns(uint256){ return 7; } } contract C is A { uint256 y; constructor(){ y = super.f(); } function gy() external view returns(uint256){ return y; } }`,
         [{ sig: 'gy()' }], 2));
     it('super.f() where a MID base ctor also calls super.f() (both reach A.f)', () =>
       same(
-        `@abstract class A { @state x: u256; @virtual f(): u256 { return 3n; } } @abstract class B extends A { @state bx: u256; constructor(){ this.bx = super.f(); } } @contract class C extends B { @state cx: u256; constructor(){ this.cx = super.f() + this.bx; } @external @view g(): u256 { return this.cx; } }`,
+        `abstract class A { x: u256; @virtual f(): u256 { return 3n; } } abstract class B extends A { bx: u256; constructor(){ this.bx = super.f(); } } class C extends B { cx: u256; constructor(){ this.cx = super.f() + this.bx; } get g(): External<u256> { return this.cx; } }`,
         `abstract contract A { uint256 x; function f() internal virtual returns(uint256){ return 3; } } abstract contract B is A { uint256 bx; constructor(){ bx = super.f(); } } contract C is B { uint256 cx; constructor(){ cx = super.f() + bx; } function g() external view returns(uint256){ return cx; } }`,
         [{ sig: 'g()' }], 3));
     it('super.f() where the base declares no f still REJECTS (JETH444)', () =>
       expect(
-        codes(`@abstract class A { @state x: u256; } @contract class C extends A { @state y: u256; constructor(){ this.y = super.f(); } }`),
+        codes(`abstract class A { x: u256; } class C extends A { y: u256; constructor(){ this.y = super.f(); } }`),
       ).toContain('JETH444'));
   });
 
@@ -494,7 +494,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   describe('heritage base-arg member access is rejected (over-acceptance closed)', () => {
     it('extends A(this.mk()) - a member function call in a heritage arg -> both reject', () => {
       expect(
-        codes(`@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends A(this.mk()) { mk(): u256 { return 5n; } }`),
+        codes(`abstract class A { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends A(this.mk()) { mk(): u256 { return 5n; } }`),
       ).toContain('JETH379');
       expect(
         solcRejects(`abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is A(mk()) { function mk() internal pure returns(uint256){return 5;} }`),
@@ -502,7 +502,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     });
     it('extends A(this.state) - a member state read in a heritage arg -> both reject', () => {
       expect(
-        codes(`@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends A(this.s) { @state s: u256; }`),
+        codes(`abstract class A { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends A(this.s) { s: u256; }`),
       ).toContain('JETH379');
       expect(
         solcRejects(`abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is A(s) { uint256 s; }`),
@@ -510,7 +510,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     });
     it('extends A(5n + 1n) - a constant heritage arg still ACCEPTS byte-identical', () =>
       same(
-        `@abstract class A { @state cap: u256; constructor(c: u256){ this.cap = c; } } @contract class C extends A(5n + 1n) { @external @view g(): u256 { return this.cap; } }`,
+        `abstract class A { cap: u256; constructor(c: u256){ this.cap = c; } } class C extends A(5n + 1n) { get g(): External<u256> { return this.cap; } }`,
         `abstract contract A { uint256 cap; constructor(uint256 c){ cap=c; } } contract C is A(5 + 1) { function g() external view returns(uint256){ return cap; } }`,
         [{ sig: 'g()' }], 1));
   });
@@ -524,12 +524,12 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   // did not fire when there was no same-named base function - an over-acceptance now closed.
   describe('@override specifier problems reject with distinct codes, matching solc 0.8.35', () => {
     it('JETH369: @override overrides nothing - no base at all', () => {
-      expect(codes('@contract class C { @override @external f(): u256 { return 42n; } }')).toContain('JETH369');
+      expect(codes('class C { @override get f(): External<u256> { return 42n; } }')).toContain('JETH369');
       expect(solcRejects('contract C { function f() external override returns(uint256){ return 42; } }')).toBe(true);
     });
     it('JETH369: @override overrides nothing - extends a base that does not declare the function', () => {
       expect(
-        codes('@abstract class A { @state x: u256; } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
+        codes('abstract class A { x: u256; } class C extends A { @override get f(): External<u256> { return 1n; } }'),
       ).toContain('JETH369');
       expect(
         solcRejects('abstract contract A { uint256 x; } contract C is A { function f() external override returns(uint256){ return 1; } }'),
@@ -537,12 +537,12 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     });
     it('JETH369: @override overrides nothing - base declares a DIFFERENT-named virtual function', () => {
       expect(
-        codes('@abstract class A { @virtual @external g(): u256 { return 0n; } } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
+        codes('abstract class A { @virtual get g(): External<u256> { return 0n; } } class C extends A { @override get f(): External<u256> { return 1n; } }'),
       ).toContain('JETH369');
     });
     it('JETH374: a @virtual base function redefined WITHOUT @override (the inverse) still rejects', () => {
       expect(
-        codes('@abstract class A { @virtual @external f(): u256 { return 0n; } } @contract class C extends A { @external f(): u256 { return 1n; } }'),
+        codes('abstract class A { @virtual get f(): External<u256> { return 0n; } } class C extends A { get f(): External<u256> { return 1n; } }'),
       ).toContain('JETH374');
       expect(
         solcRejects('abstract contract A { function f() external virtual returns(uint256){ return 0; } } contract C is A { function f() external returns(uint256){ return 1; } }'),
@@ -550,7 +550,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
     });
     it('control: a genuine @override of a real @virtual base function still compiles on both', () => {
       expect(
-        codes('@abstract class A { @virtual @external f(): u256 { return 0n; } } @contract class C extends A { @override @external f(): u256 { return 1n; } }'),
+        codes('abstract class A { @virtual get f(): External<u256> { return 0n; } } class C extends A { @override get f(): External<u256> { return 1n; } }'),
       ).toEqual([]);
       expect(
         solcRejects('abstract contract A { function f() external virtual returns(uint256){ return 0; } } contract C is A { function f() external override returns(uint256){ return 1; } }'),
@@ -566,39 +566,39 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
   // override at runtime. Each leak flips to BOTH-REJECT; each control still BOTH-ACCEPTS byte-identical.
   describe('W2D scope-leak: base body cannot see derived-only declarations', () => {
     it('P0-23 state var: a base fn reading a derived-only @state var rejects (both)', () => {
-      const J = '@abstract class A { @external @view gy(): u256 { return this.y; } } @contract class C extends A { @state y: u256; constructor(){ this.y = 7n; } }';
+      const J = 'abstract class A { get gy(): External<u256> { return this.y; } } class C extends A { y: u256; constructor(){ this.y = 7n; } }';
       const S = 'abstract contract A { function gy() external view returns (uint256) { return y; } } contract C is A { uint256 public y; constructor(){ y = 7; } }';
       expect(codes(J)).toContain('JETH065');
       expect(solcRejects(S)).toBe(true);
     });
     it('P0-23 internal fn: a base fn calling a derived-only function rejects (both)', () => {
-      const J = '@abstract class A { @external @view cd(): u256 { return this.helper(); } } @contract class C extends A { @view helper(): u256 { return 99n; } }';
+      const J = 'abstract class A { get cd(): External<u256> { return this.helper(); } } class C extends A { helper(): u256 { return 99n; } }';
       const S = 'abstract contract A { function cd() external view returns (uint256) { return helper(); } } contract C is A { function helper() internal view returns (uint256) { return 99; } }';
       expect(codes(J)).toContain('JETH074');
       expect(solcRejects(S)).toBe(true);
     });
     it('P0-23 3-level grandbase: a top base reading a derived-only @state var rejects (both)', () => {
-      const J = '@abstract class A { @external @view f(): u256 { return this.z; } } @abstract class B extends A {} @contract class C extends B { @state z: u256; constructor(){ this.z=1n; } }';
+      const J = 'abstract class A { get f(): External<u256> { return this.z; } } abstract class B extends A {} class C extends B { z: u256; constructor(){ this.z=1n; } }';
       const S = 'abstract contract A { function f() external view returns(uint256){ return z; } } abstract contract B is A {} contract C is B { uint256 z; constructor(){ z=1; } }';
       expect(codes(J)).toContain('JETH065');
       expect(solcRejects(S)).toBe(true);
     });
     it('P0-23 sibling base under multiple inheritance: B reading K-only @state var rejects (both)', () => {
-      const J = '@abstract class B { @external @view fb(): u256 { return this.k; } } @abstract class K { @state k: u256; constructor(){ this.k=2n; } } @contract class C extends B, K {}';
+      const J = 'abstract class B { get fb(): External<u256> { return this.k; } } abstract class K { k: u256; constructor(){ this.k=2n; } } class C extends B, K {}';
       const S = 'abstract contract B { function fb() external view returns(uint256){ return k; } } abstract contract K { uint256 k; constructor(){ k=2; } } contract C is B, K {}';
       expect(codes(J)).toContain('JETH065');
       expect(solcRejects(S)).toBe(true);
     });
     it('control: downward @virtual dispatch (base calls this.val(), overridden more-derived) still works', () =>
       same(
-        '@abstract class A { @external @view run(): u256 { return this.val(); } @virtual @view val(): u256 { return 1n; } } @contract class C extends A { @override @view val(): u256 { return 2n; } }',
+        'abstract class A { get run(): External<u256> { return this.val(); } @virtual val(): u256 { return 1n; } } class C extends A { @override val(): u256 { return 2n; } }',
         'abstract contract A { function run() external view returns (uint256) { return val(); } function val() internal view virtual returns (uint256) { return 1; } } contract C is A { function val() internal view virtual override returns (uint256) { return 2; } }',
         [{ sig: 'run()' }],
         1,
       ));
     it('control: a base reading a var declared in ITS OWN base (upward) still both-accepts', () =>
       same(
-        '@abstract class A { @state av: u256; constructor(){ this.av=1n; } } @abstract class B extends A { @external @view fb(): u256 { return this.av; } } @contract class C extends B {}',
+        'abstract class A { av: u256; constructor(){ this.av=1n; } } abstract class B extends A { get fb(): External<u256> { return this.av; } } class C extends B {}',
         'abstract contract A { uint256 av; constructor(){ av=1; } } abstract contract B is A { function fb() external view returns(uint256){ return av; } } contract C is B {}',
         [{ sig: 'fb()' }],
         1,
