@@ -39,48 +39,47 @@ const DATA_B = dataSlot(2n);
 const DATA_C = dataSlot(4n);
 
 const JETH = `
-@struct class P { id: u64; owner: address; flag: bool; }
-@struct class Q { big: u256; small: u128; mid: u128; }
-@struct class S { val: u256; }
+type P = { id: u64; owner: address; flag: bool; };
+type Q = { big: u256; small: u128; mid: u128; };
+type S = { val: u256; };
 
-@contract
 class TwoArrays {
-  @state a: P[];     // slot 0
-  @state x: u256;    // slot 1
-  @state b: Q[];     // slot 2
-  @state y: u256;    // slot 3
-  @state c: S[];     // slot 4
+  a: P[];     // slot 0
+  x: u256;    // slot 1
+  b: Q[];     // slot 2
+  y: u256;    // slot 3
+  c: S[];     // slot 4
 
-  @external setX(v: u256): void { this.x = v; }
-  @external setY(v: u256): void { this.y = v; }
-  @external @view getX(): u256 { return this.x; }
-  @external @view getY(): u256 { return this.y; }
+  setX(v: u256): External<void> { this.x = v; }
+  setY(v: u256): External<void> { this.y = v; }
+  get getX(): External<u256> { return this.x; }
+  get getY(): External<u256> { return this.y; }
 
-  @external pushA(id: u64, owner: address, flag: bool): void { this.a.push(P(id, owner, flag)); }
-  @external pushAEmpty(): void { this.a.push(); }
-  @external popA(): void { this.a.pop(); }
-  @external setAFlag(i: u256, v: bool): void { this.a[i].flag = v; }
-  @external setAId(i: u256, v: u64): void { this.a[i].id = v; }
-  @external @view lenA(): u256 { return this.a.length; }
-  @external @view getAId(i: u256): u64 { return this.a[i].id; }
-  @external @view getAOwner(i: u256): address { return this.a[i].owner; }
-  @external @view getAFlag(i: u256): bool { return this.a[i].flag; }
+  pushA(id: u64, owner: address, flag: bool): External<void> { this.a.push(P(id, owner, flag)); }
+  pushAEmpty(): External<void> { this.a.push(); }
+  popA(): External<void> { this.a.pop(); }
+  setAFlag(i: u256, v: bool): External<void> { this.a[i].flag = v; }
+  setAId(i: u256, v: u64): External<void> { this.a[i].id = v; }
+  get lenA(): External<u256> { return this.a.length; }
+  get getAId(i: u256): External<u64> { return this.a[i].id; }
+  get getAOwner(i: u256): External<address> { return this.a[i].owner; }
+  get getAFlag(i: u256): External<bool> { return this.a[i].flag; }
 
-  @external pushB(big: u256, small: u128, mid: u128): void { this.b.push(Q(big, small, mid)); }
-  @external pushBEmpty(): void { this.b.push(); }
-  @external popB(): void { this.b.pop(); }
-  @external setBSmall(i: u256, v: u128): void { this.b[i].small = v; }
-  @external setBBig(i: u256, v: u256): void { this.b[i].big = v; }
-  @external @view lenB(): u256 { return this.b.length; }
-  @external @view getBBig(i: u256): u256 { return this.b[i].big; }
-  @external @view getBSmall(i: u256): u128 { return this.b[i].small; }
-  @external @view getBMid(i: u256): u128 { return this.b[i].mid; }
+  pushB(big: u256, small: u128, mid: u128): External<void> { this.b.push(Q(big, small, mid)); }
+  pushBEmpty(): External<void> { this.b.push(); }
+  popB(): External<void> { this.b.pop(); }
+  setBSmall(i: u256, v: u128): External<void> { this.b[i].small = v; }
+  setBBig(i: u256, v: u256): External<void> { this.b[i].big = v; }
+  get lenB(): External<u256> { return this.b.length; }
+  get getBBig(i: u256): External<u256> { return this.b[i].big; }
+  get getBSmall(i: u256): External<u128> { return this.b[i].small; }
+  get getBMid(i: u256): External<u128> { return this.b[i].mid; }
 
-  @external pushC(val: u256): void { this.c.push(S(val)); }
-  @external popC(): void { this.c.pop(); }
-  @external setCVal(i: u256, v: u256): void { this.c[i].val = v; }
-  @external @view lenC(): u256 { return this.c.length; }
-  @external @view getCVal(i: u256): u256 { return this.c[i].val; }
+  pushC(val: u256): External<void> { this.c.push(S(val)); }
+  popC(): External<void> { this.c.pop(); }
+  setCVal(i: u256, v: u256): External<void> { this.c[i].val = v; }
+  get lenC(): External<u256> { return this.c.length; }
+  get getCVal(i: u256): External<u256> { return this.c[i].val; }
 }
 `;
 

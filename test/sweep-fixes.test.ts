@@ -11,18 +11,18 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@struct class D { id: u256; data: Arr<u256, 3>; }
-@contract class SW {
-  @state s: D;
-  @external @pure uDivI256(a: i256, b: i256): i256 { unchecked: { return a / b; } }
-  @external @pure pureRMW(a: u8): u8 { let xs: u8[] = [a, a]; xs[0n]++; xs[0n] = xs[0n] + 1n; return xs[0n]; }
-  @external setS(id: u256, a: u256, b: u256, c: u256): void { this.s = D(id, [a, b, c]); }
-  @external @view getId(): u256 { return this.s.id; }
-  @external @view getData(i: u256): u256 { return this.s.data[i]; }
-  @external @pure ctorReturn(id: u256, a: u256, b: u256, c: u256): D { return D(id, [a, b, c]); }
-  @external @pure postInc(x: u256): u256 { let a: u256 = x; let p: u256 = a++; return p + a; }
-  @external @pure preInc(x: u256): u256 { let a: u256 = x; let p: u256 = ++a; return p + a; }
-  @external @pure ternMem(c: bool, x: u256, y: u256): u256[] {
+const JETH = `type D = { id: u256; data: Arr<u256, 3>; };
+class SW {
+  s: D;
+  get uDivI256(a: i256, b: i256): External<i256> { unchecked: { return a / b; } }
+  get pureRMW(a: u8): External<u8> { let xs: u8[] = [a, a]; xs[0n]++; xs[0n] = xs[0n] + 1n; return xs[0n]; }
+  setS(id: u256, a: u256, b: u256, c: u256): External<void> { this.s = D(id, [a, b, c]); }
+  get getId(): External<u256> { return this.s.id; }
+  get getData(i: u256): External<u256> { return this.s.data[i]; }
+  get ctorReturn(id: u256, a: u256, b: u256, c: u256): External<D> { return D(id, [a, b, c]); }
+  get postInc(x: u256): External<u256> { let a: u256 = x; let p: u256 = a++; return p + a; }
+  get preInc(x: u256): External<u256> { let a: u256 = x; let p: u256 = ++a; return p + a; }
+  get ternMem(c: bool, x: u256, y: u256): External<u256[]> {
     let xs: u256[] = [x, x];
     let ys: u256[] = [y, y, y];
     return c ? xs : ys;

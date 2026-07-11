@@ -31,15 +31,15 @@ async function diff(J: string, S: string, calls: [string, string][]) {
 
 describe('storage aggregate crash + nesting fixes - byte-identical to solc 0.8.35', () => {
   it('(A) abi.encode + return of Arr<D,2> (fixed array, dynamic-field element)', async () => {
-    const J = `@struct class D { id: u256; tags: u256[]; }
-    @contract class C {
-      @state vals: Arr<D,2>;
-      @external seed(): void {
+    const J = `type D = { id: u256; tags: u256[]; };
+    class C {
+      vals: Arr<D,2>;
+      seed(): External<void> {
         let a: u256[]=[1n,2n]; let b: u256[]=[3n,4n,5n];
         this.vals[0n]=D(7n,a); this.vals[1n]=D(8n,b);
       }
-      @external @view enc(): bytes { return abi.encode(this.vals); }
-      @external @view get(): Arr<D,2> { return this.vals; } }`;
+      get enc(): External<bytes> { return abi.encode(this.vals); }
+      get get(): External<Arr<D,2>> { return this.vals; } }`;
     const S = `contract C {
       struct D { uint256 id; uint256[] tags; }
       D[2] vals;
@@ -53,15 +53,15 @@ describe('storage aggregate crash + nesting fixes - byte-identical to solc 0.8.3
   });
 
   it('(B) read a whole D[] dyn-struct-array element FIELD of an outer struct (this.b.items[i])', async () => {
-    const J = `@struct class D { id: u256; name: string; }
-    @struct class Box { tag: u256; items: D[]; }
-    @contract class C {
-      @state b: Box;
-      @external seed(): void { this.b.items.push(D(1n,"old")); this.b.items.push(D(2n,"two")); }
-      @external @view get(i: u256): D { return this.b.items[i]; }
-      @external @view getName(i: u256): string { return this.b.items[i].name; }
-      @external @view bind(i: u256): D { let p: D = this.b.items[i]; return p; }
-      @external @view enc(i: u256): bytes { return abi.encode(this.b.items[i]); } }`;
+    const J = `type D = { id: u256; name: string; };
+    type Box = { tag: u256; items: D[]; };
+    class C {
+      b: Box;
+      seed(): External<void> { this.b.items.push(D(1n,"old")); this.b.items.push(D(2n,"two")); }
+      get get(i: u256): External<D> { return this.b.items[i]; }
+      get getName(i: u256): External<string> { return this.b.items[i].name; }
+      get bind(i: u256): External<D> { let p: D = this.b.items[i]; return p; }
+      get enc(i: u256): External<bytes> { return abi.encode(this.b.items[i]); } }`;
     const S = `contract C {
       struct D { uint256 id; string name; }
       struct Box { uint256 tag; D[] items; }

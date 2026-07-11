@@ -149,3 +149,21 @@ test/qualified-selector-interfaceid.test.ts:75  trial mismatch: orig=ok post=rej
 test/qualified-selector-interfaceid.test.ts:149  @interface class IFoo extends ...: a native interface cannot extend (JETH349) - stays legacy | @interface class IEmpty extends ...: a native interface cannot extend (JETH349) - stays legacy
 test/qualified-selector-interfaceid.test.ts:218  @interface class IFoo extends ...: a native interface cannot extend (JETH349) - stays legacy
 test/receive-fallback.test.ts:138  trial mismatch: orig=rej[JETH386] post=ok
+test/s6-return-struct-storage-string-field.test.ts:261  trial mismatch: orig=rej[JETH072,JETH074] post=rej[JETH041]
+test/selfcall-tuples.test.ts:53  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:67  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:97  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:111  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:125  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:163  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:179  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:197  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:215  trial mismatch: orig=ok post=ok
+test/selfcall-tuples.test.ts:262  trial mismatch: orig=rej[JETH164] post=ok
+test/special-entry-gates.test.ts:251  trial mismatch: orig=rej[JETH380] post=rej[JETH013,JETH380]
+test/special-entry-gates.test.ts:276  trial mismatch: orig=ok post=rej[JETH473]
+test/special-entry-gates.test.ts:281  trial mismatch: orig=ok post=rej[JETH473]
+test/special-entry-gates.test.ts:287  trial mismatch: orig=ok post=rej[JETH473]
+test/string-concat.test.ts:174  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/string-concat.test.ts:185  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=ok post=rej[JETH352])
+test/switch.test.ts:96  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])

@@ -50,21 +50,20 @@ contract FixedArrayFieldElement {
 }`;
 
 const JETH = `// scenario: fixed-array field inside a dynamic-array struct element.
-@struct class Rec { id: u64; data: Arr<u256, 3>; }
+type Rec = { id: u64; data: Arr<u256, 3>; };
 
-@contract
 class FixedArrayFieldElement {
-  @state recs: Rec[];      // length @ slot 0, data @ keccak(0); each Rec = 4 slots
-  @state sentinel: u256;   // slot 1
+  recs: Rec[];      // length @ slot 0, data @ keccak(0); each Rec = 4 slots
+  sentinel: u256;   // slot 1
 
-  @external pushEmpty(): void { this.recs.push(); }
-  @external popRec(): void { this.recs.pop(); }
-  @external setId(i: u256, v: u64): void { this.recs[i].id = v; }
-  @external setData(i: u256, j: u256, v: u256): void { this.recs[i].data[j] = v; }
+  pushEmpty(): External<void> { this.recs.push(); }
+  popRec(): External<void> { this.recs.pop(); }
+  setId(i: u256, v: u64): External<void> { this.recs[i].id = v; }
+  setData(i: u256, j: u256, v: u256): External<void> { this.recs[i].data[j] = v; }
 
-  @external @view len(): u256 { return this.recs.length; }
-  @external @view getId(i: u256): u64 { return this.recs[i].id; }
-  @external @view getData(i: u256, j: u256): u256 { return this.recs[i].data[j]; }
+  get len(): External<u256> { return this.recs.length; }
+  get getId(i: u256): External<u64> { return this.recs[i].id; }
+  get getData(i: u256, j: u256): External<u256> { return this.recs[i].data[j]; }
 }`;
 
 describe('fixed-array-field-element: storage dyn-array of struct w/ fixed-array field vs Solidity', () => {

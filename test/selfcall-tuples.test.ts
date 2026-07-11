@@ -78,10 +78,10 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(a) DIRECT tuple return: mutating callee -> CALL (state mutation observed)', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @state x: u256;
-        @external bump(): [u256, u256] { this.x = this.x + 1n; return [this.x, this.x * 2n]; }
-        @external caller(): [u256, u256] { return this.bump(); }
+      `class C {
+        x: u256;
+        bump(): External<[u256, u256]> { this.x = this.x + 1n; return [this.x, this.x * 2n]; }
+        caller(): External<[u256, u256]> { return this.bump(); }
       }`,
       `contract C {
         uint256 x;
@@ -144,10 +144,10 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(b) TUPLE-ASSIGN: mutating callee -> CALL', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @state x: u256;
-        @external bump(): [u256, u256] { this.x = this.x + 1n; return [this.x, this.x * 2n]; }
-        @external caller(): u256 { let a: u256 = 0n; let b: u256 = 0n; [a, b] = this.bump(); return a + b; }
+      `class C {
+        x: u256;
+        bump(): External<[u256, u256]> { this.x = this.x + 1n; return [this.x, this.x * 2n]; }
+        caller(): External<u256> { let a: u256 = 0n; let b: u256 = 0n; [a, b] = this.bump(); return a + b; }
       }`,
       `contract C {
         uint256 x;
@@ -230,14 +230,14 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(c) try/catch: 3-tuple mutating callee + bubble', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @state x: u256;
-        @external trip(k: u256): [address, u256, bool] {
+      `class C {
+        x: u256;
+        trip(k: u256): External<[address, u256, bool]> {
           if (k == 0n) { revert("zero"); }
           this.x = this.x + k;
           return [address(0xCCn), this.x, true];
         }
-        @external run(k: u256): u256 {
+        run(k: u256): External<u256> {
           try { let [a, n, f] = this.trip(k); return n + (f ? 10n : 0n); } catch (e) { return 12345n; }
         }
       }`,
@@ -272,28 +272,28 @@ describe('external self-call tuple forms (this.f())', () => {
   });
 
   it('arity / single-value / void misuse give a precise JETH356 diagnostic', () => {
-    expect(jethRejects(`@contract class C {
-      @external @view pair(): [u256,u256] { return [1n,2n]; }
-      @external go(): u256 { let a:u256=0n; let b:u256=0n; let c:u256=0n; [a,b,c]=this.pair(); return a; }
+    expect(jethRejects(`class C {
+      get pair(): External<[u256,u256]> { return [1n,2n]; }
+      go(): External<u256> { let a:u256=0n; let b:u256=0n; let c:u256=0n; [a,b,c]=this.pair(); return a; }
     }`)).toContain('JETH356');
-    expect(jethRejects(`@contract class C {
-      @external @view one(): u256 { return 1n; }
-      @external go(): u256 { let a:u256=0n; let b:u256=0n; [a,b]=this.one(); return a; }
+    expect(jethRejects(`class C {
+      get one(): External<u256> { return 1n; }
+      go(): External<u256> { let a:u256=0n; let b:u256=0n; [a,b]=this.one(); return a; }
     }`)).toContain('JETH356');
-    expect(jethRejects(`@contract class C {
-      @external doit(): void { }
-      @external go(): [u256,u256] { return this.doit(); }
+    expect(jethRejects(`class C {
+      doit(): External<void> { }
+      go(): External<[u256,u256]> { return this.doit(); }
     }`)).toContain('JETH356');
   });
 
   it('internal (non-external) tuple fns still route through the internal-call path', () => {
-    expect(jethRejects(`@contract class C {
+    expect(jethRejects(`class C {
       pair(): [u256,u256] { return [1n,2n]; }
-      @external @view get(): [u256,u256] { return this.pair(); }
+      get get(): External<[u256,u256]> { return this.pair(); }
     }`)).toBeNull();
-    expect(jethRejects(`@contract class C {
+    expect(jethRejects(`class C {
       pair(): [u256,u256] { return [1n,2n]; }
-      @external go(): u256 { let a:u256=0n; let b:u256=0n; [a,b]=this.pair(); return a+b; }
+      get go(): External<u256> { let a:u256=0n; let b:u256=0n; [a,b]=this.pair(); return a+b; }
     }`)).toBeNull();
   });
 });

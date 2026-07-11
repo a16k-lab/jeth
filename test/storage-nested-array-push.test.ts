@@ -36,16 +36,16 @@ async function bothMatch(jeth: string, solc: string, calls: [string, string?][])
 
 describe('storage push of a whole nested-dynamic-array element', () => {
   it('A: string[][].push(string[]) - local push + literal push + read back', async () => {
-    const J = `@contract class C {
-      @state a: string[][];
-      @external set(): void {
+    const J = `class C {
+      a: string[][];
+      set(): External<void> {
         let row: string[] = ["hello", "world"];
         this.a.push(row);
         this.a.push(["x", "yy", "this-is-a-fairly-long-string-exceeding-thirty-two-bytes-ok"]);
       }
-      @external outer(): u256 { return this.a.length; }
-      @external leni(i: u256): u256 { return this.a[i].length; }
-      @external get(i: u256, j: u256): string { return this.a[i][j]; }
+      get outer(): External<u256> { return this.a.length; }
+      get leni(i: u256): External<u256> { return this.a[i].length; }
+      get get(i: u256, j: u256): External<string> { return this.a[i][j]; }
     }`;
     const S = `contract C {
       string[][] a;
@@ -69,16 +69,16 @@ describe('storage push of a whole nested-dynamic-array element', () => {
   });
 
   it('B: bytes[][].push(bytes[]) + pop + reuse (stale slot, shorter inner)', async () => {
-    const J = `@contract class C {
-      @state a: bytes[][];
-      @external set(): void {
+    const J = `class C {
+      a: bytes[][];
+      set(): External<void> {
         let row: bytes[] = [bytes("aaaa"), bytes("this-long-bytes-blob-is-clearly-over-thirty-two-bytes-yes")];
         this.a.push(row);
       }
-      @external reuse(): void { this.a.pop(); this.a.push([bytes("z")]); }
-      @external outer(): u256 { return this.a.length; }
-      @external leni(i: u256): u256 { return this.a[i].length; }
-      @external get(i: u256, j: u256): bytes { return this.a[i][j]; }
+      reuse(): External<void> { this.a.pop(); this.a.push([bytes("z")]); }
+      get outer(): External<u256> { return this.a.length; }
+      get leni(i: u256): External<u256> { return this.a[i].length; }
+      get get(i: u256, j: u256): External<bytes> { return this.a[i][j]; }
     }`;
     const S = `contract C {
       bytes[][] a;
@@ -101,17 +101,17 @@ describe('storage push of a whole nested-dynamic-array element', () => {
   });
 
   it('C: u256[][][].push(u256[][]) - local push + literal push', async () => {
-    const J = `@contract class C {
-      @state a: u256[][][];
-      @external set(): void {
+    const J = `class C {
+      a: u256[][][];
+      set(): External<void> {
         let m: u256[][] = [[1n, 2n], [3n, 4n, 5n]];
         this.a.push(m);
         this.a.push([[9n]]);
       }
-      @external outer(): u256 { return this.a.length; }
-      @external lenj(i: u256): u256 { return this.a[i].length; }
-      @external lenk(i: u256, j: u256): u256 { return this.a[i][j].length; }
-      @external get(i: u256, j: u256, k: u256): u256 { return this.a[i][j][k]; }
+      get outer(): External<u256> { return this.a.length; }
+      get lenj(i: u256): External<u256> { return this.a[i].length; }
+      get lenk(i: u256, j: u256): External<u256> { return this.a[i][j].length; }
+      get get(i: u256, j: u256, k: u256): External<u256> { return this.a[i][j][k]; }
     }`;
     const S = `contract C {
       uint256[][][] a;
@@ -139,14 +139,14 @@ describe('storage push of a whole nested-dynamic-array element', () => {
   });
 
   it('D: u256[][][] pop + reuse with shorter element (deep stale clear)', async () => {
-    const J = `@contract class C {
-      @state a: u256[][][];
-      @external seedBig(): void { this.a.push([[111n, 222n, 333n], [444n, 555n]]); }
-      @external reuse(): void { this.a.pop(); this.a.push([[7n]]); }
-      @external outer(): u256 { return this.a.length; }
-      @external lenj(i: u256): u256 { return this.a[i].length; }
-      @external lenk(i: u256, j: u256): u256 { return this.a[i][j].length; }
-      @external get(i: u256, j: u256, k: u256): u256 { return this.a[i][j][k]; }
+    const J = `class C {
+      a: u256[][][];
+      seedBig(): External<void> { this.a.push([[111n, 222n, 333n], [444n, 555n]]); }
+      reuse(): External<void> { this.a.pop(); this.a.push([[7n]]); }
+      get outer(): External<u256> { return this.a.length; }
+      get lenj(i: u256): External<u256> { return this.a[i].length; }
+      get lenk(i: u256, j: u256): External<u256> { return this.a[i][j].length; }
+      get get(i: u256, j: u256, k: u256): External<u256> { return this.a[i][j][k]; }
     }`;
     const S = `contract C {
       uint256[][][] a;
@@ -173,12 +173,12 @@ describe('storage push of a whole nested-dynamic-array element', () => {
     // NOTE: a BARE empty array literal push `this.a.push([])` is now correctly REJECTED (solc rejects it too -
     // it cannot deduce the empty literal's type in push-arg position; see _push_empty_literal.test.ts). The
     // valid way to push an empty inner array is `new Array<string>(0n)` (== solc `new string[](0)`), tested here.
-    const J = `@contract class C {
-      @state a: string[][];
-      @external set(): void { let e: string[] = new Array<string>(0n); this.a.push(e); this.a.push(["only"]); }
-      @external outer(): u256 { return this.a.length; }
-      @external leni(i: u256): u256 { return this.a[i].length; }
-      @external get(i: u256, j: u256): string { return this.a[i][j]; }
+    const J = `class C {
+      a: string[][];
+      set(): External<void> { let e: string[] = new Array<string>(0n); this.a.push(e); this.a.push(["only"]); }
+      get outer(): External<u256> { return this.a.length; }
+      get leni(i: u256): External<u256> { return this.a[i].length; }
+      get get(i: u256, j: u256): External<string> { return this.a[i][j]; }
     }`;
     const S = `contract C {
       string[][] a;
@@ -194,13 +194,13 @@ describe('storage push of a whole nested-dynamic-array element', () => {
   });
 
   it('F: whole-array assignment string[][] = memory image (overwrites longer existing data)', async () => {
-    const J = `@contract class C {
-      @state a: string[][];
-      @external seed(): void { this.a.push(["long-existing-value-that-spans-more-than-thirty-two-bytes-clearly"]); this.a.push(["q", "ww"]); }
-      @external set(): void { let v: string[][] = [["a"], ["bb", "ccc", "dddd"]]; this.a = v; }
-      @external outer(): u256 { return this.a.length; }
-      @external leni(i: u256): u256 { return this.a[i].length; }
-      @external get(i: u256, j: u256): string { return this.a[i][j]; }
+    const J = `class C {
+      a: string[][];
+      seed(): External<void> { this.a.push(["long-existing-value-that-spans-more-than-thirty-two-bytes-clearly"]); this.a.push(["q", "ww"]); }
+      set(): External<void> { let v: string[][] = [["a"], ["bb", "ccc", "dddd"]]; this.a = v; }
+      get outer(): External<u256> { return this.a.length; }
+      get leni(i: u256): External<u256> { return this.a[i].length; }
+      get get(i: u256, j: u256): External<string> { return this.a[i][j]; }
     }`;
     const S = `contract C {
       string[][] a;

@@ -55,14 +55,14 @@ describe('W5A(1): whole fixed-array element store at depth (this.g3[i] = a / pus
       return W(i) + W(0x60n) + W(0x60n + BigInt(hx.length / 2)) + hx + encStr(y);
     };
     await eqCalls(
-      `@contract class C {
-  @state g3: Arr<string,2>[];
-  @external push0(): void { this.g3.push(); }
-  @external pushA(x: string, y: string): void { let a: Arr<string,2> = [x, y]; this.g3.push(a); }
-  @external setAt(i: u256, x: string, y: string): void { let a: Arr<string,2> = [x, y]; this.g3[i] = a; }
-  @external pop(): void { this.g3.pop(); }
-  @external get(i: u256, j: u256): string { return this.g3[i][j]; }
-  @external len(): u256 { return this.g3.length; }
+      `class C {
+  g3: Arr<string,2>[];
+  push0(): External<void> { this.g3.push(); }
+  pushA(x: string, y: string): External<void> { let a: Arr<string,2> = [x, y]; this.g3.push(a); }
+  setAt(i: u256, x: string, y: string): External<void> { let a: Arr<string,2> = [x, y]; this.g3[i] = a; }
+  pop(): External<void> { this.g3.pop(); }
+  get get(i: u256, j: u256): External<string> { return this.g3[i][j]; }
+  get len(): External<u256> { return this.g3.length; }
 }`,
       `contract C {
   string[2][] g3;
@@ -92,13 +92,13 @@ describe('W5A(1): whole fixed-array element store at depth (this.g3[i] = a / pus
 
   it('Arr<u256,3>[] setAt/push (static leaf via storeStaticAggFromMem) and literal RHS-first order', async () => {
     await eqCalls(
-      `@contract class C {
-  @state g3: Arr<u256,3>[];
+      `class C {
+  g3: Arr<u256,3>[];
   boom(): u256 { require(false, "BOOM"); return 1n; }
-  @external push0(): void { this.g3.push(); }
-  @external setAt(i: u256, v: u256): void { let a: Arr<u256,3> = [v, 0n, v * 2n]; this.g3[i] = a; }
-  @external setLit(i: u256): void { this.g3[i] = [this.boom(), 1n, 2n]; }
-  @external get(i: u256, j: u256): u256 { return this.g3[i][j]; }
+  push0(): External<void> { this.g3.push(); }
+  setAt(i: u256, v: u256): External<void> { let a: Arr<u256,3> = [v, 0n, v * 2n]; this.g3[i] = a; }
+  setLit(i: u256): External<void> { this.g3[i] = [this.boom(), 1n, 2n]; }
+  get get(i: u256, j: u256): External<u256> { return this.g3[i][j]; }
 }`,
       `contract C {
   uint256[3][] g3;
@@ -126,15 +126,15 @@ describe('W5A(1): whole fixed-array element store at depth (this.g3[i] = a / pus
       return W(i) + W(0x60n) + W(0x60n + BigInt(hx.length / 2)) + hx + encStr(y);
     };
     await eqCalls(
-      `@struct class D { n: u256; xs: Arr<string,2> }
-@contract class C {
-  @state vals: D[];
-  @state m: mapping<u256, Arr<string,2>>;
-  @external push0(): void { this.vals.push(); }
-  @external setXs(i: u256, x: string, y: string): void { let xs: Arr<string,2> = [x, y]; this.vals[i].xs = xs; }
-  @external getXs(i: u256, j: u256): string { return this.vals[i].xs[j]; }
-  @external setM(k: u256, x: string, y: string): void { let a: Arr<string,2> = [x, y]; this.m[k] = a; }
-  @external getM(k: u256, j: u256): string { return this.m[k][j]; }
+      `type D = { n: u256; xs: Arr<string,2> };
+class C {
+  vals: D[];
+  m: mapping<u256, Arr<string,2>>;
+  push0(): External<void> { this.vals.push(); }
+  setXs(i: u256, x: string, y: string): External<void> { let xs: Arr<string,2> = [x, y]; this.vals[i].xs = xs; }
+  get getXs(i: u256, j: u256): External<string> { return this.vals[i].xs[j]; }
+  setM(k: u256, x: string, y: string): External<void> { let a: Arr<string,2> = [x, y]; this.m[k] = a; }
+  get getM(k: u256, j: u256): External<string> { return this.m[k][j]; }
 }`,
       `struct D { uint256 n; string[2] xs; }
 contract C {
@@ -161,9 +161,9 @@ contract C {
 });
 
 describe('W5A(2): fixed-array element through a nested-dyn-struct chain (v.t.inner.fa[j])', () => {
-  const J3 = `@struct class I { fa: Arr<u256,3>; m: u256 }
-@struct class T { s: string; inner: I }
-@struct class S { a: u256; t: T }
+  const J3 = `type I = { fa: Arr<u256,3>; m: u256 };
+type T = { s: string; inner: I };
+type S = { a: u256; t: T };
 `;
   const S3 = `struct I { uint256[3] fa; uint256 m; }
 struct T { string s; I inner; }
@@ -173,8 +173,8 @@ struct S { uint256 a; T t; }
   it('read + write, const and runtime index, compound forms, runtime OOB Panic 0x32', async () => {
     await eqCalls(
       J3 +
-        `@contract class C {
-  @external @pure go(j: u256): u256 {
+        `class C {
+  get go(j: u256): External<u256> {
     let v: S = S(1n, T("hi", I([10n,20n,30n], 4n)));
     v.t.inner.fa[j] = 99n;
     v.t.inner.fa[1n] += 5n;
@@ -198,12 +198,12 @@ struct S { uint256 a; T t; }
 
   it('struct-element array with a field hop after the index (v.t.inner.qs[j].y)', async () => {
     await eqCalls(
-      `@struct class Q { x: u256; y: u256 }
-@struct class I { qs: Arr<Q,2>; m: u256 }
-@struct class T { s: string; inner: I }
-@struct class S { a: u256; t: T }
-@contract class C {
-  @external @pure go(j: u256): u256 {
+      `type Q = { x: u256; y: u256 };
+type I = { qs: Arr<Q,2>; m: u256 };
+type T = { s: string; inner: I };
+type S = { a: u256; t: T };
+class C {
+  get go(j: u256): External<u256> {
     let v: S = S(1n, T("hi", I([Q(1n,2n), Q(3n,4n)], 9n)));
     v.t.inner.qs[j].y = 42n;
     return v.t.inner.qs[0n].x + v.t.inner.qs[1n].x + v.t.inner.qs[0n].y + v.t.inner.qs[1n].y;
@@ -228,16 +228,16 @@ contract C {
     expect(
       codes(
         J3 +
-          `@contract class C { @external @pure go(): u256 { let v: S = S(1n, T("h", I([1n,2n,3n], 4n))); return v.t.inner.fa[3n]; } }`,
+          `class C { get go(): External<u256> { let v: S = S(1n, T("h", I([1n,2n,3n], 4n))); return v.t.inner.fa[3n]; } }`,
       ),
     ).toContain('JETH211');
   });
 });
 
 describe('W5A(3): whole nested static-struct field read (return / let-alias / internal arg)', () => {
-  const J = `@struct class I { x: u256; y: u256 }
-@struct class T { s: string; inner: I }
-@struct class S { a: u256; t: T }
+  const J = `type I = { x: u256; y: u256 };
+type T = { s: string; inner: I };
+type S = { a: u256; t: T };
 `;
   const SS = `struct I { uint256 x; uint256 y; }
 struct T { string s; I inner; }
@@ -247,12 +247,12 @@ struct S { uint256 a; T t; }
   it('return + abi.encode + let-ALIAS (write-through both directions) + internal-arg mutation', async () => {
     await eqCalls(
       J +
-        `@contract class C {
+        `class C {
   bump(w: I): u256 { w.x += 100n; return w.x + w.y; }
-  @external @pure ret(): I { let v: S = S(1n, T("hi", I(7n, 8n))); return v.t.inner; }
-  @external @pure enc(): bytes { let v: S = S(1n, T("hi", I(7n, 8n))); return abi.encode(v.t.inner); }
-  @external @pure lb(): u256 { let v: S = S(1n, T("hi", I(7n, 8n))); let w: I = v.t.inner; w.y = 50n; v.t.inner.x = 3n; return w.x + v.t.inner.y; }
-  @external @pure arg(): u256 { let v: S = S(1n, T("hi", I(7n, 8n))); let r: u256 = this.bump(v.t.inner); return r + v.t.inner.x; }
+  get ret(): External<I> { let v: S = S(1n, T("hi", I(7n, 8n))); return v.t.inner; }
+  get enc(): External<bytes> { let v: S = S(1n, T("hi", I(7n, 8n))); return abi.encode(v.t.inner); }
+  get lb(): External<u256> { let v: S = S(1n, T("hi", I(7n, 8n))); let w: I = v.t.inner; w.y = 50n; v.t.inner.x = 3n; return w.x + v.t.inner.y; }
+  get arg(): External<u256> { let v: S = S(1n, T("hi", I(7n, 8n))); let r: u256 = this.bump(v.t.inner); return r + v.t.inner.x; }
 }`,
       SS +
         `contract C {
@@ -268,15 +268,15 @@ struct S { uint256 a; T t; }
 
   it('packed fields + deeper chains (v.t.u.inner, v.t.u.inner.q) and a whole static fixed-array field', async () => {
     await eqCalls(
-      `@struct class Q { m: u256; n: u256 }
-@struct class I { p: u8; q: Q; fa: Arr<u256,2> }
-@struct class U { z: string; inner: I }
-@struct class T { s: string; u: U }
-@struct class S { a: u256; t: T }
-@contract class C {
-  @external @pure gq(): Q { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner.q; }
-  @external @pure gi(): I { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner; }
-  @external @pure gf(): Arr<u256,2> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner.fa; }
+      `type Q = { m: u256; n: u256 };
+type I = { p: u8; q: Q; fa: Arr<u256,2> };
+type U = { z: string; inner: I };
+type T = { s: string; u: U };
+type S = { a: u256; t: T };
+class C {
+  get gq(): External<Q> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner.q; }
+  get gi(): External<I> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner; }
+  get gf(): External<Arr<u256,2>> { let v: S = S(1n, T("a", U("b", I(5n, Q(6n, 7n), [8n, 9n])))); return v.t.u.inner.fa; }
 }`,
       `struct Q { uint256 m; uint256 n; }
 struct I { uint8 p; Q q; uint256[2] fa; }
@@ -294,29 +294,29 @@ contract C {
 
   it('adjacent shapes stay CLEAN rejects (no half-accept): storage store / emit / whole member write', () => {
     const store = codes(
-      J + `@contract class C { @state st: I; @external put(): void { let v: S = S(1n, T("hi", I(7n, 8n))); this.st = v.t.inner; } }`,
+      J + `class C { st: I; put(): External<void> { let v: S = S(1n, T("hi", I(7n, 8n))); this.st = v.t.inner; } }`,
     );
     expect(store.length).toBeGreaterThan(0); // JETH900 clean reject (solc accepts; a later lift)
     const emit = codes(
-      J + `@contract class C { @event Ev(i: I): void; @external go(): void { let v: S = S(1n, T("hi", I(7n, 8n))); emit this.Ev(v.t.inner); } }`,
+      J + `class C { Ev: event<{ i: I }>; go(): External<void> { let v: S = S(1n, T("hi", I(7n, 8n))); emit this.Ev(v.t.inner); } }`,
     );
     expect(emit.length).toBeGreaterThan(0);
     // whole nested member WRITE would deep-copy where solc re-points (aliasing would diverge) - JETH429.
     const write = codes(
-      J + `@contract class C { @external go(): u256 { let v: S = S(1n, T("hi", I(7n, 8n))); v.t.inner = I(9n, 10n); return v.t.inner.x; } }`,
+      J + `class C { get go(): External<u256> { let v: S = S(1n, T("hi", I(7n, 8n))); v.t.inner = I(9n, 10n); return v.t.inner.x; } }`,
     );
     expect(write).toContain('JETH429');
   });
 
   it('Edge B unregressed: whole nested DYN struct field return / alias / v.t', async () => {
     await eqCalls(
-      `@struct class U { q: string; n: u256 }
-@struct class T { s: string; u: U }
-@struct class S { a: u256; t: T }
-@contract class C {
-  @external @pure ret(): U { let v: S = S(1n, T("x", U("hello", 7n))); return v.t.u; }
-  @external @pure lb(): u256 { let v: S = S(1n, T("x", U("hello", 7n))); let w: U = v.t.u; w.n = 9n; return v.t.u.n; }
-  @external @pure retT(): T { let v: S = S(1n, T("x", U("hello", 7n))); return v.t; }
+      `type U = { q: string; n: u256 };
+type T = { s: string; u: U };
+type S = { a: u256; t: T };
+class C {
+  get ret(): External<U> { let v: S = S(1n, T("x", U("hello", 7n))); return v.t.u; }
+  get lb(): External<u256> { let v: S = S(1n, T("x", U("hello", 7n))); let w: U = v.t.u; w.n = 9n; return v.t.u.n; }
+  get retT(): External<T> { let v: S = S(1n, T("x", U("hello", 7n))); return v.t; }
 }`,
       `struct U { string q; uint256 n; }
 struct T { string s; U u; }

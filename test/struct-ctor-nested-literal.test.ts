@@ -10,15 +10,15 @@ import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const JETH = `@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
-@struct class Row { x: u256; y: u256; }
-@struct class M { tag: u256; rows: Arr<Row, 2>; }
-@contract class SC {
-  @state w: W;
-  @external setW(t: u256, a: u256, b: u256, c: u256, d: u256): void { this.w = W(t, [[a, b], [c, d]]); }
-  @external @view getW(): W { return this.w; }
-  @external @view mkW(t: u256, a: u256, b: u256, c: u256, d: u256): W { return W(t, [[a, b], [c, d]]); }
-  @external @view mkM(t: u256, x0: u256, y0: u256, x1: u256, y1: u256): M { return M(t, [Row(x0, y0), Row(x1, y1)]); }
+const JETH = `type W = { tag: u256; grid: Arr<Arr<u256, 2>, 2>; };
+type Row = { x: u256; y: u256; };
+type M = { tag: u256; rows: Arr<Row, 2>; };
+class SC {
+  w: W;
+  setW(t: u256, a: u256, b: u256, c: u256, d: u256): External<void> { this.w = W(t, [[a, b], [c, d]]); }
+  get getW(): External<W> { return this.w; }
+  get mkW(t: u256, a: u256, b: u256, c: u256, d: u256): External<W> { return W(t, [[a, b], [c, d]]); }
+  get mkM(t: u256, x0: u256, y0: u256, x1: u256, y1: u256): External<M> { return M(t, [Row(x0, y0), Row(x1, y1)]); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

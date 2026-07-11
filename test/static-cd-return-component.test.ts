@@ -13,12 +13,12 @@ const sel = (s: string) => functionSelector(s);
 
 describe('static calldata aggregate as a multi-return component (JETH213) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@struct class S { a: u256; b: u256; }
-@contract class C {
-  @external @pure fa(a: Arr<u256,2>, x: u256): [Arr<u256,2>, u256] { return [a, x]; }
-  @external @pure fs(s: S, x: u256): [S, u256] { return [s, x]; }
-  @external @pure fn(a: Arr<u8,3>, x: u256): [Arr<u8,3>, u256] { return [a, x]; }
-  @external @pure fm(a: Arr<u256,2>, b: u256[], x: u256): [Arr<u256,2>, u256[], u256] { return [a, b, x]; } }`;
+  const J = `type S = { a: u256; b: u256; };
+class C {
+  get fa(a: Arr<u256,2>, x: u256): External<[Arr<u256,2>, u256]> { return [a, x]; }
+  get fs(s: S, x: u256): External<[S, u256]> { return [s, x]; }
+  get fn(a: Arr<u8,3>, x: u256): External<[Arr<u8,3>, u256]> { return [a, x]; }
+  get fm(a: Arr<u256,2>, b: u256[], x: u256): External<[Arr<u256,2>, u256[], u256]> { return [a, b, x]; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {

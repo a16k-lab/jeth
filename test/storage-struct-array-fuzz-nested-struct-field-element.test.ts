@@ -27,27 +27,26 @@ const STRIDE = 3n; // storage slots per Outer element
 
 // Constant BigInt array indices in JETH must be BigInt literals (this.recs[0n]).
 const JETH = `
-@struct class Inner { x: u128; y: u128; }
-@struct class Outer { p: u64; inner: Inner; q: u64; }
+type Inner = { x: u128; y: u128; };
+type Outer = { p: u64; inner: Inner; q: u64; };
 
-@contract
 class NSFE {
-  @state recs: Outer[];   // length @ slot 0, data @ keccak(0); each Outer = 3 slots
-  @state sentinel: u256;  // slot 1
+  recs: Outer[];   // length @ slot 0, data @ keccak(0); each Outer = 3 slots
+  sentinel: u256;  // slot 1
 
-  @external pushEmpty(): void { this.recs.push(); }
-  @external popRec(): void { this.recs.pop(); }
+  pushEmpty(): External<void> { this.recs.push(); }
+  popRec(): External<void> { this.recs.pop(); }
 
-  @external setP(i: u256, v: u64): void { this.recs[i].p = v; }
-  @external setQ(i: u256, v: u64): void { this.recs[i].q = v; }
-  @external setX(i: u256, v: u128): void { this.recs[i].inner.x = v; }
-  @external setY(i: u256, v: u128): void { this.recs[i].inner.y = v; }
+  setP(i: u256, v: u64): External<void> { this.recs[i].p = v; }
+  setQ(i: u256, v: u64): External<void> { this.recs[i].q = v; }
+  setX(i: u256, v: u128): External<void> { this.recs[i].inner.x = v; }
+  setY(i: u256, v: u128): External<void> { this.recs[i].inner.y = v; }
 
-  @external @view len(): u256 { return this.recs.length; }
-  @external @view getP(i: u256): u64 { return this.recs[i].p; }
-  @external @view getQ(i: u256): u64 { return this.recs[i].q; }
-  @external @view getX(i: u256): u128 { return this.recs[i].inner.x; }
-  @external @view getY(i: u256): u128 { return this.recs[i].inner.y; }
+  get len(): External<u256> { return this.recs.length; }
+  get getP(i: u256): External<u64> { return this.recs[i].p; }
+  get getQ(i: u256): External<u64> { return this.recs[i].q; }
+  get getX(i: u256): External<u128> { return this.recs[i].inner.x; }
+  get getY(i: u256): External<u128> { return this.recs[i].inner.y; }
 }
 `;
 

@@ -60,17 +60,16 @@ function mk(p: Pair) {
 // ---------------------------------------------------------------------------
 // (a) single-slot { uint128 a; uint128 b }  -> storageSlotCount = 1
 // ---------------------------------------------------------------------------
-const A_JETH = `@struct class Rec { a: u128; b: u128; }
-@contract
+const A_JETH = `type Rec = { a: u128; b: u128; };
 class LayoutA {
-  @state recs: Rec[];
-  @state sentinel: u256;
-  @external add(a: u128, b: u128): void { this.recs.push(Rec(a, b)); }
-  @external setA(i: u256, v: u128): void { this.recs[i].a = v; }
-  @external setB(i: u256, v: u128): void { this.recs[i].b = v; }
-  @external @view len(): u256 { return this.recs.length; }
-  @external @view getA(i: u256): u128 { return this.recs[i].a; }
-  @external @view getB(i: u256): u128 { return this.recs[i].b; }
+  recs: Rec[];
+  sentinel: u256;
+  add(a: u128, b: u128): External<void> { this.recs.push(Rec(a, b)); }
+  setA(i: u256, v: u128): External<void> { this.recs[i].a = v; }
+  setB(i: u256, v: u128): External<void> { this.recs[i].b = v; }
+  get len(): External<u256> { return this.recs.length; }
+  get getA(i: u256): External<u128> { return this.recs[i].a; }
+  get getB(i: u256): External<u128> { return this.recs[i].b; }
 }`;
 const A_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -88,19 +87,18 @@ contract LayoutA {
 // ---------------------------------------------------------------------------
 // (b) 3-slot { uint256 a; uint256 b; uint256 c }  -> storageSlotCount = 3
 // ---------------------------------------------------------------------------
-const B_JETH = `@struct class Rec { a: u256; b: u256; c: u256; }
-@contract
+const B_JETH = `type Rec = { a: u256; b: u256; c: u256; };
 class LayoutB {
-  @state recs: Rec[];
-  @state sentinel: u256;
-  @external add(a: u256, b: u256, c: u256): void { this.recs.push(Rec(a, b, c)); }
-  @external setA(i: u256, v: u256): void { this.recs[i].a = v; }
-  @external setB(i: u256, v: u256): void { this.recs[i].b = v; }
-  @external setC(i: u256, v: u256): void { this.recs[i].c = v; }
-  @external @view len(): u256 { return this.recs.length; }
-  @external @view getA(i: u256): u256 { return this.recs[i].a; }
-  @external @view getB(i: u256): u256 { return this.recs[i].b; }
-  @external @view getC(i: u256): u256 { return this.recs[i].c; }
+  recs: Rec[];
+  sentinel: u256;
+  add(a: u256, b: u256, c: u256): External<void> { this.recs.push(Rec(a, b, c)); }
+  setA(i: u256, v: u256): External<void> { this.recs[i].a = v; }
+  setB(i: u256, v: u256): External<void> { this.recs[i].b = v; }
+  setC(i: u256, v: u256): External<void> { this.recs[i].c = v; }
+  get len(): External<u256> { return this.recs.length; }
+  get getA(i: u256): External<u256> { return this.recs[i].a; }
+  get getB(i: u256): External<u256> { return this.recs[i].b; }
+  get getC(i: u256): External<u256> { return this.recs[i].c; }
 }`;
 const B_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -121,18 +119,17 @@ contract LayoutB {
 // (c) tight-pack straddle { uint128 a; uint128 b; uint8 c }
 //     a|b fill slot0 (16+16=32), c in slot1 -> storageSlotCount = 2
 // ---------------------------------------------------------------------------
-const C_JETH = `@struct class Rec { a: u128; b: u128; c: u8; }
-@contract
+const C_JETH = `type Rec = { a: u128; b: u128; c: u8; };
 class LayoutC {
-  @state recs: Rec[];
-  @state sentinel: u256;
-  @external add(a: u128, b: u128, c: u8): void { this.recs.push(Rec(a, b, c)); }
-  @external setA(i: u256, v: u128): void { this.recs[i].a = v; }
-  @external setC(i: u256, v: u8): void { this.recs[i].c = v; }
-  @external @view len(): u256 { return this.recs.length; }
-  @external @view getA(i: u256): u128 { return this.recs[i].a; }
-  @external @view getB(i: u256): u128 { return this.recs[i].b; }
-  @external @view getC(i: u256): u8 { return this.recs[i].c; }
+  recs: Rec[];
+  sentinel: u256;
+  add(a: u128, b: u128, c: u8): External<void> { this.recs.push(Rec(a, b, c)); }
+  setA(i: u256, v: u128): External<void> { this.recs[i].a = v; }
+  setC(i: u256, v: u8): External<void> { this.recs[i].c = v; }
+  get len(): External<u256> { return this.recs.length; }
+  get getA(i: u256): External<u128> { return this.recs[i].a; }
+  get getB(i: u256): External<u128> { return this.recs[i].b; }
+  get getC(i: u256): External<u8> { return this.recs[i].c; }
 }`;
 const C_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -152,20 +149,19 @@ contract LayoutC {
 // (d) { bool a; uint8 b; uint16 c; uint64 d; address e }
 //     1+1+2+8+20 = 32 -> all pack into one slot -> storageSlotCount = 1
 // ---------------------------------------------------------------------------
-const D_JETH = `@struct class Rec { a: bool; b: u8; c: u16; d: u64; e: address; }
-@contract
+const D_JETH = `type Rec = { a: bool; b: u8; c: u16; d: u64; e: address; };
 class LayoutD {
-  @state recs: Rec[];
-  @state sentinel: u256;
-  @external add(a: bool, b: u8, c: u16, d: u64, e: address): void { this.recs.push(Rec(a, b, c, d, e)); }
-  @external setB(i: u256, v: u8): void { this.recs[i].b = v; }
-  @external setE(i: u256, v: address): void { this.recs[i].e = v; }
-  @external @view len(): u256 { return this.recs.length; }
-  @external @view getA(i: u256): bool { return this.recs[i].a; }
-  @external @view getB(i: u256): u8 { return this.recs[i].b; }
-  @external @view getC(i: u256): u16 { return this.recs[i].c; }
-  @external @view getD(i: u256): u64 { return this.recs[i].d; }
-  @external @view getE(i: u256): address { return this.recs[i].e; }
+  recs: Rec[];
+  sentinel: u256;
+  add(a: bool, b: u8, c: u16, d: u64, e: address): External<void> { this.recs.push(Rec(a, b, c, d, e)); }
+  setB(i: u256, v: u8): External<void> { this.recs[i].b = v; }
+  setE(i: u256, v: address): External<void> { this.recs[i].e = v; }
+  get len(): External<u256> { return this.recs.length; }
+  get getA(i: u256): External<bool> { return this.recs[i].a; }
+  get getB(i: u256): External<u8> { return this.recs[i].b; }
+  get getC(i: u256): External<u16> { return this.recs[i].c; }
+  get getD(i: u256): External<u64> { return this.recs[i].d; }
+  get getE(i: u256): External<address> { return this.recs[i].e; }
 }`;
 const D_SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

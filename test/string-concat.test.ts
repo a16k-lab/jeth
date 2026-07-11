@@ -42,22 +42,22 @@ function solAccepts(src: string): boolean {
   }
 }
 
-const J = `@contract class C {
-  @state stored: string;
-  @external @pure tl(name: string): string { return \`Hello \${name}\`; }
-  @external @pure tl2(a: string, b: string): string { return \`<\${a}|\${b}>\`; }
-  @external @pure tllit(): string { const name: string = "World"; return \`Hello \${name}!\`; }
-  @external @pure single(name: string): string { return \`\${name}\`; }
-  @external @view scm(a: string, b: string): string { return a.concat(b); }
-  @external @view scm3(a: string, b: string, c: string): string { return a.concat(b, c); }
-  @external @view bcm(a: bytes, b: bytes): bytes { return a.concat(b); }
-  @external @view bcmN(a: bytes, x: bytes4): bytes { return a.concat(x); }
-  @external @view ss(a: string, b: string): string { return string.concat(a, b); }
-  @external @view bs(a: bytes, b: bytes): bytes { return bytes.concat(a, b); }
-  @external @pure s0(): string { return string.concat(); }
-  @external @pure memloc(): string { const m: string = "ab"; return m.concat("cd"); }
-  @external @view kc(a: string, b: string): bytes32 { return keccak256(bytes(string.concat(a, b))); }
-  @external stor(): string { this.stored = "set"; return this.stored.concat("!"); }
+const J = `class C {
+  stored: string;
+  get tl(name: string): External<string> { return \`Hello \${name}\`; }
+  get tl2(a: string, b: string): External<string> { return \`<\${a}|\${b}>\`; }
+  get tllit(): External<string> { const name: string = "World"; return \`Hello \${name}!\`; }
+  get single(name: string): External<string> { return \`\${name}\`; }
+  get scm(a: string, b: string): External<string> { return a.concat(b); }
+  get scm3(a: string, b: string, c: string): External<string> { return a.concat(b, c); }
+  get bcm(a: bytes, b: bytes): External<bytes> { return a.concat(b); }
+  get bcmN(a: bytes, x: bytes4): External<bytes> { return a.concat(x); }
+  get ss(a: string, b: string): External<string> { return string.concat(a, b); }
+  get bs(a: bytes, b: bytes): External<bytes> { return bytes.concat(a, b); }
+  get s0(): External<string> { return string.concat(); }
+  get memloc(): External<string> { const m: string = "ab"; return m.concat("cd"); }
+  get kc(a: string, b: string): External<bytes32> { return keccak256(bytes(string.concat(a, b))); }
+  stor(): External<string> { this.stored = "set"; return this.stored.concat("!"); }
 }`;
 const S = `contract C {
   string stored;
@@ -119,10 +119,10 @@ describe('concat sources + composition', () => {
 // A computed string (template or concat) is a valid revert/require reason -> dynamic Error(string),
 // byte-identical to solc revert(string.concat(...)) / require(c, string.concat(...)).
 describe('dynamic revert / require messages', () => {
-  const RJ = `@contract class C {
-    @external @pure rt(a: string): u256 { revert(\`bad: \${a}\`); }
-    @external @pure rc(a: string): u256 { revert("bad: ".concat(a)); }
-    @external @pure rq(c: bool, a: string): u256 { require(c, \`need \${a}\`); return 1n; }
+  const RJ = `class C {
+    get rt(a: string): External<u256> { revert(\`bad: \${a}\`); }
+    get rc(a: string): External<u256> { revert("bad: ".concat(a)); }
+    get rq(c: bool, a: string): External<u256> { require(c, \`need \${a}\`); return 1n; }
   }`;
   const RS = `contract C {
     function rt(string calldata a) external pure returns(uint){ revert(string.concat("bad: ", a)); }
@@ -159,7 +159,7 @@ describe('dynamic revert / require messages', () => {
 // single-bytesN concat (which must repack to a bytes value), are also covered.
 describe('many-part concat + bytesN (no StackTooDeep)', () => {
   it('template with 3 interpolations + literal parts', async () => {
-    const J = `@contract class C { @external @pure f(a: string, b: string, c: string): string { return \`transfer \${a} -> \${b}: \${c}\`; } }`;
+    const J = `class C { get f(a: string, b: string, c: string): External<string> { return \`transfer \${a} -> \${b}: \${c}\`; } }`;
     const S = `contract C { function f(string calldata a, string calldata b, string calldata c) external pure returns(string memory){ return string.concat("transfer ", a, " -> ", b, ": ", c); } }`;
     const j = await deployJeth(J);
     const s = await deploySol(S);
@@ -192,7 +192,7 @@ describe('many-part concat + bytesN (no StackTooDeep)', () => {
     expect(o.slice(128, 128 + expected.length)).toBe(expected);
   });
   it('bytes.concat of a single bytesN repacks to bytes', async () => {
-    const J = `@contract class C { @external @pure f(): bytes { const b: bytes16 = bytes16(0xdeadbeefdeadbeefdeadbeefdeadbeefn); return bytes.concat(b); } }`;
+    const J = `class C { get f(): External<bytes> { const b: bytes16 = bytes16(0xdeadbeefdeadbeefdeadbeefdeadbeefn); return bytes.concat(b); } }`;
     const S = `contract C { function f() external pure returns(bytes memory){ bytes16 b=bytes16(0xdeadbeefdeadbeefdeadbeefdeadbeef); return bytes.concat(b); } }`;
     const j = await deployJeth(J);
     const s = await deploySol(S);
@@ -206,27 +206,27 @@ describe('concat accept/reject parity with solc', () => {
   const cases: { label: string; j: string; s: string }[] = [
     {
       label: 'string.concat rejects a uint arg',
-      j: `@contract class C { @external @view f(a: string, n: u256): string { return a.concat(n); } }`,
+      j: `class C { get f(a: string, n: u256): External<string> { return a.concat(n); } }`,
       s: `contract C { function f(string calldata a, uint n) external pure returns(string memory){ return string.concat(a, n); } }`,
     },
     {
       label: 'string.concat rejects a bytes arg',
-      j: `@contract class C { @external @view f(a: string, b: bytes): string { return a.concat(b); } }`,
+      j: `class C { get f(a: string, b: bytes): External<string> { return a.concat(b); } }`,
       s: `contract C { function f(string calldata a, bytes calldata b) external pure returns(string memory){ return string.concat(a, b); } }`,
     },
     {
       label: 'bytes.concat rejects a string arg',
-      j: `@contract class C { @external @view f(a: bytes, b: string): bytes { return a.concat(b); } }`,
+      j: `class C { get f(a: bytes, b: string): External<bytes> { return a.concat(b); } }`,
       s: `contract C { function f(bytes calldata a, string calldata b) external pure returns(bytes memory){ return bytes.concat(a, b); } }`,
     },
     {
       label: 'bytes.concat rejects a uint arg',
-      j: `@contract class C { @external @view f(a: bytes, n: u256): bytes { return a.concat(n); } }`,
+      j: `class C { get f(a: bytes, n: u256): External<bytes> { return a.concat(n); } }`,
       s: `contract C { function f(bytes calldata a, uint n) external pure returns(bytes memory){ return bytes.concat(a, n); } }`,
     },
     {
       label: 'template rejects a non-string interpolation',
-      j: '@contract class C { @external @view f(n: u256): string { return `count ${n}`; } }',
+      j: 'class C { get f(n: u256): External<string> { return `count ${n}`; } }',
       s: `contract C { function f(uint n) external pure returns(string memory){ return string.concat("count ", n); } }`,
     },
   ];
@@ -237,17 +237,17 @@ describe('concat accept/reject parity with solc', () => {
     });
   }
   it('tagged template literals stay rejected', () => {
-    expect(jethAccepts('@contract class C { @external @pure f(): string { return tag`x`; } }')).toBe(false);
+    expect(jethAccepts('class C { get f(): External<string> { return tag`x`; } }')).toBe(false);
   });
   it('a template static part with invalid UTF-8 is rejected like a plain string (both reject)', () => {
     // a template literal builds a `string` (string.concat), so a static part producing a lone high byte
     // (\xff) is invalid UTF-8 and must reject (JETH447), exactly as the plain-string form does and as
     // solc's string.concat rejects. A VALID non-ASCII part (byte-identical to solc unicode"...") accepts.
-    const jbad = '@contract class C { @external @pure f(x: string): string { return `a\\xffb${x}`; } }';
+    const jbad = 'class C { get f(x: string): External<string> { return `a\\xffb${x}`; } }';
     const sbad = 'contract C { function f(string calldata x) external pure returns(string memory){ return string.concat("a\\xffb", x); } }';
     expect(jethAccepts(jbad)).toBe(false);
     expect(solAccepts(sbad)).toBe(false);
     // control: a valid non-ASCII template part (maps to solc unicode"...") is accepted by JETH.
-    expect(jethAccepts('@contract class C { @external @pure f(x: string): string { return `世界${x}`; } }')).toBe(true);
+    expect(jethAccepts('class C { get f(x: string): External<string> { return `世界${x}`; } }')).toBe(true);
   });
 });

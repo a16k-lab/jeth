@@ -25,22 +25,22 @@ function strArg(sel: string, headStatic: bigint[], s: string): string {
   return h;
 }
 
-const JETH = `@struct class P { x: u128; y: u128; }
-@struct class D { a: u256; s: string; }
-@contract class MR {
-  @state mp: mapping<address, P>;
-  @state md: mapping<address, D>;
-  @state mu: mapping<address, u256[]>;
-  @state ms: mapping<address, string[]>;
-  @external setP(k: address, x: u128, y: u128): void { this.mp[k].x = x; this.mp[k].y = y; }
-  @external setDA(k: address, a: u256): void { this.md[k].a = a; }
-  @external setDS(k: address, s: string): void { this.md[k].s = s; }
-  @external pushU(k: address, v: u256): void { this.mu[k].push(v); }
-  @external pushS(k: address, s: string): void { this.ms[k].push(s); }
-  @external @view getP(k: address): P { return this.mp[k]; }
-  @external @view getD(k: address): D { return this.md[k]; }
-  @external @view getU(k: address): u256[] { return this.mu[k]; }
-  @external @view getS(k: address): string[] { return this.ms[k]; }
+const JETH = `type P = { x: u128; y: u128; };
+type D = { a: u256; s: string; };
+class MR {
+  mp: mapping<address, P>;
+  md: mapping<address, D>;
+  mu: mapping<address, u256[]>;
+  ms: mapping<address, string[]>;
+  setP(k: address, x: u128, y: u128): External<void> { this.mp[k].x = x; this.mp[k].y = y; }
+  setDA(k: address, a: u256): External<void> { this.md[k].a = a; }
+  setDS(k: address, s: string): External<void> { this.md[k].s = s; }
+  pushU(k: address, v: u256): External<void> { this.mu[k].push(v); }
+  pushS(k: address, s: string): External<void> { this.ms[k].push(s); }
+  get getP(k: address): External<P> { return this.mp[k]; }
+  get getD(k: address): External<D> { return this.md[k]; }
+  get getU(k: address): External<u256[]> { return this.mu[k]; }
+  get getS(k: address): External<string[]> { return this.ms[k]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

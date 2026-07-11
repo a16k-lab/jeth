@@ -18,12 +18,12 @@ function diags(src: string): string[] {
   }
 }
 
-const JETH = `@contract class UD {
-  @external @pure d8(a: i8, b: i8): i8 { unchecked: { return a / b; } }
-  @external @pure d16(a: i16, b: i16): i16 { unchecked: { return a / b; } }
-  @external @pure d64(a: i64, b: i64): i64 { unchecked: { return a / b; } }
-  @external @pure d128(a: i128, b: i128): i128 { unchecked: { return a / b; } }
-  @external @pure d256(a: i256, b: i256): i256 { unchecked: { return a / b; } }
+const JETH = `class UD {
+  get d8(a: i8, b: i8): External<i8> { unchecked: { return a / b; } }
+  get d16(a: i16, b: i16): External<i16> { unchecked: { return a / b; } }
+  get d64(a: i64, b: i64): External<i64> { unchecked: { return a / b; } }
+  get d128(a: i128, b: i128): External<i128> { unchecked: { return a / b; } }
+  get d256(a: i256, b: i256): External<i256> { unchecked: { return a / b; } }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -66,11 +66,11 @@ describe('round-2.5 fixes', () => {
 
   it('#3 pushing a whole array element into a nested storage array now COMPILES (deep copy; see push-array-elem.test.ts)', () => {
     expect(
-      diags(`@contract class G {
-  @state dd: u256[][];
-  @external f(): void { let xs: u256[] = [1n, 2n]; this.dd.push(xs); }
+      diags(`class G {
+  dd: u256[][];
+  f(): External<void> { let xs: u256[] = [1n, 2n]; this.dd.push(xs); }
 }`),
     ).toEqual([]);
-    expect(diags(`@contract class G { @state dd: u256[][]; @external f(): void { this.dd.push(); } }`)).toEqual([]);
+    expect(diags(`class G { dd: u256[][]; f(): External<void> { this.dd.push(); } }`)).toEqual([]);
   });
 });

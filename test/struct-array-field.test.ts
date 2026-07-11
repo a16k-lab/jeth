@@ -11,20 +11,20 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@struct class S { a: u256; xs: u256[]; b: u256; }
-@struct class E { a: u256; xs: u256[]; }
-@contract class SF {
-  @state s: S;
-  @external setA(v: u256): void { this.s.a = v; }
-  @external setB(v: u256): void { this.s.b = v; }
-  @external pushX(v: u256): void { this.s.xs.push(v); }
-  @external popX(): void { this.s.xs.pop(); }
-  @external setX(i: u256, v: u256): void { this.s.xs[i] = v; }
-  @external @view xlen(): u256 { return this.s.xs.length; }
-  @external @view xat(i: u256): u256 { return this.s.xs[i]; }
-  @external @view getA(): u256 { return this.s.a; }
-  @external @view getS(): S { return this.s; }
-  @external @pure echo(e: E): E { return e; }
+const JETH = `type S = { a: u256; xs: u256[]; b: u256; };
+type E = { a: u256; xs: u256[]; };
+class SF {
+  s: S;
+  setA(v: u256): External<void> { this.s.a = v; }
+  setB(v: u256): External<void> { this.s.b = v; }
+  pushX(v: u256): External<void> { this.s.xs.push(v); }
+  popX(): External<void> { this.s.xs.pop(); }
+  setX(i: u256, v: u256): External<void> { this.s.xs[i] = v; }
+  get xlen(): External<u256> { return this.s.xs.length; }
+  get xat(i: u256): External<u256> { return this.s.xs[i]; }
+  get getA(): External<u256> { return this.s.a; }
+  get getS(): External<S> { return this.s; }
+  get echo(e: E): External<E> { return e; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

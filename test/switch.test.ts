@@ -22,18 +22,18 @@ function codes(src: string): string[] {
 }
 
 const J = `enum Color { Red, Green, Blue }
-@contract class C {
-  @state hits: u256;
-  @external @pure rank(c: Color): u256 {
+class C {
+  hits: u256;
+  get rank(c: Color): External<u256> {
     switch (c) { case Color.Red: return 1n; case Color.Green: case Color.Blue: return 2n; }
     return 0n;   // unreachable (exhaustive), but keeps the type checker happy
   }
-  @external @pure grade(x: u256): u256 {
+  get grade(x: u256): External<u256> {
     let r: u256 = 0n;
     switch (x) { case 1n: r = 100n; break; case 2n: case 3n: r = 200n; break; default: r = 999n; }
     return r;
   }
-  @external bump(x: u256): void {
+  bump(x: u256): External<void> {
     // switch INSIDE a loop: break ends the case (not the loop); continue skips to the next turn.
     let i: u256 = 0n;
     for (i = 0n; i < x; i = i + 1n) {
@@ -41,7 +41,7 @@ const J = `enum Color { Red, Green, Blue }
       this.hits = this.hits + 100n;
     }
   }
-  @external @pure pick(b: bool): u256 { switch (b) { case true: return 7n; case false: return 8n; } }
+  get pick(b: bool): External<u256> { switch (b) { case true: return 7n; case false: return 8n; } }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;

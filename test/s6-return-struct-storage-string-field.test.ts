@@ -49,11 +49,11 @@ const N40 = 'A'.repeat(40); // a >32-byte (multi-word) name
 
 describe('S6: return a struct constructed from a storage bytes/string field', () => {
   it('make(k) = Pair(k, this.name) is byte-identical to solc across "", "hi", and a 40-byte name', async () => {
-    const J = `@struct class Pair { k: u256; name: string }
-@contract class C {
-  @state name: string;
-  @external setName(s: string): void { this.name = s; }
-  @external make(k: u256): Pair { return Pair(k, this.name); }
+    const J = `type Pair = { k: u256; name: string };
+class C {
+  name: string;
+  setName(s: string): External<void> { this.name = s; }
+  get make(k: u256): External<Pair> { return Pair(k, this.name); }
 }`;
     const S = `struct Pair { uint256 k; string name; }
 contract C {
@@ -78,11 +78,11 @@ contract C {
   });
 
   it('mid-position T(9, this.name, 9) is byte-identical to solc', async () => {
-    const J = `@struct class T { a: u256; name: string; b: u256 }
-@contract class C {
-  @state name: string;
-  @external setName(s: string): void { this.name = s; }
-  @external mk(): T { return T(9n, this.name, 9n); }
+    const J = `type T = { a: u256; name: string; b: u256 };
+class C {
+  name: string;
+  setName(s: string): External<void> { this.name = s; }
+  get mk(): External<T> { return T(9n, this.name, 9n); }
 }`;
     const S = `struct T { uint256 a; string name; uint256 b; }
 contract C {
@@ -107,12 +107,12 @@ contract C {
   });
 
   it('two storage strings T2(this.a, this.b) is byte-identical to solc', async () => {
-    const J = `@struct class T2 { a: string; b: string }
-@contract class C {
-  @state a: string;
-  @state b: string;
-  @external setAB(x: string, y: string): void { this.a = x; this.b = y; }
-  @external mk(): T2 { return T2(this.a, this.b); }
+    const J = `type T2 = { a: string; b: string };
+class C {
+  a: string;
+  b: string;
+  setAB(x: string, y: string): External<void> { this.a = x; this.b = y; }
+  get mk(): External<T2> { return T2(this.a, this.b); }
 }`;
     const S = `struct T2 { string a; string b; }
 contract C {
@@ -141,12 +141,12 @@ contract C {
   });
 
   it('nested Outer(k, Inner(this.name)) is byte-identical to solc', async () => {
-    const J = `@struct class Inner { name: string }
-@struct class Outer { k: u256; inner: Inner }
-@contract class C {
-  @state name: string;
-  @external setName(s: string): void { this.name = s; }
-  @external mk(k: u256): Outer { return Outer(k, Inner(this.name)); }
+    const J = `type Inner = { name: string };
+type Outer = { k: u256; inner: Inner };
+class C {
+  name: string;
+  setName(s: string): External<void> { this.name = s; }
+  get mk(k: u256): External<Outer> { return Outer(k, Inner(this.name)); }
 }`;
     const S = `struct Inner { string name; }
 struct Outer { uint256 k; Inner inner; }
@@ -172,11 +172,11 @@ contract C {
   });
 
   it('storage bytes field PairB(k, this.blob) is byte-identical to solc', async () => {
-    const J = `@struct class PairB { k: u256; blob: bytes }
-@contract class C {
-  @state blob: bytes;
-  @external setBlob(b: bytes): void { this.blob = b; }
-  @external make(k: u256): PairB { return PairB(k, this.blob); }
+    const J = `type PairB = { k: u256; blob: bytes };
+class C {
+  blob: bytes;
+  setBlob(b: bytes): External<void> { this.blob = b; }
+  get make(k: u256): External<PairB> { return PairB(k, this.blob); }
 }`;
     const S = `struct PairB { uint256 k; bytes blob; }
 contract C {
@@ -202,11 +202,11 @@ contract C {
 
   // CONTROL 1: abi.encode(Pair(k, this.name)) must STILL match (unregressed - the fix mirrors it).
   it('CONTROL: abi.encode(Pair(k, this.name)) stays byte-identical to solc', async () => {
-    const J = `@struct class Pair { k: u256; name: string }
-@contract class C {
-  @state name: string;
-  @external setName(s: string): void { this.name = s; }
-  @external enc(k: u256): bytes { return abi.encode(Pair(k, this.name)); }
+    const J = `type Pair = { k: u256; name: string };
+class C {
+  name: string;
+  setName(s: string): External<void> { this.name = s; }
+  get enc(k: u256): External<bytes> { return abi.encode(Pair(k, this.name)); }
 }`;
     const S = `struct Pair { uint256 k; string name; }
 contract C {
@@ -227,11 +227,11 @@ contract C {
 
   // CONTROL 2: a dyn VALUE-array field ctor V(k, this.tags) must STILL match (untouched arm).
   it('CONTROL: V(k, this.tags) with a storage u256[] field stays byte-identical to solc', async () => {
-    const J = `@struct class V { k: u256; tags: u256[] }
-@contract class C {
-  @state tags: u256[];
-  @external push(x: u256): void { this.tags.push(x); }
-  @external mk(k: u256): V { return V(k, this.tags); }
+    const J = `type V = { k: u256; tags: u256[] };
+class C {
+  tags: u256[];
+  push(x: u256): External<void> { this.tags.push(x); }
+  get mk(k: u256): External<V> { return V(k, this.tags); }
 }`;
     const S = `struct V { uint256 k; uint256[] tags; }
 contract C {

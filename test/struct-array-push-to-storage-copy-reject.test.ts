@@ -59,63 +59,63 @@ const REJECT: { name: string; code: string; jeth: string; sol: string }[] = [
   {
     name: 'push a MEMORY Box(ctor) -> Box[]  (this.bs.push(Box([...])))',
     code: 'JETH470',
-    jeth: `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@contract class C { @state bs: Box[]; @external go(): void { this.bs.push(Box([In(1n,2n),In(3n,4n)])); } }`,
+    jeth: `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+class C { bs: Box[]; go(): External<void> { this.bs.push(Box([In(1n,2n),In(3n,4n)])); } }`,
     sol: `struct In { uint256 x; uint256 y; } struct Box { In[2] arr; } contract C { Box[] bs; function go() external { bs.push(Box([In(1,2),In(3,4)])); } }`,
   },
   {
     name: 'push a MEMORY local Box -> Box[]',
     code: 'JETH470',
-    jeth: `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@contract class C { @state bs: Box[]; @external go(): void { let b: Box = Box([In(1n,2n),In(3n,4n)]); this.bs.push(b); } }`,
+    jeth: `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+class C { bs: Box[]; go(): External<void> { let b: Box = Box([In(1n,2n),In(3n,4n)]); this.bs.push(b); } }`,
     sol: `struct In { uint256 x; uint256 y; } struct Box { In[2] arr; } contract C { Box[] bs; function go() external { Box memory b=Box([In(1,2),In(3,4)]); bs.push(b); } }`,
   },
   {
     name: 'push a MEMORY struct-array-element Box -> Box[]',
     code: 'JETH470',
-    jeth: `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@contract class C { @state bs: Box[]; @external go(): void { let arr: Box[] = new Array<Box>(1n); arr[0n] = Box([In(1n,2n),In(3n,4n)]); this.bs.push(arr[0n]); } }`,
+    jeth: `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+class C { bs: Box[]; go(): External<void> { let arr: Box[] = new Array<Box>(1n); arr[0n] = Box([In(1n,2n),In(3n,4n)]); this.bs.push(arr[0n]); } }`,
     sol: `struct In { uint256 x; uint256 y; } struct Box { In[2] arr; } contract C { Box[] bs; function go() external { Box[] memory arr=new Box[](1); arr[0]=Box([In(1,2),In(3,4)]); bs.push(arr[0]); } }`,
   },
   {
     name: 'push a MEMORY Arr<In,2> -> (Arr<In,2>)[]  (direct static-struct fixed-array element)',
     code: 'JETH470',
-    jeth: `@struct class In { x: u256; y: u256 }
-@contract class C { @state xs: Arr<In,2>[]; @external go(): void { this.xs.push([In(1n,2n),In(3n,4n)]); } }`,
+    jeth: `type In = { x: u256; y: u256 };
+class C { xs: Arr<In,2>[]; go(): External<void> { this.xs.push([In(1n,2n),In(3n,4n)]); } }`,
     sol: `struct In { uint256 x; uint256 y; } contract C { In[2][] xs; function go() external { xs.push([In(1,2),In(3,4)]); } }`,
   },
   {
     name: 'push a CALLDATA Arr<In,3> -> (Arr<In,3>)[]  (direct array-of-struct rejects even calldata)',
     code: 'JETH470',
-    jeth: `@struct class In { x: u256; y: u256 }
-@contract class C { @state xs: Arr<In,3>[]; @external go(a: Arr<In,3>): void { this.xs.push(a); } }`,
+    jeth: `type In = { x: u256; y: u256 };
+class C { xs: Arr<In,3>[]; go(a: Arr<In,3>): External<void> { this.xs.push(a); } }`,
     sol: `struct In { uint256 x; uint256 y; } contract C { In[3][] xs; function go(In[3] calldata a) external { xs.push(a); } }`,
   },
   {
     name: 'push a MEMORY Arr<DIn,2> -> (Arr<DIn,2>)[]  (direct DYNAMIC-struct fixed-array element, JETH467)',
     code: 'JETH467',
-    jeth: `@struct class DIn { a: u256; s: string }
-@contract class C { @state xs: Arr<DIn,2>[]; @external go(): void { let a: Arr<DIn,2> = [DIn(1n,"x"),DIn(2n,"y")]; this.xs.push(a); } }`,
+    jeth: `type DIn = { a: u256; s: string };
+class C { xs: Arr<DIn,2>[]; go(): External<void> { let a: Arr<DIn,2> = [DIn(1n,"x"),DIn(2n,"y")]; this.xs.push(a); } }`,
     sol: `struct DIn { uint256 a; string s; } contract C { DIn[2][] xs; function go() external { DIn[2] memory a=[DIn(1,"x"),DIn(2,"y")]; xs.push(a); } }`,
   },
   {
     name: 'push a MEMORY Box -> a NESTED-FIELD dyn array (this.wrap.boxes.push(b))',
     code: 'JETH470',
-    jeth: `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@struct class Wrap { boxes: Box[] }
-@contract class C { @state wrap: Wrap; @external go(): void { let b: Box = Box([In(1n,2n),In(3n,4n)]); this.wrap.boxes.push(b); } }`,
+    jeth: `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+type Wrap = { boxes: Box[] };
+class C { wrap: Wrap; go(): External<void> { let b: Box = Box([In(1n,2n),In(3n,4n)]); this.wrap.boxes.push(b); } }`,
     sol: `struct In { uint256 x; uint256 y; } struct Box { In[2] arr; } struct Wrap { Box[] boxes; } contract C { Wrap wrap; function go() external { Box memory b=Box([In(1,2),In(3,4)]); wrap.boxes.push(b); } }`,
   },
   {
     name: 'push a MEMORY Box -> a MAPPING-VALUED dyn array (this.mv[k].push(b))',
     code: 'JETH470',
-    jeth: `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@contract class C { @state mv: mapping<u256,Box[]>; @external go(): void { let b: Box = Box([In(1n,2n),In(3n,4n)]); this.mv[0n].push(b); } }`,
+    jeth: `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+class C { mv: mapping<u256,Box[]>; go(): External<void> { let b: Box = Box([In(1n,2n),In(3n,4n)]); this.mv[0n].push(b); } }`,
     sol: `struct In { uint256 x; uint256 y; } struct Box { In[2] arr; } contract C { mapping(uint256=>Box[]) mv; function go() external { Box memory b=Box([In(1,2),In(3,4)]); mv[0].push(b); } }`,
   },
 ];
@@ -125,8 +125,8 @@ const REJECT: { name: string; code: string; jeth: string; sol: string }[] = [
 // instead of the values). JETH470 is the clean reject.
 const OVER_REJECT_MEM_NESTED = {
   name: 'push a nested Arr<Arr<In,2>,2> from a memory local (safe over-rejection; closes a miscompile)',
-  jeth: `@struct class In { x: u256; y: u256 }
-@contract class C { @state xs: Arr<Arr<In,2>,2>[]; @external go(): void { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; this.xs.push(m); } }`,
+  jeth: `type In = { x: u256; y: u256 };
+class C { xs: Arr<Arr<In,2>,2>[]; go(): External<void> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; this.xs.push(m); } }`,
   sol: `struct In { uint256 x; uint256 y; } contract C { In[2][2][] xs; function go() external { In[2][2] memory m=[[In(1,2),In(3,4)],[In(5,6),In(7,8)]]; xs.push(m); } }`,
 };
 
@@ -148,26 +148,26 @@ describe('JETH467/JETH470 (push entry point): mem|cd struct-array-family push in
 // (storage->storage struct copy + storage struct-array-element copy). All must run byte-identically to solc.
 describe('JETH467/JETH470 scope: calldata|storage struct pushes + storage->storage copies stay ACCEPTED and byte-identical', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@contract class C {
-  @state bs: Box[];
-  @state src: Box;
-  @state a: Box[];
-  @state b: Box[];
-  @state dst: Box;
-  @state boxes: Box[];
-  @external pushCd(z: Box): void { this.bs.push(z); }
-  @external @view gBs(i: u256, j: u256): u256 { return this.bs[i].arr[j].x; }
-  @external seedSrc(z: Box): void { this.src = z; }
-  @external pushStorage(): void { this.bs.push(this.src); }
-  @external seedA(z: Box): void { this.a.push(z); }
-  @external pushStorageElem(): void { this.b.push(this.a[0n]); }
-  @external @view gB(i: u256, j: u256): u256 { return this.b[i].arr[j].x; }
-  @external copyStruct(): void { this.dst = this.src; }
-  @external @view gDst(j: u256): u256 { return this.dst.arr[j].x; }
-  @external seedBoxes(z: Box): void { this.boxes.push(z); }
-  @external copyStructElem(): void { this.dst = this.boxes[0n]; }
+  const J = `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+class C {
+  bs: Box[];
+  src: Box;
+  a: Box[];
+  b: Box[];
+  dst: Box;
+  boxes: Box[];
+  pushCd(z: Box): External<void> { this.bs.push(z); }
+  get gBs(i: u256, j: u256): External<u256> { return this.bs[i].arr[j].x; }
+  seedSrc(z: Box): External<void> { this.src = z; }
+  pushStorage(): External<void> { this.bs.push(this.src); }
+  seedA(z: Box): External<void> { this.a.push(z); }
+  pushStorageElem(): External<void> { this.b.push(this.a[0n]); }
+  get gB(i: u256, j: u256): External<u256> { return this.b[i].arr[j].x; }
+  copyStruct(): External<void> { this.dst = this.src; }
+  get gDst(j: u256): External<u256> { return this.dst.arr[j].x; }
+  seedBoxes(z: Box): External<void> { this.boxes.push(z); }
+  copyStructElem(): External<void> { this.dst = this.boxes[0n]; }
 }`;
   const So = `${SPDX}
 struct In { uint256 x; uint256 y; }

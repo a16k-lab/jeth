@@ -47,7 +47,7 @@ const solcRejects = (src: string, name = 'C'): boolean => {
 describe('JETH471: msg.data is rejected inside a receive body (solc parity)', () => {
   it('msg.data.length in a native receive -> JETH471; solc mirror rejects', () => {
     expect(
-      codes(`class C { @state l: u256; receive(): void { this.l = msg.data.length + 5n; } @external @view g(): u256 { return this.l; } }`),
+      codes(`class C { l: u256; receive(): void { this.l = msg.data.length + 5n; } get g(): External<u256> { return this.l; } }`),
     ).toContain('JETH471');
     expect(
       solcRejects(`contract C { uint256 l; receive() external payable { l = msg.data.length + 5; } function g() external view returns (uint256) { return l; } }`),
@@ -55,17 +55,17 @@ describe('JETH471: msg.data is rejected inside a receive body (solc parity)', ()
   });
 
   it('keccak256(msg.data) in receive -> JETH471', () => {
-    expect(codes(`class C { @state l: bytes32; receive(): void { this.l = keccak256(msg.data); } }`)).toContain('JETH471');
+    expect(codes(`class C { l: bytes32; receive(): void { this.l = keccak256(msg.data); } }`)).toContain('JETH471');
     expect(solcRejects(`contract C { bytes32 l; receive() external payable { l = keccak256(msg.data); } }`)).toBe(true);
   });
 
   it('msg.data.slice(...) in receive -> JETH471', () => {
-    expect(codes(`class C { @state l: u256; receive(): void { this.l = msg.data.slice(0n, 4n).length; } }`)).toContain('JETH471');
+    expect(codes(`class C { l: u256; receive(): void { this.l = msg.data.slice(0n, 4n).length; } }`)).toContain('JETH471');
     expect(solcRejects(`contract C { uint256 l; receive() external payable { l = msg.data[0:4].length; } }`)).toBe(true);
   });
 
   it('msg.data[i] in receive -> JETH471', () => {
-    expect(codes(`class C { @state l: bytes1; receive(): void { this.l = msg.data[0n]; } }`)).toContain('JETH471');
+    expect(codes(`class C { l: bytes1; receive(): void { this.l = msg.data[0n]; } }`)).toContain('JETH471');
     expect(solcRejects(`contract C { bytes1 l; receive() external payable { l = msg.data[0]; } }`)).toBe(true);
   });
 
@@ -79,8 +79,8 @@ describe('JETH471: msg.data is rejected inside a receive body (solc parity)', ()
   it('receive declared in an @abstract base with msg.data -> JETH471', () => {
     expect(
       codes(`
-@abstract class B { @state l: u256; receive(): void { this.l = msg.data.length; } }
-class C extends B { @external @view g(): u256 { return this.l; } }`),
+abstract class B { l: u256; receive(): void { this.l = msg.data.length; } }
+class C extends B { get g(): External<u256> { return this.l; } }`),
     ).toContain('JETH471');
     expect(
       solcRejects(`abstract contract B { uint256 l; receive() external payable virtual { l = msg.data.length; } }
@@ -89,7 +89,7 @@ contract C is B { function g() external view returns (uint256) { return l; } }`)
   });
 
   it('msg.sig in receive stays ACCEPTED, byte-identical to solc (non-vacuous: value seeded via transfer)', async () => {
-    const J = `class C { @state l: bytes32; receive(): void { this.l = msg.sig; } @external @view g(): bytes32 { return this.l; } }`;
+    const J = `class C { l: bytes32; receive(): void { this.l = msg.sig; } get g(): External<bytes32> { return this.l; } }`;
     const S = `contract C { bytes32 l; receive() external payable { l = msg.sig; } function g() external view returns (bytes32) { return l; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -104,7 +104,7 @@ contract C is B { function g() external view returns (uint256) { return l; } }`)
   });
 
   it('msg.value + msg.sender in receive stay ACCEPTED, byte-identical (distinct seed 7 wei)', async () => {
-    const J = `class C { @state v: u256; @state s: address; receive(): void { this.v = msg.value; this.s = msg.sender; } @external @view gv(): u256 { return this.v; } }`;
+    const J = `class C { v: u256; s: address; receive(): void { this.v = msg.value; this.s = msg.sender; } get gv(): External<u256> { return this.v; } }`;
     const S = `contract C { uint256 v; address s; receive() external payable { v = msg.value; s = msg.sender; } function gv() external view returns (uint256) { return v; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -118,7 +118,7 @@ contract C is B { function g() external view returns (uint256) { return l; } }`)
   });
 
   it('msg.data in a FALLBACK stays accepted + byte-identical (unknown selector stores calldata length)', async () => {
-    const J = `class C { @state l: u256; fallback(): void { this.l = msg.data.length; } @external @view g(): u256 { return this.l; } }`;
+    const J = `class C { l: u256; fallback(): void { this.l = msg.data.length; } get g(): External<u256> { return this.l; } }`;
     const S = `contract C { uint256 l; fallback() external { l = msg.data.length; } function g() external view returns (uint256) { return l; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -187,8 +187,8 @@ describe('JETH472: a bodyless receive/fallback declaration is rejected (solc par
   it('a bodyless @virtual receive in an @abstract base with NO derived implementation -> JETH472 (solc: abstract)', () => {
     expect(
       codes(`
-@abstract class B { @virtual receive(): void; }
-class C extends B { @external @view g(): u256 { return 1n; } }`),
+abstract class B { @virtual receive(): void; }
+class C extends B { get g(): External<u256> { return 1n; } }`),
     ).toContain('JETH472');
     expect(
       solcRejects(`abstract contract B { receive() external payable virtual; }
@@ -198,8 +198,8 @@ contract C is B { function g() external view returns (uint256) { return 1; } }`)
 
   it('the legal abstract idiom (bodyless @virtual base + implemented @override in the deployed contract) stays accepted + runs byte-identical', async () => {
     const J = `
-@abstract class B { @virtual receive(): void; }
-class C extends B { @state n: u256; @override receive(): void { this.n = this.n + 1n; } @external @view g(): u256 { return this.n; } }`;
+abstract class B { @virtual receive(): void; }
+class C extends B { n: u256; @override receive(): void { this.n = this.n + 1n; } get g(): External<u256> { return this.n; } }`;
     const S = `abstract contract B { receive() external payable virtual; }
 contract C is B { uint256 n; receive() external payable override { n = n + 1; } function g() external view returns (uint256) { return n; } }`;
     const h = await Harness.create();
@@ -214,7 +214,7 @@ contract C is B { uint256 n; receive() external payable override { n = n + 1; } 
   });
 
   it('an IMPLEMENTED receive is unregressed: transfer succeeds, unknown selector reverts, counter parity', async () => {
-    const J = `class C { @state n: u256; receive(): void { this.n = this.n + 1n; } @external @view g(): u256 { return this.n; } }`;
+    const J = `class C { n: u256; receive(): void { this.n = this.n + 1n; } get g(): External<u256> { return this.n; } }`;
     const S = `contract C { uint256 n; receive() external payable { n = n + 1; } function g() external view returns (uint256) { return n; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -231,7 +231,7 @@ contract C is B { uint256 n; receive() external payable override { n = n + 1; } 
   });
 
   it('an IMPLEMENTED fallback is unregressed: value routing parity (non-payable fallback rejects value)', async () => {
-    const J = `class C { @state n: u256; fallback(): void { this.n = this.n + 10n; } @external @view g(): u256 { return this.n; } }`;
+    const J = `class C { n: u256; fallback(): void { this.n = this.n + 10n; } get g(): External<u256> { return this.n; } }`;
     const S = `contract C { uint256 n; fallback() external { n = n + 10; } function g() external view returns (uint256) { return n; } }`;
     const h = await Harness.create();
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
@@ -314,13 +314,13 @@ describe('JETH473: @nonReentrant on a read-only method (native inference bypass 
   });
 
   it('the F4 adversarial shape (@nonReentrant empty-void body) stays accepted with a nonpayable ABI', () => {
-    const out = compile(`class C { @nonReentrant @external emptyBody(): void {} }`, { fileName: 'C.jeth' });
+    const out = compile(`class C { @nonReentrant emptyBody(): External<void> {} }`, { fileName: 'C.jeth' });
     const mut = out.abi.find((e) => e.type === 'function' && e.name === 'emptyBody') as { stateMutability?: string };
     expect(mut.stateMutability).toBe('nonpayable');
   });
 
   it('@nonReentrant on a WRITING method stays accepted, byte-identical vs the solc transient-mutex mirror', async () => {
-    const J = `class C { @state x: u256; @nonReentrant set(v: u256): External<void> { this.x = v; } get getX(): External<u256> { return this.x; } }`;
+    const J = `class C { x: u256; @nonReentrant set(v: u256): External<void> { this.x = v; } get getX(): External<u256> { return this.x; } }`;
     const S = `contract C { uint256 x;
   modifier nonReentrant() { assembly { if tload(0) { revert(0, 0) } tstore(0, 1) } _; assembly { tstore(0, 0) } }
   function set(uint256 v) external nonReentrant { x = v; }
@@ -364,6 +364,6 @@ describe('JETH473: @nonReentrant on a read-only method (native inference bypass 
   });
 
   it('@nonReentrant + @payable writer stays accepted (control)', () => {
-    expect(codes(`class C { @state x: u256; @nonReentrant @external @payable dep(): void { this.x = this.x + msg.value; } }`)).toEqual([]);
+    expect(codes(`class C { x: u256; @nonReentrant dep(): Payable<void> { this.x = this.x + msg.value; } }`)).toEqual([]);
   });
 });

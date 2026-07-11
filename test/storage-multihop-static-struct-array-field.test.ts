@@ -23,14 +23,14 @@ const me = new Address(Buffer.from('11'.repeat(20), 'hex'));
 const sel = (s: string) => '0x' + functionSelector(s);
 const W = (n: bigint | number) => pad32(BigInt(n));
 
-const D = `@struct class In { x: u256; y: u256 }
-@struct class P { pre: Arr<In,2>; n: u256 }
-@struct class Wr { p: P; m: u256 }`;
+const D = `type In = { x: u256; y: u256 };
+type P = { pre: Arr<In,2>; n: u256 };
+type Wr = { p: P; m: u256 };`;
 const SD = `struct In { uint256 x; uint256 y; } struct P { In[2] pre; uint256 n; } struct Wr { P p; uint256 m; }`;
 
-const J = `${D} @contract class C {
-  @state ps: P[]; @state pa: Arr<P,2>; @state w: Wr; @state one: P;
-  @external seed(): void {
+const J = `${D} class C {
+  ps: P[]; pa: Arr<P,2>; w: Wr; one: P;
+  seed(): External<void> {
     this.ps.push(); this.ps.push();
     this.ps[0n].pre[0n].x=11n; this.ps[0n].pre[0n].y=12n; this.ps[0n].pre[1n].x=13n; this.ps[0n].pre[1n].y=14n; this.ps[0n].n=5n;
     this.ps[1n].pre[0n].x=21n; this.ps[1n].pre[0n].y=22n; this.ps[1n].pre[1n].x=23n; this.ps[1n].pre[1n].y=24n; this.ps[1n].n=6n;
@@ -40,19 +40,19 @@ const J = `${D} @contract class C {
   take(a: Arr<In,2>): u256 { return a[0n].x + 1000n*a[1n].y; }
   hop(a: Arr<In,2>): u256 { return this.take(a); }
   getPre(): Arr<In,2> { return this.ps[1n].pre; }
-  @external @view mc1(): u256 { return this.take(this.ps[0n].pre); }
-  @external @view mc1h(): u256 { return this.hop(this.ps[1n].pre); }
-  @external @view mc2(): u256 { const a: Arr<In,2> = this.getPre(); return a[0n].x + 1000n*a[1n].y; }
-  @external @view mc3(): u256 { let o: Arr<In,2>[] = new Array<Arr<In,2>>(1n); o[0n] = this.ps[0n].pre; return o[0n][1n].y; }
-  @external @view mc4a(): u256 { return this.take(this.pa[1n].pre); }
-  @external @view mc4w(): u256 { let o: Arr<In,2>[] = new Array<Arr<In,2>>(1n); o[0n] = this.pa[1n].pre; return o[0n][0n].x + o[0n][1n].y; }
-  @external @view mc5a(): u256 { return this.take(this.w.p.pre); }
-  @external @view mc5w(): u256 { let o: Arr<In,2>[] = new Array<Arr<In,2>>(1n); o[0n] = this.w.p.pre; return o[0n][0n].y + o[0n][1n].x; }
-  @external @view ctlOne(): u256 { return this.take(this.one.pre); }
-  @external @view ctlLeaf(): u256 { return this.ps[0n].pre[0n].x + 1000n*this.ps[0n].pre[1n].y; }
-  @external @view ctlRet(): Arr<In,2> { return this.ps[1n].pre; }
-  @external @view ctlEnc(): bytes { return abi.encode(this.w.p.pre); }
-  @external @view ctlTern(c: bool): u256 { return this.take(c ? this.ps[0n].pre : this.ps[1n].pre); } }`;
+  get mc1(): External<u256> { return this.take(this.ps[0n].pre); }
+  get mc1h(): External<u256> { return this.hop(this.ps[1n].pre); }
+  get mc2(): External<u256> { const a: Arr<In,2> = this.getPre(); return a[0n].x + 1000n*a[1n].y; }
+  get mc3(): External<u256> { let o: Arr<In,2>[] = new Array<Arr<In,2>>(1n); o[0n] = this.ps[0n].pre; return o[0n][1n].y; }
+  get mc4a(): External<u256> { return this.take(this.pa[1n].pre); }
+  get mc4w(): External<u256> { let o: Arr<In,2>[] = new Array<Arr<In,2>>(1n); o[0n] = this.pa[1n].pre; return o[0n][0n].x + o[0n][1n].y; }
+  get mc5a(): External<u256> { return this.take(this.w.p.pre); }
+  get mc5w(): External<u256> { let o: Arr<In,2>[] = new Array<Arr<In,2>>(1n); o[0n] = this.w.p.pre; return o[0n][0n].y + o[0n][1n].x; }
+  get ctlOne(): External<u256> { return this.take(this.one.pre); }
+  get ctlLeaf(): External<u256> { return this.ps[0n].pre[0n].x + 1000n*this.ps[0n].pre[1n].y; }
+  get ctlRet(): External<Arr<In,2>> { return this.ps[1n].pre; }
+  get ctlEnc(): External<bytes> { return abi.encode(this.w.p.pre); }
+  get ctlTern(c: bool): External<u256> { return this.take(c ? this.ps[0n].pre : this.ps[1n].pre); } }`;
 
 const S = `${SD} contract C {
   P[] ps; P[2] pa; Wr w; P one;
@@ -112,7 +112,7 @@ describe('storage multi-hop Arr<In,N> field through the pointer-headed channels 
       }
     };
     expect(
-      codes(`${D} @contract class C { take(a: Arr<In,2>): u256 { return a[0n].x; } @external @pure f(c: bool): u256 { const xs: P[] = [P([In(1n,2n),In(3n,4n)],5n), P([In(6n,7n),In(8n,9n)],10n)]; return this.take(c ? xs[0n].pre : xs[1n].pre); } }`),
+      codes(`${D} class C { take(a: Arr<In,2>): u256 { return a[0n].x; } get f(c: bool): External<u256> { const xs: P[] = [P([In(1n,2n),In(3n,4n)],5n), P([In(6n,7n),In(8n,9n)],10n)]; return this.take(c ? xs[0n].pre : xs[1n].pre); } }`),
     ).toContain('JETH074');
   });
 });

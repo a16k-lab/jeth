@@ -28,34 +28,34 @@ function codes(src: string): string[] {
 describe('variable shadowing accept/reject parity with solc (#11/#12)', () => {
   it('accepts cross-scope shadowing exactly where solc does', () => {
     // a body-top-level local shadowing a parameter (solc: function body is a child scope of the params)
-    expect(codes('@contract class C { @external @pure f(a: u256): u256 { let a: u256 = 1n; return a; } }')).toEqual([]);
+    expect(codes('class C { get f(a: u256): External<u256> { let a: u256 = 1n; return a; } }')).toEqual([]);
     // a nested-block local shadowing the parameter
     expect(
       codes(
-        '@contract class C { @external @pure f(a: u256): u256 { let s: u256 = a; if (a > 0n) { let a: u256 = 100n; s = a; } return s; } }',
+        'class C { get f(a: u256): External<u256> { let s: u256 = a; if (a > 0n) { let a: u256 = 100n; s = a; } return s; } }',
       ),
     ).toEqual([]);
     // a nested-block local shadowing an earlier local
     expect(
       codes(
-        '@contract class C { @external @pure f(x: u256): u256 { let a: u256 = 1n; { let a: u256 = 2n; return a; } } }',
+        'class C { get f(x: u256): External<u256> { let a: u256 = 1n; { let a: u256 = 2n; return a; } } }',
       ),
     ).toEqual([]);
   });
   it('rejects same-scope redeclaration (JETH068), exactly where solc errors', () => {
     expect(
-      codes('@contract class C { @external @pure f(x: u256): u256 { let a: u256 = 1n; let a: u256 = 2n; return a; } }'),
+      codes('class C { get f(x: u256): External<u256> { let a: u256 = 1n; let a: u256 = 2n; return a; } }'),
     ).toContain('JETH068');
     // two parameters with the same name is a same-scope collision too (caught earlier as JETH442)
-    expect(codes('@contract class C { @external @pure f(a: u256, a: u256): u256 { return a; } }')).toContain('JETH442');
+    expect(codes('class C { get f(a: u256, a: u256): External<u256> { return a; } }')).toContain('JETH442');
   });
 
   describe('runtime byte-identical to solc', () => {
     let jeth: Harness, sol: Harness, aj: Address, as: Address;
-    const J = `@contract class C {
-      @external @pure pshadow(a: u256): u256 { let a: u256 = 7n; return a; }
-      @external @pure nested(a: u256): u256 { let s: u256 = a; if (a > 0n) { let a: u256 = 100n; s = s + a; } return s; }
-      @external @pure earlier(x: u256): u256 { let a: u256 = x; { let a: u256 = x + 5n; return a; } } }`;
+    const J = `class C {
+      get pshadow(a: u256): External<u256> { let a: u256 = 7n; return a; }
+      get nested(a: u256): External<u256> { let s: u256 = a; if (a > 0n) { let a: u256 = 100n; s = s + a; } return s; }
+      get earlier(x: u256): External<u256> { let a: u256 = x; { let a: u256 = x + 5n; return a; } } }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {

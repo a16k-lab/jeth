@@ -44,15 +44,15 @@ async function diff(J: string, S: string, calls: [string, string?][]) {
 
 describe('storage dyn-struct-array cluster (#1 copy / #3 deep field read / #4 element assign) byte-identical', () => {
   it('#1 whole-array copy storage->memory (read back, length, return, abi.encode) + NON-ALIASING', async () => {
-    const J = `@struct class D { id: u256; tags: bytes[]; }
-    @contract class C { @state vals: D[];
-      @external seed(): void { let a: bytes[] = [bytes("aa"), bytes("bb")]; this.vals.push(D(1n, a)); let b: bytes[] = [bytes("ccc")]; this.vals.push(D(2n, b)); }
-      @external @view rowId(i: u256): u256 { let row: D[] = this.vals; return row[i].id; }
-      @external @view rowLen(): u256 { let row: D[] = this.vals; return row.length; }
-      @external @view rowTag(i: u256, j: u256): bytes { let row: D[] = this.vals; return row[i].tags[j]; }
-      @external @view retRow(): D[] { let row: D[] = this.vals; return row; }
-      @external @view encRow(): bytes { let row: D[] = this.vals; return abi.encode(row); }
-      @external mutate(): u256 { let row: D[] = this.vals; row[0n].id = 999n; return this.vals[0n].id; } }`;
+    const J = `type D = { id: u256; tags: bytes[]; };
+    class C { vals: D[];
+      seed(): External<void> { let a: bytes[] = [bytes("aa"), bytes("bb")]; this.vals.push(D(1n, a)); let b: bytes[] = [bytes("ccc")]; this.vals.push(D(2n, b)); }
+      get rowId(i: u256): External<u256> { let row: D[] = this.vals; return row[i].id; }
+      get rowLen(): External<u256> { let row: D[] = this.vals; return row.length; }
+      get rowTag(i: u256, j: u256): External<bytes> { let row: D[] = this.vals; return row[i].tags[j]; }
+      get retRow(): External<D[]> { let row: D[] = this.vals; return row; }
+      get encRow(): External<bytes> { let row: D[] = this.vals; return abi.encode(row); }
+      get mutate(): External<u256> { let row: D[] = this.vals; row[0n].id = 999n; return this.vals[0n].id; } }`;
     const S = `struct D { uint256 id; bytes[] tags; }
     contract C { D[] vals;
       function seed() external { bytes[] memory a=new bytes[](2); a[0]="aa"; a[1]="bb"; vals.push(D(1,a)); bytes[] memory b=new bytes[](1); b[0]="ccc"; vals.push(D(2,b)); }
@@ -76,12 +76,12 @@ describe('storage dyn-struct-array cluster (#1 copy / #3 deep field read / #4 el
   });
 
   it('#3 deep element-field reads: vals[i].tags / vals[i].tags[j] / vals[i].tags.length + OOB Panic', async () => {
-    const J = `@struct class D { id: u256; tags: bytes[]; }
-    @contract class C { @state vals: D[];
-      @external seed(): void { let a: bytes[] = [bytes("aa"), bytes("a-leaf-well-past-thirty-two-bytes-boundary!!")]; this.vals.push(D(1n, a)); let b: bytes[] = [bytes("z")]; this.vals.push(D(2n, b)); }
-      @external @view whole(i: u256): bytes[] { return this.vals[i].tags; }
-      @external @view one(i: u256, j: u256): bytes { return this.vals[i].tags[j]; }
-      @external @view len(i: u256): u256 { return this.vals[i].tags.length; } }`;
+    const J = `type D = { id: u256; tags: bytes[]; };
+    class C { vals: D[];
+      seed(): External<void> { let a: bytes[] = [bytes("aa"), bytes("a-leaf-well-past-thirty-two-bytes-boundary!!")]; this.vals.push(D(1n, a)); let b: bytes[] = [bytes("z")]; this.vals.push(D(2n, b)); }
+      get whole(i: u256): External<bytes[]> { return this.vals[i].tags; }
+      get one(i: u256, j: u256): External<bytes> { return this.vals[i].tags[j]; }
+      get len(i: u256): External<u256> { return this.vals[i].tags.length; } }`;
     const S = `struct D { uint256 id; bytes[] tags; }
     contract C { D[] vals;
       function seed() external { bytes[] memory a=new bytes[](2); a[0]="aa"; a[1]="a-leaf-well-past-thirty-two-bytes-boundary!!"; vals.push(D(1,a)); bytes[] memory b=new bytes[](1); b[0]="z"; vals.push(D(2,b)); }
@@ -107,13 +107,13 @@ describe('storage dyn-struct-array cluster (#1 copy / #3 deep field read / #4 el
   });
 
   it('#4 whole-element index-assign this.vals[i]=D(9n,t2): re-read + later push + OOB Panic', async () => {
-    const J = `@struct class D { id: u256; tags: bytes[]; }
-    @contract class C { @state vals: D[];
-      @external seed(): void { let a: bytes[] = [bytes("aa"), bytes("bb")]; this.vals.push(D(1n, a)); let b: bytes[] = [bytes("ccc")]; this.vals.push(D(2n, b)); }
-      @external put(i: u256): void { let t: bytes[] = [bytes("NEW-overwrites-the-old-element-data-here!!"), bytes("x")]; this.vals[i] = D(9n, t); }
-      @external push3(): void { let c: bytes[] = [bytes("third")]; this.vals.push(D(3n, c)); }
-      @external @view getAll(): D[] { return this.vals; }
-      @external @view getOne(i: u256): D { return this.vals[i]; } }`;
+    const J = `type D = { id: u256; tags: bytes[]; };
+    class C { vals: D[];
+      seed(): External<void> { let a: bytes[] = [bytes("aa"), bytes("bb")]; this.vals.push(D(1n, a)); let b: bytes[] = [bytes("ccc")]; this.vals.push(D(2n, b)); }
+      put(i: u256): External<void> { let t: bytes[] = [bytes("NEW-overwrites-the-old-element-data-here!!"), bytes("x")]; this.vals[i] = D(9n, t); }
+      push3(): External<void> { let c: bytes[] = [bytes("third")]; this.vals.push(D(3n, c)); }
+      get getAll(): External<D[]> { return this.vals; }
+      get getOne(i: u256): External<D> { return this.vals[i]; } }`;
     const S = `struct D { uint256 id; bytes[] tags; }
     contract C { D[] vals;
       function seed() external { bytes[] memory a=new bytes[](2); a[0]="aa"; a[1]="bb"; vals.push(D(1,a)); bytes[] memory b=new bytes[](1); b[0]="ccc"; vals.push(D(2,b)); }
@@ -136,17 +136,17 @@ describe('storage dyn-struct-array cluster (#1 copy / #3 deep field read / #4 el
   });
 
   it('string[] + u256[][] leaf-field variants for #1/#3/#4', async () => {
-    const J = `@struct class D { id: u256; names: string[]; grid: u256[][]; }
-    @contract class C { @state vals: D[];
-      @external seed(): void {
+    const J = `type D = { id: u256; names: string[]; grid: u256[][]; };
+    class C { vals: D[];
+      seed(): External<void> {
         let n: string[] = ["hi", "world-longer-than-thirty-two-bytes-for-sure!"]; let r0: u256[] = [1n, 2n]; let r1: u256[] = [3n]; let g: u256[][] = [r0, r1];
         this.vals.push(D(1n, n, g));
       }
-      @external @view rowNames(i: u256): string[] { let row: D[] = this.vals; return row[i].names; }
-      @external @view eltGrid(i: u256): u256[][] { return this.vals[i].grid; }
-      @external @view eltName(i: u256, j: u256): string { return this.vals[i].names[j]; }
-      @external put(i: u256): void { let n2: string[] = ["replaced"]; let g2: u256[][] = []; this.vals[i] = D(7n, n2, g2); }
-      @external @view getOne(i: u256): D { return this.vals[i]; } }`;
+      get rowNames(i: u256): External<string[]> { let row: D[] = this.vals; return row[i].names; }
+      get eltGrid(i: u256): External<u256[][]> { return this.vals[i].grid; }
+      get eltName(i: u256, j: u256): External<string> { return this.vals[i].names[j]; }
+      put(i: u256): External<void> { let n2: string[] = ["replaced"]; let g2: u256[][] = []; this.vals[i] = D(7n, n2, g2); }
+      get getOne(i: u256): External<D> { return this.vals[i]; } }`;
     const S = `struct D { uint256 id; string[] names; uint256[][] grid; }
     contract C { D[] vals;
       function seed() external {
@@ -170,11 +170,11 @@ describe('storage dyn-struct-array cluster (#1 copy / #3 deep field read / #4 el
 
   it('REGRESSION GUARD: static P[], single-bytes-field D[], single struct, whole-array return/encode unchanged', async () => {
     await diff(
-      `@struct class P { a: u256; b: u256; }
-       @contract class C { @state vals: P[];
-         @external seed(): void { this.vals.push(P(1n, 2n)); this.vals.push(P(3n, 4n)); }
-         @external @view getAll(): P[] { return this.vals; }
-         @external @view cpy(): P[] { let r: P[] = this.vals; return r; } }`,
+      `type P = { a: u256; b: u256; };
+       class C { vals: P[];
+         seed(): External<void> { this.vals.push(P(1n, 2n)); this.vals.push(P(3n, 4n)); }
+         get getAll(): External<P[]> { return this.vals; }
+         get cpy(): External<P[]> { let r: P[] = this.vals; return r; } }`,
       `struct P { uint256 a; uint256 b; }
        contract C { P[] vals;
          function seed() external { vals.push(P(1,2)); vals.push(P(3,4)); }
@@ -183,12 +183,12 @@ describe('storage dyn-struct-array cluster (#1 copy / #3 deep field read / #4 el
       [['seed()'], ['getAll()'], ['cpy()']],
     );
     await diff(
-      `@struct class D { id: u256; s: bytes; }
-       @contract class C { @state vals: D[];
-         @external seed(): void { this.vals.push(D(1n, bytes("hi"))); this.vals.push(D(2n, bytes("world!"))); }
-         @external @view getAll(): D[] { return this.vals; }
-         @external @view cpy(): D[] { let r: D[] = this.vals; return r; }
-         @external @view encV(): bytes { return abi.encode(this.vals); } }`,
+      `type D = { id: u256; s: bytes; };
+       class C { vals: D[];
+         seed(): External<void> { this.vals.push(D(1n, bytes("hi"))); this.vals.push(D(2n, bytes("world!"))); }
+         get getAll(): External<D[]> { return this.vals; }
+         get cpy(): External<D[]> { let r: D[] = this.vals; return r; }
+         get encV(): External<bytes> { return abi.encode(this.vals); } }`,
       `struct D { uint256 id; bytes s; }
        contract C { D[] vals;
          function seed() external { vals.push(D(1,"hi")); vals.push(D(2,"world!")); }
@@ -200,11 +200,11 @@ describe('storage dyn-struct-array cluster (#1 copy / #3 deep field read / #4 el
   });
 
   it('#4 element-assign with a STORAGE leaf-array source (this.vals[i]=D(9n,this.tpl)) byte-identical', async () => {
-    const J = `@struct class D { id: u256; tags: bytes[]; }
-    @contract class C { @state vals: D[]; @state tpl: bytes[];
-      @external seed(): void { let a: bytes[] = [bytes("aa"), bytes("bb")]; this.vals.push(D(1n, a)); this.tpl.push(bytes("TEMPLATE-leaf-bytes-longer-than-32-here!!")); this.tpl.push(bytes("q")); }
-      @external put(i: u256): void { this.vals[i] = D(9n, this.tpl); }
-      @external @view getOne(i: u256): D { return this.vals[i]; } }`;
+    const J = `type D = { id: u256; tags: bytes[]; };
+    class C { vals: D[]; tpl: bytes[];
+      seed(): External<void> { let a: bytes[] = [bytes("aa"), bytes("bb")]; this.vals.push(D(1n, a)); this.tpl.push(bytes("TEMPLATE-leaf-bytes-longer-than-32-here!!")); this.tpl.push(bytes("q")); }
+      put(i: u256): External<void> { this.vals[i] = D(9n, this.tpl); }
+      get getOne(i: u256): External<D> { return this.vals[i]; } }`;
     const S = `struct D { uint256 id; bytes[] tags; }
     contract C { D[] vals; bytes[] tpl;
       function seed() external { bytes[] memory a=new bytes[](2); a[0]="aa"; a[1]="bb"; vals.push(D(1,a)); tpl.push("TEMPLATE-leaf-bytes-longer-than-32-here!!"); tpl.push("q"); }
@@ -216,13 +216,13 @@ describe('storage dyn-struct-array cluster (#1 copy / #3 deep field read / #4 el
   it('SOUNDNESS: a CALLDATA leaf-array source for the element constructor cleanly rejects (no crash)', () => {
     // this.vals[i] = D(9n, t) where t is a CALLDATA bytes[] would FLATTEN the leaf field (wrong bytes), so
     // it stays a clean reject (JETH900), exactly like vals.push(D(9n, <calldata bytes[]>)).
-    const src = `@struct class D { id: u256; tags: bytes[]; }
-      @contract class C { @state vals: D[]; @external set(i: u256, t: bytes[]): void { this.vals[i] = D(9n, t); } }`;
+    const src = `type D = { id: u256; tags: bytes[]; };
+      class C { vals: D[]; set(i: u256, t: bytes[]): External<void> { this.vals[i] = D(9n, t); } }`;
     expect(codes(src)).toContain('JETH900');
     // a struct-element (D[]) field of an outer struct constructed whole into storage still cleanly rejects.
-    const src2 = `@struct class D { id: u256; tags: bytes[]; }
-      @struct class Outer { tag: u256; ds: D[]; }
-      @contract class C { @state vals: Outer[]; @external set(i: u256): void { this.vals[i] = Outer(1n, this.vals[0n].ds); } }`;
+    const src2 = `type D = { id: u256; tags: bytes[]; };
+      type Outer = { tag: u256; ds: D[]; };
+      class C { vals: Outer[]; set(i: u256): External<void> { this.vals[i] = Outer(1n, this.vals[0n].ds); } }`;
     expect(codes(src2).length).toBeGreaterThan(0);
   });
 });

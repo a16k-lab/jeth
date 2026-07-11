@@ -13,12 +13,12 @@ const rejects = (src: string): boolean => { try { compile(src, { fileName: 'C.je
 
 describe('string / bytes equality (== / !=) - byte-identical to the solc keccak idiom', () => {
   it('==, !=, bytes, long strings all match keccak256(bytes(a)) == keccak256(bytes(b))', async () => {
-    const J = `@contract class C {
-      @external @pure eq(): bool { let a: string = "hello"; let b: string = "hello"; return a == b; }
-      @external @pure ne(): bool { let a: string = "hello"; let b: string = "world"; return a == b; }
-      @external @pure nq(): bool { let a: string = "hello"; let b: string = "world"; return a != b; }
-      @external @pure by(): bool { let a: bytes = bytes("abc"); let b: bytes = bytes("abd"); return a == b; }
-      @external @pure lg(): bool { let a: string = "the quick brown fox jumps over"; let b: string = "the quick brown fox jumps over"; return a == b; } }`;
+    const J = `class C {
+      get eq(): External<bool> { let a: string = "hello"; let b: string = "hello"; return a == b; }
+      get ne(): External<bool> { let a: string = "hello"; let b: string = "world"; return a == b; }
+      get nq(): External<bool> { let a: string = "hello"; let b: string = "world"; return a != b; }
+      get by(): External<bool> { let a: bytes = bytes("abc"); let b: bytes = bytes("abd"); return a == b; }
+      get lg(): External<bool> { let a: string = "the quick brown fox jumps over"; let b: string = "the quick brown fox jumps over"; return a == b; } }`;
     const S = `contract C {
       function eq() external pure returns(bool){ string memory a="hello"; string memory b="hello"; return keccak256(bytes(a))==keccak256(bytes(b)); }
       function ne() external pure returns(bool){ string memory a="hello"; string memory b="world"; return keccak256(bytes(a))==keccak256(bytes(b)); }
@@ -36,9 +36,9 @@ describe('string / bytes equality (== / !=) - byte-identical to the solc keccak 
     }
   });
   it('ordered comparisons on string/bytes stay rejected (JETH088)', () => {
-    expect(rejects(`@contract class C { @external @pure f(a: string, b: string): bool { return a < b; } }`)).toBe(true);
-    expect(rejects(`@contract class C { @external @pure f(a: bytes, b: bytes): bool { return a > b; } }`)).toBe(true);
+    expect(rejects(`class C { get f(a: string, b: string): External<bool> { return a < b; } }`)).toBe(true);
+    expect(rejects(`class C { get f(a: bytes, b: bytes): External<bool> { return a > b; } }`)).toBe(true);
     // a string-vs-bytes == mix still rejects (no common type; matches solc)
-    expect(rejects(`@contract class C { @external @pure f(a: string, b: bytes): bool { return a == b; } }`)).toBe(true);
+    expect(rejects(`class C { get f(a: string, b: bytes): External<bool> { return a == b; } }`)).toBe(true);
   });
 });

@@ -45,13 +45,13 @@ async function diff(J: string, S: string, calls: [string, string?][]) {
 
 describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-identical to solc 0.8.35', () => {
   it('D{id;tags:bytes[]}[]: return / abi.encode / single element (was a miscompile)', async () => {
-    const J = `@struct class D { id: u256; tags: bytes[]; }
-    @contract class C { @state vals: D[];
-      @external seed(): void { let a: bytes[] = [bytes("aa"), bytes("bb")]; this.vals.push(D(1n, a)); let b: bytes[] = [bytes("ccc")]; this.vals.push(D(2n, b)); }
-      @external getAll(): D[] { return this.vals; }
-      @external getOne(i: u256): D { return this.vals[i]; }
-      @external enc(): bytes { return abi.encode(this.vals); }
-      @external encOne(i: u256): bytes { return abi.encode(this.vals[i]); } }`;
+    const J = `type D = { id: u256; tags: bytes[]; };
+    class C { vals: D[];
+      seed(): External<void> { let a: bytes[] = [bytes("aa"), bytes("bb")]; this.vals.push(D(1n, a)); let b: bytes[] = [bytes("ccc")]; this.vals.push(D(2n, b)); }
+      get getAll(): External<D[]> { return this.vals; }
+      get getOne(i: u256): External<D> { return this.vals[i]; }
+      get enc(): External<bytes> { return abi.encode(this.vals); }
+      get encOne(i: u256): External<bytes> { return abi.encode(this.vals[i]); } }`;
     const S = `struct D { uint256 id; bytes[] tags; }
     contract C { D[] vals;
       function seed() external { bytes[] memory a=new bytes[](2); a[0]="aa"; a[1]="bb"; vals.push(D(1,a)); bytes[] memory b=new bytes[](1); b[0]="ccc"; vals.push(D(2,b)); }
@@ -71,9 +71,9 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
   });
 
   it('string[] / u256[][] leaf-field, multi-field, long + empty leaves, empty outer', async () => {
-    const J = `@struct class D { id: u256; tags: bytes[]; names: string[]; grid: u256[][]; }
-    @contract class C { @state vals: D[];
-      @external seed(): void {
+    const J = `type D = { id: u256; tags: bytes[]; names: string[]; grid: u256[][]; };
+    class C { vals: D[];
+      seed(): External<void> {
         let t: bytes[] = [bytes("a-much-longer-leaf-past-32-bytes-boundary!!!"), bytes("")];
         let n: string[] = ["hi"];
         let r0: u256[] = [1n, 2n]; let r1: u256[] = [3n]; let g: u256[][] = [r0, r1];
@@ -83,9 +83,9 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
         let g2: u256[][] = [];
         this.vals.push(D(2n, t2, n2, g2));
       }
-      @external getAll(): D[] { return this.vals; }
-      @external getOne(i: u256): D { return this.vals[i]; }
-      @external enc(): bytes { return abi.encode(this.vals); } }`;
+      get getAll(): External<D[]> { return this.vals; }
+      get getOne(i: u256): External<D> { return this.vals[i]; }
+      get enc(): External<bytes> { return abi.encode(this.vals); } }`;
     const S = `struct D { uint256 id; bytes[] tags; string[] names; uint256[][] grid; }
     contract C { D[] vals;
       function seed() external {
@@ -113,16 +113,16 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
   });
 
   it('leading nested-leaf field (offset 0) + stale-slot reuse deep-clear', async () => {
-    const J = `@struct class D { tags: bytes[]; id: u256; }
-    @contract class C { @state vals: D[];
-      @external seed(): void {
+    const J = `type D = { tags: bytes[]; id: u256; };
+    class C { vals: D[];
+      seed(): External<void> {
         let a: bytes[] = [bytes("very-long-leaf-bytes-well-past-32-boundary!!"), bytes("xx")]; this.vals.push(D(a, 1n));
         let b: bytes[] = [bytes("yy")]; this.vals.push(D(b, 2n));
         this.vals.pop();
         let c: bytes[] = [bytes("z")]; this.vals.push(D(c, 3n));
       }
-      @external getAll(): D[] { return this.vals; }
-      @external getOne(): D { return this.vals[1n]; } }`;
+      get getAll(): External<D[]> { return this.vals; }
+      get getOne(): External<D> { return this.vals[1n]; } }`;
     const S = `struct D { bytes[] tags; uint256 id; }
     contract C { D[] vals;
       function seed() external {
@@ -138,10 +138,10 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
 
   it('Arr<D,N> fixed outer + an outer struct with a D[] field + mapping-valued D[]', async () => {
     // mapping-valued D[]
-    const Jm = `@struct class D { id: u256; tags: bytes[]; }
-    @contract class C { @state m: mapping<u256, D[]>;
-      @external seed(): void { let a: bytes[] = [bytes("xx"), bytes("yy")]; this.m[5n].push(D(1n, a)); let b: bytes[] = [bytes("z")]; this.m[5n].push(D(2n, b)); }
-      @external getAll(k: u256): D[] { return this.m[k]; } }`;
+    const Jm = `type D = { id: u256; tags: bytes[]; };
+    class C { m: mapping<u256, D[]>;
+      seed(): External<void> { let a: bytes[] = [bytes("xx"), bytes("yy")]; this.m[5n].push(D(1n, a)); let b: bytes[] = [bytes("z")]; this.m[5n].push(D(2n, b)); }
+      get getAll(k: u256): External<D[]> { return this.m[k]; } }`;
     const Sm = `struct D { uint256 id; bytes[] tags; }
     contract C { mapping(uint256 => D[]) m;
       function seed() external { bytes[] memory a=new bytes[](2); a[0]="xx"; a[1]="yy"; m[5].push(D(1,a)); bytes[] memory b=new bytes[](1); b[0]="z"; m[5].push(D(2,b)); }
@@ -149,11 +149,11 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
     await diff(Jm, Sm, [['seed()'], ['getAll(uint256)', W(5n)]]);
 
     // outer struct with a D[] field, returned whole (return this.o)
-    const Jo = `@struct class D { id: u256; tags: bytes[]; }
-    @struct class Outer { tag: u256; ds: D[]; }
-    @contract class C { @state o: Outer;
-      @external seed(): void { this.o.tag = 7n; let a: bytes[] = [bytes("aa"), bytes("bb")]; this.o.ds.push(D(1n, a)); let b: bytes[] = [bytes("ccc")]; this.o.ds.push(D(2n, b)); }
-      @external getit(): Outer { return this.o; } }`;
+    const Jo = `type D = { id: u256; tags: bytes[]; };
+    type Outer = { tag: u256; ds: D[]; };
+    class C { o: Outer;
+      seed(): External<void> { this.o.tag = 7n; let a: bytes[] = [bytes("aa"), bytes("bb")]; this.o.ds.push(D(1n, a)); let b: bytes[] = [bytes("ccc")]; this.o.ds.push(D(2n, b)); }
+      get getit(): External<Outer> { return this.o; } }`;
     const So = `struct D { uint256 id; bytes[] tags; }
     struct Outer { uint256 tag; D[] ds; }
     contract C { Outer o;
@@ -162,10 +162,10 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
     await diff(Jo, So, [['seed()'], ['getit()']]);
 
     // Arr<D,N> fixed outer (seed the id via per-element field set; tags seeded through the whole-element D(...) is JETH200, so id-only here)
-    const Ja = `@struct class D { id: u256; tags: bytes[]; }
-    @contract class C { @state vals: Arr<D,2>;
-      @external seed(): void { this.vals[0n].id = 11n; this.vals[1n].id = 22n; }
-      @external getAll(): Arr<D,2> { return this.vals; } }`;
+    const Ja = `type D = { id: u256; tags: bytes[]; };
+    class C { vals: Arr<D,2>;
+      seed(): External<void> { this.vals[0n].id = 11n; this.vals[1n].id = 22n; }
+      get getAll(): External<Arr<D,2>> { return this.vals; } }`;
     const Sa = `struct D { uint256 id; bytes[] tags; }
     contract C { D[2] vals;
       function seed() external { vals[0].id=11; vals[1].id=22; }
@@ -176,12 +176,12 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
   it('REGRESSION GUARD: working shapes stay byte-identical', async () => {
     // static struct array P[] (untouched static-inline path)
     await diff(
-      `@struct class P { a: u256; b: u256; }
-       @contract class C { @state vals: P[];
-         @external seed(): void { this.vals.push(P(1n, 2n)); this.vals.push(P(3n, 4n)); }
-         @external getAll(): P[] { return this.vals; }
-         @external enc(): bytes { return abi.encode(this.vals); }
-         @external getOne(): P { return this.vals[1n]; } }`,
+      `type P = { a: u256; b: u256; };
+       class C { vals: P[];
+         seed(): External<void> { this.vals.push(P(1n, 2n)); this.vals.push(P(3n, 4n)); }
+         get getAll(): External<P[]> { return this.vals; }
+         get enc(): External<bytes> { return abi.encode(this.vals); }
+         get getOne(): External<P> { return this.vals[1n]; } }`,
       `struct P { uint256 a; uint256 b; }
        contract C { P[] vals;
          function seed() external { vals.push(P(1,2)); vals.push(P(3,4)); }
@@ -193,11 +193,11 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
 
     // single-bytes-field D[] (dynamic struct, single dynamic leaf - the documented WORKING case)
     await diff(
-      `@struct class D { id: u256; s: bytes; }
-       @contract class C { @state vals: D[];
-         @external seed(): void { this.vals.push(D(1n, bytes("hi"))); this.vals.push(D(2n, bytes("world!"))); }
-         @external getAll(): D[] { return this.vals; }
-         @external getOne(): D { return this.vals[0n]; } }`,
+      `type D = { id: u256; s: bytes; };
+       class C { vals: D[];
+         seed(): External<void> { this.vals.push(D(1n, bytes("hi"))); this.vals.push(D(2n, bytes("world!"))); }
+         get getAll(): External<D[]> { return this.vals; }
+         get getOne(): External<D> { return this.vals[0n]; } }`,
       `struct D { uint256 id; bytes s; }
        contract C { D[] vals;
          function seed() external { vals.push(D(1,"hi")); vals.push(D(2,"world!")); }
@@ -208,11 +208,11 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
 
     // dynamic VALUE-array-field D[] (D{id; ns:u256[]})
     await diff(
-      `@struct class D { id: u256; ns: u256[]; }
-       @contract class C { @state vals: D[];
-         @external seed(): void { let a: u256[] = [10n, 20n]; this.vals.push(D(1n, a)); let b: u256[] = [30n]; this.vals.push(D(2n, b)); }
-         @external getAll(): D[] { return this.vals; }
-         @external getOne(): D { return this.vals[1n]; } }`,
+      `type D = { id: u256; ns: u256[]; };
+       class C { vals: D[];
+         seed(): External<void> { let a: u256[] = [10n, 20n]; this.vals.push(D(1n, a)); let b: u256[] = [30n]; this.vals.push(D(2n, b)); }
+         get getAll(): External<D[]> { return this.vals; }
+         get getOne(): External<D> { return this.vals[1n]; } }`,
       `struct D { uint256 id; uint256[] ns; }
        contract C { D[] vals;
          function seed() external { uint256[] memory a=new uint256[](2); a[0]=10; a[1]=20; vals.push(D(1,a)); uint256[] memory b=new uint256[](1); b[0]=30; vals.push(D(2,b)); }
@@ -223,11 +223,11 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
 
     // single storage struct with a bytes[] field (per-field push seed; the documented WORKING case)
     await diff(
-      `@struct class P { a: u256; tags: bytes[]; }
-       @contract class C { @state s: P;
-         @external setup(): void { this.s.a = 7n; this.s.tags.push(bytes("aa")); this.s.tags.push(bytes("bbbb")); }
-         @external enc(): bytes { return abi.encode(this.s); }
-         @external ret(): P { return this.s; } }`,
+      `type P = { a: u256; tags: bytes[]; };
+       class C { s: P;
+         setup(): External<void> { this.s.a = 7n; this.s.tags.push(bytes("aa")); this.s.tags.push(bytes("bbbb")); }
+         get enc(): External<bytes> { return abi.encode(this.s); }
+         get ret(): External<P> { return this.s; } }`,
       `struct P { uint256 a; bytes[] tags; }
        contract C { P s;
          function setup() external { s.a=7; s.tags.push("aa"); s.tags.push("bbbb"); }
@@ -238,8 +238,8 @@ describe('storage dyn-struct array with a nested-dynamic-leaf field - byte-ident
   });
 
   it('a direct array-literal constructor arg for a nested-leaf field still cleanly rejects (JETH226, solc parity)', () => {
-    const src = `@struct class D { id: u256; tags: bytes[]; }
-      @contract class C { @state vals: D[]; @external f(): void { this.vals.push(D(1n, [bytes("x")])); } }`;
+    const src = `type D = { id: u256; tags: bytes[]; };
+      class C { vals: D[]; f(): External<void> { this.vals.push(D(1n, [bytes("x")])); } }`;
     expect(codes(src)).toContain('JETH226');
   });
 });

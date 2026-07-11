@@ -59,46 +59,46 @@ function solcAccepts(src: string): boolean {
 const REJECT: { name: string; jeth: string; sol: string }[] = [
   {
     name: 'constructor(a: Arr<In,2>) { this.s = a }',
-    jeth: `@struct class In { x: u256; y: u256 }
-@contract class C { @state s: Arr<In,2>; constructor(a: Arr<In,2>) { this.s = a; } @external @view g(): u256 { return this.s[0].x; } }`,
+    jeth: `type In = { x: u256; y: u256 };
+class C { s: Arr<In,2>; constructor(a: Arr<In,2>) { this.s = a; } get g(): External<u256> { return this.s[0].x; } }`,
     sol: `struct In { uint256 x; uint256 y; } contract C { In[2] s; constructor(In[2] memory a){ s=a; } function g() external view returns(uint256){return s[0].x;} }`,
   },
   {
     name: 'runtime f(a: Arr<In,2> calldata) { this.s = a }',
-    jeth: `@struct class In { x: u256; y: u256 }
-@contract class C { @state s: Arr<In,2>; @external set(a: Arr<In,2>): void { this.s = a; } @external @view g(): u256 { return this.s[0].x; } }`,
+    jeth: `type In = { x: u256; y: u256 };
+class C { s: Arr<In,2>; set(a: Arr<In,2>): External<void> { this.s = a; } get g(): External<u256> { return this.s[0].x; } }`,
     sol: `struct In { uint256 x; uint256 y; } contract C { In[2] s; function set(In[2] calldata a) external { s=a; } function g() external view returns(uint256){return s[0].x;} }`,
   },
   {
     name: 'runtime memory-local src (let m: Arr<In,2>; this.s = m)',
-    jeth: `@struct class In { x: u256; y: u256 }
-@contract class C { @state s: Arr<In,2>; @external set(): void { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; this.s = m; } @external @view g(): u256 { return this.s[0].x; } }`,
+    jeth: `type In = { x: u256; y: u256 };
+class C { s: Arr<In,2>; set(): External<void> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; this.s = m; } get g(): External<u256> { return this.s[0].x; } }`,
     sol: `struct In { uint256 x; uint256 y; } contract C { In[2] s; function set() external { In[2] memory m=[In(1,2),In(3,4)]; s=m; } function g() external view returns(uint256){return s[0].x;} }`,
   },
   {
     name: 'Arr<In,3>',
-    jeth: `@struct class In { x: u256; y: u256 }
-@contract class C { @state s: Arr<In,3>; @external set(a: Arr<In,3>): void { this.s = a; } @external @view g(): u256 { return this.s[2].x; } }`,
+    jeth: `type In = { x: u256; y: u256 };
+class C { s: Arr<In,3>; set(a: Arr<In,3>): External<void> { this.s = a; } get g(): External<u256> { return this.s[2].x; } }`,
     sol: `struct In { uint256 x; uint256 y; } contract C { In[3] s; function set(In[3] calldata a) external { s=a; } function g() external view returns(uint256){return s[2].x;} }`,
   },
   {
     name: 'Arr<In3,2> (3-field struct)',
-    jeth: `@struct class In3 { a: u256; b: u256; c: u256 }
-@contract class C { @state s: Arr<In3,2>; @external set(a: Arr<In3,2>): void { this.s = a; } @external @view g(): u256 { return this.s[1].c; } }`,
+    jeth: `type In3 = { a: u256; b: u256; c: u256 };
+class C { s: Arr<In3,2>; set(a: Arr<In3,2>): External<void> { this.s = a; } get g(): External<u256> { return this.s[1].c; } }`,
     sol: `struct In3 { uint256 a; uint256 b; uint256 c; } contract C { In3[2] s; function set(In3[2] calldata a) external { s=a; } function g() external view returns(uint256){return s[1].c;} }`,
   },
   {
     name: '@state struct with an Arr<In,2> field, from a memory local',
-    jeth: `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@contract class C { @state b: Box; @external set(): void { let m: Box = Box([In(1n,2n),In(3n,4n)]); this.b = m; } @external @view g(): u256 { return this.b.arr[1].y; } }`,
+    jeth: `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+class C { b: Box; set(): External<void> { let m: Box = Box([In(1n,2n),In(3n,4n)]); this.b = m; } get g(): External<u256> { return this.b.arr[1].y; } }`,
     sol: `struct In { uint256 x; uint256 y; } struct Box { In[2] arr; } contract C { Box b; function set() external { Box memory m=Box([In(1,2),In(3,4)]); b=m; } function g() external view returns(uint256){return b.arr[1].y;} }`,
   },
   {
     name: 'a fixed array whose element is a struct (Box[2]) from memory local',
-    jeth: `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@contract class C { @state s: Arr<Box,2>; @external set(): void { let m: Arr<Box,2> = [Box([In(1n,2n),In(3n,4n)]),Box([In(5n,6n),In(7n,8n)])]; this.s = m; } @external @view g(): u256 { return this.s[1].arr[1].y; } }`,
+    jeth: `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+class C { s: Arr<Box,2>; set(): External<void> { let m: Arr<Box,2> = [Box([In(1n,2n),In(3n,4n)]),Box([In(5n,6n),In(7n,8n)])]; this.s = m; } get g(): External<u256> { return this.s[1].arr[1].y; } }`,
     sol: `struct In { uint256 x; uint256 y; } struct Box { In[2] arr; } contract C { Box[2] s; function set() external { Box[2] memory m=[Box([In(1,2),In(3,4)]),Box([In(5,6),In(7,8)])]; s=m; } function g() external view returns(uint256){return s[1].arr[1].y;} }`,
   },
 ];
@@ -108,8 +108,8 @@ const REJECT: { name: string; jeth: string; sol: string }[] = [
 // the "solc also rejects" assertion above is not applied to it.
 const OVER_REJECT_MEM_NESTED = {
   name: 'nested Arr<Arr<In,2>,2> from a memory local (safe over-rejection; closes a miscompile)',
-  jeth: `@struct class In { x: u256; y: u256 }
-@contract class C { @state s: Arr<Arr<In,2>,2>; @external set(): void { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; this.s = m; } @external @view g(): u256 { return this.s[1][1].y; } }`,
+  jeth: `type In = { x: u256; y: u256 };
+class C { s: Arr<Arr<In,2>,2>; set(): External<void> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; this.s = m; } get g(): External<u256> { return this.s[1][1].y; } }`,
   sol: `struct In { uint256 x; uint256 y; } contract C { In[2][2] s; function set() external { In[2][2] memory m=[[In(1,2),In(3,4)],[In(5,6),In(7,8)]]; s=m; } function g() external view returns(uint256){return s[1][1].y;} }`,
 };
 
@@ -132,31 +132,31 @@ describe('JETH470: whole struct-array / static-struct-leaf aggregate memory|call
 // MUST-STAY-ACCEPTED: these must keep compiling in BOTH JETH and solc, AND run byte-identically.
 describe('JETH470 scope: value arrays / single struct / calldata struct / storage->storage stay ACCEPTED and byte-identical', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@struct class In { x: u256; y: u256 }
-@struct class Box { arr: Arr<In,2> }
-@struct class BoxV { v: Arr<u256,2> }
-@contract class C {
-  @state va: Arr<u256,2>;
-  @state one: In;
-  @state bv: BoxV;
-  @state nc: Arr<Arr<In,2>,2>;
-  @state bc: Box;
-  @state src: Arr<In,2>;
-  @state dst: Arr<In,2>;
-  @external setVal(a: Arr<u256,2>): void { this.va = a; }
-  @external @view gVal(i: u256): u256 { return this.va[i]; }
-  @external setOne(a: In): void { this.one = a; }
-  @external @view gOne(): u256 { return this.one.y; }
-  @external setBoxV(a: BoxV): void { this.bv = a; }
-  @external @view gBoxV(i: u256): u256 { return this.bv.v[i]; }
-  @external setNestCd(a: Arr<Arr<In,2>,2>): void { this.nc = a; }
-  @external @view gNest(i: u256, j: u256): u256 { return this.nc[i][j].y; }
-  @external setBoxCd(a: Box): void { this.bc = a; }
-  @external @view gBox(i: u256): u256 { return this.bc.arr[i].y; }
-  @external seed(): void { this.src[0n].x = 11n; this.src[1n].y = 22n; }
-  @external copy(): void { this.dst = this.src; }
-  @external @view gDst0x(): u256 { return this.dst[0n].x; }
-  @external @view gDst1y(): u256 { return this.dst[1n].y; }
+  const J = `type In = { x: u256; y: u256 };
+type Box = { arr: Arr<In,2> };
+type BoxV = { v: Arr<u256,2> };
+class C {
+  va: Arr<u256,2>;
+  one: In;
+  bv: BoxV;
+  nc: Arr<Arr<In,2>,2>;
+  bc: Box;
+  src: Arr<In,2>;
+  dst: Arr<In,2>;
+  setVal(a: Arr<u256,2>): External<void> { this.va = a; }
+  get gVal(i: u256): External<u256> { return this.va[i]; }
+  setOne(a: In): External<void> { this.one = a; }
+  get gOne(): External<u256> { return this.one.y; }
+  setBoxV(a: BoxV): External<void> { this.bv = a; }
+  get gBoxV(i: u256): External<u256> { return this.bv.v[i]; }
+  setNestCd(a: Arr<Arr<In,2>,2>): External<void> { this.nc = a; }
+  get gNest(i: u256, j: u256): External<u256> { return this.nc[i][j].y; }
+  setBoxCd(a: Box): External<void> { this.bc = a; }
+  get gBox(i: u256): External<u256> { return this.bc.arr[i].y; }
+  seed(): External<void> { this.src[0n].x = 11n; this.src[1n].y = 22n; }
+  copy(): External<void> { this.dst = this.src; }
+  get gDst0x(): External<u256> { return this.dst[0n].x; }
+  get gDst1y(): External<u256> { return this.dst[1n].y; }
 }`;
   const So = `${SPDX}
 struct In { uint256 x; uint256 y; }

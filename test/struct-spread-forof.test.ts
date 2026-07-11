@@ -12,14 +12,14 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => v.toString(16).padStart(64, '0');
 
 describe('F2 for-of', () => {
-  const J = `@contract class C {
-    @state xs: u256[];
-    @external push(v: u256): void { this.xs.push(v); }
-    @external @view sum(): u256 { let s: u256 = 0n; for (const v of this.xs) { s = s + v; } return s; }
-    @external @view countGt(t: u256): u256 { let n: u256 = 0n; for (const v of this.xs) { if (v > t) { n = n + 1n; } } return n; }
-    @external @pure sumCd(a: u256[]): u256 { let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
-    @external @pure firstZero(a: u256[]): u256 { let i: u256 = 0n; for (const v of a) { if (v == 0n) { return i; } i = i + 1n; } return 999n; }
-    @external @pure sumFixed(): u256 { let a: Arr<u256,4> = [3n,5n,7n,9n]; let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
+  const J = `class C {
+    xs: u256[];
+    push(v: u256): External<void> { this.xs.push(v); }
+    get sum(): External<u256> { let s: u256 = 0n; for (const v of this.xs) { s = s + v; } return s; }
+    get countGt(t: u256): External<u256> { let n: u256 = 0n; for (const v of this.xs) { if (v > t) { n = n + 1n; } } return n; }
+    get sumCd(a: u256[]): External<u256> { let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
+    get firstZero(a: u256[]): External<u256> { let i: u256 = 0n; for (const v of a) { if (v == 0n) { return i; } i = i + 1n; } return 999n; }
+    get sumFixed(): External<u256> { let a: Arr<u256,4> = [3n,5n,7n,9n]; let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -64,15 +64,15 @@ contract C {
 });
 
 describe('F2 struct spread / object literal', () => {
-  const J = `@struct class P { x: u256; y: u256; flag: bool; }
-  @contract class C {
-    @state p: P;
-    @external setRaw(x: u256, y: u256, f: bool): void { this.p = P(x, y, f); }
-    @external bumpX(dx: u256): void { this.p = { ...this.p, x: this.p.x + dx }; }
-    @external toggle(): void { this.p = { ...this.p, flag: !this.p.flag }; }
-    @external @pure mk(x: u256, y: u256): P { return { x: x, y: y, flag: true }; }
-    @external @pure withY(p: P, ny: u256): P { return { ...p, y: ny }; }
-    @external @view get(): P { return this.p; }
+  const J = `type P = { x: u256; y: u256; flag: bool; };
+  class C {
+    p: P;
+    setRaw(x: u256, y: u256, f: bool): External<void> { this.p = P(x, y, f); }
+    bumpX(dx: u256): External<void> { this.p = { ...this.p, x: this.p.x + dx }; }
+    toggle(): External<void> { this.p = { ...this.p, flag: !this.p.flag }; }
+    get mk(x: u256, y: u256): External<P> { return { x: x, y: y, flag: true }; }
+    get withY(p: P, ny: u256): External<P> { return { ...p, y: ny }; }
+    get get(): External<P> { return this.p; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

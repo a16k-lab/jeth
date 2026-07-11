@@ -28,18 +28,18 @@ function strArg(sel: string, headStatic: bigint[], s: string): string {
   return h;
 }
 
-const JETH = `@struct class D { a: u256; s: string; }
-@contract class SR {
-  @state d: D;
-  @state ss: string[];
-  @state recs: D[];
-  @external setDA(a: u256): void { this.d.a = a; }
-  @external setDS(s: string): void { this.d.s = s; }
-  @external pushSs(s: string): void { this.ss.push(s); }
-  @external pushRec(a: u256, s: string): void { this.recs.push(D(a, s)); }
-  @external @view getD(): D { return this.d; }
-  @external @view getSs(): string[] { return this.ss; }
-  @external @view getRecs(): D[] { return this.recs; }
+const JETH = `type D = { a: u256; s: string; };
+class SR {
+  d: D;
+  ss: string[];
+  recs: D[];
+  setDA(a: u256): External<void> { this.d.a = a; }
+  setDS(s: string): External<void> { this.d.s = s; }
+  pushSs(s: string): External<void> { this.ss.push(s); }
+  pushRec(a: u256, s: string): External<void> { this.recs.push(D(a, s)); }
+  get getD(): External<D> { return this.d; }
+  get getSs(): External<string[]> { return this.ss; }
+  get getRecs(): External<D[]> { return this.recs; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
