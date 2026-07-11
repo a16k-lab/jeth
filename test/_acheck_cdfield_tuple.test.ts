@@ -221,16 +221,16 @@ contract C {
 describe('lift: tuple-assign to a pre-declared dynamic target (#6)', () => {
   it('self-call source: [a,b] = this.pair() (bytes,u256) and (u256[],u256)', async () => {
     const JETH = `
-@contract class C {
-  @external @view pair(): [bytes, u256] { return [bytes("hello"), 42n]; }
-  @external @view mk(): [u256[], u256] { return [[7n,8n,9n], 3n]; }
-  @external @view run(): [bytes, u256] {
+class C {
+  get pair(): External<[bytes, u256]> { return [bytes("hello"), 42n]; }
+  get mk(): External<[u256[], u256]> { return [[7n,8n,9n], 3n]; }
+  run(): External<[bytes, u256]> {
     let a: bytes = bytes("");
     let b: u256 = 0n;
     [a, b] = this.pair();
     return [a, b];
   }
-  @external @view arrpair(): [u256[], u256] {
+  arrpair(): External<[u256[], u256]> {
     let xs: u256[] = [1n];
     let n: u256 = 0n;
     [xs, n] = this.mk();

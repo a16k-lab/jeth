@@ -61,13 +61,13 @@ describe('external-call result of a static-struct fixed array consumed directly 
   it('Arr<In,3>: abi.encode(this.produce()) + this.consume(this.produce()) are byte-identical', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @external @pure produce(): Arr<In,3> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
-         @external @view encDirect(): bytes { return abi.encode(this.produce()); }
-         @external @pure consume(xs: Arr<In,3>): u256 { return xs[0n].a+xs[1n].a+xs[2n].a; }
-         @external @view fwdDirect(): u256 { return this.consume(this.produce()); }
-         @external @view encBound(): bytes { let m: Arr<In,3> = this.produce(); return abi.encode(m); }
-         @external @view retDirect(): Arr<In,3> { return this.produce(); } }`,
+       class C {
+         get produce(): External<Arr<In,3>> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
+         encDirect(): External<bytes> { return abi.encode(this.produce()); }
+         get consume(xs: Arr<In,3>): External<u256> { return xs[0n].a+xs[1n].a+xs[2n].a; }
+         fwdDirect(): External<u256> { return this.consume(this.produce()); }
+         encBound(): External<bytes> { let m: Arr<In,3> = this.produce(); return abi.encode(m); }
+         retDirect(): External<Arr<In,3>> { return this.produce(); } }`,
       `${SIN}
        contract C {
          function produce() external pure returns (In[3] memory) { return [In(11,12),In(21,22),In(31,32)]; }
@@ -110,12 +110,12 @@ describe('external-call result of a static-struct fixed array consumed directly 
   it('nested Arr<Arr<In,2>,3> external-call result direct-consume is byte-identical', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @external @pure produce(): Arr<Arr<In,2>,3> {
+       class C {
+         get produce(): External<Arr<Arr<In,2>,3>> {
            return [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)],[In(9n,10n),In(11n,12n)]]; }
-         @external @view encDirect(): bytes { return abi.encode(this.produce()); }
-         @external @pure consume(xs: Arr<Arr<In,2>,3>): u256 { return xs[0n][0n].a+xs[1n][1n].b+xs[2n][0n].a; }
-         @external @view fwdDirect(): u256 { return this.consume(this.produce()); } }`,
+         encDirect(): External<bytes> { return abi.encode(this.produce()); }
+         get consume(xs: Arr<Arr<In,2>,3>): External<u256> { return xs[0n][0n].a+xs[1n][1n].b+xs[2n][0n].a; }
+         fwdDirect(): External<u256> { return this.consume(this.produce()); } }`,
       `${SIN}
        contract C {
          function produce() external pure returns (In[2][3] memory) {
@@ -137,11 +137,11 @@ describe('external-call result of a static-struct fixed array consumed directly 
 
   it('a VALUE fixed array Arr<u256,3> external-call result direct-consume stays byte-identical (control)', async () => {
     const a = await pair(
-      `@contract class C {
-         @external @pure produce(): Arr<u256,3> { return [11n,22n,33n]; }
-         @external @view encDirect(): bytes { return abi.encode(this.produce()); }
-         @external @pure consume(xs: Arr<u256,3>): u256 { return xs[0n]+xs[1n]+xs[2n]; }
-         @external @view fwdDirect(): u256 { return this.consume(this.produce()); } }`,
+      `class C {
+         get produce(): External<Arr<u256,3>> { return [11n,22n,33n]; }
+         encDirect(): External<bytes> { return abi.encode(this.produce()); }
+         get consume(xs: Arr<u256,3>): External<u256> { return xs[0n]+xs[1n]+xs[2n]; }
+         fwdDirect(): External<u256> { return this.consume(this.produce()); } }`,
       `contract C {
          function produce() external pure returns (uint256[3] memory) { return [uint256(11),22,33]; }
          function encDirect() external view returns (bytes memory) { return abi.encode(this.produce()); }
@@ -157,11 +157,11 @@ describe('external-call result of a static-struct fixed array consumed directly 
   it('a whole STATIC struct external-call result direct-consume stays byte-identical (control)', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @external @pure produce(): In { return In(77n,88n); }
-         @external @view encDirect(): bytes { return abi.encode(this.produce()); }
-         @external @pure consume(x: In): u256 { return x.a+x.b; }
-         @external @view fwdDirect(): u256 { return this.consume(this.produce()); } }`,
+       class C {
+         get produce(): External<In> { return In(77n,88n); }
+         encDirect(): External<bytes> { return abi.encode(this.produce()); }
+         get consume(x: In): External<u256> { return x.a+x.b; }
+         fwdDirect(): External<u256> { return this.consume(this.produce()); } }`,
       `${SIN}
        contract C {
          function produce() external pure returns (In memory) { return In(77,88); }

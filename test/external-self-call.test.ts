@@ -81,10 +81,10 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('a @view callee lowers to STATICCALL', async () => {
     await diff(
-      `@contract class C {
-        @state y: u256 = 7n;
-        @external @view rd(): u256 { return this.y; }
-        @external go(): u256 { return this.rd() + 100n; }
+      `class C {
+        y: u256 = 7n;
+        get rd(): External<u256> { return this.y; }
+        go(): External<u256> { return this.rd() + 100n; }
       }`,
       `contract C {
         uint256 y = 7;
@@ -163,10 +163,10 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('custom-error revert bubbling through this.f()', async () => {
     await diff(
-      `@contract class C {
-        @error MyErr(code: u256);
-        @external @pure boom(): u256 { revert(MyErr(42n)); return 0n; }
-        @external go(): u256 { return this.boom(); }
+      `class C {
+        MyErr: error<{ code: u256 }>;
+        get boom(): External<u256> { revert(MyErr(42n)); return 0n; }
+        go(): External<u256> { return this.boom(); }
       }`,
       `contract C {
         error MyErr(uint256 code);
@@ -225,9 +225,9 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('tuple-return destructure: let [a, b] = this.f()', async () => {
     await diff(
-      `@contract class C {
-        @external @view pair(): [u256, u256] { return [3n, 4n]; }
-        @external go(): u256 { let [a, b]: [u256, u256] = this.pair(); return a * 10n + b; }
+      `class C {
+        get pair(): External<[u256, u256]> { return [3n, 4n]; }
+        go(): External<u256> { let [a, b]: [u256, u256] = this.pair(); return a * 10n + b; }
       }`,
       `contract C {
         function pair() external pure returns (uint256, uint256) { return (3, 4); }
@@ -239,9 +239,9 @@ describe('external self-call this.f(): byte-identical vs solc', () => {
 
   it('self-call in both ternary branches', async () => {
     await diff(
-      `@contract class C {
-        @external @pure dbl(v: u256): u256 { return v * 2n; }
-        @external go(c: bool): u256 { return c ? this.dbl(3n) : this.dbl(4n); }
+      `class C {
+        get dbl(v: u256): External<u256> { return v * 2n; }
+        go(c: bool): External<u256> { return c ? this.dbl(3n) : this.dbl(4n); }
       }`,
       `contract C {
         function dbl(uint256 v) external pure returns (uint256) { return v * 2; }

@@ -20,29 +20,29 @@ const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const sel = (s: string) => '0x' + functionSelector(s);
 const W = (n: bigint | number) => pad32(BigInt(n));
 
-const J = `@struct class P { a: u256; b: u256; }
-@contract class C {
-  @pure h(x: u256): bytes32 { return keccak256(abi.encode(x)); }
-  @external @pure t1(x: u256): [u256, bytes32] { return [x, keccak256(abi.encode(x))]; }
-  @external @pure t2(x: u256, y: u256): [u256, u256, bytes32] { return [x, y, keccak256(abi.encode(x))]; }
-  @external @pure t3(x: u256, y: u256): [u256, bytes32, u256, u256] { return [x, keccak256(abi.encode(y)), y, x]; }
-  @external @pure t4(x: u256): [u256, bytes32] { return [7n, keccak256(abi.encode(x))]; }
-  @external @pure t5(x: u256): [u256, bytes32] { return [x, keccak256(abi.encodePacked(x))]; }
-  @external @pure t6(x: u256, d: bytes): [u256, bytes32] { return [x, keccak256(d)]; }
-  @external @pure t7(x: u256): [u256, bytes32] { return [x, sha256(abi.encode(x))]; }
-  @external @pure t8(x: u256, c: bool): [u256, bytes32] { return [x, c ? keccak256(abi.encode(x)) : keccak256(abi.encodePacked(x))]; }
-  @external @pure t9(x: u256): [u256, bytes32] { return [x, this.h(x)]; }
-  @external @pure t10(x: u256, a: u256[]): [u256, bytes32] { return [x, keccak256(abi.encode(a.slice(1n)))]; }
-  @external @pure t11(x: u256): [bool, bytes32] { return [true, keccak256(abi.encode(x))]; }
-  @external @pure t12(x: u256, a: address): [address, bytes32] { return [a, keccak256(abi.encode(x))]; }
-  @external @pure t13(x: u256): [P, bytes32] { return [P(x, 2n), keccak256(abi.encode(x))]; }
-  @external @pure t14(x: u256): [u256, P] { return [x, P(u256(keccak256(abi.encode(x))), 2n)]; }
-  @external @pure pair(x: u256): [u256, bytes32] { return [x, keccak256(abi.encode(x))]; }
-  @external go(x: u256): u256 { let [a, b]: [u256, bytes32] = this.pair(x); return b == bytes32(0n) ? 0n : a; }
-  @external @pure c1(x: u256): [bytes32, u256] { return [keccak256(abi.encode(x)), x]; }
-  @external @pure c2(x: u256): [u256, bytes] { return [x, abi.encode(x)]; }
-  @external @pure c3(x: u256): [u256, bytes32] { const hh: bytes32 = keccak256(abi.encode(x)); return [x, hh]; }
-  @external @pure c4(c: bool): [u256, bytes32] { if (c) { return [1n, keccak256(abi.encode(1n))]; } }
+const J = `type P = { a: u256; b: u256; };
+class C {
+  h(x: u256): bytes32 { return keccak256(abi.encode(x)); }
+  get t1(x: u256): External<[u256, bytes32]> { return [x, keccak256(abi.encode(x))]; }
+  get t2(x: u256, y: u256): External<[u256, u256, bytes32]> { return [x, y, keccak256(abi.encode(x))]; }
+  get t3(x: u256, y: u256): External<[u256, bytes32, u256, u256]> { return [x, keccak256(abi.encode(y)), y, x]; }
+  get t4(x: u256): External<[u256, bytes32]> { return [7n, keccak256(abi.encode(x))]; }
+  get t5(x: u256): External<[u256, bytes32]> { return [x, keccak256(abi.encodePacked(x))]; }
+  get t6(x: u256, d: bytes): External<[u256, bytes32]> { return [x, keccak256(d)]; }
+  get t7(x: u256): External<[u256, bytes32]> { return [x, sha256(abi.encode(x))]; }
+  get t8(x: u256, c: bool): External<[u256, bytes32]> { return [x, c ? keccak256(abi.encode(x)) : keccak256(abi.encodePacked(x))]; }
+  get t9(x: u256): External<[u256, bytes32]> { return [x, this.h(x)]; }
+  get t10(x: u256, a: u256[]): External<[u256, bytes32]> { return [x, keccak256(abi.encode(a.slice(1n)))]; }
+  get t11(x: u256): External<[bool, bytes32]> { return [true, keccak256(abi.encode(x))]; }
+  get t12(x: u256, a: address): External<[address, bytes32]> { return [a, keccak256(abi.encode(x))]; }
+  get t13(x: u256): External<[P, bytes32]> { return [P(x, 2n), keccak256(abi.encode(x))]; }
+  get t14(x: u256): External<[u256, P]> { return [x, P(u256(keccak256(abi.encode(x))), 2n)]; }
+  get pair(x: u256): External<[u256, bytes32]> { return [x, keccak256(abi.encode(x))]; }
+  go(x: u256): External<u256> { let [a, b]: [u256, bytes32] = this.pair(x); return b == bytes32(0n) ? 0n : a; }
+  get c1(x: u256): External<[bytes32, u256]> { return [keccak256(abi.encode(x)), x]; }
+  get c2(x: u256): External<[u256, bytes]> { return [x, abi.encode(x)]; }
+  get c3(x: u256): External<[u256, bytes32]> { const hh: bytes32 = keccak256(abi.encode(x)); return [x, hh]; }
+  get c4(c: bool): External<[u256, bytes32]> { if (c) { return [1n, keccak256(abi.encode(1n))]; } }
 }`;
 
 const S = `contract C { struct P { uint256 a; uint256 b; }
@@ -117,12 +117,12 @@ describe('W6B: allocating later tuple component no longer clobbers earlier compo
   });
 
   it('@external library multi-return destructure hands the caller the real components', async () => {
-    const jl = `@library class L {
-      @external @pure mm(x: u256): [u256, bytes32] { return [x, keccak256(abi.encode(x))]; }
-      @external @pure mb(x: u256): [bool, bytes32] { return [true, keccak256(abi.encode(x))]; } }
-    @contract class C {
-      @external go(x: u256): u256 { let [a, b]: [u256, bytes32] = L.mm(x); return b == bytes32(0n) ? 0n : a; }
-      @external gb(x: u256): u256 { let [a, b]: [bool, bytes32] = L.mb(x); return a ? 1n : 2n; } }`;
+    const jl = `static class L {
+      mm(x: u256): External<[u256, bytes32]> { return [x, keccak256(abi.encode(x))]; }
+      mb(x: u256): External<[bool, bytes32]> { return [true, keccak256(abi.encode(x))]; } }
+    class C {
+      go(x: u256): External<u256> { let [a, b]: [u256, bytes32] = L.mm(x); return b == bytes32(0n) ? 0n : a; }
+      gb(x: u256): External<u256> { let [a, b]: [bool, bytes32] = L.mb(x); return a ? 1n : 2n; } }`;
     const sl = `library L {
       function mm(uint256 x) public pure returns (uint256, bytes32) { return (x, keccak256(abi.encode(x))); }
       function mb(uint256 x) public pure returns (bool, bytes32) { return (true, keccak256(abi.encode(x))); } }

@@ -80,10 +80,10 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
 
   it('self-call return this.mk() : nested static Arr<Arr<u256,2>,2>, Arr<bytes4,3>, Arr<bool,3>', async () => {
     await bothMatch(
-      `@contract class C {
-        @external @pure mk(): Arr<Arr<u256,2>,2> { let xs: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return xs; }
-        @external go(): Arr<Arr<u256,2>,2> { return this.mk(); }
-        @external goEnc(): bytes { return abi.encode(this.mk()); }
+      `class C {
+        get mk(): External<Arr<Arr<u256,2>,2>> { let xs: Arr<Arr<u256,2>,2> = [[1n,2n],[3n,4n]]; return xs; }
+        go(): External<Arr<Arr<u256,2>,2>> { return this.mk(); }
+        goEnc(): External<bytes> { return abi.encode(this.mk()); }
       }`,
       `contract C {
         function mk() external pure returns(uint256[2][2] memory){ uint256[2][2] memory xs=[[uint256(1),2],[uint256(3),4]]; return xs; }
@@ -93,9 +93,9 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
       [['go()'], ['goEnc()']],
     );
     await bothMatch(
-      `@contract class C {
-        @external @pure mk(): Arr<bytes4,3> { let xs: Arr<bytes4,3> = [bytes4(0x11223344n), bytes4(0x55667788n), bytes4(0x99aabbccn)]; return xs; }
-        @external go(): Arr<bytes4,3> { return this.mk(); }
+      `class C {
+        get mk(): External<Arr<bytes4,3>> { let xs: Arr<bytes4,3> = [bytes4(0x11223344n), bytes4(0x55667788n), bytes4(0x99aabbccn)]; return xs; }
+        go(): External<Arr<bytes4,3>> { return this.mk(); }
       }`,
       `contract C {
         function mk() external pure returns(bytes4[3] memory){ bytes4[3] memory xs=[bytes4(0x11223344),bytes4(0x55667788),bytes4(0x99aabbcc)]; return xs; }
@@ -104,9 +104,9 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
       [['go()']],
     );
     await bothMatch(
-      `@contract class C {
-        @external @pure mk(): Arr<bool,3> { let xs: Arr<bool,3> = [true, false, true]; return xs; }
-        @external go(): Arr<bool,3> { return this.mk(); }
+      `class C {
+        get mk(): External<Arr<bool,3>> { let xs: Arr<bool,3> = [true, false, true]; return xs; }
+        go(): External<Arr<bool,3>> { return this.mk(); }
       }`,
       `contract C {
         function mk() external pure returns(bool[3] memory){ bool[3] memory xs=[true,false,true]; return xs; }
@@ -153,9 +153,9 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
   it('REGRESSION: dynamic array, fixed-lit, static-struct fixed array, and direct decode still match', async () => {
     // genuine DYNAMIC array return this.mk() (must keep the [0x20][len] wrapper).
     await bothMatch(
-      `@contract class C {
-        @external @pure mk(): u256[] { let xs: u256[] = [7n,8n,9n]; return xs; }
-        @external go(): u256[] { return this.mk(); }
+      `class C {
+        get mk(): External<u256[]> { let xs: u256[] = [7n,8n,9n]; return xs; }
+        go(): External<u256[]> { return this.mk(); }
       }`,
       `contract C {
         function mk() external pure returns(uint256[] memory){ uint256[] memory xs=new uint256[](3); xs[0]=7;xs[1]=8;xs[2]=9; return xs; }
@@ -171,10 +171,10 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
     );
     // a static-STRUCT fixed array Arr<P,N> self-call (routed by the isStaticStructFixedLeafArray branch).
     await bothMatch(
-      `@struct class P { a: u256; b: u256; }
-       @contract class C {
-        @external @pure mk(): Arr<P,2> { let xs: Arr<P,2> = [P(1n,2n), P(3n,4n)]; return xs; }
-        @external go(): Arr<P,2> { return this.mk(); }
+      `type P = { a: u256; b: u256; };
+       class C {
+        get mk(): External<Arr<P,2>> { let xs: Arr<P,2> = [P(1n,2n), P(3n,4n)]; return xs; }
+        go(): External<Arr<P,2>> { return this.mk(); }
       }`,
       `contract C {
         struct P { uint256 a; uint256 b; }

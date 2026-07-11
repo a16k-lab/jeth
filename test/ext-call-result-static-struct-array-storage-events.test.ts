@@ -67,11 +67,11 @@ describe('external-call-result Arr<In,N> through storage / events / errors / get
   it('emit(E(m)) bound + emit(E(this.produce())) direct: log data is the flat inline body', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @event E(v: Arr<In,3>);
-         @external @pure produce(): Arr<In,3> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
-         @external emitBound(): void { let m: Arr<In,3> = this.produce(); emit(E(m)); }
-         @external emitDirect(): void { emit(E(this.produce())); } }`,
+       class C {
+         E: event<{ v: Arr<In,3> }>;
+         get produce(): External<Arr<In,3>> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
+         emitBound(): External<void> { let m: Arr<In,3> = this.produce(); emit(E(m)); }
+         emitDirect(): External<void> { emit(E(this.produce())); } }`,
       `${SIN}
        contract C {
          event E(In[3] v);
@@ -89,10 +89,10 @@ describe('external-call-result Arr<In,N> through storage / events / errors / get
   it('emit(E(indexed k, this.produce())): indexed topic + flat data body', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @event E(@indexed k: u256, v: Arr<In,3>);
-         @external @pure produce(): Arr<In,3> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
-         @external emitDirect(): void { emit(E(7n, this.produce())); } }`,
+       class C {
+         E: event<{ k: indexed<u256>; v: Arr<In,3> }>;
+         get produce(): External<Arr<In,3>> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
+         emitDirect(): External<void> { emit(E(7n, this.produce())); } }`,
       `${SIN}
        contract C {
          event E(uint256 indexed k, In[3] v);
@@ -106,11 +106,11 @@ describe('external-call-result Arr<In,N> through storage / events / errors / get
   it('revert(Err(m)) bound + revert(Err(this.produce())) direct: revert data is selector + flat body', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @error Bad(v: Arr<In,3>);
-         @external @pure produce(): Arr<In,3> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
-         @external revBound(): void { let m: Arr<In,3> = this.produce(); revert(Bad(m)); }
-         @external revDirect(): void { revert(Bad(this.produce())); } }`,
+       class C {
+         Bad: error<{ v: Arr<In,3> }>;
+         get produce(): External<Arr<In,3>> { return [In(11n,12n),In(21n,22n),In(31n,32n)]; }
+         revBound(): External<void> { let m: Arr<In,3> = this.produce(); revert(Bad(m)); }
+         revDirect(): External<void> { revert(Bad(this.produce())); } }`,
       `${SIN}
        contract C {
          error Bad(In[3] v);

@@ -50,9 +50,9 @@ async function expectByteIdentical(
 describe('external self-call tuple forms (this.f())', () => {
   it('(a) DIRECT tuple return: 2-tuple u256, @view callee -> staticcall', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view pair(): [u256, u256] { return [11n, 22n]; }
-        @external @view getDirect(): [u256, u256] { return this.pair(); }
+      `class C {
+        get pair(): External<[u256, u256]> { return [11n, 22n]; }
+        getDirect(): External<[u256, u256]> { return this.pair(); }
       }`,
       `contract C {
         function pair() external view returns (uint256, uint256) { return (11, 22); }
@@ -64,9 +64,9 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(a) DIRECT tuple return: 3-tuple mixed (address,u256,bool)', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view trip(): [address, u256, bool] { return [address(0xAAn), 42n, true]; }
-        @external @view get3(): [address, u256, bool] { return this.trip(); }
+      `class C {
+        get trip(): External<[address, u256, bool]> { return [address(0xAAn), 42n, true]; }
+        get3(): External<[address, u256, bool]> { return this.trip(); }
       }`,
       `contract C {
         function trip() external view returns (address, uint256, bool) { return (address(0xAA), 42, true); }
@@ -94,9 +94,9 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(a) DIRECT tuple return: dynamic component (u256, bytes)', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view pb(): [u256, bytes] { return [9n, "hello"]; }
-        @external @view get(): [u256, bytes] { return this.pb(); }
+      `class C {
+        get pb(): External<[u256, bytes]> { return [9n, "hello"]; }
+        get(): External<[u256, bytes]> { return this.pb(); }
       }`,
       `contract C {
         function pb() external view returns (uint256, bytes memory) { return (9, "hello"); }
@@ -108,9 +108,9 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(b) TUPLE-ASSIGN: 2-tuple u256', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view pair(): [u256, u256] { return [3n, 4n]; }
-        @external getAssign(): u256 { let a: u256 = 0n; let b: u256 = 0n; [a, b] = this.pair(); return a * 100n + b; }
+      `class C {
+        get pair(): External<[u256, u256]> { return [3n, 4n]; }
+        getAssign(): External<u256> { let a: u256 = 0n; let b: u256 = 0n; [a, b] = this.pair(); return a * 100n + b; }
       }`,
       `contract C {
         function pair() external view returns (uint256, uint256) { return (3, 4); }
@@ -122,9 +122,9 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(b) TUPLE-ASSIGN: 3-tuple mixed (address,u256,bool)', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view trip(): [address, u256, bool] { return [address(0xBBn), 7n, false]; }
-        @external go(): u256 {
+      `class C {
+        get trip(): External<[address, u256, bool]> { return [address(0xBBn), 7n, false]; }
+        go(): External<u256> {
           let a: address = address(0n); let n: u256 = 0n; let f: bool = true;
           [a, n, f] = this.trip();
           return n + (f ? 1n : 0n);
@@ -160,9 +160,9 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(c) try/catch: bare controlling statement, success path', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view pair(): [u256, u256] { return [1n, 2n]; }
-        @external tryIt(): u256 { try { this.pair(); return 7n; } catch (e) { return 9n; } }
+      `class C {
+        get pair(): External<[u256, u256]> { return [1n, 2n]; }
+        tryIt(): External<u256> { try { this.pair(); return 7n; } catch (e) { return 9n; } }
       }`,
       `contract C {
         function pair() external view returns (uint256, uint256) { return (1, 2); }
@@ -176,9 +176,9 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(c) try/catch: tuple binding + revert bubble to catch', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view pair(x: u256): [u256, u256] { if (x == 0n) { revert("bad"); } return [x, x + 1n]; }
-        @external tryIt(x: u256): u256 {
+      `class C {
+        get pair(x: u256): External<[u256, u256]> { if (x == 0n) { revert("bad"); } return [x, x + 1n]; }
+        tryIt(x: u256): External<u256> {
           try { let [a, b] = this.pair(x); return a + b; } catch (e) { return 999n; }
         }
       }`,
@@ -194,9 +194,9 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(c) try/catch: this.reason recovers the revert string', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view pair(x: u256): [u256, u256] { if (x == 0n) { revert("bad"); } return [x, x + 1n]; }
-        @external tryIt(x: u256): string {
+      `class C {
+        get pair(x: u256): External<[u256, u256]> { if (x == 0n) { revert("bad"); } return [x, x + 1n]; }
+        tryIt(x: u256): External<string> {
           try { let [a, b] = this.pair(x); return "ok"; } catch (e) { return this.reason; }
         }
       }`,
@@ -212,9 +212,9 @@ describe('external self-call tuple forms (this.f())', () => {
 
   it('(c) try/catch: this.panic recovers a Panic code (div-by-zero in callee)', async () => {
     await expectByteIdentical(
-      `@contract class C {
-        @external @view pair(d: u256): [u256, u256] { return [100n / d, 5n]; }
-        @external run(d: u256): u256 {
+      `class C {
+        get pair(d: u256): External<[u256, u256]> { return [100n / d, 5n]; }
+        run(d: u256): External<u256> {
           try { let [a, b] = this.pair(d); return a + b; } catch (e) { return this.panic; }
         }
       }`,

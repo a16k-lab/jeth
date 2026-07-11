@@ -21,26 +21,26 @@ const W = (n: bigint) => pad32(n);
 const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
   expect(a.map((l) => ({ t: l.topics, d: l.data }))).toEqual(b.map((l) => ({ t: l.topics, d: l.data })));
 
-const J = `@struct class In { x: u256; y: u256 }
-@struct class In3 { x: u256; y: u256; z: u256 }
-@struct class In2 { p: In; q: u256 }
-@contract class C {
-  @event Et(@indexed v: Arr<In,2>, tag: u256);
-  @event Et3(@indexed v: Arr<In3,3>, tag: u256);
-  @event Et1(@indexed v: Arr<In,1>, tag: u256);
-  @event EtN(@indexed v: Arr<In2,2>, tag: u256);
-  @external @pure produce(): Arr<In,2> { let a: Arr<In,2> = [In(31n,32n),In(33n,34n)]; return a; }
-  @external @pure produce3(): Arr<In3,3> { let a: Arr<In3,3> = [In3(41n,42n,43n),In3(44n,45n,46n),In3(47n,48n,49n)]; return a; }
-  @external @pure produce1(): Arr<In,1> { let a: Arr<In,1> = [In(51n,52n)]; return a; }
-  @external @pure produceN(): Arr<In2,2> { let a: Arr<In2,2> = [In2(In(61n,62n),63n),In2(In(64n,65n),66n)]; return a; }
-  @external eExt(): void { emit(Et(this.produce(), 77n)); }
-  @external eExt3(): void { emit(Et3(this.produce3(), 78n)); }
-  @external eExt1(): void { emit(Et1(this.produce1(), 79n)); }
-  @external eExtN(): void { emit(EtN(this.produceN(), 80n)); }
-  @external eDec(b: bytes): void { emit(Et(abi.decode(b, Arr<In,2>), 81n)); }
-  @external eDecNF(b: bytes): void { let pre: Arr<u256,2> = [1n,2n]; emit(Et(abi.decode(b, Arr<In,2>), pre[0n] + 82n)); }
-  @external eCtl(): void { let a: Arr<In,2> = [In(31n,32n),In(33n,34n)]; emit(Et(a, 83n)); }
-  @external ctlEnc(): bytes { return abi.encode(this.produce()); } }`;
+const J = `type In = { x: u256; y: u256 };
+type In3 = { x: u256; y: u256; z: u256 };
+type In2 = { p: In; q: u256 };
+class C {
+  Et: event<{ v: indexed<Arr<In,2>>; tag: u256 }>;
+  Et3: event<{ v: indexed<Arr<In3,3>>; tag: u256 }>;
+  Et1: event<{ v: indexed<Arr<In,1>>; tag: u256 }>;
+  EtN: event<{ v: indexed<Arr<In2,2>>; tag: u256 }>;
+  get produce(): External<Arr<In,2>> { let a: Arr<In,2> = [In(31n,32n),In(33n,34n)]; return a; }
+  get produce3(): External<Arr<In3,3>> { let a: Arr<In3,3> = [In3(41n,42n,43n),In3(44n,45n,46n),In3(47n,48n,49n)]; return a; }
+  get produce1(): External<Arr<In,1>> { let a: Arr<In,1> = [In(51n,52n)]; return a; }
+  get produceN(): External<Arr<In2,2>> { let a: Arr<In2,2> = [In2(In(61n,62n),63n),In2(In(64n,65n),66n)]; return a; }
+  eExt(): External<void> { emit(Et(this.produce(), 77n)); }
+  eExt3(): External<void> { emit(Et3(this.produce3(), 78n)); }
+  eExt1(): External<void> { emit(Et1(this.produce1(), 79n)); }
+  eExtN(): External<void> { emit(EtN(this.produceN(), 80n)); }
+  eDec(b: bytes): External<void> { emit(Et(abi.decode(b, Arr<In,2>), 81n)); }
+  eDecNF(b: bytes): External<void> { let pre: Arr<u256,2> = [1n,2n]; emit(Et(abi.decode(b, Arr<In,2>), pre[0n] + 82n)); }
+  eCtl(): External<void> { let a: Arr<In,2> = [In(31n,32n),In(33n,34n)]; emit(Et(a, 83n)); }
+  ctlEnc(): External<bytes> { return abi.encode(this.produce()); } }`;
 
 const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
