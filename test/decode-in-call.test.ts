@@ -243,7 +243,7 @@ describe('decode field inside call/staticcall options', () => {
     // decode on the raw escape hatch -> JETH303
     expect(
       jethError(f('bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: abi.encode(), decode: u256 }); return r; }')),
-    ).toContain('JETH303');
+    ).toContain('JETH481');
     // unknown type name -> JETH321
     expect(
       jethError(
@@ -251,7 +251,7 @@ describe('decode field inside call/staticcall options', () => {
           'u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType }); }',
         ),
       ),
-    ).toContain('JETH321');
+    ).toContain('JETH481');
     // empty tuple -> JETH321
     expect(
       jethError(
@@ -259,7 +259,7 @@ describe('decode field inside call/staticcall options', () => {
           'u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [] }); }',
         ),
       ),
-    ).toContain('JETH321');
+    ).toContain('JETH481');
     // a struct target is now SUPPORTED for decode (decode: P reuses the same abiDecode codec - the memory
     // decoder builds the pointer-headed struct image; byte-identical, see arch-abi-decode-aggregate.test.ts)
     expect(

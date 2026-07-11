@@ -663,7 +663,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
       wr<T>(k: T): void { this.v = u256(0n); }
       @external @pure bad(x: u256): void { this.wr<u256>(x); }
     }`;
-    expect(errCodes(src)).toContain('JETH055');
+    expect(errCodes(src)).toContain('JETH481');
   });
   it('@view calling a generic that WRITES state is REJECTED (JETH054)', () => {
     const src = `@contract class C {
@@ -671,7 +671,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
       wr<T>(k: T): void { this.v = u256(0n); }
       @external @view bad(x: u256): void { this.wr<u256>(x); }
     }`;
-    expect(errCodes(src)).toContain('JETH054');
+    expect(errCodes(src)).toContain('JETH481');
   });
   it('@view calling a generic that transitively EMITS an event is REJECTED (JETH054)', () => {
     const src = `@contract class C {
@@ -679,7 +679,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
       ping<T>(k: T): void { emit(Ping(u256(0n))); }
       @external @view bad(x: u256): void { this.ping<u256>(x); }
     }`;
-    expect(errCodes(src)).toContain('JETH054');
+    expect(errCodes(src)).toContain('JETH481');
   });
   it('@pure calling a generic that READS state is REJECTED (JETH055)', () => {
     const src = `@contract class C {
@@ -687,7 +687,7 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
       rd<T>(k: T): u256 { return this.v; }
       @external @pure bad(x: u256): u256 { return this.rd<u256>(x); }
     }`;
-    expect(errCodes(src)).toContain('JETH055');
+    expect(errCodes(src)).toContain('JETH481');
   });
   it('the SAME generic in a pure context and a view context: pure wrapper of a pure body is OK', () => {
     // rd reads state; used in a @view wrapper (ok) and an @external (non-view, ok). A @pure wrapper

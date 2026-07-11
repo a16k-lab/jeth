@@ -1,43 +1,41 @@
 // Phase 4e-2b scenario "nested-mapping-to-array": a two-key mapping whose value is
 // a dynamic array (mapping<A, mapping<B, T[]>>), alongside mapping<A, Rec[]> and a
 // scalar sentinel. Exercises push/length/index read+write/pop on the inner array.
-@struct
-class Rec {
+type Rec = {
   id: u64;
   amt: u128;
-}
+};
 
-@contract
 class NestedMapArray {
-  @state g: mapping<address, mapping<u256, u256[]>>; // slot 0
-  @state recs: mapping<address, Rec[]>; // slot 1
-  @state sentinel: u256; // slot 2
+  g: mapping<address, mapping<u256, u256[]>>; // slot 0
+  recs: mapping<address, Rec[]>; // slot 1
+  sentinel: u256; // slot 2
 
   // two-key mapped dynamic array of u256
-  @external gpush(a: address, b: u256, v: u256): void {
+  gpush(a: address, b: u256, v: u256): External<void> {
     this.g[a][b].push(v);
   }
-  @external gpop(a: address, b: u256): void {
+  gpop(a: address, b: u256): External<void> {
     this.g[a][b].pop();
   }
-  @external gset(a: address, b: u256, i: u256, v: u256): void {
+  gset(a: address, b: u256, i: u256, v: u256): External<void> {
     this.g[a][b][i] = v;
   }
-  @external @view glen(a: address, b: u256): u256 {
+  get glen(a: address, b: u256): External<u256> {
     return this.g[a][b].length;
   }
-  @external @view gat(a: address, b: u256, i: u256): u256 {
+  get gat(a: address, b: u256, i: u256): External<u256> {
     return this.g[a][b][i];
   }
 
   // one-key mapped dynamic array of struct (alongside, must stay isolated)
-  @external rpush(a: address, id: u64, amt: u128): void {
+  rpush(a: address, id: u64, amt: u128): External<void> {
     this.recs[a].push(Rec(id, amt));
   }
-  @external @view rlen(a: address): u256 {
+  get rlen(a: address): External<u256> {
     return this.recs[a].length;
   }
-  @external @view rid(a: address, i: u256): u64 {
+  get rid(a: address, i: u256): External<u64> {
     return this.recs[a][i].id;
   }
 }

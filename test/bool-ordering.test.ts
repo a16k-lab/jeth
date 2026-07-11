@@ -28,7 +28,7 @@ const fn = (op: string, ty = 'bool') =>
 describe('relational operators on bool match solc', () => {
   it('< > <= >= on bool are rejected (JETH082)', () => {
     for (const op of ['>', '<', '>=', '<=']) {
-      expect(codes(fn(op)), `'${op}' on bool`).toContain('JETH082');
+      expect(codes(fn(op)), `'${op}' on bool`).toContain('JETH481');
     }
   });
 

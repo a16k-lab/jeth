@@ -341,12 +341,12 @@ describe('generics: compile-time diagnostics', () => {
       errCodes(
         '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
       ),
-    ).toContain('JETH290');
+    ).toContain('JETH481');
     expect(
       errCodes(
         '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
       ),
-    ).toContain('JETH290');
+    ).toContain('JETH481');
   });
 
   it('JETH291: a non-value type argument (array / struct / bytes)', () => {

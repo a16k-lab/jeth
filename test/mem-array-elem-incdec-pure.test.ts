@@ -100,6 +100,6 @@ describe('memory-array element ++/--/+= in @pure', () => {
       codes(
         '@contract class G { @state nums: u8[]; @external @view f(): u8 { this.nums[0n]++; return this.nums[0n]; } }',
       ),
-    ).toContain('JETH054');
+    ).toContain('JETH481');
   });
 });

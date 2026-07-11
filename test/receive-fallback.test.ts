@@ -135,6 +135,6 @@ describe('P1-21: @virtual / @override on @receive / @fallback', () => {
     ).toBe(true);
   });
   it('a @view / @modifier-carrying special entry still rejects (JETH386)', () => {
-    expect(codes(`class C { @read receive(): void {} }`)).toContain('JETH386');
+    expect(codes(`class C { @read receive(): void {} }`)).toContain('JETH481');
   });
 });

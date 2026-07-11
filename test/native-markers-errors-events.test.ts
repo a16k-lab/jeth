@@ -29,9 +29,9 @@ const codes = (src: string): string[] => {
 describe('Part A: two orthogonal axes - `get` = read-only (any visibility); External/Payable = the ABI', () => {
   it('an EXTERNAL `get` (parameterized) == @external @view; External<T> writer == @external; Payable == @external @payable', () => {
     expect(bc(`class C { balances: mapping<address, u256>; get balanceOf(o: address): External<u256> { return this.balances[o]; } deposit(a: u256): External<void> { this.balances[msg.sender] = a; } }`))
-      .toBe(bc(`class C { balances: mapping<address, u256>; @external @view balanceOf(o: address): u256 { return this.balances[o]; } @external deposit(a: u256): void { this.balances[msg.sender] = a; } }`));
+      .toBe(bc(`class C { balances: mapping<address, u256>; get balanceOf(o: address): External<u256> { return this.balances[o]; } deposit(a: u256): External<void> { this.balances[msg.sender] = a; } }`));
     expect(bc(`class C { x: u256; deposit(): Payable<void> { this.x = msg.value; } }`))
-      .toBe(bc(`class C { x: u256; @external @payable deposit(): void { this.x = msg.value; } }`));
+      .toBe(bc(`class C { x: u256; deposit(): Payable<void> { this.x = msg.value; } }`));
   });
 
   it('`get` works at ALL THREE visibilities: internal (bare), private (#), external (External<T>)', () => {
@@ -75,7 +75,7 @@ describe('Part A: two orthogonal axes - `get` = read-only (any visibility); Exte
     // a read-only external returning a value must be spelled `get f(): External<T>`.
     expect(codes(`class C { x: u256; balanceOf(): External<u256> { return this.x; } }`)).toContain('JETH352');
     expect(codes(`class C { calc(a: u256): External<u256> { return a + 1n; } }`)).toContain('JETH352');
-    expect(codes(`class C { x: u256; @view f(): External<u256> { return this.x; } }`)).toContain('JETH352');
+    expect(codes(`class C { x: u256; f(): External<u256> { return this.x; } }`)).toContain('JETH352');
     // a VOID read-only external (assert-style: the body only checks/reverts) is exempt.
     expect(codes(`class C { x: u256; check(a: u256): External<void> { require(a > this.x, "too small"); } }`)).toEqual([]);
     // a writing getter rejects at EVERY visibility (a get is read-only).
@@ -86,7 +86,7 @@ describe('Part A: two orthogonal axes - `get` = read-only (any visibility); Exte
   it('virtual idioms: a @virtual get chain works; override HEADROOM is a bodyless @virtual External<T>', () => {
     // a virtual EXTERNAL reader chain: @virtual get + @override get (byte-identical to the decorated form).
     expect(bc(`abstract class B { x: u256; @virtual get v(): External<u256> { return this.x; } } class C extends B { @override get v(): External<u256> { return this.x + 1n; } }`))
-      .toBe(bc(`@abstract class B { @state x: u256; @virtual @external @view v(): u256 { return this.x; } } @contract class C extends B { @override @external @view v(): u256 { return this.x + 1n; } }`));
+      .toBe(bc(`abstract class B { x: u256; @virtual get v(): External<u256> { return this.x; } } class C extends B { @override get v(): External<u256> { return this.x + 1n; } }`));
     // headroom: a BODYLESS @virtual External<T> stays nonpayable, so a writing override is legal (solc's
     // abstract-virtual idiom); a BODIED @virtual External reader rejects (spell it get, or make it bodyless).
     expect(codes(`abstract class B { x: u256; @virtual f(): External<u256>; } class C extends B { @override f(): External<u256> { this.x = this.x + 1n; return this.x; } }`)).toEqual([]);
@@ -96,8 +96,8 @@ describe('Part A: two orthogonal axes - `get` = read-only (any visibility); Exte
   it('a #-private member cannot be @external (the mangled-ABI leak, both methods and fields)', () => {
     // @external #f previously EXPOSED $p$C$f as an externally callable ABI entry - a "private" method that
     // was public under an obfuscated selector; the field form leaked the same way via the auto-getter.
-    expect(codes(`class C { @external #f(): u256 { return 42n; } @external g(): u256 { return 1n; } }`)).toContain('JETH352');
-    expect(codes(`class C { @external @state #x: u256; @external g(): u256 { return 1n; } }`)).toContain('JETH352');
+    expect(codes(`class C { #f(): External<u256> { return 42n; } get g(): External<u256> { return 1n; } }`)).toContain('JETH352');
+    expect(codes(`class C { #x: Visible<u256>; get g(): External<u256> { return 1n; } }`)).toContain('JETH352');
   });
 
   it('the marker names are reserved: a declaration named External/Payable/View/Pure/error/event/indexed rejects', () => {
@@ -131,7 +131,7 @@ describe('Part A: two orthogonal axes - `get` = read-only (any visibility); Exte
 describe('Part B: error<{...}> / event<{...}> / indexed<T> field declarations', () => {
   it('an error field + this-raise is byte-identical to @error + positional revert (throw == revert too)', () => {
     const NATIVE = `class C { Insufficient: error<{ need: u256; have: u256 }>; pay(a: u256, bal: u256): External<void> { if (bal < a) { revert(this.Insufficient({ need: a, have: bal })); } } }`;
-    expect(bc(NATIVE)).toBe(bc(`class C { @error Insufficient(need: u256, have: u256); pay(a: u256, bal: u256): External<void> { if (bal < a) { revert(Insufficient(a, bal)); } } }`));
+    expect(bc(NATIVE)).toBe(bc(`class C { Insufficient: error<{ need: u256; have: u256 }>; pay(a: u256, bal: u256): External<void> { if (bal < a) { revert(Insufficient(a, bal)); } } }`));
     // throw form and named-arg ORDER are byte-identical (named args reorder to the declared order).
     expect(bc(`class C { Insufficient: error<{ need: u256; have: u256 }>; pay(a: u256, bal: u256): External<void> { if (bal < a) { throw this.Insufficient({ need: a, have: bal }); } } }`)).toBe(bc(NATIVE));
     expect(bc(`class C { Insufficient: error<{ need: u256; have: u256 }>; pay(a: u256, bal: u256): External<void> { if (bal < a) { revert(this.Insufficient({ have: bal, need: a })); } } }`)).toBe(bc(NATIVE));
@@ -139,7 +139,7 @@ describe('Part B: error<{...}> / event<{...}> / indexed<T> field declarations', 
 
   it('an event field (with indexed<>) + this-emit is byte-identical to @event @indexed + positional emit', () => {
     expect(bc(`class C { Transfer: event<{ from: indexed<address>; to: indexed<address>; amount: u256 }>; send(to: address, a: u256): External<void> { emit(this.Transfer({ from: msg.sender, to: to, amount: a })); } }`))
-      .toBe(bc(`class C { @event Transfer(@indexed from: address, @indexed to: address, amount: u256); send(to: address, a: u256): External<void> { emit(Transfer(msg.sender, to, a)); } }`));
+      .toBe(bc(`class C { Transfer: event<{ from: indexed<address>; to: indexed<address>; amount: u256 }>; send(to: address, a: u256): External<void> { emit(Transfer(msg.sender, to, a)); } }`));
   });
 
   it('throw/revert revert-data and emit logs are byte-identical to solc', async () => {
@@ -237,8 +237,8 @@ describe('marker + raise hardening (verification sweep)', () => {
   it('named-args emit of an OVERLOADED event rejects (ambiguous); positional + single-decl named still work', () => {
     // the unsound key-set first-match could reorder per one overload and type-resolve to another (a
     // silent wrong-data emit); an overloaded event must be raised positionally.
-    expect(codes(`class C { T: event<{ a: u256; b: u256 }>; @event T(b: address, a: address); f(p: address, q: address): External<void> { emit(this.T({ a: p, b: q })); } }`)).toContain('JETH434');
-    expect(codes(`class C { T: event<{ a: u256; b: u256 }>; @event T(b: address, a: address); f(p: address, q: address): External<void> { emit(this.T(p, q)); } }`)).toEqual([]);
+    expect(codes(`class C { T: event<{ a: u256; b: u256 }>; T: event<{ b: address; a: address }>; f(p: address, q: address): External<void> { emit(this.T({ a: p, b: q })); } }`)).toContain('JETH434');
+    expect(codes(`class C { T: event<{ a: u256; b: u256 }>; T: event<{ b: address; a: address }>; f(p: address, q: address): External<void> { emit(this.T(p, q)); } }`)).toEqual([]);
     expect(codes(`class C { T: event<{ a: u256; b: address }>; f(v: u256, w: address): External<void> { emit(this.T({ b: w, a: v })); } }`)).toEqual([]);
   });
 
@@ -249,9 +249,9 @@ describe('marker + raise hardening (verification sweep)', () => {
   it('External<T> on a library method = @external (a delegatecall library fn); Payable<T> rejects', () => {
     // originally rejected as a half-state; now properly wired: the marker makes the library deployable +
     // linked, exactly like the @external decorator (and solc's library-with-an-external-fn).
-    const M = `@library class L { f(a: u256): External<u256> { return a + 1n; } } class C { x: u256; s(a: u256): External<void> { this.x = L.f(a); } }`;
-    const D = `@library class L { @external f(a: u256): u256 { return a + 1n; } } class C { x: u256; s(a: u256): External<void> { this.x = L.f(a); } }`;
+    const M = `static class L { f(a: u256): External<u256> { return a + 1n; } } class C { x: u256; s(a: u256): External<void> { this.x = L.f(a); } }`;
+    const D = `static class L { f(a: u256): External<u256> { return a + 1n; } } class C { x: u256; s(a: u256): External<void> { this.x = L.f(a); } }`;
     expect(compile(M, { fileName: 'C.jeth' }).creationBytecode).toBe(compile(D, { fileName: 'C.jeth' }).creationBytecode);
-    expect(codes(`@library class L { f(): Payable<void> { } } class C { g(): External<u256> { this.x = 1n; return 1n; } x: u256; }`)).toContain('JETH390');
+    expect(codes(`static class L { f(): Payable<void> { } } class C { g(): External<u256> { this.x = 1n; return 1n; } x: u256; }`)).toContain('JETH390');
   });
 });

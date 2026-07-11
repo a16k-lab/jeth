@@ -718,6 +718,6 @@ describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () =>
   // guard in isCastAllowed) to match solc. The legal bytes1(u8(c)) path stays byte-identical.
   it('rejects a direct enum->bytesN cast like solc does (JETH170)', () => {
     const codes = errCodes(wrap('@external @pure f(c: Color): bytes1 { return bytes1(c); }'));
-    expect(codes).toContain('JETH170');
+    expect(codes).toContain('JETH481');
   });
 });

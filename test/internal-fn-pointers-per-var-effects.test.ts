@@ -158,7 +158,7 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
     const S = `contract C { ${S_TARGETS}
       function go(bool c, uint256 v) external view returns (uint256) { function(uint256) view returns (uint256) g = c ? rd : wr; return g(v); }
     }`;
-    expect(codes(J)).toContain('JETH054');
+    expect(codes(J)).toContain('JETH481');
     expect(solcRejects(S)).toBe(true);
   });
 
@@ -171,7 +171,7 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
         return r + g(v);
       }
     }`;
-    expect(codes(J)).toContain('JETH054');
+    expect(codes(J)).toContain('JETH481');
     expect(
       solcRejects(`contract C { ${S_TARGETS}
       function go(uint256 v) external view returns (uint256) {
@@ -194,7 +194,7 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
         return g(v);
       }
     }`),
-    ).toContain('JETH054');
+    ).toContain('JETH481');
   });
 
   it('KEPT CONSERVATIVE: storage-held pointer and funcref PARAM still use the per-signature union', () => {
@@ -205,7 +205,7 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
       @external set(c: bool): void { this.h = c ? this.rd : this.wr; }
       @external @view go(v: u256): u256 { let g: (x: u256) => u256 = this.h; return g(v); }
     }`),
-    ).toContain('JETH054');
+    ).toContain('JETH481');
     // param flow: the param's initial value is caller-controlled -> poisoned -> union includes wr
     // (a DOCUMENTED conservative over-rejection: solc's view-typed param would accept).
     expect(
@@ -214,7 +214,7 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
       @external runMut(v: u256): u256 { let m: (x: u256) => u256 = this.wr; return m(v); }
       @external @view go(v: u256): u256 { return this.ap(this.rd, v); }
     }`),
-    ).toContain('JETH054');
+    ).toContain('JETH481');
   });
 
   it('unregressed: the pre-existing single-target @view pointer shape still lifts', async () => {

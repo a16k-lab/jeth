@@ -3,39 +3,37 @@
 // (u256[] / bytes). ABI head is flat+unpacked: the aggregate leaves are inline,
 // the dynamic param contributes ONE offset word, and the dynamic tail base is
 // byte 4 (right after the selector).
-@struct
-class Pt {
+type Pt = {
   x: u128;
   y: u128;
-}
+};
 
-@contract
 class AggDynSibling {
   // (1) fixed-array (3 inline head words) + dynamic u256[] (offset word) + value i.
-  @external @pure sumAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 {
+  get sumAt(a: Arr<u256, 3>, b: u256[], i: u256): External<u256> {
     return a[i] + b[i];
   }
-  @external @pure aAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 {
+  get aAt(a: Arr<u256, 3>, b: u256[], i: u256): External<u256> {
     return a[i];
   }
-  @external @pure bAt(a: Arr<u256, 3>, b: u256[], i: u256): u256 {
+  get bAt(a: Arr<u256, 3>, b: u256[], i: u256): External<u256> {
     return b[i];
   }
-  @external @pure bLen(a: Arr<u256, 3>, b: u256[], i: u256): u256 {
+  get bLen(a: Arr<u256, 3>, b: u256[], i: u256): External<u256> {
     return b.length;
   }
 
   // (2) static struct (2 inline head words) + bytes (offset word).
-  @external @pure ptXof(p: Pt, data: bytes): u128 {
+  get ptXof(p: Pt, data: bytes): External<u128> {
     return p.x;
   }
-  @external @pure ptYof(p: Pt, data: bytes): u128 {
+  get ptYof(p: Pt, data: bytes): External<u128> {
     return p.y;
   }
-  @external @pure dataLen(p: Pt, data: bytes): u256 {
+  get dataLen(p: Pt, data: bytes): External<u256> {
     return data.length;
   }
-  @external @pure dataAt(p: Pt, data: bytes, k: u256): bytes1 {
+  get dataAt(p: Pt, data: bytes, k: u256): External<bytes1> {
     return data[k];
   }
 }

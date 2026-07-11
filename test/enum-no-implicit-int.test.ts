@@ -58,7 +58,7 @@ describe('enum member literal is not implicitly convertible to an integer (vs so
   // (3) an enum literal argument into a single (non-overloaded) uint param: JETH-REJECT, solc-REJECT.
   it('rejects an enum-literal argument into a u256 parameter (both reject)', () => {
     const j = 'pick(u: u256): u256 { return u; } @external @pure f(): u256 { return this.pick(Color.Blue); }';
-    expect(codes(J(j))).toContain('JETH085');
+    expect(codes(J(j))).toContain('JETH481');
     const s =
       'function pick(uint256 u) internal pure returns (uint256) { return u; } function f() external pure returns (uint256) { return pick(Color.Blue); }';
     expect(solRejects(S(s))).toBe(true);

@@ -1,81 +1,80 @@
 // Dynamic arrays T[]: storage (whole-slot + packed), push/pop/length/index/set,
 // calldata decode, ABI return encode.
-@contract
 class Arrays {
-  @state u: u256[]; // slot 0 (whole-slot)
-  @state p: u8[]; // slot 1 (packed, 32/slot)
-  @state b: bool[]; // slot 2 (packed)
-  @state adr: address[]; // slot 3 (unpacked, 1/slot)
+  u: u256[]; // slot 0 (whole-slot)
+  p: u8[]; // slot 1 (packed, 32/slot)
+  b: bool[]; // slot 2 (packed)
+  adr: address[]; // slot 3 (unpacked, 1/slot)
 
-  @external pushU(v: u256): void {
+  pushU(v: u256): External<void> {
     this.u.push(v);
   }
-  @external @view lenU(): u256 {
+  get lenU(): External<u256> {
     return this.u.length;
   }
-  @external @view getU(i: u256): u256 {
+  get getU(i: u256): External<u256> {
     return this.u[i];
   }
-  @external setU(i: u256, v: u256): void {
+  setU(i: u256, v: u256): External<void> {
     this.u[i] = v;
   }
-  @external popU(): void {
+  popU(): External<void> {
     this.u.pop();
   }
 
-  @external pushP(v: u8): void {
+  pushP(v: u8): External<void> {
     this.p.push(v);
   }
-  @external @view getP(i: u256): u8 {
+  get getP(i: u256): External<u8> {
     return this.p[i];
   }
-  @external @view lenP(): u256 {
+  get lenP(): External<u256> {
     return this.p.length;
   }
-  @external popP(): void {
+  popP(): External<void> {
     this.p.pop();
   }
 
-  @external pushB(v: bool): void {
+  pushB(v: bool): External<void> {
     this.b.push(v);
   }
-  @external @view getB(i: u256): bool {
+  get getB(i: u256): External<bool> {
     return this.b[i];
   }
 
-  @external pushAdr(v: address): void {
+  pushAdr(v: address): External<void> {
     this.adr.push(v);
   }
-  @external @view getAdr(i: u256): address {
+  get getAdr(i: u256): External<address> {
     return this.adr[i];
   }
 
-  @external @pure mk(): u256[] {
+  get mk(): External<u256[]> {
     return [0xaan, 0xbbn, 0xccn];
   }
-  @external @pure echoU(x: u256[]): u256[] {
+  get echoU(x: u256[]): External<u256[]> {
     return x;
   }
-  @external @pure empty(): u256[] {
+  get empty(): External<u256[]> {
     return [];
   }
-  @external @pure sum(x: u256[]): u256 {
+  get sum(x: u256[]): External<u256> {
     let s: u256 = 0n;
     for (let i: u256 = 0n; i < x.length; i += 1n) {
       s += x[i];
     }
     return s;
   }
-  @external @pure echoP(x: u8[]): u8[] {
+  get echoP(x: u8[]): External<u8[]> {
     return x;
   }
-  @external @pure echoAdr(x: address[]): address[] {
+  get echoAdr(x: address[]): External<address[]> {
     return x;
   }
-  @external @pure mix(k: u256, x: u256[]): u256 {
+  get mix(k: u256, x: u256[]): External<u256> {
     return k + x.length;
   }
-  @external @view echoStoreU(): u256[] {
+  get echoStoreU(): External<u256[]> {
     return this.u;
   }
 }

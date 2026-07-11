@@ -95,7 +95,7 @@ describe('W2A: packed abi encoding of an untyped literal rejected', () => {
   const wrap = (arg: string) => `@contract class C { @external @pure f(): bytes { return abi.encodePacked(${arg}); } }`;
   for (const arg of ['42n', '0x2a', '1000000000000000000n', '-1n', '(42n)', '1n + 1n', '2n ** 8n', '1n << 4n'])
     it(`rejects abi.encodePacked(${arg})`, () => {
-      expect(rejectCodes(wrap(arg))).toContain('JETH173');
+      expect(rejectCodes(wrap(arg))).toContain('JETH481');
     });
   it('rejects keccak256(abi.encodePacked(7n, 9n))', () => {
     expect(
@@ -146,7 +146,7 @@ describe('W2A: enum declared inside a method body rejected (not hoisted)', () =>
       rejectCodes(
         'class C { enum Color { Red, Green }\n @external @pure f(): u8 { enum E { A, B } return u8(E.B); } }',
       ),
-    ).toContain('JETH061');
+    ).toContain('JETH481');
   });
   it('keeps a class-level enum (declared after a method with a nested block) byte-identical', async () => {
     await eqCalls(

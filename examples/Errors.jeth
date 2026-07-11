@@ -1,74 +1,73 @@
 // require / revert / Error(string) / custom errors.
-@contract
 class Errors {
-  @error Insufficient(available: u256, required: u256);
-  @error Unauthorized(who: address);
-  @error Flag(ok: bool);
-  @error Three(a: u256, b: address, c: bool);
-  @error Narrow(a: u8, b: i8);
-  @error NoArgs();
+  Insufficient: error<{ available: u256; required: u256 }>;
+  Unauthorized: error<{ who: address }>;
+  Flag: error<{ ok: bool }>;
+  Three: error<{ a: u256; b: address; c: bool }>;
+  Narrow: error<{ a: u8; b: i8 }>;
+  NoArgs: error<{}>;
 
   // string-reason reverts
-  @external @pure reqTrue(a: u256): u256 {
+  get reqTrue(a: u256): External<u256> {
     require(a > 0n);
     return a;
   }
-  @external @pure reqTrueMsg(a: u256): u256 {
+  get reqTrueMsg(a: u256): External<u256> {
     require(a > 0n, 'must be positive');
     return a;
   }
-  @external @pure reqFalseShort(): void {
+  reqFalseShort(): External<void> {
     require(false, 'hello');
   }
-  @external @pure reqFalseExact32(): void {
+  reqFalseExact32(): External<void> {
     require(false, 'abcdefghijklmnopqrstuvwxyz012345');
   }
-  @external @pure reqFalseLong(): void {
+  reqFalseLong(): External<void> {
     require(false, 'this string is definitely longer than thirty-two bytes for testing');
   }
-  @external @pure revertShort(): void {
+  revertShort(): External<void> {
     revert('hello');
   }
-  @external @pure revertEmptyStr(): void {
+  revertEmptyStr(): External<void> {
     revert('');
   }
-  @external @pure revertBare(): void {
+  revertBare(): External<void> {
     revert();
   }
 
   // custom errors
-  @external @pure r1(a: u256, b: u256): void {
+  r1(a: u256, b: u256): External<void> {
     revert(Insufficient(a, b));
   }
-  @external @pure r2(w: address): void {
+  r2(w: address): External<void> {
     revert(Unauthorized(w));
   }
-  @external @pure r3(ok: bool): void {
+  r3(ok: bool): External<void> {
     revert(Flag(ok));
   }
-  @external @pure r4(a: u256, b: address, c: bool): void {
+  r4(a: u256, b: address, c: bool): External<void> {
     revert(Three(a, b, c));
   }
-  @external @pure r5(a: u8, b: i8): void {
+  r5(a: u8, b: i8): External<void> {
     revert(Narrow(a, b));
   }
-  @external @pure r7(): void {
+  r7(): External<void> {
     revert(NoArgs());
   }
-  @external @pure rq(a: u256, b: u256): u256 {
+  get rq(a: u256, b: u256): External<u256> {
     require(a > b, Insufficient(a, b));
     return a;
   }
 
   // eager-eval regression: the error arg divides; with b==0 it must Panic(0x12)
   // even though the condition is true (args are evaluated unconditionally).
-  @external @pure rqEager(a: u256, b: u256): u256 {
+  get rqEager(a: u256, b: u256): External<u256> {
     require(true, Insufficient(a, 10n / b));
     return a;
   }
 
   // coexistence of Error(string) path with checked-arith Panic in one function
-  @external @pure reqThenAdd(a: u256): u256 {
+  get reqThenAdd(a: u256): External<u256> {
     require(a > 0n, 'nz');
     return a + 1n;
   }

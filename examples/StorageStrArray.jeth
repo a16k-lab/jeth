@@ -2,77 +2,76 @@
 // elements). Length at slot p; element header i at keccak(p)+i (a normal storage
 // bytes/string: short <32 inline, long >=32 with keccak(headerSlot) data slots).
 // push/pop/length/index read+write + overwrite-clearing, mirroring Solidity.
-@contract
 class StorageStrArray {
-  @state ss: string[]; // slot 0
-  @state bb: bytes[]; // slot 1
-  @state byKey: mapping<address, string[]>; // slot 2
-  @state sentinel: u256; // slot 3 (must never be disturbed)
+  ss: string[]; // slot 0
+  bb: bytes[]; // slot 1
+  byKey: mapping<address, string[]>; // slot 2
+  sentinel: u256; // slot 3 (must never be disturbed)
 
   // string[] ss
-  @external pushS(v: string): void {
+  pushS(v: string): External<void> {
     this.ss.push(v);
   }
-  @external pushEmptyS(): void {
+  pushEmptyS(): External<void> {
     this.ss.push();
   }
-  @external popS(): void {
+  popS(): External<void> {
     this.ss.pop();
   }
-  @external setS(i: u256, v: string): void {
+  setS(i: u256, v: string): External<void> {
     this.ss[i] = v;
   }
-  @external @view sLen(): u256 {
+  get sLen(): External<u256> {
     return this.ss.length;
   }
-  @external @view sAt(i: u256): string {
+  get sAt(i: u256): External<string> {
     return this.ss[i];
   }
 
   // bytes[] bb (supports b[i].length and a byte index)
-  @external pushB(v: bytes): void {
+  pushB(v: bytes): External<void> {
     this.bb.push(v);
   }
-  @external popB(): void {
+  popB(): External<void> {
     this.bb.pop();
   }
-  @external setB(i: u256, v: bytes): void {
+  setB(i: u256, v: bytes): External<void> {
     this.bb[i] = v;
   }
-  @external @view bLen(): u256 {
+  get bLen(): External<u256> {
     return this.bb.length;
   }
-  @external @view bAt(i: u256): bytes {
+  get bAt(i: u256): External<bytes> {
     return this.bb[i];
   }
-  @external @view bElemLen(i: u256): u256 {
+  get bElemLen(i: u256): External<u256> {
     return this.bb[i].length;
   }
-  @external @view bByte(i: u256, j: u256): bytes1 {
+  get bByte(i: u256, j: u256): External<bytes1> {
     return this.bb[i][j];
   }
 
   // mapping<address, string[]> byKey (per-key isolation)
-  @external pushK(k: address, v: string): void {
+  pushK(k: address, v: string): External<void> {
     this.byKey[k].push(v);
   }
-  @external popK(k: address): void {
+  popK(k: address): External<void> {
     this.byKey[k].pop();
   }
-  @external setK(k: address, i: u256, v: string): void {
+  setK(k: address, i: u256, v: string): External<void> {
     this.byKey[k][i] = v;
   }
-  @external @view kLen(k: address): u256 {
+  get kLen(k: address): External<u256> {
     return this.byKey[k].length;
   }
-  @external @view kAt(k: address, i: u256): string {
+  get kAt(k: address, i: u256): External<string> {
     return this.byKey[k][i];
   }
 
-  @external setSentinel(c: u256): void {
+  setSentinel(c: u256): External<void> {
     this.sentinel = c;
   }
-  @external @view getSentinel(): u256 {
+  get getSentinel(): External<u256> {
     return this.sentinel;
   }
 }

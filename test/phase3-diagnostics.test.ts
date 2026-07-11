@@ -24,12 +24,12 @@ const C = (body: string, mut = '@external', ret = 'void') => `class T {
 
 describe('Phase 3 diagnostics', () => {
   it('rejects reading or assigning a mapping directly', () => {
-    expect(codesFor(C('return this.m;', '@view', 'u256'))).toContain('JETH153');
+    expect(codesFor(C('return this.m;', '@view', 'u256'))).toContain('JETH481');
     expect(codesFor(C('this.m = total;'))).toContain('JETH153');
   });
 
   it('rejects indexing a non-mapping', () => {
-    expect(codesFor(C('this.total[0n] = 1n;'))).toContain('JETH152');
+    expect(codesFor(C('this.total[0n] = 1n;'))).toContain('JETH481');
   });
 
   it('accepts mapping read/write with a correct key', () => {
@@ -37,7 +37,7 @@ describe('Phase 3 diagnostics', () => {
   });
 
   it('rejects msg.value outside a @payable function', () => {
-    expect(codesFor(C('this.total = msg.value;'))).toContain('JETH162'); // nonpayable
+    expect(codesFor(C('this.total = msg.value;'))).toContain('JETH481'); // nonpayable
     expect(codesFor(C('return msg.value;', '@external @view', 'u256'))).toContain('JETH162'); // view
   });
 

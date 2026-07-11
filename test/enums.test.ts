@@ -230,13 +230,13 @@ const wrap = (body: string) => `${E}class C { ${body} }`;
 
 describe('enum compile-time rules (solc parity)', () => {
   it('rejects arithmetic on an enum (JETH279)', () => {
-    expect(errCodes(wrap('@external @pure f(c: Color): Color { let x: Color = c + c; return x; }'))).toContain(
+    expect(errCodes(wrap('get f(c: Color): External<Color> { let x: Color = c + c; return x; }'))).toContain(
       'JETH279',
     );
-    expect(errCodes(wrap('@external @pure f(c: Color): u8 { let x: Color = c & c; return u8(x); }'))).toContain(
+    expect(errCodes(wrap('get f(c: Color): External<u8> { let x: Color = c & c; return u8(x); }'))).toContain(
       'JETH279',
     );
-    expect(errCodes(wrap('@external @pure f(c: Color): u8 { let x: Color = c << 1n; return u8(x); }'))).toContain(
+    expect(errCodes(wrap('get f(c: Color): External<u8> { let x: Color = c << 1n; return u8(x); }'))).toContain(
       'JETH279',
     );
   });
@@ -247,9 +247,9 @@ describe('enum compile-time rules (solc parity)', () => {
   });
 
   it('rejects assigning a bare integer to an enum without a cast (JETH280)', () => {
-    expect(errCodes(wrap('@external @pure f(): Color { return 1n; }'))).toContain('JETH280');
-    expect(errCodes(wrap('@state c: Color; @external s(): void { this.c = 2n; }'))).toContain('JETH280');
-    expect(errCodes(wrap('@external @pure f(c: Color): bool { return c == 1n; }'))).toContain('JETH280');
+    expect(errCodes(wrap('get f(): External<Color> { return 1n; }'))).toContain('JETH280');
+    expect(errCodes(wrap('c: Color; s(): External<void> { this.c = 2n; }'))).toContain('JETH280');
+    expect(errCodes(wrap('get f(c: Color): External<bool> { return c == 1n; }'))).toContain('JETH280');
   });
 
   it('rejects an enum member with an explicit value (JETH270)', () => {
@@ -263,15 +263,15 @@ describe('enum compile-time rules (solc parity)', () => {
   });
 
   it('rejects an unknown member Color.Purple (JETH271)', () => {
-    expect(errCodes(wrap('@external @pure f(): Color { return Color.Purple; }'))).toContain('JETH271');
+    expect(errCodes(wrap('get f(): External<Color> { return Color.Purple; }'))).toContain('JETH271');
   });
 
   it('rejects an out-of-range CONSTANT conversion Color(3) at compile time (JETH278)', () => {
-    expect(errCodes(wrap('@external @pure f(): Color { return Color(3n); }'))).toContain('JETH278');
+    expect(errCodes(wrap('get f(): External<Color> { return Color(3n); }'))).toContain('JETH278');
   });
 
   it('rejects an enum conversion of a non-integer operand (JETH277)', () => {
-    expect(errCodes(wrap('@external @pure f(a: address): Color { return Color(a); }'))).toContain('JETH277');
+    expect(errCodes(wrap('get f(a: address): External<Color> { return Color(a); }'))).toContain('JETH277');
   });
 
   it('rejects an enum name colliding with a primitive (JETH272) / a duplicate member (JETH274)', () => {
@@ -284,11 +284,11 @@ describe('enum compile-time rules (solc parity)', () => {
   });
 
   it('accepts the legal enum operations (member constants, comparisons, both-way casts)', () => {
-    expect(errCodes(wrap('@external @pure f(c: Color): bool { return c == Color.Red || c < Color.Blue; }'))).toEqual(
+    expect(errCodes(wrap('get f(c: Color): External<bool> { return c == Color.Red || c < Color.Blue; }'))).toEqual(
       [],
     );
-    expect(errCodes(wrap('@external @pure f(x: u8): Color { return Color(x); }'))).toEqual([]);
-    expect(errCodes(wrap('@external @pure f(c: Color): u256 { return u256(c); }'))).toEqual([]);
-    expect(errCodes(wrap('@external @pure f(): Color { return Color.Green; }'))).toEqual([]);
+    expect(errCodes(wrap('get f(x: u8): External<Color> { return Color(x); }'))).toEqual([]);
+    expect(errCodes(wrap('get f(c: Color): External<u256> { return u256(c); }'))).toEqual([]);
+    expect(errCodes(wrap('get f(): External<Color> { return Color.Green; }'))).toEqual([]);
   });
 });

@@ -67,8 +67,15 @@ const DEC_PRAGMA = /^[ \t]*\/\/ use @decorators[ \t]*$/m;
 const args = process.argv.slice(2);
 const dry = args.includes('--dry');
 const noTrial = args.includes('--no-trial');
+// --loose: accept ANY ok/ok migration (skip the legacy-vs-native bytecode/ABI equality gate). The get-flip
+// retry still runs (JETH352 rejects still trigger it). Used for stage-2 solc-DIFFERENTIAL tests, where the
+// oracle is native-JETH-vs-solc at test runtime, not legacy-JETH-vs-native-JETH bytecode.
+const loose = args.includes('--loose');
 const files = args.filter((a) => !a.startsWith('--'));
-if (files.length === 0) {
+// This module doubles as a LIBRARY (migrateSource/transformJethSource are exported for driver scripts,
+// e.g. the examples/*.jeth migration); the CLI file loop only runs when it is invoked directly.
+const RUN_AS_CLI = !!process.argv[1] && import.meta.url === url.pathToFileURL(process.argv[1]).href;
+if (RUN_AS_CLI && files.length === 0) {
   console.error('usage: npx tsx scripts/migrate/codemod.mjs [--dry] [--no-trial] <test-file...>');
   process.exit(2);
 }
@@ -108,7 +115,7 @@ function decSet(node) {
 
 /** Transform ONE embedded JETH source. Returns { text, edits, changes, manual } - `manual` non-empty
  *  means the source must be left unchanged (the caller never applies a partial/guessed transform). */
-function transformJethSource(text, { forceGet = new Set() } = {}) {
+export function transformJethSource(text, { forceGet = new Set() } = {}) {
   const sf = ts.createSourceFile('embedded.jeth', text, ts.ScriptTarget.ES2022, true);
   const edits = []; // { start, end, insert }
   const changes = [];
@@ -425,7 +432,9 @@ function outcomeOf(src) {
 }
 function outcomesEqual(a, b) {
   if (a.kind !== b.kind) return false;
-  if (a.kind === 'ok') return a.bc === b.bc && a.abi === b.abi;
+  // --loose: a successful native migration is accepted regardless of the legacy-vs-native bytecode/ABI
+  // (the enclosing solc-differential test verifies native-JETH-vs-solc at runtime).
+  if (a.kind === 'ok') return loose ? true : a.bc === b.bc && a.abi === b.abi;
   if (a.kind === 'rej') return a.codes.join(',') === b.codes.join(',');
   return a.name === b.name;
 }
@@ -462,7 +471,7 @@ function methodKeyAt(text, line, column) {
  *  `forceGet` seeds the get-spelling key set: a const literal that is a FRAGMENT (e.g. an @abstract
  *  class alone, standalone outcome JETH040 in every spelling) may need keys discovered by a
  *  TEMPLATE ASSEMBLY that instantiates it in full context - the caller passes them in here. */
-function migrateSource(cooked, { forceGet } = {}) {
+export function migrateSource(cooked, { forceGet } = {}) {
   let force = new Set(forceGet ?? []);
   let res = transformJethSource(cooked, { forceGet: force });
   if (res.manual.length > 0) return { text: cooked, edits: [], action: 'manual', changes: [], manual: res.manual };
@@ -582,6 +591,7 @@ function escapeForLiteral(s, kind, quote) {
 const manualBucketPath = path.join(path.dirname(url.fileURLToPath(import.meta.url)), 'manual-bucket.txt');
 const manualEntries = [];
 
+if (RUN_AS_CLI)
 for (const file of files) {
   const abs = path.resolve(file);
   const original = fs.readFileSync(abs, 'utf8');

@@ -1,49 +1,47 @@
 // Phase 4e-2b: mapping value that is a dynamic array (mapping<K, T[]>): push/pop,
 // .length, this.m[k][i] element access (value and struct field).
-@struct
-class Rec {
+type Rec = {
   id: u64;
   amt: u128;
-}
+};
 
-@contract
 class MapArray {
-  @state nums: mapping<address, u256[]>; // slot 0
-  @state recs: mapping<address, Rec[]>; // slot 1
-  @state sentinel: u256; // slot 2
+  nums: mapping<address, u256[]>; // slot 0
+  recs: mapping<address, Rec[]>; // slot 1
+  sentinel: u256; // slot 2
 
-  @external pushNum(k: address, v: u256): void {
+  pushNum(k: address, v: u256): External<void> {
     this.nums[k].push(v);
   }
-  @external popNum(k: address): void {
+  popNum(k: address): External<void> {
     this.nums[k].pop();
   }
-  @external setNum(k: address, i: u256, v: u256): void {
+  setNum(k: address, i: u256, v: u256): External<void> {
     this.nums[k][i] = v;
   }
-  @external @view numLen(k: address): u256 {
+  get numLen(k: address): External<u256> {
     return this.nums[k].length;
   }
-  @external @view numAt(k: address, i: u256): u256 {
+  get numAt(k: address, i: u256): External<u256> {
     return this.nums[k][i];
   }
 
-  @external addRec(k: address, id: u64, amt: u128): void {
+  addRec(k: address, id: u64, amt: u128): External<void> {
     this.recs[k].push(Rec(id, amt));
   }
-  @external popRec(k: address): void {
+  popRec(k: address): External<void> {
     this.recs[k].pop();
   }
-  @external setRecAmt(k: address, i: u256, v: u128): void {
+  setRecAmt(k: address, i: u256, v: u128): External<void> {
     this.recs[k][i].amt = v;
   }
-  @external @view recLen(k: address): u256 {
+  get recLen(k: address): External<u256> {
     return this.recs[k].length;
   }
-  @external @view recId(k: address, i: u256): u64 {
+  get recId(k: address, i: u256): External<u64> {
     return this.recs[k][i].id;
   }
-  @external @view recAmt(k: address, i: u256): u128 {
+  get recAmt(k: address, i: u256): External<u128> {
     return this.recs[k][i].amt;
   }
 }

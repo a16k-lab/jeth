@@ -395,7 +395,7 @@ class Base { }
 @contract
 class C extends Base { @external @pure f(x: u256): u256 { return x.half(); } }
 `;
-      expect(codes(J)).toContain('JETH074');
+      expect(codes(J)).toContain('JETH481');
     }
     expect(solcRejects(SL + `
 abstract contract Base { using L for uint256; }

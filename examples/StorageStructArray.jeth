@@ -1,47 +1,45 @@
 // Phase 4e-2: storage dynamic array of struct (the "list of records" pattern).
 // push(Rec(...)), this.recs[i].field read/write (RMW), .length, pop.
-@struct
-class Rec {
+type Rec = {
   id: u64;
   owner: address;
   amount: u128;
   active: bool;
-}
+};
 
-@contract
 class StorageStructArray {
-  @state recs: Rec[]; // length @ slot 0, data at keccak(0); each Rec = 2 slots
-  @state sentinel: u256; // slot 1
+  recs: Rec[]; // length @ slot 0, data at keccak(0); each Rec = 2 slots
+  sentinel: u256; // slot 1
 
-  @external add(id: u64, owner: address, amount: u128, active: bool): void {
+  add(id: u64, owner: address, amount: u128, active: bool): External<void> {
     this.recs.push(Rec(id, owner, amount, active));
   }
-  @external pushEmpty(): void {
+  pushEmpty(): External<void> {
     this.recs.push();
   }
-  @external popRec(): void {
+  popRec(): External<void> {
     this.recs.pop();
   }
-  @external setAmount(i: u256, v: u128): void {
+  setAmount(i: u256, v: u128): External<void> {
     this.recs[i].amount = v;
   }
-  @external setActive(i: u256, v: bool): void {
+  setActive(i: u256, v: bool): External<void> {
     this.recs[i].active = v;
   }
 
-  @external @view len(): u256 {
+  get len(): External<u256> {
     return this.recs.length;
   }
-  @external @view getId(i: u256): u64 {
+  get getId(i: u256): External<u64> {
     return this.recs[i].id;
   }
-  @external @view getOwner(i: u256): address {
+  get getOwner(i: u256): External<address> {
     return this.recs[i].owner;
   }
-  @external @view getAmount(i: u256): u128 {
+  get getAmount(i: u256): External<u128> {
     return this.recs[i].amount;
   }
-  @external @view getActive(i: u256): bool {
+  get getActive(i: u256): External<bool> {
     return this.recs[i].active;
   }
 }

@@ -73,7 +73,7 @@ describe('JETH471: msg.data is rejected inside a receive body (solc parity)', ()
     expect(
       codes(`// use @decorators
 @contract class C { @state l: u256; @receive r(): void { this.l = msg.data.length + 5n; } @external @view g(): u256 { return this.l; } }`),
-    ).toContain('JETH471');
+    ).toContain('JETH480');
   });
 
   it('receive declared in an @abstract base with msg.data -> JETH471', () => {
@@ -181,7 +181,7 @@ describe('JETH472: a bodyless receive/fallback declaration is rejected (solc par
 
   it('decorator-mode bodyless @receive -> JETH472', () => {
     expect(codes(`// use @decorators
-@contract class C { @receive r(): void; }`)).toContain('JETH472');
+@contract class C { @receive r(): void; }`)).toContain('JETH480');
   });
 
   it('a bodyless @virtual receive in an @abstract base with NO derived implementation -> JETH472 (solc: abstract)', () => {
@@ -342,11 +342,11 @@ describe('JETH473: @nonReentrant on a read-only method (native inference bypass 
     expect(
       codes(`// use @decorators
 @contract class C { @state x: u256; @nonReentrant @external @view getX(): u256 { return this.x; } }`),
-    ).toContain('JETH260');
+    ).toContain('JETH480');
     expect(
       codes(`// use @decorators
 @contract class C { @state x: u256; @nonReentrant @external @read getX(): u256 { return this.x; } }`),
-    ).toContain('JETH260');
+    ).toContain('JETH480');
   });
 
   it('a plain `get` accessor (no @nonReentrant) is unregressed byte-identical', async () => {

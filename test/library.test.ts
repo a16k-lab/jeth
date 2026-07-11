@@ -309,7 +309,7 @@ contract C { function f(uint256 a) external pure returns(uint256){ return L.f(a)
     const ok = `static class L { f(a: u256): External<u256> { return a; } }
 class C { g(a: u256): External<u256> { return L.f(a); } }`;
     expect(() => compile(ok, { fileName: 'C.jeth' })).not.toThrow();
-    const payable = `static class L { @payable f(a: u256): External<u256> { return a; } }
+    const payable = `static class L { f(a: u256): Payable<External<u256>> { return a; } }
 class C { get g(a: u256): External<u256> { return L.f(a); } }`;
     expect(jethRejectsWith(payable, 'JETH390')).toBe(true);
   });

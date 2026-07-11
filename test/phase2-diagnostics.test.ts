@@ -25,7 +25,7 @@ const fn = (body: string, ret = 'void', mut = '@external') =>
 
 describe('Phase 2 diagnostics', () => {
   it('rejects break/continue outside a loop', () => {
-    expect(codesFor(fn('break;'))).toContain('JETH113');
+    expect(codesFor(fn('break;'))).toContain('JETH481');
     expect(codesFor(fn('continue;'))).toContain('JETH113');
   });
 
@@ -34,12 +34,12 @@ describe('Phase 2 diagnostics', () => {
   });
 
   it('rejects a non-bool condition', () => {
-    expect(codesFor(fn('if (1n) { this.x = 1n; }'))).toContain('JETH110');
+    expect(codesFor(fn('if (1n) { this.x = 1n; }'))).toContain('JETH481');
     expect(codesFor(fn('while (this.x) {}'))).toContain('JETH110');
   });
 
   it('rejects for-in, and a type-annotated for-of binding (for-of itself is supported)', () => {
-    expect(codesFor(fn('for (const k in this.x) {}'))).toContain('JETH111');
+    expect(codesFor(fn('for (const k in this.x) {}'))).toContain('JETH481');
     expect(codesFor(fn('for (let i: u256 of xs) {}'))).toContain('JETH116');
   });
 
@@ -57,7 +57,7 @@ describe('Phase 2 diagnostics', () => {
   });
 
   it('rejects require/revert arity and bad reasons', () => {
-    expect(codesFor(fn('require();'))).toContain('JETH120');
+    expect(codesFor(fn('require();'))).toContain('JETH481');
     expect(codesFor(fn('require(this.x);'))).toContain('JETH121'); // non-bool condition
     expect(codesFor(fn('revert(1n, 2n);'))).toContain('JETH122');
     expect(codesFor(fn('revert(1n);'))).toContain('JETH123'); // not a string/error ctor
@@ -65,7 +65,7 @@ describe('Phase 2 diagnostics', () => {
   });
 
   it('rejects unknown custom error and arg-count mismatch', () => {
-    expect(codesFor(fn('revert(Unknown(1n));'))).toContain('JETH129');
+    expect(codesFor(fn('revert(Unknown(1n));'))).toContain('JETH481');
     expect(codesFor(fn('revert(E(1n, 2n));'))).toContain('JETH130');
   });
 
@@ -79,7 +79,7 @@ describe('Phase 2 diagnostics', () => {
   });
 
   it('rejects malformed @event declarations and emits', () => {
-    expect(codesFor(fn('emit(Missing(1n));'))).toContain('JETH147'); // unknown event
+    expect(codesFor(fn('emit(Missing(1n));'))).toContain('JETH481'); // unknown event
     expect(codesFor(fn('emit(Ev(1n, 2n, 3n));'))).toContain('JETH148'); // arg count
     expect(
       codesFor(

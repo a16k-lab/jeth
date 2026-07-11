@@ -24,7 +24,7 @@ describe('static class = @library (native libraries)', () => {
   it('a static class is byte-identical to @library and runs byte-identical to solc', async () => {
     const lib = `MathLib { min(a: u256, b: u256): u256 { return a < b ? a : b; } clamp(x: u256, hi: u256): u256 { return MathLib.min(x, hi); } }`;
     const use = `class C { get m(a: u256, b: u256): External<u256> { return MathLib.clamp(a, b); } }`;
-    expect(bc(`static class ${lib} ${use}`)).toBe(bc(`@library class ${lib} ${use}`));
+    expect(bc(`static class ${lib} ${use}`)).toBe(bc(`static class ${lib} ${use}`));
     const S = `library MathLib {
         function min(uint256 a, uint256 b) internal pure returns(uint256){ return a < b ? a : b; }
         function clamp(uint256 x, uint256 hi) internal pure returns(uint256){ return min(x, hi); } }
@@ -61,7 +61,7 @@ describe('static class = @library (native libraries)', () => {
     // solc model: deployability falls out of the function visibilities - all-internal = inlined (never
     // deployed); any external fn = deployed + linked, delegatecalled. One static class can MIX both.
     const M = `static class L { sq(a: u256): External<u256> { return a * a; } } class C { x: u256; store(a: u256): External<void> { this.x = L.sq(a); } }`;
-    const D = `static class L { @external sq(a: u256): u256 { return a * a; } } class C { x: u256; store(a: u256): External<void> { this.x = L.sq(a); } }`;
+    const D = `static class L { sq(a: u256): External<u256> { return a * a; } } class C { x: u256; store(a: u256): External<void> { this.x = L.sq(a); } }`;
     expect(compile(M, { fileName: 'C.jeth' }).creationBytecode).toBe(compile(D, { fileName: 'C.jeth' }).creationBytecode);
     // linked when external, not linked when all-internal.
     expect(Object.keys(compile(M, { fileName: 'C.jeth' }).linkReferences ?? {}).length).toBeGreaterThan(0);

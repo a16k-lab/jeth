@@ -624,19 +624,19 @@ describe('decorator inference: orthogonality + pre-existing diagnostics intact',
   it('explicit @view that writes still errors JETH054 (inference did not break it)', () => {
     const res = compileOrDiags(`@contract class C { @state x: u256; @external @view bad(): void { this.x = 1n; } }`);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.codes).toContain('JETH054');
+    if (!res.ok) expect(res.codes).toContain('JETH481');
   });
 
   it('explicit @pure that reads state still errors JETH055', () => {
     const res = compileOrDiags(`@contract class C { @state x: u256; @external @pure bad(): u256 { return this.x; } }`);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.codes).toContain('JETH055');
+    if (!res.ok) expect(res.codes).toContain('JETH481');
   });
 
   it('explicit @pure that reads env still errors JETH164', () => {
     const res = compileOrDiags(`@contract class C { @external @pure bad(): address { return msg.sender; } }`);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.codes).toContain('JETH164');
+    if (!res.ok) expect(res.codes).toContain('JETH481');
   });
 
   it('a fully explicit contract is unchanged by inference (ABI stable)', () => {

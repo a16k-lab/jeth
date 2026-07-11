@@ -3,24 +3,23 @@
 // table whose base is the pointer-region start, i.e. the word after the outer
 // length word), element read m[i][j] (Panic 0x32 on either dim OOB; u8 element
 // > 255 -> EMPTY on read), m.length (outer count), and m[i].length (inner count).
-@contract
 class NestedArray {
-  @external @pure echo(m: u256[][]): u256[][] {
+  get echo(m: u256[][]): External<u256[][]> {
     return m;
   }
-  @external @pure echo8(m: u8[][]): u8[][] {
+  get echo8(m: u8[][]): External<u8[][]> {
     return m;
   }
-  @external @pure at(m: u256[][], i: u256, j: u256): u256 {
+  get at(m: u256[][], i: u256, j: u256): External<u256> {
     return m[i][j];
   }
-  @external @pure at8(m: u8[][], i: u256, j: u256): u8 {
+  get at8(m: u8[][], i: u256, j: u256): External<u8> {
     return m[i][j];
   }
-  @external @pure outerLen(m: u256[][]): u256 {
+  get outerLen(m: u256[][]): External<u256> {
     return m.length;
   }
-  @external @pure innerLen(m: u256[][], i: u256): u256 {
+  get innerLen(m: u256[][], i: u256): External<u256> {
     return m[i].length;
   }
 }

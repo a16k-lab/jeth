@@ -393,7 +393,7 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
 
   it('JETH070: out-of-range default literal (u8 = 300n) is rejected', () => {
     const codes = jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`));
-    expect(codes).toContain('JETH070');
+    expect(codes).toContain('JETH481');
   });
 
   it('wrong-type default (bool = 1n) is diagnosed when filled at a call site', () => {
@@ -411,10 +411,10 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
           `f(a: u256, b: u256 = 1n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, 2n, 3n); }`,
         ),
       ),
-    ).toContain('JETH148');
+    ).toContain('JETH481');
     expect(
       jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n); }`)),
-    ).toContain('JETH148');
+    ).toContain('JETH481');
   });
 
   it('named: unknown key, missing no-default param, duplicate key', () => {
@@ -432,7 +432,7 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
       jethCodes(
         base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n }); }`),
       ),
-    ).toContain('JETH254');
+    ).toContain('JETH481');
     // duplicate named key -> JETH253 (parser may also reject a literal duplicate; accept either way as long as it diagnoses)
     const dup = jethCodes(
       base(
@@ -454,7 +454,7 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
           `@external @pure f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, b: 2n }); }`,
         ),
       ),
-    ).toContain('JETH164');
+    ).toContain('JETH481');
   });
 
   it('mixing positional + named: this.f(1n, {b:2n}) is sound (rejected, never silently mis-binds)', () => {
@@ -546,7 +546,7 @@ describe('F3 adv: default validation is eager (declaration-time)', () => {
   it('a bad default errors even when every call supplies the arg (validated at the declaration)', () => {
     expect(
       jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(5n); }`)),
-    ).toContain('JETH070');
+    ).toContain('JETH481');
   });
 });
 

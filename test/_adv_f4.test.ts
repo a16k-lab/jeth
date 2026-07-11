@@ -543,7 +543,7 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
   it('rejects @nonReentrant on @view / @pure / @read with JETH260', () => {
     expect(
       tryCompile(`@contract class C { @state x: u256; @nonReentrant @view f(): u256 { return this.x; } }`),
-    ).toContain('JETH260');
+    ).toContain('JETH481');
     expect(tryCompile(`@contract class C { @nonReentrant @pure f(): u256 { return 1n; } }`)).toContain('JETH260');
     expect(
       tryCompile(`@contract class C { @state x: u256; @nonReentrant @read f(): u256 { return this.x; } }`),

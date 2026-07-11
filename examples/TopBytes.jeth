@@ -1,12 +1,11 @@
-@contract
 class TopBytes {
-  @external @pure bLen(s: bytes): u256 {
+  get bLen(s: bytes): External<u256> {
     return s.length;
   }
-  @external @pure bGet(s: bytes): bytes {
+  get bGet(s: bytes): External<bytes> {
     return s;
   }
-  @external @pure bAt(s: bytes, i: u256): bytes1 {
+  get bAt(s: bytes, i: u256): External<bytes1> {
     return s[i];
   }
 }

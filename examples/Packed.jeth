@@ -1,43 +1,42 @@
 // Packed storage: u128 + bytes4 + i16 + bool share slot 0; address takes slot 1.
 // Used to prove JETH's packed layout is byte-identical to Solidity (incl. the
 // left-aligned bytesN placement).
-@contract
 class Packed {
-  @state a: u128;
-  @state b: bytes4;
-  @state c: i16;
-  @state d: bool;
-  @state e: address;
+  a: u128;
+  b: bytes4;
+  c: i16;
+  d: bool;
+  e: address;
 
-  @external setA(x: u128): void {
+  setA(x: u128): External<void> {
     this.a = x;
   }
-  @external setB(x: bytes4): void {
+  setB(x: bytes4): External<void> {
     this.b = x;
   }
-  @external setC(x: i16): void {
+  setC(x: i16): External<void> {
     this.c = x;
   }
-  @external setD(x: bool): void {
+  setD(x: bool): External<void> {
     this.d = x;
   }
-  @external setE(x: address): void {
+  setE(x: address): External<void> {
     this.e = x;
   }
 
-  @external @view getA(): u128 {
+  get getA(): External<u128> {
     return this.a;
   }
-  @external @view getB(): bytes4 {
+  get getB(): External<bytes4> {
     return this.b;
   }
-  @external @view getC(): i16 {
+  get getC(): External<i16> {
     return this.c;
   }
-  @external @view getD(): bool {
+  get getD(): External<bool> {
     return this.d;
   }
-  @external @view getE(): address {
+  get getE(): External<address> {
     return this.e;
   }
 }

@@ -2,21 +2,20 @@
 // and as a return. Whole-array echo (head/tail re-encode with a per-element offset
 // table whose base is the table start), element read a[i] (re-encoded as a
 // standalone top-level string/bytes), and a.length.
-@contract
 class StringArray {
-  @external @pure echoS(a: string[]): string[] {
+  get echoS(a: string[]): External<string[]> {
     return a;
   }
-  @external @pure echoB(a: bytes[]): bytes[] {
+  get echoB(a: bytes[]): External<bytes[]> {
     return a;
   }
-  @external @pure at(a: string[], i: u256): string {
+  get at(a: string[], i: u256): External<string> {
     return a[i];
   }
-  @external @pure atB(a: bytes[], i: u256): bytes {
+  get atB(a: bytes[], i: u256): External<bytes> {
     return a[i];
   }
-  @external @pure count(a: string[]): u256 {
+  get count(a: string[]): External<u256> {
     return a.length;
   }
 }

@@ -102,7 +102,7 @@ describe('bytesN bitwise/shift + signedness + bool-cast conformance', () => {
       expect(
         codes(`@contract class C { @external @pure f(a: bytes4, b: bytes4): bytes4 { return a ${op} b; } }`),
         `'${op}' on bytesN`,
-      ).toContain('JETH082');
+      ).toContain('JETH481');
     }
   });
 

@@ -206,7 +206,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
         codes(
           `@contract class C { @immutable a: u256; @external @pure getA(): u256 { return this.a; } constructor(){ this.a = 1n; } }`,
         ),
-      ).toContain('JETH164'));
+      ).toContain('JETH481'));
   });
 
   describe('clean gates', () => {

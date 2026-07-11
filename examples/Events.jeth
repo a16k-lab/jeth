@@ -1,40 +1,39 @@
 // Events / logs: indexed vs data params, declaration order, LOGn selection.
-@contract
 class Events {
-  @event NoIdx(value: u256);
-  @event OneIdx(@indexed key: u256, value: u256);
-  @event Transfer(@indexed from: address, @indexed to: address, value: u256);
-  @event ThreeIdx(@indexed a: u256, @indexed b: u256, @indexed c: u256, d: u256);
-  @event Bare();
-  @event OneIdxNoData(@indexed who: address);
-  @event Mixed(@indexed flag: u8, @indexed s: i16, @indexed ok: bool, who: address, sig: bytes4);
-  @event Order(a: u256, @indexed b: u256, c: u256, @indexed d: u256, e: u256);
+  NoIdx: event<{ value: u256 }>;
+  OneIdx: event<{ key: indexed<u256>; value: u256 }>;
+  Transfer: event<{ from: indexed<address>; to: indexed<address>; value: u256 }>;
+  ThreeIdx: event<{ a: indexed<u256>; b: indexed<u256>; c: indexed<u256>; d: u256 }>;
+  Bare: event<{}>;
+  OneIdxNoData: event<{ who: indexed<address> }>;
+  Mixed: event<{ flag: indexed<u8>; s: indexed<i16>; ok: indexed<bool>; who: address; sig: bytes4 }>;
+  Order: event<{ a: u256; b: indexed<u256>; c: u256; d: indexed<u256>; e: u256 }>;
 
-  @external noIdx(v: u256): void {
+  noIdx(v: u256): External<void> {
     emit(NoIdx(v));
   }
-  @external oneIdx(k: u256, v: u256): void {
+  oneIdx(k: u256, v: u256): External<void> {
     emit(OneIdx(k, v));
   }
-  @external transfer(f: address, t: address, v: u256): void {
+  transfer(f: address, t: address, v: u256): External<void> {
     emit(Transfer(f, t, v));
   }
-  @external threeIdx(a: u256, b: u256, c: u256, d: u256): void {
+  threeIdx(a: u256, b: u256, c: u256, d: u256): External<void> {
     emit(ThreeIdx(a, b, c, d));
   }
-  @external bare(): void {
+  bare(): External<void> {
     emit(Bare());
   }
-  @external oneIdxNoData(w: address): void {
+  oneIdxNoData(w: address): External<void> {
     emit(OneIdxNoData(w));
   }
-  @external mixed(fl: u8, s: i16, ok: bool, w: address, sig: bytes4): void {
+  mixed(fl: u8, s: i16, ok: bool, w: address, sig: bytes4): External<void> {
     emit(Mixed(fl, s, ok, w, sig));
   }
-  @external order(): void {
+  order(): External<void> {
     emit(Order(1n, 2n, 3n, 4n, 5n));
   }
-  @external twice(v: u256): void {
+  twice(v: u256): External<void> {
     emit(NoIdx(v));
     emit(NoIdx(v));
   }

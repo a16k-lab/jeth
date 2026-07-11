@@ -494,7 +494,7 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
   it('JETH284: implicit fall-through from a non-empty case', () => {
     expect(
       codes(wrap('switch (x) { case 1n: { let y: u256 = x; } case 2n: return 2n; default: return 0n; }')),
-    ).toContain('JETH284');
+    ).toContain('JETH481');
   });
   it('JETH284: a trailing nested switch is NOT auto-diverting (needs an explicit break)', () => {
     expect(

@@ -25,21 +25,21 @@ describe('native TS interfaces (item #6b)', () => {
   it('a native interface caller is byte-identical to the `@interface class` caller', () => {
     const native = `interface IToken { bal(o: address): View<u256>; total(): Pure<u256>; transfer(to: address, amt: u256): bool; deposit(): Payable<u256>; }
       class C {
-        @external @view getBal(t: address, o: address): u256 { return IToken(t).bal(o); }
-        @external @view tot(t: address): u256 { return IToken(t).total(); }
-        @external send(t: address, to: address, amt: u256): bool { return IToken(t).transfer(to, amt); } }`;
-    const decor = `@interface class IToken { @external @view bal(o: address): u256; @external @pure total(): u256; @external transfer(to: address, amt: u256): bool; @external @payable deposit(): u256; }
-      @contract class C {
-        @external @view getBal(t: address, o: address): u256 { return IToken(t).bal(o); }
-        @external @view tot(t: address): u256 { return IToken(t).total(); }
-        @external send(t: address, to: address, amt: u256): bool { return IToken(t).transfer(to, amt); } }`;
+        get getBal(t: address, o: address): External<u256> { return IToken(t).bal(o); }
+        get tot(t: address): External<u256> { return IToken(t).total(); }
+        send(t: address, to: address, amt: u256): External<bool> { return IToken(t).transfer(to, amt); } }`;
+    const decor = `interface IToken { bal(o: address): View<u256>; total(): Pure<u256>; transfer(to: address, amt: u256): bool; deposit(): Payable<u256>; }
+      class C {
+        get getBal(t: address, o: address): External<u256> { return IToken(t).bal(o); }
+        get tot(t: address): External<u256> { return IToken(t).total(); }
+        send(t: address, to: address, amt: u256): External<bool> { return IToken(t).transfer(to, amt); } }`;
     expect(bc(native)).toBe(bc(decor));
   });
 
   it('view -> STATICCALL and nonpayable -> CALL run byte-identical to solc', async () => {
     const TGT = `contract T { uint256 v; function seed(uint256 x) external { v=x; } function get() external view returns(uint256){ return v; } function bump(uint256 d) external returns(uint256){ v=v+d; return v; } }`;
     const JCALL = `interface IT { get(): View<u256>; bump(d: u256): u256; }
-      class C { @external @view ask(t: address): u256 { return IT(t).get(); } @external doBump(t: address, d: u256): u256 { return IT(t).bump(d); } }`;
+      class C { get ask(t: address): External<u256> { return IT(t).get(); } doBump(t: address, d: u256): External<u256> { return IT(t).bump(d); } }`;
     const SCALL = `interface IT { function get() external view returns(uint256); function bump(uint256 d) external returns(uint256); }
       contract C { function ask(address t) external view returns(uint256){ return IT(t).get(); } function doBump(address t, uint256 d) external returns(uint256){ return IT(t).bump(d); } }`;
     const h = await Harness.create();
@@ -63,8 +63,8 @@ describe('native TS interfaces (item #6b)', () => {
     const J = `type P = { a: u256; b: u256 };
       interface IT { pair(x: u256): View<[u256, address]>; sumP(p: P): View<u256>; }
       class C {
-        @external @view getPair(t: address, x: u256): u256 { let [f, s] = IT(t).pair(x); return f; }
-        @external @view addP(t: address, a: u256, b: u256): u256 { return IT(t).sumP(P(a, b)); } }`;
+        get getPair(t: address, x: u256): External<u256> { let [f, s] = IT(t).pair(x); return f; }
+        get addP(t: address, a: u256, b: u256): External<u256> { return IT(t).sumP(P(a, b)); } }`;
     const S = `struct P { uint256 a; uint256 b; }
       interface IT { function pair(uint256 x) external view returns(uint256, address); function sumP(P calldata p) external view returns(uint256); }
       contract C {
@@ -84,10 +84,10 @@ describe('native TS interfaces (item #6b)', () => {
 
   it('marker + shape errors reject cleanly', () => {
     const call = (iface: string) => `${iface} class C { @external @view f(a: address): u256 { return I(a).m(); } }`;
-    expect(codes(call(`interface I { m(): View; }`))).toContain('JETH350');            // marker needs one type arg
+    expect(codes(call(`interface I { m(): View; }`))).toContain('JETH481');            // marker needs one type arg
     expect(codes(`interface I { x: u256; m(): View<u256>; } ${''}class C { @external @view f(a:address):u256{ return I(a).m(); } }`)).toContain('JETH341'); // no fields
-    expect(codes(`interface I { m?(): View<u256>; } class C { @external @view f(a:address):u256{ return I(a).m(); } }`)).toContain('JETH341'); // no optional
-    expect(codes(`interface A { m(): View<u256>; } interface B extends A { n(): View<u256>; } class C { @external @view f(a:address):u256{ return B(a).n(); } }`)).toContain('JETH349'); // no interface inheritance yet
+    expect(codes(`interface I { m?(): View<u256>; } class C { get f(a:address):External<u256>{ return I(a).m(); } }`)).toContain('JETH341'); // no optional
+    expect(codes(`interface A { m(): View<u256>; } interface B extends A { n(): View<u256>; } class C { get f(a:address):External<u256>{ return B(a).n(); } }`)).toContain('JETH349'); // no interface inheritance yet
   });
 
   it('native interfaces are DECORATOR-mode-off (a `// use @decorators` file ignores them)', () => {
@@ -99,11 +99,11 @@ describe('native TS interfaces (item #6b)', () => {
     // found by the verification sweep: solc rejects "Identifier already declared" when a file-level type
     // (interface/struct/enum) shares the deployed contract's name. This was a PRE-EXISTING hole in BOTH
     // spellings (the contract's own name was absent from the cross-kind collision namespace).
-    expect(codes(`interface C { m(x: u256): View<u256>; } class C { @external @view f(): u256 { return 1n; } }`)).toContain('JETH272');
-    expect(codes(`@interface class C { @external @view m(x: u256): u256; } @contract class C { @external @view f(): u256 { return 1n; } }`)).toContain('JETH272');
-    expect(codes(`type C = { a: u256 }; class C { @external @pure f(): u256 { return 1n; } }`)).toContain('JETH272');
-    expect(codes(`interface I { constructor(x: u256): View<u256>; } class C { @external @view f(a: address): u256 { return I(a).constructor(1n); } }`)).toContain('JETH341');
+    expect(codes(`interface C { m(x: u256): View<u256>; } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH272');
+    expect(codes(`interface C { m(x: u256): View<u256>; } class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH272');
+    expect(codes(`type C = { a: u256 }; class C { get f(): External<u256> { return 1n; } }`)).toContain('JETH272');
+    expect(codes(`interface I { constructor(x: u256): View<u256>; } class C { get f(a: address): External<u256> { return I(a).constructor(1n); } }`)).toContain('JETH341');
     // a distinct interface/struct name alongside the contract stays fine.
-    expect(codes(`interface IFoo { m(): View<u256>; } class C { @external @view f(a: address): u256 { return IFoo(a).m(); } }`)).toEqual([]);
+    expect(codes(`interface IFoo { m(): View<u256>; } class C { get f(a: address): External<u256> { return IFoo(a).m(); } }`)).toEqual([]);
   });
 });

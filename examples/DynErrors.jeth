@@ -1,12 +1,11 @@
 // Phase 4e-7: custom errors with dynamic (bytes/string) args, head/tail encoded.
-@contract
 class DynErrors {
-  @error Unauthorized(caller: address, reason: string);
-  @error TwoStr(a: string, b: string);
-  @error Mixed(code: u256, note: string, flag: bool);
-  @error JustStr(msg: string);
+  Unauthorized: error<{ caller: address; reason: string }>;
+  TwoStr: error<{ a: string; b: string }>;
+  Mixed: error<{ code: u256; note: string; flag: bool }>;
+  JustStr: error<{ msg: string }>;
 
-  @external @pure check(x: u256, who: address, s: string): void {
+  check(x: u256, who: address, s: string): External<void> {
     if (x == 0n) {
       revert(Unauthorized(who, 'not allowed here'));
     }

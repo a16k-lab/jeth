@@ -28,11 +28,11 @@ const bothReject = (native: string, twin: string, code: string) => {
 };
 
 describe('native interface as an extendable base (P0a): twin-bytecode equality', () => {
-  it('single method + view getter impl == the @interface class twin', () => {
+  it('single method + view getter impl == the interface twin', () => {
     expect(bc(`interface I { f(x: u256): u256; g(): View<u256>; }
       class C extends I { s: u256; f(x: u256): External<u256> { this.s = x; return x + 1n; } get g(): External<u256> { return this.s; } }`))
-      .toBe(bc(`@interface class I { @external f(x: u256): u256; @external @view g(): u256; }
-      @contract class C extends I { @state s: u256; @external f(x: u256): u256 { this.s = x; return x + 1n; } @external @view g(): u256 { return this.s; } }`));
+      .toBe(bc(`interface I { f(x: u256): u256; g(): View<u256>; }
+      class C extends I { s: u256; f(x: u256): External<u256> { this.s = x; return x + 1n; } get g(): External<u256> { return this.s; } }`));
   });
 
   it('multi-method: all four mutability marker cells (bare/View/Pure/Payable) == twin', () => {
@@ -44,41 +44,41 @@ describe('native interface as an extendable base (P0a): twin-bytecode equality',
         get p(a: u256): External<u256> { return a * 3n; }
         pay(): Payable<u256> { return msg.value; }
       }`))
-      .toBe(bc(`@interface class I { @external w(x: u256): u256; @external @view v(): u256; @external @pure p(a: u256): u256; @external @payable pay(): u256; }
-      @contract class C extends I {
-        @state s: u256;
-        @external w(x: u256): u256 { this.s = x; return this.s; }
-        @external @view v(): u256 { return this.s; }
-        @external @pure p(a: u256): u256 { return a * 3n; }
-        @external @payable pay(): u256 { return msg.value; }
+      .toBe(bc(`interface I { w(x: u256): u256; v(): View<u256>; p(a: u256): Pure<u256>; pay(): Payable<u256>; }
+      class C extends I {
+        s: u256;
+        w(x: u256): External<u256> { this.s = x; return this.s; }
+        get v(): External<u256> { return this.s; }
+        get p(a: u256): External<u256> { return a * 3n; }
+        pay(): Payable<u256> { return msg.value; }
       }`));
   });
 
   it('STRICTER-impl ladder cells accept: pure impl of a View method; view impl of a bare method', () => {
     expect(bc(`interface I { g(): View<u256>; }
       class C extends I { get g(): External<u256> { return 5n; } }`))
-      .toBe(bc(`@interface class I { @external @view g(): u256; }
-      @contract class C extends I { @external @pure g(): u256 { return 5n; } }`));
+      .toBe(bc(`interface I { g(): View<u256>; }
+      class C extends I { get g(): External<u256> { return 5n; } }`));
     expect(bc(`interface I { g(): u256; }
       class C extends I { s: u256; get g(): External<u256> { return this.s; } bump(): External<void> { this.s = this.s + 1n; } }`))
-      .toBe(bc(`@interface class I { @external g(): u256; }
-      @contract class C extends I { @state s: u256; @external @view g(): u256 { return this.s; } @external bump(): void { this.s = this.s + 1n; } }`));
+      .toBe(bc(`interface I { g(): u256; }
+      class C extends I { s: u256; get g(): External<u256> { return this.s; } bump(): External<void> { this.s = this.s + 1n; } }`));
   });
 
   it('C3 mix (extends an abstract base AND an interface) == twin; obligation travels through a base', () => {
     expect(bc(`interface I { total(): View<u256>; }
       abstract class B { s: u256; constructor() { this.s = 7n; } add(d: u256): External<void> { this.s = this.s + d; } }
       class C extends B, I { get total(): External<u256> { return this.s; } }`))
-      .toBe(bc(`@interface class I { @external @view total(): u256; }
-      @abstract class B { @state s: u256; constructor() { this.s = 7n; } @external add(d: u256): void { this.s = this.s + d; } }
-      @contract class C extends B, I { @external @view total(): u256 { return this.s; } }`));
+      .toBe(bc(`interface I { total(): View<u256>; }
+      abstract class B { s: u256; constructor() { this.s = 7n; } add(d: u256): External<void> { this.s = this.s + d; } }
+      class C extends B, I { get total(): External<u256> { return this.s; } }`));
     // abstract B extends I and defers; the concrete leaf implements
     expect(bc(`interface I { g(): View<u256>; h(): u256; }
       abstract class B extends I { s: u256; get g(): External<u256> { return this.s; } }
       class C extends B { h(): External<u256> { this.s = this.s + 1n; return this.s; } }`))
-      .toBe(bc(`@interface class I { @external @view g(): u256; @external h(): u256; }
-      @abstract class B extends I { @state s: u256; @external @view g(): u256 { return this.s; } }
-      @contract class C extends B { @external h(): u256 { this.s = this.s + 1n; return this.s; } }`));
+      .toBe(bc(`interface I { g(): View<u256>; h(): u256; }
+      abstract class B extends I { s: u256; get g(): External<u256> { return this.s; } }
+      class C extends B { h(): External<u256> { this.s = this.s + 1n; return this.s; } }`));
   });
 
   it('struct + array params (expanded-tuple ABI) == twin', () => {
@@ -89,33 +89,33 @@ describe('native interface as an extendable base (P0a): twin-bytecode equality',
         get agg(xs: u256[]): External<u256> { let t: u256 = 0n; for (let i: u256 = 0n; i < xs.length; i = i + 1n) { t = t + xs[i]; } return t; }
       }`))
       .toBe(bc(`type P = { a: u256; b: u256 };
-      @interface class I { @external @view sum(p: P): u256; @external @view agg(xs: u256[]): u256; }
-      @contract class C extends I {
-        @external @view sum(p: P): u256 { return p.a + p.b; }
-        @external @view agg(xs: u256[]): u256 { let t: u256 = 0n; for (let i: u256 = 0n; i < xs.length; i = i + 1n) { t = t + xs[i]; } return t; }
+      interface I { sum(p: P): View<u256>; agg(xs: u256[]): View<u256>; }
+      class C extends I {
+        get sum(p: P): External<u256> { return p.a + p.b; }
+        get agg(xs: u256[]): External<u256> { let t: u256 = 0n; for (let i: u256 = 0n; i < xs.length; i = i + 1n) { t = t + xs[i]; } return t; }
       }`));
   });
 
   it('@override interplay: optional bare @override and required @override(I, J) == twin', () => {
     expect(bc(`interface I { f(x: u256): u256; }
       class C extends I { s: u256; @override f(x: u256): External<u256> { this.s = x; return x + 1n; } }`))
-      .toBe(bc(`@interface class I { @external f(x: u256): u256; }
-      @contract class C extends I { @state s: u256; @override @external f(x: u256): u256 { this.s = x; return x + 1n; } }`));
+      .toBe(bc(`interface I { f(x: u256): u256; }
+      class C extends I { s: u256; @override f(x: u256): External<u256> { this.s = x; return x + 1n; } }`));
     expect(bc(`interface I { f(): View<u256>; }
       interface J { f(): View<u256>; }
       class C extends I, J { @override(I, J) get f(): External<u256> { return 1n; } }`))
-      .toBe(bc(`@interface class I { @external @view f(): u256; }
-      @interface class J { @external @view f(): u256; }
-      @contract class C extends I, J { @override(I, J) @external @view f(): u256 { return 1n; } }`));
+      .toBe(bc(`interface I { f(): View<u256>; }
+      interface J { f(): View<u256>; }
+      class C extends I, J { @override(I, J) get f(): External<u256> { return 1n; } }`));
   });
 
   it('extending one interface while CALLING another (call-target usage unchanged) == twin', () => {
     expect(bc(`interface I { relay(t: address): u256; }
       interface IT { get(): View<u256>; }
       class C extends I { relay(t: address): External<u256> { this.s = IT(t).get(); return this.s; } s: u256; }`))
-      .toBe(bc(`@interface class I { @external relay(t: address): u256; }
-      @interface class IT { @external @view get(): u256; }
-      @contract class C extends I { @external relay(t: address): u256 { this.s = IT(t).get(); return this.s; } @state s: u256; }`));
+      .toBe(bc(`interface I { relay(t: address): u256; }
+      interface IT { get(): View<u256>; }
+      class C extends I { relay(t: address): External<u256> { this.s = IT(t).get(); return this.s; } s: u256; }`));
   });
 
   it('multi-file: the interface lives in a dep, imported + extended == twin', () => {
@@ -137,17 +137,17 @@ describe('native interface as an extendable base (P0a): twin-bytecode equality',
       `interface I { g(): View<u256>; }
        abstract class B extends I { s: u256; get g(): External<u256> { return this.s; } }
        class C extends B, I { h(): External<void> { this.s = 1n; } }`,
-      `@interface class I { @external @view g(): u256; }
-       @abstract class B extends I { @state s: u256; @external @view g(): u256 { return this.s; } }
-       @contract class C extends B, I { @external h(): void { this.s = 1n; } }`,
+      `interface I { g(): View<u256>; }
+       abstract class B extends I { s: u256; g(): External<u256> { return this.s; } }
+       class C extends B, I { h(): External<void> { this.s = 1n; } }`,
       'JETH371',
     );
     expect(bc(`interface I { g(): View<u256>; }
       abstract class B extends I { s: u256; get g(): External<u256> { return this.s; } }
       class C extends I, B { h(): External<void> { this.s = 1n; } }`))
-      .toBe(bc(`@interface class I { @external @view g(): u256; }
-      @abstract class B extends I { @state s: u256; @external @view g(): u256 { return this.s; } }
-      @contract class C extends I, B { @external h(): void { this.s = 1n; } }`));
+      .toBe(bc(`interface I { g(): View<u256>; }
+      abstract class B extends I { s: u256; get g(): External<u256> { return this.s; } }
+      class C extends I, B { h(): External<void> { this.s = 1n; } }`));
   });
 });
 
@@ -245,25 +245,25 @@ describe('native interface extends: reject parity (same code, both spellings)', 
     bothReject(
       `interface I { f(x: u256): u256; g(): View<u256>; }
        class C extends I { f(x: u256): External<u256> { this.s = x; return x + 1n; } s: u256; }`,
-      `@interface class I { @external f(x: u256): u256; @external @view g(): u256; }
-       @contract class C extends I { @external f(x: u256): u256 { this.s = x; return x + 1n; } @state s: u256; }`,
+      `interface I { f(x: u256): u256; g(): View<u256>; }
+       class C extends I { f(x: u256): External<u256> { this.s = x; return x + 1n; } s: u256; }`,
       'JETH385',
     );
     bothReject(
       `interface I { g(): View<u256>; }
        abstract class B extends I { s: u256; poke(): External<void> { this.s = this.s + 1n; } }
        class C extends B { }`,
-      `@interface class I { @external @view g(): u256; }
-       @abstract class B extends I { @state s: u256; @external poke(): void { this.s = this.s + 1n; } }
-       @contract class C extends B { }`,
+      `interface I { g(): View<u256>; }
+       abstract class B extends I { s: u256; poke(): External<void> { this.s = this.s + 1n; } }
+       class C extends B { }`,
       'JETH385',
     );
     // a PARAM-TYPE mismatch is an unimplemented method too, not a silent overload
     bothReject(
       `interface I { f(x: u256): u256; }
        class C extends I { f(x: bool): External<u256> { this.s = 1n; return this.s; } s: u256; }`,
-      `@interface class I { @external f(x: u256): u256; }
-       @contract class C extends I { @external f(x: bool): u256 { this.s = 1n; return this.s; } @state s: u256; }`,
+      `interface I { f(x: u256): u256; }
+       class C extends I { f(x: bool): External<u256> { this.s = 1n; return this.s; } s: u256; }`,
       'JETH385',
     );
   });
@@ -272,29 +272,29 @@ describe('native interface extends: reject parity (same code, both spellings)', 
     bothReject(
       `interface I { f(): u256; }
        class C extends I { f(): External<bool> { this.s = 1n; return true; } s: u256; }`,
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I { @external f(): bool { this.s = 1n; return true; } @state s: u256; }`,
+      `interface I { f(): u256; }
+       class C extends I { f(): External<bool> { this.s = 1n; return true; } s: u256; }`,
       'JETH386',
     );
     bothReject(
       `interface I { g(): View<u256>; }
        class C extends I { s: u256; g(): External<u256> { this.s = this.s + 1n; return this.s; } }`,
-      `@interface class I { @external @view g(): u256; }
-       @contract class C extends I { @state s: u256; @external g(): u256 { this.s = this.s + 1n; return this.s; } }`,
+      `interface I { g(): View<u256>; }
+       class C extends I { s: u256; g(): External<u256> { this.s = this.s + 1n; return this.s; } }`,
       'JETH387',
     );
     bothReject(
       `interface I { pay(): Payable<u256>; }
        class C extends I { s: u256; pay(): External<u256> { this.s = this.s + 1n; return this.s; } }`,
-      `@interface class I { @external @payable pay(): u256; }
-       @contract class C extends I { @state s: u256; @external pay(): u256 { this.s = this.s + 1n; return this.s; } }`,
+      `interface I { pay(): Payable<u256>; }
+       class C extends I { s: u256; pay(): External<u256> { this.s = this.s + 1n; return this.s; } }`,
       'JETH387',
     );
     bothReject(
       `interface I { f(): u256; }
        class C extends I { f(): Payable<u256> { return msg.value; } }`,
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I { @external @payable f(): u256 { return msg.value; } }`,
+      `interface I { f(): u256; }
+       class C extends I { f(): Payable<u256> { return msg.value; } }`,
       'JETH387',
     );
   });
@@ -303,17 +303,17 @@ describe('native interface extends: reject parity (same code, both spellings)', 
     bothReject(
       `interface I { f(): u256; }
        class C extends I { f(): u256 { this.s = 1n; return this.s; } s: u256; kick(): External<void> { this.f(); } }`,
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I { f(): u256 { this.s = 1n; return this.s; } @state s: u256; @external kick(): void { this.f(); } }`,
+      `interface I { f(): u256; }
+       class C extends I { f(): u256 { this.s = 1n; return this.s; } s: u256; kick(): External<void> { this.f(); } }`,
       'JETH388',
     );
     bothReject(
       `interface I { f(): View<u256>; }
        interface J { f(): View<u256>; }
        class C extends I, J { get f(): External<u256> { return 1n; } }`,
-      `@interface class I { @external @view f(): u256; }
-       @interface class J { @external @view f(): u256; }
-       @contract class C extends I, J { @external @view f(): u256 { return 1n; } }`,
+      `interface I { f(): View<u256>; }
+       interface J { f(): View<u256>; }
+       class C extends I, J { get f(): External<u256> { return 1n; } }`,
       'JETH381',
     );
   });
@@ -322,22 +322,22 @@ describe('native interface extends: reject parity (same code, both spellings)', 
     bothReject(
       `interface I { f(): u256; }
        class C extends I(7n) { f(): External<u256> { this.s = 1n; return this.s; } s: u256; }`,
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I(7n) { @external f(): u256 { this.s = 1n; return this.s; } @state s: u256; }`,
+      `interface I { f(): u256; }
+       class C extends I(7n) { f(): External<u256> { this.s = 1n; return this.s; } s: u256; }`,
       'JETH384',
     );
     bothReject(
       `interface I { f(): u256; }
        class C extends I, I { f(): External<u256> { this.s = 1n; return this.s; } s: u256; }`,
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I, I { @external f(): u256 { this.s = 1n; return this.s; } @state s: u256; }`,
+      `interface I { f(): u256; }
+       class C extends I, I { f(): External<u256> { this.s = 1n; return this.s; } s: u256; }`,
       'JETH456',
     );
     bothReject(
       `interface I { f(): u256; }
        class C extends I { f(): External<u256> { this.s = 1n; return this.s; } s: u256; @override h(): External<void> { this.s = 2n; } }`,
-      `@interface class I { @external f(): u256; }
-       @contract class C extends I { @external f(): u256 { this.s = 1n; return this.s; } @state s: u256; @override @external h(): void { this.s = 2n; } }`,
+      `interface I { f(): u256; }
+       class C extends I { f(): External<u256> { this.s = 1n; return this.s; } s: u256; @override h(): External<void> { this.s = 2n; } }`,
       'JETH369',
     );
   });

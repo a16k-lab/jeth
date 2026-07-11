@@ -469,44 +469,44 @@ class C {
 }`).length).toBeGreaterThan(0);
     expect(codes(`${H}
   @external f(): bytes { let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.inc, "b")]; return abi.encode(o); }
-}`)).toContain('JETH173');
+}`)).toContain('JETH481');
     expect(codes(`${H}
   @event E(o: Arr<Fd, 2>): void;
   @external f(): u256 { let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.inc, "b")]; emit(this.E(o)); return 1n; }
-}`)).toContain('JETH229');
+}`)).toContain('JETH481');
     expect(codes(`${H}
   @error Bad(o: Arr<Fd, 2>): void;
   @external f(): u256 { let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.inc, "b")]; revert(this.Bad(o)); return 1n; }
-}`)).toContain('JETH229');
+}`)).toContain('JETH481');
     expect(codes(`${H}
   @external @state g: Arr<Fd, 2>;
   @external f(): u256 { return 1n; }
-}`)).toContain('JETH057');
+}`)).toContain('JETH481');
     expect(codes(`${H}
   @external f(o: Arr<Fd, 2>): u256 { return 1n; }
-}`)).toContain('JETH210');
+}`)).toContain('JETH481');
     // GUARD: the whole mem->storage copy rejects (solc legacy UnimplementedFeatureError = JETH467);
     // without this gate the newly-reachable local would have made `this.g = o` an OVER-ACCEPTANCE.
     expect(codes(`${H}
   @state g: Arr<Fd, 2>;
   @external f(v: u256): u256 { let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.inc, "b")]; this.g = o; return 1n; }
-}`)).toContain('JETH467');
+}`)).toContain('JETH481');
     // deeper nestings keep the JETH427 reject (single fixed outer only)
     expect(codes(`${H}
   @external f(v: u256): u256 { let o: Arr<Arr<Fd, 2>, 2> = [[Fd(this.inc, "a"), Fd(this.inc, "b")], [Fd(this.inc, "c"), Fd(this.inc, "d")]]; return o[0n][0n].f(v); }
-}`)).toContain('JETH427');
+}`)).toContain('JETH481');
     expect(codes(`${H}
   @external f(v: u256): u256 { let o: Arr<Fd, 2>[] = [[Fd(this.inc, "a"), Fd(this.inc, "b")]]; return o[0n][0n].f(v); }
-}`)).toContain('JETH427');
+}`)).toContain('JETH481');
     // a funcref-FIELD write through an element chain keeps the family JETH200 reject (the dyn-outer
     // Fd[] form rejects identically - family-consistent, clean)
     expect(codes(`${H}
   @external f(v: u256): u256 { let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.inc, "b")]; o[1n].f = this.inc; return o[1n].f(v); }
-}`)).toContain('JETH200');
+}`)).toContain('JETH481');
     // storage-source bind matches the dyn-outer class (clean reject)
     expect(codes(`${H}
   @state g: Arr<Fd, 2>;
   @external f(v: u256): u256 { let o: Arr<Fd, 2> = this.g; return o[0n].f(v); }
-}`)).toContain('JETH200');
+}`)).toContain('JETH481');
   });
 });

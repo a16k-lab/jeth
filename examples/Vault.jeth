@@ -1,44 +1,34 @@
 // The Phase 3 canonical contract (directive §4.5): mappings + msg.* + payable.
-@contract
 class Vault {
-  @state balances: mapping<address, u256>;
-  @state total: u256 = 0n;
+  balances: mapping<address, u256>;
+  total: u256 = 0n;
 
-  @event Deposited(@indexed account: address, amount: u256);
+  Deposited: event<{ account: indexed<address>; amount: u256 }>;
 
-  @external
-  @payable
-  deposit(): void {
+  deposit(): Payable<void> {
     this.balances[msg.sender] += msg.value; // checked add -> SSTORE at keccak slot
     this.total += msg.value;
     emit(Deposited(msg.sender, msg.value));
   }
 
-  @external
-  withdraw(amount: u256): void {
+  withdraw(amount: u256): External<void> {
     require(this.balances[msg.sender] >= amount, 'insufficient');
     this.balances[msg.sender] -= amount;
     this.total -= amount;
   }
 
-  @external
-  @payable
-  transfer(to: address, amount: u256): void {
+  transfer(to: address, amount: u256): Payable<void> {
     require(to != address(0n), 'zero address');
     require(this.balances[msg.sender] >= amount, 'insufficient');
     this.balances[msg.sender] -= amount;
     this.balances[to] += amount;
   }
 
-  @external
-  @view
-  balanceOf(account: address): u256 {
+  get balanceOf(account: address): External<u256> {
     return this.balances[account];
   }
 
-  @external
-  @view
-  totalSupply(): u256 {
+  get totalSupply(): External<u256> {
     return this.total;
   }
 }

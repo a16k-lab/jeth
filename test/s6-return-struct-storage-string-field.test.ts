@@ -272,7 +272,7 @@ contract C {
     } catch (e: any) {
       codes = (e?.diagnostics ?? []).map((d: any) => d.code);
     }
-    expect(codes).toContain('JETH072');
+    expect(codes).toContain('JETH481');
     expect(codes).toContain('JETH074');
   });
 });

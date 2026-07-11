@@ -70,21 +70,22 @@ describe('subset validator', () => {
     expect(codesFor(wrap('this.x = 25e-1;'))).toContain('JETH003');
   });
 
-  it('rejects an unmarked contract field in decorator mode; native mode treats it as @state (item #9)', () => {
-    // decorator mode: a contract field must carry an explicit @state (JETH045).
-    expect(codesFor(`// use @decorators\n@contract\nclass T { y: u256 = 0n; }`)).toContain('JETH045');
-    // native mode (default): a bare non-static field IS a @state storage variable - accepted.
+  it('the retired `// use @decorators` pragma is rejected (JETH480); a bare native field is @state (item #9)', () => {
+    // stage 2: the legacy decorator mode was removed - the pragma is a hard error.
+    expect(codesFor(`// use @decorators\n@contract\nclass T { y: u256 = 0n; }`)).toContain('JETH480');
+    // native (the only mode): a bare non-static field IS a @state storage variable - accepted.
     expect(codesFor(`class T { y: u256 = 0n; get g(): External<u256> { return this.y; } }`)).not.toContain('JETH045');
   });
 
-  it('rejects @view functions that write storage', () => {
+  it('the retired @view / @contract / @state decorators are rejected (JETH481)', () => {
     const src = `@contract
 class T {
   @state x: u256 = 0n;
   @view
   f(): void { this.x = 1n; }
 }`;
-    expect(codesFor(src)).toContain('JETH054');
+    // mutability is inferred in native mode; @view (and @contract/@state) are banned structural spellings.
+    expect(codesFor(src)).toContain('JETH481');
   });
 
   it('rejects a literal out of range for its type', () => {

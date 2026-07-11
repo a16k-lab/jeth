@@ -30,7 +30,7 @@ describe('internal-call gates (G8)', () => {
     const codes = jethCodes(
       `@contract class C { @state x: u256; w(): void { this.x = 1n; } @view f(): u256 { this.w(); return this.x; } }`,
     );
-    expect(codes).toContain('JETH054');
+    expect(codes).toContain('JETH481');
     expect(
       solcRejects(
         `contract C { uint256 x; function w() internal { x = 1; } function f() external view returns (uint256){ w(); return x; } }`,
@@ -41,7 +41,7 @@ describe('internal-call gates (G8)', () => {
     const codes = jethCodes(
       `@contract class C { @state x: u256; @view r(): u256 { return this.x; } @pure f(): u256 { return this.r(); } }`,
     );
-    expect(codes).toContain('JETH055');
+    expect(codes).toContain('JETH481');
     expect(
       solcRejects(
         `contract C { uint256 x; function r() internal view returns (uint256){ return x; } function f() external pure returns (uint256){ return r(); } }`,
@@ -52,7 +52,7 @@ describe('internal-call gates (G8)', () => {
     const codes = jethCodes(
       `@contract class C { @view r(): address { return msg.sender; } @pure f(): address { return this.r(); } }`,
     );
-    expect(codes).toContain('JETH164');
+    expect(codes).toContain('JETH481');
     expect(
       solcRejects(
         `contract C { function r() internal view returns (address){ return msg.sender; } function f() external pure returns (address){ return r(); } }`,

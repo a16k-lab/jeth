@@ -1,54 +1,53 @@
 // Dynamic bytes/string: storage (short/long), calldata params, ABI returns,
 // .length, b[i] indexing, dynamic events and Error(string).
-@contract
 class BS {
-  @state s: string; // slot 0
-  @state b: bytes; // slot 1
-  @state canary: u256; // slot 2 (must never be disturbed by dynamic writes)
+  s: string; // slot 0
+  b: bytes; // slot 1
+  canary: u256; // slot 2 (must never be disturbed by dynamic writes)
 
-  @event Msg(m: string);
-  @event Tagged(@indexed who: address, m: string);
+  Msg: event<{ m: string }>;
+  Tagged: event<{ who: indexed<address>; m: string }>;
 
-  @external setS(v: string): void {
+  setS(v: string): External<void> {
     this.s = v;
   }
-  @external @view getS(): string {
+  get getS(): External<string> {
     return this.s;
   }
-  @external @pure echo(v: string): string {
+  get echo(v: string): External<string> {
     return v;
   }
 
-  @external setB(v: bytes): void {
+  setB(v: bytes): External<void> {
     this.b = v;
   }
-  @external @view getB(): bytes {
+  get getB(): External<bytes> {
     return this.b;
   }
-  @external @view blen(): u256 {
+  get blen(): External<u256> {
     return this.b.length;
   }
-  @external @view at(i: u256): bytes1 {
+  get at(i: u256): External<bytes1> {
     return this.b[i];
   }
 
-  @external setCanary(c: u256): void {
+  setCanary(c: u256): External<void> {
     this.canary = c;
   }
-  @external @view getCanary(): u256 {
+  get getCanary(): External<u256> {
     return this.canary;
   }
 
-  @external emitMsg(): void {
+  emitMsg(): External<void> {
     emit(Msg(this.s));
   }
-  @external emitTagged(): void {
+  emitTagged(): External<void> {
     emit(Tagged(msg.sender, this.s));
   }
-  @external @view boom(): void {
+  boom(): External<void> {
     require(false, this.s);
   }
-  @external @view boomParam(v: string): void {
+  boomParam(v: string): External<void> {
     require(false, v);
   }
 }
