@@ -38,28 +38,28 @@ function decodeU256(hex: string): bigint {
 
 describe('fixed-outer array of dynamic structs Arr<In,N> memory local (Lift #4) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@struct class In { s: string; n: u256 }
-@struct class D { items: Arr<In,2>; k: u256 }
-@contract class C {
-  @external @pure rdS(i: u256): string { let a: Arr<In,3> = [In("first_element_string_over_thirty_two_bytes!",11n),In("two",22n),In("",33n)]; return a[i].s; }
-  @external @pure rdN(i: u256): u256 { let a: Arr<In,3> = [In("aa",11n),In("bb",22n),In("cc",33n)]; return a[i].n; }
-  @external @pure welem(): string { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; a[1n] = In("replaced_with_a_long_string_over_32_bytes!",99n); return a[1n].s; }
-  @external @pure wfield(): u256 { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; a[0n].s = "changed"; a[0n].n = 555n; return a[0n].n; }
-  @external @pure len(): u256 { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a.length; }
-  @external @pure sumForOf(): u256 { let a: Arr<In,3> = [In("a",5n),In("b",6n),In("c",7n)]; let t: u256 = 0n; for (const e of a) { t = t + e.n; } return t; }
-  @external @pure bindElem(i: u256): string { let a: Arr<In,3> = [In("p",1n),In("this_element_is_definitely_over_thirty_two",2n),In("r",3n)]; let e: In = a[i]; return e.s; }
-  @external @pure whole(): Arr<In,2> { let a: Arr<In,2> = [In("hello",1n),In("a-string-that-is-quite-a-bit-longer-than-32",2n)]; return a; }
-  @external @pure enc(): bytes { let a: Arr<In,2> = [In("hello",1n),In("a-string-that-is-quite-a-bit-longer-than-32",2n)]; return abi.encode(a); }
-  @external @pure sfRead(i: u256): string { let d: D = D([In("struct_field_element_string_over_32_bytes!!",1n),In("bb",2n)], 7n); return d.items[i].s; }
-  @external @pure sfSum(): u256 { let d: D = D([In("a",10n),In("bb",20n)], 7n); return d.items[0n].n + d.items[1n].n + d.k; }
-  @external @pure sfEnc(): bytes { let d: D = D([In("a",10n),In("bb",20n)], 7n); return abi.encode(d); }
-  @external @pure sfWhole(): D { let d: D = D([In("a",10n),In("bb",20n)], 7n); return d; }
-  @external @pure nested(i: u256, j: u256): string { let a: Arr<Arr<In,2>,2> = [[In("aa",1n),In("bb",2n)],[In("cc_nested_element_string_over_thirty_two!",3n),In("dd",4n)]]; return a[i][j].s; }
-  @state fa: Arr<In,2>;
-  @external seed(): void { this.fa[0n].s = "storage_seeded_element_over_thirty_two_bytes"; this.fa[0n].n = 111n; this.fa[1n].s = "one"; this.fa[1n].n = 222n; }
-  @external @view stDirect(i: u256): string { return this.fa[i].s; }
-  @external @view stBind(i: u256): string { let m: Arr<In,2> = this.fa; return m[i].s; }
-  @external @view stBindN(i: u256): u256 { let m: Arr<In,2> = this.fa; return m[i].n; }
+  const J = `type In = { s: string; n: u256 };
+type D = { items: Arr<In,2>; k: u256 };
+class C {
+  get rdS(i: u256): External<string> { let a: Arr<In,3> = [In("first_element_string_over_thirty_two_bytes!",11n),In("two",22n),In("",33n)]; return a[i].s; }
+  get rdN(i: u256): External<u256> { let a: Arr<In,3> = [In("aa",11n),In("bb",22n),In("cc",33n)]; return a[i].n; }
+  get welem(): External<string> { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; a[1n] = In("replaced_with_a_long_string_over_32_bytes!",99n); return a[1n].s; }
+  get wfield(): External<u256> { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; a[0n].s = "changed"; a[0n].n = 555n; return a[0n].n; }
+  get len(): External<u256> { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a.length; }
+  get sumForOf(): External<u256> { let a: Arr<In,3> = [In("a",5n),In("b",6n),In("c",7n)]; let t: u256 = 0n; for (const e of a) { t = t + e.n; } return t; }
+  get bindElem(i: u256): External<string> { let a: Arr<In,3> = [In("p",1n),In("this_element_is_definitely_over_thirty_two",2n),In("r",3n)]; let e: In = a[i]; return e.s; }
+  get whole(): External<Arr<In,2>> { let a: Arr<In,2> = [In("hello",1n),In("a-string-that-is-quite-a-bit-longer-than-32",2n)]; return a; }
+  get enc(): External<bytes> { let a: Arr<In,2> = [In("hello",1n),In("a-string-that-is-quite-a-bit-longer-than-32",2n)]; return abi.encode(a); }
+  get sfRead(i: u256): External<string> { let d: D = D([In("struct_field_element_string_over_32_bytes!!",1n),In("bb",2n)], 7n); return d.items[i].s; }
+  get sfSum(): External<u256> { let d: D = D([In("a",10n),In("bb",20n)], 7n); return d.items[0n].n + d.items[1n].n + d.k; }
+  get sfEnc(): External<bytes> { let d: D = D([In("a",10n),In("bb",20n)], 7n); return abi.encode(d); }
+  get sfWhole(): External<D> { let d: D = D([In("a",10n),In("bb",20n)], 7n); return d; }
+  get nested(i: u256, j: u256): External<string> { let a: Arr<Arr<In,2>,2> = [[In("aa",1n),In("bb",2n)],[In("cc_nested_element_string_over_thirty_two!",3n),In("dd",4n)]]; return a[i][j].s; }
+  fa: Arr<In,2>;
+  seed(): External<void> { this.fa[0n].s = "storage_seeded_element_over_thirty_two_bytes"; this.fa[0n].n = 111n; this.fa[1n].s = "one"; this.fa[1n].n = 222n; }
+  get stDirect(i: u256): External<string> { return this.fa[i].s; }
+  get stBind(i: u256): External<string> { let m: Arr<In,2> = this.fa; return m[i].s; }
+  get stBindN(i: u256): External<u256> { let m: Arr<In,2> = this.fa; return m[i].n; }
 }`;
   const So = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
@@ -155,8 +155,8 @@ contract C {
   });
 
   it('memory Arr<In,N> -> storage COPY is a clean JETH467 reject (matches solc legacy UnimplementedFeature)', () => {
-    const src = `@struct class In { s: string; n: u256 }
-@contract class C { @state fa: Arr<In,2>; @external f(): void { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; this.fa = a; } }`;
+    const src = `type In = { s: string; n: u256 };
+class C { fa: Arr<In,2>; f(): External<void> { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; this.fa = a; } }`;
     expect(codes(src)).toContain('JETH467');
     // solc's legacy pipeline rejects the same copy (UnimplementedFeatureError), so JETH must too.
     let solcOk = false;

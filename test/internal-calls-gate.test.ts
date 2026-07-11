@@ -62,25 +62,25 @@ describe('internal-call gates (G8)', () => {
   it('transitive purity is NOT over-rejected: @pure calling a @pure helper compiles', () => {
     expect(
       jethCodes(
-        `@contract class C { @pure a(n: u256): u256 { return n + 1n; } @pure f(n: u256): u256 { return this.a(n) * 2n; } }`,
+        `class C { a(n: u256): u256 { return n + 1n; } f(n: u256): u256 { return this.a(n) * 2n; } }`,
       ),
     ).toBeNull();
   });
   it('a BARE-name call to an @external function is rejected (JETH240); a this.-prefixed self-call is a valid external call', () => {
     // bare g(n) (no this.) cannot call an @external function by name (solc rejects too) -> JETH240.
     expect(
-      jethCodes(`@contract class C { @external g(n: u256): u256 { return n; } @external f(n: u256): u256 { return g(n); } }`),
+      jethCodes(`class C { get g(n: u256): External<u256> { return n; } get f(n: u256): External<u256> { return g(n); } }`),
     ).toContain('JETH240');
     // this.g(n) from a NON-pure @external caller is a real external self-call to address(this), byte-identical
     // to solc (covered in external-self-call.test.ts) -> now compiles.
     expect(
-      jethCodes(`@contract class C { @external g(n: u256): u256 { return n; } @external f(n: u256): u256 { return this.g(n); } }`),
+      jethCodes(`class C { get g(n: u256): External<u256> { return n; } f(n: u256): External<u256> { return this.g(n); } }`),
     ).toBeNull();
   });
   it('struct arg to an internal callee now compiles (G8+G9)', () => {
     expect(
       jethCodes(
-        `@struct class P { a: u256; b: u256; } @contract class C { @pure h(p: P): u256 { return p.a; } @external @pure f(): u256 { let p: P = P(1n, 2n); return this.h(p); } }`,
+        `type P = { a: u256; b: u256; }; class C { h(p: P): u256 { return p.a; } get f(): External<u256> { let p: P = P(1n, 2n); return this.h(p); } }`,
       ),
     ).toBeNull();
   });
@@ -88,7 +88,7 @@ describe('internal-call gates (G8)', () => {
     // bare h(p) to an @external h is not internally callable -> JETH240.
     expect(
       jethCodes(
-        `@struct class P { a: u256; b: u256; } @contract class C { @external @pure h(p: P): u256 { return p.a; } @external f(): u256 { let p: P = P(1n, 2n); return h(p); } }`,
+        `type P = { a: u256; b: u256; }; class C { get h(p: P): External<u256> { return p.a; } get f(): External<u256> { let p: P = P(1n, 2n); return h(p); } }`,
       ),
     ).toEqual(expect.arrayContaining(['JETH240']));
     // this.h(p) from a NON-pure @external caller is a real external self-call (staticcall, h is @pure),
@@ -102,7 +102,7 @@ describe('internal-call gates (G8)', () => {
   it('multi-value return through an internal call is gated (JETH241)', () => {
     expect(
       jethCodes(
-        `@contract class C { @pure two(): [u256, u256] { return [1n, 2n]; } @external f(): u256 { let a: u256 = this.two(); return a; } }`,
+        `class C { two(): [u256, u256] { return [1n, 2n]; } get f(): External<u256> { let a: u256 = this.two(); return a; } }`,
       ),
     ).toEqual(expect.arrayContaining(['JETH241']));
   });

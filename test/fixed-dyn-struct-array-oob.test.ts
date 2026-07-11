@@ -17,21 +17,21 @@ const codes = (src: string): string[] => {
   }
 };
 
-const IN = '@struct class In { s: string; n: u256 }';
+const IN = 'type In = { s: string; n: u256 };';
 
 describe('Arr<In,N> (fixed array of dynamic structs): const-OOB index rejects (JETH211)', () => {
   it('a[5n].field on a local rejects', () => {
-    expect(codes(`${IN} @contract class C { @external @pure f(): u256 { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a[5n].n; } }`)).toContain('JETH211');
-    expect(codes(`${IN} @contract class C { @external @pure f(): string { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a[5n].s; } }`)).toContain('JETH211');
+    expect(codes(`${IN} class C { get f(): External<u256> { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a[5n].n; } }`)).toContain('JETH211');
+    expect(codes(`${IN} class C { get f(): External<string> { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a[5n].s; } }`)).toContain('JETH211');
   });
   it('d.items[5n].field on a struct-field array rejects', () => {
-    expect(codes(`${IN} @struct class D { items: Arr<In,2>; k: u256 } @contract class C { @external @pure f(): string { let d: D = D([In("a",1n),In("b",2n)], 7n); return d.items[5n].s; } }`)).toContain('JETH211');
+    expect(codes(`${IN} type D = { items: Arr<In,2>; k: u256 }; class C { get f(): External<string> { let d: D = D([In("a",1n),In("b",2n)], 7n); return d.items[5n].s; } }`)).toContain('JETH211');
   });
   it('a[0n][5n].field nested-inner OOB rejects', () => {
-    expect(codes(`${IN} @contract class C { @external @pure f(): string { let a: Arr<Arr<In,2>,2> = [[In("a",1n),In("b",2n)],[In("c",3n),In("d",4n)]]; return a[0n][5n].s; } }`)).toContain('JETH211');
+    expect(codes(`${IN} class C { get f(): External<string> { let a: Arr<Arr<In,2>,2> = [[In("a",1n),In("b",2n)],[In("c",3n),In("d",4n)]]; return a[0n][5n].s; } }`)).toContain('JETH211');
   });
   it('a valid const index and a runtime index still compile', () => {
-    expect(codes(`${IN} @contract class C { @external @pure f(): u256 { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a[1n].n; } }`)).toEqual([]);
-    expect(codes(`${IN} @contract class C { @external @pure f(i: u256): u256 { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a[i].n; } }`)).toEqual([]);
+    expect(codes(`${IN} class C { get f(): External<u256> { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a[1n].n; } }`)).toEqual([]);
+    expect(codes(`${IN} class C { get f(i: u256): External<u256> { let a: Arr<In,2> = [In("x",1n),In("y",2n)]; return a[i].n; } }`)).toEqual([]);
   });
 });

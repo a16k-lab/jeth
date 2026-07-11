@@ -107,15 +107,15 @@ describe('fixed arrays vs Solidity', () => {
   });
 
   it('rejects a constant out-of-bounds index at compile time (JETH211)', () => {
-    const src = `@contract\nclass T { @state a: Arr<u256, 3>; @view f(): u256 { return this.a[3n]; } }`;
+    const src = `class T { a: Arr<u256, 3>; f(): u256 { return this.a[3n]; } }`;
     expect(codesFor(src)).toContain('JETH211');
     // in-bounds constant compiles
-    expect(codesFor(`@contract\nclass T { @state a: Arr<u256, 3>; @view f(): u256 { return this.a[2n]; } }`)).toEqual(
+    expect(codesFor(`class T { a: Arr<u256, 3>; f(): u256 { return this.a[2n]; } }`)).toEqual(
       [],
     );
     // push/pop on a fixed array is rejected
     expect(
-      codesFor(`@contract\nclass T { @state a: Arr<u256, 3>; @external f(): void { this.a.push(1n); } }`),
+      codesFor(`class T { a: Arr<u256, 3>; f(): External<void> { this.a.push(1n); } }`),
     ).toContain('JETH218');
   });
 });

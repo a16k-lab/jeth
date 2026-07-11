@@ -18,14 +18,14 @@ function diags(src: string): string[] {
   }
 }
 
-const JETH = `@contract class W {
-  @external @pure widenU(a: u8, b: u256): u256 { return a + b; }
-  @external @pure widenAssign(a: u16): u256 { let x: u256 = a; return x; }
-  @external @pure widenI(a: i8, b: i256): i256 { return a + b; }
-  @external @pure cmpMixed(a: u8, b: u256): bool { return a < b; }
-  @external @pure widenBytes(a: bytes4): bytes32 { return a; }
-  @external @pure widenU8toU64(a: u8): u64 { return a; }
-  @external @pure negWiden(a: i8): i256 { return a; }
+const JETH = `class W {
+  get widenU(a: u8, b: u256): External<u256> { return a + b; }
+  get widenAssign(a: u16): External<u256> { let x: u256 = a; return x; }
+  get widenI(a: i8, b: i256): External<i256> { return a + b; }
+  get cmpMixed(a: u8, b: u256): External<bool> { return a < b; }
+  get widenBytes(a: bytes4): External<bytes32> { return a; }
+  get widenU8toU64(a: u8): External<u64> { return a; }
+  get negWiden(a: i8): External<i256> { return a; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -83,8 +83,8 @@ describe('implicit widening vs Solidity', () => {
   });
 
   it('narrowing and uint<->int mixes are still rejected (need explicit cast)', () => {
-    expect(diags('@contract class W { @external @pure f(a: u256): u8 { return a; } }')).toContain('JETH085');
-    expect(diags('@contract class W { @external @pure f(a: u8, b: i8): bool { return a < b; } }')).toContain('JETH083');
-    expect(diags('@contract class W { @external @pure f(a: bytes32): bytes4 { return a; } }')).toContain('JETH085');
+    expect(diags('class W { get f(a: u256): External<u8> { return a; } }')).toContain('JETH085');
+    expect(diags('class W { get f(a: u8, b: i8): External<bool> { return a < b; } }')).toContain('JETH083');
+    expect(diags('class W { get f(a: bytes32): External<bytes4> { return a; } }')).toContain('JETH085');
   });
 });

@@ -48,26 +48,26 @@ async function behavesLikeSolc(
 
 describe('nested funcref array: 2D fixed memory local', () => {
   it('build / m[i][j] read / m[i][j]=f write / m[i][j](v) call / .length / OOB', async () => {
-    const JETH = `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x + 2n; }
-      @pure c(x: u256): u256 { return x + 3n; }
-      @pure d(x: u256): u256 { return x + 4n; }
-      @pure z(x: u256): u256 { return x * 10n; }
-      @external cell(i: u256, j: u256, v: u256): u256 {
+    const JETH = `class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x + 2n; }
+      c(x: u256): u256 { return x + 3n; }
+      d(x: u256): u256 { return x + 4n; }
+      z(x: u256): u256 { return x * 10n; }
+      get cell(i: u256, j: u256, v: u256): External<u256> {
         let m: Arr<Arr<(x: u256) => u256, 2>, 2> = [[this.a, this.b], [this.c, this.d]];
         return m[i][j](v);
       }
-      @external all(v: u256): u256 {
+      get all(v: u256): External<u256> {
         let m: Arr<Arr<(x: u256) => u256, 2>, 2> = [[this.a, this.b], [this.c, this.d]];
         return m[0n][0n](v) + m[0n][1n](v) + m[1n][0n](v) + m[1n][1n](v);
       }
-      @external rewire(i: u256, j: u256, v: u256): u256 {
+      get rewire(i: u256, j: u256, v: u256): External<u256> {
         let m: Arr<Arr<(x: u256) => u256, 2>, 2> = [[this.a, this.b], [this.c, this.d]];
         m[i][j] = this.z;
         return m[i][j](v) + m[0n][0n](v);
       }
-      @external lens(): u256 {
+      get lens(): External<u256> {
         let m: Arr<Arr<(x: u256) => u256, 3>, 2> = [[this.a, this.a, this.a], [this.a, this.a, this.a]];
         return m.length * 100n + m[0n].length;
       }
@@ -114,12 +114,12 @@ describe('nested funcref array: 2D fixed memory local', () => {
 
 describe('nested funcref array: @internal param, passed through 2 internal fns', () => {
   it('Arr<Arr<(x)=>R,2>,2> param, m[i][j](v) through pick -> outer', async () => {
-    const JETH = `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x - 1n; }
-      @pure pick(m: Arr<Arr<(x: u256) => u256, 2>, 2>, i: u256, j: u256, v: u256): u256 { return m[i][j](v); }
-      @pure outer(m: Arr<Arr<(x: u256) => u256, 2>, 2>, i: u256, j: u256, v: u256): u256 { return this.pick(m, i, j, v) + 1000n; }
-      @external run(i: u256, j: u256, v: u256): u256 {
+    const JETH = `class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x - 1n; }
+      pick(m: Arr<Arr<(x: u256) => u256, 2>, 2>, i: u256, j: u256, v: u256): u256 { return m[i][j](v); }
+      outer(m: Arr<Arr<(x: u256) => u256, 2>, 2>, i: u256, j: u256, v: u256): u256 { return this.pick(m, i, j, v) + 1000n; }
+      get run(i: u256, j: u256, v: u256): External<u256> {
         let m: Arr<Arr<(x: u256) => u256, 2>, 2> = [[this.a, this.b], [this.b, this.a]];
         return this.outer(m, i, j, v);
       }
@@ -145,10 +145,10 @@ describe('nested funcref array: @internal param, passed through 2 internal fns',
 
 describe('nested funcref array: 3D fixed', () => {
   it('Arr<Arr<Arr<(x)=>R,2>,2>,2> build + m[i][j][k](v) dispatch every cell + OOB', async () => {
-    const JETH = `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x + 2n; }
-      @external run(i: u256, j: u256, k: u256, v: u256): u256 {
+    const JETH = `class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x + 2n; }
+      get run(i: u256, j: u256, k: u256, v: u256): External<u256> {
         let m: Arr<Arr<Arr<(x: u256) => u256, 2>, 2>, 2> =
           [[[this.a, this.b], [this.b, this.a]], [[this.a, this.a], [this.b, this.b]]];
         return m[i][j][k](v);
@@ -175,10 +175,10 @@ describe('nested funcref array: 3D fixed', () => {
 
 describe('nested funcref array: dynamic and mixed nesting', () => {
   it('dynamic ((x)=>R)[][] via new Array, cell write + dispatch + .length', async () => {
-    const JETH = `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x + 2n; }
-      @external run(i: u256, j: u256, v: u256): u256 {
+    const JETH = `class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x + 2n; }
+      get run(i: u256, j: u256, v: u256): External<u256> {
         let m: ((x: u256) => u256)[][] = new Array<((x: u256) => u256)[]>(2n);
         m[0n] = new Array<(x: u256) => u256>(2n);
         m[0n][0n] = this.a; m[0n][1n] = this.b;
@@ -186,7 +186,7 @@ describe('nested funcref array: dynamic and mixed nesting', () => {
         m[1n][0n] = this.b;
         return m[i][j](v);
       }
-      @external lens(i: u256): u256 {
+      get lens(i: u256): External<u256> {
         let m: ((x: u256) => u256)[][] = new Array<((x: u256) => u256)[]>(2n);
         m[0n] = new Array<(x: u256) => u256>(2n);
         m[1n] = new Array<(x: u256) => u256>(1n);
@@ -222,10 +222,10 @@ describe('nested funcref array: dynamic and mixed nesting', () => {
   });
 
   it('mixed fixed-of-dynamic Arr<((x)=>R)[],2> literal, m[i][j](v)', async () => {
-    const JETH = `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x + 2n; }
-      @external run(i: u256, j: u256, v: u256): u256 {
+    const JETH = `class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x + 2n; }
+      get run(i: u256, j: u256, v: u256): External<u256> {
         let m: Arr<((x: u256) => u256)[], 2> = [[this.a, this.b], [this.b, this.a, this.a]];
         return m[i][j](v);
       }
@@ -251,14 +251,14 @@ describe('nested funcref array: dynamic and mixed nesting', () => {
   });
 
   it('mixed dynamic-of-fixed Arr<(x)=>R,2>[] literal, m[i][j](v) + .length', async () => {
-    const JETH = `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x + 2n; }
-      @external run(i: u256, j: u256, v: u256): u256 {
+    const JETH = `class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x + 2n; }
+      get run(i: u256, j: u256, v: u256): External<u256> {
         let m: Arr<(x: u256) => u256, 2>[] = [[this.a, this.b], [this.b, this.a], [this.a, this.a]];
         return m[i][j](v);
       }
-      @external len(): u256 {
+      get len(): External<u256> {
         let m: Arr<(x: u256) => u256, 2>[] = [[this.a, this.b], [this.b, this.a], [this.a, this.a]];
         return m.length;
       }
@@ -287,15 +287,15 @@ describe('nested funcref array: dynamic and mixed nesting', () => {
 
 describe('nested funcref array: as a struct field', () => {
   it('G{ grid: Arr<Arr<(x)=>R,2>,2> } build / grid[i][j](v) / leaf rewire', async () => {
-    const JETH = `@struct class G { grid: Arr<Arr<(x: u256) => u256, 2>, 2>; }
-    @contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x + 2n; }
-      @external run(i: u256, j: u256, v: u256): u256 {
+    const JETH = `type G = { grid: Arr<Arr<(x: u256) => u256, 2>, 2>; };
+    class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x + 2n; }
+      get run(i: u256, j: u256, v: u256): External<u256> {
         let g: G = G([[this.a, this.b], [this.b, this.a]]);
         return g.grid[i][j](v);
       }
-      @external rewire(v: u256): u256 {
+      get rewire(v: u256): External<u256> {
         let g: G = G([[this.a, this.b], [this.b, this.a]]);
         g.grid[0n][0n] = this.b;
         return g.grid[0n][0n](v);
@@ -327,16 +327,16 @@ describe('nested funcref array: as a struct field', () => {
 
 describe('nested funcref array: @state storage', () => {
   it('fixed Arr<Arr<(x)=>R,2>,2> storage: set/read/call/rewire, read-back', async () => {
-    const JETH = `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x + 2n; }
-      @state g: Arr<Arr<(x: u256) => u256, 2>, 2>;
-      @external setup() {
+    const JETH = `class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x + 2n; }
+      g: Arr<Arr<(x: u256) => u256, 2>, 2>;
+      setup(): External<void> {
         this.g[0n][0n] = this.a; this.g[0n][1n] = this.b;
         this.g[1n][0n] = this.b; this.g[1n][1n] = this.a;
       }
-      @external callG(i: u256, j: u256, v: u256): u256 { return this.g[i][j](v); }
-      @external rewire() { this.g[0n][0n] = this.b; }
+      get callG(i: u256, j: u256, v: u256): External<u256> { return this.g[i][j](v); }
+      rewire(): External<void> { this.g[0n][0n] = this.b; }
     }`;
     const SOL = `contract C {
       function a(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -359,12 +359,12 @@ describe('nested funcref array: @state storage', () => {
   });
 
   it('dynamic ((x)=>R)[][] storage: push inner rows, read/call, OOB', async () => {
-    const JETH = `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @pure b(x: u256): u256 { return x + 2n; }
-      @state g: ((x: u256) => u256)[][];
-      @external setup() { this.g.push([this.a, this.b]); this.g.push([this.b]); }
-      @external callG(i: u256, j: u256, v: u256): u256 { return this.g[i][j](v); }
+    const JETH = `class C {
+      a(x: u256): u256 { return x + 1n; }
+      b(x: u256): u256 { return x + 2n; }
+      g: ((x: u256) => u256)[][];
+      setup(): External<void> { this.g.push([this.a, this.b]); this.g.push([this.b]); }
+      get callG(i: u256, j: u256, v: u256): External<u256> { return this.g[i][j](v); }
     }`;
     const SOL = `contract C {
       function a(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -391,32 +391,32 @@ describe('nested funcref array: @state storage', () => {
 
 describe('nested funcref array: the ABI boundary STILL rejects (not ABI-encodable at any nesting)', () => {
   const rejects: Record<string, string> = {
-    'nested funcref array as an @external param': `@contract class C {
-      @external run(m: Arr<Arr<(x: u256) => u256, 2>, 2>, i: u256, j: u256, v: u256): u256 { return m[i][j](v); }
+    'nested funcref array as an @external param': `class C {
+      run(m: Arr<Arr<(x: u256) => u256, 2>, 2>, i: u256, j: u256, v: u256): External<u256> { return m[i][j](v); }
     }`,
-    'dynamic nested funcref array as an @external param': `@contract class C {
-      @external run(m: ((x: u256) => u256)[][], i: u256, j: u256, v: u256): u256 { return m[i][j](v); }
+    'dynamic nested funcref array as an @external param': `class C {
+      run(m: ((x: u256) => u256)[][], i: u256, j: u256, v: u256): External<u256> { return m[i][j](v); }
     }`,
-    'return a nested funcref array from an @external fn': `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @external mk(): Arr<Arr<(x: u256) => u256, 2>, 2> { return [[this.a, this.a], [this.a, this.a]]; }
+    'return a nested funcref array from an @external fn': `class C {
+      a(x: u256): u256 { return x + 1n; }
+      mk(): External<Arr<Arr<(x: u256) => u256, 2>, 2>> { return [[this.a, this.a], [this.a, this.a]]; }
     }`,
-    'abi.encode a nested funcref array': `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @external run(): bytes {
+    'abi.encode a nested funcref array': `class C {
+      a(x: u256): u256 { return x + 1n; }
+      get run(): External<bytes> {
         let m: Arr<Arr<(x: u256) => u256, 2>, 2> = [[this.a, this.a], [this.a, this.a]];
         return abi.encode(m);
       }
     }`,
-    'event with a nested funcref array param': `@contract class C {
-      @pure a(x: u256): u256 { return x + 1n; }
-      @event E(m: Arr<Arr<(x: u256) => u256, 2>, 2>);
-      @external run() {
+    'event with a nested funcref array param': `class C {
+      a(x: u256): u256 { return x + 1n; }
+      E: event<{ m: Arr<Arr<(x: u256) => u256, 2>, 2> }>;
+      run(): External<void> {
         let m: Arr<Arr<(x: u256) => u256, 2>, 2> = [[this.a, this.a], [this.a, this.a]];
         emit E(m);
       }
     }`,
-    '@public getter of a nested funcref array state var': `@contract class C {
+    '@public getter of a nested funcref array state var': `class C {
       @public g: Arr<Arr<(x: u256) => u256, 2>, 2>;
     }`,
   };

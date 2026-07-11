@@ -43,16 +43,16 @@ async function behavesLikeSolc(
 
 describe('funcref lift FIX A: a funcref AGGREGATE as an @internal param', () => {
   it('fixed Arr<funcref,N> param: pass, index, indexed-call, multi-target, OOB, 2-hop', async () => {
-    const JETH = `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @pure sq(x: u256): u256 { return x * x; }
-      @pure pick(fns: Arr<(x: u256) => u256, 3>, i: u256, v: u256): u256 { return fns[i](v); }
-      @pure applyAll(fns: Arr<(x: u256) => u256, 3>, v: u256): u256 { return fns[0n](v) + fns[1n](v) + fns[2n](v); }
-      @pure inner(fns: Arr<(x: u256) => u256, 3>, i: u256, v: u256): u256 { return this.pick(fns, i, v) + 1000n; }
-      @external callPick(i: u256, v: u256): u256 { return this.pick([this.inc, this.dec, this.sq], i, v); }
-      @external callAll(v: u256): u256 { return this.applyAll([this.inc, this.dec, this.sq], v); }
-      @external twoHop(i: u256, v: u256): u256 { return this.inner([this.inc, this.dec, this.sq], i, v); }
+    const JETH = `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      sq(x: u256): u256 { return x * x; }
+      pick(fns: Arr<(x: u256) => u256, 3>, i: u256, v: u256): u256 { return fns[i](v); }
+      applyAll(fns: Arr<(x: u256) => u256, 3>, v: u256): u256 { return fns[0n](v) + fns[1n](v) + fns[2n](v); }
+      inner(fns: Arr<(x: u256) => u256, 3>, i: u256, v: u256): u256 { return this.pick(fns, i, v) + 1000n; }
+      get callPick(i: u256, v: u256): External<u256> { return this.pick([this.inc, this.dec, this.sq], i, v); }
+      get callAll(v: u256): External<u256> { return this.applyAll([this.inc, this.dec, this.sq], v); }
+      get twoHop(i: u256, v: u256): External<u256> { return this.inner([this.inc, this.dec, this.sq], i, v); }
     }`;
     const SOL = `contract C {
       function inc(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -76,14 +76,14 @@ describe('funcref lift FIX A: a funcref AGGREGATE as an @internal param', () => 
   });
 
   it('dynamic ((x)=>R)[] param: index, indexed-call, OOB, mutating callee', async () => {
-    const JETH = `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @pure sq(x: u256): u256 { return x * x; }
-      @pure use(fns: ((x: u256) => u256)[], i: u256, v: u256): u256 { return fns[i](v); }
-      @pure swap(fns: Arr<(x: u256) => u256, 2>): u256 { fns[0n] = this.sq; return fns[0n](6n); }
-      @external run(i: u256, v: u256): u256 { let fns: ((x: u256) => u256)[] = [this.inc, this.dec, this.sq]; return this.use(fns, i, v); }
-      @external mut(): u256 { return this.swap([this.inc, this.dec]); }
+    const JETH = `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      sq(x: u256): u256 { return x * x; }
+      use(fns: ((x: u256) => u256)[], i: u256, v: u256): u256 { return fns[i](v); }
+      swap(fns: Arr<(x: u256) => u256, 2>): u256 { fns[0n] = this.sq; return fns[0n](6n); }
+      get run(i: u256, v: u256): External<u256> { let fns: ((x: u256) => u256)[] = [this.inc, this.dec, this.sq]; return this.use(fns, i, v); }
+      get mut(): External<u256> { return this.swap([this.inc, this.dec]); }
     }`;
     const SOL = `contract C {
       function inc(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -105,18 +105,18 @@ describe('funcref lift FIX A: a funcref AGGREGATE as an @internal param', () => 
 
 describe('funcref lift FIX B: a STRUCT with a funcref field as an @internal param', () => {
   it('field read/call, value field alongside, mutating, nested struct', async () => {
-    const JETH = `@struct class H { f: (x: u256) => u256; k: u256; }
-    @struct class I { f: (x: u256) => u256; }
-    @struct class O { inner: I; k: u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @pure use(h: H, v: u256): u256 { return h.f(v) + h.k; }
-      @pure mutate(h: H, v: u256): u256 { h.f = this.dec; return h.f(v); }
-      @pure useNested(o: O, v: u256): u256 { return o.inner.f(v) + o.k; }
-      @external callUse(v: u256): u256 { return this.use(H(this.inc, 100n), v); }
-      @external callMut(v: u256): u256 { return this.mutate(H(this.inc, 0n), v); }
-      @external callNested(v: u256): u256 { return this.useNested(O(I(this.inc), 500n), v); }
+    const JETH = `type H = { f: (x: u256) => u256; k: u256; };
+    type I = { f: (x: u256) => u256; };
+    type O = { inner: I; k: u256; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      use(h: H, v: u256): u256 { return h.f(v) + h.k; }
+      mutate(h: H, v: u256): u256 { h.f = this.dec; return h.f(v); }
+      useNested(o: O, v: u256): u256 { return o.inner.f(v) + o.k; }
+      get callUse(v: u256): External<u256> { return this.use(H(this.inc, 100n), v); }
+      get callMut(v: u256): External<u256> { return this.mutate(H(this.inc, 0n), v); }
+      get callNested(v: u256): External<u256> { return this.useNested(O(I(this.inc), 500n), v); }
     }`;
     const SOL = `contract C {
       struct H { function(uint256) pure returns(uint256) f; uint256 k; }
@@ -141,15 +141,15 @@ describe('funcref lift FIX B: a STRUCT with a funcref field as an @internal para
 
 describe('funcref lift FIX C: a struct FIELD that is a fixed-array-of-funcref', () => {
   it('memory: construct, fs[i] read, fs[i]=this.g write, fs[i](v) call, .length, ternary-bind, OOB', async () => {
-    const JETH = `@struct class H { fs: Arr<(x: u256) => u256, 2>; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @pure sq(x: u256): u256 { return x * x; }
-      @external readCall(i: u256, v: u256): u256 { let h: H = H([this.inc, this.dec]); return h.fs[i](v); }
-      @external writeCall(v: u256): u256 { let h: H = H([this.inc, this.dec]); h.fs[0n] = this.sq; return h.fs[0n](v); }
-      @external len(): u256 { let h: H = H([this.inc, this.dec]); return h.fs.length; }
-      @external bind(c: bool, v: u256): u256 { let h: H = H([this.inc, this.dec]); let g: (x: u256) => u256 = c ? h.fs[0n] : h.fs[1n]; return g(v); }
+    const JETH = `type H = { fs: Arr<(x: u256) => u256, 2>; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      sq(x: u256): u256 { return x * x; }
+      get readCall(i: u256, v: u256): External<u256> { let h: H = H([this.inc, this.dec]); return h.fs[i](v); }
+      get writeCall(v: u256): External<u256> { let h: H = H([this.inc, this.dec]); h.fs[0n] = this.sq; return h.fs[0n](v); }
+      get len(): External<u256> { let h: H = H([this.inc, this.dec]); return h.fs.length; }
+      get bind(c: bool, v: u256): External<u256> { let h: H = H([this.inc, this.dec]); let g: (x: u256) => u256 = c ? h.fs[0n] : h.fs[1n]; return g(v); }
     }`;
     const SOL = `contract C {
       struct H { function(uint256) pure returns(uint256)[2] fs; }
@@ -173,15 +173,15 @@ describe('funcref lift FIX C: a struct FIELD that is a fixed-array-of-funcref', 
   });
 
   it('storage: @state struct{funcref[2]} set/read/call/rewire, read-back', async () => {
-    const JETH = `@struct class H { fs: Arr<(x: u256) => u256, 2>; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @pure sq(x: u256): u256 { return x * x; }
-      @state h: H;
-      @external setup() { this.h.fs[0n] = this.inc; this.h.fs[1n] = this.dec; }
-      @external callH(i: u256, v: u256): u256 { return this.h.fs[i](v); }
-      @external rewire() { this.h.fs[0n] = this.sq; }
+    const JETH = `type H = { fs: Arr<(x: u256) => u256, 2>; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      sq(x: u256): u256 { return x * x; }
+      h: H;
+      setup(): External<void> { this.h.fs[0n] = this.inc; this.h.fs[1n] = this.dec; }
+      get callH(i: u256, v: u256): External<u256> { return this.h.fs[i](v); }
+      rewire(): External<void> { this.h.fs[0n] = this.sq; }
     }`;
     const SOL = `contract C {
       struct H { function(uint256) pure returns(uint256)[2] fs; }
@@ -204,13 +204,13 @@ describe('funcref lift FIX C: a struct FIELD that is a fixed-array-of-funcref', 
   });
 
   it('storage: mapping(uint=>struct{funcref[2]}) set/read/call', async () => {
-    const JETH = `@struct class H { fs: Arr<(x: u256) => u256, 2>; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @state m: mapping<u256, H>;
-      @external setup(k: u256) { this.m[k].fs[0n] = this.inc; this.m[k].fs[1n] = this.dec; }
-      @external callM(k: u256, i: u256, v: u256): u256 { return this.m[k].fs[i](v); }
+    const JETH = `type H = { fs: Arr<(x: u256) => u256, 2>; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      m: mapping<u256, H>;
+      setup(k: u256): External<void> { this.m[k].fs[0n] = this.inc; this.m[k].fs[1n] = this.dec; }
+      get callM(k: u256, i: u256, v: u256): External<u256> { return this.m[k].fs[i](v); }
     }`;
     const SOL = `contract C {
       struct H { function(uint256) pure returns(uint256)[2] fs; }
@@ -231,42 +231,42 @@ describe('funcref lift FIX C: a struct FIELD that is a fixed-array-of-funcref', 
 
 describe('funcref lift FIX A/B/C: the ABI boundary STILL rejects (a funcref is not ABI-encodable)', () => {
   const rejects: Record<string, string> = {
-    'funcref fixed-array as an @external param': `@contract class C {
-      @external run(a: Arr<(x: u256) => u256, 2>, v: u256): u256 { return a[0n](v); }
+    'funcref fixed-array as an @external param': `class C {
+      run(a: Arr<(x: u256) => u256, 2>, v: u256): External<u256> { return a[0n](v); }
     }`,
-    'dynamic funcref array as an @external param': `@contract class C {
-      @external run(a: ((x: u256) => u256)[], i: u256, v: u256): u256 { return a[i](v); }
+    'dynamic funcref array as an @external param': `class C {
+      run(a: ((x: u256) => u256)[], i: u256, v: u256): External<u256> { return a[i](v); }
     }`,
-    'struct-with-funcref-field as an @external param': `@struct class H { f: (x: u256) => u256; }
-    @contract class C {
-      @external run(h: H, v: u256): u256 { return h.f(v); }
+    'struct-with-funcref-field as an @external param': `type H = { f: (x: u256) => u256; };
+    class C {
+      run(h: H, v: u256): External<u256> { return h.f(v); }
     }`,
-    'struct-with-funcref-array-field as an @external param': `@struct class H { fs: Arr<(x: u256) => u256, 2>; }
-    @contract class C {
-      @external run(h: H, i: u256, v: u256): u256 { return h.fs[i](v); }
+    'struct-with-funcref-array-field as an @external param': `type H = { fs: Arr<(x: u256) => u256, 2>; };
+    class C {
+      run(h: H, i: u256, v: u256): External<u256> { return h.fs[i](v); }
     }`,
-    'return a funcref fixed-array from an @external fn': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external mk(): Arr<(x: u256) => u256, 2> { return [this.inc, this.inc]; }
+    'return a funcref fixed-array from an @external fn': `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      mk(): External<Arr<(x: u256) => u256, 2>> { return [this.inc, this.inc]; }
     }`,
-    'return a struct-with-funcref-array from an @external fn': `@struct class H { fs: Arr<(x: u256) => u256, 2>; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external mk(): H { return H([this.inc, this.inc]); }
+    'return a struct-with-funcref-array from an @external fn': `type H = { fs: Arr<(x: u256) => u256, 2>; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      mk(): External<H> { return H([this.inc, this.inc]); }
     }`,
-    'abi.encode a struct-with-funcref-array': `@struct class H { fs: Arr<(x: u256) => u256, 2>; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external run(): bytes { let h: H = H([this.inc, this.inc]); return abi.encode(h); }
+    'abi.encode a struct-with-funcref-array': `type H = { fs: Arr<(x: u256) => u256, 2>; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      get run(): External<bytes> { let h: H = H([this.inc, this.inc]); return abi.encode(h); }
     }`,
-    'event with a struct-with-funcref-field param': `@struct class H { f: (x: u256) => u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @event E(h: H);
-      @external run() { emit E(H(this.inc)); }
+    'event with a struct-with-funcref-field param': `type H = { f: (x: u256) => u256; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      E: event<{ h: H }>;
+      run(): External<void> { emit E(H(this.inc)); }
     }`,
-    '@public getter of a struct-with-funcref-array field': `@struct class H { fs: Arr<(x: u256) => u256, 2>; }
-    @contract class C {
+    '@public getter of a struct-with-funcref-array field': `type H = { fs: Arr<(x: u256) => u256, 2>; };
+    class C {
       @public h: H;
     }`,
   };

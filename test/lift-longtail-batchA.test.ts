@@ -59,19 +59,19 @@ const rejects = (src: string): boolean => {
 
 describe('long-tail batch A: memory-struct byte access (M1-M3) byte-identical to solc 0.8.35', () => {
   it('M1/M2: plain + nested bytes-field byte write/read, runtime idx, OOB Panic, alias-through, storage/calldata controls', async () => {
-    const J = `@struct class Q2 { b: bytes; n: u256 }
-@struct class R2 { inner: Q2; m: u256 }
-@contract class C {
-  @state sq: Q2;
-  @external seed(): void { this.sq.b = bytes("wxyz"); this.sq.n = 3n; }
-  @external @pure m1(): bytes { let q: Q2 = Q2(bytes("wxyz"), 3n); q.b[2n] = 0x2an; return q.b; }
-  @external @pure m2(i: u256): bytes { let q: Q2 = Q2(bytes("wxyz"), 3n); let s: R2 = R2(q, 7n); s.inner.b[i] = 0x5an; return s.inner.b; }
-  @external @pure rd(i: u256): bytes1 { let q: Q2 = Q2(bytes("wxyz"), 3n); let s: R2 = R2(q, 7n); return s.inner.b[i]; }
-  @external @pure al(): u256 { let q: Q2 = Q2(bytes("wxyz"), 3n); let t: bytes = q.b; q.b[2n] = 0x2an; return t[2n] == 0x2an ? 1n : 0n; }
-  @external @pure alw(): u256 { let q: Q2 = Q2(bytes("wxyz"), 3n); let s: R2 = R2(q, 7n); s.inner.b[0n] = 0x42n; return q.b[0n] == 0x42n ? 1n : 0n; }
+    const J = `type Q2 = { b: bytes; n: u256 };
+type R2 = { inner: Q2; m: u256 };
+class C {
+  sq: Q2;
+  seed(): External<void> { this.sq.b = bytes("wxyz"); this.sq.n = 3n; }
+  get m1(): External<bytes> { let q: Q2 = Q2(bytes("wxyz"), 3n); q.b[2n] = 0x2an; return q.b; }
+  get m2(i: u256): External<bytes> { let q: Q2 = Q2(bytes("wxyz"), 3n); let s: R2 = R2(q, 7n); s.inner.b[i] = 0x5an; return s.inner.b; }
+  get rd(i: u256): External<bytes1> { let q: Q2 = Q2(bytes("wxyz"), 3n); let s: R2 = R2(q, 7n); return s.inner.b[i]; }
+  get al(): External<u256> { let q: Q2 = Q2(bytes("wxyz"), 3n); let t: bytes = q.b; q.b[2n] = 0x2an; return t[2n] == 0x2an ? 1n : 0n; }
+  get alw(): External<u256> { let q: Q2 = Q2(bytes("wxyz"), 3n); let s: R2 = R2(q, 7n); s.inner.b[0n] = 0x42n; return q.b[0n] == 0x42n ? 1n : 0n; }
   poke(q: Q2): void { q.b[0n] = 0x42n; }
-  @external @pure ia(): bytes { let q: Q2 = Q2(bytes("wxyz"), 3n); this.poke(q); return q.b; }
-  @external ctlSt(): bytes { this.sq.b[1n] = 0x22n; return this.sq.b; } }`;
+  get ia(): External<bytes> { let q: Q2 = Q2(bytes("wxyz"), 3n); this.poke(q); return q.b; }
+  ctlSt(): External<bytes> { this.sq.b[1n] = 0x22n; return this.sq.b; } }`;
     const S = `contract C {
   struct Q2 { bytes b; uint256 n; }
   struct R2 { Q2 inner; uint256 m; }
@@ -99,19 +99,19 @@ describe('long-tail batch A: memory-struct byte access (M1-M3) byte-identical to
     ] as const);
     // a string field stays not-indexable (solc parity), a calldata dyn-struct param stays read-only.
     expect(
-      rejects(`@struct class S2 { s: string; n: u256 } @contract class C { @external @pure f(): u256 { let q: S2 = S2("wxyz", 3n); q.s[0n] = 0x21n; return 1n; } }`),
+      rejects(`type S2 = { s: string; n: u256 }; class C { get f(): External<u256> { let q: S2 = S2("wxyz", 3n); q.s[0n] = 0x21n; return 1n; } }`),
     ).toBe(true);
     expect(
-      rejects(`@struct class Q2 { b: bytes; n: u256 } @contract class C { @external f(q: Q2): u256 { q.b[0n] = 0x42n; return 1n; } }`),
+      rejects(`type Q2 = { b: bytes; n: u256 }; class C { get f(q: Q2): External<u256> { q.b[0n] = 0x42n; return 1n; } }`),
     ).toBe(true);
   });
 
   it('M3: byte READ rvalue through a bytes[] field chain (+ ternary-base write cross stays lifted)', async () => {
-    const J = `@struct class P2 { tags: bytes[]; n: u256 }
-@contract class C {
-  @external @pure r(i: u256, j: u256): bytes1 { let tg: bytes[] = [bytes("aabb"), bytes("cd")]; let p: P2 = P2(tg, 1n); return p.tags[i][j]; }
-  @external @pure ar(): u256 { let tg: bytes[] = [bytes("aabb"), bytes("cd")]; let p: P2 = P2(tg, 1n); return p.tags[1n][0n] == 0x63n ? 1n : 0n; }
-  @external @pure tb(c: bool): bytes { let t1: bytes[] = [bytes("aabb")]; let t2: bytes[] = [bytes("ccdd")]; let p: P2 = P2(t1, 1n); let q: P2 = P2(t2, 2n); (c ? p : q).tags[0n][1n] = 0x2an; return c ? p.tags[0n] : q.tags[0n]; } }`;
+    const J = `type P2 = { tags: bytes[]; n: u256 };
+class C {
+  get r(i: u256, j: u256): External<bytes1> { let tg: bytes[] = [bytes("aabb"), bytes("cd")]; let p: P2 = P2(tg, 1n); return p.tags[i][j]; }
+  get ar(): External<u256> { let tg: bytes[] = [bytes("aabb"), bytes("cd")]; let p: P2 = P2(tg, 1n); return p.tags[1n][0n] == 0x63n ? 1n : 0n; }
+  get tb(c: bool): External<bytes> { let t1: bytes[] = [bytes("aabb")]; let t2: bytes[] = [bytes("ccdd")]; let p: P2 = P2(t1, 1n); let q: P2 = P2(t2, 2n); (c ? p : q).tags[0n][1n] = 0x2an; return c ? p.tags[0n] : q.tags[0n]; } }`;
     const S = `contract C {
   struct P2 { bytes[] tags; uint256 n; }
   function r(uint256 i, uint256 j) external pure returns (bytes1) { bytes[] memory tg = new bytes[](2); tg[0] = "aabb"; tg[1] = "cd"; P2 memory p = P2(tg, 1); return p.tags[i][j]; }
@@ -129,20 +129,20 @@ describe('long-tail batch A: memory-struct byte access (M1-M3) byte-identical to
 });
 
 describe('long-tail batch A: ternary-chain lvalues (T1-T3) byte-identical to solc 0.8.35', () => {
-  const IN = `@struct class In { x: u256; y: u256 }`;
+  const IN = `type In = { x: u256; y: u256 };`;
   const SIN = `struct In { uint256 x; uint256 y; }`;
 
   it('T1: whole-element write (storage + memory branches), runtime idx + OOB, RHS/cond/idx order', async () => {
-    const J = `${IN} @contract class C {
-  @state A: Arr<In, 2>;
-  @state B2: Arr<In, 2>;
-  @state tr: u256[];
+    const J = `${IN} class C {
+  A: Arr<In, 2>;
+  B2: Arr<In, 2>;
+  tr: u256[];
   cnd(): bool { this.tr.push(1n); return true; }
   idx(): u256 { this.tr.push(2n); return 0n; }
   rhs(): u256 { this.tr.push(3n); return 5n; }
-  @external ord(): u256[] { (this.cnd() ? this.A : this.B2)[this.idx()] = In(this.rhs(), 8n); return this.tr; }
-  @external w(c: bool, i: u256): u256 { (c ? this.A : this.B2)[i] = In(9n, 8n); return this.A[1n].y * 10n + this.B2[1n].y; }
-  @external @pure wm(c: bool): u256 { let m1: Arr<In, 2> = [In(1n, 2n), In(3n, 4n)]; let m2: Arr<In, 2> = [In(5n, 6n), In(7n, 8n)]; (c ? m1 : m2)[0n] = In(9n, 8n); return m1[0n].y * 100n + m2[0n].y; } }`;
+  ord(): External<u256[]> { (this.cnd() ? this.A : this.B2)[this.idx()] = In(this.rhs(), 8n); return this.tr; }
+  w(c: bool, i: u256): External<u256> { (c ? this.A : this.B2)[i] = In(9n, 8n); return this.A[1n].y * 10n + this.B2[1n].y; }
+  get wm(c: bool): External<u256> { let m1: Arr<In, 2> = [In(1n, 2n), In(3n, 4n)]; let m2: Arr<In, 2> = [In(5n, 6n), In(7n, 8n)]; (c ? m1 : m2)[0n] = In(9n, 8n); return m1[0n].y * 100n + m2[0n].y; } }`;
     const S = `contract C { ${SIN}
   In[2] A; In[2] B2;
   uint256[] tr;
@@ -163,22 +163,22 @@ describe('long-tail batch A: ternary-chain lvalues (T1-T3) byte-identical to sol
   });
 
   it('T2: compound ops + ++/-- (statement and value position) through the chain', async () => {
-    const J = `${IN} @contract class C {
-  @state A: Arr<In, 2>;
-  @state B2: Arr<In, 2>;
-  @state tr: u256[];
+    const J = `${IN} class C {
+  A: Arr<In, 2>;
+  B2: Arr<In, 2>;
+  tr: u256[];
   cnd(): bool { this.tr.push(1n); return true; }
   idx(): u256 { this.tr.push(2n); return 0n; }
   rhs(): u256 { this.tr.push(3n); return 5n; }
-  @external seed(): void { this.A[0n].y = 96n; this.B2[0n].y = 7n; }
-  @external ord(): u256[] { (this.cnd() ? this.A : this.B2)[this.idx()].y += this.rhs(); return this.tr; }
-  @external add(c: bool, v: u256): u256 { (c ? this.A : this.B2)[0n].y += v; return this.A[0n].y * 1000n + this.B2[0n].y; }
-  @external dvd(c: bool, v: u256): u256 { (c ? this.A : this.B2)[0n].y /= v; return this.A[0n].y * 1000n + this.B2[0n].y; }
-  @external xr(c: bool, v: u256): u256 { (c ? this.A : this.B2)[0n].y ^= v; return this.A[0n].y * 1000n + this.B2[0n].y; }
-  @external shl(c: bool, v: u256): u256 { (c ? this.A : this.B2)[0n].y <<= v; return this.A[0n].y * 1000n + this.B2[0n].y; }
-  @external st(c: bool): u256 { (c ? this.A : this.B2)[0n].y++; return this.A[0n].y * 100n + this.B2[0n].y; }
-  @external ep(c: bool): u256 { let z: u256 = (c ? this.A : this.B2)[0n].y++; return z * 1000n + this.A[0n].y * 10n + this.B2[0n].y; }
-  @external ef(c: bool): u256 { let z: u256 = --(c ? this.A : this.B2)[0n].y; return z * 1000n + this.A[0n].y * 10n + this.B2[0n].y; } }`;
+  seed(): External<void> { this.A[0n].y = 96n; this.B2[0n].y = 7n; }
+  ord(): External<u256[]> { (this.cnd() ? this.A : this.B2)[this.idx()].y += this.rhs(); return this.tr; }
+  add(c: bool, v: u256): External<u256> { (c ? this.A : this.B2)[0n].y += v; return this.A[0n].y * 1000n + this.B2[0n].y; }
+  dvd(c: bool, v: u256): External<u256> { (c ? this.A : this.B2)[0n].y /= v; return this.A[0n].y * 1000n + this.B2[0n].y; }
+  xr(c: bool, v: u256): External<u256> { (c ? this.A : this.B2)[0n].y ^= v; return this.A[0n].y * 1000n + this.B2[0n].y; }
+  shl(c: bool, v: u256): External<u256> { (c ? this.A : this.B2)[0n].y <<= v; return this.A[0n].y * 1000n + this.B2[0n].y; }
+  st(c: bool): External<u256> { (c ? this.A : this.B2)[0n].y++; return this.A[0n].y * 100n + this.B2[0n].y; }
+  ep(c: bool): External<u256> { let z: u256 = (c ? this.A : this.B2)[0n].y++; return z * 1000n + this.A[0n].y * 10n + this.B2[0n].y; }
+  ef(c: bool): External<u256> { let z: u256 = --(c ? this.A : this.B2)[0n].y; return z * 1000n + this.A[0n].y * 10n + this.B2[0n].y; } }`;
     const S = `contract C { ${SIN}
   In[2] A; In[2] B2;
   uint256[] tr;
@@ -212,14 +212,14 @@ describe('long-tail batch A: ternary-chain lvalues (T1-T3) byte-identical to sol
   });
 
   it('T3: nested ternary chains (3-level, ternary-in-cond, nested whole-element, nested compound)', async () => {
-    const J = `${IN} @contract class C {
-  @state A: Arr<In, 2>;
-  @state B2: Arr<In, 2>;
-  @state D: Arr<In, 2>;
-  @external w3(c: bool, d: bool, e2: bool): u256 { (c ? this.A : (d ? this.B2 : (e2 ? this.D : this.A)))[1n].y = 42n; return this.A[1n].y * 10000n + this.B2[1n].y * 100n + this.D[1n].y; }
-  @external wc(a: bool, b: bool): u256 { ((a ? b : !b) ? this.A : this.B2)[0n].y = 7n; return this.A[0n].y * 100n + this.B2[0n].y; }
-  @external we(c: bool, d: bool): u256 { (c ? this.A : (d ? this.B2 : this.A))[0n] = In(3n, 4n); return this.A[0n].y * 100n + this.B2[0n].y; }
-  @external wk(c: bool, d: bool): u256 { (c ? this.A : (d ? this.B2 : this.A))[0n].y += 5n; return this.A[0n].y * 100n + this.B2[0n].y; } }`;
+    const J = `${IN} class C {
+  A: Arr<In, 2>;
+  B2: Arr<In, 2>;
+  D: Arr<In, 2>;
+  w3(c: bool, d: bool, e2: bool): External<u256> { (c ? this.A : (d ? this.B2 : (e2 ? this.D : this.A)))[1n].y = 42n; return this.A[1n].y * 10000n + this.B2[1n].y * 100n + this.D[1n].y; }
+  wc(a: bool, b: bool): External<u256> { ((a ? b : !b) ? this.A : this.B2)[0n].y = 7n; return this.A[0n].y * 100n + this.B2[0n].y; }
+  we(c: bool, d: bool): External<u256> { (c ? this.A : (d ? this.B2 : this.A))[0n] = In(3n, 4n); return this.A[0n].y * 100n + this.B2[0n].y; }
+  wk(c: bool, d: bool): External<u256> { (c ? this.A : (d ? this.B2 : this.A))[0n].y += 5n; return this.A[0n].y * 100n + this.B2[0n].y; } }`;
     const S = `contract C { ${SIN}
   In[2] A; In[2] B2; In[2] D;
   function w3(bool c, bool d, bool e2) external returns (uint256) { (c ? A : (d ? B2 : (e2 ? D : A)))[1].y = 42; return A[1].y * 10000 + B2[1].y * 100 + D[1].y; }
@@ -241,17 +241,17 @@ describe('long-tail batch A: ternary-chain lvalues (T1-T3) byte-identical to sol
   });
 
   it('parity gates: mismatched branch types + storage|memory mixes stay rejected (solc rejects or copy-writes)', async () => {
-    const IN2 = `@struct class In { x: u256; y: u256 }`;
+    const IN2 = `type In = { x: u256; y: u256 };`;
     // branch types must unify: Arr<In,2> vs Arr<In,3> / fixed vs dynamic are solc TypeErrors
     // (these were OVER-ACCEPTED before this batch on both the write and read desugars).
     expect(
-      rejects(`${IN2} @contract class C { @state A: Arr<In, 2>; @state C3: Arr<In, 3>; @external w(c: bool): u256 { (c ? this.A : this.C3)[0n].y = 9n; return 1n; } }`),
+      rejects(`${IN2} class C { A: Arr<In, 2>; C3: Arr<In, 3>; get w(c: bool): External<u256> { (c ? this.A : this.C3)[0n].y = 9n; return 1n; } }`),
     ).toBe(true);
     expect(
-      rejects(`${IN2} @contract class C { @state A: Arr<In, 2>; @state C3: Arr<In, 3>; @external @view r(c: bool): u256 { return (c ? this.A : this.C3)[0n].y; } }`),
+      rejects(`${IN2} class C { A: Arr<In, 2>; C3: Arr<In, 3>; get r(c: bool): External<u256> { return (c ? this.A : this.C3)[0n].y; } }`),
     ).toBe(true);
     expect(
-      rejects(`${IN2} @contract class C { @state A: Arr<In, 2>; @state D: In[]; @external w(c: bool): u256 { (c ? this.A : this.D)[0n].y = 9n; return 1n; } }`),
+      rejects(`${IN2} class C { A: Arr<In, 2>; D: In[]; get w(c: bool): External<u256> { (c ? this.A : this.D)[0n].y = 9n; return 1n; } }`),
     ).toBe(true);
     // storage|memory mix: solc unifies the ternary to a MEMORY COPY - the storage branch's write is
     // lost in the discarded copy, the memory branch's write persists. OR cluster 1 (TERN-LV-MIX struct)
@@ -276,7 +276,7 @@ describe('long-tail batch A: ternary-chain lvalues (T1-T3) byte-identical to sol
     }
     // calldata|storage mix stays a both-reject (solc TypeError).
     expect(
-      rejects(`${IN2} @contract class C { @state A: Arr<In, 2>; @external w(c: bool, p: Arr<In, 2>): u256 { (c ? this.A : p)[0n].y = 9n; return 1n; } }`),
+      rejects(`${IN2} class C { A: Arr<In, 2>; w(c: bool, p: Arr<In, 2>): External<u256> { (c ? this.A : p)[0n].y = 9n; return 1n; } }`),
     ).toBe(true);
   });
 });

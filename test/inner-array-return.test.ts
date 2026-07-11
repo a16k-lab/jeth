@@ -12,21 +12,21 @@ const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const K = 0xabcn;
 
-const JETH = `@contract class IR {
-  @state m: mapping<u256, u256[][]>;
-  @state ddd: u256[][][];
-  @state ss: string[][];
-  @external mPushOuter(k: u256): void { this.m[k].push(); }
-  @external mPushInner(k: u256, i: u256, v: u256): void { this.m[k][i].push(v); }
-  @external @view mInner(k: u256, i: u256): u256[] { return this.m[k][i]; }
-  @external d3a(): void { this.ddd.push(); }
-  @external d3b(i: u256): void { this.ddd[i].push(); }
-  @external d3c(i: u256, j: u256, v: u256): void { this.ddd[i][j].push(v); }
-  @external @view d3Inner1(i: u256, j: u256): u256[] { return this.ddd[i][j]; }
-  @external @view d3Inner2(i: u256): u256[][] { return this.ddd[i]; }
-  @external sPushOuter(): void { this.ss.push(); }
-  @external sPushInner(i: u256, s: string): void { this.ss[i].push(s); }
-  @external @view sInner(i: u256): string[] { return this.ss[i]; }
+const JETH = `class IR {
+  m: mapping<u256, u256[][]>;
+  ddd: u256[][][];
+  ss: string[][];
+  mPushOuter(k: u256): External<void> { this.m[k].push(); }
+  mPushInner(k: u256, i: u256, v: u256): External<void> { this.m[k][i].push(v); }
+  get mInner(k: u256, i: u256): External<u256[]> { return this.m[k][i]; }
+  d3a(): External<void> { this.ddd.push(); }
+  d3b(i: u256): External<void> { this.ddd[i].push(); }
+  d3c(i: u256, j: u256, v: u256): External<void> { this.ddd[i][j].push(v); }
+  get d3Inner1(i: u256, j: u256): External<u256[]> { return this.ddd[i][j]; }
+  get d3Inner2(i: u256): External<u256[][]> { return this.ddd[i]; }
+  sPushOuter(): External<void> { this.ss.push(); }
+  sPushInner(i: u256, s: string): External<void> { this.ss[i].push(s); }
+  get sInner(i: u256): External<string[]> { return this.ss[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

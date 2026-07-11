@@ -23,20 +23,20 @@ function strSet(sel: string, head: bigint[], s: string): string {
   return h;
 }
 
-const JETH = `@struct class D { a: u256; s: string; }
-@contract class FD {
-  @state ss: Arr<string, 3>;
-  @state ds: Arr<D, 2>;
-  @external setS(i: u256, v: string): void { this.ss[i] = v; }
-  @external setDA(i: u256, a: u256): void { this.ds[i].a = a; }
-  @external setDS(i: u256, s: string): void { this.ds[i].s = s; }
-  @external setDWhole(i: u256, a: u256, s: string): void { this.ds[i] = D(a, s); }
-  @external @view getS(i: u256): string { return this.ss[i]; }
-  @external @view getDWhole(i: u256): D { return this.ds[i]; }
-  @external @view getDA(i: u256): u256 { return this.ds[i].a; }
-  @external @view getDS(i: u256): string { return this.ds[i].s; }
-  @external @view getAllS(): Arr<string, 3> { return this.ss; }
-  @external @view getAllD(): Arr<D, 2> { return this.ds; }
+const JETH = `type D = { a: u256; s: string; };
+class FD {
+  ss: Arr<string, 3>;
+  ds: Arr<D, 2>;
+  setS(i: u256, v: string): External<void> { this.ss[i] = v; }
+  setDA(i: u256, a: u256): External<void> { this.ds[i].a = a; }
+  setDS(i: u256, s: string): External<void> { this.ds[i].s = s; }
+  setDWhole(i: u256, a: u256, s: string): External<void> { this.ds[i] = D(a, s); }
+  get getS(i: u256): External<string> { return this.ss[i]; }
+  get getDWhole(i: u256): External<D> { return this.ds[i]; }
+  get getDA(i: u256): External<u256> { return this.ds[i].a; }
+  get getDS(i: u256): External<string> { return this.ds[i].s; }
+  get getAllS(): External<Arr<string, 3>> { return this.ss; }
+  get getAllD(): External<Arr<D, 2>> { return this.ds; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

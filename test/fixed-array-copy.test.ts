@@ -13,14 +13,14 @@ const sel = (s: string) => functionSelector(s);
 const b32 = (v: bigint) => Buffer.from(v.toString(16).padStart(64, '0'), 'hex');
 const kecSlot = (n: bigint) => BigInt('0x' + toHex(keccak(b32(n))));
 
-const JETH = `@struct class P { a: u256; b: u8; }
-@contract class C {
-  @state vg: Arr<u256,3>; @state vs: Arr<u256,3>;
-  @state pg: Arr<u8,5>;   @state ps: Arr<u8,5>;
-  @state sg: Arr<P,2>;    @state ss: Arr<P,2>;
-  @state strg: Arr<string,2>; @state strs: Arr<string,2>;
-  @state guard: u256;
-  @external seed(x: string): void {
+const JETH = `type P = { a: u256; b: u8; };
+class C {
+  vg: Arr<u256,3>; vs: Arr<u256,3>;
+  pg: Arr<u8,5>;   ps: Arr<u8,5>;
+  sg: Arr<P,2>;    ss: Arr<P,2>;
+  strg: Arr<string,2>; strs: Arr<string,2>;
+  guard: u256;
+  seed(x: string): External<void> {
     this.vs[0n] = 111n; this.vs[1n] = 222n; this.vs[2n] = 333n;
     this.ps[0n] = 1n; this.ps[1n] = 2n; this.ps[2n] = 3n; this.ps[3n] = 4n; this.ps[4n] = 5n;
     this.ss[0n] = P(7n, 8n); this.ss[1n] = P(9n, 10n);
@@ -29,11 +29,11 @@ const JETH = `@struct class P { a: u256; b: u8; }
     // pre-dirty the destinations so a correct copy must overwrite
     this.vg[0n] = 999n; this.pg[0n] = 99n; this.sg[0n] = P(1n,1n); this.strg[0n] = x;
   }
-  @external cpVal(): void { this.vg = this.vs; }
-  @external cpPacked(): void { this.pg = this.ps; }
-  @external cpStruct(): void { this.sg = this.ss; }
-  @external cpStr(): void { this.strg = this.strs; }
-  @external cpLit(a: u256, b: u256, c: u256): void { this.vg = [a, b, c]; }
+  cpVal(): External<void> { this.vg = this.vs; }
+  cpPacked(): External<void> { this.pg = this.ps; }
+  cpStruct(): External<void> { this.sg = this.ss; }
+  cpStr(): External<void> { this.strg = this.strs; }
+  cpLit(a: u256, b: u256, c: u256): External<void> { this.vg = [a, b, c]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

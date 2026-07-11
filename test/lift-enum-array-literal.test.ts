@@ -41,7 +41,7 @@ describe('A-LIT-RESID(enum) lift - enum array literals self-type byte-identical 
   it('abi.encode([Color.Green, cb]) - member + runtime enum, all values incl OOB revert', async () => {
     await diff(
       `${EN}
-       @contract class C { @external @pure e(cb: Color): bytes { return abi.encode([Color.Green, cb]); } }`,
+       class C { get e(cb: Color): External<bytes> { return abi.encode([Color.Green, cb]); } }`,
       `enum Color { Red, Green, Blue }
        contract C { function e(Color cb) external pure returns(bytes memory){ return abi.encode([Color.Green, cb]); } }`,
       [['e(uint8)', W(0)], ['e(uint8)', W(1)], ['e(uint8)', W(2)], ['e(uint8)', W(5)]],
@@ -51,7 +51,7 @@ describe('A-LIT-RESID(enum) lift - enum array literals self-type byte-identical 
   it('abi.encodePacked([Color.Green, cb]) - packed still pads array elements to 32 bytes', async () => {
     await diff(
       `${EN}
-       @contract class C { @external @pure e(cb: Color): bytes { return abi.encodePacked([Color.Green, cb]); } }`,
+       class C { get e(cb: Color): External<bytes> { return abi.encodePacked([Color.Green, cb]); } }`,
       `enum Color { Red, Green, Blue }
        contract C { function e(Color cb) external pure returns(bytes memory){ return abi.encodePacked([Color.Green, cb]); } }`,
       [['e(uint8)', W(0)], ['e(uint8)', W(2)]],
@@ -61,10 +61,10 @@ describe('A-LIT-RESID(enum) lift - enum array literals self-type byte-identical 
   it('3-element order + all-const + single-element', async () => {
     await diff(
       `${EN}
-       @contract class C {
-         @external @pure a(cb: Color): bytes { return abi.encode([cb, Color.Blue, Color.Red]); }
-         @external @pure b(): bytes { return abi.encode([Color.Red, Color.Green, Color.Blue]); }
-         @external @pure c(): bytes { return abi.encode([Color.Green]); } }`,
+       class C {
+         get a(cb: Color): External<bytes> { return abi.encode([cb, Color.Blue, Color.Red]); }
+         get b(): External<bytes> { return abi.encode([Color.Red, Color.Green, Color.Blue]); }
+         get c(): External<bytes> { return abi.encode([Color.Green]); } }`,
       `enum Color { Red, Green, Blue }
        contract C {
          function a(Color cb) external pure returns(bytes memory){ return abi.encode([cb, Color.Blue, Color.Red]); }
@@ -77,7 +77,7 @@ describe('A-LIT-RESID(enum) lift - enum array literals self-type byte-identical 
   it('ternary over enum array literals c ? [Red,Blue] : [Green,cb]', async () => {
     await diff(
       `${EN}
-       @contract class C { @external @pure e(c: bool, cb: Color): bytes { return abi.encode(c ? [Color.Red, Color.Blue] : [Color.Green, cb]); } }`,
+       class C { get e(c: bool, cb: Color): External<bytes> { return abi.encode(c ? [Color.Red, Color.Blue] : [Color.Green, cb]); } }`,
       `enum Color { Red, Green, Blue }
        contract C { function e(bool c, Color cb) external pure returns(bytes memory){ return abi.encode(c ? [Color.Red, Color.Blue] : [Color.Green, cb]); } }`,
       [['e(bool,uint8)', W(1) + W(2)], ['e(bool,uint8)', W(0) + W(2)]],
@@ -85,9 +85,9 @@ describe('A-LIT-RESID(enum) lift - enum array literals self-type byte-identical 
   });
 
   it('boundary: different enums / enum+int have no common type -> reject (parity)', () => {
-    expect(rejects(`${EN} enum St { Off, On } @contract class C { @external @pure f(): bytes { return abi.encode([Color.Green, St.On]); } }`)).toBe(true);
-    expect(rejects(`${EN} @contract class C { @external @pure f(): bytes { return abi.encode([Color.Green, 1n]); } }`)).toBe(true);
+    expect(rejects(`${EN} enum St { Off, On } class C { get f(): External<bytes> { return abi.encode([Color.Green, St.On]); } }`)).toBe(true);
+    expect(rejects(`${EN} class C { get f(): External<bytes> { return abi.encode([Color.Green, 1n]); } }`)).toBe(true);
     // same-enum self-types (the lift)
-    expect(rejects(`${EN} @contract class C { @external @pure f(): bytes { return abi.encode([Color.Green, Color.Red]); } }`)).toBe(false);
+    expect(rejects(`${EN} class C { get f(): External<bytes> { return abi.encode([Color.Green, Color.Red]); } }`)).toBe(false);
   });
 });

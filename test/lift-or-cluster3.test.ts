@@ -53,9 +53,9 @@ function cdStructArr(iVal: number, jVal: number): string {
 describe('OR cluster 3: funcref element values + calldata/nested byte access', () => {
   it('FUNCREF-BIND: let e: Fd = a[i]; e.f(v) dispatches like the direct a[i].f(v), byte-identical', async () => {
     await run(
-      `@struct class Fd{f:(v:u256)=>u256}
-@contract class C{ h(v:u256):u256{return v+1n;} g(v:u256):u256{return v+100n;}
-  @external run(i:u256):u256{ let a:Arr<Fd,2>=[Fd(this.h),Fd(this.g)]; let e:Fd=a[i]; return e.f(41n); } }`,
+      `type Fd = {f:(v:u256)=>u256};
+class C{ h(v:u256):u256{return v+1n;} g(v:u256):u256{return v+100n;}
+  get run(i:u256):External<u256>{ let a:Arr<Fd,2>=[Fd(this.h),Fd(this.g)]; let e:Fd=a[i]; return e.f(41n); } }`,
       `contract C{ struct Fd{function(uint256) internal returns(uint256) f;} function h(uint256 v) internal returns(uint256){return v+1;} function g(uint256 v) internal returns(uint256){return v+100;}
   function run(uint256 i) external returns(uint256){ Fd[2] memory a=[Fd(h),Fd(g)]; Fd memory e=a[i]; return e.f(41); } }`,
       [['run(uint256)', W(0)], ['run(uint256)', W(1)], ['run(uint256)', W(2)]] as const, // 42, 141, Panic 0x32
@@ -64,9 +64,9 @@ describe('OR cluster 3: funcref element values + calldata/nested byte access', (
 
   it('FUNCREF-TERN: (c ? a[0] : a[1]).f(v) dispatches identically, byte-identical', async () => {
     await run(
-      `@struct class Fd{f:(v:u256)=>u256}
-@contract class C{ h(v:u256):u256{return v+1n;} g(v:u256):u256{return v+100n;}
-  @external run(c:bool):u256{ let a:Arr<Fd,2>=[Fd(this.h),Fd(this.g)]; return (c?a[0n]:a[1n]).f(41n); } }`,
+      `type Fd = {f:(v:u256)=>u256};
+class C{ h(v:u256):u256{return v+1n;} g(v:u256):u256{return v+100n;}
+  get run(c:bool):External<u256>{ let a:Arr<Fd,2>=[Fd(this.h),Fd(this.g)]; return (c?a[0n]:a[1n]).f(41n); } }`,
       `contract C{ struct Fd{function(uint256) internal returns(uint256) f;} function h(uint256 v) internal returns(uint256){return v+1;} function g(uint256 v) internal returns(uint256){return v+100;}
   function run(bool c) external returns(uint256){ Fd[2] memory a=[Fd(h),Fd(g)]; return (c?a[0]:a[1]).f(41); } }`,
       [['run(bool)', W(1)], ['run(bool)', W(0)]] as const, // 42, 141
@@ -75,8 +75,8 @@ describe('OR cluster 3: funcref element values + calldata/nested byte access', (
 
   it('CD-STRUCTARR-BYTE: xs[i].b[j] calldata struct-array element byte read byte-identical incl OOB Panic', async () => {
     await run(
-      `@struct class S{b:bytes;n:u256}
-@contract class C{ @external @pure f(xs:S[],i:u256,j:u256):u256{ return u256(u8(xs[i].b[j])); } }`,
+      `type S = {b:bytes;n:u256};
+class C{ get f(xs:S[],i:u256,j:u256):External<u256>{ return u256(u8(xs[i].b[j])); } }`,
       `contract C{ struct S{bytes b;uint256 n;} function f(S[] calldata xs,uint256 i,uint256 j) external pure returns(uint256){ return uint256(uint8(xs[i].b[j])); } }`,
       [
         ['f((bytes,uint256)[],uint256,uint256)', cdStructArr(0, 0)], // 0x57
@@ -91,17 +91,17 @@ describe('OR cluster 3: funcref element values + calldata/nested byte access', (
 
   it('SOUNDNESS: a calldata byte WRITE xs[i].b[j] = v stays a reject (calldata is read-only)', () => {
     expect(
-      rejects(`@struct class S{b:bytes;n:u256}
-@contract class C{ @external f(xs:S[],i:u256,j:u256,v:u8):void{ xs[i].b[j]=bytes1(v); } }`),
+      rejects(`type S = {b:bytes;n:u256};
+class C{ f(xs:S[],i:u256,j:u256,v:u8):External<void>{ xs[i].b[j]=bytes1(v); } }`),
     ).toBe(true);
   });
 
   it('MEM-STRUCTARR-BYTESARR-BYTE: xs[i].tags[j][k] memory bytes[]-field byte read+write byte-identical', async () => {
     await run(
-      `@struct class S{tags:bytes[]}
-@contract class C{
-  @external @pure rd(i:u256,j:u256,k:u256):u256{ let t:bytes[]=[bytes("abc"),bytes("de")]; let xs:Arr<S,1>=[S(t)]; return u256(u8(xs[i].tags[j][k])); }
-  @external @pure wr(j:u256,k:u256,v:u8):u256{ let t:bytes[]=[bytes("abc"),bytes("de")]; let xs:Arr<S,1>=[S(t)]; xs[0n].tags[j][k]=bytes1(v); return u256(u8(xs[0n].tags[j][k])); } }`,
+      `type S = {tags:bytes[]};
+class C{
+  get rd(i:u256,j:u256,k:u256):External<u256>{ let t:bytes[]=[bytes("abc"),bytes("de")]; let xs:Arr<S,1>=[S(t)]; return u256(u8(xs[i].tags[j][k])); }
+  get wr(j:u256,k:u256,v:u8):External<u256>{ let t:bytes[]=[bytes("abc"),bytes("de")]; let xs:Arr<S,1>=[S(t)]; xs[0n].tags[j][k]=bytes1(v); return u256(u8(xs[0n].tags[j][k])); } }`,
       `contract C{ struct S{bytes[] tags;}
   function mk() internal pure returns(S[1] memory xs){ bytes[] memory t=new bytes[](2); t[0]=bytes("abc"); t[1]=bytes("de"); xs=[S(t)]; }
   function rd(uint256 i,uint256 j,uint256 k) external pure returns(uint256){ S[1] memory xs=mk(); return uint256(uint8(xs[i].tags[j][k])); }

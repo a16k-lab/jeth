@@ -66,12 +66,12 @@ async function behavesLikeSolc(
 
 describe('P0-32 funcref storage packing: byte-identical NEIGHBOR placement + layout', () => {
   it('funcref packs between two u128 (neighbor bytes identical to solc)', async () => {
-    const JETH = `@contract class C {
-      @pure g(x: u256): u256 { return x; }
-      @state a: u128;
-      @state h: (x: u256) => u256;
-      @state b: u128;
-      @external seed(): void { this.a = 0x1111n; this.b = 0x2222n; this.h = this.g; }
+    const JETH = `class C {
+      g(x: u256): u256 { return x; }
+      a: u128;
+      h: (x: u256) => u256;
+      b: u128;
+      seed(): External<void> { this.a = 0x1111n; this.b = 0x2222n; this.h = this.g; }
     }`;
     const SOL = `contract C {
       function g(uint256 x) internal pure returns(uint256){ return x; }
@@ -87,13 +87,13 @@ describe('P0-32 funcref storage packing: byte-identical NEIGHBOR placement + lay
   });
 
   it('four funcrefs pack into one slot, u64 neighbor lands identically', async () => {
-    const JETH = `@contract class C {
-      @pure f0(x: u256): u256 { return x; }
-      @pure f1(x: u256): u256 { return x + 1n; }
-      @state a: (x: u256) => u256; @state b: (x: u256) => u256;
-      @state c: (x: u256) => u256; @state d: (x: u256) => u256;
-      @state n: u64;
-      @external seed(): void { this.a = this.f0; this.b = this.f1; this.c = this.f0; this.d = this.f1; this.n = 0xabcdn; }
+    const JETH = `class C {
+      f0(x: u256): u256 { return x; }
+      f1(x: u256): u256 { return x + 1n; }
+      a: (x: u256) => u256; b: (x: u256) => u256;
+      c: (x: u256) => u256; d: (x: u256) => u256;
+      n: u64;
+      seed(): External<void> { this.a = this.f0; this.b = this.f1; this.c = this.f0; this.d = this.f1; this.n = 0xabcdn; }
     }`;
     const SOL = `contract C {
       function f0(uint256 x) internal pure returns(uint256){ return x; }
@@ -110,11 +110,11 @@ describe('P0-32 funcref storage packing: byte-identical NEIGHBOR placement + lay
   });
 
   it('Arr<funcref,4> occupies exactly one slot; u256 neighbor at slot1', async () => {
-    const JETH = `@contract class C {
-      @pure g(x: u256): u256 { return x; }
-      @state fs: Arr<(x: u256) => u256, 4>;
-      @state z: u256;
-      @external seed(): void { this.fs[0] = this.g; this.fs[3] = this.g; this.z = 0xdeadn; }
+    const JETH = `class C {
+      g(x: u256): u256 { return x; }
+      fs: Arr<(x: u256) => u256, 4>;
+      z: u256;
+      seed(): External<void> { this.fs[0] = this.g; this.fs[3] = this.g; this.z = 0xdeadn; }
     }`;
     const SOL = `contract C {
       function g(uint256 x) internal pure returns(uint256){ return x; }
@@ -128,11 +128,11 @@ describe('P0-32 funcref storage packing: byte-identical NEIGHBOR placement + lay
   });
 
   it('Arr<funcref,5> occupies two slots; u256 neighbor at slot2', async () => {
-    const JETH = `@contract class C {
-      @pure g(x: u256): u256 { return x; }
-      @state fs: Arr<(x: u256) => u256, 5>;
-      @state z: u256;
-      @external seed(): void { this.fs[4] = this.g; this.z = 0xbeefn; }
+    const JETH = `class C {
+      g(x: u256): u256 { return x; }
+      fs: Arr<(x: u256) => u256, 5>;
+      z: u256;
+      seed(): External<void> { this.fs[4] = this.g; this.z = 0xbeefn; }
     }`;
     const SOL = `contract C {
       function g(uint256 x) internal pure returns(uint256){ return x; }
@@ -146,11 +146,11 @@ describe('P0-32 funcref storage packing: byte-identical NEIGHBOR placement + lay
   });
 
   it('struct{u64,funcref,u64} packs the funcref field between neighbors', async () => {
-    const JETH = `@struct class S { x: u64; h: (z: u256) => u256; y: u64; }
-    @contract class C {
-      @pure g(z: u256): u256 { return z; }
-      @state s: S;
-      @external seed(): void { this.s.x = 0x44n; this.s.y = 0x55n; this.s.h = this.g; }
+    const JETH = `type S = { x: u64; h: (z: u256) => u256; y: u64; };
+    class C {
+      g(z: u256): u256 { return z; }
+      s: S;
+      seed(): External<void> { this.s.x = 0x44n; this.s.y = 0x55n; this.s.h = this.g; }
     }`;
     const SOL = `contract C {
       struct S { uint64 x; function(uint256) internal pure returns(uint256) h; uint64 y; }
@@ -164,11 +164,11 @@ describe('P0-32 funcref storage packing: byte-identical NEIGHBOR placement + lay
   });
 
   it('null (unset) packed @state funcref call reverts Panic(0x51), clean slot, identical to solc', async () => {
-    const JETH = `@contract class C {
-      @pure g(x: u256): u256 { return x; }
-      @state a: u64; @state h: (x: u256) => u256; @state b: u64;
-      @external setit(): void { this.h = this.g; }
-      @external callh(): u256 { return this.h(3n); }
+    const JETH = `class C {
+      g(x: u256): u256 { return x; }
+      a: u64; h: (x: u256) => u256; b: u64;
+      setit(): External<void> { this.h = this.g; }
+      get callh(): External<u256> { return this.h(3n); }
     }`;
     const SOL = `contract C {
       function g(uint256 x) internal pure returns(uint256){ return x; }
@@ -206,10 +206,10 @@ describe('P1-18 aggregate-signature internal funcref call', () => {
   }
 
   it('a funcref RETURNING an aggregate (u256[]) dispatches by memptr', async () => {
-    const JETH = `@contract class C {
-      @pure mkArr(n: u256): u256[] { let a: u256[] = [n, n + 1n, n + 2n]; return a; }
-      @pure ap(g: (n: u256) => u256[], v: u256): u256[] { return g(v); }
-      @external @pure r(): u256[] { return this.ap(this.mkArr, 100n); }
+    const JETH = `class C {
+      mkArr(n: u256): u256[] { let a: u256[] = [n, n + 1n, n + 2n]; return a; }
+      ap(g: (n: u256) => u256[], v: u256): u256[] { return g(v); }
+      get r(): External<u256[]> { return this.ap(this.mkArr, 100n); }
     }`;
     const SOL = `contract C {
       function mkArr(uint256 n) internal pure returns(uint256[] memory){ uint256[] memory a=new uint256[](3); a[0]=n;a[1]=n+1;a[2]=n+2; return a; }
@@ -220,11 +220,11 @@ describe('P1-18 aggregate-signature internal funcref call', () => {
   });
 
   it('a funcref RETURNING a struct dispatches by memptr', async () => {
-    const JETH = `@struct class P { a: u256; b: u256; }
-    @contract class C {
-      @pure mkP(n: u256): P { let p: P = { a: n, b: n * 2n }; return p; }
-      @pure ap(g: (n: u256) => P, v: u256): P { return g(v); }
-      @external @pure r(): u256 { let p: P = this.ap(this.mkP, 5n); return p.a + p.b; }
+    const JETH = `type P = { a: u256; b: u256; };
+    class C {
+      mkP(n: u256): P { let p: P = { a: n, b: n * 2n }; return p; }
+      ap(g: (n: u256) => P, v: u256): P { return g(v); }
+      get r(): External<u256> { let p: P = this.ap(this.mkP, 5n); return p.a + p.b; }
     }`;
     const SOL = `contract C {
       struct P { uint256 a; uint256 b; }
@@ -238,12 +238,12 @@ describe('P1-18 aggregate-signature internal funcref call', () => {
 
 describe('P1-19 funcref effect over-conservatism', () => {
   it('@view function is NOT poisoned by a same-sig mutating fn that merely exists', async () => {
-    const JETH = `@contract class C {
-      @state s: u256;
-      @pure inc(x: u256): u256 { return x + 1n; }
+    const JETH = `class C {
+      s: u256;
+      inc(x: u256): u256 { return x + 1n; }
       mut(x: u256): u256 { this.s = x; return x; }
-      @view apv(f: (x: u256) => u256, v: u256): u256 { return f(v); }
-      @external @view run(): u256 { return this.apv(this.inc, 5n); }
+      apv(f: (x: u256) => u256, v: u256): u256 { return f(v); }
+      get run(): External<u256> { return this.apv(this.inc, 5n); }
     }`;
     const SOL = `contract C {
       uint256 s;
@@ -257,10 +257,10 @@ describe('P1-19 funcref effect over-conservatism', () => {
   });
 
   it('@view function may TAKE the address of a mutating fn without calling it', async () => {
-    const JETH = `@contract class C {
-      @state s: u256;
+    const JETH = `class C {
+      s: u256;
       mut(x: u256): u256 { this.s = x; return x; }
-      @external @view r(): bool { let g: (x: u256) => u256 = this.mut; let h: (x: u256) => u256 = this.mut; return g == h; }
+      get r(): External<bool> { let g: (x: u256) => u256 = this.mut; let h: (x: u256) => u256 = this.mut; return g == h; }
     }`;
     const SOL = `contract C {
       uint256 s;
@@ -308,11 +308,11 @@ describe('P1-19 funcref effect over-conservatism', () => {
   });
 
   it('a @view pointer whose only target is view is accepted and runs correctly', async () => {
-    const JETH = `@contract class C {
-      @state s: u256;
+    const JETH = `class C {
+      s: u256;
       constructor() { this.s = 100n; }
-      @view rd(x: u256): u256 { return x + this.s; }
-      @external @view vp(v: u256): u256 { let g: (x: u256) => u256 = this.rd; return g(v); }
+      rd(x: u256): u256 { return x + this.s; }
+      get vp(v: u256): External<u256> { let g: (x: u256) => u256 = this.rd; return g(v); }
     }`;
     const SOL = `contract C {
       uint256 s;
@@ -326,10 +326,10 @@ describe('P1-19 funcref effect over-conservatism', () => {
 
 describe('P1-22 funcref tuple component + library funcref value', () => {
   it('a funcref tuple-return component binds and calls byte-identically', async () => {
-    const JETH = `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure mk(): [u256, (x: u256) => u256] { return [7n, this.inc]; }
-      @external @pure run(): u256 { let [a, g] = this.mk(); return a + g(10n); }
+    const JETH = `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      mk(): [u256, (x: u256) => u256] { return [7n, this.inc]; }
+      get run(): External<u256> { let [a, g] = this.mk(); return a + g(10n); }
     }`;
     const SOL = `contract C {
       function inc(uint256 x) internal pure returns(uint256){ return x + 1; }
@@ -340,10 +340,10 @@ describe('P1-22 funcref tuple component + library funcref value', () => {
   });
 
   it('a library internal function used as a funcref value (L.f) dispatches byte-identically', async () => {
-    const JETH = `@library class L { @pure inc(x: u256): u256 { return x + 1n; } }
-    @contract class C {
-      @pure ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
-      @external @pure r(): u256 { let g: (x: u256) => u256 = L.inc; return this.ap(g, 41n); }
+    const JETH = `static class L { inc(x: u256): u256 { return x + 1n; } }
+    class C {
+      ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
+      get r(): External<u256> { let g: (x: u256) => u256 = L.inc; return this.ap(g, 41n); }
     }`;
     const SOL = `library L { function inc(uint256 x) internal pure returns(uint256){ return x + 1; } }
     contract C {
@@ -354,13 +354,13 @@ describe('P1-22 funcref tuple component + library funcref value', () => {
   });
 
   it('an OVERLOADED library funcref take is rejected (both)', () => {
-    const JETH = `@library class L {
-      @pure f(x: u256): u256 { return x; }
-      @pure f(x: u256, y: u256): u256 { return x + y; }
+    const JETH = `static class L {
+      f(x: u256): u256 { return x; }
+      f(x: u256, y: u256): u256 { return x + y; }
     }
-    @contract class C {
-      @pure ap(g: (x: u256) => u256, v: u256): u256 { return g(v); }
-      @external @pure r(): u256 { let p: (x: u256) => u256 = L.f; return this.ap(p, 1n); }
+    class C {
+      ap(g: (x: u256) => u256, v: u256): u256 { return g(v); }
+      get r(): External<u256> { let p: (x: u256) => u256 = L.f; return this.ap(p, 1n); }
     }`;
     expect(jethBuild(JETH).ok).toBe(false);
   });
@@ -372,13 +372,13 @@ describe('P0-32 / boundary: funcref ABI contexts STILL reject (both)', () => {
     'abi.encode a funcref': 'function f() external view returns(bytes memory){ function(uint256) internal pure returns(uint256) p = g; return abi.encode(p); }',
   };
   it('funcref as an @external param stays rejected', () => {
-    const JETH = `@contract class C { @pure g(x: u256): u256 { return x; } @external run(f: (x: u256) => u256): u256 { return f(3n); } }`;
+    const JETH = `class C { g(x: u256): u256 { return x; } run(f: (x: u256) => u256): External<u256> { return f(3n); } }`;
     const SOL = `contract C { function g(uint256 x) internal pure returns(uint256){ return x; } ${rejects['external param (internal type)']} }`;
     expect(jethBuild(JETH).ok).toBe(false);
     expect(solcAccepts(SOL)).toBe(false);
   });
   it('abi.encode of a funcref stays rejected', () => {
-    const JETH = `@contract class C { @pure g(x: u256): u256 { return x; } @external f(): bytes { let p: (x: u256) => u256 = this.g; return abi.encode(p); } }`;
+    const JETH = `class C { g(x: u256): u256 { return x; } get f(): External<bytes> { let p: (x: u256) => u256 = this.g; return abi.encode(p); } }`;
     const SOL = `contract C { function g(uint256 x) internal pure returns(uint256){ return x; } ${rejects['abi.encode a funcref']} }`;
     expect(jethBuild(JETH).ok).toBe(false);
     expect(solcAccepts(SOL)).toBe(false);

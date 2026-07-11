@@ -67,7 +67,7 @@ const STR_SETS: [string, string][] = [
 describe('P0-33: abi.encode of a fixed-outer dynamic-element array', () => {
   it('abi.encode(Arr<string,2>) byte-identical across value sets', async () => {
     const h = await pair(
-      `@contract class C { @external @pure f(s: string, t: string): bytes { let x: Arr<string,2> = [s,t]; return abi.encode(x); } }`,
+      `class C { get f(s: string, t: string): External<bytes> { let x: Arr<string,2> = [s,t]; return abi.encode(x); } }`,
       `contract C { function f(string calldata s, string calldata t) external pure returns (bytes memory) { string[2] memory x=[s,t]; return abi.encode(x);} }`,
     );
     for (const [a, b] of STR_SETS) await cmp(h, 'f(string,string)', twoStr(a, b));
@@ -75,7 +75,7 @@ describe('P0-33: abi.encode of a fixed-outer dynamic-element array', () => {
 
   it('abi.encode(Arr<bytes,2>) byte-identical', async () => {
     const h = await pair(
-      `@contract class C { @external @pure f(s: bytes, t: bytes): bytes { let x: Arr<bytes,2> = [s,t]; return abi.encode(x); } }`,
+      `class C { get f(s: bytes, t: bytes): External<bytes> { let x: Arr<bytes,2> = [s,t]; return abi.encode(x); } }`,
       `contract C { function f(bytes calldata s, bytes calldata t) external pure returns (bytes memory) { bytes[2] memory x=[s,t]; return abi.encode(x);} }`,
     );
     for (const [a, b] of STR_SETS) await cmp(h, 'f(bytes,bytes)', twoStr(a, b));
@@ -83,7 +83,7 @@ describe('P0-33: abi.encode of a fixed-outer dynamic-element array', () => {
 
   it('abi.encode(Arr<u256[],2>) from memory-source inner arrays byte-identical', async () => {
     const h = await pair(
-      `@contract class C { @external @pure f(a: u256[], b: u256[]): bytes { let p: u256[] = a; let q: u256[] = b; let x: Arr<u256[],2> = [p,q]; return abi.encode(x); } }`,
+      `class C { get f(a: u256[], b: u256[]): External<bytes> { let p: u256[] = a; let q: u256[] = b; let x: Arr<u256[],2> = [p,q]; return abi.encode(x); } }`,
       `contract C { function f(uint256[] calldata a, uint256[] calldata b) external pure returns (bytes memory) { uint256[] memory p=a; uint256[] memory q=b; uint256[][2] memory x=[p,q]; return abi.encode(x);} }`,
     );
     for (const [a, b] of [[[1n, 2n], [3n]], [[], []], [[9n, 8n, 7n], []]] as [bigint[], bigint[]][])
@@ -92,13 +92,13 @@ describe('P0-33: abi.encode of a fixed-outer dynamic-element array', () => {
 
   it('keccak256(abi.encode(Arr<string,2>)) and mixed abi.encode(n, x, m) byte-identical', async () => {
     const hk = await pair(
-      `@contract class C { @external @pure f(s: string, t: string): bytes32 { let x: Arr<string,2> = [s,t]; return keccak256(abi.encode(x)); } }`,
+      `class C { get f(s: string, t: string): External<bytes32> { let x: Arr<string,2> = [s,t]; return keccak256(abi.encode(x)); } }`,
       `contract C { function f(string calldata s, string calldata t) external pure returns (bytes32) { string[2] memory x=[s,t]; return keccak256(abi.encode(x));} }`,
     );
     for (const [a, b] of STR_SETS) await cmp(hk, 'f(string,string)', twoStr(a, b));
 
     const hm = await pair(
-      `@contract class C { @external @pure f(n: u256, s: string, t: string, m: u256): bytes { let x: Arr<string,2> = [s,t]; return abi.encode(n, x, m); } }`,
+      `class C { get f(n: u256, s: string, t: string, m: u256): External<bytes> { let x: Arr<string,2> = [s,t]; return abi.encode(n, x, m); } }`,
       `contract C { function f(uint256 n, string calldata s, string calldata t, uint256 m) external pure returns (bytes memory) { string[2] memory x=[s,t]; return abi.encode(n, x, m);} }`,
     );
     // head: n, off(x)=0x80, m; then the string[2] tail at 0x80.
@@ -109,7 +109,7 @@ describe('P0-33: abi.encode of a fixed-outer dynamic-element array', () => {
 
   it('abi.encodeWithSelector / encodeWithSignature of Arr<string,2> byte-identical', async () => {
     const hs = await pair(
-      `@contract class C { @external @pure f(sel: bytes4, s: string, t: string): bytes { let x: Arr<string,2> = [s,t]; return abi.encodeWithSelector(sel, x); } }`,
+      `class C { get f(sel: bytes4, s: string, t: string): External<bytes> { let x: Arr<string,2> = [s,t]; return abi.encodeWithSelector(sel, x); } }`,
       `contract C { function f(bytes4 sel, string calldata s, string calldata t) external pure returns (bytes memory) { string[2] memory x=[s,t]; return abi.encodeWithSelector(sel, x);} }`,
     );
     const b0 = strBlob('ab');
@@ -121,7 +121,7 @@ describe('P0-33: abi.encode of a fixed-outer dynamic-element array', () => {
 describe('P0-34/P0-38: custom @error with a fixed-outer dynamic-element array parameter (full revert data)', () => {
   it('memory-local source: FULL recursive revert data (not the 36-byte pointer-word miscompile)', async () => {
     const h = await pair(
-      `@contract class C { @error Er(xs: Arr<string,2>); @external @pure f(s: string, t: string): void { let x: Arr<string,2> = [s,t]; revert(Er(x)); } }`,
+      `class C { Er: error<{ xs: Arr<string,2> }>; f(s: string, t: string): External<void> { let x: Arr<string,2> = [s,t]; revert(Er(x)); } }`,
       `contract C { error Er(string[2] xs); function f(string calldata s, string calldata t) external pure { string[2] memory x=[s,t]; revert Er(x);} }`,
     );
     for (const [a, b] of STR_SETS) {
@@ -134,13 +134,13 @@ describe('P0-34/P0-38: custom @error with a fixed-outer dynamic-element array pa
 
   it('calldata-param source and inline-literal source byte-identical', async () => {
     const hc = await pair(
-      `@contract class C { @error Er(xs: Arr<string,2>); @external @pure f(xs: Arr<string,2>): void { revert(Er(xs)); } }`,
+      `class C { Er: error<{ xs: Arr<string,2> }>; f(xs: Arr<string,2>): External<void> { revert(Er(xs)); } }`,
       `contract C { error Er(string[2] xs); function f(string[2] calldata xs) external pure { revert Er(xs);} }`,
     );
     for (const [a, b] of STR_SETS) await cmp(hc, 'f(string[2])', W(0x20) + twoStr(a, b));
 
     const hi = await pair(
-      `@contract class C { @error Er(xs: Arr<string,2>); @external @pure f(s: string, t: string): void { revert(Er([s,t])); } }`,
+      `class C { Er: error<{ xs: Arr<string,2> }>; f(s: string, t: string): External<void> { revert(Er([s,t])); } }`,
       `contract C { error Er(string[2] xs); function f(string calldata s, string calldata t) external pure { revert Er([s,t]);} }`,
     );
     await cmp(hi, 'f(string,string)', twoStr('hi', 'world'));
@@ -148,13 +148,13 @@ describe('P0-34/P0-38: custom @error with a fixed-outer dynamic-element array pa
 
   it('Arr<bytes,2> and Arr<u256[],2> error parameters byte-identical', async () => {
     const hb = await pair(
-      `@contract class C { @error Er(xs: Arr<bytes,2>); @external @pure f(s: bytes, t: bytes): void { let x: Arr<bytes,2> = [s,t]; revert(Er(x)); } }`,
+      `class C { Er: error<{ xs: Arr<bytes,2> }>; f(s: bytes, t: bytes): External<void> { let x: Arr<bytes,2> = [s,t]; revert(Er(x)); } }`,
       `contract C { error Er(bytes[2] xs); function f(bytes calldata s, bytes calldata t) external pure { bytes[2] memory x=[s,t]; revert Er(x);} }`,
     );
     for (const [a, b] of STR_SETS) await cmp(hb, 'f(bytes,bytes)', twoStr(a, b));
 
     const hu = await pair(
-      `@contract class C { @error Er(xs: Arr<u256[],2>); @external @pure f(a: u256[], b: u256[]): void { let p: u256[] = a; let q: u256[] = b; let x: Arr<u256[],2> = [p,q]; revert(Er(x)); } }`,
+      `class C { Er: error<{ xs: Arr<u256[],2> }>; f(a: u256[], b: u256[]): External<void> { let p: u256[] = a; let q: u256[] = b; let x: Arr<u256[],2> = [p,q]; revert(Er(x)); } }`,
       `contract C { error Er(uint256[][2] xs); function f(uint256[] calldata a, uint256[] calldata b) external pure { uint256[] memory p=a; uint256[] memory q=b; uint256[][2] memory x=[p,q]; revert Er(x);} }`,
     );
     for (const [a, b] of [[[1n, 2n], [3n]], [[], []]] as [bigint[], bigint[]][])
@@ -165,19 +165,19 @@ describe('P0-34/P0-38: custom @error with a fixed-outer dynamic-element array pa
 describe('P1-7: internal-fn parameter/return and abi.decode of a fixed-outer dynamic-element array', () => {
   it('internal g(Arr<string,2>): element read / .length / literal arg byte-identical', async () => {
     const he = await pair(
-      `@contract class C { g(xs: Arr<string,2>): string { return xs[0n]; } @external @pure f(s: string, t: string): string { let x: Arr<string,2> = [s,t]; return this.g(x); } }`,
+      `class C { g(xs: Arr<string,2>): string { return xs[0n]; } get f(s: string, t: string): External<string> { let x: Arr<string,2> = [s,t]; return this.g(x); } }`,
       `contract C { function g(string[2] memory xs) internal pure returns (string memory) { return xs[0]; } function f(string calldata s, string calldata t) external pure returns (string memory) { string[2] memory x=[s,t]; return g(x);} }`,
     );
     for (const [a, b] of STR_SETS) await cmp(he, 'f(string,string)', twoStr(a, b));
 
     const hl = await pair(
-      `@contract class C { g(xs: Arr<string,2>): u256 { return xs.length; } @external @pure f(s: string, t: string): u256 { let x: Arr<string,2> = [s,t]; return this.g(x); } }`,
+      `class C { g(xs: Arr<string,2>): u256 { return xs.length; } get f(s: string, t: string): External<u256> { let x: Arr<string,2> = [s,t]; return this.g(x); } }`,
       `contract C { function g(string[2] memory xs) internal pure returns (uint256) { return xs.length; } function f(string calldata s, string calldata t) external pure returns (uint256) { string[2] memory x=[s,t]; return g(x);} }`,
     );
     await cmp(hl, 'f(string,string)', twoStr('aa', 'bbbb'));
 
     const hlit = await pair(
-      `@contract class C { g(xs: Arr<string,2>): string { return xs[1n]; } @external @pure f(s: string, t: string): string { return this.g([s,t]); } }`,
+      `class C { g(xs: Arr<string,2>): string { return xs[1n]; } get f(s: string, t: string): External<string> { return this.g([s,t]); } }`,
       `contract C { function g(string[2] memory xs) internal pure returns (string memory) { return xs[1]; } function f(string calldata s, string calldata t) external pure returns (string memory) { return g([s,t]);} }`,
     );
     await cmp(hlit, 'f(string,string)', twoStr('aa', 'bbbbbb'));
@@ -185,13 +185,13 @@ describe('P1-7: internal-fn parameter/return and abi.decode of a fixed-outer dyn
 
   it('internal g returning Arr<string,2>: bind the result + read / direct return byte-identical', async () => {
     const hb = await pair(
-      `@contract class C { g(xs: Arr<string,2>): Arr<string,2> { return xs; } @external @pure f(s: string, t: string): string { let x: Arr<string,2> = [s,t]; let y: Arr<string,2> = this.g(x); return y[1n]; } }`,
+      `class C { g(xs: Arr<string,2>): Arr<string,2> { return xs; } get f(s: string, t: string): External<string> { let x: Arr<string,2> = [s,t]; let y: Arr<string,2> = this.g(x); return y[1n]; } }`,
       `contract C { function g(string[2] memory xs) internal pure returns (string[2] memory) { return xs; } function f(string calldata s, string calldata t) external pure returns (string memory) { string[2] memory x=[s,t]; string[2] memory y=g(x); return y[1];} }`,
     );
     for (const [a, b] of STR_SETS) await cmp(hb, 'f(string,string)', twoStr(a, b));
 
     const hd = await pair(
-      `@contract class C { g(xs: Arr<string,2>): Arr<string,2> { return xs; } @external @pure f(s: string, t: string): Arr<string,2> { let x: Arr<string,2> = [s,t]; return this.g(x); } }`,
+      `class C { g(xs: Arr<string,2>): Arr<string,2> { return xs; } get f(s: string, t: string): External<Arr<string,2>> { let x: Arr<string,2> = [s,t]; return this.g(x); } }`,
       `contract C { function g(string[2] memory xs) internal pure returns (string[2] memory) { return xs; } function f(string calldata s, string calldata t) external pure returns (string[2] memory) { string[2] memory x=[s,t]; return g(x);} }`,
     );
     for (const [a, b] of STR_SETS) await cmp(hd, 'f(string,string)', twoStr(a, b));
@@ -199,7 +199,7 @@ describe('P1-7: internal-fn parameter/return and abi.decode of a fixed-outer dyn
 
   it('internal g(Arr<u256[],2>): re-encode inside callee byte-identical', async () => {
     const h = await pair(
-      `@contract class C { g(xs: Arr<u256[],2>): bytes { return abi.encode(xs); } @external @pure f(a: u256[], b: u256[]): bytes { let p: u256[] = a; let q: u256[] = b; let x: Arr<u256[],2> = [p,q]; return this.g(x); } }`,
+      `class C { g(xs: Arr<u256[],2>): bytes { return abi.encode(xs); } get f(a: u256[], b: u256[]): External<bytes> { let p: u256[] = a; let q: u256[] = b; let x: Arr<u256[],2> = [p,q]; return this.g(x); } }`,
       `contract C { function g(uint256[][2] memory xs) internal pure returns (bytes memory) { return abi.encode(xs); } function f(uint256[] calldata a, uint256[] calldata b) external pure returns (bytes memory) { uint256[] memory p=a; uint256[] memory q=b; uint256[][2] memory x=[p,q]; return g(x);} }`,
     );
     for (const [a, b] of [[[1n, 2n, 3n], [9n]], [[], []]] as [bigint[], bigint[]][])
@@ -213,13 +213,13 @@ describe('P1-7: internal-fn parameter/return and abi.decode of a fixed-outer dyn
       return W(0x40) + W(0x40 + b0.length / 2) + b0 + strBlob(b);
     };
     const h0 = await pair(
-      `@contract class C { @external @pure f(b: bytes): string { let x: Arr<string,2> = abi.decode(b, Arr<string,2>); return x[0n]; } }`,
+      `class C { get f(b: bytes): External<string> { let x: Arr<string,2> = abi.decode(b, Arr<string,2>); return x[0n]; } }`,
       `contract C { function f(bytes calldata b) external pure returns (string memory) { string[2] memory x=abi.decode(b,(string[2])); return x[0]; } }`,
     );
     for (const [a, b] of STR_SETS) await cmp(h0, 'f(bytes)', wrap(payload(a, b)));
 
     const hr = await pair(
-      `@contract class C { @external @pure f(b: bytes): bytes { let x: Arr<string,2> = abi.decode(b, Arr<string,2>); return abi.encode(x); } }`,
+      `class C { get f(b: bytes): External<bytes> { let x: Arr<string,2> = abi.decode(b, Arr<string,2>); return abi.encode(x); } }`,
       `contract C { function f(bytes calldata b) external pure returns (bytes memory) { string[2] memory x=abi.decode(b,(string[2])); return abi.encode(x); } }`,
     );
     await cmp(hr, 'f(bytes)', wrap(payload('hi', 'there')));
@@ -228,7 +228,7 @@ describe('P1-7: internal-fn parameter/return and abi.decode of a fixed-outer dyn
   it('malformed abi.decode(b, Arr<string,2>) reverts identically to solc', async () => {
     const wrap = (hex: string) => W(0x20) + W(hex.length / 2) + hex.padEnd(Math.ceil((hex.length || 1) / 64) * 64, '0');
     const h = await pair(
-      `@contract class C { @external @pure f(b: bytes): string { let x: Arr<string,2> = abi.decode(b, Arr<string,2>); return x[0n]; } }`,
+      `class C { get f(b: bytes): External<string> { let x: Arr<string,2> = abi.decode(b, Arr<string,2>); return x[0n]; } }`,
       `contract C { function f(bytes calldata b) external pure returns (string memory) { string[2] memory x=abi.decode(b,(string[2])); return x[0]; } }`,
     );
     const bads = [
@@ -254,14 +254,14 @@ describe('adjacency: shapes solc rejects (or JETH cannot lift safely) still reje
   it('abi.encodePacked(Arr<string,2>) rejects (solc rejects nested arrays in packed)', () => {
     expect(
       rejects(
-        `@contract class C { @external @pure f(s: string): bytes { let x: Arr<string,2> = [s,s]; return abi.encodePacked(x); } }`,
+        `class C { get f(s: string): External<bytes> { let x: Arr<string,2> = [s,s]; return abi.encodePacked(x); } }`,
       ),
     ).toBe(true);
   });
   it('a funcref-bearing fixed array is never ABI-encodable', () => {
     expect(
       rejects(
-        `@contract class C { @external @pure f(): bytes { let x: Arr<((x:u256)=>u256)[],2> = [new Array<(x:u256)=>u256>(0n), new Array<(x:u256)=>u256>(0n)]; return abi.encode(x); } }`,
+        `class C { get f(): External<bytes> { let x: Arr<((x:u256)=>u256)[],2> = [new Array<(x:u256)=>u256>(0n), new Array<(x:u256)=>u256>(0n)]; return abi.encode(x); } }`,
       ),
     ).toBe(true);
   });
@@ -272,7 +272,7 @@ describe('adjacency: shapes solc rejects (or JETH cannot lift safely) still reje
     // read/write/return/storage matrix lives in fixed-dyn-struct-array-local.test.ts).
     expect(
       rejects(
-        `@struct class D { a: u256; s: string; } @contract class C { @external @pure f(): bytes { let d: D = D(1n, "x"); let x: Arr<D,2> = [d,d]; return abi.encode(x); } }`,
+        `type D = { a: u256; s: string; }; class C { get f(): External<bytes> { let d: D = D(1n, "x"); let x: Arr<D,2> = [d,d]; return abi.encode(x); } }`,
       ),
     ).toBe(false);
   });

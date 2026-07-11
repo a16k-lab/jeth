@@ -16,31 +16,31 @@ const sel = (s: string) => functionSelector(s);
 
 // Inferred mutability: @read (-> pure/view from the body) and @external alone (-> nonpayable).
 // `sum` / `pubImpl` carry no @external, so they are internal helpers (not in the ABI).
-const INFERRED = `@contract class C {
-  @state x: u256; @state y: u256;
-  @external setXY(a: u256, b: u256): void { this.x = a; this.y = b; }
-  @external @read addOne(a: u256): u256 { return a + 1n; }
-  @external @read getX(): u256 { return this.x; }
-  @external @read who(): address { return msg.sender; }
-  @external @read viaHelper(): u256 { return this.sum(); }
+const INFERRED = `class C {
+  x: u256; y: u256;
+  setXY(a: u256, b: u256): External<void> { this.x = a; this.y = b; }
+  get addOne(a: u256): External<u256> { return a + 1n; }
+  get getX(): External<u256> { return this.x; }
+  get who(): External<address> { return msg.sender; }
+  get viaHelper(): External<u256> { return this.sum(); }
   sum(): u256 { return this.x + this.y; }
-  @external extOnly(): u256 { return 42n; }
-  @external pubTarget(): u256 { return this.pubImpl(); }
-  @external caller(): u256 { return this.pubImpl() + 1n; }
+  get extOnly(): External<u256> { return 42n; }
+  get pubTarget(): External<u256> { return this.pubImpl(); }
+  get caller(): External<u256> { return this.pubImpl() + 1n; }
   pubImpl(): u256 { return 7n; }
 }`;
 // Explicit mutability: the SAME contract with @view/@pure spelled out instead of inferred.
-const EXPLICIT = `@contract class C {
-  @state x: u256; @state y: u256;
-  @external setXY(a: u256, b: u256): void { this.x = a; this.y = b; }
-  @external @pure addOne(a: u256): u256 { return a + 1n; }
-  @external @view getX(): u256 { return this.x; }
-  @external @view who(): address { return msg.sender; }
-  @external @view viaHelper(): u256 { return this.sum(); }
+const EXPLICIT = `class C {
+  x: u256; y: u256;
+  setXY(a: u256, b: u256): External<void> { this.x = a; this.y = b; }
+  get addOne(a: u256): External<u256> { return a + 1n; }
+  get getX(): External<u256> { return this.x; }
+  get who(): External<address> { return msg.sender; }
+  get viaHelper(): External<u256> { return this.sum(); }
   sum(): u256 { return this.x + this.y; }
-  @external @pure extOnly(): u256 { return 42n; }
-  @external @pure pubTarget(): u256 { return this.pubImpl(); }
-  @external @pure caller(): u256 { return this.pubImpl() + 1n; }
+  get extOnly(): External<u256> { return 42n; }
+  get pubTarget(): External<u256> { return this.pubImpl(); }
+  get caller(): External<u256> { return this.pubImpl() + 1n; }
   pubImpl(): u256 { return 7n; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT

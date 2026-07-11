@@ -20,9 +20,9 @@ const A2 = 0xb0b0000000000000000000000000000000000n;
 // state-mutating path, recursion, and a generic-calling-generic. The Solidity
 // twin hand-writes the equivalent non-generic helpers (the generic is erased).
 // ---------------------------------------------------------------------------
-const JETH = `@contract class C {
-  @state acc: u256;
-  @state lastAddr: address;
+const JETH = `class C {
+  acc: u256;
+  lastAddr: address;
 
   // a generic max/min/clamp over an ordered value type
   maxg<T>(a: T, b: T): T { return a > b ? a : b; }
@@ -34,25 +34,25 @@ const JETH = `@contract class C {
   powg<T>(base: T, exp: u256, acc: T): T { return exp == 0n ? acc : this.powg<T>(base, exp - 1n, acc * base); }
 
   // u256 wrappers (inference)
-  @external maxU(a: u256, b: u256): u256 { return this.maxg(a, b); }
-  @external minU(a: u256, b: u256): u256 { return this.ming(a, b); }
+  get maxU(a: u256, b: u256): External<u256> { return this.maxg(a, b); }
+  get minU(a: u256, b: u256): External<u256> { return this.ming(a, b); }
   // u8 wrappers (explicit type args)
-  @external maxU8(a: u8, b: u8): u8 { return this.maxg<u8>(a, b); }
+  get maxU8(a: u8, b: u8): External<u8> { return this.maxg<u8>(a, b); }
   // i128 signed wrappers (inference) - signed comparison must match solc
-  @external maxI(a: i128, b: i128): i128 { return this.maxg(a, b); }
-  @external minI(a: i128, b: i128): i128 { return this.ming(a, b); }
+  get maxI(a: i128, b: i128): External<i128> { return this.maxg(a, b); }
+  get minI(a: i128, b: i128): External<i128> { return this.ming(a, b); }
   // clamp at two distinct types coexisting (u256 + i128)
-  @external clampU(v: u256, lo: u256, hi: u256): u256 { return this.clampg<u256>(v, lo, hi); }
-  @external clampI(v: i128, lo: i128, hi: i128): i128 { return this.clampg(v, lo, hi); }
+  get clampU(v: u256, lo: u256, hi: u256): External<u256> { return this.clampg<u256>(v, lo, hi); }
+  get clampI(v: i128, lo: i128, hi: i128): External<i128> { return this.clampg(v, lo, hi); }
   // address equality (a value type that is not ordered)
-  @external addrEq(a: address, b: address): bool { return this.eqg(a, b); }
+  get addrEq(a: address, b: address): External<bool> { return this.eqg(a, b); }
   // recursion: pow at u256 and u64 (two specializations of the same recursive generic)
-  @external powU(b: u256, e: u256): u256 { return this.powg<u256>(b, e, 1n); }
-  @external powU64(b: u64, e: u256): u64 { return this.powg<u64>(b, e, 1n); }
+  get powU(b: u256, e: u256): External<u256> { return this.powg<u256>(b, e, 1n); }
+  get powU64(b: u64, e: u256): External<u64> { return this.powg<u64>(b, e, 1n); }
 
   // a state-mutating path computed through a generic (raw-slot comparison)
-  @external setClamped(v: u256, lo: u256, hi: u256): void { this.acc = this.clampg<u256>(v, lo, hi); }
-  @external setMaxAddr(a: address, b: address): void { this.lastAddr = this.maxgAddrSelect(a, b); }
+  setClamped(v: u256, lo: u256, hi: u256): External<void> { this.acc = this.clampg<u256>(v, lo, hi); }
+  setMaxAddr(a: address, b: address): External<void> { this.lastAddr = this.maxgAddrSelect(a, b); }
   // address has no '>' in solc; select via eq to keep the twin honest
   maxgAddrSelect(a: address, b: address): address { return this.eqg<address>(a, b) ? a : b; }
 }`;
@@ -171,7 +171,7 @@ describe('generics: monomorphization is byte-identical to solc', () => {
 // A bytes32 specialization and a loop-driven generic (a fold), to broaden the
 // value-type coverage beyond the integer/address cases above.
 // ---------------------------------------------------------------------------
-const JETH2 = `@contract class C {
+const JETH2 = `class C {
   eqg<T>(a: T, b: T): bool { return a == b; }
   selg<T>(c: bool, a: T, b: T): T { return c ? a : b; }
   // a loop-driven generic fold: sum 1..=n into an accumulator of type T
@@ -180,10 +180,10 @@ const JETH2 = `@contract class C {
     for (let i: u256 = 0n; i < n; i++) { s = s + seed; }
     return s;
   }
-  @external eqB(a: bytes32, b: bytes32): bool { return this.eqg(a, b); }
-  @external selB(c: bool, a: bytes32, b: bytes32): bytes32 { return this.selg(c, a, b); }
-  @external foldU(n: u256, seed: u256): u256 { return this.sumLoop<u256>(n, seed); }
-  @external foldU16(n: u256, seed: u16): u16 { return this.sumLoop<u16>(n, seed); }
+  get eqB(a: bytes32, b: bytes32): External<bool> { return this.eqg(a, b); }
+  get selB(c: bool, a: bytes32, b: bytes32): External<bytes32> { return this.selg(c, a, b); }
+  get foldU(n: u256, seed: u256): External<u256> { return this.sumLoop<u256>(n, seed); }
+  get foldU16(n: u256, seed: u16): External<u16> { return this.sumLoop<u16>(n, seed); }
 }`;
 const SOL2 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -234,13 +234,13 @@ describe('generics: bytes32 + loop-driven specializations match solc', () => {
 // hand-written u256 function (the specialized body is structurally identical).
 // ---------------------------------------------------------------------------
 describe('generics: a u256 specialization is byte-identical to a hand-written u256 helper', () => {
-  const GEN = `@contract class C {
+  const GEN = `class C {
     maxg<T>(a: T, b: T): T { return a > b ? a : b; }
-    @external m(a: u256, b: u256): u256 { return this.maxg(a, b); }
+    get m(a: u256, b: u256): External<u256> { return this.maxg(a, b); }
   }`;
-  const HAND = `@contract class C {
+  const HAND = `class C {
     maxh(a: u256, b: u256): u256 { return a > b ? a : b; }
-    @external m(a: u256, b: u256): u256 { return this.maxh(a, b); }
+    get m(a: u256, b: u256): External<u256> { return this.maxh(a, b); }
   }`;
   it('identical runtime AND creation bytecode (modulo helper name, which is internal)', () => {
     const g = compile(GEN, { fileName: 'C.jeth' });
@@ -253,8 +253,8 @@ describe('generics: a u256 specialization is byte-identical to a hand-written u2
   });
 
   it('explicit type args and inference give the identical contract', () => {
-    const inferred = `@contract class C { f<T>(a: T): T { return a; } @external g(x: u256): u256 { return this.f(x); } }`;
-    const explicit = `@contract class C { f<T>(a: T): T { return a; } @external g(x: u256): u256 { return this.f<u256>(x); } }`;
+    const inferred = `class C { f<T>(a: T): T { return a; } get g(x: u256): External<u256> { return this.f(x); } }`;
+    const explicit = `class C { f<T>(a: T): T { return a; } get g(x: u256): External<u256> { return this.f<u256>(x); } }`;
     const a = compile(inferred, { fileName: 'C.jeth' });
     const b = compile(explicit, { fileName: 'C.jeth' });
     expect(a.creationBytecode).toBe(b.creationBytecode);
@@ -270,49 +270,49 @@ describe('generics: specialization dedup, brand distinction, and the emit workli
     [...compile(src, { fileName: 'C.jeth' }).yul.matchAll(/function (userfn_[A-Za-z0-9_$]+)\(/g)].map((m) => m[1]!);
 
   it('the same type instantiated at multiple call sites emits one specialization', () => {
-    const src = `@contract class C {
+    const src = `class C {
       idf<T>(a: T): T { return a; }
-      @external g(x: u256): u256 { return this.idf(x) + this.idf<u256>(x); }
+      get g(x: u256): External<u256> { return this.idf(x) + this.idf<u256>(x); }
     }`;
     expect(yulFns(src)).toEqual(['userfn_idf$uint256']);
   });
 
   it('the same generic at multiple types emits one specialization per type', () => {
-    const src = `@contract class C {
+    const src = `class C {
       idf<T>(a: T): T { return a; }
-      @external u(x: u256): u256 { return this.idf(x); }
-      @external b(x: u8): u8 { return this.idf(x); }
-      @external i(x: i128): i128 { return this.idf(x); }
+      get u(x: u256): External<u256> { return this.idf(x); }
+      get b(x: u8): External<u8> { return this.idf(x); }
+      get i(x: i128): External<i128> { return this.idf(x); }
     }`;
     expect(new Set(yulFns(src))).toEqual(new Set(['userfn_idf$uint256', 'userfn_idf$uint8', 'userfn_idf$int128']));
   });
 
   it('a branded newtype and its base are DISTINCT specializations (nominal identity)', () => {
     const src = `type Wei = Brand<u256>;
-    @contract class C {
+    class C {
       idf<T>(a: T): T { return a; }
-      @external w(a: Wei): Wei { return this.idf(a); }
-      @external u(a: u256): u256 { return this.idf(a); }
+      get w(a: Wei): External<Wei> { return this.idf(a); }
+      get u(a: u256): External<u256> { return this.idf(a); }
     }`;
     const fns = yulFns(src);
     expect(new Set(fns)).toEqual(new Set(['userfn_idf$b_Wei_uint256', 'userfn_idf$uint256']));
   });
 
   it('a generic never called is dead and emits nothing', () => {
-    const src = `@contract class C {
+    const src = `class C {
       unused<T>(a: T): T { return a; }
-      @external g(x: u256): u256 { return x; }
+      get g(x: u256): External<u256> { return x; }
     }`;
     expect(yulFns(src)).toEqual([]);
   });
 
   it('a generic calling another generic (and recursion) drains the worklist', () => {
-    const src = `@contract class C {
+    const src = `class C {
       id<T>(a: T): T { return a; }
       dbl<T>(a: T): T { return this.id<T>(a) + this.id<T>(a); }
       sumTo<T>(n: T, acc: T): T { return n == 0n ? acc : this.sumTo<T>(n - 1n, acc + n); }
-      @external d(x: u64): u64 { return this.dbl(x); }
-      @external s(x: u32): u32 { return this.sumTo<u32>(x, 0n); }
+      get d(x: u64): External<u64> { return this.dbl(x); }
+      get s(x: u32): External<u32> { return this.sumTo<u32>(x, 0n); }
     }`;
     const fns = new Set(yulFns(src));
     // dbl<u64> -> id<u64>; sumTo<u32> recurses into itself (one specialization)
@@ -352,55 +352,55 @@ describe('generics: compile-time diagnostics', () => {
   it('JETH291: a non-value type argument (array / struct / bytes)', () => {
     expect(
       errCodes(
-        '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<u256[]>(x); } }',
+        'class C { f<T>(a: u256): u256 { return a; } get g(x:u256):External<u256> { return this.f<u256[]>(x); } }',
       ),
     ).toContain('JETH291');
     expect(
       errCodes(
-        '@contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<bytes>(x); } }',
+        'class C { f<T>(a: u256): u256 { return a; } get g(x:u256):External<u256> { return this.f<bytes>(x); } }',
       ),
     ).toContain('JETH291');
-    const structSrc = `@struct class P { x: u256; y: u256; }
-    @contract class C { f<T>(a: u256): u256 { return a; } @external g(x:u256):u256 { return this.f<P>(x); } }`;
+    const structSrc = `type P = { x: u256; y: u256; };
+    class C { f<T>(a: u256): u256 { return a; } get g(x:u256):External<u256> { return this.f<P>(x); } }`;
     expect(errCodes(structSrc)).toContain('JETH291');
   });
 
   it('JETH292: a type parameter inferable only from the return type, with no explicit arg', () => {
-    const src = `@contract class C { f<T>(a: u256): T { return T(a); } @external g(x:u256):u256 { return u256(this.f(x)); } }`;
+    const src = `class C { f<T>(a: u256): T { return T(a); } get g(x:u256):External<u256> { return u256(this.f(x)); } }`;
     expect(errCodes(src)).toContain('JETH292');
   });
 
   it('JETH293: an inference conflict (same T inferred as two different types)', () => {
-    const src = `@contract class C { f<T>(a: T, b: T): T { return a; } @external g(a:u256,b:u8):u256 { return this.f(a, b); } }`;
+    const src = `class C { f<T>(a: T, b: T): T { return a; } get g(a:u256,b:u8):External<u256> { return this.f(a, b); } }`;
     expect(errCodes(src)).toContain('JETH293');
   });
 
   it('an instantiation whose body op is invalid for the type surfaces a diagnostic (no crash)', () => {
     // a + b on an address is not a valid arithmetic op; the specialization surfaces the normal
     // binary-op diagnostic at the call (instantiated at address).
-    const src = `@contract class C { add<T>(a: T, b: T): T { return a + b; } @external g(a:address,b:address):address { return this.add(a, b); } }`;
+    const src = `class C { add<T>(a: T, b: T): T { return a + b; } get g(a:address,b:address):External<address> { return this.add(a, b); } }`;
     const codes = errCodes(src);
     expect(codes.length).toBeGreaterThan(0); // a precise diagnostic, not a crash
     // u256 instantiation of the SAME generic is independent and valid (no error)
-    const okSrc = `@contract class C { add<T>(a: T, b: T): T { return a + b; } @external g(a:u256,b:u256):u256 { return this.add(a, b); } }`;
+    const okSrc = `class C { add<T>(a: T, b: T): T { return a + b; } get g(a:u256,b:u256):External<u256> { return this.add(a, b); } }`;
     expect(errCodes(okSrc)).toEqual([]);
   });
 
   it('JETH296: a user function whose name collides with a specialization mangled name', () => {
-    const src = `@contract class C {
+    const src = `class C {
       idf<T>(a: T): T { return a; }
       idf$uint256(a: u256): u256 { return a; }
-      @external g(x: u256): u256 { return this.idf(x) + this.idf$uint256(x); }
+      get g(x: u256): External<u256> { return this.idf(x) + this.idf$uint256(x); }
     }`;
     expect(errCodes(src)).toContain('JETH296');
   });
 
   it('two instantiations of one generic are independent: one valid, one invalid', () => {
     // `a + b` is valid at u256 but invalid at address; only the address instantiation errors.
-    const src = `@contract class C {
+    const src = `class C {
       add<T>(a: T, b: T): T { return a + b; }
-      @external ok(a: u256, b: u256): u256 { return this.add(a, b); }
-      @external bad(a: address, b: address): address { return this.add(a, b); }
+      get ok(a: u256, b: u256): External<u256> { return this.add(a, b); }
+      get bad(a: address, b: address): External<address> { return this.add(a, b); }
     }`;
     expect(errCodes(src).length).toBeGreaterThan(0);
   });

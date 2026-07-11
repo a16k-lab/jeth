@@ -31,14 +31,14 @@ describe('#8 lift: calldata bytes[]-field element byte-index xs[i].tags[j][k] - 
     const L = parseInt(raw.slice(64, 128), 16);
     const args = raw.slice(128, 128 + L * 2);
 
-    const J = `@struct class P { tags: bytes[]; }
-      @contract class C {
-        @external @view b00(xs: P[]): bytes1 { return xs[0n].tags[0n][0n]; }
-        @external @view b10(xs: P[]): bytes1 { return xs[0n].tags[1n][0n]; }
-        @external @view b21(xs: P[]): bytes1 { return xs[0n].tags[2n][1n]; }
-        @external @view len(xs: P[]): u256 { return xs[0n].tags.length; }
-        @external @view whole(xs: P[]): bytes { return xs[0n].tags[1n]; }
-        @external @view oob(xs: P[]): bytes1 { return xs[0n].tags[0n][5n]; } }`;
+    const J = `type P = { tags: bytes[]; };
+      class C {
+        get b00(xs: P[]): External<bytes1> { return xs[0n].tags[0n][0n]; }
+        get b10(xs: P[]): External<bytes1> { return xs[0n].tags[1n][0n]; }
+        get b21(xs: P[]): External<bytes1> { return xs[0n].tags[2n][1n]; }
+        get len(xs: P[]): External<u256> { return xs[0n].tags.length; }
+        get whole(xs: P[]): External<bytes> { return xs[0n].tags[1n]; }
+        get oob(xs: P[]): External<bytes1> { return xs[0n].tags[0n][5n]; } }`;
     const S = `struct P { bytes[] tags; }
       contract C {
         function b00(P[] calldata xs) external pure returns(bytes1){ return xs[0].tags[0][0]; }
@@ -60,10 +60,10 @@ describe('#8 lift: calldata bytes[]-field element byte-index xs[i].tags[j][k] - 
 
   it('boundaries: memory twin accepts, string[] element rejects (JETH205), value-array element unaffected', () => {
     // memory twin already lifted (byte-identical) - stays accepted
-    expect(rejects(`@struct class P { tags: bytes[]; } @contract class C { @external @pure r(): bytes1 { let t: bytes[] = ["ab","cd"]; let xs: P[] = [P(t)]; return xs[0n].tags[0n][0n]; } }`)).toBe(false);
+    expect(rejects(`type P = { tags: bytes[]; }; class C { get r(): External<bytes1> { let t: bytes[] = ["ab","cd"]; let xs: P[] = [P(t)]; return xs[0n].tags[0n][0n]; } }`)).toBe(false);
     // string[] element is not byte-indexable in solc either
-    expect(rejects(`@struct class PS { tags: string[]; } @contract class C { @external @view r(xs: PS[]): bytes1 { return xs[0n].tags[0n][0n]; } }`)).toBe(true);
+    expect(rejects(`type PS = { tags: string[]; }; class C { get r(xs: PS[]): External<bytes1> { return xs[0n].tags[0n][0n]; } }`)).toBe(true);
     // the accepted whole-element read is unchanged
-    expect(rejects(`@struct class P { tags: bytes[]; } @contract class C { @external @view r(xs: P[]): bytes { return xs[0n].tags[0n]; } }`)).toBe(false);
+    expect(rejects(`type P = { tags: bytes[]; }; class C { get r(xs: P[]): External<bytes> { return xs[0n].tags[0n]; } }`)).toBe(false);
   });
 });

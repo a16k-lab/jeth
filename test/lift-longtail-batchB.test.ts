@@ -65,58 +65,58 @@ const rejects = (src: string): boolean => {
 
 describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to solc 0.8.35', () => {
   it('B1: ternary over ref-element literals - encode/bind/emit/internal-arg/return, aliasing witnesses', async () => {
-    const J = `@contract class C {
-  @event E(m: Arr<u256[], 2>);
+    const J = `class C {
+  E: event<{ m: Arr<u256[], 2> }>;
   h(m: Arr<u256[], 2>): u256 { return m[0n][0n] * 100n + m[1n].length; }
-  @external @pure enc(c: bool): bytes {
+  get enc(c: bool): External<bytes> {
     let a: u256[] = [1n, 2n]; let b: u256[] = [3n];
     return abi.encode(c ? [a, b] : [b, a]);
   }
-  @external @pure bind(c: bool): u256 {
+  get bind(c: bool): External<u256> {
     let a: u256[] = [1n, 2n]; let b: u256[] = [3n];
     let m: Arr<u256[], 2> = c ? [a, b] : [b, a];
     return m[0n][0n] * 100n + m[1n].length;
   }
-  @external @pure alias(c: bool): u256 {
+  get alias(c: bool): External<u256> {
     let a: u256[] = [1n, 2n]; let b: u256[] = [3n];
     let m: Arr<u256[], 2> = c ? [a, b] : [b, a];
     m[0n][0n] = 99n;
     return a[0n] * 1000n + b[0n];
   }
-  @external @pure locals(c: bool): u256 {
+  get locals(c: bool): External<u256> {
     let a: u256[] = [1n]; let b: u256[] = [2n];
     let m1: Arr<u256[], 2> = [a, a]; let m2: Arr<u256[], 2> = [b, b];
     let m: Arr<u256[], 2> = c ? m1 : m2;
     m[0n][0n] = 88n;
     return m1[0n][0n] * 100n + m2[0n][0n];
   }
-  @external ev(c: bool): void {
+  ev(c: bool): External<void> {
     let a: u256[] = [1n, 2n]; let b: u256[] = [3n];
     emit(E(c ? [a, b] : [b, a]));
   }
-  @external @pure iarg(c: bool): u256 {
+  get iarg(c: bool): External<u256> {
     let a: u256[] = [7n]; let b: u256[] = [8n, 9n];
     return this.h(c ? [a, b] : [b, a]);
   }
-  @external @pure ret(c: bool): Arr<u256[], 2> {
+  get ret(c: bool): External<Arr<u256[], 2>> {
     let a: u256[] = [7n]; let b: u256[] = [8n, 9n];
     return c ? [a, b] : [b, a];
   }
-  @external @pure nest(c: bool, d: bool): bytes {
+  get nest(c: bool, d: bool): External<bytes> {
     let a: u256[] = [1n]; let b: u256[] = [2n];
     return abi.encode(c ? [a, b] : (d ? [b, a] : [a, a]));
   }
-  @external @pure didx(c: bool): u256 {
+  get didx(c: bool): External<u256> {
     let a: u256[] = [11n, 12n]; let b: u256[] = [13n];
     return (c ? [a, b] : [b, a])[0n][0n];
   }
-  @external @pure twr(c: bool): u256 {
+  get twr(c: bool): External<u256> {
     let a: u256[] = [1n]; let b: u256[] = [2n];
     let m1: Arr<u256[], 2> = [a, a]; let m2: Arr<u256[], 2> = [b, b];
     (c ? m1 : m2)[0n][0n] = 66n;
     return m1[0n][0n] * 100n + m2[0n][0n];
   }
-  @external @pure oob(c: bool, i: u256): u256 {
+  get oob(c: bool, i: u256): External<u256> {
     let a: u256[] = [1n]; let b: u256[] = [2n];
     let m: Arr<u256[], 2> = c ? [a, b] : [b, a];
     return m[i][0n];
@@ -228,37 +228,37 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
     }
     // parity gates: cd|storage mix inside a branch literal both-reject; per-branch length mismatch rejects
     expect(
-      rejects(`@contract class C { @state s1: u256[]; @external f(c: bool, a: u256[]): bytes { let b: u256[] = [1n]; return abi.encode(c ? [a, this.s1] : [b, b]); } }`),
+      rejects(`class C { s1: u256[]; get f(c: bool, a: u256[]): External<bytes> { let b: u256[] = [1n]; return abi.encode(c ? [a, this.s1] : [b, b]); } }`),
     ).toBe(true);
     expect(
-      rejects(`@contract class C { @external @pure f(c: bool): bytes { let a: u256[] = [1n]; let b: u256[] = [2n]; return abi.encode(c ? [a, b] : [a]); } }`),
+      rejects(`class C { get f(c: bool): External<bytes> { let a: u256[] = [1n]; let b: u256[] = [2n]; return abi.encode(c ? [a, b] : [a]); } }`),
     ).toBe(true);
   });
 
   it('B1 closure: storage branches (deep-copy witness, storage|storage) + storage-WRITE consumer', async () => {
-    const J = `@contract class C {
-  @state sA: Arr<u256[], 2>;
-  @state sB: Arr<u256[], 2>;
-  @state v: Arr<u256, 2>;
-  @external seed(): void { this.sA[0n].push(5n); this.sA[1n].push(6n); this.sB[0n].push(7n); this.sB[1n].push(8n); this.sB[1n].push(9n); }
-  @external stw(c: bool): u256 {
+    const J = `class C {
+  sA: Arr<u256[], 2>;
+  sB: Arr<u256[], 2>;
+  v: Arr<u256, 2>;
+  seed(): External<void> { this.sA[0n].push(5n); this.sA[1n].push(6n); this.sB[0n].push(7n); this.sB[1n].push(8n); this.sB[1n].push(9n); }
+  get stw(c: bool): External<u256> {
     let a: u256[] = [1n]; let b: u256[] = [2n];
     let m: Arr<u256[], 2> = c ? this.sA : [a, b];
     m[0n][0n] = 99n;
     return this.sA[0n][0n] * 1000n + m[0n][0n];
   }
-  @external stst(c: bool): bytes { return abi.encode(c ? this.sA : this.sB); }
-  @external wr(c: bool): void {
+  get stst(c: bool): External<bytes> { return abi.encode(c ? this.sA : this.sB); }
+  wr(c: bool): External<void> {
     let a: u256[] = [1n]; let b: u256[] = [2n, 3n];
     this.sA = c ? [a, b] : [b, a];
   }
-  @external wrst(c: bool): void {
+  wrst(c: bool): External<void> {
     let a: u256[] = [1n];
     this.sA = c ? this.sB : [a, a];
   }
-  @external wrv(c: bool, x: u256): void { this.v = c ? [u256(1n), u256(x)] : [u256(3n), u256(4n)]; }
-  @external rd(): u256 { return this.sA[0n].length * 1000n + this.sA[1n].length * 100n + this.sA[0n][0n] * 10n + this.sA[1n][0n]; }
-  @external rdv(): u256 { return this.v[0n] * 100n + this.v[1n]; } }`;
+  wrv(c: bool, x: u256): External<void> { this.v = c ? [u256(1n), u256(x)] : [u256(3n), u256(4n)]; }
+  get rd(): External<u256> { return this.sA[0n].length * 1000n + this.sA[1n].length * 100n + this.sA[0n][0n] * 10n + this.sA[1n][0n]; }
+  get rdv(): External<u256> { return this.v[0n] * 100n + this.v[1n]; } }`;
     const S = `contract C {
   uint256[][2] sA; uint256[][2] sB; uint256[2] v;
   function seed() external { sA[0].push(5); sA[1].push(6); sB[0].push(7); sB[1].push(8); sB[1].push(9); }
@@ -304,20 +304,20 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
   });
 
   it('B1 closure: PUSH consumers (nested element + ternary source, OOB Panic parity)', async () => {
-    const J = `@contract class C {
-  @state st: u256[][];
-  @external pe(c: bool): u256 {
+    const J = `class C {
+  st: u256[][];
+  pe(c: bool): External<u256> {
     let a: u256[] = [1n]; let b: u256[] = [2n, 3n];
     let m: Arr<u256[], 2> = c ? [a, b] : [b, a];
     this.st.push(m[1n]);
     return this.st[0n].length * 10n + this.st[0n][0n];
   }
-  @external pt(c: bool): u256 {
+  pt(c: bool): External<u256> {
     let a: u256[] = [1n]; let b: u256[] = [2n, 3n];
     this.st.push(c ? a : b);
     return this.st[0n].length * 10n + this.st[0n][0n];
   }
-  @external po(i: u256): u256 {
+  po(i: u256): External<u256> {
     let a: u256[] = [1n]; let b: u256[] = [2n];
     let m: Arr<u256[], 2> = [a, b];
     this.st.push(m[i]);
@@ -356,7 +356,7 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
   });
 
   it('B2: tuple-return of ref-element literals - destructure, forward, external tuple, mutate, internal-arg', async () => {
-    const J = `@contract class C {
+    const J = `class C {
   g(): [Arr<u256[], 2>, u256] {
     let a: u256[] = [7n, 8n]; let b: u256[] = [9n];
     return [[a, b], 5n];
@@ -368,33 +368,33 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
   }
   gf(): [Arr<u256, 2>, u256] { return [[7n, 8n], 4n]; }
   h(m: Arr<u256[], 2>, x: u256): u256 { return m[0n][0n] * 100n + m[1n][0n] + x; }
-  @external @pure f(): u256 {
+  get f(): External<u256> {
     let [m, n] = this.g();
     return m[0n][1n] * 1000n + m[1n][0n] * 10n + n;
   }
-  @external @pure fd(): u256 {
+  get fd(): External<u256> {
     let [m, n] = this.gd();
     return m[0n][1n] * 100n + m[1n][0n] * 10n + n;
   }
-  @external @pure ff(): u256 {
+  get ff(): External<u256> {
     let [m, n] = this.gf();
     return m[0n] * 100n + m[1n] * 10n + n;
   }
-  @external @pure fw(): [Arr<u256[], 2>, u256] { return this.g(); }
-  @external @pure fx(): [Arr<u256[], 2>, u256] {
+  get fw(): External<[Arr<u256[], 2>, u256]> { return this.g(); }
+  get fx(): External<[Arr<u256[], 2>, u256]> {
     let a: u256[] = [7n, 8n]; let b: u256[] = [9n];
     return [[a, b], 5n];
   }
-  @external @pure fm(): u256 {
+  get fm(): External<u256> {
     let [m, n] = this.g();
     m[1n][0n] = 42n;
     return m[0n][0n] * 100n + m[1n][0n] + n;
   }
-  @external @pure fe(): bytes {
+  get fe(): External<bytes> {
     let [m, n] = this.g();
     return abi.encode(m, n);
   }
-  @external @pure fh(): u256 {
+  get fh(): External<u256> {
     let a: u256[] = [7n]; let b: u256[] = [9n];
     return this.h([a, b], 3n);
   } }`;
@@ -457,20 +457,20 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
   });
 
   it('B3: dyn-outer cd+storage element mix (deep-copy witness) + fixed-outer gate holds', async () => {
-    const J = `@contract class C {
-  @state s1: u256[];
-  @state sb: bytes;
-  @external seed(): void { this.s1.push(11n); this.s1.push(22n); this.sb = bytes("st"); }
-  @external mix(a: u256[]): u256 {
+    const J = `class C {
+  s1: u256[];
+  sb: bytes;
+  seed(): External<void> { this.s1.push(11n); this.s1.push(22n); this.sb = bytes("st"); }
+  get mix(a: u256[]): External<u256> {
     let m: u256[][] = [a, this.s1];
     return m[0n][0n] * 1000n + m[1n][1n];
   }
-  @external wit(a: u256[]): u256 {
+  get wit(a: u256[]): External<u256> {
     let m: u256[][] = [a, this.s1];
     m[0n][0n] = 77n; m[1n][0n] = 88n;
     return this.s1[0n] * 10000n + m[0n][0n] * 100n + m[1n][0n];
   }
-  @external bmix(b: bytes): u256 {
+  get bmix(b: bytes): External<u256> {
     let m: bytes[] = [b, this.sb];
     return m[0n].length * 100n + m[1n].length;
   } }`;
@@ -502,23 +502,23 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
     ] as const);
     // the FIXED-outer cd+storage literal mix stays rejected (solc TypeErrors the direct literal)
     expect(
-      rejects(`@contract class C { @state s1: u256[]; @external f(a: u256[]): u256 { let m: Arr<u256[], 2> = [a, this.s1]; return m[0n][0n]; } }`),
+      rejects(`class C { s1: u256[]; get f(a: u256[]): External<u256> { let m: Arr<u256[], 2> = [a, this.s1]; return m[0n][0n]; } }`),
     ).toBe(true);
   });
 
   it('B4: cast-typed literal self-typing - widths, families, ternary, runtime truncation, gates', async () => {
-    const J = `@contract class C {
-  @external @pure base(): bytes { return abi.encode([u256(1n), u256(2n)]); }
-  @external @pure tern(c: bool, x: u256): bytes { return abi.encode(c ? [u256(1n), u256(x)] : [u256(3n), u256(0n)]); }
-  @external @pure u8s(): bytes { return abi.encode([u8(1n), u8(200n)]); }
-  @external @pure mixw(): bytes { return abi.encode([u8(1n), u256(2n)]); }
-  @external @pure i8w(x: i256): bytes { return abi.encode([i8(-1n), i256(x)]); }
-  @external @pure addrs(a: address): bytes { return abi.encode([address(a), address(0x1111111111111111111111111111111111111111)]); }
-  @external @pure bools(): bytes { return abi.encode([true, false]); }
-  @external @pure rt(x: u256): bytes { return abi.encode([u8(x), u8(7n)]); }
-  @external @pure strs(): bytes { let a: string = "ab"; let b: string = "cde"; return abi.encode([a, b]); }
-  @external @pure bnd(c: bool, x: u256): u256 { let m: Arr<u256, 2> = c ? [u256(1n), u256(x)] : [u256(3n), u256(0n)]; return m[0n] * 1000n + m[1n]; }
-  @external @pure pck(): bytes { return abi.encodePacked([u8(1n), u8(2n)]); } }`;
+    const J = `class C {
+  get base(): External<bytes> { return abi.encode([u256(1n), u256(2n)]); }
+  get tern(c: bool, x: u256): External<bytes> { return abi.encode(c ? [u256(1n), u256(x)] : [u256(3n), u256(0n)]); }
+  get u8s(): External<bytes> { return abi.encode([u8(1n), u8(200n)]); }
+  get mixw(): External<bytes> { return abi.encode([u8(1n), u256(2n)]); }
+  get i8w(x: i256): External<bytes> { return abi.encode([i8(-1n), i256(x)]); }
+  get addrs(a: address): External<bytes> { return abi.encode([address(a), address(0x1111111111111111111111111111111111111111)]); }
+  get bools(): External<bytes> { return abi.encode([true, false]); }
+  get rt(x: u256): External<bytes> { return abi.encode([u8(x), u8(7n)]); }
+  get strs(): External<bytes> { let a: string = "ab"; let b: string = "cde"; return abi.encode([a, b]); }
+  get bnd(c: bool, x: u256): External<u256> { let m: Arr<u256, 2> = c ? [u256(1n), u256(x)] : [u256(3n), u256(0n)]; return m[0n] * 1000n + m[1n]; }
+  get pck(): External<bytes> { return abi.encodePacked([u8(1n), u8(2n)]); } }`;
     const S = `contract C {
   function base() external pure returns (bytes memory) { return abi.encode([uint256(1), uint256(2)]); }
   function tern(bool c, uint256 x) external pure returns (bytes memory) { return abi.encode(c ? [uint256(1), uint256(x)] : [uint256(3), uint256(0)]); }
@@ -555,21 +555,21 @@ describe('long-tail batch B: array-literal crosses (B1-B4) byte-identical to sol
     // Still rejected: the cast+BARE MIX (a cast fixes one width, a bare literal is mobile - no common
     // type), CROSS-FAMILY casts (u8|i16, no common type), and MIXED-SIGN bare literals. Enum elements
     // now self-type to the enum's fixed array (see the enum gate below) - byte-identical to solc.
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([1n, 2n]); } }`)).toBe(false);
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([u256(1n), 2n]); } }`)).toBe(true);
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([u8(1n), i16(2n)]); } }`)).toBe(true);
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([1n, -1n]); } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([1n, 2n]); } }`)).toBe(false);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u256(1n), 2n]); } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u8(1n), i16(2n)]); } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([1n, -1n]); } }`)).toBe(true);
     expect(
-      rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([bytes4(0x11223344n), bytes8(0x1122334455667788n)]); } }`),
+      rejects(`class C { get f(): External<bytes> { return abi.encode([bytes4(0x11223344n), bytes8(0x1122334455667788n)]); } }`),
     ).toBe(false);
     // A-LIT-RESID(enum) LIFTED: a same-enum literal self-types to the enum's fixed array (Color[N]) and
     // encodes byte-identical to solc (an enum is a value word); two DIFFERENT enums have no common type
     // so JETH keeps rejecting (parity). Full byte-identity is pinned in lift-enum-array-literal.test.ts.
     expect(
-      rejects(`enum Color { Red, Green, Blue } @contract class C { @external @pure f(): bytes { return abi.encode([Color.Green, Color.Blue]); } }`),
+      rejects(`enum Color { Red, Green, Blue } class C { get f(): External<bytes> { return abi.encode([Color.Green, Color.Blue]); } }`),
     ).toBe(false);
     expect(
-      rejects(`enum Color { Red, Green, Blue } enum St { Off, On } @contract class C { @external @pure f(): bytes { return abi.encode([Color.Green, St.On]); } }`),
+      rejects(`enum Color { Red, Green, Blue } enum St { Off, On } class C { get f(): External<bytes> { return abi.encode([Color.Green, St.On]); } }`),
     ).toBe(true);
   });
 });

@@ -48,12 +48,12 @@ async function eqLinked(jeth: string, sol: string, calls: [string, string][], sl
 describe('W5D-3: dyn-struct tuple components in @external library destructure', () => {
   it('struct-LAST 2-tuple, string field, value spread (empty / short / long) + field reads', async () => {
     await eqLinked(
-      `@struct class S { a: u256; s: string; }
-       @library class L {
-         @external @pure mm(x: u256, t: string): [u256, S] { return [x * 2n, S(x + 1n, t)]; }
+      `type S = { a: u256; s: string; };
+       static class L {
+         mm(x: u256, t: string): External<[u256, S]> { return [x * 2n, S(x + 1n, t)]; }
        }
-       @contract class C {
-         @external go(x: u256, t: string): [u256, u256, string] {
+       class C {
+         go(x: u256, t: string): External<[u256, u256, string]> {
            let [a, s] = L.mm(x, t);
            return [a, s.a, s.s];
          }
@@ -78,12 +78,12 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
 
   it('struct-FIRST position + a 3-tuple with the struct in the middle (bytes field)', async () => {
     await eqLinked(
-      `@struct class S { b: bytes; n: u128; }
-       @library class L {
-         @external @pure mm(x: u256, t: bytes): [u256, S, bool] { return [x + 100n, S(t, u128(x)), x % 2n == 0n]; }
+      `type S = { b: bytes; n: u128; };
+       static class L {
+         mm(x: u256, t: bytes): External<[u256, S, bool]> { return [x + 100n, S(t, u128(x)), x % 2n == 0n]; }
        }
-       @contract class C {
-         @external go(x: u256, t: bytes): [u256, bytes, u256, bool] {
+       class C {
+         go(x: u256, t: bytes): External<[u256, bytes, u256, bool]> {
            let [a, s, f] = L.mm(x, t);
            return [a, s.b, u256(s.n), f];
          }
@@ -107,17 +107,17 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
 
   it('TWO dyn-struct components: nested dyn-struct field + u256[] field, all leaves read back', async () => {
     await eqLinked(
-      `@struct class Q { t: string; v: u256; }
-       @struct class S { a: u256; q: Q; xs: u256[]; }
-       @library class L {
-         @external @pure mm(x: u256, t: string): [S, Q] {
+      `type Q = { t: string; v: u256; };
+       type S = { a: u256; q: Q; xs: u256[]; };
+       static class L {
+         mm(x: u256, t: string): External<[S, Q]> {
            let xs: u256[] = new Array<u256>(2n);
            xs[0n] = x; xs[1n] = x * 3n;
            return [S(x + 1n, Q(t, x + 7n), xs), Q("second-q string that is itself much longer than 31 bytes", x + 9n)];
          }
        }
-       @contract class C {
-         @external go(x: u256, t: string): [u256, string, u256, u256, u256, string, u256] {
+       class C {
+         go(x: u256, t: string): External<[u256, string, u256, u256, u256, string, u256]> {
            let [s, q2] = L.mm(x, t);
            return [s.a, s.q.t, s.q.v, s.xs[0n], s.xs[1n], q2.t, q2.v];
          }
@@ -146,19 +146,19 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
 
   it('destructured dyn struct WRITTEN to storage: read-back + raw slots byte-identical', async () => {
     await eqLinked(
-      `@struct class S { a: u256; s: string; }
-       @library class L {
-         @external @pure mm(x: u256, t: string): [u256, S] { return [x * 2n, S(x + 1n, t)]; }
+      `type S = { a: u256; s: string; };
+       static class L {
+         mm(x: u256, t: string): External<[u256, S]> { return [x * 2n, S(x + 1n, t)]; }
        }
-       @contract class C {
-         @state st: S;
-         @external put(x: u256, t: string): u256 {
+       class C {
+         st: S;
+         put(x: u256, t: string): External<u256> {
            let [a, s] = L.mm(x, t);
            this.st = s;
            return a;
          }
-         @external @view geta(): u256 { return this.st.a; }
-         @external @view gets(): string { return this.st.s; }
+         get geta(): External<u256> { return this.st.a; }
+         get gets(): External<string> { return this.st.s; }
        }`,
       `struct S { uint256 a; string s; }
        library L {
@@ -189,12 +189,12 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
     const aj = (
       await hj.deployLinked(
         compile(
-          `@struct class S { a: u256; s: string; }
-           @library class L { @external @pure mm(x: u256, t: string): [u256, S] { return [x * 2n, S(x + 1n, t)]; } }
-           @contract class C {
-             @state st: S;
-             @external put(x: u256, t: string): u256 { let [a, s] = L.mm(x, t); this.st = s; return a; }
-             @external @view geta(): u256 { return this.st.a; }
+          `type S = { a: u256; s: string; };
+           static class L { mm(x: u256, t: string): External<[u256, S]> { return [x * 2n, S(x + 1n, t)]; } }
+           class C {
+             st: S;
+             put(x: u256, t: string): External<u256> { let [a, s] = L.mm(x, t); this.st = s; return a; }
+             get geta(): External<u256> { return this.st.a; }
            }`,
           { fileName: 'C.jeth' },
         ),
@@ -207,17 +207,17 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
 
   it('skipped slots and revert bubbling stay byte-identical', async () => {
     await eqLinked(
-      `@struct class S { a: u256; s: string; }
-       @library class L {
-         @external @pure mm(x: u256): [u256, S] {
+      `type S = { a: u256; s: string; };
+       static class L {
+         mm(x: u256): External<[u256, S]> {
            if (x == 0n) { revert("zero not allowed here"); }
            if (x == 1n) { assert(false); }
            return [x * 2n, S(x + 1n, "skip-test string, definitely more than 31 bytes long!")];
          }
        }
-       @contract class C {
-         @external goA(x: u256): u256 { let [a, ,] = L.mm(x); return a; }
-         @external goS(x: u256): [u256, string] { let [, s] = L.mm(x); return [s.a, s.s]; }
+       class C {
+         goA(x: u256): External<u256> { let [a, ,] = L.mm(x); return a; }
+         goS(x: u256): External<[u256, string]> { let [, s] = L.mm(x); return [s.a, s.s]; }
        }`,
       `struct S { uint256 a; string s; }
        library L {
@@ -243,8 +243,8 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
 
   it('widened gate also admits string[] / u256[][] components (same decodeSupported set as interface tuples)', async () => {
     await eqLinked(
-      `@library class L {
-         @external @pure mm(x: u256): [string[], u256[][]] {
+      `static class L {
+         mm(x: u256): External<[string[], u256[][]]> {
            let ss: string[] = new Array<string>(2n);
            ss[0n] = "first string that is much longer than thirty-one bytes!";
            ss[1n] = "s2";
@@ -255,8 +255,8 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
            return [ss, grid];
          }
        }
-       @contract class C {
-         @external go(x: u256): [string, string, u256, u256, u256] {
+       class C {
+         go(x: u256): External<[string, string, u256, u256, u256]> {
            let [ss, grid] = L.mm(x);
            return [ss[0n], ss[1n], grid[0n][0n], grid[1n][0n], grid[1n][1n]];
          }
@@ -285,9 +285,9 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
   it('W5C lift: a struct with a FIXED-outer dynamic-element field (Arr<string,N>) destructures byte-identically', async () => {
     // Previously a clean JETH243 reject; the W5C dyn-struct fixed-outer-field codec lifts it.
     await eqLinked(
-      `@struct class S { a: u256; ss: Arr<string, 2>; }
-       @library class L { @external @pure mm(x: u256): [u256, S] { let v: S = S(x, ["a-string-well-beyond-thirty-one-bytes-long!","b"]); return [x, v]; } }
-       @contract class C { @external go(x: u256): [u256, string, string, u256] { let [a, s] = L.mm(x); return [a + s.a, s.ss[0n], s.ss[1n], s.ss.length]; } }`,
+      `type S = { a: u256; ss: Arr<string, 2>; };
+       static class L { mm(x: u256): External<[u256, S]> { let v: S = S(x, ["a-string-well-beyond-thirty-one-bytes-long!","b"]); return [x, v]; } }
+       class C { go(x: u256): External<[u256, string, string, u256]> { let [a, s] = L.mm(x); return [a + s.a, s.ss[0n], s.ss[1n], s.ss.length]; } }`,
       `struct S { uint256 a; string[2] ss; }
        library L { function mm(uint256 x) external pure returns (uint256, S memory) { S memory v = S(x, ["a-string-well-beyond-thirty-one-bytes-long!","b"]); return (x, v); } }
        contract C { function go(uint256 x) external returns (uint256, string memory, string memory, uint256) { (uint256 a, S memory s) = L.mm(x); return (a + s.a, s.ss[0], s.ss[1], s.ss.length); } }`,
@@ -299,9 +299,9 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
     // tuple ASSIGN to a pre-declared struct local still rejects (needs a deep copy the path does not wire).
     expect(
       codes(
-        `@struct class S { a: u256; s: string; }
-         @library class L { @external @pure mm(x: u256): [u256, S] { return [x, S(x, "y")]; } }
-         @contract class C { @external go(x: u256): u256 { let s: S = S(0n, ""); let a: u256 = 0n; [a, s] = L.mm(x); return a + s.a; } }`,
+        `type S = { a: u256; s: string; };
+         static class L { mm(x: u256): External<[u256, S]> { return [x, S(x, "y")]; } }
+         class C { get go(x: u256): External<u256> { let s: S = S(0n, ""); let a: u256 = 0n; [a, s] = L.mm(x); return a + s.a; } }`,
       ),
     ).toContain('JETH066');
     // the INTERNAL-call tuple with a dyn-struct component was LIFTED by long-tail batch C
@@ -309,8 +309,8 @@ describe('W5D-3: dyn-struct tuple components in @external library destructure', 
     // incl. a string-field read-through). The old JETH243 pin flips to a compile assert.
     expect(
       codes(
-        `@struct class S { a: u256; s: string; }
-         @contract class C { mk(x: u256): [u256, S] { return [x, S(x, "y")]; } @external go(x: u256): u256 { let [a, s] = this.mk(x); return a + s.a; } }`,
+        `type S = { a: u256; s: string; };
+         class C { mk(x: u256): [u256, S] { return [x, S(x, "y")]; } get go(x: u256): External<u256> { let [a, s] = this.mk(x); return a + s.a; } }`,
       ),
     ).toEqual([]);
   });

@@ -27,11 +27,11 @@ async function rt(jeth: string, sol: string, sigs: string[]) {
 
 describe('lifted over-rejections: byte-identical vs solc', () => {
   it('abi.encode of an internal call returning a value-element array [was JETH900]', async () => {
-    const J = `@contract class C {
+    const J = `class C {
       mk(): u256[] { let a: u256[] = new Array<u256>(3n); a[0n] = 7n; a[1n] = 8n; a[2n] = 9n; return a; }
-      @external @pure f(): bytes { return abi.encode(this.mk()); }
-      @external @pure g(): bytes { return abi.encode(7n, this.mk(), 9n); }
-      @external @pure p(): bytes { return abi.encodePacked(this.mk()); }
+      get f(): External<bytes> { return abi.encode(this.mk()); }
+      get g(): External<bytes> { return abi.encode(7n, this.mk(), 9n); }
+      get p(): External<bytes> { return abi.encodePacked(this.mk()); }
     }`;
     const S = `contract C {
       function mk() internal pure returns (uint256[] memory){ uint256[] memory a = new uint256[](3); a[0]=7; a[1]=8; a[2]=9; return a; }
@@ -43,14 +43,14 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
   });
 
   it('memory-array struct-element field writes xs[i].a=v / deep / compound [was JETH067]', async () => {
-    const J = `@struct class P { a: u256; b: u8; }
-    @struct class Q { m: u256; }
-    @struct class R { q: Q; pre: Arr<u256, 2>; }
-    @contract class C {
-      @external @pure fa(i: u256): bytes { let xs: P[] = new Array<P>(3n); xs[i].a = 11n; xs[i].b = 222n; return abi.encode(xs[i].a, xs[i].b); }
-      @external @pure fdeep(i: u256): bytes { let xs: R[] = new Array<R>(2n); xs[i].q.m = 7n; xs[i].pre[0n] = 8n; xs[i].pre[1n] = 9n; return abi.encode(xs[i].q.m, xs[i].pre[0n], xs[i].pre[1n]); }
-      @external @pure fdirty(i: u256, v: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].b = u8(v); return abi.encode(xs[i].b); }
-      @external @pure fcompound(i: u256): u256 { let xs: P[] = new Array<P>(3n); xs[i].a = 10n; xs[i].a += 5n; xs[i].a++; return xs[i].a; }
+    const J = `type P = { a: u256; b: u8; };
+    type Q = { m: u256; };
+    type R = { q: Q; pre: Arr<u256, 2>; };
+    class C {
+      get fa(i: u256): External<bytes> { let xs: P[] = new Array<P>(3n); xs[i].a = 11n; xs[i].b = 222n; return abi.encode(xs[i].a, xs[i].b); }
+      get fdeep(i: u256): External<bytes> { let xs: R[] = new Array<R>(2n); xs[i].q.m = 7n; xs[i].pre[0n] = 8n; xs[i].pre[1n] = 9n; return abi.encode(xs[i].q.m, xs[i].pre[0n], xs[i].pre[1n]); }
+      get fdirty(i: u256, v: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i].b = u8(v); return abi.encode(xs[i].b); }
+      get fcompound(i: u256): External<u256> { let xs: P[] = new Array<P>(3n); xs[i].a = 10n; xs[i].a += 5n; xs[i].a++; return xs[i].a; }
     }`;
     const S = `struct P { uint256 a; uint8 b; }
     struct Q { uint256 m; }
@@ -82,12 +82,12 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
   });
 
   it('whole memory-array struct-element write xs[i] = P(...) (incl fixed-array field, OOB, copy) [was JETH900]', async () => {
-    const J = `@struct class P { a: u256; b: u256; }
-    @struct class N { a: u256; pre: Arr<u256, 2>; }
-    @contract class C {
-      @external @pure we(i: u256): bytes { let xs: P[] = new Array<P>(3n); xs[i] = P(11n, 22n); xs[0n] = P(1n, 2n); return abi.encode(xs[i].a, xs[i].b, xs[0n].a, xs[0n].b); }
-      @external @pure wn(i: u256): bytes { let xs: N[] = new Array<N>(2n); xs[i] = N(5n, [6n, 7n]); return abi.encode(xs[i].a, xs[i].pre[0n], xs[i].pre[1n]); }
-      @external @pure weoob(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i] = P(1n, 2n); return abi.encode(xs[0n].a); }
+    const J = `type P = { a: u256; b: u256; };
+    type N = { a: u256; pre: Arr<u256, 2>; };
+    class C {
+      get we(i: u256): External<bytes> { let xs: P[] = new Array<P>(3n); xs[i] = P(11n, 22n); xs[0n] = P(1n, 2n); return abi.encode(xs[i].a, xs[i].b, xs[0n].a, xs[0n].b); }
+      get wn(i: u256): External<bytes> { let xs: N[] = new Array<N>(2n); xs[i] = N(5n, [6n, 7n]); return abi.encode(xs[i].a, xs[i].pre[0n], xs[i].pre[1n]); }
+      get weoob(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i] = P(1n, 2n); return abi.encode(xs[0n].a); }
     }`;
     const S = `struct P { uint256 a; uint256 b; }
     struct N { uint256 a; uint256[2] pre; }
@@ -134,12 +134,12 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
   });
 
   it('bytes[]/string[] memory element write bs[i] = bytes(..) (re-point, OOB, alias, re-encode) [was JETH217]', async () => {
-    const J = `@contract class C {
-      @external @pure wb(i: u256): bytes { let bs: bytes[] = new Array<bytes>(3n); bs[0n] = bytes("hello"); bs[i] = bytes("world!!"); return abi.encode(bs[0n], bs[i]); }
-      @external @pure ws(i: u256): bytes { let ss: string[] = new Array<string>(2n); ss[i] = "set me"; return abi.encode(ss[i]); }
-      @external @pure wboob(i: u256): bytes { let bs: bytes[] = new Array<bytes>(2n); bs[i] = bytes("x"); return abi.encode(bs[0n]); }
-      @external @pure walias(i: u256, src: bytes): bytes { let bs: bytes[] = new Array<bytes>(2n); bs[i] = src; return abi.encode(bs[i]); }
-      @external @pure wlit(): bytes { let bs: bytes[] = new Array<bytes>(2n); bs[0n] = bytes("aa"); bs[1n] = bytes("bbbb"); return abi.encode(bs); }
+    const J = `class C {
+      get wb(i: u256): External<bytes> { let bs: bytes[] = new Array<bytes>(3n); bs[0n] = bytes("hello"); bs[i] = bytes("world!!"); return abi.encode(bs[0n], bs[i]); }
+      get ws(i: u256): External<bytes> { let ss: string[] = new Array<string>(2n); ss[i] = "set me"; return abi.encode(ss[i]); }
+      get wboob(i: u256): External<bytes> { let bs: bytes[] = new Array<bytes>(2n); bs[i] = bytes("x"); return abi.encode(bs[0n]); }
+      get walias(i: u256, src: bytes): External<bytes> { let bs: bytes[] = new Array<bytes>(2n); bs[i] = src; return abi.encode(bs[i]); }
+      get wlit(): External<bytes> { let bs: bytes[] = new Array<bytes>(2n); bs[0n] = bytes("aa"); bs[1n] = bytes("bbbb"); return abi.encode(bs); }
     }`;
     const S = `contract C {
       function wb(uint256 i) external pure returns (bytes memory){ bytes[] memory bs=new bytes[](3); bs[0]="hello"; bs[i]="world!!"; return abi.encode(bs[0], bs[i]); }
@@ -175,11 +175,11 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
     // value-LEAF writes (xs[i].q.m = v, xs[i].pre[j] = v) followed by a whole-field READ (abi.encode(xs[i].q))
     // stay byte-identical. The whole-field WRITE (xs[i].q = Q(..), xs[i].pre = [..]) is a copy-vs-re-point
     // miscompile on the INLINE static-struct-array element, so it is a sound clean reject now (asserted below).
-    const J = `@struct class Q { m: u256; n: u256; }
-    @struct class P { q: Q; pre: Arr<u256, 2>; tag: u256; }
-    @contract class C {
-      @external @pure rdq(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].q.m = 5n; xs[i].q.n = 6n; return abi.encode(xs[i].q); }
-      @external @pure rdpre(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].pre[0n] = 7n; xs[i].pre[1n] = 8n; return abi.encode(xs[i].pre); }
+    const J = `type Q = { m: u256; n: u256; };
+    type P = { q: Q; pre: Arr<u256, 2>; tag: u256; };
+    class C {
+      get rdq(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i].q.m = 5n; xs[i].q.n = 6n; return abi.encode(xs[i].q); }
+      get rdpre(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i].pre[0n] = 7n; xs[i].pre[1n] = 8n; return abi.encode(xs[i].pre); }
     }`;
     const S = `struct Q { uint256 m; uint256 n; }
     struct P { Q q; uint256[2] pre; uint256 tag; }
@@ -209,22 +209,22 @@ describe('lifted over-rejections: byte-identical vs solc', () => {
         return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
       }
     };
-    expect(codes(`@struct class Q { m: u256; n: u256; }
-    @struct class P { q: Q; pre: Arr<u256, 2>; tag: u256; }
-    @contract class C { @external @pure wrq(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].q = Q(11n, 22n); return abi.encode(xs[i].q.m, xs[i].q.n); } }`)).toContain('JETH429');
-    expect(codes(`@struct class Q { m: u256; n: u256; }
-    @struct class P { q: Q; pre: Arr<u256, 2>; tag: u256; }
-    @contract class C { @external @pure wrpre(i: u256): bytes { let xs: P[] = new Array<P>(2n); xs[i].pre = [33n, 44n]; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); } }`)).toContain('JETH429');
+    expect(codes(`type Q = { m: u256; n: u256; };
+    type P = { q: Q; pre: Arr<u256, 2>; tag: u256; };
+    class C { get wrq(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i].q = Q(11n, 22n); return abi.encode(xs[i].q.m, xs[i].q.n); } }`)).toContain('JETH429');
+    expect(codes(`type Q = { m: u256; n: u256; };
+    type P = { q: Q; pre: Arr<u256, 2>; tag: u256; };
+    class C { get wrpre(i: u256): External<bytes> { let xs: P[] = new Array<P>(2n); xs[i].pre = [33n, 44n]; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); } }`)).toContain('JETH429');
   });
 
   it('runtime array index into a struct-array-element field xs[i].pre[j] (read+write, 2D, OOB) [was JETH151]', async () => {
-    const J = `@struct class P { pre: Arr<u256, 2>; tag: u256; }
-    @struct class G { grid: Arr<Arr<u256, 2>, 2>; }
-    @contract class C {
-      @external @pure rd(i: u256, j: u256): u256 { let xs: P[] = new Array<P>(3n); xs[0n].pre[0n] = 5n; xs[0n].pre[1n] = 6n; xs[2n].pre[0n] = 77n; xs[2n].pre[1n] = 88n; return xs[i].pre[j]; }
-      @external @pure wr(i: u256, j: u256, v: u256): bytes { let xs: P[] = new Array<P>(3n); xs[i].pre[j] = v; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); }
-      @external @pure rdoob(i: u256, j: u256): u256 { let xs: P[] = new Array<P>(2n); return xs[i].pre[j]; }
-      @external @pure twoD(i: u256, j: u256, k: u256): u256 { let xs: G[] = new Array<G>(2n); xs[1n].grid[0n][1n] = 42n; return xs[i].grid[j][k]; }
+    const J = `type P = { pre: Arr<u256, 2>; tag: u256; };
+    type G = { grid: Arr<Arr<u256, 2>, 2>; };
+    class C {
+      get rd(i: u256, j: u256): External<u256> { let xs: P[] = new Array<P>(3n); xs[0n].pre[0n] = 5n; xs[0n].pre[1n] = 6n; xs[2n].pre[0n] = 77n; xs[2n].pre[1n] = 88n; return xs[i].pre[j]; }
+      get wr(i: u256, j: u256, v: u256): External<bytes> { let xs: P[] = new Array<P>(3n); xs[i].pre[j] = v; return abi.encode(xs[i].pre[0n], xs[i].pre[1n]); }
+      get rdoob(i: u256, j: u256): External<u256> { let xs: P[] = new Array<P>(2n); return xs[i].pre[j]; }
+      get twoD(i: u256, j: u256, k: u256): External<u256> { let xs: G[] = new Array<G>(2n); xs[1n].grid[0n][1n] = 42n; return xs[i].grid[j][k]; }
     }`;
     const S = `struct P { uint256[2] pre; uint256 tag; }
     struct G { uint256[2][2] grid; }

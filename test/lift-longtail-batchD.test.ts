@@ -68,16 +68,16 @@ const codes = (src: string): string[] => {
 
 describe('long-tail batch D: generic @modifier at aggregate/dynamic types (MOD-GEN) byte-identical to solc 0.8.35', () => {
   it('D1: bytes (inferred) + string (explicit and state-read inferred) + u256[]/Arr<u256,2> (explicit)', async () => {
-    const J = `@contract class C {
-  @state nm: string;
+    const J = `class C {
+  nm: string;
   constructor() { this.nm = "hi"; }
   @modifier ne<T>(v: T) { require(v.length > 0n, "e"); _; }
   @modifier ok<T>(v: T) { require(keccak256(abi.encode(v)) != keccak256(abi.encode("")), "k"); _; }
-  @ne(bytes("ab")) @external f(x: u256): u256 { return x + 1n; }
-  @ok<string>("hi") @external g(x: u256): u256 { return x + 2n; }
-  @ok(this.nm) @external g2(x: u256): u256 { return x + 3n; }
-  @ne<u256[]>([2n, 3n]) @external h(x: u256): u256 { return x + 4n; }
-  @ne(bytes("")) @external bad(x: u256): u256 { return x + 5n; }
+  @ne(bytes("ab")) get f(x: u256): External<u256> { return x + 1n; }
+  @ok<string>("hi") get g(x: u256): External<u256> { return x + 2n; }
+  @ok(this.nm) get g2(x: u256): External<u256> { return x + 3n; }
+  @ne<u256[]>([2n, 3n]) get h(x: u256): External<u256> { return x + 4n; }
+  @ne(bytes("")) get bad(x: u256): External<u256> { return x + 5n; }
 }`;
     const S = `contract C {
   string nm;
@@ -101,9 +101,9 @@ describe('long-tail batch D: generic @modifier at aggregate/dynamic types (MOD-G
     ] as const);
     // Arr<u256,2> explicit, element reads in the body
     await run(
-      `@contract class C {
+      `class C {
   @modifier ne<T>(v: T) { require(v[0n] + v[1n] > 4n, "e"); _; }
-  @ne<Arr<u256, 2>>([2n, 3n]) @external f(x: u256): u256 { return x + 1n; }
+  @ne<Arr<u256, 2>>([2n, 3n]) get f(x: u256): External<u256> { return x + 1n; }
 }`,
       `contract C {
   modifier ne(uint256[2] memory v) { require(v[0] + v[1] > 4, "e"); _; }
@@ -114,18 +114,18 @@ describe('long-tail batch D: generic @modifier at aggregate/dynamic types (MOD-G
   });
 
   it('D1: struct instantiations - static (field reads), dynamic (bytes field), same-layout nominal split', async () => {
-    const J = `@struct class P { a: u256; b: u256; }
-@struct class D { a: u256; b: bytes; }
-@struct class P1 { a: u256; }
-@struct class P2 { a: u256; }
-@contract class C {
+    const J = `type P = { a: u256; b: u256; };
+type D = { a: u256; b: bytes; };
+type P1 = { a: u256; };
+type P2 = { a: u256; };
+class C {
   @modifier gt<T>(v: T) { require(v.a > v.b, "e"); _; }
   @modifier dy<T>(v: T) { require(v.a > 0n && v.b.length > 0n, "e"); _; }
   @modifier pos<T>(v: T) { require(v.a > 0n, "e"); _; }
-  @gt(P(5n, 2n)) @external f(x: u256): u256 { return x + 1n; }
-  @dy(D(3n, bytes("xy"))) @external g(x: u256): u256 { return x + 2n; }
-  @pos(P1(3n)) @external h1(x: u256): u256 { return x + 3n; }
-  @pos(P2(0n)) @external h2(x: u256): u256 { return x + 4n; }
+  @gt(P(5n, 2n)) get f(x: u256): External<u256> { return x + 1n; }
+  @dy(D(3n, bytes("xy"))) get g(x: u256): External<u256> { return x + 2n; }
+  @pos(P1(3n)) get h1(x: u256): External<u256> { return x + 3n; }
+  @pos(P2(0n)) get h2(x: u256): External<u256> { return x + 4n; }
 }`;
     const S = `struct P { uint256 a; uint256 b; }
 struct D { uint256 a; bytes b; }
@@ -150,15 +150,15 @@ contract C {
   });
 
   it('D1: multi-instantiation dispatch (bytes + u256 + u256[] of ONE modifier), dedup, T-used-twice', async () => {
-    const J = `@contract class C {
+    const J = `class C {
   @modifier ne<T>(v: T, min: u256) { require(abi.encode(v).length >= min, "e"); _; }
   @modifier tw<T>(v: T, w: T) { require(v.length + w.length > 3n, "e"); _; }
-  @ne(bytes("ab"), 96n) @external f(x: u256): u256 { return x + 1n; }
-  @ne(7n, 32n) @external g(x: u256): u256 { return x + 2n; }
-  @ne<u256[]>([2n, 3n], 128n) @external h(x: u256): u256 { return x + 3n; }
-  @ne(7n, 33n) @external bad(x: u256): u256 { return x + 4n; }
-  @ne(bytes("cd"), 96n) @external f2(x: u256): u256 { return x + 5n; }
-  @tw(bytes("ab"), bytes("cd")) @external t(x: u256): u256 { return x + 6n; }
+  @ne(bytes("ab"), 96n) get f(x: u256): External<u256> { return x + 1n; }
+  @ne(7n, 32n) get g(x: u256): External<u256> { return x + 2n; }
+  @ne<u256[]>([2n, 3n], 128n) get h(x: u256): External<u256> { return x + 3n; }
+  @ne(7n, 33n) get bad(x: u256): External<u256> { return x + 4n; }
+  @ne(bytes("cd"), 96n) get f2(x: u256): External<u256> { return x + 5n; }
+  @tw(bytes("ab"), bytes("cd")) get t(x: u256): External<u256> { return x + 6n; }
 }`;
     const S = `contract C {
   modifier neB(bytes memory v, uint256 min) { require(abi.encode(v).length >= min, "e"); _; }
@@ -186,11 +186,11 @@ contract C {
   it('D1: post-placeholder body, eval order of side-effecting args, storage/calldata arg sources, ctor, nested generics', async () => {
     // post-placeholder (buffered path) with a generic bytes param
     await run(
-      `@contract class C {
-  @state count: u256;
+      `class C {
+  count: u256;
   @modifier tick<T>(v: T) { require(v.length > 0n, "e"); _; this.count = this.count + v.length; }
-  @tick(bytes("abc")) @external f(x: u256): u256 { return x + this.count; }
-  @external @view peek(): u256 { return this.count; }
+  @tick(bytes("abc")) f(x: u256): External<u256> { return x + this.count; }
+  get peek(): External<u256> { return this.count; }
 }`,
       `contract C {
   uint256 count;
@@ -205,12 +205,12 @@ contract C {
     );
     // eval order: args of stacked generic modifiers evaluate outermost-first, before the body (counter)
     await run(
-      `@contract class C {
-  @state log: u256;
+      `class C {
+  log: u256;
   mk(k: u256): bytes { this.log = this.log * 10n + k; return bytes("ab"); }
   @modifier m1<T>(v: T) { require(v.length > 0n, "a"); this.log = this.log * 10n + 8n; _; }
   @modifier m2<T>(v: T) { require(v.length > 1n, "b"); this.log = this.log * 10n + 9n; _; }
-  @m1(this.mk(1n)) @m2(this.mk(2n)) @external f(x: u256): u256 { return this.log * 100n + x; }
+  @m1(this.mk(1n)) @m2(this.mk(2n)) f(x: u256): External<u256> { return this.log * 100n + x; }
 }`,
       `contract C {
   uint256 log;
@@ -223,12 +223,12 @@ contract C {
     );
     // arg sources: a storage read and the wrapped function's own calldata param (in-range + reverting)
     await run(
-      `@contract class C {
-  @state sb: bytes;
+      `class C {
+  sb: bytes;
   constructor() { this.sb = bytes("ab"); }
   @modifier ne<T>(v: T) { require(v.length > 1n, "e"); _; }
-  @ne(this.sb) @external f(x: u256): u256 { return x + 1n; }
-  @ne(b) @external g(b: bytes, x: u256): u256 { return x + b.length; }
+  @ne(this.sb) get f(x: u256): External<u256> { return x + 1n; }
+  @ne(b) get g(b: bytes, x: u256): External<u256> { return x + b.length; }
 }`,
       `contract C {
   bytes sb;
@@ -245,12 +245,12 @@ contract C {
     );
     // constructor + nested generics (the modifier monomorph calls a generic fn at a value leaf)
     await run(
-      `@contract class C {
-  @state s: u256;
+      `class C {
+  s: u256;
   gid<U>(x: U): U { return x; }
   @modifier ne<T>(v: T) { require(this.gid(v.length) > 1n, "e"); _; }
   @ne(bytes("ab")) constructor() { this.s = 7n; }
-  @ne(bytes("cd")) @external f(x: u256): u256 { return x + this.s; }
+  @ne(bytes("cd")) get f(x: u256): External<u256> { return x + this.s; }
 }`,
       `contract C {
   uint256 s;
@@ -265,13 +265,13 @@ contract C {
 
   it('D1 neighbor: funcref instantiation (explicit + state-read inferred) matches the non-generic funcref-param modifier', async () => {
     await run(
-      `@contract class C {
-  @state fp: (x: u256) => u256;
+      `class C {
+  fp: (x: u256) => u256;
   inc(x: u256): u256 { return x + 1n; }
   constructor() { this.fp = this.inc; }
   @modifier chk<T>(f: T) { require(f(1n) == 2n, "e"); _; }
-  @chk<(x: u256) => u256>(this.inc) @external g(x: u256): u256 { return x + 10n; }
-  @chk(this.fp) @external h(x: u256): u256 { return x + 20n; }
+  @chk<(x: u256) => u256>(this.inc) get g(x: u256): External<u256> { return x + 10n; }
+  @chk(this.fp) get h(x: u256): External<u256> { return x + 20n; }
 }`,
       `contract C {
   function(uint256) pure returns (uint256) fp;
@@ -291,15 +291,15 @@ contract C {
   it('KEPT REJECTS: mapping/void gate, bare-literal inference, generic-fn gate, funcref-array, mismatch', () => {
     // mapping-bearing and void type args keep the JETH291 gate reject
     expect(
-      codes(`@contract class C {
+      codes(`class C {
   @modifier ne<T>(v: T) { require(true, "e"); _; }
-  @ne<mapping<u256, u256>>(0n) @external f(x: u256): u256 { return x + 1n; }
+  @ne<mapping<u256, u256>>(0n) get f(x: u256): External<u256> { return x + 1n; }
 }`),
     ).toContain('JETH291');
     expect(
-      codes(`@contract class C {
+      codes(`class C {
   @modifier ne<T>(v: T) { require(true, "e"); _; }
-  @ne<void>(0n) @external f(x: u256): u256 { return x + 1n; }
+  @ne<void>(0n) get f(x: u256): External<u256> { return x + 1n; }
 }`),
     ).toContain('JETH291');
     // A BARE integer-literal array now self-types to its mobile common type (L2-MOBILE, OR cluster 4):
@@ -308,46 +308,46 @@ contract C {
     // MATCH vs both uint8[2] and uint256[2]). A METHOD reference in the same no-context position (below)
     // still rejects.
     expect(
-      codes(`@contract class C {
+      codes(`class C {
   @modifier ne<T>(v: T) { require(v.length > 0n, "e"); _; }
-  @ne([2n, 3n]) @external f(x: u256): u256 { return x + 1n; }
+  @ne([2n, 3n]) get f(x: u256): External<u256> { return x + 1n; }
 }`),
     ).toEqual([]);
     expect(
-      codes(`@contract class C {
+      codes(`class C {
   inc(x: u256): u256 { return x + 1n; }
   @modifier chk<T>(f: T) { require(f(1n) == 2n, "e"); _; }
-  @chk(this.inc) @external g(x: u256): u256 { return x + 10n; }
+  @chk(this.inc) get g(x: u256): External<u256> { return x + 10n; }
 }`),
     ).toContain('JETH065');
     // a generic FUNCTION type argument stays value-only (separate catalogue row)
     expect(
-      codes(`@contract class C {
+      codes(`class C {
   gid<U>(x: U): U { return x; }
-  @external f(x: u256): u256 { let b: bytes = this.gid(bytes("ab")); return x + b.length; }
+  get f(x: u256): External<u256> { let b: bytes = this.gid(bytes("ab")); return x + b.length; }
 }`),
     ).toContain('JETH291');
     // funcref-ARRAY instantiation matches the non-generic funcref-array modifier param class
     expect(
-      codes(`@contract class C {
+      codes(`class C {
   inc(x: u256): u256 { return x + 1n; }
   @modifier m<T>(fs: T) { require(fs.length > 0n, "e"); _; }
-  @m<((x: u256) => u256)[]>([this.inc]) @external g(x: u256): u256 { return x + 10n; }
+  @m<((x: u256) => u256)[]>([this.inc]) get g(x: u256): External<u256> { return x + 10n; }
 }`),
     ).toContain('JETH900');
     // an instantiation whose body is ill-typed at that T rejects with the BODY error (solc mirror
     // rejects too: string > int comparison)
     expect(
-      codes(`@contract class C {
+      codes(`class C {
   @modifier lim<T>(v: T) { require(v > 0n, "z"); _; }
-  @lim<string>("a") @external f(x: u256): u256 { return x + 1n; }
+  @lim<string>("a") get f(x: u256): External<u256> { return x + 1n; }
 }`),
     ).toContain('JETH084');
     // explicit type arg + mismatched arg is a clean reject (solc mirror: no int_const -> bytes conversion)
     expect(
-      codes(`@contract class C {
+      codes(`class C {
   @modifier ne<T>(v: T) { require(v.length > 0n, "e"); _; }
-  @ne<bytes>(5n) @external f(x: u256): u256 { return x + 1n; }
+  @ne<bytes>(5n) get f(x: u256): External<u256> { return x + 1n; }
 }`),
     ).toContain('JETH084');
   });
@@ -356,25 +356,25 @@ contract C {
 // ---------------------------------------------------------------------------------------------------
 // F-RESID stretch - Arr<Fd,2> fixed array of funcref-bearing dyn structs (memory local)
 // ---------------------------------------------------------------------------------------------------
-const FD_J = `@struct class Fd { f: (x: u256) => u256; s: string; }`;
+const FD_J = `type Fd = { f: (x: u256) => u256; s: string; };`;
 const FD_S = `struct Fd { function(uint256) pure returns (uint256) f; string s; }`;
 
 describe('long-tail batch D stretch: Arr<Fd,2> fixed funcref-struct array (F-RESID) byte-identical to solc 0.8.35', () => {
   it('literal, o[i].f(v) dispatch, OOB Panic, whole-element write, string-field read', async () => {
     const J = `${FD_J}
-@contract class C {
+class C {
   inc(x: u256): u256 { return x + 1n; }
   dbl(x: u256): u256 { return x * 2n; }
-  @external go(i: u256, v: u256): u256 {
+  get go(i: u256, v: u256): External<u256> {
     let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.dbl, "b")];
     return o[i].f(v);
   }
-  @external w(v: u256): u256 {
+  get w(v: u256): External<u256> {
     let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.dbl, "b")];
     o[0n] = Fd(this.dbl, "zz");
     return o[0n].f(v) + o[1n].f(v);
   }
-  @external sr(): u256 {
+  get sr(): External<u256> {
     let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.dbl, "bb")];
     return bytes(o[1n].s).length;
   }
@@ -408,21 +408,21 @@ contract C {
 
   it('element-to-local, for-of, alias write-through', async () => {
     const J = `${FD_J}
-@contract class C {
+class C {
   inc(x: u256): u256 { return x + 1n; }
   dbl(x: u256): u256 { return x * 2n; }
-  @external el(i: u256, v: u256): u256 {
+  get el(i: u256, v: u256): External<u256> {
     let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.dbl, "b")];
     let e: Fd = o[i];
     return e.f(v);
   }
-  @external fo(v: u256): u256 {
+  get fo(v: u256): External<u256> {
     let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.dbl, "b")];
     let acc: u256 = 0n;
     for (const e of o) { acc = acc + e.f(v); }
     return acc;
   }
-  @external al(v: u256): u256 {
+  get al(v: u256): External<u256> {
     let o: Arr<Fd, 2> = [Fd(this.inc, "a"), Fd(this.dbl, "b")];
     let p: Arr<Fd, 2> = o;
     p[0n] = Fd(this.dbl, "z");
@@ -461,7 +461,7 @@ contract C {
 
   it('ABI-leak matrix + kept rejects: every boundary and unverified consumer stays a clean reject', () => {
     const H = `${FD_J}
-@contract class C {
+class C {
   inc(x: u256): u256 { return x + 1n; }`;
     // return / abi.encode / event / error / getter / external param: ABI boundaries all reject
     expect(codes(`${H}

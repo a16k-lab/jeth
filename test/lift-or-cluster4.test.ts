@@ -45,18 +45,18 @@ const rejects = (src: string): boolean => {
 describe('OR cluster 4: literal typing (A-LIT-RESID + L2-MOBILE) byte-identical to solc 0.8.35', () => {
   it('A-LIT-RESID: mixed bytesN widths widen to the widest', async () => {
     await run(
-      `@contract class C { @external @pure f(): bytes { return abi.encode([bytes4(0x11223344n), bytes8(0x5566778899aabbccn)]); } }`,
+      `class C { get f(): External<bytes> { return abi.encode([bytes4(0x11223344n), bytes8(0x5566778899aabbccn)]); } }`,
       `contract C { function f() external pure returns (bytes memory) { return abi.encode([bytes4(0x11223344), bytes8(0x5566778899aabbcc)]); } }`,
       [['f()', '']] as const,
     );
     await run(
-      `@contract class C { @external @pure f(): bytes { return abi.encode([bytes2(0x1122n), bytes4(0x33445566n), bytes8(0x778899aabbccddeen)]); } }`,
+      `class C { get f(): External<bytes> { return abi.encode([bytes2(0x1122n), bytes4(0x33445566n), bytes8(0x778899aabbccddeen)]); } }`,
       `contract C { function f() external pure returns (bytes memory) { return abi.encode([bytes2(0x1122), bytes4(0x33445566), bytes8(0x778899aabbccddee)]); } }`,
       [['f()', '']] as const,
     );
     // the implicit bytesN widening also holds in plain assign/return (solc widens a bytesN constant).
     await run(
-      `@contract class C { @external @pure f(): bytes8 { return bytes4(0x11223344n); } }`,
+      `class C { get f(): External<bytes8> { return bytes4(0x11223344n); } }`,
       `contract C { function f() external pure returns (bytes8) { return bytes4(0x11223344); } }`,
       [['f()', '']] as const,
     );
@@ -77,24 +77,24 @@ describe('OR cluster 4: literal typing (A-LIT-RESID + L2-MOBILE) byte-identical 
     }
     // all-negative -> i256, byte-identical to solc's int8[2]/int16[2].
     await run(
-      `@contract class C { @external @pure f(): bytes { return abi.encode([-1n, -2n]); } }`,
+      `class C { get f(): External<bytes> { return abi.encode([-1n, -2n]); } }`,
       `contract C { function f() external pure returns (bytes memory) { return abi.encode([int8(-1), -2]); } }`,
       [['f()', '']] as const,
     );
     await run(
-      `@contract class C { @external @pure f(): bytes { return abi.encode([-128n, -129n]); } }`,
+      `class C { get f(): External<bytes> { return abi.encode([-128n, -129n]); } }`,
       `contract C { function f() external pure returns (bytes memory) { return abi.encode([int16(-128), -129]); } }`,
       [['f()', '']] as const,
     );
     // encodePacked is likewise width-independent for arrays (each element padded to 32 bytes).
     await run(
-      `@contract class C { @external @pure f(): bytes { return abi.encodePacked([1n, 300n]); } }`,
+      `class C { get f(): External<bytes> { return abi.encodePacked([1n, 300n]); } }`,
       `contract C { function f() external pure returns (bytes memory) { return abi.encodePacked([uint16(1), 300]); } }`,
       [['f()', '']] as const,
     );
     // ternary of two bare-literal arrays.
     await run(
-      `@contract class C { @external @pure f(c: bool): bytes { return abi.encode(c ? [1n, 2n] : [3n, 4n]); } }`,
+      `class C { get f(c: bool): External<bytes> { return abi.encode(c ? [1n, 2n] : [3n, 4n]); } }`,
       `contract C { function f(bool c) external pure returns (bytes memory) { return abi.encode(c ? [uint8(1), 2] : [uint8(3), 4]); } }`,
       [['f(bool)', W(1)], ['f(bool)', W(0)]] as const,
     );
@@ -102,13 +102,13 @@ describe('OR cluster 4: literal typing (A-LIT-RESID + L2-MOBILE) byte-identical 
 
   it('gates that must stay rejects', () => {
     // MIXED SIGN: no solc common type.
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([1n, -1n]); } }`)).toBe(true);
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([0n, -1n]); } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([1n, -1n]); } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([0n, -1n]); } }`)).toBe(true);
     // cast + BARE mix (a cast fixes one width, a bare literal is mobile): no common type.
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([u256(1n), 2n]); } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u256(1n), 2n]); } }`)).toBe(true);
     // CROSS-FAMILY casts.
-    expect(rejects(`@contract class C { @external @pure f(): bytes { return abi.encode([u8(1n), i16(2n)]); } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<bytes> { return abi.encode([u8(1n), i16(2n)]); } }`)).toBe(true);
     // an untyped array-literal local (would need width-sensitive inference) still rejects.
-    expect(rejects(`@contract class C { @external @pure f(): u256 { let x = [200n, 100n]; return x[0n] + x[1n]; } }`)).toBe(true);
+    expect(rejects(`class C { get f(): External<u256> { let x = [200n, 100n]; return x[0n] + x[1n]; } }`)).toBe(true);
   });
 });

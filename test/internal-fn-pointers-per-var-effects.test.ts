@@ -61,10 +61,10 @@ const S_TARGETS = `uint256 s;
 describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => {
   it('LIFT: view + mutating targets in DIFFERENT variables; the @view caller is accepted', async () => {
     await eq(
-      `@contract class C { ${J_TARGETS}
-        @external @view goView(v: u256): u256 { let g: (x: u256) => u256 = this.rd; return g(v); }
-        @external goMut(v: u256): u256 { let m: (x: u256) => u256 = this.wr; return m(v); }
-        @external @view getS(): u256 { return this.s; }
+      `class C { ${J_TARGETS}
+        get goView(v: u256): External<u256> { let g: (x: u256) => u256 = this.rd; return g(v); }
+        goMut(v: u256): External<u256> { let m: (x: u256) => u256 = this.wr; return m(v); }
+        get getS(): External<u256> { return this.s; }
       }`,
       `contract C { ${S_TARGETS}
         function goView(uint256 v) external view returns (uint256) { function(uint256) view returns (uint256) g = rd; return g(v); }
@@ -83,15 +83,15 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
 
   it('LIFT: copy chains propagate the exact target set; ternary of two view targets lifts', async () => {
     await eq(
-      `@contract class C { ${J_TARGETS}
-        @view rd2(x: u256): u256 { return x * 3n + this.s; }
-        @external runMut(v: u256): u256 { let m: (x: u256) => u256 = this.wr; return m(v); }
-        @external @view chain(v: u256): u256 {
+      `class C { ${J_TARGETS}
+        rd2(x: u256): u256 { return x * 3n + this.s; }
+        runMut(v: u256): External<u256> { let m: (x: u256) => u256 = this.wr; return m(v); }
+        get chain(v: u256): External<u256> {
           let a: (x: u256) => u256 = this.rd;
           let b: (x: u256) => u256 = a;
           return b(v);
         }
-        @external @view tern(c: bool, v: u256): u256 {
+        get tern(c: bool, v: u256): External<u256> {
           let g: (x: u256) => u256 = c ? this.rd : this.rd2;
           return g(v);
         }
@@ -121,10 +121,10 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
 
   it('LIFT: @pure caller through a pure-only pointer while a mutating same-sig target exists', async () => {
     await eq(
-      `@contract class C { ${J_TARGETS}
-        @pure dbl(x: u256): u256 { return x * 2n; }
-        @external runMut(v: u256): u256 { let m: (x: u256) => u256 = this.wr; return m(v); }
-        @external @pure go(v: u256): u256 { let g: (x: u256) => u256 = this.dbl; return g(v); }
+      `class C { ${J_TARGETS}
+        dbl(x: u256): u256 { return x * 2n; }
+        runMut(v: u256): External<u256> { let m: (x: u256) => u256 = this.wr; return m(v); }
+        get go(v: u256): External<u256> { let g: (x: u256) => u256 = this.dbl; return g(v); }
       }`,
       `contract C { ${S_TARGETS}
         function dbl(uint256 x) internal pure returns (uint256) { return x * 2; }
@@ -138,9 +138,9 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
 
   it('LIFT: uninitialized pointer local in a @view fn accepted; Panic(0x51) byte-identical', async () => {
     await eq(
-      `@contract class C { ${J_TARGETS}
-        @external runMut(v: u256): u256 { let m: (x: u256) => u256 = this.wr; return m(v); }
-        @external @view go(v: u256): u256 { let g: (x: u256) => u256; return g(v); }
+      `class C { ${J_TARGETS}
+        runMut(v: u256): External<u256> { let m: (x: u256) => u256 = this.wr; return m(v); }
+        get go(v: u256): External<u256> { let g: (x: u256) => u256; return g(v); }
       }`,
       `contract C { ${S_TARGETS}
         function runMut(uint256 v) external returns (uint256) { function(uint256) returns (uint256) m = wr; return m(v); }
@@ -219,11 +219,11 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
 
   it('unregressed: the pre-existing single-target @view pointer shape still lifts', async () => {
     await eq(
-      `@contract class C {
-        @state s: u256;
+      `class C {
+        s: u256;
         constructor() { this.s = 100n; }
-        @view rd(x: u256): u256 { return x + this.s; }
-        @external @view viewPtr(v: u256): u256 { let g: (x: u256) => u256 = this.rd; return g(v); }
+        rd(x: u256): u256 { return x + this.s; }
+        get viewPtr(v: u256): External<u256> { let g: (x: u256) => u256 = this.rd; return g(v); }
       }`,
       `contract C {
         uint256 s;

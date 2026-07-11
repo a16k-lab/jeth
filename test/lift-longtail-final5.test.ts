@@ -73,12 +73,12 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
   // ---------------------------------------------------------------- LT1
   it('LT1: internal return of a single-field funcref struct dispatches byte-identically', async () => {
     await run(
-      `@struct class Fd { f: (x: u256) => u256 } @contract class C {
+      `type Fd = { f: (x: u256) => u256 }; class C {
         inc(x: u256): u256 { return x + 1n; }
         mk(): Fd { return Fd(this.inc); }
-        @external @view g(): u256 { let d: Fd = this.mk(); return d.f(4n); }
-        @external @view chain(): u256 { return this.mk().f(10n); }
-        @external @view fwd(): u256 { return this.use(this.mk()); }
+        get g(): External<u256> { let d: Fd = this.mk(); return d.f(4n); }
+        get chain(): External<u256> { return this.mk().f(10n); }
+        get fwd(): External<u256> { return this.use(this.mk()); }
         use(d: Fd): u256 { return d.f(9n); } }`,
       `contract C {
         function inc(uint256 x) internal pure returns (uint256) { return x + 1; }
@@ -96,11 +96,11 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
     const h = await Harness.create();
     const ja = await h.deploy(
       compile(
-        `@struct class Fd { f: (x: u256) => u256; g: (x: u256) => u256 } @contract class C {
+        `type Fd = { f: (x: u256) => u256; g: (x: u256) => u256 }; class C {
           inc(x: u256): u256 { return x + 1n; }
           dbl(x: u256): u256 { return x * 2n; }
           mk(): Fd { return Fd(this.inc, this.dbl); }
-          @external @view use(): u256 { let d: Fd = this.mk(); return d.f(4n) * 100n + d.g(4n); } }`,
+          get use(): External<u256> { let d: Fd = this.mk(); return d.f(4n) * 100n + d.g(4n); } }`,
         { fileName: 'C.jeth' },
       ).creationBytecode,
     );
@@ -110,33 +110,33 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
   });
 
   it('LT1: every ABI boundary of a funcref struct stays rejected (no leak)', () => {
-    const FD = `@struct class Fd { f: (x: u256) => u256 } `;
+    const FD = `type Fd = { f: (x: u256) => u256 }; `;
     const inc = `inc(x:u256):u256{return x+1n;} `;
     // @external return
-    expect(rejects(FD + `@contract class C { ${inc} @external @view r(): Fd { return Fd(this.inc); } }`)).toBe(true);
+    expect(rejects(FD + `class C { ${inc} r(): External<Fd> { return Fd(this.inc); } }`)).toBe(true);
     // @external param
-    expect(rejects(FD + `@contract class C { @external @view p(d: Fd): u256 { return d.f(3n); } }`)).toBe(true);
+    expect(rejects(FD + `class C { p(d: Fd): External<u256> { return d.f(3n); } }`)).toBe(true);
     // abi.encode / abi.encodePacked
-    expect(rejects(FD + `@contract class C { ${inc} @external @view e(): bytes { let d: Fd = Fd(this.inc); return abi.encode(d); } }`)).toBe(true);
-    expect(rejects(FD + `@contract class C { ${inc} @external @view e(): bytes { let d: Fd = Fd(this.inc); return abi.encodePacked(d); } }`)).toBe(true);
+    expect(rejects(FD + `class C { ${inc} get e(): External<bytes> { let d: Fd = Fd(this.inc); return abi.encode(d); } }`)).toBe(true);
+    expect(rejects(FD + `class C { ${inc} get e(): External<bytes> { let d: Fd = Fd(this.inc); return abi.encodePacked(d); } }`)).toBe(true);
     // @event / @error param
-    expect(rejects(FD + `@event E(d: Fd); @contract class C { ${inc} @external em(): void { let d: Fd = Fd(this.inc); emit(E(d)); } }`)).toBe(true);
-    expect(rejects(FD + `@error Bad(d: Fd); @contract class C { ${inc} @external rv(): void { let d: Fd = Fd(this.inc); revert(Bad(d)); } }`)).toBe(true);
+    expect(rejects(FD + `@event E(d: Fd); class C { ${inc} em(): External<void> { let d: Fd = Fd(this.inc); emit(E(d)); } }`)).toBe(true);
+    expect(rejects(FD + `@error Bad(d: Fd); class C { ${inc} rv(): External<void> { let d: Fd = Fd(this.inc); revert(Bad(d)); } }`)).toBe(true);
     // constructor param
-    expect(rejects(FD + `@contract class C { constructor(d: Fd) {} }`)).toBe(true);
+    expect(rejects(FD + `class C { constructor(d: Fd) {} }`)).toBe(true);
   });
 
   // ---------------------------------------------------------------- LT2
   it('LT2: Arr<Fd,N> element dispatch a[i].f(v) is byte-identical', async () => {
     await run(
-      `@struct class Fd { f: (x: u256) => u256 } @contract class C {
+      `type Fd = { f: (x: u256) => u256 }; class C {
         inc(x: u256): u256 { return x + 1n; }
         dbl(x: u256): u256 { return x * 2n; }
-        @external @view g(): u256 { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.dbl)]; return a[0n].f(4n) * 100n + a[1n].f(4n); }
-        @external @view mut(): u256 { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.dbl)]; a[0n] = Fd(this.dbl); return a[0n].f(4n) * 100n + a[1n].f(4n); }
-        @external @view three(): u256 { let a: Arr<Fd,3> = [Fd(this.inc), Fd(this.dbl), Fd(this.inc)]; return a[0n].f(1n)*10000n + a[1n].f(3n)*100n + a[2n].f(7n); }
-        @external @view runidx(i: u256): u256 { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.dbl)]; return a[i].f(5n); }
-        @external @view aliasElem(): u256 { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.dbl)]; let p: (x:u256)=>u256 = a[1n].f; return p(10n); } }`,
+        get g(): External<u256> { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.dbl)]; return a[0n].f(4n) * 100n + a[1n].f(4n); }
+        get mut(): External<u256> { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.dbl)]; a[0n] = Fd(this.dbl); return a[0n].f(4n) * 100n + a[1n].f(4n); }
+        get three(): External<u256> { let a: Arr<Fd,3> = [Fd(this.inc), Fd(this.dbl), Fd(this.inc)]; return a[0n].f(1n)*10000n + a[1n].f(3n)*100n + a[2n].f(7n); }
+        get runidx(i: u256): External<u256> { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.dbl)]; return a[i].f(5n); }
+        get aliasElem(): External<u256> { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.dbl)]; let p: (x:u256)=>u256 = a[1n].f; return p(10n); } }`,
       `contract C {
         function inc(uint256 x) internal pure returns (uint256) { return x + 1; }
         function dbl(uint256 x) internal pure returns (uint256) { return x * 2; }
@@ -152,11 +152,11 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
 
   it('LT2: a mixed value+funcref static struct array is byte-identical', async () => {
     await run(
-      `@struct class Fd { f: (x: u256) => u256; n: u256 } @contract class C {
+      `type Fd = { f: (x: u256) => u256; n: u256 }; class C {
         inc(x: u256): u256 { return x + 1n; }
         dbl(x: u256): u256 { return x * 2n; }
-        @external @view g(): u256 { let a: Arr<Fd,2> = [Fd(this.inc, 100n), Fd(this.dbl, 200n)]; return a[0n].f(4n)*1000n + a[0n].n + a[1n].f(4n)*10n + a[1n].n; }
-        @external @view mutn(): u256 { let a: Arr<Fd,2> = [Fd(this.inc, 100n), Fd(this.dbl, 200n)]; a[0n].n = 999n; return a[0n].n + a[0n].f(4n); } }`,
+        get g(): External<u256> { let a: Arr<Fd,2> = [Fd(this.inc, 100n), Fd(this.dbl, 200n)]; return a[0n].f(4n)*1000n + a[0n].n + a[1n].f(4n)*10n + a[1n].n; }
+        get mutn(): External<u256> { let a: Arr<Fd,2> = [Fd(this.inc, 100n), Fd(this.dbl, 200n)]; a[0n].n = 999n; return a[0n].n + a[0n].f(4n); } }`,
       `contract C {
         function inc(uint256 x) internal pure returns (uint256) { return x + 1; }
         function dbl(uint256 x) internal pure returns (uint256) { return x * 2; }
@@ -168,32 +168,32 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
   });
 
   it('LT2: deeper funcref-struct-array nestings and every ABI boundary stay rejected', () => {
-    const FD = `@struct class Fd { f: (x: u256) => u256 } `;
+    const FD = `type Fd = { f: (x: u256) => u256 }; `;
     const inc = `inc(x:u256):u256{return x+1n;} `;
     // deeper nestings stay JETH427
-    expect(rejects(FD + `@contract class C { ${inc} @external @view g(): u256 { let a: Arr<Arr<Fd,2>,2> = [[Fd(this.inc),Fd(this.inc)],[Fd(this.inc),Fd(this.inc)]]; return a[0n][0n].f(1n); } }`)).toBe(true);
-    expect(rejects(FD + `@contract class C { ${inc} @external @view g(): u256 { let a: Arr<Fd,2>[] = new Array<Arr<Fd,2>>(2n); return 1n; } }`)).toBe(true);
+    expect(rejects(FD + `class C { ${inc} get g(): External<u256> { let a: Arr<Arr<Fd,2>,2> = [[Fd(this.inc),Fd(this.inc)],[Fd(this.inc),Fd(this.inc)]]; return a[0n][0n].f(1n); } }`)).toBe(true);
+    expect(rejects(FD + `class C { ${inc} get g(): External<u256> { let a: Arr<Fd,2>[] = new Array<Arr<Fd,2>>(2n); return 1n; } }`)).toBe(true);
     // ABI boundaries of Arr<Fd,N> stay rejected
-    expect(rejects(FD + `@contract class C { ${inc} @external @view r(): Arr<Fd,2> { return [Fd(this.inc), Fd(this.inc)]; } }`)).toBe(true);
-    expect(rejects(FD + `@contract class C { @external @view p(a: Arr<Fd,2>): u256 { return a[0n].f(3n); } }`)).toBe(true);
-    expect(rejects(FD + `@contract class C { ${inc} @external @view e(): bytes { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.inc)]; return abi.encode(a); } }`)).toBe(true);
-    expect(rejects(FD + `@event E(a: Arr<Fd,2>); @contract class C { ${inc} @external em(): void { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.inc)]; emit(E(a)); } }`)).toBe(true);
-    expect(rejects(FD + `@contract class C { constructor(a: Arr<Fd,2>) {} }`)).toBe(true);
+    expect(rejects(FD + `class C { ${inc} r(): External<Arr<Fd,2>> { return [Fd(this.inc), Fd(this.inc)]; } }`)).toBe(true);
+    expect(rejects(FD + `class C { get p(a: Arr<Fd,2>): External<u256> { return a[0n].f(3n); } }`)).toBe(true);
+    expect(rejects(FD + `class C { ${inc} get e(): External<bytes> { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.inc)]; return abi.encode(a); } }`)).toBe(true);
+    expect(rejects(FD + `@event E(a: Arr<Fd,2>); class C { ${inc} em(): External<void> { let a: Arr<Fd,2> = [Fd(this.inc), Fd(this.inc)]; emit(E(a)); } }`)).toBe(true);
+    expect(rejects(FD + `class C { constructor(a: Arr<Fd,2>) {} }`)).toBe(true);
   });
 
   // ---------------------------------------------------------------- LT3 / LT4
   it('LT3/LT4: memory struct-array element byte read + write is byte-identical', async () => {
     await run(
-      `@struct class P { n: u256; b: bytes } @contract class C {
-        @external @view read1(): bytes1 { let xs: P[] = [P(7n, bytes("abc")), P(8n, bytes("xyz"))]; return xs[1n].b[1n]; }
-        @external @view read2(): u256 { let xs: P[] = [P(7n, bytes("abcdef"))]; return u256(u8(xs[0n].b[0n])) * 1000n + u256(u8(xs[0n].b[5n])); }
-        @external @view roob(): bytes1 { let xs: P[] = [P(7n, bytes("ab"))]; return xs[0n].b[5n]; }
-        @external @view rAlias(): u256 { let xs: P[] = [P(7n, bytes("hello"))]; let al: bytes = xs[0n].b; return u256(u8(al[1n])) * 1000n + u256(u8(xs[0n].b[1n])); }
-        @external @view write1(): bytes { let xs: P[] = [P(7n, bytes("abc")), P(8n, bytes("xyz"))]; xs[1n].b[1n] = 0x5an; return xs[1n].b; }
-        @external @view wAlias(): bytes { let xs: P[] = [P(7n, bytes("hello"))]; let al: bytes = xs[0n].b; xs[0n].b[0n] = 0x5an; return al; }
-        @external @view wNeigh(): u256 { let xs: P[] = [P(7n, bytes("abc")), P(9n, bytes("def"))]; xs[0n].b[1n] = 0x5an; return xs[0n].n + xs[1n].n * 1000n + u256(u8(xs[1n].b[0n])); }
-        @external @view woob(): bytes { let xs: P[] = [P(7n, bytes("ab"))]; xs[0n].b[5n] = 0x5an; return xs[0n].b; }
-        @external @view wMulti(): bytes { let xs: P[] = [P(1n, bytes("xxxxxx"))]; xs[0n].b[0n] = 0x41n; xs[0n].b[2n] = 0x42n; xs[0n].b[5n] = 0x43n; return xs[0n].b; } }`,
+      `type P = { n: u256; b: bytes }; class C {
+        get read1(): External<bytes1> { let xs: P[] = [P(7n, bytes("abc")), P(8n, bytes("xyz"))]; return xs[1n].b[1n]; }
+        get read2(): External<u256> { let xs: P[] = [P(7n, bytes("abcdef"))]; return u256(u8(xs[0n].b[0n])) * 1000n + u256(u8(xs[0n].b[5n])); }
+        get roob(): External<bytes1> { let xs: P[] = [P(7n, bytes("ab"))]; return xs[0n].b[5n]; }
+        get rAlias(): External<u256> { let xs: P[] = [P(7n, bytes("hello"))]; let al: bytes = xs[0n].b; return u256(u8(al[1n])) * 1000n + u256(u8(xs[0n].b[1n])); }
+        get write1(): External<bytes> { let xs: P[] = [P(7n, bytes("abc")), P(8n, bytes("xyz"))]; xs[1n].b[1n] = 0x5an; return xs[1n].b; }
+        get wAlias(): External<bytes> { let xs: P[] = [P(7n, bytes("hello"))]; let al: bytes = xs[0n].b; xs[0n].b[0n] = 0x5an; return al; }
+        get wNeigh(): External<u256> { let xs: P[] = [P(7n, bytes("abc")), P(9n, bytes("def"))]; xs[0n].b[1n] = 0x5an; return xs[0n].n + xs[1n].n * 1000n + u256(u8(xs[1n].b[0n])); }
+        get woob(): External<bytes> { let xs: P[] = [P(7n, bytes("ab"))]; xs[0n].b[5n] = 0x5an; return xs[0n].b; }
+        get wMulti(): External<bytes> { let xs: P[] = [P(1n, bytes("xxxxxx"))]; xs[0n].b[0n] = 0x41n; xs[0n].b[2n] = 0x42n; xs[0n].b[5n] = 0x43n; return xs[0n].b; } }`,
       `contract C { struct P { uint256 n; bytes b; }
         function read1() external pure returns (bytes1) { P[] memory xs = new P[](2); xs[0]=P(7,"abc"); xs[1]=P(8,"xyz"); return xs[1].b[1]; }
         function read2() external pure returns (uint256) { P[] memory xs = new P[](1); xs[0]=P(7,"abcdef"); return uint256(uint8(xs[0].b[0]))*1000 + uint256(uint8(xs[0].b[5])); }
@@ -210,9 +210,9 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
 
   it('LT3/LT4: fixed Arr<P,N> element byte read + write is byte-identical; string field stays rejected', async () => {
     await run(
-      `@struct class Q2 { b: bytes; n: u256 } @contract class C {
-        @external @pure w(): bytes { let xs: Arr<Q2, 2> = [Q2(bytes("aabb"), 1n), Q2(bytes("ccdd"), 2n)]; xs[1n].b[0n] = 0x5an; return xs[1n].b; }
-        @external @pure r(): bytes1 { let xs: Arr<Q2, 2> = [Q2(bytes("aabb"), 1n), Q2(bytes("ccdd"), 2n)]; return xs[0n].b[3n]; } }`,
+      `type Q2 = { b: bytes; n: u256 }; class C {
+        get w(): External<bytes> { let xs: Arr<Q2, 2> = [Q2(bytes("aabb"), 1n), Q2(bytes("ccdd"), 2n)]; xs[1n].b[0n] = 0x5an; return xs[1n].b; }
+        get r(): External<bytes1> { let xs: Arr<Q2, 2> = [Q2(bytes("aabb"), 1n), Q2(bytes("ccdd"), 2n)]; return xs[0n].b[3n]; } }`,
       `contract C { struct Q2 { bytes b; uint256 n; }
         function w() external pure returns (bytes memory) { Q2[2] memory xs = [Q2(bytes("aabb"), 1), Q2(bytes("ccdd"), 2)]; xs[1].b[0] = 0x5a; return xs[1].b; }
         function r() external pure returns (bytes1) { Q2[2] memory xs = [Q2(bytes("aabb"), 1), Q2(bytes("ccdd"), 2)]; return xs[0].b[3]; } }`,
@@ -220,8 +220,8 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
     );
     // a `string` field is not indexable (JETH205, solc parity).
     expect(
-      rejects(`@struct class Q2 { s: string; n: u256 }
-@contract class C { @external @pure f(): u256 { let xs: Arr<Q2, 2> = [Q2("aa", 1n), Q2("bb", 2n)]; xs[0n].s[0n] = 0x5an; return 1n; } }`),
+      rejects(`type Q2 = { s: string; n: u256 };
+class C { get f(): External<u256> { let xs: Arr<Q2, 2> = [Q2("aa", 1n), Q2("bb", 2n)]; xs[0n].s[0n] = 0x5an; return 1n; } }`),
     ).toBe(true);
   });
 
@@ -229,11 +229,11 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
   it('LT5: a storage funcref-struct-array push stays a clean reject (raw-storage would diverge)', () => {
     // solc accepts; JETH rejects because a storage funcref is a dispatch ordinal (JETH) vs a code offset
     // (solc) - the raw storage slot would DIFFER, and the bar includes raw storage.
-    const J = `@struct class Fd { f: (x: u256) => u256 } @contract class C {
-      @state xs: Fd[];
+    const J = `type Fd = { f: (x: u256) => u256 }; class C {
+      xs: Fd[];
       inc(x: u256): u256 { return x + 1n; }
-      @external add(): void { this.xs.push(Fd(this.inc)); }
-      @external @view g(): u256 { return this.xs[0n].f(4n); } }`;
+      add(): External<void> { this.xs.push(Fd(this.inc)); }
+      get g(): External<u256> { return this.xs[0n].f(4n); } }`;
     const S = `contract C {
       struct Fd { function(uint256) internal view returns (uint256) f; }
       Fd[] xs;
@@ -246,11 +246,11 @@ describe('long-tail final 5 (byte-identical to solc 0.8.35, or a proven clean re
 
   it('LT5 witness: a bare @state funcref var diverges on raw storage (JETH ordinal vs solc offset)', async () => {
     // this is WHY LT5 must stay a reject: the raw storage slot of a stored funcref is not byte-identical.
-    const J = `@contract class C {
-      @state fp: (x: u256) => u256;
+    const J = `class C {
+      fp: (x: u256) => u256;
       inc(x: u256): u256 { return x + 1n; }
-      @external set(): void { this.fp = this.inc; }
-      @external @view use(): u256 { return this.fp(4n); } }`;
+      set(): External<void> { this.fp = this.inc; }
+      get use(): External<u256> { return this.fp(4n); } }`;
     const S = `contract C {
       function(uint256) internal view returns (uint256) fp;
       function inc(uint256 x) internal pure returns (uint256) { return x + 1; }

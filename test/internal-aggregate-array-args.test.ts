@@ -24,18 +24,18 @@ async function diff(J: string, S: string, calls: [string, string][]) {
 
 describe('Batch C: internal-fn aggregate-array args + calldata dyn-struct value-array-field encode', () => {
   it('internal/private fn taking P[] / bytes[] / D[] / u256[][] args (encode + index + length)', async () => {
-    const J = `@struct class P { a: u256; b: u256; }
-    @struct class D { a: u256; s: bytes; }
-    @contract class C {
+    const J = `type P = { a: u256; b: u256; };
+    type D = { a: u256; s: bytes; };
+    class C {
       enc(ps: P[]): bytes { return abi.encode(ps); }
       sum(ps: P[]): u256 { let n: u256 = 0n; let i: u256 = 0n; while (i < ps.length) { n = n + ps[i].a; i = i + 1n; } return n; }
       benc(bs: bytes[]): bytes { return abi.encode(bs); }
       denc(ds: D[]): bytes { return abi.encode(ds); }
       menc(m: u256[][]): bytes { return abi.encode(m); }
-      @external @pure ps(): bytes { let xs: P[] = [P(1n, 2n), P(3n, 4n)]; return abi.encode(this.enc(xs), this.sum(xs)); }
-      @external @pure bs(): bytes { let xs: bytes[] = [bytes("x"), bytes("yy")]; return this.benc(xs); }
-      @external @pure ds(): bytes { let xs: D[] = new Array<D>(1n); xs[0n] = D(7n, bytes("hi")); return this.denc(xs); }
-      @external @pure mm(): bytes { let xs: u256[][] = [[1n, 2n], [3n]]; return this.menc(xs); } }`;
+      get ps(): External<bytes> { let xs: P[] = [P(1n, 2n), P(3n, 4n)]; return abi.encode(this.enc(xs), this.sum(xs)); }
+      get bs(): External<bytes> { let xs: bytes[] = [bytes("x"), bytes("yy")]; return this.benc(xs); }
+      get ds(): External<bytes> { let xs: D[] = new Array<D>(1n); xs[0n] = D(7n, bytes("hi")); return this.denc(xs); }
+      get mm(): External<bytes> { let xs: u256[][] = [[1n, 2n], [3n]]; return this.menc(xs); } }`;
     const S = `struct P { uint256 a; uint256 b; }
     struct D { uint256 a; bytes s; }
     contract C {
@@ -52,8 +52,8 @@ describe('Batch C: internal-fn aggregate-array args + calldata dyn-struct value-
   });
 
   it('abi.encode of a calldata dyn-struct with a value-array field', async () => {
-    const J = `@struct class S { a: u256; tags: u256[]; }
-    @contract class C { @external @pure f(s: S): bytes { return abi.encode(s); } @external @pure g(s: S): u256 { return s.a + s.tags.length; } }`;
+    const J = `type S = { a: u256; tags: u256[]; };
+    class C { get f(s: S): External<bytes> { return abi.encode(s); } get g(s: S): External<u256> { return s.a + s.tags.length; } }`;
     const Sol = `struct S { uint256 a; uint256[] tags; }
     contract C { function f(S calldata s) external pure returns(bytes memory){ return abi.encode(s); } function g(S calldata s) external pure returns(uint256){ return s.a + s.tags.length; } }`;
     const W = (n: bigint) => pad32(n);

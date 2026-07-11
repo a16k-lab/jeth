@@ -62,14 +62,14 @@ const rejects = (src: string): boolean => {
   }
 };
 
-const FD = `@struct class Fd { f: (x: u256) => u256; s: string; }`;
+const FD = `type Fd = { f: (x: u256) => u256; s: string; };`;
 const FD_S = `struct Fd { function(uint256) pure returns (uint256) f; string s; }`;
 
 describe('long-tail batch C: the funcref expression surface, byte-identical to solc 0.8.35', () => {
   it('F-CALLEE: all four callee spellings + solc arg-before-callee eval order + Panic 0x51', async () => {
     const J = `${FD}
-@contract class C {
-  @state log: u256;
+class C {
+  log: u256;
   inc(x: u256): u256 { return x + 1n; }
   dec(x: u256): u256 { return x - 1n; }
   pick(c: bool): (x: u256) => u256 { return c ? this.inc : this.dec; }
@@ -78,12 +78,12 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
   ldec(x: u256): u256 { this.log = this.log * 10n + 4n; return x - 1n; }
   lcond(c: bool): bool { this.log = this.log * 10n + 1n; return c; }
   larg(v: u256): u256 { this.log = this.log * 10n + 2n; return v; }
-  @external @pure a(c: bool, v: u256): u256 { return (c ? this.inc : this.dec)(v); }
-  @external b(c: bool): u256 { let x: Fd = Fd(this.inc, "a"); let y: Fd = Fd(this.dec, "b"); return (c ? x : y).f(10n); }
-  @external cc(): u256 { return this.mk().f(4n); }
-  @external d(c: bool, v: u256): u256 { return this.pick(c)(v); }
-  @external ord(c: bool, v: u256): u256 { let r: u256 = (this.lcond(c) ? this.linc : this.ldec)(this.larg(v)); return this.log * 1000n + r; }
-  @external @pure z(c: bool, v: u256): u256 { let zz: (x: u256) => u256; let g: (x: u256) => u256 = this.inc; return (c ? g : zz)(v); }
+  get a(c: bool, v: u256): External<u256> { return (c ? this.inc : this.dec)(v); }
+  b(c: bool): External<u256> { let x: Fd = Fd(this.inc, "a"); let y: Fd = Fd(this.dec, "b"); return (c ? x : y).f(10n); }
+  cc(): External<u256> { return this.mk().f(4n); }
+  d(c: bool, v: u256): External<u256> { return this.pick(c)(v); }
+  ord(c: bool, v: u256): External<u256> { let r: u256 = (this.lcond(c) ? this.linc : this.ldec)(this.larg(v)); return this.log * 1000n + r; }
+  get z(c: bool, v: u256): External<u256> { let zz: (x: u256) => u256; let g: (x: u256) => u256 = this.inc; return (c ? g : zz)(v); }
 }`;
     const S = `contract C {
   ${FD_S}
@@ -119,13 +119,13 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
   });
 
   it('F-CALLEE order fix: pre-existing element-callee miscompile (arr[idx()](a1(), a2()))', async () => {
-    const J = `@contract class C {
-  @state log: u256;
+    const J = `class C {
+  log: u256;
   add2(x: u256, y: u256): u256 { return x + y; }
   idx(): u256 { this.log = this.log * 10n + 5n; return 0n; }
   a1(): u256 { this.log = this.log * 10n + 1n; return 3n; }
   a2(): u256 { this.log = this.log * 10n + 2n; return 4n; }
-  @external go(): u256 {
+  go(): External<u256> {
     let arr: Arr<(x: u256, y: u256) => u256, 1> = [this.add2];
     let r: u256 = arr[this.idx()](this.a1(), this.a2());
     return this.log * 1000n + r;
@@ -149,16 +149,16 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
 
   it('F-TYPES t1/t2: struct- and array-returning funcrefs (In, Fd, In[], chained g(x).f(y))', async () => {
     const J = `${FD}
-@struct class In { x: u256; y: u256 }
-@contract class C {
+type In = { x: u256; y: u256 };
+class C {
   inc(x: u256): u256 { return x + 1n; }
   mkIn(a: u256): In { return In(a, a + 1n); }
   mkArr(v: u256): In[] { let a: In[] = [In(v, 1n), In(v + 1n, 2n)]; return a; }
   mkFd(t: u256): Fd { return Fd(this.inc, "zz"); }
-  @external @pure t1(v: u256): u256 { let g: (a: u256) => In = this.mkIn; let r: In = g(v); return r.x * 100n + r.y; }
-  @external @pure t2(v: u256): u256 { let g: (v: u256) => In[] = this.mkArr; let r: In[] = g(v); return r[1n].x * 10n + r.length; }
-  @external @pure t3(v: u256): u256 { let g: (t: u256) => Fd = this.mkFd; let d: Fd = g(0n); return d.f(v) * 10n + bytes(d.s).length; }
-  @external @pure ch(v: u256): u256 { let g: (t: u256) => Fd = this.mkFd; return g(0n).f(v); }
+  get t1(v: u256): External<u256> { let g: (a: u256) => In = this.mkIn; let r: In = g(v); return r.x * 100n + r.y; }
+  get t2(v: u256): External<u256> { let g: (v: u256) => In[] = this.mkArr; let r: In[] = g(v); return r[1n].x * 10n + r.length; }
+  get t3(v: u256): External<u256> { let g: (t: u256) => Fd = this.mkFd; let d: Fd = g(0n); return d.f(v) * 10n + bytes(d.s).length; }
+  get ch(v: u256): External<u256> { let g: (t: u256) => Fd = this.mkFd; return g(0n).f(v); }
 }`;
     const S = `contract C {
   ${FD_S}
@@ -182,20 +182,20 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
 
   it('F-TYPES t3: Outer { fd: Fd } - build, nested read/call, leaf write, alias, internal param, Panic 0x51', async () => {
     const J = `${FD}
-@struct class Outer { fd: Fd; n: u256 }
-@contract class C {
+type Outer = { fd: Fd; n: u256 };
+class C {
   inc(x: u256): u256 { return x + 1n; }
   dec(x: u256): u256 { return x - 1n; }
   useO(o: Outer, v: u256): u256 { return o.fd.f(v) + o.n; }
   mkO(): Outer { return Outer(Fd(this.inc, "z"), 1n); }
-  @external @pure go(v: u256): u256 {
+  get go(v: u256): External<u256> {
     let o: Outer = Outer(Fd(this.inc, "a"), 7n);
     let p: Outer = o;
     p.fd.f = this.dec;
     return o.fd.f(v) * 100n + this.useO(o, v) + bytes(o.fd.s).length * 1000n;
   }
-  @external @pure ret(v: u256): u256 { let o: Outer = this.mkO(); return o.fd.f(v) * 10n + o.n; }
-  @external @pure zz(): u256 {
+  get ret(v: u256): External<u256> { let o: Outer = this.mkO(); return o.fd.f(v) * 10n + o.n; }
+  get zz(): External<u256> {
     let z: (x: u256) => u256;
     let o: Outer = Outer(Fd(z, "x"), 3n);
     return o.fd.f(5n);
@@ -230,15 +230,15 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
 
   it('F-CONSUMERS c1: internal tuples [Fd, u256] / [u256, Q] + the funcref-POINTER tuple with an Fd component', async () => {
     const J = `${FD}
-@struct class Q { s: string; n: u256 }
-@contract class C {
+type Q = { s: string; n: u256 };
+class C {
   inc(x: u256): u256 { return x + 1n; }
   mkF(): [Fd, u256] { return [Fd(this.inc, "z"), 9n]; }
   mkQ(): [u256, Q] { return [4n, Q("abc", 9n)]; }
   mkP(x: u256): [Fd, u256] { return [Fd(this.inc, "z"), x]; }
-  @external @pure a(): u256 { let [d, n] = this.mkF(); return d.f(4n) * 100n + n; }
-  @external @pure b(): u256 { let [a2, q] = this.mkQ(); return a2 * 1000n + q.n * 10n + bytes(q.s).length; }
-  @external @pure p(v: u256): u256 { let g: (x: u256) => [Fd, u256] = this.mkP; let [d, n] = g(v); return d.f(1n) * 100n + n; }
+  get a(): External<u256> { let [d, n] = this.mkF(); return d.f(4n) * 100n + n; }
+  get b(): External<u256> { let [a2, q] = this.mkQ(); return a2 * 1000n + q.n * 10n + bytes(q.s).length; }
+  get p(v: u256): External<u256> { let g: (x: u256) => [Fd, u256] = this.mkP; let [d, n] = g(v); return d.f(1n) * 100n + n; }
 }`;
     const S = `contract C {
   ${FD_S}
@@ -260,26 +260,26 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
 
   it('F-CONSUMERS c2: Fd[] memory - literal, indexed call, element write, alias, new Array, Panic 0x51/0x32', async () => {
     const J = `${FD}
-@contract class C {
+class C {
   inc(x: u256): u256 { return x + 1n; }
   dec(x: u256): u256 { return x - 1n; }
-  @external @pure go(i: u256, v: u256): u256 {
+  get go(i: u256, v: u256): External<u256> {
     let arr: Fd[] = [Fd(this.inc, "a"), Fd(this.dec, "b")];
     return arr[i].f(v);
   }
-  @external @pure wr(v: u256): u256 {
+  get wr(v: u256): External<u256> {
     let arr: Fd[] = [Fd(this.inc, "a"), Fd(this.dec, "b")];
     arr[0n] = Fd(this.dec, "c");
     let d: Fd = arr[1n];
     d.f = this.inc;
     return arr[0n].f(v) * 100n + arr[1n].f(v) * 10n + arr.length;
   }
-  @external @pure na(): u256 {
+  get na(): External<u256> {
     let arr: Fd[] = new Array<Fd>(2n);
     arr[0n] = Fd(this.inc, "x");
     return arr[0n].f(4n) + arr.length;
   }
-  @external @pure zf(i: u256): u256 {
+  get zf(i: u256): External<u256> {
     let z: (x: u256) => u256;
     let arr: Fd[] = [Fd(z, "a"), Fd(this.inc, "b")];
     return arr[i].f(5n);
@@ -326,19 +326,19 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
   });
 
   it('F-MULTIRET m1/m1b/m2: statement discards + direct tuple return, incl. ternary callees', async () => {
-    const J = `@contract class C {
-  @state hits: u256;
+    const J = `class C {
+  hits: u256;
   two(x: u256): [u256, u256] { this.hits = this.hits + 1n; return [x, x + 1n]; }
   three(x: u256): [u256, u256] { this.hits = this.hits + 2n; return [x, x]; }
   ptwo(a: u256, b: u256): [u256, u256] { return [a + b, a * b]; }
-  @external m1(v: u256): u256 { let g: (x: u256) => [u256, u256] = this.two; g(v); return this.hits; }
-  @external m1b(v: u256): u256 { this.two(v); return this.hits; }
-  @external m1t(c: bool, v: u256): u256 { (c ? this.two : this.three)(v); return this.hits; }
-  @external @pure m2(a: u256, b: u256): [u256, u256] { let g: (a: u256, b: u256) => [u256, u256] = this.ptwo; return g(a, b); }
-  @external @pure m2t(c: bool, v: u256): [u256, u256] { return (c ? this.two2 : this.three2)(v); }
+  m1(v: u256): External<u256> { let g: (x: u256) => [u256, u256] = this.two; g(v); return this.hits; }
+  m1b(v: u256): External<u256> { this.two(v); return this.hits; }
+  m1t(c: bool, v: u256): External<u256> { (c ? this.two : this.three)(v); return this.hits; }
+  get m2(a: u256, b: u256): External<[u256, u256]> { let g: (a: u256, b: u256) => [u256, u256] = this.ptwo; return g(a, b); }
+  get m2t(c: bool, v: u256): External<[u256, u256]> { return (c ? this.two2 : this.three2)(v); }
   two2(x: u256): [u256, u256] { return [x + 1n, x + 2n]; }
   three2(x: u256): [u256, u256] { return [x * 2n, x * 3n]; }
-  @external @pure m2d(c: bool, v: u256): u256 { let [a, b] = (c ? this.two2 : this.three2)(v); return a * 100n + b; }
+  get m2d(c: bool, v: u256): External<u256> { let [a, b] = (c ? this.two2 : this.three2)(v); return a * 100n + b; }
 }`;
     const S = `contract C {
   uint256 hits;
@@ -368,14 +368,14 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
   });
 
   it('F-MULTIRET m2: mixed [u256, string] tuple through a pointer + statement discards through expression callees', async () => {
-    const J = `@struct class FdM { f: (x: u256) => u256; s: string; }
-@contract class C {
-  @state h: u256;
+    const J = `type FdM = { f: (x: u256) => u256; s: string; };
+class C {
+  h: u256;
   mk(x: u256): [u256, string] { return [x + 1n, "hey"]; }
   bump(x: u256): u256 { this.h = this.h + x; return x; }
   pickB(c: bool): (x: u256) => u256 { return this.bump; }
-  @external @pure go(v: u256): [u256, string] { let g: (x: u256) => [u256, string] = this.mk; return g(v); }
-  @external st(c: bool, v: u256): u256 {
+  get go(v: u256): External<[u256, string]> { let g: (x: u256) => [u256, string] = this.mk; return g(v); }
+  st(c: bool, v: u256): External<u256> {
     let a: FdM = FdM(this.bump, "a");
     let b: FdM = FdM(this.bump, "b");
     (c ? a : b).f(v);
@@ -406,7 +406,7 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
   });
 
   it('rejects(): the full ABI-leak matrix for every newly-admitted funcref-bearing type', () => {
-    const PRE = `${FD}\n@struct class Outer { fd: Fd; n: u256 }\n`;
+    const PRE = `${FD}\ntype Outer = { fd: Fd; n: u256 };\n`;
     const HELP = `  inc(x: u256): u256 { return x + 1n; }\n  mkFd(): Fd { return Fd(this.inc, "z"); }\n  mkOuter(): Outer { return Outer(Fd(this.inc, "z"), 1n); }\n`;
     const C = (body: string) => `${PRE}@contract class C {\n${HELP}${body}\n}`;
     // abi.encode / encodePacked / decode / encodeWith* (solc: all reject, diff-verified BOTH-REJECT)
@@ -446,7 +446,7 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
     expect(rejects(C(`  constructor(g: (x: u256) => u256) {}`))).toBe(true);
     // @interface method types
     expect(
-      rejects(`${FD}\n@interface class I { @external f(d: Fd): u256; }\n@contract class C { @external go(): u256 { return 1n; } }`),
+      rejects(`${FD}\ninterface I { f(d: Fd): u256; }\nclass C { get go(): External<u256> { return 1n; } }`),
     ).toBe(true);
     // Arr<Fd,2> element dispatch was LIFTED by long-tail batch D (memory-local fixed array of
     // funcref structs, byte-identical incl. OOB Panic; every ABI boundary still rejects it - see
@@ -461,7 +461,7 @@ describe('long-tail batch C: the funcref expression surface, byte-identical to s
     // reject): verified byte-identical INCLUDING the alias witnesses - a previously-bound
     // `old: Fd = o.fd` keeps the OLD funcref after the write (solc re-points, never copies),
     // and a whole-struct alias `al: Outer = o` sees the NEW one through al.fd.
-    const PRE = `${FD}\n@struct class Outer { fd: Fd; n: u256 }\n`;
+    const PRE = `${FD}\ntype Outer = { fd: Fd; n: u256 };\n`;
     const J = `${PRE}@contract class C {
   inc(x: u256): u256 { return x + 1n; }
   dec(x: u256): u256 { return x - 1n; }

@@ -121,11 +121,11 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
       function mkU() external pure returns(uint256[3] memory){ uint256[3] memory xs=[uint256(5),6,7]; return xs; }
       function mkA() external pure returns(address[2] memory){ address[2] memory xs=[address(0x11),address(0x22)]; return xs; }
     }`;
-    const callerJ = `@interface class IFoo { @external @view mkU(): Arr<u256,3>; @external @view mkA(): Arr<address,2>; }
-      @contract class C {
-        @external @view goU(t: address): Arr<u256,3> { return IFoo(t).mkU(); }
-        @external @view goA(t: address): Arr<address,2> { return IFoo(t).mkA(); }
-        @external @view goUEnc(t: address): bytes { return abi.encode(IFoo(t).mkU()); }
+    const callerJ = `interface IFoo { mkU(): View<Arr<u256,3>>; mkA(): View<Arr<address,2>>; }
+      class C {
+        get goU(t: address): External<Arr<u256,3>> { return IFoo(t).mkU(); }
+        get goA(t: address): External<Arr<address,2>> { return IFoo(t).mkA(); }
+        get goUEnc(t: address): External<bytes> { return abi.encode(IFoo(t).mkU()); }
       }`;
     const callerS = `interface IFoo { function mkU() external view returns(uint256[3] memory); function mkA() external view returns(address[2] memory); }
       contract C {
@@ -165,7 +165,7 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
     );
     // plain fixed-array literal return (no call).
     await bothMatch(
-      `@contract class C { @external go(): Arr<u256,3> { return [1n,2n,3n]; } }`,
+      `class C { get go(): External<Arr<u256,3>> { return [1n,2n,3n]; } }`,
       `contract C { function go() external returns(uint256[3] memory){ return [uint256(1),2,3]; } }`,
       [['go()']],
     );
@@ -185,7 +185,7 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
     );
     // a DIRECT abi.decode of a static fixed array (also flows through the new branch).
     await bothMatch(
-      `@contract class C { @external dec(b: bytes): Arr<u256,2> { return abi.decode(b, Arr<u256,2>); } }`,
+      `class C { get dec(b: bytes): External<Arr<u256,2>> { return abi.decode(b, Arr<u256,2>); } }`,
       `contract C { function dec(bytes calldata b) external returns(uint256[2] memory){ return abi.decode(b,(uint256[2])); } }`,
       [['dec(bytes)', wrapBytes(W(42n) + W(43n))]],
     );

@@ -14,17 +14,17 @@ const sel = (s: string) => functionSelector(s);
 
 describe('whole fixed-array-element assign (JETH226) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@contract class C {
-    @state dd: Arr<Arr<u256,2>,2>;
-    @state src: Arr<u256,2>;
-    @state ee: Arr<u256,2>[];
-    @external setDD(i: u256, a: u256, b: u256): void { this.dd[i] = [a, b]; }
-    @external setSrc(a: u256, b: u256): void { this.src = [a, b]; }
-    @external copyToDD(i: u256): void { this.dd[i] = this.src; }
-    @external pushEE(a: u256, b: u256): void { this.ee.push([a, b]); }
-    @external setEE(i: u256, a: u256, b: u256): void { this.ee[i] = [a, b]; }
-    @external @view get(i: u256, j: u256): u256 { return this.dd[i][j]; }
-    @external @view getEE(i: u256, j: u256): u256 { return this.ee[i][j]; } }`;
+  const J = `class C {
+    dd: Arr<Arr<u256,2>,2>;
+    src: Arr<u256,2>;
+    ee: Arr<u256,2>[];
+    setDD(i: u256, a: u256, b: u256): External<void> { this.dd[i] = [a, b]; }
+    setSrc(a: u256, b: u256): External<void> { this.src = [a, b]; }
+    copyToDD(i: u256): External<void> { this.dd[i] = this.src; }
+    pushEE(a: u256, b: u256): External<void> { this.ee.push([a, b]); }
+    setEE(i: u256, a: u256, b: u256): External<void> { this.ee[i] = [a, b]; }
+    get get(i: u256, j: u256): External<u256> { return this.dd[i][j]; }
+    get getEE(i: u256, j: u256): External<u256> { return this.ee[i][j]; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {
@@ -103,11 +103,11 @@ contract C {
 // N inline words. Now byte-identical to solc, incl. packed (<256-bit) elements.
 describe('push of a fixed-array element onto a dynamic array (pre-existing fix) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@contract class C { @state ee: Arr<u8,4>[]; @state src: Arr<u8,4>;
-    @external pushLit(a: u8, b: u8, c: u8, d: u8): void { this.ee.push([a, b, c, d]); }
-    @external setSrc(a: u8, b: u8, c: u8, d: u8): void { this.src = [a, b, c, d]; }
-    @external pushSrc(): void { this.ee.push(this.src); }
-    @external @view get(i: u256, j: u256): u8 { return this.ee[i][j]; } }`;
+  const J = `class C { ee: Arr<u8,4>[]; src: Arr<u8,4>;
+    pushLit(a: u8, b: u8, c: u8, d: u8): External<void> { this.ee.push([a, b, c, d]); }
+    setSrc(a: u8, b: u8, c: u8, d: u8): External<void> { this.src = [a, b, c, d]; }
+    pushSrc(): External<void> { this.ee.push(this.src); }
+    get get(i: u256, j: u256): External<u8> { return this.ee[i][j]; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C { uint8[4][] ee; uint8[4] src;

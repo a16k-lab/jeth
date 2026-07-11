@@ -44,16 +44,16 @@ const codes = (src: string): string[] => {
   }
 };
 
-const IN = `@struct class In { a: u256; b: u256; }`;
+const IN = `type In = { a: u256; b: u256; };`;
 const SIN = `struct In { uint256 a; uint256 b; }`;
 
 describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer-headed, the current representation)', () => {
   it('literal build + element read m[i] (const / runtime / OOB)', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure r(): u256 { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return m[0n].a + m[1n].b + m[2n].a; }
-         @external @pure dyn(i: u256): u256 { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return m[i].a * 100n + m[i].b; } }`,
+       class C {
+         get r(): External<u256> { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return m[0n].a + m[1n].b + m[2n].a; }
+         get dyn(i: u256): External<u256> { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return m[i].a * 100n + m[i].b; } }`,
       `${SIN}
        contract C {
          function r() external pure returns(uint256){ In[3] memory m; m[0]=In(11,12);m[1]=In(13,14);m[2]=In(15,16); return m[0].a+m[1].b+m[2].a; }
@@ -65,9 +65,9 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('m[i] = In(..) value write, m[i].f read+write', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure w(): u256 { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; m[1n] = In(91n, 92n); return m[0n].a + m[1n].a + m[1n].b + m[2n].b; }
-         @external @pure fw(): u256 { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; m[0n].a = 77n; m[1n].b = 88n; return m[0n].a + m[0n].b + m[1n].a + m[1n].b; } }`,
+       class C {
+         get w(): External<u256> { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; m[1n] = In(91n, 92n); return m[0n].a + m[1n].a + m[1n].b + m[2n].b; }
+         get fw(): External<u256> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; m[0n].a = 77n; m[1n].b = 88n; return m[0n].a + m[0n].b + m[1n].a + m[1n].b; } }`,
       `${SIN}
        contract C {
          function w() external pure returns(uint256){ In[3] memory m; m[0]=In(11,12);m[1]=In(13,14);m[2]=In(15,16); m[1]=In(91,92); return m[0].a+m[1].a+m[1].b+m[2].b; }
@@ -79,11 +79,11 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('DECISIVE: m[i]=m[j] element re-point aliasing (solc reference model; FLAT would MISCOMPILE this)', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure reptT1(): u256 { let m: Arr<In,3> = [In(11n,12n), In(88n,99n), In(50n,60n)]; m[1n] = m[0n]; m[0n].a = 7n; return m[1n].a; }
-         @external @pure reptT2(): u256 { let m: Arr<In,3> = [In(11n,12n), In(88n,99n), In(50n,60n)]; m[1n] = m[0n]; m[1n].a = 77n; return m[0n].a; }
-         @external @pure reptTri(): [u256,u256] { let m: Arr<In,3> = [In(11n,12n), In(88n,99n), In(50n,60n)]; m[2n]=m[0n]; m[1n]=m[0n]; m[0n].a=7n; return [m[1n].a, m[2n].a]; }
-         @external @pure reptEnc(): bytes { let m: Arr<In,3> = [In(11n,12n), In(88n,99n), In(50n,60n)]; m[1n]=m[0n]; m[0n].a=7n; return abi.encode(m); } }`,
+       class C {
+         get reptT1(): External<u256> { let m: Arr<In,3> = [In(11n,12n), In(88n,99n), In(50n,60n)]; m[1n] = m[0n]; m[0n].a = 7n; return m[1n].a; }
+         get reptT2(): External<u256> { let m: Arr<In,3> = [In(11n,12n), In(88n,99n), In(50n,60n)]; m[1n] = m[0n]; m[1n].a = 77n; return m[0n].a; }
+         get reptTri(): External<[u256,u256]> { let m: Arr<In,3> = [In(11n,12n), In(88n,99n), In(50n,60n)]; m[2n]=m[0n]; m[1n]=m[0n]; m[0n].a=7n; return [m[1n].a, m[2n].a]; }
+         get reptEnc(): External<bytes> { let m: Arr<In,3> = [In(11n,12n), In(88n,99n), In(50n,60n)]; m[1n]=m[0n]; m[0n].a=7n; return abi.encode(m); } }`,
       `${SIN}
        contract C {
          function reptT1() external pure returns(uint256){ In[3] memory m; m[0]=In(11,12);m[1]=In(88,99);m[2]=In(50,60); m[1]=m[0]; m[0].a=7; return m[1].a; }
@@ -97,9 +97,9 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('let p = m[i] reference write-through (both directions)', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure al(): u256 { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; let p: In = m[0n]; p.a = 99n; return m[0n].a * 1000n + p.a; }
-         @external @pure al2(): u256 { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; let p: In = m[0n]; m[0n].a = 55n; return p.a * 1000n + m[0n].a; } }`,
+       class C {
+         get al(): External<u256> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; let p: In = m[0n]; p.a = 99n; return m[0n].a * 1000n + p.a; }
+         get al2(): External<u256> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; let p: In = m[0n]; m[0n].a = 55n; return p.a * 1000n + m[0n].a; } }`,
       `${SIN}
        contract C {
          function al() external pure returns(uint256){ In[2] memory m; m[0]=In(11,12);m[1]=In(13,14); In memory p=m[0]; p.a=99; return m[0].a*1000+p.a; }
@@ -111,12 +111,12 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('return m / abi.encode(m) / mixed with scalars / offset (preceding+following field)', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure ret(): Arr<In,3> { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return m; }
-         @external @pure enc(): bytes { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return abi.encode(m); }
-         @external @pure encmix(): bytes { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; return abi.encode(m, m[1n].a, 999n); }
-         @external @pure pre(): bytes { let x: u256 = 7n; let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; return abi.encode(x, m); }
-         @external @pure post(): bytes { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; let y: u256 = 9n; return abi.encode(m, y); } }`,
+       class C {
+         get ret(): External<Arr<In,3>> { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return m; }
+         get enc(): External<bytes> { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return abi.encode(m); }
+         get encmix(): External<bytes> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; return abi.encode(m, m[1n].a, 999n); }
+         get pre(): External<bytes> { let x: u256 = 7n; let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; return abi.encode(x, m); }
+         get post(): External<bytes> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; let y: u256 = 9n; return abi.encode(m, y); } }`,
       `${SIN}
        contract C {
          function ret() external pure returns(In[3] memory){ In[3] memory m; m[0]=In(11,12);m[1]=In(13,14);m[2]=In(15,16); return m; }
@@ -131,11 +131,11 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('internal-call arg pick(m,i) + 2-hop', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @pure pick(m: Arr<In,3>, i: u256): u256 { return m[i].a * 10n + m[i].b; }
-         @pure hop(m: Arr<In,3>): u256 { return this.pick(m, 2n); }
-         @external @pure p(i: u256): u256 { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return this.pick(m, i); }
-         @external @pure h(): u256 { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return this.hop(m); } }`,
+       class C {
+         pick(m: Arr<In,3>, i: u256): u256 { return m[i].a * 10n + m[i].b; }
+         hop(m: Arr<In,3>): u256 { return this.pick(m, 2n); }
+         get p(i: u256): External<u256> { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return this.pick(m, i); }
+         get h(): External<u256> { let m: Arr<In,3> = [In(11n,12n), In(13n,14n), In(15n,16n)]; return this.hop(m); } }`,
       `${SIN}
        contract C {
          function pick(In[3] memory m, uint256 i) internal pure returns(uint256){ return m[i].a*10+m[i].b; }
@@ -149,9 +149,9 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('nested Arr<Arr<In,N>,M> read + encode', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure n(): u256 { let m: Arr<Arr<In,2>,2> = [[In(11n,12n), In(13n,14n)], [In(15n,16n), In(17n,18n)]]; return m[0n][1n].a * 1000n + m[1n][0n].b; }
-         @external @pure ne(): bytes { let m: Arr<Arr<In,2>,2> = [[In(11n,12n), In(13n,14n)], [In(15n,16n), In(17n,18n)]]; return abi.encode(m); } }`,
+       class C {
+         get n(): External<u256> { let m: Arr<Arr<In,2>,2> = [[In(11n,12n), In(13n,14n)], [In(15n,16n), In(17n,18n)]]; return m[0n][1n].a * 1000n + m[1n][0n].b; }
+         get ne(): External<bytes> { let m: Arr<Arr<In,2>,2> = [[In(11n,12n), In(13n,14n)], [In(15n,16n), In(17n,18n)]]; return abi.encode(m); } }`,
       `${SIN}
        contract C {
          function n() external pure returns(uint256){ In[2][2] memory m; m[0][0]=In(11,12);m[0][1]=In(13,14);m[1][0]=In(15,16);m[1][1]=In(17,18); return m[0][1].a*1000+m[1][0].b; }
@@ -162,19 +162,19 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
 
   it('3-field / packed(u128) / struct-with-Arr<u256,2>-field elements', async () => {
     await diff(
-      `@struct class In3 { a: u256; b: u256; c: u256; }
-       @contract class C {
-         @external @pure e(): bytes { let m: Arr<In3,2> = [In3(11n,12n,13n), In3(14n,15n,16n)]; return abi.encode(m, m[1n].c); } }`,
+      `type In3 = { a: u256; b: u256; c: u256; };
+       class C {
+         get e(): External<bytes> { let m: Arr<In3,2> = [In3(11n,12n,13n), In3(14n,15n,16n)]; return abi.encode(m, m[1n].c); } }`,
       `struct In3 { uint256 a; uint256 b; uint256 c; }
        contract C {
          function e() external pure returns(bytes memory){ In3[2] memory m; m[0]=In3(11,12,13);m[1]=In3(14,15,16); return abi.encode(m, m[1].c); } }`,
       [['e()', '']],
     );
     await diff(
-      `@struct class Ip { a: u128; b: u128; }
-       @contract class C {
-         @external @pure e(): bytes { let m: Arr<Ip,2> = [Ip(11n,12n), Ip(13n,14n)]; return abi.encode(m, m[1n].a); }
-         @external @pure r(i: u256): u256 { let m: Arr<Ip,2> = [Ip(11n,12n), Ip(13n,14n)]; return m[i].a * 100n + m[i].b; } }`,
+      `type Ip = { a: u128; b: u128; };
+       class C {
+         get e(): External<bytes> { let m: Arr<Ip,2> = [Ip(11n,12n), Ip(13n,14n)]; return abi.encode(m, m[1n].a); }
+         get r(i: u256): External<u256> { let m: Arr<Ip,2> = [Ip(11n,12n), Ip(13n,14n)]; return m[i].a * 100n + m[i].b; } }`,
       `struct Ip { uint128 a; uint128 b; }
        contract C {
          function e() external pure returns(bytes memory){ Ip[2] memory m; m[0]=Ip(11,12);m[1]=Ip(13,14); return abi.encode(m, m[1].a); }
@@ -182,10 +182,10 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
       [['e()', ''], ['r(uint256)', W(0)], ['r(uint256)', W(1)]],
     );
     await diff(
-      `@struct class Q { a: u256; pre: Arr<u256,2>; }
-       @contract class C {
-         @external @pure e(): bytes { let m: Arr<Q,2> = [Q(5n,[6n,7n]), Q(8n,[9n,10n])]; return abi.encode(m, m[1n].pre[1n], m[0n].a); }
-         @external @pure r(): u256 { let m: Arr<Q,2> = [Q(5n,[6n,7n]), Q(8n,[9n,10n])]; return m[0n].pre[0n] + m[1n].pre[1n] + m[1n].a; } }`,
+      `type Q = { a: u256; pre: Arr<u256,2>; };
+       class C {
+         get e(): External<bytes> { let m: Arr<Q,2> = [Q(5n,[6n,7n]), Q(8n,[9n,10n])]; return abi.encode(m, m[1n].pre[1n], m[0n].a); }
+         get r(): External<u256> { let m: Arr<Q,2> = [Q(5n,[6n,7n]), Q(8n,[9n,10n])]; return m[0n].pre[0n] + m[1n].pre[1n] + m[1n].a; } }`,
       `struct Q { uint256 a; uint256[2] pre; }
        contract C {
          function e() external pure returns(bytes memory){ uint256[2] memory p0;p0[0]=6;p0[1]=7; uint256[2] memory p1;p1[0]=9;p1[1]=10; Q[2] memory m; m[0]=Q(5,p0);m[1]=Q(8,p1); return abi.encode(m, m[1].pre[1], m[0].a); }
@@ -197,10 +197,10 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('calldata-param read/encode/return + truncated/oversized revert flavor', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure rd(m: Arr<In,3>, i: u256): u256 { return m[i].a * 100n + m[i].b; }
-         @external @pure en(m: Arr<In,3>): bytes { return abi.encode(m); }
-         @external @pure rt(m: Arr<In,3>): Arr<In,3> { return m; } }`,
+       class C {
+         get rd(m: Arr<In,3>, i: u256): External<u256> { return m[i].a * 100n + m[i].b; }
+         get en(m: Arr<In,3>): External<bytes> { return abi.encode(m); }
+         get rt(m: Arr<In,3>): External<Arr<In,3>> { return m; } }`,
       `${SIN}
        contract C {
          function rd(In[3] calldata m, uint256 i) external pure returns(uint256){ return m[i].a*100+m[i].b; }
@@ -214,8 +214,8 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
     );
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure rd(m: Arr<In,3>): u256 { return m[0n].a + m[2n].b; } }`,
+       class C {
+         get rd(m: Arr<In,3>): External<u256> { return m[0n].a + m[2n].b; } }`,
       `${SIN}
        contract C {
          function rd(In[3] calldata m) external pure returns(uint256){ return m[0].a + m[2].b; } }`,
@@ -230,11 +230,11 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('storage @state Arr<In,N> read/encode + storage->mem copy independence', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @state s: Arr<In,3>;
-         @external seed(): void { this.s[0n] = In(11n,12n); this.s[1n] = In(13n,14n); this.s[2n] = In(15n,16n); }
-         @external @view rd(i: u256): u256 { return this.s[i].a * 100n + this.s[i].b; }
-         @external @view en(): bytes { let m: Arr<In,3> = this.s; return abi.encode(m); } }`,
+       class C {
+         s: Arr<In,3>;
+         seed(): External<void> { this.s[0n] = In(11n,12n); this.s[1n] = In(13n,14n); this.s[2n] = In(15n,16n); }
+         get rd(i: u256): External<u256> { return this.s[i].a * 100n + this.s[i].b; }
+         get en(): External<bytes> { let m: Arr<In,3> = this.s; return abi.encode(m); } }`,
       `${SIN}
        contract C {
          In[3] s;
@@ -245,10 +245,10 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
     );
     await diff(
       `${IN}
-       @contract class C {
-         @state s: Arr<In,2>;
-         @external seed(): void { this.s[0n] = In(11n,12n); this.s[1n] = In(13n,14n); }
-         @external @view cp(): u256 { let m: Arr<In,2> = this.s; m[0n].a = 500n; return m[0n].a * 10000n + this.s[0n].a; } }`,
+       class C {
+         s: Arr<In,2>;
+         seed(): External<void> { this.s[0n] = In(11n,12n); this.s[1n] = In(13n,14n); }
+         get cp(): External<u256> { let m: Arr<In,2> = this.s; m[0n].a = 500n; return m[0n].a * 10000n + this.s[0n].a; } }`,
       `${SIN}
        contract C {
          In[2] s;
@@ -263,11 +263,11 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('REG: DYNAMIC-outer In[] stays pointer-headed (build/read/return/alias)', async () => {
     await diff(
       `${IN}
-       @contract class C {
-         @external @pure lit(): bytes { let xs: In[] = [In(11n,12n), In(13n,14n), In(15n,16n)]; return abi.encode(xs); }
-         @external @pure rd(): u256 { let xs: In[] = [In(11n,12n), In(13n,14n)]; return xs[1n].a + xs[0n].b + xs.length; }
-         @external @pure ret(): In[] { let xs: In[] = [In(71n,72n), In(73n,74n)]; return xs; }
-         @external @pure aliasw(): u256 { let xs: In[] = [In(11n,12n), In(88n,99n)]; xs[1n] = xs[0n]; xs[0n].a = 7n; return xs[1n].a; } }`,
+       class C {
+         get lit(): External<bytes> { let xs: In[] = [In(11n,12n), In(13n,14n), In(15n,16n)]; return abi.encode(xs); }
+         get rd(): External<u256> { let xs: In[] = [In(11n,12n), In(13n,14n)]; return xs[1n].a + xs[0n].b + xs.length; }
+         get ret(): External<In[]> { let xs: In[] = [In(71n,72n), In(73n,74n)]; return xs; }
+         get aliasw(): External<u256> { let xs: In[] = [In(11n,12n), In(88n,99n)]; xs[1n] = xs[0n]; xs[0n].a = 7n; return xs[1n].a; } }`,
       `${SIN}
        contract C {
          function lit() external pure returns(bytes memory){ In[] memory xs=new In[](3); xs[0]=In(11,12);xs[1]=In(13,14);xs[2]=In(15,16); return abi.encode(xs); }
@@ -280,11 +280,11 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
 
   it('REG: Arr<DynIn,N> (dynamic-struct element) stays pointer-headed', async () => {
     await diff(
-      `@struct class D { a: u256; s: string; }
-       @contract class C {
-         @external @pure lit(): bytes { let m: Arr<D,2> = [D(11n,"hi"), D(13n,"world")]; return abi.encode(m); }
-         @external @pure rd(): u256 { let m: Arr<D,2> = [D(11n,"hi"), D(13n,"world")]; return m[0n].a + m[1n].a; }
-         @external @pure ret(): Arr<D,2> { let m: Arr<D,2> = [D(71n,"aa"), D(73n,"bb")]; return m; } }`,
+      `type D = { a: u256; s: string; };
+       class C {
+         get lit(): External<bytes> { let m: Arr<D,2> = [D(11n,"hi"), D(13n,"world")]; return abi.encode(m); }
+         get rd(): External<u256> { let m: Arr<D,2> = [D(11n,"hi"), D(13n,"world")]; return m[0n].a + m[1n].a; }
+         get ret(): External<Arr<D,2>> { let m: Arr<D,2> = [D(71n,"aa"), D(73n,"bb")]; return m; } }`,
       `struct D { uint256 a; string s; }
        contract C {
          function lit() external pure returns(bytes memory){ D[2] memory m; m[0]=D(11,"hi");m[1]=D(13,"world"); return abi.encode(m); }
@@ -296,10 +296,10 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
 
   it('REG: Arr<u256,N> value array unchanged (was always flat)', async () => {
     await diff(
-      `@contract class C {
-         @external @pure e(): bytes { let m: Arr<u256,3> = [11n, 12n, 13n]; return abi.encode(m, m[1n]); }
-         @external @pure r(i: u256): u256 { let m: Arr<u256,3> = [11n, 12n, 13n]; m[i] = 99n; return m[0n] + m[1n] + m[2n]; }
-         @external @pure ret(): Arr<u256,3> { let m: Arr<u256,3> = [71n, 72n, 73n]; return m; } }`,
+      `class C {
+         get e(): External<bytes> { let m: Arr<u256,3> = [11n, 12n, 13n]; return abi.encode(m, m[1n]); }
+         get r(i: u256): External<u256> { let m: Arr<u256,3> = [11n, 12n, 13n]; m[i] = 99n; return m[0n] + m[1n] + m[2n]; }
+         get ret(): External<Arr<u256,3>> { let m: Arr<u256,3> = [71n, 72n, 73n]; return m; } }`,
       `contract C {
          function e() external pure returns(bytes memory){ uint256[3] memory m; m[0]=11;m[1]=12;m[2]=13; return abi.encode(m, m[1]); }
          function r(uint256 i) external pure returns(uint256){ uint256[3] memory m; m[0]=11;m[1]=12;m[2]=13; m[i]=99; return m[0]+m[1]+m[2]; }
@@ -313,18 +313,18 @@ describe('Stage-0 flat Arr<In,N> matrix - byte-identical to solc 0.8.35 (pointer
   it('CONTROL: JETH465 inline-struct-ctor return of Arr<In,N> field STILL rejects', () => {
     expect(
       codes(`${IN}
-        @struct class S { tag: u256; m: Arr<In,2>; }
-        @contract class C {
-          @external @pure f(): S { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; return S(5n, m); } }`),
+        type S = { tag: u256; m: Arr<In,2>; };
+        class C {
+          get f(): External<S> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; return S(5n, m); } }`),
     ).toContain('JETH465');
   });
 
   it('CONTROL: JETH470 mem->storage struct-array copy STILL rejects', () => {
     expect(
       codes(`${IN}
-        @contract class C {
-          @state s: Arr<In,2>;
-          @external f(): void { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; this.s = m; } }`),
+        class C {
+          s: Arr<In,2>;
+          f(): External<void> { let m: Arr<In,2> = [In(11n,12n), In(13n,14n)]; this.s = m; } }`),
     ).toContain('JETH470');
   });
 });

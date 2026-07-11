@@ -58,7 +58,7 @@ async function sameSlots(J: string, S: string, args = '', n = 3) {
 describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
   it('consumes NO storage slot: @state/@immutable/@state keeps slots unshifted', () =>
     sameSlots(
-      `@contract class C { @state s0: u256; @immutable a: u256; @state s1: u256; constructor(){ this.s0 = 11n; this.a = 7n; this.s1 = 22n; } }`,
+      `class C { s0: u256; static a: u256; s1: u256; constructor(){ this.s0 = 11n; this.a = 7n; this.s1 = 22n; } }`,
       `contract C { uint256 s0; uint256 immutable a; uint256 s1; constructor(){ s0=11; a=7; s1=22; } }`,
       '',
       2,
@@ -66,7 +66,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
 
   it('does not break packing or finish a slot (u8 / immutable u128 / u8 pack together)', () =>
     sameSlots(
-      `@contract class C { @state x: u8; @immutable a: u128; @state y: u8; @state c: u256; constructor(){ this.x = 1n; this.a = 5n; this.y = 2n; this.c = 9n; } }`,
+      `class C { x: u8; static a: u128; y: u8; c: u256; constructor(){ this.x = 1n; this.a = 5n; this.y = 2n; this.c = 9n; } }`,
       `contract C { uint8 x; uint128 immutable a; uint8 y; uint256 c; constructor(){ x=1; a=5; y=2; c=9; } }`,
       '',
       2,
@@ -76,7 +76,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
     expect(
       BigInt(
         await sameCall(
-          `@contract class C { @immutable a: u256; @external @view getA(): u256 { return this.a; } constructor(x: u256){ this.a = x; } }`,
+          `class C { static a: u256; get getA(): External<u256> { return this.a; } constructor(x: u256){ this.a = x; } }`,
           `contract C { uint256 immutable a; function getA() external view returns(uint256){return a;} constructor(uint256 x){ a=x; } }`,
           'getA()',
           pad32(42n),
@@ -89,7 +89,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
     expect(
       BigInt(
         await sameCall(
-          `@contract class C { @state s0: u256; @immutable a: u256; @external @view g0(): u256 { return this.s0; } constructor(){ this.s0 = this.a; this.a = 42n; } }`,
+          `class C { s0: u256; static a: u256; get g0(): External<u256> { return this.s0; } constructor(){ this.s0 = this.a; this.a = 42n; } }`,
           `contract C { uint256 s0; uint256 immutable a; function g0() external view returns(uint256){return s0;} constructor(){ s0 = a; a = 42; } }`,
           'g0()',
         ),
@@ -101,7 +101,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
     expect(
       BigInt(
         await sameCall(
-          `@contract class C { @immutable a: u256; @external @view getA(): u256 { return this.a; } constructor(){ this.a = 1n; this.a += 4n; this.a = this.a + 100n; } }`,
+          `class C { static a: u256; get getA(): External<u256> { return this.a; } constructor(){ this.a = 1n; this.a += 4n; this.a = this.a + 100n; } }`,
           `contract C { uint256 immutable a; function getA() external view returns(uint256){return a;} constructor(){ a=1; a+=4; a=a+100; } }`,
           'getA()',
         ),
@@ -113,7 +113,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
     expect(
       BigInt(
         await sameCall(
-          `@contract class C { @immutable a: u256; @external @view getA(): u256 { return this.a; } constructor(){} }`,
+          `class C { static a: u256; get getA(): External<u256> { return this.a; } constructor(){} }`,
           `contract C { uint256 immutable a; function getA() external view returns(uint256){return a;} constructor(){} }`,
           'getA()',
         ),
@@ -125,7 +125,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
     expect(
       BigInt(
         await sameCall(
-          `@contract class C { @immutable a: u256; @external @view getA(): u256 { return this.a; } }`,
+          `class C { static a: u256; get getA(): External<u256> { return this.a; } }`,
           `contract C { uint256 immutable a; function getA() external view returns(uint256){return a;} }`,
           'getA()',
         ),
@@ -137,7 +137,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
     expect(
       BigInt(
         await sameCall(
-          `@contract class C { @state s: u256; @immutable a: u64; @immutable b: u64; @external @view getB(): u64 { return this.b; } constructor(_a: u64, _b: u64){ this.s = 99n; this.a = _a; this.b = _b; } }`,
+          `class C { s: u256; static a: u64; static b: u64; get getB(): External<u64> { return this.b; } constructor(_a: u64, _b: u64){ this.s = 99n; this.a = _a; this.b = _b; } }`,
           `contract C { uint256 s; uint64 immutable a; uint64 immutable b; function getB() external view returns(uint64){return b;} constructor(uint64 _a,uint64 _b){ s=99; a=_a; b=_b; } }`,
           'getB()',
           pad32(7n) + pad32(9n),
@@ -145,7 +145,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
       ),
     ).toBe(9n);
     await sameSlots(
-      `@contract class C { @state s: u256; @immutable a: u64; @immutable b: u64; constructor(_a: u64, _b: u64){ this.s = 99n; this.a = _a; this.b = _b; } }`,
+      `class C { s: u256; static a: u64; static b: u64; constructor(_a: u64, _b: u64){ this.s = 99n; this.a = _a; this.b = _b; } }`,
       `contract C { uint256 s; uint64 immutable a; uint64 immutable b; constructor(uint64 _a,uint64 _b){ s=99; a=_a; b=_b; } }`,
       pad32(7n) + pad32(9n),
       1,
@@ -156,7 +156,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
     expect(
       BigInt(
         await sameCall(
-          `@contract class C { @immutable a: u256; @immutable b: u256; @external @view getB(): u256 { return this.b; } constructor(x: u256){ this.a = x; this.b = this.a + 1n; } }`,
+          `class C { static a: u256; static b: u256; get getB(): External<u256> { return this.b; } constructor(x: u256){ this.a = x; this.b = this.a + 1n; } }`,
           `contract C { uint256 immutable a; uint256 immutable b; function getB() external view returns(uint256){return b;} constructor(uint256 x){ a=x; b=a+1; } }`,
           'getB()',
           pad32(41n),
@@ -167,7 +167,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
 
   it('owner = msg.sender immutable round-trips', () =>
     sameCall(
-      `@contract class C { @immutable owner: address; @external @view o(): address { return this.owner; } constructor(){ this.owner = msg.sender; } }`,
+      `class C { static owner: address; get o(): External<address> { return this.owner; } constructor(){ this.owner = msg.sender; } }`,
       `contract C { address immutable owner; function o() external view returns(address){return owner;} constructor(){ owner = msg.sender; } }`,
       'o()',
     ));
@@ -175,19 +175,19 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
   describe('value-type bakes (sign-extension / left-alignment / brand)', () => {
     it('int64 = -5 sign-extends to a full word', () =>
       sameCall(
-        `@contract class C { @immutable a: i64; @external @view getA(): i64 { return this.a; } constructor(){ this.a = -5n; } }`,
+        `class C { static a: i64; get getA(): External<i64> { return this.a; } constructor(){ this.a = -5n; } }`,
         `contract C { int64 immutable a; function getA() external view returns(int64){return a;} constructor(){ a = -5; } }`,
         'getA()',
       ));
     it('bool = true', () =>
       sameCall(
-        `@contract class C { @immutable f: bool; @external @view getF(): bool { return this.f; } constructor(){ this.f = true; } }`,
+        `class C { static f: bool; get getF(): External<bool> { return this.f; } constructor(){ this.f = true; } }`,
         `contract C { bool immutable f; function getF() external view returns(bool){return f;} constructor(){ f = true; } }`,
         'getF()',
       ));
     it('bytes32 from a constructor arg', () =>
       sameCall(
-        `@contract class C { @immutable h: bytes32; @external @view getH(): bytes32 { return this.h; } constructor(x: bytes32){ this.h = x; } }`,
+        `class C { static h: bytes32; get getH(): External<bytes32> { return this.h; } constructor(x: bytes32){ this.h = x; } }`,
         `contract C { bytes32 immutable h; function getH() external view returns(bytes32){return h;} constructor(bytes32 x){ h = x; } }`,
         'getH()',
         'ab'.repeat(32),
@@ -197,7 +197,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
   describe('mutability classification (immutable read needs @view, not @pure)', () => {
     it('@view reading an immutable is accepted (deploys + reads)', () =>
       sameCall(
-        `@contract class C { @immutable a: u256; @external @view getA(): u256 { return this.a; } constructor(){ this.a = 3n; } }`,
+        `class C { static a: u256; get getA(): External<u256> { return this.a; } constructor(){ this.a = 3n; } }`,
         `contract C { uint256 immutable a; function getA() external view returns(uint256){return a;} constructor(){ a=3; } }`,
         'getA()',
       ));
@@ -211,16 +211,16 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
 
   describe('clean gates', () => {
     it('a non-value-type immutable (string) -> JETH310 (parity: solc also rejects)', () =>
-      expect(codes(`@contract class C { @immutable s: string; constructor(){ this.s = "x"; } }`)).toContain('JETH310'));
+      expect(codes(`class C { static s: string; constructor(){ this.s = "x"; } }`)).toContain('JETH310'));
     it('an inline-initialized immutable is supported (staged at the start of the constructor)', () =>
       expect(codes(`@contract class C { @immutable a: u256 = 7n; constructor(){} }`)).toEqual([]));
     it('a @external @immutable synthesizes solc public-immutable view getter (accepted)', () =>
-      expect(codes(`@contract class C { @external @immutable a: u256; constructor(){ this.a = 1n; } }`)).toEqual([]));
+      expect(codes(`class C { static a: Visible<u256>; constructor(){ this.a = 1n; } }`)).toEqual([]));
     it('any OTHER visibility/mutability on an immutable still -> JETH312', () =>
-      expect(codes(`@contract class C { @view @immutable a: u256; constructor(){ this.a = 1n; } }`)).toContain('JETH312'));
+      expect(codes(`class C { @view static a: u256; constructor(){ this.a = 1n; } }`)).toContain('JETH312'));
     it('assigning an immutable outside the constructor -> JETH313', () =>
       expect(
-        codes(`@contract class C { @immutable a: u256; @external setit(): void { this.a = 1n; } constructor(){} }`),
+        codes(`class C { static a: u256; setit(): External<void> { this.a = 1n; } constructor(){} }`),
       ).toContain('JETH313'));
     it('@state and @immutable on the same field -> JETH052', () =>
       expect(codes(`@contract class C { @state @immutable a: u256; constructor(){ this.a = 1n; } }`)).toContain(
@@ -230,7 +230,7 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
 
   it('immutables contribute NO ABI getter (only a constructor entry / the explicit view fn)', () => {
     const r = compile(
-      `@contract class C { @immutable a: u256; @external @view getA(): u256 { return this.a; } constructor(x: u256){ this.a = x; } }`,
+      `class C { static a: u256; get getA(): External<u256> { return this.a; } constructor(x: u256){ this.a = x; } }`,
       { fileName: 'C.jeth' },
     );
     const names = r.abi.filter((x) => 'name' in x).map((x) => (x as { name: string }).name);

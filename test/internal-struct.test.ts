@@ -11,30 +11,30 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@struct class P { a: u256; b: u256; }
-@contract class C {
+const JETH = `type P = { a: u256; b: u256; };
+class C {
   // read a struct param (by reference)
-  @pure sum(p: P): u256 { return p.a + p.b; }
-  @external @pure sumE(a: u256, b: u256): u256 { let p: P = P(a, b); return this.sum(p); }
+  sum(p: P): u256 { return p.a + p.b; }
+  get sumE(a: u256, b: u256): External<u256> { let p: P = P(a, b); return this.sum(p); }
   // MUTATE a struct param in place: the change is visible to the caller (memory is by-ref)
   scale(p: P, k: u256): void { p.a = p.a * k; p.b = p.b * k; }
-  @external scaleE(a: u256, b: u256, k: u256): u256 { let p: P = P(a, b); this.scale(p, k); return p.a + p.b; }
+  get scaleE(a: u256, b: u256, k: u256): External<u256> { let p: P = P(a, b); this.scale(p, k); return p.a + p.b; }
   // RETURN a struct from a helper; caller returns it
-  @pure make(a: u256, b: u256): P { return P(a, b); }
-  @external @pure makeE(a: u256, b: u256): P { return this.make(a, b); }
+  make(a: u256, b: u256): P { return P(a, b); }
+  get makeE(a: u256, b: u256): External<P> { return this.make(a, b); }
   // bind a struct-returning call to a local, then read it
-  @external @pure bindRead(a: u256, b: u256): u256 { let p: P = this.make(a, b); return p.a * 1000n + p.b; }
+  get bindRead(a: u256, b: u256): External<u256> { let p: P = this.make(a, b); return p.a * 1000n + p.b; }
   // chain: outer(inner(...)) passing a struct through
-  @pure addOne(p: P): P { return P(p.a + 1n, p.b + 1n); }
-  @external @pure chainE(a: u256, b: u256): P { return this.addOne(this.make(a, b)); }
+  addOne(p: P): P { return P(p.a + 1n, p.b + 1n); }
+  get chainE(a: u256, b: u256): External<P> { return this.addOne(this.make(a, b)); }
   // recursion building a struct
-  @pure climb(p: P, n: u256): P { if (n == 0n) { return p; } return this.climb(P(p.a + 1n, p.b + 2n), n - 1n); }
-  @external @pure climbE(a: u256, b: u256, n: u256): P { return this.climb(P(a, b), n); }
+  climb(p: P, n: u256): P { if (n == 0n) { return p; } return this.climb(P(p.a + 1n, p.b + 2n), n - 1n); }
+  get climbE(a: u256, b: u256, n: u256): External<P> { return this.climb(P(a, b), n); }
   // a helper that both takes and returns a struct, used statefully
-  @state acc: P;
+  acc: P;
   addTo(p: P): void { this.acc.a = this.acc.a + p.a; this.acc.b = this.acc.b + p.b; }
-  @external feed(a: u256, b: u256): void { let p: P = P(a, b); this.addTo(p); }
-  @external @view getAcc(): P { return this.acc; }
+  feed(a: u256, b: u256): External<void> { let p: P = P(a, b); this.addTo(p); }
+  get getAcc(): External<P> { return this.acc; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

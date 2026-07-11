@@ -43,8 +43,8 @@ async function pair(jethSrc: string, solSrc: string) {
 }
 
 const FEATURE_JETH = `
-@struct class P { x: u256; y: u256; }
-@library class Lib {
+type P = { x: u256; y: u256; };
+static class Lib {
   add2(a: u256, b: u256): u256 { return a + b; }
   echo(s: string): string { return s; }
   scale(p: P, k: u256): P { return P(p.x * k, p.y * k); }
@@ -57,19 +57,19 @@ const FEATURE_JETH = `
   h(a: bool): u256 { return a ? 100n : 200n; }
   self(): address { return address(this); }
 }
-@contract @using(Lib) class C {
-  @external @pure qadd(a: u256, b: u256): u256 { return Lib.add2(a, b); }
-  @external @pure attAdd(a: u256, b: u256): u256 { return a.add2(b); }
-  @external @pure eEcho(s: string): string { return Lib.echo(s); }
-  @external @pure eScale(p: P, k: u256): P { return Lib.scale(p, k); }
-  @external @pure eSumXAtt(p: P): u256 { return p.sumX(); }
-  @external @pure eSumArr(a: u256[]): u256 { return Lib.sumArr(a); }
-  @external @pure eQuad(p: P, k: u256): u256 { return Lib.quad(p, k); }
-  @external @pure eg1(a: u256): u256 { return Lib.g(a); }
-  @external @pure eg2(a: u256, b: u256): u256 { return Lib.g(a, b); }
-  @external @pure eh(a: u256): u256 { return Lib.h(a) + Lib.h(true); }
-  @external @pure attLoop(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { s = s.add2(i); i = i + 1n; } return s; }
-  @external @view eSelf(): address { return Lib.self(); }
+@using(Lib) class C {
+  get qadd(a: u256, b: u256): External<u256> { return Lib.add2(a, b); }
+  get attAdd(a: u256, b: u256): External<u256> { return a.add2(b); }
+  get eEcho(s: string): External<string> { return Lib.echo(s); }
+  get eScale(p: P, k: u256): External<P> { return Lib.scale(p, k); }
+  get eSumXAtt(p: P): External<u256> { return p.sumX(); }
+  get eSumArr(a: u256[]): External<u256> { return Lib.sumArr(a); }
+  get eQuad(p: P, k: u256): External<u256> { return Lib.quad(p, k); }
+  get eg1(a: u256): External<u256> { return Lib.g(a); }
+  get eg2(a: u256, b: u256): External<u256> { return Lib.g(a, b); }
+  get eh(a: u256): External<u256> { return Lib.h(a) + Lib.h(true); }
+  get attLoop(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { s = s.add2(i); i = i + 1n; } return s; }
+  get eSelf(): External<address> { return Lib.self(); }
 }`;
 
 const FEATURE_SOL = `${SPDX}
@@ -160,19 +160,19 @@ describe('Phase A internal libraries: byte-identical to solc', () => {
 // logs, and storage byte-for-byte.
 // ---------------------------------------------------------------------------
 describe('Phase A libraries: state write + event + require + storage', () => {
-  const JETH = `@library class M {
+  const JETH = `static class M {
   add(a: u256, b: u256): u256 { return a + b; }
   checked(x: u256): u256 { require(x > 0n, "zero"); return x; }
 }
-@contract @using(M) class C {
-  @state total: u256;
-  @event Added(sum: u256);
-  @external bump(a: u256, b: u256): void {
+@using(M) class C {
+  total: u256;
+  Added: event<{ sum: u256 }>;
+  bump(a: u256, b: u256): External<void> {
     let s: u256 = M.add(a, b);
     this.total = this.total + s.checked();
     emit(Added(s));
   }
-  @external @view get(): u256 { return this.total; }
+  get get(): External<u256> { return this.total; }
 }`;
   const SOL = `${SPDX}
 library M {
@@ -215,9 +215,9 @@ contract C {
 // `slice` on a calldata-bytes receiver must NOT shadow the built-in `.slice`.
 // ---------------------------------------------------------------------------
 describe('Phase A libraries: a built-in method wins over an attached library method', () => {
-  const JETH = `@library class Bad { slice(b: bytes, s: u256, e: u256): u256 { return 999n; } }
-@contract @using(Bad) class C {
-  @external eslice(data: bytes): bytes { return data.slice(0n, 3n); }
+  const JETH = `static class Bad { slice(b: bytes, s: u256, e: u256): u256 { return 999n; } }
+@using(Bad) class C {
+  get eslice(data: bytes): External<bytes> { return data.slice(0n, 3n); }
 }`;
   const SOL = `${SPDX}
 library Bad { function slice(bytes calldata b, uint256 s, uint256 e) internal pure returns(uint256){ return 999; } }
@@ -239,10 +239,10 @@ contract C {
 // no ambiguity. Byte-identical to solc.
 // ---------------------------------------------------------------------------
 describe('Phase A libraries: two @using libraries, chained attachment', () => {
-  const JETH = `@library class A { inc(x: u256): u256 { return x + 1n; } }
-@library class B { dec(x: u256): u256 { return x - 1n; } }
-@contract @using(A) @using(B) class C {
-  @external @pure f(x: u256): u256 { return x.inc().dec().inc(); }
+  const JETH = `static class A { inc(x: u256): u256 { return x + 1n; } }
+static class B { dec(x: u256): u256 { return x - 1n; } }
+@using(A) @using(B) class C {
+  get f(x: u256): External<u256> { return x.inc().dec().inc(); }
 }`;
   const SOL = `${SPDX}
 library A { function inc(uint256 x) internal pure returns(uint256){ return x+1; } }
@@ -294,8 +294,8 @@ contract C { function f(uint256 a) external pure returns(uint256){ return L.f(a)
   });
 
   it('a constructor in a library -> JETH389, solc also rejects', () => {
-    const jeth = `@library class L { constructor() {} f(a: u256): u256 { return a; } }
-@contract class C { @external @pure f(a: u256): u256 { return L.f(a); } }`;
+    const jeth = `static class L { constructor() {} f(a: u256): u256 { return a; } }
+class C { get f(a: u256): External<u256> { return L.f(a); } }`;
     const sol = `${SPDX}library L { constructor() {} function f(uint256 a) internal pure returns(uint256){ return a; } }
 contract C { function f(uint256 a) external pure returns(uint256){ return L.f(a); } }`;
     expect(jethRejectsWith(jeth, 'JETH389')).toBe(true);
@@ -306,17 +306,17 @@ contract C { function f(uint256 a) external pure returns(uint256){ return L.f(a)
     // Phase B: @external on a library method is an external (delegatecall) library function (no longer
     // a JETH390 over-rejection). A call site referencing it is required for the library object to emit,
     // but the declaration alone compiles. @payable on a library method stays rejected (JETH390).
-    const ok = `@library class L { @external @pure f(a: u256): u256 { return a; } }
-@contract class C { @external @pure g(a: u256): u256 { return L.f(a); } }`;
+    const ok = `static class L { f(a: u256): External<u256> { return a; } }
+class C { g(a: u256): External<u256> { return L.f(a); } }`;
     expect(() => compile(ok, { fileName: 'C.jeth' })).not.toThrow();
-    const payable = `@library class L { @external @payable f(a: u256): u256 { return a; } }
-@contract class C { @external @pure g(a: u256): u256 { return L.f(a); } }`;
+    const payable = `static class L { @payable f(a: u256): External<u256> { return a; } }
+class C { get g(a: u256): External<u256> { return L.f(a); } }`;
     expect(jethRejectsWith(payable, 'JETH390')).toBe(true);
   });
 
   it('L.unknownMember -> JETH392, solc also rejects', () => {
-    const jeth = `@library class L { f(a: u256): u256 { return a; } }
-@contract class C { @external @pure g(a: u256): u256 { return L.nope(a); } }`;
+    const jeth = `static class L { f(a: u256): u256 { return a; } }
+class C { get g(a: u256): External<u256> { return L.nope(a); } }`;
     const sol = `${SPDX}library L { function f(uint256 a) internal pure returns(uint256){ return a; } }
 contract C { function g(uint256 a) external pure returns(uint256){ return L.nope(a); } }`;
     expect(jethRejectsWith(jeth, 'JETH392')).toBe(true);
@@ -324,9 +324,9 @@ contract C { function g(uint256 a) external pure returns(uint256){ return L.nope
   });
 
   it('ambiguous attachment (two @using libs define f for T) -> JETH393, solc also rejects', () => {
-    const jeth = `@library class A { dup(x: u256): u256 { return x + 1n; } }
-@library class B { dup(x: u256): u256 { return x + 2n; } }
-@contract @using(A) @using(B) class C { @external @pure g(x: u256): u256 { return x.dup(); } }`;
+    const jeth = `static class A { dup(x: u256): u256 { return x + 1n; } }
+static class B { dup(x: u256): u256 { return x + 2n; } }
+@using(A) @using(B) class C { get g(x: u256): External<u256> { return x.dup(); } }`;
     const sol = `${SPDX}library A { function dup(uint256 x) internal pure returns(uint256){ return x+1; } }
 library B { function dup(uint256 x) internal pure returns(uint256){ return x+2; } }
 contract C { using A for uint256; using B for uint256; function g(uint256 x) external pure returns(uint256){ return x.dup(); } }`;
@@ -346,8 +346,8 @@ contract C { using A for uint256; using B for uint256; function g(uint256 x) ext
   });
 
   it('@using(NotALibrary) -> JETH391', () => {
-    const jeth = `@library class L { f(a: u256): u256 { return a; } }
-@contract @using(Nope) class C { @external @pure g(a: u256): u256 { return a; } }`;
+    const jeth = `static class L { f(a: u256): u256 { return a; } }
+@using(Nope) class C { get g(a: u256): External<u256> { return a; } }`;
     expect(jethRejectsWith(jeth, 'JETH391')).toBe(true);
   });
 });

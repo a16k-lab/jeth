@@ -11,9 +11,9 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class FA {
-  @external @pure echoA(a: Arr<string,3>): Arr<string,3> { return a; }
-  @external @pure atA(a: Arr<string,3>, i: u256): string { return a[i]; }
+const JETH = `class FA {
+  get echoA(a: Arr<string,3>): External<Arr<string,3>> { return a; }
+  get atA(a: Arr<string,3>, i: u256): External<string> { return a[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -66,11 +66,11 @@ describe('Arr<dynamic,N> (fixed array of dynamic element) vs Solidity', () => {
   });
 });
 
-const JETHD = `@struct class D { a: u256; s: string; }
-@contract class FD {
-  @external @pure echoD(xs: Arr<D,2>): Arr<D,2> { return xs; }
-  @external @pure dA(xs: Arr<D,2>, i: u256): u256 { return xs[i].a; }
-  @external @pure dS(xs: Arr<D,2>, i: u256): string { return xs[i].s; }
+const JETHD = `type D = { a: u256; s: string; };
+class FD {
+  get echoD(xs: Arr<D,2>): External<Arr<D,2>> { return xs; }
+  get dA(xs: Arr<D,2>, i: u256): External<u256> { return xs[i].a; }
+  get dS(xs: Arr<D,2>, i: u256): External<string> { return xs[i].s; }
 }`;
 const SOLD = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

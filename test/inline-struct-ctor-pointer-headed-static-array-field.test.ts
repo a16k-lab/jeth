@@ -38,53 +38,53 @@ async function diff(J: string, S: string, sigs: string[]) {
 describe('inline struct-ctor with a pointer-headed static-struct fixed-array field - clean reject, never garbage', () => {
   // ---- the two fixed miscompiles: now a CLEAN REJECT (JETH465), consistent with the var-bound form ----
   it('return S(tag, Arr<In,2>) rejects (was a payload-dropping miscompile)', () => {
-    const J = `@struct class In { x: u256; y: u256 }
-    @struct class S { tag: u256; arr: Arr<In,2> }
-    @contract class C {
-      @external @pure f(): S { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return S(9n, a); } }`;
+    const J = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<S> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return S(9n, a); } }`;
     expect(codes(J)).toContain('JETH465');
   });
 
   it('abi.encode(S(tag, Arr<In,2>)) rejects (was a payload-dropping miscompile)', () => {
-    const J = `@struct class In { x: u256; y: u256 }
-    @struct class S { tag: u256; arr: Arr<In,2> }
-    @contract class C {
-      @external @pure f(): bytes { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return abi.encode(S(9n, a)); } }`;
+    const J = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<bytes> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return abi.encode(S(9n, a)); } }`;
     expect(codes(J)).toContain('JETH465');
   });
 
   // ---- the var-bound sibling: unchanged, still the same over-reject (proves consistency) ----
   it('the var-bound form let s: S = S(9n,a); return s stays a JETH465 reject (unchanged)', () => {
-    const J = `@struct class In { x: u256; y: u256 }
-    @struct class S { tag: u256; arr: Arr<In,2> }
-    @contract class C {
-      @external @pure f(): S { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; let s: S = S(9n, a); return s; } }`;
+    const J = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,2> };
+    class C {
+      get f(): External<S> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; let s: S = S(9n, a); return s; } }`;
     expect(codes(J)).toContain('JETH465');
   });
 
   // ---- extended shapes: Arr<In,3>, a 3-field element struct, and a nested Arr<Arr<In,N>,M> - all reject ----
   it('Arr<In,3> field return + encode reject (no garbage)', () => {
-    const J = `@struct class In { x: u256; y: u256 }
-    @struct class S { tag: u256; arr: Arr<In,3> }
-    @contract class C {
-      @external @pure ret(): S { let a: Arr<In,3> = [In(1n,2n), In(3n,4n), In(5n,6n)]; return S(9n, a); }
-      @external @pure enc(): bytes { let a: Arr<In,3> = [In(1n,2n), In(3n,4n), In(5n,6n)]; return abi.encode(S(9n, a)); } }`;
+    const J = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<In,3> };
+    class C {
+      get ret(): External<S> { let a: Arr<In,3> = [In(1n,2n), In(3n,4n), In(5n,6n)]; return S(9n, a); }
+      get enc(): External<bytes> { let a: Arr<In,3> = [In(1n,2n), In(3n,4n), In(5n,6n)]; return abi.encode(S(9n, a)); } }`;
     expect(codes(J)).toContain('JETH465');
   });
 
   it('Arr<In3,2> (a 3-field element struct) field return rejects (no garbage)', () => {
-    const J = `@struct class In3 { x: u256; y: u256; z: u256 }
-    @struct class S { tag: u256; arr: Arr<In3,2> }
-    @contract class C {
-      @external @pure f(): S { let a: Arr<In3,2> = [In3(1n,2n,3n), In3(4n,5n,6n)]; return S(9n, a); } }`;
+    const J = `type In3 = { x: u256; y: u256; z: u256 };
+    type S = { tag: u256; arr: Arr<In3,2> };
+    class C {
+      get f(): External<S> { let a: Arr<In3,2> = [In3(1n,2n,3n), In3(4n,5n,6n)]; return S(9n, a); } }`;
     expect(codes(J)).toContain('JETH465');
   });
 
   it('nested Arr<Arr<In,2>,2> field return rejects (no garbage)', () => {
-    const J = `@struct class In { x: u256; y: u256 }
-    @struct class S { tag: u256; arr: Arr<Arr<In,2>,2> }
-    @contract class C {
-      @external @pure f(): S {
+    const J = `type In = { x: u256; y: u256 };
+    type S = { tag: u256; arr: Arr<Arr<In,2>,2> };
+    class C {
+      get f(): External<S> {
         let a: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)], [In(5n,6n),In(7n,8n)]];
         return S(9n, a); } }`;
     expect(codes(J)).toContain('JETH465');
@@ -92,10 +92,10 @@ describe('inline struct-ctor with a pointer-headed static-struct fixed-array fie
 
   // ---- CONTROLS (PIN solc): these stay byte-identical MATCH and MUST NOT be swept into the reject ----
   it('CONTROL: a VALUE-array field struct S{tag; v: Arr<u256,2>} inline return + encode MATCH', async () => {
-    const J = `@struct class S { tag: u256; v: Arr<u256,2> }
-    @contract class C {
-      @external @pure ret(): S { let a: Arr<u256,2> = [111n, 222n]; return S(9n, a); }
-      @external @pure enc(): bytes { let a: Arr<u256,2> = [111n, 222n]; return abi.encode(S(9n, a)); } }`;
+    const J = `type S = { tag: u256; v: Arr<u256,2> };
+    class C {
+      get ret(): External<S> { let a: Arr<u256,2> = [111n, 222n]; return S(9n, a); }
+      get enc(): External<bytes> { let a: Arr<u256,2> = [111n, 222n]; return abi.encode(S(9n, a)); } }`;
     const S = `struct S { uint256 tag; uint256[2] v; }
     contract C {
       function ret() external pure returns(S memory){ uint256[2] memory a=[uint256(111),222]; return S(9,a); }
@@ -105,8 +105,8 @@ describe('inline struct-ctor with a pointer-headed static-struct fixed-array fie
   });
 
   it('CONTROL: a scalar-only struct inline return MATCH', async () => {
-    const J = `@struct class S { a: u256; b: u256 }
-    @contract class C { @external @pure f(): S { return S(9n, 10n); } }`;
+    const J = `type S = { a: u256; b: u256 };
+    class C { get f(): External<S> { return S(9n, 10n); } }`;
     const S = `struct S { uint256 a; uint256 b; }
     contract C { function f() external pure returns(S memory){ return S(9, 10); } }`;
     expect(codes(J)).toEqual([]);
@@ -114,10 +114,10 @@ describe('inline struct-ctor with a pointer-headed static-struct fixed-array fie
   });
 
   it('CONTROL: a standalone Arr<In,2> return / encode (not wrapped in a struct) MATCH', async () => {
-    const J = `@struct class In { x: u256; y: u256 }
-    @contract class C {
-      @external @pure ret(): Arr<In,2> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return a; }
-      @external @pure enc(): bytes { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return abi.encode(a); } }`;
+    const J = `type In = { x: u256; y: u256 };
+    class C {
+      get ret(): External<Arr<In,2>> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return a; }
+      get enc(): External<bytes> { let a: Arr<In,2> = [In(111n,222n), In(333n,444n)]; return abi.encode(a); } }`;
     const S = `struct In { uint256 x; uint256 y; }
     contract C {
       function ret() external pure returns(In[2] memory){ In[2] memory a=[In(111,222),In(333,444)]; return a; }
@@ -127,8 +127,8 @@ describe('inline struct-ctor with a pointer-headed static-struct fixed-array fie
   });
 
   it('CONTROL: an inline value-array literal field S(9n, [111n,222n]) return MATCH (inline arrayLit, not swept)', async () => {
-    const J = `@struct class S { tag: u256; v: Arr<u256,2> }
-    @contract class C { @external @pure f(): S { return S(9n, [111n, 222n]); } }`;
+    const J = `type S = { tag: u256; v: Arr<u256,2> };
+    class C { get f(): External<S> { return S(9n, [111n, 222n]); } }`;
     const S = `struct S { uint256 tag; uint256[2] v; }
     contract C { function f() external pure returns(S memory){ return S(9, [uint256(111), 222]); } }`;
     expect(codes(J)).toEqual([]);

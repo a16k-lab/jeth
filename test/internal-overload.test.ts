@@ -26,8 +26,8 @@ describe('internal/private function overloading (#47) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   // overload by arity (g/1, g/2), by type (g(bool)), default args on one overload, recursion, a private
   // overload, and a transitive @view (one overload reads state) to exercise the purity fixpoint by key.
-  const J = `@contract class C {
-    @state n: u256;
+  const J = `class C {
+    n: u256;
     g(a: u256): u256 { return a * 10n; }
     g(a: u256, b: u256): u256 { return a + b; }
     g(a: bool): u256 { if (a) { return 111n; } return 222n; }
@@ -37,14 +37,14 @@ describe('internal/private function overloading (#47) vs solc', () => {
     countdown(x: u256, step: u256): u256 { if (x < step) { return 0n; } return this.countdown(x - step); }
     readN(): u256 { return this.n; }
     readN(extra: u256): u256 { return this.n + extra; }
-    @external setN(v: u256): void { this.n = v; }
-    @external @pure one(x: u256): u256 { return this.g(x); }
-    @external @pure two(x: u256, y: u256): u256 { return this.g(x, y); }
-    @external @pure boolov(b: bool): u256 { return this.g(b); }
-    @external @pure all3(x: u256): u256 { return this.g(x) + this.g(x, x) + this.g(x > 5n); }
-    @external @pure sums(x: u256): u256 { return this.sumv(x, x) + this.sumv(x, x, x); }
-    @external @pure cd(x: u256): u256 { return this.countdown(x); }
-    @external @view rd(e: u256): u256 { return this.readN() + this.readN(e); } }`;
+    setN(v: u256): External<void> { this.n = v; }
+    get one(x: u256): External<u256> { return this.g(x); }
+    get two(x: u256, y: u256): External<u256> { return this.g(x, y); }
+    get boolov(b: bool): External<u256> { return this.g(b); }
+    get all3(x: u256): External<u256> { return this.g(x) + this.g(x, x) + this.g(x > 5n); }
+    get sums(x: u256): External<u256> { return this.sumv(x, x) + this.sumv(x, x, x); }
+    get cd(x: u256): External<u256> { return this.countdown(x); }
+    get rd(e: u256): External<u256> { return this.readN() + this.readN(e); } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {
@@ -101,18 +101,18 @@ contract C {
     // a duplicate signature cannot overload (solc errors too)
     expect(
       codes(
-        '@contract class C { g(a: u256): u256 { return a; } g(a: u256): u256 { return 2n; } @external @pure f(): u256 { return this.g(1n); } }',
+        'class C { g(a: u256): u256 { return a; } g(a: u256): u256 { return 2n; } get f(): External<u256> { return this.g(1n); } }',
       ),
     ).toContain('JETH434');
     // no overload accepts 3 arguments
     expect(
       codes(
-        '@contract class C { g(a: u256): u256 { return a; } g(a: u256, b: u256): u256 { return a + b; } @external @pure f(): u256 { return this.g(1n, 2n, 3n); } }',
+        'class C { g(a: u256): u256 { return a; } g(a: u256, b: u256): u256 { return a + b; } get f(): External<u256> { return this.g(1n, 2n, 3n); } }',
       ),
     ).toContain('JETH148');
     // a single (non-overloaded) function is unaffected
     expect(
-      codes('@contract class C { g(a: u256): u256 { return a; } @external @pure f(): u256 { return this.g(5n); } }'),
+      codes('class C { g(a: u256): u256 { return a; } get f(): External<u256> { return this.g(5n); } }'),
     ).toEqual([]);
   });
 });

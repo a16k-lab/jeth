@@ -15,7 +15,7 @@ const cdArr = (xs: readonly bigint[]) => pad32(0x20n) + pad32(BigInt(xs.length))
 
 describe('aggregate param/return through an internal call (JETH242/243) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@contract class C {
+  const J = `class C {
     sum(xs: u256[]): u256 { let t: u256 = 0n; for (const v of xs) { t = t + v; } return t; }
     nsum(xs: u64[]): u256 { let t: u256 = 0n; for (const v of xs) { t = t + v; } return t; }
     bump(xs: u256[]): void { xs[0n] = 99n; }
@@ -25,21 +25,21 @@ describe('aggregate param/return through an internal call (JETH242/243) vs solc'
     blen(b: bytes): u256 { return b.length; }
     alloc(n: u256): u256 { let z: u256[] = [n * 10n, n * 20n, n * 30n]; return z[1n]; }
     litCall(n: u256): u256[] { let m: u256[] = [this.alloc(n), n, this.alloc(n + 1n)]; return m; }
-    @external @pure sumCd(a: u256[]): u256 { return this.sum(a); }
-    @external @pure nsumCd(a: u64[]): u256 { return this.nsum(a); }
-    @external @pure sumMem(): u256 { let m: u256[] = [10n, 20n, 30n]; return this.sum(m); }
-    @external @pure aliasTest(): u256 { let m: u256[] = [1n, 2n]; this.bump(m); return m[0n]; }
-    @external @pure copyNoMutate(a: u256[]): u256 { this.bump(a); return a[0n]; }
-    @external @pure mkRet(n: u256): u256[] { return this.mk(n); }
-    @external @pure mkBind(n: u256): u256 { let xs: u256[] = this.mk(n); return xs[1n]; }
-    @external @pure chained(a: u256[]): u256 { return this.twice(a); }
-    @external @pure mkBytes(): bytes { return this.mkB(); }
-    @external @pure blenCd(b: bytes): u256 { return this.blen(b); }
-    @external @pure emptySum(a: u256[]): u256 { return this.sum(a); }
-    @external @pure litCallRet(n: u256): u256[] { return this.litCall(n); }
-    @state s: u256[];
-    @external pushS(v: u256): void { this.s.push(v); }
-    @external @view sumStore(): u256 { return this.sum(this.s); } }`;
+    get sumCd(a: u256[]): External<u256> { return this.sum(a); }
+    get nsumCd(a: u64[]): External<u256> { return this.nsum(a); }
+    get sumMem(): External<u256> { let m: u256[] = [10n, 20n, 30n]; return this.sum(m); }
+    get aliasTest(): External<u256> { let m: u256[] = [1n, 2n]; this.bump(m); return m[0n]; }
+    get copyNoMutate(a: u256[]): External<u256> { this.bump(a); return a[0n]; }
+    get mkRet(n: u256): External<u256[]> { return this.mk(n); }
+    get mkBind(n: u256): External<u256> { let xs: u256[] = this.mk(n); return xs[1n]; }
+    get chained(a: u256[]): External<u256> { return this.twice(a); }
+    get mkBytes(): External<bytes> { return this.mkB(); }
+    get blenCd(b: bytes): External<u256> { return this.blen(b); }
+    get emptySum(a: u256[]): External<u256> { return this.sum(a); }
+    get litCallRet(n: u256): External<u256[]> { return this.litCall(n); }
+    s: u256[];
+    pushS(v: u256): External<void> { this.s.push(v); }
+    get sumStore(): External<u256> { return this.sum(this.s); } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {

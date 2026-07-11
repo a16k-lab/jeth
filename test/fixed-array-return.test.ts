@@ -7,22 +7,22 @@ import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const JETH = `@struct class P { x: u128; y: u128; }
-@struct class WithArr { p: u256; xs: Arr<u256, 3>; q: u256; }
-@struct class Nest { a: u256; pt: P; b: u256; }
-@contract class FA {
-  @state nums: Arr<u256, 4>;
-  @state pts: Arr<P, 3>;
-  @state wa: WithArr;
-  @state ns: Nest;
-  @external setNum(i: u256, v: u256): void { this.nums[i] = v; }
-  @external setPt(i: u256, x: u128, y: u128): void { this.pts[i] = P(x, y); }
-  @external setWa(p: u256, a: u256, b: u256, c: u256, q: u256): void { this.wa.p = p; this.wa.xs[0n] = a; this.wa.xs[1n] = b; this.wa.xs[2n] = c; this.wa.q = q; }
-  @external setNs(a: u256, x: u128, y: u128, b: u256): void { this.ns.a = a; this.ns.pt = P(x, y); this.ns.b = b; }
-  @external @view getNums(): Arr<u256, 4> { return this.nums; }
-  @external @view getPts(): Arr<P, 3> { return this.pts; }
-  @external @view getWa(): WithArr { return this.wa; }
-  @external @view getNs(): Nest { return this.ns; }
+const JETH = `type P = { x: u128; y: u128; };
+type WithArr = { p: u256; xs: Arr<u256, 3>; q: u256; };
+type Nest = { a: u256; pt: P; b: u256; };
+class FA {
+  nums: Arr<u256, 4>;
+  pts: Arr<P, 3>;
+  wa: WithArr;
+  ns: Nest;
+  setNum(i: u256, v: u256): External<void> { this.nums[i] = v; }
+  setPt(i: u256, x: u128, y: u128): External<void> { this.pts[i] = P(x, y); }
+  setWa(p: u256, a: u256, b: u256, c: u256, q: u256): External<void> { this.wa.p = p; this.wa.xs[0n] = a; this.wa.xs[1n] = b; this.wa.xs[2n] = c; this.wa.q = q; }
+  setNs(a: u256, x: u128, y: u128, b: u256): External<void> { this.ns.a = a; this.ns.pt = P(x, y); this.ns.b = b; }
+  get getNums(): External<Arr<u256, 4>> { return this.nums; }
+  get getPts(): External<Arr<P, 3>> { return this.pts; }
+  get getWa(): External<WithArr> { return this.wa; }
+  get getNs(): External<Nest> { return this.ns; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

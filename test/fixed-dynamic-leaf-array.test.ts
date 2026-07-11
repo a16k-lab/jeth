@@ -53,12 +53,12 @@ const codes = (src: string): string[] => {
 describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory local - byte-identical to solc 0.8.35', () => {
   it('build from a literal + return the whole array (empty / short / >31-byte elements)', async () => {
     await eqCalls(
-      '@contract class C { @external @pure go(): Arr<string,3> { let xs: Arr<string,3> = ["", "short", "this-string-is-definitely-longer-than-thirty-one-bytes-yes"]; return xs; } }',
+      'class C { get go(): External<Arr<string,3>> { let xs: Arr<string,3> = ["", "short", "this-string-is-definitely-longer-than-thirty-one-bytes-yes"]; return xs; } }',
       'contract C { function go() external pure returns(string[3] memory){ string[3] memory xs=["", "short", "this-string-is-definitely-longer-than-thirty-one-bytes-yes"]; return xs; } }',
       [['go()', '']],
     );
     await eqCalls(
-      '@contract class C { @external @pure go(): Arr<bytes,2> { let xs: Arr<bytes,2> = [bytes("ab"), bytes("cdef")]; return xs; } }',
+      'class C { get go(): External<Arr<bytes,2>> { let xs: Arr<bytes,2> = [bytes("ab"), bytes("cdef")]; return xs; } }',
       'contract C { function go() external pure returns(bytes[2] memory){ bytes[2] memory xs=[bytes("ab"), bytes("cdef")]; return xs; } }',
       [['go()', '']],
     );
@@ -66,7 +66,7 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
 
   it('element read xs[i] (constant + runtime index, OOB -> Panic 0x32)', async () => {
     await eqCalls(
-      '@contract class C { @external @pure go(i: u256): string { let xs: Arr<string,2> = ["foo","bar"]; return xs[i]; } }',
+      'class C { get go(i: u256): External<string> { let xs: Arr<string,2> = ["foo","bar"]; return xs[i]; } }',
       'contract C { function go(uint256 i) external pure returns(string memory){ string[2] memory xs=["foo","bar"]; return xs[i]; } }',
       [['go(uint256)', W(0)], ['go(uint256)', W(1)], ['go(uint256)', W(2)], ['go(uint256)', W(99)]],
     );
@@ -74,17 +74,17 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
 
   it('element write xs[i] = <string/bytes> (constant + runtime index, re-point), then read back', async () => {
     await eqCalls(
-      '@contract class C { @external @pure go(): Arr<string,2> { let xs: Arr<string,2> = ["a","b"]; xs[0n] = "changed-to-a-much-longer-value!!"; xs[1n] = "z"; return xs; } }',
+      'class C { get go(): External<Arr<string,2>> { let xs: Arr<string,2> = ["a","b"]; xs[0n] = "changed-to-a-much-longer-value!!"; xs[1n] = "z"; return xs; } }',
       'contract C { function go() external pure returns(string[2] memory){ string[2] memory xs=["a","b"]; xs[0]="changed-to-a-much-longer-value!!"; xs[1]="z"; return xs; } }',
       [['go()', '']],
     );
     await eqCalls(
-      '@contract class C { @external @pure go(i: u256, s: string): string { let xs: Arr<string,2> = ["a","b"]; xs[i] = s; return xs[i]; } }',
+      'class C { get go(i: u256, s: string): External<string> { let xs: Arr<string,2> = ["a","b"]; xs[i] = s; return xs[i]; } }',
       'contract C { function go(uint256 i, string calldata s) external pure returns(string memory){ string[2] memory xs=["a","b"]; xs[i]=s; return xs[i]; } }',
       [['go(uint256,string)', W(1) + W(0x40) + W(3) + '7a7a7a'.padEnd(64, '0')]],
     );
     await eqCalls(
-      '@contract class C { @external @pure go(): bytes { let xs: Arr<bytes,2> = [bytes("a"),bytes("b")]; xs[0n] = bytes("xyz"); return xs[0n]; } }',
+      'class C { get go(): External<bytes> { let xs: Arr<bytes,2> = [bytes("a"),bytes("b")]; xs[0n] = bytes("xyz"); return xs[0n]; } }',
       'contract C { function go() external pure returns(bytes memory){ bytes[2] memory xs=[bytes("a"),bytes("b")]; xs[0]=bytes("xyz"); return xs[0]; } }',
       [['go()', '']],
     );
@@ -92,12 +92,12 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
 
   it('byte-index xs[i][j], string.concat of elements, .length via the element, multiple locals', async () => {
     await eqCalls(
-      '@contract class C { @external @pure go(): bytes1 { let xs: Arr<bytes,2> = [bytes("abc"),bytes("XY")]; return xs[0n][1n]; } }',
+      'class C { get go(): External<bytes1> { let xs: Arr<bytes,2> = [bytes("abc"),bytes("XY")]; return xs[0n][1n]; } }',
       'contract C { function go() external pure returns(bytes1){ bytes[2] memory xs=[bytes("abc"),bytes("XY")]; return xs[0][1]; } }',
       [['go()', '']],
     );
     await eqCalls(
-      '@contract class C { @external @pure go(): string { let a: Arr<string,2> = ["aa","bb"]; let b: Arr<string,2> = ["cc","dd"]; return string.concat(a[1n], b[0n]); } }',
+      'class C { get go(): External<string> { let a: Arr<string,2> = ["aa","bb"]; let b: Arr<string,2> = ["cc","dd"]; return string.concat(a[1n], b[0n]); } }',
       'contract C { function go() external pure returns(string memory){ string[2] memory a=["aa","bb"]; string[2] memory b=["cc","dd"]; return string.concat(a[1], b[0]); } }',
       [['go()', '']],
     );
@@ -105,7 +105,7 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
 
   it('nested Arr<Arr<string,2>,2> local: element read + whole return', async () => {
     await eqCalls(
-      '@contract class C { @external @pure rd(): string { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; return xs[1n][0n]; } @external @pure rr(): Arr<Arr<string,2>,2> { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; return xs; } }',
+      'class C { get rd(): External<string> { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; return xs[1n][0n]; } get rr(): External<Arr<Arr<string,2>,2>> { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; return xs; } }',
       'contract C { function rd() external pure returns(string memory){ string[2][2] memory xs=[["a","b"],["c","d"]]; return xs[1][0]; } function rr() external pure returns(string[2][2] memory){ string[2][2] memory xs=[["a","b"],["c","d"]]; return xs; } }',
       [['rd()', ''], ['rr()', '']],
     );
@@ -113,7 +113,7 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
 
   it('the dynamic-outer string[] element write is unaffected by the fixedLen header fix', async () => {
     await eqCalls(
-      '@contract class C { @external @pure go(): string[] { let xs: string[] = ["a","b","c"]; xs[1n] = "changed"; return xs; } }',
+      'class C { get go(): External<string[]> { let xs: string[] = ["a","b","c"]; xs[1n] = "changed"; return xs; } }',
       'contract C { function go() external pure returns(string[] memory){ string[] memory xs=new string[](3); xs[0]="a";xs[1]="b";xs[2]="c"; xs[1]="changed"; return xs; } }',
       [['go()', '']],
     );
@@ -123,18 +123,18 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
     // solc errors "Out of bounds array access" at compile time; JETH211 matches. The check is now wired to
     // the fixed-outer pointer-headed family (read, write, and the outer index of a nested fixed array) -
     // it was previously missing for this representation (a fail-safe runtime-Panic over-acceptance).
-    expect(codes('@contract class C { @external @pure go(): string { let xs: Arr<string,3> = ["a","b","c"]; return xs[3n]; } }')).toContain('JETH211');
-    expect(codes('@contract class C { @external go(): void { let xs: Arr<string,3> = ["a","b","c"]; xs[3n] = "z"; } }')).toContain('JETH211');
-    expect(codes('@contract class C { @external @pure go(): string { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; return xs[2n][0n]; } }')).toContain('JETH211');
-    expect(codes('@contract class C { @external @pure go(): string { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; return xs[0n][2n]; } }')).toContain('JETH211');
+    expect(codes('class C { get go(): External<string> { let xs: Arr<string,3> = ["a","b","c"]; return xs[3n]; } }')).toContain('JETH211');
+    expect(codes('class C { go(): External<void> { let xs: Arr<string,3> = ["a","b","c"]; xs[3n] = "z"; } }')).toContain('JETH211');
+    expect(codes('class C { get go(): External<string> { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; return xs[2n][0n]; } }')).toContain('JETH211');
+    expect(codes('class C { get go(): External<string> { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; return xs[0n][2n]; } }')).toContain('JETH211');
     // an IN-BOUNDS constant index is accepted (no over-rejection).
-    expect(codes('@contract class C { @external @pure go(): string { let xs: Arr<string,3> = ["a","b","c"]; return xs[2n]; } }')).toEqual([]);
+    expect(codes('class C { get go(): External<string> { let xs: Arr<string,3> = ["a","b","c"]; return xs[2n]; } }')).toEqual([]);
   });
 
   it('abi.encode(Arr<string,N>) is lifted byte-identical to solc (P0-33 fixed-of-dynamic codec)', async () => {
     // Previously a clean reject; the pointer-headed fixed-of-dynamic codec now encodes it byte-identically.
     await eqCalls(
-      '@contract class C { @external @pure go(): bytes { let xs: Arr<string,2> = ["a","b"]; return abi.encode(xs); } }',
+      'class C { get go(): External<bytes> { let xs: Arr<string,2> = ["a","b"]; return abi.encode(xs); } }',
       'contract C { function go() external pure returns(bytes memory){ string[2] memory xs = ["a","b"]; return abi.encode(xs); } }',
       [['go()', '']],
     );
@@ -145,13 +145,13 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
     // (the tuple-return wrapper adds the outer [0x20] offset word - matched to solc's full returndata).
     // Round-trip (decode then re-return) + element read + .length + byte-index are all byte-identical.
     await eqCalls(
-      '@contract class C { @external @pure go(p: Arr<bytes,2>): u256 { return p[0n].length; } }',
+      'class C { get go(p: Arr<bytes,2>): External<u256> { return p[0n].length; } }',
       'contract C { function go(bytes[2] calldata p) external pure returns(uint256){ return p[0].length; } }',
       // string[2]/bytes[2] calldata param: [0x20 tuple-offset][h0][h1][len0][data0][len1][data1]
       [['go(bytes[2])', W(0x20) + W(0x40) + W(0x40 + 0x40) + W(2) + '6162'.padEnd(64, '0') + W(4) + '63646566'.padEnd(64, '0')]],
     );
     await eqCalls(
-      '@contract class C { @external @pure go(p: Arr<string,2>): Arr<string,2> { return p; } }',
+      'class C { get go(p: Arr<string,2>): External<Arr<string,2>> { return p; } }',
       'contract C { function go(string[2] calldata p) external pure returns(string[2] memory){ return p; } }',
       [
         ['go(string[2])', W(0x20) + W(0x40) + W(0x40 + 0x40) + W(0) + W(5) + '73686f7274'.padEnd(64, '0')], // "", "short"
@@ -160,7 +160,7 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
     );
     // @external @pure return of a locally-built fixed-of-dynamic array (tuple wrapper + tail blob).
     await eqCalls(
-      '@contract class C { @external @pure go(): Arr<string,2> { let xs: Arr<string,2> = ["a","b"]; return xs; } }',
+      'class C { get go(): External<Arr<string,2>> { let xs: Arr<string,2> = ["a","b"]; return xs; } }',
       'contract C { function go() external pure returns(string[2] memory){ string[2] memory xs=["a","b"]; return xs; } }',
       [['go()', '']],
     );
@@ -173,31 +173,31 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
     // lowering (lowerExpr returns the source pointer verbatim) - byte-identical to solc's aliasing.
     // whole-array return of the alias:
     await eqCalls(
-      '@contract class C { @external @pure go(): Arr<string,3> { let xs: Arr<string,3> = ["", "short", "this-string-is-definitely-longer-than-thirty-one-bytes-yes"]; let ys: Arr<string,3> = xs; return ys; } }',
+      'class C { get go(): External<Arr<string,3>> { let xs: Arr<string,3> = ["", "short", "this-string-is-definitely-longer-than-thirty-one-bytes-yes"]; let ys: Arr<string,3> = xs; return ys; } }',
       'contract C { function go() external pure returns(string[3] memory){ string[3] memory xs=["", "short", "this-string-is-definitely-longer-than-thirty-one-bytes-yes"]; string[3] memory ys=xs; return ys; } }',
       [['go()', '']],
     );
     // aliasing is a reference (not a deep copy): mutating xs[0] AFTER the alias is visible through ys[0].
     await eqCalls(
-      '@contract class C { @external @pure go(): string { let xs: Arr<string,2> = ["a","b"]; let ys: Arr<string,2> = xs; xs[0n] = "changed-to-a-much-longer-value!!!"; return ys[0n]; } }',
+      'class C { get go(): External<string> { let xs: Arr<string,2> = ["a","b"]; let ys: Arr<string,2> = xs; xs[0n] = "changed-to-a-much-longer-value!!!"; return ys[0n]; } }',
       'contract C { function go() external pure returns(string memory){ string[2] memory xs=["a","b"]; string[2] memory ys=xs; xs[0]="changed-to-a-much-longer-value!!!"; return ys[0]; } }',
       [['go()', '']],
     );
     // the reverse direction: mutating ys[1] is visible through xs[1].
     await eqCalls(
-      '@contract class C { @external @pure go(): bytes { let xs: Arr<bytes,2> = [bytes("a"),bytes("b")]; let ys: Arr<bytes,2> = xs; ys[1n] = bytes("via-ys"); return xs[1n]; } }',
+      'class C { get go(): External<bytes> { let xs: Arr<bytes,2> = [bytes("a"),bytes("b")]; let ys: Arr<bytes,2> = xs; ys[1n] = bytes("via-ys"); return xs[1n]; } }',
       'contract C { function go() external pure returns(bytes memory){ bytes[2] memory xs=[bytes("a"),bytes("b")]; bytes[2] memory ys=xs; ys[1]=bytes("via-ys"); return xs[1]; } }',
       [['go()', '']],
     );
     // value-leaf fixed-of-dynamic twin Arr<u256[],N>: alias + element mutation visibility.
     await eqCalls(
-      '@contract class C { @external @pure go(): u256 { let xs: Arr<u256[],2> = [[1n,2n],[3n]]; let ys: Arr<u256[],2> = xs; xs[0n][1n] = 99n; return ys[0n][1n]; } }',
+      'class C { get go(): External<u256> { let xs: Arr<u256[],2> = [[1n,2n],[3n]]; let ys: Arr<u256[],2> = xs; xs[0n][1n] = 99n; return ys[0n][1n]; } }',
       'contract C { function go() external pure returns(uint256){ uint256[][2] memory xs; xs[0]=new uint256[](2);xs[0][0]=1;xs[0][1]=2;xs[1]=new uint256[](1);xs[1][0]=3; uint256[][2] memory ys=xs; xs[0][1]=99; return ys[0][1]; } }',
       [['go()', '']],
     );
     // nested Arr<Arr<string,2>,2> alias round-trips byte-identically.
     await eqCalls(
-      '@contract class C { @external @pure go(): Arr<Arr<string,2>,2> { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; let ys: Arr<Arr<string,2>,2> = xs; return ys; } }',
+      'class C { get go(): External<Arr<Arr<string,2>,2>> { let xs: Arr<Arr<string,2>,2> = [["a","b"],["c","d"]]; let ys: Arr<Arr<string,2>,2> = xs; return ys; } }',
       'contract C { function go() external pure returns(string[2][2] memory){ string[2][2] memory xs=[["a","b"],["c","d"]]; string[2][2] memory ys=xs; return ys; } }',
       [['go()', '']],
     );
@@ -205,14 +205,14 @@ describe('Edge D: Arr<string,N> / Arr<bytes,N> fixed-outer-dynamic-leaf memory l
 
   it('adjacent alias shapes stay correctly gated (no over-acceptance)', () => {
     // a fixed-outer alias with a MISMATCHED type still rejects (JETH085), not a silent wrong-length copy.
-    expect(codes('@contract class C { @external @pure go(): u256 { let xs: Arr<string,2> = ["a","b"]; let ys: Arr<string,3> = xs; return 0n; } }')).toContain('JETH085');
-    expect(codes('@contract class C { @external @pure go(): u256 { let xs: Arr<string,2> = ["a","b"]; let ys: Arr<bytes,2> = xs; return 0n; } }')).toContain('JETH085');
+    expect(codes('class C { get go(): External<u256> { let xs: Arr<string,2> = ["a","b"]; let ys: Arr<string,3> = xs; return 0n; } }')).toContain('JETH085');
+    expect(codes('class C { get go(): External<u256> { let xs: Arr<string,2> = ["a","b"]; let ys: Arr<bytes,2> = xs; return 0n; } }')).toContain('JETH085');
     // a DYNAMIC-outer nested-value alias (u256[][]) stays a clean reject (a distinct memArray lowering, not
     // wired here); a clean reject is never a miscompile.
-    expect(codes('@contract class C { @external @pure go(): u256[][] { let xs: u256[][] = [[1n,2n],[3n]]; let ys: u256[][] = xs; return ys[0n][0n]; } }').length).toBeGreaterThan(0);
+    expect(codes('class C { get go(): External<u256[][]> { let xs: u256[][] = [[1n,2n],[3n]]; let ys: u256[][] = xs; return ys[0n][0n]; } }').length).toBeGreaterThan(0);
     // a whole calldata fixed-of-dynamic PARAM copied into a memory local (let ys = p) is LIFTED (W5B):
     // a calldata->memory DEEP COPY via abiDecFromCdToImage's fixed-of-dynamic branch, byte-identical to
     // solc's `string[2] memory ys = p` (behavioral coverage in test/calldata-fixed-dyn-deepcopy.test.ts).
-    expect(codes('@contract class C { @external @pure go(p: Arr<string,2>): Arr<string,2> { let ys: Arr<string,2> = p; return ys; } }').length).toBe(0);
+    expect(codes('class C { get go(p: Arr<string,2>): External<Arr<string,2>> { let ys: Arr<string,2> = p; return ys; } }').length).toBe(0);
   });
 });

@@ -47,7 +47,7 @@ async function diff(jeth: string, sol: string, calls: { sig: string; args?: stri
 
 describe('hash builtins vs Solidity', () => {
   it('sha256 / ripemd160 over bytes (empty, short, long)', async () => {
-    const J = `@contract class C { @external @pure s(x: bytes): bytes32 { return sha256(x); } @external @pure r(x: bytes): bytes20 { return ripemd160(x); } }`;
+    const J = `class C { get s(x: bytes): External<bytes32> { return sha256(x); } get r(x: bytes): External<bytes20> { return ripemd160(x); } }`;
     const S = `contract C { function s(bytes calldata x) external pure returns (bytes32){ return sha256(x); } function r(bytes calldata x) external pure returns (bytes20){ return ripemd160(x); } }`;
     await diff(J, S, [
       { sig: 's(bytes)', args: cdBytes('616263') },
@@ -72,7 +72,7 @@ describe('hash builtins vs Solidity', () => {
 
   it('hashing a string via abi.encodePacked matches solc', async () => {
     await diff(
-      `@contract class C { @external @pure f(s: string): bytes32 { return keccak256(abi.encodePacked(s)); } }`,
+      `class C { get f(s: string): External<bytes32> { return keccak256(abi.encodePacked(s)); } }`,
       `contract C { function f(string calldata s) external pure returns (bytes32){ return keccak256(abi.encodePacked(s)); } }`,
       [{ sig: 'f(string)', args: cdBytes('68656c6c6f') }],
     );

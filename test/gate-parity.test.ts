@@ -32,7 +32,7 @@ async function dS(src: string, args = '') {
 
 describe('JETH312 - @external @immutable view getter (byte-identical to solc public immutable)', () => {
   it('a u256 immutable getter: selector dispatches + returndata == the immutable value == solc', async () => {
-    const J = `@contract class C { @external @immutable x: u256; constructor(v: u256){ this.x = v; } }`;
+    const J = `class C { static x: Visible<u256>; constructor(v: u256){ this.x = v; } }`;
     const S = `contract C { uint256 public immutable x; constructor(uint256 v){ x = v; } }`;
     const args = pad32(0xdeadbeefn);
     const j = await dJ(J, args),
@@ -46,7 +46,7 @@ describe('JETH312 - @external @immutable view getter (byte-identical to solc pub
   });
 
   it('a bytes32 immutable getter is byte-identical to solc', async () => {
-    const J = `@contract class C { @external @immutable h: bytes32; constructor(v: bytes32){ this.h = v; } }`;
+    const J = `class C { static h: Visible<bytes32>; constructor(v: bytes32){ this.h = v; } }`;
     const S = `contract C { bytes32 public immutable h; constructor(bytes32 v){ h = v; } }`;
     const args = '00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff';
     const j = await dJ(J, args),
@@ -59,7 +59,7 @@ describe('JETH312 - @external @immutable view getter (byte-identical to solc pub
   });
 
   it('an address immutable getter is byte-identical to solc', async () => {
-    const J = `@contract class C { @external @immutable owner: address; constructor(){ this.owner = msg.sender; } }`;
+    const J = `class C { static owner: Visible<address>; constructor(){ this.owner = msg.sender; } }`;
     const S = `contract C { address public immutable owner; constructor(){ owner = msg.sender; } }`;
     const j = await dJ(J),
       s = await dS(S);
@@ -71,7 +71,7 @@ describe('JETH312 - @external @immutable view getter (byte-identical to solc pub
   });
 
   it('the immutable consumes NO storage slot (slot 0 stays zero, like solc)', async () => {
-    const J = `@contract class C { @external @immutable x: u256; constructor(v: u256){ this.x = v; } }`;
+    const J = `class C { static x: Visible<u256>; constructor(v: u256){ this.x = v; } }`;
     const S = `contract C { uint256 public immutable x; constructor(uint256 v){ x = v; } }`;
     const args = pad32(7n);
     const j = await dJ(J, args),
@@ -83,7 +83,7 @@ describe('JETH312 - @external @immutable view getter (byte-identical to solc pub
 describe('JETH321 - @modifier with a conditional _ placeholder (0-or-N-times) vs solc 0.8.35', () => {
   // maybe(c) { if (c) { _; } } on a VALUE-returning f(): c=true runs the body (returns 42), c=false
   // skips it (returns the zero value 0), byte-identical to solc; the @state write also happens iff c.
-  const Jf = `@contract class C { @state n: u256; @modifier maybe(c: bool) { if (c) { _; } } @external @maybe(c) f(c: bool): u256 { this.n = 99n; return 42n; } }`;
+  const Jf = `class C { n: u256; @modifier maybe(c: bool) { if (c) { _; } } @maybe(c) f(c: bool): External<u256> { this.n = 99n; return 42n; } }`;
   const Sf = `contract C { uint256 n; modifier maybe(bool c){ if (c) { _; } } function f(bool c) external maybe(c) returns (uint256) { n = 99; return 42; } }`;
 
   it('value return, c=true: body runs (42 returned, slot written) byte-identical to solc', async () => {
@@ -113,7 +113,7 @@ describe('JETH321 - @modifier with a conditional _ placeholder (0-or-N-times) vs
   });
 
   // maybe(c) on a VOID g(): c=true writes the slot, c=false leaves it; both empty-return, == solc.
-  const Jg = `@contract class C { @state n: u256; @modifier maybe(c: bool) { if (c) { _; } } @external @maybe(c) g(c: bool): void { this.n = 7n; } }`;
+  const Jg = `class C { n: u256; @modifier maybe(c: bool) { if (c) { _; } } @maybe(c) g(c: bool): External<void> { this.n = 7n; } }`;
   const Sg = `contract C { uint256 n; modifier maybe(bool c){ if (c) { _; } } function g(bool c) external maybe(c) { n = 7; } }`;
 
   it('void return, c=true: body runs (slot written, empty return) == solc', async () => {
@@ -140,7 +140,7 @@ describe('JETH321 - @modifier with a conditional _ placeholder (0-or-N-times) vs
 
   // `pre; if (c) { _; } post;`: surrounding code runs in BOTH branches (pre -> slot p, post -> slot q),
   // only the BODY (slot b) is conditional. Verifies the recursive marker placement keeps pre/post.
-  const Jw = `@contract class C { @state p: u256; @state b: u256; @state q: u256; @modifier wrap(c: bool) { this.p = 1n; if (c) { _; } this.q = 3n; } @external @wrap(c) f(c: bool): void { this.b = 2n; } }`;
+  const Jw = `class C { p: u256; b: u256; q: u256; @modifier wrap(c: bool) { this.p = 1n; if (c) { _; } this.q = 3n; } @wrap(c) f(c: bool): External<void> { this.b = 2n; } }`;
   const Sw = `contract C { uint256 p; uint256 b; uint256 q; modifier wrap(bool c){ p = 1; if (c) { _; } q = 3; } function f(bool c) external wrap(c) { b = 2; } }`;
 
   it('pre/post around a conditional placeholder run in BOTH branches (c=true), == solc slots', async () => {

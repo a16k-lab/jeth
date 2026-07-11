@@ -101,9 +101,9 @@ const solRejects = (src: string): boolean => {
 describe('ICE-LIB-SIG: cross-library delegatecall with a SHARED signature (lifted over-rejection)', () => {
   it('canonical same-sig chain High.m -> Low.m is byte-identical, on the contract AND both library objects', async () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } }
-@library class High { @external @pure m(x: u256): u256 { return Low.m(x) * 2n; } }
-@contract class C { @external @pure f(x: u256): u256 { return High.m(x); } }`;
+static class Low { m(x: u256): External<u256> { return x + 1n; } }
+static class High { m(x: u256): External<u256> { return Low.m(x) * 2n; } }
+class C { f(x: u256): External<u256> { return High.m(x); } }`;
     const sol = `${SPDX}
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } }
 library High { function m(uint256 x) public pure returns (uint256) { return Low.m(x) * 2; } }
@@ -124,10 +124,10 @@ contract C { function f(uint256 x) external pure returns (uint256) { return High
 
   it('a 3-level same-sig chain (Top.m -> High.m -> Low.m) and each library object are byte-identical', async () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } }
-@library class High { @external @pure m(x: u256): u256 { return Low.m(x) * 2n; } }
-@library class Top { @external @pure m(x: u256): u256 { return High.m(x) + 10n; } }
-@contract class C { @external @pure f(x: u256): u256 { return Top.m(x); } }`;
+static class Low { m(x: u256): External<u256> { return x + 1n; } }
+static class High { m(x: u256): External<u256> { return Low.m(x) * 2n; } }
+static class Top { m(x: u256): External<u256> { return High.m(x) + 10n; } }
+class C { f(x: u256): External<u256> { return Top.m(x); } }`;
     const sol = `${SPDX}
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } }
 library High { function m(uint256 x) public pure returns (uint256) { return Low.m(x) * 2; } }
@@ -143,10 +143,10 @@ contract C { function f(uint256 x) external pure returns (uint256) { return Top.
 
   it('a DIAMOND (A.m and B.k both delegatecall Low.m; the contract calls both) is byte-identical', async () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } }
-@library class A { @external @pure m(x: u256): u256 { return Low.m(x) * 3n; } }
-@library class B { @external @pure k(x: u256): u256 { return Low.m(x) * 5n; } }
-@contract class C { @external @pure f(x: u256): u256 { return A.m(x) + B.k(x); } }`;
+static class Low { m(x: u256): External<u256> { return x + 1n; } }
+static class A { m(x: u256): External<u256> { return Low.m(x) * 3n; } }
+static class B { k(x: u256): External<u256> { return Low.m(x) * 5n; } }
+class C { f(x: u256): External<u256> { return A.m(x) + B.k(x); } }`;
     const sol = `${SPDX}
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } }
 library A { function m(uint256 x) public pure returns (uint256) { return Low.m(x) * 3; } }
@@ -161,13 +161,13 @@ contract C { function f(uint256 x) external pure returns (uint256) { return A.m(
 
   it('the caller lib keeps its own fns + internal and #-private helpers next to the same-sig delegatecall', async () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } helper(x: u256): u256 { return x + 3n; } }
-@library class High {
+static class Low { m(x: u256): External<u256> { return x + 1n; } helper(x: u256): u256 { return x + 3n; } }
+static class High {
   #boost(y: u256): u256 { return y + 100n; }
-  @external @pure m(x: u256): u256 { return High.#boost(Low.m(x)) + Low.helper(x); }
-  @external @pure g(x: u256): u256 { return x * 7n; }
+  m(x: u256): External<u256> { return High.#boost(Low.m(x)) + Low.helper(x); }
+  g(x: u256): External<u256> { return x * 7n; }
 }
-@contract class C { @external @pure f(x: u256): u256 { return High.m(x) + High.g(x); } }`;
+class C { f(x: u256): External<u256> { return High.m(x) + High.g(x); } }`;
     const sol = `${SPDX}
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } function helper(uint256 x) internal pure returns (uint256) { return x + 3; } }
 library High {
@@ -190,9 +190,9 @@ contract C { function f(uint256 x) external pure returns (uint256) { return High
       return '0x' + selector + pad32(32n) + pad32(BigInt(hex.length / 2)) + hex.padEnd(words * 64, '0');
     };
     const jeth = `
-@library class Low { @external @pure echo(s: string): string { return s; } }
-@library class High { @external @pure echo(s: string): string { return Low.echo(s); } }
-@contract class C { @external @pure es(s: string): string { return High.echo(s); } }`;
+static class Low { echo(s: string): External<string> { return s; } }
+static class High { echo(s: string): External<string> { return Low.echo(s); } }
+class C { es(s: string): External<string> { return High.echo(s); } }`;
     const sol = `${SPDX}
 library Low { function echo(string memory s) public pure returns (string memory) { return s; } }
 library High { function echo(string memory s) public pure returns (string memory) { return Low.echo(s); } }
@@ -223,9 +223,9 @@ contract C { function f(uint256 x) external pure returns (uint256) { return High
 describe('ICE-LIB-SIG: unchanged controls', () => {
   it('DISTINCT names (High.h -> Low.m): works, and the callee selector is NOT dispatched by the caller object', async () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } }
-@library class High { @external @pure h(x: u256): u256 { return Low.m(x) * 2n; } }
-@contract class C { @external @pure f(x: u256): u256 { return High.h(x); } }`;
+static class Low { m(x: u256): External<u256> { return x + 1n; } }
+static class High { h(x: u256): External<u256> { return Low.m(x) * 2n; } }
+class C { f(x: u256): External<u256> { return High.h(x); } }`;
     const sol = `${SPDX}
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } }
 library High { function h(uint256 x) public pure returns (uint256) { return Low.m(x) * 2; } }
@@ -242,9 +242,9 @@ contract C { function f(uint256 x) external pure returns (uint256) { return High
 
   it('same-sig but UNCALLED, and a contract calling two same-sig libraries, stay byte-identical', async () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } }
-@library class High { @external @pure m(x: u256): u256 { return x * 3n; } }
-@contract class C { @external @pure f(x: u256): u256 { return High.m(x) + Low.m(x); } }`;
+static class Low { m(x: u256): External<u256> { return x + 1n; } }
+static class High { m(x: u256): External<u256> { return x * 3n; } }
+class C { f(x: u256): External<u256> { return High.m(x) + Low.m(x); } }`;
     const sol = `${SPDX}
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } }
 library High { function m(uint256 x) public pure returns (uint256) { return x * 3; } }
@@ -256,9 +256,9 @@ contract C { function f(uint256 x) external pure returns (uint256) { return High
 
   it('the contract declaring its OWN same-sig fn keeps its own dispatcher case', async () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } }
-@library class High { @external @pure m(x: u256): u256 { return Low.m(x) * 2n; } }
-@contract class C { @external @pure m(x: u256): u256 { return x * 100n; } @external @pure f(x: u256): u256 { return High.m(x); } }`;
+static class Low { m(x: u256): External<u256> { return x + 1n; } }
+static class High { m(x: u256): External<u256> { return Low.m(x) * 2n; } }
+class C { get m(x: u256): External<u256> { return x * 100n; } f(x: u256): External<u256> { return High.m(x); } }`;
     const sol = `${SPDX}
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } }
 library High { function m(uint256 x) public pure returns (uint256) { return Low.m(x) * 2; } }
@@ -272,9 +272,9 @@ contract C { function m(uint256 x) external pure returns (uint256) { return x * 
 describe('ICE-LIB-SIG: still-reject gates', () => {
   it('two external libraries sharing one source name stay rejected (JETH037; solc duplicate declaration)', () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } }
-@library class Low { @external @pure m(x: u256): u256 { return x + 2n; } }
-@contract class C { @external @pure f(x: u256): u256 { return Low.m(x); } }`;
+static class Low { m(x: u256): External<u256> { return x + 1n; } }
+static class Low { m(x: u256): External<u256> { return x + 2n; } }
+class C { f(x: u256): External<u256> { return Low.m(x); } }`;
     const sol = `
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } }
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 2; } }
@@ -285,9 +285,9 @@ contract C { function f(uint256 x) external pure returns (uint256) { return Low.
 
   it('calling a fn the callee library does not declare stays rejected (JETH392; solc member lookup)', () => {
     const jeth = `
-@library class Low { @external @pure m(x: u256): u256 { return x + 1n; } }
-@library class High { @external @pure m(x: u256): u256 { return Low.q(x) * 2n; } }
-@contract class C { @external @pure f(x: u256): u256 { return High.m(x); } }`;
+static class Low { m(x: u256): External<u256> { return x + 1n; } }
+static class High { m(x: u256): External<u256> { return Low.q(x) * 2n; } }
+class C { f(x: u256): External<u256> { return High.m(x); } }`;
     const sol = `
 library Low { function m(uint256 x) public pure returns (uint256) { return x + 1; } }
 library High { function m(uint256 x) public pure returns (uint256) { return Low.q(x) * 2; } }

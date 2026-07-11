@@ -40,24 +40,24 @@ async function behavesLikeSolc(
 
 describe('funcref lift FIX 1: direct call of a @state funcref field this.p(v)', () => {
   it('pure target, mutating target (state), null-field Panic(0x51), void field statement', async () => {
-    const JETH = `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @state s: u256;
+    const JETH = `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      s: u256;
       setS(x: u256): u256 { this.s = x * 3n; return this.s; }
       wr(x: u256) { this.s = x + 1n; }
-      @state p: (x: u256) => u256;
-      @state m: (x: u256) => u256;
-      @state w: (x: u256) => void;
+      p: (x: u256) => u256;
+      m: (x: u256) => u256;
+      w: (x: u256) => void;
       constructor() { this.p = this.inc; this.s = 100n; }
-      @external setDec() { this.p = this.dec; }
-      @external run(v: u256): u256 { return this.p(v); }
-      @external setMut() { this.m = this.setS; }
-      @external runMut(v: u256): u256 { return this.m(v); }
-      @external nullCall(v: u256): u256 { return this.m(v); }
-      @external setW() { this.w = this.wr; }
-      @external runW(v: u256) { this.w(v); }
-      @external @view getS(): u256 { return this.s; }
+      setDec(): External<void> { this.p = this.dec; }
+      run(v: u256): External<u256> { return this.p(v); }
+      setMut(): External<void> { this.m = this.setS; }
+      runMut(v: u256): External<u256> { return this.m(v); }
+      nullCall(v: u256): External<u256> { return this.m(v); }
+      setW(): External<void> { this.w = this.wr; }
+      runW(v: u256): External<void> { this.w(v); }
+      get getS(): External<u256> { return this.s; }
     }`;
     const SOL = `contract C {
       function inc(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -95,16 +95,16 @@ describe('funcref lift FIX 1: direct call of a @state funcref field this.p(v)', 
 
 describe('funcref lift FIX 2: an address-take used directly as a == / != operand', () => {
   it('g == this.inc / this.inc == g / != / both-address-take inc == dec, both branches', async () => {
-    const JETH = `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @external eqL(c: bool): bool { let g: (x: u256) => u256 = c ? this.inc : this.dec; return g == this.inc; }
-      @external eqR(c: bool): bool { let g: (x: u256) => u256 = c ? this.inc : this.dec; return this.inc == g; }
-      @external neL(c: bool): bool { let g: (x: u256) => u256 = c ? this.inc : this.dec; return g != this.inc; }
-      @external bothEq(): bool { return this.inc == this.inc; }
-      @external bothNe(): bool { return this.inc == this.dec; }
-      @external bothBang(): bool { return this.inc != this.dec; }
-      @external branch(c: bool): u256 { let g: (x: u256) => u256 = c ? this.inc : this.dec; if (g == this.inc) { return 111n; } return 222n; }
+    const JETH = `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      get eqL(c: bool): External<bool> { let g: (x: u256) => u256 = c ? this.inc : this.dec; return g == this.inc; }
+      get eqR(c: bool): External<bool> { let g: (x: u256) => u256 = c ? this.inc : this.dec; return this.inc == g; }
+      get neL(c: bool): External<bool> { let g: (x: u256) => u256 = c ? this.inc : this.dec; return g != this.inc; }
+      get bothEq(): External<bool> { return this.inc == this.inc; }
+      get bothNe(): External<bool> { return this.inc == this.dec; }
+      get bothBang(): External<bool> { return this.inc != this.dec; }
+      get branch(c: bool): External<u256> { let g: (x: u256) => u256 = c ? this.inc : this.dec; if (g == this.inc) { return 111n; } return 222n; }
     }`;
     const SOL = `contract C {
       function inc(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -129,15 +129,15 @@ describe('funcref lift FIX 2: an address-take used directly as a == / != operand
 
 describe('funcref lift FIX 3: a memory / storage array of funcrefs', () => {
   it('fixed + dynamic memory array: literal, arr[i](v), arr[i]=this.f, .length, element read, OOB Panic', async () => {
-    const JETH = `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @pure sq(x: u256): u256 { return x * x; }
-      @external fixedCall(i: u256, v: u256): u256 { let fs: Arr<(x: u256) => u256, 2> = [this.inc, this.dec]; return fs[i](v); }
-      @external dynCall(i: u256, v: u256): u256 { let fs: ((x: u256) => u256)[] = [this.inc, this.dec, this.sq]; return fs[i](v); }
-      @external dynLen(): u256 { let fs: ((x: u256) => u256)[] = [this.inc, this.dec, this.sq]; return fs.length; }
-      @external writeElem(v: u256): u256 { let fs: Arr<(x: u256) => u256, 2> = [this.inc, this.dec]; fs[0] = this.sq; return fs[0](v); }
-      @external readElem(c: bool, v: u256): u256 { let fs: Arr<(x: u256) => u256, 2> = [this.inc, this.dec]; let g: (x: u256) => u256 = c ? fs[0] : fs[1]; return g(v); }
+    const JETH = `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      sq(x: u256): u256 { return x * x; }
+      get fixedCall(i: u256, v: u256): External<u256> { let fs: Arr<(x: u256) => u256, 2> = [this.inc, this.dec]; return fs[i](v); }
+      get dynCall(i: u256, v: u256): External<u256> { let fs: ((x: u256) => u256)[] = [this.inc, this.dec, this.sq]; return fs[i](v); }
+      get dynLen(): External<u256> { let fs: ((x: u256) => u256)[] = [this.inc, this.dec, this.sq]; return fs.length; }
+      get writeElem(v: u256): External<u256> { let fs: Arr<(x: u256) => u256, 2> = [this.inc, this.dec]; fs[0] = this.sq; return fs[0](v); }
+      get readElem(c: bool, v: u256): External<u256> { let fs: Arr<(x: u256) => u256, 2> = [this.inc, this.dec]; let g: (x: u256) => u256 = c ? fs[0] : fs[1]; return g(v); }
     }`;
     const SOL = `contract C {
       function inc(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -163,17 +163,17 @@ describe('funcref lift FIX 3: a memory / storage array of funcrefs', () => {
   });
 
   it('@state fixed + dynamic funcref array: write, push, indexed call, .length, OOB, storage read-back', async () => {
-    const JETH = `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @pure sq(x: u256): u256 { return x * x; }
-      @state fa: Arr<(x: u256) => u256, 2>;
-      @state da: ((x: u256) => u256)[];
-      @external setFa() { this.fa[0] = this.inc; this.fa[1] = this.dec; }
-      @external callFa(i: u256, v: u256): u256 { return this.fa[i](v); }
-      @external pushDa() { this.da.push(this.inc); this.da.push(this.sq); }
-      @external callDa(i: u256, v: u256): u256 { return this.da[i](v); }
-      @external daLen(): u256 { return this.da.length; }
+    const JETH = `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      sq(x: u256): u256 { return x * x; }
+      fa: Arr<(x: u256) => u256, 2>;
+      da: ((x: u256) => u256)[];
+      setFa(): External<void> { this.fa[0] = this.inc; this.fa[1] = this.dec; }
+      get callFa(i: u256, v: u256): External<u256> { return this.fa[i](v); }
+      pushDa(): External<void> { this.da.push(this.inc); this.da.push(this.sq); }
+      get callDa(i: u256, v: u256): External<u256> { return this.da[i](v); }
+      get daLen(): External<u256> { return this.da.length; }
     }`;
     const SOL = `contract C {
       function inc(uint256 x) internal pure returns(uint256){ return x+1; }
@@ -203,13 +203,13 @@ describe('funcref lift FIX 3: a memory / storage array of funcrefs', () => {
 
 describe('funcref lift FIX 4: a struct with a funcref field', () => {
   it('memory: construct, field read, field write, indexed call; value field alongside', async () => {
-    const JETH = `@struct class Ops { a: (x: u256) => u256; b: u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @external callMem(v: u256): u256 { let o: Ops = Ops(this.inc, 7n); return o.a(v); }
-      @external writeMem(v: u256): u256 { let o: Ops = Ops(this.inc, 7n); o.a = this.dec; return o.a(v); }
-      @external readB(): u256 { let o: Ops = Ops(this.inc, 7n); return o.b; }
+    const JETH = `type Ops = { a: (x: u256) => u256; b: u256; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      get callMem(v: u256): External<u256> { let o: Ops = Ops(this.inc, 7n); return o.a(v); }
+      get writeMem(v: u256): External<u256> { let o: Ops = Ops(this.inc, 7n); o.a = this.dec; return o.a(v); }
+      get readB(): External<u256> { let o: Ops = Ops(this.inc, 7n); return o.b; }
     }`;
     const SOL = `contract C {
       struct Ops { function(uint256) pure returns(uint256) a; uint256 b; }
@@ -227,15 +227,15 @@ describe('funcref lift FIX 4: a struct with a funcref field', () => {
   });
 
   it('@state struct with a funcref field: write field, indexed call, null Panic, value field, read-back', async () => {
-    const JETH = `@struct class Ops { a: (x: u256) => u256; b: u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure dec(x: u256): u256 { return x - 1n; }
-      @state o: Ops;
-      @external setInc() { this.o.a = this.inc; this.o.b = 5n; }
-      @external setDec() { this.o.a = this.dec; }
-      @external call(v: u256): u256 { return this.o.a(v); }
-      @external getB(): u256 { return this.o.b; }
+    const JETH = `type Ops = { a: (x: u256) => u256; b: u256; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      dec(x: u256): u256 { return x - 1n; }
+      o: Ops;
+      setInc(): External<void> { this.o.a = this.inc; this.o.b = 5n; }
+      setDec(): External<void> { this.o.a = this.dec; }
+      get call(v: u256): External<u256> { return this.o.a(v); }
+      get getB(): External<u256> { return this.o.b; }
     }`;
     const SOL = `contract C {
       struct Ops { function(uint256) pure returns(uint256) a; uint256 b; }
@@ -258,11 +258,11 @@ describe('funcref lift FIX 4: a struct with a funcref field', () => {
   });
 
   it('nested value-word struct (struct-in-struct with a funcref leaf)', async () => {
-    const JETH = `@struct class Inner { fn: (x: u256) => u256; k: u256; }
-    @struct class Outer { inner: Inner; tag: u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external run(v: u256): u256 { let o: Outer = Outer(Inner(this.inc, 9n), 3n); return o.inner.fn(v) + o.inner.k + o.tag; }
+    const JETH = `type Inner = { fn: (x: u256) => u256; k: u256; };
+    type Outer = { inner: Inner; tag: u256; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      get run(v: u256): External<u256> { let o: Outer = Outer(Inner(this.inc, 9n), 3n); return o.inner.fn(v) + o.inner.k + o.tag; }
     }`;
     const SOL = `contract C {
       struct Inner { function(uint256) pure returns(uint256) fn; uint256 k; }
@@ -276,14 +276,14 @@ describe('funcref lift FIX 4: a struct with a funcref field', () => {
 
 describe('funcref lift adversarial: multi-target dispatch through array/struct/state, cross', () => {
   it('mutating pointers dispatched through a @state array (multi-target, writes state)', async () => {
-    const JETH = `@contract class C {
-      @state s: u256;
+    const JETH = `class C {
+      s: u256;
       setA(x: u256): u256 { this.s = x + 1n; return this.s; }
       setB(x: u256): u256 { this.s = x * 2n; return this.s; }
-      @state fns: ((x: u256) => u256)[];
-      @external init() { this.fns.push(this.setA); this.fns.push(this.setB); }
-      @external run(i: u256, v: u256): u256 { return this.fns[i](v); }
-      @external @view getS(): u256 { return this.s; }
+      fns: ((x: u256) => u256)[];
+      init(): External<void> { this.fns.push(this.setA); this.fns.push(this.setB); }
+      run(i: u256, v: u256): External<u256> { return this.fns[i](v); }
+      get getS(): External<u256> { return this.s; }
     }`;
     const SOL = `contract C {
       uint256 s;
@@ -304,11 +304,11 @@ describe('funcref lift adversarial: multi-target dispatch through array/struct/s
   });
 
   it('cross dispatch: write an array element from a struct field, then dispatch both', async () => {
-    const JETH = `@struct class Box { f: (x: u256) => u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @pure sq(x: u256): u256 { return x * x; }
-      @external run(v: u256): u256 { let arr: Arr<(x: u256) => u256, 2> = [this.inc, this.inc]; let b: Box = Box(this.sq); arr[1] = b.f; return arr[0](v) + arr[1](v); }
+    const JETH = `type Box = { f: (x: u256) => u256; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      sq(x: u256): u256 { return x * x; }
+      get run(v: u256): External<u256> { let arr: Arr<(x: u256) => u256, 2> = [this.inc, this.inc]; let b: Box = Box(this.sq); arr[1] = b.f; return arr[0](v) + arr[1](v); }
     }`;
     const SOL = `contract C {
       struct Box { function(uint256) pure returns(uint256) f; }
@@ -324,36 +324,36 @@ describe('funcref lift adversarial: multi-target dispatch through array/struct/s
 // context, exactly like solc's "Internal type cannot be used ... in this context".
 describe('funcref lift: ABI contexts with a funcref aggregate STAY rejected (soundness)', () => {
   const rejects: Record<string, string> = {
-    'return a funcref array from an @external fn': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external run(): ((x: u256) => u256)[] { let fs: ((x: u256) => u256)[] = [this.inc]; return fs; }
+    'return a funcref array from an @external fn': `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      run(): External<((x: u256) => u256)[]> { let fs: ((x: u256) => u256)[] = [this.inc]; return fs; }
     }`,
-    'abi.encode a funcref array': `@contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external run(): bytes { let fs: Arr<(x: u256) => u256, 1> = [this.inc]; return abi.encode(fs); }
+    'abi.encode a funcref array': `class C {
+      inc(x: u256): u256 { return x + 1n; }
+      get run(): External<bytes> { let fs: Arr<(x: u256) => u256, 1> = [this.inc]; return abi.encode(fs); }
     }`,
-    'funcref array as an @external param': `@contract class C {
-      @external run(fs: ((x: u256) => u256)[], i: u256, v: u256): u256 { return fs[i](v); }
+    'funcref array as an @external param': `class C {
+      run(fs: ((x: u256) => u256)[], i: u256, v: u256): External<u256> { return fs[i](v); }
     }`,
-    '@public getter of a funcref array': `@contract class C {
+    '@public getter of a funcref array': `class C {
       @public fa: Arr<(x: u256) => u256, 1>;
     }`,
-    'abi.encode a funcref struct': `@struct class Ops { a: (x: u256) => u256; b: u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external run(): bytes { let o: Ops = Ops(this.inc, 1n); return abi.encode(o); }
+    'abi.encode a funcref struct': `type Ops = { a: (x: u256) => u256; b: u256; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      get run(): External<bytes> { let o: Ops = Ops(this.inc, 1n); return abi.encode(o); }
     }`,
-    'return a funcref struct from an @external fn': `@struct class Ops { a: (x: u256) => u256; b: u256; }
-    @contract class C {
-      @pure inc(x: u256): u256 { return x + 1n; }
-      @external run(): Ops { return Ops(this.inc, 1n); }
+    'return a funcref struct from an @external fn': `type Ops = { a: (x: u256) => u256; b: u256; };
+    class C {
+      inc(x: u256): u256 { return x + 1n; }
+      run(): External<Ops> { return Ops(this.inc, 1n); }
     }`,
-    'funcref struct as an @external param': `@struct class Ops { a: (x: u256) => u256; b: u256; }
-    @contract class C {
-      @external run(o: Ops, v: u256): u256 { return o.a(v); }
+    'funcref struct as an @external param': `type Ops = { a: (x: u256) => u256; b: u256; };
+    class C {
+      run(o: Ops, v: u256): External<u256> { return o.a(v); }
     }`,
-    '@public getter of a funcref struct': `@struct class Ops { a: (x: u256) => u256; b: u256; }
-    @contract class C {
+    '@public getter of a funcref struct': `type Ops = { a: (x: u256) => u256; b: u256; };
+    class C {
       @public o: Ops;
     }`,
   };

@@ -21,13 +21,13 @@ const rejects = (src: string): boolean => {
 
 describe('TERN-STRUCT-ARR for-of lift - byte-identical to solc 0.8.35', () => {
   it('for-of over a ternary struct array (mem|storage, mem|mem) + plain regression', async () => {
-    const J = `@struct class In { a: u256; b: u256; }
-      @contract class C {
-        @state fa: Arr<In,2>;
-        @external seed() { this.fa[0n] = In(100n,200n); this.fa[1n] = In(300n,400n); }
-        @external @view tern(c: bool): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let s: u256 = 0n; for (const e of (c ? m : this.fa)) { s = s + e.a*10n + e.b; } return s; }
-        @external @pure memmem(c: bool): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let n: Arr<In,2> = [In(5n,6n),In(7n,8n)]; let s: u256 = 0n; for (const e of (c ? m : n)) { s = s + e.a*10n + e.b; } return s; }
-        @external @pure plain(): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let s: u256 = 0n; for (const e of m) { s = s + e.a; } return s; } }`;
+    const J = `type In = { a: u256; b: u256; };
+      class C {
+        fa: Arr<In,2>;
+        seed(): External<void> { this.fa[0n] = In(100n,200n); this.fa[1n] = In(300n,400n); }
+        get tern(c: bool): External<u256> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let s: u256 = 0n; for (const e of (c ? m : this.fa)) { s = s + e.a*10n + e.b; } return s; }
+        get memmem(c: bool): External<u256> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let n: Arr<In,2> = [In(5n,6n),In(7n,8n)]; let s: u256 = 0n; for (const e of (c ? m : n)) { s = s + e.a*10n + e.b; } return s; }
+        get plain(): External<u256> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let s: u256 = 0n; for (const e of m) { s = s + e.a; } return s; } }`;
     const S = `struct In { uint256 a; uint256 b; }
       contract C {
         In[2] fa;
@@ -54,10 +54,10 @@ describe('TERN-STRUCT-ARR for-of lift - byte-identical to solc 0.8.35', () => {
   });
 
   it('boundaries: for-of over a plain array + over a bound ternary local still accept; a call iterable still rejects', () => {
-    const IN = `@struct class In { a: u256; b: u256; }`;
+    const IN = `type In = { a: u256; b: u256; };`;
     // the manual bind-then-for-of still works
-    expect(rejects(`${IN} @contract class C { @state fa: Arr<In,2>; @external @view r(c: bool): u256 { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let p: Arr<In,2> = c ? m : this.fa; let s: u256 = 0n; for (const e of p) { s = s + e.a; } return s; } }`)).toBe(false);
+    expect(rejects(`${IN} class C { fa: Arr<In,2>; get r(c: bool): External<u256> { let m: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let p: Arr<In,2> = c ? m : this.fa; let s: u256 = 0n; for (const e of p) { s = s + e.a; } return s; } }`)).toBe(false);
     // a call iterable is still rejected (must bind first - re-evaluation hazard), JETH117
-    expect(rejects(`${IN} @contract class C { mk(): Arr<In,2> { return [In(1n,2n),In(3n,4n)]; } @external @view r(): u256 { let s: u256 = 0n; for (const e of this.mk()) { s = s + e.a; } return s; } }`)).toBe(true);
+    expect(rejects(`${IN} class C { mk(): Arr<In,2> { return [In(1n,2n),In(3n,4n)]; } get r(): External<u256> { let s: u256 = 0n; for (const e of this.mk()) { s = s + e.a; } return s; } }`)).toBe(true);
   });
 });
