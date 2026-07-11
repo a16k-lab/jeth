@@ -20,17 +20,17 @@ const P32 = 'p'.repeat(32);
 const Q33 = 'q'.repeat(33);
 const hexlit = (s: string) => 'hex"' + Buffer.from(s).toString('hex') + '"';
 
-const J = `@struct class P { a: u256; b: u256; } @struct class W { x: Arr<u256,2>; y: u256; }
-@contract class C {
-  @external @pure t1(): [P[], u256] { let xs: P[] = [P(1n,2n),P(3n,4n)]; return [xs, 42n]; }
-  @external @pure t2(): [u256, P[]] { let xs: P[] = [P(1n,2n),P(3n,4n)]; return [42n, xs]; }
-  @external @pure t3(): [W[], u256] { let xs: W[] = [W([1n,2n],3n),W([4n,5n],6n)]; return [xs, 7n]; }
-  @external @pure t4(): [u256, bytes[]] { let bs: bytes[] = [bytes("${P32}"),bytes("${Q33}")]; return [42n, bs]; }
-  @external @pure t5(): [bytes[], u256] { let bs: bytes[] = [bytes("${P32}"),bytes("${Q33}")]; return [bs, 42n]; }
-  @external @pure t6(): [u256, string[]] { let ss: string[] = ["${P32}","${Q33}"]; return [7n, ss]; }
-  @external @pure cv(): [u256[], u256] { let xs: u256[] = [1n,2n,3n]; return [xs, 9n]; }
-  @external @pure nn(): [u256[][], u256] { let m: u256[][] = [[1n,2n],[3n]]; return [m, 9n]; }
-  @external @pure m3(): [P[], bytes[], u256] { let xs: P[] = [P(1n,2n)]; let bs: bytes[] = [bytes("ab"),bytes("cde")]; return [xs, bs, 5n]; } }`;
+const J = `type P = { a: u256; b: u256; }; type W = { x: Arr<u256,2>; y: u256; };
+class C {
+  get t1(): External<[P[], u256]> { let xs: P[] = [P(1n,2n),P(3n,4n)]; return [xs, 42n]; }
+  get t2(): External<[u256, P[]]> { let xs: P[] = [P(1n,2n),P(3n,4n)]; return [42n, xs]; }
+  get t3(): External<[W[], u256]> { let xs: W[] = [W([1n,2n],3n),W([4n,5n],6n)]; return [xs, 7n]; }
+  get t4(): External<[u256, bytes[]]> { let bs: bytes[] = [bytes("${P32}"),bytes("${Q33}")]; return [42n, bs]; }
+  get t5(): External<[bytes[], u256]> { let bs: bytes[] = [bytes("${P32}"),bytes("${Q33}")]; return [bs, 42n]; }
+  get t6(): External<[u256, string[]]> { let ss: string[] = ["${P32}","${Q33}"]; return [7n, ss]; }
+  get cv(): External<[u256[], u256]> { let xs: u256[] = [1n,2n,3n]; return [xs, 9n]; }
+  get nn(): External<[u256[][], u256]> { let m: u256[][] = [[1n,2n],[3n]]; return [m, 9n]; }
+  get m3(): External<[P[], bytes[], u256]> { let xs: P[] = [P(1n,2n)]; let bs: bytes[] = [bytes("ab"),bytes("cde")]; return [xs, bs, 5n]; } }`;
 
 const S = `struct P { uint a; uint b; } struct W { uint[2] x; uint y; }
 contract C {

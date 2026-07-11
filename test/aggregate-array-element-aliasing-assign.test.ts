@@ -67,7 +67,7 @@ describe('Cat A2: pointer-headed aggregate-array element aliasing assignment - b
   });
 
   it('a static-struct array element ref-assign now ACCEPTS (static-struct arrays are pointer-headed)', () => {
-    const C = (body: string) => `@struct class P { a: u256; b: u256; }\n@contract class C { @external @pure f(): u256 { let xs: P[] = new Array<P>(2n); ${body} return xs[0n].a; } }`;
+    const C = (body: string) => `type P = { a: u256; b: u256; };\nclass C { get f(): External<u256> { let xs: P[] = new Array<P>(2n); ${body} return xs[0n].a; } }`;
     expect(codes(C('xs[0n] = P(1n, 2n);'))).toEqual([]); // fresh -> accept
     expect(codes(C('xs[0n] = P(1n, 2n); xs[1n] = xs[0n];'))).toEqual([]); // element ref -> now aliases (pointer-headed)
     // pointer-headed (dyn-field struct) element ref-assign also ACCEPTS:

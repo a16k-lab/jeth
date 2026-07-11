@@ -19,7 +19,7 @@ const codes = (src: string): string[] => {
     throw e;
   }
 };
-const fn = (body: string, extra = '') => `${extra}@contract class C { @external @pure f(): bool { ${body} } }`;
+const fn = (body: string, extra = '') => `${extra}class C { get f(): External<bool> { ${body} } }`;
 
 describe('aggregate comparison gate (JETH088, solc parity)', () => {
   it('rejects == / != on a struct (solc rejects struct equality)', () => {

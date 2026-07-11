@@ -77,7 +77,7 @@ describe('Cat A: bind a pointer-headed aggregate-array element (alias) - byte-id
     // static-struct P[] is now POINTER-HEADED like solc, so `let p = xs[i]` binds the element pointer
     // (alias): mutating p writes through to xs[i], re-pointing xs[i] leaves p on the old image.
     // Byte-identity covered in pointer-headed-static-struct-array.test.ts.
-    const C = (body: string) => `@struct class P { a: u256; b: u256; }\n@contract class C { @external @pure f(): u256 { let xs: P[] = [P(1n, 2n)]; ${body} } }`;
+    const C = (body: string) => `type P = { a: u256; b: u256; };\nclass C { get f(): External<u256> { let xs: P[] = [P(1n, 2n)]; ${body} } }`;
     expect(codes(C('let p: P = xs[0n]; return p.a;'))).toEqual([]);
     expect(codes(C('let n: u256 = 0n; for (const p of xs) { n = n + p.a; } return n;'))).toEqual([]);
     // the pointer-headed dynamic forms ACCEPT too:

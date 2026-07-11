@@ -63,8 +63,8 @@ describe('decode field inside call/staticcall options', () => {
     // For each shape, an in-object decode and a chained .decode caller that are otherwise identical must
     // compile to the SAME creation bytecode (they lower to the same abiDecode-over-extCall IR).
     const single = (decExpr: string, chain: string, ret: string) => ({
-      inObj: `@contract class C { @external @view f(t: address): ${ret} { return t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" }, decode: ${decExpr} }); } }`,
-      chain: `@contract class C { @external @view f(t: address): ${ret} { return t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" } }).decode(${chain}); } }`,
+      inObj: `class C { get f(t: address): External<${ret}> { return t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" }, decode: ${decExpr} }); } }`,
+      chain: `class C { get f(t: address): External<${ret}> { return t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" } }).decode(${chain}); } }`,
     });
     const cases = [
       single('u256', 'u256', 'u256'),
@@ -200,66 +200,56 @@ describe('decode field inside call/staticcall options', () => {
   });
 
   it('accepts the supported decode-in-call shapes', () => {
-    const ok = (body: string) => `@contract class C { @external f(t: address): ${body} }`;
+    // a value-carrying `call` is state-mutating -> a plain External<T> method; the read-only
+    // `staticcall` shapes are spelled with `get` (native read-only external function).
+    const okM = (ret: string, body: string) => `class C { f(t: address): External<${ret}> { ${body} } }`;
+    const okG = (ret: string, body: string) => `class C { get f(t: address): External<${ret}> { ${body} } }`;
     expect(
       jethAccepts(
-        ok(
-          'u256 { return t.call({ data: abi.encode(), value: 1n, success: { condition: this.ok, revert: "x" }, decode: u256 }); }',
-        ),
+        okM('u256', 'return t.call({ data: abi.encode(), value: 1n, success: { condition: this.ok, revert: "x" }, decode: u256 });'),
       ),
     ).toBe(true);
     expect(
       jethAccepts(
-        ok(
-          'string { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string }); }',
-        ),
+        okG('string', 'return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string });'),
       ),
     ).toBe(true);
     expect(
       jethAccepts(
-        ok(
-          'bytes { let xs: u256[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: u256[] }); return abi.encode(xs); }',
-        ),
+        okG('bytes', 'let xs: u256[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: u256[] }); return abi.encode(xs);'),
       ),
     ).toBe(true);
     expect(
       jethAccepts(
-        ok(
-          'bytes { let xs: Arr<u256,3> = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: Arr<u256,3> }); return abi.encode(xs); }',
-        ),
+        okG('bytes', 'let xs: Arr<u256,3> = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: Arr<u256,3> }); return abi.encode(xs);'),
       ),
     ).toBe(true);
     expect(
       jethAccepts(
-        ok(
-          'bytes { let [a, b]: [u256, address] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [u256, address] }); return abi.encode(a, b); }',
-        ),
+        okG('bytes', 'let [a, b]: [u256, address] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [u256, address] }); return abi.encode(a, b);'),
       ),
     ).toBe(true);
   });
 
   it('cleanly rejects (no crash) decode misuse with a precise diagnostic', () => {
-    const f = (body: string) => `@contract class C { @external f(t: address): ${body} }`;
+    // read-only external functions are spelled with `get` in native mode; the misuse is the decode shape.
+    const fG = (ret: string, body: string) => `class C { get f(t: address): External<${ret}> { ${body} } }`;
     // decode on the raw escape hatch -> JETH303
     expect(
-      jethError(f('bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: abi.encode(), decode: u256 }); return r; }')),
-    ).toContain('JETH481');
+      jethError(fG('bytes', 'let [ok, r]: [bool, bytes] = t.tryCall({ data: abi.encode(), decode: u256 }); return r;')),
+    ).toContain('JETH303');
     // unknown type name -> JETH321
     expect(
       jethError(
-        f(
-          'u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType }); }',
-        ),
+        fG('u256', 'return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType });'),
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH321');
     // empty tuple -> JETH321
     expect(
       jethError(
-        f(
-          'u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [] }); }',
-        ),
+        fG('u256', 'return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [] });'),
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH321');
     // a struct target is now SUPPORTED for decode (decode: P reuses the same abiDecode codec - the memory
     // decoder builds the pointer-headed struct image; byte-identical, see arch-abi-decode-aggregate.test.ts)
     expect(
@@ -272,17 +262,13 @@ describe('decode field inside call/staticcall options', () => {
     // verified in arch-residual-c-decode-array.test.ts; the low-level-call decode reuses the same abiDecode IR).
     expect(
       jethAccepts(
-        f(
-          'bytes { let xs: string[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string[] }); return abi.encode(xs); }',
-        ),
+        fG('bytes', 'let xs: string[] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: string[] }); return abi.encode(xs);'),
       ),
     ).toBe(true);
     // tuple decode bound to a single name -> JETH323
     expect(
       jethError(
-        f(
-          'bytes { let x: bytes = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [u256, address] }); return x; }',
-        ),
+        fG('bytes', 'let x: bytes = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: [u256, address] }); return x;'),
       ),
     ).toContain('JETH323');
     // single decode destructured -> JETH323
@@ -293,10 +279,8 @@ describe('decode field inside call/staticcall options', () => {
     ).toContain('JETH323');
     // none of these crashed the compiler (JETH900)
     for (const src of [
-      f('bytes { let [ok, r]: [bool, bytes] = t.tryCall({ data: abi.encode(), decode: u256 }); return r; }'),
-      f(
-        'u256 { return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType }); }',
-      ),
+      fG('bytes', 'let [ok, r]: [bool, bytes] = t.tryCall({ data: abi.encode(), decode: u256 }); return r;'),
+      fG('u256', 'return t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: NotAType });'),
     ])
       expect(jethError(src)).not.toContain('JETH900');
   });

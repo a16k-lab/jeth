@@ -44,11 +44,11 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
       const jU = Array.from({ length: N }, (_, i) => `${i + 5}n`).join(',');
       const sU = 'uint256(5)' + Array.from({ length: N - 1 }, (_, i) => `,${i + 6}`).join('');
       await bothMatch(
-        `@contract class C {
-          @external @pure mk(): Arr<u256,${N}> { let xs: Arr<u256,${N}> = [${jU}]; return xs; }
-          @external go(): Arr<u256,${N}> { return this.mk(); }
-          @external goLet(): Arr<u256,${N}> { let r: Arr<u256,${N}> = this.mk(); return r; }
-          @external goEnc(): bytes { return abi.encode(this.mk()); }
+        `class C {
+          get mk(): External<Arr<u256,${N}>> { let xs: Arr<u256,${N}> = [${jU}]; return xs; }
+          go(): External<Arr<u256,${N}>> { return this.mk(); }
+          goLet(): External<Arr<u256,${N}>> { let r: Arr<u256,${N}> = this.mk(); return r; }
+          goEnc(): External<bytes> { return abi.encode(this.mk()); }
         }`,
         `contract C {
           function mk() external pure returns(uint256[${N}] memory){ uint256[${N}] memory xs=[${sU}]; return xs; }
@@ -63,10 +63,10 @@ describe('Fix 1a: fixed value-leaf array returned directly from an external call
       const jA = Array.from({ length: N }, (_, i) => `address(0x${(i + 1).toString(16).padStart(40, '0')}n)`).join(',');
       const sA = Array.from({ length: N }, (_, i) => `address(0x${(i + 1).toString(16).padStart(40, '0')})`).join(',');
       await bothMatch(
-        `@contract class C {
-          @external @pure mk(): Arr<address,${N}> { let xs: Arr<address,${N}> = [${jA}]; return xs; }
-          @external go(): Arr<address,${N}> { return this.mk(); }
-          @external goEnc(): bytes { return abi.encode(this.mk()); }
+        `class C {
+          get mk(): External<Arr<address,${N}>> { let xs: Arr<address,${N}> = [${jA}]; return xs; }
+          go(): External<Arr<address,${N}>> { return this.mk(); }
+          goEnc(): External<bytes> { return abi.encode(this.mk()); }
         }`,
         `contract C {
           function mk() external pure returns(address[${N}] memory){ address[${N}] memory xs=[${sA}]; return xs; }
