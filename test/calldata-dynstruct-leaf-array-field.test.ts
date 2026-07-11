@@ -30,8 +30,8 @@ async function diff(J: string, S: string, calls: [string, string][]) {
 
 describe('Edge F: abi.encode/return of a calldata dyn-struct with a leaf-array field vs solc 0.8.35', () => {
   it('S{a; tags:bytes[]} well-formed encode/getter + malformed reverts (empty)', async () => {
-    const J = `@struct class S { a: u256; tags: bytes[]; }
-    @contract class C { @external @pure f(s: S): bytes { return abi.encode(s); } @external @pure g(s: S): u256 { return s.a + s.tags.length + s.tags[1n].length; } }`;
+    const J = `type S = { a: u256; tags: bytes[]; };
+    class C { get f(s: S): External<bytes> { return abi.encode(s); } get g(s: S): External<u256> { return s.a + s.tags.length + s.tags[1n].length; } }`;
     const Sl = `struct S { uint256 a; bytes[] tags; }
     contract C { function f(S calldata s) external pure returns(bytes memory){ return abi.encode(s); } function g(S calldata s) external pure returns(uint256){ return s.a + s.tags.length + s.tags[1].length; } }`;
     const tags = W(2n) + W(0x40n) + W(0x80n) + W(2n) + '6161'.padEnd(64, '0') + W(4n) + '62626262'.padEnd(64, '0');
@@ -49,15 +49,15 @@ describe('Edge F: abi.encode/return of a calldata dyn-struct with a leaf-array f
   });
 
   it('S{a; xs:string[]} and S{a; grid:u256[][]} well-formed encode (leaf-array variants)', async () => {
-    const Js = `@struct class S { a: u256; xs: string[]; }
-    @contract class C { @external @pure f(s: S): bytes { return abi.encode(s); } }`;
+    const Js = `type S = { a: u256; xs: string[]; };
+    class C { get f(s: S): External<bytes> { return abi.encode(s); } }`;
     const Ss = `struct S { uint256 a; string[] xs; }
     contract C { function f(S calldata s) external pure returns(bytes memory){ return abi.encode(s); } }`;
     const sxs = W(2n) + W(0x40n) + W(0x80n) + W(2n) + '6869'.padEnd(64, '0') + W(2n) + '796f'.padEnd(64, '0');
     await diff(Js, Ss, [['f((uint256,string[]))', W(0x20n) + W(5n) + W(0x40n) + sxs]]);
 
-    const Jg = `@struct class S { a: u256; grid: u256[][]; }
-    @contract class C { @external @pure f(s: S): bytes { return abi.encode(s); } @external @pure g(s: S): u256 { return s.grid[0n][1n] + s.grid[1n][0n]; } }`;
+    const Jg = `type S = { a: u256; grid: u256[][]; };
+    class C { get f(s: S): External<bytes> { return abi.encode(s); } get g(s: S): External<u256> { return s.grid[0n][1n] + s.grid[1n][0n]; } }`;
     const Sg = `struct S { uint256 a; uint256[][] grid; }
     contract C { function f(S calldata s) external pure returns(bytes memory){ return abi.encode(s); } function g(S calldata s) external pure returns(uint256){ return s.grid[0][1] + s.grid[1][0]; } }`;
     const grid = W(2n) + W(0x40n) + W(0xc0n) + W(2n) + W(1n) + W(2n) + W(1n) + W(3n);
@@ -66,12 +66,12 @@ describe('Edge F: abi.encode/return of a calldata dyn-struct with a leaf-array f
 
   it('regression: value-array field + bytes field calldata structs unchanged', async () => {
     await diff(
-      `@struct class S { a: u256; xs: u256[]; } @contract class C { @external @pure f(s: S): bytes { return abi.encode(s); } }`,
+      `type S = { a: u256; xs: u256[]; }; class C { get f(s: S): External<bytes> { return abi.encode(s); } }`,
       `struct S { uint256 a; uint256[] xs; } contract C { function f(S calldata s) external pure returns(bytes memory){ return abi.encode(s); } }`,
       [['f((uint256,uint256[]))', W(0x20n) + W(9n) + W(0x40n) + W(3n) + W(5n) + W(6n) + W(7n)]],
     );
     await diff(
-      `@struct class S { a: u256; s: bytes; } @contract class C { @external @pure f(s: S): bytes { return abi.encode(s); } }`,
+      `type S = { a: u256; s: bytes; }; class C { get f(s: S): External<bytes> { return abi.encode(s); } }`,
       `struct S { uint256 a; bytes s; } contract C { function f(S calldata s) external pure returns(bytes memory){ return abi.encode(s); } }`,
       [['f((uint256,bytes))', W(0x20n) + W(9n) + W(0x40n) + W(2n) + '6161'.padEnd(64, '0')]],
     );

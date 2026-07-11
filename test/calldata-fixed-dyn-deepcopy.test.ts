@@ -51,13 +51,13 @@ const dynTuple = (tails: string[]): string => {
 const LONG = 'a much longer string that exceeds thirty-one bytes!!!';
 
 describe('W5B: calldata fixed-of-dynamic param -> memory local deep copy (byte-identical to solc 0.8.35)', () => {
-  const J = `@contract class C {
-    @external go(p: Arr<string,2>): bytes {
+  const J = `class C {
+    get go(p: Arr<string,2>): External<bytes> {
       let ys: Arr<string,2> = p;
       ys[0n] = "MUT";
       return abi.encode(ys[0n], ys[1n], p[0n], p[1n]);
     }
-    @external ret(p: Arr<string,2>): Arr<string,2> { let ys: Arr<string,2> = p; return ys; }
+    get ret(p: Arr<string,2>): External<Arr<string,2>> { let ys: Arr<string,2> = p; return ys; }
   }`;
   const S = `contract C {
     function go(string[2] calldata p) external pure returns (bytes memory) {
@@ -83,9 +83,9 @@ describe('W5B: calldata fixed-of-dynamic param -> memory local deep copy (byte-i
   });
 
   it('Arr<bytes,3> and Arr<u256[],2> (deep copy: ys[0][0]=99 leaves p[0][0] intact)', async () => {
-    const J2 = `@contract class C {
-      @external b3(p: Arr<bytes,3>): bytes { let ys: Arr<bytes,3> = p; return abi.encode(ys[0n], ys[1n], ys[2n]); }
-      @external u2(p: Arr<u256[],2>): bytes { let ys: Arr<u256[],2> = p; ys[0n][0n] = 99n; return abi.encode(ys[0n], ys[1n], p[0n][0n]); }
+    const J2 = `class C {
+      get b3(p: Arr<bytes,3>): External<bytes> { let ys: Arr<bytes,3> = p; return abi.encode(ys[0n], ys[1n], ys[2n]); }
+      get u2(p: Arr<u256[],2>): External<bytes> { let ys: Arr<u256[],2> = p; ys[0n][0n] = 99n; return abi.encode(ys[0n], ys[1n], p[0n][0n]); }
     }`;
     const S2 = `contract C {
       function b3(bytes[3] calldata p) external pure returns (bytes memory) { bytes[3] memory ys = p; return abi.encode(ys[0], ys[1], ys[2]); }
@@ -100,7 +100,7 @@ describe('W5B: calldata fixed-of-dynamic param -> memory local deep copy (byte-i
   });
 
   it('2-level Arr<string[],2> deep copy', async () => {
-    const J5 = `@contract class C { @external go(p: Arr<string[],2>): string { let ys: Arr<string[],2> = p; return ys[0n][0n]; } }`;
+    const J5 = `class C { get go(p: Arr<string[],2>): External<string> { let ys: Arr<string[],2> = p; return ys[0n][0n]; } }`;
     const S5 = `contract C { function go(string[][2] calldata p) external pure returns (string memory) { string[][2] memory ys = p; return ys[0][0]; } }`;
     const sArr = (xs: string[]) => W(xs.length) + dynTuple(xs.map(encStr));
     await eqCalls(J5, S5, [['go(string[][2])', W(32) + dynTuple([sArr([LONG]), sArr([])])]]);
@@ -117,11 +117,11 @@ describe('W5B: calldata fixed-of-dynamic param -> memory local deep copy (byte-i
   });
 
   it('MISCOMPILE regression: internal-call arg forwarding of a fixed-of-dynamic calldata param', async () => {
-    const J6 = `@contract class C {
+    const J6 = `class C {
       f(x: Arr<string,2>): string { return x[1n]; }
       g(x: Arr<u256[],2>): u256 { return x[1n][0n]; }
-      @external go(p: Arr<string,2>): string { return this.f(p); }
-      @external gu(p: Arr<u256[],2>): u256 { return this.g(p); }
+      get go(p: Arr<string,2>): External<string> { return this.f(p); }
+      get gu(p: Arr<u256[],2>): External<u256> { return this.g(p); }
     }`;
     const S6 = `contract C {
       function f(string[2] memory x) internal pure returns (string memory) { return x[1]; }

@@ -34,53 +34,53 @@ function jethCodes(src: string): string[] | null {
   }
 }
 
-const JETH = `@struct class Inner { a: u256; b: u256 }
-@struct class D { x: u256; y: u256 }
-@struct class Deep { d: D; z: u256 }
-@struct class Flags { on: bool; who: address; n: u256 }
-@struct class Nest { inner: Inner; k: u256 }
-@struct class NestArr { arr: Arr<u256, 2>; k: u256 }
-@struct class NestArr2 { g: Arr<Arr<u256, 2>, 2>; k: u256 }
-@struct class NestDeep { inner: Deep; k: u256 }
-@struct class NestFlags { fl: Flags; k: u256 }
-@struct class NestBoolArr { bs: Arr<bool, 3>; k: u256 }
-@struct class NestStructArr { fa: Arr<Flags, 2>; k: u256 }
-@contract class C {
-  @external @pure encBools(n: NestBoolArr): bytes { return abi.encode(n.bs); }
-  @external @pure retBools(n: NestBoolArr): Arr<bool, 3> { return n.bs; }
-  @external @pure kBools(n: NestBoolArr): u256 { return n.k; }
-  @external @pure retStructArr(n: NestStructArr): Arr<Flags, 2> { return n.fa; }
-  @external @pure encStructArr(n: NestStructArr): bytes { return abi.encode(n.fa); }
-  @external @pure kStructArr(n: NestStructArr): u256 { return n.k; }
+const JETH = `type Inner = { a: u256; b: u256 };
+type D = { x: u256; y: u256 };
+type Deep = { d: D; z: u256 };
+type Flags = { on: bool; who: address; n: u256 };
+type Nest = { inner: Inner; k: u256 };
+type NestArr = { arr: Arr<u256, 2>; k: u256 };
+type NestArr2 = { g: Arr<Arr<u256, 2>, 2>; k: u256 };
+type NestDeep = { inner: Deep; k: u256 };
+type NestFlags = { fl: Flags; k: u256 };
+type NestBoolArr = { bs: Arr<bool, 3>; k: u256 };
+type NestStructArr = { fa: Arr<Flags, 2>; k: u256 };
+class C {
+  get encBools(n: NestBoolArr): External<bytes> { return abi.encode(n.bs); }
+  get retBools(n: NestBoolArr): External<Arr<bool, 3>> { return n.bs; }
+  get kBools(n: NestBoolArr): External<u256> { return n.k; }
+  get retStructArr(n: NestStructArr): External<Arr<Flags, 2>> { return n.fa; }
+  get encStructArr(n: NestStructArr): External<bytes> { return abi.encode(n.fa); }
+  get kStructArr(n: NestStructArr): External<u256> { return n.k; }
 
-  @external @pure encInner(n: Nest): bytes { return abi.encode(n.inner); }
-  @external @pure retInner(n: Nest): Inner { return n.inner; }
-  @external @pure kNest(n: Nest): u256 { return n.k; }
+  get encInner(n: Nest): External<bytes> { return abi.encode(n.inner); }
+  get retInner(n: Nest): External<Inner> { return n.inner; }
+  get kNest(n: Nest): External<u256> { return n.k; }
 
-  @external @pure encArr(n: NestArr): bytes { return abi.encode(n.arr); }
-  @external @pure retArr(n: NestArr): Arr<u256, 2> { return n.arr; }
-  @external @pure kArr(n: NestArr): u256 { return n.k; }
+  get encArr(n: NestArr): External<bytes> { return abi.encode(n.arr); }
+  get retArr(n: NestArr): External<Arr<u256, 2>> { return n.arr; }
+  get kArr(n: NestArr): External<u256> { return n.k; }
 
-  @external @pure encArr2(n: NestArr2): bytes { return abi.encode(n.g); }
-  @external @pure retArr2(n: NestArr2): Arr<Arr<u256, 2>, 2> { return n.g; }
-  @external @pure kArr2(n: NestArr2): u256 { return n.k; }
+  get encArr2(n: NestArr2): External<bytes> { return abi.encode(n.g); }
+  get retArr2(n: NestArr2): External<Arr<Arr<u256, 2>, 2>> { return n.g; }
+  get kArr2(n: NestArr2): External<u256> { return n.k; }
 
-  @external @pure encDeep(n: NestDeep): bytes { return abi.encode(n.inner.d); }
-  @external @pure retDeep(n: NestDeep): D { return n.inner.d; }
-  @external @pure encDeepWhole(n: NestDeep): bytes { return abi.encode(n.inner); }
-  @external @pure kDeep(n: NestDeep): u256 { return n.k; }
+  get encDeep(n: NestDeep): External<bytes> { return abi.encode(n.inner.d); }
+  get retDeep(n: NestDeep): External<D> { return n.inner.d; }
+  get encDeepWhole(n: NestDeep): External<bytes> { return abi.encode(n.inner); }
+  get kDeep(n: NestDeep): External<u256> { return n.k; }
 
-  @external @pure encFlags(n: NestFlags): bytes { return abi.encode(n.fl); }
-  @external @pure retFlags(n: NestFlags): Flags { return n.fl; }
-  @external @pure kFlags(n: NestFlags): u256 { return n.k; }
+  get encFlags(n: NestFlags): External<bytes> { return abi.encode(n.fl); }
+  get retFlags(n: NestFlags): External<Flags> { return n.fl; }
+  get kFlags(n: NestFlags): External<u256> { return n.k; }
 
   // fixed-array OUTER param root: read a whole static struct element ps[1]
-  @external @pure encElem(ps: Arr<Inner, 3>): bytes { return abi.encode(ps[1n]); }
-  @external @pure retElem(ps: Arr<Inner, 3>): Inner { return ps[1n]; }
-  @external @pure kElem(ps: Arr<Inner, 3>): u256 { return ps[2n].b; }
+  get encElem(ps: Arr<Inner, 3>): External<bytes> { return abi.encode(ps[1n]); }
+  get retElem(ps: Arr<Inner, 3>): External<Inner> { return ps[1n]; }
+  get kElem(ps: Arr<Inner, 3>): External<u256> { return ps[2n].b; }
 
   // control: memory-local n.inner (MATCH, unregressed)
-  @external @pure encMemLocal(n: Nest): bytes { let m: Nest = n; return abi.encode(m.inner); }
+  get encMemLocal(n: Nest): External<bytes> { let m: Nest = n; return abi.encode(m.inner); }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -288,22 +288,22 @@ describe('S4: whole static-aggregate LEAF read from a fully-static calldata para
 
   // ---- KEPT rejects / read-only (compile-time) ----
   it('assignment to n.inner is read-only -> JETH214', () => {
-    const src = `@struct class Inner { a: u256; b: u256 }
-@struct class Nest { inner: Inner; k: u256 }
-@contract class C { @external f(n: Nest): u256 { n.inner = n.inner; return 1n; } }`;
+    const src = `type Inner = { a: u256; b: u256 };
+type Nest = { inner: Inner; k: u256 };
+class C { get f(n: Nest): External<u256> { n.inner = n.inner; return 1n; } }`;
     expect(jethCodes(src)).toContain('JETH214');
   });
 
   it('const-OOB fixed-array leaf index still rejects (JETH211)', () => {
-    const src = `@struct class NestArr2 { g: Arr<Arr<u256,2>,2>; k: u256 }
-@contract class C { @external @pure f(n: NestArr2): bytes { return abi.encode(n.g[5n]); } }`;
+    const src = `type NestArr2 = { g: Arr<Arr<u256,2>,2>; k: u256 };
+class C { get f(n: NestArr2): External<bytes> { return abi.encode(n.g[5n]); } }`;
     expect(jethCodes(src)).toContain('JETH211');
   });
 
   it('a funcref-containing aggregate leaf still rejects (isStaticType excludes funcref)', () => {
-    const src = `@struct class F { cb: (x: u256) => u256; n: u256 }
-@struct class Nest { f: F; k: u256 }
-@contract class C { @external f(n: Nest): bytes { return abi.encode(n.f); } }`;
+    const src = `type F = { cb: (x: u256) => u256; n: u256 };
+type Nest = { f: F; k: u256 };
+class C { f(n: Nest): External<bytes> { return abi.encode(n.f); } }`;
     expect(jethCodes(src)).not.toBeNull();
   });
 });

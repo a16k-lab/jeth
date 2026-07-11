@@ -31,8 +31,11 @@
 // LITERAL FORMS: plain template/string literals are transformed on the cooked text and every edit
 // span is mapped back onto the raw text (escapes elsewhere in the literal stay byte-identical).
 // INTERPOLATED templates AND string CONCATENATION chains (`CONST + \`...\``) are COMPOSITES: a
-// `${IDENT}` hole / non-literal `+` operand naming a once-declared const with a plain-literal
-// initializer is RESOLVED to that literal; any other hole becomes an inert `__JMIGk__` placeholder.
+// `${IDENT}` hole / non-literal `+` operand is resolved LEXICALLY (nearest enclosing scope) and,
+// when the resolved declaration is a const with a plain-literal initializer, the hole RESOLVES to
+// that literal; any other hole becomes an inert `__JMIGk__` placeholder. A composite whose
+// assembly carries the `// use @decorators` pragma is stage-2-skipped AND PINS every const it
+// consumes to the legacy spelling (reverting the const's pass-1 migration; the fixpoint restarts).
 // Literal `+` operands are chunks (edited in place, excluded from standalone pass-1), and a nested
 // interpolated-template operand contributes its own chunks and holes. The transform runs over the
 // assembled original instantiation; edits inside resolved holes are dropped (the const's own
@@ -565,31 +568,84 @@ for (const file of files) {
   const sf = ts.createSourceFile(abs, original, ts.ScriptTarget.ES2022, true);
   const line = (node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
 
-  // ---- const-literal index (for resolving `${IDENT}` template holes) --------------------------
-  // A hole whose expression is an identifier declared EXACTLY ONCE in the file as a variable
-  // initialized with a plain template/string literal resolves to that literal: the interpolated
-  // template is then trialed as the EXACT instantiation the migrated test file will produce
-  // (migrated const text + edited chunks). Any other hole becomes an inert placeholder.
-  const constLits = new Map(); // name -> the initializer literal node
-  const declCounts = new Map(); // name -> number of declarations (any kind) - shadowing guard
-  const bumpDecl = (name) => declCounts.set(name, (declCounts.get(name) ?? 0) + 1);
-  const collectDecls = (n) => {
-    if (
-      (ts.isVariableDeclaration(n) || ts.isParameter(n) || ts.isFunctionDeclaration(n) || ts.isClassDeclaration(n)) &&
-      n.name &&
-      ts.isIdentifier(n.name)
-    ) {
-      bumpDecl(n.name.text);
-      if (
-        ts.isVariableDeclaration(n) &&
-        n.initializer &&
-        (ts.isNoSubstitutionTemplateLiteral(n.initializer) || ts.isStringLiteral(n.initializer))
-      )
-        constLits.set(n.name.text, n.initializer);
-    }
-    ts.forEachChild(n, collectDecls);
+  // ---- const-literal resolution (for `${IDENT}` template holes / `+ IDENT` operands) ----------
+  // A hole whose expression is an identifier is resolved LEXICALLY: walk the ancestor scopes from
+  // the use site outward and take the NEAREST declaration of that name. When that declaration is a
+  // variable initialized with a plain template/string literal, the hole resolves to that literal:
+  // the composite is then trialed as the EXACT instantiation the migrated test file will produce
+  // (migrated const text + edited chunks). A nearer non-literal declaration (parameter, class,
+  // destructuring, import, loop/catch binding) shadows - the hole becomes an inert placeholder.
+  // (Global-uniqueness was the old guard; it wrongly degraded `const T` re-declared in two sibling
+  // it-blocks to a placeholder, and the fragment-blind skeleton trial then missed a JETH352 get
+  // flip - the batch-3 OR6 accept->reject flip.)
+  const bindsName = (bindingName, name) => {
+    if (ts.isIdentifier(bindingName)) return bindingName.text === name;
+    if (ts.isObjectBindingPattern(bindingName) || ts.isArrayBindingPattern(bindingName))
+      return bindingName.elements.some((el) => ts.isBindingElement(el) && bindsName(el.name, name));
+    return false;
   };
-  ts.forEachChild(sf, collectDecls);
+  const scopeDeclares = (stmts, name) => {
+    // { lit } = const-declared here with a plain-literal initializer; {} = declared here any other
+    // way (unresolvable); null = not declared in this statement list.
+    for (const s of stmts) {
+      if (ts.isVariableStatement(s)) {
+        for (const d of s.declarationList.declarations) {
+          if (!bindsName(d.name, name)) continue;
+          if (
+            ts.isIdentifier(d.name) &&
+            d.initializer &&
+            (ts.isNoSubstitutionTemplateLiteral(d.initializer) || ts.isStringLiteral(d.initializer))
+          )
+            return { lit: d.initializer };
+          return {};
+        }
+      } else if (
+        (ts.isFunctionDeclaration(s) || ts.isClassDeclaration(s) || ts.isEnumDeclaration(s)) &&
+        s.name &&
+        ts.isIdentifier(s.name) &&
+        s.name.text === name
+      ) {
+        return {};
+      } else if (ts.isImportDeclaration(s) && s.importClause) {
+        const ic = s.importClause;
+        if (ic.name?.text === name) return {};
+        if (ic.namedBindings) {
+          if (ts.isNamespaceImport(ic.namedBindings) && ic.namedBindings.name.text === name) return {};
+          if (ts.isNamedImports(ic.namedBindings) && ic.namedBindings.elements.some((el) => el.name.text === name)) return {};
+        }
+      }
+    }
+    return null;
+  };
+  const resolveConstHole = (expr) => {
+    if (!ts.isIdentifier(expr)) return null;
+    const name = expr.text;
+    for (let a = expr.parent; a; a = a.parent) {
+      if (ts.isFunctionLike(a) && a.parameters?.some((p) => bindsName(p.name, name))) return null;
+      if (ts.isCatchClause(a) && a.variableDeclaration && bindsName(a.variableDeclaration.name, name)) return null;
+      if (
+        (ts.isForStatement(a) || ts.isForOfStatement(a) || ts.isForInStatement(a)) &&
+        a.initializer &&
+        ts.isVariableDeclarationList(a.initializer) &&
+        a.initializer.declarations.some((d) => bindsName(d.name, name))
+      )
+        return null;
+      const stmts = ts.isBlock(a) || ts.isModuleBlock(a) || ts.isSourceFile(a) ? a.statements : null;
+      if (stmts) {
+        const hit = scopeDeclares(stmts, name);
+        if (hit) return hit.lit ?? null;
+      }
+    }
+    return null;
+  };
+
+  // Consts PINNED to their legacy spelling: a const consumed by a `// use @decorators` (stage-2)
+  // assembly must keep its original text - the pragma composite's chunks are untouched, so a
+  // migrated const would splice native syntax into a LEGACY-mode source (the batch-3 @library
+  // LIB inside the pragma-carrying LC template broke exactly this way). Pinning reverts the
+  // const's pass-1 migration and blocks any re-migration; the composite fixpoint restarts so
+  // every other composite re-trials against the reverted decision.
+  const pinnedLits = new Set();
 
   // Per-literal state. A const literal that is a context-blind FRAGMENT (standalone outcome
   // identical in every spelling) may be re-migrated with get-keys DISCOVERED BY A TEMPLATE ASSEMBLY
@@ -606,6 +662,10 @@ for (const file of files) {
     const st = { decision: cooked, edits: [], logEntry: null, force: prev?.force ?? new Set() };
     litState.set(node, st);
     if (!BANNED.test(cooked)) return;
+    if (pinnedLits.has(node)) {
+      st.logEntry = { line: line(node), action: 'kept-legacy', reason: 'consumed by a // use @decorators (stage-2) assembly - the const stays legacy' };
+      return;
+    }
     const rawStart = node.getStart(sf) + 1;
     const rawEnd = node.end - 1;
     const raw = original.slice(rawStart, rawEnd);
@@ -731,11 +791,9 @@ for (const file of files) {
     const holes = new Map(); // hole part -> { orig, lit, resolved }
     for (const p of parts) {
       if (p.type !== 'hole') continue;
-      const e = p.expr;
-      if (ts.isIdentifier(e) && constLits.has(e.text) && declCounts.get(e.text) === 1) {
-        const lit = constLits.get(e.text);
-        holes.set(p, { orig: lit.text, lit, resolved: true });
-      } else holes.set(p, { orig: `__JMIG${phCount++}__`, lit: null, resolved: false });
+      const lit = resolveConstHole(p.expr);
+      if (lit) holes.set(p, { orig: lit.text, lit, resolved: true });
+      else holes.set(p, { orig: `__JMIG${phCount++}__`, lit: null, resolved: false });
     }
     const postHole = (h) => (h.resolved ? decisionOf(h.lit) : h.orig);
 
@@ -755,7 +813,18 @@ for (const file of files) {
     }
     if (DEC_PRAGMA.test(origAsm)) {
       st.logEntry = { line: line(n), action: 'skipped-stage2', reason: '// use @decorators pragma (stage-2 rewrites these)' };
-      return false;
+      // This composite's chunks stay untouched, so every resolved const it consumes must stay
+      // legacy too: PIN it and revert any pass-1 migration, then restart the fixpoint so other
+      // composites re-trial against the reverted decision.
+      let reverted = false;
+      for (const h of holes.values()) {
+        if (!h.resolved || pinnedLits.has(h.lit)) continue;
+        pinnedLits.add(h.lit);
+        const cur = litState.get(h.lit);
+        if (cur && cur.decision !== h.lit.text) reverted = true;
+        migrateLiteral(h.lit, ts.isStringLiteral(h.lit) ? 'string' : 'template');
+      }
+      return reverted;
     }
 
     // Build the EXACT post assembly the migrated test file will instantiate at runtime (edited
@@ -837,6 +906,10 @@ for (const file of files) {
             if (!force.has(hit.key)) { force.add(hit.key); progressed = true; }
           } else if (g.resolved) {
             const hole = holes.get(g.part);
+            if (pinnedLits.has(hole.lit)) {
+              unroutable = 'a JETH352 inside a const pinned legacy by a stage-2 assembly';
+              continue;
+            }
             const constState = litState.get(hole.lit);
             if (constState && !constState.force.has(hit.key)) {
               constState.force.add(hit.key);

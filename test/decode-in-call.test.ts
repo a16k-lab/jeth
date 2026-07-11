@@ -80,34 +80,34 @@ describe('decode field inside call/staticcall options', () => {
       expect(a).toBe(b);
     }
     // dynamic array + fixed array (re-encode the decoded value so the return shape is identical both ways)
-    const arrInObj = `@contract class C { @external @view f(t: address): bytes { let xs: u256[] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" }, decode: u256[] }); return abi.encode(xs); } }`;
-    const arrChain = `@contract class C { @external @view f(t: address): bytes { let xs: u256[] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" } }).decode(u256[]); return abi.encode(xs); } }`;
+    const arrInObj = `class C { get f(t: address): External<bytes> { let xs: u256[] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" }, decode: u256[] }); return abi.encode(xs); } }`;
+    const arrChain = `class C { get f(t: address): External<bytes> { let xs: u256[] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" } }).decode(u256[]); return abi.encode(xs); } }`;
     expect(compile(arrInObj, { fileName: 'C.jeth' }).creationBytecode).toBe(
       compile(arrChain, { fileName: 'C.jeth' }).creationBytecode,
     );
     // tuple destructuring
-    const tupInObj = `@contract class C { @external @view f(t: address): bytes { let [a, s]: [u256, string] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" }, decode: [u256, string] }); return abi.encode(a, s); } }`;
-    const tupChain = `@contract class C { @external @view f(t: address): bytes { let [a, s]: [u256, string] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" } }).decode([u256, string]); return abi.encode(a, s); } }`;
+    const tupInObj = `class C { get f(t: address): External<bytes> { let [a, s]: [u256, string] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" }, decode: [u256, string] }); return abi.encode(a, s); } }`;
+    const tupChain = `class C { get f(t: address): External<bytes> { let [a, s]: [u256, string] = t.staticcall({ data: abi.encodeWithSignature("g()"), success: { condition: this.ok, revert: "f" } }).decode([u256, string]); return abi.encode(a, s); } }`;
     expect(compile(tupInObj, { fileName: 'C.jeth' }).creationBytecode).toBe(
       compile(tupChain, { fileName: 'C.jeth' }).creationBytecode,
     );
   });
 
   it('single value/dynamic decode is byte-identical to solc cross-contract', async () => {
-    const TJ = `@contract class T {
-      @external @view u(): u256 { return 0xbeefn; }
-      @external @view s(): string { return "decoded in call"; }
-      @external @view a(): address { return 0x1234567890AbcdEF1234567890aBcdef12345678n; }
+    const TJ = `class T {
+      get u(): External<u256> { return 0xbeefn; }
+      get s(): External<string> { return "decoded in call"; }
+      get a(): External<address> { return 0x1234567890AbcdEF1234567890aBcdef12345678n; }
     }`;
     const TS = `contract T {
       function u() external pure returns (uint256){ return 0xbeef; }
       function s() external pure returns (string memory){ return "decoded in call"; }
       function a() external pure returns (address){ return 0x1234567890AbcdEF1234567890aBcdef12345678; }
     }`;
-    const CJ = `@contract class C {
-      @external @view cu(t: address): u256 { return t.staticcall({ data: abi.encodeWithSignature("u()"), success: { condition: this.ok, revert: "f" }, decode: u256 }); }
-      @external @view cs(t: address): string { return t.staticcall({ data: abi.encodeWithSignature("s()"), success: { condition: this.ok, revert: "f" }, decode: string }); }
-      @external @view ca(t: address): address { return t.staticcall({ data: abi.encodeWithSignature("a()"), success: { condition: this.ok, revert: "f" }, decode: address }); }
+    const CJ = `class C {
+      get cu(t: address): External<u256> { return t.staticcall({ data: abi.encodeWithSignature("u()"), success: { condition: this.ok, revert: "f" }, decode: u256 }); }
+      get cs(t: address): External<string> { return t.staticcall({ data: abi.encodeWithSignature("s()"), success: { condition: this.ok, revert: "f" }, decode: string }); }
+      get ca(t: address): External<address> { return t.staticcall({ data: abi.encodeWithSignature("a()"), success: { condition: this.ok, revert: "f" }, decode: address }); }
     }`;
     const CS = `contract C {
       function cu(address t) external view returns (uint256){ (bool ok, bytes memory r)=t.staticcall(abi.encodeWithSignature("u()")); require(ok,"f"); return abi.decode(r,(uint256)); }
@@ -118,9 +118,9 @@ describe('decode field inside call/staticcall options', () => {
   });
 
   it('tuple decode via destructuring is byte-identical to solc cross-contract', async () => {
-    const TJ = `@contract class T {
-      @external @view pair(): bytes { return abi.encode(0x2an, "tuple!"); }
-      @external @view trip(): bytes { return abi.encode(0x7bn, "three", true); }
+    const TJ = `class T {
+      get pair(): External<bytes> { return abi.encode(0x2an, "tuple!"); }
+      get trip(): External<bytes> { return abi.encode(0x7bn, "three", true); }
     }`;
     const TS = `contract T {
       function pair() external pure returns (bytes memory){ return abi.encode(uint256(0x2a), "tuple!"); }
@@ -128,13 +128,13 @@ describe('decode field inside call/staticcall options', () => {
     }`;
     // the target returns abi.encode(...) as bytes, so the caller decodes the INNER payload: it first decodes
     // the outer bytes wrapper, then the tuple. Mirror exactly on both sides.
-    const CJ = `@contract class C {
-      @external @view cp(t: address): bytes {
+    const CJ = `class C {
+      get cp(t: address): External<bytes> {
         let raw: bytes = t.staticcall({ data: abi.encodeWithSignature("pair()"), success: { condition: this.ok, revert: "f" }, decode: bytes });
         let [n, s]: [u256, string] = abi.decode(raw, [u256, string]);
         return abi.encode(n, s);
       }
-      @external @view ct(t: address): bytes {
+      get ct(t: address): External<bytes> {
         let [n, s, b]: [u256, string, bool] = t.staticcall({ data: abi.encodeWithSignature("trip()"), success: { condition: this.ok, revert: "f" }, decode: bytes }).decode([u256, string, bool]);
         return abi.encode(n, s, b);
       }
@@ -163,9 +163,9 @@ describe('decode field inside call/staticcall options', () => {
       function pa() external pure returns (uint256, address){ return (0x2a, 0xfEdcBA9876543210FedCBa9876543210fEdCBa98); }
       function ps() external pure returns (uint256, string memory){ return (0x7b, "direct tuple"); }
     }`;
-    const CJ = `@contract class C {
-      @external @view cpa(t: address): bytes { let [n, a]: [u256, address] = t.staticcall({ data: abi.encodeWithSignature("pa()"), success: { condition: this.ok, revert: "f" }, decode: [u256, address] }); return abi.encode(n, a); }
-      @external @view cps(t: address): bytes { let [n, s]: [u256, string] = t.staticcall({ data: abi.encodeWithSignature("ps()"), success: { condition: this.ok, revert: "f" }, decode: [u256, string] }); return abi.encode(n, s); }
+    const CJ = `class C {
+      get cpa(t: address): External<bytes> { let [n, a]: [u256, address] = t.staticcall({ data: abi.encodeWithSignature("pa()"), success: { condition: this.ok, revert: "f" }, decode: [u256, address] }); return abi.encode(n, a); }
+      get cps(t: address): External<bytes> { let [n, s]: [u256, string] = t.staticcall({ data: abi.encodeWithSignature("ps()"), success: { condition: this.ok, revert: "f" }, decode: [u256, string] }); return abi.encode(n, s); }
     }`;
     const CS = `contract C {
       function cpa(address t) external view returns (bytes memory){ (bool ok, bytes memory r)=t.staticcall(abi.encodeWithSignature("pa()")); require(ok,"f"); (uint256 n, address a)=abi.decode(r,(uint256,address)); return abi.encode(n,a); }
@@ -186,11 +186,11 @@ describe('decode field inside call/staticcall options', () => {
   });
 
   it('a failing success condition reverts before decode (byte-identical to solc)', async () => {
-    const TJ = `@contract class T { @external @view ok(): u256 { return 5n; } @external @view boom(): u256 { revertWith(abi.encode()); return 0n; } }`;
+    const TJ = `class T { get ok(): External<u256> { return 5n; } get boom(): External<u256> { revertWith(abi.encode()); return 0n; } }`;
     const TS = `contract T { function ok() external pure returns (uint256){ return 5; } function boom() external pure returns (uint256){ revert(); } }`;
-    const CJ = `@contract class C {
-      @external @view good(t: address): u256 { return t.staticcall({ data: abi.encodeWithSignature("ok()"), success: { condition: this.ok, revert: "FAILED" }, decode: u256 }); }
-      @external @view bad(t: address): u256 { return t.staticcall({ data: abi.encodeWithSignature("boom()"), success: { condition: this.ok, revert: "FAILED" }, decode: u256 }); }
+    const CJ = `class C {
+      get good(t: address): External<u256> { return t.staticcall({ data: abi.encodeWithSignature("ok()"), success: { condition: this.ok, revert: "FAILED" }, decode: u256 }); }
+      get bad(t: address): External<u256> { return t.staticcall({ data: abi.encodeWithSignature("boom()"), success: { condition: this.ok, revert: "FAILED" }, decode: u256 }); }
     }`;
     const CS = `contract C {
       function good(address t) external view returns (uint256){ (bool ok, bytes memory r)=t.staticcall(abi.encodeWithSignature("ok()")); require(ok,"FAILED"); return abi.decode(r,(uint256)); }
@@ -264,7 +264,7 @@ describe('decode field inside call/staticcall options', () => {
     // decoder builds the pointer-headed struct image; byte-identical, see arch-abi-decode-aggregate.test.ts)
     expect(
       jethError(
-        `@struct class P { a: u256; s: string; } @contract class C { @external f(t: address): u256 { let p: P = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: P }); return p.a; } }`,
+        `type P = { a: u256; s: string; }; class C { get f(t: address): External<u256> { let p: P = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: P }); return p.a; } }`,
       ),
     ).toEqual([]);
     // Residual C lifted string[] (and P[] / bytes[] / u256[][]) as decode targets and Residual B memory-array
@@ -288,7 +288,7 @@ describe('decode field inside call/staticcall options', () => {
     // single decode destructured -> JETH323
     expect(
       jethError(
-        `@contract class C { @external f(t: address): u256 { let [a, b]: [u256, u256] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: u256 }); return a; } }`,
+        `class C { get f(t: address): External<u256> { let [a, b]: [u256, u256] = t.staticcall({ data: abi.encode(), success: { condition: this.ok, revert: "x" }, decode: u256 }); return a; } }`,
       ),
     ).toContain('JETH323');
     // none of these crashed the compiler (JETH900)

@@ -69,7 +69,7 @@ function rejects(src: string): string[] {
 describe('(A) value-leaf sub-aggregate element return masks dirty leaves (was an over-validation revert)', () => {
   it('u8[][] -> u8[]: dirty leaves masked, clean identical, OOB Panic 0x32', async () => {
     const a = await pair(
-      `@contract class C{ @external @pure f(xs:u8[][],i:u256):u8[]{return xs[i];} }`,
+      `class C{ get f(xs:u8[][],i:u256):External<u8[]>{return xs[i];} }`,
       `contract C{ function f(uint8[][] calldata xs,uint256 i)external pure returns(uint8[] memory){return xs[i];} }`,
     );
     const inner0 = rawArr(['ff'.repeat(31) + '01', 'ab'.repeat(31) + 'ff']); // dirty high bits
@@ -81,7 +81,7 @@ describe('(A) value-leaf sub-aggregate element return masks dirty leaves (was an
   });
   it('bool[][] -> bool[]: dirty/non-0/1 bool 1ified', async () => {
     const a = await pair(
-      `@contract class C{ @external @pure f(xs:bool[][],i:u256):bool[]{return xs[i];} }`,
+      `class C{ get f(xs:bool[][],i:u256):External<bool[]>{return xs[i];} }`,
       `contract C{ function f(bool[][] calldata xs,uint256 i)external pure returns(bool[] memory){return xs[i];} }`,
     );
     const inner = rawArr(['ff'.repeat(31) + '01', '00'.repeat(32), 'aa'.repeat(31) + '05']);
@@ -89,7 +89,7 @@ describe('(A) value-leaf sub-aggregate element return masks dirty leaves (was an
   });
   it('Arr<u8,2>[] -> Arr<u8,2>: dirty leaves masked, OOB Panic 0x32', async () => {
     const a = await pair(
-      `@contract class C{ @external @pure f(xs:Arr<u8,2>[],i:u256):Arr<u8,2>{return xs[i];} }`,
+      `class C{ get f(xs:Arr<u8,2>[],i:u256):External<Arr<u8,2>>{return xs[i];} }`,
       `contract C{ function f(uint8[2][] calldata xs,uint256 i)external pure returns(uint8[2] memory){return xs[i];} }`,
     );
     const xs = W(2) + ('ff'.repeat(31) + '01') + ('ab'.repeat(31) + '02') + W(3) + W(4);
@@ -99,7 +99,7 @@ describe('(A) value-leaf sub-aggregate element return masks dirty leaves (was an
   });
   it('P[][] -> P[] still VALIDATES a dirty struct field (clean reject of dirty bits, not mask)', async () => {
     const a = await pair(
-      `@struct class P{a:u8;b:u8;} @contract class C{ @external @pure f(xs:P[][],i:u256):P[]{return xs[i];} }`,
+      `type P = {a:u8;b:u8;}; class C{ get f(xs:P[][],i:u256):External<P[]>{return xs[i];} }`,
       `struct P{uint8 a;uint8 b;} contract C{ function f(P[][] calldata xs,uint256 i)external pure returns(P[] memory){return xs[i];} }`,
     );
     const dirty = W(1) + ('ff'.repeat(31) + '01') + W(2); // a dirty -> both revert
@@ -112,7 +112,7 @@ describe('(A) value-leaf sub-aggregate element return masks dirty leaves (was an
 describe('(B1) whole sub-aggregate element with bytes/string/dyn-struct leaf', () => {
   it('bytes[][] -> bytes[]', async () => {
     const a = await pair(
-      `@contract class C{ @external @pure f(xs:bytes[][],i:u256):bytes[]{return xs[i];} }`,
+      `class C{ get f(xs:bytes[][],i:u256):External<bytes[]>{return xs[i];} }`,
       `contract C{ function f(bytes[][] calldata xs,uint256 i)external pure returns(bytes[] memory){return xs[i];} }`,
     );
     const xs = arrTab([arrTab([blob('hi'), blob('a-string-longer-than-thirty-two-bytes-here')]), arrTab([])]);
@@ -122,7 +122,7 @@ describe('(B1) whole sub-aggregate element with bytes/string/dyn-struct leaf', (
   });
   it('string[][] -> string[]', async () => {
     const a = await pair(
-      `@contract class C{ @external @pure f(xs:string[][],i:u256):string[]{return xs[i];} }`,
+      `class C{ get f(xs:string[][],i:u256):External<string[]>{return xs[i];} }`,
       `contract C{ function f(string[][] calldata xs,uint256 i)external pure returns(string[] memory){return xs[i];} }`,
     );
     const xs = arrTab([arrTab([blob('x'), blob(''), blob('z')])]);
@@ -130,7 +130,7 @@ describe('(B1) whole sub-aggregate element with bytes/string/dyn-struct leaf', (
   });
   it('D[][] -> D[] (D dynamic), incl truncated -> empty revert', async () => {
     const a = await pair(
-      `@struct class D{v:u256;tag:string;} @contract class C{ @external @pure f(xs:D[][],i:u256):D[]{return xs[i];} }`,
+      `type D = {v:u256;tag:string;}; class C{ get f(xs:D[][],i:u256):External<D[]>{return xs[i];} }`,
       `struct D{uint256 v;string tag;} contract C{ function f(D[][] calldata xs,uint256 i)external pure returns(D[] memory){return xs[i];} }`,
     );
     const dynD = (v: number, s: string) => W(v) + W(0x40) + blob(s);
@@ -145,11 +145,11 @@ describe('(B1) whole sub-aggregate element with bytes/string/dyn-struct leaf', (
 });
 
 describe('(B2) whole dynamic-array FIELD of a calldata dyn-struct array element', () => {
-  const Jg = `@struct class S{a:u256;grid:u256[][];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256):u256[][]{return xs[i].grid;}
-  @external @pure j(xs:S[],i:u256,k:u256):u256[]{return xs[i].grid[k];}
-  @external @pure e(xs:S[],i:u256):bytes{return abi.encode(xs[i].grid);}
+  const Jg = `type S = {a:u256;grid:u256[][];};
+class C{
+  get f(xs:S[],i:u256):External<u256[][]>{return xs[i].grid;}
+  get j(xs:S[],i:u256,k:u256):External<u256[]>{return xs[i].grid[k];}
+  get e(xs:S[],i:u256):External<bytes>{return abi.encode(xs[i].grid);}
 }`;
   const Sg = `struct S{uint256 a;uint256[][] grid;}
 contract C{
@@ -187,11 +187,11 @@ contract C{
 
   it('xs[i].items (D[] dyn struct) return + abi.encode + malformed', async () => {
     const a = await pair(
-      `@struct class D{v:u256;tag:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256):D[]{return xs[i].items;}
-  @external @pure e(xs:S[],i:u256):bytes{return abi.encode(xs[i].items);}
+      `type D = {v:u256;tag:string;};
+type S = {a:u256;items:D[];};
+class C{
+  get f(xs:S[],i:u256):External<D[]>{return xs[i].items;}
+  get e(xs:S[],i:u256):External<bytes>{return abi.encode(xs[i].items);}
 }`,
       `struct D{uint256 v;string tag;}
 struct S{uint256 a;D[] items;}
@@ -221,11 +221,11 @@ contract C{
 describe('whole STRUCT element of a struct-array field xs[i].items[j] (lifted byte-identical)', () => {
   it('dynamic D: return + abi.encode + OOB + malformed', async () => {
     const a = await pair(
-      `@struct class D{v:u256;tag:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}
-  @external @pure e(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}
+      `type D = {v:u256;tag:string;};
+type S = {a:u256;items:D[];};
+class C{
+  get f(xs:S[],i:u256,j:u256):External<D>{return xs[i].items[j];}
+  get e(xs:S[],i:u256,j:u256):External<bytes>{return abi.encode(xs[i].items[j]);}
 }`,
       `struct D{uint256 v;string tag;}
 struct S{uint256 a;D[] items;}
@@ -255,11 +255,11 @@ contract C{
 
   it('static D: return + abi.encode + OOB byte-identical', async () => {
     const a = await pair(
-      `@struct class D{v:u256;w:u256;}
-@struct class S{a:u256;items:D[];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}
-  @external @pure e(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}
+      `type D = {v:u256;w:u256;};
+type S = {a:u256;items:D[];};
+class C{
+  get f(xs:S[],i:u256,j:u256):External<D>{return xs[i].items[j];}
+  get e(xs:S[],i:u256,j:u256):External<bytes>{return abi.encode(xs[i].items[j]);}
 }`,
       `struct D{uint256 v;uint256 w;}
 struct S{uint256 a;D[] items;}

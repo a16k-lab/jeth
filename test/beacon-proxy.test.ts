@@ -62,17 +62,17 @@ function jethCodes(src: string): string[] {
 // ---- V1 / V2 implementations (normal JETH @contracts with an exact solc mirror). slot0 = value,
 // slot1 = initialized. initialize(x) sets both ONCE; V1.value_() returns value; V2.value_() returns
 // value*2; both have bump(). ----
-const V1_JETH = `@contract class V1 {
-  @state value: u256 = 0n;
-  @state initialized: bool = false;
-  @external initialize(x: u256): void {
+const V1_JETH = `class V1 {
+  value: u256 = 0n;
+  initialized: bool = false;
+  initialize(x: u256): External<void> {
     require(!this.initialized, "init");
     this.initialized = true;
     this.value = x;
   }
-  @external bump(): void { this.value = this.value + 1n; }
-  @external @view value_(): u256 { return this.value; }
-  @external @view version(): u256 { return 1n; }
+  bump(): External<void> { this.value = this.value + 1n; }
+  get value_(): External<u256> { return this.value; }
+  get version(): External<u256> { return 1n; }
 }`;
 const V1_SOL = `contract V1 {
   uint256 value;
@@ -83,17 +83,17 @@ const V1_SOL = `contract V1 {
   function version() external view returns (uint256) { return 1; }
 }`;
 
-const V2_JETH = `@contract class V2 {
-  @state value: u256 = 0n;
-  @state initialized: bool = false;
-  @external initialize(x: u256): void {
+const V2_JETH = `class V2 {
+  value: u256 = 0n;
+  initialized: bool = false;
+  initialize(x: u256): External<void> {
     require(!this.initialized, "init");
     this.initialized = true;
     this.value = x;
   }
-  @external bump(): void { this.value = this.value + 1n; }
-  @external @view value_(): u256 { return this.value * 2n; }
-  @external @view version(): u256 { return 2n; }
+  bump(): External<void> { this.value = this.value + 1n; }
+  get value_(): External<u256> { return this.value * 2n; }
+  get version(): External<u256> { return 2n; }
 }`;
 const V2_SOL = `contract V2 {
   uint256 value;
@@ -386,14 +386,14 @@ describe('beacon-proxy (Phase 2d)', () => {
   it('(gate) a @proxy(\'beacon\') class may not declare an @external method (JETH405)', () => {
     const src = `@proxy('beacon') class P {
       constructor(b: address) { proxyInitBeacon(b, bytes("")); }
-      @external foo(): u256 { return 1n; }
+      get foo(): External<u256> { return 1n; }
     }`;
     expect(jethRejects(src)).toBe(true);
     expect(jethCodes(src)).toContain('JETH405');
   });
 
   it('(gate) a @beacon class may not declare @state (JETH406)', () => {
-    const src = `@beacon class B { @state x: u256 = 0n; constructor(impl: address) {} }`;
+    const src = `@beacon class B { x: u256 = 0n; constructor(impl: address) {} }`;
     expect(jethRejects(src)).toBe(true);
     expect(jethCodes(src)).toContain('JETH406');
   });
@@ -408,7 +408,7 @@ describe('beacon-proxy (Phase 2d)', () => {
   });
 
   it('(gate) a @beacon class may not declare upgradeTo/implementation/owner (JETH408)', () => {
-    const src = `@beacon class B { constructor(impl: address) {} @external @view implementation(): address { return address(0n); } }`;
+    const src = `@beacon class B { constructor(impl: address) {} get implementation(): External<address> { return address(0n); } }`;
     expect(jethRejects(src)).toBe(true);
     expect(jethCodes(src)).toContain('JETH408');
   });
@@ -418,7 +418,7 @@ describe('beacon-proxy (Phase 2d)', () => {
       constructor(b: address) { proxyInitBeacon(b, bytes("")); }
     }`;
     // proxyBeacon() inside a non-beacon proxy is a builtin; verify it type-checks in a normal @contract
-    const reader = `@contract class R { @external @view b(): address { return proxyBeacon(); } }`;
+    const reader = `class R { get b(): External<address> { return proxyBeacon(); } }`;
     expect(jethAccepts(src)).toBe(true);
     expect(jethAccepts(reader)).toBe(true);
   });

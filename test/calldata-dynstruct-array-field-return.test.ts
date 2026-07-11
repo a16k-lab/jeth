@@ -103,10 +103,10 @@ async function diff(J: string, S: string, calls: [string, string][]) {
 
 // ---- JETH/solc source pairs (direct return o.xs) ----
 const J = {
-  strval: `@struct class St { s: string; n: u256 } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { return o.xs; } @external @pure gk(o: O): u256 { return o.k; } }`,
-  bytes: `@struct class St { n: u256; b: bytes } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { return o.xs; } @external @pure gk(o: O): u256 { return o.k; } }`,
-  dynarr: `@struct class St { n: u256; ns: u256[] } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { return o.xs; } @external @pure gk(o: O): u256 { return o.k; } }`,
-  strstat: `@struct class Pt { a: u256; b: u256 } @struct class St { s: string; p: Pt; n: u256 } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { return o.xs; } @external @pure gk(o: O): u256 { return o.k; } }`,
+  strval: `type St = { s: string; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { return o.xs; } get gk(o: O): External<u256> { return o.k; } }`,
+  bytes: `type St = { n: u256; b: bytes }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { return o.xs; } get gk(o: O): External<u256> { return o.k; } }`,
+  dynarr: `type St = { n: u256; ns: u256[] }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { return o.xs; } get gk(o: O): External<u256> { return o.k; } }`,
+  strstat: `type Pt = { a: u256; b: u256 }; type St = { s: string; p: Pt; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { return o.xs; } get gk(o: O): External<u256> { return o.k; } }`,
 };
 const S = {
   strval: `struct St { string s; uint256 n; } struct O { St[] xs; uint256 k; } contract C { function go(O calldata o) external pure returns (St[] memory) { return o.xs; } function gk(O calldata o) external pure returns (uint256) { return o.k; } }`,
@@ -174,7 +174,7 @@ describe('S5-B: direct return of a calldata dyn-struct-array field o.xs vs solc 
   });
 
   it('const-OOB o.xs[999n].n is a runtime Panic 0x32 (both)', async () => {
-    const Joob = `@struct class St { s: string; n: u256 } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): u256 { return o.xs[999n].n; } }`;
+    const Joob = `type St = { s: string; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<u256> { return o.xs[999n].n; } }`;
     const Soob = `struct St { string s; uint256 n; } struct O { St[] xs; uint256 k; } contract C { function go(O calldata o) external pure returns (uint256) { return o.xs[999].n; } }`;
     const out = await diff(Joob, Soob, [
       ['go(((string,uint256)[],uint256))', encO(dynArr([eStrval('hi', 7)]), 1)],
@@ -185,11 +185,11 @@ describe('S5-B: direct return of a calldata dyn-struct-array field o.xs vs solc 
 
   it('CONTROL: abi.encode(o.xs) and let-bound `let ys=o.xs; return ys` still MATCH solc', async () => {
     const cd = encO(dynArr([eStrval('hi', 7), eStrval('yo', 9)]), 42);
-    const Jenc = `@struct class St { s: string; n: u256 } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): bytes { return abi.encode(o.xs); } }`;
+    const Jenc = `type St = { s: string; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<bytes> { return abi.encode(o.xs); } }`;
     const Senc = `struct St { string s; uint256 n; } struct O { St[] xs; uint256 k; } contract C { function go(O calldata o) external pure returns (bytes memory) { return abi.encode(o.xs); } }`;
     await diff(Jenc, Senc, [['go(((string,uint256)[],uint256))', cd]]);
 
-    const Jlet = `@struct class St { s: string; n: u256 } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { let ys: St[] = o.xs; return ys; } }`;
+    const Jlet = `type St = { s: string; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { let ys: St[] = o.xs; return ys; } }`;
     const Slet = `struct St { string s; uint256 n; } struct O { St[] xs; uint256 k; } contract C { function go(O calldata o) external pure returns (St[] memory) { St[] memory ys = o.xs; return ys; } }`;
     await diff(Jlet, Slet, [['go(((string,uint256)[],uint256))', cd]]);
   });
@@ -198,17 +198,17 @@ describe('S5-B: direct return of a calldata dyn-struct-array field o.xs vs solc 
     // solc returns 448 bytes of full nested bodies for this shape; the tight gate keeps it rejecting,
     // BYTE-PARALLEL to the let-bound form which itself rejects (JETH200). A wrong-bytes accept (the
     // attempt-1 miscompile: 128 bytes with dangling offsets) is FAR WORSE than this clean reject.
-    const Jn = `@struct class In { s: string } @struct class St { inner: In; n: u256 } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { return o.xs; } @external @pure gk(o: O): u256 { return o.k; } }`;
+    const Jn = `type In = { s: string }; type St = { inner: In; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { return o.xs; } get gk(o: O): External<u256> { return o.k; } }`;
     expect(codes(Jn)).toContain('JETH900');
     // parity: the let-bound form of the SAME shape also rejects (analyzer JETH200).
-    const JnLet = `@struct class In { s: string } @struct class St { inner: In; n: u256 } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { let ys: St[] = o.xs; return ys; } @external @pure gk(o: O): u256 { return o.k; } }`;
+    const JnLet = `type In = { s: string }; type St = { inner: In; n: u256 }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { let ys: St[] = o.xs; return ys; } get gk(o: O): External<u256> { return o.k; } }`;
     expect(codes(JnLet)).toContain('JETH200');
   });
 
   it('CONTROL: struct-element-array field St{n;ps:Pt[]} DIRECT return is a CLEAN JETH900 reject', () => {
-    const Jp = `@struct class Pt { a: u256; b: u256 } @struct class St { n: u256; ps: Pt[] } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { return o.xs; } @external @pure gk(o: O): u256 { return o.k; } }`;
+    const Jp = `type Pt = { a: u256; b: u256 }; type St = { n: u256; ps: Pt[] }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { return o.xs; } get gk(o: O): External<u256> { return o.k; } }`;
     expect(codes(Jp)).toContain('JETH900');
-    const JpLet = `@struct class Pt { a: u256; b: u256 } @struct class St { n: u256; ps: Pt[] } @struct class O { xs: St[]; k: u256 } @contract class C { @external @pure go(o: O): St[] { let ys: St[] = o.xs; return ys; } @external @pure gk(o: O): u256 { return o.k; } }`;
+    const JpLet = `type Pt = { a: u256; b: u256 }; type St = { n: u256; ps: Pt[] }; type O = { xs: St[]; k: u256 }; class C { get go(o: O): External<St[]> { let ys: St[] = o.xs; return ys; } get gk(o: O): External<u256> { return o.k; } }`;
     expect(codes(JpLet)).toContain('JETH200');
   });
 });

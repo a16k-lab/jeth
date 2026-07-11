@@ -23,17 +23,17 @@ function codes(src: string): string[] {
   }
 }
 
-const J = `@contract class C {
-  @external @pure and4(a: bytes4, b: bytes4): bytes4 { return a & b; }
-  @external @pure or4(a: bytes4, b: bytes4): bytes4 { return a | b; }
-  @external @pure xor4(a: bytes4, b: bytes4): bytes4 { return a ^ b; }
-  @external @pure not4(a: bytes4): bytes4 { return ~a; }
-  @external @pure not32(a: bytes32): bytes32 { return ~a; }
-  @external @pure shl4(a: bytes4, n: u8): bytes4 { return a << n; }
-  @external @pure shr4(a: bytes4, n: u8): bytes4 { return a >> n; }
-  @external @pure shr32(a: bytes32, n: u8): bytes32 { return a >> n; }
-  @external @pure and32(a: bytes32, b: bytes32): bytes32 { return a & b; }
-  @external @pure boolId(a: bool): bool { return bool(a); }
+const J = `class C {
+  get and4(a: bytes4, b: bytes4): External<bytes4> { return a & b; }
+  get or4(a: bytes4, b: bytes4): External<bytes4> { return a | b; }
+  get xor4(a: bytes4, b: bytes4): External<bytes4> { return a ^ b; }
+  get not4(a: bytes4): External<bytes4> { return ~a; }
+  get not32(a: bytes32): External<bytes32> { return ~a; }
+  get shl4(a: bytes4, n: u8): External<bytes4> { return a << n; }
+  get shr4(a: bytes4, n: u8): External<bytes4> { return a >> n; }
+  get shr32(a: bytes32, n: u8): External<bytes32> { return a >> n; }
+  get and32(a: bytes32, b: bytes32): External<bytes32> { return a & b; }
+  get boolId(a: bool): External<bool> { return bool(a); }
 }`;
 const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
@@ -92,9 +92,9 @@ describe('bytesN bitwise/shift + signedness + bool-cast conformance', () => {
   });
 
   it('rejects what solc rejects: signed exponent and signed shift amount', () => {
-    expect(codes('@contract class C { @external @pure f(a: i8, b: i8): i8 { return a ** b; } }')).toContain('JETH082');
-    expect(codes('@contract class C { @external @pure f(a: u8, n: i8): u8 { return a << n; } }')).toContain('JETH081');
-    expect(codes('@contract class C { @external @pure f(a: u8, n: i8): u8 { return a >> n; } }')).toContain('JETH081');
+    expect(codes('class C { get f(a: i8, b: i8): External<i8> { return a ** b; } }')).toContain('JETH082');
+    expect(codes('class C { get f(a: u8, n: i8): External<u8> { return a << n; } }')).toContain('JETH081');
+    expect(codes('class C { get f(a: u8, n: i8): External<u8> { return a >> n; } }')).toContain('JETH081');
   });
 
   it('still rejects what solc rejects: arithmetic (+ - * / %) on bytesN', () => {
@@ -107,17 +107,17 @@ describe('bytesN bitwise/shift + signedness + bool-cast conformance', () => {
   });
 
   it('still accepts unsigned exponent and unsigned shift amount, and integer bitwise', () => {
-    expect(codes('@contract class C { @external @pure f(a: u8, b: u8): u8 { return a ** b; } }')).toEqual([]);
-    expect(codes('@contract class C { @external @pure f(a: u8, n: u8): u8 { return a << n; } }')).toEqual([]);
-    expect(codes('@contract class C { @external @pure f(a: u8, b: u8): u8 { return a & b; } }')).toEqual([]);
+    expect(codes('class C { get f(a: u8, b: u8): External<u8> { return a ** b; } }')).toEqual([]);
+    expect(codes('class C { get f(a: u8, n: u8): External<u8> { return a << n; } }')).toEqual([]);
+    expect(codes('class C { get f(a: u8, b: u8): External<u8> { return a & b; } }')).toEqual([]);
   });
 
   it('the literal 0 implicitly converts to bytesN like solc; any other literal does not', async () => {
-    expect(codes('@contract class C { @external @pure f(): bytes32 { return 0n; } }')).toEqual([]); // solc accepts
-    expect(codes('@contract class C { @external @pure f(): bytes4 { let b: bytes4 = 0n; return b; } }')).toEqual([]);
-    expect(codes('@contract class C { @external @pure f(): bytes32 { return 1n; } }')).toContain('JETH084'); // only 0
+    expect(codes('class C { get f(): External<bytes32> { return 0n; } }')).toEqual([]); // solc accepts
+    expect(codes('class C { get f(): External<bytes4> { let b: bytes4 = 0n; return b; } }')).toEqual([]);
+    expect(codes('class C { get f(): External<bytes32> { return 1n; } }')).toContain('JETH084'); // only 0
     // runtime: 0n -> bytes32 is the all-zero word
-    const J0 = '@contract class C { @external @pure z(): bytes32 { return 0n; } }';
+    const J0 = 'class C { get z(): External<bytes32> { return 0n; } }';
     const h0 = await Harness.create();
     const a0 = await h0.deploy(compile(J0, { fileName: 'C.jeth' }).creationBytecode);
     expect((await h0.call(a0, '0x' + sel('z()'))).returnHex).toBe('0x' + '0'.repeat(64));

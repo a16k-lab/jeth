@@ -45,7 +45,7 @@ const codes = (src: string): string[] => {
 describe('audit sweep fixes - byte-identical to solc 0.8.35', () => {
   it('\\xNN string escapes are raw bytes (bytes / keccak / concat)', async () => {
     await eqCalls(
-      '@contract class C { @external @pure a(): bytes { return bytes("\\xff"); } @external @pure b(): bytes32 { return keccak256(bytes("\\xff")); } @external @pure c(): bytes { return bytes("\\xC0\\xFF\\xEE"); } @external @pure d(): bytes { return bytes.concat(bytes("\\x80"), bytes("ab")); } }',
+      'class C { get a(): External<bytes> { return bytes("\\xff"); } get b(): External<bytes32> { return keccak256(bytes("\\xff")); } get c(): External<bytes> { return bytes("\\xC0\\xFF\\xEE"); } get d(): External<bytes> { return bytes.concat(bytes("\\x80"), bytes("ab")); } }',
       'contract C { function a() external pure returns(bytes memory){ return bytes("\\xff"); } function b() external pure returns(bytes32){ return keccak256(bytes("\\xff")); } function c() external pure returns(bytes memory){ return bytes("\\xC0\\xFF\\xEE"); } function d() external pure returns(bytes memory){ return bytes.concat(bytes("\\x80"), bytes("ab")); } }',
       [['a()', ''], ['b()', ''], ['c()', ''], ['d()', '']],
     );
@@ -53,23 +53,23 @@ describe('audit sweep fixes - byte-identical to solc 0.8.35', () => {
 
   it('\\xNN in a template-literal static part (with substitution) is a raw byte too', async () => {
     await eqCalls(
-      '@contract class C { @external @pure f(x: string): string { return `A\\xc3\\xa9${x}`; } }',
+      'class C { get f(x: string): External<string> { return `A\\xc3\\xa9${x}`; } }',
       'contract C { function f(string calldata x) external pure returns(string memory){ return string.concat("A\\xc3\\xa9", x); } }',
       [['f(string)', W(0x20n) + W(1n) + '7a'.padEnd(64, '0')]],
     );
   });
 
   it('a \\xNN-invalid-UTF-8 string literal is rejected (JETH447); valid UTF-8 / ascii accepted', () => {
-    expect(codes('@contract class C { @external @pure f(): string { return "\\xe9"; } }')).toContain('JETH447');
-    expect(codes('@contract class C { @external @pure f(): string { return "\\xc3\\xa9"; } }')).toEqual([]);
-    expect(codes('@contract class C { @external @pure f(): string { return "hello"; } }')).toEqual([]);
+    expect(codes('class C { get f(): External<string> { return "\\xe9"; } }')).toContain('JETH447');
+    expect(codes('class C { get f(): External<string> { return "\\xc3\\xa9"; } }')).toEqual([]);
+    expect(codes('class C { get f(): External<string> { return "hello"; } }')).toEqual([]);
   });
 
   it('abi.encode of a storage struct with a nested dynamic-struct field (empty + non-empty inner string)', async () => {
-    const D = '@struct class T { n: u256; s: string; } @struct class W { id: u256; t: T; }';
+    const D = 'type T = { n: u256; s: string; }; type W = { id: u256; t: T; };';
     const Ds = 'struct T { uint256 n; string s; } struct W { uint256 id; T t; }';
     await eqCalls(
-      `${D} @contract class C { @state w: W; @external e(): bytes { this.w.id=9n; this.w.t.n=100n; this.w.t.s=""; return abi.encode(this.w); } @external ne(): bytes { this.w.id=9n; this.w.t.n=100n; this.w.t.s="hello-world"; return abi.encode(this.w); } }`,
+      `${D} class C { w: W; e(): External<bytes> { this.w.id=9n; this.w.t.n=100n; this.w.t.s=""; return abi.encode(this.w); } ne(): External<bytes> { this.w.id=9n; this.w.t.n=100n; this.w.t.s="hello-world"; return abi.encode(this.w); } }`,
       `${Ds} contract C { W w; function e() external returns(bytes memory){ w.id=9; w.t.n=100; w.t.s=""; return abi.encode(w); } function ne() external returns(bytes memory){ w.id=9; w.t.n=100; w.t.s="hello-world"; return abi.encode(w); } }`,
       [['e()', ''], ['ne()', '']],
     );
@@ -77,22 +77,22 @@ describe('audit sweep fixes - byte-identical to solc 0.8.35', () => {
 
   it('@constant enum from a bare integer is rejected (JETH280); member / cast accepted byte-identical', async () => {
     const E = 'enum Color { Red, Green, Blue } ';
-    expect(codes(E + '@contract class C { @constant K: Color = 2n; @external @pure f(): Color { return this.K; } }')).toContain('JETH280');
-    expect(codes(E + '@contract class C { @constant K: Color = 3n; @external @pure f(): Color { return this.K; } }')).toContain('JETH280');
+    expect(codes(E + 'class C { static K: Color = 2n; get f(): External<Color> { return this.K; } }')).toContain('JETH280');
+    expect(codes(E + 'class C { static K: Color = 3n; get f(): External<Color> { return this.K; } }')).toContain('JETH280');
     await eqCalls(
-      E + '@contract class C { @constant K: Color = Color.Blue; @external @pure f(): Color { return this.K; } }',
+      E + 'class C { static K: Color = Color.Blue; get f(): External<Color> { return this.K; } }',
       'enum Color { Red, Green, Blue } contract C { Color constant K = Color.Blue; function f() external pure returns(Color){ return K; } }',
       [['f()', '']],
     );
     await eqCalls(
-      E + '@contract class C { @constant K: Color = Color(1n); @external @pure f(): Color { return this.K; } }',
+      E + 'class C { static K: Color = Color(1n); get f(): External<Color> { return this.K; } }',
       'enum Color { Red, Green, Blue } contract C { Color constant K = Color(1); function f() external pure returns(Color){ return K; } }',
       [['f()', '']],
     );
   });
 
   it('a discarded value-returning interface call validates returndata size (reverts on a short return)', async () => {
-    const jethC = '@interface class IERC20 { @external transfer(to: address, amt: u256): bool; } @contract class C { @external f(t: address): u256 { IERC20(t).transfer(t, 1n); return 42n; } }';
+    const jethC = 'interface IERC20 { transfer(to: address, amt: u256): bool; } class C { f(t: address): External<u256> { IERC20(t).transfer(t, 1n); return 42n; } }';
     const solC = 'interface IERC20 { function transfer(address to, uint256 amt) external returns(bool); } contract C { function f(address t) external returns(uint256){ IERC20(t).transfer(t, 1); return 42; } }';
     const targets = {
       good: 'contract T { function transfer(address, uint256) external returns(bool){ return true; } }',

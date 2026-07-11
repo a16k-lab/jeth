@@ -22,10 +22,10 @@ function codes(src: string): string[] {
 
 describe('bytesN[i] indexing (#10) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@contract class C { @state s: bytes32;
-    @external setS(v: bytes32): void { this.s = v; }
-    @external @view at(i: u256): bytes1 { return this.s[i]; }
-    @external @pure atP(b: bytes32, i: u256): bytes1 { return b[i]; } }`;
+  const J = `class C { s: bytes32;
+    setS(v: bytes32): External<void> { this.s = v; }
+    get at(i: u256): External<bytes1> { return this.s[i]; }
+    get atP(b: bytes32, i: u256): External<bytes1> { return b[i]; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C { bytes32 s;
@@ -56,15 +56,15 @@ contract C { bytes32 s;
     }
   });
   it('a constant out-of-range byte index is a compile error; a dynamic-bytes b[i] is unaffected', () => {
-    expect(codes('@contract class C { @external @pure f(b: bytes4): bytes1 { return b[5n]; } }')).toContain('JETH152');
-    expect(codes('@contract class C { @external @pure f(b: bytes4): bytes1 { return b[3n]; } }')).toEqual([]);
-    expect(codes('@contract class C { @external @pure f(b: bytes, i: u256): bytes1 { return b[i]; } }')).toEqual([]);
+    expect(codes('class C { get f(b: bytes4): External<bytes1> { return b[5n]; } }')).toContain('JETH152');
+    expect(codes('class C { get f(b: bytes4): External<bytes1> { return b[3n]; } }')).toEqual([]);
+    expect(codes('class C { get f(b: bytes, i: u256): External<bytes1> { return b[i]; } }')).toEqual([]);
   });
 });
 
 describe('empty statement (#13)', () => {
   it('a lone `;` is rejected, matching solc grammar', () => {
-    expect(codes('@contract class C { @external @pure f(): u256 { ; return 1n; } }')).toContain('JETH061');
+    expect(codes('class C { get f(): External<u256> { ; return 1n; } }')).toContain('JETH061');
   });
 });
 
@@ -81,23 +81,23 @@ describe('constant folding in state initializers (#9) vs solc', () => {
       '10n % 3n',
       '255n >> 1n',
     ]) {
-      expect(codes(`@contract class C { @state x: u8 = ${init}; }`), init).toEqual([]);
+      expect(codes(`class C { x: u8 = ${init}; }`), init).toEqual([]);
     }
     for (const init of ['10n ** 18n', '2n ** 255n', '(2n ** 256n) - 1n']) {
-      expect(codes(`@contract class C { @state x: u256 = ${init}; }`), init).toEqual([]);
+      expect(codes(`class C { x: u256 = ${init}; }`), init).toEqual([]);
     }
-    expect(codes('@contract class C { @state x: i8 = -(100n + 28n); }')).toEqual([]); // -128 fits i8
+    expect(codes('class C { x: i8 = -(100n + 28n); }')).toEqual([]); // -128 fits i8
     // rejected with a range error (the folded final value overflows)
     for (const init of ['100n + 200n', '255n + 1n', '3n * 100n', '1n << 8n']) {
-      expect(codes(`@contract class C { @state x: u8 = ${init}; }`), init).toContain('JETH070');
+      expect(codes(`class C { x: u8 = ${init}; }`), init).toContain('JETH070');
     }
-    expect(codes('@contract class C { @state x: u256 = 2n ** 256n; }')).toContain('JETH070');
+    expect(codes('class C { x: u256 = 2n ** 256n; }')).toContain('JETH070');
     // a fractional `/` is not a foldable constant (solc also rejects it), so it is JETH048
-    expect(codes('@contract class C { @state x: u8 = 7n / 2n; }')).toContain('JETH048');
+    expect(codes('class C { x: u8 = 7n / 2n; }')).toContain('JETH048');
   });
   it('a folded initializer is byte-identical to solc at runtime', async () => {
     const J =
-      '@contract class C { @state DEC: u256 = 10n ** 18n; @state Y: u8 = 300n - 200n; @external @view dec(): u256 { return this.DEC; } @external @view y(): u8 { return this.Y; } }';
+      'class C { DEC: u256 = 10n ** 18n; Y: u8 = 300n - 200n; get dec(): External<u256> { return this.DEC; } get y(): External<u8> { return this.Y; } }';
     const S =
       '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\ncontract C { uint256 public DEC = 10**18; uint8 public Y = 300-200; }';
     const h = await Harness.create();

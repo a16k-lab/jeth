@@ -50,16 +50,16 @@ async function expectSame(a: { aj: Address; as: Address }, sig: string, cd: stri
   return { j, s };
 }
 
-const IN = `@struct class In { a: u256; b: u256 }`;
+const IN = `type In = { a: u256; b: u256 };`;
 const SIN = `struct In { uint256 a; uint256 b; }`;
 
 describe('calldata static-struct fixed-array forwarded as an internal-call arg (the live miscompile)', () => {
   it('Arr<In,2> internal-arg: byte-identical, returns the real element (never zero)', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @pure pick(a: Arr<In,2>, i: u256): In { return a[i]; }
-         @external @pure via(a: Arr<In,2>, i: u256): In { return this.pick(a, i); } }`,
+       class C {
+         pick(a: Arr<In,2>, i: u256): In { return a[i]; }
+         get via(a: Arr<In,2>, i: u256): External<In> { return this.pick(a, i); } }`,
       `${SIN}
        contract C {
          function pick(In[2] memory a, uint256 i) internal pure returns (In memory) { return a[i]; }
@@ -78,9 +78,9 @@ describe('calldata static-struct fixed-array forwarded as an internal-call arg (
   it('Arr<In,3> internal-arg at every index', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @pure pick(a: Arr<In,3>, i: u256): In { return a[i]; }
-         @external @pure via(a: Arr<In,3>, i: u256): In { return this.pick(a, i); } }`,
+       class C {
+         pick(a: Arr<In,3>, i: u256): In { return a[i]; }
+         get via(a: Arr<In,3>, i: u256): External<In> { return this.pick(a, i); } }`,
       `${SIN}
        contract C {
          function pick(In[3] memory a, uint256 i) internal pure returns (In memory) { return a[i]; }
@@ -99,9 +99,9 @@ describe('calldata static-struct fixed-array forwarded as an internal-call arg (
   it('nested Arr<Arr<In,2>,2> internal-arg (a[i][j])', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @pure pick(a: Arr<Arr<In,2>,2>, i: u256, j: u256): In { return a[i][j]; }
-         @external @pure via(a: Arr<Arr<In,2>,2>, i: u256, j: u256): In { return this.pick(a, i, j); } }`,
+       class C {
+         pick(a: Arr<Arr<In,2>,2>, i: u256, j: u256): In { return a[i][j]; }
+         get via(a: Arr<Arr<In,2>,2>, i: u256, j: u256): External<In> { return this.pick(a, i, j); } }`,
       `${SIN}
        contract C {
          function pick(In[2][2] memory a, uint256 i, uint256 j) internal pure returns (In memory) { return a[i][j]; }
@@ -123,10 +123,10 @@ describe('calldata static-struct fixed-array forwarded as an internal-call arg (
   it('nested internal calls forwarding the struct-array arg (two hops)', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @pure pick2(a: Arr<In,2>, i: u256): In { return a[i]; }
-         @pure pick(a: Arr<In,2>, i: u256): In { return this.pick2(a, i); }
-         @external @pure via(a: Arr<In,2>, i: u256): In { return this.pick(a, i); } }`,
+       class C {
+         pick2(a: Arr<In,2>, i: u256): In { return a[i]; }
+         pick(a: Arr<In,2>, i: u256): In { return this.pick2(a, i); }
+         get via(a: Arr<In,2>, i: u256): External<In> { return this.pick(a, i); } }`,
       `${SIN}
        contract C {
          function pick2(In[2] memory a, uint256 i) internal pure returns (In memory) { return a[i]; }
@@ -142,9 +142,9 @@ describe('calldata static-struct fixed-array forwarded as an internal-call arg (
   it('callee mutates its (pass-by-memory copy) struct-array arg, returns the element', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @pure bump(a: Arr<In,2>, i: u256): In { a[i].a = a[i].a + 1n; return a[i]; }
-         @external @pure via(a: Arr<In,2>, i: u256): In { return this.bump(a, i); } }`,
+       class C {
+         bump(a: Arr<In,2>, i: u256): In { a[i].a = a[i].a + 1n; return a[i]; }
+         get via(a: Arr<In,2>, i: u256): External<In> { return this.bump(a, i); } }`,
       `${SIN}
        contract C {
          function bump(In[2] memory a, uint256 i) internal pure returns (In memory) { a[i].a = a[i].a + 1; return a[i]; }
@@ -158,10 +158,10 @@ describe('calldata static-struct fixed-array forwarded as an internal-call arg (
 
   it('dirty struct-field word trap is preserved (bool field validated lazily like solc)', async () => {
     const a = await pair(
-      `@struct class F { on: bool; k: u256 }
-       @contract class C {
-         @pure getK(a: Arr<F,2>, i: u256): u256 { return a[i].k; }
-         @external @pure via(a: Arr<F,2>, i: u256): u256 { return this.getK(a, i); } }`,
+      `type F = { on: bool; k: u256 };
+       class C {
+         getK(a: Arr<F,2>, i: u256): u256 { return a[i].k; }
+         get via(a: Arr<F,2>, i: u256): External<u256> { return this.getK(a, i); } }`,
       `struct F { bool on; uint256 k; }
        contract C {
          function getK(F[2] memory a, uint256 i) internal pure returns (uint256) { return a[i].k; }
@@ -177,10 +177,10 @@ describe('calldata static-struct fixed-array forwarded as an internal-call arg (
 describe('CONTROLS: the shared internal-arg path stays byte-identical (no regression)', () => {
   it('flat static struct forwarded as an internal arg (still the FLAT copy)', async () => {
     const a = await pair(
-      `@struct class Nest { x: u256; y: u256; z: u256 }
-       @contract class C {
-         @pure ident(n: Nest): Nest { return n; }
-         @external @pure via(n: Nest): Nest { return this.ident(n); } }`,
+      `type Nest = { x: u256; y: u256; z: u256 };
+       class C {
+         ident(n: Nest): Nest { return n; }
+         get via(n: Nest): External<Nest> { return this.ident(n); } }`,
       `struct Nest { uint256 x; uint256 y; uint256 z; }
        contract C {
          function ident(Nest memory n) internal pure returns (Nest memory) { return n; }
@@ -192,9 +192,9 @@ describe('CONTROLS: the shared internal-arg path stays byte-identical (no regres
 
   it('value fixed array Arr<u256,3> internal-arg (still flat inline, memStaticElem undefined)', async () => {
     const a = await pair(
-      `@contract class C {
-         @pure pick(a: Arr<u256,3>, i: u256): u256 { return a[i]; }
-         @external @pure via(a: Arr<u256,3>, i: u256): u256 { return this.pick(a, i); } }`,
+      `class C {
+         pick(a: Arr<u256,3>, i: u256): u256 { return a[i]; }
+         get via(a: Arr<u256,3>, i: u256): External<u256> { return this.pick(a, i); } }`,
       `contract C {
          function pick(uint256[3] memory a, uint256 i) internal pure returns (uint256) { return a[i]; }
          function via(uint256[3] calldata a, uint256 i) external pure returns (uint256) { return pick(a, i); } }`,
@@ -205,10 +205,10 @@ describe('CONTROLS: the shared internal-arg path stays byte-identical (no regres
 
   it('calldata dyn-field struct internal-arg (pointer-headed dyn image, unchanged path)', async () => {
     const a = await pair(
-      `@struct class D { s: string; k: u256 }
-       @contract class C {
-         @pure getK(d: D): u256 { return d.k; }
-         @external @pure via(d: D): u256 { return this.getK(d); } }`,
+      `type D = { s: string; k: u256 };
+       class C {
+         getK(d: D): u256 { return d.k; }
+         get via(d: D): External<u256> { return this.getK(d); } }`,
       `struct D { string s; uint256 k; }
        contract C {
          function getK(D memory d) internal pure returns (uint256) { return d.k; }
@@ -223,9 +223,9 @@ describe('CONTROLS: the shared internal-arg path stays byte-identical (no regres
 
   it('calldata dyn value-array u256[] internal-arg (calldataArray path, unchanged)', async () => {
     const a = await pair(
-      `@contract class C {
-         @pure at(a: u256[], i: u256): u256 { return a[i]; }
-         @external @pure via(a: u256[], i: u256): u256 { return this.at(a, i); } }`,
+      `class C {
+         at(a: u256[], i: u256): u256 { return a[i]; }
+         get via(a: u256[], i: u256): External<u256> { return this.at(a, i); } }`,
       `contract C {
          function at(uint256[] memory a, uint256 i) internal pure returns (uint256) { return a[i]; }
          function via(uint256[] calldata a, uint256 i) external pure returns (uint256) { return at(a, i); } }`,
@@ -236,10 +236,10 @@ describe('CONTROLS: the shared internal-arg path stays byte-identical (no regres
 
   it('struct-from-literals internal-arg (allocAggToMem path, unchanged)', async () => {
     const a = await pair(
-      `@struct class P { a: u256; b: u256 }
-       @contract class C {
-         @pure getA(p: P): u256 { return p.a; }
-         @external @pure via(): u256 { return this.getA(P(0x33n, 0x44n)); } }`,
+      `type P = { a: u256; b: u256 };
+       class C {
+         getA(p: P): u256 { return p.a; }
+         get via(): External<u256> { return this.getA(P(0x33n, 0x44n)); } }`,
       `struct P { uint256 a; uint256 b; }
        contract C {
          function getA(P memory p) internal pure returns (uint256) { return p.a; }
@@ -252,9 +252,9 @@ describe('CONTROLS: the shared internal-arg path stays byte-identical (no regres
   it('memory-local Arr<In,2> (built from literals) internal-arg still MATCHes', async () => {
     const a = await pair(
       `${IN}
-       @contract class C {
-         @pure pick2(a: Arr<In,2>, i: u256): In { return a[i]; }
-         @external @pure via(i: u256): In { let m: Arr<In,2> = [ In(0x1111n, 0x2222n), In(0x3333n, 0x4444n) ]; return this.pick2(m, i); } }`,
+       class C {
+         pick2(a: Arr<In,2>, i: u256): In { return a[i]; }
+         get via(i: u256): External<In> { let m: Arr<In,2> = [ In(0x1111n, 0x2222n), In(0x3333n, 0x4444n) ]; return this.pick2(m, i); } }`,
       `${SIN}
        contract C {
          function pick2(In[2] memory a, uint256 i) internal pure returns (In memory) { return a[i]; }
@@ -268,21 +268,21 @@ describe('CONTROLS: the shared internal-arg path stays byte-identical (no regres
     const args = W(0x1111) + W(0x2222) + W(0x3333) + W(0x4444) + W(1);
     const retA = await pair(
       `${IN}
-       @contract class C { @external @pure f(a: Arr<In,2>, i: u256): Arr<In,2> { return a; } }`,
+       class C { get f(a: Arr<In,2>, i: u256): External<Arr<In,2>> { return a; } }`,
       `${SIN}
        contract C { function f(In[2] calldata a, uint256 i) external pure returns (In[2] memory) { return a; } }`,
     );
     await expectSame(retA, 'f((uint256,uint256)[2],uint256)', args);
     const enc = await pair(
       `${IN}
-       @contract class C { @external @pure f(a: Arr<In,2>, i: u256): bytes { return abi.encode(a); } }`,
+       class C { get f(a: Arr<In,2>, i: u256): External<bytes> { return abi.encode(a); } }`,
       `${SIN}
        contract C { function f(In[2] calldata a, uint256 i) external pure returns (bytes memory) { return abi.encode(a); } }`,
     );
     await expectSame(enc, 'f((uint256,uint256)[2],uint256)', args);
     const elem = await pair(
       `${IN}
-       @contract class C { @external @pure f(a: Arr<In,2>, i: u256): In { return a[i]; } }`,
+       class C { get f(a: Arr<In,2>, i: u256): External<In> { return a[i]; } }`,
       `${SIN}
        contract C { function f(In[2] calldata a, uint256 i) external pure returns (In memory) { return a[i]; } }`,
     );
@@ -290,7 +290,7 @@ describe('CONTROLS: the shared internal-arg path stays byte-identical (no regres
     expect(j.r).toBe('0x' + W(0x3333) + W(0x4444));
     const fld = await pair(
       `${IN}
-       @contract class C { @external @pure f(a: Arr<In,2>, i: u256): u256 { return a[i].a; } }`,
+       class C { get f(a: Arr<In,2>, i: u256): External<u256> { return a[i].a; } }`,
       `${SIN}
        contract C { function f(In[2] calldata a, uint256 i) external pure returns (uint256) { return a[i].a; } }`,
     );

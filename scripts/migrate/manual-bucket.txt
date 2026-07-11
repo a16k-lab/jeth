@@ -42,3 +42,26 @@ test/_mv2_memnew.test.ts:48  interpolated template: the get-flip candidate metho
 test/aggregate-array-element-aliasing-assign.test.ts:70  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
 test/aggregate-comparison.test.ts:22  interpolated template: assembly trial mismatch orig=rej[JETH072] post=rej[JETH040]
 test/arch-residual-b-tuple-return.test.ts:23  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=ok post=rej[JETH352,JETH352,JETH352])
+test/audit-over-rejections.test.ts:74  interpolated template: an edit crosses a region boundary (at 102)
+test/bind-aggregate-array-element.test.ts:80  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/bool-ordering.test.ts:26  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH013,JETH013,JETH072,JETH072,JETH072,JETH352])
+test/bool-ordering.test.ts:49  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH085,JETH352])
+test/bytesn-bitwise-shift.test.ts:103  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/call-interface-getter-lifts.test.ts:380  trial mismatch: orig=rej[JETH044,JETH133,JETH380,JETH433] post=ok
+test/call-interface-getter-lifts.test.ts:446  @interface class I2 extends ...: a native interface cannot extend (JETH349) - stays legacy | @interface class I3 extends ...: a native interface cannot extend (JETH349) - stays legacy
+test/call-interface-getter-lifts.test.ts:483  trial mismatch: orig=rej[JETH433] post=rej[JETH040]
+test/call-interface-getter-lifts.test.ts:508  @interface class I2 extends ...: a native interface cannot extend (JETH349) - stays legacy | @interface class I3 extends ...: a native interface cannot extend (JETH349) - stays legacy
+test/clone-proxy.test.ts:397  trial mismatch: orig=rej[JETH054] post=ok
+test/clone-proxy.test.ts:402  trial mismatch: orig=rej[JETH055] post=ok
+test/clone-proxy.test.ts:407  trial mismatch: orig=rej[JETH054] post=ok
+test/clone-proxy.test.ts:412  trial mismatch: orig=rej[JETH054] post=ok
+test/clone-proxy.test.ts:438  trial mismatch: orig=rej[JETH164] post=ok
+test/clone-proxy.test.ts:441  trial mismatch: orig=rej[JETH164] post=ok
+test/clone-proxy.test.ts:444  trial mismatch: orig=rej[JETH164] post=ok
+test/comparison-literal-widen.test.ts:25  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH013,JETH072,JETH352])
+test/const-fold-4096-limit.test.ts:30  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/constant-field.test.ts:92  trial mismatch: orig=rej[JETH048,JETH065] post=ok
+test/decode-in-call.test.ts:66  interpolated template: an edit inside an unresolved ${...} hole (at 51)
+test/decode-in-call.test.ts:67  interpolated template: an edit inside an unresolved ${...} hole (at 51)
+test/decode-in-call.test.ts:203  interpolated template: an edit inside an unresolved ${...} hole (at 45)
+test/decode-in-call.test.ts:242  interpolated template: an edit inside an unresolved ${...} hole (at 45)

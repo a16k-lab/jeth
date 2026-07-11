@@ -69,11 +69,11 @@ describe('calldata-whole-struct-element: dynamic D = {v:u256; tag:string}', () =
   let xs: string;
   beforeAll(async () => {
     a = await pair(
-      `@struct class D{v:u256;tag:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}
-  @external @pure e(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}
+      `type D = {v:u256;tag:string;};
+type S = {a:u256;items:D[];};
+class C{
+  get f(xs:S[],i:u256,j:u256):External<D>{return xs[i].items[j];}
+  get e(xs:S[],i:u256,j:u256):External<bytes>{return abi.encode(xs[i].items[j]);}
 }`,
       `struct D{uint256 v;string tag;}
 struct S{uint256 a;D[] items;}
@@ -143,11 +143,11 @@ describe('calldata-whole-struct-element: static D = {v:u256; w:u256}', () => {
   let xs: string;
   beforeAll(async () => {
     a = await pair(
-      `@struct class D{v:u256;w:u256;}
-@struct class S{a:u256;items:D[];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}
-  @external @pure e(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}
+      `type D = {v:u256;w:u256;};
+type S = {a:u256;items:D[];};
+class C{
+  get f(xs:S[],i:u256,j:u256):External<D>{return xs[i].items[j];}
+  get e(xs:S[],i:u256,j:u256):External<bytes>{return abi.encode(xs[i].items[j]);}
 }`,
       `struct D{uint256 v;uint256 w;}
 struct S{uint256 a;D[] items;}

@@ -45,22 +45,22 @@ const DLEN = BigInt(D.length / 2);
 const DPAD = D + '00'.repeat((32 - (D.length / 2) % 32) % 32);
 const oneBytesArg = W(0x20n) + W(DLEN) + DPAD;
 
-const J = `@contract class C {
-  @external @view tail(data: bytes): bytes { return data.slice(4n); }
-  @external @view mid(data: bytes): bytes { return data.slice(2n, 5n); }
-  @external @view dyn(data: bytes, s: u256, e: u256): bytes { return data.slice(s, e); }
-  @external @view slen(data: bytes, s: u256, e: u256): u256 { const x: bytes = data.slice(s, e); return x.length; }
-  @external @view ss(data: bytes): bytes { return data.slice(1n).slice(2n); }
-  @external @view u8s(data: bytes, i: u8): bytes { return data.slice(i); }
-  @external @view selSkip(): bytes { return msg.data.slice(4n); }
-  @external @view oob(): bytes { return msg.data.slice(1000n); }
-  @external @view kc(data: bytes): bytes32 { return keccak256(data.slice(2n)); }
-  @external @view enc(data: bytes): bytes { return abi.encode(data.slice(2n)); }
-  @external @view encp(data: bytes): bytes { return abi.encodePacked(data.slice(2n)); }
-  @external @view bind(data: bytes): bytes { const x: bytes = data.slice(2n); return x; }
-  @external @pure purep(data: bytes): bytes { return data.slice(4n); }
-  @external @view dec(blob: bytes): u256 { return abi.decode(blob.slice(4n), u256); }
-  @external @view dec2(blob: bytes): [u256, address] { const [a, b] = abi.decode(blob.slice(4n), [u256, address]); return [a, b]; }
+const J = `class C {
+  get tail(data: bytes): External<bytes> { return data.slice(4n); }
+  get mid(data: bytes): External<bytes> { return data.slice(2n, 5n); }
+  get dyn(data: bytes, s: u256, e: u256): External<bytes> { return data.slice(s, e); }
+  get slen(data: bytes, s: u256, e: u256): External<u256> { const x: bytes = data.slice(s, e); return x.length; }
+  get ss(data: bytes): External<bytes> { return data.slice(1n).slice(2n); }
+  get u8s(data: bytes, i: u8): External<bytes> { return data.slice(i); }
+  get selSkip(): External<bytes> { return msg.data.slice(4n); }
+  get oob(): External<bytes> { return msg.data.slice(1000n); }
+  get kc(data: bytes): External<bytes32> { return keccak256(data.slice(2n)); }
+  get enc(data: bytes): External<bytes> { return abi.encode(data.slice(2n)); }
+  get encp(data: bytes): External<bytes> { return abi.encodePacked(data.slice(2n)); }
+  get bind(data: bytes): External<bytes> { const x: bytes = data.slice(2n); return x; }
+  get purep(data: bytes): External<bytes> { return data.slice(4n); }
+  get dec(blob: bytes): External<u256> { return abi.decode(blob.slice(4n), u256); }
+  get dec2(blob: bytes): External<[u256, address]> { const [a, b] = abi.decode(blob.slice(4n), [u256, address]); return [a, b]; }
 }`;
 const S = `contract C {
   function tail(bytes calldata d) external view returns(bytes memory){ return d[4:]; }
@@ -135,14 +135,14 @@ describe('calldata slicing - byte-identical to solc data[start:end]', () => {
 // the zero-arg whole-slice form. (NOTE: the index must be a BigInt literal - arr[0n], not arr[0]; a plain
 // 0 is a JETH071 "use 0n" error, which earlier masked these as if element access were unsupported.)
 describe('calldata slicing - extended sources', () => {
-  const EJ = `@struct class P { a: u256; data: bytes; }
-@struct class Q { a: u256; s: string; }
-@contract class C {
-  @external @view str1(s: string): string { return s.slice(1n); }
-  @external @view str2(s: string): string { return s.slice(1n, 4n); }
-  @external @view fld(p: P): bytes { return p.data.slice(1n); }
-  @external @view sfld(q: Q): string { return q.s.slice(1n); }
-  @external @view whole(d: bytes): bytes { return d.slice(); }
+  const EJ = `type P = { a: u256; data: bytes; };
+type Q = { a: u256; s: string; };
+class C {
+  get str1(s: string): External<string> { return s.slice(1n); }
+  get str2(s: string): External<string> { return s.slice(1n, 4n); }
+  get fld(p: P): External<bytes> { return p.data.slice(1n); }
+  get sfld(q: Q): External<string> { return q.s.slice(1n); }
+  get whole(d: bytes): External<bytes> { return d.slice(); }
 }`;
   const ES = `contract C {
   struct P { uint a; bytes data; }
@@ -176,16 +176,16 @@ describe('calldata slicing - extended sources', () => {
 // returned, hashed, measured, and SLICED, byte-identical to solc (incl. an out-of-bounds Panic 0x32).
 // The index is a BigInt literal (arr[0n]) or any uint expression. Verified vs solc arr[i] / arr[i][s:e].
 describe('calldata array-element access + element slicing', () => {
-  const AJ = `@contract class C {
-    @external @view e0(arr: bytes[]): bytes { return arr[0n]; }
-    @external @view e1(arr: bytes[]): bytes { return arr[1n]; }
-    @external @view dyn(arr: bytes[], i: u256): bytes { return arr[i]; }
-    @external @view len1(arr: bytes[]): u256 { return arr[1n].length; }
-    @external @view kc(arr: bytes[]): bytes32 { return keccak256(arr[0n]); }
-    @external @view sl(arr: bytes[]): bytes { return arr[0n].slice(1n); }
-    @external @view sl1(arr: bytes[], s: u256, e: u256): bytes { return arr[1n].slice(s, e); }
-    @external @view se0(arr: string[]): string { return arr[0n]; }
-    @external @view ssl(arr: string[]): string { return arr[0n].slice(1n); }
+  const AJ = `class C {
+    get e0(arr: bytes[]): External<bytes> { return arr[0n]; }
+    get e1(arr: bytes[]): External<bytes> { return arr[1n]; }
+    get dyn(arr: bytes[], i: u256): External<bytes> { return arr[i]; }
+    get len1(arr: bytes[]): External<u256> { return arr[1n].length; }
+    get kc(arr: bytes[]): External<bytes32> { return keccak256(arr[0n]); }
+    get sl(arr: bytes[]): External<bytes> { return arr[0n].slice(1n); }
+    get sl1(arr: bytes[], s: u256, e: u256): External<bytes> { return arr[1n].slice(s, e); }
+    get se0(arr: string[]): External<string> { return arr[0n]; }
+    get ssl(arr: string[]): External<string> { return arr[0n].slice(1n); }
   }`;
   const AS = `contract C {
     function e0(bytes[] calldata arr) external pure returns(bytes memory){ return arr[0]; }
@@ -228,10 +228,10 @@ describe('calldata array-element access + element slicing', () => {
 
 // Byte-indexing a calldata bytes value (a param or a slice) yields bytes1, byte-identical to solc d[i].
 describe('calldata bytes byte-indexing', () => {
-  const BJ = `@contract class C {
-    @external @view bi(d: bytes, i: u256): bytes1 { return d[i]; }
-    @external @view bsl(d: bytes): bytes1 { return d.slice(2n)[0n]; }
-    @external @view bu8(d: bytes): u8 { return u8(d[0n]); }
+  const BJ = `class C {
+    get bi(d: bytes, i: u256): External<bytes1> { return d[i]; }
+    get bsl(d: bytes): External<bytes1> { return d.slice(2n)[0n]; }
+    get bu8(d: bytes): External<u8> { return u8(d[0n]); }
   }`;
   const BS = `contract C {
     function bi(bytes calldata d, uint i) external pure returns(bytes1){ return d[i]; }
@@ -260,17 +260,17 @@ describe('calldata slicing - accept/reject parity with solc', () => {
   const cases: { label: string; j: string; s: string }[] = [
     {
       label: 'memory bytes is not sliceable',
-      j: `@contract class C { @external @pure f(): bytes { const x: u8 = 1n; const m: bytes = abi.encodePacked(x); return m.slice(0n); } }`,
+      j: `class C { get f(): External<bytes> { const x: u8 = 1n; const m: bytes = abi.encodePacked(x); return m.slice(0n); } }`,
       s: `contract C { function f() external pure returns(bytes memory){ uint8 x=1; bytes memory m=abi.encodePacked(x); return m[0:]; } }`,
     },
     {
       label: 'storage bytes is not sliceable',
-      j: `@contract class C { @state s: bytes; @external @view f(): bytes { return this.s.slice(0n); } }`,
+      j: `class C { s: bytes; get f(): External<bytes> { return this.s.slice(0n); } }`,
       s: `contract C { bytes s; function f() external view returns(bytes memory){ return s[0:]; } }`,
     },
     {
       label: 'signed start index is rejected',
-      j: `@contract class C { @external @view f(data: bytes, i: i256): bytes { return data.slice(i); } }`,
+      j: `class C { get f(data: bytes, i: i256): External<bytes> { return data.slice(i); } }`,
       s: `contract C { function f(bytes calldata d, int i) external pure returns(bytes memory){ return d[i:]; } }`,
     },
     // `.length` DIRECTLY on an unbound bytes/string calldata slice expression: solc rejects with
@@ -279,32 +279,32 @@ describe('calldata slicing - accept/reject parity with solc', () => {
     // (the positive control below + the `slen` behavioural case). All forms must BOTH-REJECT.
     {
       label: '.length on a bytes slice expression is rejected',
-      j: `@contract class C { @external @view f(d: bytes): u256 { return d.slice(2n, 5n).length; } }`,
+      j: `class C { get f(d: bytes): External<u256> { return d.slice(2n, 5n).length; } }`,
       s: `contract C { function f(bytes calldata d) external pure returns(uint){ return d[2:5].length; } }`,
     },
     {
       label: '.length on an open-ended bytes slice is rejected',
-      j: `@contract class C { @external @view f(d: bytes): u256 { return d.slice(4n).length; } }`,
+      j: `class C { get f(d: bytes): External<u256> { return d.slice(4n).length; } }`,
       s: `contract C { function f(bytes calldata d) external pure returns(uint){ return d[4:].length; } }`,
     },
     {
       label: '.length on a whole bytes slice d.slice() is rejected',
-      j: `@contract class C { @external @view f(d: bytes): u256 { return d.slice().length; } }`,
+      j: `class C { get f(d: bytes): External<u256> { return d.slice().length; } }`,
       s: `contract C { function f(bytes calldata d) external pure returns(uint){ return d[:].length; } }`,
     },
     {
       label: '.length on a slice-of-slice is rejected',
-      j: `@contract class C { @external @view f(d: bytes): u256 { return d.slice(1n, 9n).slice(0n, 2n).length; } }`,
+      j: `class C { get f(d: bytes): External<u256> { return d.slice(1n, 9n).slice(0n, 2n).length; } }`,
       s: `contract C { function f(bytes calldata d) external pure returns(uint){ return d[1:9][0:2].length; } }`,
     },
     {
       label: '.length on a msg.data slice is rejected',
-      j: `@contract class C { @external @view f(): u256 { return msg.data.slice(4n).length; } }`,
+      j: `class C { get f(): External<u256> { return msg.data.slice(4n).length; } }`,
       s: `contract C { function f() external view returns(uint){ return msg.data[4:].length; } }`,
     },
     {
       label: '.length on a string slice expression is rejected',
-      j: `@contract class C { @external @view f(s: string): u256 { return s.slice(1n, 4n).length; } }`,
+      j: `class C { get f(s: string): External<u256> { return s.slice(1n, 4n).length; } }`,
       s: `contract C { function f(string calldata s) external pure returns(uint){ return s[1:4].length; } }`,
     },
   ];
@@ -315,13 +315,13 @@ describe('calldata slicing - accept/reject parity with solc', () => {
     });
   }
   it('uint8 index is accepted (matches solc)', () => {
-    const j = `@contract class C { @external @view f(data: bytes, i: u8): bytes { return data.slice(i); } }`;
+    const j = `class C { get f(data: bytes, i: u8): External<bytes> { return data.slice(i); } }`;
     const s = `contract C { function f(bytes calldata d, uint8 i) external pure returns(bytes memory){ return d[i:]; } }`;
     expect(jethAccepts(j)).toBe(true);
     expect(solAccepts(s)).toBe(true);
   });
   it('.length on a slice BOUND to a local is accepted (matches solc)', () => {
-    const j = `@contract class C { @external @view f(d: bytes): u256 { const x: bytes = d.slice(2n, 5n); return x.length; } }`;
+    const j = `class C { get f(d: bytes): External<u256> { const x: bytes = d.slice(2n, 5n); return x.length; } }`;
     const s = `contract C { function f(bytes calldata d) external pure returns(uint){ bytes calldata x = d[2:5]; return x.length; } }`;
     expect(jethAccepts(j)).toBe(true);
     expect(solAccepts(s)).toBe(true);

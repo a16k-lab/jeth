@@ -25,37 +25,37 @@ function strPush(sel: string, head: bigint[], s: string): string {
   return h;
 }
 
-const JETH = `@struct class P { x: u128; y: u128; }
-@struct class D { a: u256; s: string; }
-@contract class AC {
-  @state a: u256[];
-  @state b: u256[];
-  @state pa: P[];
-  @state pb: P[];
-  @state sa: string[];
-  @state sb: string[];
-  @state da: D[];
-  @state db: D[];
-  @state ma: mapping<address, u256[]>;
-  @state mb: mapping<address, u256[]>;
-  @external pushA(v: u256): void { this.a.push(v); }
-  @external pushB(v: u256): void { this.b.push(v); }
-  @external pushPB(x: u128, y: u128): void { this.pb.push(P(x, y)); }
-  @external pushSB(s: string): void { this.sb.push(s); }
-  @external pushDB(av: u256, s: string): void { this.db.push(D(av, s)); }
-  @external pushMB(k: address, v: u256): void { this.mb[k].push(v); }
-  @external copyAB(): void { this.a = this.b; }
-  @external copyPA(): void { this.pa = this.pb; }
-  @external copySA(): void { this.sa = this.sb; }
-  @external copyDA(): void { this.da = this.db; }
-  @external copyToMap(k: address): void { this.ma[k] = this.b; }
-  @external copyFromMap(k: address): void { this.a = this.mb[k]; }
-  @external @view getA(): u256[] { return this.a; }
-  @external @view getPA(): P[] { return this.pa; }
-  @external @view getSA(): string[] { return this.sa; }
-  @external @view getDA(): D[] { return this.da; }
-  @external @view getMA(k: address): u256[] { return this.ma[k]; }
-  @external @view lenA(): u256 { return this.a.length; }
+const JETH = `type P = { x: u128; y: u128; };
+type D = { a: u256; s: string; };
+class AC {
+  a: u256[];
+  b: u256[];
+  pa: P[];
+  pb: P[];
+  sa: string[];
+  sb: string[];
+  da: D[];
+  db: D[];
+  ma: mapping<address, u256[]>;
+  mb: mapping<address, u256[]>;
+  pushA(v: u256): External<void> { this.a.push(v); }
+  pushB(v: u256): External<void> { this.b.push(v); }
+  pushPB(x: u128, y: u128): External<void> { this.pb.push(P(x, y)); }
+  pushSB(s: string): External<void> { this.sb.push(s); }
+  pushDB(av: u256, s: string): External<void> { this.db.push(D(av, s)); }
+  pushMB(k: address, v: u256): External<void> { this.mb[k].push(v); }
+  copyAB(): External<void> { this.a = this.b; }
+  copyPA(): External<void> { this.pa = this.pb; }
+  copySA(): External<void> { this.sa = this.sb; }
+  copyDA(): External<void> { this.da = this.db; }
+  copyToMap(k: address): External<void> { this.ma[k] = this.b; }
+  copyFromMap(k: address): External<void> { this.a = this.mb[k]; }
+  get getA(): External<u256[]> { return this.a; }
+  get getPA(): External<P[]> { return this.pa; }
+  get getSA(): External<string[]> { return this.sa; }
+  get getDA(): External<D[]> { return this.da; }
+  get getMA(k: address): External<u256[]> { return this.ma[k]; }
+  get lenA(): External<u256> { return this.a.length; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

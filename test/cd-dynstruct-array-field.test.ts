@@ -23,14 +23,14 @@ const buildS = (selStr: string, a: bigint, xs: readonly bigint[], trailing?: big
 
 describe('calldata dyn-struct dynamic value-array field (JETH230) vs solc', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@struct class S { a: u256; xs: u256[]; }
-@struct class N { a: u256; ns: u64[]; }
-@contract class C {
-  @external @pure idx(s: S, i: u256): u256 { return s.xs[i]; }
-  @external @pure len(s: S): u256 { return s.xs.length; }
-  @external @pure echo(s: S): u256[] { return s.xs; }
-  @external @pure sum(s: S): u256 { let t: u256 = 0n; for (const v of s.xs) { t = t + v; } return t; }
-  @external @pure nidx(n: N, i: u256): u64 { return n.ns[i]; } }`;
+  const J = `type S = { a: u256; xs: u256[]; };
+type N = { a: u256; ns: u64[]; };
+class C {
+  get idx(s: S, i: u256): External<u256> { return s.xs[i]; }
+  get len(s: S): External<u256> { return s.xs.length; }
+  get echo(s: S): External<u256[]> { return s.xs; }
+  get sum(s: S): External<u256> { let t: u256 = 0n; for (const v of s.xs) { t = t + v; } return t; }
+  get nidx(n: N, i: u256): External<u64> { return n.ns[i]; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {

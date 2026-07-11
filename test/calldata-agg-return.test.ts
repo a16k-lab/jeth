@@ -14,13 +14,13 @@ const sel = (s: string) => functionSelector(s);
 const w = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const call = (sig: string, words: bigint[]) => sel(sig) + words.map(w).join('');
 
-const JETH = `@struct class P { a: u256; b: u8; c: address; }
-@contract class C {
-  @external @pure echo2(a: Arr<Arr<u256, 2>, 2>): Arr<Arr<u256, 2>, 2> { return a; }
-  @external @pure echo3(a: Arr<Arr<Arr<u256, 2>, 2>, 2>): Arr<Arr<Arr<u256, 2>, 2>, 2> { return a; }
-  @external @pure echoPacked(a: Arr<Arr<u8, 4>, 3>): Arr<Arr<u8, 4>, 3> { return a; }
-  @external @pure echoStruct(p: P): P { return p; }
-  @external @pure echoStructArr(a: Arr<P, 2>): Arr<P, 2> { return a; }
+const JETH = `type P = { a: u256; b: u8; c: address; };
+class C {
+  get echo2(a: Arr<Arr<u256, 2>, 2>): External<Arr<Arr<u256, 2>, 2>> { return a; }
+  get echo3(a: Arr<Arr<Arr<u256, 2>, 2>, 2>): External<Arr<Arr<Arr<u256, 2>, 2>, 2>> { return a; }
+  get echoPacked(a: Arr<Arr<u8, 4>, 3>): External<Arr<Arr<u8, 4>, 3>> { return a; }
+  get echoStruct(p: P): External<P> { return p; }
+  get echoStructArr(a: Arr<P, 2>): External<Arr<P, 2>> { return a; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

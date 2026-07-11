@@ -73,13 +73,13 @@ const cdLeaf = (a: number, elems: string[], n: number) => {
 };
 
 describe('R3: direct calldata abi.encode of a nested struct with an inner array member (was JETH900)', () => {
-  const vJ = '@struct class T { xs: u256[]; n: u256 } @struct class S { a: u256; t: T }';
+  const vJ = 'type T = { xs: u256[]; n: u256 }; type S = { a: u256; t: T };';
   const vS = 'struct T { uint256[] xs; uint256 n; } struct S { uint256 a; T t; }';
   const vSig = '((uint256,(uint256[],uint256)))';
 
   it('non-vacuity: abi.encode output decodes to the exact seeded values', async () => {
     const h = await Harness.create();
-    const J = `${vJ} @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`;
+    const J = `${vJ} class C { get f(p: S): External<bytes> { return abi.encode(p); } }`;
     const S = `${vS} contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`;
     const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
@@ -117,29 +117,29 @@ describe('R3: direct calldata abi.encode of a nested struct with an inner array 
     const inputs = [wf, empty, one, huge256, huge64, trunc, oobInnerOff, oobOuterOff];
 
     await diff(
-      `${vJ} @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`,
+      `${vJ} class C { get f(p: S): External<bytes> { return abi.encode(p); } }`,
       `${vS} contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`,
       inputs.map((a) => [`f${vSig}`, a]),
     );
     await diff(
-      `${vJ} @contract class C { @external @pure f(p: S): bytes32 { return keccak256(abi.encode(p)); } }`,
+      `${vJ} class C { get f(p: S): External<bytes32> { return keccak256(abi.encode(p)); } }`,
       `${vS} contract C { function f(S calldata p) external pure returns(bytes32){ return keccak256(abi.encode(p)); } }`,
       inputs.map((a) => [`f${vSig}`, a]),
     );
     await diff(
-      `${vJ} @contract class C { @event Ev(p: S); @external g(p: S): void { emit(Ev(p)); } }`,
+      `${vJ} class C { Ev: event<{ p: S }>; g(p: S): External<void> { emit(Ev(p)); } }`,
       `${vS} contract C { event Ev(S p); function g(S calldata p) external { emit Ev(p); } }`,
       inputs.map((a) => [`g${vSig}`, a]),
     );
     await diff(
-      `${vJ} @contract class C { @error Er(p: S); @external g(p: S): void { revert(Er(p)); } }`,
+      `${vJ} class C { Er: error<{ p: S }>; g(p: S): External<void> { revert(Er(p)); } }`,
       `${vS} contract C { error Er(S p); function g(S calldata p) external { revert Er(p); } }`,
       inputs.map((a) => [`g${vSig}`, a]),
     );
   });
 
   it('leaf-array member string[] / bytes[]: abi.encode + emit byte-identical (wf + malformed)', async () => {
-    const lJ = '@struct class T { ss: string[]; n: u256 } @struct class S { a: u256; t: T }';
+    const lJ = 'type T = { ss: string[]; n: u256 }; type S = { a: u256; t: T };';
     const lS = 'struct T { string[] ss; uint256 n; } struct S { uint256 a; T t; }';
     const lSig = '((uint256,(string[],uint256)))';
     const lInputs = [
@@ -151,34 +151,34 @@ describe('R3: direct calldata abi.encode of a nested struct with an inner array 
       W(0x20) + W(0xbb) + W(0x40) + W(2n ** 200n) + W(0x77), // OOB inner offset -> EMPTY
     ];
     await diff(
-      `${lJ} @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`,
+      `${lJ} class C { get f(p: S): External<bytes> { return abi.encode(p); } }`,
       `${lS} contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`,
       lInputs.map((a) => [`f${lSig}`, a]),
     );
     await diff(
-      `${lJ} @contract class C { @event Ev(p: S); @external g(p: S): void { emit(Ev(p)); } }`,
+      `${lJ} class C { Ev: event<{ p: S }>; g(p: S): External<void> { emit(Ev(p)); } }`,
       `${lS} contract C { event Ev(S p); function g(S calldata p) external { emit Ev(p); } }`,
       lInputs.map((a) => [`g${lSig}`, a]),
     );
 
-    const bJ = '@struct class T { bs: bytes[]; n: u256 } @struct class S { a: u256; t: T }';
+    const bJ = 'type T = { bs: bytes[]; n: u256 }; type S = { a: u256; t: T };';
     const bS = 'struct T { bytes[] bs; uint256 n; } struct S { uint256 a; T t; }';
     const bSig = '((uint256,(bytes[],uint256)))';
     const bInputs = [cdLeaf(5, ['deadbeef', 'cafe'], 7), cdLeaf(5, [], 7), cdLeaf(1, ['00'], 2)];
     await diff(
-      `${bJ} @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`,
+      `${bJ} class C { get f(p: S): External<bytes> { return abi.encode(p); } }`,
       `${bS} contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`,
       bInputs.map((a) => [`f${bSig}`, a]),
     );
     await diff(
-      `${bJ} @contract class C { @error Er(p: S); @external g(p: S): void { revert(Er(p)); } }`,
+      `${bJ} class C { Er: error<{ p: S }>; g(p: S): External<void> { revert(Er(p)); } }`,
       `${bS} contract C { error Er(S p); function g(S calldata p) external { revert Er(p); } }`,
       bInputs.map((a) => [`g${bSig}`, a]),
     );
   });
 
   it('u256[][] leaf-array member: abi.encode + keccak byte-identical', async () => {
-    const aJ = '@struct class T { xs: u256[][]; n: u256 } @struct class S { a: u256; t: T }';
+    const aJ = 'type T = { xs: u256[][]; n: u256 }; type S = { a: u256; t: T };';
     const aS = 'struct T { uint256[][] xs; uint256 n; } struct S { uint256 a; T t; }';
     const aSig = '((uint256,(uint256[][],uint256)))';
     // T{ xs:u256[][]; n }: off_xs=0x40, then [outerlen][off0..offk][ each [len][elems] ]
@@ -196,19 +196,19 @@ describe('R3: direct calldata abi.encode of a nested struct with an inner array 
     };
     const inputs = [cdAA(2, [[1, 2], [3]], 5), cdAA(2, [], 5), cdAA(2, [[], []], 5)];
     await diff(
-      `${aJ} @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`,
+      `${aJ} class C { get f(p: S): External<bytes> { return abi.encode(p); } }`,
       `${aS} contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`,
       inputs.map((a) => [`f${aSig}`, a]),
     );
     await diff(
-      `${aJ} @contract class C { @external @pure f(p: S): bytes32 { return keccak256(abi.encode(p)); } }`,
+      `${aJ} class C { get f(p: S): External<bytes32> { return keccak256(abi.encode(p)); } }`,
       `${aS} contract C { function f(S calldata p) external pure returns(bytes32){ return keccak256(abi.encode(p)); } }`,
       inputs.map((a) => [`f${aSig}`, a]),
     );
   });
 
   it('multi-level nesting S{a; t:T{u:U{u256[]}; k}}: abi.encode + emit byte-identical', async () => {
-    const mJ = '@struct class U { w: u256[] } @struct class T { u: U; k: u256 } @struct class S { a: u256; t: T }';
+    const mJ = 'type U = { w: u256[] }; type T = { u: U; k: u256 }; type S = { a: u256; t: T };';
     const mS = 'struct U { uint256[] w; } struct T { U u; uint256 k; } struct S { uint256 a; T t; }';
     const mSig = '((uint256,((uint256[]),uint256)))';
     // S{a; t}: [a][off_t=0x40]; T{u; k}: [off_u=0x40][k]; U{w}: [off_w=0x20][arr]
@@ -219,19 +219,19 @@ describe('R3: direct calldata abi.encode of a nested struct with an inner array 
     };
     const inputs = [cdU(9, [1, 2, 3], 8), cdU(9, [], 8), cdU(0, [5], 0)];
     await diff(
-      `${mJ} @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`,
+      `${mJ} class C { get f(p: S): External<bytes> { return abi.encode(p); } }`,
       `${mS} contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`,
       inputs.map((a) => [`f${mSig}`, a]),
     );
     await diff(
-      `${mJ} @contract class C { @event Ev(p: S); @external g(p: S): void { emit(Ev(p)); } }`,
+      `${mJ} class C { Ev: event<{ p: S }>; g(p: S): External<void> { emit(Ev(p)); } }`,
       `${mS} contract C { event Ev(S p); function g(S calldata p) external { emit Ev(p); } }`,
       inputs.map((a) => [`g${mSig}`, a]),
     );
   });
 
   it('nested-struct field alongside scalar + dynamic siblings S{a; s:string; t:T{u256[];n}}', async () => {
-    const sJ = '@struct class T { xs: u256[]; n: u256 } @struct class S { a: u256; s: string; t: T }';
+    const sJ = 'type T = { xs: u256[]; n: u256 }; type S = { a: u256; s: string; t: T };';
     const sS = 'struct T { uint256[] xs; uint256 n; } struct S { uint256 a; string s; T t; }';
     const sSig = '((uint256,string,(uint256[],uint256)))';
     // S{a; s; t}: 3 head words [a][off_s][off_t]; off_s=0x60, off_t=0x60+sTail
@@ -245,12 +245,12 @@ describe('R3: direct calldata abi.encode of a nested struct with an inner array 
     };
     const inputs = [cdSib(1, 'hi', [4, 5, 6], 2), cdSib(1, '', [], 2), cdSib(9, 'padded-string-value', [7, 8], 3)];
     await diff(
-      `${sJ} @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`,
+      `${sJ} class C { get f(p: S): External<bytes> { return abi.encode(p); } }`,
       `${sS} contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`,
       inputs.map((a) => [`f${sSig}`, a]),
     );
     await diff(
-      `${sJ} @contract class C { @error Er(p: S); @external g(p: S): void { revert(Er(p)); } }`,
+      `${sJ} class C { Er: error<{ p: S }>; g(p: S): External<void> { revert(Er(p)); } }`,
       `${sS} contract C { error Er(S p); function g(S calldata p) external { revert Er(p); } }`,
       inputs.map((a) => [`g${sSig}`, a]),
     );
@@ -260,13 +260,13 @@ describe('R3: direct calldata abi.encode of a nested struct with an inner array 
     const huge = W(0x20) + W(0xaa) + W(0x40) + W(0x40) + W(0x99) + W(MAX);
     // RE-ENCODE context -> EMPTY revert (returndata "0x")
     await diff(
-      `${vJ} @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`,
+      `${vJ} class C { get f(p: S): External<bytes> { return abi.encode(p); } }`,
       `${vS} contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`,
       [[`f${vSig}`, huge]],
     );
     // BIND context -> Panic 0x41 (returndata 0x4e487b71...0041)
     await diff(
-      `${vJ} @contract class C { @external @pure f(p: S): bytes { let m: S = p; return abi.encode(m); } }`,
+      `${vJ} class C { get f(p: S): External<bytes> { let m: S = p; return abi.encode(m); } }`,
       `${vS} contract C { function f(S calldata p) external pure returns(bytes memory){ S memory m = p; return abi.encode(m); } }`,
       [[`f${vSig}`, huge]],
     );
@@ -275,7 +275,7 @@ describe('R3: direct calldata abi.encode of a nested struct with an inner array 
   it('unregressed: scalar-only and single-leaf nested structs keep the direct calldata fast path', async () => {
     // scalar-only nested struct: no array member -> direct cd path (NOT materialized)
     await diff(
-      '@struct class T { x: u256; y: u256 } @struct class S { a: u256; t: T } @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }',
+      'type T = { x: u256; y: u256 }; type S = { a: u256; t: T }; class C { get f(p: S): External<bytes> { return abi.encode(p); } }',
       'struct T { uint256 x; uint256 y; } struct S { uint256 a; T t; } contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }',
       [['f((uint256,(uint256,uint256)))', W(0xaa) + W(1) + W(2)]],
     );
@@ -287,7 +287,7 @@ describe('R3: direct calldata abi.encode of a nested struct with an inner array 
       return W(0x20) + W(a) + W(0x40) + (W(0x40) + W(n) + sTail);
     };
     await diff(
-      '@struct class T { s: string; n: u256 } @struct class S { a: u256; t: T } @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }',
+      'type T = { s: string; n: u256 }; type S = { a: u256; t: T }; class C { get f(p: S): External<bytes> { return abi.encode(p); } }',
       'struct T { string s; uint256 n; } struct S { uint256 a; T t; } contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }',
       [
         ['f((uint256,(string,uint256)))', leafnest('hi', 9, 7)],

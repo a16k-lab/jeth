@@ -57,8 +57,8 @@ async function eqDeploy(jeth: string, sol: string, ctorArgs: string, slots: bigi
 describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
   it('bare return in the ctor modifier, before and after `_` (deployed level)', async () => {
     await eqDeploy(
-      `@contract class C {
-        @state s: u256;
+      `class C {
+        s: u256;
         @modifier m() { this.s = this.s + 1n; if (this.s > 0n) { return; } _; this.s = this.s + 10n; }
         @m constructor() { this.s = this.s + 100n; }
       }`,
@@ -71,8 +71,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
       [0n],
     );
     await eqDeploy(
-      `@contract class C {
-        @state s: u256;
+      `class C {
+        s: u256;
         @modifier m() { this.s = this.s + 1n; _; if (this.s > 0n) { return; } this.s = this.s + 10n; }
         @m constructor() { this.s = this.s + 100n; }
       }`,
@@ -87,8 +87,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
   });
 
   it('ctor BODY return + post-code modifier: the post code still runs (both branch parities)', async () => {
-    const J = `@contract class C {
-      @state s: u256;
+    const J = `class C {
+      s: u256;
       @modifier m() { this.s = this.s + 1n; _; this.s = this.s + 10n; }
       @m constructor(x: u256) { this.s = this.s + 100n; if (x > 0n) { return; } this.s = this.s + 1000n; }
     }`;
@@ -107,8 +107,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
 
   it('multi-placeholder + conditional-placeholder modifiers with a body return', async () => {
     await eqDeploy(
-      `@contract class C {
-        @state s: u256;
+      `class C {
+        s: u256;
         @modifier m() { _; this.s = this.s + 10n; _; this.s = this.s + 100n; }
         @m constructor(x: u256) { this.s = this.s + 1n; if (x > 0n) { return; } this.s = this.s + 1000n; }
       }`,
@@ -120,8 +120,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
       W(1),
       [0n],
     );
-    const J = `@contract class C {
-      @state s: u256;
+    const J = `class C {
+      s: u256;
       @modifier m(c: bool) { this.s = this.s + 1n; if (c) { _; } this.s = this.s + 10n; }
       @m(x > 0n) constructor(x: u256) { this.s = this.s + 100n; if (x > 1n) { return; } this.s = this.s + 1000n; }
     }`;
@@ -135,12 +135,12 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
   });
 
   it('MISCOMPILE FIX: a return in a BASE ctor body/modifier no longer skips the derived body', async () => {
-    const J = `@abstract class B {
-      @state a: u256;
+    const J = `abstract class B {
+      a: u256;
       constructor(x: u256) { this.a = x; if (x > 5n) { return; } this.a = x * 10n; }
     }
-    @contract class C extends B {
-      @state b: u256;
+    class C extends B {
+      b: u256;
       constructor(x: u256) { super(x); this.b = x + 100n; }
     }`;
     const S = `abstract contract B {
@@ -159,13 +159,13 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
     expect(BigInt(await readSlot(h, a, 1n))).toBe(107n);
     // base MODIFIER bare-return variant (level-wrap outlining)
     await eqDeploy(
-      `@abstract class B {
-        @state a: u256;
+      `abstract class B {
+        a: u256;
         @modifier m() { this.a = this.a + 1n; if (this.a > 0n) { return; } _; this.a = this.a + 10n; }
         @m constructor() { this.a = this.a + 100n; }
       }
-      @contract class C extends B {
-        @state b: u256;
+      class C extends B {
+        b: u256;
         constructor() { super(); this.b = 7n; }
       }`,
       `abstract contract B {
@@ -183,17 +183,17 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
   });
 
   it('three-level chain: base modifier return + base body returns + derived body, both arg parities', async () => {
-    const J = `@abstract class A0 {
-      @state a: u256;
+    const J = `abstract class A0 {
+      a: u256;
       @modifier ma() { this.a = this.a + 1n; if (this.a > 100n) { return; } _; this.a = this.a + 10n; }
       @ma constructor(x: u256) { this.a = this.a + x; if (x > 5n) { return; } this.a = this.a + 1000n; }
     }
-    @abstract class B0 extends A0 {
-      @state b: u256;
+    abstract class B0 extends A0 {
+      b: u256;
       constructor(x: u256) { super(x); this.b = x; if (x > 3n) { return; } this.b = x * 100n; }
     }
-    @contract class C extends B0 {
-      @state c: u256;
+    class C extends B0 {
+      c: u256;
       constructor(x: u256) { super(x); this.c = x + 7n; }
     }`;
     const S = `abstract contract A0 {
@@ -215,8 +215,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
 
   it('COLLISION LIFT: modifier param sharing the ctor param name (incl. an arg referencing it)', async () => {
     await eqDeploy(
-      `@contract class C {
-        @state s: u256;
+      `class C {
+        s: u256;
         @modifier m(x: u256) { this.s = this.s + x; _; this.s = this.s * x; }
         @m(3n) constructor(x: u256) { this.s = this.s + x * 10n; }
       }`,
@@ -229,8 +229,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
       [0n],
     );
     await eqDeploy(
-      `@contract class C {
-        @state s: u256;
+      `class C {
+        s: u256;
         @modifier m(x: u256) { this.s = this.s + x; _; this.s = this.s + x * 1000n; }
         @m(x * 2n) constructor(x: u256) { this.s = this.s + x; }
       }`,
@@ -245,14 +245,14 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
   });
 
   it('immutables THREAD through the outlined units; a modifier may READ but not WRITE them', async () => {
-    const J = `@contract class C {
-      @immutable ia: u256;
-      @immutable ib: u256;
-      @state s: u256;
+    const J = `class C {
+      static ia: u256;
+      static ib: u256;
+      s: u256;
       @modifier m() { _; this.s = this.s + this.ia + 10n; }
       @m constructor(x: u256) { this.ia = x + 1n; if (x > 0n) { return; } this.ia = 999n; this.ib = 3n; }
-      @external @view geta(): u256 { return this.ia; }
-      @external @view getb(): u256 { return this.ib; }
+      get geta(): External<u256> { return this.ia; }
+      get getb(): External<u256> { return this.ib; }
     }`;
     const S = `contract C {
       uint256 immutable ia;
@@ -266,8 +266,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
     await eqDeploy(J, S, W(41), [0n], [['geta()', ''], ['getb()', '']]);
     await eqDeploy(J, S, W(0), [0n], [['geta()', ''], ['getb()', '']]);
     // an immutable WRITE inside ctor-modifier code: BOTH reject (solc "Cannot write to immutable here")
-    const JW = `@contract class C {
-      @immutable ia: u256;
+    const JW = `class C {
+      static ia: u256;
       @modifier m() { this.ia = 5n; _; }
       @m constructor() { }
     }`;
@@ -279,9 +279,9 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
 
   it('outlined body: internal call (creation duplication) + string ctor param + revert parity', async () => {
     await eqDeploy(
-      `@contract class C {
-        @state s: u256;
-        @pure dbl(v: u256): u256 { return v * 2n; }
+      `class C {
+        s: u256;
+        dbl(v: u256): u256 { return v * 2n; }
         @modifier m() { _; this.s = this.s + 10n; }
         @m constructor(x: u256) { this.s = this.dbl(x); if (x > 0n) { return; } this.s = 0n; }
       }`,
@@ -295,8 +295,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
       [0n],
     );
     // revert inside the outlined body: creation reverts on both sides
-    const J = `@contract class C {
-      @state s: u256;
+    const J = `class C {
+      s: u256;
       @modifier m() { _; this.s = this.s + 10n; }
       @m constructor(x: u256) { if (x == 0n) { revert("zero"); } this.s = x; if (x > 5n) { return; } this.s = x * 2n; }
     }`;
@@ -314,8 +314,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
   it('KEPT REJECTS: nested inner-modifier return under a post-code outer; multi-run body param write', () => {
     // solc resumes after the enclosing `_`; the level-exit lowering cannot express that -> JETH323.
     expect(
-      codes(`@contract class C {
-        @state s: u256;
+      codes(`class C {
+        s: u256;
         @modifier a() { this.s = this.s + 1n; _; this.s = this.s + 10n; }
         @modifier b() { this.s = this.s + 100n; if (this.s > 0n) { return; } _; }
         @a @b constructor() { this.s = this.s + 10000n; }
@@ -323,17 +323,17 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
     ).toContain('JETH323');
     // same shape on a FUNCTION (the fixed pre-existing miscompile): clean JETH323, no wrong bytes.
     expect(
-      codes(`@contract class C {
-        @state s: u256;
+      codes(`class C {
+        s: u256;
         @modifier a() { this.s = this.s + 1n; _; this.s = this.s + 10n; }
         @modifier b() { this.s = this.s + 100n; if (this.s > 0n) { return; } _; this.s = this.s + 1000n; }
-        @external @a @b f(): void { this.s = this.s + 10000n; }
+        @a @b f(): External<void> { this.s = this.s + 10000n; }
       }`),
     ).toContain('JETH323');
     // an outlined body re-run by a multi-placeholder modifier that WRITES its own param -> JETH323.
     expect(
-      codes(`@contract class C {
-        @state s: u256;
+      codes(`class C {
+        s: u256;
         @modifier m() { _; this.s = this.s + 10n; _; }
         @m constructor(x: u256) { x = x + 1n; this.s = this.s + x; if (x > 0n) { return; } this.s = 0n; }
       }`),
@@ -342,8 +342,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
 
   it('unregressed: nested modifiers with a bare return confined to the OUTERMOST layer still lift', async () => {
     await eqDeploy(
-      `@contract class C {
-        @state s: u256;
+      `class C {
+        s: u256;
         @modifier a() { this.s = this.s + 1n; if (this.s > 100n) { return; } _; this.s = this.s + 10n; }
         @modifier b() { this.s = this.s + 100n; _; this.s = this.s + 1000n; }
         @a @b constructor(x: u256) { this.s = this.s + x; }
@@ -359,8 +359,8 @@ describe('W5D-1: constructor modifier/body `return;` via outlining', () => {
     );
     // inner bare-return under a PRE-ONLY outer stays accepted (level exit == solc layer exit).
     await eqDeploy(
-      `@contract class C {
-        @state s: u256;
+      `class C {
+        s: u256;
         @modifier a(y: u256) { require(y > 0n, "no"); _; }
         @modifier b() { this.s = this.s + 100n; if (this.s > 0n) { return; } _; this.s = this.s + 1000n; }
         @a(1n) @b constructor(x: u256) { this.s = this.s + x; }

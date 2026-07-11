@@ -66,9 +66,9 @@ async function eqCallsLinked(jeth: string, sol: string, calls: [string, string][
 describe('P1-12: this.f({ value, gas }) payable/gas self-call options', () => {
   it('value forwarded on a payable self-call (observed via msg.value), across a spread', async () => {
     await eqCalls(
-      `@contract class C {
-        @external @payable pay(): u256 { return msg.value; }
-        @external @payable fwd(e: u256): u256 { return this.pay({ value: e }); }
+      `class C {
+        pay(): Payable<u256> { return msg.value; }
+        fwd(e: u256): Payable<u256> { return this.pay({ value: e }); }
       }`,
       `contract C {
         function pay() external payable returns (uint256) { return msg.value; }
@@ -81,9 +81,9 @@ describe('P1-12: this.f({ value, gas }) payable/gas self-call options', () => {
 
   it('value + positional args self-call', async () => {
     await eqCalls(
-      `@contract class C {
-        @external @payable pay(a: u256, b: u256): u256 { return msg.value + a + b; }
-        @external @payable fwd(e: u256): u256 { return this.pay(2n, 5n, { value: e }); }
+      `class C {
+        pay(a: u256, b: u256): Payable<u256> { return msg.value + a + b; }
+        fwd(e: u256): Payable<u256> { return this.pay(2n, 5n, { value: e }); }
       }`,
       `contract C {
         function pay(uint256 a, uint256 b) external payable returns (uint256) { return msg.value + a + b; }
@@ -96,9 +96,9 @@ describe('P1-12: this.f({ value, gas }) payable/gas self-call options', () => {
 
   it('gas option only, and value+gas together', async () => {
     await eqCalls(
-      `@contract class C {
-        @external echo(x: u256): u256 { return x; }
-        @external run(): u256 { return this.echo(11n, { gas: 60000n }); }
+      `class C {
+        get echo(x: u256): External<u256> { return x; }
+        run(): External<u256> { return this.echo(11n, { gas: 60000n }); }
       }`,
       `contract C {
         function echo(uint256 x) external returns (uint256) { return x; }
@@ -107,9 +107,9 @@ describe('P1-12: this.f({ value, gas }) payable/gas self-call options', () => {
       [['run()', '']],
     );
     await eqCalls(
-      `@contract class C {
-        @external @payable pay(): u256 { return msg.value; }
-        @external @payable fwd(e: u256): u256 { return this.pay({ value: e, gas: 90000n }); }
+      `class C {
+        pay(): Payable<u256> { return msg.value; }
+        fwd(e: u256): Payable<u256> { return this.pay({ value: e, gas: 90000n }); }
       }`,
       `contract C {
         function pay() external payable returns (uint256) { return msg.value; }
@@ -122,9 +122,9 @@ describe('P1-12: this.f({ value, gas }) payable/gas self-call options', () => {
 
   it('plain this.f() with no options still works', async () => {
     await eqCalls(
-      `@contract class C {
-        @external @payable pay(): u256 { return msg.value; }
-        @external @payable fwd(): u256 { return this.pay(); }
+      `class C {
+        pay(): Payable<u256> { return msg.value; }
+        fwd(): Payable<u256> { return this.pay(); }
       }`,
       `contract C {
         function pay() external payable returns (uint256) { return msg.value; }
@@ -137,9 +137,9 @@ describe('P1-12: this.f({ value, gas }) payable/gas self-call options', () => {
 
   it('DISAMBIGUATION: this.pay({value:5}) where pay has a param named `value` is a NAMED ARG (msg.value stays 0)', async () => {
     await eqCalls(
-      `@contract class C {
-        @external @payable pay(value: u256): [u256, u256] { return [value, msg.value]; }
-        @external @payable fwd(): [u256, u256] { return this.pay({ value: 5n }); }
+      `class C {
+        pay(value: u256): Payable<[u256, u256]> { return [value, msg.value]; }
+        fwd(): Payable<[u256, u256]> { return this.pay({ value: 5n }); }
       }`,
       `contract C {
         function pay(uint256 value) external payable returns (uint256, uint256) { return (value, msg.value); }
@@ -152,11 +152,11 @@ describe('P1-12: this.f({ value, gas }) payable/gas self-call options', () => {
 
   it('REJECT: value option on a non-payable / internal target, unknown option key, non-int value', () => {
     // value on a non-payable self-call
-    expect(accepts(`@contract class C { @external np(): u256 { return 1n; } @external @payable f(e: u256): u256 { return this.np({ value: e }); } }`)).toBe(false);
+    expect(accepts(`class C { get np(): External<u256> { return 1n; } f(e: u256): Payable<u256> { return this.np({ value: e }); } }`)).toBe(false);
     // options on an internal (non-external) target
-    expect(codesOf(`@contract class C { priv(): u256 { return 1n; } @external @payable f(e: u256): u256 { return this.priv({ value: e }); } }`)).toContain('JETH432');
+    expect(codesOf(`class C { priv(): u256 { return 1n; } f(e: u256): Payable<u256> { return this.priv({ value: e }); } }`)).toContain('JETH432');
     // non-integer value
-    expect(accepts(`@contract class C { @external @payable pay(): u256 { return msg.value; } @external @payable f(t: address): u256 { return this.pay({ value: t }); } }`)).toBe(false);
+    expect(accepts(`class C { pay(): Payable<u256> { return msg.value; } f(t: address): Payable<u256> { return this.pay({ value: t }); } }`)).toBe(false);
   });
 });
 
@@ -166,7 +166,7 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
 
   it('element read a.slice(1)[i] across indices', async () => {
     await eqCalls(
-      `@contract class C { @external @view f(a: u256[], i: u256): u256 { return a.slice(1n)[i]; } }`,
+      `class C { get f(a: u256[], i: u256): External<u256> { return a.slice(1n)[i]; } }`,
       `contract C { function f(uint256[] calldata a, uint256 i) external pure returns (uint256) { return a[1:][i]; } }`,
       [['f(uint256[],uint256)', arr(11, 22, 33, 44, 55) + W(0)], ['f(uint256[],uint256)', arr(11, 22, 33, 44, 55) + W(3)]],
     );
@@ -174,12 +174,12 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
 
   it('bound-local .length across start; direct return of 2-arg slice incl. empty', async () => {
     await eqCalls(
-      `@contract class C { @external @view f(a: u256[], s: u256): u256 { let b: u256[] = a.slice(s); return b.length; } }`,
+      `class C { get f(a: u256[], s: u256): External<u256> { let b: u256[] = a.slice(s); return b.length; } }`,
       `contract C { function f(uint256[] calldata a, uint256 s) external pure returns (uint256) { uint256[] calldata b = a[s:]; return b.length; } }`,
       [['f(uint256[],uint256)', arr(11, 22, 33, 44, 55) + W(0)], ['f(uint256[],uint256)', arr(11, 22, 33, 44, 55) + W(5)]],
     );
     await eqCalls(
-      `@contract class C { @external @view f(a: u256[], s: u256, e: u256): u256[] { return a.slice(s, e); } }`,
+      `class C { get f(a: u256[], s: u256, e: u256): External<u256[]> { return a.slice(s, e); } }`,
       `contract C { function f(uint256[] calldata a, uint256 s, uint256 e) external pure returns (uint256[] memory) { return a[s:e]; } }`,
       [
         ['f(uint256[],uint256,uint256)', arr(11, 22, 33, 44, 55) + W(1) + W(4)],
@@ -191,7 +191,7 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
 
   it('REVERT cases byte-identical: start>end, end>len, and element OOB Panic(0x32)', async () => {
     await eqCalls(
-      `@contract class C { @external @view f(a: u256[], s: u256, e: u256): u256[] { return a.slice(s, e); } }`,
+      `class C { get f(a: u256[], s: u256, e: u256): External<u256[]> { return a.slice(s, e); } }`,
       `contract C { function f(uint256[] calldata a, uint256 s, uint256 e) external pure returns (uint256[] memory) { return a[s:e]; } }`,
       [
         ['f(uint256[],uint256,uint256)', arr(11, 22, 33, 44, 55) + W(3) + W(1)], // start>end
@@ -200,7 +200,7 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
       ],
     );
     await eqCalls(
-      `@contract class C { @external @view f(a: u256[], i: u256): u256 { return a.slice(2n)[i]; } }`,
+      `class C { get f(a: u256[], i: u256): External<u256> { return a.slice(2n)[i]; } }`,
       `contract C { function f(uint256[] calldata a, uint256 i) external pure returns (uint256) { return a[2:][i]; } }`,
       [['f(uint256[],uint256)', arr(11, 22, 33, 44, 55) + W(3)], ['f(uint256[],uint256)', arr(11, 22, 33, 44, 55) + W(2)]],
     );
@@ -209,22 +209,22 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
   it('other value element types with dirty-bit masking (address / bool / uint32 / int64)', async () => {
     const enc = (words: string[]) => W(0x20) + W(words.length) + words.join('');
     await eqCalls(
-      `@contract class C { @external @view f(a: address[]): address[] { let b: address[] = a.slice(0n); return b; } }`,
+      `class C { get f(a: address[]): External<address[]> { let b: address[] = a.slice(0n); return b; } }`,
       `contract C { function f(address[] calldata a) external pure returns (address[] memory) { address[] memory b = a[0:]; return b; } }`,
       [['f(address[])', enc(['ff'.repeat(12) + 'aa'.repeat(20)])]], // dirty upper bits masked
     );
     await eqCalls(
-      `@contract class C { @external @view f(a: bool[]): bool[] { return a.slice(1n); } }`,
+      `class C { get f(a: bool[]): External<bool[]> { return a.slice(1n); } }`,
       `contract C { function f(bool[] calldata a) external pure returns (bool[] memory) { return a[1:]; } }`,
       [['f(bool[])', enc([W(1), W(5), W(255)])]], // dirty bool masked to 1
     );
     await eqCalls(
-      `@contract class C { @external @view f(a: u32[]): u32[] { return a.slice(0n); } }`,
+      `class C { get f(a: u32[]): External<u32[]> { return a.slice(0n); } }`,
       `contract C { function f(uint32[] calldata a) external pure returns (uint32[] memory) { return a[0:]; } }`,
       [['f(uint32[])', enc(['ff'.repeat(28) + '000000ff', W(0xdeadbeef)])]],
     );
     await eqCalls(
-      `@contract class C { @external @view f(a: i64[], i: u256): i64 { return a.slice(1n)[i]; } }`,
+      `class C { get f(a: i64[], i: u256): External<i64> { return a.slice(1n)[i]; } }`,
       `contract C { function f(int64[] calldata a, uint256 i) external pure returns (int64) { return a[1:][i]; } }`,
       [['f(int64[],uint256)', enc([W(7), 'ff'.repeat(32), W(3)]) + W(0)]],
     );
@@ -233,7 +233,7 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
   it('slice-of-slice element read + bound length', async () => {
     const enc = W(0x20) + W(5) + [10, 20, 30, 40, 50].map((x) => W(x)).join('');
     await eqCalls(
-      `@contract class C { @external @view f(a: u256[], i: u256): u256 { return a.slice(1n).slice(1n)[i]; } }`,
+      `class C { get f(a: u256[], i: u256): External<u256> { return a.slice(1n).slice(1n)[i]; } }`,
       `contract C { function f(uint256[] calldata a, uint256 i) external pure returns (uint256) { return a[1:][1:][i]; } }`,
       [['f(uint256[],uint256)', enc + W(0)]],
     );
@@ -241,16 +241,16 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
 
   it('REJECT: .length on an unbound slice expression; struct/dynamic-element/non-calldata slices', () => {
     // solc: "Member length not found ... in uint256[] calldata slice" -> reject the unbound-slice .length
-    expect(accepts(`@contract class C { @external @view f(a: u256[]): u256 { return a.slice(1n).length; } }`)).toBe(false);
+    expect(accepts(`class C { get f(a: u256[]): External<u256> { return a.slice(1n).length; } }`)).toBe(false);
     expect(solcAccepts(`contract C { function f(uint256[] calldata a) external pure returns (uint256) { return a[1:].length; } }`)).toBe(false);
     // static-struct element slice: LIFTED (W5B) - element field-read via the rebased calldata array
     // ref (behavioral coverage in test/calldata-slice-struct-deepcopy.test.ts)
-    expect(accepts(`@struct class P { x: u256; y: u256; } @contract class C { @external @view f(a: P[], i: u256): u256 { return a.slice(1n)[i].y; } }`)).toBe(true);
+    expect(accepts(`type P = { x: u256; y: u256; }; class C { get f(a: P[], i: u256): External<u256> { return a.slice(1n)[i].y; } }`)).toBe(true);
     // dynamic-element slices left rejected - PARITY: solc 0.8.35 itself rejects index range access
     // on arrays with dynamically encoded base types (verified BOTH-REJECT)
-    expect(accepts(`@contract class C { @external @view f(a: bytes[]): bytes { return a.slice(1n)[0n]; } }`)).toBe(false);
+    expect(accepts(`class C { get f(a: bytes[]): External<bytes> { return a.slice(1n)[0n]; } }`)).toBe(false);
     expect(solcAccepts(`contract C { function f(bytes[] calldata a) external pure returns (bytes memory) { return a[1:][0]; } }`)).toBe(false);
-    expect(accepts(`@contract class C { @external @view f(a: u256[][]): u256 { return a.slice(1n)[0n][0n]; } }`)).toBe(false);
+    expect(accepts(`class C { get f(a: u256[][]): External<u256> { return a.slice(1n)[0n][0n]; } }`)).toBe(false);
     expect(solcAccepts(`contract C { function f(uint256[][] calldata a) external pure returns (uint256) { return a[1:][0][0]; } }`)).toBe(false);
   });
 });
@@ -259,15 +259,15 @@ describe('P1-8: calldata value-element array slicing a.slice(start[, end])', () 
 describe('P1-11: tuple destructure of an @external (delegatecall) library call', () => {
   it('2-tuple and 3-tuple value returns across a spread', async () => {
     await eqCallsLinked(
-      `@library class L { @external @pure mm(x: u256): [u256, u256] { return [x + 1n, x + 2n]; } }
-       @contract class C { @external @pure go(x: u256): u256 { let [a, b] = L.mm(x); return a * 100n + b; } }`,
+      `static class L { mm(x: u256): External<[u256, u256]> { return [x + 1n, x + 2n]; } }
+       class C { go(x: u256): External<u256> { let [a, b] = L.mm(x); return a * 100n + b; } }`,
       `library L { function mm(uint256 x) external pure returns (uint256, uint256) { return (x + 1, x + 2); } }
        contract C { function go(uint256 x) external pure returns (uint256) { (uint256 a, uint256 b) = L.mm(x); return a * 100 + b; } }`,
       [['go(uint256)', W(0)], ['go(uint256)', W(5)], ['go(uint256)', W(255)]],
     );
     await eqCallsLinked(
-      `@library class L { @external @pure mm(x: u256): [u256, u256, u256] { return [x, x + 1n, x + 2n]; } }
-       @contract class C { @external @pure go(x: u256): u256 { let [a, b, c] = L.mm(x); return a + b * 10n + c * 100n; } }`,
+      `static class L { mm(x: u256): External<[u256, u256, u256]> { return [x, x + 1n, x + 2n]; } }
+       class C { go(x: u256): External<u256> { let [a, b, c] = L.mm(x); return a + b * 10n + c * 100n; } }`,
       `library L { function mm(uint256 x) external pure returns (uint256, uint256, uint256) { return (x, x + 1, x + 2); } }
        contract C { function go(uint256 x) external pure returns (uint256) { (uint256 a, uint256 b, uint256 c) = L.mm(x); return a + b * 10 + c * 100; } }`,
       [['go(uint256)', W(7)]],
@@ -276,15 +276,15 @@ describe('P1-11: tuple destructure of an @external (delegatecall) library call',
 
   it('mixed-type and dynamic (bytes / u256[]) tuple components', async () => {
     await eqCallsLinked(
-      `@library class L { @external @pure mm(x: u256): [address, bool, u256] { return [address(u160(x)), x > 0n, x * 2n]; } }
-       @contract class C { @external @pure go(x: u256): u256 { let [a, f, n] = L.mm(x); return (f ? n : 0n) + u256(u160(a)); } }`,
+      `static class L { mm(x: u256): External<[address, bool, u256]> { return [address(u160(x)), x > 0n, x * 2n]; } }
+       class C { go(x: u256): External<u256> { let [a, f, n] = L.mm(x); return (f ? n : 0n) + u256(u160(a)); } }`,
       `library L { function mm(uint256 x) external pure returns (address, bool, uint256) { return (address(uint160(x)), x > 0, x * 2); } }
        contract C { function go(uint256 x) external pure returns (uint256) { (address a, bool f, uint256 n) = L.mm(x); return (f ? n : 0) + uint256(uint160(a)); } }`,
       [['go(uint256)', W(0)], ['go(uint256)', W(100)]],
     );
     await eqCallsLinked(
-      `@library class L { @external @pure mm(x: u256): [u256, u256[]] { let xs: u256[] = [x, x + 1n]; return [x, xs]; } }
-       @contract class C { @external @pure go(x: u256): u256 { let [a, xs] = L.mm(x); return a + xs[0n] + xs[1n]; } }`,
+      `static class L { mm(x: u256): External<[u256, u256[]]> { let xs: u256[] = [x, x + 1n]; return [x, xs]; } }
+       class C { go(x: u256): External<u256> { let [a, xs] = L.mm(x); return a + xs[0n] + xs[1n]; } }`,
       `library L { function mm(uint256 x) external pure returns (uint256, uint256[] memory) { uint256[] memory xs = new uint256[](2); xs[0]=x; xs[1]=x+1; return (x, xs); } }
        contract C { function go(uint256 x) external pure returns (uint256) { (uint256 a, uint256[] memory xs) = L.mm(x); return a + xs[0] + xs[1]; } }`,
       [['go(uint256)', W(4)], ['go(uint256)', W(10)]],
@@ -293,8 +293,8 @@ describe('P1-11: tuple destructure of an @external (delegatecall) library call',
 
   it('INTERNAL library tuple destructure still works (regression)', async () => {
     await eqCallsLinked(
-      `@library class L { mm(x: u256): [u256, u256] { return [x, x + 1n]; } }
-       @contract class C { @external @pure go(x: u256): u256 { let [a, b] = L.mm(x); return a * 10n + b; } }`,
+      `static class L { mm(x: u256): [u256, u256] { return [x, x + 1n]; } }
+       class C { get go(x: u256): External<u256> { let [a, b] = L.mm(x); return a * 10n + b; } }`,
       `library L { function mm(uint256 x) internal pure returns (uint256, uint256) { return (x, x + 1); } }
        contract C { function go(uint256 x) external pure returns (uint256) { (uint256 a, uint256 b) = L.mm(x); return a * 10 + b; } }`,
       [['go(uint256)', W(9)]],
@@ -303,12 +303,12 @@ describe('P1-11: tuple destructure of an @external (delegatecall) library call',
   });
 
   it('REJECT: wrong-arity / single-return (dyn-struct component now LIFTED, W5D-3)', () => {
-    expect(accepts(`@library class L { @external @pure mm(x: u256): [u256, u256] { return [x, x]; } } @contract class C { @external @pure go(x: u256): u256 { let [a, b, c] = L.mm(x); return a; } }`)).toBe(false);
-    expect(accepts(`@library class L { @external @pure mm(x: u256): u256 { return x; } } @contract class C { @external @pure go(x: u256): u256 { let [a, b] = L.mm(x); return a; } }`)).toBe(false);
+    expect(accepts(`static class L { mm(x: u256): External<[u256, u256]> { return [x, x]; } } class C { go(x: u256): External<u256> { let [a, b, c] = L.mm(x); return a; } }`)).toBe(false);
+    expect(accepts(`static class L { mm(x: u256): External<u256> { return x; } } class C { get go(x: u256): External<u256> { let [a, b] = L.mm(x); return a; } }`)).toBe(false);
     // W5D-3: a DYNAMIC-struct tuple component decodes through the same abiDecode source the interface
     // tuple path uses (buildDynStructFromMemBlob), so this shape is now accepted (behavior verified
     // byte-identical in library-tuple-dyn-struct.test.ts).
-    expect(accepts(`@struct class D { xs: u256[]; } @library class L { @external @pure mm(): [u256, D] { let xs: u256[] = [1n]; return [1n, D(xs)]; } } @contract class C { @external @pure go(): u256 { let [a, d] = L.mm(); return a; } }`)).toBe(true);
+    expect(accepts(`type D = { xs: u256[]; }; static class L { mm(): External<[u256, D]> { let xs: u256[] = [1n]; return [1n, D(xs)]; } } class C { go(): External<u256> { let [a, d] = L.mm(); return a; } }`)).toBe(true);
   });
 });
 
@@ -316,23 +316,23 @@ describe('P1-11: tuple destructure of an @external (delegatecall) library call',
 describe('P1-4: getter var overriding/implementing a base virtual / interface function', () => {
   it('getter override of a view / nonpayable / concrete base returns the stored value', async () => {
     await eqCalls(
-      `@abstract class A { @virtual @external x(): u256; }
-       @contract class C extends A { @override @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `abstract class A { @virtual x(): External<u256>; }
+       class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract A { function x() external view virtual returns (uint256); }
        contract C is A { uint256 public override x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(0)], ['x()', ''], ['set(uint256)', W(42)], ['x()', '']],
     );
     // nonpayable base (a view getter may override it), and a concrete-body base:
     await eqCalls(
-      `@abstract class A { @virtual @external x(): u256; }
-       @contract class C extends A { @override @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `abstract class A { @virtual x(): External<u256>; }
+       class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract A { function x() external virtual returns (uint256); }
        contract C is A { uint256 public override x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(7)], ['x()', '']],
     );
     await eqCalls(
-      `@abstract class A { @virtual @external x(): u256 { return 111n; } }
-       @contract class C extends A { @override @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `abstract class A { @virtual x(): External<u256> { return 111n; } }
+       class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract A { function x() external view virtual returns (uint256) { return 111; } }
        contract C is A { uint256 public override x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(9)], ['x()', '']],
@@ -341,24 +341,24 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
 
   it('interface-implementing getter, mapping getter, address getter', async () => {
     await eqCalls(
-      `@interface class I { @external x(): u256; }
-       @contract class C extends I { @override @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `interface I { x(): u256; }
+       class C extends I { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `interface I { function x() external view returns (uint256); }
        contract C is I { uint256 public override x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(99)], ['x()', '']],
     );
     const kw = '00'.repeat(12) + '11'.repeat(20);
     await eqCalls(
-      `@abstract class A { @virtual @external m(k: address): u256; }
-       @contract class C extends A { @override @external @state m: mapping<address,u256>; @external set(k: address, v: u256): void { this.m[k] = v; } }`,
+      `abstract class A { @virtual m(k: address): External<u256>; }
+       class C extends A { @override m: Visible<mapping<address,u256>>; set(k: address, v: u256): External<void> { this.m[k] = v; } }`,
       `abstract contract A { function m(address) external view virtual returns (uint256); }
        contract C is A { mapping(address=>uint256) public override m; function set(address k, uint256 v) external { m[k] = v; } }`,
       [['set(address,uint256)', kw + W(5)], ['m(address)', kw]],
     );
     const aw = '00'.repeat(12) + 'ab'.repeat(20);
     await eqCalls(
-      `@abstract class A { @virtual @external o(): address; }
-       @contract class C extends A { @override @external @state o: address; @external set(v: address): void { this.o = v; } }`,
+      `abstract class A { @virtual o(): External<address>; }
+       class C extends A { @override o: Visible<address>; set(v: address): External<void> { this.o = v; } }`,
       `abstract contract A { function o() external view virtual returns (address); }
        contract C is A { address public override o; function set(address v) external { o = v; } }`,
       [['set(address)', aw], ['o()', '']],
@@ -367,8 +367,8 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
 
   it('getter override coexisting with a same-name overload dispatches correctly', async () => {
     await eqCalls(
-      `@abstract class A { @virtual @external x(): u256; }
-       @contract class C extends A { @override @external @state x: u256; @external @view x2(a: u256): u256 { return a * 3n; } @external set(v: u256): void { this.x = v; } }`,
+      `abstract class A { @virtual x(): External<u256>; }
+       class C extends A { @override x: Visible<u256>; get x2(a: u256): External<u256> { return a * 3n; } set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract A { function x() external view virtual returns (uint256); }
        contract C is A { uint256 public override x; function x2(uint256 a) external view returns (uint256) { return a * 3; } function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(50)], ['x()', ''], ['x2(uint256)', W(7)]],
@@ -379,19 +379,19 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
     // base pure -> getter (view) loosens
     expect(accepts(`@abstract class A { @virtual @external @pure x(): u256; } @contract class C extends A { @override @external @state x: u256; }`)).toBe(false);
     // base payable
-    expect(accepts(`@abstract class A { @virtual @external @payable x(): u256; } @contract class C extends A { @override @external @state x: u256; }`)).toBe(false);
+    expect(accepts(`abstract class A { @virtual x(): Payable<u256>; } class C extends A { @override x: Visible<u256>; }`)).toBe(false);
     // return type mismatch (u128 base, u256 getter)
-    expect(accepts(`@abstract class A { @virtual @external x(): u128; } @contract class C extends A { @override @external @state x: u256; }`)).toBe(false);
+    expect(accepts(`abstract class A { @virtual get x(): External<u128>; } class C extends A { @override x: Visible<u256>; }`)).toBe(false);
     // return type mismatch (u256 base, address getter)
-    expect(accepts(`@abstract class A { @virtual @external x(): u256; } @contract class C extends A { @override @external @state x: address; }`)).toBe(false);
+    expect(accepts(`abstract class A { @virtual get x(): External<u256>; } class C extends A { @override x: Visible<address>; }`)).toBe(false);
     // param mismatch (base has a param, plain-var getter has none)
-    expect(accepts(`@abstract class A { @virtual @external x(a: u256): u256; } @contract class C extends A { @override @external @state x: u256; }`)).toBe(false);
+    expect(accepts(`abstract class A { @virtual get x(a: u256): External<u256>; } class C extends A { @override x: Visible<u256>; }`)).toBe(false);
     // base not virtual
-    expect(accepts(`@abstract class A { @external x(): u256 { return 1n; } } @contract class C extends A { @override @external @state x: u256; }`)).toBe(false);
+    expect(accepts(`abstract class A { get x(): External<u256> { return 1n; } } class C extends A { @override x: Visible<u256>; }`)).toBe(false);
     // @override but no base function of that name
-    expect(codesOf(`@contract class C { @override @external @state x: u256; }`)).toContain('JETH433');
+    expect(codesOf(`class C { @override x: Visible<u256>; }`)).toContain('JETH433');
     // mapping key-type mismatch
-    expect(accepts(`@abstract class A { @virtual @external m(k: u256): u256; } @contract class C extends A { @override @external @state m: mapping<address,u256>; }`)).toBe(false);
+    expect(accepts(`abstract class A { @virtual get m(k: u256): External<u256>; } class C extends A { @override m: Visible<mapping<address,u256>>; }`)).toBe(false);
   });
 
   // B-getter-override-multi-interface: a getter var implementing a method declared by 2+ directly/
@@ -402,16 +402,16 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
   it('multi-interface getter: complete @override(list) accepted, byte-identical read-back', async () => {
     // two interfaces, complete list -> accepted; seed and read back (non-vacuous)
     await eqCalls(
-      `@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; }
-       @contract class C extends I1, I2 { @override(I1, I2) @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `interface I1 { x(): u256; } interface I2 { x(): u256; }
+       class C extends I1, I2 { @override(I1, I2) x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); }
        contract C is I1, I2 { uint256 public override(I1, I2) x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(0xc0ffee)], ['x()', '']],
     );
     // three interfaces, complete list
     await eqCalls(
-      `@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; } @interface class I3 { @external x(): u256; }
-       @contract class C extends I1, I2, I3 { @override(I1, I2, I3) @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `interface I1 { x(): u256; } interface I2 { x(): u256; } interface I3 { x(): u256; }
+       class C extends I1, I2, I3 { @override(I1, I2, I3) x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); } interface I3 { function x() external view returns (uint256); }
        contract C is I1, I2, I3 { uint256 public override(I1, I2, I3) x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(0xbeef)], ['x()', '']],
@@ -419,24 +419,24 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
     // mapping getter, complete list
     const kw = W(7);
     await eqCalls(
-      `@interface class I1 { @external m(k: u256): u256; } @interface class I2 { @external m(k: u256): u256; }
-       @contract class C extends I1, I2 { @override(I1, I2) @external @state m: mapping<u256,u256>; @external sm(k: u256, v: u256): void { this.m[k] = v; } }`,
+      `interface I1 { m(k: u256): u256; } interface I2 { m(k: u256): u256; }
+       class C extends I1, I2 { @override(I1, I2) m: Visible<mapping<u256,u256>>; sm(k: u256, v: u256): External<void> { this.m[k] = v; } }`,
       `interface I1 { function m(uint256) external view returns (uint256); } interface I2 { function m(uint256) external view returns (uint256); }
        contract C is I1, I2 { mapping(uint256=>uint256) public override(I1, I2) m; function sm(uint256 k, uint256 v) external { m[k] = v; } }`,
       [['sm(uint256,uint256)', kw + W(0xdead)], ['m(uint256)', kw]],
     );
     // array getter, complete list
     await eqCalls(
-      `@interface class I1 { @external a(i: u256): u256; } @interface class I2 { @external a(i: u256): u256; }
-       @contract class C extends I1, I2 { @override(I1, I2) @external @state a: u256[]; @external pa(v: u256): void { this.a.push(v); } }`,
+      `interface I1 { a(i: u256): u256; } interface I2 { a(i: u256): u256; }
+       class C extends I1, I2 { @override(I1, I2) a: Visible<u256[]>; pa(v: u256): External<void> { this.a.push(v); } }`,
       `interface I1 { function a(uint256) external view returns (uint256); } interface I2 { function a(uint256) external view returns (uint256); }
        contract C is I1, I2 { uint256[] public override(I1, I2) a; function pa(uint256 v) external { a.push(v); } }`,
       [['pa(uint256)', W(0x1111)], ['pa(uint256)', W(0x2222)], ['a(uint256)', W(1)]],
     );
     // mixed base virtual + interface, complete @override(B, I1)
     await eqCalls(
-      `@abstract class B { @virtual @external x(): u256 { return 1n; } } @interface class I1 { @external x(): u256; }
-       @contract class C extends B, I1 { @override(B, I1) @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
+      `abstract class B { @virtual x(): External<u256> { return 1n; } } interface I1 { x(): u256; }
+       class C extends B, I1 { @override(B, I1) x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract B { function x() external view virtual returns (uint256) { return 1; } } interface I1 { function x() external view returns (uint256); }
        contract C is B, I1 { uint256 public override(B, I1) x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(0x42)], ['x()', '']],
@@ -455,28 +455,28 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
     // Each JETH-rejected case must be a case solc ALSO rejects (parity, no over-rejection).
     const REJ: [string, string][] = [
       // bare @override over two interfaces -> needs override(I1, I2)
-      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; }
-        @contract class C extends I1, I2 { @override @external @state x: u256; }`,
+      [`interface I1 { x(): u256; } interface I2 { x(): u256; }
+        class C extends I1, I2 { @override x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); }
         contract C is I1, I2 { uint256 public override x; }`],
       // override(I1) names only one of two heads
-      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; }
-        @contract class C extends I1, I2 { @override(I1) @external @state x: u256; }`,
+      [`interface I1 { x(): u256; } interface I2 { x(): u256; }
+        class C extends I1, I2 { @override(I1) x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); }
         contract C is I1, I2 { uint256 public override(I1) x; }`],
       // three interfaces, override(I1, I2) missing I3
-      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; } @interface class I3 { @external x(): u256; }
-        @contract class C extends I1, I2, I3 { @override(I1, I2) @external @state x: u256; }`,
+      [`interface I1 { x(): u256; } interface I2 { x(): u256; } interface I3 { x(): u256; }
+        class C extends I1, I2, I3 { @override(I1, I2) x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); } interface I3 { function x() external view returns (uint256); }
         contract C is I1, I2, I3 { uint256 public override(I1, I2) x; }`],
       // duplicate in list
-      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(): u256; }
-        @contract class C extends I1, I2 { @override(I1, I1) @external @state x: u256; }`,
+      [`interface I1 { x(): u256; } interface I2 { x(): u256; }
+        class C extends I1, I2 { @override(I1, I1) x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external view returns (uint256); }
         contract C is I1, I2 { uint256 public override(I1, I1) x; }`],
       // I2 declares a DIFFERENT method y (not x): I2 is not a valid member of x's override list
-      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external y(): u256; }
-        @contract class C extends I1, I2 { @override(I1, I2) @external @state x: u256; @override @external y(): u256 { return 0n; } }`,
+      [`interface I1 { x(): u256; } interface I2 { y(): u256; }
+        class C extends I1, I2 { @override(I1, I2) x: Visible<u256>; @override get y(): External<u256> { return 0n; } }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function y() external view returns (uint256); }
         contract C is I1, I2 { uint256 public override(I1, I2) x; function y() external view override returns (uint256) { return 0; } }`],
       // I2 declares x with a DIFFERENT signature (x(uint256)): not a member
@@ -485,23 +485,23 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
        `interface I1 { function x() external view returns (uint256); } interface I2 { function x(uint256) external view returns (uint256); }
         abstract contract C is I1, I2 { uint256 public override(I1, I2) x; }`],
       // view getter cannot override a @pure interface method (I2 pure), fully listed
-      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external @pure x(): u256; }
-        @contract class C extends I1, I2 { @override(I1, I2) @external @state x: u256; }`,
+      [`interface I1 { x(): u256; } interface I2 { x(): Pure<u256>; }
+        class C extends I1, I2 { @override(I1, I2) x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external pure returns (uint256); }
         contract C is I1, I2 { uint256 public override(I1, I2) x; }`],
       // view getter cannot override a @pure interface method, bare form
-      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external @pure x(): u256; }
-        @contract class C extends I1, I2 { @override @external @state x: u256; }`,
+      [`interface I1 { x(): u256; } interface I2 { x(): Pure<u256>; }
+        class C extends I1, I2 { @override x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function x() external pure returns (uint256); }
         contract C is I1, I2 { uint256 public override x; }`],
       // mapping getter, bare over two interfaces
-      [`@interface class I1 { @external m(k: u256): u256; } @interface class I2 { @external m(k: u256): u256; }
-        @contract class C extends I1, I2 { @override @external @state m: mapping<u256,u256>; }`,
+      [`interface I1 { m(k: u256): u256; } interface I2 { m(k: u256): u256; }
+        class C extends I1, I2 { @override m: Visible<mapping<u256,u256>>; }`,
        `interface I1 { function m(uint256) external view returns (uint256); } interface I2 { function m(uint256) external view returns (uint256); }
         contract C is I1, I2 { mapping(uint256=>uint256) public override m; }`],
       // array getter, bare over two interfaces
-      [`@interface class I1 { @external a(i: u256): u256; } @interface class I2 { @external a(i: u256): u256; }
-        @contract class C extends I1, I2 { @override @external @state a: u256[]; }`,
+      [`interface I1 { a(i: u256): u256; } interface I2 { a(i: u256): u256; }
+        class C extends I1, I2 { @override a: Visible<u256[]>; }`,
        `interface I1 { function a(uint256) external view returns (uint256); } interface I2 { function a(uint256) external view returns (uint256); }
         contract C is I1, I2 { uint256[] public override a; }`],
       // diamond: naming the (non-declaring) direct bases I2, I3 is an invalid override list
@@ -510,8 +510,8 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
        `interface I1 { function x() external view returns (uint256); } interface I2 is I1 {} interface I3 is I1 {}
         contract C is I2, I3 { uint256 public override(I2, I3) x; }`],
       // mixed base virtual + interface, bare over both -> needs override(B, I1)
-      [`@abstract class B { @virtual @external x(): u256 { return 1n; } } @interface class I1 { @external x(): u256; }
-        @contract class C extends B, I1 { @override @external @state x: u256; }`,
+      [`abstract class B { @virtual get x(): External<u256> { return 1n; } } interface I1 { x(): u256; }
+        class C extends B, I1 { @override x: Visible<u256>; }`,
        `abstract contract B { function x() external view virtual returns (uint256) { return 1; } } interface I1 { function x() external view returns (uint256); }
         contract C is B, I1 { uint256 public override x; }`],
     ];

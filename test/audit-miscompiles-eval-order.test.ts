@@ -29,7 +29,7 @@ const logsOf = (r: { logs?: { topics: string[]; data: string }[] }) =>
 describe('audit miscompiles: require eager-eval + emit eval-order vs solc', () => {
   it('M0: require(true, sideEffectingMsg()) evaluates the message eagerly (state persists)', async () => {
     const { hj, hs, aj, as } = await pair(
-      "@contract class C { @state m: u256; ev(): string { this.m = 42n; return 'x'; } @external go(): u256 { require(true, this.ev()); return 1n; } @external getM(): u256 { return this.m; } }",
+      "class C { m: u256; ev(): string { this.m = 42n; return 'x'; } go(): External<u256> { require(true, this.ev()); return 1n; } get getM(): External<u256> { return this.m; } }",
       'contract C { uint256 m; function ev() internal returns(string memory){ m=42; return "x"; } function go() external returns(uint256){ require(true, ev()); return 1; } function getM() external view returns(uint256){ return m; } }',
     );
     const gj = await hj.call(aj, sel('go()'));
@@ -41,7 +41,7 @@ describe('audit miscompiles: require eager-eval + emit eval-order vs solc', () =
 
   it('M0: require(false, ...) still reverts with the message and runs its side effects', async () => {
     const { hj, hs, aj, as } = await pair(
-      "@contract class C { @state c: u256; tag(): string { this.c = this.c + 1n; return 'E'; } @external go(ok: bool): void { require(ok, string.concat(this.tag(), '!')); } @external rc(): u256 { return this.c; } }",
+      "class C { c: u256; tag(): string { this.c = this.c + 1n; return 'E'; } go(ok: bool): External<void> { require(ok, string.concat(this.tag(), '!')); } get rc(): External<u256> { return this.c; } }",
       'contract C { uint256 c; function tag() internal returns(string memory){ c=c+1; return "E"; } function go(bool ok) external { require(ok, string.concat(tag(), "!")); } function rc() external view returns(uint256){ return c; } }',
     );
     const W = (n: bigint) => n.toString(16).padStart(64, '0');
@@ -56,7 +56,7 @@ describe('audit miscompiles: require eager-eval + emit eval-order vs solc', () =
 
   it('M1: emit Ev(a, indexed b) with side-effecting args matches solc topic/data', async () => {
     const { hj, hs, aj, as } = await pair(
-      '@contract class C { @state s: u256; @event Ev(a: u256, @indexed b: u256); @external go(): void { this.s = 0n; emit(Ev((this.s = this.s*10n+1n), (this.s = this.s*10n+2n))); } }',
+      'class C { s: u256; Ev: event<{ a: u256; b: indexed<u256> }>; go(): External<void> { this.s = 0n; emit(Ev((this.s = this.s*10n+1n), (this.s = this.s*10n+2n))); } }',
       'contract C { uint256 s; event Ev(uint256 a, uint256 indexed b); function go() external { s = 0; emit Ev((s = s*10+1), (s = s*10+2)); } }',
     );
     expect(logsOf(await hj.call(aj, sel('go()')))).toBe(logsOf(await hs.call(as, sel('go()'))));
@@ -64,7 +64,7 @@ describe('audit miscompiles: require eager-eval + emit eval-order vs solc', () =
 
   it('M1: interleaved (a, @b, c, @d) side-effecting args - indexed reverse then non-indexed forward', async () => {
     const { hj, hs, aj, as } = await pair(
-      '@contract class C { @state s: u256; @event Ev(a: u256, @indexed b: u256, c: u256, @indexed d: u256); @external go(): void { this.s = 0n; emit(Ev((this.s=this.s*10n+1n),(this.s=this.s*10n+2n),(this.s=this.s*10n+3n),(this.s=this.s*10n+4n))); } }',
+      'class C { s: u256; Ev: event<{ a: u256; b: indexed<u256>; c: u256; d: indexed<u256> }>; go(): External<void> { this.s = 0n; emit(Ev((this.s=this.s*10n+1n),(this.s=this.s*10n+2n),(this.s=this.s*10n+3n),(this.s=this.s*10n+4n))); } }',
       'contract C { uint256 s; event Ev(uint256 a, uint256 indexed b, uint256 c, uint256 indexed d); function go() external { s = 0; emit Ev((s=s*10+1),(s=s*10+2),(s=s*10+3),(s=s*10+4)); } }',
     );
     expect(logsOf(await hj.call(aj, sel('go()')))).toBe(logsOf(await hs.call(as, sel('go()'))));
@@ -73,7 +73,7 @@ describe('audit miscompiles: require eager-eval + emit eval-order vs solc', () =
   it('M1 regression: ordinary non-side-effecting events stay byte-identical', async () => {
     const W = (n: bigint) => n.toString(16).padStart(64, '0');
     const { hj, hs, aj, as } = await pair(
-      '@contract class C { @event T(@indexed f: address, @indexed t: address, v: u256); @external go(a: address, b: address, v: u256): void { emit(T(a, b, v)); } }',
+      'class C { T: event<{ f: indexed<address>; t: indexed<address>; v: u256 }>; go(a: address, b: address, v: u256): External<void> { emit(T(a, b, v)); } }',
       'contract C { event T(address indexed f, address indexed t, uint256 v); function go(address a, address b, uint256 v) external { emit T(a, b, v); } }',
     );
     const args = W(0x1111n) + W(0x2222n) + W(100n);

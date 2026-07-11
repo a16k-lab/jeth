@@ -51,11 +51,11 @@ describe('comparison of an integer variable to an out-of-range literal (#7)', ()
 
   describe('runtime byte-identical to solc', () => {
     let jeth: Harness, sol: Harness, aj: Address, as: Address;
-    const J = `@contract class C {
-      @external @pure eq(a: u8): bool { return a == 256n; }
-      @external @pure lt(a: u8): bool { return a < 256n; }
-      @external @pure ne(a: u8): bool { return a != 300n; }
-      @external @pure norm(a: u8, b: u8): bool { return a < b; } }`;
+    const J = `class C {
+      get eq(a: u8): External<bool> { return a == 256n; }
+      get lt(a: u8): External<bool> { return a < 256n; }
+      get ne(a: u8): External<bool> { return a != 300n; }
+      get norm(a: u8, b: u8): External<bool> { return a < b; } }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {

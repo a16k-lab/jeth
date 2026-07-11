@@ -13,22 +13,22 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const kc = (p: bigint) => BigInt('0x' + toHex(keccak(hexToBytes(('0x' + pad(p)) as `0x${string}`)))); // keccak256(pad32(p))
 
-const JETH = `@contract class C {
-  @state a: Arr<u256[], 2>;     // uint256[][2]: slots 0,1 (each an inner dyn-array length slot)
-  @state b: Arr<u256, 2>[];     // uint256[2][]: slot 2 length; element i = uint256[2] at keccak(2)+i*2
-  @state pk: Arr<u8, 4>[];      // uint8[4][]: packed fixed element (1 slot each)
-  @external pushA(i: u256, v: u256): void { this.a[i].push(v); }
-  @external setA(i: u256, j: u256, v: u256): void { this.a[i][j] = v; }
-  @external @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
-  @external @view lenA(i: u256): u256 { return this.a[i].length; }
-  @external pushB(): void { this.b.push(); }
-  @external popB(): void { this.b.pop(); }
-  @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
-  @external @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
-  @external @view lenB(): u256 { return this.b.length; }
-  @external pushPk(): void { this.pk.push(); }
-  @external setPk(i: u256, j: u256, v: u8): void { this.pk[i][j] = v; }
-  @external @view getPk(i: u256, j: u256): u8 { return this.pk[i][j]; }
+const JETH = `class C {
+  a: Arr<u256[], 2>;     // uint256[][2]: slots 0,1 (each an inner dyn-array length slot)
+  b: Arr<u256, 2>[];     // uint256[2][]: slot 2 length; element i = uint256[2] at keccak(2)+i*2
+  pk: Arr<u8, 4>[];      // uint8[4][]: packed fixed element (1 slot each)
+  pushA(i: u256, v: u256): External<void> { this.a[i].push(v); }
+  setA(i: u256, j: u256, v: u256): External<void> { this.a[i][j] = v; }
+  get getA(i: u256, j: u256): External<u256> { return this.a[i][j]; }
+  get lenA(i: u256): External<u256> { return this.a[i].length; }
+  pushB(): External<void> { this.b.push(); }
+  popB(): External<void> { this.b.pop(); }
+  setB(i: u256, j: u256, v: u256): External<void> { this.b[i][j] = v; }
+  get getB(i: u256, j: u256): External<u256> { return this.b[i][j]; }
+  get lenB(): External<u256> { return this.b.length; }
+  pushPk(): External<void> { this.pk.push(); }
+  setPk(i: u256, j: u256, v: u8): External<void> { this.pk[i][j] = v; }
+  get getPk(i: u256, j: u256): External<u8> { return this.pk[i][j]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

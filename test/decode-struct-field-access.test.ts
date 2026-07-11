@@ -42,7 +42,7 @@ const codes = (src: string): string[] => {
 describe('Edge E: field access on abi.decode / external-library struct results - byte-identical to solc 0.8.35', () => {
   it('abi.decode(b, P).x and .y (value fields, both offsets)', async () => {
     await eqCalls(
-      '@struct class P { x: u256; y: u256 } @contract class C { @external @pure gx(b: bytes): u256 { return abi.decode(b, P).x; } @external @pure gy(b: bytes): u256 { return abi.decode(b, P).y; } }',
+      'type P = { x: u256; y: u256 }; class C { get gx(b: bytes): External<u256> { return abi.decode(b, P).x; } get gy(b: bytes): External<u256> { return abi.decode(b, P).y; } }',
       'contract C { struct P { uint256 x; uint256 y; } function gx(bytes calldata b) external pure returns(uint256){ return abi.decode(b, (P)).x; } function gy(bytes calldata b) external pure returns(uint256){ return abi.decode(b, (P)).y; } }',
       [['gx(bytes)', W(0x20n) + W(0x40n) + W(7n) + W(8n)], ['gy(bytes)', W(0x20n) + W(0x40n) + W(7n) + W(8n)]],
     );
@@ -50,7 +50,7 @@ describe('Edge E: field access on abi.decode / external-library struct results -
 
   it('abi.decode(b, P).field with packed members (u8/u128/u256)', async () => {
     await eqCalls(
-      '@struct class P { a: u8; b: u128; c: u256 } @contract class C { @external @pure ga(b: bytes): u8 { return abi.decode(b, P).a; } @external @pure gb(b: bytes): u128 { return abi.decode(b, P).b; } @external @pure gc(b: bytes): u256 { return abi.decode(b, P).c; } }',
+      'type P = { a: u8; b: u128; c: u256 }; class C { get ga(b: bytes): External<u8> { return abi.decode(b, P).a; } get gb(b: bytes): External<u128> { return abi.decode(b, P).b; } get gc(b: bytes): External<u256> { return abi.decode(b, P).c; } }',
       'contract C { struct P { uint8 a; uint128 b; uint256 c; } function ga(bytes calldata b) external pure returns(uint8){ return abi.decode(b, (P)).a; } function gb(bytes calldata b) external pure returns(uint128){ return abi.decode(b, (P)).b; } function gc(bytes calldata b) external pure returns(uint256){ return abi.decode(b, (P)).c; } }',
       [
         ['ga(bytes)', W(0x20n) + W(0x60n) + W(3n) + W(4n) + W(5n)],
@@ -62,7 +62,7 @@ describe('Edge E: field access on abi.decode / external-library struct results -
 
   it('malformed abi.decode input reverts identically', async () => {
     await eqCalls(
-      '@struct class P { x: u256; y: u256 } @contract class C { @external @pure go(b: bytes): u256 { return abi.decode(b, P).x; } }',
+      'type P = { x: u256; y: u256 }; class C { get go(b: bytes): External<u256> { return abi.decode(b, P).x; } }',
       'contract C { struct P { uint256 x; uint256 y; } function go(bytes calldata b) external pure returns(uint256){ return abi.decode(b, (P)).x; } }',
       [
         ['go(bytes)', W(0x20n) + W(0x40n) + W(7n) + W(8n)], // well-formed
@@ -73,7 +73,7 @@ describe('Edge E: field access on abi.decode / external-library struct results -
   });
 
   it('L.mk(a).x and .y on an @external (delegatecall) library struct result', async () => {
-    const jeth = '@struct class P { x: u256; y: u256 } @library class L { @external @pure mk(a: u256): P { return P(a, a + 1n); } } @contract class C { @external @pure gx(a: u256): u256 { return L.mk(a).x; } @external @pure gy(a: u256): u256 { return L.mk(a).y; } }';
+    const jeth = 'type P = { x: u256; y: u256 }; static class L { mk(a: u256): External<P> { return P(a, a + 1n); } } class C { gx(a: u256): External<u256> { return L.mk(a).x; } gy(a: u256): External<u256> { return L.mk(a).y; } }';
     const sol = `${SPDX}\nstruct P { uint256 x; uint256 y; }\nlibrary L { function mk(uint256 a) external pure returns(P memory){ return P(a, a+1); } }\ncontract C { function gx(uint256 a) external pure returns(uint256){ return L.mk(a).x; } function gy(uint256 a) external pure returns(uint256){ return L.mk(a).y; } }`;
     const jb = compile(jeth, { fileName: 'C.jeth' });
     const sb = compileSolidityLinked(sol, 'C', ['L']);
@@ -94,7 +94,7 @@ describe('Edge E: field access on abi.decode / external-library struct results -
   it('a non-value / dynamic-struct field access stays a sound clean reject (no crash, no over-acceptance)', () => {
     // string field of a (dynamic) decoded struct, and a value field of a dynamic decoded struct: both
     // reject cleanly (the dynamic-struct field-of-call-result case is deferred, like the internal-call form).
-    expect(codes('@struct class P{x:u256;s:string} @contract class C { @external @pure go(b: bytes): string { return abi.decode(b,P).s; } }').length).toBeGreaterThan(0);
-    expect(codes('@struct class P{x:u256;y:u256} @contract class C { @external @pure go(b: bytes): u256 { return abi.decode(b,P).nope; } }')).toContain('JETH210');
+    expect(codes('type P = {x:u256;s:string}; class C { get go(b: bytes): External<string> { return abi.decode(b,P).s; } }').length).toBeGreaterThan(0);
+    expect(codes('type P = {x:u256;y:u256}; class C { get go(b: bytes): External<u256> { return abi.decode(b,P).nope; } }')).toContain('JETH210');
   });
 });

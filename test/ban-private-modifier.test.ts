@@ -16,14 +16,14 @@ const codes = (src: string): string[] => {
 
 describe('ban the bare TS `private` access modifier (JETH445)', () => {
   it('a `private` method is a loud reject, not a silent no-op', () => {
-    expect(codes(`@contract class C { private f(): u256 { return 1n; } }`)).toContain('JETH445');
+    expect(codes(`class C { private f(): u256 { return 1n; } }`)).toContain('JETH445');
   });
   it('a `private` field is rejected (never silently accepted)', () => {
-    expect(codes(`@contract class C { private y: u256; }`).length).toBeGreaterThan(0);
+    expect(codes(`class C { private y: u256; }`).length).toBeGreaterThan(0);
   });
   it('plain internal / @external / @state members are unaffected', () => {
-    expect(codes(`@contract class C { f(): u256 { return 1n; } @external @pure g(): u256 { return this.f(); } }`)).toEqual([]);
-    expect(codes(`@contract class C { @external @pure f(): u256 { return 1n; } }`)).toEqual([]);
-    expect(codes(`@contract class C { @state y: u256; @external @view g(): u256 { return this.y; } }`)).toEqual([]);
+    expect(codes(`class C { f(): u256 { return 1n; } get g(): External<u256> { return this.f(); } }`)).toEqual([]);
+    expect(codes(`class C { get f(): External<u256> { return 1n; } }`)).toEqual([]);
+    expect(codes(`class C { y: u256; get g(): External<u256> { return this.y; } }`)).toEqual([]);
   });
 });

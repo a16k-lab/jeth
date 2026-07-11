@@ -92,14 +92,14 @@ const codes = (src: string): string[] => {
 describe('calldata leaf-array-field struct BIND to a memory local - byte-identical to solc 0.8.35', () => {
   const P = '(uint256,string[])'; // canonical tuple of S { uint256 a; string[] tags }
   const J = `
-@struct class S { a: u256; tags: string[] }
-@contract class C {
-  @external @pure fa(p: S): u256 { let m: S = p; return m.a; }
-  @external @pure flen(p: S): u256 { let m: S = p; return m.tags.length; }
-  @external @pure fget(p: S, i: u256): string { let m: S = p; return m.tags[i]; }
-  @external @pure fenc(p: S): bytes { let m: S = p; return abi.encode(m); }
-  @external @pure fwhole(p: S): S { let m: S = p; return m; }
-  @external @pure ffield(p: S): string[] { let m: S = p; return m.tags; }
+type S = { a: u256; tags: string[] };
+class C {
+  get fa(p: S): External<u256> { let m: S = p; return m.a; }
+  get flen(p: S): External<u256> { let m: S = p; return m.tags.length; }
+  get fget(p: S, i: u256): External<string> { let m: S = p; return m.tags[i]; }
+  get fenc(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
+  get fwhole(p: S): External<S> { let m: S = p; return m; }
+  get ffield(p: S): External<string[]> { let m: S = p; return m.tags; }
 }`;
   const S = `
 struct S { uint256 a; string[] tags; }
@@ -171,11 +171,11 @@ contract C {
   it('bytes[] leaf', async () => {
     const Pb = '(uint256,bytes[])';
     const Jb = `
-@struct class S { a: u256; blobs: bytes[] }
-@contract class C {
-  @external @pure f(p: S): bytes { let m: S = p; return m.blobs[0n]; }
-  @external @pure fe(p: S): bytes { let m: S = p; return abi.encode(m); }
-  @external @pure fl(p: S): u256 { let m: S = p; return m.blobs.length; }
+type S = { a: u256; blobs: bytes[] };
+class C {
+  get f(p: S): External<bytes> { let m: S = p; return m.blobs[0n]; }
+  get fe(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
+  get fl(p: S): External<u256> { let m: S = p; return m.blobs.length; }
 }`;
     const Sb = `
 struct S { uint256 a; bytes[] blobs; }
@@ -192,11 +192,11 @@ contract C {
   it('u256[][] leaf', async () => {
     const Pu = '(uint256,uint256[][])';
     const Ju = `
-@struct class S { a: u256; grid: u256[][] }
-@contract class C {
-  @external @pure f(p: S): u256 { let m: S = p; return m.grid[1n][0n]; }
-  @external @pure fe(p: S): bytes { let m: S = p; return abi.encode(m); }
-  @external @pure fl(p: S): u256 { let m: S = p; return m.grid.length; }
+type S = { a: u256; grid: u256[][] };
+class C {
+  get f(p: S): External<u256> { let m: S = p; return m.grid[1n][0n]; }
+  get fe(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
+  get fl(p: S): External<u256> { let m: S = p; return m.grid.length; }
 }`;
     const Su = `
 struct S { uint256 a; uint256[][] grid; }
@@ -213,12 +213,12 @@ contract C {
   it('mixed fields: a; s:string; tags:string[]; xs:u256[]', async () => {
     const Pm = '(uint256,string,string[],uint256[])';
     const Jm = `
-@struct class S { a: u256; s: string; tags: string[]; xs: u256[] }
-@contract class C {
-  @external @pure fe(p: S): bytes { let m: S = p; return abi.encode(m); }
-  @external @pure fs(p: S): string { let m: S = p; return m.s; }
-  @external @pure ft(p: S): string { let m: S = p; return m.tags[0n]; }
-  @external @pure fx(p: S): u256 { let m: S = p; return m.xs[1n]; }
+type S = { a: u256; s: string; tags: string[]; xs: u256[] };
+class C {
+  get fe(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
+  get fs(p: S): External<string> { let m: S = p; return m.s; }
+  get ft(p: S): External<string> { let m: S = p; return m.tags[0n]; }
+  get fx(p: S): External<u256> { let m: S = p; return m.xs[1n]; }
 }`;
     const Sm = `
 struct S { uint256 a; string s; string[] tags; uint256[] xs; }
@@ -246,10 +246,10 @@ contract C {
 
   it('memory-source alias: let m2: S = m', async () => {
     const Ja = `
-@struct class S { a: u256; tags: string[] }
-@contract class C {
-  @external @pure f(p: S): bytes { let m: S = p; let m2: S = m; return abi.encode(m2); }
-  @external @pure fg(p: S): string { let m: S = p; let m2: S = m; return m2.tags[1n]; }
+type S = { a: u256; tags: string[] };
+class C {
+  get f(p: S): External<bytes> { let m: S = p; let m2: S = m; return abi.encode(m2); }
+  get fg(p: S): External<string> { let m: S = p; let m2: S = m; return m2.tags[1n]; }
 }`;
     const Sa = `
 struct S { uint256 a; string[] tags; }
@@ -264,14 +264,14 @@ contract C {
 
   it('storage-source copy: let m: S = this.st (deep copy) + readback + OOB', async () => {
     const Jb = `
-@struct class S { a: u256; tags: string[] }
-@contract class C {
-  @state st: S;
-  @external set(p: S): void { this.st = p; }
-  @external @view getA(): u256 { let m: S = this.st; return m.a; }
-  @external @view getT(idx: u256): string { let m: S = this.st; return m.tags[idx]; }
-  @external @view getLen(): u256 { let m: S = this.st; return m.tags.length; }
-  @external @view getEnc(): bytes { let m: S = this.st; return abi.encode(m); }
+type S = { a: u256; tags: string[] };
+class C {
+  st: S;
+  set(p: S): External<void> { this.st = p; }
+  get getA(): External<u256> { let m: S = this.st; return m.a; }
+  get getT(idx: u256): External<string> { let m: S = this.st; return m.tags[idx]; }
+  get getLen(): External<u256> { let m: S = this.st; return m.tags.length; }
+  get getEnc(): External<bytes> { let m: S = this.st; return abi.encode(m); }
 }`;
     const Sb = `
 struct S { uint256 a; string[] tags; }
@@ -300,12 +300,12 @@ contract C {
 
   it('internal-arg pass of the bound leaf-array struct', async () => {
     const Ji = `
-@struct class S { a: u256; tags: string[] }
-@contract class C {
-  @pure sumLen(m: S): u256 { return m.a + m.tags.length; }
-  @pure firstTag(m: S): string { return m.tags[0n]; }
-  @external @pure viaInternal(p: S): u256 { let m: S = p; return sumLen(m); }
-  @external @pure viaInternal2(p: S): string { let m: S = p; return firstTag(m); }
+type S = { a: u256; tags: string[] };
+class C {
+  sumLen(m: S): u256 { return m.a + m.tags.length; }
+  firstTag(m: S): string { return m.tags[0n]; }
+  get viaInternal(p: S): External<u256> { let m: S = p; return sumLen(m); }
+  get viaInternal2(p: S): External<string> { let m: S = p; return firstTag(m); }
 }`;
     const Si = `
 struct S { uint256 a; string[] tags; }
@@ -322,12 +322,12 @@ contract C {
 
   it('storage write of the bound local: this.st = m + readback', async () => {
     const Jw = `
-@struct class S { a: u256; tags: string[] }
-@contract class C {
-  @state st: S;
-  @external store(p: S): void { let m: S = p; this.st = m; }
-  @external @view rd(idx: u256): string { let m: S = this.st; return m.tags[idx]; }
-  @external @view ra(): u256 { let m: S = this.st; return m.a; }
+type S = { a: u256; tags: string[] };
+class C {
+  st: S;
+  store(p: S): External<void> { let m: S = p; this.st = m; }
+  get rd(idx: u256): External<string> { let m: S = this.st; return m.tags[idx]; }
+  get ra(): External<u256> { let m: S = this.st; return m.a; }
 }`;
     const Sw = `
 struct S { uint256 a; string[] tags; }
@@ -351,10 +351,10 @@ contract C {
   it('REGRESSION: value-array (u256[]) field bind unregressed', async () => {
     const Pv = '(uint256,uint256[])';
     const Jv = `
-@struct class S { a: u256; xs: u256[] }
-@contract class C {
-  @external @pure f(p: S): u256 { let m: S = p; return m.xs[1n]; }
-  @external @pure fe(p: S): bytes { let m: S = p; return abi.encode(m); }
+type S = { a: u256; xs: u256[] };
+class C {
+  get f(p: S): External<u256> { let m: S = p; return m.xs[1n]; }
+  get fe(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
 }`;
     const Sv = `
 struct S { uint256 a; uint256[] xs; }
@@ -369,12 +369,12 @@ contract C {
 
   it('REGRESSION: direct calldata-param reads (no bind) unregressed', async () => {
     const Jd = `
-@struct class S { a: u256; tags: string[] }
-@contract class C {
-  @external @pure da(p: S): u256 { return p.a; }
-  @external @pure dl(p: S): u256 { return p.tags.length; }
-  @external @pure dg(p: S): string { return p.tags[0n]; }
-  @external @pure de(p: S): bytes { return abi.encode(p); }
+type S = { a: u256; tags: string[] };
+class C {
+  get da(p: S): External<u256> { return p.a; }
+  get dl(p: S): External<u256> { return p.tags.length; }
+  get dg(p: S): External<string> { return p.tags[0n]; }
+  get de(p: S): External<bytes> { return abi.encode(p); }
 }`;
     const Sd = `
 struct S { uint256 a; string[] tags; }
@@ -394,14 +394,14 @@ contract C {
     // so `let m: S = p` for S{ a; qs: Q[] } (Q dynamic) now DEEP-COPIES the calldata struct into memory
     // byte-identical to solc's `S memory m = p;`, instead of the old JETH200 reject.
     const Jg = `
-@struct class Q { x: u256; s: string }
-@struct class S { a: u256; qs: Q[] }
-@contract class C {
-  @external @pure fa(p: S): u256 { let m: S = p; return m.a; }
-  @external @pure fl(p: S): u256 { let m: S = p; return m.qs.length; }
-  @external @pure fn(p: S): u256 { let m: S = p; return m.qs[1].x; }
-  @external @pure fq(p: S): string { let m: S = p; return m.qs[1].s; }
-  @external @pure fe(p: S): bytes { let m: S = p; return abi.encode(m); }
+type Q = { x: u256; s: string };
+type S = { a: u256; qs: Q[] };
+class C {
+  get fa(p: S): External<u256> { let m: S = p; return m.a; }
+  get fl(p: S): External<u256> { let m: S = p; return m.qs.length; }
+  get fn(p: S): External<u256> { let m: S = p; return m.qs[1].x; }
+  get fq(p: S): External<string> { let m: S = p; return m.qs[1].s; }
+  get fe(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
 }`;
     const Sg = `
 struct Q { uint256 x; string s; }

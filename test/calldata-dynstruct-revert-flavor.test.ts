@@ -41,8 +41,8 @@ const encBytes = (hex: string) => W(BigInt(hex.length / 2)) + hex.padEnd(Math.ce
 describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () => {
   // --- DIVERGENCE 1: BIND (let m = p) huge inner length -> Panic 0x41 ---
   it('D1: string-field bind Panics 0x41 on huge len; well-formed round-trips; trunc/OOB empty', async () => {
-    const J = `@struct class R { s: string; n: u256; }
-      @contract class C { @external @pure f(p: R): bytes { let m: R = p; return abi.encode(m); } }`;
+    const J = `type R = { s: string; n: u256; };
+      class C { get f(p: R): External<bytes> { let m: R = p; return abi.encode(m); } }`;
     const S = `struct R { string s; uint256 n; }
       contract C { function f(R calldata p) external pure returns(bytes memory){ R memory m = p; return abi.encode(m); } }`;
     const sig = 'f((string,uint256))';
@@ -58,8 +58,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
   });
 
   it('D1: bytes-field and u256[]-field bind Panic 0x41 on huge len; well-formed round-trips', async () => {
-    const Jb = `@struct class R { x: u256; bs: bytes; }
-      @contract class C { @external @pure f(p: R): bytes { let m: R = p; return abi.encode(m); } }`;
+    const Jb = `type R = { x: u256; bs: bytes; };
+      class C { get f(p: R): External<bytes> { let m: R = p; return abi.encode(m); } }`;
     const Sb = `struct R { uint256 x; bytes bs; }
       contract C { function f(R calldata p) external pure returns(bytes memory){ R memory m = p; return abi.encode(m); } }`;
     const sigB = 'f((uint256,bytes))';
@@ -70,8 +70,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
       [sigB, (W(0x20n) + W(7n) + W(0x40n) + encBytes('deadbeef')).slice(0, -64)], // trunc -> empty
     ]);
 
-    const Ja = `@struct class R { x: u256; xs: u256[]; }
-      @contract class C { @external @pure f(p: R): bytes { let m: R = p; return abi.encode(m); } }`;
+    const Ja = `type R = { x: u256; xs: u256[]; };
+      class C { get f(p: R): External<bytes> { let m: R = p; return abi.encode(m); } }`;
     const Sa = `struct R { uint256 x; uint256[] xs; }
       contract C { function f(R calldata p) external pure returns(bytes memory){ R memory m = p; return abi.encode(m); } }`;
     const sigA = 'f((uint256,uint256[]))';
@@ -91,8 +91,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
   // EXACT flip is therefore MUCH earlier than 2^64 for a wide element (probe-verified vs solc 0.8.35). These
   // pins assert JETH Panics 0x41 at solc's exact flip and empty-reverts just below (where solc does too).
   it('D1(size): u256[] bind Panics 0x41 at solc EXACT flip; empty just below; well-formed anchor', async () => {
-    const J = `@struct class R { xs: u256[]; n: u256; }
-      @contract class C { @external @pure f(p: R): bytes { let m: R = p; return abi.encode(m); } }`;
+    const J = `type R = { xs: u256[]; n: u256; };
+      class C { get f(p: R): External<bytes> { let m: R = p; return abi.encode(m); } }`;
     const S = `struct R { uint256[] xs; uint256 n; }
       contract C { function f(R calldata p) external pure returns(bytes memory){ R memory m = p; return abi.encode(m); } }`;
     const sig = 'f((uint256[],uint256))';
@@ -105,8 +105,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
     ]);
     // context-split preservation: the SAME flip length in the RE-ENCODE context (abi.encode(p), no bind)
     // must stay EMPTY, not Panic (divergence-2). freePtr differs but the encode context caps empty either way.
-    const Je = `@struct class R { xs: u256[]; n: u256; }
-      @contract class C { @external @pure f(p: R): bytes { return abi.encode(p); } }`;
+    const Je = `type R = { xs: u256[]; n: u256; };
+      class C { get f(p: R): External<bytes> { return abi.encode(p); } }`;
     const Se = `struct R { uint256[] xs; uint256 n; }
       contract C { function f(R calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`;
     await diff(Je, Se, [
@@ -116,8 +116,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
   });
 
   it('D1(size): string bind Panics 0x41 at solc EXACT flip; empty just below; well-formed anchor', async () => {
-    const J = `@struct class R { s: string; n: u256; }
-      @contract class C { @external @pure f(p: R): bytes { let m: R = p; return abi.encode(m); } }`;
+    const J = `type R = { s: string; n: u256; };
+      class C { get f(p: R): External<bytes> { let m: R = p; return abi.encode(m); } }`;
     const S = `struct R { string s; uint256 n; }
       contract C { function f(R calldata p) external pure returns(bytes memory){ R memory m = p; return abi.encode(m); } }`;
     const sig = 'f((string,uint256))';
@@ -133,8 +133,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
 
   // --- DIVERGENCE 2: abi.encode / emit / error huge inner length -> EMPTY ---
   it('D2: abi.encode of string/bytes field empty-reverts on huge len; well-formed round-trips', async () => {
-    const Js = `@struct class R { s: string; n: u256; }
-      @contract class C { @external @pure f(p: R): bytes { return abi.encode(p); } }`;
+    const Js = `type R = { s: string; n: u256; };
+      class C { get f(p: R): External<bytes> { return abi.encode(p); } }`;
     const Ss = `struct R { string s; uint256 n; }
       contract C { function f(R calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`;
     const sig = 'f((string,uint256))';
@@ -144,8 +144,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
       [sig, W(0x20n) + W(0x40n) + W(99n) + W(HUGE64)], // huge -> EMPTY
     ]);
 
-    const Jb = `@struct class R { x: u256; bs: bytes; }
-      @contract class C { @external @pure f(p: R): bytes { return abi.encode(p); } }`;
+    const Jb = `type R = { x: u256; bs: bytes; };
+      class C { get f(p: R): External<bytes> { return abi.encode(p); } }`;
     const Sb = `struct R { uint256 x; bytes bs; }
       contract C { function f(R calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`;
     const sigB = 'f((uint256,bytes))';
@@ -156,8 +156,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
   });
 
   it('D2: emit E(p) and revert Er(p) empty-revert on huge len; well-formed emits/reverts match', async () => {
-    const Jemit = `@contract class C { @event E(p: R); @external f(p: R): void { emit(E(p)); } }
-      @struct class R { s: string; n: u256; }`;
+    const Jemit = `class C { E: event<{ p: R }>; f(p: R): External<void> { emit(E(p)); } }
+      type R = { s: string; n: u256; };`;
     const Semit = `struct R { string s; uint256 n; }
       contract C { event E(R p); function f(R calldata p) external { emit E(p); } }`;
     const sig = 'f((string,uint256))';
@@ -166,8 +166,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
       [sig, W(0x20n) + W(0x40n) + W(99n) + W(MAX)], // huge -> EMPTY
     ]);
 
-    const Jerr = `@contract class C { @error Er(p: R); @external @pure f(p: R): void { revert(Er(p)); } }
-      @struct class R { s: string; n: u256; }`;
+    const Jerr = `class C { Er: error<{ p: R }>; f(p: R): External<void> { revert(Er(p)); } }
+      type R = { s: string; n: u256; };`;
     const Serr = `struct R { string s; uint256 n; }
       contract C { error Er(R p); function f(R calldata p) external pure { revert Er(p); } }`;
     await diff(Jerr, Serr, [
@@ -178,8 +178,8 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
 
   // --- RETURN-ECHO unchanged (Panic 0x41 on huge, well-formed echo byte-identical) ---
   it('D0: return-echo of a whole cd dyn-struct Panics 0x41 on huge len (unregressed)', async () => {
-    const J = `@struct class R { s: string; n: u256; }
-      @contract class C { @external @pure f(p: R): R { return p; } }`;
+    const J = `type R = { s: string; n: u256; };
+      class C { get f(p: R): External<R> { return p; } }`;
     const S = `struct R { string s; uint256 n; }
       contract C { function f(R calldata p) external pure returns(R memory){ return p; } }`;
     const sig = 'f((string,uint256))';
@@ -191,12 +191,12 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
 
   // --- DIVERGENCE 3: nested-dyn-struct field bind (was JETH900 on VALID input) ---
   it('D3: nested-dyn-struct field bind decodes byte-identically; malformed follows the split', async () => {
-    const J = `@struct class T { s: string; n: u256; }
-      @struct class S { a: u256; t: T; }
-      @contract class C {
-        @external @pure ea(p: S): u256 { let m: S = p; return m.a + m.t.n; }
-        @external @pure et(p: S): bytes { let m: S = p; return abi.encode(m.t); }
-        @external @pure em(p: S): bytes { let m: S = p; return abi.encode(m); }
+    const J = `type T = { s: string; n: u256; };
+      type S = { a: u256; t: T; };
+      class C {
+        get ea(p: S): External<u256> { let m: S = p; return m.a + m.t.n; }
+        get et(p: S): External<bytes> { let m: S = p; return abi.encode(m.t); }
+        get em(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
       }`;
     const S = `struct T { string s; uint256 n; }
       struct S { uint256 a; T t; }
@@ -223,9 +223,9 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
 
   it('D3: nested-dyn-struct field abi.encode(p) empty-reverts on huge len; multi-level + value-array nesting', async () => {
     // encode(p) whole-struct: huge inner length -> EMPTY (re-encode flavor)
-    const Je = `@struct class T { s: string; n: u256; }
-      @struct class S { a: u256; t: T; }
-      @contract class C { @external @pure f(p: S): bytes { return abi.encode(p); } }`;
+    const Je = `type T = { s: string; n: u256; };
+      type S = { a: u256; t: T; };
+      class C { get f(p: S): External<bytes> { return abi.encode(p); } }`;
     const Se = `struct T { string s; uint256 n; }
       struct S { uint256 a; T t; }
       contract C { function f(S calldata p) external pure returns(bytes memory){ return abi.encode(p); } }`;
@@ -238,13 +238,13 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
     ]);
 
     // MULTI-LEVEL: S{a; t:T}, T{u:U; k:u256}, U{s:string}
-    const Jm = `@struct class U { s: string; }
-      @struct class T { u: U; k: u256; }
-      @struct class S { a: u256; t: T; }
-      @contract class C {
-        @external @pure em(p: S): bytes { let m: S = p; return abi.encode(m); }
-        @external @pure eu(p: S): bytes { let m: S = p; return abi.encode(m.t.u); }
-        @external @pure ek(p: S): u256 { let m: S = p; return m.a + m.t.k; }
+    const Jm = `type U = { s: string; };
+      type T = { u: U; k: u256; };
+      type S = { a: u256; t: T; };
+      class C {
+        get em(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
+        get eu(p: S): External<bytes> { let m: S = p; return abi.encode(m.t.u); }
+        get ek(p: S): External<u256> { let m: S = p; return m.a + m.t.k; }
       }`;
     const Sm = `struct U { string s; }
       struct T { U u; uint256 k; }
@@ -266,11 +266,11 @@ describe('calldata dyn-struct revert-flavor context split vs solc 0.8.35', () =>
     }
 
     // NESTED struct with a value-array field: S{a; t:T}, T{xs:u256[]; n:u256}
-    const Ja = `@struct class T { xs: u256[]; n: u256; }
-      @struct class S { a: u256; t: T; }
-      @contract class C {
-        @external @pure em(p: S): bytes { let m: S = p; return abi.encode(m); }
-        @external @pure el(p: S): u256 { let m: S = p; return m.t.xs.length + m.t.xs[0n] + m.t.n; }
+    const Ja = `type T = { xs: u256[]; n: u256; };
+      type S = { a: u256; t: T; };
+      class C {
+        get em(p: S): External<bytes> { let m: S = p; return abi.encode(m); }
+        get el(p: S): External<u256> { let m: S = p; return m.t.xs.length + m.t.xs[0n] + m.t.n; }
       }`;
     const Sa = `struct T { uint256[] xs; uint256 n; }
       struct S { uint256 a; T t; }

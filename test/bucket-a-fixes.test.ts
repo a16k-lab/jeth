@@ -30,7 +30,7 @@ describe('Bucket-A over-rejection fixes vs Solidity', () => {
   it('addmod / mulmod builtins (full precision, m==0 -> Panic 0x12, widened args)', async () => {
     const M = (1n << 256n) - 1n;
     await diff(
-      `@contract class C { @external @pure am(a: u256, b: u256, m: u256): u256 { return addmod(a, b, m); } @external @pure mm(a: u256, b: u256, m: u256): u256 { return mulmod(a, b, m); } @external @pure w(a: u8, b: u16): u256 { return addmod(a, b, 5n); } }`,
+      `class C { get am(a: u256, b: u256, m: u256): External<u256> { return addmod(a, b, m); } get mm(a: u256, b: u256, m: u256): External<u256> { return mulmod(a, b, m); } get w(a: u8, b: u16): External<u256> { return addmod(a, b, 5n); } }`,
       `contract C { function am(uint256 a, uint256 b, uint256 m) external pure returns (uint256){ return addmod(a,b,m); } function mm(uint256 a, uint256 b, uint256 m) external pure returns (uint256){ return mulmod(a,b,m); } function w(uint8 a, uint16 b) external pure returns (uint256){ return addmod(a,b,5); } }`,
       [
         { sig: 'am(uint256,uint256,uint256)', args: W(M) + W(M) + W(7n) },
@@ -44,7 +44,7 @@ describe('Bucket-A over-rejection fixes vs Solidity', () => {
 
   it('abi.encode / encodePacked of a string literal arg', async () => {
     await diff(
-      `@contract class C { @external @pure p(): bytes32 { return keccak256(abi.encodePacked("DOMAIN")); } @external @pure e(x: u256): bytes { return abi.encode("hi", x); } }`,
+      `class C { get p(): External<bytes32> { return keccak256(abi.encodePacked("DOMAIN")); } get e(x: u256): External<bytes> { return abi.encode("hi", x); } }`,
       `contract C { function p() external pure returns (bytes32){ return keccak256(abi.encodePacked("DOMAIN")); } function e(uint256 x) external pure returns (bytes memory){ return abi.encode("hi", x); } }`,
       [{ sig: 'p()' }, { sig: 'e(uint256)', args: W(9n) }],
     );
@@ -52,16 +52,16 @@ describe('Bucket-A over-rejection fixes vs Solidity', () => {
 
   it('binary-op with a literal operand exceeding the operand type (common-type widening + overflow)', async () => {
     await diff(
-      `@contract class C {
-        @external @pure add(a: u8): u16 { return a + 1000n; }
-        @external @pure mul(a: u8): u16 { return a * 1000n; }
-        @external @pure mul32(a: u8): u32 { return a * 1000n; }
-        @external @pure left(a: u8): u16 { return 1000n + a; }
-        @external @pure bor(a: u8): u16 { return a | 0x1ffn; }
-        @external @pure fits(a: u8): u8 { return a + 100n; }
-        @external @pure wide(a: u16): u32 { return a + 70000n; }
-        @external @pure neg(a: i8): i16 { return a + -1000n; }
-        @external @pure unc(a: u8): u16 { unchecked: { return a * 1000n; } }
+      `class C {
+        get add(a: u8): External<u16> { return a + 1000n; }
+        get mul(a: u8): External<u16> { return a * 1000n; }
+        get mul32(a: u8): External<u32> { return a * 1000n; }
+        get left(a: u8): External<u16> { return 1000n + a; }
+        get bor(a: u8): External<u16> { return a | 0x1ffn; }
+        get fits(a: u8): External<u8> { return a + 100n; }
+        get wide(a: u16): External<u32> { return a + 70000n; }
+        get neg(a: i8): External<i16> { return a + -1000n; }
+        get unc(a: u8): External<u16> { unchecked: { return a * 1000n; } }
       }`,
       `contract C {
         function add(uint8 a) external pure returns (uint16){ return a + 1000; }
@@ -92,7 +92,7 @@ describe('Bucket-A over-rejection fixes vs Solidity', () => {
 
   it('indexed static-aggregate event params from a local / constructor', async () => {
     await diff(
-      `@struct class P { x: u256; y: u256; } @contract class C { @event A(@indexed a: Arr<u256,3>, n: u256); @event S(@indexed p: P, n: u256); @external fa(): void { let a: Arr<u256,3> = [10n, 20n, 30n]; emit(A(a, 7n)); } @external fs(x: u256, y: u256): void { emit(S(P(x, y), 7n)); } }`,
+      `type P = { x: u256; y: u256; }; class C { A: event<{ a: indexed<Arr<u256,3>>; n: u256 }>; S: event<{ p: indexed<P>; n: u256 }>; fa(): External<void> { let a: Arr<u256,3> = [10n, 20n, 30n]; emit(A(a, 7n)); } fs(x: u256, y: u256): External<void> { emit(S(P(x, y), 7n)); } }`,
       `struct P { uint256 x; uint256 y; } contract C { event A(uint256[3] indexed a, uint256 n); event S(P indexed p, uint256 n); function fa() external { uint256[3] memory a=[uint256(10),20,30]; emit A(a, 7); } function fs(uint256 x, uint256 y) external { emit S(P(x,y), 7); } }`,
       [{ sig: 'fa()' }, { sig: 'fs(uint256,uint256)', args: W(1n) + W(2n) }],
     );

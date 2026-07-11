@@ -46,17 +46,17 @@ function eip1167Runtime(impl: Address): string {
 // ---- The impl, a JETH and a solc version with identical storage/behaviour. ----
 // initialize(x) sets slot0 = x (once-guard via a stored flag at slot1), who() reads slot0.
 // Plus storeArgs reads its appended immutable args (cloneArgs) so a clone reads its tail.
-const IMPL_JETH = `@contract class Impl {
-  @state value: u256 = 0n;
-  @state inited: bool = false;
-  @external initialize(x: u256): void {
+const IMPL_JETH = `class Impl {
+  value: u256 = 0n;
+  inited: bool = false;
+  initialize(x: u256): External<void> {
     require(!this.inited, "already");
     this.inited = true;
     this.value = x;
   }
-  @external @view who(): u256 { return this.value; }
-  @external @view oneArg(): u256 { return cloneArgs().decode(u256); }
-  @external @view rawArgs(): bytes { return cloneArgs(); }
+  get who(): External<u256> { return this.value; }
+  get oneArg(): External<u256> { return cloneArgs().decode(u256); }
+  get rawArgs(): External<bytes> { return cloneArgs(); }
 }`;
 const IMPL_SOL = `contract Impl {
   uint256 public value;
@@ -160,14 +160,14 @@ const FACTORY_SOL = `contract Factory {
   }
 }`;
 
-const FACTORY_JETH = `@contract class Factory {
-  @external clone_(impl: address): address { return clone(impl); }
-  @external cloneDet(impl: address, salt: bytes32): address { return cloneDeterministic(impl, salt); }
-  @external @view predict(impl: address, salt: bytes32): address { return predictClone(impl, salt); }
-  @external cloneArgs_(impl: address, args: bytes): address { return cloneWithArgs(impl, args); }
-  @external @view predictArgs(impl: address, salt: bytes32, args: bytes): address { return predictCloneWithArgs(impl, salt, args); }
-  @external cloneDetArgs(impl: address, salt: bytes32, args: bytes): address { return cloneDeterministicWithArgs(impl, salt, args); }
-  @external @view checkContract(a: address): bool { return isContract(a); }
+const FACTORY_JETH = `class Factory {
+  clone_(impl: address): External<address> { return clone(impl); }
+  cloneDet(impl: address, salt: bytes32): External<address> { return cloneDeterministic(impl, salt); }
+  get predict(impl: address, salt: bytes32): External<address> { return predictClone(impl, salt); }
+  cloneArgs_(impl: address, args: bytes): External<address> { return cloneWithArgs(impl, args); }
+  get predictArgs(impl: address, salt: bytes32, args: bytes): External<address> { return predictCloneWithArgs(impl, salt, args); }
+  cloneDetArgs(impl: address, salt: bytes32, args: bytes): External<address> { return cloneDeterministicWithArgs(impl, salt, args); }
+  get checkContract(a: address): External<bool> { return isContract(a); }
 }`;
 
 /** Deploy the JETH factory+impl on one harness and the solc factory+impl on another; return the bits. */
@@ -416,18 +416,18 @@ describe('clone-proxy: gates', () => {
   });
 
   it('a nonpayable (bare @external) deploy is ACCEPTED; @external @payable too', () => {
-    expect(jethAccepts(`@contract class C { @external ok(i: address): address { return clone(i); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external @payable ok(i: address): address { return clone(i); } }`)).toBe(
+    expect(jethAccepts(`class C { ok(i: address): External<address> { return clone(i); } }`)).toBe(true);
+    expect(jethAccepts(`class C { ok(i: address): Payable<address> { return clone(i); } }`)).toBe(
       true,
     );
   });
 
   it('predictClone / isContract / cloneArgs are allowed in @view (pure code/env reads)', () => {
     expect(
-      jethAccepts(`@contract class C {
-        @external @view p(i: address, s: bytes32): address { return predictClone(i, s); }
-        @external @view c(a: address): bool { return isContract(a); }
-        @external @view g(): bytes { return cloneArgs(); }
+      jethAccepts(`class C {
+        get p(i: address, s: bytes32): External<address> { return predictClone(i, s); }
+        get c(a: address): External<bool> { return isContract(a); }
+        get g(): External<bytes> { return cloneArgs(); }
       }`),
     ).toBe(true);
   });
@@ -446,26 +446,26 @@ describe('clone-proxy: gates', () => {
 
   it('arg type gates: non-address impl, non-bytes32 salt, non-bytes args', () => {
     // non-address impl
-    expect(jethRejects(`@contract class C { @external f(x: u256): address { return clone(x); } }`)).toBe(true);
+    expect(jethRejects(`class C { get f(x: u256): External<address> { return clone(x); } }`)).toBe(true);
     // non-bytes32 salt
     expect(
       jethRejects(
-        `@contract class C { @external f(i: address, s: u256): address { return cloneDeterministic(i, s); } }`,
+        `class C { get f(i: address, s: u256): External<address> { return cloneDeterministic(i, s); } }`,
       ),
     ).toBe(true);
     // non-bytes args
     expect(
-      jethRejects(`@contract class C { @external f(i: address, a: u256): address { return cloneWithArgs(i, a); } }`),
+      jethRejects(`class C { get f(i: address, a: u256): External<address> { return cloneWithArgs(i, a); } }`),
     ).toBe(true);
     // wrong arity
     expect(
-      jethRejects(`@contract class C { @external f(i: address): address { return cloneDeterministic(i); } }`),
+      jethRejects(`class C { get f(i: address): External<address> { return cloneDeterministic(i); } }`),
     ).toBe(true);
-    expect(jethRejects(`@contract class C { @external @view f(): bytes { return cloneArgs(1n); } }`)).toBe(true);
+    expect(jethRejects(`class C { get f(): External<bytes> { return cloneArgs(1n); } }`)).toBe(true);
   });
 
   it('a u160 / bytes20 impl coerces to address (accepted)', () => {
-    expect(jethAccepts(`@contract class C { @external f(i: u160): address { return clone(i); } }`)).toBe(true);
-    expect(jethAccepts(`@contract class C { @external f(i: bytes20): address { return clone(i); } }`)).toBe(true);
+    expect(jethAccepts(`class C { f(i: u160): External<address> { return clone(i); } }`)).toBe(true);
+    expect(jethAccepts(`class C { f(i: bytes20): External<address> { return clone(i); } }`)).toBe(true);
   });
 });

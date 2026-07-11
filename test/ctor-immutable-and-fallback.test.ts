@@ -67,7 +67,7 @@ async function sameRaw(J: string, S: string, dataHex: string, value = 0n) {
 describe('(A) ctor calls a helper that reads an @immutable (was JETH901) vs solc 0.8.35', () => {
   it('same-contract u256 helper read (g() -> 15)', () =>
     sameGetter(
-      `@contract class C { @immutable b: u256; @state o: u256; helper(): u256 { return this.b; } constructor(x: u256){ this.b = x; this.o = this.helper(); } @external @view g(): u256 { return this.o; } }`,
+      `class C { static b: u256; o: u256; helper(): u256 { return this.b; } constructor(x: u256){ this.b = x; this.o = this.helper(); } get g(): External<u256> { return this.o; } }`,
       `contract C { uint256 immutable b; uint256 o; function helper() internal view returns(uint256){return b;} constructor(uint256 x){ b=x; o=helper(); } function g() external view returns(uint256){return o;} }`,
       'g()',
       pad32(15n).replace(/^0x/, ''),
@@ -75,7 +75,7 @@ describe('(A) ctor calls a helper that reads an @immutable (was JETH901) vs solc
 
   it('same-contract address helper read', () =>
     sameGetter(
-      `@contract class C { @immutable owner: address; @state o: address; who(): address { return this.owner; } constructor(a: address){ this.owner = a; this.o = this.who(); } @external @view g(): address { return this.o; } }`,
+      `class C { static owner: address; o: address; who(): address { return this.owner; } constructor(a: address){ this.owner = a; this.o = this.who(); } get g(): External<address> { return this.o; } }`,
       `contract C { address immutable owner; address o; function who() internal view returns(address){return owner;} constructor(address a){ owner=a; o=who(); } function g() external view returns(address){return o;} }`,
       'g()',
       pad32(BigInt('0x00000000000000000000000011223344556677889900aabbccddeeff0011aabb')).replace(/^0x/, ''),
@@ -83,7 +83,7 @@ describe('(A) ctor calls a helper that reads an @immutable (was JETH901) vs solc
 
   it('ctor-reachable call chain (outer -> inner reads immutable)', () =>
     sameGetter(
-      `@contract class C { @immutable b: u256; @state o: u256; inner(): u256 { return this.b; } outer(): u256 { return this.inner() + 1n; } constructor(x: u256){ this.b = x; this.o = this.outer(); } @external @view g(): u256 { return this.o; } }`,
+      `class C { static b: u256; o: u256; inner(): u256 { return this.b; } outer(): u256 { return this.inner() + 1n; } constructor(x: u256){ this.b = x; this.o = this.outer(); } get g(): External<u256> { return this.o; } }`,
       `contract C { uint256 immutable b; uint256 o; function inner() internal view returns(uint256){return b;} function outer() internal view returns(uint256){return inner()+1;} constructor(uint256 x){ b=x; o=outer(); } function g() external view returns(uint256){return o;} }`,
       'g()',
       pad32(99n).replace(/^0x/, ''),
@@ -91,7 +91,7 @@ describe('(A) ctor calls a helper that reads an @immutable (was JETH901) vs solc
 
   it('helper inherited from an abstract base reads the base immutable', () =>
     sameGetter(
-      `@abstract class A { @immutable b: u256; helper(): u256 { return this.b; } } @contract class C extends A { @state o: u256; constructor(x: u256){ this.b = x; this.o = this.helper(); } @external @view g(): u256 { return this.o; } }`,
+      `abstract class A { static b: u256; helper(): u256 { return this.b; } } class C extends A { o: u256; constructor(x: u256){ this.b = x; this.o = this.helper(); } get g(): External<u256> { return this.o; } }`,
       `abstract contract A { uint256 immutable b; function helper() internal view returns(uint256){return b;} } contract C is A { uint256 o; constructor(uint256 x){ b=x; o=helper(); } function g() external view returns(uint256){return o;} }`,
       'g()',
       pad32(123n).replace(/^0x/, ''),
@@ -99,7 +99,7 @@ describe('(A) ctor calls a helper that reads an @immutable (was JETH901) vs solc
 
   it('a runtime read of the immutable still uses loadimmutable (no regression)', () =>
     sameGetter(
-      `@contract class C { @immutable b: u256; constructor(x: u256){ this.b = x; } @external @view readb(): u256 { return this.b; } }`,
+      `class C { static b: u256; constructor(x: u256){ this.b = x; } get readb(): External<u256> { return this.b; } }`,
       `contract C { uint256 immutable b; constructor(uint256 x){ b=x; } function readb() external view returns(uint256){return b;} }`,
       'readb()',
       pad32(77n).replace(/^0x/, ''),
@@ -107,7 +107,7 @@ describe('(A) ctor calls a helper that reads an @immutable (was JETH901) vs solc
 
   it('a direct ctor read of the immutable is still byte-identical', () =>
     sameGetter(
-      `@contract class C { @immutable b: u256; @state o: u256; constructor(x: u256){ this.b = x; this.o = this.b + 1n; } @external @view g(): u256 { return this.o; } }`,
+      `class C { static b: u256; o: u256; constructor(x: u256){ this.b = x; this.o = this.b + 1n; } get g(): External<u256> { return this.o; } }`,
       `contract C { uint256 immutable b; uint256 o; constructor(uint256 x){ b=x; o=b+1; } function g() external view returns(uint256){return o;} }`,
       'g()',
       pad32(41n).replace(/^0x/, ''),
@@ -115,7 +115,7 @@ describe('(A) ctor calls a helper that reads an @immutable (was JETH901) vs solc
 });
 
 describe('(B) data-passing @fallback fb(input: bytes): bytes vs solc 0.8.35', () => {
-  const ECHO_J = `@contract class C { @fallback fb(input: bytes): bytes { return input; } }`;
+  const ECHO_J = `class C { fallback(input: bytes): bytes { return input; } }`;
   const ECHO_S = `contract C { fallback(bytes calldata input) external returns (bytes memory) { return input; } }`;
 
   it('echoes arbitrary non-matching calldata raw (no ABI wrapper)', async () => {
@@ -127,7 +127,7 @@ describe('(B) data-passing @fallback fb(input: bytes): bytes vs solc 0.8.35', ()
 
   it('fall-off the end returns empty bytes', async () => {
     const r = await sameRaw(
-      `@contract class C { @fallback fb(input: bytes): bytes { } }`,
+      `class C { fallback(input: bytes): bytes { } }`,
       `contract C { fallback(bytes calldata input) external returns (bytes memory) { } }`,
       '0xdeadbeef',
     );
@@ -136,7 +136,7 @@ describe('(B) data-passing @fallback fb(input: bytes): bytes vs solc 0.8.35', ()
 
   it('payable form accepts value; non-payable reverts on value', async () => {
     await sameRaw(
-      `@contract @payable class C { @fallback @payable fb(input: bytes): bytes { return input; } }`,
+      `@payable class C { fallback(input: bytes): Payable<bytes> { return input; } }`,
       `contract C { fallback(bytes calldata input) external payable returns (bytes memory) { return input; } }`,
       '0xcafe',
       100n,
@@ -147,21 +147,21 @@ describe('(B) data-passing @fallback fb(input: bytes): bytes vs solc 0.8.35', ()
 
   it('returns a constructed bytes value', () =>
     sameRaw(
-      `@contract class C { @fallback fb(input: bytes): bytes { return bytes("hi"); } }`,
+      `class C { fallback(input: bytes): bytes { return bytes("hi"); } }`,
       `contract C { fallback(bytes calldata input) external returns (bytes memory) { return bytes("hi"); } }`,
       '0x1234',
     ).then((r) => expect(r.returnHex).toBe('0x6869')));
 
   it('reads input.length, slices, and branches', async () => {
     await sameRaw(
-      `@contract class C { @state n: u256; @fallback fb(input: bytes): bytes { this.n = input.length; return input.slice(1n, 3n); } @external @view getN(): u256 { return this.n; } }`,
+      `class C { n: u256; fallback(input: bytes): bytes { this.n = input.length; return input.slice(1n, 3n); } get getN(): External<u256> { return this.n; } }`,
       `contract C { uint256 n; fallback(bytes calldata input) external returns (bytes memory) { n = input.length; return input[1:3]; } function getN() external view returns(uint256){return n;} }`,
       '0x00112233445566',
     ).then((r) => expect(r.returnHex).toBe('0x1122'));
   });
 
   it('coexists with an external function: matching selector vs fallback', async () => {
-    const J = `@contract class C { @external @view foo(): u256 { return 7n; } @fallback fb(input: bytes): bytes { return input; } }`;
+    const J = `class C { get foo(): External<u256> { return 7n; } fallback(input: bytes): bytes { return input; } }`;
     const S = `contract C { function foo() external view returns(uint256){return 7;} fallback(bytes calldata input) external returns (bytes memory) { return input; } }`;
     const rFoo = await sameRaw(J, S, '0x' + functionSelector('foo()'));
     expect(BigInt(rFoo.returnHex)).toBe(7n);
@@ -171,20 +171,20 @@ describe('(B) data-passing @fallback fb(input: bytes): bytes vs solc 0.8.35', ()
 
   it('the bare no-arg/no-return @fallback still works', () =>
     sameRaw(
-      `@contract class C { @state n: u256; @fallback fb(): void { this.n = 5n; } @external @view getN(): u256 { return this.n; } }`,
+      `class C { n: u256; fallback(): void { this.n = 5n; } get getN(): External<u256> { return this.n; } }`,
       `contract C { uint256 n; fallback() external { n = 5; } function getN() external view returns(uint256){return n;} }`,
       '0xdead',
     ).then((r) => expect(r.success).toBe(true)));
 
   it('rejects half-forms and bad param/return types (clean JETH384, no over-acceptance)', () => {
     // solc requires BOTH the bytes param AND the bytes return, or NEITHER.
-    expect(codes(`@contract class C { @fallback fb(): bytes { return bytes("x"); } }`)).toContain('JETH384');
-    expect(codes(`@contract class C { @fallback fb(input: bytes): void { } }`)).toContain('JETH384');
-    expect(codes(`@contract class C { @fallback fb(x: u256): void {} }`)).toContain('JETH384');
-    expect(codes(`@contract class C { @fallback fb(x: string): bytes { return bytes("x"); } }`)).toContain('JETH384');
+    expect(codes(`class C { fallback(): bytes { return bytes("x"); } }`)).toContain('JETH384');
+    expect(codes(`class C { fallback(input: bytes): void { } }`)).toContain('JETH384');
+    expect(codes(`class C { fallback(x: u256): void {} }`)).toContain('JETH384');
+    expect(codes(`class C { fallback(x: string): bytes { return bytes("x"); } }`)).toContain('JETH384');
     // @receive never takes a param or a return type.
-    expect(codes(`@contract class C { @receive r(x: bytes): void {} }`)).toContain('JETH384');
+    expect(codes(`class C { receive(x: bytes): void {} }`)).toContain('JETH384');
     // the valid data-passing form compiles.
-    expect(codes(`@contract class C { @fallback fb(input: bytes): bytes { return input; } }`)).toEqual([]);
+    expect(codes(`class C { fallback(input: bytes): bytes { return input; } }`)).toEqual([]);
   });
 });

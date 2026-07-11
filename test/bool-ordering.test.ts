@@ -54,13 +54,13 @@ describe('relational operators on bool match solc', () => {
 
   it('a bool ordering inside a larger expression is also rejected', () => {
     expect(
-      codes(`@contract class C { @external @pure f(a: bool, b: bool): bool { return (a > b) || (a == b); } }`),
+      codes(`class C { get f(a: bool, b: bool): External<bool> { return (a > b) || (a == b); } }`),
     ).toContain('JETH082');
   });
 
   describe('bool ==/!= runtime byte-identical to solc', () => {
     let jeth: Harness, sol: Harness, aj: Address, as: Address;
-    const J = `@contract class C { @external @pure eq(a: bool, b: bool): bool { return a == b; } @external @pure ne(a: bool, b: bool): bool { return a != b; } }`;
+    const J = `class C { get eq(a: bool, b: bool): External<bool> { return a == b; } get ne(a: bool, b: bool): External<bool> { return a != b; } }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C { function eq(bool a, bool b) external pure returns (bool){ return a == b; } function ne(bool a, bool b) external pure returns (bool){ return a != b; } }`;

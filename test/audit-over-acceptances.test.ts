@@ -32,32 +32,32 @@ function codesOf(src: string): string[] {
 
 describe('audit over-acceptances now reject like solc', () => {
   it('OA0: @constant cross-signedness+width cast u8(i16(-1)) is rejected', () => {
-    expect(codesOf('@contract class C { @constant K: u8 = u8(i16(0n - 1n)); @external @pure get(): u8 { return this.K; } }')).toContain('JETH070');
+    expect(codesOf('class C { static K: u8 = u8(i16(0n - 1n)); get get(): External<u8> { return this.K; } }')).toContain('JETH070');
     // and the same illegal cast in a non-constant folded context
-    expect(accepts('@contract class C { @external @pure f(): u8 { return u8(i16(5n)); } }')).toBe(false);
+    expect(accepts('class C { get f(): External<u8> { return u8(i16(5n)); } }')).toBe(false);
     // valid const casts still accepted
-    expect(accepts('@contract class C { @constant K: u256 = u256(u8(5n)); @external @pure get(): u256 { return this.K; } }')).toBe(true);
-    expect(accepts('@contract class C { @constant K: u8 = u8(u16(7n)); @external @pure get(): u8 { return this.K; } }')).toBe(true);
-    expect(accepts('@contract class C { @constant K: i8 = i8(u8(200n)); @external @pure get(): i8 { return this.K; } }')).toBe(true);
+    expect(accepts('class C { static K: u256 = u256(u8(5n)); get get(): External<u256> { return this.K; } }')).toBe(true);
+    expect(accepts('class C { static K: u8 = u8(u16(7n)); get get(): External<u8> { return this.K; } }')).toBe(true);
+    expect(accepts('class C { static K: i8 = i8(u8(200n)); get get(): External<i8> { return this.K; } }')).toBe(true);
   });
 
   it('OA1: constant OOB on a struct-element fixed memory array is rejected at compile time', () => {
-    expect(codesOf('@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): u256 { let xs: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return xs[5n].a; } }')).toContain('JETH211');
+    expect(codesOf('type P = {a:u256;b:u256;}; class C { get f(): External<u256> { let xs: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return xs[5n].a; } }')).toContain('JETH211');
     // in-bounds access still accepted; a DYNAMIC outer array (unknown length) is NOT statically rejected
-    expect(accepts('@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(): u256 { let xs: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return xs[1n].a; } }')).toBe(true);
-    expect(accepts('@struct class P{a:u256;b:u256;} @contract class C { @external @pure f(ps: P[]): u256 { return ps[5n].a; } }')).toBe(true);
+    expect(accepts('type P = {a:u256;b:u256;}; class C { get f(): External<u256> { let xs: Arr<P,2> = [P(1n,2n),P(3n,4n)]; return xs[1n].a; } }')).toBe(true);
+    expect(accepts('type P = {a:u256;b:u256;}; class C { get f(ps: P[]): External<u256> { return ps[5n].a; } }')).toBe(true);
   });
 
   it('OA3: super.f() to an @external base virtual is rejected', () => {
-    expect(codesOf('@abstract class A { @state v: u256; @virtual @external f(): void { this.v = this.v + 1n; } } @contract class C extends A { @override @external f(): void { super.f(); } }')).toContain('JETH240');
+    expect(codesOf('abstract class A { v: u256; @virtual f(): External<void> { this.v = this.v + 1n; } } class C extends A { @override f(): External<void> { super.f(); } }')).toContain('JETH240');
     // super to an INTERNAL base still works
-    expect(accepts('@abstract class A { @state v: u256; @virtual g(): u256 { this.v = this.v + 1n; return this.v; } } @contract class C extends A { @override g(): u256 { return super.g() + 5n; } @external go(): u256 { return this.g(); } }')).toBe(true);
+    expect(accepts('abstract class A { v: u256; @virtual g(): u256 { this.v = this.v + 1n; return this.v; } } class C extends A { @override g(): u256 { return super.g() + 5n; } go(): External<u256> { return this.g(); } }')).toBe(true);
   });
 
   it('OA4: @override with a signature that overrides nothing is rejected (botched override)', () => {
-    expect(codesOf('@abstract class A { @virtual @external f(x: u256): u256 { return x; } } @contract class C extends A { @override @external f(x: u128): u256 { return u256(x) + 1000n; } }')).toContain('JETH369');
+    expect(codesOf('abstract class A { @virtual get f(x: u256): External<u256> { return x; } } class C extends A { @override get f(x: u128): External<u256> { return u256(x) + 1000n; } }')).toContain('JETH369');
     // a real override (same signature) and a real overload (no @override) still accepted
-    expect(accepts('@abstract class A { @virtual @external f(x: u256): u256 { return x; } } @contract class C extends A { @override @external f(x: u256): u256 { return x + 1n; } }')).toBe(true);
-    expect(accepts('@abstract class A { @virtual @external f(x: u256): u256 { return x; } } @contract class C extends A { @external f(x: u128): u256 { return u256(x); } @override @external f(x: u256): u256 { return x; } }')).toBe(true);
+    expect(accepts('abstract class A { @virtual get f(x: u256): External<u256> { return x; } } class C extends A { @override get f(x: u256): External<u256> { return x + 1n; } }')).toBe(true);
+    expect(accepts('abstract class A { @virtual get f(x: u256): External<u256> { return x; } } class C extends A { get f(x: u128): External<u256> { return u256(x); } @override get f(x: u256): External<u256> { return x; } }')).toBe(true);
   });
 });

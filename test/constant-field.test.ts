@@ -25,18 +25,18 @@ describe('@constant slot-free inlined constant', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
   // A @constant is declared BEFORE the @state vars on purpose: in solc the constant has no slot, so
   // x must be slot 0 and y slot 1. If JETH wrongly gave the constant a slot, x/y would shift.
-  const J = `@contract class C {
-    @constant FEE: u256 = 100n;
-    @constant SCALE: u256 = 10n ** 18n;
-    @constant ON: bool = true;
-    @state x: u256 = 0n;
-    @state y: u256 = 0n;
-    @external set(a: u256, b: u256): void { this.x = a; this.y = b; }
-    @external @pure fee(): u256 { return this.FEE; }
-    @external @pure scale(): u256 { return this.SCALE; }
-    @external @pure on(): bool { return this.ON; }
-    @external @pure calc(v: u256): u256 { return v * this.FEE + this.SCALE; }
-    @external @view xv(): u256 { return this.x; } }`;
+  const J = `class C {
+    static FEE: u256 = 100n;
+    static SCALE: u256 = 10n ** 18n;
+    static ON: bool = true;
+    x: u256 = 0n;
+    y: u256 = 0n;
+    set(a: u256, b: u256): External<void> { this.x = a; this.y = b; }
+    get fee(): External<u256> { return this.FEE; }
+    get scale(): External<u256> { return this.SCALE; }
+    get on(): External<bool> { return this.ON; }
+    get calc(v: u256): External<u256> { return v * this.FEE + this.SCALE; }
+    get xv(): External<u256> { return this.x; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {
@@ -82,10 +82,10 @@ contract C {
     expect((await jeth.call(aj, '0x' + sel('xv()'))).returnHex).toBe('0x' + pad32(7n));
   });
   it('compile-time behavior: assigning to a @constant rejects; reading works', () => {
-    expect(codes('@contract class C { @constant K: u256 = 1n; @external f(): void { this.K = 2n; } }')).toContain(
+    expect(codes('class C { static K: u256 = 1n; f(): External<void> { this.K = 2n; } }')).toContain(
       'JETH441',
     );
-    expect(codes('@contract class C { @constant K: u256 = 1n; @external @pure f(): u256 { return this.K; } }')).toEqual(
+    expect(codes('class C { static K: u256 = 1n; get f(): External<u256> { return this.K; } }')).toEqual(
       [],
     );
     // a @constant requires a foldable initializer

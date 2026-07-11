@@ -36,12 +36,12 @@ function arrOffsetTable(items: string[]): string {
 const valArr = (xs: bigint[]) => pad(BigInt(xs.length)) + xs.map(pad).join('');
 
 // ===================== #2 grid: u256[][] =====================
-const J2 = `@struct class S{a:u256;grid:u256[][];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256,j:u256,k:u256):u256{return xs[i].grid[j][k];}
-  @external @pure innerLen(xs:S[],i:u256,j:u256):u256{return xs[i].grid[j].length;}
-  @external @pure outerLen(xs:S[],i:u256):u256{return xs[i].grid.length;}
-  @external @pure a(xs:S[],i:u256):u256{return xs[i].a;}
+const J2 = `type S = {a:u256;grid:u256[][];};
+class C{
+  get f(xs:S[],i:u256,j:u256,k:u256):External<u256>{return xs[i].grid[j][k];}
+  get innerLen(xs:S[],i:u256,j:u256):External<u256>{return xs[i].grid[j].length;}
+  get outerLen(xs:S[],i:u256):External<u256>{return xs[i].grid.length;}
+  get a(xs:S[],i:u256):External<u256>{return xs[i].a;}
 }`;
 const S2 = `struct S{uint256 a;uint256[][] grid;}
 contract C{
@@ -54,12 +54,12 @@ const TY2 = '(uint256,uint256[][])';
 const elemGrid = (a: bigint, grid: bigint[][]) => pad(a) + pad(0x40n) + arrOffsetTable(grid.map(valArr));
 
 // ===================== #3 items: D[] (D dynamic) =====================
-const J3 = `@struct class D{v:u256;tag:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256,j:u256):u256{return xs[i].items[j].v;}
-  @external @pure t(xs:S[],i:u256,j:u256):string{return xs[i].items[j].tag;}
-  @external @pure ilen(xs:S[],i:u256):u256{return xs[i].items.length;}
+const J3 = `type D = {v:u256;tag:string;};
+type S = {a:u256;items:D[];};
+class C{
+  get f(xs:S[],i:u256,j:u256):External<u256>{return xs[i].items[j].v;}
+  get t(xs:S[],i:u256,j:u256):External<string>{return xs[i].items[j].tag;}
+  get ilen(xs:S[],i:u256):External<u256>{return xs[i].items.length;}
 }`;
 const S3 = `struct D{uint256 v;string tag;}
 struct S{uint256 a;D[] items;}
@@ -80,11 +80,11 @@ const dynD = (v: bigint, s: string) => pad(v) + pad(0x40n) + strBlob(s);
 const elemItems = (a: bigint, itemsBlob: string) => pad(a) + pad(0x40n) + itemsBlob;
 
 // ===================== #3b items: D[] (D static, contiguous) =====================
-const J3b = `@struct class D{v:u256;w:u256;}
-@struct class S{a:u256;items:D[];}
-@contract class C{
-  @external @pure f(xs:S[],i:u256,j:u256):u256{return xs[i].items[j].w;}
-  @external @pure ilen(xs:S[],i:u256):u256{return xs[i].items.length;}
+const J3b = `type D = {v:u256;w:u256;};
+type S = {a:u256;items:D[];};
+class C{
+  get f(xs:S[],i:u256,j:u256):External<u256>{return xs[i].items[j].w;}
+  get ilen(xs:S[],i:u256):External<u256>{return xs[i].items.length;}
 }`;
 const S3b = `struct D{uint256 v;uint256 w;}
 struct S{uint256 a;D[] items;}
@@ -97,15 +97,15 @@ const TY3b = `(uint256,${TYDb}[])`;
 const itemsStatic = (ds: [bigint, bigint][]) => pad(BigInt(ds.length)) + ds.map(([v, w]) => pad(v) + pad(w)).join('');
 
 // ===================== deeper #2 cube: u256[][][] =====================
-const Jc = `@struct class S{a:u256;cube:u256[][][];}
-@contract class C{@external @pure f(xs:S[],i:u256,j:u256,k:u256,l:u256):u256{return xs[i].cube[j][k][l];}}`;
+const Jc = `type S = {a:u256;cube:u256[][][];};
+class C{get f(xs:S[],i:u256,j:u256,k:u256,l:u256):External<u256>{return xs[i].cube[j][k][l];}}`;
 const Sc = `struct S{uint256 a;uint256[][][] cube;}
 contract C{function f(S[] calldata xs,uint256 i,uint256 j,uint256 k,uint256 l)external pure returns(uint256){return xs[i].cube[j][k][l];}}`;
 const TYc = '(uint256,uint256[][][])';
 
 // ===================== bool dirty-bit =====================
-const Jbool = `@struct class S{a:u256;flags:bool[][];}
-@contract class C{@external @pure f(xs:S[],i:u256,j:u256,k:u256):bool{return xs[i].flags[j][k];}}`;
+const Jbool = `type S = {a:u256;flags:bool[][];};
+class C{get f(xs:S[],i:u256,j:u256,k:u256):External<bool>{return xs[i].flags[j][k];}}`;
 const Sbool = `struct S{uint256 a;bool[][] flags;}
 contract C{function f(S[] calldata xs,uint256 i,uint256 j,uint256 k)external pure returns(bool){return xs[i].flags[j][k];}}`;
 const TYbool = '(uint256,bool[][])';
@@ -273,17 +273,17 @@ describe('cd-nested-fields: whole-field value forms (lifted; only the struct-ELE
   // cd-mask-and-whole-encode LIFT: the whole dynamic-ARRAY field value forms now COMPILE (return + abi.encode)
   // byte-identically to solc - the differential proof is in cd-mask-and-whole-encode.test.ts.
   it('xs[i].grid (whole u256[][]) now COMPILES (lifted)', () => {
-    expect(rejects(`@struct class S{a:u256;grid:u256[][];}
-@contract class C{@external @pure r(xs:S[],i:u256):u256[][]{return xs[i].grid;}}`)).toBe(false);
+    expect(rejects(`type S = {a:u256;grid:u256[][];};
+class C{get r(xs:S[],i:u256):External<u256[][]>{return xs[i].grid;}}`)).toBe(false);
   });
   it('xs[i].grid[j] (whole u256[]) now COMPILES (lifted)', () => {
-    expect(rejects(`@struct class S{a:u256;grid:u256[][];}
-@contract class C{@external @pure r(xs:S[],i:u256,j:u256):u256[]{return xs[i].grid[j];}}`)).toBe(false);
+    expect(rejects(`type S = {a:u256;grid:u256[][];};
+class C{get r(xs:S[],i:u256,j:u256):External<u256[]>{return xs[i].grid[j];}}`)).toBe(false);
   });
   it('xs[i].items (whole D[]) now COMPILES (lifted)', () => {
-    expect(rejects(`@struct class D{v:u256;t:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{@external @pure r(xs:S[],i:u256):D[]{return xs[i].items;}}`)).toBe(false);
+    expect(rejects(`type D = {v:u256;t:string;};
+type S = {a:u256;items:D[];};
+class C{get r(xs:S[],i:u256):External<D[]>{return xs[i].items;}}`)).toBe(false);
   });
   // calldata-whole-struct-element LIFT: a whole struct ELEMENT of a dyn-struct-array field used as a VALUE
   // (xs[i].items[j]) now COMPILES byte-identically to solc (return + abi.encode), for both a dynamic D
@@ -292,18 +292,18 @@ describe('cd-nested-fields: whole-field value forms (lifted; only the struct-ELE
   // calldata codec. The full differential proof (honest reads, OOB i/j -> Panic 0x32, truncated/oversized
   // calldata, return Panic 0x41 vs abi.encode EMPTY revert) is in calldata-whole-struct-element.test.ts.
   it('xs[i].items[j] whole STRUCT element (dynamic D) now COMPILES (lifted)', () => {
-    expect(rejects(`@struct class D{v:u256;tag:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{@external @pure r(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`)).toBe(false);
+    expect(rejects(`type D = {v:u256;tag:string;};
+type S = {a:u256;items:D[];};
+class C{get r(xs:S[],i:u256,j:u256):External<D>{return xs[i].items[j];}}`)).toBe(false);
   });
   it('xs[i].items[j] whole STRUCT element (static D) now COMPILES (lifted)', () => {
-    expect(rejects(`@struct class D{v:u256;w:u256;}
-@struct class S{a:u256;items:D[];}
-@contract class C{@external @pure r(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`)).toBe(false);
+    expect(rejects(`type D = {v:u256;w:u256;};
+type S = {a:u256;items:D[];};
+class C{get r(xs:S[],i:u256,j:u256):External<D>{return xs[i].items[j];}}`)).toBe(false);
   });
   it('abi.encode(xs[i].items[j]) whole struct element now COMPILES (lifted)', () => {
-    expect(rejects(`@struct class D{v:u256;tag:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{@external @pure r(xs:S[],i:u256,j:u256):bytes{return abi.encode(xs[i].items[j]);}}`)).toBe(false);
+    expect(rejects(`type D = {v:u256;tag:string;};
+type S = {a:u256;items:D[];};
+class C{get r(xs:S[],i:u256,j:u256):External<bytes>{return abi.encode(xs[i].items[j]);}}`)).toBe(false);
   });
 });

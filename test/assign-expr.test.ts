@@ -11,29 +11,29 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@contract class C {
+const JETH = `class C {
   // (x = v) yields v
-  @external @pure plainEq(v: u256): u256 { let x: u256 = 0n; let y: u256 = (x = v) + 1n; return x * 1000n + y; }
+  get plainEq(v: u256): External<u256> { let x: u256 = 0n; let y: u256 = (x = v) + 1n; return x * 1000n + y; }
   // (x += v) yields the new x
-  @external @pure compound(a: u256, v: u256): u256 { let x: u256 = a; let y: u256 = (x += v) * 2n; return x * 1000000n + y; }
+  get compound(a: u256, v: u256): External<u256> { let x: u256 = a; let y: u256 = (x += v) * 2n; return x * 1000000n + y; }
   // chained x = y = a (right associative): both become a, result a
-  @external @pure chained(a: u256): u256 { let x: u256 = 0n; let y: u256 = 0n; x = y = a; return x * 1000n + y; }
+  get chained(a: u256): External<u256> { let x: u256 = 0n; let y: u256 = 0n; x = y = a; return x * 1000n + y; }
   // assignment nested in a cast argument
-  @external @pure asArg(v: u256): u256 { let x: u256 = 0n; let r: u256 = u256(u128(x = v)) + x; return r; }
+  get asArg(v: u256): External<u256> { let x: u256 = 0n; let r: u256 = u256(u128(x = v)) + x; return r; }
   // assignment in a condition
-  @external @pure inCond(v: u256): u256 { let x: u256 = 0n; if ((x = v) > 10n) { return x + 100n; } return x; }
+  get inCond(v: u256): External<u256> { let x: u256 = 0n; if ((x = v) > 10n) { return x + 100n; } return x; }
   // assignment in a return
-  @external @pure inReturn(v: u256): u256 { let x: u256 = 0n; return (x = v) + 7n; }
+  get inReturn(v: u256): External<u256> { let x: u256 = 0n; return (x = v) + 7n; }
   // narrow-type masked yield: (x = ...) where x is u8 wraps via assignment? No - checked.
-  @external @pure narrowYield(a: u8, b: u8): u16 { let x: u8 = a; let r: u16 = (x = b); return r; }
+  get narrowYield(a: u8, b: u8): External<u16> { let x: u8 = a; let r: u16 = (x = b); return r; }
   // signed assignment yield
-  @external @pure signedYield(v: i64): i256 { let x: i64 = 0n; let r: i256 = (x = v); return r; }
+  get signedYield(v: i64): External<i256> { let x: i64 = 0n; let r: i256 = (x = v); return r; }
   // compound chain in one expression
-  @external @pure multiCompound(a: u256): u256 { let x: u256 = a; x += 5n; let y: u256 = (x *= 2n) - (x -= 3n); return x * 1000n + y; }
+  get multiCompound(a: u256): External<u256> { let x: u256 = a; x += 5n; let y: u256 = (x *= 2n) - (x -= 3n); return x * 1000n + y; }
   // state variable as the LHS of an expression-assignment
-  @state s: u256;
-  @external setVia(v: u256): u256 { let y: u256 = (this.s = v) + 1n; return y; }
-  @external @view getS(): u256 { return this.s; }
+  s: u256;
+  setVia(v: u256): External<u256> { let y: u256 = (this.s = v) + 1n; return y; }
+  get getS(): External<u256> { return this.s; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

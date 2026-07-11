@@ -13,10 +13,10 @@ const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class C {
-  @external @pure dof(a: Arr<u256,2>[], i: u256, j: u256): u256 { return a[i][j]; }
-  @external @pure fod(a: Arr<u256[],2>, i: u256, j: u256): u256 { return a[i][j]; }
-  @external @pure fodLen(a: Arr<u256[],2>, i: u256): u256 { return a[i].length; }
+const JETH = `class C {
+  get dof(a: Arr<u256,2>[], i: u256, j: u256): External<u256> { return a[i][j]; }
+  get fod(a: Arr<u256[],2>, i: u256, j: u256): External<u256> { return a[i][j]; }
+  get fodLen(a: Arr<u256[],2>, i: u256): External<u256> { return a[i].length; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

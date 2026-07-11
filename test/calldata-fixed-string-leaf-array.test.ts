@@ -64,7 +64,7 @@ const PAYLOAD: [string, string][] = [
 describe('Arr<string,2>[] (solc string[2][] calldata): dynamic-outer fixed-string-leaf, byte-identical to solc 0.8.35', () => {
   it('.length of the dynamic outer array', async () => {
     await eqCalls(
-      '@contract class C { @external @pure f(xs: Arr<string,2>[]): u256 { return xs.length; } }',
+      'class C { get f(xs: Arr<string,2>[]): External<u256> { return xs.length; } }',
       'contract C { function f(string[2][] calldata xs) external pure returns(uint256){ return xs.length; } }',
       [['f(string[2][])', arg(PAYLOAD)]],
     );
@@ -72,17 +72,17 @@ describe('Arr<string,2>[] (solc string[2][] calldata): dynamic-outer fixed-strin
 
   it('leaf read xs[i][j] for every in-bounds (i,j), including a >31-byte leaf', async () => {
     await eqCalls(
-      '@contract class C { @external @pure f(xs: Arr<string,2>[]): string { return xs[0n][0n]; } }',
+      'class C { get f(xs: Arr<string,2>[]): External<string> { return xs[0n][0n]; } }',
       'contract C { function f(string[2][] calldata xs) external pure returns(string memory){ return xs[0][0]; } }',
       [['f(string[2][])', arg(PAYLOAD)]],
     );
     await eqCalls(
-      '@contract class C { @external @pure f(xs: Arr<string,2>[]): string { return xs[0n][1n]; } }',
+      'class C { get f(xs: Arr<string,2>[]): External<string> { return xs[0n][1n]; } }',
       'contract C { function f(string[2][] calldata xs) external pure returns(string memory){ return xs[0][1]; } }',
       [['f(string[2][])', arg(PAYLOAD)]],
     );
     await eqCalls(
-      '@contract class C { @external @pure f(xs: Arr<string,2>[]): string { return xs[1n][1n]; } }',
+      'class C { get f(xs: Arr<string,2>[]): External<string> { return xs[1n][1n]; } }',
       'contract C { function f(string[2][] calldata xs) external pure returns(string memory){ return xs[1][1]; } }',
       [['f(string[2][])', arg(PAYLOAD)]],
     );
@@ -90,7 +90,7 @@ describe('Arr<string,2>[] (solc string[2][] calldata): dynamic-outer fixed-strin
 
   it('runtime index xs[i][0] - in-bounds matches, OUT-OF-BOUNDS outer index Panics identically (0x32)', async () => {
     await eqCalls(
-      '@contract class C { @external @pure f(xs: Arr<string,2>[], i: u256): string { return xs[i][0n]; } }',
+      'class C { get f(xs: Arr<string,2>[], i: u256): External<string> { return xs[i][0n]; } }',
       'contract C { function f(string[2][] calldata xs, uint256 i) external pure returns(string memory){ return xs[i][0]; } }',
       [
         ['f(string[2][],uint256)', arg2(PAYLOAD, 0)], // in-bounds

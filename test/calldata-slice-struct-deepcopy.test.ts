@@ -51,10 +51,10 @@ async function eqCalls(jeth: string, sol: string, calls: [string, string][]) {
 }
 
 describe('W5B shape 3: abi.encode of a calldata value-array slice', () => {
-  const J = `@contract class C {
-    @external enc(a: u256[], s: u256, e: u256): bytes { return abi.encode(a.slice(s, e)); }
-    @external kc(a: u8[]): bytes32 { return keccak256(abi.encode(a.slice(1n))); }
-    @external mix(a: u256[], n: u256): bytes { return abi.encode(n, a.slice(1n), true); }
+  const J = `class C {
+    get enc(a: u256[], s: u256, e: u256): External<bytes> { return abi.encode(a.slice(s, e)); }
+    get kc(a: u8[]): External<bytes32> { return keccak256(abi.encode(a.slice(1n))); }
+    get mix(a: u256[], n: u256): External<bytes> { return abi.encode(n, a.slice(1n), true); }
   }`;
   const S = `contract C {
     function enc(uint256[] calldata a, uint256 s, uint256 e) external pure returns (bytes memory) { return abi.encode(a[s:e]); }
@@ -92,7 +92,7 @@ describe('W5B shape 3: abi.encode of a calldata value-array slice', () => {
 
   it('enum slice: out-of-range in-window reverts empty; out-of-window ignored', async () => {
     const JE = `enum Color { Red, Green, Blue }
-    @contract class C { @external enc(a: Color[]): bytes { return abi.encode(a.slice(1n)); } }`;
+    class C { get enc(a: Color[]): External<bytes> { return abi.encode(a.slice(1n)); } }`;
     const SE = `contract C { enum Color { Red, Green, Blue } function enc(Color[] calldata a) external pure returns (bytes memory) { return abi.encode(a[1:]); } }`;
     await eqCalls(JE, SE, [
       ['enc(uint8[])', W(32) + arr([W(0), W(2)])],
@@ -103,26 +103,26 @@ describe('W5B shape 3: abi.encode of a calldata value-array slice', () => {
 });
 
 describe('W5B shape 4: STATIC-STRUCT calldata array slices (P[] -> ps.slice(s, e))', () => {
-  const HDR = `@struct class P { x: u256; y: u256 }
-  @struct class Q { a: u8; b: bool; c: address }
-  @struct class In2 { m: u256; n: u8 }
-  @struct class R { pre: Arr<u256,2>; inn: In2; t: u256 }`;
+  const HDR = `type P = { x: u256; y: u256 };
+  type Q = { a: u8; b: bool; c: address };
+  type In2 = { m: u256; n: u8 };
+  type R = { pre: Arr<u256,2>; inn: In2; t: u256 };`;
   const SHDR = `struct P { uint256 x; uint256 y; }
     struct Q { uint8 a; bool b; address c; }
     struct In2 { uint256 m; uint8 n; }
     struct R { uint256[2] pre; In2 inn; uint256 t; }`;
   const J = `${HDR}
-  @contract class C {
-    @external f1(ps: P[], s: u256, e: u256, i: u256): u256 { return ps.slice(s, e)[i].y; }
-    @external f2(qs: Q[], i: u256): bytes { let s: Q[] = qs.slice(1n); return abi.encode(s.length, s[i].a, s[i].b, s[i].c); }
-    @external f3(rs: R[], i: u256): bytes { return abi.encode(rs.slice(1n)[i].inn.m, rs.slice(1n)[i].inn.n, rs.slice(1n)[i].t); }
-    @external f4(ps: P[]): P { return ps.slice(1n)[0n]; }
-    @external f5(ps: P[]): P[] { let s: P[] = ps.slice(1n); return s; }
-    @external f6(ps: P[], s: u256): bytes { return abi.encode(ps.slice(s)); }
+  class C {
+    get f1(ps: P[], s: u256, e: u256, i: u256): External<u256> { return ps.slice(s, e)[i].y; }
+    get f2(qs: Q[], i: u256): External<bytes> { let s: Q[] = qs.slice(1n); return abi.encode(s.length, s[i].a, s[i].b, s[i].c); }
+    get f3(rs: R[], i: u256): External<bytes> { return abi.encode(rs.slice(1n)[i].inn.m, rs.slice(1n)[i].inn.n, rs.slice(1n)[i].t); }
+    get f4(ps: P[]): External<P> { return ps.slice(1n)[0n]; }
+    get f5(ps: P[]): External<P[]> { let s: P[] = ps.slice(1n); return s; }
+    get f6(ps: P[], s: u256): External<bytes> { return abi.encode(ps.slice(s)); }
     g(xs: P[]): u256 { return xs.length * 1000n + (xs.length > 0n ? xs[0n].x : 0n); }
-    @external f7(ps: P[], s: u256, e: u256): u256 { return this.g(ps.slice(s, e)); }
-    @external f9(ps: P[]): u256 { let s: P[] = ps.slice(1n).slice(1n); return s.length * 100n + s[0n].x; }
-    @external fm(ps: P[]): bytes { let s: P[] = ps.slice(1n); s[0n].x = 777n; return abi.encode(s[0n].x, ps[1n].x); }
+    get f7(ps: P[], s: u256, e: u256): External<u256> { return this.g(ps.slice(s, e)); }
+    get f9(ps: P[]): External<u256> { let s: P[] = ps.slice(1n).slice(1n); return s.length * 100n + s[0n].x; }
+    get fm(ps: P[]): External<bytes> { let s: P[] = ps.slice(1n); s[0n].x = 777n; return abi.encode(s[0n].x, ps[1n].x); }
   }`;
   const S = `contract C {
     ${SHDR}
@@ -202,11 +202,11 @@ describe('W5B shape 4: STATIC-STRUCT calldata array slices (P[] -> ps.slice(s, e
   });
 
   it('PARITY rejects: unbound slice .length; dynamic-element slices (solc rejects them too)', () => {
-    expect(jethAccepts(`@struct class P { x: u256; y: u256 } @contract class C { @external f(ps: P[]): u256 { return ps.slice(1n).length; } }`)).toBe(false);
+    expect(jethAccepts(`type P = { x: u256; y: u256 }; class C { get f(ps: P[]): External<u256> { return ps.slice(1n).length; } }`)).toBe(false);
     expect(solAccepts(`contract C { struct P { uint256 x; uint256 y; } function f(P[] calldata ps) external pure returns (uint256) { return ps[1:].length; } }`)).toBe(false);
-    expect(jethAccepts(`@struct class D { s: string; n: u256 } @contract class C { @external f(ds: D[]): u256 { return ds.slice(1n)[0n].n; } }`)).toBe(false);
+    expect(jethAccepts(`type D = { s: string; n: u256 }; class C { get f(ds: D[]): External<u256> { return ds.slice(1n)[0n].n; } }`)).toBe(false);
     expect(solAccepts(`contract C { struct D { string s; uint256 n; } function f(D[] calldata ds) external pure returns (uint256) { return ds[1:][0].n; } }`)).toBe(false);
-    expect(jethAccepts(`@contract class C { @external f(bs: bytes[]): u256 { let s: bytes[] = bs.slice(1n); return s.length; } }`)).toBe(false);
+    expect(jethAccepts(`class C { get f(bs: bytes[]): External<u256> { let s: bytes[] = bs.slice(1n); return s.length; } }`)).toBe(false);
     expect(solAccepts(`contract C { function f(bytes[] calldata bs) external pure returns (uint256) { bytes[] memory s = bs[1:]; return s.length; } }`)).toBe(false);
   });
 });

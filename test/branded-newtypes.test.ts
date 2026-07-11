@@ -14,30 +14,30 @@ const A = 0xa11ce0000000000000000000000000000000n;
 // Branded version
 const BRANDED = `type TokenId = Brand<u256>;
 type Wei = Brand<u256>;
-@struct class Rec { id: TokenId; bal: Wei; }
-@contract class C {
-  @state owner: mapping<TokenId, address>;
-  @state rec: Rec;
-  @external setOwner(id: TokenId, o: address): void { this.owner[id] = o; }
-  @external @view ownerOf(id: TokenId): address { return this.owner[id]; }
-  @external @pure next(id: TokenId): TokenId { return TokenId(u256(id) + 1n); }
-  @external @pure addWei(a: Wei, b: Wei): Wei { return a + b; }
-  @external @pure eqId(a: TokenId, b: TokenId): bool { return a == b; }
-  @external setRec(i: TokenId, b: Wei): void { this.rec = Rec(i, b); }
-  @external @view recId(): u256 { return u256(this.rec.id); }
+type Rec = { id: TokenId; bal: Wei; };
+class C {
+  owner: mapping<TokenId, address>;
+  rec: Rec;
+  setOwner(id: TokenId, o: address): External<void> { this.owner[id] = o; }
+  get ownerOf(id: TokenId): External<address> { return this.owner[id]; }
+  get next(id: TokenId): External<TokenId> { return TokenId(u256(id) + 1n); }
+  get addWei(a: Wei, b: Wei): External<Wei> { return a + b; }
+  get eqId(a: TokenId, b: TokenId): External<bool> { return a == b; }
+  setRec(i: TokenId, b: Wei): External<void> { this.rec = Rec(i, b); }
+  get recId(): External<u256> { return u256(this.rec.id); }
 }`;
 // Structurally identical, but plain u256 everywhere (the brand is the only difference).
-const PLAIN = `@struct class Rec { id: u256; bal: u256; }
-@contract class C {
-  @state owner: mapping<u256, address>;
-  @state rec: Rec;
-  @external setOwner(id: u256, o: address): void { this.owner[id] = o; }
-  @external @view ownerOf(id: u256): address { return this.owner[id]; }
-  @external @pure next(id: u256): u256 { return u256(id + 1n); }
-  @external @pure addWei(a: u256, b: u256): u256 { return a + b; }
-  @external @pure eqId(a: u256, b: u256): bool { return a == b; }
-  @external setRec(i: u256, b: u256): void { this.rec = Rec(i, b); }
-  @external @view recId(): u256 { return u256(this.rec.id); }
+const PLAIN = `type Rec = { id: u256; bal: u256; };
+class C {
+  owner: mapping<u256, address>;
+  rec: Rec;
+  setOwner(id: u256, o: address): External<void> { this.owner[id] = o; }
+  get ownerOf(id: u256): External<address> { return this.owner[id]; }
+  get next(id: u256): External<u256> { return u256(id + 1n); }
+  get addWei(a: u256, b: u256): External<u256> { return a + b; }
+  get eqId(a: u256, b: u256): External<bool> { return a == b; }
+  setRec(i: u256, b: u256): External<void> { this.rec = Rec(i, b); }
+  get recId(): External<u256> { return u256(this.rec.id); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

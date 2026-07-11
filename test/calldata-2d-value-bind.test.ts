@@ -52,11 +52,11 @@ describe('calldata-2d-value-bind: u256[][]', () => {
   let a: { aj: Address; as: Address };
   beforeAll(async () => {
     a = await pair(
-      `@contract class C{
-  @external @pure len(xs:u256[][],i:u256):u256{ let row:u256[]=xs[i]; return row.length; }
-  @external @pure idx(xs:u256[][],i:u256,k:u256):u256{ let row:u256[]=xs[i]; return row[k]; }
-  @external @pure sum(xs:u256[][],i:u256):u256{ let row:u256[]=xs[i]; let t:u256=0n; for(const v of row){ t=t+v; } return t; }
-  @external @pure ret(xs:u256[][],i:u256):u256[]{ let row:u256[]=xs[i]; return row; }
+      `class C{
+  get len(xs:u256[][],i:u256):External<u256>{ let row:u256[]=xs[i]; return row.length; }
+  get idx(xs:u256[][],i:u256,k:u256):External<u256>{ let row:u256[]=xs[i]; return row[k]; }
+  get sum(xs:u256[][],i:u256):External<u256>{ let row:u256[]=xs[i]; let t:u256=0n; for(const v of row){ t=t+v; } return t; }
+  get ret(xs:u256[][],i:u256):External<u256[]>{ let row:u256[]=xs[i]; return row; }
 }`,
       `contract C{
   function len(uint256[][] calldata xs,uint256 i)external pure returns(uint256){ uint256[] memory row=xs[i]; return row.length; }
@@ -106,10 +106,10 @@ describe('calldata-2d-value-bind: address[][] (value-leaf masking)', () => {
   let a: { aj: Address; as: Address };
   beforeAll(async () => {
     a = await pair(
-      `@contract class C{
-  @external @pure idx(xs:address[][],i:u256,k:u256):address{ let row:address[]=xs[i]; return row[k]; }
-  @external @pure len(xs:address[][],i:u256):u256{ let row:address[]=xs[i]; return row.length; }
-  @external @pure ret(xs:address[][],i:u256):address[]{ let row:address[]=xs[i]; return row; }
+      `class C{
+  get idx(xs:address[][],i:u256,k:u256):External<address>{ let row:address[]=xs[i]; return row[k]; }
+  get len(xs:address[][],i:u256):External<u256>{ let row:address[]=xs[i]; return row.length; }
+  get ret(xs:address[][],i:u256):External<address[]>{ let row:address[]=xs[i]; return row; }
 }`,
       `contract C{
   function idx(address[][] calldata xs,uint256 i,uint256 k)external pure returns(address){ address[] memory row=xs[i]; return row[k]; }
@@ -141,8 +141,8 @@ describe('calldata-2d-value-bind: Arr<u256,2>[] (fixed inner)', () => {
   let a: { aj: Address; as: Address };
   beforeAll(async () => {
     a = await pair(
-      `@contract class C{
-  @external @pure idx(xs:Arr<u256,2>[],i:u256,k:u256):u256{ let row:Arr<u256,2>=xs[i]; return row[k]; }
+      `class C{
+  get idx(xs:Arr<u256,2>[],i:u256,k:u256):External<u256>{ let row:Arr<u256,2>=xs[i]; return row[k]; }
 }`,
       `contract C{
   function idx(uint256[2][] calldata xs,uint256 i,uint256 k)external pure returns(uint256){ uint256[2] memory row=xs[i]; return row[k]; }
