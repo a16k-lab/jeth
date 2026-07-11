@@ -27,7 +27,7 @@ function codes(src: string): string[] {
   }
 }
 const fn = (body: string, consts = '') =>
-  `@contract class C {\n  ${consts}  @external f(a: u256): u256 { ${body} }\n}\n`;
+  `class C {\n  ${consts}  get f(a: u256): External<u256> { ${body} }\n}\n`;
 const accepts = (body: string, consts = '') => expect(codes(fn(body, consts))).toEqual([]);
 const rejects = (body: string, consts = '') => expect(codes(fn(body, consts)).length).toBeGreaterThan(0);
 
@@ -84,7 +84,7 @@ describe('constant ** / << 4096-bit fold limit (P0-36 crash, P0-37 boundary)', (
 });
 
 describe('constant division/modulo by a zero @constant reference (P0-25)', () => {
-  const Z0 = '@constant Z: u256 = 0n;\n';
+  const Z0 = 'static Z: u256 = 0n;\n';
 
   it('rejects a pure int_const divide/modulo by a zero @constant', () => {
     expect(codes(fn('return 1n / this.Z;', Z0))).toEqual(['JETH079']);
@@ -94,20 +94,20 @@ describe('constant division/modulo by a zero @constant reference (P0-25)', () =>
   });
 
   it('rejects when the zero divisor is a computed @constant (2n - 2n) or a folded ref expr', () => {
-    rejects('return 1n / this.Z;', '@constant Z: u256 = 2n - 2n;\n');
-    rejects('return 1n / this.Z;', '@constant Z: u256 = 10n - 10n;\n');
-    rejects('return 1n / (this.Z - this.Z);', '@constant Z: u256 = 5n;\n');
+    rejects('return 1n / this.Z;', 'static Z: u256 = 2n - 2n;\n');
+    rejects('return 1n / this.Z;', 'static Z: u256 = 10n - 10n;\n');
+    rejects('return 1n / (this.Z - this.Z);', 'static Z: u256 = 5n;\n');
   });
 
   it('KEEPS a runtime/typed dividend accepted (a Panic 0x12 at runtime, matching solc)', () => {
     accepts('return a / this.Z;', Z0); // runtime dividend
     accepts('return u256(1) / this.Z;', Z0); // typed-cast dividend -> runtime, not folded
-    accepts('return a / this.Z;', '@constant Z: u256 = 5n;\n'); // nonzero divisor
+    accepts('return a / this.Z;', 'static Z: u256 = 5n;\n'); // nonzero divisor
     accepts('return a / a;'); // both runtime
   });
 
   it('KEEPS a nonzero pure-constant division accepted (exact fold)', () => {
-    accepts('return 1n / this.Z;', '@constant Z: u256 = 1n;\n');
-    accepts('return 6n / this.Z;', '@constant Z: u256 = 2n;\n');
+    accepts('return 1n / this.Z;', 'static Z: u256 = 1n;\n');
+    accepts('return 6n / this.Z;', 'static Z: u256 = 2n;\n');
   });
 });

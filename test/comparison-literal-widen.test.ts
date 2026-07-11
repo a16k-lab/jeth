@@ -22,7 +22,7 @@ function codes(src: string): string[] {
     throw e;
   }
 }
-const f = (p: string, e: string) => `@contract class C { @external @pure f(a: ${p}): bool { return ${e}; } }`;
+const f = (p: string, e: string) => `class C { get f(a: ${p}): External<bool> { return ${e}; } }`;
 
 describe('comparison of an integer variable to an out-of-range literal (#7)', () => {
   it('accepts when the literal widens to a same-signedness common type (like solc)', () => {

@@ -71,7 +71,7 @@ describe('audit over-rejections lifted byte-identical', () => {
       [32, 'abcdefghijklmnopqrstuvwxyzABCDEF'],
     ] as [number, string][]) {
       await eqValue(
-        `@contract class C { @constant K: bytes${n} = bytes${n}("${s}"); @external @pure get(): bytes${n} { return this.K; } }`,
+        `class C { static K: bytes${n} = bytes${n}("${s}"); get get(): External<bytes${n}> { return this.K; } }`,
         `contract C { bytes${n} constant K = bytes${n}("${s}"); function get() external pure returns (bytes${n}) { return K; } }`,
         'get()',
       );

@@ -43,13 +43,13 @@ const solRejects = (src: string) => {
 describe('enum member literal is not implicitly convertible to an integer (vs solc)', () => {
   // (1) return Color.Blue from a uint-returning function: JETH-REJECT, solc-REJECT.
   it('rejects `return Color.Blue;` from a u256 function (both reject)', () => {
-    expect(codes(J('@external @pure f(): u256 { return Color.Blue; }'))).toContain('JETH085');
+    expect(codes(J('get f(): External<u256> { return Color.Blue; }'))).toContain('JETH085');
     expect(solRejects(S('function f() external pure returns (uint256) { return Color.Blue; }'))).toBe(true);
   });
 
   // (2) let x: u256 = Color.Green: JETH-REJECT, solc-REJECT.
   it('rejects `let x: u256 = Color.Green;` (both reject)', () => {
-    expect(codes(J('@external @pure f(): u256 { let x: u256 = Color.Green; return x; }'))).toContain('JETH085');
+    expect(codes(J('get f(): External<u256> { let x: u256 = Color.Green; return x; }'))).toContain('JETH085');
     expect(solRejects(S('function f() external pure returns (uint256) { uint256 x = Color.Green; return x; }'))).toBe(
       true,
     );
@@ -57,8 +57,8 @@ describe('enum member literal is not implicitly convertible to an integer (vs so
 
   // (3) an enum literal argument into a single (non-overloaded) uint param: JETH-REJECT, solc-REJECT.
   it('rejects an enum-literal argument into a u256 parameter (both reject)', () => {
-    const j = 'pick(u: u256): u256 { return u; } @external @pure f(): u256 { return this.pick(Color.Blue); }';
-    expect(codes(J(j))).toContain('JETH481');
+    const j = 'pick(u: u256): u256 { return u; } get f(): External<u256> { return this.pick(Color.Blue); }';
+    expect(codes(J(j))).toContain('JETH085');
     const s =
       'function pick(uint256 u) internal pure returns (uint256) { return u; } function f() external pure returns (uint256) { return pick(Color.Blue); }';
     expect(solRejects(S(s))).toBe(true);
@@ -77,9 +77,9 @@ describe('enum member literal is not implicitly convertible to an integer (vs so
   describe('explicit cast and same-enum assignment still work, byte-identical to solc', () => {
     let jeth: Harness, sol: Harness, aj: Address, as: Address;
     const body = `
-      @external @pure cast(): u256 { return u256(Color.Blue); }
-      @external @pure same(): Color { return Color.Green; }
-      @external @pure ovl(): u256 { return this.pick(Color.Blue); }
+      get cast(): External<u256> { return u256(Color.Blue); }
+      get same(): External<Color> { return Color.Green; }
+      get ovl(): External<u256> { return this.pick(Color.Blue); }
       pick(c: Color): u256 { return 100n; }
       pick(u: u256): u256 { return 200n; }`;
     const sbody = `

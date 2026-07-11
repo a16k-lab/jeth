@@ -23,12 +23,12 @@ function codes(src: string): string[] {
   }
 }
 const fn = (op: string, ty = 'bool') =>
-  `@contract class C { @external @pure f(a: ${ty}, b: ${ty}): bool { return a ${op} b; } }`;
+  `class C { get f(a: ${ty}, b: ${ty}): External<bool> { return a ${op} b; } }`;
 
 describe('relational operators on bool match solc', () => {
   it('< > <= >= on bool are rejected (JETH082)', () => {
     for (const op of ['>', '<', '>=', '<=']) {
-      expect(codes(fn(op)), `'${op}' on bool`).toContain('JETH481');
+      expect(codes(fn(op)), `'${op}' on bool`).toContain('JETH082');
     }
   });
 
@@ -46,7 +46,7 @@ describe('relational operators on bool match solc', () => {
     // enum ordering (compares the underlying uint8), as solc allows
     for (const op of ['>', '<', '>=', '<=', '==', '!=']) {
       expect(
-        codes(`enum E { A, B, C } @contract class C { @external @pure f(a: E, b: E): bool { return a ${op} b; } }`),
+        codes(`enum E { A, B, C } class C { get f(a: E, b: E): External<bool> { return a ${op} b; } }`),
         `'${op}' on enum`,
       ).toEqual([]);
     }

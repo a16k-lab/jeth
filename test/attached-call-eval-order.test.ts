@@ -40,7 +40,7 @@ async function pair(jethSrc: string, solSrc: string, calls: [string, string?][])
 }
 
 // Shared library + contract scaffolding. mark trace: t = t*100 + id.
-const LIB = `@library class L {
+const LIB = `static class L {
   tag2(v: u256, k: u256): u256 { return v * 1000n + k; }
   tag3(v: u256, a: u256, b: u256): u256 { return v * 1000000n + a * 1000n + b; }
   f(v: u256, a: u256): u256 { return v * 10n + a; }
@@ -54,15 +54,14 @@ const SLIB = `library L {
   function h(uint256 v, uint256 a) internal pure returns (uint256) { return v * 100 + a; }
   function sink(uint256 v, uint256 k) internal pure { }
 }`;
-const LC = (body: string) => `// use @decorators
-${LIB}
-@using(L) @contract class C {
-  @state t: u256; @state n: u256;
+const LC = (body: string) => `${LIB}
+@using(L) class C {
+  t: u256; n: u256;
   mk(id: u256): u256 { this.t = this.t * 100n + id; return id; }
   bump(): u256 { this.mk(1n); this.n = this.n + 11n; return 6n; }
-  @external seed(x: u256): void { this.n = x; }
-  @external @view rdN(): u256 { return this.n; }
-  @external @view tr(): u256 { return this.t; }
+  seed(x: u256): External<void> { this.n = x; }
+  get rdN(): External<u256> { return this.n; }
+  get tr(): External<u256> { return this.t; }
   ${body}
 }`;
 const SC = (body: string, extra = '') => `${SLIB}
@@ -96,7 +95,7 @@ const seedGoTr: [string, string?][] = [['seed(uint256)', W(9)], ['go()'], ['tr()
 describe('attached-call evaluation order (args first, receiver LAST - solc legacy)', () => {
   it('legacy @using: a state-mutating arg runs BEFORE the storage receiver read (the adjudicated repro)', async () => {
     const [, go, tr, n] = await pair(
-      LC(`@external go(): u256 { return this.n.tag2(this.bump()); }`),
+      LC(`go(): External<u256> { return this.n.tag2(this.bump()); }`),
       SC(`function go() external returns (uint256) { return n.tag2(bump()); }`),
       [...seedGoTr, ['rdN()']],
     );
@@ -118,7 +117,7 @@ describe('attached-call evaluation order (args first, receiver LAST - solc legac
   it('TWO mutating args evaluate left-to-right, receiver after BOTH (both channels)', async () => {
     const legacy = await pair(
       LC(`bumpB(): u256 { this.mk(2n); this.n = this.n + 300n; return 8n; }
-  @external go(): u256 { return this.n.tag3(this.bump(), this.bumpB()); }`),
+  go(): External<u256> { return this.n.tag3(this.bump(), this.bumpB()); }`),
       SC(`function bumpB() internal returns (uint256) { mk(2); n = n + 300; return 8; }
   function go() external returns (uint256) { return n.tag3(bump(), bumpB()); }`),
       seedGoTr,
@@ -139,7 +138,7 @@ describe('attached-call evaluation order (args first, receiver LAST - solc legac
   it('a CALL-RESULT receiver evaluates after the args (trace order, not just values)', async () => {
     const [go, tr] = await pair(
       LC(`pick(): u256 { this.mk(7n); return 4n; }
-  @external go(): u256 { return this.pick().tag2(this.mk(3n)); }`),
+  go(): External<u256> { return this.pick().tag2(this.mk(3n)); }`),
       SC(`function pick() internal returns (uint256) { mk(7); return 4; }
   function go() external returns (uint256) { return pick().tag2(mk(3)); }`),
       [['go()'], ['tr()']],
@@ -150,10 +149,10 @@ describe('attached-call evaluation order (args first, receiver LAST - solc legac
 
   it('a receiver with a side effect in ITS OWN expression (arr[bumpI()]) still runs after the args', async () => {
     const [, go, tr] = await pair(
-      LC(`@state arr: Arr<u256, 3>;
+      LC(`arr: Arr<u256, 3>;
   bumpI(): u256 { this.mk(7n); this.arr[2n] = this.arr[2n] + 5n; return 2n; }
-  @external seedA(): void { this.arr[0n] = 50n; this.arr[1n] = 60n; this.arr[2n] = 70n; }
-  @external go(): u256 { return this.arr[this.bumpI()].tag2(this.mk(3n)); }`),
+  seedA(): External<void> { this.arr[0n] = 50n; this.arr[1n] = 60n; this.arr[2n] = 70n; }
+  go(): External<u256> { return this.arr[this.bumpI()].tag2(this.mk(3n)); }`),
       SC(`uint256[3] arr;
   function bumpI() internal returns (uint256) { mk(7); arr[2] = arr[2] + 5; return 2; }
   function seedA() external { arr[0] = 50; arr[1] = 60; arr[2] = 70; }
@@ -168,7 +167,7 @@ describe('attached-call evaluation order (args first, receiver LAST - solc legac
     const [, go, tr] = await pair(
       LC(`g(): u256 { this.mk(3n); this.n = this.n + 11n; return 2n; }
   k(): u256 { this.mk(4n); return 5n; }
-  @external go(): u256 { return this.n.f(this.g()).h(this.k()); }`),
+  go(): External<u256> { return this.n.f(this.g()).h(this.k()); }`),
       SC(`function g() internal returns (uint256) { mk(3); n = n + 11; return 2; }
   function k() internal returns (uint256) { mk(4); return 5; }
   function go() external returns (uint256) { return n.f(g()).h(k()); }`),
@@ -180,10 +179,10 @@ describe('attached-call evaluation order (args first, receiver LAST - solc legac
 
   it('an attached call as the ARGUMENT of another attached call (nested rule)', async () => {
     const [, , go, tr] = await pair(
-      LC(`@state kk: u256;
+      LC(`kk: u256;
   bumpBoth(): u256 { this.mk(1n); this.n = this.n + 11n; this.kk = this.kk + 2n; return 6n; }
-  @external seedK(x: u256): void { this.kk = x; }
-  @external go(): u256 { return this.n.tag2(this.kk.tag2(this.bumpBoth())); }`),
+  seedK(x: u256): External<void> { this.kk = x; }
+  go(): External<u256> { return this.n.tag2(this.kk.tag2(this.bumpBoth())); }`),
       SC(`uint256 kk;
   function bumpBoth() internal returns (uint256) { mk(1); n = n + 11; kk = kk + 2; return 6; }
   function seedK(uint256 x) external { kk = x; }
@@ -197,7 +196,7 @@ describe('attached-call evaluation order (args first, receiver LAST - solc legac
   it('STATEMENT position (void attached call) keeps the same order - both channels', async () => {
     const legacy = await pair(
       LC(`rd(): u256 { this.mk(9n); return this.n; }
-  @external go(): void { this.rd().sink(this.bump()); }`),
+  go(): External<void> { this.rd().sink(this.bump()); }`),
       SC(`function rd() internal returns (uint256) { mk(9); return n; }
   function go() external { rd().sink(bump()); }`),
       seedGoTr,
@@ -215,16 +214,15 @@ describe('attached-call evaluation order (args first, receiver LAST - solc legac
 
   it('a STRUCT receiver copies storage->memory AFTER the args; a BYTES receiver likewise', async () => {
     const [, goS, trS] = await pair(
-      `// use @decorators
-@struct class P { x: u256; y: u256; }
-@library class LP { getx(p: P, k: u256): u256 { return p.x * 1000n + k; } }
-@using(LP) @contract class C {
-  @state t: u256; @state s: P;
+      `type P = { x: u256; y: u256; };
+static class LP { getx(p: P, k: u256): u256 { return p.x * 1000n + k; } }
+@using(LP) class C {
+  t: u256; s: P;
   mk(id: u256): u256 { this.t = this.t * 100n + id; return id; }
   bumpX(): u256 { this.mk(1n); this.s.x = this.s.x + 11n; return 6n; }
-  @external seed(x: u256): void { this.s.x = x; this.s.y = 1n; }
-  @external go(): u256 { return this.s.getx(this.bumpX()); }
-  @external @view tr(): u256 { return this.t; }
+  seed(x: u256): External<void> { this.s.x = x; this.s.y = 1n; }
+  go(): External<u256> { return this.s.getx(this.bumpX()); }
+  get tr(): External<u256> { return this.t; }
 }`,
       `library LP { struct P { uint256 x; uint256 y; }
   function getx(P memory p, uint256 k) internal pure returns (uint256) { return p.x * 1000 + k; } }
@@ -241,15 +239,14 @@ contract C { using LP for LP.P;
     expect(goS).toBe(20006n); // p.x sees the mutated value: the memory copy is made after the arg
     expect(trS).toBe(1n);
     const [, goB, trB] = await pair(
-      `// use @decorators
-@library class LB { blen(b: bytes, k: u256): u256 { return b.length * 1000n + k; } }
-@using(LB) @contract class C {
-  @state t: u256; @state b: bytes;
+      `static class LB { blen(b: bytes, k: u256): u256 { return b.length * 1000n + k; } }
+@using(LB) class C {
+  t: u256; b: bytes;
   mk(id: u256): u256 { this.t = this.t * 100n + id; return id; }
   grow(): u256 { this.mk(1n); this.b.push(0x22n); return 6n; }
-  @external seed(x: u256): void { this.b.push(0x11n); this.b.push(0x11n); }
-  @external go(): u256 { return this.b.blen(this.grow()); }
-  @external @view tr(): u256 { return this.t; }
+  seed(x: u256): External<void> { this.b.push(0x11n); this.b.push(0x11n); }
+  go(): External<u256> { return this.b.blen(this.grow()); }
+  get tr(): External<u256> { return this.t; }
 }`,
       `library LB { function blen(bytes memory b, uint256 k) internal pure returns (uint256) { return b.length * 1000 + k; } }
 contract C { using LB for bytes;
@@ -268,7 +265,7 @@ contract C { using LB for bytes;
 
   it('a side-effect-free attached call is unregressed (plain literal arg)', async () => {
     const [, go, tr] = await pair(
-      LC(`@external go(): u256 { return this.n.tag2(5n); }`),
+      LC(`get go(): External<u256> { return this.n.tag2(5n); }`),
       SC(`function go() external returns (uint256) { return n.tag2(5); }`),
       seedGoTr,
     );
@@ -277,15 +274,14 @@ contract C { using LB for bytes;
   });
 
   it('the @external (DELEGATECALL) library channel is NOT reordered: solc evaluates ITS receiver FIRST', async () => {
-    const jeth = `// use @decorators
-@library class L { @external @pure tag2(v: u256, k: u256): u256 { return v * 1000n + k; } }
-@using(L) @contract class C {
-  @state t: u256; @state n: u256;
+    const jeth = `static class L { tag2(v: u256, k: u256): External<u256> { return v * 1000n + k; } }
+@using(L) class C {
+  t: u256; n: u256;
   mk(id: u256): u256 { this.t = this.t * 100n + id; return id; }
   bump(): u256 { this.mk(1n); this.n = this.n + 11n; return 6n; }
-  @external seed(x: u256): void { this.n = x; }
-  @external go(): u256 { return this.n.tag2(this.bump()); }
-  @external @view tr(): u256 { return this.t; }
+  seed(x: u256): External<void> { this.n = x; }
+  go(): External<u256> { return this.n.tag2(this.bump()); }
+  get tr(): External<u256> { return this.t; }
 }`;
     const sol = `${SPDX}
 library L { function tag2(uint256 v, uint256 k) external pure returns (uint256) { return v * 1000 + k; } }

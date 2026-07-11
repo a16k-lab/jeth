@@ -27,6 +27,15 @@ function jethRejects(src: string): boolean {
     return true;
   }
 }
+// diagnostic codes for a source (used to pin the exact native reject; [] means it compiled).
+function codes(src: string): string[] {
+  try {
+    compile(src, { fileName: 'C.jeth' });
+    return [];
+  } catch (e: unknown) {
+    return ((e as { diagnostics?: { code: string }[] })?.diagnostics ?? []).map((d) => d.code);
+  }
+}
 function solcRejects(src: string): boolean {
   try {
     compileSolidity(SPDX + src, 'C');
@@ -69,21 +78,20 @@ describe('sweep soundness fixes (miscompiles + over-acceptances)', () => {
     expect(
       jethRejects(`class C { get f(a: u256, b: u256): External<u256> { return mulmod(a, b, 1n - 1n); } }`),
     ).toBe(true);
-    // @internal/@payable
-    expect(jethRejects(`@contract class C { @payable g(): void {} @external f(): void { this.g(); } }`)).toBe(true);
+    // @payable on an internally-reached method: no native spelling (the native `Payable<T>` marker implies
+    // external), so the legacy @payable decorator is banned (JETH481).
+    expect(codes(`@contract class C { @payable g(): void {} @external f(): void { this.g(); } }`)).toContain('JETH481');
     // nested unchecked
     expect(
       jethRejects(
         `class C { get f(): External<u256> { let x: u256 = 0n; unchecked: { unchecked: { x = x + 1n; } } return x; } }`,
       ),
     ).toBe(true);
-    // stray decorators on event / error param
-    expect(jethRejects(`@contract class C { @view @event E(a: u256); @external f(): void { emit(E(1n)); } }`)).toBe(
-      true,
-    );
-    expect(
-      jethRejects(`@contract class C { @error Bad(@indexed a: u256); @external f(): void { revert(Bad(1n)); } }`),
-    ).toBe(true);
+    // stray @view on an event has no native form (events carry no mutability marker) - banned (JETH481);
+    // the native indexed-on-an-error-FIELD (`error<{ a: indexed<u256> }>`) is a distinct semantic reject
+    // (JETH129) that still fires (the analog of the legacy `@error Bad(@indexed a)`).
+    expect(codes(`@contract class C { @view @event E(a: u256); @external f(): void { emit(E(1n)); } }`)).toContain('JETH481');
+    expect(jethRejects(`class C { Bad: error<{ a: indexed<u256> }>; f(): External<void> { revert(Bad(1n)); } }`)).toBe(true);
   });
 
   it('non-zero runtime modulus still reverts Panic(0x12) byte-identical', async () => {
@@ -250,15 +258,19 @@ describe('sweep batch D (moderate over-rejections)', () => {
   });
 });
 
-describe('sweep @immutable inline initialization', () => {
-  it('inline init (no ctor, with ctor, and an expression) byte-identical', async () => {
+describe('sweep immutable initialization (native: static field, no init, set in the ctor)', () => {
+  it('constructor-assigned immutables (literal, msg.sender, and a constant-expr) byte-identical', async () => {
+    // Native mode has no inline-initialized immutable: a `static x: T` with no initializer is the
+    // immutable, assigned in the constructor (a `static x: T = expr` initializer makes it a compile-time
+    // constant instead). solc's inline `immutable a = 5` stages the assignment into the constructor too,
+    // so the constructor-set native form is runtime byte-identical.
     await rt(
-      `@contract class C { @immutable a: u256 = 5n; @immutable b: address = msg.sender; @external @view ga(): u256 { return this.a; } @external @view gb(): address { return this.b; } }`,
+      `class C { static a: u256; static b: address; constructor() { this.a = 5n; this.b = msg.sender; } get ga(): External<u256> { return this.a; } get gb(): External<address> { return this.b; } }`,
       `contract C { uint256 immutable a = 5; address immutable b = msg.sender; function ga() external view returns(uint256){ return a; } function gb() external view returns(address){ return b; } }`,
       [{ sig: 'ga()' }, { sig: 'gb()' }],
     );
     await rt(
-      `@contract class C { @constant K: u256 = 3n; @immutable a: u256 = this.K * 7n; @external @view ga(): u256 { return this.a; } }`,
+      `class C { static K: u256 = 3n; static a: u256; constructor() { this.a = this.K * 7n; } get ga(): External<u256> { return this.a; } }`,
       `contract C { uint256 constant K = 3; uint256 immutable a = K * 7; function ga() external view returns(uint256){ return a; } }`,
       [{ sig: 'ga()' }],
     );
@@ -296,22 +308,22 @@ describe('constant arithmetic accept/reject parity vs solc (already solc-accurat
   }
 });
 
-describe('@payable on internal/private/hidden is rejected (solc parity)', () => {
-  // solc: "internal" and "private" functions cannot be payable. is an explicitly-internal fn.
-  const reject: [string, string][] = [
+describe('@payable on an internally-reached method has no native form; the legacy @payable is banned', () => {
+  // solc: "internal"/"private" functions cannot be payable. Native mode has no @payable decorator at all -
+  // the payable marker is `Payable<T>`, which IMPLIES external (an internal payable does not exist). So the
+  // legacy "@payable on a hidden method" over-acceptance is now simply the banned decorator (JETH481).
+  const banned: [string, string][] = [
     [
-      '@payable',
+      'payable-then-called',
       `@contract class C { @payable v(): u256 { return msg.value; } @external @payable f(): u256 { return this.v(); } }`,
     ],
-    ['@payable', `@contract class C { @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
-    ['@payable', `@contract class C { @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
+    ['payable-internal', `@contract class C { @payable v(): u256 { return 1n; } @external f(): void { this.v(); } }`],
   ];
-  for (const [name, src] of reject) {
-    it(`rejects ${name}`, () => expect(jethRejects(src)).toBe(true));
+  for (const [name, src] of banned) {
+    it(`bans the @payable decorator (${name})`, () => expect(codes(src)).toContain('JETH481'));
   }
-  // external/public payable must still be accepted.
-  it('accepts @external/@external @payable', () => {
-    expect(jethAccepts(`class C { f(): Payable<u256> { return msg.value; } }`)).toBe(true);
+  // an external Payable<T> writer must still be accepted (payable implies external, natively).
+  it('accepts an external Payable<T> writer', () => {
     expect(jethAccepts(`class C { f(): Payable<u256> { return msg.value; } }`)).toBe(true);
   });
 });
@@ -818,13 +830,14 @@ describe('remaining over-rejections R1/R3/R5 vs solc (byte-identical)', () => {
     expect(jethAccepts(`class C { bad(): u256 { return msg.value; } }`)).toBe(true);
     // external non-payable reading msg.value directly still requires @payable -> rejected
     expect(jethRejects(`class C { get bad(): External<u256> { return msg.value; } }`)).toBe(true);
-    // external non-payable reading msg.value rejected; @pure internal rejected (env read)
+    // external non-payable reading msg.value rejected.
     expect(jethRejects(`class C { get f(): External<u256> { return msg.value; } }`)).toBe(true);
+    // the legacy "@pure internal reads env" reject has no native form: mutability is INFERRED, so an
+    // internal method reading msg.value is simply allowed (forwarded, see above) - there is no way to
+    // DECLARE pure. The decorator that carried the rule is banned (JETH481).
     expect(
-      jethRejects(
-        `@contract class C { @pure h(): u256 { return msg.value; } @external f(): u256 { return this.h(); } }`,
-      ),
-    ).toBe(true);
+      codes(`@contract class C { @pure h(): u256 { return msg.value; } @external f(): u256 { return this.h(); } }`),
+    ).toContain('JETH481');
   });
 });
 
@@ -1337,7 +1350,7 @@ describe('calldata dynamic-struct DEEP field access (byte-identical to solc)', (
 describe('assignment evaluation order: RHS before LHS index/key (byte-identical to solc)', () => {
   // solc evaluates the RHS before the LHS location (incl its index/key). A side-effecting index with a
   // side-effecting RHS must match solc; previously JETH lowered the index first and silently miscompiled.
-  const INC = `@state i: u256; inc(): u256 { let v: u256 = this.i; this.i = this.i + 1n; return v; }`;
+  const INC = `i: u256; inc(): u256 { let v: u256 = this.i; this.i = this.i + 1n; return v; }`;
   const SINC = `uint256 i; function inc() internal returns (uint256){ uint256 v=i; i++; return v; }`;
   const cases: [string, string, string][] = [
     [
