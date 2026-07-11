@@ -379,6 +379,18 @@ function collectBannedDecorators(sf: ts.SourceFile, fileName: string): Diagnosti
         const name = nameOf(d);
         if (name && Object.prototype.hasOwnProperty.call(BANNED_DECORATOR_POINTERS, name)) report(d, name);
       }
+    } else if (ts.isTypeAliasDeclaration(n) || ts.isInterfaceDeclaration(n) || ts.isEnumDeclaration(n)) {
+      // A `type`/`interface`/`enum` declaration cannot legally carry a decorator (canHaveDecorators=false,
+      // getDecorators()=[]), but the parser still records a stray `@banned` in node.modifiers with only a
+      // GRAMMAR-phase error (TS1206, not a parse diagnostic) - so a retired decorator on its NATIVE form
+      // (e.g. `@struct type P = { ... }`) used to be SILENTLY dropped instead of firing the ban. Scan the
+      // modifiers directly and report banned names (the sibling of the JETH479 VariableStatement hole).
+      for (const m of (n as { modifiers?: ts.NodeArray<ts.ModifierLike> }).modifiers ?? []) {
+        if (ts.isDecorator(m)) {
+          const name = nameOf(m);
+          if (name && Object.prototype.hasOwnProperty.call(BANNED_DECORATOR_POINTERS, name)) report(m, name);
+        }
+      }
     }
     ts.forEachChild(n, visit);
   };
