@@ -29,12 +29,12 @@ const encStrArr = (ss: string[]) => {
 };
 const encD = (a: bigint, s: string) => pad(a) + pad(0x40n) + encStr(s);
 
-const JETH = `@struct class D { a: u256; s: string; }
-@contract class C {
-  @external @pure arrFirst(xs: u256[]): [u256[], u256] { return [xs, 5n]; }
-  @external @pure arrSecond(ss: string[]): [u256, string[]] { return [3n, ss]; }
-  @external @pure structFirst(d: D): [D, u256] { return [d, 9n]; }
-  @external @pure two(b: bytes, xs: u256[]): [bytes, u256[]] { return [b, xs]; }
+const JETH = `type D = { a: u256; s: string; };
+class C {
+  get arrFirst(xs: u256[]): External<[u256[], u256]> { return [xs, 5n]; }
+  get arrSecond(ss: string[]): External<[u256, string[]]> { return [3n, ss]; }
+  get structFirst(d: D): External<[D, u256]> { return [d, 9n]; }
+  get two(b: bytes, xs: u256[]): External<[bytes, u256[]]> { return [b, xs]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

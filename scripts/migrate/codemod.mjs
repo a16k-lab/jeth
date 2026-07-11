@@ -404,7 +404,19 @@ function transformJethSource(text, { forceGet = new Set() } = {}) {
 function outcomeOf(src) {
   try {
     const r = compileFn(src, { fileName: 'C.jeth' });
-    return { kind: 'ok', bc: r.creationBytecode };
+    // ABI skeleton for the ok/ok equality: view|pure collapse to 'readonly' (identical bytecode,
+    // and the native inference legitimately tightens a declared @view with a pure body to pure),
+    // but any OTHER drift - names, signatures, event/error entries, payable vs nonpayable - means
+    // the rewrite changed an observable artifact and must go manual (batch-6 lesson: dropping an
+    // internal @view flipped an external caller's stateMutability with byte-equal bytecode).
+    const abi = JSON.stringify(
+      (r.abi ?? []).map((e) =>
+        e && typeof e === 'object' && (e.stateMutability === 'view' || e.stateMutability === 'pure')
+          ? { ...e, stateMutability: 'readonly' }
+          : e,
+      ),
+    );
+    return { kind: 'ok', bc: r.creationBytecode, abi };
   } catch (e) {
     if (CompileErrorCls && e instanceof CompileErrorCls)
       return { kind: 'rej', codes: e.diagnostics.map((d) => d.code).sort(), diags: e.diagnostics };
@@ -413,10 +425,16 @@ function outcomeOf(src) {
 }
 function outcomesEqual(a, b) {
   if (a.kind !== b.kind) return false;
-  if (a.kind === 'ok') return a.bc === b.bc;
+  if (a.kind === 'ok') return a.bc === b.bc && a.abi === b.abi;
   if (a.kind === 'rej') return a.codes.join(',') === b.codes.join(',');
   return a.name === b.name;
 }
+// A source that imports (or exports for) a sibling file is a BUNDLE MEMBER: its standalone trial
+// rejects on the unresolved import (or the missing importer) in BOTH spellings, so rej==rej equality
+// is vacuous evidence and the real bundle outcome is invisible (batch-6 lesson: a bundle entry's
+// @external @view member migrated without its get flip - the standalone trial never reached the
+// analyzer's JETH352 - and the real multi-file compile FLIPPED accept->reject). Never rewrite these.
+const BUNDLE_MEMBER = /(^|\n)\s*(import|export)\b/;
 
 /** Resolve a diagnostic (1-based line/column) in `text` to its innermost enclosing method + class,
  *  keyed `Class.method` - the forceGet key. Class names are invariant under the transform, so a key
@@ -449,6 +467,8 @@ function migrateSource(cooked, { forceGet } = {}) {
   let res = transformJethSource(cooked, { forceGet: force });
   if (res.manual.length > 0) return { text: cooked, edits: [], action: 'manual', changes: [], manual: res.manual };
   if (res.text === cooked) return { text: cooked, edits: [], action: 'unchanged', changes: res.changes, manual: [] };
+  if (BUNDLE_MEMBER.test(cooked))
+    return { text: cooked, edits: [], action: 'manual', changes: [], manual: ['import/export-bearing source: a standalone trial cannot see the bundle'] };
   if (!compileFn) return { text: res.text, edits: res.edits, action: 'rewritten-untrialed', changes: res.changes, manual: [] };
 
   const orig = outcomeOf(cooked);
@@ -797,6 +817,22 @@ for (const file of files) {
     }
     const postHole = (h) => (h.resolved ? decisionOf(h.lit) : h.orig);
 
+    // An UNRESOLVED hole in class-decorator position (`${kw} class X` / `${kw} interface I`) or in
+    // extends position (`class C extends ${B}`) means the instantiation can inject a class decorator,
+    // keyword, or base the skeleton trial never sees - any member rewrite in that assembly is unsound
+    // (batch-6 lesson: base('@abstract') / base('@view') instantiations flipped where the __JMIG__
+    // skeleton trialed equal). Manual, never guess.
+    for (let k = 0; k < parts.length; k++) {
+      const p = parts[k];
+      if (p.type !== 'hole' || holes.get(p).resolved) continue;
+      const next = parts[k + 1];
+      if (next?.type === 'chunk' && /^\s*((abstract|static)\s+)?(class|interface)\b/.test(next.lit.text))
+        return fail(`${label}: an unresolved \${...} hole in class-decorator position (\${...} class)`);
+      const prev = parts[k - 1];
+      if (prev?.type === 'chunk' && /\bextends\s+([A-Za-z_$][\w$]*\s*,\s*)*$/.test(prev.lit.text))
+        return fail(`${label}: an unresolved \${...} hole in extends position (class C extends \${...})`);
+    }
+
     // assemble the ORIGINAL instantiation + its region table
     let origAsm = '';
     const regions = []; // { part, type: 'chunk'|'hole', resolved?, start, end } over origAsm
@@ -876,6 +912,8 @@ for (const file of files) {
         st.logEntry = { line: line(n), action: 'unchanged', changes: res.changes };
         return changedConst;
       }
+      if (BUNDLE_MEMBER.test(origAsm))
+        return fail(`${label}: import/export-bearing assembly: a standalone trial cannot see the bundle`) || changedConst;
       if (!compileFn) { chunkEdits = edits; changes = res.changes; action = 'rewritten-interp-untrialed'; break; }
       const orig = outcomeOf(origAsm);
       const post = outcomeOf(postAsm);

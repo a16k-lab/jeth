@@ -26,15 +26,15 @@ function bytesArg(sel: string, k: bigint, s: string): string {
   return h;
 }
 
-const JETH = `@contract class MB {
-  @state mb: mapping<address, bytes>;
-  @state ms: mapping<address, string>;
-  @external setB(k: address, v: bytes): void { this.mb[k] = v; }
-  @external setS(k: address, v: string): void { this.ms[k] = v; }
-  @external @view getB(k: address): bytes { return this.mb[k]; }
-  @external @view getS(k: address): string { return this.ms[k]; }
-  @external @view lenB(k: address): u256 { return this.mb[k].length; }
-  @external @view atB(k: address, i: u256): bytes1 { return this.mb[k][i]; }
+const JETH = `class MB {
+  mb: mapping<address, bytes>;
+  ms: mapping<address, string>;
+  setB(k: address, v: bytes): External<void> { this.mb[k] = v; }
+  setS(k: address, v: string): External<void> { this.ms[k] = v; }
+  get getB(k: address): External<bytes> { return this.mb[k]; }
+  get getS(k: address): External<string> { return this.ms[k]; }
+  get lenB(k: address): External<u256> { return this.mb[k].length; }
+  get atB(k: address, i: u256): External<bytes1> { return this.mb[k][i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

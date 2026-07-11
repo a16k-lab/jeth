@@ -19,24 +19,24 @@ const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const me = new Address(Buffer.from('11'.repeat(20), 'hex'));
 const sel = (s: string) => '0x' + functionSelector(s);
 
-const J = `@struct class In { x: u256; y: u256 }
-@struct class In3 { x: u256; y: u256; z: u256 }
-@contract class C {
-  @external @pure fNest(): [u256, Arr<In,2>] { let m: Arr<Arr<In,2>,2> = [[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]]; return [42n, m[1n]]; }
-  @external @pure fDynOuter(): [u256, Arr<In,2>] { let m: Arr<In,2>[] = [[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]]; return [42n, m[1n]]; }
-  @external @pure fFirst(): [Arr<In,2>, u256] { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [m[0n], 42n]; }
-  @external @pure fMid(): [u256, Arr<In,2>, u256] { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [7n, m[1n], 43n]; }
-  @external @pure fLast(): [u256, u256, Arr<In,2>] { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [42n, 7n, m[0n]]; }
-  @external @pure fIn3(): [u256, Arr<In3,2>] { let m: Arr<In3,2>[] = [[In3(1n,2n,3n),In3(4n,5n,6n)]]; return [42n, m[0n]]; }
-  @external @pure fDeep(): [u256, Arr<Arr<In,2>,2>] { let m: Arr<Arr<Arr<In,2>,2>,2> = [[[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]],[[In(21n,22n),In(23n,24n)],[In(25n,26n),In(27n,28n)]]]; return [42n, m[1n]]; }
-  @external @pure fMixed(): [u256, Arr<In,2>, string] { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [42n, m[1n], "hello world"]; }
-  @external @pure fValElem(): [u256, Arr<u256,2>] { let m: Arr<Arr<u256,2>,2> = [[31n,32n],[33n,34n]]; return [42n, m[1n]]; }
-  @external @pure fValElemDyn(): [u256, Arr<u256,2>] { let m: Arr<u256,2>[] = [[31n,32n],[33n,34n]]; return [42n, m[1n]]; }
-  @external @pure fTwoElems(): [Arr<In,2>, u256, Arr<In,2>] { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [m[0n], 5n, m[1n]]; }
-  @external @pure ctrlLocal(): [u256, Arr<In,2>] { let a: Arr<In,2> = [In(15n,16n),In(17n,18n)]; return [42n, a]; }
-  @external @pure ctrlEnc(): bytes { let m: Arr<Arr<In,2>,2> = [[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]]; return abi.encode(m[1n]); }
-  @external @pure ctrlDynStr(): [u256, string[]] { let ss: string[] = ["ab","cde"]; return [42n, ss]; }
-  @external @pure ctrlDynArr(): [u256, u256[]] { let xs: u256[] = [7n,8n,9n]; return [42n, xs]; } }`;
+const J = `type In = { x: u256; y: u256 };
+type In3 = { x: u256; y: u256; z: u256 };
+class C {
+  get fNest(): External<[u256, Arr<In,2>]> { let m: Arr<Arr<In,2>,2> = [[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]]; return [42n, m[1n]]; }
+  get fDynOuter(): External<[u256, Arr<In,2>]> { let m: Arr<In,2>[] = [[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]]; return [42n, m[1n]]; }
+  get fFirst(): External<[Arr<In,2>, u256]> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [m[0n], 42n]; }
+  get fMid(): External<[u256, Arr<In,2>, u256]> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [7n, m[1n], 43n]; }
+  get fLast(): External<[u256, u256, Arr<In,2>]> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [42n, 7n, m[0n]]; }
+  get fIn3(): External<[u256, Arr<In3,2>]> { let m: Arr<In3,2>[] = [[In3(1n,2n,3n),In3(4n,5n,6n)]]; return [42n, m[0n]]; }
+  get fDeep(): External<[u256, Arr<Arr<In,2>,2>]> { let m: Arr<Arr<Arr<In,2>,2>,2> = [[[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]],[[In(21n,22n),In(23n,24n)],[In(25n,26n),In(27n,28n)]]]; return [42n, m[1n]]; }
+  get fMixed(): External<[u256, Arr<In,2>, string]> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [42n, m[1n], "hello world"]; }
+  get fValElem(): External<[u256, Arr<u256,2>]> { let m: Arr<Arr<u256,2>,2> = [[31n,32n],[33n,34n]]; return [42n, m[1n]]; }
+  get fValElemDyn(): External<[u256, Arr<u256,2>]> { let m: Arr<u256,2>[] = [[31n,32n],[33n,34n]]; return [42n, m[1n]]; }
+  get fTwoElems(): External<[Arr<In,2>, u256, Arr<In,2>]> { let m: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [m[0n], 5n, m[1n]]; }
+  get ctrlLocal(): External<[u256, Arr<In,2>]> { let a: Arr<In,2> = [In(15n,16n),In(17n,18n)]; return [42n, a]; }
+  get ctrlEnc(): External<bytes> { let m: Arr<Arr<In,2>,2> = [[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]]; return abi.encode(m[1n]); }
+  get ctrlDynStr(): External<[u256, string[]]> { let ss: string[] = ["ab","cde"]; return [42n, ss]; }
+  get ctrlDynArr(): External<[u256, u256[]]> { let xs: u256[] = [7n,8n,9n]; return [42n, xs]; } }`;
 
 const S = `struct In { uint256 x; uint256 y; } struct In3 { uint256 x; uint256 y; uint256 z; }
 contract C {

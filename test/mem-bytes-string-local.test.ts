@@ -20,15 +20,15 @@ const cd1 = (sig: string, s: string) => '0x' + sel(sig) + pad(0x20n) + encStr(s)
 // (string, uint256): offset(0x40) + value + [len][data]
 const cdSU = (sig: string, s: string, v: bigint) => '0x' + sel(sig) + pad(0x40n) + pad(v) + encStr(s);
 
-const JETH = `@contract class C {
-  @state st: string;
-  @external setSt(x: string): void { this.st = x; }
-  @external @pure echo(x: string): string { let s: string = x; return s; }
-  @external @pure echoLit(): string { let s: string = "hello, this is a string literal over 32 bytes long!!"; return s; }
-  @external @view fromStorage(): string { let s: string = this.st; return s; }
-  @external @pure blen(x: bytes): u256 { let b: bytes = x; return b.length; }
-  @external @pure byteAt(x: bytes, i: u256): u8 { let b: bytes = x; return u8(b[i]); }
-  @external @pure aliasLen(x: bytes): u256 { let s: bytes = x; let t: bytes = s; return t.length; }
+const JETH = `class C {
+  st: string;
+  setSt(x: string): External<void> { this.st = x; }
+  get echo(x: string): External<string> { let s: string = x; return s; }
+  get echoLit(): External<string> { let s: string = "hello, this is a string literal over 32 bytes long!!"; return s; }
+  get fromStorage(): External<string> { let s: string = this.st; return s; }
+  get blen(x: bytes): External<u256> { let b: bytes = x; return b.length; }
+  get byteAt(x: bytes, i: u256): External<u8> { let b: bytes = x; return u8(b[i]); }
+  get aliasLen(x: bytes): External<u256> { let s: bytes = x; let t: bytes = s; return t.length; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

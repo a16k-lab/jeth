@@ -11,29 +11,29 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
-@struct class Q { x: u128; y: u128; }
-@contract class C {
+const JETH = `type P = { a: u256; b: u8; c: i64; d: address; };
+type Q = { x: u128; y: u128; };
+class C {
   // construct + return a whole memory struct
-  @external @pure mk(a: u256, b: u8, c: i64, d: address): P { let p: P = P(a, b, c, d); return p; }
+  get mk(a: u256, b: u8, c: i64, d: address): External<P> { let p: P = P(a, b, c, d); return p; }
   // construct, mutate fields, return
-  @external @pure mutate(a: u256, b: u8): P {
+  get mutate(a: u256, b: u8): External<P> {
     let p: P = P(a, b, 0n, address(0n));
     p.a = p.a + 1n; p.b = 255n; p.c = -7n; p.d = address(0x1234n);
     return p;
   }
   // compound + inc/dec on memory fields
-  @external @pure ops(a: u256): u256 {
+  get ops(a: u256): External<u256> {
     let q: Q = Q(u128(a), 10n);
     q.x += 5n; q.y -= 3n; q.x++; let z: u128 = q.x--;
     return q.x * 1000000n + q.y * 1000n + z;
   }
   // read a single field
-  @external @pure getB(a: u256, b: u8): u8 { let p: P = P(a, b, 1n, address(0n)); return p.b; }
+  get getB(a: u256, b: u8): External<u8> { let p: P = P(a, b, 1n, address(0n)); return p.b; }
   // memory aliasing: q = p; mutating q changes p
-  @external @pure aliasing(a: u128): Q { let p: Q = Q(a, a); let q: Q = p; q.x = 99n; return p; }
+  get aliasing(a: u128): External<Q> { let p: Q = Q(a, a); let q: Q = p; q.x = 99n; return p; }
   // narrow/signed field cleanliness on construction + return
-  @external @pure signs(c: i64): P { let p: P = P(0n, 0n, c, address(0n)); return p; }
+  get signs(c: i64): External<P> { let p: P = P(0n, 0n, c, address(0n)); return p; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

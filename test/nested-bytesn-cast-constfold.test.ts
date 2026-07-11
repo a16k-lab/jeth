@@ -87,10 +87,10 @@ describe('nested bytesN(bytesM(literal)) const cast (OR-b) vs solc', () => {
 
   it('reject controls stay rejecting (no over-acceptance introduced)', () => {
     // over-length bare-hex inner literal into bytesN: solc rejects, JETH must too
-    expect(codes('@contract class C { @external @pure f(): bytes4 { return bytes4(0xabababababn); } }')).toContain('JETH170');
+    expect(codes('class C { get f(): External<bytes4> { return bytes4(0xabababababn); } }')).toContain('JETH170');
     // bytesN(uintM(x)) with a size mismatch (M != N*8): solc rejects, JETH must too
-    expect(codes('@contract class C { @external @pure f(): bytes4 { return bytes4(u128(0xababababn)); } }')).toContain('JETH170');
+    expect(codes('class C { get f(): External<bytes4> { return bytes4(u128(0xababababn)); } }')).toContain('JETH170');
     // a valid nested cast still compiles clean
-    expect(codes('@contract class C { @external @pure f(): bytes4 { return bytes4(bytes4(0xababababn)); } }')).toEqual([]);
+    expect(codes('class C { get f(): External<bytes4> { return bytes4(bytes4(0xababababn)); } }')).toEqual([]);
   });
 });

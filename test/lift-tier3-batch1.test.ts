@@ -51,15 +51,15 @@ const rejects = (src: string): boolean => {
 
 describe('Tier-3 Batch-1 lifts byte-identical to solc 0.8.35', () => {
   it('L9: ref-element array literals (cd copy, storage copy, legal mixes, memory alias) + parity gate', async () => {
-    const J = `@contract class C {
-  @state s1: u256[]; @state s2: u256[];
-  @external seed(): void { this.s1.push(71n); this.s1.push(72n); this.s2.push(81n); }
-  @external @pure f(a: u256[], b: u256[]): u256 { let m: Arr<u256[],2> = [a, b]; return m[0n][1n] + m[1n][0n]; }
-  @external @pure fr(a: u256[], b: u256[]): Arr<u256[],2> { let m: Arr<u256[],2> = [a, b]; return m; }
-  @external @view fst(): u256 { let m: Arr<u256[],2> = [this.s1, this.s2]; return m[0n][1n] + m[1n][0n]; }
-  @external @pure fcm(a: u256[]): u256 { let x: u256[] = [5n,6n]; let m: Arr<u256[],2> = [a, x]; return m[0n][0n] + m[1n][1n]; }
-  @external @view fms(): u256 { let x: u256[] = [5n]; let m: Arr<u256[],2> = [x, this.s1]; return m[0n][0n] + m[1n][0n]; }
-  @external @pure ali(): u256 { let x: u256[] = [1n,2n]; let m: Arr<u256[],2> = [x, x]; m[0n][0n] = 9n; return x[0n] + m[1n][0n]; } }`;
+    const J = `class C {
+  s1: u256[]; s2: u256[];
+  seed(): External<void> { this.s1.push(71n); this.s1.push(72n); this.s2.push(81n); }
+  get f(a: u256[], b: u256[]): External<u256> { let m: Arr<u256[],2> = [a, b]; return m[0n][1n] + m[1n][0n]; }
+  get fr(a: u256[], b: u256[]): External<Arr<u256[],2>> { let m: Arr<u256[],2> = [a, b]; return m; }
+  get fst(): External<u256> { let m: Arr<u256[],2> = [this.s1, this.s2]; return m[0n][1n] + m[1n][0n]; }
+  get fcm(a: u256[]): External<u256> { let x: u256[] = [5n,6n]; let m: Arr<u256[],2> = [a, x]; return m[0n][0n] + m[1n][1n]; }
+  get fms(): External<u256> { let x: u256[] = [5n]; let m: Arr<u256[],2> = [x, this.s1]; return m[0n][0n] + m[1n][0n]; }
+  get ali(): External<u256> { let x: u256[] = [1n,2n]; let m: Arr<u256[],2> = [x, x]; m[0n][0n] = 9n; return x[0n] + m[1n][0n]; } }`;
     const S = `contract C {
   uint256[] s1; uint256[] s2;
   function seed() external { s1.push(71); s1.push(72); s2.push(81); }
@@ -81,23 +81,23 @@ describe('Tier-3 Batch-1 lifts byte-identical to solc 0.8.35', () => {
       ['fcm(uint256[])', one([41, 42])], ['fms()', ''], ['ali()', ''],
     ] as const);
     // the solc parity gate: calldata + storage elements cannot unify.
-    expect(rejects(`@contract class C { @state s1: u256[]; @external @view f(a: u256[]): u256 { let m: Arr<u256[],2> = [a, this.s1]; return m[0n][0n]; } }`)).toBe(true);
+    expect(rejects(`class C { s1: u256[]; get f(a: u256[]): External<u256> { let m: Arr<u256[],2> = [a, this.s1]; return m[0n][0n]; } }`)).toBe(true);
   });
 
   it('L2 residuals: lit|lit ternary encode, bytes-member ternary, ternary-chain lvalue', async () => {
-    const D = `@struct class In { x: u256; y: u256 }`;
+    const D = `type In = { x: u256; y: u256 };`;
     const SD = `struct In { uint256 x; uint256 y; }`;
-    const J = `${D} @struct class B { t: bytes; n: u256 }
-@contract class C {
-  @state A: Arr<In,2>; @state B2: Arr<In,2>; @state hits: u256;
-  @external seed(): void { this.A[0n]=In(1n,2n); this.A[1n]=In(3n,4n); this.B2[0n]=In(5n,6n); this.B2[1n]=In(7n,8n); }
+    const J = `${D} type B = { t: bytes; n: u256 };
+class C {
+  A: Arr<In,2>; B2: Arr<In,2>; hits: u256;
+  seed(): External<void> { this.A[0n]=In(1n,2n); this.A[1n]=In(3n,4n); this.B2[0n]=In(5n,6n); this.B2[1n]=In(7n,8n); }
   bump(): u256 { this.hits = this.hits + 1n; return 1n; }
-  @external @pure litlit(c: bool): bytes { return abi.encode(c ? [In(1n,2n)] : [In(3n,4n)]); }
-  @external @pure litlit2(c: bool): bytes { return abi.encode(c ? [In(1n,2n),In(3n,4n)] : [In(5n,6n),In(7n,8n)]); }
-  @external @pure bmem(c: bool): bytes { let a: B = B(bytes("aa"), 1n); let b: B = B(bytes("bbbb"), 2n); return (c ? a : b).t; }
-  @external lv(c: bool, i: u256, v: u256): void { (c ? this.A : this.B2)[i].y = v; }
-  @external lvEff(c: bool): u256 { (c ? this.A : this.B2)[this.bump()].y = this.bump(); return this.hits; }
-  @external @view g(): u256 { return this.A[1n].y + 1000n*this.B2[1n].y + 1000000n*this.A[1n].x; } }`;
+  get litlit(c: bool): External<bytes> { return abi.encode(c ? [In(1n,2n)] : [In(3n,4n)]); }
+  get litlit2(c: bool): External<bytes> { return abi.encode(c ? [In(1n,2n),In(3n,4n)] : [In(5n,6n),In(7n,8n)]); }
+  get bmem(c: bool): External<bytes> { let a: B = B(bytes("aa"), 1n); let b: B = B(bytes("bbbb"), 2n); return (c ? a : b).t; }
+  lv(c: bool, i: u256, v: u256): External<void> { (c ? this.A : this.B2)[i].y = v; }
+  lvEff(c: bool): External<u256> { (c ? this.A : this.B2)[this.bump()].y = this.bump(); return this.hits; }
+  get g(): External<u256> { return this.A[1n].y + 1000n*this.B2[1n].y + 1000000n*this.A[1n].x; } }`;
     const S = `${SD} struct B { bytes t; uint256 n; }
 contract C {
   In[2] A; In[2] B2; uint256 hits;
@@ -121,10 +121,10 @@ contract C {
     // all-nonneg -> u256, byte-identical to solc's uint8[2] (abi.encode pads every element to a 32-byte
     // word regardless of width, so the encoding is width-independent). The ternary of two bare-literal
     // arrays likewise compiles and is byte-identical (verified per branch).
-    expect(rejects(`@contract class C { @external @pure f(c: bool): bytes { return abi.encode(c ? [1n,2n] : [3n,4n]); } }`)).toBe(false);
+    expect(rejects(`class C { get f(c: bool): External<bytes> { return abi.encode(c ? [1n,2n] : [3n,4n]); } }`)).toBe(false);
   });
 
   it('L6 stays a deliberate reject: the prior-alias witness makes any lift a miscompile', () => {
-    expect(rejects(`@contract class C { @state psv: Arr<u256,2>; @external @view w(): u256 { let o: Arr<u256,2>[] = [[1n,2n]]; let r: Arr<u256,2> = o[0n]; o[0n] = this.psv; return r[0n]; } }`)).toBe(true);
+    expect(rejects(`class C { psv: Arr<u256,2>; get w(): External<u256> { let o: Arr<u256,2>[] = [[1n,2n]]; let r: Arr<u256,2> = o[0n]; o[0n] = this.psv; return r[0n]; } }`)).toBe(true);
   });
 });

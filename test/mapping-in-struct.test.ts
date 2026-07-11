@@ -16,40 +16,40 @@ const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const mapSlot = (key: bigint, slot: bigint) =>
   BigInt('0x' + toHex(keccak(hexToBytes(('0x' + pad(key) + pad(slot)) as `0x${string}`))));
 
-const JETH = `@struct class Acct { head: u256; bal: mapping<address, u256>; tail: u64; }
-@struct class Pk { a: u64; m: mapping<u256, u256>; b: u64; }
-@struct class Two { x: u256; m1: mapping<u256, u256>; m2: mapping<address, u64>; y: u256; }
-@contract class C {
-  @state s: Acct;
-  @state mp: mapping<u256, Acct>;
-  @state pk: Pk;
-  @state tw: Two;
-  @external setHead(v: u256): void { this.s.head = v; }
-  @external setTail(v: u64): void { this.s.tail = v; }
-  @external setBal(a: address, v: u256): void { this.s.bal[a] = v; }
-  @external incBal(a: address, v: u256): void { this.s.bal[a] = this.s.bal[a] + v; }
-  @external @view getHead(): u256 { return this.s.head; }
-  @external @view getTail(): u64 { return this.s.tail; }
-  @external @view getBal(a: address): u256 { return this.s.bal[a]; }
+const JETH = `type Acct = { head: u256; bal: mapping<address, u256>; tail: u64; };
+type Pk = { a: u64; m: mapping<u256, u256>; b: u64; };
+type Two = { x: u256; m1: mapping<u256, u256>; m2: mapping<address, u64>; y: u256; };
+class C {
+  s: Acct;
+  mp: mapping<u256, Acct>;
+  pk: Pk;
+  tw: Two;
+  setHead(v: u256): External<void> { this.s.head = v; }
+  setTail(v: u64): External<void> { this.s.tail = v; }
+  setBal(a: address, v: u256): External<void> { this.s.bal[a] = v; }
+  incBal(a: address, v: u256): External<void> { this.s.bal[a] = this.s.bal[a] + v; }
+  get getHead(): External<u256> { return this.s.head; }
+  get getTail(): External<u64> { return this.s.tail; }
+  get getBal(a: address): External<u256> { return this.s.bal[a]; }
   // mapping value is a struct-with-mapping (nested)
-  @external setMHead(k: u256, v: u256): void { this.mp[k].head = v; }
-  @external setMBal(k: u256, a: address, v: u256): void { this.mp[k].bal[a] = v; }
-  @external @view getMBal(k: u256, a: address): u256 { return this.mp[k].bal[a]; }
-  @external @view getMHead(k: u256): u256 { return this.mp[k].head; }
+  setMHead(k: u256, v: u256): External<void> { this.mp[k].head = v; }
+  setMBal(k: u256, a: address, v: u256): External<void> { this.mp[k].bal[a] = v; }
+  get getMBal(k: u256, a: address): External<u256> { return this.mp[k].bal[a]; }
+  get getMHead(k: u256): External<u256> { return this.mp[k].head; }
   // packed neighbours around a mapping field
-  @external setPk(a: u64, b: u64): void { this.pk.a = a; this.pk.b = b; }
-  @external setPkM(k: u256, v: u256): void { this.pk.m[k] = v; }
-  @external @view getPkA(): u64 { return this.pk.a; }
-  @external @view getPkB(): u64 { return this.pk.b; }
-  @external @view getPkM(k: u256): u256 { return this.pk.m[k]; }
+  setPk(a: u64, b: u64): External<void> { this.pk.a = a; this.pk.b = b; }
+  setPkM(k: u256, v: u256): External<void> { this.pk.m[k] = v; }
+  get getPkA(): External<u64> { return this.pk.a; }
+  get getPkB(): External<u64> { return this.pk.b; }
+  get getPkM(k: u256): External<u256> { return this.pk.m[k]; }
   // two mapping fields with different key/value types
-  @external setTwo(x: u256, y: u256): void { this.tw.x = x; this.tw.y = y; }
-  @external setTwoM1(k: u256, v: u256): void { this.tw.m1[k] = v; }
-  @external setTwoM2(a: address, v: u64): void { this.tw.m2[a] = v; }
-  @external @view getTwoM1(k: u256): u256 { return this.tw.m1[k]; }
-  @external @view getTwoM2(a: address): u64 { return this.tw.m2[a]; }
-  @external @view getTwoX(): u256 { return this.tw.x; }
-  @external @view getTwoY(): u256 { return this.tw.y; }
+  setTwo(x: u256, y: u256): External<void> { this.tw.x = x; this.tw.y = y; }
+  setTwoM1(k: u256, v: u256): External<void> { this.tw.m1[k] = v; }
+  setTwoM2(a: address, v: u64): External<void> { this.tw.m2[a] = v; }
+  get getTwoM1(k: u256): External<u256> { return this.tw.m1[k]; }
+  get getTwoM2(a: address): External<u64> { return this.tw.m2[a]; }
+  get getTwoX(): External<u256> { return this.tw.x; }
+  get getTwoY(): External<u256> { return this.tw.y; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -188,27 +188,27 @@ describe('mapping-in-struct gate parity (storage-only)', () => {
       return true;
     }
   }
-  const DECL = `@struct class S { head: u256; bal: mapping<address, u256>; }`;
+  const DECL = `type S = { head: u256; bal: mapping<address, u256>; };`;
   const SOLDECL = `contract C { struct S { uint256 head; mapping(address=>uint256) bal; }`;
   it('cannot RETURN a struct-with-mapping (JETH247, like solc)', () => {
-    expect(jethCodes(`${DECL} @contract class C { @state s: S; @view f(): S { return this.s; } }`)).toContain(
+    expect(jethCodes(`${DECL} class C { s: S; f(): S { return this.s; } }`)).toContain(
       'JETH247',
     );
     expect(solcRejects(`${SOLDECL} S s; function f() external view returns (S memory){ return s; } }`)).toBe(true);
   });
   it('cannot take a struct-with-mapping PARAM (JETH247, like solc)', () => {
-    expect(jethCodes(`${DECL} @contract class C { @external f(p: S): void { } }`)).toContain('JETH247');
+    expect(jethCodes(`${DECL} class C { f(p: S): External<void> { } }`)).toContain('JETH247');
     expect(solcRejects(`${SOLDECL} function f(S memory p) external {} }`)).toBe(true);
   });
   it('cannot CONSTRUCT a struct-with-mapping (JETH247, like solc)', () => {
     expect(
-      jethCodes(`${DECL} @contract class C { @state s: S; @external f(): void { let x: S = S(1n); } }`),
+      jethCodes(`${DECL} class C { s: S; f(): External<void> { let x: S = S(1n); } }`),
     ).not.toBeNull();
     expect(solcRejects(`${SOLDECL} function f() external { S memory x = S(1); } }`)).toBe(true);
   });
   it('cannot whole-COPY a struct-with-mapping (JETH247, like solc)', () => {
     expect(
-      jethCodes(`${DECL} @contract class C { @state s: S; @state t: S; @external f(): void { this.s = this.t; } }`),
+      jethCodes(`${DECL} class C { s: S; t: S; f(): External<void> { this.s = this.t; } }`),
     ).toContain('JETH247');
     expect(solcRejects(`${SOLDECL} S s; S t; function f() external { s = t; } }`)).toBe(true);
   });

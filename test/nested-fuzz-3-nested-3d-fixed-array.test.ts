@@ -21,24 +21,23 @@ function cubeSlot(a: bigint, b: bigint, c: bigint): bigint {
 }
 
 const JETH_SRC = `// 3D fixed array with sentinels before/after.
-@contract
 class Cube3D {
-  @state sentinelBefore: u256;                      // slot 0
-  @state cube: Arr<Arr<Arr<u256, 2>, 2>, 2>;        // slots 1-8
-  @state sentinelAfter: u256;                        // slot 9
+  sentinelBefore: u256;                      // slot 0
+  cube: Arr<Arr<Arr<u256, 2>, 2>, 2>;        // slots 1-8
+  sentinelAfter: u256;                        // slot 9
 
-  @external setSent(before: u256, after: u256): void {
+  setSent(before: u256, after: u256): External<void> {
     this.sentinelBefore = before;
     this.sentinelAfter = after;
   }
-  @external setCube(a: u256, b: u256, c: u256, v: u256): void {
+  setCube(a: u256, b: u256, c: u256, v: u256): External<void> {
     this.cube[a][b][c] = v;
   }
-  @external @view getCube(a: u256, b: u256, c: u256): u256 {
+  get getCube(a: u256, b: u256, c: u256): External<u256> {
     return this.cube[a][b][c];
   }
-  @external @view getSentBefore(): u256 { return this.sentinelBefore; }
-  @external @view getSentAfter(): u256 { return this.sentinelAfter; }
+  get getSentBefore(): External<u256> { return this.sentinelBefore; }
+  get getSentAfter(): External<u256> { return this.sentinelAfter; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

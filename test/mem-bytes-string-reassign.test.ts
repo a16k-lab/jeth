@@ -19,22 +19,22 @@ const cdBool = (sig: string, b: boolean) => '0x' + sel(sig) + pad(b ? 1n : 0n);
 // (bytes1) arg: a left-aligned single byte
 const cdB1 = (sig: string, byte: number) => '0x' + sel(sig) + byte.toString(16).padStart(2, '0').padEnd(64, '0');
 
-const JETH = `@contract class C {
-  @external @pure bLocal(): bytes { let d: bytes = bytes("a"); d = bytes("hello"); return d; }
-  @external @pure bLen(): u256 { let d: bytes = bytes("a"); d = bytes("hello"); return d.length; }
-  @external @pure sLocal(): string { let s: string = "a"; s = "world"; return s; }
-  @external @pure sLen(): u256 { let s: string = "a"; s = "world!!"; return bytes(s).length; }
-  @external bParam(): bytes { return this.g(bytes("a")); }
+const JETH = `class C {
+  get bLocal(): External<bytes> { let d: bytes = bytes("a"); d = bytes("hello"); return d; }
+  get bLen(): External<u256> { let d: bytes = bytes("a"); d = bytes("hello"); return d.length; }
+  get sLocal(): External<string> { let s: string = "a"; s = "world"; return s; }
+  get sLen(): External<u256> { let s: string = "a"; s = "world!!"; return bytes(s).length; }
+  get bParam(): External<bytes> { return this.g(bytes("a")); }
   g(d: bytes): bytes { d = bytes("changed"); return d; }
-  @external sParam(): string { return this.h("a"); }
+  get sParam(): External<string> { return this.h("a"); }
   h(d: string): string { d = "modified"; return d; }
-  @external @pure longer(): bytes { let d: bytes = bytes("ab"); d = bytes("abcdefghijklmnopqrstuvwxyz012345!!!"); return d; }
-  @external @pure shorter(): bytes { let d: bytes = bytes("abcdefghijklmnop"); d = bytes("x"); return d; }
-  @external @pure empty(): bytes { let d: bytes = bytes("abc"); d = bytes(""); return d; }
-  @external @pure cond(c: bool): bytes { let d: bytes = bytes("orig"); if (c) { d = bytes("changed!"); } return d; }
-  @external @pure mutateAfter(b: bytes1): bytes { let d: bytes = bytes("aa"); d = bytes("hello"); d[0n] = b; return d; }
-  @external @pure multi(): bytes { let d: bytes = bytes("a"); d = bytes("two"); d = bytes("three3"); d = bytes("final!!"); return d; }
-  @external @pure fromLocal(): bytes { let a: bytes = bytes("sourcevalue"); let d: bytes = bytes("x"); d = a; return d; }
+  get longer(): External<bytes> { let d: bytes = bytes("ab"); d = bytes("abcdefghijklmnopqrstuvwxyz012345!!!"); return d; }
+  get shorter(): External<bytes> { let d: bytes = bytes("abcdefghijklmnop"); d = bytes("x"); return d; }
+  get empty(): External<bytes> { let d: bytes = bytes("abc"); d = bytes(""); return d; }
+  get cond(c: bool): External<bytes> { let d: bytes = bytes("orig"); if (c) { d = bytes("changed!"); } return d; }
+  get mutateAfter(b: bytes1): External<bytes> { let d: bytes = bytes("aa"); d = bytes("hello"); d[0n] = b; return d; }
+  get multi(): External<bytes> { let d: bytes = bytes("a"); d = bytes("two"); d = bytes("three3"); d = bytes("final!!"); return d; }
+  get fromLocal(): External<bytes> { let a: bytes = bytes("sourcevalue"); let d: bytes = bytes("x"); d = a; return d; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -93,8 +93,8 @@ describe('bytes/string memory local + internal-param whole-value reassign vs Sol
   });
 
   it('an @external (calldata) bytes param reassign is a CLEAN reject (JETH214), not JETH900', () => {
-    const src = `@contract class C {
-      @external f(d: bytes): bytes { d = bytes("x"); return d; }
+    const src = `class C {
+      get f(d: bytes): External<bytes> { d = bytes("x"); return d; }
     }`;
     let codes: string[] = [];
     try {
@@ -107,8 +107,8 @@ describe('bytes/string memory local + internal-param whole-value reassign vs Sol
     expect(codes).not.toContain('JETH900');
   });
   it('an @external (calldata) string param reassign is a CLEAN reject too', () => {
-    const src = `@contract class C {
-      @external f(s: string): string { s = "x"; return s; }
+    const src = `class C {
+      get f(s: string): External<string> { s = "x"; return s; }
     }`;
     let codes: string[] = [];
     try {

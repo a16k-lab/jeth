@@ -8,19 +8,19 @@ import { Harness, encodeCall } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const JETH = `@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
-@contract class NF {
-  @state g: Arr<Arr<u256, 2>, 2>;
-  @state g3: Arr<Arr<Arr<u256, 2>, 3>, 2>;
-  @state w: W;
-  @external setG(i: u256, j: u256, v: u256): void { this.g[i][j] = v; }
-  @external setG3(i: u256, j: u256, k: u256, v: u256): void { this.g3[i][j][k] = v; }
-  @external setW(t: u256, i: u256, j: u256, v: u256): void { this.w.tag = t; this.w.grid[i][j] = v; }
-  @external @view whole(): Arr<Arr<u256, 2>, 2> { return this.g; }
-  @external @view row(i: u256): Arr<u256, 2> { return this.g[i]; }
-  @external @view whole3(): Arr<Arr<Arr<u256, 2>, 3>, 2> { return this.g3; }
-  @external @view plane(i: u256): Arr<Arr<u256, 2>, 3> { return this.g3[i]; }
-  @external @view wstruct(): W { return this.w; }
+const JETH = `type W = { tag: u256; grid: Arr<Arr<u256, 2>, 2>; };
+class NF {
+  g: Arr<Arr<u256, 2>, 2>;
+  g3: Arr<Arr<Arr<u256, 2>, 3>, 2>;
+  w: W;
+  setG(i: u256, j: u256, v: u256): External<void> { this.g[i][j] = v; }
+  setG3(i: u256, j: u256, k: u256, v: u256): External<void> { this.g3[i][j][k] = v; }
+  setW(t: u256, i: u256, j: u256, v: u256): External<void> { this.w.tag = t; this.w.grid[i][j] = v; }
+  get whole(): External<Arr<Arr<u256, 2>, 2>> { return this.g; }
+  get row(i: u256): External<Arr<u256, 2>> { return this.g[i]; }
+  get whole3(): External<Arr<Arr<Arr<u256, 2>, 3>, 2>> { return this.g3; }
+  get plane(i: u256): External<Arr<Arr<u256, 2>, 3>> { return this.g3[i]; }
+  get wstruct(): External<W> { return this.w; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

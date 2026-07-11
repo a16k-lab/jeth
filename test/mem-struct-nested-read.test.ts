@@ -11,30 +11,30 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@struct class Inner { a: u256; b: i64; }
-@struct class Outer { tag: u256; inner: Inner; z: u8; }
-@contract class C {
+const JETH = `type Inner = { a: u256; b: i64; };
+type Outer = { tag: u256; inner: Inner; z: u8; };
+class C {
   // return a whole nested struct field
-  @external @pure getInner(t: u256, a: u256, b: i64): Inner {
+  get getInner(t: u256, a: u256, b: i64): External<Inner> {
     let p: Outer = Outer(t, Inner(a, b), 0n);
     return p.inner;
   }
   // alias: q = p.inner; mutating q is visible through p (return whole p)
-  @external @pure aliasMutate(a: u256, b: i64): Outer {
+  get aliasMutate(a: u256, b: i64): External<Outer> {
     let p: Outer = Outer(9n, Inner(a, b), 5n);
     let q: Inner = p.inner;
     q.a = q.a + 1000n; q.b = -3n;
     return p;
   }
   // bind nested field, read its value fields
-  @external @pure readVia(a: u256, b: i64): u256 {
+  get readVia(a: u256, b: i64): External<u256> {
     let p: Outer = Outer(0n, Inner(a, b), 0n);
     let q: Inner = p.inner;
     return q.a + u256(u64(q.b));
   }
   // pass a nested field (by ref) to an internal helper that mutates it
   bump(i: Inner): void { i.a = i.a + 1n; }
-  @external @pure passInner(a: u256, b: i64): Outer {
+  get passInner(a: u256, b: i64): External<Outer> {
     let p: Outer = Outer(7n, Inner(a, b), 2n);
     this.bump(p.inner);
     return p;

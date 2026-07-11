@@ -23,26 +23,25 @@ const BKEY = BigInt('0x' + 'ab'.repeat(32)); // bytes32 key
 const UKEY = 0xdeadbeefn; // u256 key
 
 const JETH = `// s2-map-struct-multikey
-@struct class Acct { bal: u128; nonce: u64; active: bool; }
+type Acct = { bal: u128; nonce: u64; active: bool; };
 
-@contract
 class MultiKey {
-  @state bm: mapping<bytes32, Acct>; // slot 0
-  @state um: mapping<u256, Acct>;    // slot 1
+  bm: mapping<bytes32, Acct>; // slot 0
+  um: mapping<u256, Acct>;    // slot 1
 
-  @external setBBal(k: bytes32, v: u128): void { this.bm[k].bal = v; }
-  @external setBNonce(k: bytes32, v: u64): void { this.bm[k].nonce = v; }
-  @external setBActive(k: bytes32, v: bool): void { this.bm[k].active = v; }
-  @external @view getBBal(k: bytes32): u128 { return this.bm[k].bal; }
-  @external @view getBNonce(k: bytes32): u64 { return this.bm[k].nonce; }
-  @external @view getBActive(k: bytes32): bool { return this.bm[k].active; }
+  setBBal(k: bytes32, v: u128): External<void> { this.bm[k].bal = v; }
+  setBNonce(k: bytes32, v: u64): External<void> { this.bm[k].nonce = v; }
+  setBActive(k: bytes32, v: bool): External<void> { this.bm[k].active = v; }
+  get getBBal(k: bytes32): External<u128> { return this.bm[k].bal; }
+  get getBNonce(k: bytes32): External<u64> { return this.bm[k].nonce; }
+  get getBActive(k: bytes32): External<bool> { return this.bm[k].active; }
 
-  @external setUBal(k: u256, v: u128): void { this.um[k].bal = v; }
-  @external setUNonce(k: u256, v: u64): void { this.um[k].nonce = v; }
-  @external setUActive(k: u256, v: bool): void { this.um[k].active = v; }
-  @external @view getUBal(k: u256): u128 { return this.um[k].bal; }
-  @external @view getUNonce(k: u256): u64 { return this.um[k].nonce; }
-  @external @view getUActive(k: u256): bool { return this.um[k].active; }
+  setUBal(k: u256, v: u128): External<void> { this.um[k].bal = v; }
+  setUNonce(k: u256, v: u64): External<void> { this.um[k].nonce = v; }
+  setUActive(k: u256, v: bool): External<void> { this.um[k].active = v; }
+  get getUBal(k: u256): External<u128> { return this.um[k].bal; }
+  get getUNonce(k: u256): External<u64> { return this.um[k].nonce; }
+  get getUActive(k: u256): External<bool> { return this.um[k].active; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

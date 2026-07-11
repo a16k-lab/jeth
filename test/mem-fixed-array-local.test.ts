@@ -13,26 +13,26 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const call = (sig: string, words: bigint[]) => '0x' + sel(sig) + words.map(pad).join('');
 
-const JETH = `@contract class C {
-  @state g: Arr<u256, 3>;
-  @external setG(i: u256, v: u256): void { this.g[i] = v; }
+const JETH = `class C {
+  g: Arr<u256, 3>;
+  setG(i: u256, v: u256): External<void> { this.g[i] = v; }
   // construct + element read/write/compound + whole return
-  @external @pure build(x: u256, y: u256, z: u256): Arr<u256, 3> {
+  get build(x: u256, y: u256, z: u256): External<Arr<u256, 3>> {
     let a: Arr<u256, 3> = [x, y, z];
     a[0n] = a[0n] + 1n; a[1n]++; a[2n] += 10n;
     return a;
   }
-  @external @pure sum(x: u256, y: u256, z: u256): u256 { let a: Arr<u256, 3> = [x, y, z]; return a[0n] + a[1n] + a[2n]; }
+  get sum(x: u256, y: u256, z: u256): External<u256> { let a: Arr<u256, 3> = [x, y, z]; return a[0n] + a[1n] + a[2n]; }
   // bounds check
-  @external @pure oob(x: u256, i: u256): u256 { let a: Arr<u256, 3> = [x, x, x]; return a[i]; }
+  get oob(x: u256, i: u256): External<u256> { let a: Arr<u256, 3> = [x, x, x]; return a[i]; }
   // aliasing: b = a; b[0]=99 changes a
-  @external @pure aliasing(x: u256): Arr<u256, 3> { let a: Arr<u256, 3> = [x, x, x]; let b: Arr<u256, 3> = a; b[0n] = 99n; return a; }
+  get aliasing(x: u256): External<Arr<u256, 3>> { let a: Arr<u256, 3> = [x, x, x]; let b: Arr<u256, 3> = a; b[0n] = 99n; return a; }
   // narrow / signed elements
-  @external @pure narrow(p: u8, q: u8): Arr<u8, 4> { let a: Arr<u8, 4> = [p, q, 255n, 0n]; a[1n] = 200n; return a; }
-  @external @pure signed(p: i64, q: i64): Arr<i64, 3> { let a: Arr<i64, 3> = [p, q, -1n]; return a; }
+  get narrow(p: u8, q: u8): External<Arr<u8, 4>> { let a: Arr<u8, 4> = [p, q, 255n, 0n]; a[1n] = 200n; return a; }
+  get signed(p: i64, q: i64): External<Arr<i64, 3>> { let a: Arr<i64, 3> = [p, q, -1n]; return a; }
   // copy from storage fixed array
-  @external @view fromG(): Arr<u256, 3> { let a: Arr<u256, 3> = this.g; a[0n] = a[0n] + 1000n; return a; }
-  @external @view getG(i: u256): u256 { return this.g[i]; }
+  get fromG(): External<Arr<u256, 3>> { let a: Arr<u256, 3> = this.g; a[0n] = a[0n] + 1000n; return a; }
+  get getG(i: u256): External<u256> { return this.g[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

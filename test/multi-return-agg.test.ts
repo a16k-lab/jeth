@@ -10,20 +10,20 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@struct class P { x: u128; y: u128; }
-@struct class D { a: u256; s: string; }
-@contract class MA {
-  @state p: P;
-  @state d: D;
-  @state arr: u256[];
-  @external setP(x: u128, y: u128): void { this.p.x = x; this.p.y = y; }
-  @external setDA(a: u256): void { this.d.a = a; }
-  @external setDS(s: string): void { this.d.s = s; }
-  @external pushArr(v: u256): void { this.arr.push(v); }
-  @external @view withStatic(n: u256): [P, u256] { return [this.p, n]; }
-  @external @view withDyn(n: u256): [D, u256] { return [this.d, n]; }
-  @external @view withArr(n: u256): [u256[], u256] { return [this.arr, n]; }
-  @external @view twoAgg(): [P, D] { return [this.p, this.d]; }
+const JETH = `type P = { x: u128; y: u128; };
+type D = { a: u256; s: string; };
+class MA {
+  p: P;
+  d: D;
+  arr: u256[];
+  setP(x: u128, y: u128): External<void> { this.p.x = x; this.p.y = y; }
+  setDA(a: u256): External<void> { this.d.a = a; }
+  setDS(s: string): External<void> { this.d.s = s; }
+  pushArr(v: u256): External<void> { this.arr.push(v); }
+  get withStatic(n: u256): External<[P, u256]> { return [this.p, n]; }
+  get withDyn(n: u256): External<[D, u256]> { return [this.d, n]; }
+  get withArr(n: u256): External<[u256[], u256]> { return [this.arr, n]; }
+  get twoAgg(): External<[P, D]> { return [this.p, this.d]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

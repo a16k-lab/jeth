@@ -24,33 +24,33 @@ function strPush(sel: string, head: bigint[], s: string): string {
   return h;
 }
 
-const JETH = `@struct class D { a: u256; s: string; }
-@contract class NA {
-  @state dd: u256[][];
-  @state ss: string[][];
-  @state ddd: u256[][][];
-  @state da: D[][];
-  @external pushOuter(): void { this.dd.push(); }
-  @external pushInner(i: u256, v: u256): void { this.dd[i].push(v); }
-  @external popInner(i: u256): void { this.dd[i].pop(); }
-  @external setAt(i: u256, j: u256, v: u256): void { this.dd[i][j] = v; }
-  @external @view outerLen(): u256 { return this.dd.length; }
-  @external @view innerLen(i: u256): u256 { return this.dd[i].length; }
-  @external @view at(i: u256, j: u256): u256 { return this.dd[i][j]; }
-  @external @view getDD(): u256[][] { return this.dd; }
-  @external pushSOuter(): void { this.ss.push(); }
-  @external pushSInner(i: u256, s: string): void { this.ss[i].push(s); }
-  @external @view getSS(): string[][] { return this.ss; }
-  @external @view sAt(i: u256, j: u256): string { return this.ss[i][j]; }
-  @external push3a(): void { this.ddd.push(); }
-  @external push3b(i: u256): void { this.ddd[i].push(); }
-  @external push3c(i: u256, j: u256, v: u256): void { this.ddd[i][j].push(v); }
-  @external @view at3(i: u256, j: u256, k: u256): u256 { return this.ddd[i][j][k]; }
-  @external @view getDDD(): u256[][][] { return this.ddd; }
-  @external pushDAOuter(): void { this.da.push(); }
-  @external pushDAInner(i: u256, a: u256, s: string): void { this.da[i].push(D(a, s)); }
-  @external @view getDA(): D[][] { return this.da; }
-  @external @view daAt(i: u256, j: u256): D { return this.da[i][j]; }
+const JETH = `type D = { a: u256; s: string; };
+class NA {
+  dd: u256[][];
+  ss: string[][];
+  ddd: u256[][][];
+  da: D[][];
+  pushOuter(): External<void> { this.dd.push(); }
+  pushInner(i: u256, v: u256): External<void> { this.dd[i].push(v); }
+  popInner(i: u256): External<void> { this.dd[i].pop(); }
+  setAt(i: u256, j: u256, v: u256): External<void> { this.dd[i][j] = v; }
+  get outerLen(): External<u256> { return this.dd.length; }
+  get innerLen(i: u256): External<u256> { return this.dd[i].length; }
+  get at(i: u256, j: u256): External<u256> { return this.dd[i][j]; }
+  get getDD(): External<u256[][]> { return this.dd; }
+  pushSOuter(): External<void> { this.ss.push(); }
+  pushSInner(i: u256, s: string): External<void> { this.ss[i].push(s); }
+  get getSS(): External<string[][]> { return this.ss; }
+  get sAt(i: u256, j: u256): External<string> { return this.ss[i][j]; }
+  push3a(): External<void> { this.ddd.push(); }
+  push3b(i: u256): External<void> { this.ddd[i].push(); }
+  push3c(i: u256, j: u256, v: u256): External<void> { this.ddd[i][j].push(v); }
+  get at3(i: u256, j: u256, k: u256): External<u256> { return this.ddd[i][j][k]; }
+  get getDDD(): External<u256[][][]> { return this.ddd; }
+  pushDAOuter(): External<void> { this.da.push(); }
+  pushDAInner(i: u256, a: u256, s: string): External<void> { this.da[i].push(D(a, s)); }
+  get getDA(): External<D[][]> { return this.da; }
+  get daAt(i: u256, j: u256): External<D> { return this.da[i][j]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

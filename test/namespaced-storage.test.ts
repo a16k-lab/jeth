@@ -43,15 +43,15 @@ const codes = (src: string): string[] => {
   }
 };
 
-const JETH = `@contract class C {
+const JETH = `class C {
   @storage('app.a') count: u256; @storage('app.a') owner: address; @storage('app.a') small: u96;
   @storage('app.m') m: mapping<u256, u256>; @storage('app.m') xs: u256[];
-  @storage('app.b') flag: bool; @state plain: u256;
-  @external set(c: u256, o: address, s: u96): void { this.count = c; this.owner = o; this.small = s; }
-  @external setFlag(f: bool): void { this.flag = f; }
-  @external setM(k: u256, v: u256): void { this.m[k] = v; }
-  @external pushX(v: u256): void { this.xs.push(v); }
-  @external setPlain(p: u256): void { this.plain = p; } }`;
+  @storage('app.b') flag: bool; plain: u256;
+  set(c: u256, o: address, s: u96): External<void> { this.count = c; this.owner = o; this.small = s; }
+  setFlag(f: bool): External<void> { this.flag = f; }
+  setM(k: u256, v: u256): External<void> { this.m[k] = v; }
+  pushX(v: u256): External<void> { this.xs.push(v); }
+  setPlain(p: u256): External<void> { this.plain = p; } }`;
 
 const SOL = `contract M {
   struct A { uint256 count; address owner; uint96 small; } struct Mm { mapping(uint256=>uint256) m; uint256[] xs; } struct B { bool flag; }
@@ -103,7 +103,7 @@ describe('@storage(ns) namespaced storage (EIP-7201)', () => {
   });
 
   it('gate: @storage needs exactly one non-empty string-literal namespace', () => {
-    expect(codes(`@contract class C { @storage() x: u256; @external @view f(): u256 { return this.x; } }`).length).toBeGreaterThan(0);
-    expect(codes(`@contract class C { @storage('') x: u256; @external @view f(): u256 { return this.x; } }`).length).toBeGreaterThan(0);
+    expect(codes(`class C { @storage() x: u256; get f(): External<u256> { return this.x; } }`).length).toBeGreaterThan(0);
+    expect(codes(`class C { @storage('') x: u256; get f(): External<u256> { return this.x; } }`).length).toBeGreaterThan(0);
   });
 });

@@ -34,13 +34,13 @@ const run = async (J: string, S: string, calls: ReadonlyArray<readonly [string, 
 
 describe('Tier-3 inline lifts (L10a, L11b, L13) byte-identical to solc 0.8.35', () => {
   it('L10a: dynamic-return funcref call + L11b: funcref-struct ternary', async () => {
-    const J = `@struct class FSt { f: (x: u256) => u256; tag: u256 }
-@contract class C {
+    const J = `type FSt = { f: (x: u256) => u256; tag: u256 };
+class C {
   inc(x: u256): u256 { return x + 1n; }
   dec(x: u256): u256 { return x - 1n; }
   pick(x: u256): string { return x > 0n ? "hi" : "lo"; }
-  @external @pure l10a(x: u256): string { let g: (x: u256) => string = this.pick; return g(x); }
-  @external @pure l11b(c: bool): u256 { let a: FSt = FSt(this.inc, 2n); let b: FSt = FSt(this.dec, 1n); let p: FSt = c ? a : b; return p.f(10n) + p.tag; } }`;
+  get l10a(x: u256): External<string> { let g: (x: u256) => string = this.pick; return g(x); }
+  get l11b(c: bool): External<u256> { let a: FSt = FSt(this.inc, 2n); let b: FSt = FSt(this.dec, 1n); let p: FSt = c ? a : b; return p.f(10n) + p.tag; } }`;
     const S = `contract C {
   function inc(uint256 x) internal pure returns(uint256){ return x + 1; }
   function dec(uint256 x) internal pure returns(uint256){ return x - 1; }
@@ -58,26 +58,26 @@ describe('Tier-3 inline lifts (L10a, L11b, L13) byte-identical to solc 0.8.35', 
         return true;
       }
     };
-    expect(rejects(`@struct class FSt { f: (x: u256) => u256; tag: u256 } @contract class C { inc(x:u256):u256{return x;} @external @pure f(): bytes { let a: FSt = FSt(this.inc, 2n); return abi.encode(a); } }`)).toBe(true);
+    expect(rejects(`type FSt = { f: (x: u256) => u256; tag: u256 }; class C { inc(x:u256):u256{return x;} get f(): External<bytes> { let a: FSt = FSt(this.inc, 2n); return abi.encode(a); } }`)).toBe(true);
     // The event/error boundaries too (the Tier-3 verification workflow caught these leaking: the
     // gates delegated to isSupportedStructReturn, which L11a widened; solc bans internal types as
     // event/error parameter types, so a dedicated typeHasFuncref screen now fires at both gates).
-    const FD = `@struct class Fd { f: (x: u256) => u256; s: string }`;
-    expect(rejects(`${FD} @contract class C { @event E(d: Fd); inc(x:u256):u256{return x;} @external f(): u256 { let d: Fd = Fd(this.inc, "hi"); emit(E(d)); return 1n; } }`)).toBe(true);
-    expect(rejects(`${FD} @contract class C { @event E(@indexed d: Fd); inc(x:u256):u256{return x;} @external f(): u256 { let d: Fd = Fd(this.inc, "hi"); emit(E(d)); return 1n; } }`)).toBe(true);
-    expect(rejects(`${FD} @contract class C { @error Bad(d: Fd); inc(x:u256):u256{return x;} @external f(): u256 { let d: Fd = Fd(this.inc, "hi"); revert(Bad(d)); } }`)).toBe(true);
-    expect(rejects(`@contract class C { @event E(g: (x: u256) => u256); inc(x:u256):u256{return x;} @external f(): u256 { emit(E(this.inc)); return 1n; } }`)).toBe(true);
+    const FD = `type Fd = { f: (x: u256) => u256; s: string };`;
+    expect(rejects(`${FD} class C { E: event<{ d: Fd }>; inc(x:u256):u256{return x;} f(): External<u256> { let d: Fd = Fd(this.inc, "hi"); emit(E(d)); return 1n; } }`)).toBe(true);
+    expect(rejects(`${FD} class C { E: event<{ d: indexed<Fd> }>; inc(x:u256):u256{return x;} f(): External<u256> { let d: Fd = Fd(this.inc, "hi"); emit(E(d)); return 1n; } }`)).toBe(true);
+    expect(rejects(`${FD} class C { Bad: error<{ d: Fd }>; inc(x:u256):u256{return x;} get f(): External<u256> { let d: Fd = Fd(this.inc, "hi"); revert(Bad(d)); } }`)).toBe(true);
+    expect(rejects(`class C { E: event<{ g: (x: u256) => u256 }>; inc(x:u256):u256{return x;} f(): External<u256> { emit(E(this.inc)); return 1n; } }`)).toBe(true);
   });
 
   it('L13: byte-write into a bytes[] field element (write, OOB Panic, alias-through, storage control)', async () => {
-    const J = `@struct class Pt6 { tags: bytes[]; n: u256 }
-@contract class C {
-  @state ss: bytes[];
-  @external seedS(): void { this.ss.push(bytes("qq")); }
-  @external @pure f(): bytes { let t: bytes[] = [bytes("aabbcc"), bytes("dd")]; let p: Pt6 = Pt6(t, 9n); p.tags[0n][1n] = 0x21n; return p.tags[0n]; }
-  @external @pure fo(): bytes { let t: bytes[] = [bytes("aabbcc")]; let p: Pt6 = Pt6(t, 9n); p.tags[0n][9n] = 0x21n; return p.tags[0n]; }
-  @external @pure loc(): u256 { let t: bytes[] = [bytes("ab")]; let p: Pt6 = Pt6(t, 9n); let al: bytes = p.tags[0n]; p.tags[0n][0n] = 0x5an; return al[0n] == 0x5an ? 1n : 0n; }
-  @external ctlSt(): bytes { this.ss[0n][1n] = 0x22n; return this.ss[0n]; } }`;
+    const J = `type Pt6 = { tags: bytes[]; n: u256 };
+class C {
+  ss: bytes[];
+  seedS(): External<void> { this.ss.push(bytes("qq")); }
+  get f(): External<bytes> { let t: bytes[] = [bytes("aabbcc"), bytes("dd")]; let p: Pt6 = Pt6(t, 9n); p.tags[0n][1n] = 0x21n; return p.tags[0n]; }
+  get fo(): External<bytes> { let t: bytes[] = [bytes("aabbcc")]; let p: Pt6 = Pt6(t, 9n); p.tags[0n][9n] = 0x21n; return p.tags[0n]; }
+  get loc(): External<u256> { let t: bytes[] = [bytes("ab")]; let p: Pt6 = Pt6(t, 9n); let al: bytes = p.tags[0n]; p.tags[0n][0n] = 0x5an; return al[0n] == 0x5an ? 1n : 0n; }
+  ctlSt(): External<bytes> { this.ss[0n][1n] = 0x22n; return this.ss[0n]; } }`;
     const S = `struct Pt6 { bytes[] tags; uint256 n; }
 contract C {
   bytes[] ss;

@@ -33,24 +33,24 @@ const cdUSSU = (sig: string, a: bigint, s1: string, s2: string, nv: bigint) => {
 // fromCalldata(D x): D=(uint256,string) dynamic -> selector + off(0x20) + tuple[a, off_s=0x40, [len][data]]
 const cdD = (sig: string, a: bigint, s: string) => '0x' + sel(sig) + pad(0x20n) + pad(a) + pad(0x40n) + encStr(s);
 
-const JETH = `@struct class D { a: u256; s: string; }
-@contract class C {
-  @state st: D;
-  @state m: mapping<address, D>;
-  @state recs: D[];
-  @external seedSt(av: u256, s: string): void { this.st = D(av, s); }
-  @external seedMap(av: u256, s: string): void { this.m[address(0xbeefn)] = D(av, s); }
-  @external seedRec(av: u256, s: string): void { this.recs.push(D(av, s)); }
-  @external @view fromStorage(): D { let d: D = this.st; return d; }
-  @external @view fromMap(): D { let d: D = this.m[address(0xbeefn)]; return d; }
-  @external @view fromRec(): D { let d: D = this.recs[0n]; return d; }
-  @external @view copyMut(nv: u256, ns: string): D { let d: D = this.st; d.a = nv; d.s = ns; return d; }
-  @external @pure fromCalldata(x: D): D { let d: D = x; return d; }
-  @external @pure copyCdMut(x: D, nv: u256): D { let d: D = x; d.a = nv; return d; }
-  @external @pure writeBytes(av: u256, s: string, ns: string): D { let d: D = D(av, s); d.s = ns; return d; }
-  @external @pure writeBoth(av: u256, s: string, ns: string, nv: u256): D { let d: D = D(av, s); d.s = ns; d.a = nv; return d; }
-  @external @pure aliasMut(av: u256, s: string): D { let d: D = D(av, s); let e: D = d; e.a = 999n; return d; }
-  @external @pure aliasBytes(av: u256, s: string, ns: string): D { let d: D = D(av, s); let e: D = d; e.s = ns; return d; }
+const JETH = `type D = { a: u256; s: string; };
+class C {
+  st: D;
+  m: mapping<address, D>;
+  recs: D[];
+  seedSt(av: u256, s: string): External<void> { this.st = D(av, s); }
+  seedMap(av: u256, s: string): External<void> { this.m[address(0xbeefn)] = D(av, s); }
+  seedRec(av: u256, s: string): External<void> { this.recs.push(D(av, s)); }
+  get fromStorage(): External<D> { let d: D = this.st; return d; }
+  get fromMap(): External<D> { let d: D = this.m[address(0xbeefn)]; return d; }
+  get fromRec(): External<D> { let d: D = this.recs[0n]; return d; }
+  get copyMut(nv: u256, ns: string): External<D> { let d: D = this.st; d.a = nv; d.s = ns; return d; }
+  get fromCalldata(x: D): External<D> { let d: D = x; return d; }
+  get copyCdMut(x: D, nv: u256): External<D> { let d: D = x; d.a = nv; return d; }
+  get writeBytes(av: u256, s: string, ns: string): External<D> { let d: D = D(av, s); d.s = ns; return d; }
+  get writeBoth(av: u256, s: string, ns: string, nv: u256): External<D> { let d: D = D(av, s); d.s = ns; d.a = nv; return d; }
+  get aliasMut(av: u256, s: string): External<D> { let d: D = D(av, s); let e: D = d; e.a = 999n; return d; }
+  get aliasBytes(av: u256, s: string, ns: string): External<D> { let d: D = D(av, s); let e: D = d; e.s = ns; return d; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -49,9 +49,9 @@ async function diff(J: string, S: string, calls: string[]): Promise<{ success: b
 // ---------------------------------------------------------------------------------------------------
 describe('L10b: tuple-return funcref, destructured pointer call (byte-identical)', () => {
   it('let [p, q] = g(a, b) through a (u256,u256)=>[u256,u256] pointer', async () => {
-    const J = `@contract class C {
+    const J = `class C {
       two(a: u256, b: u256): [u256, u256] { return [a + b, a * b]; }
-      @external run(a: u256, b: u256): u256 {
+      get run(a: u256, b: u256): External<u256> {
         let g: (a: u256, b: u256) => [u256, u256] = this.two;
         let [p, q] = g(a, b);
         return p + q * 2n;
@@ -70,10 +70,10 @@ describe('L10b: tuple-return funcref, destructured pointer call (byte-identical)
   });
 
   it('runtime dispatch: two same-signature multi-return targets behind one pointer', async () => {
-    const J = `@contract class C {
+    const J = `class C {
       sumProd(a: u256, b: u256): [u256, u256] { return [a + b, a * b]; }
       diffMax(a: u256, b: u256): [u256, u256] { return [a - b, a > b ? a : b]; }
-      @external run(c: u256, a: u256, b: u256): u256 {
+      get run(c: u256, a: u256, b: u256): External<u256> {
         let g: (a: u256, b: u256) => [u256, u256] = c > 0n ? this.sumProd : this.diffMax;
         let [p, q] = g(a, b);
         return p * 1000n + q;
@@ -97,9 +97,9 @@ describe('L10b: tuple-return funcref, destructured pointer call (byte-identical)
   });
 
   it('tuple-ASSIGN form [p, q] = g(a, b) and a MIXED [u256, string] return tuple', async () => {
-    const J = `@contract class C {
+    const J = `class C {
       mk(a: u256): [u256, string] { return [a + 1n, "hi"]; }
-      @external run(a: u256): u256 {
+      get run(a: u256): External<u256> {
         let g: (a: u256) => [u256, string] = this.mk;
         let p: u256 = 0n;
         let s: string = "";
@@ -122,9 +122,9 @@ describe('L10b: tuple-return funcref, destructured pointer call (byte-identical)
   });
 
   it('KEPT REJECTS: value-position use (JETH244), arity mismatch (JETH066), sig mismatch (JETH428)', () => {
-    const base = `@contract class C {
+    const base = `class C {
       two(a: u256, b: u256): [u256, u256] { return [a + b, a * b]; }
-      @external run(a: u256, b: u256): u256 {
+      get run(a: u256, b: u256): External<u256> {
         let g: (a: u256, b: u256) => [u256, u256] = this.two;
         BODY
       }
@@ -132,9 +132,9 @@ describe('L10b: tuple-return funcref, destructured pointer call (byte-identical)
     expect(codes(base.replace('BODY', 'let x: u256 = g(a, b); return x;'))).toContain('JETH244');
     expect(codes(base.replace('BODY', 'let [p, q, r] = g(a, b); return p + q + r;'))).toContain('JETH066');
     expect(
-      codes(`@contract class C {
+      codes(`class C {
         one(a: u256): u256 { return a + 1n; }
-        @external run(a: u256): u256 {
+        get run(a: u256): External<u256> {
           let g: (a: u256) => [u256, u256] = this.one;
           let [p, q] = g(a); return p + q;
         }
@@ -146,14 +146,14 @@ describe('L10b: tuple-return funcref, destructured pointer call (byte-identical)
 // ---------------------------------------------------------------------------------------------------
 // L11a - funcref field in a DYNAMIC struct
 // ---------------------------------------------------------------------------------------------------
-const FD = `@struct class Fd { f: (x: u256) => u256; s: string; }`;
+const FD = `type Fd = { f: (x: u256) => u256; s: string; };`;
 const FD_S = `struct Fd { function(uint256) pure returns (uint256) f; string s; }`;
 describe('L11a: funcref field in a dynamic struct (byte-identical)', () => {
   it('ctor Fd(this.inc, "hi"), call d.f(5n), read d.s via bytes().length', async () => {
     const J = `${FD}
-    @contract class C {
+    class C {
       inc(x: u256): u256 { return x + 1n; }
-      @external run(): u256 { let d: Fd = Fd(this.inc, "hey"); return d.f(5n) * 10n + bytes(d.s).length; }
+      get run(): External<u256> { let d: Fd = Fd(this.inc, "hey"); return d.f(5n) * 10n + bytes(d.s).length; }
     }`;
     const S = `contract C { ${FD_S}
       function inc(uint256 x) internal pure returns (uint256) { return x + 1; }
@@ -165,13 +165,13 @@ describe('L11a: funcref field in a dynamic struct (byte-identical)', () => {
 
   it('field WRITE d.f = this.dec, storage COPY (let m: Fd = this.d), and alias mutation', async () => {
     const J = `${FD}
-    @contract class C {
-      @state d: Fd;
+    class C {
+      d: Fd;
       inc(x: u256): u256 { return x + 1n; }
       dec(x: u256): u256 { return x - 1n; }
       constructor() { this.d = Fd(this.inc, "abc"); }
-      @external fromStorage(): u256 { let m: Fd = this.d; return m.f(41n) + bytes(m.s).length; }
-      @external rewrite(c: u256): u256 {
+      get fromStorage(): External<u256> { let m: Fd = this.d; return m.f(41n) + bytes(m.s).length; }
+      get rewrite(c: u256): External<u256> {
         let d: Fd = Fd(this.inc, "hi");
         let e: Fd = d;
         if (c > 0n) { e.f = this.dec; }
@@ -203,10 +203,10 @@ describe('L11a: funcref field in a dynamic struct (byte-identical)', () => {
 
   it('ternary over two Fd locals consumed via .f(...) (the F4-3-adjacent spelling)', async () => {
     const J = `${FD}
-    @contract class C {
+    class C {
       inc(x: u256): u256 { return x + 1n; }
       dec(x: u256): u256 { return x - 1n; }
-      @external run(c: u256): u256 {
+      get run(c: u256): External<u256> {
         let a: Fd = Fd(this.inc, "a");
         let b: Fd = Fd(this.dec, "b");
         let d: Fd = c > 0n ? a : b;
@@ -230,13 +230,13 @@ describe('L11a: funcref field in a dynamic struct (byte-identical)', () => {
 
   it('consumer axis: Fd as an @internal argument AND an @internal return; storage Fd[] push', async () => {
     const J = `${FD}
-    @contract class C {
-      @state arr: Fd[];
+    class C {
+      arr: Fd[];
       inc(x: u256): u256 { return x + 1n; }
       use(d: Fd): u256 { return d.f(20n) + bytes(d.s).length; }
       mk(): Fd { return Fd(this.inc, "ab"); }
-      @external run(): u256 { let d: Fd = this.mk(); return this.use(d); }
-      @external pushRead(): u256 {
+      get run(): External<u256> { let d: Fd = this.mk(); return this.use(d); }
+      pushRead(): External<u256> {
         this.arr.push(Fd(this.inc, "pq"));
         let m: Fd = this.arr[0n];
         return m.f(50n) + bytes(m.s).length;
@@ -260,7 +260,7 @@ describe('L11a: funcref field in a dynamic struct (byte-identical)', () => {
   });
 
   it('KEPT REJECTS: every ABI boundary of a funcref-bearing struct still rejects (solc parity)', () => {
-    const C = (body: string) => `${FD}\n@contract class C { inc(x: u256): u256 { return x + 1n; } ${body} }`;
+    const C = (body: string) => `${FD}\nclass C { inc(x: u256): u256 { return x + 1n; } ${body} }`;
     // @external return / param (JETH426 signature gate)
     expect(codes(C(`@external run(): Fd { return Fd(this.inc, "hi"); }`))).toContain('JETH426');
     expect(codes(C(`@external run(d: Fd): u256 { return 1n; }`))).toContain('JETH426');
@@ -268,15 +268,15 @@ describe('L11a: funcref field in a dynamic struct (byte-identical)', () => {
     expect(codes(C(`@external run(): bytes { let d: Fd = Fd(this.inc, "hi"); return abi.encode(d); }`))).toContain('JETH173');
     expect(codes(C(`@external run(): bytes { let d: Fd = Fd(this.inc, "hi"); return abi.encodePacked(d); }`))).toContain('JETH173');
     // constructor param (JETH302), public getter (JETH057), abi.decode target (JETH322)
-    expect(codes(`${FD}\n@contract class C { @state x: u256; constructor(d: Fd) { this.x = 1n; } }`)).toContain('JETH302');
-    expect(codes(`${FD}\n@contract class C { @external @state d: Fd; inc(x: u256): u256 { return x + 1n; } constructor() { this.d = Fd(this.inc, "a"); } }`)).toContain('JETH057');
+    expect(codes(`${FD}\nclass C { x: u256; constructor(d: Fd) { this.x = 1n; } }`)).toContain('JETH302');
+    expect(codes(`${FD}\nclass C { d: Visible<Fd>; inc(x: u256): u256 { return x + 1n; } constructor() { this.d = Fd(this.inc, "a"); } }`)).toContain('JETH057');
     expect(codes(C(`@external run(b: bytes): u256 { let d: Fd = abi.decode(b, Fd); return 1n; }`))).toContain('JETH322');
     // @interface param + return (JETH347 / JETH348)
     expect(
-      codes(`${FD}\n@interface class IX { @external g(d: Fd): u256; }\n@contract class C { z(x: u256): u256 { return x; } @external run(t: address): u256 { let d: Fd = Fd(this.z, "a"); return IX(t).g(d); } }`),
+      codes(`${FD}\ninterface IX { g(d: Fd): u256; }\nclass C { z(x: u256): u256 { return x; } get run(t: address): External<u256> { let d: Fd = Fd(this.z, "a"); return IX(t).g(d); } }`),
     ).toContain('JETH347');
     expect(
-      codes(`${FD}\n@interface class IX { @external g(): Fd; }\n@contract class C { @external run(t: address): u256 { let d: Fd = IX(t).g(); return 1n; } }`),
+      codes(`${FD}\ninterface IX { g(): Fd; }\nclass C { run(t: address): External<u256> { let d: Fd = IX(t).g(); return 1n; } }`),
     ).toContain('JETH348');
   });
 });
@@ -286,12 +286,12 @@ describe('L11a: funcref field in a dynamic struct (byte-identical)', () => {
 // ---------------------------------------------------------------------------------------------------
 describe('L14: @external @state struct var implements a tuple-returning @interface method', () => {
   const JETH = (getterDecl: string) => `
-    @interface class IG { @external @view g(): [u256, u256]; }
-    @struct class S6 { a: u256; b: u256; }
-    @contract class C extends IG {
+    interface IG { g(): View<[u256, u256]>; }
+    type S6 = { a: u256; b: u256; };
+    class C extends IG {
       ${getterDecl}
       constructor() { this.g = S6(7n, 8n); }
-      @external @view viaIface(): u256 {
+      get viaIface(): External<u256> {
         let [x, y] = IG(address(this)).g();
         return x * 100n + y;
       }
@@ -326,10 +326,10 @@ describe('L14: @external @state struct var implements a tuple-returning @interfa
 
   it('a struct with a string field flattens to (u256, string) and still satisfies the interface', async () => {
     const J = `
-      @interface class IG { @external @view g(): [u256, string]; }
-      @struct class Sm { a: u256; s: string; }
-      @contract class C extends IG {
-        @external @state g: Sm;
+      interface IG { g(): View<[u256, string]>; }
+      type Sm = { a: u256; s: string; };
+      class C extends IG {
+        g: Visible<Sm>;
         constructor() { this.g = Sm(5n, "hey"); }
       }`;
     const S = `
@@ -345,14 +345,14 @@ describe('L14: @external @state struct var implements a tuple-returning @interfa
 
   it('KEPT REJECTS: mismatched returns and a @pure interface method still fail (JETH385)', () => {
     const mismatch = `
-      @interface class IG { @external @view g(): u256; }
-      @struct class S6 { a: u256; b: u256; }
-      @contract class C extends IG { @external @state g: S6; constructor() { this.g = S6(7n, 8n); } }`;
+      interface IG { g(): View<u256>; }
+      type S6 = { a: u256; b: u256; };
+      class C extends IG { g: Visible<S6>; constructor() { this.g = S6(7n, 8n); } }`;
     expect(codes(mismatch)).toContain('JETH385');
     const pure = `
-      @interface class IG { @external @pure g(): [u256, u256]; }
-      @struct class S6 { a: u256; b: u256; }
-      @contract class C extends IG { @external @state g: S6; constructor() { this.g = S6(7n, 8n); } }`;
+      interface IG { g(): Pure<[u256, u256]>; }
+      type S6 = { a: u256; b: u256; };
+      class C extends IG { g: Visible<S6>; constructor() { this.g = S6(7n, 8n); } }`;
     expect(codes(pure)).toContain('JETH385');
   });
 });
@@ -362,11 +362,11 @@ describe('L14: @external @state struct var implements a tuple-returning @interfa
 // ---------------------------------------------------------------------------------------------------
 describe('L15: generic @modifier monomorphization (explicit + inferred)', () => {
   it('two instantiations in one contract (u256 explicit + inferred; i256 explicit with a revert path)', async () => {
-    const J = `@contract class C {
+    const J = `class C {
       @modifier lim<T>(v: T) { require(v > 0n, "neg"); _; }
-      @lim<u256>(3n) @external f(x: u256): u256 { return x + 1n; }
-      @lim(4n) @external h(x: u256): u256 { return x + 2n; }
-      @lim<i256>(0n - 5n) @external g(x: u256): u256 { return x + 3n; }
+      @lim<u256>(3n) get f(x: u256): External<u256> { return x + 1n; }
+      @lim(4n) get h(x: u256): External<u256> { return x + 2n; }
+      @lim<i256>(0n - 5n) get g(x: u256): External<u256> { return x + 3n; }
     }`;
     const S = `contract C {
       modifier limU(uint256 v) { require(v > 0, "neg"); _; }
@@ -386,12 +386,12 @@ describe('L15: generic @modifier monomorphization (explicit + inferred)', () => 
   });
 
   it('post-placeholder code (buffered path) + modifier args evaluated exactly once', async () => {
-    const J = `@contract class C {
-      @state count: u256;
+    const J = `class C {
+      count: u256;
       bump(): u256 { this.count = this.count + 1n; return this.count; }
       @modifier tick<T>(v: T) { require(v > 0n, "z"); _; this.count = this.count + 100n; }
-      @tick(this.bump()) @external f(x: u256): u256 { return x + this.count; }
-      @external @view peek(): u256 { return this.count; }
+      @tick(this.bump()) f(x: u256): External<u256> { return x + this.count; }
+      get peek(): External<u256> { return this.count; }
     }`;
     const S = `contract C {
       uint256 count;
@@ -406,17 +406,17 @@ describe('L15: generic @modifier monomorphization (explicit + inferred)', () => 
   });
 
   it('KEPT REJECTS: only UNINSTANTIABLE uses fail (JETH327); an ill-typed body at that T fails there', () => {
-    const uninstantiable = `@contract class C {
+    const uninstantiable = `class C {
       @modifier lim<T>(v: T) { require(v > 0n, "z"); _; }
-      @lim @external f(x: u256): u256 { return x + 1n; }
+      @lim get f(x: u256): External<u256> { return x + 1n; }
     }`;
     expect(codes(uninstantiable)).toContain('JETH327');
     // Batch D (MOD-GEN) lifted aggregate/dynamic type arguments: `@lim<string>` now instantiates and
     // fails in the BODY (string > int comparison, JETH084) - the solc monomorphized mirror rejects the
     // same body. Mapping-bearing type args keep the JETH291 gate (see lift-longtail-batchD.test.ts).
-    const stringBodyError = `@contract class C {
+    const stringBodyError = `class C {
       @modifier lim<T>(v: T) { require(v > 0n, "z"); _; }
-      @lim<string>("a") @external f(x: u256): u256 { return x + 1n; }
+      @lim<string>("a") get f(x: u256): External<u256> { return x + 1n; }
     }`;
     expect(codes(stringBodyError)).toContain('JETH084');
   });

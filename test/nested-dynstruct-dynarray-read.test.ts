@@ -38,7 +38,7 @@ async function eqCalls(jeth: string, sol: string, calls: [string, string][]) {
   return out;
 }
 
-const JP = '@struct class S2 { a: u256; arr: u256[]; } @struct class S3 { p: S2; n: u256; } @contract class C { ';
+const JP = 'type S2 = { a: u256; arr: u256[]; }; type S3 = { p: S2; n: u256; }; class C { ';
 const SP = 'struct S2 { uint256 a; uint256[] arr; } struct S3 { S2 p; uint256 n; } contract C { ';
 const J = (body: string) => JP + body + ' }';
 const S = (body: string) => SP + body + ' }';

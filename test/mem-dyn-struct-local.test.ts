@@ -28,23 +28,23 @@ const cdBU = (sig: string, b: string, i: bigint) => '0x' + sel(sig) + pad(0x40n)
 const cdUSU = (sig: string, a: bigint, s: string, na: bigint) =>
   '0x' + sel(sig) + pad(a) + pad(0x60n) + pad(na) + encStr(s);
 
-const JETH = `@struct class D1 { a: u256; s: string; }
-@struct class D2 { s: string; a: u256; }
-@struct class D3 { a: u8; s: string; b: bytes; n: u64; }
-@contract class C {
-  @external @pure mk(a: u256, s: string): D1 { let d: D1 = D1(a, s); return d; }
-  @external @pure getA(a: u256, s: string): u256 { let d: D1 = D1(a, s); return d.a; }
-  @external @pure getS(a: u256, s: string): string { let d: D1 = D1(a, s); return d.s; }
-  @external @pure bLen(b: bytes, n: u64): u256 { let d: D3 = D3(0n, "", b, n); return d.b.length; }
-  @external @pure writeA(a: u256, s: string, na: u256): D1 { let d: D1 = D1(a, s); d.a = na; return d; }
-  @external @pure rwBoth(a: u256, s: string, na: u256): u256 { let d: D1 = D1(a, s); d.a = d.a + na; return d.a; }
-  @external @pure mk2(s: string, a: u256): D2 { let d: D2 = D2(s, a); return d; }
-  @external @pure get2A(s: string, a: u256): u256 { let d: D2 = D2(s, a); return d.a; }
-  @external @pure get2S(s: string, a: u256): string { let d: D2 = D2(s, a); return d.s; }
-  @external @pure mk3(a: u8, s: string, b: bytes, n: u64): D3 { let d: D3 = D3(a, s, b, n); return d; }
-  @external @pure bAt(b: bytes, i: u256): u8 { let d: D3 = D3(0n, "", b, 0n); return u8(d.b[i]); }
-  @external @pure fromLocal(a: u256, s: string): D1 { let t: string = s; let d: D1 = D1(a, t); return d; }
-  @external @pure litField(a: u256): D1 { let d: D1 = D1(a, "a string literal that is over thirty-two bytes long!!"); return d; }
+const JETH = `type D1 = { a: u256; s: string; };
+type D2 = { s: string; a: u256; };
+type D3 = { a: u8; s: string; b: bytes; n: u64; };
+class C {
+  get mk(a: u256, s: string): External<D1> { let d: D1 = D1(a, s); return d; }
+  get getA(a: u256, s: string): External<u256> { let d: D1 = D1(a, s); return d.a; }
+  get getS(a: u256, s: string): External<string> { let d: D1 = D1(a, s); return d.s; }
+  get bLen(b: bytes, n: u64): External<u256> { let d: D3 = D3(0n, "", b, n); return d.b.length; }
+  get writeA(a: u256, s: string, na: u256): External<D1> { let d: D1 = D1(a, s); d.a = na; return d; }
+  get rwBoth(a: u256, s: string, na: u256): External<u256> { let d: D1 = D1(a, s); d.a = d.a + na; return d.a; }
+  get mk2(s: string, a: u256): External<D2> { let d: D2 = D2(s, a); return d; }
+  get get2A(s: string, a: u256): External<u256> { let d: D2 = D2(s, a); return d.a; }
+  get get2S(s: string, a: u256): External<string> { let d: D2 = D2(s, a); return d.s; }
+  get mk3(a: u8, s: string, b: bytes, n: u64): External<D3> { let d: D3 = D3(a, s, b, n); return d; }
+  get bAt(b: bytes, i: u256): External<u8> { let d: D3 = D3(0n, "", b, 0n); return u8(d.b[i]); }
+  get fromLocal(a: u256, s: string): External<D1> { let t: string = s; let d: D1 = D1(a, t); return d; }
+  get litField(a: u256): External<D1> { let d: D1 = D1(a, "a string literal that is over thirty-two bytes long!!"); return d; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

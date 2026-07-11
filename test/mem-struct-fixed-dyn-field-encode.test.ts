@@ -46,12 +46,12 @@ async function eqCalls(jeth: string, sol: string, calls: [string, string, string
 describe('mem-struct fixed-of-dynamic field abi.encode (#7 miscompile)', () => {
   it('Arr<string,2> mem-built local: encode(field) / mixed-position / keccak, exact solc bytes', async () => {
     const J = `
-@struct class D { tags: Arr<string,2>; k: u256 }
-@contract class C {
-  @external @pure e(): bytes { let d: D = D(["ab","cdcd"], 3n); return abi.encode(d.tags); }
-  @external @pure eKF(): bytes { let d: D = D(["ab","cdcd"], 3n); return abi.encode(d.k, d.tags); }
-  @external @pure eFK(): bytes { let d: D = D(["ab","cdcd"], 3n); return abi.encode(d.tags, d.k); }
-  @external @pure kh(): u256 { let d: D = D(["ab","cdcd"], 3n); return u256(keccak256(abi.encode(d.tags))); }
+type D = { tags: Arr<string,2>; k: u256 };
+class C {
+  get e(): External<bytes> { let d: D = D(["ab","cdcd"], 3n); return abi.encode(d.tags); }
+  get eKF(): External<bytes> { let d: D = D(["ab","cdcd"], 3n); return abi.encode(d.k, d.tags); }
+  get eFK(): External<bytes> { let d: D = D(["ab","cdcd"], 3n); return abi.encode(d.tags, d.k); }
+  get kh(): External<u256> { let d: D = D(["ab","cdcd"], 3n); return u256(keccak256(abi.encode(d.tags))); }
 }`;
     const S = `
 contract C {
@@ -85,10 +85,10 @@ contract C {
   it('Arr<string,3> with empty / >31-byte elements: differential + first-element anchor', async () => {
     const long = 'this-is-a-string-that-is-longer-than-thirty-two-bytes-here';
     const J = `
-@struct class D { tags: Arr<string,3>; k: u256 }
-@contract class C {
-  @external @pure e(): bytes { let d: D = D(["", "x", "${long}"], 9n); return abi.encode(d.tags); }
-  @external @pure eM(): bytes { let d: D = D(["", "x", "${long}"], 9n); return abi.encode(d.k, d.tags); }
+type D = { tags: Arr<string,3>; k: u256 };
+class C {
+  get e(): External<bytes> { let d: D = D(["", "x", "${long}"], 9n); return abi.encode(d.tags); }
+  get eM(): External<bytes> { let d: D = D(["", "x", "${long}"], 9n); return abi.encode(d.k, d.tags); }
 }`;
     const S = `
 contract C {
@@ -104,10 +104,10 @@ contract C {
 
   it('Arr<bytes,2> mem-built local: encode(field) exact solc bytes', async () => {
     const J = `
-@struct class B { blobs: Arr<bytes,2>; k: u256 }
-@contract class C {
+type B = { blobs: Arr<bytes,2>; k: u256 };
+class C {
   strToBytes(s: string): bytes { return abi.encodePacked(s); }
-  @external @pure eb(): bytes { let b: B = B([strToBytes("ab"), strToBytes("cdcd")], 5n); return abi.encode(b.blobs); }
+  get eb(): External<bytes> { let b: B = B([strToBytes("ab"), strToBytes("cdcd")], 5n); return abi.encode(b.blobs); }
 }`;
     const S = `
 contract C {
@@ -123,16 +123,16 @@ contract C {
 
   it('field sources: internal param / nested sub-struct / P[]-element, all differential', async () => {
     const J = `
-@struct class D { tags: Arr<string,2>; k: u256 }
-@struct class In { tags: Arr<string,2>; z: u256 }
-@struct class Ou { t: In; k: u256 }
-@struct class P { tags: Arr<string,2>; k: u256 }
-@contract class C {
+type D = { tags: Arr<string,2>; k: u256 };
+type In = { tags: Arr<string,2>; z: u256 };
+type Ou = { t: In; k: u256 };
+type P = { tags: Arr<string,2>; k: u256 };
+class C {
   enc(d: D): bytes { return abi.encode(d.tags); }
-  @external @pure param(): bytes { let d: D = D(["aa","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], 1n); return this.enc(d); }
-  @external @pure nested(): bytes { let v: Ou = Ou(In(["nn","mmmm"], 4n), 9n); return abi.encode(v.t.tags); }
-  @external @pure elem(): bytes { let xs: P[] = [P(["a0","b0"], 1n), P(["a1","b1"], 2n)]; return abi.encode(xs[1n].tags); }
-  @external @pure elemM(): bytes { let xs: P[] = [P(["a0","b0"], 1n), P(["a1","b1"], 2n)]; return abi.encode(xs[1n].k, xs[1n].tags); }
+  get param(): External<bytes> { let d: D = D(["aa","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"], 1n); return this.enc(d); }
+  get nested(): External<bytes> { let v: Ou = Ou(In(["nn","mmmm"], 4n), 9n); return abi.encode(v.t.tags); }
+  get elem(): External<bytes> { let xs: P[] = [P(["a0","b0"], 1n), P(["a1","b1"], 2n)]; return abi.encode(xs[1n].tags); }
+  get elemM(): External<bytes> { let xs: P[] = [P(["a0","b0"], 1n), P(["a1","b1"], 2n)]; return abi.encode(xs[1n].k, xs[1n].tags); }
 }`;
     const S = `
 contract C {
@@ -157,10 +157,10 @@ contract C {
 
   it('UNREGRESSED: Arr<u256[],2> value-leaf twin encode stays byte-identical', async () => {
     const J = `
-@struct class D { g: Arr<u256[],2>; k: u256 }
-@contract class C {
-  @external @pure e(): bytes { let d: D = D([[11n,22n,33n],[44n]], 9n); return abi.encode(d.g); }
-  @external @pure eM(): bytes { let d: D = D([[11n,22n,33n],[44n]], 9n); return abi.encode(d.k, d.g); }
+type D = { g: Arr<u256[],2>; k: u256 };
+class C {
+  get e(): External<bytes> { let d: D = D([[11n,22n,33n],[44n]], 9n); return abi.encode(d.g); }
+  get eM(): External<bytes> { let d: D = D([[11n,22n,33n],[44n]], 9n); return abi.encode(d.k, d.g); }
 }`;
     const S = `
 contract C {
@@ -177,9 +177,9 @@ contract C {
 
   it('UNREGRESSED: abi.encodePacked(field) rejects on BOTH sides (solc: type not supported in packed mode)', async () => {
     const J = `
-@struct class D { tags: Arr<string,2>; k: u256 }
-@contract class C {
-  @external @pure ep(): bytes { let d: D = D(["ab","cd"], 3n); return abi.encodePacked(d.tags); }
+type D = { tags: Arr<string,2>; k: u256 };
+class C {
+  get ep(): External<bytes> { let d: D = D(["ab","cd"], 3n); return abi.encodePacked(d.tags); }
 }`;
     // JETH must REJECT (a clean compile error), matching solc's "Type not supported in packed mode".
     expect(() => compile(J, { fileName: 'C.jeth' })).toThrow();

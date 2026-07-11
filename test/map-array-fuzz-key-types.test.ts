@@ -26,44 +26,43 @@ const dataSlot = (lenSlot: bigint) => kec(pad32(lenSlot));
 
 // ---- JETH source: one mapping<K, u256[]> per key type, distinct slots 0..4 ----
 const JETH = `
-@contract
 class KeyTypes {
-  @state ma: mapping<address, u256[]>;   // slot 0
-  @state mu: mapping<u256, u256[]>;       // slot 1
-  @state mb: mapping<bytes32, u256[]>;    // slot 2
-  @state m6: mapping<u64, u256[]>;        // slot 3
-  @state mi: mapping<i128, u256[]>;       // slot 4
-  @state sentinel: u256;                   // slot 5
+  ma: mapping<address, u256[]>;   // slot 0
+  mu: mapping<u256, u256[]>;       // slot 1
+  mb: mapping<bytes32, u256[]>;    // slot 2
+  m6: mapping<u64, u256[]>;        // slot 3
+  mi: mapping<i128, u256[]>;       // slot 4
+  sentinel: u256;                   // slot 5
 
-  @external pushA(k: address, v: u256): void { this.ma[k].push(v); }
-  @external popA(k: address): void { this.ma[k].pop(); }
-  @external setA(k: address, i: u256, v: u256): void { this.ma[k][i] = v; }
-  @external @view lenA(k: address): u256 { return this.ma[k].length; }
-  @external @view atA(k: address, i: u256): u256 { return this.ma[k][i]; }
+  pushA(k: address, v: u256): External<void> { this.ma[k].push(v); }
+  popA(k: address): External<void> { this.ma[k].pop(); }
+  setA(k: address, i: u256, v: u256): External<void> { this.ma[k][i] = v; }
+  get lenA(k: address): External<u256> { return this.ma[k].length; }
+  get atA(k: address, i: u256): External<u256> { return this.ma[k][i]; }
 
-  @external pushU(k: u256, v: u256): void { this.mu[k].push(v); }
-  @external popU(k: u256): void { this.mu[k].pop(); }
-  @external setU(k: u256, i: u256, v: u256): void { this.mu[k][i] = v; }
-  @external @view lenU(k: u256): u256 { return this.mu[k].length; }
-  @external @view atU(k: u256, i: u256): u256 { return this.mu[k][i]; }
+  pushU(k: u256, v: u256): External<void> { this.mu[k].push(v); }
+  popU(k: u256): External<void> { this.mu[k].pop(); }
+  setU(k: u256, i: u256, v: u256): External<void> { this.mu[k][i] = v; }
+  get lenU(k: u256): External<u256> { return this.mu[k].length; }
+  get atU(k: u256, i: u256): External<u256> { return this.mu[k][i]; }
 
-  @external pushB(k: bytes32, v: u256): void { this.mb[k].push(v); }
-  @external popB(k: bytes32): void { this.mb[k].pop(); }
-  @external setB(k: bytes32, i: u256, v: u256): void { this.mb[k][i] = v; }
-  @external @view lenB(k: bytes32): u256 { return this.mb[k].length; }
-  @external @view atB(k: bytes32, i: u256): u256 { return this.mb[k][i]; }
+  pushB(k: bytes32, v: u256): External<void> { this.mb[k].push(v); }
+  popB(k: bytes32): External<void> { this.mb[k].pop(); }
+  setB(k: bytes32, i: u256, v: u256): External<void> { this.mb[k][i] = v; }
+  get lenB(k: bytes32): External<u256> { return this.mb[k].length; }
+  get atB(k: bytes32, i: u256): External<u256> { return this.mb[k][i]; }
 
-  @external push6(k: u64, v: u256): void { this.m6[k].push(v); }
-  @external pop6(k: u64): void { this.m6[k].pop(); }
-  @external set6(k: u64, i: u256, v: u256): void { this.m6[k][i] = v; }
-  @external @view len6(k: u64): u256 { return this.m6[k].length; }
-  @external @view at6(k: u64, i: u256): u256 { return this.m6[k][i]; }
+  push6(k: u64, v: u256): External<void> { this.m6[k].push(v); }
+  pop6(k: u64): External<void> { this.m6[k].pop(); }
+  set6(k: u64, i: u256, v: u256): External<void> { this.m6[k][i] = v; }
+  get len6(k: u64): External<u256> { return this.m6[k].length; }
+  get at6(k: u64, i: u256): External<u256> { return this.m6[k][i]; }
 
-  @external pushI(k: i128, v: u256): void { this.mi[k].push(v); }
-  @external popI(k: i128): void { this.mi[k].pop(); }
-  @external setI(k: i128, i: u256, v: u256): void { this.mi[k][i] = v; }
-  @external @view lenI(k: i128): u256 { return this.mi[k].length; }
-  @external @view atI(k: i128, i: u256): u256 { return this.mi[k][i]; }
+  pushI(k: i128, v: u256): External<void> { this.mi[k].push(v); }
+  popI(k: i128): External<void> { this.mi[k].pop(); }
+  setI(k: i128, i: u256, v: u256): External<void> { this.mi[k][i] = v; }
+  get lenI(k: i128): External<u256> { return this.mi[k].length; }
+  get atI(k: i128, i: u256): External<u256> { return this.mi[k][i]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

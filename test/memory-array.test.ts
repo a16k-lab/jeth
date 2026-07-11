@@ -10,32 +10,32 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class MA {
-  @external @pure build(a: u256, b: u256, c: u256): u256[] {
+const JETH = `class MA {
+  get build(a: u256, b: u256, c: u256): External<u256[]> {
     let xs: u256[] = [a, b, c];
     return xs;
   }
-  @external @pure sum(a: u256, b: u256, c: u256): u256 {
+  get sum(a: u256, b: u256, c: u256): External<u256> {
     let xs: u256[] = [a, b, c];
     let s: u256 = 0n;
     let i: u256 = 0n;
     while (i < xs.length) { s = s + xs[i]; i = i + 1n; }
     return s;
   }
-  @external @pure setThenGet(a: u256, b: u256): u256 {
+  get setThenGet(a: u256, b: u256): External<u256> {
     let xs: u256[] = [a, b];
     xs[0n] = xs[0n] + xs[1n];
     return xs[0n];
   }
-  @external @pure lenOf(a: u256): u256 {
+  get lenOf(a: u256): External<u256> {
     let xs: u256[] = [a, a, a, a];
     return xs.length;
   }
-  @external @pure oob(): u256 {
+  get oob(): External<u256> {
     let xs: u256[] = [1n, 2n];
     return xs[5n];
   }
-  @external @pure addr(a: address, b: address): address[] {
+  get addr(a: address, b: address): External<address[]> {
     let xs: address[] = [a, b];
     return xs;
   }

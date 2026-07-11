@@ -22,35 +22,35 @@ const dynArgs = (blobs: string[]) => {
   return head + blobs.join('');
 };
 
-const J = `@contract class B4 {
-  @external @pure mk(n: u256): bytes[][] { let xs: bytes[][] = new Array<bytes[]>(n); return xs; }
-  @external @pure mkLen(n: u256): u256 { let xs: bytes[][] = new Array<bytes[]>(n); return xs.length; }
-  @external @pure innerLen0(): u256 { let xs: bytes[][] = new Array<bytes[]>(3n); return xs[1n].length; }
-  @external @pure huge(): bytes[][] { let xs: bytes[][] = new Array<bytes[]>(18446744073709551616n); return xs; }
-  @external @pure lit(a: bytes, b: bytes, c: bytes): bytes[][] { let xs: bytes[][] = [[a, b], [c]]; return xs; }
-  @external @pure inner(a: bytes, b: bytes, c: bytes): bytes[] { let xs: bytes[][] = [[a, b], [c]]; return xs[0n]; }
-  @external @pure leaf(a: bytes, b: bytes, c: bytes): bytes { let xs: bytes[][] = [[a, b], [c]]; return xs[0n][1n]; }
-  @external @pure innerLen(a: bytes, b: bytes, c: bytes): u256 { let xs: bytes[][] = [[a, b], [c]]; return xs[0n].length; }
-  @external @pure leafLen(a: bytes, b: bytes, c: bytes): u256 { let xs: bytes[][] = [[a, b], [c]]; return xs[0n][1n].length; }
-  @external @pure oobOuter(a: bytes): bytes[] { let xs: bytes[][] = [[a]]; return xs[5n]; }
-  @external @pure oobInner(a: bytes): bytes { let xs: bytes[][] = [[a]]; return xs[0n][5n]; }
-  @external @pure enc(a: bytes, b: bytes, c: bytes): bytes { let xs: bytes[][] = [[a, b], [c]]; return abi.encode(xs); }
-  @external @pure repointInner(a: bytes, b: bytes): bytes[][] {
+const J = `class B4 {
+  get mk(n: u256): External<bytes[][]> { let xs: bytes[][] = new Array<bytes[]>(n); return xs; }
+  get mkLen(n: u256): External<u256> { let xs: bytes[][] = new Array<bytes[]>(n); return xs.length; }
+  get innerLen0(): External<u256> { let xs: bytes[][] = new Array<bytes[]>(3n); return xs[1n].length; }
+  get huge(): External<bytes[][]> { let xs: bytes[][] = new Array<bytes[]>(18446744073709551616n); return xs; }
+  get lit(a: bytes, b: bytes, c: bytes): External<bytes[][]> { let xs: bytes[][] = [[a, b], [c]]; return xs; }
+  get inner(a: bytes, b: bytes, c: bytes): External<bytes[]> { let xs: bytes[][] = [[a, b], [c]]; return xs[0n]; }
+  get leaf(a: bytes, b: bytes, c: bytes): External<bytes> { let xs: bytes[][] = [[a, b], [c]]; return xs[0n][1n]; }
+  get innerLen(a: bytes, b: bytes, c: bytes): External<u256> { let xs: bytes[][] = [[a, b], [c]]; return xs[0n].length; }
+  get leafLen(a: bytes, b: bytes, c: bytes): External<u256> { let xs: bytes[][] = [[a, b], [c]]; return xs[0n][1n].length; }
+  get oobOuter(a: bytes): External<bytes[]> { let xs: bytes[][] = [[a]]; return xs[5n]; }
+  get oobInner(a: bytes): External<bytes> { let xs: bytes[][] = [[a]]; return xs[0n][5n]; }
+  get enc(a: bytes, b: bytes, c: bytes): External<bytes> { let xs: bytes[][] = [[a, b], [c]]; return abi.encode(xs); }
+  get repointInner(a: bytes, b: bytes): External<bytes[][]> {
     let xs: bytes[][] = new Array<bytes[]>(2n);
     let row: bytes[] = new Array<bytes>(2n); row[0n] = a; row[1n] = b;
     xs[0n] = row; return xs;
   }
-  @external @pure repointLeaf(a: bytes, b: bytes, c: bytes): bytes[][] { let xs: bytes[][] = [[a, b], [c]]; xs[0n][1n] = c; return xs; }
-  @external @pure strs(a: string, b: string): string[][] {
+  get repointLeaf(a: bytes, b: bytes, c: bytes): External<bytes[][]> { let xs: bytes[][] = [[a, b], [c]]; xs[0n][1n] = c; return xs; }
+  get strs(a: string, b: string): External<string[][]> {
     let xs: string[][] = new Array<string[]>(1n);
     let row: string[] = new Array<string>(2n); row[0n] = a; row[1n] = b;
     xs[0n] = row; return xs;
   }
-  @external @pure strLeaf(a: string, b: string): string { let xs: string[][] = [[a, b]]; return xs[0n][1n]; }
-  @external dec(data: bytes): bytes { let xs: bytes[][] = abi.decode(data, bytes[][]); return abi.encode(xs); }
+  get strLeaf(a: string, b: string): External<string> { let xs: string[][] = [[a, b]]; return xs[0n][1n]; }
+  get dec(data: bytes): External<bytes> { let xs: bytes[][] = abi.decode(data, bytes[][]); return abi.encode(xs); }
   // 3-deep
-  @external @pure leaf3(a: bytes, b: bytes): bytes { let m: bytes[][][] = [[[a],[b]]]; return m[0n][1n][0n]; }
-  @external @pure enc3(a: bytes, b: bytes): bytes { let m: bytes[][][] = [[[a],[b]]]; return abi.encode(m); }
+  get leaf3(a: bytes, b: bytes): External<bytes> { let m: bytes[][][] = [[[a],[b]]]; return m[0n][1n][0n]; }
+  get enc3(a: bytes, b: bytes): External<bytes> { let m: bytes[][][] = [[[a],[b]]]; return abi.encode(m); }
 }`;
 const So = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;

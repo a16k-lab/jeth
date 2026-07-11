@@ -60,20 +60,20 @@ const rejects = (src: string): boolean => {
     return true;
   }
 };
-const D = `@struct class In { x: u256; y: u256 }`;
+const D = `type In = { x: u256; y: u256 };`;
 const SD = `struct In { uint256 x; uint256 y; }`;
 
 describe('Tier-2 OR lifts byte-identical to solc 0.8.35', () => {
   it('L12: fixed-array state initializers (full/short/packed/bool + tail zeros + longer-literal reject)', async () => {
-    const J = `@contract class C {
-  @state arr: Arr<u256,3> = [11n, 22n];
-  @state packed: Arr<u8,5> = [1n, 2n, 3n];
-  @state bools: Arr<bool,3> = [true, false, true];
-  @state aft: u256 = 42n;
-  @external @view g(i: u256): u256 { return this.arr[i]; }
-  @external @view gp(i: u256): u8 { return this.packed[i]; }
-  @external @view gb(i: u256): bool { return this.bools[i]; }
-  @external @view ga(): u256 { return this.aft; } }`;
+    const J = `class C {
+  arr: Arr<u256,3> = [11n, 22n];
+  packed: Arr<u8,5> = [1n, 2n, 3n];
+  bools: Arr<bool,3> = [true, false, true];
+  aft: u256 = 42n;
+  get g(i: u256): External<u256> { return this.arr[i]; }
+  get gp(i: u256): External<u8> { return this.packed[i]; }
+  get gb(i: u256): External<bool> { return this.bools[i]; }
+  get ga(): External<u256> { return this.aft; } }`;
     const S = `contract C {
   uint256[3] arr = [uint256(11), 22];
   uint8[5] packed = [1, 2, 3];
@@ -89,19 +89,19 @@ describe('Tier-2 OR lifts byte-identical to solc 0.8.35', () => {
     calls.push(['ga()', ''], ['g(uint256)', W(9)]);
     const { jh, ja } = await run(J, S, calls);
     expect(BigInt((await jh.call(ja, sel('g(uint256)') + W(2))).returnHex)).toBe(0n); // partial-fill tail
-    expect(rejects(`@contract class C { @state a: Arr<u256,2> = [1n,2n,3n]; @external @view g(): u256 { return this.a[0n]; } }`)).toBe(true);
+    expect(rejects(`class C { a: Arr<u256,2> = [1n,2n,3n]; get g(): External<u256> { return this.a[0n]; } }`)).toBe(true);
   });
 
   it('NEW-JETH152: mapping-rooted fixed-array whole-element read/write (+ nested map, dyn control)', async () => {
-    const J = `${D} @contract class C {
-  @state mp: mapping<u256, Arr<In,2>>; @state nm: mapping<u256, mapping<u256, Arr<In,2>>>; @state md: mapping<u256, In[]>;
-  @external seed(): void { this.mp[5n][0n] = In(11n,12n); this.mp[5n][1n] = In(13n,14n); this.nm[1n][2n][1n] = In(31n,32n);
+    const J = `${D} class C {
+  mp: mapping<u256, Arr<In,2>>; nm: mapping<u256, mapping<u256, Arr<In,2>>>; md: mapping<u256, In[]>;
+  seed(): External<void> { this.mp[5n][0n] = In(11n,12n); this.mp[5n][1n] = In(13n,14n); this.nm[1n][2n][1n] = In(31n,32n);
     this.md[9n].push(In(41n,42n)); this.md[9n].push(In(43n,44n)); }
-  @external wr(k: u256, i: u256): void { this.mp[k][i] = In(71n,72n); }
-  @external @view rd(k: u256, i: u256): In { return this.mp[k][i]; }
-  @external @view rdn(): In { return this.nm[1n][2n][1n]; }
-  @external @view chk(): u256 { return this.mp[5n][0n].x + 1000n*this.mp[5n][1n].y; }
-  @external @view ctlDyn(i: u256): In { return this.md[9n][i]; } }`;
+  wr(k: u256, i: u256): External<void> { this.mp[k][i] = In(71n,72n); }
+  get rd(k: u256, i: u256): External<In> { return this.mp[k][i]; }
+  get rdn(): External<In> { return this.nm[1n][2n][1n]; }
+  get chk(): External<u256> { return this.mp[5n][0n].x + 1000n*this.mp[5n][1n].y; }
+  get ctlDyn(i: u256): External<In> { return this.md[9n][i]; } }`;
     const S = `${SD} contract C {
   mapping(uint256 => In[2]) mp; mapping(uint256 => mapping(uint256 => In[2])) nm; mapping(uint256 => In[]) md;
   function seed() external { mp[5][0] = In(11,12); mp[5][1] = In(13,14); nm[1][2][1] = In(31,32);
@@ -119,15 +119,15 @@ describe('Tier-2 OR lifts byte-identical to solc 0.8.35', () => {
   });
 
   it('B-15: s2s assign + push of a multi-hop storage field (dyn + nested-struct parents)', async () => {
-    const J = `${D} @struct class P { pre: Arr<In,2>; n: u256 } @struct class Wr { p: P; m: u256 }
-@contract class C {
-  @state ps: P[]; @state w: Wr; @state tgt: Arr<In,2>; @state stk: Arr<In,2>[];
-  @external seed(): void { this.ps.push(); this.ps[0n].pre[0n] = In(11n,12n); this.ps[0n].pre[1n] = In(13n,14n);
+    const J = `${D} type P = { pre: Arr<In,2>; n: u256 }; type Wr = { p: P; m: u256 };
+class C {
+  ps: P[]; w: Wr; tgt: Arr<In,2>; stk: Arr<In,2>[];
+  seed(): External<void> { this.ps.push(); this.ps[0n].pre[0n] = In(11n,12n); this.ps[0n].pre[1n] = In(13n,14n);
     this.w.p.pre[0n] = In(61n,62n); this.w.p.pre[1n] = In(63n,64n); }
-  @external asg(): void { this.tgt = this.ps[0n].pre; }
-  @external psh(): void { this.stk.push(this.ps[0n].pre); this.stk.push(this.w.p.pre); }
-  @external @view rd(): u256 { return this.tgt[0n].x + 1000n*this.tgt[1n].y; }
-  @external @view rs(i: u256): u256 { return this.stk[i][0n].x + 1000n*this.stk[i][1n].y; } }`;
+  asg(): External<void> { this.tgt = this.ps[0n].pre; }
+  psh(): External<void> { this.stk.push(this.ps[0n].pre); this.stk.push(this.w.p.pre); }
+  get rd(): External<u256> { return this.tgt[0n].x + 1000n*this.tgt[1n].y; }
+  get rs(i: u256): External<u256> { return this.stk[i][0n].x + 1000n*this.stk[i][1n].y; } }`;
     const S = `${SD} struct P { In[2] pre; uint256 n; } struct Wr { P p; uint256 m; }
 contract C {
   P[] ps; Wr w; In[2] tgt; In[2][] stk;
@@ -141,11 +141,11 @@ contract C {
   });
 
   it('L8: field-alias binds - calldata deep copy + memory alias (mutations visible both ways)', async () => {
-    const J = `@struct class Mm { g: u256[][]; t: u256 }
-@contract class C {
-  @external @pure f(m: Mm, i: u256, j: u256): u256 { let ys: u256[][] = m.g; return ys[i][j]; }
-  @external @pure a1(m: Mm): u256 { let d: Mm = m; let ys: u256[][] = d.g; ys[0n][1n] = 77n; return d.g[0n][1n]; }
-  @external @pure a2(m: Mm): u256 { let d: Mm = m; let ys: u256[][] = d.g; d.g[1n][0n] = 88n; return ys[1n][0n]; } }`;
+    const J = `type Mm = { g: u256[][]; t: u256 };
+class C {
+  get f(m: Mm, i: u256, j: u256): External<u256> { let ys: u256[][] = m.g; return ys[i][j]; }
+  get a1(m: Mm): External<u256> { let d: Mm = m; let ys: u256[][] = d.g; ys[0n][1n] = 77n; return d.g[0n][1n]; }
+  get a2(m: Mm): External<u256> { let d: Mm = m; let ys: u256[][] = d.g; d.g[1n][0n] = 88n; return ys[1n][0n]; } }`;
     const S = `struct Mm { uint256[][] g; uint256 t; }
 contract C {
   function f(Mm calldata m, uint256 i, uint256 j) external pure returns(uint256){ uint256[][] memory ys = m.g; return ys[i][j]; }
@@ -162,13 +162,13 @@ contract C {
   });
 
   it('B-8/B-10: ternary bind (copy locality) + literal-branch ternary encode both orders', async () => {
-    const J = `${D} @contract class C {
-  @state sx: Arr<In,2>; @state sy: Arr<In,2>;
-  @external seed(): void { this.sx[0n]=In(11n,12n); this.sx[1n]=In(13n,14n); this.sy[0n]=In(21n,22n); this.sy[1n]=In(23n,24n); }
-  @external @view b8(c: bool): u256 { let m: Arr<In,2> = c ? this.sx : this.sy; return m[0n].x + 1000n*m[1n].y; }
-  @external @view b8loc(c: bool): u256 { let m: Arr<In,2> = c ? this.sx : this.sy; m[0n].x = 99n; return this.sx[0n].x + this.sy[0n].x; }
-  @external @view b10(c: bool): bytes { return abi.encode(c ? [In(41n,42n),In(43n,44n)] : this.sx); }
-  @external @view b10r(c: bool): bytes { return abi.encode(c ? this.sx : [In(51n,52n),In(53n,54n)]); } }`;
+    const J = `${D} class C {
+  sx: Arr<In,2>; sy: Arr<In,2>;
+  seed(): External<void> { this.sx[0n]=In(11n,12n); this.sx[1n]=In(13n,14n); this.sy[0n]=In(21n,22n); this.sy[1n]=In(23n,24n); }
+  get b8(c: bool): External<u256> { let m: Arr<In,2> = c ? this.sx : this.sy; return m[0n].x + 1000n*m[1n].y; }
+  get b8loc(c: bool): External<u256> { let m: Arr<In,2> = c ? this.sx : this.sy; m[0n].x = 99n; return this.sx[0n].x + this.sy[0n].x; }
+  get b10(c: bool): External<bytes> { return abi.encode(c ? [In(41n,42n),In(43n,44n)] : this.sx); }
+  get b10r(c: bool): External<bytes> { return abi.encode(c ? this.sx : [In(51n,52n),In(53n,54n)]); } }`;
     const S = `${SD} contract C {
   In[2] sx; In[2] sy;
   function seed() external { sx[0]=In(11,12); sx[1]=In(13,14); sy[0]=In(21,22); sy[1]=In(23,24); }
@@ -183,16 +183,16 @@ contract C {
   });
 
   it('B-9/C-7: access chains on a ternary (.length / [i].x / .a) incl side-effect-count parity', async () => {
-    const J = `${D} @struct class Sd { a: u256; t: bytes }
-@contract class C {
-  @state sx: Arr<In,2>; @state sy: Arr<In,2>; @state s1: Sd; @state s2: Sd; @state hits: u256;
-  @external seed(): void { this.sx[0n]=In(11n,12n); this.sx[1n]=In(13n,14n); this.sy[0n]=In(21n,22n); this.sy[1n]=In(23n,24n);
+    const J = `${D} type Sd = { a: u256; t: bytes };
+class C {
+  sx: Arr<In,2>; sy: Arr<In,2>; s1: Sd; s2: Sd; hits: u256;
+  seed(): External<void> { this.sx[0n]=In(11n,12n); this.sx[1n]=In(13n,14n); this.sy[0n]=In(21n,22n); this.sy[1n]=In(23n,24n);
     this.s1 = Sd(31n, bytes("aa")); this.s2 = Sd(41n, bytes("bbb")); }
   eff(): bool { this.hits = this.hits + 1n; return this.hits > 1n; }
-  @external @view b9len(c: bool): u256 { return (c ? this.sx : this.sy).length; }
-  @external @view b9elem(c: bool, i: u256): u256 { return (c ? this.sx : this.sy)[i].y; }
-  @external @view c7(c: bool): u256 { return (c ? this.s1 : this.s2).a; }
-  @external effOrder(): u256 { return (this.eff() ? this.sx : this.sy)[0n].x + 100000n*this.hits; } }`;
+  get b9len(c: bool): External<u256> { return (c ? this.sx : this.sy).length; }
+  get b9elem(c: bool, i: u256): External<u256> { return (c ? this.sx : this.sy)[i].y; }
+  get c7(c: bool): External<u256> { return (c ? this.s1 : this.s2).a; }
+  effOrder(): External<u256> { return (this.eff() ? this.sx : this.sy)[0n].x + 100000n*this.hits; } }`;
     const S = `${SD} struct Sd { uint256 a; bytes t; }
 contract C {
   In[2] sx; In[2] sy; Sd s1; Sd s2; uint256 hits;
@@ -211,14 +211,14 @@ contract C {
   });
 
   it('L7(b): whole s.f through the FLAT consumers (return/encode/tuple/topic); pointer channels stay rejected', async () => {
-    const J = `${D} @struct class S1 { f: Arr<In,2>; n: u256 }
-@contract class C {
-  @event E(@indexed v: Arr<In,2>, t: u256);
-  @external @pure g(): Arr<In,2> { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); return s.f; }
-  @external @pure ge(): bytes { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); return abi.encode(s.f); }
-  @external @pure gt(): [u256, Arr<In,2>] { const s: S1 = S1([In(6n,7n),In(8n,9n)], 5n); return [77n, s.f]; }
-  @external em(): void { const s: S1 = S1([In(11n,12n),In(13n,14n)], 5n); emit(E(s.f, 9n)); }
-  @external @pure leaf(): u256 { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); return s.f[1n].y + s.n; } }`;
+    const J = `${D} type S1 = { f: Arr<In,2>; n: u256 };
+class C {
+  E: event<{ v: indexed<Arr<In,2>>; t: u256 }>;
+  get g(): External<Arr<In,2>> { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); return s.f; }
+  get ge(): External<bytes> { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); return abi.encode(s.f); }
+  get gt(): External<[u256, Arr<In,2>]> { const s: S1 = S1([In(6n,7n),In(8n,9n)], 5n); return [77n, s.f]; }
+  em(): External<void> { const s: S1 = S1([In(11n,12n),In(13n,14n)], 5n); emit(E(s.f, 9n)); }
+  get leaf(): External<u256> { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); return s.f[1n].y + s.n; } }`;
     const S = `${SD} struct S1 { In[2] f; uint256 n; }
 contract C {
   event E(In[2] indexed v, uint256 t);
@@ -228,18 +228,18 @@ contract C {
   function em() external { S1 memory s = S1([In(11,12),In(13,14)], 5); emit E(s.f, 9); }
   function leaf() external pure returns(uint256){ S1 memory s = S1([In(1,2),In(3,4)], 5); return s.f[1].y + s.n; } }`;
     await run(J, S, [['g()', ''], ['ge()', ''], ['gt()', ''], ['em()', ''], ['leaf()', '']] as const, true);
-    const DD = `${D} @struct class S1 { f: Arr<In,2>; n: u256 }`;
-    expect(rejects(`${DD} @contract class C { take(a: Arr<In,2>): u256 { return a[0n].x; } @external @pure f(): u256 { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); return this.take(s.f); } }`)).toBe(true);
-    expect(rejects(`${DD} @contract class C { @external @pure f(): u256 { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); let o: Arr<In,2>[] = new Array<Arr<In,2>>(1n); o[0n] = s.f; return o[0n][0n].x; } }`)).toBe(true);
+    const DD = `${D} type S1 = { f: Arr<In,2>; n: u256 };`;
+    expect(rejects(`${DD} class C { take(a: Arr<In,2>): u256 { return a[0n].x; } get f(): External<u256> { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); return this.take(s.f); } }`)).toBe(true);
+    expect(rejects(`${DD} class C { get f(): External<u256> { const s: S1 = S1([In(1n,2n),In(3n,4n)], 5n); let o: Arr<In,2>[] = new Array<Arr<In,2>>(1n); o[0n] = s.f; return o[0n][0n].x; } }`)).toBe(true);
   });
 
   it('L7(b) extra shapes: nested Arr<Arr<In,2>,2> field + single-field-ctor struct (old S3 controls)', async () => {
-    const J = `${D} @struct class Q { arr: Arr<In,2> } @struct class N2 { g: Arr<Arr<In,2>,2>; n: u256 }
-@contract class C {
-  @external @pure f(): Arr<In,2> { let q: Q = Q([In(1n,2n),In(3n,4n)]); return q.arr; }
-  @external @pure fe(): bytes { let q: Q = Q([In(1n,2n),In(3n,4n)]); return abi.encode(q.arr); }
-  @external @pure gn(): bytes { let s: N2 = N2([[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]], 9n); return abi.encode(s.g); }
-  @external @pure gr(): Arr<Arr<In,2>,2> { let s: N2 = N2([[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]], 9n); return s.g; } }`;
+    const J = `${D} type Q = { arr: Arr<In,2> }; type N2 = { g: Arr<Arr<In,2>,2>; n: u256 };
+class C {
+  get f(): External<Arr<In,2>> { let q: Q = Q([In(1n,2n),In(3n,4n)]); return q.arr; }
+  get fe(): External<bytes> { let q: Q = Q([In(1n,2n),In(3n,4n)]); return abi.encode(q.arr); }
+  get gn(): External<bytes> { let s: N2 = N2([[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]], 9n); return abi.encode(s.g); }
+  get gr(): External<Arr<Arr<In,2>,2>> { let s: N2 = N2([[In(11n,12n),In(13n,14n)],[In(15n,16n),In(17n,18n)]], 9n); return s.g; } }`;
     const S = `${SD} struct Q { In[2] arr; } struct N2 { In[2][2] g; uint256 n; }
 contract C {
   function f() external pure returns(In[2] memory){ Q memory q = Q([In(1,2),In(3,4)]); return q.arr; }
@@ -250,8 +250,8 @@ contract C {
   });
 
   it('desugar guard: cd|cd indexed ternary lifted with DIRTY-u8 validate parity; st|cd stays rejected', async () => {
-    expect(rejects(`@contract class C { @state s: u256[]; @external @view f(c: bool, x: u256[], i: u256): u256 { return (c ? this.s : x)[i]; } }`)).toBe(true);
-    const J = `@contract class C { @external @pure f(c: bool, x: u8[], y: u8[], i: u256): u256 { return (c ? x : y)[i]; } }`;
+    expect(rejects(`class C { s: u256[]; get f(c: bool, x: u256[], i: u256): External<u256> { return (c ? this.s : x)[i]; } }`)).toBe(true);
+    const J = `class C { get f(c: bool, x: u8[], y: u8[], i: u256): External<u256> { return (c ? x : y)[i]; } }`;
     const S = `contract C { function f(bool c, uint8[] calldata x, uint8[] calldata y, uint256 i) external pure returns(uint256){ return uint256((c ? x : y)[i]); } }`;
     const sig = 'f(bool,uint8[],uint8[],uint256)';
     const arr = (vals: (number | string)[]) => W(vals.length) + vals.map((v) => (typeof v === 'string' ? v : W(v))).join('');

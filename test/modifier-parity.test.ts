@@ -55,7 +55,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   // yields the LAST run's value, and intervening pre/mid/post code runs in declaration order.
   // ---------------------------------------------------------------------------
   it('JETH320: `m(){ _; _; }` on a state-writing g() runs the body TWICE (raw slot byte-identical)', async () => {
-    const J = `@contract class C { @state n: u256; @modifier twice() { _; _; } @external @twice bump(): void { this.n = this.n + 1n; } }`;
+    const J = `class C { n: u256; @modifier twice() { _; _; } @twice bump(): External<void> { this.n = this.n + 1n; } }`;
     const S = `contract C { uint256 n; modifier twice(){ _; _; } function bump() external twice { n = n + 1; } }`;
     const { j } = await diff(J, S, '0x' + sel('bump()'), [0n]);
     // sanity: the body really ran twice
@@ -64,7 +64,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
 
   it('JETH320: `m(){ _; _; }` on a value-return f() returns the LAST run value (byte-identical)', async () => {
     // each run increments n then returns it: two runs => returns 2.
-    const J = `@contract class C { @state n: u256; @modifier twice() { _; _; } @external @twice f(): u256 { this.n = this.n + 1n; return this.n; } }`;
+    const J = `class C { n: u256; @modifier twice() { _; _; } @twice f(): External<u256> { this.n = this.n + 1n; return this.n; } }`;
     const S = `contract C { uint256 n; modifier twice(){ _; _; } function f() external twice returns(uint256){ n = n + 1; return n; } }`;
     const { rj } = await diff(J, S, '0x' + sel('f()'), [0n]);
     expect(BigInt(rj.returnHex)).toBe(2n);
@@ -72,7 +72,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
 
   it('JETH320: `pre; _; mid; _; post;` interleaves modifier code and two body runs in order', async () => {
     // n starts 0; pre +1 => 1; body *2 => 2; mid +10 => 12; body *2 => 24; post +100 => 124.
-    const J = `@contract class C { @state n: u256; @modifier weave() { this.n = this.n + 1n; _; this.n = this.n + 10n; _; this.n = this.n + 100n; } @external @weave run(): void { this.n = this.n * 2n; } }`;
+    const J = `class C { n: u256; @modifier weave() { this.n = this.n + 1n; _; this.n = this.n + 10n; _; this.n = this.n + 100n; } @weave run(): External<void> { this.n = this.n * 2n; } }`;
     const S = `contract C { uint256 n; modifier weave(){ n = n + 1; _; n = n + 10; _; n = n + 100; } function run() external weave { n = n * 2; } }`;
     const { j } = await diff(J, S, '0x' + sel('run()'), [0n]);
     expect(BigInt(await readSlot(j.h, j.a, 0n))).toBe(124n);
@@ -82,7 +82,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   // JETH322: AGGREGATE modifier parameter. The arg materializes once; the guard reads its length.
   // ---------------------------------------------------------------------------
   it('JETH322: `chk(xs: u256[]){ require(xs.length>0); _; }` fires on empty + passes on non-empty', async () => {
-    const J = `@contract class C { @state n: u256; @modifier chk(xs: u256[]) { require(xs.length > 0n, "empty"); _; } @external @chk(([])) e(): void { this.n = 1n; } @external @chk(([7n,8n])) ne(): void { this.n = this.n + 9n; } }`;
+    const J = `class C { n: u256; @modifier chk(xs: u256[]) { require(xs.length > 0n, "empty"); _; } @chk(([])) e(): External<void> { this.n = 1n; } @chk(([7n,8n])) ne(): External<void> { this.n = this.n + 9n; } }`;
     const S = `contract C { uint256 n; modifier chk(uint256[] memory xs){ require(xs.length>0,"empty"); _; } function e() external chk(new uint256[](0)) { n = 1; } function ne() external chk(_two()) { n = n + 9; } function _two() internal pure returns(uint256[] memory r){ r = new uint256[](2); r[0]=7; r[1]=8; } }`;
     // the empty-array branch reverts on BOTH (require fires)
     await diff(J, S, '0x' + sel('e()'), [0n]);
@@ -92,7 +92,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   });
 
   it('JETH322: a fixed-array modifier param Arr<u256,2> reads an element in the guard', async () => {
-    const J = `@contract class C { @state n: u256; @modifier minHead(a: Arr<u256,2>) { require(a[0n] >= 10n, "lo"); _; } @external @minHead(([5n,6n])) lo(): void { this.n = 1n; } @external @minHead(([15n,6n])) hi(): void { this.n = 2n; } }`;
+    const J = `class C { n: u256; @modifier minHead(a: Arr<u256,2>) { require(a[0n] >= 10n, "lo"); _; } @minHead(([5n,6n])) lo(): External<void> { this.n = 1n; } @minHead(([15n,6n])) hi(): External<void> { this.n = 2n; } }`;
     const S = `contract C { uint256 n; modifier minHead(uint256[2] memory a){ require(a[0]>=10,"lo"); _; } function lo() external minHead([uint256(5),6]) { n = 1; } function hi() external minHead([uint256(15),6]) { n = 2; } }`;
     await diff(J, S, '0x' + sel('lo()'), [0n]); // reverts on both
     const { j } = await diff(J, S, '0x' + sel('hi()'), [0n]); // passes on both
@@ -104,7 +104,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   // aggregate RETURN. The post-code runs AFTER the body and the result is ABI-encoded ONCE.
   // ---------------------------------------------------------------------------
   it('JETH323: post-code modifier on a fn taking u256[] (aggregate param) - byte-identical', async () => {
-    const J = `@contract class C { @state n: u256; @modifier track() { _; this.n = this.n + 1n; } @external @track sum(xs: u256[]): u256 { let t: u256 = 0n; for (let i: u256 = 0n; i < xs.length; i = i + 1n) { t = t + xs[i]; } return t; } }`;
+    const J = `class C { n: u256; @modifier track() { _; this.n = this.n + 1n; } @track sum(xs: u256[]): External<u256> { let t: u256 = 0n; for (let i: u256 = 0n; i < xs.length; i = i + 1n) { t = t + xs[i]; } return t; } }`;
     const S = `contract C { uint256 n; modifier track(){ _; n = n + 1; } function sum(uint256[] memory xs) external track returns(uint256){ uint256 t=0; for (uint256 i=0;i<xs.length;i++){ t += xs[i]; } return t; } }`;
     // calldata: sum([3,4,5]) -> head offset 0x20, len 3, elems
     const cd =
@@ -120,14 +120,14 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   });
 
   it('JETH323: post-code modifier on a MULTI-VALUE return (u256,u256) - byte-identical', async () => {
-    const J = `@contract class C { @state n: u256; @modifier track() { _; this.n = this.n + 1n; } @external @track pair(x: u256): [u256, u256] { return [x, x + 1n]; } }`;
+    const J = `class C { n: u256; @modifier track() { _; this.n = this.n + 1n; } @track pair(x: u256): External<[u256, u256]> { return [x, x + 1n]; } }`;
     const S = `contract C { uint256 n; modifier track(){ _; n = n + 1; } function pair(uint256 x) external track returns(uint256,uint256){ return (x, x+1); } }`;
     const { rj } = await diff(J, S, '0x' + sel('pair(uint256)') + pad32(41n), [0n]);
     expect(rj.returnHex).toBe('0x' + pad32(41n) + pad32(42n));
   });
 
   it('JETH323: post-code modifier returning a value-element dynamic array u256[] - byte-identical', async () => {
-    const J = `@contract class C { @state n: u256; @modifier track() { _; this.n = this.n + 1n; } @external @track mk(x: u256): u256[] { return [x, x + 1n, x + 2n]; } }`;
+    const J = `class C { n: u256; @modifier track() { _; this.n = this.n + 1n; } @track mk(x: u256): External<u256[]> { return [x, x + 1n, x + 2n]; } }`;
     const S = `contract C { uint256 n; modifier track(){ _; n = n + 1; } function mk(uint256 x) external track returns(uint256[] memory){ uint256[] memory r = new uint256[](3); r[0]=x; r[1]=x+1; r[2]=x+2; return r; } }`;
     const { rj } = await diff(J, S, '0x' + sel('mk(uint256)') + pad32(7n), [0n]);
     // ABI: [0x20][len=3][7][8][9]
@@ -135,7 +135,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   });
 
   it('JETH323: post-code modifier returning a STATIC struct P{x,y} - byte-identical', async () => {
-    const J = `@struct class P { x: u256; y: u256; } @contract class C { @state n: u256; @modifier track() { _; this.n = this.n + 1n; } @external @track mkP(a: u256): P { return P(a, a + 5n); } }`;
+    const J = `type P = { x: u256; y: u256; }; class C { n: u256; @modifier track() { _; this.n = this.n + 1n; } @track mkP(a: u256): External<P> { return P(a, a + 5n); } }`;
     const S = `contract C { struct P { uint256 x; uint256 y; } uint256 n; modifier track(){ _; n = n + 1; } function mkP(uint256 a) external track returns(P memory){ return P(a, a+5); } }`;
     const { rj } = await diff(J, S, '0x' + sel('mkP(uint256)') + pad32(3n), [0n]);
     expect(rj.returnHex).toBe('0x' + pad32(3n) + pad32(8n));
@@ -146,7 +146,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   // (zero) return values; otherwise the body runs and produces its value.
   // ---------------------------------------------------------------------------
   it('JETH325: `m(){ if (c) return; _; }` early-out returns the ZERO value, else runs the body', async () => {
-    const J = `@contract class C { @state gate: bool; @state n: u256; @modifier guard() { if (this.gate) { return; } _; } @external setGate(g: bool): void { this.gate = g; } @external @guard f(): u256 { this.n = this.n + 1n; return 99n; } }`;
+    const J = `class C { gate: bool; n: u256; @modifier guard() { if (this.gate) { return; } _; } setGate(g: bool): External<void> { this.gate = g; } @guard f(): External<u256> { this.n = this.n + 1n; return 99n; } }`;
     const S = `contract C { bool gate; uint256 n; modifier guard(){ if (gate) { return; } _; } function setGate(bool g) external { gate = g; } function f() external guard returns(uint256){ n = n + 1; return 99; } }`;
     // gate=false: body runs, returns 99, n becomes 1
     {
@@ -170,7 +170,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   });
 
   it('JETH325: `m(){ _; return; }` (post-placeholder bare return) is a no-op tail, byte-identical', async () => {
-    const J = `@contract class C { @state n: u256; @modifier m() { _; return; } @external @m f(): u256 { this.n = 1n; return 7n; } }`;
+    const J = `class C { n: u256; @modifier m() { _; return; } @m f(): External<u256> { this.n = 1n; return 7n; } }`;
     const S = `contract C { uint256 n; modifier m(){ _; return; } function f() external m returns(uint256){ n = 1; return 7; } }`;
     const { rj } = await diff(J, S, '0x' + sel('f()'), [0n]);
     expect(BigInt(rj.returnHex)).toBe(7n);
@@ -181,7 +181,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   // ---------------------------------------------------------------------------
   it('a value-return modifier `m(){ return 5n; }` still rejects (JETH324: solc rejects it too)', () => {
     expect(
-      codes(`@contract class C { @modifier m() { return 5n; _; } @external @m f(): u256 { return 1n; } }`),
+      codes(`class C { @modifier m() { return 5n; _; } @m get f(): External<u256> { return 1n; } }`),
     ).toContain('JETH324');
     // solc also rejects a value-return inside a modifier
     expect(() =>
@@ -190,7 +190,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   });
 
   it('P1-20: a constructor with a post-code modifier is LIFTED, byte-identical (slot 0 == 11)', async () => {
-    const J = `@contract class C { @state n: u256; @modifier m() { _; this.n = this.n + 1n; } @m constructor(){ this.n = 10n; } }`;
+    const J = `class C { n: u256; @modifier m() { _; this.n = this.n + 1n; } @m constructor(){ this.n = 10n; } }`;
     const S = `contract C { uint256 n; modifier m() { _; n = n + 1; } constructor() m { n = 10; } }`;
     const j = await depJ(J),
       s = await depS(S);
@@ -199,7 +199,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
   });
 
   it('P1-20: a multi-placeholder (@twice) modifier on a constructor runs the body twice, byte-identical', async () => {
-    const J = `@contract class C { @state n: u256; @modifier twice() { _; _; } @twice constructor(){ this.n = this.n + 1n; } }`;
+    const J = `class C { n: u256; @modifier twice() { _; _; } @twice constructor(){ this.n = this.n + 1n; } }`;
     const S = `contract C { uint256 n; modifier twice() { _; _; } constructor() twice { n = n + 1; } }`;
     const j = await depJ(J),
       s = await depS(S);
@@ -212,7 +212,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
       ['true', 7n],
       ['false', 0n],
     ] as const) {
-      const J = `@contract class C { @state n: u256; @modifier m(c: bool) { if (c) { _; } } @m(${flag}) constructor(){ this.n = this.n + 7n; } }`;
+      const J = `class C { n: u256; @modifier m(c: bool) { if (c) { _; } } @m(${flag}) constructor(){ this.n = this.n + 7n; } }`;
       const S = `contract C { uint256 n; modifier m(bool c) { if (c) { _; } } constructor() m(${flag}) { n = n + 7; } }`;
       const j = await depJ(J),
         s = await depS(S);
@@ -225,7 +225,7 @@ describe('Full modifier parity vs solc 0.8.35 (JETH320 / JETH322 / JETH323 / JET
     // behavior verified byte-identical vs solc in test/ctor-modifier-return.test.ts
     expect(
       codes(
-        `@contract class C { @state n: u256; @modifier m(c: bool) { if (c) { return; } _; } @m(false) constructor(){ this.n = 10n; } }`,
+        `class C { n: u256; @modifier m(c: bool) { if (c) { return; } _; } @m(false) constructor(){ this.n = 10n; } }`,
       ),
     ).toEqual([]);
   });

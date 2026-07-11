@@ -16,13 +16,13 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => v.toString(16).padStart(64, '0');
 
 // All targets are a MEMORY-array element in a @pure function (no state touched).
-const J = `@contract class G {
-  @external @pure inc(a: u8): u8 { let xs: u8[] = [a, a]; xs[0n]++; return xs[0n]; }
-  @external @pure dec(a: u8): u8 { let xs: u8[] = [a, a]; xs[0n]--; return xs[0n]; }
-  @external @pure preInc(a: u8): u8 { let xs: u8[] = [a, a]; let r: u8 = ++xs[0n]; return r; }
-  @external @pure preDec(a: u8): u8 { let xs: u8[] = [a, a]; let r: u8 = --xs[0n]; return r; }
-  @external @pure addAssign(a: u8, b: u8): u8 { let xs: u8[] = [a, b]; xs[0n] += xs[1n]; return xs[0n]; }
-  @external @pure addAssignLit(a: u8): u8 { let xs: u8[] = [a, a]; xs[0n] += 1n; return xs[0n]; }
+const J = `class G {
+  get inc(a: u8): External<u8> { let xs: u8[] = [a, a]; xs[0n]++; return xs[0n]; }
+  get dec(a: u8): External<u8> { let xs: u8[] = [a, a]; xs[0n]--; return xs[0n]; }
+  get preInc(a: u8): External<u8> { let xs: u8[] = [a, a]; let r: u8 = ++xs[0n]; return r; }
+  get preDec(a: u8): External<u8> { let xs: u8[] = [a, a]; let r: u8 = --xs[0n]; return r; }
+  get addAssign(a: u8, b: u8): External<u8> { let xs: u8[] = [a, b]; xs[0n] += xs[1n]; return xs[0n]; }
+  get addAssignLit(a: u8): External<u8> { let xs: u8[] = [a, a]; xs[0n] += 1n; return xs[0n]; }
 }`;
 const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;

@@ -25,28 +25,27 @@ function mapSlot(keyWord: bigint, baseSlot: bigint): bigint {
   return BigInt('0x' + toHex(keccak(buf)));
 }
 
-const JETH = `@contract
-class K {
-  @state si: mapping<i256, u256>;
-  @state b4: mapping<bytes4, u256>;
-  @state bl: mapping<bool, u256>;
-  @state deep: mapping<u256, mapping<u256, mapping<u256, u256>>>;
-  @state edge: mapping<u256, u256>;
-  @state adj0: mapping<u256, u256>;
-  @state adj1: mapping<u256, u256>;
-  @external setSi(k: i256, v: u256): void { this.si[k] = v; }
-  @external @view getSi(k: i256): u256 { return this.si[k]; }
-  @external setB4(k: bytes4, v: u256): void { this.b4[k] = v; }
-  @external @view getB4(k: bytes4): u256 { return this.b4[k]; }
-  @external setBl(k: bool, v: u256): void { this.bl[k] = v; }
-  @external @view getBl(k: bool): u256 { return this.bl[k]; }
-  @external setDeep(a: u256, b: u256, c: u256, v: u256): void { this.deep[a][b][c] = v; }
-  @external @view getDeep(a: u256, b: u256, c: u256): u256 { return this.deep[a][b][c]; }
-  @external setEdge(k: u256, v: u256): void { this.edge[k] = v; }
-  @external @view getEdge(k: u256): u256 { return this.edge[k]; }
-  @external setAdj(v0: u256, v1: u256): void { this.adj0[0n] = v0; this.adj1[0n] = v1; }
-  @external @view getAdj0(): u256 { return this.adj0[0n]; }
-  @external @view getAdj1(): u256 { return this.adj1[0n]; }
+const JETH = `class K {
+  si: mapping<i256, u256>;
+  b4: mapping<bytes4, u256>;
+  bl: mapping<bool, u256>;
+  deep: mapping<u256, mapping<u256, mapping<u256, u256>>>;
+  edge: mapping<u256, u256>;
+  adj0: mapping<u256, u256>;
+  adj1: mapping<u256, u256>;
+  setSi(k: i256, v: u256): External<void> { this.si[k] = v; }
+  get getSi(k: i256): External<u256> { return this.si[k]; }
+  setB4(k: bytes4, v: u256): External<void> { this.b4[k] = v; }
+  get getB4(k: bytes4): External<u256> { return this.b4[k]; }
+  setBl(k: bool, v: u256): External<void> { this.bl[k] = v; }
+  get getBl(k: bool): External<u256> { return this.bl[k]; }
+  setDeep(a: u256, b: u256, c: u256, v: u256): External<void> { this.deep[a][b][c] = v; }
+  get getDeep(a: u256, b: u256, c: u256): External<u256> { return this.deep[a][b][c]; }
+  setEdge(k: u256, v: u256): External<void> { this.edge[k] = v; }
+  get getEdge(k: u256): External<u256> { return this.edge[k]; }
+  setAdj(v0: u256, v1: u256): External<void> { this.adj0[0n] = v0; this.adj1[0n] = v1; }
+  get getAdj0(): External<u256> { return this.adj0[0n]; }
+  get getAdj1(): External<u256> { return this.adj1[0n]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

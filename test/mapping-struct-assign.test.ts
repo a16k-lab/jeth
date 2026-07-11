@@ -26,20 +26,20 @@ function strSet(sel: string, head: bigint[], s: string): string {
   return h;
 }
 
-const JETH = `@struct class P { x: u128; y: u128; }
-@struct class D { a: u256; s: string; }
-@contract class MS {
-  @state mp: mapping<address, P>;
-  @state md: mapping<address, D>;
-  @state dd: D;
-  @external setP(k: address, x: u128, y: u128): void { this.mp[k] = P(x, y); }
-  @external setD(k: address, a: u256, s: string): void { this.md[k] = D(a, s); }
-  @external copyP(a: address, b: address): void { this.mp[a] = this.mp[b]; }
-  @external copyD(a: address, b: address): void { this.md[a] = this.md[b]; }
-  @external setDD(a: u256, s: string): void { this.dd = D(a, s); }
-  @external fromState(k: address): void { this.md[k] = this.dd; }
-  @external @view getP(k: address): P { return this.mp[k]; }
-  @external @view getD(k: address): D { return this.md[k]; }
+const JETH = `type P = { x: u128; y: u128; };
+type D = { a: u256; s: string; };
+class MS {
+  mp: mapping<address, P>;
+  md: mapping<address, D>;
+  dd: D;
+  setP(k: address, x: u128, y: u128): External<void> { this.mp[k] = P(x, y); }
+  setD(k: address, a: u256, s: string): External<void> { this.md[k] = D(a, s); }
+  copyP(a: address, b: address): External<void> { this.mp[a] = this.mp[b]; }
+  copyD(a: address, b: address): External<void> { this.md[a] = this.md[b]; }
+  setDD(a: u256, s: string): External<void> { this.dd = D(a, s); }
+  fromState(k: address): External<void> { this.md[k] = this.dd; }
+  get getP(k: address): External<P> { return this.mp[k]; }
+  get getD(k: address): External<D> { return this.md[k]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

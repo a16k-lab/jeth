@@ -12,33 +12,33 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const K = 0xbeefn;
 
-const JETH = `@struct class W { tag: u256; grid: Arr<Arr<u256, 2>, 2>; }
-@struct class Pk { a: u64; rows: Arr<Arr<u8, 4>, 3>; b: u64; }
-@struct class Sg { s: Arr<Arr<i64, 2>, 2>; }
-@contract class NA {
-  @state up: Arr<Arr<u8, 4>, 3>;
-  @state sg: Arr<Arr<i64, 2>, 2>;
-  @state d4: Arr<Arr<Arr<u256, 2>, 2>, 2>;
-  @state w: W;
-  @state pk: Pk;
-  @state mw: mapping<u256, W>;
-  @state warr: W[];
-  @external setUp(i: u256, j: u256, v: u8): void { this.up[i][j] = v; }
-  @external setSg(i: u256, j: u256, v: i64): void { this.sg[i][j] = v; }
-  @external setD4(i: u256, j: u256, k: u256, v: u256): void { this.d4[i][j][k] = v; }
-  @external setW(t: u256, i: u256, j: u256, v: u256): void { this.w.tag = t; this.w.grid[i][j] = v; }
-  @external setPk(a: u64, b: u64, i: u256, j: u256, v: u8): void { this.pk.a = a; this.pk.b = b; this.pk.rows[i][j] = v; }
-  @external setMw(k: u256, t: u256, i: u256, j: u256, v: u256): void { this.mw[k].tag = t; this.mw[k].grid[i][j] = v; }
-  @external pushW(): void { this.warr.push(); }
-  @external setWarr(idx: u256, t: u256, i: u256, j: u256, v: u256): void { this.warr[idx].tag = t; this.warr[idx].grid[i][j] = v; }
-  @external @view getUp(): Arr<Arr<u8, 4>, 3> { return this.up; }
-  @external @view getSg(): Arr<Arr<i64, 2>, 2> { return this.sg; }
-  @external @view getD4(): Arr<Arr<Arr<u256, 2>, 2>, 2> { return this.d4; }
-  @external @view getW(): W { return this.w; }
-  @external @view getPk(): Pk { return this.pk; }
-  @external @view getMw(k: u256): W { return this.mw[k]; }
-  @external @view getWarr(): W[] { return this.warr; }
-  @external @view getWarrI(i: u256): W { return this.warr[i]; }
+const JETH = `type W = { tag: u256; grid: Arr<Arr<u256, 2>, 2>; };
+type Pk = { a: u64; rows: Arr<Arr<u8, 4>, 3>; b: u64; };
+type Sg = { s: Arr<Arr<i64, 2>, 2>; };
+class NA {
+  up: Arr<Arr<u8, 4>, 3>;
+  sg: Arr<Arr<i64, 2>, 2>;
+  d4: Arr<Arr<Arr<u256, 2>, 2>, 2>;
+  w: W;
+  pk: Pk;
+  mw: mapping<u256, W>;
+  warr: W[];
+  setUp(i: u256, j: u256, v: u8): External<void> { this.up[i][j] = v; }
+  setSg(i: u256, j: u256, v: i64): External<void> { this.sg[i][j] = v; }
+  setD4(i: u256, j: u256, k: u256, v: u256): External<void> { this.d4[i][j][k] = v; }
+  setW(t: u256, i: u256, j: u256, v: u256): External<void> { this.w.tag = t; this.w.grid[i][j] = v; }
+  setPk(a: u64, b: u64, i: u256, j: u256, v: u8): External<void> { this.pk.a = a; this.pk.b = b; this.pk.rows[i][j] = v; }
+  setMw(k: u256, t: u256, i: u256, j: u256, v: u256): External<void> { this.mw[k].tag = t; this.mw[k].grid[i][j] = v; }
+  pushW(): External<void> { this.warr.push(); }
+  setWarr(idx: u256, t: u256, i: u256, j: u256, v: u256): External<void> { this.warr[idx].tag = t; this.warr[idx].grid[i][j] = v; }
+  get getUp(): External<Arr<Arr<u8, 4>, 3>> { return this.up; }
+  get getSg(): External<Arr<Arr<i64, 2>, 2>> { return this.sg; }
+  get getD4(): External<Arr<Arr<Arr<u256, 2>, 2>, 2>> { return this.d4; }
+  get getW(): External<W> { return this.w; }
+  get getPk(): External<Pk> { return this.pk; }
+  get getMw(k: u256): External<W> { return this.mw[k]; }
+  get getWarr(): External<W[]> { return this.warr; }
+  get getWarrI(i: u256): External<W> { return this.warr[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

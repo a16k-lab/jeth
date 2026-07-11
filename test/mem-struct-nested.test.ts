@@ -10,37 +10,37 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@struct class Inner { a: u256; b: i64; }
-@struct class Outer { tag: u8; inner: Inner; z: u256; }
-@struct class Deep { o: Outer; w: u256; }
-@contract class C {
+const JETH = `type Inner = { a: u256; b: i64; };
+type Outer = { tag: u8; inner: Inner; z: u256; };
+type Deep = { o: Outer; w: u256; };
+class C {
   // read nested value fields
-  @external @pure rd(t: u8, a: u256, b: i64, z: u256): u256 {
+  get rd(t: u8, a: u256, b: i64, z: u256): External<u256> {
     let p: Outer = Outer(t, Inner(a, b), z);
     return u256(p.tag) * 1000000n + p.inner.a + u256(u64(p.inner.b)) + p.z;
   }
   // write nested value fields, then return the whole struct
-  @external @pure wr(a: u256, b: i64): Outer {
+  get wr(a: u256, b: i64): External<Outer> {
     let p: Outer = Outer(0n, Inner(0n, 0n), 0n);
     p.tag = 9n; p.inner.a = a; p.inner.b = b; p.inner.a += 1n; p.z = a * 2n;
     return p;
   }
   // 2-level deep chain p.o.inner.a
-  @external @pure deep(a: u256, b: i64): Deep {
+  get deep(a: u256, b: i64): External<Deep> {
     let d: Deep = Deep(Outer(1n, Inner(a, b), 7n), 0n);
     d.o.inner.a = d.o.inner.a + 100n; d.o.inner.b = -5n; d.w = 42n;
     return d;
   }
   // pass a nested-struct memory struct to a helper that mutates a deep field (by ref)
   bumpInner(p: Outer): void { p.inner.a = p.inner.a + 1n; p.inner.b = p.inner.b - 1n; }
-  @external @pure viaHelper(a: u256, b: i64): Outer {
+  get viaHelper(a: u256, b: i64): External<Outer> {
     let p: Outer = Outer(3n, Inner(a, b), 5n);
     this.bumpInner(p); this.bumpInner(p);
     return p;
   }
   // return a nested struct constructed by a helper
-  @pure mkOuter(t: u8, a: u256, b: i64): Outer { return Outer(t, Inner(a, b), 0n); }
-  @external @pure mkE(t: u8, a: u256, b: i64): Outer { return this.mkOuter(t, a, b); }
+  mkOuter(t: u8, a: u256, b: i64): Outer { return Outer(t, Inner(a, b), 0n); }
+  get mkE(t: u8, a: u256, b: i64): External<Outer> { return this.mkOuter(t, a, b); }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

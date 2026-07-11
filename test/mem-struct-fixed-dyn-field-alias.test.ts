@@ -51,14 +51,14 @@ const retStr = (s: string): string => {
 describe('mem-struct fixed-of-dynamic field alias (W5C-mem)', () => {
   it('Arr<string,2> mem-built local: element/length/whole/encode/argpass + OOB Panic 0x32', async () => {
     const J = `
-@struct class D { tags: Arr<string,2>; k: u256 }
-@contract class C {
+type D = { tags: Arr<string,2>; k: u256 };
+class C {
   echo(ys: Arr<string,2>): string { return ys[1n]; }
-  @external @pure elem(i: u256): string { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return ys[i]; }
-  @external @pure len(): u256 { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return ys.length; }
-  @external @pure whole(): Arr<string,2> { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return ys; }
-  @external @pure enc(): bytes { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return abi.encode(ys); }
-  @external @pure arg(): string { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return this.echo(ys); }
+  get elem(i: u256): External<string> { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return ys[i]; }
+  get len(): External<u256> { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return ys.length; }
+  get whole(): External<Arr<string,2>> { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return ys; }
+  get enc(): External<bytes> { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return abi.encode(ys); }
+  get arg(): External<string> { let d: D = D(["ab","cdcd"], 3n); let ys: Arr<string,2> = d.tags; return this.echo(ys); }
 }`;
     const S = `
 contract C {
@@ -81,10 +81,10 @@ contract C {
 
   it('Arr<string,3> internal MEMORY PARAM source (the exact repro shape)', async () => {
     const J = `
-@struct class D { tags: Arr<string,3>; k: u256 }
-@contract class C {
+type D = { tags: Arr<string,3>; k: u256 };
+class C {
   g(d: D, i: u256): string { let ys: Arr<string,3> = d.tags; return ys[i]; }
-  @external @pure f(i: u256): string { let d: D = D(["p","qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq","r"], 1n); return this.g(d, i); }
+  get f(i: u256): External<string> { let d: D = D(["p","qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq","r"], 1n); return this.g(d, i); }
 }`;
     const S = `
 contract C {
@@ -102,9 +102,9 @@ contract C {
 
   it('Arr<bytes,2> mem-built local element read (incl >31-byte + empty)', async () => {
     const J = `
-@struct class D { tags: Arr<bytes,2>; k: u256 }
-@contract class C {
-  @external @pure elem(i: u256): bytes { let d: D = D([bytes(""), bytes("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")], 5n); let ys: Arr<bytes,2> = d.tags; return ys[i]; }
+type D = { tags: Arr<bytes,2>; k: u256 };
+class C {
+  get elem(i: u256): External<bytes> { let d: D = D([bytes(""), bytes("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz")], 5n); let ys: Arr<bytes,2> = d.tags; return ys[i]; }
 }`;
     const S = `
 contract C {
@@ -120,12 +120,12 @@ contract C {
 
   it('Arr<u256[],2> value-leaf twin, internal param source: element/length + inner/outer OOB', async () => {
     const J = `
-@struct class D { g: Arr<u256[],2>; k: u256 }
-@contract class C {
+type D = { g: Arr<u256[],2>; k: u256 };
+class C {
   pick(d: D, i: u256, j: u256): u256 { let ys: Arr<u256[],2> = d.g; return ys[i][j]; }
   plen(d: D, i: u256): u256 { let ys: Arr<u256[],2> = d.g; return ys[i].length; }
-  @external @pure f(i: u256, j: u256): u256 { let d: D = D([[10n,20n,30n],[99n]], 7n); return this.pick(d, i, j); }
-  @external @pure fl(i: u256): u256 { let d: D = D([[10n,20n,30n],[99n]], 7n); return this.plen(d, i); }
+  get f(i: u256, j: u256): External<u256> { let d: D = D([[10n,20n,30n],[99n]], 7n); return this.pick(d, i, j); }
+  get fl(i: u256): External<u256> { let d: D = D([[10n,20n,30n],[99n]], 7n); return this.plen(d, i); }
 }`;
     const S = `
 contract C {
@@ -148,10 +148,10 @@ contract C {
 
   it('NESTED sub-struct field source v.t.tags (Arr<string,2>)', async () => {
     const J = `
-@struct class In { tags: Arr<string,2>; z: u256 }
-@struct class Ou { t: In; k: u256 }
-@contract class C {
-  @external @pure elem(i: u256): string { let v: Ou = Ou(In(["nn","mmmm"], 4n), 9n); let ys: Arr<string,2> = v.t.tags; return ys[i]; }
+type In = { tags: Arr<string,2>; z: u256 };
+type Ou = { t: In; k: u256 };
+class C {
+  get elem(i: u256): External<string> { let v: Ou = Ou(In(["nn","mmmm"], 4n), 9n); let ys: Arr<string,2> = v.t.tags; return ys[i]; }
 }`;
     const S = `
 contract C {
@@ -168,9 +168,9 @@ contract C {
 
   it('P[]-element field source xs[i].tags (Arr<string,2>)', async () => {
     const J = `
-@struct class P { tags: Arr<string,2>; k: u256 }
-@contract class C {
-  @external @pure elem(i: u256, j: u256): string { let xs: P[] = [P(["a0","b0"], 1n), P(["a1","b1"], 2n)]; let ys: Arr<string,2> = xs[i].tags; return ys[j]; }
+type P = { tags: Arr<string,2>; k: u256 };
+class C {
+  get elem(i: u256, j: u256): External<string> { let xs: P[] = [P(["a0","b0"], 1n), P(["a1","b1"], 2n)]; let ys: Arr<string,2> = xs[i].tags; return ys[j]; }
 }`;
     const S = `
 contract C {
@@ -188,11 +188,11 @@ contract C {
 
   it('mutation-alias BOTH directions (write ys -> read d.tags, write d.tags -> read ys)', async () => {
     const J = `
-@struct class D { tags: Arr<string,2>; k: u256 }
-@contract class C {
-  @external @pure ysToD(): string { let d: D = D(["aa","bb"], 7n); let ys: Arr<string,2> = d.tags; ys[0n] = "ZZZ"; return d.tags[0n]; }
-  @external @pure dToYs(): string { let d: D = D(["aa","bb"], 7n); let ys: Arr<string,2> = d.tags; d.tags[1n] = "WWW"; return ys[1n]; }
-  @external @pure ysToDLong(): string { let d: D = D(["aa","bb"], 7n); let ys: Arr<string,2> = d.tags; ys[0n] = "this-re-point-is-longer-than-thirty-one-bytes"; return d.tags[0n]; }
+type D = { tags: Arr<string,2>; k: u256 };
+class C {
+  get ysToD(): External<string> { let d: D = D(["aa","bb"], 7n); let ys: Arr<string,2> = d.tags; ys[0n] = "ZZZ"; return d.tags[0n]; }
+  get dToYs(): External<string> { let d: D = D(["aa","bb"], 7n); let ys: Arr<string,2> = d.tags; d.tags[1n] = "WWW"; return ys[1n]; }
+  get ysToDLong(): External<string> { let d: D = D(["aa","bb"], 7n); let ys: Arr<string,2> = d.tags; ys[0n] = "this-re-point-is-longer-than-thirty-one-bytes"; return d.tags[0n]; }
 }`;
     const S = `
 contract C {

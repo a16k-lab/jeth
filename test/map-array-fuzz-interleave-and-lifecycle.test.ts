@@ -26,23 +26,22 @@ const mapLenSlot = (k: bigint, base: bigint) => kec(pad32(k) + pad32(base));
 const dataSlot = (lenSlot: bigint) => kec(pad32(lenSlot));
 
 const JETH = `// interleave-and-lifecycle
-@contract
 class Inter {
-  @state direct: u256[];                    // slot 0
-  @state m: mapping<address, u256[]>;       // slot 1
-  @state s: u256;                           // slot 2
+  direct: u256[];                    // slot 0
+  m: mapping<address, u256[]>;       // slot 1
+  s: u256;                           // slot 2
 
-  @external pushDirect(v: u256): void { this.direct.push(v); }
-  @external popDirect(): void { this.direct.pop(); }
-  @external @view lenDirect(): u256 { return this.direct.length; }
-  @external @view getDirect(i: u256): u256 { return this.direct[i]; }
-  @external setDirect(i: u256, v: u256): void { this.direct[i] = v; }
+  pushDirect(v: u256): External<void> { this.direct.push(v); }
+  popDirect(): External<void> { this.direct.pop(); }
+  get lenDirect(): External<u256> { return this.direct.length; }
+  get getDirect(i: u256): External<u256> { return this.direct[i]; }
+  setDirect(i: u256, v: u256): External<void> { this.direct[i] = v; }
 
-  @external pushM(k: address, v: u256): void { this.m[k].push(v); }
-  @external popM(k: address): void { this.m[k].pop(); }
-  @external @view lenM(k: address): u256 { return this.m[k].length; }
-  @external @view getM(k: address, i: u256): u256 { return this.m[k][i]; }
-  @external setM(k: address, i: u256, v: u256): void { this.m[k][i] = v; }
+  pushM(k: address, v: u256): External<void> { this.m[k].push(v); }
+  popM(k: address): External<void> { this.m[k].pop(); }
+  get lenM(k: address): External<u256> { return this.m[k].length; }
+  get getM(k: address, i: u256): External<u256> { return this.m[k][i]; }
+  setM(k: address, i: u256, v: u256): External<void> { this.m[k][i] = v; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

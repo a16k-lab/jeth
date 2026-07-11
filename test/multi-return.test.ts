@@ -11,13 +11,13 @@ const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const A = BigInt('0x' + '11'.repeat(20));
 
-const JETH = `@contract class MR {
-  @external @pure two(a: u256, b: u256): [u256, u256] { return [a, b]; }
-  @external @pure mixed(a: u256, b: address, c: bool): [u256, address, bool] { return [a, b, c]; }
-  @external @pure swap(a: u256, b: u256): [u256, u256] { return [b, a]; }
-  @external @pure withStr(n: u256, s: string): [u256, string] { return [n, s]; }
-  @external @pure twoStr(a: string, b: string): [string, string] { return [a, b]; }
-  @external @pure strBetween(a: string, n: u256, b: string): [string, u256, string] { return [a, n, b]; }
+const JETH = `class MR {
+  get two(a: u256, b: u256): External<[u256, u256]> { return [a, b]; }
+  get mixed(a: u256, b: address, c: bool): External<[u256, address, bool]> { return [a, b, c]; }
+  get swap(a: u256, b: u256): External<[u256, u256]> { return [b, a]; }
+  get withStr(n: u256, s: string): External<[u256, string]> { return [n, s]; }
+  get twoStr(a: string, b: string): External<[string, string]> { return [a, b]; }
+  get strBetween(a: string, n: u256, b: string): External<[string, u256, string]> { return [a, n, b]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

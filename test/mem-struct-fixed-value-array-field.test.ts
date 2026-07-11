@@ -52,7 +52,7 @@ function jethCodes(src: string): string[] {
 describe('whole fixed-value-word-array field of a memory struct as an aggregate (S3) - byte-identical to solc 0.8.35', () => {
   it('abi.encode(q.nums), nums: Arr<u256,3> - canonical, non-vacuous decode', async () => {
     const [ret] = await eqDecode(
-      '@struct class Q { nums: Arr<u256,3> } @contract class C { @external @pure f(): bytes { let q: Q = Q([1n,2n,3n]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); return abi.encode(q.nums); } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
@@ -66,7 +66,7 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
 
   it('return q.nums, nums: Arr<u256,3> - inline 3 words, non-vacuous decode', async () => {
     const [ret] = await eqDecode(
-      '@struct class Q { nums: Arr<u256,3> } @contract class C { @external @pure f(): Arr<u256,3> { let q: Q = Q([7n,8n,9n]); return q.nums; } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<Arr<u256,3>> { let q: Q = Q([7n,8n,9n]); return q.nums; } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(uint256[3] memory){ Q memory q=Q([uint256(7),8,9]); return q.nums; } }',
       [['f()', '']],
     );
@@ -78,31 +78,31 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
   it('leaf value types: address / bool / u8 / bytes32 / i256(negative)', async () => {
     // address[3]
     await eqDecode(
-      '@struct class Q { nums: Arr<address,3> } @contract class C { @external @pure f(): bytes { let q: Q = Q([address(0x11),address(0x22),address(0x33)]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<address,3> }; class C { get f(): External<bytes> { let q: Q = Q([address(0x11),address(0x22),address(0x33)]); return abi.encode(q.nums); } }',
       'struct Q { address[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([address(0x11),address(0x22),address(0x33)]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
     // bool[4]
     await eqDecode(
-      '@struct class Q { nums: Arr<bool,4> } @contract class C { @external @pure f(): bytes { let q: Q = Q([true,false,true,true]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<bool,4> }; class C { get f(): External<bytes> { let q: Q = Q([true,false,true,true]); return abi.encode(q.nums); } }',
       'struct Q { bool[4] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([true,false,true,true]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
     // uint8[4]
     await eqDecode(
-      '@struct class Q { nums: Arr<u8,4> } @contract class C { @external @pure f(): bytes { let q: Q = Q([1n,2n,3n,4n]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<u8,4> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n,4n]); return abi.encode(q.nums); } }',
       'struct Q { uint8[4] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint8(1),2,3,4]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
     // bytes32[2] (values seeded from params - avoids the unsupported bytes32(int) literal)
     await eqDecode(
-      '@struct class Q { nums: Arr<bytes32,2> } @contract class C { @external @pure f(x: bytes32, y: bytes32): bytes { let q: Q = Q([x,y]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<bytes32,2> }; class C { get f(x: bytes32, y: bytes32): External<bytes> { let q: Q = Q([x,y]); return abi.encode(q.nums); } }',
       'struct Q { bytes32[2] nums; } contract C { function f(bytes32 x, bytes32 y) external pure returns(bytes memory){ Q memory q=Q([x,y]); return abi.encode(q.nums); } }',
       [['f(bytes32,bytes32)', 'aa'.padStart(64, '0') + 'bb'.padStart(64, '0')]],
     );
     // int256[3] with a negative element
     const [ret] = await eqDecode(
-      '@struct class Q { nums: Arr<i256,3> } @contract class C { @external @pure f(): bytes { let q: Q = Q([1n,-2n,3n]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<i256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,-2n,3n]); return abi.encode(q.nums); } }',
       'struct Q { int256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([int256(1),-2,3]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
@@ -112,7 +112,7 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
 
   it('NESTED value-word array field: Arr<Arr<u256,2>,2> - non-vacuous decode', async () => {
     const [ret] = await eqDecode(
-      '@struct class Q { nums: Arr<Arr<u256,2>,2> } @contract class C { @external @pure f(): bytes { let q: Q = Q([[1n,2n],[3n,4n]]); return abi.encode(q.nums); } }',
+      'type Q = { nums: Arr<Arr<u256,2>,2> }; class C { get f(): External<bytes> { let q: Q = Q([[1n,2n],[3n,4n]]); return abi.encode(q.nums); } }',
       'struct Q { uint256[2][2] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([[uint256(1),2],[uint256(3),4]]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
@@ -127,7 +127,7 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
 
   it('preceding value field (non-zero word offset): Q2{a:u256; nums:Arr<u256,3>}', async () => {
     const [ret] = await eqDecode(
-      '@struct class Q2 { a: u256; nums: Arr<u256,3> } @contract class C { @external @pure f(): bytes { let q: Q2 = Q2(9n,[10n,11n,12n]); return abi.encode(q.nums); } }',
+      'type Q2 = { a: u256; nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q2 = Q2(9n,[10n,11n,12n]); return abi.encode(q.nums); } }',
       'struct Q2 { uint256 a; uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q2 memory q=Q2(9,[uint256(10),11,12]); return abi.encode(q.nums); } }',
       [['f()', '']],
     );
@@ -140,13 +140,13 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
   it('let-bind ys = q.nums, abi.encode(q.nums,7n), abi.encodePacked, internal-arg, inner-struct field', async () => {
     // let-bind alias
     await eqDecode(
-      '@struct class Q { nums: Arr<u256,3> } @contract class C { @external @pure f(): bytes { let q: Q = Q([1n,2n,3n]); let ys: Arr<u256,3> = q.nums; return abi.encode(ys); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); let ys: Arr<u256,3> = q.nums; return abi.encode(ys); } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); uint256[3] memory ys=q.nums; return abi.encode(ys); } }',
       [['f()', '']],
     );
     // abi.encode(q.nums, 7n) - the field followed by a trailing scalar
     const [ret] = await eqDecode(
-      '@struct class Q { nums: Arr<u256,3> } @contract class C { @external @pure f(): bytes { let q: Q = Q([1n,2n,3n]); return abi.encode(q.nums, 7n); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); return abi.encode(q.nums, 7n); } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); return abi.encode(q.nums, uint256(7)); } }',
       [['f()', '']],
     );
@@ -157,19 +157,19 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
     expect(ret!.slice(2 + 64 * 5, 2 + 64 * 6)).toBe(W(7n));
     // abi.encodePacked(q.nums)
     await eqDecode(
-      '@struct class Q { nums: Arr<u256,3> } @contract class C { @external @pure f(): bytes { let q: Q = Q([1n,2n,3n]); return abi.encodePacked(q.nums); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); return abi.encodePacked(q.nums); } }',
       'struct Q { uint256[3] nums; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); return abi.encodePacked(q.nums); } }',
       [['f()', '']],
     );
     // internal-arg: this.g(q.nums) (g is internal-by-default, called via this.)
     await eqDecode(
-      '@struct class Q { nums: Arr<u256,3> } @contract class C { @pure g(a: Arr<u256,3>): bytes { return abi.encode(a); } @external @pure f(): bytes { let q: Q = Q([1n,2n,3n]); return this.g(q.nums); } }',
+      'type Q = { nums: Arr<u256,3> }; class C { g(a: Arr<u256,3>): bytes { return abi.encode(a); } get f(): External<bytes> { let q: Q = Q([1n,2n,3n]); return this.g(q.nums); } }',
       'struct Q { uint256[3] nums; } contract C { function g(uint256[3] memory a) internal pure returns(bytes memory){ return abi.encode(a); } function f() external pure returns(bytes memory){ Q memory q=Q([uint256(1),2,3]); return g(q.nums); } }',
       [['f()', '']],
     );
     // nested struct-in-struct inner fixed-array field: q.inner.nums
     await eqDecode(
-      '@struct class Inner { nums: Arr<u256,3> } @struct class Q { a: u256; inner: Inner } @contract class C { @external @pure f(): bytes { let q: Q = Q(9n, Inner([1n,2n,3n])); return abi.encode(q.inner.nums); } }',
+      'type Inner = { nums: Arr<u256,3> }; type Q = { a: u256; inner: Inner }; class C { get f(): External<bytes> { let q: Q = Q(9n, Inner([1n,2n,3n])); return abi.encode(q.inner.nums); } }',
       'struct Inner { uint256[3] nums; } struct Q { uint256 a; Inner inner; } contract C { function f() external pure returns(bytes memory){ Q memory q=Q(9, Inner([uint256(1),2,3])); return abi.encode(q.inner.nums); } }',
       [['f()', '']],
     );
@@ -179,9 +179,9 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
   // bytes). This is the exact shape that MISCOMPILED in the first attempt; the tight predicate excludes it.
   it('Tier-2 L7(b) LIFTED: Arr<In,N> of a STATIC STRUCT field now ACCEPTS via aggFieldRead (byte-identity pinned in lift-tier2-or-catalogue.test.ts; the flat sub-image route makes the old all-zero miscompile impossible)', () => {
     const returnSrc =
-      '@struct class In { a: u256; b: u256 } @struct class Q { arr: Arr<In,2> } @contract class C { @external @pure f(): Arr<In,2> { let q: Q = Q([In(1n,2n),In(3n,4n)]); return q.arr; } }';
+      'type In = { a: u256; b: u256 }; type Q = { arr: Arr<In,2> }; class C { get f(): External<Arr<In,2>> { let q: Q = Q([In(1n,2n),In(3n,4n)]); return q.arr; } }';
     const encodeSrc =
-      '@struct class In { a: u256; b: u256 } @struct class Q { arr: Arr<In,2> } @contract class C { @external @pure f(): bytes { let q: Q = Q([In(1n,2n),In(3n,4n)]); return abi.encode(q.arr); } }';
+      'type In = { a: u256; b: u256 }; type Q = { arr: Arr<In,2> }; class C { get f(): External<bytes> { let q: Q = Q([In(1n,2n),In(3n,4n)]); return abi.encode(q.arr); } }';
     expect(jethCodes(returnSrc)).toEqual(['OK']);
     expect(jethCodes(encodeSrc)).toEqual(['OK']);
   });
@@ -189,7 +189,7 @@ describe('whole fixed-value-word-array field of a memory struct as an aggregate 
   // deeper struct nesting inside the array is ALSO excluded (any struct anywhere in the chain)
   it('Tier-2 L7(b) LIFTED: Arr<Arr<In,2>,2> (struct leaf under nested arrays) field now ACCEPTS (byte-identity pinned in lift-tier2-or-catalogue.test.ts)', () => {
     const src =
-      '@struct class In { a: u256 } @struct class Q { arr: Arr<Arr<In,2>,2> } @contract class C { @external @pure f(): bytes { let q: Q = Q([[In(1n),In(2n)],[In(3n),In(4n)]]); return abi.encode(q.arr); } }';
+      'type In = { a: u256 }; type Q = { arr: Arr<Arr<In,2>,2> }; class C { get f(): External<bytes> { let q: Q = Q([[In(1n),In(2n)],[In(3n),In(4n)]]); return abi.encode(q.arr); } }';
     expect(jethCodes(src)).toEqual(['OK']);
   });
 });

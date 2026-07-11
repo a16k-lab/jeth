@@ -13,23 +13,23 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const call = (sig: string, words: bigint[]) => '0x' + sel(sig) + words.map(pad).join('');
 
-const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
-@contract class C {
-  @state s: P;
-  @external setS(a: u256, b: u8, c: i64, d: address): void { this.s.a = a; this.s.b = b; this.s.c = c; this.s.d = d; }
+const JETH = `type P = { a: u256; b: u8; c: i64; d: address; };
+class C {
+  s: P;
+  setS(a: u256, b: u8, c: i64, d: address): External<void> { this.s.a = a; this.s.b = b; this.s.c = c; this.s.d = d; }
   // copy storage -> memory, mutate the copy, return both copy and storage to prove COPY semantics
-  @external copyMutate(na: u256): u256 {
+  get copyMutate(na: u256): External<u256> {
     let p: P = this.s;       // fresh copy of storage
     p.a = na; p.b = 7n;      // mutate the copy only
     return p.a + u256(p.b) + u256(u64(p.c)) + this.s.a; // copy.a(=na) + copy.b(7) + copy.c + STORAGE.a (unchanged)
   }
   // copy storage struct and return it whole
-  @external @view snapshot(): P { let p: P = this.s; return p; }
+  get snapshot(): External<P> { let p: P = this.s; return p; }
   // copy a CALLDATA struct param to a memory local, mutate, return
-  @external @pure fromParam(q: P, na: u256): P { let p: P = q; p.a = na; p.d = address(0x999n); return p; }
+  get fromParam(q: P, na: u256): External<P> { let p: P = q; p.a = na; p.d = address(0x999n); return p; }
   // confirm storage is untouched by reading it back after copyMutate
-  @external @view getSA(): u256 { return this.s.a; }
-  @external @view getSB(): u8 { return this.s.b; }
+  get getSA(): External<u256> { return this.s.a; }
+  get getSB(): External<u8> { return this.s.b; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

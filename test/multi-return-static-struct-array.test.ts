@@ -12,33 +12,33 @@ import { Harness } from '../src/evm.js';
 import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
-const JETH = `@struct class In { x: u256; y: u256 }
-@struct class In3 { x: u256; y: u256; z: u256 }
-@struct class In2 { p: In; q: u256 }
-@contract class C {
+const JETH = `type In = { x: u256; y: u256 };
+type In3 = { x: u256; y: u256; z: u256 };
+type In2 = { p: In; q: u256 };
+class C {
   // the exact reported miscompile: [scalar, Arr<In,2>]
-  @external @pure two(): [u256, Arr<In,2>] { let a: Arr<In,2> = [In(7n,8n), In(9n,10n)]; return [42n, a]; }
+  get two(): External<[u256, Arr<In,2>]> { let a: Arr<In,2> = [In(7n,8n), In(9n,10n)]; return [42n, a]; }
   // N=1 and N=3
-  @external @pure one(): [u256, Arr<In,1>] { let a: Arr<In,1> = [In(7n,8n)]; return [42n, a]; }
-  @external @pure three(): [u256, Arr<In,3>] { let a: Arr<In,3> = [In(1n,2n),In(3n,4n),In(5n,6n)]; return [42n, a]; }
+  get one(): External<[u256, Arr<In,1>]> { let a: Arr<In,1> = [In(7n,8n)]; return [42n, a]; }
+  get three(): External<[u256, Arr<In,3>]> { let a: Arr<In,3> = [In(1n,2n),In(3n,4n),In(5n,6n)]; return [42n, a]; }
   // Arr<In,N> at FIRST / MIDDLE / LAST tuple position
-  @external @pure first(): [Arr<In,2>, u256] { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [a, 42n]; }
-  @external @pure middle(): [u256, Arr<In,2>, u256] { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [7n, a, 42n]; }
-  @external @pure last(): [u256, u256, Arr<In,2>] { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [42n, 7n, a]; }
+  get first(): External<[Arr<In,2>, u256]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [a, 42n]; }
+  get middle(): External<[u256, Arr<In,2>, u256]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [7n, a, 42n]; }
+  get last(): External<[u256, u256, Arr<In,2>]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [42n, 7n, a]; }
   // 3-field element struct, nested-static-struct element
-  @external @pure wide(): [u256, Arr<In3,2>] { let a: Arr<In3,2> = [In3(1n,2n,3n),In3(4n,5n,6n)]; return [42n, a]; }
-  @external @pure nested(): [u256, Arr<In2,2>] { let a: Arr<In2,2> = [In2(In(1n,2n),3n), In2(In(4n,5n),6n)]; return [42n, a]; }
+  get wide(): External<[u256, Arr<In3,2>]> { let a: Arr<In3,2> = [In3(1n,2n,3n),In3(4n,5n,6n)]; return [42n, a]; }
+  get nested(): External<[u256, Arr<In2,2>]> { let a: Arr<In2,2> = [In2(In(1n,2n),3n), In2(In(4n,5n),6n)]; return [42n, a]; }
   // alongside a value array, another struct, a dynamic string sibling; two static-struct arrays
-  @external @pure withValArr(): [Arr<In,2>, Arr<u256,3>] { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let v: Arr<u256,3> = [11n,12n,13n]; return [a, v]; }
-  @external @pure withStruct(): [In, Arr<In,2>] { let s: In = In(99n,100n); let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [s, a]; }
-  @external @pure withStr(): [Arr<In,2>, string] { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [a, "hello"]; }
-  @external @pure twoArrs(): [Arr<In,2>, u256, Arr<In,3>] { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let b: Arr<In,3> = [In(5n,6n),In(7n,8n),In(9n,10n)]; return [a, 5n, b]; }
-  @external @pure nestedArr(): [u256, Arr<Arr<In,2>,2>] { let a: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [42n, a]; }
+  get withValArr(): External<[Arr<In,2>, Arr<u256,3>]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let v: Arr<u256,3> = [11n,12n,13n]; return [a, v]; }
+  get withStruct(): External<[In, Arr<In,2>]> { let s: In = In(99n,100n); let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [s, a]; }
+  get withStr(): External<[Arr<In,2>, string]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; return [a, "hello"]; }
+  get twoArrs(): External<[Arr<In,2>, u256, Arr<In,3>]> { let a: Arr<In,2> = [In(1n,2n),In(3n,4n)]; let b: Arr<In,3> = [In(5n,6n),In(7n,8n),In(9n,10n)]; return [a, 5n, b]; }
+  get nestedArr(): External<[u256, Arr<Arr<In,2>,2>]> { let a: Arr<Arr<In,2>,2> = [[In(1n,2n),In(3n,4n)],[In(5n,6n),In(7n,8n)]]; return [42n, a]; }
   // CONTROLS that must stay byte-identical (they exercise the sibling branches):
-  @external @pure ctrlSolo(): Arr<In,2> { let a: Arr<In,2> = [In(7n,8n),In(9n,10n)]; return a; }
-  @external @pure ctrlStructInTuple(): [u256, In] { let s: In = In(7n,8n); return [42n, s]; }
-  @external @pure ctrlValArrInTuple(): [u256, Arr<u256,3>] { let a: Arr<u256,3> = [7n,8n,9n]; return [42n, a]; }
-  @external @pure ctrlAbiEncode(): bytes { let a: Arr<In,2> = [In(7n,8n),In(9n,10n)]; return abi.encode(42n, a); }
+  get ctrlSolo(): External<Arr<In,2>> { let a: Arr<In,2> = [In(7n,8n),In(9n,10n)]; return a; }
+  get ctrlStructInTuple(): External<[u256, In]> { let s: In = In(7n,8n); return [42n, s]; }
+  get ctrlValArrInTuple(): External<[u256, Arr<u256,3>]> { let a: Arr<u256,3> = [7n,8n,9n]; return [42n, a]; }
+  get ctrlAbiEncode(): External<bytes> { let a: Arr<In,2> = [In(7n,8n),In(9n,10n)]; return abi.encode(42n, a); }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

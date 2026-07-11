@@ -20,24 +20,23 @@ function mapSlot(keyWord: bigint, baseSlot: bigint): bigint {
   return BigInt('0x' + toHex(keccak(buf)));
 }
 
-const JETH = `@contract
-class M {
-  @state allowance: mapping<address, mapping<address, u256>>;
-  @state flags: mapping<address, bool>;
-  @state counts: mapping<u256, u8>;
-  @state names: mapping<address, bytes4>;
-  @state signed: mapping<u256, i16>;
-  @external setAllow(o: address, s: address, v: u256): void { this.allowance[o][s] = v; }
-  @external incAllow(o: address, s: address, d: u256): void { this.allowance[o][s] += d; }
-  @external @view getAllow(o: address, s: address): u256 { return this.allowance[o][s]; }
-  @external setFlag(a: address, b: bool): void { this.flags[a] = b; }
-  @external @view getFlag(a: address): bool { return this.flags[a]; }
-  @external setCount(k: u256, v: u8): void { this.counts[k] = v; }
-  @external @view getCount(k: u256): u8 { return this.counts[k]; }
-  @external setName(a: address, n: bytes4): void { this.names[a] = n; }
-  @external @view getName(a: address): bytes4 { return this.names[a]; }
-  @external setSigned(k: u256, v: i16): void { this.signed[k] = v; }
-  @external @view getSigned(k: u256): i16 { return this.signed[k]; }
+const JETH = `class M {
+  allowance: mapping<address, mapping<address, u256>>;
+  flags: mapping<address, bool>;
+  counts: mapping<u256, u8>;
+  names: mapping<address, bytes4>;
+  signed: mapping<u256, i16>;
+  setAllow(o: address, s: address, v: u256): External<void> { this.allowance[o][s] = v; }
+  incAllow(o: address, s: address, d: u256): External<void> { this.allowance[o][s] += d; }
+  get getAllow(o: address, s: address): External<u256> { return this.allowance[o][s]; }
+  setFlag(a: address, b: bool): External<void> { this.flags[a] = b; }
+  get getFlag(a: address): External<bool> { return this.flags[a]; }
+  setCount(k: u256, v: u8): External<void> { this.counts[k] = v; }
+  get getCount(k: u256): External<u8> { return this.counts[k]; }
+  setName(a: address, n: bytes4): External<void> { this.names[a] = n; }
+  get getName(a: address): External<bytes4> { return this.names[a]; }
+  setSigned(k: u256, v: i16): External<void> { this.signed[k] = v; }
+  get getSigned(k: u256): External<i16> { return this.signed[k]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

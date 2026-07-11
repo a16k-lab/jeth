@@ -57,7 +57,7 @@ const codes = (src: string): string[] => {
 describe('W3-Y2a nested-struct-chain reads/writes - byte-identical to solc 0.8.35', () => {
   it('P0-35a: m.i.xs[k] read (value spread + OOB Panic) + .length + whole read', async () => {
     await eqCalls(
-      '@struct class I { xs: u256[]; n: u256 } @struct class M { a: u256; i: I } @contract class C { @external @pure go(k: u256, ys: u256[]): u256 { let m: M = M(1n, I(ys, 7n)); return m.i.xs[k]; } @external @pure ln(ys: u256[]): u256 { let m: M = M(1n, I(ys, 7n)); return m.i.xs.length; } @external @pure whole(ys: u256[]): u256[] { let m: M = M(1n, I(ys, 7n)); return m.i.xs; } }',
+      'type I = { xs: u256[]; n: u256 }; type M = { a: u256; i: I }; class C { get go(k: u256, ys: u256[]): External<u256> { let m: M = M(1n, I(ys, 7n)); return m.i.xs[k]; } get ln(ys: u256[]): External<u256> { let m: M = M(1n, I(ys, 7n)); return m.i.xs.length; } get whole(ys: u256[]): External<u256[]> { let m: M = M(1n, I(ys, 7n)); return m.i.xs; } }',
       'struct I { uint256[] xs; uint256 n; } struct M { uint256 a; I i; } contract C { function go(uint256 k, uint256[] calldata ys) external pure returns(uint256){ M memory m=M(1,I(ys,7)); return m.i.xs[k]; } function ln(uint256[] calldata ys) external pure returns(uint256){ M memory m=M(1,I(ys,7)); return m.i.xs.length; } function whole(uint256[] calldata ys) external pure returns(uint256[] memory){ M memory m=M(1,I(ys,7)); return m.i.xs; } }',
       [
         ['go(uint256,uint256[])', argKYs(0n, [10n, 20n, 30n])],
@@ -72,7 +72,7 @@ describe('W3-Y2a nested-struct-chain reads/writes - byte-identical to solc 0.8.3
 
   it('P1-24: m.i.xs[i] write (const + runtime index) with read-back; no sibling corruption', async () => {
     await eqCalls(
-      '@struct class I { xs: u256[]; n: u256 } @struct class M { a: u256; i: I } @contract class C { @external @pure go(ys: u256[]): u256 { let m: M = M(1n, I(ys, 4242n)); m.i.xs[0n] = 99n; m.i.xs[2n] = 77n; return m.i.xs[0n] + m.i.xs[1n] + m.i.xs[2n] + m.i.n + m.a; } @external @pure wr(k: u256, ys: u256[]): u256 { let m: M = M(1n, I(ys, 7n)); m.i.xs[k] = 999n; return m.i.xs[k]; } }',
+      'type I = { xs: u256[]; n: u256 }; type M = { a: u256; i: I }; class C { get go(ys: u256[]): External<u256> { let m: M = M(1n, I(ys, 4242n)); m.i.xs[0n] = 99n; m.i.xs[2n] = 77n; return m.i.xs[0n] + m.i.xs[1n] + m.i.xs[2n] + m.i.n + m.a; } get wr(k: u256, ys: u256[]): External<u256> { let m: M = M(1n, I(ys, 7n)); m.i.xs[k] = 999n; return m.i.xs[k]; } }',
       'struct I { uint256[] xs; uint256 n; } struct M { uint256 a; I i; } contract C { function go(uint256[] calldata ys) external pure returns(uint256){ M memory m=M(1,I(ys,4242)); m.i.xs[0]=99; m.i.xs[2]=77; return m.i.xs[0]+m.i.xs[1]+m.i.xs[2]+m.i.n+m.a; } function wr(uint256 k, uint256[] calldata ys) external pure returns(uint256){ M memory m=M(1,I(ys,7)); m.i.xs[k]=999; return m.i.xs[k]; } }',
       [
         ['go(uint256[])', argYs([10n, 20n, 30n])],
@@ -85,7 +85,7 @@ describe('W3-Y2a nested-struct-chain reads/writes - byte-identical to solc 0.8.3
 
   it('P1-23: v.t.inner.x static hop under a dynamic hop - value read + write', async () => {
     await eqCalls(
-      '@struct class In { x: u256; y: u256 } @struct class T { s: string; inner: In } @struct class S { a: u256; t: T } @contract class C { @external @pure rd(): u256 { let v: S = S(1n, T("hi", In(5n, 6n))); return v.t.inner.x + v.t.inner.y + v.a; } @external @pure wr(): u256 { let v: S = S(1n, T("hi", In(5n, 6n))); v.t.inner.x = 50n; v.t.inner.y = 60n; return v.t.inner.x + v.t.inner.y; } }',
+      'type In = { x: u256; y: u256 }; type T = { s: string; inner: In }; type S = { a: u256; t: T }; class C { get rd(): External<u256> { let v: S = S(1n, T("hi", In(5n, 6n))); return v.t.inner.x + v.t.inner.y + v.a; } get wr(): External<u256> { let v: S = S(1n, T("hi", In(5n, 6n))); v.t.inner.x = 50n; v.t.inner.y = 60n; return v.t.inner.x + v.t.inner.y; } }',
       'struct In { uint256 x; uint256 y; } struct T { string s; In inner; } struct S { uint256 a; T t; } contract C { function rd() external pure returns(uint256){ S memory v=S(1,T("hi",In(5,6))); return v.t.inner.x+v.t.inner.y+v.a; } function wr() external pure returns(uint256){ S memory v=S(1,T("hi",In(5,6))); v.t.inner.x=50; v.t.inner.y=60; return v.t.inner.x+v.t.inner.y; } }',
       [['rd()', ''], ['wr()', '']],
     );
@@ -93,12 +93,12 @@ describe('W3-Y2a nested-struct-chain reads/writes - byte-identical to solc 0.8.3
 
   it('P1-23: deep static hops (v.t.inner.i2.p) + a static hop then a further dynamic hop (v.t.inner.u.x)', async () => {
     await eqCalls(
-      '@struct class In2 { p: u256; q: u256 } @struct class In { z: u256; i2: In2 } @struct class T { s: string; inner: In } @struct class S { a: u256; t: T } @contract class C { @external @pure rd(): u256 { let v: S = S(1n, T("hi", In(9n, In2(3n,4n)))); return v.t.inner.i2.p + v.t.inner.i2.q + v.t.inner.z; } @external @pure wr(): u256 { let v: S = S(1n, T("hi", In(9n, In2(3n,4n)))); v.t.inner.i2.p = 100n; v.t.inner.z = 200n; return v.t.inner.i2.p + v.t.inner.i2.q + v.t.inner.z; } }',
+      'type In2 = { p: u256; q: u256 }; type In = { z: u256; i2: In2 }; type T = { s: string; inner: In }; type S = { a: u256; t: T }; class C { get rd(): External<u256> { let v: S = S(1n, T("hi", In(9n, In2(3n,4n)))); return v.t.inner.i2.p + v.t.inner.i2.q + v.t.inner.z; } get wr(): External<u256> { let v: S = S(1n, T("hi", In(9n, In2(3n,4n)))); v.t.inner.i2.p = 100n; v.t.inner.z = 200n; return v.t.inner.i2.p + v.t.inner.i2.q + v.t.inner.z; } }',
       'struct In2 { uint256 p; uint256 q; } struct In { uint256 z; In2 i2; } struct T { string s; In inner; } struct S { uint256 a; T t; } contract C { function rd() external pure returns(uint256){ S memory v=S(1,T("hi",In(9,In2(3,4)))); return v.t.inner.i2.p+v.t.inner.i2.q+v.t.inner.z; } function wr() external pure returns(uint256){ S memory v=S(1,T("hi",In(9,In2(3,4)))); v.t.inner.i2.p=100; v.t.inner.z=200; return v.t.inner.i2.p+v.t.inner.i2.q+v.t.inner.z; } }',
       [['rd()', ''], ['wr()', '']],
     );
     await eqCalls(
-      '@struct class U { s: string; x: u256 } @struct class In { z: u256; u: U } @struct class T { s: string; inner: In } @struct class S { a: u256; t: T } @contract class C { @external @pure rd(): u256 { let v: S = S(1n, T("hi", In(9n, U("yo", 55n)))); return v.t.inner.u.x + v.t.inner.z; } @external @pure wr(): u256 { let v: S = S(1n, T("hi", In(9n, U("yo", 55n)))); v.t.inner.u.x = 88n; return v.t.inner.u.x; } }',
+      'type U = { s: string; x: u256 }; type In = { z: u256; u: U }; type T = { s: string; inner: In }; type S = { a: u256; t: T }; class C { get rd(): External<u256> { let v: S = S(1n, T("hi", In(9n, U("yo", 55n)))); return v.t.inner.u.x + v.t.inner.z; } get wr(): External<u256> { let v: S = S(1n, T("hi", In(9n, U("yo", 55n)))); v.t.inner.u.x = 88n; return v.t.inner.u.x; } }',
       'struct U { string s; uint256 x; } struct In { uint256 z; U u; } struct T { string s; In inner; } struct S { uint256 a; T t; } contract C { function rd() external pure returns(uint256){ S memory v=S(1,T("hi",In(9,U("yo",55)))); return v.t.inner.u.x+v.t.inner.z; } function wr() external pure returns(uint256){ S memory v=S(1,T("hi",In(9,U("yo",55)))); v.t.inner.u.x=88; return v.t.inner.u.x; } }',
       [['rd()', ''], ['wr()', '']],
     );
@@ -106,7 +106,7 @@ describe('W3-Y2a nested-struct-chain reads/writes - byte-identical to solc 0.8.3
 
   it('P1-23: writing v.t.inner.x does not corrupt a sibling string (v.t.s after inner)', async () => {
     await eqCalls(
-      '@struct class In { x: u256; y: u256 } @struct class T { inner: In; s: string } @struct class S { a: u256; t: T } @contract class C { @external @pure go(): string { let v: S = S(1n, T(In(5n, 6n), "keepme")); v.t.inner.x = 999n; v.t.inner.y = 888n; return v.t.s; } }',
+      'type In = { x: u256; y: u256 }; type T = { inner: In; s: string }; type S = { a: u256; t: T }; class C { get go(): External<string> { let v: S = S(1n, T(In(5n, 6n), "keepme")); v.t.inner.x = 999n; v.t.inner.y = 888n; return v.t.s; } }',
       'struct In { uint256 x; uint256 y; } struct T { In inner; string s; } struct S { uint256 a; T t; } contract C { function go() external pure returns(string memory){ S memory v=S(1,T(In(5,6),"keepme")); v.t.inner.x=999; v.t.inner.y=888; return v.t.s; } }',
       [['go()', '']],
     );
@@ -116,12 +116,12 @@ describe('W3-Y2a nested-struct-chain reads/writes - byte-identical to solc 0.8.3
     // an internal param is registered in memDynStructLocals; the resolveCdDynStruct guard must route these
     // through the memory resolvers, not mis-claim them as calldata params.
     await eqCalls(
-      '@struct class In { x: u256; y: u256 } @struct class T { s: string; inner: In } @struct class S { a: u256; t: T } @contract class C { @pure rd(v: S): u256 { return v.t.inner.x + v.t.inner.y + v.a; } @external @pure go(): u256 { let v: S = S(10n, T("hi", In(5n, 6n))); return rd(v); } }',
+      'type In = { x: u256; y: u256 }; type T = { s: string; inner: In }; type S = { a: u256; t: T }; class C { rd(v: S): u256 { return v.t.inner.x + v.t.inner.y + v.a; } get go(): External<u256> { let v: S = S(10n, T("hi", In(5n, 6n))); return rd(v); } }',
       'struct In { uint256 x; uint256 y; } struct T { string s; In inner; } struct S { uint256 a; T t; } contract C { function rd(S memory v) internal pure returns(uint256){ return v.t.inner.x+v.t.inner.y+v.a; } function go() external pure returns(uint256){ S memory v=S(10,T("hi",In(5,6))); return rd(v); } }',
       [['go()', '']],
     );
     await eqCalls(
-      '@struct class I { xs: u256[]; n: u256 } @struct class M { a: u256; i: I } @contract class C { @pure rd(m: M, k: u256): u256 { return m.i.xs[k] + m.i.n; } @external @pure go(k: u256, ys: u256[]): u256 { let m: M = M(1n, I(ys, 42n)); return rd(m, k); } }',
+      'type I = { xs: u256[]; n: u256 }; type M = { a: u256; i: I }; class C { rd(m: M, k: u256): u256 { return m.i.xs[k] + m.i.n; } get go(k: u256, ys: u256[]): External<u256> { let m: M = M(1n, I(ys, 42n)); return rd(m, k); } }',
       'struct I { uint256[] xs; uint256 n; } struct M { uint256 a; I i; } contract C { function rd(M memory m, uint256 k) internal pure returns(uint256){ return m.i.xs[k]+m.i.n; } function go(uint256 k, uint256[] calldata ys) external pure returns(uint256){ M memory m=M(1,I(ys,42)); return rd(m,k); } }',
       [['go(uint256,uint256[])', argKYs(1n, [10n, 20n, 30n])]],
     );
@@ -134,7 +134,7 @@ describe('W3-Y2a nested-struct-chain reads/writes - byte-identical to solc 0.8.3
     const vTuple = W(100n) + W(64n) + tTuple; // [a=100][off_to_t=0x40][t]
     const arg = W(32n) + vTuple; // [off_to_v=0x20][v]
     await eqCalls(
-      '@struct class T { s: string; n: u256 } @struct class S { a: u256; t: T } @contract class C { @external @pure go(v: S): u256 { return v.a + v.t.n; } }',
+      'type T = { s: string; n: u256 }; type S = { a: u256; t: T }; class C { get go(v: S): External<u256> { return v.a + v.t.n; } }',
       'struct T { string s; uint256 n; } struct S { uint256 a; T t; } contract C { function go(S calldata v) external pure returns(uint256){ return v.a + v.t.n; } }',
       [['go((uint256,(string,uint256)))', arg]],
     );
@@ -144,12 +144,12 @@ describe('W3-Y2a nested-struct-chain reads/writes - byte-identical to solc 0.8.3
     // an unknown field on a nested static hop
     expect(
       codes(
-        '@struct class In { x: u256 } @struct class T { s: string; inner: In } @struct class S { a: u256; t: T } @contract class C { @external @pure go(): u256 { let v: S = S(1n, T("hi", In(5n))); return v.t.inner.nope; } }',
+        'type In = { x: u256 }; type T = { s: string; inner: In }; type S = { a: u256; t: T }; class C { get go(): External<u256> { let v: S = S(1n, T("hi", In(5n))); return v.t.inner.nope; } }',
       ),
     ).toContain('JETH210');
     // a member access on a VALUE array element (m.i.xs[0].x)
     const c = codes(
-      '@struct class I { xs: u256[]; n: u256 } @struct class M { a: u256; i: I } @contract class C { @external @pure go(ys: u256[]): u256 { let m: M = M(1n, I(ys, 7n)); return m.i.xs[0n].x; } }',
+      'type I = { xs: u256[]; n: u256 }; type M = { a: u256; i: I }; class C { get go(ys: u256[]): External<u256> { let m: M = M(1n, I(ys, 7n)); return m.i.xs[0n].x; } }',
     );
     expect(c.length).toBeGreaterThan(0);
     expect(c).not.toContain('JETH151'); // not the misleading "mapping access" diagnostic

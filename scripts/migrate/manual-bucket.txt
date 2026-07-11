@@ -135,3 +135,10 @@ test/lift-longtail-batchC.test.ts:456  interpolated template: assembly trial mis
 test/lift-longtail-batchC.test.ts:465  interpolated template: assembly trial mismatch orig=rej[JETH013,JETH013,JETH013,JETH013,JETH013,JETH013,JETH013,JETH067,JETH067,JETH067,JETH074,JETH074,JETH074,JETH074,JETH074] post=rej[JETH040]
 test/lift-or-cluster4.test.ts:73  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
 test/lift-over-rejections.test.ts:130  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/mem-array-elem-incdec-pure.test.ts:101  trial mismatch: orig=rej[JETH054] post=ok
+test/modifier.test.ts:141  trial mismatch: orig=rej[JETH164] post=ok
+test/modifier.test.ts:153  trial mismatch: orig=rej[JETH054] post=ok
+test/modifier.test.ts:201  trial mismatch: orig=rej[JETH330] post=ok
+test/multi-file-imports.test.ts:155  import/export-bearing source: a standalone trial cannot see the bundle
+test/namespaced-storage.test.ts:102  trial mismatch: orig=rej[JETH065,JETH409] post=ok
+test/nested-bytesn-cast-constfold.test.ts:28  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH170,JETH352])

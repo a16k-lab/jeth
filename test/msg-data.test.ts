@@ -22,11 +22,11 @@ function codes(src: string): string[] {
 
 describe('msg.data calldata bytes view', () => {
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
-  const J = `@contract class C {
-    @external @pure len(a: u256, b: u256): u256 { return msg.data.length; }
-    @external @pure echo(a: u256): bytes { return msg.data; }
-    @external @pure copy(a: u256): bytes { let d: bytes = msg.data; return d; }
-    @external @pure at(i: u256, x: u256): bytes1 { return msg.data[i]; } }`;
+  const J = `class C {
+    get len(a: u256, b: u256): External<u256> { return msg.data.length; }
+    get echo(a: u256): External<bytes> { return msg.data; }
+    get copy(a: u256): External<bytes> { let d: bytes = msg.data; return d; }
+    get at(i: u256, x: u256): External<bytes1> { return msg.data[i]; } }`;
   const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {
@@ -66,6 +66,6 @@ contract C {
     }
   });
   it('compile-time: msg.data is allowed in @pure; the stale JETH161 gate is gone', () => {
-    expect(codes('@contract class C { @external @pure f(): u256 { return msg.data.length; } }')).toEqual([]);
+    expect(codes('class C { get f(): External<u256> { return msg.data.length; } }')).toEqual([]);
   });
 });

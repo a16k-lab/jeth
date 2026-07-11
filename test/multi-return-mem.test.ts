@@ -9,9 +9,9 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class MM {
-  @external @pure f(a: u256, b: u256): [u256[], u256] { let xs: u256[] = [a, b, a + b]; return [xs, a]; }
-  @external @pure g(n: u256, a: u256, b: u256): [u256, u256[]] { let xs: u256[] = [a, b]; return [n, xs]; }
+const JETH = `class MM {
+  get f(a: u256, b: u256): External<[u256[], u256]> { let xs: u256[] = [a, b, a + b]; return [xs, a]; }
+  get g(n: u256, a: u256, b: u256): External<[u256, u256[]]> { let xs: u256[] = [a, b]; return [n, xs]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
