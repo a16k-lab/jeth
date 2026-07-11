@@ -540,17 +540,20 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
     }
   };
 
-  it('rejects @nonReentrant on @view / @pure / @read with JETH260', () => {
+  it('rejects @nonReentrant on a read-only (inferred view / pure) fn with JETH473', () => {
+    // Native mode infers mutability, so there is no @view/@pure/@read decorator: a read-only external
+    // (a bare-read `get`) that carries @nonReentrant is the native twin of the old JETH260 case, and it
+    // is rejected with JETH473 (a guard is pointless on a fn that cannot re-enter through a state write).
     expect(
-      tryCompile(`@contract class C { @state x: u256; @nonReentrant @view f(): u256 { return this.x; } }`),
-    ).toContain('JETH481');
-    expect(tryCompile(`@contract class C { @nonReentrant @pure f(): u256 { return 1n; } }`)).toContain('JETH260');
+      tryCompile(`class C { x: u256; @nonReentrant get f(): External<u256> { return this.x; } }`),
+    ).toContain('JETH473');
+    expect(tryCompile(`class C { @nonReentrant get f(): External<u256> { return 1n; } }`)).toContain('JETH473');
     expect(
-      tryCompile(`@contract class C { @state x: u256; @nonReentrant @read f(): u256 { return this.x; } }`),
-    ).toContain('JETH260');
+      tryCompile(`class C { x: u256; @nonReentrant get g(): External<u256> { return this.x; } }`),
+    ).toContain('JETH473');
   });
 
-  it('rejects @nonReentrant on / / with JETH261', () => {
+  it('rejects @nonReentrant on a non-external (internal) fn with JETH261', () => {
     expect(tryCompile(`class C { x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
       'JETH261',
     );

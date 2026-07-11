@@ -359,8 +359,8 @@ describe('F6-adv 3: cross-type recursion terminates within a wall-clock budget (
     const params = Array.from({ length: N }, (_, i) => `b${i}: B${i}`).join(', ');
     const calls = Array.from({ length: N }, (_, i) => `u256(this.idf<B${i}>(b${i}))`).join(' + ');
     const src = `${brands}
-    @contract class C { idf<T>(a: T): T { return a; }
-      @external @pure go(${params}): u256 { return ${calls}; } }`;
+    class C { idf<T>(a: T): T { return a; }
+      get go(${params}): External<u256> { return ${calls}; } }`;
     const t0 = Date.now();
     const o = compileOutcome(src);
     const ms = Date.now() - t0;
@@ -393,9 +393,9 @@ describe('F6-adv 3: cross-type recursion terminates within a wall-clock budget (
     const widths = Array.from({ length: 32 }, (_, i) => i + 1);
     const calls = widths.map((w) => `this.idf<bytes${w}>(b${w})`).join(' == ');
     const params = widths.map((w) => `b${w}: bytes${w}`).join(', ');
-    const src = `@contract class C {
+    const src = `class C {
       idf<T>(a: T): bool { return true; }
-      @external @pure go(${params}): bool { return ${calls}; }
+      get go(${params}): External<bool> { return ${calls}; }
     }`;
     const t0 = Date.now();
     const o = compileOutcome(src);
@@ -657,37 +657,43 @@ describe('F6-adv 7: transitive purity/mutability fixpoint through a generic', ()
     }`;
     expect(errCodes(src)).toEqual([]);
   });
-  it('@pure calling a generic that WRITES state is REJECTED (JETH055)', () => {
-    const src = `@contract class C {
-      @state v: u256;
+  it('a read-only get that transitively WRITES state through a generic is REJECTED (JETH043)', () => {
+    // Native twin of the legacy "@pure/@view calling a state-writing generic" reject: a `get` accessor
+    // declares read-only intent, so a transitive state write through the generic `wr<T>` is rejected
+    // with JETH043 (a getter must not modify state). Mutability is inferred, so there is no @pure/@view
+    // decorator to violate; the read-only `get` marker is the native carrier of the same rule.
+    const src = `class C {
+      v: u256;
       wr<T>(k: T): void { this.v = u256(0n); }
-      @external @pure bad(x: u256): void { this.wr<u256>(x); }
+      get bad(x: u256): External<void> { this.wr<u256>(x); }
     }`;
-    expect(errCodes(src)).toContain('JETH481');
+    expect(errCodes(src)).toContain('JETH043');
   });
-  it('@view calling a generic that WRITES state is REJECTED (JETH054)', () => {
-    const src = `@contract class C {
-      @state v: u256;
-      wr<T>(k: T): void { this.v = u256(0n); }
-      @external @view bad(x: u256): void { this.wr<u256>(x); }
+  it('a read-only get that transitively WRITES via a nested generic is REJECTED (JETH043)', () => {
+    const src = `class C {
+      w: u256;
+      wr<T>(k: T): void { this.w = u256(k == k ? 1n : 0n); }
+      get bad(x: u256): External<u256> { this.wr<u256>(x); return this.w; }
     }`;
-    expect(errCodes(src)).toContain('JETH481');
+    expect(errCodes(src)).toContain('JETH043');
   });
-  it('@view calling a generic that transitively EMITS an event is REJECTED (JETH054)', () => {
-    const src = `@contract class C {
-      @event Ping(x: u256);
+  it('a read-only get that transitively EMITS an event through a generic is REJECTED (JETH043)', () => {
+    const src = `class C {
+      Ping: event<{ x: u256 }>;
       ping<T>(k: T): void { emit(Ping(u256(0n))); }
-      @external @view bad(x: u256): void { this.ping<u256>(x); }
+      get bad(x: u256): External<void> { this.ping<u256>(x); }
     }`;
-    expect(errCodes(src)).toContain('JETH481');
+    expect(errCodes(src)).toContain('JETH043');
   });
-  it('@pure calling a generic that READS state is REJECTED (JETH055)', () => {
-    const src = `@contract class C {
-      @state v: u256;
+  it('a read-only get that transitively READS state through a generic is ALLOWED (native infers view, no pure/read decorator to violate)', () => {
+    // Legacy asserted JETH055 for "@pure reads state"; native mode has no @pure declaration distinct
+    // from an inferred view, so a `get` reading state through a generic is simply a valid view getter.
+    const src = `class C {
+      v: u256;
       rd<T>(k: T): u256 { return this.v; }
-      @external @pure bad(x: u256): u256 { return this.rd<u256>(x); }
+      get good(x: u256): External<u256> { return this.rd<u256>(x); }
     }`;
-    expect(errCodes(src)).toContain('JETH481');
+    expect(errCodes(src)).toEqual([]);
   });
   it('the SAME generic in a pure context and a view context: pure wrapper of a pure body is OK', () => {
     // rd reads state; used in a @view wrapper (ok) and an @external (non-view, ok). A @pure wrapper
@@ -896,13 +902,13 @@ describe('F6-adv 10: soundness-rejection diagnostics (capture code, no crash)', 
   const cases: [string, string, string][] = [
     [
       'JETH290',
-      'external generic',
-      '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
+      'external generic (External<T> marker)',
+      'class C { f<T>(a: T): External<T> { return a; } g(x:u256):External<u256> { return this.f<u256>(x); } }',
     ],
     [
       'JETH290',
-      'public generic',
-      '@contract class C { @external f<T>(a: T): T { return a; } @external g(x:u256):u256 { return this.f(x); } }',
+      'external void generic (External<void> marker)',
+      'class C { f<T>(a: T): External<void> { } g(x:u256):External<u256> { this.f<u256>(x); return x; } }',
     ],
     [
       'JETH290',

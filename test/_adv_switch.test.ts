@@ -470,7 +470,7 @@ describe('ADV switch: byte-identical to the if/else twin under solc', () => {
 // ---- compile-time soundness: the desugar must REJECT what solc/the spec rejects --------------
 describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () => {
   const wrap = (b: string) =>
-    `enum Color { Red, Green, Blue }\n@struct class S { a: u256; }\n@contract class C { @external @pure f(c: Color, x: u256, s: string): u256 {\n${b}\nreturn 0n; } }`;
+    `enum Color { Red, Green, Blue }\ntype S = { a: u256; };\nclass C { get f(c: Color, x: u256, s: string): External<u256> {\n${b}\nreturn 0n; } }`;
 
   it('JETH281: non-value discriminant (string / array / struct)', () => {
     expect(codes(wrap('switch (s) { case "a": return 1n; default: return 0n; }'))).toContain('JETH281');
@@ -494,7 +494,7 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
   it('JETH284: implicit fall-through from a non-empty case', () => {
     expect(
       codes(wrap('switch (x) { case 1n: { let y: u256 = x; } case 2n: return 2n; default: return 0n; }')),
-    ).toContain('JETH481');
+    ).toContain('JETH284');
   });
   it('JETH284: a trailing nested switch is NOT auto-diverting (needs an explicit break)', () => {
     expect(

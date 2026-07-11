@@ -370,7 +370,7 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
     // default references another param
     expect(jethCodes(base(`f(a: u256, b: u256 = a): u256 { return a + b; }`))).toContain('JETH250');
     // default reads state this.x
-    expect(jethCodes(base(`@state x: u256;\nf(b: u256 = this.x): u256 { return b; }`))).toContain('JETH250');
+    expect(jethCodes(base(`x: u256;\nf(b: u256 = this.x): u256 { return b; }`))).toContain('JETH250');
     // default is msg.sender
     expect(jethCodes(base(`f(who: address = msg.sender): u256 { return 1n; }`))).toContain('JETH250');
     // default is a function call to another function
@@ -392,13 +392,13 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
   });
 
   it('JETH070: out-of-range default literal (u8 = 300n) is rejected', () => {
-    const codes = jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`));
-    expect(codes).toContain('JETH481');
+    const codes = jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\nget t(): External<u8> { return this.f(); }`));
+    expect(codes).toContain('JETH070');
   });
 
   it('wrong-type default (bool = 1n) is diagnosed when filled at a call site', () => {
     const codes = jethCodes(
-      base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`),
+      base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\nget t(): External<u256> { return this.f(); }`),
     );
     // an integer literal coerced into bool -> JETH084 (cannot use integer literal as bool).
     expect(codes.some((c) => c === 'JETH084' || c === 'JETH085')).toBe(true);
@@ -408,13 +408,13 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
     expect(
       jethCodes(
         base(
-          `f(a: u256, b: u256 = 1n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, 2n, 3n); }`,
+          `f(a: u256, b: u256 = 1n): u256 { return a + b; }\nget t(): External<u256> { return this.f(1n, 2n, 3n); }`,
         ),
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH148');
     expect(
-      jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n); }`)),
-    ).toContain('JETH481');
+      jethCodes(base(`f(a: u256, b: u256): u256 { return a + b; }\nget t(): External<u256> { return this.f(1n); }`)),
+    ).toContain('JETH148');
   });
 
   it('named: unknown key, missing no-default param, duplicate key', () => {
@@ -422,7 +422,7 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
     // which then fails to coerce into the u256 param. Whatever the code, it must reject (no crash).
     const unknown = jethCodes(
       base(
-        `f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, zzz: 2n }); }`,
+        `f(a: u256, b: u256): u256 { return a + b; }\nget t(): External<u256> { return this.f({ a: 1n, zzz: 2n }); }`,
       ),
     );
     expect(unknown).not.toContain('OK');
@@ -430,31 +430,32 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
     // named call missing a param that has no default -> JETH254
     expect(
       jethCodes(
-        base(`f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n }); }`),
+        base(`f(a: u256, b: u256): u256 { return a + b; }\nget t(): External<u256> { return this.f({ a: 1n }); }`),
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH254');
     // duplicate named key -> JETH253 (parser may also reject a literal duplicate; accept either way as long as it diagnoses)
     const dup = jethCodes(
       base(
-        `f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, a: 2n, b: 3n }); }`,
+        `f(a: u256, b: u256): u256 { return a + b; }\nget t(): External<u256> { return this.f({ a: 1n, a: 2n, b: 3n }); }`,
       ),
     );
     expect(dup).not.toContain('OK');
     expect(dup.every((c) => !c.startsWith('CRASH'))).toBe(true);
   });
 
-  it('JETH164: a @pure function cannot make a this.f() external self-call (matches solc pure restriction)', () => {
-    // this.f(...) to an @external f is now a real external message-call to address(this) (lifted from the
-    // old blanket JETH240). A @pure function may NOT make it - it reads address(this) / the environment -
-    // so solc rejects it too; JETH rejects with the purity code JETH164. Still a rejection probe (never a
-    // silent accept). A NON-pure caller doing this.f(...) compiles byte-identically (external-self-call.test.ts).
+  it('JETH043: a read-only get cannot make a this.f() external self-call (native twin of the pure restriction)', () => {
+    // this.f(...) to an external f is a real external message-call to address(this). A read-only `get`
+    // (the native carrier of the old @pure/@view intent, since mutability is now inferred) may NOT make
+    // it - an external CALL can re-enter and modify state - so JETH rejects it with the read-only
+    // violation JETH043. Still a rejection probe (never a silent accept); a NON-get caller doing
+    // this.f(...) compiles byte-identically (external-self-call.test.ts).
     expect(
       jethCodes(
         base(
-          `@external @pure f(a: u256, b: u256): u256 { return a + b; }\n@external @pure t(): u256 { return this.f({ a: 1n, b: 2n }); }`,
+          `get f(a: u256, b: u256): External<u256> { return a + b; }\nget t(): External<u256> { return this.f({ a: 1n, b: 2n }); }`,
         ),
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH043');
   });
 
   it('mixing positional + named: this.f(1n, {b:2n}) is sound (rejected, never silently mis-binds)', () => {
@@ -462,7 +463,7 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
     // literal coerced into u256 param b -> must be rejected, not silently accepted.
     const codes = jethCodes(
       base(
-        `f(a: u256, b: u256 = 7n): u256 { return a + b; }\n@external @pure t(): u256 { return this.f(1n, { b: 2n }); }`,
+        `f(a: u256, b: u256 = 7n): u256 { return a + b; }\nget t(): External<u256> { return this.f(1n, { b: 2n }); }`,
       ),
     );
     expect(codes).not.toContain('OK');
@@ -482,8 +483,8 @@ describe('F3 adv: cross-width type(T).max default', () => {
       f(cap: u128 = type(u256).max): u128 { return cap; }
       get t(): External<u128> { return this.f(); }
     }`);
-    const bareLiteral = jethCodes(`@contract class C {
-      @external @pure t(): u128 { let v: u128 = ${(1n << 256n) - 1n}n; return v; }
+    const bareLiteral = jethCodes(`class C {
+      get t(): External<u128> { let v: u128 = ${(1n << 256n) - 1n}n; return v; }
     }`);
     expect(withDefault, 'type(u256).max into u128 default').toContain('JETH070');
     expect(bareLiteral, 'bare 2^256-1 into u128').toContain('JETH070');
@@ -517,36 +518,36 @@ describe('F3 adv: default validation is eager (declaration-time)', () => {
   it('a bad default errors even on an UNCALLED helper', () => {
     // bool = 1n: wrong type. u8 = 300n: out of range. u128 = type(u256).max: out of range.
     expect(
-      jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return 0n; }`)).some(
+      jethCodes(base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\nget t(): External<u256> { return 0n; }`)).some(
         (c) => c === 'JETH084' || c === 'JETH085',
       ),
     ).toBe(true);
-    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return 0n; }`))).toContain(
+    expect(jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\nget t(): External<u8> { return 0n; }`))).toContain(
       'JETH070',
     );
     expect(
-      jethCodes(base(`f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return 0n; }`)),
+      jethCodes(base(`f(cap: u128 = type(u256).max): u128 { return cap; }\nget t(): External<u128> { return 0n; }`)),
     ).toContain('JETH070');
   });
   it('the SAME bad default also errors when the helper IS internally called', () => {
     expect(
       jethCodes(
-        base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\n@external @pure t(): u256 { return this.f(); }`),
+        base(`f(on: bool = 1n): u256 { return on ? 1n : 0n; }\nget t(): External<u256> { return this.f(); }`),
       ).some((c) => c === 'JETH084' || c === 'JETH085'),
     ).toBe(true);
     expect(
-      jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(); }`)),
+      jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\nget t(): External<u8> { return this.f(); }`)),
     ).toContain('JETH070');
     expect(
       jethCodes(
-        base(`f(cap: u128 = type(u256).max): u128 { return cap; }\n@external @pure t(): u128 { return this.f(); }`),
+        base(`f(cap: u128 = type(u256).max): u128 { return cap; }\nget t(): External<u128> { return this.f(); }`),
       ),
     ).toContain('JETH070');
   });
   it('a bad default errors even when every call supplies the arg (validated at the declaration)', () => {
     expect(
-      jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\n@external @pure t(): u8 { return this.f(5n); }`)),
-    ).toContain('JETH481');
+      jethCodes(base(`f(a: u8 = 300n): u8 { return a; }\nget t(): External<u8> { return this.f(5n); }`)),
+    ).toContain('JETH070');
   });
 });
 

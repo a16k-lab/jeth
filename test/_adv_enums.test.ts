@@ -664,21 +664,21 @@ const wrap = (body: string) => `${PRE}class C { ${body} }`;
 
 describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () => {
   it('rejects arithmetic / bitwise / shift on enums (JETH279)', () => {
-    expect(errCodes(wrap('@external @pure f(): Color { return Color.Red + 1n; }'))).toContain('JETH279');
-    expect(errCodes(wrap('@external @pure f(a: Color, b: Color): u8 { return u8(a + b); }'))).toContain('JETH279');
-    expect(errCodes(wrap('@external @pure f(a: Color, b: Color): u8 { return u8(a & b); }'))).toContain('JETH279');
-    expect(errCodes(wrap('@external @pure f(a: Color): u8 { return u8(a << 1n); }'))).toContain('JETH279');
-    expect(errCodes(wrap('@external @pure f(a: Color): u8 { return u8(a | a); }'))).toContain('JETH279');
+    expect(errCodes(wrap('get f(): External<Color> { return Color.Red + 1n; }'))).toContain('JETH279');
+    expect(errCodes(wrap('get f(a: Color, b: Color): External<u8> { return u8(a + b); }'))).toContain('JETH279');
+    expect(errCodes(wrap('get f(a: Color, b: Color): External<u8> { return u8(a & b); }'))).toContain('JETH279');
+    expect(errCodes(wrap('get f(a: Color): External<u8> { return u8(a << 1n); }'))).toContain('JETH279');
+    expect(errCodes(wrap('get f(a: Color): External<u8> { return u8(a | a); }'))).toContain('JETH279');
   });
   it('rejects mixing two different enums in a comparison (JETH083)', () => {
-    expect(errCodes(wrap('@external @pure f(a: Color, b: Status): bool { return a == b; }'))).toContain('JETH083');
-    expect(errCodes(wrap('@external @pure f(a: Color, b: Status): bool { return a < b; }'))).toContain('JETH083');
+    expect(errCodes(wrap('get f(a: Color, b: Status): External<bool> { return a == b; }'))).toContain('JETH083');
+    expect(errCodes(wrap('get f(a: Color, b: Status): External<bool> { return a < b; }'))).toContain('JETH083');
   });
   it('rejects a bare integer assigned to an enum without a cast (JETH280)', () => {
-    expect(errCodes(wrap('@external @pure f(): Color { return 1n; }'))).toContain('JETH280');
-    expect(errCodes(wrap('@state c: Color; @external s(): void { this.c = 2n; }'))).toContain('JETH280');
-    expect(errCodes(wrap('@external @pure f(c: Color): bool { return c == 1n; }'))).toContain('JETH280');
-    expect(errCodes(wrap('@external @pure f(): Color { const c: Color = 1n; return c; }'))).toContain('JETH280');
+    expect(errCodes(wrap('get f(): External<Color> { return 1n; }'))).toContain('JETH280');
+    expect(errCodes(wrap('c: Color; s(): External<void> { this.c = 2n; }'))).toContain('JETH280');
+    expect(errCodes(wrap('get f(c: Color): External<bool> { return c == 1n; }'))).toContain('JETH280');
+    expect(errCodes(wrap('get f(): External<Color> { const c: Color = 1n; return c; }'))).toContain('JETH280');
   });
   it('rejects an empty enum (JETH275) and explicit member values (JETH270)', () => {
     expect(errCodes('enum E {}\nclass C { get f(): External<u8> { return 0n; } }')).toContain('JETH275');
@@ -687,18 +687,18 @@ describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () =>
     );
   });
   it('rejects an unknown member (JETH271) and out-of-range constant cast (JETH278)', () => {
-    expect(errCodes(wrap('@external @pure f(): Color { return Color.Purple; }'))).toContain('JETH271');
-    expect(errCodes(wrap('@external @pure f(): Color { return Color(3n); }'))).toContain('JETH278');
-    expect(errCodes(wrap('@external @pure f(): Color { return Color(255n); }'))).toContain('JETH278');
+    expect(errCodes(wrap('get f(): External<Color> { return Color.Purple; }'))).toContain('JETH271');
+    expect(errCodes(wrap('get f(): External<Color> { return Color(3n); }'))).toContain('JETH278');
+    expect(errCodes(wrap('get f(): External<Color> { return Color(255n); }'))).toContain('JETH278');
   });
   it('accepts the in-range constant cast Color(2n) (no error)', () => {
-    expect(errCodes(wrap('@external @pure f(): Color { return Color(2n); }'))).toEqual([]);
-    expect(errCodes(wrap('@external @pure f(): Color { return Color(0n); }'))).toEqual([]);
+    expect(errCodes(wrap('get f(): External<Color> { return Color(2n); }'))).toEqual([]);
+    expect(errCodes(wrap('get f(): External<Color> { return Color(0n); }'))).toEqual([]);
   });
   it('rejects casting a non-integer (address / bytes32 / bool / struct) to an enum (JETH277)', () => {
-    expect(errCodes(wrap('@external @pure f(a: address): Color { return Color(a); }'))).toContain('JETH277');
-    expect(errCodes(wrap('@external @pure f(b: bytes32): Color { return Color(b); }'))).toContain('JETH277');
-    expect(errCodes(wrap('@external @pure f(b: bool): Color { return Color(b); }'))).toContain('JETH277');
+    expect(errCodes(wrap('get f(a: address): External<Color> { return Color(a); }'))).toContain('JETH277');
+    expect(errCodes(wrap('get f(b: bytes32): External<Color> { return Color(b); }'))).toContain('JETH277');
+    expect(errCodes(wrap('get f(b: bool): External<Color> { return Color(b); }'))).toContain('JETH277');
     expect(
       errCodes(
         'enum Color { Red, Green, Blue }\ntype P = { x: u256; };\nclass C { get f(p: P): External<Color> { return Color(p); } }',
@@ -706,8 +706,8 @@ describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () =>
     ).toContain('JETH277');
   });
   it('rejects an enum used as a non-bool if/loop discriminant (JETH110)', () => {
-    expect(errCodes(wrap('@external @pure f(c: Color): u8 { if (c) { return 1n; } return 0n; }'))).toContain('JETH110');
-    expect(errCodes(wrap('@external @pure f(c: Color): u8 { while (c) { return 1n; } return 0n; }'))).toContain(
+    expect(errCodes(wrap('get f(c: Color): External<u8> { if (c) { return 1n; } return 0n; }'))).toContain('JETH110');
+    expect(errCodes(wrap('get f(c: Color): External<u8> { while (c) { return 1n; } return 0n; }'))).toContain(
       'JETH110',
     );
   });
@@ -717,7 +717,7 @@ describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () =>
   // bytes1(uint8(c)). JETH now rejects the direct enum->bytesN cast (JETH170, via the enum-source
   // guard in isCastAllowed) to match solc. The legal bytes1(u8(c)) path stays byte-identical.
   it('rejects a direct enum->bytesN cast like solc does (JETH170)', () => {
-    const codes = errCodes(wrap('@external @pure f(c: Color): bytes1 { return bytes1(c); }'));
-    expect(codes).toContain('JETH481');
+    const codes = errCodes(wrap('get f(c: Color): External<bytes1> { return bytes1(c); }'));
+    expect(codes).toContain('JETH170');
   });
 });

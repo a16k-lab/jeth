@@ -402,9 +402,9 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
   it('for-of over a non-array (uint) => JETH118', () => {
     expect(
       errCodes(
-        base(`@external @view f(): u256 { let s: u256 = 0n; for (const v of this.n) { s = s + v; } return s; }`),
+        base(`get f(): External<u256> { let s: u256 = 0n; for (const v of this.n) { s = s + v; } return s; }`),
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH118');
   });
   it('for-of over a mapping rejects cleanly (JETH153: mapping read forbidden, no crash)', () => {
     // The mapping read inside `for (const v of this.m)` is rejected before the for-of array
@@ -424,9 +424,9 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
   it('type-annotated binding => JETH116', () => {
     expect(
       errCodes(
-        base(`@external @view f(): u256 { let s: u256 = 0n; for (const v: u256 of this.xs) { s = s + v; } return s; }`),
+        base(`get f(): External<u256> { let s: u256 = 0n; for (const v: u256 of this.xs) { s = s + v; } return s; }`),
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH116');
   });
   it('destructuring binding => JETH115', () => {
     const src = `type P = { x: u256; y: u256; }; class C { ps: P[]; get f(): External<u256> { let s: u256 = 0n; for (const { x, y } of this.ps) { s = s + x; } return s; } }`;
@@ -435,14 +435,14 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
   it('for-in => JETH111', () => {
     expect(
       errCodes(
-        base(`@external @view f(): u256 { let s: u256 = 0n; for (const k in this.xs) { s = s + 1n; } return s; }`),
+        base(`get f(): External<u256> { let s: u256 = 0n; for (const k in this.xs) { s = s + 1n; } return s; }`),
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH111');
   });
   it('var binding => JETH115', () => {
     expect(
-      errCodes(base(`@external @view f(): u256 { let s: u256 = 0n; for (var v of this.xs) { s = s + v; } return s; }`)),
-    ).toContain('JETH481');
+      errCodes(base(`get f(): External<u256> { let s: u256 = 0n; for (var v of this.xs) { s = s + v; } return s; }`)),
+    ).toContain('JETH115');
   });
   it('nested for-of with the SAME element name compiles (the inner binding shadows the outer, like solc)', () => {
     // each loop body is its own scope, so the inner `v` shadows the outer `v` (cross-scope shadowing
@@ -450,7 +450,7 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
     expect(
       errCodes(
         base(
-          `@external @view f(): u256 { let s: u256 = 0n; for (const v of this.xs) { for (const v of this.xs) { s = s + v; } } return s; }`,
+          `get f(): External<u256> { let s: u256 = 0n; for (const v of this.xs) { for (const v of this.xs) { s = s + v; } } return s; }`,
         ),
       ),
     ).toEqual([]);

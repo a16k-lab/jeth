@@ -74,10 +74,8 @@ const arg = (region: string): string => P(0x20) + region;
 // ---- twin programs -----------------------------------------------------------
 // (A) local binding: echo the whole copied array (proves full-data deep copy).
 const echoJeth = (jty: string) => `
-@contract
 class C {
-  @external
-  f(a: ${jty}): ${jty} {
+  get f(a: ${jty}): External<${jty}> {
     let row: ${jty} = a;
     return row;
   }

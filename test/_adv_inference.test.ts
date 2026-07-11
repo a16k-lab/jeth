@@ -525,28 +525,30 @@ describe('decorator inference: inferred === explicit === solc (positive)', () =>
 describe('decorator inference: rejection parity', () => {
   const rej: { name: string; src: string; code: string }[] = [
     {
-      name: '@read writes state directly -> JETH056',
-      src: `@contract class C { @state x: u256; @read bad(): void { this.x = 1n; } }`,
-      code: 'JETH056',
+      // Native twin of the legacy "@read writes state" reject: a read-only `get` (mutability is now
+      // inferred, so `get` is the native carrier of read-only intent) that writes state is JETH043.
+      name: 'read-only get writes state directly -> JETH043',
+      src: `class C { x: u256; get bad(): External<void> { this.x = 1n; } }`,
+      code: 'JETH043',
     },
     {
-      name: '@read writes state transitively via hidden -> JETH056',
-      src: `@contract class C {
-        @state x: u256;
-        @read bad(): u256 { return this.w(); }
+      name: 'read-only get writes state transitively via a hidden helper -> JETH043',
+      src: `class C {
+        x: u256;
+        get bad(): External<u256> { return this.w(); }
         w(): u256 { this.x = 1n; return this.x; }
       }`,
-      code: 'JETH056',
+      code: 'JETH043',
     },
     {
-      name: '@read writes via a deep hidden chain -> JETH056',
-      src: `@contract class C {
-        @state x: u256;
-        @read bad(): u256 { return this.h1(); }
+      name: 'read-only get writes via a deep hidden chain -> JETH043',
+      src: `class C {
+        x: u256;
+        get bad(): External<u256> { return this.h1(); }
         h1(): u256 { return this.h2(); }
         h2(): u256 { this.x = this.x + 1n; return this.x; }
       }`,
-      code: 'JETH056',
+      code: 'JETH043',
     },
     {
       // msg.value in an externally-reachable function needs @payable; @external makes bad reachable.
@@ -555,45 +557,48 @@ describe('decorator inference: rejection parity', () => {
       code: 'JETH162',
     },
     {
-      name: '@read emits an event directly -> JETH149',
-      src: `@contract class C { @event E(a: u256); @read bad(): void { emit(E(1n)); } }`,
-      code: 'JETH149',
+      // Native twin of the legacy "@read emits an event": a read-only `get` that emits is JETH043.
+      name: 'read-only get emits an event directly -> JETH043',
+      src: `class C { E: event<{ a: u256 }>; get bad(): External<void> { emit(E(1n)); } }`,
+      code: 'JETH043',
     },
-    // @read mutability conflicts -> JETH052
+    // Mutability decorators no longer exist (mutability is inferred), so the old @read+@view/@pure/@payable
+    // conflict is now the banned-decorator diagnostic JETH481. There is no native way to express the conflict.
     {
-      name: '@read + @view conflict -> JETH052',
+      name: '@read + @view (banned mutability decorators) -> JETH481',
       src: `@contract class C { @read @view bad(): u256 { return 1n; } }`,
-      code: 'JETH052',
+      code: 'JETH481',
     },
     {
-      name: '@read + @pure conflict -> JETH052',
+      name: '@read + @pure (banned mutability decorators) -> JETH481',
       src: `@contract class C { @read @pure bad(): u256 { return 1n; } }`,
-      code: 'JETH052',
+      code: 'JETH481',
     },
     {
-      name: '@read + @payable conflict -> JETH052',
+      name: '@read + @payable (banned mutability decorators) -> JETH481',
       src: `@contract class C { @read @payable bad(): u256 { return 1n; } }`,
-      code: 'JETH052',
+      code: 'JETH481',
     },
-    // removed visibility decorators -> JETH440 (the @external-only model: write @external to expose,
-    // everything else is internal by default; @public/@internal/@private/@hidden no longer exist).
+    // Visibility decorators are banned in native mode: write External<T> to expose, everything else is
+    // internal by default. @public/@internal/@private now hit the JETH481 ban; @hidden was never a real
+    // decorator, so it still resolves to the unknown-decorator diagnostic JETH440.
     {
-      name: '@public is removed -> JETH440',
+      name: '@public is banned -> JETH481',
       src: `class C { @public bad(): u256 { return 1n; } }`,
-      code: 'JETH440',
+      code: 'JETH481',
     },
     {
-      name: '@internal is removed -> JETH440',
+      name: '@internal is banned -> JETH481',
       src: `class C { @internal bad(): u256 { return 1n; } }`,
-      code: 'JETH440',
+      code: 'JETH481',
     },
     {
-      name: '@private is removed -> JETH440',
+      name: '@private is banned -> JETH481',
       src: `class C { @private bad(): u256 { return 1n; } }`,
-      code: 'JETH440',
+      code: 'JETH481',
     },
     {
-      name: '@hidden is removed -> JETH440',
+      name: '@hidden is not a decorator -> JETH440',
       src: `class C { @hidden bad(): u256 { return 1n; } }`,
       code: 'JETH440',
     },
@@ -609,34 +614,37 @@ describe('decorator inference: rejection parity', () => {
 });
 
 // ---------------------------------------------------------------------------
-// BOUNDARY: @read and an explicit @external on the same function is allowed (visibility and
-// mutability are orthogonal). And inference must not have broken the pre-existing @view-writes /
-// @pure-reads diagnostics.
+// BOUNDARY: an exposed read-only `get` resolves to an external view (visibility and mutability are
+// orthogonal). Native mode infers mutability, so the pre-existing "read-only writes state" reject
+// survives as JETH043; the pure-vs-view distinction is no longer a declarable conflict, so a get that
+// merely READS state or the environment is simply a valid view.
 // ---------------------------------------------------------------------------
 
 describe('decorator inference: orthogonality + pre-existing diagnostics intact', () => {
-  it('@read + explicit @external is allowed and resolves external @view', () => {
+  it('a read-only get resolves to an external view (visibility and mutability are orthogonal)', () => {
     const res = compileOrDiags(`class C { x: u256; get getX(): External<u256> { return this.x; } }`);
     expect(res.ok).toBe(true);
     if (res.ok) expect(fnMap(res.abi)).toEqual({ getX: 'view' });
   });
 
-  it('explicit @view that writes still errors JETH054 (inference did not break it)', () => {
-    const res = compileOrDiags(`@contract class C { @state x: u256; @external @view bad(): void { this.x = 1n; } }`);
+  it('a read-only get that writes state still errors JETH043 (native twin of the @view-writes reject)', () => {
+    const res = compileOrDiags(`class C { x: u256; get bad(): External<void> { this.x = 1n; } }`);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.codes).toContain('JETH481');
+    if (!res.ok) expect(res.codes).toContain('JETH043');
   });
 
-  it('explicit @pure that reads state still errors JETH055', () => {
-    const res = compileOrDiags(`@contract class C { @state x: u256; @external @pure bad(): u256 { return this.x; } }`);
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.codes).toContain('JETH481');
+  it('a read-only get that reads state is a valid view (no @pure declaration to violate)', () => {
+    // Legacy asserted JETH055 for an explicit @pure that reads state; native mode infers mutability, so
+    // a get reading state is simply a valid view getter (pure-vs-view is not a declarable conflict).
+    const res = compileOrDiags(`class C { x: u256; get bad(): External<u256> { return this.x; } }`);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(fnMap(res.abi)).toEqual({ bad: 'view' });
   });
 
-  it('explicit @pure that reads env still errors JETH164', () => {
-    const res = compileOrDiags(`@contract class C { @external @pure bad(): address { return msg.sender; } }`);
-    expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.codes).toContain('JETH481');
+  it('a read-only get that reads the environment (msg.sender) is a valid view', () => {
+    const res = compileOrDiags(`class C { get bad(): External<address> { return msg.sender; } }`);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(fnMap(res.abi)).toEqual({ bad: 'view' });
   });
 
   it('a fully explicit contract is unchanged by inference (ABI stable)', () => {
@@ -658,9 +666,9 @@ describe('decorator inference: orthogonality + pre-existing diagnostics intact',
 // ---------------------------------------------------------------------------
 
 describe('transitive emit makes a function non-read-only (parity with solc)', () => {
-  const READ_VIA_HIDDEN_EMIT = `@contract class C {
-    @event E(a: u256);
-    @read foo(): u256 { return this.bar(); }
+  const READ_VIA_HIDDEN_EMIT = `class C {
+    E: event<{ a: u256 }>;
+    get foo(): External<u256> { return this.bar(); }
     bar(): u256 { emit(E(1n)); return 5n; }
   }`;
 
@@ -681,12 +689,14 @@ describe('transitive emit makes a function non-read-only (parity with solc)', ()
     expect(rejected, 'solc should reject a view function that transitively emits').toBe(true);
   });
 
-  it('JETH also REJECTS @read / @view / @pure that transitively emit', () => {
-    expect(compileOrDiags(READ_VIA_HIDDEN_EMIT).ok, '@read transitively emitting must be rejected').toBe(false);
-    const viaView = `@contract class C { @event E(a: u256); @external @view foo(): u256 { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
-    expect(compileOrDiags(viaView).ok, '@view transitively emitting must be rejected').toBe(false);
-    const viaPure = `@contract class C { @event E(a: u256); @external @pure foo(): u256 { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
-    expect(compileOrDiags(viaPure).ok, '@pure transitively emitting must be rejected').toBe(false);
+  it('JETH also REJECTS a read-only get that emits (directly / transitively / via a deep chain)', () => {
+    // Native mode infers mutability, so a read-only `get` is the carrier of the old @read/@view/@pure
+    // intent; a get that emits an event (directly or transitively) is rejected with JETH043.
+    expect(compileOrDiags(READ_VIA_HIDDEN_EMIT).ok, 'a get transitively emitting must be rejected').toBe(false);
+    const direct = `class C { E: event<{ a: u256 }>; get foo(): External<void> { emit(E(1n)); } }`;
+    expect(compileOrDiags(direct).ok, 'a get emitting directly must be rejected').toBe(false);
+    const viaDeepChain = `class C { E: event<{ a: u256 }>; get foo(): External<u256> { return this.h1(); } h1(): u256 { return this.h2(); } h2(): u256 { emit(E(1n)); return 5n; } }`;
+    expect(compileOrDiags(viaDeepChain).ok, 'a get emitting via a deep chain must be rejected').toBe(false);
     // a plain nonpayable function transitively emitting is fine (control).
     const ok = `class C { E: event<{ a: u256 }>; foo(): External<u256> { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
     expect(compileOrDiags(ok).ok, 'a nonpayable function may transitively emit').toBe(true);

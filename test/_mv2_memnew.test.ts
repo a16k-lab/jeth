@@ -45,108 +45,108 @@ const I64MIN = M - (1n << 63n); // -2^63 as a u256 word
 const I128MAX = (1n << 127n) - 1n;
 const I128MIN = M - (1n << 127n); // -2^127 as a u256 word
 
-const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; e: bytes4; f: i128; }
-@struct class Inner { a: u256; b: i64; }
-@struct class Outer { tag: u256; inner: Inner; z: u8; }
-@contract class C {
-  @state s: P;
-  @state st: string;
-  @state g: Arr<u256, 3>;
-  @state g5: Arr<i64, 5>;
-  @state gb: Arr<bytes8, 4>;
-  @state comp: Arr<u256, 2>[];        // uint256[2][]
-  @state nest: Arr<u256[], 2>;        // uint256[][2]
+const JETH = `type P = { a: u256; b: u8; c: i64; d: address; e: bytes4; f: i128; };
+type Inner = { a: u256; b: i64; };
+type Outer = { tag: u256; inner: Inner; z: u8; };
+class C {
+  s: P;
+  st: string;
+  g: Arr<u256, 3>;
+  g5: Arr<i64, 5>;
+  gb: Arr<bytes8, 4>;
+  comp: Arr<u256, 2>[];        // uint256[2][]
+  nest: Arr<u256[], 2>;        // uint256[][2]
 
   // ---- (1) struct copy from storage ----
-  @external setS(a: u256, b: u8, c: i64, d: address, e: bytes4, f: i128): void {
+  setS(a: u256, b: u8, c: i64, d: address, e: bytes4, f: i128): External<void> {
     this.s.a = a; this.s.b = b; this.s.c = c; this.s.d = d; this.s.e = e; this.s.f = f;
   }
   // copy storage -> memory, mutate copy, return copy whole (storage must NOT change)
-  @external copyMut(na: u256, nb: u8): P {
+  get copyMut(na: u256, nb: u8): External<P> {
     let p: P = this.s;
     p.a = na; p.b = nb; p.f = ${'-'}1n;
     return p;
   }
-  @external @view snap(): P { let p: P = this.s; return p; }
+  get snap(): External<P> { let p: P = this.s; return p; }
   // sum-style readback so a packed-transcode bug shows in the return value too
-  @external @view packedSum(): u256 {
+  get packedSum(): External<u256> {
     let p: P = this.s;
     return p.a + u256(p.b) + u256(u64(p.c)) + u256(u128(p.f));
   }
-  @external @view getSa(): u256 { return this.s.a; }
-  @external @view getSb(): u8 { return this.s.b; }
-  @external @view getSf(): i128 { return this.s.f; }
+  get getSa(): External<u256> { return this.s.a; }
+  get getSb(): External<u8> { return this.s.b; }
+  get getSf(): External<i128> { return this.s.f; }
   // copy storage struct, push narrow/signed fields to extremes via mutation, return WHOLE
   // (a missing mask on the memory->ABI encode of b:u8 / c:i64 / e:bytes4 would surface here)
-  @external @view copyExtreme(): P {
+  get copyExtreme(): External<P> {
     let p: P = this.s;
     p.b = 255n; p.c = ${'-'}1n; p.e = bytes4(u32(0xFFFFFFFFn)); p.f = ${'-'}1n;
     return p;
   }
   // copy a CALLDATA struct param -> memory; mutate; return; (prove echo of unchanged param too)
-  @external @pure fromParam(q: P, na: u256): P { let p: P = q; p.a = na; p.d = address(0x999n); p.e = bytes4(u32(0n)); return p; }
+  get fromParam(q: P, na: u256): External<P> { let p: P = q; p.a = na; p.d = address(0x999n); p.e = bytes4(u32(0n)); return p; }
 
   // ---- (2) whole nested struct-field read + alias + pass-by-ref ----
-  @external @pure getInner(t: u256, a: u256, b: i64): Inner {
+  get getInner(t: u256, a: u256, b: i64): External<Inner> {
     let p: Outer = Outer(t, Inner(a, b), 0n);
     return p.inner;
   }
-  @external @pure aliasMut(a: u256, b: i64): Outer {
+  get aliasMut(a: u256, b: i64): External<Outer> {
     let p: Outer = Outer(9n, Inner(a, b), 5n);
     let q: Inner = p.inner;
     q.a = q.a + 1000n; q.b = ${'-'}3n;
     return p;
   }
   bump(i: Inner): void { i.a = i.a + 1n; i.b = i.b - 7n; }
-  @external @pure passInner(a: u256, b: i64): Outer {
+  get passInner(a: u256, b: i64): External<Outer> {
     let p: Outer = Outer(7n, Inner(a, b), 2n);
     this.bump(p.inner);
     return p;
   }
 
   // ---- (3) bytes/string memory locals ----
-  @external setSt(x: string): void { this.st = x; }
-  @external @pure echo(x: string): string { let s: string = x; return s; }
-  @external @pure echoLit(): string { let s: string = "hello, this is a string literal that exceeds 32 bytes!!"; return s; }
-  @external @view fromStorageStr(): string { let s: string = this.st; return s; }
-  @external @pure blen(x: bytes): u256 { let b: bytes = x; return b.length; }
-  @external @pure byteAt(x: bytes, i: u256): u8 { let b: bytes = x; return u8(b[i]); }
-  @external @pure aliasLen(x: bytes): u256 { let s: bytes = x; let t: bytes = s; return t.length; }
-  @external @pure litByteAt(i: u256): u8 { let b: bytes = "abcdefghijklmnopqrstuvwxyz0123456789"; return u8(b[i]); }
+  setSt(x: string): External<void> { this.st = x; }
+  get echo(x: string): External<string> { let s: string = x; return s; }
+  get echoLit(): External<string> { let s: string = "hello, this is a string literal that exceeds 32 bytes!!"; return s; }
+  get fromStorageStr(): External<string> { let s: string = this.st; return s; }
+  get blen(x: bytes): External<u256> { let b: bytes = x; return b.length; }
+  get byteAt(x: bytes, i: u256): External<u8> { let b: bytes = x; return u8(b[i]); }
+  get aliasLen(x: bytes): External<u256> { let s: bytes = x; let t: bytes = s; return t.length; }
+  get litByteAt(i: u256): External<u8> { let b: bytes = "abcdefghijklmnopqrstuvwxyz0123456789"; return u8(b[i]); }
 
   // ---- (4) fixed-array memory locals ----
-  @external @pure build(x: u256, y: u256, z: u256): Arr<u256, 3> {
+  get build(x: u256, y: u256, z: u256): External<Arr<u256, 3>> {
     let a: Arr<u256, 3> = [x, y, z];
     a[0n] = a[0n] + 1n; a[1n]++; a[2n] += 10n;
     return a;
   }
-  @external @pure oob(x: u256, i: u256): u256 { let a: Arr<u256, 3> = [x, x, x]; return a[i]; }
-  @external @pure aliasArr(x: u256): Arr<u256, 3> { let a: Arr<u256, 3> = [x, x, x]; let b: Arr<u256, 3> = a; b[0n] = 99n; return a; }
-  @external @pure two(p: u256, q: u256): Arr<u256, 2> { let a: Arr<u256, 2> = [p, q]; a[1n] += 5n; return a; }
-  @external @pure five(p: i64, q: i64): Arr<i64, 5> { let a: Arr<i64, 5> = [p, q, ${'-'}1n, 0n, q]; a[2n]++; a[3n] -= 4n; return a; }
-  @external @pure addrArr(p: address, q: address): Arr<address, 3> { let a: Arr<address, 3> = [p, q, address(0n)]; a[2n] = p; return a; }
-  @external @pure bytesArr(p: bytes8, q: bytes8): Arr<bytes8, 4> { let a: Arr<bytes8, 4> = [p, q, p, q]; return a; }
-  @external @pure narrowArr(p: u8, q: u8): Arr<u8, 4> { let a: Arr<u8, 4> = [p, q, 255n, 0n]; a[1n] = 200n; a[0n] += 50n; return a; }
+  get oob(x: u256, i: u256): External<u256> { let a: Arr<u256, 3> = [x, x, x]; return a[i]; }
+  get aliasArr(x: u256): External<Arr<u256, 3>> { let a: Arr<u256, 3> = [x, x, x]; let b: Arr<u256, 3> = a; b[0n] = 99n; return a; }
+  get two(p: u256, q: u256): External<Arr<u256, 2>> { let a: Arr<u256, 2> = [p, q]; a[1n] += 5n; return a; }
+  get five(p: i64, q: i64): External<Arr<i64, 5>> { let a: Arr<i64, 5> = [p, q, ${'-'}1n, 0n, q]; a[2n]++; a[3n] -= 4n; return a; }
+  get addrArr(p: address, q: address): External<Arr<address, 3>> { let a: Arr<address, 3> = [p, q, address(0n)]; a[2n] = p; return a; }
+  get bytesArr(p: bytes8, q: bytes8): External<Arr<bytes8, 4>> { let a: Arr<bytes8, 4> = [p, q, p, q]; return a; }
+  get narrowArr(p: u8, q: u8): External<Arr<u8, 4>> { let a: Arr<u8, 4> = [p, q, 255n, 0n]; a[1n] = 200n; a[0n] += 50n; return a; }
   // copy from a storage fixed array -> mutate the COPY -> storage stays intact
-  @external @view fromG(): Arr<u256, 3> { let a: Arr<u256, 3> = this.g; a[0n] = a[0n] + 1000n; a[2n]++; return a; }
-  @external @view getG(i: u256): u256 { return this.g[i]; }
-  @external setG(i: u256, v: u256): void { this.g[i] = v; }
-  @external @view fromG5(): Arr<i64, 5> { let a: Arr<i64, 5> = this.g5; a[0n]++; return a; }
-  @external setG5(i: u256, v: i64): void { this.g5[i] = v; }
-  @external @view fromGb(): Arr<bytes8, 4> { let a: Arr<bytes8, 4> = this.gb; return a; }
-  @external setGb(i: u256, v: bytes8): void { this.gb[i] = v; }
+  get fromG(): External<Arr<u256, 3>> { let a: Arr<u256, 3> = this.g; a[0n] = a[0n] + 1000n; a[2n]++; return a; }
+  get getG(i: u256): External<u256> { return this.g[i]; }
+  setG(i: u256, v: u256): External<void> { this.g[i] = v; }
+  get fromG5(): External<Arr<i64, 5>> { let a: Arr<i64, 5> = this.g5; a[0n]++; return a; }
+  setG5(i: u256, v: i64): External<void> { this.g5[i] = v; }
+  get fromGb(): External<Arr<bytes8, 4>> { let a: Arr<bytes8, 4> = this.gb; return a; }
+  setGb(i: u256, v: bytes8): External<void> { this.gb[i] = v; }
 
   // ---- (5) G6 composite ABI ----
-  @external pushComp(): void { this.comp.push(); }
-  @external popComp(): void { this.comp.pop(); }
-  @external setComp(i: u256, j: u256, v: u256): void { this.comp[i][j] = v; }
-  @external @view allComp(): Arr<u256, 2>[] { return this.comp; }
-  @external @pure echoComp(x: Arr<u256, 2>[]): Arr<u256, 2>[] { return x; }
-  @external pushNest(i: u256, v: u256): void { this.nest[i].push(v); }
-  @external setNest(i: u256, j: u256, v: u256): void { this.nest[i][j] = v; }
-  @external popNest(i: u256): void { this.nest[i].pop(); }
-  @external @view getNest(i: u256, j: u256): u256 { return this.nest[i][j]; }
-  @external @view lenNest(i: u256): u256 { return this.nest[i].length; }
+  pushComp(): External<void> { this.comp.push(); }
+  popComp(): External<void> { this.comp.pop(); }
+  setComp(i: u256, j: u256, v: u256): External<void> { this.comp[i][j] = v; }
+  get allComp(): External<Arr<u256, 2>[]> { return this.comp; }
+  get echoComp(x: Arr<u256, 2>[]): External<Arr<u256, 2>[]> { return x; }
+  pushNest(i: u256, v: u256): External<void> { this.nest[i].push(v); }
+  setNest(i: u256, j: u256, v: u256): External<void> { this.nest[i][j] = v; }
+  popNest(i: u256): External<void> { this.nest[i].pop(); }
+  get getNest(i: u256, j: u256): External<u256> { return this.nest[i][j]; }
+  get lenNest(i: u256): External<u256> { return this.nest[i].length; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
