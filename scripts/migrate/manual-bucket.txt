@@ -167,3 +167,31 @@ test/special-entry-gates.test.ts:287  trial mismatch: orig=ok post=rej[JETH473]
 test/string-concat.test.ts:174  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
 test/string-concat.test.ts:185  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=ok post=rej[JETH352])
 test/switch.test.ts:96  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/ternary-pointer-headed-location.test.ts:95  pinned legacy: feeds an unresolvable ${...} hole (composite at line 99) - a placeholder trial cannot see migrated hole text, so the feed stays legacy
+test/ternary-pointer-headed-location.test.ts:34  pinned legacy: feeds an unresolvable ${...} hole (composite at line 99) - a placeholder trial cannot see migrated hole text, so the feed stays legacy
+test/try-catch.test.ts:269  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH351,JETH352])
+test/try-catch.test.ts:362  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH352,JETH361])
+test/tuple-return-alloc-clobber.test.ts:23  trial mismatch: orig=ok post=ok
+test/tuple-return-alloc-clobber.test.ts:120  trial mismatch: orig=ok post=ok
+test/upgradeable-proxy.test.ts:377  trial mismatch: orig=rej[JETH054] post=ok
+test/upgradeable-proxy.test.ts:380  trial mismatch: orig=rej[JETH055] post=ok
+test/upgradeable-proxy.test.ts:383  trial mismatch: orig=rej[JETH054] post=ok
+test/upgradeable-proxy.test.ts:386  trial mismatch: orig=rej[JETH055] post=ok
+test/upgradeable-proxy.test.ts:393  trial mismatch: orig=rej[JETH164] post=ok
+test/upgradeable-proxy.test.ts:394  trial mismatch: orig=rej[JETH164] post=ok
+test/using-on-abstract.test.ts:444  concatenation: an unresolved ${...} hole in class-decorator position (${...} class)
+test/using-on-abstract.test.ts:779  concatenation: assembly trial mismatch orig=ok post=rej[JETH048,JETH065]
+test/using-on-abstract.test.ts:790  concatenation: assembly trial mismatch orig=ok post=rej[JETH048,JETH065]
+test/using-on-abstract.test.ts:920  concatenation: assembly trial mismatch orig=ok post=rej[JETH048,JETH065]
+test/using-on-abstract.test.ts:933  concatenation: assembly trial mismatch orig=ok post=rej[JETH048,JETH065]
+test/using-on-abstract.test.ts:949  concatenation: assembly trial mismatch orig=ok post=rej[JETH048,JETH065]
+test/using-on-abstract.test.ts:964  concatenation: assembly trial mismatch orig=ok post=rej[JETH048,JETH065]
+test/using-on-abstract.test.ts:977  trial mismatch: orig=ok post=rej[JETH048,JETH065]
+test/using-on-abstract.test.ts:994  concatenation: assembly trial mismatch orig=ok post=rej[JETH048,JETH065]
+test/uups-proxy.test.ts:92  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH170,JETH352])
+test/validator.test.ts:83  trial mismatch: orig=rej[JETH054] post=ok
+test/visibility-model.test.ts:27  interpolated template: a hole in decorator-name position (@${...})
+test/visibility-model.test.ts:55  trial mismatch: orig=rej[JETH052,JETH131] post=rej[JETH052]
+test/w2a-literal-fold-guards.test.ts:50  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/w2a-literal-fold-guards.test.ts:60  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/w2a-literal-fold-guards.test.ts:95  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])

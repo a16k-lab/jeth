@@ -12,9 +12,9 @@ import { compileSolidity } from './_solidity.js';
 const pad = (v: bigint) => v.toString(16).padStart(64, '0');
 
 // D = { uint256 a; string s } -> tuple head = 2 words (a, offset-to-s) = 64 bytes.
-const JETH = `@struct class D { a: u256; s: string; }
-@contract class T {
-  @external @pure echo(xs: D[]): D[] { return xs; }
+const JETH = `type D = { a: u256; s: string; };
+class T {
+  get echo(xs: D[]): External<D[]> { return xs; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

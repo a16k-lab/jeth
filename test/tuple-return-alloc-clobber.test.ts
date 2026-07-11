@@ -147,10 +147,10 @@ describe('W6B: allocating later tuple component no longer clobbers earlier compo
   });
 
   it('interface-call tuple destructure decodes the real components', async () => {
-    const jCallee = `@contract class D { @external @pure pair(x: u256): [u256, bytes32] { return [x, keccak256(abi.encode(x))]; } }`;
+    const jCallee = `class D { get pair(x: u256): External<[u256, bytes32]> { return [x, keccak256(abi.encode(x))]; } }`;
     const sCallee = `contract D { function pair(uint256 x) external pure returns (uint256, bytes32) { return (x, keccak256(abi.encode(x))); } }`;
-    const jCaller = `@interface class IFoo { @external @pure pair(x: u256): [u256, bytes32]; }
-      @contract class C { @external @view go(t: address, x: u256): u256 { let [a, b]: [u256, bytes32] = IFoo(t).pair(x); return b == bytes32(0n) ? 0n : a; } }`;
+    const jCaller = `interface IFoo { pair(x: u256): Pure<[u256, bytes32]>; }
+      class C { get go(t: address, x: u256): External<u256> { let [a, b]: [u256, bytes32] = IFoo(t).pair(x); return b == bytes32(0n) ? 0n : a; } }`;
     const sCaller = `interface IFoo { function pair(uint256 x) external pure returns (uint256, bytes32); }
       contract C { function go(address t, uint256 x) external view returns (uint256) { (uint256 a, bytes32 b) = IFoo(t).pair(x); return b == bytes32(0) ? 0 : a; } }`;
     const jeth = await Harness.create();

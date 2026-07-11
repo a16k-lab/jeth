@@ -605,8 +605,9 @@ for (const file of files) {
     return false;
   };
   const scopeDeclares = (stmts, name) => {
-    // { lit } = const-declared here with a plain-literal initializer; {} = declared here any other
-    // way (unresolvable); null = not declared in this statement list.
+    // { lit, decl } = const-declared here with a plain-literal initializer; { decl } = declared
+    // here any other scannable way (the decl subtree can carry migratable literals); {} = declared
+    // here opaquely (imports); null = not declared in this statement list.
     for (const s of stmts) {
       if (ts.isVariableStatement(s)) {
         for (const d of s.declarationList.declarations) {
@@ -616,8 +617,8 @@ for (const file of files) {
             d.initializer &&
             (ts.isNoSubstitutionTemplateLiteral(d.initializer) || ts.isStringLiteral(d.initializer))
           )
-            return { lit: d.initializer };
-          return {};
+            return { lit: d.initializer, decl: d };
+          return { decl: d };
         }
       } else if (
         (ts.isFunctionDeclaration(s) || ts.isClassDeclaration(s) || ts.isEnumDeclaration(s)) &&
@@ -625,7 +626,7 @@ for (const file of files) {
         ts.isIdentifier(s.name) &&
         s.name.text === name
       ) {
-        return {};
+        return { decl: s };
       } else if (ts.isImportDeclaration(s) && s.importClause) {
         const ic = s.importClause;
         if (ic.name?.text === name) return {};
@@ -637,7 +638,7 @@ for (const file of files) {
     }
     return null;
   };
-  const resolveConstHole = (expr) => {
+  const resolveDecl = (expr) => {
     if (!ts.isIdentifier(expr)) return null;
     const name = expr.text;
     for (let a = expr.parent; a; a = a.parent) {
@@ -653,11 +654,12 @@ for (const file of files) {
       const stmts = ts.isBlock(a) || ts.isModuleBlock(a) || ts.isSourceFile(a) ? a.statements : null;
       if (stmts) {
         const hit = scopeDeclares(stmts, name);
-        if (hit) return hit.lit ?? null;
+        if (hit) return hit;
       }
     }
     return null;
   };
+  const resolveConstHole = (expr) => resolveDecl(expr)?.lit ?? null;
 
   // Consts PINNED to their legacy spelling: a const consumed by a `// use @decorators` (stage-2)
   // assembly must keep its original text - the pragma composite's chunks are untouched, so a
@@ -665,7 +667,18 @@ for (const file of files) {
   // LIB inside the pragma-carrying LC template broke exactly this way). Pinning reverts the
   // const's pass-1 migration and blocks any re-migration; the composite fixpoint restarts so
   // every other composite re-trials against the reverted decision.
+  // A second pin source (the batch-9 ternary lesson): an UNRESOLVABLE ${...} hole whose runtime
+  // text is fed by migratable banned material (a const with a TEMPLATE-EXPRESSION initializer, a
+  // helper whose body carries banned literals, ...). The placeholder trial substitutes __JMIGk__
+  // on BOTH sides, so it is faithful ONLY while the hole's runtime text is byte-identical between
+  // the baseline and the migrated file - migrating the feed elsewhere in the file silently drifts
+  // every consuming assembly (base's `get produce` + the untouched legacy tail added a JETH054 the
+  // "unchanged" composite never trialed). pinDangerousFeeds statically pins every such feed legacy
+  // BEFORE the hole degrades to a placeholder. pinnedTpls carries the pinned template-expression /
+  // concatenation composites (their chunks stay untouched).
   const pinnedLits = new Set();
+  const pinnedTpls = new Set();
+  const pinReasons = new Map(); // pinned node -> human reason for the kept-legacy log
 
   // Per-literal state. A const literal that is a context-blind FRAGMENT (standalone outcome
   // identical in every spelling) may be re-migrated with get-keys DISCOVERED BY A TEMPLATE ASSEMBLY
@@ -683,7 +696,11 @@ for (const file of files) {
     litState.set(node, st);
     if (!BANNED.test(cooked)) return;
     if (pinnedLits.has(node)) {
-      st.logEntry = { line: line(node), action: 'kept-legacy', reason: 'consumed by a // use @decorators (stage-2) assembly - the const stays legacy' };
+      st.logEntry = {
+        line: line(node),
+        action: 'kept-legacy',
+        reason: pinReasons.get(node) ?? 'consumed by a // use @decorators (stage-2) assembly - the const stays legacy',
+      };
       return;
     }
     const rawStart = node.getStart(sf) + 1;
@@ -784,11 +801,81 @@ for (const file of files) {
     return parts;
   };
 
+  // Pin every migratable banned feed of an unresolvable hole expression to its legacy spelling:
+  // banned plain literals (via pinnedLits + a migrateLiteral re-run that reverts the decision) and
+  // banned template-expression / concatenation composites (via pinnedTpls - their chunks stay
+  // untouched). The scan is STATIC and order-independent: it walks the hole expression's subtree
+  // and, through lexically-resolved identifiers, the declaring statements' subtrees (consts,
+  // helper functions, ...), so it does not depend on whether the feed was already processed this
+  // pass. Cross-FILE imports stay opaque (a hole fed by another test file's const is out of this
+  // file-local model; the capture-diff remains the arbiter there). Returns true when anything new
+  // was pinned - the caller restarts the composite fixpoint against the reverted decisions.
+  const pinDangerousFeeds = (expr, consumerLine) => {
+    let pinned = false;
+    const visited = new Set();
+    const pinReason = `feeds an unresolvable \${...} hole (composite at line ${consumerLine}) - a placeholder trial cannot see migrated hole text, so the feed stays legacy`;
+    const scan = (root) => {
+      if (!root || visited.has(root)) return;
+      visited.add(root);
+      const walk = (nd) => {
+        if (
+          (ts.isNoSubstitutionTemplateLiteral(nd) || ts.isStringLiteral(nd)) &&
+          BANNED.test(nd.text) &&
+          !ownedLits.has(nd) &&
+          !pinnedLits.has(nd)
+        ) {
+          pinnedLits.add(nd);
+          pinReasons.set(nd, pinReason);
+          manualEntries.push(`${path.relative(process.cwd(), abs)}:${line(nd)}  pinned legacy: ${pinReason}`);
+          migrateLiteral(nd, ts.isStringLiteral(nd) ? 'string' : 'template');
+          pinned = true;
+        } else if (compositeNodes.has(nd) && !pinnedTpls.has(nd) && BANNED.test(nd.getText(sf))) {
+          pinnedTpls.add(nd);
+          manualEntries.push(`${path.relative(process.cwd(), abs)}:${line(nd)}  pinned legacy: ${pinReason}`);
+          pinned = true;
+        }
+        if (
+          ts.isIdentifier(nd) &&
+          !(ts.isPropertyAccessExpression(nd.parent) && nd.parent.name === nd) &&
+          !(ts.isPropertyAssignment(nd.parent) && nd.parent.name === nd) &&
+          !(ts.isQualifiedName(nd.parent) && nd.parent.right === nd)
+        ) {
+          const d = resolveDecl(nd);
+          if (d?.decl) scan(d.decl);
+        }
+        ts.forEachChild(nd, walk);
+      };
+      walk(root);
+    };
+    scan(expr);
+    return pinned;
+  };
+
   // Returns true when it re-migrated a const literal with new get-keys (the caller then restarts
   // the whole composite pass: earlier composites may reference the re-migrated const too).
   const handleComposite = (n, parts, label) => {
     const st = { edits: [], logEntry: null };
     tplState.set(n, st);
+    if (pinnedTpls.has(n)) {
+      st.logEntry = {
+        line: line(n),
+        action: 'kept-legacy',
+        reason: 'pinned legacy - its runtime text feeds an unresolvable ${...} hole elsewhere',
+      };
+      return false;
+    }
+    // SOUNDNESS PRE-PASS (before the banned-chunk gate and any fail/placeholder path): pin the
+    // migratable banned feeds of every hole that will not resolve to a plain-literal const. This
+    // keeps the placeholder trial, a manual-kept assembly, AND an unbanned-chunk assembly (which
+    // is never trialed at all) byte-faithful to the baseline runtime text.
+    {
+      let pinnedAny = false;
+      for (const p of parts) {
+        if (p.type !== 'hole' || resolveConstHole(p.expr)) continue;
+        if (pinDangerousFeeds(p.expr, line(n))) pinnedAny = true;
+      }
+      if (pinnedAny) return true; // restart the fixpoint against the reverted decisions
+    }
     const chunkParts = parts.filter((p) => p.type === 'chunk');
     if (!chunkParts.some((p) => BANNED.test(p.lit.text))) return false;
     const fail = (reason) => {
@@ -987,6 +1074,7 @@ for (const file of files) {
   // an assembly re-migrates a const literal (earlier composites may reference it): force sets grow
   // monotonically, so the fixpoint terminates.
   const composites = []; // { node, parts, label }
+  const compositeNodes = new Set(); // composite root nodes, for pinDangerousFeeds' static scan
   const plainLits = [];
   const ownedLits = new Set(); // literal nodes that are chunks of a banned concatenation chain
   const visit = (n) => {
@@ -994,12 +1082,14 @@ for (const file of files) {
       const parts = flattenConcat(n);
       if (parts.some((p) => p.type === 'chunk' && BANNED.test(p.lit.text))) {
         composites.push({ node: n, parts, label: 'concatenation' });
+        compositeNodes.add(n);
         for (const p of parts) if (p.type === 'chunk') ownedLits.add(p.lit);
       }
       // descend regardless: literals nested inside unresolved hole expressions (e.g. helper-call
       // arguments) keep their pass-1 standalone treatment; owned chunks are excluded below.
     } else if (ts.isTemplateExpression(n) && !ownedExprs.has(n)) {
       composites.push({ node: n, parts: flattenTemplate(n), label: 'interpolated template' });
+      compositeNodes.add(n);
     }
     if (ts.isNoSubstitutionTemplateLiteral(n)) plainLits.push([n, 'template']);
     else if (ts.isStringLiteral(n)) plainLits.push([n, 'string']);

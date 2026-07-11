@@ -11,22 +11,22 @@ import { compileSolidity } from './_solidity.js';
 
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@contract class C {
-  @state x: u256;
-  @state y: u256;
-  @pure two(): [u256, u256] { return [11n, 22n]; }
-  @pure three(): [u256, u256, u256] { return [1n, 2n, 3n]; }
-  @pure mix(): [u256, bool, u8] { return [7n, true, 5n]; }
-  @pure addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
-  @external @pure declCall(): u256 { let [a, b] = this.two(); return a * 1000n + b; }
-  @external @pure assignCall(): u256 { let a: u256 = 0n; let b: u256 = 0n; [a, b] = this.two(); return a * 1000n + b; }
-  @external @pure skipCall(): u256 { let [a, , c] = this.three(); return a * 1000n + c; }
-  @external @pure mixed(): u256 { let [a, f, c] = this.mix(); return f ? (a * 1000n + u256(c)) : 0n; }
-  @external @pure callArgs(p: u256, q: u256): u256 { let [s, d] = this.addsub(p, q); return s * 1000000n + d; }
-  @external @pure declTuple(p: u256, q: u256): u256 { let [a, b] = [p, q]; return a * 1000000n + b; }
-  @external @pure swapLocal(p: u256, q: u256): u256 { let a: u256 = p; let b: u256 = q; [a, b] = [b, a]; return a * 1000000n + b; }
-  @external swapState(p: u256, q: u256): u256 { this.x = p; this.y = q; [this.x, this.y] = [this.y, this.x]; return this.x * 1000000n + this.y; }
-  @external mixedTargets(): u256 { let b: u256 = 0n; [this.x, b] = this.two(); return this.x * 1000n + b; }
+const JETH = `class C {
+  x: u256;
+  y: u256;
+  two(): [u256, u256] { return [11n, 22n]; }
+  three(): [u256, u256, u256] { return [1n, 2n, 3n]; }
+  mix(): [u256, bool, u8] { return [7n, true, 5n]; }
+  addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
+  get declCall(): External<u256> { let [a, b] = this.two(); return a * 1000n + b; }
+  get assignCall(): External<u256> { let a: u256 = 0n; let b: u256 = 0n; [a, b] = this.two(); return a * 1000n + b; }
+  get skipCall(): External<u256> { let [a, , c] = this.three(); return a * 1000n + c; }
+  get mixed(): External<u256> { let [a, f, c] = this.mix(); return f ? (a * 1000n + u256(c)) : 0n; }
+  get callArgs(p: u256, q: u256): External<u256> { let [s, d] = this.addsub(p, q); return s * 1000000n + d; }
+  get declTuple(p: u256, q: u256): External<u256> { let [a, b] = [p, q]; return a * 1000000n + b; }
+  get swapLocal(p: u256, q: u256): External<u256> { let a: u256 = p; let b: u256 = q; [a, b] = [b, a]; return a * 1000000n + b; }
+  swapState(p: u256, q: u256): External<u256> { this.x = p; this.y = q; [this.x, this.y] = [this.y, this.x]; return this.x * 1000000n + this.y; }
+  mixedTargets(): External<u256> { let b: u256 = 0n; [this.x, b] = this.two(); return this.x * 1000n + b; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -50,41 +50,41 @@ const jethAccepts = (src: string) => jethCodes(src).length === 0;
 // sets both ONCE (only when owner is still zero). value_() returns value (V1) / value*2 (V2). bump() adds 1.
 // authorizeUpgrade(newImpl) gates on msg.sender == owner. The solc mirror has the IDENTICAL layout +
 // the UUPS upgrade machinery matching the JETH synthesized entries byte-for-byte. ----
-const V1_JETH = `@uups @contract class V1 {
-  @state owner: address = address(0n);
-  @state value: u256 = 0n;
+const V1_JETH = `@uups class V1 {
+  owner: address = address(0n);
+  value: u256 = 0n;
   authorizeUpgrade(newImpl: address): void {
     require(msg.sender == this.owner, "not authorized");
   }
-  @external initialize(o: address, v: u256): void {
+  initialize(o: address, v: u256): External<void> {
     require(this.owner == address(0n), "init");
     this.owner = o;
     this.value = v;
   }
-  @external bump(): void { this.value = this.value + 1n; }
-  @external @view value_(): u256 { return this.value; }
-  @external @view version(): u256 { return 1n; }
+  bump(): External<void> { this.value = this.value + 1n; }
+  get value_(): External<u256> { return this.value; }
+  get version(): External<u256> { return 1n; }
 }`;
 
-const V2_JETH = `@uups @contract class V2 {
-  @state owner: address = address(0n);
-  @state value: u256 = 0n;
+const V2_JETH = `@uups class V2 {
+  owner: address = address(0n);
+  value: u256 = 0n;
   authorizeUpgrade(newImpl: address): void {
     require(msg.sender == this.owner, "not authorized");
   }
-  @external initialize(o: address, v: u256): void {
+  initialize(o: address, v: u256): External<void> {
     require(this.owner == address(0n), "init");
     this.owner = o;
     this.value = v;
   }
-  @external bump(): void { this.value = this.value + 1n; }
-  @external @view value_(): u256 { return this.value * 2n; }
-  @external @view version(): u256 { return 2n; }
+  bump(): External<void> { this.value = this.value + 1n; }
+  get value_(): External<u256> { return this.value * 2n; }
+  get version(): External<u256> { return 2n; }
 }`;
 
 // A plain contract WITHOUT proxiableUUID (the anti-brick STATICCALL fails -> ERC1967InvalidImplementation).
-const NO_UUID_JETH = `@contract class NoUuid {
-  @external @view ping(): u256 { return 42n; }
+const NO_UUID_JETH = `class NoUuid {
+  get ping(): External<u256> { return 42n; }
 }`;
 
 // A contract whose proxiableUUID() returns a WRONG slot (-> UUPSUnsupportedProxiableUUID(thatSlot)).
@@ -398,21 +398,21 @@ describe('uups-proxy (Phase 2c)', () => {
   });
 
   it('(6) GATE: @uups WITHOUT authorizeUpgrade is rejected (JETH402)', () => {
-    const src = `@uups @contract class L { @state v: u256 = 0n; @external f(): void { this.v = 1n; } }`;
+    const src = `@uups class L { v: u256 = 0n; f(): External<void> { this.v = 1n; } }`;
     expect(jethCodes(src)).toContain('JETH402');
   });
 
   it('(6b) GATE: @uups + @proxy rejected (JETH404); a user upgradeToAndCall/proxiableUUID rejected (JETH403)', () => {
     expect(jethCodes(`@uups @proxy class L { authorizeUpgrade(n: address): void {} }`)).toContain('JETH404');
     expect(
-      jethCodes(`@uups @contract class L { authorizeUpgrade(n: address): void {} @external upgradeToAndCall(n: address, d: bytes): void {} }`),
+      jethCodes(`@uups class L { authorizeUpgrade(n: address): void {} upgradeToAndCall(n: address, d: bytes): External<void> {} }`),
     ).toContain('JETH403');
     expect(
-      jethCodes(`@uups @contract class L { authorizeUpgrade(n: address): void {} @external @view proxiableUUID(): bytes32 { return 0x0n as bytes32; } }`),
+      jethCodes(`@uups class L { authorizeUpgrade(n: address): void {} get proxiableUUID(): External<bytes32> { return 0x0n as bytes32; } }`),
     ).toContain('JETH403');
     // an authorizeUpgrade with a wrong param type / @external visibility is NOT a valid gate -> JETH402
-    expect(jethCodes(`@uups @contract class L { authorizeUpgrade(n: u256): void {} }`)).toContain('JETH402');
-    expect(jethCodes(`@uups @contract class L { @external authorizeUpgrade(n: address): void {} }`)).toContain('JETH402');
+    expect(jethCodes(`@uups class L { authorizeUpgrade(n: u256): void {} }`)).toContain('JETH402');
+    expect(jethCodes(`@uups class L { authorizeUpgrade(n: address): External<void> {} }`)).toContain('JETH402');
   });
 
   it('(6c) GATE: a valid @uups impl with a bare-internal authorizeUpgrade compiles', () => {

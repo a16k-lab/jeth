@@ -55,17 +55,17 @@ function jethCodes(src: string): string[] {
 // slot1 = initialized. initialize(x) sets both ONCE; V1.value_() returns value; V2.value_() returns
 // value*2; both have bump(). V2 ALSO declares upgradeToAndCall(address,bytes) (selector 0x4f1ef286) so
 // we can prove a NON-admin's upgradeToAndCall delegates INTO the impl (the clash-defeat). ----
-const V1_JETH = `@contract class V1 {
-  @state value: u256 = 0n;
-  @state initialized: bool = false;
-  @external initialize(x: u256): void {
+const V1_JETH = `class V1 {
+  value: u256 = 0n;
+  initialized: bool = false;
+  initialize(x: u256): External<void> {
     require(!this.initialized, "init");
     this.initialized = true;
     this.value = x;
   }
-  @external bump(): void { this.value = this.value + 1n; }
-  @external @view value_(): u256 { return this.value; }
-  @external @view version(): u256 { return 1n; }
+  bump(): External<void> { this.value = this.value + 1n; }
+  get value_(): External<u256> { return this.value; }
+  get version(): External<u256> { return 1n; }
 }`;
 const V1_SOL = `contract V1 {
   uint256 value;
@@ -78,18 +78,18 @@ const V1_SOL = `contract V1 {
 
 // V2 also exposes a function whose selector EQUALS upgradeToAndCall(address,bytes) so a non-admin call
 // to that selector, delegated into the impl, returns a sentinel (proves the clash-defeat reaches V2).
-const V2_JETH = `@contract class V2 {
-  @state value: u256 = 0n;
-  @state initialized: bool = false;
-  @external initialize(x: u256): void {
+const V2_JETH = `class V2 {
+  value: u256 = 0n;
+  initialized: bool = false;
+  initialize(x: u256): External<void> {
     require(!this.initialized, "init");
     this.initialized = true;
     this.value = x;
   }
-  @external bump(): void { this.value = this.value + 1n; }
-  @external @view value_(): u256 { return this.value * 2n; }
-  @external @view version(): u256 { return 2n; }
-  @external upgradeToAndCall(newImpl: address, data: bytes): u256 { return 0xC1A54n; }
+  bump(): External<void> { this.value = this.value + 1n; }
+  get value_(): External<u256> { return this.value * 2n; }
+  get version(): External<u256> { return 2n; }
+  get upgradeToAndCall(newImpl: address, data: bytes): External<u256> { return 0xC1A54n; }
 }`;
 const V2_SOL = `contract V2 {
   uint256 value;
@@ -469,7 +469,7 @@ describe('transparent-proxy (Phase 2b)', () => {
     it('a @proxy(\'transparent\') class may NOT declare an @external method (JETH401)', () => {
       const src = `@proxy('transparent') class P {
         constructor(i: address, a: address) { proxyInit(i, a, abi.encode()); }
-        @external foo(): u256 { return 1n; }
+        get foo(): External<u256> { return 1n; }
       }`;
       expect(jethRejects(src)).toBe(true);
       expect(jethCodes(src)).toContain('JETH401');
@@ -477,7 +477,7 @@ describe('transparent-proxy (Phase 2b)', () => {
     it('an @external @view method on a transparent proxy is also rejected', () => {
       const src = `@proxy('transparent') class P {
         constructor(i: address, a: address) { proxyInit(i, a, abi.encode()); }
-        @external @view bar(): u256 { return 1n; }
+        get bar(): External<u256> { return 1n; }
       }`;
       expect(jethRejects(src)).toBe(true);
       expect(jethCodes(src)).toContain('JETH401');
@@ -499,19 +499,19 @@ describe('transparent-proxy (Phase 2b)', () => {
       expect(jethCodes(src)).toContain('JETH400');
     });
     it('the plain @proxy (no arg) still accepts @external methods (Phase 2a unchanged)', () => {
-      expect(jethAccepts(`@proxy class P { @external up(n: address, d: bytes): void { upgradeProxy(n, d); } }`)).toBe(true);
+      expect(jethAccepts(`@proxy class P { up(n: address, d: bytes): External<void> { upgradeProxy(n, d); } }`)).toBe(true);
     });
     it('the empty call-form @proxy() is the plain proxy (accepts @external)', () => {
-      expect(jethAccepts(`@proxy() class P { @external up(n: address, d: bytes): void { upgradeProxy(n, d); } }`)).toBe(true);
+      expect(jethAccepts(`@proxy() class P { up(n: address, d: bytes): External<void> { upgradeProxy(n, d); } }`)).toBe(true);
     });
     it('a transparent proxy may NOT declare @state of its own (JETH399)', () => {
-      const src = `@proxy('transparent') class P { @state x: u256 = 0n; constructor(i: address, a: address) { proxyInit(i, a, abi.encode()); } }`;
+      const src = `@proxy('transparent') class P { x: u256 = 0n; constructor(i: address, a: address) { proxyInit(i, a, abi.encode()); } }`;
       expect(jethRejects(src)).toBe(true);
       expect(jethCodes(src)).toContain('JETH399');
     });
     it('a transparent proxy may NOT declare a @receive/@fallback (JETH398)', () => {
-      expect(jethRejects(`@proxy('transparent') class P { @receive r(): void {} }`)).toBe(true);
-      expect(jethRejects(`@proxy('transparent') class P { @fallback f(): void {} }`)).toBe(true);
+      expect(jethRejects(`@proxy('transparent') class P { receive(): void {} }`)).toBe(true);
+      expect(jethRejects(`@proxy('transparent') class P { fallback(): void {} }`)).toBe(true);
     });
   });
 });

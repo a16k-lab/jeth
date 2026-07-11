@@ -42,13 +42,13 @@ async function rt(
 describe('W8A: whole-aggregate store with an impure index that mutates RHS-read state (byte-identical)', () => {
   it('struct-array element ps[bump()] = P(ctr, ctr+50): RHS reads PRE-bump ctr', async () => {
     await rt(
-      `@struct class P { x: u256; y: u256 } @contract class C {
-        @state ctr: u256; @state ps: P[];
+      `type P = { x: u256; y: u256 }; class C {
+        ctr: u256; ps: P[];
         bump(): u256 { this.ctr = this.ctr + 1n; return 0n; }
-        @external run(): void { this.ps.push(P(0n,0n)); this.ps[this.bump()] = P(this.ctr, this.ctr + 50n); }
-        @external @view gx(): u256 { return this.ps[0n].x; }
-        @external @view gy(): u256 { return this.ps[0n].y; }
-        @external @view gc(): u256 { return this.ctr; } }`,
+        run(): External<void> { this.ps.push(P(0n,0n)); this.ps[this.bump()] = P(this.ctr, this.ctr + 50n); }
+        get gx(): External<u256> { return this.ps[0n].x; }
+        get gy(): External<u256> { return this.ps[0n].y; }
+        get gc(): External<u256> { return this.ctr; } }`,
       `struct P { uint256 x; uint256 y; } contract C {
         uint256 ctr; P[] ps;
         function bump() internal returns(uint256){ ctr = ctr + 1; return 0; }
@@ -63,12 +63,12 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
 
   it('fixed-array element dd[bump()] = [ctr, ctr+50] (Arr<u256,2>[])', async () => {
     await rt(
-      `@contract class C {
-        @state ctr: u256; @state dd: Arr<u256,2>[];
+      `class C {
+        ctr: u256; dd: Arr<u256,2>[];
         bump(): u256 { this.ctr = this.ctr + 1n; return 0n; }
-        @external run(): void { this.dd.push([0n,0n]); this.dd[this.bump()] = [this.ctr, this.ctr + 50n]; }
-        @external @view g0(): u256 { return this.dd[0n][0n]; }
-        @external @view g1(): u256 { return this.dd[0n][1n]; } }`,
+        run(): External<void> { this.dd.push([0n,0n]); this.dd[this.bump()] = [this.ctr, this.ctr + 50n]; }
+        get g0(): External<u256> { return this.dd[0n][0n]; }
+        get g1(): External<u256> { return this.dd[0n][1n]; } }`,
       `contract C {
         uint256 ctr; uint256[2][] dd;
         function bump() internal returns(uint256){ ctr = ctr + 1; return 0; }
@@ -82,12 +82,12 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
 
   it('struct-member field xs[bump()].inner = P(ctr, ctr+50)', async () => {
     await rt(
-      `@struct class P { x: u256; y: u256 } @struct class Q { inner: P } @contract class C {
-        @state ctr: u256; @state xs: Q[];
+      `type P = { x: u256; y: u256 }; type Q = { inner: P }; class C {
+        ctr: u256; xs: Q[];
         bump(): u256 { this.ctr = this.ctr + 1n; return 0n; }
-        @external run(): void { this.xs.push(Q(P(0n,0n))); this.xs[this.bump()].inner = P(this.ctr, this.ctr + 50n); }
-        @external @view gx(): u256 { return this.xs[0n].inner.x; }
-        @external @view gy(): u256 { return this.xs[0n].inner.y; } }`,
+        run(): External<void> { this.xs.push(Q(P(0n,0n))); this.xs[this.bump()].inner = P(this.ctr, this.ctr + 50n); }
+        get gx(): External<u256> { return this.xs[0n].inner.x; }
+        get gy(): External<u256> { return this.xs[0n].inner.y; } }`,
       `struct P { uint256 x; uint256 y; } struct Q { P inner; } contract C {
         uint256 ctr; Q[] xs;
         function bump() internal returns(uint256){ ctr = ctr + 1; return 0; }
@@ -101,12 +101,12 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
 
   it('mapping-to-struct m[bump()] = P(ctr, ctr+50)', async () => {
     await rt(
-      `@struct class P { x: u256; y: u256 } @contract class C {
-        @state ctr: u256; @state m: mapping<u256,P>;
+      `type P = { x: u256; y: u256 }; class C {
+        ctr: u256; m: mapping<u256,P>;
         bump(): u256 { this.ctr = this.ctr + 1n; return 0n; }
-        @external run(): void { this.m[this.bump()] = P(this.ctr, this.ctr + 50n); }
-        @external @view gx(): u256 { return this.m[0n].x; }
-        @external @view gy(): u256 { return this.m[0n].y; } }`,
+        run(): External<void> { this.m[this.bump()] = P(this.ctr, this.ctr + 50n); }
+        get gx(): External<u256> { return this.m[0n].x; }
+        get gy(): External<u256> { return this.m[0n].y; } }`,
       `struct P { uint256 x; uint256 y; } contract C {
         uint256 ctr; mapping(uint256=>P) m;
         function bump() internal returns(uint256){ ctr = ctr + 1; return 0; }
@@ -120,13 +120,13 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
 
   it('side-effect count parity: bump() runs EXACTLY once (disjoint nc counter)', async () => {
     await rt(
-      `@struct class P { x: u256; y: u256 } @contract class C {
-        @state ctr: u256; @state nc: u256; @state ps: P[];
+      `type P = { x: u256; y: u256 }; class C {
+        ctr: u256; nc: u256; ps: P[];
         bump(): u256 { this.nc = this.nc + 1n; this.ctr = this.ctr + 1n; return 0n; }
-        @external run(): void { this.ps.push(P(0n,0n)); this.ps[this.bump()] = P(this.ctr, this.ctr + 50n); }
-        @external @view gx(): u256 { return this.ps[0n].x; }
-        @external @view gnc(): u256 { return this.nc; }
-        @external @view gctr(): u256 { return this.ctr; } }`,
+        run(): External<void> { this.ps.push(P(0n,0n)); this.ps[this.bump()] = P(this.ctr, this.ctr + 50n); }
+        get gx(): External<u256> { return this.ps[0n].x; }
+        get gnc(): External<u256> { return this.nc; }
+        get gctr(): External<u256> { return this.ctr; } }`,
       `struct P { uint256 x; uint256 y; } contract C {
         uint256 ctr; uint256 nc; P[] ps;
         function bump() internal returns(uint256){ nc = nc + 1; ctr = ctr + 1; return 0; }
@@ -141,12 +141,12 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
 
   it('side-effecting KEY on a mapping runs exactly once', async () => {
     await rt(
-      `@struct class P { x: u256; y: u256 } @contract class C {
-        @state ctr: u256; @state nc: u256; @state m: mapping<u256,P>;
+      `type P = { x: u256; y: u256 }; class C {
+        ctr: u256; nc: u256; m: mapping<u256,P>;
         key(): u256 { this.nc = this.nc + 1n; this.ctr = this.ctr + 7n; return 3n; }
-        @external run(): void { this.m[this.key()] = P(this.ctr, this.ctr + 1n); }
-        @external @view gx(): u256 { return this.m[3n].x; }
-        @external @view gnc(): u256 { return this.nc; } }`,
+        run(): External<void> { this.m[this.key()] = P(this.ctr, this.ctr + 1n); }
+        get gx(): External<u256> { return this.m[3n].x; }
+        get gnc(): External<u256> { return this.nc; } }`,
       `struct P { uint256 x; uint256 y; } contract C {
         uint256 ctr; uint256 nc; mapping(uint256=>P) m;
         function key() internal returns(uint256){ nc = nc + 1; ctr = ctr + 7; return 3; }
@@ -161,14 +161,14 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
   it('side-effecting index AND side-effecting RHS (former JETH331) is byte-identical', async () => {
     // solc evaluates the RHS (mk() side effects) BEFORE the index (bump()).
     await rt(
-      `@struct class P { x: u256; y: u256 } @contract class C {
-        @state ctr: u256; @state ps: P[];
+      `type P = { x: u256; y: u256 }; class C {
+        ctr: u256; ps: P[];
         bump(): u256 { this.ctr = this.ctr + 1n; return 0n; }
         mk(): u256 { this.ctr = this.ctr + 100n; return this.ctr; }
-        @external run(): void { this.ps.push(P(0n,0n)); this.ps[this.bump()] = P(this.mk(), this.mk()); }
-        @external @view gx(): u256 { return this.ps[0n].x; }
-        @external @view gy(): u256 { return this.ps[0n].y; }
-        @external @view gc(): u256 { return this.ctr; } }`,
+        run(): External<void> { this.ps.push(P(0n,0n)); this.ps[this.bump()] = P(this.mk(), this.mk()); }
+        get gx(): External<u256> { return this.ps[0n].x; }
+        get gy(): External<u256> { return this.ps[0n].y; }
+        get gc(): External<u256> { return this.ctr; } }`,
       `struct P { uint256 x; uint256 y; } contract C {
         uint256 ctr; P[] ps;
         function bump() internal returns(uint256){ ctr = ctr + 1; return 0; }
@@ -184,12 +184,12 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
 
   it('memory-reference RHS with an impure index (storage deep-copy) is byte-identical', async () => {
     await rt(
-      `@struct class P { x: u256; y: u256 } @contract class C {
-        @state ctr: u256; @state ps: P[];
+      `type P = { x: u256; y: u256 }; class C {
+        ctr: u256; ps: P[];
         bump(): u256 { this.ctr = this.ctr + 1n; return 0n; }
-        @external run(): void { this.ps.push(P(0n,0n)); let src: P = P(this.ctr, this.ctr + 5n); this.ps[this.bump()] = src; }
-        @external @view gx(): u256 { return this.ps[0n].x; }
-        @external @view gy(): u256 { return this.ps[0n].y; } }`,
+        run(): External<void> { this.ps.push(P(0n,0n)); let src: P = P(this.ctr, this.ctr + 5n); this.ps[this.bump()] = src; }
+        get gx(): External<u256> { return this.ps[0n].x; }
+        get gy(): External<u256> { return this.ps[0n].y; } }`,
       `struct P { uint256 x; uint256 y; } contract C {
         uint256 ctr; P[] ps;
         function bump() internal returns(uint256){ ctr = ctr + 1; return 0; }
@@ -204,11 +204,11 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
   it('controls: value-leaf write + pure-index side-effecting-RHS stay byte-identical', async () => {
     // value-leaf ps[bump()].x = ctr (already correct; must stay)
     await rt(
-      `@struct class P { x: u256; y: u256 } @contract class C {
-        @state ctr: u256; @state ps: P[];
+      `type P = { x: u256; y: u256 }; class C {
+        ctr: u256; ps: P[];
         bump(): u256 { this.ctr = this.ctr + 1n; return 0n; }
-        @external run(): void { this.ps.push(P(0n,0n)); this.ps[this.bump()].x = this.ctr; }
-        @external @view gx(): u256 { return this.ps[0n].x; } }`,
+        run(): External<void> { this.ps.push(P(0n,0n)); this.ps[this.bump()].x = this.ctr; }
+        get gx(): External<u256> { return this.ps[0n].x; } }`,
       `struct P { uint256 x; uint256 y; } contract C {
         uint256 ctr; P[] ps;
         function bump() internal returns(uint256){ ctr = ctr + 1; return 0; }
@@ -219,12 +219,12 @@ describe('W8A: whole-aggregate store with an impure index that mutates RHS-read 
     );
     // pure index, side-effecting RHS ps[0] = P(bump(), bump()) (already correct; must stay)
     await rt(
-      `@struct class P { x: u256; y: u256 } @contract class C {
-        @state ctr: u256; @state ps: P[];
+      `type P = { x: u256; y: u256 }; class C {
+        ctr: u256; ps: P[];
         bump(): u256 { this.ctr = this.ctr + 1n; return this.ctr; }
-        @external run(): void { this.ps.push(P(0n,0n)); this.ps[0n] = P(this.bump(), this.bump()); }
-        @external @view gx(): u256 { return this.ps[0n].x; }
-        @external @view gy(): u256 { return this.ps[0n].y; } }`,
+        run(): External<void> { this.ps.push(P(0n,0n)); this.ps[0n] = P(this.bump(), this.bump()); }
+        get gx(): External<u256> { return this.ps[0n].x; }
+        get gy(): External<u256> { return this.ps[0n].y; } }`,
       `struct P { uint256 x; uint256 y; } contract C {
         uint256 ctr; P[] ps;
         function bump() internal returns(uint256){ ctr = ctr + 1; return ctr; }

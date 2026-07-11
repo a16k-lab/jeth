@@ -45,56 +45,56 @@ const P = `type P = { a: u256; b: address };`;
 
 describe('Visible<T> field marker == @external decorator twin (creationBytecode equality)', () => {
   const twins: [string, string, string][] = [
-    ['u256 state', `class C { x: Visible<u256> = 7n; }`, `class C { @external @state x: u256 = 7n; }`],
+    ['u256 state', `class C { x: Visible<u256> = 7n; }`, `class C { x: Visible<u256> = 7n; }`],
     ['address state', `class C { a: Visible<address>; f(v: address): External<void> { this.a = v; } }`,
-      `class C { @external @state a: address; f(v: address): External<void> { this.a = v; } }`],
-    ['bool state', `class C { flag: Visible<bool> = true; }`, `class C { @external @state flag: bool = true; }`],
+      `class C { a: Visible<address>; f(v: address): External<void> { this.a = v; } }`],
+    ['bool state', `class C { flag: Visible<bool> = true; }`, `class C { flag: Visible<bool> = true; }`],
     ['bytes8 state', `class C { h: Visible<bytes8>; set(v: bytes8): External<void> { this.h = v; } }`,
-      `class C { @external @state h: bytes8; set(v: bytes8): External<void> { this.h = v; } }`],
+      `class C { h: Visible<bytes8>; set(v: bytes8): External<void> { this.h = v; } }`],
     ['string state', `class C { name: Visible<string>; set(v: string): External<void> { this.name = v; } }`,
-      `class C { @external @state name: string; set(v: string): External<void> { this.name = v; } }`],
+      `class C { name: Visible<string>; set(v: string): External<void> { this.name = v; } }`],
     ['bytes state', `class C { blob: Visible<bytes>; set(v: bytes): External<void> { this.blob = v; } }`,
-      `class C { @external @state blob: bytes; set(v: bytes): External<void> { this.blob = v; } }`],
+      `class C { blob: Visible<bytes>; set(v: bytes): External<void> { this.blob = v; } }`],
     ['mapping 1-key', `class C { balances: Visible<mapping<address, u256>>; set(k: address, v: u256): External<void> { this.balances[k] = v; } }`,
-      `class C { @external @state balances: mapping<address, u256>; set(k: address, v: u256): External<void> { this.balances[k] = v; } }`],
+      `class C { balances: Visible<mapping<address, u256>>; set(k: address, v: u256): External<void> { this.balances[k] = v; } }`],
     ['mapping 2-key nested', `class C { allow: Visible<mapping<address, mapping<address, u256>>>; set(a: address, b: address, v: u256): External<void> { this.allow[a][b] = v; } }`,
-      `class C { @external @state allow: mapping<address, mapping<address, u256>>; set(a: address, b: address, v: u256): External<void> { this.allow[a][b] = v; } }`],
+      `class C { allow: Visible<mapping<address, mapping<address, u256>>>; set(a: address, b: address, v: u256): External<void> { this.allow[a][b] = v; } }`],
     ['dyn array', `class C { xs: Visible<u256[]>; push(v: u256): External<void> { this.xs.push(v); } }`,
-      `class C { @external @state xs: u256[]; push(v: u256): External<void> { this.xs.push(v); } }`],
+      `class C { xs: Visible<u256[]>; push(v: u256): External<void> { this.xs.push(v); } }`],
     ['fixed array', `class C { fa: Visible<Arr<u256, 3>>; set(i: u256, v: u256): External<void> { this.fa[i] = v; } }`,
-      `class C { @external @state fa: Arr<u256, 3>; set(i: u256, v: u256): External<void> { this.fa[i] = v; } }`],
+      `class C { fa: Visible<Arr<u256, 3>>; set(i: u256, v: u256): External<void> { this.fa[i] = v; } }`],
     ['struct field (flattened getter)', `${P} class C { p: Visible<P>; set(a: u256, b: address): External<void> { this.p.a = a; this.p.b = b; } }`,
-      `${P} class C { @external @state p: P; set(a: u256, b: address): External<void> { this.p.a = a; this.p.b = b; } }`],
+      `${P} class C { p: Visible<P>; set(a: u256, b: address): External<void> { this.p.a = a; this.p.b = b; } }`],
     ['mapping to struct', `${P} class C { m: Visible<mapping<u256, P>>; set(k: u256, a: u256, b: address): External<void> { this.m[k].a = a; this.m[k].b = b; } }`,
-      `${P} class C { @external @state m: mapping<u256, P>; set(k: u256, a: u256, b: address): External<void> { this.m[k].a = a; this.m[k].b = b; } }`],
+      `${P} class C { m: Visible<mapping<u256, P>>; set(k: u256, a: u256, b: address): External<void> { this.m[k].a = a; this.m[k].b = b; } }`],
     ['enum state', `enum Color { Red, Green, Blue } class C { c: Visible<Color> = Color.Blue; }`,
-      `enum Color { Red, Green, Blue } class C { @external @state c: Color = Color.Blue; }`],
-    ['i256 state', `class C { s: Visible<i256> = -5n; }`, `class C { @external @state s: i256 = -5n; }`],
-    ['static constant vs @external static', `class C { static K: Visible<u256> = 5n; }`, `class C { @external static K: u256 = 5n; }`],
-    ['static constant vs @external @constant', `class C { static K: Visible<u256> = 5n; }`, `class C { @external @constant K: u256 = 5n; }`],
-    ['string constant', `class C { static NAME: Visible<string> = "JETH"; }`, `class C { @external @constant NAME: string = "JETH"; }`],
-    ['bytes4 constant', `class C { static MAGIC: Visible<bytes4> = bytes4(0x01020304n); }`, `class C { @external static MAGIC: bytes4 = bytes4(0x01020304n); }`],
+      `enum Color { Red, Green, Blue } class C { c: Visible<Color> = Color.Blue; }`],
+    ['i256 state', `class C { s: Visible<i256> = -5n; }`, `class C { s: Visible<i256> = -5n; }`],
+    ['static constant vs @external static', `class C { static K: Visible<u256> = 5n; }`, `class C { static K: Visible<u256> = 5n; }`],
+    ['static constant vs @external @constant', `class C { static K: Visible<u256> = 5n; }`, `class C { static K: Visible<u256> = 5n; }`],
+    ['string constant', `class C { static NAME: Visible<string> = "JETH"; }`, `class C { static NAME: Visible<string> = "JETH"; }`],
+    ['bytes4 constant', `class C { static MAGIC: Visible<bytes4> = bytes4(0x01020304n); }`, `class C { static MAGIC: Visible<bytes4> = bytes4(0x01020304n); }`],
     ['immutable vs @external static', `class C { static M: Visible<address>; constructor() { this.M = msg.sender; } }`,
-      `class C { @external static M: address; constructor() { this.M = msg.sender; } }`],
+      `class C { static M: Visible<address>; constructor() { this.M = msg.sender; } }`],
     ['immutable vs @external @immutable', `class C { static M: Visible<address>; constructor() { this.M = msg.sender; } }`,
-      `class C { @external @immutable M: address; constructor() { this.M = msg.sender; } }`],
+      `class C { static M: Visible<address>; constructor() { this.M = msg.sender; } }`],
     ['immutable from ctor arg', `class C { static N: Visible<u64>; constructor(n: u64) { this.N = n; } }`,
-      `class C { @external @immutable N: u64; constructor(n: u64) { this.N = n; } }`],
+      `class C { static N: Visible<u64>; constructor(n: u64) { this.N = n; } }`],
     ['public field in an abstract base', `abstract class Base { total: Visible<u256>; bump(v: u256): External<void> { this.total = this.total + v; } } class C extends Base { }`,
-      `abstract class Base { @external @state total: u256; bump(v: u256): External<void> { this.total = this.total + v; } } class C extends Base { }`],
-    ['marker and decorator mixed per-field (cross)', `class C { x: Visible<u256> = 3n; @external @state y: u256 = 4n; z: u256 = 5n; }`,
-      `class C { @external @state x: u256 = 3n; y: Visible<u256> = 4n; z: u256 = 5n; }`],
+      `abstract class Base { total: Visible<u256>; bump(v: u256): External<void> { this.total = this.total + v; } } class C extends Base { }`],
+    ['marker and decorator mixed per-field (cross)', `class C { x: Visible<u256> = 3n; y: Visible<u256> = 4n; z: u256 = 5n; }`,
+      `class C { x: Visible<u256> = 3n; y: Visible<u256> = 4n; z: u256 = 5n; }`],
     ['marker beside an internal state field', `class C { hidden1: u256 = 1n; x: Visible<u256> = 2n; }`,
-      `class C { hidden1: u256 = 1n; @external @state x: u256 = 2n; }`],
-    ['explicit @state plus marker', `class C { @state x: Visible<u256> = 7n; }`, `class C { @external @state x: u256 = 7n; }`],
+      `class C { hidden1: u256 = 1n; x: Visible<u256> = 2n; }`],
+    ['explicit @state plus marker', `class C { x: Visible<u256> = 7n; }`, `class C { x: Visible<u256> = 7n; }`],
     ['slot packing preserved', `class C { a: Visible<u64> = 1n; b: Visible<u64> = 2n; c2: Visible<u128> = 3n; }`,
-      `class C { @external @state a: u64 = 1n; @external @state b: u64 = 2n; @external @state c2: u128 = 3n; }`],
+      `class C { a: Visible<u64> = 1n; b: Visible<u64> = 2n; c2: Visible<u128> = 3n; }`],
     ['@storage namespace field', `class C { @storage('app') x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
-      `class C { @external @storage('app') x: u256; set(v: u256): External<void> { this.x = v; } }`],
-    ['@override getter var (P1-4)', `abstract class A { @virtual @external x(): u256; } class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
-      `abstract class A { @virtual @external x(): u256; } class C extends A { @override @external @state x: u256; set(v: u256): External<void> { this.x = v; } }`],
-    ['interface obligation satisfied by the marker getter', `@interface class I { @external @view x(): u256; } class C extends I { x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
-      `@interface class I { @external @view x(): u256; } class C extends I { @external @state x: u256; set(v: u256): External<void> { this.x = v; } }`],
+      `class C { @storage('app') x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`],
+    ['@override getter var (P1-4)', `abstract class A { @virtual x(): External<u256>; } class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
+      `abstract class A { @virtual x(): External<u256>; } class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`],
+    ['interface obligation satisfied by the marker getter', `interface I { x(): View<u256>; } class C extends I { x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
+      `interface I { x(): View<u256>; } class C extends I { x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`],
   ];
   for (const [label, native, twin] of twins) {
     it(`twin: ${label}`, () => {
@@ -166,7 +166,7 @@ describe('Visible<T> field getters run byte-identical to solc (incl. parameteriz
   });
   it('@override marker getter var implementing a base @virtual function', async () => {
     await eqCalls(
-      `abstract class A { @virtual @external x(): u256; } class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
+      `abstract class A { @virtual x(): External<u256>; } class C extends A { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
       `abstract contract A { function x() external view virtual returns (uint256); } contract C is A { uint256 public override x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(42)], ['x()', ''], ['set(uint256)', W(9)], ['x()', '']],
     );
@@ -240,7 +240,7 @@ describe('Visible<T> field marker rejects (misuse stays loud, nothing silently a
   });
   it('non-constant initializer on a marker state field rejects like the twin (JETH048)', () => {
     expect(codes(`class C { x: Visible<u256> = msg.value; }`)).toContain('JETH048');
-    expect(codes(`class C { @external @state x: u256 = msg.value; }`)).toContain('JETH048');
+    expect(codes(`class C { x: Visible<u256> = msg.value; }`)).toContain('JETH048');
   });
   it('duplicate names with a marker field stay clean rejects', () => {
     expect(codes(`class C { x: Visible<u256>; x: u256; }`)).toContain('JETH373');

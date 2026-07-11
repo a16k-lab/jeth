@@ -31,32 +31,32 @@ describe('visibility model: @external only, private-by-default', () => {
   });
   it('@external is exposed; a no-decorator function is internal (not in the ABI)', () => {
     expect(
-      abiNames(`@contract class C { @external @pure f(): u256 { return 1n; } @pure helper(): u256 { return 2n; } }`),
+      abiNames(`class C { get f(): External<u256> { return 1n; } helper(): u256 { return 2n; } }`),
     ).toEqual(['f']);
   });
   it('a no-decorator helper is callable internally by name', () => {
     expect(
       codes(
-        `@contract class C { @pure helper(x: u256): u256 { return x + 1n; } @external @pure f(): u256 { return helper(5n); } }`,
+        `class C { helper(x: u256): u256 { return x + 1n; } get f(): External<u256> { return helper(5n); } }`,
       ),
     ).toEqual([]);
   });
   it('getter trigger is @external @state (not @public)', () => {
     expect(
       abiNames(
-        `@contract class C { @external @state count: u256; @external inc(): void { this.count = this.count + 1n; } }`,
+        `class C { count: Visible<u256>; inc(): External<void> { this.count = this.count + 1n; } }`,
       ),
     ).toEqual(['inc', 'count']);
     expect(
-      abiNames(`@contract class C { @state hidden: u256; @external inc(): void { this.hidden = this.hidden + 1n; } }`),
+      abiNames(`class C { hidden: u256; inc(): External<void> { this.hidden = this.hidden + 1n; } }`),
     ).toEqual(['inc']); // no getter for a plain @state
   });
   it('@payable / @nonReentrant require @external', () => {
     expect(codes(`@contract class C { @payable @pure f(): u256 { return msg.value; } }`)).toContain('JETH131');
-    expect(codes(`@contract class C { @nonReentrant f(): void {} }`)).toContain('JETH261');
+    expect(codes(`class C { @nonReentrant f(): void {} }`)).toContain('JETH261');
   });
   it('the old "R2" case now just works: an aggregate helper called internally', async () => {
-    const src = `@struct class P { a: u8; b: u32; } @contract class C { @pure dist(p: P): u32 { return p.a + p.b; } @external @pure f(x: u8, y: u32): u32 { return dist(P(x, y)); } }`;
+    const src = `type P = { a: u8; b: u32; }; class C { dist(p: P): u32 { return p.a + p.b; } get f(x: u8, y: u32): External<u32> { return dist(P(x, y)); } }`;
     expect(codes(src)).toEqual([]);
     const h = await Harness.create();
     const a = await h.deploy(compile(src, { fileName: 'C.jeth' }).creationBytecode);

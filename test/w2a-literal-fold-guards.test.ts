@@ -65,7 +65,7 @@ describe('W2A: leading-zero (octal) decimal literals rejected', () => {
 });
 
 describe('W2A: enum vs out-of-range integer-literal comparison rejected', () => {
-  const JH = '@contract class C { enum Color { Red, Green, Blue }\n';
+  const JH = 'class C { enum Color { Red, Green, Blue }\n';
   for (const op of ['==', '!=', '<', '>', '<=', '>='])
     it(`rejects c ${op} 300n`, () => {
       expect(rejectCodes(`${JH} @external @pure f(c: Color): bool { return c ${op} 300n; } }`)).toContain('JETH280');
@@ -84,7 +84,7 @@ describe('W2A: enum vs out-of-range integer-literal comparison rejected', () => 
   });
   it('keeps a plain uint8 var vs 300 (intended widening) byte-identical', async () => {
     await eqCalls(
-      '@contract class C { @external @pure f(x: u8): bool { return x == 300n; } }',
+      'class C { get f(x: u8): External<bool> { return x == 300n; } }',
       'contract C { function f(uint8 x) external pure returns (bool){ return x == 300; } }',
       [['f(uint8)', W(5n)]],
     );
@@ -99,29 +99,29 @@ describe('W2A: packed abi encoding of an untyped literal rejected', () => {
     });
   it('rejects keccak256(abi.encodePacked(7n, 9n))', () => {
     expect(
-      rejectCodes('@contract class C { @external @pure f(): bytes32 { return keccak256(abi.encodePacked(7n, 9n)); } }'),
+      rejectCodes('class C { get f(): External<bytes32> { return keccak256(abi.encodePacked(7n, 9n)); } }'),
     ).toContain('JETH173');
   });
   it('keeps a typed local / explicit cast / bool / string / address literal byte-identical', async () => {
     await eqCalls(
-      '@contract class C { @external @pure f(x: u8): bytes { return abi.encodePacked(x, true, "hi"); } }',
+      'class C { get f(x: u8): External<bytes> { return abi.encodePacked(x, true, "hi"); } }',
       'contract C { function f(uint8 x) external pure returns (bytes memory){ return abi.encodePacked(x, true, "hi"); } }',
       [['f(uint8)', W(0x2an)]],
     );
     await eqCalls(
-      '@contract class C { @external @pure f(): bytes { return abi.encodePacked(u256(1n + 1n), address(0n)); } }',
+      'class C { get f(): External<bytes> { return abi.encodePacked(u256(1n + 1n), address(0n)); } }',
       'contract C { function f() external pure returns (bytes memory){ return abi.encodePacked(uint256(1 + 1), address(0)); } }',
       [['f()', '']],
     );
   });
   it('keeps a literal in standard abi.encode / encodeWithSignature byte-identical', async () => {
     await eqCalls(
-      '@contract class C { @external @pure f(): bytes { return abi.encode(42n, true); } }',
+      'class C { get f(): External<bytes> { return abi.encode(42n, true); } }',
       'contract C { function f() external pure returns (bytes memory){ return abi.encode(42, true); } }',
       [['f()', '']],
     );
     await eqCalls(
-      '@contract class C { @external @pure f(): bytes { return abi.encodeWithSignature("g(uint256)", 42n); } }',
+      'class C { get f(): External<bytes> { return abi.encodeWithSignature("g(uint256)", 42n); } }',
       'contract C { function f() external pure returns (bytes memory){ return abi.encodeWithSignature("g(uint256)", 42); } }',
       [['f()', '']],
     );
@@ -131,26 +131,26 @@ describe('W2A: packed abi encoding of an untyped literal rejected', () => {
 describe('W2A: enum declared inside a method body rejected (not hoisted)', () => {
   it('rejects a method-body enum', () => {
     expect(
-      rejectCodes('@contract class C { @external @pure f(): u8 { enum E { A, B, Z } return u8(E.Z); } }'),
+      rejectCodes('class C { get f(): External<u8> { enum E { A, B, Z } return u8(E.Z); } }'),
     ).toContain('JETH061');
   });
   it('rejects a nested-block enum', () => {
     expect(
       rejectCodes(
-        '@contract class C { @external @pure f(): u8 { if (true) { enum E { A, B } return u8(E.B); } return 0n; } }',
+        'class C { get f(): External<u8> { if (true) { enum E { A, B } return u8(E.B); } return 0n; } }',
       ),
     ).toContain('JETH061');
   });
   it('rejects a method-body enum even when a class-level enum is also present', () => {
     expect(
       rejectCodes(
-        '@contract class C { enum Color { Red, Green }\n @external @pure f(): u8 { enum E { A, B } return u8(E.B); } }',
+        'class C { enum Color { Red, Green }\n @external @pure f(): u8 { enum E { A, B } return u8(E.B); } }',
       ),
     ).toContain('JETH061');
   });
   it('keeps a class-level enum (declared after a method with a nested block) byte-identical', async () => {
     await eqCalls(
-      '@contract class C { @external @pure g(): u8 { if (true) { return 1n; } return 0n; }\n enum Color { Red, Green, Blue }\n @external @pure f(): u8 { return u8(Color.Blue); } }',
+      'class C { get g(): External<u8> { if (true) { return 1n; } return 0n; }\n enum Color { Red, Green, Blue }\n @external @pure f(): u8 { return u8(Color.Blue); } }',
       'contract C { function g() external pure returns (uint8) { if (true) { return 1; } return 0; }\n enum Color { Red, Green, Blue }\n function f() external pure returns (uint8) { return uint8(Color.Blue); } }',
       [['f()', ''], ['g()', '']],
     );
@@ -159,7 +159,7 @@ describe('W2A: enum declared inside a method body rejected (not hoisted)', () =>
 
 describe('W2A: over-2^53 fixed-array length rejected (no silent double rounding)', () => {
   const st = (len: string) =>
-    `@contract class C { @state a: Arr<u256, ${len}>;\n @state b: u256;\n @external @view g(): u256 { return this.b; } }`;
+    `class C { a: Arr<u256, ${len}>;\n b: u256;\n get g(): External<u256> { return this.b; } }`;
   it('rejects 2^53+1 (9007199254740993)', () => {
     expect(rejectCodes(st('9007199254740993'))).toContain('JETH446');
   });
@@ -171,12 +171,12 @@ describe('W2A: over-2^53 fixed-array length rejected (no silent double rounding)
   });
   it('keeps normal small lengths byte-identical, incl. a for-of over Arr<u256,2>[]', async () => {
     await eqCalls(
-      '@contract class C { @state a: Arr<u256,3>;\n @external setz(v: u256): void { this.a[1n] = v; }\n @external @view getz(): u256 { return this.a[1n]; } }',
+      'class C { a: Arr<u256,3>;\n setz(v: u256): External<void> { this.a[1n] = v; }\n get getz(): External<u256> { return this.a[1n]; } }',
       'contract C { uint256[3] a;\n function setz(uint256 v) external { a[1]=v; }\n function getz() external view returns (uint256){ return a[1]; } }',
       [['setz(uint256)', W(0x2an)], ['getz()', '']],
     );
     await eqCalls(
-      '@contract class C { @external @pure f(): u256 { let xs: Arr<u256,2>[] = [[1n,2n],[3n,4n]]; let s: u256 = 0n; for (let row of xs) { s = s + row[0n] + row[1n]; } return s; } }',
+      'class C { get f(): External<u256> { let xs: Arr<u256,2>[] = [[1n,2n],[3n,4n]]; let s: u256 = 0n; for (let row of xs) { s = s + row[0n] + row[1n]; } return s; } }',
       'contract C { function f() external pure returns(uint256){ uint256[2][] memory xs = new uint256[2][](2); xs[0]=[uint256(1),2]; xs[1]=[uint256(3),4]; uint256 s=0; for (uint i=0;i<xs.length;i++){ uint256[2] memory row=xs[i]; s+=row[0]+row[1]; } return s; } }',
       [['f()', '']],
     );

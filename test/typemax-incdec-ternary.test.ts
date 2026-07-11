@@ -9,19 +9,19 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class TC {
-  @state count: u256;
-  @external @pure umax(): u256 { return type(u256).max; }
-  @external @pure u8max(): u8 { return type(u8).max; }
-  @external @pure i8min(): i256 { return type(i8).min; }
-  @external @pure i256max(): i256 { return type(i256).max; }
-  @external inc(): u256 { this.count++; return this.count; }
-  @external dec(): u256 { this.count--; return this.count; }
-  @external preInc(): u256 { ++this.count; return this.count; }
-  @external @pure localIncDec(a: u256): u256 { let x: u256 = a; x++; x++; x--; return x; }
-  @external @pure tern(a: u256, b: u256): u256 { return a > b ? a : b; }
-  @external @pure ternTypes(c: bool, a: u8, b: u256): u256 { return c ? a : b; }
-  @external @pure ternShort(c: bool, a: u256): u256 { return c ? a + 1n : a; }
+const JETH = `class TC {
+  count: u256;
+  get umax(): External<u256> { return type(u256).max; }
+  get u8max(): External<u8> { return type(u8).max; }
+  get i8min(): External<i256> { return type(i8).min; }
+  get i256max(): External<i256> { return type(i256).max; }
+  inc(): External<u256> { this.count++; return this.count; }
+  dec(): External<u256> { this.count--; return this.count; }
+  preInc(): External<u256> { ++this.count; return this.count; }
+  get localIncDec(a: u256): External<u256> { let x: u256 = a; x++; x++; x--; return x; }
+  get tern(a: u256, b: u256): External<u256> { return a > b ? a : b; }
+  get ternTypes(c: bool, a: u8, b: u256): External<u256> { return c ? a : b; }
+  get ternShort(c: bool, a: u256): External<u256> { return c ? a + 1n : a; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

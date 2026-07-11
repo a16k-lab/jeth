@@ -36,14 +36,14 @@ const SIn = `struct In { uint256 x; uint256 y; }`;
 
 describe('ternary over pointer-headed Arr<In,N>: internal-arg transcode (RC-2) byte-identical', () => {
   it('storage/storage and literal/storage ternary internal-call args + return controls match solc', async () => {
-    const J = `${In} @contract class C {
-  @state sx: Arr<In,2>; @state sy: Arr<In,2>;
-  @external seed(): void { this.sx[0n]=In(11n,12n); this.sx[1n]=In(13n,14n); this.sy[0n]=In(21n,22n); this.sy[1n]=In(23n,24n); }
-  @pure sum(a: Arr<In,2>): u256 { return a[0n].x + a[1n].y; }
-  @external @view arg(c: bool): u256 { return this.sum(c ? this.sx : this.sy); }
-  @external @view argL(c: bool): u256 { return this.sum(c ? [In(41n,42n),In(43n,44n)] : this.sx); }
-  @external @view ret(c: bool): Arr<In,2> { return c ? this.sx : this.sy; }
-  @external @view retL(c: bool): Arr<In,2> { return c ? [In(41n,42n),In(43n,44n)] : this.sx; } }`;
+    const J = `${In} class C {
+  sx: Arr<In,2>; sy: Arr<In,2>;
+  seed(): External<void> { this.sx[0n]=In(11n,12n); this.sx[1n]=In(13n,14n); this.sy[0n]=In(21n,22n); this.sy[1n]=In(23n,24n); }
+  sum(a: Arr<In,2>): u256 { return a[0n].x + a[1n].y; }
+  get arg(c: bool): External<u256> { return this.sum(c ? this.sx : this.sy); }
+  get argL(c: bool): External<u256> { return this.sum(c ? [In(41n,42n),In(43n,44n)] : this.sx); }
+  get ret(c: bool): External<Arr<In,2>> { return c ? this.sx : this.sy; }
+  get retL(c: bool): External<Arr<In,2>> { return c ? [In(41n,42n),In(43n,44n)] : this.sx; } }`;
     const S = `${SIn} contract C {
   In[2] sx; In[2] sy;
   function seed() external { sx[0]=In(11,12); sx[1]=In(13,14); sy[0]=In(21,22); sy[1]=In(23,24); }
@@ -70,8 +70,8 @@ describe('ternary over pointer-headed Arr<In,N>: internal-arg transcode (RC-2) b
   });
 
   it('cd|cd ternary stays accepted and byte-identical (clean + dirty calldata)', async () => {
-    const J = `@struct class Pk { a: u8; b: u256 }
-@contract class C { @external @pure f(c: bool, p: Arr<Pk,2>, q: Arr<Pk,2>): Arr<Pk,2> { return c ? p : q; } }`;
+    const J = `type Pk = { a: u8; b: u256 };
+class C { get f(c: bool, p: Arr<Pk,2>, q: Arr<Pk,2>): External<Arr<Pk,2>> { return c ? p : q; } }`;
     const S = `struct Pk { uint8 a; uint256 b; }
 contract C { function f(bool c, Pk[2] calldata p, Pk[2] calldata q) external pure returns(Pk[2] memory){ return c ? p : q; } }`;
     const h = await Harness.create();
@@ -104,17 +104,17 @@ describe('ternary rejects: abiDecode branches (RC-1) and cd|storage location mix
   });
 
   it('a calldata|storage ternary mix rejects across every reference family (was OA-1)', () => {
-    expect(codes(`${In} @contract class C { @state sx: Arr<In,2>; @external @view f(c: bool, p: Arr<In,2>): Arr<In,2> { return c ? p : this.sx; } }`)).toContain('JETH074');
-    expect(codes(`@contract class C { @state sx: Arr<u256,2>; @external @view f(c: bool, p: Arr<u256,2>): Arr<u256,2> { return c ? p : this.sx; } }`)).toContain('JETH074');
-    expect(codes(`${In} @contract class C { @state sx: In; @external @view f(c: bool, p: In): In { return c ? p : this.sx; } }`)).toContain('JETH074');
-    expect(codes(`@contract class C { @state sb: bytes; @external @view f(c: bool, b: bytes): bytes { return c ? b : this.sb; } }`)).toContain('JETH074');
-    expect(codes(`@struct class Q { a: u256; t: bytes } @contract class C { @state sq: Q; @external @view f(c: bool, p: Q): u256 { let v: Q = c ? p : this.sq; return v.a; } }`)).toContain('JETH074');
+    expect(codes(`${In} class C { sx: Arr<In,2>; get f(c: bool, p: Arr<In,2>): External<Arr<In,2>> { return c ? p : this.sx; } }`)).toContain('JETH074');
+    expect(codes(`class C { sx: Arr<u256,2>; get f(c: bool, p: Arr<u256,2>): External<Arr<u256,2>> { return c ? p : this.sx; } }`)).toContain('JETH074');
+    expect(codes(`${In} class C { sx: In; get f(c: bool, p: In): External<In> { return c ? p : this.sx; } }`)).toContain('JETH074');
+    expect(codes(`class C { sb: bytes; get f(c: bool, b: bytes): External<bytes> { return c ? b : this.sb; } }`)).toContain('JETH074');
+    expect(codes(`type Q = { a: u256; t: bytes }; class C { sq: Q; get f(c: bool, p: Q): External<u256> { let v: Q = c ? p : this.sq; return v.a; } }`)).toContain('JETH074');
   });
 
   it('bytes memory|storage ternary stays accepted and byte-identical', async () => {
-    const J = `@contract class C { @state sb: bytes;
-  @external seed(): void { this.sb = bytes("stor"); }
-  @external @view bmem(c: bool): bytes { let m: bytes = bytes("memv"); return c ? m : this.sb; } }`;
+    const J = `class C { sb: bytes;
+  seed(): External<void> { this.sb = bytes("stor"); }
+  get bmem(c: bool): External<bytes> { let m: bytes = bytes("memv"); return c ? m : this.sb; } }`;
     const S = `contract C { bytes sb;
   function seed() external { sb = "stor"; }
   function bmem(bool c) external view returns(bytes memory){ bytes memory m = "memv"; return c ? m : sb; } }`;

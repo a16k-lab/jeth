@@ -13,18 +13,16 @@ function codesFor(source: string): string[] {
   }
 }
 
-const wrap = (body: string) => `@contract
-class T {
-  @state x: u256 = 0n;
-  @external
-  f(): void {
+const wrap = (body: string) => `class T {
+  x: u256 = 0n;
+  f(): External<void> {
     ${body}
   }
 }`;
 
 describe('subset validator', () => {
   it("rejects the 'number' type", () => {
-    expect(codesFor(`@contract\nclass T { @state x: number = 0n; }`)).toContain('JETH001');
+    expect(codesFor(`class T { x: number = 0n; }`)).toContain('JETH001');
   });
 
   it('rejects floating-point literals', () => {
@@ -32,7 +30,7 @@ describe('subset validator', () => {
   });
 
   it('rejects async / await', () => {
-    const src = `@contract\nclass T { @external async f(): void {} }`;
+    const src = `class T { async f(): External<void> {} }`;
     expect(codesFor(src)).toContain('JETH020');
   });
 
@@ -76,7 +74,7 @@ describe('subset validator', () => {
     // decorator mode: a contract field must carry an explicit @state (JETH045).
     expect(codesFor(`// use @decorators\n@contract\nclass T { y: u256 = 0n; }`)).toContain('JETH045');
     // native mode (default): a bare non-static field IS a @state storage variable - accepted.
-    expect(codesFor(`@contract\nclass T { y: u256 = 0n; @external @view g(): u256 { return this.y; } }`)).not.toContain('JETH045');
+    expect(codesFor(`class T { y: u256 = 0n; get g(): External<u256> { return this.y; } }`)).not.toContain('JETH045');
   });
 
   it('rejects @view functions that write storage', () => {
@@ -90,25 +88,24 @@ class T {
   });
 
   it('rejects a literal out of range for its type', () => {
-    const src = `@contract\nclass T { @state x: u8 = 256n; }`;
+    const src = `class T { x: u8 = 256n; }`;
     expect(codesFor(src)).toContain('JETH070');
   });
 
   it('rejects an integer literal assigned to a bool state var', () => {
     // soundness hole: a BigInt literal must not initialize a bool (would store a
     // non-0/1 word, corrupting the bool invariant)
-    expect(codesFor(`@contract\nclass T { @state b: bool = 999n; }`)).toContain('JETH086');
+    expect(codesFor(`class T { b: bool = 999n; }`)).toContain('JETH086');
   });
 
   it('rejects a bool literal assigned to an integer state var', () => {
-    expect(codesFor(`@contract\nclass T { @state x: u256 = true; }`)).toContain('JETH087');
+    expect(codesFor(`class T { x: u256 = true; }`)).toContain('JETH087');
   });
 
   it('allows a local to shadow a parameter (like solc; codegen gives each a unique Yul name)', () => {
-    const src = `@contract
-class T {
-  @state x: u256 = 0n;
-  @external f(a: u256): u256 { let a: u256 = 1n; return a; }
+    const src = `class T {
+  x: u256 = 0n;
+  get f(a: u256): External<u256> { let a: u256 = 1n; return a; }
 }`;
     expect(codesFor(src)).toEqual([]); // cross-scope shadow of a parameter is allowed (warning-only in solc)
   });

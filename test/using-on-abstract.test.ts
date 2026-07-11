@@ -53,8 +53,7 @@ async function same(J: string, S: string, calls: { sig: string; arg?: string; va
 }
 
 const JL = `
-@library
-class L {
+static class L {
   half(v: u256): u256 { return v / 2n; }
 }
 `;
@@ -64,8 +63,7 @@ library L {
 }
 `;
 const JM = `
-@library
-class M {
+static class M {
   deca(v: u256): u256 { return v * 10n; }
 }
 `;
@@ -76,12 +74,9 @@ library M {
 `;
 // three same-name tag libraries for the shadowing anchors: L1 = +1000, L2 = +2000, L3 = +3000
 const JT = `
-@library
-class L1 { tag(v: u256): u256 { return v + 1000n; } }
-@library
-class L2 { tag(v: u256): u256 { return v + 2000n; } }
-@library
-class L3 { tag(v: u256): u256 { return v + 3000n; } }
+static class L1 { tag(v: u256): u256 { return v + 1000n; } }
+static class L2 { tag(v: u256): u256 { return v + 2000n; } }
+static class L3 { tag(v: u256): u256 { return v + 3000n; } }
 `;
 const ST = `
 library L1 { function tag(uint256 v) internal pure returns (uint256) { return v + 1000; } }
@@ -92,10 +87,8 @@ library L3 { function tag(uint256 v) internal pure returns (uint256) { return v 
 describe('AXIS 1: @using(L) on an @abstract base serves the base OWN bodies', () => {
   it('canonical: inherited helper uses the attachment, child calls the helper (decoded f(10)=5)', async () => {
     const J = JL + `
-@using(L) @abstract
-class Base { cap(x: u256): u256 { return x.half(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(L) abstract class Base { cap(x: u256): u256 { return x.half(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `;
     const S = SL + `
 abstract contract Base { using L for uint256; function cap(uint256 x) internal pure returns (uint256) { return x.half(); } }
@@ -109,10 +102,9 @@ contract C is Base { function f(uint256 x) external pure returns (uint256) { ret
 
   it('reversed decorator order (@abstract then @using) lifts identically (f(26)=13)', async () => {
     const J = JL + `
-@abstract @using(L)
-class Base { cap(x: u256): u256 { return x.half(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(L)
+abstract class Base { cap(x: u256): u256 { return x.half(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `;
     const S = SL + `
 abstract contract Base { using L for uint256; function cap(uint256 x) internal pure returns (uint256) { return x.half(); } }
@@ -125,16 +117,12 @@ contract C is Base { function f(uint256 x) external pure returns (uint256) { ret
 
   it('diamond/C3: two abstract mids over the @using-abstract root', async () => {
     const J = JL + `
-@using(L) @abstract
-class Base { cap(x: u256): u256 { return x.half(); } }
-@abstract
-class A1 extends Base { g1(x: u256): u256 { return this.cap(x) + 1n; } }
-@abstract
-class A2 extends Base { g2(x: u256): u256 { return this.cap(x) + 2n; } }
-@contract
+@using(L) abstract class Base { cap(x: u256): u256 { return x.half(); } }
+abstract class A1 extends Base { g1(x: u256): u256 { return this.cap(x) + 1n; } }
+abstract class A2 extends Base { g2(x: u256): u256 { return this.cap(x) + 2n; } }
 class C extends A1, A2 {
-  @external @pure f1(x: u256): u256 { return this.g1(x); }
-  @external @pure f2(x: u256): u256 { return this.g2(x); }
+  get f1(x: u256): External<u256> { return this.g1(x); }
+  get f2(x: u256): External<u256> { return this.g2(x); }
 }
 `;
     const S = SL + `
@@ -154,13 +142,11 @@ contract C is A1, A2 {
 
   it('a base method calling ANOTHER base method that uses the attachment (f(10)=20)', async () => {
     const J = JL + `
-@using(L) @abstract
-class Base {
+@using(L) abstract class Base {
   inner(x: u256): u256 { return x.half(); }
   outer(x: u256): u256 { return this.inner(x) * 3n + x.half(); }
 }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.outer(x); } }
+class C extends Base { get f(x: u256): External<u256> { return this.outer(x); } }
 `;
     const S = SL + `
 abstract contract Base {
@@ -177,15 +163,13 @@ contract C is Base { function f(uint256 x) external pure returns (uint256) { ret
 
   it('abstract base with state + ctor chain: attached call in the BASE constructor body', async () => {
     const J = JL + `
-@using(L) @abstract
-class Base {
-  @state total: u256;
+@using(L) abstract class Base {
+  total: u256;
   constructor(seed: u256) { this.total = seed.half(); }
 }
-@contract
 class C extends Base {
   constructor() { super(14n); }
-  @external @view f(): u256 { return this.total; }
+  get f(): External<u256> { return this.total; }
 }
 `;
     const S = SL + `
@@ -206,10 +190,8 @@ contract C is Base {
 
   it('base CTOR under same-name shadowing writes the BASE library flavor (slot-checked 2005)', async () => {
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Base { @state acc: u256; constructor(seed: u256) { this.acc = seed.tag(); } }
-@using(L1) @contract
-class C extends Base { constructor() { super(5n); } @external @view getAcc(): u256 { return this.acc; } }
+@using(L2) abstract class Base { acc: u256; constructor(seed: u256) { this.acc = seed.tag(); } }
+@using(L1) class C extends Base { constructor() { super(5n); } get getAcc(): External<u256> { return this.acc; } }
 `, ST + `
 abstract contract Base { using L2 for uint256; uint256 acc; constructor(uint256 seed) { acc = seed.tag(); } }
 contract C is Base { using L1 for uint256; constructor() Base(5) {} function getAcc() external view returns (uint256) { return acc; } }
@@ -221,14 +203,10 @@ contract C is Base { using L1 for uint256; constructor() Base(5) {} function get
   it('struct + bytes receivers mirror the @using-on-contract surface', async () => {
     // struct receiver
     await same(`
-@struct
-class P { x: u256; y: u256; }
-@library
-class LS { sum(p: P): u256 { return p.x + p.y; } }
-@using(LS) @abstract
-class Base { cap(p: P): u256 { return p.sum(); } }
-@contract
-class C extends Base { @external @pure f(a: u256, b: u256): u256 { let p: P = P(a, b); return this.cap(p); } }
+type P = { x: u256; y: u256; };
+static class LS { sum(p: P): u256 { return p.x + p.y; } }
+@using(LS) abstract class Base { cap(p: P): u256 { return p.sum(); } }
+class C extends Base { get f(a: u256, b: u256): External<u256> { let p: P = P(a, b); return this.cap(p); } }
 `, `
 struct P { uint256 x; uint256 y; }
 library LS { function sum(P memory p) internal pure returns (uint256) { return p.x + p.y; } }
@@ -237,12 +215,9 @@ contract C is Base { function f(uint256 a, uint256 b) external pure returns (uin
 `, [{ sig: 'f(uint256,uint256)', arg: pad32(3n) + pad32(9n) }]);
     // bytes receiver
     await same(`
-@library
-class LB { len2(b: bytes): u256 { return b.length * 2n; } }
-@using(LB) @abstract
-class Base { cap(b: bytes): u256 { return b.len2(); } }
-@contract
-class C extends Base { @external @pure f(b: bytes): u256 { return this.cap(b); } }
+static class LB { len2(b: bytes): u256 { return b.length * 2n; } }
+@using(LB) abstract class Base { cap(b: bytes): u256 { return b.len2(); } }
+class C extends Base { get f(b: bytes): External<u256> { return this.cap(b); } }
 `, `
 library LB { function len2(bytes memory b) internal pure returns (uint256) { return b.length * 2; } }
 abstract contract Base { using LB for bytes; function cap(bytes memory b) internal pure returns (uint256) { return b.len2(); } }
@@ -252,12 +227,10 @@ contract C is Base { function f(bytes memory b) external pure returns (uint256) 
 
   it('scoping: a same-name attachment in base and child resolves LEXICALLY (2001 vs 1001)', async () => {
     const J = JT + `
-@using(L2) @abstract
-class Base { cap(x: u256): u256 { return x.tag(); } }
-@using(L1) @contract
-class C extends Base {
-  @external @pure f(x: u256): u256 { return this.cap(x); }
-  @external @pure g(x: u256): u256 { return x.tag(); }
+@using(L2) abstract class Base { cap(x: u256): u256 { return x.tag(); } }
+@using(L1) class C extends Base {
+  get f(x: u256): External<u256> { return this.cap(x); }
+  get g(x: u256): External<u256> { return x.tag(); }
 }
 `;
     const S = ST + `
@@ -280,27 +253,21 @@ contract C is Base {
 
   it('@using(L, M), stacked @using, and a @payable base fn', async () => {
     await same(JL + JM + `
-@using(L, M) @abstract
-class Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(L, M) abstract class Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `, SL + SM + `
 abstract contract Base { using L for uint256; using M for uint256; function cap(uint256 x) internal pure returns (uint256) { return x.half() + x.deca(); } }
 contract C is Base { function f(uint256 x) external pure returns (uint256) { return cap(x); } }
 `, [{ sig: 'f(uint256)', arg: pad32(9n) }]);
     await same(JL + JM + `
-@using(L) @using(M) @abstract
-class Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(L) @using(M) abstract class Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `, SL + SM + `
 abstract contract Base { using L for uint256; using M for uint256; function cap(uint256 x) internal pure returns (uint256) { return x.half() + x.deca(); } }
 contract C is Base { function f(uint256 x) external pure returns (uint256) { return cap(x); } }
 `, [{ sig: 'f(uint256)', arg: pad32(12n) }]);
     await same(JL + `
-@using(L) @abstract
-class Base { @external @payable buy(): u256 { return msg.value.half(); } }
-@contract
+@using(L) abstract class Base { buy(): Payable<u256> { return msg.value.half(); } }
 class C extends Base { }
 `, SL + `
 abstract contract Base { using L for uint256; function buy() external payable virtual returns (uint256) { return msg.value.half(); } }
@@ -310,12 +277,10 @@ contract C is Base { }
 
   it('super with @virtual/@override markers: each body uses its OWN class attachment (3002)', async () => {
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Base { @virtual tagit(x: u256): u256 { return x.tag(); } }
-@using(L1) @contract
-class C extends Base {
+@using(L2) abstract class Base { @virtual tagit(x: u256): u256 { return x.tag(); } }
+@using(L1) class C extends Base {
   @override tagit(x: u256): u256 { return super.tagit(x) + x.tag(); }
-  @external @pure f(x: u256): u256 { return this.tagit(x); }
+  get f(x: u256): External<u256> { return this.tagit(x); }
 }
 `, ST + `
 abstract contract Base { using L2 for uint256; function tagit(uint256 x) internal pure virtual returns (uint256) { return x.tag(); } }
@@ -331,19 +296,16 @@ contract C is Base {
 
   it('a GENERIC function body resolves attachments in its declaring class (deployed and base)', async () => {
     await same(JL + `
-@using(L) @contract
-class C {
+@using(L) class C {
   twice<T>(v: T, k: u256): u256 { return k.half() + k.half(); }
-  @external @pure f(x: u256): u256 { return this.twice(x, x); }
+  get f(x: u256): External<u256> { return this.twice(x, x); }
 }
 `, SL + `
 contract C { using L for uint256; function twice(uint256 v, uint256 k) internal pure returns (uint256) { return k.half() + k.half(); } function f(uint256 x) external pure returns (uint256) { return twice(x, x); } }
 `, [{ sig: 'f(uint256)', arg: pad32(10n) }]);
     await same(JL + `
-@using(L) @abstract
-class Base { gh<T>(v: T, k: u256): u256 { return k.half(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.gh(x, x); } }
+@using(L) abstract class Base { gh<T>(v: T, k: u256): u256 { return k.half(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.gh(x, x); } }
 `, SL + `
 abstract contract Base { using L for uint256; function gh(uint256 v, uint256 k) internal pure returns (uint256) { return k.half(); } }
 contract C is Base { function f(uint256 x) external pure returns (uint256) { return gh(x, x); } }
@@ -354,10 +316,8 @@ contract C is Base { function f(uint256 x) external pure returns (uint256) { ret
 describe('AXIS 2: lexical boundaries - no fall-through to the deployed contract map', () => {
   it('MIN-R4: a base with its OWN @using cannot reach a key only the DEPLOYED @using attaches', () => {
     const J = JL + JM + `
-@using(M) @abstract
-class Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
-@using(L) @contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(M) abstract class Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
+@using(L) class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `;
     expect(codes(J)).toContain('JETH074');
     expect(solcRejects(SL + SM + `
@@ -368,12 +328,9 @@ contract C is Base { using L for uint256; function f(uint256 x) external pure re
 
   it('MIN-R4 3-level variant: a MID with its own @using cannot reach the deployed key either', () => {
     const J = JL + JM + `
-@abstract
-class Base { }
-@using(M) @abstract
-class Mid extends Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
-@using(L) @contract
-class C extends Mid { @external @pure f(x: u256): u256 { return this.cap(x); } }
+abstract class Base { }
+@using(M) abstract class Mid extends Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
+@using(L) class C extends Mid { get f(x: u256): External<u256> { return this.cap(x); } }
 `;
     expect(codes(J)).toContain('JETH074');
     expect(solcRejects(SL + SM + `
@@ -385,10 +342,8 @@ contract C is Mid { using L for uint256; function f(uint256 x) external pure ret
 
   it('corrected mirror: adding the lib to the base OWN @using turns MIN-R4 into an accept (105)', async () => {
     const { j } = await same(JL + JM + `
-@using(M, L) @abstract
-class Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
-@using(L) @contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(M, L) abstract class Base { cap(x: u256): u256 { return x.half() + x.deca(); } }
+@using(L) class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `, SL + SM + `
 abstract contract Base { using M for uint256; using L for uint256; function cap(uint256 x) internal pure returns (uint256) { return x.half() + x.deca(); } }
 contract C is Base { using L for uint256; function f(uint256 x) external pure returns (uint256) { return cap(x); } }
@@ -399,10 +354,8 @@ contract C is Base { using L for uint256; function f(uint256 x) external pure re
 
   it('R1: a base body with NO @using cannot use the deployed contract attachment', () => {
     expect(codes(JL + `
-@abstract
-class Base { cap(x: u256): u256 { return x.half(); } }
-@using(L) @contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+abstract class Base { cap(x: u256): u256 { return x.half(); } }
+@using(L) class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `)).toContain('JETH074');
     expect(solcRejects(SL + `
 abstract contract Base { function cap(uint256 x) internal pure returns (uint256) { return x.half(); } }
@@ -412,12 +365,9 @@ contract C is Base { using L for uint256; function f(uint256 x) external pure re
 
   it('R2: a MID body with no @using cannot use the deployed contract attachment', () => {
     expect(codes(JL + `
-@abstract
-class Base { }
-@abstract
-class Mid extends Base { cap(x: u256): u256 { return x.half(); } }
-@using(L) @contract
-class C extends Mid { @external @pure f(x: u256): u256 { return this.cap(x); } }
+abstract class Base { }
+abstract class Mid extends Base { cap(x: u256): u256 { return x.half(); } }
+@using(L) class C extends Mid { get f(x: u256): External<u256> { return this.cap(x); } }
 `)).toContain('JETH074');
     expect(solcRejects(SL + `
 abstract contract Base { }
@@ -428,10 +378,8 @@ contract C is Mid { using L for uint256; function f(uint256 x) external pure ret
 
   it('R5: a LIBRARY body cannot use the deployed contract attachment', () => {
     expect(codes(JL + `
-@library
-class K { quarter(v: u256): u256 { return v.half(); } }
-@using(L) @contract
-class C { @external @pure f(x: u256): u256 { return K.quarter(x); } }
+static class K { quarter(v: u256): u256 { return v.half(); } }
+@using(L) class C { get f(x: u256): External<u256> { return K.quarter(x); } }
 `)).toContain('JETH074');
     expect(solcRejects(SL + `
 library K { function quarter(uint256 v) internal pure returns (uint256) { return v.half(); } }
@@ -458,31 +406,23 @@ contract C is Base { function f(uint256 x) external pure returns (uint256) { ret
   it('control: no-@using attachment, wrong arity, bad @using arg, base-own-ambiguous', () => {
     // no @using anywhere
     expect(codes(JL + `
-@abstract
-class Base { cap(x: u256): u256 { return x.half(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+abstract class Base { cap(x: u256): u256 { return x.half(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `)).toContain('JETH074');
     // wrong arity through the lifted base attachment (half takes just the receiver)
     expect(codes(JL + `
-@using(L) @abstract
-class Base { cap(x: u256): u256 { return x.half(3n); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(L) abstract class Base { cap(x: u256): u256 { return x.half(3n); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `)).toContain('JETH148');
     // a bad @using argument on the abstract is validated like the deployed form
     expect(codes(JL + `
-@using(NotALib) @abstract
-class Base { cap(x: u256): u256 { return x.half(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(NotALib) abstract class Base { cap(x: u256): u256 { return x.half(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `)).toContain('JETH391');
     // two of the base's OWN @using libs attach the same key -> ambiguous at the call site
     expect(codes(JT + `
-@using(L1, L2) @abstract
-class Base { cap(x: u256): u256 { return x.tag(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(L1, L2) abstract class Base { cap(x: u256): u256 { return x.tag(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `)).toContain('JETH393');
     expect(solcRejects(ST + `
 abstract contract Base { using L1 for uint256; using L2 for uint256; function cap(uint256 x) internal pure returns (uint256) { return x.tag(); } }
@@ -493,12 +433,9 @@ contract C is Base { function f(uint256 x) external pure returns (uint256) { ret
   it('built-in collision (JETH341) is lexical too: fires in the @using base body, not the child', async () => {
     // in the base's own body the attached `length` collides with the built-in -> both reject
     expect(codes(`
-@library
-class LL { length(xs: u256[]): u256 { return 999n; } }
-@using(LL) @abstract
-class Base { cap(xs: u256[]): u256 { return xs.length; } }
-@contract
-class C extends Base { @external @pure f(xs: u256[]): u256 { return this.cap(xs); } }
+static class LL { length(xs: u256[]): u256 { return 999n; } }
+@using(LL) abstract class Base { cap(xs: u256[]): u256 { return xs.length; } }
+class C extends Base { get f(xs: u256[]): External<u256> { return this.cap(xs); } }
 `)).toContain('JETH341');
     expect(solcRejects(`
 library LL { function length(uint256[] memory xs) internal pure returns (uint256) { return 999; } }
@@ -507,12 +444,9 @@ contract C is Base { function f(uint256[] memory xs) external pure returns (uint
 `)).toBe(true);
     // the child body is OUTSIDE the directive's scope: the built-in resolves fine on both sides
     await same(`
-@library
-class LL { length(xs: u256[]): u256 { return 999n; } }
-@using(LL) @abstract
-class Base { }
-@contract
-class C extends Base { @external @pure f(xs: u256[]): u256 { return xs.length; } }
+static class LL { length(xs: u256[]): u256 { return 999n; } }
+@using(LL) abstract class Base { }
+class C extends Base { get f(xs: u256[]): External<u256> { return xs.length; } }
 `, `
 library LL { function length(uint256[] memory xs) internal pure returns (uint256) { return 999; } }
 abstract contract Base { using LL for uint256[]; }
@@ -522,10 +456,9 @@ contract C is Base { function f(uint256[] memory xs) external pure returns (uint
 
   it('control unchanged: @using on @contract, the self convention (file-wide), qualified L.f', async () => {
     const { j } = await same(JL + `
-@using(L) @contract
-class C {
-  @external @pure f(x: u256): u256 { return x.half(); }
-  @external @pure g(x: u256): u256 { return L.half(x) + 1n; }
+@using(L) class C {
+  get f(x: u256): External<u256> { return x.half(); }
+  get g(x: u256): External<u256> { return L.half(x) + 1n; }
 }
 `, SL + `
 contract C {
@@ -539,24 +472,18 @@ contract C {
     // the native `self` convention is FILE-WIDE by design: it serves a base body with no @using
     // anywhere, and a LIBRARY body (solc mirrors carry the using directive inside the consumer)
     await same(`
-@library
-class S { double(self: u256): u256 { return self * 2n; } }
-@abstract
-class Base { cap(x: u256): u256 { return x.double(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+static class S { double(self: u256): u256 { return self * 2n; } }
+abstract class Base { cap(x: u256): u256 { return x.double(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `, `
 library S { function double(uint256 self) internal pure returns (uint256) { return self * 2; } }
 abstract contract Base { using S for uint256; function cap(uint256 x) internal pure returns (uint256) { return x.double(); } }
 contract C is Base { function f(uint256 x) external pure returns (uint256) { return cap(x); } }
 `, [{ sig: 'f(uint256)', arg: pad32(21n) }]);
     await same(`
-@library
-class S { double(self: u256): u256 { return self * 2n; } }
-@library
-class K { quad(v: u256): u256 { return v.double().double(); } }
-@contract
-class C { @external @pure f(x: u256): u256 { return K.quad(x); } }
+static class S { double(self: u256): u256 { return self * 2n; } }
+static class K { quad(v: u256): u256 { return v.double().double(); } }
+class C { get f(x: u256): External<u256> { return K.quad(x); } }
 `, `
 library S { function double(uint256 self) internal pure returns (uint256) { return self * 2; } }
 library K { using S for uint256; function quad(uint256 v) internal pure returns (uint256) { return v.double().double(); } }
@@ -564,13 +491,10 @@ contract C { function f(uint256 x) external pure returns (uint256) { return K.qu
 `, [{ sig: 'f(uint256)', arg: pad32(7n) }]);
     // a self-convention lib and a base @using lib side by side in one base body
     await same(`
-@library
-class S { double(self: u256): u256 { return self * 2n; } }
+static class S { double(self: u256): u256 { return self * 2n; } }
 ` + JL + `
-@using(L) @abstract
-class Base { cap(x: u256): u256 { return x.half() + x.double(); } }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return this.cap(x); } }
+@using(L) abstract class Base { cap(x: u256): u256 { return x.half() + x.double(); } }
+class C extends Base { get f(x: u256): External<u256> { return this.cap(x); } }
 `, `
 library S { function double(uint256 self) internal pure returns (uint256) { return self * 2; } }
 ` + SL + `
@@ -583,12 +507,10 @@ contract C is Base { function f(uint256 x) external pure returns (uint256) { ret
 describe('AXIS 3: a @modifier body resolves attachments in its DECLARING class', () => {
   it('MOD1 (shadowing): base-declared modifier uses the BASE library, not the deployed one (2007)', async () => {
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Base { @state acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; } }
-@using(L1) @contract
-class C extends Base {
-  @external @mark(7n) poke(): void { }
-  @external @view getAcc(): u256 { return this.acc; }
+@using(L2) abstract class Base { acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; } }
+@using(L1) class C extends Base {
+  @mark(7n) poke(): External<void> { }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; using L2 for uint256; modifier mark(uint256 x) { acc = x.tag(); _; } }
@@ -605,12 +527,10 @@ contract C is Base {
 
   it('MOD2 (no shadowing): only the base has @using - the modifier body still resolves (2009)', async () => {
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Base { @state acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; } }
-@contract
+@using(L2) abstract class Base { acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; } }
 class C extends Base {
-  @external @mark(9n) poke(): void { }
-  @external @view getAcc(): u256 { return this.acc; }
+  @mark(9n) poke(): External<void> { }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; using L2 for uint256; modifier mark(uint256 x) { acc = x.tag(); _; } }
@@ -626,12 +546,11 @@ contract C is Base {
 
   it('a modifier declared in the DEPLOYED class uses its own map (unchanged, 1007)', async () => {
     const { j } = await same(JT + `
-@using(L1) @contract
-class C {
-  @state acc: u256;
+@using(L1) class C {
+  acc: u256;
   @modifier mark(x: u256) { this.acc = x.tag(); _; }
-  @external @mark(7n) poke(): void { }
-  @external @view getAcc(): u256 { return this.acc; }
+  @mark(7n) poke(): External<void> { }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 contract C {
@@ -649,12 +568,10 @@ contract C {
 
   it('a CTOR modifier declared in the base resolves via the base (slot-checked 2005)', async () => {
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Base { @state acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; } }
-@using(L1) @contract
-class C extends Base {
+@using(L2) abstract class Base { acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; } }
+@using(L1) class C extends Base {
   @mark(5n) constructor() { }
-  @external @view getAcc(): u256 { return this.acc; }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; using L2 for uint256; modifier mark(uint256 x) { acc = x.tag(); _; } }
@@ -671,14 +588,11 @@ contract C is Base {
   it('3-level chain: grandchild applies the BASE modifier; a MID-declared modifier uses MID', async () => {
     // modifier declared in Base (L2), applied by the grandchild C past a @using(L3) Mid -> 2007
     const a = await same(JT + `
-@using(L2) @abstract
-class Base { @state acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; } }
-@using(L3) @abstract
-class Mid extends Base { }
-@using(L1) @contract
-class C extends Mid {
-  @external @mark(7n) poke(): void { }
-  @external @view getAcc(): u256 { return this.acc; }
+@using(L2) abstract class Base { acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; } }
+@using(L3) abstract class Mid extends Base { }
+@using(L1) class C extends Mid {
+  @mark(7n) poke(): External<void> { }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; using L2 for uint256; modifier mark(uint256 x) { acc = x.tag(); _; } }
@@ -693,14 +607,11 @@ contract C is Mid {
     expect((await a.j.h.call(a.j.a, '0x' + sel('getAcc()'))).returnHex).toBe('0x' + pad32(2007n));
     // modifier declared in Mid with Mid's own @using(L3) -> 3007
     const b = await same(JT + `
-@abstract
-class Base { @state acc: u256; }
-@using(L3) @abstract
-class Mid extends Base { @modifier mark(x: u256) { this.acc = x.tag(); _; } }
-@using(L1) @contract
-class C extends Mid {
-  @external @mark(7n) poke(): void { }
-  @external @view getAcc(): u256 { return this.acc; }
+abstract class Base { acc: u256; }
+@using(L3) abstract class Mid extends Base { @modifier mark(x: u256) { this.acc = x.tag(); _; } }
+@using(L1) class C extends Mid {
+  @mark(7n) poke(): External<void> { }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; }
@@ -718,12 +629,10 @@ contract C is Mid {
   it('POST-code and CONDITIONAL-placeholder modifier shapes route the same way', async () => {
     // post-placeholder code (the buffered userfn path): both the pre and post writes use Base's L2
     const a = await same(JT + `
-@using(L2) @abstract
-class Base { @state acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; this.acc = this.acc + x.tag(); } }
-@using(L1) @contract
-class C extends Base {
-  @external @mark(7n) poke(): u256 { return 1n; }
-  @external @view getAcc(): u256 { return this.acc; }
+@using(L2) abstract class Base { acc: u256; @modifier mark(x: u256) { this.acc = x.tag(); _; this.acc = this.acc + x.tag(); } }
+@using(L1) class C extends Base {
+  @mark(7n) poke(): External<u256> { return 1n; }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; using L2 for uint256; modifier mark(uint256 x) { acc = x.tag(); _; acc = acc + x.tag(); } }
@@ -737,12 +646,10 @@ contract C is Base {
     expect((await a.j.h.call(a.j.a, '0x' + sel('getAcc()'))).returnHex).toBe('0x' + pad32(4014n)); // 2007 + 2007
     // conditional placeholder (whole-body lowering)
     const b = await same(JT + `
-@using(L2) @abstract
-class Base { @state acc: u256; @modifier mark(x: u256) { if (x > 1n) { this.acc = x.tag(); _; } } }
-@using(L1) @contract
-class C extends Base {
-  @external @mark(7n) poke(): u256 { return 1n; }
-  @external @view getAcc(): u256 { return this.acc; }
+@using(L2) abstract class Base { acc: u256; @modifier mark(x: u256) { if (x > 1n) { this.acc = x.tag(); _; } } }
+@using(L1) class C extends Base {
+  @mark(7n) poke(): External<u256> { return 1n; }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; using L2 for uint256; modifier mark(uint256 x) { if (x > 1) { acc = x.tag(); _; } } }
@@ -762,11 +669,10 @@ describe('AXIS 4: constructor paths own their attachments (fast path + base-ctor
     // Regression cell: the chain<=1 fast path reaches checkConstructor directly (no buildLevel), which
     // never set bodyOwnerContract - the owner-only lookup saw undefined and rejected JETH074.
     const { j } = await same(JL + `
-@using(L) @contract
-class C {
-  @state acc: u256;
+@using(L) class C {
+  acc: u256;
   constructor() { this.acc = (8n).half(); }
-  @external @view g(): u256 { return this.acc; }
+  get g(): External<u256> { return this.acc; }
 }
 `, SL + `
 contract C { using L for uint256; uint256 acc; constructor() { acc = uint256(8).half(); } function g() external view returns (uint256) { return acc; } }
@@ -803,12 +709,10 @@ contract C { using L for uint256; uint256 immutable k = uint256(18).half(); uint
     // requires a constant @state initializer (pre-existing JETH048 gate), independent of @using -
     // the plain qualified spelling L.half(44n) rejects identically, so it is not an ownership defect.
     expect(codes(JL + `
-@using(L) @contract
-class C { @state s: u256 = (44n).half(); @external @view g(): u256 { return this.s; } }
+@using(L) class C { s: u256 = (44n).half(); get g(): External<u256> { return this.s; } }
 `)).toContain('JETH048');
     expect(codes(JL + `
-@contract
-class C { @state s: u256 = L.half(44n); @external @view g(): u256 { return this.s; } }
+class C { s: u256 = L.half(44n); get g(): External<u256> { return this.s; } }
 `)).toContain('JETH048');
   });
 
@@ -816,14 +720,11 @@ class C { @state s: u256 = L.half(44n); @external @view g(): u256 { return this.
     // The miscompile cell: bindBaseArgs swapped the LOCAL scope to Mid's params but left the
     // attachment owner at the deployed contract, so seed.tag() picked C's L1 (+1000) over Mid's L2.
     const { j } = await same(JT + `
-@abstract
-class Base { @state acc: u256; constructor(x: u256) { this.acc = x; } }
-@using(L2) @abstract
-class Mid extends Base { constructor(seed: u256) { super(seed.tag()); } }
-@using(L1) @contract
-class C extends Mid {
+abstract class Base { acc: u256; constructor(x: u256) { this.acc = x; } }
+@using(L2) abstract class Mid extends Base { constructor(seed: u256) { super(seed.tag()); } }
+@using(L1) class C extends Mid {
   constructor() { super(7n); }
-  @external @view getAcc(): u256 { return this.acc; }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; constructor(uint256 x) { acc = x; } }
@@ -837,14 +738,11 @@ contract C is Mid { using L1 for uint256; constructor() Mid(7) {} function getAc
     // Same shape, no deployed @using at all: the owner-swapped lookup finds Mid's L2; the pre-fix
     // deployed-map lookup found nothing and rejected JETH074 while solc accepts.
     const { j } = await same(JT + `
-@abstract
-class Base { @state acc: u256; constructor(x: u256) { this.acc = x; } }
-@using(L2) @abstract
-class Mid extends Base { constructor(seed: u256) { super(seed.tag()); } }
-@contract
+abstract class Base { acc: u256; constructor(x: u256) { this.acc = x; } }
+@using(L2) abstract class Mid extends Base { constructor(seed: u256) { super(seed.tag()); } }
 class C extends Mid {
   constructor() { super(4n); }
-  @external @view getAcc(): u256 { return this.acc; }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; constructor(uint256 x) { acc = x; } }
@@ -856,12 +754,10 @@ contract C is Mid { constructor() Mid(4) {} function getAcc() external view retu
 
   it('control: a DEPLOYED-level super(arg) still resolves via the deployed map (1005)', async () => {
     const { j } = await same(JT + `
-@abstract
-class Base { @state acc: u256; constructor(x: u256) { this.acc = x; } }
-@using(L1) @contract
-class C extends Base {
+abstract class Base { acc: u256; constructor(x: u256) { this.acc = x; } }
+@using(L1) class C extends Base {
   constructor() { super((5n).tag()); }
-  @external @view getAcc(): u256 { return this.acc; }
+  get getAcc(): External<u256> { return this.acc; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; constructor(uint256 x) { acc = x; } }
@@ -872,14 +768,11 @@ contract C is Base { using L1 for uint256; constructor() Base(uint256(5).tag()) 
 
   it('control: a post-super STATEMENT in the MID body resolves via Mid (2007, the 9c14905 fix)', async () => {
     const { j } = await same(JT + `
-@abstract
-class Base { @state acc: u256; constructor(x: u256) { this.acc = x; } }
-@using(L2) @abstract
-class Mid extends Base { @state m: u256; constructor(seed: u256) { super(seed); this.m = (7n).tag(); } }
-@using(L1) @contract
-class C extends Mid {
+abstract class Base { acc: u256; constructor(x: u256) { this.acc = x; } }
+@using(L2) abstract class Mid extends Base { m: u256; constructor(seed: u256) { super(seed); this.m = (7n).tag(); } }
+@using(L1) class C extends Mid {
   constructor() { super(1n); }
-  @external @view getM(): u256 { return this.m; }
+  get getM(): External<u256> { return this.m; }
 }
 `, ST + `
 abstract contract Base { uint256 acc; constructor(uint256 x) { acc = x; } }
@@ -899,11 +792,11 @@ contract C is Mid { using L1 for uint256; constructor() Mid(1) {} function getM(
 `;
     const solTail = ` uint256 acc; constructor() { acc = uint256(26).half(); } function g() external view returns (uint256) { return acc; } }`;
     const a = await same(
-      JL + `\n@using(L) @contract\nclass C {${ctorBody}}\n`,
+      JL + `\n@using(L) class C {${ctorBody}}\n`,
       SL + `contract C { using L for uint256;${solTail}`,
       [{ sig: 'g()' }], 1);
     const b = await same(
-      JL + `\n@abstract\nclass Empty { }\n@using(L) @contract\nclass C extends Empty {${ctorBody}}\n`,
+      JL + `\nabstract class Empty { }\n@using(L) class C extends Empty {${ctorBody}}\n`,
       SL + `abstract contract Empty { }\ncontract C is Empty { using L for uint256;${solTail}`,
       [{ sig: 'g()' }], 1);
     const ra = await a.j.h.call(a.j.a, '0x' + sel('g()'));

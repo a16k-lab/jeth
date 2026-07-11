@@ -24,14 +24,14 @@ const cdBSS = (sig: string, c: boolean, x: string, y: string) => {
 
 const SHORT = 'yes',
   LONG = 'no, this is a string that runs well past thirty-two bytes for the long case';
-const JETH = `@contract class C {
-  @state a: string; @state b: string;
-  @external setAB(x: string, y: string): void { this.a = x; this.b = y; }
-  @external @pure lit(c: bool): string { return c ? "${SHORT}" : "${LONG}"; }
-  @external @view stor(c: bool): string { let s: string = c ? this.a : this.b; return s; }
-  @external @pure cd(c: bool, x: string, y: string): string { return c ? x : y; }
-  @external @pure cdLen(c: bool, x: bytes, y: bytes): u256 { return (c ? x : y).length; }
-  @external @pure nested(c: bool, d: bool, x: string, y: string): string { return c ? (d ? x : y) : "fallback string that is also over thirty-two bytes long ok"; }
+const JETH = `class C {
+  a: string; b: string;
+  setAB(x: string, y: string): External<void> { this.a = x; this.b = y; }
+  get lit(c: bool): External<string> { return c ? "${SHORT}" : "${LONG}"; }
+  get stor(c: bool): External<string> { let s: string = c ? this.a : this.b; return s; }
+  get cd(c: bool, x: string, y: string): External<string> { return c ? x : y; }
+  get cdLen(c: bool, x: bytes, y: bytes): External<u256> { return (c ? x : y).length; }
+  get nested(c: bool, d: bool, x: string, y: string): External<string> { return c ? (d ? x : y) : "fallback string that is also over thirty-two bytes long ok"; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -88,14 +88,14 @@ describe('W3-Y2c storage<->memory struct-copy + whole-field-assign - byte-identi
   }
 
   it('P1-10: whole u256[] field assign to a storage struct-array element (+ overwrite-clear, OOB, empty)', async () => {
-    const J = `@struct class D { id: u256; xs: u256[]; }
-    @contract class C { @state vals: D[]; @state sentinel: u256;
-      @external seed() { this.vals.push(); this.vals[0n].id = 100n; this.vals[0n].xs.push(1n); this.vals[0n].xs.push(2n); this.vals[0n].xs.push(3n); this.vals.push(); this.vals[1n].id = 200n; this.sentinel = 0xcafen; }
-      @external setxs(i: u256, b: u256[]) { this.vals[i].xs = b; }
-      @external getid(i: u256): u256 { return this.vals[i].id; }
-      @external getlen(i: u256): u256 { return this.vals[i].xs.length; }
-      @external getxs(i: u256, j: u256): u256 { return this.vals[i].xs[j]; }
-      @external getsent(): u256 { return this.sentinel; } }`;
+    const J = `type D = { id: u256; xs: u256[]; };
+    class C { vals: D[]; sentinel: u256;
+      seed(): External<void> { this.vals.push(); this.vals[0n].id = 100n; this.vals[0n].xs.push(1n); this.vals[0n].xs.push(2n); this.vals[0n].xs.push(3n); this.vals.push(); this.vals[1n].id = 200n; this.sentinel = 0xcafen; }
+      setxs(i: u256, b: u256[]): External<void> { this.vals[i].xs = b; }
+      get getid(i: u256): External<u256> { return this.vals[i].id; }
+      get getlen(i: u256): External<u256> { return this.vals[i].xs.length; }
+      get getxs(i: u256, j: u256): External<u256> { return this.vals[i].xs[j]; }
+      get getsent(): External<u256> { return this.sentinel; } }`;
     const S = `contract C { struct D { uint256 id; uint256[] xs; } D[] vals; uint256 sentinel;
       function seed() external { vals.push(); vals[0].id=100; vals[0].xs.push(1); vals[0].xs.push(2); vals[0].xs.push(3); vals.push(); vals[1].id=200; sentinel=0xcafe; }
       function setxs(uint256 i, uint256[] calldata b) external { vals[i].xs = b; }
@@ -131,11 +131,11 @@ describe('W3-Y2c storage<->memory struct-copy + whole-field-assign - byte-identi
   });
 
   it('P1-10: whole u256[] field assign to a mapping-value struct field (this.m[k].xs = b)', async () => {
-    const J = `@struct class D { id: u256; xs: u256[]; }
-    @contract class C { @state m: mapping<address, D>;
-      @external setxs(k: address, b: u256[]) { this.m[k].xs = b; }
-      @external getlen(k: address): u256 { return this.m[k].xs.length; }
-      @external getxs(k: address, j: u256): u256 { return this.m[k].xs[j]; } }`;
+    const J = `type D = { id: u256; xs: u256[]; };
+    class C { m: mapping<address, D>;
+      setxs(k: address, b: u256[]): External<void> { this.m[k].xs = b; }
+      get getlen(k: address): External<u256> { return this.m[k].xs.length; }
+      get getxs(k: address, j: u256): External<u256> { return this.m[k].xs[j]; } }`;
     const S = `contract C { struct D { uint256 id; uint256[] xs; } mapping(address=>D) m;
       function setxs(address k, uint256[] calldata b) external { m[k].xs = b; }
       function getlen(address k) external view returns (uint256){ return m[k].xs.length; }
@@ -151,16 +151,16 @@ describe('W3-Y2c storage<->memory struct-copy + whole-field-assign - byte-identi
   });
 
   it('P1-10 sibling: whole static fixed-array field assign at depth (this.vals[i].fa, this.o.inner.fa)', async () => {
-    const J = `@struct class D { id: u256; fa: Arr<u256,2>; }
-    @struct class In { a: u256; fa: Arr<u256,2>; }
-    @struct class O { x: u256; inner: In; }
-    @contract class C { @state vals: D[]; @state o: O;
-      @external seed() { this.vals.push(); this.vals[0n].id = 7n; }
-      @external setElem(i: u256, a: Arr<u256,2>) { this.vals[i].fa = a; }
-      @external setNested(a: Arr<u256,2>) { this.o.inner.fa = a; }
-      @external gElem(i: u256, j: u256): u256 { return this.vals[i].fa[j]; }
-      @external gId(i: u256): u256 { return this.vals[i].id; }
-      @external gNested(j: u256): u256 { return this.o.inner.fa[j]; } }`;
+    const J = `type D = { id: u256; fa: Arr<u256,2>; };
+    type In = { a: u256; fa: Arr<u256,2>; };
+    type O = { x: u256; inner: In; };
+    class C { vals: D[]; o: O;
+      seed(): External<void> { this.vals.push(); this.vals[0n].id = 7n; }
+      setElem(i: u256, a: Arr<u256,2>): External<void> { this.vals[i].fa = a; }
+      setNested(a: Arr<u256,2>): External<void> { this.o.inner.fa = a; }
+      get gElem(i: u256, j: u256): External<u256> { return this.vals[i].fa[j]; }
+      get gId(i: u256): External<u256> { return this.vals[i].id; }
+      get gNested(j: u256): External<u256> { return this.o.inner.fa[j]; } }`;
     const S = `contract C { struct D { uint256 id; uint256[2] fa; } struct In { uint256 a; uint256[2] fa; } struct O { uint256 x; In inner; }
       D[] vals; O o;
       function seed() external { vals.push(); vals[0].id=7; }
@@ -182,13 +182,13 @@ describe('W3-Y2c storage<->memory struct-copy + whole-field-assign - byte-identi
   });
 
   it('CRASH fix: a memory static-struct array element copied into a storage struct (Arr<P,N> + P[])', async () => {
-    const J = `@struct class P { n: u256; m: u256; }
-    @contract class C { @state p0: P; @state sent: u256;
-      @external fromFixed() { let ps: Arr<P,2> = [P(11n,22n), P(33n,44n)]; this.p0 = ps[1n]; this.sent = 0x99n; }
-      @external fromDyn() { let ps: P[] = [P(7n,8n), P(9n,10n)]; this.p0 = ps[0n]; }
-      @external gn(): u256 { return this.p0.n; }
-      @external gm(): u256 { return this.p0.m; }
-      @external gs(): u256 { return this.sent; } }`;
+    const J = `type P = { n: u256; m: u256; };
+    class C { p0: P; sent: u256;
+      fromFixed(): External<void> { let ps: Arr<P,2> = [P(11n,22n), P(33n,44n)]; this.p0 = ps[1n]; this.sent = 0x99n; }
+      fromDyn(): External<void> { let ps: P[] = [P(7n,8n), P(9n,10n)]; this.p0 = ps[0n]; }
+      get gn(): External<u256> { return this.p0.n; }
+      get gm(): External<u256> { return this.p0.m; }
+      get gs(): External<u256> { return this.sent; } }`;
     const S = `contract C { struct P { uint256 n; uint256 m; } P p0; uint256 sent;
       function fromFixed() external { P[2] memory ps = [P(11,22), P(33,44)]; p0 = ps[1]; sent = 0x99; }
       function fromDyn() external { P[] memory ps = new P[](2); ps[0]=P(7,8); ps[1]=P(9,10); p0 = ps[0]; }
@@ -202,12 +202,12 @@ describe('W3-Y2c storage<->memory struct-copy + whole-field-assign - byte-identi
   });
 
   it('CRASH fix: a memory dynamic-field-struct array element (string field) copied into storage (+ overwrite-clear)', async () => {
-    const J = `@struct class P { n: u256; str: string; }
-    @contract class C { @state p0: P;
-      @external setLong(a: string) { this.p0.str = a; this.p0.n = 5n; }
-      @external fromElem(a: string) { let ps: P[] = [P(1n,a), P(2n,a)]; this.p0 = ps[1n]; }
-      @external gn(): u256 { return this.p0.n; }
-      @external gs(): string { return this.p0.str; } }`;
+    const J = `type P = { n: u256; str: string; };
+    class C { p0: P;
+      setLong(a: string): External<void> { this.p0.str = a; this.p0.n = 5n; }
+      fromElem(a: string): External<void> { let ps: P[] = [P(1n,a), P(2n,a)]; this.p0 = ps[1n]; }
+      get gn(): External<u256> { return this.p0.n; }
+      get gs(): External<string> { return this.p0.str; } }`;
     const S = `contract C { struct P { uint256 n; string str; } P p0;
       function setLong(string calldata a) external { p0.str = a; p0.n = 5; }
       function fromElem(string calldata a) external { P[] memory ps = new P[](2); ps[0]=P(1,a); ps[1]=P(2,a); p0 = ps[1]; }
@@ -223,12 +223,12 @@ describe('W3-Y2c storage<->memory struct-copy + whole-field-assign - byte-identi
   });
 
   it('CRASH fix: a memory dyn-struct array element with a bytes[] field copied into storage', async () => {
-    const J = `@struct class P { n: u256; bs: bytes[]; }
-    @contract class C { @state p0: P;
-      @external fromElem(a: bytes[]) { let ps: P[] = [P(7n,a), P(8n,a)]; this.p0 = ps[0n]; }
-      @external gn(): u256 { return this.p0.n; }
-      @external gl(): u256 { return this.p0.bs.length; }
-      @external gb(i: u256): bytes { return this.p0.bs[i]; } }`;
+    const J = `type P = { n: u256; bs: bytes[]; };
+    class C { p0: P;
+      fromElem(a: bytes[]): External<void> { let ps: P[] = [P(7n,a), P(8n,a)]; this.p0 = ps[0n]; }
+      get gn(): External<u256> { return this.p0.n; }
+      get gl(): External<u256> { return this.p0.bs.length; }
+      get gb(i: u256): External<bytes> { return this.p0.bs[i]; } }`;
     const S = `contract C { struct P { uint256 n; bytes[] bs; } P p0;
       function fromElem(bytes[] calldata a) external { P[] memory ps = new P[](2); ps[0].n=7; ps[0].bs=a; ps[1].n=8; ps[1].bs=a; p0 = ps[0]; }
       function gn() external view returns(uint256){ return p0.n; }
@@ -242,16 +242,16 @@ describe('W3-Y2c storage<->memory struct-copy + whole-field-assign - byte-identi
     // a bytes[] field whole-assign to a storage struct-array element: solc ITSELF rejects (nested calldata
     // dynamic array to storage is unimplemented in the old codegen), JETH matches with a clean reject.
     expect(
-      codes('@struct class D { id: u256; bs: bytes[]; } @contract class C { @state vals: D[]; @external w(b: bytes[]) { this.vals[0n].bs = b; } }'),
+      codes('type D = { id: u256; bs: bytes[]; }; class C { vals: D[]; w(b: bytes[]): External<void> { this.vals[0n].bs = b; } }'),
     ).not.toEqual([]);
     // a struct-element array field P[] whole-assign to a storage struct-array element: both reject.
     expect(
-      codes('@struct class Q { n: u256; } @struct class D { id: u256; ps: Q[]; } @contract class C { @state vals: D[]; @external w(b: Q[]) { this.vals[0n].ps = b; } }'),
+      codes('type Q = { n: u256; }; type D = { id: u256; ps: Q[]; }; class C { vals: D[]; w(b: Q[]): External<void> { this.vals[0n].ps = b; } }'),
     ).not.toEqual([]);
     // a whole fixed-array ELEMENT of a nested array at depth (index last step) was LIFTED by W5A
     // (byte-identical to solc, see store-at-depth-nested-chain.test.ts): it now compiles cleanly.
     expect(
-      codes('@contract class C { @state g3: Arr<u256,2>[]; @external w(i: u256, a: Arr<u256,2>) { this.g3[i][0n] = a[0n]; this.g3[i] = a; } }'),
+      codes('class C { g3: Arr<u256,2>[]; w(i: u256, a: Arr<u256,2>): External<void> { this.g3[i][0n] = a[0n]; this.g3[i] = a; } }'),
     ).toEqual([]);
   });
 });

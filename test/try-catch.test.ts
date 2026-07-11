@@ -32,17 +32,17 @@ function jethRejects(src: string): boolean {
 }
 
 // The interface, identical shape in JETH and solc.
-const IFACE_JETH = `@interface class IFoo {
-  @external echo(x: u256): u256;
-  @external @view view2(x: u256): u256;
-  @external boom(): u256;
-  @external custom(): u256;
-  @external panicDiv(x: u256): u256;
-  @external panicAssert(): u256;
-  @external reqFalse(): u256;
-  @external setX(x: u256): void;
-  @external @view pair(): [u256, string];
-  @external @view str(): string;
+const IFACE_JETH = `interface IFoo {
+  echo(x: u256): u256;
+  view2(x: u256): View<u256>;
+  boom(): u256;
+  custom(): u256;
+  panicDiv(x: u256): u256;
+  panicAssert(): u256;
+  reqFalse(): u256;
+  setX(x: u256): void;
+  pair(): View<[u256, string]>;
+  str(): View<string>;
 }`;
 const IFACE_SOL = `interface IFoo {
   function echo(uint256) external returns(uint256);
@@ -107,7 +107,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('success: a value-returning controlling call, r used in the try body', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).echo(21n); return r; } catch (e) { return 999n; } } }`,
+      class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).echo(21n); return r; } catch (e) { return 999n; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(uint256){ try IFoo(t).echo(21) returns(uint256 r){ return r; } catch (bytes memory e){ return 999; } } }`,
       [{ sig: 'f(address)' }],
@@ -117,7 +117,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('failure -> catch: e = the verbatim Error(string) returndata', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): bytes { try { let r: u256 = IFoo(t).boom(); return ""; } catch (e) { return e; } } }`,
+      class C { f(t: address): External<bytes> { try { let r: u256 = IFoo(t).boom(); return ""; } catch (e) { return e; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(bytes memory){ try IFoo(t).boom() returns(uint256 r){ return ""; } catch (bytes memory e){ return e; } } }`,
       [{ sig: 'f(address)' }],
@@ -127,7 +127,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('failure -> catch: e = the verbatim custom-error returndata', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): bytes { try { let r: u256 = IFoo(t).custom(); return ""; } catch (e) { return e; } } }`,
+      class C { f(t: address): External<bytes> { try { let r: u256 = IFoo(t).custom(); return ""; } catch (e) { return e; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(bytes memory){ try IFoo(t).custom() returns(uint256 r){ return ""; } catch (bytes memory e){ return e; } } }`,
       [{ sig: 'f(address)' }],
@@ -137,7 +137,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('failure -> catch: e = the verbatim Panic(assert) returndata', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): bytes { try { let r: u256 = IFoo(t).panicAssert(); return ""; } catch (e) { return e; } } }`,
+      class C { f(t: address): External<bytes> { try { let r: u256 = IFoo(t).panicAssert(); return ""; } catch (e) { return e; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(bytes memory){ try IFoo(t).panicAssert() returns(uint256 r){ return ""; } catch (bytes memory e){ return e; } } }`,
       [{ sig: 'f(address)' }],
@@ -147,7 +147,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('failure -> catch: e = the verbatim Panic(div-by-zero) returndata', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): bytes { try { let r: u256 = IFoo(t).panicDiv(0n); return ""; } catch (e) { return e; } } }`,
+      class C { f(t: address): External<bytes> { try { let r: u256 = IFoo(t).panicDiv(0n); return ""; } catch (e) { return e; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(bytes memory){ try IFoo(t).panicDiv(0) returns(uint256 r){ return ""; } catch (bytes memory e){ return e; } } }`,
       [{ sig: 'f(address)' }],
@@ -157,7 +157,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('failure -> catch: e = empty bytes for an empty revert (require(false))', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): bytes { try { let r: u256 = IFoo(t).reqFalse(); return ""; } catch (e) { return e; } } }`,
+      class C { f(t: address): External<bytes> { try { let r: u256 = IFoo(t).reqFalse(); return ""; } catch (e) { return e; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(bytes memory){ try IFoo(t).reqFalse() returns(uint256 r){ return ""; } catch (bytes memory e){ return e; } } }`,
       [{ sig: 'f(address)' }],
@@ -167,7 +167,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('non-contract target -> the WHOLE try/catch reverts empty (does NOT enter catch)', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).echo(21n); return r; } catch (e) { return 999n; } } }`,
+      class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).echo(21n); return r; } catch (e) { return 999n; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(uint256){ try IFoo(t).echo(21) returns(uint256 r){ return r; } catch (bytes memory e){ return 999; } } }`,
       [{ sig: 'f(address)', noTarget: true }],
@@ -177,7 +177,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('void controlling call: the try body runs on success', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): u256 { try { IFoo(t).setX(5n); return 1n; } catch (e) { return 2n; } } }`,
+      class C { f(t: address): External<u256> { try { IFoo(t).setX(5n); return 1n; } catch (e) { return 2n; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(uint256){ try IFoo(t).setX(5){ return 1; } catch (bytes memory e){ return 2; } } }`,
       [{ sig: 'f(address)' }],
@@ -187,8 +187,8 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('tuple return: [u256, string] decoded and bound in the try body', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external @view f(t: address): string { try { let [n, s]: [u256, string] = IFoo(t).pair(); return s; } catch (e) { return "fail"; } }
-        @external @view g(t: address): u256 { try { let [n, s]: [u256, string] = IFoo(t).pair(); return n; } catch (e) { return 0n; } } }`,
+      class C { get f(t: address): External<string> { try { let [n, s]: [u256, string] = IFoo(t).pair(); return s; } catch (e) { return "fail"; } }
+        get g(t: address): External<u256> { try { let [n, s]: [u256, string] = IFoo(t).pair(); return n; } catch (e) { return 0n; } } }`,
       `${IFACE_SOL}
       contract C {
         function f(address t) external view returns(string memory){ try IFoo(t).pair() returns(uint256 n, string memory s){ return s; } catch (bytes memory e){ return "fail"; } }
@@ -200,7 +200,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('@view controlling call lowers to STATICCALL in a @view caller', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external @view f(t: address): u256 { try { let r: u256 = IFoo(t).view2(9n); return r; } catch (e) { return 1n; } } }`,
+      class C { get f(t: address): External<u256> { try { let r: u256 = IFoo(t).view2(9n); return r; } catch (e) { return 1n; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external view returns(uint256){ try IFoo(t).view2(9) returns(uint256 r){ return r; } catch (bytes memory e){ return 1; } } }`,
       [{ sig: 'f(address)' }],
@@ -210,7 +210,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('catch with NO binding (`catch { }`) on a failing call', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).boom(); return r; } catch { return 5n; } } }`,
+      class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).boom(); return r; } catch { return 5n; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(uint256){ try IFoo(t).boom() returns(uint256 r){ return r; } catch { return 5; } } }`,
       [{ sig: 'f(address)' }],
@@ -220,7 +220,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('catch (e) with e unused on a failing call', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).boom(); return r; } catch (e) { return 6n; } } }`,
+      class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).boom(); return r; } catch (e) { return 6n; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(uint256){ try IFoo(t).boom() returns(uint256 r){ return r; } catch (bytes memory e){ return 6; } } }`,
       [{ sig: 'f(address)' }],
@@ -230,7 +230,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('e.length is readable in the catch body', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).boom(); return r; } catch (e) { return e.length; } } }`,
+      class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).boom(); return r; } catch (e) { return e.length; } } }`,
       `${IFACE_SOL}
       contract C { function f(address t) external returns(uint256){ try IFoo(t).boom() returns(uint256 r){ return r; } catch (bytes memory e){ return e.length; } } }`,
       [{ sig: 'f(address)' }],
@@ -240,7 +240,7 @@ describe('try/catch core (stage 2a): byte-identical vs solc', () => {
   it('nested try/catch: the inner catch handles the inner failure', async () => {
     await rt(
       `${IFACE_JETH}
-      @contract class C { @external f(t: address): u256 {
+      class C { f(t: address): External<u256> {
         try { let a: u256 = IFoo(t).echo(1n);
           try { let b: u256 = IFoo(t).boom(); return b; } catch (e2) { return 100n; }
         } catch (e) { return 200n; } } }`,
@@ -315,12 +315,12 @@ const BAD_TARGET_SOL = `contract T {
 
 describe('try/catch helpers (stage 2b): this.reason / this.panic byte-identical vs solc', () => {
   // The JETH caller uses this.reason / this.panic; the solc caller uses the native catch Error/Panic forms.
-  const CJ_REASON = `@interface class IFoo { @external bad(mode: u256): u256; }
-  @contract class C { @external f(t: address, m: u256): string { try { let r: u256 = IFoo(t).bad(m); return ""; } catch (e) { return this.reason; } } }`;
+  const CJ_REASON = `interface IFoo { bad(mode: u256): u256; }
+  class C { f(t: address, m: u256): External<string> { try { let r: u256 = IFoo(t).bad(m); return ""; } catch (e) { return this.reason; } } }`;
   const CS_REASON = `interface IFoo { function bad(uint256) external returns(uint256); }
   contract C { function f(address t, uint256 m) external returns(string memory){ try IFoo(t).bad(m) returns(uint256 r){ return ""; } catch Error(string memory reason){ return reason; } catch { return ""; } } }`;
-  const CJ_PANIC = `@interface class IFoo { @external bad(mode: u256): u256; }
-  @contract class C { @external f(t: address, m: u256): u256 { try { let r: u256 = IFoo(t).bad(m); return 0n; } catch (e) { return this.panic; } } }`;
+  const CJ_PANIC = `interface IFoo { bad(mode: u256): u256; }
+  class C { f(t: address, m: u256): External<u256> { try { let r: u256 = IFoo(t).bad(m); return 0n; } catch (e) { return this.panic; } } }`;
   const CS_PANIC = `interface IFoo { function bad(uint256) external returns(uint256); }
   contract C { function f(address t, uint256 m) external returns(uint256){ try IFoo(t).bad(m) returns(uint256 r){ return 0; } catch Panic(uint256 c){ return c; } catch { return 0; } } }`;
 
@@ -356,7 +356,7 @@ describe('try/catch helpers (stage 2b): this.reason / this.panic byte-identical 
       function boom() external pure returns(uint256){ revert("xy"); }
       function pdiv(uint256 x) external pure returns(uint256){ return 1/x; }
     }`;
-    const ifj = `@interface class IFoo { @external boom(): u256; @external pdiv(x: u256): u256; }`;
+    const ifj = `interface IFoo { boom(): u256; pdiv(x: u256): u256; }`;
     const ifs = `interface IFoo { function boom() external returns(uint256); function pdiv(uint256) external returns(uint256); }`;
     const cjShape = (target: string) =>
       `${ifj}\n@contract class C { @external f(t: address): string { try { let r: u256 = IFoo(t).${target}; return ""; } catch (e) { let p: u256 = this.panic; if (p != 0n) { return "panic"; } return this.reason; } } }`;
@@ -383,38 +383,38 @@ describe('try/catch helpers (stage 2b): this.reason / this.panic byte-identical 
 });
 
 describe('try/catch: clean rejections (no crash)', () => {
-  const IF = `@interface class IFoo { @external bar(x: u256): u256; @external @view pair(): [u256, string]; @external nada(): void; }`;
+  const IF = `interface IFoo { bar(x: u256): u256; pair(): View<[u256, string]>; nada(): void; }`;
   it('rejects this.reason outside a catch', () => {
-    expect(jethRejects(`@contract class C { @external f(): string { return this.reason; } }`)).toBe(true);
+    expect(jethRejects(`class C { get f(): External<string> { return this.reason; } }`)).toBe(true);
   });
   it('rejects this.panic outside a catch', () => {
-    expect(jethRejects(`@contract class C { @external f(): u256 { return this.panic; } }`)).toBe(true);
+    expect(jethRejects(`class C { get f(): External<u256> { return this.panic; } }`)).toBe(true);
   });
   it('rejects this.reason inside the try body (not the catch)', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): string { try { let r: u256 = IFoo(t).bar(1n); return this.reason; } catch (e) { return ""; } } }`,
+        `${IF}\nclass C { f(t: address): External<string> { try { let r: u256 = IFoo(t).bar(1n); return this.reason; } catch (e) { return ""; } } }`,
       ),
     ).toBe(true);
   });
   it('rejects a finally clause', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } catch (e) { return 0n; } finally { } } }`,
+        `${IF}\nclass C { get f(t: address): External<u256> { try { let r: u256 = IFoo(t).bar(1n); return r; } catch (e) { return 0n; } finally { } } }`,
       ),
     ).toBe(true);
   });
   it('rejects a try with no catch', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } finally { } } }`,
+        `${IF}\nclass C { get f(t: address): External<u256> { try { let r: u256 = IFoo(t).bar(1n); return r; } finally { } } }`,
       ),
     ).toBe(true);
   });
   it('rejects a first statement that is not an interface call', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = 5n; return r; } catch (e) { return 0n; } } }`,
+        `${IF}\nclass C { get f(t: address): External<u256> { try { let r: u256 = 5n; return r; } catch (e) { return 0n; } } }`,
       ),
     ).toBe(true);
   });
@@ -424,40 +424,40 @@ describe('try/catch: clean rejections (no crash)', () => {
     // try expression - it is a message call - covered in selfcall-tuples.test.ts.)
     expect(
       jethRejects(
-        `${IF}\n@contract class C { g(): u256 { return 1n; } @external f(t: address): u256 { try { let r: u256 = this.g(); return r; } catch (e) { return 0n; } } }`,
+        `${IF}\nclass C { g(): u256 { return 1n; } get f(t: address): External<u256> { try { let r: u256 = this.g(); return r; } catch (e) { return 0n; } } }`,
       ),
     ).toBe(true);
   });
   it('rejects a void method bound to a name', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).nada(); return r; } catch (e) { return 0n; } } }`,
+        `${IF}\nclass C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).nada(); return r; } catch (e) { return 0n; } } }`,
       ),
     ).toBe(true);
   });
   it('rejects a tuple method bound to a single name', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).pair(); return r; } catch (e) { return 0n; } } }`,
+        `${IF}\nclass C { get f(t: address): External<u256> { try { let r: u256 = IFoo(t).pair(); return r; } catch (e) { return 0n; } } }`,
       ),
     ).toBe(true);
   });
   it('rejects a catch binding annotated as a non-bytes type', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).bar(1n); return r; } catch (e: u256) { return 0n; } } }`,
+        `${IF}\nclass C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).bar(1n); return r; } catch (e: u256) { return 0n; } } }`,
       ),
     ).toBe(true);
   });
   it('rejects an empty try block', () => {
     expect(
-      jethRejects(`${IF}\n@contract class C { @external f(t: address): u256 { try { } catch (e) { return 0n; } } }`),
+      jethRejects(`${IF}\nclass C { get f(t: address): External<u256> { try { } catch (e) { return 0n; } } }`),
     ).toBe(true);
   });
   it('rejects a return-type annotation that mismatches the method return', () => {
     expect(
       jethRejects(
-        `${IF}\n@contract class C { @external f(t: address): bool { try { let r: bool = IFoo(t).bar(1n); return r; } catch (e) { return false; } } }`,
+        `${IF}\nclass C { f(t: address): External<bool> { try { let r: bool = IFoo(t).bar(1n); return r; } catch (e) { return false; } } }`,
       ),
     ).toBe(true);
   });

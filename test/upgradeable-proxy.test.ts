@@ -45,17 +45,17 @@ const jethRejects = (src: string) => !jethAccepts(src);
 // ---- V1 / V2 implementations (normal JETH @contracts, with an exact solc mirror). ----
 // Storage layout: slot0 = value (uint256), slot1 = initialized (bool). initialize(x) sets both ONCE;
 // V1.value() returns value; V2.value() returns value*2 (the upgrade swaps behaviour); both have bump().
-const V1_JETH = `@contract class V1 {
-  @state value: u256 = 0n;
-  @state initialized: bool = false;
-  @external initialize(x: u256): void {
+const V1_JETH = `class V1 {
+  value: u256 = 0n;
+  initialized: bool = false;
+  initialize(x: u256): External<void> {
     require(!this.initialized, "init");
     this.initialized = true;
     this.value = x;
   }
-  @external bump(): void { this.value = this.value + 1n; }
-  @external @view value_(): u256 { return this.value; }
-  @external @view version(): u256 { return 1n; }
+  bump(): External<void> { this.value = this.value + 1n; }
+  get value_(): External<u256> { return this.value; }
+  get version(): External<u256> { return 1n; }
 }`;
 const V1_SOL = `contract V1 {
   uint256 value;
@@ -66,17 +66,17 @@ const V1_SOL = `contract V1 {
   function version() external view returns (uint256) { return 1; }
 }`;
 
-const V2_JETH = `@contract class V2 {
-  @state value: u256 = 0n;
-  @state initialized: bool = false;
-  @external initialize(x: u256): void {
+const V2_JETH = `class V2 {
+  value: u256 = 0n;
+  initialized: bool = false;
+  initialize(x: u256): External<void> {
     require(!this.initialized, "init");
     this.initialized = true;
     this.value = x;
   }
-  @external bump(): void { this.value = this.value + 1n; }
-  @external @view value_(): u256 { return this.value * 2n; }
-  @external @view version(): u256 { return 2n; }
+  bump(): External<void> { this.value = this.value + 1n; }
+  get value_(): External<u256> { return this.value * 2n; }
+  get version(): External<u256> { return 2n; }
 }`;
 const V2_SOL = `contract V2 {
   uint256 value;
@@ -94,12 +94,12 @@ const PROXY_JETH = `@proxy class P {
   constructor(impl: address, admin: address, initVal: u256) {
     proxyInit(impl, admin, abi.encodeWithSelector(0x${INIT_SEL}n, initVal));
   }
-  @external upgradeTo(newImpl: address, data: bytes): void {
+  upgradeTo(newImpl: address, data: bytes): External<void> {
     require(msg.sender == proxyAdmin(), "not admin");
     upgradeProxy(newImpl, data);
   }
-  @external @view implementation(): address { return proxyImplementation(); }
-  @external @view admin(): address { return proxyAdmin(); }
+  get implementation(): External<address> { return proxyImplementation(); }
+  get admin(): External<address> { return proxyAdmin(); }
 }`;
 
 // ---- The hand-written solc ERC1967 proxy (the verified baseline assembly): raw sstore/sload at the
@@ -386,34 +386,34 @@ describe('upgradeable-proxy (Phase 2a foundation)', () => {
       expect(jethRejects(`@proxy class P { @external @pure bad(n: address): void { proxyInit(n, abi.encode()); } }`)).toBe(true);
     });
     it('a @view caller of proxyImplementation()/proxyAdmin() is ACCEPTED (a storage read)', () => {
-      expect(jethAccepts(`@proxy class P { @external @view i(): address { return proxyImplementation(); } }`)).toBe(true);
-      expect(jethAccepts(`@proxy class P { @external @view a(): address { return proxyAdmin(); } }`)).toBe(true);
+      expect(jethAccepts(`@proxy class P { get i(): External<address> { return proxyImplementation(); } }`)).toBe(true);
+      expect(jethAccepts(`@proxy class P { get a(): External<address> { return proxyAdmin(); } }`)).toBe(true);
     });
     it('a @pure caller of proxyImplementation()/proxyAdmin() is rejected (it SLOADs)', () => {
       expect(jethRejects(`@proxy class P { @external @pure i(): address { return proxyImplementation(); } }`)).toBe(true);
       expect(jethRejects(`@proxy class P { @external @pure a(): address { return proxyAdmin(); } }`)).toBe(true);
     });
     it('a @proxy class may NOT declare a @receive entry', () => {
-      expect(jethRejects(`@proxy class P { @receive r(): void {} }`)).toBe(true);
+      expect(jethRejects(`@proxy class P { receive(): void {} }`)).toBe(true);
     });
     it('a @proxy class may NOT declare a @fallback entry', () => {
-      expect(jethRejects(`@proxy class P { @fallback f(): void {} }`)).toBe(true);
+      expect(jethRejects(`@proxy class P { fallback(): void {} }`)).toBe(true);
     });
     it('a @proxy class may NOT declare @state of its own', () => {
-      expect(jethRejects(`@proxy class P { @state x: u256 = 0n; }`)).toBe(true);
+      expect(jethRejects(`@proxy class P { x: u256 = 0n; }`)).toBe(true);
     });
     it('proxyInit non-bytes initData / non-address impl is rejected', () => {
-      expect(jethRejects(`@proxy class P { @external g(a: address): void { proxyInit(a, 5n); } }`)).toBe(true);
-      expect(jethRejects(`@proxy class P { @external g(): void { proxyInit(5n, abi.encode()); } }`)).toBe(true);
+      expect(jethRejects(`@proxy class P { g(a: address): External<void> { proxyInit(a, 5n); } }`)).toBe(true);
+      expect(jethRejects(`@proxy class P { g(): External<void> { proxyInit(5n, abi.encode()); } }`)).toBe(true);
     });
     it('proxyInit/upgradeProxy wrong arity is rejected', () => {
-      expect(jethRejects(`@proxy class P { @external g(a: address): void { proxyInit(a); } }`)).toBe(true);
-      expect(jethRejects(`@proxy class P { @external g(a: address): void { upgradeProxy(a); } }`)).toBe(true);
+      expect(jethRejects(`@proxy class P { g(a: address): External<void> { proxyInit(a); } }`)).toBe(true);
+      expect(jethRejects(`@proxy class P { g(a: address): External<void> { upgradeProxy(a); } }`)).toBe(true);
     });
     it('the proxy builtins are usable in a normal @contract too (not gated to @proxy)', () => {
-      expect(jethAccepts(`@contract class C {
-        @external g(a: address): void { upgradeProxy(a, abi.encode()); }
-        @external @view i(): address { return proxyImplementation(); }
+      expect(jethAccepts(`class C {
+        g(a: address): External<void> { upgradeProxy(a, abi.encode()); }
+        get i(): External<address> { return proxyImplementation(); }
       }`)).toBe(true);
     });
     it('a usable end-to-end @proxy (ctor + admin-gated upgrade + getters) compiles', () => {

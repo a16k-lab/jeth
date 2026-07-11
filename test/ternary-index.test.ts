@@ -9,8 +9,8 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
-const JETH = `@contract class TI {
-  @external @pure pick(c: bool, x: u256, y: u256, i: u256): u256 {
+const JETH = `class TI {
+  get pick(c: bool, x: u256, y: u256, i: u256): External<u256> {
     let xs: u256[] = [x, x + 1n];
     let ys: u256[] = [y, y + 1n, y + 2n];
     return (c ? xs : ys)[i];

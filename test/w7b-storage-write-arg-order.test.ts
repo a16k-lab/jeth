@@ -38,11 +38,11 @@ async function eqCalls(jeth: string, sol: string, calls: [string, string][]) {
 describe('W7B: storage-write argument order matches solc 0.8.35', () => {
   it('state struct assign: a later ctor arg reading the destination sees the OLD field (A7)', async () => {
     await eqCalls(
-      `@struct class P { x: u256; y: u256 }
-      @contract class C {
-        @state p: P;
+      `type P = { x: u256; y: u256 };
+      class C {
+        p: P;
         rd(): u256 { return this.p.x; }
-        @external f(): u256 { this.p = P(5n, 0n); this.p = P(7n, this.rd()); return this.p.y; } }`,
+        f(): External<u256> { this.p = P(5n, 0n); this.p = P(7n, this.rd()); return this.p.y; } }`,
       `struct P { uint256 x; uint256 y; }
       contract C {
         P p;
@@ -54,11 +54,11 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('value-arg read position AND store-after-all-args (both interleave directions, P20)', async () => {
     await eqCalls(
-      `@struct class P { x: u256; y: u256 }
-      @contract class C {
-        @state p: P;
+      `type P = { x: u256; y: u256 };
+      class C {
+        p: P;
         bump2(): u256 { this.p = P(50n, this.p.y); return 60n; }
-        @external f(): u256 { this.p = P(5n, 0n); this.p = P(this.p.x + 1n, this.bump2()); return this.p.x * 100n + this.p.y; } }`,
+        f(): External<u256> { this.p = P(5n, 0n); this.p = P(this.p.x + 1n, this.bump2()); return this.p.x * 100n + this.p.y; } }`,
       `struct P { uint256 x; uint256 y; }
       contract C {
         P p;
@@ -70,11 +70,11 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('struct push: ctor args evaluate BEFORE the length grow (A8)', async () => {
     await eqCalls(
-      `@struct class P { x: u256; y: u256 }
-      @contract class C {
-        @state ps: P[];
+      `type P = { x: u256; y: u256 };
+      class C {
+        ps: P[];
         rd(): u256 { return this.ps.length; }
-        @external f(): u256 { this.ps.push(P(5n, this.rd())); return this.ps[0n].y; } }`,
+        f(): External<u256> { this.ps.push(P(5n, this.rd())); return this.ps[0n].y; } }`,
       `struct P { uint256 x; uint256 y; }
       contract C {
         P[] ps;
@@ -86,16 +86,16 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('push(ps[0]) / strs.push(strs[0]) / dd.push(dd[0]) on an EMPTY array panics on the source bounds check', async () => {
     await eqCalls(
-      `@struct class P { x: u256; y: u256 }
-      @contract class C {
-        @state ps: P[];
-        @state strs: string[];
-        @state dd: u256[][];
-        @state gg: Arr<u256, 2>[];
-        @external f(): u256 { this.ps.push(this.ps[0n]); return this.ps.length; }
-        @external g(): u256 { this.strs.push(this.strs[0n]); return this.strs.length; }
-        @external h(): u256 { this.dd.push(this.dd[0n]); return this.dd.length; }
-        @external k(): u256 { this.gg.push(this.gg[0n]); return this.gg.length; } }`,
+      `type P = { x: u256; y: u256 };
+      class C {
+        ps: P[];
+        strs: string[];
+        dd: u256[][];
+        gg: Arr<u256, 2>[];
+        f(): External<u256> { this.ps.push(this.ps[0n]); return this.ps.length; }
+        g(): External<u256> { this.strs.push(this.strs[0n]); return this.strs.length; }
+        h(): External<u256> { this.dd.push(this.dd[0n]); return this.dd.length; }
+        k(): External<u256> { this.gg.push(this.gg[0n]); return this.gg.length; } }`,
       `struct P { uint256 x; uint256 y; }
       contract C {
         P[] ps;
@@ -112,11 +112,11 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('value push: a lazy value expression reads the OLD length (sa.push(sa.length) / sa.push(rd()))', async () => {
     await eqCalls(
-      `@contract class C {
-        @state sa: u256[];
+      `class C {
+        sa: u256[];
         rd(): u256 { return this.sa.length; }
-        @external f(): u256 { this.sa.push(this.sa.length); this.sa.push(this.sa.length); return this.sa[0n] * 100n + this.sa[1n] * 10n + this.sa.length; }
-        @external g(): u256 { this.sa.push(this.rd()); this.sa.push(this.rd()); return this.sa[0n] * 100n + this.sa[1n] * 10n + this.sa.length; } }`,
+        f(): External<u256> { this.sa.push(this.sa.length); this.sa.push(this.sa.length); return this.sa[0n] * 100n + this.sa[1n] * 10n + this.sa.length; }
+        g(): External<u256> { this.sa.push(this.rd()); this.sa.push(this.rd()); return this.sa[0n] * 100n + this.sa[1n] * 10n + this.sa.length; } }`,
       `contract C {
         uint256[] sa;
         function rd() internal view returns (uint256) { return sa.length; }
@@ -128,20 +128,20 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('mapping / element / place struct assigns: RHS args first, destination after (P29/P30/P17/P32)', async () => {
     await eqCalls(
-      `@struct class P { x: u256; y: u256 }
-      @struct class O { a: u256; inner: P }
-      @contract class C {
-        @state seq: u256;
-        @state m: mapping<u256, P>;
-        @state ps: P[];
-        @state o: O;
+      `type P = { x: u256; y: u256 };
+      type O = { a: u256; inner: P };
+      class C {
+        seq: u256;
+        m: mapping<u256, P>;
+        ps: P[];
+        o: O;
         tick(): u256 { this.seq = this.seq + 1n; return this.seq; }
         rd(): u256 { return this.o.inner.x; }
-        @external f(): u256 { this.m[this.seq] = P(this.tick(), 5n); return this.m[0n].x * 100n + this.m[1n].x * 10n + this.seq; }
-        @external g(): u256 { this.ps.push(P(0n, 0n)); this.ps.push(P(0n, 0n)); this.ps[this.seq % 2n] = P(9n, 9n);
+        f(): External<u256> { this.m[this.seq] = P(this.tick(), 5n); return this.m[0n].x * 100n + this.m[1n].x * 10n + this.seq; }
+        g(): External<u256> { this.ps.push(P(0n, 0n)); this.ps.push(P(0n, 0n)); this.ps[this.seq % 2n] = P(9n, 9n);
           return this.ps[0n].x * 100n + this.ps[1n].x * 10n + this.seq; }
-        @external h(): u256 { this.o = O(1n, P(5n, 0n)); this.o.inner = P(7n, this.rd()); return this.o.inner.y; }
-        @external k(): u256 { this.m[1n] = P(5n, 0n); this.m[1n] = P(7n, this.m[1n].x); return this.m[1n].y; } }`,
+        h(): External<u256> { this.o = O(1n, P(5n, 0n)); this.o.inner = P(7n, this.rd()); return this.o.inner.y; }
+        k(): External<u256> { this.m[1n] = P(5n, 0n); this.m[1n] = P(7n, this.m[1n].x); return this.m[1n].y; } }`,
       `struct P { uint256 x; uint256 y; }
       struct O { uint256 a; P inner; }
       contract C {
@@ -162,12 +162,12 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('nested ctor: ALL args (inner and outer) evaluate before any store (P18)', async () => {
     await eqCalls(
-      `@struct class P { x: u256; y: u256 }
-      @struct class N { p: P; z: u256 }
-      @contract class C {
-        @state n: N;
+      `type P = { x: u256; y: u256 };
+      type N = { p: P; z: u256 };
+      class C {
+        n: N;
         rd(): u256 { return this.n.p.x; }
-        @external f(): u256 { this.n = N(P(5n, 0n), 0n); this.n = N(P(7n, this.rd()), this.rd()); return this.n.p.y * 10n + this.n.z; } }`,
+        f(): External<u256> { this.n = N(P(5n, 0n), 0n); this.n = N(P(7n, this.rd()), this.rd()); return this.n.p.y * 10n + this.n.z; } }`,
       `struct P { uint256 x; uint256 y; }
       struct N { P p; uint256 z; }
       contract C {
@@ -180,19 +180,19 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('dyn-field structs: overwrite-clear happens AFTER the args ran (P7), push/elem variants (P24/P25/P21)', async () => {
     await eqCalls(
-      `@struct class S { s: string; z: u256 }
-      @contract class C {
-        @state st: S;
-        @state ss: S[];
-        @state m: mapping<u256, S>;
+      `type S = { s: string; z: u256 };
+      class C {
+        st: S;
+        ss: S[];
+        m: mapping<u256, S>;
         rdLen(): u256 { return bytes(this.st.s).length; }
         rdN(): u256 { return this.ss.length; }
         rdE(): u256 { return bytes(this.ss[0n].s).length; }
         rdM(): u256 { return bytes(this.m[1n].s).length; }
-        @external f(): u256 { this.st = S("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1n); this.st = S("b", this.rdLen()); return this.st.z; }
-        @external g(): u256 { this.ss.push(S("b", this.rdN())); return this.ss[0n].z; }
-        @external h(): u256 { this.ss[0n] = S("cc", this.rdE()); return this.ss[0n].z; }
-        @external k(): u256 { this.m[1n] = S("aaaa", 1n); this.m[1n] = S("b", this.rdM()); return this.m[1n].z; } }`,
+        f(): External<u256> { this.st = S("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1n); this.st = S("b", this.rdLen()); return this.st.z; }
+        g(): External<u256> { this.ss.push(S("b", this.rdN())); return this.ss[0n].z; }
+        h(): External<u256> { this.ss[0n] = S("cc", this.rdE()); return this.ss[0n].z; }
+        k(): External<u256> { this.m[1n] = S("aaaa", 1n); this.m[1n] = S("b", this.rdM()); return this.m[1n].z; } }`,
       `struct S { string s; uint256 z; }
       contract C {
         S st;
@@ -212,11 +212,11 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('a MEMORY dyn-array ctor arg is captured by reference and read late (P9b)', async () => {
     await eqCalls(
-      `@struct class S { arr: u256[]; z: u256 }
-      @contract class C {
-        @state st: S;
+      `type S = { arr: u256[]; z: u256 };
+      class C {
+        st: S;
         mut(xs: u256[]): u256 { xs[0n] = 9n; return 3n; }
-        @external f(): u256 { let xs: u256[] = new Array<u256>(1n); xs[0n] = 1n; this.st = S(xs, this.mut(xs)); return this.st.arr[0n]; } }`,
+        f(): External<u256> { let xs: u256[] = new Array<u256>(1n); xs[0n] = 1n; this.st = S(xs, this.mut(xs)); return this.st.arr[0n]; } }`,
       `struct S { uint256[] arr; uint256 z; }
       contract C {
         S st;
@@ -228,17 +228,17 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('a STORAGE array/string ctor arg is snapshotted at its position (early copy, P27/P8)', async () => {
     await eqCalls(
-      `@struct class S { arr: u256[]; z: u256 }
-      @struct class T { s: string; z: u256 }
-      @contract class C {
-        @state src: u256[];
-        @state sb: string;
-        @state st: S;
-        @state tt: T;
+      `type S = { arr: u256[]; z: u256 };
+      type T = { s: string; z: u256 };
+      class C {
+        src: u256[];
+        sb: string;
+        st: S;
+        tt: T;
         mutSrc(): u256 { this.src[0n] = 9n; return 3n; }
         mutSb(): u256 { this.sb = "zz"; return 3n; }
-        @external f(): u256 { this.src.push(1n); this.st = S(this.src, this.mutSrc()); return this.st.arr[0n] * 10n + this.src[0n]; }
-        @external g(): string { this.sb = "ab"; this.tt = T(this.sb, this.mutSb()); return this.tt.s; } }`,
+        f(): External<u256> { this.src.push(1n); this.st = S(this.src, this.mutSrc()); return this.st.arr[0n] * 10n + this.src[0n]; }
+        g(): External<string> { this.sb = "ab"; this.tt = T(this.sb, this.mutSb()); return this.tt.s; } }`,
       `struct S { uint256[] arr; uint256 z; }
       struct T { string s; uint256 z; }
       contract C {
@@ -256,14 +256,14 @@ describe('W7B: storage-write argument order matches solc 0.8.35', () => {
 
   it('fixed-array-literal field: elements evaluate at their position, stores after (E2/E11)', async () => {
     await eqCalls(
-      `@struct class P { a: Arr<u256, 2>; z: u256 }
-      @contract class C {
-        @state p: P;
-        @state gg: Arr<u256, 2>[];
+      `type P = { a: Arr<u256, 2>; z: u256 };
+      class C {
+        p: P;
+        gg: Arr<u256, 2>[];
         rd(): u256 { return this.p.a[0n]; }
         rg(): u256 { return this.gg.length; }
-        @external f(): u256 { this.p = P([5n, 6n], 0n); this.p = P([7n, this.rd()], this.rd()); return this.p.a[1n] * 10n + this.p.z; }
-        @external g(): u256 { this.gg.push([this.rg(), 9n]); return this.gg[0n][0n] * 10n + this.gg.length; } }`,
+        f(): External<u256> { this.p = P([5n, 6n], 0n); this.p = P([7n, this.rd()], this.rd()); return this.p.a[1n] * 10n + this.p.z; }
+        g(): External<u256> { this.gg.push([this.rg(), 9n]); return this.gg[0n][0n] * 10n + this.gg.length; } }`,
       `struct P { uint256[2] a; uint256 z; }
       contract C {
         P p;
