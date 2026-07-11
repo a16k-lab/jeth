@@ -136,7 +136,9 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(codes(J).length > 0).toBe(expectReject);
       expect(solcRejects(S)).toBe(expectReject);
     };
-    it('@pure + an env-reading (msg.sender) modifier -> both reject', () =>
+    it('@pure + an env-reading (msg.sender) modifier -> both reject (native: no @pure to violate, so the banned decorator is JETH481; solc rejects the explicit-pure mirror)', () =>
+      // Unlike the state-writing-modifier case, an env-reading modifier on a read-only fn is inferred `view`
+      // natively (legal), so there is no native reject; the legacy @pure spelling is a banned decorator (JETH481).
       parity(
         `@contract class C { @modifier g() { require(msg.sender != address(0n), "z"); _; } @external @pure @g f(x: u256): u256 { return x; } }`,
         `contract C { modifier g(){ require(msg.sender!=address(0),"z"); _; } function f(uint256 x) external pure g returns(uint256){ return x; } }`,
@@ -148,9 +150,11 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
         `contract C { uint256 n; modifier g(){ require(n>0,"z"); _; } function f() external view g returns(uint256){ return n; } }`,
         false,
       ));
-    it('@view + a state-WRITING modifier -> both reject', () =>
+    it('a read-only get + a state-WRITING modifier -> both reject', () =>
+      // Native: a `get` is read-only; a modifier that writes state makes it transitively mutating -> JETH043
+      // (the native twin of the legacy @view + state-writing-modifier reject). solc rejects the mirror.
       parity(
-        `@contract class C { @state n: u256; @modifier g() { this.n = this.n + 1n; _; } @external @view @g f(): u256 { return this.n; } }`,
+        `class C { n: u256; @modifier g() { this.n = this.n + 1n; _; } @g get f(): External<u256> { return this.n; } }`,
         `contract C { uint256 n; modifier g(){ n=n+1; _; } function f() external view g returns(uint256){ return n; } }`,
         true,
       ));
@@ -197,8 +201,8 @@ describe('Phase 5 user-defined modifiers (@modifier) vs solc 0.8.35', () => {
       expect(
         codes(`class C { @modifier m(a: mapping<u256, u256>) { _; } @m f(): External<void> {} }`),
       ).toContain('JETH247'));
-    it('a visibility/mutability decorator on the modifier itself -> JETH330', () =>
-      expect(codes(`@contract class C { @view @modifier m() { _; } @external @m f(): void {} }`)).toContain('JETH330'));
+    it('a visibility/mutability marker on the modifier itself -> JETH330', () =>
+      expect(codes(`class C { @modifier m(): View<void> { _; } @m f(): External<void> {} }`)).toContain('JETH330'));
     it('a (pre-only) modifier on a multi-value-return function is supported', () =>
       expect(
         codes(`class C { @modifier m() { _; } @m get f(): External<[u256, u256]> { return [1n, 2n]; } }`),

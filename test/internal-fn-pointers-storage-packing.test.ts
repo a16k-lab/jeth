@@ -191,10 +191,10 @@ describe('P1-18 aggregate-signature internal funcref call', () => {
       const sArr = arr.length
         ? `uint256[] memory arr = new uint256[](${arr.length}); ${arr.map((x, i) => `arr[${i}]=${x};`).join(' ')}`
         : `uint256[] memory arr = new uint256[](0);`;
-      const JETH = `@contract class C {
-        @pure sum(a: u256[]): u256 { let t: u256 = 0n; for (let i: u256 = 0n; i < a.length; i = i + 1n) { t = t + a[i]; } return t; }
-        @pure ap(g: (a: u256[]) => u256, x: u256[]): u256 { return g(x); }
-        @external @pure run(): u256 { ${jArr} return this.ap(this.sum, arr); }
+      const JETH = `class C {
+        sum(a: u256[]): u256 { let t: u256 = 0n; for (let i: u256 = 0n; i < a.length; i = i + 1n) { t = t + a[i]; } return t; }
+        ap(g: (a: u256[]) => u256, x: u256[]): u256 { return g(x); }
+        get run(): External<u256> { ${jArr} return this.ap(this.sum, arr); }
       }`;
       const SOL = `contract C {
         function sum(uint256[] memory a) internal pure returns(uint256){ uint256 t=0; for(uint256 i=0;i<a.length;i++){t+=a[i];} return t; }
@@ -272,11 +272,11 @@ describe('P1-19 funcref effect over-conservatism', () => {
   });
 
   it('a genuinely-mutating reachable target in @view STILL rejects (both)', () => {
-    const JETH = `@contract class C {
-      @state s: u256;
+    const JETH = `class C {
+      s: u256;
       mut(x: u256): u256 { this.s = x; return x; }
-      @view apv(f: (x: u256) => u256, v: u256): u256 { return f(v); }
-      @external @view run(): u256 { return this.apv(this.mut, 5n); }
+      apv(f: (x: u256) => u256, v: u256): u256 { return f(v); }
+      get run(): External<u256> { return this.apv(this.mut, 5n); }
     }`;
     const SOL = `contract C {
       uint256 s;
@@ -289,12 +289,12 @@ describe('P1-19 funcref effect over-conservatism', () => {
   });
 
   it('a transitively-mutating reachable target in @view STILL rejects (both)', () => {
-    const JETH = `@contract class C {
-      @state s: u256;
+    const JETH = `class C {
+      s: u256;
       wr(x: u256): void { this.s = x; }
       outer(x: u256): u256 { this.wr(x); return x; }
-      @view apv(f: (x: u256) => u256, v: u256): u256 { return f(v); }
-      @external @view r(): u256 { return this.apv(this.outer, 1n); }
+      apv(f: (x: u256) => u256, v: u256): u256 { return f(v); }
+      get r(): External<u256> { return this.apv(this.outer, 1n); }
     }`;
     const SOL = `contract C {
       uint256 s;

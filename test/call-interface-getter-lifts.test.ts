@@ -376,8 +376,9 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
   });
 
   it('REJECT (no over-acceptance): loosened mutability / wrong return type / param mismatch / non-virtual / override-nothing', () => {
-    // base pure -> getter (view) loosens
-    expect(accepts(`@abstract class A { @virtual @external @pure x(): u256; } @contract class C extends A { @override @external @state x: u256; }`)).toBe(false);
+    // base pure -> getter (view) loosens (native has no abstract-class pure marker, so the pure base is a
+    // pure interface method; a view getter var overriding it still loosens mutability -> reject)
+    expect(accepts(`interface A { x(): Pure<u256>; } class C extends A { @override x: Visible<u256>; }`)).toBe(false);
     // base payable
     expect(accepts(`abstract class A { @virtual x(): Payable<u256>; } class C extends A { @override x: Visible<u256>; }`)).toBe(false);
     // return type mismatch (u128 base, u256 getter)
@@ -441,14 +442,15 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
        contract C is B, I1 { uint256 public override(B, I1) x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(0x42)], ['x()', '']],
     );
-    // diamond: I2, I3 (empty) both extend I1(x); bare @override / @override(I1) accepted (single head I1)
-    await eqCalls(
-      `@interface class I1 { @external x(): u256; } @interface class I2 extends I1 {} @interface class I3 extends I1 {}
-       @contract class C extends I2, I3 { @override @external @state x: u256; @external set(v: u256): void { this.x = v; } }`,
-      `interface I1 { function x() external view returns (uint256); } interface I2 is I1 {} interface I3 is I1 {}
-       contract C is I2, I3 { uint256 public override x; function set(uint256 v) external { x = v; } }`,
-      [['set(uint256)', W(0x77)], ['x()', '']],
-    );
+    // diamond: I2, I3 both extend I1 - native mode has no interface-extends-interface (JETH349 - declare
+    // the methods directly), so solc's "single head I1 -> bare @override accepted" diamond is unreachable
+    // natively; the flat-interface accepts above cover the getter-override accept path.
+    expect(
+      codesOf(
+        `interface I1 { x(): u256; } interface I2 extends I1 {} interface I3 extends I1 {}
+         class C extends I2, I3 { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
+      ),
+    ).toContain('JETH349');
   });
 
   it('multi-interface getter REJECT (no over-acceptance): bare/incomplete list, bogus/duplicate member, @pure iface', () => {
@@ -479,9 +481,10 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
         class C extends I1, I2 { @override(I1, I2) x: Visible<u256>; @override get y(): External<u256> { return 0n; } }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function y() external view returns (uint256); }
         contract C is I1, I2 { uint256 public override(I1, I2) x; function y() external view override returns (uint256) { return 0; } }`],
-      // I2 declares x with a DIFFERENT signature (x(uint256)): not a member
-      [`@interface class I1 { @external x(): u256; } @interface class I2 { @external x(a: u256): u256; }
-        @abstract @contract class C extends I1, I2 { @override(I1, I2) @external @state x: u256; }`,
+      // I2 declares x with a DIFFERENT signature (x(uint256)): not a member (JETH keeps C concrete so the
+      // getter-var override-list membership check fires; solc uses an abstract contract - both reject)
+      [`interface I1 { x(): u256; } interface I2 { x(a: u256): u256; }
+        class C extends I1, I2 { @override(I1, I2) x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 { function x(uint256) external view returns (uint256); }
         abstract contract C is I1, I2 { uint256 public override(I1, I2) x; }`],
       // view getter cannot override a @pure interface method (I2 pure), fully listed
@@ -504,9 +507,10 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
         class C extends I1, I2 { @override a: Visible<u256[]>; }`,
        `interface I1 { function a(uint256) external view returns (uint256); } interface I2 { function a(uint256) external view returns (uint256); }
         contract C is I1, I2 { uint256[] public override a; }`],
-      // diamond: naming the (non-declaring) direct bases I2, I3 is an invalid override list
-      [`@interface class I1 { @external x(): u256; } @interface class I2 extends I1 {} @interface class I3 extends I1 {}
-        @contract class C extends I2, I3 { @override(I2, I3) @external @state x: u256; }`,
+      // diamond: native has no interface-extends-interface (JETH349); solc rejects naming the non-declaring
+      // direct bases I2, I3 in the override list
+      [`interface I1 { x(): u256; } interface I2 extends I1 {} interface I3 extends I1 {}
+        class C extends I2, I3 { @override(I2, I3) x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 is I1 {} interface I3 is I1 {}
         contract C is I2, I3 { uint256 public override(I2, I3) x; }`],
       // mixed base virtual + interface, bare over both -> needs override(B, I1)

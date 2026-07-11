@@ -26,18 +26,22 @@ function solcRejects(src: string): boolean {
 }
 
 describe('internal-call gates (G8)', () => {
-  it('@view calling a state-writer is rejected (JETH054), like solc', () => {
+  it('a read-only (get) accessor transitively writing state is rejected (JETH043), like solc rejects a state-writing view', () => {
+    // Native: the read-only external form is `get`; a getter that transitively writes (through the internal
+    // writer w()) breaks its read-only contract -> JETH043, the native twin of the legacy @view-writes reject.
     const codes = jethCodes(
-      `@contract class C { @state x: u256; w(): void { this.x = 1n; } @view f(): u256 { this.w(); return this.x; } }`,
+      `class C { x: u256; w(): void { this.x = 1n; } get f(): External<u256> { this.w(); return this.x; } }`,
     );
-    expect(codes).toContain('JETH481');
+    expect(codes).toContain('JETH043');
     expect(
       solcRejects(
         `contract C { uint256 x; function w() internal { x = 1; } function f() external view returns (uint256){ w(); return x; } }`,
       ),
     ).toBe(true);
   });
-  it('@pure calling a state-reader is rejected (JETH055), like solc', () => {
+  it('a @pure-declared reader-of-state has no native form: the removed @pure decorator is banned (JETH481); solc rejects the explicit-pure program', () => {
+    // Native infers mutability (there is no @pure to violate), so the JETH054/055 purity-declaration gates
+    // are legacy-decorator-specific: the source that once tripped JETH055 now trips the decorator ban.
     const codes = jethCodes(
       `@contract class C { @state x: u256; @view r(): u256 { return this.x; } @pure f(): u256 { return this.r(); } }`,
     );
@@ -48,7 +52,9 @@ describe('internal-call gates (G8)', () => {
       ),
     ).toBe(true);
   });
-  it('@pure calling an env-reader is rejected (JETH164), like solc', () => {
+  it('a @pure-declared reader-of-env has no native form: the removed @pure decorator is banned (JETH481); solc rejects the explicit-pure program', () => {
+    // As above: native has no @pure to violate (a reader of msg.* is inferred view), so the former JETH164
+    // program now trips the decorator ban.
     const codes = jethCodes(
       `@contract class C { @view r(): address { return msg.sender; } @pure f(): address { return this.r(); } }`,
     );
@@ -91,11 +97,11 @@ describe('internal-call gates (G8)', () => {
         `type P = { a: u256; b: u256; }; class C { get h(p: P): External<u256> { return p.a; } get f(): External<u256> { let p: P = P(1n, 2n); return h(p); } }`,
       ),
     ).toEqual(expect.arrayContaining(['JETH240']));
-    // this.h(p) from a NON-pure @external caller is a real external self-call (staticcall, h is @pure),
-    // byte-identical to solc (covered in external-self-call.test.ts) -> now compiles.
+    // this.h(p) from a NON-get external caller is a real external self-call (staticcall, h is a read-only
+    // `get`), byte-identical to solc (covered in external-self-call.test.ts) -> now compiles.
     expect(
       jethCodes(
-        `@struct class P { a: u256; b: u256; } @contract class C { @external @pure h(p: P): u256 { return p.a; } @external f(): u256 { let p: P = P(1n, 2n); return this.h(p); } }`,
+        `type P = { a: u256; b: u256; }; class C { get h(p: P): External<u256> { return p.a; } f(): External<u256> { let p: P = P(1n, 2n); return this.h(p); } }`,
       ),
     ).toBeNull();
   });

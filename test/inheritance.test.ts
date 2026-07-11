@@ -204,16 +204,19 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       par(j2('(I, J, I)'), s2('(I, J, I)')); // duplicate
       expect(codes(j2('(I, J)'))).toEqual([]); // complete -> accept
       expect(codes(j2('(J, I)'))).toEqual([]); // order-insensitive
-      // J extends I, C extends J only: single DIRECT head J; naming I (a transitive, non-direct interface) is invalid.
+      // J extends I, C extends J only: solc uses this hierarchy to test transitive vs direct heads.
+      // Native mode has no interface-extends-interface (JETH349 - declare methods directly), so both the
+      // transitive-in-list form and the single-direct-head form are rejected natively (the chain itself);
+      // solc rejects the first (naming transitive I is "Invalid contract specified") and accepts the second.
       par(
-        `@interface class I { @external g(): u256; } @interface class J extends I { @external g(): u256; } @contract class C extends J { @override(I, J) @external g(): u256 { return 8n; } }`,
+        `interface I { g(): u256; } interface J extends I { g(): u256; } class C extends J { @override(I, J) get g(): External<u256> { return 8n; } }`,
         `interface I { function g() external returns(uint256); } interface J is I { function g() external returns(uint256); } contract C is J { function g() external override(I,J) returns(uint256){ return 8; } }`,
       );
       expect(
         codes(
-          `@interface class I { @external g(): u256; } @interface class J extends I { @external g(): u256; } @contract class C extends J { @override(J) @external g(): u256 { return 8n; } }`,
+          `interface I { g(): u256; } interface J extends I { g(): u256; } class C extends J { @override(J) get g(): External<u256> { return 8n; } }`,
         ),
-      ).toEqual([]); // single direct head J -> @override(J) accepts
+      ).toContain('JETH349'); // native: the J-extends-I chain is rejected, so the single-direct-head accept is unreachable
     });
     // ---- base-constructor-argument accept/reject parity ----
     it('a heritage base-arg referencing a ctor parameter -> both reject (state/params not in scope)', () =>

@@ -98,8 +98,11 @@ describe('@storage(ns) namespaced storage (EIP-7201)', () => {
     expect(j.plain).toBe(0x7777n); // @state stays disjoint at slot 0
   });
 
-  it('gate: @storage combined with @state/@constant/@immutable -> JETH409', () => {
-    expect(codes(`@contract class C { @state @storage('ns') x: u256; @external f(): void { this.x = 1n; } }`)).toContain('JETH409');
+  it('gate: @storage combined with a banned slot-model decorator (@state/@constant/@immutable) -> JETH481', () => {
+    // The other slot models are now spelled natively (@state = a bare field, @constant/@immutable = `static`),
+    // so the only way to still WRITE @state/@constant/@immutable alongside a (kept) @storage field is a banned
+    // decorator, caught by the stage-2 ban pre-pass (JETH481). @storage itself stays a supported decorator.
+    expect(codes(`class C { @storage('ns') @state x: u256; f(): External<void> { this.x = 1n; } }`)).toContain('JETH481');
   });
 
   it('gate: @storage needs exactly one non-empty string-literal namespace', () => {

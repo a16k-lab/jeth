@@ -70,13 +70,17 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
     );
   });
 
-  it('positive: C.g.selector (self) and A.g.selector (abstract base)', async () => {
+  it('positive: this.m.selector (self) and this.g.selector (abstract base)', async () => {
+    // Native mode references a contract method's own / inherited selector via `this.<name>.selector`.
+    // The contract-NAME-qualified `C.m.selector` form needs the removed @external decorator and rejects
+    // (JETH074, pinned below); interface-qualified `I.m.selector` is covered above. solc's `C.m`/`A.g`
+    // selectors equal these `this.`-qualified ones (selector is the name+params, mutability-independent).
     await matchPositive(
-      `@abstract class A { @external g(x: u256): u256 { return x; } }
-       @contract class C extends A {
-         @external m(a: address, b: bool): u256 { return 0n; }
-         @external f(): bytes4 { return C.m.selector; }
-         @external f2(): bytes4 { return A.g.selector; }
+      `abstract class A { get g(x: u256): External<u256> { return x; } }
+       class C extends A {
+         get m(a: address, b: bool): External<u256> { return 0n; }
+         get f(): External<bytes4> { return this.m.selector; }
+         get f2(): External<bytes4> { return this.g.selector; }
        }`,
       `abstract contract A { function g(uint256 x) external virtual pure returns(uint256){ return x; } }
        contract C is A {
@@ -86,6 +90,18 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
        }`,
       ['f()', 'f2()'],
     );
+  });
+
+  it('negative: contract-NAME-qualified C.m.selector rejects natively (JETH074); use this.m.selector', () => {
+    // The qualified-selector resolver keys on the @external decorator, which native methods do not carry,
+    // so `ClassName.method.selector` is unresolvable in native mode (solc still accepts it - hence a
+    // JETH-only reject rather than a bothReject).
+    const j = jethCompile(
+      `abstract class A { get g(x: u256): External<u256> { return x; } }
+       class C extends A { get m(a: address, b: bool): External<u256> { return 0n; } get f(): External<bytes4> { return C.m.selector; } }`,
+    );
+    expect(j.ok).toBe(false);
+    expect(j.codes).toContain('JETH074');
   });
 
   it('positive: selector with struct/array/bytes params uses the canonical tuple form', async () => {
@@ -144,28 +160,18 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
     );
   });
 
-  it('positive: interfaceId EXCLUDES inherited interface functions (only the interface\'s own)', async () => {
-    await matchPositive(
-      `@interface class IBase { @external g(x: u256): u256; }
-       @interface class IFoo extends IBase { @external h(a: address): bool; }
-       @interface class IEmpty extends IBase {}
-       @contract class C extends IFoo {
-         @external g(x: u256): u256 { return x; }
-         @external h(a: address): bool { return true; }
-         @external f(): bytes4 { return type(IFoo).interfaceId; }
-         @external f2(): bytes4 { return type(IEmpty).interfaceId; }
-       }`,
-      `interface IBase { function g(uint256 x) external returns(uint256); }
-       interface IFoo is IBase { function h(address a) external returns(bool); }
-       interface IEmpty is IBase {}
-       contract C is IFoo {
-         function g(uint256 x) external pure returns(uint256){ return x; }
-         function h(address a) external pure returns(bool){ return true; }
-         function f() external pure returns(bytes4){ return type(IFoo).interfaceId; }
-         function f2() external pure returns(bytes4){ return type(IEmpty).interfaceId; }
-       }`,
-      ['f()', 'f2()'],
+  it('native rejects interface-extends-interface behind interfaceId (JETH349); flat-interface Ids are pinned above', () => {
+    // solc computes type(I).interfaceId as the XOR of I's OWN selectors, EXCLUDING inherited ones - a
+    // property that requires an interface hierarchy. Native mode has no interface-extends-interface
+    // (JETH349 - declare the methods directly), so the "exclude inherited" scenario is unreachable; the
+    // interfaceId of a flat interface (single / multi / ERC165) is pinned byte-identical to solc above.
+    const j = jethCompile(
+      `interface IBase { g(x: u256): u256; }
+       interface IFoo extends IBase { h(a: address): bool; }
+       class C extends IFoo { get h(a: address): External<bool> { return true; } get f(): External<bytes4> { return type(IFoo).interfaceId; } }`,
     );
+    expect(j.ok).toBe(false);
+    expect(j.codes).toContain('JETH349');
   });
 
   // ---------------- NEGATIVE (both reject) ----------------
@@ -214,13 +220,15 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
   });
 
   it('negative: I.inheritedFn.selector (interface inherited member is not direct)', () => {
+    // Native rejects the interface hierarchy itself (JETH349 - no interface-extends-interface), while solc
+    // accepts `interface IFoo is IBase` but rejects `IFoo.g.selector` (g is inherited, not a direct member):
+    // both compilers reject the program.
     bothReject(
-      `@interface class IBase { @external g(x: u256): u256; }
-       @interface class IFoo extends IBase { @external h(a: address): bool; }
-       @contract class C extends IFoo {
-         @external g(x: u256): u256 { return x; }
-         @external h(a: address): bool { return true; }
-         @external f(): bytes4 { return IFoo.g.selector; }
+      `interface IBase { g(x: u256): u256; }
+       interface IFoo extends IBase { h(a: address): bool; }
+       class C extends IFoo {
+         get h(a: address): External<bool> { return true; }
+         get f(): External<bytes4> { return IFoo.g.selector; }
        }`,
       `interface IBase { function g(uint256 x) external returns(uint256); }
        interface IFoo is IBase { function h(address a) external returns(bool); }

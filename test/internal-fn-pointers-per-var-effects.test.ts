@@ -50,9 +50,9 @@ async function eq(jeth: string, sol: string, calls: [string, string][], slots: b
   for (const s of slots) expect(await readSlot(hj, aj, s), `slot ${s}`).toBe(await readSlot(hs, as, s));
 }
 
-// Shared target set: a @view reader and a mutating writer with the SAME JETH signature.
-const J_TARGETS = `@state s: u256;
-  @view rd(x: u256): u256 { return x + this.s; }
+// Shared target set: a (inferred-view) reader and a mutating writer with the SAME JETH signature.
+const J_TARGETS = `s: u256;
+  rd(x: u256): u256 { return x + this.s; }
   wr(x: u256): u256 { this.s = x; return x * 2n; }`;
 const S_TARGETS = `uint256 s;
   function rd(uint256 x) internal view returns (uint256) { return x + s; }
@@ -152,26 +152,28 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
   });
 
   it('KEPT REJECT (both): a SHARED variable with mixed targets in a @view caller', () => {
-    const J = `@contract class C { ${J_TARGETS}
-      @external @view go(c: bool, v: u256): u256 { let g: (x: u256) => u256 = c ? this.rd : this.wr; return g(v); }
+    const J = `class C { ${J_TARGETS}
+      get go(c: bool, v: u256): External<u256> { let g: (x: u256) => u256 = c ? this.rd : this.wr; return g(v); }
     }`;
     const S = `contract C { ${S_TARGETS}
       function go(bool c, uint256 v) external view returns (uint256) { function(uint256) view returns (uint256) g = c ? rd : wr; return g(v); }
     }`;
-    expect(codes(J)).toContain('JETH481');
+    // Native: the read-only `get go` reaches wr (a state writer) through the shared pointer, so the getter
+    // is not read-only -> JETH043 (a get accessor may not modify state), the native twin of the @view reject.
+    expect(codes(J)).toContain('JETH043');
     expect(solcRejects(S)).toBe(true);
   });
 
   it('KEPT REJECT (both): a variable REASSIGNED to a mutating target (flow-insensitive union)', () => {
-    const J = `@contract class C { ${J_TARGETS}
-      @external @view go(v: u256): u256 {
+    const J = `class C { ${J_TARGETS}
+      get go(v: u256): External<u256> {
         let g: (x: u256) => u256 = this.rd;
         let r: u256 = g(v);
         g = this.wr;
         return r + g(v);
       }
     }`;
-    expect(codes(J)).toContain('JETH481');
+    expect(codes(J)).toContain('JETH043');
     expect(
       solcRejects(`contract C { ${S_TARGETS}
       function go(uint256 v) external view returns (uint256) {
@@ -187,34 +189,35 @@ describe('W5D-2: per-pointer-variable funcref mutability discrimination', () => 
   it('KEPT REJECT: a mutating call through a SECOND tracked variable in a @view fn (non-vacuity)', () => {
     // proves the per-variable tracking really attributes wr's effects to the variable that holds it.
     expect(
-      codes(`@contract class C { ${J_TARGETS}
-      @external @view go(v: u256): u256 {
+      codes(`class C { ${J_TARGETS}
+      get go(v: u256): External<u256> {
         let g: (x: u256) => u256 = this.rd;
         { let g2: (x: u256) => u256 = this.wr; g2(v); }
         return g(v);
       }
     }`),
-    ).toContain('JETH481');
+    ).toContain('JETH043');
   });
 
   it('KEPT CONSERVATIVE: storage-held pointer and funcref PARAM still use the per-signature union', () => {
-    // storage round-trip: reading this.h into a local is an untrackable source -> union includes wr.
+    // storage round-trip: reading this.h into a local is an untrackable source -> union includes wr, so the
+    // read-only `get go` transitively writes -> JETH043 (native twin of the @view reject).
     expect(
-      codes(`@contract class C { ${J_TARGETS}
-      @state h: (x: u256) => u256;
-      @external set(c: bool): void { this.h = c ? this.rd : this.wr; }
-      @external @view go(v: u256): u256 { let g: (x: u256) => u256 = this.h; return g(v); }
+      codes(`class C { ${J_TARGETS}
+      h: (x: u256) => u256;
+      set(c: bool): External<void> { this.h = c ? this.rd : this.wr; }
+      get go(v: u256): External<u256> { let g: (x: u256) => u256 = this.h; return g(v); }
     }`),
-    ).toContain('JETH481');
+    ).toContain('JETH043');
     // param flow: the param's initial value is caller-controlled -> poisoned -> union includes wr
     // (a DOCUMENTED conservative over-rejection: solc's view-typed param would accept).
     expect(
-      codes(`@contract class C { ${J_TARGETS}
-      @view ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
-      @external runMut(v: u256): u256 { let m: (x: u256) => u256 = this.wr; return m(v); }
-      @external @view go(v: u256): u256 { return this.ap(this.rd, v); }
+      codes(`class C { ${J_TARGETS}
+      ap(f: (x: u256) => u256, v: u256): u256 { return f(v); }
+      runMut(v: u256): External<u256> { let m: (x: u256) => u256 = this.wr; return m(v); }
+      get go(v: u256): External<u256> { return this.ap(this.rd, v); }
     }`),
-    ).toContain('JETH481');
+    ).toContain('JETH043');
   });
 
   it('unregressed: the pre-existing single-target @view pointer shape still lifts', async () => {

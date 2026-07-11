@@ -250,17 +250,20 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
     );
   });
 
-  it('positive: an interface extending another interface (`J is I`)', async () => {
+  it('positive: a contract implementing two interfaces (native flattens: interface-extends-interface is JETH349)', async () => {
+    // Native mode has no interface-extends-interface (JETH349); the chain's requirement - C must supply
+    // every method of both interfaces - is expressed by implementing the two interfaces directly. The
+    // JETH349 reject of the chained form itself is pinned in the negative case below.
     await matchPositive(
-      `@interface class I { @external f(): u256; }
-       @interface class J extends I { @external @view g(): u256; }
-       @contract class C extends J {
-         @external f(): u256 { return 3n; }
-         @external @view g(): u256 { return 4n; }
+      `interface I { f(): u256; }
+       interface J { g(): View<u256>; }
+       class C extends I, J {
+         get f(): External<u256> { return 3n; }
+         get g(): External<u256> { return 4n; }
        }`,
       `interface I { function f() external returns(uint256); }
-       interface J is I { function g() external view returns(uint256); }
-       contract C is J { function f() external returns(uint256){ return 3; } function g() external view returns(uint256){ return 4; } }`,
+       interface J { function g() external view returns(uint256); }
+       contract C is I, J { function f() external returns(uint256){ return 3; } function g() external view returns(uint256){ return 4; } }`,
       [
         ['f()', ''],
         ['g()', ''],
@@ -359,15 +362,18 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
     );
   });
 
-  it('negative: interface method left open through a `J is I` chain', () => {
+  it('negative: native rejects interface-extends-interface (JETH349); solc chained form leaves f open', () => {
+    // Native mode does not support an interface extending another interface (JETH349 - declare the methods
+    // directly). solc accepts `interface J is I`, but the contract below still leaves I.f unimplemented, so
+    // both compilers reject the chained form (JETH for the chain itself, solc for the open method).
     bothReject(
-      `@interface class I { @external f(): u256; }
-       @interface class J extends I { @external @view g(): u256; }
-       @contract class C extends J { @external @view g(): u256 { return 4n; } }`,
+      `interface I { f(): u256; }
+       interface J extends I { g(): View<u256>; }
+       class C extends J { get g(): External<u256> { return 4n; } }`,
       `interface I { function f() external returns(uint256); }
        interface J is I { function g() external view returns(uint256); }
        contract C is J { function g() external view returns(uint256){ return 4; } }`,
-      'JETH385',
+      'JETH349',
     );
   });
 

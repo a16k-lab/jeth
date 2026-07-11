@@ -90,7 +90,7 @@ describe('multi-file imports', () => {
     expect(diag(`import { T } from "./d.jeth";\nclass C { get f(): External<u256> { return 1n; } }`, { 'd.jeth': `export type T = { a: u256 };\nclass Rogue { get g(): External<u256> { return 1n; } }` }))
       .toEqual(['JETH036@d.jeth:2']); // concrete contract in a dep
     expect(diag(`import { T } from "./d.jeth";\nclass C { get f(): External<u256> { return 1n; } }`, { 'd.jeth': `// use @decorators\nexport type T = Brand<u256>;` }))
-      .toEqual(['JETH036@d.jeth:1']); // cross-mode import
+      .toEqual(['JETH480@d.jeth:1']); // a dep carrying the removed `// use @decorators` pragma is banned (JETH480)
   });
 
   it('convenience import aliases: `import { A as B }` binds A under the local name B, byte-identically', () => {
@@ -152,7 +152,7 @@ describe('multi-file hardening (verification sweep)', () => {
 
   it('a block-wrapped contract in a dep is caught (recursive scan) - no silent artifact replacement', () => {
     expect(diag(`import { T } from "./dep.jeth";\nclass Vault { x: u256; get getX(): External<u256> { return this.x; } }`,
-      { 'dep.jeth': `export type T = { a: u256 };\n{ @contract class Rogue { @external @view g(): u256 { return 99n; } } }` }))
+      { 'dep.jeth': `export type T = { a: u256 };\n{ class Rogue { get g(): External<u256> { return 99n; } } }` }))
       .toEqual(['JETH036@dep.jeth:2']);
   });
 

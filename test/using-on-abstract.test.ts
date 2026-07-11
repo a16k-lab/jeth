@@ -387,16 +387,15 @@ contract C { using L for uint256; function f(uint256 x) external pure returns (u
 `)).toBe(true);
   });
 
-  it('control: the CHILD writing the attached call directly stays both-reject (both spellings)', () => {
-    for (const decs of ['@using(L) @abstract', '@abstract @using(L)']) {
-      const J = JL + `
-${decs}
-class Base { }
-@contract
-class C extends Base { @external @pure f(x: u256): u256 { return x.half(); } }
+  it('control: the CHILD writing the attached call directly stays both-reject', () => {
+    // The @using(L) attaches to abstract Base only; it is NOT projected into the deployed child C, so C's
+    // own body cannot resolve x.half() -> JETH074, like solc. (The legacy two-decorator-order sweep
+    // collapses natively: `@using(L) abstract class Base` is the single native spelling.)
+    const J = JL + `
+@using(L) abstract class Base { }
+class C extends Base { get f(x: u256): External<u256> { return x.half(); } }
 `;
-      expect(codes(J)).toContain('JETH481');
-    }
+    expect(codes(J)).toContain('JETH074');
     expect(solcRejects(SL + `
 abstract contract Base { using L for uint256; }
 contract C is Base { function f(uint256 x) external pure returns (uint256) { return x.half(); } }
@@ -680,26 +679,27 @@ contract C { using L for uint256; uint256 acc; constructor() { acc = uint256(8).
     expect((await j.h.call(j.a, '0x' + sel('g()'))).returnHex).toBe('0x' + pad32(4n));
   });
 
-  it('inline @immutable initializers use the deployed map: no-ctor AND with-ctor flavors', async () => {
-    // no ctor at all: the chain<=1 no-node branch synthesizes the body from immutableInitStmts()
+  it('a ctor-set @immutable (declared on the deployed contract) uses the deployed map: no extra base AND with a @state field', async () => {
+    // Native has no inline-initialized immutable (`static k = expr` is a compile-time @constant, JETH048);
+    // an immutable is `static k` set in the DECLARING class's constructor, so the ctor body owns the
+    // attachment - here the deployed contract C, whose own @using(L) serves `(8n).half()`.
     const a = await same(JL + `
-@using(L) @contract
-class C {
-  @immutable k: u256 = (8n).half();
-  @external @view g(): u256 { return this.k; }
+@using(L) class C {
+  static k: u256;
+  constructor() { this.k = (8n).half(); }
+  get g(): External<u256> { return this.k; }
 }
 `, SL + `
 contract C { using L for uint256; uint256 immutable k = uint256(8).half(); function g() external view returns (uint256) { return k; } }
 `, [{ sig: 'g()' }]);
     expect((await a.j.h.call(a.j.a, '0x' + sel('g()'))).returnHex).toBe('0x' + pad32(4n));
-    // ctor present: immutableInitStmts() runs inside checkConstructor, before the body statements
+    // a second field set in the SAME ctor body: both `.half()` calls resolve via C's own @using(L)
     const b = await same(JL + `
-@using(L) @contract
-class C {
-  @immutable k: u256 = (18n).half();
-  @state acc: u256;
-  constructor() { this.acc = (100n).half(); }
-  @external @view g(): u256 { return this.k + this.acc; }
+@using(L) class C {
+  static k: u256;
+  acc: u256;
+  constructor() { this.k = (18n).half(); this.acc = (100n).half(); }
+  get g(): External<u256> { return this.k + this.acc; }
 }
 `, SL + `
 contract C { using L for uint256; uint256 immutable k = uint256(18).half(); uint256 acc; constructor() { acc = uint256(100).half(); } function g() external view returns (uint256) { return k + acc; } }
@@ -786,9 +786,9 @@ contract C is Mid { using L1 for uint256; constructor() Mid(1) {} function getM(
     // The fast path (checkConstructor) and the merge path (buildLevel) must give one ctor body the
     // same attachment owner: adding an empty base flips the path taken, nothing else.
     const ctorBody = `
-  @state acc: u256;
+  acc: u256;
   constructor() { this.acc = (26n).half(); }
-  @external @view g(): u256 { return this.acc; }
+  get g(): External<u256> { return this.acc; }
 `;
     const solTail = ` uint256 acc; constructor() { acc = uint256(26).half(); } function g() external view returns (uint256) { return acc; } }`;
     const a = await same(
@@ -811,10 +811,8 @@ describe('AXIS 5: an inline @immutable initializer is owned by its DECLARING cla
     // The miscompile cell: immutableInitStmts staged EVERY level's initializers under the one ambient
     // owner (the deployed contract), so Mid's (9n).tag() picked C's L1 (+1000) over Mid's own L2.
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Mid { @immutable k: u256 = (9n).tag(); }
-@using(L1) @contract
-class C extends Mid { @external @view g(): u256 { return this.k; } }
+@using(L2) abstract class Mid { static k: u256; constructor() { this.k = (9n).tag(); } }
+@using(L1) class C extends Mid { get g(): External<u256> { return this.k; } }
 `, ST + `
 abstract contract Mid { using L2 for uint256; uint256 immutable k = uint256(9).tag(); }
 contract C is Mid { using L1 for uint256; function g() external view returns (uint256) { return k; } }
@@ -824,12 +822,9 @@ contract C is Mid { using L1 for uint256; function g() external view returns (ui
 
   it('B12: a 3-level chain pins the DECLARING class map, not any mid or deployed one (3013)', async () => {
     const { j } = await same(JT + `
-@using(L3) @abstract
-class Grand { @immutable k: u256 = (13n).tag(); }
-@using(L2) @abstract
-class Mid extends Grand { }
-@using(L1) @contract
-class C extends Mid { @external @view g(): u256 { return this.k; } }
+@using(L3) abstract class Grand { static k: u256; constructor() { this.k = (13n).tag(); } }
+@using(L2) abstract class Mid extends Grand { }
+@using(L1) class C extends Mid { get g(): External<u256> { return this.k; } }
 `, ST + `
 abstract contract Grand { using L3 for uint256; uint256 immutable k = uint256(13).tag(); }
 abstract contract Mid is Grand { using L2 for uint256; }
@@ -840,10 +835,8 @@ contract C is Mid { using L1 for uint256; function g() external view returns (ui
 
   it('B13: an explicit deployed ctor routes identically (2009 via the chain>1 merge path)', async () => {
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Mid { @immutable k: u256 = (9n).tag(); }
-@using(L1) @contract
-class C extends Mid { constructor() {} @external @view g(): u256 { return this.k; } }
+@using(L2) abstract class Mid { static k: u256; constructor() { this.k = (9n).tag(); } }
+@using(L1) class C extends Mid { constructor() {} get g(): External<u256> { return this.k; } }
 `, ST + `
 abstract contract Mid { using L2 for uint256; uint256 immutable k = uint256(9).tag(); }
 contract C is Mid { using L1 for uint256; constructor() {} function g() external view returns (uint256) { return k; } }
@@ -855,10 +848,8 @@ contract C is Mid { using L1 for uint256; constructor() {} function g() external
     // Pre-fix the ambient deployed-map lookup found no attachment and rejected JETH074; solc accepts
     // (Mid's own `using L2` serves Mid's field initializer regardless of the deployed class).
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Mid { @immutable k: u256 = (11n).tag(); }
-@contract
-class C extends Mid { @external @view g(): u256 { return this.k; } }
+@using(L2) abstract class Mid { static k: u256; constructor() { this.k = (11n).tag(); } }
+class C extends Mid { get g(): External<u256> { return this.k; } }
 `, ST + `
 abstract contract Mid { using L2 for uint256; uint256 immutable k = uint256(11).tag(); }
 contract C is Mid { function g() external view returns (uint256) { return k; } }
@@ -868,12 +859,9 @@ contract C is Mid { function g() external view returns (uint256) { return k; } }
 
   it('B14 control: the self convention (file-wide) serves a base @immutable initializer too', async () => {
     const { j } = await same(`
-@library
-class S { double(self: u256): u256 { return self * 2n; } }
-@abstract
-class Mid { @immutable k: u256 = (7n).double(); }
-@contract
-class C extends Mid { @external @view g(): u256 { return this.k; } }
+static class S { double(self: u256): u256 { return self * 2n; } }
+abstract class Mid { static k: u256; constructor() { this.k = (7n).double(); } }
+class C extends Mid { get g(): External<u256> { return this.k; } }
 `, `
 library S { function double(uint256 self) internal pure returns (uint256) { return self * 2; } }
 abstract contract Mid { using S for uint256; uint256 immutable k = uint256(7).double(); }
@@ -885,10 +873,8 @@ contract C is Mid { function g() external view returns (uint256) { return k; } }
   it('control: a DEPLOYED-declared @immutable still uses the deployed map under shadowing (1017)', async () => {
     // The A2/A3 anchor: the per-field owner for a deployed-declared field IS the deployed class.
     const { j } = await same(JT + `
-@using(L2) @abstract
-class Mid { }
-@using(L1) @contract
-class C extends Mid { @immutable k: u256 = (17n).tag(); @external @view g(): u256 { return this.k; } }
+@using(L2) abstract class Mid { }
+@using(L1) class C extends Mid { static k: u256; constructor() { this.k = (17n).tag(); } get g(): External<u256> { return this.k; } }
 `, ST + `
 abstract contract Mid { using L2 for uint256; }
 contract C is Mid { using L1 for uint256; uint256 immutable k = uint256(17).tag(); function g() external view returns (uint256) { return k; } }

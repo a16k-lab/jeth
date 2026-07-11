@@ -305,13 +305,13 @@ const RET_TARGET_SOL = `contract T {
 describe('typed interface calls: returndatasize bounds (byte-identical vs solc)', () => {
   async function rtRet(sig: string) {
     const tsb = compileSolidity(SPDX + RET_TARGET_SOL, 'T');
-    const callerJeth = `@interface class IFoo {
-      @external zero(): u256;
-      @external short31(): u256;
-      @external extra64(): u256;
+    const callerJeth = `interface IFoo {
+      zero(): u256;
+      short31(): u256;
+      extra64(): u256;
     }
-    @contract class C {
-      @external f(t: address): u256 { return IFoo(t).${sig}(); }
+    class C {
+      f(t: address): External<u256> { return IFoo(t).${sig}(); }
     }`;
     const callerSol = `interface IFoo { function zero() external returns(uint256); function short31() external returns(uint256); function extra64() external returns(uint256); }
     contract C { function f(address t) external returns(uint256){ return IFoo(t).${sig}(); } }`;
@@ -399,20 +399,22 @@ describe('typed interface calls: clean rejections (no crash)', () => {
   it('rejects a method body in an interface', () => {
     expect(
       jethRejects(
-        `@interface class IFoo { @external bar(): u256 { return 1n; } }\n@contract class C { @external f(): u256 { return 0n; } }`,
+        `interface IFoo { bar(): u256 { return 1n; } }\nclass C { get f(): External<u256> { return 0n; } }`,
       ),
     ).toBe(true);
   });
   it('rejects a state field in an interface', () => {
     expect(
       jethRejects(
-        `@interface class IFoo { x: u256; @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`,
+        `interface IFoo { x: u256; bar(): u256; }\nclass C { get f(): External<u256> { return 0n; } }`,
       ),
     ).toBe(true);
   });
-  it('rejects a non-@external method in an interface', () => {
+  it('rejects a private (#) method in an interface (native interface methods are implicitly external)', () => {
+    // The legacy "@external required" rule is gone - a plain native interface method is implicitly the
+    // external form; the surviving visibility rule is that an interface method may not be private.
     expect(
-      jethRejects(`@interface class IFoo { bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`),
+      jethRejects(`interface IFoo { #bar(): u256; }\nclass C { get f(): External<u256> { return 0n; } }`),
     ).toBe(true);
   });
   it('rejects method overloading in an interface', () => {
@@ -425,7 +427,7 @@ describe('typed interface calls: clean rejections (no crash)', () => {
   it('rejects a constructor in an interface', () => {
     expect(
       jethRejects(
-        `@interface class IFoo { constructor() {} @external bar(): u256; }\n@contract class C { @external f(): u256 { return 0n; } }`,
+        `interface IFoo { constructor(): void; bar(): u256; }\nclass C { get f(): External<u256> { return 0n; } }`,
       ),
     ).toBe(true);
   });

@@ -284,9 +284,9 @@ describe('Phase A libraries: accept/reject gate matrix', () => {
     }
   }
 
-  it('@state in a library -> JETH388, solc also rejects', () => {
-    const jeth = `@library class L { @state x: u256; f(a: u256): u256 { return a; } }
-@contract class C { @external @pure f(a: u256): u256 { return L.f(a); } }`;
+  it('state (a bare field) in a library -> JETH388, solc also rejects', () => {
+    const jeth = `static class L { x: u256; f(a: u256): u256 { return a; } }
+class C { get f(a: u256): External<u256> { return L.f(a); } }`;
     const sol = `${SPDX}library L { uint256 x; function f(uint256 a) internal pure returns(uint256){ return a; } }
 contract C { function f(uint256 a) external pure returns(uint256){ return L.f(a); } }`;
     expect(jethRejectsWith(jeth, 'JETH388')).toBe(true);
@@ -337,9 +337,9 @@ contract C { using A for uint256; using B for uint256; function g(uint256 x) ext
   it('this.x contract-state access from a library -> JETH394 (deliberate Phase-A gate; solc rejects this.x in a library too)', () => {
     // A library has no contract state; `this.x` is rejected. (Bare `this`, e.g. address(this), is
     // ALLOWED - verified byte-identical in the feature suite above.)
-    const jeth = `@library class L { @state q: u256; f(a: u256): u256 { return a + this.q; } }
-@contract class C { @state q: u256; @external @view g(a: u256): u256 { return L.f(a); } }`;
-    // (the @state in L is itself JETH388; this asserts the this.x path is also gated)
+    const jeth = `static class L { q: u256; f(a: u256): u256 { return a + this.q; } }
+class C { q: u256; get g(a: u256): External<u256> { return L.f(a); } }`;
+    // (the bare state field in L is itself JETH388; this asserts the this.x path is also gated)
     expect(
       jethRejectsWith(jeth, 'JETH394') || jethRejectsWith(jeth, 'JETH388'),
     ).toBe(true);
