@@ -279,9 +279,9 @@ contract C {
 
   it('.selector on an internal function is rejected (no ABI selector)', () => {
     const src = `class C {
-  @internal p(x: u256): u256 { return x; }
+  p(x: u256): u256 { return x; }
   get s(): External<bytes4> { return this.p.selector; }
-}`;
+}`; // native: a bare method is internal (drop @internal); an internal fn has no ABI selector -> JETH074
     expect(codes(src)).toContain('JETH074');
   });
 });

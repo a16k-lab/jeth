@@ -88,8 +88,11 @@ contract C {
     expect(codes('class C { static K: u256 = 1n; get f(): External<u256> { return this.K; } }')).toEqual(
       [],
     );
-    // a @constant requires a foldable initializer
-    expect(codes('@contract class C { @constant K: u256; @external @pure f(): u256 { return this.K; } }')).toContain(
+    // a native `static K = <init>` constant requires a FOLDABLE (constant-expression) initializer; a
+    // fractional value is not one (mirrors solc, and the legacy `@constant K: u256;` missing-init reject:
+    // in native, a bare `static K: u256;` with no initializer is instead an @immutable, so the constant
+    // "needs a constant expression" branch is exercised here). Downstream JETH065 (this.K never collected).
+    expect(codes('class C { static K: u256 = 1n / 2n; get f(): External<u256> { return this.K; } }')).toContain(
       'JETH048',
     );
     // a @constant + @state with the same shape compiles; @constant is excluded from the ABI (no getter)

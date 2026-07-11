@@ -201,7 +201,11 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
         `contract C { uint256 immutable a; function getA() external view returns(uint256){return a;} constructor(){ a=3; } }`,
         'getA()',
       ));
-    it('@pure reading an immutable is rejected (JETH164), matching solc', () =>
+    it('a retired @pure marker on an immutable reader is banned (native: mutability is inferred, never declared) -> JETH481', () =>
+      // native adjudication: the legacy JETH164 "a @pure method cannot read an immutable" gate depended on an
+      // EXPLICIT @pure declaration. Native mutability is INFERRED from the body (there is no class-method Pure
+      // marker; `Pure<T>` is interface-only), so the reader would simply be inferred view and compile - the
+      // only reject left is the banned @pure decorator itself.
       expect(
         codes(
           `@contract class C { @immutable a: u256; @external @pure getA(): u256 { return this.a; } constructor(){ this.a = 1n; } }`,
@@ -212,19 +216,30 @@ describe('Phase 5 immutables (@immutable) vs solc 0.8.35', () => {
   describe('clean gates', () => {
     it('a non-value-type immutable (string) -> JETH310 (parity: solc also rejects)', () =>
       expect(codes(`class C { static s: string; constructor(){ this.s = "x"; } }`)).toContain('JETH310'));
-    it('an inline-initialized immutable is supported (staged at the start of the constructor)', () =>
-      expect(codes(`@contract class C { @immutable a: u256 = 7n; constructor(){} }`)).toEqual([]));
-    it('a @external @immutable synthesizes solc public-immutable view getter (accepted)', () =>
+    it('an inline-initialized static field is supported (a compile-time constant, folded and slot-free)', () =>
+      // native adjudication: a `static a: u256 = 7n` (WITH an initializer) is a compile-time @constant, not
+      // an @immutable. The legacy inline-initialized-@immutable form has NO native spelling (a bare
+      // `static a: u256;` with no initializer is the native immutable, covered above); the inline form is
+      // simply a constant now, and it still compiles clean.
+      expect(codes(`class C { static a: u256 = 7n; constructor(){} }`)).toEqual([]));
+    it('a Visible<T> immutable synthesizes solc public-immutable view getter (accepted)', () =>
       expect(codes(`class C { static a: Visible<u256>; constructor(){ this.a = 1n; } }`)).toEqual([]));
-    it('any OTHER visibility/mutability on an immutable still -> JETH312', () =>
-      expect(codes(`class C { @view static a: u256; constructor(){ this.a = 1n; } }`)).toContain('JETH312'));
+    it('a retired mutability decorator on an immutable is banned (native: only Visible<T> exposes a field) -> JETH481', () =>
+      // native adjudication: the legacy JETH312 "other visibility/mutability on an immutable" gate tested
+      // decorator combinations (@view/@pure/... on the field). Native has NO field mutability marker (only
+      // Visible<T> exposes a getter), so the decorator itself is now banned before that gate is reachable.
+      expect(codes(`class C { @view static a: u256; constructor(){ this.a = 1n; } }`)).toContain('JETH481'));
     it('assigning an immutable outside the constructor -> JETH313', () =>
       expect(
         codes(`class C { static a: u256; setit(): External<void> { this.a = 1n; } constructor(){} }`),
       ).toContain('JETH313'));
-    it('@state and @immutable on the same field -> JETH052', () =>
+    it('combining the retired @state and @immutable field decorators is banned -> JETH481', () =>
+      // native adjudication: the legacy JETH052 "a field cannot combine @state and @immutable" gate tested a
+      // decorator COMBINATION. Native has no field-kind decorators (a bare `x: T` is state, a `static x: T;`
+      // is immutable, mutually exclusive by shape), so the combination is unspellable and the decorators are
+      // banned before that gate is reachable.
       expect(codes(`@contract class C { @state @immutable a: u256; constructor(){ this.a = 1n; } }`)).toContain(
-        'JETH052',
+        'JETH481',
       ));
   });
 

@@ -258,12 +258,15 @@ contract C {
   // STILL reject at the analyzer BEFORE codegen (JETH072/074) - the fix must not open the emit/topic
   // path. This is a pre-existing SAFE over-rejection of the emit-of-dynamic-struct family, unchanged.
   it('CONTROL (still-reject): emit E(Pair(k, this.name)) is rejected before codegen', () => {
-    const J = `@struct class Pair { k: u256; name: string }
-@event class E { p: Pair }
-@contract class C {
-  @state name: string;
-  @external setName(s: string): void { this.name = s; }
-  @external fire(k: u256): void { emit E(Pair(k, this.name)); }
+    // native: @struct -> `type Pair = {..}`, @event -> file-level `type E = event<{..}>`, drop @contract,
+    // bare state field, @external -> External<void>. The SEMANTIC over-rejection (emit of a struct payload
+    // with a dynamic storage field, JETH072/074) is unchanged and still fires before codegen.
+    const J = `type Pair = { k: u256; name: string };
+type E = event<{ p: Pair }>;
+class C {
+  name: string;
+  setName(s: string): External<void> { this.name = s; }
+  fire(k: u256): External<void> { emit E(Pair(k, this.name)); }
 }`;
     let codes: string[] = [];
     try {
@@ -272,7 +275,6 @@ contract C {
     } catch (e: any) {
       codes = (e?.diagnostics ?? []).map((d: any) => d.code);
     }
-    expect(codes).toContain('JETH481');
     expect(codes).toContain('JETH074');
   });
 });

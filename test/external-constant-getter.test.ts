@@ -162,13 +162,21 @@ describe('@external @constant auto-getter (solc public constant), byte-identical
     expect(solcRejects(s3)).toBe(true);
   });
 
-  it('JETH466: every non-@external exposure/mutability decorator on @constant is a clean reject (never silently ignored)', () => {
-    for (const dec of ['public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'override', 'virtual']) {
-      expect(codes(`@contract class C { @${dec} @constant K: u256 = 7n; @external @pure f(): u256 { return 1n; } }`), `@${dec}`).toContain(
-        'JETH466',
-      );
+  it('every non-Visible exposure/mutability decorator on a static constant is a clean reject (never silently ignored)', () => {
+    // native adjudication: a @constant is a `static K = v` field; the ONLY exposure marker is Visible<T>. The
+    // legacy JETH466 gate ("only @external combines with @constant") splits by whether the extra decorator was
+    // RETIRED (public/internal/private/view/pure/payable/read -> banned JETH481) or KEPT (override/virtual/hidden,
+    // which reach the constant collector and are nonsensical on a slot-free constant -> JETH466). Either way the
+    // decorator is loud, never swallowed - which is exactly what this test guards.
+    const expected: Record<string, string> = {
+      public: 'JETH481', internal: 'JETH481', private: 'JETH481', view: 'JETH481',
+      pure: 'JETH481', payable: 'JETH481', read: 'JETH481',
+      hidden: 'JETH466', override: 'JETH466', virtual: 'JETH466',
+    };
+    for (const [dec, code] of Object.entries(expected)) {
+      expect(codes(`class C { @${dec} static K: u256 = 7n; get f(): External<u256> { return 1n; } }`), `@${dec}`).toContain(code);
     }
-    // and solc rejects the two standalone analogues that parse at all
+    // and solc rejects the standalone analogue that parses at all
     expect(solcRejects(`contract C { uint256 public constant override K = 7; }`)).toBe(true); // overrides nothing
   });
 });

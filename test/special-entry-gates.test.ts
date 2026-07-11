@@ -248,7 +248,9 @@ contract C is B { uint256 n; receive() external payable override { n = n + 1; } 
   });
 
   it('the plain-method bodyless gate (JETH380) is unregressed', () => {
-    expect(codes(`class C { f(): void; @external g(): External<void> { this.f(); } }`)).toContain('JETH380');
+    // native: the External<void> return marker already exposes g (drop the redundant @external); a bodyless
+    // plain method `f(): void;` is still the JETH380 gate.
+    expect(codes(`class C { f(): void; g(): External<void> { this.f(); } }`)).toContain('JETH380');
   });
 });
 
@@ -268,49 +270,37 @@ describe('JETH473: @nonReentrant on a read-only method (native inference bypass 
     ).toBe(true);
   });
 
-  it('@nonReentrant floors an inferred method at NONPAYABLE (never view/pure): the ABI no longer lies', () => {
-    // Before the fix these inferred view/pure while the Yul TSTOREd - every eth_call reverted against
-    // a read-only ABI claim. The mutex IS a state write, so the honest ABI is nonpayable (exactly the
-    // solc twin's: a tstore modifier on an undeclared-mutability function).
-    const readBody = compile(
-      `class C { x: u256; set(v: u256): External<void> { this.x = v; } @nonReentrant @external getX2(): u256 { return this.x; } }`,
-      { fileName: 'C.jeth' },
-    );
-    const mutGet = readBody.abi.find((e) => e.type === 'function' && e.name === 'getX2') as { stateMutability?: string };
-    expect(mutGet.stateMutability).toBe('nonpayable');
-    const pureBody = compile(`class C { @nonReentrant @external p(): u256 { return 42n; } }`, { fileName: 'C.jeth' });
-    const mutP = pureBody.abi.find((e) => e.type === 'function' && e.name === 'p') as { stateMutability?: string };
-    expect(mutP.stateMutability).toBe('nonpayable');
+  it('a read-only @nonReentrant value method is a LOUD reject natively (the ABI never lies about mutability)', () => {
+    // native model change (the JETH473 group): the legacy compiler ACCEPTED @nonReentrant on a read-only-body
+    // external value method and floored its ABI to nonpayable (so the once-view claim did not lie at runtime).
+    // Native mutability is INFERRED, and a value-returning read-only external function must be a `get` - so the
+    // two native spellings are both a compile-time reject instead of a floored accept: a `get` -> JETH473, a
+    // plain External<T> method (the writer form, misused on a read-only body) -> JETH352. Either way no
+    // view/pure ABI entry that secretly TSTOREs is ever emitted. (A void/writer @nonReentrant method still
+    // floors to nonpayable and is accepted - see the F4 empty-body and the WRITING-method cells below.)
+    // read-only body that READS state:
+    expect(codes(`class C { x: u256; set(v: u256): External<void> { this.x = v; } @nonReentrant get getX2(): External<u256> { return this.x; } }`)).toContain('JETH473');
+    expect(codes(`class C { x: u256; set(v: u256): External<void> { this.x = v; } @nonReentrant getX2(): External<u256> { return this.x; } }`)).toContain('JETH352');
+    // pure body:
+    expect(codes(`class C { @nonReentrant get p(): External<u256> { return 42n; } }`)).toContain('JETH473');
+    expect(codes(`class C { @nonReentrant p(): External<u256> { return 42n; } }`)).toContain('JETH352');
   });
 
-  it('the guarded inferred read-only-body method is byte-identical to the solc twin on CALL and STATICCALL', async () => {
-    const J = `class C { x: u256; set(v: u256): External<void> { this.x = v; } @nonReentrant @external getX2(): u256 { return this.x; } }`;
+  it('solc ACCEPTS the undeclared-mutability tstore-modifier reader (floored nonpayable); JETH deliberately rejects the native equivalent', () => {
+    // F3 originally deployed a read-only-body @nonReentrant method next to a solc tstore-modifier twin and
+    // probed CALL vs STATICCALL parity - proving the floored ABI did not lie at runtime. Native mode removes
+    // that situation at COMPILE time (see the cell above), so no such JETH contract exists to probe. solc still
+    // compiles its twin (an undeclared-mutability function with a state-writing modifier, floored to nonpayable),
+    // making JETH's reject a documented SAFE over-rejection (stricter than solc, never a miscompile). The
+    // WRITER-guard runtime differential is covered by the "@nonReentrant on a WRITING method ..." cell below.
     const S = `contract C { uint256 x;
   modifier nr() { assembly { if tload(0) { revert(0, 0) } tstore(0, 1) } _; assembly { tstore(0, 0) } }
   function set(uint256 v) external { x = v; }
   function getX2() external nr returns (uint256) { return x; } }`;
-    const PROBER = `contract P {
-  function stat(address t) external view returns (bool ok, bytes memory ret) { (ok, ret) = t.staticcall(abi.encodeWithSignature("getX2()")); }
-  function reg(address t) external returns (bool ok, bytes memory ret) { (ok, ret) = t.call(abi.encodeWithSignature("getX2()")); } }`;
-    const h = await Harness.create();
-    const aj = await h.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
-    const as = await h.deploy(compileSolidity(SPDX + S, 'C').creation);
-    const ap = await h.deploy(compileSolidity(SPDX + PROBER, 'P').creation);
-    const addrWord = (a: { toString(): string }) => W(BigInt(a.toString()));
-    await h.call(aj, '0x' + sel('set(uint256)') + W(55n));
-    await h.call(as, '0x' + sel('set(uint256)') + W(55n));
-    for (const probe of ['stat(address)', 'reg(address)']) {
-      const rj = await h.call(ap, '0x' + sel(probe) + addrWord(aj));
-      const rs = await h.call(ap, '0x' + sel(probe) + addrWord(as));
-      expect(rj.returnHex, `${probe} parity`).toBe(rs.returnHex);
-    }
-    // non-vacuity: the STATICCALL inner-ok flag is 0 on both (the mutex tstore reverts in a static
-    // context), and the REGULAR call returns 55 on both.
-    const stat = await h.call(ap, '0x' + sel('stat(address)') + addrWord(aj));
-    expect(BigInt(stat.returnHex.slice(0, 66))).toBe(0n);
-    const reg = await h.call(ap, '0x' + sel('reg(address)') + addrWord(aj));
-    expect(BigInt(reg.returnHex.slice(0, 66))).toBe(1n);
-    expect(reg.returnHex).toContain(W(55n));
+    expect(solcRejects(S)).toBe(false); // solc compiles + floors the twin to nonpayable
+    // JETH rejects both native spellings of the same intent (a read-only body under a reentrancy guard):
+    expect(codes(`class C { x: u256; set(v: u256): External<void> { this.x = v; } @nonReentrant get getX2(): External<u256> { return this.x; } }`)).toContain('JETH473');
+    expect(codes(`class C { x: u256; set(v: u256): External<void> { this.x = v; } @nonReentrant getX2(): External<u256> { return this.x; } }`)).toContain('JETH352');
   });
 
   it('the F4 adversarial shape (@nonReentrant empty-void body) stays accepted with a nonpayable ABI', () => {

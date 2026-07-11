@@ -89,8 +89,8 @@ const NO_UUID_JETH = `class NoUuid {
 
 // A contract whose proxiableUUID() returns a WRONG slot (-> UUPSUnsupportedProxiableUUID(thatSlot)).
 const WRONG_SLOT = 0x1111111111111111111111111111111111111111111111111111111111111111n;
-const WRONG_UUID_JETH = `@contract class WrongUuid {
-  @external @view proxiableUUID(): bytes32 { return bytes32(0x${WRONG_SLOT.toString(16)}n); }
+const WRONG_UUID_JETH = `class WrongUuid {
+  get proxiableUUID(): External<bytes32> { return bytes32(0x${WRONG_SLOT.toString(16)}n); }
 }`;
 
 // ---- The JETH plain proxy (Phase 2a delegate-only). Constructor: proxyInit(impl, initData) (NO admin -

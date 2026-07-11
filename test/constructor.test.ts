@@ -180,8 +180,10 @@ describe('Phase 5 constructors vs solc 0.8.35', () => {
       ).toContain('JETH300'));
     it('a return type on the constructor -> JETH301', () =>
       expect(codes(`class C { x: u256; constructor(): u256 { this.x=1n; } }`)).toContain('JETH301'));
-    it('a @view constructor -> JETH301', () =>
-      expect(codes(`class C { x: u256; @view constructor(){this.x=1n;} }`)).toContain('JETH301'));
+    it('a view-marked constructor -> JETH301', () =>
+      // native: mutability is a RETURN-type marker (View<T>); a constructor cannot declare a return type,
+      // so trying to mark it view lands on the same JETH301 as the plain return-type case above.
+      expect(codes(`class C { x: u256; constructor(): View<void> {this.x=1n;} }`)).toContain('JETH301'));
     it('an aggregate (fixed-array) constructor param is now accepted (JETH302 lifted)', () =>
       expect(codes(`class C { x: u256; constructor(a: Arr<u256,3>){this.x=a[0n];} }`)).toEqual([]));
     it('calling an internal function from the constructor is now accepted (JETH303 lifted)', () =>

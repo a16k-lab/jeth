@@ -22,11 +22,13 @@ const abiNames = (src: string): string[] =>
     .map((a: any) => a.name as string);
 
 describe('visibility model: @external only, private-by-default', () => {
-  it('removed keywords @public/@internal/@private/@hidden -> JETH440', () => {
-    for (const kw of ['public', 'internal', 'private', 'hidden']) {
-      expect(codes(`@contract class C { @${kw} f(): u256 { return 1n; } @external g(): void {} }`), kw).toContain(
-        'JETH440',
-      );
+  it('removed visibility keywords are loud rejects: @public/@internal/@private banned (JETH481), @hidden gated (JETH440)', () => {
+    // native: @public/@internal/@private are RETIRED structural decorators -> JETH481 (native visibility is a
+    // return marker / bare-default / leading `#`). @hidden was never a real JETH decorator and stays on the
+    // removed-visibility gate JETH440. Either way it is rejected, never silently swallowed.
+    const expected: Record<string, string> = { public: 'JETH481', internal: 'JETH481', private: 'JETH481', hidden: 'JETH440' };
+    for (const [kw, code] of Object.entries(expected)) {
+      expect(codes(`class C { @${kw} f(): u256 { return 1n; } g(): External<void> {} }`), kw).toContain(code);
     }
   });
   it('@external is exposed; a no-decorator function is internal (not in the ABI)', () => {
@@ -51,8 +53,14 @@ describe('visibility model: @external only, private-by-default', () => {
       abiNames(`class C { hidden: u256; inc(): External<void> { this.hidden = this.hidden + 1n; } }`),
     ).toEqual(['inc']); // no getter for a plain @state
   });
-  it('@payable / @nonReentrant require @external', () => {
-    expect(codes(`@contract class C { @payable @pure f(): u256 { return msg.value; } }`)).toContain('JETH131');
+  it('@payable / @nonReentrant require an exposed entry', () => {
+    // native: `@payable` is retired - payable is the `Payable<T>` return marker, which IS an exposed entry, so
+    // a "payable-but-internal" function is structurally impossible (the legacy JETH131 gate is unreachable).
+    // The retired decorator is banned (JETH481), and the native analogue of the old `@payable @pure` conflict
+    // - a read-only `get` returning `Payable<T>` - is the surviving clean reject (JETH352).
+    expect(codes(`@contract class C { @payable @pure f(): u256 { return msg.value; } }`)).toContain('JETH481');
+    expect(codes(`class C { get f(): Payable<u256> { return msg.value; } }`)).toContain('JETH352');
+    // @nonReentrant is kept, and still requires an @external entry (an internal function -> JETH261).
     expect(codes(`class C { @nonReentrant f(): void {} }`)).toContain('JETH261');
   });
   it('the old "R2" case now just works: an aggregate helper called internally', async () => {

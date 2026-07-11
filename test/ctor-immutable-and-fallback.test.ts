@@ -136,7 +136,7 @@ describe('(B) data-passing @fallback fb(input: bytes): bytes vs solc 0.8.35', ()
 
   it('payable form accepts value; non-payable reverts on value', async () => {
     await sameRaw(
-      `@payable class C { fallback(input: bytes): Payable<bytes> { return input; } }`,
+      `class C { fallback(input: bytes): Payable<bytes> { return input; } }`,
       `contract C { fallback(bytes calldata input) external payable returns (bytes memory) { return input; } }`,
       '0xcafe',
       100n,

@@ -229,8 +229,11 @@ describe('Visible<T> field marker rejects (misuse stays loud, nothing silently a
     expect(codes(`class C { receive(): Visible<void> { } }`)).toContain('JETH384');
     expect(codes(`class C { fallback(): Visible<void> { } }`)).toContain('JETH384');
   });
-  it('decorator mode: the marker stays an unknown type (native-gated, JETH013)', () => {
-    expect(codes(`// use @decorators\n@contract class C { @state x: Visible<u256>; }`)).toContain('JETH013');
+  it('the retired `// use @decorators` pragma is a hard reject (native is the only syntax now) -> JETH480', () => {
+    // native adjudication: this cell used to prove the Visible<T> marker was native-ONLY (an unknown type
+    // JETH013 under the legacy decorator pragma). Stage-2 removed the dual-mode pragma entirely, so the
+    // `// use @decorators` line is now retired (JETH480) and short-circuits before any marker resolution.
+    expect(codes(`// use @decorators\n@contract class C { @state x: Visible<u256>; }`)).toContain('JETH480');
   });
   it('the RESERVED_MARKERS gate: a declaration cannot be named Visible or External (JETH038)', () => {
     expect(codes(`class Visible { } class C { x: u256; }`)).toContain('JETH038');
