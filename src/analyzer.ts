@@ -226,14 +226,16 @@ export class Analyzer {
   // state symbols, available once layout is planned
   private stateByName = new Map<string, StateVar>();
   private publicStateNames = new Set<string>(); // @public @state vars that get an auto-generated getter
-  // P0b (native mode): contract fields whose declared type was the `External<T>` marker - the native
-  // spelling of the @external field decorator (solc's `public` auto-getter). The marker is unwrapped
-  // to the inner type by unwrapExternalFieldMarker (mirroring the External<T> return-marker unwrap in
-  // collectFunction) and the member is recorded HERE, so every `@external`-decorator decision site
-  // (publicStateNames / publicConstantNames / publicImmutableNames / the #-private contradiction /
-  // the P1-4 getter-override capture) treats both spellings identically - the SAME getter machinery
-  // runs, making the marker form byte-identical to its decorator twin.
-  private externalFieldMarkers = new WeakSet<ts.PropertyDeclaration>();
+  // P0b (native mode): contract fields whose declared type was the `Visible<T>` marker - the native
+  // spelling of the @external field decorator (solc's `public` auto-getter). Fields are PUBLIC (an
+  // auto-getter), methods are EXTERNAL - hence the field marker is Visible<T> while External<T>/
+  // Payable<T> stay method-only. The marker is unwrapped to the inner type by unwrapVisibleFieldMarker
+  // (mirroring the External<T> return-marker unwrap in collectFunction) and the member is recorded
+  // HERE, so every `@external`-decorator decision site (publicStateNames / publicConstantNames /
+  // publicImmutableNames / the #-private contradiction / the P1-4 getter-override capture) treats both
+  // spellings identically - the SAME getter machinery runs, making the marker form byte-identical to
+  // its decorator twin.
+  private visibleFieldMarkers = new WeakSet<ts.PropertyDeclaration>();
   // P1-4: `@external @state` getter vars carrying `@override` (a getter that overrides/implements a base
   // @virtual @external function or an interface method). Recorded during state collection (the member node
   // + decorators are only available there); validated against the collected base functions before override
@@ -1409,13 +1411,13 @@ export class Analyzer {
     // The native MARKER names are syntax, not types: a user declaration named like one (a struct named
     // `External`, a class named `View`) would shadow the marker in return positions and fail there with a
     // MISLEADING arity error ("External<T> takes exactly one return type"). Reserve them loudly instead.
-    const RESERVED_MARKERS = new Set(['External', 'Payable', 'View', 'Pure', 'error', 'event', 'indexed']);
+    const RESERVED_MARKERS = new Set(['External', 'Payable', 'View', 'Pure', 'Visible', 'error', 'event', 'indexed']);
     const checkReserved = (nameNode: ts.Identifier): void => {
       if (this.nativeMode && RESERVED_MARKERS.has(nameNode.text)) {
         this.diags.error(
           nameNode,
           'JETH038',
-          `'${nameNode.text}' is a reserved native marker name (External/Payable/View/Pure are visibility-mutability markers; error/event/indexed declare errors and events) and cannot name a declaration`,
+          `'${nameNode.text}' is a reserved native marker name (External/Payable/View/Pure are visibility-mutability markers; Visible marks a public field; error/event/indexed declare errors and events) and cannot name a declaration`,
         );
       }
     };
@@ -1996,11 +1998,11 @@ export class Analyzer {
       for (const member of c.members) {
         if (ts.isPropertyDeclaration(member) && ts.isIdentifier(member.name)) {
           const nm = member.name.text;
-          // P0b: unwrap an `External<T>` field marker FIRST (native spelling of @external) so
+          // P0b: unwrap a `Visible<T>` field marker FIRST (native spelling of @external) so
           // isStateField / the collectors below see the inner type + the recorded external flag.
-          this.unwrapExternalFieldMarker(member);
+          this.unwrapVisibleFieldMarker(member);
           const decs = decoratorNames(member);
-          const externalMarker = this.externalFieldMarkers.has(member);
+          const visibleMarker = this.visibleFieldMarkers.has(member);
           // only a plain @state (or a native BARE field, item #9) takes a slot and can collide across the
           // chain; @constant/@immutable collisions are caught by the existing JETH046 path after collection.
           if (this.isStateField(member, decs)) {
@@ -2019,12 +2021,12 @@ export class Analyzer {
           // record it so resolveGetterOverrides can validate it against the base @virtual function it
           // implements. Only a getter (`@external`) can override a function; a non-@override same-name
           // clash is left to the normal JETH133 path.
-          // The External<T> marker twin: a bare marker field is implicit @state (item #9), so the marker
+          // The Visible<T> marker twin: a bare marker field is implicit @state (item #9), so the marker
           // plus @override is recorded exactly like `@external @state @override` (isStateField keeps a
           // static / @constant / @immutable marker field out - those reject @override in their collectors).
           if (
-            (decs.includes('external') || externalMarker) &&
-            (decs.includes('state') || decs.includes('storage') || (externalMarker && this.isStateField(member, decs))) &&
+            (decs.includes('external') || visibleMarker) &&
+            (decs.includes('state') || decs.includes('storage') || (visibleMarker && this.isStateField(member, decs))) &&
             decs.includes('override')
           ) {
             // Capture the explicit @override(I1, I2) base list (the diamond/multi-interface completeness
@@ -5939,60 +5941,71 @@ export class Analyzer {
     ts.forEachChild(this.sourceFile, visit);
   }
 
-  /** P0b (native mode): unwrap an `External<T>` FIELD type marker - the native spelling of the @external
-   *  field decorator (solc's `public` state variable / constant / immutable auto-getter):
-   *    x: External<u256>                       = @external @state x: u256
-   *    balances: External<mapping<K, V>>       = @external @state balances (parameterized getter)
-   *    static K: External<u256> = 5n;          = @external @constant / @external static (constant getter)
-   *    static M: External<address>;            = @external @immutable / @external static (view getter)
+  /** P0b (native mode): unwrap a `Visible<T>` FIELD type marker - the native spelling of the @external
+   *  field decorator (solc's `public` state variable / constant / immutable auto-getter). Fields are
+   *  PUBLIC (an auto-getter), methods are EXTERNAL - hence Visible on fields, External/Payable on methods:
+   *    x: Visible<u256>                        = @external @state x: u256
+   *    balances: Visible<mapping<K, V>>        = @external @state balances (parameterized getter)
+   *    static K: Visible<u256> = 5n;           = @external @constant / @external static (constant getter)
+   *    static M: Visible<address>;             = @external @immutable / @external static (view getter)
    *  Called at the TOP of the state-collection loop (the first point a contract field's type is
    *  inspected), BEFORE isStateField / decorator routing, so every downstream pass sees the inner type
    *  plus the recorded flag - the exact state the @external decorator produces (same publicStateNames /
    *  publicConstantNames / publicImmutableNames machinery, hence byte-identical getters). The marker is
-   *  contract-field-only: a struct field / local / param spelled External<T> keeps rejecting (JETH013
+   *  contract-field-only: a struct field / local / param spelled Visible<T> keeps rejecting (JETH013
    *  unknown type), and in decorator mode the marker stays an unknown type as before. */
-  private unwrapExternalFieldMarker(member: ts.PropertyDeclaration): void {
+  private unwrapVisibleFieldMarker(member: ts.PropertyDeclaration): void {
     if (!this.nativeMode || !member.type) return;
     if (!ts.isTypeReferenceNode(member.type) || !ts.isIdentifier(member.type.typeName)) return;
     const head = member.type.typeName.text;
-    if (head === 'Payable' || head === 'View' || head === 'Pure') {
-      // The FUNCTION markers are meaningless on a field: an auto-getter is always view (never payable),
-      // and view/pure describe a body, not a stored value. Reject loudly - the generic JETH013 "unknown
-      // type" would be misleading right next to the accepted External<T>.
+    if (head === 'External') {
+      // The METHOD visibility marker on a field: a field's public surface is the auto-getter, so the
+      // field marker is named for what the field IS (visible) rather than how a method is reached.
       this.diags.error(
         member.type,
         'JETH482',
-        `${head}<T> has no meaning on a field (a field's auto-getter is always view); a public field is spelled External<T>`,
+        `on a field the visibility marker is Visible<T> (the public auto-getter); External<T>/Payable<T> belong on methods`,
       );
       return;
     }
-    if (head !== 'External') return;
+    if (head === 'Payable' || head === 'View' || head === 'Pure') {
+      // The FUNCTION markers are meaningless on a field: an auto-getter is always view (never payable),
+      // and view/pure describe a body, not a stored value. Reject loudly - the generic JETH013 "unknown
+      // type" would be misleading right next to the accepted Visible<T>.
+      this.diags.error(
+        member.type,
+        'JETH482',
+        `${head}<T> has no meaning on a field (a field's auto-getter is always view); a public field is spelled Visible<T>`,
+      );
+      return;
+    }
+    if (head !== 'Visible') return;
     const args = member.type.typeArguments;
     if (!args || args.length !== 1) {
       this.diags.error(
         member.type,
         'JETH482',
-        `External<T> takes exactly one field type (e.g. x: External<u256>, balances: External<mapping<address, u256>>)`,
+        `Visible<T> takes exactly one field type (e.g. x: Visible<u256>, balances: Visible<mapping<address, u256>>)`,
       );
       return;
     }
-    // A nested marker / declaration head inside External<...> is a contradiction, not a type: an
-    // External<error<...>> would otherwise unwrap into an ERROR DECLARATION and silently drop the
-    // marker; External<External<...>> would just fail later with a misleading JETH013.
+    // A nested marker / declaration head inside Visible<...> is a contradiction, not a type: a
+    // Visible<error<...>> would otherwise unwrap into an ERROR DECLARATION and silently drop the
+    // marker; Visible<Visible<...>> would just fail later with a misleading JETH013.
     const inner = args[0]!;
     if (ts.isTypeReferenceNode(inner) && ts.isIdentifier(inner.typeName)) {
       const innerHead = inner.typeName.text;
-      if (['External', 'Payable', 'View', 'Pure', 'error', 'event', 'indexed'].includes(innerHead)) {
+      if (['Visible', 'External', 'Payable', 'View', 'Pure', 'error', 'event', 'indexed'].includes(innerHead)) {
         this.diags.error(
           inner,
           'JETH482',
-          `External<${innerHead}<...>> is not a field type (${innerHead} is a reserved marker/declaration head); External<T> wraps the stored type itself`,
+          `Visible<${innerHead}<...>> is not a field type (${innerHead} is a reserved marker/declaration head); Visible<T> wraps the stored type itself`,
         );
         return;
       }
     }
     (member as unknown as { type?: ts.TypeNode }).type = inner;
-    this.externalFieldMarkers.add(member);
+    this.visibleFieldMarkers.add(member);
   }
 
   /** Item #9: is this contract PropertyDeclaration a plain @state storage field - either explicitly @state,
@@ -6027,15 +6040,15 @@ export class Analyzer {
     // reused verbatim, so the field form is byte-identical to the decorator form.
     if (this.nativeMode && this.collectNativeErrorOrEventField(member)) return;
     const decs = decoratorNames(member);
-    // P0b: the External<T> field marker (already unwrapped) is the native @external twin everywhere below.
-    const externalMarker = this.externalFieldMarkers.has(member);
+    // P0b: the Visible<T> field marker (already unwrapped) is the native @external twin everywhere below.
+    const visibleMarker = this.visibleFieldMarkers.has(member);
     // @external on a `#`-private FIELD is the same mangled-ABI leak as on a method: the auto-generated
     // getter would expose $p$C$x as an externally callable entry. A private field has no public getter.
-    if (ts.isIdentifier(member.name) && member.name.text.startsWith('$p$') && (decs.includes('external') || externalMarker)) {
+    if (ts.isIdentifier(member.name) && member.name.text.startsWith('$p$') && (decs.includes('external') || visibleMarker)) {
       this.diags.error(
         member,
         'JETH352',
-        `a #-private field cannot be ${externalMarker ? 'External<T>' : '@external'} (private and a public getter contradict; it would expose the mangled name in the ABI); drop the # or the ${externalMarker ? 'marker' : '@external'}`,
+        `a #-private field cannot be ${visibleMarker ? 'Visible<T>' : '@external'} (private and a public getter contradict; it would expose the mangled name in the ABI); drop the # or the ${visibleMarker ? 'marker' : '@external'}`,
       );
       return;
     }
@@ -6233,7 +6246,7 @@ export class Analyzer {
         }
       }
     }
-    if (decs.includes('external') || externalMarker) this.publicStateNames.add(member.name.text); // @external / External<T> @state/@storage -> auto-generated getter
+    if (decs.includes('external') || visibleMarker) this.publicStateNames.add(member.name.text); // @external / Visible<T> @state/@storage -> auto-generated getter
     if (namespace !== undefined) {
       // Route to the namespace's raw list; planNamespacedStorage lays each ns out from slot 0 and
       // offsets by base(ns). Kept OUT of `out` (rawState) so @storage never shifts an @state slot.
@@ -6364,7 +6377,7 @@ export class Analyzer {
       );
       return;
     }
-    const isPublic = decs.includes('external') || this.externalFieldMarkers.has(member); // @external / External<T> @constant -> auto-generated getter
+    const isPublic = decs.includes('external') || this.visibleFieldMarkers.has(member); // @external / Visible<T> @constant -> auto-generated getter
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
     // Folding supports integer + bool + address + bytesN + string constants. A bytes/aggregate
@@ -6453,7 +6466,7 @@ export class Analyzer {
       );
       return;
     }
-    if (decs.includes('external') || this.externalFieldMarkers.has(member)) this.publicImmutableNames.add(name); // @external / External<T> @immutable -> auto-generated view getter
+    if (decs.includes('external') || this.visibleFieldMarkers.has(member)) this.publicImmutableNames.add(name); // @external / Visible<T> @immutable -> auto-generated view getter
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
     if (!isStaticValueType(type)) {
@@ -6486,6 +6499,23 @@ export class Analyzer {
     // internal payable does not exist). The marker is stripped BEFORE the return type resolves (mirroring
     // the interface View/Pure/Payable unwrap) and never enters the signature/selector; a bare return stays
     // internal. Native mode only - in decorator mode the marker is an unknown type (JETH013), as before.
+    // The FIELD marker in a return position is the mirror of External-on-field: fields are PUBLIC
+    // (Visible<T> = the auto-getter), methods are EXTERNAL. Reject with a pointer - the generic JETH013
+    // "unknown type" would be misleading right next to the accepted External<T>/Payable<T>.
+    if (
+      this.nativeMode &&
+      member.type &&
+      ts.isTypeReferenceNode(member.type) &&
+      ts.isIdentifier(member.type.typeName) &&
+      member.type.typeName.text === 'Visible'
+    ) {
+      this.diags.error(
+        member.type,
+        'JETH482',
+        `Visible<T> marks a public FIELD (the auto-getter); on a method the visibility marker is External<T> (or Payable<T> for a payable writer)`,
+      );
+      return undefined;
+    }
     let markerExternal = false;
     let markerPayable = false;
     if (

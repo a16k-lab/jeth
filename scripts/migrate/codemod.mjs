@@ -15,7 +15,7 @@
 //   @interface class I   -> TS `interface I` with View<T>/Pure<T>/Payable<T> return markers
 //   @library class L     -> static class L; @external lib fns -> External<T> return marker
 //   @external method     -> External<T> return marker; read-only value-returning -> `get f(): External<T>`
-//   @external field      -> External<T> field-type marker (P0b), incl. static const/immutable forms
+//   @external field      -> Visible<T> field-type marker (P0b), incl. static const/immutable forms
 //   @view/@pure/@read    -> dropped (mutability is inferred); on external value-returning -> `get`
 //   @payable             -> Payable<T> return marker (kept on constructors: no native ctor spelling)
 //   @state               -> bare field
@@ -239,8 +239,8 @@ function transformJethSource(text, { forceGet = new Set() } = {}) {
       if (isExt) {
         if (!m.type) manual.push(`${clsName}: @external field without a type annotation`);
         else {
-          replaceNode(m.type, `External<${typeText(m.type)}>`);
-          changes.push(`${clsName}.${m.name.getText(sf)}: @external field -> External<T>`);
+          replaceNode(m.type, `Visible<${typeText(m.type)}>`);
+          changes.push(`${clsName}.${m.name.getText(sf)}: @external field -> Visible<T>`);
         }
       }
       if (ds.has('state')) changes.push(`${clsName}.${m.name.getText(sf)}: @state -> bare field`);
