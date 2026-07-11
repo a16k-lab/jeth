@@ -74,144 +74,144 @@ const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
   a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 // ---------------------------------------------------------------------------
-const JETH = `@contract class C {
+const JETH = `class C {
   // ---- G3: errors/events with non-indexed dynamic-array args ----
-  @error E1(a: u256[]);
-  @error E2(tag: u256, a: u256[]);
-  @error E3(a: u256[], s: string);
-  @error E3b(a: u256[], b: bytes);
-  @error E4(a: u256[], b: u256[]);
-  @error EAddr(a: address[]);
-  @error ESigned(a: i64[]);
-  @error EU8(a: u8[]);
-  @error EB32(a: bytes32[]);
-  @error ENest(a: u256[][]);
-  @error ENest3(a: u256[][][]);
-  @error EMixNest(tag: u256, a: u256[][], s: string);
-  @event Ev1(a: u256[]);
-  @event Ev2(@indexed tag: u256, a: u256[]);
-  @event Ev3(a: u256[], s: string);
-  @event Ev3b(a: u256[], b: bytes);
-  @event Ev4(a: u256[], b: u256[]);
-  @event EvAddr(a: address[]);
-  @event EvSigned(a: i64[]);
-  @event EvU8(a: u8[]);
-  @event EvB32(a: bytes32[]);
-  @event EvNest(a: u256[][]);
-  @event EvNest3(a: u256[][][]);
+  E1: error<{ a: u256[] }>;
+  E2: error<{ tag: u256; a: u256[] }>;
+  E3: error<{ a: u256[]; s: string }>;
+  E3b: error<{ a: u256[]; b: bytes }>;
+  E4: error<{ a: u256[]; b: u256[] }>;
+  EAddr: error<{ a: address[] }>;
+  ESigned: error<{ a: i64[] }>;
+  EU8: error<{ a: u8[] }>;
+  EB32: error<{ a: bytes32[] }>;
+  ENest: error<{ a: u256[][] }>;
+  ENest3: error<{ a: u256[][][] }>;
+  EMixNest: error<{ tag: u256; a: u256[][]; s: string }>;
+  Ev1: event<{ a: u256[] }>;
+  Ev2: event<{ tag: indexed<u256>; a: u256[] }>;
+  Ev3: event<{ a: u256[]; s: string }>;
+  Ev3b: event<{ a: u256[]; b: bytes }>;
+  Ev4: event<{ a: u256[]; b: u256[] }>;
+  EvAddr: event<{ a: address[] }>;
+  EvSigned: event<{ a: i64[] }>;
+  EvU8: event<{ a: u8[] }>;
+  EvB32: event<{ a: bytes32[] }>;
+  EvNest: event<{ a: u256[][] }>;
+  EvNest3: event<{ a: u256[][][] }>;
   // errors - calldata array sources
-  @external @pure r1(a: u256[]): void { revert(E1(a)); }
-  @external @pure r2(t: u256, a: u256[]): void { revert(E2(t, a)); }
-  @external @pure r3(a: u256[], s: string): void { revert(E3(a, s)); }
-  @external @pure r3b(a: u256[], b: bytes): void { revert(E3b(a, b)); }
-  @external @pure r4(a: u256[], b: u256[]): void { revert(E4(a, b)); }
-  @external @pure rAddr(a: address[]): void { revert(EAddr(a)); }
-  @external @pure rSigned(a: i64[]): void { revert(ESigned(a)); }
-  @external @pure rU8(a: u8[]): void { revert(EU8(a)); }
-  @external @pure rB32(a: bytes32[]): void { revert(EB32(a)); }
-  @external @pure rNest(a: u256[][]): void { revert(ENest(a)); }
-  @external @pure rNest3(a: u256[][][]): void { revert(ENest3(a)); }
-  @external @pure rMixNest(t: u256, a: u256[][], s: string): void { revert(EMixNest(t, a, s)); }
+  r1(a: u256[]): External<void> { revert(E1(a)); }
+  r2(t: u256, a: u256[]): External<void> { revert(E2(t, a)); }
+  r3(a: u256[], s: string): External<void> { revert(E3(a, s)); }
+  r3b(a: u256[], b: bytes): External<void> { revert(E3b(a, b)); }
+  r4(a: u256[], b: u256[]): External<void> { revert(E4(a, b)); }
+  rAddr(a: address[]): External<void> { revert(EAddr(a)); }
+  rSigned(a: i64[]): External<void> { revert(ESigned(a)); }
+  rU8(a: u8[]): External<void> { revert(EU8(a)); }
+  rB32(a: bytes32[]): External<void> { revert(EB32(a)); }
+  rNest(a: u256[][]): External<void> { revert(ENest(a)); }
+  rNest3(a: u256[][][]): External<void> { revert(ENest3(a)); }
+  rMixNest(t: u256, a: u256[][], s: string): External<void> { revert(EMixNest(t, a, s)); }
   // errors - memory array sources (flat value arrays only)
-  @external @pure rMemU(x: u256, y: u256, z: u256): void { let xs: u256[] = [x, y, z]; revert(E1(xs)); }
-  @external @pure rMemI(x: i64, y: i64): void { let xs: i64[] = [x, y]; revert(ESigned(xs)); }
-  @external @pure rMemA(x: address, y: address): void { let xs: address[] = [x, y]; revert(EAddr(xs)); }
-  @external @pure rMemU8(x: u8, y: u8): void { let xs: u8[] = [x, y]; revert(EU8(xs)); }
-  @external @pure rMemB32(x: bytes32, y: bytes32): void { let xs: bytes32[] = [x, y]; revert(EB32(xs)); }
+  rMemU(x: u256, y: u256, z: u256): External<void> { let xs: u256[] = [x, y, z]; revert(E1(xs)); }
+  rMemI(x: i64, y: i64): External<void> { let xs: i64[] = [x, y]; revert(ESigned(xs)); }
+  rMemA(x: address, y: address): External<void> { let xs: address[] = [x, y]; revert(EAddr(xs)); }
+  rMemU8(x: u8, y: u8): External<void> { let xs: u8[] = [x, y]; revert(EU8(xs)); }
+  rMemB32(x: bytes32, y: bytes32): External<void> { let xs: bytes32[] = [x, y]; revert(EB32(xs)); }
   // events - calldata array sources
-  @external e1(a: u256[]): void { emit(Ev1(a)); }
-  @external e2(t: u256, a: u256[]): void { emit(Ev2(t, a)); }
-  @external e3(a: u256[], s: string): void { emit(Ev3(a, s)); }
-  @external e3b(a: u256[], b: bytes): void { emit(Ev3b(a, b)); }
-  @external e4(a: u256[], b: u256[]): void { emit(Ev4(a, b)); }
-  @external eAddr(a: address[]): void { emit(EvAddr(a)); }
-  @external eSigned(a: i64[]): void { emit(EvSigned(a)); }
-  @external eU8(a: u8[]): void { emit(EvU8(a)); }
-  @external eB32(a: bytes32[]): void { emit(EvB32(a)); }
-  @external eNest(a: u256[][]): void { emit(EvNest(a)); }
-  @external eNest3(a: u256[][][]): void { emit(EvNest3(a)); }
+  e1(a: u256[]): External<void> { emit(Ev1(a)); }
+  e2(t: u256, a: u256[]): External<void> { emit(Ev2(t, a)); }
+  e3(a: u256[], s: string): External<void> { emit(Ev3(a, s)); }
+  e3b(a: u256[], b: bytes): External<void> { emit(Ev3b(a, b)); }
+  e4(a: u256[], b: u256[]): External<void> { emit(Ev4(a, b)); }
+  eAddr(a: address[]): External<void> { emit(EvAddr(a)); }
+  eSigned(a: i64[]): External<void> { emit(EvSigned(a)); }
+  eU8(a: u8[]): External<void> { emit(EvU8(a)); }
+  eB32(a: bytes32[]): External<void> { emit(EvB32(a)); }
+  eNest(a: u256[][]): External<void> { emit(EvNest(a)); }
+  eNest3(a: u256[][][]): External<void> { emit(EvNest3(a)); }
   // events - memory array sources
-  @external eMemU(x: u256, y: u256): void { let xs: u256[] = [x, y]; emit(Ev1(xs)); }
-  @external eMemA(x: address, y: address, z: address): void { let xs: address[] = [x, y, z]; emit(EvAddr(xs)); }
+  eMemU(x: u256, y: u256): External<void> { let xs: u256[] = [x, y]; emit(Ev1(xs)); }
+  eMemA(x: address, y: address, z: address): External<void> { let xs: address[] = [x, y, z]; emit(EvAddr(xs)); }
 
   // ---- G4: indexed bytes/string event params ----
-  @event Es(@indexed s: string, v: u256);
-  @event Eb(@indexed b: bytes, v: u256);
-  @event Emix(@indexed k: u256, @indexed s: string, v: u256);
-  @event Etwo(@indexed s1: string, @indexed s2: string);
-  @event Eonly(@indexed s: string);
-  @event EidxArr(@indexed b: bytes, a: u256[]);
-  @external es(s: string, v: u256): void { emit(Es(s, v)); }
-  @external eb(b: bytes, v: u256): void { emit(Eb(b, v)); }
-  @external emix(k: u256, s: string, v: u256): void { emit(Emix(k, s, v)); }
-  @external etwo(s1: string, s2: string): void { emit(Etwo(s1, s2)); }
-  @external eonly(s: string): void { emit(Eonly(s)); }
-  @external eidxArr(b: bytes, a: u256[]): void { emit(EidxArr(b, a)); }
+  Es: event<{ s: indexed<string>; v: u256 }>;
+  Eb: event<{ b: indexed<bytes>; v: u256 }>;
+  Emix: event<{ k: indexed<u256>; s: indexed<string>; v: u256 }>;
+  Etwo: event<{ s1: indexed<string>; s2: indexed<string> }>;
+  Eonly: event<{ s: indexed<string> }>;
+  EidxArr: event<{ b: indexed<bytes>; a: u256[] }>;
+  es(s: string, v: u256): External<void> { emit(Es(s, v)); }
+  eb(b: bytes, v: u256): External<void> { emit(Eb(b, v)); }
+  emix(k: u256, s: string, v: u256): External<void> { emit(Emix(k, s, v)); }
+  etwo(s1: string, s2: string): External<void> { emit(Etwo(s1, s2)); }
+  eonly(s: string): External<void> { emit(Eonly(s)); }
+  eidxArr(b: bytes, a: u256[]): External<void> { emit(EidxArr(b, a)); }
 
   // ---- G6: storage Arr<T[],N> (fixed array of dynamic arrays) ----
-  @state s0: u256;                  // sentinel before
-  @state a: Arr<u256[], 3>;         // uint256[][3]: slots 1,2,3
-  @state ab: Arr<bytes32[], 2>;     // bytes32[][2]: slots 4,5
-  @state s1: u256;                  // sentinel between
+  s0: u256;                  // sentinel before
+  a: Arr<u256[], 3>;         // uint256[][3]: slots 1,2,3
+  ab: Arr<bytes32[], 2>;     // bytes32[][2]: slots 4,5
+  s1: u256;                  // sentinel between
 
   // ---- G6: storage Arr<T,N>[] (dynamic array of fixed arrays) ----
-  @state b: Arr<u256, 2>[];         // uint256[2][]: slot 7
-  @state c: Arr<u256, 3>[];         // uint256[3][]: slot 8
-  @state d: Arr<u256, 5>[];         // uint256[5][]: slot 9
-  @state pk8: Arr<u8, 4>[];         // uint8[4][] packed: slot 10
-  @state pk16: Arr<u16, 8>[];       // uint16[8][] packed: slot 11
-  @state pkI64: Arr<i64, 2>[];      // int64[2][] packed: slot 12
-  @state ba: Arr<bytes32, 2>[];     // bytes32[2][]: slot 13
-  @state ad: Arr<address, 2>[];     // address[2][]: slot 14
-  @state dd: Arr<Arr<u256, 2>, 2>[]; // uint256[2][2][]: slot 15
-  @state s2: u256;                  // sentinel after
+  b: Arr<u256, 2>[];         // uint256[2][]: slot 7
+  c: Arr<u256, 3>[];         // uint256[3][]: slot 8
+  d: Arr<u256, 5>[];         // uint256[5][]: slot 9
+  pk8: Arr<u8, 4>[];         // uint8[4][] packed: slot 10
+  pk16: Arr<u16, 8>[];       // uint16[8][] packed: slot 11
+  pkI64: Arr<i64, 2>[];      // int64[2][] packed: slot 12
+  ba: Arr<bytes32, 2>[];     // bytes32[2][]: slot 13
+  ad: Arr<address, 2>[];     // address[2][]: slot 14
+  dd: Arr<Arr<u256, 2>, 2>[]; // uint256[2][2][]: slot 15
+  s2: u256;                  // sentinel after
 
-  @external setS0(v: u256): void { this.s0 = v; }
-  @external setS1(v: u256): void { this.s1 = v; }
-  @external setS2(v: u256): void { this.s2 = v; }
+  setS0(v: u256): External<void> { this.s0 = v; }
+  setS1(v: u256): External<void> { this.s1 = v; }
+  setS2(v: u256): External<void> { this.s2 = v; }
 
-  @external pushA(i: u256, v: u256): void { this.a[i].push(v); }
-  @external setA(i: u256, j: u256, v: u256): void { this.a[i][j] = v; }
-  @external @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
-  @external @view lenA(i: u256): u256 { return this.a[i].length; }
-  @external pushAb(i: u256, v: bytes32): void { this.ab[i].push(v); }
-  @external @view getAb(i: u256, j: u256): bytes32 { return this.ab[i][j]; }
-  @external @view lenAb(i: u256): u256 { return this.ab[i].length; }
+  pushA(i: u256, v: u256): External<void> { this.a[i].push(v); }
+  setA(i: u256, j: u256, v: u256): External<void> { this.a[i][j] = v; }
+  get getA(i: u256, j: u256): External<u256> { return this.a[i][j]; }
+  get lenA(i: u256): External<u256> { return this.a[i].length; }
+  pushAb(i: u256, v: bytes32): External<void> { this.ab[i].push(v); }
+  get getAb(i: u256, j: u256): External<bytes32> { return this.ab[i][j]; }
+  get lenAb(i: u256): External<u256> { return this.ab[i].length; }
 
-  @external pushB(): void { this.b.push(); }
-  @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
-  @external @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
-  @external @view lenB(): u256 { return this.b.length; }
-  @external pushC(): void { this.c.push(); }
-  @external setC(i: u256, j: u256, v: u256): void { this.c[i][j] = v; }
-  @external @view getC(i: u256, j: u256): u256 { return this.c[i][j]; }
-  @external @view lenC(): u256 { return this.c.length; }
-  @external pushD(): void { this.d.push(); }
-  @external setD(i: u256, j: u256, v: u256): void { this.d[i][j] = v; }
-  @external @view getD(i: u256, j: u256): u256 { return this.d[i][j]; }
-  @external @view lenD(): u256 { return this.d.length; }
+  pushB(): External<void> { this.b.push(); }
+  setB(i: u256, j: u256, v: u256): External<void> { this.b[i][j] = v; }
+  get getB(i: u256, j: u256): External<u256> { return this.b[i][j]; }
+  get lenB(): External<u256> { return this.b.length; }
+  pushC(): External<void> { this.c.push(); }
+  setC(i: u256, j: u256, v: u256): External<void> { this.c[i][j] = v; }
+  get getC(i: u256, j: u256): External<u256> { return this.c[i][j]; }
+  get lenC(): External<u256> { return this.c.length; }
+  pushD(): External<void> { this.d.push(); }
+  setD(i: u256, j: u256, v: u256): External<void> { this.d[i][j] = v; }
+  get getD(i: u256, j: u256): External<u256> { return this.d[i][j]; }
+  get lenD(): External<u256> { return this.d.length; }
 
-  @external pushPk8(): void { this.pk8.push(); }
-  @external setPk8(i: u256, j: u256, v: u8): void { this.pk8[i][j] = v; }
-  @external @view getPk8(i: u256, j: u256): u8 { return this.pk8[i][j]; }
-  @external pushPk16(): void { this.pk16.push(); }
-  @external setPk16(i: u256, j: u256, v: u16): void { this.pk16[i][j] = v; }
-  @external @view getPk16(i: u256, j: u256): u16 { return this.pk16[i][j]; }
-  @external pushPkI64(): void { this.pkI64.push(); }
-  @external setPkI64(i: u256, j: u256, v: i64): void { this.pkI64[i][j] = v; }
-  @external @view getPkI64(i: u256, j: u256): i64 { return this.pkI64[i][j]; }
+  pushPk8(): External<void> { this.pk8.push(); }
+  setPk8(i: u256, j: u256, v: u8): External<void> { this.pk8[i][j] = v; }
+  get getPk8(i: u256, j: u256): External<u8> { return this.pk8[i][j]; }
+  pushPk16(): External<void> { this.pk16.push(); }
+  setPk16(i: u256, j: u256, v: u16): External<void> { this.pk16[i][j] = v; }
+  get getPk16(i: u256, j: u256): External<u16> { return this.pk16[i][j]; }
+  pushPkI64(): External<void> { this.pkI64.push(); }
+  setPkI64(i: u256, j: u256, v: i64): External<void> { this.pkI64[i][j] = v; }
+  get getPkI64(i: u256, j: u256): External<i64> { return this.pkI64[i][j]; }
 
-  @external pushBa(): void { this.ba.push(); }
-  @external setBa(i: u256, j: u256, v: bytes32): void { this.ba[i][j] = v; }
-  @external @view getBa(i: u256, j: u256): bytes32 { return this.ba[i][j]; }
-  @external pushAd(): void { this.ad.push(); }
-  @external setAd(i: u256, j: u256, v: address): void { this.ad[i][j] = v; }
-  @external @view getAd(i: u256, j: u256): address { return this.ad[i][j]; }
+  pushBa(): External<void> { this.ba.push(); }
+  setBa(i: u256, j: u256, v: bytes32): External<void> { this.ba[i][j] = v; }
+  get getBa(i: u256, j: u256): External<bytes32> { return this.ba[i][j]; }
+  pushAd(): External<void> { this.ad.push(); }
+  setAd(i: u256, j: u256, v: address): External<void> { this.ad[i][j] = v; }
+  get getAd(i: u256, j: u256): External<address> { return this.ad[i][j]; }
 
-  @external pushDd(): void { this.dd.push(); }
-  @external setDd(i: u256, j: u256, k: u256, v: u256): void { this.dd[i][j][k] = v; }
-  @external @view getDd(i: u256, j: u256, k: u256): u256 { return this.dd[i][j][k]; }
-  @external @view lenDd(): u256 { return this.dd.length; }
+  pushDd(): External<void> { this.dd.push(); }
+  setDd(i: u256, j: u256, k: u256, v: u256): External<void> { this.dd[i][j][k] = v; }
+  get getDd(i: u256, j: u256, k: u256): External<u256> { return this.dd[i][j][k]; }
+  get lenDd(): External<u256> { return this.dd.length; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

@@ -26,11 +26,11 @@ describe('AUDIT panics/reverts edges: inner/element offset high-bit divergence',
   // signed form, so these cases are byte-identical to solc.
   let jeth: Harness, sol: Harness, aj: Address, as: Address;
 
-  const JETH = `@struct class D { a: u256; b: bytes; }
-@contract class C {
-  @external @pure mm(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
-  @external @pure saAt(a: string[], i: u256): string { return a[i]; }
-  @external @pure dbLen(d: D): u256 { return d.b.length; }
+  const JETH = `type D = { a: u256; b: bytes; };
+class C {
+  get mm(m: u256[][], i: u256, j: u256): External<u256> { return m[i][j]; }
+  get saAt(a: string[], i: u256): External<string> { return a[i]; }
+  get dbLen(d: D): External<u256> { return d.b.length; }
 }`;
   const SOL = `pragma solidity ^0.8.20;
 struct D { uint256 a; bytes b; }
@@ -161,29 +161,29 @@ describe('AUDIT panics/reverts edges: zero-length fixed array over-acceptance', 
   // FIXED (JETH013): JETH now rejects a zero-length fixed array in every position,
   // matching solc ("Array with zero length specified").
   it('Arr<u256,0> param: both JETH and solc reject', () => {
-    const j = `@contract class C { @external @pure f(a: Arr<u256,0>): u256 { return 1n; } }`;
+    const j = `class C { get f(a: Arr<u256,0>): External<u256> { return 1n; } }`;
     const s = `pragma solidity ^0.8.20; contract C { function f(uint256[0] calldata a) external pure returns(uint256){ return 1; } }`;
     expect(tryJeth(j)).toBe('REJECT');
     expect(trySol(s)).toBe('REJECT');
   });
 
   it('@state Arr<u256,0> is rejected (no zero-slot aliasing)', () => {
-    const j = `@contract class C { @state a: Arr<u256,0>; @state b: u256; @external @view f(): u256 { return this.b; } }`;
+    const j = `class C { a: Arr<u256,0>; b: u256; get f(): External<u256> { return this.b; } }`;
     expect(tryJeth(j)).toBe('REJECT');
   });
 
   it('Arr<u256,0> in struct field / mapping value / nested fixed: both JETH and solc reject', () => {
     const cases: [string, string][] = [
       [
-        `@struct class S { a: Arr<u256,0>; b: u256; } @contract class C { @state s: S; @external @view f(): u256 { return this.s.b; } }`,
+        `type S = { a: Arr<u256,0>; b: u256; }; class C { s: S; get f(): External<u256> { return this.s.b; } }`,
         `pragma solidity ^0.8.20; struct S { uint256[0] a; uint256 b; } contract C { S s; function f() external view returns(uint256){ return s.b; } }`,
       ],
       [
-        `@contract class C { @state m: mapping<u256, Arr<u256,0>>; @external @view f(): u256 { return 0n; } }`,
+        `class C { m: mapping<u256, Arr<u256,0>>; get f(): External<u256> { return 0n; } }`,
         `pragma solidity ^0.8.20; contract C { mapping(uint256=>uint256[0]) m; function f() external view returns(uint256){ return 0; } }`,
       ],
       [
-        `@contract class C { @state m: Arr<Arr<u256,0>,3>; @external @view f(): u256 { return 0n; } }`,
+        `class C { m: Arr<Arr<u256,0>,3>; get f(): External<u256> { return 0n; } }`,
         `pragma solidity ^0.8.20; contract C { uint256[0][3] m; function f() external view returns(uint256){ return 0; } }`,
       ],
     ];

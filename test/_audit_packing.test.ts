@@ -53,22 +53,22 @@ describe('AUDIT packing: struct field packing mixed widths', () => {
     // Fields chosen to straddle the 32-byte boundary: 16+8+1 = 25 used, then
     // bytes4 (4) fits -> 29, then uint64 (8) does NOT fit -> new slot.
     const jethSrc = `
-@struct class S {
+type S = {
   a: u128;
   b: u64;
   c: bool;
   d: bytes4;
   e: u64;
   f: bytes32;
-}
-@contract class C {
-  @state s: S;
-  @external setA(v: u128) { this.s.a = v; }
-  @external setB(v: u64) { this.s.b = v; }
-  @external setC(v: bool) { this.s.c = v; }
-  @external setD(v: bytes4) { this.s.d = v; }
-  @external setE(v: u64) { this.s.e = v; }
-  @external setF(v: bytes32) { this.s.f = v; }
+};
+class C {
+  s: S;
+  setA(v: u128): External<void> { this.s.a = v; }
+  setB(v: u64): External<void> { this.s.b = v; }
+  setC(v: bool): External<void> { this.s.c = v; }
+  setD(v: bytes4): External<void> { this.s.d = v; }
+  setE(v: u64): External<void> { this.s.e = v; }
+  setF(v: bytes32): External<void> { this.s.f = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -98,9 +98,9 @@ contract C {
 describe('AUDIT packing: fixed arrays packed + whole-slot + straddle', () => {
   it('uint64[5] packed, with odd count straddle (4 per slot)', async () => {
     const jethSrc = `
-@contract class C {
-  @state a: Arr<u64, 5>;
-  @external set(i: u256, v: u64) { this.a[i] = v; }
+class C {
+  a: Arr<u64, 5>;
+  set(i: u256, v: u64): External<void> { this.a[i] = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -119,9 +119,9 @@ contract C {
 
   it('address[3] (whole-slot in arrays despite 20 bytes)', async () => {
     const jethSrc = `
-@contract class C {
-  @state a: Arr<address, 3>;
-  @external set(i: u256, v: address) { this.a[i] = v; }
+class C {
+  a: Arr<address, 3>;
+  set(i: u256, v: address): External<void> { this.a[i] = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -139,9 +139,9 @@ contract C {
 
   it('bytes2[20] packed 16 per slot', async () => {
     const jethSrc = `
-@contract class C {
-  @state a: Arr<bytes2, 20>;
-  @external set(i: u256, v: bytes2) { this.a[i] = v; }
+class C {
+  a: Arr<bytes2, 20>;
+  set(i: u256, v: bytes2): External<void> { this.a[i] = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -163,11 +163,11 @@ contract C {
 describe('AUDIT packing: dynamic array storage value+struct', () => {
   it('uint64[] push/pop packs 4 per slot, pop zeroes freed', async () => {
     const jethSrc = `
-@contract class C {
-  @state a: u64[];
-  @external push(v: u64) { this.a.push(v); }
-  @external pop() { this.a.pop(); }
-  @external set(i: u256, v: u64) { this.a[i] = v; }
+class C {
+  a: u64[];
+  push(v: u64): External<void> { this.a.push(v); }
+  pop(): External<void> { this.a.pop(); }
+  set(i: u256, v: u64): External<void> { this.a[i] = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -196,9 +196,9 @@ contract C {
 describe('AUDIT packing: bytesN-with-remainder + signed int arrays', () => {
   it('bytes3[12] packed 10 per slot (2 wasted bytes per slot)', async () => {
     const jethSrc = `
-@contract class C {
-  @state a: Arr<bytes3, 12>;
-  @external set(i: u256, v: bytes3) { this.a[i] = v; }
+class C {
+  a: Arr<bytes3, 12>;
+  set(i: u256, v: bytes3): External<void> { this.a[i] = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -218,10 +218,10 @@ contract C {
 
   it('int64[8] packed 4 per slot, negative values sign-extend on read', async () => {
     const jethSrc = `
-@contract class C {
-  @state a: Arr<i64, 8>;
-  @external set(i: u256, v: i64) { this.a[i] = v; }
-  @external get(i: u256): i64 { return this.a[i]; }
+class C {
+  a: Arr<i64, 8>;
+  set(i: u256, v: i64): External<void> { this.a[i] = v; }
+  get get(i: u256): External<i64> { return this.a[i]; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -249,10 +249,10 @@ contract C {
 
   it('int128[] dynamic packed 2 per slot, negatives', async () => {
     const jethSrc = `
-@contract class C {
-  @state a: i128[];
-  @external push(v: i128) { this.a.push(v); }
-  @external get(i: u256): i128 { return this.a[i]; }
+class C {
+  a: i128[];
+  push(v: i128): External<void> { this.a.push(v); }
+  get get(i: u256): External<i128> { return this.a[i]; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -276,11 +276,11 @@ contract C {
 describe('AUDIT packing: fixed array of struct + struct in fixed array', () => {
   it('Pt[3] where Pt packs into a single slot (uint128 x2)', async () => {
     const jethSrc = `
-@struct class Pt { x: u128; y: u128; }
-@contract class C {
-  @state a: Arr<Pt, 3>;
-  @external setX(i: u256, v: u128) { this.a[i].x = v; }
-  @external setY(i: u256, v: u128) { this.a[i].y = v; }
+type Pt = { x: u128; y: u128; };
+class C {
+  a: Arr<Pt, 3>;
+  setX(i: u256, v: u128): External<void> { this.a[i].x = v; }
+  setY(i: u256, v: u128): External<void> { this.a[i].y = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -303,12 +303,12 @@ contract C {
     // T { uint8 tag; uint256[3] data; uint8 flag } - data is whole-slot array (3
     // slots), tag is 1 byte alone, flag 1 byte alone after.
     const jethSrc = `
-@struct class T { tag: u8; data: Arr<u256, 3>; flag: u8; }
-@contract class C {
-  @state t: T;
-  @external setTag(v: u8) { this.t.tag = v; }
-  @external setData(i: u256, v: u256) { this.t.data[i] = v; }
-  @external setFlag(v: u8) { this.t.flag = v; }
+type T = { tag: u8; data: Arr<u256, 3>; flag: u8; };
+class C {
+  t: T;
+  setTag(v: u8): External<void> { this.t.tag = v; }
+  setData(i: u256, v: u256): External<void> { this.t.data[i] = v; }
+  setFlag(v: u8): External<void> { this.t.flag = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -333,9 +333,9 @@ contract C {
 describe('AUDIT packing: nested fixed array (whole-slot)', () => {
   it('uint256[2][2] indexing a[i][j] matches solc slots', async () => {
     const jethSrc = `
-@contract class C {
-  @state a: Arr<Arr<u256, 2>, 2>;
-  @external set(i: u256, j: u256, v: u256) { this.a[i][j] = v; }
+class C {
+  a: Arr<Arr<u256, 2>, 2>;
+  set(i: u256, j: u256, v: u256): External<void> { this.a[i][j] = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -357,13 +357,13 @@ contract C {
 describe('AUDIT packing: compound assignment + mapping struct values', () => {
   it('compound += on packed struct fields (RMW, sign-ext, narrow width)', async () => {
     const jethSrc = `
-@struct class S { a: u32; b: i64; c: u128; }
-@contract class C {
-  @state s: S;
-  @external setAll(a: u32, b: i64, c: u128) { this.s.a = a; this.s.b = b; this.s.c = c; }
-  @external addA(v: u32) { this.s.a += v; }
-  @external addB(v: i64) { this.s.b += v; }
-  @external addC(v: u128) { this.s.c += v; }
+type S = { a: u32; b: i64; c: u128; };
+class C {
+  s: S;
+  setAll(a: u32, b: i64, c: u128): External<void> { this.s.a = a; this.s.b = b; this.s.c = c; }
+  addA(v: u32): External<void> { this.s.a += v; }
+  addB(v: i64): External<void> { this.s.b += v; }
+  addC(v: u128): External<void> { this.s.c += v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -387,11 +387,11 @@ contract C {
 
   it('mapping<bytes32, S> with packed struct value', async () => {
     const jethSrc = `
-@struct class S { a: u64; b: u64; flag: bool; }
-@contract class C {
-  @state m: mapping<bytes32, S>;
-  @external setA(k: bytes32, v: u64) { this.m[k].a = v; }
-  @external setFlag(k: bytes32, v: bool) { this.m[k].flag = v; }
+type S = { a: u64; b: u64; flag: bool; };
+class C {
+  m: mapping<bytes32, S>;
+  setA(k: bytes32, v: u64): External<void> { this.m[k].a = v; }
+  setFlag(k: bytes32, v: bool): External<void> { this.m[k].flag = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -413,15 +413,15 @@ contract C {
 describe('AUDIT packing: static struct return ABI (packed fields, signed, bytesN)', () => {
   it('return a packed struct from storage: ABI words match (sign-ext, bytesN left-align)', async () => {
     const jethSrc = `
-@struct class S { a: i64; b: u32; c: bytes4; d: bool; e: address; }
-@contract class C {
-  @state s: S;
-  @external setA(v: i64) { this.s.a = v; }
-  @external setB(v: u32) { this.s.b = v; }
-  @external setC(v: bytes4) { this.s.c = v; }
-  @external setD(v: bool) { this.s.d = v; }
-  @external setE(v: address) { this.s.e = v; }
-  @external get(): S { return this.s; }
+type S = { a: i64; b: u32; c: bytes4; d: bool; e: address; };
+class C {
+  s: S;
+  setA(v: i64): External<void> { this.s.a = v; }
+  setB(v: u32): External<void> { this.s.b = v; }
+  setC(v: bytes4): External<void> { this.s.c = v; }
+  setD(v: bool): External<void> { this.s.d = v; }
+  setE(v: address): External<void> { this.s.e = v; }
+  get get(): External<S> { return this.s; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -455,13 +455,13 @@ describe('AUDIT packing: dynamic array of struct with packed fields', () => {
     // Rec { uint128 a; uint64 b; bool c; bytes4 d } - all pack into slot 0 of elem
     // (16+8+1+4 = 29 bytes). Each element is 1 slot.
     const jethSrc = `
-@struct class Rec { a: u128; b: u64; c: bool; d: bytes4; }
-@contract class C {
-  @state recs: Rec[];
-  @external pushV(a: u128, b: u64, c: bool, d: bytes4) { this.recs.push(Rec(a, b, c, d)); }
-  @external pop() { this.recs.pop(); }
-  @external setA(i: u256, v: u128) { this.recs[i].a = v; }
-  @external setC(i: u256, v: bool) { this.recs[i].c = v; }
+type Rec = { a: u128; b: u64; c: bool; d: bytes4; };
+class C {
+  recs: Rec[];
+  pushV(a: u128, b: u64, c: bool, d: bytes4): External<void> { this.recs.push(Rec(a, b, c, d)); }
+  pop(): External<void> { this.recs.pop(); }
+  setA(i: u256, v: u128): External<void> { this.recs[i].a = v; }
+  setC(i: u256, v: bool): External<void> { this.recs[i].c = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -492,13 +492,13 @@ contract C {
 describe('AUDIT packing: dynamic bytes/string storage transitions', () => {
   it('string storage short<->long transitions clear stale data slots', async () => {
     const jethSrc = `
-@contract class C {
-  @state s: string;
-  @external setShort() { this.s = "hi"; }
-  @external setLong() { this.s = "this is a long string exceeding thirty one bytes for sure yes"; }
-  @external setEmpty() { this.s = ""; }
-  @external setMed() { this.s = "0123456789012345678901234567890"; }
-  @external setExact32() { this.s = "01234567890123456789012345678901"; }
+class C {
+  s: string;
+  setShort(): External<void> { this.s = "hi"; }
+  setLong(): External<void> { this.s = "this is a long string exceeding thirty one bytes for sure yes"; }
+  setEmpty(): External<void> { this.s = ""; }
+  setMed(): External<void> { this.s = "0123456789012345678901234567890"; }
+  setExact32(): External<void> { this.s = "01234567890123456789012345678901"; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -545,11 +545,11 @@ describe('AUDIT packing: struct stride rounding in arrays', () => {
     // Pt { uint256 a; uint128 b } = 2 slots (a fills slot0, b in low half of slot1).
     // stride must be 2 whole slots per element.
     const jethSrc = `
-@struct class Pt { a: u256; b: u128; }
-@contract class C {
-  @state arr: Arr<Pt, 3>;
-  @external setA(i: u256, v: u256) { this.arr[i].a = v; }
-  @external setB(i: u256, v: u128) { this.arr[i].b = v; }
+type Pt = { a: u256; b: u128; };
+class C {
+  arr: Arr<Pt, 3>;
+  setA(i: u256, v: u256): External<void> { this.arr[i].a = v; }
+  setB(i: u256, v: u128): External<void> { this.arr[i].b = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -571,14 +571,14 @@ contract C {
 
   it('dynamic Rec[] where Rec is 3 slots, push/pop element stride', async () => {
     const jethSrc = `
-@struct class Rec { a: u256; b: u128; c: u128; d: u256; }
-@contract class C {
-  @state recs: Rec[];
-  @external pushZ() { this.recs.push(); }
-  @external setA(i: u256, v: u256) { this.recs[i].a = v; }
-  @external setB(i: u256, v: u128) { this.recs[i].b = v; }
-  @external setC(i: u256, v: u128) { this.recs[i].c = v; }
-  @external setD(i: u256, v: u256) { this.recs[i].d = v; }
+type Rec = { a: u256; b: u128; c: u128; d: u256; };
+class C {
+  recs: Rec[];
+  pushZ(): External<void> { this.recs.push(); }
+  setA(i: u256, v: u256): External<void> { this.recs[i].a = v; }
+  setB(i: u256, v: u128): External<void> { this.recs[i].b = v; }
+  setC(i: u256, v: u128): External<void> { this.recs[i].c = v; }
+  setD(i: u256, v: u256): External<void> { this.recs[i].d = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -614,10 +614,10 @@ contract C {
 describe('AUDIT packing: nested mapping-valued arrays + nested mappings', () => {
   it('mapping<u256, u256[]> per-key isolation (whole-slot elements)', async () => {
     const jethSrc = `
-@contract class C {
-  @state m: mapping<u256, u256[]>;
-  @external push(k: u256, v: u256) { this.m[k].push(v); }
-  @external set(k: u256, i: u256, v: u256) { this.m[k][i] = v; }
+class C {
+  m: mapping<u256, u256[]>;
+  push(k: u256, v: u256): External<void> { this.m[k].push(v); }
+  set(k: u256, i: u256, v: u256): External<void> { this.m[k][i] = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -643,9 +643,9 @@ contract C {
 
   it('nested mapping<address, mapping<u256, u128>> packing of value', async () => {
     const jethSrc = `
-@contract class C {
-  @state m: mapping<address, mapping<u256, u128>>;
-  @external set(a: address, k: u256, v: u128) { this.m[a][k] = v; }
+class C {
+  m: mapping<address, mapping<u256, u128>>;
+  set(a: address, k: u256, v: u128): External<void> { this.m[a][k] = v; }
 }`;
     const solSrc = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

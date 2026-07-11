@@ -14,16 +14,16 @@ const sel = (s: string) => functionSelector(s);
 // JETH twin and a Solidity twin with identical semantics.
 // ----------------------------------------------------------------------------
 
-const JETH = `@contract class C {
-  @state x: u256;
-  @state y: u256;
-  @state z: u256;
-  @state counter: u256;
-  @state pa: u128;            // packed pair in one slot with pb
-  @state pb: u128;
-  @state arr: Arr<u256, 4>;   // fixed array (storage)
-  @state dyn: u256[];         // dynamic array
-  @state m: mapping<u256, u256>;
+const JETH = `class C {
+  x: u256;
+  y: u256;
+  z: u256;
+  counter: u256;
+  pa: u128;            // packed pair in one slot with pb
+  pb: u128;
+  arr: Arr<u256, 4>;   // fixed array (storage)
+  dyn: u256[];         // dynamic array
+  m: mapping<u256, u256>;
 
   bump(): u256 { this.counter = this.counter + 1n; return this.counter; }
   idx0(): u256 { this.counter = this.counter + 1n; return 0n; }
@@ -33,13 +33,13 @@ const JETH = `@contract class C {
   tag(t: u256): u256 { this.counter = this.counter * 10n + t; return t; }
   tagIdx(t: u256, ret: u256): u256 { this.counter = this.counter * 10n + t; return ret; }
 
-  @pure two(): [u256, u256] { return [11n, 22n]; }
-  @pure three(): [u256, u256, u256] { return [1n, 2n, 3n]; }
-  @pure addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
-  @pure mixT(): [u8, bool, i64, address, bytes32] {
+  two(): [u256, u256] { return [11n, 22n]; }
+  three(): [u256, u256, u256] { return [1n, 2n, 3n]; }
+  addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
+  mixT(): [u8, bool, i64, address, bytes32] {
     return [255n, true, -5n, address(0xaan), bytes32(0x1122334455667788990011223344556677889900112233445566778899001122n)];
   }
-  @pure widenSrc(): [u8, u16] { return [200n, 60000n]; }
+  widenSrc(): [u8, u16] { return [200n, 60000n]; }
   nested(): [u256, u256] { let [a, b] = this.two(); return [a + 1n, b + 1n]; }
   recurT(n: u256): [u256, u256] {
     if (n == 0n) { return [0n, 1n]; }
@@ -48,13 +48,13 @@ const JETH = `@contract class C {
   }
 
   // --- eval-order: tuple-literal RHS with side-effecting components, left-to-right ---
-  @external orderLit(): u256 {
+  orderLit(): External<u256> {
     this.counter = 0n;
     let [a, b, c] = [this.bump(), this.bump(), this.bump()];
     return a * 1000000n + b * 1000n + c;
   }
   // --- eval-order: assign form, RHS components side-effecting; targets are locals ---
-  @external orderAssignLit(): u256 {
+  orderAssignLit(): External<u256> {
     this.counter = 0n;
     let a: u256 = 0n; let b: u256 = 0n;
     [a, b] = [this.bump(), this.bump()];
@@ -62,20 +62,20 @@ const JETH = `@contract class C {
   }
   // --- eval-order: side-effecting INDEX expressions on the LHS targets ---
   // (a[idx0()], a[idx1()]) = (RHS). counter encodes which index-fn ran and order.
-  @external orderTargetIdx(): u256 {
+  orderTargetIdx(): External<u256> {
     this.counter = 0n;
     this.arr[0n] = 0n; this.arr[1n] = 0n;
     [this.arr[this.idx0()], this.arr[this.idx1()]] = this.two();
     return this.counter;
   }
   // returns the final array contents too
-  @external orderTargetIdxVals(): u256 {
+  orderTargetIdxVals(): External<u256> {
     this.arr[0n] = 0n; this.arr[1n] = 0n;
     [this.arr[this.idx0()], this.arr[this.idx1()]] = this.two();
     return this.arr[0n] * 1000n + this.arr[1n];
   }
   // --- mixed: target index AND side-effecting RHS, interleaved ---
-  @external orderMixed(): u256 {
+  orderMixed(): External<u256> {
     this.counter = 0n;
     this.arr[0n] = 0n; this.arr[1n] = 0n;
     [this.arr[this.idx0()], this.arr[this.idx1()]] = [this.bump(), this.bump()];
@@ -83,52 +83,52 @@ const JETH = `@contract class C {
   }
 
   // --- swaps ---
-  @external @pure swap2(p: u256, q: u256): u256 { let a: u256 = p; let b: u256 = q; [a, b] = [b, a]; return a * 1000000n + b; }
-  @external @pure rotate3(p: u256, q: u256, r: u256): u256 {
+  get swap2(p: u256, q: u256): External<u256> { let a: u256 = p; let b: u256 = q; [a, b] = [b, a]; return a * 1000000n + b; }
+  get rotate3(p: u256, q: u256, r: u256): External<u256> {
     let a: u256 = p; let b: u256 = q; let c: u256 = r;
     [a, b, c] = [c, a, b];
     return a * 1000000n + b * 1000n + c;
   }
-  @external @pure noop2(p: u256, q: u256): u256 { let a: u256 = p; let b: u256 = q; [a, b] = [a, b]; return a * 1000000n + b; }
-  @external swapState(p: u256, q: u256): u256 { this.x = p; this.y = q; [this.x, this.y] = [this.y, this.x]; return this.x * 1000000n + this.y; }
+  get noop2(p: u256, q: u256): External<u256> { let a: u256 = p; let b: u256 = q; [a, b] = [a, b]; return a * 1000000n + b; }
+  swapState(p: u256, q: u256): External<u256> { this.x = p; this.y = q; [this.x, this.y] = [this.y, this.x]; return this.x * 1000000n + this.y; }
   // swap two PACKED state vars (both in one slot)
-  @external swapPacked(p: u128, q: u128): u256 { this.pa = p; this.pb = q; [this.pa, this.pb] = [this.pb, this.pa]; return u256(this.pa) * 1000000n + u256(this.pb); }
+  swapPacked(p: u128, q: u128): External<u256> { this.pa = p; this.pb = q; [this.pa, this.pb] = [this.pb, this.pa]; return u256(this.pa) * 1000000n + u256(this.pb); }
   // rotate three state vars via tuple
-  @external rotateState(p: u256, q: u256, r: u256): u256 {
+  rotateState(p: u256, q: u256, r: u256): External<u256> {
     this.x = p; this.y = q; this.z = r;
     [this.x, this.y, this.z] = [this.z, this.x, this.y];
     return this.x * 1000000n + this.y * 1000n + this.z;
   }
 
   // --- multi-return variety ---
-  @external @pure nestedCall(): u256 { let [a, b] = this.nested(); return a * 1000n + b; }
-  @external recur(n: u256): u256 { let [a, b] = this.recurT(n); return a * 1000000n + b; }
+  get nestedCall(): External<u256> { let [a, b] = this.nested(); return a * 1000n + b; }
+  get recur(n: u256): External<u256> { let [a, b] = this.recurT(n); return a * 1000000n + b; }
   // multi-return fn called in a loop, accumulate
-  @external loopSum(n: u256): u256 {
+  get loopSum(n: u256): External<u256> {
     let acc: u256 = 0n;
     let i: u256 = 0n;
     while (i < n) { let [s, d] = this.addsub(i + 10n, i); acc = acc + s + d; i = i + 1n; }
     return acc;
   }
   // skipped CALL components: call still runs once (counter), value discarded
-  @external skipCallSide(): u256 {
+  skipCallSide(): External<u256> {
     this.counter = 0n;
     let [a, , c] = this.threeSide();
     return a * 1000000n + c * 1000n + this.counter;
   }
   threeSide(): [u256, u256, u256] { this.counter = this.counter + 7n; return [1n, 2n, 3n]; }
   // skipped TUPLE-literal components: side effects still happen
-  @external skipLitSide(): u256 {
+  skipLitSide(): External<u256> {
     this.counter = 0n;
     let [a, , c] = [this.bump(), this.bump(), this.bump()];
     return a * 1000000n + c * 1000n + this.counter;
   }
   // leading + trailing skips
-  @external @pure skipEnds(): u256 { let [ , b, ,] = this.three(); return b; }
-  @external @pure allButOne(): u256 { let [ , , c] = this.three(); return c; }
+  get skipEnds(): External<u256> { let [ , b, ,] = this.three(); return b; }
+  get allButOne(): External<u256> { let [ , , c] = this.three(); return c; }
 
   // --- mixed component types & widening ---
-  @external @pure mixedTypes(): u256 {
+  get mixedTypes(): External<u256> {
     let [a, f, sg, ad, bz] = this.mixT();
     let r: u256 = u256(a);
     if (f) { r = r + 1000n; }
@@ -138,45 +138,45 @@ const JETH = `@contract class C {
     return r;
   }
   // widen u8/u16 components into u256 targets (assign form, existing vars)
-  @external widenAssign(): u256 {
+  get widenAssign(): External<u256> {
     let a: u256 = 123n; let b: u256 = 456n;
     [a, b] = this.widenSrc();
     return a * 1000000n + b;
   }
   // widen in decl form
-  @external @pure widenDecl(): u256 {
+  get widenDecl(): External<u256> {
     let [a, b]: [u256, u256] = [u256(7n), u256(8n)];
     let [c, d] = this.widenSrc();   // u8,u16 -> declared as their own types
     return a + b + u256(c) + u256(d);
   }
 
   // --- signed min/max via tuple ---
-  @pure signs(): [i256, i256] { return [-57896044618658097711785492504343953926634992332820282019728792003956564819968n, 57896044618658097711785492504343953926634992332820282019728792003956564819967n]; }
-  @external @pure signMinMax(): i256 { let [lo, hi] = this.signs(); return lo + hi; }
+  signs(): [i256, i256] { return [-57896044618658097711785492504343953926634992332820282019728792003956564819968n, 57896044618658097711785492504343953926634992332820282019728792003956564819967n]; }
+  get signMinMax(): External<i256> { let [lo, hi] = this.signs(); return lo + hi; }
 
   // --- targets: struct fields, array elems, mapping values ---
-  @external arrTargets(): u256 {
+  arrTargets(): External<u256> {
     this.arr[2n] = 0n; this.arr[3n] = 0n;
     [this.arr[2n], this.arr[3n]] = this.two();
     return this.arr[2n] * 1000n + this.arr[3n];
   }
-  @external mapTargets(k: u256): u256 {
+  mapTargets(k: u256): External<u256> {
     this.m[k] = 0n; this.m[k + 1n] = 0n;
     [this.m[k], this.m[k + 1n]] = this.two();
     return this.m[k] * 1000n + this.m[k + 1n];
   }
   // mixed targets: one state, one local
-  @external mixedTargets(): u256 { let b: u256 = 0n; [this.x, b] = this.two(); return this.x * 1000n + b; }
+  mixedTargets(): External<u256> { let b: u256 = 0n; [this.x, b] = this.two(); return this.x * 1000n + b; }
   // self-referential swap-ish: [a, b] = [b, a] where b reads state mutated? (pure locals here)
 
   // --- nesting in control flow ---
-  @external @pure inIf(c: bool): u256 {
+  get inIf(c: bool): External<u256> {
     let r: u256 = 0n;
     if (c) { let [a, b] = this.two(); r = a + b; } else { let [a, b] = this.three2(); r = a + b; }
     return r;
   }
-  @pure three2(): [u256, u256] { return [100n, 200n]; }
-  @external @pure inFor(n: u256): u256 {
+  three2(): [u256, u256] { return [100n, 200n]; }
+  get inFor(n: u256): External<u256> {
     let acc: u256 = 0n;
     for (let i: u256 = 0n; i < n; i = i + 1n) { let [a, b] = this.two(); acc = acc + a + b; }
     return acc;
@@ -184,21 +184,21 @@ const JETH = `@contract class C {
 
   // RHS reads state, targets are the SAME state vars: classic "must snapshot RHS
   // before any store" case. [this.x, this.y] = [this.y, this.x + this.y].
-  @external stateFib(p: u256, q: u256): u256 {
+  stateFib(p: u256, q: u256): External<u256> {
     this.x = p; this.y = q;
     [this.x, this.y] = [this.y, this.x + this.y];
     return this.x * 1000000n + this.y;
   }
   // checked-arith revert parity: addsub underflows when b > a.
-  @external @pure underflow(p: u256, q: u256): u256 { let [s, d] = this.addsub(p, q); return s + d; }
+  get underflow(p: u256, q: u256): External<u256> { let [s, d] = this.addsub(p, q); return s + d; }
   // dynamic-array element targets via tuple (with a resize first).
-  @external dynTargets(): u256 {
+  dynTargets(): External<u256> {
     this.dyn = [0n, 0n, 0n];
     [this.dyn[0n], this.dyn[2n]] = this.two();
     return this.dyn[0n] * 1000n + this.dyn[2n] + this.dyn[1n];
   }
   // out-of-bounds dynamic index in a tuple target must panic like solc.
-  @external dynOOB(): u256 {
+  dynOOB(): External<u256> {
     this.dyn = [0n];
     [this.dyn[0n], this.dyn[5n]] = this.two();
     return this.dyn[0n];
@@ -208,14 +208,14 @@ const JETH = `@contract class C {
   // counter encodes the exact interleaving (each helper appends a decimal digit).
   // assign form, tuple-literal RHS: targets arr[tagIdx(1,0)] and arr[tagIdx(2,1)],
   // RHS components tag(3), tag(4). Whatever order solc picks, counter must match.
-  @external traceLitIdx(): u256 {
+  traceLitIdx(): External<u256> {
     this.counter = 0n;
     this.arr[0n] = 0n; this.arr[1n] = 0n;
     [this.arr[this.tagIdx(1n, 0n)], this.arr[this.tagIdx(2n, 1n)]] = [this.tag(3n), this.tag(4n)];
     return this.counter;
   }
   // assign form, multi-call RHS: targets evaluated around the single call.
-  @external traceCallIdx(): u256 {
+  traceCallIdx(): External<u256> {
     this.counter = 0n;
     this.arr[0n] = 0n; this.arr[1n] = 0n;
     [this.arr[this.tagIdx(1n, 0n)], this.arr[this.tagIdx(2n, 1n)]] = this.twoTag();
@@ -223,21 +223,21 @@ const JETH = `@contract class C {
   }
   twoTag(): [u256, u256] { this.counter = this.counter * 10n + 9n; return [11n, 22n]; }
   // mapping-key side effects as targets
-  @external traceMapKey(): u256 {
+  traceMapKey(): External<u256> {
     this.counter = 0n;
     [this.m[this.tag(1n)], this.m[this.tag(2n)]] = [this.tag(3n), this.tag(4n)];
     return this.counter;
   }
   // tuple-literal RHS only, three components, order trace
-  @external traceLit3(): u256 {
+  traceLit3(): External<u256> {
     this.counter = 0n;
     let a: u256 = 0n; let b: u256 = 0n; let c: u256 = 0n;
     [a, b, c] = [this.tag(1n), this.tag(2n), this.tag(3n)];
     return this.counter * 1000000n + a * 10000n + b * 100n + c;
   }
 
-  @external getCounter(): u256 { return this.counter; }
-  @external getArr(i: u256): u256 { return this.arr[i]; }
+  get getCounter(): External<u256> { return this.counter; }
+  get getArr(i: u256): External<u256> { return this.arr[i]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

@@ -90,40 +90,40 @@ function cdArray(selector: string, words: bigint[]): string {
 // PART 1 - for-of: element-kind coverage over storage / calldata / fixed arrays.
 // =====================================================================================
 describe('F2 for-of: element-kind coverage (storage/calldata/fixed)', () => {
-  const J = `@contract class C {
-    @state us: u256[];
-    @state b8: u8[];
-    @state ad: address[];
-    @state bo: bool[];
-    @state b32: bytes32[];
-    @external pushU(v: u256): void { this.us.push(v); }
-    @external pushB8(v: u8): void { this.b8.push(v); }
-    @external pushAd(v: address): void { this.ad.push(v); }
-    @external pushBo(v: bool): void { this.bo.push(v); }
-    @external pushB32(v: bytes32): void { this.b32.push(v); }
+  const J = `class C {
+    us: u256[];
+    b8: u8[];
+    ad: address[];
+    bo: bool[];
+    b32: bytes32[];
+    pushU(v: u256): External<void> { this.us.push(v); }
+    pushB8(v: u8): External<void> { this.b8.push(v); }
+    pushAd(v: address): External<void> { this.ad.push(v); }
+    pushBo(v: bool): External<void> { this.bo.push(v); }
+    pushB32(v: bytes32): External<void> { this.b32.push(v); }
 
-    @external @view sumU(): u256 { let s: u256 = 0n; for (const v of this.us) { s = s + v; } return s; }
-    @external @view sumB8(): u256 { let s: u256 = 0n; for (const v of this.b8) { s = s + u256(v); } return s; }
-    @external @view countTrue(): u256 { let n: u256 = 0n; for (const v of this.bo) { if (v) { n = n + 1n; } } return n; }
-    @external @view lastAddr(): address { let r: address = address(0n); for (const v of this.ad) { r = v; } return r; }
-    @external @view lastB32(): bytes32 { let r: bytes32 = bytes32(0n); for (const v of this.b32) { r = v; } return r; }
+    get sumU(): External<u256> { let s: u256 = 0n; for (const v of this.us) { s = s + v; } return s; }
+    get sumB8(): External<u256> { let s: u256 = 0n; for (const v of this.b8) { s = s + u256(v); } return s; }
+    get countTrue(): External<u256> { let n: u256 = 0n; for (const v of this.bo) { if (v) { n = n + 1n; } } return n; }
+    get lastAddr(): External<address> { let r: address = address(0n); for (const v of this.ad) { r = v; } return r; }
+    get lastB32(): External<bytes32> { let r: bytes32 = bytes32(0n); for (const v of this.b32) { r = v; } return r; }
 
     // calldata array element kinds
-    @external @pure sumCdU(a: u256[]): u256 { let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
-    @external @pure sumCdI(a: i128[]): i128 { let s: i128 = 0n; for (const v of a) { s = s + v; } return s; }
-    @external @pure sumCdB8(a: u8[]): u256 { let s: u256 = 0n; for (const v of a) { s = s + u256(v); } return s; }
+    get sumCdU(a: u256[]): External<u256> { let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
+    get sumCdI(a: i128[]): External<i128> { let s: i128 = 0n; for (const v of a) { s = s + v; } return s; }
+    get sumCdB8(a: u8[]): External<u256> { let s: u256 = 0n; for (const v of a) { s = s + u256(v); } return s; }
 
     // empty array => zero iterations
-    @external @pure sumEmpty(a: u256[]): u256 { let s: u256 = 7n; for (const v of a) { s = s + v; } return s; }
+    get sumEmpty(a: u256[]): External<u256> { let s: u256 = 7n; for (const v of a) { s = s + v; } return s; }
 
     // memory fixed array Arr<T,N>
-    @external @pure sumFixed(): u256 { let a: Arr<u256,4> = [3n,5n,7n,9n]; let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
+    get sumFixed(): External<u256> { let a: Arr<u256,4> = [3n,5n,7n,9n]; let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
     // calldata fixed array Arr<T,N>
-    @external @pure sumCdFixed(a: Arr<u256,3>): u256 { let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
+    get sumCdFixed(a: Arr<u256,3>): External<u256> { let s: u256 = 0n; for (const v of a) { s = s + v; } return s; }
 
     // early return / break / continue
-    @external @pure firstGt(a: u256[], t: u256): u256 { for (const v of a) { if (v > t) { return v; } } return 0n; }
-    @external @pure sumEven(a: u256[]): u256 { let s: u256 = 0n; for (const v of a) { if (v == 0n) { continue; } if (v == 13n) { break; } s = s + v; } return s; }
+    get firstGt(a: u256[], t: u256): External<u256> { for (const v of a) { if (v > t) { return v; } } return 0n; }
+    get sumEven(a: u256[]): External<u256> { let s: u256 = 0n; for (const v of a) { if (v == 0n) { continue; } if (v == 13n) { break; } s = s + v; } return s; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -182,9 +182,9 @@ contract C {
 
 // firstGt / sumEven need a tail scalar arg or trailing dynamic, build calldata explicitly.
 describe('F2 for-of: control flow (break/continue/return) with explicit calldata', () => {
-  const J = `@contract class C {
-    @external @pure firstGt(t: u256, a: u256[]): u256 { for (const v of a) { if (v > t) { return v; } } return 0n; }
-    @external @pure sumEven(a: u256[]): u256 { let s: u256 = 0n; for (const v of a) { if (v == 0n) { continue; } if (v == 13n) { break; } s = s + v; } return s; }
+  const J = `class C {
+    get firstGt(t: u256, a: u256[]): External<u256> { for (const v of a) { if (v > t) { return v; } } return 0n; }
+    get sumEven(a: u256[]): External<u256> { let s: u256 = 0n; for (const v of a) { if (v == 0n) { continue; } if (v == 13n) { break; } s = s + v; } return s; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -212,22 +212,22 @@ contract C {
 // JETH re-reads xs.length and xs[i] each iteration; solc's hand-written loop does too.
 // =====================================================================================
 describe('F2 for-of: mutation mid-loop must match solc re-read-each-iteration', () => {
-  const J = `@contract class C {
-    @state xs: u256[];
-    @external push(v: u256): void { this.xs.push(v); }
-    @external @view len(): u256 { return this.xs.length; }
-    @external @view at(i: u256): u256 { return this.xs[i]; }
+  const J = `class C {
+    xs: u256[];
+    push(v: u256): External<void> { this.xs.push(v); }
+    get len(): External<u256> { return this.xs.length; }
+    get at(i: u256): External<u256> { return this.xs[i]; }
     // Body pops the LAST element each iteration: classic re-read-length divergence trap.
-    @external popEach(): void { for (const v of this.xs) { if (this.xs.length > 0n) { this.xs.pop(); } } }
+    popEach(): External<void> { for (const v of this.xs) { if (this.xs.length > 0n) { this.xs.pop(); } } }
     // Body doubles xs[i] in place (write-through to the same array being iterated).
-    @external doubleInPlace(): void { let i: u256 = 0n; for (const v of this.xs) { this.xs[i] = v * 2n; i = i + 1n; } }
+    doubleInPlace(): External<void> { let i: u256 = 0n; for (const v of this.xs) { this.xs[i] = v * 2n; i = i + 1n; } }
     // Body pushes a copy of small elements; bounded by gas but length grows mid-iteration.
     // Use a cap so it terminates identically on both sides.
-    @external growBounded(cap: u256): void { let i: u256 = 0n; for (const v of this.xs) { if (this.xs.length < cap) { this.xs.push(v); } i = i + 1n; } }
+    growBounded(cap: u256): External<void> { let i: u256 = 0n; for (const v of this.xs) { if (this.xs.length < cap) { this.xs.push(v); } i = i + 1n; } }
     // Pop TWICE per iteration: the index outpaces the shrinking length faster than one-per-iter.
     // The re-read of xs.length in the condition is the ONLY thing that keeps the element read
     // xs[__i] in bounds; if JETH cached length this would OOB-panic where solc does not.
-    @external pop2(): void { for (const v of this.xs) { if (this.xs.length > 0n) { this.xs.pop(); } if (this.xs.length > 0n) { this.xs.pop(); } } }
+    pop2(): External<void> { for (const v of this.xs) { if (this.xs.length > 0n) { this.xs.pop(); } if (this.xs.length > 0n) { this.xs.pop(); } } }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -288,19 +288,19 @@ contract C {
 // PART 3 - nesting, sequencing, return; synthesized index names must not collide.
 // =====================================================================================
 describe('F2 for-of: nesting / sequencing / index-name non-collision', () => {
-  const J = `@contract class C {
-    @state xs: u256[];
-    @external push(v: u256): void { this.xs.push(v); }
+  const J = `class C {
+    xs: u256[];
+    push(v: u256): External<void> { this.xs.push(v); }
     // nested for-of with DIFFERENT element names (same name => JETH068 shadow rule, tested in rejections)
-    @external @view pairSum(): u256 { let s: u256 = 0n; for (const v of this.xs) { for (const w of this.xs) { s = s + v * w; } } return s; }
+    get pairSum(): External<u256> { let s: u256 = 0n; for (const v of this.xs) { for (const w of this.xs) { s = s + v * w; } } return s; }
     // for-of inside a regular for
-    @external @view repeat(n: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i = i + 1n) { for (const v of this.xs) { s = s + v; } } return s; }
+    get repeat(n: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i = i + 1n) { for (const v of this.xs) { s = s + v; } } return s; }
     // regular for inside a for-of
-    @external @view triangular(): u256 { let s: u256 = 0n; for (const v of this.xs) { for (let i: u256 = 0n; i < v; i = i + 1n) { s = s + 1n; } } return s; }
+    get triangular(): External<u256> { let s: u256 = 0n; for (const v of this.xs) { for (let i: u256 = 0n; i < v; i = i + 1n) { s = s + 1n; } } return s; }
     // three SEQUENTIAL for-of loops: synthesized indices __jeth_of_0/1/2 must not collide
-    @external @view triple(): u256 { let s: u256 = 0n; for (const v of this.xs) { s = s + v; } for (const v of this.xs) { s = s + v * 2n; } for (const v of this.xs) { s = s + v * 3n; } return s; }
+    get triple(): External<u256> { let s: u256 = 0n; for (const v of this.xs) { s = s + v; } for (const v of this.xs) { s = s + v * 2n; } for (const v of this.xs) { s = s + v * 3n; } return s; }
     // return from inside nested for-of
-    @external @view firstPairGt(t: u256): u256 { for (const v of this.xs) { for (const w of this.xs) { if (v + w > t) { return v * 1000n + w; } } } return 0n; }
+    get firstPairGt(t: u256): External<u256> { for (const v of this.xs) { for (const w of this.xs) { if (v + w > t) { return v * 1000n + w; } } } return 0n; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -332,13 +332,13 @@ contract C {
 // PART 4 - `let v` (mutable copy) mutated in the body must NOT write back to the array.
 // =====================================================================================
 describe('F2 for-of: `let v` is a copy, mutation does not write back', () => {
-  const J = `@contract class C {
-    @state xs: u256[];
-    @external push(v: u256): void { this.xs.push(v); }
-    @external @view at(i: u256): u256 { return this.xs[i]; }
+  const J = `class C {
+    xs: u256[];
+    push(v: u256): External<void> { this.xs.push(v); }
+    get at(i: u256): External<u256> { return this.xs[i]; }
     // mutate the loop variable; the storage array must be UNCHANGED afterward.
-    @external bumpCopies(): void { for (let v of this.xs) { v = v + 1000n; } }
-    @external @view sum(): u256 { let s: u256 = 0n; for (const v of this.xs) { s = s + v; } return s; }
+    bumpCopies(): External<void> { for (let v of this.xs) { v = v + 1000n; } }
+    get sum(): External<u256> { let s: u256 = 0n; for (const v of this.xs) { s = s + v; } return s; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -367,12 +367,12 @@ contract C {
 // =====================================================================================
 describe('F2 for-of: branded element + per-iteration event emission', () => {
   const J = `type Wei = Brand<u256>;
-  @contract class C {
-    @event Item(@indexed idx: u256, v: u256);
-    @state ws: Wei[];
-    @external push(v: Wei): void { this.ws.push(v); }
-    @external @view sum(): u256 { let s: u256 = 0n; for (const v of this.ws) { s = s + u256(v); } return s; }
-    @external emitAll(): void { let i: u256 = 0n; for (const v of this.ws) { emit(Item(i, u256(v))); i = i + 1n; } }
+  class C {
+    Item: event<{ idx: indexed<u256>; v: u256 }>;
+    ws: Wei[];
+    push(v: Wei): External<void> { this.ws.push(v); }
+    get sum(): External<u256> { let s: u256 = 0n; for (const v of this.ws) { s = s + u256(v); } return s; }
+    emitAll(): External<void> { let i: u256 = 0n; for (const v of this.ws) { emit(Item(i, u256(v))); i = i + 1n; } }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -398,7 +398,7 @@ contract C {
 // PART 6 - for-of REJECTIONS / soundness (capture codes, never crash).
 // =====================================================================================
 describe('F2 for-of: rejections (codes pinned, no crash)', () => {
-  const base = (body: string) => `@contract class C { @state xs: u256[]; @state n: u256; ${body} }`;
+  const base = (body: string) => `class C { xs: u256[]; n: u256; ${body} }`;
   it('for-of over a non-array (uint) => JETH118', () => {
     expect(
       errCodes(
@@ -410,15 +410,15 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
     // The mapping read inside `for (const v of this.m)` is rejected before the for-of array
     // check (mappings cannot be read directly), so the code is JETH153 rather than JETH118.
     // Either way it is a clean compile-time rejection, never a crash or a miscompile.
-    const src = `@contract class C { @state m: mapping<u256, u256>; @external @view f(): u256 { let s: u256 = 0n; for (const v of this.m) { s = s + v; } return s; } }`;
+    const src = `class C { m: mapping<u256, u256>; get f(): External<u256> { let s: u256 = 0n; for (const v of this.m) { s = s + v; } return s; } }`;
     expect(errCodes(src)).toContain('JETH153');
   });
   it('for-of over a struct => JETH118', () => {
-    const src = `@struct class P { x: u256; y: u256; } @contract class C { @state p: P; @external @view f(): u256 { let s: u256 = 0n; for (const v of this.p) { s = s + v; } return s; } }`;
+    const src = `type P = { x: u256; y: u256; }; class C { p: P; get f(): External<u256> { let s: u256 = 0n; for (const v of this.p) { s = s + v; } return s; } }`;
     expect(errCodes(src)).toContain('JETH118');
   });
   it('for-of over a CALL result => JETH117 (iterable must be a plain ref)', () => {
-    const src = `@contract class C { @state xs: u256[]; getXs(): u256[] { return this.xs; } @external @view f(): u256 { let s: u256 = 0n; for (const v of this.getXs()) { s = s + v; } return s; } }`;
+    const src = `class C { xs: u256[]; getXs(): u256[] { return this.xs; } get f(): External<u256> { let s: u256 = 0n; for (const v of this.getXs()) { s = s + v; } return s; } }`;
     expect(errCodes(src)).toContain('JETH117');
   });
   it('type-annotated binding => JETH116', () => {
@@ -429,7 +429,7 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
     ).toContain('JETH116');
   });
   it('destructuring binding => JETH115', () => {
-    const src = `@struct class P { x: u256; y: u256; } @contract class C { @state ps: P[]; @external @view f(): u256 { let s: u256 = 0n; for (const { x, y } of this.ps) { s = s + x; } return s; } }`;
+    const src = `type P = { x: u256; y: u256; }; class C { ps: P[]; get f(): External<u256> { let s: u256 = 0n; for (const { x, y } of this.ps) { s = s + x; } return s; } }`;
     expect(errCodes(src)).toContain('JETH115');
   });
   it('for-in => JETH111', () => {
@@ -460,14 +460,14 @@ describe('F2 for-of: rejections (codes pinned, no crash)', () => {
   // SUPPORTED: a storage struct-array element is copied into a fresh memory image. Byte-identical
   // to solc (previously over-rejected with JETH900/JETH063).
   it('for-of over struct[] compiles and is byte-identical to solc (struct element supported)', async () => {
-    const J = `@struct class P { x: u256; y: u256; } @contract class C { @state ps: P[]; @external add(x: u256, y: u256): void { this.ps.push(P(x, y)); } @external @view f(): u256 { let s: u256 = 0n; for (const v of this.ps) { s = s + v.x + v.y; } return s; } }`;
+    const J = `type P = { x: u256; y: u256; }; class C { ps: P[]; add(x: u256, y: u256): External<void> { this.ps.push(P(x, y)); } get f(): External<u256> { let s: u256 = 0n; for (const v of this.ps) { s = s + v.x + v.y; } return s; } }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 struct P { uint256 x; uint256 y; }
 contract C { P[] ps; function add(uint256 x, uint256 y) external { ps.push(P(x,y)); } function f() external view returns (uint256){ uint256 s=0; for(uint256 i=0;i<ps.length;i++){ s = s + ps[i].x + ps[i].y; } return s; } }`;
     expect(errCodes(J), 'for-of over struct[] now compiles').toEqual([]);
     // the standalone (typed) struct-element-to-memory local it desugars to also compiles
-    const standalone = `@struct class P { x: u256; y: u256; } @contract class C { @state ps: P[]; @external add(x: u256, y: u256): void { this.ps.push(P(x, y)); } @external @view g(): u256 { let v: P = this.ps[0n]; return v.x; } }`;
+    const standalone = `type P = { x: u256; y: u256; }; class C { ps: P[]; add(x: u256, y: u256): External<void> { this.ps.push(P(x, y)); } get g(): External<u256> { let v: P = this.ps[0n]; return v.x; } }`;
     expect(errCodes(standalone), 'standalone struct-elem -> memory local also compiles').toEqual([]);
     // runtime byte-identical to solc
     const jb = compile(J, { fileName: 'C.jeth' });
@@ -496,14 +496,14 @@ contract C { P[] ps; function add(uint256 x, uint256 y) external { ps.push(P(x,y
 // =====================================================================================
 describe('F2 struct spread: aliasing read-old-then-write + packed slots', () => {
   // P is fully packed into ONE slot: u8 + u8 + address(20) + bool = 30 bytes < 32.
-  const J = `@struct class P { a: u8; b: u8; c: address; d: bool; }
-  @contract class C {
-    @state p: P;
-    @external setRaw(a: u8, b: u8, c: address, d: bool): void { this.p = P(a, b, c, d); }
-    @external bumpA(da: u8): void { this.p = { ...this.p, a: this.p.a + da }; }
-    @external toggleD(): void { this.p = { ...this.p, d: !this.p.d }; }
-    @external setC(c: address): void { this.p = { ...this.p, c: c }; }
-    @external @view get(): P { return this.p; }
+  const J = `type P = { a: u8; b: u8; c: address; d: bool; };
+  class C {
+    p: P;
+    setRaw(a: u8, b: u8, c: address, d: bool): External<void> { this.p = P(a, b, c, d); }
+    bumpA(da: u8): External<void> { this.p = { ...this.p, a: this.p.a + da }; }
+    toggleD(): External<void> { this.p = { ...this.p, d: !this.p.d }; }
+    setC(c: address): External<void> { this.p = { ...this.p, c: c }; }
+    get get(): External<P> { return this.p; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -549,28 +549,28 @@ contract C {
 // =====================================================================================
 describe('F2 struct literal: override / shorthand / field-kind / multi-slot', () => {
   const J = `type Wei = Brand<u256>;
-  @struct class Big { a: u256; b: u256; c: address; d: bool; e: bytes32; f: i64; g: Wei; }
-  @struct class One { only: u256; }
-  @contract class C {
-    @state big: Big;
-    @state one: One;
-    @external @pure mkShorthand(a: u256, b: u256, c: address, d: bool, e: bytes32, f: i64, g: Wei): Big {
+  type Big = { a: u256; b: u256; c: address; d: bool; e: bytes32; f: i64; g: Wei; };
+  type One = { only: u256; };
+  class C {
+    big: Big;
+    one: One;
+    get mkShorthand(a: u256, b: u256, c: address, d: bool, e: bytes32, f: i64, g: Wei): External<Big> {
       return { a, b, c, d, e, f, g };
     }
-    @external @pure mkFull(a: u256, b: u256, c: address, d: bool, e: bytes32, f: i64, g: Wei): Big {
+    get mkFull(a: u256, b: u256, c: address, d: bool, e: bytes32, f: i64, g: Wei): External<Big> {
       return { a: a, b: b, c: c, d: d, e: e, f: f, g: g };
     }
-    @external @pure withCOverride(base: Big, nc: address): Big { return { ...base, c: nc }; }
+    get withCOverride(base: Big, nc: address): External<Big> { return { ...base, c: nc }; }
     // spread + override the SAME field twice in source order is a DUP (JETH233) - tested in rejections.
     // override-wins: spread provides a, then a is overridden.
-    @external @pure overrideWins(base: Big, na: u256): Big { return { ...base, a: na }; }
+    get overrideWins(base: Big, na: u256): External<Big> { return { ...base, a: na }; }
     // override in a different ORDER than declaration (b before a) - must still map by name.
-    @external @pure reorder(base: Big, na: u256, nb: u256): Big { return { ...base, b: nb, a: na }; }
-    @external @pure mkOne(v: u256): One { return { only: v }; }
-    @external storeBig(a: u256, b: u256, c: address, d: bool, e: bytes32, f: i64, g: Wei): void {
+    get reorder(base: Big, na: u256, nb: u256): External<Big> { return { ...base, b: nb, a: na }; }
+    get mkOne(v: u256): External<One> { return { only: v }; }
+    storeBig(a: u256, b: u256, c: address, d: bool, e: bytes32, f: i64, g: Wei): External<void> {
       this.big = { a, b, c, d, e, f, g };
     }
-    @external @view getBig(): Big { return this.big; }
+    get getBig(): External<Big> { return this.big; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -655,21 +655,21 @@ contract C {
 //          calldata / memory-local / storage / another-value struct sources.
 // =====================================================================================
 describe('F2 struct spread: evaluation order + spread-source kinds', () => {
-  const J = `@struct class P { x: u256; y: u256; z: u256; }
-  @contract class C {
-    @state p: P;
-    @external setP(x: u256, y: u256, z: u256): void { this.p = P(x, y, z); }
+  const J = `type P = { x: u256; y: u256; z: u256; };
+  class C {
+    p: P;
+    setP(x: u256, y: u256, z: u256): External<void> { this.p = P(x, y, z); }
     // override x using base.y (cross-field reference in the new value)
-    @external @pure crossField(base: P): P { return { ...base, x: base.y + base.z }; }
+    get crossField(base: P): External<P> { return { ...base, x: base.y + base.z }; }
     // spread a CALLDATA struct param
-    @external @pure fromCd(base: P, nx: u256): P { return { ...base, x: nx }; }
+    get fromCd(base: P, nx: u256): External<P> { return { ...base, x: nx }; }
     // spread a MEMORY local struct
-    @external @pure fromMem(a: u256, b: u256, c: u256, nx: u256): P { let m: P = P(a, b, c); return { ...m, x: nx }; }
+    get fromMem(a: u256, b: u256, c: u256, nx: u256): External<P> { let m: P = P(a, b, c); return { ...m, x: nx }; }
     // spread a STORAGE struct (this.p) and override
-    @external @view fromStorage(nx: u256): P { let s: P = this.p; return { ...s, x: nx }; }
+    get fromStorage(nx: u256): External<P> { let s: P = this.p; return { ...s, x: nx }; }
     // store via spread of storage then read raw slots
-    @external bumpZ(dz: u256): void { this.p = { ...this.p, z: this.p.z + dz }; }
-    @external @view get(): P { return this.p; }
+    bumpZ(dz: u256): External<void> { this.p = { ...this.p, z: this.p.z + dz }; }
+    get get(): External<P> { return this.p; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -709,70 +709,70 @@ describe('F2 struct literal: rejections (codes pinned, no crash)', () => {
     // a nested STATIC struct field constructed INLINE (mirrors positional StructName(...)).
     expect(
       errCodes(
-        `@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @external @pure mk(y: u256): O { return { i: I(0n), y: y }; } }`,
+        `type I = { a: u256; }; type O = { i: I; y: u256; }; class C { get mk(y: u256): External<O> { return { i: I(0n), y: y }; } }`,
       ),
     ).toEqual([]);
     // a non-inline source (a struct local) for a STATIC nested struct field is now also accepted (the
     // codegen copies its leaves); verified byte-identical in fix-all-divergences.test.ts.
     expect(
       errCodes(
-        `@struct class I { a: u256; } @struct class O { i: I; y: u256; } @contract class C { @external @pure mk(y: u256): O { let z: I = I(0n); return { i: z, y: y }; } }`,
+        `type I = { a: u256; }; type O = { i: I; y: u256; }; class C { get mk(y: u256): External<O> { let z: I = I(0n); return { i: z, y: y }; } }`,
       ),
     ).toEqual([]);
   });
   it('dynamic-field (bytes) struct via object literal: a bytes literal is accepted', () => {
     expect(
       errCodes(
-        `@struct class D { x: u256; b: bytes; } @contract class C { @external @pure mk(x: u256): D { return { x: x, b: "hi" }; } }`,
+        `type D = { x: u256; b: bytes; }; class C { get mk(x: u256): External<D> { return { x: x, b: "hi" }; } }`,
       ),
     ).toEqual([]);
   });
   it('array-field struct via object literal: an array LITERAL AND a non-inline fixed-array local both accepted', () => {
     expect(
       errCodes(
-        `@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { return { x: x, arr: [1n,2n] }; } }`,
+        `type A = { x: u256; arr: Arr<u256,2>; }; class C { get mk(x: u256): External<A> { return { x: x, arr: [1n,2n] }; } }`,
       ),
     ).toEqual([]);
     expect(
       errCodes(
-        `@struct class A { x: u256; arr: Arr<u256,2>; } @contract class C { @external @pure mk(x: u256): A { let z: Arr<u256,2> = [1n,2n]; return { x: x, arr: z }; } }`,
+        `type A = { x: u256; arr: Arr<u256,2>; }; class C { get mk(x: u256): External<A> { let z: Arr<u256,2> = [1n,2n]; return { x: x, arr: z }; } }`,
       ),
     ).toEqual([]);
   });
   it('object literal with no struct context (return type u256) => JETH227', () => {
-    const src = `@contract class C { @external @pure f(): u256 { return { x: 1n, y: 2n }; } }`;
+    const src = `class C { get f(): External<u256> { return { x: 1n, y: 2n }; } }`;
     expect(errCodes(src)).toContain('JETH227');
   });
   it('object literal assigned to a non-struct local (u256) => JETH227', () => {
-    const src = `@contract class C { @external @pure f(): u256 { let r: u256 = { x: 1n }; return r; } }`;
+    const src = `class C { get f(): External<u256> { let r: u256 = { x: 1n }; return r; } }`;
     expect(errCodes(src)).toContain('JETH227');
   });
   it('unknown field => JETH232', () => {
-    const src = `@struct class P { x: u256; y: u256; } @contract class C { @external @pure mk(): P { return { x: 1n, y: 2n, z: 3n }; } }`;
+    const src = `type P = { x: u256; y: u256; }; class C { get mk(): External<P> { return { x: 1n, y: 2n, z: 3n }; } }`;
     expect(errCodes(src)).toContain('JETH232');
   });
   it('duplicate field => JETH233', () => {
-    const src = `@struct class P { x: u256; y: u256; } @contract class C { @external @pure mk(): P { return { x: 1n, x: 2n, y: 3n }; } }`;
+    const src = `type P = { x: u256; y: u256; }; class C { get mk(): External<P> { return { x: 1n, x: 2n, y: 3n }; } }`;
     expect(errCodes(src)).toContain('JETH233');
   });
   it('missing field without spread => JETH235', () => {
-    const src = `@struct class P { x: u256; y: u256; } @contract class C { @external @pure mk(): P { return { x: 1n }; } }`;
+    const src = `type P = { x: u256; y: u256; }; class C { get mk(): External<P> { return { x: 1n }; } }`;
     expect(errCodes(src)).toContain('JETH235');
   });
   it('two spreads => JETH230', () => {
-    const src = `@struct class P { x: u256; y: u256; } @contract class C { @external @pure mk(p: P, q: P): P { return { ...p, ...q }; } }`;
+    const src = `type P = { x: u256; y: u256; }; class C { get mk(p: P, q: P): External<P> { return { ...p, ...q }; } }`;
     expect(errCodes(src)).toContain('JETH230');
   });
   it('spread of a DIFFERENT struct type => JETH236', () => {
-    const src = `@struct class P { x: u256; y: u256; } @struct class Q { x: u256; y: u256; } @contract class C { @external @pure mk(q: Q): P { return { ...q, x: 1n }; } }`;
+    const src = `type P = { x: u256; y: u256; }; type Q = { x: u256; y: u256; }; class C { get mk(q: Q): External<P> { return { ...q, x: 1n }; } }`;
     expect(errCodes(src)).toContain('JETH236');
   });
   it('spread of a CALL result => JETH234', () => {
-    const src = `@struct class P { x: u256; y: u256; } @contract class C { id(p: P): P { return p; } @external @pure mk(p: P): P { return { ...id(p), x: 1n }; } }`;
+    const src = `type P = { x: u256; y: u256; }; class C { id(p: P): P { return p; } get mk(p: P): External<P> { return { ...id(p), x: 1n }; } }`;
     expect(errCodes(src)).toContain('JETH234');
   });
   it('mapping-containing struct via literal => JETH247', () => {
-    const src = `@struct class M { x: u256; m: mapping<u256, u256>; } @contract class C { @state s: M; @external f(): void { this.s = { ...this.s, x: 1n }; } }`;
+    const src = `type M = { x: u256; m: mapping<u256, u256>; }; class C { s: M; f(): External<void> { this.s = { ...this.s, x: 1n }; } }`;
     expect(errCodes(src)).toContain('JETH247');
   });
 });
@@ -783,21 +783,21 @@ describe('F2 struct literal: rejections (codes pinned, no crash)', () => {
 //           identical runtime/slots, and both must match solc.
 // =====================================================================================
 describe('F2 struct: spread/literal desugars to the SAME structNew as positional', () => {
-  const POSITIONAL = `@struct class P { x: u256; y: u256; z: address; flag: bool; }
-  @contract class C {
-    @state p: P;
-    @external set(x: u256, y: u256, z: address, f: bool): void { this.p = P(x, y, z, f); }
-    @external bump(dx: u256): void { let cur: P = this.p; this.p = P(cur.x + dx, cur.y, cur.z, cur.flag); }
-    @external @pure mk(x: u256, y: u256, z: address, f: bool): P { return P(x, y, z, f); }
-    @external @view get(): P { return this.p; }
+  const POSITIONAL = `type P = { x: u256; y: u256; z: address; flag: bool; };
+  class C {
+    p: P;
+    set(x: u256, y: u256, z: address, f: bool): External<void> { this.p = P(x, y, z, f); }
+    bump(dx: u256): External<void> { let cur: P = this.p; this.p = P(cur.x + dx, cur.y, cur.z, cur.flag); }
+    get mk(x: u256, y: u256, z: address, f: bool): External<P> { return P(x, y, z, f); }
+    get get(): External<P> { return this.p; }
   }`;
-  const SPREAD = `@struct class P { x: u256; y: u256; z: address; flag: bool; }
-  @contract class C {
-    @state p: P;
-    @external set(x: u256, y: u256, z: address, f: bool): void { this.p = { x: x, y: y, z: z, flag: f }; }
-    @external bump(dx: u256): void { this.p = { ...this.p, x: this.p.x + dx }; }
-    @external @pure mk(x: u256, y: u256, z: address, f: bool): P { return { x, y, z, flag: f }; }
-    @external @view get(): P { return this.p; }
+  const SPREAD = `type P = { x: u256; y: u256; z: address; flag: bool; };
+  class C {
+    p: P;
+    set(x: u256, y: u256, z: address, f: bool): External<void> { this.p = { x: x, y: y, z: z, flag: f }; }
+    bump(dx: u256): External<void> { this.p = { ...this.p, x: this.p.x + dx }; }
+    get mk(x: u256, y: u256, z: address, f: bool): External<P> { return { x, y, z, flag: f }; }
+    get get(): External<P> { return this.p; }
   }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

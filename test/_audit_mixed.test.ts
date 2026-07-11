@@ -12,21 +12,20 @@ function pad(v: bigint): string {
 }
 
 const JETH = `
-@struct class Pt { x: u128; y: u128; }
-@contract
+type Pt = { x: u128; y: u128; };
 class A {
   // static aggregate BEFORE a dynamic array param
-  @external @pure aggThenArr(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return a[2n] + b[i]; }
+  get aggThenArr(a: Arr<u256, 3>, b: u256[], i: u256): External<u256> { return a[2n] + b[i]; }
   // static struct then bytes then dyn array
-  @external @pure structThenDyn(p: Pt, s: bytes, b: u256[], i: u256): u256 { return b[i]; }
-  @external @pure structThenDynY(p: Pt, s: bytes, b: u256[], i: u256): u128 { return p.y; }
+  get structThenDyn(p: Pt, s: bytes, b: u256[], i: u256): External<u256> { return b[i]; }
+  get structThenDynY(p: Pt, s: bytes, b: u256[], i: u256): External<u128> { return p.y; }
   // dyn array, static aggregate, dyn array (aggregate in the MIDDLE)
-  @external @pure arrAggArr(b: u256[], a: Arr<u256, 2>, c: u256[], i: u256): u256 { return b[i] + a[1n] + c[0n]; }
+  get arrAggArr(b: u256[], a: Arr<u256, 2>, c: u256[], i: u256): External<u256> { return b[i] + a[1n] + c[0n]; }
   // two dynamic arrays + a value
-  @external @pure twoArr(b: u256[], c: u256[], i: u256, j: u256): u256 { return b[i] + c[j]; }
+  get twoArr(b: u256[], c: u256[], i: u256, j: u256): External<u256> { return b[i] + c[j]; }
   // fixed-array-of-struct then dyn array
-  @external @pure fasThenArr(ps: Arr<Pt, 2>, b: u256[], i: u256): u128 { return ps[1n].x; }
-  @external @pure fasThenArrB(ps: Arr<Pt, 2>, b: u256[], i: u256): u256 { return b[i]; }
+  get fasThenArr(ps: Arr<Pt, 2>, b: u256[], i: u256): External<u128> { return ps[1n].x; }
+  get fasThenArrB(ps: Arr<Pt, 2>, b: u256[], i: u256): External<u256> { return b[i]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

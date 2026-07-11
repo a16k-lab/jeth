@@ -12,41 +12,40 @@ function pad(v: bigint): string {
 }
 
 const JETH = `
-@struct class Pt { x: u128; y: u128; }
-@struct class Acct { bal: u128; nonce: u64; active: bool; }
-@struct class Inner { a: u128; b: u128; }
-@struct class Outer { p: u64; inner: Inner; q: u64; }
-@struct class WithArr { id: u64; data: Arr<u256, 2>; }
-@struct class Deep { tag: u32; mat: Arr<Arr<u64, 2>, 2>; tail: u16; }
-@struct class Mixed3 { a: address; b: bytes4; c: i64; }
+type Pt = { x: u128; y: u128; };
+type Acct = { bal: u128; nonce: u64; active: bool; };
+type Inner = { a: u128; b: u128; };
+type Outer = { p: u64; inner: Inner; q: u64; };
+type WithArr = { id: u64; data: Arr<u256, 2>; };
+type Deep = { tag: u32; mat: Arr<Arr<u64, 2>, 2>; tail: u16; };
+type Mixed3 = { a: address; b: bytes4; c: i64; };
 
-@contract
 class A {
-  @external @pure sumTriple(a: Arr<u256, 3>): u256 { return a[0n] + a[1n] + a[2n]; }
-  @external @pure pick(a: Arr<u8, 4>, i: u256): u8 { return a[i]; }
-  @external @pure pickI(a: Arr<i64, 4>, i: u256): i64 { return a[i]; }
-  @external @pure pickB(a: Arr<bytes4, 4>, i: u256): bytes4 { return a[i]; }
-  @external @pure pickBool(a: Arr<bool, 4>, i: u256): bool { return a[i]; }
-  @external @pure ptX(p: Pt): u128 { return p.x; }
-  @external @pure ptY(p: Pt): u128 { return p.y; }
-  @external @pure acctNonce(a: Acct): u64 { return a.nonce; }
-  @external @pure acctActive(a: Acct): bool { return a.active; }
-  @external @pure acctBal(a: Acct): u128 { return a.bal; }
-  @external @pure outerInnerA(o: Outer): u128 { return o.inner.a; }
-  @external @pure outerInnerB(o: Outer): u128 { return o.inner.b; }
-  @external @pure outerP(o: Outer): u64 { return o.p; }
-  @external @pure outerQ(o: Outer): u64 { return o.q; }
-  @external @pure withId(t: WithArr): u64 { return t.id; }
-  @external @pure dataAt(t: WithArr, j: u256): u256 { return t.data[j]; }
-  @external @pure ptsX(ps: Arr<Pt, 2>, i: u256): u128 { return ps[i].x; }
-  @external @pure ptsY(ps: Arr<Pt, 2>, i: u256): u128 { return ps[i].y; }
-  @external @pure afterAgg(a: Arr<u256, 3>, x: u256): u256 { return a[2n] + x; }
-  @external @pure deepMat(d: Deep, i: u256, j: u256): u64 { return d.mat[i][j]; }
-  @external @pure deepTail(d: Deep): u16 { return d.tail; }
-  @external @pure deepTag(d: Deep): u32 { return d.tag; }
-  @external @pure mixA(m: Mixed3): address { return m.a; }
-  @external @pure mixB(m: Mixed3): bytes4 { return m.b; }
-  @external @pure mixC(m: Mixed3): i64 { return m.c; }
+  get sumTriple(a: Arr<u256, 3>): External<u256> { return a[0n] + a[1n] + a[2n]; }
+  get pick(a: Arr<u8, 4>, i: u256): External<u8> { return a[i]; }
+  get pickI(a: Arr<i64, 4>, i: u256): External<i64> { return a[i]; }
+  get pickB(a: Arr<bytes4, 4>, i: u256): External<bytes4> { return a[i]; }
+  get pickBool(a: Arr<bool, 4>, i: u256): External<bool> { return a[i]; }
+  get ptX(p: Pt): External<u128> { return p.x; }
+  get ptY(p: Pt): External<u128> { return p.y; }
+  get acctNonce(a: Acct): External<u64> { return a.nonce; }
+  get acctActive(a: Acct): External<bool> { return a.active; }
+  get acctBal(a: Acct): External<u128> { return a.bal; }
+  get outerInnerA(o: Outer): External<u128> { return o.inner.a; }
+  get outerInnerB(o: Outer): External<u128> { return o.inner.b; }
+  get outerP(o: Outer): External<u64> { return o.p; }
+  get outerQ(o: Outer): External<u64> { return o.q; }
+  get withId(t: WithArr): External<u64> { return t.id; }
+  get dataAt(t: WithArr, j: u256): External<u256> { return t.data[j]; }
+  get ptsX(ps: Arr<Pt, 2>, i: u256): External<u128> { return ps[i].x; }
+  get ptsY(ps: Arr<Pt, 2>, i: u256): External<u128> { return ps[i].y; }
+  get afterAgg(a: Arr<u256, 3>, x: u256): External<u256> { return a[2n] + x; }
+  get deepMat(d: Deep, i: u256, j: u256): External<u64> { return d.mat[i][j]; }
+  get deepTail(d: Deep): External<u16> { return d.tail; }
+  get deepTag(d: Deep): External<u32> { return d.tag; }
+  get mixA(m: Mixed3): External<address> { return m.a; }
+  get mixB(m: Mixed3): External<bytes4> { return m.b; }
+  get mixC(m: Mixed3): External<i64> { return m.c; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

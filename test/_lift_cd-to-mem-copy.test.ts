@@ -92,12 +92,9 @@ contract C {
 
 // (B) constructor field from a calldata leaf-array: build P(7, t) then echo the whole struct.
 const ctorJeth = (jty: string) => `
-@struct
-class P { a: u256; tags: ${jty}; }
-@contract
+type P = { a: u256; tags: ${jty}; };
 class C {
-  @external
-  f(t: ${jty}): P {
+  get f(t: ${jty}): External<P> {
     let p: P = P(7n, t);
     return p;
   }
@@ -176,10 +173,8 @@ describe('lift: cd-to-mem-copy (calldata reference-element array -> memory)', ()
 
   it('P[] (static struct) local copy echoes byte-identically', async () => {
     const J = `
-@struct
-class P { a: u256; b: u256; }
-@contract
-class C { @external f(a: P[]): P[] { let row: P[] = a; return row; } }`;
+type P = { a: u256; b: u256; };
+class C { get f(a: P[]): External<P[]> { let row: P[] = a; return row; } }`;
     const S = `
 struct P { uint256 a; uint256 b; }
 contract C { function f(P[] calldata a) external pure returns (P[] memory) { P[] memory row = a; return row; } }`;
@@ -209,8 +204,7 @@ contract C { function f(P[] calldata a) external pure returns (P[] memory) { P[]
 
   it('copied array is a real DEEP copy: usable as an abi.encode arg', async () => {
     const J = `
-@contract
-class C { @external f(a: u256[][]): bytes { let row: u256[][] = a; return abi.encode(row); } }`;
+class C { get f(a: u256[][]): External<bytes> { let row: u256[][] = a; return abi.encode(row); } }`;
     const S = `
 contract C { function f(uint256[][] calldata a) external pure returns (bytes memory) { uint256[][] memory row = a; return abi.encode(row); } }`;
     const { j, s } = await diffCall(J, S, 'f(uint256[][])', arg(nested2Region([[1, 2, 3], [], [9]])));
@@ -329,10 +323,8 @@ contract C { function f(uint256[][] calldata a) external pure returns (bytes mem
 
   it('value-element constructor field (Q(7n, valArr)) unchanged', async () => {
     const J = `
-@struct
-class Q { a: u256; xs: u256[]; }
-@contract
-class C { @external f(t: u256[]): Q { let q: Q = Q(7n, t); return q; } }`;
+type Q = { a: u256; xs: u256[]; };
+class C { get f(t: u256[]): External<Q> { let q: Q = Q(7n, t); return q; } }`;
     const S = `
 struct Q { uint256 a; uint256[] xs; }
 contract C { function f(uint256[] calldata t) external pure returns (Q memory) { Q memory q = Q(7, t); return q; } }`;
@@ -351,10 +343,9 @@ contract C { function f(uint256[] calldata t) external pure returns (Q memory) {
   // ---------------------------------------------------------------------------------------------
   it('storage-source reference-element copy now compiles (lifted)', () => {
     const r = compileJeth(`
-@contract
 class C {
-  @state blobs: bytes[];
-  @external f(): u256 { let row: bytes[] = this.blobs; return u256(row.length); }
+  blobs: bytes[];
+  get f(): External<u256> { let row: bytes[] = this.blobs; return u256(row.length); }
 }`);
     expect(r.ok).toBe(true);
   });
@@ -363,10 +354,8 @@ class C {
     // cd-whole-and-dynstruct-copy LIFT #5: a dyn-struct-element calldata array deep-copies into a pointer-headed
     // memory image via buildDynStructFromCdBase, byte-identical to solc. No longer a JETH900 reject.
     const r = compileJeth(`
-@struct
-class D { a: u256; tag: bytes; }
-@contract
-class C { @external @pure f(a: D[]): D[] { let row: D[] = a; return row; } }`);
+type D = { a: u256; tag: bytes; };
+class C { get f(a: D[]): External<D[]> { let row: D[] = a; return row; } }`);
     expect(r.ok).toBe(true);
   });
 });

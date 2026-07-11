@@ -7,20 +7,19 @@ import { functionSelector } from '../src/selectors.js';
 import { compileSolidity } from './_solidity.js';
 
 const JETH = `
-@struct class P { x: u128; y: u128; }
-@struct class Acct { bal: u128; nonce: u64; active: bool; }
-@struct class Outer { p: u64; inner: P; q: u64; }
-@struct class WithArr { id: u64; data: Arr<u256, 2>; }
-@contract
+type P = { x: u128; y: u128; };
+type Acct = { bal: u128; nonce: u64; active: bool; };
+type Outer = { p: u64; inner: P; q: u64; };
+type WithArr = { id: u64; data: Arr<u256, 2>; };
 class A {
-  @external @pure sumTriple(a: Arr<u256, 3>): u256 { return a[0n] + a[1n] + a[2n]; }
-  @external @pure pick(a: Arr<u8, 4>, i: u256): u8 { return a[i]; }
-  @external @pure acctNonce(a: Acct): u64 { return a.nonce; }
-  @external @pure outerQ(o: Outer): u64 { return o.q; }
-  @external @pure dataAt(t: WithArr, j: u256): u256 { return t.data[j]; }
-  @external @pure ptsX(ps: Arr<P, 2>, i: u256): u128 { return ps[i].x; }
-  @external @pure aggThenArr(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return b[i]; }
-  @external @pure arrAt(b: u256[], i: u256): u256 { return b[i]; }
+  get sumTriple(a: Arr<u256, 3>): External<u256> { return a[0n] + a[1n] + a[2n]; }
+  get pick(a: Arr<u8, 4>, i: u256): External<u8> { return a[i]; }
+  get acctNonce(a: Acct): External<u64> { return a.nonce; }
+  get outerQ(o: Outer): External<u64> { return o.q; }
+  get dataAt(t: WithArr, j: u256): External<u256> { return t.data[j]; }
+  get ptsX(ps: Arr<P, 2>, i: u256): External<u128> { return ps[i].x; }
+  get aggThenArr(a: Arr<u256, 3>, b: u256[], i: u256): External<u256> { return b[i]; }
+  get arrAt(b: u256[], i: u256): External<u256> { return b[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

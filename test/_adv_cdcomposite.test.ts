@@ -19,22 +19,22 @@ const sel = (s: string) => functionSelector(s);
 const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 
 // ---- A single contract exercising every shape / element type under test. -----
-const JETH = `@contract class C {
-  @external @pure dof(a: Arr<u256,2>[], i: u256, j: u256): u256 { return a[i][j]; }
-  @external @pure dofLen(a: Arr<u256,2>[]): u256 { return a.length; }
-  @external @pure dofEcho(a: Arr<u256,2>[]): Arr<u256,2>[] { return a; }
+const JETH = `class C {
+  get dof(a: Arr<u256,2>[], i: u256, j: u256): External<u256> { return a[i][j]; }
+  get dofLen(a: Arr<u256,2>[]): External<u256> { return a.length; }
+  get dofEcho(a: Arr<u256,2>[]): External<Arr<u256,2>[]> { return a; }
 
-  @external @pure fod(a: Arr<u256[],2>, i: u256, j: u256): u256 { return a[i][j]; }
-  @external @pure fodLen(a: Arr<u256[],2>, i: u256): u256 { return a[i].length; }
-  @external @pure fodEcho(a: Arr<u256[],2>): Arr<u256[],2> { return a; }
+  get fod(a: Arr<u256[],2>, i: u256, j: u256): External<u256> { return a[i][j]; }
+  get fodLen(a: Arr<u256[],2>, i: u256): External<u256> { return a[i].length; }
+  get fodEcho(a: Arr<u256[],2>): External<Arr<u256[],2>> { return a; }
 
-  @external @pure dofU8(a: Arr<u8,3>[], i: u256, j: u256): u8 { return a[i][j]; }
-  @external @pure dofI128(a: Arr<i128,2>[], i: u256, j: u256): i128 { return a[i][j]; }
-  @external @pure dofAddr(a: Arr<address,2>[], i: u256, j: u256): address { return a[i][j]; }
-  @external @pure dofB4(a: Arr<bytes4,2>[], i: u256, j: u256): bytes4 { return a[i][j]; }
+  get dofU8(a: Arr<u8,3>[], i: u256, j: u256): External<u8> { return a[i][j]; }
+  get dofI128(a: Arr<i128,2>[], i: u256, j: u256): External<i128> { return a[i][j]; }
+  get dofAddr(a: Arr<address,2>[], i: u256, j: u256): External<address> { return a[i][j]; }
+  get dofB4(a: Arr<bytes4,2>[], i: u256, j: u256): External<bytes4> { return a[i][j]; }
 
-  @external @pure fodU8(a: Arr<u8[],2>, i: u256, j: u256): u8 { return a[i][j]; }
-  @external @pure fodI256(a: Arr<i256[],2>, i: u256, j: u256): i256 { return a[i][j]; }
+  get fodU8(a: Arr<u8[],2>, i: u256, j: u256): External<u8> { return a[i][j]; }
+  get fodI256(a: Arr<i256[],2>, i: u256, j: u256): External<i256> { return a[i][j]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

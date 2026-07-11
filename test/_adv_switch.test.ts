@@ -42,18 +42,18 @@ function eqLogs(a: LogEntry[], b: LogEntry[]) {
 // ABI signature) so a call lands on the same method in both.
 const J = `enum Color { Red, Green, Blue }
 enum Big { A, B, C, D, E }
-@struct class P { a: u256; b: u256; }
-@contract class C {
-  @state n: u256;          // slot 0: side-effect counter for the single-evaluation probe
-  @state hits: u256;       // slot 1: loop accumulator
+type P = { a: u256; b: u256; };
+class C {
+  n: u256;          // slot 0: side-effect counter for the single-evaluation probe
+  hits: u256;       // slot 1: loop accumulator
 
-  @error Boom(code: u256);
-  @event Ping(@indexed k: u256, v: u256);
+  Boom: error<{ code: u256 }>;
+  Ping: event<{ k: indexed<u256>; v: u256 }>;
 
   // --- (1) single evaluation: bumpAndGet() increments n and returns the NEW n; the switch must call
   // it exactly once no matter which arm matches. Mutates storage, so a double-eval shows up in slot 0.
   bumpAndGet(): u256 { this.n = this.n + 1n; return this.n; }
-  @external bumpSwitch(): u256 {
+  bumpSwitch(): External<u256> {
     let r: u256 = 0n;
     switch (this.bumpAndGet()) {
       case 1n: r = 100n; break;
@@ -63,12 +63,12 @@ enum Big { A, B, C, D, E }
     return r;
   }
   // discriminant that is a compound expression (must be computed once, value used by every arm).
-  @external @pure exprDisc(a: u256, b: u256): u256 {
+  get exprDisc(a: u256, b: u256): External<u256> {
     switch (a + b) { case 5n: return 50n; case 6n: return 60n; default: return 0n; }
   }
   // single-eval where the matching arm is an EMPTY-LABEL GROUP: the desugar reads the temp in EVERY
   // OR term (__sw == 2 || __sw == 3). The temp is a const, so re-reading must NOT re-bump n.
-  @external bumpGroup(): u256 {
+  bumpGroup(): External<u256> {
     let r: u256 = 0n;
     switch (this.bumpAndGet()) {
       case 1n: case 2n: case 3n: r = 230n; break;   // reads the temp up to 3 times for one match
@@ -78,7 +78,7 @@ enum Big { A, B, C, D, E }
   }
 
   // --- (2) fall-through grouping: many empty labels share one body; an empty group right before default.
-  @external @pure group(x: u256): u256 {
+  get group(x: u256): External<u256> {
     switch (x) {
       case 1n: case 2n: case 3n: return 100n;     // 3 empty labels share one body
       case 4n: return 40n;                        // a lone non-empty case in the middle
@@ -87,7 +87,7 @@ enum Big { A, B, C, D, E }
     }
   }
   // interleaved empty/non-empty with NO default (uint, falls off the end to the trailing return)
-  @external @pure inter(x: u256): u256 {
+  get inter(x: u256): External<u256> {
     switch (x) {
       case 1n: return 1n;
       case 2n: case 3n: return 23n;
@@ -97,21 +97,21 @@ enum Big { A, B, C, D, E }
   }
 
   // --- (3) every discriminant value type ---
-  @external @pure dEnum(c: Color): u256 { switch (c) { case Color.Red: return 1n; case Color.Green: case Color.Blue: return 2n; } return 0n; }
+  get dEnum(c: Color): External<u256> { switch (c) { case Color.Red: return 1n; case Color.Green: case Color.Blue: return 2n; } return 0n; }
   // exhaustive enum switch with NO default and NO trailing return: an empty-label GROUP (Green+Blue)
   // must count toward exhaustiveness AND route both members to the shared body.
-  @external @pure enumGroupExhaust(c: Color): u256 { switch (c) { case Color.Red: return 1n; case Color.Green: case Color.Blue: return 2n; } }
-  @external @pure dU8(x: u8): u256 { switch (x) { case 0n: return 1n; case 255n: return 2n; default: return 0n; } }
-  @external @pure dI256(x: i256): u256 { switch (x) { case -5n: return 1n; case -1n: return 2n; case 0n: return 3n; case 7n: return 4n; default: return 0n; } }
-  @external @pure dAddr(x: address): u256 { switch (x) { case address(0n): return 1n; case address(0xaan): return 2n; default: return 0n; } }
-  @external @pure dB32(x: bytes32): u256 { switch (x) { case bytes32(u256(0n)): return 1n; case bytes32(u256(0xffn)): return 2n; default: return 0n; } }
-  @external @pure dBool(b: bool): u256 { switch (b) { case true: return 7n; case false: return 8n; } }
+  get enumGroupExhaust(c: Color): External<u256> { switch (c) { case Color.Red: return 1n; case Color.Green: case Color.Blue: return 2n; } }
+  get dU8(x: u8): External<u256> { switch (x) { case 0n: return 1n; case 255n: return 2n; default: return 0n; } }
+  get dI256(x: i256): External<u256> { switch (x) { case -5n: return 1n; case -1n: return 2n; case 0n: return 3n; case 7n: return 4n; default: return 0n; } }
+  get dAddr(x: address): External<u256> { switch (x) { case address(0n): return 1n; case address(0xaan): return 2n; default: return 0n; } }
+  get dB32(x: bytes32): External<u256> { switch (x) { case bytes32(u256(0n)): return 1n; case bytes32(u256(0xffn)): return 2n; default: return 0n; } }
+  get dBool(b: bool): External<u256> { switch (b) { case true: return 7n; case false: return 8n; } }
 
   // --- (4) every terminator form ---
-  @external @pure tReturn(x: u256): u256 { switch (x) { case 1n: return 11n; default: return 0n; } }
-  @external @pure tRevertStr(x: u256): u256 { switch (x) { case 1n: revert("nope"); default: return 0n; } }
-  @external @pure tRevertErr(x: u256): u256 { switch (x) { case 1n: revert(Boom(x)); default: return 0n; } }
-  @external tContinue(x: u256): u256 {        // continue inside a loop terminates the case for that turn
+  get tReturn(x: u256): External<u256> { switch (x) { case 1n: return 11n; default: return 0n; } }
+  get tRevertStr(x: u256): External<u256> { switch (x) { case 1n: revert("nope"); default: return 0n; } }
+  get tRevertErr(x: u256): External<u256> { switch (x) { case 1n: revert(Boom(x)); default: return 0n; } }
+  get tContinue(x: u256): External<u256> {        // continue inside a loop terminates the case for that turn
     let s: u256 = 0n; let i: u256 = 0n;
     for (i = 0n; i < x; i = i + 1n) {
       switch (i) { case 2n: continue; default: s = s + 1n; }
@@ -119,20 +119,20 @@ enum Big { A, B, C, D, E }
     }
     return s;
   }
-  @external tBreak(x: u256): u256 {           // plain break: case ends, control falls past the switch
+  get tBreak(x: u256): External<u256> {           // plain break: case ends, control falls past the switch
     let s: u256 = 0n;
     switch (x) { case 1n: s = 1n; break; default: s = 9n; }
     return s + 1000n;
   }
-  @external @pure tIfElse(x: u256): u256 {    // case body is an if-else where BOTH branches return
+  get tIfElse(x: u256): External<u256> {    // case body is an if-else where BOTH branches return
     switch (x) { case 1n: if (x > 0n) { return 5n; } else { return 6n; } default: return 0n; }
   }
-  @external @pure tBlock(x: u256): u256 {     // case body is a block whose last stmt returns
+  get tBlock(x: u256): External<u256> {     // case body is a block whose last stmt returns
     switch (x) { case 1n: { let y: u256 = x + 1n; return y; } default: return 0n; }
   }
 
   // --- (5) nesting & loops ---
-  @external loopBreak(x: u256): u256 {        // break ends the CASE, never the loop -> loop runs x times
+  loopBreak(x: u256): External<u256> {        // break ends the CASE, never the loop -> loop runs x times
     let i: u256 = 0n;
     for (i = 0n; i < x; i = i + 1n) {
       switch (i) { case 0n: this.hits = this.hits + 1n; break; case 5n: continue; default: this.hits = this.hits + 10n; }
@@ -140,12 +140,12 @@ enum Big { A, B, C, D, E }
     }
     return this.hits;
   }
-  @external @pure whileSwitch(x: u256): u256 {
+  get whileSwitch(x: u256): External<u256> {
     let s: u256 = 0n; let i: u256 = 0n;
     while (i < x) { switch (i) { case 1n: s = s + 7n; break; default: s = s + 1n; } i = i + 1n; }
     return s;
   }
-  @external @pure switchInSwitch(x: u256, c: Color): u256 {   // nested switch with required trailing break
+  get switchInSwitch(x: u256, c: Color): External<u256> {   // nested switch with required trailing break
     let r: u256 = 0n;
     switch (x) {
       case 1n:
@@ -155,55 +155,55 @@ enum Big { A, B, C, D, E }
     }
     return r;
   }
-  @external @pure switchInIf(x: u256, y: u256): u256 {
+  get switchInIf(x: u256, y: u256): External<u256> {
     if (y > 0n) { switch (x) { case 1n: return 1n; default: return 2n; } }
     return 3n;
   }
 
   // --- (6) temp non-collision ---
-  @external @pure twoSwitch(x: u256, y: u256): u256 {   // two sequential switches in one fn
+  get twoSwitch(x: u256, y: u256): External<u256> {   // two sequential switches in one fn
     let r: u256 = 0n;
     switch (x) { case 1n: r = r + 1n; break; default: r = r + 2n; }
     switch (y) { case 1n: r = r + 10n; break; default: r = r + 20n; }
     return r;
   }
-  @external @pure siblingLocal(x: u256): u256 {         // a local named the same in disjoint sibling cases
+  get siblingLocal(x: u256): External<u256> {         // a local named the same in disjoint sibling cases
     switch (x) {
       case 1n: { let v: u256 = 100n; return v; }
       case 2n: { let v: u256 = 200n; return v; }
       default: { let v: u256 = 300n; return v; }
     }
   }
-  @external @pure hotLoop(x: u256): u256 {              // a switch inside a many-iteration loop
+  get hotLoop(x: u256): External<u256> {              // a switch inside a many-iteration loop
     let s: u256 = 0n; let i: u256 = 0n;
     for (i = 0n; i < x; i = i + 1n) { switch (i % 3n) { case 0n: s = s + 1n; break; case 1n: s = s + 2n; break; default: s = s + 3n; } }
     return s;
   }
 
   // --- (7) return shapes through the switch ---
-  @external @pure rStruct(x: u256): P { switch (x) { case 1n: return P(1n, 2n); default: return P(3n, 4n); } }
-  @external @pure rFixed(x: u256): Arr<u256,3> { switch (x) { case 1n: return [1n, 2n, 3n]; default: return [4n, 5n, 6n]; } }
-  @external @pure rTuple(x: u256): [u256, u256] { switch (x) { case 1n: return [10n, 11n]; default: return [20n, 21n]; } }
-  @external @pure rString(x: u256): string { switch (x) { case 1n: return "alpha"; default: return "this string is comfortably longer than thirty-two bytes total!"; } }
+  get rStruct(x: u256): External<P> { switch (x) { case 1n: return P(1n, 2n); default: return P(3n, 4n); } }
+  get rFixed(x: u256): External<Arr<u256,3>> { switch (x) { case 1n: return [1n, 2n, 3n]; default: return [4n, 5n, 6n]; } }
+  get rTuple(x: u256): External<[u256, u256]> { switch (x) { case 1n: return [10n, 11n]; default: return [20n, 21n]; } }
+  get rString(x: u256): External<string> { switch (x) { case 1n: return "alpha"; default: return "this string is comfortably longer than thirty-two bytes total!"; } }
 
   // --- (8) exhaustive enum switch, no default; and a redundant default ---
-  @external @pure exhaust(b: Big): u256 {
+  get exhaust(b: Big): External<u256> {
     switch (b) { case Big.A: return 10n; case Big.B: return 20n; case Big.C: return 30n; case Big.D: return 40n; case Big.E: return 50n; }
   }
-  @external @pure exhaustDef(b: Big): u256 {  // same coverage but with a redundant default
+  get exhaustDef(b: Big): External<u256> {  // same coverage but with a redundant default
     switch (b) { case Big.A: return 10n; case Big.B: return 20n; case Big.C: return 30n; case Big.D: return 40n; case Big.E: return 50n; default: return 999n; }
   }
 
   // --- (9) characterize ACTUAL behavior of non-constant case labels (duplicate CONSTANT labels are
   // now a JETH287 compile error, asserted separately below) ---
-  @external @pure varLabel(x: u256, y: u256): u256 {   // case label is a runtime variable
+  get varLabel(x: u256, y: u256): External<u256> {   // case label is a runtime variable
     switch (x) { case y: return 1n; case 5n: return 2n; default: return 0n; }
   }
-  @external @pure defOnly(x: u256): u256 { switch (x) { default: return 42n; } }
-  @external @pure emptySwitch(x: u256): u256 { switch (x) {} return 7n; }
+  get defOnly(x: u256): External<u256> { switch (x) { default: return 42n; } }
+  get emptySwitch(x: u256): External<u256> { switch (x) {} return 7n; }
 
   // --- event through a switch arm (logs parity) ---
-  @external evSwitch(x: u256): void { switch (x) { case 1n: emit(Ping(x, 100n)); break; default: emit(Ping(x, 999n)); } }
+  evSwitch(x: u256): External<void> { switch (x) { case 1n: emit(Ping(x, 100n)); break; default: emit(Ping(x, 999n)); } }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -475,11 +475,11 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
   it('JETH281: non-value discriminant (string / array / struct)', () => {
     expect(codes(wrap('switch (s) { case "a": return 1n; default: return 0n; }'))).toContain('JETH281');
     expect(
-      codes(`@contract class C { @external @pure f(a: u256[]): u256 { switch (a) { default: return 0n; } } }`),
+      codes(`class C { get f(a: u256[]): External<u256> { switch (a) { default: return 0n; } } }`),
     ).toContain('JETH281');
     expect(
       codes(
-        `@struct class S { a: u256; }\n@contract class C { @external @pure f(s: S): u256 { switch (s) { default: return 0n; } } }`,
+        `type S = { a: u256; };\nclass C { get f(s: S): External<u256> { switch (s) { default: return 0n; } } }`,
       ),
     ).toContain('JETH281');
   });
@@ -499,7 +499,7 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
   it('JETH284: a trailing nested switch is NOT auto-diverting (needs an explicit break)', () => {
     expect(
       codes(
-        `enum E { A, B }\n@contract class C { @external @pure f(x: u256, c: E): u256 {\nswitch (x) { case 1n: switch (c) { case E.A: return 1n; case E.B: return 2n; } default: return 0n; }\nreturn 9n; } }`,
+        `enum E { A, B }\nclass C { get f(x: u256, c: E): External<u256> {\nswitch (x) { case 1n: switch (c) { case E.A: return 1n; case E.B: return 2n; } default: return 0n; }\nreturn 9n; } }`,
       ),
     ).toContain('JETH284');
   });
@@ -542,7 +542,7 @@ describe('ADV switch: soundness / rejections (no crash, right diagnostic)', () =
     // past every visible user name, so the synth temp becomes `__jeth_sw_1` and the user's
     // `__jeth_sw_0` (= 42) is preserved. The contract compiles AND returns 42, byte-identically to the
     // hand-written `let v = 42; if (x == 1) return v; return 0;` twin.
-    const src = `@contract class C { @external @pure f(x: u256): u256 {
+    const src = `class C { get f(x: u256): External<u256> {
       let __jeth_sw_0: u256 = 42n;
       switch (x) { case 1n: return __jeth_sw_0; default: return 0n; }
     } }`;

@@ -34,27 +34,26 @@ function callDyn(selSig: string, staticHead: bigint[], bytes: Uint8Array): strin
 const A1 = BigInt('0x' + '11'.repeat(20));
 
 const JETH = `
-@struct class D { a: u256; s: string; }
-@contract
+type D = { a: u256; s: string; };
 class A {
-  @state recs: D[];                       // slot 0
-  @state byKeyArr: mapping<address, D[]>; // slot 1
-  @external pushRec(a: u256, ss: string): void { this.recs.push(D(a, ss)); }
-  @external popRec(): void { this.recs.pop(); }
-  @external pushEmptyRec(): void { this.recs.push(); }
-  @external setRecS(i: u256, v: string): void { this.recs[i].s = v; }
-  @external setRecA(i: u256, v: u256): void { this.recs[i].a = v; }
-  @external @view recsLen(): u256 { return this.recs.length; }
-  @external @view recAt(i: u256): string { return this.recs[i].s; }
-  @external @view recAtA(i: u256): u256 { return this.recs[i].a; }
-  @external pushKA(k: address, a: u256, ss: string): void { this.byKeyArr[k].push(D(a, ss)); }
-  @external popKA(k: address): void { this.byKeyArr[k].pop(); }
-  @external pushEmptyKA(k: address): void { this.byKeyArr[k].push(); }
-  @external setKAs(k: address, i: u256, v: string): void { this.byKeyArr[k][i].s = v; }
-  @external setKAa(k: address, i: u256, v: u256): void { this.byKeyArr[k][i].a = v; }
-  @external @view kaLen(k: address): u256 { return this.byKeyArr[k].length; }
-  @external @view kaAt(k: address, i: u256): string { return this.byKeyArr[k][i].s; }
-  @external @view kaAtA(k: address, i: u256): u256 { return this.byKeyArr[k][i].a; }
+  recs: D[];                       // slot 0
+  byKeyArr: mapping<address, D[]>; // slot 1
+  pushRec(a: u256, ss: string): External<void> { this.recs.push(D(a, ss)); }
+  popRec(): External<void> { this.recs.pop(); }
+  pushEmptyRec(): External<void> { this.recs.push(); }
+  setRecS(i: u256, v: string): External<void> { this.recs[i].s = v; }
+  setRecA(i: u256, v: u256): External<void> { this.recs[i].a = v; }
+  get recsLen(): External<u256> { return this.recs.length; }
+  get recAt(i: u256): External<string> { return this.recs[i].s; }
+  get recAtA(i: u256): External<u256> { return this.recs[i].a; }
+  pushKA(k: address, a: u256, ss: string): External<void> { this.byKeyArr[k].push(D(a, ss)); }
+  popKA(k: address): External<void> { this.byKeyArr[k].pop(); }
+  pushEmptyKA(k: address): External<void> { this.byKeyArr[k].push(); }
+  setKAs(k: address, i: u256, v: string): External<void> { this.byKeyArr[k][i].s = v; }
+  setKAa(k: address, i: u256, v: u256): External<void> { this.byKeyArr[k][i].a = v; }
+  get kaLen(k: address): External<u256> { return this.byKeyArr[k].length; }
+  get kaAt(k: address, i: u256): External<string> { return this.byKeyArr[k][i].s; }
+  get kaAtA(k: address, i: u256): External<u256> { return this.byKeyArr[k][i].a; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

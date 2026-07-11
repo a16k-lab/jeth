@@ -13,18 +13,17 @@ function pad(v: bigint): string {
 const W = (v: bigint) => pad(v);
 
 const JETH = `
-@struct class Odd { a: u24; b: i40; c: bytes7; d: i8; e: u200; }
-@contract
+type Odd = { a: u24; b: i40; c: bytes7; d: i8; e: u200; };
 class A {
-  @external @pure oa(o: Odd): u24 { return o.a; }
-  @external @pure ob(o: Odd): i40 { return o.b; }
-  @external @pure oc(o: Odd): bytes7 { return o.c; }
-  @external @pure od(o: Odd): i8 { return o.d; }
-  @external @pure oe(o: Odd): u200 { return o.e; }
+  get oa(o: Odd): External<u24> { return o.a; }
+  get ob(o: Odd): External<i40> { return o.b; }
+  get oc(o: Odd): External<bytes7> { return o.c; }
+  get od(o: Odd): External<i8> { return o.d; }
+  get oe(o: Odd): External<u200> { return o.e; }
   // fixed array of odd-width ints
-  @external @pure pi(a: Arr<i24, 3>, i: u256): i24 { return a[i]; }
-  @external @pure pu(a: Arr<u40, 3>, i: u256): u40 { return a[i]; }
-  @external @pure pb(a: Arr<bytes3, 3>, i: u256): bytes3 { return a[i]; }
+  get pi(a: Arr<i24, 3>, i: u256): External<i24> { return a[i]; }
+  get pu(a: Arr<u40, 3>, i: u256): External<u40> { return a[i]; }
+  get pb(a: Arr<bytes3, 3>, i: u256): External<bytes3> { return a[i]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

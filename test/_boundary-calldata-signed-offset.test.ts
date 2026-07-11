@@ -33,7 +33,7 @@ const W = (n: number | bigint) => (((BigInt(n) % (1n << 256n)) + (1n << 256n)) %
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 const setWord = (hex: string, i: number, v: bigint) => { const a = hex.match(/.{64}/g)!; a[i] = W(v); return a.join(''); };
 
-const JETH = '@contract class C { @external @pure fw(a: Arr<bytes,2>): bytes { return abi.encode(a); } }';
+const JETH = 'class C { get fw(a: Arr<bytes,2>): External<bytes> { return abi.encode(a); } }';
 const SOL = 'contract C { function fw(bytes[2] calldata a) external pure returns(bytes memory){ return abi.encode(a); } }';
 // well-formed a = ["aa","bb"]: [off_a=0x20][off0=0x40][off1=0x80][len2,"aa"][len2,"bb"]
 const WF = W(0x20) + W(0x40) + W(0x80) + W(2) + '6161'.padEnd(64, '0') + W(2) + '6262'.padEnd(64, '0');

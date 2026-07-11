@@ -37,60 +37,60 @@ const TSLOT = 'e3c13ce1a6dbca2cd747af6cfb37b5bfaa572cf58e51980e617e5acd973fa8b3'
 // Storage layout: slot 0 = x (u256), slot 1 = arr (u256[]).
 // ---------------------------------------------------------------------------------------------
 const JETH = `
-@struct class P { a: u256; b: u256; }
-@contract class V {
-  @state x: u256;
-  @state arr: u256[];
-  @error Bad(code: u256);
-  @event Hit(@indexed who: u256, n: u256);
+type P = { a: u256; b: u256; };
+class V {
+  x: u256;
+  arr: u256[];
+  Bad: error<{ code: u256 }>;
+  Hit: event<{ who: indexed<u256>; n: u256 }>;
 
   // --- EVERY-RETURN-PATH-RESETS (each mutates x on its taken path so the twin's x advances too) ---
   // 1. early return before any state write
-  @nonReentrant @external earlyRet(a: u256): u256 { if (a == 0n) { return 99n; } this.x = this.x + 1n; return this.x; }
+  @nonReentrant earlyRet(a: u256): External<u256> { if (a == 0n) { return 99n; } this.x = this.x + 1n; return this.x; }
   // 2. return inside for, while, do-while, and AFTER a loop
-  @nonReentrant @external inForRet(n: u256): u256 { this.x = this.x + 1n; for (let i: u256 = 0n; i < n; i = i + 1n) { if (i == 2n) { return i; } } return 100n; }
-  @nonReentrant @external inWhileRet(n: u256): u256 { this.x = this.x + 1n; let i: u256 = 0n; while (i < n) { if (i == 1n) { return i; } i = i + 1n; } return 200n; }
-  @nonReentrant @external inDoWhileRet(n: u256): u256 { this.x = this.x + 1n; let i: u256 = 0n; do { if (i == 5n) { return 7n; } i = i + 1n; } while (i < n); return 300n; }
+  @nonReentrant inForRet(n: u256): External<u256> { this.x = this.x + 1n; for (let i: u256 = 0n; i < n; i = i + 1n) { if (i == 2n) { return i; } } return 100n; }
+  @nonReentrant inWhileRet(n: u256): External<u256> { this.x = this.x + 1n; let i: u256 = 0n; while (i < n) { if (i == 1n) { return i; } i = i + 1n; } return 200n; }
+  @nonReentrant inDoWhileRet(n: u256): External<u256> { this.x = this.x + 1n; let i: u256 = 0n; do { if (i == 5n) { return 7n; } i = i + 1n; } while (i < n); return 300n; }
   // 3. nested if/else and a for-inside-if
-  @nonReentrant @external nested(a: u256, b: u256): u256 { this.x = this.x + 1n; if (a > b) { if (a > 10n) { return 1n; } else { return 2n; } } else { for (let i: u256 = 0n; i < b; i = i + 1n) { if (i == a) { return 3n; } } return 4n; } }
+  @nonReentrant nested(a: u256, b: u256): External<u256> { this.x = this.x + 1n; if (a > b) { if (a > 10n) { return 1n; } else { return 2n; } } else { for (let i: u256 = 0n; i < b; i = i + 1n) { if (i == a) { return 3n; } } return 4n; } }
   // 4. multiple distinct returns: if-chain + ternary
-  @nonReentrant @external multi(a: u256): u256 { this.x = this.x + 1n; if (a == 1n) { return 11n; } if (a == 2n) { return 22n; } return a > 5n ? 55n : 66n; }
+  @nonReentrant multi(a: u256): External<u256> { this.x = this.x + 1n; if (a == 1n) { return 11n; } if (a == 2n) { return 22n; } return a > 5n ? 55n : 66n; }
   // 5. non-value returns: struct, fixed array, string, multi-value tuple
-  @nonReentrant @external retStruct(a: u256): P { this.x = this.x + 1n; return P(a, a + 1n); }
-  @nonReentrant @external retArr(a: u256): Arr<u256, 3> { this.x = this.x + 1n; return [a, a + 1n, a + 2n]; }
-  @nonReentrant @external retStr(a: u256): string { this.x = this.x + 1n; if (a == 0n) { return ""; } return "hello-world-this-is-a-fairly-long-string-over-32"; }
-  @nonReentrant @external retTuple(a: u256): [u256, u256] { this.x = this.x + 1n; return [a, a + 1n]; }
+  @nonReentrant retStruct(a: u256): External<P> { this.x = this.x + 1n; return P(a, a + 1n); }
+  @nonReentrant retArr(a: u256): External<Arr<u256, 3>> { this.x = this.x + 1n; return [a, a + 1n, a + 2n]; }
+  @nonReentrant retStr(a: u256): External<string> { this.x = this.x + 1n; if (a == 0n) { return ""; } return "hello-world-this-is-a-fairly-long-string-over-32"; }
+  @nonReentrant retTuple(a: u256): External<[u256, u256]> { this.x = this.x + 1n; return [a, a + 1n]; }
   // 6. void fall-through, and value fall-through (implicit zero)
-  @nonReentrant @external voidFall(): void { this.x = this.x + 1n; }
-  @nonReentrant @external valFall(a: u256): u256 { this.x = this.x + 1n; if (a == 999n) { return 1n; } }
+  @nonReentrant voidFall(): External<void> { this.x = this.x + 1n; }
+  @nonReentrant valFall(a: u256): External<u256> { this.x = this.x + 1n; if (a == 999n) { return 1n; } }
   // 7. empty body, and event-then-return
-  @nonReentrant @external emptyBody(): void {}
-  @nonReentrant @external evtRet(n: u256): void { this.x = this.x + 1n; emit(Hit(7n, n)); }
+  @nonReentrant emptyBody(): External<void> {}
+  @nonReentrant evtRet(n: u256): External<void> { this.x = this.x + 1n; emit(Hit(7n, n)); }
 
   // --- REVERT PATHS (must rely on EIP-1153 rollback, no explicit reset) ---
-  @nonReentrant @external reqFalse(): void { this.x = this.x + 1n; require(false, "no"); }
-  @nonReentrant @external revMsg(): void { this.x = this.x + 1n; revert("boom"); }
-  @nonReentrant @external custErr(): void { this.x = this.x + 1n; revert(Bad(5n)); }
-  @nonReentrant @external doOverflow(a: u256): u256 { this.x = this.x + 1n; return a + type(u256).max; }
-  @nonReentrant @external doDivZero(a: u256, b: u256): u256 { this.x = this.x + 1n; return a / b; }
-  @nonReentrant @external doOob(i: u256): u256 { this.x = this.x + 1n; return this.arr[i]; }
+  @nonReentrant reqFalse(): External<void> { this.x = this.x + 1n; require(false, "no"); }
+  @nonReentrant revMsg(): External<void> { this.x = this.x + 1n; revert("boom"); }
+  @nonReentrant custErr(): External<void> { this.x = this.x + 1n; revert(Bad(5n)); }
+  @nonReentrant doOverflow(a: u256): External<u256> { this.x = this.x + 1n; return a + type(u256).max; }
+  @nonReentrant doDivZero(a: u256, b: u256): External<u256> { this.x = this.x + 1n; return a / b; }
+  @nonReentrant doOob(i: u256): External<u256> { this.x = this.x + 1n; return this.arr[i]; }
 
   // --- INTERACTIONS ---
   // 9. payable: callvalue handling + guard
-  @nonReentrant @payable @external dep(): u256 { this.x = this.x + 1n; return msg.value; }
+  @nonReentrant dep(): Payable<u256> { this.x = this.x + 1n; return msg.value; }
   // 10. struct param (calldata decode before the guard)
-  @nonReentrant @external structParam(p: P): u256 { this.x = this.x + 1n; return p.a + p.b; }
+  @nonReentrant structParam(p: P): External<u256> { this.x = this.x + 1n; return p.a + p.b; }
   // 11. events byte-identical
-  @nonReentrant @external manyEvt(n: u256): void { this.x = this.x + 1n; emit(Hit(1n, n)); emit(Hit(2n, n + 1n)); }
+  @nonReentrant manyEvt(n: u256): External<void> { this.x = this.x + 1n; emit(Hit(1n, n)); emit(Hit(2n, n + 1n)); }
   // 12. a SECOND guarded fn that shares the same mutex with bump-style functions
-  @nonReentrant @external bump(): u256 { this.x = this.x + 1n; return this.x; }
+  @nonReentrant bump(): External<u256> { this.x = this.x + 1n; return this.x; }
 
   // --- EXOTIC return shapes (each lowers to a distinct return( shape; multi-entry must reset) ---
-  @nonReentrant @external echoDynArr(a: u256[]): u256[] { this.x = this.x + 1n; return a; }
-  @nonReentrant @external echoStr2(s: string): string { this.x = this.x + 1n; return s; }
-  @nonReentrant @external echoStructDyn(d: P): P { this.x = this.x + 1n; return d; }
-  @nonReentrant @external tupTriple(a: u256): [u256, u256, u256] { this.x = this.x + 1n; return [a, a + 1n, a + 2n]; }
-  @nonReentrant @external manyRet(a: u256): u256 {
+  @nonReentrant echoDynArr(a: u256[]): External<u256[]> { this.x = this.x + 1n; return a; }
+  @nonReentrant echoStr2(s: string): External<string> { this.x = this.x + 1n; return s; }
+  @nonReentrant echoStructDyn(d: P): External<P> { this.x = this.x + 1n; return d; }
+  @nonReentrant tupTriple(a: u256): External<[u256, u256, u256]> { this.x = this.x + 1n; return [a, a + 1n, a + 2n]; }
+  @nonReentrant manyRet(a: u256): External<u256> {
     this.x = this.x + 1n;
     if (a == 0n) { return 0n; }
     if (a == 1n) { return 1n; }
@@ -100,7 +100,7 @@ const JETH = `
     return a;
   }
 
-  @external @view get(): u256 { return this.x; }
+  get get(): External<u256> { return this.x; }
 }`;
 
 // ---------------------------------------------------------------------------------------------
@@ -466,8 +466,8 @@ describe('F4 @nonReentrant ADVERSARIAL: every return path resets vs a transient-
     // below); the F4 invariant we CAN assert is that wrapping the SAME body in @nonReentrant does
     // not change the returned bytes at all. We compile a tiny twin pair of JETH contracts that
     // differ ONLY by the decorator and compare their returndata + runtime behavior.
-    const guarded = `@contract class W { @state x: u256; @nonReentrant @external f(a: u256): Arr<u256,3> { this.x = this.x + 1n; return [a, a + 1n, a + 2n]; } }`;
-    const plain = `@contract class W { @state x: u256; @external f(a: u256): Arr<u256,3> { this.x = this.x + 1n; return [a, a + 1n, a + 2n]; } }`;
+    const guarded = `class W { x: u256; @nonReentrant f(a: u256): External<Arr<u256,3>> { this.x = this.x + 1n; return [a, a + 1n, a + 2n]; } }`;
+    const plain = `class W { x: u256; f(a: u256): External<Arr<u256,3>> { this.x = this.x + 1n; return [a, a + 1n, a + 2n]; } }`;
     const gh = await Harness.create();
     const gv = await gh.deploy(compile(guarded, { fileName: 'W.jeth' }).creationBytecode);
     const pv = await gh.deploy(compile(plain, { fileName: 'W.jeth' }).creationBytecode);
@@ -551,13 +551,13 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
   });
 
   it('rejects @nonReentrant on / / with JETH261', () => {
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
+    expect(tryCompile(`class C { x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
       'JETH261',
     );
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
+    expect(tryCompile(`class C { x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
       'JETH261',
     );
-    expect(tryCompile(`@contract class C { @state x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
+    expect(tryCompile(`class C { x: u256; @nonReentrant f(): void { this.x = 1n; } }`)).toContain(
       'JETH261',
     );
   });
@@ -567,21 +567,21 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
     // BARE-name call f() from inside the contract is rejected by "cannot internally call @external" (JETH240).
     expect(
       tryCompile(
-        `@contract class C { @state x: u256; @nonReentrant @external f(): void { this.x = 1n; } @external g(): void { f(); } }`,
+        `class C { x: u256; @nonReentrant f(): External<void> { this.x = 1n; } g(): External<void> { f(); } }`,
       ),
     ).toContain('JETH240');
     // this.f() from a NON-pure @external function is a real external self-call to address(this) that runs
     // the guard normally - byte-identical to solc (external-self-call.test.ts), so it COMPILES clean.
     expect(
       tryCompile(
-        `@contract class C { @state x: u256; @nonReentrant @external f(): void { this.x = 1n; } @external g(): void { this.f(); } }`,
+        `class C { x: u256; @nonReentrant f(): External<void> { this.x = 1n; } g(): External<void> { this.f(); } }`,
       ),
     ).toEqual([]);
   });
 
   it('the guard does NOT change the ABI/selector/mutability vs the same fn without the decorator', () => {
-    const guarded = `@contract class V { @state x: u256; @nonReentrant @external bump(): u256 { this.x = this.x + 1n; return this.x; } @nonReentrant @payable @external dep(): u256 { return msg.value; } }`;
-    const plain = `@contract class V { @state x: u256; @external bump(): u256 { this.x = this.x + 1n; return this.x; } @payable @external dep(): u256 { return msg.value; } }`;
+    const guarded = `class V { x: u256; @nonReentrant bump(): External<u256> { this.x = this.x + 1n; return this.x; } @nonReentrant dep(): Payable<u256> { return msg.value; } }`;
+    const plain = `class V { x: u256; bump(): External<u256> { this.x = this.x + 1n; return this.x; } dep(): Payable<u256> { return msg.value; } }`;
     const pick = (abi: any[]) =>
       abi
         .filter((e) => e.type === 'function')
@@ -606,7 +606,7 @@ describe('F4 @nonReentrant soundness: validation codes + ABI/selector parity', (
 // ---------------------------------------------------------------------------------------------
 describe('static fixed-array literal return matches solc (regression)', () => {
   it('Arr<u256,3> array-literal return equals solc uint256[3] (bare 3 words, no wrapper)', async () => {
-    const J = `@contract class V { @external @pure litArr(a: u256): Arr<u256,3> { return [a, a + 1n, a + 2n]; } }`;
+    const J = `class V { get litArr(a: u256): External<Arr<u256,3>> { return [a, a + 1n, a + 2n]; } }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract V { function litArr(uint256 a) external pure returns (uint256[3] memory) { return [a, a + 1, a + 2]; } }`;

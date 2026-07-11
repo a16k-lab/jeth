@@ -13,18 +13,17 @@ function pad(v: bigint): string {
 const W = (v: bigint) => pad(v);
 
 const JETH = `
-@struct class D { a: u256; s: bytes; }
-@contract
+type D = { a: u256; s: bytes; };
 class A {
-  @external @pure aggThenD(p: Arr<u256,3>, d: D): u256 { return d.a; }
-  @external @pure aggThenDlen(p: Arr<u256,3>, d: D): u256 { return d.s.length; }
-  @external @pure arrThenD(b: u256[], d: D, i: u256): u256 { return d.a; }
-  @external @pure dThenArr(d: D, b: u256[], i: u256): u256 { return b[i]; }
-  @external @pure dThenArrA(d: D, b: u256[], i: u256): u256 { return d.a; }
-  @external @pure twoD(d: D, e: D): u256 { return d.a; }
-  @external @pure twoDe(d: D, e: D): u256 { return e.a; }
-  @external @pure valDval(x: u256, d: D, y: u256): u256 { return d.a; }
-  @external @pure valDvalY(x: u256, d: D, y: u256): u256 { return y; }
+  get aggThenD(p: Arr<u256,3>, d: D): External<u256> { return d.a; }
+  get aggThenDlen(p: Arr<u256,3>, d: D): External<u256> { return d.s.length; }
+  get arrThenD(b: u256[], d: D, i: u256): External<u256> { return d.a; }
+  get dThenArr(d: D, b: u256[], i: u256): External<u256> { return b[i]; }
+  get dThenArrA(d: D, b: u256[], i: u256): External<u256> { return d.a; }
+  get twoD(d: D, e: D): External<u256> { return d.a; }
+  get twoDe(d: D, e: D): External<u256> { return e.a; }
+  get valDval(x: u256, d: D, y: u256): External<u256> { return d.a; }
+  get valDvalY(x: u256, d: D, y: u256): External<u256> { return y; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

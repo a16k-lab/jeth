@@ -14,24 +14,23 @@ function pad(v: bigint): string {
 const W = (v: bigint) => pad(v);
 
 const JETH = `
-@struct class P { x: u128; y: u128; }
-@struct class S { id: u64; ps: Arr<P, 2>; }
-@struct class Inner { a: u128; data: Arr<u256, 3>; }
-@struct class Outer { id: u64; inner: Inner; tail: u16; }
-@contract
+type P = { x: u128; y: u128; };
+type S = { id: u64; ps: Arr<P, 2>; };
+type Inner = { a: u128; data: Arr<u256, 3>; };
+type Outer = { id: u64; inner: Inner; tail: u16; };
 class A {
   // struct with fixed-array-of-struct field, deep read s.ps[i].x / .y
-  @external @pure spx(s: S, i: u256): u128 { return s.ps[i].x; }
-  @external @pure spy(s: S, i: u256): u128 { return s.ps[i].y; }
-  @external @pure sid(s: S): u64 { return s.id; }
+  get spx(s: S, i: u256): External<u128> { return s.ps[i].x; }
+  get spy(s: S, i: u256): External<u128> { return s.ps[i].y; }
+  get sid(s: S): External<u64> { return s.id; }
   // nested struct-with-array, deep o.inner.data[j], o.inner.a, o.tail
-  @external @pure odata(o: Outer, j: u256): u256 { return o.inner.data[j]; }
-  @external @pure oinnerA(o: Outer): u128 { return o.inner.a; }
-  @external @pure otail(o: Outer): u16 { return o.tail; }
-  @external @pure oid(o: Outer): u64 { return o.id; }
+  get odata(o: Outer, j: u256): External<u256> { return o.inner.data[j]; }
+  get oinnerA(o: Outer): External<u128> { return o.inner.a; }
+  get otail(o: Outer): External<u16> { return o.tail; }
+  get oid(o: Outer): External<u64> { return o.id; }
   // fixed-array-of-fixed-array-of-struct param a[i][j].x
-  @external @pure aax(a: Arr<Arr<P, 2>, 2>, i: u256, j: u256): u128 { return a[i][j].x; }
-  @external @pure aay(a: Arr<Arr<P, 2>, 2>, i: u256, j: u256): u128 { return a[i][j].y; }
+  get aax(a: Arr<Arr<P, 2>, 2>, i: u256, j: u256): External<u128> { return a[i][j].x; }
+  get aay(a: Arr<Arr<P, 2>, 2>, i: u256, j: u256): External<u128> { return a[i][j].y; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

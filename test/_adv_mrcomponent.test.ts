@@ -49,45 +49,45 @@ const encNestedU256 = (rows: bigint[][]) => encDynElemArr(rows.map(encU256Arr));
 const bytesNword = (loBytes: bigint, n: number) => (wrap(loBytes % (1n << BigInt(8 * n))) << BigInt(8 * (32 - n))) % M;
 
 // All contracts under test. One contract keeps the harness simple.
-const JETH = `@struct class D { a: u256; s: string; }
-@struct class E { a: u8; s: string; }
-@contract class C {
-  @state sn: u256 = 77n;
+const JETH = `type D = { a: u256; s: string; };
+type E = { a: u8; s: string; };
+class C {
+  sn: u256 = 77n;
   // narrow-field dynamic struct (solc VALIDATES the u8 field -> dirty reverts) as component
-  @external @pure aEstruct(e: E): [E, u256] { return [e, 1n]; }
-  @external @pure aEarr(es: E[]): [E[], u256] { return [es, 1n]; }
-  @external @pure pEsecond(n: u256, e: E): [u256, E] { return [n, e]; }
+  get aEstruct(e: E): External<[E, u256]> { return [e, 1n]; }
+  get aEarr(es: E[]): External<[E[], u256]> { return [es, 1n]; }
+  get pEsecond(n: u256, e: E): External<[u256, E]> { return [n, e]; }
   // --- element-type variety, calldata array as SOLE-position component ---
-  @external @pure aU256(xs: u256[]): [u256[], u256] { return [xs, 5n]; }
-  @external @pure aU8(xs: u8[]): [u8[], u256] { return [xs, 5n]; }
-  @external @pure aBool(xs: bool[]): [bool[], u256] { return [xs, 5n]; }
-  @external @pure aAddr(xs: address[]): [address[], u256] { return [xs, 5n]; }
-  @external @pure aI128(xs: i128[]): [i128[], u256] { return [xs, 5n]; }
-  @external @pure aI40(xs: i40[]): [i40[], u256] { return [xs, 5n]; }
-  @external @pure aB32(xs: bytes32[]): [bytes32[], u256] { return [xs, 5n]; }
-  @external @pure aB4(xs: bytes4[]): [bytes4[], u256] { return [xs, 5n]; }
-  @external @pure aStr(xs: string[]): [string[], u256] { return [xs, 5n]; }
-  @external @pure aBytes(xs: bytes[]): [bytes[], u256] { return [xs, 5n]; }
-  @external @pure aDarr(xs: D[]): [D[], u256] { return [xs, 5n]; }
-  @external @pure aNested(xs: u256[][]): [u256[][], u256] { return [xs, 5n]; }
-  @external @pure aFixedOfDyn(xs: Arr<u256,2>[]): [Arr<u256,2>[], u256] { return [xs, 5n]; }
-  @external @pure aDstruct(d: D): [D, u256] { return [d, 9n]; }
+  get aU256(xs: u256[]): External<[u256[], u256]> { return [xs, 5n]; }
+  get aU8(xs: u8[]): External<[u8[], u256]> { return [xs, 5n]; }
+  get aBool(xs: bool[]): External<[bool[], u256]> { return [xs, 5n]; }
+  get aAddr(xs: address[]): External<[address[], u256]> { return [xs, 5n]; }
+  get aI128(xs: i128[]): External<[i128[], u256]> { return [xs, 5n]; }
+  get aI40(xs: i40[]): External<[i40[], u256]> { return [xs, 5n]; }
+  get aB32(xs: bytes32[]): External<[bytes32[], u256]> { return [xs, 5n]; }
+  get aB4(xs: bytes4[]): External<[bytes4[], u256]> { return [xs, 5n]; }
+  get aStr(xs: string[]): External<[string[], u256]> { return [xs, 5n]; }
+  get aBytes(xs: bytes[]): External<[bytes[], u256]> { return [xs, 5n]; }
+  get aDarr(xs: D[]): External<[D[], u256]> { return [xs, 5n]; }
+  get aNested(xs: u256[][]): External<[u256[][], u256]> { return [xs, 5n]; }
+  get aFixedOfDyn(xs: Arr<u256,2>[]): External<[Arr<u256,2>[], u256]> { return [xs, 5n]; }
+  get aDstruct(d: D): External<[D, u256]> { return [d, 9n]; }
   // --- component POSITION variety ---
-  @external @pure pSecond(ss: string[]): [u256, string[]] { return [3n, ss]; }
-  @external @pure pMid(a: u256, xs: u256[], b: u256): [u256, u256[], u256] { return [a, xs, b]; }
-  @external @pure pTwoArr(xs: u256[], ys: u256[]): [u256[], u256[]] { return [xs, ys]; }
-  @external @pure pTwoStruct(d1: D, d2: D): [D, D] { return [d1, d2]; }
-  @external @pure pArrThenStruct(xs: u256[], d: D): [u256[], D] { return [xs, d]; }
-  @external @pure pStructThenArr(d: D, xs: u256[]): [D, u256[]] { return [d, xs]; }
-  @external @pure pBytesThenArr(b: bytes, xs: u256[]): [bytes, u256[]] { return [b, xs]; }
-  @external @pure pArrThenBytes(xs: u256[], b: bytes): [u256[], bytes] { return [xs, b]; }
-  @external @pure pStrThenArr(s: string, xs: u256[]): [string, u256[]] { return [s, xs]; }
+  get pSecond(ss: string[]): External<[u256, string[]]> { return [3n, ss]; }
+  get pMid(a: u256, xs: u256[], b: u256): External<[u256, u256[], u256]> { return [a, xs, b]; }
+  get pTwoArr(xs: u256[], ys: u256[]): External<[u256[], u256[]]> { return [xs, ys]; }
+  get pTwoStruct(d1: D, d2: D): External<[D, D]> { return [d1, d2]; }
+  get pArrThenStruct(xs: u256[], d: D): External<[u256[], D]> { return [xs, d]; }
+  get pStructThenArr(d: D, xs: u256[]): External<[D, u256[]]> { return [d, xs]; }
+  get pBytesThenArr(b: bytes, xs: u256[]): External<[bytes, u256[]]> { return [b, xs]; }
+  get pArrThenBytes(xs: u256[], b: bytes): External<[u256[], bytes]> { return [xs, b]; }
+  get pStrThenArr(s: string, xs: u256[]): External<[string, u256[]]> { return [s, xs]; }
   // interleave value / calldata-array / bytes / string / storage components
-  @external @view pAll(n: u256, xs: u256[], b: bytes, s: string): [u256, u256[], bytes, string, u256] { return [n, xs, b, s, this.sn]; }
+  get pAll(n: u256, xs: u256[], b: bytes, s: string): External<[u256, u256[], bytes, string, u256]> { return [n, xs, b, s, this.sn]; }
   // --- consistency: same array returned as SOLE component (existing echo) ---
-  @external @pure soleArr(xs: u256[]): u256[] { return xs; }
-  @external @pure soleStr(xs: string[]): string[] { return xs; }
-  @external @pure soleD(d: D): D { return d; }
+  get soleArr(xs: u256[]): External<u256[]> { return xs; }
+  get soleStr(xs: string[]): External<string[]> { return xs; }
+  get soleD(d: D): External<D> { return d; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

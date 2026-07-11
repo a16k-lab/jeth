@@ -19,14 +19,13 @@ const W = (v: bigint) => pad(v);
 const HB = 1n << 255n; // high bit set
 
 const JETH = `
-@struct class D { a: u256; s: bytes; }
-@contract
+type D = { a: u256; s: bytes; };
 class A {
-  @external @pure dLen(d: D): u256 { return d.s.length; }
-  @external @pure dGet(d: D): bytes { return d.s; }
-  @external @pure dByte(d: D, i: u256): bytes1 { return d.s[i]; }
-  @external @pure mGet(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
-  @external @pure sElem(a: string[], i: u256): string { return a[i]; }
+  get dLen(d: D): External<u256> { return d.s.length; }
+  get dGet(d: D): External<bytes> { return d.s; }
+  get dByte(d: D, i: u256): External<bytes1> { return d.s[i]; }
+  get mGet(m: u256[][], i: u256, j: u256): External<u256> { return m[i][j]; }
+  get sElem(a: string[], i: u256): External<string> { return a[i]; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

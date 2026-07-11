@@ -25,28 +25,27 @@ const LONG = 'this is a multi-word string longer than thirty-two bytes total her
 
 // ---------- string[][][] ----------
 const J3 = `
-@contract
 class C {
-  @state a: string[][][];
-  @external build(): void {
+  a: string[][][];
+  build(): External<void> {
     this.a.push([["alpha"], ["beta", "gamma"]]);
     this.a.push([["${LONG}"]]);
   }
-  @external pushLocal(): void {
+  pushLocal(): External<void> {
     let row: string[][] = [["loc1", "loc2"]];
     this.a.push(row);
   }
-  @external popThenShorter(): void {
+  popThenShorter(): External<void> {
     this.a.pop();
     this.a.push([["short"]]);
   }
-  @external push2(): void {
+  push2(): External<void> {
     this.a.push([["p2a"], ["p2b"]]);
   }
-  @external @view g(i: u256, j: u256, k: u256): string { return this.a[i][j][k]; }
-  @external @view outerLen(): u256 { return u256(this.a.length); }
-  @external @view midLen(i: u256): u256 { return u256(this.a[i].length); }
-  @external @view innLen(i: u256, j: u256): u256 { return u256(this.a[i][j].length); }
+  get g(i: u256, j: u256, k: u256): External<string> { return this.a[i][j][k]; }
+  get outerLen(): External<u256> { return u256(this.a.length); }
+  get midLen(i: u256): External<u256> { return u256(this.a[i].length); }
+  get innLen(i: u256, j: u256): External<u256> { return u256(this.a[i][j].length); }
 }`;
 const S3 = `${SPDX}contract C {
   string[][][] a;
@@ -75,21 +74,20 @@ const S3 = `${SPDX}contract C {
 
 // ---------- bytes[][][] ----------
 const Jb = `
-@contract
 class C {
-  @state a: bytes[][][];
-  @external build(): void {
+  a: bytes[][][];
+  build(): External<void> {
     let inner: bytes[] = [bytes("hello"), bytes("a multi-word bytes value longer than thirty-two bytes here ok")];
     let mid: bytes[][] = [inner];
     this.a.push(mid);
   }
-  @external popShorter(): void {
+  popShorter(): External<void> {
     this.a.pop();
     let s: bytes[][] = [[bytes("z")]];
     this.a.push(s);
   }
-  @external @view g(i: u256, j: u256, k: u256): bytes { return this.a[i][j][k]; }
-  @external @view outerLen(): u256 { return u256(this.a.length); }
+  get g(i: u256, j: u256, k: u256): External<bytes> { return this.a[i][j][k]; }
+  get outerLen(): External<u256> { return u256(this.a.length); }
 }`;
 const Sb = `${SPDX}contract C {
   bytes[][][] a;
@@ -112,12 +110,11 @@ const Sb = `${SPDX}contract C {
 
 // ---------- string[][][][] (depth 4) ----------
 const J4 = `
-@contract
 class C {
-  @state a: string[][][][];
-  @external build(): void { this.a.push([[["deep four level value here longer than thirty two bytes total xx"]]]); }
-  @external @view g(i: u256, j: u256, k: u256, l: u256): string { return this.a[i][j][k][l]; }
-  @external @view outerLen(): u256 { return u256(this.a.length); }
+  a: string[][][][];
+  build(): External<void> { this.a.push([[["deep four level value here longer than thirty two bytes total xx"]]]); }
+  get g(i: u256, j: u256, k: u256, l: u256): External<string> { return this.a[i][j][k][l]; }
+  get outerLen(): External<u256> { return u256(this.a.length); }
 }`;
 const S4 = `${SPDX}contract C {
   string[][][][] a;

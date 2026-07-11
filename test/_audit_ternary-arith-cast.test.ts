@@ -82,28 +82,28 @@ async function slotsEq(p: Pair, label: string, slots: bigint[], mism: string[]) 
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // Contract A: VALUE ternary + short-circuit of untaken reverting/side-effecting branch.
 // ════════════════════════════════════════════════════════════════════════════════════════════
-const JA = `@contract class C {
-  @state seq: u256;
+const JA = `class C {
+  seq: u256;
   // basic value ternary, narrow result type (truncation parity)
-  @external @pure pick8(c: bool, a: u8, b: u8): u8 { return c ? a : b; }
-  @external @pure pickI16(c: bool, a: i16, b: i16): i16 { return c ? a : b; }
+  get pick8(c: bool, a: u8, b: u8): External<u8> { return c ? a : b; }
+  get pickI16(c: bool, a: i16, b: i16): External<i16> { return c ? a : b; }
   // condition computed from arithmetic; untaken branch DIVIDES BY ZERO -> must short-circuit
-  @external @pure divGuard(a: u256, b: u256): u256 { return b == 0n ? 0n : a / b; }
+  get divGuard(a: u256, b: u256): External<u256> { return b == 0n ? 0n : a / b; }
   // untaken branch OVERFLOWS (checked) -> must not fire when condition picks safe branch
-  @external @pure ovGuard(c: bool, a: u256, b: u256): u256 { return c ? a : a * b; }
+  get ovGuard(c: bool, a: u256, b: u256): External<u256> { return c ? a : a * b; }
   // untaken branch is INT_MIN negation -> Panic only if taken. The zero arm needs an explicit i256
   // cast to match solc's int256(0): solc types each ternary branch by its OWN mobile type (a
   // non-negative literal is unsigned), so a bare 0 vs the signed -a has no common type (JETH417).
-  @external @pure negGuard(c: bool, a: i256): i256 { return c ? i256(0n) : -a; }
+  get negGuard(c: bool, a: i256): External<i256> { return c ? i256(0n) : -a; }
   // nested value ternary with three side-effecting writes; only one path runs
-  @external nestedSeq(c: bool, d: bool): u256 { this.seq = 0n; let r: u256 = c ? (this.seq = this.seq + 1n) : (d ? (this.seq = this.seq + 2n) : (this.seq = this.seq + 3n)); return this.seq * 10n + r; }
+  nestedSeq(c: bool, d: bool): External<u256> { this.seq = 0n; let r: u256 = c ? (this.seq = this.seq + 1n) : (d ? (this.seq = this.seq + 2n) : (this.seq = this.seq + 3n)); return this.seq * 10n + r; }
   // ternary result widened to wider type (implicit widen of both arms)
-  @external @pure widenArms(c: bool, a: u8, b: u16): u256 { return u256(c ? u16(a) : b); }
+  get widenArms(c: bool, a: u8, b: u16): External<u256> { return u256(c ? u16(a) : b); }
   // ternary as operand of arithmetic (precedence / cleaning)
-  @external @pure ternArith(c: bool, a: u8, b: u8): u8 { return (c ? a : b) + 1n; }
+  get ternArith(c: bool, a: u8, b: u8): External<u8> { return (c ? a : b) + 1n; }
   // dirty-bool condition: any nonzero word is "true" in solc once cleaned; param is bool
-  @external @pure boolPick(c: bool, a: u256, b: u256): u256 { return c ? a : b; }
-  @external @view getSeq(): u256 { return this.seq; }
+  get boolPick(c: bool, a: u256, b: u256): External<u256> { return c ? a : b; }
+  get getSeq(): External<u256> { return this.seq; }
 }`;
 const SA = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -127,19 +127,19 @@ contract C {
 // ════════════════════════════════════════════════════════════════════════════════════════════
 const SHORT = 'yes',
   LONG = 'no, this is a string that runs well past thirty-two bytes for the long case';
-const JB = `@contract class C {
-  @state a: string; @state b: string;
-  @event Ev(s: string);
-  @external setAB(x: string, y: string): void { this.a = x; this.b = y; }
-  @external @pure lit(c: bool): string { return c ? "${SHORT}" : "${LONG}"; }
-  @external @view stor(c: bool): string { let s: string = c ? this.a : this.b; return s; }
-  @external @pure cd(c: bool, x: string, y: string): string { return c ? x : y; }
-  @external @pure cdLen(c: bool, x: bytes, y: bytes): u256 { return (c ? x : y).length; }
-  @external @pure nested(c: bool, d: bool, x: string, y: string): string { return c ? (d ? x : y) : "fallback string that is also over thirty-two bytes long ok"; }
+const JB = `class C {
+  a: string; b: string;
+  Ev: event<{ s: string }>;
+  setAB(x: string, y: string): External<void> { this.a = x; this.b = y; }
+  get lit(c: bool): External<string> { return c ? "${SHORT}" : "${LONG}"; }
+  get stor(c: bool): External<string> { let s: string = c ? this.a : this.b; return s; }
+  get cd(c: bool, x: string, y: string): External<string> { return c ? x : y; }
+  get cdLen(c: bool, x: bytes, y: bytes): External<u256> { return (c ? x : y).length; }
+  get nested(c: bool, d: bool, x: string, y: string): External<string> { return c ? (d ? x : y) : "fallback string that is also over thirty-two bytes long ok"; }
   // ternary with a memory-local branch
-  @external @pure memLocal(c: bool, x: string): string { let m: string = "local literal value that exceeds thirty two bytes for the heap path"; return c ? x : m; }
+  get memLocal(c: bool, x: string): External<string> { let m: string = "local literal value that exceeds thirty two bytes for the heap path"; return c ? x : m; }
   // ternary string as event arg (log parity)
-  @external emitPick(c: bool, x: string, y: string): void { emit(Ev(c ? x : y)); }
+  emitPick(c: bool, x: string, y: string): External<void> { emit(Ev(c ? x : y)); }
 }`;
 const SB = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -160,29 +160,29 @@ contract C {
 // Contract D: static struct / fixed-array ternary — storage-copy independence, untaken reverting
 // ctor branch, nested aggregate ternary, packed/signed/bytesN fields.
 // ════════════════════════════════════════════════════════════════════════════════════════════
-const JD = `@struct class P { a: u256; b: u8; c: address; d: i128; e: bool; f: bytes32; }
-@contract class C {
-  @state x: P; @state y: P; @state z: P;
-  @state ax: Arr<u256,3>; @state ay: Arr<u256,3>;
-  @external seed(): void {
+const JD = `type P = { a: u256; b: u8; c: address; d: i128; e: bool; f: bytes32; };
+class C {
+  x: P; y: P; z: P;
+  ax: Arr<u256,3>; ay: Arr<u256,3>;
+  seed(): External<void> {
     this.x = P(11n, 200n, address(0xa1n), -5n, true, bytes32(u256(0x1122n)));
     this.y = P(33n, 44n, address(0xb2n), 99n, false, bytes32(u256(0xdeadbeefn)));
     this.z = P(55n, 66n, address(0xc3n), -77n, true, bytes32(u256(0xfeedn)));
     this.ax[0n] = 1n; this.ax[1n] = 2n; this.ax[2n] = 3n;
     this.ay[0n] = 7n; this.ay[1n] = 8n; this.ay[2n] = 9n;
   }
-  @external @view getX(): P { return this.x; }
-  @external @view getY(): P { return this.y; }
-  @external @view pickStruct(c: bool): P { return c ? this.x : this.y; }
-  @external @view pickArr(c: bool): Arr<u256,3> { return c ? this.ax : this.ay; }
-  @external @view fieldD(c: bool): i128 { let p: P = c ? this.x : this.y; return p.d; }
+  get getX(): External<P> { return this.x; }
+  get getY(): External<P> { return this.y; }
+  get pickStruct(c: bool): External<P> { return c ? this.x : this.y; }
+  get pickArr(c: bool): External<Arr<u256,3>> { return c ? this.ax : this.ay; }
+  get fieldD(c: bool): External<i128> { let p: P = c ? this.x : this.y; return p.d; }
   // mutate the copied local: storage must be untouched
-  @external mutLocal(c: bool): P { let p: P = c ? this.x : this.y; p.a = 7777n; p.b = 1n; p.d = -42n; p.e = false; return p; }
+  get mutLocal(c: bool): External<P> { let p: P = c ? this.x : this.y; p.a = 7777n; p.b = 1n; p.d = -42n; p.e = false; return p; }
   // nested aggregate ternary
-  @external @view nestedAgg(c: bool, d: bool): P { return c ? this.x : (d ? this.y : this.z); }
+  get nestedAgg(c: bool, d: bool): External<P> { return c ? this.x : (d ? this.y : this.z); }
   // untaken ctor branch divides by zero -> short-circuit
-  @external divBranch(c: bool, v: u256): P { return c ? this.x : P(1000n / v, 2n, address(0n), 0n, false, bytes32(u256(0n))); }
-  @external @view getArr(i: u256): u256 { return this.ax[i]; }
+  get divBranch(c: bool, v: u256): External<P> { return c ? this.x : P(1000n / v, 2n, address(0n), 0n, false, bytes32(u256(0n))); }
+  get getArr(i: u256): External<u256> { return this.ax[i]; }
 }`;
 const SD = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -211,47 +211,47 @@ contract C {
 // Contract E: ARITHMETIC + CASTS at many widths (checked overflow Panic 0x11, /0 Panic 0x12,
 // INT_MIN/-1, negation, exponentiation, unchecked wrap, implicit widen, explicit casts).
 // ════════════════════════════════════════════════════════════════════════════════════════════
-const JE = `@contract class C {
-  @external @pure addU8(a: u8, b: u8): u8 { return a + b; }
-  @external @pure subU8(a: u8, b: u8): u8 { return a - b; }
-  @external @pure mulU8(a: u8, b: u8): u8 { return a * b; }
-  @external @pure addI8(a: i8, b: i8): i8 { return a + b; }
-  @external @pure subI8(a: i8, b: i8): i8 { return a - b; }
-  @external @pure mulI8(a: i8, b: i8): i8 { return a * b; }
-  @external @pure divI8(a: i8, b: i8): i8 { return a / b; }
-  @external @pure modI8(a: i8, b: i8): i8 { return a % b; }
-  @external @pure negI8(a: i8): i8 { return -a; }
-  @external @pure addU256(a: u256, b: u256): u256 { return a + b; }
-  @external @pure subU256(a: u256, b: u256): u256 { return a - b; }
-  @external @pure mulU256(a: u256, b: u256): u256 { return a * b; }
-  @external @pure divI256(a: i256, b: i256): i256 { return a / b; }
-  @external @pure modI256(a: i256, b: i256): i256 { return a % b; }
-  @external @pure negI256(a: i256): i256 { return -a; }
-  @external @pure powU8(a: u8, b: u8): u8 { return a ** b; }
-  @external @pure powI8(a: i8, b: u8): i8 { return a ** b; }
-  @external @pure powU256(a: u256, b: u256): u256 { return a ** b; }
+const JE = `class C {
+  get addU8(a: u8, b: u8): External<u8> { return a + b; }
+  get subU8(a: u8, b: u8): External<u8> { return a - b; }
+  get mulU8(a: u8, b: u8): External<u8> { return a * b; }
+  get addI8(a: i8, b: i8): External<i8> { return a + b; }
+  get subI8(a: i8, b: i8): External<i8> { return a - b; }
+  get mulI8(a: i8, b: i8): External<i8> { return a * b; }
+  get divI8(a: i8, b: i8): External<i8> { return a / b; }
+  get modI8(a: i8, b: i8): External<i8> { return a % b; }
+  get negI8(a: i8): External<i8> { return -a; }
+  get addU256(a: u256, b: u256): External<u256> { return a + b; }
+  get subU256(a: u256, b: u256): External<u256> { return a - b; }
+  get mulU256(a: u256, b: u256): External<u256> { return a * b; }
+  get divI256(a: i256, b: i256): External<i256> { return a / b; }
+  get modI256(a: i256, b: i256): External<i256> { return a % b; }
+  get negI256(a: i256): External<i256> { return -a; }
+  get powU8(a: u8, b: u8): External<u8> { return a ** b; }
+  get powI8(a: i8, b: u8): External<i8> { return a ** b; }
+  get powU256(a: u256, b: u256): External<u256> { return a ** b; }
   // unchecked variants
-  @external @pure uAddU8(a: u8, b: u8): u8 { unchecked: { return a + b; } }
-  @external @pure uMulU8(a: u8, b: u8): u8 { unchecked: { return a * b; } }
-  @external @pure uNegI8(a: i8): i8 { unchecked: { return -a; } }
-  @external @pure uPowU8(a: u8, b: u8): u8 { unchecked: { return a ** b; } }
-  @external @pure uSubU256(a: u256, b: u256): u256 { unchecked: { return a - b; } }
+  get uAddU8(a: u8, b: u8): External<u8> { unchecked: { return a + b; } }
+  get uMulU8(a: u8, b: u8): External<u8> { unchecked: { return a * b; } }
+  get uNegI8(a: i8): External<i8> { unchecked: { return -a; } }
+  get uPowU8(a: u8, b: u8): External<u8> { unchecked: { return a ** b; } }
+  get uSubU256(a: u256, b: u256): External<u256> { unchecked: { return a - b; } }
   // implicit widening chains
-  @external @pure widen(a: u8, b: u16, c: u32): u64 { return a + b + c; }
-  @external @pure widenMul(a: i8, b: i64): i128 { return a * b; }
+  get widen(a: u8, b: u16, c: u32): External<u64> { return a + b + c; }
+  get widenMul(a: i8, b: i64): External<i128> { return a * b; }
   // explicit casts: truncate / sign-extend / mask
-  @external @pure narrow(a: u256): u8 { return u8(a); }
-  @external @pure signExt(a: i8): i256 { return i256(a); }
-  @external @pure u2i(a: u8): i8 { return i8(a); }
-  @external @pure i2u(a: i8): u8 { return u8(a); }
-  @external @pure b1u8(a: bytes1): u8 { return u8(a); }
-  @external @pure u8b1(a: u8): bytes1 { return bytes1(a); }
-  @external @pure b32b4(a: bytes32): bytes4 { return bytes4(a); }
-  @external @pure b4b32(a: bytes4): bytes32 { return bytes32(a); }
-  @external @pure addrU160(a: address): u160 { return u160(a); }
-  @external @pure u160addr(a: u160): address { return address(a); }
-  @external @pure i24round(a: i24): i24 { return i24(u24(a)); }
-  @external @pure castInTern(c: bool, a: u256): u8 { return c ? u8(a) : 0n; }
+  get narrow(a: u256): External<u8> { return u8(a); }
+  get signExt(a: i8): External<i256> { return i256(a); }
+  get u2i(a: u8): External<i8> { return i8(a); }
+  get i2u(a: i8): External<u8> { return u8(a); }
+  get b1u8(a: bytes1): External<u8> { return u8(a); }
+  get u8b1(a: u8): External<bytes1> { return bytes1(a); }
+  get b32b4(a: bytes32): External<bytes4> { return bytes4(a); }
+  get b4b32(a: bytes4): External<bytes32> { return bytes32(a); }
+  get addrU160(a: address): External<u160> { return u160(a); }
+  get u160addr(a: u160): External<address> { return address(a); }
+  get i24round(a: i24): External<i24> { return i24(u24(a)); }
+  get castInTern(c: bool, a: u256): External<u8> { return c ? u8(a) : 0n; }
 }`;
 const SE = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -298,40 +298,40 @@ contract C {
 // ════════════════════════════════════════════════════════════════════════════════════════════
 // Contract F: evaluation ORDER + control flow + require/revert/custom-error reasons.
 // ════════════════════════════════════════════════════════════════════════════════════════════
-const JF = `@contract class C {
-  @error Er2(x: u256, y: u256);
-  @event Ev3(a: u256, b: u256, c: u256);
+const JF = `class C {
+  Er2: error<{ x: u256; y: u256 }>;
+  Ev3: event<{ a: u256; b: u256; c: u256 }>;
   // binary operands RIGHT-to-LEFT
-  @external @pure subOrder(): u256 { let s: u256 = 0n; let r: u256 = (s = s * 10n + 1n) - (s = s * 10n + 2n) + 100n; return s * 1000n + r; }
-  @external @pure mulOrder(): u256 { let s: u256 = 0n; let r: u256 = (s = s * 10n + 3n) * (s = s * 10n + 5n); return s * 1000n + r; }
+  get subOrder(): External<u256> { let s: u256 = 0n; let r: u256 = (s = s * 10n + 1n) - (s = s * 10n + 2n) + 100n; return s * 1000n + r; }
+  get mulOrder(): External<u256> { let s: u256 = 0n; let r: u256 = (s = s * 10n + 3n) * (s = s * 10n + 5n); return s * 1000n + r; }
   // arg lists LEFT-to-RIGHT
-  @external @pure argOrder(): u256 { let s: u256 = 0n; return this.sum3((s = s*10n+1n),(s = s*10n+2n),(s = s*10n+3n)) * 10000n + s; }
-  @pure sum3(a: u256, b: u256, c: u256): u256 { return a * 100n + b * 10n + c; }
+  get argOrder(): External<u256> { let s: u256 = 0n; return this.sum3((s = s*10n+1n),(s = s*10n+2n),(s = s*10n+3n)) * 10000n + s; }
+  sum3(a: u256, b: u256, c: u256): u256 { return a * 100n + b * 10n + c; }
   // inc/dec in operands
-  @external @pure incBin(): u256 { let x: u256 = 5n; let y: u256 = (++x) * 100n + (++x); return x * 100000n + y; }
-  @external @pure postBin(): u256 { let x: u256 = 5n; let y: u256 = (x++) * 100n + (x++); return x * 100000n + y; }
+  get incBin(): External<u256> { let x: u256 = 5n; let y: u256 = (++x) * 100n + (++x); return x * 100000n + y; }
+  get postBin(): External<u256> { let x: u256 = 5n; let y: u256 = (x++) * 100n + (x++); return x * 100000n + y; }
   // ternary in operand: branch selection order with side effects
-  @external @pure ternOrder(c: bool): u256 { let s: u256 = 0n; let r: u256 = (c ? (s = s*10n+1n) : (s = s*10n+2n)) + (s = s*10n+9n); return s * 1000n + r; }
+  get ternOrder(c: bool): External<u256> { let s: u256 = 0n; let r: u256 = (c ? (s = s*10n+1n) : (s = s*10n+2n)) + (s = s*10n+9n); return s * 1000n + r; }
   // for loop accumulation (overflow inside loop -> revert parity)
-  @external @pure factorial(n: u256): u256 { let r: u256 = 1n; for (let i: u256 = 1n; i <= n; i += 1n) { r *= i; } return r; }
+  get factorial(n: u256): External<u256> { let r: u256 = 1n; for (let i: u256 = 1n; i <= n; i += 1n) { r *= i; } return r; }
   // while with break/continue
-  @external @pure skipEven(n: u256): u256 { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { i += 1n; if (i % 2n == 0n) { continue; } s += i; } return s; }
-  @external @pure breakAt(n: u256, k: u256): u256 { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { if (i == k) { break; } s += i; } return s; }
+  get skipEven(n: u256): External<u256> { let s: u256 = 0n; let i: u256 = 0n; while (i < n) { i += 1n; if (i % 2n == 0n) { continue; } s += i; } return s; }
+  get breakAt(n: u256, k: u256): External<u256> { let s: u256 = 0n; for (let i: u256 = 0n; i < n; i += 1n) { if (i == k) { break; } s += i; } return s; }
   // if/else-if classify
-  @external @pure classify(x: u256): u256 { if (x < 10n) { return 1n; } else if (x < 20n) { return 2n; } else { return 3n; } }
+  get classify(x: u256): External<u256> { if (x < 10n) { return 1n; } else if (x < 20n) { return 2n; } else { return 3n; } }
   // require with string reason
-  @external @pure reqStr(a: u256): u256 { require(a > 0n, "must be positive"); return a; }
+  get reqStr(a: u256): External<u256> { require(a > 0n, "must be positive"); return a; }
   // require with custom error, eager arg eval (left to right)
-  @external @pure reqErr(a: u256, b: u256): u256 { require(a > b, Er2(a, b)); return a; }
+  get reqErr(a: u256, b: u256): External<u256> { require(a > b, Er2(a, b)); return a; }
   // revert with custom error + side-effecting args
-  @external @pure revArgs(): u256 { let s: u256 = 0n; revert(Er2((s = s*10n+1n), (s = s*10n+2n))); }
+  get revArgs(): External<u256> { let s: u256 = 0n; revert(Er2((s = s*10n+1n), (s = s*10n+2n))); }
   // revert with bare string
-  @external @pure revStr(): void { revert("boom long reason string that is definitely over thirty-two bytes ok"); }
+  revStr(): External<void> { revert("boom long reason string that is definitely over thirty-two bytes ok"); }
   // emit with side-effecting args (left to right) + log parity
-  @external emitOrd(): u256 { let s: u256 = 0n; emit(Ev3((s=s*10n+1n),(s=s*10n+2n),(s=s*10n+3n))); return s; }
+  emitOrd(): External<u256> { let s: u256 = 0n; emit(Ev3((s=s*10n+1n),(s=s*10n+2n),(s=s*10n+3n))); return s; }
   // short-circuit && / || (no divide-by-zero when guarded)
-  @external @pure scAnd(a: u256): bool { return (a > 0n) && ((10n / a) > 0n); }
-  @external @pure scOr(a: u256): bool { return (a == 0n) || ((10n / a) > 5n); }
+  get scAnd(a: u256): External<bool> { return (a > 0n) && ((10n / a) > 0n); }
+  get scOr(a: u256): External<bool> { return (a == 0n) || ((10n / a) > 5n); }
 }`;
 const SF = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

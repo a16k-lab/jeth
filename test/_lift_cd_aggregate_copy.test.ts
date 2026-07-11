@@ -43,8 +43,8 @@ async function expectSame(a: { aj: any; as: any }, sig: string, cd: string) {
 describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (return xs[i])', () => {
   it('Arr<P,2>[] -> Arr<P,2> (static-struct fixed sub-array, inline)', async () => {
     const a = await pair(
-      `@struct class P { a: u256; b: u256; }
-       @contract class C { @external f(xs: Arr<P,2>[], i: u256): Arr<P,2> { return xs[i]; } }`,
+      `type P = { a: u256; b: u256; };
+       class C { get f(xs: Arr<P,2>[], i: u256): External<Arr<P,2>> { return xs[i]; } }`,
       `struct P { uint256 a; uint256 b; }
        contract C { function f(P[2][] calldata xs, uint256 i) external pure returns (P[2] memory) { return xs[i]; } }`,
     );
@@ -57,8 +57,8 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
 
   it('P[][] -> P[] (dynamic static-struct sub-array, [0x20] wrapper)', async () => {
     const a = await pair(
-      `@struct class P { a: u256; b: u256; }
-       @contract class C { @external f(xs: P[][], i: u256): P[] { return xs[i]; } }`,
+      `type P = { a: u256; b: u256; };
+       class C { get f(xs: P[][], i: u256): External<P[]> { return xs[i]; } }`,
       `struct P { uint256 a; uint256 b; }
        contract C { function f(P[][] calldata xs, uint256 i) external pure returns (P[] memory) { return xs[i]; } }`,
     );
@@ -77,7 +77,7 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
 
   it('u256[][] -> u256[] (value-leaf), oversized inner len empty-reverts (not Panic 0x41)', async () => {
     const a = await pair(
-      `@contract class C { @external f(xs: u256[][], i: u256): u256[] { return xs[i]; } }`,
+      `class C { get f(xs: u256[][], i: u256): External<u256[]> { return xs[i]; } }`,
       `contract C { function f(uint256[][] calldata xs, uint256 i) external pure returns (uint256[] memory) { return xs[i]; } }`,
     );
     const E0 = W(3) + W(1) + W(2) + W(3);
@@ -93,7 +93,7 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
 
   it('Arr<u256,3>[] -> Arr<u256,3> (value-fixed leaf, inline)', async () => {
     const a = await pair(
-      `@contract class C { @external f(xs: Arr<u256,3>[], i: u256): Arr<u256,3> { return xs[i]; } }`,
+      `class C { get f(xs: Arr<u256,3>[], i: u256): External<Arr<u256,3>> { return xs[i]; } }`,
       `contract C { function f(uint256[3][] calldata xs, uint256 i) external pure returns (uint256[3] memory) { return xs[i]; } }`,
     );
     const xs = W(2) + W(1) + W(2) + W(3) + W(4) + W(5) + W(6);
@@ -104,7 +104,7 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
 
   it('deeper nesting: u256[][][] and P[][][] return xs[i]', async () => {
     const av = await pair(
-      `@contract class C { @external f(xs: u256[][][], i: u256): u256[][] { return xs[i]; } }`,
+      `class C { get f(xs: u256[][][], i: u256): External<u256[][]> { return xs[i]; } }`,
       `contract C { function f(uint256[][][] calldata xs, uint256 i) external pure returns (uint256[][] memory) { return xs[i]; } }`,
     );
     {
@@ -116,8 +116,8 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
       await expectSame(av, 'f(uint256[][][],uint256)', W(0x40) + W(0) + W(1) + W(0x20) + E0);
     }
     const ap = await pair(
-      `@struct class P { a: u256; b: u256; }
-       @contract class C { @external f(xs: P[][][], i: u256): P[][] { return xs[i]; } }`,
+      `type P = { a: u256; b: u256; };
+       class C { get f(xs: P[][][], i: u256): External<P[][]> { return xs[i]; } }`,
       `struct P { uint256 a; uint256 b; }
        contract C { function f(P[][][] calldata xs, uint256 i) external pure returns (P[][] memory) { return xs[i]; } }`,
     );
@@ -133,7 +133,7 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
 
   it('whole bytes[][] element (return xs[i] -> bytes[]) is byte-identical', async () => {
     const ap = await pair(
-      `@contract class C { @external @pure f(xs: bytes[][], i: u256): bytes[] { return xs[i]; } }`,
+      `class C { get f(xs: bytes[][], i: u256): External<bytes[]> { return xs[i]; } }`,
       `contract C { function f(bytes[][] calldata xs, uint256 i) external pure returns (bytes[] memory) { return xs[i]; } }`,
     );
     // outer offset table for 2 inner bytes[]; inner0 = ["hi", 40-byte], inner1 = []
@@ -161,7 +161,7 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
 
   it('whole D[][] element (return xs[i] -> D[], D dynamic) is byte-identical', async () => {
     const ap = await pair(
-      `@struct class D{a:u256;b:bytes;} @contract class C { @external @pure f(xs: D[][], i: u256): D[] { return xs[i]; } }`,
+      `type D = {a:u256;b:bytes;}; class C { get f(xs: D[][], i: u256): External<D[]> { return xs[i]; } }`,
       `struct D{uint256 a;bytes b;} contract C { function f(D[][] calldata xs, uint256 i) external pure returns (D[] memory) { return xs[i]; } }`,
     );
     const dynD = (a: number, s: string) => {
@@ -189,11 +189,11 @@ describe('LIFT #1: whole sub-aggregate element of a calldata array-of-array (ret
 
 describe('LIFT #5: dynamic-struct-element calldata array deep copy (let row: D[] = a)', () => {
   // D{a:u256; xs:u256[]; b:bytes}: a value field, a dynamic value-array field, a bytes field.
-  const J = `@struct class D{ a:u256; xs:u256[]; b:bytes; }
-    @contract class C{
-      @external f1(a:D[], i:u256):u256{ let row:D[]=a; return row[i].a; }
-      @external f2(a:D[], i:u256, j:u256):u256{ let row:D[]=a; return row[i].xs[j]; }
-      @external f3(a:D[], i:u256):bytes{ let row:D[]=a; return row[i].b; }
+  const J = `type D = { a:u256; xs:u256[]; b:bytes; };
+    class C{
+      get f1(a:D[], i:u256):External<u256>{ let row:D[]=a; return row[i].a; }
+      get f2(a:D[], i:u256, j:u256):External<u256>{ let row:D[]=a; return row[i].xs[j]; }
+      get f3(a:D[], i:u256):External<bytes>{ let row:D[]=a; return row[i].b; }
     }`;
   const S = `struct D{ uint256 a; uint256[] xs; bytes b; }
     contract C{
@@ -247,7 +247,7 @@ describe('LIFT #5: dynamic-struct-element calldata array deep copy (let row: D[]
 
   it('malformed calldata: oversized inner length -> Panic 0x41; truncated/OOB -> empty revert', async () => {
     const a = await pair(
-      `@struct class D{a:u256;b:bytes;} @contract class C{ @external f(a:D[], i:u256):u256{ let row:D[]=a; return row[i].a; } }`,
+      `type D = {a:u256;b:bytes;}; class C{ get f(a:D[], i:u256):External<u256>{ let row:D[]=a; return row[i].a; } }`,
       `struct D{uint256 a;bytes b;} contract C{ function f(D[] calldata a, uint256 i) external pure returns(uint256){ D[] memory row=a; return row[i].a; } }`,
     );
     const sig = 'f(D[],uint256)';
@@ -263,9 +263,9 @@ describe('LIFT #5: dynamic-struct-element calldata array deep copy (let row: D[]
 
   it('dyn-struct with a bytes[] leaf-array field (Cat-C field codec)', async () => {
     const a = await pair(
-      `@struct class D{ a:u256; tags:bytes[]; }
-       @contract class C{ @external f(a:D[], i:u256, j:u256):bytes{ let row:D[]=a; return row[i].tags[j]; }
-         @external g(a:D[], i:u256):u256{ let row:D[]=a; return row[i].a; } }`,
+      `type D = { a:u256; tags:bytes[]; };
+       class C{ get f(a:D[], i:u256, j:u256):External<bytes>{ let row:D[]=a; return row[i].tags[j]; }
+         get g(a:D[], i:u256):External<u256>{ let row:D[]=a; return row[i].a; } }`,
       `struct D{ uint256 a; bytes[] tags; }
        contract C{ function f(D[] calldata a, uint256 i, uint256 j) external pure returns(bytes memory){ D[] memory row=a; return row[i].tags[j]; }
          function g(D[] calldata a, uint256 i) external pure returns(uint256){ D[] memory row=a; return row[i].a; } }`,

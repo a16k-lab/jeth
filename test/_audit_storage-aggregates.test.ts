@@ -88,20 +88,20 @@ const MAXU = M - 1n;
 // 1. Packed struct: full-slot dirty fields, RMW, neighbor preservation.
 // ===========================================================================
 describe('storage-agg: packed struct mixed widths, dirty calldata', () => {
-  const JETH = `@struct class S { a: u8; b: i16; c: bool; d: bytes3; e: u64; f: address; }
-@contract class C {
-  @state pre: u256;       // slot 0 guard
-  @state s: S;            // slot 1 (8+16+8+24+64+160 = 280 bits > 256 -> 2 slots)
-  @state post: u256;      // guard
-  @external setA(v: u8): void { this.s.a = v; }
-  @external setB(v: i16): void { this.s.b = v; }
-  @external setC(v: bool): void { this.s.c = v; }
-  @external setD(v: bytes3): void { this.s.d = v; }
-  @external setE(v: u64): void { this.s.e = v; }
-  @external setF(v: address): void { this.s.f = v; }
-  @external addB(v: i16): void { this.s.b += v; }
-  @external setPre(v: u256): void { this.pre = v; }
-  @external setPost(v: u256): void { this.post = v; }
+  const JETH = `type S = { a: u8; b: i16; c: bool; d: bytes3; e: u64; f: address; };
+class C {
+  pre: u256;       // slot 0 guard
+  s: S;            // slot 1 (8+16+8+24+64+160 = 280 bits > 256 -> 2 slots)
+  post: u256;      // guard
+  setA(v: u8): External<void> { this.s.a = v; }
+  setB(v: i16): External<void> { this.s.b = v; }
+  setC(v: bool): External<void> { this.s.c = v; }
+  setD(v: bytes3): External<void> { this.s.d = v; }
+  setE(v: u64): External<void> { this.s.e = v; }
+  setF(v: address): External<void> { this.s.f = v; }
+  addB(v: i16): External<void> { this.s.b += v; }
+  setPre(v: u256): External<void> { this.pre = v; }
+  setPost(v: u256): External<void> { this.post = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -157,15 +157,15 @@ contract C {
 // 2. Nested struct (struct field is a struct), packed inner.
 // ===========================================================================
 describe('storage-agg: nested struct, packed inner fields', () => {
-  const JETH = `@struct class Inner { x: u64; y: u64; flag: bool; }
-@struct class Outer { tag: u128; inner: Inner; tail: u8; }
-@contract class C {
-  @state o: Outer;     // tag@slot0(lo), inner.x/y/flag pack @slot1, tail@slot2
-  @external setTag(v: u128): void { this.o.tag = v; }
-  @external setX(v: u64): void { this.o.inner.x = v; }
-  @external setY(v: u64): void { this.o.inner.y = v; }
-  @external setFlag(v: bool): void { this.o.inner.flag = v; }
-  @external setTail(v: u8): void { this.o.tail = v; }
+  const JETH = `type Inner = { x: u64; y: u64; flag: bool; };
+type Outer = { tag: u128; inner: Inner; tail: u8; };
+class C {
+  o: Outer;     // tag@slot0(lo), inner.x/y/flag pack @slot1, tail@slot2
+  setTag(v: u128): External<void> { this.o.tag = v; }
+  setX(v: u64): External<void> { this.o.inner.x = v; }
+  setY(v: u64): External<void> { this.o.inner.y = v; }
+  setFlag(v: bool): External<void> { this.o.inner.flag = v; }
+  setTail(v: u8): External<void> { this.o.tail = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -202,13 +202,13 @@ contract C {
 // 3. uint64[] dynamic: push packs 4/slot, pop zeroes freed lane, OOB index Panic.
 // ===========================================================================
 describe('storage-agg: uint64[] packed push/pop/set, OOB Panic 0x32', () => {
-  const JETH = `@contract class C {
-  @state a: u64[];
-  @external push(v: u64): void { this.a.push(v); }
-  @external pop(): void { this.a.pop(); }
-  @external set(i: u256, v: u64): void { this.a[i] = v; }
-  @external @view get(i: u256): u64 { return this.a[i]; }
-  @external @view len(): u256 { return this.a.length; }
+  const JETH = `class C {
+  a: u64[];
+  push(v: u64): External<void> { this.a.push(v); }
+  pop(): External<void> { this.a.pop(); }
+  set(i: u256, v: u64): External<void> { this.a[i] = v; }
+  get get(i: u256): External<u64> { return this.a[i]; }
+  get len(): External<u256> { return this.a.length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -256,14 +256,14 @@ contract C {
 // 4. Dynamic array of multi-slot struct: stride, push();-then-set, pop frees all.
 // ===========================================================================
 describe('storage-agg: Rec[] (3-slot stride) push/set/pop frees whole element', () => {
-  const JETH = `@struct class Rec { a: u256; b: u128; c: u128; d: u256; }
-@contract class C {
-  @state recs: Rec[];
-  @external pushZ(): void { this.recs.push(); }
-  @external pushV(a: u256, b: u128, c: u128, d: u256): void { this.recs.push(Rec(a, b, c, d)); }
-  @external pop(): void { this.recs.pop(); }
-  @external setB(i: u256, v: u128): void { this.recs[i].b = v; }
-  @external setC(i: u256, v: u128): void { this.recs[i].c = v; }
+  const JETH = `type Rec = { a: u256; b: u128; c: u128; d: u256; };
+class C {
+  recs: Rec[];
+  pushZ(): External<void> { this.recs.push(); }
+  pushV(a: u256, b: u128, c: u128, d: u256): External<void> { this.recs.push(Rec(a, b, c, d)); }
+  pop(): External<void> { this.recs.pop(); }
+  setB(i: u256, v: u128): External<void> { this.recs[i].b = v; }
+  setC(i: u256, v: u128): External<void> { this.recs[i].c = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -302,17 +302,17 @@ contract C {
 // ===========================================================================
 describe('storage-agg: bytes/string short/long transitions, dirty len, OOB', () => {
   // NOTE: indexing into string is not legal in Solidity; test bytes index instead.
-  const JETH2 = `@contract class C {
-  @state pre: u256;
-  @state s: string;     // slot 1
-  @state bs: bytes;     // slot 2
-  @state post: u256;
-  @external setS(v: string): void { this.s = v; }
-  @external setBs(v: bytes): void { this.bs = v; }
-  @external @view atBs(i: u256): bytes1 { return this.bs[i]; }
-  @external @view lenBs(): u256 { return this.bs.length; }
-  @external setPre(v: u256): void { this.pre = v; }
-  @external setPost(v: u256): void { this.post = v; }
+  const JETH2 = `class C {
+  pre: u256;
+  s: string;     // slot 1
+  bs: bytes;     // slot 2
+  post: u256;
+  setS(v: string): External<void> { this.s = v; }
+  setBs(v: bytes): External<void> { this.bs = v; }
+  get atBs(i: u256): External<bytes1> { return this.bs[i]; }
+  get lenBs(): External<u256> { return this.bs.length; }
+  setPre(v: u256): External<void> { this.pre = v; }
+  setPost(v: u256): External<void> { this.post = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -364,18 +364,18 @@ contract C {
 // 6. Whole dynamic-array copy with shrink (tail clearing) - value + string elems.
 // ===========================================================================
 describe('storage-agg: whole dynamic-array copy a=b with grow+shrink tail clear', () => {
-  const JETH = `@struct class D { n: u256; s: string; }
-@contract class C {
-  @state a: u256[];
-  @state b: u256[];
-  @state sa: string[];
-  @state sb: string[];
-  @external pushA(v: u256): void { this.a.push(v); }
-  @external pushB(v: u256): void { this.b.push(v); }
-  @external pushSA(s: string): void { this.sa.push(s); }
-  @external pushSB(s: string): void { this.sb.push(s); }
-  @external copyAB(): void { this.a = this.b; }
-  @external copySAB(): void { this.sa = this.sb; }
+  const JETH = `type D = { n: u256; s: string; };
+class C {
+  a: u256[];
+  b: u256[];
+  sa: string[];
+  sb: string[];
+  pushA(v: u256): External<void> { this.a.push(v); }
+  pushB(v: u256): External<void> { this.b.push(v); }
+  pushSA(s: string): External<void> { this.sa.push(s); }
+  pushSB(s: string): External<void> { this.sb.push(s); }
+  copyAB(): External<void> { this.a = this.b; }
+  copySAB(): External<void> { this.sa = this.sb; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -440,16 +440,16 @@ contract C {
 // 7. Whole fixed-array copy + whole struct copy.
 // ===========================================================================
 describe('storage-agg: whole fixed-array copy & whole struct copy', () => {
-  const JETH = `@struct class S { a: u128; b: u64; c: bool; }
-@contract class C {
-  @state fa: Arr<u256, 3>;   // slots 0..2
-  @state fb: Arr<u256, 3>;   // slots 3..5
-  @state s1: S;              // slot 6
-  @state s2: S;              // slot 7
-  @external setFb(i: u256, v: u256): void { this.fb[i] = v; }
-  @external setS2(a: u128, b: u64, c: bool): void { this.s2 = S(a, b, c); }
-  @external copyFA(): void { this.fa = this.fb; }
-  @external copyS(): void { this.s1 = this.s2; }
+  const JETH = `type S = { a: u128; b: u64; c: bool; };
+class C {
+  fa: Arr<u256, 3>;   // slots 0..2
+  fb: Arr<u256, 3>;   // slots 3..5
+  s1: S;              // slot 6
+  s2: S;              // slot 7
+  setFb(i: u256, v: u256): External<void> { this.fb[i] = v; }
+  setS2(a: u128, b: u64, c: bool): External<void> { this.s2 = S(a, b, c); }
+  copyFA(): External<void> { this.fa = this.fb; }
+  copyS(): External<void> { this.s1 = this.s2; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -481,12 +481,12 @@ contract C {
 // 8. Mapping to dynamic array: per-key isolation, push/pop, set OOB Panic.
 // ===========================================================================
 describe('storage-agg: mapping<u256,u256[]> per-key push/pop/set OOB', () => {
-  const JETH = `@contract class C {
-  @state m: mapping<u256, u256[]>;
-  @external push(k: u256, v: u256): void { this.m[k].push(v); }
-  @external pop(k: u256): void { this.m[k].pop(); }
-  @external set(k: u256, i: u256, v: u256): void { this.m[k][i] = v; }
-  @external @view len(k: u256): u256 { return this.m[k].length; }
+  const JETH = `class C {
+  m: mapping<u256, u256[]>;
+  push(k: u256, v: u256): External<void> { this.m[k].push(v); }
+  pop(k: u256): External<void> { this.m[k].pop(); }
+  set(k: u256, i: u256, v: u256): External<void> { this.m[k][i] = v; }
+  get len(k: u256): External<u256> { return this.m[k].length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -528,13 +528,13 @@ contract C {
 // 9. Nested mapping mapping<address,mapping<u256,V>> packed value + struct value.
 // ===========================================================================
 describe('storage-agg: nested mapping, packed value & struct value', () => {
-  const JETH = `@struct class S { a: u64; b: u64; flag: bool; }
-@contract class C {
-  @state mv: mapping<address, mapping<u256, u128>>;
-  @state ms: mapping<bytes32, S>;
-  @external setV(a: address, k: u256, v: u128): void { this.mv[a][k] = v; }
-  @external setSa(k: bytes32, v: u64): void { this.ms[k].a = v; }
-  @external setSflag(k: bytes32, v: bool): void { this.ms[k].flag = v; }
+  const JETH = `type S = { a: u64; b: u64; flag: bool; };
+class C {
+  mv: mapping<address, mapping<u256, u128>>;
+  ms: mapping<bytes32, S>;
+  setV(a: address, k: u256, v: u128): External<void> { this.mv[a][k] = v; }
+  setSa(k: bytes32, v: u64): External<void> { this.ms[k].a = v; }
+  setSflag(k: bytes32, v: bool): External<void> { this.ms[k].flag = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -571,15 +571,15 @@ contract C {
 // 10. Mapping as struct field (struct contains mapping); delete leaves mapping.
 // ===========================================================================
 describe('storage-agg: struct with mapping field, delete keeps entries', () => {
-  const JETH = `@struct class S { a: u256; m: mapping<address, u256>; b: u256; }
-@contract class C {
-  @state s: S;          // a@0, m@1, b@2
-  @state guard: u256;   // slot 3
-  @external setA(v: u256): void { this.s.a = v; }
-  @external setB(v: u256): void { this.s.b = v; }
-  @external setM(k: address, v: u256): void { this.s.m[k] = v; }
-  @external setGuard(v: u256): void { this.guard = v; }
-  @external delS(): void { delete this.s; }
+  const JETH = `type S = { a: u256; m: mapping<address, u256>; b: u256; };
+class C {
+  s: S;          // a@0, m@1, b@2
+  guard: u256;   // slot 3
+  setA(v: u256): External<void> { this.s.a = v; }
+  setB(v: u256): External<void> { this.s.b = v; }
+  setM(k: address, v: u256): External<void> { this.s.m[k] = v; }
+  setGuard(v: u256): External<void> { this.guard = v; }
+  delS(): External<void> { delete this.s; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -629,11 +629,11 @@ contract C {
 // 11. Mapping to bytes/string short/long; delete clears, mapping intact.
 // ===========================================================================
 describe('storage-agg: mapping<address,bytes> short/long, delete value', () => {
-  const JETH = `@contract class C {
-  @state mb: mapping<address, bytes>;
-  @external setB(k: address, v: bytes): void { this.mb[k] = v; }
-  @external delB(k: address): void { delete this.mb[k]; }
-  @external @view lenB(k: address): u256 { return this.mb[k].length; }
+  const JETH = `class C {
+  mb: mapping<address, bytes>;
+  setB(k: address, v: bytes): External<void> { this.mb[k] = v; }
+  delB(k: address): External<void> { delete this.mb[k]; }
+  get lenB(k: address): External<u256> { return this.mb[k].length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -666,22 +666,22 @@ contract C {
 // 12. delete: packed fixed array (whole + element), value, struct, dyn-array.
 // ===========================================================================
 describe('storage-agg: delete packed/value/struct/dyn-array, neighbor preserve', () => {
-  const JETH = `@struct class S { a: u128; b: u64; c: bool; }
-@contract class C {
-  @state a8: Arr<u8, 5>;     // slot 0 (5 bytes packed)
-  @state guard: u256;        // slot 1
-  @state xs: u256[];         // slot 2
-  @state s: S;               // slot 3
-  @external seed(): void {
+  const JETH = `type S = { a: u128; b: u64; c: bool; };
+class C {
+  a8: Arr<u8, 5>;     // slot 0 (5 bytes packed)
+  guard: u256;        // slot 1
+  xs: u256[];         // slot 2
+  s: S;               // slot 3
+  seed(): External<void> {
     this.a8[0n]=1n; this.a8[1n]=2n; this.a8[2n]=3n; this.a8[3n]=4n; this.a8[4n]=5n;
     this.guard=0x9999n;
     this.xs.push(0xaaaan); this.xs.push(0xbbbbn); this.xs.push(0xccccn);
     this.s = S(123n, 456n, true);
   }
-  @external delA8(): void { delete this.a8; }
-  @external delA8e(): void { delete this.a8[2n]; }
-  @external delXs(): void { delete this.xs; }
-  @external delS(): void { delete this.s; }
+  delA8(): External<void> { delete this.a8; }
+  delA8e(): External<void> { delete this.a8[2n]; }
+  delXs(): External<void> { delete this.xs; }
+  delS(): External<void> { delete this.s; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -725,14 +725,14 @@ contract C {
 // 13. Slot reuse after pop then re-push (stale data must be overwritten).
 // ===========================================================================
 describe('storage-agg: slot reuse after pop/delete, no stale bytes', () => {
-  const JETH = `@struct class R { a: u128; b: u64; c: bool; d: bytes4; }
-@contract class C {
-  @state recs: R[];
-  @state s: string;
-  @external pushV(a: u128, b: u64, c: bool, d: bytes4): void { this.recs.push(R(a, b, c, d)); }
-  @external pop(): void { this.recs.pop(); }
-  @external delAndReset(): void { delete this.s; this.s = "${SHORT}"; }
-  @external setS(v: string): void { this.s = v; }
+  const JETH = `type R = { a: u128; b: u64; c: bool; d: bytes4; };
+class C {
+  recs: R[];
+  s: string;
+  pushV(a: u128, b: u64, c: bool, d: bytes4): External<void> { this.recs.push(R(a, b, c, d)); }
+  pop(): External<void> { this.recs.pop(); }
+  delAndReset(): External<void> { delete this.s; this.s = "${SHORT}"; }
+  setS(v: string): External<void> { this.s = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -772,13 +772,13 @@ contract C {
 // 14. Nested fixed array uint256[2][3] + array-of-array dynamic u256[][].
 // ===========================================================================
 describe('storage-agg: nested fixed array + nested dynamic array', () => {
-  const JETH = `@contract class C {
-  @state ff: Arr<Arr<u256, 2>, 3>;   // slots 0..5 whole-slot
-  @state dd: u256[][];               // slot 6
-  @external setFF(i: u256, j: u256, v: u256): void { this.ff[i][j] = v; }
-  @external pushOuter(): void { this.dd.push(); }
-  @external pushInner(i: u256, v: u256): void { this.dd[i].push(v); }
-  @external setInner(i: u256, j: u256, v: u256): void { this.dd[i][j] = v; }
+  const JETH = `class C {
+  ff: Arr<Arr<u256, 2>, 3>;   // slots 0..5 whole-slot
+  dd: u256[][];               // slot 6
+  setFF(i: u256, j: u256, v: u256): External<void> { this.ff[i][j] = v; }
+  pushOuter(): External<void> { this.dd.push(); }
+  pushInner(i: u256, v: u256): External<void> { this.dd[i].push(v); }
+  setInner(i: u256, j: u256, v: u256): External<void> { this.dd[i][j] = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -820,13 +820,13 @@ contract C {
 // 15. Packed-neighbor preservation in array-of-packed-structs (dirty writes).
 // ===========================================================================
 describe('storage-agg: Pt[3] single-slot packed struct, neighbor preserve', () => {
-  const JETH = `@struct class Pt { x: u128; y: u128; }
-@contract class C {
-  @state a: Arr<Pt, 3>;   // each Pt 1 slot; slots 0,1,2
-  @state guard: u256;     // slot 3
-  @external setX(i: u256, v: u128): void { this.a[i].x = v; }
-  @external setY(i: u256, v: u128): void { this.a[i].y = v; }
-  @external setGuard(v: u256): void { this.guard = v; }
+  const JETH = `type Pt = { x: u128; y: u128; };
+class C {
+  a: Arr<Pt, 3>;   // each Pt 1 slot; slots 0,1,2
+  guard: u256;     // slot 3
+  setX(i: u256, v: u128): External<void> { this.a[i].x = v; }
+  setY(i: u256, v: u128): External<void> { this.a[i].y = v; }
+  setGuard(v: u256): External<void> { this.guard = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -858,11 +858,11 @@ contract C {
 // 16. bytes32[] dynamic whole-slot + .length growth boundaries.
 // ===========================================================================
 describe('storage-agg: bytes32[] whole-slot push to slot boundary', () => {
-  const JETH = `@contract class C {
-  @state a: bytes32[];
-  @external push(v: bytes32): void { this.a.push(v); }
-  @external pop(): void { this.a.pop(); }
-  @external @view len(): u256 { return this.a.length; }
+  const JETH = `class C {
+  a: bytes32[];
+  push(v: bytes32): External<void> { this.a.push(v); }
+  pop(): External<void> { this.a.pop(); }
+  get len(): External<u256> { return this.a.length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -895,11 +895,11 @@ contract C {
 // 17. i128[] dynamic packed 2/slot with negatives (sign-ext) + RMW via re-set.
 // ===========================================================================
 describe('storage-agg: i128[] packed 2/slot negatives', () => {
-  const JETH = `@contract class C {
-  @state a: i128[];
-  @external push(v: i128): void { this.a.push(v); }
-  @external set(i: u256, v: i128): void { this.a[i] = v; }
-  @external @view get(i: u256): i128 { return this.a[i]; }
+  const JETH = `class C {
+  a: i128[];
+  push(v: i128): External<void> { this.a.push(v); }
+  set(i: u256, v: i128): External<void> { this.a[i] = v; }
+  get get(i: u256): External<i128> { return this.a[i]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -932,12 +932,12 @@ contract C {
 // 18. Struct with whole-slot fixed-array field + trailing packed (delete whole).
 // ===========================================================================
 describe('storage-agg: struct {u8 tag; u256[3] data; u8 flag} delete', () => {
-  const JETH = `@struct class T { tag: u8; data: Arr<u256, 3>; flag: u8; }
-@contract class C {
-  @state t: T;          // tag@slot0 lane, data@1..3, flag@4 lane
-  @external seed(): void { this.t.tag = 0x7fn; this.t.data[0n] = 0x11n; this.t.data[2n] = 0x55n; this.t.flag = 0x99n; }
-  @external delT(): void { delete this.t; }
-  @external setData(i: u256, v: u256): void { this.t.data[i] = v; }
+  const JETH = `type T = { tag: u8; data: Arr<u256, 3>; flag: u8; };
+class C {
+  t: T;          // tag@slot0 lane, data@1..3, flag@4 lane
+  seed(): External<void> { this.t.tag = 0x7fn; this.t.data[0n] = 0x11n; this.t.data[2n] = 0x55n; this.t.flag = 0x99n; }
+  delT(): External<void> { delete this.t; }
+  setData(i: u256, v: u256): External<void> { this.t.data[i] = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -968,7 +968,7 @@ contract C {
 // ===========================================================================
 describe('storage-agg: length semantics & push return-of-ref parity', () => {
   it('JETH and solc both reject assigning to .length', () => {
-    const j = `@contract class C { @state a: u256[]; @external f(): void { this.a.length = 3n; } }`;
+    const j = `class C { a: u256[]; f(): External<void> { this.a.length = 3n; } }`;
     const s = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract C { uint256[] a; function f() external { a.length = 3; } }`;
@@ -993,12 +993,12 @@ contract C { uint256[] a; function f() external { a.length = 3; } }`;
 // 20. Dynamic array of dynamic-field struct D{n;s} push/pop frees header+long.
 // ===========================================================================
 describe('storage-agg: D[] {u256 n; string s} push/pop frees long-data', () => {
-  const JETH = `@struct class D { n: u256; s: string; }
-@contract class C {
-  @state recs: D[];   // slot 0; each D = 2 slots (n, s-header)
-  @external pushV(n: u256, s: string): void { this.recs.push(D(n, s)); }
-  @external pop(): void { this.recs.pop(); }
-  @external @view getS(i: u256): string { return this.recs[i].s; }
+  const JETH = `type D = { n: u256; s: string; };
+class C {
+  recs: D[];   // slot 0; each D = 2 slots (n, s-header)
+  pushV(n: u256, s: string): External<void> { this.recs.push(D(n, s)); }
+  pop(): External<void> { this.recs.pop(); }
+  get getS(i: u256): External<string> { return this.recs[i].s; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1031,21 +1031,21 @@ contract C {
 // 21. Address-array & bool-array packed delete element vs whole.
 // ===========================================================================
 describe('storage-agg: address[3] & bool[10] delete element/whole', () => {
-  const JETH = `@contract class C {
-  @state addrs: Arr<address, 3>;   // each whole-slot (20 bytes but no packing in arrays)
-  @state flags: Arr<bool, 10>;     // 10 bytes packed in slot 3
-  @state guard: u256;              // slot 4
-  @external seed(): void {
+  const JETH = `class C {
+  addrs: Arr<address, 3>;   // each whole-slot (20 bytes but no packing in arrays)
+  flags: Arr<bool, 10>;     // 10 bytes packed in slot 3
+  guard: u256;              // slot 4
+  seed(): External<void> {
     this.addrs[0n] = address(0x1111111111111111111111111111111111111111n);
     this.addrs[1n] = address(0x2222222222222222222222222222222222222222n);
     this.addrs[2n] = address(0x3333333333333333333333333333333333333333n);
     this.flags[0n]=true; this.flags[3n]=true; this.flags[9n]=true;
     this.guard=0xfn;
   }
-  @external delAddr(): void { delete this.addrs; }
-  @external delAddrE(): void { delete this.addrs[1n]; }
-  @external delFlags(): void { delete this.flags; }
-  @external delFlagE(): void { delete this.flags[3n]; }
+  delAddr(): External<void> { delete this.addrs; }
+  delAddrE(): External<void> { delete this.addrs[1n]; }
+  delFlags(): External<void> { delete this.flags; }
+  delFlagE(): External<void> { delete this.flags[3n]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1088,13 +1088,13 @@ contract C {
 // 22. Whole-struct return from storage (packed fields ABI re-expand).
 // ===========================================================================
 describe('storage-agg: return packed struct from storage (ABI re-expand)', () => {
-  const JETH = `@struct class S { a: i64; b: u32; c: bytes4; d: bool; e: address; }
-@contract class C {
-  @state s: S;
-  @external setA(v: i64): void { this.s.a = v; }
-  @external setE(v: address): void { this.s.e = v; }
-  @external setAll(a: i64, b: u32, c: bytes4, d: bool, e: address): void { this.s = S(a, b, c, d, e); }
-  @external @view get(): S { return this.s; }
+  const JETH = `type S = { a: i64; b: u32; c: bytes4; d: bool; e: address; };
+class C {
+  s: S;
+  setA(v: i64): External<void> { this.s.a = v; }
+  setE(v: address): External<void> { this.s.e = v; }
+  setAll(a: i64, b: u32, c: bytes4, d: bool, e: address): External<void> { this.s = S(a, b, c, d, e); }
+  get get(): External<S> { return this.s; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1134,9 +1134,9 @@ contract C {
 // 23. Dynamic offset/length attacks on a fn that decodes a string into storage.
 // ===========================================================================
 describe('storage-agg: malformed dynamic offsets/lengths into storage write', () => {
-  const JETH = `@contract class C {
-  @state s: string;
-  @external setS(v: string): void { this.s = v; }
+  const JETH = `class C {
+  s: string;
+  setS(v: string): External<void> { this.s = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1177,11 +1177,11 @@ contract C { string s; function setS(string calldata v) external { s = v; } }`;
 // 24. Mapping<bool,...> & mapping<i8,...> dirty-key normalization to slot.
 // ===========================================================================
 describe('storage-agg: mapping key normalization (bool, i8) dirty bits', () => {
-  const JETH = `@contract class C {
-  @state mbool: mapping<bool, u256>;
-  @state mi8: mapping<i8, u256>;
-  @external setBool(k: bool, v: u256): void { this.mbool[k] = v; }
-  @external setI8(k: i8, v: u256): void { this.mi8[k] = v; }
+  const JETH = `class C {
+  mbool: mapping<bool, u256>;
+  mi8: mapping<i8, u256>;
+  setBool(k: bool, v: u256): External<void> { this.mbool[k] = v; }
+  setI8(k: i8, v: u256): External<void> { this.mi8[k] = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1217,13 +1217,13 @@ contract C {
 // 25. Whole fixed-array-of-struct copy where dest held LONGER strings (tail clear).
 // ===========================================================================
 describe('storage-agg: Arr<D,2> copy with string fields, dest-longer tail clear', () => {
-  const JETH = `@struct class D { n: u256; s: string; }
-@contract class C {
-  @state dst: Arr<D, 2>;   // D[0]: n@0,s@1 ; D[1]: n@2,s@3
-  @state src: Arr<D, 2>;   // D[0]: n@4,s@5 ; D[1]: n@6,s@7
-  @external setDst(i: u256, n: u256, s: string): void { this.dst[i] = D(n, s); }
-  @external setSrc(i: u256, n: u256, s: string): void { this.src[i] = D(n, s); }
-  @external copy(): void { this.dst = this.src; }
+  const JETH = `type D = { n: u256; s: string; };
+class C {
+  dst: Arr<D, 2>;   // D[0]: n@0,s@1 ; D[1]: n@2,s@3
+  src: Arr<D, 2>;   // D[0]: n@4,s@5 ; D[1]: n@6,s@7
+  setDst(i: u256, n: u256, s: string): External<void> { this.dst[i] = D(n, s); }
+  setSrc(i: u256, n: u256, s: string): External<void> { this.src[i] = D(n, s); }
+  copy(): External<void> { this.dst = this.src; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1262,11 +1262,11 @@ contract C {
 // 26. bytes[] (array of dynamic bytes) push long elems, pop frees header+long.
 // ===========================================================================
 describe('storage-agg: bytes[] push/pop frees element headers + long-data', () => {
-  const JETH = `@contract class C {
-  @state a: bytes[];
-  @external push(v: bytes): void { this.a.push(v); }
-  @external pop(): void { this.a.pop(); }
-  @external @view at(i: u256): bytes { return this.a[i]; }
+  const JETH = `class C {
+  a: bytes[];
+  push(v: bytes): External<void> { this.a.push(v); }
+  pop(): External<void> { this.a.pop(); }
+  get at(i: u256): External<bytes> { return this.a[i]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1299,10 +1299,10 @@ contract C {
 // 27. Exactly 31/32-byte boundary for bytes (short/long flag) + freed-tail.
 // ===========================================================================
 describe('storage-agg: bytes 31/32-byte short/long flag boundary', () => {
-  const JETH = `@contract class C {
-  @state bs: bytes;   // slot 0
-  @external setBs(v: bytes): void { this.bs = v; }
-  @external @view len(): u256 { return this.bs.length; }
+  const JETH = `class C {
+  bs: bytes;   // slot 0
+  setBs(v: bytes): External<void> { this.bs = v; }
+  get len(): External<u256> { return this.bs.length; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -1333,11 +1333,11 @@ contract C {
 // 28. mapping to mapping-to-array (mapping<u256, mapping<u256, u256[]>>).
 // ===========================================================================
 describe('storage-agg: mapping<u256, mapping<u256, u256[]>> deep nesting', () => {
-  const JETH = `@contract class C {
-  @state m: mapping<u256, mapping<u256, u256[]>>;
-  @external push(k1: u256, k2: u256, v: u256): void { this.m[k1][k2].push(v); }
-  @external pop(k1: u256, k2: u256): void { this.m[k1][k2].pop(); }
-  @external set(k1: u256, k2: u256, i: u256, v: u256): void { this.m[k1][k2][i] = v; }
+  const JETH = `class C {
+  m: mapping<u256, mapping<u256, u256[]>>;
+  push(k1: u256, k2: u256, v: u256): External<void> { this.m[k1][k2].push(v); }
+  pop(k1: u256, k2: u256): External<void> { this.m[k1][k2].pop(); }
+  set(k1: u256, k2: u256, i: u256, v: u256): External<void> { this.m[k1][k2][i] = v; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

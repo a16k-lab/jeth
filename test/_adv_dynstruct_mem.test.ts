@@ -60,106 +60,106 @@ const cd_b1 = (sig: string, b: Buffer) => '0x' + sel(sig) + pad(0x20n) + encByte
 
 // ----------------------- JETH + Solidity sources -----------------------------
 const JETH = `
-@struct class VS  { a: u256; s: string; }
-@struct class SV  { s: string; a: u256; }
-@struct class VSV { a: u256; s: string; b: u256; }
-@struct class SVS { s: string; a: u256; t: string; }
-@struct class SS  { s: string; t: string; }
-@struct class DVD { s: string; a: u256; t: string; }
-@struct class NU8  { a: u8;  s: string; }
-@struct class NU16 { a: u16; s: string; }
-@struct class NI8  { a: i8;  s: string; }
-@struct class NI16 { a: i16; s: string; }
-@struct class NI64 { a: i64; s: string; }
-@struct class NI128{ a: i128; s: string; }
-@struct class NADDR{ a: address; s: string; }
-@struct class NBOOL{ a: bool; s: string; }
-@struct class NB4  { a: bytes4; s: string; }
-@struct class POST { s: string; a: u8; }
-@struct class MIX  { a: u8; s: string; b: i16; t: bytes; c: address; n: bool; }
-@struct class D3   { a: u8; s: string; b: bytes; n: u64; }
-@struct class B1S  { a: bytes1; s: string; }
-@struct class B16S { a: bytes16; s: string; }
-@struct class B32S { a: bytes32; s: string; }
-@struct class LB   { s: string; b: bytes; }
-@struct class VB   { a: u256; b: bytes; }
-@contract class C {
-  @external @pure mkVS(a: u256, s: string): VS { let d: VS = VS(a, s); return d; }
-  @external @pure mkSV(s: string, a: u256): SV { let d: SV = SV(s, a); return d; }
-  @external @pure mkVSV(a: u256, s: string, b: u256): VSV { let d: VSV = VSV(a, s, b); return d; }
-  @external @pure mkSVS(s: string, a: u256, t: string): SVS { let d: SVS = SVS(s, a, t); return d; }
-  @external @pure mkSS(s: string, t: string): SS { let d: SS = SS(s, t); return d; }
-  @external @pure mkDVD(s: string, a: u256, t: string): DVD { let d: DVD = DVD(s, a, t); return d; }
+type VS = { a: u256; s: string; };
+type SV = { s: string; a: u256; };
+type VSV = { a: u256; s: string; b: u256; };
+type SVS = { s: string; a: u256; t: string; };
+type SS = { s: string; t: string; };
+type DVD = { s: string; a: u256; t: string; };
+type NU8 = { a: u8;  s: string; };
+type NU16 = { a: u16; s: string; };
+type NI8 = { a: i8;  s: string; };
+type NI16 = { a: i16; s: string; };
+type NI64 = { a: i64; s: string; };
+type NI128 = { a: i128; s: string; };
+type NADDR = { a: address; s: string; };
+type NBOOL = { a: bool; s: string; };
+type NB4 = { a: bytes4; s: string; };
+type POST = { s: string; a: u8; };
+type MIX = { a: u8; s: string; b: i16; t: bytes; c: address; n: bool; };
+type D3 = { a: u8; s: string; b: bytes; n: u64; };
+type B1S = { a: bytes1; s: string; };
+type B16S = { a: bytes16; s: string; };
+type B32S = { a: bytes32; s: string; };
+type LB = { s: string; b: bytes; };
+type VB = { a: u256; b: bytes; };
+class C {
+  get mkVS(a: u256, s: string): External<VS> { let d: VS = VS(a, s); return d; }
+  get mkSV(s: string, a: u256): External<SV> { let d: SV = SV(s, a); return d; }
+  get mkVSV(a: u256, s: string, b: u256): External<VSV> { let d: VSV = VSV(a, s, b); return d; }
+  get mkSVS(s: string, a: u256, t: string): External<SVS> { let d: SVS = SVS(s, a, t); return d; }
+  get mkSS(s: string, t: string): External<SS> { let d: SS = SS(s, t); return d; }
+  get mkDVD(s: string, a: u256, t: string): External<DVD> { let d: DVD = DVD(s, a, t); return d; }
 
-  @external @pure mkU8(a: u8, s: string): NU8 { let d: NU8 = NU8(a, s); return d; }
-  @external @pure mkU16(a: u16, s: string): NU16 { let d: NU16 = NU16(a, s); return d; }
-  @external @pure mkI8(a: i8, s: string): NI8 { let d: NI8 = NI8(a, s); return d; }
-  @external @pure mkI16(a: i16, s: string): NI16 { let d: NI16 = NI16(a, s); return d; }
-  @external @pure mkI64(a: i64, s: string): NI64 { let d: NI64 = NI64(a, s); return d; }
-  @external @pure mkI128(a: i128, s: string): NI128 { let d: NI128 = NI128(a, s); return d; }
-  @external @pure mkADDR(a: address, s: string): NADDR { let d: NADDR = NADDR(a, s); return d; }
-  @external @pure mkBOOL(a: bool, s: string): NBOOL { let d: NBOOL = NBOOL(a, s); return d; }
-  @external @pure mkB4(a: bytes4, s: string): NB4 { let d: NB4 = NB4(a, s); return d; }
+  get mkU8(a: u8, s: string): External<NU8> { let d: NU8 = NU8(a, s); return d; }
+  get mkU16(a: u16, s: string): External<NU16> { let d: NU16 = NU16(a, s); return d; }
+  get mkI8(a: i8, s: string): External<NI8> { let d: NI8 = NI8(a, s); return d; }
+  get mkI16(a: i16, s: string): External<NI16> { let d: NI16 = NI16(a, s); return d; }
+  get mkI64(a: i64, s: string): External<NI64> { let d: NI64 = NI64(a, s); return d; }
+  get mkI128(a: i128, s: string): External<NI128> { let d: NI128 = NI128(a, s); return d; }
+  get mkADDR(a: address, s: string): External<NADDR> { let d: NADDR = NADDR(a, s); return d; }
+  get mkBOOL(a: bool, s: string): External<NBOOL> { let d: NBOOL = NBOOL(a, s); return d; }
+  get mkB4(a: bytes4, s: string): External<NB4> { let d: NB4 = NB4(a, s); return d; }
 
-  @external @pure getVSa(a: u256, s: string): u256 { let d: VS = VS(a, s); return d.a; }
-  @external @pure getVSs(a: u256, s: string): string { let d: VS = VS(a, s); return d.s; }
-  @external @pure getSVa(s: string, a: u256): u256 { let d: SV = SV(s, a); return d.a; }
-  @external @pure getSVs(s: string, a: u256): string { let d: SV = SV(s, a); return d.s; }
-  @external @pure getVSVb(a: u256, s: string, b: u256): u256 { let d: VSV = VSV(a, s, b); return d.b; }
-  @external @pure getSVSt(s: string, a: u256, t: string): string { let d: SVS = SVS(s, a, t); return d.t; }
-  @external @pure getU8a(a: u8, s: string): u8 { let d: NU8 = NU8(a, s); return d.a; }
-  @external @pure getI16a(a: i16, s: string): i16 { let d: NI16 = NI16(a, s); return d.a; }
+  get getVSa(a: u256, s: string): External<u256> { let d: VS = VS(a, s); return d.a; }
+  get getVSs(a: u256, s: string): External<string> { let d: VS = VS(a, s); return d.s; }
+  get getSVa(s: string, a: u256): External<u256> { let d: SV = SV(s, a); return d.a; }
+  get getSVs(s: string, a: u256): External<string> { let d: SV = SV(s, a); return d.s; }
+  get getVSVb(a: u256, s: string, b: u256): External<u256> { let d: VSV = VSV(a, s, b); return d.b; }
+  get getSVSt(s: string, a: u256, t: string): External<string> { let d: SVS = SVS(s, a, t); return d.t; }
+  get getU8a(a: u8, s: string): External<u8> { let d: NU8 = NU8(a, s); return d.a; }
+  get getI16a(a: i16, s: string): External<i16> { let d: NI16 = NI16(a, s); return d.a; }
 
-  @external @pure writeVSa(a: u256, s: string, na: u256): VS { let d: VS = VS(a, s); d.a = na; return d; }
-  @external @pure rwVSa(a: u256, s: string, na: u256): VS { let d: VS = VS(a, s); d.a = d.a + na; return d; }
+  get writeVSa(a: u256, s: string, na: u256): External<VS> { let d: VS = VS(a, s); d.a = na; return d; }
+  get rwVSa(a: u256, s: string, na: u256): External<VS> { let d: VS = VS(a, s); d.a = d.a + na; return d; }
   // value field that sits AFTER the dynamic field (head-offset under write):
-  @external @pure writeSVa(s: string, a: u256, na: u256): SV { let d: SV = SV(s, a); d.a = na; return d; }
-  @external @pure rwSVa(s: string, a: u256, na: u256): SV { let d: SV = SV(s, a); d.a = d.a + na; return d; }
+  get writeSVa(s: string, a: u256, na: u256): External<SV> { let d: SV = SV(s, a); d.a = na; return d; }
+  get rwSVa(s: string, a: u256, na: u256): External<SV> { let d: SV = SV(s, a); d.a = d.a + na; return d; }
   // narrow field write after dyn field:
-  @external @pure writePOSTa(s: string, a: u8, na: u8): POST { let d: POST = POST(s, a); d.a = na; return d; }
+  get writePOSTa(s: string, a: u8, na: u8): External<POST> { let d: POST = POST(s, a); d.a = na; return d; }
   // write the MIDDLE value field of VSV then return:
-  @external @pure writeVSVa(a: u256, s: string, b: u256, na: u256): VSV { let d: VSV = VSV(a, s, b); d.a = na; return d; }
-  @external @pure writeVSVb(a: u256, s: string, b: u256, nb: u256): VSV { let d: VSV = VSV(a, s, b); d.b = nb; return d; }
+  get writeVSVa(a: u256, s: string, b: u256, na: u256): External<VSV> { let d: VSV = VSV(a, s, b); d.a = na; return d; }
+  get writeVSVb(a: u256, s: string, b: u256, nb: u256): External<VSV> { let d: VSV = VSV(a, s, b); d.b = nb; return d; }
 
-  @external @pure bLen(b: bytes, n: u64): u256 { let d: D3 = D3(0n, "", b, n); return d.b.length; }
-  @external @pure bAt(b: bytes, i: u256): u8 { let d: D3 = D3(0n, "", b, 0n); return u8(d.b[i]); }
+  get bLen(b: bytes, n: u64): External<u256> { let d: D3 = D3(0n, "", b, n); return d.b.length; }
+  get bAt(b: bytes, i: u256): External<u8> { let d: D3 = D3(0n, "", b, 0n); return u8(d.b[i]); }
 
   // construct a dyn field from a memory-string LOCAL (alias), and the SAME local in two fields:
-  @external @pure fromLocal(a: u256, s: string): VS { let t: string = s; let d: VS = VS(a, t); return d; }
-  @external @pure twoFromLocal(s: string): SS { let t: string = s; let d: SS = SS(t, t); return d; }
+  get fromLocal(a: u256, s: string): External<VS> { let t: string = s; let d: VS = VS(a, t); return d; }
+  get twoFromLocal(s: string): External<SS> { let t: string = s; let d: SS = SS(t, t); return d; }
   // string LITERAL fields (short and >32 bytes):
-  @external @pure litShort(a: u256): VS { let d: VS = VS(a, "short"); return d; }
-  @external @pure litLong(a: u256): VS { let d: VS = VS(a, "this string literal is definitely longer than thirty-two bytes!!"); return d; }
-  @external @pure litTwo(): SS { let d: SS = SS("first literal piece", "second literal piece is long enough to cross thirty-two bytes!"); return d; }
+  get litShort(a: u256): External<VS> { let d: VS = VS(a, "short"); return d; }
+  get litLong(a: u256): External<VS> { let d: VS = VS(a, "this string literal is definitely longer than thirty-two bytes!!"); return d; }
+  get litTwo(): External<SS> { let d: SS = SS("first literal piece", "second literal piece is long enough to cross thirty-two bytes!"); return d; }
 
   // many distinct fields of differing widths interspersed with two dyn fields:
-  @external @pure mkMIX(a: u8, s: string, b: i16, t: bytes, c: address, n: bool): MIX { let d: MIX = MIX(a, s, b, t, c, n); return d; }
-  @external @pure mk3(a: u8, s: string, b: bytes, n: u64): D3 { let d: D3 = D3(a, s, b, n); return d; }
+  get mkMIX(a: u8, s: string, b: i16, t: bytes, c: address, n: bool): External<MIX> { let d: MIX = MIX(a, s, b, t, c, n); return d; }
+  get mk3(a: u8, s: string, b: bytes, n: u64): External<D3> { let d: D3 = D3(a, s, b, n); return d; }
   // one struct used in TWO functions:
-  @external @pure mkVSagain(a: u256, s: string): VS { let d: VS = VS(a, s); return d; }
+  get mkVSagain(a: u256, s: string): External<VS> { let d: VS = VS(a, s); return d; }
   // other bytesN widths interspersed:
-  @external @pure mkB1(a: bytes1, s: string): B1S { let d: B1S = B1S(a, s); return d; }
-  @external @pure mkB16(a: bytes16, s: string): B16S { let d: B16S = B16S(a, s); return d; }
-  @external @pure mkB32(a: bytes32, s: string): B32S { let d: B32S = B32S(a, s); return d; }
+  get mkB1(a: bytes1, s: string): External<B1S> { let d: B1S = B1S(a, s); return d; }
+  get mkB16(a: bytes16, s: string): External<B16S> { let d: B16S = B16S(a, s); return d; }
+  get mkB32(a: bytes32, s: string): External<B32S> { let d: B32S = B32S(a, s); return d; }
   // HARD aliasing: a long string LITERAL field next to a long calldata string field:
-  @external @pure litPlusArg(arg: string): SS { let d: SS = SS("a long string literal that exceeds thirty-two bytes for aliasing!", arg); return d; }
-  @external @pure argPlusLit(arg: string): SS { let d: SS = SS(arg, "a long string literal that exceeds thirty-two bytes for aliasing!"); return d; }
+  get litPlusArg(arg: string): External<SS> { let d: SS = SS("a long string literal that exceeds thirty-two bytes for aliasing!", arg); return d; }
+  get argPlusLit(arg: string): External<SS> { let d: SS = SS(arg, "a long string literal that exceeds thirty-two bytes for aliasing!"); return d; }
   // .length / byte index on a LITERAL-constructed dyn field (not calldata):
-  @external @pure litLen(): u256 { let d: LB = LB("", "literal bytes payload exceeding thirty-two bytes for length test!"); return d.b.length; }
-  @external @pure litAt(i: u256): u8 { let d: LB = LB("", "literal bytes payload exceeding thirty-two bytes for length test!"); return u8(d.b[i]); }
+  get litLen(): External<u256> { let d: LB = LB("", "literal bytes payload exceeding thirty-two bytes for length test!"); return d.b.length; }
+  get litAt(i: u256): External<u8> { let d: LB = LB("", "literal bytes payload exceeding thirty-two bytes for length test!"); return u8(d.b[i]); }
   // cross-field: read a bytes local's .length, store it into a value field of a struct
   // whose dyn field IS that same bytes payload:
-  @external @pure lenIntoVal(x: bytes): VB { let b: bytes = x; let k: u256 = b.length; let d: VB = VB(k, b); return d; }
+  get lenIntoVal(x: bytes): External<VB> { let b: bytes = x; let k: u256 = b.length; let d: VB = VB(k, b); return d; }
   // ALIASING STRESS: construct the struct, then allocate MORE memory (another string
   // local + a literal), then return the original struct. The struct's dyn pointers must
   // still be intact (the later allocs must not clobber them).
-  @external @pure allocAfter(a: u256, s: string): VS { let d: VS = VS(a, s); let junk: string = "padding allocation that grows the free pointer well past the head"; let more: string = s; return d; }
+  get allocAfter(a: u256, s: string): External<VS> { let d: VS = VS(a, s); let junk: string = "padding allocation that grows the free pointer well past the head"; let more: string = s; return d; }
   // construct TWO dyn-struct locals, return the FIRST (its blob must survive the second's allocs):
-  @external @pure twoStructs(a: u256, s: string, t: string): VS { let d1: VS = VS(a, s); let d2: SS = SS(t, t); return d1; }
+  get twoStructs(a: u256, s: string, t: string): External<VS> { let d1: VS = VS(a, s); let d2: SS = SS(t, t); return d1; }
   // write a value field AFTER reading a byte of the dyn field, then return:
-  @external @pure byteThenWrite(s: string, a: u256): SV { let d: SV = SV(s, a); let k: u256 = d.a + a; d.a = k; return d; }
+  get byteThenWrite(s: string, a: u256): External<SV> { let d: SV = SV(s, a); let k: u256 = d.a + a; d.a = k; return d; }
   // construct, read a value field, write another, return - all in one body:
-  @external @pure combo(a: u256, s: string, b: u256): VSV { let d: VSV = VSV(a, s, b); let k: u256 = d.a; d.b = d.b + k; return d; }
+  get combo(a: u256, s: string, b: u256): External<VSV> { let d: VSV = VSV(a, s, b); let k: u256 = d.a; d.b = d.b + k; return d; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

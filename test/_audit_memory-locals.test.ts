@@ -55,158 +55,158 @@ const cd_b1 = (sig: string, b: Buffer) => '0x' + sel(sig) + pad(0x20n) + encBuf(
 
 // ----------------------------- sources ---------------------------------------
 const JETH = `
-@struct class P { a: u256; b: u8; c: i64; d: address; }
-@struct class Q { x: u128; y: u128; }
-@struct class Inner { a: u256; b: i64; }
-@struct class Outer { tag: u256; inner: Inner; z: u8; }
-@struct class VS  { a: u256; s: string; }
-@struct class SV  { s: string; a: u256; }
-@struct class SV2 { s: string; a: u8; }
-@struct class D4  { a: u256; s: string; b: bytes; n: u64; }
-@struct class DN  { x: u8; y: i16; z: address; w: bytes4; flag: bool; s: string; }
-@contract class C {
-  @state s: P;                  // slots 0..3 (a=0,b/?=1 actually a=slot0; struct packs: a=slot0, b+c+d=slot1)
-  @state q: Q;                  // packed x,y in one slot
-  @state st: VS;                // dynamic-field storage struct
-  @state st4: D4;
-  @state m: mapping<u256, u256>;
-  @state arr: Arr<u256, 4>;     // fixed storage array
-  @state dyn: u256[];           // dynamic storage array
-  @state cnt: u256;
-  @state acc: u256;
-  @state g3: Arr<u256, 3>;      // fixed storage array source for memory copy
+type P = { a: u256; b: u8; c: i64; d: address; };
+type Q = { x: u128; y: u128; };
+type Inner = { a: u256; b: i64; };
+type Outer = { tag: u256; inner: Inner; z: u8; };
+type VS = { a: u256; s: string; };
+type SV = { s: string; a: u256; };
+type SV2 = { s: string; a: u8; };
+type D4 = { a: u256; s: string; b: bytes; n: u64; };
+type DN = { x: u8; y: i16; z: address; w: bytes4; flag: bool; s: string; };
+class C {
+  s: P;                  // slots 0..3 (a=0,b/?=1 actually a=slot0; struct packs: a=slot0, b+c+d=slot1)
+  q: Q;                  // packed x,y in one slot
+  st: VS;                // dynamic-field storage struct
+  st4: D4;
+  m: mapping<u256, u256>;
+  arr: Arr<u256, 4>;     // fixed storage array
+  dyn: u256[];           // dynamic storage array
+  cnt: u256;
+  acc: u256;
+  g3: Arr<u256, 3>;      // fixed storage array source for memory copy
 
   // ===== static struct memory locals =====
-  @external @pure mkP(a: u256, b: u8, c: i64, d: address): P { let p: P = P(a, b, c, d); return p; }
-  @external @pure readWrite(a: u256, b: u8, c: i64, d: address, na: u256): P {
+  get mkP(a: u256, b: u8, c: i64, d: address): External<P> { let p: P = P(a, b, c, d); return p; }
+  get readWrite(a: u256, b: u8, c: i64, d: address, na: u256): External<P> {
     let p: P = P(a, b, c, d); let k: u256 = p.a; p.a = k + na; return p;
   }
   // aliasing: q aliases p; mutate through q; read p
-  @external @pure aliasMut(a: u128, b: u128, nx: u128): Q {
+  get aliasMut(a: u128, b: u128, nx: u128): External<Q> {
     let p: Q = Q(a, b); let r: Q = p; r.x = r.x + nx; r.y = nx; return p;
   }
   // nested-field whole read: let inn = o.inner aliases the parent; mutate inn; read o
-  @external @pure nestedAlias(t: u256, ia: u256, ib: i64, z: u8, nv: u256): Outer {
+  get nestedAlias(t: u256, ia: u256, ib: i64, z: u8, nv: u256): External<Outer> {
     let o: Outer = Outer(t, Inner(ia, ib), z);
     let inn: Inner = o.inner;
     inn.a = nv;
     return o;
   }
   // pass-by-ref helper mutates a memory struct param
-  @pure setQ(p: Q, nx: u128, ny: u128): void { p.x = nx; p.y = ny; }
-  @external @pure refMut(a: u128, b: u128, nx: u128, ny: u128): Q {
+  setQ(p: Q, nx: u128, ny: u128): void { p.x = nx; p.y = ny; }
+  get refMut(a: u128, b: u128, nx: u128, ny: u128): External<Q> {
     let p: Q = Q(a, b); this.setQ(p, nx, ny); return p;
   }
   // copy storage struct -> mutate local -> return (storage must NOT change)
-  @external setS(a: u256, b: u8, c: i64, d: address): void { this.s = P(a, b, c, d); }
-  @external copyMutS(na: u256): P { let p: P = this.s; p.a = na; p.b = 255n; return p; }
-  @external @view getS(): P { return this.s; }
+  setS(a: u256, b: u8, c: i64, d: address): External<void> { this.s = P(a, b, c, d); }
+  get copyMutS(na: u256): External<P> { let p: P = this.s; p.a = na; p.b = 255n; return p; }
+  get getS(): External<P> { return this.s; }
 
   // ===== static fixed-array memory locals =====
-  @external @pure fa_build(x: u256, y: u256, z: u256, i: u256): u256 {
+  get fa_build(x: u256, y: u256, z: u256, i: u256): External<u256> {
     let a: Arr<u256, 3> = [x, y, z]; a[0n] += 1n; a[1n]++; return a[i];
   }
-  @external @pure fa_oobR(x: u256, i: u256): u256 { let a: Arr<u256, 3> = [x, x, x]; return a[i]; }
-  @external @pure fa_oobW(x: u256, i: u256): u256 { let a: Arr<u256, 3> = [x, x, x]; a[i] = 9n; return a[0n]; }
-  @external @pure fa_alias(x: u256): Arr<u256, 3> { let a: Arr<u256, 3> = [x, x, x]; let b: Arr<u256, 3> = a; b[0n] = 99n; return a; }
-  @external @pure fa_return(p: u256, q: u256): Arr<u256, 2> { let a: Arr<u256, 2> = [p, q]; a[1n] += 5n; return a; }
-  @external @pure fa_narrow(p: u8, q: u8): Arr<u8, 4> { let a: Arr<u8, 4> = [p, q, 255n, 0n]; a[1n] = 200n; a[0n] += 50n; return a; }
-  @external setG3(x: u256, y: u256, z: u256): void { this.g3[0n] = x; this.g3[1n] = y; this.g3[2n] = z; }
-  @external @view fa_fromStorage(): Arr<u256, 3> { let a: Arr<u256, 3> = this.g3; a[0n] = a[0n] + 1000n; a[2n]++; return a; }
+  get fa_oobR(x: u256, i: u256): External<u256> { let a: Arr<u256, 3> = [x, x, x]; return a[i]; }
+  get fa_oobW(x: u256, i: u256): External<u256> { let a: Arr<u256, 3> = [x, x, x]; a[i] = 9n; return a[0n]; }
+  get fa_alias(x: u256): External<Arr<u256, 3>> { let a: Arr<u256, 3> = [x, x, x]; let b: Arr<u256, 3> = a; b[0n] = 99n; return a; }
+  get fa_return(p: u256, q: u256): External<Arr<u256, 2>> { let a: Arr<u256, 2> = [p, q]; a[1n] += 5n; return a; }
+  get fa_narrow(p: u8, q: u8): External<Arr<u8, 4>> { let a: Arr<u8, 4> = [p, q, 255n, 0n]; a[1n] = 200n; a[0n] += 50n; return a; }
+  setG3(x: u256, y: u256, z: u256): External<void> { this.g3[0n] = x; this.g3[1n] = y; this.g3[2n] = z; }
+  get fa_fromStorage(): External<Arr<u256, 3>> { let a: Arr<u256, 3> = this.g3; a[0n] = a[0n] + 1000n; a[2n]++; return a; }
 
   // ===== dynamic value-array memory locals =====
-  @external @pure dv_build(a: u256, b: u256, c: u256, i: u256): u256 { let xs: u256[] = [a, b, c]; xs[1n] = xs[1n] + 7n; return xs[i]; }
-  @external @pure dv_oobR(a: u256, i: u256): u256 { let xs: u256[] = [a, a]; return xs[i]; }
-  @external @pure dv_oobW(a: u256, i: u256): u256 { let xs: u256[] = [a, a]; xs[i] = 5n; return xs[0n]; }
-  @external @pure dv_len(a: u256, b: u256, c: u256): u256 { let xs: u256[] = [a, b, c]; return xs.length; }
+  get dv_build(a: u256, b: u256, c: u256, i: u256): External<u256> { let xs: u256[] = [a, b, c]; xs[1n] = xs[1n] + 7n; return xs[i]; }
+  get dv_oobR(a: u256, i: u256): External<u256> { let xs: u256[] = [a, a]; return xs[i]; }
+  get dv_oobW(a: u256, i: u256): External<u256> { let xs: u256[] = [a, a]; xs[i] = 5n; return xs[0n]; }
+  get dv_len(a: u256, b: u256, c: u256): External<u256> { let xs: u256[] = [a, b, c]; return xs.length; }
 
   // ===== bytes/string memory locals =====
-  @external @pure bs_echo(s: string): string { let t: string = s; return t; }
-  @external @pure bs_len(b: bytes): u256 { let t: bytes = b; return t.length; }
-  @external @pure bs_at(b: bytes, i: u256): u8 { let t: bytes = b; return u8(t[i]); }
-  @external @pure bs_litLen(): u256 { let t: bytes = "literal payload exceeding thirty-two bytes for a length read!"; return t.length; }
-  @external @view bs_fromStorageLen(): u256 { let t: bytes = this.st4.b; return t.length; }
-  @external seedStS(av: u256, s: string): void { this.st = VS(av, s); }
+  get bs_echo(s: string): External<string> { let t: string = s; return t; }
+  get bs_len(b: bytes): External<u256> { let t: bytes = b; return t.length; }
+  get bs_at(b: bytes, i: u256): External<u8> { let t: bytes = b; return u8(t[i]); }
+  get bs_litLen(): External<u256> { let t: bytes = "literal payload exceeding thirty-two bytes for a length read!"; return t.length; }
+  get bs_fromStorageLen(): External<u256> { let t: bytes = this.st4.b; return t.length; }
+  seedStS(av: u256, s: string): External<void> { this.st = VS(av, s); }
 
   // ===== dynamic-field struct memory locals =====
-  @external @pure dyn_mkVS(a: u256, s: string): VS { let d: VS = VS(a, s); return d; }
-  @external @pure dyn_writeVal(a: u256, s: string, na: u256): VS { let d: VS = VS(a, s); d.a = d.a + na; return d; }
-  @external @pure dyn_writeStr(a: u256, s: string, ns: string): VS { let d: VS = VS(a, s); d.s = ns; return d; }
+  get dyn_mkVS(a: u256, s: string): External<VS> { let d: VS = VS(a, s); return d; }
+  get dyn_writeVal(a: u256, s: string, na: u256): External<VS> { let d: VS = VS(a, s); d.a = d.a + na; return d; }
+  get dyn_writeStr(a: u256, s: string, ns: string): External<VS> { let d: VS = VS(a, s); d.s = ns; return d; }
   // value field AFTER the dynamic field (head-offset under write)
-  @external @pure dyn_writeSVa(s: string, a: u256, na: u256): SV { let d: SV = SV(s, a); d.a = na; return d; }
+  get dyn_writeSVa(s: string, a: u256, na: u256): External<SV> { let d: SV = SV(s, a); d.a = na; return d; }
   // copy from storage struct -> return whole (storage unchanged)
-  @external seedSt4(av: u256, s: string, b: bytes, n: u64): void { this.st4 = D4(av, s, b, n); }
-  @external @view dyn_fromSt4(): D4 { let d: D4 = this.st4; return d; }
-  @external @view dyn_fromSt4Write(ns: string, nb: bytes, nv: u256): D4 { let d: D4 = this.st4; d.s = ns; d.b = nb; d.a = nv; return d; }
+  seedSt4(av: u256, s: string, b: bytes, n: u64): External<void> { this.st4 = D4(av, s, b, n); }
+  get dyn_fromSt4(): External<D4> { let d: D4 = this.st4; return d; }
+  get dyn_fromSt4Write(ns: string, nb: bytes, nv: u256): External<D4> { let d: D4 = this.st4; d.s = ns; d.b = nb; d.a = nv; return d; }
   // copy from calldata struct param -> return whole
-  @external @pure dyn_fromCd(x: D4): D4 { let d: D4 = x; return d; }
+  get dyn_fromCd(x: D4): External<D4> { let d: D4 = x; return d; }
   // copy from calldata DN (narrow/signed/address/bytes4/bool fields) -> validation parity
-  @external @pure dyn_fromDNcd(x: DN): DN { let d: DN = x; return d; }
-  @external @pure dyn_mkDN(x: u8, y: i16, z: address, w: bytes4, flag: bool, s: string): DN { let d: DN = DN(x, y, z, w, flag, s); return d; }
+  get dyn_fromDNcd(x: DN): External<DN> { let d: DN = x; return d; }
+  get dyn_mkDN(x: u8, y: i16, z: address, w: bytes4, flag: bool, s: string): External<DN> { let d: DN = DN(x, y, z, w, flag, s); return d; }
   // copy from another LOCAL (alias chain) then mutate through alias; read original
-  @external @pure dyn_aliasCross(av: u256, s: string, ns: string, nv: u256): VS {
+  get dyn_aliasCross(av: u256, s: string, ns: string, nv: u256): External<VS> {
     let d: VS = VS(av, s); let e: VS = d; e.s = ns; e.a = nv; return d;
   }
   // mutate through alias is visible in the ORIGINAL's bytes read (length)
-  @external @view dyn_aliasLen(): u256 { let d: D4 = this.st4; let e: D4 = d; d.b = "ZZZ"; return e.b.length; }
+  get dyn_aliasLen(): External<u256> { let d: D4 = this.st4; let e: D4 = d; d.b = "ZZZ"; return e.b.length; }
   // byte index on a dyn field of a constructed struct (in-bounds + OOB)
-  @external @pure dyn_bAt(b: bytes, i: u256): u8 { let d: D4 = D4(0n, "", b, 0n); return u8(d.b[i]); }
+  get dyn_bAt(b: bytes, i: u256): External<u8> { let d: D4 = D4(0n, "", b, 0n); return u8(d.b[i]); }
   // construct a dyn-struct from a calldata NARROW value param placed AFTER the dyn field;
   // a dirty u8/i16/bool param surfaces as a checked param-validation revert (before any struct work)
-  @external @pure dyn_mkPostNarrow(s: string, a: u8): SV2 { let d: SV2 = SV2(s, a); return d; }
+  get dyn_mkPostNarrow(s: string, a: u8): External<SV2> { let d: SV2 = SV2(s, a); return d; }
   // calldata copy of SV2 (value field after dyn field): solc validates the narrow word on copy
-  @external @pure dyn_fromCdPost(x: SV2): SV2 { let d: SV2 = x; return d; }
+  get dyn_fromCdPost(x: SV2): External<SV2> { let d: SV2 = x; return d; }
   // tuple destructuring where a MEMORY struct field is a target (swap two fields of a memory struct)
-  @external @pure td_memField(a: u128, b: u128): Q { let p: Q = Q(a, b); [p.x, p.y] = [p.y, p.x]; return p; }
+  get td_memField(a: u128, b: u128): External<Q> { let p: Q = Q(a, b); [p.x, p.y] = [p.y, p.x]; return p; }
   // tuple destructuring assigning a call result to two memory-struct fields
-  @external @pure td_memFieldCall(a: u256, b: u256): Inner { let p: Inner = Inner(0n, 0n); [p.a, p.b] = this.addsubI(a, b); return p; }
-  @pure addsubI(a: u256, b: u256): [u256, i64] { return [a + b, i64(u64(a)) - i64(u64(b))]; }
+  get td_memFieldCall(a: u256, b: u256): External<Inner> { let p: Inner = Inner(0n, 0n); [p.a, p.b] = this.addsubI(a, b); return p; }
+  addsubI(a: u256, b: u256): [u256, i64] { return [a + b, i64(u64(a)) - i64(u64(b))]; }
 
   // ===== internal/private calls: value/void/struct, recursion, purity =====
-  @pure addV(a: u256, b: u256): u256 { return a + b; }
-  @external @pure callV(a: u256, b: u256): u256 { return this.addV(a, b) * 2n; }
+  addV(a: u256, b: u256): u256 { return a + b; }
+  get callV(a: u256, b: u256): External<u256> { return this.addV(a, b) * 2n; }
   bumpAcc(by: u256): void { this.acc = this.acc + by; }
-  @external doBump(x: u256): void { this.bumpAcc(x); this.bumpAcc(x); }
-  @external @view getAcc(): u256 { return this.acc; }
+  doBump(x: u256): External<void> { this.bumpAcc(x); this.bumpAcc(x); }
+  get getAcc(): External<u256> { return this.acc; }
   // struct param + struct return through an internal call
-  @pure twP(p: P): P { return P(p.a + 1n, u8(p.b + 1n), i64(p.c - 1n), p.d); }
-  @external @pure callStructPR(a: u256, b: u8, c: i64, d: address): P { return this.twP(P(a, b, c, d)); }
+  twP(p: P): P { return P(p.a + 1n, u8(p.b + 1n), i64(p.c - 1n), p.d); }
+  get callStructPR(a: u256, b: u8, c: i64, d: address): External<P> { return this.twP(P(a, b, c, d)); }
   // recursion that takes AND returns a struct
-  @pure climb(p: Q, n: u128): Q { if (n == 0n) { return p; } return this.climb(Q(p.x + 1n, p.y + 2n), n - 1n); }
-  @external @pure climbE(a: u128, b: u128, n: u128): Q { return this.climb(Q(a, b), n); }
+  climb(p: Q, n: u128): Q { if (n == 0n) { return p; } return this.climb(Q(p.x + 1n, p.y + 2n), n - 1n); }
+  get climbE(a: u128, b: u128, n: u128): External<Q> { return this.climb(Q(a, b), n); }
   // recursion that mutates the param by-ref each level
-  @pure accDown(p: Q, n: u128): void { if (n == 0n) { return; } p.x = p.x + n; this.accDown(p, n - 1n); }
-  @external @pure accE(a: u128, n: u128): Q { let p: Q = Q(a, 0n); this.accDown(p, n); return p; }
+  accDown(p: Q, n: u128): void { if (n == 0n) { return; } p.x = p.x + n; this.accDown(p, n - 1n); }
+  get accE(a: u128, n: u128): External<Q> { let p: Q = Q(a, 0n); this.accDown(p, n); return p; }
   // transitive purity: pure -> pure -> pure
-  @pure d4(x: u256): u256 { return x * 8n; }
-  @pure c4(x: u256): u256 { return this.d4(x) + 4n; }
-  @pure b4(x: u256): u256 { return this.c4(x) + 2n; }
-  @external @pure chainE(x: u256): u256 { return this.b4(x) + 1n; }
+  d4(x: u256): u256 { return x * 8n; }
+  c4(x: u256): u256 { return this.d4(x) + 4n; }
+  b4(x: u256): u256 { return this.c4(x) + 2n; }
+  get chainE(x: u256): External<u256> { return this.b4(x) + 1n; }
   // private call (bare name)
-  @pure priv(a: u256): u256 { return a * 3n; }
-  @external @pure callPriv(a: u256): u256 { return priv(a) + 1n; }
+  priv(a: u256): u256 { return a * 3n; }
+  get callPriv(a: u256): External<u256> { return priv(a) + 1n; }
 
   // ===== multi-value internal calls via tuple destructuring =====
-  @pure two(): [u256, u256] { return [11n, 22n]; }
-  @pure addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
-  @external @pure td_decl(): u256 { let [a, b] = this.two(); return a * 1000n + b; }
-  @external @pure td_skip(): u256 { let [ , b] = this.two(); return b; }
-  @external @pure td_underflow(p: u256, qv: u256): u256 { let [s, d] = this.addsub(p, qv); return s + d; }
+  two(): [u256, u256] { return [11n, 22n]; }
+  addsub(a: u256, b: u256): [u256, u256] { return [a + b, a - b]; }
+  get td_decl(): External<u256> { let [a, b] = this.two(); return a * 1000n + b; }
+  get td_skip(): External<u256> { let [ , b] = this.two(); return b; }
+  get td_underflow(p: u256, qv: u256): External<u256> { let [s, d] = this.addsub(p, qv); return s + d; }
   // assign to existing locals
-  @external @pure td_assignLocal(p: u256, qv: u256): u256 { let a: u256 = 1n; let b: u256 = 2n; [a, b] = this.addsub(p, qv); return a * 1000000n + b; }
+  get td_assignLocal(p: u256, qv: u256): External<u256> { let a: u256 = 1n; let b: u256 = 2n; [a, b] = this.addsub(p, qv); return a * 1000000n + b; }
   // swap via tuple
-  @external @pure td_swap(p: u256, qv: u256): u256 { let a: u256 = p; let b: u256 = qv; [a, b] = [b, a]; return a * 1000000n + b; }
+  get td_swap(p: u256, qv: u256): External<u256> { let a: u256 = p; let b: u256 = qv; [a, b] = [b, a]; return a * 1000000n + b; }
   // assign to STORAGE targets; compare raw slots
-  @external td_storage(p: u256, qv: u256): u256 { [this.acc, this.cnt] = this.addsub(p, qv); return this.acc * 1000000n + this.cnt; }
+  td_storage(p: u256, qv: u256): External<u256> { [this.acc, this.cnt] = this.addsub(p, qv); return this.acc * 1000000n + this.cnt; }
   // swap two PACKED state vars (one slot) via tuple
-  @external td_swapPacked(p: u128, qv: u128): u256 { this.q.x = p; this.q.y = qv; [this.q.x, this.q.y] = [this.q.y, this.q.x]; return u256(this.q.x) * 1000000n + u256(this.q.y); }
+  td_swapPacked(p: u128, qv: u128): External<u256> { this.q.x = p; this.q.y = qv; [this.q.x, this.q.y] = [this.q.y, this.q.x]; return u256(this.q.x) * 1000000n + u256(this.q.y); }
   // RHS evaluated BEFORE LHS store: [this.acc, this.cnt] = [this.cnt, this.acc + this.cnt]
-  @external td_rhsFirst(p: u256, qv: u256): u256 { this.acc = p; this.cnt = qv; [this.acc, this.cnt] = [this.cnt, this.acc + this.cnt]; return this.acc * 1000000n + this.cnt; }
+  td_rhsFirst(p: u256, qv: u256): External<u256> { this.acc = p; this.cnt = qv; [this.acc, this.cnt] = [this.cnt, this.acc + this.cnt]; return this.acc * 1000000n + this.cnt; }
   // skipped CALL component: call runs once (side effect), value discarded
   threeSide(): [u256, u256, u256] { this.cnt = this.cnt + 7n; return [1n, 2n, 3n]; }
-  @external td_skipCall(): u256 { this.cnt = 0n; let [a, , c] = this.threeSide(); return a * 1000000n + c * 1000n + this.cnt; }
-  @view getCnt(): u256 { return this.cnt; }
-  @view getQ(): Q { return this.q; }
+  td_skipCall(): External<u256> { this.cnt = 0n; let [a, , c] = this.threeSide(); return a * 1000000n + c * 1000n + this.cnt; }
+  getCnt(): u256 { return this.cnt; }
+  getQ(): Q { return this.q; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

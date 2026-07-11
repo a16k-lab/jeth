@@ -56,29 +56,29 @@ async function slotsEq(p: Pair, label: string, slots: bigint[]) {
 // P packs (b:u8, c:address, e:bool) into one slot alongside a:u256 and d:i128. Mutating the
 // memory local must NOT touch storage; verify via getters AND raw slots, both branch directions.
 // ───────────────────────────────────────────────────────────────────────────────────────────
-const J1 = `@struct class P { a: u256; b: u8; c: address; d: i128; e: bool; f: bytes32; }
-@contract class C {
-  @state x: P; @state y: P;
-  @external seed(): void {
+const J1 = `type P = { a: u256; b: u8; c: address; d: i128; e: bool; f: bytes32; };
+class C {
+  x: P; y: P;
+  seed(): External<void> {
     this.x = P(11n, 200n, address(0xa1n), -5n, true, bytes32(u256(0x1122n)));
     this.y = P(33n, 44n, address(0xb2n), 99n, false, bytes32(u256(0xdeadbeefn)));
   }
-  @external @view getX(): P { return this.x; }
-  @external @view getY(): P { return this.y; }
+  get getX(): External<P> { return this.x; }
+  get getY(): External<P> { return this.y; }
   // copy via ternary, mutate every field of the local, return it (storage must be untouched)
-  @external mutLocal(c: bool): P {
+  get mutLocal(c: bool): External<P> {
     let p: P = c ? this.x : this.y;
     p.a = 7777n; p.b = 1n; p.c = address(0xcafen); p.d = -42n; p.e = false; p.f = bytes32(u256(0x9999n));
     return p;
   }
-  @external @view pickStruct(c: bool): P { return c ? this.x : this.y; }
-  @external @view pickStructLocal(c: bool): P { let p: P = c ? this.x : this.y; return p; }
+  get pickStruct(c: bool): External<P> { return c ? this.x : this.y; }
+  get pickStructLocal(c: bool): External<P> { let p: P = c ? this.x : this.y; return p; }
   // field read after select via a memory-aggregate local (the supported form)
-  @external @view fieldA(c: bool): u256 { let p: P = c ? this.x : this.y; return p.a; }
-  @external @view fieldB(c: bool): u8 { let p: P = c ? this.x : this.y; return p.b; }
-  @external @view fieldD(c: bool): i128 { let p: P = c ? this.x : this.y; return p.d; }
-  @external @view fieldE(c: bool): bool { let p: P = c ? this.x : this.y; return p.e; }
-  @external @view fieldF(c: bool): bytes32 { let p: P = c ? this.x : this.y; return p.f; }
+  get fieldA(c: bool): External<u256> { let p: P = c ? this.x : this.y; return p.a; }
+  get fieldB(c: bool): External<u8> { let p: P = c ? this.x : this.y; return p.b; }
+  get fieldD(c: bool): External<i128> { let p: P = c ? this.x : this.y; return p.d; }
+  get fieldE(c: bool): External<bool> { let p: P = c ? this.x : this.y; return p.e; }
+  get fieldF(c: bool): External<bytes32> { let p: P = c ? this.x : this.y; return p.f; }
 }`;
 const S1 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -110,18 +110,18 @@ contract C {
 // revert (division by zero, subtraction underflow, multiplication overflow). When the storage
 // branch is taken (c true) the ctor must NOT be evaluated -> no revert. solc must agree.
 // ───────────────────────────────────────────────────────────────────────────────────────────
-const J2 = `@struct class P { a: u256; b: u256; }
-@contract class C {
-  @state x: P;
-  @external seed(): void { this.x = P(100n, 200n); }
+const J2 = `type P = { a: u256; b: u256; };
+class C {
+  x: P;
+  seed(): External<void> { this.x = P(100n, 200n); }
   // ctor branch divides by v: if v==0 and ctor branch is TAKEN -> revert; if NOT taken -> ok.
-  @external divBranch(c: bool, v: u256): P { return c ? this.x : P(1000n / v, 2n); }
+  get divBranch(c: bool, v: u256): External<P> { return c ? this.x : P(1000n / v, 2n); }
   // ctor branch underflows: 5 - v underflows when v>5 and the ctor branch is taken.
-  @external subBranch(c: bool, v: u256): P { return c ? this.x : P(5n - v, 3n); }
+  get subBranch(c: bool, v: u256): External<P> { return c ? this.x : P(5n - v, 3n); }
   // ctor branch overflows on a 256-bit multiply.
-  @external mulBranch(c: bool, v: u256): P { return c ? this.x : P(v * v, 4n); }
+  get mulBranch(c: bool, v: u256): External<P> { return c ? this.x : P(v * v, 4n); }
   // local-init form (same short-circuit requirement)
-  @external divLocal(c: bool, v: u256): P { let p: P = c ? this.x : P(1000n / v, 2n); return p; }
+  get divLocal(c: bool, v: u256): External<P> { let p: P = c ? this.x : P(1000n / v, 2n); return p; }
 }`;
 const S2 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -139,14 +139,14 @@ contract C {
 // Contract 3: NESTED aggregates. Struct-with-fixed-array-field, fixed-array-of-struct,
 // nested fixed arrays uint256[2][3], plus packed u8 arrays. Whole-aggregate return via ternary.
 // ───────────────────────────────────────────────────────────────────────────────────────────
-const J3 = `@struct class Inner { p: u128; q: u128; }
-@struct class WithArr { tag: u256; arr: Arr<u256,3>; }
-@contract class C {
-  @state wx: WithArr; @state wy: WithArr;
-  @state sx: Arr<Inner,2>; @state sy: Arr<Inner,2>;
-  @state nx: Arr<Arr<u256,2>,3>; @state ny: Arr<Arr<u256,2>,3>;
-  @state bx: Arr<u8,5>; @state by: Arr<u8,5>;
-  @external seed(): void {
+const J3 = `type Inner = { p: u128; q: u128; };
+type WithArr = { tag: u256; arr: Arr<u256,3>; };
+class C {
+  wx: WithArr; wy: WithArr;
+  sx: Arr<Inner,2>; sy: Arr<Inner,2>;
+  nx: Arr<Arr<u256,2>,3>; ny: Arr<Arr<u256,2>,3>;
+  bx: Arr<u8,5>; by: Arr<u8,5>;
+  seed(): External<void> {
     this.wx = WithArr(1n, [10n, 20n, 30n]); this.wy = WithArr(2n, [40n, 50n, 60n]);
     this.sx[0n] = Inner(1n, 2n); this.sx[1n] = Inner(3n, 4n);
     this.sy[0n] = Inner(5n, 6n); this.sy[1n] = Inner(7n, 8n);
@@ -155,17 +155,17 @@ const J3 = `@struct class Inner { p: u128; q: u128; }
     this.bx[0n] = 255n; this.bx[1n] = 1n; this.bx[2n] = 128n; this.bx[3n] = 0n; this.bx[4n] = 77n;
     this.by[0n] = 9n; this.by[1n] = 8n; this.by[2n] = 7n; this.by[3n] = 6n; this.by[4n] = 5n;
   }
-  @external @view pickWithArr(c: bool): WithArr { return c ? this.wx : this.wy; }
-  @external @view pickArrOfStruct(c: bool): Arr<Inner,2> { return c ? this.sx : this.sy; }
-  @external @view pickNested(c: bool): Arr<Arr<u256,2>,3> { return c ? this.nx : this.ny; }
-  @external @view pickPacked(c: bool): Arr<u8,5> { return c ? this.bx : this.by; }
+  get pickWithArr(c: bool): External<WithArr> { return c ? this.wx : this.wy; }
+  get pickArrOfStruct(c: bool): External<Arr<Inner,2>> { return c ? this.sx : this.sy; }
+  get pickNested(c: bool): External<Arr<Arr<u256,2>,3>> { return c ? this.nx : this.ny; }
+  get pickPacked(c: bool): External<Arr<u8,5>> { return c ? this.bx : this.by; }
   // local + field read on the nested ones
-  @external @view withArrLocal(c: bool): WithArr { let w: WithArr = c ? this.wx : this.wy; return w; }
-  @external @view packedElem(c: bool, i: u256): u8 { let a: Arr<u8,5> = c ? this.bx : this.by; return a[i]; }
+  get withArrLocal(c: bool): External<WithArr> { let w: WithArr = c ? this.wx : this.wy; return w; }
+  get packedElem(c: bool, i: u256): External<u8> { let a: Arr<u8,5> = c ? this.bx : this.by; return a[i]; }
   // mutate the value field of a struct-with-array local; storage must be untouched (independence)
-  @external mutWithArr(c: bool): WithArr { let w: WithArr = c ? this.wx : this.wy; w.tag = 999n; return w; }
-  @external @view getWx(): WithArr { return this.wx; }
-  @external @view getWy(): WithArr { return this.wy; }
+  get mutWithArr(c: bool): External<WithArr> { let w: WithArr = c ? this.wx : this.wy; w.tag = 999n; return w; }
+  get getWx(): External<WithArr> { return this.wx; }
+  get getWy(): External<WithArr> { return this.wy; }
 }`;
 const S3 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -200,10 +200,10 @@ contract C {
 //  - storage vs ctor, storage vs another memory local, two ctors, nested ternary c ? x : (d ? y : z).
 //  - boundary values: 0, 2^256-1, signed min/max, max address, max bytesN.
 // ───────────────────────────────────────────────────────────────────────────────────────────
-const J4 = `@struct class P { a: u256; s: i256; ad: address; bn: bytes32; }
-@contract class C {
-  @state x: P; @state y: P; @state z: P;
-  @external seed(): void {
+const J4 = `type P = { a: u256; s: i256; ad: address; bn: bytes32; };
+class C {
+  x: P; y: P; z: P;
+  seed(): External<void> {
     this.x = P(0n, 0n, address(0n), bytes32(u256(0n)));
     this.y = P(115792089237316195423570985008687907853269984665640564039457584007913129639935n,
                57896044618658097711785492504343953926634992332820282019728792003956564819967n,
@@ -211,11 +211,11 @@ const J4 = `@struct class P { a: u256; s: i256; ad: address; bn: bytes32; }
     this.z = P(42n, -57896044618658097711785492504343953926634992332820282019728792003956564819968n, address(0x1n), bytes32(u256(0x1n)));
   }
   // storage vs ctor with boundary literal args
-  @external sVsCtor(c: bool, v: i256): P { return c ? this.x : P(v == 0n ? 0n : u256(1n), v, address(0x2n), bytes32(u256(0x3n))); }
+  get sVsCtor(c: bool, v: i256): External<P> { return c ? this.x : P(v == 0n ? 0n : u256(1n), v, address(0x2n), bytes32(u256(0x3n))); }
   // storage vs another memory local
-  @external sVsLocal(c: bool): P { let m: P = P(9n, -1n, address(0x7n), bytes32(u256(0x8n))); return c ? this.x : m; }
+  get sVsLocal(c: bool): External<P> { let m: P = P(9n, -1n, address(0x7n), bytes32(u256(0x8n))); return c ? this.x : m; }
   // two constructors
-  @external twoCtor(c: bool, v: u256): P { return c ? P(v, 1n, address(0xaan), bytes32(u256(0xbbn))) : P(v + 1n, -1n, address(0xccn), bytes32(u256(0xddn))); }
+  get twoCtor(c: bool, v: u256): External<P> { return c ? P(v, 1n, address(0xaan), bytes32(u256(0xbbn))) : P(v + 1n, -1n, address(0xccn), bytes32(u256(0xddn))); }
 }`;
 const S4 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -236,22 +236,22 @@ contract C {
 // Contract 5: Fixed-array element-type variety: address arrays, bytesN arrays, write p[i]=v
 // after select then return (the local must be an independent copy of storage).
 // ───────────────────────────────────────────────────────────────────────────────────────────
-const J5 = `@contract class C {
-  @state ax: Arr<address,3>; @state ay: Arr<address,3>;
-  @state bx: Arr<bytes4,4>; @state by: Arr<bytes4,4>;
-  @external seed(): void {
+const J5 = `class C {
+  ax: Arr<address,3>; ay: Arr<address,3>;
+  bx: Arr<bytes4,4>; by: Arr<bytes4,4>;
+  seed(): External<void> {
     this.ax[0n] = address(0xa1n); this.ax[1n] = address(0xa2n); this.ax[2n] = address(type(u160).max);
     this.ay[0n] = address(0xb1n); this.ay[1n] = address(0xb2n); this.ay[2n] = address(0x0n);
     this.bx[0n] = bytes4(u32(0x11223344n)); this.bx[1n] = bytes4(u32(0xffffffffn)); this.bx[2n] = bytes4(u32(0x0n)); this.bx[3n] = bytes4(u32(0xdeadbeefn));
     this.by[0n] = bytes4(u32(0xaabbccddn)); this.by[1n] = bytes4(u32(0x1n)); this.by[2n] = bytes4(u32(0x2n)); this.by[3n] = bytes4(u32(0x3n));
   }
-  @external @view pickAddrs(c: bool): Arr<address,3> { return c ? this.ax : this.ay; }
-  @external @view pickBytes4(c: bool): Arr<bytes4,4> { return c ? this.bx : this.by; }
+  get pickAddrs(c: bool): External<Arr<address,3>> { return c ? this.ax : this.ay; }
+  get pickBytes4(c: bool): External<Arr<bytes4,4>> { return c ? this.bx : this.by; }
   // write an element after select, return whole; storage must be untouched (independence)
-  @external mutAddrs(c: bool): Arr<address,3> { let a: Arr<address,3> = c ? this.ax : this.ay; a[1n] = address(0xdeadn); return a; }
-  @external @view addrElem(c: bool, i: u256): address { let a: Arr<address,3> = c ? this.ax : this.ay; return a[i]; }
-  @external @view getAx(): Arr<address,3> { return this.ax; }
-  @external @view getAy(): Arr<address,3> { return this.ay; }
+  get mutAddrs(c: bool): External<Arr<address,3>> { let a: Arr<address,3> = c ? this.ax : this.ay; a[1n] = address(0xdeadn); return a; }
+  get addrElem(c: bool, i: u256): External<address> { let a: Arr<address,3> = c ? this.ax : this.ay; return a[i]; }
+  get getAx(): External<Arr<address,3>> { return this.ax; }
+  get getAy(): External<Arr<address,3>> { return this.ay; }
 }`;
 const S5 = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -401,11 +401,11 @@ describe('adversarial: static-aggregate ternary vs Solidity', () => {
   // The inner ternary materializes + selects recursively (aggToMemPtr 'ternary' -> lowerExpr).
   // Byte-identical to solc across all (c,d) combinations.
   describe('nested aggregate ternary c ? x : (d ? y : z)', () => {
-    const Jn = `@struct class P { a: u256; b: u8; c: address; }
-@contract class C {
-  @state x: P; @state y: P; @state z: P;
-  @external seed(): void { this.x = P(1n, 2n, address(0xa1n)); this.y = P(3n, 4n, address(0xb2n)); this.z = P(5n, 6n, address(0xc3n)); }
-  @external @view nested(c: bool, d: bool): P { return c ? this.x : (d ? this.y : this.z); }
+    const Jn = `type P = { a: u256; b: u8; c: address; };
+class C {
+  x: P; y: P; z: P;
+  seed(): External<void> { this.x = P(1n, 2n, address(0xa1n)); this.y = P(3n, 4n, address(0xb2n)); this.z = P(5n, 6n, address(0xc3n)); }
+  get nested(c: bool, d: bool): External<P> { return c ? this.x : (d ? this.y : this.z); }
 }`;
     const Sn = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

@@ -60,104 +60,104 @@ const encU256Arr = (xs: bigint[]) => pad(BigInt(xs.length)) + xs.map(pad).join('
 const call = (sig: string, words: bigint[] = [], extra = '') => '0x' + sel(sig) + words.map(pad).join('') + extra;
 
 const JETH = `
-@struct class P { a: u256; b: u8; c: address; }
-@struct class Mixed { a: u128; b: u64; c: bool; d: address; e: bytes8; f: i40; }
-@struct class FD { a: u256; s: string; }                  // fixed then dynamic
-@struct class DF { s: string; a: u256; }                  // dynamic then fixed
-@struct class TwoDyn { s: string; t: string; }            // two dynamic fields
-@struct class Nest { x: u256; inner: FD; y: u256; }        // dynamic struct field
-@struct class WithArr { id: u64; data: Arr<u256, 3>; tag: bytes4; } // fixed-array field
-@struct class WithNarrArr { id: u64; data: Arr<u8, 3>; tag: bytes4; } // narrow fixed-array field
-@contract class C {
-  @state vals: u256[];
-  @state names: string[];
-  @state blobs: bytes[];
-  @state grid: u256[][];
-  @state recs: FD[];
-  @state fd1: FD;
-  @state fd2: FD;
-  @state nums: Arr<u256, 3>;
-  @state m: mapping<u256, u256[]>;
-  @state ms: mapping<u256, FD>;
-  @state mb: mapping<u256, bytes>;
+type P = { a: u256; b: u8; c: address; };
+type Mixed = { a: u128; b: u64; c: bool; d: address; e: bytes8; f: i40; };
+type FD = { a: u256; s: string; };                  // fixed then dynamic
+type DF = { s: string; a: u256; };                  // dynamic then fixed
+type TwoDyn = { s: string; t: string; };            // two dynamic fields
+type Nest = { x: u256; inner: FD; y: u256; };        // dynamic struct field
+type WithArr = { id: u64; data: Arr<u256, 3>; tag: bytes4; }; // fixed-array field
+type WithNarrArr = { id: u64; data: Arr<u8, 3>; tag: bytes4; }; // narrow fixed-array field
+class C {
+  vals: u256[];
+  names: string[];
+  blobs: bytes[];
+  grid: u256[][];
+  recs: FD[];
+  fd1: FD;
+  fd2: FD;
+  nums: Arr<u256, 3>;
+  m: mapping<u256, u256[]>;
+  ms: mapping<u256, FD>;
+  mb: mapping<u256, bytes>;
 
   // ---- seeders ----
-  @external pushVal(v: u256): void { this.vals.push(v); }
-  @external pushName(s: string): void { this.names.push(s); }
-  @external pushBlob(b: bytes): void { this.blobs.push(b); }
-  @external gridPush(): void { this.grid.push(); }
-  @external gridPushInner(i: u256, v: u256): void { this.grid[i].push(v); }
-  @external pushFD(a: u256, s: string): void { this.recs.push(FD(a, s)); }
-  @external setFd1(a: u256, s: string): void { this.fd1 = FD(a, s); }
-  @external setFd2(a: u256, s: string): void { this.fd2 = FD(a, s); }
-  @external setNums(a: u256, b: u256, c: u256): void { this.nums = [a, b, c]; }
-  @external setM(k: u256, a: u256, b: u256): void { this.m[k] = [a, b]; }
-  @external setMs(k: u256, a: u256, s: string): void { this.ms[k] = FD(a, s); }
-  @external setMb(k: u256, b: bytes): void { this.mb[k] = b; }
+  pushVal(v: u256): External<void> { this.vals.push(v); }
+  pushName(s: string): External<void> { this.names.push(s); }
+  pushBlob(b: bytes): External<void> { this.blobs.push(b); }
+  gridPush(): External<void> { this.grid.push(); }
+  gridPushInner(i: u256, v: u256): External<void> { this.grid[i].push(v); }
+  pushFD(a: u256, s: string): External<void> { this.recs.push(FD(a, s)); }
+  setFd1(a: u256, s: string): External<void> { this.fd1 = FD(a, s); }
+  setFd2(a: u256, s: string): External<void> { this.fd2 = FD(a, s); }
+  setNums(a: u256, b: u256, c: u256): External<void> { this.nums = [a, b, c]; }
+  setM(k: u256, a: u256, b: u256): External<void> { this.m[k] = [a, b]; }
+  setMs(k: u256, a: u256, s: string): External<void> { this.ms[k] = FD(a, s); }
+  setMb(k: u256, b: bytes): External<void> { this.mb[k] = b; }
 
   // ---- VALUE-ARRAY ECHO (CLEANS dirty leaves) ----
-  @external @pure echoU8Fix(a: Arr<u8, 4>): Arr<u8, 4> { return a; }
-  @external @pure echoU8Dyn(a: u8[]): u8[] { return a; }
-  @external @pure echoBoolDyn(a: bool[]): bool[] { return a; }
-  @external @pure echoI8Dyn(a: i8[]): i8[] { return a; }
-  @external @pure echoB4Dyn(a: bytes4[]): bytes4[] { return a; }
-  @external @pure echoAddrDyn(a: address[]): address[] { return a; }
-  @external @pure echoU16Nest(a: Arr<u16[], 2>): Arr<u16[], 2> { return a; }   // fixed-of-dynamic narrow
-  @external @pure echoU8DynNest(a: u8[][]): u8[][] { return a; }                // dyn-of-dyn narrow
+  get echoU8Fix(a: Arr<u8, 4>): External<Arr<u8, 4>> { return a; }
+  get echoU8Dyn(a: u8[]): External<u8[]> { return a; }
+  get echoBoolDyn(a: bool[]): External<bool[]> { return a; }
+  get echoI8Dyn(a: i8[]): External<i8[]> { return a; }
+  get echoB4Dyn(a: bytes4[]): External<bytes4[]> { return a; }
+  get echoAddrDyn(a: address[]): External<address[]> { return a; }
+  get echoU16Nest(a: Arr<u16[], 2>): External<Arr<u16[], 2>> { return a; }   // fixed-of-dynamic narrow
+  get echoU8DynNest(a: u8[][]): External<u8[][]> { return a; }                // dyn-of-dyn narrow
 
   // ---- STRUCT / STRUCT-ELEMENT ECHO (VALIDATES dirty fields) ----
-  @external @pure echoStruct(p: P): P { return p; }
-  @external @pure echoMixed(p: Mixed): Mixed { return p; }
-  @external @pure echoStructArr(a: P[]): P[] { return a; }      // DYNAMIC array of struct
-  @external @pure echoStructFix(a: Arr<P, 2>): Arr<P, 2> { return a; }
-  @external @pure echoWithNarrArr(p: WithNarrArr): WithNarrArr { return p; }
+  get echoStruct(p: P): External<P> { return p; }
+  get echoMixed(p: Mixed): External<Mixed> { return p; }
+  get echoStructArr(a: P[]): External<P[]> { return a; }      // DYNAMIC array of struct
+  get echoStructFix(a: Arr<P, 2>): External<Arr<P, 2>> { return a; }
+  get echoWithNarrArr(p: WithNarrArr): External<WithNarrArr> { return p; }
 
   // ---- dynamic-struct echoes ----
-  @external @pure echoFD(d: FD): FD { return d; }
-  @external @pure echoNest(d: Nest): Nest { return d; }
-  @external @pure echoFDArr(a: FD[]): FD[] { return a; }          // arr of dynamic struct
-  @external @pure echoFDFix(a: Arr<FD, 2>): Arr<FD, 2> { return a; } // fixed arr of dynamic struct
+  get echoFD(d: FD): External<FD> { return d; }
+  get echoNest(d: Nest): External<Nest> { return d; }
+  get echoFDArr(a: FD[]): External<FD[]> { return a; }          // arr of dynamic struct
+  get echoFDFix(a: Arr<FD, 2>): External<Arr<FD, 2>> { return a; } // fixed arr of dynamic struct
 
   // ---- bytes/string echoes ----
-  @external @pure echoBytes(b: bytes): bytes { return b; }
-  @external @pure echoStr(s: string): string { return s; }
-  @external @pure echoBytesArr(a: bytes[]): bytes[] { return a; }
-  @external @pure echoStrArr(a: string[]): string[] { return a; }
-  @external @pure echoGrid(a: u256[][]): u256[][] { return a; }
+  get echoBytes(b: bytes): External<bytes> { return b; }
+  get echoStr(s: string): External<string> { return s; }
+  get echoBytesArr(a: bytes[]): External<bytes[]> { return a; }
+  get echoStrArr(a: string[]): External<string[]> { return a; }
+  get echoGrid(a: u256[][]): External<u256[][]> { return a; }
 
   // ---- literal / constructed returns (no calldata cleaning involved) ----
-  @external @pure mkFD(a: u256, s: string): FD { return FD(a, s); }
-  @external @pure mkDF(s: string, a: u256): DF { return DF(s, a); }
-  @external @pure mkTwoDyn(s: string, t: string): TwoDyn { return TwoDyn(s, t); }
-  @external @pure mkNest(x: u256, a: u256, s: string, y: u256): Nest { return Nest(x, FD(a, s), y); }
-  @external @pure emptyStr(): string { return ""; }
-  @external @pure emptyStructStr(): FD { return FD(0n, ""); }
+  get mkFD(a: u256, s: string): External<FD> { return FD(a, s); }
+  get mkDF(s: string, a: u256): External<DF> { return DF(s, a); }
+  get mkTwoDyn(s: string, t: string): External<TwoDyn> { return TwoDyn(s, t); }
+  get mkNest(x: u256, a: u256, s: string, y: u256): External<Nest> { return Nest(x, FD(a, s), y); }
+  get emptyStr(): External<string> { return ""; }
+  get emptyStructStr(): External<FD> { return FD(0n, ""); }
 
   // ---- WHOLE STORAGE aggregate returns ----
-  @external @view allVals(): u256[] { return this.vals; }
-  @external @view allNames(): string[] { return this.names; }
-  @external @view allBlobs(): bytes[] { return this.blobs; }
-  @external @view allGrid(): u256[][] { return this.grid; }
-  @external @view allFD(): FD[] { return this.recs; }
-  @external @view getFd1(): FD { return this.fd1; }
-  @external @view getNums(): Arr<u256, 3> { return this.nums; }
+  get allVals(): External<u256[]> { return this.vals; }
+  get allNames(): External<string[]> { return this.names; }
+  get allBlobs(): External<bytes[]> { return this.blobs; }
+  get allGrid(): External<u256[][]> { return this.grid; }
+  get allFD(): External<FD[]> { return this.recs; }
+  get getFd1(): External<FD> { return this.fd1; }
+  get getNums(): External<Arr<u256, 3>> { return this.nums; }
 
   // ---- WHOLE MAPPING-value returns ----
-  @external @view getM(k: u256): u256[] { return this.m[k]; }
-  @external @view getMs(k: u256): FD { return this.ms[k]; }
-  @external @view getMb(k: u256): bytes { return this.mb[k]; }
+  get getM(k: u256): External<u256[]> { return this.m[k]; }
+  get getMs(k: u256): External<FD> { return this.ms[k]; }
+  get getMb(k: u256): External<bytes> { return this.mb[k]; }
 
   // ---- MULTI-VALUE TUPLES mixing components ----
-  @external @pure mvValStr(n: u256, s: string): [u256, string] { return [n, s]; }
-  @external @pure mvStrVal(s: string, n: u256): [string, u256] { return [s, n]; }
-  @external @pure mvValBytesVal(n: u256, b: bytes, m: u256): [u256, bytes, u256] { return [n, b, m]; }
-  @external @pure mvCdArrVal(xs: u256[], n: u256): [u256[], u256] { return [xs, n]; }       // value-array cd component (CLEANS)
-  @external @pure mvCdNarrArrVal(xs: u8[], n: u256): [u8[], u256] { return [xs, n]; }        // narrow value-array cd component (CLEANS)
-  @external @pure mvAllStatic(a: u256, b: address, c: bool): [u256, address, bool] { return [a, b, c]; }
-  @external @view mvStructVal(n: u256): [FD, u256] { return [this.fd1, n]; }
-  @external @view mvArrVal(n: u256): [u256[], u256] { return [this.vals, n]; }
-  @external @view mvStrArr(n: u256): [string[], u256] { return [this.names, n]; }
-  @external @pure mvBytesCdArr(b: bytes, xs: u256[]): [bytes, u256[]] { return [b, xs]; }
+  get mvValStr(n: u256, s: string): External<[u256, string]> { return [n, s]; }
+  get mvStrVal(s: string, n: u256): External<[string, u256]> { return [s, n]; }
+  get mvValBytesVal(n: u256, b: bytes, m: u256): External<[u256, bytes, u256]> { return [n, b, m]; }
+  get mvCdArrVal(xs: u256[], n: u256): External<[u256[], u256]> { return [xs, n]; }       // value-array cd component (CLEANS)
+  get mvCdNarrArrVal(xs: u8[], n: u256): External<[u8[], u256]> { return [xs, n]; }        // narrow value-array cd component (CLEANS)
+  get mvAllStatic(a: u256, b: address, c: bool): External<[u256, address, bool]> { return [a, b, c]; }
+  get mvStructVal(n: u256): External<[FD, u256]> { return [this.fd1, n]; }
+  get mvArrVal(n: u256): External<[u256[], u256]> { return [this.vals, n]; }
+  get mvStrArr(n: u256): External<[string[], u256]> { return [this.names, n]; }
+  get mvBytesCdArr(b: bytes, xs: u256[]): External<[bytes, u256[]]> { return [b, xs]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

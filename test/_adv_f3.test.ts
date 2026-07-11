@@ -72,7 +72,7 @@ async function buildPair(jSrc: string, sSrc: string) {
 // 1. Default of each kind, omitted at the call site, vs a fully-spelled-out solc twin.
 // ---------------------------------------------------------------------------
 describe('F3 adv: a default of every kind matches the spelled-out constant', () => {
-  const J = `@contract class C {
+  const J = `class C {
     du(a: u256, b: u256 = 7n): u256 { return a + b; }
     di(a: i64, b: i64 = -5n): i64 { return a + b; }
     db(a: u256, on: bool = true): u256 { return on ? a : 0n; }
@@ -82,15 +82,15 @@ describe('F3 adv: a default of every kind matches the spelled-out constant', () 
     dmax(a: u256, cap: u256 = type(u256).max): u256 { return a < cap ? a : cap; }
     dmin(a: i128, lo: i128 = type(i128).min): i128 { return a > lo ? a : lo; }
     d255(a: u8, b: u8 = u8(255n)): u8 { return a > b ? a : b; }
-    @external @pure tu(a: u256): u256 { return this.du(a); }
-    @external @pure ti(a: i64): i64 { return this.di(a); }
-    @external @pure tb(a: u256): u256 { return this.db(a); }
-    @external @pure ta(a: u256): u256 { return this.da(a); }
-    @external @pure tan(a: u256): u256 { return this.dan(a); }
-    @external @pure tby(): bytes32 { return this.dby(0n); }
-    @external @pure tmax(a: u256): u256 { return this.dmax(a); }
-    @external @pure tmin(a: i128): i128 { return this.dmin(a); }
-    @external @pure t255(a: u8): u8 { return this.d255(a); }
+    get tu(a: u256): External<u256> { return this.du(a); }
+    get ti(a: i64): External<i64> { return this.di(a); }
+    get tb(a: u256): External<u256> { return this.db(a); }
+    get ta(a: u256): External<u256> { return this.da(a); }
+    get tan(a: u256): External<u256> { return this.dan(a); }
+    get tby(): External<bytes32> { return this.dby(0n); }
+    get tmax(a: u256): External<u256> { return this.dmax(a); }
+    get tmin(a: i128): External<i128> { return this.dmin(a); }
+    get t255(a: u8): External<u8> { return this.d255(a); }
   }`;
   const S = `// SPDX-License-Identifier: MIT
   pragma solidity ^0.8.20;
@@ -137,12 +137,12 @@ describe('F3 adv: a default of every kind matches the spelled-out constant', () 
 // 2. Multiple trailing defaults: omit none / some / all, including a zero-arg call.
 // ---------------------------------------------------------------------------
 describe('F3 adv: multiple trailing defaults, omit none / some / all', () => {
-  const J = `@contract class C {
+  const J = `class C {
     f(a: u256 = 1n, b: u256 = 2n, c: u256 = 3n): u256 { return a * 100n + b * 10n + c; }
-    @external @pure none(): u256 { return this.f(); }
-    @external @pure one(x: u256): u256 { return this.f(x); }
-    @external @pure two(x: u256, y: u256): u256 { return this.f(x, y); }
-    @external @pure all(x: u256, y: u256, z: u256): u256 { return this.f(x, y, z); }
+    get none(): External<u256> { return this.f(); }
+    get one(x: u256): External<u256> { return this.f(x); }
+    get two(x: u256, y: u256): External<u256> { return this.f(x, y); }
+    get all(x: u256, y: u256, z: u256): External<u256> { return this.f(x, y, z); }
   }`;
   const S = `// SPDX-License-Identifier: MIT
   pragma solidity ^0.8.20;
@@ -169,15 +169,15 @@ describe('F3 adv: multiple trailing defaults, omit none / some / all', () => {
 // 3. Defaults that affect STATE (raw slots) and EVENTS (logs).
 // ---------------------------------------------------------------------------
 describe('F3 adv: defaulted arg flowing into storage + into an event', () => {
-  const J = `@contract class C {
-    @state x: u256;
-    @state y: u256;
-    @event Set(@indexed who: address, amount: u256);
+  const J = `class C {
+    x: u256;
+    y: u256;
+    Set: event<{ who: indexed<address>; amount: u256 }>;
     store(a: u256, b: u256 = 1000n): void { this.x = a + b; this.y = b; }
     announce(amount: u256, who: address = address(u160(0xbeefn))): void { emit(Set(who, amount)); }
-    @external setIt(a: u256): void { this.store(a); }
-    @external setBoth(a: u256, b: u256): void { this.store(a, b); }
-    @external ann(amount: u256): void { this.announce(amount); }
+    setIt(a: u256): External<void> { this.store(a); }
+    setBoth(a: u256, b: u256): External<void> { this.store(a, b); }
+    ann(amount: u256): External<void> { this.announce(amount); }
   }`;
   const S = `// SPDX-License-Identifier: MIT
   pragma solidity ^0.8.20;
@@ -208,9 +208,9 @@ describe('F3 adv: defaulted arg flowing into storage + into an event', () => {
 // 4. Recursion with a defaulted accumulator.
 // ---------------------------------------------------------------------------
 describe('F3 adv: recursion with a defaulted accumulator', () => {
-  const J = `@contract class C {
+  const J = `class C {
     rec(n: u256, acc: u256 = 0n): u256 { if (n == 0n) { return acc; } return this.rec(n - 1n, acc + n); }
-    @external @pure sumTo(n: u256): u256 { return this.rec(n); }
+    get sumTo(n: u256): External<u256> { return this.rec(n); }
   }`;
   const S = `// SPDX-License-Identifier: MIT
   pragma solidity ^0.8.20;
@@ -234,19 +234,19 @@ describe('F3 adv: recursion with a defaulted accumulator', () => {
 // 5. Named args: full / reordered / partial+default / shorthand / single-struct-param / struct-literal.
 // ---------------------------------------------------------------------------
 describe('F3 adv: named arguments bind by NAME not position', () => {
-  const J = `@struct class P3 { x: u256; y: u256; z: u256; }
-  @contract class C {
+  const J = `type P3 = { x: u256; y: u256; z: u256; };
+  class C {
     f(a: u256, b: u256, c: u256 = 9n): u256 { return a * 10000n + b * 100n + c; }
     viaStruct(p: P3): u256 { return p.x * 10000n + p.y * 100n + p.z; }
-    @external @pure full(a: u256, b: u256, c: u256): u256 { return this.f({ a: a, b: b, c: c }); }
-    @external @pure reorder(a: u256, b: u256, c: u256): u256 { return this.f({ c: c, a: a, b: b }); }
-    @external @pure part(a: u256, b: u256): u256 { return this.f({ b: b, a: a }); }
-    @external @pure shorthand(a: u256, b: u256): u256 { return this.f({ a, b }); }
-    @external @pure structParamNamed(x: u256, y: u256, z: u256): u256 {
+    get full(a: u256, b: u256, c: u256): External<u256> { return this.f({ a: a, b: b, c: c }); }
+    get reorder(a: u256, b: u256, c: u256): External<u256> { return this.f({ c: c, a: a, b: b }); }
+    get part(a: u256, b: u256): External<u256> { return this.f({ b: b, a: a }); }
+    get shorthand(a: u256, b: u256): External<u256> { return this.f({ a, b }); }
+    get structParamNamed(x: u256, y: u256, z: u256): External<u256> {
       let v: P3 = P3(x, y, z);
       return this.viaStruct({ p: v });               // key == param name -> named call
     }
-    @external @pure structParamLiteral(x: u256, y: u256, z: u256): u256 {
+    get structParamLiteral(x: u256, y: u256, z: u256): External<u256> {
       return this.viaStruct({ x: x, y: y, z: z });   // keys are STRUCT FIELDS -> positional struct literal
     }
   }`;
@@ -292,10 +292,10 @@ describe('F3 adv: named arguments bind by NAME not position', () => {
 describe('F3 adv: a defaulted param does NOT leak into the ABI / selector', () => {
   // solc-public g split into an @external wrapper (ABI/selector boundary, carries the default)
   // plus an internal helper gI (also carries the default) that the internal caller uses.
-  const J = `@contract class C {
-    @pure gI(a: u256, b: u256 = 5n): u256 { return a + b; }
-    @external @pure g(a: u256, b: u256 = 5n): u256 { return this.gI(a, b); }
-    @external @pure useInternal(a: u256): u256 { return this.gI(a); }
+  const J = `class C {
+    gI(a: u256, b: u256 = 5n): u256 { return a + b; }
+    get g(a: u256, b: u256 = 5n): External<u256> { return this.gI(a, b); }
+    get useInternal(a: u256): External<u256> { return this.gI(a); }
   }`;
   const S = `// SPDX-License-Identifier: MIT
   pragma solidity ^0.8.20;
@@ -304,8 +304,8 @@ describe('F3 adv: a defaulted param does NOT leak into the ABI / selector', () =
     function useInternal(uint256 a) external pure returns (uint256) { return g(a, 5); }
   }`;
   // A control twin with NO default, to prove the default does not perturb the selector / ABI.
-  const J_NODEF = `@contract class C {
-    @external @pure g(a: u256, b: u256): u256 { return a + b; }
+  const J_NODEF = `class C {
+    get g(a: u256, b: u256): External<u256> { return a + b; }
   }`;
   let P: Awaited<ReturnType<typeof buildPair>>;
   beforeAll(async () => {
@@ -338,8 +338,8 @@ describe('F3 adv: a defaulted param does NOT leak into the ABI / selector', () =
 //    rather than reverting. Confirm JETH matches that quirk byte-for-byte.
 // ---------------------------------------------------------------------------
 describe('F3 adv: truncated calldata parity (solc zero-pads static args)', () => {
-  const J = `@contract class C {
-    @external @pure g(a: u256, b: u256): u256 { return a + b; }
+  const J = `class C {
+    get g(a: u256, b: u256): External<u256> { return a + b; }
   }`;
   const S = `// SPDX-License-Identifier: MIT
   pragma solidity ^0.8.20;
@@ -364,7 +364,7 @@ describe('F3 adv: truncated calldata parity (solc zero-pads static args)', () =>
 // 8. Soundness / rejection probes: each must produce a diagnostic (not crash, not silently accept).
 // ---------------------------------------------------------------------------
 describe('F3 adv: rejection probes (must diagnose, never crash, never silently accept)', () => {
-  const base = (members: string) => `@contract class C {\n${members}\n}`;
+  const base = (members: string) => `class C {\n${members}\n}`;
 
   it('JETH250: non-constant defaults (param ref, state, msg.sender, call, arithmetic on non-literal)', () => {
     // default references another param
@@ -380,7 +380,7 @@ describe('F3 adv: rejection probes (must diagnose, never crash, never silently a
   });
 
   it('JETH252: default on a non-value-type param (struct / array / bytes)', () => {
-    expect(jethCodes(`@struct class P { x: u256; }\n` + base(`f(p: P = P(0n)): u256 { return p.x; }`))).toContain(
+    expect(jethCodes(`type P = { x: u256; };\n` + base(`f(p: P = P(0n)): u256 { return p.x; }`))).toContain(
       'JETH252',
     );
     expect(jethCodes(base(`f(a: u256[] = [1n]): u256 { return a.length; }`))).toContain('JETH252');
@@ -478,9 +478,9 @@ describe('F3 adv: cross-width type(T).max default', () => {
   it('cap: u128 = type(u256).max range-errors the same as the bare literal', () => {
     // The default type(u256).max == 2^256-1, coerced into a u128 param at the call site, must hit
     // the same range check that the literal 2^256-1 would. Both should yield JETH070.
-    const withDefault = jethCodes(`@contract class C {
+    const withDefault = jethCodes(`class C {
       f(cap: u128 = type(u256).max): u128 { return cap; }
-      @external @pure t(): u128 { return this.f(); }
+      get t(): External<u128> { return this.f(); }
     }`);
     const bareLiteral = jethCodes(`@contract class C {
       @external @pure t(): u128 { let v: u128 = ${(1n << 256n) - 1n}n; return v; }
@@ -490,9 +490,9 @@ describe('F3 adv: cross-width type(T).max default', () => {
   });
 
   it('cap: u128 = type(u128).max is in range and matches solc', async () => {
-    const J = `@contract class C {
+    const J = `class C {
       f(x: u128, cap: u128 = type(u128).max): u128 { return x < cap ? x : cap; }
-      @external @pure t(x: u128): u128 { return this.f(x); }
+      get t(x: u128): External<u128> { return this.f(x); }
     }`;
     const S = `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
@@ -513,7 +513,7 @@ describe('F3 adv: cross-width type(T).max default', () => {
 //     unused code). It is purely a diagnostic - an unused default emits no code - never a miscompile.
 // ---------------------------------------------------------------------------
 describe('F3 adv: default validation is eager (declaration-time)', () => {
-  const base = (members: string) => `@contract class C {\n${members}\n}`;
+  const base = (members: string) => `class C {\n${members}\n}`;
   it('a bad default errors even on an UNCALLED helper', () => {
     // bool = 1n: wrong type. u8 = 300n: out of range. u128 = type(u256).max: out of range.
     expect(
@@ -555,10 +555,10 @@ describe('F3 adv: default validation is eager (declaration-time)', () => {
 //     names) is constructed correctly even in a MIXED call f(positional, {field: v}). Runtime parity.
 // ---------------------------------------------------------------------------
 describe('F3 adv: positional struct-literal arg alongside an ordinary positional arg', () => {
-  const J = `@struct class S { x: u256; y: u256; }
-  @contract class C {
+  const J = `type S = { x: u256; y: u256; };
+  class C {
     f(a: u256, b: S): u256 { return a + b.x * 10n + b.y; }
-    @external @pure t(a: u256, bx: u256, by: u256): u256 { return this.f(a, { x: bx, y: by }); }
+    get t(a: u256, bx: u256, by: u256): External<u256> { return this.f(a, { x: bx, y: by }); }
   }`;
   const Sol = `// SPDX-License-Identifier: MIT
   pragma solidity ^0.8.20;

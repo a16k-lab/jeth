@@ -13,18 +13,17 @@ function pad(v: bigint): string {
 const W = (v: bigint) => pad(v);
 
 const JETH = `
-@struct class Acct { bal: u128; nonce: u64; active: bool; }
-@struct class Pt { x: u128; y: u128; }
-@contract
+type Acct = { bal: u128; nonce: u64; active: bool; };
+type Pt = { x: u128; y: u128; };
 class A {
   // reads NOTHING from the struct param -> does solc still validate it?
-  @external @pure ignore(a: Acct): u256 { return 1n; }
-  @external @pure ignoreArr(a: Arr<u8, 4>): u256 { return 1n; }
-  @external @pure ignoreFas(ps: Arr<Pt, 2>): u256 { return 1n; }
+  get ignore(a: Acct): External<u256> { return 1n; }
+  get ignoreArr(a: Arr<u8, 4>): External<u256> { return 1n; }
+  get ignoreFas(ps: Arr<Pt, 2>): External<u256> { return 1n; }
   // reads only one field
-  @external @pure onlyBal(a: Acct): u128 { return a.bal; }
+  get onlyBal(a: Acct): External<u128> { return a.bal; }
   // a param mixed with another that is dirty
-  @external @pure twoStructs(a: Acct, b: Acct): u128 { return a.bal; }
+  get twoStructs(a: Acct, b: Acct): External<u128> { return a.bal; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

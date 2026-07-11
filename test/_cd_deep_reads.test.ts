@@ -19,11 +19,11 @@ const pad = (v: bigint) => (((v % M) + M) % M).toString(16).padStart(64, '0');
 const SPDX = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 
 // ---------- Case A: xs[i][j].field, xs: P[2][], P = {a,c:u8,b} (packed middle field) ----------
-const JETH_A = `@struct class P{a:u256;c:u8;b:u256;}
-@contract class C{
-  @external @pure rdA(xs:Arr<P,3>[],i:u256,j:u256):u256{return xs[i][j].a;}
-  @external @pure rdC(xs:Arr<P,3>[],i:u256,j:u256):u8{return xs[i][j].c;}
-  @external @pure rdB(xs:Arr<P,3>[],i:u256,j:u256):u256{return xs[i][j].b;}
+const JETH_A = `type P = {a:u256;c:u8;b:u256;};
+class C{
+  get rdA(xs:Arr<P,3>[],i:u256,j:u256):External<u256>{return xs[i][j].a;}
+  get rdC(xs:Arr<P,3>[],i:u256,j:u256):External<u8>{return xs[i][j].c;}
+  get rdB(xs:Arr<P,3>[],i:u256,j:u256):External<u256>{return xs[i][j].b;}
 }`;
 const SOL_A = `struct P{uint256 a;uint8 c;uint256 b;}
 contract C{
@@ -33,10 +33,10 @@ contract C{
 }`;
 
 // ---------- Case C: xs[i].tags[j], xs: S[], S = {a:u256, tags:string[]} ----------
-const JETH_C = `@struct class S{a:u256;tags:string[];}
-@contract class C{
-  @external @pure read(xs:S[],i:u256,j:u256):string{return xs[i].tags[j];}
-  @external @pure echo(xs:S[],i:u256):string[]{return xs[i].tags;}
+const JETH_C = `type S = {a:u256;tags:string[];};
+class C{
+  get read(xs:S[],i:u256,j:u256):External<string>{return xs[i].tags[j];}
+  get echo(xs:S[],i:u256):External<string[]>{return xs[i].tags;}
 }`;
 const SOL_C = `struct S{uint256 a;string[] tags;}
 contract C{
@@ -184,29 +184,29 @@ describe('cd-deep-reads: deferred sub-cases stay CLEAN rejects (no miscompile)',
     // cd-whole-and-dynstruct-copy LIFT #1: `return xs[i]` for a calldata Arr<P,N>[] / P[][] now decodes the
     // inner sub-array to memory byte-identically to solc (the value/static-struct leaf forms). No longer rejected.
     expect(
-      rejects(`@struct class P{a:u256;b:u256;}
-@contract class C{@external @pure rd(xs:Arr<P,2>[],i:u256):Arr<P,2>{return xs[i];}}`),
+      rejects(`type P = {a:u256;b:u256;};
+class C{get rd(xs:Arr<P,2>[],i:u256):External<Arr<P,2>>{return xs[i];}}`),
     ).toBe(false);
   });
   // cd-mask-and-whole-encode LIFT: the whole DYNAMIC-ARRAY field value forms are now ACCEPTED byte-
   // identically (return + abi.encode), verified differentially in cd-whole-field-aggregate.test.ts.
   it('(C-deep) whole nested-array field xs[i].grid now COMPILES (lifted byte-identical)', () => {
     expect(
-      rejects(`@struct class S{a:u256;grid:u256[][];}
-@contract class C{@external @pure rd(xs:S[],i:u256):u256[][]{return xs[i].grid;}}`),
+      rejects(`type S = {a:u256;grid:u256[][];};
+class C{get rd(xs:S[],i:u256):External<u256[][]>{return xs[i].grid;}}`),
     ).toBe(false);
   });
   it('(C-deep) whole inner array xs[i].grid[j] (value) now COMPILES (lifted byte-identical)', () => {
     expect(
-      rejects(`@struct class S{a:u256;grid:u256[][];}
-@contract class C{@external @pure rd(xs:S[],i:u256,j:u256):u256[]{return xs[i].grid[j];}}`),
+      rejects(`type S = {a:u256;grid:u256[][];};
+class C{get rd(xs:S[],i:u256,j:u256):External<u256[]>{return xs[i].grid[j];}}`),
     ).toBe(false);
   });
   it('(C-deep) whole dyn-struct-array field xs[i].items now COMPILES (lifted byte-identical)', () => {
     expect(
-      rejects(`@struct class D{v:u256;s:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{@external @pure rd(xs:S[],i:u256):D[]{return xs[i].items;}}`),
+      rejects(`type D = {v:u256;s:string;};
+type S = {a:u256;items:D[];};
+class C{get rd(xs:S[],i:u256):External<D[]>{return xs[i].items;}}`),
     ).toBe(false);
   });
   it('(C-deep) whole STRUCT ELEMENT of a struct-array field xs[i].items[j] now COMPILES (lifted byte-identical)', () => {
@@ -215,9 +215,9 @@ describe('cd-deep-reads: deferred sub-cases stay CLEAN rejects (no miscompile)',
     // bounds-checks (Panic 0x32) before the recursive codec re-encodes the whole D. Differential proof in
     // calldata-whole-struct-element.test.ts.
     expect(
-      rejects(`@struct class D{v:u256;s:string;}
-@struct class S{a:u256;items:D[];}
-@contract class C{@external @pure rd(xs:S[],i:u256,j:u256):D{return xs[i].items[j];}}`),
+      rejects(`type D = {v:u256;s:string;};
+type S = {a:u256;items:D[];};
+class C{get rd(xs:S[],i:u256,j:u256):External<D>{return xs[i].items[j];}}`),
     ).toBe(false);
   });
 });

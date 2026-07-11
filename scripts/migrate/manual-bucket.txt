@@ -10,3 +10,32 @@ test/interface-impl.test.ts:255  @interface class J extends ...: a native interf
 test/interface-impl.test.ts:364  @interface class J extends ...: a native interface cannot extend (JETH349) - stays legacy
 test/internal-fn-pointers.test.ts:232  trial mismatch: orig=rej[JETH055,JETH055] post=ok
 test/phase2-diagnostics.test.ts:74  @error T: not a bodyless method
+test/_acheck_cdfield_tuple.test.ts:223  trial mismatch: orig=ok post=ok
+test/_adv_f3.test.ts:485  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/_adv_f4.test.ts:545  trial mismatch: orig=rej[JETH260,JETH261] post=rej[JETH261]
+test/_adv_f4.test.ts:547  trial mismatch: orig=rej[JETH260,JETH261] post=rej[JETH261]
+test/_adv_f4.test.ts:549  trial mismatch: orig=rej[JETH260,JETH261] post=rej[JETH261]
+test/_adv_generics.test.ts:361  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/_adv_generics.test.ts:396  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/_adv_generics.test.ts:661  trial mismatch: orig=rej[JETH055] post=ok
+test/_adv_generics.test.ts:669  trial mismatch: orig=rej[JETH054] post=ok
+test/_adv_generics.test.ts:677  trial mismatch: orig=rej[JETH054] post=ok
+test/_adv_generics.test.ts:685  trial mismatch: orig=rej[JETH055] post=ok
+test/_adv_generics.test.ts:900  trial mismatch: orig=rej[JETH290] post=rej[JETH013,JETH013,JETH072,JETH148]
+test/_adv_generics.test.ts:905  trial mismatch: orig=rej[JETH290] post=rej[JETH013,JETH013,JETH072,JETH148]
+test/_adv_inference.test.ts:529  trial mismatch: orig=rej[JETH056] post=ok
+test/_adv_inference.test.ts:534  trial mismatch: orig=rej[JETH056] post=ok
+test/_adv_inference.test.ts:543  trial mismatch: orig=rej[JETH056] post=ok
+test/_adv_inference.test.ts:559  trial mismatch: orig=rej[JETH056,JETH149] post=ok
+test/_adv_inference.test.ts:565  trial mismatch: orig=rej[JETH052] post=ok
+test/_adv_inference.test.ts:570  trial mismatch: orig=rej[JETH052] post=ok
+test/_adv_inference.test.ts:575  trial mismatch: orig=rej[JETH052,JETH131] post=rej[JETH052]
+test/_adv_inference.test.ts:625  trial mismatch: orig=rej[JETH054] post=ok
+test/_adv_inference.test.ts:631  trial mismatch: orig=rej[JETH055] post=ok
+test/_adv_inference.test.ts:637  trial mismatch: orig=rej[JETH164] post=ok
+test/_adv_inference.test.ts:661  trial mismatch: orig=rej[JETH056] post=ok
+test/_adv_inference.test.ts:686  trial mismatch: orig=rej[JETH054] post=ok
+test/_adv_inference.test.ts:688  trial mismatch: orig=rej[JETH055] post=ok
+test/_adv_switch.test.ts:473  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH352])
+test/_lift_cd-to-mem-copy.test.ts:76  interpolated template: an edit inside an unresolved ${...} hole (at 52)
+test/_mv2_memnew.test.ts:48  interpolated template: the get-flip candidate method's body contains an unresolved ${...} hole (trial orig=rej post=rej[JETH072,JETH072,JETH072,JETH072,JETH072,JETH072,JETH151,JETH151,JETH352,JETH352,JETH352,JETH352])

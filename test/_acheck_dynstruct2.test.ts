@@ -29,15 +29,14 @@ function callDyn(selSig: string, staticHead: bigint[], bytes: Uint8Array): strin
 }
 
 const JETH = `
-@struct class D { a: u256; s: string; }
-@contract
+type D = { a: u256; s: string; };
 class A {
-  @state d: D;            // 0..1
-  @external setDa(v: u256): void { this.d.a = v; }
-  @external setDs(v: string): void { this.d.s = v; }
-  @external setD(a: u256, ss: string): void { this.d = D(a, ss); }
-  @external @view getDs(): string { return this.d.s; }
-  @external @view getDa(): u256 { return this.d.a; }
+  d: D;            // 0..1
+  setDa(v: u256): External<void> { this.d.a = v; }
+  setDs(v: string): External<void> { this.d.s = v; }
+  setD(a: u256, ss: string): External<void> { this.d = D(a, ss); }
+  get getDs(): External<string> { return this.d.s; }
+  get getDa(): External<u256> { return this.d.a; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

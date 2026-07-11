@@ -80,13 +80,13 @@ async function deployPair(jeth: string, sol: string): Promise<{ hj: Harness; aj:
 
 describe('lift: calldata field-array binding (#5a) - u256[][] grid', () => {
   const JETH = `
-@struct class S { a: u256; grid: u256[][]; }
-@contract class C {
-  @external @view rowread(xs: S[], i: u256, j: u256, k: u256): u256 { let row: u256[][] = xs[i].grid; return row[j][k]; }
-  @external @view rowlen(xs: S[], i: u256): u256 { let row: u256[][] = xs[i].grid; return u256(row.length); }
-  @external @view innerlen(xs: S[], i: u256, j: u256): u256 { let row: u256[][] = xs[i].grid; return u256(row[j].length); }
-  @external @view echo(xs: S[], i: u256): u256[][] { let row: u256[][] = xs[i].grid; return row; }
-  @external @view innerread(xs: S[], i: u256, j: u256, k: u256): u256 { let inner: u256[] = xs[i].grid[j]; return inner[k]; }
+type S = { a: u256; grid: u256[][]; };
+class C {
+  get rowread(xs: S[], i: u256, j: u256, k: u256): External<u256> { let row: u256[][] = xs[i].grid; return row[j][k]; }
+  get rowlen(xs: S[], i: u256): External<u256> { let row: u256[][] = xs[i].grid; return u256(row.length); }
+  get innerlen(xs: S[], i: u256, j: u256): External<u256> { let row: u256[][] = xs[i].grid; return u256(row[j].length); }
+  get echo(xs: S[], i: u256): External<u256[][]> { let row: u256[][] = xs[i].grid; return row; }
+  get innerread(xs: S[], i: u256, j: u256, k: u256): External<u256> { let inner: u256[] = xs[i].grid[j]; return inner[k]; }
 }`;
   const SOL = `
 struct S { uint256 a; uint256[][] grid; }
@@ -136,11 +136,11 @@ contract C {
 
 describe('lift: calldata field-array binding (#5a) - bytes[] tags', () => {
   const JETH = `
-@struct class S { a: u256; tags: bytes[]; }
-@contract class C {
-  @external @view tagread(xs: S[], i: u256, j: u256): bytes { let row: bytes[] = xs[i].tags; return row[j]; }
-  @external @view taglen(xs: S[], i: u256): u256 { let row: bytes[] = xs[i].tags; return u256(row.length); }
-  @external @view echo(xs: S[], i: u256): bytes[] { let row: bytes[] = xs[i].tags; return row; }
+type S = { a: u256; tags: bytes[]; };
+class C {
+  get tagread(xs: S[], i: u256, j: u256): External<bytes> { let row: bytes[] = xs[i].tags; return row[j]; }
+  get taglen(xs: S[], i: u256): External<u256> { let row: bytes[] = xs[i].tags; return u256(row.length); }
+  get echo(xs: S[], i: u256): External<bytes[]> { let row: bytes[] = xs[i].tags; return row; }
 }`;
   const SOL = `
 struct S { uint256 a; bytes[] tags; }
@@ -181,10 +181,10 @@ contract C {
 
 describe('lift: multi-return field component (#5b)', () => {
   const JETH = `
-@struct class S { a: u256; grid: u256[][]; }
-@contract class C {
-  @external @view pair(xs: S[], i: u256): [u256[][], u256] { return [xs[i].grid, xs[i].a]; }
-  @external @view innerpair(xs: S[], i: u256, j: u256): [u256[], u256] { return [xs[i].grid[j], xs[i].a]; }
+type S = { a: u256; grid: u256[][]; };
+class C {
+  get pair(xs: S[], i: u256): External<[u256[][], u256]> { return [xs[i].grid, xs[i].a]; }
+  get innerpair(xs: S[], i: u256, j: u256): External<[u256[], u256]> { return [xs[i].grid[j], xs[i].a]; }
 }`;
   const SOL = `
 struct S { uint256 a; uint256[][] grid; }
@@ -257,8 +257,8 @@ contract C {
 
   it('abi.decode source: [a,b] = abi.decode(data, [bytes, u256])', async () => {
     const JETH = `
-@contract class C {
-  @external @view run(data: bytes): [bytes, u256] {
+class C {
+  get run(data: bytes): External<[bytes, u256]> {
     let a: bytes = bytes("");
     let b: u256 = 0n;
     [a, b] = abi.decode(data, [bytes, u256]);
@@ -287,11 +287,11 @@ contract C {
   });
 
   it('interface-call source: [a,b] = ITwo(t).pair()', async () => {
-    const JETH_P = `@contract class P { @external @view pair(): [bytes, u256] { return [bytes("yo"), 9n]; } }`;
+    const JETH_P = `class P { get pair(): External<[bytes, u256]> { return [bytes("yo"), 9n]; } }`;
     const JETH_C = `
-@interface class ITwo { @external pair(): [bytes, u256]; }
-@contract class C {
-  @external run(t: address): [bytes, u256] {
+interface ITwo { pair(): [bytes, u256]; }
+class C {
+  run(t: address): External<[bytes, u256]> {
     let a: bytes = bytes("");
     let b: u256 = 0n;
     [a, b] = ITwo(t).pair();
@@ -330,17 +330,17 @@ contract C {
 
   it('rejects a non-re-pointable target (struct local / storage)', () => {
     const structTarget = `
-@struct class P { x: u256; y: u256; }
-@contract class C {
-  @external @view pair(): [P, u256] { return [P(3n,4n), 5n]; }
-  @external @view run(): u256 { let p: P = P(1n,2n); let b: u256 = 0n; [p, b] = this.pair(); return b; }
+type P = { x: u256; y: u256; };
+class C {
+  get pair(): External<[P, u256]> { return [P(3n,4n), 5n]; }
+  get run(): External<u256> { let p: P = P(1n,2n); let b: u256 = 0n; [p, b] = this.pair(); return b; }
 }`;
     expect(() => compile(structTarget)).toThrow();
     const storageTarget = `
-@contract class C {
-  @state s: bytes;
-  @external @view pair(): [bytes, u256] { return [bytes("x"), 1n]; }
-  @external run() { let b: u256 = 0n; [this.s, b] = this.pair(); }
+class C {
+  s: bytes;
+  get pair(): External<[bytes, u256]> { return [bytes("x"), 1n]; }
+  run(): External<void> { let b: u256 = 0n; [this.s, b] = this.pair(); }
 }`;
     expect(() => compile(storageTarget)).toThrow();
   });

@@ -118,62 +118,61 @@ function dynStructArrayRegion(items: { a: bigint; s: Uint8Array }[]): string {
 
 // ============================ CONTRACT UNDER TEST =============================
 const JETH = `
-@struct class WithArr { id: u64; data: Arr<u256,3>; tag: u64; }
-@struct class WithDyn { a: u64; xs: u256[]; b: u64; }
-@struct class D { a: u64; s: string; }
+type WithArr = { id: u64; data: Arr<u256,3>; tag: u64; };
+type WithDyn = { a: u64; xs: u256[]; b: u64; };
+type D = { a: u64; s: string; };
 
-@contract
 class C {
   // fixed array of dynamic byte sequences
-  @external @pure fbAt(a: Arr<bytes,2>, i: u256): bytes { return a[i]; }
-  @external @pure fbLen(a: Arr<bytes,2>, i: u256): u256 { return a[i].length; }
-  @external @pure fbEcho(a: Arr<bytes,2>): Arr<bytes,2> { return a; }
-  @external @pure fsAt(a: Arr<string,2>, i: u256): string { return a[i]; }
-  @external @pure fsEcho(a: Arr<string,2>): Arr<string,2> { return a; }
-  @external @pure fb3At(a: Arr<bytes,3>, i: u256): bytes { return a[i]; }
+  get fbAt(a: Arr<bytes,2>, i: u256): External<bytes> { return a[i]; }
+  get fbLen(a: Arr<bytes,2>, i: u256): External<u256> { return a[i].length; }
+  get fbEcho(a: Arr<bytes,2>): External<Arr<bytes,2>> { return a; }
+  get fsAt(a: Arr<string,2>, i: u256): External<string> { return a[i]; }
+  get fsEcho(a: Arr<string,2>): External<Arr<string,2>> { return a; }
+  get fb3At(a: Arr<bytes,3>, i: u256): External<bytes> { return a[i]; }
 
   // array of dynamic byte sequences
-  @external @pure baAt(a: bytes[], i: u256): bytes { return a[i]; }
-  @external @pure baLen(a: bytes[]): u256 { return a.length; }
-  @external @pure baElemLen(a: bytes[], i: u256): u256 { return a[i].length; }
-  @external @pure baEcho(a: bytes[]): bytes[] { return a; }
-  @external @pure saAt(a: string[], i: u256): string { return a[i]; }
-  @external @pure saEcho(a: string[]): string[] { return a; }
+  get baAt(a: bytes[], i: u256): External<bytes> { return a[i]; }
+  get baLen(a: bytes[]): External<u256> { return a.length; }
+  get baElemLen(a: bytes[], i: u256): External<u256> { return a[i].length; }
+  get baEcho(a: bytes[]): External<bytes[]> { return a; }
+  get saAt(a: string[], i: u256): External<string> { return a[i]; }
+  get saEcho(a: string[]): External<string[]> { return a; }
 
   // nested dynamic value arrays
-  @external @pure m2At(m: u256[][], i: u256, j: u256): u256 { return m[i][j]; }
-  @external @pure m2Len(m: u256[][]): u256 { return m.length; }
-  @external @pure m2InnerLen(m: u256[][], i: u256): u256 { return m[i].length; }
-  @external @pure m2Echo(m: u256[][]): u256[][] { return m; }
-  @external @pure m3At(m: u256[][][], i: u256, j: u256, k: u256): u256 { return m[i][j][k]; }
-  @external @pure m3Echo(m: u256[][][]): u256[][][] { return m; }
+  get m2At(m: u256[][], i: u256, j: u256): External<u256> { return m[i][j]; }
+  get m2Len(m: u256[][]): External<u256> { return m.length; }
+  get m2InnerLen(m: u256[][], i: u256): External<u256> { return m[i].length; }
+  get m2Echo(m: u256[][]): External<u256[][]> { return m; }
+  get m3At(m: u256[][][], i: u256, j: u256, k: u256): External<u256> { return m[i][j][k]; }
+  get m3Echo(m: u256[][][]): External<u256[][][]> { return m; }
 
   // bytes[][] : nested array of dynamic byte sequences
-  @external @pure bbAt(m: bytes[][], i: u256, j: u256): bytes { return m[i][j]; }
+  get bbAt(m: bytes[][], i: u256, j: u256): External<bytes> { return m[i][j]; }
 
   // fixed array of dynamic array of string
-  @external @pure fsaAt(a: Arr<string[],2>, i: u256, j: u256): string { return a[i][j]; }
-  @external @pure fsaLen(a: Arr<string[],2>, i: u256): u256 { return a[i].length; }
+  get fsaAt(a: Arr<string[],2>, i: u256, j: u256): External<string> { return a[i][j]; }
+  get fsaLen(a: Arr<string[],2>, i: u256): External<u256> { return a[i].length; }
 
   // dynamic array of DYNAMIC struct (string field)
-  @external @pure dsS(a: D[], i: u256): string { return a[i].s; }
-  @external @pure dsA(a: D[], i: u256): u64 { return a[i].a; }
-  @external @pure dsLen(a: D[]): u256 { return a.length; }
+  get dsS(a: D[], i: u256): External<string> { return a[i].s; }
+  get dsA(a: D[], i: u256): External<u64> { return a[i].a; }
+  get dsLen(a: D[]): External<u256> { return a.length; }
 
   // narrow / signed dynamic value arrays (lazy dirty validation on a[i])
-  @external @pure u8At(a: u8[], i: u256): u8 { return a[i]; }
-  @external @pure i8At(a: i8[], i: u256): i8 { return a[i]; }
-  @external @pure i256At(a: i256[], i: u256): i256 { return a[i]; }
-  @external @pure boolAt(a: bool[], i: u256): bool { return a[i]; }
-  @external @pure b1At(a: bytes1[], i: u256): bytes1 { return a[i]; }
-  @external @pure b4At(a: bytes4[], i: u256): bytes4 { return a[i]; }
-  @external @pure addrAt(a: address[], i: u256): address { return a[i]; }
-  @external @pure u8Echo(a: u8[]): u8[] { return a; }
+  get u8At(a: u8[], i: u256): External<u8> { return a[i]; }
+  get i8At(a: i8[], i: u256): External<i8> { return a[i]; }
+  get i256At(a: i256[], i: u256): External<i256> { return a[i]; }
+  get boolAt(a: bool[], i: u256): External<bool> { return a[i]; }
+  get b1At(a: bytes1[], i: u256): External<bytes1> { return a[i]; }
+  get b4At(a: bytes4[], i: u256): External<bytes4> { return a[i]; }
+  get addrAt(a: address[], i: u256): External<address> { return a[i]; }
+  get u8Echo(a: u8[]): External<u8[]> { return a; }
 
   // struct with fixed-array field / dynamic-array field (echo + leaf)
-  @external @pure waData(t: WithArr, j: u256): u256 { return t.data[j]; }
-  @external @pure waEcho(t: WithArr): WithArr { return t; }
-  @external @pure wdEcho(t: WithDyn): WithDyn { return t; }
+  get waData(t: WithArr, j: u256): External<u256> { return t.data[j]; }
+  get waEcho(t: WithArr): External<WithArr> { return t; }
+  get wdEcho(t: WithDyn): External<WithDyn> { return t; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

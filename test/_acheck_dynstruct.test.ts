@@ -31,52 +31,51 @@ function callDyn(selSig: string, staticHead: bigint[], bytes: Uint8Array): strin
 // JETH source. Struct F packs two u64 BEFORE the bytes; struct G has a u128 packed
 // adjacent to a bool, then a string, then another u128 - to stress packing siblings.
 const JETH = `
-@struct class D { a: u256; s: string; }
-@struct class F { p: u64; q: u64; c: bytes; }       // p,q pack slot0; c slot1
-@struct class G { a: u128; flag: bool; s: string; b: u128; } // a,flag pack slot0; s slot1; b slot2
-@struct class H { s: string; n: u256; }             // s slot0; n slot1 (dyn field FIRST)
-@contract
+type D = { a: u256; s: string; };
+type F = { p: u64; q: u64; c: bytes; };       // p,q pack slot0; c slot1
+type G = { a: u128; flag: bool; s: string; b: u128; }; // a,flag pack slot0; s slot1; b slot2
+type H = { s: string; n: u256; };             // s slot0; n slot1 (dyn field FIRST)
 class A {
-  @state d: D;            // 0..1
-  @state sent: u256;      // 2
-  @state f: F;            // 3..4
-  @state g: G;            // 5..7
-  @state h: H;            // 8..9
-  @state m: mapping<u256, D>;  // 10
+  d: D;            // 0..1
+  sent: u256;      // 2
+  f: F;            // 3..4
+  g: G;            // 5..7
+  h: H;            // 8..9
+  m: mapping<u256, D>;  // 10
 
-  @external setDa(v: u256): void { this.d.a = v; }
-  @external setDs(v: string): void { this.d.s = v; }
-  @external @view getDs(): string { return this.d.s; }
-  @external @view getDa(): u256 { return this.d.a; }
+  setDa(v: u256): External<void> { this.d.a = v; }
+  setDs(v: string): External<void> { this.d.s = v; }
+  get getDs(): External<string> { return this.d.s; }
+  get getDa(): External<u256> { return this.d.a; }
 
-  @external setFp(v: u64): void { this.f.p = v; }
-  @external setFq(v: u64): void { this.f.q = v; }
-  @external setFc(v: bytes): void { this.f.c = v; }
-  @external @view getFp(): u64 { return this.f.p; }
-  @external @view getFq(): u64 { return this.f.q; }
-  @external @view getFc(): bytes { return this.f.c; }
+  setFp(v: u64): External<void> { this.f.p = v; }
+  setFq(v: u64): External<void> { this.f.q = v; }
+  setFc(v: bytes): External<void> { this.f.c = v; }
+  get getFp(): External<u64> { return this.f.p; }
+  get getFq(): External<u64> { return this.f.q; }
+  get getFc(): External<bytes> { return this.f.c; }
 
-  @external setGa(v: u128): void { this.g.a = v; }
-  @external setGflag(v: bool): void { this.g.flag = v; }
-  @external setGs(v: string): void { this.g.s = v; }
-  @external setGb(v: u128): void { this.g.b = v; }
-  @external @view getGa(): u128 { return this.g.a; }
-  @external @view getGflag(): bool { return this.g.flag; }
-  @external @view getGs(): string { return this.g.s; }
-  @external @view getGb(): u128 { return this.g.b; }
+  setGa(v: u128): External<void> { this.g.a = v; }
+  setGflag(v: bool): External<void> { this.g.flag = v; }
+  setGs(v: string): External<void> { this.g.s = v; }
+  setGb(v: u128): External<void> { this.g.b = v; }
+  get getGa(): External<u128> { return this.g.a; }
+  get getGflag(): External<bool> { return this.g.flag; }
+  get getGs(): External<string> { return this.g.s; }
+  get getGb(): External<u128> { return this.g.b; }
 
-  @external setHs(v: string): void { this.h.s = v; }
-  @external setHn(v: u256): void { this.h.n = v; }
-  @external @view getHs(): string { return this.h.s; }
-  @external @view getHn(): u256 { return this.h.n; }
+  setHs(v: string): External<void> { this.h.s = v; }
+  setHn(v: u256): External<void> { this.h.n = v; }
+  get getHs(): External<string> { return this.h.s; }
+  get getHn(): External<u256> { return this.h.n; }
 
-  @external setMa(k: u256, v: u256): void { this.m[k].a = v; }
-  @external setMs(k: u256, v: string): void { this.m[k].s = v; }
-  @external @view getMs(k: u256): string { return this.m[k].s; }
-  @external @view getMa(k: u256): u256 { return this.m[k].a; }
+  setMa(k: u256, v: u256): External<void> { this.m[k].a = v; }
+  setMs(k: u256, v: string): External<void> { this.m[k].s = v; }
+  get getMs(k: u256): External<string> { return this.m[k].s; }
+  get getMa(k: u256): External<u256> { return this.m[k].a; }
 
-  @external setSent(v: u256): void { this.sent = v; }
-  @external @view getSent(): u256 { return this.sent; }
+  setSent(v: u256): External<void> { this.sent = v; }
+  get getSent(): External<u256> { return this.sent; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

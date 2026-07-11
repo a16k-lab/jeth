@@ -13,12 +13,11 @@ function pad(v: bigint): string {
 const W = (v: bigint) => pad(v);
 
 const JETH = `
-@struct class P { x: u128; y: u128; }
-@contract
+type P = { x: u128; y: u128; };
 class A {
-  @external @pure pick(a: Arr<u8, 4>, i: u256): u8 { return a[i]; }
-  @external @pure spx(ps: Arr<P, 2>, i: u256): u128 { return ps[i].x; }
-  @external @pure aax(a: Arr<Arr<P,2>,2>, i: u256, j: u256): u128 { return a[i][j].x; }
+  get pick(a: Arr<u8, 4>, i: u256): External<u8> { return a[i]; }
+  get spx(ps: Arr<P, 2>, i: u256): External<u128> { return ps[i].x; }
+  get aax(a: Arr<Arr<P,2>,2>, i: u256, j: u256): External<u128> { return a[i][j].x; }
 }`;
 const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

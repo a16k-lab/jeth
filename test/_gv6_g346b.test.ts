@@ -41,65 +41,65 @@ const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
   a.length === b.length &&
   a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
-const JETH = `@contract class C {
+const JETH = `class C {
   // G3 dirty-element cleaning
-  @error EU8(a: u8[]);
-  @error ESigned(a: i64[]);
-  @error EAddr(a: address[]);
-  @event EvU8(a: u8[]);
-  @event EvSigned(a: i64[]);
-  @event EvAddr(a: address[]);
-  @external @pure rU8(a: u8[]): void { revert(EU8(a)); }
-  @external @pure rSigned(a: i64[]): void { revert(ESigned(a)); }
-  @external @pure rAddr(a: address[]): void { revert(EAddr(a)); }
-  @external eU8(a: u8[]): void { emit(EvU8(a)); }
-  @external eSigned(a: i64[]): void { emit(EvSigned(a)); }
-  @external eAddr(a: address[]): void { emit(EvAddr(a)); }
+  EU8: error<{ a: u8[] }>;
+  ESigned: error<{ a: i64[] }>;
+  EAddr: error<{ a: address[] }>;
+  EvU8: event<{ a: u8[] }>;
+  EvSigned: event<{ a: i64[] }>;
+  EvAddr: event<{ a: address[] }>;
+  rU8(a: u8[]): External<void> { revert(EU8(a)); }
+  rSigned(a: i64[]): External<void> { revert(ESigned(a)); }
+  rAddr(a: address[]): External<void> { revert(EAddr(a)); }
+  eU8(a: u8[]): External<void> { emit(EvU8(a)); }
+  eSigned(a: i64[]): External<void> { emit(EvSigned(a)); }
+  eAddr(a: address[]): External<void> { emit(EvAddr(a)); }
   // G4 indexed dirty content
-  @event Eb(@indexed b: bytes, v: u256);
-  @event Es(@indexed s: string);
-  @external eb(b: bytes, v: u256): void { emit(Eb(b, v)); }
-  @external es(s: string): void { emit(Es(s)); }
+  Eb: event<{ b: indexed<bytes>; v: u256 }>;
+  Es: event<{ s: indexed<string> }>;
+  eb(b: bytes, v: u256): External<void> { emit(Eb(b, v)); }
+  es(s: string): External<void> { emit(Es(s)); }
 
   // G6 push/pop slot reuse - dynamic array of FIXED arrays (full word)
-  @state b: Arr<u256, 3>[];     // slot 0
+  b: Arr<u256, 3>[];     // slot 0
   // G6 push/pop - dynamic array of PACKED fixed arrays
-  @state pk8: Arr<u8, 4>[];     // slot 1
-  @state pk16: Arr<u16, 8>[];   // slot 2
+  pk8: Arr<u8, 4>[];     // slot 1
+  pk16: Arr<u16, 8>[];   // slot 2
   // G6 push/pop - dynamic of 2D fixed
-  @state dd: Arr<Arr<u256, 2>, 2>[]; // slot 3
+  dd: Arr<Arr<u256, 2>, 2>[]; // slot 3
   // G6 fixed array of DYNAMIC arrays - pop the inner dynamic
-  @state a: Arr<u256[], 2>;     // slots 4,5
-  @state sent: u256;            // slot 6 sentinel after
+  a: Arr<u256[], 2>;     // slots 4,5
+  sent: u256;            // slot 6 sentinel after
 
-  @external pushB(): void { this.b.push(); }
-  @external popB(): void { this.b.pop(); }
-  @external setB(i: u256, j: u256, v: u256): void { this.b[i][j] = v; }
-  @external @view getB(i: u256, j: u256): u256 { return this.b[i][j]; }
-  @external @view lenB(): u256 { return this.b.length; }
+  pushB(): External<void> { this.b.push(); }
+  popB(): External<void> { this.b.pop(); }
+  setB(i: u256, j: u256, v: u256): External<void> { this.b[i][j] = v; }
+  get getB(i: u256, j: u256): External<u256> { return this.b[i][j]; }
+  get lenB(): External<u256> { return this.b.length; }
 
-  @external pushPk8(): void { this.pk8.push(); }
-  @external popPk8(): void { this.pk8.pop(); }
-  @external setPk8(i: u256, j: u256, v: u8): void { this.pk8[i][j] = v; }
-  @external @view getPk8(i: u256, j: u256): u8 { return this.pk8[i][j]; }
-  @external @view lenPk8(): u256 { return this.pk8.length; }
+  pushPk8(): External<void> { this.pk8.push(); }
+  popPk8(): External<void> { this.pk8.pop(); }
+  setPk8(i: u256, j: u256, v: u8): External<void> { this.pk8[i][j] = v; }
+  get getPk8(i: u256, j: u256): External<u8> { return this.pk8[i][j]; }
+  get lenPk8(): External<u256> { return this.pk8.length; }
 
-  @external pushPk16(): void { this.pk16.push(); }
-  @external popPk16(): void { this.pk16.pop(); }
-  @external setPk16(i: u256, j: u256, v: u16): void { this.pk16[i][j] = v; }
-  @external @view getPk16(i: u256, j: u256): u16 { return this.pk16[i][j]; }
+  pushPk16(): External<void> { this.pk16.push(); }
+  popPk16(): External<void> { this.pk16.pop(); }
+  setPk16(i: u256, j: u256, v: u16): External<void> { this.pk16[i][j] = v; }
+  get getPk16(i: u256, j: u256): External<u16> { return this.pk16[i][j]; }
 
-  @external pushDd(): void { this.dd.push(); }
-  @external popDd(): void { this.dd.pop(); }
-  @external setDd(i: u256, j: u256, k: u256, v: u256): void { this.dd[i][j][k] = v; }
-  @external @view getDd(i: u256, j: u256, k: u256): u256 { return this.dd[i][j][k]; }
+  pushDd(): External<void> { this.dd.push(); }
+  popDd(): External<void> { this.dd.pop(); }
+  setDd(i: u256, j: u256, k: u256, v: u256): External<void> { this.dd[i][j][k] = v; }
+  get getDd(i: u256, j: u256, k: u256): External<u256> { return this.dd[i][j][k]; }
 
-  @external pushA(i: u256, v: u256): void { this.a[i].push(v); }
-  @external popA(i: u256): void { this.a[i].pop(); }
-  @external setA(i: u256, j: u256, v: u256): void { this.a[i][j] = v; }
-  @external @view getA(i: u256, j: u256): u256 { return this.a[i][j]; }
-  @external @view lenA(i: u256): u256 { return this.a[i].length; }
-  @external setSent(v: u256): void { this.sent = v; }
+  pushA(i: u256, v: u256): External<void> { this.a[i].push(v); }
+  popA(i: u256): External<void> { this.a[i].pop(); }
+  setA(i: u256, j: u256, v: u256): External<void> { this.a[i][j] = v; }
+  get getA(i: u256, j: u256): External<u256> { return this.a[i][j]; }
+  get lenA(i: u256): External<u256> { return this.a[i].length; }
+  setSent(v: u256): External<void> { this.sent = v; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

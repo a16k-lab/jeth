@@ -14,13 +14,13 @@ import { compileSolidity } from './_solidity.js';
 const M = 1n << 256n;
 const sel = (s: string) => functionSelector(s);
 
-const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
-@struct class Q { x: u128; y: u128; }
-@struct class W { a: u8; b: i64; c: address; d: bytes4; }
-@struct class S { a: i8; b: i16; c: i128; d: i256; }
-@contract class C {
+const JETH = `type P = { a: u256; b: u8; c: i64; d: address; };
+type Q = { x: u128; y: u128; };
+type W = { a: u8; b: i64; c: address; d: bytes4; };
+type S = { a: i8; b: i16; c: i128; d: i256; };
+class C {
   // ---- aliasing chains: q=p; r=q; mutate r; all three alias ----
-  @external @pure chain3(a: u128): Q {
+  get chain3(a: u128): External<Q> {
     let p: Q = Q(a, a);
     let q: Q = p;
     let r: Q = q;
@@ -28,7 +28,7 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return p;
   }
   // mutate through the MIDDLE alias, read the head
-  @external @pure chainMid(a: u128, b: u128): Q {
+  get chainMid(a: u128, b: u128): External<Q> {
     let p: Q = Q(a, b);
     let q: Q = p;
     let r: Q = q;
@@ -36,47 +36,47 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return r;
   }
   // alias then pass the ALIAS to a mutating helper; read the original
-  @pure bumpQ(p: Q): void { p.x = p.x + 1000n; p.y = p.y * 2n; }
-  @external @pure aliasPass(a: u128, b: u128): Q {
+  bumpQ(p: Q): void { p.x = p.x + 1000n; p.y = p.y * 2n; }
+  get aliasPass(a: u128, b: u128): External<Q> {
     let p: Q = Q(a, b);
     let q: Q = p;
     this.bumpQ(q);
     return p;
   }
   // ---- pass-by-ref: helper MUTATES param, caller sees it ----
-  @pure setFields(p: P, na: u256, nb: u8, nc: i64): void {
+  setFields(p: P, na: u256, nb: u8, nc: i64): void {
     p.a = na; p.b = nb; p.c = nc;
   }
-  @external @pure refMutate(a: u256, b: u8, c: i64): P {
+  get refMutate(a: u256, b: u8, c: i64): External<P> {
     let p: P = P(0n, 0n, 0n, address(0x99n));
     this.setFields(p, a, b, c);
     return p;
   }
   // helper that does NOT mutate: builds a NEW struct, returns it; original untouched
-  @pure freshQ(p: Q): Q { return Q(p.x + 1n, p.y + 1n); }
-  @external @pure noMutate(a: u128, b: u128): Q {
+  freshQ(p: Q): Q { return Q(p.x + 1n, p.y + 1n); }
+  get noMutate(a: u128, b: u128): External<Q> {
     let p: Q = Q(a, b);
     let unused: Q = this.freshQ(p);
     return p;
   }
   // helper returns the fresh struct; we keep both, sum a field to prove distinctness
-  @external @pure distinctSum(a: u128, b: u128): u128 {
+  get distinctSum(a: u128, b: u128): External<u128> {
     let p: Q = Q(a, b);
     let r: Q = this.freshQ(p);
     return p.x + r.x;
   }
   // ---- boundary / narrow / signed whole-struct return ----
-  @external @pure mkP(a: u256, b: u8, c: i64, d: address): P { let p: P = P(a, b, c, d); return p; }
-  @external @pure mkW(a: u8, b: i64, c: address, d: bytes4): W { let p: W = W(a, b, c, d); return p; }
-  @external @pure mkS(a: i8, b: i16, c: i128, d: i256): S { let p: S = S(a, b, c, d); return p; }
+  get mkP(a: u256, b: u8, c: i64, d: address): External<P> { let p: P = P(a, b, c, d); return p; }
+  get mkW(a: u8, b: i64, c: address, d: bytes4): External<W> { let p: W = W(a, b, c, d); return p; }
+  get mkS(a: i8, b: i16, c: i128, d: i256): External<S> { let p: S = S(a, b, c, d); return p; }
   // construct narrow/signed, mutate, return whole (bytes4 passed in as a param)
-  @external @pure mutW(a: u8, b: i64, d0: bytes4, d1: bytes4): W {
+  get mutW(a: u8, b: i64, d0: bytes4, d1: bytes4): External<W> {
     let p: W = W(0n, 0n, address(0n), d0);
     p.a = a; p.b = b; p.c = address(0xCAFEn); p.d = d1;
     return p;
   }
   // ---- two distinct structs in one function (separate allocations) ----
-  @external @pure twoStructs(a: u128, b: u128, c: u128, d: u128): u256 {
+  get twoStructs(a: u128, b: u128, c: u128, d: u128): External<u256> {
     let p: Q = Q(a, b);
     let r: Q = Q(c, d);
     p.x = p.x + 1n; r.y = r.y + 2n;
@@ -84,67 +84,67 @@ const JETH = `@struct class P { a: u256; b: u8; c: i64; d: address; }
     return u256(p.x) * (1n << 192n) + u256(p.y) * (1n << 128n) + u256(r.x) * (1n << 64n) + u256(r.y);
   }
   // ---- same struct passed to a helper TWICE ----
-  @pure addX(p: Q, k: u128): void { p.x = p.x + k; }
-  @external @pure twice(a: u128, b: u128): Q {
+  addX(p: Q, k: u128): void { p.x = p.x + k; }
+  get twice(a: u128, b: u128): External<Q> {
     let p: Q = Q(a, b);
     this.addX(p, 10n);
     this.addX(p, 5n);
     return p;
   }
   // struct returned then re-passed
-  @external @pure returnRepass(a: u128, b: u128): Q {
+  get returnRepass(a: u128, b: u128): External<Q> {
     let p: Q = this.freshQ(Q(a, b));
     this.addX(p, 1n);
     return p;
   }
   // ---- recursion that takes AND returns a struct (modest depth) ----
-  @pure climb(p: P, n: u256): P {
+  climb(p: P, n: u256): P {
     if (n == 0n) { return p; }
     return this.climb(P(p.a + 1n, u8(p.b + 1n), i64(p.c - 1n), p.d), n - 1n);
   }
-  @external @pure climbE(a: u256, b: u8, c: i64, d: address, n: u256): P {
+  get climbE(a: u256, b: u8, c: i64, d: address, n: u256): External<P> {
     return this.climb(P(a, b, c, d), n);
   }
   // recursion that MUTATES the param in place at each level (by-ref accumulation)
-  @pure accDown(p: Q, n: u128): void {
+  accDown(p: Q, n: u128): void {
     if (n == 0n) { return; }
     p.x = p.x + n;
     this.accDown(p, n - 1n);
   }
-  @external @pure accE(a: u128, n: u128): Q { let p: Q = Q(a, 0n); this.accDown(p, n); return p; }
+  get accE(a: u128, n: u128): External<Q> { let p: Q = Q(a, 0n); this.accDown(p, n); return p; }
   // ---- @pure helper mutating a memory struct param (legal in Solidity) ----
-  @pure pureBump(p: P): void { p.a = p.a + 1n; p.b = u8(p.b + 1n); }
-  @external @pure pureBumpE(a: u256, b: u8): P { let p: P = P(a, b, 0n, address(0n)); this.pureBump(p); return p; }
+  pureBump(p: P): void { p.a = p.a + 1n; p.b = u8(p.b + 1n); }
+  get pureBumpE(a: u256, b: u8): External<P> { let p: P = P(a, b, 0n, address(0n)); this.pureBump(p); return p; }
   // ---- compound + ++/-- on struct fields through aliases ----
-  @external @pure compoundAlias(a: u128): u256 {
+  get compoundAlias(a: u128): External<u256> {
     let p: Q = Q(a, a);
     let q: Q = p;
     q.x += 5n; p.y -= 3n; q.x++; let z: u128 = p.x--;
     return u256(p.x) * 1000000n + u256(q.y) * 1000n + u256(z);
   }
   // chain this.outer(this.inner(...)) passing a struct through
-  @pure inner(p: P): P { return P(p.a * 2n, u8(p.b + 1n), i64(p.c + 1n), p.d); }
-  @pure outer(p: P): P { return P(p.a + 1n, u8(p.b * 2n), i64(p.c * 2n), p.d); }
-  @external @pure chainCall(a: u256, b: u8, c: i64, d: address): P {
+  inner(p: P): P { return P(p.a * 2n, u8(p.b + 1n), i64(p.c + 1n), p.d); }
+  outer(p: P): P { return P(p.a + 1n, u8(p.b * 2n), i64(p.c * 2n), p.d); }
+  get chainCall(a: u256, b: u8, c: i64, d: address): External<P> {
     return this.outer(this.inner(P(a, b, c, d)));
   }
   // bind a struct-returning call to a local, then mutate the local (no effect on a fresh source)
-  @external @pure bindMutate(a: u128, b: u128): u128 {
+  get bindMutate(a: u128, b: u128): External<u128> {
     let p: Q = Q(a, b);
     let r: Q = this.freshQ(p);
     r.x = 0n; r.y = 0n;
     return p.x + p.y;
   }
   // helper reads two struct params (distinct), combine
-  @pure combine(p: Q, r: Q): u256 { return u256(p.x) + u256(r.y); }
-  @external @pure combineE(a: u128, b: u128, c: u128, d: u128): u256 {
+  combine(p: Q, r: Q): u256 { return u256(p.x) + u256(r.y); }
+  get combineE(a: u128, b: u128, c: u128, d: u128): External<u256> {
     let p: Q = Q(a, b);
     let r: Q = Q(c, d);
     return this.combine(p, r);
   }
   // pass the SAME struct as both args; mutate one path -> both see it (same object)
-  @pure addBoth(p: Q, r: Q): void { p.x = p.x + 1n; r.y = r.y + 1n; }
-  @external @pure sameTwice(a: u128, b: u128): Q {
+  addBoth(p: Q, r: Q): void { p.x = p.x + 1n; r.y = r.y + 1n; }
+  get sameTwice(a: u128, b: u128): External<Q> {
     let p: Q = Q(a, b);
     this.addBoth(p, p);
     return p;

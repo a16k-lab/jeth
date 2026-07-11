@@ -12,15 +12,14 @@ function pad(v: bigint): string {
 }
 
 const JETH = `
-@struct class Pt { x: u128; y: u128; }
-@contract
+type Pt = { x: u128; y: u128; };
 class A {
-  @external @pure sumTriple(a: Arr<u256, 3>): u256 { return a[0n] + a[1n] + a[2n]; }
-  @external @pure ptX(p: Pt): u128 { return p.x; }
-  @external @pure ptY(p: Pt): u128 { return p.y; }
-  @external @pure arrAt(b: u256[], i: u256): u256 { return b[i]; }
-  @external @pure bytesAt(s: bytes, i: u256): bytes1 { return s[i]; }
-  @external @pure aggThenArr(a: Arr<u256, 3>, b: u256[], i: u256): u256 { return b[i]; }
+  get sumTriple(a: Arr<u256, 3>): External<u256> { return a[0n] + a[1n] + a[2n]; }
+  get ptX(p: Pt): External<u128> { return p.x; }
+  get ptY(p: Pt): External<u128> { return p.y; }
+  get arrAt(b: u256[], i: u256): External<u256> { return b[i]; }
+  get bytesAt(s: bytes, i: u256): External<bytes1> { return s[i]; }
+  get aggThenArr(a: Arr<u256, 3>, b: u256[], i: u256): External<u256> { return b[i]; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

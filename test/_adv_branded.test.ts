@@ -47,13 +47,13 @@ describe('1. brand over each base kind erases to the plain base (bytecode + ABI)
   const cases: [string, string, string][] = [
     [
       'Brand<address>',
-      `type X=Brand<address>;@contract class C{@state s:X;@external set(a:X):void{this.s=a;}@view get():address{return address(this.s);}@external @pure id(a:X):X{return a;}}`,
-      `@contract class C{@state s:address;@external set(a:address):void{this.s=a;}@view get():address{return this.s;}@external @pure id(a:address):address{return a;}}`,
+      `type X=Brand<address>;class C{s:X;set(a:X):External<void>{this.s=a;}get():address{return address(this.s);}get id(a:X):External<X>{return a;}}`,
+      `class C{s:address;set(a:address):External<void>{this.s=a;}get():address{return this.s;}get id(a:address):External<address>{return a;}}`,
     ],
     [
       'Brand<bytes32>',
-      `type X=Brand<bytes32>;@contract class C{@state s:X;@external set(a:X):void{this.s=a;}@view get():bytes32{return bytes32(this.s);}@external @pure id(a:X):X{return a;}}`,
-      `@contract class C{@state s:bytes32;@external set(a:bytes32):void{this.s=a;}@view get():bytes32{return this.s;}@external @pure id(a:bytes32):bytes32{return a;}}`,
+      `type X=Brand<bytes32>;class C{s:X;set(a:X):External<void>{this.s=a;}get():bytes32{return bytes32(this.s);}get id(a:X):External<X>{return a;}}`,
+      `class C{s:bytes32;set(a:bytes32):External<void>{this.s=a;}get():bytes32{return this.s;}get id(a:bytes32):External<bytes32>{return a;}}`,
     ],
     [
       // NOTE: JETH has no `bool(x)` cast at all (even `bool(bool)` -> JETH170), so a
@@ -61,18 +61,18 @@ describe('1. brand over each base kind erases to the plain base (bytecode + ABI)
       // language gap, not a brand bug; here we exercise the brand where it IS usable (state +
       // pass-through), which is what erases. Returning the brand directly returns `bool` in the ABI.
       'Brand<bool>',
-      `type X=Brand<bool>;@contract class C{@state s:X;@external set(a:X):void{this.s=a;}@view get():X{return this.s;}@external @pure id(a:X):X{return a;}}`,
-      `@contract class C{@state s:bool;@external set(a:bool):void{this.s=a;}@view get():bool{return this.s;}@external @pure id(a:bool):bool{return a;}}`,
+      `type X=Brand<bool>;class C{s:X;set(a:X):External<void>{this.s=a;}get():X{return this.s;}get id(a:X):External<X>{return a;}}`,
+      `class C{s:bool;set(a:bool):External<void>{this.s=a;}get():bool{return this.s;}get id(a:bool):External<bool>{return a;}}`,
     ],
     [
       'Brand<u8>',
-      `type X=Brand<u8>;@contract class C{@state s:X;@external set(a:X):void{this.s=a;}@view get():u8{return u8(this.s);}@external @pure id(a:X):X{return a;}}`,
-      `@contract class C{@state s:u8;@external set(a:u8):void{this.s=a;}@view get():u8{return this.s;}@external @pure id(a:u8):u8{return a;}}`,
+      `type X=Brand<u8>;class C{s:X;set(a:X):External<void>{this.s=a;}get():u8{return u8(this.s);}get id(a:X):External<X>{return a;}}`,
+      `class C{s:u8;set(a:u8):External<void>{this.s=a;}get():u8{return this.s;}get id(a:u8):External<u8>{return a;}}`,
     ],
     [
       'Brand<i128>',
-      `type X=Brand<i128>;@contract class C{@state s:X;@external set(a:X):void{this.s=a;}@view get():i128{return i128(this.s);}@external @pure id(a:X):X{return a;}}`,
-      `@contract class C{@state s:i128;@external set(a:i128):void{this.s=a;}@view get():i128{return this.s;}@external @pure id(a:i128):i128{return a;}}`,
+      `type X=Brand<i128>;class C{s:X;set(a:X):External<void>{this.s=a;}get():i128{return i128(this.s);}get id(a:X):External<X>{return a;}}`,
+      `class C{s:i128;set(a:i128):External<void>{this.s=a;}get():i128{return this.s;}get id(a:i128):External<i128>{return a;}}`,
     ],
   ];
   for (const [label, branded, plain] of cases) {
@@ -80,7 +80,7 @@ describe('1. brand over each base kind erases to the plain base (bytecode + ABI)
   }
 
   it('bool(Brand<bool>) and the ABI both show the base type, not the brand name', () => {
-    const r = compile(`type Flag=Brand<bool>;@contract class C{@external @pure f(a:Flag):Flag{return a;}}`, {
+    const r = compile(`type Flag=Brand<bool>;class C{get f(a:Flag):External<Flag>{return a;}}`, {
       fileName: 'C.jeth',
     });
     const fn = r.abi.find((x: any) => x.name === 'f') as any;
@@ -97,25 +97,25 @@ describe('2. branded aggregates erase to the base and match solc', () => {
   it('Arr<TokenId,3>, TokenId[], branded struct field, branded map key+value, tuple return all erase', () => {
     assertErased(
       `type T=Brand<u256>;type W=Brand<address>;
-       @struct class Rec{ id: T; who: W; }
-       @contract class C{
-         @state m: mapping<T,W>;
-         @external @pure fixedEcho(a: Arr<T,3>): Arr<T,3> { return a; }
-         @external @pure dynEcho(a: T[]): T[] { return a; }
-         @external setM(k: T, v: W): void { this.m[k] = v; }
-         @view getM(k: T): W { return this.m[k]; }
-         @external @pure rec(i: T, w: W): Rec { return Rec(i, w); }
-         @external @pure tup(a: T, b: W): [T, W] { return [a, b]; }
+       type Rec = { id: T; who: W; };
+       class C{
+         m: mapping<T,W>;
+         get fixedEcho(a: Arr<T,3>): External<Arr<T,3>> { return a; }
+         get dynEcho(a: T[]): External<T[]> { return a; }
+         setM(k: T, v: W): External<void> { this.m[k] = v; }
+         getM(k: T): W { return this.m[k]; }
+         get rec(i: T, w: W): External<Rec> { return Rec(i, w); }
+         get tup(a: T, b: W): External<[T, W]> { return [a, b]; }
        }`,
-      `@struct class Rec{ id: u256; who: address; }
-       @contract class C{
-         @state m: mapping<u256,address>;
-         @external @pure fixedEcho(a: Arr<u256,3>): Arr<u256,3> { return a; }
-         @external @pure dynEcho(a: u256[]): u256[] { return a; }
-         @external setM(k: u256, v: address): void { this.m[k] = v; }
-         @view getM(k: u256): address { return this.m[k]; }
-         @external @pure rec(i: u256, w: address): Rec { return Rec(i, w); }
-         @external @pure tup(a: u256, b: address): [u256, address] { return [a, b]; }
+      `type Rec = { id: u256; who: address; };
+       class C{
+         m: mapping<u256,address>;
+         get fixedEcho(a: Arr<u256,3>): External<Arr<u256,3>> { return a; }
+         get dynEcho(a: u256[]): External<u256[]> { return a; }
+         setM(k: u256, v: address): External<void> { this.m[k] = v; }
+         getM(k: u256): address { return this.m[k]; }
+         get rec(i: u256, w: address): External<Rec> { return Rec(i, w); }
+         get tup(a: u256, b: address): External<[u256, address]> { return [a, b]; }
        }`,
       'branded aggregates',
     );
@@ -123,16 +123,16 @@ describe('2. branded aggregates erase to the base and match solc', () => {
 
   it('branded mapping + struct store to the same raw slots as solc', async () => {
     const J = `type T=Brand<u256>;type W=Brand<address>;
-      @struct class Rec{ id: T; bal: T; }
-      @contract class C{
-        @state m: mapping<T,W>;
-        @state rec: Rec;
-        @external setM(k:T,v:W):void{ this.m[k]=v; }
-        @external @view getM(k:T):W{ return this.m[k]; }
-        @external setRec(i:T,b:T):void{ this.rec=Rec(i,b); }
-        @external @pure echoArr(a: Arr<T,3>): Arr<T,3> { return a; }
-        @external @pure echoDyn(a: T[]): T[] { return a; }
-        @external @pure tup(a:T,b:W):[T,W]{ return [a,b]; }
+      type Rec = { id: T; bal: T; };
+      class C{
+        m: mapping<T,W>;
+        rec: Rec;
+        setM(k:T,v:W):External<void>{ this.m[k]=v; }
+        get getM(k:T):External<W>{ return this.m[k]; }
+        setRec(i:T,b:T):External<void>{ this.rec=Rec(i,b); }
+        get echoArr(a: Arr<T,3>): External<Arr<T,3>> { return a; }
+        get echoDyn(a: T[]): External<T[]> { return a; }
+        get tup(a:T,b:W):External<[T,W]>{ return [a,b]; }
       }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -192,9 +192,9 @@ contract C{
 describe('3. branded events/errors use the base type in the signature + identical bytes', () => {
   it('event signature (topic0) uses the base type, and logs are byte-identical to solc', async () => {
     const J = `type TokenId=Brand<u256>;type Acc=Brand<address>;
-      @contract class C{
-        @event Transfer(@indexed from: Acc, @indexed id: TokenId, amt: TokenId);
-        @external xfer(from: Acc, id: TokenId, amt: TokenId): void { emit(Transfer(from, id, amt)); }
+      class C{
+        Transfer: event<{ from: indexed<Acc>; id: indexed<TokenId>; amt: TokenId }>;
+        xfer(from: Acc, id: TokenId, amt: TokenId): External<void> { emit(Transfer(from, id, amt)); }
       }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -229,9 +229,9 @@ contract C{
 
   it('error selector uses the base type and revert data is byte-identical to solc', async () => {
     const J = `type W=Brand<u256>;
-      @contract class C{
-        @error Insufficient(need: W, have: W);
-        @external @pure f(a: W, b: W): void { revert(Insufficient(a, b)); }
+      class C{
+        Insufficient: error<{ need: W; have: W }>;
+        f(a: W, b: W): External<void> { revert(Insufficient(a, b)); }
       }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -265,10 +265,10 @@ contract C{
 describe('4. branded small field packs identically to the base (raw slots)', () => {
   it('Brand<u8> packed beside u8/u16/address occupies the same slot+offset as the base', async () => {
     const J = `type Small=Brand<u8>;type Tag=Brand<u16>;
-      @struct class S{ a: Small; b: u8; c: Tag; d: address; e: u8; }
-      @contract class C{
-        @state s: S;
-        @external set(a:Small,b:u8,c:Tag,d:address,e:u8):void{ this.s=S(a,b,c,d,e); }
+      type S = { a: Small; b: u8; c: Tag; d: address; e: u8; };
+      class C{
+        s: S;
+        set(a:Small,b:u8,c:Tag,d:address,e:u8):External<void>{ this.s=S(a,b,c,d,e); }
       }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -283,8 +283,8 @@ contract C{
     // Also prove erasure against a plain-base JETH contract.
     assertErased(
       J,
-      `@struct class S{ a: u8; b: u8; c: u16; d: address; e: u8; }
-       @contract class C{ @state s: S; @external set(a:u8,b:u8,c:u16,d:address,e:u8):void{ this.s=S(a,b,c,d,e); } }`,
+      `type S = { a: u8; b: u8; c: u16; d: address; e: u8; };
+       class C{ s: S; set(a:u8,b:u8,c:u16,d:address,e:u8):External<void>{ this.s=S(a,b,c,d,e); } }`,
       'packed small brand',
     );
     const jh = await Harness.create();
@@ -315,31 +315,31 @@ contract C{
 // =====================================================================================
 describe('5. literal retyping + branded arithmetic match solc at runtime', () => {
   it('`const x: TokenId = 5n`, `id + 1n`, and `id == otherId` compile (brand kept)', () => {
-    expect(compiles(`type T=Brand<u256>;@contract class C{@external @pure f():T{const x:T=5n;return x;}}`)).toBe(true);
-    expect(compiles(`type T=Brand<u256>;@contract class C{@external @pure f(id:T):T{return id+1n;}}`)).toBe(true);
-    expect(compiles(`type T=Brand<u256>;@contract class C{@external @pure f(a:T,b:T):bool{return a==b;}}`)).toBe(true);
+    expect(compiles(`type T=Brand<u256>;class C{get f():External<T>{const x:T=5n;return x;}}`)).toBe(true);
+    expect(compiles(`type T=Brand<u256>;class C{get f(id:T):External<T>{return id+1n;}}`)).toBe(true);
+    expect(compiles(`type T=Brand<u256>;class C{get f(a:T,b:T):External<bool>{return a==b;}}`)).toBe(true);
   });
 
   it('literal range checks honor the BASE width of the brand (u8 -> 255 ok, 256/300 reject)', () => {
-    expect(compiles(`type S=Brand<u8>;@contract class C{@external @pure f():S{const x:S=255n;return x;}}`)).toBe(true);
-    expect(errCodes(`type S=Brand<u8>;@contract class C{@external @pure f():S{const x:S=300n;return x;}}`)).toContain(
+    expect(compiles(`type S=Brand<u8>;class C{get f():External<S>{const x:S=255n;return x;}}`)).toBe(true);
+    expect(errCodes(`type S=Brand<u8>;class C{get f():External<S>{const x:S=300n;return x;}}`)).toContain(
       'JETH070',
     );
-    expect(errCodes(`type S=Brand<u8>;@contract class C{@external @pure f(id:S):S{return id+256n;}}`)).toContain(
+    expect(errCodes(`type S=Brand<u8>;class C{get f(id:S):External<S>{return id+256n;}}`)).toContain(
       'JETH070',
     );
     // signed base
-    expect(compiles(`type S=Brand<i8>;@contract class C{@external @pure f():S{const x:S=-128n;return x;}}`)).toBe(true);
-    expect(errCodes(`type S=Brand<i8>;@contract class C{@external @pure f():S{const x:S=-129n;return x;}}`)).toContain(
+    expect(compiles(`type S=Brand<i8>;class C{get f():External<S>{const x:S=-128n;return x;}}`)).toBe(true);
+    expect(errCodes(`type S=Brand<i8>;class C{get f():External<S>{const x:S=-129n;return x;}}`)).toContain(
       'JETH070',
     );
   });
 
   it('branded u8 arithmetic is checked at 8 bits (overflow Panic 0x11) byte-identical to solc', async () => {
-    const J = `type B=Brand<u8>;@contract class C{
-      @external @pure addUnwrap(a:B,b:B):u256{ return u256(a+b); }
-      @external @pure wrapDirty(x:u256):u256{ return u256(B(x)); }
-      @external @pure eqId(a:B,b:B):bool{ return a==b; }
+    const J = `type B=Brand<u8>;class C{
+      get addUnwrap(a:B,b:B):External<u256>{ return u256(a+b); }
+      get wrapDirty(x:u256):External<u256>{ return u256(B(x)); }
+      get eqId(a:B,b:B):External<bool>{ return a==b; }
     }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -376,43 +376,43 @@ contract C{
 // =====================================================================================
 describe('6. nominal barrier rejections (non-address bases)', () => {
   it('plain base -> brand without a cast is rejected', () => {
-    expect(errCodes(`type T=Brand<u256>;@contract class C{@external @pure f(x:u256):T{return x;}}`)).toContain(
+    expect(errCodes(`type T=Brand<u256>;class C{get f(x:u256):External<T>{return x;}}`)).toContain(
       'JETH085',
     );
   });
   it('brand -> base without a cast is rejected', () => {
-    expect(errCodes(`type T=Brand<u256>;@contract class C{@external @pure f(x:T):u256{return x;}}`)).toContain(
+    expect(errCodes(`type T=Brand<u256>;class C{get f(x:T):External<u256>{return x;}}`)).toContain(
       'JETH085',
     );
   });
   it('brand A -> brand B without a cast is rejected (assignment)', () => {
     expect(
-      errCodes(`type A=Brand<u256>;type B=Brand<u256>;@contract class C{@external @pure f(x:A):B{return x;}}`),
+      errCodes(`type A=Brand<u256>;type B=Brand<u256>;class C{get f(x:A):External<B>{return x;}}`),
     ).toContain('JETH085');
   });
   it('mixing brand + base in arithmetic is rejected', () => {
-    expect(errCodes(`type T=Brand<u256>;@contract class C{@external @pure f(x:T,y:u256):T{return x+y;}}`)).toContain(
+    expect(errCodes(`type T=Brand<u256>;class C{get f(x:T,y:u256):External<T>{return x+y;}}`)).toContain(
       'JETH083',
     );
   });
   it('mixing brand A + brand B in a comparison is rejected', () => {
     expect(
       errCodes(
-        `type A=Brand<u256>;type B=Brand<u256>;@contract class C{@external @pure f(x:A,y:B):bool{return x==y;}}`,
+        `type A=Brand<u256>;type B=Brand<u256>;class C{get f(x:A,y:B):External<bool>{return x==y;}}`,
       ),
     ).toContain('JETH083');
   });
   it('passing a brand where its base is required is rejected (internal call arg)', () => {
     expect(
       errCodes(
-        `type T=Brand<u256>;@contract class C{g(x:u256):u256{return x;}@external @pure f(x:T):u256{return this.g(x);}}`,
+        `type T=Brand<u256>;class C{g(x:u256):u256{return x;}get f(x:T):External<u256>{return this.g(x);}}`,
       ),
     ).toContain('JETH085');
   });
   it('passing a base where the brand is required is rejected (internal call arg)', () => {
     expect(
       errCodes(
-        `type T=Brand<u256>;@contract class C{g(x:T):T{return x;}@external @pure f(x:u256):T{return this.g(x);}}`,
+        `type T=Brand<u256>;class C{g(x:T):T{return x;}get f(x:u256):External<T>{return this.g(x);}}`,
       ),
     ).toContain('JETH085');
   });
@@ -428,13 +428,13 @@ describe('6. nominal barrier rejections (non-address bases)', () => {
 describe('6b. cross-brand explicit cast: more permissive than solc, but runtime-correct', () => {
   it('allows the direct no-op cast brand A(u256) -> brand B(u256)', () => {
     expect(
-      compiles(`type A=Brand<u256>;type B=Brand<u256>;@contract class C{@external @pure f(x:A):B{return B(x);}}`),
+      compiles(`type A=Brand<u256>;type B=Brand<u256>;class C{get f(x:A):External<B>{return B(x);}}`),
     ).toBe(true);
   });
   it('a width-changing cross-brand cast still MASKS to the target base width (matches solc base cast)', async () => {
     // JETH: Brand<u8>(Brand<u256>-valued x). solc equivalent: uint8(<u256>). The result must
     // be masked to 8 bits; if the cast were a pure no-op this would leave dirty high bits.
-    const J = `type A=Brand<u256>;type B=Brand<u8>;@contract class C{@external @pure f(x:A):u256{ return u256(B(x)); }}`;
+    const J = `type A=Brand<u256>;type B=Brand<u8>;class C{get f(x:A):External<u256>{ return u256(B(x)); }}`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 contract C{ function f(uint256 x) external pure returns (uint256){ return uint256(uint8(x)); } }`;
@@ -461,32 +461,32 @@ describe('7. nasty Brand declarations are rejected with a clear error, never a c
 
   reject(
     're-brand Brand<TokenId> (brand over a brand) rejected',
-    `type T=Brand<u256>;type B=Brand<T>;@contract class C{@external @pure f(x:B):B{return x;}}`,
+    `type T=Brand<u256>;type B=Brand<T>;class C{f(x:B):External<B>{return x;}}`,
   );
-  reject('Brand<mapping<...>> rejected', `type M=Brand<mapping<u256,u256>>;@contract class C{@external f():void{}}`);
-  reject('Brand<u256[]> rejected', `type M=Brand<u256[]>;@contract class C{@external f():void{}}`);
+  reject('Brand<mapping<...>> rejected', `type M=Brand<mapping<u256,u256>>;class C{f():External<void>{}}`);
+  reject('Brand<u256[]> rejected', `type M=Brand<u256[]>;class C{f():External<void>{}}`);
   reject(
     'Brand<SomeStruct> rejected',
-    `@struct class S{a:u256;}type M=Brand<S>;@contract class C{@external f():void{}}`,
+    `type S = {a:u256;};type M=Brand<S>;class C{f():External<void>{}}`,
     'JETH013',
   );
   reject(
     'duplicate alias name rejected',
-    `type X=Brand<u256>;type X=Brand<u8>;@contract class C{@external f():void{}}`,
+    `type X=Brand<u256>;type X=Brand<u8>;class C{f():External<void>{}}`,
   );
   reject(
     'alias name conflicts with a primitive (u256) rejected',
-    `type u256=Brand<u8>;@contract class C{@external f():void{}}`,
+    `type u256=Brand<u8>;class C{f():External<void>{}}`,
   );
-  reject('inline Brand<u256> in a param rejected', `@contract class C{@external @pure f(x:Brand<u256>):void{}}`);
-  reject('self-referential Brand<X> rejected', `type X=Brand<X>;@contract class C{@external f():void{}}`, 'JETH013');
-  reject('empty Brand<> rejected', `type X=Brand<>;@contract class C{@external f():void{}}`);
+  reject('inline Brand<u256> in a param rejected', `class C{f(x:Brand<u256>):External<void>{}}`);
+  reject('self-referential Brand<X> rejected', `type X=Brand<X>;class C{f():External<void>{}}`, 'JETH013');
+  reject('empty Brand<> rejected', `type X=Brand<>;class C{f():External<void>{}}`);
 
   it('all of the above produce a diagnostic, none throw a non-CompileError crash', () => {
     const srcs = [
-      `type B=Brand<T>;type T=Brand<u256>;@contract class C{@external f():void{}}`,
-      `type M=Brand<mapping<u256,u256>>;@contract class C{@external f():void{}}`,
-      `type X=Brand<>;@contract class C{@external f():void{}}`,
+      `type B=Brand<T>;type T=Brand<u256>;class C{f():External<void>{}}`,
+      `type M=Brand<mapping<u256,u256>>;class C{f():External<void>{}}`,
+      `type X=Brand<>;class C{f():External<void>{}}`,
     ];
     for (const s of srcs) {
       let threwCompileError = false;
@@ -506,19 +506,19 @@ describe('7. nasty Brand declarations are rejected with a clear error, never a c
 // =====================================================================================
 describe('8. widening across a brand boundary is consistently rejected', () => {
   it('Brand<u128> does NOT implicitly widen to u256 (crossing the brand boundary needs a cast)', () => {
-    expect(errCodes(`type S=Brand<u128>;@contract class C{@external @pure f(x:S):u256{return x;}}`)).toContain(
+    expect(errCodes(`type S=Brand<u128>;class C{get f(x:S):External<u256>{return x;}}`)).toContain(
       'JETH085',
     );
   });
   it('Brand<u128> does NOT implicitly widen to a different brand Brand<u256>', () => {
     expect(
-      errCodes(`type S=Brand<u128>;type T=Brand<u256>;@contract class C{@external @pure f(x:S):T{return x;}}`),
+      errCodes(`type S=Brand<u128>;type T=Brand<u256>;class C{get f(x:S):External<T>{return x;}}`),
     ).toContain('JETH085');
   });
   it('the UNWRAPPED base still widens normally (sanity: u128 -> u256 is fine without a brand)', () => {
-    expect(compiles(`@contract class C{@external @pure f(x:u128):u256{return x;}}`)).toBe(true);
+    expect(compiles(`class C{get f(x:u128):External<u256>{return x;}}`)).toBe(true);
     // and explicit unwrap-then-use widens fine
-    expect(compiles(`type S=Brand<u128>;@contract class C{@external @pure f(x:S):u256{return u256(u128(x));}}`)).toBe(
+    expect(compiles(`type S=Brand<u128>;class C{get f(x:S):External<u256>{return u256(u128(x));}}`)).toBe(
       true,
     );
   });
@@ -537,48 +537,48 @@ describe('8. widening across a brand boundary is consistently rejected', () => {
 describe('branded address enforces the nominal barrier (regression)', () => {
   it('rejects: branded address compared to a bare address without a cast', () => {
     expect(
-      errCodes(`type A=Brand<address>;@contract class C{@external @pure f(a:A,b:address):bool{return a==b;}}`),
+      errCodes(`type A=Brand<address>;class C{get f(a:A,b:address):External<bool>{return a==b;}}`),
     ).toContain('JETH083');
   });
   it('rejects: two DIFFERENT branded addresses compared without a cast', () => {
     expect(
       errCodes(
-        `type A=Brand<address>;type B=Brand<address>;@contract class C{@external @pure f(a:A,b:B):bool{return a==b;}}`,
+        `type A=Brand<address>;type B=Brand<address>;class C{get f(a:A,b:B):External<bool>{return a==b;}}`,
       ),
     ).toContain('JETH083');
   });
   it('rejects: a bare address assigned to a branded-address return without a wrap', () => {
-    expect(errCodes(`type A=Brand<address>;@contract class C{@external @pure f(b:address):A{return b;}}`)).toContain(
+    expect(errCodes(`type A=Brand<address>;class C{get f(b:address):External<A>{return b;}}`)).toContain(
       'JETH085',
     );
   });
   it('rejects: a bare address stored into a branded-address local without a wrap', () => {
-    expect(errCodes(`type A=Brand<address>;@contract class C{@external f(b:address):void{const a:A=b;}}`)).toContain(
+    expect(errCodes(`type A=Brand<address>;class C{f(b:address):External<void>{const a:A=b;}}`)).toContain(
       'JETH085',
     );
   });
 
   // The guard is brand-specific, not address-wide: same-brand and plain address folds still work.
   it('still accepts: same-brand address comparison, and plain address == address', () => {
-    expect(compiles(`type A=Brand<address>;@contract class C{@external @pure f(a:A,b:A):bool{return a==b;}}`)).toBe(
+    expect(compiles(`type A=Brand<address>;class C{get f(a:A,b:A):External<bool>{return a==b;}}`)).toBe(
       true,
     );
-    expect(compiles(`@contract class C{@external @pure f(a:address,b:address):bool{return a==b;}}`)).toBe(true);
+    expect(compiles(`class C{get f(a:address,b:address):External<bool>{return a==b;}}`)).toBe(true);
     // and explicit wrap/unwrap across the barrier compiles
     expect(
-      compiles(`type A=Brand<address>;@contract class C{@external @pure f(x:address):address{return address(A(x));}}`),
+      compiles(`type A=Brand<address>;class C{get f(x:address):External<address>{return address(A(x));}}`),
     ).toBe(true);
   });
 
   // The hole is base-specific: prove the SAME shapes are correctly rejected for a u256 base.
   it('control: the identical shapes ARE rejected when the base is u256 (so the leak is address-only)', () => {
     expect(
-      errCodes(`type A=Brand<u256>;@contract class C{@external @pure f(a:A,b:u256):bool{return a==b;}}`),
+      errCodes(`type A=Brand<u256>;class C{get f(a:A,b:u256):External<bool>{return a==b;}}`),
     ).toContain('JETH083');
-    expect(errCodes(`type A=Brand<u256>;@contract class C{@external @pure f(b:u256):A{return b;}}`)).toContain(
+    expect(errCodes(`type A=Brand<u256>;class C{get f(b:u256):External<A>{return b;}}`)).toContain(
       'JETH085',
     );
-    expect(errCodes(`type A=Brand<u256>;@contract class C{@external f(b:u256):void{const a:A=b;}}`)).toContain(
+    expect(errCodes(`type A=Brand<u256>;class C{f(b:u256):External<void>{const a:A=b;}}`)).toContain(
       'JETH085',
     );
   });
@@ -586,11 +586,11 @@ describe('branded address enforces the nominal barrier (regression)', () => {
   // Even though the type system leaks, confirm the runtime stays byte-identical to solc:
   // a branded-address round-trip through storage matches the plain-address contract exactly.
   it('despite the leak, runtime is still byte-identical to solc (no miscompile)', async () => {
-    const J = `type Acc=Brand<address>;@contract class C{
-      @state o: Acc;
-      @external set(x: address): void { this.o = Acc(x); }
-      @external @view get(): address { return address(this.o); }
-      @external @pure same(a: Acc, b: Acc): bool { return a == b; }
+    const J = `type Acc=Brand<address>;class C{
+      o: Acc;
+      set(x: address): External<void> { this.o = Acc(x); }
+      get get(): External<address> { return address(this.o); }
+      get same(a: Acc, b: Acc): External<bool> { return a == b; }
     }`;
     const S = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

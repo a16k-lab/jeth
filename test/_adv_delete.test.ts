@@ -61,11 +61,11 @@ async function cmp(p: Pair, label: string, fnSig: string, slots: bigint[], call?
 // 1. Nested dynamic arrays: u256[][], u256[][][], string[][]
 // ---------------------------------------------------------------------------
 describe('delete: nested dynamic arrays', () => {
-  const JETH = `@contract class C {
-  @state dd: u256[][];        // slot 0
-  @state ddd: u256[][][];     // slot 1
-  @state sdd: string[][];     // slot 2
-  @external seed(): void {
+  const JETH = `class C {
+  dd: u256[][];        // slot 0
+  ddd: u256[][][];     // slot 1
+  sdd: string[][];     // slot 2
+  seed(): External<void> {
     this.dd.push([10n, 20n]); this.dd.push([30n, 40n, 50n]);
     // ddd[0] = [[1,2],[3]] ; ddd[1] = [[7]]
     this.ddd.push();
@@ -76,12 +76,12 @@ describe('delete: nested dynamic arrays', () => {
     this.sdd.push();
     this.sdd[0n].push("${SHORT}"); this.sdd[0n].push("${LONG}");
   }
-  @external delDD(): void { delete this.dd; }
-  @external delDDelem(): void { delete this.dd[1n]; }
-  @external delDDD(): void { delete this.ddd; }
-  @external delDDDelem(): void { delete this.ddd[0n]; }
-  @external delSDD(): void { delete this.sdd; }
-  @external delSDDelem(): void { delete this.sdd[0n]; }
+  delDD(): External<void> { delete this.dd; }
+  delDDelem(): External<void> { delete this.dd[1n]; }
+  delDDD(): External<void> { delete this.ddd; }
+  delDDDelem(): External<void> { delete this.ddd[0n]; }
+  delSDD(): External<void> { delete this.sdd; }
+  delSDDelem(): External<void> { delete this.sdd[0n]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -192,18 +192,18 @@ contract C {
 // 2. Fixed array of dynamic: Arr<string,N>, Arr<D,N> (D has a string field)
 // ---------------------------------------------------------------------------
 describe('delete: fixed array of dynamic element', () => {
-  const JETH = `@struct class D { n: u256; s: string; }
-@contract class C {
-  @state fs: Arr<string,3>;   // slots 0,1,2 (each a string header)
-  @state fd: Arr<D,2>;        // slots 3,4 (D[0]: n@3, s@4) ; 5,6 (D[1])
-  @state guard: u256;         // slot 7
-  @external seed(): void {
+  const JETH = `type D = { n: u256; s: string; };
+class C {
+  fs: Arr<string,3>;   // slots 0,1,2 (each a string header)
+  fd: Arr<D,2>;        // slots 3,4 (D[0]: n@3, s@4) ; 5,6 (D[1])
+  guard: u256;         // slot 7
+  seed(): External<void> {
     this.fs[0n] = "${SHORT}"; this.fs[1n] = "${LONG}"; this.fs[2n] = "${LONG2}";
     this.fd[0n] = D(11n, "${LONG}"); this.fd[1n] = D(22n, "${SHORT}");
     this.guard = 0xfeedn;
   }
-  @external delFS(): void { delete this.fs; }
-  @external delFD(): void { delete this.fd; }
+  delFS(): External<void> { delete this.fs; }
+  delFD(): External<void> { delete this.fd; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -246,17 +246,17 @@ contract C {
 // 3. Struct WITH a mapping field: delete must zero value fields but LEAVE mapping entries.
 // ---------------------------------------------------------------------------
 describe('delete: struct containing a mapping field', () => {
-  const JETH = `@struct class S { a: u256; m: mapping<address, u256>; b: u256; }
-@contract class C {
-  @state s: S;                // a@0, m@1, b@2
-  @state after: u256;         // slot 3
-  @external seed(): void {
+  const JETH = `type S = { a: u256; m: mapping<address, u256>; b: u256; };
+class C {
+  s: S;                // a@0, m@1, b@2
+  after: u256;         // slot 3
+  seed(): External<void> {
     this.s.a = 111n; this.s.b = 222n;
     this.s.m[address(0xa11ce0000000000000000000000000000000n)] = 777n;
     this.s.m[address(0xb0b0000000000000000000000000000000000n)] = 888n;
     this.after = 0xcafen;
   }
-  @external delS(): void { delete this.s; }
+  delS(): External<void> { delete this.s; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -294,12 +294,12 @@ contract C {
 // 4. delete a bytes/string FIELD of a struct directly; siblings untouched.
 // ---------------------------------------------------------------------------
 describe('delete: a bytes/string field of a storage struct directly', () => {
-  const JETH = `@struct class D { n: u256; s: string; bs: bytes; t: u256; }
-@contract class C {
-  @state d: D;   // n@0, s@1, bs@2, t@3
-  @external seed(): void { this.d = D(5n, "${LONG}", "${LONG2}", 9n); }
-  @external delS(): void { delete this.d.s; }
-  @external delBs(): void { delete this.d.bs; }
+  const JETH = `type D = { n: u256; s: string; bs: bytes; t: u256; };
+class C {
+  d: D;   // n@0, s@1, bs@2, t@3
+  seed(): External<void> { this.d = D(5n, "${LONG}", "${LONG2}", 9n); }
+  delS(): External<void> { delete this.d.s; }
+  delBs(): External<void> { delete this.d.bs; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -331,23 +331,23 @@ contract C {
 // 5. Packed fixed arrays: uint8[5], uint128[4], bool[10] - delete whole + element.
 // ---------------------------------------------------------------------------
 describe('delete: packed fixed arrays', () => {
-  const JETH = `@contract class C {
-  @state a8: Arr<u8,5>;     // slot 0 (5 bytes packed)
-  @state a128: Arr<u128,4>; // slots 1,2 (2 per slot)
-  @state ab: Arr<bool,10>;  // slot 3 (10 bytes packed)
-  @state guard: u256;       // slot 4
-  @external seed(): void {
+  const JETH = `class C {
+  a8: Arr<u8,5>;     // slot 0 (5 bytes packed)
+  a128: Arr<u128,4>; // slots 1,2 (2 per slot)
+  ab: Arr<bool,10>;  // slot 3 (10 bytes packed)
+  guard: u256;       // slot 4
+  seed(): External<void> {
     this.a8[0n]=1n; this.a8[1n]=2n; this.a8[2n]=3n; this.a8[3n]=4n; this.a8[4n]=5n;
     this.a128[0n]=100n; this.a128[1n]=200n; this.a128[2n]=300n; this.a128[3n]=400n;
     this.ab[0n]=true; this.ab[3n]=true; this.ab[9n]=true;
     this.guard = 0x9999n;
   }
-  @external delA8(): void { delete this.a8; }
-  @external delA8e(): void { delete this.a8[2n]; }
-  @external delA128(): void { delete this.a128; }
-  @external delA128e(): void { delete this.a128[3n]; }
-  @external delAb(): void { delete this.ab; }
-  @external delAbe(): void { delete this.ab[3n]; }
+  delA8(): External<void> { delete this.a8; }
+  delA8e(): External<void> { delete this.a8[2n]; }
+  delA128(): External<void> { delete this.a128; }
+  delA128e(): External<void> { delete this.a128[3n]; }
+  delAb(): External<void> { delete this.ab; }
+  delAbe(): External<void> { delete this.ab[3n]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -400,22 +400,22 @@ contract C {
 // 6. Slot reuse: delete a dynamic array / string, then re-grow / re-set; no stale bytes.
 // ---------------------------------------------------------------------------
 describe('delete: slot reuse after delete (no stale bytes)', () => {
-  const JETH = `@contract class C {
-  @state xs: u256[];   // slot 0
-  @state s: string;    // slot 1
-  @external seed(): void {
+  const JETH = `class C {
+  xs: u256[];   // slot 0
+  s: string;    // slot 1
+  seed(): External<void> {
     this.xs.push(0xaaaan); this.xs.push(0xbbbbn); this.xs.push(0xccccn); this.xs.push(0xddddn);
     this.s = "${LONG}";
   }
-  @external delAndRegrow(): void {
+  delAndRegrow(): External<void> {
     delete this.xs;
     this.xs.push(7n); this.xs.push(8n);
   }
-  @external delAndReset(): void {
+  delAndReset(): External<void> {
     delete this.s;
     this.s = "${SHORT}";
   }
-  @external delStrThenLong(): void {
+  delStrThenLong(): External<void> {
     delete this.s;
     this.s = "${LONG2}";
   }
@@ -469,21 +469,21 @@ contract C {
 // 7. delete in a loop, delete then re-delete (idempotent), delete an already-zero value.
 // ---------------------------------------------------------------------------
 describe('delete: loops, idempotency, no-op on zero', () => {
-  const JETH = `@contract class C {
-  @state fa: Arr<u256,5>;  // slots 0..4
-  @state xs: u256[];       // slot 5
-  @state c: u256;          // slot 6
-  @external seed(): void {
+  const JETH = `class C {
+  fa: Arr<u256,5>;  // slots 0..4
+  xs: u256[];       // slot 5
+  c: u256;          // slot 6
+  seed(): External<void> {
     this.fa[0n]=1n; this.fa[1n]=2n; this.fa[2n]=3n; this.fa[3n]=4n; this.fa[4n]=5n;
     this.xs.push(9n); this.xs.push(8n);
     this.c = 42n;
   }
-  @external delLoop(): void {
+  delLoop(): External<void> {
     let i: u256 = 0n;
     while (i < 5n) { delete this.fa[i]; i = i + 1n; }
   }
-  @external delTwice(): void { delete this.xs; delete this.xs; }
-  @external delZero(): void { delete this.c; delete this.c; }
+  delTwice(): External<void> { delete this.xs; delete this.xs; }
+  delZero(): External<void> { delete this.c; delete this.c; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -527,18 +527,18 @@ contract C {
 // 8. Nested mapping delete + mapping to a dynamic array.
 // ---------------------------------------------------------------------------
 describe('delete: nested mapping value & mapping-to-array', () => {
-  const JETH = `@contract class C {
-  @state mm: mapping<address, mapping<u256, u256>>;  // slot 0
-  @state ma: mapping<address, u256[]>;               // slot 1
-  @external seed(): void {
+  const JETH = `class C {
+  mm: mapping<address, mapping<u256, u256>>;  // slot 0
+  ma: mapping<address, u256[]>;               // slot 1
+  seed(): External<void> {
     this.mm[address(0xa11ce0000000000000000000000000000000n)][7n] = 111n;
     this.mm[address(0xa11ce0000000000000000000000000000000n)][8n] = 222n;
     this.ma[address(0xa11ce0000000000000000000000000000000n)].push(0x11n);
     this.ma[address(0xa11ce0000000000000000000000000000000n)].push(0x22n);
     this.ma[address(0xa11ce0000000000000000000000000000000n)].push(0x33n);
   }
-  @external delMMv(): void { delete this.mm[address(0xa11ce0000000000000000000000000000000n)][7n]; }
-  @external delMAv(): void { delete this.ma[address(0xa11ce0000000000000000000000000000000n)]; }
+  delMMv(): External<void> { delete this.mm[address(0xa11ce0000000000000000000000000000000n)][7n]; }
+  delMAv(): External<void> { delete this.ma[address(0xa11ce0000000000000000000000000000000n)]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -584,15 +584,15 @@ contract C {
 // 9. delete this.arr[i] where arr is a struct array (D[]) with a string field.
 // ---------------------------------------------------------------------------
 describe('delete: a struct-array element with a string field', () => {
-  const JETH = `@struct class D { n: u256; s: string; t: u256; }
-@contract class C {
-  @state recs: D[];   // slot 0
-  @external seed(): void {
+  const JETH = `type D = { n: u256; s: string; t: u256; };
+class C {
+  recs: D[];   // slot 0
+  seed(): External<void> {
     this.recs.push(D(1n, "${LONG}", 10n));
     this.recs.push(D(2n, "${LONG2}", 20n));
     this.recs.push(D(3n, "${SHORT}", 30n));
   }
-  @external delMid(): void { delete this.recs[1n]; }
+  delMid(): External<void> { delete this.recs[1n]; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -643,15 +643,15 @@ contract C {
 // ---------------------------------------------------------------------------
 describe('delete: boundary / dirty packed values', () => {
   // packed slot 0: bool(1) + address(20) + u88(11) = 32 bytes, fully filled to dirty every byte.
-  const JETH = `@contract class C {
-  @state flag: bool;        // slot 0 off 0
-  @state who: address;      // slot 0 off 1..20
-  @state extra: u88;        // slot 0 off 21..31
-  @state big: u256;         // slot 1
-  @state smin: i256;        // slot 2
-  @state s8: i8;            // slot 3 off 0
-  @state s8b: i8;           // slot 3 off 1
-  @external seed(): void {
+  const JETH = `class C {
+  flag: bool;        // slot 0 off 0
+  who: address;      // slot 0 off 1..20
+  extra: u88;        // slot 0 off 21..31
+  big: u256;         // slot 1
+  smin: i256;        // slot 2
+  s8: i8;            // slot 3 off 0
+  s8b: i8;           // slot 3 off 1
+  seed(): External<void> {
     this.flag = true;
     this.who = address(0xDeaDbeefdEAdbeefdEadbEEFdeadbeEFdEaDbeeFn);
     this.extra = ${(2n ** 88n - 1n).toString()}n;
@@ -659,12 +659,12 @@ describe('delete: boundary / dirty packed values', () => {
     this.smin = -${(2n ** 255n).toString()}n;
     this.s8 = -128n; this.s8b = 127n;
   }
-  @external delWho(): void { delete this.who; }
-  @external delExtra(): void { delete this.extra; }
-  @external delFlag(): void { delete this.flag; }
-  @external delBig(): void { delete this.big; }
-  @external delSmin(): void { delete this.smin; }
-  @external delS8(): void { delete this.s8; }
+  delWho(): External<void> { delete this.who; }
+  delExtra(): External<void> { delete this.extra; }
+  delFlag(): External<void> { delete this.flag; }
+  delBig(): External<void> { delete this.big; }
+  delSmin(): External<void> { delete this.smin; }
+  delS8(): External<void> { delete this.s8; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
@@ -723,7 +723,7 @@ contract C {
 // ---------------------------------------------------------------------------
 describe('delete: whole-mapping rejection parity', () => {
   it('JETH rejects delete of a whole mapping', () => {
-    const src = `@contract class C { @state m: mapping<address,u256>; @external f(): void { delete this.m; } }`;
+    const src = `class C { m: mapping<address,u256>; f(): External<void> { delete this.m; } }`;
     expect(() => compile(src, { fileName: 'C.jeth' })).toThrow();
   });
   it('solc also rejects delete of a whole mapping', () => {

@@ -33,126 +33,126 @@ const mapSlot = (key: bigint, slot: bigint) =>
 const bytesNWord = (val: bigint, n: number) => val << BigInt((32 - n) * 8);
 
 const JETH = `
-@struct class Acct { head: u256; bal: mapping<address, u256>; tail: u64; }
-@struct class Pk { a: u8; b: u16; c: bool; m: mapping<u256, u256>; d: u8; e: u32; f: address; }
-@struct class FirstMap { m: mapping<address, u256>; a: u64; b: u64; }
-@struct class OnlyMap { m: mapping<u256, u64>; }
-@struct class Multi { x: u128; m1: mapping<u256, u256>; y: u128; z: u128; m2: mapping<address, u64>; w: u64; }
-@struct class Inner { ihead: u64; ibal: mapping<address, u256>; itail: u64; }
-@struct class WithInnerMap { sa: u64; im: mapping<u256, Inner>; sb: u64; }
-@struct class Deep { d: u256; dm: mapping<address, u256>; }
-@struct class OuterDeep { oh: u256; inner: mapping<u256, Deep>; ot: u64; }
-@struct class KV { ku8: mapping<u8, u8>; ki: mapping<i256, i256>; kb: mapping<bool, address>; k4: mapping<bytes4, bytes32>; k32: mapping<bytes32, u256>; ki8: mapping<i8, u256>; }
-@contract class C {
-  @state acct: Acct;
-  @state pk: Pk;
-  @state fm: FirstMap;
-  @state om: OnlyMap;
-  @state multi: Multi;
-  @state mp: mapping<u256, Acct>;
-  @state mm: mapping<u256, mapping<u256, Acct>>;
-  @state wim: WithInnerMap;
-  @state md: mapping<u256, OuterDeep>;
-  @state kv: KV;
-  @state sentinel: u256;
+type Acct = { head: u256; bal: mapping<address, u256>; tail: u64; };
+type Pk = { a: u8; b: u16; c: bool; m: mapping<u256, u256>; d: u8; e: u32; f: address; };
+type FirstMap = { m: mapping<address, u256>; a: u64; b: u64; };
+type OnlyMap = { m: mapping<u256, u64>; };
+type Multi = { x: u128; m1: mapping<u256, u256>; y: u128; z: u128; m2: mapping<address, u64>; w: u64; };
+type Inner = { ihead: u64; ibal: mapping<address, u256>; itail: u64; };
+type WithInnerMap = { sa: u64; im: mapping<u256, Inner>; sb: u64; };
+type Deep = { d: u256; dm: mapping<address, u256>; };
+type OuterDeep = { oh: u256; inner: mapping<u256, Deep>; ot: u64; };
+type KV = { ku8: mapping<u8, u8>; ki: mapping<i256, i256>; kb: mapping<bool, address>; k4: mapping<bytes4, bytes32>; k32: mapping<bytes32, u256>; ki8: mapping<i8, u256>; };
+class C {
+  acct: Acct;
+  pk: Pk;
+  fm: FirstMap;
+  om: OnlyMap;
+  multi: Multi;
+  mp: mapping<u256, Acct>;
+  mm: mapping<u256, mapping<u256, Acct>>;
+  wim: WithInnerMap;
+  md: mapping<u256, OuterDeep>;
+  kv: KV;
+  sentinel: u256;
 
   // --- Acct: struct with a mapping field surrounded by value fields ---
-  @external setHead(v: u256): void { this.acct.head = v; }
-  @external setTail(v: u64): void { this.acct.tail = v; }
-  @external setBal(a: address, v: u256): void { this.acct.bal[a] = v; }
-  @external incBal(a: address, v: u256): void { this.acct.bal[a] = this.acct.bal[a] + v; }
-  @external @view getHead(): u256 { return this.acct.head; }
-  @external @view getTail(): u64 { return this.acct.tail; }
-  @external @view getBal(a: address): u256 { return this.acct.bal[a]; }
+  setHead(v: u256): External<void> { this.acct.head = v; }
+  setTail(v: u64): External<void> { this.acct.tail = v; }
+  setBal(a: address, v: u256): External<void> { this.acct.bal[a] = v; }
+  incBal(a: address, v: u256): External<void> { this.acct.bal[a] = this.acct.bal[a] + v; }
+  get getHead(): External<u256> { return this.acct.head; }
+  get getTail(): External<u64> { return this.acct.tail; }
+  get getBal(a: address): External<u256> { return this.acct.bal[a]; }
 
   // --- Pk: a mapping field tightly packed between small fields on BOTH sides ---
-  @external setPkPacked(a: u8, b: u16, c: bool, d: u8, e: u32, f: address): void {
+  setPkPacked(a: u8, b: u16, c: bool, d: u8, e: u32, f: address): External<void> {
     this.pk.a = a; this.pk.b = b; this.pk.c = c; this.pk.d = d; this.pk.e = e; this.pk.f = f;
   }
-  @external setPkM(k: u256, v: u256): void { this.pk.m[k] = v; }
-  @external @view getPkA(): u8 { return this.pk.a; }
-  @external @view getPkB(): u16 { return this.pk.b; }
-  @external @view getPkC(): bool { return this.pk.c; }
-  @external @view getPkD(): u8 { return this.pk.d; }
-  @external @view getPkE(): u32 { return this.pk.e; }
-  @external @view getPkF(): address { return this.pk.f; }
-  @external @view getPkM(k: u256): u256 { return this.pk.m[k]; }
+  setPkM(k: u256, v: u256): External<void> { this.pk.m[k] = v; }
+  get getPkA(): External<u8> { return this.pk.a; }
+  get getPkB(): External<u16> { return this.pk.b; }
+  get getPkC(): External<bool> { return this.pk.c; }
+  get getPkD(): External<u8> { return this.pk.d; }
+  get getPkE(): External<u32> { return this.pk.e; }
+  get getPkF(): External<address> { return this.pk.f; }
+  get getPkM(k: u256): External<u256> { return this.pk.m[k]; }
 
   // --- FirstMap: FIRST field is a mapping ---
-  @external setFmM(a: address, v: u256): void { this.fm.m[a] = v; }
-  @external setFm(a: u64, b: u64): void { this.fm.a = a; this.fm.b = b; }
-  @external @view getFmM(a: address): u256 { return this.fm.m[a]; }
-  @external @view getFmA(): u64 { return this.fm.a; }
-  @external @view getFmB(): u64 { return this.fm.b; }
+  setFmM(a: address, v: u256): External<void> { this.fm.m[a] = v; }
+  setFm(a: u64, b: u64): External<void> { this.fm.a = a; this.fm.b = b; }
+  get getFmM(a: address): External<u256> { return this.fm.m[a]; }
+  get getFmA(): External<u64> { return this.fm.a; }
+  get getFmB(): External<u64> { return this.fm.b; }
 
   // --- OnlyMap: the ONLY field is a mapping (narrow value u64) ---
-  @external setOmM(k: u256, v: u64): void { this.om.m[k] = v; }
-  @external @view getOmM(k: u256): u64 { return this.om.m[k]; }
+  setOmM(k: u256, v: u64): External<void> { this.om.m[k] = v; }
+  get getOmM(k: u256): External<u64> { return this.om.m[k]; }
 
   // --- Multi: two mappings interspersed with value fields ---
-  @external setMulti(x: u128, y: u128, z: u128, w: u64): void {
+  setMulti(x: u128, y: u128, z: u128, w: u64): External<void> {
     this.multi.x = x; this.multi.y = y; this.multi.z = z; this.multi.w = w;
   }
-  @external setMultiM1(k: u256, v: u256): void { this.multi.m1[k] = v; }
-  @external setMultiM2(a: address, v: u64): void { this.multi.m2[a] = v; }
-  @external @view getMultiX(): u128 { return this.multi.x; }
-  @external @view getMultiY(): u128 { return this.multi.y; }
-  @external @view getMultiZ(): u128 { return this.multi.z; }
-  @external @view getMultiW(): u64 { return this.multi.w; }
-  @external @view getMultiM1(k: u256): u256 { return this.multi.m1[k]; }
-  @external @view getMultiM2(a: address): u64 { return this.multi.m2[a]; }
+  setMultiM1(k: u256, v: u256): External<void> { this.multi.m1[k] = v; }
+  setMultiM2(a: address, v: u64): External<void> { this.multi.m2[a] = v; }
+  get getMultiX(): External<u128> { return this.multi.x; }
+  get getMultiY(): External<u128> { return this.multi.y; }
+  get getMultiZ(): External<u128> { return this.multi.z; }
+  get getMultiW(): External<u64> { return this.multi.w; }
+  get getMultiM1(k: u256): External<u256> { return this.multi.m1[k]; }
+  get getMultiM2(a: address): External<u64> { return this.multi.m2[a]; }
 
   // --- mp: mapping<u256, Acct> (struct-with-mapping as a mapping value) ---
-  @external setMpHead(k: u256, v: u256): void { this.mp[k].head = v; }
-  @external setMpTail(k: u256, v: u64): void { this.mp[k].tail = v; }
-  @external setMpBal(k: u256, a: address, v: u256): void { this.mp[k].bal[a] = v; }
-  @external @view getMpHead(k: u256): u256 { return this.mp[k].head; }
-  @external @view getMpTail(k: u256): u64 { return this.mp[k].tail; }
-  @external @view getMpBal(k: u256, a: address): u256 { return this.mp[k].bal[a]; }
+  setMpHead(k: u256, v: u256): External<void> { this.mp[k].head = v; }
+  setMpTail(k: u256, v: u64): External<void> { this.mp[k].tail = v; }
+  setMpBal(k: u256, a: address, v: u256): External<void> { this.mp[k].bal[a] = v; }
+  get getMpHead(k: u256): External<u256> { return this.mp[k].head; }
+  get getMpTail(k: u256): External<u64> { return this.mp[k].tail; }
+  get getMpBal(k: u256, a: address): External<u256> { return this.mp[k].bal[a]; }
 
   // --- mm: mapping<u256, mapping<u256, Acct>> (two outer keys, then struct-with-mapping) ---
-  @external setMmHead(k1: u256, k2: u256, v: u256): void { this.mm[k1][k2].head = v; }
-  @external setMmBal(k1: u256, k2: u256, a: address, v: u256): void { this.mm[k1][k2].bal[a] = v; }
-  @external @view getMmHead(k1: u256, k2: u256): u256 { return this.mm[k1][k2].head; }
-  @external @view getMmBal(k1: u256, k2: u256, a: address): u256 { return this.mm[k1][k2].bal[a]; }
+  setMmHead(k1: u256, k2: u256, v: u256): External<void> { this.mm[k1][k2].head = v; }
+  setMmBal(k1: u256, k2: u256, a: address, v: u256): External<void> { this.mm[k1][k2].bal[a] = v; }
+  get getMmHead(k1: u256, k2: u256): External<u256> { return this.mm[k1][k2].head; }
+  get getMmBal(k1: u256, k2: u256, a: address): External<u256> { return this.mm[k1][k2].bal[a]; }
 
   // --- wim: a struct field that is mapping<u256, Inner> where Inner has a mapping ---
-  @external setWim(sa: u64, sb: u64): void { this.wim.sa = sa; this.wim.sb = sb; }
-  @external setWimHead(k: u256, v: u64): void { this.wim.im[k].ihead = v; }
-  @external setWimTail(k: u256, v: u64): void { this.wim.im[k].itail = v; }
-  @external setWimBal(k: u256, a: address, v: u256): void { this.wim.im[k].ibal[a] = v; }
-  @external @view getWimSa(): u64 { return this.wim.sa; }
-  @external @view getWimSb(): u64 { return this.wim.sb; }
-  @external @view getWimHead(k: u256): u64 { return this.wim.im[k].ihead; }
-  @external @view getWimTail(k: u256): u64 { return this.wim.im[k].itail; }
-  @external @view getWimBal(k: u256, a: address): u256 { return this.wim.im[k].ibal[a]; }
+  setWim(sa: u64, sb: u64): External<void> { this.wim.sa = sa; this.wim.sb = sb; }
+  setWimHead(k: u256, v: u64): External<void> { this.wim.im[k].ihead = v; }
+  setWimTail(k: u256, v: u64): External<void> { this.wim.im[k].itail = v; }
+  setWimBal(k: u256, a: address, v: u256): External<void> { this.wim.im[k].ibal[a] = v; }
+  get getWimSa(): External<u64> { return this.wim.sa; }
+  get getWimSb(): External<u64> { return this.wim.sb; }
+  get getWimHead(k: u256): External<u64> { return this.wim.im[k].ihead; }
+  get getWimTail(k: u256): External<u64> { return this.wim.im[k].itail; }
+  get getWimBal(k: u256, a: address): External<u256> { return this.wim.im[k].ibal[a]; }
 
   // --- md: mapping<u256, OuterDeep>; OuterDeep.inner is mapping<u256, Deep>; Deep has a mapping ---
-  @external setMdH(k: u256, v: u256): void { this.md[k].oh = v; }
-  @external setMdT(k: u256, v: u64): void { this.md[k].ot = v; }
-  @external setMdInnerD(k: u256, k2: u256, v: u256): void { this.md[k].inner[k2].d = v; }
-  @external setMdDeep(k: u256, k2: u256, a: address, v: u256): void { this.md[k].inner[k2].dm[a] = v; }
-  @external @view getMdH(k: u256): u256 { return this.md[k].oh; }
-  @external @view getMdT(k: u256): u64 { return this.md[k].ot; }
-  @external @view getMdInnerD(k: u256, k2: u256): u256 { return this.md[k].inner[k2].d; }
-  @external @view getMdDeep(k: u256, k2: u256, a: address): u256 { return this.md[k].inner[k2].dm[a]; }
+  setMdH(k: u256, v: u256): External<void> { this.md[k].oh = v; }
+  setMdT(k: u256, v: u64): External<void> { this.md[k].ot = v; }
+  setMdInnerD(k: u256, k2: u256, v: u256): External<void> { this.md[k].inner[k2].d = v; }
+  setMdDeep(k: u256, k2: u256, a: address, v: u256): External<void> { this.md[k].inner[k2].dm[a] = v; }
+  get getMdH(k: u256): External<u256> { return this.md[k].oh; }
+  get getMdT(k: u256): External<u64> { return this.md[k].ot; }
+  get getMdInnerD(k: u256, k2: u256): External<u256> { return this.md[k].inner[k2].d; }
+  get getMdDeep(k: u256, k2: u256, a: address): External<u256> { return this.md[k].inner[k2].dm[a]; }
 
   // --- KV: key-type and value-type variety in struct-field mappings ---
-  @external setKu8(k: u8, v: u8): void { this.kv.ku8[k] = v; }
-  @external @view getKu8(k: u8): u8 { return this.kv.ku8[k]; }
-  @external setKi(k: i256, v: i256): void { this.kv.ki[k] = v; }
-  @external @view getKi(k: i256): i256 { return this.kv.ki[k]; }
-  @external setKb(k: bool, v: address): void { this.kv.kb[k] = v; }
-  @external @view getKb(k: bool): address { return this.kv.kb[k]; }
-  @external setK4(k: bytes4, v: bytes32): void { this.kv.k4[k] = v; }
-  @external @view getK4(k: bytes4): bytes32 { return this.kv.k4[k]; }
-  @external setK32(k: bytes32, v: u256): void { this.kv.k32[k] = v; }
-  @external @view getK32(k: bytes32): u256 { return this.kv.k32[k]; }
-  @external setKi8(k: i8, v: u256): void { this.kv.ki8[k] = v; }
-  @external @view getKi8(k: i8): u256 { return this.kv.ki8[k]; }
+  setKu8(k: u8, v: u8): External<void> { this.kv.ku8[k] = v; }
+  get getKu8(k: u8): External<u8> { return this.kv.ku8[k]; }
+  setKi(k: i256, v: i256): External<void> { this.kv.ki[k] = v; }
+  get getKi(k: i256): External<i256> { return this.kv.ki[k]; }
+  setKb(k: bool, v: address): External<void> { this.kv.kb[k] = v; }
+  get getKb(k: bool): External<address> { return this.kv.kb[k]; }
+  setK4(k: bytes4, v: bytes32): External<void> { this.kv.k4[k] = v; }
+  get getK4(k: bytes4): External<bytes32> { return this.kv.k4[k]; }
+  setK32(k: bytes32, v: u256): External<void> { this.kv.k32[k] = v; }
+  get getK32(k: bytes32): External<u256> { return this.kv.k32[k]; }
+  setKi8(k: i8, v: u256): External<void> { this.kv.ki8[k] = v; }
+  get getKi8(k: i8): External<u256> { return this.kv.ki8[k]; }
 
-  @external setSentinel(v: u256): void { this.sentinel = v; }
-  @external @view getSentinel(): u256 { return this.sentinel; }
+  setSentinel(v: u256): External<void> { this.sentinel = v; }
+  get getSentinel(): External<u256> { return this.sentinel; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

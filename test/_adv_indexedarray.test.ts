@@ -26,48 +26,48 @@ const eqLogs = (a: LogEntry[], b: LogEntry[]) =>
   a.every((l, i) => l.data === b[i]!.data && JSON.stringify(l.topics) === JSON.stringify(b[i]!.topics));
 
 // One contract per language exercising every shape under test.
-const JETH = `@contract class C {
-  @event Eu(@indexed a: u256[]);
-  @event E8(@indexed a: u8[]);
-  @event E16(@indexed a: u16[]);
-  @event E128(@indexed a: u128[]);
-  @event Ei8(@indexed a: i8[]);
-  @event Ei128(@indexed a: i128[]);
-  @event Ei256(@indexed a: i256[]);
-  @event Eb(@indexed a: bool[]);
-  @event Ead(@indexed a: address[]);
-  @event Eb1(@indexed a: bytes1[]);
-  @event Eb4(@indexed a: bytes4[]);
-  @event Eb32(@indexed a: bytes32[]);
-  @event Efirst(@indexed a: u256[], v: u256);
-  @event Elast(k: u256, @indexed a: u256[]);
-  @event Ethree(@indexed k: u256, @indexed a: u256[], @indexed b: address[]);
-  @event Emixdata(@indexed a: u256[], s: string, v: u256);
-  @event Emulti(@indexed a: u256[], @indexed b: u8[]);
-  @event Edata(a: u256[], v: u256);
-  @external eu(a: u256[]): void { emit(Eu(a)); }
-  @external e8(a: u8[]): void { emit(E8(a)); }
-  @external e16(a: u16[]): void { emit(E16(a)); }
-  @external e128(a: u128[]): void { emit(E128(a)); }
-  @external ei8(a: i8[]): void { emit(Ei8(a)); }
-  @external ei128(a: i128[]): void { emit(Ei128(a)); }
-  @external ei256(a: i256[]): void { emit(Ei256(a)); }
-  @external eb(a: bool[]): void { emit(Eb(a)); }
-  @external ead(a: address[]): void { emit(Ead(a)); }
-  @external eb1(a: bytes1[]): void { emit(Eb1(a)); }
-  @external eb4(a: bytes4[]): void { emit(Eb4(a)); }
-  @external eb32(a: bytes32[]): void { emit(Eb32(a)); }
-  @external efirst(a: u256[], v: u256): void { emit(Efirst(a, v)); }
-  @external elast(k: u256, a: u256[]): void { emit(Elast(k, a)); }
-  @external ethree(k: u256, a: u256[], b: address[]): void { emit(Ethree(k, a, b)); }
-  @external emixdata(a: u256[], s: string, v: u256): void { emit(Emixdata(a, s, v)); }
-  @external emulti(a: u256[], b: u8[]): void { emit(Emulti(a, b)); }
-  @external etwice(a: u256[], b: u256[]): void { emit(Eu(a)); emit(Eu(b)); }
-  @external eloop(a: u256[]): void {
+const JETH = `class C {
+  Eu: event<{ a: indexed<u256[]> }>;
+  E8: event<{ a: indexed<u8[]> }>;
+  E16: event<{ a: indexed<u16[]> }>;
+  E128: event<{ a: indexed<u128[]> }>;
+  Ei8: event<{ a: indexed<i8[]> }>;
+  Ei128: event<{ a: indexed<i128[]> }>;
+  Ei256: event<{ a: indexed<i256[]> }>;
+  Eb: event<{ a: indexed<bool[]> }>;
+  Ead: event<{ a: indexed<address[]> }>;
+  Eb1: event<{ a: indexed<bytes1[]> }>;
+  Eb4: event<{ a: indexed<bytes4[]> }>;
+  Eb32: event<{ a: indexed<bytes32[]> }>;
+  Efirst: event<{ a: indexed<u256[]>; v: u256 }>;
+  Elast: event<{ k: u256; a: indexed<u256[]> }>;
+  Ethree: event<{ k: indexed<u256>; a: indexed<u256[]>; b: indexed<address[]> }>;
+  Emixdata: event<{ a: indexed<u256[]>; s: string; v: u256 }>;
+  Emulti: event<{ a: indexed<u256[]>; b: indexed<u8[]> }>;
+  Edata: event<{ a: u256[]; v: u256 }>;
+  eu(a: u256[]): External<void> { emit(Eu(a)); }
+  e8(a: u8[]): External<void> { emit(E8(a)); }
+  e16(a: u16[]): External<void> { emit(E16(a)); }
+  e128(a: u128[]): External<void> { emit(E128(a)); }
+  ei8(a: i8[]): External<void> { emit(Ei8(a)); }
+  ei128(a: i128[]): External<void> { emit(Ei128(a)); }
+  ei256(a: i256[]): External<void> { emit(Ei256(a)); }
+  eb(a: bool[]): External<void> { emit(Eb(a)); }
+  ead(a: address[]): External<void> { emit(Ead(a)); }
+  eb1(a: bytes1[]): External<void> { emit(Eb1(a)); }
+  eb4(a: bytes4[]): External<void> { emit(Eb4(a)); }
+  eb32(a: bytes32[]): External<void> { emit(Eb32(a)); }
+  efirst(a: u256[], v: u256): External<void> { emit(Efirst(a, v)); }
+  elast(k: u256, a: u256[]): External<void> { emit(Elast(k, a)); }
+  ethree(k: u256, a: u256[], b: address[]): External<void> { emit(Ethree(k, a, b)); }
+  emixdata(a: u256[], s: string, v: u256): External<void> { emit(Emixdata(a, s, v)); }
+  emulti(a: u256[], b: u8[]): External<void> { emit(Emulti(a, b)); }
+  etwice(a: u256[], b: u256[]): External<void> { emit(Eu(a)); emit(Eu(b)); }
+  eloop(a: u256[]): External<void> {
     let i: u256 = 0n;
     while (i < 3n) { emit(Eu(a)); i = i + 1n; }
   }
-  @external edata(a: u256[], v: u256): void { emit(Edata(a, v)); }
+  edata(a: u256[], v: u256): External<void> { emit(Edata(a, v)); }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT
@@ -356,26 +356,26 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
   // ---- 7. an indexed STATIC fixed-array / struct param is now SUPPORTED (keccak topic) -----
   it('fixed-array indexed event param now compiles (keccak topic, JETH207 lifted)', () => {
     expect(() =>
-      compile(`@contract class C { @event E(@indexed a: Arr<u256, 3>); @external f(): void {} }`, {
+      compile(`class C { E: event<{ a: indexed<Arr<u256, 3>> }>; f(): External<void> {} }`, {
         fileName: 'C.jeth',
       }),
     ).not.toThrow();
   });
   it('struct indexed event param now compiles (keccak topic, JETH207 lifted)', () => {
-    const src = `@struct class S { x: u256; }
-@contract class C { @event E(@indexed s: S); @external f(): void {} }`;
+    const src = `type S = { x: u256; };
+class C { E: event<{ s: indexed<S> }>; f(): External<void> {} }`;
     expect(() => compile(src, { fileName: 'C.jeth' })).not.toThrow();
     // a supported DYNAMIC struct (value + bytes/string + dyn value-array fields) indexed param now
     // compiles too (topic = keccak of the flattened payload; verified byte-identical in
     // fix-all-divergences.test.ts).
-    const dyn = `@struct class D { s: string; }
-@contract class C { @event E(@indexed d: D); @external f(): void {} }`;
+    const dyn = `type D = { s: string; };
+class C { E: event<{ d: indexed<D> }>; f(): External<void> {} }`;
     expect(() => compile(dyn, { fileName: 'C.jeth' })).not.toThrow();
     // a dynamic struct with a NESTED dynamic struct field is now supported too (topic = keccak of the
     // recursively flattened payload; byte-identical to solc, verified in fix-all-divergences.test.ts).
-    const nested = `@struct class Inner { p: u256; s: string; }
-@struct class D2 { x: u256; inner: Inner; }
-@contract class C { @event E(@indexed d: D2); @external f(): void {} }`;
+    const nested = `type Inner = { p: u256; s: string; };
+type D2 = { x: u256; inner: Inner; };
+class C { E: event<{ d: indexed<D2> }>; f(): External<void> {} }`;
     expect(() => compile(nested, { fileName: 'C.jeth' })).not.toThrow();
   });
   it('nested dynamic array (u256[][]) indexed event param is now ACCEPTED (packed-padded topic)', () => {
@@ -383,7 +383,7 @@ describe('ADVERSARIAL indexed value-array event topic (JETH207) vs Solidity', ()
     // (verified on the harness in event-dynamic-aggregate-params.test.ts).
     let threw = false;
     try {
-      compile(`@contract class C { @event E(@indexed a: u256[][]); @external f(): void {} }`, { fileName: 'C.jeth' });
+      compile(`class C { E: event<{ a: indexed<u256[][]> }>; f(): External<void> {} }`, { fileName: 'C.jeth' });
     } catch (e: any) {
       threw = true;
     }

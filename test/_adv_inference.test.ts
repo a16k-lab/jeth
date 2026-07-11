@@ -59,14 +59,14 @@ const twins: Twin[] = [
   // 1. @read transitive PURE at depth 3 (touches nothing) -> infer pure.
   {
     name: 'transitive-pure-depth3',
-    inferred: `@contract class C {
-      @external @read top(a: u256): u256 { return this.l1(a); }
+    inferred: `class C {
+      get top(a: u256): External<u256> { return this.l1(a); }
       l1(a: u256): u256 { return this.l2(a) + 1n; }
       l2(a: u256): u256 { return this.l3(a) * 2n; }
       l3(a: u256): u256 { return a + 10n; }
     }`,
-    explicit: `@contract class C {
-      @external @pure top(a: u256): u256 { return this.l1(a); }
+    explicit: `class C {
+      get top(a: u256): External<u256> { return this.l1(a); }
       l1(a: u256): u256 { return this.l2(a) + 1n; }
       l2(a: u256): u256 { return this.l3(a) * 2n; }
       l3(a: u256): u256 { return a + 10n; }
@@ -86,18 +86,18 @@ const twins: Twin[] = [
   // 2. @read transitive STATE READ at depth 3 -> infer view.
   {
     name: 'transitive-view-state-depth3',
-    inferred: `@contract class C {
-      @state v: u256;
-      @external setV(x: u256): void { this.v = x; }
-      @external @read top(): u256 { return this.l1(); }
+    inferred: `class C {
+      v: u256;
+      setV(x: u256): External<void> { this.v = x; }
+      get top(): External<u256> { return this.l1(); }
       l1(): u256 { return this.l2() + 1n; }
       l2(): u256 { return this.l3(); }
       l3(): u256 { return this.v; }
     }`,
-    explicit: `@contract class C {
-      @state v: u256;
-      @external setV(x: u256): void { this.v = x; }
-      @external @view top(): u256 { return this.l1(); }
+    explicit: `class C {
+      v: u256;
+      setV(x: u256): External<void> { this.v = x; }
+      get top(): External<u256> { return this.l1(); }
       l1(): u256 { return this.l2() + 1n; }
       l2(): u256 { return this.l3(); }
       l3(): u256 { return this.v; }
@@ -120,13 +120,13 @@ const twins: Twin[] = [
   // 3. @read transitive ENV READ (msg.sender) at depth -> infer view (env makes it view, not pure).
   {
     name: 'transitive-view-env-depth',
-    inferred: `@contract class C {
-      @external @read top(): address { return this.l1(); }
+    inferred: `class C {
+      get top(): External<address> { return this.l1(); }
       l1(): address { return this.l2(); }
       l2(): address { return msg.sender; }
     }`,
-    explicit: `@contract class C {
-      @external @view top(): address { return this.l1(); }
+    explicit: `class C {
+      get top(): External<address> { return this.l1(); }
       l1(): address { return this.l2(); }
       l2(): address { return msg.sender; }
     }`,
@@ -147,17 +147,17 @@ const twins: Twin[] = [
   //    delegates into the recursion; the inferred view-ness still flows out through the entry.
   {
     name: 'mutual-recursion-view',
-    inferred: `@contract class C {
-      @state n: u256;
-      @external setN(x: u256): void { this.n = x; }
-      @external @read isEven(k: u256): bool { return this.evenI(k); }
+    inferred: `class C {
+      n: u256;
+      setN(x: u256): External<void> { this.n = x; }
+      get isEven(k: u256): External<bool> { return this.evenI(k); }
       evenI(k: u256): bool { if (k == 0n) { return true; } return this.oddI(k - 1n); }
       oddI(k: u256): bool { if (k == 0n) { return this.n == 0n; } return this.evenI(k - 1n); }
     }`,
-    explicit: `@contract class C {
-      @state n: u256;
-      @external setN(x: u256): void { this.n = x; }
-      @external @view isEven(k: u256): bool { return this.evenI(k); }
+    explicit: `class C {
+      n: u256;
+      setN(x: u256): External<void> { this.n = x; }
+      get isEven(k: u256): External<bool> { return this.evenI(k); }
       evenI(k: u256): bool { if (k == 0n) { return true; } return this.oddI(k - 1n); }
       oddI(k: u256): bool { if (k == 0n) { return this.n == 0n; } return this.evenI(k - 1n); }
     }`,
@@ -183,12 +183,12 @@ const twins: Twin[] = [
   //    entry is a thin @external @read wrapper whose purity is inferred from the helper.
   {
     name: 'self-recursion-pure',
-    inferred: `@contract class C {
-      @external @read fib(k: u256): u256 { return this.fibI(k); }
+    inferred: `class C {
+      get fib(k: u256): External<u256> { return this.fibI(k); }
       fibI(k: u256): u256 { if (k < 2n) { return k; } return this.fibI(k - 1n) + this.fibI(k - 2n); }
     }`,
-    explicit: `@contract class C {
-      @external @pure fib(k: u256): u256 { return this.fibI(k); }
+    explicit: `class C {
+      get fib(k: u256): External<u256> { return this.fibI(k); }
       fibI(k: u256): u256 { if (k < 2n) { return k; } return this.fibI(k - 1n) + this.fibI(k - 2n); }
     }`,
     sol: `// SPDX-License-Identifier: MIT
@@ -207,14 +207,14 @@ const twins: Twin[] = [
   //    `innerI` that `outer` calls - both still infer pure and stay byte-identical.)
   {
     name: 'read-calls-read',
-    inferred: `@contract class C {
-      @external @read outer(a: u256): u256 { return this.innerI(a) + 1n; }
-      @external @read inner(a: u256): u256 { return this.innerI(a); }
+    inferred: `class C {
+      get outer(a: u256): External<u256> { return this.innerI(a) + 1n; }
+      get inner(a: u256): External<u256> { return this.innerI(a); }
       innerI(a: u256): u256 { return a * 3n; }
     }`,
-    explicit: `@contract class C {
-      @external @pure outer(a: u256): u256 { return this.innerI(a) + 1n; }
-      @external @pure inner(a: u256): u256 { return this.innerI(a); }
+    explicit: `class C {
+      get outer(a: u256): External<u256> { return this.innerI(a) + 1n; }
+      get inner(a: u256): External<u256> { return this.innerI(a); }
       innerI(a: u256): u256 { return a * 3n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
@@ -237,16 +237,16 @@ const twins: Twin[] = [
   //    exposed; caller reuses pubTarget's value through the internal pubTargetI.
   {
     name: 'visibility-callgraph',
-    inferred: `@contract class C {
-      @external pubTarget(): u256 { return this.pubTargetI(); }
-      @external caller(): u256 { return this.pubTargetI() + 1n; }
-      @external extOnly(): u256 { return 42n; }
+    inferred: `class C {
+      get pubTarget(): External<u256> { return this.pubTargetI(); }
+      get caller(): External<u256> { return this.pubTargetI() + 1n; }
+      get extOnly(): External<u256> { return 42n; }
       pubTargetI(): u256 { return 7n; }
     }`,
-    explicit: `@contract class C {
-      @external pubTarget(): u256 { return this.pubTargetI(); }
-      @external caller(): u256 { return this.pubTargetI() + 1n; }
-      @external extOnly(): u256 { return 42n; }
+    explicit: `class C {
+      get pubTarget(): External<u256> { return this.pubTargetI(); }
+      get caller(): External<u256> { return this.pubTargetI() + 1n; }
+      get extOnly(): External<u256> { return 42n; }
       pubTargetI(): u256 { return 7n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
@@ -267,17 +267,17 @@ const twins: Twin[] = [
   //    exposed @external; helperI and countdownI are internal.
   {
     name: 'visibility-this-and-recursion',
-    inferred: `@contract class C {
-      @external viaThis(a: u256): u256 { return this.helperI(a); }
-      @external helper(a: u256): u256 { return this.helperI(a); }
-      @external countdown(k: u256): u256 { return this.countdownI(k); }
+    inferred: `class C {
+      get viaThis(a: u256): External<u256> { return this.helperI(a); }
+      get helper(a: u256): External<u256> { return this.helperI(a); }
+      get countdown(k: u256): External<u256> { return this.countdownI(k); }
       helperI(a: u256): u256 { return a + 100n; }
       countdownI(k: u256): u256 { if (k == 0n) { return 0n; } return this.countdownI(k - 1n) + 1n; }
     }`,
-    explicit: `@contract class C {
-      @external viaThis(a: u256): u256 { return this.helperI(a); }
-      @external helper(a: u256): u256 { return this.helperI(a); }
-      @external countdown(k: u256): u256 { return this.countdownI(k); }
+    explicit: `class C {
+      get viaThis(a: u256): External<u256> { return this.helperI(a); }
+      get helper(a: u256): External<u256> { return this.helperI(a); }
+      get countdown(k: u256): External<u256> { return this.countdownI(k); }
       helperI(a: u256): u256 { return a + 100n; }
       countdownI(k: u256): u256 { if (k == 0n) { return 0n; } return this.countdownI(k - 1n) + 1n; }
     }`,
@@ -304,16 +304,16 @@ const twins: Twin[] = [
   //    the shared read-only logic is the internal `leafI`; `mid` is an internal helper.
   {
     name: 'visibility-called-by-hidden',
-    inferred: `@contract class C {
-      @external @read entry(a: u256): u256 { return this.mid(a); }
+    inferred: `class C {
+      get entry(a: u256): External<u256> { return this.mid(a); }
       mid(a: u256): u256 { return this.leafI(a) + 1n; }
-      @external @read leaf(a: u256): u256 { return this.leafI(a); }
+      get leaf(a: u256): External<u256> { return this.leafI(a); }
       leafI(a: u256): u256 { return a * 5n; }
     }`,
-    explicit: `@contract class C {
-      @external @pure entry(a: u256): u256 { return this.mid(a); }
+    explicit: `class C {
+      get entry(a: u256): External<u256> { return this.mid(a); }
       mid(a: u256): u256 { return this.leafI(a) + 1n; }
-      @external @pure leaf(a: u256): u256 { return this.leafI(a); }
+      get leaf(a: u256): External<u256> { return this.leafI(a); }
       leafI(a: u256): u256 { return a * 5n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
@@ -335,15 +335,15 @@ const twins: Twin[] = [
   //     are internal (unmarked) and called by name.
   {
     name: 'hidden-calls-hidden-mutating',
-    inferred: `@contract class C {
-      @state s: u256;
-      @external bump(): u256 { this.h1(); return this.s; }
+    inferred: `class C {
+      s: u256;
+      bump(): External<u256> { this.h1(); return this.s; }
       h1(): void { this.h2(); this.s = this.s + 1n; }
       h2(): void { this.s = this.s + 10n; }
     }`,
-    explicit: `@contract class C {
-      @state s: u256;
-      @external bump(): u256 { this.h1(); return this.s; }
+    explicit: `class C {
+      s: u256;
+      bump(): External<u256> { this.h1(); return this.s; }
       h1(): void { this.h2(); this.s = this.s + 1n; }
       h2(): void { this.s = this.s + 10n; }
     }`,
@@ -365,18 +365,18 @@ const twins: Twin[] = [
   //     by name). setX is the nonpayable writer.
   {
     name: 'mixed-read-and-inferred-visibility',
-    inferred: `@contract class C {
-      @state x: u256;
-      @external setX(v: u256): void { this.x = v; }
-      @external @read getX(): u256 { return this.getXI(); }
-      @external @read deriv(): u256 { return this.getXI() * 2n; }
+    inferred: `class C {
+      x: u256;
+      setX(v: u256): External<void> { this.x = v; }
+      get getX(): External<u256> { return this.getXI(); }
+      get deriv(): External<u256> { return this.getXI() * 2n; }
       getXI(): u256 { return this.x; }
     }`,
-    explicit: `@contract class C {
-      @state x: u256;
-      @external setX(v: u256): void { this.x = v; }
-      @external @view getX(): u256 { return this.getXI(); }
-      @external @view deriv(): u256 { return this.getXI() * 2n; }
+    explicit: `class C {
+      x: u256;
+      setX(v: u256): External<void> { this.x = v; }
+      get getX(): External<u256> { return this.getXI(); }
+      get deriv(): External<u256> { return this.getXI() * 2n; }
       getXI(): u256 { return this.x; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
@@ -398,19 +398,19 @@ const twins: Twin[] = [
   //     mutability inference on an internal function.
   {
     name: 'read-plus-hidden-helper',
-    inferred: `@contract class C {
-      @state x: u256;
-      @external setX(v: u256): void { this.x = v; }
-      @external @read consume(): u256 { return this.hiddenView() + this.hiddenPure(3n); }
-      @read hiddenView(): u256 { return this.x; }
-      @read hiddenPure(a: u256): u256 { return a + 1n; }
+    inferred: `class C {
+      x: u256;
+      setX(v: u256): External<void> { this.x = v; }
+      get consume(): External<u256> { return this.hiddenView() + this.hiddenPure(3n); }
+      hiddenView(): u256 { return this.x; }
+      hiddenPure(a: u256): u256 { return a + 1n; }
     }`,
-    explicit: `@contract class C {
-      @state x: u256;
-      @external setX(v: u256): void { this.x = v; }
-      @external @view consume(): u256 { return this.hiddenView() + this.hiddenPure(3n); }
-      @view hiddenView(): u256 { return this.x; }
-      @pure hiddenPure(a: u256): u256 { return a + 1n; }
+    explicit: `class C {
+      x: u256;
+      setX(v: u256): External<void> { this.x = v; }
+      get consume(): External<u256> { return this.hiddenView() + this.hiddenPure(3n); }
+      hiddenView(): u256 { return this.x; }
+      hiddenPure(a: u256): u256 { return a + 1n; }
     }`,
     sol: `// SPDX-License-Identifier: MIT
     pragma solidity ^0.8.20;
@@ -431,19 +431,19 @@ const twins: Twin[] = [
   //     excluded from the ABI; only a0 (exposed) and setZ appear.
   {
     name: 'deep-chain-view',
-    inferred: `@contract class C {
-      @state z: u256;
-      @external setZ(v: u256): void { this.z = v; }
-      @external @read a0(): u256 { return this.a1(); }
+    inferred: `class C {
+      z: u256;
+      setZ(v: u256): External<void> { this.z = v; }
+      get a0(): External<u256> { return this.a1(); }
       a1(): u256 { return this.a2(); }
       a2(): u256 { return this.a3(); }
       a3(): u256 { return this.a4(); }
       a4(): u256 { return this.z + 1n; }
     }`,
-    explicit: `@contract class C {
-      @state z: u256;
-      @external setZ(v: u256): void { this.z = v; }
-      @external @view a0(): u256 { return this.a1(); }
+    explicit: `class C {
+      z: u256;
+      setZ(v: u256): External<void> { this.z = v; }
+      get a0(): External<u256> { return this.a1(); }
       a1(): u256 { return this.a2(); }
       a2(): u256 { return this.a3(); }
       a3(): u256 { return this.a4(); }
@@ -551,7 +551,7 @@ describe('decorator inference: rejection parity', () => {
     {
       // msg.value in an externally-reachable function needs @payable; @external makes bad reachable.
       name: '@external @read reads msg.value directly -> JETH162',
-      src: `@contract class C { @external @read bad(): u256 { return msg.value; } }`,
+      src: `class C { get bad(): External<u256> { return msg.value; } }`,
       code: 'JETH162',
     },
     {
@@ -579,22 +579,22 @@ describe('decorator inference: rejection parity', () => {
     // everything else is internal by default; @public/@internal/@private/@hidden no longer exist).
     {
       name: '@public is removed -> JETH440',
-      src: `@contract class C { @public bad(): u256 { return 1n; } }`,
+      src: `class C { @public bad(): u256 { return 1n; } }`,
       code: 'JETH440',
     },
     {
       name: '@internal is removed -> JETH440',
-      src: `@contract class C { @internal bad(): u256 { return 1n; } }`,
+      src: `class C { @internal bad(): u256 { return 1n; } }`,
       code: 'JETH440',
     },
     {
       name: '@private is removed -> JETH440',
-      src: `@contract class C { @private bad(): u256 { return 1n; } }`,
+      src: `class C { @private bad(): u256 { return 1n; } }`,
       code: 'JETH440',
     },
     {
       name: '@hidden is removed -> JETH440',
-      src: `@contract class C { @hidden bad(): u256 { return 1n; } }`,
+      src: `class C { @hidden bad(): u256 { return 1n; } }`,
       code: 'JETH440',
     },
   ];
@@ -616,7 +616,7 @@ describe('decorator inference: rejection parity', () => {
 
 describe('decorator inference: orthogonality + pre-existing diagnostics intact', () => {
   it('@read + explicit @external is allowed and resolves external @view', () => {
-    const res = compileOrDiags(`@contract class C { @state x: u256; @external @read getX(): u256 { return this.x; } }`);
+    const res = compileOrDiags(`class C { x: u256; get getX(): External<u256> { return this.x; } }`);
     expect(res.ok).toBe(true);
     if (res.ok) expect(fnMap(res.abi)).toEqual({ getX: 'view' });
   });
@@ -640,10 +640,10 @@ describe('decorator inference: orthogonality + pre-existing diagnostics intact',
   });
 
   it('a fully explicit contract is unchanged by inference (ABI stable)', () => {
-    const res = compileOrDiags(`@contract class C {
-      @state x: u256;
-      @external @view getX(): u256 { return this.x; }
-      @external setX(v: u256): void { this.x = v; }
+    const res = compileOrDiags(`class C {
+      x: u256;
+      get getX(): External<u256> { return this.x; }
+      setX(v: u256): External<void> { this.x = v; }
       helper(): u256 { return this.x + 1n; }
     }`);
     expect(res.ok).toBe(true);
@@ -688,7 +688,7 @@ describe('transitive emit makes a function non-read-only (parity with solc)', ()
     const viaPure = `@contract class C { @event E(a: u256); @external @pure foo(): u256 { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
     expect(compileOrDiags(viaPure).ok, '@pure transitively emitting must be rejected').toBe(false);
     // a plain nonpayable function transitively emitting is fine (control).
-    const ok = `@contract class C { @event E(a: u256); @external foo(): u256 { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
+    const ok = `class C { E: event<{ a: u256 }>; foo(): External<u256> { return this.bar(); } bar(): u256 { emit(E(1n)); return 5n; } }`;
     expect(compileOrDiags(ok).ok, 'a nonpayable function may transitively emit').toBe(true);
   });
 });

@@ -24,15 +24,14 @@ contract AuditCd {
 }`;
 
 const JETH = `
-@struct class D { a: u256; s: string; }
-@struct class E { id: u64; name: bytes; }
-@contract
+type D = { a: u256; s: string; };
+type E = { id: u64; name: bytes; };
 class AuditCd {
-  @external @pure dS(d: D): string { return d.s; }
-  @external @pure dEcho(d: D): D { return d; }
-  @external @pure eName(e: E): bytes { return e.name; }
-  @external @pure saEcho(a: string[]): string[] { return a; }
-  @external @pure mEcho(m: u256[][]): u256[][] { return m; }
+  get dS(d: D): External<string> { return d.s; }
+  get dEcho(d: D): External<D> { return d; }
+  get eName(e: E): External<bytes> { return e.name; }
+  get saEcho(a: string[]): External<string[]> { return a; }
+  get mEcho(m: u256[][]): External<u256[][]> { return m; }
 }`;
 
 const M = 1n << 256n;

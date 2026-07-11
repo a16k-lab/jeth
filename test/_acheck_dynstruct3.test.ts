@@ -32,24 +32,23 @@ function callDyn(selSig: string, staticHead: bigint[], bytes: Uint8Array): strin
 }
 
 const JETH = `
-@struct class D { a: u256; s: string; }
-@struct class W { x: u256; inner: D; t: string; }
-@contract
+type D = { a: u256; s: string; };
+type W = { x: u256; inner: D; t: string; };
 class A {
-  @state mm: mapping<u256, mapping<u256, D>>;  // slot 0
-  @state w: W;                                  // slot 1..4: x@1, inner.a@2, inner.s@3, t@4
-  @external setMA(k1: u256, k2: u256, v: u256): void { this.mm[k1][k2].a = v; }
-  @external setMS(k1: u256, k2: u256, v: string): void { this.mm[k1][k2].s = v; }
-  @external @view getMA(k1: u256, k2: u256): u256 { return this.mm[k1][k2].a; }
-  @external @view getMS(k1: u256, k2: u256): string { return this.mm[k1][k2].s; }
-  @external setWx(v: u256): void { this.w.x = v; }
-  @external setWInnerA(v: u256): void { this.w.inner.a = v; }
-  @external setWInnerS(v: string): void { this.w.inner.s = v; }
-  @external setWt(v: string): void { this.w.t = v; }
-  @external @view getWx(): u256 { return this.w.x; }
-  @external @view getWInnerA(): u256 { return this.w.inner.a; }
-  @external @view getWInnerS(): string { return this.w.inner.s; }
-  @external @view getWt(): string { return this.w.t; }
+  mm: mapping<u256, mapping<u256, D>>;  // slot 0
+  w: W;                                  // slot 1..4: x@1, inner.a@2, inner.s@3, t@4
+  setMA(k1: u256, k2: u256, v: u256): External<void> { this.mm[k1][k2].a = v; }
+  setMS(k1: u256, k2: u256, v: string): External<void> { this.mm[k1][k2].s = v; }
+  get getMA(k1: u256, k2: u256): External<u256> { return this.mm[k1][k2].a; }
+  get getMS(k1: u256, k2: u256): External<string> { return this.mm[k1][k2].s; }
+  setWx(v: u256): External<void> { this.w.x = v; }
+  setWInnerA(v: u256): External<void> { this.w.inner.a = v; }
+  setWInnerS(v: string): External<void> { this.w.inner.s = v; }
+  setWt(v: string): External<void> { this.w.t = v; }
+  get getWx(): External<u256> { return this.w.x; }
+  get getWInnerA(): External<u256> { return this.w.inner.a; }
+  get getWInnerS(): External<string> { return this.w.inner.s; }
+  get getWt(): External<string> { return this.w.t; }
 }`;
 
 const SOL = `// SPDX-License-Identifier: MIT

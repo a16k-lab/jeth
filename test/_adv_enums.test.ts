@@ -26,121 +26,121 @@ const PRAGMA = '// SPDX-License-Identifier: MIT\npragma solidity 0.8.35;\n';
 // ---- the contract under test (JETH) and a byte-for-byte Solidity twin -------------------------
 const J = `enum Color { Red, Green, Blue }
 enum Status { Inactive, Active, Banned, Frozen }
-@struct class Packed { a: Color; b: u8; c: Status; d: bool; e: address; }
-@struct class Boundary { lead: u248; col: Color; trail: u8; }
-@struct class Item { c: Color; qty: u32; flag: bool; }
-@struct class WithArr { tag: u8; cols: Arr<Color,3>; }
-@struct class Nested { id: u16; it: Item; }
-@struct class WithDyn { a: Color[]; n: u256; }
-@contract class C {
-  @error BadColor(c: Color);
-  @error TaggedColor(tag: u256, c: Color);
-  @event ColorSet(c: Color);
-  @event ColorIdx(@indexed c: Color, v: u256);
-  @event TwoEnum(@indexed a: Color, b: Status);
-  @event ColorArr(a: Color[]);
-  @state packed: Packed;            // slot 0
-  @state bnd: Boundary;             // slots 1-2 (u248 fills slot1; Color+u8 in slot2)
-  @state it: Item;                  // slot 3
-  @state cdyn: Color[];             // slot 4 (len) + keccak data
-  @state cfix: Arr<Color,3>;        // slots 5,6,7 (one each? packed? -> match solc)
-  @state seen: mapping<Color, bool>;
-  @state pref: mapping<address, Color>;
-  @state cur: Color;                // standalone slot for delete
-  @state wa: WithArr;               // struct holding a fixed enum array
-  @state nst: Nested;               // struct in struct, enum field nested
+type Packed = { a: Color; b: u8; c: Status; d: bool; e: address; };
+type Boundary = { lead: u248; col: Color; trail: u8; };
+type Item = { c: Color; qty: u32; flag: bool; };
+type WithArr = { tag: u8; cols: Arr<Color,3>; };
+type Nested = { id: u16; it: Item; };
+type WithDyn = { a: Color[]; n: u256; };
+class C {
+  BadColor: error<{ c: Color }>;
+  TaggedColor: error<{ tag: u256; c: Color }>;
+  ColorSet: event<{ c: Color }>;
+  ColorIdx: event<{ c: indexed<Color>; v: u256 }>;
+  TwoEnum: event<{ a: indexed<Color>; b: Status }>;
+  ColorArr: event<{ a: Color[] }>;
+  packed: Packed;            // slot 0
+  bnd: Boundary;             // slots 1-2 (u248 fills slot1; Color+u8 in slot2)
+  it: Item;                  // slot 3
+  cdyn: Color[];             // slot 4 (len) + keccak data
+  cfix: Arr<Color,3>;        // slots 5,6,7 (one each? packed? -> match solc)
+  seen: mapping<Color, bool>;
+  pref: mapping<address, Color>;
+  cur: Color;                // standalone slot for delete
+  wa: WithArr;               // struct holding a fixed enum array
+  nst: Nested;               // struct in struct, enum field nested
 
   // --- packing ---
-  @external setPacked(a: Color, b: u8, c: Status, d: bool, e: address): void {
+  setPacked(a: Color, b: u8, c: Status, d: bool, e: address): External<void> {
     this.packed = Packed(a, b, c, d, e);
   }
-  @external @view getPackedA(): Color { return this.packed.a; }
-  @external @view getPackedC(): Status { return this.packed.c; }
-  @external setBnd(lead: u248, col: Color, trail: u8): void { this.bnd = Boundary(lead, col, trail); }
-  @external @view bndCol(): Color { return this.bnd.col; }
-  @external setItem(c: Color, q: u32, f: bool): void { this.it = Item(c, q, f); }
-  @external @view itemColor(): Color { return this.it.c; }
+  get getPackedA(): External<Color> { return this.packed.a; }
+  get getPackedC(): External<Status> { return this.packed.c; }
+  setBnd(lead: u248, col: Color, trail: u8): External<void> { this.bnd = Boundary(lead, col, trail); }
+  get bndCol(): External<Color> { return this.bnd.col; }
+  setItem(c: Color, q: u32, f: bool): External<void> { this.it = Item(c, q, f); }
+  get itemColor(): External<Color> { return this.it.c; }
 
   // --- enum arrays ---
-  @external @pure echoFix(a: Arr<Color,3>): Arr<Color,3> { return a; }
-  @external @pure echoDyn(a: Color[]): Color[] { return a; }
-  @external @pure echoNestedFix(a: Arr<Arr<Color,2>,2>): Arr<Arr<Color,2>,2> { return a; }
-  @external @pure echoStruct(s: WithDyn): WithDyn { return s; }
-  @external @pure fixElem(a: Arr<Color,3>, i: u256): Color { return a[i]; }
-  @external @pure dynElem(a: Color[], i: u256): Color { return a[i]; }
-  @external @pure fixSum(a: Arr<Color,3>): u256 { let s: u256 = 0n; for (const v of a) { s = s + u256(v); } return s; }
-  @external @pure dynSum(a: Color[]): u256 { let s: u256 = 0n; for (const v of a) { s = s + u256(v); } return s; }
-  @external @pure dynLen(a: Color[]): u256 { return a.length; }
-  @external pushCdyn(c: Color): void { this.cdyn.push(c); }     // element-wise (whole cd->storage copy is rejected JETH900, non-enum)
-  @external @view getCdyn(): Color[] { return this.cdyn; }
-  @external @view cdynElem(i: u256): Color { return this.cdyn[i]; }
-  @external setCfixElem(i: u256, c: Color): void { this.cfix[i] = c; }
-  @external @view getCfix(): Arr<Color,3> { return this.cfix; }
-  @external @view cfixElem(i: u256): Color { return this.cfix[i]; }
+  get echoFix(a: Arr<Color,3>): External<Arr<Color,3>> { return a; }
+  get echoDyn(a: Color[]): External<Color[]> { return a; }
+  get echoNestedFix(a: Arr<Arr<Color,2>,2>): External<Arr<Arr<Color,2>,2>> { return a; }
+  get echoStruct(s: WithDyn): External<WithDyn> { return s; }
+  get fixElem(a: Arr<Color,3>, i: u256): External<Color> { return a[i]; }
+  get dynElem(a: Color[], i: u256): External<Color> { return a[i]; }
+  get fixSum(a: Arr<Color,3>): External<u256> { let s: u256 = 0n; for (const v of a) { s = s + u256(v); } return s; }
+  get dynSum(a: Color[]): External<u256> { let s: u256 = 0n; for (const v of a) { s = s + u256(v); } return s; }
+  get dynLen(a: Color[]): External<u256> { return a.length; }
+  pushCdyn(c: Color): External<void> { this.cdyn.push(c); }     // element-wise (whole cd->storage copy is rejected JETH900, non-enum)
+  get getCdyn(): External<Color[]> { return this.cdyn; }
+  get cdynElem(i: u256): External<Color> { return this.cdyn[i]; }
+  setCfixElem(i: u256, c: Color): External<void> { this.cfix[i] = c; }
+  get getCfix(): External<Arr<Color,3>> { return this.cfix; }
+  get cfixElem(i: u256): External<Color> { return this.cfix[i]; }
 
   // --- events ---
-  @external emitColor(c: Color): void { emit(ColorSet(c)); }
-  @external emitIdx(c: Color, v: u256): void { emit(ColorIdx(c, v)); }
-  @external emitTwo(a: Color, b: Status): void { emit(TwoEnum(a, b)); }
-  @external emitArr(a: Color[]): void { emit(ColorArr(a)); }
+  emitColor(c: Color): External<void> { emit(ColorSet(c)); }
+  emitIdx(c: Color, v: u256): External<void> { emit(ColorIdx(c, v)); }
+  emitTwo(a: Color, b: Status): External<void> { emit(TwoEnum(a, b)); }
+  emitArr(a: Color[]): External<void> { emit(ColorArr(a)); }
 
   // --- custom errors ---
-  @external @pure revBad(c: Color): void { revert(BadColor(c)); }
-  @external @pure revTagged(t: u256, c: Color): void { revert(TaggedColor(t, c)); }
+  revBad(c: Color): External<void> { revert(BadColor(c)); }
+  revTagged(t: u256, c: Color): External<void> { revert(TaggedColor(t, c)); }
 
   // --- casts ---
-  @external @pure mk(x: u8): Color { return Color(x); }
-  @external @pure mkFromU256(x: u256): Color { return Color(x); }
-  @external @pure mkFromI8(x: i8): Color { return Color(u8(x)); }
-  @external @pure mkI8(x: i8): Color { return Color(x); }           // direct signed cast, range-checked
-  @external @pure mkI256(x: i256): Color { return Color(x); }
-  @external @pure cToBytes1(c: Color): bytes1 { return bytes1(u8(c)); } // the LEGAL enum->bytes1 path
-  @external @pure toU8(c: Color): u8 { return u8(c); }
-  @external @pure toU16(c: Color): u16 { return u16(c); }
-  @external @pure toU256(c: Color): u256 { return u256(c); }
-  @external @pure roundtrip(x: u8): u8 { return u8(Color(x)); }
-  @external @pure redConst(): Color { return Color.Red; }
-  @external @pure blueConst(): Color { return Color.Blue; }
-  @external @pure constCast(): Color { return Color(2n); }
+  get mk(x: u8): External<Color> { return Color(x); }
+  get mkFromU256(x: u256): External<Color> { return Color(x); }
+  get mkFromI8(x: i8): External<Color> { return Color(u8(x)); }
+  get mkI8(x: i8): External<Color> { return Color(x); }           // direct signed cast, range-checked
+  get mkI256(x: i256): External<Color> { return Color(x); }
+  get cToBytes1(c: Color): External<bytes1> { return bytes1(u8(c)); } // the LEGAL enum->bytes1 path
+  get toU8(c: Color): External<u8> { return u8(c); }
+  get toU16(c: Color): External<u16> { return u16(c); }
+  get toU256(c: Color): External<u256> { return u256(c); }
+  get roundtrip(x: u8): External<u8> { return u8(Color(x)); }
+  get redConst(): External<Color> { return Color.Red; }
+  get blueConst(): External<Color> { return Color.Blue; }
+  get constCast(): External<Color> { return Color(2n); }
 
   // --- mapping key/value ---
-  @external mark(c: Color): void { this.seen[c] = true; }
-  @external @view isSeen(c: Color): bool { return this.seen[c]; }
-  @external setPref(a: address, c: Color): void { this.pref[a] = c; }
-  @external @view prefOf(a: address): Color { return this.pref[a]; }
+  mark(c: Color): External<void> { this.seen[c] = true; }
+  get isSeen(c: Color): External<bool> { return this.seen[c]; }
+  setPref(a: address, c: Color): External<void> { this.pref[a] = c; }
+  get prefOf(a: address): External<Color> { return this.pref[a]; }
 
   // --- default member 0 + delete ---
-  @external @view unsetMapping(a: address): Color { return this.pref[a]; }   // never set -> Red(0)
-  @external setCur(c: Color): void { this.cur = c; }
-  @external delCur(): void { delete this.cur; }
-  @external @view getCur(): Color { return this.cur; }
+  get unsetMapping(a: address): External<Color> { return this.pref[a]; }   // never set -> Red(0)
+  setCur(c: Color): External<void> { this.cur = c; }
+  delCur(): External<void> { delete this.cur; }
+  get getCur(): External<Color> { return this.cur; }
 
   // --- comparisons / control flow ---
-  @external @pure eq(a: Color, b: Color): bool { return a == b; }
-  @external @pure ne(a: Color, b: Color): bool { return a != b; }
-  @external @pure lt(a: Color, b: Color): bool { return a < b; }
-  @external @pure le(a: Color, b: Color): bool { return a <= b; }
-  @external @pure gt(a: Color, b: Color): bool { return a > b; }
-  @external @pure ge(a: Color, b: Color): bool { return a >= b; }
-  @external @pure tern(c: Color): u256 { return c == Color.Blue ? 100n : 1n; }
-  @external @pure classify(c: Color): u8 {
+  get eq(a: Color, b: Color): External<bool> { return a == b; }
+  get ne(a: Color, b: Color): External<bool> { return a != b; }
+  get lt(a: Color, b: Color): External<bool> { return a < b; }
+  get le(a: Color, b: Color): External<bool> { return a <= b; }
+  get gt(a: Color, b: Color): External<bool> { return a > b; }
+  get ge(a: Color, b: Color): External<bool> { return a >= b; }
+  get tern(c: Color): External<u256> { return c == Color.Blue ? 100n : 1n; }
+  get classify(c: Color): External<u8> {
     if (c == Color.Red) { return 7n; }
     if (c == Color.Green) { return 8n; }
     return 9n;
   }
 
   // --- multi-value + nested ---
-  @external @pure pair(c: Color, n: u256): [Color, u256] { return [c, n]; }
-  @external setNested(id: u16, c: Color, q: u32, f: bool): void { this.nst = Nested(id, Item(c, q, f)); }
-  @external @view nestedColor(): Color { return this.nst.it.c; }
-  @external setWa(tag: u8, c0: Color, c1: Color, c2: Color): void { this.wa = WithArr(tag, [c0, c1, c2]); }
-  @external @view waElem(i: u256): Color { return this.wa.cols[i]; }
-  @external @pure mkBoundary(lead: u248, col: Color, trail: u8): Boundary { return Boundary(lead, col, trail); }
+  get pair(c: Color, n: u256): External<[Color, u256]> { return [c, n]; }
+  setNested(id: u16, c: Color, q: u32, f: bool): External<void> { this.nst = Nested(id, Item(c, q, f)); }
+  get nestedColor(): External<Color> { return this.nst.it.c; }
+  setWa(tag: u8, c0: Color, c1: Color, c2: Color): External<void> { this.wa = WithArr(tag, [c0, c1, c2]); }
+  get waElem(i: u256): External<Color> { return this.wa.cols[i]; }
+  get mkBoundary(lead: u248, col: Color, trail: u8): External<Boundary> { return Boundary(lead, col, trail); }
 
   // --- default enum param (F3) ---
   mkDef(c: Color = Color.Red): Color { return c; }
-  @external @pure defParam(): Color { return this.mkDef(); }
-  @external @pure withDef(c: Color = Color.Red): Color { return c; }
+  get defParam(): External<Color> { return this.mkDef(); }
+  get withDef(c: Color = Color.Red): External<Color> { return c; }
 }`;
 
 const SOL = `${PRAGMA}contract C {
@@ -660,7 +660,7 @@ function errCodes(src: string): string[] {
   }
 }
 const PRE = 'enum Color { Red, Green, Blue }\nenum Status { Inactive, Active }\n';
-const wrap = (body: string) => `${PRE}@contract class C { ${body} }`;
+const wrap = (body: string) => `${PRE}class C { ${body} }`;
 
 describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () => {
   it('rejects arithmetic / bitwise / shift on enums (JETH279)', () => {
@@ -681,8 +681,8 @@ describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () =>
     expect(errCodes(wrap('@external @pure f(): Color { const c: Color = 1n; return c; }'))).toContain('JETH280');
   });
   it('rejects an empty enum (JETH275) and explicit member values (JETH270)', () => {
-    expect(errCodes('enum E {}\n@contract class C { @external @pure f(): u8 { return 0n; } }')).toContain('JETH275');
-    expect(errCodes('enum E { A = 5 }\n@contract class C { @external @pure f(): u8 { return 0n; } }')).toContain(
+    expect(errCodes('enum E {}\nclass C { get f(): External<u8> { return 0n; } }')).toContain('JETH275');
+    expect(errCodes('enum E { A = 5 }\nclass C { get f(): External<u8> { return 0n; } }')).toContain(
       'JETH270',
     );
   });
@@ -701,7 +701,7 @@ describe('ADV enums: soundness rejections (no crash, correct diagnostic)', () =>
     expect(errCodes(wrap('@external @pure f(b: bool): Color { return Color(b); }'))).toContain('JETH277');
     expect(
       errCodes(
-        'enum Color { Red, Green, Blue }\n@struct class P { x: u256; }\n@contract class C { @external @pure f(p: P): Color { return Color(p); } }',
+        'enum Color { Red, Green, Blue }\ntype P = { x: u256; };\nclass C { get f(p: P): External<Color> { return Color(p); } }',
       ),
     ).toContain('JETH277');
   });
