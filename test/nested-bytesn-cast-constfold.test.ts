@@ -25,17 +25,17 @@ function codes(src: string): string[] {
   }
 }
 
-const J = `@contract class C {
-  @external @pure a(): bytes4 { return bytes4(bytes4(0xababababn)); }
-  @external @pure w8(): bytes8 { return bytes8(bytes4(0xababababn)); }
-  @external @pure w32(): bytes32 { return bytes32(bytes4(0xababababn)); }
-  @external @pure n2(): bytes2 { return bytes2(bytes4(0xababababn)); }
-  @external @pure n1(): bytes1 { return bytes1(bytes4(0xababababn)); }
-  @external @pure s32(): bytes32 { return bytes32(bytes32(0x${'cd'.repeat(32)}n)); }
-  @external @pure tri(): bytes2 { return bytes2(bytes4(bytes8(0x1122334455667788n))); }
-  @external @pure inner(): bytes4 { return bytes4(0xababababn); }
-  @external @pure viaLocal(): bytes4 { let b: bytes4 = bytes4(0xababababn); return bytes4(b); }
-  @external @pure pw(b: bytes4): bytes8 { return bytes8(b); } }`;
+const J = `class C {
+  get a(): External<bytes4> { return bytes4(bytes4(0xababababn)); }
+  get w8(): External<bytes8> { return bytes8(bytes4(0xababababn)); }
+  get w32(): External<bytes32> { return bytes32(bytes4(0xababababn)); }
+  get n2(): External<bytes2> { return bytes2(bytes4(0xababababn)); }
+  get n1(): External<bytes1> { return bytes1(bytes4(0xababababn)); }
+  get s32(): External<bytes32> { return bytes32(bytes32(0x${'cd'.repeat(32)}n)); }
+  get tri(): External<bytes2> { return bytes2(bytes4(bytes8(0x1122334455667788n))); }
+  get inner(): External<bytes4> { return bytes4(0xababababn); }
+  get viaLocal(): External<bytes4> { let b: bytes4 = bytes4(0xababababn); return bytes4(b); }
+  get pw(b: bytes4): External<bytes8> { return bytes8(b); } }`;
 const S = `// SPDX-License-Identifier: MIT
 pragma solidity 0.8.35;
 contract C {

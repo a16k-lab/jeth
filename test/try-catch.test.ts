@@ -266,8 +266,8 @@ const RET_TARGET_SOL = `contract T {
 describe('try/catch: return-decode bounds (byte-identical vs solc)', () => {
   async function rtRet(sig: string) {
     const tsb = compileSolidity(SPDX + RET_TARGET_SOL, 'T');
-    const callerJeth = `@interface class IFoo { @external zero(): u256; @external short31(): u256; @external extra64(): u256; }
-    @contract class C { @external f(t: address): u256 { try { let r: u256 = IFoo(t).${sig}(); return r; } catch (e) { return 777n; } } }`;
+    const callerJeth = `interface IFoo { zero(): u256; short31(): u256; extra64(): u256; }
+    class C { f(t: address): External<u256> { try { let r: u256 = IFoo(t).${sig}(); return r; } catch (e) { return 777n; } } }`;
     const callerSol = `interface IFoo { function zero() external returns(uint256); function short31() external returns(uint256); function extra64() external returns(uint256); }
     contract C { function f(address t) external returns(uint256){ try IFoo(t).${sig}() returns(uint256 r){ return r; } catch (bytes memory e){ return 777; } } }`;
     const cjb = compile(callerJeth, { fileName: 'C.jeth' });
@@ -359,7 +359,7 @@ describe('try/catch helpers (stage 2b): this.reason / this.panic byte-identical 
     const ifj = `interface IFoo { boom(): u256; pdiv(x: u256): u256; }`;
     const ifs = `interface IFoo { function boom() external returns(uint256); function pdiv(uint256) external returns(uint256); }`;
     const cjShape = (target: string) =>
-      `${ifj}\n@contract class C { @external f(t: address): string { try { let r: u256 = IFoo(t).${target}; return ""; } catch (e) { let p: u256 = this.panic; if (p != 0n) { return "panic"; } return this.reason; } } }`;
+      `${ifj}\nclass C { f(t: address): External<string> { try { let r: u256 = IFoo(t).${target}; return ""; } catch (e) { let p: u256 = this.panic; if (p != 0n) { return "panic"; } return this.reason; } } }`;
     const csShape = (target: string) =>
       `${ifs}\ncontract C { function f(address t) external returns(string memory){ try IFoo(t).${target} returns(uint256 r){ return ""; } catch Panic(uint256 p){ return "panic"; } catch Error(string memory s){ return s; } catch { return ""; } } }`;
     async function one(jt: string, st: string) {

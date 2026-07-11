@@ -57,18 +57,17 @@ contract NameClash {
 });
 
 describe('Phase 2 regression: negative INT_MIN literals (Bug B)', () => {
-  const JETH = `@contract
-class NegLit {
-  @state s8: i8 = -128n;
-  @error I16(x: i16);
-  @error I8(x: i8);
-  @external @pure retMin16(): i16 { return -32768n; }
-  @external @pure retMin8(): i8 { return -128n; }
-  @external @pure retMin256(): i256 { return ${I256_MIN.toString()}n; }
-  @external @pure errMin16(): void { revert(I16(-32768n)); }
-  @external @pure errMin8(): void { require(false, I8(-128n)); }
-  @external @view getS8(): i8 { return this.s8; }
-  @external @pure negVar(x: i8): i8 { return -x; }
+  const JETH = `class NegLit {
+  s8: i8 = -128n;
+  I16: error<{ x: i16 }>;
+  I8: error<{ x: i8 }>;
+  get retMin16(): External<i16> { return -32768n; }
+  get retMin8(): External<i8> { return -128n; }
+  get retMin256(): External<i256> { return ${I256_MIN.toString()}n; }
+  errMin16(): External<void> { revert(I16(-32768n)); }
+  errMin8(): External<void> { require(false, I8(-128n)); }
+  get getS8(): External<i8> { return this.s8; }
+  get negVar(x: i8): External<i8> { return -x; }
 }`;
   const SOL = `// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;

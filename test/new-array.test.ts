@@ -162,7 +162,7 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
   });
 
   it('accepts value-element new Array forms', () => {
-    const ok = (b: string) => `@contract class C { @external @pure f(n: u256): bytes { ${b} } }`;
+    const ok = (b: string) => `class C { get f(n: u256): External<bytes> { ${b} } }`;
     expect(jethAccepts(ok('let a: u256[] = new Array<u256>(n); return abi.encode(a);'))).toBe(true);
     expect(jethAccepts(ok('let a: bool[] = new Array<bool>(n); return abi.encode(a);'))).toBe(true);
     expect(jethAccepts(ok('let a: address[] = new Array<address>(n); return abi.encode(a);'))).toBe(true);
@@ -177,7 +177,7 @@ describe('new Array<T>(n): byte-identical vs solc', () => {
   });
 
   it('cleanly rejects (no crash) unsupported new Array forms', () => {
-    const f = (b: string) => `@contract class C { @external @pure f(n: u256): bytes { ${b} } }`;
+    const f = (b: string) => `class C { get f(n: u256): External<bytes> { ${b} } }`;
     // signed-int length -> rejected (matches solc: no implicit int->uint256), no crash
     expect(
       jethCodes(

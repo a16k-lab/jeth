@@ -47,9 +47,9 @@ describe('nested dyn-struct field -> dyn-array leaf read from abi.decode (was JE
   it('x.p.arr.length / x.p.arr[i] / scalar control are byte-identical to solc', async () => {
     const A3 = s3Calldata([10, 20, 30]);
     const out = await eqCalls(
-      J('@external @pure len(b: bytes): u256 { let x: S3 = abi.decode(b, S3); return x.p.arr.length; }' +
-        ' @external @pure el(b: bytes): u256 { let x: S3 = abi.decode(b, S3); return x.p.arr[1n]; }' +
-        ' @external @pure sc(b: bytes): u256 { let x: S3 = abi.decode(b, S3); return x.p.a + x.n; }'),
+      J('get len(b: bytes): External<u256> { let x: S3 = abi.decode(b, S3); return x.p.arr.length; }' +
+        ' get el(b: bytes): External<u256> { let x: S3 = abi.decode(b, S3); return x.p.arr[1n]; }' +
+        ' get sc(b: bytes): External<u256> { let x: S3 = abi.decode(b, S3); return x.p.a + x.n; }'),
       S('function len(bytes calldata b) external pure returns(uint256){ S3 memory x=abi.decode(b,(S3)); return x.p.arr.length; }' +
         ' function el(bytes calldata b) external pure returns(uint256){ S3 memory x=abi.decode(b,(S3)); return x.p.arr[1]; }' +
         ' function sc(bytes calldata b) external pure returns(uint256){ S3 memory x=abi.decode(b,(S3)); return x.p.a + x.n; }'),
@@ -63,8 +63,8 @@ describe('nested dyn-struct field -> dyn-array leaf read from abi.decode (was JE
 
   it('empty array, 5-element access, and OOB -> Panic 0x32 match solc', async () => {
     await eqCalls(
-      J('@external @pure len(b: bytes): u256 { let x: S3 = abi.decode(b, S3); return x.p.arr.length; }' +
-        ' @external @pure el(b: bytes, i: u256): u256 { let x: S3 = abi.decode(b, S3); return x.p.arr[i]; }'),
+      J('get len(b: bytes): External<u256> { let x: S3 = abi.decode(b, S3); return x.p.arr.length; }' +
+        ' get el(b: bytes, i: u256): External<u256> { let x: S3 = abi.decode(b, S3); return x.p.arr[i]; }'),
       S('function len(bytes calldata b) external pure returns(uint256){ S3 memory x=abi.decode(b,(S3)); return x.p.arr.length; }' +
         ' function el(bytes calldata b, uint256 i) external pure returns(uint256){ S3 memory x=abi.decode(b,(S3)); return x.p.arr[i]; }'),
       [
@@ -78,10 +78,10 @@ describe('nested dyn-struct field -> dyn-array leaf read from abi.decode (was JE
   it('write x.p.arr[i], loop-sum, whole-field abi.encode(x.p.arr) and abi.encode(x.p) match solc', async () => {
     const A3 = s3Calldata([10, 20, 30]);
     await eqCalls(
-      J('@external @pure wr(b: bytes): u256 { let x: S3 = abi.decode(b, S3); x.p.arr[1n] = 555n; return x.p.arr[1n] + x.p.arr[0n]; }' +
-        ' @external @pure sum(b: bytes): u256 { let x: S3 = abi.decode(b, S3); let s: u256 = 0n; for (let i: u256 = 0n; i < x.p.arr.length; i = i + 1n) { s = s + x.p.arr[i]; } return s; }' +
-        ' @external @pure encArr(b: bytes): bytes { let x: S3 = abi.decode(b, S3); return abi.encode(x.p.arr); }' +
-        ' @external @pure encP(b: bytes): bytes { let x: S3 = abi.decode(b, S3); return abi.encode(x.p); }'),
+      J('get wr(b: bytes): External<u256> { let x: S3 = abi.decode(b, S3); x.p.arr[1n] = 555n; return x.p.arr[1n] + x.p.arr[0n]; }' +
+        ' get sum(b: bytes): External<u256> { let x: S3 = abi.decode(b, S3); let s: u256 = 0n; for (let i: u256 = 0n; i < x.p.arr.length; i = i + 1n) { s = s + x.p.arr[i]; } return s; }' +
+        ' get encArr(b: bytes): External<bytes> { let x: S3 = abi.decode(b, S3); return abi.encode(x.p.arr); }' +
+        ' get encP(b: bytes): External<bytes> { let x: S3 = abi.decode(b, S3); return abi.encode(x.p); }'),
       S('function wr(bytes calldata b) external pure returns(uint256){ S3 memory x=abi.decode(b,(S3)); x.p.arr[1]=555; return x.p.arr[1]+x.p.arr[0]; }' +
         ' function sum(bytes calldata b) external pure returns(uint256){ S3 memory x=abi.decode(b,(S3)); uint256 s=0; for(uint256 i=0;i<x.p.arr.length;i++){ s+=x.p.arr[i]; } return s; }' +
         ' function encArr(bytes calldata b) external pure returns(bytes memory){ S3 memory x=abi.decode(b,(S3)); return abi.encode(x.p.arr); }' +

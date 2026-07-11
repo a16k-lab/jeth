@@ -93,7 +93,7 @@ describe('F5 switch', () => {
 
   it('stricter lints', () => {
     const wrap = (b: string) =>
-      `enum Color { Red, Green, Blue }\n@contract class C { @external @pure f(c: Color, x: u256): u256 {\n${b}\nreturn 0n; } }`;
+      `enum Color { Red, Green, Blue }\nclass C { get f(c: Color, x: u256): External<u256> {\n${b}\nreturn 0n; } }`;
     // non-exhaustive enum switch with no default
     expect(codes(wrap('switch (c) { case Color.Red: return 1n; case Color.Green: return 2n; }'))).toContain('JETH286');
     // implicit fall-through from a non-empty case

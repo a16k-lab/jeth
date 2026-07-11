@@ -47,7 +47,7 @@ async function eqCalls(jeth: string, sol: string, calls: [string, string][]) {
 describe('W2A: leading-zero (octal) decimal literals rejected', () => {
   for (const lit of ['010', '08', '09', '00', '0777', '0_1'])
     it(`rejects ${lit}`, () => {
-      expect(rejectCodes(`@contract class C { @external @pure f(): u256 { return ${lit}; } }`)).toContain('JETH049');
+      expect(rejectCodes(`class C { get f(): External<u256> { return ${lit}; } }`)).toContain('JETH049');
     });
   it('keeps 0 / 0x2a / 0e5 / 0.5e1 / 0n byte-identical', async () => {
     for (const [j, s] of [
@@ -57,7 +57,7 @@ describe('W2A: leading-zero (octal) decimal literals rejected', () => {
       ['5n', '0.5e1'], // 0.5e1 == 5
     ] as [string, string][])
       await eqCalls(
-        `@contract class C { @external @pure f(): u256 { return ${j}; } }`,
+        `class C { get f(): External<u256> { return ${j}; } }`,
         `contract C { function f() external pure returns (uint256){ return ${s}; } }`,
         [['f()', '']],
       );
@@ -68,16 +68,16 @@ describe('W2A: enum vs out-of-range integer-literal comparison rejected', () => 
   const JH = 'class C { enum Color { Red, Green, Blue }\n';
   for (const op of ['==', '!=', '<', '>', '<=', '>='])
     it(`rejects c ${op} 300n`, () => {
-      expect(rejectCodes(`${JH} @external @pure f(c: Color): bool { return c ${op} 300n; } }`)).toContain('JETH280');
+      expect(rejectCodes(`${JH} get f(c: Color): External<bool> { return c ${op} 300n; } }`)).toContain('JETH280');
     });
   it('rejects 300n == c (reversed operand order)', () => {
-    expect(rejectCodes(`${JH} @external @pure f(c: Color): bool { return 300n == c; } }`)).toContain('JETH280');
+    expect(rejectCodes(`${JH} get f(c: Color): External<bool> { return 300n == c; } }`)).toContain('JETH280');
   });
   it('keeps enum vs enum-member comparisons byte-identical', async () => {
     const SH = 'contract C { enum Color { Red, Green, Blue }\n';
     for (const op of ['==', '!=', '<', '>', '<=', '>='])
       await eqCalls(
-        `${JH} @external @pure f(c: Color): bool { return c ${op} Color.Green; } }`,
+        `${JH} get f(c: Color): External<bool> { return c ${op} Color.Green; } }`,
         `${SH} function f(Color c) external pure returns (bool){ return c ${op} Color.Green; } }`,
         [['f(uint8)', W(1n)]],
       );
@@ -92,10 +92,10 @@ describe('W2A: enum vs out-of-range integer-literal comparison rejected', () => 
 });
 
 describe('W2A: packed abi encoding of an untyped literal rejected', () => {
-  const wrap = (arg: string) => `@contract class C { @external @pure f(): bytes { return abi.encodePacked(${arg}); } }`;
+  const wrap = (arg: string) => `class C { get f(): External<bytes> { return abi.encodePacked(${arg}); } }`;
   for (const arg of ['42n', '0x2a', '1000000000000000000n', '-1n', '(42n)', '1n + 1n', '2n ** 8n', '1n << 4n'])
     it(`rejects abi.encodePacked(${arg})`, () => {
-      expect(rejectCodes(wrap(arg))).toContain('JETH481');
+      expect(rejectCodes(wrap(arg))).toContain('JETH173');
     });
   it('rejects keccak256(abi.encodePacked(7n, 9n))', () => {
     expect(
@@ -144,13 +144,13 @@ describe('W2A: enum declared inside a method body rejected (not hoisted)', () =>
   it('rejects a method-body enum even when a class-level enum is also present', () => {
     expect(
       rejectCodes(
-        'class C { enum Color { Red, Green }\n @external @pure f(): u8 { enum E { A, B } return u8(E.B); } }',
+        'class C { enum Color { Red, Green }\n get f(): External<u8> { enum E { A, B } return u8(E.B); } }',
       ),
-    ).toContain('JETH481');
+    ).toContain('JETH061');
   });
   it('keeps a class-level enum (declared after a method with a nested block) byte-identical', async () => {
     await eqCalls(
-      'class C { get g(): External<u8> { if (true) { return 1n; } return 0n; }\n enum Color { Red, Green, Blue }\n @external @pure f(): u8 { return u8(Color.Blue); } }',
+      'class C { get g(): External<u8> { if (true) { return 1n; } return 0n; }\n enum Color { Red, Green, Blue }\n get f(): External<u8> { return u8(Color.Blue); } }',
       'contract C { function g() external pure returns (uint8) { if (true) { return 1; } return 0; }\n enum Color { Red, Green, Blue }\n function f() external pure returns (uint8) { return uint8(Color.Blue); } }',
       [['f()', ''], ['g()', '']],
     );

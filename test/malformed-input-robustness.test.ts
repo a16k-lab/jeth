@@ -283,13 +283,15 @@ describe('JETH479: a decorator or `declare` on a variable statement rejects loud
     expect(codes(`class C { get f(): External<u256> { declare let x = 9n; return 1n; } }`)).toContain('JETH479');
   });
 
-  it('DECORATOR MODE: the same statement-decorator drop rejects there too', () => {
+  it('DECORATOR MODE is itself banned now: the legacy pragma source rejects at JETH480 (was the JETH479 drop)', () => {
+    // Native mode is the only mode: the `// use @decorators` pragma is rejected up front (JETH480),
+    // so the statement-decorator drop is now moot in this source. The native repro above is the live pin.
     expect(codes(`// use @decorators
 @contract class C {
   @state s: u256;
   boom(): u256 { this.s = 100n; return 0n; }
   @external f(): u256 { @only(this.boom()) let x: u256 = 7n; return x + this.s; }
-}`)).toEqual(['JETH479']);
+}`)).toEqual(['JETH480']);
   });
 
   it('decorators on return / if / expression statements still hit the JETH061 gate (unregressed)', () => {
@@ -298,12 +300,11 @@ describe('JETH479: a decorator or `declare` on a variable statement rejects loud
     expect(codes(`class C { s: u256; setS(): External<void> { @zzz this.s = 1n; } }`)).toContain('JETH061');
   });
 
-  it('legal MEMBER decorators stay unregressed (decorator mode compiles + runs)', async () => {
-    const out = compile(`// use @decorators
-@contract class C {
-  @state s: u256;
-  @external set(v: u256): void { this.s = v; }
-  @external @view f(): u256 { return this.s + 1n; }
+  it('legal MEMBER methods stay unregressed (native form compiles + runs)', async () => {
+    const out = compile(`class C {
+  s: u256;
+  set(v: u256): External<void> { this.s = v; }
+  get f(): External<u256> { return this.s + 1n; }
 }`, { fileName: 'C.jeth' });
     const h = await Harness.create();
     const addr = await h.deploy(out.creationBytecode);

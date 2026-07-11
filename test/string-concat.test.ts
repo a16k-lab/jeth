@@ -171,7 +171,7 @@ describe('many-part concat + bytesN (no StackTooDeep)', () => {
   });
   it('string.concat of 15 string literals', async () => {
     const lits = Array.from({ length: 15 }, (_, i) => `"${String.fromCharCode(97 + i)}"`).join(', ');
-    const j = await deployJeth(`@contract class C { @external @pure f(): string { return string.concat(${lits}); } }`);
+    const j = await deployJeth(`class C { get f(): External<string> { return string.concat(${lits}); } }`);
     const s = await deploySol(`contract C { function f() external pure returns(string memory){ return string.concat(${lits}); } }`);
     const rj = await j.h.call(j.a, '0x' + sel('f()'));
     const rs = await s.h.call(s.a, '0x' + sel('f()'));
@@ -182,7 +182,7 @@ describe('many-part concat + bytesN (no StackTooDeep)', () => {
     // so there is no solc contract to diff against; JETH's descriptor-spill lowering compiles it. Verify
     // against the deterministic concatenation result instead.
     const body = Array.from({ length: 10 }, () => 'x${a}').join('');
-    const j = await deployJeth(`@contract class C { @external @pure f(a: string): string { return \`${body}\`; } }`);
+    const j = await deployJeth(`class C { get f(a: string): External<string> { return \`${body}\`; } }`);
     const cd = sel('f(string)') + W(0x20n) + W(2n) + PAD('4141'); // a = "AA"
     const rj = await j.h.call(j.a, '0x' + cd);
     expect(rj.success).toBe(true);

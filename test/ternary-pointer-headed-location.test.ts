@@ -31,7 +31,7 @@ const codes = (src: string): string[] => {
     return e?.diagnostics ? e.diagnostics.map((d: any) => d.code) : ['THROW'];
   }
 };
-const In = `@struct class In { x: u256; y: u256 }`;
+const In = `type In = { x: u256; y: u256 };`;
 const SIn = `struct In { uint256 x; uint256 y; }`;
 
 describe('ternary over pointer-headed Arr<In,N>: internal-arg transcode (RC-2) byte-identical', () => {
@@ -92,15 +92,15 @@ contract C { function f(bool c, Pk[2] calldata p, Pk[2] calldata q) external pur
 });
 
 describe('ternary rejects: abiDecode branches (RC-1) and cd|storage location mixes (RC-3)', () => {
-  const base = `${In} @contract class C { @state sx: Arr<In,2>;
-  @external @pure produce(): Arr<In,2> { let a: Arr<In,2> = [In(31n,32n),In(33n,34n)]; return a; }`;
+  const base = `${In} class C { sx: Arr<In,2>;
+  get produce(): External<Arr<In,2>> { let a: Arr<In,2> = [In(31n,32n),In(33n,34n)]; return a; }`;
 
   it('an abi.decode / external-call-result ternary branch is a clean JETH074 reject (was MC-2..6)', () => {
-    expect(codes(`${base} @external @view f(c: bool): bytes { return abi.encode(c ? this.produce() : this.sx); } }`)).toContain('JETH074');
-    expect(codes(`${base} @external @view f(c: bool): Arr<In,2> { return c ? this.produce() : this.sx; } }`)).toContain('JETH074');
-    expect(codes(`${base} @event E(@indexed v: Arr<In,2>, t: u256); @external f(c: bool): void { emit(E(c ? this.produce() : this.sx, 9n)); } }`)).toContain('JETH074');
-    expect(codes(`${base} @external @view f(c: bool): Arr<In,2> { return c ? this.produce() : this.produce(); } }`)).toContain('JETH074');
-    expect(codes(`${base} @external @pure g(b: bytes): Arr<In,2> { return abi.decode(b, Arr<In,2>); } @external @view f(c: bool, b: bytes): Arr<In,2> { return c ? abi.decode(b, Arr<In,2>) : this.sx; } }`)).toContain('JETH074');
+    expect(codes(`${base} get f(c: bool): External<bytes> { return abi.encode(c ? this.produce() : this.sx); } }`)).toContain('JETH074');
+    expect(codes(`${base} get f(c: bool): External<Arr<In,2>> { return c ? this.produce() : this.sx; } }`)).toContain('JETH074');
+    expect(codes(`${base} E: event<{ v: indexed<Arr<In,2>>; t: u256 }>; f(c: bool): External<void> { emit(E(c ? this.produce() : this.sx, 9n)); } }`)).toContain('JETH074');
+    expect(codes(`${base} get f(c: bool): External<Arr<In,2>> { return c ? this.produce() : this.produce(); } }`)).toContain('JETH074');
+    expect(codes(`${base} get g(b: bytes): External<Arr<In,2>> { return abi.decode(b, Arr<In,2>); } get f(c: bool, b: bytes): External<Arr<In,2>> { return c ? abi.decode(b, Arr<In,2>) : this.sx; } }`)).toContain('JETH074');
   });
 
   it('a calldata|storage ternary mix rejects across every reference family (was OA-1)', () => {
