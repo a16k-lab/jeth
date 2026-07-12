@@ -635,11 +635,13 @@ export interface InterfaceMethod {
 // `methods` holds ONLY the methods declared directly in this interface's body (solc's resolution set for
 // type(I).interfaceId and a qualified I.m.selector, both of which EXCLUDE inherited methods - witnessed
 // vs 0.8.35). An `interface B extends A` chain records `parents` (source order); a call-site method
-// lookup walks the parent chain (Analyzer.lookupInterfaceMethod), matching solc's `interface B is A`
+// lookup walks the parent chain (Analyzer.lookupInterfaceMethods), matching solc's `interface B is A`
 // semantics where B's callable surface is the union of the chain.
 export interface InterfaceDecl {
   name: string;
-  methods: Map<string, InterfaceMethod>; // method name -> shape (no overloading in v1), OWN methods only
+  // method name -> its OVERLOADS (source order; unique by canonical signature - a same-signature
+  // duplicate is rejected at collection like solc's "defined twice"), OWN methods only.
+  methods: Map<string, InterfaceMethod[]>;
   parents?: string[]; // direct base interfaces (`extends A, B`), source order; undefined = no bases
 }
 

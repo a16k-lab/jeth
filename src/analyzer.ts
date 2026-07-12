@@ -1020,7 +1020,7 @@ export class Analyzer {
       this.diags.error(cls, 'JETH340', `@interface '${name}' redeclared (the name is already a type)`);
       return;
     }
-    const methods = new Map<string, InterfaceMethod>();
+    const methods = new Map<string, InterfaceMethod[]>();
     for (const member of cls.members) {
       if (ts.isPropertyDeclaration(member)) {
         this.diags.error(member, 'JETH341', `@interface '${name}' cannot declare a field (an interface has no state)`);
@@ -1036,15 +1036,17 @@ export class Analyzer {
       }
       const m = this.collectInterfaceMethod(member, name);
       if (!m) continue;
-      if (methods.has(m.name)) {
+      const group = methods.get(m.name);
+      if (group?.some((g) => g.signature === m.signature)) {
         this.diags.error(
           member,
           'JETH342',
-          `@interface '${name}' method '${m.name}' is overloaded; method overloading inside an interface is not supported yet`,
+          `@interface '${name}' declares '${m.signature}' twice (solc: 'Function with same name and parameter types defined twice.'); overloads must differ in parameter types`,
         );
         continue;
       }
-      methods.set(m.name, m);
+      if (group) group.push(m);
+      else methods.set(m.name, [m]);
     }
     this.interfacesByName.set(name, { name, methods });
     // Keep the interface's class node so C3 linearization can include it as an ordering NODE (solc
@@ -1231,7 +1233,13 @@ export class Analyzer {
         parents.push(pname);
       }
     }
-    const methods = new Map<string, InterfaceMethod>();
+    // OVERLOADS (IFACE-OVERLOADS lift, witnessed vs 0.8.35): an interface may declare the same NAME
+    // with different parameter types (each overload keeps its own canonical signature/selector and
+    // enters the callable surface + the per-signature implementation obligations); a same-signature
+    // duplicate is rejected (solc DeclarationError "Function with same name and parameter types
+    // defined twice." - which also covers a same-params/different-RETURN pair, since the canonical
+    // signature carries only name + params).
+    const methods = new Map<string, InterfaceMethod[]>();
     for (const member of iface.members) {
       if (!ts.isMethodSignature(member)) {
         this.diags.error(member, 'JETH341', `interface '${name}' may only declare methods (no fields, index/call signatures, or accessors)`);
@@ -1239,11 +1247,13 @@ export class Analyzer {
       }
       const m = this.collectNativeInterfaceMethod(member, name);
       if (!m) continue;
-      if (methods.has(m.name)) {
-        this.diags.error(member, 'JETH342', `interface '${name}' method '${m.name}' is overloaded; method overloading inside an interface is not supported yet`);
+      const group = methods.get(m.name);
+      if (group?.some((g) => g.signature === m.signature)) {
+        this.diags.error(member, 'JETH342', `interface '${name}' declares '${m.signature}' twice (solc: 'Function with same name and parameter types defined twice.'); overloads must differ in parameter types`);
         continue;
       }
-      methods.set(m.name, m);
+      if (group) group.push(m);
+      else methods.set(m.name, [m]);
     }
     // NAME-COLLISION rules across the inheritance chain (each cell witnessed vs solc 0.8.35):
     //  - two DISTINCT declaring interfaces reach `name` with the SAME signature (a multi-parent
@@ -1257,11 +1267,13 @@ export class Analyzer {
     //  - same params, different MUTABILITY: solc rejects a loosening and accepts a tightening; JETH
     //    rejects BOTH (the tightening cell is a catalogued safe over-rejection: declare the method in
     //    the derived interface only, or keep the base's mutability) -> JETH387.
-    //  - same name, different params (a cross-chain OVERLOAD, solc accepts) or an IDENTICAL redeclare
-    //    (solc accepts): rejected -> JETH342, the same no-interface-overloading policy as within one
-    //    body (catalogued safe over-rejections; the workaround is to drop the redeclaration).
+    //  - an IDENTICAL redeclare (solc accepts): rejected -> JETH342 (catalogued safe over-rejection
+    //    IFACE-CHAIN-REDECLARE; the workaround is to drop the redeclaration).
+    //  - same name, DIFFERENT params - an OWN overload of an inherited method, or two parents
+    //    contributing different signatures (incl. the two-parent diamond): solc treats the union as an
+    //    overload set, so the entries MERGE (IFACE-OVERLOADS lift; formerly a JETH342 reject).
+    const inherited = new Map<string, { from: string; m: InterfaceMethod }[]>();
     if (parents.length > 0) {
-      const inherited = new Map<string, { from: string; m: InterfaceMethod }>();
       const visited = new Set<string>();
       const collectFrom = (nm: string): void => {
         if (visited.has(nm)) return;
@@ -1269,26 +1281,33 @@ export class Analyzer {
         const d = this.interfacesByName.get(nm);
         if (!d) return;
         for (const p of d.parents ?? []) collectFrom(p);
-        for (const im of d.methods.values()) {
-          const prior = inherited.get(im.name);
-          if (prior && prior.from !== nm) {
-            this.diags.error(
-              iface,
-              prior.m.signature === im.signature ? 'JETH430' : 'JETH342',
-              prior.m.signature === im.signature
-                ? `interface '${name}' inherits '${im.name}' with the same signature from both '${prior.from}' and '${nm}'; redeclaring it with an override list is not expressible in a TS interface, so this diamond is rejected (declare the method in a single shared base)`
-                : `interface '${name}' inherits '${im.name}' with different signatures from '${prior.from}' and '${nm}'; method overloading across an interface inheritance chain is not supported yet`,
-            );
-            continue;
+        for (const g of d.methods.values()) {
+          for (const im of g) {
+            const entries = inherited.get(im.name);
+            const clash = entries?.find((e) => e.m.signature === im.signature);
+            if (clash) {
+              // the visited-set dedups a common grandparent, so a same-signature clash is always
+              // from two DISTINCT declarers - solc's un-unifiable interface diamond.
+              this.diags.error(
+                iface,
+                'JETH430',
+                `interface '${name}' inherits '${im.name}' with the same signature from both '${clash.from}' and '${nm}'; redeclaring it with an override list is not expressible in a TS interface, so this diamond is rejected (declare the method in a single shared base)`,
+              );
+              continue;
+            }
+            if (entries) entries.push({ from: nm, m: im });
+            else inherited.set(im.name, [{ from: nm, m: im }]);
           }
-          inherited.set(im.name, { from: nm, m: im });
         }
       };
       for (const p of parents) collectFrom(p);
-      for (const [mname, own] of methods) {
-        const inh = inherited.get(mname);
-        if (!inh) continue;
-        if (own.signature === inh.m.signature) {
+      for (const [mname, group] of methods) {
+        for (const own of group) {
+          // an own overload with a DIFFERENT signature from every inherited `mname` is a legal
+          // cross-chain overload (solc accepts; merged into the callable union). Only a SAME-signature
+          // redeclare hits the return/mutability/identical-redeclare rules.
+          const inh = inherited.get(mname)?.find((e) => e.m.signature === own.signature);
+          if (!inh) continue;
           if (!this.interfaceMethodReturnsEqual(own, inh.m)) {
             this.diags.error(
               iface,
@@ -1308,13 +1327,49 @@ export class Analyzer {
               `interface '${name}' redeclares '${mname}' already declared by base interface '${inh.from}'; remove the redeclaration (the inherited method is already callable through '${name}')`,
             );
           }
-        } else {
-          this.diags.error(
-            iface,
-            'JETH342',
-            `interface '${name}' method '${mname}' overloads '${inh.from}.${mname}'; method overloading across an interface inheritance chain is not supported yet`,
-          );
         }
+      }
+    }
+    // SELECTOR-COLLISION guard over the interface's callable UNION (own + inherited), witnessed vs
+    // 0.8.35: two different signatures sharing one 4-byte selector reject ("Function signature hash
+    // collision"), whether same-name overloads, different names in one body, or across an extends
+    // chain. Without this, both call spellings would encode the SAME selector - indistinguishable to
+    // the callee - so accepting it would be an over-acceptance (found live on the pre-lift base:
+    // blockHashAskewLimitary(uint256) vs blockHashAddendsInexpansible(uint256), both 0x00000000).
+    // A group whose declarers all lie within ONE parent's chain was already reported when that chain
+    // link was collected (its own union contains the same pair); report each collision once, at the
+    // interface where the colliding declarations first meet.
+    {
+      const union: { from: string; m: InterfaceMethod }[] = [];
+      for (const g of methods.values()) for (const m of g) union.push({ from: name, m });
+      for (const entries of inherited.values()) union.push(...entries);
+      const bySel = new Map<string, { from: string; m: InterfaceMethod }[]>();
+      for (const e of union) {
+        const g = bySel.get(e.m.selector);
+        if (g) g.push(e);
+        else bySel.set(e.m.selector, [e]);
+      }
+      const chainSet = (root: string): Set<string> => {
+        const out = new Set<string>();
+        const walk = (nm: string): void => {
+          if (out.has(nm)) return;
+          out.add(nm);
+          for (const p of this.interfacesByName.get(nm)?.parents ?? []) walk(p);
+        };
+        walk(root);
+        return out;
+      };
+      const parentChains = parents.map(chainSet);
+      for (const g of bySel.values()) {
+        const sigs = [...new Set(g.map((e) => e.m.signature))];
+        if (sigs.length < 2) continue;
+        const froms = [...new Set(g.map((e) => e.from))];
+        if (!froms.includes(name) && parentChains.some((c) => froms.every((f) => c.has(f)))) continue;
+        this.diags.error(
+          iface,
+          'JETH044',
+          `selector clash 0x${g[0]!.m.selector} between ${sigs.join(' and ')} in interface '${name}' (solc: 'Function signature hash collision')`,
+        );
       }
     }
     this.interfacesByName.set(name, { name, methods, ...(parents.length > 0 ? { parents } : {}) });
@@ -1337,27 +1392,32 @@ export class Analyzer {
     return ra.length === rb.length && ra.every((t, i) => typesEqual(t, rb[i]!));
   }
 
-  /** Resolve a method of interface `ifaceName` by name, walking the `extends` parent chain
-   *  depth-first in source order (solc: `interface B is A` makes B's callable surface the UNION of
-   *  the chain; each method keeps its OWN canonical signature/selector/mutability from its original
-   *  declaration). Name collisions across a chain are rejected at collection, so at most one
-   *  declaration can match. Returns undefined when no interface in the chain declares the name. */
-  private lookupInterfaceMethod(ifaceName: string, methodName: string): InterfaceMethod | undefined {
+  /** Resolve the OVERLOAD SET of a method name on interface `ifaceName`, walking the `extends`
+   *  parent chain depth-first in source order (solc: `interface B is A` makes B's callable surface
+   *  the UNION of the chain; each method keeps its OWN canonical signature/selector/mutability from
+   *  its original declaration). The union is unique by signature: a same-signature pair across a
+   *  chain is rejected at collection (JETH430 diamond / JETH342 identical redeclare), so the
+   *  signature dedup here only guards already-rejected sources. Returns [] when no interface in the
+   *  chain declares the name. */
+  private lookupInterfaceMethods(ifaceName: string, methodName: string): InterfaceMethod[] {
     const seen = new Set<string>();
-    const walk = (nm: string): InterfaceMethod | undefined => {
-      if (seen.has(nm)) return undefined;
+    const sigs = new Set<string>();
+    const out: InterfaceMethod[] = [];
+    const walk = (nm: string): void => {
+      if (seen.has(nm)) return;
       seen.add(nm);
       const d = this.interfacesByName.get(nm);
-      if (!d) return undefined;
-      const own = d.methods.get(methodName);
-      if (own) return own;
-      for (const p of d.parents ?? []) {
-        const m = walk(p);
-        if (m) return m;
+      if (!d) return;
+      for (const m of d.methods.get(methodName) ?? []) {
+        if (!sigs.has(m.signature)) {
+          sigs.add(m.signature);
+          out.push(m);
+        }
       }
-      return undefined;
+      for (const p of d.parents ?? []) walk(p);
     };
-    return walk(ifaceName);
+    walk(ifaceName);
+    return out;
   }
 
   private collectNativeInterfaceMethod(member: ts.MethodSignature, ifaceName: string): InterfaceMethod | undefined {
@@ -3618,8 +3678,8 @@ export class Analyzer {
    *  are NOT in the `collected` base-function list (they live in this.interfacesByName), so an
    *  @override on a genuine interface implementation must not be flagged "overrides nothing". We scan
    *  every contract in the current linearization: if any lists an interface whose method matches this
-   *  signature, the override is a legal interface implementation. (No interface overloading in v1, so a
-   *  name lookup + canonical-signature compare suffices.) */
+   *  signature, the override is a legal interface implementation. (Overloads resolve per-signature:
+   *  the name's overload set is scanned for the exact canonical signature.) */
   private overrideImplementsInterfaceMethod(rf: RawFunction): boolean {
     const want = this.sigKey(rf);
     for (const cn of this.linOrder) {
@@ -3629,8 +3689,7 @@ export class Analyzer {
         // An `extends B` base may itself be an interface CHAIN (`interface B extends A`): a method
         // declared anywhere in the chain is a legal @override target (solc W20c: bare `override` on
         // the impl of an inherited interface method is accepted), so walk the chain, not just B.
-        const m = this.lookupInterfaceMethod(hb.name, rf.name);
-        if (m && m.signature === want) return true;
+        if (this.lookupInterfaceMethods(hb.name, rf.name).some((m) => m.signature === want)) return true;
       }
     }
     return false;
@@ -3659,8 +3718,7 @@ export class Analyzer {
       visited.add(nm);
       const d = this.interfacesByName.get(nm);
       if (!d) return; // a contract base: its interfaces are handled via its own linearization row
-      const m = d.methods.get(rf.name);
-      if (m && m.signature === want) {
+      if ((d.methods.get(rf.name) ?? []).some((m) => m.signature === want)) {
         heads.push(nm);
         return; // chain collisions are rejected at collection; nothing deeper can re-declare it
       }
@@ -4049,8 +4107,8 @@ export class Analyzer {
         if (definerContracts.has(cn)) return cn;
         // a direct-base @interface of cn declaring the exact signature is its own delivered definer.
         for (const hb of heritageBases(cls)) {
-          const im = this.interfacesByName.get(hb.name)?.methods.get(winner.name);
-          if (im && im.signature === sk) return hb.name;
+          const ims = this.interfacesByName.get(hb.name)?.methods.get(winner.name);
+          if (ims?.some((im) => im.signature === sk)) return hb.name;
         }
         // otherwise recurse through cn's direct bases and keep only the MAXIMAL deliveries within this
         // subtree (drop a definer that another delivery - reachable in the same subtree - derives from).
@@ -4216,7 +4274,9 @@ export class Analyzer {
     for (const ifaceName of ifaceNames) {
       const iface = this.interfacesByName.get(ifaceName);
       if (!iface) continue; // recorded only for real interfaces, but stay defensive
-      for (const m of iface.methods.values()) {
+      // per-SIGNATURE accounting: every OVERLOAD is its own obligation (solc: a contract missing one
+      // overload of an interface name "should be marked as abstract" - witnessed).
+      for (const m of [...iface.methods.values()].flat()) {
         // P1-4: an interface method implemented by a validated getter var override (uint256 public
         // override x; implementing I.x()) is satisfied - the auto-generated getter is the implementation.
         // resolveGetterOverrides already validated the getter's signature / return / mutability against the
@@ -4339,7 +4399,7 @@ export class Analyzer {
         if (!view.has(ifaceName)) continue; // this interface is not an obligation in X's view
         const iface = this.interfacesByName.get(ifaceName);
         if (!iface) continue;
-        for (const m of iface.methods.values()) {
+        for (const m of [...iface.methods.values()].flat()) {
           if (reported.has(m.signature)) continue;
           // Path 1: validated getter-var override declared at-or-above X.
           const gv = this.getterOverrideVars.get(m.name);
@@ -4756,15 +4816,15 @@ export class Analyzer {
     visit(definingContract);
     const heads: { name: string; mutability: Mutability }[] = [];
     for (const ifaceName of reachableIfaces) {
-      const m = this.interfacesByName.get(ifaceName)?.methods.get(name);
-      if (
-        m &&
-        m.params.length === shape.paramTypes.length &&
-        m.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)) &&
-        this.ifaceReturnsMatchGetterShape(m, shape)
-      ) {
-        heads.push({ name: ifaceName, mutability: m.mutability });
-      }
+      // among the name's overloads, at most one can carry the getter's exact shape (the overload set
+      // is unique by signature), so the first match is THE head this interface contributes.
+      const m = (this.interfacesByName.get(ifaceName)?.methods.get(name) ?? []).find(
+        (cand) =>
+          cand.params.length === shape.paramTypes.length &&
+          cand.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)) &&
+          this.ifaceReturnsMatchGetterShape(cand, shape),
+      );
+      if (m) heads.push({ name: ifaceName, mutability: m.mutability });
     }
     return heads;
   }
@@ -12050,11 +12110,44 @@ export class Analyzer {
     // ---- the method ----
     // The callable surface of `ifaceName` is the UNION of its extends-chain (solc `interface B is A`):
     // an inherited method dispatches STATICCALL/CALL per its ORIGINAL declaration's marker, with the
-    // selector of its own canonical signature (lookupInterfaceMethod walks the parent chain).
-    const method = this.lookupInterfaceMethod(ifaceName, methodName);
-    if (!method) {
+    // selector of its own canonical signature (lookupInterfaceMethods walks the parent chain). An
+    // OVERLOADED name resolves like solc's argument-dependent lookup (witnessed vs 0.8.35): filter by
+    // arity, then by which overload's parameter types ALL the arguments fit (a side-effect-free trial,
+    // the same idiom as the internal resolveOverload); a call fitting two overloads is ambiguous
+    // ('Member "f" not unique after argument-dependent lookup') and a typed argument that fits exactly
+    // one is accepted. The chosen overload's arguments are re-checked for real below.
+    const overloads = this.lookupInterfaceMethods(ifaceName, methodName);
+    if (overloads.length === 0) {
       this.diags.error(pa, 'JETH351', `interface '${ifaceName}' has no method '${methodName}'`);
       return 'handled';
+    }
+    let method: InterfaceMethod;
+    if (overloads.length === 1) {
+      method = overloads[0]!;
+    } else {
+      const applicable = overloads.filter((c) => c.params.length === node.arguments.length);
+      if (applicable.length === 0) {
+        this.diags.error(
+          node,
+          'JETH354',
+          `no overload of '${ifaceName}.${methodName}' takes ${node.arguments.length} argument(s)`,
+        );
+        return 'handled';
+      }
+      const viable = applicable.length === 1 ? applicable : applicable.filter((c) => this.ifaceOverloadArgsMatch(node, c));
+      if (viable.length === 0) {
+        this.diags.error(node, 'JETH355', `no overload of '${ifaceName}.${methodName}' matches the argument types`);
+        return 'handled';
+      }
+      if (viable.length > 1) {
+        this.diags.error(
+          node,
+          'JETH434',
+          `call to '${ifaceName}.${methodName}' is ambiguous (matches ${viable.length} overloads; solc: 'Member "${methodName}" not unique after argument-dependent lookup')`,
+        );
+        return 'handled';
+      }
+      method = viable[0]!;
     }
     const op: 'call' | 'staticcall' =
       method.mutability === 'view' || method.mutability === 'pure' ? 'staticcall' : 'call';
@@ -14396,6 +14489,57 @@ export class Analyzer {
     return ok;
   }
 
+  /** Do ALL of an interface call's arguments fit this overload's parameter types? The InterfaceMethod
+   *  twin of overloadArgsMatch: a TRIAL type-check with every side effect (diagnostics, effect flags,
+   *  callee/pointer sets) rolled back, mirroring the REAL per-argument loop in resolveInterfaceCall
+   *  (checkExpr against the declared param type, the struct name-identity gate, then coerce) so the
+   *  trial can never accept an overload the real check would reject. Interface methods have no
+   *  defaults or named-argument form, so arity was already filtered by the caller. */
+  private ifaceOverloadArgsMatch(node: ts.CallExpression, c: InterfaceMethod): boolean {
+    const diagLen = this.diags.items.length;
+    const rs = this.currentReadsState,
+      ws = this.currentWritesState,
+      re = this.currentReadsEnv;
+    const savedCallees = this.currentCallees;
+    const savedPtrSigs = this.currentPtrCallSigs;
+    const savedPtrVarSources = this.currentPtrVarSources;
+    const savedPtrVarPoisoned = this.currentPtrVarPoisoned;
+    const savedPtrVarCalls = this.currentPtrVarCalls;
+    this.currentCallees = new Set();
+    this.currentPtrCallSigs = new Set();
+    this.currentPtrVarSources = new Map();
+    this.currentPtrVarPoisoned = new Set();
+    this.currentPtrVarCalls = [];
+    let ok = true;
+    for (let i = 0; i < c.params.length; i++) {
+      const pt = c.params[i]!.type;
+      const a = this.checkExpr(node.arguments[i]!, pt);
+      if (!a) {
+        ok = false;
+        break;
+      }
+      if (pt.kind === 'struct') {
+        if (a.type.kind !== 'struct' || a.type.name !== pt.name) {
+          ok = false;
+          break;
+        }
+      } else {
+        this.coerce(a, pt, node.arguments[i]!);
+      }
+    }
+    ok = ok && this.diags.items.length === diagLen; // a clean fit leaves no new diagnostics
+    this.diags.items.length = diagLen; // discard trial diagnostics
+    this.currentReadsState = rs;
+    this.currentWritesState = ws;
+    this.currentReadsEnv = re;
+    this.currentCallees = savedCallees;
+    this.currentPtrCallSigs = savedPtrSigs;
+    this.currentPtrVarSources = savedPtrVarSources;
+    this.currentPtrVarPoisoned = savedPtrVarPoisoned;
+    this.currentPtrVarCalls = savedPtrVarCalls;
+    return ok;
+  }
+
   /** Inheritance: resolve `super.f(args)` to the next implementation in the linearization. Inside a
    *  function defined by `Cx`, super.f resolves to the FIRST contract AFTER Cx (in the deployed
    *  contract's full linearization) that DEFINES f - exactly solc's MRO super order. A super outside
@@ -14725,12 +14869,13 @@ export class Analyzer {
    *  then falls through to normal property-access handling). */
   private qualifiedSelectorOf(node: ts.Node, typeName: string, memberName: string): Expr | undefined | 'not-a-type' {
     // (1) an @interface: every interface method is @external, so any declared method has a selector.
-    // interfacesByName holds ONLY the directly-declared methods (interface overloading is rejected at
-    // collection, and inherited methods are NOT flattened in) - exactly solc's resolution set.
+    // interfacesByName holds ONLY the directly-declared methods (inherited methods are NOT flattened
+    // in) - exactly solc's resolution set. An OVERLOADED name is ambiguous as a bare member reference
+    // (witnessed vs 0.8.35: 'Member "f" not unique after argument-dependent lookup').
     const iface = this.interfacesByName.get(typeName);
     if (iface) {
-      const m = iface.methods.get(memberName);
-      if (!m) {
+      const group = iface.methods.get(memberName);
+      if (!group) {
         this.diags.error(
           node,
           'JETH074',
@@ -14738,7 +14883,15 @@ export class Analyzer {
         );
         return undefined;
       }
-      return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + m.selector) << 224n };
+      if (group.length > 1) {
+        this.diags.error(
+          node,
+          'JETH074',
+          `.selector on overloaded interface method '${typeName}.${memberName}' is ambiguous (it has ${group.length} overloads; solc: 'Member "${memberName}" not unique after argument-dependent lookup')`,
+        );
+        return undefined;
+      }
+      return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: BigInt('0x' + group[0]!.selector) << 224n };
     }
     // (2) a @contract / @abstract type: resolve `memberName` among the methods DECLARED DIRECTLY in that
     // class's body (not inherited - solc rejects `Derived.baseFn.selector`). The method must be @external
@@ -14812,7 +14965,8 @@ export class Analyzer {
       return undefined;
     }
     let acc = 0n;
-    for (const m of iface.methods.values()) acc ^= BigInt('0x' + m.selector);
+    // every OVERLOAD contributes its own selector to the XOR (witnessed vs 0.8.35).
+    for (const g of iface.methods.values()) for (const m of g) acc ^= BigInt('0x' + m.selector);
     return { kind: 'literalInt', type: { kind: 'bytesN', size: 4 }, value: acc << 224n };
   }
 
@@ -19474,11 +19628,23 @@ export class Analyzer {
     const ifaceName = fnRef.expression.text;
     const iface = this.interfacesByName.get(ifaceName)!;
     const methodName = fnRef.name.text;
-    const method = iface.methods.get(methodName);
-    if (!method) {
+    const methodGroup = iface.methods.get(methodName);
+    if (!methodGroup) {
       this.diags.error(fnRef, 'JETH351', `interface '${ifaceName}' has no method '${methodName}'`);
       return undefined;
     }
+    if (methodGroup.length > 1) {
+      // witnessed vs 0.8.35: abi.encodeCall(I.f, (...)) with an overloaded f rejects at the member
+      // reference itself ('Member "f" not unique after argument-dependent lookup'), even when the
+      // argument tuple's arity would pick a unique overload - match that, fail closed.
+      this.diags.error(
+        fnRef,
+        'JETH434',
+        `abi.encodeCall: '${ifaceName}.${methodName}' is overloaded and the bare method reference is ambiguous (solc: 'Member "${methodName}" not unique after argument-dependent lookup')`,
+      );
+      return undefined;
+    }
+    const method = methodGroup[0]!;
     const argsNode = node.arguments[1]!;
     if (!ts.isArrayLiteralExpression(argsNode)) {
       this.diags.error(

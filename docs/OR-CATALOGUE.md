@@ -415,11 +415,6 @@ pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
   closed 4 pre-existing over-acceptances in the shared machinery: immutable `@override`-of-nothing,
   `@virtual` on an immutable, and an unattached same-file interface legitimizing `@override` getter
   vars (state var AND immutable flavors) - all now solc-witnessed rejects.
-- **IFACE-OVERLOADS** (JETH342): an interface declaring overloads of one method name rejects at the
-  interface; solc accepts a fully-implementing contract. Workaround: distinct method names.
-- **PURE-GET-OBLIGATION** (JETH352): an interface `p(): Pure<u256>` obligation implemented by a
-  `get p(): Pure<u256>` rejects while the solc mirror accepts. Workaround: declare the obligation
-  `View<T>` (or bare) and keep the impl's stricter body.
 - **STRING-FIELD-INIT - LIFTED (2026-07-12)**: a `string`/`bytes` state field WITH a string-literal
   initializer (`s: string = "x"`, `Visible<string>`, `b: bytes = "ab"`, short/long/empty/unicode/
   no-sub template) now compiles: desugared into the implicit-constructor assignment (the exact
@@ -434,6 +429,29 @@ pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
   **FIELD-INIT-NS** - a `@storage('ns')` field initializer. Invalid UTF-8 rejects JETH447 like the
   twin (solc "Contains invalid UTF-8 sequence"); `static s: string` stays JETH310 (solc: "Immutable
   variables cannot have a non-value type").
+- **IFACE-OVERLOADS - LIFTED (2026-07-12)**: a native interface may declare same-name
+  different-params overloads (in-body, via `extends`, and across a two-parent diamond of different
+  sigs); each overload keeps its own selector, is a per-signature obligation (missing one ->
+  JETH385 leaf / JETH483 middle, solc "should be marked as abstract"), and the call site resolves by
+  arity then an exact-fit type trial (both-fit = JETH434, no-fit = JETH355/precise arg error, all
+  solc "Member not unique / not found after argument-dependent lookup" parity, incl. the u8-widens-
+  into-both ambiguity). `type(I).interfaceId` XORs every overload; a bare overloaded member
+  reference (`I.f.selector` -> JETH074, `abi.encodeCall(I.f, ...)` -> JETH434) fails closed like
+  solc's "Member not unique". A same-name same-params duplicate stays JETH342 (solc "defined
+  twice", return type ignored). The same lift closed a PRE-EXISTING OVER-ACCEPTANCE in the same
+  machinery: two different signatures in an interface's callable union sharing one 4-byte selector
+  (e.g. blockHashAskewLimitary(uint256) / blockHashAddendsInexpansible(uint256), both 0x00000000)
+  compiled silently while solc rejects "Function signature hash collision" - now JETH044 (in-body,
+  same-name mined pair, and across a chain). Verified by runtime differentials with a solc-authored
+  callee + state readback (test/native-interface-overloads.test.ts). The chain rows
+  IFACE-CHAIN-REDECLARE (JETH342) / IFACE-CHAIN-TIGHTEN (JETH387) / IFACE-DIAMOND-OVERRIDE-LIST
+  same-sig JETH430 are UNCHANGED; the IFACE-CHAIN-OVERLOAD row is lifted by this work.
+- **PURE-GET-OBLIGATION - RESOLVED (stale pin; lifted by GET-MUT-HEADROOM `9a77971`)**: the
+  recorded shape (`p(): Pure<u256>` obligation implemented by `get p(): Pure<u256>`) ACCEPTS on the
+  base and runs byte-equal to the solc mirror; the ladder matches solc exactly (pure impl of a View
+  obligation accepts; a view/state-reading impl of a Pure obligation rejects JETH387 = solc
+  'changes state mutability from "pure" to "view"'). Pinned in
+  test/native-interface-overloads.test.ts (Row B section).
 - **TWO-BASE-GET-DIAMOND - LIFTED (2026-07-12, `9a77971`)**: the headline get-form leaf
   `@override(A2, B2)` was ALREADY accepted at the audit base (stale pin); `9a77971` lifted the VAR
   form: a getter var (plain / constant / immutable) with `@override(A2, B2)` unifying a get declared
@@ -471,11 +489,13 @@ pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
   **IFACE-CHAIN-REDECLARE** (JETH342: identical redeclare of an inherited method; solc accepts),
   **IFACE-CHAIN-TIGHTEN** (JETH387: same-signature redeclare tightening mutability, e.g. bare ->
   View; solc accepts the tightening, rejects the loosening - JETH rejects both),
-  **IFACE-CHAIN-OVERLOAD** (JETH342: same name, different params across the chain; solc treats it as
-  an overload - same policy as the in-body JETH342 no-overloading rule), and
+  **IFACE-CHAIN-OVERLOAD - LIFTED (2026-07-12, with IFACE-OVERLOADS)**: same name, different params
+  across the chain now MERGES into the overload union exactly like solc (in-body overloading landed
+  in the same commit; see the IFACE-OVERLOADS row above), and
   **IFACE-DIAMOND-OVERRIDE-LIST** (JETH430: two DISTINCT parents declaring the same signature needs a
   redeclare carrying `override(A, B)`, which a TS interface method cannot spell; solc-reject parity
-  for the bare shape, OR only for the unspellable redeclare cell).
+  for the bare shape, OR only for the unspellable redeclare cell; two parents contributing
+  DIFFERENT signatures of one name merge as overloads - lifted, witnessed).
 - **MANGLE-INJECT** (JETH373/434/044/065/374/375): a user identifier spelled like a `#` mangle
   product (`$p$C$x`) fails CLOSED in all four spellings (never merges storage/dispatch).
 - **CONST-FWD-REF** (JETH048/065): constant initializers are declaration-order-dependent; solc's are

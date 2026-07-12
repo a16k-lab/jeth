@@ -417,10 +417,18 @@ describe('typed interface calls: clean rejections (no crash)', () => {
       jethRejects(`interface IFoo { #bar(): u256; }\nclass C { get f(): External<u256> { return 0n; } }`),
     ).toBe(true);
   });
-  it('rejects method overloading in an interface', () => {
+  it('accepts method overloading in an interface (IFACE-OVERLOADS lift); a SAME-signature duplicate still rejects', () => {
+    // LIFTED 2026-07-12: solc accepts same-name different-params overloads in an interface; the full
+    // overload matrix (dispatch, obligations, ambiguity, selector collisions) lives in
+    // test/native-interface-overloads.test.ts. The residual reject is the solc-parity duplicate.
     expect(
       jethRejects(
         `interface IFoo { bar(x: u256): u256; bar(x: bool): u256; }\nclass C { get f(): External<u256> { return 0n; } }`,
+      ),
+    ).toBe(false);
+    expect(
+      jethRejects(
+        `interface IFoo { bar(x: u256): u256; bar(y: u256): u256; }\nclass C { get f(): External<u256> { return 0n; } }`,
       ),
     ).toBe(true);
   });
