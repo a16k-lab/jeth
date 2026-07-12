@@ -244,7 +244,7 @@ export class Analyzer {
   // invalid attempt (no matching base / loosened mutability / wrong return type) is cleanly rejected.
   private getterOverrideVars = new Map<
     string,
-    { node: ts.PropertyDeclaration; definingContract: string; overrideList?: string[] }
+    { node: ts.PropertyDeclaration; definingContract: string; overrideList?: string[]; kind: 'state' | 'constant' | 'immutable' }
   >();
   // The declared type of each getter-override var (name -> type), captured in resolveGetterOverrides so
   // the later interface-obligation check (which runs before stateByName is populated) can recompute the
@@ -255,7 +255,7 @@ export class Analyzer {
   private validGetterOverrides = new Set<string>();
   // @constant fields: slot-free compile-time constants. The folded literal is inlined at every
   // read site (no SLOAD, no storage slot), so a @constant never shifts the slot of a @state var.
-  private constantsByName = new Map<string, { value: bigint | boolean | Uint8Array; type: JethType }>();
+  private constantsByName = new Map<string, { value: bigint | boolean | Uint8Array; type: JethType; declaredIn?: string }>();
   private publicConstantNames = new Set<string>(); // @external @constant fields that get an auto-generated getter
   // @immutable fields (Phase 5): value-type, assigned once in the constructor, baked into runtime
   // code via setimmutable (NO storage slot - never enters rawState/planLayout). immutableOrder keeps
@@ -2245,21 +2245,41 @@ export class Analyzer {
           // implements. Only a getter (`@external`) can override a function; a non-@override same-name
           // clash is left to the normal JETH133 path.
           // The Visible<T> marker twin: a bare marker field is implicit @state (item #9), so the marker
-          // plus @override is recorded exactly like `@external @state @override` (isStateField keeps a
-          // static / @constant / @immutable marker field out - those reject @override in their collectors).
-          if (
-            (decs.includes('external') || visibleMarker) &&
-            (decs.includes('state') || decs.includes('storage') || (visibleMarker && this.isStateField(member, decs))) &&
-            decs.includes('override')
-          ) {
-            // Capture the explicit @override(I1, I2) base list (the diamond/multi-interface completeness
-            // list) so resolveGetterOverrides can enforce solc's per-interface membership + completeness.
-            const overrideCall = decoratorCall(member, 'override');
-            const overrideList =
-              overrideCall && overrideCall.arguments.length > 0
-                ? overrideCall.arguments.map((a) => (ts.isIdentifier(a) ? a.text : a.getText()))
-                : undefined;
-            this.getterOverrideVars.set(nm, { node: member, definingContract: cn, overrideList });
+          // plus @override is recorded exactly like `@external @state @override`.
+          // OVERRIDE-VAR-STATIC: a Visible<T> CONSTANT (`static K: Visible<T> = v` / @constant) and a
+          // Visible<T> IMMUTABLE (`static K: Visible<T>` + ctor assign / @immutable) may ALSO carry
+          // @override - solc accepts `uint256 public constant override(A, B) x = 7;` and the immutable
+          // twin (witnessed vs 0.8.35). They are recorded with their KIND so resolveGetterOverrides can
+          // apply solc's mutability rule: a CONSTANT getter counts as PURE in override checking (it may
+          // override a pure head; witnessed "changes state mutability from payable to pure"), while an
+          // immutable/state getter counts as VIEW (a pure head stays rejected, "pure to view").
+          // A NON-public (no Visible<T>/@external) static with @override is gated in its collector,
+          // mirroring solc's "Override can only be used with public state variables."
+          if ((decs.includes('external') || visibleMarker) && decs.includes('override')) {
+            const isStaticKw = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+            const kind: 'state' | 'constant' | 'immutable' =
+              decs.includes('state') || decs.includes('storage') || this.isStateField(member, decs)
+                ? 'state'
+                : decs.includes('constant') || (isStaticKw && member.initializer !== undefined)
+                  ? 'constant'
+                  : decs.includes('immutable') || isStaticKw
+                    ? 'immutable'
+                    : 'state';
+            const isVarKind =
+              kind !== 'state' ||
+              decs.includes('state') ||
+              decs.includes('storage') ||
+              (visibleMarker && this.isStateField(member, decs));
+            if (isVarKind) {
+              // Capture the explicit @override(I1, I2) base list (the diamond/multi-interface completeness
+              // list) so resolveGetterOverrides can enforce solc's per-interface membership + completeness.
+              const overrideCall = decoratorCall(member, 'override');
+              const overrideList =
+                overrideCall && overrideCall.arguments.length > 0
+                  ? overrideCall.arguments.map((a) => (ts.isIdentifier(a) ? a.text : a.getText()))
+                  : undefined;
+              this.getterOverrideVars.set(nm, { node: member, definingContract: cn, overrideList, kind });
+            }
           }
           this.collectStateVar(member, rawState, cn);
         }
@@ -4002,14 +4022,34 @@ export class Analyzer {
         );
         const liveDefs = [...new Set(live.map((d) => d.def))];
         if (liveDefs.length >= 2) {
-          const named = liveDefs.filter((x) => x !== '<ambiguous>');
-          this.diags.error(
-            cls,
-            'JETH430',
-            `contract '${cn}' must override function '${winner.name}': two or more base classes (${named.join(', ')}) define it with the same name and parameter types`,
-          );
+          // OVERRIDE-VAR-MULTIHEAD: a VALIDATED getter-var override (@override(A, B) x: Visible<T>,
+          // including a Visible constant/immutable) declared AT `cn` IS cn's override of this signature -
+          // solc accepts `uint256 public override(A2, B2) g;` unifying two base declarations (witnessed).
+          // A var declared at a MORE-DERIVED contract does NOT excuse cn (solc reports the un-unifying
+          // contract itself), so the skip is exact-contract only.
+          const gvv = this.getterOverrideVars.get(winner.name);
+          const varUnifies =
+            gvv !== undefined &&
+            gvv.definingContract === cn &&
+            this.validGetterOverrides.has(winner.name) &&
+            this.getterOverrideMatchesSig(winner);
+          if (!varUnifies) {
+            const named = liveDefs.filter((x) => x !== '<ambiguous>');
+            this.diags.error(
+              cls,
+              'JETH430',
+              `contract '${cn}' must override function '${winner.name}': two or more base classes (${named.join(', ')}) define it with the same name and parameter types`,
+            );
+          }
         }
       }
+
+      // OVERRIDE-VAR-MULTIHEAD: a validated getter-var override matching this signature replaces the whole
+      // function group - the auto-generated getter is the dispatched entry, every base version is dropped
+      // (a public state-var override is terminal in solc: implicitly non-virtual, not further overridable,
+      // and its bases are not super targets). Mirrors the single-contract branch drop above; without it the
+      // base winner double-registered the selector (JETH044) and a bodyless winner still tripped JETH380.
+      if (this.validGetterOverrides.has(winner.name) && this.getterOverrideMatchesSig(winner)) continue;
 
       // A bodyless (unimplemented @virtual) definition that is NEVER overridden by a concrete impl,
       // in a NON-abstract deployed contract, is unimplemented -> reject. (If the winner itself is
@@ -4134,6 +4174,24 @@ export class Analyzer {
             if (heads.length <= 1) continue;
           }
         }
+        // OVERRIDE-VAR-STATIC (L14 twin): a Visible CONSTANT / IMMUTABLE without @override also
+        // implements a single-head interface method (solc >= 0.8.8; witnessed: `uint256 public
+        // constant x = 7;` satisfies `interface A { function x() external view returns (uint256); }`).
+        // A CONSTANT getter counts as PURE, so it satisfies a pure/view/nonpayable method; an IMMUTABLE
+        // getter is VIEW (view/nonpayable only). Same single-head guard as the state-var path.
+        {
+          const sc = this.publicConstantNames.has(m.name) ? this.constantsByName.get(m.name) : undefined;
+          const si = !sc && this.publicImmutableNames.has(m.name) ? this.immutablesByName.get(m.name) : undefined;
+          const t = sc?.type ?? si?.type;
+          const mutOk = sc
+            ? m.mutability !== 'payable'
+            : m.mutability === 'view' || m.mutability === 'nonpayable';
+          if (t !== undefined && mutOk && this.getterShapeMatchesIfaceMethod(m, t)) {
+            const shape = this.getterSignatureShape(m.name, t)!;
+            const heads = this.getterInterfaceOverrideHeads(deployedName, m.name, shape);
+            if (heads.length <= 1) continue;
+          }
+        }
         const w = winnerBySig.get(m.signature);
         if (!w || w.bodyless) {
           // Unimplemented interface method. An @abstract deployed contract may leave it open (solc). A
@@ -4233,6 +4291,24 @@ export class Analyzer {
               (m.mutability === 'view' || m.mutability === 'nonpayable') &&
               this.getterShapeMatchesIfaceMethod(m, t)
             ) {
+              const shape = this.getterSignatureShape(m.name, t)!;
+              const heads = this.getterInterfaceOverrideHeads(cn, m.name, shape);
+              if (heads.length <= 1) continue;
+            }
+          }
+          // Path 2b (OVERRIDE-VAR-STATIC): a Visible CONSTANT / IMMUTABLE at-or-above X whose
+          // auto-getter matches also satisfies X's obligation (witnessed: a `uint256 public constant
+          // x = 7;` in a non-abstract middle satisfies its interface view). Constant getters count as
+          // PURE (satisfy pure/view/nonpayable); immutable getters are VIEW. Same single-head guard.
+          {
+            const sc = this.publicConstantNames.has(m.name) ? this.constantsByName.get(m.name) : undefined;
+            const si = !sc && this.publicImmutableNames.has(m.name) ? this.immutablesByName.get(m.name) : undefined;
+            const t = sc?.type ?? si?.type;
+            const owner = sc?.declaredIn ?? si?.declaredIn;
+            const mutOk = sc
+              ? m.mutability !== 'payable'
+              : m.mutability === 'view' || m.mutability === 'nonpayable';
+            if (t !== undefined && owner !== undefined && view.has(owner) && mutOk && this.getterShapeMatchesIfaceMethod(m, t)) {
               const shape = this.getterSignatureShape(m.name, t)!;
               const heads = this.getterInterfaceOverrideHeads(cn, m.name, shape);
               if (heads.length <= 1) continue;
@@ -4376,9 +4452,39 @@ export class Analyzer {
    *  set (base virtuals live here); interface methods are matched separately (they are not in `collected`).
    *  `stateVarType` maps a getter-var name to its declared type. */
   private resolveGetterOverrides(collected: RawFunction[], stateVarType: Map<string, JethType>): void {
+    // Transitive base set (contracts + interfaces) per contract name, for CONTRACT-HEAD MAXIMALITY:
+    // solc's override heads are the per-direct-base MOST-DERIVED declarers, so a grandbase overridden
+    // by a named middle is NOT itself a head (deep diamond: `override(M1, M2)` is complete even though
+    // grandbase A also declares the signature). Memo set before recursion tolerates a heritage cycle.
+    const baseSetMemo = new Map<string, Set<string>>();
+    const transitiveBases = (cn: string): Set<string> => {
+      const memo = baseSetMemo.get(cn);
+      if (memo) return memo;
+      const out = new Set<string>();
+      baseSetMemo.set(cn, out);
+      const cls = this.classByName.get(cn) ?? this.interfaceClassByName.get(cn);
+      if (!cls) return out;
+      for (const hb of heritageBases(cls)) {
+        out.add(hb.name);
+        for (const b of transitiveBases(hb.name)) out.add(b);
+      }
+      return out;
+    };
     for (const [name, info] of this.getterOverrideVars) {
-      const t = stateVarType.get(name);
-      if (t === undefined) continue; // not a real @state var (collection already errored)
+      // OVERRIDE-VAR-STATIC: the var may be a @state getter var (type from the state table), a Visible
+      // CONSTANT, or a Visible IMMUTABLE (types from their own registries). A CONSTANT getter counts as
+      // PURE in solc's override mutability check (witnessed: `uint256 public constant override x = 7;`
+      // over a pure interface method ACCEPTS; over payable rejects "payable to pure"); an immutable or
+      // state getter counts as VIEW (a pure head rejects "pure to view").
+      const t =
+        info.kind === 'constant'
+          ? this.constantsByName.get(name)?.type
+          : info.kind === 'immutable'
+            ? this.immutablesByName.get(name)?.type
+            : stateVarType.get(name);
+      if (t === undefined) continue; // not a real var of its kind (collection already errored)
+      const getterIsPure = info.kind === 'constant';
+      const getterMutLabel = getterIsPure ? 'pure' : 'view';
       this.getterOverrideVarType.set(name, t);
       const shape = this.getterSignatureShape(name, t);
       // A getter is VIEW and takes exactly its mapping-key / array-index params, returns the leaf value.
@@ -4400,22 +4506,11 @@ export class Analyzer {
       const sameNameBases = collected.filter(
         (rf) => rf.name === name && rf.definingContract !== undefined && (idxOf.get(rf.definingContract) ?? 0) > myIdx,
       );
-      const ifaceHead = this.getterOverridesInterfaceMethod(name, shape);
       const sigMatch = sameNameBases.filter(
         (rf) =>
           rf.params.length === shape.paramTypes.length &&
           rf.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)),
       );
-      if (sigMatch.length === 0 && !ifaceHead) {
-        // @override but there is NO base function (contract or interface) with this getter's signature.
-        this.diags.error(
-          info.node,
-          'JETH433',
-          `getter '${name}' has @override but overrides no base function with a matching signature`,
-        );
-        continue;
-      }
-      let bad = false;
       // Interface OVERRIDE HEADS: every @interface (reachable from the contract's heritage) that DIRECTLY
       // declares a method of this getter's exact signature. solc treats each such interface - alongside each
       // base CONTRACT declaring the signature - as an overridden base that must be named in @override(...).
@@ -4425,22 +4520,52 @@ export class Analyzer {
       // interface method (a mutability change). This mirrors the regular-function override path (JETH381/
       // JETH415), which the getter path previously skipped by short-circuiting on the first matching iface.
       const ifaceHeads = this.getterInterfaceOverrideHeads(info.definingContract, name, shape);
+      if (sigMatch.length === 0 && ifaceHeads.length === 0) {
+        // @override but there is NO base function (contract or interface) with this getter's signature.
+        // The existence probe uses the HERITAGE-REACHABLE heads (getterInterfaceOverrideHeads), not the
+        // whole-file interface registry: an interface the class does NOT extend is no override target
+        // (solc: "Public state variable has override specified but does not override anything." - the
+        // registry-wide scan over-accepted `interface A {...} class C { @override x: Visible<u256>; }`).
+        // A reachable head with an incompatible MUTABILITY still counts as existing; the per-head
+        // mutability loop below rejects it with solc's "changes state mutability" flavor.
+        this.diags.error(
+          info.node,
+          'JETH433',
+          `getter '${name}' has @override but overrides no base function with a matching signature`,
+        );
+        continue;
+      }
+      let bad = false;
       // A view getter overriding a @pure or @payable interface method loosens/changes mutability -> reject
       // (solc: "Overriding public state variable changes state mutability ..."). Fires per interface head,
       // independent of the override list (a fully-listed @override(I1, I2) with a pure I2 is still rejected).
+      // A CONSTANT getter counts as PURE (witnessed), so only a payable head rejects for it.
       for (const h of ifaceHeads) {
-        if (h.mutability === 'pure' || h.mutability === 'payable') {
+        if ((h.mutability === 'pure' && !getterIsPure) || h.mutability === 'payable') {
           this.diags.error(
             info.node,
             'JETH433',
-            `getter '${name}' (view) cannot override the @${h.mutability} method declared in interface '${h.name}' (a getter changes state mutability)`,
+            `getter '${name}' (${getterMutLabel}) cannot override the @${h.mutability} method declared in interface '${h.name}' (a getter changes state mutability)`,
           );
           bad = true;
         }
       }
       // The full override-head set = distinct base CONTRACTS declaring the signature + interface heads. solc
       // counts each as one overridden base for list completeness / membership.
-      const contractHeadNames = [...new Set(sigMatch.map((rf) => rf.definingContract!))];
+      // CONTRACT-HEAD MAXIMALITY (mirrors validateOverrideList): for each DIRECT base of the var's
+      // contract, the head is the MOST-DERIVED declarer within that base's hierarchy. A grandbase
+      // subsumed by an overriding middle on the SAME path is not a head; a grandbase delivered
+      // UN-overridden through a sibling path remains one.
+      const declarers = new Set(sigMatch.map((rf) => rf.definingContract!));
+      const vCls = this.classByName.get(info.definingContract);
+      const directBases = vCls ? heritageBases(vCls).map((h) => h.name) : [];
+      const definerWithin = (base: string): string | undefined => {
+        const cand = [...declarers].filter((x) => x === base || transitiveBases(base).has(x));
+        return cand.find((x) => !cand.some((y) => y !== x && transitiveBases(y).has(x)));
+      };
+      const contractHeadNames = [
+        ...new Set(directBases.map(definerWithin).filter((x): x is string => x !== undefined)),
+      ];
       const allHeadNames = [...new Set([...contractHeadNames, ...ifaceHeads.map((h) => h.name)])];
       const headSet = new Set(allHeadNames);
       const list = info.overrideList ?? [];
@@ -4478,10 +4603,11 @@ export class Analyzer {
           this.diags.error(info.node, 'JETH433', `getter '${name}' return type must exactly match the base function's return type`);
           bad = true;
         }
-        // mutability: a getter is VIEW. solc accepts overriding a VIEW or NONPAYABLE base (view is equal or
-        // stricter), but REJECTS overriding a PURE base (view is looser than pure) or a PAYABLE base.
-        if (base.mutability === 'pure' || base.mutability === 'payable') {
-          this.diags.error(info.node, 'JETH433', `getter '${name}' (view) cannot override a @${base.mutability} base function (a getter changes state mutability)`);
+        // mutability: a state/immutable getter is VIEW - solc accepts overriding a VIEW or NONPAYABLE base
+        // (view is equal or stricter) but REJECTS a PURE base (view is looser than pure) or a PAYABLE one.
+        // A CONSTANT getter counts as PURE (witnessed vs 0.8.35), so only a payable base rejects for it.
+        if ((base.mutability === 'pure' && !getterIsPure) || base.mutability === 'payable') {
+          this.diags.error(info.node, 'JETH433', `getter '${name}' (${getterMutLabel}) cannot override a @${base.mutability} base function (a getter changes state mutability)`);
           bad = true;
         }
         // visibility: a getter is EXTERNAL; the base must be external too (JETH maps public->external).
@@ -4528,29 +4654,6 @@ export class Analyzer {
       m.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)) &&
       this.ifaceReturnsMatchGetterShape(m, shape)
     );
-  }
-
-  /** P1-4: does a getter of `name` with `(paramTypes) view returns (returnType)` implement a method of a
-   *  directly-extended @interface (an interface method IS a valid override target for a public getter)?
-   *  A `nonpayable`/`view` interface method is satisfiable by a `view` getter; a `pure`/`payable` one is
-   *  NOT (that mutability mismatch is enforced separately, per interface, in resolveGetterOverrides). */
-  private getterOverridesInterfaceMethod(
-    name: string,
-    shape: { paramTypes: JethType[]; returnType: JethType; returnTypes?: JethType[] },
-  ): boolean {
-    for (const iface of this.interfacesByName.values()) {
-      const m = iface.methods.get(name);
-      if (!m) continue;
-      if (
-        m.params.length === shape.paramTypes.length &&
-        m.params.every((p, i) => typesEqual(p.type, shape.paramTypes[i]!)) &&
-        this.ifaceReturnsMatchGetterShape(m, shape) &&
-        (m.mutability === 'view' || m.mutability === 'nonpayable')
-      ) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /** P1-4: the @interface OVERRIDE HEADS for a getter var of `name` declared in contract `definingContract`
@@ -6473,7 +6576,7 @@ export class Analyzer {
       }
       // `static K = <init>` = a compile-time @constant; `static M;` (no initializer, set in the ctor) = an
       // @immutable. Routed through the exact same collectors, so byte-identical to the decorated form.
-      if (member.initializer) this.collectConstant(member);
+      if (member.initializer) this.collectConstant(member, declaredIn);
       else this.collectImmutable(member, declaredIn);
       return;
     }
@@ -6520,7 +6623,7 @@ export class Analyzer {
       return;
     }
     if (isConstant) {
-      this.collectConstant(member);
+      this.collectConstant(member, declaredIn);
       return;
     }
     if (isImmutable) {
@@ -6740,15 +6843,19 @@ export class Analyzer {
   // is auto-generated (see publicConstantNames / synthConstantGetter). Scoped to value-type
   // constants (uintN/intN/bool/address/bytesN) plus string literals; a bytes/aggregate constant
   // stays a clean over-rejection.
-  private collectConstant(member: ts.PropertyDeclaration): void {
+  private collectConstant(member: ts.PropertyDeclaration, declaredIn?: string): void {
     const name = (member.name as ts.Identifier).text;
     const decs = decoratorNames(member);
+    const isPublic = decs.includes('external') || this.visibleFieldMarkers.has(member); // @external / Visible<T> @constant -> auto-generated getter
     // Only @external may combine with @constant (synthesizing solc's public-constant getter). The
     // OTHER visibility/mutability decorators are nonsensical on a constant (no storage, always
-    // readable internally), and @override/@virtual on a constant would otherwise be SILENTLY
-    // swallowed (solc rejects `constant override` with no matching base, and forbids virtual state
-    // variables outright) - all stay gated instead of ignored.
-    const extraDec = ['public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'override', 'virtual'].find(
+    // readable internally), and @virtual on a constant is forbidden outright (solc forbids virtual
+    // state variables) - all stay gated instead of ignored.
+    // OVERRIDE-VAR-STATIC: @override on a PUBLIC (Visible<T>/@external) constant is the solc-accepted
+    // `uint256 public constant override(A, B) x = 7;` - it flows through resolveGetterOverrides
+    // (recorded in analyzeContract) exactly like a state getter var. On a NON-public constant it stays
+    // rejected (solc: "Override can only be used with public state variables.").
+    const extraDec = ['public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'virtual'].find(
       (d) => decs.includes(d),
     );
     if (extraDec) {
@@ -6759,7 +6866,14 @@ export class Analyzer {
       );
       return;
     }
-    const isPublic = decs.includes('external') || this.visibleFieldMarkers.has(member); // @external / Visible<T> @constant -> auto-generated getter
+    if (decs.includes('override') && !isPublic) {
+      this.diags.error(
+        member,
+        'JETH466',
+        `@override on constant '${name}' requires a public getter (mark it Visible<T> / @external); solc: "Override can only be used with public state variables."`,
+      );
+      return;
+    }
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
     // Folding supports integer + bool + address + bytesN + string constants. A bytes/aggregate
@@ -6800,7 +6914,7 @@ export class Analyzer {
         this.diags.error(init, 'JETH048', `@constant '${name}' string literal contains an invalid UTF-8 sequence`);
         return;
       }
-      this.constantsByName.set(name, { value: cbytes, type });
+      this.constantsByName.set(name, { value: cbytes, type, declaredIn });
       if (isPublic) this.publicConstantNames.add(name);
       return;
     }
@@ -6822,7 +6936,7 @@ export class Analyzer {
       this.diags.error(member.initializer, 'JETH048', `@constant '${name}' initializer must be a constant expression`);
       return;
     }
-    this.constantsByName.set(name, { value: folded, type });
+    this.constantsByName.set(name, { value: folded, type, declaredIn });
     if (isPublic) this.publicConstantNames.add(name);
   }
 
@@ -6837,7 +6951,9 @@ export class Analyzer {
     // (name() view returns (T), reading the immutable via loadimmutable - NO storage slot). It is
     // synthesized in analyzeContract (see publicImmutableNames). The OTHER visibility/mutability
     // decorators are nonsensical on an immutable (no parameterized getter, no storage) and stay gated.
-    const extra = ['public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden'].find((d) =>
+    // @virtual is gated too (solc forbids virtual state variables outright - previously it was
+    // SILENTLY swallowed here, an over-acceptance).
+    const extra = ['public', 'internal', 'private', 'view', 'pure', 'payable', 'read', 'hidden', 'virtual'].find((d) =>
       decs.includes(d),
     );
     if (extra) {
@@ -6848,7 +6964,22 @@ export class Analyzer {
       );
       return;
     }
-    if (decs.includes('external') || this.visibleFieldMarkers.has(member)) this.publicImmutableNames.add(name); // @external / Visible<T> @immutable -> auto-generated view getter
+    const isPublicImm = decs.includes('external') || this.visibleFieldMarkers.has(member);
+    // OVERRIDE-VAR-STATIC: @override on a PUBLIC (Visible<T>/@external) immutable is the solc-accepted
+    // `uint256 public immutable override(A, B) x;` - it flows through resolveGetterOverrides (recorded
+    // in analyzeContract; the immutable getter counts as VIEW, so a pure head stays rejected there). On
+    // a NON-public immutable @override stays rejected (solc: "Override can only be used with public
+    // state variables."). Previously @override on an immutable was SILENTLY swallowed - an @override
+    // with nothing to override was over-accepted.
+    if (decs.includes('override') && !isPublicImm) {
+      this.diags.error(
+        member,
+        'JETH312',
+        `@override on immutable '${name}' requires a public getter (mark it Visible<T> / @external); solc: "Override can only be used with public state variables."`,
+      );
+      return;
+    }
+    if (isPublicImm) this.publicImmutableNames.add(name); // @external / Visible<T> @immutable -> auto-generated view getter
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
     if (!isStaticValueType(type)) {
