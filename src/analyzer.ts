@@ -634,6 +634,7 @@ export class Analyzer {
     this.collectNativeInterfaces(); // item #6b: native `interface I { m(): View<T> }`
     this.rejectImplementsClauses(); // a silently-ignored `implements` clause skipped interface obligations
     this.checkClassNamespaceCollisions(); // duplicate contract/abstract/library names + builtin-global shadows
+    this.checkClassTypeNameCollisions(); // ANY top-level class vs a same-named file-level type (solc parity)
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
     const classes = this.findContractClasses();
     if (classes.length === 0) {
@@ -1471,6 +1472,47 @@ export class Analyzer {
     if (this.hasStaticClassModifier(cls)) return false; // a `static class` is a LIBRARY, never the contract
     const decs = decoratorNames(cls);
     return !Analyzer.CLASS_KIND_DECORATORS.some((d) => decs.includes(d));
+  }
+
+  /** ANY top-level class (the deploy candidate, a base - consumed as `extends` or not - an abstract
+   *  contract, or a library) shares solc's FILE-level declaration namespace with every file-level TYPE
+   *  (struct / enum / branded newtype / interface) and file-level error/event declaration. solc 0.8.35
+   *  rejects EVERY such same-name pair as "Identifier already declared" (witnessed per kind pair:
+   *  contract / abstract contract / library x interface / struct / enum / UDVT / file-level error /
+   *  file-level event, consumed and unconsumed alike). Previously only the DEPLOYED contract's own name
+   *  was checked (the JETH272 gate in analyzeContract, kept as-is), so
+   *  `interface I {} class I {} class C extends I {}` silently ACCEPTED - and linearize() resolves a
+   *  base name via interfaceClassByName BEFORE classByName, so the interface shadowed the class,
+   *  leaving `class I` dead code (an over-acceptance with wrong-base risk). Rejecting the collision
+   *  here makes that shadowing unreachable without touching resolution order. A legacy
+   *  @struct/@interface class IS the type declaration itself (own namespaces + duplicate checks), so
+   *  those are excluded exactly like kindOf in checkClassNamespaceCollisions; in native-only mode they
+   *  are already JETH481-banned upstream. For the deployed name the message + node match the
+   *  analyzeContract gate exactly, so the DiagnosticBag exact-duplicate collapse keeps one diagnostic. */
+  private checkClassTypeNameCollisions(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n) && n.name) {
+        const decs = decoratorNames(n);
+        if (!decs.includes('struct') && !decs.includes('interface')) {
+          const name = n.name.text;
+          if (this.structsByName.has(name) || this.interfacesByName.has(name)) {
+            this.diags.error(
+              n,
+              'JETH272',
+              `contract '${name}' name conflicts with a same-named type (a struct, enum, or interface); solc rejects this as "Identifier already declared"`,
+            );
+          } else if (this.fileLevelErrorEvents.has(name)) {
+            this.diags.error(
+              n,
+              'JETH272',
+              `contract '${name}' name conflicts with a same-named file-level error/event declaration; solc rejects this as "Identifier already declared"`,
+            );
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
   }
 
   /** Every class name that appears in some `extends` clause (a base). Used so a native bare base is
