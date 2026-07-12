@@ -459,8 +459,14 @@ each has a verified workaround):**
   rejects - no valid-UTF-8 mirror exists).
 - **GET-EXTLIB-VIEW** (JETH043): a `get` accessor calling an External<T> (delegatecall) library fn -
   JETH classifies any delegatecall as state-modifying; solc keeps `pure`. Drop `get` (byte-identical).
-- **NATIVE-GET-MUT-HEADROOM** (JETH378/352): a @virtual get inferring PURE cannot be overridden by a
-  view get (headroom inexpressible in the native get spelling); the legacy `@view` spelling that used to express it is retired (JETH481).
+- **NATIVE-GET-MUT-HEADROOM**: LIFTED (GET-MUT-HEADROOM item). `get f(): View<T>` / `get f(): Pure<T>`
+  on a contract get accessor DECLARE the mutability (exactly solc's explicit `view`/`pure`): the
+  declared value anchors the override ladder + the ABI stateMutability, so a `@virtual get f():
+  View<u256>` with a pure body takes a state-reading override, byte-identical to the solc declared-view
+  mirror. A looser-than-declared body rejects (JETH054/055/164 = solc's "declared view/pure but ..."
+  TypeErrors); the markers stay get-only (plain method JETH013, field JETH482, #-private/@nonReentrant/
+  arity JETH352/260). The inferred-pure base spelling (External<T>) still rejects a view override
+  (JETH378) - the headroom opens ONLY via the declared marker. test/get-declared-mutability.test.ts.
 - **STRUCT-FIELD-LENGTH** (JETH202): a struct field literally named `length` cannot be read (the
   .length builtin check fires first); solc allows it.
 - **SPECIAL-NAME-METHOD** (JETH386/384/084): an ordinary external method NAMED receive/fallback is

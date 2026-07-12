@@ -39,7 +39,7 @@ JETH used to accept two per-file syntaxes: a legacy decorator syntax (opted into
 | `@public m()` | `m(args): External<T>` (`Payable<T>` if payable) |
 | `@internal m()` | drop it - a bare method/field is internal |
 | `@private` member | a leading `#` (e.g. `#x`, `#f()`) |
-| `@view` / `@pure` / `@read` | drop it - mutability is inferred (`View<T>`/`Pure<T>` markers only inside an `interface`) |
+| `@view` / `@pure` / `@read` | drop it - mutability is inferred; to DECLARE it (solc's explicit `view`/`pure`, e.g. for override headroom) write `get m(args): View<T>` / `get m(args): Pure<T>`; inside an `interface` the `View<T>`/`Pure<T>` markers state the per-method mutability |
 | `@payable m()` | `m(args): Payable<T>` |
 | `@state x: T` | a bare field `x: T` |
 | `@constant K: T = v` | a `static K: T = v` field |

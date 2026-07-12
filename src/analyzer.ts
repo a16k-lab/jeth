@@ -2371,7 +2371,9 @@ export class Analyzer {
             // `get` is the READ-ONLY axis, at ANY visibility (the visibility axis is orthogonal):
             //   get f(args): T             = INTERNAL read-only        (callable as this.f(...))
             //   get #f(args): T            = PRIVATE read-only         (this contract only)
-            //   get f(args): External<T>   = EXTERNAL read-only        (the ABI accessor)
+            //   get f(args): External<T>   = EXTERNAL read-only        (the ABI accessor, mutability inferred)
+            //   get f(args): View<T>       = EXTERNAL, DECLARED view   (solc's explicit `view` keyword)
+            //   get f(args): Pure<T>       = EXTERNAL, DECLARED pure   (solc's explicit `pure` keyword)
             // The synthesis adds NO visibility of its own - the accessor's return-type marker (unwrapped
             // by collectFunction) or its `#` name decides; a Payable<T> get is a contradiction (payable
             // is a writer property; a get is read-only).
@@ -2388,7 +2390,7 @@ export class Analyzer {
               ts.factory.createMethodDeclaration(ts.getDecorators(g) ? [...ts.getDecorators(g)!] : undefined, undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
               g,
             );
-            const fn = this.collectFunction(synthMethod);
+            const fn = this.collectFunction(synthMethod, { getAccessor: true });
             if (fn) {
               fn.isGetter = true;
               fn.definingContract = cn;
@@ -6782,7 +6784,7 @@ export class Analyzer {
     this.immutableOrder.push(name);
   }
 
-  private collectFunction(member: ts.MethodDeclaration): RawFunction | undefined {
+  private collectFunction(member: ts.MethodDeclaration, opts?: { getAccessor?: boolean }): RawFunction | undefined {
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(member, 'JETH049', 'method name must be a plain identifier');
       return undefined;
@@ -6812,11 +6814,26 @@ export class Analyzer {
     }
     let markerExternal = false;
     let markerPayable = false;
+    // GET-MUT-HEADROOM: `View<T>` / `Pure<T>` on a CONTRACT `get` accessor DECLARE its mutability
+    // (exactly solc's explicit `view`/`pure` keywords): the DECLARED value - not the body inference -
+    // anchors the override ladder and the ABI stateMutability, so a base `@virtual get f(): View<u256>`
+    // with a pure body keeps view HEADROOM for a state-reading override (solc accepts a view override
+    // of a declared-view virtual, where the inferred-pure base would reject it, JETH378). The body may
+    // be STRICTER than declared (a pure body under View<T> is fine, like solc); a LOOSER body rejects
+    // via the existing declared-mutability checks (JETH054 view-writes / JETH055+JETH164 pure-reads -
+    // solc's "declared view/pure but this expression ..." TypeErrors). Like External<T> the marker
+    // implies EXTERNAL and never enters the signature/selector. GET-ONLY: on a plain method the markers
+    // keep their existing reject (JETH013 unknown type - a read-only external METHOD is spelled `get`),
+    // on a field JETH482 (Visible<T> owns fields), on special entries JETH386, in interfaces they stay
+    // the per-method mutability markers (collectNativeInterfaces, untouched).
+    let markerDeclaredMut: Mutability | undefined;
     if (
       member.type &&
       ts.isTypeReferenceNode(member.type) &&
       ts.isIdentifier(member.type.typeName) &&
-      (member.type.typeName.text === 'External' || member.type.typeName.text === 'Payable')
+      (member.type.typeName.text === 'External' ||
+        member.type.typeName.text === 'Payable' ||
+        (opts?.getAccessor === true && (member.type.typeName.text === 'View' || member.type.typeName.text === 'Pure')))
     ) {
       const markerName = member.type.typeName.text;
       const args = member.type.typeArguments;
@@ -6854,6 +6871,8 @@ export class Analyzer {
       }
       markerExternal = true;
       markerPayable = markerName === 'Payable';
+      if (markerName === 'View') markerDeclaredMut = 'view';
+      else if (markerName === 'Pure') markerDeclaredMut = 'pure';
       (member as unknown as { type?: ts.TypeNode }).type = args[0];
     }
 
@@ -6990,6 +7009,12 @@ export class Analyzer {
       }
       mutability = 'payable';
     }
+    // GET-MUT-HEADROOM: a View<T>/Pure<T> get marker fixes the mutability to the DECLARED value (never
+    // re-inferred): the post-fixpoint inference only fills a still-nonpayable slot, so the declared
+    // anchor survives to the override ladder (JETH378) and the ABI stateMutability, and the
+    // JETH054/055/164 declared-mutability body checks fire exactly like solc's "declared view/pure
+    // but ..." TypeErrors (a pure body under View<T> stays fine - stricter is allowed, ABI says view).
+    if (markerDeclaredMut) mutability = markerDeclaredMut;
     // solc: internal/private functions can never be payable (no message context of their own).
     // @hidden is an explicitly-internal function, so it is rejected with @payable too.
     if (decs.includes('payable') && !decs.includes('external') && !markerExternal) {
@@ -7005,11 +7030,17 @@ export class Analyzer {
     // are incompatible, and reentrancy only meaningfully protects externally-reachable entries.
     const nonReentrant = decs.includes('nonReentrant');
     if (nonReentrant) {
-      if (read || decs.includes('view') || decs.includes('pure')) {
+      // A DECLARED read-only get (View<T>/Pure<T>) is the native twin of the explicit @view/@pure
+      // spellings and is rejected at collection like them; without this the declared anchor would skip
+      // the post-inference JETH473 net (it only floors a still-nonpayable slot) and the ABI would claim
+      // view/pure while the guard TSTOREs - every staticcall of the entry would revert (wrong bytes).
+      if (read || decs.includes('view') || decs.includes('pure') || markerDeclaredMut) {
         this.diags.error(
           member,
           'JETH260',
-          '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)',
+          markerDeclaredMut
+            ? `@nonReentrant cannot be combined with a declared ${markerDeclaredMut === 'view' ? 'View' : 'Pure'}<T> accessor (a reentrancy guard writes transient storage; the function must be state-mutating)`
+            : '@nonReentrant cannot be combined with @read/@view/@pure (a reentrancy guard writes transient storage; the function must be state-mutating)',
         );
       }
       if (!decs.includes('external') && !markerExternal) {
