@@ -15,8 +15,11 @@ It registers a dedicated `jeth` language (so `.jeth` files are no longer plain t
 - layers JETH-specific colors on top of the full TypeScript grammar (`source.ts`): the sized
   integer types (`u8`..`u256`, `i8`..`i256`), `bytesN`, `address`/`bool`/`string`/`void`, the
   type constructors `mapping`/`Arr`/`Brand`, the still-legal decorators (`@modifier`,
-  `@nonReentrant`, `@override`, `@virtual`, `@diamond`, `@storage`, ...; the grammar also still
-  colors the retired legacy decorator spellings), the global objects (`msg`/`block`/`tx`/`abi`)
+  `@nonReentrant`, `@override`, `@virtual`, `@diamond`, `@storage`, ...; user-named modifier
+  applications like `@onlyOwner` are colored too, and the 21 retired legacy decorator
+  spellings get a distinct DEPRECATED scope so they read as invalid before compiling), the
+  native value markers (`External`/`Payable`/`Visible`/`View`/`Pure` and the `event<{...}>`/
+  `error<{...}>`/`indexed<T>` type constructors), the global objects (`msg`/`block`/`tx`/`abi`)
   and their members, and the builtins (`keccak256`, `require`, `revert`, `emit`, ...).
 - attaches **no language server**, so there are no spurious "Cannot find name 'u256'" type
   errors that a plain `*.jeth` -> TypeScript association would produce.
@@ -26,7 +29,7 @@ It registers a dedicated `jeth` language (so `.jeth` files are no longer plain t
 Copy this folder into your VS Code extensions directory and reload:
 
 ```sh
-cp -R tools/jeth-vscode ~/.vscode/extensions/jeth-syntax-0.2.0
+cp -R tools/jeth-vscode ~/.vscode/extensions/jeth-syntax-0.3.0
 # then in VS Code: Cmd/Ctrl+Shift+P -> "Developer: Reload Window"
 ```
 

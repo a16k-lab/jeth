@@ -2,7 +2,7 @@
   "name": "jeth-syntax",
   "displayName": "JETH Syntax",
   "description": "Syntax highlighting and the JETH file icon for .jeth files - a TypeScript-subset smart-contract language compiling to EVM.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "jeth",
   "private": true,
   "license": "MIT",
