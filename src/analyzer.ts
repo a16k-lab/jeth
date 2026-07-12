@@ -3752,6 +3752,35 @@ export class Analyzer {
       g.sort((a, b) => (linIndex.get(a.definingContract!) ?? 0) - (linIndex.get(b.definingContract!) ?? 0));
     }
 
+    // A SAME-CONTRACT duplicate signature involving a BODYLESS declaration. The concrete+concrete
+    // duplicate is already rejected downstream (the JETH044 signature check runs on the final
+    // FunctionIR list), but a bodyless declaration never becomes a FunctionIR - the signature
+    // grouping above simply merges it into the override set - so `@virtual f(v: u256): External<u256>;`
+    // declared twice in one class slipped through byte-identical to the single declaration. solc
+    // 0.8.35 rejects every flavor with DeclarationError "Function with same name and parameter types
+    // defined twice" (witnessed: bodyless+bodyless in either spelling - @virtual or TS `abstract` -
+    // the mixed abstract/@virtual pair, bodyless+concrete in one class, and the bodyless pair in a
+    // MIDDLE class of a chain). Duplicates are detected WITHIN a signature group (the group key is
+    // name + canonical params) using the display-name-augmented sub-key of the downstream check, so a
+    // same-canonical different-JETH-type pair stays a selector-clash concern, never a false duplicate;
+    // the same signature declared in DIFFERENT contracts of the chain is overriding, never flagged.
+    for (const versions of groups.values()) {
+      const firstBySubKey = new Map<string, RawFunction>();
+      for (const v of versions) {
+        const subKey = `${v.definingContract ?? ''}::${v.params.map((p) => displayName(p.type)).join(',')}`;
+        const first = firstBySubKey.get(subKey);
+        if (first === undefined) {
+          firstBySubKey.set(subKey, v);
+        } else if (first.bodyless || v.bodyless) {
+          this.diags.error(
+            v.node,
+            'JETH044',
+            `duplicate function '${this.sigKey(v)}' (a function with the same name and parameter types is already declared)`,
+          );
+        }
+      }
+    }
+
     const winners: RawFunction[] = [];
 
     // Transitive bases of each contract in the linearization (for the diamond override-list check):
