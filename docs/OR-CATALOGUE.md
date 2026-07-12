@@ -1,5 +1,13 @@
 # Over-rejection catalogue
 
+> **Native-syntax only (2026-07).** JETH no longer has a decorator "mode": the `// use @decorators`
+> pragma is a hard error (JETH480) and the 21 legacy structural decorators are removed (JETH481) - see
+> the [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). This
+> catalogue is a running audit ledger: the dated rounds below use the decorator spellings that were
+> current when each finding was recorded, kept verbatim for historical continuity. Where an older entry
+> presented a "legacy X spelling" as a working workaround, that spelling is now retired - use the native
+> replacement from the table.
+
 **Status: live-audited at f0e3761; Tier-1 verified at `1b330fb`; Tier-2 at `d42e6de`; Tier-3 at
 `cef1148` + the soundness fix `8174afc`; long-tail batch A (M-BYTES + T-LVALUE, 6 shapes) lifted
 on top of `fbd357a`; long-tail batch B (A-LIT array-literal crosses, 4 shapes + closure lifts)
@@ -110,7 +118,7 @@ solc's literal typing cannot be reproduced) - a lift would trade a clean reject 
 | L6 | `o[0n] = <storage/whole-agg>` writing into an inline value-word element of a nested memory array | JETH429 | The prior-alias witness (solc re-points, an earlier alias keeps OLD values) proves NO RHS source is liftable; a flat layout can only copy |
 | L7(a) | memory-struct ctor with a BOUND fixed-array var `S1(a, 5n)` | JETH465 | solc stores a live reference to `a`; the inline literal ctor `S1([In..,In..], 5n)` IS accepted and byte-identical |
 | L2-MOBILE | the CAST+BARE int mix in an array literal: `abi.encode([u256(1n), 2n])`, `[u8(1n), 300n]`. The pure-bare spellings (`abi.encode([1n, 2n])`, the bare ternary) were LIFTED at `9110ce3` (encode pads elements to 32 bytes, width-independent; test/lift-or-cluster4.test.ts; runtime-verified identical, 2026-07-10 audit) | JETH213 | solc folds the bare value into the cast's common type ([u8(1),300] -> uint16[2]); JETH keeps no-common-type. Bool literals and fully cast-typed elements are lifted. Workaround: cast every element |
-| FUNCREF-PURE | a @pure function calling through a funcref whose SIGNATURE has a state-writing address-taken target elsewhere in the contract (dispatcher-set poisoning): `@pure b()` using `Fd.f` of sig `(u256)=>u256` rejects when `ord()` address-takes state-writing `linc/ldec` of the same sig | JETH055 | JETH funcref types carry NO mutability (solc's `function(...) pure returns(...)` pointer types do), so the purity checker soundly assumes the sig-key dispatcher set; a lift needs mutability in the funcref type grammar. Workaround: drop @pure, or avoid impure address-takes of the same signature |
+| FUNCREF-PURE | a pure (inferred) function calling through a funcref whose SIGNATURE has a state-writing address-taken target elsewhere in the contract (dispatcher-set poisoning): a pure `b()` using `Fd.f` of sig `(u256)=>u256` rejects when `ord()` address-takes state-writing `linc/ldec` of the same sig | JETH055 | JETH funcref types carry NO mutability (solc's `function(...) pure returns(...)` pointer types do), so the purity checker soundly assumes the sig-key dispatcher set; a lift needs mutability in the funcref type grammar. Workaround: make the function non-pure (read state so it infers view), or avoid impure address-takes of the same signature |
 | A-LIT-RESID | a whole calldata-param branch in a pointer-headed nested ternary `c ? p : [a, b]` (p: `Arr<u256[],N>` cd param; the copy does not replicate solc's cd-ref validation). The mixed-bytesN and ENUM-element spellings were LIFTED (`9110ce3` + test/lift-enum-array-literal.test.ts; runtime-verified identical incl. OOB-enum Panic parity, 2026-07-10 audit) | JETH074 | Bind the cd param to a memory local first |
 
 Retired from this table by the 2026-07-10 live audit (12-row adversarial re-probe at HEAD, zero
@@ -162,9 +170,9 @@ lifted and byte-identical).
 
 Safe over-rejections seen in passing during these lifts (pre-existing, clean, uncatalogued before):
 
-- **USING-ON-LIBRARY (JETH074)**: `@using(M)` on a `@library` is not consumed (solc accepts `using`
+- **USING-ON-LIBRARY (JETH074)**: `@using(M)` on a `static class` library is not consumed (solc accepts `using`
   inside a library body). In-file, a library body's only attachment source is the self-convention.
-- **JETH387 receive/fallback internal-call gate**: a `@receive`/`@fallback` body may not call ANY
+- **JETH387 receive/fallback internal-call gate**: a `receive()`/`fallback()` body may not call ANY
   internal fn (attachment calls included); solc accepts. Placement-independent, fully gates that
   surface.
 - **JETH065 accessor property-read**: reading an internal `get` accessor with property syntax
@@ -215,7 +223,7 @@ array-type-in-value-position feature (TS code 1011) and the analyzer's semantic 
 preserved. The byte-identical form is `x.slice(s, e)[j]`.
 
 Earlier live re-audit at `5627d90` CORRECTED two stale entries: array-typed event params
-(`@event E(a: u256[])`) MATCH byte-identically, and a calldata struct-array element aggregate field
+(an event with a `u256[]` parameter, `E: event<{ a: u256[] }>`) MATCH byte-identically, and a calldata struct-array element aggregate field
 bound to a memory local (`let p: In = s[i].pre`) is a BOTH-REJECT (parity), not an OR.
 
 Parity footnote confirmed during the batch C close-out: `.length` on a STRING value (local or
@@ -400,7 +408,7 @@ each has a verified workaround):**
   virtual bodyless declaration; spell it `@virtual f(): ...;` (byte-identical). Aligns with the
   deferred implicit-virtual item.
 - **NATIVE-IFACE-EXTENDS** (JETH370): `interface I` is a call target, not an extendable base (v1
-  scope boundary); use `@interface class I` for extends.
+  scope boundary); the `@interface class I` extends-workaround is retired (JETH481), so this stays a plain scope boundary.
 - **MANGLE-INJECT** (JETH373/434/044/065/374/375): a user identifier spelled like a `#` mangle
   product (`$p$C$x`) fails CLOSED in all four spellings (never merges storage/dispatch).
 - **CONST-FWD-REF** (JETH048/065): constant initializers are declaration-order-dependent; solc's are
@@ -434,7 +442,7 @@ each has a verified workaround):**
 - **GET-EXTLIB-VIEW** (JETH043): a `get` accessor calling an External<T> (delegatecall) library fn -
   JETH classifies any delegatecall as state-modifying; solc keeps `pure`. Drop `get` (byte-identical).
 - **NATIVE-GET-MUT-HEADROOM** (JETH378/352): a @virtual get inferring PURE cannot be overridden by a
-  view get (headroom inexpressible in the native get spelling); the legacy @view spelling works.
+  view get (headroom inexpressible in the native get spelling); the legacy `@view` spelling that used to express it is retired (JETH481).
 - **STRUCT-FIELD-LENGTH** (JETH202): a struct field literally named `length` cannot be read (the
   .length builtin check fires first); solc allows it.
 - **SPECIAL-NAME-METHOD** (JETH386/384/084): an ordinary external method NAMED receive/fallback is
@@ -442,11 +450,11 @@ each has a verified workaround):**
 - **COMMA-FORUPDATE** (JETH073): a comma expression in a for-update clause (no solc comma operator;
   parity-debatable).
 
-**OPEN - needs triage (pre-existing OA seen in passing, NOT fixed this round):** a NON-@abstract base
-class carrying a bodyless @virtual member (plain method or special entry) plus an implemented
-@override in the deployed entry compiles in JETH, while solc rejects the file ('Contract "B" should
+**OPEN - needs triage (pre-existing OA seen in passing, NOT fixed this round):** a non-`abstract` base
+class carrying a bodyless `@virtual` member (plain method or special entry) plus an implemented
+`@override` in the deployed entry compiles in JETH, while solc rejects the file ('Contract "B" should
 be marked as abstract'). Systemic to JETH's entry-contract model (non-entry bases are never
-deployed). Decide: require @abstract on any base with a bodyless @virtual member (parity reject), or
+deployed). Decide: require the `abstract` keyword on any base with a bodyless `@virtual` member (parity reject), or
 document as a deliberate dialect boundary.
 
 Also confirmed in passing (safe, pre-existing): the JETH387 receive/fallback internal-call gate and

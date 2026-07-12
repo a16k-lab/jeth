@@ -1,5 +1,10 @@
 # Arch over-rejection #1: memory struct local from a calldata struct-array element (+ for..of)
 
+> **Historical (design/build record).** JETH is now native-syntax only: the decorator spellings below are
+> the retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481). See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 A SAFE over-rejection (JETH cleanly rejects, solc 0.8.35 accepts; never a miscompile). Close it byte-identical.
 This is the FIRST of three architectural items; do ONLY this one.
 

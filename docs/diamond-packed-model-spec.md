@@ -1,5 +1,11 @@
 # Diamond PACKED model (diamond-2 layout) - build spec
 
+> **Historical (design/build record).** JETH is now native-syntax only: the decorator spellings below are
+> the retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481). `@storage`
+> and `@diamond` remain legal. See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 The second EIP-2535 storage model: `@diamond('packed')`, byte-identical to a hand-written solc 0.8.35
 diamond-2-hardhat. It REUSES the whole framework already built for `@diamond('array')` (src/diamond.ts
 `expandDiamond` source-text expansion, the selector-router fallback, the synthesis-only runtime-address

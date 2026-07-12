@@ -3,13 +3,20 @@
 Syntax highlighting for JETH (`.jeth`) source files - a TypeScript-subset smart-contract
 language that compiles to EVM bytecode.
 
+> **Native-syntax only.** JETH no longer has a decorator "mode"; the structural/visibility/mutability
+> decorators (`@contract`, `@external`, `@state`, ...) were removed. The still-legal decorators are
+> `@modifier`, `@nonReentrant`, `@virtual`, `@override`, `@using`, `@diamond`, `@storage`, `@proxy`,
+> `@beacon`, `@facet`, `@anonymous`, and `@payable` on a constructor. See the
+> [native-spelling table](../../SUPPORTED.md#legacy-decorator-removal-native-syntax-only).
+
 It registers a dedicated `jeth` language (so `.jeth` files are no longer plain text), gives
 `.jeth` files the **JETH gradient logo** as their file icon, and ships a TextMate grammar that:
 
 - layers JETH-specific colors on top of the full TypeScript grammar (`source.ts`): the sized
   integer types (`u8`..`u256`, `i8`..`i256`), `bytesN`, `address`/`bool`/`string`/`void`, the
-  type constructors `mapping`/`Arr`/`Brand`, the decorators (`@contract`, `@external`, `@view`,
-  `@state`, `@event`, `@error`, `@interface`, ...), the global objects (`msg`/`block`/`tx`/`abi`)
+  type constructors `mapping`/`Arr`/`Brand`, the still-legal decorators (`@modifier`,
+  `@nonReentrant`, `@override`, `@virtual`, `@diamond`, `@storage`, ...; the grammar also still
+  colors the retired legacy decorator spellings), the global objects (`msg`/`block`/`tx`/`abi`)
   and their members, and the builtins (`keccak256`, `require`, `revert`, `emit`, ...).
 - attaches **no language server**, so there are no spurious "Cannot find name 'u256'" type
   errors that a plain `*.jeth` -> TypeScript association would produce.

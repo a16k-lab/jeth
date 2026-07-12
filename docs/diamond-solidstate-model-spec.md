@@ -1,5 +1,11 @@
 # Diamond SOLIDSTATE model - build spec
 
+> **Historical (design/build record).** JETH is now native-syntax only: the decorator spellings below are
+> the retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481). `@storage`
+> and `@diamond` remain legal. See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 The third and final EIP-2535 model: `@diamond('solidstate')`, byte-identical to solidstate-network/
 solidstate-solidity's diamond. It REUSES the framework built for `@diamond('array')` and `@diamond('packed')`
 (src/diamond.ts `expandDiamond`, the selector-router fallback, the runtime-address delegatecall, the

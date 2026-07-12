@@ -1,5 +1,10 @@
 # Gate parity: lift JETH312 (public-immutable getter) + JETH321 (modifier conditional placeholder)
 
+> **Historical (design/build record).** JETH is now native-syntax only: the decorator spellings below are
+> the retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481). See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 The last two SAFE over-rejections (JETH cleanly rejects valid Solidity that solc 0.8.35 accepts; never
 miscompiles). Close them byte-identical to solc. Two independent, small fixes. Do NOT touch the constructor
 gates (JETH302/303 - already done, commit 9f704dc).

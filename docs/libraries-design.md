@@ -1,5 +1,11 @@
 # JETH libraries - design spec (solc 0.8.35-verified)
 
+> **Historical (design record).** JETH is now native-syntax only: the decorator spellings below are the
+> retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481; a library is
+> now a `static class L { ... }`, `@using` remains legal). See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 Two phases. **Phase A (this spec): INTERNAL libraries** - functions inlined into the caller, byte-identical
 to solc's internal library functions (verified: a contract using internal lib funcs deploys as ONE contract,
 no linking, no delegatecall; `L.add(3,4)`=7, `x.double()`=42). **Phase B (later): EXTERNAL libraries** -

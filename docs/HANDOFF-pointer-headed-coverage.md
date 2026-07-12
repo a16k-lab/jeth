@@ -1,5 +1,10 @@
 # HANDOFF: finish the pointer-headed `Arr<In,N>` coverage proof
 
+> **Historical (handoff record).** JETH is now native-syntax only: the decorator spellings below are the
+> retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481). See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 > **STATUS (2026-07-07): COMPLETE - FULLY-COVERED-CLEAN at HEAD `1a3c4c3`.** Both steps below were
 > executed to convergence (5 fix rounds + a two-probe final certificate; see `docs/NEXT-STEPS.md`
 > for the round table and the residual catalogue). This document is retained as history.

@@ -7,86 +7,97 @@ matrix lives in [`../SUPPORTED.md`](../SUPPORTED.md). This file records the thin
 **not** plain Solidity parity: the JETH-only ergonomics, and the two places JETH is actually
 *more capable* than the Solidity compiler.
 
+> **Native-syntax only.** JETH has no decorator "mode": a bare `class` is the contract, a bare
+> field is state, `External<T>` / `Payable<T>` expose functions, and mutability is inferred. The
+> retired `// use @decorators` pragma is a hard error (JETH480) and the legacy structural decorators
+> are removed (JETH481). See [`../SUPPORTED.md`](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only)
+> for the native-spelling table.
+
 ---
 
-## 1. Decorator inference (JETH-only ergonomics)
+## 1. Mutability inference and a minimal visibility surface (JETH-only ergonomics)
 
 Solidity makes you spell out every function's visibility and mutability. JETH simplifies the
-visibility surface to a single `@external` (everything else is internal - see below) and adds a
-compile-time mutability **inference** so devs don't have to choose `@pure` vs `@view`. The inferred
-`@read` resolves to a concrete mutability **before the ABI is emitted**, so the generated ABI is
-always the true one. (Verified: a `@read` contract emits a **byte-identical ABI** to the same
-contract written with explicit `@view`/`@pure`, and is byte-identical to solc at runtime.)
+visibility surface to a single `External<T>` return marker (everything else is internal - see below)
+and infers mutability at compile time, so devs never choose `pure` vs `view`. The inference resolves
+to a concrete mutability **before the ABI is emitted**, so the generated ABI is always the true one.
+(Verified: an inferred contract emits a **byte-identical ABI** to the same contract with its
+mutability written out, and is byte-identical to solc at runtime.)
 
-### `@read`: infer `@pure` vs `@view`
+### Mutability inference: pure vs view
 
-Mark a read-only function `@read` and the compiler computes, from the function's **transitive**
-effects, whether it is `@pure` (touches no state and no execution environment) or `@view`
-(reads state or `msg.*`/`block.*`/`tx.*`/`address(this)`, but never modifies state).
+A read-only function needs no mutability marker: the compiler computes, from the function's
+**transitive** effects, whether it is `pure` (touches no state and no execution environment) or
+`view` (reads state or `msg.*`/`block.*`/`tx.*`/`address(this)`, but never modifies state). A
+read-only, value-returning entry point is spelled with `get` (`get f(...): External<T>`, else
+`JETH352`).
 
 ```ts
-@contract class C {
-  @state x: u256;
-  @read double(a: u256): u256 { return a * 2n; }   // touches nothing  -> @pure
-  @read getX(): u256 { return this.x; }            // reads state      -> @view
-  @read who(): address { return msg.sender; }      // reads env        -> @view
-  @read viaHelper(): u256 { return this.sum(); }   // helper reads x   -> @view (transitive)
-  @hidden sum(): u256 { return this.x + 1n; }
+class C {
+  x: u256 = 0n;
+  get double(a: u256): External<u256> { return a * 2n; }   // touches nothing  -> pure
+  get getX(): External<u256> { return this.x; }            // reads state      -> view
+  get who(): External<address> { return msg.sender; }      // reads env        -> view
+  get viaHelper(): External<u256> { return this.sum(); }   // helper reads x   -> view (transitive)
+  sum(): u256 { return this.x + 1n; }                      // no marker -> internal
 }
 ```
 
-A `@read` function that **modifies state** (writes storage, or **emits an event**, since a log is a
-state change) directly or transitively is rejected (`JETH056`). `@read` combined with an
-explicit `@view`/`@pure`/`@payable` is a conflict (`JETH052`). Visibility and mutability are
-orthogonal, so `@external @read` etc. are fine.
+A read-only function that **modifies state** (writes storage, or **emits an event**, since a log is a
+state change) directly or transitively is rejected (`JETH056`; a `get` that writes is `JETH043`).
+Because mutability is always inferred there is no marker to conflict; the one mutability spelled
+explicitly is payable, via a `Payable<T>` return marker.
 
-### Visibility: `@external` exposes, everything else is internal
+### Visibility: `External<T>` exposes, everything else is internal
 
-JETH has exactly **one** visibility decorator, `@external`: it places a function in the ABI and the
-dispatcher. A function with **no** visibility decorator is **internal** - callable by name (`f()` /
-`this.f()`), absent from the ABI, and not reachable from outside. A function is therefore either
-externally exposed (`@external`, and NOT callable internally - that would be a message call) or
-internal (callable by name) - never both. This keeps the surface minimal and the call-vs-message-call
-boundary explicit, a deliberate safer-than-Solidity subset.
+JETH has exactly **one** visibility marker, the `External<T>` (or `Payable<T>`) return type: it places
+a function in the ABI and the dispatcher, and a public state getter is a `Visible<T>` field. A method
+with **no** such marker is **internal** - callable by name (`f()` / `this.f()`), absent from the ABI,
+and not reachable from outside. A function is therefore either externally exposed (`External<T>`, and
+NOT callable by bare name - that would be an internal call) or internal (callable by name) - never
+both. This keeps the surface minimal and the call-vs-message-call boundary explicit, a deliberate
+safer-than-Solidity subset.
 
 ```ts
-@contract class C {
-  @state x: u256;
-  helper(): u256 { return this.x; }                // no @external -> internal, not in the ABI
-  @external get(): u256 { return this.helper(); }   // @external -> in the ABI; calls the internal helper
+class C {
+  x: u256 = 0n;
+  helper(): u256 { return this.x; }                     // no marker -> internal, not in the ABI
+  get value(): External<u256> { return this.helper(); }  // External<T> -> in the ABI; calls the internal helper
 }
 ```
 
-`@public`, `@private`, `@internal`, and `@hidden` are rejected (`JETH054`); the compiler decides
-internal-vs-private itself (codegen-identical until inheritance lands). Calling an `@external` function
-internally is rejected (`JETH240`): expose an `@external` entry and have any internal caller go through
-a shared internal helper instead.
+The legacy `@public` / `@internal` / `@private` decorators are removed (`JETH481`, pointing at the
+native spelling) and `@hidden` is rejected (`JETH440`); the compiler decides internal-vs-private itself
+(codegen-identical until inheritance lands). A private member is spelled with a leading `#`. Calling an
+`External<T>` function by bare name is rejected (`JETH240`): expose an `External<T>` entry and have any
+internal caller go through a shared internal helper instead (`this.f()` on an `External<T>` function is
+a real self message-call, not an internal call).
 
 **vs solc mutability (a deliberate leniency, not a miscompile).** Because `this.f()` on an internal `f`
-is an ordinary internal call (not a message call), a `@pure` function may call `this.internalPureMethod()`
-where solc - which treats **every** `this.f()` as an external message call - would require `@view` (and in
+is an ordinary internal call (not a message call), a pure function may call `this.internalPureMethod()`
+where solc - which treats **every** `this.f()` as an external message call - would require `view` (and in
 fact rejects `this.f()` altogether for an internal `f`, since solc 0.8 has no internal-via-`this` syntax).
 JETH accepts it; solc rejects it. This is benign: the only cases that would diverge *behaviourally* - an
 internal method reading `msg.sender` / the environment, reached via `this.` - are already rejected by
-JETH's own `@pure`/`@view` mutability check, so no wrong bytes are ever produced. An `@external` self-call
-`this.f()` **is** a real `STATICCALL`/`CALL` in both, and JETH already requires the caller to be `@view`
+JETH's own pure/view mutability check, so no wrong bytes are ever produced. An `External<T>` self-call
+`this.f()` **is** a real `STATICCALL`/`CALL` in both, and JETH already requires the caller to be `view`
 (`JETH055`), matching solc.
 
-### Mixing manual + inferred
+### Inference composes with the exposure markers
 
-All of these compose. A function may infer **both** mutability and visibility:
+All of these compose. A function infers its mutability while `External<T>` (or `get`) states exposure:
 
 ```ts
-@contract class C {
-  @state x: u256;
-  @read total(): u256 { return this.x + this.base(); } // -> @view, and (if called) @public / else @external
-  @hidden base(): u256 { return 100n; }
+class C {
+  x: u256 = 0n;
+  get total(): External<u256> { return this.x + this.base(); } // inferred view
+  base(): u256 { return 100n; }                                // no marker -> internal
 }
 ```
 
-Explicit decorators always win and are validated exactly as in Solidity:
-`@view` that writes -> `JETH054`, `@pure` that reads -> `JETH055`/`JETH164`, internally calling
-an `@external` function -> `JETH240`.
+The inferred mutability is validated exactly as in Solidity: a would-be `view`/`get` that writes state,
+or a would-be `pure` that reads state or the environment, is rejected (`JETH043`/`JETH056`/`JETH164`),
+and calling an `External<T>` function by bare name is rejected (`JETH240`).
 
 ---
 
@@ -104,12 +115,12 @@ the same idea as Solidity's `type X is uint256` user-defined value types, with l
 type TokenId = Brand<u256>;
 type Wei     = Brand<u256>;
 
-@contract class C {
-  @state owner: mapping<TokenId, address>;          // branded key, slot layout == mapping<u256,...>
-  @external setOwner(id: TokenId, o: address): void { this.owner[id] = o; } // selector: setOwner(uint256,address)
-  @external @pure addWei(a: Wei, b: Wei): Wei { return a + b; }             // same-brand math keeps the brand
-  @external @pure wrap(x: u256): TokenId { return TokenId(x); }             // explicit wrap
-  @external @pure unwrap(id: TokenId): u256 { return u256(id); }            // explicit unwrap
+class C {
+  owner: mapping<TokenId, address>;                                         // branded key, slot layout == mapping<u256,...>
+  setOwner(id: TokenId, o: address): External<void> { this.owner[id] = o; } // selector: setOwner(uint256,address)
+  get addWei(a: Wei, b: Wei): External<Wei> { return a + b; }               // same-brand math keeps the brand (pure)
+  get wrap(x: u256): External<TokenId> { return TokenId(x); }               // explicit wrap (pure)
+  get unwrap(id: TokenId): External<u256> { return u256(id); }              // explicit unwrap (pure)
 }
 ```
 
@@ -142,13 +153,13 @@ fields. It desugars to the exact same construction as positional `StructName(...
 ABI, and storage layout are identical.
 
 ```ts
-@struct class Config { fee: u16; recipient: address; paused: bool; }
+type Config = { fee: u16; recipient: address; paused: bool };
 
-@contract class C {
-  @state cfg: Config;
-  @external setFee(f: u16): void { this.cfg = { ...this.cfg, fee: f }; }       // update one field
-  @external pause(): void { this.cfg = { ...this.cfg, paused: !this.cfg.paused }; }
-  @external @pure make(r: address): Config { return { fee: 0n, recipient: r, paused: false }; } // full literal
+class C {
+  cfg: Config;
+  setFee(f: u16): External<void> { this.cfg = { ...this.cfg, fee: f }; }       // update one field
+  pause(): External<void> { this.cfg = { ...this.cfg, paused: !this.cfg.paused }; }
+  get make(r: address): External<Config> { return { fee: 0n, recipient: r, paused: false }; } // full literal (pure)
 }
 ```
 
@@ -165,9 +176,9 @@ context (a return type, an annotated local, an assignment target, or a call argu
 binding each element to a fresh copy. It desugars to the indexed loop you would write by hand:
 
 ```ts
-@contract class C {
-  @state xs: u256[];
-  @external @view total(): u256 {
+class C {
+  xs: u256[];
+  get total(): External<u256> {
     let s: u256 = 0n;
     for (const v of this.xs) { s = s + v; }   // == for (let i=0n; i<this.xs.length; i=i+1n) { const v = this.xs[i]; ... }
     return s;
@@ -189,14 +200,14 @@ which desugar to an ordinary positional internal call. They apply only at intern
 provide every argument and the ABI/selector always list every parameter.
 
 ```ts
-@contract class C {
-  @hidden fee(amount: u256, bps: u256 = 30n, floor: u256 = 1n): u256 {
+class C {
+  fee(amount: u256, bps: u256 = 30n, floor: u256 = 1n): u256 {
     let f: u256 = (amount * bps) / 10000n;
     return f < floor ? floor : f;
   }
-  @external @view a(x: u256): u256 { return this.fee(x); }                   // bps=30, floor=1
-  @external @view b(x: u256): u256 { return this.fee(x, 50n); }              // floor=1
-  @external @view c(x: u256): u256 { return this.fee({ amount: x, bps: 50n }); } // named, floor default
+  get a(x: u256): External<u256> { return this.fee(x); }                       // bps=30, floor=1
+  get b(x: u256): External<u256> { return this.fee(x, 50n); }                  // floor=1
+  get c(x: u256): External<u256> { return this.fee({ amount: x, bps: 50n }); } // named, floor default
 }
 ```
 
@@ -211,14 +222,14 @@ single struct parameter).
 
 ### `@nonReentrant` reentrancy guard
 
-A built-in decorator that wraps an external/public state-mutating function in an EIP-1153
+A built-in decorator that wraps an external state-mutating function in an EIP-1153
 **transient-storage** reentrancy mutex, the same mechanism as OpenZeppelin's
 `ReentrancyGuardTransient` but with no import, no boilerplate, and no storage slot consumed.
 
 ```ts
-@contract class Vault {
-  @state bal: mapping<address, u256>;
-  @nonReentrant @external withdraw(amount: u256): void {
+class Vault {
+  bal: mapping<address, u256>;
+  @nonReentrant withdraw(amount: u256): External<void> {
     // ... guarded body ...
   }
 }
@@ -228,10 +239,11 @@ On entry the guard reverts with OpenZeppelin's `ReentrancyGuardReentrantCall()` 
 `0x3ee5aeb5`) if the contract is already executing a guarded function, otherwise it sets a
 transient flag; on every normal exit it clears the flag, and a reverting call has the flag rolled
 back automatically by EIP-1153. The transient slot costs no persistent storage and is wiped at the
-end of every transaction. The decorator requires a state-mutating external or public function
-(`@view`/`@pure`/`@read` are rejected, as is `@internal`/`@private`/`@hidden`), and a
-`@nonReentrant` function cannot be called internally (the guard protects the external entry). It
-never changes the function's ABI, selector, or mutability.
+end of every transaction. The decorator requires a state-mutating `External<T>` function: a read-only
+`get` is rejected (`JETH473` - its ABI claims view/pure but the guard writes transient storage), and
+an internal (bare / `#`) function has no external entry to guard. A `@nonReentrant` function cannot be
+called internally (the guard protects the external entry). It never changes the function's ABI,
+selector, or mutability.
 
 ### Exhaustive `switch` (JETH-only control flow)
 
@@ -242,8 +254,8 @@ TypeScript so it cannot silently mis-route:
 ```ts
 enum Status { Pending, Active, Closed }
 
-@contract class C {
-  @external @pure label(s: Status): u256 {
+class C {
+  get label(s: Status): External<u256> {
     switch (s) {
       case Status.Pending: return 1n;
       case Status.Active: case Status.Closed: return 2n;  // shared body (empty label falls through)
@@ -268,12 +280,12 @@ compile time (each concrete instantiation generates a specialized copy, exactly 
 type-specific function, so there is zero runtime cost and the result is byte-identical to solc).
 
 ```ts
-@contract class C {
-  @hidden max<T>(a: T, b: T): T { return a > b ? a : b; }     // one definition...
-  @hidden clamp<T>(v: T, lo: T, hi: T): T { return this.max(this.min(v, hi), lo); }
-  @hidden min<T>(a: T, b: T): T { return a < b ? a : b; }
-  @external @pure capU(v: u256, hi: u256): u256 { return this.min(v, hi); }   // ...used at u256
-  @external @pure capByte(v: u8, hi: u8): u8 { return this.min(v, hi); }      // ...and at u8
+class C {
+  max<T>(a: T, b: T): T { return a > b ? a : b; }              // one definition...
+  clamp<T>(v: T, lo: T, hi: T): T { return this.max(this.min(v, hi), lo); }
+  min<T>(a: T, b: T): T { return a < b ? a : b; }
+  get capU(v: u256, hi: u256): External<u256> { return this.min(v, hi); }   // ...used at u256
+  get capByte(v: u8, hi: u8): External<u8> { return this.min(v, hi); }      // ...and at u8
 }
 ```
 
@@ -283,11 +295,10 @@ internal function; instantiations are deduplicated and the body is type-checked 
 instantiations still compile). Type arguments are inferred from the value arguments, or given
 explicitly (`this.max<u256>(a, b)`). Type arguments must be value types (`uintN` / `intN` / `bool` /
 `address` / `bytesN` / an enum / a branded newtype). Generics are internal-only: a generic
-`@external` / `@public` function is rejected (`JETH290`), since a generic type is not expressible in
-the ABI, and no generic or specialization ever appears in the ABI. Monomorphization is bounded (the
-value-type universe is finite and recursion at a fixed type closes through the dedup cache), and a
-specialization whose mangled name would collide with a user function is rejected rather than silently
-overwritten.
+`External<T>` function is rejected (`JETH290`), since a generic type is not expressible in the ABI, and
+no generic or specialization ever appears in the ABI. Monomorphization is bounded (the value-type
+universe is finite and recursion at a fixed type closes through the dedup cache), and a specialization
+whose mangled name would collide with a user function is rejected rather than silently overwritten.
 
 ## 4. Where JETH is *more capable* than the Solidity compiler
 
@@ -302,9 +313,9 @@ Internal-call frames live more compactly, so recursion goes much deeper before e
 1024-slot stack.
 
 ```ts
-@contract class C {
-  @internal @pure rec(n: u256): u256 { if (n == 0n) { return 0n; } return 1n + this.rec(n - 1n); }
-  @external @pure run(n: u256): u256 { return this.rec(n); }
+class C {
+  rec(n: u256): u256 { if (n == 0n) { return 0n; } return 1n + this.rec(n - 1n); }   // internal
+  get run(n: u256): External<u256> { return this.rec(n); }
 }
 ```
 
@@ -354,9 +365,11 @@ Comparing two **distinct** internal function pointers whose bodies are byte-iden
 `false` in JETH:
 
 ```ts
-@pure f(x: u256): u256 { return x + 1n; }
-@pure g(x: u256): u256 { return x + 1n; }   // same body as f
-@external @pure eq(): bool { return this.f == this.g; }   // JETH: false
+class C {
+  f(x: u256): u256 { return x + 1n; }                    // internal
+  g(x: u256): u256 { return x + 1n; }                    // same body as f
+  get eq(): External<bool> { return this.f == this.g; }  // JETH: false
+}
 ```
 
 This is an optimizer artifact in solc, not a language semantic:

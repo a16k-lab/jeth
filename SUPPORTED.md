@@ -6,6 +6,56 @@ sweep** (closed all 17 audit-found compile-time gaps; runtime byte-identical to 
 [docs/distinctive-features.md](docs/distinctive-features.md)). The full suite is 1500+ differential
 tests against `solc-js` (returndata + raw storage slots + event logs), zero known miscompiles.
 
+**JETH is native-syntax only.** There is no decorator "mode". The examples throughout this file use
+the native surface (a bare `class` is the contract, a bare field is state, `External<T>`/`Payable<T>`
+expose functions, mutability is inferred). The retired `// use @decorators` pragma and the 21 legacy
+structural decorators are hard compile errors - see [Legacy decorator
+removal](#legacy-decorator-removal-native-syntax-only) below for the full native-spelling table.
+
+## Legacy decorator removal (native-syntax only)
+
+JETH used to accept two per-file syntaxes: a legacy decorator syntax (opted into with a
+`// use @decorators` pragma) and the native TypeScript-shaped syntax. The legacy syntax is now
+**fully removed**; native is the only syntax.
+
+- A source that still carries the retired `// use @decorators` pragma is a hard compile error,
+  **JETH480**, reported at the directive line before any other pass (parse, diamond expansion,
+  bundling), so it is the first thing a legacy file sees.
+- The 21 structural / visibility / mutability decorators below were removed. Each is a hard compile
+  error, **JETH481**, whose message points at the native spelling to use instead. (The scan runs on
+  the original user source, so the compiler's own internally-synthesized decorators - e.g. a
+  `@diamond` expansion - are never flagged.)
+
+| Removed decorator | Native spelling |
+|---|---|
+| `@contract class C { ... }` | a bare leaf `class C { ... }` |
+| `@abstract class C { ... }` | `abstract class C { ... }` |
+| `@struct class P { ... }` | a `type P = { a: T; ... }` object-type alias |
+| `@interface class I { ... }` | a TS `interface I { m(args): View<T> }`; implement via `class C extends I` |
+| `@library class L { ... }` | a `static class L { ... }` |
+| `@external m(): void` (state-mutating) | `m(args): External<T>` (void returns `External<void>`) |
+| `@external m(): T` (read-only, value-returning) | `get m(args): External<T>` |
+| `@external` / `@public` field | `x: Visible<T>` (public getter) |
+| `@public m()` | `m(args): External<T>` (`Payable<T>` if payable) |
+| `@internal m()` | drop it - a bare method/field is internal |
+| `@private` member | a leading `#` (e.g. `#x`, `#f()`) |
+| `@view` / `@pure` / `@read` | drop it - mutability is inferred (`View<T>`/`Pure<T>` markers only inside an `interface`) |
+| `@payable m()` | `m(args): Payable<T>` |
+| `@state x: T` | a bare field `x: T` |
+| `@constant K: T = v` | a `static K: T = v` field |
+| `@immutable K: T` | a `static K: T;` field (no initializer; assigned in the constructor) |
+| `@event E(...)` / member | `E: event<{ ... }>` (a field) or file-level `type E = event<{ ... }>` |
+| `@error E(...)` / member | `E: error<{ ... }>` (a field) or file-level `type E = error<{ ... }>` |
+| `@indexed p: T` | `p: indexed<T>` inside the `event<{ ... }>` shape |
+| `@receive` | a method named `receive() { ... }` (payable implied, no marker) |
+| `@fallback` | a method named `fallback() { ... }` |
+
+The **keep-list** decorators are still legal (they have no native spelling): `@virtual`, `@override`
+(and its override list), `@modifier` and every user-named modifier application, `@nonReentrant`,
+`@using`, `@diamond`, `@storage`, `@proxy`, `@beacon`, `@facet`, `@anonymous`, and `@payable` **on a
+constructor**. Separately, `@hidden` was never a native spelling and stays rejected (**JETH440**):
+internal is the bare default, so a member needs no visibility decorator at all.
+
 ## Differential audit (2026-06-20) - fixes
 
 A fresh adversarial differential audit against solc 0.8.35 found and fixed the following. All are
@@ -19,7 +69,7 @@ Silent miscompiles fixed (the dangerous class - JETH accepted + ran but produced
   results are now rejected at compile time (`JETH070`/`JETH079`), matching solc, instead of deferring
   to a runtime panic or silently truncating. Variable arithmetic (incl. `unchecked` wrapping) is
   unchanged - only fully-constant subtrees fold.
-- **enum declared INSIDE the `@contract class`** previously produced an EMPTY ABI (every function
+- **enum declared INSIDE the contract `class`** previously produced an EMPTY ABI (every function
   silently dropped, all calls revert). In-class enums are now hoisted to top level pre-parse and the
   contract compiles normally (TS cannot parse an enum as a class member).
 - **Nested array literal returns** (`return [[1n,2n],[3n,4n]]` directly typed as a dynamic `u256[][]`)
@@ -30,8 +80,8 @@ Silent miscompiles fixed (the dangerous class - JETH accepted + ran but produced
   supported byte-identical to solc (see "Nested / multi-dimensional MEMORY-array LOCALS" below).
 
 Over-acceptances fixed (JETH accepted programs solc rejects):
-- Conflicting state mutability (`@view @payable`, `@pure @payable`) is now rejected (`JETH052`).
-- `@public @state` was silently ignored (no getter). It now auto-generates a getter (solc parity);
+- Conflicting state mutability (a read-only function that is also payable) is now rejected (`JETH052`).
+- A public state getter (a `Visible<T>` field) was silently ignored (no getter). It now auto-generates a getter (solc parity);
   a getter colliding with a same-named function is a clean `JETH044`. Supported shapes, all
   byte-identical to solc:
   - value-type and `bytes`/`string` vars: `name() view returns (T)`.
@@ -50,7 +100,7 @@ Over-acceptances fixed (JETH accepted programs solc rejects):
     whole storage-struct component (head/tail) at any nesting depth, reached via a constant OR a runtime
     (mapping/array) slot. Byte-identical to solc (incl. empty-revert on array OOB, zero-struct absent key).
 
-  The auto-getter now matches solc for EVERY storage type JETH supports. The only `@public` vars solc
+  The auto-getter now matches solc for EVERY storage type JETH supports. The only public-getter (`Visible<T>`) vars solc
   accepts that JETH rejects are ones whose underlying STORAGE TYPE is itself unimplemented (so a manual
   getter or a write is rejected too, not a getter-specific over-rejection), e.g. `string[3][]` (a
   dynamic array of fixed arrays of a dynamic type, `JETH217`).
@@ -119,12 +169,12 @@ evaluates `and` arguments right-to-left, so an inline `returndatasize()` reads t
 
 The niche crypto precompiles take typed inputs and REVERT on invalid input (instead of the raw
 precompile's silent zero): `modexp(base, exp, mod)` -> `bytes` (0x05); `bn256Add(p, q)` /
-`bn256Mul(p, s)` over a 2-`u256`-field `G1Point @struct` / `bn256Pairing(input: bytes)` -> `bool`
+`bn256Mul(p, s)` over a 2-`u256`-field `G1Point` struct / `bn256Pairing(input: bytes)` -> `bool`
 (0x06/0x07/0x08); `blake2f(rounds, h, m, t, f)` -> `bytes(64)` (0x09); and
 `pointEvaluation(versionedHash, z, y, commitment, proof)` -> `[fe, modulus]` KZG (0x0a, destructure-only,
 192-byte `vh|z|y|commitment(48)|proof(48)` input matching EIP-4844).
 
-`@receive recv() { ... }` (payable implied) and `@fallback fb() { ... }` are the special entry points,
+A method named `receive() { ... }` (payable implied) and one named `fallback() { ... }` are the special entry points,
 dispatch byte-identical to Solidity's `receive()` / `fallback()` (empty calldata -> receive; a
 non-matching selector or value to a non-payable fallback -> fallback / revert).
 
@@ -151,7 +201,7 @@ concat) is a valid `revert` / `require` reason - lowered to a runtime `Error(str
 solc `revert(string.concat(...))`.
 
 Libraries (Phase A: internal, inlined) match solc's internal library functions byte-identically:
-`@library class L { add(a: u256, b: u256): u256 { return a + b; } }` with internal (inlined) functions,
+`static class L { add(a: u256, b: u256): u256 { return a + b; } }` with internal (inlined) functions,
 called either qualified `L.add(x, 1n)` or - via a `@using(L)` decorator on the contract - as an attached
 method `x.add(1n)` (which desugars to `L.add(x, 1n)` when `x`'s type matches the first parameter; Solidity's
 `using L for T` does not parse in the TS subset, hence the decorator). Library functions are emitted as
@@ -163,19 +213,19 @@ on a dynamic array, `.balance`/`.code`/`.codehash` on `address`), the member acc
 REJECTED `JETH341` (matching solc's "Member ... not unique after argument-dependent lookup"); rename the
 library function or call it qualified `L.f(x, ...)`. A library function attached to a DIFFERENT type than the
 receiver, or whose name is not a built-in member of the receiver type, is not a collision and resolves to the
-attached function (no-collision attached calls still work). Rejected (clean): a library with `@state` /
+attached function (no-collision attached calls still work). Rejected (clean): a library with a state field /
 constructor, `L.unknownMember`, and an ambiguous attachment.
 
 External (delegatecall) library functions (Phase B) are also supported, byte-identical to solc's public/
-external library functions: an `@external` method in a `@library` is deployed in the library's own bytecode
+external library functions: an `External<T>` method in a `static class` library is deployed in the library's own bytecode
 and called via `DELEGATECALL` to a link-time address. `compile()` returns the library artifacts +
 `linkReferences`; the deployer substitutes each deployed library's 20-byte address into the contract's
 `__$..$__` placeholders (the contract's Yul uses `linkersymbol("L")`, which solc resolves to the standard
 placeholder). Verified byte-identical (returndata + revert data + logs): qualified + attached external calls,
 string/bytes/struct/array params and returns, two-library linking, a library mixing internal (inlined) and
 external (delegatecall) functions, and - critically - revert bubbling (a string `revert` and a custom error
-both propagate through the delegatecall byte-for-byte). A library may not be `@payable` (a delegatecall takes
-no value); a `@pure`/`@view` caller of a nonpayable external library function is rejected exactly as solc
+both propagate through the delegatecall byte-for-byte). A library method may not be payable (a delegatecall takes
+no value); a pure/view caller of a nonpayable external library function is rejected exactly as solc
 rejects it. Storage-reference library parameters (solc's `using For` over a mutated storage type) remain
 unsupported - JETH has no storage-reference parameter, so the pattern is not expressible.
 
@@ -188,7 +238,7 @@ the clone's code (read by the impl via `cloneArgs()` -> bytes, `.decode(T)` for 
 `predictCloneWithArgs` give the CREATE2 address; `isContract(addr)` -> bool. Verified byte-identical to a solc
 EIP-1167 factory: the deployed clone's runtime bytecode, the delegatecall round-trip (runs in the clone's
 storage), `predictClone == ` the actual deploy address, the `cloneArgs` round-trip, and clone-storage
-independence. A deploying builtin writes state, so it is rejected in a `@view`/`@pure` function (matching
+independence. A deploying builtin writes state, so it is rejected in a view/pure function (matching
 solc). New diagnostics JETH395-397.
 
 EIP-1967 upgradeable proxies (the foundation of the Transparent / UUPS / Beacon variants) are supported,
@@ -197,7 +247,7 @@ canonical delegate fallback (forward all calldata to the EIP-1967 implementation
 over the collision-resistant fixed slots: `proxyInit(impl[, admin], initData)` (constructor - code-checks the
 impl, writes the slot(s), runs the init delegatecall once, emits `Upgraded(address indexed)`);
 `upgradeProxy(newImpl, data)` (the user gates who may call it); `proxyImplementation()` / `proxyAdmin()`. A
-`@proxy` may not declare `@state` (storage belongs to the impl) or a user `@receive`/`@fallback`
+`@proxy` may not declare state (storage belongs to the impl) or a user `receive()`/`fallback()`
 (JETH398/399). Verified byte-identical (returndata + the proxy's storage slots + the `Upgraded` topic/data +
 revert): calls route into the proxy's storage (impl's own untouched), the impl/admin slots, the
 upgrade-and-event round-trip, the one-time init, the bubbled init-revert, and the auth / isContract gates.
@@ -206,8 +256,8 @@ The **Transparent** variant `@proxy('transparent')` is supported, byte-identical
 `upgradeToAndCall(address,bytes)` (any other admin selector reverts `ProxyDeniedAdminAccess()` `0xd2b576ec`),
 and every non-admin call delegates to the impl (so a non-admin call whose selector collides with
 `upgradeToAndCall` still hits the impl, defeating the selector clash). A transparent proxy may not declare
-`@external` methods (JETH400/401). The **UUPS** variant is supported, byte-identical to OZ `UUPSUpgradeable`:
-the proxy is the plain `@proxy` (delegate-only) and a `@uups @contract` carries the upgrade logic -
+`External<T>` methods (JETH400/401). The **UUPS** variant is supported, byte-identical to OZ `UUPSUpgradeable`:
+the proxy is the plain `@proxy` (delegate-only) and a `@uups` class carries the upgrade logic -
 `@uups` synthesizes `upgradeToAndCall(address,bytes)` (calls the user-defined `authorizeUpgrade(newImpl)`
 gate; the anti-brick `proxiableUUID()` staticcall on the new impl - a failed/short call reverts
 `ERC1967InvalidImplementation(address)` `0x4c9c8ce3`, a wrong slot reverts `UUPSUnsupportedProxiableUUID(bytes32)`
@@ -221,27 +271,27 @@ new impl and emits `Upgraded(address indexed)`, plus `implementation()` / `owner
 caller reverts `OwnableUnauthorizedAccount(address)` `0x118cdaa7`), and a `@proxy('beacon') class P {
 constructor(beacon, initData) { proxyInitBeacon(beacon, ...); } }` is the beacon proxy: its fallback reads
 the EIP-1967 beacon slot, staticcalls `implementation()` (`0x5c60da1b`) on every call, then delegatecalls,
-so one `beacon.upgradeTo` swaps every proxy at once. A beacon proxy may not declare `@external` methods or
-`@state` (JETH405-408). Verified byte-identical (returndata + each proxy's own storage + the `Upgraded`
+so one `beacon.upgradeTo` swaps every proxy at once. A beacon proxy may not declare `External<T>` methods or
+state (JETH405-408). Verified byte-identical (returndata + each proxy's own storage + the `Upgraded`
 topic/data + revert): per-call routing into each proxy's separate storage, the beacon slot, the
 `implementation()`/`owner()` getters, the owner gate, and an upgrade-all-at-once over two proxies on one
 beacon (both swap, independent state preserved).
 
 The **Diamond** (EIP-2535 multi-facet proxy) is supported in all three reference storage layouts, byte-identical
 to hand-written solc 0.8.35 mirrors. The foundation is **`@storage('ns')` namespaced storage** (EIP-7201): a
-storage field marked `@storage('ns')` (instead of `@state`) lives in a struct rooted at
+storage field marked `@storage('ns')` (instead of a bare state field) lives in a struct rooted at
 `base(ns) = keccak256(abi.encode(uint256(keccak256(bytes(ns))) - 1)) & ~0xff`; fields sharing a namespace string
-form one logical struct (sequential + packing within it), different namespaces are isolated, and `@state` fields
+form one logical struct (sequential + packing within it), different namespaces are isolated, and bare state fields
 stay at sequential slot 0 - all collision-safe (verified byte-identical to a solc ERC-7201 struct across scalars,
 packed fields, mappings, dynamic/fixed arrays, `mapping(K=>struct)` values, and `bytes`; JETH409 gates `@storage`
-against `@state`/`@constant`/`@immutable`). A **`@facet class F { ... }`** is an ordinary deployable contract
-whose `@storage('ns')` state and `@external` selectors are cut into a diamond. A **`@diamond('<model>') class D`**
+against a plain state field / `static` constant / `static` immutable). A **`@facet class F { ... }`** is an ordinary deployable contract
+whose `@storage('ns')` state and `External<T>` selectors are cut into a diamond. A **`@diamond('<model>') class D`**
 synthesizes the whole EIP-2535 surface (the user writes only `constructor(owner) { diamondInit*(owner); }`): the
 selector-router fallback (sload the facet for `msg.sig`, delegatecall, return-or-bubble, "Diamond: Function does
 not exist" on a miss), an owner-gated `diamondCut(FacetCut[],_init,_calldata)` with the model's exact
 Add/Replace/Remove + the `_init` delegatecall + the `DiamondCut` event, the four `IDiamondLoupe` functions
 (`facets`/`facetFunctionSelectors`/`facetAddresses`/`facetAddress`), ERC-165, and ownership. A `@diamond` may not
-declare `@state`/`@external`/`@receive`/`@fallback`/events (all synthesized); diagnostics JETH411-414. The three
+declare state / `External<T>` methods / `receive()` / `fallback()` / events (all synthesized); diagnostics JETH411-414. The three
 models (a different storage layout each, identical external surface):
 - **`@diamond('array')`** (the diamond-1/3-hardhat layout): `selectorToFacetAndPosition` + per-facet
   `bytes4[] functionSelectors` + `address[] facetAddresses` at `keccak256("diamond.standard.diamond.storage")`;
@@ -266,12 +316,12 @@ expressible, so a TRUE born-frozen-at-deploy diamond - facets wired once in the 
 `diamondCut` - is a possible follow-up; the finalizable freeze above already provides immutability.) All
 diamond/proxy patterns are delegatecall-only with no raw `delegatecall`/`CREATE` in user code.
 
-A DYNAMIC-field struct (a `@struct` with `bytes`/`string` fields) assigned to storage from a memory
+A DYNAMIC-field struct (a struct with `bytes`/`string` fields) assigned to storage from a memory
 local (`this.d = m`) or a calldata struct param (`this.d = p`) now writes value fields packed and
 `bytes`/`string` fields with overwrite-clear (byte-identical incl. raw slots, packing, and long->short
 overwrite). A struct with a dynamic-ARRAY field from a memory/calldata source stays a clean rejection.
 
-`@constant` `address` / `bytesN` (left-aligned) / `string` are supported: slot-free compile-time
+`static` `address` / `bytesN` (left-aligned) / `string` constants are supported: slot-free compile-time
 constants substituted at each read site (a string as a fresh memory literal), byte-identical to solc
 and consuming no storage slot.
 
@@ -329,14 +379,14 @@ internal type) is supported behaviorally byte-identical to solc 0.8.35. Address-
 yields a value-typed pointer (a stable small integer id identifying the target function); a call `f(v)`
 through it dispatches on the id (a switch over every address-taken target of the matching signature) and
 invokes the target, so `apply(this.inc, 5n) == inc(5) == 6`. Supported surface: a function-pointer
-PARAMETER and RETURN of an `@internal`/`@private` function; a `let`-bound / `@state` pointer variable; a
+PARAMETER and RETURN of an internal (bare) or private (`#`) function; a `let`-bound / state pointer variable; a
 conditional pointer (`c ? this.inc : this.dec`); a pointer passed through several functions or returned
-then called; `@pure`/`@view`/mutating targets (the enclosing function's mutability is validated against
+then called; pure/view/mutating targets (the enclosing function's mutability is validated against
 every same-signature target it may invoke); `f == g` / `f != g` (equal iff the same target function).
 Value-typed signatures only. A call through a NULL/unset pointer reverts `Panic(0x51)`, exactly like
 solc's zero-initialized internal function type. REJECTED (clean, matching solc): observing the raw pointer
-as an integer (`u256(f)`, returning it as a uint), ABI-encoding a pointer, a funcref in an `@external`/
-`@public` signature (not ABI-encodable), taking the address of an `@external` or OVERLOADED function, and
+as an integer (`u256(f)`, returning it as a uint), ABI-encoding a pointer, a funcref in an externally-exposed
+(`External<T>`) signature (not ABI-encodable), taking the address of an `External<T>` or OVERLOADED function, and
 external function types / selectors-as-values (out of scope). Not supported yet (clean reject): an ARRAY or
 STRUCT of function pointers.
 
@@ -394,21 +444,26 @@ returning a whole MAPPING value `return this.m[k]` (struct / dynamic struct / va
 array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 
 ### Surface / declarations
-- `@contract` class -> contract.
-- `@state` fields -> storage slots (Solidity-compatible layout + packing).
+- A bare leaf `class C { ... }` -> contract.
+- Bare fields (`x: T`) -> storage slots (Solidity-compatible layout + packing).
 - Methods -> ABI functions.
-- Visibility: `@external` is the SOLE writable visibility decorator (an exposed ABI entry point).
-  A function / state variable WITHOUT `@external` is INTERNAL (private-by-default): callable by name
-  from inside the contract, never in the ABI, not externally callable. `@public`/`@internal`/
-  `@private`/`@hidden` are not writable (`JETH054`) - the compiler owns the internal-side decision
-  (private now; private vs internal inferred from cross-contract use once inheritance lands). A
-  `@external @state` variable gets an auto-generated getter and is still usable in code. To expose
-  logic that also recurses / is reused internally, write an `@external` wrapper over an internal impl.
-- Mutability decorators: `@view`, `@pure`, `@payable` (default nonpayable). INFERENCE: `@read` marks a
-  read-only function, resolved to `@pure` (touches no state/env, transitively) or `@view` (reads, never
-  writes); a transitive write is rejected (JETH056). All inference resolves to a concrete
-  visibility+mutability before ABI emission, so the generated ABI is the true one.
-- Constant state initializers (`@state x: u256 = 42n`) -> written in creation code.
+- Visibility: an `External<T>` (or `Payable<T>`) return marker is the SOLE way to expose a function
+  (an ABI entry point); a public state getter is a `Visible<T>` field. A method / field WITHOUT such a
+  marker is INTERNAL (private-by-default): callable by name from inside the contract, never in the ABI,
+  not externally callable; a private member is spelled with a leading `#`. The legacy `@public` /
+  `@internal` / `@private` decorators are removed (`JETH481`, pointing at the native spelling) and
+  `@hidden` is rejected (`JETH440`) - the compiler owns the internal-side decision (private now;
+  private vs internal inferred from cross-contract use once inheritance lands). A `Visible<T>` field
+  gets an auto-generated getter and is still usable in code. To expose logic that also recurses / is
+  reused internally, write an `External<T>` wrapper over an internal impl.
+- Mutability is INFERRED from the body (no marker): a read-only function resolves to pure (touches no
+  state/env, transitively) or view (reads, never writes), a read-only value-returning external is
+  spelled with `get` (`get f(): External<T>`, else `JETH352`), and a payable function returns
+  `Payable<T>`. A transitive write in a would-be read-only function is rejected (JETH056). Inside an
+  `interface`, the `View<T>` / `Pure<T>` / `Payable<T>` markers state the declared mutability. All
+  inference resolves to a concrete visibility+mutability before ABI emission, so the generated ABI is
+  the true one.
+- Constant state initializers (a bare `x: u256 = 42n` field) -> written in creation code.
 
 ### Types
 - `u8`..`u256`, `i8`..`i256` (BigInt literals only).
@@ -441,16 +496,16 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
 ### Reverts & custom errors (Phase 2)
 - `require(cond)`, `require(cond, "msg")`, `revert()`, `revert("msg")` -> byte-exact
   `Error(string)` / empty revert (verified vs solc; UTF-8 length, word padding).
-- Custom errors: `@error Name(p: T);` declaration; `revert(Name(args))` /
-  `require(cond, Name(args))` -> selector + ABI-encoded static args. Error args are
+- Custom errors: a file-level `type Name = error<{ p: T }>` (or a `Name: error<{ p: T }>` member);
+  `revert(Name(args))` / `require(cond, Name(args))` -> selector + ABI-encoded static args. Error args are
   evaluated **eagerly** (a side-effecting arg reverts even when the condition passes),
   matching solc. `type:"error"` entries emitted in the ABI.
 
 ### Events (Phase 2)
-- `@event Name(@indexed p: T, q: U);` declaration; `emit(Name(args));`.
+- A file-level `type Name = event<{ p: indexed<T>; q: U }>` (or a `Name: event<{ ... }>` member); `emit(Name(args));`.
 - topic0 = keccak256(canonical sig); `LOG(nIndexed+1)`; indexed params -> topics
   (int sign-extended, bytesN left-aligned, bool/uint/address as the word); non-indexed
-  params -> ABI data region in declaration order. Rejected in `@view`/`@pure`.
+  params -> ABI data region in declaration order. Rejected in view/pure functions.
   `type:"event"` entries (with `indexed` flags) emitted in the ABI.
 
 ### Mappings (Phase 3)
@@ -462,12 +517,12 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   (uint zero-ext, int sign-ext, address zero-ext, bytesN left-aligned).
 
 ### Environment globals (Phase 3)
-- `msg.sender` (CALLER), `msg.value` (CALLVALUE, **@payable only**), `msg.sig` (selector),
+- `msg.sender` (CALLER), `msg.value` (CALLVALUE, **payable only**), `msg.sig` (selector),
   `tx.origin` (ORIGIN), `address(this)` (ADDRESS), and `block.timestamp/number/chainid/
-  coinbase/basefee/gaslimit/prevrandao`. Forbidden in `@pure` (except `msg.sig`).
+  coinbase/basefee/gaslimit/prevrandao`. Forbidden in pure functions (except `msg.sig`).
 
 ### Payable & address (Phase 3)
-- `@payable` functions accept ETH (no callvalue guard); non-payable reject it (empty revert).
+- Payable functions (a `Payable<T>` return marker) accept ETH (no callvalue guard); non-payable reject it (empty revert).
 - `address(0n)` literal; `payable(x)`; `address<->uint160` (no-op) and `address<->bytes20`
   (96-bit shift) casts. Address comparisons are unsigned; address arithmetic is rejected.
 
@@ -488,11 +543,11 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   packed storage to full words), mixed static+dynamic args.
 
 ### Structs (Phase 4c)
-- `@struct class Name { ... }`; mixed-width field packing (Solidity-identical slots); `this.s.field`
+- A struct type `type Name = { ... }`; mixed-width field packing (Solidity-identical slots); `this.s.field`
   read/write (RMW); positional `Name(...)` construction, incl. nested `Outer(p, Inner(a,b), q)`
   (flattened into packed slots, Phase 4e-2c); whole-struct assignment; struct -> ABI tuple return.
-- A `@struct` may have a MAPPING field (G7): `struct Acct { uint256 head; mapping(address => uint256) bal; }`.
-  Such a struct is STORAGE-ONLY (matching solc): allowed as a `@state` var or a mapping VALUE
+- A struct may have a MAPPING field (G7): `type Acct = { head: u256; bal: mapping<address, u256> }`.
+  Such a struct is STORAGE-ONLY (matching solc): allowed as a state field or a mapping VALUE
   (`mapping<K, Acct>`), accessed via `this.s.bal[a]` / `this.m[k].bal[a]` (the mapping base is the
   field slot `structBase + fieldSlot`; value at `keccak(key . base)`); the mapping field never packs
   with neighbours (its own slot). Byte-identical to solc on raw storage slots. A struct containing a
@@ -517,7 +572,7 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   `this.mat[r][c]`. Whole-slot index elements; byte-identical raw slots + OOB `Panic(0x32)`.
 
 ### Storage dynamic array of struct (Phase 4e-2)
-- `@state recs: Rec[]` (the "list of records" pattern): `this.recs.push(Rec(...))`,
+- A state field `recs: Rec[]` (the "list of records" pattern): `this.recs.push(Rec(...))`,
   `push()` (zero element), `this.recs.pop()`, `this.recs[i].field` read/write (RMW,
   incl. nested-struct and fixed-array element fields), `this.recs.length`. Element
   at `keccak(p)+i*storageSlotCount(struct)`, fields packed Solidity-identically.
@@ -543,7 +598,7 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   still gated is ELEMENT access into such a field on a calldata param (`s.xs[i]` -> JETH230).
 
 ### Storage / mapping-valued `string[]` / `bytes[]`
-- `@state ss: string[]` / `bytes[]` and `mapping<K, string[]>` / `mapping<K, bytes[]>`:
+- State fields `ss: string[]` / `bytes[]` and `mapping<K, string[]>` / `mapping<K, bytes[]>`:
   layout mirrors solc (length at slot `p` / runtime mapping slot `keccak(key.base)`;
   element header `i` at `keccak(lenSlot)+i`, a normal storage bytes/string: short
   `<32` inline, long `>=32` with `keccak(headerSlot)` data slots). Supports
@@ -571,7 +626,7 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   pointer arithmetic). Byte-identical to Solidity (differentially verified).
 - STORAGE array compositions (G6): `Arr<T[],N>` (= `uint256[][N]`, a fixed array of dynamic
   arrays) and `Arr<T,N>[]` (= `uint256[N][]`, a dynamic array of fixed arrays, incl. packed
-  fixed elements like `uint8[4][]`) work as `@state` vars: element access, `.push`, `.length`,
+  fixed elements like `uint8[4][]`) work as state fields: element access, `.push`, `.length`,
   and nested indexing (`a[i][j]`), byte-identical to solc incl. raw storage slots. A whole
   calldata-param or return of these composite shapes stays gated.
 
@@ -584,12 +639,12 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   echo which cleans). Storage `Pt[]` and `ps[i]` whole-element are still deferred.
 
 ### Storage / mapping-valued dynamic structs (Phase 4e-7)
-- A `@struct` with >=1 bytes/string field (a DYNAMIC struct) in STORAGE or as a
+- A struct with >=1 bytes/string field (a DYNAMIC struct) in STORAGE or as a
   mapping value: solc-identical layout (contiguous slots; each static field uses
   normal packed storage; each bytes/string field at `base + fieldSlot` is a normal
   storage bytes/string: short `<32` inline, long `>=32` with `keccak(headerSlot)`
-  data slots). Supports a bare `@state d: D`, a `mapping<K, D>` value, a dynamic
-  array of dynamic struct `@state recs: D[]` (and a `mapping<K, D[]>` value), and a
+  data slots). Supports a bare state field `d: D`, a `mapping<K, D>` value, a dynamic
+  array of dynamic struct `recs: D[]` (and a `mapping<K, D[]>` value), and a
   nested `Outer{x; D inner; y}`. Operations: `this.d.field` read/write for both a
   static field (packed RMW) and a bytes/string field (`storeStrMem`, overwrite-
   clearing the old tail); whole-struct assignment `this.d = D(a, s)` (each field
@@ -607,7 +662,7 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   param / return, and fixed `Arr<D,N>` of a dynamic struct, stay gated.
 
 ### Dynamic structs (Phase 4e-6)
-- A `@struct` with >=1 dynamic field (bytes/string, or a nested struct that is
+- A struct with >=1 dynamic field (bytes/string, or a nested struct that is
   itself dynamic) is a DYNAMIC struct (spec section 3) and is supported as a
   calldata PARAM and as a RETURN, byte-identical to Solidity. Static fields stay
   INLINE in the tuple head (declaration order); each dynamic field gets a head
@@ -622,7 +677,7 @@ array / `string[]`) encoded from the runtime `keccak(key . base)` slot.
   relative to the tuple start (spec section 3.2); bounds checks per dynamic level;
   any layout fault (offset/length past calldatasize, truncated head, wrong-base
   offset) -> EMPTY revert; field reads are LAZY (a malformed UNREAD dynamic field
-  is ignored). Differentially verified. A `@struct` with a dynamic-ARRAY field
+  is ignored). Differentially verified. A struct with a dynamic-ARRAY field
   (`T[]`/`string[]`/`T[][]`) is now supported in storage, as a whole-struct RETURN,
   and as a whole-struct calldata-param echo; only ELEMENT access into such a field of
   a calldata struct param (`s.xs[i]`) stays gated (JETH230). `D[]` (a dynamic array of
@@ -664,7 +719,7 @@ and is never miscompiled.
 - STATIC struct MEMORY locals are supported (G9): `let p: P = P(...)` construct, value-field read/write
   including nested chains (`p.x`, `p.inner.x`, `d.o.inner.a`, `p.x = v`, `p.x += v`, `p.x++`),
   whole-struct return, and memory aliasing (`let q = p`; a write through `q` is visible through `p`).
-  @internal/@private functions take and RETURN static structs as memory by reference (mutation in a
+  internal / private functions take and RETURN static structs as memory by reference (mutation in a
   callee is visible to the caller); a struct can be passed, returned, bound to a local, chained, and
   built via recursion. Also supported: copying a memory local FROM a storage struct or calldata struct
   param (`let p: P = this.s` / `= calldataParam`, a fresh COPY); reading a whole nested struct field
@@ -730,19 +785,19 @@ and is never miscompiled.
   rather than `type:"tuple"` + `components` (selectors are canonical and correct; JSON-shape polish).
 - `msg.data` is the whole calldata as `bytes` (selector included, so `msg.data.length` ==
   `calldatasize()`): `.length`, copy to a memory bytes / return, and byte-indexing (Panic 0x32 OOB);
-  allowed in `@pure` (calldata, like `msg.sig`).
+  allowed in pure functions (calldata, like `msg.sig`).
 - An indexed FIXED-array or static-struct event param is a keccak topic of `abi.encode(value)` (from a
-  `@state` source or a calldata-param source). Indexed `bytes`/`string` and indexed DYNAMIC
+  a state-field source or a calldata-param source). Indexed `bytes`/`string` and indexed DYNAMIC
   value-element arrays also work (keccak of the content / element words). All byte-identical to solc.
-- `@constant` fields: a slot-free compile-time constant (uintN/intN/bool) inlined at each read site
+- `static` constant fields: a slot-free compile-time constant (uintN/intN/bool) inlined at each read site
   (no SLOAD, no storage slot, absent from the ABI), byte-identical to solc incl. raw storage layout.
 - Evaluation ORDER of side-effecting subexpressions now matches solc: BINARY operands evaluate
   RIGHT-to-LEFT and ARGUMENT lists (array literals, return tuples, event/error args, call args)
   LEFT-to-RIGHT, byte-identical to solc (verified). This covers `++`/`--` in value position and
   assignment-expressions `(x = v)`/`(x += v)`/`x = y = a`.
 - Internal/private/public function calls are supported (`this.method(...)` or bare `name(...)`)
-  for value-typed and void params/returns (plus static-struct params/returns to @internal/@private
-  callees), with recursion, mutual recursion, and transitive `@view`/`@pure` purity. A MULTI-VALUE
+  for value-typed and void params/returns (plus static-struct params/returns to internal / private
+  callees), with recursion, mutual recursion, and transitive view/pure purity. A MULTI-VALUE
   internal call (value return components) is callable via tuple destructuring (below). Aggregate
   (array/bytes/string) params/returns through an internal call remain gated. At internal call sites,
   default arguments (`f(a, b = 10n)`) and named arguments (`this.f({ a, b })`) are supported (F3),
@@ -755,12 +810,12 @@ and is never miscompiled.
 - **Phase 5 (functions in depth) - constructors, immutables, modifiers** (byte-identical to solc
   incl. raw storage slots): a `constructor(params) { body }` runs once at deploy - value-type params
   (uintN/intN/bool/address/bytesN/enum/branded) are ABI-decoded from the args appended to the init
-  code (decoded from memory), the body may write `@state` and read `msg.sender` / `msg.value`
-  (`@payable`) / `address(this)`, constant field initializers run before it, and a non-payable
-  constructor rejects deploy-time value. `@immutable` value-type fields are assigned in the
+  code (decoded from memory), the body may write state and read `msg.sender` / `msg.value`
+  (payable) / `address(this)`, constant field initializers run before it, and a non-payable
+  constructor rejects deploy-time value. Immutable value-type fields (a ctor-assigned `static K: T;`) are assigned in the
   constructor and baked into the runtime code via `setimmutable`/`loadimmutable` - they consume NO
   storage slot (a constructor read sees the staged value, a runtime read is `loadimmutable`, and
-  reading one needs `@view` not `@pure`). User `@modifier`s (a single `_` placeholder, applied via
+  reading one needs view not pure). User `@modifier`s (a single `_` placeholder, applied via
   `@name` / `@name(args)`) inline their code around the body - both PRE-code (a guard like
   `require(cond); _;`) and POST-code (after `_`). Post-code with an early `return` uses solc-identical
   buffered-return semantics: the body's `return` runs the enclosing modifier post-code (inner-first,
@@ -789,9 +844,9 @@ Each of the following compiles to a clean compile-time error (verified), not a m
 - **ELEMENT access into a dynamic-array field of a calldata struct param** (`s.xs[i]` where
   `xs: u256[]`/`string[]`) - JETH230. The WHOLE-struct echo / return of such a param works.
 - **Aggregate (array / `bytes` / `string`) params or returns through an internal call** - JETH242.
-  Value-typed and static-struct params/returns to `@internal`/`@private` callees work.
+  Value-typed and static-struct params/returns to internal / private callees work.
 - **A struct param to a PUBLIC/EXTERNAL callee via an internal call** - JETH242 (that is a message
-  call, Phase 6); a struct param to an `@internal`/`@private` callee works (by-reference memory).
+  call, Phase 6); a struct param to an internal / private callee works (by-reference memory).
 - **A struct memory local with a DYNAMIC-array field** (`u256[]` / `string[]`) - JETH200; and ELEMENT
   access into a FIXED-array field through such a local (`s.a[i]`) - JETH900. Value-typed,
   `bytes`/`string`-field, and NESTED-STRUCT-field struct memory locals work fully (G9/G10).
@@ -811,9 +866,9 @@ Each of the following compiles to a clean compile-time error (verified), not a m
 - **Phase 5 constructor / immutable / modifier - now at solc parity** (the main over-rejections were
   lifted, byte-identical to solc): a constructor with an **aggregate/dynamic param** (`uint[]`/`bytes`/
   `string`/struct - JETH302), a constructor that **calls an internal function** (JETH303), an
-  `@external @immutable` with its auto-generated **view getter** (JETH312), a `@modifier` with its `_`
+  an immutable field exposed with a getter and its auto-generated **view getter** (JETH312), a `@modifier` with its `_`
   placeholder **inside a conditional** (the 0-or-N-times shape; skipping `_` returns the function's zero
-  value - JETH321), and an inline-initialized `@immutable` (JETH311) are all now SUPPORTED. The
+  value - JETH321), and an inline-initialized immutable field (JETH311) are all now SUPPORTED. The
   REMAINING clean gates (rare shapes; each a diagnostic, never a miscompile): a defaulted ctor param
   (JETH304 - JETH-specific, no solc form); a non-value-type immutable (JETH310) and an immutable
   assigned outside the constructor (JETH313) are accept/reject PARITY (solc rejects too); and a few rare
@@ -821,7 +876,7 @@ Each of the following compiles to a clean compile-time error (verified), not a m
   (JETH322), a `return` inside the modifier body (JETH324 value-return = parity / JETH325 bare-return), a
   generic modifier (JETH327), and a POST-code modifier on an aggregate/dynamic-param or
   multi-value/aggregate-return function or constructor (JETH323). One known low-severity over-rejection:
-  a constructor that *provably* overflows a staged `@immutable` read at runtime is rejected (JETH901)
+  a constructor that *provably* overflows a staged immutable-field read at runtime is rejected (JETH901)
   where solc accepts and the deploy then reverts (the contract is non-functional in both compilers).
 - **Phase 6 remaining** (external low-level/message calls, `abi.decode`, interface calls, `try`/`catch`
   and `new Array<T>(n)` are DONE): inheritance, libraries (`using for`/`DELEGATECALL`), abstract
@@ -867,9 +922,9 @@ in a struct literal IS supported, F2.)
 - `require`/`revert` custom-error arguments are evaluated eagerly (unconditionally),
   so an arg that reverts fires even when the condition passes - matches solc, not
   JS short-circuit intuition.
-- `msg.value` is readable only in `@payable` functions (matches solc; it is NOT
+- `msg.value` is readable only in payable functions (matches solc; it is NOT
   silently 0 elsewhere). Reading environment globals (`msg.*`/`block.*`/`tx.*`/
-  `address(this)`) is forbidden in `@pure`.
+  `address(this)`) is forbidden in pure functions.
 - `address` is a distinct value type: comparisons are unsigned, arithmetic is
   rejected, and `address`/`address payable` share one EVM word (payable->plain is
   implicit, the reverse needs `payable(...)`).

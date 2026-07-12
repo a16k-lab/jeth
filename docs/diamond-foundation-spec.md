@@ -1,5 +1,11 @@
 # Diamond foundation spec: `@storage('ns')` namespaced storage + bigint base-slot widen
 
+> **Historical (design/build record).** JETH is now native-syntax only: the decorator spellings below are
+> the retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481). `@storage`
+> and `@diamond` remain legal. See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 This is the FIRST shared-core deliverable for the EIP-2535 diamond work (see docs/proxy-design.md "Phase 3").
 It is a self-contained, independently byte-checkable unit: a contract with `@storage('ns')` fields laid out at
 an ERC-7201 keccak-derived base slot, byte-identical to a hand-written solc namespaced-storage struct. Everything

@@ -1,5 +1,11 @@
 # Diamond ARRAY model (diamond-1/3 layout) - build spec
 
+> **Historical (design/build record).** JETH is now native-syntax only: the decorator spellings below are
+> the retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481). `@storage`
+> and `@diamond` remain legal. See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 Builds the first complete EIP-2535 diamond on the `@storage('ns')` foundation (commit 2652595, see
 docs/diamond-foundation-spec.md). Byte-identity target: a hand-written solc 0.8.35 diamond using the
 diamond-3-hardhat storage layout + IN-DIAMOND loupe/cut/owner dispatch (NOT separate facets). The harness

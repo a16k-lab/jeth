@@ -29,18 +29,22 @@ npm test     # compiles Counter, deploys on @ethereumjs/evm, asserts state
 
 ## Example
 
-```typescript
-@contract
-class Counter {
-  @state count: u256 = 0n;
+JETH is **native-syntax only**: a bare `class` is the deployed contract, a bare
+field is contract state, `External<T>` exposes a function to the ABI, and mutability
+is inferred (a read-only value-returning entry is spelled with `get`). No decorators
+are required for the ordinary surface. See the
+[Legacy decorator removal](SUPPORTED.md#legacy-decorator-removal-native-syntax-only)
+section for the retired decorator spellings and their native replacements.
 
-  @external
-  increment(): void {
+```typescript
+class Counter {
+  count: u256 = 0n;
+
+  increment(): External<void> {
     this.count += 1n;   // checked uint256 add -> SSTORE at slot 0
   }
 
-  @view
-  current(): u256 {
+  get current(): External<u256> {
     return this.count;
   }
 }
@@ -59,8 +63,9 @@ globals, `payable`, `address(this)`), Phase 4 (the full ABI-v2 surface: arrays,
 structs, `bytes`/`string`, dynamic head/tail encode/decode with unbounded nesting,
 storage/calldata composites, memory locals, internal calls + overloading, tuple
 destructuring, `delete`, events/errors), and Phase 5 (functions in depth: constructors
-with ABI-encoded args, `@immutable` fields baked into code with no storage slot, and
-user `@modifier`s with pre/post code + solc-identical buffered return). Phase 6 is in
+with ABI-encoded args, immutable fields - a ctor-assigned `static K: T;` - baked into
+code with no storage slot, and user `@modifier`s with pre/post code + solc-identical
+buffered return). Phase 6 is in
 progress (external low-level calls `addr.call`/`tryCall`/`staticcall`, `abi.decode`,
 typed interface calls `IFoo(addr).bar(x)`, `try`/`catch`, `new Array<T>(n)`,
 `addr.code`/`codehash`). Returndata, raw storage slots (including keccak-derived mapping
@@ -80,8 +85,9 @@ adversarially audited:
 - **Exhaustive `switch`** over enums/value types (no implicit fall-through, exhaustiveness checked)
 - **Generics** `f<T>(...)` (compile-time monomorphization, internal-only)
 
-plus a `@read` **mutability-inference** helper (infers `@pure` vs `@view`) and a deliberately minimal
-visibility surface (`@external` exposes a function; everything else is internal). See
+plus compile-time **mutability inference** (the compiler resolves `view` vs `pure` from a function's
+body, so no marker is written; `View<T>`/`Pure<T>` markers exist only inside an `interface`) and a
+deliberately minimal visibility surface (`External<T>` exposes a function; everything else is internal). See
 [docs/distinctive-features.md](docs/distinctive-features.md) for these and [SUPPORTED.md](SUPPORTED.md)
 for the full Solidity-parity matrix. Remaining Phase 6 work: inheritance, libraries (`using for` /
 `DELEGATECALL`), `ecrecover` + precompiles, `receive`/`fallback`, function types, `bytes`/`string.concat`,

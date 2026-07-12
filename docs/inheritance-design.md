@@ -1,5 +1,11 @@
 # JETH contract inheritance - design spec (solc 0.8.35-verified)
 
+> **Historical (design record).** JETH is now native-syntax only: the decorator spellings below are the
+> retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481; `@virtual` /
+> `@override` remain legal). See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 Multiple contract inheritance via **compile-time flattening** (solc has no runtime vtables): the
 deployed contract is the C3-linearized merge of its base chain. JETH flattens the hierarchy into ONE
 `ContractIR` *before* the existing analyze/emit pipeline, so most of the pipeline is reused unchanged.

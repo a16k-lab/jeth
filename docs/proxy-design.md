@@ -1,5 +1,11 @@
 # JETH proxies - design spec (OZ 5.x / EIP-1167 / EIP-1967 verified)
 
+> **Historical (design record).** JETH is now native-syntax only: the decorator spellings below are the
+> retired legacy surface (`// use @decorators` -> JETH480, structural decorators -> JETH481; `@proxy` /
+> `@beacon` / `@facet` / `@diamond` / `@storage` remain legal). See the
+> [native-spelling table](../SUPPORTED.md#legacy-decorator-removal-native-syntax-only). The described
+> semantics are unchanged; only the surface syntax was replaced.
+
 The whole-system safety rule: there is NO `addr.delegatecall(...)` primitive in user code. delegatecall is
 reachable ONLY through these structured, byte-identical-to-OpenZeppelin patterns. Four patterns, built in
 phases. **Phase 1 (THIS spec): the MINIMAL PROXY (EIP-1167 clone) + immutable args.** It is self-contained -
