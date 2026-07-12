@@ -567,10 +567,12 @@ Also confirmed in passing (safe, pre-existing): the JETH387 receive/fallback int
 the batch-C funcRefCall ordering are unregressed; solc-legacy stack-too-deep at 40 params is a
 LEGACY-WALL where JETH is strictly more capable (documented in distinctive-features section 4).
 
-**OPEN over-acceptance (found by the ABSTRACT-METHOD-DECL verify, 2026-07-12, pre-existing at
-`8171315`, inherited byte-identically by the abstract spelling):** a class declaring the SAME
-bodyless `@virtual` member TWICE (`abstract class B { @virtual f(v: u256): External<u256>;
-@virtual f(v: u256): External<u256>; }` + an overriding leaf) compiles while solc rejects
-"Function with same name and parameter types defined twice" (dup and mixed @virtual/abstract
-spellings alike). Fix direction: a per-class duplicate-signature check over bodyless member
-declarations (the JETH342 in-interface twin already rejects).
+**DUP-BODYLESS-VIRTUAL - CLOSED (2026-07-12, `b322386`):** a same-class duplicate signature
+involving a bodyless declaration (identical `@virtual` pair, TS `abstract` pair, MIXED pair,
+bodyless+concrete either order, bodyless get pair, triple, and a middle-class-of-chain pair) was
+silently accepted byte-identical to the single declaration - a bodyless declaration never became a
+FunctionIR, so the concrete-duplicate JETH044 check never saw it. Now every flavor rejects JETH044
+with the concrete-duplicate message shape (solc-witnessed: DeclarationError "Function with same name
+and parameter types defined twice"). Distinct-signature overloads, cross-class chain redeclaration,
+interface implementations, and diamond shared-root/sibling declarers all stay accepting,
+byte-identical (test/dup-bodyless-virtual.test.ts).
