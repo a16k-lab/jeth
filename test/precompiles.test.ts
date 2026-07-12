@@ -10,7 +10,7 @@
 // match). The "safer" thread vs the raw precompile: bn256/blake2f/KZG REVERT on invalid input instead of
 // returning zero. KZG cannot be executed here (no trusted setup is loaded), so it is asserted at the
 // accept/codegen level only.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { bytesToHex, hexToBytes } from '@ethereumjs/util';
 import { sha256 } from 'ethereum-cryptography/sha256.js';
 import { compile } from '../src/compile.js';
@@ -167,13 +167,24 @@ describe('pointEvaluation / KZG (0x0a)', () => {
     const tail = W(BigInt(commitment.length / 2)) + pad48(commitment) + W(BigInt(proof.length / 2)) + pad48(proof);
     return psel + head + tail;
   }
+  // The one-time costs (the kzg-wasm mainnet trusted-setup load + both compiles + both deploys) are
+  // paid ONCE here, under an explicit generous hook timeout - previously the FIRST diffKzg test paid
+  // them inside its own 60s default budget, and under heavy machine load (parallel forks + WASM init
+  // contention) it intermittently blew that budget (observed 61-158s), making the suite flaky. The
+  // contracts are stateless view wrappers, so sharing the deployed instances across tests is safe;
+  // each test now only issues calls (milliseconds).
+  let jHarness: Harness, sHarness: Harness;
+  let jAddr: Awaited<ReturnType<Harness['deploy']>>, sAddr: Awaited<ReturnType<Harness['deploy']>>;
+  beforeAll(async () => {
+    jHarness = await enableKzg(await Harness.create());
+    sHarness = await enableKzg(await Harness.create());
+    jAddr = await jHarness.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
+    sAddr = await sHarness.deploy(compileSolidity(SPDX + S, 'C').creation);
+  }, 120_000);
+
   async function diffKzg(cd: string) {
-    const j = await enableKzg(await Harness.create());
-    const s = await enableKzg(await Harness.create());
-    const ja = await j.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
-    const sa = await s.deploy(compileSolidity(SPDX + S, 'C').creation);
-    const rj = await j.call(ja, '0x' + cd);
-    const rs = await s.call(sa, '0x' + cd);
+    const rj = await jHarness.call(jAddr, '0x' + cd);
+    const rs = await sHarness.call(sAddr, '0x' + cd);
     expect(rj.success).toBe(rs.success);
     expect(rj.returnHex).toBe(rs.returnHex);
     return rj;
@@ -214,12 +225,10 @@ describe('pointEvaluation / KZG (0x0a)', () => {
   it('commitment length != 48 -> JETH safety revert', async () => {
     // the typed-input safety gate (solc's raw staticcall has no such check); assert JETH reverts.
     const vh = versionedHash(KZG_INFINITY);
-    const j = await enableKzg(await Harness.create());
-    const ja = await j.deploy(compile(J, { fileName: 'C.jeth' }).creationBytecode);
     const short = 'c0' + '00'.repeat(46); // 47 bytes
     const head = vh + ZERO32 + ZERO32 + W(0xa0n) + W(0x100n);
     const tail = W(47n) + pad48(short + '00') + W(48n) + pad48(KZG_INFINITY);
-    const rj = await j.call(ja, '0x' + psel + head + tail);
+    const rj = await jHarness.call(jAddr, '0x' + psel + head + tail);
     expect(rj.success).toBe(false);
   });
 
