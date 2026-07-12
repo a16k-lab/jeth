@@ -420,9 +420,20 @@ pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
 - **PURE-GET-OBLIGATION** (JETH352): an interface `p(): Pure<u256>` obligation implemented by a
   `get p(): Pure<u256>` rejects while the solc mirror accepts. Workaround: declare the obligation
   `View<T>` (or bare) and keep the impl's stricter body.
-- **STRING-FIELD-INIT** (JETH048): a `string` state field WITH an initializer (`s: string = "x"` /
-  `Visible<string>`) rejects regardless of marker; solc accepts. Workaround: assign in the ctor
-  (byte-identical to solc, verified).
+- **STRING-FIELD-INIT - LIFTED (2026-07-12)**: a `string`/`bytes` state field WITH a string-literal
+  initializer (`s: string = "x"`, `Visible<string>`, `b: bytes = "ab"`, short/long/empty/unicode/
+  no-sub template) now compiles: desugared into the implicit-constructor assignment (the exact
+  byte-identical workaround twin), emitted at the TOP of the merged constructor - solc 0.8.35 runs
+  ALL state-var initializers before any ctor body, ctor modifier, or base ctor body across the whole
+  chain (witnessed: a base ctor's virtual call sees a derived field's init; a ctor modifier's
+  pre-code sees the init; initializer-only creation is non-payable). Oracle: bc(field-init) ===
+  bc(twin) per shape + solc runtime differentials (test/string-field-init.test.ts). RESIDUAL safe
+  ORs kept (each a clean JETH048; solc accepts): **FIELD-INIT-EXPR** - a NON-literal initializer
+  (`"a" + "b"`, a substitution template, `this.a + 1n` - solc even allows reading other state vars,
+  declaration-order-evaluated with fwd refs reading the zero default, witnessed) and
+  **FIELD-INIT-NS** - a `@storage('ns')` field initializer. Invalid UTF-8 rejects JETH447 like the
+  twin (solc "Contains invalid UTF-8 sequence"); `static s: string` stays JETH310 (solc: "Immutable
+  variables cannot have a non-value type").
 - **TWO-BASE-GET-DIAMOND - LIFTED (2026-07-12, `9a77971`)**: the headline get-form leaf
   `@override(A2, B2)` was ALREADY accepted at the audit base (stale pin); `9a77971` lifted the VAR
   form: a getter var (plain / constant / immutable) with `@override(A2, B2)` unifying a get declared

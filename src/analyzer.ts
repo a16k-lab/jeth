@@ -225,6 +225,11 @@ interface RawModifier {
 export class Analyzer {
   // state symbols, available once layout is planned
   private stateByName = new Map<string, StateVar>();
+  // STRING-FIELD-INIT (JETH048 lift): a plain @state `string`/`bytes` field whose initializer is a
+  // string literal (`s: string = "x"`). Recorded here at collection time (the slot is not planned yet)
+  // and desugared by fieldInitStmts into the implicit-constructor assignment `this.s = "x"` - the exact
+  // byte-identical workaround twin. Literal-only: any other initializer keeps the JETH048 reject.
+  private pendingFieldInits: { name: string; node: ts.Expression }[] = [];
   private publicStateNames = new Set<string>(); // @public @state vars that get an auto-generated getter
   // P0b (native mode): contract fields whose declared type was the `Visible<T>` marker - the native
   // spelling of the @external field decorator (solc's `public` auto-getter). Fields are PUBLIC (an
@@ -5118,6 +5123,9 @@ export class Analyzer {
     // W5D-1: return-involving shapes are OUTLINED (buildCtorLevelStmts) so a body `return;` resumes at
     // the modifier post-code and a modifier `return;` exits the wrap - byte-identical to solc.
     const body = this.buildCtorLevelStmts(ctorMods, rawBody, ctorNode, params, false);
+    // STRING-FIELD-INIT: the desugared field-initializer assignments run FIRST, OUTSIDE the modifier
+    // wrap - solc evaluates all state-var initializers before a ctor modifier's pre-code (witnessed).
+    const fieldInits = this.fieldInitStmts();
     this.bodyOwnerContract = savedCtorBodyOwner;
     this.currentInConstructor = false;
     this.popScope();
@@ -5126,7 +5134,7 @@ export class Analyzer {
     // into the CREATION object by emitConstructor (the call graph keys are recorded in this.callGraph),
     // so the ctor body's calls resolve there. JETH303 (the over-rejection) is lifted.
 
-    return { params, payable, body };
+    return { params, payable, body: [...fieldInits, ...body] };
   }
 
   /** P1-21: validate the @receive / @fallback override relationship across the linearization, matching
@@ -5556,6 +5564,33 @@ export class Analyzer {
    *  ctor body (the modifier form, evaluated in the ctor's PARAM scope so a base arg may depend on the
    *  derived params). Unsupported shapes (the phantom modifier form, the diamond-same-name-sibling-param
    *  collision, a super/heritage-provided-twice conflict) are gated (JETH379) - clean over-rejections. */
+  /** STRING-FIELD-INIT (JETH048 lift): desugar each pending `string`/`bytes` state-field literal
+   *  initializer into the implicit-constructor assignment `this.s = "x"` - exactly the IR the
+   *  byte-identical workaround twin (`constructor() { this.s = "x"; }`) produces. Placement: solc runs
+   *  ALL state-var initializers BEFORE any constructor body or ctor modifier, across the whole chain
+   *  (witnessed vs 0.8.35: a base ctor's virtual call sees a derived field's init; a ctor modifier's
+   *  pre-code sees the init), so callers emit these at the very TOP of the merged constructor, outside
+   *  every modifier wrap. Ordered by slot = declaration order base-first (solc's initializer evaluation
+   *  order); the inits are literal-only, so no init can read state and the order is unobservable at
+   *  runtime regardless. checkExpr on the literal applies the same UTF-8 validation as the twin
+   *  (JETH447, matching solc's "Contains invalid UTF-8 sequence"). */
+  private fieldInitStmts(): Stmt[] {
+    if (this.pendingFieldInits.length === 0) return [];
+    const out: Stmt[] = [];
+    const items = this.pendingFieldInits
+      .map((p) => ({ p, v: this.stateByName.get(p.name) }))
+      .filter((x): x is { p: { name: string; node: ts.Expression }; v: StateVar } => x.v !== undefined)
+      .sort((a, b) => (a.v.slot < b.v.slot ? -1 : a.v.slot > b.v.slot ? 1 : 0));
+    for (const { p, v } of items) {
+      const e = this.checkExpr(p.node, v.type);
+      const value = e ? this.coerce(e, v.type, p.node) : undefined;
+      if (!value) continue; // a diagnostic was emitted (e.g. invalid UTF-8) - the compile already fails
+      this.currentWritesState = true; // same flag the twin's checkLValue sets on a dynState write
+      out.push({ kind: 'assign', target: { kind: 'dynState', type: v.type, slot: v.slot, varName: v.name }, value });
+    }
+    return out;
+  }
+
   private mergeConstructors(): ConstructorIR | undefined {
     const chain = this.ctorChain;
     const hasInlineImmInit = this.immutableOrder.some((n) => this.immutablesByName.get(n)!.init !== undefined);
@@ -5563,7 +5598,13 @@ export class Analyzer {
     // @immutable initializers, synthesize a body that stages them (they run in creation code).
     if (chain.length <= 1) {
       if (chain[0]?.node) return this.checkConstructor(chain[0].node);
-      if (!hasInlineImmInit) return undefined;
+      // STRING-FIELD-INIT: no user ctor, but string/bytes field initializers -> synthesize the implicit
+      // constructor holding exactly the workaround twin's assignments (non-payable, like solc's
+      // initializer-only creation, which rejects a deploy value).
+      if (!hasInlineImmInit) {
+        const fieldInits = this.fieldInitStmts();
+        return fieldInits.length > 0 ? { params: [], payable: false, body: fieldInits } : undefined;
+      }
       // No ctor, only inline @immutable initializers: with chain<=1 every field is declared by the
       // deployed class itself, so set that ambient owner (same fix as checkConstructor; without it
       // `@immutable k = (8n).half()` under @using(L) rejects JETH074). immutableInitStmts still
@@ -5572,10 +5613,13 @@ export class Analyzer {
       this.bodyOwnerContract = chain[0]?.contract;
       const immBody = this.immutableInitStmts();
       this.bodyOwnerContract = savedBodyOwner;
-      return { params: [], payable: false, body: immBody };
+      // Field initializers run before the inline @immutable stages (both are literal-/constant-only,
+      // so the relative order is unobservable; this matches the merged-chain path below).
+      return { params: [], payable: false, body: [...this.fieldInitStmts(), ...immBody] };
     }
-    // no constructor anywhere AND no inline immutable init -> no creation-time work beyond defaults.
-    if (!chain.some((c) => c.node) && !hasInlineImmInit) return undefined;
+    // no constructor anywhere AND no inline immutable init AND no string/bytes field initializer ->
+    // no creation-time work beyond defaults.
+    if (!chain.some((c) => c.node) && !hasInlineImmInit && this.pendingFieldInits.length === 0) return undefined;
     const deployed = chain[0]!;
 
     // ---- BASE-CONSTRUCTOR ARGUMENTS (lift JETH379 for the supported shapes) ----
@@ -6058,7 +6102,10 @@ export class Analyzer {
       return out;
     };
 
-    const body: Stmt[] = this.immutableInitStmts();
+    // STRING-FIELD-INIT: the desugared field-initializer assignments run FIRST - before the inline
+    // @immutable stages and before every level's modifier wrap / ctor body (solc runs all state-var
+    // initializers before any constructor code; witnessed vs 0.8.35).
+    const body: Stmt[] = [...this.fieldInitStmts(), ...this.immutableInitStmts()];
     if (!baseArgsGate) body.push(...buildLevel(0));
     this.popScope();
     this.currentInConstructor = false;
@@ -6718,6 +6765,17 @@ export class Analyzer {
           const nz = [...words.entries()].filter(([, w]) => w !== 0n).map(([slotOffset, word]) => ({ slotOffset, word }));
           if (nz.length > 0) initialSlotWords = nz;
         }
+      } else if (
+        namespace === undefined &&
+        (type.kind === 'string' || type.kind === 'bytes') &&
+        (ts.isStringLiteral(member.initializer) || ts.isNoSubstitutionTemplateLiteral(member.initializer))
+      ) {
+        // STRING-FIELD-INIT lift: `s: string = "x"` / `b: bytes = "ab"` on a plain @state field (solc
+        // accepts `string public s = "x";`). Desugared by fieldInitStmts into the implicit-constructor
+        // assignment `this.s = "x"` (the byte-identical workaround twin), which runs at the TOP of the
+        // merged constructor - solc evaluates ALL state-var initializers before any ctor body or ctor
+        // modifier (witnessed vs 0.8.35). A NON-literal init, or a @storage('ns') field, keeps JETH048.
+        this.pendingFieldInits.push({ name: member.name.text, node: member.initializer });
       } else {
         const folded = this.foldConstant(member.initializer, type);
         if (folded === undefined) {
