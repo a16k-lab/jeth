@@ -406,9 +406,15 @@ each has a verified workaround):**
 
 **New safe-OR rows found by the 2026-07-12 lift/fix verifies (each a clean reject, solc accepts,
 pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
-- **OVERRIDE-VAR-MULTIHEAD** (JETH385 x2 + JETH433): a getter var (`x: Visible<u256>` + `@override(A, B)`)
-  implementing the SAME-signature method of TWO interfaces rejects; solc accepts
-  `uint256 public override(A,B) x`. Workaround: implement as a `get` method with `@override(A, B)`.
+- **OVERRIDE-VAR-MULTIHEAD - LIFTED (2026-07-12, `9a77971`)**: the headline shape (a plain
+  `x: Visible<u256>` + `@override(A, B)` over two same-sig interfaces) turned out ALREADY lifted at
+  `6e46949` (the audit pin was stale); `9a77971` lifted the witnessed RESIDUALS: Visible CONSTANTS and
+  IMMUTABLES as `@override` getter vars (single/multi-head, mixed base+iface heads, solc mutability
+  rule: a constant getter counts as PURE, immutable/state as VIEW) plus the solc-0.8.8 no-override
+  single-head interface implementation by statics at the leaf AND at non-abstract middles. Same commit
+  closed 4 pre-existing over-acceptances in the shared machinery: immutable `@override`-of-nothing,
+  `@virtual` on an immutable, and an unattached same-file interface legitimizing `@override` getter
+  vars (state var AND immutable flavors) - all now solc-witnessed rejects.
 - **IFACE-OVERLOADS** (JETH342): an interface declaring overloads of one method name rejects at the
   interface; solc accepts a fully-implementing contract. Workaround: distinct method names.
 - **PURE-GET-OBLIGATION** (JETH352): an interface `p(): Pure<u256>` obligation implemented by a
@@ -417,9 +423,12 @@ pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
 - **STRING-FIELD-INIT** (JETH048): a `string` state field WITH an initializer (`s: string = "x"` /
   `Visible<string>`) rejects regardless of marker; solc accepts. Workaround: assign in the ctor
   (byte-identical to solc, verified).
-- **TWO-BASE-GET-DIAMOND** (JETH381): a `get` declared in TWO abstract bases rejects even when the
-  leaf's `@override(A, B)` tightens legally; solc accepts. Workaround: hoist the shared get to a
-  single common base.
+- **TWO-BASE-GET-DIAMOND - LIFTED (2026-07-12, `9a77971`)**: the headline get-form leaf
+  `@override(A2, B2)` was ALREADY accepted at the audit base (stale pin); `9a77971` lifted the VAR
+  form: a getter var (plain / constant / immutable) with `@override(A2, B2)` unifying a get declared
+  by two base contracts (implemented AND bodyless flavors; the base signature group drops out of the
+  dispatch/super chains), with per-direct-base contract-head MAXIMALITY so a deep-diamond var
+  `@override(M1, M2)` is complete while naming the non-maximal root still rejects (solc parity).
 - **JETH477-DEPTH**: expression/statement nesting beyond the compiler's recursion budget (~2000-term
   binary chains cold) is a clean reject; solc compiles. Deliberate robustness boundary.
 - **ABSTRACT-METHOD-DECL** (JETH375/374): TS `abstract f(): External<void>;` is not consumed as the
