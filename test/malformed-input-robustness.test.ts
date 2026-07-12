@@ -148,6 +148,11 @@ describe('JETH477: a too-deeply-nested source rejects CLEANLY instead of a raw R
     // The usable JS stack depth is environment-dependent (a vitest worker's is shallower than a plain
     // node process, where 1500 terms compiles fine), so the JETH side runs in a FRESH child process -
     // the same environment the 2000-term crash was adjudicated in. The solc mirror runs here.
+    // The child gets an EXPLICIT --stack-size: the 1500-term compile deterministically needs ~800KB of
+    // V8 stack while node's default is ~984KB (only ~18% headroom); under heavy machine load V8 sits in
+    // larger interpreter frames longer and the child intermittently tripped the JETH477 RangeError guard,
+    // making this anchor flaky. 1968KB (~2.5x need) makes it deterministic. The 2000-term REJECT test
+    // above keeps the DEFAULT stack on purpose - its meaning is "the guard fires in a stock process".
     const compileUrl = pathToFileURL(path.resolve(__dirname, '../src/compile.ts')).href;
     const evmUrl = pathToFileURL(path.resolve(__dirname, '../src/evm.ts')).href;
     const selectorsUrl = pathToFileURL(path.resolve(__dirname, '../src/selectors.ts')).href;
@@ -162,7 +167,7 @@ describe('JETH477: a too-deeply-nested source rejects CLEANLY instead of a raw R
       const r = await h.call(addr, '0x' + functionSelector('f()'));
       console.log('RESULT:' + r.success + ':' + r.returnHex);
     `;
-    const out = execFileSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script], {
+    const out = execFileSync(process.execPath, ['--stack-size=1968', '--import', 'tsx', '--input-type=module', '-e', script], {
       cwd: path.resolve(__dirname, '..'),
       encoding: 'utf8',
       timeout: 110_000,
