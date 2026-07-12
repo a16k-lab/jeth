@@ -23762,6 +23762,41 @@ export class Analyzer {
           return this.buildBinary(op, l, r, node);
         }
       }
+      // STR-EQ-LIT: a BARE string literal as a string-EQUALITY operand (`s == "hi"`, `"hi" == s`,
+      // `s != "hi"`, and the two-literal `"a" == "b"`). A bare literal has no type without an expected
+      // (-> JETH074), but the explicit-cast twin `s == string("hi")` ALREADY compiles: string(...) of a
+      // literal merely feeds STRING as the literal's expected type and returns the SAME stringLiteral
+      // node (identity conversion). Do exactly that here - type the literal as `string` iff the OTHER
+      // operand types as `string` (or BOTH operands are bare literals, matching the accepted
+      // string("a") == string("b") twin) - so the operands reach the keccak-equality desugar in
+      // buildBinary unchanged. Byte-identical to the string("...") spelling: the desugar re-synthesizes
+      // keccak256(bytes(<original node>)) from the SOURCE nodes either way, and bytes("hi") folds to the
+      // same stringLiteral as bytes(string("hi")). ONLY for == / != : an ordered `s < "hi"` falls
+      // through and stays a reject (solc rejects ordered string comparison; the cast twin is the same
+      // JETH088 reject downstream). A bytes-vs-literal mix (`b == "hi"`) is NOT typed here (the other
+      // operand must be `string`), so it keeps today's clean reject - matching its cast twin
+      // `b == string("hi")` (JETH083, a string-vs-bytes unify failure) in accept/reject outcome.
+      if (op === '==' || op === '!=') {
+        const isStrLit = (e: ts.Expression) => ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e);
+        const lLit = isStrLit(node.left);
+        const rLit = isStrLit(node.right);
+        if (lLit && rLit) {
+          const l = this.checkExpr(node.left, STRING);
+          if (!l) return undefined;
+          const r = this.checkExpr(node.right, STRING);
+          if (!r) return undefined;
+          return this.buildBinary(op, l, r, node);
+        }
+        if (lLit !== rLit) {
+          const other = this.checkExpr(lLit ? node.right : node.left, undefined);
+          if (!other) return undefined;
+          if (other.type.kind === 'string') {
+            const lit = this.checkExpr(lLit ? node.left : node.right, STRING);
+            if (!lit) return undefined;
+            return this.buildBinary(op, lLit ? lit : other, lLit ? other : lit, node);
+          }
+        }
+      }
       // FIX 2: an address-take used DIRECTLY as a `==`/`!=` operand (`g == this.inc`, `this.inc == g`).
       // An address-take (`f` / `this.f`) has no type without an expected funcref, so if the OTHER operand
       // is a funcref, feed its type in so the name resolves to a pointer id (binding it to a local first
