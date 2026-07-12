@@ -481,9 +481,18 @@ entry) plus an implemented `@override` in the deployed entry - now rejects, matc
 non-abstract contract-kind class declaring a bodyless method/get fires JETH483 at the member), and
 (2) an inherited rule (a non-abstract class anywhere in the chain - a MIDDLE included - whose own
 view leaves an inherited bodyless member, getter-var overrides honored, or a bodyless special entry
-unimplemented fires JETH483 at the class), both witnessed vs solc per shape. The legal abstract idiom
-(`abstract class` declarer + implementing leaf, abstract middles) stays accepted byte-identical.
-Regression: test/abstract-required-bodyless-virtual.test.ts.
+unimplemented fires JETH483 at the class), both witnessed vs solc per shape. As FIRST landed, the
+inherited rule walked only CONTRACT-declared version groups; an INTERFACE-declared obligation was
+enforced at the deployed leaf alone (JETH385), so an implementing leaf still masked a non-abstract
+middle over a native `interface` base (the JETH483-IFACE-MIDDLE residual, verify-found). The rule
+now also covers interface obligations: for each non-abstract class X above the leaf, every method of
+every interface in X's own view (direct base, an `interface B extends A` UNION obligation, a
+multi-interface heritage, diamond siblings each on their own row) must be satisfied at-or-above X by
+a bodied function, a validated `@override x: Visible<T>` getter var, or a plain `Visible<T>` state
+var whose auto-getter matches - else JETH483 (in enforceInterfaceImplementation), witnessed vs solc
+per shape including the View-getter flavor and a getter-var impl declared only at the leaf. The
+legal abstract idiom (`abstract class` declarer + implementing leaf, abstract middles) stays
+accepted byte-identical. Regression: test/abstract-required-bodyless-virtual.test.ts.
 
 Also confirmed in passing (safe, pre-existing): the JETH387 receive/fallback internal-call gate and
 the batch-C funcRefCall ordering are unregressed; solc-legacy stack-too-deep at 40 params is a

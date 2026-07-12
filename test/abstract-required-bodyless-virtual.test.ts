@@ -284,3 +284,218 @@ describe('JETH483 controls: the legal abstract idiom stays accepted and solc-run
     expect(got).not.toContain('JETH483'); // the abstract declarer and the leaf are innocent of 483
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// The INTERFACE flavor of the inherited rule (JETH483-IFACE-MIDDLE): a non-abstract MIDDLE class
+// over a NATIVE INTERFACE base whose own view of the chain leaves an interface-declared obligation
+// unimplemented must be abstract, even when the deployed LEAF implements it. Pre-fix the interface
+// obligation (JETH385) fired only at the deployed leaf, so an implementing leaf MASKED the
+// non-abstract middle (over-acceptance; solc 0.8.35 rejects 'Contract "M" should be marked as
+// abstract.' - witnessed for the method flavor, the View-getter flavor, an `interface B extends A`
+// union obligation, a multi-interface heritage, a diamond sibling, and a public-getter-var impl
+// declared only at the leaf). Both pinned repros ACCEPTED at parent 6d94558 (proven by a
+// base-compile in the fix worktree); every accept control below was proven BYTE-IDENTICAL to its
+// parent-6d94558 compile at fix time.
+// ---------------------------------------------------------------------------------------------
+describe('JETH483 interface flavor: a non-abstract middle over an unimplemented interface obligation rejects', () => {
+  it('pinned repro 1 (method flavor, leaf implements) -> exactly JETH483; solc mirror rejects', () => {
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } class M extends I { w: u256; h(x: u256): External<u256> { this.w = x; return this.w; } } class C extends M { f(x: u256): External<u256> { this.w = x + 1n; return this.w; } }`,
+      ),
+    ).toEqual(['JETH483']);
+    expect(
+      solcRejects(
+        `interface I { function f(uint256 x) external returns (uint256); } contract M is I { uint256 w; function h(uint256 x) external returns (uint256) { w = x; return w; } } contract C is M { function f(uint256 x) external override returns (uint256) { w = x + 1; return w; } }`,
+      ),
+    ).toBe(true);
+  });
+
+  it('pinned repro 2 (View-getter flavor, leaf implements via get) -> exactly JETH483; solc mirror rejects', () => {
+    expect(
+      codes(
+        `interface I { g(): View<u256>; } class M extends I { w: u256; h(x: u256): External<u256> { this.w = x; return this.w; } } class C extends M { get g(): External<u256> { return this.w; } }`,
+      ),
+    ).toEqual(['JETH483']);
+    expect(
+      solcRejects(
+        `interface I { function g() external view returns (uint256); } contract M is I { uint256 w; function h(uint256 x) external returns (uint256) { w = x; return w; } } contract C is M { function g() external view override returns (uint256) { return w; } }`,
+      ),
+    ).toBe(true);
+  });
+
+  it('iface-extends-iface UNION: the middle implements only the parent-interface part -> exactly JETH483', () => {
+    expect(
+      codes(
+        `interface A { f(x: u256): u256; } interface B extends A { g(x: u256): u256; } class M extends B { s: u256; f(x: u256): External<u256> { this.s = x; return x; } } class C extends M { g(x: u256): External<u256> { this.s = x + 1n; return this.s; } }`,
+      ),
+    ).toEqual(['JETH483']);
+    expect(
+      solcRejects(
+        `interface A { function f(uint256 x) external returns (uint256); } interface B is A { function g(uint256 x) external returns (uint256); } contract M is B { uint256 s; function f(uint256 x) external override returns (uint256) { s = x; return x; } } contract C is M { function g(uint256 x) external override returns (uint256) { s = x + 1; return s; } }`,
+      ),
+    ).toBe(true);
+  });
+
+  it('multi-interface heritage: the middle implements one of two -> exactly JETH483', () => {
+    expect(
+      codes(
+        `interface A { f(x: u256): u256; } interface B { g(x: u256): u256; } class M extends A, B { s: u256; f(x: u256): External<u256> { this.s = x; return x; } } class C extends M { g(x: u256): External<u256> { this.s = x + 1n; return this.s; } }`,
+      ),
+    ).toEqual(['JETH483']);
+    expect(
+      solcRejects(
+        `interface A { function f(uint256 x) external returns (uint256); } interface B { function g(uint256 x) external returns (uint256); } contract M is A, B { uint256 s; function f(uint256 x) external override returns (uint256) { s = x; return x; } } contract C is M { function g(uint256 x) external override returns (uint256) { s = x + 1; return s; } }`,
+      ),
+    ).toBe(true);
+  });
+
+  it('a Visible<T> getter var declared only at the LEAF does not satisfy the middle -> exactly JETH483', () => {
+    expect(
+      codes(
+        `interface I { x(): View<u256>; } class M extends I { w: u256; h(v: u256): External<u256> { this.w = v; return this.w; } } class C extends M { x: Visible<u256>; }`,
+      ),
+    ).toEqual(['JETH483']);
+    expect(
+      solcRejects(
+        `interface I { function x() external view returns (uint256); } contract M is I { uint256 w; function h(uint256 v) external returns (uint256) { w = v; return w; } } contract C is M { uint256 public x; }`,
+      ),
+    ).toBe(true);
+  });
+
+  it('diamond siblings over one interface: only the non-implementing sibling fires -> exactly JETH483', () => {
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } class M extends I { s: u256; f(x: u256): External<u256> { this.s = x; return x; } } class M2 extends I { s2: u256; } class C extends M, M2 { k(x: u256): External<u256> { this.s = x; return x; } }`,
+      ),
+    ).toEqual(['JETH483']);
+    expect(
+      solcRejects(
+        `interface I { function f(uint256 x) external returns (uint256); } contract M is I { uint256 s; function f(uint256 x) external override returns (uint256) { s = x; return x; } } contract M2 is I { uint256 s2; } contract C is M, M2 { function k(uint256 x) external returns (uint256) { s = x; return x; } }`,
+      ),
+    ).toBe(true);
+  });
+
+  it('a deep chain: BOTH non-abstract middles above the implementing leaf fire (one JETH483 each)', () => {
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } class M extends I { s: u256; h(x: u256): External<u256> { this.s = x; return this.s; } } class D extends M { s2: u256; } class C extends D { f(x: u256): External<u256> { this.s = x; return this.s; } }`,
+      ),
+    ).toEqual(['JETH483', 'JETH483']);
+    expect(
+      solcRejects(
+        `interface I { function f(uint256 x) external returns (uint256); } contract M is I { uint256 s; function h(uint256 x) external returns (uint256) { s = x; return s; } } contract D is M { uint256 s2; } contract C is D { function f(uint256 x) external override returns (uint256) { s = x; return s; } }`,
+      ),
+    ).toBe(true);
+  });
+
+  it('pre-existing leaf gates unregressed: abstract middle + missing leaf stays JETH385; nobody-implements adds JETH483 for the middle', () => {
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } abstract class M extends I { w: u256; } class C extends M { h(x: u256): External<u256> { this.w = x; return this.w; } }`,
+      ),
+    ).toEqual(['JETH385']);
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } class M extends I { w: u256; } class C extends M { h(x: u256): External<u256> { this.w = x; return this.w; } }`,
+      ),
+    ).toEqual(['JETH385', 'JETH483']);
+  });
+
+  it('JETH481 guard: the legacy @abstract / @interface decorator spellings of these shapes stay banned', () => {
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } @abstract class M extends I { w: u256; } class C extends M { f(x: u256): External<u256> { this.w = x; return this.w; } }`,
+      ),
+    ).toEqual(['JETH481']);
+    expect(
+      codes(
+        `@interface class I { f(x: u256): u256; } class C extends I { s: u256; f(x: u256): External<u256> { this.s = x; return x; } }`,
+      ),
+    ).toEqual(['JETH481']);
+  });
+});
+
+describe('JETH483 interface-flavor controls: every legal shape stays accepted (and solc-runtime-equal)', () => {
+  it('abstract middle + implementing leaf accepts and matches solc on distinct seeds', async () => {
+    const J = `interface I { f(x: u256): u256; } abstract class M extends I { w: u256; h(x: u256): External<u256> { this.w = x; return this.w; } } class C extends M { f(x: u256): External<u256> { this.w = x + 1n; return this.w; } }`;
+    const S = `interface I { function f(uint256 x) external returns (uint256); } abstract contract M is I { uint256 w; function h(uint256 x) external returns (uint256) { w = x; return w; } } contract C is M { function f(uint256 x) external override returns (uint256) { w = x + 1; return w; } }`;
+    const r = await runBoth(J, S, [
+      { data: sel('f(uint256)') + W(41n) },
+      { data: sel('h(uint256)') + W(9n) },
+    ]);
+    expect(r[0]).toEqual({ success: true, returnHex: '0x' + W(42n) });
+    expect(r[1]).toEqual({ success: true, returnHex: '0x' + W(9n) });
+  });
+
+  it('the P0a direct-implementation surface is untouched: class extends I + full impl accepts', () => {
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } class C extends I { s: u256; f(x: u256): External<u256> { this.s = x; return x + 1n; } }`,
+      ),
+    ).toEqual([]);
+  });
+
+  it('a non-abstract middle that implements ALL interface obligations itself accepts (solc parity)', () => {
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } class M extends I { s: u256; f(x: u256): External<u256> { this.s = x; return x; } } class C extends M { h(x: u256): External<u256> { this.s = x; return 3n; } }`,
+      ),
+    ).toEqual([]);
+    expect(
+      solcRejects(
+        `interface I { function f(uint256 x) external returns (uint256); } contract M is I { uint256 s; function f(uint256 x) external override returns (uint256) { s = x; return x; } } contract C is M { function h(uint256 x) external returns (uint256) { s = x; return 3; } }`,
+      ),
+    ).toBe(false);
+  });
+
+  it('a middle implementing a View obligation via `get` accepts; abstract-abstract deep chain accepts', () => {
+    expect(
+      codes(
+        `interface I { g(): View<u256>; } class M extends I { w: u256; get g(): External<u256> { return this.w; } } class C extends M { h(x: u256): External<u256> { this.w = x; return this.w; } }`,
+      ),
+    ).toEqual([]);
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } abstract class M extends I { s: u256; } abstract class D extends M { s2: u256; } class C extends D { f(x: u256): External<u256> { this.s = x; return this.s; } }`,
+      ),
+    ).toEqual([]);
+  });
+
+  it('iface-extends-iface: a middle implementing the WHOLE union accepts and matches solc', async () => {
+    const J = `interface A { f(x: u256): u256; } interface B extends A { g(x: u256): u256; } class M extends B { s: u256; f(x: u256): External<u256> { this.s = x; return x; } g(x: u256): External<u256> { this.s = x + 1n; return this.s; } } class C extends M { k(x: u256): External<u256> { this.s = x; return 9n; } }`;
+    const S = `interface A { function f(uint256 x) external returns (uint256); } interface B is A { function g(uint256 x) external returns (uint256); } contract M is B { uint256 s; function f(uint256 x) external override returns (uint256) { s = x; return x; } function g(uint256 x) external override returns (uint256) { s = x + 1; return s; } } contract C is M { function k(uint256 x) external returns (uint256) { s = x; return 9; } }`;
+    const r = await runBoth(J, S, [
+      { data: sel('f(uint256)') + W(5n) },
+      { data: sel('g(uint256)') + W(6n) },
+      { data: sel('k(uint256)') + W(7n) },
+    ]);
+    expect(r[1]).toEqual({ success: true, returnHex: '0x' + W(7n) });
+  });
+
+  it('a middle overridden by the leaf still satisfies the middle (its own impl counts)', () => {
+    expect(
+      codes(
+        `interface I { f(x: u256): u256; } class M extends I { s: u256; @virtual f(x: u256): External<u256> { this.s = x; return x; } } class C extends M { @override f(x: u256): External<u256> { this.s = x; return x + 2n; } }`,
+      ),
+    ).toEqual([]);
+  });
+
+  it('getter-var satisfaction at the MIDDLE: @override Visible<T> and plain Visible<T> both accept (solc parity)', () => {
+    expect(
+      codes(
+        `interface I { x(): View<u256>; } class M extends I { @override x: Visible<u256>; h(v: u256): External<void> { this.x = v; } } class C extends M { k(v: u256): External<void> { this.x = v + 1n; } }`,
+      ),
+    ).toEqual([]);
+    expect(
+      codes(
+        `interface I { x(): View<u256>; } class M extends I { x: Visible<u256>; h(v: u256): External<void> { this.x = v; } } class C extends M { k(v: u256): External<void> { this.x = v + 1n; } }`,
+      ),
+    ).toEqual([]);
+    expect(
+      solcRejects(
+        `interface I { function x() external view returns (uint256); } contract M is I { uint256 public x; function h(uint256 v) external { x = v; } } contract C is M { function k(uint256 v) external { x = v + 1; } }`,
+      ),
+    ).toBe(false);
+  });
+});

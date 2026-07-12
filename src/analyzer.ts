@@ -2435,7 +2435,7 @@ export class Analyzer {
     // function in the deployed contract - unless the deployed contract is @abstract (solc: an abstract
     // contract may leave interface functions unimplemented; a concrete one is rejected). Runs on the
     // override WINNERS (the most-derived, dispatched definitions) so it sees exactly the deployed ABI.
-    this.enforceInterfaceImplementation(lin, winnerFns, stateVarType);
+    this.enforceInterfaceImplementation(lin, winnerFns, stateVarType, collectedFns);
 
     // Phase A: register every @library's functions as ordinary internal functions of THIS compile.
     // They were collected with a qualified source name `L.f` (namespaced away from contract names),
@@ -3646,6 +3646,8 @@ export class Analyzer {
     // monotonicity), so the first candidate is X's winner. A version DECLARED by X itself is the
     // declarer rule's job (skipped here to keep one message per cause), and a validated getter-var
     // override (`@override x: Visible<T>`) declared at-or-above X implements the signature for X.
+    // The INTERFACE-declared twin of this rule (an obligation from `extends I` left unimplemented in
+    // X's own view) lives in enforceInterfaceImplementation (JETH483 there too).
     for (const versions of groups.values()) {
       for (let i = 1; i < this.linOrder.length; i++) {
         const cn = this.linOrder[i]!;
@@ -4077,6 +4079,7 @@ export class Analyzer {
     lin: ts.ClassDeclaration[],
     winners: RawFunction[],
     stateVarType: Map<string, JethType>,
+    collected: RawFunction[],
   ): void {
     // The implementation obligations are exactly the @interface NODES present in the linearization (an
     // interface reached via a base contract obliges the deployed contract just as a direct `extends I`
@@ -4162,6 +4165,88 @@ export class Analyzer {
             w.node,
             'JETH388',
             `implementation of '${ifaceName}.${m.name}' must be @external (an interface method is external); found @${w.visibility}`,
+          );
+        }
+      }
+    }
+
+    // OA-ABSTRACT (inherited rule, INTERFACE flavor): solc requires abstract on EVERY contract whose
+    // OWN view of the chain (itself + its transitive bases) leaves an INTERFACE-declared obligation
+    // unimplemented - not just the deployed leaf (the JETH385 loop above). Witnessed vs 0.8.35:
+    // `interface I { function f(uint256) external returns (uint256); } contract M is I { ...no f... }
+    // contract C is M { ...implements f... }` -> 'Contract "M" should be marked as abstract.' (the
+    // implementing LEAF does not excuse the non-abstract MIDDLE; same for the view-getter flavor, an
+    // `interface B is A` union obligation, a multi-interface heritage, and a public-getter-var impl
+    // declared only at the leaf). This is the interface twin of the contract-declared inherited rule in
+    // resolveOverrides (JETH483 there). For each non-abstract class X above the leaf, every method of
+    // every interface in X's view must be satisfied by one of the SAME three paths the leaf loop above
+    // accepts, each restricted to declarations at-or-above X:
+    //   1. a validated getter-var override (`@override x: Visible<T>`) declared at-or-above X;
+    //   2. a plain Visible<T> state var at-or-above X whose auto-getter matches (single-head guard
+    //      relative to X's own heritage, mirroring L14);
+    //   3. a BODIED function version defined at-or-above X (candidates sorted by the deployed
+    //      linearization, whose relative order restricted to X's chain matches X's own C3 order, so the
+    //      first candidate is X's winner). A bodyless version DECLARED BY X itself is
+    //      checkAbstractRequiredForBodylessMembers' JETH483 (skipped here: one message per cause).
+    const linIndex = new Map(lin.map((c, idx) => [c.name?.text ?? '<anon>', idx]));
+    const versionsBySig = new Map<string, RawFunction[]>();
+    for (const rf of collected) {
+      if (rf.definingContract === undefined) continue;
+      const k = this.sigKey(rf);
+      const g = versionsBySig.get(k);
+      if (g) g.push(rf);
+      else versionsBySig.set(k, [rf]);
+    }
+    for (const g of versionsBySig.values()) {
+      g.sort((a, b) => (linIndex.get(a.definingContract!) ?? 0) - (linIndex.get(b.definingContract!) ?? 0));
+    }
+    for (let i = 1; i < lin.length; i++) {
+      const cls = lin[i]!;
+      if (this.isInterfaceClass(cls) || this.isAbstractClass(cls)) continue;
+      const cn = cls.name?.text ?? '<anon>';
+      const view = this.visibleContractsByName.get(cn);
+      if (!view) continue;
+      const reported = new Set<string>(); // one JETH483 per signature per class (diamond-duplicated obligations)
+      for (const ifaceName of ifaceNames) {
+        if (!view.has(ifaceName)) continue; // this interface is not an obligation in X's view
+        const iface = this.interfacesByName.get(ifaceName);
+        if (!iface) continue;
+        for (const m of iface.methods.values()) {
+          if (reported.has(m.signature)) continue;
+          // Path 1: validated getter-var override declared at-or-above X.
+          const gv = this.getterOverrideVars.get(m.name);
+          if (
+            this.validGetterOverrides.has(m.name) &&
+            this.getterMatchesInterfaceMethod(m) &&
+            gv !== undefined &&
+            view.has(gv.definingContract)
+          ) continue;
+          // Path 2: plain Visible<T> state var at-or-above X whose auto-getter matches (L14 twin).
+          {
+            const t = stateVarType.get(m.name);
+            const owner = this.stateOwnerByName.get(m.name);
+            if (
+              t !== undefined &&
+              owner !== undefined &&
+              view.has(owner) &&
+              this.publicStateNames.has(m.name) &&
+              (m.mutability === 'view' || m.mutability === 'nonpayable') &&
+              this.getterShapeMatchesIfaceMethod(m, t)
+            ) {
+              const shape = this.getterSignatureShape(m.name, t)!;
+              const heads = this.getterInterfaceOverrideHeads(cn, m.name, shape);
+              if (heads.length <= 1) continue;
+            }
+          }
+          // Path 3: the most-derived function version at-or-above X must exist and have a body.
+          const w = versionsBySig.get(m.signature)?.find((v) => view.has(v.definingContract!));
+          if (w !== undefined && !w.bodyless) continue;
+          if (w !== undefined && w.definingContract === cn) continue; // declarer rule's JETH483
+          reported.add(m.signature);
+          this.diags.error(
+            cls,
+            'JETH483',
+            `class '${cn}' inherits interface method '${ifaceName}.${m.name}' without an implementation and is not abstract (solc: 'Contract "${cn}" should be marked as abstract.'); mark the class abstract (\`abstract class ${cn}\`) or implement '${m.name}' in it`,
           );
         }
       }
