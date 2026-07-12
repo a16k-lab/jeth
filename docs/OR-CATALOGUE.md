@@ -566,3 +566,11 @@ accepted byte-identical. Regression: test/abstract-required-bodyless-virtual.tes
 Also confirmed in passing (safe, pre-existing): the JETH387 receive/fallback internal-call gate and
 the batch-C funcRefCall ordering are unregressed; solc-legacy stack-too-deep at 40 params is a
 LEGACY-WALL where JETH is strictly more capable (documented in distinctive-features section 4).
+
+**OPEN over-acceptance (found by the ABSTRACT-METHOD-DECL verify, 2026-07-12, pre-existing at
+`8171315`, inherited byte-identically by the abstract spelling):** a class declaring the SAME
+bodyless `@virtual` member TWICE (`abstract class B { @virtual f(v: u256): External<u256>;
+@virtual f(v: u256): External<u256>; }` + an overriding leaf) compiles while solc rejects
+"Function with same name and parameter types defined twice" (dup and mixed @virtual/abstract
+spellings alike). Fix direction: a per-class duplicate-signature check over bodyless member
+declarations (the JETH342 in-interface twin already rejects).
