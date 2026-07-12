@@ -9,6 +9,20 @@ export interface ParsedSource {
   sourceFile: ts.SourceFile;
   fileName: string;
   text: string;
+  /** Class-body enums preceded by a modifier keyword (`const enum E {}`, `export enum E {}`, ...):
+   *  deliberately NOT hoisted; compile() rejects each loudly (JETH484) before analysis. */
+  classEnumModifierErrors: ClassEnumModifierError[];
+}
+
+/** A class-body enum that carries one or more modifier keywords. Hoisting only the `enum Name { ... }`
+ *  text would leave the modifier behind in the class body, where TS error-recovers it into a modifier
+ *  on the NEXT member (possibly changing its meaning, e.g. `static`) or a keyword-named phantom
+ *  property that the analyzer would silently ignore - the JETH476/479 silent-recovery family. */
+export interface ClassEnumModifierError {
+  start: number; // offset of the first modifier keyword
+  end: number; // offset just past the enum body's closing `}` (or past `enum` when malformed)
+  modifiers: string[]; // the modifier words, in source order (e.g. ['export', 'const'])
+  name: string; // the enum's name, '' when unreadable
 }
 
 export function parse(text: string, fileName = 'contract.jeth'): ParsedSource {
@@ -17,7 +31,7 @@ export function parse(text: string, fileName = 'contract.jeth'): ParsedSource {
   // Hoist any in-class enum to top level before parsing. Offsets are preserved (the enum is
   // blanked in place with equal-length whitespace and appended at the end), so diagnostic
   // spans for the rest of the file are unchanged. No-op when no in-class enum is present.
-  const hoisted = hoistInClassEnums(text);
+  const { text: hoisted, errors } = hoistInClassEnums(text);
   const sourceFile = ts.createSourceFile(
     fileName,
     hoisted,
@@ -25,8 +39,26 @@ export function parse(text: string, fileName = 'contract.jeth'): ParsedSource {
     /*setParentNodes*/ true,
     ts.ScriptKind.TS,
   );
-  return { sourceFile, fileName, text: hoisted };
+  return { sourceFile, fileName, text: hoisted, classEnumModifierErrors: errors };
 }
+
+/** Every TS modifier keyword that could be written in front of a class-body `enum`. None of them is
+ *  legal there (solc contract-scoped enums carry no modifiers), and hoisting past one would strand it
+ *  as silent error-recovery residue, so the scanner refuses to hoist and records a JETH484 error. */
+const CLASS_ENUM_MODIFIER_WORDS = new Set([
+  'const',
+  'export',
+  'declare',
+  'static',
+  'abstract',
+  'readonly',
+  'override',
+  'public',
+  'private',
+  'protected',
+  'async',
+  'accessor',
+]);
 
 /** Move `enum Name { ... }` declarations that sit DIRECTLY inside a class body out to top level.
  *  A char scanner tracks string/comment state and a brace stack (each entry records whether that
@@ -35,20 +67,34 @@ export function parse(text: string, fileName = 'contract.jeth'): ParsedSource {
  *  as an illegal statement-position declaration (solc rejects `enum` outside file/contract scope).
  *  Each hoisted enum is blanked where it sat (newlines kept, so offsets/line numbers are stable) and
  *  re-appended at the end of the source, where collectEnums (a position-agnostic recursive walk)
- *  registers it. No-op when no directly-in-class enum is present. */
-function hoistInClassEnums(text: string): string {
+ *  registers it. No-op when no directly-in-class enum is present.
+ *
+ *  A class-body enum PRECEDED by a modifier keyword (`const enum E {}`, `export const enum E {}`,
+ *  `static enum E {}`, ...) is NOT hoisted: hoisting only the `enum ... }` text would leave the
+ *  modifier stranded in the class body, where TS error-recovers it into a modifier on the NEXT member
+ *  (`static` would silently change that member's meaning) or a keyword-named phantom property. The
+ *  scanner records the span in `errors` instead; compile() rejects it loudly (JETH484). Modifier words
+ *  are tracked ONLY directly inside a class body, so file-level `export enum` (the multi-file import
+ *  mechanism) is untouched. */
+function hoistInClassEnums(text: string): { text: string; errors: ClassEnumModifierError[] } {
   const isWord = (ch: string) => /[A-Za-z0-9_$]/.test(ch);
   const spans: { start: number; end: number }[] = [];
+  const errors: ClassEnumModifierError[] = [];
   const n = text.length;
   // Brace stack: true iff this `{` opened a class body. `pendingClass` is set when the `class`
   // keyword has been seen and its opening `{` is still awaited (past the name / heritage clause).
   const braceIsClass: boolean[] = [];
   let pendingClass = false;
+  // Modifier keyword(s) seen directly in a class body whose following token is still awaited.
+  // Comments and whitespace keep the run alive; any other token clears it. If the next token is
+  // `enum`, the run becomes a JETH484 error instead of a hoist.
+  let pendingMods: { start: number; words: string[] } | null = null;
   let i = 0;
   const inClassBody = () => braceIsClass.length > 0 && braceIsClass[braceIsClass.length - 1] === true;
   while (i < n) {
     const c = text[i]!;
     if (c === '"' || c === "'" || c === '`') {
+      pendingMods = null;
       const q = c;
       i++;
       while (i < n) {
@@ -81,17 +127,20 @@ function hoistInClassEnums(text: string): string {
       !isWord(text[i - 1] ?? '') &&
       !isWord(text[i + 5] ?? '')
     ) {
+      pendingMods = null;
       pendingClass = true;
       i += 5;
       continue;
     }
     if (c === '{') {
+      pendingMods = null;
       braceIsClass.push(pendingClass);
       pendingClass = false;
       i++;
       continue;
     }
     if (c === '}') {
+      pendingMods = null;
       braceIsClass.pop();
       i++;
       continue;
@@ -118,14 +167,47 @@ function hoistInClassEnums(text: string): string {
             }
           }
         }
+        if (pendingMods !== null) {
+          // Modifier-preceded class-body enum: refuse to hoist, record a loud error instead.
+          const nameMatch = /^enum\s+([A-Za-z_$][A-Za-z0-9_$]*)/.exec(text.slice(i, j + 1));
+          errors.push({
+            start: pendingMods.start,
+            end: k,
+            modifiers: pendingMods.words,
+            name: nameMatch?.[1] ?? '',
+          });
+          pendingMods = null;
+          i = k;
+          continue;
+        }
         spans.push({ start: i, end: k });
         i = k;
         continue;
       }
+      // Malformed enum (`const enum;` / body never opens): leave it for TS error recovery; the
+      // parse-diagnostics guard rejects a silently-accepted malformed source. The `enum` word itself
+      // is a token, so it ends any pending modifier run.
+      pendingMods = null;
+      i += 4;
+      continue;
     }
+    if (inClassBody() && /[A-Za-z]/.test(c) && !isWord(text[i - 1] ?? '')) {
+      let e = i + 1;
+      while (e < n && isWord(text[e] ?? '')) e++;
+      const word = text.slice(i, e);
+      if (CLASS_ENUM_MODIFIER_WORDS.has(word)) {
+        if (pendingMods === null) pendingMods = { start: i, words: [word] };
+        else pendingMods.words.push(word);
+      } else {
+        pendingMods = null; // any other word token ends the modifier run
+      }
+      i = e;
+      continue;
+    }
+    if (pendingMods !== null && !/\s/.test(c)) pendingMods = null;
     i++;
   }
-  if (spans.length === 0) return text;
+  if (spans.length === 0) return { text, errors };
   let out = '';
   let cursor = 0;
   const moved: string[] = [];
@@ -137,7 +219,7 @@ function hoistInClassEnums(text: string): string {
     cursor = s.end;
   }
   out += text.slice(cursor);
-  return out + '\n' + moved.join('\n') + '\n';
+  return { text: out + '\n' + moved.join('\n') + '\n', errors };
 }
 
 /** Extract decorator names (e.g. ["contract"], ["external","view"]) from a node. */

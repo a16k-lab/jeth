@@ -48,6 +48,50 @@ function isConstArithmeticOperand(node: ts.Node): boolean {
   return false;
 }
 
+/** JETH485: the class-member sibling of the JETH479 stray-token family. A stray keyword in a class
+ *  body is error-recovered by TS into shapes the analyzer used to ignore SILENTLY:
+ *    (a) `const` / `export` attach as a MODIFIER on the next member (`class C { const get g() ... }`)
+ *        with only a grammar-phase error (not a parse diagnostic); neither is legal TS on a class
+ *        member. `declare` on a member IS legal TS (ambient), but has no on-chain meaning, mirroring
+ *        the JETH479 declare-on-let reject. The file-level `export` modifier (the multi-file import
+ *        mechanism) sits on DECLARATIONS, not class members, and stays allowed.
+ *    (b) a lone keyword followed by a line break becomes a keyword-named PropertyDeclaration with no
+ *        type and no initializer (`const` -> a phantom field named 'const'). A typeless,
+ *        initializerless field has no on-chain meaning for ANY name, so reject it loudly; a real
+ *        field keeps its type annotation (`constant: u256` is untouched).
+ *  Kept OUT of the recursive `visit` (called once per node) so visit's stack frame stays small: a deep
+ *  operator chain recurses ~1 visit frame per term, and extra inline locals measurably lowered the
+ *  JETH477 usable-depth threshold. */
+function checkStrayClassBodyKeywords(node: ts.Node, diags: DiagnosticBag): void {
+  if (ts.isClassElement(node) && ts.canHaveModifiers(node)) {
+    for (const m of ts.getModifiers(node) ?? []) {
+      if (m.kind === ts.SyntaxKind.ConstKeyword || m.kind === ts.SyntaxKind.ExportKeyword) {
+        diags.error(
+          m,
+          'JETH485',
+          `'${m.getText()}' is not a valid class-member modifier (a stray token error-recovered by the parser); remove it`,
+        );
+      } else if (m.kind === ts.SyntaxKind.DeclareKeyword) {
+        diags.error(
+          m,
+          'JETH485',
+          "'declare' (a TS ambient declaration) has no on-chain meaning on a class member; remove it",
+        );
+      }
+    }
+  }
+  if (ts.isPropertyDeclaration(node) && ts.isIdentifier(node.name) && !node.type && !node.initializer) {
+    const isKeywordName = ts.identifierToKeywordKind(node.name) !== undefined;
+    diags.error(
+      node,
+      'JETH485',
+      isKeywordName
+        ? `stray '${node.name.text}' keyword in a class body (error-recovered into a typeless member); remove it`
+        : `class member '${node.name.text}' has no type and no initializer, so it has no on-chain meaning; add a type (e.g. '${node.name.text}: u256') or remove it`,
+    );
+  }
+}
+
 export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag): void {
   const visit = (node: ts.Node): void => {
     // Solidity reserves `_` (the @modifier placeholder), so it cannot be a DECLARED identifier name
@@ -104,6 +148,11 @@ export function validateSubset(sourceFile: ts.SourceFile, diags: DiagnosticBag):
         }
       }
     }
+
+    // JETH485 stray-keyword residue on class members: logic lives in a helper, NOT inline, so the
+    // recursive `visit` frame stays small (a deep operator chain recurses ~1 frame per term; inline
+    // locals here measurably lowered the JETH477 depth threshold).
+    checkStrayClassBodyKeywords(node, diags);
 
     switch (node.kind) {
       case ts.SyntaxKind.AwaitExpression:

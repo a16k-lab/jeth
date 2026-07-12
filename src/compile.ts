@@ -574,6 +574,29 @@ function compileUnit(source: string, opts: CompileOptions): CompileResult {
     if (banSegments) remapDiagnostics(bannedDecorators, banSegments);
     throw new CompileError(bannedDecorators);
   }
+  // JETH484: a class-body enum written with a modifier keyword (`const enum E {}` / `export enum E {}` /
+  // `static enum E {}` / ...). The hoist pre-pass (parser.ts hoistInClassEnums) deliberately refuses to
+  // hoist it: moving only the `enum ... }` text would strand the modifier in the class body, where TS
+  // error-recovers it into a modifier on the NEXT member or a keyword-named phantom property - silently
+  // accepted residue (the JETH476/479 family), and `static` would even change the next member's meaning.
+  // Reject loudly BEFORE analysis ever sees the error-recovered AST. File-level `export enum` (the
+  // multi-file import mechanism) is untouched: the scanner tracks modifiers only inside a class body.
+  if (parsed.classEnumModifierErrors.length > 0) {
+    const modErrors: Diagnostic[] = parsed.classEnumModifierErrors.map((e) => {
+      const { line, character } = parsed.sourceFile.getLineAndCharacterOfPosition(e.start);
+      return {
+        severity: 'error' as const,
+        code: 'JETH484',
+        message: `a class-body enum cannot carry '${e.modifiers.join(' ')}'; declare it as a plain 'enum ${e.name || 'E'} { ... }' or move it to file level`,
+        file: fileName,
+        line: line + 1,
+        column: character + 1,
+        length: Math.max(1, e.end - e.start),
+      };
+    });
+    if (bundleSegments) remapDiagnostics(modErrors, bundleSegments);
+    throw new CompileError(modErrors);
+  }
   // `$m<N>$` is the v3 module-scoping mangle: a SOURCE identifier spelled that way would collide with the
   // rename space, and the demangle at hash boundaries (error/event selectors, link symbols, ABI names)
   // would silently rewrite it to a name that appears nowhere in the source. Reserved EVERYWHERE - checked
