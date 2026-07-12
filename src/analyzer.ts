@@ -1185,11 +1185,45 @@ export class Analyzer {
       this.diags.error(iface, 'JETH340', `interface '${name}' redeclared (the name is already a type)`);
       return;
     }
-    if (iface.heritageClauses?.length) {
-      // `interface I2 extends I1` would need method-inheritance merging we do not model yet; reject cleanly
-      // rather than silently dropping the inherited methods (a call to one would then mis-resolve).
-      this.diags.error(iface, 'JETH349', `interface '${name}' cannot extend another interface yet (declare its methods directly)`);
-      return;
+    // JETH349 (reshaped): `interface B extends A` is the native spelling of solc's `interface B is A`
+    // (B's callable surface = the union of the chain; selectors from each method's OWN signature).
+    // Witnessed vs 0.8.35: a base must be an interface DECLARED ABOVE the derived one ("Definition of
+    // base has to precede definition of derived contract" - which also makes an extends CYCLE
+    // unspellable, since a cycle always needs a forward edge), a non-interface base is rejected
+    // ("Interfaces can only inherit from other interfaces" / "Contract expected"), and a duplicate
+    // parent is rejected. Because native interfaces are collected in SOURCE order, a single-pass
+    // "parent must already be collected" rule reproduces all three solc behaviors exactly.
+    const parents: string[] = [];
+    for (const clause of iface.heritageClauses ?? []) {
+      for (const t of clause.types) {
+        const e = t.expression;
+        if (!ts.isIdentifier(e) || t.typeArguments) {
+          this.diags.error(
+            t,
+            'JETH349',
+            `interface '${name}' can only extend a plain interface name (no type arguments or qualified names)`,
+          );
+          continue;
+        }
+        const pname = e.text;
+        if (!this.interfacesByName.has(pname)) {
+          this.diags.error(
+            t,
+            'JETH349',
+            `interface '${name}' can only extend another interface declared ABOVE it in the file ('${pname}' is not one: a class/struct/type is not extendable by an interface, and a base interface must precede the derived one)`,
+          );
+          continue;
+        }
+        if (parents.includes(pname)) {
+          this.diags.error(
+            t,
+            'JETH456',
+            `base interface '${pname}' is listed more than once in the extends clause of '${name}' (a base may be named only once)`,
+          );
+          continue;
+        }
+        parents.push(pname);
+      }
     }
     const methods = new Map<string, InterfaceMethod>();
     for (const member of iface.members) {
@@ -1205,15 +1239,119 @@ export class Analyzer {
       }
       methods.set(m.name, m);
     }
-    this.interfacesByName.set(name, { name, methods });
+    // NAME-COLLISION rules across the inheritance chain (each cell witnessed vs solc 0.8.35):
+    //  - two DISTINCT declaring interfaces reach `name` with the SAME signature (a multi-parent
+    //    diamond that no common grandparent unifies): solc demands a redeclare carrying
+    //    `override(A, B)` - a list TS interface methods cannot spell - so BOTH the bare shape (solc:
+    //    "Derived contract must override") and the redeclare are rejected -> JETH430 (reused: "two or
+    //    more base classes define it"). A common-GRANDPARENT reached via two paths is ONE declarer
+    //    and stays accepted (dedup below is by declaring interface).
+    //  - an OWN method redeclares an inherited one with the same params but a DIFFERENT return ->
+    //    JETH386 (solc rejects: "Overriding function return types differ").
+    //  - same params, different MUTABILITY: solc rejects a loosening and accepts a tightening; JETH
+    //    rejects BOTH (the tightening cell is a catalogued safe over-rejection: declare the method in
+    //    the derived interface only, or keep the base's mutability) -> JETH387.
+    //  - same name, different params (a cross-chain OVERLOAD, solc accepts) or an IDENTICAL redeclare
+    //    (solc accepts): rejected -> JETH342, the same no-interface-overloading policy as within one
+    //    body (catalogued safe over-rejections; the workaround is to drop the redeclaration).
+    if (parents.length > 0) {
+      const inherited = new Map<string, { from: string; m: InterfaceMethod }>();
+      const visited = new Set<string>();
+      const collectFrom = (nm: string): void => {
+        if (visited.has(nm)) return;
+        visited.add(nm);
+        const d = this.interfacesByName.get(nm);
+        if (!d) return;
+        for (const p of d.parents ?? []) collectFrom(p);
+        for (const im of d.methods.values()) {
+          const prior = inherited.get(im.name);
+          if (prior && prior.from !== nm) {
+            this.diags.error(
+              iface,
+              prior.m.signature === im.signature ? 'JETH430' : 'JETH342',
+              prior.m.signature === im.signature
+                ? `interface '${name}' inherits '${im.name}' with the same signature from both '${prior.from}' and '${nm}'; redeclaring it with an override list is not expressible in a TS interface, so this diamond is rejected (declare the method in a single shared base)`
+                : `interface '${name}' inherits '${im.name}' with different signatures from '${prior.from}' and '${nm}'; method overloading across an interface inheritance chain is not supported yet`,
+            );
+            continue;
+          }
+          inherited.set(im.name, { from: nm, m: im });
+        }
+      };
+      for (const p of parents) collectFrom(p);
+      for (const [mname, own] of methods) {
+        const inh = inherited.get(mname);
+        if (!inh) continue;
+        if (own.signature === inh.m.signature) {
+          if (!this.interfaceMethodReturnsEqual(own, inh.m)) {
+            this.diags.error(
+              iface,
+              'JETH386',
+              `interface '${name}' redeclares '${mname}' from base interface '${inh.from}' with a different return type (solc: overriding function return types differ)`,
+            );
+          } else if (own.mutability !== inh.m.mutability) {
+            this.diags.error(
+              iface,
+              'JETH387',
+              `interface '${name}' redeclares '${mname}' from base interface '${inh.from}' with different mutability ('${own.mutability}' vs '${inh.m.mutability}'); keep the base declaration's mutability or declare the method only once in the chain`,
+            );
+          } else {
+            this.diags.error(
+              iface,
+              'JETH342',
+              `interface '${name}' redeclares '${mname}' already declared by base interface '${inh.from}'; remove the redeclaration (the inherited method is already callable through '${name}')`,
+            );
+          }
+        } else {
+          this.diags.error(
+            iface,
+            'JETH342',
+            `interface '${name}' method '${mname}' overloads '${inh.from}.${mname}'; method overloading across an interface inheritance chain is not supported yet`,
+          );
+        }
+      }
+    }
+    this.interfacesByName.set(name, { name, methods, ...(parents.length > 0 ? { parents } : {}) });
     // P0a: register the interface as an EXTENDABLE base, exactly like collectInterface does for an
     // `@interface class`. The linearizer's node list is typed ts.ClassDeclaration, but an interface node
     // is an ORDERING + OBLIGATION marker only: every member-touching consumer skips it via
     // isInterfaceClass (which recognizes a ts.InterfaceDeclaration), heritageBases reads only
-    // `.heritageClauses` (shared by both node kinds; empty here - a heritage-bearing interface was
-    // rejected above), and all method/mutability/obligation data flows BY NAME through
+    // `.heritageClauses` (shared by both node kinds; for an `interface B extends A` it yields the
+    // parent interfaces, which the C3 linearizer resolves via interfaceClassByName - exactly solc's
+    // MRO over `interface B is A`, including the W13b "Linearization impossible" reject for
+    // `class C extends B, A`), and all method/mutability/obligation data flows BY NAME through
     // interfacesByName - so the cast can never leak a TypeElement into a ClassElement consumer.
     this.interfaceClassByName.set(name, iface as unknown as ts.ClassDeclaration);
+  }
+
+  /** Whether two interface-method declarations carry the SAME return shape (single or tuple). */
+  private interfaceMethodReturnsEqual(a: InterfaceMethod, b: InterfaceMethod): boolean {
+    const ra = a.returnTypes ?? (a.returnType.kind === 'void' ? [] : [a.returnType]);
+    const rb = b.returnTypes ?? (b.returnType.kind === 'void' ? [] : [b.returnType]);
+    return ra.length === rb.length && ra.every((t, i) => typesEqual(t, rb[i]!));
+  }
+
+  /** Resolve a method of interface `ifaceName` by name, walking the `extends` parent chain
+   *  depth-first in source order (solc: `interface B is A` makes B's callable surface the UNION of
+   *  the chain; each method keeps its OWN canonical signature/selector/mutability from its original
+   *  declaration). Name collisions across a chain are rejected at collection, so at most one
+   *  declaration can match. Returns undefined when no interface in the chain declares the name. */
+  private lookupInterfaceMethod(ifaceName: string, methodName: string): InterfaceMethod | undefined {
+    const seen = new Set<string>();
+    const walk = (nm: string): InterfaceMethod | undefined => {
+      if (seen.has(nm)) return undefined;
+      seen.add(nm);
+      const d = this.interfacesByName.get(nm);
+      if (!d) return undefined;
+      const own = d.methods.get(methodName);
+      if (own) return own;
+      for (const p of d.parents ?? []) {
+        const m = walk(p);
+        if (m) return m;
+      }
+      return undefined;
+    };
+    return walk(ifaceName);
   }
 
   private collectNativeInterfaceMethod(member: ts.MethodSignature, ifaceName: string): InterfaceMethod | undefined {
@@ -3396,32 +3534,48 @@ export class Analyzer {
       const cls = this.classByName.get(cn);
       if (!cls) continue;
       for (const hb of heritageBases(cls)) {
-        const iface = this.interfacesByName.get(hb.name);
-        const m = iface?.methods.get(rf.name);
+        // An `extends B` base may itself be an interface CHAIN (`interface B extends A`): a method
+        // declared anywhere in the chain is a legal @override target (solc W20c: bare `override` on
+        // the impl of an inherited interface method is accepted), so walk the chain, not just B.
+        const m = this.lookupInterfaceMethod(hb.name, rf.name);
         if (m && m.signature === want) return true;
       }
     }
     return false;
   }
 
-  /** The @interface DIRECT bases of `rf`'s declaring contract that declare a method with `rf`'s exact
-   *  canonical signature. Each such interface is its OWN override "head" - solc counts it as an
-   *  overridden contract that must be named in @override(...), exactly like a base-contract branch head.
-   *  (Interface methods live in this.interfacesByName, never in the flattened `collected`/`overridden`
-   *  contract-function list, so the heads computation must add them explicitly. Only DIRECT bases count:
-   *  solc's "Invalid contract specified in override list" for a transitively-inherited interface I named
-   *  when C only lists J-is-I means a non-direct interface is NOT a head.) InterfaceMethod.signature and
-   *  this.sigKey share the identical canonical format, so a name lookup + signature compare suffices. */
+  /** The @interface override "heads" for `rf`: the interfaces that DIRECTLY DECLARE a method with
+   *  `rf`'s exact canonical signature, reachable from the declaring contract's DIRECT interface bases
+   *  through `extends` chains. Each head is an overridden contract solc counts for the @override(...)
+   *  list. Witnessed vs 0.8.35 (interface-extends-interface lift): for `contract C is B` with
+   *  `interface B is A` (A declares f), `override(A)` is VALID membership (W20a/W33 accept) while
+   *  `override(B)` is NOT (W20b "Invalid contract specified in override list": B does not declare f),
+   *  and with a second direct base K also declaring f the completeness rule demands
+   *  `override(A, K)` (W32). So the walk descends interface parents but only a DECLARING interface is
+   *  a head; a non-declaring chain link never is. Interfaces reached via a base CONTRACT are handled
+   *  by that contract's own row in the linearization, not here (pre-existing witnessed behavior kept).
+   *  InterfaceMethod.signature and this.sigKey share the identical canonical format, so a name lookup
+   *  + signature compare suffices. */
   private interfaceOverrideHeads(rf: RawFunction): string[] {
     const cls = this.classByName.get(rf.definingContract!);
     if (!cls) return [];
     const want = this.sigKey(rf);
-    return heritageBases(cls)
-      .map((h) => h.name)
-      .filter((b) => {
-        const m = this.interfacesByName.get(b)?.methods.get(rf.name);
-        return m !== undefined && m.signature === want;
-      });
+    const heads: string[] = [];
+    const visited = new Set<string>();
+    const walk = (nm: string): void => {
+      if (visited.has(nm)) return;
+      visited.add(nm);
+      const d = this.interfacesByName.get(nm);
+      if (!d) return; // a contract base: its interfaces are handled via its own linearization row
+      const m = d.methods.get(rf.name);
+      if (m && m.signature === want) {
+        heads.push(nm);
+        return; // chain collisions are rejected at collection; nothing deeper can re-declare it
+      }
+      for (const p of d.parents ?? []) walk(p);
+    };
+    for (const h of heritageBases(cls)) walk(h.name);
+    return heads;
   }
 
   /** Resolve the override sets across the linearization. Returns the WINNERS (most-derived definition
@@ -11490,7 +11644,6 @@ export class Analyzer {
     const pa = node.expression;
     const ifaceName = this.interfaceWrapperName(pa.expression);
     if (!ifaceName) return undefined;
-    const iface = this.interfacesByName.get(ifaceName)!;
     const wrapper = pa.expression as ts.CallExpression;
     const methodName = pa.name.text;
 
@@ -11516,7 +11669,10 @@ export class Analyzer {
     const recv = this.coerce(addr, ADDRESS, wrapper.arguments[0]!);
 
     // ---- the method ----
-    const method = iface.methods.get(methodName);
+    // The callable surface of `ifaceName` is the UNION of its extends-chain (solc `interface B is A`):
+    // an inherited method dispatches STATICCALL/CALL per its ORIGINAL declaration's marker, with the
+    // selector of its own canonical signature (lookupInterfaceMethod walks the parent chain).
+    const method = this.lookupInterfaceMethod(ifaceName, methodName);
     if (!method) {
       this.diags.error(pa, 'JETH351', `interface '${ifaceName}' has no method '${methodName}'`);
       return 'handled';

@@ -343,17 +343,21 @@ describe('native interface extends: reject parity (same code, both spellings)', 
     );
   });
 
-  it('pre-existing gates unchanged: JETH370 for a non-interface base, JETH391 for implements, JETH349 for interface-extends-interface, the decorator pragma banned', () => {
+  it('pre-existing gates unchanged: JETH370 for a non-interface base, JETH391 for implements, JETH349 for an invalid interface parent, the decorator pragma banned', () => {
     // extending a struct type alias is still JETH370
     expect(codes(`type P = { a: u256 };
       class C extends P { f(): External<u256> { this.x = 1n; return 1n; } x: u256; }`)).toContain('JETH370');
     // `implements` stays a loud reject
     expect(codes(`interface I { f(x: u256): u256; }
       class C implements I { f(x: u256): External<u256> { this.s = x; return x; } s: u256; }`)).toContain('JETH391');
-    // a native interface still cannot extend another interface
+    // interface-extends-interface is LIFTED (see native-interface-extends-interface.test.ts): the chain
+    // compiles and C owes the full union. JETH349 remains for an INVALID parent (here: a struct type).
     expect(codes(`interface I0 { f(): u256; }
       interface I extends I0 { g(): u256; }
-      class C extends I { f(): External<u256> { this.s = 1n; return this.s; } g(): External<u256> { this.s = 2n; return this.s; } s: u256; }`)).toContain('JETH349');
+      class C extends I { f(): External<u256> { this.s = 1n; return this.s; } g(): External<u256> { this.s = 2n; return this.s; } s: u256; }`)).toEqual([]);
+    expect(codes(`type P = { a: u256 };
+      interface I extends P { g(): u256; }
+      class C extends I { g(): External<u256> { this.s = 2n; return this.s; } s: u256; }`)).toContain('JETH349');
     // decorator mode was removed in stage 2; a `// use @decorators` file now hard-rejects (JETH480).
     expect(codes(`// use @decorators
 interface I { f(x: u256): u256; }

@@ -250,10 +250,10 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
     );
   });
 
-  it('positive: a contract implementing two interfaces (native flattens: interface-extends-interface is JETH349)', async () => {
-    // Native mode has no interface-extends-interface (JETH349); the chain's requirement - C must supply
-    // every method of both interfaces - is expressed by implementing the two interfaces directly. The
-    // JETH349 reject of the chained form itself is pinned in the negative case below.
+  it('positive: a contract implementing two interfaces (flat form; the extends-chain form is lifted too)', async () => {
+    // C must supply every method of both interfaces. The `interface J extends I` chain spelling is
+    // LIFTED and byte-identical (native-interface-extends-interface.test.ts); this cell keeps the flat
+    // two-direct-bases form pinned vs solc.
     await matchPositive(
       `interface I { f(): u256; }
        interface J { g(): View<u256>; }
@@ -362,10 +362,10 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
     );
   });
 
-  it('negative: native rejects interface-extends-interface (JETH349); solc chained form leaves f open', () => {
-    // Native mode does not support an interface extending another interface (JETH349 - declare the methods
-    // directly). solc accepts `interface J is I`, but the contract below still leaves I.f unimplemented, so
-    // both compilers reject the chained form (JETH for the chain itself, solc for the open method).
+  it('negative: an interface chain leaving the inherited f unimplemented -> JETH385, like solc', () => {
+    // interface-extends-interface is LIFTED (native-interface-extends-interface.test.ts): both compilers
+    // now accept the `interface J extends I` chain itself and reject THIS program for the SAME reason -
+    // the contract owes the full union and leaves I.f open (solc: "should be marked as abstract").
     bothReject(
       `interface I { f(): u256; }
        interface J extends I { g(): View<u256>; }
@@ -373,7 +373,7 @@ describe('contract implementing an @interface (heritage `extends I`): byte-ident
       `interface I { function f() external returns(uint256); }
        interface J is I { function g() external view returns(uint256); }
        contract C is J { function g() external view returns(uint256){ return 4; } }`,
-      'JETH349',
+      'JETH385',
     );
   });
 

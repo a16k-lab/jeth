@@ -409,9 +409,24 @@ each has a verified workaround):**
   deferred implicit-virtual item.
 - **NATIVE-IFACE-EXTENDS - RESOLVED (P0a, 2026-07-11)**: a native `interface I` IS an extendable
   base (`class C extends I`), byte-identical to solc's implements path (test/native-interface-extends.test.ts;
-  live-probed ACCEPTS at 557e23e). The residual OR is **IFACE-EXTENDS-IFACE** (JETH349): an
-  `interface B extends A` inheritance chain rejects while solc accepts `interface B is A`; workaround:
-  redeclare A's methods in B (selector-identical since interface methods carry no bodies).
+  live-probed ACCEPTS at 557e23e). **IFACE-EXTENDS-IFACE - RESOLVED (2026-07-12)**: an
+  `interface B extends A` chain (2/3-level, multi-parent, common-grandparent diamond) is the native
+  spelling of solc's `interface B is A`: B's callable surface is the UNION of the chain (each method
+  keeps its ORIGINAL declaration's selector + STATICCALL/CALL marker), a `class C extends B` owes the
+  full union (JETH385 per original declaring interface), C3 ordering/`@override` heads/`type(I)
+  .interfaceId` (own-methods-only) all witnessed vs 0.8.35 (test/native-interface-extends-interface.test.ts).
+  JETH349 now fires only for an invalid parent: a non-interface base, a base declared BELOW the
+  derived interface (solc: "Definition of base has to precede" - which also covers extends CYCLES),
+  or a type-argument/qualified base. Residual SAFE over-rejections in the chain (each a clean
+  reject with a verified workaround = declare the method once in the chain):
+  **IFACE-CHAIN-REDECLARE** (JETH342: identical redeclare of an inherited method; solc accepts),
+  **IFACE-CHAIN-TIGHTEN** (JETH387: same-signature redeclare tightening mutability, e.g. bare ->
+  View; solc accepts the tightening, rejects the loosening - JETH rejects both),
+  **IFACE-CHAIN-OVERLOAD** (JETH342: same name, different params across the chain; solc treats it as
+  an overload - same policy as the in-body JETH342 no-overloading rule), and
+  **IFACE-DIAMOND-OVERRIDE-LIST** (JETH430: two DISTINCT parents declaring the same signature needs a
+  redeclare carrying `override(A, B)`, which a TS interface method cannot spell; solc-reject parity
+  for the bare shape, OR only for the unspellable redeclare cell).
 - **MANGLE-INJECT** (JETH373/434/044/065/374/375): a user identifier spelled like a `#` mangle
   product (`$p$C$x`) fails CLOSED in all four spellings (never merges storage/dispatch).
 - **CONST-FWD-REF** (JETH048/065): constant initializers are declaration-order-dependent; solc's are

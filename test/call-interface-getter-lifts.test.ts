@@ -442,15 +442,16 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
        contract C is B, I1 { uint256 public override(B, I1) x; function set(uint256 v) external { x = v; } }`,
       [['set(uint256)', W(0x42)], ['x()', '']],
     );
-    // diamond: I2, I3 both extend I1 - native mode has no interface-extends-interface (JETH349 - declare
-    // the methods directly), so solc's "single head I1 -> bare @override accepted" diamond is unreachable
-    // natively; the flat-interface accepts above cover the getter-override accept path.
-    expect(
-      codesOf(
-        `interface I1 { x(): u256; } interface I2 extends I1 {} interface I3 extends I1 {}
-         class C extends I2, I3 { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
-      ),
-    ).toContain('JETH349');
+    // diamond: I2, I3 both extend I1 - the interface-extends-interface chain is LIFTED
+    // (native-interface-extends-interface.test.ts), so solc's "single declaring head I1 -> bare
+    // @override accepted" diamond is now reachable natively and must be byte-identical at runtime.
+    await eqCalls(
+      `interface I1 { x(): u256; } interface I2 extends I1 {} interface I3 extends I1 {}
+       class C extends I2, I3 { @override x: Visible<u256>; set(v: u256): External<void> { this.x = v; } }`,
+      `interface I1 { function x() external view returns (uint256); } interface I2 is I1 {} interface I3 is I1 {}
+       contract C is I2, I3 { uint256 public override x; function set(uint256 v) external { x = v; } }`,
+      [['set(uint256)', W(0x5eed)], ['x()', '']],
+    );
   });
 
   it('multi-interface getter REJECT (no over-acceptance): bare/incomplete list, bogus/duplicate member, @pure iface', () => {
@@ -507,8 +508,8 @@ describe('P1-4: getter var overriding/implementing a base virtual / interface fu
         class C extends I1, I2 { @override a: Visible<u256[]>; }`,
        `interface I1 { function a(uint256) external view returns (uint256); } interface I2 { function a(uint256) external view returns (uint256); }
         contract C is I1, I2 { uint256[] public override a; }`],
-      // diamond: native has no interface-extends-interface (JETH349); solc rejects naming the non-declaring
-      // direct bases I2, I3 in the override list
+      // diamond through lifted chains: solc rejects naming the non-declaring direct bases I2, I3 in the
+      // override list (only the declaring I1 is a head); JETH's membership check rejects the same way
       [`interface I1 { x(): u256; } interface I2 extends I1 {} interface I3 extends I1 {}
         class C extends I2, I3 { @override(I2, I3) x: Visible<u256>; }`,
        `interface I1 { function x() external view returns (uint256); } interface I2 is I1 {} interface I3 is I1 {}

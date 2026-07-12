@@ -160,18 +160,29 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
     );
   });
 
-  it('native rejects interface-extends-interface behind interfaceId (JETH349); flat-interface Ids are pinned above', () => {
-    // solc computes type(I).interfaceId as the XOR of I's OWN selectors, EXCLUDING inherited ones - a
-    // property that requires an interface hierarchy. Native mode has no interface-extends-interface
-    // (JETH349 - declare the methods directly), so the "exclude inherited" scenario is unreachable; the
-    // interfaceId of a flat interface (single / multi / ERC165) is pinned byte-identical to solc above.
-    const j = jethCompile(
+  it('type(I).interfaceId through an interface-extends-interface chain EXCLUDES inherited methods, like solc', async () => {
+    // solc computes type(I).interfaceId as the XOR of I's OWN selectors, EXCLUDING inherited ones. The
+    // `interface IFoo extends IBase` chain is LIFTED (native-interface-extends-interface.test.ts), so
+    // the "exclude inherited" scenario is now reachable and pinned byte-identical at runtime here.
+    await matchPositive(
       `interface IBase { g(x: u256): u256; }
        interface IFoo extends IBase { h(a: address): bool; }
-       class C extends IFoo { get h(a: address): External<bool> { return true; } get f(): External<bytes4> { return type(IFoo).interfaceId; } }`,
+       class C extends IFoo {
+         get g(x: u256): External<u256> { return x; }
+         get h(a: address): External<bool> { return true; }
+         get f(): External<bytes4> { return type(IFoo).interfaceId; }
+         get fb(): External<bytes4> { return type(IBase).interfaceId; }
+       }`,
+      `interface IBase { function g(uint256 x) external returns(uint256); }
+       interface IFoo is IBase { function h(address a) external returns(bool); }
+       contract C is IFoo {
+         function g(uint256 x) external pure returns(uint256){ return x; }
+         function h(address a) external pure returns(bool){ return true; }
+         function f() external pure returns(bytes4){ return type(IFoo).interfaceId; }
+         function fb() external pure returns(bytes4){ return type(IBase).interfaceId; }
+       }`,
+      ['f()', 'fb()'],
     );
-    expect(j.ok).toBe(false);
-    expect(j.codes).toContain('JETH349');
   });
 
   // ---------------- NEGATIVE (both reject) ----------------
@@ -220,13 +231,14 @@ describe('type-qualified .selector and type(I).interfaceId: byte-identical vs so
   });
 
   it('negative: I.inheritedFn.selector (interface inherited member is not direct)', () => {
-    // Native rejects the interface hierarchy itself (JETH349 - no interface-extends-interface), while solc
-    // accepts `interface IFoo is IBase` but rejects `IFoo.g.selector` (g is inherited, not a direct member):
-    // both compilers reject the program.
+    // The interface hierarchy itself is LIFTED (native-interface-extends-interface.test.ts); both
+    // compilers now accept `interface IFoo extends IBase` but reject `IFoo.g.selector` for the SAME
+    // reason: g is inherited, not a direct member of type(IFoo) (solc: "Member g not found"; JETH074).
     bothReject(
       `interface IBase { g(x: u256): u256; }
        interface IFoo extends IBase { h(a: address): bool; }
        class C extends IFoo {
+         get g(x: u256): External<u256> { return x; }
          get h(a: address): External<bool> { return true; }
          get f(): External<bytes4> { return IFoo.g.selector; }
        }`,

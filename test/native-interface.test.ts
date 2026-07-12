@@ -87,7 +87,8 @@ describe('native TS interfaces (item #6b)', () => {
     expect(codes(call(`interface I { m(): View; }`))).toContain('JETH350');            // marker needs one type arg
     expect(codes(`interface I { x: u256; m(): View<u256>; } ${''}class C { get f(a:address):External<u256>{ return I(a).m(); } }`)).toContain('JETH341'); // no fields
     expect(codes(`interface I { m?(): View<u256>; } class C { get f(a:address):External<u256>{ return I(a).m(); } }`)).toContain('JETH341'); // no optional
-    expect(codes(`interface A { m(): View<u256>; } interface B extends A { n(): View<u256>; } class C { get f(a:address):External<u256>{ return B(a).n(); } }`)).toContain('JETH349'); // no interface inheritance yet
+    expect(codes(`interface A { m(): View<u256>; } interface B extends A { n(): View<u256>; } class C { get f(a:address):External<u256>{ return B(a).n(); } }`)).toEqual([]); // interface inheritance LIFTED (see native-interface-extends-interface.test.ts); JETH349 remains only for an invalid parent
+    expect(codes(`interface B extends A { n(): View<u256>; } interface A { m(): View<u256>; } class C { get f(a:address):External<u256>{ return B(a).n(); } }`)).toContain('JETH349'); // base below derived still rejects (solc: base must precede)
   });
 
   it('the `// use @decorators` pragma is banned in native-only mode (JETH480)', () => {

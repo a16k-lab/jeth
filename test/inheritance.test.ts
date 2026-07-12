@@ -204,10 +204,12 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       par(j2('(I, J, I)'), s2('(I, J, I)')); // duplicate
       expect(codes(j2('(I, J)'))).toEqual([]); // complete -> accept
       expect(codes(j2('(J, I)'))).toEqual([]); // order-insensitive
-      // J extends I, C extends J only: solc uses this hierarchy to test transitive vs direct heads.
-      // Native mode has no interface-extends-interface (JETH349 - declare methods directly), so both the
-      // transitive-in-list form and the single-direct-head form are rejected natively (the chain itself);
-      // solc rejects the first (naming transitive I is "Invalid contract specified") and accepts the second.
+      // J extends I with J REDECLARING g: the interface-extends-interface chain is LIFTED
+      // (native-interface-extends-interface.test.ts), but an in-chain redeclare of an inherited method
+      // stays a catalogued safe over-rejection (IFACE-CHAIN-REDECLARE, JETH342 - solc accepts the
+      // identical redeclare). Both cells below still REJECT on both sides where they must: solc rejects
+      // the first for naming I (J's redeclare subsumed I's version - "Invalid contract specified") and
+      // accepts the second, which JETH342 over-rejects (documented in docs/OR-CATALOGUE.md).
       par(
         `interface I { g(): u256; } interface J extends I { g(): u256; } class C extends J { @override(I, J) get g(): External<u256> { return 8n; } }`,
         `interface I { function g() external returns(uint256); } interface J is I { function g() external returns(uint256); } contract C is J { function g() external override(I,J) returns(uint256){ return 8; } }`,
@@ -216,7 +218,14 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
         codes(
           `interface I { g(): u256; } interface J extends I { g(): u256; } class C extends J { @override(J) get g(): External<u256> { return 8n; } }`,
         ),
-      ).toContain('JETH349'); // native: the J-extends-I chain is rejected, so the single-direct-head accept is unreachable
+      ).toContain('JETH342'); // the chain itself is lifted; the in-chain redeclare is the residual OR
+      // the redeclare-free chain twin of the same topology IS accepted, with the declaring interface I
+      // as the single valid @override head (witnessed: solc accepts override(A)-style indirect heads).
+      expect(
+        codes(
+          `interface I { g(): u256; } interface J extends I { h(): u256; } class C extends J { @override(I) get g(): External<u256> { return 8n; } get h(): External<u256> { return 9n; } }`,
+        ),
+      ).toEqual([]);
     });
     // ---- base-constructor-argument accept/reject parity ----
     it('a heritage base-arg referencing a ctor parameter -> both reject (state/params not in scope)', () =>
