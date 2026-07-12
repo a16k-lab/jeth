@@ -398,10 +398,28 @@ JETH479 (declare-statements too).
 
 **New SAFE over-rejection rows (clean rejects, solc accepts; catalogue candidates from the audit -
 each has a verified workaround):**
-- **STR-EQ-LIT** (JETH074, the biggest usability item): string/bytes `==`/`!=` with a BARE literal
-  operand (`s == "hi"`) rejects in every position/mode; typed-vs-typed and the `string("hi")`/
-  `bytes("hi")` cast spellings work byte-identically (48-cell matrix). Lift = give the literal a type
-  from the sibling operand in the desugar.
+- **STR-EQ-LIT - LIFTED (2026-07-12, `79fbf89`)**: `s == "hi"` / `"hi" == s` / `!=` now type the bare
+  literal from the sibling string operand, byte-identical to the `string("hi")` cast twin (60-cell
+  verify + 43 runtime calls vs the solc keccak mirror). Ordered compares (`s < "hi"`) and mixed-type
+  operands keep rejecting at solc parity; the bytesN-literal asymmetry (`b4 == "abcd"` accepts,
+  `"abcd" == b4` rejects) is solc's own.
+
+**New safe-OR rows found by the 2026-07-12 lift/fix verifies (each a clean reject, solc accepts,
+pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
+- **OVERRIDE-VAR-MULTIHEAD** (JETH385 x2 + JETH433): a getter var (`x: Visible<u256>` + `@override(A, B)`)
+  implementing the SAME-signature method of TWO interfaces rejects; solc accepts
+  `uint256 public override(A,B) x`. Workaround: implement as a `get` method with `@override(A, B)`.
+- **IFACE-OVERLOADS** (JETH342): an interface declaring overloads of one method name rejects at the
+  interface; solc accepts a fully-implementing contract. Workaround: distinct method names.
+- **PURE-GET-OBLIGATION** (JETH352): an interface `p(): Pure<u256>` obligation implemented by a
+  `get p(): Pure<u256>` rejects while the solc mirror accepts. Workaround: declare the obligation
+  `View<T>` (or bare) and keep the impl's stricter body.
+- **STRING-FIELD-INIT** (JETH048): a `string` state field WITH an initializer (`s: string = "x"` /
+  `Visible<string>`) rejects regardless of marker; solc accepts. Workaround: assign in the ctor
+  (byte-identical to solc, verified).
+- **TWO-BASE-GET-DIAMOND** (JETH381): a `get` declared in TWO abstract bases rejects even when the
+  leaf's `@override(A, B)` tightens legally; solc accepts. Workaround: hoist the shared get to a
+  single common base.
 - **JETH477-DEPTH**: expression/statement nesting beyond the compiler's recursion budget (~2000-term
   binary chains cold) is a clean reject; solc compiles. Deliberate robustness boundary.
 - **ABSTRACT-METHOD-DECL** (JETH375/374): TS `abstract f(): External<void>;` is not consumed as the
