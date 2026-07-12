@@ -407,8 +407,11 @@ each has a verified workaround):**
 - **ABSTRACT-METHOD-DECL** (JETH375/374): TS `abstract f(): External<void>;` is not consumed as the
   virtual bodyless declaration; spell it `@virtual f(): ...;` (byte-identical). Aligns with the
   deferred implicit-virtual item.
-- **NATIVE-IFACE-EXTENDS** (JETH370): `interface I` is a call target, not an extendable base (v1
-  scope boundary); the `@interface class I` extends-workaround is retired (JETH481), so this stays a plain scope boundary.
+- **NATIVE-IFACE-EXTENDS - RESOLVED (P0a, 2026-07-11)**: a native `interface I` IS an extendable
+  base (`class C extends I`), byte-identical to solc's implements path (test/native-interface-extends.test.ts;
+  live-probed ACCEPTS at 557e23e). The residual OR is **IFACE-EXTENDS-IFACE** (JETH349): an
+  `interface B extends A` inheritance chain rejects while solc accepts `interface B is A`; workaround:
+  redeclare A's methods in B (selector-identical since interface methods carry no bodies).
 - **MANGLE-INJECT** (JETH373/434/044/065/374/375): a user identifier spelled like a `#` mangle
   product (`$p$C$x`) fails CLOSED in all four spellings (never merges storage/dispatch).
 - **CONST-FWD-REF** (JETH048/065): constant initializers are declaration-order-dependent; solc's are
