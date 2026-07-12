@@ -453,12 +453,16 @@ each has a verified workaround):**
 - **COMMA-FORUPDATE** (JETH073): a comma expression in a for-update clause (no solc comma operator;
   parity-debatable).
 
-**OPEN - needs triage (pre-existing OA seen in passing, NOT fixed this round):** a non-`abstract` base
-class carrying a bodyless `@virtual` member (plain method or special entry) plus an implemented
-`@override` in the deployed entry compiles in JETH, while solc rejects the file ('Contract "B" should
-be marked as abstract'). Systemic to JETH's entry-contract model (non-entry bases are never
-deployed). Decide: require the `abstract` keyword on any base with a bodyless `@virtual` member (parity reject), or
-document as a deliberate dialect boundary.
+**RESOLVED (JETH483, parity reject):** the formerly-OPEN over-acceptance - a non-`abstract` base class
+carrying a bodyless `@virtual` member (plain method, `get` accessor, or receive/fallback special
+entry) plus an implemented `@override` in the deployed entry - now rejects, matching solc's
+'Contract "B" should be marked as abstract.'. Enforced two ways: (1) a syntactic declarer rule (ANY
+non-abstract contract-kind class declaring a bodyless method/get fires JETH483 at the member), and
+(2) an inherited rule (a non-abstract class anywhere in the chain - a MIDDLE included - whose own
+view leaves an inherited bodyless member, getter-var overrides honored, or a bodyless special entry
+unimplemented fires JETH483 at the class), both witnessed vs solc per shape. The legal abstract idiom
+(`abstract class` declarer + implementing leaf, abstract middles) stays accepted byte-identical.
+Regression: test/abstract-required-bodyless-virtual.test.ts.
 
 Also confirmed in passing (safe, pre-existing): the JETH387 receive/fallback internal-call gate and
 the batch-C funcRefCall ordering are unregressed; solc-legacy stack-too-deep at 40 params is a

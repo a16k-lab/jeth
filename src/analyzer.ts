@@ -635,6 +635,7 @@ export class Analyzer {
     this.rejectImplementsClauses(); // a silently-ignored `implements` clause skipped interface obligations
     this.checkClassNamespaceCollisions(); // duplicate contract/abstract/library names + builtin-global shadows
     this.checkClassTypeNameCollisions(); // ANY top-level class vs a same-named file-level type (solc parity)
+    this.checkAbstractRequiredForBodylessMembers(); // a non-abstract class declaring a bodyless member (solc parity)
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
     const classes = this.findContractClasses();
     if (classes.length === 0) {
@@ -1507,6 +1508,56 @@ export class Analyzer {
               'JETH272',
               `contract '${name}' name conflicts with a same-named file-level error/event declaration; solc rejects this as "Identifier already declared"`,
             );
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
+  /** OA-ABSTRACT (declarer rule): solc rejects ANY contract that declares a function without an
+   *  implementation unless the contract is marked `abstract` ('Contract "B" should be marked as
+   *  abstract.'), EVEN when a derived contract implements every such member. JETH previously enforced
+   *  this only for the DEPLOYED contract (JETH380), so a non-abstract BASE with a bodyless @virtual
+   *  member whose leaf implemented it was silently ACCEPTED (an over-acceptance; witnessed for a plain
+   *  method, a `get` accessor, and the receive/fallback special entries). This purely SYNTACTIC pass
+   *  scans every class declaration: a class of contract kind (bare / @contract / @proxy / @beacon /
+   *  @facet - abstract classes, libraries, and legacy @struct/@interface classes are exempt; a native
+   *  `interface I` is a ts.InterfaceDeclaration and never reaches here) that declares a bodyless
+   *  method or `get` accessor must carry the `abstract` keyword. The legal abstract idiom
+   *  (`abstract class B { @virtual f(): External<T>; } class C extends B { @override f... }`) is
+   *  untouched. Runs on the PARSED source only, so methods the analyzer synthesizes later (event/error
+   *  field forms) are never inspected. */
+  private checkAbstractRequiredForBodylessMembers(): void {
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n)) {
+        const decs = decoratorNames(n);
+        const contractKind =
+          !this.hasAbstractKeyword(n) &&
+          !decs.includes('abstract') &&
+          !this.hasStaticClassModifier(n) &&
+          !decs.includes('library') &&
+          !decs.includes('struct') &&
+          !decs.includes('interface');
+        if (contractKind) {
+          for (const m of n.members) {
+            // The @event/@error DECLARATION forms are bodyless by design and are still SYNTHESIZED
+            // internally by the diamond expansion (`@event DiamondCut(...): void;` inside the
+            // synthesized @contract class); they declare no function to implement, so they are not an
+            // abstractness obligation. In USER source these decorators are JETH481-banned upstream, so
+            // the exemption cannot re-open the over-acceptance for native code.
+            const mdecs = decoratorNames(m);
+            if (mdecs.includes('event') || mdecs.includes('error')) continue;
+            if ((ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m)) && m.body === undefined) {
+              const cname = n.name?.text ?? '<anonymous>';
+              const mname = m.name !== undefined && ts.isIdentifier(m.name) ? m.name.text : '<member>';
+              this.diags.error(
+                m,
+                'JETH483',
+                `class '${cname}' declares bodyless member '${mname}' but is not abstract (solc: 'Contract "${cname}" should be marked as abstract.'); mark the class abstract (\`abstract class ${cname}\`) or implement '${mname}'`,
+              );
+            }
           }
         }
       }
@@ -3428,6 +3479,42 @@ export class Analyzer {
       this.visibleContractsByName.set(cn, set);
     }
 
+    // OA-ABSTRACT (inherited rule): solc requires abstract on EVERY contract in the hierarchy that, in
+    // ITS OWN view of the chain, leaves an inherited function unimplemented - not just the deployed
+    // leaf (JETH380) or the declarer (JETH483 in checkAbstractRequiredForBodylessMembers). Witnessed:
+    // `abstract contract A { function f() external virtual returns (uint256); } contract M is A {}
+    // contract C is M { ...implements f... }` -> 'Contract "M" should be marked as abstract.'. For each
+    // NON-abstract class X above the leaf, the most-derived version of each signature among X and its
+    // transitive bases must be implemented. `versions` is sorted most-derived first by the DEPLOYED
+    // linearization, whose relative order restricted to X's chain matches X's own C3 order (C3
+    // monotonicity), so the first candidate is X's winner. A version DECLARED by X itself is the
+    // declarer rule's job (skipped here to keep one message per cause), and a validated getter-var
+    // override (`@override x: Visible<T>`) declared at-or-above X implements the signature for X.
+    for (const versions of groups.values()) {
+      for (let i = 1; i < this.linOrder.length; i++) {
+        const cn = this.linOrder[i]!;
+        const cls = byName.get(cn);
+        if (!cls || this.isAbstractClass(cls) || this.isInterfaceClass(cls)) continue;
+        const above = basesOf.get(cn);
+        const cand = versions.filter(
+          (v) => v.definingContract === cn || (v.definingContract !== undefined && above?.has(v.definingContract)),
+        );
+        const w = cand[0];
+        if (w === undefined || !w.bodyless || w.definingContract === cn) continue;
+        const gv = this.getterOverrideVars.get(w.name);
+        if (
+          this.validGetterOverrides.has(w.name) &&
+          gv !== undefined &&
+          (gv.definingContract === cn || above?.has(gv.definingContract))
+        ) continue;
+        this.diags.error(
+          cls,
+          'JETH483',
+          `class '${cn}' inherits @virtual function '${w.name}' from '${w.definingContract}' without an implementation and is not abstract (solc: 'Contract "${cn}" should be marked as abstract.'); mark the class abstract (\`abstract class ${cn}\`) or implement '${w.name}' in it`,
+        );
+      }
+    }
+
     for (const [sk, versions] of groups) {
       // If every version of this signature is declared in the SAME contract, this is NOT an override
       // relationship - it is either a single function or a same-contract duplicate (handled by the
@@ -4709,6 +4796,30 @@ export class Analyzer {
     kind: 'receive' | 'fallback',
     linIdx: Map<string, number>,
   ): void {
+    // OA-ABSTRACT (inherited rule, special-entry flavor): solc requires abstract on every contract whose
+    // own chain leaves a bodyless @receive/@fallback unimplemented, including a NON-abstract MIDDLE class
+    // (witnessed: `abstract contract A { receive() external payable virtual; } contract M is A {}
+    // contract C is M { receive() ... override {} }` -> 'Contract "M" should be marked as abstract.').
+    // The leaf is checkSpecialEntry's job (a bodyless WINNER -> JETH472), and a bodyless declaration in a
+    // non-abstract DECLARER is checkAbstractRequiredForBodylessMembers' (JETH483 at the member). Here:
+    // for each non-abstract class X above the leaf, the most-derived same-kind declaration at-or-above X
+    // (decls are most-derived first; restricted to X's transitive-base set for diamond correctness) must
+    // have a body. Runs before the <=1 early return: with a single bodyless base declaration the leaf
+    // already rejects (JETH472), but the middle's own abstract obligation is solc's and is kept anyway.
+    for (let i = 1; i < this.linOrder.length; i++) {
+      const cn = this.linOrder[i]!;
+      const cls = this.classByName.get(cn);
+      if (!cls || this.isAbstractClass(cls) || this.isInterfaceClass(cls)) continue;
+      const visible = this.visibleContractsByName.get(cn);
+      if (!visible) continue;
+      const w = decls.find((d) => visible.has(d.contract));
+      if (w === undefined || w.member.body !== undefined || w.contract === cn) continue;
+      this.diags.error(
+        cls,
+        'JETH483',
+        `class '${cn}' inherits the bodyless @virtual ${kind} entry from '${w.contract}' without an implementation and is not abstract (solc: 'Contract "${cn}" should be marked as abstract.'); mark the class abstract (\`abstract class ${cn}\`) or implement the ${kind} in it`,
+      );
+    }
     if (decls.length <= 1) {
       // A lone special entry: an @override on it with no base declaration is "overrides nothing".
       const only = decls[0];
