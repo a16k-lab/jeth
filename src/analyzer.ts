@@ -641,6 +641,7 @@ export class Analyzer {
     this.checkClassNamespaceCollisions(); // duplicate contract/abstract/library names + builtin-global shadows
     this.checkClassTypeNameCollisions(); // ANY top-level class vs a same-named file-level type (solc parity)
     this.checkAbstractRequiredForBodylessMembers(); // a non-abstract class declaring a bodyless member (solc parity)
+    this.checkAbstractMemberShapes(); // JETH486: `abstract` is only a bodyless method/get obligation; misuse rejects loudly
     this.collectLibraries(); // @library declarations: internal (inlined) functions, collected before contracts
     const classes = this.findContractClasses();
     if (classes.length === 0) {
@@ -1709,6 +1710,60 @@ export class Analyzer {
     ts.forEachChild(this.sourceFile, visit);
   }
 
+  /** ABSTRACT-METHOD-DECL misuse gate (JETH486): the TS `abstract` member modifier is the native
+   *  spelling of a bodyless @virtual method/get declaration (collectFunction maps it to isVirtual),
+   *  so every OTHER `abstract` member position must reject LOUDLY instead of being silently eaten
+   *  (each is invalid TS whose grammar error lives in the CHECKER, not in parseDiagnostics, so the
+   *  rejectSilentlyAcceptedSyntaxErrors net never sees it - witnessed: all four shapes previously
+   *  compiled silently or with only incidental codes):
+   *    - a body (TS1245 "Method cannot have an implementation because it is marked abstract"): the
+   *      obligation form is bodyless; a defaulted overridable method is `@virtual` WITH a body;
+   *    - `static` (TS1243 "'static' modifier cannot be used with 'abstract' modifier"): a static is
+   *      per-class (const/immutable machinery), never dispatched, so it has no override surface;
+   *    - a constructor (TS1242): solc constructors always need a body, nothing to declare;
+   *    - a FIELD (legal TS, but a JETH field is a STATE VARIABLE and solidity has no abstract state
+   *      var; the getter obligation is spelled `abstract get x(): T`);
+   *    - an `interface` member (TS1070): interface members are already obligations, abstract adds
+   *      nothing and solc has no such spelling.
+   *  A bodyless abstract method/get in a NON-abstract class needs no check here: TS enforces it at
+   *  grammar level and the JETH483 declarer rule (bodyless member in a non-abstract contract) plus
+   *  the JETH390 library-body rule already reject those classes loudly. Purely syntactic, runs on
+   *  the PARSED source only (synthesized members are never inspected). */
+  private checkAbstractMemberShapes(): void {
+    const abstractMod = (m: ts.Node): ts.Modifier | undefined =>
+      ts.canHaveModifiers(m) ? (ts.getModifiers(m) ?? []).find((x) => x.kind === ts.SyntaxKind.AbstractKeyword) : undefined;
+    const visit = (n: ts.Node): void => {
+      if (ts.isClassDeclaration(n)) {
+        for (const m of n.members) {
+          const mod = abstractMod(m);
+          if (!mod) continue;
+          const mname = m.name !== undefined && ts.isIdentifier(m.name) ? m.name.text : '<member>';
+          if (ts.isConstructorDeclaration(m)) {
+            this.diags.error(mod, 'JETH486', `'abstract' cannot appear on a constructor (a constructor always needs a body; there is nothing for a derived contract to implement)`);
+          } else if (ts.isPropertyDeclaration(m)) {
+            this.diags.error(mod, 'JETH486', `an abstract field has no on-chain meaning (a JETH field is a state variable; Solidity has no abstract state variable); declare the obligation as \`abstract get ${mname}(): T\` (or an abstract method) instead`);
+          } else if (ts.isMethodDeclaration(m) || ts.isGetAccessorDeclaration(m)) {
+            if ((ts.getModifiers(m) ?? []).some((x) => x.kind === ts.SyntaxKind.StaticKeyword)) {
+              this.diags.error(mod, 'JETH486', `'static' and 'abstract' cannot be used together on '${mname}' (a static member is per-class and never dispatched, so it has no override surface)`);
+            }
+            if (m.body !== undefined) {
+              this.diags.error(mod, 'JETH486', `abstract member '${mname}' cannot have a body (an abstract member IS the bodyless obligation); drop the body, or drop 'abstract' and mark it @virtual to give an overridable default implementation`);
+            }
+          }
+        }
+      } else if (ts.isInterfaceDeclaration(n)) {
+        for (const m of n.members) {
+          const mod = abstractMod(m);
+          if (mod) {
+            this.diags.error(mod, 'JETH486', `'abstract' cannot appear on an interface member (an interface member is already a bodyless obligation); remove it`);
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    ts.forEachChild(this.sourceFile, visit);
+  }
+
   /** Every class name that appears in some `extends` clause (a base). Used so a native bare base is
    *  inlined into its leaf rather than counted as a second deployed contract (item #4). */
   private extendedClassNames(): Set<string> {
@@ -2347,12 +2402,16 @@ export class Analyzer {
             this.diags.error(member, 'JETH386', `a \`${nm}\` special entry cannot be \`static\``);
             continue;
           }
+          // ABSTRACT-METHOD-DECL: `abstract receive(): void;` / `abstract fallback(): ...;` are the
+          // native spellings of the bodyless @virtual special entry (same modifier-to-virtual mapping
+          // as ordinary methods; an abstract entry WITH a body was already rejected by JETH486).
+          const entryAbstractKw = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.AbstractKeyword);
           if (decs.includes('receive') || nm === 'receive') {
             if (sawReceiveHere)
               this.diags.error(member, 'JETH383', 'a contract may declare at most one @receive entry');
             sawReceiveHere = true;
             if (!receiveNode) receiveNode = { member, contract: cn };
-            receiveDecls.push({ member, contract: cn, virtual: decs.includes('virtual'), override: decs.includes('override') });
+            receiveDecls.push({ member, contract: cn, virtual: decs.includes('virtual') || entryAbstractKw, override: decs.includes('override') });
             continue;
           }
           if (decs.includes('fallback') || nm === 'fallback') {
@@ -2360,7 +2419,7 @@ export class Analyzer {
               this.diags.error(member, 'JETH383', 'a contract may declare at most one @fallback entry');
             sawFallbackHere = true;
             if (!fallbackNode) fallbackNode = { member, contract: cn };
-            fallbackDecls.push({ member, contract: cn, virtual: decs.includes('virtual'), override: decs.includes('override') });
+            fallbackDecls.push({ member, contract: cn, virtual: decs.includes('virtual') || entryAbstractKw, override: decs.includes('override') });
             continue;
           }
           if (decs.includes('error')) this.collectErrorDecl(member);
@@ -2410,9 +2469,15 @@ export class Analyzer {
               continue;
             }
             // carry the accessor's OWN decorators (@virtual / @override on a `get` participate in the
-            // normal override machinery).
+            // normal override machinery) AND its `abstract` modifier (ABSTRACT-METHOD-DECL: the native
+            // spelling of a bodyless @virtual - `abstract get g(): T;` - must reach collectFunction's
+            // isVirtual mapping; the other modifiers stay dropped as before, gated elsewhere).
+            const gModifiers: ts.ModifierLike[] = [
+              ...(ts.getDecorators(g) ?? []),
+              ...(ts.getModifiers(g) ?? []).filter((m) => m.kind === ts.SyntaxKind.AbstractKeyword),
+            ];
             const synthMethod = this.synth(
-              ts.factory.createMethodDeclaration(ts.getDecorators(g) ? [...ts.getDecorators(g)!] : undefined, undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
+              ts.factory.createMethodDeclaration(gModifiers.length > 0 ? gModifiers : undefined, undefined, g.name, undefined, undefined, g.parameters, g.type, g.body),
               g,
             );
             const fn = this.collectFunction(synthMethod, { getAccessor: true });
@@ -7194,13 +7259,22 @@ export class Analyzer {
     // unimplemented @virtual (a base abstract method). The explicit base list of @override(B, C)
     // (the diamond redefinition list) is captured for the diamond completeness check. Spread into
     // every RawFunction this method returns.
+    // ABSTRACT-METHOD-DECL: the TS `abstract` member modifier is a first-class native spelling of the
+    // bodyless @virtual declaration (`abstract f(v: u256): External<T>;` inside an `abstract class`
+    // == `@virtual f(v: u256): External<T>;`), so it feeds the SAME isVirtual flag and flows through
+    // the identical override machinery (JETH374 @override required in the leaf / JETH483 abstract
+    // required on declarer+middles / JETH380 unimplemented / ladder + diamond checks). Both spellings
+    // coexist; misuse of the modifier (a body, static, ctor, field, interface member) is rejected
+    // upfront by checkAbstractMemberShapes (JETH486). The `abstract get g(): T;` accessor flavor
+    // arrives here with the modifier forwarded by the get-accessor synthesis.
+    const hasAbstractKw = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.AbstractKeyword);
     const overrideCall = decoratorCall(member, 'override');
     let overrideList: string[] | undefined;
     if (overrideCall && overrideCall.arguments.length > 0) {
       overrideList = overrideCall.arguments.map((a) => (ts.isIdentifier(a) ? a.text : a.getText()));
     }
     const inhMeta = {
-      isVirtual: decs.includes('virtual'),
+      isVirtual: decs.includes('virtual') || hasAbstractKw,
       isOverride: decs.includes('override'),
       overrideList,
       bodyless: member.body === undefined,

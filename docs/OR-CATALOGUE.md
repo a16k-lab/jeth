@@ -442,9 +442,20 @@ pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
   `@override(M1, M2)` is complete while naming the non-maximal root still rejects (solc parity).
 - **JETH477-DEPTH**: expression/statement nesting beyond the compiler's recursion budget (~2000-term
   binary chains cold) is a clean reject; solc compiles. Deliberate robustness boundary.
-- **ABSTRACT-METHOD-DECL** (JETH375/374): TS `abstract f(): External<void>;` is not consumed as the
-  virtual bodyless declaration; spell it `@virtual f(): ...;` (byte-identical). Aligns with the
-  deferred implicit-virtual item.
+- **ABSTRACT-METHOD-DECL - LIFTED (2026-07-12)**: the TS `abstract` member modifier on a method /
+  `get` accessor (and on `receive`/`fallback`) inside an `abstract class` IS the native spelling of
+  the bodyless `@virtual` declaration - byte-identical to the `@virtual` twin across the whole
+  matrix (method/get, External/Payable/View/Pure markers, internal bare, string params, abstract
+  middles, bodyless-over-bodyless redeclares, diamond `@override(A, B)`, Visible<T> getter-var
+  override leaf, special entries; test/abstract-method-decl.test.ts) and runtime-differential-equal
+  to the solc mirrors. The pre-lift behavior was the modifier consumed as a plain bodyless member
+  (one extra JETH375 over the twin; the get flavor dropped the modifier in synthesis). Both
+  spellings coexist (`@virtual` is KEEP-list). New misuse gate **JETH486** (each shape is invalid
+  TS whose grammar error the checker - not parseDiagnostics - reports, so JETH must reject
+  explicitly): an abstract member WITH a body, `static abstract`, an abstract constructor
+  (pre-lift: silently accepted), an abstract FIELD (pre-lift: silently became a state var; the
+  obligation form is `abstract get x(): T`), and `abstract` on an interface member (pre-lift:
+  silently eaten).
 - **NATIVE-IFACE-EXTENDS - RESOLVED (P0a, 2026-07-11)**: a native `interface I` IS an extendable
   base (`class C extends I`), byte-identical to solc's implements path (test/native-interface-extends.test.ts;
   live-probed ACCEPTS at 557e23e). **IFACE-EXTENDS-IFACE - RESOLVED (2026-07-12)**: an
