@@ -496,8 +496,16 @@ pre-existing at `750d262` - byte-for-byte identical on the pre-lift parent):**
   redeclare carrying `override(A, B)`, which a TS interface method cannot spell; solc-reject parity
   for the bare shape, OR only for the unspellable redeclare cell; two parents contributing
   DIFFERENT signatures of one name merge as overloads - lifted, witnessed).
-- **MANGLE-INJECT** (JETH373/434/044/065/374/375): a user identifier spelled like a `#` mangle
-  product (`$p$C$x`) fails CLOSED in all four spellings (never merges storage/dispatch).
+- **MANGLE-INJECT - CLOSED as a bar violation (2026-07-12 live audit)**: the four DECLARATION-collision
+  spellings always failed closed (JETH373/434/044/352/065), but the audit found the ACCESS side
+  fail-OPEN: a user-written `this.$p$B$x` in a derived class silently bound base B's PRIVATE `#x` for
+  READ and WRITE (solc rejects the twin as undeclared) - a `#`-privacy-bypass OVER-ACCEPTANCE, live
+  since the mangle pre-pass landed (post-mangle a user spelling is indistinguishable). Fixed the
+  fail-closed way: the pre-mangle reserved-identifier scan (the `$m<N>$` guard's home in compile.ts)
+  now rejects EVERY user-written `$p$`-prefixed identifier (JETH036), declaration and access sites
+  alike. Standalone `$p$C$x` declarations (previously accept-side parity) deliberately became safe
+  rejects - a documented OR in exchange for a closed privacy hole. Regression:
+  test/private-hash-member.test.ts (reserved-$p$ describe).
 - **CONST-FWD-REF** (JETH048/065): constant initializers are declaration-order-dependent; solc's are
   order-independent. Declare in dependency order.
 - **LIB-CONST / LIB-MEMBER-EVENT / LIB-MEMBER-ERROR** (JETH388/390 family): a library may not declare
@@ -576,3 +584,56 @@ with the concrete-duplicate message shape (solc-witnessed: DeclarationError "Fun
 and parameter types defined twice"). Distinct-signature overloads, cross-class chain redeclaration,
 interface implementations, and diamond shared-root/sibling declarers all stay accepting,
 byte-identical (test/dup-bodyless-virtual.test.ts).
+
+## 2026-07-12 LIVE AUDIT (post native-only removal, HEAD b8b7ae8 -> fix): 34 rows / 9 clusters re-probed
+
+Every still-open row reconstructed in native syntax and differential-checked vs solc 0.8.35. One bar
+violation found + FIXED; three rows were stale pins (already lifted); two need one-line text
+precision. All other rows INTACT.
+
+**BAR VIOLATION FOUND + FIXED - MANGLE-INJECT (over-acceptance / `#`-privacy bypass):** a user-written
+identifier spelled like the private mangle product (`this.$p$B$x` in a class `C extends B`) silently
+bound base `B`'s private `#x` for READ and WRITE - solc rejects the twin as an undeclared identifier.
+Root cause: `manglePrivateMembers` (the `#x` -> `$p$C$x` pre-pass) made a user-written `$p$...` token
+indistinguishable from a real mangle afterward, and the existing guards only covered declaration
+collisions (JETH373/434/044) and ABI exposure (JETH352/065), never the access site. FIXED by extending
+`rejectReservedModuleIdentifiers` (compile.ts, already reserving the `$m<N>$` module prefix PRE-rename)
+to also reject any user-written `$p$`-prefixed identifier, declaration and access sites alike - fail
+closed everywhere. Regression: test/private-hash-member.test.ts ("reserved $p$ prefix fails closed").
+Suite 4219 green.
+
+**STALE PINS (already lifted by `69afb58` / `ea98210`, the 2026-07-08 cluster-3 lift; catalogue header
+L23 recorded the lift but the older "REMAINING over-rejections" narrative L205-212 kept the old rows):**
+- **CD-BYTE-ACCESS** - the calldata read `xs[i].b[j]` ACCEPTS + runtime byte-identical (incl. both OOB
+  Panic axes). The calldata WRITE is a parity both-reject (JETH151; solc: calldata is read-only), not
+  an OR - reclassify.
+- **FUNCREF-ELEM-LOCAL** - `let e: Fd = a[i]; e.f(v)` and `(c ? a[0n] : a[1n]).f(v)` both ACCEPT +
+  byte-identical (incl. mixed value+funcref field elements).
+- **TAGS-JK** - `xs[i].tags[j][k]` on a memory struct-array element ACCEPTS read AND write,
+  byte-identical (the calldata twin was lifted separately at `ea98210`).
+
+**PRECISION CORRECTIONS (row stands, text should tighten):**
+- **FIELD-INIT-NS** - only a string/bytes-LITERAL initializer on a `@storage(ns)` field rejects
+  (JETH048); a CONSTANT scalar initializer (`@storage('ns') x: u256 = 5n`) has ALWAYS accepted and is
+  runtime-identical to the ERC-7201 twin. Narrow the row to "string/bytes-literal initializer".
+- **JETH434-DISAMBIGUABLE** - the row claims solc has no named-arg emit; solc 0.8.35 DOES
+  (`emit E({...})`) and resolves overloads by key set / arg types. So this is a genuine OR vs solc,
+  not a JETH-only ergonomic row - upgrade the framing (strengthens the lift case).
+
+**INTACT rows re-confirmed (all clean rejects, solc accepts, verified workaround; grouped by lift value):**
+- LIFT-CANDIDATES (solc accepts, a byte-identical path is plausible): FIELD-INIT-EXPR (non-literal
+  field initializers via the implicit-ctor desugar), LIB-CONST / LIB-MEMBER-EVENT / LIB-MEMBER-ERROR
+  (library-scoped constants + member events/errors; the file-level workaround proves the lowering is
+  byte-identical), BYTES-CONST (add `bytes` to the constant whitelist), USING-ON-LIBRARY (@using inside
+  a library body), GET-EXTLIB-VIEW (a read-only External-lib call surface), RECEIVE-INTERNAL-CALL
+  (internal calls from receive/fallback), GET-PROPERTY-READ (property-syntax read of an argless get),
+  PAREN-CALLEE (peel a parenthesized callee), DEFAULT-ARG-CONST (fold `C.K` at a default-arg site),
+  JETH434-DISAMBIGUABLE (unique-key-set named-arg emit).
+- DELIBERATE / parity (must stay): CONST-FWD-REF, WIDEN-RCVR, MOD-SPECIAL-ENTRY, SPECIAL-NAME-METHOD,
+  IFACE-CHAIN-REDECLARE, IFACE-CHAIN-TIGHTEN (loosening half is parity), IFACE-DIAMOND-OVERRIDE-LIST
+  (bare shape both-rejects; only the unspellable-redeclare cell is the OR), STRUCT-FIELD-LENGTH,
+  IMM-INIT-SHADOW, NAMED-RAISE-EXCLUSIVITY, MEMBER-SHADOWS-FILE-EVENT, STR-ESC-ASTRAL (escapes; raw
+  char lifted), JETH477-DEPTH (robustness boundary), LT5 (stored-funcref raw-storage divergence),
+  COMMA-FORUPDATE (parity both-reject - Solidity has no comma operator).
+- CONTROLS (post native-only sanity): keep-list decorators (@using/@modifier/@virtual/@override) and
+  get call-syntax all unregressed, zero spurious JETH481.

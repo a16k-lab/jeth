@@ -288,16 +288,23 @@ function rewriteModuleScopes(
   ts.forEachChild(sf, rewrite);
 }
 
-/** `$m<N>$` identifiers are reserved for the v3 module-scoping rename (src/imports.ts): a user-written
- *  one would collide with the rename space, and demangleModuleName would silently rewrite it at every
- *  hash boundary (an error named `$m1$X` would get selector keccak('X(...)') - a name not in the source).
- *  Checked on the PRE-RENAME AST so it sees only user-written spellings. */
+/** `$m<N>$` and `$p$` identifiers are reserved for the compiler's internal mangles - the v3
+ *  module-scoping rename (src/imports.ts) and the `#`-private member mangle (`#x` in class C ->
+ *  `$p$C$x`, below). A user-written spelling would collide with the mangle space: `$m1$X` would be
+ *  silently demangled at every hash boundary (selector keccak('X(...)') - a name not in the source),
+ *  and a user-written `this.$p$B$x` was a confirmed `#`-PRIVACY BYPASS (it bound base B's private
+ *  `#x` for read AND write, where solc rejects the twin as undeclared - a live over-acceptance found
+ *  by the 2026-07-12 OR-catalogue live audit). Checked on the PRE-MANGLE AST, so every `$p$`/`$m`
+ *  identifier seen here is user-written by construction; both fail CLOSED, declaration and access
+ *  sites alike. */
 function rejectReservedModuleIdentifiers(sf: ts.SourceFile, diags: DiagnosticBag): void {
   const visit = (n: ts.Node): void => {
+    // the raw spelling is NOT quoted in either message: the message demanglers would strip/rewrite
+    // the prefix and misquote it; the diagnostic's source span already points at the identifier.
     if (ts.isIdentifier(n) && /^\$m\d+\$/.test(n.text)) {
-      // the raw spelling is NOT quoted in the message: the message demangler would strip its `$m<N>$`
-      // prefix and misquote it; the diagnostic's source span already points at the identifier.
       diags.error(n, 'JETH036', `this identifier uses the reserved '$m<N>$' module-scoping prefix; rename it`);
+    } else if (ts.isIdentifier(n) && n.text.startsWith('$p$')) {
+      diags.error(n, 'JETH036', `this identifier uses the reserved '$p$' private-member mangle prefix; rename it`);
     }
     ts.forEachChild(n, visit);
   };

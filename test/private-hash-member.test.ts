@@ -113,3 +113,24 @@ describe('# private members (item #2) - byte-identical to solc `private`', () =>
     expect(srej(Smethod)).toBe(true);
   });
 });
+
+// MANGLE-INJECT closed (found by the 2026-07-12 OR-catalogue live audit): a user-written identifier
+// spelled like a mangle product (`$p$B$x`) used to be indistinguishable from the mangled `#x` AFTER the
+// pre-pass, so `this.$p$B$x` in a derived class silently bound base B's PRIVATE `#x` for read AND write
+// (solc rejects the twin as undeclared) - a `#`-privacy bypass. The reserved-identifier scan now runs
+// PRE-mangle and rejects every user-written `$p$`-prefixed identifier (JETH036), declaration and access
+// sites alike - fail closed, like the `$m<N>$` module-scoping prefix.
+describe('reserved $p$ prefix fails closed (the privacy-bypass fix)', () => {
+  const codes = (src: string): string[] => {
+    try { compile(src, { fileName: 'c.jeth' }); return []; } catch (e: any) { return e.diagnostics.map((d: any) => d.code); }
+  };
+  it('user-spelled mangle access can never reach another class\'s #private (read, write, same-class alias)', () => {
+    expect(codes(`abstract class B { #x: u256; seed(): External<void> { this.#x = 77n; } }\nclass C extends B { get f(): External<u256> { return this.$p$B$x; } }`)).toContain('JETH036');
+    expect(codes(`abstract class B { #x: u256; get reveal(): External<u256> { return this.#x; } }\nclass C extends B { poke(v: u256): External<void> { this.$p$B$x = v; } }`)).toContain('JETH036');
+    expect(codes(`class C { #x: u256; get f(): External<u256> { return this.$p$C$x; } }`)).toContain('JETH036');
+  });
+  it('standalone $p$ declarations fail closed too; normal # members are unaffected', () => {
+    expect(codes(`class C { $p$C$x: u256; get f(): External<u256> { return this.$p$C$x; } }`)).toContain('JETH036');
+    expect(codes(`class C { #x: u256; set(v: u256): External<void> { this.#x = v; } get f(): External<u256> { return this.#x; } }`)).toEqual([]);
+  });
+});
