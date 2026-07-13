@@ -713,3 +713,34 @@ the existing (contract) path already enforces; the per-library maps handled scop
 site (fallback filter, qualified-raise guard, cross-namespace dedup) had to be checked against solc
 independently. The adversarial sweep caught all three before they shipped; every runtime path was
 byte-identical across the four lenses.
+
+## 2026-07-13 LIVE AUDIT (29 rows re-probed at HEAD e649cc6, 0 regressions/miscompiles)
+
+Confirmed RETIRED (now accept, byte-identical to solc): BYTES-CONST, PAREN-CALLEE (guards intact:
+overloaded/`payable` still reject), DEFAULT-ARG-CONST (state/immutable/bare defaults still reject),
+GET-PROPERTY-READ, LIB-CONST, LIB-MEMBER-ERROR, LIB-MEMBER-EVENT. MANGLE-INJECT confirmed CLOSED
+(this.$p$B$x rejects JETH036 at decl + access; parity both-reject).
+
+Additional STALE rows the audit found already-lifted (catalogue text was behind):
+- **USING-ON-LIBRARY - already LIFTED** (`@using(M)` inside a static-class library body accepts,
+  runtime byte-identical). NON-FINDING clarified: an attached call `a.dbl()` with a first param named
+  `self` and NO `@using` is the deliberate native SELF-CONVENTION (a JETH-only superset ergonomic, like
+  default args - no solc equivalent); a NON-`self` first param without `@using` correctly rejects
+  JETH074, so there is no global attachment leak.
+- **IMM-INIT-SHADOW - already LIFTED** (a ctor param/local named like the contract class binds the
+  local; runtime byte-identical incl. the wrong-bind trap - reads the local, not a same-named static).
+- **MEMBER-SHADOWS-FILE-EVENT - different-signature case LIFTED** (a member event shadows a same-named
+  file-level event; emit resolves to the member, topic0 verified). RESIDUAL still INTACT: a SAME-signature
+  member event vs file-level event rejects JETH144 (solc shadows same-sig too).
+
+**Current genuinely-liftable ORs (solc accepts, byte-identical path plausible):** LIB-EVENT-QUALIFIED
+(qualified `emit(L.E(a))` from a contract, JETH146 - smallest, mirror the working `revert(L.Bad(a))`),
+JETH434-DISAMBIGUABLE (unique-key-set named-arg emit, JETH434), RECEIVE-INTERNAL-CALL (internal call
+from receive/fallback, JETH387), STRUCT-FIELD-LENGTH (a struct field named `length`, JETH202 - small +
+safe), FIELD-INIT-EXPR (non-literal state-field initializer, JETH048), FIELD-INIT-NS (@storage(ns)
+string/bytes literal init, JETH048), GET-EXTLIB-VIEW (a get calling a view external-lib fn, JETH043),
+MEMBER-SHADOWS-FILE-EVENT same-sig residual (JETH144), and the interface-chain redeclare/tighten rows
+(JETH342/JETH387, deliberate-leaning). Deliberate/parity keeps (unchanged, sound): FUNCREF-PURE,
+L2-MOBILE (cast+bare mix), L6, L7a, B-21 (the pointer-headed fixed-array layout family), STR-ESC-ASTRAL,
+MOD-SPECIAL-ENTRY, NAMED-RAISE-EXCLUSIVITY, LT5, trailing-hole destructure; COMMA-FORUPDATE is a parity
+both-reject (not an OR).
