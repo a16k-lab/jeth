@@ -142,11 +142,12 @@ describe('interface extends interface: byte-identity vs the redeclare workaround
     const CALL = `class C { get u(t: address): External<u256> { return 1n; } }`;
     // same params, different return: solc rejects ("Overriding function return types differ")
     expect(codes(`interface A { f(): View<u256>; } interface B extends A { f(): View<address>; } ${CALL}`)).toContain('JETH386');
-    // same params, mutability change: solc rejects the loosening; JETH rejects both directions (OR on tighten)
+    // same params, mutability change: LOOSEN (view -> nonpayable) rejects JETH387 (solc parity); TIGHTEN
+    // (nonpayable -> view) is LIFTED (IFACE-CHAIN-TIGHTEN, solc accepts)
     expect(codes(`interface A { f(): View<u256>; } interface B extends A { f(): u256; } ${CALL}`)).toContain('JETH387');
-    expect(codes(`interface A { f(): u256; } interface B extends A { f(): View<u256>; } ${CALL}`)).toContain('JETH387');
-    // identical redeclare (solc accepts; catalogued OR IFACE-CHAIN-REDECLARE, stays a clean reject)
-    expect(codes(`interface A { f(): View<u256>; } interface B extends A { f(): View<u256>; } ${CALL}`)).toContain('JETH342');
+    expect(codes(`interface A { f(): u256; } interface B extends A { f(): View<u256>; } ${CALL}`)).toEqual([]);
+    // identical redeclare: LIFTED (IFACE-CHAIN-REDECLARE, solc accepts a redundant redeclare in a chain)
+    expect(codes(`interface A { f(): View<u256>; } interface B extends A { f(): View<u256>; } ${CALL}`)).toEqual([]);
     // cross-chain overload: LIFTED (IFACE-OVERLOADS, 2026-07-12) - solc treats the chain as an
     // overload set, so a different-params redeclare now MERGES (see native-interface-overloads.test.ts)
     expect(codes(`interface A { f(): View<u256>; } interface B extends A { f(x: u256): View<u256>; } ${CALL}`)).toEqual([]);

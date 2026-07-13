@@ -246,12 +246,17 @@ describe('interface overloads: reject parity (every cell solc-witnessed)', () =>
       class C { s: u256; go(a: address): External<void> { this.s = B0(a).blockHashAskewLimitary(1n); } }`)).toContain('JETH044');
   });
 
-  it('unchanged chain rows: same-sig diamond JETH430, identical redeclare JETH342, tighten JETH387 (catalogued)', () => {
+  it('chain rows: same-sig diamond stays JETH430; identical redeclare + mutability-tighten are LIFTED', () => {
+    // a REAL diamond (two distinct parents, same signature) still rejects JETH430 - unexpressible override list
     expect(codes(`interface A1 { f(x: u256): u256; } interface B1 { f(x: u256): u256; } interface D1 extends A1, B1 {}
       class C { s: u256; go(a: address): External<void> { this.s = D1(a).f(1n); } }`)).toContain('JETH430');
+    // IFACE-CHAIN-REDECLARE: an EXACT same-signature redeclare in a linear chain now ACCEPTS (solc parity)
     expect(codes(`interface A0 { f(x: u256): u256; } interface B0 extends A0 { f(x: u256): u256; }
-      class C { s: u256; go(a: address): External<void> { this.s = B0(a).f(1n); } }`)).toContain('JETH342');
+      class C { s: u256; go(a: address): External<void> { this.s = B0(a).f(1n); } }`)).toEqual([]);
+    // IFACE-CHAIN-TIGHTEN: a mutability TIGHTEN (nonpayable -> view) now ACCEPTS; a LOOSEN stays JETH387
     expect(codes(`interface A0 { f(x: u256): u256; } interface B0 extends A0 { f(x: u256): View<u256>; }
+      class C { s: u256; go(a: address): External<void> { this.s = B0(a).f(1n); } }`)).toEqual([]);
+    expect(codes(`interface A0 { f(x: u256): View<u256>; } interface B0 extends A0 { f(x: u256): u256; }
       class C { s: u256; go(a: address): External<void> { this.s = B0(a).f(1n); } }`)).toContain('JETH387');
   });
 

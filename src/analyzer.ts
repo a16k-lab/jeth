@@ -335,6 +335,9 @@ export class Analyzer {
   // a bare `K` / `revert(Bad(a))` / `emit(E(a))` inside a lib fn resolves against THAT library's tables
   // plus file-level decls, and never the using-contract's (matching solc's library scope).
   private currentLibrary?: string;
+  // GET-EXTLIB-VIEW: true while checking a `get` accessor body, so an external-lib (delegatecall) call
+  // defers its effect to the purity fixpoint instead of the conservative eager state-write mark.
+  private currentIsGetter = false;
   // `@using(L)` attachment: when a class carries @using(L) decorators, each L function whose FIRST
   // param type is T attaches as a method on T, so `x.f(args)` desugars to `L.f(x, ...args)`. Keyed by
   // `${canonicalName(T)}#${methodName}` -> the matching RawFunctions (more than one => ambiguous
@@ -1287,6 +1290,26 @@ export class Analyzer {
     //    overload set, so the entries MERGE (IFACE-OVERLOADS lift; formerly a JETH342 reject).
     const inherited = new Map<string, { from: string; m: InterfaceMethod }[]>();
     if (parents.length > 0) {
+      // IFACE-CHAIN-REDECLARE: on a LINEAR chain (each interface has <=1 parent), a same-signature clash
+      // during inheritance collection is a redundant redeclare (`D extends B extends A`, B redeclares A.f),
+      // ALREADY validated at B's own collection - dedupe it silently. A same-signature clash on a real
+      // DIAMOND (2+ parents anywhere) is solc's un-unifiable interface diamond and still rejects JETH430.
+      const isLinearAncestry = (roots: string[]): boolean => {
+        const seen = new Set<string>();
+        const stack = [...roots];
+        while (stack.length > 0) {
+          const n = stack.pop()!;
+          if (seen.has(n)) continue;
+          seen.add(n);
+          const d = this.interfacesByName.get(n);
+          if (!d) continue;
+          const ps = d.parents ?? [];
+          if (ps.length > 1) return false;
+          stack.push(...ps);
+        }
+        return true;
+      };
+      const linearChain = parents.length <= 1 && isLinearAncestry(parents);
       const visited = new Set<string>();
       const collectFrom = (nm: string): void => {
         if (visited.has(nm)) return;
@@ -1299,13 +1322,16 @@ export class Analyzer {
             const entries = inherited.get(im.name);
             const clash = entries?.find((e) => e.m.signature === im.signature);
             if (clash) {
-              // the visited-set dedups a common grandparent, so a same-signature clash is always
-              // from two DISTINCT declarers - solc's un-unifiable interface diamond.
-              this.diags.error(
-                iface,
-                'JETH430',
-                `interface '${name}' inherits '${im.name}' with the same signature from both '${clash.from}' and '${nm}'; redeclaring it with an override list is not expressible in a TS interface, so this diamond is rejected (declare the method in a single shared base)`,
-              );
+              // a same-signature clash is from two declarers. On a LINEAR chain it is a redundant redeclare
+              // (already validated at the redeclaring interface) - dedupe silently. On a real DIAMOND (2+
+              // parents) it is solc's un-unifiable interface diamond - reject JETH430.
+              if (!linearChain) {
+                this.diags.error(
+                  iface,
+                  'JETH430',
+                  `interface '${name}' inherits '${im.name}' with the same signature from both '${clash.from}' and '${nm}'; redeclaring it with an override list is not expressible in a TS interface, so this diamond is rejected (declare the method in a single shared base)`,
+                );
+              }
               continue;
             }
             if (entries) entries.push({ from: nm, m: im });
@@ -1328,17 +1354,25 @@ export class Analyzer {
               `interface '${name}' redeclares '${mname}' from base interface '${inh.from}' with a different return type (solc: overriding function return types differ)`,
             );
           } else if (own.mutability !== inh.m.mutability) {
-            this.diags.error(
-              iface,
-              'JETH387',
-              `interface '${name}' redeclares '${mname}' from base interface '${inh.from}' with different mutability ('${own.mutability}' vs '${inh.m.mutability}'); keep the base declaration's mutability or declare the method only once in the chain`,
-            );
+            // IFACE-CHAIN-TIGHTEN: a redeclare may only TIGHTEN mutability (nonpayable -> view -> pure),
+            // matching solc; LOOSENING (view -> nonpayable) and any payable crossing stay JETH387. The
+            // implementing contract's obligation is enforced against the tightest marker at the impl-ladder
+            // (resolveGetterOverrides / the interface-impl check), so a tightened obligation is sound.
+            const mr: Record<Mutability, number> = { payable: 3, nonpayable: 2, view: 1, pure: 0 };
+            const crossesPayable = (own.mutability === 'payable') !== (inh.m.mutability === 'payable');
+            if (mr[own.mutability] > mr[inh.m.mutability] || crossesPayable) {
+              this.diags.error(
+                iface,
+                'JETH387',
+                `interface '${name}' redeclares '${mname}' from base interface '${inh.from}' loosening mutability ('${inh.m.mutability}' -> '${own.mutability}'); an interface redeclare may only tighten it (nonpayable -> view -> pure), and payable never crosses`,
+              );
+            }
+            // a non-payable-crossing TIGHTEN falls through with no diagnostic (accept). B.methods already
+            // carries B's own tighter marker, so nothing further to mutate.
           } else {
-            this.diags.error(
-              iface,
-              'JETH342',
-              `interface '${name}' redeclares '${mname}' already declared by base interface '${inh.from}'; remove the redeclaration (the inherited method is already callable through '${name}')`,
-            );
+            // IFACE-CHAIN-REDECLARE: an EXACT same-signature+same-mutability redeclare of an inherited
+            // method is a no-op (solc accepts). B's own `f` stays in `methods` (interfaceId XORs it once,
+            // the within-body dedup keeps it single); the inherited A.f dedups at lookup.
           }
         }
       }
@@ -8102,6 +8136,11 @@ export class Analyzer {
     // resolves against THIS library's per-library tables (+ file-level), never the using-contract's.
     // Set unconditionally (like the fields above), so a contract fn always clears it to undefined.
     this.currentLibrary = rf.libraryName;
+    // GET-EXTLIB-VIEW: only inside a `get` accessor does an external-lib (delegatecall) call defer its
+    // effect to the transitive-purity fixpoint (so a get over a pure/view lib fn stays read-only). In a
+    // NON-get function the call keeps its conservative state-write mark, so the GET-IS-A-MUST classifier
+    // (JETH352) still treats an external-lib caller as non-read-only - preserving the existing spelling.
+    this.currentIsGetter = rf.isGetter === true;
     this.pushScope(); // function/parameter scope
     this.currentMutability = rf.mutability;
     // only @external is externally reachable; an unmarked (internal) function is not. Gates the
@@ -15669,10 +15708,14 @@ export class Analyzer {
     // propagates the library function's REAL (post-fixpoint) mutability to this caller - exactly like an
     // internal call - instead of guessing at the call site (a bare external lib fn's @read mutability is
     // not resolved yet). It is NOT added to internallyCalled: it is delegatecalled, never inlined here.
-    // A declared NONPAYABLE (not @read/@view/@pure) library function is a state-modifying call from the
-    // caller's view (solc rejects a @view caller delegatecalling a non-view library fn), so force a write.
+    // GET-EXTLIB-VIEW: inside a `get` accessor, defer the effect to the transitive-purity fixpoint (via the
+    // currentCallees edge below) instead of eagerly forcing a write - so a get over a pure/view external-lib
+    // fn stays read-only (LIFTED), while a get over an emit-writer lib fn still propagates the write ->
+    // JETH043. Outside a get, keep the conservative eager write (a delegatecall MAY write the caller's
+    // storage): it keeps a non-get external-lib caller classified non-read-only so GET-IS-A-MUST (JETH352)
+    // and the ABI stay as before (bytecode-neutral - view/pure/nonpayable are byte-identical).
     this.currentCallees.add(this.fkey(callee));
-    if (!callee.inferRead && callee.mutability === 'nonpayable') this.currentWritesState = true;
+    if (!this.currentIsGetter && !callee.inferRead && callee.mutability === 'nonpayable') this.currentWritesState = true;
     const call: Expr & { kind: 'extCall' } = {
       kind: 'extCall',
       type: BYTES,

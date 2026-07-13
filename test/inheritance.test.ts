@@ -204,12 +204,10 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
       par(j2('(I, J, I)'), s2('(I, J, I)')); // duplicate
       expect(codes(j2('(I, J)'))).toEqual([]); // complete -> accept
       expect(codes(j2('(J, I)'))).toEqual([]); // order-insensitive
-      // J extends I with J REDECLARING g: the interface-extends-interface chain is LIFTED
-      // (native-interface-extends-interface.test.ts), but an in-chain redeclare of an inherited method
-      // stays a catalogued safe over-rejection (IFACE-CHAIN-REDECLARE, JETH342 - solc accepts the
-      // identical redeclare). Both cells below still REJECT on both sides where they must: solc rejects
-      // the first for naming I (J's redeclare subsumed I's version - "Invalid contract specified") and
-      // accepts the second, which JETH342 over-rejects (documented in docs/OR-CATALOGUE.md).
+      // J extends I with J REDECLARING g: BOTH the interface-extends-interface chain AND the in-chain
+      // identical redeclare are now LIFTED (IFACE-CHAIN-REDECLARE). J's redeclare subsumes I's version, so
+      // J is the maximal branch head: naming I in @override rejects on both sides (JETH415 / "Invalid
+      // contract specified"), while @override(J) is complete and ACCEPTS on both sides.
       par(
         `interface I { g(): u256; } interface J extends I { g(): u256; } class C extends J { @override(I, J) get g(): External<u256> { return 8n; } }`,
         `interface I { function g() external returns(uint256); } interface J is I { function g() external returns(uint256); } contract C is J { function g() external override(I,J) returns(uint256){ return 8; } }`,
@@ -218,7 +216,7 @@ describe('Phase 6 contract inheritance vs solc 0.8.35', () => {
         codes(
           `interface I { g(): u256; } interface J extends I { g(): u256; } class C extends J { @override(J) get g(): External<u256> { return 8n; } }`,
         ),
-      ).toContain('JETH342'); // the chain itself is lifted; the in-chain redeclare is the residual OR
+      ).toEqual([]); // in-chain redeclare LIFTED; J is the maximal head, @override(J) is complete
       // the redeclare-free chain twin of the same topology IS accepted, with the declaring interface I
       // as the single valid @override head (witnessed: solc accepts override(A)-style indirect heads).
       expect(
