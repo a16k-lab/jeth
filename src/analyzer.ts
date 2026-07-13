@@ -2128,6 +2128,26 @@ export class Analyzer {
     return this.libraryByName.has(name);
   }
 
+  /** LIB-SHADOW: does a bare identifier `name` actually BIND to library L here? Only when no nearer
+   *  declaration shadows it - a param/local (isVisibleLocal), a state var, a CONSTANT, or an IMMUTABLE
+   *  all take precedence, exactly like solc: a contract member named `L` shadows the top-level library,
+   *  so `L.x` becomes member access on that value ("Member x not found in uint256") and must reject.
+   *  Every site that resolves `L.<member>` as a library access (call/const-read/event/error/funcref)
+   *  routes through this so the shadow rule is applied uniformly, not per-site. */
+  private libraryBindsInScope(name: string): boolean {
+    return (
+      this.libraryByName.has(name) &&
+      !this.isVisibleLocal(name) &&
+      !this.stateByName.has(name) &&
+      !this.constantsByName.has(name) &&
+      !this.immutablesByName.has(name) &&
+      // a contract METHOD named like the library shadows it too (solc: `Lib` binds to the function value,
+      // so `Lib.f` is member access on a function type -> rejects). Library functions are keyed `Lib.f`
+      // (dotted) in candidatesByName, so a BARE `Lib` entry there is a contract-declared method.
+      !this.candidatesByName.has(name)
+    );
+  }
+
   /** Scan `cls`'s `@using(...)` decorators into `into`: for each named library L, attach every L
    *  function whose FIRST parameter type is T as a method on T, keyed by
    *  `${canonicalName(T)}#${methodName}` (the BARE method name, not the qualified `L.f`). More than
@@ -5788,6 +5808,23 @@ export class Analyzer {
     return undefined;
   }
 
+  /** FIELD-INIT-EXPR: is this state-field initializer PROVABLY ORDER-INDEPENDENT - built only from
+   *  literals (and templates/concats/negations over them)? Such an init reads NO state var, NO immutable,
+   *  and calls NO function, so evaluating it at the ctor top vs. inline is value-identical regardless of
+   *  declaration order - safe to lift. Anything else (an identifier, a CALL like `mk()` which may read a
+   *  later const-folded state var, a `this.` access, a member access) is NOT order-independent and stays
+   *  JETH048: a syntactic `this` check is insufficient - a bare internal call reads state indirectly. */
+  private isOrderIndependentInit(node: ts.Expression): boolean {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return true;
+    if (ts.isNumericLiteral(node) || ts.isBigIntLiteral(node)) return true;
+    if (node.kind === ts.SyntaxKind.TrueKeyword || node.kind === ts.SyntaxKind.FalseKeyword) return true;
+    if (ts.isParenthesizedExpression(node)) return this.isOrderIndependentInit(node.expression);
+    if (ts.isTemplateExpression(node)) return node.templateSpans.every((s) => this.isOrderIndependentInit(s.expression));
+    if (ts.isBinaryExpression(node)) return this.isOrderIndependentInit(node.left) && this.isOrderIndependentInit(node.right);
+    if (ts.isPrefixUnaryExpression(node)) return this.isOrderIndependentInit(node.operand);
+    return false; // identifier / call / this / member access -> could read state; not order-independent
+  }
+
   /** Does the expression access a contract member via `this` (a `this.member` property/element access,
    *  e.g. a member-function call `this.mk()` or a member read `this.x`)? Used to reject such an access in
    *  a base-constructor argument, where solc has no `this` in scope. A bare `this` NOT used as a
@@ -7042,7 +7079,7 @@ export class Analyzer {
         }
       } else if (
         (type.kind === 'string' || type.kind === 'bytes') &&
-        !this.exprAccessesThisMember(member.initializer)
+        this.isOrderIndependentInit(member.initializer)
       ) {
         // STRING-FIELD-INIT lift: `s: string = "x"` / `b: bytes = "ab"` on a @state field (solc accepts
         // `string public s = "x";`). Desugared by fieldInitStmts into the implicit-constructor assignment
@@ -9845,9 +9882,7 @@ export class Analyzer {
         ts.isCallExpression(e) &&
         ts.isPropertyAccessExpression(e.expression) &&
         ts.isIdentifier(e.expression.expression) &&
-        this.isLibraryName(e.expression.expression.text) &&
-        !this.isVisibleLocal(e.expression.expression.text) &&
-        !this.stateByName.has(e.expression.expression.text)
+        this.libraryBindsInScope(e.expression.expression.text)
       ) {
         const c = this.resolveQualifiedLibraryCall(e, e.expression.expression.text, e.expression.name.text, true);
         if (c)
@@ -11759,12 +11794,10 @@ export class Analyzer {
       ts.isPropertyAccessExpression(node.expression) &&
       ts.isIdentifier(node.expression.expression) &&
       ts.isIdentifier(node.expression.name) &&
-      this.libraryByName.has(node.expression.expression.text) &&
-      // a param/local/state var named like the library shadows it (solc: `L.Bad` is then member access
-      // on that value, not the library) - the same guards the qualified library-CALL / library-CONSTANT
-      // reads carry, so a shadowed `L.Bad` falls through to a clean reject instead of binding the library.
-      !this.isVisibleLocal(node.expression.expression.text) &&
-      !this.stateByName.has(node.expression.expression.text)
+      // a param/local/state var/constant/immutable named like the library shadows it (solc: `L.Bad` is
+      // then member access on that value, not the library), so a shadowed `L.Bad` falls through to a clean
+      // reject - the shared libraryBindsInScope rule the qualified CALL / CONSTANT / EVENT reads all carry.
+      this.libraryBindsInScope(node.expression.expression.text)
     ) {
       const decl = this.libraryErrorsByName.get(node.expression.expression.text)?.get(node.expression.name.text);
       if (decl) return this.checkErrorArgs(node, decl, node.expression.name.text);
@@ -12828,9 +12861,7 @@ export class Analyzer {
       ts.isPropertyAccessExpression(inner.expression) &&
       ts.isIdentifier(inner.expression.expression) &&
       ts.isIdentifier(inner.expression.name) &&
-      this.libraryByName.has(inner.expression.expression.text) &&
-      !this.isVisibleLocal(inner.expression.expression.text) &&
-      !this.stateByName.has(inner.expression.expression.text)
+      this.libraryBindsInScope(inner.expression.expression.text)
     ) {
       const cand = this.libraryEventsByName.get(inner.expression.expression.text)?.get(inner.expression.name.text);
       if (cand && cand.length) {
@@ -14341,8 +14372,7 @@ export class Analyzer {
       ts.isPropertyAccessExpression(node) &&
       ts.isIdentifier(node.expression) &&
       ts.isIdentifier(node.name) &&
-      this.libraryByName.has(node.expression.text) &&
-      !this.isVisibleLocal(node.expression.text)
+      this.libraryBindsInScope(node.expression.text)
     ) {
       const libName = node.expression.text;
       const fnName = node.name.text;
@@ -15765,7 +15795,7 @@ export class Analyzer {
   ): { call: Expr & { kind: 'extCall' }; returnTypes: JethType[] } | 'handled' | undefined {
     if (!ts.isCallExpression(node) || !ts.isPropertyAccessExpression(node.expression)) return undefined;
     const pa = node.expression;
-    if (!ts.isIdentifier(pa.expression) || !this.libraryByName.has(pa.expression.text) || this.isVisibleLocal(pa.expression.text)) {
+    if (!ts.isIdentifier(pa.expression) || !this.libraryBindsInScope(pa.expression.text)) {
       return undefined;
     }
     const libName = pa.expression.text;
@@ -15852,8 +15882,7 @@ export class Analyzer {
     if (
       ts.isPropertyAccessExpression(pa) &&
       ts.isIdentifier(pa.expression) &&
-      this.libraryByName.has(pa.expression.text) &&
-      !this.isVisibleLocal(pa.expression.text)
+      this.libraryBindsInScope(pa.expression.text)
     ) {
       const libName = pa.expression.text;
       const fnName = pa.name.text;
@@ -15961,8 +15990,7 @@ export class Analyzer {
     if (
       ts.isPropertyAccessExpression(node.expression) &&
       ts.isIdentifier(node.expression.expression) &&
-      this.libraryByName.has(node.expression.expression.text) &&
-      !this.isVisibleLocal(node.expression.expression.text)
+      this.libraryBindsInScope(node.expression.expression.text)
     )
       return `${node.expression.expression.text}.${node.expression.name.text}`;
     return undefined;
@@ -23247,8 +23275,7 @@ export class Analyzer {
     if (
       ts.isPropertyAccessExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      !this.isVisibleLocal(node.expression.text) &&
-      !this.stateByName.has(node.expression.text)
+      this.libraryBindsInScope(node.expression.text)
     ) {
       const lc = this.libraryConstantsByName.get(node.expression.text)?.get(node.name.text);
       if (lc) return this.constantReadExpr(lc);
@@ -24600,9 +24627,7 @@ export class Analyzer {
       ts.isCallExpression(node) &&
       ts.isPropertyAccessExpression(node.expression) &&
       ts.isIdentifier(node.expression.expression) &&
-      this.isLibraryName(node.expression.expression.text) &&
-      !this.isVisibleLocal(node.expression.expression.text) &&
-      !this.stateByName.has(node.expression.expression.text)
+      this.libraryBindsInScope(node.expression.expression.text)
     ) {
       return this.resolveQualifiedLibraryCall(node, node.expression.expression.text, node.expression.name.text, false);
     }

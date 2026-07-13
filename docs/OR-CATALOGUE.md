@@ -744,3 +744,74 @@ MEMBER-SHADOWS-FILE-EVENT same-sig residual (JETH144), and the interface-chain r
 L2-MOBILE (cast+bare mix), L6, L7a, B-21 (the pointer-headed fixed-array layout family), STR-ESC-ASTRAL,
 MOD-SPECIAL-ENTRY, NAMED-RAISE-EXCLUSIVITY, LT5, trailing-hole destructure; COMMA-FORUPDATE is a parity
 both-reject (not an OR).
+
+## 2026-07-14 LIFT-ALL-LIFTABLE CAMPAIGN (9 ORs lifted; 3 fresh bar violations found + fixed; suite 455/4250)
+
+Lifted all 9 genuinely-liftable ORs from the 2026-07-13 audit, then ran an adversarial verification
+sweep (4 finders x solc-differential + verify) over the change surface. The sweep found THREE bar
+violations no incremental work caught - two INTRODUCED by lifts in this same campaign, one PRE-EXISTING
+that a lift newly exposed. All three fixed; bar (0 MC / 0 OA) re-proven.
+
+**LIFTED (byte-identical to solc 0.8.35, tests in test/lift-all-or-cluster.test.ts unless noted):**
+- **STRUCT-FIELD-LENGTH** (was JETH202): a struct field named `length` reads the field, not the array
+  builtin. Guarded by a side-effect-free `declaredExprType` (NOT a trial-type - see LESSON below).
+- **LIB-EVENT-QUALIFIED** (was JETH146): `emit(L.E(a))` from a contract resolves L's per-library event.
+- **JETH434-DISAMBIGUABLE**: a named-arg emit of an OVERLOADED member event disambiguates by key set
+  (0 match -> JETH130, 1 -> force+reorder, >1 -> JETH434) via a `forcedEmitEvent` hand-off.
+- **RECEIVE-INTERNAL-CALL** (was JETH387): `receive()`/`fallback()` may call internal helpers.
+- **FIELD-INIT-EXPR** (was JETH048): a PROVABLY-ORDER-INDEPENDENT string/bytes state-field init
+  (literals, templates whose `${}` spans are all literals, literal concats) routes through the ctor-top
+  desugar. See the MC finding below - the lifted set was NARROWED after the sweep.
+- **FIELD-INIT-NS** (was JETH048): a `@storage(ns)` string/bytes LITERAL init (same guard).
+- **GET-EXTLIB-VIEW** (was JETH043): a `get` accessor may call a pure/view external-lib fn (a new
+  `currentIsGetter` defers the eager conservative write to the purity fixpoint for getters only).
+- **IFACE-CHAIN-REDECLARE / IFACE-CHAIN-TIGHTEN** (were JETH342/JETH387): an identical interface method
+  redeclare across an extends-chain is a no-op; a mutability TIGHTEN (payable>nonpayable>view>pure)
+  accepts unless it crosses the payable boundary. Tests in native-interface-{overloads,extends-interface}.
+
+**BAR VIOLATIONS the sweep found + fixed (the reason the sweep exists):**
+1. **FIELD-INIT-EXPR MISCOMPILE** (introduced by this campaign's FIELD-INIT lift): `s: string = mk()`
+   where `mk()` is a bare internal call reading a LATER const-folded value-type field - JETH baked the
+   folded value into the deploy image (reads 42), solc runs declaration-order (mk() reads 0). The first
+   guard (`!exprAccessesThisMember`) was SYNTACTIC-only and missed the indirect state read through the
+   call. FIX: replaced with `isOrderIndependentInit` - the init must be built ONLY from literals/
+   templates-with-literal-spans/literal-concats (reads nothing, calls nothing), so ctor-top vs inline is
+   value-identical. A cast `bytes("a")` (order-independent but a call) is now a SAFE over-rejection.
+2. **LIB-SHADOW OVER-ACCEPTANCE family** (introduced/widened by the library-declaration + qualified-emit
+   work): a contract member named like a library L shadows it in solc (`L.x` becomes member access on
+   that value -> "Member x not found"), so solc REJECTS. JETH accepted for CONSTANT / IMMUTABLE / METHOD
+   shadows across every member kind (internal call / ext-delegatecall call / const read / event / error
+   / funcref). FIX: one shared `libraryBindsInScope(name)` guard (state + constant + immutable + local +
+   contract-method via `candidatesByName`) routed through ALL ~9 library-value-resolution sites; the
+   method axis was the sweep's confirmed find. A param/local/state shadow already rejected; type/interface
+   name-collisions reject at declaration in both (parity). Unshadowed `L.x` still binds (controls pinned).
+3. **LIB-CALLVALUE MISCOMPILE** (PRE-EXISTING; the RECEIVE-INTERNAL-CALL lift newly exposed it on the
+   receive path): a value-bearing caller (receive / payable fn / payable fallback / payable ctor) that
+   DELEGATECALLs a non-payable external library fn reverted, because the LIBRARY OBJECT's runtime
+   dispatcher emitted the non-payable `if callvalue() { revert }` guard. A delegatecall inherits the
+   caller's callvalue and solc's library dispatchers carry NO such guard, so solc succeeds - JETH
+   reverted (confirmed via linked harness: solc total=6/8, JETH revert). Reachable pre-lift via a plain
+   payable fn too. FIX: `emittingLibraryObject` flag suppresses the runtime-dispatch callvalue guard for
+   library objects (src/yul.ts). Regression test in test/library-external.test.ts (receive + payable fn +
+   payable fallback, value sent, byte-identical to solc). The CONTRACT dispatcher guard is untouched
+   (a non-payable contract fn / receive-less contract still reverts on value - verified).
+
+**NEW sound over-rejections found (fail closed; catalogued, NOT lifted this round):**
+- **FALLBACK-EXTERNAL-MARKER** (JETH386): `fallback(input: bytes): External<bytes>` rejects; solc accepts
+  a returning fallback. DELIBERATE keep - a fallback is not an ABI function reached by a selector, so the
+  `External<T>` marker is meaningless on it; the working native form is `fallback(input: bytes): bytes`
+  (bare return), which JETH already accepts. solc has no External<T> marker concept, so nothing to match.
+- **LIB-EVENT-NAMEDARG** (JETH227): `emit(L.E({a}))` (a QUALIFIED library event with NAMED args) rejects;
+  the positional `emit(L.E(a))` works. Niche combo; lift risks the just-touched emit path. Future lift.
+- **LIB-CREATION-VALUE** (out of scope): deploying a standalone external-library OBJECT with value reverts
+  in JETH (creation-code callvalue guard) while solc's library creation accepts value. Library objects are
+  not asserted byte-identical to solc (different runtime), no JETH source construct controls this, and the
+  observable delegatecall behavior (fixed above) IS byte-identical. Pre-existing deployment-tooling edge.
+
+**LESSONS:** (1) a syntactic `this.member` guard cannot prove order-independence - a bare internal CALL
+reads state indirectly; require the init to read/call NOTHING. (2) A shadow rule must be a SINGLE shared
+predicate hit by every resolution site (call/const/event/error/funcref, statement + value position); the
+sweep found the one axis - contract methods - that per-site guards had all missed. (3) A library object
+is DELEGATECALLed and inherits caller callvalue: its dispatcher must omit the non-payable guard, or every
+value-bearing caller into a library miscompiles. (4) A side-effecting trial-type at a hot generic site
+(every `.length`) leaks analyzer state cross-file under isolate:false - use a side-effect-free resolver.

@@ -46,21 +46,48 @@ describe('LIB-EVENT-QUALIFIED: emit(L.E(a)) from a contract', () => {
   });
 });
 
+describe('LIB-SHADOW: a contract member named like a library shadows it (solc reject-parity)', () => {
+  it('a constant / immutable / method named like library L blocks L.<call|const|event|error>; unshadowed binds', () => {
+    // solc: the contract member named L shadows the top-level library, so `L.x` is member access on that
+    // value ("Member x not found in uint256") and rejects. JETH must reject too (JETH074/146/123), not bind L.
+    const shadowed = [
+      `static class L { m(): u256 { return 1n; } }\nclass C { static L: u256 = 9n; get f(): External<u256> { return L.m(); } }`, // constant
+      `static class L { m(): u256 { return 1n; } }\nclass C { static L: u256; constructor() { this.L = 9n; } get f(): External<u256> { return L.m(); } }`, // immutable
+      `static class L { m(): u256 { return 1n; } }\nclass C { L(): u256 { return 0n; } get f(): External<u256> { return L.m(); } }`, // contract method
+      `static class L { static K: u256 = 3n; }\nclass C { static L: u256 = 9n; get f(): External<u256> { return L.K; } }`, // const read shadowed by constant
+      `static class L { sq(a: u256): External<u256> { return a * a; } }\nclass C { L(): u256 { return 0n; } get f(): External<u256> { return L.sq(2n); } }`, // ext call shadowed by method
+      `static class L { E: event<{ a: u256 }>; }\nclass C { static L: u256 = 9n; fire(a: u256): External<void> { emit(L.E(a)); } }`, // event shadowed by constant
+      `static class L { Bad: error<{ a: u256 }>; }\nclass C { static L: u256 = 9n; f(a: u256): External<void> { revert(L.Bad(a)); } }`, // error shadowed by constant
+    ];
+    for (const s of shadowed) expect(codes(s).length).toBeGreaterThan(0);
+    // controls: no shadow -> L binds and every member kind accepts (must NOT over-reject).
+    const ok = [
+      `static class L { m(): u256 { return 1n; } }\nclass C { static K: u256 = 9n; other(): u256 { return 0n; } get f(): External<u256> { return L.m(); } }`,
+      `static class L { static K: u256 = 3n; }\nclass C { get f(): External<u256> { return L.K; } }`,
+      `static class L { E: event<{ a: u256 }>; }\nclass C { fire(a: u256): External<void> { emit(L.E(a)); } }`,
+    ];
+    for (const s of ok) expect(codes(s)).toEqual([]);
+  });
+});
+
 describe('FIELD-INIT-EXPR / FIELD-INIT-NS: non-literal + namespaced string/bytes field initializers', () => {
   it('a non-this string/bytes initializer (template, cast) and a @storage(ns) literal init are byte-identical', () => {
     const tmpl = 'class C { s: string = `x${"y"}z`; get f(): External<string> { return this.s; } }';
     const tmplTwin = 'class C { s: string; constructor() { this.s = `x${"y"}z`; } get f(): External<string> { return this.s; } }';
     expect(codes(tmpl)).toEqual([]);
     expect(bc(tmpl)).toBe(bc(tmplTwin));
-    expect(codes(`class C { b: bytes = bytes("a"); get f(): External<bytes> { return this.b; } }`)).toEqual([]);
     const ns = `@storage('my.ns')\nclass C { s: string = "x"; get f(): External<string> { return this.s; } }`;
     expect(codes(ns)).toEqual([]);
     expect(bc(ns)).toBe(bc(`@storage('my.ns')\nclass C { s: string; constructor() { this.s = "x"; } get f(): External<string> { return this.s; } }`));
   });
-  it('RESIDUALS stay JETH048: a this-reading init, a value-type non-fold init, a state-var-reading init', () => {
+  it('RESIDUALS stay JETH048: this-reading, value-type non-fold, state-var-reading, a cast, and a call init', () => {
     expect(codes(`class C { a: u256; s: string = this.a == 0n ? "x" : "y"; get f(): External<string> { return this.s; } }`)).toContain('JETH048');
     expect(codes(`class C { x: u256 = block.timestamp; get f(): External<u256> { return this.x; } }`)).toContain('JETH048');
     expect(codes(`class C { a: u256 = 5n; b: u256 = this.a + 1n; get f(): External<u256> { return this.b; } }`)).toContain('JETH048');
+    // a cast (bytes("a")) is order-independent but rejected to keep the lifted set call-free: safe over-rejection
+    expect(codes(`class C { b: bytes = bytes("a"); get f(): External<bytes> { return this.b; } }`)).toContain('JETH048');
+    // MC GUARD: a bare internal call may read a later const-folded state var - must NOT route through the desugar
+    expect(codes(`class C { s: string = mk(); n: u256 = 42n; mk(): string { return this.n == 42n ? "hit" : "miss"; } get f(): External<string> { return this.s; } }`)).toContain('JETH048');
   });
 });
 

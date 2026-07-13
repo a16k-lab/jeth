@@ -376,4 +376,49 @@ contract C {
       expect(BigInt(r.returnHex)).toBe(expected);
     }
   });
+
+  // LIB-CALLVALUE: a value-bearing caller (receive / payable fn / payable fallback) that DELEGATECALLs a
+  // non-payable external library fn must NOT revert - solc's library object omits the non-payable callvalue
+  // guard (delegatecall inherits the caller's callvalue). JETH used to emit the guard in the library object,
+  // reverting every value-bearing delegatecall into a library: a MISCOMPILE (solc succeeded, JETH reverted).
+  it('a value-bearing caller delegatecalling a non-payable external library fn matches solc (no spurious revert)', async () => {
+    const jeth = `
+static class L { bump(x: u256): External<u256> { return x + 1n; } }
+class C {
+  total: u256;
+  receive() { this.total = L.bump(msg.value); }
+  pay(): Payable<void> { this.total = L.bump(msg.value); }
+  fallback(): Payable<void> { this.total = L.bump(msg.value + 100n); }
+  get read(): External<u256> { return this.total; }
+}`;
+    const sol = `${SPDX}
+library L { function bump(uint256 x) public pure returns (uint256) { return x + 1; } }
+contract C {
+  uint256 total;
+  receive() external payable { total = L.bump(msg.value); }
+  function pay() external payable { total = L.bump(msg.value); }
+  fallback() external payable { total = L.bump(msg.value + 100); }
+  function read() external view returns (uint256) { return total; }
+}`;
+    const ctx = await pairLinked(jeth, sol, ['L']);
+    const read = () => Promise.all([ctx.jeth.call(ctx.aj, '0x' + sel('read()')), ctx.sol.call(ctx.as, '0x' + sel('read()'))]);
+    // receive() with value=5 -> total = 6
+    let [jr, sr] = [await ctx.jeth.call(ctx.aj, '0x', { value: 5n }), await ctx.sol.call(ctx.as, '0x', { value: 5n })];
+    expect({ success: jr.success, ret: jr.returnHex }).toEqual({ success: sr.success, ret: sr.returnHex });
+    let [jread, sread] = await read();
+    expect(jread.returnHex).toBe(sread.returnHex);
+    expect(BigInt(jread.returnHex)).toBe(6n);
+    // payable pay() with value=7 -> total = 8
+    [jr, sr] = [await ctx.jeth.call(ctx.aj, '0x' + sel('pay()'), { value: 7n }), await ctx.sol.call(ctx.as, '0x' + sel('pay()'), { value: 7n })];
+    expect({ success: jr.success, ret: jr.returnHex }).toEqual({ success: sr.success, ret: sr.returnHex });
+    [jread, sread] = await read();
+    expect(jread.returnHex).toBe(sread.returnHex);
+    expect(BigInt(jread.returnHex)).toBe(8n);
+    // fallback() (unknown selector) with value=3 -> total = 3 + 100 + 1 = 104
+    [jr, sr] = [await ctx.jeth.call(ctx.aj, '0xdeadbeef', { value: 3n }), await ctx.sol.call(ctx.as, '0xdeadbeef', { value: 3n })];
+    expect({ success: jr.success, ret: jr.returnHex }).toEqual({ success: sr.success, ret: sr.returnHex });
+    [jread, sread] = await read();
+    expect(jread.returnHex).toBe(sread.returnHex);
+    expect(BigInt(jread.returnHex)).toBe(104n);
+  });
 });

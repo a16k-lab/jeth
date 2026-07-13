@@ -245,6 +245,11 @@ export class YulEmitter {
   private tmp = 0;
   private nameCounter = 0; // per-function unique local-name counter
   private funcs = new Map<string, FunctionIR>(); // contract functions by name (internal-call targets)
+  // LIB-CALLVALUE: while emitting a LIBRARY object's runtime, the per-function non-payable callvalue guard
+  // is suppressed. A library is only ever DELEGATECALLed, so it inherits the caller's callvalue - solc's
+  // library dispatchers omit the guard, and emitting it would revert a value-bearing caller (a payable fn /
+  // receive / payable fallback) that delegatecalls a non-payable library fn (a miscompile: solc succeeds).
+  private emittingLibraryObject = false;
   private contract?: ContractIR; // the contract being emitted (for the diamond storage base/slots)
   // W5D-1: per-constructor-emission registry of OUTLINED ctor units. A ctorOutlineBind lowers its body
   // as a creation-block Yul function (def collected in ctorOutlineDefs, hoisted next to
@@ -295,7 +300,9 @@ ${indent(runtime, 6)}
       slotCount: 0,
       immutables: [],
     };
+    this.emittingLibraryObject = true;
     const runtime = this.emitRuntime(synthetic);
+    this.emittingLibraryObject = false;
     // v3 module scoping: a dep-declared library's IR name may carry the `$mN$` scope mangle; its Yul
     // OBJECT is named by the demangled SOURCE name so the artifact matches the same library written in
     // the entry file (compile.ts looks the object up under the same demangled name).
@@ -996,7 +1003,9 @@ ${indent(runtime, 6)}
   private emitDispatchCase(fn: FunctionIR): string[] {
     const out: string[] = [];
     this.nameCounter = 0; // deterministic, function-local unique names
-    if (fn.mutability !== 'payable') {
+    // A library object omits the non-payable callvalue guard (delegatecall inherits caller callvalue,
+    // and solc's library dispatchers carry no guard); see emittingLibraryObject.
+    if (fn.mutability !== 'payable' && !this.emittingLibraryObject) {
       out.push('if callvalue() { revert(0, 0) } // reject value to non-payable');
     }
     // Phase 2c (UUPS): a synthesized @uups entry has a hand-written body (no source `body`/params to
