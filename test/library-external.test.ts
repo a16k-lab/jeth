@@ -156,12 +156,15 @@ contract C {
   });
 
   it('a CUSTOM-ERROR revert in an external library fn bubbles byte-identically', async () => {
+    // TooSmall is FILE-LEVEL (matching the solc twin, which declares it at file level): a library fn can
+    // see file-level errors, not a contract's member errors (a library-declared error `Guard.TooSmall`
+    // would work too). A contract MEMBER error is not visible inside a library - that stays a clean reject.
     const jeth = `
+type TooSmall = error<{ min: u256; got: u256 }>;
 static class Guard {
   mustBig(x: u256): External<u256> { require(x >= 10n, TooSmall(10n, x)); return x; }
 }
 class C {
-  TooSmall: error<{ min: u256; got: u256 }>;
   run(x: u256): External<u256> { return Guard.mustBig(x); }
 }`;
     const sol = `${SPDX}

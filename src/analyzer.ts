@@ -322,6 +322,19 @@ export class Analyzer {
   // internal-call path and are byte-identical to solc's internal library functions for free. The
   // registry holds each library's RawFunctions (decl order) for overload resolution at the call site.
   private libraryByName = new Map<string, RawFunction[]>();
+  // LIB-CONST / LIB-MEMBER-EVENT / LIB-MEMBER-ERROR: a library may declare constants, events, and errors
+  // (solc parity). These are PER-LIBRARY (keyed libName -> memberName), NOT merged into the global
+  // constant/event/error tables: solc scopes them to the library (two libraries may share a name, a
+  // library `K` and a contract `K` are distinct, a bare name in a contract never sees a library's decls),
+  // so a global merge would be UNSOUND both ways. The selector/topic0 is keccak of the BARE signature
+  // (scope-independent), so the per-library ErrorDecl/EventIR carry the identical, byte-identical value.
+  private libraryConstantsByName = new Map<string, Map<string, { value: bigint | boolean | Uint8Array; type: JethType }>>();
+  private libraryEventsByName = new Map<string, Map<string, EventIR[]>>();
+  private libraryErrorsByName = new Map<string, Map<string, ErrorDecl>>();
+  // The library whose function body is being checked (undefined inside a contract/abstract-base body), so
+  // a bare `K` / `revert(Bad(a))` / `emit(E(a))` inside a lib fn resolves against THAT library's tables
+  // plus file-level decls, and never the using-contract's (matching solc's library scope).
+  private currentLibrary?: string;
   // `@using(L)` attachment: when a class carries @using(L) decorators, each L function whose FIRST
   // param type is T attaches as a method on T, so `x.f(args)` desugars to `L.f(x, ...args)`. Keyed by
   // `${canonicalName(T)}#${methodName}` -> the matching RawFunctions (more than one => ambiguous
@@ -1897,7 +1910,24 @@ export class Analyzer {
     const fns: RawFunction[] = [];
     for (const member of cls.members) {
       if (ts.isPropertyDeclaration(member)) {
-        // @state / @immutable / @constant - a library has no storage and no baked-in fields.
+        // LIB-MEMBER-EVENT / LIB-MEMBER-ERROR: an `E: event<{...}>` / `X: error<{...}>` field routes to
+        // the per-library event/error table (solc allows events/errors in libraries).
+        if (this.collectNativeErrorOrEventField(member, name)) continue;
+        // LIB-CONST: a `static K: T = <literal>` is a folded per-library constant (solc's `T internal
+        // constant K`). A Visible<T> library constant (public getter) is deferred - it falls through to
+        // JETH388. A bare/@state field (no `static`, or no initializer = would-be immutable/storage) has
+        // no place in a library and stays a clean JETH388.
+        const isStatic = (ts.getModifiers(member) ?? []).some((m) => m.kind === ts.SyntaxKind.StaticKeyword);
+        const isVisible =
+          !!member.type &&
+          ts.isTypeReferenceNode(member.type) &&
+          ts.isIdentifier(member.type.typeName) &&
+          member.type.typeName.text === 'Visible';
+        if (isStatic && member.initializer && !isVisible && ts.isIdentifier(member.name)) {
+          this.collectLibraryConstant(member, name);
+          continue;
+        }
+        // @state / @immutable / a public/aggregate constant - a library has no storage and no baked-in fields.
         this.diags.error(
           member,
           'JETH388',
@@ -2024,6 +2054,34 @@ export class Analyzer {
       fns.push(fn);
     }
     this.libraryByName.set(name, fns);
+
+    // CROSS-KIND name collision: a library has a SINGLE member namespace shared by its functions,
+    // constants, events, and errors (solc: `DeclarationError: Identifier already declared`). Intra-kind
+    // reuse is fine (overloaded functions/events, JETH046/128/144 catch same-kind dups); a name shared
+    // across TWO kinds is the collision - the same rule the contract path enforces with JETH133. Function
+    // names come from the AST (a library method is always a function); the other three from the per-library
+    // tables just populated.
+    const kindsByName = new Map<string, Set<string>>();
+    const note = (nm: string, kind: string): void => {
+      let s = kindsByName.get(nm);
+      if (!s) kindsByName.set(nm, (s = new Set()));
+      s.add(kind);
+    };
+    for (const m of cls.members) {
+      if (ts.isMethodDeclaration(m) && ts.isIdentifier(m.name)) note(m.name.text, 'function');
+    }
+    for (const nm of this.libraryConstantsByName.get(name)?.keys() ?? []) note(nm, 'constant');
+    for (const nm of this.libraryEventsByName.get(name)?.keys() ?? []) note(nm, 'event');
+    for (const nm of this.libraryErrorsByName.get(name)?.keys() ?? []) note(nm, 'error');
+    for (const [nm, kinds] of kindsByName) {
+      if (kinds.size > 1) {
+        this.diags.error(
+          cls,
+          'JETH133',
+          `identifier '${nm}' is already declared in library '${name}' (a ${[...kinds].join(' and a ')} share the name; solc reuses a name only among overloaded functions or events)`,
+        );
+      }
+    }
   }
 
   /** True if `name` is a declared @library. */
@@ -6272,7 +6330,7 @@ export class Analyzer {
 
   // ---- @error / @event declarations ----------------------------------------
 
-  private collectErrorDecl(member: ts.MethodDeclaration): void {
+  private collectErrorDecl(member: ts.MethodDeclaration, libScope?: string): void {
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(member, 'JETH049', 'error name must be a plain identifier');
       return;
@@ -6347,7 +6405,13 @@ export class Analyzer {
         `@error '${name}' has unsupported decorator(s): ${strayErr.map((d) => '@' + d).join(', ')}`,
       );
     }
-    if (this.errorsByName.has(name)) {
+    // LIB-MEMBER-ERROR: a library error lives in the PER-LIBRARY table (solc scopes it to the library),
+    // so the duplicate check is against that library's own errors and the contract's global errors/ABI
+    // are untouched. The signature/selector are the demangled BARE name (scope-independent), so a
+    // `revert(Bad(a))` inside the library and `revert(L.Bad(a))` from a contract both revert byte-identically.
+    const libErrors = libScope !== undefined ? (this.libraryErrorsByName.get(libScope) ?? new Map<string, ErrorDecl>()) : undefined;
+    if (libScope !== undefined) this.libraryErrorsByName.set(libScope, libErrors!);
+    if (libErrors ? libErrors.has(name) : this.errorsByName.has(name)) {
       this.diags.error(member, 'JETH128', `duplicate @error declaration '${name}'`);
       return;
     }
@@ -6357,11 +6421,15 @@ export class Analyzer {
     );
     const selector = functionSelector(signature);
     const decl: ErrorDecl = { name, params, signature, selector };
-    this.errorsByName.set(name, decl);
-    this.errors.push(decl);
+    if (libErrors) {
+      libErrors.set(name, decl);
+    } else {
+      this.errorsByName.set(name, decl);
+      this.errors.push(decl);
+    }
   }
 
-  private collectEvent(member: ts.MethodDeclaration): void {
+  private collectEvent(member: ts.MethodDeclaration, libScope?: string, fileLevel = false): void {
     if (!ts.isIdentifier(member.name)) {
       this.diags.error(member, 'JETH049', 'event name must be a plain identifier');
       return;
@@ -6491,15 +6559,25 @@ export class Analyzer {
       demangleModuleName(name),
       params.map((p) => p.type),
     );
-    const overloads = this.eventsByName.get(name) ?? [];
+    // LIB-MEMBER-EVENT: a library event lives in the PER-LIBRARY table (solc scopes it to the library);
+    // the topic0 = keccak of the BARE signature (scope-independent), so `emit(E(...))` inside the library
+    // logs byte-identically to solc's inlined library event. Duplicate check is per-library; the
+    // contract's global events/ABI are untouched.
+    const libEvents = libScope !== undefined ? (this.libraryEventsByName.get(libScope) ?? new Map<string, EventIR[]>()) : undefined;
+    if (libScope !== undefined) this.libraryEventsByName.set(libScope, libEvents!);
+    const overloads = libEvents ? (libEvents.get(name) ?? []) : (this.eventsByName.get(name) ?? []);
     if (overloads.some((e) => e.signature === signature)) {
       this.diags.error(member, 'JETH144', `duplicate @event declaration '${signature}'`);
       return;
     }
     const topic0 = eventTopic0(signature);
-    const ev: EventIR = { name, params, signature, topic0, anonymous };
-    this.eventsByName.set(name, [...overloads, ev]);
-    this.events.push(ev);
+    const ev: EventIR = { name, params, signature, topic0, anonymous, fileLevel: fileLevel || undefined };
+    if (libEvents) {
+      libEvents.set(name, [...overloads, ev]);
+    } else {
+      this.eventsByName.set(name, [...overloads, ev]);
+      this.events.push(ev);
+    }
   }
 
   /** Native error/event field declarations. Returns true when the field IS an `error<{...}>` /
@@ -6507,7 +6585,7 @@ export class Analyzer {
    *  The object-type fields become the declaration's ordered parameters; an `indexed<T>` field type
    *  unwraps to an @indexed parameter of T. A synthesized decorated bodyless method is routed through
    *  collectErrorDecl/collectEvent so every gate + the selector/topic0 are identical to the decorator form. */
-  private collectNativeErrorOrEventField(member: ts.PropertyDeclaration): boolean {
+  private collectNativeErrorOrEventField(member: ts.PropertyDeclaration, libScope?: string): boolean {
     const t = member.type;
     if (!t || !ts.isTypeReferenceNode(t) || !ts.isIdentifier(t.typeName)) return false;
     const kind = t.typeName.text;
@@ -6539,7 +6617,7 @@ export class Analyzer {
       this.diags.error(member, 'JETH353', `an ${kind} field declaration cannot carry decorator(s): ${strayDecs.map((d) => '@' + d).join(', ')}${kind === 'event' ? ' (only @anonymous is allowed)' : ''}`);
       return true;
     }
-    this.synthesizeErrorEventDecl(kind, member.name, args[0] as ts.TypeLiteralNode, member, decs.includes('anonymous'));
+    this.synthesizeErrorEventDecl(kind, member.name, args[0] as ts.TypeLiteralNode, member, decs.includes('anonymous'), libScope);
     return true;
   }
 
@@ -6554,6 +6632,8 @@ export class Analyzer {
     lit: ts.TypeLiteralNode,
     anchor: ts.Node,
     anonymous: boolean,
+    libScope?: string,
+    fileLevel = false,
   ): void {
     const f = ts.factory;
     const params: ts.ParameterDeclaration[] = [];
@@ -6586,8 +6666,8 @@ export class Analyzer {
       f.createMethodDeclaration([kindDec, ...anonDec], undefined, nameNode, undefined, undefined, params, undefined, undefined),
       anchor,
     );
-    if (kind === 'error') this.collectErrorDecl(synthDecl);
-    else this.collectEvent(synthDecl);
+    if (kind === 'error') this.collectErrorDecl(synthDecl, libScope);
+    else this.collectEvent(synthDecl, libScope, fileLevel);
   }
 
   /** File-level error/event names declared via `type X = error<{...}>` / `type X = event<{...}>` - raised
@@ -6618,7 +6698,7 @@ export class Analyzer {
           if (!args || args.length !== 1 || !ts.isTypeLiteralNode(args[0]!)) {
             this.diags.error(n.type, 'JETH353', `${kind}<...> takes exactly one object type listing the parameters, e.g. \`type X = ${kind}<{ a: u256 }>\` (or \`${kind}<{}>\` for none)`);
           } else {
-            this.synthesizeErrorEventDecl(kind, n.name, args[0] as ts.TypeLiteralNode, n, false);
+            this.synthesizeErrorEventDecl(kind, n.name, args[0] as ts.TypeLiteralNode, n, false, undefined, true);
             this.fileLevelErrorEvents.add(n.name.text);
           }
         }
@@ -7086,8 +7166,28 @@ export class Analyzer {
       );
       return;
     }
+    const rec = this.foldConstantField(
+      member,
+      (n) => this.constantsByName.has(n) || this.stateByName.has(n) || this.immutablesByName.has(n),
+    );
+    if (!rec) return;
+    this.constantsByName.set(name, { ...rec, declaredIn });
+    if (isPublic) this.publicConstantNames.add(name);
+  }
+
+  /** Resolve + fold a `@constant`/static field into its compile-time value, shared by the contract
+   *  collector (collectConstant) and the LIB-CONST library collector (collectLibraryConstant). The
+   *  diagnostic ORDER is preserved verbatim (type -> value-type gate JETH050 -> required-initializer
+   *  JETH048 -> duplicate JETH046 -> kind-specific fold), with the duplicate check injected via `isDup`
+   *  so the caller decides the scope (contract tables vs a per-library map). Returns the value+type
+   *  record, or undefined after emitting the diagnostic. */
+  private foldConstantField(
+    member: ts.PropertyDeclaration,
+    isDup: (name: string) => boolean,
+  ): { value: bigint | boolean | Uint8Array; type: JethType } | undefined {
+    const name = (member.name as ts.Identifier).text;
     const type = resolveType(member.type, this.diags, this.structsByName);
-    if (!type) return;
+    if (!type) return undefined;
     // Folding supports integer + bool + address + bytesN + string + bytes constants. Any OTHER
     // aggregate constant (a struct / array) stays a clean over-rejection, not a fold-failure cascade.
     if (
@@ -7104,15 +7204,15 @@ export class Analyzer {
         'JETH050',
         `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address/bytesN/string/bytes constants)`,
       );
-      return;
+      return undefined;
     }
     if (!member.initializer) {
       this.diags.error(member, 'JETH048', `@constant '${name}' requires a constant initializer`);
-      return;
+      return undefined;
     }
-    if (this.constantsByName.has(name) || this.stateByName.has(name) || this.immutablesByName.has(name)) {
+    if (isDup(name)) {
       this.diags.error(member, 'JETH046', `duplicate @constant '${name}'`);
-      return;
+      return undefined;
     }
     if (type.kind === 'string') {
       // a string constant must be a string literal (solc: only a literal); store the UTF-8 bytes,
@@ -7120,16 +7220,14 @@ export class Analyzer {
       const init = member.initializer;
       if (!ts.isStringLiteral(init) && !ts.isNoSubstitutionTemplateLiteral(init)) {
         this.diags.error(init, 'JETH048', `@constant '${name}' must be a string literal`);
-        return;
+        return undefined;
       }
       const cbytes = this.strLitBytes(init);
       if (!this.isValidUtf8(cbytes)) {
         this.diags.error(init, 'JETH048', `@constant '${name}' string literal contains an invalid UTF-8 sequence`);
-        return;
+        return undefined;
       }
-      this.constantsByName.set(name, { value: cbytes, type, declaredIn });
-      if (isPublic) this.publicConstantNames.add(name);
-      return;
+      return { value: cbytes, type };
     }
     if (type.kind === 'bytes') {
       // a `bytes` constant is a dynamic byte payload (no UTF-8 constraint, unlike `string`): accept the
@@ -7145,11 +7243,9 @@ export class Analyzer {
           'JETH048',
           `@constant '${name}' must be a bytes literal (a string literal, bytes("..."), or abi.encodePacked(...) of literals)`,
         );
-        return;
+        return undefined;
       }
-      this.constantsByName.set(name, { value: bbytes, type, declaredIn });
-      if (isPublic) this.publicConstantNames.add(name);
-      return;
+      return { value: bbytes, type };
     }
     // An ENUM @constant (an enum is a branded uintN) must be initialized from an enum MEMBER
     // (Color.Blue) or an enum CAST (Color(x)) - a bare integer literal implicitly converted to the enum
@@ -7162,15 +7258,39 @@ export class Analyzer {
         'JETH280',
         `cannot use a bare integer literal as enum '${displayName(type)}'; use ${displayName(type)}.<Member> or ${displayName(type)}(...)`,
       );
-      return;
+      return undefined;
     }
     const folded = this.foldConstant(member.initializer, type);
     if (folded === undefined) {
       this.diags.error(member.initializer, 'JETH048', `@constant '${name}' initializer must be a constant expression`);
-      return;
+      return undefined;
     }
-    this.constantsByName.set(name, { value: folded, type, declaredIn });
-    if (isPublic) this.publicConstantNames.add(name);
+    return { value: folded, type };
+  }
+
+  /** The read-site Expr for a folded constant record (contract or library): the inline literal shape
+   *  (stringLiteral for string/bytes, literalBool, literalInt), identical to the this.CONSTANT read. */
+  private constantReadExpr(c: { value: bigint | boolean | Uint8Array; type: JethType }): Expr {
+    if (c.value instanceof Uint8Array) return { kind: 'stringLiteral', type: c.type, bytes: c.value };
+    return typeof c.value === 'boolean'
+      ? { kind: 'literalBool', type: c.type, value: c.value }
+      : { kind: 'literalInt', type: c.type, value: c.value };
+  }
+
+  /** LIB-CONST: collect a library constant `static K: T = <literal>` into the per-library table. Reuses
+   *  foldConstantField (identical fold + diagnostics), scoped to this library's own duplicate check; no
+   *  storage slot, no getter (solc: `library L { T internal constant K = ...; }` reads as a folded
+   *  literal at `L.K` and bare `K` inside L's own functions). */
+  private collectLibraryConstant(member: ts.PropertyDeclaration, libName: string): void {
+    let map = this.libraryConstantsByName.get(libName);
+    if (!map) {
+      map = new Map();
+      this.libraryConstantsByName.set(libName, map);
+    }
+    const name = (member.name as ts.Identifier).text;
+    const rec = this.foldConstantField(member, (n) => map!.has(n));
+    if (!rec) return;
+    map.set(name, rec);
   }
 
   // An `@immutable` is a value-type field assigned once in the constructor and baked into the
@@ -7951,6 +8071,10 @@ export class Analyzer {
     // P0-23: a @library function has no contract owner (it must resolve library-flat). A contract
     // function's body sees only its defining contract + bases (upward). No owner -> gate is a no-op.
     this.bodyOwnerContract = rf.libraryName ? undefined : rf.definingContract;
+    // LIB-CONST/EVENT/ERROR: inside a library fn body, a bare `K` / `revert(Bad(a))` / `emit(E(a))`
+    // resolves against THIS library's per-library tables (+ file-level), never the using-contract's.
+    // Set unconditionally (like the fields above), so a contract fn always clears it to undefined.
+    this.currentLibrary = rf.libraryName;
     this.pushScope(); // function/parameter scope
     this.currentMutability = rf.mutability;
     // only @external is externally reachable; an unmarked (internal) function is not. Gates the
@@ -11452,11 +11576,11 @@ export class Analyzer {
     }
     let paramNameSets: string[][];
     if (kind === 'error') {
-      const d = this.errorsByName.get(name);
+      const d = this.resolveErrorDeclInScope(name);
       if (!d) return undefined;
       paramNameSets = [d.params.map((p) => p.name)];
     } else {
-      const evs = this.eventsByName.get(name);
+      const evs = this.resolveEventOverloadsInScope(name);
       if (!evs || evs.length === 0) return undefined;
       paramNameSets = evs.map((e) => e.params.map((p) => p.name));
     }
@@ -11512,6 +11636,20 @@ export class Analyzer {
     return Sn(f.createCallExpression(Sn(f.createIdentifier(name)), undefined, [...args]));
   }
 
+  /** LIB-MEMBER-ERROR: resolve a bare error name in the CURRENT scope. Inside a library fn, its own
+   *  errors first, then FILE-LEVEL errors (globally visible) - never the using-contract's (solc scopes a
+   *  library's errors to the library). Inside a contract fn (currentLibrary undefined), the global table
+   *  unchanged (contract member + file-level errors). */
+  private resolveErrorDeclInScope(name: string): ErrorDecl | undefined {
+    if (this.currentLibrary) {
+      return (
+        this.libraryErrorsByName.get(this.currentLibrary)?.get(name) ??
+        (this.fileLevelErrorEvents.has(name) ? this.errorsByName.get(name) : undefined)
+      );
+    }
+    return this.errorsByName.get(name);
+  }
+
   private checkRevertReason(node: ts.Expression): RevertReason | undefined {
     if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
       return { kind: 'errorString', message: this.strLitBytes(node) };
@@ -11520,11 +11658,29 @@ export class Analyzer {
     const thisErr = this.desugarThisRaise(node, 'error');
     if (thisErr === null) return undefined;
     if (thisErr) return this.checkErrorConstructor(thisErr);
-    // a custom-error constructor: a call whose callee is a DECLARED error name. A call to any other
-    // identifier (e.g. the type-conversion `string(b)`) is NOT an error call - it falls through to the
-    // runtime-string path below, matching solc which lowers a string-typed reason to Error(string).
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && this.errorsByName.has(node.expression.text)) {
+    // a custom-error constructor: a call whose callee is a DECLARED error name (scope-resolved). A call to
+    // any other identifier (e.g. the type-conversion `string(b)`) is NOT an error call - it falls through
+    // to the runtime-string path below, matching solc which lowers a string-typed reason to Error(string).
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && this.resolveErrorDeclInScope(node.expression.text)) {
       return this.checkErrorConstructor(node);
+    }
+    // LIB-MEMBER-ERROR: a QUALIFIED library-error raise `revert(L.Bad(a))` from a contract (or another
+    // library). Intercepted BEFORE the string trial so `L.Bad(...)` is not mis-read as a library FUNCTION
+    // call. Fires only when Bad is a declared error of the library L; otherwise falls through unchanged.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      ts.isIdentifier(node.expression.name) &&
+      this.libraryByName.has(node.expression.expression.text) &&
+      // a param/local/state var named like the library shadows it (solc: `L.Bad` is then member access
+      // on that value, not the library) - the same guards the qualified library-CALL / library-CONSTANT
+      // reads carry, so a shadowed `L.Bad` falls through to a clean reject instead of binding the library.
+      !this.isVisibleLocal(node.expression.expression.text) &&
+      !this.stateByName.has(node.expression.expression.text)
+    ) {
+      const decl = this.libraryErrorsByName.get(node.expression.expression.text)?.get(node.expression.name.text);
+      if (decl) return this.checkErrorArgs(node, decl, node.expression.name.text);
     }
     // a template literal `bad: ${x}` is a runtime string-typed expression (it desugars to string.concat);
     // it falls through to the dynamic Error(string) path below, byte-identical to solc revert(string.concat).
@@ -11558,11 +11714,17 @@ export class Analyzer {
 
   private checkErrorConstructor(node: ts.CallExpression): RevertReason | undefined {
     const name = (node.expression as ts.Identifier).text;
-    const decl = this.errorsByName.get(name);
+    const decl = this.resolveErrorDeclInScope(name);
     if (!decl) {
       this.diags.error(node.expression, 'JETH129', `unknown custom error '${name}'`);
       return undefined;
     }
+    return this.checkErrorArgs(node, decl, name);
+  }
+
+  /** Shared arity + per-arg check for a custom-error raise, given the resolved decl. Reused by the bare
+   *  `revert(X(...))` path (checkErrorConstructor) and the qualified `revert(L.Bad(...))` library-error path. */
+  private checkErrorArgs(node: ts.CallExpression, decl: ErrorDecl, name: string): RevertReason | undefined {
     if (node.arguments.length !== decl.params.length) {
       this.diags.error(
         node,
@@ -12539,6 +12701,22 @@ export class Analyzer {
 
   // ---- events --------------------------------------------------------------
 
+  /** LIB-MEMBER-EVENT: resolve an event name's overloads in the CURRENT scope. Inside a library fn, its
+   *  own events first, then FILE-LEVEL events - never the using-contract's (solc scopes a library's events
+   *  to the library). Inside a contract fn, the global table unchanged. */
+  private resolveEventOverloadsInScope(name: string): EventIR[] | undefined {
+    if (this.currentLibrary) {
+      const own = this.libraryEventsByName.get(this.currentLibrary)?.get(name);
+      if (own && own.length) return own;
+      // the file-level fallback must return ONLY the file-level overloads: eventsByName mixes file-level
+      // and same-named CONTRACT overloads (different signatures coexist, no dedup across scopes), and a
+      // library fn must NOT see the using-contract's events (the per-library scope invariant).
+      const global = this.eventsByName.get(name)?.filter((e) => e.fileLevel);
+      return global && global.length ? global : undefined;
+    }
+    return this.eventsByName.get(name);
+  }
+
   private checkEmit(call: ts.CallExpression, out: Stmt[]): void {
     if (call.arguments.length !== 1) {
       this.diags.error(call, 'JETH145', 'emit(...) takes exactly one event-constructor argument');
@@ -12553,7 +12731,7 @@ export class Analyzer {
       this.diags.error(inner, 'JETH146', 'emit(...) argument must be an event constructor, e.g. emit(Transfer(a, b))');
       return;
     }
-    const candidates = this.eventsByName.get(inner.expression.text);
+    const candidates = this.resolveEventOverloadsInScope(inner.expression.text);
     if (!candidates || candidates.length === 0) {
       this.diags.error(inner.expression, 'JETH147', `unknown event '${inner.expression.text}'`);
       return;
@@ -22940,11 +23118,29 @@ export class Analyzer {
       node.expression.kind === ts.SyntaxKind.ThisKeyword &&
       this.constantsByName.has(node.name.text)
     ) {
-      const c = this.constantsByName.get(node.name.text)!;
-      if (c.value instanceof Uint8Array) return { kind: 'stringLiteral', type: c.type, bytes: c.value }; // string constant
-      return typeof c.value === 'boolean'
-        ? { kind: 'literalBool', type: c.type, value: c.value }
-        : { kind: 'literalInt', type: c.type, value: c.value };
+      return this.constantReadExpr(this.constantsByName.get(node.name.text)!);
+    }
+
+    // LIB-CONST: a QUALIFIED library-constant read `L.K` (from a contract fn, or self-qualified inside L).
+    // A library is never a local/state var, so the guards mirror the L.f() call dispatch; the read fires
+    // ONLY when K is a declared constant of L (a function member is absent from the table -> falls through
+    // to the library-call paths). Inlines the folded literal, exactly like this.CONSTANT.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      !this.isVisibleLocal(node.expression.text) &&
+      !this.stateByName.has(node.expression.text)
+    ) {
+      const lc = this.libraryConstantsByName.get(node.expression.text)?.get(node.name.text);
+      if (lc) return this.constantReadExpr(lc);
+    }
+
+    // LIB-CONST: a BARE `K` inside a library function resolves to THAT library's constant (self scope),
+    // unless shadowed by a local/param (which wins, matching solc). Placed before the bare-identifier
+    // JETH072 so an unshadowed library constant folds instead of erroring.
+    if (this.currentLibrary && ts.isIdentifier(node) && !this.lookupLocal(node.text)) {
+      const lc = this.libraryConstantsByName.get(this.currentLibrary)?.get(node.text);
+      if (lc) return this.constantReadExpr(lc);
     }
 
     // this.<immutable> (read). An immutable read is a code read (loadimmutable), NOT a storage read,
