@@ -308,6 +308,11 @@ export class Analyzer {
   private errorsByName = new Map<string, ErrorDecl>();
   private errors: ErrorDecl[] = [];
   private eventsByName = new Map<string, EventIR[]>(); // source name -> all overloads (solc allows event overloading by signature)
+  // JETH434-DISAMBIGUABLE: when a NAMED-arg emit of an overloaded event is disambiguated by its key set,
+  // desugarThisRaise picks the overload and FORCES it through to checkEmit here (so the type-based overload
+  // resolution can never re-pick a different overload than the one used to reorder the args). Set+captured
+  // within one desugar->checkEmit call frame; captured and cleared at checkEmit before any early return.
+  private forcedEmitEvent?: EventIR;
   private events: EventIR[] = [];
   // Phase 6: @interface declarations (name -> {methods}); emits no bytecode, names a type + ABI shape.
   private interfacesByName = new Map<string, InterfaceDecl>();
@@ -3223,6 +3228,11 @@ export class Analyzer {
     // like context). The most-derived definition won during collection above.
     const receive = receiveNode ? this.checkSpecialEntry(receiveNode.member, 'receive', receiveNode.contract) : undefined;
     const fallback = fallbackNode ? this.checkSpecialEntry(fallbackNode.member, 'fallback', fallbackNode.contract) : undefined;
+    // RECEIVE-INTERNAL-CALL: a helper reachable ONLY from a @receive/@fallback body was added to
+    // this.internallyCalled AFTER the earlier sweep ran, so re-apply it now that the special entries are
+    // checked - else yul never emits the helper's userfn and the inline call dangles. Byte-neutral for
+    // every other contract (it only sets true for keys already in this.internallyCalled).
+    for (const f of functions) if (this.internallyCalled.has(f.key)) f.internallyCalled = true;
     // P1-21: validate the special-entry override relationship (a redeclaration across the chain must
     // carry @override, the base must be @virtual, @override with no base is "overrides nothing"). `lin`
     // is most-derived first, so a larger index = more-base.
@@ -5672,13 +5682,10 @@ export class Analyzer {
       this.bodyOwnerContract = savedBodyOwner;
     }
     this.popScope();
-    if (this.currentCallees.size > 0) {
-      this.diags.error(
-        member,
-        'JETH387',
-        `calling an internal/private function from a @${kind} entry is not supported yet; inline the logic into the entry body`,
-      );
-    }
+    // RECEIVE-INTERNAL-CALL: a @receive/@fallback body MAY call internal/private (and attached) helpers
+    // (solc parity). The call already lowered inline into `body`; its callee was added to
+    // this.internallyCalled at the resolution site, so a re-sweep after the special entries are checked
+    // (see analyzeContract) marks the FunctionIR so yul emits the helper's userfn. No JETH387 gate.
     return { payable, returnsBytes, body, bytesParam };
   }
 
@@ -11641,6 +11648,7 @@ export class Analyzer {
       return null;
     }
     let paramNameSets: string[][];
+    let evOverloads: EventIR[] | undefined;
     if (kind === 'error') {
       const d = this.resolveErrorDeclInScope(name);
       if (!d) return undefined;
@@ -11648,6 +11656,7 @@ export class Analyzer {
     } else {
       const evs = this.resolveEventOverloadsInScope(name);
       if (!evs || evs.length === 0) return undefined;
+      evOverloads = evs;
       paramNameSets = evs.map((e) => e.params.map((p) => p.name));
     }
     const f = ts.factory;
@@ -11656,19 +11665,11 @@ export class Analyzer {
     if (node.arguments.length === 1 && ts.isObjectLiteralExpression(node.arguments[0]!)) {
       const obj = node.arguments[0]!;
       // NAMED args reorder to a declaration's param order - which requires knowing WHICH declaration.
-      // With an OVERLOADED event the key-set alone cannot soundly pick one (two overloads may share the
-      // same names in different orders/types, and the downstream type-based overload resolution could
-      // then pick a DIFFERENT overload than the one used for the reorder - a silent wrong-data emit).
-      // Reject: an overloaded event must be raised positionally, where the existing arity+type overload
-      // resolution is sound.
-      if (paramNameSets.length > 1) {
-        this.diags.error(
-          obj,
-          'JETH434',
-          `event '${name}' is overloaded; named arguments cannot pick an overload - use the positional form emit(this.${name}(...))`,
-        );
-        return null;
-      }
+      // Build the key set first, then disambiguate an OVERLOADED event by it: exactly one overload whose
+      // param-NAME set equals the keys is selected and FORCED (below), so the downstream type-based
+      // resolution cannot re-pick a different overload than the one used to reorder (which would be a
+      // silent wrong-data emit). Zero matches -> the precise field error; 2+ matches (same key set, e.g.
+      // different types under the same names) -> JETH434, the sound residual over-rejection.
       const entries = new Map<string, ts.Expression>();
       for (const prop of obj.properties) {
         if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name)) {
@@ -11688,8 +11689,12 @@ export class Analyzer {
           return null;
         }
       }
-      const match = paramNameSets.find((ps) => ps.length === entries.size && ps.every((n2) => entries.has(n2)));
-      if (!match) {
+      const matchIdxs: number[] = [];
+      for (let i = 0; i < paramNameSets.length; i++) {
+        const ps = paramNameSets[i]!;
+        if (ps.length === entries.size && ps.every((n2) => entries.has(n2))) matchIdxs.push(i);
+      }
+      if (matchIdxs.length === 0) {
         this.diags.error(
           obj,
           'JETH130',
@@ -11697,7 +11702,18 @@ export class Analyzer {
         );
         return null;
       }
-      args = match.map((n2) => entries.get(n2)!);
+      if (matchIdxs.length > 1) {
+        this.diags.error(
+          obj,
+          'JETH434',
+          `${kind} '${name}' is overloaded and multiple overloads share these named-argument keys - use the positional form emit(this.${name}(...))`,
+        );
+        return null;
+      }
+      const chosen = matchIdxs[0]!;
+      // an OVERLOADED event: force the selected overload through to checkEmit (see forcedEmitEvent).
+      if (kind === 'event' && evOverloads && evOverloads.length > 1) this.forcedEmitEvent = evOverloads[chosen];
+      args = paramNameSets[chosen]!.map((n2) => entries.get(n2)!);
     }
     return Sn(f.createCallExpression(Sn(f.createIdentifier(name)), undefined, [...args]));
   }
@@ -12793,6 +12809,10 @@ export class Analyzer {
     const thisEvt = this.desugarThisRaise(inner, 'event');
     if (thisEvt === null) return;
     if (thisEvt) inner = thisEvt;
+    // JETH434-DISAMBIGUABLE: a named-arg emit of an overloaded event was disambiguated by key set; use the
+    // FORCED overload directly (capture+clear first so it never leaks past an early return).
+    const forcedEv = this.forcedEmitEvent;
+    this.forcedEmitEvent = undefined;
     // LIB-MEMBER-EVENT: a QUALIFIED emit(L.E(a)) from a contract, mirroring the qualified library-error
     // raise revert(L.Bad(a)). Resolve E in library L's per-library event table, then rebuild a bare-name
     // inner E(args) so the shared arity/overload/emit logic below runs unchanged. Guarded against a
@@ -12844,7 +12864,8 @@ export class Analyzer {
       return;
     }
     let ev: EventIR;
-    if (byArity.length === 1) ev = byArity[0]!;
+    if (forcedEv) ev = forcedEv; // JETH434-DISAMBIGUABLE: the key-set-selected overload
+    else if (byArity.length === 1) ev = byArity[0]!;
     else {
       const viable = byArity.filter((c) => this.eventArgsMatch(inner, c));
       if (viable.length === 1) ev = viable[0]!;
