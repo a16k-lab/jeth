@@ -41,6 +41,21 @@ deployed separately + DELEGATECALL + link-time address substitution. Do NOT buil
    FIRST parameter type equals `x`'s type. If no match, `x.f` is not a library method (fall through to the
    normal member-access handling). Multiple `@using(L1) @using(L2)` allowed; a name collision (two attached
    libs both define `f` for T) -> reject. The receiver `x` is evaluated ONCE (bind it, then pass).
+5b. **The `self` convention (native attached calls, `b30e7ea`)**: a library function whose FIRST parameter
+   is literally named `self` attaches **file-wide WITHOUT any `@using`** - `x.f(args)` where `self`'s type
+   equals `x`'s type desugars to `L.f(x, ...args)` exactly like the `@using` form. This is a DELIBERATE
+   JETH-only ergonomic (the native replacement for `using`), NOT an `@using` gate bypass: a first param NOT
+   named `self` still needs `@using` (a bare `x.dbl()` where `dbl(x: T)` has no `self` and no `@using` ->
+   JETH074). It is a language SUPERSET, exactly like default arguments: JETH accepts `x.f(args)` where
+   solc requires an explicit `using L for T;` and otherwise rejects "Member not found after
+   argument-dependent lookup". Because it lowers to the same correct internal call, it is SOUND (correct
+   bytes) and is therefore NOT an over-acceptance under the zero-miscompile / zero-over-acceptance bar (the
+   bar forbids accepting genuinely-invalid programs or emitting wrong bytes, not accepting a deliberate
+   superset spelling). Two file-wide `self`-libs defining the same `f` for T -> JETH393 ambiguous (the
+   attachment map spans every visible library, by design). Tests: `test/native-self-attachment.test.ts`
+   (dedicated), plus attached-call-eval-order / multi-file-imports / using-on-abstract / constructor.
+   Multi-file scope: a `self`-attached call names no library identifier, so the v2 reference check scopes
+   it to each file's import edges (see src/imports.ts).
 6. **Param scope (Phase A)**: value types, memory/calldata bytes/string, structs, arrays - the same param
    types JETH internal functions already accept. DEFER storage-reference params (solc's `using For` over a
    storage type that mutates caller storage, e.g. EnumerableSet) - JETH has no storage-ref param; gate it.
