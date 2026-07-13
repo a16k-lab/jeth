@@ -7088,20 +7088,21 @@ export class Analyzer {
     }
     const type = resolveType(member.type, this.diags, this.structsByName);
     if (!type) return;
-    // Folding supports integer + bool + address + bytesN + string constants. A bytes/aggregate
-    // constant stays a clean over-rejection (a later step), not a confusing fold-failure cascade.
+    // Folding supports integer + bool + address + bytesN + string + bytes constants. Any OTHER
+    // aggregate constant (a struct / array) stays a clean over-rejection, not a fold-failure cascade.
     if (
       type.kind !== 'uint' &&
       type.kind !== 'int' &&
       type.kind !== 'bool' &&
       type.kind !== 'address' &&
       type.kind !== 'bytesN' &&
-      type.kind !== 'string'
+      type.kind !== 'string' &&
+      type.kind !== 'bytes'
     ) {
       this.diags.error(
         member,
         'JETH050',
-        `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address/bytesN/string constants)`,
+        `@constant ${displayName(type)} is not supported yet (only uintN/intN/bool/address/bytesN/string/bytes constants)`,
       );
       return;
     }
@@ -7127,6 +7128,26 @@ export class Analyzer {
         return;
       }
       this.constantsByName.set(name, { value: cbytes, type, declaredIn });
+      if (isPublic) this.publicConstantNames.add(name);
+      return;
+    }
+    if (type.kind === 'bytes') {
+      // a `bytes` constant is a dynamic byte payload (no UTF-8 constraint, unlike `string`): accept the
+      // same literal forms a bytes VALUE accepts - a string literal, `bytes("...")`, or an
+      // `abi.encodePacked(...)` of literals (constByteString). Stored as the payload; every read site
+      // materializes it as a fresh memory bytes via the SAME `stringLiteral` IR the string path uses (a
+      // string and bytes value share one in-memory ABI layout), so the read/getter/encode parity that is
+      // already verified for string constants carries over unchanged.
+      const bbytes = this.constByteString(member.initializer);
+      if (bbytes === undefined) {
+        this.diags.error(
+          member.initializer,
+          'JETH048',
+          `@constant '${name}' must be a bytes literal (a string literal, bytes("..."), or abi.encodePacked(...) of literals)`,
+        );
+        return;
+      }
+      this.constantsByName.set(name, { value: bbytes, type, declaredIn });
       if (isPublic) this.publicConstantNames.add(name);
       return;
     }
@@ -13851,6 +13872,22 @@ export class Analyzer {
       this.isEnumName(node.expression.text)
     )
       return true;
+    // a reference to a value-type @constant, `this.K` (the spelling `C.K` becomes `this.K` before
+    // analysis via the static-access rewrite; a bare-Identifier receiver covers any un-rewritten form).
+    // A contract constant is slot-free and caller-independent, so at the fill site `this.K` re-checks to
+    // an inlined literal - a default `b: u256 = C.K` is as self-contained as `b: u256 = 7n`. Restricted
+    // to VALUE-type constants (int/bool/address/bytesN/enum); string/bytes are already blocked by JETH252
+    // (a default param must be a value type). A bare-identifier `K` is deliberately NOT accepted: at a
+    // fill site it would resolve in the CALLER's scope (a same-named local would hijack it) - the
+    // property form has no such caller-scope dependency.
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.name) &&
+      (node.expression.kind === ts.SyntaxKind.ThisKeyword || ts.isIdentifier(node.expression))
+    ) {
+      const c = this.constantsByName.get(node.name.text);
+      if (c && isStaticValueType(c.type)) return true;
+    }
     // a value cast / builtin over constants: address(0n), u8(255n), bytes4(0x..n), payable(0n), type(u256), Color(0n)
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const c = node.expression.text;
@@ -14454,6 +14491,39 @@ export class Analyzer {
     if (applicable.length === 0) return undefined;
     const viable = applicable.filter((c) => this.overloadArgsMatch(node, c));
     return viable.length === 1 ? viable[0] : undefined;
+  }
+
+  /** PAREN-CALLEE: does a parenthesized callee `(<inner>)(...)` denote something solc would NOT accept
+   *  as pure grouping around a direct call target? Two cases: (1) `payable` - a state-mutability keyword
+   *  whose conversion grammar needs `payable(` with no gap, so `(payable)(x)` is a solc ParserError; and
+   *  (2) an OVERLOADED function name - parenthesizing forces a value lookup (before args), which has no
+   *  unique function type for an overload set, so solc rejects `(g)(x)` even when the args would
+   *  disambiguate the bare `g(x)`. A non-overloaded method/static/library fn and an elementary-type cast
+   *  `(u8)(x)` are pure grouping (both accepted, byte-identical) and return false. `C.f` has already been
+   *  rewritten to `this.f` pre-analysis, so a static overload is counted via the `this.` arm. */
+  private parenCalleeDiverges(inner: ts.Expression): boolean {
+    if (ts.isIdentifier(inner) && inner.text === 'payable') return true;
+    let overloads = 0;
+    if (ts.isIdentifier(inner)) {
+      overloads = this.candidatesByName.get(inner.text)?.length ?? 0;
+    } else if (ts.isPropertyAccessExpression(inner) && ts.isIdentifier(inner.name)) {
+      if (inner.expression.kind === ts.SyntaxKind.ThisKeyword) {
+        overloads = this.candidatesByName.get(inner.name.text)?.length ?? 0;
+      } else if (ts.isIdentifier(inner.expression)) {
+        const lib = this.libraryByName.get(inner.expression.text);
+        if (lib) overloads = lib.filter((c) => c.name === `${(inner.expression as ts.Identifier).text}.${inner.name.text}`).length;
+      }
+    }
+    return overloads >= 2;
+  }
+
+  /** GET-PROPERTY-READ: the argless `get x()` accessor named `name` visible here, if any. An internal
+   *  read-only accessor read as a PROPERTY (`this.x`) is the property spelling of the call `this.x()`;
+   *  the registries are already scope-restricted, so this respects visibility. Returns undefined when
+   *  `name` is not a getter, or is a getter that takes arguments (which needs an explicit call). */
+  private arglessGetter(name: string): RawFunction | undefined {
+    const cands = this.candidatesByName.get(name) ?? (this.funcsByName.has(name) ? [this.funcsByName.get(name)!] : []);
+    return cands.find((c) => c.isGetter && c.params.length === 0);
   }
 
   /** Is the call's argument SHAPE (arity / named form) callable on this candidate (F3 defaults aware)? */
@@ -21212,6 +21282,30 @@ export class Analyzer {
       if (csig) return this.checkFuncRefCall(node, csig);
     }
 
+    // PAREN-CALLEE: a parenthesized DIRECT callee `(this.dbl)(v)` / `(C.dbl)(v)` / `(L.f)(v)`. The
+    // funcref-callee resolver above already claimed every parenthesized callee that types to a funcref
+    // (a ternary of funcrefs, a funcref local); whatever parenthesized callee remains is grouping around
+    // a direct call target, so peel the parens (pure grouping, no eval change) and re-check the call. The
+    // synth() keeps the original range so diagnostics stay exact; recursion handles nested `((f))(v)`.
+    // NOT every parenthesized callee is pure grouping in solc's model, though: `(payable)(x)` is a solc
+    // ParserError (a mutability keyword needs an immediately-following `(`), and `(g)(x)` on an OVERLOADED
+    // `g` forces a VALUE lookup that has no unique function type (solc: "No matching declaration after
+    // variable lookup"). parenCalleeDiverges keeps both a clean JETH074 reject (fall through) rather than
+    // over-accepting a program solc refuses.
+    if (
+      ts.isCallExpression(node) &&
+      ts.isParenthesizedExpression(node.expression) &&
+      !this.parenCalleeDiverges(node.expression.expression)
+    ) {
+      return this.checkExpr(
+        this.synth(
+          ts.factory.updateCallExpression(node, node.expression.expression, node.typeArguments, node.arguments),
+          node,
+        ),
+        expected,
+      );
+    }
+
     // assignment used as a value-producing expression: (x = v), (x += v), chained x = y = a.
     // Yields the assigned (LHS-typed) value, exactly like Solidity. Statement-position
     // assignments are handled earlier in checkStatement and never reach here.
@@ -22873,6 +22967,16 @@ export class Analyzer {
     if (ts.isPropertyAccessExpression(node) && node.expression.kind === ts.SyntaxKind.ThisKeyword) {
       const v = this.stateByName.get(node.name.text);
       if (!v) {
+        // GET-PROPERTY-READ: `this.x` where `x` is an argless `get` accessor is the property spelling of
+        // `this.x()`. Desugar to the call and re-check - byte-identical to writing the call. A state var
+        // of the same name is impossible (name collision), so this only fires when there is no field; the
+        // re-check routes through the internal-call path (visibility / mutability enforced there).
+        if (this.arglessGetter(node.name.text)) {
+          return this.checkExpr(
+            this.synth(ts.factory.createCallExpression(node, undefined, ts.factory.createNodeArray([])), node),
+            expected,
+          );
+        }
         this.diags.error(node, 'JETH065', `unknown state variable 'this.${node.name.text}'`);
         return undefined;
       }
