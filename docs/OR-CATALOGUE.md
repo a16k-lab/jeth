@@ -675,3 +675,41 @@ LESSON (re-affirmed): a syntactic peel/desugar is only "pure grouping" for the s
 as grouping - a parenthesized OVERLOADED name and a mutability keyword are NOT, so the peel needed a
 solc-parity divergence gate. The adversarial sweep caught both over-acceptances before they shipped;
 the other three lifts were clean across all 458 cases.
+
+## 2026-07-13 LIBRARY-DECLARATIONS LIFT (LIB-CONST / LIB-MEMBER-EVENT / LIB-MEMBER-ERROR, HEAD eb7b1ec, suite 454/4238)
+
+A `static class` library may now declare constants, events, and errors (solc parity), all PER-LIBRARY
+scoped (proven necessary against solc: a global table would both over-reject two libraries sharing a
+name and over-accept a bare name resolving cross-scope). Investigated by a 3-agent probe-backed
+planning workflow, verified by a 4-lens 307-case adversarial workflow. Regression:
+test/lib-member-decls.test.ts.
+
+- **LIB-CONST - LIFTED**: `static K: T = <literal>` (value / string / bytes) in a library, read as `L.K`
+  from a contract fn and bare `K` inside the library (a local/param shadows it); no storage slot, no
+  getter (folded literal, byte-identical to solc `library L { T internal constant K = v; }`). Reused the
+  extracted foldConstantField (identical fold + diagnostics) + a per-library table.
+- **LIB-MEMBER-ERROR - LIFTED**: `Bad: error<{...}>` raised bare `revert(Bad(a))` / `require(cond,
+  Bad(a))` inside the library and qualified `revert(L.Bad(a))` from a contract; revert selector + data
+  byte-identical to solc (bare-signature keccak, scope-independent), internal + external(delegatecall).
+- **LIB-MEMBER-EVENT - LIFTED**: `E: event<{...}>` emitted `emit(E(a))` inside the library; logs
+  (topic0 + indexed topics + data + emitter address under delegatecall) byte-identical to solc.
+  RESIDUAL clean over-rejection (deferred): qualified `emit(L.E(a))` from a CONTRACT rejects JETH146
+  (the error qualified form is supported; the event one needs emit-site surgery - bind via a lib fn).
+
+Closes TWO pre-existing over-acceptances the scoping exposed: a lib fn raising/emitting a bare CONTRACT
+decl now rejects (JETH129 / JETH147) - a library cannot see a contract's errors/events (solc parity).
+
+The 307-case sweep found + FIXED three over-acceptances the lifts opened (all scope/declaration gaps,
+none touching the byte-identical lowering): (1) a CROSS-KIND name collision in a library (a const/fn/
+event/error sharing a name) is now JETH133, mirroring the contract path (a library has one member
+namespace); (2) an EVENT SCOPE LEAK where a lib fn bound a same-named CONTRACT event overload through
+the file-level fallback (eventsByName mixes file-level + contract overloads under one name) - now
+filtered to file-level-only via an EventIR.fileLevel tag; (3) a QUALIFIED-ERROR SHADOW where
+`revert(L.Bad(a))` ignored a param/local/state var shadowing the library name - now guarded with
+!isVisibleLocal / !stateByName, matching the constant-read and library-call siblings.
+
+LESSON (re-affirmed): a new declaration namespace needs the SAME cross-kind + shadow + scope discipline
+the existing (contract) path already enforces; the per-library maps handled scoping but each new lookup
+site (fallback filter, qualified-raise guard, cross-namespace dedup) had to be checked against solc
+independently. The adversarial sweep caught all three before they shipped; every runtime path was
+byte-identical across the four lenses.
