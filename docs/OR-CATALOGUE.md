@@ -637,3 +637,41 @@ L23 recorded the lift but the older "REMAINING over-rejections" narrative L205-2
   COMMA-FORUPDATE (parity both-reject - Solidity has no comma operator).
 - CONTROLS (post native-only sanity): keep-list decorators (@using/@modifier/@virtual/@override) and
   get call-syntax all unregressed, zero spurious JETH481.
+
+## 2026-07-13 SMALL-CLUSTER LIFT (top 4 from the 2026-07-12 audit, HEAD 42dd241, suite 453/4229)
+
+Four small over-rejections lifted, each byte-identical to solc 0.8.35 (or to its own call/literal twin
+where solc has no spelling), verified by a 4-lens 458-case adversarial workflow (bytes-const /
+paren-callee / default+getprop / cross-fuzz). Regression: test/lift-cluster-small-four.test.ts.
+
+- **BYTES-CONST - LIFTED**: a `bytes`-typed constant `static B: bytes = "ab"` / `bytes("ab")` /
+  `abi.encodePacked(...)` now compiles (was JETH050). Stored as a byte payload via `constByteString`;
+  every read materializes a fresh memory bytes through the SAME `stringLiteral` IR the string-constant
+  path uses (string and bytes share one in-memory ABI), so the getter / keccak / concat / encode parity
+  already proven for string constants carries over. No UTF-8 constraint (unlike `string`). Residual
+  clean rejects (both a bytes VALUE also rejects, so not bytes-const-specific): direct index of the
+  const `C.B[i]` (bind a local first) and `abi.encodePacked(<non-string-literal>)` in the initializer.
+- **PAREN-CALLEE - LIFTED (narrowed)**: a parenthesized DIRECT callee `(this.f)(v)` / `(C.f)(v)` /
+  `(L.f)(v)` / `((this.f))(v)` now compiles (was JETH074) by peeling the parens and re-checking. NARROWED
+  to solc parity (parenCalleeDiverges): `(payable)(x)` (a mutability keyword, solc ParserError) and an
+  OVERLOADED `(g)(v)` (parenthesizing forces a value lookup with no unique function type - solc: "No
+  matching declaration after variable lookup" / "Member not unique") stay a clean JETH074 reject. Both
+  were over-acceptances the adversarial sweep caught + fixed BEFORE the commit landed. Elementary-type
+  casts `(u8)(x)` (byte-identical to `u8(x)`) and funcref-ternary callees `(c?a:b)(v)` still work.
+- **DEFAULT-ARG-CONST - LIFTED**: a value-type constant as an internal-fn default param `add(a: u256,
+  b: u256 = C.K)` now compiles (was JETH250), byte-identical to the literal-default twin. Only the
+  property form `this.K` (the spelling `C.K` becomes `this.K` pre-analysis) - caller-independent. A STATE
+  var default, an IMMUTABLE default, and a bare-identifier default `= K` all still reject JETH250 (they
+  would introduce a caller-scope dependency); a non-value-type (bytes/string/struct) default stays
+  JETH252/050.
+- **GET-PROPERTY-READ - LIFTED**: an argless `get x()` accessor read as a PROPERTY `this.x` now compiles
+  and is byte-identical to the call `this.x()` (was JETH065), same-class and inherited, with virtual/
+  override dispatch and mutability enforced identically. A getter WITH params, a plain (non-get) method,
+  a genuinely unknown name, and an lvalue `this.x = v` all still reject JETH065. Residual clean reject:
+  field access on the property form `this.pp.a` where `pp` is a struct-returning getter (bind a local
+  first; the local-bind is accepted byte-identical) - a pure routing gap, not a bar violation.
+
+LESSON (re-affirmed): a syntactic peel/desugar is only "pure grouping" for the shapes solc also treats
+as grouping - a parenthesized OVERLOADED name and a mutability keyword are NOT, so the peel needed a
+solc-parity divergence gate. The adversarial sweep caught both over-acceptances before they shipped;
+the other three lifts were clean across all 458 cases.
