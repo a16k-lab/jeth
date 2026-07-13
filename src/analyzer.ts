@@ -7042,15 +7042,20 @@ export class Analyzer {
         }
       } else if (
         (type.kind === 'string' || type.kind === 'bytes') &&
-        (ts.isStringLiteral(member.initializer) || ts.isNoSubstitutionTemplateLiteral(member.initializer))
+        !this.exprAccessesThisMember(member.initializer)
       ) {
         // STRING-FIELD-INIT lift: `s: string = "x"` / `b: bytes = "ab"` on a @state field (solc accepts
         // `string public s = "x";`). Desugared by fieldInitStmts into the implicit-constructor assignment
         // `this.s = "x"` (the byte-identical workaround twin), which runs at the TOP of the merged
         // constructor - solc evaluates ALL state-var initializers before any ctor body or ctor modifier
-        // (witnessed vs 0.8.35). FIELD-INIT-NS: a @storage('ns') field's string/bytes literal initializer
-        // routes through the SAME desugar - the assignment writes the EIP-7201 namespaced slot exactly
-        // like the ctor-assign workaround (byte-identical). A NON-literal init still keeps JETH048.
+        // (witnessed vs 0.8.35). FIELD-INIT-NS: a @storage('ns') field's string/bytes initializer routes
+        // through the SAME desugar - the assignment writes the EIP-7201 namespaced slot byte-identically.
+        // FIELD-INIT-EXPR: a NON-literal string/bytes initializer (a concat `"a" + "b"`, a substitution
+        // template) is lifted too, AS LONG AS it does not access `this.<member>`: an init that reads no
+        // state var / immutable / member has NO declaration-order or forward-reference hazard (its value
+        // is order-independent), so routing it through the ctor top is byte-identical. An init that DOES
+        // read `this.<member>` stays JETH048 (a sound over-rejection - the full declaration-order-with-
+        // forward-refs-read-zero rework is a documented residual, FIELD-INIT-STATEREAD).
         this.pendingFieldInits.push({ name: member.name.text, node: member.initializer });
       } else {
         const folded = this.foldConstant(member.initializer, type);
