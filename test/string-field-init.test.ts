@@ -180,16 +180,15 @@ describe('STRING-FIELD-INIT: string/bytes state-field initializers (JETH048 lift
     expect(codes(`class C {\n  s: string = "x";\n}`)).toEqual([]);
     expect(codes(`class C {\n  s: Visible<string> = "x";\n}`)).toEqual([]);
     expect(codes(`class C {\n  b: bytes = "ab";\n}`)).toEqual([]);
+    // FIELD-INIT-NS lift: a @storage(ns) field's string/bytes LITERAL init now routes through the same
+    // implicit-ctor desugar (byte-identical to the ctor-assign twin), so it accepts too.
+    expect(codes(`class C {\n  @storage('my.ns') s: string = "x";\n}`)).toEqual([]);
     // constants and value-type inits: unchanged accept (they never routed through the lift)
     expect(codes(`class C {\n  static K: string = "x";\n  get out(): External<string> { return C.K; }\n}`)).toEqual([]);
     expect(codes(`class C {\n  x: u256 = 7n;\n}`)).toEqual([]);
     // guards: exact reject codes preserved
-    expect(codes(`class C {\n  s: string = "a" + "b";\n}`)).toContain('JETH048'); // non-literal init
-    expect(codes('class C {\n  s: string = `a${1n}b`;\n}')).toContain('JETH048'); // substitution template
-    expect(codes(`class C {\n  @storage('my.ns') s: string = "x";\n}`)).toContain('JETH048'); // namespaced route
     expect(codes(`class C {\n  static s: string;\n  constructor() { this.s = "x"; }\n}`)).toContain('JETH310'); // immutable string (solc rejects too)
-    expect(codes(`class C {\n  a: string[] = ["x"];\n}`)).toContain('JETH048'); // array of strings
-    expect(codes(`class C {\n  a: u256 = 5n;\n  b: u256 = this.a + 1n;\n}`)).toContain('JETH048'); // init reads a field (safe OR; solc accepts)
+    expect(codes(`class C {\n  a: string[] = ["x"];\n}`)).toContain('JETH048'); // array of strings (aggregate, unchanged)
     expect(codes(`@proxy\nclass P {\n  s: string = "x";\n}`)).toContain('JETH399'); // proxy state gate intact
     expect(codes(`class C {\n  s: string = "\\ud800";\n}`)).toContain('JETH447'); // invalid UTF-8 (solc rejects \xed\xa0\x80)
     expect(codes(`class C {\n  @state s: string = "x";\n}`)).toContain('JETH481'); // native-only ban intact

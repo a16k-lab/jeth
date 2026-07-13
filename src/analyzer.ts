@@ -7000,15 +7000,16 @@ export class Analyzer {
           if (nz.length > 0) initialSlotWords = nz;
         }
       } else if (
-        namespace === undefined &&
         (type.kind === 'string' || type.kind === 'bytes') &&
         (ts.isStringLiteral(member.initializer) || ts.isNoSubstitutionTemplateLiteral(member.initializer))
       ) {
-        // STRING-FIELD-INIT lift: `s: string = "x"` / `b: bytes = "ab"` on a plain @state field (solc
-        // accepts `string public s = "x";`). Desugared by fieldInitStmts into the implicit-constructor
-        // assignment `this.s = "x"` (the byte-identical workaround twin), which runs at the TOP of the
-        // merged constructor - solc evaluates ALL state-var initializers before any ctor body or ctor
-        // modifier (witnessed vs 0.8.35). A NON-literal init, or a @storage('ns') field, keeps JETH048.
+        // STRING-FIELD-INIT lift: `s: string = "x"` / `b: bytes = "ab"` on a @state field (solc accepts
+        // `string public s = "x";`). Desugared by fieldInitStmts into the implicit-constructor assignment
+        // `this.s = "x"` (the byte-identical workaround twin), which runs at the TOP of the merged
+        // constructor - solc evaluates ALL state-var initializers before any ctor body or ctor modifier
+        // (witnessed vs 0.8.35). FIELD-INIT-NS: a @storage('ns') field's string/bytes literal initializer
+        // routes through the SAME desugar - the assignment writes the EIP-7201 namespaced slot exactly
+        // like the ctor-assign workaround (byte-identical). A NON-literal init still keeps JETH048.
         this.pendingFieldInits.push({ name: member.name.text, node: member.initializer });
       } else {
         const folded = this.foldConstant(member.initializer, type);
@@ -7266,6 +7267,32 @@ export class Analyzer {
       return undefined;
     }
     return { value: folded, type };
+  }
+
+  /** STRUCT-FIELD-LENGTH: does `expr` type to a struct that declares a field literally named `length`?
+   *  Such a field shadows the `.length` builtin (solc member lookup finds the field), so `expr.length`
+   *  must resolve as a field read, not the array/bytes length. Resolved from DECLARED types only (a
+   *  struct local/param, a struct state/immutable field, or a nested struct field) - deliberately NOT via
+   *  trialExprType, which fires per `.length` access and would register a library reference as a side
+   *  effect for a library-call base (a cross-file leak). A non-declared base falls through to the builtin. */
+  private structHasLengthField(expr: ts.Expression): boolean {
+    const t = this.declaredExprType(expr);
+    return !!(t && t.kind === 'struct' && t.fields.some((f) => f.name === 'length'));
+  }
+
+  /** Side-effect-free type of a simple lvalue-shaped expression from its DECLARATION: an identifier
+   *  local/param, `this.<state|immutable>`, or a nested struct field chain. Returns undefined for
+   *  anything that would need evaluation (a call, index, ternary, cast). */
+  private declaredExprType(expr: ts.Expression): JethType | undefined {
+    if (ts.isIdentifier(expr)) return this.lookupLocal(expr.text);
+    if (ts.isPropertyAccessExpression(expr) && ts.isIdentifier(expr.name)) {
+      if (expr.expression.kind === ts.SyntaxKind.ThisKeyword) {
+        return this.stateByName.get(expr.name.text)?.type ?? this.immutablesByName.get(expr.name.text)?.type;
+      }
+      const bt = this.declaredExprType(expr.expression);
+      if (bt && bt.kind === 'struct') return bt.fields.find((f) => f.name === expr.name.text)?.type;
+    }
+    return undefined;
   }
 
   /** The read-site Expr for a folded constant record (contract or library): the inline literal shape
@@ -12727,11 +12754,31 @@ export class Analyzer {
     const thisEvt = this.desugarThisRaise(inner, 'event');
     if (thisEvt === null) return;
     if (thisEvt) inner = thisEvt;
+    // LIB-MEMBER-EVENT: a QUALIFIED emit(L.E(a)) from a contract, mirroring the qualified library-error
+    // raise revert(L.Bad(a)). Resolve E in library L's per-library event table, then rebuild a bare-name
+    // inner E(args) so the shared arity/overload/emit logic below runs unchanged. Guarded against a
+    // param/local/state var named like the library (which shadows it), like the error and constant reads.
+    let libEventCandidates: EventIR[] | undefined;
+    if (
+      ts.isCallExpression(inner) &&
+      ts.isPropertyAccessExpression(inner.expression) &&
+      ts.isIdentifier(inner.expression.expression) &&
+      ts.isIdentifier(inner.expression.name) &&
+      this.libraryByName.has(inner.expression.expression.text) &&
+      !this.isVisibleLocal(inner.expression.expression.text) &&
+      !this.stateByName.has(inner.expression.expression.text)
+    ) {
+      const cand = this.libraryEventsByName.get(inner.expression.expression.text)?.get(inner.expression.name.text);
+      if (cand && cand.length) {
+        libEventCandidates = cand;
+        inner = this.synth(ts.factory.createCallExpression(inner.expression.name, undefined, inner.arguments), inner);
+      }
+    }
     if (!ts.isCallExpression(inner) || !ts.isIdentifier(inner.expression)) {
       this.diags.error(inner, 'JETH146', 'emit(...) argument must be an event constructor, e.g. emit(Transfer(a, b))');
       return;
     }
-    const candidates = this.resolveEventOverloadsInScope(inner.expression.text);
+    const candidates = libEventCandidates ?? this.resolveEventOverloadsInScope(inner.expression.text);
     if (!candidates || candidates.length === 0) {
       this.diags.error(inner.expression, 'JETH147', `unknown event '${inner.expression.text}'`);
       return;
@@ -22079,7 +22126,10 @@ export class Analyzer {
     if (
       ts.isPropertyAccessExpression(node) &&
       node.name.text === 'length' &&
-      node.expression.kind !== ts.SyntaxKind.ThisKeyword
+      node.expression.kind !== ts.SyntaxKind.ThisKeyword &&
+      // STRUCT-FIELD-LENGTH: a struct field literally named `length` shadows the .length builtin (solc
+      // reads the field); skip the builtin so `p.length` falls through to the normal struct-field read.
+      !this.structHasLengthField(node.expression)
     ) {
       const bt = this.baseDynType(node.expression);
       // an @using lib fn named `length` attached to the receiver's array/bytes type collides with the
